@@ -14,6 +14,8 @@ type headerNavAccess struct {
 	RequireAuth bool
 }
 
+const HeaderNavModuleModelStatus = "modelStatus"
+
 func getHeaderNavAccess(module string) headerNavAccess {
 	fallback := headerNavAccess{
 		Enabled:     true,
@@ -33,6 +35,10 @@ func getHeaderNavAccess(module string) headerNavAccess {
 		return fallback
 	}
 
+	if module == HeaderNavModuleModelStatus {
+		pricingAccess := parseHeaderNavAccess(parsed["pricing"], fallback)
+		return parseHeaderNavAccess(parsed[module], pricingAccess)
+	}
 	return parseHeaderNavAccess(parsed[module], fallback)
 }
 

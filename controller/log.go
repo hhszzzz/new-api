@@ -44,7 +44,15 @@ func GetUserLogs(c *gin.Context) {
 	group := c.Query("group")
 	requestId := c.Query("request_id")
 	upstreamRequestId := c.Query("upstream_request_id")
-	logs, total, err := model.GetUserLogs(userId, logType, startTimestamp, endTimestamp, modelName, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), group, requestId, upstreamRequestId)
+	canViewRouting := canViewModelRouting(c)
+	if !canViewRouting && modelName != "" && !isAllowedUserLogModelFilter(modelName, visiblePerfModelSet(c)) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "model filter is not available",
+		})
+		return
+	}
+	logs, total, err := model.GetUserLogs(userId, logType, startTimestamp, endTimestamp, modelName, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), group, requestId, upstreamRequestId, canViewRouting)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -123,15 +131,28 @@ func GetLogsStat(c *gin.Context) {
 }
 
 func GetLogsSelfStat(c *gin.Context) {
-	username := c.GetString("username")
-	logType, _ := strconv.Atoi(c.Query("type"))
+	userId := c.GetInt("id")
 	startTimestamp, _ := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)
 	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
 	tokenName := c.Query("token_name")
 	modelName := c.Query("model_name")
 	channel, _ := strconv.Atoi(c.Query("channel"))
 	group := c.Query("group")
-	quotaNum, err := model.SumUsedQuota(logType, startTimestamp, endTimestamp, modelName, username, tokenName, channel, group)
+	canViewRouting := canViewModelRouting(c)
+	if !canViewRouting && modelName != "" && !isAllowedUserLogModelFilter(modelName, visiblePerfModelSet(c)) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "model filter is not available",
+		})
+		return
+	}
+	var quotaNum model.Stat
+	var err error
+	if canViewRouting {
+		quotaNum, err = model.SumUsedQuota(model.LogTypeConsume, startTimestamp, endTimestamp, modelName, c.GetString("username"), tokenName, channel, group)
+	} else {
+		quotaNum, err = model.SumUserUsedQuota(userId, startTimestamp, endTimestamp, modelName, tokenName, channel, group)
+	}
 	if err != nil {
 		common.ApiError(c, err)
 		return

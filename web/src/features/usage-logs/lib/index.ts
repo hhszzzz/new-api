@@ -24,12 +24,13 @@ For commercial licensing, please contact support@quantumnous.com
 export {
   parseLogOther,
   getTimeColor,
-  formatModelName,
   formatDuration,
   getParamOverrideActionLabel,
   parseAuditLine,
   isViolationFeeLog,
 } from './format'
+
+export { formatModelName, getModelRouteInfo } from './model-route'
 
 // Filter utilities
 export { buildSearchParams, getLogCategoryLabel } from './filter'

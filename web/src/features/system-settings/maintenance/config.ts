@@ -25,6 +25,7 @@ export type HeaderNavModulesConfig = {
   home: boolean
   console: boolean
   pricing: HeaderNavAccessConfig
+  modelStatus: HeaderNavAccessConfig
   rankings: HeaderNavAccessConfig
   docs: boolean
   about: boolean
@@ -42,6 +43,10 @@ export const HEADER_NAV_DEFAULT: HeaderNavModulesConfig = {
   home: true,
   console: true,
   pricing: {
+    enabled: true,
+    requireAuth: false,
+  },
+  modelStatus: {
     enabled: true,
     requireAuth: false,
   },
@@ -85,7 +90,11 @@ export const SIDEBAR_MODULES_DEFAULT: SidebarModulesAdminConfig = {
 
 const toBoolean = (value: unknown, fallback: boolean): boolean => {
   if (typeof value === 'boolean') return value
-  if (typeof value === 'number') return value === 1
+  if (typeof value === 'number') {
+    if (value === 1) return true
+    if (value === 0) return false
+    return fallback
+  }
   if (typeof value === 'string') {
     const normalized = value.trim().toLowerCase()
     if (normalized === 'true' || normalized === '1') return true
@@ -97,6 +106,7 @@ const toBoolean = (value: unknown, fallback: boolean): boolean => {
 const cloneHeaderNavDefault = (): HeaderNavModulesConfig => ({
   ...HEADER_NAV_DEFAULT,
   pricing: { ...HEADER_NAV_DEFAULT.pricing },
+  modelStatus: { ...HEADER_NAV_DEFAULT.modelStatus },
   rankings: { ...HEADER_NAV_DEFAULT.rankings },
 })
 
@@ -145,16 +155,16 @@ export function parseHeaderNavModules(
     const result: HeaderNavModulesConfig = {
       ...base,
       pricing: { ...base.pricing },
+      modelStatus: { ...base.modelStatus },
       rankings: { ...base.rankings },
     }
 
+    result.pricing = parseAccessModule(parsed.pricing, result.pricing)
+    result.modelStatus = parseAccessModule(parsed.modelStatus, result.pricing)
+    result.rankings = parseAccessModule(parsed.rankings, result.rankings)
+
     Object.entries(parsed).forEach(([key, raw]) => {
-      if (key === 'pricing') {
-        result.pricing = parseAccessModule(raw, base.pricing)
-        return
-      }
-      if (key === 'rankings') {
-        result.rankings = parseAccessModule(raw, base.rankings)
+      if (key === 'pricing' || key === 'modelStatus' || key === 'rankings') {
         return
       }
 

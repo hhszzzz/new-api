@@ -32,12 +32,13 @@ import type { LogCategory } from '../types'
  */
 export function useColumnsByCategory(
   logCategory: LogCategory,
-  isAdmin: boolean
+  isAdminView: boolean,
+  canViewModelRoute: boolean
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 ): ColumnDef<any>[] {
-  const commonColumns = useCommonLogsColumns(isAdmin)
-  const drawingColumns = useDrawingLogsColumns(isAdmin)
-  const taskColumns = useTaskLogsColumns(isAdmin)
+  const commonColumns = useCommonLogsColumns(isAdminView, canViewModelRoute)
+  const drawingColumns = useDrawingLogsColumns(isAdminView)
+  const taskColumns = useTaskLogsColumns(isAdminView)
 
   switch (logCategory) {
     case 'common':

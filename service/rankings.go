@@ -1,9 +1,11 @@
 package service
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -134,33 +136,56 @@ var (
 	rankingCache   = map[string]rankingCacheItem{}
 )
 
-func GetRankingsSnapshot(period string) (*RankingsResponse, error) {
+func GetRankingsSnapshot(period string, visibleModelNames []string, canViewPrivate bool) (*RankingsResponse, error) {
 	config, err := rankingConfig(period)
 	if err != nil {
 		return nil, err
 	}
+	visibleModelNames, visibilityCacheKey := rankingVisibilityCacheKey(visibleModelNames, canViewPrivate)
+	cacheKey := config.id + ":" + visibilityCacheKey
 
 	now := time.Now()
 	rankingCacheMu.Lock()
-	if item, ok := rankingCache[config.id]; ok && now.Before(item.expiresAt) {
+	if item, ok := rankingCache[cacheKey]; ok && now.Before(item.expiresAt) {
 		rankingCacheMu.Unlock()
 		return item.data, nil
 	}
 	rankingCacheMu.Unlock()
 
-	data, err := buildRankingsSnapshot(config, now)
+	data, err := buildRankingsSnapshot(config, now, visibleModelNames, canViewPrivate)
 	if err != nil {
 		return nil, err
 	}
 
 	rankingCacheMu.Lock()
-	rankingCache[config.id] = rankingCacheItem{
+	rankingCache[cacheKey] = rankingCacheItem{
 		expiresAt: now.Add(rankingCacheTTL),
 		data:      data,
 	}
 	rankingCacheMu.Unlock()
 
 	return data, nil
+}
+
+func rankingVisibilityCacheKey(modelNames []string, canViewPrivate bool) ([]string, string) {
+	if canViewPrivate {
+		return nil, "private"
+	}
+	seen := make(map[string]struct{}, len(modelNames))
+	canonical := make([]string, 0, len(modelNames))
+	for _, modelName := range modelNames {
+		if modelName == "" {
+			continue
+		}
+		if _, ok := seen[modelName]; ok {
+			continue
+		}
+		seen[modelName] = struct{}{}
+		canonical = append(canonical, modelName)
+	}
+	sort.Strings(canonical)
+	digest := sha256.Sum256([]byte(strings.Join(canonical, "\x00")))
+	return canonical, fmt.Sprintf("visible:%x", digest)
 }
 
 func rankingConfig(period string) (rankingPeriodConfig, error) {
@@ -178,13 +203,13 @@ func rankingConfig(period string) (rankingPeriodConfig, error) {
 	}
 }
 
-func buildRankingsSnapshot(config rankingPeriodConfig, now time.Time) (*RankingsResponse, error) {
+func buildRankingsSnapshot(config rankingPeriodConfig, now time.Time, visibleModelNames []string, canViewPrivate bool) (*RankingsResponse, error) {
 	startTime, endTime := rankingTimeRange(config, now)
-	currentTotals, err := model.GetRankingQuotaTotals(startTime, endTime)
+	currentTotals, err := model.GetRankingQuotaTotals(startTime, endTime, visibleModelNames, canViewPrivate)
 	if err != nil {
 		return nil, err
 	}
-	currentBuckets, err := model.GetRankingQuotaBuckets(startTime, endTime, config.bucketSize)
+	currentBuckets, err := model.GetRankingQuotaBuckets(startTime, endTime, config.bucketSize, visibleModelNames, canViewPrivate)
 	if err != nil {
 		return nil, err
 	}
@@ -192,13 +217,17 @@ func buildRankingsSnapshot(config rankingPeriodConfig, now time.Time) (*Rankings
 	var previousTotals []model.RankingQuotaTotal
 	if config.hasPrevious {
 		previousStart, previousEnd := previousRankingTimeRange(config, startTime)
-		previousTotals, err = model.GetRankingQuotaTotals(previousStart, previousEnd)
+		previousTotals, err = model.GetRankingQuotaTotals(previousStart, previousEnd, visibleModelNames, canViewPrivate)
 		if err != nil {
 			return nil, err
 		}
 	}
+	currentTotals = normalizeRedactedRankingTotals(currentTotals)
+	currentBuckets = normalizeRedactedRankingBuckets(currentBuckets)
+	previousTotals = normalizeRedactedRankingTotals(previousTotals)
 
 	meta := buildRankingModelMeta()
+	meta[rankingOthersLabel] = rankingModelMeta{vendor: "Various"}
 	totalTokens := sumRankingTokens(currentTotals)
 	previousRankByModel := rankingRankMap(previousTotals)
 	previousTokensByModel := rankingTokenMap(previousTotals)
@@ -258,6 +287,58 @@ func modelMeta(modelName string, meta map[string]rankingModelMeta) rankingModelM
 		return item
 	}
 	return rankingModelMeta{vendor: rankingUnknownVendor}
+}
+
+func normalizeRedactedRankingTotals(rows []model.RankingQuotaTotal) []model.RankingQuotaTotal {
+	totals := make(map[string]int64, len(rows))
+	for _, row := range rows {
+		modelName := row.ModelName
+		if modelName == "" {
+			modelName = rankingOthersLabel
+		}
+		totals[modelName] += row.TotalTokens
+	}
+	result := make([]model.RankingQuotaTotal, 0, len(totals))
+	for modelName, totalTokens := range totals {
+		result = append(result, model.RankingQuotaTotal{ModelName: modelName, TotalTokens: totalTokens})
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].TotalTokens != result[j].TotalTokens {
+			return result[i].TotalTokens > result[j].TotalTokens
+		}
+		return result[i].ModelName < result[j].ModelName
+	})
+	return result
+}
+
+func normalizeRedactedRankingBuckets(rows []model.RankingQuotaBucket) []model.RankingQuotaBucket {
+	type aggregateKey struct {
+		modelName string
+		bucket    int64
+	}
+	tokens := make(map[aggregateKey]int64, len(rows))
+	for _, row := range rows {
+		modelName := row.ModelName
+		if modelName == "" {
+			modelName = rankingOthersLabel
+		}
+		tokens[aggregateKey{modelName: modelName, bucket: row.Bucket}] += row.Tokens
+	}
+	result := make([]model.RankingQuotaBucket, 0, len(tokens))
+	for key, bucketTokens := range tokens {
+		result = append(result, model.RankingQuotaBucket{
+			ModelName: key.modelName,
+			Bucket:    key.bucket,
+			Tokens:    bucketTokens,
+		})
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Bucket != result[j].Bucket {
+			return result[i].Bucket < result[j].Bucket
+		}
+		return result[i].ModelName < result[j].ModelName
+	})
+	return result
 }
 
 func buildRankedModels(totals []model.RankingQuotaTotal, totalTokens int64, previousRanks map[string]int, previousTokens map[string]int64, meta map[string]rankingModelMeta, showGrowth bool) []RankedModel {
@@ -371,7 +452,16 @@ func buildModelHistory(buckets []model.RankingQuotaBucket, totals []model.Rankin
 		otherTotal += item.TotalTokens
 	}
 	if otherTotal > 0 {
-		models = append(models, ModelHistoryModel{Name: rankingOthersLabel, Vendor: "Various", Total: otherTotal})
+		if _, alreadyVisible := topModels[rankingOthersLabel]; alreadyVisible {
+			for i := range models {
+				if models[i].Name == rankingOthersLabel {
+					models[i].Total += otherTotal
+					break
+				}
+			}
+		} else {
+			models = append(models, ModelHistoryModel{Name: rankingOthersLabel, Vendor: "Various", Total: otherTotal})
+		}
 	}
 
 	bucketSet := make(map[int64]struct{})

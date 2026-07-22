@@ -47,6 +47,7 @@ func TestMain(m *testing.M) {
 		&Log{},
 		&Channel{},
 		&QuotaData{},
+		&ScopedQuotaData{},
 		&Ability{},
 		&TopUp{},
 		&SubscriptionPlan{},
@@ -66,30 +67,37 @@ func TestMain(m *testing.M) {
 
 func truncateTables(t *testing.T) {
 	t.Helper()
+	clearTestTables(t)
 	t.Cleanup(func() {
-		DB.Exec("DELETE FROM tasks")
-		DB.Exec("DELETE FROM auth_flows")
-		DB.Exec("DELETE FROM external_identity_claims")
-		DB.Exec("DELETE FROM user_sessions")
-		DB.Exec("DELETE FROM passkey_credentials")
-		DB.Exec("DELETE FROM two_fa_backup_codes")
-		DB.Exec("DELETE FROM two_fas")
-		DB.Exec("DELETE FROM tokens")
-		DB.Exec("DELETE FROM user_oauth_bindings")
-		DB.Exec("DELETE FROM users")
-		DB.Exec("DELETE FROM logs")
-		DB.Exec("DELETE FROM channels")
-		DB.Exec("DELETE FROM quota_data")
-		DB.Exec("DELETE FROM abilities")
-		DB.Exec("DELETE FROM top_ups")
-		DB.Exec("DELETE FROM subscription_orders")
-		DB.Exec("DELETE FROM subscription_plans")
-		DB.Exec("DELETE FROM user_subscriptions")
-		DB.Exec("DELETE FROM perf_metrics")
-		DB.Exec("DELETE FROM system_instances")
-		DB.Exec("DELETE FROM system_task_locks")
-		DB.Exec("DELETE FROM system_tasks")
+		clearTestTables(t)
 	})
+}
+
+func clearTestTables(t *testing.T) {
+	t.Helper()
+	require.NoError(t, DB.Exec("DELETE FROM tasks").Error)
+	require.NoError(t, DB.Exec("DELETE FROM auth_flows").Error)
+	require.NoError(t, DB.Exec("DELETE FROM external_identity_claims").Error)
+	require.NoError(t, DB.Exec("DELETE FROM user_sessions").Error)
+	require.NoError(t, DB.Exec("DELETE FROM passkey_credentials").Error)
+	require.NoError(t, DB.Exec("DELETE FROM two_fa_backup_codes").Error)
+	require.NoError(t, DB.Exec("DELETE FROM two_fas").Error)
+	require.NoError(t, DB.Exec("DELETE FROM tokens").Error)
+	require.NoError(t, DB.Exec("DELETE FROM user_oauth_bindings").Error)
+	require.NoError(t, DB.Exec("DELETE FROM users").Error)
+	require.NoError(t, DB.Exec("DELETE FROM logs").Error)
+	require.NoError(t, DB.Exec("DELETE FROM channels").Error)
+	require.NoError(t, DB.Exec("DELETE FROM quota_data").Error)
+	require.NoError(t, DB.Exec("DELETE FROM quota_data_scoped").Error)
+	require.NoError(t, DB.Exec("DELETE FROM abilities").Error)
+	require.NoError(t, DB.Exec("DELETE FROM top_ups").Error)
+	require.NoError(t, DB.Exec("DELETE FROM subscription_orders").Error)
+	require.NoError(t, DB.Exec("DELETE FROM subscription_plans").Error)
+	require.NoError(t, DB.Exec("DELETE FROM user_subscriptions").Error)
+	require.NoError(t, DB.Exec("DELETE FROM perf_metrics").Error)
+	require.NoError(t, DB.Exec("DELETE FROM system_instances").Error)
+	require.NoError(t, DB.Exec("DELETE FROM system_task_locks").Error)
+	require.NoError(t, DB.Exec("DELETE FROM system_tasks").Error)
 }
 
 func insertTask(t *testing.T, task *Task) {

@@ -112,7 +112,7 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 	// 使用公开 task_xxxx ID 替换上游 ID 返回给客户端
 	publicResponse := dto.TaskResponse[string]{
 		Code:    sunoResponse.Code,
-		Message: sunoResponse.Message,
+		Message: taskcommon.RedactModelRoutingText(sunoResponse.Message, info.OriginModelName, info.UpstreamModelName),
 		Data:    info.PublicTaskID,
 	}
 	c.JSON(http.StatusOK, publicResponse)

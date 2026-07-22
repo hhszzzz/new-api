@@ -1,6 +1,6 @@
 package perfmetrics
 
-import "sync/atomic"
+import "sync"
 
 type Store interface {
 	Record(sample Sample)
@@ -60,6 +60,42 @@ type SummaryAllResult struct {
 	Models []ModelSummary `json:"models"`
 }
 
+type Status string
+
+const (
+	StatusNoData      Status = "no_data"
+	StatusOperational Status = "operational"
+	StatusDegraded    Status = "degraded"
+	StatusFailed      Status = "failed"
+)
+
+type StatusModelSource struct {
+	ModelName string
+	Vendor    string
+}
+
+type StatusPoint struct {
+	Ts          int64    `json:"ts"`
+	Status      Status   `json:"status"`
+	SuccessRate *float64 `json:"success_rate"`
+}
+
+type ModelStatus struct {
+	ModelName    string        `json:"model_name"`
+	Vendor       string        `json:"vendor"`
+	SuccessRate  *float64      `json:"success_rate"`
+	AvgLatencyMs *int64        `json:"avg_latency_ms"`
+	AvgTps       *float64      `json:"avg_tps"`
+	Status       Status        `json:"status"`
+	Timeline     []StatusPoint `json:"timeline"`
+}
+
+type StatusResult struct {
+	GeneratedAt int64         `json:"generated_at"`
+	WindowHours int           `json:"window_hours"`
+	Models      []ModelStatus `json:"models"`
+}
+
 type bucketKey struct {
 	model    string
 	group    string
@@ -77,77 +113,67 @@ type counters struct {
 }
 
 type atomicBucket struct {
-	requestCount   atomic.Int64
-	successCount   atomic.Int64
-	totalLatencyMs atomic.Int64
-	ttftSumMs      atomic.Int64
-	ttftCount      atomic.Int64
-	outputTokens   atomic.Int64
-	generationMs   atomic.Int64
+	mu      sync.Mutex
+	pending counters
+	total   counters
 }
 
 func (b *atomicBucket) add(sample Sample) {
-	b.requestCount.Add(1)
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	delta := counters{requestCount: 1}
 	if sample.Success {
-		b.successCount.Add(1)
+		delta.successCount = 1
 	}
 	if sample.LatencyMs > 0 {
-		b.totalLatencyMs.Add(sample.LatencyMs)
+		delta.totalLatencyMs = sample.LatencyMs
 	}
 	if sample.HasTtft && sample.TtftMs >= 0 {
-		b.ttftSumMs.Add(sample.TtftMs)
-		b.ttftCount.Add(1)
+		delta.ttftSumMs = sample.TtftMs
+		delta.ttftCount = 1
 	}
 	if sample.OutputTokens > 0 && sample.GenerationMs > 0 {
-		b.outputTokens.Add(sample.OutputTokens)
-		b.generationMs.Add(sample.GenerationMs)
+		delta.outputTokens = sample.OutputTokens
+		delta.generationMs = sample.GenerationMs
 	}
+	b.pending.add(delta)
+	b.total.add(delta)
 }
 
 func (b *atomicBucket) snapshot() counters {
-	return counters{
-		requestCount:   b.requestCount.Load(),
-		successCount:   b.successCount.Load(),
-		totalLatencyMs: b.totalLatencyMs.Load(),
-		ttftSumMs:      b.ttftSumMs.Load(),
-		ttftCount:      b.ttftCount.Load(),
-		outputTokens:   b.outputTokens.Load(),
-		generationMs:   b.generationMs.Load(),
-	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.pending
+}
+
+func (b *atomicBucket) totalSnapshot() counters {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.total
 }
 
 func (b *atomicBucket) drain() counters {
-	return counters{
-		requestCount:   b.requestCount.Swap(0),
-		successCount:   b.successCount.Swap(0),
-		totalLatencyMs: b.totalLatencyMs.Swap(0),
-		ttftSumMs:      b.ttftSumMs.Swap(0),
-		ttftCount:      b.ttftCount.Swap(0),
-		outputTokens:   b.outputTokens.Swap(0),
-		generationMs:   b.generationMs.Swap(0),
-	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	drained := b.pending
+	b.pending = counters{}
+	return drained
 }
 
 func (b *atomicBucket) addCounters(c counters) {
-	if c.requestCount != 0 {
-		b.requestCount.Add(c.requestCount)
-	}
-	if c.successCount != 0 {
-		b.successCount.Add(c.successCount)
-	}
-	if c.totalLatencyMs != 0 {
-		b.totalLatencyMs.Add(c.totalLatencyMs)
-	}
-	if c.ttftSumMs != 0 {
-		b.ttftSumMs.Add(c.ttftSumMs)
-	}
-	if c.ttftCount != 0 {
-		b.ttftCount.Add(c.ttftCount)
-	}
-	if c.outputTokens != 0 {
-		b.outputTokens.Add(c.outputTokens)
-	}
-	if c.generationMs != 0 {
-		b.generationMs.Add(c.generationMs)
-	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.pending.add(c)
+}
+
+func (c *counters) add(value counters) {
+	c.requestCount += value.requestCount
+	c.successCount += value.successCount
+	c.totalLatencyMs += value.totalLatencyMs
+	c.ttftSumMs += value.ttftSumMs
+	c.ttftCount += value.ttftCount
+	c.outputTokens += value.outputTokens
+	c.generationMs += value.generationMs
 }

@@ -1,10 +1,9 @@
 package perfmetrics
 
 import (
-	"context"
-	"fmt"
 	"math"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,7 +13,11 @@ import (
 	"github.com/QuantumNous/new-api/setting/perf_metrics_setting"
 )
 
-var hotBuckets sync.Map
+var (
+	hotBuckets sync.Map
+	// bucketFlushMu keeps aggregate reads consistent while completed hot buckets move into the database.
+	bucketFlushMu sync.RWMutex
+)
 
 // seriesSchema is a stable client cache/schema marker. Do not change it when
 // hiding fields or making response-only privacy hardening changes.
@@ -22,6 +25,7 @@ const seriesSchema = "dbcd0a3c01b55203"
 
 func Init() {
 	go flushLoop()
+	startRedisPublisher()
 }
 
 func RecordRelaySample(info *relaycommon.RelayInfo, success bool, outputTokens int64) {
@@ -56,7 +60,7 @@ func RecordRelaySample(info *relaycommon.RelayInfo, success bool, outputTokens i
 
 func Record(sample Sample) {
 	setting := perf_metrics_setting.GetSetting()
-	if !setting.Enabled || sample.Model == "" {
+	if !setting.Enabled || strings.TrimSpace(sample.Model) == "" {
 		return
 	}
 	if sample.Group == "" {
@@ -72,8 +76,11 @@ func Record(sample Sample) {
 		bucketTs: bucketStart(time.Now().Unix()),
 	}
 	actual, _ := hotBuckets.LoadOrStore(key, &atomicBucket{})
-	actual.(*atomicBucket).add(sample)
-	recordRedis(key, sample)
+	bucket := actual.(*atomicBucket)
+	bucket.add(sample)
+	if common.RedisEnabled {
+		markRedisBucketDirty(key, bucket)
+	}
 }
 
 func Query(params QueryParams) (QueryResult, error) {
@@ -86,9 +93,14 @@ func Query(params QueryParams) (QueryResult, error) {
 	endTs := time.Now().Unix()
 	startTs := endTs - int64(params.Hours)*3600
 
+	// Keep the database snapshot and in-memory snapshot on the same side of a
+	// completed-bucket flush. Otherwise the flush can drain a bucket after the
+	// database query but before the hot-bucket scan, making that bucket vanish.
+	bucketFlushMu.RLock()
 	merged := map[bucketKey]counters{}
 	rows, err := model.GetPerfMetrics(params.Model, params.Group, startTs, endTs)
 	if err != nil {
+		bucketFlushMu.RUnlock()
 		return QueryResult{}, err
 	}
 	for _, row := range rows {
@@ -118,6 +130,7 @@ func Query(params QueryParams) (QueryResult, error) {
 		mergeCounters(merged, k, value.(*atomicBucket).snapshot())
 		return true
 	})
+	bucketFlushMu.RUnlock()
 
 	return buildQueryResult(params.Model, merged), nil
 }
@@ -133,8 +146,12 @@ func QuerySummaryAll(hours int, groups []string) (SummaryAllResult, error) {
 	startTs := endTs - int64(hours)*3600
 	allowedGroups := allowedGroupSet(groups)
 
+	// See Query: the DB read and hot-bucket scan form one logical snapshot with
+	// respect to local completed-bucket flushes.
+	bucketFlushMu.RLock()
 	rows, err := model.GetPerfMetricsSummaryBucketsAll(startTs, endTs, groups)
 	if err != nil {
+		bucketFlushMu.RUnlock()
 		return SummaryAllResult{}, err
 	}
 
@@ -170,6 +187,7 @@ func QuerySummaryAll(hours int, groups []string) (SummaryAllResult, error) {
 		mergeModelBucket(modelBuckets, k.model, k.bucketTs, snap)
 		return true
 	})
+	bucketFlushMu.RUnlock()
 
 	models := make([]ModelSummary, 0, len(totals))
 	for name, total := range totals {
@@ -375,54 +393,4 @@ func avgTps(value counters) float64 {
 		return 0
 	}
 	return float64(value.outputTokens) / (float64(value.generationMs) / 1000)
-}
-
-func recordRedis(key bucketKey, sample Sample) {
-	if !common.RedisEnabled || common.RDB == nil {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	redisKey := redisBucketKey(key)
-	pipe := common.RDB.TxPipeline()
-	pipe.HIncrBy(ctx, redisKey, "req", 1)
-	if sample.Success {
-		pipe.HIncrBy(ctx, redisKey, "ok", 1)
-	}
-	if sample.LatencyMs > 0 {
-		pipe.HIncrBy(ctx, redisKey, "lat", sample.LatencyMs)
-	}
-	if sample.HasTtft && sample.TtftMs >= 0 {
-		pipe.HIncrBy(ctx, redisKey, "ttft", sample.TtftMs)
-		pipe.HIncrBy(ctx, redisKey, "ttft_n", 1)
-	}
-	if sample.OutputTokens > 0 && sample.GenerationMs > 0 {
-		pipe.HIncrBy(ctx, redisKey, "out", sample.OutputTokens)
-		pipe.HIncrBy(ctx, redisKey, "gen_ms", sample.GenerationMs)
-	}
-	pipe.Expire(ctx, redisKey, time.Hour)
-	_, _ = pipe.Exec(ctx)
-}
-
-func mergeRedisActiveBuckets(merged map[bucketKey]counters, params QueryParams, startTs int64, endTs int64) {
-	if !common.RedisEnabled || common.RDB == nil || params.Model == "" || params.Group == "" {
-		return
-	}
-	active := bucketStart(time.Now().Unix())
-	if active < startTs || active > endTs {
-		return
-	}
-	key := bucketKey{model: params.Model, group: params.Group, bucketTs: active}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	values, err := common.RDB.HGetAll(ctx, redisBucketKey(key)).Result()
-	if err != nil || len(values) == 0 {
-		return
-	}
-	mergeCounters(merged, key, redisCounters(values))
-}
-
-func redisBucketKey(key bucketKey) string {
-	return fmt.Sprintf("perf:%s:%s:%d", key.model, key.group, key.bucketTs)
 }

@@ -2,6 +2,7 @@ package sora
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -21,7 +22,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/pkg/errors"
-	"github.com/tidwall/sjson"
 )
 
 // ============================
@@ -252,6 +252,11 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 	// 使用公开 task_xxxx ID 返回给客户端
 	dResp.ID = info.PublicTaskID
 	dResp.TaskID = info.PublicTaskID
+	dResp.Model = info.OriginModelName
+	if dResp.Error != nil {
+		dResp.Error.Message = taskcommon.RedactModelRoutingText(dResp.Error.Message, info.OriginModelName, info.UpstreamModelName)
+		dResp.Error.Code = taskcommon.RedactModelRoutingText(dResp.Error.Code, info.OriginModelName, info.UpstreamModelName)
+	}
 	c.JSON(http.StatusOK, dResp)
 	return upstreamID, responseBody, nil
 }
@@ -322,10 +327,37 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 }
 
 func (a *TaskAdaptor) ConvertToOpenAIVideo(task *model.Task) ([]byte, error) {
-	data := task.Data
-	var err error
-	if data, err = sjson.SetBytes(data, "id", task.TaskID); err != nil {
-		return nil, errors.Wrap(err, "set id failed")
+	sanitizedData, err := taskcommon.SanitizePublicTaskData(
+		task.Data,
+		task.Properties.OriginModelName,
+		task.Properties.UpstreamModelName,
+	)
+	if err != nil {
+		return nil, errors.Wrap(err, "sanitize sora task data failed")
 	}
-	return data, nil
+
+	var data map[string]json.RawMessage
+	if err := common.Unmarshal(sanitizedData, &data); err != nil {
+		return nil, errors.Wrap(err, "unmarshal sora task data failed")
+	}
+	if data == nil {
+		return nil, errors.New("sora task data is empty")
+	}
+
+	publicTaskID, err := common.Marshal(task.TaskID)
+	if err != nil {
+		return nil, errors.Wrap(err, "marshal public task id failed")
+	}
+	data["id"] = publicTaskID
+	if task.Properties.OriginModelName == "" {
+		delete(data, "model")
+	} else {
+		originModelName, err := common.Marshal(task.Properties.OriginModelName)
+		if err != nil {
+			return nil, errors.Wrap(err, "marshal origin model name failed")
+		}
+		data["model"] = originModelName
+	}
+
+	return common.Marshal(data)
 }

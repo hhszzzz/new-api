@@ -108,6 +108,11 @@ export type UsageBillingPath =
 
 export interface LogOtherData {
   admin_info?: {
+    // Model routing is nested here so the backend can strip it from
+    // non-admin responses together with other administrator-only metadata.
+    is_model_mapped?: boolean
+    upstream_model_name?: string
+    po?: string[]
     is_multi_key?: boolean
     multi_key_index?: number
     use_channel?: number[]
@@ -176,6 +181,7 @@ export interface LogOtherData {
   cache_creation_ratio?: number
   cache_creation_ratio_5m?: number
   cache_creation_ratio_1h?: number
+  // Legacy administrator-only model routing fields. New logs use admin_info.
   is_model_mapped?: boolean
   upstream_model_name?: string
   audio_ratio?: number
@@ -203,6 +209,8 @@ export interface LogOtherData {
   image_generation_call?: boolean
   image_generation_call_price?: number
   is_system_prompt_overwritten?: boolean
+  // Legacy administrator-only parameter override audit. New logs use
+  // admin_info.po so the backend can strip it for non-admin responses.
   po?: string[]
   billing_source?: string
   group?: string

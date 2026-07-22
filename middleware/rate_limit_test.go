@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -16,6 +17,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// go test -count reuses package globals, so each outage check needs a distinct
+// key in the process-wide in-memory fallback limiter.
+var redisFailurePolicyTestRun atomic.Uint64
 
 func useRateLimitMiniRedis(t *testing.T) (*miniredis.Miniredis, *redis.Client) {
 	t.Helper()
@@ -199,6 +204,7 @@ func TestRedisFailurePolicies(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	_, redisClient := useRateLimitMiniRedis(t)
 	require.NoError(t, redisClient.Close())
+	emailRemoteAddr := "[2001:db8::" + strconv.FormatUint(redisFailurePolicyTestRun.Add(1), 16) + "]:12345"
 
 	router := gin.New()
 	require.NoError(t, router.SetTrustedProxies(nil))
@@ -221,5 +227,5 @@ func TestRedisFailurePolicies(t *testing.T) {
 	userResponse := performRateLimitRequest(router, "/user", "192.0.2.61:12345")
 	assert.Equal(t, http.StatusInternalServerError, userResponse.Code)
 	assert.Empty(t, userResponse.Body.String())
-	assert.Equal(t, http.StatusNoContent, performRateLimitRequest(router, "/email", "192.0.2.62:12345").Code)
+	assert.Equal(t, http.StatusNoContent, performRateLimitRequest(router, "/email", emailRemoteAddr).Code)
 }

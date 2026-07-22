@@ -37,6 +37,13 @@ type userModelsResponse struct {
 func setupModelListControllerTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 
+	previousDB := model.DB
+	previousLogDB := model.LOG_DB
+	previousMainDatabaseType := common.MainDatabaseType()
+	previousLogDatabaseType := common.LogDatabaseType()
+	previousRedisEnabled := common.RedisEnabled
+	previousGinMode := gin.Mode()
+
 	initModelListColumnNames(t)
 
 	gin.SetMode(gin.TestMode)
@@ -52,6 +59,12 @@ func setupModelListControllerTestDB(t *testing.T) *gorm.DB {
 	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Channel{}, &model.Ability{}, &model.Model{}, &model.Vendor{}))
 
 	t.Cleanup(func() {
+		model.InvalidatePricingCache()
+		model.DB = previousDB
+		model.LOG_DB = previousLogDB
+		common.SetDatabaseTypes(previousMainDatabaseType, previousLogDatabaseType)
+		common.RedisEnabled = previousRedisEnabled
+		gin.SetMode(previousGinMode)
 		sqlDB, err := db.DB()
 		if err == nil {
 			_ = sqlDB.Close()
@@ -283,6 +296,13 @@ func TestListModelsIncludesTieredBillingModel(t *testing.T) {
 		Password: "password",
 		Group:    "default",
 		Status:   common.UserStatusEnabled,
+	}).Error)
+	require.NoError(t, db.Create(&model.Channel{
+		Id:     1,
+		Type:   constant.ChannelTypeOpenAI,
+		Key:    "tiered-model-list-key",
+		Name:   "tiered-model-list-channel",
+		Status: common.ChannelStatusEnabled,
 	}).Error)
 	require.NoError(t, db.Create(&[]model.Ability{
 		{Group: "default", Model: "zz-tiered-visible-model", ChannelId: 1, Enabled: true},

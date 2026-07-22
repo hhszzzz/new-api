@@ -43,13 +43,13 @@ import { cn } from '@/lib/utils'
 import { LOG_TYPE_ALL_VALUE } from '../../constants'
 import type { UsageLog } from '../../data/schema'
 import {
-  formatModelName,
   getTieredBillingSummary,
   hasAnyCacheTokens,
   parseLogOther,
   isViolationFeeLog,
   renderAuditContent,
 } from '../../lib/format'
+import { formatModelName } from '../../lib/model-route'
 import {
   isDisplayableLogType,
   isTimingLogType,
@@ -288,7 +288,10 @@ function buildTypeDetailSegments(
   return segments
 }
 
-export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
+export function useCommonLogsColumns(
+  isAdminView: boolean,
+  canViewModelRoute: boolean
+): ColumnDef<UsageLog>[] {
   const { t } = useTranslation()
   const columns: ColumnDef<UsageLog>[] = [
     {
@@ -324,7 +327,7 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
     },
   ]
 
-  if (isAdmin) {
+  if (isAdminView) {
     columns.push(
       {
         id: 'channel',
@@ -610,7 +613,11 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
         const log = row.original
         if (!isDisplayableLogType(log.type)) return null
 
-        const modelInfo = formatModelName(log)
+        const modelInfo = formatModelName(
+          log.model_name,
+          parseLogOther(log.other),
+          canViewModelRoute
+        )
 
         return (
           <div className='flex w-fit flex-col gap-0.5'>
@@ -775,7 +782,7 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
         const log = row.original
         const other = parseLogOther(log.other)
 
-        const segments = buildDetailSegments(log, other, t, isAdmin)
+        const segments = buildDetailSegments(log, other, t, isAdminView)
         const primary = segments[0]
         const hasMore = segments.length > 1
         let primaryTextClass = 'text-foreground'
@@ -821,7 +828,8 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
             </button>
             <DetailsDialog
               log={log}
-              isAdmin={isAdmin}
+              isAdminView={isAdminView}
+              canViewModelRoute={canViewModelRoute}
               open={dialogOpen}
               onOpenChange={setDialogOpen}
             />

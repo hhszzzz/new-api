@@ -260,8 +260,14 @@ func updateOptionMap(key string, value string) (err error) {
 		common.OptionMapRWMutex.Unlock()
 		return nil
 	}
+	pricingOptionUpdated := false
 	common.OptionMapRWMutex.Lock()
-	defer common.OptionMapRWMutex.Unlock()
+	defer func() {
+		common.OptionMapRWMutex.Unlock()
+		if err == nil && pricingOptionUpdated {
+			InvalidatePricingCache()
+		}
+	}()
 	common.OptionMap[key] = value
 
 	// 检查是否是模型配置 - 使用更规范的方式处理
@@ -532,6 +538,7 @@ func updateOptionMap(key string, value string) (err error) {
 		common.DataExportDefaultTime = value
 	case "ModelRatio":
 		err = ratio_setting.UpdateModelRatioByJSONString(value)
+		pricingOptionUpdated = true
 	case "GroupRatio":
 		err = ratio_setting.UpdateGroupRatioByJSONString(value)
 	case "GroupGroupRatio":
@@ -540,18 +547,25 @@ func updateOptionMap(key string, value string) (err error) {
 		err = setting.UpdateUserUsableGroupsByJSONString(value)
 	case "CompletionRatio":
 		err = ratio_setting.UpdateCompletionRatioByJSONString(value)
+		pricingOptionUpdated = true
 	case "ModelPrice":
 		err = ratio_setting.UpdateModelPriceByJSONString(value)
+		pricingOptionUpdated = true
 	case "CacheRatio":
 		err = ratio_setting.UpdateCacheRatioByJSONString(value)
+		pricingOptionUpdated = true
 	case "CreateCacheRatio":
 		err = ratio_setting.UpdateCreateCacheRatioByJSONString(value)
+		pricingOptionUpdated = true
 	case "ImageRatio":
 		err = ratio_setting.UpdateImageRatioByJSONString(value)
+		pricingOptionUpdated = true
 	case "AudioRatio":
 		err = ratio_setting.UpdateAudioRatioByJSONString(value)
+		pricingOptionUpdated = true
 	case "AudioCompletionRatio":
 		err = ratio_setting.UpdateAudioCompletionRatioByJSONString(value)
+		pricingOptionUpdated = true
 	case "TopUpLink":
 		common.TopUpLink = value
 	//case "ChatLink":

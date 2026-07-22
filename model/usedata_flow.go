@@ -17,46 +17,59 @@ type FlowQuotaData struct {
 	ChannelID   int    `json:"channel_id,omitempty" gorm:"column:channel_id"`
 	ChannelName string `json:"channel_name,omitempty" gorm:"-"`
 	ModelName   string `json:"model_name" gorm:"column:model_name"`
+	ModelScope  int    `json:"-" gorm:"column:model_scope"`
 	TokenUsed   int    `json:"token_used" gorm:"column:token_used"`
 	Count       int    `json:"count" gorm:"column:count"`
 	Quota       int    `json:"quota" gorm:"column:quota"`
 }
 
-func GetFlowQuotaData(startTime int64, endTime int64, username string, userID int, role int) ([]*FlowQuotaData, error) {
+func GetFlowQuotaData(startTime int64, endTime int64, username string, userID int, role int, canViewPrivate bool) ([]*FlowQuotaData, error) {
 	switch {
 	case role >= common.RoleRootUser:
 		return getRootFlowQuotaData(startTime, endTime, username)
 	case role >= common.RoleAdminUser:
 		return getAdminFlowQuotaData(startTime, endTime, username)
 	default:
-		return getSelfFlowQuotaData(startTime, endTime, userID)
+		return getSelfFlowQuotaData(startTime, endTime, userID, canViewPrivate)
 	}
 }
 
-func flowQuotaBaseQuery(startTime int64, endTime int64) *gorm.DB {
-	query := DB.Table("quota_data").
+func flowQuotaBaseQuery(tableName string, startTime int64, endTime int64) *gorm.DB {
+	query := DB.Table(tableName).
 		Where("use_group <> ''").
 		Where("created_at >= ? and created_at <= ?", startTime, endTime)
 	return query
 }
 
-func getSelfFlowQuotaData(startTime int64, endTime int64, userID int) ([]*FlowQuotaData, error) {
-	rows := make([]*FlowQuotaData, 0)
-	err := flowQuotaBaseQuery(startTime, endTime).
+func getSelfFlowQuotaData(startTime int64, endTime int64, userID int, canViewPrivate bool) ([]*FlowQuotaData, error) {
+	legacyRows := make([]*FlowQuotaData, 0)
+	err := flowQuotaBaseQuery("quota_data", startTime, endTime).
 		Select("token_id, use_group, model_name, sum(count) as count, sum(quota) as quota, sum(token_used) as token_used").
 		Where("user_id = ?", userID).
 		Group("token_id, use_group, model_name").
 		Order("quota DESC").
-		Find(&rows).Error
+		Find(&legacyRows).Error
 	if err != nil {
 		return nil, err
 	}
+	scopedRows := make([]*FlowQuotaData, 0)
+	err = flowQuotaBaseQuery((ScopedQuotaData{}).TableName(), startTime, endTime).
+		Select("token_id, use_group, model_name, model_scope, sum(count) as count, sum(quota) as quota, sum(token_used) as token_used").
+		Where("user_id = ?", userID).
+		Group("token_id, use_group, model_name, model_scope").
+		Order("quota DESC").
+		Find(&scopedRows).Error
+	if err != nil {
+		return nil, err
+	}
+	rows := append(legacyRows, scopedRows...)
+	rows = sanitizeSelfFlowQuotaData(rows, canViewPrivate)
 	return rows, fillFlowTokenNames(rows)
 }
 
 func getAdminFlowQuotaData(startTime int64, endTime int64, username string) ([]*FlowQuotaData, error) {
-	rows := make([]*FlowQuotaData, 0)
-	query := flowQuotaBaseQuery(startTime, endTime).
+	legacyRows := make([]*FlowQuotaData, 0)
+	query := flowQuotaBaseQuery("quota_data", startTime, endTime).
 		Select("user_id, username, use_group, model_name, channel_id, sum(count) as count, sum(quota) as quota, sum(token_used) as token_used")
 	if username != "" {
 		query = query.Where("username = ?", username)
@@ -64,16 +77,30 @@ func getAdminFlowQuotaData(startTime int64, endTime int64, username string) ([]*
 	err := query.
 		Group("user_id, username, use_group, model_name, channel_id").
 		Order("quota DESC").
-		Find(&rows).Error
+		Find(&legacyRows).Error
 	if err != nil {
 		return nil, err
 	}
+	scopedRows := make([]*FlowQuotaData, 0)
+	query = flowQuotaBaseQuery((ScopedQuotaData{}).TableName(), startTime, endTime).
+		Select("user_id, username, use_group, model_name, model_scope, channel_id, sum(count) as count, sum(quota) as quota, sum(token_used) as token_used")
+	if username != "" {
+		query = query.Where("username = ?", username)
+	}
+	err = query.
+		Group("user_id, username, use_group, model_name, model_scope, channel_id").
+		Order("quota DESC").
+		Find(&scopedRows).Error
+	if err != nil {
+		return nil, err
+	}
+	rows := mergeAdminFlowQuotaData(append(legacyRows, scopedRows...))
 	return rows, fillFlowChannelNames(rows)
 }
 
 func getRootFlowQuotaData(startTime int64, endTime int64, username string) ([]*FlowQuotaData, error) {
-	rows := make([]*FlowQuotaData, 0)
-	query := flowQuotaBaseQuery(startTime, endTime).
+	legacyRows := make([]*FlowQuotaData, 0)
+	query := flowQuotaBaseQuery("quota_data", startTime, endTime).
 		Select("user_id, username, node_name, token_id, use_group, model_name, channel_id, sum(count) as count, sum(quota) as quota, sum(token_used) as token_used")
 	if username != "" {
 		query = query.Where("username = ?", username)
@@ -81,10 +108,24 @@ func getRootFlowQuotaData(startTime int64, endTime int64, username string) ([]*F
 	err := query.
 		Group("user_id, username, node_name, token_id, use_group, model_name, channel_id").
 		Order("quota DESC").
-		Find(&rows).Error
+		Find(&legacyRows).Error
 	if err != nil {
 		return nil, err
 	}
+	scopedRows := make([]*FlowQuotaData, 0)
+	query = flowQuotaBaseQuery((ScopedQuotaData{}).TableName(), startTime, endTime).
+		Select("user_id, username, node_name, token_id, use_group, model_name, model_scope, channel_id, sum(count) as count, sum(quota) as quota, sum(token_used) as token_used")
+	if username != "" {
+		query = query.Where("username = ?", username)
+	}
+	err = query.
+		Group("user_id, username, node_name, token_id, use_group, model_name, model_scope, channel_id").
+		Order("quota DESC").
+		Find(&scopedRows).Error
+	if err != nil {
+		return nil, err
+	}
+	rows := mergeRootFlowQuotaData(append(legacyRows, scopedRows...))
 	if err := fillFlowTokenNames(rows); err != nil {
 		return rows, err
 	}

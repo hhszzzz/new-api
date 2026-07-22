@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/samber/lo"
 	"github.com/tidwall/gjson"
@@ -190,6 +192,19 @@ func ApplyParamOverrideWithRelayInfo(jsonData []byte, info *RelayInfo) ([]byte, 
 	result, err := ApplyParamOverride(jsonData, paramOverride, overrideCtx)
 	if err != nil {
 		return nil, err
+	}
+	if info != nil && info.ChannelMeta != nil {
+		finalModelResult := gjson.GetBytes(result, "model")
+		if finalModelResult.Exists() && finalModelResult.Type == gjson.String {
+			finalModelName := finalModelResult.String()
+			publicUpstreamModelName := info.OriginModelName
+			if info.RelayMode == relayconstant.RelayModeResponsesCompact {
+				publicUpstreamModelName = strings.TrimSuffix(publicUpstreamModelName, ratio_setting.CompactModelSuffix)
+				info.BillingModelName = ratio_setting.WithCompactModelSuffix(finalModelName)
+			}
+			info.UpstreamModelName = finalModelName
+			info.IsModelMapped = finalModelName != publicUpstreamModelName
+		}
 	}
 	syncRuntimeHeaderOverrideFromContext(info, overrideCtx)
 	if info != nil {

@@ -316,7 +316,7 @@ func (channel *Channel) GetOtherInfo() map[string]interface{} {
 }
 
 func (channel *Channel) SetOtherInfo(otherInfo map[string]interface{}) {
-	otherInfoBytes, err := json.Marshal(otherInfo)
+	otherInfoBytes, err := common.Marshal(otherInfo)
 	if err != nil {
 		common.SysLog(fmt.Sprintf("failed to marshal other info: channel_id=%d, tag=%s, name=%s, error=%v", channel.Id, channel.GetTag(), channel.Name, err))
 		return
@@ -449,7 +449,11 @@ func BatchInsertChannels(channels []Channel) error {
 			}
 		}
 	}
-	return tx.Commit().Error
+	if err := tx.Commit().Error; err != nil {
+		return err
+	}
+	InitChannelCache()
+	return nil
 }
 
 func BatchDeleteChannels(ids []int) (int64, error) {
@@ -477,6 +481,7 @@ func BatchDeleteChannels(ids []int) (int64, error) {
 	if err := tx.Commit().Error; err != nil {
 		return 0, err
 	}
+	InvalidatePricingCache()
 	return deletedCount, nil
 }
 
@@ -525,6 +530,7 @@ func (channel *Channel) Insert() error {
 	if err != nil {
 		return err
 	}
+	defer InvalidatePricingCache()
 	err = channel.AddAbilities(nil)
 	return err
 }
@@ -573,6 +579,7 @@ func (channel *Channel) Update() error {
 	if err != nil {
 		return err
 	}
+	defer InvalidatePricingCache()
 	DB.Model(channel).First(channel, "id = ?", channel.Id)
 	err = channel.UpdateAbilities(nil)
 	return err
@@ -604,6 +611,7 @@ func (channel *Channel) Delete() error {
 	if err != nil {
 		return err
 	}
+	defer InvalidatePricingCache()
 	err = channel.DeleteAbilities()
 	return err
 }
@@ -780,6 +788,7 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 			common.SysLog(fmt.Sprintf("failed to update channel status: channel_id=%d, status=%d, error=%v", channel.Id, status, err))
 			return false
 		}
+		InvalidatePricingCache()
 	}
 	return true
 }
@@ -789,6 +798,7 @@ func EnableChannelByTag(tag string) error {
 	if err != nil {
 		return err
 	}
+	InvalidatePricingCache()
 	err = UpdateAbilityStatusByTag(tag, true)
 	return err
 }
@@ -798,6 +808,7 @@ func DisableChannelByTag(tag string) error {
 	if err != nil {
 		return err
 	}
+	InvalidatePricingCache()
 	err = UpdateAbilityStatusByTag(tag, false)
 	return err
 }
@@ -875,11 +886,17 @@ func updateChannelUsedQuota(id int, quota int) {
 
 func DeleteChannelByStatus(status int64) (int64, error) {
 	result := DB.Where("status = ?", status).Delete(&Channel{})
+	if result.Error == nil && result.RowsAffected > 0 {
+		InvalidatePricingCache()
+	}
 	return result.RowsAffected, result.Error
 }
 
 func DeleteDisabledChannel() (int64, error) {
 	result := DB.Where("status = ? or status = ?", common.ChannelStatusAutoDisabled, common.ChannelStatusManuallyDisabled).Delete(&Channel{})
+	if result.Error == nil && result.RowsAffected > 0 {
+		InvalidatePricingCache()
+	}
 	return result.RowsAffected, result.Error
 }
 

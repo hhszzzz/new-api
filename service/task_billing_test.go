@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"math"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/types"
+	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
@@ -214,6 +216,62 @@ func TestTaskBillingOtherFiltersHistoricalOtherRatios(t *testing.T) {
 	assert.NotContains(t, other, "negative")
 	assert.NotContains(t, other, "nan")
 	assert.NotContains(t, other, "inf")
+}
+
+func TestTaskBillingOtherStoresModelRoutingInAdminInfo(t *testing.T) {
+	task := makeTask(1, 1, 100, 0, BillingSourceWallet, 0)
+	task.Properties.UpstreamModelName = "upstream-model"
+
+	other := taskBillingOther(task)
+
+	assert.NotContains(t, other, "is_model_mapped")
+	assert.NotContains(t, other, "upstream_model_name")
+	adminInfo, ok := other["admin_info"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, true, adminInfo["is_model_mapped"])
+	assert.Equal(t, "upstream-model", adminInfo["upstream_model_name"])
+}
+
+func TestLogTaskConsumptionStoresModelRoutingInAdminInfo(t *testing.T) {
+	truncate(t)
+	seedUser(t, 1, 1_000)
+	seedChannel(t, 1)
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/video/generations", nil)
+	ctx.Set("username", "test_user")
+	ctx.Set("token_name", "test_token")
+	relayInfo := &relaycommon.RelayInfo{
+		UserId:          1,
+		UsingGroup:      "default",
+		OriginModelName: "requested-model",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelId:         1,
+			IsModelMapped:     true,
+			UpstreamModelName: "upstream-model",
+		},
+		TaskRelayInfo: &relaycommon.TaskRelayInfo{Action: "generate"},
+		PriceData: types.PriceData{
+			ModelPrice: 0.02,
+			Quota:      10,
+			GroupRatioInfo: types.GroupRatioInfo{
+				GroupRatio: 1,
+			},
+		},
+	}
+
+	LogTaskConsumption(ctx, relayInfo)
+
+	var savedLog model.Log
+	require.NoError(t, model.LOG_DB.Where("user_id = ? AND type = ?", 1, model.LogTypeConsume).First(&savedLog).Error)
+	other, err := common.StrToMap(savedLog.Other)
+	require.NoError(t, err)
+	assert.NotContains(t, other, "is_model_mapped")
+	assert.NotContains(t, other, "upstream_model_name")
+	adminInfo, ok := other["admin_info"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, true, adminInfo["is_model_mapped"])
+	assert.Equal(t, "upstream-model", adminInfo["upstream_model_name"])
 }
 
 func TestTaskBillingContextPriceDataFiltersMultiplier(t *testing.T) {

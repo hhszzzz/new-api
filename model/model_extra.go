@@ -1,31 +1,63 @@
 package model
 
 func GetModelEnableGroups(modelName string) []string {
-	// 确保缓存最新
-	GetPricing()
-
 	if modelName == "" {
 		return make([]string, 0)
 	}
+	for {
+		updatePricingLock.RLock()
+		if pricingCacheFreshLocked() {
+			modelEnableGroupsLock.RLock()
+			groups := make([]string, len(modelEnableGroups[modelName]))
+			copy(groups, modelEnableGroups[modelName])
+			modelEnableGroupsLock.RUnlock()
+			updatePricingLock.RUnlock()
+			return groups
+		}
+		updatePricingLock.RUnlock()
 
-	modelEnableGroupsLock.RLock()
-	groups, ok := modelEnableGroups[modelName]
-	modelEnableGroupsLock.RUnlock()
-	if !ok {
-		return make([]string, 0)
+		if ensurePricingCache() {
+			continue
+		}
+
+		updatePricingLock.RLock()
+		modelEnableGroupsLock.RLock()
+		groups := make([]string, len(modelEnableGroups[modelName]))
+		copy(groups, modelEnableGroups[modelName])
+		modelEnableGroupsLock.RUnlock()
+		updatePricingLock.RUnlock()
+		return groups
 	}
-	return groups
 }
 
 // GetModelQuotaTypes 返回指定模型的计费类型集合（来自缓存）
 func GetModelQuotaTypes(modelName string) []int {
-	GetPricing()
+	for {
+		updatePricingLock.RLock()
+		if pricingCacheFreshLocked() {
+			modelEnableGroupsLock.RLock()
+			quota, ok := modelQuotaTypeMap[modelName]
+			modelEnableGroupsLock.RUnlock()
+			updatePricingLock.RUnlock()
+			if !ok {
+				return []int{}
+			}
+			return []int{quota}
+		}
+		updatePricingLock.RUnlock()
 
-	modelEnableGroupsLock.RLock()
-	quota, ok := modelQuotaTypeMap[modelName]
-	modelEnableGroupsLock.RUnlock()
-	if !ok {
-		return []int{}
+		if ensurePricingCache() {
+			continue
+		}
+
+		updatePricingLock.RLock()
+		modelEnableGroupsLock.RLock()
+		quota, ok := modelQuotaTypeMap[modelName]
+		modelEnableGroupsLock.RUnlock()
+		updatePricingLock.RUnlock()
+		if !ok {
+			return []int{}
+		}
+		return []int{quota}
 	}
-	return []int{quota}
 }

@@ -114,6 +114,76 @@ func TestHeaderNavModuleAuthRequiresLoginForRankings(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, recorder.Code)
 }
 
+func TestHeaderNavModuleAuthInheritsPricingAndAllowsModelStatusOverrides(t *testing.T) {
+	tests := []struct {
+		name          string
+		config        string
+		authenticated bool
+		wantStatus    int
+	}{
+		{
+			name:       "model status defaults to enabled and public",
+			config:     "",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "missing model status inherits disabled pricing",
+			config:     `{"pricing":{"enabled":false,"requireAuth":false}}`,
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "missing model status inherits pricing login requirement",
+			config:     `{"pricing":{"enabled":true,"requireAuth":true}}`,
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			name:       "legacy model status boolean inherits pricing login requirement",
+			config:     `{"pricing":{"enabled":true,"requireAuth":true},"modelStatus":true}`,
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			name:       "partial model status object inherits disabled pricing",
+			config:     `{"pricing":{"enabled":false,"requireAuth":true},"modelStatus":{"requireAuth":false}}`,
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "explicit model status settings override disabled pricing",
+			config:     `{"pricing":{"enabled":false,"requireAuth":false},"modelStatus":{"enabled":true,"requireAuth":false}}`,
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "model status can require login independently",
+			config:     `{"pricing":{"enabled":true,"requireAuth":false},"modelStatus":{"enabled":true,"requireAuth":true}}`,
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			name:          "authenticated user can access model status when login is required",
+			config:        `{"pricing":{"enabled":true,"requireAuth":false},"modelStatus":{"enabled":true,"requireAuth":true}}`,
+			authenticated: true,
+			wantStatus:    http.StatusOK,
+		},
+		{
+			name:       "model status can be disabled independently",
+			config:     `{"pricing":{"enabled":true,"requireAuth":false},"modelStatus":{"enabled":false,"requireAuth":false}}`,
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:          "disabled model status remains forbidden to authenticated users",
+			config:        `{"pricing":{"enabled":true,"requireAuth":false},"modelStatus":{"enabled":false,"requireAuth":false}}`,
+			authenticated: true,
+			wantStatus:    http.StatusForbidden,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			withHeaderNavModules(t, test.config)
+			recorder := performHeaderNavRequest(t, HeaderNavModuleAuth(HeaderNavModuleModelStatus), test.authenticated)
+			require.Equal(t, test.wantStatus, recorder.Code)
+		})
+	}
+}
+
 func TestHeaderNavModuleAuthRejectsLegacyDisabledModule(t *testing.T) {
 	raw := `{"rankings":false}`
 	withHeaderNavModules(t, raw)

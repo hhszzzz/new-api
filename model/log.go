@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"html"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
@@ -103,6 +106,60 @@ func createLog(log *Log) error {
 	return LOG_DB.Create(log).Error
 }
 
+const logModelNameScopeRequested = "requested"
+
+// withRequestedModelNameScope marks model_name as the client-requested model.
+// The marker is written only at the final server-side log boundary, so older
+// rows without it are treated as having unknown provenance in user views.
+func withRequestedModelNameScope(other map[string]interface{}, modelName string) map[string]interface{} {
+	if modelName == "" {
+		return other
+	}
+
+	scopedOther := make(map[string]interface{}, len(other)+1)
+	for key, value := range other {
+		scopedOther[key] = value
+	}
+	adminInfo := map[string]interface{}{}
+	if existingAdminInfo, ok := other["admin_info"].(map[string]interface{}); ok {
+		adminInfo = make(map[string]interface{}, len(existingAdminInfo)+1)
+		for key, value := range existingAdminInfo {
+			adminInfo[key] = value
+		}
+	}
+	adminInfo["model_name_scope"] = logModelNameScopeRequested
+	scopedOther["admin_info"] = adminInfo
+	return scopedOther
+}
+
+func hasRequestedModelNameScope(other map[string]interface{}) bool {
+	adminInfo, ok := other["admin_info"].(map[string]interface{})
+	if !ok {
+		return false
+	}
+	modelNameScope, ok := adminInfo["model_name_scope"].(string)
+	return ok && modelNameScope == logModelNameScopeRequested
+}
+
+func applyUserVisibleModelFilter(tx *gorm.DB, columnPrefix string, modelName string) (*gorm.DB, error) {
+	if modelName == "" {
+		return tx, nil
+	}
+	if strings.Contains(modelName, "%") {
+		return nil, errors.New("model filter is not available")
+	}
+
+	// Requiring the server-written provenance marker prevents historical rows
+	// whose raw model_name was an upstream route from matching a public name.
+	markerPattern := `%"model_name_scope":"` + logModelNameScopeRequested + `"%`
+	markerCondition, markerPattern, err := buildLogLikeCondition(columnPrefix+"other", markerPattern)
+	if err != nil {
+		return nil, err
+	}
+	return tx.Where(columnPrefix+"model_name = ?", modelName).
+		Where(markerCondition, markerPattern), nil
+}
+
 func clickHouseLogOrder(prefix string) string {
 	return prefix + "created_at desc, " + prefix + "request_id desc"
 }
@@ -113,18 +170,295 @@ func assignDisplayLogIds(logs []*Log, startIdx int) {
 	}
 }
 
-func formatUserLogs(logs []*Log, startIdx int) {
+func isASCIIAlphaNumeric(value byte) bool {
+	return value >= 'a' && value <= 'z' ||
+		value >= 'A' && value <= 'Z' ||
+		value >= '0' && value <= '9'
+}
+
+func blocksModelReferenceBoundary(content string, adjacentIndex int, direction int) bool {
+	if adjacentIndex < 0 || adjacentIndex >= len(content) {
+		return false
+	}
+	adjacent := content[adjacentIndex]
+	if isASCIIAlphaNumeric(adjacent) || adjacent == '_' || adjacent == '-' {
+		return true
+	}
+	if adjacent != '.' {
+		return false
+	}
+	beyondIndex := adjacentIndex + direction
+	return beyondIndex >= 0 && beyondIndex < len(content) && isASCIIAlphaNumeric(content[beyondIndex])
+}
+
+func replaceExactModelReferences(content string, upstreamModelName string, publicModelName string) string {
+	if content == "" || upstreamModelName == "" {
+		return content
+	}
+
+	type matchRange struct {
+		start int
+		end   int
+	}
+	matches := make([]matchRange, 0, 1)
+	for searchFrom := 0; searchFrom < len(content); {
+		relativeStart := strings.Index(content[searchFrom:], upstreamModelName)
+		if relativeStart == -1 {
+			break
+		}
+		start := searchFrom + relativeStart
+		end := start + len(upstreamModelName)
+		leftBoundary := !blocksModelReferenceBoundary(content, start-1, -1)
+		rightBoundary := !blocksModelReferenceBoundary(content, end, 1)
+		if leftBoundary && rightBoundary {
+			matches = append(matches, matchRange{start: start, end: end})
+		}
+		searchFrom = end
+	}
+	if len(matches) == 0 {
+		return content
+	}
+
+	var sanitized strings.Builder
+	sanitized.Grow(len(content))
+	lastEnd := 0
+	for _, match := range matches {
+		sanitized.WriteString(content[lastEnd:match.start])
+		sanitized.WriteString(publicModelName)
+		lastEnd = match.end
+	}
+	sanitized.WriteString(content[lastEnd:])
+	return sanitized.String()
+}
+
+func containsFoldedModelReference(content string, modelName string) bool {
+	if content == "" || modelName == "" || len(content) < len(modelName) {
+		return false
+	}
+	for start := 0; start+len(modelName) <= len(content); start++ {
+		end := start + len(modelName)
+		if !strings.EqualFold(content[start:end], modelName) {
+			continue
+		}
+		leftBlocked := blocksSensitiveModelReferenceBoundary(content, start-1, -1)
+		rightBlocked := blocksSensitiveModelReferenceBoundary(content, end, 1)
+		if !leftBlocked && !rightBlocked {
+			return true
+		}
+	}
+	return false
+}
+
+func blocksSensitiveModelReferenceBoundary(content string, adjacentIndex int, direction int) bool {
+	if adjacentIndex < 0 || adjacentIndex >= len(content) {
+		return false
+	}
+	adjacent := content[adjacentIndex]
+	if isASCIIAlphaNumeric(adjacent) {
+		return true
+	}
+	if adjacent != '.' {
+		return false
+	}
+	beyondIndex := adjacentIndex + direction
+	return direction > 0 && beyondIndex >= 0 && beyondIndex < len(content) &&
+		content[beyondIndex] >= '0' && content[beyondIndex] <= '9'
+}
+
+func hasPercentEscape(value string) bool {
+	isHex := func(char byte) bool {
+		return char >= '0' && char <= '9' ||
+			char >= 'a' && char <= 'f' ||
+			char >= 'A' && char <= 'F'
+	}
+	for i := 0; i+2 < len(value); i++ {
+		if value[i] == '%' && isHex(value[i+1]) && isHex(value[i+2]) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsObfuscatedModelReference(content string, upstreamModelName string) bool {
+	canonical := content
+	for range 4 {
+		if containsFoldedModelReference(canonical, upstreamModelName) {
+			return true
+		}
+		changed := false
+		if hasPercentEscape(canonical) {
+			unescaped, err := url.PathUnescape(canonical)
+			if err != nil || unescaped == canonical {
+				return true
+			}
+			canonical = unescaped
+			changed = true
+		}
+		unescaped := html.UnescapeString(canonical)
+		if unescaped != canonical {
+			canonical = unescaped
+			changed = true
+		}
+		if !changed {
+			break
+		}
+	}
+	if containsFoldedModelReference(canonical, upstreamModelName) ||
+		hasPercentEscape(canonical) ||
+		html.UnescapeString(canonical) != canonical {
+		return true
+	}
+	// Escaped JSON/path fragments cannot be proven safe without knowing the
+	// upstream's encoding convention, so routed diagnostics containing them
+	// remain fail-closed.
+	return strings.Contains(canonical, `\`)
+}
+
+func sanitizeRoutedErrorText(content string, upstreamModelNames []string, publicModelName string) (string, bool) {
+	requestedModelPlaceholder := "\x00"
+	for {
+		placeholderConflict := strings.Contains(content, requestedModelPlaceholder)
+		placeholderConflict = placeholderConflict || strings.Contains(publicModelName, requestedModelPlaceholder)
+		for _, upstreamModelName := range upstreamModelNames {
+			placeholderConflict = placeholderConflict || strings.Contains(upstreamModelName, requestedModelPlaceholder)
+		}
+		if !placeholderConflict {
+			break
+		}
+		requestedModelPlaceholder += "\x00"
+	}
+	// Protect occurrences that are already the public requested identity before
+	// replacing the shorter upstream name. This keeps sanitization idempotent
+	// when, for example, public "openai/gpt-4" contains upstream "gpt-4".
+	sanitized := replaceExactModelReferences(content, publicModelName, requestedModelPlaceholder)
+	for _, upstreamModelName := range upstreamModelNames {
+		sanitized = replaceExactModelReferences(sanitized, upstreamModelName, requestedModelPlaceholder)
+	}
+	for _, upstreamModelName := range upstreamModelNames {
+		if containsObfuscatedModelReference(sanitized, upstreamModelName) {
+			return "", false
+		}
+	}
+	return strings.ReplaceAll(sanitized, requestedModelPlaceholder, publicModelName), true
+}
+
+func formatUserLogs(logs []*Log, startIdx int, canViewModelRouting bool) {
 	for i := range logs {
 		logs[i].ChannelName = ""
 		var otherMap map[string]interface{}
-		otherMap, _ = common.StrToMap(logs[i].Other)
+		otherMap, parseErr := common.StrToMap(logs[i].Other)
+		if !canViewModelRouting && (parseErr != nil || len(otherMap) == 0) {
+			// Empty or malformed historical metadata cannot prove that model_name
+			// is the client-requested identity, so omit both uncertain fields.
+			logs[i].ModelName = ""
+			if logs[i].Type == LogTypeError {
+				logs[i].Content = ""
+			}
+			logs[i].Other = common.MapToJsonStr(map[string]interface{}{})
+			continue
+		}
 		if otherMap != nil {
+			modelNameIsRequested := hasRequestedModelNameScope(otherMap)
+			modelRoutingChecked := false
+			adminFields := map[string]interface{}{}
+			upstreamModelNames := make([]string, 0, 2)
+			if upstreamModelName, ok := otherMap["upstream_model_name"].(string); ok && upstreamModelName != "" {
+				upstreamModelNames = append(upstreamModelNames, upstreamModelName)
+			}
+			if canViewModelRouting {
+				if adminInfo, ok := otherMap["admin_info"].(map[string]interface{}); ok {
+					if isModelMapped, exists := adminInfo["is_model_mapped"]; exists {
+						adminFields["is_model_mapped"] = isModelMapped
+					}
+					if upstreamModel, exists := adminInfo["upstream_model_name"]; exists {
+						adminFields["upstream_model_name"] = upstreamModel
+					}
+					if paramOverrideAudit, exists := adminInfo["po"]; exists {
+						adminFields["po"] = paramOverrideAudit
+					}
+				}
+			} else if adminInfo, ok := otherMap["admin_info"].(map[string]interface{}); ok {
+				modelRoutingChecked, _ = adminInfo["model_routing_checked"].(bool)
+				if upstreamModelName, ok := adminInfo["upstream_model_name"].(string); ok && upstreamModelName != "" {
+					if len(upstreamModelNames) == 0 || upstreamModelNames[0] != upstreamModelName {
+						upstreamModelNames = append(upstreamModelNames, upstreamModelName)
+					}
+				}
+			}
 			// Remove admin-only debug fields.
 			delete(otherMap, "admin_info")
 			// Remove operation-audit details (operator/route info), admin-only.
 			delete(otherMap, "audit_info")
 			// delete(otherMap, "reject_reason")
 			delete(otherMap, "stream_status")
+			if canViewModelRouting {
+				if len(adminFields) > 0 {
+					otherMap["admin_info"] = adminFields
+				}
+			} else {
+				if !modelNameIsRequested {
+					// Historical rows may contain the routed upstream model in
+					// model_name. Without server-written provenance it is unsafe to
+					// expose the value, even when it matches a current public model.
+					logs[i].ModelName = ""
+				}
+				// Historical logs stored model-routing details at the top level.
+				delete(otherMap, "is_model_mapped")
+				delete(otherMap, "upstream_model_name")
+				// Historical parameter-override audits may contain the routed model.
+				delete(otherMap, "po")
+				if logs[i].Type == LogTypeError {
+					if !modelNameIsRequested || !modelRoutingChecked {
+						// Historical rows and writers that did not explicitly complete
+						// routing analysis cannot prove their diagnostics are public-safe.
+						logs[i].Content = ""
+						delete(otherMap, "error_code")
+						delete(otherMap, "error_type")
+					} else if len(upstreamModelNames) > 0 {
+						if sanitized, safe := sanitizeRoutedErrorText(logs[i].Content, upstreamModelNames, logs[i].ModelName); safe {
+							logs[i].Content = sanitized
+						} else {
+							logs[i].Content = ""
+						}
+						for _, field := range []string{"error_code", "error_type"} {
+							value, ok := otherMap[field].(string)
+							if !ok {
+								continue
+							}
+							if sanitized, safe := sanitizeRoutedErrorText(value, upstreamModelNames, logs[i].ModelName); safe {
+								otherMap[field] = sanitized
+							} else {
+								delete(otherMap, field)
+							}
+						}
+					}
+				} else {
+					for _, upstreamModelName := range upstreamModelNames {
+						publicModelName := logs[i].ModelName
+						modelNameMatchesUpstream := publicModelName == upstreamModelName ||
+							strings.TrimSuffix(publicModelName, ratio_setting.CompactModelSuffix) == upstreamModelName &&
+								strings.HasSuffix(publicModelName, ratio_setting.CompactModelSuffix)
+						if modelNameMatchesUpstream {
+							publicModelName = ""
+						}
+						logs[i].Content = replaceExactModelReferences(logs[i].Content, upstreamModelName, publicModelName)
+					}
+				}
+				modelNameMatchesUpstream := false
+				for _, upstreamModelName := range upstreamModelNames {
+					if logs[i].ModelName == upstreamModelName ||
+						strings.HasSuffix(logs[i].ModelName, ratio_setting.CompactModelSuffix) &&
+							strings.TrimSuffix(logs[i].ModelName, ratio_setting.CompactModelSuffix) == upstreamModelName {
+						modelNameMatchesUpstream = true
+						break
+					}
+				}
+				if modelNameMatchesUpstream {
+					// Legacy realtime logs persisted only the routed model in model_name.
+					// The requested model cannot be reconstructed safely, so omit it.
+					logs[i].ModelName = ""
+				}
+			}
 		}
 		logs[i].Other = common.MapToJsonStr(otherMap)
 	}
@@ -137,7 +471,7 @@ func GetLogByTokenId(tokenId int) (logs []*Log, err error) {
 		order = clickHouseLogOrder("")
 	}
 	err = LOG_DB.Model(&Log{}).Where("token_id = ?", tokenId).Order(order).Limit(common.MaxRecentItems).Find(&logs).Error
-	formatUserLogs(logs, 0)
+	formatUserLogs(logs, 0, false)
 	return logs, err
 }
 
@@ -285,7 +619,7 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 	username := c.GetString("username")
 	requestId := c.GetString(common.RequestIdKey)
 	upstreamRequestId := c.GetString(common.UpstreamRequestIdKey)
-	otherStr := common.MapToJsonStr(other)
+	otherStr := common.MapToJsonStr(withRequestedModelNameScope(other, modelName))
 	// 判断是否需要记录 IP
 	needRecordIp := false
 	if settingMap, err := GetUserSetting(userId, false); err == nil {
@@ -349,7 +683,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	requestId := c.GetString(common.RequestIdKey)
 	upstreamRequestId := c.GetString(common.UpstreamRequestIdKey)
 	createdAt := common.GetTimestamp()
-	otherStr := common.MapToJsonStr(params.Other)
+	otherStr := common.MapToJsonStr(withRequestedModelNameScope(params.Other, params.ModelName))
 	// 判断是否需要记录 IP
 	needRecordIp := false
 	if settingMap, err := GetUserSetting(userId, false); err == nil {
@@ -389,16 +723,17 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	}
 	if common.DataExportEnabled {
 		LogQuotaData(QuotaDataLogParams{
-			UserID:    userId,
-			Username:  username,
-			ModelName: params.ModelName,
-			Quota:     params.Quota,
-			CreatedAt: createdAt,
-			TokenUsed: params.PromptTokens + params.CompletionTokens,
-			UseGroup:  params.Group,
-			TokenID:   params.TokenId,
-			ChannelID: params.ChannelId,
-			NodeName:  common.NodeName,
+			UserID:     userId,
+			Username:   username,
+			ModelName:  params.ModelName,
+			ModelScope: QuotaModelScopeRequested,
+			Quota:      params.Quota,
+			CreatedAt:  createdAt,
+			TokenUsed:  params.PromptTokens + params.CompletionTokens,
+			UseGroup:   params.Group,
+			TokenID:    params.TokenId,
+			ChannelID:  params.ChannelId,
+			NodeName:   common.NodeName,
 		})
 	}
 }
@@ -440,7 +775,7 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 		ChannelId: params.ChannelId,
 		TokenId:   params.TokenId,
 		Group:     params.Group,
-		Other:     common.MapToJsonStr(params.Other),
+		Other:     common.MapToJsonStr(withRequestedModelNameScope(params.Other, params.ModelName)),
 	}
 	err := createLog(log)
 	if err != nil {
@@ -452,15 +787,16 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 			nodeName = common.NodeName
 		}
 		LogQuotaData(QuotaDataLogParams{
-			UserID:    params.UserId,
-			Username:  username,
-			ModelName: params.ModelName,
-			Quota:     params.Quota,
-			CreatedAt: createdAt,
-			UseGroup:  params.Group,
-			TokenID:   params.TokenId,
-			ChannelID: params.ChannelId,
-			NodeName:  nodeName,
+			UserID:     params.UserId,
+			Username:   username,
+			ModelName:  params.ModelName,
+			ModelScope: QuotaModelScopeRequested,
+			Quota:      params.Quota,
+			CreatedAt:  createdAt,
+			UseGroup:   params.Group,
+			TokenID:    params.TokenId,
+			ChannelID:  params.ChannelId,
+			NodeName:   nodeName,
 		})
 	}
 }
@@ -559,9 +895,7 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 	return logs, total, err
 }
 
-const logSearchCountLimit = 10000
-
-func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, startIdx int, num int, group string, requestId string, upstreamRequestId string) (logs []*Log, total int64, err error) {
+func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, startIdx int, num int, group string, requestId string, upstreamRequestId string, canViewModelRouting bool) (logs []*Log, total int64, err error) {
 	var tx *gorm.DB
 	if logType == LogTypeUnknown {
 		tx = LOG_DB.Where("logs.user_id = ?", userId)
@@ -569,7 +903,11 @@ func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int
 		tx = LOG_DB.Where("logs.user_id = ? and logs.type = ?", userId, logType)
 	}
 
-	if tx, err = applyExplicitLogTextFilter(tx, "logs.model_name", modelName); err != nil {
+	if canViewModelRouting {
+		if tx, err = applyExplicitLogTextFilter(tx, "logs.model_name", modelName); err != nil {
+			return nil, 0, err
+		}
+	} else if tx, err = applyUserVisibleModelFilter(tx, "logs.", modelName); err != nil {
 		return nil, 0, err
 	}
 	if tokenName != "" {
@@ -590,14 +928,14 @@ func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int
 	if group != "" {
 		tx = tx.Where("logs."+logGroupCol+" = ?", group)
 	}
-	err = tx.Model(&Log{}).Limit(logSearchCountLimit).Count(&total).Error
-	if err != nil {
-		common.SysError("failed to count user logs: " + err.Error())
-		return nil, 0, errors.New("查询日志失败")
-	}
 	order := "logs.id desc"
 	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
 		order = clickHouseLogOrder("logs.")
+	}
+	err = tx.Model(&Log{}).Count(&total).Error
+	if err != nil {
+		common.SysError("failed to count user logs: " + err.Error())
+		return nil, 0, errors.New("查询日志失败")
 	}
 	err = tx.Order(order).Limit(num).Offset(startIdx).Find(&logs).Error
 	if err != nil {
@@ -605,7 +943,7 @@ func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int
 		return nil, 0, errors.New("查询日志失败")
 	}
 
-	formatUserLogs(logs, startIdx)
+	formatUserLogs(logs, startIdx, canViewModelRouting)
 	return logs, total, err
 }
 
@@ -665,6 +1003,57 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 	}
 	if err := rpmTpmQuery.Scan(&stat).Error; err != nil {
 		common.SysError("failed to query rpm/tpm stat: " + err.Error())
+		return stat, errors.New("查询统计数据失败")
+	}
+
+	return stat, nil
+}
+
+// SumUserUsedQuota returns self-service usage statistics. When a model filter
+// is present it only includes rows whose model_name was explicitly marked as
+// the client-requested identity at the server-side log boundary.
+func SumUserUsedQuota(userId int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, channel int, group string) (stat Stat, err error) {
+	tx := LOG_DB.Table("logs").Select("COALESCE(sum(quota), 0) quota").Where("user_id = ?", userId)
+	rpmTpmQuery := LOG_DB.Table("logs").
+		Select("count(*) rpm, COALESCE(sum(prompt_tokens), 0) + COALESCE(sum(completion_tokens), 0) tpm").
+		Where("user_id = ?", userId)
+
+	if tokenName != "" {
+		tx = tx.Where("token_name = ?", tokenName)
+		rpmTpmQuery = rpmTpmQuery.Where("token_name = ?", tokenName)
+	}
+	if startTimestamp != 0 {
+		tx = tx.Where("created_at >= ?", startTimestamp)
+	}
+	if endTimestamp != 0 {
+		tx = tx.Where("created_at <= ?", endTimestamp)
+	}
+	if tx, err = applyUserVisibleModelFilter(tx, "", modelName); err != nil {
+		return stat, err
+	}
+	if rpmTpmQuery, err = applyUserVisibleModelFilter(rpmTpmQuery, "", modelName); err != nil {
+		return stat, err
+	}
+	if channel != 0 {
+		tx = tx.Where("channel_id = ?", channel)
+		rpmTpmQuery = rpmTpmQuery.Where("channel_id = ?", channel)
+	}
+	if group != "" {
+		tx = tx.Where(logGroupCol+" = ?", group)
+		rpmTpmQuery = rpmTpmQuery.Where(logGroupCol+" = ?", group)
+	}
+
+	tx = tx.Where("type = ?", LogTypeConsume)
+	rpmTpmQuery = rpmTpmQuery.
+		Where("type = ?", LogTypeConsume).
+		Where("created_at >= ?", time.Now().Add(-60*time.Second).Unix())
+
+	if err := tx.Scan(&stat).Error; err != nil {
+		common.SysError("failed to query user log stat: " + err.Error())
+		return stat, errors.New("查询统计数据失败")
+	}
+	if err := rpmTpmQuery.Scan(&stat).Error; err != nil {
+		common.SysError("failed to query user rpm/tpm stat: " + err.Error())
 		return stat, errors.New("查询统计数据失败")
 	}
 

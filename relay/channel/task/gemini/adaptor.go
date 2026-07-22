@@ -244,19 +244,9 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 }
 
 func (a *TaskAdaptor) ConvertToOpenAIVideo(task *model.Task) ([]byte, error) {
-	upstreamTaskID := task.GetUpstreamTaskID()
-	upstreamName, err := taskcommon.DecodeLocalTaskID(upstreamTaskID)
-	if err != nil {
-		upstreamName = ""
-	}
-	modelName := extractModelFromOperationName(upstreamName)
-	if strings.TrimSpace(modelName) == "" {
-		modelName = "veo-3.0-generate-001"
-	}
-
 	video := dto.NewOpenAIVideo()
 	video.ID = task.TaskID
-	video.Model = modelName
+	video.Model = task.Properties.OriginModelName
 	video.Status = task.Status.ToVideoStatus()
 	video.SetProgressStr(task.Progress)
 	video.CreatedAt = task.CreatedAt

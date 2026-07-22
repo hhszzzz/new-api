@@ -10,7 +10,9 @@ import (
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/QuantumNous/new-api/dto"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/setting/model_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/samber/lo"
 	"github.com/stretchr/testify/require"
 )
@@ -2283,6 +2285,73 @@ func TestShouldAuditParamPathUsesFieldBoundaryPrefixMatching(t *testing.T) {
 	require.True(t, shouldAuditParamPath("systemInstruction.parts.0.text"))
 	require.False(t, shouldAuditParamPath("model_name"))
 	require.False(t, shouldAuditParamPath("message"))
+}
+
+func TestApplyParamOverrideWithRelayInfoTracksFinalModelRoute(t *testing.T) {
+	tests := []struct {
+		name           string
+		originModel    string
+		upstreamModel  string
+		wasMapped      bool
+		relayMode      int
+		overrideModel  string
+		expectMapped   bool
+		expectUpstream string
+		expectBilling  string
+	}{
+		{
+			name:           "override routes public model to private model",
+			originModel:    "public-model",
+			upstreamModel:  "public-model",
+			overrideModel:  "private-model",
+			expectMapped:   true,
+			expectUpstream: "private-model",
+		},
+		{
+			name:           "override restores mapped model to requested model",
+			originModel:    "public-model",
+			upstreamModel:  "private-model",
+			wasMapped:      true,
+			overrideModel:  "public-model",
+			expectMapped:   false,
+			expectUpstream: "public-model",
+		},
+		{
+			name:           "compact override updates final billing model",
+			originModel:    ratio_setting.WithCompactModelSuffix("public-model"),
+			upstreamModel:  "private-mapped-model",
+			wasMapped:      true,
+			relayMode:      relayconstant.RelayModeResponsesCompact,
+			overrideModel:  "private-final-model",
+			expectMapped:   true,
+			expectUpstream: "private-final-model",
+			expectBilling:  ratio_setting.WithCompactModelSuffix("private-final-model"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			info := &RelayInfo{
+				OriginModelName: tt.originModel,
+				RelayMode:       tt.relayMode,
+				ChannelMeta: &ChannelMeta{
+					UpstreamModelName: tt.upstreamModel,
+					IsModelMapped:     tt.wasMapped,
+					ParamOverride: map[string]interface{}{
+						"model": tt.overrideModel,
+					},
+				},
+			}
+
+			result, err := ApplyParamOverrideWithRelayInfo([]byte(`{"model":"public-model"}`), info)
+			require.NoError(t, err)
+			require.JSONEq(t, fmt.Sprintf(`{"model":%q}`, tt.overrideModel), string(result))
+			require.Equal(t, tt.expectUpstream, info.UpstreamModelName)
+			require.Equal(t, tt.expectMapped, info.IsModelMapped)
+			require.Equal(t, tt.expectBilling, info.BillingModelName)
+			require.NotEmpty(t, info.ParamOverrideAudit)
+		})
+	}
 }
 
 func assertJSONEqual(t *testing.T, want, got string) {

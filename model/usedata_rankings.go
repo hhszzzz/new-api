@@ -9,43 +9,71 @@ import (
 
 type RankingQuotaTotal struct {
 	ModelName   string `json:"model_name"`
+	ModelScope  int    `json:"-"`
 	TotalTokens int64  `json:"total_tokens"`
 }
 
 type RankingQuotaBucket struct {
-	ModelName string `json:"model_name"`
-	Bucket    int64  `json:"bucket"`
-	Tokens    int64  `json:"tokens"`
+	ModelName  string `json:"model_name"`
+	ModelScope int    `json:"-"`
+	Bucket     int64  `json:"bucket"`
+	Tokens     int64  `json:"tokens"`
 }
 
-func GetRankingQuotaTotals(startTime int64, endTime int64) ([]RankingQuotaTotal, error) {
-	var rows []RankingQuotaTotal
+func GetRankingQuotaTotals(startTime int64, endTime int64, visibleModelNames []string, canViewPrivate bool) ([]RankingQuotaTotal, error) {
+	var legacyRows []RankingQuotaTotal
 	query := DB.Table("quota_data").
 		Select("model_name, sum(token_used) as total_tokens").
-		Where("model_name <> ''").
 		Group("model_name").
 		Having("sum(token_used) > 0").
 		Order("total_tokens DESC")
 	query = applyRankingQuotaTimeRange(query, startTime, endTime)
-	err := query.Find(&rows).Error
-	return rows, err
+	err := query.Find(&legacyRows).Error
+	if err != nil {
+		return nil, err
+	}
+	var scopedRows []RankingQuotaTotal
+	query = DB.Model(&ScopedQuotaData{}).
+		Select("model_name, model_scope, sum(token_used) as total_tokens").
+		Group("model_name, model_scope").
+		Having("sum(token_used) > 0").
+		Order("total_tokens DESC")
+	query = applyRankingQuotaTimeRange(query, startTime, endTime)
+	err = query.Find(&scopedRows).Error
+	if err != nil {
+		return nil, err
+	}
+	return sanitizeRankingQuotaTotals(append(legacyRows, scopedRows...), visibleModelNames, canViewPrivate), nil
 }
 
-func GetRankingQuotaBuckets(startTime int64, endTime int64, bucketSize int64) ([]RankingQuotaBucket, error) {
+func GetRankingQuotaBuckets(startTime int64, endTime int64, bucketSize int64, visibleModelNames []string, canViewPrivate bool) ([]RankingQuotaBucket, error) {
 	if bucketSize <= 0 {
 		bucketSize = 3600
 	}
 	bucketExpr := rankingBucketExpr(bucketSize)
-	var rows []RankingQuotaBucket
+	var legacyRows []RankingQuotaBucket
 	query := DB.Table("quota_data").
 		Select(fmt.Sprintf("model_name, %s as bucket, sum(token_used) as tokens", bucketExpr)).
-		Where("model_name <> ''").
 		Group(fmt.Sprintf("model_name, %s", bucketExpr)).
 		Having("sum(token_used) > 0").
 		Order("bucket ASC")
 	query = applyRankingQuotaTimeRange(query, startTime, endTime)
-	err := query.Find(&rows).Error
-	return rows, err
+	err := query.Find(&legacyRows).Error
+	if err != nil {
+		return nil, err
+	}
+	var scopedRows []RankingQuotaBucket
+	query = DB.Model(&ScopedQuotaData{}).
+		Select(fmt.Sprintf("model_name, model_scope, %s as bucket, sum(token_used) as tokens", bucketExpr)).
+		Group(fmt.Sprintf("model_name, model_scope, %s", bucketExpr)).
+		Having("sum(token_used) > 0").
+		Order("bucket ASC")
+	query = applyRankingQuotaTimeRange(query, startTime, endTime)
+	err = query.Find(&scopedRows).Error
+	if err != nil {
+		return nil, err
+	}
+	return sanitizeRankingQuotaBuckets(append(legacyRows, scopedRows...), visibleModelNames, canViewPrivate), nil
 }
 
 func rankingBucketExpr(bucketSize int64) string {

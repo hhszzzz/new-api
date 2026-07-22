@@ -76,6 +76,7 @@ import {
   getResponseTimeColor,
   renderAuditContent,
 } from '../../lib/format'
+import { getModelRouteInfo } from '../../lib/model-route'
 import {
   getLogTypeConfig,
   isPerCallBilling,
@@ -471,7 +472,8 @@ function TokenBreakdown(props: { log: UsageLog; other: LogOtherData }) {
 
 interface DetailsDialogProps {
   log: UsageLog
-  isAdmin: boolean
+  isAdminView: boolean
+  canViewModelRoute: boolean
   open: boolean
   onOpenChange: (open: boolean) => void
 }
@@ -481,6 +483,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
   const { copiedText, copyToClipboard } = useCopyToClipboard({ notify: false })
   const details = props.log.content ?? ''
   const other = parseLogOther(props.log.other)
+  const modelRoute = getModelRouteInfo(other, props.canViewModelRoute)
   const typeConfig = getLogTypeConfig(props.log.type)
 
   const isViolation = isViolationFeeLog(other)
@@ -497,10 +500,13 @@ export function DetailsDialog(props: DetailsDialogProps) {
   const hasAudioTokens = other?.ws || other?.audio
   const showTiming = isTimingLogType(props.log.type)
   const showAdminIp =
-    !!props.log.ip && (showTiming || (props.isAdmin && isTopup))
+    !!props.log.ip && (showTiming || (props.isAdminView && isTopup))
   const adminInfo = other?.admin_info
+  const paramOverrides = props.canViewModelRoute
+    ? (adminInfo?.po ?? other?.po)
+    : undefined
   const topupAuditFields =
-    isTopup && props.isAdmin && adminInfo
+    isTopup && props.isAdminView && adminInfo
       ? ([
           adminInfo.payment_method && {
             label: t('Order Payment Method'),
@@ -528,13 +534,13 @@ export function DetailsDialog(props: DetailsDialogProps) {
           },
         ].filter(Boolean) as Array<{ label: string; value: string }>)
       : []
-  const showLegacyTopupWarning = isTopup && props.isAdmin && !adminInfo
+  const showLegacyTopupWarning = isTopup && props.isAdminView && !adminInfo
   const showTopupAuditSection =
     isTopup &&
-    props.isAdmin &&
+    props.isAdminView &&
     (topupAuditFields.length > 0 || showLegacyTopupWarning)
   const manageOperator = (() => {
-    if (!isManage || !props.isAdmin || !adminInfo) return null
+    if (!isManage || !props.isAdminView || !adminInfo) return null
     const username = adminInfo.admin_username
     const id = adminInfo.admin_id
     const hasUsername = username != null && String(username).trim() !== ''
@@ -545,7 +551,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
     return `ID: ${id}`
   })()
   const authMethodLabel = (() => {
-    if (!isManage || !props.isAdmin || !adminInfo?.auth_method) return ''
+    if (!isManage || !props.isAdminView || !adminInfo?.auth_method) return ''
     if (adminInfo.auth_method === 'access_token') return t('Access Token')
     if (adminInfo.auth_method === 'session') return t('Session')
     return String(adminInfo.auth_method)
@@ -554,12 +560,13 @@ export function DetailsDialog(props: DetailsDialogProps) {
   // Localized operation text rendered from the language-independent op
   // descriptor (shared by audit type=3 and login type=7).
   const operationText = renderAuditContent(other, t)
-  const auditRoute = isManage && props.isAdmin ? other?.audit_info : undefined
+  const auditRoute =
+    isManage && props.isAdminView ? other?.audit_info : undefined
   // Channel update records which fields changed (stable field tokens); render
   // them with their localized labels for admins.
   const changedFieldTokens =
     isManage &&
-    props.isAdmin &&
+    props.isAdminView &&
     Array.isArray(other?.op?.params?.changed_fields)
       ? (other.op.params.changed_fields as string[])
       : []
@@ -567,7 +574,9 @@ export function DetailsDialog(props: DetailsDialogProps) {
     .map((field) => t(CHANNEL_FIELD_LABELS[field] ?? field))
     .join(', ')
   const showManageAuditSection =
-    isManage && props.isAdmin && (operationText != null || auditRoute != null)
+    isManage &&
+    props.isAdminView &&
+    (operationText != null || auditRoute != null)
 
   // Login audit (type=7); visible to the log owner, not admin-only.
   const isLogin = props.log.type === 7
@@ -597,7 +606,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
       ? t('Native format')
       : conversionChain.join(' -> ')
   const showConversion =
-    props.isAdmin &&
+    props.isAdminView &&
     props.log.type !== 6 &&
     (other?.request_path || conversionChain.length > 0)
 
@@ -656,7 +665,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
             />
           )}
 
-          {props.isAdmin && props.log.channel > 0 && (
+          {props.isAdminView && props.log.channel > 0 && (
             <DetailRow
               label={t('Channel')}
               value={
@@ -674,7 +683,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
             />
           )}
 
-          {channelChain && props.isAdmin && (
+          {channelChain && props.isAdminView && (
             <DetailRow label={t('Retry Chain')} value={channelChain} mono />
           )}
 
@@ -781,7 +790,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
         )}
 
         {/* Quota saturation marker (admin only) */}
-        {props.isAdmin && other?.admin_info?.quota_saturation && (
+        {props.isAdminView && other?.admin_info?.quota_saturation && (
           <DetailSection
             icon={<AlertTriangle className='size-3.5' aria-hidden='true' />}
             label={t('Quota clamped')}
@@ -816,7 +825,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
         )}
 
         {/* Reject reason (admin only) */}
-        {props.isAdmin && other?.reject_reason && (
+        {props.isAdminView && other?.reject_reason && (
           <DetailSection
             icon={<AlertTriangle className='size-3.5' aria-hidden='true' />}
             label={t('Reject Reason')}
@@ -1044,7 +1053,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
         )}
 
         {/* Model mapping */}
-        {other?.is_model_mapped && other?.upstream_model_name && (
+        {modelRoute.actualModel ? (
           <DetailSection label={t('Model Mapping')}>
             <DetailRow
               label={t('Request Model')}
@@ -1053,11 +1062,11 @@ export function DetailsDialog(props: DetailsDialogProps) {
             />
             <DetailRow
               label={t('Actual Model')}
-              value={other.upstream_model_name}
+              value={modelRoute.actualModel}
               mono
             />
           </DetailSection>
-        )}
+        ) : null}
 
         {/* Token breakdown (for consume/error types with token data) */}
         {isDisplayableType(props.log.type) && other && (
@@ -1069,7 +1078,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
           <BillingBreakdown
             log={props.log}
             other={other}
-            isAdmin={props.isAdmin}
+            isAdmin={props.isAdminView}
           />
         )}
 
@@ -1086,7 +1095,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
         )}
 
         {/* Admin billing mode indicator for non-consume */}
-        {props.isAdmin &&
+        {props.isAdminView &&
           !isConsume &&
           props.log.type !== 6 &&
           other?.admin_info && (
@@ -1108,7 +1117,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
           )}
 
         {/* Stream status details (admin only) */}
-        {props.isAdmin &&
+        {props.isAdminView &&
           other?.stream_status &&
           other.stream_status.status !== 'ok' && (
             <DetailSection label={t('Stream Status')}>
@@ -1199,13 +1208,13 @@ export function DetailsDialog(props: DetailsDialogProps) {
         )}
 
         {/* Param override */}
-        {other?.po && Array.isArray(other.po) && other.po.length > 0 && (
+        {Array.isArray(paramOverrides) && paramOverrides.length > 0 ? (
           <DetailSection
             icon={<Settings2 className='size-3.5' aria-hidden='true' />}
             iconTone='chart-3'
-            label={`${t('Param Override')} (${other.po.length})`}
+            label={`${t('Param Override')} (${paramOverrides.length})`}
           >
-            {other.po.filter(Boolean).map((line) => {
+            {paramOverrides.filter(Boolean).map((line) => {
               const parsed = parseAuditLine(line)
               if (!parsed) return null
               return (
@@ -1226,7 +1235,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
               )
             })}
           </DetailSection>
-        )}
+        ) : null}
 
         {/* Content */}
         {details && (

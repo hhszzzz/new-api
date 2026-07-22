@@ -31,24 +31,21 @@ func isNoThinkingRequest(req *dto.GeminiChatRequest) bool {
 	return false
 }
 
-func trimModelThinking(modelName string) string {
-	// 去除模型名称中的 -nothinking 后缀
-	if strings.HasSuffix(modelName, "-nothinking") {
-		return strings.TrimSuffix(modelName, "-nothinking")
+// ConfigureGeminiBillingModel selects the virtual no-thinking pricing variant
+// before pre-consume without changing either the client-requested model or the
+// model that will later be selected by channel mapping.
+func ConfigureGeminiBillingModel(info *relaycommon.RelayInfo) {
+	if info == nil || !model_setting.GetGeminiSettings().ThinkingAdapterEnabled {
+		return
 	}
-	// 去除模型名称中的 -thinking 后缀
-	if strings.HasSuffix(modelName, "-thinking") {
-		return strings.TrimSuffix(modelName, "-thinking")
+	request, ok := info.Request.(*dto.GeminiChatRequest)
+	if !ok || !isNoThinkingRequest(request) || strings.HasSuffix(info.OriginModelName, "-nothinking") {
+		return
 	}
-
-	// 去除模型名称中的 -thinking-number
-	if strings.Contains(modelName, "-thinking-") {
-		parts := strings.Split(modelName, "-thinking-")
-		if len(parts) > 1 {
-			return parts[0] + "-thinking"
-		}
+	noThinkingModelName := info.OriginModelName + "-nothinking"
+	if helper.HasModelBillingConfig(noThinkingModelName) {
+		info.BillingModelName = noThinkingModelName
 	}
-	return modelName
 }
 
 func GeminiHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
@@ -71,18 +68,6 @@ func GeminiHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 	}
 
 	if model_setting.GetGeminiSettings().ThinkingAdapterEnabled {
-		if isNoThinkingRequest(request) {
-			// check is thinking
-			if !strings.Contains(info.OriginModelName, "-nothinking") {
-				// try to get no thinking model price
-				noThinkingModelName := info.OriginModelName + "-nothinking"
-				containPrice := helper.HasModelBillingConfig(noThinkingModelName)
-				if containPrice {
-					info.OriginModelName = noThinkingModelName
-					info.UpstreamModelName = noThinkingModelName
-				}
-			}
-		}
 		if request.GenerationConfig.ThinkingConfig == nil {
 			relayconvert.ApplyGeminiThinkingConfig(request, info)
 		}

@@ -72,7 +72,12 @@ func GetUserQuotaDates(c *gin.Context) {
 		})
 		return
 	}
-	dates, err := model.GetQuotaDataByUserId(userId, startTimestamp, endTimestamp)
+	dates, err := model.GetQuotaDataByUserId(
+		userId,
+		startTimestamp,
+		endTimestamp,
+		c.GetInt("role") >= common.RoleAdminUser,
+	)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -91,7 +96,7 @@ func GetAllFlowQuotaDates(c *gin.Context) {
 		return
 	}
 	username := c.Query("username")
-	dates, err := model.GetFlowQuotaData(startTimestamp, endTimestamp, username, 0, c.GetInt("role"))
+	dates, err := model.GetFlowQuotaData(startTimestamp, endTimestamp, username, 0, c.GetInt("role"), true)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -117,7 +122,14 @@ func GetUserFlowQuotaDates(c *gin.Context) {
 		})
 		return
 	}
-	dates, err := model.GetFlowQuotaData(startTimestamp, endTimestamp, "", userId, common.RoleCommonUser)
+	dates, err := model.GetFlowQuotaData(
+		startTimestamp,
+		endTimestamp,
+		"",
+		userId,
+		common.RoleCommonUser,
+		c.GetInt("role") >= common.RoleAdminUser,
+	)
 	if err != nil {
 		common.ApiError(c, err)
 		return

@@ -2,7 +2,6 @@ package perfmetrics
 
 import (
 	"fmt"
-	"strconv"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -24,6 +23,9 @@ func flushLoop() {
 }
 
 func flushCompletedBuckets() {
+	bucketFlushMu.Lock()
+	defer bucketFlushMu.Unlock()
+
 	currentBucket := bucketStart(time.Now().Unix())
 	hotBuckets.Range(func(key, value any) bool {
 		k := key.(bucketKey)
@@ -38,7 +40,7 @@ func flushCompletedBuckets() {
 			return true
 		}
 
-		err := model.UpsertPerfMetric(&model.PerfMetric{
+		err := model.UpsertPerfMetricInstance(redisWriterID, &model.PerfMetric{
 			ModelName:      k.model,
 			Group:          k.group,
 			BucketTs:       k.bucketTs,
@@ -55,7 +57,6 @@ func flushCompletedBuckets() {
 			common.SysError(fmt.Sprintf("failed to flush perf metric bucket model=%s group=%s bucket=%d: %s", k.model, k.group, k.bucketTs, err.Error()))
 			return true
 		}
-
 		deleteOldEmptyBucket(k, key)
 		return true
 	})
@@ -75,24 +76,4 @@ func cleanupExpiredMetrics(retentionDays int) {
 	if err := model.DeletePerfMetricsBefore(cutoff); err != nil {
 		common.SysError("failed to cleanup expired perf metrics: " + err.Error())
 	}
-}
-
-func redisCounters(values map[string]string) counters {
-	return counters{
-		requestCount:   parseRedisInt(values["req"]),
-		successCount:   parseRedisInt(values["ok"]),
-		totalLatencyMs: parseRedisInt(values["lat"]),
-		ttftSumMs:      parseRedisInt(values["ttft"]),
-		ttftCount:      parseRedisInt(values["ttft_n"]),
-		outputTokens:   parseRedisInt(values["out"]),
-		generationMs:   parseRedisInt(values["gen_ms"]),
-	}
-}
-
-func parseRedisInt(value string) int64 {
-	if value == "" {
-		return 0
-	}
-	parsed, _ := strconv.ParseInt(value, 10, 64)
-	return parsed
 }

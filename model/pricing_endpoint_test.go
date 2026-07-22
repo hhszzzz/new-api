@@ -14,6 +14,9 @@ import (
 func resetPricingEndpointTestTables(t *testing.T) {
 	t.Helper()
 	originalMemoryCacheEnabled := common.MemoryCacheEnabled
+	t.Cleanup(func() {
+		common.MemoryCacheEnabled = originalMemoryCacheEnabled
+	})
 	common.MemoryCacheEnabled = true
 	require.NoError(t, DB.AutoMigrate(&Channel{}, &Ability{}, &Model{}, &Vendor{}))
 	for _, table := range []string{"abilities", "channels", "models", "vendors"} {
@@ -27,8 +30,31 @@ func resetPricingEndpointTestTables(t *testing.T) {
 		}
 		InitChannelCache()
 		InvalidatePricingCache()
-		common.MemoryCacheEnabled = originalMemoryCacheEnabled
 	})
+}
+
+func TestPricingEndpointGettersRefreshAfterInvalidation(t *testing.T) {
+	resetPricingEndpointTestTables(t)
+
+	insertPricingEndpointChannel(t, 100, constant.ChannelTypeOpenAI, dto.ChannelOtherSettings{})
+	insertPricingEndpointAbility(t, 100, "cache-endpoint-model")
+	require.NotEmpty(t, GetPricing())
+	require.Equal(t, []constant.EndpointType{constant.EndpointTypeOpenAI}, GetModelSupportEndpointTypes("cache-endpoint-model"))
+
+	require.NoError(t, DB.Model(&Channel{}).Where("id = ?", 100).Update("type", constant.ChannelTypeAnthropic).Error)
+	InvalidatePricingCache()
+	assert.Equal(t, []constant.EndpointType{
+		constant.EndpointTypeAnthropic,
+		constant.EndpointTypeOpenAI,
+	}, GetModelSupportEndpointTypes("cache-endpoint-model"))
+
+	require.NoError(t, DB.Model(&Channel{}).Where("id = ?", 100).Update("type", constant.ChannelTypeGemini).Error)
+	InvalidatePricingCache()
+	endpointMap := GetSupportedEndpointMap()
+	assert.Equal(t, common.EndpointInfo{
+		Path:   "/v1beta/models/{model}:generateContent",
+		Method: "POST",
+	}, endpointMap[string(constant.EndpointTypeGemini)])
 }
 
 func insertPricingEndpointChannel(t *testing.T, channelID int, channelType int, settings dto.ChannelOtherSettings) {
