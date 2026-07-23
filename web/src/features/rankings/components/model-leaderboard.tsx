@@ -20,7 +20,7 @@ import { useTranslation } from 'react-i18next'
 
 import { getLobeIcon } from '@/lib/lobe-icon'
 
-import { formatTokens } from '../lib/format'
+import { formatTokens, formatUSD } from '../lib/format'
 import type { ModelRanking } from '../types'
 import { ModelLink, VendorLink } from './entity-links'
 import { GrowthText } from './growth-text'
@@ -127,10 +127,14 @@ function ModelList(props: {
                 </>
               )}
             </div>
-            <GrowthText
-              value={row.growth_pct}
-              className={compact ? 'text-[10px]' : 'text-[11px]'}
-            />
+            <div className='text-muted-foreground/80 flex items-center justify-end gap-1 font-mono text-[11px] tabular-nums'>
+              {formatUSD(row.total_usd)}
+              <span aria-hidden>·</span>
+              <GrowthText
+                value={row.growth_pct}
+                className={compact ? 'text-[10px]' : 'text-[11px]'}
+              />
+            </div>
           </div>
         </li>
       ))}

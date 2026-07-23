@@ -22,7 +22,23 @@ For commercial licensing, please contact support@quantumnous.com
 //
 // Shape of the real data shown on the /rankings page.
 
-export type RankingPeriod = 'today' | 'week' | 'month' | 'year'
+export type RankingPeriod = 'today' | 'week' | 'month' | 'year' | 'custom'
+
+export type RankingsQuery = {
+  period: RankingPeriod
+  startTimestamp?: number
+  endTimestamp?: number
+}
+
+export type RankingRange = {
+  period: RankingPeriod
+  start_timestamp: number
+  end_timestamp: number
+  previous_start_timestamp: number
+  previous_end_timestamp: number
+  bucket: 'hour' | 'day' | 'week'
+  bucket_seconds: number
+}
 
 export type RankingCategoryId =
   | 'all'
@@ -48,8 +64,14 @@ export type ModelRanking = {
   category: RankingCategoryId
   /** Total tokens routed through this model in the period. */
   total_tokens: number
+  /** Charged quota recorded for this model in the period. */
+  total_quota: number
+  /** Charged quota converted to fixed USD. */
+  total_usd: number
   /** Share of all tokens served (0..1). */
   share: number
+  /** Share of charged quota (0..1). */
+  quota_share: number
   /** Period-over-period change in token volume (%). */
   growth_pct: number
 }
@@ -59,7 +81,10 @@ export type VendorRanking = {
   vendor: string
   vendor_icon?: string
   total_tokens: number
+  total_quota: number
+  total_usd: number
   share: number
+  quota_share: number
   growth_pct: number
   /** Number of distinct models from this vendor with traffic. */
   models_count: number
@@ -91,13 +116,21 @@ export type ModelHistoryPoint = {
   vendor: string
   /** Token count routed through the model in this bucket. */
   tokens: number
+  quota: number
+  usd: number
 }
 
 export type ModelHistorySeries = {
   /** Flat points ready for VChart, ordered oldest → newest. */
   points: ModelHistoryPoint[]
   /** Models that appear in the series, sorted by total tokens desc. */
-  models: Array<{ name: string; vendor: string; total: number }>
+  models: Array<{
+    name: string
+    vendor: string
+    total: number
+    total_quota: number
+    total_usd: number
+  }>
   /** Bucket count (used for sizing axis ticks). */
   buckets: number
 }
@@ -112,18 +145,59 @@ export type VendorSharePoint = {
   label: string
   vendor: string
   share: number
+  quota_share: number
   tokens: number
+  quota: number
+  usd: number
 }
 
 export type VendorShareSeries = {
   /** Flat points ready for VChart, ordered oldest → newest. */
   points: VendorSharePoint[]
   /** Vendors that appear in the series, sorted by aggregate tokens desc. */
-  vendors: Array<{ name: string; total: number; share: number }>
+  vendors: Array<{
+    name: string
+    total: number
+    total_quota: number
+    total_usd: number
+    share: number
+    quota_share: number
+  }>
   buckets: number
 }
 
+export type RankingUserGroup = {
+  use_group: string
+  total_tokens: number
+  total_quota: number
+  total_usd: number
+  quota_share: number
+  token_share: number
+}
+
+export type RankingUser = {
+  rank: number
+  username: string
+  total_tokens: number
+  total_quota: number
+  total_usd: number
+  quota_share: number
+  token_share: number
+  groups: RankingUserGroup[]
+}
+
+export type RankingUserUsage = {
+  total_tokens: number
+  total_quota: number
+  total_usd: number
+  users: RankingUser[]
+}
+
 export type RankingsSnapshot = {
+  range: RankingRange
+  total_tokens: number
+  total_quota: number
+  total_usd: number
   // Overall (all categories) ------------------------------------------------
   models: ModelRanking[]
   vendors: VendorRanking[]
@@ -135,4 +209,6 @@ export type RankingsSnapshot = {
   models_history: ModelHistorySeries
   /** 100%-stacked area history of token share by vendor over the period. */
   vendor_share_history: VendorShareSeries
+  /** Present only for authenticated viewers. */
+  user_usage?: RankingUserUsage
 }

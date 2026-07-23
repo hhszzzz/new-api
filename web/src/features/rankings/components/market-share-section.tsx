@@ -24,7 +24,7 @@ import { useTranslation } from 'react-i18next'
 import { useChartTheme } from '@/lib/use-chart-theme'
 import { VCHART_OPTION } from '@/lib/vchart'
 
-import { formatShare, formatTokens } from '../lib/format'
+import { formatShare, formatTokens, formatUSD } from '../lib/format'
 import type { RankingPeriod, VendorRanking, VendorShareSeries } from '../types'
 import { VendorLink } from './entity-links'
 
@@ -33,6 +33,7 @@ const PERIOD_DESCRIPTIONS: Record<RankingPeriod, string> = {
   week: 'Token share by model author across the past few weeks',
   month: 'Token share by model author across the past month',
   year: 'Token share by model author across the past year',
+  custom: 'Token share by model author across the selected date range',
 }
 
 /** Stable colour palette for vendors, used in both the share chart and the
@@ -88,6 +89,12 @@ function buildVendorColourMap(names: string[]): Record<string, string> {
 }
 
 const MAX_VENDORS_IN_LIST = 12
+
+type RankingTooltipLine = {
+  key: string
+  value: string | number
+  datum?: Record<string, unknown>
+}
 
 type MarketShareSectionProps = {
   history: VendorShareSeries
@@ -172,7 +179,7 @@ export function MarketShareSection(props: MarketShareSectionProps) {
               key: (datum: Record<string, unknown>) =>
                 String(datum?.vendor ?? ''),
               value: (datum: Record<string, unknown>) =>
-                `${(Number(datum?.share) * 100).toFixed(1)}% · ${formatTokens(Number(datum?.tokens) || 0)}`,
+                `${(Number(datum?.share) * 100).toFixed(1)}% · ${formatTokens(Number(datum?.tokens) || 0)} · ${formatUSD(Number(datum?.usd) || 0)}`,
             },
           ],
         },
@@ -189,15 +196,20 @@ export function MarketShareSection(props: MarketShareSectionProps) {
                 Number(datum?.share) || 0,
             },
           ],
-          updateContent: (
-            array: Array<{ key: string; value: string | number }>
-          ) => {
-            return array
-              .filter((item) => Number(item.value) > 0.001)
-              .sort((a, b) => Number(b.value) - Number(a.value))
+          updateContent: (array: RankingTooltipLine[]) => {
+            return [...array]
+              .sort((left, right) => {
+                const shareDifference =
+                  Number(right.datum?.share ?? right.value) -
+                  Number(left.datum?.share ?? left.value)
+                if (shareDifference !== 0) return shareDifference
+                return (
+                  Number(right.datum?.usd ?? 0) - Number(left.datum?.usd ?? 0)
+                )
+              })
               .map((item) => ({
                 key: item.key,
-                value: `${(Number(item.value) * 100).toFixed(1)}%`,
+                value: `${formatShare(Number(item.datum?.share ?? item.value) || 0)} · ${formatTokens(Number(item.datum?.tokens) || 0)} · ${formatUSD(Number(item.datum?.usd) || 0)}`,
               }))
           },
         },
@@ -300,7 +312,7 @@ function VendorList(props: {
               {formatTokens(vendor.total_tokens)}
             </div>
             <div className='text-muted-foreground/80 font-mono text-[11px] tabular-nums'>
-              {formatShare(vendor.share)}
+              {formatUSD(vendor.total_usd)} · {formatShare(vendor.share)}
             </div>
           </div>
         </li>

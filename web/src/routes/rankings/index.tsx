@@ -25,9 +25,16 @@ import { useAuthStore } from '@/stores/auth-store'
 
 const rankingsSearchSchema = z.object({
   period: z
-    .enum(['today', 'week', 'month', 'year'])
+    .enum(['today', 'week', 'month', 'year', 'custom'])
     .optional()
     .catch(undefined),
+  start_timestamp: z.coerce
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .catch(undefined),
+  end_timestamp: z.coerce.number().int().positive().optional().catch(undefined),
 })
 
 export const Route = createFileRoute('/rankings/')({

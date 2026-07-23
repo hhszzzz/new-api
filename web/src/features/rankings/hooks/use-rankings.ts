@@ -19,12 +19,18 @@ For commercial licensing, please contact support@quantumnous.com
 import { useQuery } from '@tanstack/react-query'
 
 import { getRankings } from '../api'
-import type { RankingPeriod } from '../types'
+import type { RankingsQuery } from '../types'
 
-export function useRankings(period: RankingPeriod) {
+export function useRankings(query: RankingsQuery, viewerKey: string) {
   return useQuery({
-    queryKey: ['rankings', period],
-    queryFn: () => getRankings(period),
+    queryKey: [
+      'rankings',
+      query.period,
+      query.startTimestamp ?? null,
+      query.endTimestamp ?? null,
+      viewerKey,
+    ],
+    queryFn: () => getRankings(query),
     staleTime: 5 * 60 * 1000,
   })
 }

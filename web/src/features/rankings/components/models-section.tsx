@@ -24,7 +24,7 @@ import { useTranslation } from 'react-i18next'
 import { useChartTheme } from '@/lib/use-chart-theme'
 import { VCHART_OPTION } from '@/lib/vchart'
 
-import { formatTokens } from '../lib/format'
+import { formatTokens, formatUSD } from '../lib/format'
 import type { ModelHistorySeries, ModelRanking, RankingPeriod } from '../types'
 import { ModelLeaderboard } from './model-leaderboard'
 
@@ -33,14 +33,23 @@ const PERIOD_DESCRIPTIONS: Record<RankingPeriod, string> = {
   week: 'Weekly token usage by model across the past few weeks',
   month: 'Daily token usage by model across the past month',
   year: 'Weekly token usage by model across the past year',
+  custom: 'Token usage by model across the selected date range',
 }
 
 const TOOLTIP_MAX_ROWS = 10
+
+type RankingTooltipLine = {
+  key: string
+  value: string | number
+  datum?: Record<string, unknown>
+}
 
 type ModelsSectionProps = {
   history: ModelHistorySeries
   rows: ModelRanking[]
   period: RankingPeriod
+  totalTokens: number
+  totalUSD: number
 }
 
 /**
@@ -71,11 +80,6 @@ export function ModelsSection(props: ModelsSectionProps) {
       return (order.get(a.model) ?? 999) - (order.get(b.model) ?? 999)
     })
   }, [props.history])
-
-  const totalTokens = useMemo(
-    () => props.rows.reduce((s, r) => s + r.total_tokens, 0),
-    [props.rows]
-  )
 
   const spec = useMemo(() => {
     if (orderedPoints.length === 0) return null
@@ -116,7 +120,7 @@ export function ModelsSection(props: ModelsSectionProps) {
               key: (datum: Record<string, unknown>) =>
                 String(datum?.model ?? ''),
               value: (datum: Record<string, unknown>) =>
-                formatTokens(Number(datum?.tokens) || 0),
+                `${formatTokens(Number(datum?.tokens) || 0)} · ${formatUSD(Number(datum?.usd) || 0)}`,
             },
           ],
         },
@@ -133,28 +137,50 @@ export function ModelsSection(props: ModelsSectionProps) {
                 Number(datum?.tokens) || 0,
             },
           ],
-          updateContent: (
-            array: Array<{ key: string; value: string | number }>
-          ) => {
-            array.sort((a, b) => Number(b.value) - Number(a.value))
-            const sum = array.reduce((s, x) => s + (Number(x.value) || 0), 0)
-            const visible = array.slice(0, TOOLTIP_MAX_ROWS)
-            const overflow = array.slice(TOOLTIP_MAX_ROWS)
-            const result = visible.map((item) => ({
+          updateContent: (array: RankingTooltipLine[]) => {
+            const ranked = [...array].sort((left, right) => {
+              const tokenDifference =
+                Number(right.datum?.tokens ?? right.value) -
+                Number(left.datum?.tokens ?? left.value)
+              if (tokenDifference !== 0) return tokenDifference
+              return (
+                Number(right.datum?.usd ?? 0) - Number(left.datum?.usd ?? 0)
+              )
+            })
+            const totalTokens = ranked.reduce(
+              (sum, item) =>
+                sum + Number((item.datum?.tokens ?? item.value) || 0),
+              0
+            )
+            const totalUSD = ranked.reduce(
+              (sum, item) => sum + Number(item.datum?.usd ?? 0),
+              0
+            )
+            const visible = ranked.slice(0, TOOLTIP_MAX_ROWS)
+            const overflow = ranked.slice(TOOLTIP_MAX_ROWS)
+            const result: RankingTooltipLine[] = visible.map((item) => ({
               key: item.key,
-              value: formatTokens(Number(item.value) || 0),
+              value: `${formatTokens(Number(item.datum?.tokens ?? item.value) || 0)} · ${formatUSD(Number(item.datum?.usd) || 0)}`,
             }))
             if (overflow.length > 0) {
-              const otherSum = overflow.reduce(
-                (s, item) => s + (Number(item.value) || 0),
+              const otherTokens = overflow.reduce(
+                (sum, item) =>
+                  sum + Number((item.datum?.tokens ?? item.value) || 0),
+                0
+              )
+              const otherUSD = overflow.reduce(
+                (sum, item) => sum + Number(item.datum?.usd ?? 0),
                 0
               )
               result.push({
                 key: t('+{{count}} more', { count: overflow.length }),
-                value: formatTokens(otherSum),
+                value: `${formatTokens(otherTokens)} · ${formatUSD(otherUSD)}`,
               })
             }
-            result.unshift({ key: t('Total:'), value: formatTokens(sum) })
+            result.unshift({
+              key: t('Total:'),
+              value: `${formatTokens(totalTokens)} · ${formatUSD(totalUSD)}`,
+            })
             return result
           },
         },
@@ -178,10 +204,13 @@ export function ModelsSection(props: ModelsSectionProps) {
         </div>
         <div className='shrink-0 text-right'>
           <div className='text-foreground font-mono text-2xl font-semibold tabular-nums'>
-            {formatTokens(totalTokens)}
+            {formatTokens(props.totalTokens)}
+            <span className='text-muted-foreground/80 ml-1 text-xs font-normal'>
+              {t('tokens')}
+            </span>
           </div>
-          <div className='text-muted-foreground/80 text-[10px] font-medium tracking-widest uppercase'>
-            {t('tokens')}
+          <div className='text-muted-foreground/80 font-mono text-xs tabular-nums'>
+            {formatUSD(props.totalUSD)}
           </div>
         </div>
       </header>

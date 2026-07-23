@@ -17,41 +17,86 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useNavigate, useSearch } from '@tanstack/react-router'
+import type { DateRange } from 'react-day-picker'
 import { useTranslation } from 'react-i18next'
 
 import { PublicLayout } from '@/components/layout'
 import { PageTransition } from '@/components/page-transition'
 import { Skeleton } from '@/components/ui/skeleton'
+import { useAuthStore } from '@/stores/auth-store'
 
 import {
   MarketShareSection,
   ModelsSection,
   PulseSection,
   RankingsHero,
+  UserUsageSection,
 } from './components'
 import { useRankings } from './hooks/use-rankings'
+import {
+  datesFromRankingQuery,
+  defaultRankingDateRange,
+  normalizeRankingDateRange,
+  rankingQueryFromSearch,
+} from './lib/range'
 import type { RankingPeriod } from './types'
-
-const VALID_PERIODS: RankingPeriod[] = ['today', 'week', 'month', 'year']
 
 export function Rankings() {
   const { t } = useTranslation()
   const search = useSearch({ from: '/rankings/' })
   const navigate = useNavigate()
+  const user = useAuthStore((state) => state.auth.user)
 
-  const period: RankingPeriod = VALID_PERIODS.includes(
-    search.period as RankingPeriod
-  )
-    ? (search.period as RankingPeriod)
-    : 'week'
+  const period: RankingPeriod = search.period ?? 'week'
 
-  const rankingsQuery = useRankings(period)
+  const query = rankingQueryFromSearch({
+    period,
+    start_timestamp: search.start_timestamp,
+    end_timestamp: search.end_timestamp,
+  })
+  const customRange = datesFromRankingQuery(query)
+  const viewerKey = user ? `${user.id}:${user.role}` : 'anonymous'
+  const rankingsQuery = useRankings(query, viewerKey)
   const snapshot = rankingsQuery.data?.data
 
   const handlePeriodChange = (next: RankingPeriod) => {
+    if (next === 'custom') {
+      const range = customRange ?? defaultRankingDateRange()
+      const normalized = normalizeRankingDateRange(range)
+      navigate({
+        to: '/rankings',
+        search: {
+          period: 'custom',
+          start_timestamp: normalized?.startTimestamp,
+          end_timestamp: normalized?.endTimestamp,
+        },
+      })
+      return
+    }
     navigate({
       to: '/rankings',
-      search: (prev) => ({ ...prev, period: next }),
+      search: {
+        period: next,
+        start_timestamp: undefined,
+        end_timestamp: undefined,
+      },
+    })
+  }
+
+  const handleCustomRangeChange = (range: DateRange | undefined) => {
+    if (!range?.from || !range.to) return
+    const normalized = normalizeRankingDateRange({
+      from: range.from,
+      to: range.to,
+    })
+    if (!normalized) return
+    navigate({
+      to: '/rankings',
+      search: {
+        period: 'custom',
+        start_timestamp: normalized.startTimestamp,
+        end_timestamp: normalized.endTimestamp,
+      },
     })
   }
 
@@ -74,11 +119,15 @@ export function Rankings() {
           }}
         />
         <PageTransition className='relative mx-auto w-full max-w-[1280px] space-y-8 px-3 pt-16 pb-10 sm:px-6 sm:pt-20 sm:pb-12 xl:px-8'>
-          <RankingsHero period={period} onPeriodChange={handlePeriodChange} />
+          <RankingsHero
+            period={period}
+            customRange={customRange}
+            onPeriodChange={handlePeriodChange}
+            onCustomRangeChange={handleCustomRangeChange}
+          />
 
-          {rankingsQuery.isLoading ? (
-            <RankingsLoading />
-          ) : !snapshot ? (
+          {rankingsQuery.isLoading && <RankingsLoading />}
+          {!rankingsQuery.isLoading && !snapshot && (
             <RankingsError
               message={
                 rankingsQuery.error instanceof Error
@@ -86,18 +135,26 @@ export function Rankings() {
                   : t('Unable to load rankings data')
               }
             />
-          ) : (
+          )}
+          {!rankingsQuery.isLoading && snapshot && (
             <>
               <ModelsSection
                 history={snapshot.models_history}
                 rows={snapshot.models}
                 period={period}
+                totalTokens={snapshot.total_tokens}
+                totalUSD={snapshot.total_usd}
               />
 
               <MarketShareSection
                 history={snapshot.vendor_share_history}
                 rows={snapshot.vendors}
                 period={period}
+              />
+
+              <UserUsageSection
+                usage={snapshot.user_usage}
+                isAuthenticated={Boolean(user)}
               />
 
               <PulseSection
@@ -113,10 +170,13 @@ export function Rankings() {
 }
 
 function RankingsLoading() {
+  const { t } = useTranslation()
   return (
-    <div className='space-y-6'>
+    <div role='status' aria-label={t('Loading...')} className='space-y-6'>
+      <span className='sr-only'>{t('Loading...')}</span>
       <Skeleton className='h-[420px] w-full rounded-xl' />
       <Skeleton className='h-[360px] w-full rounded-xl' />
+      <Skeleton className='h-[520px] w-full rounded-xl' />
       <Skeleton className='h-[180px] w-full rounded-xl' />
     </div>
   )
@@ -125,7 +185,11 @@ function RankingsLoading() {
 function RankingsError(props: { message: string }) {
   const { t } = useTranslation()
   return (
-    <div className='bg-card rounded-xl border border-dashed px-6 py-12 text-center'>
+    <div
+      role='alert'
+      aria-label={t('Unable to load rankings')}
+      className='bg-card rounded-xl border border-dashed px-6 py-12 text-center'
+    >
       <h2 className='text-foreground text-base font-semibold'>
         {t('Unable to load rankings')}
       </h2>
