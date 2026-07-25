@@ -87,9 +87,8 @@ func Distribute() func(c *gin.Context) {
 			return
 		}
 
-		// Resolve the user-specific route before channel selection. Root users
-		// intentionally bypass this policy; all other users receive a strict
-		// target-model/channel-pool selection when a rule applies.
+		// Resolve the user-specific route before channel selection so every
+		// configured user receives strict target-model/channel-pool selection.
 		if (shouldSelectChannel || ok) && modelRequest.Model != "" {
 			if _, routeErr := applyUserModelRoute(c, modelRequest.Model, usingGroup); routeErr != nil {
 				abortWithOpenAiMessage(c, http.StatusServiceUnavailable, "用户模型路由暂时不可用")

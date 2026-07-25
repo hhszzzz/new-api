@@ -13,7 +13,7 @@ import (
 )
 
 func applyUserModelRoute(c *gin.Context, sourceModel, usingGroup string) (*model.UserModelRoute, error) {
-	if c == nil || c.GetInt("id") <= 0 || c.GetInt("role") == common.RoleRootUser {
+	if c == nil || c.GetInt("id") <= 0 {
 		return nil, nil
 	}
 	sourceModel = strings.TrimSpace(sourceModel)

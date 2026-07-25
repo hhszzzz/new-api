@@ -465,4 +465,63 @@ describe('user model routes dialog', () => {
       screen.getByRole('option', { name: /Aggregate channel/ })
     ).toBeVisible()
   })
+
+  test('saves a named aggregate channel pool without an input error', async () => {
+    mockedGetCandidates.mockImplementation(async (_userId, params = {}) => {
+      if (!params.target_model) return candidateResponse([])
+      return candidateResponse([
+        {
+          id: 31,
+          name: 'Ready Channel',
+          type: 1,
+          priority: 1,
+          weight: 100,
+          aggregate_id: 7,
+          aggregate_name: 'Shared API',
+        },
+      ])
+    })
+    mockedCreateRoute.mockResolvedValue({
+      success: true,
+      data: {
+        id: 10,
+        user_id: 1,
+        source_model: 'gpt-5.4',
+        target_model: 'target-a',
+        pool_name: 'Primary Pool',
+        execution_group: 'default',
+        all_groups: true,
+        groups: [],
+        channel_ids: [31],
+        enabled: true,
+      },
+    })
+    renderDialog()
+    const user = userEvent.setup()
+
+    await user.type(await screen.findByLabelText('Source model'), 'gpt-5.4')
+    await user.type(screen.getByLabelText('Target model'), 'target-a')
+    await user.type(screen.getByLabelText('Channel pool name'), 'Primary Pool')
+    const channelSelect = await screen.findByLabelText('Channel pool')
+    await waitFor(() => {
+      expect(
+        screen.getByRole('option', { name: /Aggregate channel/ })
+      ).toBeVisible()
+    })
+    await user.selectOptions(channelSelect, 'aggregate:7')
+    await user.click(screen.getByRole('button', { name: 'Add route' }))
+
+    await waitFor(() => {
+      expect(mockedCreateRoute).toHaveBeenCalledWith(1, {
+        source_model: 'gpt-5.4',
+        target_model: 'target-a',
+        pool_name: 'Primary Pool',
+        execution_group: 'default',
+        all_groups: true,
+        groups: [],
+        channel_ids: [31],
+        enabled: true,
+      })
+    })
+  })
 })

@@ -1,12 +1,17 @@
 package middleware
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayhelper "github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
@@ -15,7 +20,8 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestApplyUserModelRouteUsesActualRequestGroup(t *testing.T) {
+func setupUserModelRouteResolutionTest(t *testing.T) func(role int) *gin.Context {
+	t.Helper()
 	previousDB := model.DB
 	previousAutoGroups := setting.AutoGroups2JsonString()
 	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "user-model-route.db")), &gorm.Config{})
@@ -43,24 +49,50 @@ func TestApplyUserModelRouteUsesActualRequestGroup(t *testing.T) {
 		require.NoError(t, setting.UpdateAutoGroupsByJsonString(previousAutoGroups))
 	})
 
-	newContext := func() *gin.Context {
+	return func(role int) *gin.Context {
 		ctx, _ := gin.CreateTestContext(nil)
 		ctx.Set("id", 1)
-		ctx.Set("role", common.RoleCommonUser)
+		ctx.Set("role", role)
 		common.SetContextKey(ctx, constant.ContextKeyUserGroups, []string{"default", "vip"})
 		return ctx
 	}
+}
 
-	normalContext := newContext()
+func TestApplyUserModelRouteUsesActualRequestGroup(t *testing.T) {
+	newContext := setupUserModelRouteResolutionTest(t)
+
+	normalContext := newContext(common.RoleCommonUser)
 	route, err := applyUserModelRoute(normalContext, "gpt-5.4", "default")
 	require.NoError(t, err)
 	assert.Nil(t, route)
 	assert.Zero(t, common.GetContextKeyInt(normalContext, constant.ContextKeyUserModelRouteId))
 
-	autoContext := newContext()
+	autoContext := newContext(common.RoleCommonUser)
 	route, err = applyUserModelRoute(autoContext, "gpt-5.4", "auto")
 	require.NoError(t, err)
 	require.NotNil(t, route)
 	assert.Equal(t, "gpt-5.5", route.TargetModel)
 	assert.Equal(t, "internal", common.GetContextKeyString(autoContext, constant.ContextKeyAutoGroup))
+}
+
+func TestApplyUserModelRouteDoesNotBypassRootUser(t *testing.T) {
+	newContext := setupUserModelRouteResolutionTest(t)
+	ctx := newContext(common.RoleRootUser)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	common.SetContextKey(ctx, constant.ContextKeyOriginalModel, "gpt-5.4")
+
+	route, err := applyUserModelRoute(ctx, "gpt-5.4", "auto")
+
+	require.NoError(t, err)
+	require.NotNil(t, route)
+	assert.Equal(t, "gpt-5.5", common.GetContextKeyString(ctx, constant.ContextKeyUserModelRouteTarget))
+	assert.Equal(t, route.Id, common.GetContextKeyInt(ctx, constant.ContextKeyUserModelRouteId))
+
+	request := &dto.GeneralOpenAIRequest{Model: "gpt-5.4"}
+	info := relaycommon.GenRelayInfoOpenAI(ctx, request)
+	require.NoError(t, relayhelper.ModelMappedHelper(ctx, info, request))
+	assert.Equal(t, route.Id, info.UserModelRouteId)
+	assert.Equal(t, "gpt-5.5", info.RouteTargetModelName)
+	assert.Equal(t, "gpt-5.5", request.Model)
+	assert.True(t, info.IsModelMapped)
 }

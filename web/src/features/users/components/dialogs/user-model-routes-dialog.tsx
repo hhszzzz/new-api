@@ -708,12 +708,13 @@ export function UserModelRoutesDialog(props: UserModelRoutesDialogProps) {
                   <Input
                     id='route-pool-name'
                     value={draft.pool_name}
-                    onChange={(event) =>
+                    onChange={(event) => {
+                      const poolName = event.currentTarget.value
                       setDraft((current) => ({
                         ...current,
-                        pool_name: event.currentTarget.value,
+                        pool_name: poolName,
                       }))
-                    }
+                    }}
                     placeholder={
                       draft.source_model && draft.target_model
                         ? `${draft.source_model} -> ${draft.target_model}`

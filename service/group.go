@@ -25,9 +25,6 @@ func applySpecialUsableGroups(groups map[string]string, userGroup string) {
 			}
 		}
 	}
-	if _, exists := groups[userGroup]; !exists {
-		groups[userGroup] = "用户分组"
-	}
 }
 
 // GetUserUsableGroups retains the legacy single-user-group contract.
