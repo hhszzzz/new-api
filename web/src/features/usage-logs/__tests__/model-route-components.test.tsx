@@ -89,6 +89,7 @@ const routedLog: UsageLog = {
       upstream_protocol: 'chat',
     },
     request_conversion: ['responses', 'chat'],
+    reasoning_effort: 'high',
     is_model_mapped: true,
     upstream_model_name: LEGACY_ACTUAL_MODEL,
     po: [`set ${LEGACY_PARAM_OVERRIDE}`],
@@ -306,6 +307,26 @@ describe('usage-log model route component visibility', () => {
     expect(diagnosticHeading.closest('label')?.querySelector('svg')).toBeNull()
     expect(headerHeading.closest('label')?.querySelector('svg')).toBeNull()
     expect(ipLabel.closest('div')?.querySelector('svg')).toBeNull()
+  })
+
+  test('places reasoning effort before request diagnostics', async () => {
+    renderDetailsDialog(ROLE.ADMIN, 'all')
+
+    await waitFor(() => {
+      expect(screen.getByTestId('details-permissions')).toHaveAttribute(
+        'data-admin-view',
+        'true'
+      )
+    })
+
+    const dialog = screen.getByRole('dialog')
+    const reasoningLabel = within(dialog).getByText('Reasoning Effort')
+    const diagnosticsHeading = within(dialog).getByText('Request Diagnostics')
+
+    expect(
+      reasoningLabel.compareDocumentPosition(diagnosticsHeading) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).not.toBe(0)
   })
 
   test.each([

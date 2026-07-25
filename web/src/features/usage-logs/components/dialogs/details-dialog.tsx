@@ -772,6 +772,21 @@ export function DetailsDialog(props: DetailsDialogProps) {
           )}
         </div>
 
+        {/* Reasoning effort */}
+        {other?.reasoning_effort && (
+          <DetailRow
+            label={t('Reasoning Effort')}
+            value={
+              <StatusBadge
+                label={other.reasoning_effort}
+                variant={reasoningEffortVariant}
+                size='sm'
+                copyable={false}
+              />
+            }
+          />
+        )}
+
         {props.isAdminView && diagnostics && (
           <DetailSection label={t('Request Diagnostics')}>
             {(diagnostics.method || diagnostics.path) && (
@@ -1161,21 +1176,6 @@ export function DetailsDialog(props: DetailsDialogProps) {
               />
             )}
           </DetailSection>
-        )}
-
-        {/* Reasoning effort */}
-        {other?.reasoning_effort && (
-          <DetailRow
-            label={t('Reasoning Effort')}
-            value={
-              <StatusBadge
-                label={other.reasoning_effort}
-                variant={reasoningEffortVariant}
-                size='sm'
-                copyable={false}
-              />
-            }
-          />
         )}
 
         {/* System prompt override */}
