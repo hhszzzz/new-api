@@ -633,6 +633,19 @@ export function getChannelAggregateById(
   return aggregates.find((aggregate) => aggregate.id === aggregateId)
 }
 
+export function getChannelTableRowId(
+  row: Channel | TagRow | ChannelAggregateRow
+): string {
+  if (isChannelAggregateRow(row)) {
+    return row.key
+  }
+  if (isTagAggregateRow(row)) {
+    return `tag:${row.tag || ''}`
+  }
+
+  return `channel:${row.id}`
+}
+
 /**
  * Type guard to check whether a row is a channel aggregate row.
  */
