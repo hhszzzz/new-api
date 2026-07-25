@@ -66,6 +66,17 @@ export function Dialog({
   showCloseButton,
   ...dialogProps
 }: DialogProps) {
+  const bodyRef = React.useRef<HTMLDivElement>(null)
+
+  // The body keeps its scroll offset between openings because the element is
+  // reused, so a dialog reopened after scrolling would appear mid-content.
+  // Reset it whenever the dialog opens so every dialog starts at the top.
+  React.useEffect(() => {
+    if (dialogProps.open) {
+      bodyRef.current?.scrollTo({ top: 0 })
+    }
+  }, [dialogProps.open])
+
   return (
     <DialogRoot {...dialogProps}>
       {trigger ? <DialogTrigger render={trigger} /> : null}
@@ -95,6 +106,7 @@ export function Dialog({
         </DialogHeader>
 
         <div
+          ref={bodyRef}
           className={cn(
             '-mx-1 min-h-0 overflow-x-hidden overflow-y-auto overscroll-contain',
             'h-[var(--dialog-content-height)] max-h-[calc(100vh-14rem)]'

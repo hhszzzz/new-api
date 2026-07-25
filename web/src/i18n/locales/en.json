@@ -2084,6 +2084,7 @@
     "First/Last Frame to Video": "First/Last Frame to Video",
     "Fix Abilities": "Repair Channel Consistency",
     "Fix order": "Fix order",
+    "Fix the endpoint JSON before loading a template": "Fix the endpoint JSON before loading a template",
     "Fixed abilities: {{success}} succeeded, {{fails}} failed": "Channel consistency repaired: {{success}} succeeded, {{fails}} failed",
     "Fixed price": "Fixed price",
     "Fixed price (USD)": "Fixed price (USD)",

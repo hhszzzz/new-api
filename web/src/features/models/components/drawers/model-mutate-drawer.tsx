@@ -252,6 +252,12 @@ export function ModelMutateDrawer({
   // Submit may only rewrite pricing for this name, or for a name the user
   // explicitly priced; anything else it never saw and must leave alone.
   const [loadedPricingName, setLoadedPricingName] = useState<string>('')
+  // Controlled value for the endpoint-template picker. Reset to null after each
+  // pick so the same template can be chosen again and the trigger returns to its
+  // placeholder instead of sticking on the last-added template.
+  const [endpointTemplateKey, setEndpointTemplateKey] = useState<string | null>(
+    null
+  )
   // Keep a ref so the load effect can read the latest modelSettings without
   // depending on it: modelSettings is a fresh object on every system-options
   // refetch, and including it in the deps would reset the form under the user.
@@ -716,12 +722,33 @@ export function ModelMutateDrawer({
     ]
   )
 
+  // Merge the picked template into whatever is already configured instead of
+  // replacing it. Overwriting made the picker effectively single-use: choosing a
+  // second endpoint silently discarded the first one.
   const handleFillEndpointTemplate = (templateKey: string) => {
     const template = ENDPOINT_TEMPLATES[templateKey]
-    if (template) {
-      const templateJson = JSON.stringify({ [templateKey]: template }, null, 2)
-      form.setValue('endpoints', templateJson)
+    if (!template) return
+
+    const current = form.getValues('endpoints')?.trim()
+    let merged: Record<string, unknown> = {}
+    if (current) {
+      try {
+        const parsed = JSON.parse(current)
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          merged = parsed as Record<string, unknown>
+        }
+      } catch {
+        // Hand-edited JSON that does not parse is left untouched: replacing it
+        // would throw away the user's work. Only valid objects are extended.
+        toast.error(t('Fix the endpoint JSON before loading a template'))
+        return
+      }
     }
+
+    merged[templateKey] = template
+    form.setValue('endpoints', JSON.stringify(merged, null, 2), {
+      shouldDirty: true,
+    })
   }
 
   return (
@@ -926,13 +953,18 @@ export function ModelMutateDrawer({
               <div className='flex items-center justify-between'>
                 <h3 className='text-sm font-semibold'>{t('Endpoints')}</h3>
                 <Select<string>
+                  value={endpointTemplateKey}
                   items={Object.keys(ENDPOINT_TEMPLATES).map((key) => ({
                     value: key,
                     label: key,
                   }))}
-                  onValueChange={(v) =>
-                    v !== null && handleFillEndpointTemplate(v)
-                  }
+                  onValueChange={(v) => {
+                    if (v === null) return
+                    handleFillEndpointTemplate(v)
+                    // Snap back to the placeholder so the next (or same) template
+                    // can be added without first clearing the selection.
+                    setEndpointTemplateKey(null)
+                  }}
                 >
                   <SelectTrigger size='sm' className='w-[200px]'>
                     <SelectValue placeholder={t('Load template...')} />

@@ -25,10 +25,15 @@ import { formatUSD } from '../format'
 import { buildRankingPieSlices, formatRankingUserTooltip } from '../user-usage'
 
 describe('rankings charged-amount presentation', () => {
-  test('formats fixed USD independently from site currency settings', () => {
-    assert.equal(formatUSD(0), '$0.00')
-    assert.equal(formatUSD(1.25), '$1.25')
-    assert.equal(formatUSD(0.000002), '$0.000002')
+  // Charged amounts sit beside a token count in every ranking row, so they are
+  // rounded to a single decimal to keep the columns scannable. A tiny non-zero
+  // amount must still read as "spent something" rather than as free usage.
+  test('formats fixed USD to one decimal independently from site currency settings', () => {
+    assert.equal(formatUSD(0), '$0.0')
+    assert.equal(formatUSD(1.25), '$1.3')
+    assert.equal(formatUSD(12), '$12.0')
+    assert.equal(formatUSD(1234.567), '$1,234.6')
+    assert.equal(formatUSD(0.000002), '<$0.1')
   })
 
   test('builds top five user slices plus one exact Other slice', () => {
@@ -94,7 +99,7 @@ describe('rankings charged-amount presentation', () => {
     )
 
     assert.match(tooltip, /Usage by group/)
-    assert.match(tooltip, /team: \$1\.50 · 150 tokens · 75\.0%/)
+    assert.match(tooltip, /team: \$1\.5 · 150 tokens · 75\.0%/)
   })
 
   test('normalizes shares when the reported total is lower than user rows', () => {

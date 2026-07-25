@@ -2085,6 +2085,7 @@
     "First/Last Frame to Video": "首尾生视频",
     "Fix Abilities": "修复渠道一致性",
     "Fix order": "修复顺序",
+    "Fix the endpoint JSON before loading a template": "请先修复端点 JSON，再加载模板",
     "Fixed abilities: {{success}} succeeded, {{fails}} failed": "渠道一致性修复完成：{{success}} 个成功，{{fails}} 个失败",
     "Fixed price": "固定价格",
     "Fixed price (USD)": "固定价格 (USD)",

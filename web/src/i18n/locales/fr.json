@@ -2084,6 +2084,7 @@
     "First/Last Frame to Video": "Première/Dernière image vers vidéo",
     "Fix Abilities": "Réparer la cohérence des canaux",
     "Fix order": "Corriger l’ordre",
+    "Fix the endpoint JSON before loading a template": "Corrigez le JSON du point de terminaison avant de charger un modèle",
     "Fixed abilities: {{success}} succeeded, {{fails}} failed": "Cohérence des canaux réparée : {{success}} réussie(s), {{fails}} échouée(s)",
     "Fixed price": "Prix fixe",
     "Fixed price (USD)": "Prix fixe (USD)",

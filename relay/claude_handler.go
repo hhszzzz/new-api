@@ -107,6 +107,11 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		info.UpstreamModelName = request.Model
 	}
 
+	// Record the effort only after the thinking config above is final, so the
+	// log reports what actually goes upstream rather than what the client asked
+	// for.
+	relaycommon.RecordClaudeReasoningEffort(info, request)
+
 	// The route-injected prompt always leads, so it outranks both the channel
 	// system prompt and any system prompt the client sent.
 	if leadingPrompt := info.LeadingSystemPrompt(request.System != nil); leadingPrompt != "" {

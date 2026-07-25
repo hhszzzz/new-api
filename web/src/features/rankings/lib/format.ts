@@ -38,14 +38,23 @@ export function formatTokens(value: number): string {
   return value.toLocaleString()
 }
 
-/** Format a rankings amount as USD, independent of the site's token currency. */
+/**
+ * Format a rankings amount as USD, independent of the site's token currency.
+ *
+ * Charged amounts are shown next to a token count, so a single decimal keeps the
+ * columns readable; the exact sub-cent value carries no meaning at a glance and
+ * a long fraction only makes the ranking harder to scan. A tiny non-zero amount
+ * is reported as a threshold rather than rounded to `$0.0`, which would read as
+ * free usage.
+ */
 export function formatUSD(value: number): string {
-  if (!Number.isFinite(value) || value <= 0) return '$0.00'
+  if (!Number.isFinite(value) || value <= 0) return '$0.0'
+  if (value < 0.05) return '<$0.1'
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency: 'USD',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 6,
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
   }).format(value)
 }
 

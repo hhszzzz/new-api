@@ -32,6 +32,10 @@ func ApplyGeminiThinkingConfig(geminiRequest *dto.GeminiChatRequest, info *relay
 	sharedgemini.ApplyThinkingConfig(geminiRequest, info, oaiRequest...)
 }
 
+func RecordGeminiReasoningEffort(geminiRequest *dto.GeminiChatRequest, info *relaycommon.RelayInfo) {
+	sharedgemini.RecordReasoningEffort(geminiRequest, info)
+}
+
 func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*dto.OpenAIResponsesRequest, error) {
 	return oaichat.ChatCompletionsRequestToResponsesRequest(req)
 }

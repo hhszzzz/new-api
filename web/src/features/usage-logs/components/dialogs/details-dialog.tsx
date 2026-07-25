@@ -107,6 +107,7 @@ function DetailRow(props: {
   value: React.ReactNode
   mono?: boolean
   muted?: boolean
+  highlight?: boolean
 }) {
   return (
     <div className='grid min-w-0 grid-cols-[5.25rem_minmax(0,1fr)] gap-2 text-sm sm:grid-cols-[7rem_minmax(0,1fr)] sm:gap-3'>
@@ -117,7 +118,8 @@ function DetailRow(props: {
         className={cn(
           'max-w-full min-w-0 text-xs break-all sm:wrap-break-word',
           props.mono && 'font-mono',
-          props.muted && 'text-muted-foreground'
+          props.muted && 'text-muted-foreground',
+          props.highlight && 'font-medium text-sky-600 dark:text-sky-400'
         )}
       >
         {props.value}
@@ -597,12 +599,17 @@ export function DetailsDialog(props: DetailsDialogProps) {
         props.log.ip && {
           label: t('IP Address'),
           value: props.log.ip,
+          highlight: true,
         },
         other?.user_agent && {
           label: t('User Agent'),
           value: String(other.user_agent),
         },
-      ].filter(Boolean) as Array<{ label: string; value: string }>)
+      ].filter(Boolean) as Array<{
+        label: string
+        value: string
+        highlight?: boolean
+      }>)
     : []
 
   const conversionChain =
@@ -732,7 +739,12 @@ export function DetailsDialog(props: DetailsDialogProps) {
           )}
 
           {showAdminIp && (
-            <DetailRow label={t('IP Address')} value={diagnosticIp} mono />
+            <DetailRow
+              label={t('IP Address')}
+              value={diagnosticIp}
+              mono
+              highlight
+            />
           )}
 
           {showTiming && props.log.use_time > 0 && (
@@ -1135,6 +1147,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
                 label={field.label}
                 value={field.value}
                 mono
+                highlight={field.highlight}
               />
             ))}
           </DetailSection>

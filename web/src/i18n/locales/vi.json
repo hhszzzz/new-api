@@ -2084,6 +2084,7 @@
     "First/Last Frame to Video": "Khung đầu/cuối sang video",
     "Fix Abilities": "Sửa tính nhất quán kênh",
     "Fix order": "Sửa thứ tự",
+    "Fix the endpoint JSON before loading a template": "Hãy sửa JSON điểm cuối trước khi tải mẫu",
     "Fixed abilities: {{success}} succeeded, {{fails}} failed": "Đã sửa tính nhất quán kênh: {{success}} thành công, {{fails}} thất bại",
     "Fixed price": "Giá cố định",
     "Fixed price (USD)": "Giá cố định (USD)",

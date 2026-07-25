@@ -73,6 +73,11 @@ func GeminiHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		}
 	}
 
+	// A caller that sends generationConfig.thinkingConfig itself skips the
+	// thinking adapter above, so the effort is recorded here rather than only
+	// inside the adapter.
+	relayconvert.RecordGeminiReasoningEffort(request, info)
+
 	adaptor := GetAdaptor(info.ApiType)
 	if adaptor == nil {
 		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())

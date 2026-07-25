@@ -54,6 +54,12 @@ export function UserUsageSection(props: UserUsageSectionProps) {
     const start = (currentPage - 1) * USER_PAGE_SIZE
     return users.slice(start, start + USER_PAGE_SIZE)
   }, [currentPage, users])
+  // The inline usage bars are relative to the biggest spender, so the leader
+  // fills the bar and every other row reads as a fraction of it.
+  const topUserUSD = users.reduce(
+    (max, user) => Math.max(max, user.total_usd),
+    0
+  )
   const userColumnSize = Math.ceil(pagedUsers.length / 2)
   const pagedUserColumns = [
     pagedUsers.slice(0, userColumnSize),
@@ -344,6 +350,7 @@ export function UserUsageSection(props: UserUsageSectionProps) {
                         key={`${user.rank}-${user.username}`}
                         user={user}
                         selected={selectedUser?.rank === user.rank}
+                        share={topUserUSD > 0 ? user.total_usd / topUserUSD : 0}
                         colour={
                           colourMap[
                             slices.find((slice) => slice.userRank === user.rank)
@@ -484,11 +491,14 @@ function UserRow(props: {
   user: RankingUser
   selected: boolean
   colour?: string
+  /** 0..1 share of the largest user, used to size the inline usage bar. */
+  share: number
   onSelect: () => void
   onMove: (direction: 'next' | 'previous') => void
 }) {
   const { t } = useTranslation()
   const displayUsername = localizeUsageLabel(props.user.username, t)
+  const isPodium = props.user.rank <= 3
   return (
     <button
       id={`ranking-user-${props.user.rank}`}
@@ -496,8 +506,9 @@ function UserRow(props: {
       aria-pressed={props.selected}
       aria-label={t('Select {{user}}', { user: displayUsername })}
       className={cn(
-        'focus-visible:ring-ring/50 flex w-full items-center gap-3 py-2.5 text-left outline-none focus-visible:ring-2',
-        props.selected && 'bg-muted/50'
+        'focus-visible:ring-ring/50 group flex w-full items-center gap-3 rounded-md px-2 py-2.5 text-left outline-none transition-colors focus-visible:ring-2',
+        'hover:bg-muted/40',
+        props.selected && 'bg-muted/60'
       )}
       onClick={props.onSelect}
       onKeyDown={(event) => {
@@ -511,16 +522,45 @@ function UserRow(props: {
         }
       }}
     >
-      <span className='text-muted-foreground/80 w-6 shrink-0 text-right font-mono text-xs tabular-nums'>
+      <span
+        className={cn(
+          'w-6 shrink-0 text-right font-mono text-xs tabular-nums',
+          isPodium
+            ? 'text-foreground font-semibold'
+            : 'text-muted-foreground/80'
+        )}
+      >
         {props.user.rank}.
       </span>
       <span
         aria-hidden
-        className='size-2.5 shrink-0 rounded-full'
-        style={{ backgroundColor: props.colour ?? '#94a3b8' }}
+        className={cn(
+          'size-2.5 shrink-0 rounded-full',
+          props.selected && 'ring-offset-background ring-2 ring-offset-1'
+        )}
+        style={{
+          backgroundColor: props.colour ?? '#94a3b8',
+          ...(props.selected
+            ? { '--tw-ring-color': props.colour ?? '#94a3b8' }
+            : {}),
+        }}
       />
-      <span className='text-foreground min-w-0 flex-1 truncate text-sm font-medium'>
-        {displayUsername}
+      <span className='min-w-0 flex-1 truncate'>
+        <span className='text-foreground truncate text-sm font-medium'>
+          {displayUsername}
+        </span>
+        <span
+          aria-hidden
+          className='bg-muted/70 mt-1 block h-1 w-full overflow-hidden rounded-full'
+        >
+          <span
+            className='block h-full rounded-full'
+            style={{
+              width: `${Math.max(2, Math.min(100, props.share * 100))}%`,
+              backgroundColor: props.colour ?? '#94a3b8',
+            }}
+          />
+        </span>
       </span>
       <span className='shrink-0 text-right'>
         <span className='text-foreground block font-mono text-sm font-semibold tabular-nums'>

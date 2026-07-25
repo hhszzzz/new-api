@@ -2084,6 +2084,7 @@
     "First/Last Frame to Video": "首尾生影片",
     "Fix Abilities": "修復渠道一致性",
     "Fix order": "修復順序",
+    "Fix the endpoint JSON before loading a template": "請先修復端點 JSON，再載入模板",
     "Fixed abilities: {{success}} succeeded, {{fails}} failed": "渠道一致性修復完成：{{success}} 個成功，{{fails}} 個失敗",
     "Fixed price": "固定價格",
     "Fixed price (USD)": "固定價格 (USD)",

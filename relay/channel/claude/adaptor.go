@@ -100,6 +100,12 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 	if err != nil {
 		return nil, err
 	}
+	// Conversion is where an OpenAI-style reasoning_effort (or a thinking model
+	// suffix) becomes an Anthropic thinking config, so the effort can only be
+	// recorded once the converted request exists.
+	if claudeRequest, ok := result.Value.(*dto.ClaudeRequest); ok {
+		relaycommon.RecordClaudeReasoningEffort(info, claudeRequest)
+	}
 	return result.Value, nil
 }
 

@@ -2084,6 +2084,7 @@
     "First/Last Frame to Video": "Первый/последний кадр в видео",
     "Fix Abilities": "Восстановить согласованность каналов",
     "Fix order": "Исправить порядок",
+    "Fix the endpoint JSON before loading a template": "Исправьте JSON конечной точки перед загрузкой шаблона",
     "Fixed abilities: {{success}} succeeded, {{fails}} failed": "Согласованность каналов восстановлена: успешно {{success}}, ошибок {{fails}}",
     "Fixed price": "Фиксированная цена",
     "Fixed price (USD)": "Фиксированная цена (USD)",

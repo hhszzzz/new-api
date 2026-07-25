@@ -144,7 +144,40 @@ func ApplyThinkingConfig(geminiRequest *dto.GeminiChatRequest, info *relaycommon
 			IncludeThoughts: true,
 			ThinkingLevel:   level,
 		}
+	}
+
+	RecordReasoningEffort(geminiRequest, info)
+}
+
+// RecordReasoningEffort publishes the effort level of an outbound Gemini request
+// onto the relay info so the consume log can show it.
+//
+// It must be called once the thinking config is final, so the log reports what
+// actually goes upstream. Callers that send generationConfig.thinkingConfig
+// themselves skip the thinking adapter entirely, so the native path has to
+// record too rather than relying on ApplyThinkingConfig.
+//
+// Gemini expresses effort either as a native level (thinkingLevel) or as a token
+// budget (thinkingBudget), so both are folded onto the shared vocabulary. A
+// missing config means the model was left at its default, which is not an
+// explicit effort choice and is therefore not reported.
+func RecordReasoningEffort(geminiRequest *dto.GeminiChatRequest, info *relaycommon.RelayInfo) {
+	if geminiRequest == nil || info == nil {
+		return
+	}
+	config := geminiRequest.GenerationConfig.ThinkingConfig
+	if config == nil {
+		return
+	}
+	if level := reasoning.NormalizeEffort(config.ThinkingLevel); level != "" {
 		info.ReasoningEffort = level
+		return
+	}
+	if config.ThinkingBudget == nil {
+		return
+	}
+	if effort := reasoning.EffortFromBudgetTokens(*config.ThinkingBudget); effort != "" && effort != reasoning.EffortNone {
+		info.ReasoningEffort = effort
 	}
 }
 
