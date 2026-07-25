@@ -45,6 +45,10 @@ func (r *EmbeddingRequest) GetTokenCountMeta() *types.TokenCountMeta {
 	}
 }
 
+func (r *EmbeddingRequest) GetSensitiveText() string {
+	return strings.Join(r.ParseInput(), "\n")
+}
+
 func (r *EmbeddingRequest) IsStream(c *gin.Context) bool {
 	return false
 }

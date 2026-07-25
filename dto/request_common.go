@@ -7,6 +7,7 @@ import (
 
 type Request interface {
 	GetTokenCountMeta() *types.TokenCountMeta
+	GetSensitiveText() string
 	IsStream(c *gin.Context) bool
 	SetModelName(modelName string)
 }
@@ -18,6 +19,9 @@ func (b *BaseRequest) GetTokenCountMeta() *types.TokenCountMeta {
 	return &types.TokenCountMeta{
 		TokenType: types.TokenTypeTokenizer,
 	}
+}
+func (b *BaseRequest) GetSensitiveText() string {
+	return ""
 }
 func (b *BaseRequest) IsStream(c *gin.Context) bool {
 	return false

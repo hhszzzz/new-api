@@ -15,6 +15,9 @@ func CheckSensitiveMessages(messages []dto.Message) ([]string, error) {
 	}
 
 	for _, message := range messages {
+		if !strings.EqualFold(message.Role, "user") {
+			continue
+		}
 		arrayContent := message.ParseContent()
 		for _, m := range arrayContent {
 			if m.Type == "image_url" {

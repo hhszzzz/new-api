@@ -108,6 +108,26 @@ func (r *GeminiChatRequest) GetTokenCountMeta() *types.TokenCountMeta {
 	}
 }
 
+func (r *GeminiChatRequest) GetSensitiveText() string {
+	texts := make([]string, 0)
+	for _, content := range r.Contents {
+		if content.Role != "" && !strings.EqualFold(content.Role, "user") {
+			continue
+		}
+		for _, part := range content.Parts {
+			if part.Text != "" {
+				texts = append(texts, part.Text)
+			}
+		}
+	}
+	for i := range r.Requests {
+		if text := r.Requests[i].GetSensitiveText(); text != "" {
+			texts = append(texts, text)
+		}
+	}
+	return strings.Join(texts, "\n")
+}
+
 func (r *GeminiChatRequest) IsStream(c *gin.Context) bool {
 	if c.Query("alt") == "sse" {
 		return true
@@ -570,6 +590,10 @@ func (r *GeminiEmbeddingRequest) GetTokenCountMeta() *types.TokenCountMeta {
 	}
 }
 
+func (r *GeminiEmbeddingRequest) GetSensitiveText() string {
+	return r.GetTokenCountMeta().CombineText
+}
+
 func (r *GeminiEmbeddingRequest) SetModelName(modelName string) {
 	if modelName != "" {
 		r.Model = modelName
@@ -597,6 +621,16 @@ func (r *GeminiBatchEmbeddingRequest) GetTokenCountMeta() *types.TokenCountMeta 
 	return &types.TokenCountMeta{
 		CombineText: inputText,
 	}
+}
+
+func (r *GeminiBatchEmbeddingRequest) GetSensitiveText() string {
+	texts := make([]string, 0, len(r.Requests))
+	for _, request := range r.Requests {
+		if request != nil {
+			texts = append(texts, request.GetSensitiveText())
+		}
+	}
+	return strings.Join(texts, "\n")
 }
 
 func (r *GeminiBatchEmbeddingRequest) SetModelName(modelName string) {

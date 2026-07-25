@@ -171,6 +171,10 @@ func (i *ImageRequest) GetTokenCountMeta() *types.TokenCountMeta {
 	}
 }
 
+func (i *ImageRequest) GetSensitiveText() string {
+	return i.Prompt
+}
+
 func (i *ImageRequest) IsStream(c *gin.Context) bool {
 	return i.Stream != nil && *i.Stream
 }

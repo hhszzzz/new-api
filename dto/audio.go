@@ -41,6 +41,10 @@ func (r *AudioRequest) GetTokenCountMeta() *types.TokenCountMeta {
 	return meta
 }
 
+func (r *AudioRequest) GetSensitiveText() string {
+	return strings.Join([]string{r.Input, r.Instructions}, "\n")
+}
+
 func (r *AudioRequest) IsStream(c *gin.Context) bool {
 	return r.StreamFormat == "sse"
 }

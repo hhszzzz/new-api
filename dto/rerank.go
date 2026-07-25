@@ -38,6 +38,10 @@ func (r *RerankRequest) GetTokenCountMeta() *types.TokenCountMeta {
 	}
 }
 
+func (r *RerankRequest) GetSensitiveText() string {
+	return r.GetTokenCountMeta().CombineText
+}
+
 func (r *RerankRequest) SetModelName(modelName string) {
 	if modelName != "" {
 		r.Model = modelName
