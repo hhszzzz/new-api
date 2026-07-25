@@ -393,17 +393,26 @@ func hourStart(ts int64) int64 {
 	return ts - ts%3600
 }
 
+// Success-rate thresholds shared with the model catalog ("模型广场") success
+// rate grading in web/src/features/performance-metrics/lib/format.ts, so the
+// same model never renders green in one page and amber/red in the other.
+const (
+	statusOperationalMinRate = 90.0
+	statusDegradedMinRate    = 70.0
+)
+
 func classifyStatus(value counters) Status {
 	if value.requestCount <= 0 {
 		return StatusNoData
 	}
-	if value.successCount <= 0 {
-		return StatusFailed
-	}
-	if value.successCount >= value.requestCount {
+	rate := statusSuccessRateValue(value)
+	if rate >= statusOperationalMinRate {
 		return StatusOperational
 	}
-	return StatusDegraded
+	if rate >= statusDegradedMinRate {
+		return StatusDegraded
+	}
+	return StatusFailed
 }
 
 func statusSuccessRate(value counters) *float64 {

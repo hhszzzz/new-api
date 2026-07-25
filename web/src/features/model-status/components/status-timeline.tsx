@@ -32,7 +32,10 @@ import {
 import { cn } from '@/lib/utils'
 
 import type { ModelStatusTimelinePoint } from '../types'
-import { getModelStatusLabel, STATUS_PRESENTATION } from './status-presentation'
+import {
+  getModelStatusBarClass,
+  getModelStatusLabel,
+} from './status-presentation'
 
 type StatusTimelineProps = {
   timeline: ModelStatusTimelinePoint[]
@@ -70,7 +73,10 @@ export function StatusTimeline(props: StatusTimelineProps) {
           aria-label={t('Status over the last 24 hours')}
         >
           {props.timeline.map((point) => {
-            const presentation = STATUS_PRESENTATION[point.status]
+            const barClassName = getModelStatusBarClass(
+              point.status,
+              point.success_rate
+            )
             const statusLabel = getModelStatusLabel(t, point.status)
             const timeRangeLabel = formatHourRange(
               point.ts,
@@ -119,7 +125,7 @@ export function StatusTimeline(props: StatusTimelineProps) {
                         type='button'
                         className={cn(
                           'block h-7 w-full min-w-0 cursor-default overflow-hidden rounded-[3px] border-0 p-0 outline-none transition-[filter,box-shadow] hover:brightness-95 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 sm:h-8 sm:rounded',
-                          presentation.barClassName
+                          barClassName
                         )}
                         aria-label={accessibleLabel}
                       />

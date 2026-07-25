@@ -462,26 +462,6 @@ export function buildAppRankings(
   })
 }
 
-/** Aggregate uptime over the most recent 30 days. */
-export function aggregateUptime(points: UptimeDayPoint[]): {
-  uptime_pct: number
-  incidents: number
-  outage_minutes: number
-} {
-  if (points.length === 0) {
-    return { uptime_pct: 0, incidents: 0, outage_minutes: 0 }
-  }
-  const incidents = points.reduce((s, p) => s + p.incidents, 0)
-  const outageMinutes = points.reduce((s, p) => s + p.outage_minutes, 0)
-  const totalMinutes = points.length * 1_440
-  const uptimePct = ((totalMinutes - outageMinutes) / totalMinutes) * 100
-  return {
-    incidents,
-    outage_minutes: outageMinutes,
-    uptime_pct: Math.round(uptimePct * 1000) / 1000,
-  }
-}
-
 /** Compact integer formatter for token counts in apps tab. */
 export function formatTokenVolume(n: number): string {
   if (!Number.isFinite(n) || n <= 0) return '0'

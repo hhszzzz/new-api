@@ -261,6 +261,34 @@ func TestQueryStatusBuildsFixedHourlyTimelineAndClassifiesModels(t *testing.T) {
 	assert.Contains(t, string(encoded), `"avg_ttft_ms"`)
 }
 
+// classifyStatus must grade on success rate using the same thresholds as the
+// model catalog ("模型广场") success-rate palette in
+// web/src/features/performance-metrics/lib/format.ts, so a model never renders
+// green on one page and amber/red on the other.
+func TestClassifyStatusGradesOnSuccessRateThresholds(t *testing.T) {
+	tests := []struct {
+		name     string
+		value    counters
+		expected Status
+	}{
+		{name: "no requests", value: counters{}, expected: StatusNoData},
+		{name: "all failed", value: counters{requestCount: 10}, expected: StatusFailed},
+		{name: "all succeeded", value: counters{requestCount: 10, successCount: 10}, expected: StatusOperational},
+		{name: "at operational threshold", value: counters{requestCount: 10, successCount: 9}, expected: StatusOperational},
+		{name: "just below operational threshold", value: counters{requestCount: 100, successCount: 89}, expected: StatusDegraded},
+		{name: "at degraded threshold", value: counters{requestCount: 10, successCount: 7}, expected: StatusDegraded},
+		{name: "just below degraded threshold", value: counters{requestCount: 100, successCount: 69}, expected: StatusFailed},
+		{name: "mostly failing", value: counters{requestCount: 100, successCount: 1}, expected: StatusFailed},
+		{name: "success count above request count", value: counters{requestCount: 2, successCount: 5}, expected: StatusOperational},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.expected, classifyStatus(test.value))
+		})
+	}
+}
+
 func TestQueryStatusUsesPerInstanceRedisBucketsWithoutDoubleCountingLocalHourBucket(t *testing.T) {
 	db := setupStatusTestDB(t)
 	withStatusBucketTime(t, "hour")
@@ -290,7 +318,7 @@ func TestQueryStatusUsesPerInstanceRedisBucketsWithoutDoubleCountingLocalHourBuc
 	require.NoError(t, err)
 	require.Len(t, result.Models, 1)
 	status := result.Models[0]
-	assert.Equal(t, StatusDegraded, status.Status)
+	assert.Equal(t, StatusFailed, status.Status)
 	assert.Equal(t, int64(2), status.RequestCount)
 	assert.Equal(t, int64(1), status.SuccessCount)
 	require.NotNil(t, status.SuccessRate)
@@ -334,7 +362,7 @@ func TestQueryStatusIncludesCompletedRedisBucketsFromEveryUnflushedWriter(t *tes
 	require.NoError(t, err)
 	require.Len(t, result.Models, 1)
 	status := result.Models[0]
-	assert.Equal(t, StatusDegraded, status.Status)
+	assert.Equal(t, StatusFailed, status.Status)
 	require.NotNil(t, status.SuccessRate)
 	require.NotNil(t, status.AvgLatencyMs)
 	assert.Equal(t, 50.0, *status.SuccessRate)
@@ -361,7 +389,7 @@ func TestQueryStatusKeepsRemoteCompletedBucketVisibleAfterBucketSwitch(t *testin
 	require.NoError(t, err)
 	require.Len(t, result.Models, 1)
 	status := result.Models[0]
-	assert.Equal(t, StatusDegraded, status.Status)
+	assert.Equal(t, StatusFailed, status.Status)
 	require.NotNil(t, status.SuccessRate)
 	require.NotNil(t, status.AvgLatencyMs)
 	assert.Equal(t, 50.0, *status.SuccessRate)
@@ -399,7 +427,7 @@ func TestQueryStatusDeduplicatesPersistedWriterWithoutHidingOtherWriters(t *test
 	require.NoError(t, err)
 	require.Len(t, result.Models, 1)
 	status := result.Models[0]
-	assert.Equal(t, StatusDegraded, status.Status)
+	assert.Equal(t, StatusFailed, status.Status)
 	require.NotNil(t, status.SuccessRate)
 	require.NotNil(t, status.AvgLatencyMs)
 	assert.Equal(t, 50.0, *status.SuccessRate)
@@ -467,14 +495,14 @@ func TestQueryStatusMergesOnlyActiveRedisBucketWithCompletedLocalBuckets(t *test
 			require.NoError(t, err)
 			require.Len(t, result.Models, 1)
 			status := result.Models[0]
-			assert.Equal(t, StatusDegraded, status.Status)
+			assert.Equal(t, StatusFailed, status.Status)
 			require.NotNil(t, status.SuccessRate)
 			require.NotNil(t, status.AvgLatencyMs)
 			require.NotNil(t, status.AvgTps)
 			assert.Equal(t, 60.0, *status.SuccessRate)
 			assert.Equal(t, int64(240), *status.AvgLatencyMs)
 			assert.Equal(t, 20.0, *status.AvgTps)
-			assert.Equal(t, StatusDegraded, status.Timeline[23].Status)
+			assert.Equal(t, StatusFailed, status.Timeline[23].Status)
 		})
 	}
 }
@@ -525,7 +553,7 @@ func TestQueryStatusKeepsMoreCompleteLocalActiveBucketWhenRedisBucketIsPartial(t
 	require.NoError(t, err)
 	require.Len(t, result.Models, 1)
 	status := result.Models[0]
-	assert.Equal(t, StatusDegraded, status.Status)
+	assert.Equal(t, StatusFailed, status.Status)
 	require.NotNil(t, status.SuccessRate)
 	require.NotNil(t, status.AvgLatencyMs)
 	assert.Equal(t, 60.0, *status.SuccessRate)

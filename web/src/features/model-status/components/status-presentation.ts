@@ -18,28 +18,28 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import type { TFunction } from 'i18next'
 
+import { getSuccessRateDotClass } from '@/features/performance-metrics/lib/format'
+
 import type { ModelHealthStatus } from '../types'
 
-type StatusPresentation = {
-  barClassName: string
-}
+const NO_DATA_BAR_CLASS = 'bg-muted ring-1 ring-inset ring-border/70'
 
-export const STATUS_PRESENTATION: Record<
-  ModelHealthStatus,
-  StatusPresentation
-> = {
-  operational: {
-    barClassName: 'bg-success',
-  },
-  degraded: {
-    barClassName: 'bg-warning',
-  },
-  failed: {
-    barClassName: 'bg-destructive',
-  },
-  no_data: {
-    barClassName: 'bg-muted ring-1 ring-inset ring-border/70',
-  },
+/**
+ * Bar color for one hour of the status timeline.
+ *
+ * Delegates to the model catalog ("模型广场") success-rate palette so the same
+ * model never renders a different color on the two pages, including the
+ * catalog's two shades of green (full green at 100%, lighter green above 90%).
+ * The theme-level `bg-success`/`bg-warning`/`bg-destructive` tokens are
+ * deliberately not used here: theme presets redefine them, which would make the
+ * status page drift from the catalog.
+ */
+export function getModelStatusBarClass(
+  status: ModelHealthStatus,
+  successRate: number | null
+): string {
+  if (status === 'no_data' || successRate === null) return NO_DATA_BAR_CLASS
+  return getSuccessRateDotClass(successRate)
 }
 
 export function getModelStatusLabel(

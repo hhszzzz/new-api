@@ -250,7 +250,7 @@ func TestFlushKeepsStatusReadsConsistentWhileMovingCompletedBucket(t *testing.T)
 	require.Len(t, before.Models, 1)
 	require.NotNil(t, before.Models[0].SuccessRate)
 	require.NotNil(t, before.Models[0].AvgLatencyMs)
-	assert.Equal(t, StatusDegraded, before.Models[0].Status)
+	assert.Equal(t, StatusFailed, before.Models[0].Status)
 	assert.Equal(t, 50.0, *before.Models[0].SuccessRate)
 	assert.Equal(t, int64(200), *before.Models[0].AvgLatencyMs)
 
