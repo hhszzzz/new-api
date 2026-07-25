@@ -225,6 +225,14 @@ export const STATIC_I18N_KEYS = [
   // Channel Affinity section
   'Channel Affinity',
 
+  // Client detection and model route diagnostics
+  '{{count}} channels',
+  'Native',
+  'Convertible',
+  'Incompatible',
+  'No enabled channels for this model in this group',
+  'Keep full IP addresses in usage logs; the IP column remains hidden by default.',
+
   // Models constants
   'Exact Match',
   'Prefix Match',

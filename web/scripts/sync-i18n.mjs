@@ -82,6 +82,12 @@ const BRAND_AND_LITERAL_KEYS = new Set([
   'Replicate',
   'SiliconFlow',
   'Stripe',
+  'Stainless Go SDK',
+  'Stainless Java SDK',
+  'Stainless JavaScript SDK',
+  'Stainless PHP SDK',
+  'Stainless Python SDK',
+  'Stainless Ruby SDK',
   'Submodel',
   'SunoAPI',
   'Telegram',
@@ -229,8 +235,9 @@ function isLikelyUntranslated({ locale, baseValue, value }) {
   if (locale === 'ru') return true
 
   // For fr/vi: still useful but noisier; keep it conservative.
-  if (locale === 'fr' || locale === 'vi')
+  if (locale === 'fr' || locale === 'vi') {
     return /\b(the|and|or|to|with|please)\b/i.test(s)
+  }
 
   return false
 }
