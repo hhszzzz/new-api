@@ -77,7 +77,11 @@ export function UsersTable() {
   } = useTableUrlState({
     search: route.useSearch(),
     navigate: route.useNavigate(),
-    pagination: { defaultPage: 1, defaultPageSize: isMobile ? 10 : 20 },
+    pagination: {
+      defaultPage: 1,
+      defaultPageSize: isMobile ? 10 : 20,
+      pageSizeStorageKey: 'users:admin:page-size',
+    },
     globalFilter: { enabled: true, key: 'filter' },
     columnFilters: [
       { columnId: 'status', searchKey: 'status', type: 'array' },
@@ -173,6 +177,7 @@ export function UsersTable() {
   const { table } = useDataTable({
     data: users,
     columns,
+    tableStateStorageKey: 'users:admin',
     enableRowSelection: true,
     columnFilters,
     globalFilter,
@@ -231,13 +236,12 @@ export function UsersTable() {
           },
         ],
       }}
-      getRowClassName={(row, { isMobile }) =>
-        isDisabledUserRow(row.original)
-          ? isMobile
-            ? DISABLED_ROW_MOBILE
-            : DISABLED_ROW_DESKTOP
-          : undefined
-      }
+      getRowClassName={(row, { isMobile }) => {
+        if (!isDisabledUserRow(row.original)) {
+          return undefined
+        }
+        return isMobile ? DISABLED_ROW_MOBILE : DISABLED_ROW_DESKTOP
+      }}
       bulkActions={<DataTableBulkActions table={table} />}
     />
   )

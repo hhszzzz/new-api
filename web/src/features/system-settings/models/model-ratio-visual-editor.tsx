@@ -456,6 +456,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
   const { table } = useDataTable({
     data: models,
     columns,
+    tableStateStorageKey: 'model-ratio-editor:admin',
     getRowId: (row) => row.name,
     ensurePageInRange,
     sorting,
@@ -527,7 +528,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
         value: string | undefined
       ) => {
         if (!value || value === '') return
-        const parsed = parseFloat(value)
+        const parsed = Number.parseFloat(value)
         if (Number.isFinite(parsed)) target[name] = parsed
       }
 

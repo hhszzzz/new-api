@@ -45,6 +45,7 @@ export function SubscriptionsTable() {
   const { table } = useDataTable({
     data: plans,
     columns,
+    tableStateStorageKey: 'subscriptions:admin',
     withFilteredRowModel: false,
     withFacetedRowModel: false,
   })

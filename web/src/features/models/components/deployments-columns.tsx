@@ -114,7 +114,6 @@ export function useDeploymentsColumns(opts: {
         return value.includes(status)
       },
       size: 160,
-      enableSorting: false,
     },
     {
       accessorKey: 'provider',

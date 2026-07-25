@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useQueryClient } from '@tanstack/react-query'
-import { type ColumnDef, type RowSelectionState } from '@tanstack/react-table'
+import type { ColumnDef, RowSelectionState } from '@tanstack/react-table'
 import {
   Search,
   Info,
@@ -335,6 +335,7 @@ export function UpstreamConflictDialog({
   const { table } = useDataTable({
     data: conflictRows,
     columns,
+    tableStateStorageKey: 'upstream-conflict:admin',
     rowSelection,
     enableRowSelection: true,
     onRowSelectionChange: setRowSelection,
@@ -396,7 +397,7 @@ export function UpstreamConflictDialog({
     const payload: SyncOverwritePayload[] = Object.entries(groupedSelections)
       .map(([modelName, fields]) => ({
         model_name: modelName,
-        fields: Array.from(fields),
+        fields: [...fields],
       }))
       .filter((item) => item.fields.length > 0)
 

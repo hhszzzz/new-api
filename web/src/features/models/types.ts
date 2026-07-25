@@ -91,7 +91,22 @@ export interface GetModelsParams {
   vendor?: string // vendor ID to filter by
   status?: string // filter by status
   sync_official?: string // filter by sync_official status
+  sort_by?: ModelSortBy
+  sort_order?: SortOrder
 }
+
+export type ModelSortBy =
+  | 'id'
+  | 'model_name'
+  | 'name_rule'
+  | 'status'
+  | 'vendor_id'
+  | 'sync_official'
+  | 'created_time'
+  | 'updated_time'
+
+export type DeploymentSortBy = 'id' | 'name' | 'status' | 'created_at'
+export type SortOrder = 'asc' | 'desc'
 
 /**
  * Search models parameters
@@ -103,6 +118,8 @@ export interface SearchModelsParams {
   sync_official?: string // filter by sync_official status
   p?: number
   page_size?: number
+  sort_by?: ModelSortBy
+  sort_order?: SortOrder
 }
 
 /**

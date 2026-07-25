@@ -223,6 +223,7 @@ export function UpstreamRatioSyncTable({
   const { table } = useDataTable({
     data: filteredData,
     columns,
+    tableStateStorageKey: 'upstream-ratio-sync:admin',
     getRowId: (row) => row.key,
     initialPagination: { pageIndex: 0, pageSize: 10 },
     withFilteredRowModel: false,

@@ -24,6 +24,7 @@ import {
   DataTablePagination,
   DataTableRow,
   DataTableView,
+  DataTableViewOptions,
   useDataTable,
 } from '@/components/data-table'
 
@@ -72,12 +73,12 @@ export function PricingTable(props: PricingTableProps) {
   const { table } = useDataTable({
     data: models,
     columns,
+    tableStateStorageKey: 'pricing:user',
     pageCount: Math.ceil(models.length / pagination.pageSize),
     pagination,
     onPaginationChange: setPagination,
     manualPagination: false,
     withFilteredRowModel: false,
-    withSortedRowModel: false,
     withFacetedRowModel: false,
   })
 
@@ -90,6 +91,9 @@ export function PricingTable(props: PricingTableProps) {
 
   return (
     <div className='space-y-4'>
+      <div className='flex justify-end'>
+        <DataTableViewOptions table={table} />
+      </div>
       <DataTableView
         table={table}
         isLoading={isLoading}

@@ -961,6 +961,7 @@ function ChannelTestDialogContent({
   const { table } = useDataTable({
     data: tableData,
     columns,
+    tableStateStorageKey: 'channel-test:admin',
     rowSelection,
     pagination,
     enableRowSelection: true,

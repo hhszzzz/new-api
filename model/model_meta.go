@@ -7,6 +7,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -42,6 +43,59 @@ type Model struct {
 
 	MatchedModels []string `json:"matched_models,omitempty" gorm:"-"`
 	MatchedCount  int      `json:"matched_count,omitempty" gorm:"-"`
+}
+
+type ModelSortOptions struct {
+	SortBy    string
+	SortOrder string
+}
+
+var modelSortColumns = map[string]string{
+	"id":            "id",
+	"model_name":    "model_name",
+	"name_rule":     "name_rule",
+	"status":        "status",
+	"vendor_id":     "vendor_id",
+	"sync_official": "sync_official",
+	"created_time":  "created_time",
+	"updated_time":  "updated_time",
+}
+
+func NewModelSortOptions(sortBy string, sortOrder string) ModelSortOptions {
+	normalizedSortBy := strings.ToLower(strings.TrimSpace(sortBy))
+	normalizedSortOrder := strings.ToLower(strings.TrimSpace(sortOrder))
+	if _, ok := modelSortColumns[normalizedSortBy]; !ok {
+		normalizedSortBy = "id"
+		normalizedSortOrder = "desc"
+	} else if normalizedSortOrder != "asc" {
+		normalizedSortOrder = "desc"
+	}
+	return ModelSortOptions{SortBy: normalizedSortBy, SortOrder: normalizedSortOrder}
+}
+
+func (options ModelSortOptions) Apply(query *gorm.DB) *gorm.DB {
+	columnName, ok := modelSortColumns[options.SortBy]
+	if !ok {
+		columnName = "id"
+	}
+	query = query.Order(clause.OrderByColumn{
+		Column: clause.Column{Table: "models", Name: columnName},
+		Desc:   options.SortOrder != "asc",
+	})
+	if columnName != "id" {
+		query = query.Order(clause.OrderByColumn{
+			Column: clause.Column{Table: "models", Name: "id"},
+			Desc:   true,
+		})
+	}
+	return query
+}
+
+func resolveModelSortOptions(sortOptions []ModelSortOptions) ModelSortOptions {
+	if len(sortOptions) == 0 {
+		return NewModelSortOptions("", "")
+	}
+	return sortOptions[0]
 }
 
 func (mi *Model) Insert() error {
@@ -191,7 +245,7 @@ func GetPreferredModelOwnerChannelTypes(modelNames []string, groups []string) (m
 	return result, nil
 }
 
-func SearchModels(keyword string, vendor string, status string, syncOfficial string, offset int, limit int) ([]*Model, int64, error) {
+func SearchModels(keyword string, vendor string, status string, syncOfficial string, offset int, limit int, sortOptions ...ModelSortOptions) ([]*Model, int64, error) {
 	var models []*Model
 	db := DB.Model(&Model{})
 	if keyword != "" {
@@ -215,7 +269,7 @@ func SearchModels(keyword string, vendor string, status string, syncOfficial str
 	if err := db.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
-	if err := db.Order("models.id DESC").Offset(offset).Limit(limit).Find(&models).Error; err != nil {
+	if err := resolveModelSortOptions(sortOptions).Apply(db).Offset(offset).Limit(limit).Find(&models).Error; err != nil {
 		return nil, 0, err
 	}
 	return models, total, nil

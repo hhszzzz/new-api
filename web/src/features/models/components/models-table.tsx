@@ -18,7 +18,8 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
 import { getRouteApi } from '@tanstack/react-router'
-import { useMemo } from 'react'
+import type { OnChangeFn, SortingState } from '@tanstack/react-table'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { DataTablePage, useDataTable } from '@/components/data-table'
@@ -32,16 +33,29 @@ import {
   getSyncStatusOptions,
 } from '../constants'
 import { modelsQueryKeys, vendorsQueryKeys } from '../lib'
+import type { ModelSortBy } from '../types'
 import { DataTableBulkActions } from './data-table-bulk-actions'
 import { useModelsColumns } from './models-columns'
 import { useModels } from './models-provider'
 
 const route = getRouteApi('/_authenticated/models/$section')
 
+const MODEL_SORTABLE_COLUMNS = new Set<ModelSortBy>([
+  'id',
+  'model_name',
+  'name_rule',
+  'status',
+  'vendor_id',
+  'sync_official',
+  'created_time',
+  'updated_time',
+])
+
 export function ModelsTable() {
   const { t } = useTranslation()
   const { selectedVendor } = useModels()
   const isMobile = useMediaQuery('(max-width: 640px)')
+  const [sorting, setSorting] = useState<SortingState>([])
 
   // URL state management
   const {
@@ -58,6 +72,7 @@ export function ModelsTable() {
     pagination: {
       defaultPage: 1,
       defaultPageSize: isMobile ? 10 : DEFAULT_PAGE_SIZE,
+      pageSizeStorageKey: 'models:admin:page-size',
     },
     globalFilter: { enabled: true, key: 'filter' },
     columnFilters: [
@@ -118,6 +133,27 @@ export function ModelsTable() {
     syncFilterValue
   )
 
+  const sortParams = useMemo(() => {
+    const activeSort = sorting[0]
+    if (
+      !activeSort ||
+      !MODEL_SORTABLE_COLUMNS.has(activeSort.id as ModelSortBy)
+    ) {
+      return {}
+    }
+    return {
+      sort_by: activeSort.id as ModelSortBy,
+      sort_order: activeSort.desc ? 'desc' : 'asc',
+    } as const
+  }, [sorting])
+
+  const handleSortingChange: OnChangeFn<SortingState> = (updater) => {
+    setSorting(updater)
+    if (pagination.pageIndex > 0) {
+      onPaginationChange({ ...pagination, pageIndex: 0 })
+    }
+  }
+
   // Fetch models data
   // eslint-disable-next-line @tanstack/query/exhaustive-deps
   const { data, isLoading, isFetching } = useQuery({
@@ -126,6 +162,7 @@ export function ModelsTable() {
       vendor: activeVendorFilter,
       status: statusFilterValue,
       sync_official: syncFilterValue,
+      ...sortParams,
       p: pagination.pageIndex + 1,
       page_size: pagination.pageSize,
     }),
@@ -136,11 +173,13 @@ export function ModelsTable() {
           vendor: activeVendorFilter,
           status: statusFilterValue,
           sync_official: syncFilterValue,
+          ...sortParams,
           p: pagination.pageIndex + 1,
           page_size: pagination.pageSize,
         })
       }
       return getModels({
+        ...sortParams,
         p: pagination.pageIndex + 1,
         page_size: pagination.pageSize,
       })
@@ -158,7 +197,9 @@ export function ModelsTable() {
   const { table } = useDataTable({
     data: models,
     columns,
+    tableStateStorageKey: 'models:admin',
     totalCount,
+    sorting,
     initialColumnVisibility: {
       description: false,
       bound_channels: false,
@@ -171,7 +212,9 @@ export function ModelsTable() {
     onColumnFiltersChange,
     onPaginationChange,
     onGlobalFilterChange,
+    onSortingChange: handleSortingChange,
     manualPagination: true,
+    manualSorting: true,
     manualFiltering: true,
     ensurePageInRange,
   })

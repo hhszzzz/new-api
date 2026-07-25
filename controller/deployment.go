@@ -203,6 +203,25 @@ func computeStatusCounts(total int, deployments []ionet.Deployment) map[string]i
 	return counts
 }
 
+func normalizeDeploymentSort(sortBy string, sortOrder string) (string, string) {
+	sortColumns := map[string]string{
+		"id":         "id",
+		"name":       "name",
+		"status":     "status",
+		"created_at": "created_at",
+	}
+	normalizedSortBy := strings.ToLower(strings.TrimSpace(sortBy))
+	providerSortBy, ok := sortColumns[normalizedSortBy]
+	if !ok {
+		return "created_at", "desc"
+	}
+	normalizedSortOrder := strings.ToLower(strings.TrimSpace(sortOrder))
+	if normalizedSortOrder != "asc" {
+		normalizedSortOrder = "desc"
+	}
+	return providerSortBy, normalizedSortOrder
+}
+
 func GetAllDeployments(c *gin.Context) {
 	pageInfo := common.GetPageQuery(c)
 	client, ok := getIoEnterpriseClient(c)
@@ -211,12 +230,13 @@ func GetAllDeployments(c *gin.Context) {
 	}
 
 	status := c.Query("status")
+	sortBy, sortOrder := normalizeDeploymentSort(c.Query("sort_by"), c.Query("sort_order"))
 	opts := &ionet.ListDeploymentsOptions{
 		Status:    strings.ToLower(strings.TrimSpace(status)),
 		Page:      pageInfo.GetPage(),
 		PageSize:  pageInfo.GetPageSize(),
-		SortBy:    "created_at",
-		SortOrder: "desc",
+		SortBy:    sortBy,
+		SortOrder: sortOrder,
 	}
 
 	dl, err := client.ListDeployments(opts)
@@ -249,13 +269,14 @@ func SearchDeployments(c *gin.Context) {
 
 	status := strings.ToLower(strings.TrimSpace(c.Query("status")))
 	keyword := strings.TrimSpace(c.Query("keyword"))
+	sortBy, sortOrder := normalizeDeploymentSort(c.Query("sort_by"), c.Query("sort_order"))
 
 	dl, err := client.ListDeployments(&ionet.ListDeploymentsOptions{
 		Status:    status,
 		Page:      pageInfo.GetPage(),
 		PageSize:  pageInfo.GetPageSize(),
-		SortBy:    "created_at",
-		SortOrder: "desc",
+		SortBy:    sortBy,
+		SortOrder: sortOrder,
 	})
 	if err != nil {
 		common.ApiError(c, err)

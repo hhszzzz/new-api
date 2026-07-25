@@ -336,7 +336,6 @@ export function usePricingColumns(
         )
       },
       size: 130,
-      enableSorting: false,
     },
   ]
 

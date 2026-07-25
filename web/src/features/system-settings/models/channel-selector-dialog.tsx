@@ -296,6 +296,7 @@ export function ChannelSelectorDialog({
   const { table } = useDataTable({
     data: sortedChannels,
     columns,
+    tableStateStorageKey: 'ratio-channel-selector:admin',
     rowSelection,
     getRowId: (row) => row.id.toString(),
     enableRowSelection: true,

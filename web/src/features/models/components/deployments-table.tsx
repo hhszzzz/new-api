@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { getRouteApi } from '@tanstack/react-router'
+import type { OnChangeFn, SortingState } from '@tanstack/react-table'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -39,7 +40,7 @@ import { useTableUrlState } from '@/hooks/use-table-url-state'
 import { deleteDeployment, listDeployments, searchDeployments } from '../api'
 import { getDeploymentStatusOptions } from '../constants'
 import { deploymentsQueryKeys } from '../lib'
-import type { Deployment } from '../types'
+import type { Deployment, DeploymentSortBy } from '../types'
 import { useDeploymentsColumns } from './deployments-columns'
 import { ExtendDeploymentDialog } from './dialogs/extend-deployment-dialog'
 import { RenameDeploymentDialog } from './dialogs/rename-deployment-dialog'
@@ -49,10 +50,18 @@ import { ViewLogsDialog } from './dialogs/view-logs-dialog'
 
 const route = getRouteApi('/_authenticated/models/$section')
 
+const DEPLOYMENT_SORTABLE_COLUMNS = new Set<DeploymentSortBy>([
+  'id',
+  'name',
+  'status',
+  'created_at',
+])
+
 export function DeploymentsTable() {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const isMobile = useMediaQuery('(max-width: 640px)')
+  const [sorting, setSorting] = useState<SortingState>([])
 
   // URL state (use dedicated keys so it won't collide with metadata table)
   const {
@@ -71,6 +80,7 @@ export function DeploymentsTable() {
       pageSizeKey: 'dPageSize',
       defaultPage: 1,
       defaultPageSize: isMobile ? 8 : 10,
+      pageSizeStorageKey: 'model-deployments:admin:page-size',
     },
     globalFilter: { enabled: true, key: 'dFilter' },
     columnFilters: [
@@ -85,6 +95,27 @@ export function DeploymentsTable() {
     statusFilter.length > 0 && !statusFilter.includes('all')
       ? statusFilter[0]
       : undefined
+
+  const sortParams = useMemo(() => {
+    const activeSort = sorting[0]
+    if (
+      !activeSort ||
+      !DEPLOYMENT_SORTABLE_COLUMNS.has(activeSort.id as DeploymentSortBy)
+    ) {
+      return {}
+    }
+    return {
+      sort_by: activeSort.id as DeploymentSortBy,
+      sort_order: activeSort.desc ? 'desc' : 'asc',
+    } as const
+  }, [sorting])
+
+  const handleSortingChange: OnChangeFn<SortingState> = (updater) => {
+    setSorting(updater)
+    if (pagination.pageIndex > 0) {
+      onPaginationChange({ ...pagination, pageIndex: 0 })
+    }
+  }
 
   // Dialog state
   const [logsOpen, setLogsOpen] = useState(false)
@@ -118,6 +149,7 @@ export function DeploymentsTable() {
     queryKey: deploymentsQueryKeys.list({
       keyword,
       status: activeStatus,
+      ...sortParams,
       p: pagination.pageIndex + 1,
       page_size: pagination.pageSize,
     }),
@@ -126,12 +158,14 @@ export function DeploymentsTable() {
         return searchDeployments({
           keyword,
           status: activeStatus,
+          ...sortParams,
           p: pagination.pageIndex + 1,
           page_size: pagination.pageSize,
         })
       }
       return listDeployments({
         status: activeStatus,
+        ...sortParams,
         p: pagination.pageIndex + 1,
         page_size: pagination.pageSize,
       })
@@ -195,16 +229,19 @@ export function DeploymentsTable() {
   const { table } = useDataTable({
     data: deployments,
     columns,
+    tableStateStorageKey: 'model-deployments:admin',
     totalCount,
+    sorting,
     columnFilters,
     pagination,
     globalFilter,
     onColumnFiltersChange,
     onPaginationChange,
     onGlobalFilterChange,
+    onSortingChange: handleSortingChange,
     manualPagination: true,
+    manualSorting: true,
     manualFiltering: true,
-    withSortedRowModel: false,
     ensurePageInRange,
   })
 

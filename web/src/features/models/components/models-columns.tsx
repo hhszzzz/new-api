@@ -232,7 +232,6 @@ export function useModelsColumns(vendors: Vendor[] = []): ColumnDef<Model>[] {
       },
       size: 110,
       minSize: 110,
-      enableSorting: false,
     },
 
     // Vendor column
@@ -258,7 +257,6 @@ export function useModelsColumns(vendors: Vendor[] = []): ColumnDef<Model>[] {
         return value.includes(String(row.getValue(id)))
       },
       size: 130,
-      enableSorting: false,
     },
 
     // Description column
@@ -428,7 +426,6 @@ export function useModelsColumns(vendors: Vendor[] = []): ColumnDef<Model>[] {
         return false
       },
       size: 100,
-      enableSorting: false,
     },
 
     // Created Time column

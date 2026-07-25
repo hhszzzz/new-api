@@ -4,11 +4,13 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type Redemption struct {
@@ -26,7 +28,60 @@ type Redemption struct {
 	ExpiredTime  int64          `json:"expired_time" gorm:"bigint"` // 过期时间，0 表示不过期
 }
 
-func GetAllRedemptions(startIdx int, num int) (redemptions []*Redemption, total int64, err error) {
+type RedemptionSortOptions struct {
+	SortBy    string
+	SortOrder string
+}
+
+var redemptionSortColumns = map[string]string{
+	"id":            "id",
+	"name":          "name",
+	"status":        "status",
+	"quota":         "quota",
+	"created_time":  "created_time",
+	"expired_time":  "expired_time",
+	"used_user_id":  "used_user_id",
+	"redeemed_time": "redeemed_time",
+}
+
+func NewRedemptionSortOptions(sortBy string, sortOrder string) RedemptionSortOptions {
+	normalizedSortBy := strings.ToLower(strings.TrimSpace(sortBy))
+	normalizedSortOrder := strings.ToLower(strings.TrimSpace(sortOrder))
+	if _, ok := redemptionSortColumns[normalizedSortBy]; !ok {
+		normalizedSortBy = "id"
+		normalizedSortOrder = "desc"
+	} else if normalizedSortOrder != "asc" {
+		normalizedSortOrder = "desc"
+	}
+	return RedemptionSortOptions{SortBy: normalizedSortBy, SortOrder: normalizedSortOrder}
+}
+
+func (options RedemptionSortOptions) Apply(query *gorm.DB) *gorm.DB {
+	columnName, ok := redemptionSortColumns[options.SortBy]
+	if !ok {
+		columnName = "id"
+	}
+	query = query.Order(clause.OrderByColumn{
+		Column: clause.Column{Name: columnName},
+		Desc:   options.SortOrder != "asc",
+	})
+	if columnName != "id" {
+		query = query.Order(clause.OrderByColumn{
+			Column: clause.Column{Name: "id"},
+			Desc:   true,
+		})
+	}
+	return query
+}
+
+func resolveRedemptionSortOptions(sortOptions []RedemptionSortOptions) RedemptionSortOptions {
+	if len(sortOptions) == 0 {
+		return NewRedemptionSortOptions("", "")
+	}
+	return sortOptions[0]
+}
+
+func GetAllRedemptions(startIdx int, num int, sortOptions ...RedemptionSortOptions) (redemptions []*Redemption, total int64, err error) {
 	// 开始事务
 	tx := DB.Begin()
 	if tx.Error != nil {
@@ -46,7 +101,7 @@ func GetAllRedemptions(startIdx int, num int) (redemptions []*Redemption, total 
 	}
 
 	// 获取分页数据
-	err = tx.Order("id desc").Limit(num).Offset(startIdx).Find(&redemptions).Error
+	err = resolveRedemptionSortOptions(sortOptions).Apply(tx).Limit(num).Offset(startIdx).Find(&redemptions).Error
 	if err != nil {
 		tx.Rollback()
 		return nil, 0, err
@@ -60,7 +115,7 @@ func GetAllRedemptions(startIdx int, num int) (redemptions []*Redemption, total 
 	return redemptions, total, nil
 }
 
-func SearchRedemptions(keyword string, status string, startIdx int, num int) (redemptions []*Redemption, total int64, err error) {
+func SearchRedemptions(keyword string, status string, startIdx int, num int, sortOptions ...RedemptionSortOptions) (redemptions []*Redemption, total int64, err error) {
 	tx := DB.Begin()
 	if tx.Error != nil {
 		return nil, 0, tx.Error
@@ -111,7 +166,7 @@ func SearchRedemptions(keyword string, status string, startIdx int, num int) (re
 	}
 
 	// Get paginated data
-	err = query.Order("id desc").Limit(num).Offset(startIdx).Find(&redemptions).Error
+	err = resolveRedemptionSortOptions(sortOptions).Apply(query).Limit(num).Offset(startIdx).Find(&redemptions).Error
 	if err != nil {
 		tx.Rollback()
 		return nil, 0, err

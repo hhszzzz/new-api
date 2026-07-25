@@ -16,7 +16,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import type { GetModelsParams, SearchModelsParams } from '../types'
+import type {
+  DeploymentSortBy,
+  GetModelsParams,
+  SearchModelsParams,
+  SortOrder,
+} from '../types'
 
 /**
  * React Query cache keys for models
@@ -61,6 +66,8 @@ export const deploymentsQueryKeys = {
     status?: string
     p?: number
     page_size?: number
+    sort_by?: DeploymentSortBy
+    sort_order?: SortOrder
   }) => [...deploymentsQueryKeys.lists(), filters] as const,
   detail: (id: string | number) =>
     [...deploymentsQueryKeys.all, 'detail', id] as const,

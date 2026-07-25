@@ -36,6 +36,8 @@ import type {
   SyncOverwritePayload,
   DeploymentSettingsResponse,
   ListDeploymentsResponse,
+  DeploymentSortBy,
+  SortOrder,
 } from './types'
 
 // ============================================================================
@@ -349,6 +351,8 @@ export async function listDeployments(params: {
   p?: number
   page_size?: number
   status?: string
+  sort_by?: DeploymentSortBy
+  sort_order?: SortOrder
 }): Promise<ListDeploymentsResponse> {
   const res = await api.get('/api/deployments/', { params })
   return res.data
@@ -365,6 +369,8 @@ export async function searchDeployments(params: {
   page_size?: number
   status?: string
   keyword?: string
+  sort_by?: DeploymentSortBy
+  sort_order?: SortOrder
 }): Promise<ListDeploymentsResponse> {
   const res = await api.get('/api/deployments/search', { params })
   return res.data
