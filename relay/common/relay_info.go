@@ -229,7 +229,43 @@ func (info *RelayInfo) HasModelRouting() bool {
 	if info.RelayMode == relayconstant.RelayModeResponsesCompact {
 		requestedModelName = strings.TrimSuffix(requestedModelName, ratio_setting.CompactModelSuffix)
 	}
-	return upstreamModelName != requestedModelName
+	if upstreamModelName == requestedModelName {
+		return false
+	}
+
+	// Anthropic may report a version alias such as claude-opus-4.8 for a
+	// request sent as claude-opus-4-8. This is not a model-routing change.
+	for _, prefix := range []string{"claude-opus-", "claude-sonnet-", "claude-haiku-"} {
+		if !strings.HasPrefix(upstreamModelName, prefix) || !strings.HasPrefix(requestedModelName, prefix) {
+			continue
+		}
+		normalizedModelNames := [2]string{upstreamModelName, requestedModelName}
+		for i, modelName := range normalizedModelNames {
+			version := strings.TrimPrefix(modelName, prefix)
+			major, minorAndSuffix, found := strings.Cut(version, ".")
+			if !found || major == "" || minorAndSuffix == "" {
+				continue
+			}
+			minor := minorAndSuffix
+			if suffixIndex := strings.IndexByte(minor, '-'); suffixIndex >= 0 {
+				minor = minor[:suffixIndex]
+			}
+			validVersion := true
+			for _, part := range []string{major, minor} {
+				for _, char := range part {
+					if char < '0' || char > '9' {
+						validVersion = false
+						break
+					}
+				}
+			}
+			if validVersion {
+				normalizedModelNames[i] = prefix + major + "-" + minorAndSuffix
+			}
+		}
+		return normalizedModelNames[0] != normalizedModelNames[1]
+	}
+	return true
 }
 
 func (info *RelayInfo) HasUserModelRoute() bool {

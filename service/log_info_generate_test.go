@@ -52,6 +52,28 @@ func TestGenerateTextOtherInfoStoresModelRoutingInAdminInfo(t *testing.T) {
 	assert.Equal(t, []interface{}{"set model = upstream-model"}, parsedAdminInfo["po"])
 }
 
+func TestGenerateTextOtherInfoOmitsClaudeReportedVersionAlias(t *testing.T) {
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	now := time.Now()
+	relayInfo := &relaycommon.RelayInfo{
+		StartTime:         now,
+		FirstResponseTime: now,
+		OriginModelName:   "claude-opus-4-8",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "claude-opus-4.8",
+		},
+	}
+
+	other := GenerateTextOtherInfo(ctx, relayInfo, 1, 1, 1, 0, 0, 0, 1)
+
+	adminInfo, ok := other["admin_info"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, true, adminInfo["model_routing_checked"])
+	assert.NotContains(t, adminInfo, "is_model_mapped")
+	assert.NotContains(t, adminInfo, "upstream_model_name")
+}
+
 func TestAppendModelRoutingAdminInfoPreservesExistingAdminFields(t *testing.T) {
 	other := map[string]interface{}{
 		"admin_info": map[string]interface{}{

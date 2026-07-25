@@ -441,3 +441,29 @@ func TestClaudeNativeStreamRedactsRoutedMessageModel(t *testing.T) {
 	require.Contains(t, recorder.Body.String(), `"metadata":{"model":"provider-claude-private"}`)
 	require.NotContains(t, recorder.Body.String(), `"model":"provider-claude-private","content"`)
 }
+
+func TestClaudeNativeStreamTreatsReportedVersionAliasAsUnrouted(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	info := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatClaude,
+		OriginModelName: "claude-opus-4-8",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "claude-opus-4-8",
+		},
+	}
+	claudeInfo := &ClaudeResponseInfo{
+		Usage:        &dto.Usage{},
+		ResponseText: strings.Builder{},
+	}
+	data := `{"type":"message_start","message":{"id":"msg_1","model":"claude-opus-4.8","content":[],"usage":{"input_tokens":1,"output_tokens":1}}}`
+
+	newAPIError := HandleStreamResponseData(c, info, claudeInfo, data)
+
+	require.Nil(t, newAPIError)
+	require.Equal(t, "claude-opus-4.8", info.UpstreamModelName)
+	require.False(t, info.HasModelRouting())
+}
