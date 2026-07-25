@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"strings"
+	"unicode"
 
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/setting"
@@ -38,45 +39,88 @@ func CheckSensitiveText(text string) (bool, []string) {
 
 // SensitiveWordContains 是否包含敏感词，返回是否包含敏感词和敏感词列表
 func SensitiveWordContains(text string) (bool, []string) {
-	if len(text) == 0 {
-		return false, nil
-	}
 	words := setting.SensitiveWordsSnapshot()
-	if len(words) == 0 {
+	hits := sensitiveWordMatches(text, words, true)
+	if len(hits) == 0 {
 		return false, nil
 	}
-	checkText := strings.ToLower(text)
-	return AcSearch(checkText, words, true)
+	return true, []string{string(hits[0].word)}
+}
+
+type sensitiveWordMatch struct {
+	pos  int
+	word []rune
+}
+
+func sensitiveWordMatches(text string, words []string, returnImmediately bool) []sensitiveWordMatch {
+	if len(text) == 0 || len(words) == 0 {
+		return nil
+	}
+	m := getOrBuildAC(words)
+	if m == nil {
+		return nil
+	}
+	textRunes := []rune(strings.ToLower(text))
+	matches := make([]sensitiveWordMatch, 0)
+	for _, hit := range m.MultiPatternSearch(textRunes, false) {
+		word := string(hit.Word)
+		if sensitiveWordHasLatinOrDigit(word) && !sensitiveWordAtBoundary(textRunes, hit.Pos, len(hit.Word)) {
+			continue
+		}
+		matches = append(matches, sensitiveWordMatch{pos: hit.Pos, word: hit.Word})
+		if returnImmediately {
+			break
+		}
+	}
+	return matches
+}
+
+func sensitiveWordHasLatinOrDigit(word string) bool {
+	for _, r := range word {
+		if unicode.In(r, unicode.Latin) || unicode.IsDigit(r) {
+			return true
+		}
+	}
+	return false
+}
+
+func sensitiveWordAtBoundary(text []rune, start int, length int) bool {
+	if start > 0 && isLatinIdentifierRune(text[start-1]) {
+		return false
+	}
+	end := start + length
+	return end >= len(text) || !isLatinIdentifierRune(text[end])
+}
+
+func isLatinIdentifierRune(r rune) bool {
+	return unicode.In(r, unicode.Latin) || unicode.IsDigit(r) || r == '_'
 }
 
 // SensitiveWordReplace 敏感词替换，返回是否包含敏感词和替换后的文本
 func SensitiveWordReplace(text string, returnImmediately bool) (bool, []string, string) {
 	words := setting.SensitiveWordsSnapshot()
-	if len(words) == 0 {
+	hits := sensitiveWordMatches(text, words, returnImmediately)
+	if len(hits) == 0 {
 		return false, nil, text
 	}
-	checkText := strings.ToLower(text)
-	m := getOrBuildAC(words)
-	if m == nil {
-		return false, nil, text
-	}
-	hits := m.MultiPatternSearch([]rune(checkText), returnImmediately)
-	if len(hits) > 0 {
-		words := make([]string, 0, len(hits))
-		var builder strings.Builder
-		builder.Grow(len(text))
-		lastPos := 0
-
-		for _, hit := range hits {
-			pos := hit.Pos
-			word := string(hit.Word)
-			builder.WriteString(text[lastPos:pos])
-			builder.WriteString("**###**")
-			lastPos = pos + len(word)
-			words = append(words, word)
+	matchedWords := make([]string, 0, len(hits))
+	var builder strings.Builder
+	textRunes := []rune(text)
+	lastPos := 0
+	for _, hit := range hits {
+		pos := hit.pos
+		end := pos + len(hit.word)
+		if pos < lastPos || end > len(textRunes) {
+			continue
 		}
-		builder.WriteString(text[lastPos:])
-		return true, words, builder.String()
+		builder.WriteString(string(textRunes[lastPos:pos]))
+		builder.WriteString("**###**")
+		lastPos = end
+		matchedWords = append(matchedWords, string(hit.word))
 	}
-	return false, nil, text
+	if len(matchedWords) == 0 {
+		return false, nil, text
+	}
+	builder.WriteString(string(textRunes[lastPos:]))
+	return true, matchedWords, builder.String()
 }
