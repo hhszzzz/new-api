@@ -44,7 +44,6 @@ import {
   Headphones,
   Monitor,
   Cloud,
-  Globe,
   ShieldCheck,
   UserCog,
   Info,
@@ -168,6 +167,13 @@ function DetailSection(props: {
 function formatRatio(ratio: number | undefined): string {
   if (ratio == null) return '-'
   return ratio.toFixed(4)
+}
+
+function formatDiagnosticBytes(value: number | undefined): string {
+  if (value == null || !Number.isFinite(value) || value < 0) return '-'
+  if (value < 1024) return `${value} B`
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`
+  return `${(value / 1024 / 1024).toFixed(1)} MiB`
 }
 
 function getUsageBillingPathLabel(
@@ -483,6 +489,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
   const { copiedText, copyToClipboard } = useCopyToClipboard({ notify: false })
   const details = props.log.content ?? ''
   const other = parseLogOther(props.log.other)
+  const diagnostics = other?.diagnostics
   const modelRoute = getModelRouteInfo(other, props.canViewModelRoute)
   const typeConfig = getLogTypeConfig(props.log.type)
 
@@ -499,8 +506,9 @@ export function DetailsDialog(props: DetailsDialogProps) {
     !!other?.expr_b64
   const hasAudioTokens = other?.ws || other?.audio
   const showTiming = isTimingLogType(props.log.type)
+  const diagnosticIp = diagnostics?.ip || props.log.ip
   const showAdminIp =
-    !!props.log.ip && (showTiming || (props.isAdminView && isTopup))
+    Boolean(diagnosticIp) && (showTiming || props.isAdminView || isTopup)
   const adminInfo = other?.admin_info
   const paramOverrides = props.canViewModelRoute
     ? (adminInfo?.po ?? other?.po)
@@ -605,12 +613,23 @@ export function DetailsDialog(props: DetailsDialogProps) {
     conversionChain.length <= 1
       ? t('Native format')
       : conversionChain.join(' -> ')
+  const protocolConversion = [
+    diagnostics?.request_protocol,
+    diagnostics?.protocol_converter,
+    diagnostics?.upstream_protocol,
+  ].filter(Boolean) as string[]
+  const displayedConversionLabel =
+    protocolConversion.length > 0
+      ? protocolConversion.join(' → ')
+      : conversionLabel
   const showConversion =
     props.isAdminView &&
     props.log.type !== 6 &&
-    (other?.request_path || conversionChain.length > 0)
+    (other?.request_path ||
+      conversionChain.length > 0 ||
+      protocolConversion.length > 0)
 
-  const useChannel = other?.admin_info?.use_channel
+  const useChannel = adminInfo?.retry_chain ?? other?.admin_info?.use_channel
   const channelChain =
     useChannel && useChannel.length > 0 ? useChannel.join(' → ') : undefined
   let reasoningEffortVariant: StatusBadgeProps['variant'] = 'green'
@@ -667,21 +686,34 @@ export function DetailsDialog(props: DetailsDialogProps) {
 
           {props.isAdminView && props.log.channel > 0 && (
             <DetailRow
-              label={t('Channel')}
+              label={t('Surface Channel')}
               value={
                 <span>
-                  {props.log.channel}
-                  {props.log.channel_name && (
-                    <span className='text-muted-foreground'>
-                      {' '}
-                      ({props.log.channel_name})
-                    </span>
-                  )}
+                  {adminInfo?.surface_channel_name ||
+                    props.log.channel_name ||
+                    `#${props.log.channel}`}
+                  {adminInfo?.aggregate_name &&
+                    adminInfo.aggregate_name !==
+                      adminInfo.surface_channel_name && (
+                      <span className='text-muted-foreground'>
+                        {' '}
+                        ({t('Aggregate')}: {adminInfo.aggregate_name})
+                      </span>
+                    )}
                 </span>
               }
               mono
             />
           )}
+
+          {props.isAdminView &&
+            (adminInfo?.actual_channel_name || props.log.channel > 0) && (
+              <DetailRow
+                label={t('Actual Channel')}
+                value={`${adminInfo?.actual_channel_name || props.log.channel_name || '-'} #${adminInfo?.actual_channel_id || props.log.channel}`}
+                mono
+              />
+            )}
 
           {channelChain && props.isAdminView && (
             <DetailRow label={t('Retry Chain')} value={channelChain} mono />
@@ -700,16 +732,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
           )}
 
           {showAdminIp && (
-            <DetailRow
-              label={t('IP Address')}
-              value={
-                <span className='flex items-center gap-1'>
-                  <Globe className='size-3 text-amber-500' aria-hidden='true' />
-                  {props.log.ip}
-                </span>
-              }
-              mono
-            />
+            <DetailRow label={t('IP Address')} value={diagnosticIp} mono />
           )}
 
           {showTiming && props.log.use_time > 0 && (
@@ -749,6 +772,124 @@ export function DetailsDialog(props: DetailsDialogProps) {
           )}
         </div>
 
+        {props.isAdminView && diagnostics && (
+          <DetailSection label={t('Request Diagnostics')}>
+            {(diagnostics.method || diagnostics.path) && (
+              <DetailRow
+                label={t('Request')}
+                value={`${diagnostics.method || '-'} ${diagnostics.path || '-'}`}
+                mono
+              />
+            )}
+            {diagnostics.client && (
+              <DetailRow label={t('Client')} value={diagnostics.client} mono />
+            )}
+            {diagnostics.node && (
+              <DetailRow label={t('Node')} value={diagnostics.node} mono />
+            )}
+            {diagnostics.status_code != null && (
+              <DetailRow
+                label={t('Status Code')}
+                value={String(diagnostics.status_code)}
+                mono
+              />
+            )}
+            {diagnostics.duration_ms != null && (
+              <DetailRow
+                label={t('Total Duration')}
+                value={`${diagnostics.duration_ms} ms`}
+                mono
+              />
+            )}
+            {diagnostics.first_response_ms != null && (
+              <DetailRow
+                label={t('First Response')}
+                value={`${diagnostics.first_response_ms} ms`}
+                mono
+              />
+            )}
+            {(diagnostics.request_size != null ||
+              diagnostics.response_size != null ||
+              diagnostics.upstream_request_size != null) && (
+              <DetailRow
+                label={t('Payload Size')}
+                value={
+                  <span className='flex flex-col gap-0.5'>
+                    {diagnostics.request_size != null && (
+                      <span>
+                        {t('Request')}:{' '}
+                        {formatDiagnosticBytes(diagnostics.request_size)}
+                      </span>
+                    )}
+                    {diagnostics.upstream_request_size != null && (
+                      <span>
+                        {t('Upstream Request')}:{' '}
+                        {formatDiagnosticBytes(
+                          diagnostics.upstream_request_size
+                        )}
+                      </span>
+                    )}
+                    {diagnostics.response_size != null && (
+                      <span>
+                        {t('Response')}:{' '}
+                        {formatDiagnosticBytes(diagnostics.response_size)}
+                      </span>
+                    )}
+                  </span>
+                }
+                mono
+              />
+            )}
+            {diagnostics.request_protocol && (
+              <DetailRow
+                label={t('Entry Protocol')}
+                value={diagnostics.request_protocol}
+                mono
+              />
+            )}
+            {diagnostics.upstream_protocol && (
+              <DetailRow
+                label={t('Upstream Protocol')}
+                value={diagnostics.upstream_protocol}
+                mono
+              />
+            )}
+            {diagnostics.protocol_converter && (
+              <DetailRow
+                label={t('Protocol Converter')}
+                value={diagnostics.protocol_converter}
+                mono
+              />
+            )}
+            {diagnostics.route_pool_name && (
+              <DetailRow
+                label={t('Route Pool')}
+                value={diagnostics.route_pool_name}
+                mono
+              />
+            )}
+            {diagnostics.route_rule_id != null && (
+              <DetailRow
+                label={t('Route Rule')}
+                value={`#${diagnostics.route_rule_id}`}
+                mono
+              />
+            )}
+          </DetailSection>
+        )}
+
+        {props.isAdminView &&
+          adminInfo?.request_headers &&
+          Object.keys(adminInfo.request_headers).length > 0 && (
+            <DetailSection label={t('Safe Request Headers')}>
+              {Object.entries(adminInfo.request_headers).map(
+                ([name, value]) => (
+                  <DetailRow key={name} label={name} value={value} mono />
+                )
+              )}
+            </DetailSection>
+          )}
+
         {/* Request conversion (admin only, not for refund) */}
         {showConversion && (
           <DetailSection label={t('Request Conversion')}>
@@ -757,11 +898,11 @@ export function DetailsDialog(props: DetailsDialogProps) {
                 variant='ghost'
                 size='sm'
                 className='absolute top-0 right-0 h-5 w-5 p-0'
-                onClick={() => copyToClipboard(conversionLabel)}
+                onClick={() => copyToClipboard(displayedConversionLabel)}
                 title={t('Copy to clipboard')}
                 aria-label={t('Copy to clipboard')}
               >
-                {copiedText === conversionLabel ? (
+                {copiedText === displayedConversionLabel ? (
                   <Check className='size-3 text-green-600' />
                 ) : (
                   <Copy className='size-3' />
@@ -781,7 +922,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
                     aria-hidden='true'
                   />
                   <span className='min-w-0 break-all sm:wrap-break-word'>
-                    {conversionLabel}
+                    {displayedConversionLabel}
                   </span>
                 </div>
               </div>

@@ -22,7 +22,8 @@ func GetAllLogs(c *gin.Context) {
 	group := c.Query("group")
 	requestId := c.Query("request_id")
 	upstreamRequestId := c.Query("upstream_request_id")
-	logs, total, err := model.GetAllLogs(logType, startTimestamp, endTimestamp, modelName, username, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), channel, group, requestId, upstreamRequestId)
+	sortOptions := model.NewLogSortOptions(c.Query("sort_by"), c.Query("sort_order"))
+	logs, total, err := model.GetAllLogs(logType, startTimestamp, endTimestamp, modelName, username, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), channel, group, requestId, upstreamRequestId, sortOptions)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -45,6 +46,7 @@ func GetUserLogs(c *gin.Context) {
 	requestId := c.Query("request_id")
 	upstreamRequestId := c.Query("upstream_request_id")
 	canViewRouting := canViewModelRouting(c)
+	sortOptions := model.NewLogSortOptions(c.Query("sort_by"), c.Query("sort_order"))
 	if !canViewRouting && modelName != "" && !isAllowedUserLogModelFilter(modelName, visiblePerfModelSet(c)) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
@@ -52,7 +54,7 @@ func GetUserLogs(c *gin.Context) {
 		})
 		return
 	}
-	logs, total, err := model.GetUserLogs(userId, logType, startTimestamp, endTimestamp, modelName, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), group, requestId, upstreamRequestId, canViewRouting)
+	logs, total, err := model.GetUserLogs(userId, logType, startTimestamp, endTimestamp, modelName, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), group, requestId, upstreamRequestId, canViewRouting, sortOptions)
 	if err != nil {
 		common.ApiError(c, err)
 		return

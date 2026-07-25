@@ -18,7 +18,8 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
 import { getRouteApi } from '@tanstack/react-router'
-import type { ColumnDef } from '@tanstack/react-table'
+import type { ColumnDef, OnChangeFn, SortingState } from '@tanstack/react-table'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -39,7 +40,7 @@ import {
 import { useColumnsByCategory } from '../lib/columns'
 import { parseLogOther } from '../lib/format'
 import { fetchLogsByCategory } from '../lib/utils'
-import type { LogCategory } from '../types'
+import type { LogCategory, LogSortOrder, UsageLogSortBy } from '../types'
 import { CommonLogsFilterBar } from './common-logs-filter-bar'
 import { TaskLogsFilterBar } from './task-logs-filter-bar'
 import { UsageLogsMobileList } from './usage-logs-mobile-card'
@@ -55,6 +56,36 @@ const logTypeRowTint: Record<number, string> = {
 // Warning tint for logs where a quota conversion saturated (admin-only marker).
 // Takes precedence over the per-type tint since it flags a billing anomaly.
 const quotaSaturationRowTint = 'bg-amber-50/60 dark:bg-amber-950/25'
+
+const LOG_SORTABLE_COLUMNS: Record<LogCategory, Set<UsageLogSortBy>> = {
+  common: new Set([
+    'created_at',
+    'channel',
+    'user',
+    'token_name',
+    'model_name',
+    'is_stream',
+    'prompt_tokens',
+    'quota',
+    'use_time',
+  ]),
+  drawing: new Set([
+    'submit_time',
+    'channel_id',
+    'action',
+    'mj_id',
+    'code',
+    'progress',
+  ]),
+  task: new Set([
+    'submit_time',
+    'channel_id',
+    'user',
+    'task_id',
+    'status',
+    'progress',
+  ]),
+}
 
 function getColumnVisibilityStorageKey(
   logCategory: LogCategory,
@@ -82,6 +113,7 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
   const { isAdminView, canViewModelRoute } = useLogsViewScope()
   const isMobile = useMediaQuery('(max-width: 640px)')
   const searchParams = route.useSearch()
+  const [sorting, setSorting] = useState<SortingState>([])
 
   const {
     columnFilters,
@@ -92,7 +124,11 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
   } = useTableUrlState({
     search: route.useSearch(),
     navigate: route.useNavigate(),
-    pagination: { defaultPage: 1, defaultPageSize: isMobile ? 20 : 100 },
+    pagination: {
+      defaultPage: 1,
+      defaultPageSize: isMobile ? 20 : 100,
+      pageSizeStorageKey: `usage-logs:${logCategory}:${isAdminView ? 'admin' : 'user'}:page-size`,
+    },
     globalFilter: { enabled: false },
     columnFilters: [
       {
@@ -121,6 +157,24 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
     ],
   })
 
+  const activeSort = sorting[0]
+  const sortBy =
+    activeSort &&
+    LOG_SORTABLE_COLUMNS[logCategory].has(activeSort.id as UsageLogSortBy)
+      ? (activeSort.id as UsageLogSortBy)
+      : undefined
+  let sortOrder: LogSortOrder | undefined
+  if (sortBy) {
+    sortOrder = activeSort?.desc ? 'desc' : 'asc'
+  }
+
+  const handleSortingChange: OnChangeFn<SortingState> = (updater) => {
+    setSorting(updater)
+    if (pagination.pageIndex > 0) {
+      onPaginationChange({ ...pagination, pageIndex: 0 })
+    }
+  }
+
   const { data, isLoading, isFetching } = useQuery({
     queryKey: [
       'logs',
@@ -130,6 +184,7 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
       pagination.pageIndex + 1,
       pagination.pageSize,
       columnFilters,
+      sorting,
       searchParams,
       t,
     ],
@@ -141,6 +196,8 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
         pageSize: pagination.pageSize,
         searchParams,
         columnFilters,
+        sortBy,
+        sortOrder,
       })
 
       if (!result?.success) {
@@ -159,26 +216,52 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
   })
 
   const logs = data?.items || []
-  const columns = useColumnsByCategory(
+  const rawColumns = useColumnsByCategory(
     logCategory,
     isAdminView,
     canViewModelRoute
+  )
+  const columns = useMemo(
+    () =>
+      rawColumns.map((column) => {
+        let columnId = column.id
+        if (!columnId && 'accessorKey' in column) {
+          const accessorKey = column.accessorKey
+          if (typeof accessorKey === 'string') columnId = accessorKey
+        }
+        return {
+          ...column,
+          enableSorting: Boolean(
+            columnId &&
+            LOG_SORTABLE_COLUMNS[logCategory].has(columnId as UsageLogSortBy)
+          ),
+        }
+      }),
+    [logCategory, rawColumns]
   )
   const isLoadingData = isLoading || (isFetching && !data)
 
   const { table } = useDataTable({
     data: logs as Record<string, unknown>[],
     columns: columns as ColumnDef<Record<string, unknown>>[],
+    tableStateStorageKey: `usage-logs:${logCategory}:${isAdminView ? 'admin' : 'user'}`,
     columnFilters,
     columnVisibilityStorageKey: getColumnVisibilityStorageKey(
       logCategory,
       isAdminView
     ),
+    initialColumnVisibility:
+      logCategory === 'common'
+        ? { client: false, protocol: false, ip: false }
+        : undefined,
     pagination,
+    sorting,
     enableRowSelection: false,
     onPaginationChange,
     onColumnFiltersChange,
+    onSortingChange: handleSortingChange,
     manualPagination: true,
+    manualSorting: true,
     manualFiltering: true,
     totalCount: data?.total || 0,
     ensurePageInRange,

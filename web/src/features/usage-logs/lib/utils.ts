@@ -38,6 +38,8 @@ import type {
   FetchLogsConfig,
   GetMidjourneyLogsParams,
   GetTaskLogsParams,
+  LogSortOrder,
+  UsageLogSortBy,
 } from '../types'
 
 // ============================================================================
@@ -92,24 +94,6 @@ function timestampToSeconds(ms: number): number {
 }
 
 /**
- * Build query parameters from filters
- */
-export function buildQueryParams(
-  params: Record<string, unknown>
-): URLSearchParams {
-  const queryParams = new URLSearchParams()
-
-  Object.entries(params).forEach(([key, value]) => {
-    // Keep 0 as a valid value, only filter out undefined, null, and empty string
-    if (value !== undefined && value !== null && value !== '') {
-      queryParams.append(key, String(value))
-    }
-  })
-
-  return queryParams
-}
-
-/**
  * Build time range parameters with default values
  * Shared logic for all log types
  */
@@ -146,14 +130,25 @@ export function buildBaseParams(config: {
   pageSize: number
   searchParams: Record<string, unknown>
   useMilliseconds?: boolean
+  sortBy?: UsageLogSortBy
+  sortOrder?: LogSortOrder
 }): {
   p: number
   page_size: number
   channel_id?: string
   start_timestamp?: number
   end_timestamp?: number
+  sort_by?: UsageLogSortBy
+  sort_order?: LogSortOrder
 } {
-  const { page, pageSize, searchParams, useMilliseconds = false } = config
+  const {
+    page,
+    pageSize,
+    searchParams,
+    useMilliseconds = false,
+    sortBy,
+    sortOrder,
+  } = config
 
   return {
     p: page,
@@ -163,6 +158,7 @@ export function buildBaseParams(config: {
           channel_id: String(searchParams.channel),
         }
       : {}),
+    ...(sortBy ? { sort_by: sortBy, sort_order: sortOrder } : {}),
     ...buildTimeRangeParams(searchParams, useMilliseconds),
   }
 }
@@ -176,8 +172,18 @@ export function buildApiParams(config: {
   searchParams: Record<string, unknown>
   columnFilters?: Array<{ id: string; value: unknown }>
   isAdmin: boolean
+  sortBy?: UsageLogSortBy
+  sortOrder?: LogSortOrder
 }): GetLogsParams {
-  const { page, pageSize, searchParams, columnFilters = [], isAdmin } = config
+  const {
+    page,
+    pageSize,
+    searchParams,
+    columnFilters = [],
+    isAdmin,
+    sortBy,
+    sortOrder,
+  } = config
 
   // Helper to process type parameter (single value from array)
   const processType = (value: unknown): number | undefined => {
@@ -214,6 +220,9 @@ export function buildApiParams(config: {
       : {}),
     ...(searchParams.upstreamRequestId
       ? { upstream_request_id: String(searchParams.upstreamRequestId) }
+      : {}),
+    ...(sortBy
+      ? { sort_by: sortBy as GetLogsParams['sort_by'], sort_order: sortOrder }
       : {}),
     ...buildTimeRangeParams(searchParams, false),
   }
@@ -259,8 +268,16 @@ export function buildApiParams(config: {
 export async function fetchLogsByCategory(
   config: FetchLogsConfig
 ): Promise<GetLogsResponse> {
-  const { logCategory, isAdmin, page, pageSize, searchParams, columnFilters } =
-    config
+  const {
+    logCategory,
+    isAdmin,
+    page,
+    pageSize,
+    searchParams,
+    columnFilters,
+    sortBy,
+    sortOrder,
+  } = config
 
   if (logCategory === 'common') {
     const params = buildApiParams({
@@ -269,6 +286,8 @@ export async function fetchLogsByCategory(
       searchParams,
       columnFilters,
       isAdmin,
+      sortBy,
+      sortOrder,
     })
     return isAdmin ? await getAllLogs(params) : await getUserLogs(params)
   }
@@ -279,6 +298,8 @@ export async function fetchLogsByCategory(
     pageSize,
     searchParams,
     useMilliseconds: logCategory === 'drawing',
+    sortBy,
+    sortOrder,
   })
 
   const paramsWithFilter = {

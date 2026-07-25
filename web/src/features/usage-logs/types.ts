@@ -30,6 +30,33 @@ import type { UsageLog } from './data/schema'
  */
 export type LogCategory = 'common' | 'drawing' | 'task'
 
+export type LogSortOrder = 'asc' | 'desc'
+export type CommonLogSortBy =
+  | 'created_at'
+  | 'channel'
+  | 'user'
+  | 'token_name'
+  | 'model_name'
+  | 'is_stream'
+  | 'prompt_tokens'
+  | 'quota'
+  | 'use_time'
+export type DrawingLogSortBy =
+  | 'submit_time'
+  | 'channel_id'
+  | 'action'
+  | 'mj_id'
+  | 'code'
+  | 'progress'
+export type TaskLogSortBy =
+  | 'submit_time'
+  | 'channel_id'
+  | 'user'
+  | 'task_id'
+  | 'status'
+  | 'progress'
+export type UsageLogSortBy = CommonLogSortBy | DrawingLogSortBy | TaskLogSortBy
+
 // ============================================================================
 // Filter Types
 // ============================================================================
@@ -140,6 +167,34 @@ export interface LogOtherData {
       original: number
       clamped: number
     }
+    request_headers?: Record<string, string>
+    retry_chain?: string[]
+    surface_channel_name?: string
+    aggregate_name?: string
+    actual_channel_id?: number
+    actual_channel_name?: string
+    upstream_protocol?: string
+    protocol_converter?: string
+    route_pool_name?: string
+    route_rule_id?: number
+  }
+  diagnostics?: {
+    method?: string
+    path?: string
+    request_size?: number
+    upstream_request_size?: number
+    response_size?: number
+    status_code?: number
+    client?: string
+    request_protocol?: string
+    upstream_protocol?: string
+    protocol_converter?: string
+    route_pool_name?: string
+    route_rule_id?: number
+    duration_ms?: number
+    first_response_ms?: number
+    ip?: string
+    node?: string
   }
   // Language-independent operation descriptor (audit/login logs).
   // Frontend renders localized content from action + params via i18n templates.
@@ -321,6 +376,8 @@ export interface GetLogsParams {
   group?: string
   request_id?: string
   upstream_request_id?: string
+  sort_by?: CommonLogSortBy
+  sort_order?: LogSortOrder
 }
 
 export interface GetLogsResponse {
@@ -364,6 +421,8 @@ export interface GetMidjourneyLogsParams {
   mj_id?: string
   start_timestamp?: number
   end_timestamp?: number
+  sort_by?: DrawingLogSortBy
+  sort_order?: LogSortOrder
 }
 
 // ============================================================================
@@ -377,6 +436,8 @@ export interface GetTaskLogsParams {
   task_id?: string
   start_timestamp?: number
   end_timestamp?: number
+  sort_by?: TaskLogSortBy
+  sort_order?: LogSortOrder
 }
 
 // ============================================================================
@@ -393,6 +454,8 @@ export interface FetchLogsConfig {
   pageSize: number
   searchParams: Record<string, unknown>
   columnFilters: Array<{ id: string; value: unknown }>
+  sortBy?: UsageLogSortBy
+  sortOrder?: LogSortOrder
 }
 
 // ============================================================================

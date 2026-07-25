@@ -626,6 +626,11 @@ func handleConfigUpdate(key, value string) bool {
 	} else if configName == "billing_setting" {
 		InvalidatePricingCache()
 		ratio_setting.InvalidateExposedDataCache()
+	} else if configName == "log_diagnostic_setting" {
+		setting := operation_setting.GetLogDiagnosticSetting()
+		setting.ExtraHeaders = operation_setting.NormalizeLogDiagnosticHeaders(setting.ExtraHeaders)
+	} else if configName == "client_policy_setting" {
+		operation_setting.NormalizeClientPolicySetting()
 	}
 
 	return true // 已处理

@@ -359,6 +359,9 @@ export type OperationsSettings = {
   'perf_metrics_setting.flush_interval': number
   'perf_metrics_setting.bucket_time': 'hour' | 'minute' | '5min'
   'perf_metrics_setting.retention_days': number
+  'log_diagnostic_setting.record_ip': boolean
+  'log_diagnostic_setting.record_headers': boolean
+  'log_diagnostic_setting.extra_headers': string[]
 }
 
 export type SecuritySettings = {

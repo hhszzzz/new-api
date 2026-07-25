@@ -27,6 +27,8 @@ func GetAllTask(c *gin.Context) {
 		StartTimestamp: startTimestamp,
 		EndTimestamp:   endTimestamp,
 		ChannelID:      c.Query("channel_id"),
+		SortBy:         c.Query("sort_by"),
+		SortOrder:      c.Query("sort_order"),
 	}
 
 	items := model.TaskGetAllTasks(pageInfo.GetStartIdx(), pageInfo.GetPageSize(), queryParams)
@@ -51,6 +53,8 @@ func GetUserTask(c *gin.Context) {
 		Action:         c.Query("action"),
 		StartTimestamp: startTimestamp,
 		EndTimestamp:   endTimestamp,
+		SortBy:         c.Query("sort_by"),
+		SortOrder:      c.Query("sort_order"),
 	}
 
 	items := model.TaskGetAllUserTask(userId, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), queryParams)

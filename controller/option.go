@@ -335,6 +335,54 @@ func UpdateOption(c *gin.Context) {
 			return
 		}
 	}
+	if strings.HasPrefix(option.Key, "log_diagnostic_setting.") {
+		switch option.Key {
+		case "log_diagnostic_setting.record_ip", "log_diagnostic_setting.record_headers":
+			if option.Value != "true" && option.Value != "false" {
+				common.ApiErrorMsg(c, "诊断开关必须是布尔值")
+				return
+			}
+		case "log_diagnostic_setting.extra_headers":
+			var headers []string
+			if err := common.UnmarshalJsonStr(option.Value.(string), &headers); err != nil {
+				common.ApiErrorMsg(c, "额外请求头必须是 JSON 数组")
+				return
+			}
+			if err := operation_setting.ValidateLogDiagnosticHeaders(headers); err != nil {
+				common.ApiErrorMsg(c, err.Error())
+				return
+			}
+		default:
+			common.ApiErrorMsg(c, "不支持的日志诊断配置")
+			return
+		}
+	}
+	if strings.HasPrefix(option.Key, "client_policy_setting.") {
+		if option.Key != "client_policy_setting.rules" && option.Key != "client_policy_setting.group_policies" {
+			common.ApiErrorMsg(c, "不支持的客户端策略配置")
+			return
+		}
+		candidate := *operation_setting.GetClientPolicySetting()
+		if option.Key == "client_policy_setting.rules" {
+			var rules []operation_setting.ClientIdentificationRule
+			if err := common.UnmarshalJsonStr(option.Value.(string), &rules); err != nil {
+				common.ApiErrorMsg(c, "客户端识别规则必须是 JSON 数组")
+				return
+			}
+			candidate.Rules = rules
+		} else {
+			var groupPolicies map[string]operation_setting.ClientAccessPolicy
+			if err := common.UnmarshalJsonStr(option.Value.(string), &groupPolicies); err != nil {
+				common.ApiErrorMsg(c, "分组客户端策略必须是 JSON 对象")
+				return
+			}
+			candidate.GroupPolicies = groupPolicies
+		}
+		if err := operation_setting.ValidateClientPolicySetting(candidate); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
+	}
 	err = model.UpdateOption(option.Key, option.Value.(string))
 	if err != nil {
 		common.ApiError(c, err)

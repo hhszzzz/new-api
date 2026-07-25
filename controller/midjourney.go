@@ -302,6 +302,8 @@ func GetAllMidjourney(c *gin.Context) {
 		MjID:           c.Query("mj_id"),
 		StartTimestamp: c.Query("start_timestamp"),
 		EndTimestamp:   c.Query("end_timestamp"),
+		SortBy:         c.Query("sort_by"),
+		SortOrder:      c.Query("sort_order"),
 	}
 
 	items := model.GetAllTasks(pageInfo.GetStartIdx(), pageInfo.GetPageSize(), queryParams)
@@ -327,6 +329,8 @@ func GetUserMidjourney(c *gin.Context) {
 		MjID:           c.Query("mj_id"),
 		StartTimestamp: c.Query("start_timestamp"),
 		EndTimestamp:   c.Query("end_timestamp"),
+		SortBy:         c.Query("sort_by"),
+		SortOrder:      c.Query("sort_order"),
 	}
 
 	items := model.GetAllUserTask(userId, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), queryParams)

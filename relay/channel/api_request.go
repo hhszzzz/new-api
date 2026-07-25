@@ -12,6 +12,7 @@ import (
 	"time"
 
 	common2 "github.com/QuantumNous/new-api/common"
+	appconstant "github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/constant"
@@ -475,6 +476,16 @@ func DoRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	return doRequest(c, req, info)
 }
 func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http.Response, error) {
+	if req != nil {
+		upstreamRequestSize := req.ContentLength
+		if upstreamRequestSize < 0 && info != nil && info.UpstreamRequestBodySize > 0 {
+			upstreamRequestSize = info.UpstreamRequestBodySize
+		}
+		if upstreamRequestSize >= 0 {
+			common2.SetContextKey(c, appconstant.ContextKeyUpstreamRequestSize, upstreamRequestSize)
+		}
+	}
+
 	var client *http.Client
 	var err error
 	if info.ChannelSetting.Proxy != "" {

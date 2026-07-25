@@ -56,6 +56,9 @@ const defaultOperationsSettings: OperationsSettings = {
   'perf_metrics_setting.flush_interval': 5,
   'perf_metrics_setting.bucket_time': 'hour',
   'perf_metrics_setting.retention_days': 0,
+  'log_diagnostic_setting.record_ip': false,
+  'log_diagnostic_setting.record_headers': false,
+  'log_diagnostic_setting.extra_headers': [],
 }
 
 export function OperationsSettings() {

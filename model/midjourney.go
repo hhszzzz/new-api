@@ -1,5 +1,12 @@
 package model
 
+import (
+	"strings"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+)
+
 type Midjourney struct {
 	Id          int    `json:"id"`
 	Code        int    `json:"code"`
@@ -31,6 +38,54 @@ type TaskQueryParams struct {
 	MjID           string
 	StartTimestamp string
 	EndTimestamp   string
+	SortBy         string
+	SortOrder      string
+}
+
+type MidjourneySortOptions struct {
+	SortBy    string
+	SortOrder string
+}
+
+var midjourneySortColumns = map[string]string{
+	"id":          "id",
+	"submit_time": "submit_time",
+	"channel_id":  "channel_id",
+	"action":      "action",
+	"mj_id":       "mj_id",
+	"code":        "code",
+	"progress":    "progress",
+	"status":      "status",
+}
+
+func NewMidjourneySortOptions(sortBy string, sortOrder string) MidjourneySortOptions {
+	normalizedSortBy := strings.ToLower(strings.TrimSpace(sortBy))
+	normalizedSortOrder := strings.ToLower(strings.TrimSpace(sortOrder))
+	if _, ok := midjourneySortColumns[normalizedSortBy]; !ok {
+		normalizedSortBy = "id"
+		normalizedSortOrder = "desc"
+	} else if normalizedSortOrder != "asc" {
+		normalizedSortOrder = "desc"
+	}
+	return MidjourneySortOptions{SortBy: normalizedSortBy, SortOrder: normalizedSortOrder}
+}
+
+func (options MidjourneySortOptions) Apply(query *gorm.DB) *gorm.DB {
+	columnName, ok := midjourneySortColumns[options.SortBy]
+	if !ok {
+		columnName = "id"
+	}
+	query = query.Order(clause.OrderByColumn{
+		Column: clause.Column{Name: columnName},
+		Desc:   options.SortOrder != "asc",
+	})
+	if columnName != "id" {
+		query = query.Order(clause.OrderByColumn{
+			Column: clause.Column{Name: "id"},
+			Desc:   true,
+		})
+	}
+	return query
 }
 
 func GetAllUserTask(userId int, startIdx int, num int, queryParams TaskQueryParams) []*Midjourney {
@@ -52,7 +107,7 @@ func GetAllUserTask(userId int, startIdx int, num int, queryParams TaskQueryPara
 	}
 
 	// 获取数据
-	err = query.Order("id desc").Limit(num).Offset(startIdx).Find(&tasks).Error
+	err = NewMidjourneySortOptions(queryParams.SortBy, queryParams.SortOrder).Apply(query).Limit(num).Offset(startIdx).Find(&tasks).Error
 	if err != nil {
 		return nil
 	}
@@ -82,7 +137,7 @@ func GetAllTasks(startIdx int, num int, queryParams TaskQueryParams) []*Midjourn
 	}
 
 	// 获取数据
-	err = query.Order("id desc").Limit(num).Offset(startIdx).Find(&tasks).Error
+	err = NewMidjourneySortOptions(queryParams.SortBy, queryParams.SortOrder).Apply(query).Limit(num).Offset(startIdx).Find(&tasks).Error
 	if err != nil {
 		return nil
 	}

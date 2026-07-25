@@ -76,7 +76,19 @@ const routedLog: UsageLog = {
       is_model_mapped: true,
       upstream_model_name: NESTED_ACTUAL_MODEL,
       po: [`set ${NESTED_PARAM_OVERRIDE}`],
+      request_headers: {
+        'user-agent': 'codex-cli/1.0',
+      },
     },
+    diagnostics: {
+      method: 'POST',
+      path: '/v1/responses',
+      ip: '203.0.113.10',
+      client: 'codex',
+      request_protocol: 'responses',
+      upstream_protocol: 'chat',
+    },
+    request_conversion: ['responses', 'chat'],
     is_model_mapped: true,
     upstream_model_name: LEGACY_ACTUAL_MODEL,
     po: [`set ${LEGACY_PARAM_OVERRIDE}`],
@@ -231,6 +243,69 @@ describe('usage-log model route component visibility', () => {
     expect(
       within(dialog).queryByText(LEGACY_PARAM_OVERRIDE)
     ).not.toBeInTheDocument()
+    expect(
+      within(dialog).queryByText('Request Diagnostics')
+    ).not.toBeInTheDocument()
+    expect(
+      within(dialog).queryByText('Safe Request Headers')
+    ).not.toBeInTheDocument()
+    expect(
+      within(dialog).queryByText('Request Conversion')
+    ).not.toBeInTheDocument()
+  })
+
+  test.each([
+    ['administrator all scope', 'all', true],
+    ['administrator self scope', 'self', false],
+  ] as const)(
+    'limits request internals in the %s details dialog',
+    async (_label, scope, shouldShow) => {
+      renderDetailsDialog(ROLE.ADMIN, scope)
+
+      await waitFor(() => {
+        expect(screen.getByTestId('details-permissions')).toHaveAttribute(
+          'data-admin-view',
+          String(shouldShow)
+        )
+      })
+
+      const dialog = screen.getByRole('dialog')
+      if (shouldShow) {
+        expect(within(dialog).getByText('Request Diagnostics')).toBeVisible()
+        expect(within(dialog).getByText('Safe Request Headers')).toBeVisible()
+        expect(within(dialog).getByText('Request Conversion')).toBeVisible()
+      } else {
+        expect(
+          within(dialog).queryByText('Request Diagnostics')
+        ).not.toBeInTheDocument()
+        expect(
+          within(dialog).queryByText('Safe Request Headers')
+        ).not.toBeInTheDocument()
+        expect(
+          within(dialog).queryByText('Request Conversion')
+        ).not.toBeInTheDocument()
+      }
+    }
+  )
+
+  test('keeps diagnostic headings and the IP row text-only for administrators', async () => {
+    renderDetailsDialog(ROLE.ADMIN, 'all')
+
+    await waitFor(() => {
+      expect(screen.getByTestId('details-permissions')).toHaveAttribute(
+        'data-admin-view',
+        'true'
+      )
+    })
+
+    const dialog = screen.getByRole('dialog')
+    const diagnosticHeading = within(dialog).getByText('Request Diagnostics')
+    const headerHeading = within(dialog).getByText('Safe Request Headers')
+    const ipLabel = within(dialog).getByText('IP Address')
+
+    expect(diagnosticHeading.closest('label')?.querySelector('svg')).toBeNull()
+    expect(headerHeading.closest('label')?.querySelector('svg')).toBeNull()
+    expect(ipLabel.closest('div')?.querySelector('svg')).toBeNull()
   })
 
   test.each([

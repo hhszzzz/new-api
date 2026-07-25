@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { ColumnDef } from '@tanstack/react-table'
-import { GitBranch, Sparkles, KeyRound } from 'lucide-react'
+import { KeyRound, Route, Sparkles } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -341,8 +341,12 @@ export function useCommonLogsColumns(
           if (!isDisplayableLogType(log.type)) return null
 
           const other = parseLogOther(log.other)
+          const adminInfo = other?.admin_info
           const affinity = other?.admin_info?.channel_affinity
-          const rawUseChannel = other?.admin_info?.use_channel ?? []
+          const rawUseChannel =
+            other?.admin_info?.retry_chain ??
+            other?.admin_info?.use_channel ??
+            []
           const useChannel = Array.isArray(rawUseChannel)
             ? rawUseChannel.map(String).filter(Boolean)
             : []
@@ -350,11 +354,27 @@ export function useCommonLogsColumns(
           const channelChain = hasRetryChain
             ? useChannel.join(' → ')
             : undefined
-          const channelDisplay = log.channel_name
-            ? `${log.channel_name} #${log.channel}`
-            : `#${log.channel}`
+          const surfaceChannelName =
+            adminInfo?.surface_channel_name ||
+            adminInfo?.aggregate_name ||
+            log.channel_name ||
+            `#${log.channel}`
+          const actualChannelName =
+            adminInfo?.actual_channel_name || log.channel_name
+          const hasChannelName = Boolean(
+            adminInfo?.surface_channel_name ||
+            adminInfo?.aggregate_name ||
+            log.channel_name
+          )
           const channelIdDisplay = `#${log.channel}`
-          const channelName = sensitiveVisible ? log.channel_name : '••••'
+          const actualChannelIdDisplay = `#${
+            adminInfo?.actual_channel_id || log.channel
+          }`
+          const hasChannelRoute =
+            hasRetryChain ||
+            Boolean(
+              actualChannelName && actualChannelName !== surfaceChannelName
+            )
           const multiKeyIndex = other?.admin_info?.multi_key_index
           const showMultiKeyIndex =
             other?.admin_info?.is_multi_key === true &&
@@ -362,127 +382,149 @@ export function useCommonLogsColumns(
             Number.isFinite(multiKeyIndex)
 
           return (
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <div className='flex max-w-[160px] flex-col gap-0.5' />
-                  }
-                >
-                  <div className='relative inline-flex w-fit items-center gap-1'>
-                    <StatusBadge
-                      label={channelIdDisplay}
-                      autoColor={String(log.channel)}
-                      copyText={String(log.channel)}
-                      size='sm'
-                      showDot={false}
-                      className='font-mono'
-                    />
-                    {showMultiKeyIndex && (
+            <div className='flex max-w-[190px] flex-col'>
+              <div className='relative inline-flex w-fit max-w-full items-center gap-1'>
+                {hasChannelRoute ? (
+                  <Popover>
+                    <PopoverTrigger
+                      render={
+                        <button
+                          type='button'
+                          className='focus-visible:ring-ring inline-flex max-w-full min-w-0 items-center gap-1 rounded-md text-left transition-opacity hover:opacity-80 focus-visible:ring-2 focus-visible:outline-none'
+                          aria-label={
+                            sensitiveVisible
+                              ? surfaceChannelName
+                              : channelIdDisplay
+                          }
+                          onClick={(event) => event.stopPropagation()}
+                        />
+                      }
+                    >
                       <StatusBadge
-                        label={String(multiKeyIndex)}
+                        label={channelIdDisplay}
+                        autoColor={String(log.channel)}
                         size='sm'
                         showDot={false}
                         copyable={false}
-                        variant='neutral'
-                        className='h-5 min-w-5 justify-center rounded-full px-1 font-mono text-xs'
-                        aria-label={`${t('Key')} ${multiKeyIndex}`}
+                        className='font-mono'
                       />
-                    )}
-                    {hasRetryChain && (
-                      <Popover>
-                        <PopoverTrigger
-                          render={
-                            <button
-                              type='button'
-                              className='text-muted-foreground hover:text-foreground focus-visible:ring-ring inline-flex size-5 shrink-0 items-center justify-center rounded-full transition-colors focus-visible:ring-2 focus-visible:outline-none'
-                              aria-label={t('Retry Chain')}
-                              onClick={(e) => e.stopPropagation()}
+                      <Route
+                        className='text-muted-foreground size-3.5 shrink-0'
+                        aria-hidden='true'
+                      />
+                    </PopoverTrigger>
+                    <PopoverContent side='top' align='start' className='w-72'>
+                      <div className='space-y-2 text-xs'>
+                        <div className='flex items-center justify-between gap-3'>
+                          <span className='text-muted-foreground'>
+                            {t('Surface Channel')}
+                          </span>
+                          <span className='text-right font-mono font-medium break-all'>
+                            {sensitiveVisible
+                              ? surfaceChannelName
+                              : channelIdDisplay}
+                          </span>
+                        </div>
+                        <div
+                          data-testid='actual-channel-row'
+                          className='grid grid-cols-[max-content_minmax(0,1fr)] items-center gap-3'
+                        >
+                          <span className='text-muted-foreground'>
+                            {t('Actual Channel')}
+                          </span>
+                          <div className='flex min-w-0 flex-col items-end gap-1 justify-self-end'>
+                            <StatusBadge
+                              data-testid='actual-channel-id'
+                              label={actualChannelIdDisplay}
+                              autoColor={String(
+                                adminInfo?.actual_channel_id || log.channel
+                              )}
+                              copyText={String(
+                                adminInfo?.actual_channel_id || log.channel
+                              )}
+                              size='sm'
+                              showDot={false}
+                              className='h-4 px-1 font-mono !text-[11px]'
                             />
-                          }
-                        >
-                          <GitBranch
-                            className='size-3.5 text-amber-500'
-                            aria-hidden='true'
-                          />
-                        </PopoverTrigger>
-                        <PopoverContent
-                          side='top'
-                          align='start'
-                          className='w-64 text-xs'
-                        >
-                          <div className='flex flex-col gap-1'>
-                            <p className='font-medium'>{t('Retry Chain')}</p>
-                            <p className='text-muted-foreground font-mono break-all'>
-                              {channelChain}
-                            </p>
+                            {sensitiveVisible && (
+                              <span className='text-right font-medium break-all'>
+                                {actualChannelName || '-'}
+                              </span>
+                            )}
                           </div>
-                        </PopoverContent>
-                      </Popover>
-                    )}
-                    {affinity && (
-                      <button
-                        type='button'
-                        className='absolute -top-1 -right-1 leading-none text-amber-500'
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          setAffinityTarget({
-                            rule_name: affinity.rule_name || '',
-                            using_group:
-                              affinity.using_group ||
-                              affinity.selected_group ||
-                              '',
-                            key_hint: affinity.key_hint || '',
-                            key_fp: affinity.key_fp || '',
-                          })
-                          setAffinityDialogOpen(true)
-                        }}
-                      >
-                        <Sparkles className='size-3 fill-current' />
-                      </button>
-                    )}
-                  </div>
-                  {log.channel_name && (
-                    <span className='text-muted-foreground/70 truncate [font-family:var(--font-body)] !text-xs'>
-                      {channelName}
-                    </span>
-                  )}
-                </TooltipTrigger>
-                <TooltipContent>
-                  <div className='space-y-1'>
-                    <p>
-                      {sensitiveVisible ? channelDisplay : channelIdDisplay}
-                    </p>
-                    {channelChain && (
-                      <p className='text-muted-foreground text-xs'>
-                        {t('Chain')}: {channelChain}
-                      </p>
-                    )}
-                    {showMultiKeyIndex && (
-                      <p className='text-muted-foreground text-xs'>
-                        {t('Key')}: {multiKeyIndex}
-                      </p>
-                    )}
-                    {affinity && (
-                      <div className='border-t pt-1 text-xs'>
-                        <p className='font-medium'>{t('Channel Affinity')}</p>
-                        <p>
-                          {t('Rule')}: {affinity.rule_name || '-'}
-                        </p>
-                        <p>
-                          {t('Group')}:{' '}
-                          {sensitiveVisible
-                            ? affinity.using_group ||
-                              affinity.selected_group ||
-                              '-'
-                            : '••••'}
-                        </p>
+                        </div>
+                        {channelChain && (
+                          <div className='flex items-start justify-between gap-3'>
+                            <span className='text-muted-foreground'>
+                              {t('Retry Chain')}
+                            </span>
+                            <span className='text-right font-mono break-all'>
+                              {channelChain}
+                            </span>
+                          </div>
+                        )}
+                        {showMultiKeyIndex && (
+                          <div className='flex items-start justify-between gap-3'>
+                            <span className='text-muted-foreground'>
+                              {t('Key')}
+                            </span>
+                            <span className='font-mono'>{multiKeyIndex}</span>
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+                    </PopoverContent>
+                  </Popover>
+                ) : (
+                  <StatusBadge
+                    label={channelIdDisplay}
+                    autoColor={String(log.channel)}
+                    copyText={String(log.channel)}
+                    size='sm'
+                    showDot={false}
+                    className='font-mono'
+                  />
+                )}
+                {showMultiKeyIndex && (
+                  <StatusBadge
+                    label={String(multiKeyIndex)}
+                    size='sm'
+                    showDot={false}
+                    copyable={false}
+                    variant='neutral'
+                    className='h-5 min-w-5 justify-center rounded-full px-1 font-mono text-xs'
+                    aria-label={`${t('Key')} ${multiKeyIndex}`}
+                  />
+                )}
+                {affinity && (
+                  <button
+                    type='button'
+                    className='absolute -top-1 -right-1 leading-none text-amber-500'
+                    aria-label={t('Channel Affinity')}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      setAffinityTarget({
+                        rule_name: affinity.rule_name || '',
+                        using_group:
+                          affinity.using_group || affinity.selected_group || '',
+                        key_hint: affinity.key_hint || '',
+                        key_fp: affinity.key_fp || '',
+                      })
+                      setAffinityDialogOpen(true)
+                    }}
+                  >
+                    <Sparkles
+                      className='size-3 fill-current'
+                      aria-hidden='true'
+                    />
+                  </button>
+                )}
+              </div>
+              {hasChannelName && (
+                <span className='text-muted-foreground/70 truncate [font-family:var(--font-body)] text-xs'>
+                  {sensitiveVisible ? surfaceChannelName : '••••'}
+                </span>
+              )}
+            </div>
           )
         },
       },
@@ -542,6 +584,71 @@ export function useCommonLogsColumns(
       }
     )
   }
+
+  columns.push(
+    {
+      id: 'client',
+      header: t('Client'),
+      accessorFn: (row) => parseLogOther(row.other)?.diagnostics?.client ?? '',
+      cell: ({ row }) => {
+        const client = parseLogOther(row.original.other)?.diagnostics?.client
+        return client ? (
+          <StatusBadge
+            label={client}
+            variant='neutral'
+            size='sm'
+            copyable={false}
+          />
+        ) : (
+          <span className='text-muted-foreground'>—</span>
+        )
+      },
+      size: 130,
+    },
+    {
+      id: 'protocol',
+      header: t('Protocol'),
+      accessorFn: (row) =>
+        parseLogOther(row.other)?.diagnostics?.request_protocol ?? '',
+      cell: ({ row }) => {
+        const diagnostics = parseLogOther(row.original.other)?.diagnostics
+        const requestProtocol = diagnostics?.request_protocol
+        const upstreamProtocol = isAdminView
+          ? diagnostics?.upstream_protocol
+          : undefined
+        if (!requestProtocol && !upstreamProtocol) {
+          return <span className='text-muted-foreground'>—</span>
+        }
+        return (
+          <div className='flex flex-col text-xs'>
+            <span>{requestProtocol || '—'}</span>
+            {upstreamProtocol && upstreamProtocol !== requestProtocol && (
+              <span className='text-muted-foreground'>
+                → {upstreamProtocol}
+              </span>
+            )}
+          </div>
+        )
+      },
+      size: 150,
+    },
+    {
+      id: 'ip',
+      header: t('IP Address'),
+      accessorFn: (row) =>
+        row.ip || parseLogOther(row.other)?.diagnostics?.ip || '',
+      cell: ({ row }) => {
+        const ip =
+          row.original.ip || parseLogOther(row.original.other)?.diagnostics?.ip
+        return ip ? (
+          <span className='font-mono text-xs'>{ip}</span>
+        ) : (
+          <span className='text-muted-foreground'>—</span>
+        )
+      },
+      size: 150,
+    }
+  )
 
   columns.push({
     accessorKey: 'token_name',

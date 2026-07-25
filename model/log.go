@@ -2,21 +2,27 @@ package model
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"html"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 func applyExplicitLogTextFilter(tx *gorm.DB, column string, value string) (*gorm.DB, error) {
@@ -83,6 +89,70 @@ type Log struct {
 	Other             string `json:"other"`
 }
 
+type LogSortOptions struct {
+	SortBy    string
+	SortOrder string
+}
+
+var logSortColumns = map[string]string{
+	"created_at":    "created_at",
+	"channel":       "channel_id",
+	"user":          "username",
+	"token_name":    "token_name",
+	"model_name":    "model_name",
+	"is_stream":     "is_stream",
+	"prompt_tokens": "prompt_tokens",
+	"quota":         "quota",
+	"use_time":      "use_time",
+}
+
+func NewLogSortOptions(sortBy string, sortOrder string) LogSortOptions {
+	normalizedSortBy := strings.ToLower(strings.TrimSpace(sortBy))
+	normalizedSortOrder := strings.ToLower(strings.TrimSpace(sortOrder))
+	if _, ok := logSortColumns[normalizedSortBy]; !ok {
+		normalizedSortBy = "created_at"
+		normalizedSortOrder = "desc"
+	} else if normalizedSortOrder != "asc" {
+		normalizedSortOrder = "desc"
+	}
+	return LogSortOptions{SortBy: normalizedSortBy, SortOrder: normalizedSortOrder}
+}
+
+func (options LogSortOptions) Apply(query *gorm.DB) *gorm.DB {
+	columnName, ok := logSortColumns[options.SortBy]
+	if !ok {
+		columnName = "created_at"
+	}
+	query = query.Order(clause.OrderByColumn{
+		Column: clause.Column{Table: "logs", Name: columnName},
+		Desc:   options.SortOrder != "asc",
+	})
+	if columnName != "created_at" {
+		query = query.Order(clause.OrderByColumn{
+			Column: clause.Column{Table: "logs", Name: "created_at"},
+			Desc:   true,
+		})
+	}
+	tieBreakColumn := "id"
+	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+		tieBreakColumn = "request_id"
+	}
+	if columnName != tieBreakColumn {
+		query = query.Order(clause.OrderByColumn{
+			Column: clause.Column{Table: "logs", Name: tieBreakColumn},
+			Desc:   true,
+		})
+	}
+	return query
+}
+
+func resolveLogSortOptions(sortOptions []LogSortOptions) LogSortOptions {
+	if len(sortOptions) == 0 {
+		return NewLogSortOptions("", "")
+	}
+	return sortOptions[0]
+}
+
 // don't use iota, avoid change log type value
 const (
 	LogTypeUnknown = 0
@@ -104,6 +174,333 @@ func ensureLogRequestId(log *Log) {
 func createLog(log *Log) error {
 	ensureLogRequestId(log)
 	return LOG_DB.Create(log).Error
+}
+
+const (
+	maxDiagnosticHeaderValueBytes = 512
+	maxDiagnosticHeaderBytes      = 4 * 1024
+)
+
+var diagnosticHeaderAllowlist = map[string]struct{}{
+	"user-agent":                  {},
+	"content-type":                {},
+	"anthropic-version":           {},
+	"anthropic-beta":              {},
+	"x-app":                       {},
+	"originator":                  {},
+	"traceparent":                 {},
+	"tracestate":                  {},
+	"x-request-id":                {},
+	"x-client-request-id":         {},
+	"x-codex-beta-features":       {},
+	"x-codex-parent-thread-id":    {},
+	"x-codex-turn-metadata":       {},
+	"x-codex-turn-state":          {},
+	"x-codex-window-id":           {},
+	"x-openai-memgen-request":     {},
+	"x-openai-subagent":           {},
+	"x-stainless-arch":            {},
+	"x-stainless-lang":            {},
+	"x-stainless-os":              {},
+	"x-stainless-package-version": {},
+	"x-stainless-retry-count":     {},
+	"x-stainless-runtime":         {},
+	"x-stainless-runtime-version": {},
+	"x-stainless-timeout":         {},
+}
+
+func ensureOtherMap(other map[string]interface{}) map[string]interface{} {
+	if other == nil {
+		return make(map[string]interface{})
+	}
+	return other
+}
+
+func ensureAdminInfo(other map[string]interface{}) map[string]interface{} {
+	other = ensureOtherMap(other)
+	adminInfo, ok := other["admin_info"].(map[string]interface{})
+	if !ok || adminInfo == nil {
+		adminInfo = map[string]interface{}{}
+		other["admin_info"] = adminInfo
+	}
+	return adminInfo
+}
+
+func diagnosticHeaderValue(name, value string) string {
+	value = strings.TrimSpace(value)
+	if strings.Contains(name, "session") || strings.Contains(name, "thread") {
+		digest := sha256.Sum256([]byte(value))
+		return "sha256:" + hex.EncodeToString(digest[:])[:16]
+	}
+	if len(value) > maxDiagnosticHeaderValueBytes {
+		value = value[:maxDiagnosticHeaderValueBytes]
+	}
+	return value
+}
+
+func collectDiagnosticHeaders(c *gin.Context) map[string]string {
+	result := make(map[string]string)
+	if c == nil || c.Request == nil {
+		return result
+	}
+	setting := operation_setting.GetLogDiagnosticSetting()
+	allowed := make(map[string]struct{}, len(diagnosticHeaderAllowlist)+len(setting.ExtraHeaders))
+	for name := range diagnosticHeaderAllowlist {
+		allowed[name] = struct{}{}
+	}
+	for _, name := range operation_setting.NormalizeLogDiagnosticHeaders(setting.ExtraHeaders) {
+		if operation_setting.IsDiagnosticHeaderAllowed(name) {
+			allowed[name] = struct{}{}
+		}
+	}
+	names := make([]string, 0, len(c.Request.Header))
+	for name := range c.Request.Header {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	used := 0
+	for _, headerName := range names {
+		values := c.Request.Header.Values(headerName)
+		name := strings.ToLower(strings.TrimSpace(headerName))
+		if _, ok := allowed[name]; !ok || !operation_setting.IsDiagnosticHeaderAllowed(name) {
+			continue
+		}
+		value := ""
+		if len(values) > 0 {
+			value = diagnosticHeaderValue(name, values[0])
+		}
+		if value == "" {
+			continue
+		}
+		cost := len(name) + len(value) + 2
+		if used+cost > maxDiagnosticHeaderBytes {
+			break
+		}
+		result[name] = value
+		used += cost
+	}
+	return result
+}
+
+func channelSnapshot(channelId int) map[string]interface{} {
+	if channelId <= 0 {
+		return nil
+	}
+	channel, err := CacheGetChannel(channelId)
+	if err != nil || channel == nil {
+		channel, err = GetChannelById(channelId, false)
+		if err != nil || channel == nil {
+			return nil
+		}
+	}
+	actualName := strings.TrimSpace(channel.Name)
+	aggregateName := strings.TrimSpace(channel.AggregateName)
+	if aggregateName == "" {
+		_ = HydrateChannelAggregateSnapshots([]*Channel{channel})
+		aggregateName = strings.TrimSpace(channel.AggregateName)
+	}
+	snapshot := map[string]interface{}{
+		"actual_channel_id":   channel.Id,
+		"actual_channel_name": actualName,
+	}
+	if aggregateName != "" {
+		snapshot["aggregate_name"] = aggregateName
+	}
+	return snapshot
+}
+
+func routePoolAggregateName(c *gin.Context) string {
+	if c == nil || DB == nil || common.GetContextKeyInt(c, constant.ContextKeyUserModelRouteId) <= 0 {
+		return ""
+	}
+	channelIds, ok := common.GetContextKeyType[[]int](c, constant.ContextKeyUserModelRouteChannel)
+	if !ok || len(channelIds) == 0 {
+		return ""
+	}
+	seen := make(map[int]struct{}, len(channelIds))
+	normalizedIds := make([]int, 0, len(channelIds))
+	for _, channelId := range channelIds {
+		if channelId <= 0 {
+			return ""
+		}
+		if _, exists := seen[channelId]; exists {
+			continue
+		}
+		seen[channelId] = struct{}{}
+		normalizedIds = append(normalizedIds, channelId)
+	}
+	if len(normalizedIds) == 0 {
+		return ""
+	}
+
+	channels := make([]*Channel, 0, len(normalizedIds))
+	if err := DB.Where("id IN ?", normalizedIds).Find(&channels).Error; err != nil || len(channels) != len(normalizedIds) {
+		return ""
+	}
+	if err := HydrateChannelAggregateSnapshots(channels); err != nil {
+		return ""
+	}
+
+	aggregateId := 0
+	aggregateName := ""
+	for _, channel := range channels {
+		if channel == nil || channel.AggregateId == nil || *channel.AggregateId <= 0 {
+			return ""
+		}
+		name := strings.TrimSpace(channel.AggregateName)
+		if name == "" {
+			return ""
+		}
+		if aggregateId == 0 {
+			aggregateId = *channel.AggregateId
+			aggregateName = name
+			continue
+		}
+		if aggregateId != *channel.AggregateId {
+			return ""
+		}
+	}
+	return aggregateName
+}
+
+func appendLogDiagnostics(c *gin.Context, channelId int, other map[string]interface{}) map[string]interface{} {
+	other = ensureOtherMap(other)
+	adminInfo := ensureAdminInfo(other)
+	diagnostics := map[string]interface{}{}
+	if c != nil && c.Request != nil {
+		diagnostics["method"] = c.Request.Method
+		if c.Request.URL != nil {
+			diagnostics["path"] = c.Request.URL.Path
+		}
+		if c.Request.ContentLength >= 0 {
+			diagnostics["request_size"] = c.Request.ContentLength
+		}
+	}
+	if c != nil && c.Writer != nil {
+		diagnostics["status_code"] = c.Writer.Status()
+		if size := c.Writer.Size(); size >= 0 {
+			diagnostics["response_size"] = size
+		}
+	}
+	if c != nil {
+		if value := common.GetContextKeyString(c, constant.ContextKeyClientName); value != "" {
+			diagnostics["client"] = value
+		}
+		for key, target := range map[constant.ContextKey]string{
+			constant.ContextKeyRequestProtocol:    "request_protocol",
+			constant.ContextKeyUpstreamProtocol:   "upstream_protocol",
+			constant.ContextKeyProtocolConverter:  "protocol_converter",
+			constant.ContextKeyUserModelRoutePool: "route_pool_name",
+			constant.ContextKeyUserModelRouteId:   "route_rule_id",
+		} {
+			if key == constant.ContextKeyUserModelRouteId {
+				if id := common.GetContextKeyInt(c, key); id > 0 {
+					diagnostics[target] = id
+				}
+				continue
+			}
+			if value := common.GetContextKeyString(c, key); value != "" {
+				diagnostics[target] = value
+			}
+		}
+		if started := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime); !started.IsZero() {
+			diagnostics["duration_ms"] = time.Since(started).Milliseconds()
+		}
+		if operation_setting.GetLogDiagnosticSetting().RecordIP {
+			diagnostics["ip"] = c.ClientIP()
+		}
+		if upstreamRequestSize, ok := common.GetContextKeyType[int64](c, constant.ContextKeyUpstreamRequestSize); ok && upstreamRequestSize >= 0 {
+			diagnostics["upstream_request_size"] = upstreamRequestSize
+		}
+		if usedChannels := c.GetStringSlice("use_channel"); len(usedChannels) > 0 {
+			adminInfo["retry_chain"] = append([]string(nil), usedChannels...)
+		}
+	}
+	if nodeName := strings.TrimSpace(common.NodeName); nodeName != "" {
+		diagnostics["node"] = nodeName
+	}
+	if firstResponse, ok := other["frt"].(float64); ok && firstResponse >= 0 {
+		diagnostics["first_response_ms"] = firstResponse
+	}
+	if snapshot := channelSnapshot(channelId); snapshot != nil {
+		for key, value := range snapshot {
+			adminInfo[key] = value
+		}
+		if aggregateName := routePoolAggregateName(c); aggregateName != "" {
+			adminInfo["surface_channel_name"] = aggregateName
+		} else if routePool, ok := diagnostics["route_pool_name"].(string); ok && strings.TrimSpace(routePool) != "" {
+			adminInfo["surface_channel_name"] = strings.TrimSpace(routePool)
+		} else if aggregateName, ok := snapshot["aggregate_name"].(string); ok && aggregateName != "" {
+			adminInfo["surface_channel_name"] = aggregateName
+		} else {
+			adminInfo["surface_channel_name"] = snapshot["actual_channel_name"]
+		}
+	}
+	if len(diagnostics) > 0 {
+		other["diagnostics"] = diagnostics
+	}
+	setting := operation_setting.GetLogDiagnosticSetting()
+	if setting.RecordHeaders {
+		if headers := collectDiagnosticHeaders(c); len(headers) > 0 {
+			adminInfo["request_headers"] = headers
+		}
+	}
+	if len(adminInfo) == 0 {
+		delete(other, "admin_info")
+	}
+	return other
+}
+
+// logIPForStorage applies the global diagnostic switch. The historical
+// per-user flag remains in the compatibility schema but no longer controls
+// request or error log collection.
+func logIPForStorage(c *gin.Context) string {
+	if c == nil || !operation_setting.GetLogDiagnosticSetting().RecordIP {
+		return ""
+	}
+	return c.ClientIP()
+}
+
+func adminLogSurfaceName(log *Log, other map[string]interface{}) string {
+	if adminInfo, ok := other["admin_info"].(map[string]interface{}); ok {
+		for _, key := range []string{"surface_channel_name", "aggregate_name", "actual_channel_name"} {
+			if name, ok := adminInfo[key].(string); ok && strings.TrimSpace(name) != "" {
+				return strings.TrimSpace(name)
+			}
+		}
+	}
+	if log == nil {
+		return ""
+	}
+	return strings.TrimSpace(log.ChannelName)
+}
+
+// sanitizeAdminSelfLogInfo keeps the user-scoped administrator view limited to
+// model-routing fields. The global administrator log endpoint returns the
+// complete diagnostic snapshot separately; personal log views must not expose
+// unrelated audit, header, IP, or quota internals merely because the viewer is
+// an administrator.
+func sanitizeAdminSelfLogInfo(other map[string]interface{}) {
+	adminInfo, ok := other["admin_info"].(map[string]interface{})
+	if !ok {
+		return
+	}
+	allowed := map[string]struct{}{
+		"is_model_mapped":     {},
+		"upstream_model_name": {},
+		"po":                  {},
+	}
+	filtered := make(map[string]interface{}, len(allowed))
+	for key := range allowed {
+		if value, exists := adminInfo[key]; exists {
+			filtered[key] = value
+		}
+	}
+	if len(filtered) == 0 {
+		delete(other, "admin_info")
+		return
+	}
+	other["admin_info"] = filtered
 }
 
 const logModelNameScopeRequested = "requested"
@@ -342,9 +739,35 @@ func sanitizeRoutedErrorText(content string, upstreamModelNames []string, public
 	return strings.ReplaceAll(sanitized, requestedModelPlaceholder, publicModelName), true
 }
 
+func retainPublicLogDiagnostics(other map[string]interface{}) {
+	diagnostics, ok := other["diagnostics"].(map[string]interface{})
+	if !ok {
+		delete(other, "diagnostics")
+		return
+	}
+
+	publicDiagnostics := make(map[string]interface{}, 2)
+	for _, field := range []string{"client", "request_protocol"} {
+		value, ok := diagnostics[field].(string)
+		if !ok || strings.TrimSpace(value) == "" {
+			continue
+		}
+		publicDiagnostics[field] = value
+	}
+	if len(publicDiagnostics) == 0 {
+		delete(other, "diagnostics")
+		return
+	}
+	other["diagnostics"] = publicDiagnostics
+}
+
 func formatUserLogs(logs []*Log, startIdx int, canViewModelRouting bool) {
 	for i := range logs {
-		logs[i].ChannelName = ""
+		if !canViewModelRouting {
+			logs[i].ChannelId = 0
+			logs[i].ChannelName = ""
+			logs[i].UpstreamRequestId = ""
+		}
 		var otherMap map[string]interface{}
 		otherMap, parseErr := common.StrToMap(logs[i].Other)
 		if !canViewModelRouting && (parseErr != nil || len(otherMap) == 0) {
@@ -358,44 +781,40 @@ func formatUserLogs(logs []*Log, startIdx int, canViewModelRouting bool) {
 			continue
 		}
 		if otherMap != nil {
+			if canViewModelRouting {
+				logs[i].ChannelName = adminLogSurfaceName(logs[i], otherMap)
+				sanitizeAdminSelfLogInfo(otherMap)
+				retainPublicLogDiagnostics(otherMap)
+				delete(otherMap, "request_conversion")
+				delete(otherMap, "request_path")
+			}
 			modelNameIsRequested := hasRequestedModelNameScope(otherMap)
 			modelRoutingChecked := false
-			adminFields := map[string]interface{}{}
 			upstreamModelNames := make([]string, 0, 2)
 			if upstreamModelName, ok := otherMap["upstream_model_name"].(string); ok && upstreamModelName != "" {
 				upstreamModelNames = append(upstreamModelNames, upstreamModelName)
 			}
-			if canViewModelRouting {
+			if !canViewModelRouting {
 				if adminInfo, ok := otherMap["admin_info"].(map[string]interface{}); ok {
-					if isModelMapped, exists := adminInfo["is_model_mapped"]; exists {
-						adminFields["is_model_mapped"] = isModelMapped
-					}
-					if upstreamModel, exists := adminInfo["upstream_model_name"]; exists {
-						adminFields["upstream_model_name"] = upstreamModel
-					}
-					if paramOverrideAudit, exists := adminInfo["po"]; exists {
-						adminFields["po"] = paramOverrideAudit
-					}
-				}
-			} else if adminInfo, ok := otherMap["admin_info"].(map[string]interface{}); ok {
-				modelRoutingChecked, _ = adminInfo["model_routing_checked"].(bool)
-				if upstreamModelName, ok := adminInfo["upstream_model_name"].(string); ok && upstreamModelName != "" {
-					if len(upstreamModelNames) == 0 || upstreamModelNames[0] != upstreamModelName {
-						upstreamModelNames = append(upstreamModelNames, upstreamModelName)
+					modelRoutingChecked, _ = adminInfo["model_routing_checked"].(bool)
+					if upstreamModelName, ok := adminInfo["upstream_model_name"].(string); ok && upstreamModelName != "" {
+						if len(upstreamModelNames) == 0 || upstreamModelNames[0] != upstreamModelName {
+							upstreamModelNames = append(upstreamModelNames, upstreamModelName)
+						}
 					}
 				}
 			}
-			// Remove admin-only debug fields.
-			delete(otherMap, "admin_info")
-			// Remove operation-audit details (operator/route info), admin-only.
-			delete(otherMap, "audit_info")
-			// delete(otherMap, "reject_reason")
-			delete(otherMap, "stream_status")
-			if canViewModelRouting {
-				if len(adminFields) > 0 {
-					otherMap["admin_info"] = adminFields
-				}
-			} else {
+			if !canViewModelRouting {
+				// Remove administrator-only diagnostics and historical top-level
+				// channel fields. Frontend hiding is only a second line of defense.
+				delete(otherMap, "admin_info")
+				delete(otherMap, "audit_info")
+				delete(otherMap, "stream_status")
+				delete(otherMap, "channel_id")
+				delete(otherMap, "channel_name")
+				delete(otherMap, "request_conversion")
+				delete(otherMap, "request_path")
+				retainPublicLogDiagnostics(otherMap)
 				if !modelNameIsRequested {
 					// Historical rows may contain the routed upstream model in
 					// model_name. Without server-written provenance it is unsafe to
@@ -463,6 +882,21 @@ func formatUserLogs(logs []*Log, startIdx int, canViewModelRouting bool) {
 		logs[i].Other = common.MapToJsonStr(otherMap)
 	}
 	assignDisplayLogIds(logs, startIdx)
+}
+
+func formatAdminLogs(logs []*Log) {
+	for _, log := range logs {
+		if log == nil {
+			continue
+		}
+		other, err := common.StrToMap(log.Other)
+		if err != nil || other == nil {
+			continue
+		}
+		if surfaceName := adminLogSurfaceName(log, other); surfaceName != "" {
+			log.ChannelName = surfaceName
+		}
+	}
 }
 
 func GetLogByTokenId(tokenId int) (logs []*Log, err error) {
@@ -619,36 +1053,25 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 	username := c.GetString("username")
 	requestId := c.GetString(common.RequestIdKey)
 	upstreamRequestId := c.GetString(common.UpstreamRequestIdKey)
+	other = appendLogDiagnostics(c, channelId, other)
 	otherStr := common.MapToJsonStr(withRequestedModelNameScope(other, modelName))
-	// 判断是否需要记录 IP
-	needRecordIp := false
-	if settingMap, err := GetUserSetting(userId, false); err == nil {
-		if settingMap.RecordIpLog {
-			needRecordIp = true
-		}
-	}
 	log := &Log{
-		UserId:           userId,
-		Username:         username,
-		CreatedAt:        common.GetTimestamp(),
-		Type:             LogTypeError,
-		Content:          content,
-		PromptTokens:     0,
-		CompletionTokens: 0,
-		TokenName:        tokenName,
-		ModelName:        modelName,
-		Quota:            0,
-		ChannelId:        channelId,
-		TokenId:          tokenId,
-		UseTime:          useTimeSeconds,
-		IsStream:         isStream,
-		Group:            group,
-		Ip: func() string {
-			if needRecordIp {
-				return c.ClientIP()
-			}
-			return ""
-		}(),
+		UserId:            userId,
+		Username:          username,
+		CreatedAt:         common.GetTimestamp(),
+		Type:              LogTypeError,
+		Content:           content,
+		PromptTokens:      0,
+		CompletionTokens:  0,
+		TokenName:         tokenName,
+		ModelName:         modelName,
+		Quota:             0,
+		ChannelId:         channelId,
+		TokenId:           tokenId,
+		UseTime:           useTimeSeconds,
+		IsStream:          isStream,
+		Group:             group,
+		Ip:                logIPForStorage(c),
 		RequestId:         requestId,
 		UpstreamRequestId: upstreamRequestId,
 		Other:             otherStr,
@@ -683,36 +1106,25 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	requestId := c.GetString(common.RequestIdKey)
 	upstreamRequestId := c.GetString(common.UpstreamRequestIdKey)
 	createdAt := common.GetTimestamp()
+	params.Other = appendLogDiagnostics(c, params.ChannelId, params.Other)
 	otherStr := common.MapToJsonStr(withRequestedModelNameScope(params.Other, params.ModelName))
-	// 判断是否需要记录 IP
-	needRecordIp := false
-	if settingMap, err := GetUserSetting(userId, false); err == nil {
-		if settingMap.RecordIpLog {
-			needRecordIp = true
-		}
-	}
 	log := &Log{
-		UserId:           userId,
-		Username:         username,
-		CreatedAt:        createdAt,
-		Type:             LogTypeConsume,
-		Content:          params.Content,
-		PromptTokens:     params.PromptTokens,
-		CompletionTokens: params.CompletionTokens,
-		TokenName:        params.TokenName,
-		ModelName:        params.ModelName,
-		Quota:            params.Quota,
-		ChannelId:        params.ChannelId,
-		TokenId:          params.TokenId,
-		UseTime:          params.UseTimeSeconds,
-		IsStream:         params.IsStream,
-		Group:            params.Group,
-		Ip: func() string {
-			if needRecordIp {
-				return c.ClientIP()
-			}
-			return ""
-		}(),
+		UserId:            userId,
+		Username:          username,
+		CreatedAt:         createdAt,
+		Type:              LogTypeConsume,
+		Content:           params.Content,
+		PromptTokens:      params.PromptTokens,
+		CompletionTokens:  params.CompletionTokens,
+		TokenName:         params.TokenName,
+		ModelName:         params.ModelName,
+		Quota:             params.Quota,
+		ChannelId:         params.ChannelId,
+		TokenId:           params.TokenId,
+		UseTime:           params.UseTimeSeconds,
+		IsStream:          params.IsStream,
+		Group:             params.Group,
+		Ip:                logIPForStorage(c),
 		RequestId:         requestId,
 		UpstreamRequestId: upstreamRequestId,
 		Other:             otherStr,
@@ -801,7 +1213,7 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 	}
 }
 
-func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, startIdx int, num int, channel int, group string, requestId string, upstreamRequestId string) (logs []*Log, total int64, err error) {
+func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, startIdx int, num int, channel int, group string, requestId string, upstreamRequestId string, sortOptions ...LogSortOptions) (logs []*Log, total int64, err error) {
 	var tx *gorm.DB
 	if logType == LogTypeUnknown {
 		tx = LOG_DB
@@ -840,11 +1252,7 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 	if err != nil {
 		return nil, 0, err
 	}
-	order := "logs.created_at desc, logs.id desc"
-	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
-		order = clickHouseLogOrder("logs.")
-	}
-	err = tx.Order(order).Limit(num).Offset(startIdx).Find(&logs).Error
+	err = resolveLogSortOptions(sortOptions).Apply(tx).Limit(num).Offset(startIdx).Find(&logs).Error
 	if err != nil {
 		return nil, 0, err
 	}
@@ -891,11 +1299,12 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 			logs[i].ChannelName = channelMap[logs[i].ChannelId]
 		}
 	}
+	formatAdminLogs(logs)
 
 	return logs, total, err
 }
 
-func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, startIdx int, num int, group string, requestId string, upstreamRequestId string, canViewModelRouting bool) (logs []*Log, total int64, err error) {
+func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, startIdx int, num int, group string, requestId string, upstreamRequestId string, canViewModelRouting bool, sortOptions ...LogSortOptions) (logs []*Log, total int64, err error) {
 	var tx *gorm.DB
 	if logType == LogTypeUnknown {
 		tx = LOG_DB.Where("logs.user_id = ?", userId)
@@ -928,16 +1337,12 @@ func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int
 	if group != "" {
 		tx = tx.Where("logs."+logGroupCol+" = ?", group)
 	}
-	order := "logs.id desc"
-	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
-		order = clickHouseLogOrder("logs.")
-	}
 	err = tx.Model(&Log{}).Count(&total).Error
 	if err != nil {
 		common.SysError("failed to count user logs: " + err.Error())
 		return nil, 0, errors.New("查询日志失败")
 	}
-	err = tx.Order(order).Limit(num).Offset(startIdx).Find(&logs).Error
+	err = resolveLogSortOptions(sortOptions).Apply(tx).Limit(num).Offset(startIdx).Find(&logs).Error
 	if err != nil {
 		common.SysError("failed to search user logs: " + err.Error())
 		return nil, 0, errors.New("查询日志失败")

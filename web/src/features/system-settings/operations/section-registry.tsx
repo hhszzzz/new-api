@@ -20,6 +20,7 @@ import { SystemBehaviorSection } from '../general/system-behavior-section'
 import { EmailSettingsSection } from '../integrations/email-settings-section'
 import { MonitoringSettingsSection } from '../integrations/monitoring-settings-section'
 import { WorkerSettingsSection } from '../integrations/worker-settings-section'
+import { LogDiagnosticSettingsSection } from '../maintenance/log-diagnostic-settings-section'
 import { LogSettingsSection } from '../maintenance/log-settings-section'
 import { PerformanceSection } from '../maintenance/performance-section'
 import { UpdateCheckerSection } from '../maintenance/update-checker-section'
@@ -98,6 +99,22 @@ const OPERATIONS_SECTIONS = [
     build: (settings: OperationsSettings) => (
       <LogSettingsSection
         defaultEnabled={Boolean(settings.LogConsumeEnabled)}
+      />
+    ),
+  },
+  {
+    id: 'diagnostics',
+    titleKey: 'Log Diagnostics',
+    build: (settings: OperationsSettings) => (
+      <LogDiagnosticSettingsSection
+        defaultValues={{
+          'log_diagnostic_setting.record_ip':
+            settings['log_diagnostic_setting.record_ip'] ?? false,
+          'log_diagnostic_setting.record_headers':
+            settings['log_diagnostic_setting.record_headers'] ?? false,
+          'log_diagnostic_setting.extra_headers':
+            settings['log_diagnostic_setting.extra_headers'] ?? [],
+        }}
       />
     ),
   },
