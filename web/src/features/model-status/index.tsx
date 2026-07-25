@@ -30,7 +30,7 @@ import { useTranslation } from 'react-i18next'
 import { PublicLayout } from '@/components/layout'
 import { PageTransition } from '@/components/page-transition'
 import { Button } from '@/components/ui/button'
-import { Card, CardAction, CardContent, CardHeader } from '@/components/ui/card'
+import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import {
   Empty,
   EmptyContent,
@@ -51,15 +51,15 @@ import {
 } from './lib/model-status'
 
 const REFRESH_INTERVAL_MS = 60 * 1000
-const REFRESH_COOLDOWN_MS = 5 * 1000
+const REFRESH_COOLDOWN_SECONDS = 5
 const MODEL_STATUS_PAGE_SIZE = 20
 
 export function ModelStatus() {
   const { t, i18n } = useTranslation()
   const [page, setPage] = useState(1)
-  const [isRefreshCoolingDown, setIsRefreshCoolingDown] = useState(false)
+  const [refreshCooldownSeconds, setRefreshCooldownSeconds] = useState(0)
   const modelListRef = useRef<HTMLElement>(null)
-  const refreshCooldownTimerRef = useRef<number | null>(null)
+  const refreshCooldownIntervalRef = useRef<number | null>(null)
   const statusQuery = useQuery({
     queryKey: ['model-status'],
     queryFn: getModelStatus,
@@ -87,8 +87,8 @@ export function ModelStatus() {
 
   useEffect(
     () => () => {
-      if (refreshCooldownTimerRef.current !== null) {
-        window.clearTimeout(refreshCooldownTimerRef.current)
+      if (refreshCooldownIntervalRef.current !== null) {
+        window.clearInterval(refreshCooldownIntervalRef.current)
       }
     },
     []
@@ -116,6 +116,7 @@ export function ModelStatus() {
       }),
     [locale]
   )
+  const numberFormatter = useMemo(() => new Intl.NumberFormat(locale), [locale])
   const updatedAt = snapshot
     ? updatedAtFormatter.format(new Date(snapshot.generated_at * 1000))
     : null
@@ -131,14 +132,28 @@ export function ModelStatus() {
     modelListRef.current?.scrollIntoView({ block: 'start' })
   }
   const refreshStatus = () => {
-    if (statusQuery.isFetching || isRefreshCoolingDown) return
+    if (statusQuery.isFetching || refreshCooldownSeconds > 0) return
 
-    setIsRefreshCoolingDown(true)
+    setRefreshCooldownSeconds(REFRESH_COOLDOWN_SECONDS)
     void statusQuery.refetch()
-    refreshCooldownTimerRef.current = window.setTimeout(() => {
-      setIsRefreshCoolingDown(false)
-      refreshCooldownTimerRef.current = null
-    }, REFRESH_COOLDOWN_MS)
+    refreshCooldownIntervalRef.current = window.setInterval(() => {
+      setRefreshCooldownSeconds((current) => {
+        if (current <= 1) {
+          if (refreshCooldownIntervalRef.current !== null) {
+            window.clearInterval(refreshCooldownIntervalRef.current)
+            refreshCooldownIntervalRef.current = null
+          }
+          return 0
+        }
+        return current - 1
+      })
+    }, 1000)
+  }
+  let refreshButtonLabel = t('Refresh')
+  if (isRefreshPending) {
+    refreshButtonLabel = t('Refreshing...')
+  } else if (refreshCooldownSeconds > 0) {
+    refreshButtonLabel = `${t('Refresh')} (${refreshCooldownSeconds}s)`
   }
   let statusContent: React.ReactNode
 
@@ -185,6 +200,7 @@ export function ModelStatus() {
               model={model}
               generatedAt={snapshot.generated_at}
               hourFormatter={hourFormatter}
+              numberFormatter={numberFormatter}
             />
           ))}
         </section>
@@ -278,7 +294,7 @@ export function ModelStatus() {
                 variant='outline'
                 size='sm'
                 onClick={refreshStatus}
-                disabled={statusQuery.isFetching || isRefreshCoolingDown}
+                disabled={statusQuery.isFetching || refreshCooldownSeconds > 0}
               >
                 <span
                   data-icon='inline-start'
@@ -289,7 +305,7 @@ export function ModelStatus() {
                 >
                   <HugeiconsIcon icon={RefreshIcon} strokeWidth={2} />
                 </span>
-                {isRefreshPending ? t('Refreshing...') : t('Refresh')}
+                <span className='tabular-nums'>{refreshButtonLabel}</span>
               </Button>
             </div>
           </header>
@@ -311,19 +327,19 @@ function StatusLoading() {
         {Array.from({ length: 4 }, (_, index) => (
           <Card key={index} size='sm'>
             <CardHeader>
-              <div className='flex flex-col gap-2'>
-                <Skeleton className='h-3 w-20' />
+              <div className='flex items-center gap-2.5'>
+                <Skeleton className='size-9 rounded-lg' />
                 <Skeleton className='h-5 w-44' />
               </div>
-              <CardAction>
-                <Skeleton className='h-5 w-20 rounded-full' />
-              </CardAction>
             </CardHeader>
             <CardContent className='flex flex-col gap-4'>
-              <div className='grid grid-cols-3 gap-2'>
-                <Skeleton className='h-14' />
-                <Skeleton className='h-14' />
-                <Skeleton className='h-14' />
+              <div className='grid grid-cols-6 gap-px overflow-hidden rounded-lg border'>
+                <Skeleton className='h-12 rounded-none' />
+                <Skeleton className='h-12 rounded-none' />
+                <Skeleton className='h-12 rounded-none' />
+                <Skeleton className='h-12 rounded-none' />
+                <Skeleton className='h-12 rounded-none' />
+                <Skeleton className='h-12 rounded-none' />
               </div>
               <Skeleton className='h-8 w-full' />
             </CardContent>

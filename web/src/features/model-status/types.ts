@@ -25,13 +25,22 @@ export type ModelHealthStatus =
 export type ModelStatusTimelinePoint = {
   ts: number
   status: ModelHealthStatus
+  request_count: number
+  success_count: number
   success_rate: number | null
+  avg_ttft_ms: number | null
+  avg_latency_ms: number | null
+  avg_tps: number | null
 }
 
 export type ModelStatusModel = {
   model_name: string
   vendor: string
+  icon: string
+  request_count: number
+  success_count: number
   success_rate: number | null
+  avg_ttft_ms: number | null
   avg_latency_ms: number | null
   avg_tps: number | null
   status: ModelHealthStatus

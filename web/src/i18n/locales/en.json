@@ -4503,6 +4503,7 @@
     "succeeded": "succeeded",
     "Success": "Success",
     "Success rate": "Success rate",
+    "Successful requests": "Successful requests",
     "Successfully created {{count}} API Key(s)": "Successfully created {{count}} API Key(s)",
     "Successfully created {{count}} redemption codes": "Successfully created {{count}} redemption codes",
     "Successfully deleted {{count}} API key(s)": "Successfully deleted {{count}} API key(s)",

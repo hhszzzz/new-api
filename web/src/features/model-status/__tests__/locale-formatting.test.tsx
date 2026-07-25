@@ -52,6 +52,10 @@ vi.mock('@/components/page-transition', () => ({
   PageTransition: (props: { children: React.ReactNode }) => props.children,
 }))
 
+vi.mock('@/lib/lobe-icon', () => ({
+  getLobeIcon: () => <span data-testid='model-icon' />,
+}))
+
 describe('model status locale formatting', () => {
   test('renders with the project zhCN language code without an Intl error', () => {
     render(<ModelStatus />)

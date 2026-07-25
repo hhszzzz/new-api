@@ -38,7 +38,11 @@ function createModel(
   return {
     model_name: modelName,
     vendor: 'test',
+    icon: '',
+    request_count: 0,
+    success_count: 0,
     success_rate: null,
+    avg_ttft_ms: null,
     avg_latency_ms: null,
     avg_tps: null,
     status,
@@ -74,7 +78,12 @@ describe('model status presentation data', () => {
         {
           ts: operationalHour + 120,
           status: 'operational',
+          request_count: 4,
+          success_count: 4,
           success_rate: 100,
+          avg_ttft_ms: 120,
+          avg_latency_ms: 240,
+          avg_tps: 30,
         },
       ],
       currentHour + 300
@@ -86,12 +95,27 @@ describe('model status presentation data', () => {
     assert.deepEqual(timeline.at(-3), {
       ts: operationalHour,
       status: 'operational',
+      request_count: 4,
+      success_count: 4,
       success_rate: 100,
+      avg_ttft_ms: 120,
+      avg_latency_ms: 240,
+      avg_tps: 30,
     })
     assert.equal(
       timeline.filter((point) => point.status === 'no_data').length,
       23
     )
+    assert.deepEqual(timeline.at(-1), {
+      ts: currentHour,
+      status: 'no_data',
+      request_count: 0,
+      success_count: 0,
+      success_rate: null,
+      avg_ttft_ms: null,
+      avg_latency_ms: null,
+      avg_tps: null,
+    })
   })
 
   test('keeps a cached snapshot visible when a background refresh fails', () => {

@@ -129,6 +129,9 @@ func statusCacheInputs(models []StatusModelSource, groups []string) ([]StatusMod
 		cacheKeyData = strconv.AppendInt(cacheKeyData, int64(len(item.Vendor)), 10)
 		cacheKeyData = append(cacheKeyData, ':')
 		cacheKeyData = append(cacheKeyData, item.Vendor...)
+		cacheKeyData = strconv.AppendInt(cacheKeyData, int64(len(item.Icon)), 10)
+		cacheKeyData = append(cacheKeyData, ':')
+		cacheKeyData = append(cacheKeyData, item.Icon...)
 	}
 	cacheKeyData = append(cacheKeyData, 'g', ':')
 	for _, group := range canonicalGroups {
@@ -151,6 +154,10 @@ func cloneStatusResult(result StatusResult) StatusResult {
 			value := *item.SuccessRate
 			cloned.Models[i].SuccessRate = &value
 		}
+		if item.AvgTtftMs != nil {
+			value := *item.AvgTtftMs
+			cloned.Models[i].AvgTtftMs = &value
+		}
 		if item.AvgLatencyMs != nil {
 			value := *item.AvgLatencyMs
 			cloned.Models[i].AvgLatencyMs = &value
@@ -166,10 +173,23 @@ func cloneStatusResult(result StatusResult) StatusResult {
 		copy(cloned.Models[i].Timeline, item.Timeline)
 		for j, point := range item.Timeline {
 			if point.SuccessRate == nil {
-				continue
+				cloned.Models[i].Timeline[j].SuccessRate = nil
+			} else {
+				value := *point.SuccessRate
+				cloned.Models[i].Timeline[j].SuccessRate = &value
 			}
-			value := *point.SuccessRate
-			cloned.Models[i].Timeline[j].SuccessRate = &value
+			if point.AvgTtftMs != nil {
+				value := *point.AvgTtftMs
+				cloned.Models[i].Timeline[j].AvgTtftMs = &value
+			}
+			if point.AvgLatencyMs != nil {
+				value := *point.AvgLatencyMs
+				cloned.Models[i].Timeline[j].AvgLatencyMs = &value
+			}
+			if point.AvgTps != nil {
+				value := *point.AvgTps
+				cloned.Models[i].Timeline[j].AvgTps = &value
+			}
 		}
 	}
 	return cloned
@@ -243,6 +263,8 @@ func queryStatusAt(models []StatusModelSource, groups []string, now time.Time) (
 			requestCount:   row.RequestCount,
 			successCount:   row.SuccessCount,
 			totalLatencyMs: row.TotalLatencyMs,
+			ttftSumMs:      row.TtftSumMs,
+			ttftCount:      row.TtftCount,
 			outputTokens:   row.OutputTokens,
 			generationMs:   row.GenerationMs,
 		})
@@ -308,20 +330,38 @@ func queryStatusAt(models []StatusModelSource, groups []string, now time.Time) (
 			total.requestCount += value.requestCount
 			total.successCount += value.successCount
 			total.totalLatencyMs += value.totalLatencyMs
+			total.ttftSumMs += value.ttftSumMs
+			total.ttftCount += value.ttftCount
 			total.outputTokens += value.outputTokens
 			total.generationMs += value.generationMs
-			timeline = append(timeline, StatusPoint{
-				Ts:          hour,
-				Status:      classifyStatus(value),
-				SuccessRate: statusSuccessRate(value),
-			})
+			point := StatusPoint{
+				Ts:           hour,
+				Status:       classifyStatus(value),
+				RequestCount: value.requestCount,
+				SuccessCount: value.successCount,
+				SuccessRate:  statusSuccessRate(value),
+			}
+			if value.requestCount > 0 {
+				avgLatencyMs := avg(value.totalLatencyMs, value.requestCount)
+				avgThroughput := rounded(avgTps(value))
+				point.AvgLatencyMs = &avgLatencyMs
+				point.AvgTps = &avgThroughput
+			}
+			if value.ttftCount > 0 {
+				avgTtftMs := avg(value.ttftSumMs, value.ttftCount)
+				point.AvgTtftMs = &avgTtftMs
+			}
+			timeline = append(timeline, point)
 		}
 
 		modelStatus := ModelStatus{
-			ModelName: item.ModelName,
-			Vendor:    item.Vendor,
-			Status:    classifyStatus(total),
-			Timeline:  timeline,
+			ModelName:    item.ModelName,
+			Vendor:       item.Vendor,
+			Icon:         item.Icon,
+			RequestCount: total.requestCount,
+			SuccessCount: total.successCount,
+			Status:       classifyStatus(total),
+			Timeline:     timeline,
 		}
 		if total.requestCount > 0 {
 			successRate := rounded(statusSuccessRateValue(total))
@@ -330,6 +370,10 @@ func queryStatusAt(models []StatusModelSource, groups []string, now time.Time) (
 			modelStatus.SuccessRate = &successRate
 			modelStatus.AvgLatencyMs = &avgLatencyMs
 			modelStatus.AvgTps = &avgThroughput
+		}
+		if total.ttftCount > 0 {
+			avgTtftMs := avg(total.ttftSumMs, total.ttftCount)
+			modelStatus.AvgTtftMs = &avgTtftMs
 		}
 		result.Models = append(result.Models, modelStatus)
 	}

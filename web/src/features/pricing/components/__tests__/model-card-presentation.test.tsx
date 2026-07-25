@@ -72,8 +72,8 @@ describe('model card presentation', () => {
     expect(screen.queryByText('1M')).not.toBeInTheDocument()
   })
 
-  test('hides the provider, group, and empty description text while preserving card layout', () => {
-    const { container } = render(
+  test('hides empty description content and removes its large reserved height', () => {
+    const { container, rerender } = render(
       <ModelCard model={model} tokenUnit='M' onClick={() => undefined} />
     )
 
@@ -89,12 +89,25 @@ describe('model card presentation', () => {
     expect(
       screen.queryByText('No description available.')
     ).not.toBeInTheDocument()
-    expect(container.querySelector('p.text-muted-foreground')).toHaveClass(
-      'flex-1',
-      'sm:min-h-[2.5rem]'
-    )
+    const emptyDescription = container.querySelector('p.text-muted-foreground')
+    expect(emptyDescription).toHaveClass('flex-1', 'mt-2', 'sm:mt-3')
+    expect(emptyDescription).not.toHaveClass('sm:min-h-[2.5rem]')
     expect(
       screen.getByRole('heading', { name: 'claude-test' }).closest('.group')
     ).not.toHaveClass('self-start')
+
+    rerender(
+      <ModelCard
+        model={{ ...model, description: 'A concise model description.' }}
+        tokenUnit='M'
+        onClick={() => undefined}
+      />
+    )
+
+    expect(screen.getByText('A concise model description.')).toHaveClass(
+      'flex-1',
+      'sm:mt-4',
+      'sm:min-h-[2.5rem]'
+    )
   })
 })

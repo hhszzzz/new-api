@@ -78,7 +78,12 @@ export function normalizeStatusTimeline(
       pointsByHour.get(ts) ?? {
         ts,
         status: 'no_data',
+        request_count: 0,
+        success_count: 0,
         success_rate: null,
+        avg_ttft_ms: null,
+        avg_latency_ms: null,
+        avg_tps: null,
       }
     )
   })

@@ -134,6 +134,8 @@ func TestQueryStatusBuildsFixedHourlyTimelineAndClassifiesModels(t *testing.T) {
 			RequestCount:   2,
 			SuccessCount:   2,
 			TotalLatencyMs: 600,
+			TtftSumMs:      300,
+			TtftCount:      2,
 			OutputTokens:   40,
 			GenerationMs:   2000,
 		},
@@ -144,6 +146,8 @@ func TestQueryStatusBuildsFixedHourlyTimelineAndClassifiesModels(t *testing.T) {
 			RequestCount:   2,
 			SuccessCount:   1,
 			TotalLatencyMs: 1000,
+			TtftSumMs:      250,
+			TtftCount:      1,
 			OutputTokens:   40,
 			GenerationMs:   2000,
 		},
@@ -164,13 +168,13 @@ func TestQueryStatusBuildsFixedHourlyTimelineAndClassifiesModels(t *testing.T) {
 	}).Error)
 
 	hot := &atomicBucket{}
-	hot.add(Sample{Success: true, LatencyMs: 100, OutputTokens: 20, GenerationMs: 1000})
+	hot.add(Sample{Success: true, LatencyMs: 100, TtftMs: 80, HasTtft: true, OutputTokens: 20, GenerationMs: 1000})
 	hot.add(Sample{Success: true, LatencyMs: 300, OutputTokens: 20, GenerationMs: 1000})
 	hotBuckets.Store(bucketKey{model: "operational-model", group: "default", bucketTs: currentHour}, hot)
 
 	result, err := queryStatusAt([]StatusModelSource{
 		{ModelName: "no-data-model", Vendor: "No Data Vendor"},
-		{ModelName: "operational-model", Vendor: "Operational Vendor"},
+		{ModelName: "operational-model", Vendor: "Operational Vendor", Icon: "OpenAI.Color"},
 		{ModelName: "degraded-model", Vendor: "Degraded Vendor"},
 		{ModelName: "failed-model", Vendor: "Failed Vendor"},
 	}, []string{"default"}, now)
@@ -188,30 +192,53 @@ func TestQueryStatusBuildsFixedHourlyTimelineAndClassifiesModels(t *testing.T) {
 
 	failed := result.Models[0]
 	assert.Equal(t, StatusFailed, failed.Status)
+	assert.Equal(t, int64(2), failed.RequestCount)
+	assert.Zero(t, failed.SuccessCount)
 	require.NotNil(t, failed.SuccessRate)
 	assert.Equal(t, 0.0, *failed.SuccessRate)
+	assert.Nil(t, failed.AvgTtftMs)
 
 	degraded := result.Models[1]
 	assert.Equal(t, StatusDegraded, degraded.Status)
+	assert.Equal(t, int64(4), degraded.RequestCount)
+	assert.Equal(t, int64(3), degraded.SuccessCount)
 	require.NotNil(t, degraded.SuccessRate)
+	require.NotNil(t, degraded.AvgTtftMs)
 	require.NotNil(t, degraded.AvgLatencyMs)
 	require.NotNil(t, degraded.AvgTps)
 	assert.Equal(t, 75.0, *degraded.SuccessRate)
+	assert.Equal(t, int64(183), *degraded.AvgTtftMs)
 	assert.Equal(t, int64(400), *degraded.AvgLatencyMs)
 	assert.Equal(t, 20.0, *degraded.AvgTps)
 	assert.Equal(t, StatusDegraded, degraded.Timeline[21].Status)
+	assert.Equal(t, int64(4), degraded.Timeline[21].RequestCount)
+	assert.Equal(t, int64(3), degraded.Timeline[21].SuccessCount)
 	require.NotNil(t, degraded.Timeline[21].SuccessRate)
+	require.NotNil(t, degraded.Timeline[21].AvgTtftMs)
+	require.NotNil(t, degraded.Timeline[21].AvgLatencyMs)
+	require.NotNil(t, degraded.Timeline[21].AvgTps)
 	assert.Equal(t, 75.0, *degraded.Timeline[21].SuccessRate)
+	assert.Equal(t, int64(183), *degraded.Timeline[21].AvgTtftMs)
+	assert.Equal(t, int64(400), *degraded.Timeline[21].AvgLatencyMs)
+	assert.Equal(t, 20.0, *degraded.Timeline[21].AvgTps)
 
 	operational := result.Models[2]
 	assert.Equal(t, StatusOperational, operational.Status)
+	assert.Equal(t, "OpenAI.Color", operational.Icon)
+	assert.Equal(t, int64(2), operational.RequestCount)
+	assert.Equal(t, int64(2), operational.SuccessCount)
 	assert.Equal(t, StatusOperational, operational.Timeline[23].Status)
+	require.NotNil(t, operational.AvgTtftMs)
 	require.NotNil(t, operational.AvgLatencyMs)
+	assert.Equal(t, int64(80), *operational.AvgTtftMs)
 	assert.Equal(t, int64(200), *operational.AvgLatencyMs)
 
 	noData := result.Models[3]
 	assert.Equal(t, StatusNoData, noData.Status)
+	assert.Zero(t, noData.RequestCount)
+	assert.Zero(t, noData.SuccessCount)
 	assert.Nil(t, noData.SuccessRate)
+	assert.Nil(t, noData.AvgTtftMs)
 	assert.Nil(t, noData.AvgLatencyMs)
 	assert.Nil(t, noData.AvgTps)
 	require.Len(t, noData.Timeline, 24)
@@ -219,12 +246,19 @@ func TestQueryStatusBuildsFixedHourlyTimelineAndClassifiesModels(t *testing.T) {
 	assert.Equal(t, currentHour, noData.Timeline[23].Ts)
 	for _, point := range noData.Timeline {
 		assert.Equal(t, StatusNoData, point.Status)
+		assert.Zero(t, point.RequestCount)
+		assert.Zero(t, point.SuccessCount)
 		assert.Nil(t, point.SuccessRate)
+		assert.Nil(t, point.AvgTtftMs)
+		assert.Nil(t, point.AvgLatencyMs)
+		assert.Nil(t, point.AvgTps)
 	}
 
 	encoded, err := common.Marshal(result)
 	require.NoError(t, err)
-	assert.NotContains(t, string(encoded), "request_count")
+	assert.Contains(t, string(encoded), `"request_count"`)
+	assert.Contains(t, string(encoded), `"success_count"`)
+	assert.Contains(t, string(encoded), `"avg_ttft_ms"`)
 }
 
 func TestQueryStatusUsesPerInstanceRedisBucketsWithoutDoubleCountingLocalHourBucket(t *testing.T) {
@@ -243,13 +277,13 @@ func TestQueryStatusUsesPerInstanceRedisBucketsWithoutDoubleCountingLocalHourBuc
 		TotalLatencyMs: 1000,
 	}).Error)
 	local := &atomicBucket{}
-	local.add(Sample{Success: true, LatencyMs: 100, OutputTokens: 20, GenerationMs: 1000})
+	local.add(Sample{Success: true, LatencyMs: 100, TtftMs: 100, HasTtft: true, OutputTokens: 20, GenerationMs: 1000})
 	hotBuckets.Store(active, local)
 	setStatusRedisInstanceCounters(t, active, redisWriterID, map[string]interface{}{
-		"req": 1, "ok": 1, "lat": 100, "out": 20, "gen_ms": 1000,
+		"req": 1, "ok": 1, "lat": 100, "ttft": 100, "ttft_n": 1, "out": 20, "gen_ms": 1000,
 	})
 	setStatusRedisInstanceCounters(t, active, "remote-instance", map[string]interface{}{
-		"req": 1, "ok": 0, "lat": 400, "out": 20, "gen_ms": 1000,
+		"req": 1, "ok": 0, "lat": 400, "ttft": 300, "ttft_n": 1, "out": 20, "gen_ms": 1000,
 	})
 
 	result, err := queryStatusAt([]StatusModelSource{{ModelName: "shared-model"}}, []string{"default"}, now)
@@ -257,12 +291,25 @@ func TestQueryStatusUsesPerInstanceRedisBucketsWithoutDoubleCountingLocalHourBuc
 	require.Len(t, result.Models, 1)
 	status := result.Models[0]
 	assert.Equal(t, StatusDegraded, status.Status)
+	assert.Equal(t, int64(2), status.RequestCount)
+	assert.Equal(t, int64(1), status.SuccessCount)
 	require.NotNil(t, status.SuccessRate)
+	require.NotNil(t, status.AvgTtftMs)
 	require.NotNil(t, status.AvgLatencyMs)
 	require.NotNil(t, status.AvgTps)
 	assert.Equal(t, 50.0, *status.SuccessRate)
+	assert.Equal(t, int64(200), *status.AvgTtftMs)
 	assert.Equal(t, int64(250), *status.AvgLatencyMs)
 	assert.Equal(t, 20.0, *status.AvgTps)
+	currentPoint := status.Timeline[23]
+	assert.Equal(t, int64(2), currentPoint.RequestCount)
+	assert.Equal(t, int64(1), currentPoint.SuccessCount)
+	require.NotNil(t, currentPoint.AvgTtftMs)
+	require.NotNil(t, currentPoint.AvgLatencyMs)
+	require.NotNil(t, currentPoint.AvgTps)
+	assert.Equal(t, int64(200), *currentPoint.AvgTtftMs)
+	assert.Equal(t, int64(250), *currentPoint.AvgLatencyMs)
+	assert.Equal(t, 20.0, *currentPoint.AvgTps)
 }
 
 func TestQueryStatusIncludesCompletedRedisBucketsFromEveryUnflushedWriter(t *testing.T) {
@@ -625,29 +672,42 @@ func TestQueryStatusCacheReturnsDeepCopiesAndIsolatesVisibilityKeys(t *testing.T
 		}
 		successRate := 100.0
 		avgLatencyMs := int64(120)
+		avgTtftMs := int64(80)
 		avgTps := 30.0
 		pointSuccessRate := 100.0
+		pointAvgTtftMs := int64(75)
+		pointAvgLatencyMs := int64(110)
+		pointAvgTps := 28.0
 		return StatusResult{
 			GeneratedAt: generatedAt.Unix(),
 			WindowHours: statusWindowHours,
 			Models: []ModelStatus{{
 				ModelName:    models[0].ModelName,
 				Vendor:       models[0].Vendor,
+				Icon:         models[0].Icon,
+				RequestCount: 4,
+				SuccessCount: 4,
 				SuccessRate:  &successRate,
+				AvgTtftMs:    &avgTtftMs,
 				AvgLatencyMs: &avgLatencyMs,
 				AvgTps:       &avgTps,
 				Status:       status,
 				Timeline: []StatusPoint{{
-					Ts:          generatedAt.Unix(),
-					Status:      status,
-					SuccessRate: &pointSuccessRate,
+					Ts:           generatedAt.Unix(),
+					Status:       status,
+					RequestCount: 2,
+					SuccessCount: 2,
+					SuccessRate:  &pointSuccessRate,
+					AvgTtftMs:    &pointAvgTtftMs,
+					AvgLatencyMs: &pointAvgLatencyMs,
+					AvgTps:       &pointAvgTps,
 				}},
 			}},
 		}, nil
 	}
 
 	first, err := queryStatusCachedAt(
-		[]StatusModelSource{{ModelName: "visible-model", Vendor: "Vendor A"}},
+		[]StatusModelSource{{ModelName: "visible-model", Vendor: "Vendor A", Icon: "Icon A"}},
 		[]string{"default"},
 		now,
 		load,
@@ -655,15 +715,20 @@ func TestQueryStatusCacheReturnsDeepCopiesAndIsolatesVisibilityKeys(t *testing.T
 	require.NoError(t, err)
 	require.Len(t, first.Models, 1)
 	first.Models[0].Vendor = "mutated"
+	first.Models[0].Icon = "mutated"
 	*first.Models[0].SuccessRate = 1
+	*first.Models[0].AvgTtftMs = 999
 	*first.Models[0].AvgLatencyMs = 999
 	*first.Models[0].AvgTps = 1
 	first.Models[0].Timeline[0].Status = StatusFailed
 	*first.Models[0].Timeline[0].SuccessRate = 1
+	*first.Models[0].Timeline[0].AvgTtftMs = 999
+	*first.Models[0].Timeline[0].AvgLatencyMs = 999
+	*first.Models[0].Timeline[0].AvgTps = 1
 
 	second, err := queryStatusCachedAt(
 		[]StatusModelSource{
-			{ModelName: "visible-model", Vendor: "Vendor A"},
+			{ModelName: "visible-model", Vendor: "Vendor A", Icon: "Icon A"},
 			{ModelName: "visible-model", Vendor: "ignored duplicate"},
 		},
 		[]string{"default", "default"},
@@ -674,16 +739,25 @@ func TestQueryStatusCacheReturnsDeepCopiesAndIsolatesVisibilityKeys(t *testing.T
 	require.Len(t, second.Models, 1)
 	assert.Equal(t, int64(1), loadCount.Load())
 	assert.Equal(t, "Vendor A", second.Models[0].Vendor)
+	assert.Equal(t, "Icon A", second.Models[0].Icon)
 	require.NotNil(t, second.Models[0].SuccessRate)
+	require.NotNil(t, second.Models[0].AvgTtftMs)
 	require.NotNil(t, second.Models[0].AvgLatencyMs)
 	require.NotNil(t, second.Models[0].AvgTps)
 	assert.Equal(t, 100.0, *second.Models[0].SuccessRate)
+	assert.Equal(t, int64(80), *second.Models[0].AvgTtftMs)
 	assert.Equal(t, int64(120), *second.Models[0].AvgLatencyMs)
 	assert.Equal(t, 30.0, *second.Models[0].AvgTps)
 	require.Len(t, second.Models[0].Timeline, 1)
 	assert.Equal(t, StatusOperational, second.Models[0].Timeline[0].Status)
 	require.NotNil(t, second.Models[0].Timeline[0].SuccessRate)
+	require.NotNil(t, second.Models[0].Timeline[0].AvgTtftMs)
+	require.NotNil(t, second.Models[0].Timeline[0].AvgLatencyMs)
+	require.NotNil(t, second.Models[0].Timeline[0].AvgTps)
 	assert.Equal(t, 100.0, *second.Models[0].Timeline[0].SuccessRate)
+	assert.Equal(t, int64(75), *second.Models[0].Timeline[0].AvgTtftMs)
+	assert.Equal(t, int64(110), *second.Models[0].Timeline[0].AvgLatencyMs)
+	assert.Equal(t, 28.0, *second.Models[0].Timeline[0].AvgTps)
 
 	differentVendor, err := queryStatusCachedAt(
 		[]StatusModelSource{{ModelName: "visible-model", Vendor: "Vendor B"}},
@@ -695,34 +769,44 @@ func TestQueryStatusCacheReturnsDeepCopiesAndIsolatesVisibilityKeys(t *testing.T
 	assert.Equal(t, int64(2), loadCount.Load())
 	assert.Equal(t, "Vendor B", differentVendor.Models[0].Vendor)
 
-	differentGroup, err := queryStatusCachedAt(
-		[]StatusModelSource{{ModelName: "visible-model", Vendor: "Vendor B"}},
-		[]string{"vip"},
+	differentIcon, err := queryStatusCachedAt(
+		[]StatusModelSource{{ModelName: "visible-model", Vendor: "Vendor B", Icon: "Icon B"}},
+		[]string{"default"},
 		now.Add(3*time.Second),
 		load,
 	)
 	require.NoError(t, err)
 	assert.Equal(t, int64(3), loadCount.Load())
-	assert.Equal(t, StatusFailed, differentGroup.Models[0].Status)
+	assert.Equal(t, "Icon B", differentIcon.Models[0].Icon)
 
-	differentVisibleModel, err := queryStatusCachedAt(
-		[]StatusModelSource{{ModelName: "other-visible-model", Vendor: "Vendor A"}},
-		[]string{"default"},
+	differentGroup, err := queryStatusCachedAt(
+		[]StatusModelSource{{ModelName: "visible-model", Vendor: "Vendor B", Icon: "Icon B"}},
+		[]string{"vip"},
 		now.Add(4*time.Second),
 		load,
 	)
 	require.NoError(t, err)
 	assert.Equal(t, int64(4), loadCount.Load())
+	assert.Equal(t, StatusFailed, differentGroup.Models[0].Status)
+
+	differentVisibleModel, err := queryStatusCachedAt(
+		[]StatusModelSource{{ModelName: "other-visible-model", Vendor: "Vendor A"}},
+		[]string{"default"},
+		now.Add(5*time.Second),
+		load,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, int64(5), loadCount.Load())
 	assert.Equal(t, "other-visible-model", differentVisibleModel.Models[0].ModelName)
 
 	_, err = queryStatusCachedAt(
-		[]StatusModelSource{{ModelName: "visible-model", Vendor: "Vendor A"}},
+		[]StatusModelSource{{ModelName: "visible-model", Vendor: "Vendor A", Icon: "Icon A"}},
 		[]string{"default"},
 		now.Add(statusCacheTTL),
 		load,
 	)
 	require.NoError(t, err)
-	assert.Equal(t, int64(5), loadCount.Load())
+	assert.Equal(t, int64(6), loadCount.Load())
 }
 
 func TestQueryStatusCacheDeduplicatesConcurrentLoads(t *testing.T) {

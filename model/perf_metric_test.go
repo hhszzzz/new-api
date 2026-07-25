@@ -222,10 +222,10 @@ func TestGetPerfMetricsHourlySummaryBucketsForModelsAggregatesSQLiteBuckets(t *t
 	firstHour := time.Date(2026, time.July, 22, 10, 0, 0, 0, time.UTC).Unix()
 	excludedBucket := firstHour + 3600 + 300
 	require.NoError(t, db.Create(&[]PerfMetric{
-		{ModelName: "visible-model", Group: "default", BucketTs: firstHour + 60, RequestCount: 2, SuccessCount: 2, TotalLatencyMs: 200, OutputTokens: 20, GenerationMs: 1000},
-		{ModelName: "visible-model", Group: "auto", BucketTs: firstHour + 300, RequestCount: 3, SuccessCount: 1, TotalLatencyMs: 900, OutputTokens: 60, GenerationMs: 3000},
+		{ModelName: "visible-model", Group: "default", BucketTs: firstHour + 60, RequestCount: 2, SuccessCount: 2, TotalLatencyMs: 200, TtftSumMs: 240, TtftCount: 2, OutputTokens: 20, GenerationMs: 1000},
+		{ModelName: "visible-model", Group: "auto", BucketTs: firstHour + 300, RequestCount: 3, SuccessCount: 1, TotalLatencyMs: 900, TtftSumMs: 300, TtftCount: 1, OutputTokens: 60, GenerationMs: 3000},
 		{ModelName: "visible-model", Group: "retired", BucketTs: firstHour + 600, RequestCount: 50, SuccessCount: 0},
-		{ModelName: "visible-model", Group: "default", BucketTs: firstHour + 3600 + 60, RequestCount: 1, SuccessCount: 1, TotalLatencyMs: 400},
+		{ModelName: "visible-model", Group: "default", BucketTs: firstHour + 3600 + 60, RequestCount: 1, SuccessCount: 1, TotalLatencyMs: 400, TtftSumMs: 180, TtftCount: 1},
 		{ModelName: "visible-model", Group: "default", BucketTs: excludedBucket, RequestCount: 20, SuccessCount: 0},
 		{ModelName: "hidden-model", Group: "default", BucketTs: firstHour + 120, RequestCount: 40, SuccessCount: 0},
 		{ModelName: "visible-model", Group: "default", BucketTs: firstHour - 60, RequestCount: 30, SuccessCount: 0},
@@ -246,6 +246,8 @@ func TestGetPerfMetricsHourlySummaryBucketsForModelsAggregatesSQLiteBuckets(t *t
 	assert.Equal(t, int64(5), rows[0].RequestCount)
 	assert.Equal(t, int64(3), rows[0].SuccessCount)
 	assert.Equal(t, int64(1100), rows[0].TotalLatencyMs)
+	assert.Equal(t, int64(540), rows[0].TtftSumMs)
+	assert.Equal(t, int64(3), rows[0].TtftCount)
 	assert.Equal(t, int64(80), rows[0].OutputTokens)
 	assert.Equal(t, int64(4000), rows[0].GenerationMs)
 
@@ -253,6 +255,8 @@ func TestGetPerfMetricsHourlySummaryBucketsForModelsAggregatesSQLiteBuckets(t *t
 	assert.Equal(t, int64(1), rows[1].RequestCount)
 	assert.Equal(t, int64(1), rows[1].SuccessCount)
 	assert.Equal(t, int64(400), rows[1].TotalLatencyMs)
+	assert.Equal(t, int64(180), rows[1].TtftSumMs)
+	assert.Equal(t, int64(1), rows[1].TtftCount)
 
 	emptyGroups, err := GetPerfMetricsHourlySummaryBucketsForModels(firstHour, firstHour+3600, 0, []string{}, []string{"visible-model"})
 	require.NoError(t, err)
@@ -390,6 +394,8 @@ func TestGetPerfMetricsHourlySummaryBucketsForModelsBuildsCompatibleDialectSQL(t
 			assert.Contains(t, sql, test.wantGroupColumn)
 			assert.Contains(t, sql, "model_name IN")
 			assert.Contains(t, sql, "bucket_ts <> 150")
+			assert.Contains(t, sql, "SUM(ttft_sum_ms) as ttft_sum_ms")
+			assert.Contains(t, sql, "SUM(ttft_count) as ttft_count")
 		})
 	}
 }

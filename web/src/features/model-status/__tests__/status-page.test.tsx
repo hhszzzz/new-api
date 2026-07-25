@@ -48,6 +48,10 @@ vi.mock('@/components/page-transition', () => ({
   PageTransition: (props: { children: ReactNode }) => props.children,
 }))
 
+vi.mock('@/lib/lobe-icon', () => ({
+  getLobeIcon: () => <span data-testid='model-icon' />,
+}))
+
 const mockedGetModelStatus = vi.mocked(getModelStatus)
 const GENERATED_AT = 1_800_000_000
 
@@ -55,7 +59,11 @@ function createModel(modelName: string): ModelStatusModel {
   return {
     model_name: modelName,
     vendor: 'OpenAI',
+    icon: 'OpenAI.Color',
+    request_count: 200,
+    success_count: 199,
     success_rate: 99.5,
+    avg_ttft_ms: 180,
     avg_latency_ms: 420,
     avg_tps: 31.2,
     status: 'operational',
@@ -210,7 +218,9 @@ describe('model status page request states', () => {
     })
 
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Refresh' })).toBeDisabled()
+      expect(
+        screen.getByRole('button', { name: /Refresh \([1-5]s\)/ })
+      ).toBeDisabled()
     )
     expect(screen.getByRole('article', { name: 'cached-model' })).toBeVisible()
     expect(
@@ -218,7 +228,7 @@ describe('model status page request states', () => {
     ).not.toBeInTheDocument()
   })
 
-  test('keeps Refresh disabled for five seconds after a manual refresh', async () => {
+  test('shows a five-second countdown while manual refresh is cooling down', async () => {
     const refreshRequest = createDeferred<ModelStatusResponse>()
     const response = createResponse([createModel('refresh-model')])
     mockedGetModelStatus
@@ -246,10 +256,18 @@ describe('model status page request states', () => {
         await Promise.resolve()
       })
 
-      expect(screen.getByRole('button', { name: 'Refresh' })).toBeDisabled()
-      act(() => vi.advanceTimersByTime(4999))
-      expect(screen.getByRole('button', { name: 'Refresh' })).toBeDisabled()
-      act(() => vi.advanceTimersByTime(1))
+      expect(
+        screen.getByRole('button', { name: 'Refresh (5s)' })
+      ).toBeDisabled()
+      act(() => vi.advanceTimersByTime(1000))
+      expect(
+        screen.getByRole('button', { name: 'Refresh (4s)' })
+      ).toBeDisabled()
+      act(() => vi.advanceTimersByTime(3000))
+      expect(
+        screen.getByRole('button', { name: 'Refresh (1s)' })
+      ).toBeDisabled()
+      act(() => vi.advanceTimersByTime(1000))
       expect(screen.getByRole('button', { name: 'Refresh' })).toBeEnabled()
     } finally {
       vi.useRealTimers()

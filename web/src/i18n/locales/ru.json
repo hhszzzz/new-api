@@ -4503,6 +4503,7 @@
     "succeeded": "успешно",
     "Success": "Успешно",
     "Success rate": "Доля успешных запросов",
+    "Successful requests": "Успешные запросы",
     "Successfully created {{count}} API Key(s)": "Успешно создано {{count}} API-ключ(а/ей)",
     "Successfully created {{count}} redemption codes": "Успешно создано {{count}} кодов активации",
     "Successfully deleted {{count}} API key(s)": "Успешно удалено {{count}} API-ключ(а/ей)",

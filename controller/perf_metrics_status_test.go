@@ -35,7 +35,7 @@ func TestGetPerfMetricsStatusReturnsOnlyVisibleEnabledModels(t *testing.T) {
 
 	db := setupModelListControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.PerfMetric{}, &model.PerfMetricInstance{}))
-	vendor := model.Vendor{Name: "Visible Vendor", Status: 1}
+	vendor := model.Vendor{Name: "Visible Vendor", Icon: "Anthropic.Color", Status: 1}
 	require.NoError(t, db.Create(&vendor).Error)
 	require.NoError(t, db.Create(&model.Channel{Id: 801, Type: constant.ChannelTypeOpenAI, Name: "status-channel", Status: common.ChannelStatusEnabled}).Error)
 	require.NoError(t, db.Create(&[]model.Ability{
@@ -45,7 +45,7 @@ func TestGetPerfMetricsStatusReturnsOnlyVisibleEnabledModels(t *testing.T) {
 		{Group: "default", Model: "disabled-status-model", ChannelId: 801, Enabled: true},
 	}).Error)
 	for _, item := range []*model.Model{
-		{ModelName: "visible-status-model", VendorID: vendor.Id, Status: 1, SyncOfficial: 1},
+		{ModelName: "visible-status-model", Icon: "Claude.Color", VendorID: vendor.Id, Status: 1, SyncOfficial: 1},
 		{ModelName: "visible-no-data-model", VendorID: vendor.Id, Status: 1, SyncOfficial: 1},
 		{ModelName: "hidden-group-model", VendorID: vendor.Id, Status: 1, SyncOfficial: 1},
 		{ModelName: "disabled-status-model", VendorID: vendor.Id, Status: 0, SyncOfficial: 1},
@@ -55,7 +55,7 @@ func TestGetPerfMetricsStatusReturnsOnlyVisibleEnabledModels(t *testing.T) {
 
 	completedHour := time.Now().Add(-time.Hour).Truncate(time.Hour).Unix()
 	require.NoError(t, db.Create(&[]model.PerfMetric{
-		{ModelName: "visible-status-model", Group: "default", BucketTs: completedHour, RequestCount: 2, SuccessCount: 1, TotalLatencyMs: 600},
+		{ModelName: "visible-status-model", Group: "default", BucketTs: completedHour, RequestCount: 2, SuccessCount: 1, TotalLatencyMs: 600, TtftSumMs: 300, TtftCount: 1, OutputTokens: 30, GenerationMs: 1000},
 		{ModelName: "visible-status-model", Group: "vip", BucketTs: completedHour, RequestCount: 1, SuccessCount: 0},
 		{ModelName: "visible-status-model", Group: "retired", BucketTs: completedHour, RequestCount: 1, SuccessCount: 0},
 		{ModelName: "hidden-group-model", Group: "vip", BucketTs: completedHour, RequestCount: 1, SuccessCount: 0},
@@ -76,11 +76,40 @@ func TestGetPerfMetricsStatusReturnsOnlyVisibleEnabledModels(t *testing.T) {
 	require.Len(t, payload.Data.Models, 2)
 	assert.Equal(t, "visible-status-model", payload.Data.Models[0].ModelName)
 	assert.Equal(t, perfmetrics.StatusDegraded, payload.Data.Models[0].Status)
+	assert.Equal(t, "Claude.Color", payload.Data.Models[0].Icon)
+	assert.Equal(t, int64(2), payload.Data.Models[0].RequestCount)
+	assert.Equal(t, int64(1), payload.Data.Models[0].SuccessCount)
 	require.NotNil(t, payload.Data.Models[0].SuccessRate)
+	require.NotNil(t, payload.Data.Models[0].AvgTtftMs)
+	require.NotNil(t, payload.Data.Models[0].AvgLatencyMs)
+	require.NotNil(t, payload.Data.Models[0].AvgTps)
 	assert.Equal(t, 50.0, *payload.Data.Models[0].SuccessRate)
+	assert.Equal(t, int64(300), *payload.Data.Models[0].AvgTtftMs)
+	assert.Equal(t, int64(300), *payload.Data.Models[0].AvgLatencyMs)
+	assert.Equal(t, 30.0, *payload.Data.Models[0].AvgTps)
 	assert.Equal(t, "Visible Vendor", payload.Data.Models[0].Vendor)
+	metricPointIndex := -1
+	for index, point := range payload.Data.Models[0].Timeline {
+		if point.Ts == completedHour {
+			metricPointIndex = index
+			break
+		}
+	}
+	require.NotEqual(t, -1, metricPointIndex)
+	metricPoint := payload.Data.Models[0].Timeline[metricPointIndex]
+	assert.Equal(t, int64(2), metricPoint.RequestCount)
+	assert.Equal(t, int64(1), metricPoint.SuccessCount)
+	require.NotNil(t, metricPoint.AvgTtftMs)
+	require.NotNil(t, metricPoint.AvgLatencyMs)
+	require.NotNil(t, metricPoint.AvgTps)
+	assert.Equal(t, int64(300), *metricPoint.AvgTtftMs)
+	assert.Equal(t, int64(300), *metricPoint.AvgLatencyMs)
+	assert.Equal(t, 30.0, *metricPoint.AvgTps)
 	assert.Equal(t, "visible-no-data-model", payload.Data.Models[1].ModelName)
 	assert.Equal(t, perfmetrics.StatusNoData, payload.Data.Models[1].Status)
+	assert.Equal(t, "Anthropic.Color", payload.Data.Models[1].Icon)
+	assert.Zero(t, payload.Data.Models[1].RequestCount)
+	assert.Zero(t, payload.Data.Models[1].SuccessCount)
 }
 
 func TestGetPerfMetricsStatusReturnsEmptyWhenNoModelsAreVisible(t *testing.T) {

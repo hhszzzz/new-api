@@ -3,6 +3,7 @@ package controller
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
@@ -127,16 +128,22 @@ func GetPerfMetrics(c *gin.Context) {
 
 func GetPerfMetricsStatus(c *gin.Context) {
 	pricing, usableGroups, _, _ := getVisiblePricing(c)
-	vendorNames := make(map[int]string)
+	vendors := make(map[int]model.PricingVendor)
 	for _, vendor := range model.GetVendors() {
-		vendorNames[vendor.ID] = vendor.Name
+		vendors[vendor.ID] = vendor
 	}
 
 	models := make([]perfmetrics.StatusModelSource, 0, len(pricing))
 	for _, item := range pricing {
+		vendor := vendors[item.VendorID]
+		icon := item.Icon
+		if strings.TrimSpace(icon) == "" {
+			icon = vendor.Icon
+		}
 		models = append(models, perfmetrics.StatusModelSource{
 			ModelName: item.ModelName,
-			Vendor:    vendorNames[item.VendorID],
+			Vendor:    vendor.Name,
+			Icon:      icon,
 		})
 	}
 

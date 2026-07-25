@@ -72,18 +72,28 @@ const (
 type StatusModelSource struct {
 	ModelName string
 	Vendor    string
+	Icon      string
 }
 
 type StatusPoint struct {
-	Ts          int64    `json:"ts"`
-	Status      Status   `json:"status"`
-	SuccessRate *float64 `json:"success_rate"`
+	Ts           int64    `json:"ts"`
+	Status       Status   `json:"status"`
+	RequestCount int64    `json:"request_count"`
+	SuccessCount int64    `json:"success_count"`
+	SuccessRate  *float64 `json:"success_rate"`
+	AvgTtftMs    *int64   `json:"avg_ttft_ms"`
+	AvgLatencyMs *int64   `json:"avg_latency_ms"`
+	AvgTps       *float64 `json:"avg_tps"`
 }
 
 type ModelStatus struct {
 	ModelName    string        `json:"model_name"`
 	Vendor       string        `json:"vendor"`
+	Icon         string        `json:"icon"`
+	RequestCount int64         `json:"request_count"`
+	SuccessCount int64         `json:"success_count"`
 	SuccessRate  *float64      `json:"success_rate"`
+	AvgTtftMs    *int64        `json:"avg_ttft_ms"`
 	AvgLatencyMs *int64        `json:"avg_latency_ms"`
 	AvgTps       *float64      `json:"avg_tps"`
 	Status       Status        `json:"status"`

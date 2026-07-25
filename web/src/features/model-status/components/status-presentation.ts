@@ -21,7 +21,6 @@ import type { TFunction } from 'i18next'
 import type { ModelHealthStatus } from '../types'
 
 type StatusPresentation = {
-  dotClassName: string
   barClassName: string
 }
 
@@ -30,19 +29,15 @@ export const STATUS_PRESENTATION: Record<
   StatusPresentation
 > = {
   operational: {
-    dotClassName: 'bg-success',
     barClassName: 'bg-success',
   },
   degraded: {
-    dotClassName: 'bg-warning',
     barClassName: 'bg-warning',
   },
   failed: {
-    dotClassName: 'bg-destructive',
     barClassName: 'bg-destructive',
   },
   no_data: {
-    dotClassName: 'bg-muted-foreground/45',
     barClassName: 'bg-muted ring-1 ring-inset ring-border/70',
   },
 }

@@ -49,6 +49,10 @@ vi.mock('@/components/page-transition', () => ({
   PageTransition: (props: { children: ReactNode }) => props.children,
 }))
 
+vi.mock('@/lib/lobe-icon', () => ({
+  getLobeIcon: () => <span data-testid='model-icon' />,
+}))
+
 const mockedGetModelStatus = vi.mocked(getModelStatus)
 const GENERATED_AT = 1_800_000_000
 const scrollIntoView = vi.fn()
@@ -57,7 +61,11 @@ function createModels(count: number): ModelStatusModel[] {
   return Array.from({ length: count }, (_, index) => ({
     model_name: `model-${String(index + 1).padStart(2, '0')}`,
     vendor: 'Test Vendor',
+    icon: 'OpenAI.Color',
+    request_count: 10,
+    success_count: 10,
     success_rate: 100,
+    avg_ttft_ms: 100,
     avg_latency_ms: 200,
     avg_tps: 20,
     status: 'operational',
