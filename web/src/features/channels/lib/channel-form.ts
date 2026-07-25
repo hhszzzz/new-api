@@ -212,6 +212,10 @@ export const channelFormSchema = z
       .refine(isOptionalJsonObject, ERROR_MESSAGES.INVALID_JSON),
     advanced_custom: z.string().optional(),
     other: z.string().optional(),
+    aggregate_id: z.number().int().positive().nullable().optional(),
+    inherit_aggregate_base_url: z.boolean().optional(),
+    client_policy_mode: z.enum(['unrestricted', 'allow', 'deny']).optional(),
+    client_policy_clients: z.string().optional(),
     // Multi-key options (not sent to backend directly)
     multi_key_mode: z.enum(['single', 'batch', 'multi_to_single']).optional(),
     multi_key_type: z.enum(['random', 'polling']).optional(),
@@ -366,6 +370,10 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   header_override: '',
   settings: '{}',
   other: '',
+  aggregate_id: null,
+  inherit_aggregate_base_url: false,
+  client_policy_mode: 'unrestricted',
+  client_policy_clients: '',
   multi_key_mode: 'single',
   multi_key_type: 'random',
   batch_add_set_key_prefix_2_name: false,
@@ -451,6 +459,8 @@ export function transformChannelToFormDefaults(
   let upstreamModelUpdateAutoSyncEnabled = false
   let upstreamModelUpdateIgnoredModels = ''
   let advancedCustom = ''
+  let clientPolicyMode: 'unrestricted' | 'allow' | 'deny' = 'unrestricted'
+  let clientPolicyClients = ''
 
   if (channel.settings) {
     try {
@@ -478,6 +488,15 @@ export function transformChannelToFormDefaults(
         : ''
       if (parsed.advanced_custom) {
         advancedCustom = stringifyAdvancedCustomConfig(parsed.advanced_custom)
+      }
+      if (
+        parsed.client_policy?.mode === 'allow' ||
+        parsed.client_policy?.mode === 'deny'
+      ) {
+        clientPolicyMode = parsed.client_policy.mode
+      }
+      if (Array.isArray(parsed.client_policy?.clients)) {
+        clientPolicyClients = parsed.client_policy.clients.join(', ')
       }
     } catch (error) {
       // eslint-disable-next-line no-console
@@ -507,6 +526,8 @@ export function transformChannelToFormDefaults(
     header_override: channel.header_override || '',
     settings: channel.settings || '{}',
     other: channel.other || '',
+    aggregate_id: channel.aggregate_id ?? null,
+    inherit_aggregate_base_url: channel.inherit_aggregate_base_url === true,
     multi_key_mode: 'single',
     multi_key_type: channel.channel_info.multi_key_mode || 'random',
     batch_add_set_key_prefix_2_name: false,
@@ -530,6 +551,8 @@ export function transformChannelToFormDefaults(
     upstream_model_update_auto_sync_enabled: upstreamModelUpdateAutoSyncEnabled,
     upstream_model_update_ignored_models: upstreamModelUpdateIgnoredModels,
     advanced_custom: advancedCustom,
+    client_policy_mode: clientPolicyMode,
+    client_policy_clients: clientPolicyClients,
   }
 }
 
@@ -677,6 +700,25 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
     delete settingsObj.advanced_custom
   }
 
+  if (
+    formData.client_policy_mode === 'allow' ||
+    formData.client_policy_mode === 'deny'
+  ) {
+    settingsObj.client_policy = {
+      mode: formData.client_policy_mode,
+      clients: [
+        ...new Set(
+          String(formData.client_policy_clients || '')
+            .split(',')
+            .map((client) => client.trim().toLowerCase())
+            .filter(Boolean)
+        ),
+      ],
+    }
+  } else if ('client_policy' in settingsObj) {
+    delete settingsObj.client_policy
+  }
+
   return JSON.stringify(settingsObj)
 }
 
@@ -719,6 +761,8 @@ export function transformFormDataToCreatePayload(formData: ChannelFormValues): {
     header_override: formData.header_override || null,
     settings: buildSettingsJSON(formData),
     other: formData.other || '',
+    aggregate_id: formData.aggregate_id ?? null,
+    inherit_aggregate_base_url: formData.inherit_aggregate_base_url === true,
   }
 
   // Clean up empty strings to null for optional fields
@@ -766,6 +810,8 @@ export function transformFormDataToUpdatePayload(
     header_override: formData.header_override || null,
     settings: buildSettingsJSON(formData),
     other: formData.other || '',
+    aggregate_id: formData.aggregate_id ?? null,
+    inherit_aggregate_base_url: formData.inherit_aggregate_base_url === true,
   }
 
   // Only include key if it was changed (not empty)

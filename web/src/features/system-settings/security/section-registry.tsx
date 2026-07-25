@@ -1,3 +1,4 @@
+import { ClientPolicySettingsSection } from '../operations/client-policy-settings-section'
 /*
 Copyright (C) 2023-2026 QuantumNous
 
@@ -86,6 +87,20 @@ const SECURITY_SECTIONS = [
         defaultValues={{
           'token_setting.max_user_tokens':
             settings['token_setting.max_user_tokens'],
+        }}
+      />
+    ),
+  },
+  {
+    id: 'client-policy',
+    titleKey: 'Client Policies',
+    build: (settings: SecuritySettings) => (
+      <ClientPolicySettingsSection
+        defaultValues={{
+          'client_policy_setting.rules':
+            settings['client_policy_setting.rules'] ?? '[]',
+          'client_policy_setting.group_policies':
+            settings['client_policy_setting.group_policies'] ?? '{}',
         }}
       />
     ),

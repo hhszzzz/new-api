@@ -379,6 +379,8 @@ export type SecuritySettings = {
   'fetch_setting.allowed_ports': number[]
   'fetch_setting.apply_ip_filter_for_domain': boolean
   'token_setting.max_user_tokens': number
+  'client_policy_setting.rules': string
+  'client_policy_setting.group_policies': string
 }
 
 export type UpstreamChannel = {

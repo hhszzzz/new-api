@@ -55,6 +55,7 @@ import { type SubmitErrorHandler, useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
+import { ClientMultiSelect } from '@/components/client-multi-select'
 import {
   sideDrawerContentClassName,
   sideDrawerFooterClassName,
@@ -121,6 +122,7 @@ import {
   parseChannelConnectionInfo,
   type ChannelConnectionInfo,
 } from '@/lib/channel-connection-info'
+import { CLIENT_POLICY_MODE_LABEL_KEYS } from '@/lib/client-policy'
 import { getLobeIcon } from '@/lib/lobe-icon'
 import { ROLE } from '@/lib/roles'
 import { cn } from '@/lib/utils'
@@ -130,6 +132,7 @@ import {
   fetchModels,
   getAllModels,
   getChannel,
+  getChannelAggregates,
   getChannelKey,
   getGroups,
   getPrefillGroups,
@@ -155,6 +158,7 @@ import {
   transformChannelToFormDefaults,
   type ChannelFormValues,
   deduplicateKeys,
+  getChannelAggregateById,
   getChannelTypeIcon,
   getKeyPromptForType,
   parseModelsString,
@@ -297,6 +301,10 @@ const SENSITIVE_FORM_FIELDS = [
   'upstream_model_update_check_enabled',
   'upstream_model_update_auto_sync_enabled',
   'upstream_model_update_ignored_models',
+  'aggregate_id',
+  'inherit_aggregate_base_url',
+  'client_policy_mode',
+  'client_policy_clients',
 ] satisfies (keyof ChannelFormValues)[]
 
 function readAdvancedSettingsPreference(): boolean {
@@ -664,6 +672,12 @@ export function ChannelMutateDrawer({
     queryFn: getGroups,
   })
 
+  const { data: aggregatesData } = useQuery({
+    queryKey: ['channel-aggregates'],
+    queryFn: getChannelAggregates,
+    enabled: open,
+  })
+
   // Fetch all available models
   const { data: allModelsData } = useQuery({
     queryKey: ['channel_models'],
@@ -720,6 +734,14 @@ export function ChannelMutateDrawer({
   const currentOther = form.watch('other')
   const currentModels = form.watch('models')
   const currentName = form.watch('name')
+  const currentAggregateId = form.watch('aggregate_id')
+  const currentAggregate = getChannelAggregateById(
+    aggregatesData?.data ?? [],
+    currentAggregateId
+  )
+  const currentInheritAggregateBaseURL = form.watch(
+    'inherit_aggregate_base_url'
+  )
   const currentModelMapping = form.watch('model_mapping')
   const awsKeyType = form.watch('aws_key_type')
   const vertexKeyType = form.watch('vertex_key_type')
@@ -730,6 +752,8 @@ export function ChannelMutateDrawer({
   const currentAdvancedCustom = form.watch('advanced_custom')
   const currentPriority = form.watch('priority')
   const currentWeight = form.watch('weight')
+  const currentClientPolicyMode = form.watch('client_policy_mode')
+  const currentClientPolicyClients = form.watch('client_policy_clients')
   const currentTestModel = form.watch('test_model')
   const currentAutoBan = form.watch('auto_ban')
   const currentTag = form.watch('tag')
@@ -911,6 +935,14 @@ export function ChannelMutateDrawer({
     () => parseModelsString(currentModels),
     [currentModels]
   )
+  const currentClientPolicyClientList = useMemo(
+    () =>
+      String(currentClientPolicyClients || '')
+        .split(',')
+        .map((client) => client.trim().toLowerCase())
+        .filter(Boolean),
+    [currentClientPolicyClients]
+  )
 
   const currentTypeLabel = useMemo(
     () =>
@@ -996,7 +1028,9 @@ export function ChannelMutateDrawer({
     currentPriority ||
     currentWeight ||
     currentTestModel?.trim() ||
-    (currentAutoBan ?? 1) !== 1
+    (currentAutoBan ?? 1) !== 1 ||
+    currentClientPolicyMode !== 'unrestricted' ||
+    currentClientPolicyClients?.trim()
   )
   const internalNotesConfigured = Boolean(
     currentTag?.trim() || currentRemark?.trim()
@@ -1276,6 +1310,16 @@ export function ChannelMutateDrawer({
       }
     }
   }, [currentType, isEditing, form])
+
+  useEffect(() => {
+    if (!currentAggregate || !currentInheritAggregateBaseURL) return
+    if (currentAggregate.base_url) {
+      form.setValue('base_url', currentAggregate.base_url, {
+        shouldDirty: false,
+        shouldValidate: true,
+      })
+    }
+  }, [currentAggregate, currentInheritAggregateBaseURL, form])
 
   useEffect(() => {
     if (currentType !== 45 || currentBaseUrl !== 'doubao-coding-plan') return
@@ -2057,6 +2101,119 @@ export function ChannelMutateDrawer({
                             )}
                           />
                         )}
+
+                        <div className='border-border/60 bg-muted/10 space-y-3 rounded-lg border p-3 sm:col-span-2'>
+                          <div>
+                            <FormLabel>{t('Channel aggregate')}</FormLabel>
+                            <FormDescription>
+                              {t(
+                                'Optional parent for a shared endpoint. Keys, models, health, and routing remain on this child channel.'
+                              )}
+                            </FormDescription>
+                          </div>
+                          <div className='grid gap-3 sm:grid-cols-2'>
+                            <FormField
+                              control={form.control}
+                              name='aggregate_id'
+                              render={({ field }) => (
+                                <FormItem>
+                                  <FormLabel>{t('Parent aggregate')}</FormLabel>
+                                  <FormControl>
+                                    <Select
+                                      value={
+                                        field.value
+                                          ? String(field.value)
+                                          : 'none'
+                                      }
+                                      onValueChange={(value) =>
+                                        (() => {
+                                          const nextId =
+                                            value === 'none'
+                                              ? null
+                                              : Number(value)
+                                          field.onChange(nextId)
+                                          if (!nextId) {
+                                            form.setValue(
+                                              'inherit_aggregate_base_url',
+                                              false
+                                            )
+                                          }
+                                        })()
+                                      }
+                                      disabled={sensitiveLocked}
+                                    >
+                                      <SelectTrigger>
+                                        <SelectValue
+                                          placeholder={t('No aggregate')}
+                                        >
+                                          {currentAggregate?.name ??
+                                            t('No aggregate')}
+                                        </SelectValue>
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        <SelectItem value='none'>
+                                          {t('No aggregate')}
+                                        </SelectItem>
+                                        {(aggregatesData?.data ?? []).map(
+                                          (aggregate) => (
+                                            <SelectItem
+                                              key={aggregate.id}
+                                              value={String(aggregate.id)}
+                                            >
+                                              {aggregate.name} (
+                                              {t('{{count}} child channels', {
+                                                count: aggregate.child_count,
+                                              })}
+                                              )
+                                            </SelectItem>
+                                          )
+                                        )}
+                                      </SelectContent>
+                                    </Select>
+                                  </FormControl>
+                                  <FormMessage />
+                                </FormItem>
+                              )}
+                            />
+                            <FormField
+                              control={form.control}
+                              name='inherit_aggregate_base_url'
+                              render={({ field }) => (
+                                <FormItem
+                                  className={sideDrawerSwitchItemClassName()}
+                                >
+                                  <div>
+                                    <FormLabel>
+                                      {t('Inherit aggregate base URL')}
+                                    </FormLabel>
+                                    <FormDescription className='text-xs'>
+                                      {t(
+                                        'Use the parent URL for this child. Disable to keep a channel-specific endpoint.'
+                                      )}
+                                    </FormDescription>
+                                  </div>
+                                  <FormControl>
+                                    <Switch
+                                      checked={field.value === true}
+                                      onCheckedChange={field.onChange}
+                                      disabled={
+                                        sensitiveLocked || !currentAggregateId
+                                      }
+                                    />
+                                  </FormControl>
+                                </FormItem>
+                              )}
+                            />
+                          </div>
+                          {currentAggregateId &&
+                            currentInheritAggregateBaseURL && (
+                              <div className='text-muted-foreground text-xs'>
+                                {t(
+                                  'The shared URL will be used at runtime; deleting the parent safely copies it to this child.'
+                                )}
+                              </div>
+                            )}
+                        </div>
 
                         {currentType === 1 && (
                           <fieldset
@@ -3722,6 +3879,89 @@ export function ChannelMutateDrawer({
                                 </FormItem>
                               )}
                             />
+
+                            <div className='border-border/60 bg-muted/10 space-y-3 rounded-lg border p-3 sm:col-span-2'>
+                              <div>
+                                <FormLabel>
+                                  {t('Client access policy')}
+                                </FormLabel>
+                                <FormDescription>
+                                  {t(
+                                    'Filter this channel by detected client. Unknown clients are rejected by allow lists and accepted by deny lists.'
+                                  )}
+                                </FormDescription>
+                              </div>
+                              <div className='grid gap-3 sm:grid-cols-2'>
+                                <FormField
+                                  control={form.control}
+                                  name='client_policy_mode'
+                                  render={({ field }) => (
+                                    <FormItem>
+                                      <FormLabel>{t('Policy mode')}</FormLabel>
+                                      <FormControl>
+                                        <Select
+                                          value={field.value || 'unrestricted'}
+                                          onValueChange={field.onChange}
+                                        >
+                                          <SelectTrigger>
+                                            <SelectValue>
+                                              {t(
+                                                CLIENT_POLICY_MODE_LABEL_KEYS[
+                                                  field.value || 'unrestricted'
+                                                ]
+                                              )}
+                                            </SelectValue>
+                                          </SelectTrigger>
+                                          <SelectContent>
+                                            <SelectItem value='unrestricted'>
+                                              {t('Unrestricted')}
+                                            </SelectItem>
+                                            <SelectItem value='allow'>
+                                              {t('Allow only')}
+                                            </SelectItem>
+                                            <SelectItem value='deny'>
+                                              {t('Deny')}
+                                            </SelectItem>
+                                          </SelectContent>
+                                        </Select>
+                                      </FormControl>
+                                    </FormItem>
+                                  )}
+                                />
+                                <FormField
+                                  control={form.control}
+                                  name='client_policy_clients'
+                                  render={() => (
+                                    <FormItem>
+                                      <FormLabel>{t('Client names')}</FormLabel>
+                                      <FormControl>
+                                        <ClientMultiSelect
+                                          selected={
+                                            currentClientPolicyClientList
+                                          }
+                                          onChange={(clients) =>
+                                            form.setValue(
+                                              'client_policy_clients',
+                                              clients.join(', '),
+                                              { shouldDirty: true }
+                                            )
+                                          }
+                                          disabled={
+                                            currentClientPolicyMode ===
+                                            'unrestricted'
+                                          }
+                                        />
+                                      </FormControl>
+                                      <FormDescription>
+                                        {t(
+                                          'Choose built-in clients or add a custom name that matches an identification rule.'
+                                        )}
+                                      </FormDescription>
+                                    </FormItem>
+                                  )}
+                                />
+                              </div>
+                            </div>
                           </div>
 
                           <div
