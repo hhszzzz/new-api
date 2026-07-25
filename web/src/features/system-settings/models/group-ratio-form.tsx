@@ -103,7 +103,6 @@ export const GroupRatioForm = memo(function GroupRatioForm({
 
   const watchedGroupRatio = form.watch('GroupRatio')
   const watchedUserUsableGroups = form.watch('UserUsableGroups')
-  const watchedTopupGroupRatio = form.watch('TopupGroupRatio')
   const groupNames = useMemo(() => {
     const ratioMap = safeJsonParse<Record<string, number>>(watchedGroupRatio, {
       fallback: {},
@@ -113,18 +112,8 @@ export const GroupRatioForm = memo(function GroupRatioForm({
       watchedUserUsableGroups,
       { fallback: {}, silent: true }
     )
-    const topupMap = safeJsonParse<Record<string, number>>(
-      watchedTopupGroupRatio,
-      { fallback: {}, silent: true }
-    )
-    return [
-      ...new Set([
-        ...Object.keys(ratioMap),
-        ...Object.keys(usableMap),
-        ...Object.keys(topupMap),
-      ]),
-    ]
-  }, [watchedGroupRatio, watchedUserUsableGroups, watchedTopupGroupRatio])
+    return [...new Set([...Object.keys(ratioMap), ...Object.keys(usableMap)])]
+  }, [watchedGroupRatio, watchedUserUsableGroups])
 
   return (
     <div className='space-y-6'>
@@ -221,26 +210,6 @@ export const GroupRatioForm = memo(function GroupRatioForm({
                     {t(
                       'JSON map of group → ratio applied when the user selects the group explicitly.'
                     )}
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
-            <FormField
-              control={form.control}
-              name='TopupGroupRatio'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('Top-up group ratios')}</FormLabel>
-                  <FormControl>
-                    <Textarea rows={6} {...field} />
-                  </FormControl>
-                  <FormDescription>
-                    {t(
-                      'Optional multiplier per user group used when calculating recharge pricing. Provide a JSON object such as'
-                    )}
-                    {` { "default": 1, "vip": 1.2 }`}.
                   </FormDescription>
                   <FormMessage />
                 </FormItem>
@@ -428,7 +397,7 @@ function GroupPricingGuide({ open, onOpenChange }: GroupPricingGuideProps) {
                 </span>
                 {': '}
                 {t(
-                  'decides the top-up ratio, which groups the user can pick for tokens, and whether an override ratio applies.'
+                  'Special usable group rules make extra token groups visible to, or hide default ones from, users of a specific user group.'
                 )}
               </p>
             </div>
