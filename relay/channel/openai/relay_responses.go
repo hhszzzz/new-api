@@ -33,6 +33,13 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	if oaiError := responsesResponse.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
+	if info.HasUserModelRoute() {
+		responsesResponse.Model = info.PublicResponseModelName()
+		responseBody, err = relaycommon.RedactUserModelRouteJSON(responseBody, info)
+		if err != nil {
+			return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		}
+	}
 
 	if responsesResponse.HasImageGenerationCall() {
 		c.Set("image_generation_call", true)
@@ -88,6 +95,17 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			logger.LogError(c, "failed to unmarshal stream response: "+err.Error())
 			sr.Error(err)
 			return
+		}
+		if info.HasUserModelRoute() {
+			if streamResponse.Response != nil {
+				streamResponse.Response.Model = info.PublicResponseModelName()
+			}
+			redacted, redactErr := relaycommon.RedactUserModelRouteJSON([]byte(data), info)
+			if redactErr != nil {
+				sr.Error(redactErr)
+				return
+			}
+			data = string(redacted)
 		}
 		sendResponsesStreamData(c, streamResponse, data)
 		switch streamResponse.Type {

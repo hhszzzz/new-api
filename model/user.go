@@ -972,6 +972,22 @@ func deleteUserAuthenticationData(tx *gorm.DB, userId int) error {
 	if err := releaseAllExternalIdentitiesWithTx(tx, userId); err != nil {
 		return err
 	}
+	var routeIds []int
+	if err := tx.Model(&UserModelRoute{}).Where("user_id = ?", userId).Pluck("id", &routeIds).Error; err != nil {
+		if !policyTableMissing(err) {
+			return err
+		}
+		routeIds = nil
+	}
+	if len(routeIds) > 0 {
+		for _, routeData := range []any{&UserModelRouteGroup{}, &UserModelRouteChannel{}} {
+			if err := tx.Unscoped().Where("route_id IN ?", routeIds).Delete(routeData).Error; err != nil {
+				if !policyTableMissing(err) {
+					return err
+				}
+			}
+		}
+	}
 	for _, authenticationData := range []any{
 		&TwoFABackupCode{},
 		&TwoFA{},
@@ -981,6 +997,11 @@ func deleteUserAuthenticationData(tx *gorm.DB, userId int) error {
 		&Token{},
 	} {
 		if err := tx.Unscoped().Where("user_id = ?", userId).Delete(authenticationData).Error; err != nil {
+			return err
+		}
+	}
+	for _, policyData := range []any{&UserGroupMembership{}, &UserModelPermission{}, &UserModelRoute{}} {
+		if err := tx.Unscoped().Where("user_id = ?", userId).Delete(policyData).Error; err != nil && !policyTableMissing(err) {
 			return err
 		}
 	}

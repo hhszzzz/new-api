@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -25,6 +26,13 @@ func sendStreamData(c *gin.Context, info *relaycommon.RelayInfo, data string, fo
 		return nil
 	}
 
+	if info != nil && info.HasUserModelRoute() {
+		redacted, err := relaycommon.RedactUserModelRouteJSON([]byte(data), info)
+		if err != nil {
+			return err
+		}
+		data = string(redacted)
+	}
 	if !forceFormat && !thinkToContent {
 		return helper.StringData(c, data)
 	}
@@ -32,6 +40,9 @@ func sendStreamData(c *gin.Context, info *relaycommon.RelayInfo, data string, fo
 	var lastStreamResponse dto.ChatCompletionsStreamResponse
 	if err := common.UnmarshalJsonStr(data, &lastStreamResponse); err != nil {
 		return err
+	}
+	if info != nil && info.HasUserModelRoute() {
+		lastStreamResponse.Model = info.PublicResponseModelName()
 	}
 
 	if !thinkToContent {
@@ -109,7 +120,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 
 	defer service.CloseResponseBodyGracefully(resp)
 
-	model := info.UpstreamModelName
+	model := info.PublicResponseModelName()
 	var responseId string
 	var createAt int64 = 0
 	var systemFingerprint string
@@ -216,6 +227,9 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
+	if info.HasUserModelRoute() {
+		simpleResponse.Model = info.PublicResponseModelName()
+	}
 
 	if oaiError := simpleResponse.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
@@ -254,14 +268,28 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 
 	switch info.RelayFormat {
 	case types.RelayFormatOpenAI:
-		if usageModified {
-			var bodyMap map[string]interface{}
+		if usageModified || info.HasUserModelRoute() {
+			var bodyMap map[string]json.RawMessage
 			err = common.Unmarshal(responseBody, &bodyMap)
 			if err != nil {
 				return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 			}
-			bodyMap["usage"] = simpleResponse.Usage
-			responseBody, _ = common.Marshal(bodyMap)
+			usageJSON, marshalErr := common.Marshal(simpleResponse.Usage)
+			if marshalErr != nil {
+				return nil, types.NewOpenAIError(marshalErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+			}
+			bodyMap["usage"] = usageJSON
+			if info.HasUserModelRoute() {
+				modelJSON, marshalErr := common.Marshal(info.PublicResponseModelName())
+				if marshalErr != nil {
+					return nil, types.NewOpenAIError(marshalErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+				}
+				bodyMap["model"] = modelJSON
+			}
+			responseBody, err = common.Marshal(bodyMap)
+			if err != nil {
+				return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+			}
 		}
 		if forceFormat {
 			responseBody, err = common.Marshal(simpleResponse)

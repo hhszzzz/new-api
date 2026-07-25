@@ -66,13 +66,13 @@ func buildMessageDeltaPatchUsage(claudeResponse *dto.ClaudeResponse, claudeInfo 
 }
 
 func shouldSkipClaudeMessageDeltaUsagePatch(info *relaycommon.RelayInfo) bool {
-	if model_setting.GetGlobalSettings().PassThroughRequestEnabled {
-		return true
-	}
 	if info == nil {
 		return false
 	}
-	return info.ChannelSetting.PassThroughBodyEnabled
+	if model_setting.GetGlobalSettings().PassThroughRequestEnabled && !info.HasUserModelRoute() {
+		return true
+	}
+	return info.ChannelSetting.PassThroughBodyEnabled && !info.HasUserModelRoute()
 }
 
 func patchClaudeMessageDeltaUsageData(data string, usage *dto.ClaudeUsage) string {
@@ -106,6 +106,9 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 			// message_start, 获取usage
 			if claudeResponse.Message != nil {
 				info.UpstreamModelName = claudeResponse.Message.Model
+				if info.HasUserModelRoute() {
+					claudeResponse.Message.Model = info.PublicResponseModelName()
+				}
 			}
 		} else if claudeResponse.Type == "message_delta" {
 			// 确保 message_delta 的 usage 包含完整的 input_tokens 和 cache 相关字段
@@ -113,6 +116,13 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 			if !shouldSkipClaudeMessageDeltaUsagePatch(info) {
 				data = patchClaudeMessageDeltaUsageData(data, buildMessageDeltaPatchUsage(&claudeResponse, claudeInfo))
 			}
+		}
+		if info.HasUserModelRoute() {
+			redacted, redactErr := relaycommon.RedactUserModelRouteJSON([]byte(data), info)
+			if redactErr != nil {
+				return types.NewError(redactErr, types.ErrorCodeBadResponseBody)
+			}
+			data = string(redacted)
 		}
 		helper.ClaudeChunkData(c, claudeResponse, data)
 	} else if info.RelayFormat == types.RelayFormatOpenAI {
@@ -161,7 +171,7 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 	} else if info.RelayFormat == types.RelayFormatOpenAI {
 		if info.ShouldIncludeUsage {
 			openAIUsage := buildOpenAIStyleUsageFromClaudeUsage(claudeInfo.Usage)
-			response := helper.GenerateFinalUsageResponse(claudeInfo.ResponseId, claudeInfo.Created, info.UpstreamModelName, openAIUsage)
+			response := helper.GenerateFinalUsageResponse(claudeInfo.ResponseId, claudeInfo.Created, info.PublicResponseModelName(), openAIUsage)
 			err := helper.ObjectData(c, response)
 			if err != nil {
 				common.SysLog("send final response failed: " + err.Error())
@@ -175,7 +185,7 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 	claudeInfo := &ClaudeResponseInfo{
 		ResponseId:   helper.GetResponseID(c),
 		Created:      common.GetTimestamp(),
-		Model:        info.UpstreamModelName,
+		Model:        info.PublicResponseModelName(),
 		ResponseText: strings.Builder{},
 		Usage:        &dto.Usage{},
 	}
@@ -218,6 +228,9 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		claudeInfo.Usage.ClaudeCacheCreation5mTokens = claudeResponse.Usage.GetCacheCreation5mTokens()
 		claudeInfo.Usage.ClaudeCacheCreation1hTokens = claudeResponse.Usage.GetCacheCreation1hTokens()
 	}
+	if info.HasUserModelRoute() {
+		claudeResponse.Model = info.PublicResponseModelName()
+	}
 	var responseData []byte
 	switch info.RelayFormat {
 	case types.RelayFormatOpenAI:
@@ -228,7 +241,14 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 			return types.NewError(err, types.ErrorCodeBadResponseBody)
 		}
 	case types.RelayFormatClaude:
-		responseData = data
+		if info.HasUserModelRoute() {
+			responseData, err = relaycommon.RedactUserModelRouteJSON(data, info)
+			if err != nil {
+				return types.NewError(err, types.ErrorCodeBadResponseBody)
+			}
+		} else {
+			responseData = data
+		}
 	}
 
 	if claudeResponse.Usage != nil && claudeResponse.Usage.ServerToolUse != nil && claudeResponse.Usage.ServerToolUse.WebSearchRequests > 0 {
@@ -245,7 +265,7 @@ func ClaudeHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayI
 	claudeInfo := &ClaudeResponseInfo{
 		ResponseId:   helper.GetResponseID(c),
 		Created:      common.GetTimestamp(),
-		Model:        info.UpstreamModelName,
+		Model:        info.PublicResponseModelName(),
 		ResponseText: strings.Builder{},
 		Usage:        &dto.Usage{},
 	}

@@ -50,7 +50,7 @@ func GeminiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 	}
 
 	chatResp := responseGeminiChat2OpenAI(c, &geminiResponse)
-	chatResp.Model = info.UpstreamModelName
+	chatResp.Model = info.PublicResponseModelName()
 	if responseID := helper.GetResponseID(c); responseID != "" {
 		chatResp.Id = responseID
 	}
@@ -83,7 +83,7 @@ func GeminiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, r
 	created := common.GetTimestamp()
 	state, err := relayconvert.NewResponseStreamState(types.RelayFormatOpenAI, types.RelayFormatOpenAIResponses, relayconvert.ResponseStreamOptions{
 		ID:      responseID,
-		Model:   info.UpstreamModelName,
+		Model:   info.PublicResponseModelName(),
 		Created: created,
 	})
 	if err != nil {
@@ -126,7 +126,7 @@ func GeminiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, r
 		response, isStop := streamResponseGeminiChat2OpenAI(geminiResponse)
 		response.Id = responseID
 		response.Created = created
-		response.Model = info.UpstreamModelName
+		response.Model = info.PublicResponseModelName()
 
 		if response.IsToolCall() {
 			finishReason = constant.FinishReasonToolCalls
@@ -158,7 +158,7 @@ func GeminiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, r
 			return false
 		}
 		if isStop {
-			return sendChunk(helper.GenerateStopResponse(responseID, created, info.UpstreamModelName, finishReason))
+			return sendChunk(helper.GenerateStopResponse(responseID, created, info.PublicResponseModelName(), finishReason))
 		}
 		return true
 	})

@@ -177,6 +177,14 @@ func TestRedactModelRoutingTextIsIdempotentWhenOriginContainsUpstreamModel(t *te
 	assert.Equal(t, once, twice)
 }
 
+func TestRedactModelRoutingTextHandlesRouteAndMappedModelTogether(t *testing.T) {
+	text := "provider/gpt-5.5 failed after routing gpt-5.5"
+
+	redacted := RedactModelRoutingText(text, "gpt-5.4", "gpt-5.5", "provider/gpt-5.5")
+
+	assert.Equal(t, "gpt-5.4 failed after routing gpt-5.4", redacted)
+}
+
 func TestSanitizePublicTaskDataUsesOriginalPublicKeyOnRedactionCollision(t *testing.T) {
 	const (
 		originModel   = "openai/gpt-4"

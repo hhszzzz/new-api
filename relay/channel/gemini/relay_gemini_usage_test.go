@@ -514,3 +514,67 @@ func TestGeminiStreamHandlerEmptyUsageMetadataBuildsEstimatedBillingUsage(t *tes
 	require.Equal(t, usage.CompletionTokens, usage.BillingUsage.GeminiUsageMetadata.CandidatesTokenCount)
 	require.True(t, common.GetContextKeyBool(c, constant.ContextKeyLocalCountTokens))
 }
+
+func TestGeminiNativeResponseRedactsRoutedModelVersion(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/models/gemini-public:generateContent", nil)
+
+	info := &relaycommon.RelayInfo{
+		OriginModelName:      "gemini-public",
+		UserModelRouteId:     7,
+		RouteTargetModelName: "provider-gemini-private",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "provider-gemini-private",
+		},
+	}
+	responseBody := []byte(`{"candidates":[{"content":{"role":"model","parts":[{"text":"provider-gemini-private remains content"}]}}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1,"totalTokenCount":2},"modelVersion":"provider-gemini-private"}`)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(bytes.NewReader(responseBody)),
+	}
+
+	usage, newAPIError := GeminiTextGenerationHandler(c, info, resp)
+	require.Nil(t, newAPIError)
+	require.NotNil(t, usage)
+	require.Contains(t, recorder.Body.String(), `"modelVersion":"gemini-public"`)
+	require.Contains(t, recorder.Body.String(), `"text":"provider-gemini-private remains content"`)
+	require.NotContains(t, recorder.Body.String(), `"modelVersion":"provider-gemini-private"`)
+}
+
+func TestGeminiNativeStreamRedactsRoutedModelVersion(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/models/gemini-public:streamGenerateContent", nil)
+
+	oldStreamingTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 300
+	t.Cleanup(func() {
+		constant.StreamingTimeout = oldStreamingTimeout
+	})
+
+	info := &relaycommon.RelayInfo{
+		OriginModelName:      "gemini-public",
+		UserModelRouteId:     7,
+		RouteTargetModelName: "provider-gemini-private",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "provider-gemini-private",
+		},
+	}
+	streamBody := []byte("data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"provider-gemini-private remains content\"}]}}],\"usageMetadata\":{\"promptTokenCount\":1,\"candidatesTokenCount\":1,\"totalTokenCount\":2},\"modelVersion\":\"provider-gemini-private\"}\n\ndata: [DONE]\n\n")
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(bytes.NewReader(streamBody)),
+	}
+
+	usage, newAPIError := GeminiTextGenerationStreamHandler(c, info, resp)
+	require.Nil(t, newAPIError)
+	require.NotNil(t, usage)
+	require.Contains(t, recorder.Body.String(), `"modelVersion":"gemini-public"`)
+	require.Contains(t, recorder.Body.String(), `"text":"provider-gemini-private remains content"`)
+	require.NotContains(t, recorder.Body.String(), `"modelVersion":"provider-gemini-private"`)
+}

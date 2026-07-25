@@ -68,7 +68,7 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info *re
 		}
 	} else if info != nil {
 		thinkingSuffix := "-thinking"
-		if strings.HasSuffix(info.OriginModelName, thinkingSuffix) &&
+		if strings.HasSuffix(relaymeta.RelayInfoUpstreamModelName(info), thinkingSuffix) &&
 			!strings.HasSuffix(openAIRequest.Model, thinkingSuffix) {
 			openAIRequest.Model = openAIRequest.Model + thinkingSuffix
 		}

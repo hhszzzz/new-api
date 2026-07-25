@@ -445,6 +445,67 @@ func TestListModelsTokenLimitIncludesTieredBillingModel(t *testing.T) {
 	require.NotContains(t, ids, "zz-token-unpriced-model")
 }
 
+func TestListModelsIntersectsUserAndTokenModelPermissions(t *testing.T) {
+	withSelfUseModeEnabled(t)
+	db := setupModelListControllerTestDB(t)
+	require.NoError(t, db.Create(&model.Channel{
+		Id:     704,
+		Type:   constant.ChannelTypeOpenAI,
+		Key:    "model-permission-key",
+		Name:   "model-permission-channel",
+		Status: common.ChannelStatusEnabled,
+	}).Error)
+	require.NoError(t, db.Create(&[]model.Ability{
+		{Group: "default", Model: "permission-a", ChannelId: 704, Enabled: true},
+		{Group: "default", Model: "permission-b", ChannelId: 704, Enabled: true},
+		{Group: "default", Model: "permission-c", ChannelId: 704, Enabled: true},
+	}).Error)
+	model.InitChannelCache()
+
+	tests := []struct {
+		name       string
+		userLimits map[string]bool
+		tokenLimit bool
+		tokenRules map[string]bool
+		want       []string
+	}{
+		{
+			name:       "enabled empty user permission denies every model",
+			userLimits: map[string]bool{},
+			want:       []string{},
+		},
+		{
+			name:       "token permission can only narrow the user permission",
+			userLimits: map[string]bool{"permission-a": true, "permission-b": true},
+			tokenLimit: true,
+			tokenRules: map[string]bool{"permission-b": true, "permission-c": true},
+			want:       []string{"permission-b"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(recorder)
+			ctx.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+			ctx.Set("role", common.RoleCommonUser)
+			common.SetContextKey(ctx, constant.ContextKeyUserGroups, []string{"default"})
+			common.SetContextKey(ctx, constant.ContextKeyUserModelLimitEnabled, true)
+			common.SetContextKey(ctx, constant.ContextKeyUserModelLimit, test.userLimits)
+			common.SetContextKey(ctx, constant.ContextKeyTokenModelLimitEnabled, test.tokenLimit)
+			common.SetContextKey(ctx, constant.ContextKeyTokenModelLimit, test.tokenRules)
+
+			ListModels(ctx, constant.ChannelTypeOpenAI)
+
+			ids := decodeListModelsResponse(t, recorder)
+			assert.Len(t, ids, len(test.want))
+			for _, modelName := range test.want {
+				assert.Contains(t, ids, modelName)
+			}
+		})
+	}
+}
+
 func TestCheckUpdatePasswordRequiresCurrentPassword(t *testing.T) {
 	db := setupModelListControllerTestDB(t)
 	hashedPassword, err := common.Password2Hash("CurrentPassword123")

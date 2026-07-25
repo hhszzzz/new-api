@@ -253,7 +253,7 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 			request.Usage = json.RawMessage(`{"include":true}`)
 		}
 		// 适配 OpenRouter 的 thinking 后缀
-		if !model_setting.ShouldPreserveThinkingSuffix(info.OriginModelName) &&
+		if !model_setting.ShouldPreserveThinkingSuffix(info.UpstreamModelName) &&
 			strings.HasSuffix(info.UpstreamModelName, "-thinking") {
 			info.UpstreamModelName = strings.TrimSuffix(info.UpstreamModelName, "-thinking")
 			request.Model = info.UpstreamModelName
@@ -657,7 +657,7 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 			usage, err = OaiResponsesHandler(c, info, resp)
 		}
 	case relayconstant.RelayModeResponsesCompact:
-		usage, err = OaiResponsesCompactionHandler(c, resp)
+		usage, err = OaiResponsesCompactionHandlerWithInfo(c, resp, info)
 	default:
 		if info.IsStream {
 			usage, err = OaiStreamHandler(c, info, resp)

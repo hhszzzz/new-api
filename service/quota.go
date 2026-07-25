@@ -157,10 +157,7 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 
 func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo,
 	usage *dto.RealtimeUsage, extraContent string) {
-	billingModelName := relayInfo.OriginModelName
-	if relayInfo.ChannelMeta != nil && relayInfo.UpstreamModelName != "" {
-		billingModelName = relayInfo.UpstreamModelName
-	}
+	billingModelName := relayInfo.GetBillingModelName()
 
 	var tieredResult *billingexpr.TieredResult
 	tieredOk, tieredQuota, tieredRes := TryTieredSettle(relayInfo, billingexpr.TokenParams{

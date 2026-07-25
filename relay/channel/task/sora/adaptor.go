@@ -254,8 +254,8 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 	dResp.TaskID = info.PublicTaskID
 	dResp.Model = info.OriginModelName
 	if dResp.Error != nil {
-		dResp.Error.Message = taskcommon.RedactModelRoutingText(dResp.Error.Message, info.OriginModelName, info.UpstreamModelName)
-		dResp.Error.Code = taskcommon.RedactModelRoutingText(dResp.Error.Code, info.OriginModelName, info.UpstreamModelName)
+		dResp.Error.Message = taskcommon.RedactModelRoutingText(dResp.Error.Message, info.OriginModelName, info.RouteTargetModelName, info.UpstreamModelName)
+		dResp.Error.Code = taskcommon.RedactModelRoutingText(dResp.Error.Code, info.OriginModelName, info.RouteTargetModelName, info.UpstreamModelName)
 	}
 	c.JSON(http.StatusOK, dResp)
 	return upstreamID, responseBody, nil
@@ -330,6 +330,7 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(task *model.Task) ([]byte, error) {
 	sanitizedData, err := taskcommon.SanitizePublicTaskData(
 		task.Data,
 		task.Properties.OriginModelName,
+		task.PrivateData.RouteTargetModelName,
 		task.Properties.UpstreamModelName,
 	)
 	if err != nil {

@@ -126,7 +126,7 @@ func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
 }
 
 func (a *Adaptor) getRequestUrl(info *relaycommon.RelayInfo, modelName, suffix string) (string, error) {
-	region := GetModelRegion(info.ApiVersion, info.OriginModelName)
+	region := GetModelRegion(info.ApiVersion, info.UpstreamModelName)
 	if info.ChannelOtherSettings.VertexKeyType != dto.VertexKeyTypeAPIKey {
 		adc := &Credentials{}
 		if err := common.Unmarshal([]byte(info.ApiKey), adc); err != nil {
@@ -171,7 +171,7 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 	suffix := ""
 	if a.RequestMode == RequestModeGemini {
 		if model_setting.GetGeminiSettings().ThinkingAdapterEnabled &&
-			!model_setting.ShouldPreserveThinkingSuffix(info.OriginModelName) {
+			!model_setting.ShouldPreserveThinkingSuffix(info.UpstreamModelName) {
 			// 新增逻辑：处理 -thinking-<budget> 格式
 			if strings.Contains(info.UpstreamModelName, "-thinking-") {
 				parts := strings.Split(info.UpstreamModelName, "-thinking-")

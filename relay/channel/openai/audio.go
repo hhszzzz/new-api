@@ -50,7 +50,12 @@ func OpenaiTTSHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 					usage.TotalTokens = simpleResponse.TotalTokens
 				}
 			}
-			if err := helper.StringData(c, data); err != nil {
+			clientData, err := relaycommon.RedactUserModelRouteJSON([]byte(data), info)
+			if err != nil {
+				sr.Stop(err)
+				return
+			}
+			if err := helper.StringData(c, string(clientData)); err != nil {
 				sr.Error(err)
 			}
 		})
@@ -122,23 +127,29 @@ func OpenaiSTTHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 	if err != nil {
 		return types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError), nil
 	}
-	// 写入新的 response body
-	service.IOCopyBytesGracefully(c, resp, responseBody)
-
 	var responseData struct {
 		Usage *dto.Usage `json:"usage"`
 	}
+	var upstreamUsage *dto.Usage
 	if err := common.Unmarshal(responseBody, &responseData); err == nil && responseData.Usage != nil {
 		if responseData.Usage.TotalTokens > 0 {
-			usage := responseData.Usage
-			if usage.PromptTokens == 0 {
-				usage.PromptTokens = usage.InputTokens
+			upstreamUsage = responseData.Usage
+			if upstreamUsage.PromptTokens == 0 {
+				upstreamUsage.PromptTokens = upstreamUsage.InputTokens
 			}
-			if usage.CompletionTokens == 0 {
-				usage.CompletionTokens = usage.OutputTokens
+			if upstreamUsage.CompletionTokens == 0 {
+				upstreamUsage.CompletionTokens = upstreamUsage.OutputTokens
 			}
-			return nil, usage
 		}
+	}
+
+	clientResponseBody, err := relaycommon.RedactUserModelRouteJSON(responseBody, info)
+	if err != nil {
+		return types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError), nil
+	}
+	service.IOCopyBytesGracefully(c, resp, clientResponseBody)
+	if upstreamUsage != nil {
+		return nil, upstreamUsage
 	}
 
 	usage := &dto.Usage{}

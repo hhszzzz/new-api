@@ -204,6 +204,36 @@ func TestStreamResponseOpenAI2ClaudeClosesTextThinkingAndToolBlocks(t *testing.T
 	assert.Equal(t, "message_stop", finishResponses[2].Type)
 }
 
+func TestStreamResponseOpenAI2ClaudeUsesHandlerFallbackUsageOnFinish(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		SendResponseCount: 2,
+		ClaudeConvertInfo: &relaycommon.ClaudeConvertInfo{
+			LastMessagesType: relaycommon.LastMessageTypeText,
+			Usage: &dto.Usage{
+				PromptTokens:     7,
+				CompletionTokens: 3,
+				TotalTokens:      10,
+			},
+		},
+	}
+
+	responses := StreamResponseOpenAI2Claude(&dto.ChatCompletionsStreamResponse{
+		Id:    "chatcmpl_1",
+		Model: "gpt-test",
+		Choices: []dto.ChatCompletionsStreamResponseChoice{
+			{FinishReason: ptr("stop")},
+		},
+	}, info)
+
+	require.Len(t, responses, 3)
+	assert.Equal(t, "content_block_stop", responses[0].Type)
+	assert.Equal(t, "message_delta", responses[1].Type)
+	require.NotNil(t, responses[1].Usage)
+	assert.Equal(t, 7, responses[1].Usage.InputTokens)
+	assert.Equal(t, 3, responses[1].Usage.OutputTokens)
+	assert.Equal(t, "message_stop", responses[2].Type)
+}
+
 func TestNormalizeCacheCreationSplit(t *testing.T) {
 	cache5m, cache1h := NormalizeCacheCreationSplit(10, 3, 2)
 	assert.Equal(t, 8, cache5m)

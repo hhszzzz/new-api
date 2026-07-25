@@ -44,29 +44,25 @@ func InitChannelCache() {
 		}
 	}
 	var abilities []*Ability
-	DB.Find(&abilities)
-	groups := make(map[string]bool)
-	for _, ability := range abilities {
-		groups[ability.Group] = true
-	}
+	DB.Where("enabled = ?", true).Find(&abilities)
 	newGroup2model2channels := make(map[string]map[string][]int)
-	for group := range groups {
-		newGroup2model2channels[group] = make(map[string][]int)
-	}
-	for _, channel := range channels {
-		if channel.Status != common.ChannelStatusEnabled {
-			continue // skip disabled channels
+	for _, ability := range abilities {
+		channel := newChannelId2channel[ability.ChannelId]
+		if channel == nil || channel.Status != common.ChannelStatusEnabled {
+			continue
 		}
-		groups := strings.Split(channel.Group, ",")
-		for _, group := range groups {
-			models := strings.Split(channel.Models, ",")
-			for _, model := range models {
-				if _, ok := newGroup2model2channels[group][model]; !ok {
-					newGroup2model2channels[group][model] = make([]int, 0)
-				}
-				newGroup2model2channels[group][model] = append(newGroup2model2channels[group][model], channel.Id)
-			}
+		group := strings.TrimSpace(ability.Group)
+		model := strings.TrimSpace(ability.Model)
+		if group == "" || model == "" {
+			continue
 		}
+		if newGroup2model2channels[group] == nil {
+			newGroup2model2channels[group] = make(map[string][]int)
+		}
+		newGroup2model2channels[group][model] = append(
+			newGroup2model2channels[group][model],
+			ability.ChannelId,
+		)
 	}
 
 	// sort by priority
@@ -115,21 +111,33 @@ func SyncChannelCache(frequency int) {
 }
 
 func GetRandomSatisfiedChannel(group string, model string, retry int, requestPath string) (*Channel, error) {
+	return GetRandomSatisfiedChannelInPool(group, model, retry, requestPath, nil)
+}
+
+func GetRandomSatisfiedChannelInPool(group string, model string, retry int, requestPath string, allowedChannelIds []int) (*Channel, error) {
+	return GetRandomSatisfiedChannelInPoolWithFilter(group, model, retry, requestPath, allowedChannelIds, nil)
+}
+
+func GetRandomSatisfiedChannelInPoolWithFilter(group string, model string, retry int, requestPath string, allowedChannelIds []int, candidateFilter ChannelCandidateFilter) (*Channel, error) {
 	// if memory cache is disabled, get channel directly from database
 	if !common.MemoryCacheEnabled {
-		return GetChannel(group, model, retry, requestPath)
+		return GetChannelInPoolWithFilter(group, model, retry, requestPath, allowedChannelIds, candidateFilter)
 	}
 
 	channelSyncLock.RLock()
 	defer channelSyncLock.RUnlock()
 
 	// First, try to find channels with the exact model name.
-	channels := filterChannelsByRequestPathAndModel(group2model2channels[group][model], requestPath, model)
+	channels := filterChannelIdsByPool(group2model2channels[group][model], allowedChannelIds)
+	channels = filterChannelsByRequestPathAndModel(channels, requestPath, model)
+	channels = filterChannelIdsByCandidate(channels, candidateFilter)
 
 	// If no channels found, try to find channels with the normalized model name.
 	if len(channels) == 0 {
 		normalizedModel := ratio_setting.FormatMatchingModelName(model)
-		channels = filterChannelsByRequestPathAndModel(group2model2channels[group][normalizedModel], requestPath, model)
+		channels = filterChannelIdsByPool(group2model2channels[group][normalizedModel], allowedChannelIds)
+		channels = filterChannelsByRequestPathAndModel(channels, requestPath, model)
+		channels = filterChannelIdsByCandidate(channels, candidateFilter)
 	}
 
 	if len(channels) == 0 {
@@ -209,6 +217,40 @@ func GetRandomSatisfiedChannel(group string, model string, retry int, requestPat
 	}
 	// return null if no channel is not found
 	return nil, errors.New("channel not found")
+}
+
+func filterChannelIdsByCandidate(channelIds []int, candidateFilter ChannelCandidateFilter) []int {
+	if candidateFilter == nil || len(channelIds) == 0 {
+		return channelIds
+	}
+	filtered := make([]int, 0, len(channelIds))
+	for _, channelId := range channelIds {
+		channel, ok := channelsIDM[channelId]
+		if ok && candidateFilter(channel) {
+			filtered = append(filtered, channelId)
+		}
+	}
+	return filtered
+}
+
+func filterChannelIdsByPool(channelIds []int, allowedChannelIds []int) []int {
+	if allowedChannelIds == nil {
+		return channelIds
+	}
+	if len(channelIds) == 0 || len(allowedChannelIds) == 0 {
+		return []int{}
+	}
+	allowed := make(map[int]struct{}, len(allowedChannelIds))
+	for _, channelId := range allowedChannelIds {
+		allowed[channelId] = struct{}{}
+	}
+	filtered := make([]int, 0, len(channelIds))
+	for _, channelId := range channelIds {
+		if _, ok := allowed[channelId]; ok {
+			filtered = append(filtered, channelId)
+		}
+	}
+	return filtered
 }
 
 // filterChannelsByRequestPathAndModel restricts candidates by request path and

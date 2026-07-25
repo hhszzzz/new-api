@@ -81,7 +81,15 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 				localUsage.InputTokenDetails.TextTokens += textToken
 				localUsage.InputTokenDetails.AudioTokens += audioToken
 
-				err = helper.WssString(c, targetConn, string(message))
+				upstreamMessage := message
+				if info.HasUserModelRoute() {
+					upstreamMessage, err = relaycommon.RewriteUserModelRouteRequestJSON(message, info.SelectionModelName())
+					if err != nil {
+						errChan <- fmt.Errorf("error rewriting routed model: %v", err)
+						return
+					}
+				}
+				err = helper.WssString(c, targetConn, string(upstreamMessage))
 				if err != nil {
 					errChan <- fmt.Errorf("error writing to target: %v", err)
 					return
@@ -187,7 +195,15 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 					localUsage.OutputTokenDetails.AudioTokens += audioToken
 				}
 
-				err = helper.WssString(c, clientConn, string(message))
+				clientMessage := message
+				if info.HasUserModelRoute() {
+					clientMessage, err = relaycommon.RedactUserModelRouteJSON(message, info)
+					if err != nil {
+						errChan <- fmt.Errorf("error redacting routed model: %v", err)
+						return
+					}
+				}
+				err = helper.WssString(c, clientConn, string(clientMessage))
 				if err != nil {
 					errChan <- fmt.Errorf("error writing to client: %v", err)
 					return

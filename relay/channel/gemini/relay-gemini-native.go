@@ -41,6 +41,12 @@ func GeminiTextGenerationHandler(c *gin.Context, info *relaycommon.RelayInfo, re
 
 	// 计算使用量（优先上游 UsageMetadata，缺失时本地估算并保留 Gemini 计费语义）
 	usage := buildUsageFromGeminiResponse(c, info, &geminiResponse)
+	if info.HasUserModelRoute() {
+		responseBody, err = relaycommon.RedactUserModelRouteJSON(responseBody, info)
+		if err != nil {
+			return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		}
+	}
 
 	service.IOCopyBytesGracefully(c, resp, responseBody)
 
@@ -73,6 +79,13 @@ func NativeGeminiEmbeddingHandler(c *gin.Context, resp *http.Response, info *rel
 		}
 	}
 
+	if info.HasUserModelRoute() {
+		responseBody, err = relaycommon.RedactUserModelRouteJSON(responseBody, info)
+		if err != nil {
+			return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		}
+	}
+
 	service.IOCopyBytesGracefully(c, resp, responseBody)
 
 	return usage, nil
@@ -81,7 +94,16 @@ func NativeGeminiEmbeddingHandler(c *gin.Context, resp *http.Response, info *rel
 func GeminiTextGenerationStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	helper.SetEventStreamHeaders(c)
 
-	return geminiStreamHandler(c, info, resp, func(data string, geminiResponse *dto.GeminiChatResponse) bool {
+	var privacyErr *types.NewAPIError
+	usage, relayErr := geminiStreamHandler(c, info, resp, func(data string, geminiResponse *dto.GeminiChatResponse) bool {
+		if info.HasUserModelRoute() {
+			redacted, err := relaycommon.RedactUserModelRouteJSON([]byte(data), info)
+			if err != nil {
+				privacyErr = types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+				return false
+			}
+			data = string(redacted)
+		}
 		err := helper.StringData(c, data)
 		if err != nil {
 			logger.LogError(c, "failed to write stream data: "+err.Error())
@@ -90,4 +112,8 @@ func GeminiTextGenerationStreamHandler(c *gin.Context, info *relaycommon.RelayIn
 		info.SendResponseCount++
 		return true
 	})
+	if privacyErr != nil {
+		return nil, privacyErr
+	}
+	return usage, relayErr
 }

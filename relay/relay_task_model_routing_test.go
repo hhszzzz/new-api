@@ -15,14 +15,15 @@ import (
 
 func TestTaskModel2DtoSanitizesNestedModelRoutingForPublicAudience(t *testing.T) {
 	const (
-		originModel   = "requested-video-model"
-		upstreamModel = "provider-internal-video-model"
+		originModel      = "requested-video-model"
+		routeTargetModel = "routed-video-model"
+		upstreamModel    = "provider-internal-video-model"
 	)
 
 	rawData, err := common.Marshal(map[string]any{
 		"model": upstreamModel,
 		"result": map[string]any{
-			"model_name":     upstreamModel,
+			"model_name":     routeTargetModel,
 			"fallback_model": upstreamModel,
 			"clips": []any{
 				map[string]any{
@@ -45,7 +46,8 @@ func TestTaskModel2DtoSanitizesNestedModelRoutingForPublicAudience(t *testing.T)
 		ChannelId:  73,
 		FailReason: "model " + upstreamModel + " is unavailable",
 		PrivateData: model.TaskPrivateData{
-			ResultURL: "https://results.example/models/" + upstreamModel + "/video.mp4",
+			ResultURL:            "https://results.example/models/" + upstreamModel + "/" + routeTargetModel + "/video.mp4",
+			RouteTargetModelName: routeTargetModel,
 		},
 		Properties: model.Properties{
 			Input:             "requested through " + upstreamModel,
@@ -59,6 +61,7 @@ func TestTaskModel2DtoSanitizesNestedModelRoutingForPublicAudience(t *testing.T)
 	publicJSON, err := common.Marshal(publicDto)
 	require.NoError(t, err)
 	assert.NotContains(t, string(publicJSON), upstreamModel)
+	assert.NotContains(t, string(publicJSON), routeTargetModel)
 	assert.Contains(t, string(publicJSON), originModel)
 	assert.Contains(t, publicDto.FailReason, originModel)
 	assert.Contains(t, publicDto.ResultURL, originModel)
@@ -87,19 +90,21 @@ func TestTaskModel2DtoSanitizesNestedModelRoutingForPublicAudience(t *testing.T)
 
 func TestSanitizeTaskErrorForPublicKeepsInternalErrorAndHidesPublicRouting(t *testing.T) {
 	const (
-		originModel   = "requested-video-model"
-		upstreamModel = "provider-internal-video-model"
+		originModel      = "requested-video-model"
+		routeTargetModel = "routed-video-model"
+		upstreamModel    = "provider-internal-video-model"
 	)
 	internalError := errors.New("model " + upstreamModel + " is unavailable")
 	taskErr := &dto.TaskError{
-		Code:       upstreamModel + "/not_found",
-		Message:    internalError.Error(),
-		Data:       map[string]any{"model": upstreamModel},
+		Code:       routeTargetModel + "/not_found",
+		Message:    internalError.Error() + " via " + routeTargetModel,
+		Data:       map[string]any{"model": upstreamModel, "route_model": routeTargetModel},
 		StatusCode: http.StatusBadRequest,
 		Error:      internalError,
 	}
 	info := &relaycommon.RelayInfo{
-		OriginModelName: originModel,
+		OriginModelName:      originModel,
+		RouteTargetModelName: routeTargetModel,
 		ChannelMeta: &relaycommon.ChannelMeta{
 			UpstreamModelName: upstreamModel,
 		},
@@ -109,6 +114,7 @@ func TestSanitizeTaskErrorForPublicKeepsInternalErrorAndHidesPublicRouting(t *te
 	publicJSON, err := common.Marshal(publicError)
 	require.NoError(t, err)
 	assert.NotContains(t, string(publicJSON), upstreamModel)
+	assert.NotContains(t, string(publicJSON), routeTargetModel)
 	assert.Contains(t, string(publicJSON), originModel)
 	assert.Contains(t, publicError.Error.Error(), upstreamModel)
 }

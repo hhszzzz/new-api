@@ -28,6 +28,7 @@ import {
   ShieldAlert,
   Link2,
   CreditCard,
+  GitBranch,
 } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -58,6 +59,7 @@ import {
 import { getUserActionMessage } from '../lib'
 import type { User, ManageUserAction } from '../types'
 import { UserBindingDialog } from './dialogs/user-binding-dialog'
+import { UserModelRoutesDialog } from './dialogs/user-model-routes-dialog'
 import { useUsers } from './users-provider'
 
 interface DataTableRowActionsProps {
@@ -72,6 +74,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const [resetTwoFAOpen, setResetTwoFAOpen] = useState(false)
   const [bindingDialogOpen, setBindingDialogOpen] = useState(false)
   const [subscriptionsDialogOpen, setSubscriptionsDialogOpen] = useState(false)
+  const [modelRoutesDialogOpen, setModelRoutesDialogOpen] = useState(false)
 
   const handleEdit = () => {
     setCurrentRow(user)
@@ -213,6 +216,18 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
         <DropdownMenuItem
           onSelect={(event) => {
             event.preventDefault()
+            setModelRoutesDialogOpen(true)
+          }}
+        >
+          {t('Manage Model Routes')}
+          <DropdownMenuShortcut>
+            <GitBranch size={16} />
+          </DropdownMenuShortcut>
+        </DropdownMenuItem>
+
+        <DropdownMenuItem
+          onSelect={(event) => {
+            event.preventDefault()
             setSubscriptionsDialogOpen(true)
           }}
         >
@@ -299,6 +314,14 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
         open={subscriptionsDialogOpen}
         onOpenChange={setSubscriptionsDialogOpen}
         user={{ id: user.id, username: user.username }}
+        onSuccess={triggerRefresh}
+      />
+
+      <UserModelRoutesDialog
+        open={modelRoutesDialogOpen}
+        onOpenChange={setModelRoutesDialogOpen}
+        userId={user.id}
+        username={user.username}
         onSuccess={triggerRefresh}
       />
     </div>

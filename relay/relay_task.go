@@ -74,7 +74,36 @@ func ResolveOriginTask(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskErr
 		info.OriginModelName = originModelName
 	}
 
-	// 锁定到原始任务的渠道（重试时复用同一渠道，轮换 key）
+	if originTask.PrivateData.ModelRouteSnapshotVersion > 0 {
+		info.OriginRouteSnapshotVersion = originTask.PrivateData.ModelRouteSnapshotVersion
+		info.UserModelRouteId = 0
+		info.RouteTargetModelName = ""
+		info.RouteExecutionGroup = ""
+		clearOriginRouteContext(c)
+		if originTask.PrivateData.UserModelRouteId > 0 {
+			targetModel := strings.TrimSpace(originTask.PrivateData.RouteTargetModelName)
+			executionGroup := strings.TrimSpace(originTask.PrivateData.RouteExecutionGroup)
+			if targetModel == "" || executionGroup == "" || originTask.ChannelId <= 0 {
+				return service.TaskErrorWrapperLocal(errors.New("task route snapshot is incomplete"), "task_origin_route_unavailable", http.StatusBadRequest)
+			}
+			info.UserModelRouteId = originTask.PrivateData.UserModelRouteId
+			info.RouteTargetModelName = targetModel
+			info.RouteExecutionGroup = executionGroup
+			common.SetContextKey(c, constant.ContextKeyUserModelRouteId, info.UserModelRouteId)
+			common.SetContextKey(c, constant.ContextKeyUserModelRouteTarget, targetModel)
+			common.SetContextKey(c, constant.ContextKeyUserModelRouteGroup, executionGroup)
+			common.SetContextKey(c, constant.ContextKeyUserModelRouteChannel, []int{originTask.ChannelId})
+			if common.GetContextKeyString(c, constant.ContextKeyUsingGroup) == "auto" {
+				common.SetContextKey(c, constant.ContextKeyAutoGroup, executionGroup)
+			}
+		} else if strings.TrimSpace(originTask.PrivateData.RouteTargetModelName) != "" ||
+			strings.TrimSpace(originTask.PrivateData.RouteExecutionGroup) != "" {
+			return service.TaskErrorWrapperLocal(errors.New("task route snapshot is inconsistent"), "task_origin_route_unavailable", http.StatusBadRequest)
+		}
+	}
+
+	// 锁定到原始任务的渠道（重试时复用同一渠道，轮换 key）。具体的
+	// 上下文初始化由控制器在路由校验后完成，避免在这里绕过用户渠道池。
 	ch, err := model.GetChannelById(originTask.ChannelId, true)
 	if err != nil {
 		return service.TaskErrorWrapperLocal(err, "channel_not_found", http.StatusBadRequest)
@@ -83,22 +112,6 @@ func ResolveOriginTask(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskErr
 		return service.TaskErrorWrapperLocal(errors.New("the channel of the origin task is disabled"), "task_channel_disable", http.StatusBadRequest)
 	}
 	info.LockedChannel = ch
-
-	if originTask.ChannelId != info.ChannelId {
-		key, _, newAPIError := ch.GetNextEnabledKey()
-		if newAPIError != nil {
-			return service.TaskErrorWrapper(newAPIError, "channel_no_available_key", newAPIError.StatusCode)
-		}
-		common.SetContextKey(c, constant.ContextKeyChannelKey, key)
-		common.SetContextKey(c, constant.ContextKeyChannelType, ch.Type)
-		common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, ch.GetBaseURL())
-		common.SetContextKey(c, constant.ContextKeyChannelId, originTask.ChannelId)
-
-		info.ChannelBaseUrl = ch.GetBaseURL()
-		info.ChannelId = originTask.ChannelId
-		info.ChannelType = ch.Type
-		info.ApiKey = key
-	}
 
 	// 提取 remix 参数（时长、分辨率 → OtherRatios）
 	if info.Action == constant.TaskActionRemix {
@@ -130,6 +143,21 @@ func ResolveOriginTask(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskErr
 	}
 
 	return nil
+}
+
+func clearOriginRouteContext(c *gin.Context) {
+	if c == nil || c.Keys == nil {
+		return
+	}
+	for _, key := range []constant.ContextKey{
+		constant.ContextKeyUserModelRouteId,
+		constant.ContextKeyUserModelRouteTarget,
+		constant.ContextKeyUserModelRouteGroup,
+		constant.ContextKeyUserModelRouteChannel,
+		constant.ContextKeyAutoGroup,
+	} {
+		delete(c.Keys, string(key))
+	}
 }
 
 func resolveTrustedOriginModelName(properties model.Properties) (string, error) {
@@ -271,12 +299,12 @@ func sanitizeTaskErrorForPublic(taskErr *dto.TaskError, info *relaycommon.RelayI
 		return taskErr
 	}
 
-	taskErr.Message = taskcommon.RedactModelRoutingText(taskErr.Message, info.OriginModelName, info.UpstreamModelName)
+	taskErr.Message = taskcommon.RedactModelRoutingText(taskErr.Message, info.OriginModelName, info.RouteTargetModelName, info.UpstreamModelName)
 	lowerMessage := strings.ToLower(taskErr.Message)
 	if strings.Contains(lowerMessage, "post") || strings.Contains(lowerMessage, "dial") || strings.Contains(lowerMessage, "http") {
 		taskErr.Message = common.MaskSensitiveInfo(taskErr.Message)
 	}
-	taskErr.Code = taskcommon.RedactModelRoutingText(taskErr.Code, info.OriginModelName, info.UpstreamModelName)
+	taskErr.Code = taskcommon.RedactModelRoutingText(taskErr.Code, info.OriginModelName, info.RouteTargetModelName, info.UpstreamModelName)
 	if taskErr.Data == nil {
 		return taskErr
 	}
@@ -286,7 +314,7 @@ func sanitizeTaskErrorForPublic(taskErr *dto.TaskError, info *relaycommon.RelayI
 		taskErr.Data = nil
 		return taskErr
 	}
-	sanitizedData, err := taskcommon.SanitizePublicTaskErrorData(data, info.OriginModelName, info.UpstreamModelName)
+	sanitizedData, err := taskcommon.SanitizePublicTaskErrorData(data, info.OriginModelName, info.RouteTargetModelName, info.UpstreamModelName)
 	if err != nil {
 		taskErr.Data = nil
 		return taskErr
@@ -455,6 +483,7 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 			respBody, err = taskcommon.SanitizePublicTaskData(
 				openAIVideoData,
 				originTask.Properties.OriginModelName,
+				originTask.PrivateData.RouteTargetModelName,
 				originTask.Properties.UpstreamModelName,
 			)
 			if err != nil {
@@ -556,6 +585,7 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
 		"url": taskcommon.RedactModelRoutingText(
 			task.GetResultURL(),
 			task.Properties.OriginModelName,
+			task.PrivateData.RouteTargetModelName,
 			task.Properties.UpstreamModelName,
 		),
 	}
@@ -612,10 +642,10 @@ func TaskModel2Dto(task *model.Task, audience TaskDtoAudience) *dto.TaskDto {
 	resultURL := task.GetResultURL()
 	if audience != TaskDtoAudienceAdmin {
 		properties.UpstreamModelName = ""
-		properties.Input = taskcommon.RedactModelRoutingText(properties.Input, properties.OriginModelName, task.Properties.UpstreamModelName)
-		failReason = taskcommon.RedactModelRoutingText(failReason, properties.OriginModelName, task.Properties.UpstreamModelName)
-		resultURL = taskcommon.RedactModelRoutingText(resultURL, properties.OriginModelName, task.Properties.UpstreamModelName)
-		sanitizedTaskData, err := taskcommon.SanitizePublicTaskData(task.Data, properties.OriginModelName, task.Properties.UpstreamModelName)
+		properties.Input = taskcommon.RedactModelRoutingText(properties.Input, properties.OriginModelName, task.PrivateData.RouteTargetModelName, task.Properties.UpstreamModelName)
+		failReason = taskcommon.RedactModelRoutingText(failReason, properties.OriginModelName, task.PrivateData.RouteTargetModelName, task.Properties.UpstreamModelName)
+		resultURL = taskcommon.RedactModelRoutingText(resultURL, properties.OriginModelName, task.PrivateData.RouteTargetModelName, task.Properties.UpstreamModelName)
+		sanitizedTaskData, err := taskcommon.SanitizePublicTaskData(task.Data, properties.OriginModelName, task.PrivateData.RouteTargetModelName, task.Properties.UpstreamModelName)
 		if err != nil {
 			taskData = nil
 		} else {

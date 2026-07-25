@@ -73,6 +73,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	var (
 		newAPIError *types.NewAPIError
+		relayInfo   *relaycommon.RelayInfo
 		ws          *websocket.Conn
 	)
 
@@ -89,18 +90,34 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	defer func() {
 		if newAPIError != nil {
 			logger.LogError(c, fmt.Sprintf("relay error: %s", common.LocalLogPreview(newAPIError.Error())))
-			newAPIError.SetMessage(common.MessageWithRequestId(newAPIError.Error(), requestId))
+			publicMessage := newAPIError.Error()
+			privacyInfo := relayInfo
+			if privacyInfo == nil {
+				if routeTarget := common.GetContextKeyString(c, constant.ContextKeyUserModelRouteTarget); routeTarget != "" {
+					privacyInfo = &relaycommon.RelayInfo{
+						UserModelRouteId:     common.GetContextKeyInt(c, constant.ContextKeyUserModelRouteId),
+						OriginModelName:      common.GetContextKeyString(c, constant.ContextKeyOriginalModel),
+						RouteTargetModelName: routeTarget,
+						ChannelMeta:          &relaycommon.ChannelMeta{UpstreamModelName: routeTarget},
+					}
+				}
+			}
+			publicMessage = relaycommon.RedactUserModelRouteText(publicMessage, privacyInfo)
+			newAPIError.SetMessage(common.MessageWithRequestId(publicMessage, requestId))
 			switch relayFormat {
 			case types.RelayFormatOpenAIRealtime:
-				helper.WssError(c, ws, newAPIError.ToOpenAIError())
+				publicError := relaycommon.SanitizeUserModelRouteOpenAIError(newAPIError.ToOpenAIError(), privacyInfo)
+				helper.WssError(c, ws, publicError)
 			case types.RelayFormatClaude:
+				publicError := relaycommon.SanitizeUserModelRouteClaudeError(newAPIError.ToClaudeError(), privacyInfo)
 				c.JSON(newAPIError.StatusCode, gin.H{
 					"type":  "error",
-					"error": newAPIError.ToClaudeError(),
+					"error": publicError,
 				})
 			default:
+				publicError := relaycommon.SanitizeUserModelRouteOpenAIError(newAPIError.ToOpenAIError(), privacyInfo)
 				c.JSON(newAPIError.StatusCode, gin.H{
-					"error": newAPIError.ToOpenAIError(),
+					"error": publicError,
 				})
 			}
 		}
@@ -117,7 +134,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		return
 	}
 
-	relayInfo, err := relaycommon.GenRelayInfo(c, relayFormat, request, ws)
+	relayInfo, err = relaycommon.GenRelayInfo(c, relayFormat, request, ws)
 	if err != nil {
 		newAPIError = types.NewError(err, types.ErrorCodeGenRelayInfoFailed)
 		return
@@ -182,13 +199,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 	}()
 
-	retryParam := &service.RetryParam{
-		Ctx:         c,
-		TokenGroup:  relayInfo.TokenGroup,
-		ModelName:   relayInfo.OriginModelName,
-		RequestPath: c.Request.URL.Path,
-		Retry:       common.GetPointer(0),
-	}
+	retryParam := buildRelayRetryParam(c, relayInfo)
 	relayInfo.RetryIndex = 0
 	relayInfo.LastError = nil
 
@@ -313,9 +324,15 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 	info.PriceData.GroupRatioInfo = helper.HandleGroupRatio(c, info)
 
 	if err != nil {
+		if common.GetContextKeyInt(c, constant.ContextKeyUserModelRouteId) > 0 {
+			return nil, types.NewError(fmt.Errorf("用户模型路由没有可用渠道"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		}
 		return nil, types.NewError(fmt.Errorf("获取分组 %s 下模型 %s 的可用渠道失败（retry）: %s", selectGroup, info.OriginModelName, err.Error()), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}
 	if channel == nil {
+		if common.GetContextKeyInt(c, constant.ContextKeyUserModelRouteId) > 0 {
+			return nil, types.NewError(fmt.Errorf("用户模型路由没有可用渠道"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		}
 		return nil, types.NewError(fmt.Errorf("分组 %s 下模型 %s 的可用渠道不存在（retry）", selectGroup, info.OriginModelName), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}
 
@@ -507,6 +524,32 @@ func RelayTask(c *gin.Context) {
 		return
 	}
 
+	// Origin-task submissions (notably video remix) are resolved after the
+	// distributor has run. Apply the same account route policy here before a
+	// locked origin channel can be used.
+	if relayInfo.OriginRouteSnapshotVersion == 0 {
+		route, routeErr := middleware.ApplyUserModelRoute(c, relayInfo.OriginModelName, relayInfo.UsingGroup)
+		if routeErr != nil {
+			respondTaskError(c, service.TaskErrorWrapperLocal(routeErr, "user_model_route_unavailable", http.StatusServiceUnavailable))
+			return
+		}
+		if route != nil {
+			relayInfo.UserModelRouteId = route.Id
+			relayInfo.RouteTargetModelName = strings.TrimSpace(route.TargetModel)
+			relayInfo.RouteExecutionGroup = strings.TrimSpace(route.ExecutionGroup)
+		}
+	}
+	if lockedCh, ok := relayInfo.LockedChannel.(*model.Channel); ok && lockedCh != nil {
+		if err := middleware.ValidateSelectedRouteChannel(c, lockedCh, c.Request.URL.Path); err != nil {
+			respondTaskError(c, service.TaskErrorWrapperLocal(err, "task_channel_outside_user_route", http.StatusForbidden))
+			return
+		}
+		if setupErr := middleware.SetupContextForSelectedChannel(c, lockedCh, relayInfo.OriginModelName); setupErr != nil {
+			respondTaskError(c, service.TaskErrorWrapperLocal(setupErr.Err, "setup_locked_channel_failed", http.StatusInternalServerError))
+			return
+		}
+	}
+
 	var result *relay.TaskSubmitResult
 	var taskErr *dto.TaskError
 	defer func() {
@@ -515,13 +558,7 @@ func RelayTask(c *gin.Context) {
 		}
 	}()
 
-	retryParam := &service.RetryParam{
-		Ctx:         c,
-		TokenGroup:  relayInfo.TokenGroup,
-		ModelName:   relayInfo.OriginModelName,
-		RequestPath: c.Request.URL.Path,
-		Retry:       common.GetPointer(0),
-	}
+	retryParam := buildRelayRetryParam(c, relayInfo)
 
 	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
 		var channel *model.Channel
@@ -610,6 +647,27 @@ func RelayTask(c *gin.Context) {
 
 	if taskErr != nil {
 		respondTaskError(c, taskErr)
+	}
+}
+
+func buildRelayRetryParam(c *gin.Context, info *relaycommon.RelayInfo) *service.RetryParam {
+	modelName := info.OriginModelName
+	if routedModel := common.GetContextKeyString(c, constant.ContextKeyUserModelRouteTarget); routedModel != "" {
+		modelName = routedModel
+	}
+	group := info.TokenGroup
+	if routedGroup := common.GetContextKeyString(c, constant.ContextKeyUserModelRouteGroup); routedGroup != "" {
+		group = routedGroup
+	}
+	channelIds, _ := common.GetContextKeyType[[]int](c, constant.ContextKeyUserModelRouteChannel)
+	return &service.RetryParam{
+		Ctx:               c,
+		TokenGroup:        group,
+		ModelName:         modelName,
+		RequestPath:       c.Request.URL.Path,
+		AllowedChannelIds: channelIds,
+		CandidateFilter:   middleware.BuildChannelCandidateFilter(c, modelName),
+		Retry:             common.GetPointer(0),
 	}
 }
 

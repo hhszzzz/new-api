@@ -3,6 +3,7 @@ package controller
 import (
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
@@ -177,32 +179,109 @@ type modelListGroups struct {
 
 func getModelListGroups(c *gin.Context) (modelListGroups, error) {
 	tokenGroup := common.GetContextKeyString(c, constant.ContextKeyTokenGroup)
-	userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
-	if userGroup == "" && (tokenGroup == "" || tokenGroup == "auto") {
-		var err error
-		userGroup, err = model.GetUserGroup(c.GetInt("id"), false)
+	userGroups := common.GetContextKeyStringSlice(c, constant.ContextKeyUserGroups)
+	if len(userGroups) == 0 {
+		if legacyGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup); legacyGroup != "" {
+			userGroups = []string{legacyGroup}
+		}
+	}
+	if len(userGroups) == 0 && c.GetInt("id") > 0 {
+		user, err := model.GetUserCache(c.GetInt("id"))
 		if err != nil {
 			return modelListGroups{}, err
 		}
+		userGroups = user.Groups
 	}
-
-	if tokenGroup == "auto" {
-		return modelListGroups{
-			userGroup:   userGroup,
-			tokenGroup:  tokenGroup,
-			ownerGroups: service.GetUserAutoGroup(userGroup),
-		}, nil
+	userGroup := ""
+	if len(userGroups) > 0 {
+		userGroup = userGroups[0]
 	}
-
-	group := userGroup
-	if tokenGroup != "" {
-		group = tokenGroup
+	ownerGroups := userGroups
+	switch {
+	case tokenGroup == "auto":
+		ownerGroups = service.GetUserAutoGroups(userGroups)
+	case tokenGroup != "" && service.GroupInUserUsableGroupsForGroups(userGroups, tokenGroup):
+		ownerGroups = []string{tokenGroup}
 	}
 	return modelListGroups{
 		userGroup:   userGroup,
 		tokenGroup:  tokenGroup,
-		ownerGroups: []string{group},
+		ownerGroups: ownerGroups,
 	}, nil
+}
+
+func getAllowedModelNames(c *gin.Context, acceptUnsetRatioModel bool) ([]string, []string, error) {
+	groups, err := getModelListGroups(c)
+	if err != nil {
+		return nil, nil, err
+	}
+	models := service.GetGroupsEnabledModels(groups.ownerGroups)
+	if userId := c.GetInt("id"); userId > 0 && c.GetInt("role") != common.RoleRootUser {
+		routeSources, routeErr := model.GetEnabledUserModelRouteSources(userId, groups.ownerGroups)
+		if routeErr != nil {
+			return nil, nil, routeErr
+		}
+		seen := make(map[string]struct{}, len(models)+len(routeSources))
+		for _, modelName := range models {
+			seen[modelName] = struct{}{}
+		}
+		for _, modelName := range routeSources {
+			if _, exists := seen[modelName]; exists {
+				continue
+			}
+			if !acceptUnsetRatioModel && !helper.HasModelBillingConfig(modelName) {
+				continue
+			}
+			models = append(models, modelName)
+			seen[modelName] = struct{}{}
+		}
+		sort.Strings(models)
+	}
+	userLimitEnabled := common.GetContextKeyBool(c, constant.ContextKeyUserModelLimitEnabled)
+	userLimits, _ := common.GetContextKeyType[map[string]bool](c, constant.ContextKeyUserModelLimit)
+	tokenLimitEnabled := common.GetContextKeyBool(c, constant.ContextKeyTokenModelLimitEnabled)
+	tokenLimits, _ := common.GetContextKeyType[map[string]bool](c, constant.ContextKeyTokenModelLimit)
+	// A token allowlist has historically been able to expose a priced model
+	// even when that model is not present in the selected group's channel
+	// catalog (for example, a tiered-billing-only model). Keep that contract,
+	// while still applying the user allowlist as an intersection below.
+	if tokenLimitEnabled {
+		seen := make(map[string]struct{}, len(models)+len(tokenLimits))
+		for _, modelName := range models {
+			seen[modelName] = struct{}{}
+		}
+		for modelName := range tokenLimits {
+			modelName = strings.TrimSpace(modelName)
+			if modelName == "" {
+				continue
+			}
+			if !acceptUnsetRatioModel && !helper.HasModelBillingConfig(modelName) {
+				continue
+			}
+			if _, exists := seen[modelName]; exists {
+				continue
+			}
+			models = append(models, modelName)
+			seen[modelName] = struct{}{}
+		}
+		sort.Strings(models)
+	}
+
+	allowed := make([]string, 0, len(models))
+	for _, modelName := range models {
+		if !acceptUnsetRatioModel && !helper.HasModelBillingConfig(modelName) {
+			continue
+		}
+		matchName := ratio_setting.FormatMatchingModelName(modelName)
+		if userLimitEnabled && !userLimits[matchName] {
+			continue
+		}
+		if tokenLimitEnabled && !tokenLimits[matchName] {
+			continue
+		}
+		allowed = append(allowed, modelName)
+	}
+	return allowed, groups.ownerGroups, nil
 }
 
 func ListModels(c *gin.Context, modelType int) {
@@ -217,8 +296,7 @@ func ListModels(c *gin.Context, modelType int) {
 		}
 	}
 
-	userModelNames := make([]string, 0)
-	groups, err := getModelListGroups(c)
+	userModelNames, ownerGroups, err := getAllowedModelNames(c, acceptUnsetRatioModel)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
@@ -226,36 +304,6 @@ func ListModels(c *gin.Context, modelType int) {
 		})
 		return
 	}
-	ownerGroups := groups.ownerGroups
-	modelLimitEnable := common.GetContextKeyBool(c, constant.ContextKeyTokenModelLimitEnabled)
-	if modelLimitEnable {
-		s, ok := common.GetContextKey(c, constant.ContextKeyTokenModelLimit)
-		var tokenModelLimit map[string]bool
-		if ok {
-			tokenModelLimit = s.(map[string]bool)
-		} else {
-			tokenModelLimit = map[string]bool{}
-		}
-		for allowModel, _ := range tokenModelLimit {
-			if !acceptUnsetRatioModel {
-				if !helper.HasModelBillingConfig(allowModel) {
-					continue
-				}
-			}
-			userModelNames = append(userModelNames, allowModel)
-		}
-	} else {
-		models := service.GetGroupsEnabledModels(ownerGroups)
-		for _, modelName := range models {
-			if !acceptUnsetRatioModel {
-				if !helper.HasModelBillingConfig(modelName) {
-					continue
-				}
-			}
-			userModelNames = append(userModelNames, modelName)
-		}
-	}
-
 	ownerByModel := map[string]string{}
 	if len(ownerGroups) > 0 {
 		ownerByModel = getPreferredModelOwners(userModelNames, ownerGroups)
@@ -276,12 +324,12 @@ func ListModels(c *gin.Context, modelType int) {
 				Type:        "model",
 			}
 		}
-		c.JSON(200, gin.H{
-			"data":     useranthropicModels,
-			"first_id": useranthropicModels[0].ID,
-			"has_more": false,
-			"last_id":  useranthropicModels[len(useranthropicModels)-1].ID,
-		})
+		response := gin.H{"data": useranthropicModels, "has_more": false}
+		if len(useranthropicModels) > 0 {
+			response["first_id"] = useranthropicModels[0].ID
+			response["last_id"] = useranthropicModels[len(useranthropicModels)-1].ID
+		}
+		c.JSON(200, response)
 	case constant.ChannelTypeGemini:
 		userGeminiModels := make([]dto.GeminiModel, len(userOpenAiModels))
 		for i, model := range userOpenAiModels {
@@ -311,9 +359,40 @@ func ChannelListModels(c *gin.Context) {
 }
 
 func DashboardListModels(c *gin.Context) {
+	modelsByChannel := channelId2Models
+	if c.GetInt("role") != common.RoleRootUser {
+		acceptUnsetRatioModel := operation_setting.SelfUseModeEnabled
+		if !acceptUnsetRatioModel {
+			if userSettings, err := model.GetUserSetting(c.GetInt("id"), false); err == nil {
+				acceptUnsetRatioModel = userSettings.AcceptUnsetRatioModel
+			}
+		}
+		allowedModels, _, err := getAllowedModelNames(c, acceptUnsetRatioModel)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"success": false,
+				"message": "get user group failed",
+			})
+			return
+		}
+		allowed := make(map[string]struct{}, len(allowedModels))
+		for _, modelName := range allowedModels {
+			allowed[modelName] = struct{}{}
+		}
+		modelsByChannel = make(map[int][]string, len(channelId2Models))
+		for channelType, modelNames := range channelId2Models {
+			visible := make([]string, 0, len(modelNames))
+			for _, modelName := range modelNames {
+				if _, ok := allowed[modelName]; ok {
+					visible = append(visible, modelName)
+				}
+			}
+			modelsByChannel[channelType] = visible
+		}
+	}
 	c.JSON(200, gin.H{
 		"success": true,
-		"data":    channelId2Models,
+		"data":    modelsByChannel,
 	})
 }
 
@@ -326,7 +405,16 @@ func EnabledListModels(c *gin.Context) {
 
 func RetrieveModel(c *gin.Context, modelType int) {
 	modelId := c.Param("model")
-	if aiModel, ok := openAIModelsMap[modelId]; ok {
+	acceptUnsetRatioModel := operation_setting.SelfUseModeEnabled
+	if !acceptUnsetRatioModel && c.GetInt("id") > 0 {
+		if userSettings, err := model.GetUserSetting(c.GetInt("id"), false); err == nil {
+			acceptUnsetRatioModel = userSettings.AcceptUnsetRatioModel
+		}
+	}
+	allowedModels, ownerGroups, err := getAllowedModelNames(c, acceptUnsetRatioModel)
+	if err == nil && common.StringsContains(allowedModels, modelId) {
+		owners := getPreferredModelOwners([]string{modelId}, ownerGroups)
+		aiModel := buildOpenAIModel(modelId, owners)
 		switch modelType {
 		case constant.ChannelTypeAnthropic:
 			c.JSON(200, dto.AnthropicModel{

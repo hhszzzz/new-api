@@ -269,9 +269,15 @@ func migrateDB() error {
 	}
 
 	err := DB.AutoMigrate(
+		&ChannelAggregate{},
 		&Channel{},
 		&Token{},
 		&User{},
+		&UserGroupMembership{},
+		&UserModelPermission{},
+		&UserModelRoute{},
+		&UserModelRouteGroup{},
+		&UserModelRouteChannel{},
 		&UserSession{},
 		&AuthFlow{},
 		&ExternalIdentityClaim{},
@@ -311,6 +317,9 @@ func migrateDB() error {
 	if err := InitializeUserAuthVersions(); err != nil {
 		return err
 	}
+	if err := InitializeUserPolicies(); err != nil {
+		return err
+	}
 	if err := InitializeExternalIdentityClaims(); err != nil {
 		return err
 	}
@@ -334,9 +343,15 @@ func migrateDBFast() error {
 		model interface{}
 		name  string
 	}{
+		{&ChannelAggregate{}, "ChannelAggregate"},
 		{&Channel{}, "Channel"},
 		{&Token{}, "Token"},
 		{&User{}, "User"},
+		{&UserGroupMembership{}, "UserGroupMembership"},
+		{&UserModelPermission{}, "UserModelPermission"},
+		{&UserModelRoute{}, "UserModelRoute"},
+		{&UserModelRouteGroup{}, "UserModelRouteGroup"},
+		{&UserModelRouteChannel{}, "UserModelRouteChannel"},
 		{&UserSession{}, "UserSession"},
 		{&AuthFlow{}, "AuthFlow"},
 		{&ExternalIdentityClaim{}, "ExternalIdentityClaim"},
@@ -392,6 +407,9 @@ func migrateDBFast() error {
 		}
 	}
 	if err := InitializeUserAuthVersions(); err != nil {
+		return err
+	}
+	if err := InitializeUserPolicies(); err != nil {
 		return err
 	}
 	if err := InitializeExternalIdentityClaims(); err != nil {

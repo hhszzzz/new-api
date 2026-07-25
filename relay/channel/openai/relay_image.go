@@ -46,13 +46,17 @@ func OpenaiImageHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.
 	}
 
 	if oaiError := usageResp.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
-		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
+		publicError := relaycommon.SanitizeUserModelRouteOpenAIError(*oaiError, info)
+		return nil, types.WithOpenAIError(publicError, resp.StatusCode)
 	}
 
 	updateOpenAIImageCount(info, gjson.GetBytes(responseBody, "data.#").Int())
 
-	// 写入新的 response body
-	service.IOCopyBytesGracefully(c, resp, responseBody)
+	clientResponseBody, err := relaycommon.RedactUserModelRouteJSON(responseBody, info)
+	if err != nil {
+		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+	}
+	service.IOCopyBytesGracefully(c, resp, clientResponseBody)
 
 	normalizeOpenAIUsage(&usageResp.Usage)
 	applyUsagePostProcessing(info, &usageResp.Usage, responseBody)
@@ -134,7 +138,12 @@ func OpenaiImageStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp 
 				completedImages++
 			}
 		}
-		if err := writeOpenaiImageStreamChunk(c, raw); err != nil {
+		clientRaw, err := relaycommon.RedactUserModelRouteJSON(raw, info)
+		if err != nil {
+			sr.Stop(err)
+			return
+		}
+		if err := writeOpenaiImageStreamChunk(c, clientRaw); err != nil {
 			sr.Stop(err)
 		}
 	})
@@ -247,7 +256,8 @@ func openaiImageJSONAsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo,
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	if oaiError := usageResp.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
-		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
+		publicError := relaycommon.SanitizeUserModelRouteOpenAIError(*oaiError, info)
+		return nil, types.WithOpenAIError(publicError, resp.StatusCode)
 	}
 	normalizeOpenAIUsage(&usageResp.Usage)
 	applyUsagePostProcessing(info, &usageResp.Usage, responseBody)

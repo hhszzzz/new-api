@@ -77,7 +77,7 @@ func CommonClaudeHeadersOperation(c *gin.Context, req *http.Header, info *relayc
 	if anthropicBeta != "" {
 		req.Set("anthropic-beta", anthropicBeta)
 	}
-	model_setting.GetClaudeSettings().WriteHeaders(info.OriginModelName, req)
+	model_setting.GetClaudeSettings().WriteHeaders(info.UpstreamModelName, req)
 }
 
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) error {

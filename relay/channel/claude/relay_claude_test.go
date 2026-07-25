@@ -1,11 +1,18 @@
 package claude
 
 import (
+	"bytes"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/dto"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service/relayconvert"
+	"github.com/QuantumNous/new-api/types"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -372,4 +379,65 @@ func TestOpenAIChatRequestToClaudeMessages_ClaudeOpus48ThinkingUsesAdaptiveHighE
 	require.Nil(t, claudeRequest.Temperature)
 	require.Nil(t, claudeRequest.TopP)
 	require.Nil(t, claudeRequest.TopK)
+}
+
+func TestClaudeNativeResponseRedactsRoutedModel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	info := &relaycommon.RelayInfo{
+		RelayFormat:          types.RelayFormatClaude,
+		OriginModelName:      "claude-public",
+		UserModelRouteId:     8,
+		RouteTargetModelName: "provider-claude-private",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "provider-claude-private",
+		},
+	}
+	responseBody := []byte(`{"id":"msg_1","type":"message","role":"assistant","model":"provider-claude-private","content":[{"type":"text","text":"provider-claude-private remains content"}],"usage":{"input_tokens":1,"output_tokens":1},"metadata":{"model":"provider-claude-private"},"provider_extension":true}`)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(bytes.NewReader(responseBody)),
+	}
+
+	usage, newAPIError := ClaudeHandler(c, resp, info)
+	require.Nil(t, newAPIError)
+	require.NotNil(t, usage)
+	require.Contains(t, recorder.Body.String(), `"model":"claude-public"`)
+	require.Contains(t, recorder.Body.String(), `"text":"provider-claude-private remains content"`)
+	require.Contains(t, recorder.Body.String(), `"metadata":{"model":"provider-claude-private"}`)
+	require.Contains(t, recorder.Body.String(), `"provider_extension":true`)
+	require.NotContains(t, recorder.Body.String(), `"model":"provider-claude-private","content"`)
+}
+
+func TestClaudeNativeStreamRedactsRoutedMessageModel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	info := &relaycommon.RelayInfo{
+		RelayFormat:          types.RelayFormatClaude,
+		OriginModelName:      "claude-public",
+		UserModelRouteId:     8,
+		RouteTargetModelName: "provider-claude-private",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "provider-claude-private",
+		},
+	}
+	claudeInfo := &ClaudeResponseInfo{
+		Usage:        &dto.Usage{},
+		ResponseText: strings.Builder{},
+	}
+	data := `{"type":"message_start","message":{"id":"msg_1","model":"provider-claude-private","content":"provider-claude-private remains content","usage":{"input_tokens":1,"output_tokens":1}},"metadata":{"model":"provider-claude-private"}}`
+
+	newAPIError := HandleStreamResponseData(c, info, claudeInfo, data)
+	require.Nil(t, newAPIError)
+	require.Contains(t, recorder.Body.String(), `"model":"claude-public"`)
+	require.Contains(t, recorder.Body.String(), `"content":"provider-claude-private remains content"`)
+	require.Contains(t, recorder.Body.String(), `"metadata":{"model":"provider-claude-private"}`)
+	require.NotContains(t, recorder.Body.String(), `"model":"provider-claude-private","content"`)
 }

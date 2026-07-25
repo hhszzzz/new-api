@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/pkg/cachex"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -349,6 +350,29 @@ func buildChannelAffinityCacheKeySuffix(rule operation_setting.ChannelAffinityRu
 	return strings.Join(parts, ":")
 }
 
+func buildChannelAffinityCacheKeySuffixForContext(c *gin.Context, rule operation_setting.ChannelAffinityRule, modelName string, usingGroup string, affinityValue string) string {
+	suffix := buildChannelAffinityCacheKeySuffix(rule, modelName, usingGroup, affinityValue)
+	if c == nil {
+		return suffix
+	}
+	routeId := common.GetContextKeyInt(c, constant.ContextKeyUserModelRouteId)
+	if routeId <= 0 {
+		return suffix
+	}
+	channelIds, _ := common.GetContextKeyType[[]int](c, constant.ContextKeyUserModelRouteChannel)
+	fingerprintSource := fmt.Sprintf("%d|%s|%s|%v",
+		routeId,
+		common.GetContextKeyString(c, constant.ContextKeyUserModelRouteTarget),
+		common.GetContextKeyString(c, constant.ContextKeyUserModelRouteGroup),
+		channelIds,
+	)
+	fingerprint := common.Sha1([]byte(fingerprintSource))
+	if len(fingerprint) > 12 {
+		fingerprint = fingerprint[:12]
+	}
+	return suffix + ":route-" + strconv.Itoa(routeId) + "-" + fingerprint
+}
+
 func setChannelAffinityContext(c *gin.Context, meta channelAffinityMeta) {
 	c.Set(ginKeyChannelAffinityCacheKey, meta.CacheKey)
 	c.Set(ginKeyChannelAffinityTTLSeconds, meta.TTLSeconds)
@@ -591,7 +615,7 @@ func GetPreferredChannelByAffinity(c *gin.Context, modelName string, usingGroup 
 		if ttlSeconds <= 0 {
 			ttlSeconds = setting.DefaultTTLSeconds
 		}
-		cacheKeySuffix := buildChannelAffinityCacheKeySuffix(rule, modelName, usingGroup, affinityValue)
+		cacheKeySuffix := buildChannelAffinityCacheKeySuffixForContext(c, rule, modelName, usingGroup, affinityValue)
 		cacheKeyFull := channelAffinityCacheNamespace + ":" + cacheKeySuffix
 		setChannelAffinityContext(c, channelAffinityMeta{
 			CacheKey:       cacheKeyFull,

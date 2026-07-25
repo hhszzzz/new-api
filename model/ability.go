@@ -3,12 +3,14 @@ package model
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/samber/lo"
 	"gorm.io/gorm"
@@ -29,6 +31,8 @@ type AbilityWithChannel struct {
 	Ability
 	ChannelType int `json:"channel_type"`
 }
+
+type ChannelCandidateFilter func(channel *Channel) bool
 
 func GetAllEnableAbilityWithChannels() ([]AbilityWithChannel, error) {
 	var abilities []AbilityWithChannel
@@ -60,90 +64,181 @@ func GetAllEnableAbilities() []Ability {
 	return abilities
 }
 
-func getPriority(group string, model string, retry int) (int, error) {
-
+func getPriority(group string, model string, retry int, channelIds []int) (int, error) {
 	var priorities []int
-	err := DB.Model(&Ability{}).
+	query := DB.Model(&Ability{}).
 		Select("DISTINCT(priority)").
-		Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true).
-		Order("priority DESC").              // 按优先级降序排序
-		Pluck("priority", &priorities).Error // Pluck用于将查询的结果直接扫描到一个切片中
-
-	if err != nil {
-		// 处理错误
+		Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true)
+	if channelIds != nil {
+		query = query.Where("channel_id IN ?", channelIds)
+	}
+	if err := query.Order("priority DESC").Pluck("priority", &priorities).Error; err != nil {
 		return 0, err
 	}
-
 	if len(priorities) == 0 {
-		// 如果没有查询到优先级，则返回错误
 		return 0, errors.New("数据库一致性被破坏")
 	}
-
-	// 确定要使用的优先级
-	var priorityToUse int
 	if retry >= len(priorities) {
-		// 如果重试次数大于优先级数，则使用最小的优先级
-		priorityToUse = priorities[len(priorities)-1]
-	} else {
-		priorityToUse = priorities[retry]
+		return priorities[len(priorities)-1], nil
 	}
-	return priorityToUse, nil
+	return priorities[retry], nil
 }
 
-func getChannelQuery(group string, model string, retry int) (*gorm.DB, error) {
-	maxPrioritySubQuery := DB.Model(&Ability{}).Select("MAX(priority)").Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true)
-	channelQuery := DB.Where(commonGroupCol+" = ? and model = ? and enabled = ? and priority = (?)", group, model, true, maxPrioritySubQuery)
-	if retry != 0 {
-		priority, err := getPriority(group, model, retry)
-		if err != nil {
-			return nil, err
-		} else {
-			channelQuery = DB.Where(commonGroupCol+" = ? and model = ? and enabled = ? and priority = ?", group, model, true, priority)
-		}
+func getChannelQuery(group string, model string, retry int, channelIds []int) (*gorm.DB, error) {
+	baseQuery := DB.Model(&Ability{}).
+		Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true)
+	if channelIds != nil {
+		baseQuery = baseQuery.Where("channel_id IN ?", channelIds)
 	}
-
-	return channelQuery, nil
+	if retry == 0 {
+		maxPrioritySubQuery := baseQuery.Session(&gorm.Session{}).Select("MAX(priority)")
+		return baseQuery.Where("priority = (?)", maxPrioritySubQuery), nil
+	}
+	priority, err := getPriority(group, model, retry, channelIds)
+	if err != nil {
+		return nil, err
+	}
+	return baseQuery.Where("priority = ?", priority), nil
 }
 
 func GetChannel(group string, model string, retry int, requestPath string) (*Channel, error) {
-	var abilities []Ability
+	return GetChannelInPool(group, model, retry, requestPath, nil)
+}
 
-	var err error = nil
-	channelQuery, err := getChannelQuery(group, model, retry)
+func GetChannelInPool(group string, model string, retry int, requestPath string, channelIds []int) (*Channel, error) {
+	return GetChannelInPoolWithFilter(group, model, retry, requestPath, channelIds, nil)
+}
+
+func GetChannelInPoolWithFilter(group string, modelName string, retry int, requestPath string, channelIds []int, candidateFilter ChannelCandidateFilter) (*Channel, error) {
+	abilities, channels, err := findEligibleChannelAbilities(group, modelName, modelName, requestPath, channelIds, candidateFilter)
 	if err != nil {
 		return nil, err
 	}
-	if common.UsingMainDatabase(common.DatabaseTypeSQLite) || common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
-		err = channelQuery.Order("weight DESC").Find(&abilities).Error
-	} else {
-		err = channelQuery.Order("weight DESC").Find(&abilities).Error
-	}
-	if err != nil {
-		return nil, err
-	}
-	abilities = filterAbilitiesByRequestPathAndModel(abilities, requestPath, model)
-	channel := Channel{}
-	if len(abilities) > 0 {
-		// Randomly choose one
-		weightSum := uint(0)
-		for _, ability_ := range abilities {
-			weightSum += ability_.Weight + 10
-		}
-		// Randomly choose one
-		weight := common.GetRandomInt(int(weightSum))
-		for _, ability_ := range abilities {
-			weight -= int(ability_.Weight) + 10
-			//log.Printf("weight: %d, ability weight: %d", weight, *ability_.Weight)
-			if weight <= 0 {
-				channel.Id = ability_.ChannelId
-				break
+	if len(abilities) == 0 {
+		normalizedModel := ratio_setting.FormatMatchingModelName(modelName)
+		if normalizedModel != "" && normalizedModel != modelName {
+			abilities, channels, err = findEligibleChannelAbilities(group, normalizedModel, modelName, requestPath, channelIds, candidateFilter)
+			if err != nil {
+				return nil, err
 			}
 		}
-	} else {
+	}
+	if len(abilities) == 0 {
 		return nil, nil
 	}
-	err = DB.First(&channel, "id = ?", channel.Id).Error
-	return &channel, err
+
+	priorities := make(map[int64]struct{})
+	for _, ability := range abilities {
+		priority := int64(0)
+		if ability.Priority != nil {
+			priority = *ability.Priority
+		}
+		priorities[priority] = struct{}{}
+	}
+	sortedPriorities := make([]int64, 0, len(priorities))
+	for priority := range priorities {
+		sortedPriorities = append(sortedPriorities, priority)
+	}
+	sort.Slice(sortedPriorities, func(i, j int) bool {
+		return sortedPriorities[i] > sortedPriorities[j]
+	})
+	if retry >= len(sortedPriorities) {
+		retry = len(sortedPriorities) - 1
+	}
+	if retry < 0 {
+		retry = 0
+	}
+	targetPriority := sortedPriorities[retry]
+	targetAbilities := make([]Ability, 0, len(abilities))
+	for _, ability := range abilities {
+		priority := int64(0)
+		if ability.Priority != nil {
+			priority = *ability.Priority
+		}
+		if priority == targetPriority {
+			targetAbilities = append(targetAbilities, ability)
+		}
+	}
+	if len(targetAbilities) == 0 {
+		return nil, nil
+	}
+
+	weightSum := uint(0)
+	for _, ability := range targetAbilities {
+		weightSum += ability.Weight + 10
+	}
+	weight := common.GetRandomInt(int(weightSum))
+	channelId := 0
+	for _, ability := range targetAbilities {
+		weight -= int(ability.Weight) + 10
+		if weight <= 0 {
+			channelId = ability.ChannelId
+			break
+		}
+	}
+	channel := channels[channelId]
+	if channel == nil {
+		return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channelId)
+	}
+	return channel, nil
+}
+
+// findEligibleChannelAbilities loads all priorities first, then removes
+// channels that cannot serve this request. Priority and weight selection must
+// only run over the remaining legal candidates.
+func findEligibleChannelAbilities(group, abilityModel, requestModel, requestPath string, channelIds []int, candidateFilter ChannelCandidateFilter) ([]Ability, map[int]*Channel, error) {
+	query := DB.Model(&Ability{}).
+		Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, abilityModel, true)
+	if channelIds != nil {
+		query = query.Where("channel_id IN ?", channelIds)
+	}
+	abilities := make([]Ability, 0)
+	if err := query.Order("priority DESC").Order("weight DESC").Find(&abilities).Error; err != nil {
+		return nil, nil, err
+	}
+	if len(abilities) == 0 {
+		return abilities, map[int]*Channel{}, nil
+	}
+
+	ids := make([]int, 0, len(abilities))
+	seen := make(map[int]struct{}, len(abilities))
+	for _, ability := range abilities {
+		if _, ok := seen[ability.ChannelId]; ok {
+			continue
+		}
+		seen[ability.ChannelId] = struct{}{}
+		ids = append(ids, ability.ChannelId)
+	}
+	channelRows := make([]*Channel, 0, len(ids))
+	if err := DB.Where("id IN ? AND status = ?", ids, common.ChannelStatusEnabled).Find(&channelRows).Error; err != nil {
+		return nil, nil, err
+	}
+	if err := HydrateChannelAggregateSnapshots(channelRows); err != nil {
+		return nil, nil, err
+	}
+	channels := make(map[int]*Channel, len(channelRows))
+	for _, channel := range channelRows {
+		channels[channel.Id] = channel
+	}
+
+	filtered := make([]Ability, 0, len(abilities))
+	for _, ability := range abilities {
+		channel := channels[ability.ChannelId]
+		if channel == nil {
+			continue
+		}
+		if requestPath != "" && channel.Type == constant.ChannelTypeAdvancedCustom {
+			config := channel.GetOtherSettings().AdvancedCustom
+			if config == nil || !config.SupportsPathForModel(requestPath, requestModel) {
+				continue
+			}
+		}
+		if candidateFilter != nil && !candidateFilter(channel) {
+			continue
+		}
+		filtered = append(filtered, ability)
+	}
+	return filtered, channels, nil
 }
 
 // filterAbilitiesByRequestPathAndModel restricts candidates by request path and

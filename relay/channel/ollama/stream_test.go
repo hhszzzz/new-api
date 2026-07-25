@@ -94,3 +94,67 @@ func TestOllamaChatHandlerNonStreamToolCalls(t *testing.T) {
 		})
 	}
 }
+
+func TestOllamaHandlersHideUserModelRoute(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	const (
+		publicModel = "gpt-5.4"
+		targetModel = "gpt-5.5"
+		finalModel  = "provider/gpt-5.5"
+	)
+	newInfo := func() *relaycommon.RelayInfo {
+		return &relaycommon.RelayInfo{
+			OriginModelName:      publicModel,
+			UserModelRouteId:     7,
+			RouteTargetModelName: targetModel,
+			ChannelMeta: &relaycommon.ChannelMeta{
+				UpstreamModelName: finalModel,
+			},
+		}
+	}
+
+	t.Run("non-stream", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		context, _ := gin.CreateTestContext(recorder)
+		response := &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body: io.NopCloser(strings.NewReader(
+				`{"model":"provider/gpt-5.5","created_at":"2026-05-27T12:00:00Z","message":{"role":"assistant","content":"done"},"done":true,"prompt_eval_count":2,"eval_count":3}`,
+			)),
+		}
+
+		usage, apiErr := ollamaChatHandler(context, newInfo(), response)
+
+		require.Nil(t, apiErr)
+		require.Equal(t, 5, usage.TotalTokens)
+		var output dto.OpenAITextResponse
+		require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &output))
+		assert.Equal(t, publicModel, output.Model)
+		assert.NotContains(t, recorder.Body.String(), targetModel)
+		assert.NotContains(t, recorder.Body.String(), finalModel)
+	})
+
+	t.Run("stream", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		context, _ := gin.CreateTestContext(recorder)
+		context.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+		body := strings.Join([]string{
+			`{"model":"provider/gpt-5.5","created_at":"2026-05-27T12:00:00Z","message":{"role":"assistant","content":"done"},"done":false}`,
+			`{"model":"provider/gpt-5.5","created_at":"2026-05-27T12:00:01Z","done":true,"prompt_eval_count":2,"eval_count":3}`,
+		}, "\n")
+		response := &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(body)),
+		}
+
+		usage, apiErr := ollamaStreamHandler(context, newInfo(), response)
+
+		require.Nil(t, apiErr)
+		require.Equal(t, 5, usage.TotalTokens)
+		assert.Contains(t, recorder.Body.String(), `"model":"`+publicModel+`"`)
+		assert.NotContains(t, recorder.Body.String(), targetModel)
+		assert.NotContains(t, recorder.Body.String(), finalModel)
+	})
+}

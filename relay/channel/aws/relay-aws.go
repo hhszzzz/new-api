@@ -21,7 +21,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/pkg/errors"
 
-	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
@@ -172,7 +171,7 @@ func doAwsClientRequest(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor,
 
 // buildAwsRequestBody prepares the payload for AWS requests, applying passthrough rules when enabled.
 func buildAwsRequestBody(c *gin.Context, info *relaycommon.RelayInfo, awsClaudeReq any) ([]byte, error) {
-	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled {
+	if info.ShouldPassThroughBody() {
 		storage, err := common.GetBodyStorage(c)
 		if err != nil {
 			return nil, errors.Wrap(err, "get request body for pass-through fail")
@@ -235,7 +234,7 @@ func awsHandler(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (*types
 	claudeInfo := &claude.ClaudeResponseInfo{
 		ResponseId:   helper.GetResponseID(c),
 		Created:      common.GetTimestamp(),
-		Model:        info.UpstreamModelName,
+		Model:        info.PublicResponseModelName(),
 		ResponseText: strings.Builder{},
 		Usage:        &dto.Usage{},
 	}
@@ -267,7 +266,7 @@ func awsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (
 	claudeInfo := &claude.ClaudeResponseInfo{
 		ResponseId:   helper.GetResponseID(c),
 		Created:      common.GetTimestamp(),
-		Model:        info.UpstreamModelName,
+		Model:        info.PublicResponseModelName(),
 		ResponseText: strings.Builder{},
 		Usage:        &dto.Usage{},
 	}
@@ -330,7 +329,7 @@ func handleNovaRequest(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) 
 		Id:      helper.GetResponseID(c),
 		Object:  "chat.completion",
 		Created: common.GetTimestamp(),
-		Model:   info.UpstreamModelName,
+		Model:   info.PublicResponseModelName(),
 		Choices: []dto.OpenAITextResponseChoice{{
 			Index: 0,
 			Message: dto.Message{

@@ -20,10 +20,12 @@ func ModelMappedHelper(c *gin.Context, info *common.RelayInfo, request dto.Reque
 
 	isResponsesCompact := info.RelayMode == relayconstant.RelayModeResponsesCompact
 	originModelName := info.OriginModelName
-	mappingModelName := originModelName
-	if isResponsesCompact && strings.HasSuffix(originModelName, ratio_setting.CompactModelSuffix) {
-		mappingModelName = strings.TrimSuffix(originModelName, ratio_setting.CompactModelSuffix)
+	mappingModelName := info.SelectionModelName()
+	if isResponsesCompact && strings.HasSuffix(mappingModelName, ratio_setting.CompactModelSuffix) {
+		mappingModelName = strings.TrimSuffix(mappingModelName, ratio_setting.CompactModelSuffix)
 	}
+	info.UpstreamModelName = mappingModelName
+	info.IsModelMapped = info.HasUserModelRoute() && mappingModelName != strings.TrimSuffix(originModelName, ratio_setting.CompactModelSuffix)
 
 	// map model name
 	modelMapping := c.GetString("model_mapping")
@@ -45,7 +47,6 @@ func ModelMappedHelper(c *gin.Context, info *common.RelayInfo, request dto.Reque
 				if visitedModels[mappedModel] {
 					if mappedModel == currentModel {
 						if currentModel == mappingModelName {
-							info.IsModelMapped = false
 							break
 						} else {
 							info.IsModelMapped = true
@@ -61,9 +62,7 @@ func ModelMappedHelper(c *gin.Context, info *common.RelayInfo, request dto.Reque
 				break
 			}
 		}
-		if info.IsModelMapped {
-			info.UpstreamModelName = currentModel
-		}
+		info.UpstreamModelName = currentModel
 	}
 
 	if isResponsesCompact {
@@ -72,7 +71,11 @@ func ModelMappedHelper(c *gin.Context, info *common.RelayInfo, request dto.Reque
 			finalUpstreamModelName = info.UpstreamModelName
 		}
 		info.UpstreamModelName = finalUpstreamModelName
-		info.BillingModelName = ratio_setting.WithCompactModelSuffix(finalUpstreamModelName)
+		if info.HasUserModelRoute() {
+			info.BillingModelName = originModelName
+		} else {
+			info.BillingModelName = ratio_setting.WithCompactModelSuffix(finalUpstreamModelName)
+		}
 	}
 	if request != nil {
 		request.SetModelName(info.UpstreamModelName)

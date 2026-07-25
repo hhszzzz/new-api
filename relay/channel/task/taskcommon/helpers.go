@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -65,25 +66,25 @@ func DecodeLocalTaskID(id string) (string, error) {
 
 // SanitizePublicTaskData removes provider model-routing details from arbitrary
 // task payloads while preserving JSON number precision and unknown fields.
-func SanitizePublicTaskData(data []byte, originModelName, upstreamModelName string) ([]byte, error) {
+func SanitizePublicTaskData(data []byte, originModelName string, privateModelNames ...string) ([]byte, error) {
 	if len(data) == 0 {
 		return nil, nil
 	}
 
-	return sanitizeTaskModelRouting(json.RawMessage(data), originModelName, upstreamModelName, 0, false)
+	return sanitizeTaskModelRouting(json.RawMessage(data), originModelName, normalizePrivateModelNames(originModelName, privateModelNames), 0, false)
 }
 
 // SanitizePublicTaskErrorData applies model-routing redaction and masks
 // sensitive network details in arbitrary upstream error payloads.
-func SanitizePublicTaskErrorData(data []byte, originModelName, upstreamModelName string) ([]byte, error) {
+func SanitizePublicTaskErrorData(data []byte, originModelName string, privateModelNames ...string) ([]byte, error) {
 	if len(data) == 0 {
 		return nil, nil
 	}
 
-	return sanitizeTaskModelRouting(json.RawMessage(data), originModelName, upstreamModelName, 0, true)
+	return sanitizeTaskModelRouting(json.RawMessage(data), originModelName, normalizePrivateModelNames(originModelName, privateModelNames), 0, true)
 }
 
-func sanitizeTaskModelRouting(data json.RawMessage, originModelName, upstreamModelName string, depth int, maskSensitive bool) (json.RawMessage, error) {
+func sanitizeTaskModelRouting(data json.RawMessage, originModelName string, privateModelNames []string, depth int, maskSensitive bool) (json.RawMessage, error) {
 	switch common.GetJsonType(data) {
 	case "object":
 		var object map[string]json.RawMessage
@@ -93,7 +94,7 @@ func sanitizeTaskModelRouting(data json.RawMessage, originModelName, upstreamMod
 		sanitizedObject := make(map[string]json.RawMessage, len(object))
 		originalPublicKeys := make(map[string]bool, len(object))
 		for key, child := range object {
-			sanitizedKey := redactModelRoutingKey(key, originModelName, upstreamModelName)
+			sanitizedKey := redactModelRoutingKey(key, originModelName, privateModelNames)
 			if maskSensitive {
 				sanitizedKey = maskSensitiveTaskErrorText(sanitizedKey)
 			}
@@ -106,7 +107,7 @@ func sanitizeTaskModelRouting(data json.RawMessage, originModelName, upstreamMod
 					continue
 				}
 			}
-			if sanitizedKey == key && shouldReplaceTaskModelRoutingField(key, child, originModelName, upstreamModelName, depth) {
+			if sanitizedKey == key && shouldReplaceTaskModelRoutingField(key, child, originModelName, privateModelNames, depth) {
 				if originModelName == "" {
 					delete(sanitizedObject, sanitizedKey)
 				} else {
@@ -119,7 +120,7 @@ func sanitizeTaskModelRouting(data json.RawMessage, originModelName, upstreamMod
 				}
 				continue
 			}
-			sanitizedChild, err := sanitizeTaskModelRouting(child, originModelName, upstreamModelName, depth+1, maskSensitive)
+			sanitizedChild, err := sanitizeTaskModelRouting(child, originModelName, privateModelNames, depth+1, maskSensitive)
 			if err != nil {
 				return nil, err
 			}
@@ -134,7 +135,7 @@ func sanitizeTaskModelRouting(data json.RawMessage, originModelName, upstreamMod
 			return nil, err
 		}
 		for i, child := range items {
-			sanitizedChild, err := sanitizeTaskModelRouting(child, originModelName, upstreamModelName, depth, maskSensitive)
+			sanitizedChild, err := sanitizeTaskModelRouting(child, originModelName, privateModelNames, depth, maskSensitive)
 			if err != nil {
 				return nil, err
 			}
@@ -147,7 +148,7 @@ func sanitizeTaskModelRouting(data json.RawMessage, originModelName, upstreamMod
 		if err := common.Unmarshal(data, &text); err != nil {
 			return nil, err
 		}
-		text = RedactModelRoutingText(text, originModelName, upstreamModelName)
+		text = redactModelRoutingIdentifier(text, originModelName, privateModelNames)
 		if maskSensitive {
 			text = maskSensitiveTaskErrorText(text)
 		}
@@ -172,15 +173,22 @@ func maskSensitiveTaskErrorText(text string) string {
 
 // RedactModelRoutingText replaces upstream model identifiers at non-alphanumeric
 // boundaries while leaving longer alphanumeric model names unchanged.
-func RedactModelRoutingText(text, originModelName, upstreamModelName string) string {
-	return redactModelRoutingIdentifier(text, originModelName, upstreamModelName)
+func RedactModelRoutingText(text, originModelName string, privateModelNames ...string) string {
+	return redactModelRoutingIdentifier(text, originModelName, normalizePrivateModelNames(originModelName, privateModelNames))
 }
 
-func redactModelRoutingKey(key, originModelName, upstreamModelName string) string {
-	return redactModelRoutingIdentifier(key, originModelName, upstreamModelName)
+func redactModelRoutingKey(key, originModelName string, privateModelNames []string) string {
+	return redactModelRoutingIdentifier(key, originModelName, privateModelNames)
 }
 
-func redactModelRoutingIdentifier(text, originModelName, upstreamModelName string) string {
+func redactModelRoutingIdentifier(text, originModelName string, privateModelNames []string) string {
+	for _, privateModelName := range privateModelNames {
+		text = redactSingleModelRoutingIdentifier(text, originModelName, privateModelName)
+	}
+	return text
+}
+
+func redactSingleModelRoutingIdentifier(text, originModelName, upstreamModelName string) string {
 	if upstreamModelName == "" || upstreamModelName == originModelName || indexASCIIInsensitive(text, upstreamModelName) < 0 {
 		return text
 	}
@@ -217,6 +225,30 @@ func redactModelRoutingIdentifier(text, originModelName, upstreamModelName strin
 	}
 	redacted.WriteString(text[cursor:])
 	return redacted.String()
+}
+
+func normalizePrivateModelNames(originModelName string, modelNames []string) []string {
+	normalized := make([]string, 0, len(modelNames))
+	for _, modelName := range modelNames {
+		modelName = strings.TrimSpace(modelName)
+		if modelName == "" || modelName == originModelName {
+			continue
+		}
+		duplicate := false
+		for _, existing := range normalized {
+			if strings.EqualFold(existing, modelName) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			normalized = append(normalized, modelName)
+		}
+	}
+	sort.SliceStable(normalized, func(i, j int) bool {
+		return len(normalized[i]) > len(normalized[j])
+	})
+	return normalized
 }
 
 func identifierRangeWithin(text string, start, end int, identifier string) bool {
@@ -313,7 +345,8 @@ func isTaskModelRoutingField(key string) bool {
 func shouldReplaceTaskModelRoutingField(
 	key string,
 	value json.RawMessage,
-	originModelName, upstreamModelName string,
+	originModelName string,
+	privateModelNames []string,
 	depth int,
 ) bool {
 	if !isTaskModelRoutingField(key) {
@@ -322,16 +355,16 @@ func shouldReplaceTaskModelRoutingField(
 	normalized := strings.NewReplacer("_", "", "-", "", " ", "").Replace(strings.ToLower(key))
 	switch normalized {
 	case "engine", "modeltype", "deployment", "deploymentid", "deploymentname":
-		if upstreamModelName == "" {
+		if len(privateModelNames) == 0 {
 			return false
 		}
 		var modelName string
 		if err := common.Unmarshal(value, &modelName); err != nil {
 			return false
 		}
-		return RedactModelRoutingText(modelName, originModelName, upstreamModelName) != modelName
+		return redactModelRoutingIdentifier(modelName, originModelName, privateModelNames) != modelName
 	}
-	if normalized != "model" || depth == 0 || upstreamModelName == "" {
+	if normalized != "model" || depth == 0 || len(privateModelNames) == 0 {
 		return true
 	}
 
@@ -339,7 +372,7 @@ func shouldReplaceTaskModelRoutingField(
 	if err := common.Unmarshal(value, &modelName); err != nil {
 		return false
 	}
-	return RedactModelRoutingText(modelName, originModelName, upstreamModelName) != modelName
+	return redactModelRoutingIdentifier(modelName, originModelName, privateModelNames) != modelName
 }
 
 // BuildProxyURL constructs the video proxy URL using the public task ID.

@@ -14,6 +14,7 @@ import (
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func newImageTestContext(t *testing.T, body, contentType string, isStream bool) (*gin.Context, *httptest.ResponseRecorder, *http.Response, *relaycommon.RelayInfo) {
@@ -446,4 +447,79 @@ func TestOpenaiImageStreamHandlerRecordsUpstreamErrorEvent(t *testing.T) {
 	// is still forwarded in the data: payload (stream ID 77).
 	require.Contains(t, recorder.Body.String(), `event: upstream_error`)
 	require.Contains(t, recorder.Body.String(), `stream ID 77`)
+}
+
+func TestOpenaiImageHandlersHideUserModelRouteWithoutChangingImageContent(t *testing.T) {
+	oldMode := gin.Mode()
+	gin.SetMode(gin.TestMode)
+	t.Cleanup(func() { gin.SetMode(oldMode) })
+
+	const (
+		publicModel = "gpt-5.4"
+		targetModel = "gpt-5.5"
+		finalModel  = "provider/gpt-5.5"
+	)
+	applyRoute := func(info *relaycommon.RelayInfo) {
+		info.OriginModelName = publicModel
+		info.UserModelRouteId = 7
+		info.RouteTargetModelName = targetModel
+		info.UpstreamModelName = finalModel
+	}
+
+	t.Run("non-stream JSON", func(t *testing.T) {
+		body := `{"model":"provider/gpt-5.5","data":[{"b64_json":"provider/gpt-5.5","revised_prompt":"gpt-5.5"}],"metadata":{"model":"provider/gpt-5.5"}}`
+		context, recorder, response, info := newImageTestContext(t, body, "application/json", false)
+		applyRoute(info)
+
+		usage, apiErr := OpenaiImageHandler(context, info, response)
+
+		require.Nil(t, apiErr)
+		require.NotNil(t, usage)
+		output := recorder.Body.String()
+		require.Equal(t, publicModel, gjson.Get(output, "model").String())
+		require.Equal(t, finalModel, gjson.Get(output, "data.0.b64_json").String())
+		require.Equal(t, targetModel, gjson.Get(output, "data.0.revised_prompt").String())
+		require.Equal(t, finalModel, gjson.Get(output, "metadata.model").String())
+	})
+
+	t.Run("SSE JSON event", func(t *testing.T) {
+		oldTimeout := constant.StreamingTimeout
+		constant.StreamingTimeout = 30
+		t.Cleanup(func() { constant.StreamingTimeout = oldTimeout })
+		body := strings.Join([]string{
+			`data: {"type":"image_generation.partial_image","model":"provider/gpt-5.5","error":{"message":"gpt-5.5 unavailable"},"b64_json":"provider/gpt-5.5","revised_prompt":"gpt-5.5","metadata":{"model":"provider/gpt-5.5"}}`,
+			``,
+			`data: [DONE]`,
+			``,
+		}, "\n")
+		context, recorder, response, info := newImageTestContext(t, body, "text/event-stream", true)
+		applyRoute(info)
+
+		usage, apiErr := OpenaiImageStreamHandler(context, info, response)
+
+		require.Nil(t, apiErr)
+		require.NotNil(t, usage)
+		output := recorder.Body.String()
+		require.Contains(t, output, `"model":"gpt-5.4"`)
+		require.Contains(t, output, `"message":"gpt-5.4 unavailable"`)
+		require.Contains(t, output, `"b64_json":"provider/gpt-5.5"`)
+		require.Contains(t, output, `"revised_prompt":"gpt-5.5"`)
+		require.Contains(t, output, `"metadata":{"model":"provider/gpt-5.5"}`)
+	})
+
+	t.Run("structured error", func(t *testing.T) {
+		body := `{"error":{"message":"provider/gpt-5.5 unavailable via gpt-5.5","type":"provider/gpt-5.5","code":"gpt-5.5"}}`
+		context, recorder, response, info := newImageTestContext(t, body, "application/json", false)
+		applyRoute(info)
+
+		usage, apiErr := OpenaiImageHandler(context, info, response)
+
+		require.Nil(t, usage)
+		require.NotNil(t, apiErr)
+		require.Empty(t, recorder.Body.String())
+		publicError := apiErr.ToOpenAIError()
+		require.Equal(t, "gpt-5.4 unavailable via gpt-5.4", publicError.Message)
+		require.Equal(t, publicModel, publicError.Type)
+		require.Equal(t, publicModel, publicError.Code)
+	})
 }

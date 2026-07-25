@@ -947,7 +947,7 @@ func convertGeminiChatResponseToOAIChat(_ *gin.Context, info *relaycommon.RelayI
 	usage := UsageFromGeminiMetadata(geminiResponse.GetUsageMetadata(), fallbackPromptTokens(info))
 	openAIResponse := ResponseGeminiChat2OpenAI(fmt.Sprintf("chatcmpl-%s", common.GetUUID()), common.GetTimestamp(), geminiResponse)
 	if info != nil && info.ChannelMeta != nil {
-		openAIResponse.Model = info.UpstreamModelName
+		openAIResponse.Model = info.PublicResponseModelName()
 	}
 	if usage != nil {
 		openAIResponse.Usage = *usage
@@ -966,7 +966,7 @@ func convertGeminiChatStreamResponseToOAIChat(_ *gin.Context, info *relaycommon.
 		openAIResponse.Id = fmt.Sprintf("chatcmpl-%s", common.GetUUID())
 		openAIResponse.Created = common.GetTimestamp()
 		if info != nil && info.ChannelMeta != nil {
-			openAIResponse.Model = info.UpstreamModelName
+			openAIResponse.Model = info.PublicResponseModelName()
 		}
 		openAIResponse.Usage = usage
 	}

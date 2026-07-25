@@ -13,7 +13,7 @@ import (
 type OpenAIError struct {
 	Message  string          `json:"message"`
 	Type     string          `json:"type"`
-	Param    string          `json:"param"`
+	Param    any             `json:"param"`
 	Code     any             `json:"code"`
 	Metadata json.RawMessage `json:"metadata,omitempty"`
 }
@@ -175,6 +175,22 @@ func (e *NewAPIError) MaskSensitiveErrorWithStatusCode() string {
 
 func (e *NewAPIError) SetMessage(message string) {
 	e.Err = errors.New(message)
+	switch relayError := e.RelayError.(type) {
+	case OpenAIError:
+		relayError.Message = message
+		e.RelayError = relayError
+	case *OpenAIError:
+		if relayError != nil {
+			relayError.Message = message
+		}
+	case ClaudeError:
+		relayError.Message = message
+		e.RelayError = relayError
+	case *ClaudeError:
+		if relayError != nil {
+			relayError.Message = message
+		}
+	}
 }
 
 func (e *NewAPIError) ToOpenAIError() OpenAIError {
@@ -183,9 +199,18 @@ func (e *NewAPIError) ToOpenAIError() OpenAIError {
 	case ErrorTypeOpenAIError:
 		if openAIError, ok := e.RelayError.(OpenAIError); ok {
 			result = openAIError
+		} else if openAIError, ok := e.RelayError.(*OpenAIError); ok && openAIError != nil {
+			result = *openAIError
 		}
 	case ErrorTypeClaudeError:
 		if claudeError, ok := e.RelayError.(ClaudeError); ok {
+			result = OpenAIError{
+				Message: e.Error(),
+				Type:    claudeError.Type,
+				Param:   "",
+				Code:    e.errorCode,
+			}
+		} else if claudeError, ok := e.RelayError.(*ClaudeError); ok && claudeError != nil {
 			result = OpenAIError{
 				Message: e.Error(),
 				Type:    claudeError.Type,
@@ -200,6 +225,12 @@ func (e *NewAPIError) ToOpenAIError() OpenAIError {
 			Param:   "",
 			Code:    e.errorCode,
 		}
+	}
+	// RelayError may retain the provider's original message. The public error
+	// always follows Err, which is redacted by the relay controller when a
+	// user-specific model route is active.
+	if e.Err != nil {
+		result.Message = e.Error()
 	}
 	if e.errorCode != ErrorCodeCountTokenFailed {
 		result.Message = common.MaskSensitiveInfo(result.Message)
@@ -219,16 +250,26 @@ func (e *NewAPIError) ToClaudeError() ClaudeError {
 				Message: e.Error(),
 				Type:    fmt.Sprintf("%v", openAIError.Code),
 			}
+		} else if openAIError, ok := e.RelayError.(*OpenAIError); ok && openAIError != nil {
+			result = ClaudeError{
+				Message: e.Error(),
+				Type:    fmt.Sprintf("%v", openAIError.Code),
+			}
 		}
 	case ErrorTypeClaudeError:
 		if claudeError, ok := e.RelayError.(ClaudeError); ok {
 			result = claudeError
+		} else if claudeError, ok := e.RelayError.(*ClaudeError); ok && claudeError != nil {
+			result = *claudeError
 		}
 	default:
 		result = ClaudeError{
 			Message: e.Error(),
 			Type:    string(e.errorType),
 		}
+	}
+	if e.Err != nil {
+		result.Message = e.Error()
 	}
 	if e.errorCode != ErrorCodeCountTokenFailed {
 		result.Message = common.MaskSensitiveInfo(result.Message)

@@ -4,12 +4,16 @@ import (
 	"bytes"
 	"database/sql/driver"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	commonRelay "github.com/QuantumNous/new-api/relay/common"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type TaskStatus string
@@ -110,6 +114,12 @@ type TaskPrivateData struct {
 	TokenId        int                 `json:"token_id,omitempty"`        // 令牌 ID，用于令牌额度退款
 	NodeName       string              `json:"node_name,omitempty"`       // 发起任务的节点名，轮询结算阶段据此归属日志而非最后查询节点
 	BillingContext *TaskBillingContext `json:"billing_context,omitempty"` // 计费参数快照（用于轮询阶段重新计算）
+	// ModelRouteSnapshotVersion distinguishes newly submitted tasks from legacy
+	// rows. This prevents a later policy edit from changing an existing task.
+	ModelRouteSnapshotVersion int    `json:"model_route_snapshot_version,omitempty"`
+	UserModelRouteId          int    `json:"user_model_route_id,omitempty"`
+	RouteTargetModelName      string `json:"route_target_model_name,omitempty"`
+	RouteExecutionGroup       string `json:"route_execution_group,omitempty"`
 }
 
 // TaskBillingContext 记录任务提交时的计费参数，以便轮询阶段可以重新计算额度。
@@ -172,15 +182,70 @@ type SyncTaskQueryParams struct {
 	StartTimestamp int64
 	EndTimestamp   int64
 	UserIDs        []int
+	SortBy         string
+	SortOrder      string
+}
+
+type TaskSortOptions struct {
+	SortBy    string
+	SortOrder string
+}
+
+var taskSortColumns = map[string]string{
+	"id":          "id",
+	"submit_time": "submit_time",
+	"channel_id":  "channel_id",
+	"user":        "user_id",
+	"task_id":     "task_id",
+	"status":      "status",
+	"progress":    "progress",
+}
+
+func NewTaskSortOptions(sortBy string, sortOrder string) TaskSortOptions {
+	normalizedSortBy := strings.ToLower(strings.TrimSpace(sortBy))
+	normalizedSortOrder := strings.ToLower(strings.TrimSpace(sortOrder))
+	if _, ok := taskSortColumns[normalizedSortBy]; !ok {
+		normalizedSortBy = "id"
+		normalizedSortOrder = "desc"
+	} else if normalizedSortOrder != "asc" {
+		normalizedSortOrder = "desc"
+	}
+	return TaskSortOptions{SortBy: normalizedSortBy, SortOrder: normalizedSortOrder}
+}
+
+func (options TaskSortOptions) Apply(query *gorm.DB) *gorm.DB {
+	columnName, ok := taskSortColumns[options.SortBy]
+	if !ok {
+		columnName = "id"
+	}
+	query = query.Order(clause.OrderByColumn{
+		Column: clause.Column{Name: columnName},
+		Desc:   options.SortOrder != "asc",
+	})
+	if columnName != "id" {
+		query = query.Order(clause.OrderByColumn{
+			Column: clause.Column{Name: "id"},
+			Desc:   true,
+		})
+	}
+	return query
 }
 
 func InitTask(platform constant.TaskPlatform, relayInfo *commonRelay.RelayInfo) *Task {
 	properties := Properties{}
 	privateData := TaskPrivateData{}
-	if relayInfo != nil && relayInfo.ChannelMeta != nil {
-		if relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeGemini ||
-			relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeVertexAi {
-			privateData.Key = relayInfo.ChannelMeta.ApiKey
+	if relayInfo != nil {
+		// Version the snapshot even when no route matched. A zero version is
+		// reserved for legacy tasks whose original policy cannot be recovered.
+		privateData.ModelRouteSnapshotVersion = 1
+		privateData.UserModelRouteId = relayInfo.UserModelRouteId
+		privateData.RouteTargetModelName = relayInfo.RouteTargetModelName
+		privateData.RouteExecutionGroup = relayInfo.RouteExecutionGroup
+		if relayInfo.ChannelMeta != nil {
+			if relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeGemini ||
+				relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeVertexAi {
+				privateData.Key = relayInfo.ChannelMeta.ApiKey
+			}
 		}
 		if relayInfo.UpstreamModelName != "" {
 			properties.UpstreamModelName = relayInfo.UpstreamModelName
@@ -241,7 +306,7 @@ func TaskGetAllUserTask(userId int, startIdx int, num int, queryParams SyncTaskQ
 	}
 
 	// 获取数据
-	err = query.Omit("channel_id").Order("id desc").Limit(num).Offset(startIdx).Find(&tasks).Error
+	err = NewTaskSortOptions(queryParams.SortBy, queryParams.SortOrder).Apply(query.Omit("channel_id")).Limit(num).Offset(startIdx).Find(&tasks).Error
 	if err != nil {
 		return nil
 	}
@@ -286,7 +351,7 @@ func TaskGetAllTasks(startIdx int, num int, queryParams SyncTaskQueryParams) []*
 	}
 
 	// 获取数据
-	err = query.Order("id desc").Limit(num).Offset(startIdx).Find(&tasks).Error
+	err = NewTaskSortOptions(queryParams.SortBy, queryParams.SortOrder).Apply(query).Limit(num).Offset(startIdx).Find(&tasks).Error
 	if err != nil {
 		return nil
 	}
