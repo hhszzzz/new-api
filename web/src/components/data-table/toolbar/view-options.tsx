@@ -16,7 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { type Table } from '@tanstack/react-table'
+import type { Table } from '@tanstack/react-table'
+import { ChevronDown, ChevronUp, RotateCcw } from 'lucide-react'
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -26,7 +27,9 @@ import {
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuGroup,
+  DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 
@@ -50,6 +53,23 @@ export function DataTableViewOptions<TData>({
     [table]
   )
 
+  const moveColumn = (columnId: string, direction: -1 | 1) => {
+    const fallbackOrder = table.getAllLeafColumns().map((column) => column.id)
+    table.setColumnOrder((current) => {
+      const order = current.length > 0 ? [...current] : fallbackOrder
+      const currentIndex = order.indexOf(columnId)
+      const nextIndex = currentIndex + direction
+      if (currentIndex < 0 || nextIndex < 0 || nextIndex >= order.length) {
+        return order
+      }
+      ;[order[currentIndex], order[nextIndex]] = [
+        order[nextIndex],
+        order[currentIndex],
+      ]
+      return order
+    })
+  }
+
   return (
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger
@@ -63,24 +83,65 @@ export function DataTableViewOptions<TData>({
       >
         {t('View')}
       </DropdownMenuTrigger>
-      <DropdownMenuContent align='end' className='w-[150px]'>
+      <DropdownMenuContent align='end' className='w-[240px]'>
         <DropdownMenuGroup>
           <DropdownMenuLabel>{t('Toggle columns')}</DropdownMenuLabel>
           {hideableColumns.map((column) => {
             return (
-              <DropdownMenuCheckboxItem
-                key={column.id}
-                className='capitalize'
-                checked={column.getIsVisible()}
-                onCheckedChange={(value) => column.toggleVisibility(!!value)}
-              >
-                {typeof column.columnDef.header === 'string'
-                  ? column.columnDef.header
-                  : (column.columnDef.meta?.label ?? column.id)}
-              </DropdownMenuCheckboxItem>
+              <div key={column.id} className='flex items-center gap-0.5'>
+                <DropdownMenuCheckboxItem
+                  className='min-w-0 flex-1 capitalize'
+                  checked={column.getIsVisible()}
+                  onCheckedChange={(value) => column.toggleVisibility(!!value)}
+                >
+                  <span className='truncate'>
+                    {typeof column.columnDef.header === 'string'
+                      ? column.columnDef.header
+                      : (column.columnDef.meta?.label ?? column.id)}
+                  </span>
+                </DropdownMenuCheckboxItem>
+                <Button
+                  type='button'
+                  variant='ghost'
+                  size='icon'
+                  className='size-7'
+                  aria-label={t('Move column earlier')}
+                  onClick={(event) => {
+                    event.preventDefault()
+                    event.stopPropagation()
+                    moveColumn(column.id, -1)
+                  }}
+                >
+                  <ChevronUp className='size-3.5' />
+                </Button>
+                <Button
+                  type='button'
+                  variant='ghost'
+                  size='icon'
+                  className='size-7'
+                  aria-label={t('Move column later')}
+                  onClick={(event) => {
+                    event.preventDefault()
+                    event.stopPropagation()
+                    moveColumn(column.id, 1)
+                  }}
+                >
+                  <ChevronDown className='size-3.5' />
+                </Button>
+              </div>
             )
           })}
         </DropdownMenuGroup>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          onSelect={(event) => {
+            event.preventDefault()
+            table.options.meta?.resetPersistedView?.()
+          }}
+        >
+          <RotateCcw className='size-4' />
+          {t('Restore default view')}
+        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   )

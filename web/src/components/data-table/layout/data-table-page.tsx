@@ -59,6 +59,7 @@ import {
 } from '../hooks/use-data-table-view-mode'
 import { DataTableToolbar } from '../toolbar/toolbar'
 import { DataTableViewModeToggle } from '../toolbar/view-mode-toggle'
+import { DataTableViewOptions } from '../toolbar/view-options'
 import { DataTableCardGrid } from './card-grid'
 import { MobileCardList } from './mobile-card-list'
 
@@ -376,6 +377,13 @@ function renderToolbar<TData>(
         {...props.toolbarProps}
         viewToggle={props.toolbarProps.viewToggle ?? viewToggle}
       />
+    )
+  }
+  if (props.table.options.meta?.resetPersistedView) {
+    return (
+      <div className='flex justify-end'>
+        <DataTableViewOptions table={props.table} />
+      </div>
     )
   }
   return null

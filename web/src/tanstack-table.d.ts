@@ -19,6 +19,10 @@ For commercial licensing, please contact support@quantumnous.com
 import '@tanstack/react-table'
 
 declare module '@tanstack/react-table' {
+  interface TableMeta<_TData> {
+    resetPersistedView?: () => void
+  }
+
   interface ColumnMeta<_TData, _TValue> {
     label?: string
     description?: string
