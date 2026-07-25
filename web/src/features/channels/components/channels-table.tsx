@@ -18,13 +18,8 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
 import { getRouteApi } from '@tanstack/react-router'
-import type {
-  ColumnFiltersState,
-  OnChangeFn,
-  SortingState,
-  Row,
-} from '@tanstack/react-table'
-import { Eye, EyeOff } from 'lucide-react'
+import type { OnChangeFn, SortingState, Row } from '@tanstack/react-table'
+import { AlertTriangle, Eye, EyeOff, RefreshCw } from 'lucide-react'
 import { useState, useMemo, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -35,6 +30,7 @@ import {
   useDebouncedColumnFilter,
   useDataTable,
 } from '@/components/data-table'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -54,7 +50,9 @@ import {
 } from '../constants'
 import {
   channelsQueryKeys,
+  aggregateChannelsByAggregate,
   aggregateChannelsByTag,
+  isChannelAggregateRow,
   isTagAggregateRow,
   getChannelTypeIcon,
   getChannelTypeLabel,
@@ -69,7 +67,6 @@ const route = getRouteApi('/_authenticated/channels/')
 const CHANNELS_COLUMN_VISIBILITY_STORAGE_KEY = 'channels:column-visibility'
 const CHANNELS_COLUMN_SIZING_STORAGE_KEY = 'channels:column-sizing'
 const CHANNELS_VIEW_MODE_STORAGE_KEY = 'channels:view-mode'
-const CHANNELS_STATUS_FILTER_STORAGE_KEY = 'channel-status-filter'
 
 const CHANNEL_SORTABLE_COLUMNS = new Set<ChannelSortBy>([
   'id',
@@ -82,7 +79,9 @@ const CHANNEL_SORTABLE_COLUMNS = new Set<ChannelSortBy>([
 
 function isDisabledChannelRow(channel: Channel) {
   return (
-    !isTagAggregateRow(channel) && channel.status !== CHANNEL_STATUS.ENABLED
+    !isTagAggregateRow(channel) &&
+    !isChannelAggregateRow(channel) &&
+    channel.status !== CHANNEL_STATUS.ENABLED
   )
 }
 
@@ -115,6 +114,7 @@ export function ChannelsTable() {
     pagination: {
       defaultPage: 1,
       defaultPageSize: isMobile ? 10 : DEFAULT_PAGE_SIZE,
+      pageSizeStorageKey: 'channels:admin:page-size',
     },
     globalFilter: { enabled: true, key: 'filter' },
     columnFilters: [
@@ -122,35 +122,12 @@ export function ChannelsTable() {
         columnId: 'status',
         searchKey: 'status',
         type: 'array',
-        deserialize: (value) => {
-          if (value !== undefined) return value
-          const stored = localStorage.getItem(
-            CHANNELS_STATUS_FILTER_STORAGE_KEY
-          )
-          return stored === 'enabled' || stored === 'disabled' ? [stored] : []
-        },
       },
       { columnId: 'type', searchKey: 'type', type: 'array' },
       { columnId: 'group', searchKey: 'group', type: 'array' },
       { columnId: 'model', searchKey: 'model', type: 'string' },
     ],
   })
-
-  const handleColumnFiltersChange: OnChangeFn<ColumnFiltersState> = (
-    updater
-  ) => {
-    onColumnFiltersChange((previous) => {
-      const next = typeof updater === 'function' ? updater(previous) : updater
-      const status = next.find((f) => f.id === 'status')?.value as
-        | string[]
-        | undefined
-      localStorage.setItem(
-        CHANNELS_STATUS_FILTER_STORAGE_KEY,
-        status?.[0] ?? 'all'
-      )
-      return next
-    })
-  }
 
   // Extract filters from column filters
   const statusFilter =
@@ -219,7 +196,7 @@ export function ChannelsTable() {
 
   // Fetch channels data
   // eslint-disable-next-line @tanstack/query/exhaustive-deps
-  const { data, isLoading, isFetching } = useQuery({
+  const { data, isLoading, isFetching, isError, error, refetch } = useQuery({
     queryKey: channelsQueryKeys.list({
       keyword: globalFilter,
       model: modelFilter,
@@ -243,7 +220,7 @@ export function ChannelsTable() {
     }),
     queryFn: async () => {
       if (shouldSearch) {
-        return searchChannels({
+        const response = await searchChannels({
           keyword: globalFilter,
           model: modelFilter,
           group:
@@ -264,8 +241,12 @@ export function ChannelsTable() {
           p: pagination.pageIndex + 1,
           page_size: pagination.pageSize,
         })
+        if (!response.success) {
+          throw new Error(response.message || t('Failed to load channels'))
+        }
+        return response
       } else {
-        return getChannels({
+        const response = await getChannels({
           group:
             groupFilter.length > 0 && !groupFilter.includes('all')
               ? groupFilter[0]
@@ -284,6 +265,10 @@ export function ChannelsTable() {
           p: pagination.pageIndex + 1,
           page_size: pagination.pageSize,
         })
+        if (!response.success) {
+          throw new Error(response.message || t('Failed to load channels'))
+        }
+        return response
       }
     },
     placeholderData: (previousData) => previousData,
@@ -295,6 +280,10 @@ export function ChannelsTable() {
 
     if (enableTagMode && rawChannels.length > 0) {
       return aggregateChannelsByTag(rawChannels)
+    }
+
+    if (!enableTagMode && rawChannels.length > 0) {
+      return aggregateChannelsByAggregate(rawChannels)
     }
 
     return rawChannels
@@ -310,6 +299,7 @@ export function ChannelsTable() {
   const { table } = useDataTable({
     data: channels,
     columns,
+    tableStateStorageKey: 'channels:admin',
     totalCount,
     sorting,
     initialColumnVisibility: {
@@ -324,10 +314,12 @@ export function ChannelsTable() {
     pagination,
     globalFilter,
     enableRowSelection: batchMode
-      ? (row: Row<Channel>) => !isTagAggregateRow(row.original)
+      ? (row: Row<Channel>) =>
+          !isTagAggregateRow(row.original) &&
+          !isChannelAggregateRow(row.original)
       : false,
     onSortingChange: handleSortingChange,
-    onColumnFiltersChange: handleColumnFiltersChange,
+    onColumnFiltersChange,
     onPaginationChange,
     onGlobalFilterChange,
     getSubRows: (row: Channel & { children?: Channel[] }) => row.children,
@@ -405,11 +397,15 @@ export function ChannelsTable() {
     })),
   ]
 
-  return (
+  const isLoadingData = isLoading || (isFetching && !data)
+  const errorMessage =
+    error instanceof Error ? error.message : t('Failed to load channels')
+
+  const tablePage = (
     <DataTablePage
       table={table}
       columns={columns}
-      isLoading={isLoading}
+      isLoading={isLoadingData}
       isFetching={isFetching}
       emptyTitle={t('No Channels Found')}
       emptyDescription={t(
@@ -491,5 +487,50 @@ export function ChannelsTable() {
       }}
       bulkActions={batchMode ? <DataTableBulkActions table={table} /> : null}
     />
+  )
+
+  if (isError && !data) {
+    return (
+      <div className='flex min-h-56 items-center justify-center'>
+        <Alert className='max-w-lg'>
+          <AlertTriangle className='h-4 w-4' />
+          <AlertDescription className='flex items-center justify-between gap-3'>
+            <span>{errorMessage}</span>
+            <Button
+              type='button'
+              variant='outline'
+              size='sm'
+              onClick={() => void refetch()}
+            >
+              <RefreshCw className='h-4 w-4' />
+              {t('Retry')}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      </div>
+    )
+  }
+
+  return (
+    <div className='flex h-full min-h-0 flex-col gap-2'>
+      {isError && (
+        <Alert>
+          <AlertTriangle className='h-4 w-4' />
+          <AlertDescription className='flex items-center justify-between gap-3'>
+            <span>{errorMessage}</span>
+            <Button
+              type='button'
+              variant='outline'
+              size='sm'
+              onClick={() => void refetch()}
+            >
+              <RefreshCw className='h-4 w-4' />
+              {t('Retry')}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+      {tablePage}
+    </div>
   )
 }

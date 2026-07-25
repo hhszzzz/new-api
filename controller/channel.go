@@ -168,6 +168,10 @@ func GetAllChannels(c *gin.Context) {
 	for _, datum := range channelData {
 		clearChannelInfo(datum)
 	}
+	if err := model.HydrateChannelAggregateSnapshots(channelData); err != nil {
+		common.ApiError(c, err)
+		return
+	}
 
 	countQuery := buildChannelListQuery(groupFilter, statusFilter, -1)
 	var results []struct {
@@ -613,6 +617,11 @@ func AddChannel(c *gin.Context) {
 		return
 	}
 
+	if err := model.ValidateChannelAggregateLink(addChannelRequest.Channel); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
 	// 使用统一的校验函数
 	if err := validateChannel(addChannelRequest.Channel, true); err != nil {
 		c.JSON(http.StatusOK, gin.H{
@@ -978,6 +987,19 @@ func UpdateChannel(c *gin.Context) {
 		return
 	}
 	originProxy := originChannel.GetSetting().Proxy
+	if _, aggregateProvided := requestData["aggregate_id"]; !aggregateProvided {
+		channel.AggregateId = originChannel.AggregateId
+	}
+	if _, inheritProvided := requestData["inherit_aggregate_base_url"]; !inheritProvided {
+		channel.InheritAggregateBaseURL = originChannel.InheritAggregateBaseURL
+	}
+	if channel.AggregateId == nil {
+		channel.InheritAggregateBaseURL = false
+	}
+	if err := model.ValidateChannelAggregateLink(&channel.Channel); err != nil {
+		common.ApiError(c, err)
+		return
+	}
 	proxyChanged := false
 	if _, settingProvided := requestData["setting"]; settingProvided {
 		newProxy, _ := service.NormalizeProxyURL(channel.GetSetting().Proxy)
@@ -1081,6 +1103,21 @@ func UpdateChannel(c *gin.Context) {
 	}
 	err = channel.Update()
 	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if _, aggregateProvided := requestData["aggregate_id"]; aggregateProvided {
+		if err := model.UpdateChannelAggregateLink(channel.Id, channel.AggregateId, channel.InheritAggregateBaseURL); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+	} else if _, inheritProvided := requestData["inherit_aggregate_base_url"]; inheritProvided {
+		if err := model.UpdateChannelAggregateLink(channel.Id, originChannel.AggregateId, channel.InheritAggregateBaseURL); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+	}
+	if err := model.HydrateChannelAggregateSnapshots([]*model.Channel{&channel.Channel}); err != nil {
 		common.ApiError(c, err)
 		return
 	}

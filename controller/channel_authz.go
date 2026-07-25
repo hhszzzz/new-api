@@ -12,6 +12,12 @@ func channelHasSensitiveChanges(channel *PatchChannel, origin *model.Channel, re
 	if _, ok := requestData["base_url"]; ok && !equalStringPtr(channel.BaseURL, origin.BaseURL) {
 		return true
 	}
+	if _, ok := requestData["aggregate_id"]; ok && !equalIntPtr(channel.AggregateId, origin.AggregateId) {
+		return true
+	}
+	if _, ok := requestData["inherit_aggregate_base_url"]; ok && channel.InheritAggregateBaseURL != origin.InheritAggregateBaseURL {
+		return true
+	}
 	if _, ok := requestData["openai_organization"]; ok && !equalStringPtr(channel.OpenAIOrganization, origin.OpenAIOrganization) {
 		return true
 	}
@@ -61,16 +67,18 @@ func channelHasSensitiveChanges(channel *PatchChannel, origin *model.Channel, re
 // channelHasSensitiveChanges with a precise old-vs-new comparison; this set is
 // used to exclude them from the fail-closed scan for unknown fields.
 var channelSensitiveFields = map[string]struct{}{
-	"type":                {},
-	"key":                 {},
-	"base_url":            {},
-	"openai_organization": {},
-	"header_override":     {},
-	"param_override":      {},
-	"setting":             {},
-	"other":               {},
-	"settings":            {},
-	"key_mode":            {},
+	"type":                       {},
+	"key":                        {},
+	"base_url":                   {},
+	"aggregate_id":               {},
+	"inherit_aggregate_base_url": {},
+	"openai_organization":        {},
+	"header_override":            {},
+	"param_override":             {},
+	"setting":                    {},
+	"other":                      {},
+	"settings":                   {},
+	"key_mode":                   {},
 }
 
 // channelOperationalFields lists fields managed by operation endpoints instead
@@ -133,4 +141,13 @@ var channelNonSensitiveFields = map[string]struct{}{
 	"remark":              {},
 	"channel_info":        {},
 	"multi_key_mode":      {},
+	"aggregate_name":      {},
+	"aggregate_base_url":  {},
+}
+
+func equalIntPtr(left, right *int) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }

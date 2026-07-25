@@ -24,7 +24,11 @@ import { GroupBadge } from '@/components/group-badge'
 import { cn } from '@/lib/utils'
 
 import { CHANNEL_STATUS } from '../constants'
-import { isTagAggregateRow, parseGroupsList } from '../lib'
+import {
+  isChannelAggregateRow,
+  isTagAggregateRow,
+  parseGroupsList,
+} from '../lib'
 import type { Channel } from '../types'
 import { ChannelRowActionsLayoutContext } from './channel-row-actions-context'
 import { useChannels } from './channels-provider'
@@ -49,6 +53,8 @@ function ChannelCardComponent({
   const { t } = useTranslation()
   const { sensitiveVisible } = useChannels()
   const isTagRow = isTagAggregateRow(row.original)
+  const isChannelAggregate = isChannelAggregateRow(row.original)
+  const isSummaryRow = isTagRow || isChannelAggregate
   const cells = row.getAllCells()
 
   const renderCell = (id: string) => {
@@ -84,7 +90,7 @@ function ChannelCardComponent({
   // power toggle, so the plain "Enabled"/"Disabled" badge is redundant. Keep
   // only the informative states (e.g. auto-disabled, unknown) and tag rows.
   const showStatusBadge =
-    isTagRow ||
+    isSummaryRow ||
     (row.original.status !== CHANNEL_STATUS.ENABLED &&
       row.original.status !== CHANNEL_STATUS.MANUAL_DISABLED)
 
@@ -97,7 +103,7 @@ function ChannelCardComponent({
         {/* Row 1: selection + type, with status badge + actions menu */}
         <div className='flex items-center justify-between gap-2'>
           <div className='flex min-w-0 flex-1 items-center gap-2'>
-            {!isTagRow && selectCell && (
+            {!isSummaryRow && selectCell && (
               <span className='shrink-0'>{selectCell}</span>
             )}
             <div className='min-w-0 overflow-hidden'>{typeCell}</div>
@@ -114,7 +120,7 @@ function ChannelCardComponent({
           {/* Left column */}
           <div className='flex min-w-0 flex-1 flex-col gap-3 overflow-hidden'>
             <div className='min-w-0 text-sm'>
-              {!isTagRow && (
+              {!isSummaryRow && (
                 <div className={labelClass}>
                   #{sensitiveVisible ? row.original.id : SENSITIVE_MASK}
                 </div>

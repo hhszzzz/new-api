@@ -41,22 +41,26 @@ type Channel struct {
 	UsedQuota          int64   `json:"used_quota" gorm:"bigint;default:0"`
 	ModelMapping       *string `json:"model_mapping" gorm:"type:text"`
 	//MaxInputTokens     *int    `json:"max_input_tokens" gorm:"default:0"`
-	StatusCodeMapping *string `json:"status_code_mapping" gorm:"type:varchar(1024);default:''"`
-	Priority          *int64  `json:"priority" gorm:"bigint;default:0"`
-	AutoBan           *int    `json:"auto_ban" gorm:"default:1"`
-	OtherInfo         string  `json:"other_info"`
-	Tag               *string `json:"tag" gorm:"index"`
-	Setting           *string `json:"setting" gorm:"type:text"` // 渠道额外设置
-	ParamOverride     *string `json:"param_override" gorm:"type:text"`
-	HeaderOverride    *string `json:"header_override" gorm:"type:text"`
-	Remark            *string `json:"remark" gorm:"type:varchar(255)" validate:"max=255"`
+	StatusCodeMapping       *string `json:"status_code_mapping" gorm:"type:varchar(1024);default:''"`
+	Priority                *int64  `json:"priority" gorm:"bigint;default:0"`
+	AutoBan                 *int    `json:"auto_ban" gorm:"default:1"`
+	OtherInfo               string  `json:"other_info"`
+	Tag                     *string `json:"tag" gorm:"index"`
+	Setting                 *string `json:"setting" gorm:"type:text"` // 渠道额外设置
+	ParamOverride           *string `json:"param_override" gorm:"type:text"`
+	HeaderOverride          *string `json:"header_override" gorm:"type:text"`
+	Remark                  *string `json:"remark" gorm:"type:varchar(255)" validate:"max=255"`
+	AggregateId             *int    `json:"aggregate_id,omitempty" gorm:"index"`
+	InheritAggregateBaseURL bool    `json:"inherit_aggregate_base_url"`
 	// add after v0.8.5
 	ChannelInfo ChannelInfo `json:"channel_info" gorm:"type:json"`
 
 	OtherSettings string `json:"settings" gorm:"column:settings"` // 其他设置，存储azure版本等不需要检索的信息，详见dto.ChannelOtherSettings
 
 	// cache info
-	Keys []string `json:"-" gorm:"-"`
+	Keys             []string `json:"-" gorm:"-"`
+	AggregateName    string   `json:"aggregate_name,omitempty" gorm:"-"`
+	AggregateBaseURL string   `json:"aggregate_base_url,omitempty" gorm:"-"`
 }
 
 type ChannelInfo struct {
@@ -362,7 +366,13 @@ func GetAllChannels(startIdx int, num int, selectAll bool, idSort bool, sortOpti
 	} else {
 		err = order.Apply(DB).Limit(num).Offset(startIdx).Omit("key").Find(&channels).Error
 	}
-	return channels, err
+	if err != nil {
+		return nil, err
+	}
+	if err := HydrateChannelAggregateSnapshots(channels); err != nil {
+		return nil, err
+	}
+	return channels, nil
 }
 
 func GetChannelsByTag(tag string, idSort bool, selectAll bool, sortOptions ...ChannelSortOptions) ([]*Channel, error) {
@@ -372,8 +382,13 @@ func GetChannelsByTag(tag string, idSort bool, selectAll bool, sortOptions ...Ch
 	if !selectAll {
 		query = query.Omit("key")
 	}
-	err := query.Find(&channels).Error
-	return channels, err
+	if err := query.Find(&channels).Error; err != nil {
+		return nil, err
+	}
+	if err := HydrateChannelAggregateSnapshots(channels); err != nil {
+		return nil, err
+	}
+	return channels, nil
 }
 
 func SearchChannels(keyword string, group string, model string, idSort bool, sortOptions ...ChannelSortOptions) ([]*Channel, error) {
@@ -406,6 +421,9 @@ func SearchChannels(keyword string, group string, model string, idSort bool, sor
 	if err != nil {
 		return nil, err
 	}
+	if err := HydrateChannelAggregateSnapshots(channels); err != nil {
+		return nil, err
+	}
 	return channels, nil
 }
 
@@ -418,6 +436,9 @@ func GetChannelById(id int, selectAll bool) (*Channel, error) {
 		err = DB.Omit("key").First(channel, "id = ?", id).Error
 	}
 	if err != nil {
+		return nil, err
+	}
+	if err := HydrateChannelAggregateSnapshots([]*Channel{channel}); err != nil {
 		return nil, err
 	}
 	return channel, nil
@@ -500,6 +521,11 @@ func (channel *Channel) GetWeight() int {
 }
 
 func (channel *Channel) GetBaseURL() string {
+	if channel.AggregateId != nil && channel.InheritAggregateBaseURL {
+		if aggregateBaseURL := strings.TrimSpace(channel.AggregateBaseURL); aggregateBaseURL != "" {
+			return aggregateBaseURL
+		}
+	}
 	if channel.BaseURL == nil {
 		return ""
 	}

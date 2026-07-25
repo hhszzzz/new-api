@@ -63,6 +63,10 @@ export const channelSchema = z.object({
   param_override: z.string().nullish(),
   header_override: z.string().nullish(),
   remark: z.string().default(''),
+  aggregate_id: z.number().nullish(),
+  inherit_aggregate_base_url: z.boolean().default(false),
+  aggregate_name: z.string().optional(),
+  aggregate_base_url: z.string().optional(),
   max_input_tokens: z.number().default(0),
   channel_info: channelInfoSchema.default({
     is_multi_key: false,
@@ -74,6 +78,33 @@ export const channelSchema = z.object({
 })
 
 export type Channel = z.infer<typeof channelSchema>
+
+export type ChannelAggregate = {
+  id: number
+  name: string
+  base_url: string
+  remark: string
+  created_at: number
+  updated_at: number
+  child_count: number
+}
+
+export type ChannelAggregateInput = Pick<
+  ChannelAggregate,
+  'name' | 'base_url' | 'remark'
+>
+
+export type ChannelAggregateResponse = {
+  success: boolean
+  message?: string
+  data?: ChannelAggregate
+}
+
+export type ChannelAggregatesResponse = {
+  success: boolean
+  message?: string
+  data?: ChannelAggregate[]
+}
 
 // ============================================================================
 // Channel Settings Types
@@ -359,6 +390,8 @@ export interface ChannelFormData {
   header_override?: string
   settings?: string
   other?: string
+  aggregate_id?: number | null
+  inherit_aggregate_base_url?: boolean
   // Multi-key specific
   multi_key_mode?: 'single' | 'batch' | 'multi_to_single'
   multi_key_type?: 'random' | 'polling'

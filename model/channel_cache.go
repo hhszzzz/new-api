@@ -32,6 +32,9 @@ func InitChannelCache() {
 	newChannel2advancedCustomConfig := make(map[int]*dto.AdvancedCustomConfig)
 	var channels []*Channel
 	DB.Find(&channels)
+	if err := HydrateChannelAggregateSnapshots(channels); err != nil {
+		common.SysError(fmt.Sprintf("failed to hydrate channel aggregates: %v", err))
+	}
 	for _, channel := range channels {
 		newChannelId2channel[channel.Id] = channel
 		if channel.Type == constant.ChannelTypeAdvancedCustom {

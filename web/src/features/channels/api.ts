@@ -24,6 +24,9 @@ import type {
   BatchDeleteParams,
   BatchSetTagParams,
   Channel,
+  ChannelAggregateInput,
+  ChannelAggregateResponse,
+  ChannelAggregatesResponse,
   ChannelBalanceResponse,
   ChannelOpsResponse,
   ChannelTestResponse,
@@ -102,6 +105,44 @@ export async function searchChannels(
  */
 export async function getChannel(id: number): Promise<GetChannelResponse> {
   const res = await api.get(`/api/channel/${id}`)
+  return res.data
+}
+
+export async function getChannelAggregates(): Promise<ChannelAggregatesResponse> {
+  const res = await api.get('/api/channel/aggregates')
+  return res.data
+}
+
+export async function createChannelAggregate(
+  data: ChannelAggregateInput
+): Promise<ChannelAggregateResponse> {
+  const res = await api.post(
+    '/api/channel/aggregates',
+    data,
+    channelActionConfig()
+  )
+  return res.data
+}
+
+export async function updateChannelAggregate(
+  id: number,
+  data: ChannelAggregateInput
+): Promise<ChannelAggregateResponse> {
+  const res = await api.put(
+    `/api/channel/aggregates/${id}`,
+    data,
+    channelActionConfig()
+  )
+  return res.data
+}
+
+export async function deleteChannelAggregate(
+  id: number
+): Promise<{ success: boolean; message?: string }> {
+  const res = await api.delete(
+    `/api/channel/aggregates/${id}`,
+    channelActionConfig()
+  )
   return res.data
 }
 

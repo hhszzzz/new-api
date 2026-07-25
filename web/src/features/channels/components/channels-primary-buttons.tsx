@@ -29,6 +29,7 @@ import {
   SortAsc,
   RefreshCw,
   ArrowUpFromLine,
+  Layers3,
 } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -226,6 +227,17 @@ export function ChannelsPrimaryButtons() {
               {t('Update All Balances')}
               <DropdownMenuShortcut>
                 <DollarSign className='h-4 w-4' />
+              </DropdownMenuShortcut>
+            </DropdownMenuItem>
+
+            <DropdownMenuItem
+              onClick={() => {
+                setOpen('channel-aggregates')
+              }}
+            >
+              {t('Manage channel aggregates')}
+              <DropdownMenuShortcut>
+                <Layers3 className='h-4 w-4' />
               </DropdownMenuShortcut>
             </DropdownMenuItem>
 

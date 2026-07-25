@@ -27,7 +27,12 @@ import {
   RESPONSE_TIME_THRESHOLDS,
   TYPE_TO_KEY_PROMPT,
 } from '../constants'
-import type { Channel, ChannelSettings, ChannelOtherSettings } from '../types'
+import type {
+  Channel,
+  ChannelAggregate,
+  ChannelSettings,
+  ChannelOtherSettings,
+} from '../types'
 
 // ============================================================================
 // Channel Type Utilities
@@ -599,25 +604,151 @@ export function getAttentionReason(channel: Channel): string | null {
 }
 
 // ============================================================================
-// Tag Aggregation Utilities
+// Channel aggregation utilities
 // ============================================================================
 
 /**
- * Tag row type (extends Channel with children)
+ * Synthetic tag row type (extends Channel with children).
  */
 export type TagRow = Channel & {
   children: Channel[]
+  row_kind: 'tag'
 }
 
 /**
- * Type guard to check whether a row is a tag aggregate row
+ * Synthetic parent row used to fold child channels that belong to the same
+ * channel aggregate. The children remain real Channel objects, so selection,
+ * editing, health and routing continue to operate on concrete channel IDs.
  */
-export function isTagAggregateRow(row: Channel | TagRow): row is TagRow {
-  return Array.isArray((row as TagRow).children)
+export type ChannelAggregateRow = Channel & {
+  children: Channel[]
+  row_kind: 'channel_aggregate'
+}
+
+export function getChannelAggregateById(
+  aggregates: ChannelAggregate[],
+  aggregateId: number | null | undefined
+): ChannelAggregate | undefined {
+  if (!aggregateId) return undefined
+  return aggregates.find((aggregate) => aggregate.id === aggregateId)
 }
 
 /**
- * Aggregate channels by tag for tag mode display
+ * Type guard to check whether a row is a channel aggregate row.
+ */
+export function isChannelAggregateRow(
+  row: Channel | TagRow | ChannelAggregateRow
+): row is ChannelAggregateRow {
+  return (
+    Array.isArray((row as ChannelAggregateRow).children) &&
+    (row as ChannelAggregateRow).row_kind === 'channel_aggregate'
+  )
+}
+
+/**
+ * Type guard to check whether a row is a tag aggregate row. The children
+ * fallback keeps this compatible with older cached table data that did not
+ * carry an explicit row kind.
+ */
+export function isTagAggregateRow(
+  row: Channel | TagRow | ChannelAggregateRow
+): row is TagRow {
+  return Array.isArray((row as TagRow).children) && !isChannelAggregateRow(row)
+}
+
+/**
+ * Aggregate channels by parent aggregate for the normal channel list. Rows
+ * without an aggregate remain flat, while each parent gets one expandable
+ * row. No scheduling semantics are changed: only the presentation tree is
+ * synthesized here.
+ */
+export function aggregateChannelsByAggregate(
+  channels: Channel[]
+): (Channel | ChannelAggregateRow)[] {
+  const aggregateRows = new Map<number, ChannelAggregateRow>()
+  const result: (Channel | ChannelAggregateRow)[] = []
+
+  for (const channel of channels) {
+    const aggregateId = channel.aggregate_id
+    if (!aggregateId || aggregateId <= 0) {
+      result.push(channel)
+      continue
+    }
+
+    let aggregateRow = aggregateRows.get(aggregateId)
+    if (!aggregateRow) {
+      aggregateRow = {
+        ...channel,
+        id: -aggregateId,
+        key: `aggregate:${aggregateId}`,
+        name: channel.aggregate_name || '',
+        type: 0,
+        status: channel.status,
+        group: channel.group || '',
+        models: channel.models || '',
+        tag: null,
+        used_quota: 0,
+        balance: 0,
+        response_time: 0,
+        priority: null,
+        weight: null,
+        test_time: 0,
+        created_time: 0,
+        balance_updated_time: 0,
+        aggregate_id: aggregateId,
+        aggregate_name: channel.aggregate_name || '',
+        aggregate_base_url: channel.aggregate_base_url || '',
+        row_kind: 'channel_aggregate',
+        children: [],
+      } as ChannelAggregateRow
+      aggregateRows.set(aggregateId, aggregateRow)
+      result.push(aggregateRow)
+    }
+
+    aggregateRow.children.push(channel)
+    aggregateRow.used_quota += channel.used_quota || 0
+    aggregateRow.balance += channel.balance || 0
+    const childCount = aggregateRow.children.length
+    aggregateRow.response_time =
+      (aggregateRow.response_time * (childCount - 1) +
+        (channel.response_time || 0)) /
+      childCount
+    if (channel.status === 1) {
+      aggregateRow.status = 1
+    } else if (aggregateRow.status === undefined) {
+      aggregateRow.status = channel.status
+    }
+
+    const groups = new Set(
+      aggregateRow.group
+        .split(',')
+        .map((value) => value.trim())
+        .filter(Boolean)
+    )
+    for (const group of channel.group.split(',').map((value) => value.trim())) {
+      if (group) groups.add(group)
+    }
+    aggregateRow.group = [...groups].join(',')
+
+    const models = new Set(
+      aggregateRow.models
+        .split(',')
+        .map((value) => value.trim())
+        .filter(Boolean)
+    )
+    for (const model of channel.models
+      .split(',')
+      .map((value) => value.trim())) {
+      if (model) models.add(model)
+    }
+    aggregateRow.models = [...models].join(',')
+  }
+
+  return result
+}
+
+/**
+ * Aggregate channels by tag for tag mode display.
  * Converts flat array into tree structure grouped by tag
  */
 export function aggregateChannelsByTag(
@@ -649,6 +780,7 @@ export function aggregateChannelsByTag(
         created_time: 0,
         balance_updated_time: 0,
         models: '',
+        row_kind: 'tag',
         children: [],
       } as TagRow
       tagMap.set(tag, tagRow)

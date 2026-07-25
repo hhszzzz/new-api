@@ -72,6 +72,8 @@ import {
   handleUpdateTagField,
   handleUpdateChannelBalance,
   isTagAggregateRow,
+  isChannelAggregateRow,
+  type ChannelAggregateRow,
   type TagRow,
 } from '../lib'
 import { parseUpstreamUpdateMeta } from '../lib/upstream-update-utils'
@@ -175,6 +177,7 @@ function PriorityCell({ channel }: { channel: Channel }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const isTagRow = isTagAggregateRow(channel)
+  const isChannelAggregate = isChannelAggregateRow(channel)
   const priority = channel.priority
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [pendingValue, setPendingValue] = useState<number | null>(null)
@@ -214,6 +217,10 @@ function PriorityCell({ channel }: { channel: Channel }) {
     )
   }
 
+  if (isChannelAggregate) {
+    return <span className='text-muted-foreground'>—</span>
+  }
+
   // Regular channel row - editable
   return (
     <NumericSpinnerInput
@@ -233,6 +240,7 @@ function WeightCell({ channel }: { channel: Channel }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const isTagRow = isTagAggregateRow(channel)
+  const isChannelAggregate = isChannelAggregateRow(channel)
   const weight = channel.weight
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [pendingValue, setPendingValue] = useState<number | null>(null)
@@ -272,6 +280,10 @@ function WeightCell({ channel }: { channel: Channel }) {
     )
   }
 
+  if (isChannelAggregate) {
+    return <span className='text-muted-foreground'>—</span>
+  }
+
   // Regular channel row - editable
   return (
     <NumericSpinnerInput
@@ -300,6 +312,7 @@ function BalanceCell({ channel }: { channel: Channel }) {
   const layout = useContext(ChannelRowActionsLayoutContext)
   const { sensitiveVisible } = useChannels()
   const isTagRow = isTagAggregateRow(channel)
+  const isChannelAggregate = isChannelAggregateRow(channel)
   const balance = channel.balance || 0
   const usedQuota = channel.used_quota || 0
   const [isUpdating, setIsUpdating] = useState(false)
@@ -355,8 +368,9 @@ function BalanceCell({ channel }: { channel: Channel }) {
   const maskedUsedLabel = `${t('Used:')} ${SENSITIVE_MASK}`
   const maskedRemainingLabel = `${t('Remaining:')} ${SENSITIVE_MASK}`
 
-  // Tag row: only show cumulative used quota
-  if (isTagRow) {
+  // Synthetic summary rows only show cumulative usage; balance refresh and
+  // provider-specific actions remain available on concrete child channels.
+  if (isTagRow || isChannelAggregate) {
     return (
       <TooltipProvider>
         <Tooltip>
@@ -544,9 +558,10 @@ export function useChannelsColumns(
               ),
               cell: ({ row }) => {
                 const isTagRow = isTagAggregateRow(row.original)
+                const isChannelAggregate = isChannelAggregateRow(row.original)
 
-                // Don't show checkbox for tag rows
-                if (isTagRow) {
+                // Synthetic parent rows are not concrete selectable channels.
+                if (isTagRow || isChannelAggregate) {
                   return null
                 }
 
@@ -584,6 +599,7 @@ export function useChannelsColumns(
         meta: { mobileTitle: true },
         cell: ({ row }) => {
           const isTagRow = isTagAggregateRow(row.original)
+          const isChannelAggregate = isChannelAggregateRow(row.original)
           const name = row.getValue('name') as string
           const channel = row.original
 
@@ -611,6 +627,43 @@ export function useChannelsColumns(
                   <StatusBadge
                     label={`${childrenCount} channels`}
                     variant='blue'
+                    size='sm'
+                    copyable={false}
+                  />
+                </div>
+              </div>
+            )
+          }
+
+          if (isChannelAggregate) {
+            const aggregateName = channel.aggregate_name || t('Aggregate')
+            const childrenCount = (channel as ChannelAggregateRow).children
+              .length
+            return (
+              <div className='flex items-center gap-2'>
+                <Button
+                  variant='ghost'
+                  size='sm'
+                  className='h-6 w-6 p-0'
+                  onClick={row.getToggleExpandedHandler()}
+                  aria-label={row.getIsExpanded() ? t('Collapse') : t('Expand')}
+                  aria-expanded={row.getIsExpanded()}
+                >
+                  {row.getIsExpanded() ? (
+                    <ChevronDown className='h-4 w-4' />
+                  ) : (
+                    <ChevronRight className='h-4 w-4' />
+                  )}
+                </Button>
+                <div className='flex min-w-0 items-center gap-1.5'>
+                  <span className='truncate font-semibold'>
+                    {sensitiveVisible ? aggregateName : SENSITIVE_MASK}
+                  </span>
+                  <StatusBadge
+                    label={t('{{count}} child channels', {
+                      count: childrenCount,
+                    })}
+                    variant='purple'
                     size='sm'
                     copyable={false}
                   />
@@ -681,6 +734,15 @@ export function useChannelsColumns(
                     </Tooltip>
                   </TooltipProvider>
                 )}
+                {channel.aggregate_name && (
+                  <StatusBadge
+                    label={`${t('Aggregate')}: ${channel.aggregate_name}`}
+                    variant='purple'
+                    size='sm'
+                    copyable={false}
+                    className='w-fit'
+                  />
+                )}
               </div>
             </div>
           )
@@ -689,18 +751,51 @@ export function useChannelsColumns(
         minSize: 200,
       },
 
+      {
+        accessorKey: 'aggregate_name',
+        header: t('Aggregate'),
+        cell: ({ row }) => {
+          const channel = row.original
+          if (isTagAggregateRow(channel) || isChannelAggregateRow(channel)) {
+            return null
+          }
+          return channel.aggregate_name ? (
+            <div className='max-w-[12rem]'>
+              <TruncatedText text={channel.aggregate_name} />
+            </div>
+          ) : (
+            <span className='text-muted-foreground'>—</span>
+          )
+        },
+        size: 160,
+        minSize: 120,
+      },
+
       // Type column
       {
         accessorKey: 'type',
         header: t('Type'),
         cell: ({ row }) => {
           const isTagRow = isTagAggregateRow(row.original)
+          const isChannelAggregate = isChannelAggregateRow(row.original)
 
           if (isTagRow) {
             return (
               <StatusBadge
                 label={t('Tag Aggregate')}
                 variant='blue'
+                size='sm'
+                copyable={false}
+                className='-ml-1.5'
+              />
+            )
+          }
+
+          if (isChannelAggregate) {
+            return (
+              <StatusBadge
+                label={t('Channel Aggregate')}
+                variant='purple'
                 size='sm'
                 copyable={false}
                 className='-ml-1.5'
@@ -831,6 +926,7 @@ export function useChannelsColumns(
         meta: { mobileBadge: true },
         cell: ({ row }) => {
           const isTagRow = isTagAggregateRow(row.original)
+          const isChannelAggregate = isChannelAggregateRow(row.original)
           const status = row.getValue('status') as number
           const channel = row.original as Channel
 
@@ -860,6 +956,25 @@ export function useChannelsColumns(
                 />
               )
             }
+          }
+
+          if (isChannelAggregate) {
+            const childrenCount = (channel as ChannelAggregateRow).children
+              .length
+            const hasEnabled = status === 1
+            return (
+              <StatusBadge
+                label={t(
+                  hasEnabled ? 'Active ({{count}})' : 'Inactive ({{count}})',
+                  {
+                    count: childrenCount,
+                  }
+                )}
+                variant={hasEnabled ? 'success' : 'neutral'}
+                size='sm'
+                copyable={false}
+              />
+            )
           }
 
           // Regular channel row
@@ -1136,6 +1251,7 @@ export function useChannelsColumns(
         cell: ({ row }) => {
           // Check if this is a tag row (has children)
           const isTagRow = isTagAggregateRow(row.original)
+          const isChannelAggregate = isChannelAggregateRow(row.original)
 
           if (isTagRow) {
             return (
@@ -1144,6 +1260,10 @@ export function useChannelsColumns(
                 row={row as any}
               />
             )
+          }
+
+          if (isChannelAggregate) {
+            return null
           }
 
           return <DataTableRowActions row={row} />
