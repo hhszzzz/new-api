@@ -27,7 +27,7 @@ import { quotaUnitsToDollars } from '@/lib/format'
 import { ROLE } from '@/lib/roles'
 
 import { DEFAULT_GROUP } from '../constants'
-import { type UserFormData, type User } from '../types'
+import type { User, UserFormData } from '../types'
 
 // ============================================================================
 // Form Schema
@@ -40,6 +40,10 @@ export const userFormSchema = z.object({
   role: z.number().optional(),
   quota_dollars: z.number().min(0).optional(),
   group: z.string().optional(),
+  groups: z.array(z.string()).optional(),
+  primary_group: z.string().optional(),
+  model_limits_enabled: z.boolean().optional(),
+  model_limits: z.array(z.string()).optional(),
   remark: z.string().optional(),
   admin_permissions: z
     .record(z.string(), z.record(z.string(), z.boolean()))
@@ -59,6 +63,10 @@ export const USER_FORM_DEFAULT_VALUES: UserFormValues = {
   role: 1, // Default to common user
   quota_dollars: 0,
   group: DEFAULT_GROUP,
+  groups: [DEFAULT_GROUP],
+  primary_group: DEFAULT_GROUP,
+  model_limits_enabled: false,
+  model_limits: [],
   remark: '',
   // Filled against the backend catalog at render time; see UsersMutateDrawer.
   admin_permissions: {},
@@ -94,12 +102,19 @@ export function transformFormDataToPayload(
     )
   }
 
-  // For create: only send required fields
+  payload.groups = data.groups || []
+  payload.primary_group = data.primary_group || data.groups?.[0] || data.group
+  payload.model_limits_enabled = data.model_limits_enabled === true
+  payload.model_limits = data.model_limits || []
+
+  // Profile and policy fields are accepted by both create and update APIs so
+  // the backend can persist them atomically.
   if (userId === undefined) {
     payload.role = role
+    payload.group = payload.primary_group
   } else {
     // For update: quota is adjusted atomically via /api/user/manage, not sent here
-    payload.group = data.group
+    payload.group = payload.primary_group
     payload.remark = data.remark || undefined
     payload.id = userId
   }
@@ -113,6 +128,9 @@ export function transformFormDataToPayload(
  * the catalog at render time in UsersMutateDrawer.
  */
 export function transformUserToFormDefaults(user: User): UserFormValues {
+  const groups = user.groups?.length
+    ? user.groups
+    : [user.group || DEFAULT_GROUP]
   return {
     username: user.username,
     display_name: user.display_name,
@@ -120,6 +138,10 @@ export function transformUserToFormDefaults(user: User): UserFormValues {
     role: user.role,
     quota_dollars: quotaUnitsToDollars(user.quota),
     group: user.group || DEFAULT_GROUP,
+    groups,
+    primary_group: user.group || groups[0] || DEFAULT_GROUP,
+    model_limits_enabled: user.model_limits_enabled ?? false,
+    model_limits: user.model_limits ?? [],
     remark: user.remark || '',
     admin_permissions: user.admin_permissions ?? {},
   }

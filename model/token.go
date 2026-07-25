@@ -7,8 +7,10 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/bytedance/gopkg/util/gopool"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type Token struct {
@@ -29,6 +31,59 @@ type Token struct {
 	Group              string         `json:"group" gorm:"default:''"`
 	CrossGroupRetry    bool           `json:"cross_group_retry"` // 跨分组重试，仅auto分组有效
 	DeletedAt          gorm.DeletedAt `gorm:"index"`
+}
+
+type TokenSortOptions struct {
+	SortBy    string
+	SortOrder string
+}
+
+var tokenSortColumns = map[string]string{
+	"id":            "id",
+	"name":          "name",
+	"status":        "status",
+	"remain_quota":  "remain_quota",
+	"group":         "group",
+	"created_time":  "created_time",
+	"accessed_time": "accessed_time",
+	"expired_time":  "expired_time",
+}
+
+func NewTokenSortOptions(sortBy string, sortOrder string) TokenSortOptions {
+	normalizedSortBy := strings.ToLower(strings.TrimSpace(sortBy))
+	normalizedSortOrder := strings.ToLower(strings.TrimSpace(sortOrder))
+	if _, ok := tokenSortColumns[normalizedSortBy]; !ok {
+		normalizedSortBy = "id"
+		normalizedSortOrder = "desc"
+	} else if normalizedSortOrder != "asc" {
+		normalizedSortOrder = "desc"
+	}
+	return TokenSortOptions{SortBy: normalizedSortBy, SortOrder: normalizedSortOrder}
+}
+
+func (options TokenSortOptions) Apply(query *gorm.DB) *gorm.DB {
+	columnName, ok := tokenSortColumns[options.SortBy]
+	if !ok {
+		columnName = "id"
+	}
+	query = query.Order(clause.OrderByColumn{
+		Column: clause.Column{Name: columnName},
+		Desc:   options.SortOrder != "asc",
+	})
+	if columnName != "id" {
+		query = query.Order(clause.OrderByColumn{
+			Column: clause.Column{Name: "id"},
+			Desc:   true,
+		})
+	}
+	return query
+}
+
+func resolveTokenSortOptions(sortOptions []TokenSortOptions) TokenSortOptions {
+	if len(sortOptions) == 0 {
+		return NewTokenSortOptions("", "")
+	}
+	return sortOptions[0]
 }
 
 func (token *Token) Clean() {
@@ -78,10 +133,10 @@ func (token *Token) GetIpLimits() []string {
 	return ipLimits
 }
 
-func GetAllUserTokens(userId int, startIdx int, num int) ([]*Token, error) {
+func GetAllUserTokens(userId int, startIdx int, num int, sortOptions ...TokenSortOptions) ([]*Token, error) {
 	var tokens []*Token
 	var err error
-	err = DB.Where("user_id = ?", userId).Order("id desc").Limit(num).Offset(startIdx).Find(&tokens).Error
+	err = resolveTokenSortOptions(sortOptions).Apply(DB.Where("user_id = ?", userId)).Limit(num).Offset(startIdx).Find(&tokens).Error
 	return tokens, err
 }
 
@@ -131,7 +186,7 @@ func validateLikePattern(input string) error {
 
 const searchHardLimit = 100
 
-func SearchUserTokens(userId int, keyword string, token string, offset int, limit int) (tokens []*Token, total int64, err error) {
+func SearchUserTokens(userId int, keyword string, token string, offset int, limit int, sortOptions ...TokenSortOptions) (tokens []*Token, total int64, err error) {
 	// model 层强制截断
 	if limit <= 0 || limit > searchHardLimit {
 		limit = searchHardLimit
@@ -184,7 +239,7 @@ func SearchUserTokens(userId int, keyword string, token string, offset int, limi
 	}
 
 	// 再分页查数据
-	err = baseQuery.Order("id desc").Offset(offset).Limit(limit).Find(&tokens).Error
+	err = resolveTokenSortOptions(sortOptions).Apply(baseQuery).Offset(offset).Limit(limit).Find(&tokens).Error
 	if err != nil {
 		common.SysError("failed to search tokens: " + err.Error())
 		return nil, 0, errors.New("搜索令牌失败")
@@ -351,7 +406,14 @@ func (token *Token) GetModelLimitsMap() map[string]bool {
 	limits := token.GetModelLimits()
 	limitsMap := make(map[string]bool)
 	for _, limit := range limits {
+		limit = strings.TrimSpace(limit)
+		if limit == "" {
+			continue
+		}
 		limitsMap[limit] = true
+		if normalized := ratio_setting.FormatMatchingModelName(limit); normalized != "" {
+			limitsMap[normalized] = true
+		}
 	}
 	return limitsMap
 }

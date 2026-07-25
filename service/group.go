@@ -8,33 +8,55 @@ import (
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 )
 
-func GetUserUsableGroups(userGroup string) map[string]string {
-	groupsCopy := setting.GetUserUsableGroupsCopy()
-	if userGroup != "" {
-		specialSettings, b := ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup.Get(userGroup)
-		if b {
-			// 处理特殊可用分组
-			for specialGroup, desc := range specialSettings {
-				if strings.HasPrefix(specialGroup, "-:") {
-					// 移除分组
-					groupToRemove := strings.TrimPrefix(specialGroup, "-:")
-					delete(groupsCopy, groupToRemove)
-				} else if strings.HasPrefix(specialGroup, "+:") {
-					// 添加分组
-					groupToAdd := strings.TrimPrefix(specialGroup, "+:")
-					groupsCopy[groupToAdd] = desc
-				} else {
-					// 直接添加分组
-					groupsCopy[specialGroup] = desc
-				}
+func applySpecialUsableGroups(groups map[string]string, userGroup string) {
+	if strings.TrimSpace(userGroup) == "" {
+		return
+	}
+	specialSettings, ok := ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup.Get(userGroup)
+	if ok {
+		for specialGroup, description := range specialSettings {
+			switch {
+			case strings.HasPrefix(specialGroup, "-:"):
+				delete(groups, strings.TrimPrefix(specialGroup, "-:"))
+			case strings.HasPrefix(specialGroup, "+:"):
+				groups[strings.TrimPrefix(specialGroup, "+:")] = description
+			default:
+				groups[specialGroup] = description
 			}
 		}
-		// 如果userGroup不在UserUsableGroups中，返回UserUsableGroups + userGroup
-		if _, ok := groupsCopy[userGroup]; !ok {
-			groupsCopy[userGroup] = "用户分组"
+	}
+	if _, exists := groups[userGroup]; !exists {
+		groups[userGroup] = "用户分组"
+	}
+}
+
+// GetUserUsableGroups retains the legacy single-user-group contract.
+func GetUserUsableGroups(userGroup string) map[string]string {
+	groups := setting.GetUserUsableGroupsCopy()
+	applySpecialUsableGroups(groups, userGroup)
+	return groups
+}
+
+// GetUserUsableGroupsForGroups combines each membership's independently
+// usable token groups. A restriction on one membership must not revoke access
+// granted by another membership. This preserves the existing special usable
+// group rules while allowing multiple base memberships.
+func GetUserUsableGroupsForGroups(userGroups []string) map[string]string {
+	groups := make(map[string]string)
+	for _, userGroup := range userGroups {
+		userGroup = strings.TrimSpace(userGroup)
+		if userGroup == "" {
+			continue
+		}
+		for group, description := range GetUserUsableGroups(userGroup) {
+			groups[group] = description
 		}
 	}
-	return groupsCopy
+	return groups
+}
+
+func GetAuthorizedUserGroups(userGroups []string) map[string]string {
+	return GetUserUsableGroupsForGroups(userGroups)
 }
 
 func GroupInUserUsableGroups(userGroup, groupName string) bool {
@@ -42,39 +64,58 @@ func GroupInUserUsableGroups(userGroup, groupName string) bool {
 	return ok
 }
 
-// GetUserAutoGroup 根据用户分组获取自动分组设置
+func GroupInUserUsableGroupsForGroups(userGroups []string, groupName string) bool {
+	_, ok := GetUserUsableGroupsForGroups(userGroups)[groupName]
+	return ok
+}
+
+func UserHasGroup(groups []string, groupName string) bool {
+	for _, group := range groups {
+		if group == groupName {
+			return true
+		}
+	}
+	return false
+}
+
+// GetUserAutoGroup retains the legacy single-user-group contract.
 func GetUserAutoGroup(userGroup string) []string {
-	groups := GetUserUsableGroups(userGroup)
+	return getAutoGroups(GetUserUsableGroups(userGroup))
+}
+
+func GetUserAutoGroups(userGroups []string) []string {
+	return getAutoGroups(GetUserUsableGroupsForGroups(userGroups))
+}
+
+func getAutoGroups(usableGroups map[string]string) []string {
 	autoGroups := make([]string, 0)
 	for _, group := range setting.GetAutoGroups() {
-		if _, ok := groups[group]; ok {
+		if _, ok := usableGroups[group]; ok {
 			autoGroups = append(autoGroups, group)
 		}
 	}
 	return autoGroups
 }
 
-// GetGroupsEnabledModels 按 groups 顺序获取各分组启用的模型并去重
+// GetGroupsEnabledModels gets enabled models in group order and removes duplicates.
 func GetGroupsEnabledModels(groups []string) []string {
 	seen := make(map[string]struct{})
 	models := make([]string, 0)
 	for _, group := range groups {
 		for _, modelName := range model.GetGroupEnabledModels(group) {
-			if _, ok := seen[modelName]; !ok {
-				seen[modelName] = struct{}{}
-				models = append(models, modelName)
+			if _, ok := seen[modelName]; ok {
+				continue
 			}
+			seen[modelName] = struct{}{}
+			models = append(models, modelName)
 		}
 	}
 	return models
 }
 
-// GetUserGroupRatio 获取用户使用某个分组的倍率
-// userGroup 用户分组
-// group 需要获取倍率的分组
+// GetUserGroupRatio returns the ratio for a user group using a token group.
 func GetUserGroupRatio(userGroup, group string) float64 {
-	ratio, ok := ratio_setting.GetGroupGroupRatio(userGroup, group)
-	if ok {
+	if ratio, ok := ratio_setting.GetGroupGroupRatio(userGroup, group); ok {
 		return ratio
 	}
 	return ratio_setting.GetGroupRatio(group)

@@ -7,27 +7,45 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
 )
 
-const userCacheSchemaVersion = 2
+const userCacheSchemaVersion = 3
 
 type UserBase struct {
-	Id          int    `json:"id"`
-	Group       string `json:"group"`
-	Email       string `json:"email"`
-	Quota       int    `json:"quota"`
-	Status      int    `json:"status"`
-	Role        int    `json:"role"`
-	Username    string `json:"username"`
-	Setting     string `json:"setting"`
-	AuthVersion int64  `json:"-"`
-	CacheSchema int    `json:"-"`
+	Id                 int      `json:"id"`
+	Group              string   `json:"group"`
+	Groups             []string `json:"groups"`
+	TopupGroup         string   `json:"topup_group"`
+	ModelLimitsEnabled bool     `json:"model_limits_enabled"`
+	ModelLimits        []string `json:"model_limits"`
+	PolicyVersion      int64    `json:"-"`
+	Email              string   `json:"email"`
+	Quota              int      `json:"quota"`
+	Status             int      `json:"status"`
+	Role               int      `json:"role"`
+	Username           string   `json:"username"`
+	Setting            string   `json:"setting"`
+	AuthVersion        int64    `json:"-"`
+	CacheSchema        int      `json:"-"`
 }
 
 func (user *UserBase) WriteContext(c *gin.Context) {
+	c.Set("role", user.Role)
 	common.SetContextKey(c, constant.ContextKeyUserGroup, user.Group)
+	common.SetContextKey(c, constant.ContextKeyUserGroups, user.Groups)
+	modelLimitEnabled := user.ModelLimitsEnabled && user.Role != common.RoleRootUser
+	common.SetContextKey(c, constant.ContextKeyUserModelLimitEnabled, modelLimitEnabled)
+	modelLimits := make(map[string]bool, len(user.ModelLimits))
+	for _, modelName := range user.ModelLimits {
+		modelLimits[modelName] = true
+		if normalized := ratio_setting.FormatMatchingModelName(modelName); normalized != "" {
+			modelLimits[normalized] = true
+		}
+	}
+	common.SetContextKey(c, constant.ContextKeyUserModelLimit, modelLimits)
 	common.SetContextKey(c, constant.ContextKeyUserQuota, user.Quota)
 	common.SetContextKey(c, constant.ContextKeyUserStatus, user.Status)
 	common.SetContextKey(c, constant.ContextKeyUserEmail, user.Email)
@@ -77,6 +95,11 @@ func populateUserCache(user User) error {
 	if !common.RedisEnabled {
 		return nil
 	}
+	if user.Groups == nil || user.ModelLimits == nil {
+		if err := HydrateUserPolicy(&user); err != nil {
+			return err
+		}
+	}
 	return writeUserCache(user.ToBaseUser(), true)
 }
 
@@ -86,6 +109,11 @@ func populateUserCache(user User) error {
 func updateUserCache(user User) error {
 	if !common.RedisEnabled {
 		return nil
+	}
+	if user.Groups == nil || user.ModelLimits == nil {
+		if err := HydrateUserPolicy(&user); err != nil {
+			return err
+		}
 	}
 	return writeUserCache(user.ToBaseUser(), false)
 }
@@ -110,6 +138,10 @@ func GetUserCache(userId int) (*UserBase, error) {
 		if floorErr == nil && floor > user.AuthVersion {
 			return nil, ErrUserAuthCachePending
 		}
+		policyFloor, policyFloorErr := getUserPolicyVersionFloor(userId)
+		if policyFloorErr == nil && policyFloor > user.PolicyVersion {
+			return nil, ErrUserAuthCachePending
+		}
 		if err := populateUserCache(*user); err != nil {
 			if errors.Is(err, ErrUserAuthCachePending) {
 				return nil, err
@@ -130,7 +162,7 @@ func cacheGetUserBase(userId int) (*UserBase, error) {
 	if err != nil {
 		return nil, err
 	}
-	if userCache.Id != userId || userCache.CacheSchema != userCacheSchemaVersion || userCache.AuthVersion <= 0 {
+	if userCache.Id != userId || userCache.CacheSchema != userCacheSchemaVersion || userCache.AuthVersion <= 0 || userCache.PolicyVersion <= 0 {
 		return nil, fmt.Errorf("user cache schema is stale")
 	}
 	floor, err := getUserAuthVersionFloor(userId)
@@ -138,6 +170,13 @@ func cacheGetUserBase(userId int) (*UserBase, error) {
 		return nil, err
 	}
 	if floor > userCache.AuthVersion {
+		return nil, ErrUserAuthCachePending
+	}
+	policyFloor, err := getUserPolicyVersionFloor(userId)
+	if err != nil {
+		return nil, err
+	}
+	if policyFloor > userCache.PolicyVersion {
 		return nil, ErrUserAuthCachePending
 	}
 	return &userCache, nil

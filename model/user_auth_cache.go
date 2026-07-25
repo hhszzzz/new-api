@@ -23,12 +23,22 @@ var ErrUserAuthCachePending = errors.New("user authentication state update is pe
 
 var ErrUserAuthVersionConflict = errors.New("user authentication version update conflicted")
 
+var ErrUserPolicyVersionConflict = errors.New("user policy version update conflicted")
+
 func getUserAuthFenceKey(userId int) string {
 	return fmt.Sprintf("auth:user:fence:%d", userId)
 }
 
 func getUserAuthVersionKey(userId int) string {
 	return fmt.Sprintf("auth:user:version:%d", userId)
+}
+
+func getUserPolicyFenceKey(userId int) string {
+	return fmt.Sprintf("auth:user:policy:fence:%d", userId)
+}
+
+func getUserPolicyVersionKey(userId int) string {
+	return fmt.Sprintf("auth:user:policy:version:%d", userId)
 }
 
 // A pending fence only covers the interval between publishing the next
@@ -53,17 +63,37 @@ func writeUserCache(user *UserBase, includeQuota bool) error {
 	if user.AuthVersion <= 0 {
 		return fmt.Errorf("invalid user auth version")
 	}
+	if user.PolicyVersion <= 0 {
+		// Rows created before policy migrations have no version yet. Treat the
+		// legacy policy as version one until the migration initializer persists it.
+		user.PolicyVersion = 1
+	}
 	includeQuotaArg := "0"
 	if includeQuota {
 		includeQuotaArg = "1"
 	}
 	ttl := userCacheTTLSeconds()
+	groupsJSON, err := common.Marshal(user.Groups)
+	if err != nil {
+		return err
+	}
+	modelLimitsJSON, err := common.Marshal(user.ModelLimits)
+	if err != nil {
+		return err
+	}
 	const script = `
 local incoming = tonumber(ARGV[1])
 local pending = tonumber(redis.call('GET', KEYS[2]) or '0')
 local committed = tonumber(redis.call('GET', KEYS[3]) or '0')
 local current = tonumber(redis.call('HGET', KEYS[1], 'AuthVersion') or '0')
+local incomingPolicy = tonumber(ARGV[17])
+local pendingPolicy = tonumber(redis.call('GET', KEYS[4]) or '0')
+local committedPolicy = tonumber(redis.call('GET', KEYS[5]) or '0')
+local currentPolicy = tonumber(redis.call('HGET', KEYS[1], 'PolicyVersion') or '0')
 if pending > incoming or committed > incoming or current > incoming then
+  return 0
+end
+if pendingPolicy > incomingPolicy or committedPolicy > incomingPolicy or currentPolicy > incomingPolicy then
   return 0
 end
 if committed < incoming then
@@ -72,22 +102,34 @@ end
 if pending > 0 and pending <= incoming then
   redis.call('DEL', KEYS[2])
 end
+if committedPolicy < incomingPolicy then
+  redis.call('SET', KEYS[5], ARGV[17])
+end
+if pendingPolicy > 0 and pendingPolicy <= incomingPolicy then
+  redis.call('DEL', KEYS[4])
+end
 if ARGV[10] == '0' and redis.call('EXISTS', KEYS[1]) == 0 then
   return 1
 end
 redis.call('HSET', KEYS[1],
   'Id', ARGV[2], 'Group', ARGV[3], 'Email', ARGV[4],
   'Status', ARGV[5], 'Role', ARGV[6], 'Username', ARGV[7],
-  'Setting', ARGV[8], 'AuthVersion', ARGV[1], 'CacheSchema', ARGV[9])
+	'Setting', ARGV[8], 'AuthVersion', ARGV[1], 'CacheSchema', ARGV[9],
+	'Groups', ARGV[13], 'TopupGroup', ARGV[14],
+	'ModelLimitsEnabled', ARGV[15], 'ModelLimits', ARGV[16], 'PolicyVersion', ARGV[17])
 if ARGV[10] == '1' and redis.call('HEXISTS', KEYS[1], 'Quota') == 0 then
   redis.call('HSET', KEYS[1], 'Quota', ARGV[11])
 end
 redis.call('EXPIRE', KEYS[1], ARGV[12])
 return 1`
 	result, err := common.RDB.Eval(context.Background(), script,
-		[]string{getUserCacheKey(user.Id), getUserAuthFenceKey(user.Id), getUserAuthVersionKey(user.Id)},
+		[]string{
+			getUserCacheKey(user.Id), getUserAuthFenceKey(user.Id), getUserAuthVersionKey(user.Id),
+			getUserPolicyFenceKey(user.Id), getUserPolicyVersionKey(user.Id),
+		},
 		user.AuthVersion, user.Id, user.Group, user.Email, user.Status, user.Role,
 		user.Username, user.Setting, user.CacheSchema, includeQuotaArg, user.Quota, ttl,
+		string(groupsJSON), user.TopupGroup, user.ModelLimitsEnabled, string(modelLimitsJSON), user.PolicyVersion,
 	).Int()
 	if err != nil {
 		return err
@@ -96,6 +138,30 @@ return 1`
 		return ErrUserAuthCachePending
 	}
 	return nil
+}
+
+func getUserPolicyVersionFloor(userId int) (int64, error) {
+	if !common.RedisEnabled {
+		return 0, nil
+	}
+	values, err := common.RDB.MGet(context.Background(), getUserPolicyFenceKey(userId), getUserPolicyVersionKey(userId)).Result()
+	if err != nil {
+		return 0, err
+	}
+	var floor int64
+	for _, value := range values {
+		if value == nil {
+			continue
+		}
+		parsed, err := strconv.ParseInt(fmt.Sprint(value), 10, 64)
+		if err != nil {
+			return 0, err
+		}
+		if parsed > floor {
+			floor = parsed
+		}
+	}
+	return floor, nil
 }
 
 func getUserAuthVersionFloor(userId int) (int64, error) {
@@ -147,6 +213,27 @@ return 1`
 	return common.RDB.Eval(context.Background(), script, []string{getUserAuthFenceKey(userId)}, authVersion, userAuthFenceTTLSeconds()).Err()
 }
 
+func SetUserPolicyVersionFence(userId int, policyVersion int64) error {
+	if !common.RedisEnabled {
+		return nil
+	}
+	if userId <= 0 || policyVersion <= 0 {
+		return fmt.Errorf("invalid user policy fence")
+	}
+	const script = `
+local current = tonumber(redis.call('GET', KEYS[1]) or '0')
+local incoming = tonumber(ARGV[1])
+if current < incoming then
+  redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2])
+elseif current == incoming then
+  redis.call('EXPIRE', KEYS[1], ARGV[2])
+elseif redis.call('TTL', KEYS[1]) < 0 then
+  redis.call('EXPIRE', KEYS[1], ARGV[2])
+end
+return 1`
+	return common.RDB.Eval(context.Background(), script, []string{getUserPolicyFenceKey(userId)}, policyVersion, userAuthFenceTTLSeconds()).Err()
+}
+
 // publishCommittedUserAuthVersion records the durable lower bound used to
 // reject an arbitrarily delayed cache fill after a committed security change.
 // It also removes this transaction's now-obsolete pending fence.
@@ -170,6 +257,29 @@ end
 return 1`
 	return common.RDB.Eval(context.Background(), script,
 		[]string{getUserAuthVersionKey(userId), getUserAuthFenceKey(userId)}, authVersion,
+	).Err()
+}
+
+func publishCommittedUserPolicyVersion(userId int, policyVersion int64) error {
+	if !common.RedisEnabled {
+		return nil
+	}
+	if userId <= 0 || policyVersion <= 0 {
+		return fmt.Errorf("invalid committed user policy version")
+	}
+	const script = `
+local incoming = tonumber(ARGV[1])
+local committed = tonumber(redis.call('GET', KEYS[1]) or '0')
+local pending = tonumber(redis.call('GET', KEYS[2]) or '0')
+if committed < incoming then
+  redis.call('SET', KEYS[1], ARGV[1])
+end
+if pending > 0 and pending <= incoming then
+  redis.call('DEL', KEYS[2])
+end
+return 1`
+	return common.RDB.Eval(context.Background(), script,
+		[]string{getUserPolicyVersionKey(userId), getUserPolicyFenceKey(userId)}, policyVersion,
 	).Err()
 }
 
@@ -207,6 +317,36 @@ func IncrementUserAuthVersionWithTx(tx *gorm.DB, userId int) (int64, error) {
 	return 0, ErrUserAuthVersionConflict
 }
 
+func IncrementUserPolicyVersionWithTx(tx *gorm.DB, userId int) (int64, error) {
+	if tx == nil || userId <= 0 {
+		return 0, fmt.Errorf("invalid user policy version update")
+	}
+	for range 3 {
+		var user User
+		if err := lockForUpdate(tx.Unscoped()).Select("id", "policy_version").Where("id = ?", userId).First(&user).Error; err != nil {
+			return 0, err
+		}
+		current := user.PolicyVersion
+		if current < 1 {
+			current = 1
+		}
+		next := current + 1
+		if err := SetUserPolicyVersionFence(userId, next); err != nil {
+			return 0, err
+		}
+		result := tx.Unscoped().Model(&User{}).
+			Where("id = ? AND policy_version = ?", userId, user.PolicyVersion).
+			Update("policy_version", next)
+		if result.Error != nil {
+			return 0, result.Error
+		}
+		if result.RowsAffected == 1 {
+			return next, nil
+		}
+	}
+	return 0, ErrUserPolicyVersionConflict
+}
+
 // BumpUserAuthVersion is the transaction-owning variant used by password,
 // role, status and security-factor changes outside another transaction.
 func BumpUserAuthVersion(userId int) (int64, error) {
@@ -229,6 +369,17 @@ func BumpUserAuthVersion(userId int) (int64, error) {
 func PublishUserAuthCache(userId int) error {
 	user, err := GetUserById(userId, false)
 	if err != nil {
+		return err
+	}
+	return updateUserCache(*user)
+}
+
+func PublishUserPolicyCache(userId int) error {
+	user, err := GetUserById(userId, false)
+	if err != nil {
+		return err
+	}
+	if err := publishCommittedUserPolicyVersion(userId, user.PolicyVersion); err != nil {
 		return err
 	}
 	return updateUserCache(*user)

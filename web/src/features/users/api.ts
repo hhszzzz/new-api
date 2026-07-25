@@ -28,6 +28,9 @@ import type {
   ManageUserAction,
   ManageUserQuotaPayload,
   ApiResponse,
+  UserPolicy,
+  UserModelRoute,
+  UserModelRouteCandidates,
 } from './types'
 
 // ============================================================================
@@ -86,6 +89,63 @@ export async function searchUsers(
  */
 export async function getUser(id: number): Promise<ApiResponse<User>> {
   const res = await api.get(`/api/user/${id}`)
+  return res.data
+}
+
+export async function getUserPolicy(
+  id: number
+): Promise<ApiResponse<UserPolicy>> {
+  const res = await api.get(`/api/user/${id}/policy`)
+  return res.data
+}
+
+export async function updateUserPolicy(
+  id: number,
+  data: UserPolicy
+): Promise<ApiResponse> {
+  const res = await api.put(`/api/user/${id}/policy`, data)
+  return res.data
+}
+
+export async function getUserModelRoutes(
+  id: number
+): Promise<ApiResponse<UserModelRoute[]>> {
+  const res = await api.get(`/api/user/${id}/model-routes`)
+  return res.data
+}
+
+export async function getUserModelRouteCandidates(
+  id: number,
+  params: { target_model?: string; execution_group?: string } = {}
+): Promise<ApiResponse<UserModelRouteCandidates>> {
+  const res = await api.get(`/api/user/${id}/model-route-candidates`, {
+    params,
+  })
+  return res.data
+}
+
+export async function createUserModelRoute(
+  id: number,
+  data: Omit<UserModelRoute, 'id' | 'user_id' | 'created_at' | 'updated_at'>
+): Promise<ApiResponse<UserModelRoute>> {
+  const res = await api.post(`/api/user/${id}/model-routes`, data)
+  return res.data
+}
+
+export async function updateUserModelRoute(
+  id: number,
+  routeId: number,
+  data: Omit<UserModelRoute, 'id' | 'user_id' | 'created_at' | 'updated_at'>
+): Promise<ApiResponse<UserModelRoute>> {
+  const res = await api.put(`/api/user/${id}/model-routes/${routeId}`, data)
+  return res.data
+}
+
+export async function deleteUserModelRoute(
+  id: number,
+  routeId: number
+): Promise<ApiResponse> {
+  const res = await api.delete(`/api/user/${id}/model-routes/${routeId}`)
   return res.data
 }
 

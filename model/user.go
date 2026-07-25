@@ -77,53 +77,71 @@ func resolveUserSortOptions(sortOptions []UserSortOptions) UserSortOptions {
 // User if you add sensitive fields, don't forget to clean them in setupLogin function.
 // Otherwise, the sensitive information will be saved on local storage in plain text!
 type User struct {
-	Id               int                        `json:"id"`
-	Username         string                     `json:"username" gorm:"unique;index" validate:"max=20"`
-	Password         string                     `json:"password" gorm:"not null;" validate:"min=8,max=20"`
-	OriginalPassword string                     `json:"original_password" gorm:"-:all"` // this field is only for Password change verification, don't save it to database!
-	DisplayName      string                     `json:"display_name" gorm:"index" validate:"max=20"`
-	Role             int                        `json:"role" gorm:"type:int;default:1"`   // admin, common
-	Status           int                        `json:"status" gorm:"type:int;default:1"` // enabled, disabled
-	Email            string                     `json:"email" gorm:"index" validate:"max=50"`
-	GitHubId         string                     `json:"github_id" gorm:"column:github_id;index"`
-	DiscordId        string                     `json:"discord_id" gorm:"column:discord_id;index"`
-	OidcId           string                     `json:"oidc_id" gorm:"column:oidc_id;index"`
-	WeChatId         string                     `json:"wechat_id" gorm:"column:wechat_id;index"`
-	TelegramId       string                     `json:"telegram_id" gorm:"column:telegram_id;index"`
-	VerificationCode string                     `json:"verification_code" gorm:"-:all"`                         // this field is only for Email verification, don't save it to database!
-	AccessToken      *string                    `json:"-" gorm:"type:char(32);column:access_token;uniqueIndex"` // this token is for system management
-	Quota            int                        `json:"quota" gorm:"type:int;default:0"`
-	UsedQuota        int                        `json:"used_quota" gorm:"type:int;default:0;column:used_quota"` // used quota
-	RequestCount     int                        `json:"request_count" gorm:"type:int;default:0;"`               // request number
-	Group            string                     `json:"group" gorm:"type:varchar(64);default:'default'"`
-	AffCode          string                     `json:"aff_code" gorm:"type:varchar(32);column:aff_code;uniqueIndex"`
-	AffCount         int                        `json:"aff_count" gorm:"type:int;default:0;column:aff_count"`
-	AffQuota         int                        `json:"aff_quota" gorm:"type:int;default:0;column:aff_quota"`           // 邀请剩余额度
-	AffHistoryQuota  int                        `json:"aff_history_quota" gorm:"type:int;default:0;column:aff_history"` // 邀请历史额度
-	InviterId        int                        `json:"inviter_id" gorm:"type:int;column:inviter_id;index"`
-	DeletedAt        gorm.DeletedAt             `gorm:"index"`
-	LinuxDOId        string                     `json:"linux_do_id" gorm:"column:linux_do_id;index"`
-	Setting          string                     `json:"setting" gorm:"type:text;column:setting"`
-	Remark           string                     `json:"remark,omitempty" gorm:"type:varchar(255)" validate:"max=255"`
-	StripeCustomer   string                     `json:"stripe_customer" gorm:"type:varchar(64);column:stripe_customer;index"`
-	CreatedAt        int64                      `json:"created_at" gorm:"autoCreateTime;column:created_at"`
-	LastLoginAt      int64                      `json:"last_login_at" gorm:"default:0;column:last_login_at"`
-	AuthVersion      int64                      `json:"-" gorm:"type:bigint;not null;default:1;column:auth_version"`
-	AdminPermissions map[string]map[string]bool `json:"admin_permissions,omitempty" gorm:"-:all"`
+	Id                 int                        `json:"id"`
+	Username           string                     `json:"username" gorm:"unique;index" validate:"max=20"`
+	Password           string                     `json:"password" gorm:"not null;" validate:"min=8,max=20"`
+	OriginalPassword   string                     `json:"original_password" gorm:"-:all"` // this field is only for Password change verification, don't save it to database!
+	DisplayName        string                     `json:"display_name" gorm:"index" validate:"max=20"`
+	Role               int                        `json:"role" gorm:"type:int;default:1"`   // admin, common
+	Status             int                        `json:"status" gorm:"type:int;default:1"` // enabled, disabled
+	Email              string                     `json:"email" gorm:"index" validate:"max=50"`
+	GitHubId           string                     `json:"github_id" gorm:"column:github_id;index"`
+	DiscordId          string                     `json:"discord_id" gorm:"column:discord_id;index"`
+	OidcId             string                     `json:"oidc_id" gorm:"column:oidc_id;index"`
+	WeChatId           string                     `json:"wechat_id" gorm:"column:wechat_id;index"`
+	TelegramId         string                     `json:"telegram_id" gorm:"column:telegram_id;index"`
+	VerificationCode   string                     `json:"verification_code" gorm:"-:all"`                         // this field is only for Email verification, don't save it to database!
+	AccessToken        *string                    `json:"-" gorm:"type:char(32);column:access_token;uniqueIndex"` // this token is for system management
+	Quota              int                        `json:"quota" gorm:"type:int;default:0"`
+	UsedQuota          int                        `json:"used_quota" gorm:"type:int;default:0;column:used_quota"` // used quota
+	RequestCount       int                        `json:"request_count" gorm:"type:int;default:0;"`               // request number
+	Group              string                     `json:"group" gorm:"type:varchar(64);default:'default'"`
+	TopupGroup         string                     `json:"topup_group" gorm:"type:varchar(64);default:''"`
+	ModelLimitsEnabled bool                       `json:"model_limits_enabled"`
+	PolicyVersion      int64                      `json:"-" gorm:"type:bigint;not null;default:1;column:policy_version"`
+	Groups             []string                   `json:"groups" gorm:"-:all"`
+	ModelLimits        []string                   `json:"model_limits" gorm:"-:all"`
+	AffCode            string                     `json:"aff_code" gorm:"type:varchar(32);column:aff_code;uniqueIndex"`
+	AffCount           int                        `json:"aff_count" gorm:"type:int;default:0;column:aff_count"`
+	AffQuota           int                        `json:"aff_quota" gorm:"type:int;default:0;column:aff_quota"`           // 邀请剩余额度
+	AffHistoryQuota    int                        `json:"aff_history_quota" gorm:"type:int;default:0;column:aff_history"` // 邀请历史额度
+	InviterId          int                        `json:"inviter_id" gorm:"type:int;column:inviter_id;index"`
+	DeletedAt          gorm.DeletedAt             `gorm:"index"`
+	LinuxDOId          string                     `json:"linux_do_id" gorm:"column:linux_do_id;index"`
+	Setting            string                     `json:"setting" gorm:"type:text;column:setting"`
+	Remark             string                     `json:"remark,omitempty" gorm:"type:varchar(255)" validate:"max=255"`
+	StripeCustomer     string                     `json:"stripe_customer" gorm:"type:varchar(64);column:stripe_customer;index"`
+	CreatedAt          int64                      `json:"created_at" gorm:"autoCreateTime;column:created_at"`
+	LastLoginAt        int64                      `json:"last_login_at" gorm:"default:0;column:last_login_at"`
+	AuthVersion        int64                      `json:"-" gorm:"type:bigint;not null;default:1;column:auth_version"`
+	AdminPermissions   map[string]map[string]bool `json:"admin_permissions,omitempty" gorm:"-:all"`
 }
 
 func (user *User) ToBaseUser() *UserBase {
+	groups := user.Groups
+	if groups == nil {
+		groups = []string{}
+	}
+	modelLimits := user.ModelLimits
+	if modelLimits == nil {
+		modelLimits = []string{}
+	}
 	cache := &UserBase{
-		Id:          user.Id,
-		Group:       user.Group,
-		Quota:       user.Quota,
-		Status:      user.Status,
-		Role:        user.Role,
-		Username:    user.Username,
-		Setting:     user.Setting,
-		Email:       user.Email,
-		AuthVersion: user.AuthVersion,
-		CacheSchema: userCacheSchemaVersion,
+		Id:                 user.Id,
+		Group:              user.Group,
+		Groups:             groups,
+		TopupGroup:         user.TopupGroup,
+		ModelLimitsEnabled: user.ModelLimitsEnabled,
+		ModelLimits:        modelLimits,
+		PolicyVersion:      user.PolicyVersion,
+		Quota:              user.Quota,
+		Status:             user.Status,
+		Role:               user.Role,
+		Username:           user.Username,
+		Setting:            user.Setting,
+		Email:              user.Email,
+		AuthVersion:        user.AuthVersion,
+		CacheSchema:        userCacheSchemaVersion,
 	}
 	return cache
 }
@@ -377,6 +395,9 @@ func GetAllUsers(pageInfo *common.PageInfo, sortOptions ...UserSortOptions) (use
 	if err = tx.Commit().Error; err != nil {
 		return nil, 0, err
 	}
+	if err = HydrateUsersPolicy(users); err != nil {
+		return nil, 0, err
+	}
 
 	return users, total, nil
 }
@@ -414,7 +435,28 @@ func SearchUsers(keyword string, group string, role *int, status *int, startIdx 
 
 	query = query.Where("("+likeCondition+")", likeArgs...)
 	if group != "" {
-		query = query.Where(commonGroupCol+" = ?", group)
+		// Memberships are authoritative once the policy table has been
+		// migrated. Keep the legacy column fallback for rolling upgrades and
+		// isolated fixtures that still only have users.group.
+		if tx.Migrator().HasTable(&UserGroupMembership{}) {
+			membershipQuery := tx.Model(&UserGroupMembership{}).
+				Select("user_id").
+				Where("group_name = ?", group)
+			allMembershipQuery := tx.Model(&UserGroupMembership{}).
+				Select("user_id")
+			// During a rolling upgrade, users whose membership rows have not
+			// been backfilled still authorize through users.group. Include that
+			// legacy fallback without allowing a mismatching legacy group to
+			// bypass an existing membership set.
+			query = query.Where(
+				"id IN (?) OR (id NOT IN (?) AND "+commonGroupCol+" = ?)",
+				membershipQuery,
+				allMembershipQuery,
+				group,
+			)
+		} else {
+			query = query.Where(commonGroupCol+" = ?", group)
+		}
 	}
 	if role != nil {
 		query = query.Where("role = ?", *role)
@@ -446,6 +488,9 @@ func SearchUsers(keyword string, group string, role *int, status *int, startIdx 
 	if err = tx.Commit().Error; err != nil {
 		return nil, 0, err
 	}
+	if err = HydrateUsersPolicy(users); err != nil {
+		return nil, 0, err
+	}
 
 	return users, total, nil
 }
@@ -461,7 +506,13 @@ func GetUserById(id int, selectAll bool) (*User, error) {
 	} else {
 		err = DB.Omit("password", "access_token").First(&user, "id = ?", id).Error
 	}
-	return &user, err
+	if err != nil {
+		return &user, err
+	}
+	if err = HydrateUserPolicy(&user); err != nil {
+		return &user, err
+	}
+	return &user, nil
 }
 
 func GetUserIdByAffCode(affCode string) (int, error) {
@@ -604,7 +655,10 @@ func (user *User) Insert(inviterId int) error {
 				user.SetSetting(defaultSetting)
 			}
 
-			return tx.Create(user).Error
+			if err := tx.Create(user).Error; err != nil {
+				return err
+			}
+			return initializeUserPolicyWithTx(tx, user)
 		})
 	}); err != nil {
 		return err
@@ -667,7 +721,10 @@ func (user *User) InsertWithTx(tx *gorm.DB, inviterId int) error {
 			user.SetSetting(defaultSetting)
 		}
 
-		return tx.Create(user).Error
+		if err := tx.Create(user).Error; err != nil {
+			return err
+		}
+		return initializeUserPolicyWithTx(tx, user)
 	})
 }
 
@@ -1188,6 +1245,30 @@ func GetUserGroup(id int, fromDB bool) (group string, err error) {
 		return "", err
 	}
 
+	return group, nil
+}
+
+func GetUserTopupGroup(id int, fromDB bool) (string, error) {
+	if id <= 0 {
+		return "", errors.New("invalid user id")
+	}
+	if !fromDB && common.RedisEnabled {
+		user, err := GetUserCache(id)
+		if err == nil && strings.TrimSpace(user.TopupGroup) != "" {
+			return user.TopupGroup, nil
+		}
+	}
+	var user User
+	if err := DB.Where("id = ?", id).First(&user).Error; err != nil {
+		return "", err
+	}
+	if topupGroup := strings.TrimSpace(user.TopupGroup); topupGroup != "" {
+		return topupGroup, nil
+	}
+	group := strings.TrimSpace(user.Group)
+	if group == "" || group == "auto" {
+		group = defaultUserGroup
+	}
 	return group, nil
 }
 

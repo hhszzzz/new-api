@@ -7,8 +7,13 @@ const (
 	ContextKeyPromptTokens    ContextKey = "prompt_tokens"
 	ContextKeyEstimatedTokens ContextKey = "estimated_tokens"
 
-	ContextKeyOriginalModel    ContextKey = "original_model"
-	ContextKeyRequestStartTime ContextKey = "request_start_time"
+	ContextKeyOriginalModel       ContextKey = "original_model"
+	ContextKeyRequestStartTime    ContextKey = "request_start_time"
+	ContextKeyRequestProtocol     ContextKey = "request_protocol"
+	ContextKeyUpstreamProtocol    ContextKey = "upstream_protocol"
+	ContextKeyProtocolConverter   ContextKey = "protocol_converter"
+	ContextKeyClientName          ContextKey = "client_name"
+	ContextKeyUpstreamRequestSize ContextKey = "upstream_request_size"
 
 	/* token related keys */
 	ContextKeyTokenUnlimited         ContextKey = "token_unlimited_quota"
@@ -43,14 +48,22 @@ const (
 	ContextKeyAutoGroupRetryIndex ContextKey = "auto_group_retry_index"
 
 	/* user related keys */
-	ContextKeyUserId      ContextKey = "id"
-	ContextKeyUserSetting ContextKey = "user_setting"
-	ContextKeyUserQuota   ContextKey = "user_quota"
-	ContextKeyUserStatus  ContextKey = "user_status"
-	ContextKeyUserEmail   ContextKey = "user_email"
-	ContextKeyUserGroup   ContextKey = "user_group"
-	ContextKeyUsingGroup  ContextKey = "group"
-	ContextKeyUserName    ContextKey = "username"
+	ContextKeyUserId                ContextKey = "id"
+	ContextKeyUserSetting           ContextKey = "user_setting"
+	ContextKeyUserQuota             ContextKey = "user_quota"
+	ContextKeyUserStatus            ContextKey = "user_status"
+	ContextKeyUserEmail             ContextKey = "user_email"
+	ContextKeyUserGroup             ContextKey = "user_group"
+	ContextKeyUserGroups            ContextKey = "user_groups"
+	ContextKeyUserModelLimitEnabled ContextKey = "user_model_limit_enabled"
+	ContextKeyUserModelLimit        ContextKey = "user_model_limit"
+	ContextKeyUserModelRouteId      ContextKey = "user_model_route_id"
+	ContextKeyUserModelRouteTarget  ContextKey = "user_model_route_target"
+	ContextKeyUserModelRouteGroup   ContextKey = "user_model_route_group"
+	ContextKeyUserModelRouteChannel ContextKey = "user_model_route_channels"
+	ContextKeyUserModelRoutePool    ContextKey = "user_model_route_pool"
+	ContextKeyUsingGroup            ContextKey = "group"
+	ContextKeyUserName              ContextKey = "username"
 
 	ContextKeyLocalCountTokens ContextKey = "local_count_tokens"
 

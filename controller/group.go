@@ -3,6 +3,7 @@ package controller
 import (
 	"net/http"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
@@ -25,20 +26,46 @@ func GetGroups(c *gin.Context) {
 
 func GetUserGroups(c *gin.Context) {
 	usableGroups := make(map[string]map[string]interface{})
-	userGroup := ""
 	userId := c.GetInt("id")
-	userGroup, _ = model.GetUserGroup(userId, false)
-	userUsableGroups := service.GetUserUsableGroups(userGroup)
-	for groupName, _ := range ratio_setting.GetGroupRatioCopy() {
-		// UserUsableGroups contains the groups that the user can use
-		if desc, ok := userUsableGroups[groupName]; ok {
+	if userId <= 0 {
+		for groupName, desc := range setting.GetUserUsableGroupsCopy() {
+			if groupName == "auto" {
+				continue
+			}
 			usableGroups[groupName] = map[string]interface{}{
-				"ratio": service.GetUserGroupRatio(userGroup, groupName),
+				"ratio": service.GetUserGroupRatio("", groupName),
 				"desc":  desc,
 			}
 		}
+		if len(setting.GetAutoGroups()) > 0 {
+			usableGroups["auto"] = map[string]interface{}{
+				"ratio": "自动",
+				"desc":  setting.GetUsableGroupDescription("auto"),
+			}
+		}
+		common.ApiSuccess(c, usableGroups)
+		return
 	}
-	if _, ok := userUsableGroups["auto"]; ok {
+	user, err := model.GetUserCache(userId)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	usable := service.GetAuthorizedUserGroups(user.Groups)
+	primaryGroup := ""
+	if len(user.Groups) > 0 {
+		primaryGroup = user.Groups[0]
+	}
+	for groupName, desc := range usable {
+		if groupName == "auto" {
+			continue
+		}
+		usableGroups[groupName] = map[string]interface{}{
+			"ratio": service.GetUserGroupRatio(primaryGroup, groupName),
+			"desc":  desc,
+		}
+	}
+	if _, ok := usable["auto"]; ok {
 		usableGroups["auto"] = map[string]interface{}{
 			"ratio": "自动",
 			"desc":  setting.GetUsableGroupDescription("auto"),

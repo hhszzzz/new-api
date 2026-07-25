@@ -7,9 +7,12 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
 )
@@ -31,10 +34,42 @@ func buildMaskedTokenResponses(tokens []*model.Token) []*model.Token {
 	return maskedTokens
 }
 
+func validateTokenGroup(c *gin.Context, userId int, group string) bool {
+	group = strings.TrimSpace(group)
+	if group == "" {
+		common.ApiErrorMsg(c, "令牌必须绑定一个分组")
+		return false
+	}
+	userGroups := common.GetContextKeyStringSlice(c, constant.ContextKeyUserGroups)
+	if len(userGroups) == 0 {
+		if legacyGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup); legacyGroup != "" {
+			userGroups = []string{legacyGroup}
+		}
+	}
+	if len(userGroups) == 0 {
+		user, err := model.GetUserCache(userId)
+		if err != nil {
+			common.ApiError(c, err)
+			return false
+		}
+		userGroups = user.Groups
+	}
+	if !service.GroupInUserUsableGroupsForGroups(userGroups, group) {
+		common.ApiErrorMsg(c, fmt.Sprintf("无权使用分组 %s", group))
+		return false
+	}
+	if group != "auto" && !ratio_setting.ContainsGroupRatio(group) {
+		common.ApiErrorMsg(c, fmt.Sprintf("分组 %s 已被弃用", group))
+		return false
+	}
+	return true
+}
+
 func GetAllTokens(c *gin.Context) {
 	userId := c.GetInt("id")
 	pageInfo := common.GetPageQuery(c)
-	tokens, err := model.GetAllUserTokens(userId, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+	sortOptions := model.NewTokenSortOptions(c.Query("sort_by"), c.Query("sort_order"))
+	tokens, err := model.GetAllUserTokens(userId, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), sortOptions)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -51,8 +86,9 @@ func SearchTokens(c *gin.Context) {
 	token := c.Query("token")
 
 	pageInfo := common.GetPageQuery(c)
+	sortOptions := model.NewTokenSortOptions(c.Query("sort_by"), c.Query("sort_order"))
 
-	tokens, total, err := model.SearchUserTokens(userId, keyword, token, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+	tokens, total, err := model.SearchUserTokens(userId, keyword, token, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), sortOptions)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -201,6 +237,9 @@ func AddToken(c *gin.Context) {
 		})
 		return
 	}
+	if !validateTokenGroup(c, c.GetInt("id"), token.Group) {
+		return
+	}
 	key, err := common.GenerateKey()
 	if err != nil {
 		common.ApiErrorI18n(c, i18n.MsgTokenGenerateFailed)
@@ -289,6 +328,9 @@ func UpdateToken(c *gin.Context) {
 	if statusOnly != "" {
 		cleanToken.Status = token.Status
 	} else {
+		if !validateTokenGroup(c, userId, token.Group) {
+			return
+		}
 		// If you add more fields, please also update token.Update()
 		cleanToken.Name = token.Name
 		cleanToken.ExpiredTime = token.ExpiredTime

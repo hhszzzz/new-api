@@ -1,10 +1,12 @@
 package controller
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,6 +22,7 @@ import (
 	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/QuantumNous/new-api/constant"
 
@@ -306,9 +309,12 @@ func Register(c *gin.Context) {
 			RemainQuota:        500000, // 示例额度
 			UnlimitedQuota:     true,
 			ModelLimitsEnabled: false,
+			Group:              "default",
 		}
 		if setting.DefaultUseAutoGroup {
 			token.Group = "auto"
+		} else if len(cleanUser.Groups) > 0 {
+			token.Group = cleanUser.Groups[0]
 		}
 		if err := token.Insert(); err != nil {
 			common.ApiErrorI18n(c, i18n.MsgCreateDefaultTokenErr)
@@ -517,31 +523,35 @@ func buildSelfUserData(user *model.User) map[string]interface{} {
 	permissions := calculateUserPermissions(user.Role)
 	permissions["admin_permissions"] = authz.Capabilities(user.Id, user.Role)
 	return map[string]interface{}{
-		"id":                user.Id,
-		"username":          user.Username,
-		"display_name":      user.DisplayName,
-		"role":              user.Role,
-		"status":            user.Status,
-		"email":             user.Email,
-		"github_id":         user.GitHubId,
-		"discord_id":        user.DiscordId,
-		"oidc_id":           user.OidcId,
-		"wechat_id":         user.WeChatId,
-		"telegram_id":       user.TelegramId,
-		"group":             user.Group,
-		"quota":             user.Quota,
-		"used_quota":        user.UsedQuota,
-		"request_count":     user.RequestCount,
-		"aff_code":          user.AffCode,
-		"aff_count":         user.AffCount,
-		"aff_quota":         user.AffQuota,
-		"aff_history_quota": user.AffHistoryQuota,
-		"inviter_id":        user.InviterId,
-		"linux_do_id":       user.LinuxDOId,
-		"setting":           user.Setting,
-		"stripe_customer":   user.StripeCustomer,
-		"sidebar_modules":   userSetting.SidebarModules, // 正确提取sidebar_modules字段
-		"permissions":       permissions,
+		"id":                   user.Id,
+		"username":             user.Username,
+		"display_name":         user.DisplayName,
+		"role":                 user.Role,
+		"status":               user.Status,
+		"email":                user.Email,
+		"github_id":            user.GitHubId,
+		"discord_id":           user.DiscordId,
+		"oidc_id":              user.OidcId,
+		"wechat_id":            user.WeChatId,
+		"telegram_id":          user.TelegramId,
+		"group":                user.Group,
+		"groups":               user.Groups,
+		"topup_group":          user.TopupGroup,
+		"model_limits_enabled": user.ModelLimitsEnabled,
+		"model_limits":         user.ModelLimits,
+		"quota":                user.Quota,
+		"used_quota":           user.UsedQuota,
+		"request_count":        user.RequestCount,
+		"aff_code":             user.AffCode,
+		"aff_count":            user.AffCount,
+		"aff_quota":            user.AffQuota,
+		"aff_history_quota":    user.AffHistoryQuota,
+		"inviter_id":           user.InviterId,
+		"linux_do_id":          user.LinuxDOId,
+		"setting":              user.Setting,
+		"stripe_customer":      user.StripeCustomer,
+		"sidebar_modules":      userSetting.SidebarModules, // 正确提取sidebar_modules字段
+		"permissions":          permissions,
 	}
 }
 
@@ -645,33 +655,298 @@ func GetUserModels(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	groups := service.GetUserUsableGroups(user.Group)
+	groups := service.GetAuthorizedUserGroups(user.Groups)
 	group := c.Query("group")
 	var groupsToQuery []string
 	switch {
 	case group == "":
-		for g := range groups {
-			groupsToQuery = append(groupsToQuery, g)
+		// Start with the administrator-defined membership order, then include
+		// every additional group granted by the usable-group rules. Maps do not
+		// provide stable iteration order, so the remaining names are sorted.
+		seenGroups := make(map[string]struct{}, len(groups))
+		for _, userGroup := range user.Groups {
+			if _, ok := groups[userGroup]; ok {
+				groupsToQuery = append(groupsToQuery, userGroup)
+				seenGroups[userGroup] = struct{}{}
+			}
 		}
+		for _, autoGroup := range setting.GetAutoGroups() {
+			if _, ok := groups[autoGroup]; ok {
+				if _, seen := seenGroups[autoGroup]; !seen {
+					groupsToQuery = append(groupsToQuery, autoGroup)
+					seenGroups[autoGroup] = struct{}{}
+				}
+			}
+		}
+		remainingGroups := make([]string, 0, len(groups)-len(groupsToQuery))
+		for authorizedGroup := range groups {
+			if _, seen := seenGroups[authorizedGroup]; !seen {
+				remainingGroups = append(remainingGroups, authorizedGroup)
+			}
+		}
+		sort.Strings(remainingGroups)
+		groupsToQuery = append(groupsToQuery, remainingGroups...)
 	case group == "auto":
 		if _, ok := groups[group]; ok {
-			groupsToQuery = service.GetUserAutoGroup(user.Group)
+			groupsToQuery = service.GetUserAutoGroups(user.Groups)
 		}
 	default:
 		if _, ok := groups[group]; ok {
 			groupsToQuery = []string{group}
 		}
 	}
+	models := service.GetGroupsEnabledModels(groupsToQuery)
+	if user.Role != common.RoleRootUser {
+		routeSources, routeErr := model.GetEnabledUserModelRouteSources(user.Id, groupsToQuery)
+		if routeErr == nil && len(routeSources) > 0 {
+			seen := make(map[string]struct{}, len(models)+len(routeSources))
+			for _, modelName := range models {
+				seen[modelName] = struct{}{}
+			}
+			for _, modelName := range routeSources {
+				if _, exists := seen[modelName]; !exists {
+					models = append(models, modelName)
+					seen[modelName] = struct{}{}
+				}
+			}
+		}
+	}
+	if user.Role != common.RoleRootUser && user.ModelLimitsEnabled {
+		allowed := make(map[string]struct{}, len(user.ModelLimits))
+		for _, modelName := range user.ModelLimits {
+			modelName = strings.TrimSpace(modelName)
+			if modelName == "" {
+				continue
+			}
+			allowed[modelName] = struct{}{}
+			allowed[ratio_setting.FormatMatchingModelName(modelName)] = struct{}{}
+		}
+		filtered := make([]string, 0, len(models))
+		for _, modelName := range models {
+			matchName := ratio_setting.FormatMatchingModelName(modelName)
+			if _, ok := allowed[modelName]; ok {
+				filtered = append(filtered, modelName)
+			} else if _, ok := allowed[matchName]; ok {
+				filtered = append(filtered, modelName)
+			}
+		}
+		models = filtered
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
-		"data":    service.GetGroupsEnabledModels(groupsToQuery),
+		"data":    models,
 	})
 }
 
+func GetUserPolicy(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id <= 0 {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	user, err := model.GetUserById(id, false)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if !canManageTargetRole(c.GetInt("role"), user.Role) {
+		common.ApiErrorI18n(c, i18n.MsgUserNoPermissionHigherLevel)
+		return
+	}
+	common.ApiSuccess(c, model.UserPolicyUpdate{
+		Groups:             user.Groups,
+		PrimaryGroup:       user.Group,
+		TopupGroup:         user.TopupGroup,
+		ModelLimitsEnabled: user.ModelLimitsEnabled,
+		ModelLimits:        user.ModelLimits,
+	})
+}
+
+func decodeManagedUserMutation(c *gin.Context) (model.User, map[string]json.RawMessage, error) {
+	var raw map[string]json.RawMessage
+	if err := common.DecodeJson(c.Request.Body, &raw); err != nil {
+		return model.User{}, nil, err
+	}
+	payload, err := common.Marshal(raw)
+	if err != nil {
+		return model.User{}, nil, err
+	}
+	var user model.User
+	if err := common.Unmarshal(payload, &user); err != nil {
+		return model.User{}, nil, err
+	}
+	return user, raw, nil
+}
+
+func userPolicyFromMutation(user model.User, raw map[string]json.RawMessage, fallback *model.UserPolicyUpdate) (*model.UserPolicyUpdate, error) {
+	_, hasGroups := raw["groups"]
+	_, hasPrimaryGroup := raw["primary_group"]
+	_, hasLegacyGroup := raw["group"]
+	_, hasTopupGroup := raw["topup_group"]
+	_, hasModelLimitsEnabled := raw["model_limits_enabled"]
+	_, hasModelLimits := raw["model_limits"]
+	if !hasGroups && !hasPrimaryGroup && !hasLegacyGroup && !hasTopupGroup && !hasModelLimitsEnabled && !hasModelLimits {
+		return nil, nil
+	}
+
+	update := model.UserPolicyUpdate{
+		Groups:             append([]string(nil), user.Groups...),
+		PrimaryGroup:       user.Group,
+		TopupGroup:         user.TopupGroup,
+		ModelLimitsEnabled: user.ModelLimitsEnabled,
+		ModelLimits:        append([]string(nil), user.ModelLimits...),
+	}
+	if !hasGroups {
+		switch {
+		case hasLegacyGroup:
+			update.Groups = []string{user.Group}
+		case fallback != nil:
+			update.Groups = append([]string(nil), fallback.Groups...)
+		default:
+			group := strings.TrimSpace(user.Group)
+			if group == "" || group == "auto" {
+				group = "default"
+			}
+			update.Groups = []string{group}
+		}
+	}
+	if hasPrimaryGroup {
+		if err := common.Unmarshal(raw["primary_group"], &update.PrimaryGroup); err != nil {
+			return nil, err
+		}
+	} else if hasGroups && hasLegacyGroup {
+		// New clients may keep sending the legacy `group` field alongside the
+		// multi-group list. In that shape it identifies the explicit primary
+		// group; when it is the only policy field it remains the old single-group
+		// replacement handled above.
+		if err := common.Unmarshal(raw["group"], &update.PrimaryGroup); err != nil {
+			return nil, err
+		}
+	} else if !hasPrimaryGroup && fallback != nil {
+		update.PrimaryGroup = fallback.PrimaryGroup
+	}
+	if !hasTopupGroup && fallback != nil {
+		update.TopupGroup = fallback.TopupGroup
+	}
+	if !hasModelLimitsEnabled && fallback != nil {
+		update.ModelLimitsEnabled = fallback.ModelLimitsEnabled
+	}
+	if !hasModelLimits && fallback != nil {
+		update.ModelLimits = append([]string(nil), fallback.ModelLimits...)
+	}
+
+	normalized, err := normalizeUserPolicyUpdate(update)
+	if err != nil {
+		return nil, err
+	}
+	return &normalized, nil
+}
+
+func normalizeUserPolicyUpdate(update model.UserPolicyUpdate) (model.UserPolicyUpdate, error) {
+	seenGroups := make(map[string]struct{}, len(update.Groups))
+	groups := make([]string, 0, len(update.Groups))
+	for _, group := range update.Groups {
+		group = strings.TrimSpace(group)
+		if group == "" || group == "auto" || !ratio_setting.ContainsGroupRatio(group) {
+			return model.UserPolicyUpdate{}, fmt.Errorf("无效分组：%s", group)
+		}
+		if _, exists := seenGroups[group]; exists {
+			continue
+		}
+		seenGroups[group] = struct{}{}
+		groups = append(groups, group)
+	}
+	if len(groups) == 0 {
+		return model.UserPolicyUpdate{}, errors.New("至少需要选择一个用户分组")
+	}
+	update.PrimaryGroup = strings.TrimSpace(update.PrimaryGroup)
+	if update.PrimaryGroup == "" {
+		update.PrimaryGroup = groups[0]
+	}
+	if !service.UserHasGroup(groups, update.PrimaryGroup) {
+		return model.UserPolicyUpdate{}, errors.New("默认分组无效")
+	}
+	// Keep the primary membership first so legacy reads of users.group and
+	// older token fallback behavior remain deterministic.
+	orderedGroups := make([]string, 0, len(groups))
+	orderedGroups = append(orderedGroups, update.PrimaryGroup)
+	for _, group := range groups {
+		if group != update.PrimaryGroup {
+			orderedGroups = append(orderedGroups, group)
+		}
+	}
+	update.Groups = orderedGroups
+	update.TopupGroup = strings.TrimSpace(update.TopupGroup)
+	if update.TopupGroup == "" {
+		update.TopupGroup = groups[0]
+	}
+	if !ratio_setting.ContainsGroupRatio(update.TopupGroup) || !service.UserHasGroup(groups, update.TopupGroup) {
+		return model.UserPolicyUpdate{}, errors.New("充值分组无效")
+	}
+
+	publicModels := make(map[string]struct{})
+	for _, pricing := range model.GetPricing() {
+		publicModels[pricing.ModelName] = struct{}{}
+	}
+	seenModels := make(map[string]struct{}, len(update.ModelLimits))
+	models := make([]string, 0, len(update.ModelLimits))
+	for _, modelName := range update.ModelLimits {
+		modelName = strings.TrimSpace(modelName)
+		if _, exists := publicModels[modelName]; !exists {
+			return model.UserPolicyUpdate{}, fmt.Errorf("模型不是公开可用模型：%s", modelName)
+		}
+		if _, exists := seenModels[modelName]; exists {
+			continue
+		}
+		seenModels[modelName] = struct{}{}
+		models = append(models, modelName)
+	}
+	update.ModelLimits = models
+	return update, nil
+}
+
+func UpdateUserPolicy(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id <= 0 {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	user, err := model.GetUserById(id, false)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if !canManageTargetRole(c.GetInt("role"), user.Role) {
+		common.ApiErrorI18n(c, i18n.MsgUserNoPermissionHigherLevel)
+		return
+	}
+	var update model.UserPolicyUpdate
+	if err := common.DecodeJson(c.Request.Body, &update); err != nil {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	update, err = normalizeUserPolicyUpdate(update)
+	if err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
+	}
+	if err := model.ReplaceUserPolicy(id, update); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAuditFor(c, id, "user.policy.update", map[string]interface{}{
+		"groups":               update.Groups,
+		"primary_group":        update.PrimaryGroup,
+		"topup_group":          update.TopupGroup,
+		"model_limits_enabled": update.ModelLimitsEnabled,
+		"model_limit_count":    len(update.ModelLimits),
+	})
+	common.ApiSuccess(c, nil)
+}
+
 func UpdateUser(c *gin.Context) {
-	var updatedUser model.User
-	err := common.DecodeJson(c.Request.Body, &updatedUser)
+	updatedUser, rawMutation, err := decodeManagedUserMutation(c)
 	if err != nil || updatedUser.Id == 0 {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
@@ -703,6 +978,21 @@ func UpdateUser(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgUserNoPermissionHigherLevel)
 		return
 	}
+	originPolicy := model.UserPolicyUpdate{
+		Groups:             append([]string(nil), originUser.Groups...),
+		PrimaryGroup:       originUser.Group,
+		TopupGroup:         originUser.TopupGroup,
+		ModelLimitsEnabled: originUser.ModelLimitsEnabled,
+		ModelLimits:        append([]string(nil), originUser.ModelLimits...),
+	}
+	policyUpdate, err := userPolicyFromMutation(updatedUser, rawMutation, &originPolicy)
+	if err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
+	}
+	// The membership table is authoritative. Keep EditWithTx from writing a
+	// legacy group value that could diverge from the policy transaction below.
+	updatedUser.Group = originUser.Group
 	if updatedUser.Password == "$I_LOVE_U" {
 		updatedUser.Password = "" // rollback to what it should be
 	}
@@ -711,6 +1001,11 @@ func UpdateUser(c *gin.Context) {
 	if err := model.DB.Transaction(func(tx *gorm.DB) error {
 		if err := updatedUser.EditWithTx(tx, updatePassword); err != nil {
 			return err
+		}
+		if policyUpdate != nil {
+			if _, err := model.ReplaceUserPolicyWithTx(tx, updatedUser.Id, *policyUpdate); err != nil {
+				return err
+			}
 		}
 		touched, err := updateAdminPermissionsForUserInTx(c, tx, updatedUser.Id, originUser.Role, updatedUser.AdminPermissions)
 		authzTouched = touched
@@ -731,13 +1026,23 @@ func UpdateUser(c *gin.Context) {
 			return
 		}
 	}
-	if err := model.PublishUserAuthCache(updatedUser.Id); err != nil {
+	if policyUpdate != nil {
+		if err := model.PublishUserPolicyCache(updatedUser.Id); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		if err := model.InvalidateUserTokensCache(updatedUser.Id); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+	} else if err := model.PublishUserAuthCache(updatedUser.Id); err != nil {
 		common.ApiError(c, err)
 		return
 	}
 	recordManageAuditFor(c, updatedUser.Id, "user.update", map[string]interface{}{
-		"username": originUser.Username,
-		"id":       updatedUser.Id,
+		"username":       originUser.Username,
+		"id":             updatedUser.Id,
+		"policy_updated": policyUpdate != nil,
 	})
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -1008,8 +1313,7 @@ func DeleteSelf(c *gin.Context) {
 }
 
 func CreateUser(c *gin.Context) {
-	var user model.User
-	err := common.DecodeJson(c.Request.Body, &user)
+	user, rawMutation, err := decodeManagedUserMutation(c)
 	user.Username = strings.TrimSpace(user.Username)
 	if err != nil || user.Username == "" || user.Password == "" {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
@@ -1027,17 +1331,28 @@ func CreateUser(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgUserCannotCreateHigherLevel)
 		return
 	}
+	policyUpdate, err := userPolicyFromMutation(user, rawMutation, nil)
+	if err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
+	}
 	// Even for admin users, we cannot fully trust them!
 	cleanUser := model.User{
 		Username:    user.Username,
 		Password:    user.Password,
 		DisplayName: user.DisplayName,
 		Role:        user.Role, // 保持管理员设置的角色
+		Group:       user.Group,
 	}
 	authzTouched := false
 	if err := model.DB.Transaction(func(tx *gorm.DB) error {
 		if err := cleanUser.InsertWithTx(tx, 0); err != nil {
 			return err
+		}
+		if policyUpdate != nil {
+			if _, err := model.ReplaceUserPolicyWithTx(tx, cleanUser.Id, *policyUpdate); err != nil {
+				return err
+			}
 		}
 		touched, err := updateAdminPermissionsForUserInTx(c, tx, cleanUser.Id, cleanUser.Role, user.AdminPermissions)
 		authzTouched = touched
@@ -1052,11 +1367,22 @@ func CreateUser(c *gin.Context) {
 			return
 		}
 	}
+	if policyUpdate != nil {
+		if err := model.PublishUserPolicyCache(cleanUser.Id); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		if err := model.InvalidateUserTokensCache(cleanUser.Id); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+	}
 	cleanUser.FinishInsert(0)
 
 	recordManageAuditFor(c, cleanUser.Id, "user.create", map[string]interface{}{
-		"username": cleanUser.Username,
-		"role":     cleanUser.Role,
+		"username":       cleanUser.Username,
+		"role":           cleanUser.Role,
+		"policy_updated": policyUpdate != nil,
 	})
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,

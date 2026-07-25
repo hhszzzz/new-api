@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery } from '@tanstack/react-query'
 import { Pencil } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -31,6 +31,7 @@ import {
   sideDrawerFormClassName,
   sideDrawerHeaderClassName,
 } from '@/components/drawer-layout'
+import { MultiSelect } from '@/components/multi-select'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -61,7 +62,9 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
+import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import { getPricing } from '@/features/pricing/api'
 import {
   ADMIN_PERMISSION_ACTIONS,
   ADMIN_PERMISSION_RESOURCES,
@@ -78,6 +81,7 @@ import {
   createUser,
   updateUser,
   getUser,
+  getUserPolicy,
   getGroups,
   getPermissionCatalog,
 } from '../api'
@@ -89,7 +93,7 @@ import {
   transformFormDataToPayload,
   transformUserToFormDefaults,
 } from '../lib'
-import { type User } from '../types'
+import type { User } from '../types'
 import { UserQuotaDialog } from './user-quota-dialog'
 import { useUsers } from './users-provider'
 
@@ -99,6 +103,8 @@ type UsersMutateDrawerProps = {
   currentRow?: User
 }
 
+const EMPTY_STRING_LIST: string[] = []
+
 export function UsersMutateDrawer({
   open,
   onOpenChange,
@@ -106,6 +112,7 @@ export function UsersMutateDrawer({
 }: UsersMutateDrawerProps) {
   const { t } = useTranslation()
   const isUpdate = !!currentRow
+  const currentRowId = currentRow?.id
   const { triggerRefresh } = useUsers()
   const currentUser = useAuthStore((s) => s.auth.user)
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -118,7 +125,12 @@ export function UsersMutateDrawer({
     staleTime: 5 * 60 * 1000,
   })
 
-  const groups = groupsData?.data || []
+  const { data: pricingData } = useQuery({
+    queryKey: ['pricing'],
+    queryFn: getPricing,
+    enabled: open,
+    staleTime: 5 * 60 * 1000,
+  })
 
   // Permission catalog is owned by the backend; fetched once and reused.
   const { data: permissionCatalog = EMPTY_PERMISSION_CATALOG } = useQuery({
@@ -132,20 +144,41 @@ export function UsersMutateDrawer({
     defaultValues: USER_FORM_DEFAULT_VALUES,
   })
 
-  // Load existing data when updating
+  // Load the user record and policy together so the drawer never renders a
+  // partially populated policy form.
   useEffect(() => {
-    if (open && isUpdate && currentRow) {
-      // For update, fetch fresh data
-      getUser(currentRow.id).then((result) => {
-        if (result.success && result.data) {
-          form.reset(transformUserToFormDefaults(result.data))
-        }
-      })
-    } else if (open && !isUpdate) {
-      // For create, reset to defaults
+    let active = true
+    if (!open) return () => undefined
+
+    if (!isUpdate || !currentRowId) {
       form.reset(USER_FORM_DEFAULT_VALUES)
+      return () => undefined
     }
-  }, [open, isUpdate, currentRow, form])
+
+    void Promise.all([getUser(currentRowId), getUserPolicy(currentRowId)])
+      .then(([userResult, policyResult]) => {
+        if (!active || !userResult.success || !userResult.data) return
+        const defaults = transformUserToFormDefaults(userResult.data)
+        if (policyResult.success && policyResult.data) {
+          defaults.groups = policyResult.data.groups
+          defaults.primary_group =
+            policyResult.data.primary_group ||
+            policyResult.data.groups[0] ||
+            defaults.primary_group
+          defaults.group = defaults.primary_group
+          defaults.model_limits_enabled = policyResult.data.model_limits_enabled
+          defaults.model_limits = policyResult.data.model_limits
+        }
+        form.reset(defaults)
+      })
+      .catch(() => {
+        if (active) toast.error(t('Failed to load'))
+      })
+
+    return () => {
+      active = false
+    }
+  }, [open, isUpdate, currentRowId, form, t])
 
   const { meta: currencyMeta } = getCurrencyDisplay()
   const currencyLabel = getCurrencyLabel()
@@ -153,10 +186,43 @@ export function UsersMutateDrawer({
 
   const currentQuotaRaw = form.watch('quota_dollars') || 0
   const selectedRole = form.watch('role')
+  const selectedGroups = form.watch('groups') ?? EMPTY_STRING_LIST
+  const primaryGroup = form.watch('primary_group')
+  const modelLimitsEnabled = form.watch('model_limits_enabled') ?? false
+  const selectedModelLimits = form.watch('model_limits') ?? EMPTY_STRING_LIST
+  const groupOptions = useMemo(() => {
+    const values = new Set([...(groupsData?.data || []), ...selectedGroups])
+    return [...values].map((group) => ({ value: group, label: group }))
+  }, [groupsData?.data, selectedGroups])
+  const modelOptions = useMemo(() => {
+    const values = new Set([
+      ...(pricingData?.data || []).map((model) => model.model_name),
+      ...selectedModelLimits,
+    ])
+    return [...values]
+      .sort((left, right) => left.localeCompare(right))
+      .map((model) => ({ value: model, label: model }))
+  }, [pricingData?.data, selectedModelLimits])
   const canEditAdminPermissions = currentUser?.role === ROLE.SUPER_ADMIN
   const targetIsAdmin = (selectedRole ?? currentRow?.role ?? 0) >= ROLE.ADMIN
 
   const onSubmit = async (data: UserFormValues) => {
+    if (!data.groups?.length) {
+      form.setError('groups', {
+        type: 'manual',
+        message: t('Select at least one group'),
+      })
+      return
+    }
+
+    if (!data.primary_group || !data.groups.includes(data.primary_group)) {
+      form.setError('primary_group', {
+        type: 'manual',
+        message: t('Select a default group'),
+      })
+      return
+    }
+
     if (!isUpdate) {
       const passwordLength = data.password?.length || 0
       if (passwordLength < 8 || passwordLength > 20) {
@@ -175,27 +241,27 @@ export function UsersMutateDrawer({
         currentRow?.id,
         permissionCatalog
       )
-      const result = isUpdate
-        ? await updateUser(payload as typeof payload & { id: number })
-        : await createUser(payload)
 
-      if (result.success) {
-        toast.success(
-          isUpdate
-            ? t(SUCCESS_MESSAGES.USER_UPDATED)
-            : t(SUCCESS_MESSAGES.USER_CREATED)
+      if (isUpdate && currentRow) {
+        const result = await updateUser(
+          payload as typeof payload & { id: number }
         )
-        onOpenChange(false)
-        triggerRefresh()
+        if (!result.success) {
+          toast.error(result.message || t(ERROR_MESSAGES.UPDATE_FAILED))
+          return
+        }
+        toast.success(t(SUCCESS_MESSAGES.USER_UPDATED))
       } else {
-        toast.error(
-          result.message ||
-            (isUpdate
-              ? t(ERROR_MESSAGES.UPDATE_FAILED)
-              : t(ERROR_MESSAGES.CREATE_FAILED))
-        )
+        const result = await createUser(payload)
+        if (!result.success) {
+          toast.error(result.message || t(ERROR_MESSAGES.CREATE_FAILED))
+          return
+        }
+        toast.success(t(SUCCESS_MESSAGES.USER_CREATED))
       }
-    } catch (_error) {
+      onOpenChange(false)
+      triggerRefresh()
+    } catch {
       toast.error(t(ERROR_MESSAGES.UNEXPECTED))
     } finally {
       setIsSubmitting(false)
@@ -278,7 +344,8 @@ export function UsersMutateDrawer({
                             { value: '10', label: t('Admin') },
                           ]}
                           onValueChange={(value) =>
-                            value !== null && field.onChange(parseInt(value))
+                            value !== null &&
+                            field.onChange(Number.parseInt(value))
                           }
                           value={String(field.value)}
                         >
@@ -348,107 +415,200 @@ export function UsersMutateDrawer({
                 />
               </SideDrawerSection>
 
-              {/* Group & Quota Settings (Update only) */}
-              {isUpdate && (
-                <SideDrawerSection>
-                  <h3 className='text-sm font-medium'>{t('Group & Quota')}</h3>
+              {/* Group & Quota Settings */}
+              <SideDrawerSection>
+                <h3 className='text-sm font-medium'>{t('Group & Quota')}</h3>
 
-                  <FormField
-                    control={form.control}
-                    name='group'
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>{t('Group')}</FormLabel>
-                        <Select
-                          items={[
-                            ...groups.map((group) => ({
-                              value: group,
-                              label: group,
-                            })),
-                          ]}
-                          onValueChange={field.onChange}
-                          value={field.value}
-                        >
-                          <FormControl>
-                            <SelectTrigger>
-                              <SelectValue placeholder={t('Select a group')} />
-                            </SelectTrigger>
-                          </FormControl>
-                          <SelectContent alignItemWithTrigger={false}>
-                            <SelectGroup>
-                              {groups.map((group) => (
-                                <SelectItem key={group} value={group}>
-                                  {group}
-                                </SelectItem>
-                              ))}
-                            </SelectGroup>
-                          </SelectContent>
-                        </Select>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
+                <FormField
+                  control={form.control}
+                  name='groups'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('User Groups')}</FormLabel>
+                      <FormControl>
+                        <MultiSelect
+                          id='user-groups'
+                          options={groupOptions}
+                          selected={field.value || []}
+                          onChange={(values) => {
+                            field.onChange(values)
+                            if (
+                              !primaryGroup ||
+                              !values.includes(primaryGroup)
+                            ) {
+                              form.setValue('primary_group', values[0] || '', {
+                                shouldDirty: true,
+                              })
+                            }
+                          }}
+                          placeholder={t('Select user groups')}
+                          maxVisibleChips={5}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
 
-                  <FormField
-                    control={form.control}
-                    name='quota_dollars'
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>
-                          {t('Remaining Quota ({{currency}})', {
-                            currency: currencyLabel,
-                          })}
-                        </FormLabel>
-                        <div className='flex gap-2'>
+                <FormField
+                  control={form.control}
+                  name='primary_group'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Default Group')}</FormLabel>
+                      <Select
+                        items={selectedGroups.map((group) => ({
+                          value: group,
+                          label: group,
+                        }))}
+                        onValueChange={(value) =>
+                          value !== null && field.onChange(value)
+                        }
+                        value={field.value || null}
+                        disabled={selectedGroups.length === 0}
+                      >
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue
+                              placeholder={t('Select a default group')}
+                            />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent alignItemWithTrigger={false}>
+                          <SelectGroup>
+                            {selectedGroups.map((group) => (
+                              <SelectItem key={group} value={group}>
+                                {group}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                      <FormDescription>
+                        {t('Used when a token does not select a group')}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                {isUpdate && (
+                  <>
+                    <FormField
+                      control={form.control}
+                      name='quota_dollars'
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>
+                            {t('Remaining Quota ({{currency}})', {
+                              currency: currencyLabel,
+                            })}
+                          </FormLabel>
+                          <div className='flex gap-2'>
+                            <FormControl>
+                              <Input
+                                value={
+                                  tokensOnly
+                                    ? String(field.value || 0)
+                                    : (field.value || 0).toFixed(6)
+                                }
+                                readOnly
+                                className='flex-1'
+                              />
+                            </FormControl>
+                            <Button
+                              type='button'
+                              variant='outline'
+                              onClick={() => setQuotaDialogOpen(true)}
+                            >
+                              <Pencil className='mr-1 h-4 w-4' />
+                              {t('Adjust Quota')}
+                            </Button>
+                          </div>
+                          <FormDescription>
+                            {formatQuota(
+                              parseQuotaFromDollars(field.value || 0)
+                            )}
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={form.control}
+                      name='remark'
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>{t('Remark')}</FormLabel>
                           <FormControl>
-                            <Input
-                              value={
-                                tokensOnly
-                                  ? String(field.value || 0)
-                                  : (field.value || 0).toFixed(6)
-                              }
-                              readOnly
-                              className='flex-1'
+                            <Textarea
+                              {...field}
+                              placeholder={t(
+                                'Admin notes (only visible to admins)'
+                              )}
+                              rows={3}
                             />
                           </FormControl>
-                          <Button
-                            type='button'
-                            variant='outline'
-                            onClick={() => setQuotaDialogOpen(true)}
-                          >
-                            <Pencil className='mr-1 h-4 w-4' />
-                            {t('Adjust Quota')}
-                          </Button>
-                        </div>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </>
+                )}
+              </SideDrawerSection>
+
+              <SideDrawerSection>
+                <h3 className='text-sm font-medium'>{t('Model Access')}</h3>
+
+                <FormField
+                  control={form.control}
+                  name='model_limits_enabled'
+                  render={({ field }) => (
+                    <FormItem className='flex items-center justify-between gap-4'>
+                      <div className='space-y-1'>
+                        <FormLabel>{t('Limit available models')}</FormLabel>
                         <FormDescription>
-                          {formatQuota(parseQuotaFromDollars(field.value || 0))}
+                          {t('Only selected models are visible and usable')}
+                        </FormDescription>
+                      </div>
+                      <FormControl>
+                        <Switch
+                          checked={field.value === true}
+                          onCheckedChange={field.onChange}
+                          aria-label={t('Limit available models')}
+                        />
+                      </FormControl>
+                    </FormItem>
+                  )}
+                />
+
+                {modelLimitsEnabled && (
+                  <FormField
+                    control={form.control}
+                    name='model_limits'
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t('Allowed Models')}</FormLabel>
+                        <FormControl>
+                          <MultiSelect
+                            id='user-model-limits'
+                            options={modelOptions}
+                            selected={field.value || []}
+                            onChange={field.onChange}
+                            placeholder={t('Select allowed models')}
+                            maxVisibleChips={5}
+                          />
+                        </FormControl>
+                        <FormDescription>
+                          {t('No selection blocks access to every model')}
                         </FormDescription>
                         <FormMessage />
                       </FormItem>
                     )}
                   />
-
-                  <FormField
-                    control={form.control}
-                    name='remark'
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>{t('Remark')}</FormLabel>
-                        <FormControl>
-                          <Textarea
-                            {...field}
-                            placeholder={t(
-                              'Admin notes (only visible to admins)'
-                            )}
-                            rows={3}
-                          />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                </SideDrawerSection>
-              )}
+                )}
+              </SideDrawerSection>
 
               {canEditAdminPermissions &&
                 targetIsAdmin &&

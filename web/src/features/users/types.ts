@@ -46,6 +46,10 @@ export const userSchema = z.object({
   used_quota: z.number(),
   request_count: z.number(),
   group: z.string(),
+  groups: z.array(z.string()).optional(),
+  topup_group: z.string().optional(),
+  model_limits_enabled: z.boolean().optional(),
+  model_limits: z.array(z.string()).optional(),
   aff_code: z.string().optional(),
   aff_count: z.number().optional(),
   aff_quota: z.number().optional(),
@@ -124,8 +128,60 @@ export interface UserFormData {
   role?: number // Only used when creating user
   quota?: number // Only used when updating user
   group?: string // Only used when updating user
+  groups?: string[]
+  primary_group?: string
+  model_limits_enabled?: boolean
+  model_limits?: string[]
   remark?: string // Only used when updating user
   admin_permissions?: AdminPermissionMatrix
+}
+
+export interface UserPolicy {
+  groups: string[]
+  primary_group: string
+  topup_group: string
+  model_limits_enabled: boolean
+  model_limits: string[]
+}
+
+export interface UserModelRoute {
+  id: number
+  user_id: number
+  source_model: string
+  target_model: string
+  pool_name: string
+  all_groups: boolean
+  execution_group: string
+  enabled: boolean
+  created_at?: number
+  updated_at?: number
+  groups: string[]
+  channel_ids: number[]
+}
+
+export interface UserModelRouteCandidateChannel {
+  id: number
+  name: string
+  type: number
+  priority: number | null
+  weight: number
+  aggregate_id?: number
+  aggregate_name?: string
+  protocol_compatibility?: Partial<
+    Record<'chat' | 'messages' | 'responses' | 'gemini', ProtocolCompatibility>
+  >
+}
+
+export type ProtocolCompatibility = 'native' | 'convertible' | 'incompatible'
+
+export interface UserModelRouteCandidates {
+  source_models: string[]
+  target_models: string[]
+  applicable_groups: string[]
+  execution_groups: string[]
+  execution_group_channel_counts: Record<string, number>
+  recommended_execution_group: string
+  channels: UserModelRouteCandidateChannel[]
 }
 
 export type ManageUserAction =
