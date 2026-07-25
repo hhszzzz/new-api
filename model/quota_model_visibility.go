@@ -226,17 +226,20 @@ func sortedFlowQuotaData[K comparable](aggregated map[K]*FlowQuotaData) []*FlowQ
 
 func sanitizeRankingQuotaTotals(rows []RankingQuotaTotal, visibleModelNames []string, canViewPrivate bool) []RankingQuotaTotal {
 	visibleModels := quotaVisibleModelSet(visibleModelNames)
-	totals := make(map[string]int64, len(rows))
+	totals := make(map[string]*RankingQuotaTotal, len(rows))
 	for _, row := range rows {
 		modelName := rankingQuotaModelName(row.ModelName, row.ModelScope, visibleModels, canViewPrivate)
-		totals[modelName] += row.TotalTokens
+		aggregate, ok := totals[modelName]
+		if !ok {
+			aggregate = &RankingQuotaTotal{ModelName: modelName}
+			totals[modelName] = aggregate
+		}
+		aggregate.TotalTokens += row.TotalTokens
+		aggregate.TotalQuota += row.TotalQuota
 	}
 	result := make([]RankingQuotaTotal, 0, len(totals))
-	for modelName, totalTokens := range totals {
-		result = append(result, RankingQuotaTotal{
-			ModelName:   modelName,
-			TotalTokens: totalTokens,
-		})
+	for _, aggregate := range totals {
+		result = append(result, *aggregate)
 	}
 	sort.Slice(result, func(i, j int) bool {
 		if result[i].TotalTokens != result[j].TotalTokens {
@@ -253,24 +256,86 @@ func sanitizeRankingQuotaBuckets(rows []RankingQuotaBucket, visibleModelNames []
 		modelName string
 		bucket    int64
 	}
-	tokens := make(map[aggregateKey]int64, len(rows))
+	totals := make(map[aggregateKey]*RankingQuotaBucket, len(rows))
 	for _, row := range rows {
 		modelName := rankingQuotaModelName(row.ModelName, row.ModelScope, visibleModels, canViewPrivate)
-		tokens[aggregateKey{modelName: modelName, bucket: row.Bucket}] += row.Tokens
+		key := aggregateKey{modelName: modelName, bucket: row.Bucket}
+		aggregate, ok := totals[key]
+		if !ok {
+			aggregate = &RankingQuotaBucket{ModelName: modelName, Bucket: row.Bucket}
+			totals[key] = aggregate
+		}
+		aggregate.Tokens += row.Tokens
+		aggregate.Quota += row.Quota
 	}
-	result := make([]RankingQuotaBucket, 0, len(tokens))
-	for key, bucketTokens := range tokens {
-		result = append(result, RankingQuotaBucket{
-			ModelName: key.modelName,
-			Bucket:    key.bucket,
-			Tokens:    bucketTokens,
-		})
+	result := make([]RankingQuotaBucket, 0, len(totals))
+	for _, aggregate := range totals {
+		result = append(result, *aggregate)
 	}
 	sort.Slice(result, func(i, j int) bool {
 		if result[i].Bucket != result[j].Bucket {
 			return result[i].Bucket < result[j].Bucket
 		}
 		return result[i].ModelName < result[j].ModelName
+	})
+	return result
+}
+
+// sanitizeRankingUserQuotaRows applies the same model-scope visibility rules
+// as the public model leaderboard. Hidden rows are marked and merged by user
+// and request group so callers can preserve total usage without exposing a
+// private model's provenance.
+func sanitizeRankingUserQuotaRows(rows []RankingUserQuotaRow, visibleModelNames []string, canViewPrivate bool) []RankingUserQuotaRow {
+	visibleModels := quotaVisibleModelSet(visibleModelNames)
+	type aggregateKey struct {
+		userID      int
+		username    string
+		useGroup    string
+		hiddenModel bool
+	}
+	aggregated := make(map[aggregateKey]*RankingUserQuotaRow, len(rows))
+	for _, row := range rows {
+		modelName := rankingQuotaModelName(row.ModelName, row.ModelScope, visibleModels, canViewPrivate)
+		hidden := !canViewPrivate && modelName == ""
+		key := aggregateKey{
+			userID:      row.UserID,
+			username:    row.Username,
+			useGroup:    row.UseGroup,
+			hiddenModel: hidden,
+		}
+		aggregate, ok := aggregated[key]
+		if !ok {
+			aggregate = &RankingUserQuotaRow{
+				UserID:      row.UserID,
+				Username:    row.Username,
+				UseGroup:    row.UseGroup,
+				ModelName:   modelName,
+				HiddenModel: hidden,
+			}
+			aggregated[key] = aggregate
+		}
+		aggregate.TotalTokens += row.TotalTokens
+		aggregate.TotalQuota += row.TotalQuota
+	}
+
+	result := make([]RankingUserQuotaRow, 0, len(aggregated))
+	for _, aggregate := range aggregated {
+		result = append(result, *aggregate)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].TotalQuota != result[j].TotalQuota {
+			return result[i].TotalQuota > result[j].TotalQuota
+		}
+		if result[i].TotalTokens != result[j].TotalTokens {
+			return result[i].TotalTokens > result[j].TotalTokens
+		}
+		if result[i].Username != result[j].Username {
+			return result[i].Username < result[j].Username
+		}
+		if result[i].UseGroup != result[j].UseGroup {
+			return result[i].UseGroup < result[j].UseGroup
+		}
+		return !result[i].HiddenModel && result[j].HiddenModel
 	})
 	return result
 }

@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -42,7 +43,11 @@ func performHeaderNavRequest(t *testing.T, handler gin.HandlerFunc, authenticate
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.GET("/api/test", handler, func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"success": true})
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"id":      c.GetInt("id"),
+			"role":    c.GetInt("role"),
+		})
 	})
 
 	var accessToken string
@@ -85,6 +90,16 @@ func TestHeaderNavModuleAuthAllowsDefaultPublicAccess(t *testing.T) {
 	recorder := performHeaderNavRequest(t, HeaderNavModuleAuth("pricing"), false)
 
 	require.Equal(t, http.StatusOK, recorder.Code)
+}
+
+func TestHeaderNavModuleAuthPopulatesOptionalUserIdentity(t *testing.T) {
+	withHeaderNavModules(t, "")
+
+	recorder := performHeaderNavRequest(t, HeaderNavModuleAuth("rankings"), true)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Contains(t, recorder.Body.String(), `"id":1`)
+	require.Contains(t, recorder.Body.String(), fmt.Sprintf(`"role":%d`, common.RoleCommonUser))
 }
 
 func TestHeaderNavModuleAuthRejectsDisabledPricing(t *testing.T) {
