@@ -107,22 +107,24 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		info.UpstreamModelName = request.Model
 	}
 
-	if info.ChannelSetting.SystemPrompt != "" {
+	// The route-injected prompt always leads, so it outranks both the channel
+	// system prompt and any system prompt the client sent.
+	if leadingPrompt := info.LeadingSystemPrompt(request.System != nil); leadingPrompt != "" {
 		if request.System == nil {
-			request.SetStringSystem(info.ChannelSetting.SystemPrompt)
-		} else if info.ChannelSetting.SystemPromptOverride {
+			request.SetStringSystem(leadingPrompt)
+		} else {
 			common.SetContextKey(c, constant.ContextKeySystemPromptOverride, true)
 			if request.IsStringSystem() {
 				existing := strings.TrimSpace(request.GetStringSystem())
 				if existing == "" {
-					request.SetStringSystem(info.ChannelSetting.SystemPrompt)
+					request.SetStringSystem(leadingPrompt)
 				} else {
-					request.SetStringSystem(info.ChannelSetting.SystemPrompt + "\n" + existing)
+					request.SetStringSystem(leadingPrompt + "\n" + existing)
 				}
 			} else {
 				systemContents := request.ParseSystem()
 				newSystem := dto.ClaudeMediaMessage{Type: dto.ContentTypeText}
-				newSystem.SetText(info.ChannelSetting.SystemPrompt)
+				newSystem.SetText(leadingPrompt)
 				if len(systemContents) == 0 {
 					request.System = []dto.ClaudeMediaMessage{newSystem}
 				} else {

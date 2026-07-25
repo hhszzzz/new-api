@@ -516,6 +516,7 @@ describe('user model routes dialog', () => {
         source_model: 'gpt-5.4',
         target_model: 'target-a',
         pool_name: 'Primary Pool',
+        inject_prompt: '',
         execution_group: 'default',
         all_groups: true,
         groups: [],

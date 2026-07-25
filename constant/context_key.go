@@ -62,6 +62,7 @@ const (
 	ContextKeyUserModelRouteGroup   ContextKey = "user_model_route_group"
 	ContextKeyUserModelRouteChannel ContextKey = "user_model_route_channels"
 	ContextKeyUserModelRoutePool    ContextKey = "user_model_route_pool"
+	ContextKeyUserModelRoutePrompt  ContextKey = "user_model_route_prompt"
 	ContextKeyUsingGroup            ContextKey = "group"
 	ContextKeyUserName              ContextKey = "username"
 

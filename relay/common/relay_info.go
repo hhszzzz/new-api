@@ -97,6 +97,10 @@ type RelayInfo struct {
 	StartTime         time.Time
 	FirstResponseTime time.Time
 	isFirstResponse   bool
+	// systemPromptsApplied records that the configured system prompt layers have
+	// already been folded into the outbound request, so a later conversion stage
+	// cannot prepend them a second time.
+	systemPromptsApplied bool
 	//SendLastReasoningResponse bool
 	IsStream               bool
 	IsGeminiBatchEmbedding bool
@@ -110,6 +114,11 @@ type RelayInfo struct {
 	UserModelRouteId     int
 	RouteTargetModelName string
 	RouteExecutionGroup  string
+	// RouteInjectPrompt is an administrator-authored prompt that outranks both
+	// the client system prompt and the channel system prompt. It exists because
+	// a routed request runs on a different upstream model than the client asked
+	// for, and the route owner may need to state the requested identity.
+	RouteInjectPrompt string
 	// BillingModelName is an internal pricing identity. It is only set when
 	// billing intentionally uses a virtual or routed model variant while
 	// OriginModelName must remain the immutable client-requested identity.
@@ -290,6 +299,67 @@ func (info *RelayInfo) PublicResponseModelName() string {
 		return info.OriginModelName
 	}
 	return info.UpstreamModelName
+}
+
+// RouteSystemPrompt returns the route-injected prompt that must be placed ahead
+// of every other system prompt. It is only honored for an active route, so a
+// stale context value can never leak into an unrouted request.
+func (info *RelayInfo) RouteSystemPrompt() string {
+	if info == nil || !info.HasUserModelRoute() {
+		return ""
+	}
+	return strings.TrimSpace(info.RouteInjectPrompt)
+}
+
+// LeadingSystemPrompt returns the text to place ahead of the client's own system
+// prompt, resolving the two configured layers by priority:
+//
+//	route inject prompt  (highest, always applied when a route is active)
+//	channel system prompt (only replaces/prepends when SystemPromptOverride)
+//
+// hasClientPrompt reports whether the request already carries a system prompt.
+// When it does, the channel layer stays subject to its existing opt-in flag
+// while the route layer still applies, which is what makes the route prompt
+// outrank a caller-supplied system prompt.
+//
+// The first call marks the prompts as applied and every later call returns "".
+// A single request can traverse several stages that each compose system prompts
+// (chat completions -> responses conversion, then the adaptor), and the earlier
+// stage folds its prompt into a field the later stage reads back, so without
+// this guard the same prompt would be prepended twice.
+func (info *RelayInfo) LeadingSystemPrompt(hasClientPrompt bool) string {
+	if info == nil || info.systemPromptsApplied {
+		return ""
+	}
+	routePrompt := info.RouteSystemPrompt()
+	// ChannelSetting is reached through the embedded ChannelMeta pointer, which
+	// stays nil until InitChannelMeta runs. Adaptors may compose prompts before
+	// that, so the channel layer must degrade to empty instead of panicking.
+	channelPrompt := ""
+	channelOverride := false
+	if info.ChannelMeta != nil {
+		channelPrompt = strings.TrimSpace(info.ChannelSetting.SystemPrompt)
+		channelOverride = info.ChannelSetting.SystemPromptOverride
+	}
+	if hasClientPrompt && !channelOverride {
+		channelPrompt = ""
+	}
+	leading := JoinSystemPrompts(routePrompt, channelPrompt)
+	if leading != "" {
+		info.systemPromptsApplied = true
+	}
+	return leading
+}
+
+// JoinSystemPrompts concatenates non-empty prompt layers in priority order.
+func JoinSystemPrompts(prompts ...string) string {
+	parts := make([]string, 0, len(prompts))
+	for _, prompt := range prompts {
+		if prompt = strings.TrimSpace(prompt); prompt != "" {
+			parts = append(parts, prompt)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 func (info *RelayInfo) ShouldPassThroughBody() bool {
@@ -589,6 +659,7 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 		UserModelRouteId:     common.GetContextKeyInt(c, constant.ContextKeyUserModelRouteId),
 		RouteTargetModelName: common.GetContextKeyString(c, constant.ContextKeyUserModelRouteTarget),
 		RouteExecutionGroup:  common.GetContextKeyString(c, constant.ContextKeyUserModelRouteGroup),
+		RouteInjectPrompt:    common.GetContextKeyString(c, constant.ContextKeyUserModelRoutePrompt),
 
 		TokenId:        common.GetContextKeyInt(c, constant.ContextKeyTokenId),
 		TokenKey:       common.GetContextKeyString(c, constant.ContextKeyTokenKey),

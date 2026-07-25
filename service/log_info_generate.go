@@ -121,6 +121,12 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 
 	AppendChannelAffinityAdminInfo(ctx, adminInfo)
 
+	// A route-injected prompt rewrites what the upstream model is told, so keep
+	// it visible to administrators even though it never reaches the end user.
+	if relayInfo.RouteSystemPrompt() != "" {
+		adminInfo["route_prompt_injected"] = true
+	}
+
 	other["admin_info"] = adminInfo
 	AppendModelRoutingAdminInfo(other, relayInfo.HasModelRouting(), relayInfo.UpstreamModelName)
 	appendRequestPath(ctx, relayInfo, other)

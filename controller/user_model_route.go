@@ -248,8 +248,13 @@ func validateUserModelRoute(c *gin.Context, user *model.User, route *model.UserM
 	route.TargetModel = strings.TrimSpace(route.TargetModel)
 	route.PoolName = strings.TrimSpace(route.PoolName)
 	route.ExecutionGroup = strings.TrimSpace(route.ExecutionGroup)
+	route.InjectPrompt = strings.TrimSpace(route.InjectPrompt)
 	if route.SourceModel == "" || route.TargetModel == "" || route.ExecutionGroup == "" || len(route.ChannelIds) == 0 {
 		common.ApiErrorMsg(c, "模型路由信息不完整")
+		return false
+	}
+	if len(route.InjectPrompt) > model.UserModelRouteMaxInjectPrompt {
+		common.ApiErrorMsg(c, fmt.Sprintf("注入提示词过长，最多 %d 个字符", model.UserModelRouteMaxInjectPrompt))
 		return false
 	}
 	publicModels := make(map[string]struct{})

@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -19,55 +20,91 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// applySystemPromptIfNeeded prepends the configured system prompt layers to an
+// OpenAI chat request. The route-injected prompt always leads, so it outranks
+// both the channel system prompt and any system prompt the client sent.
 func applySystemPromptIfNeeded(c *gin.Context, info *relaycommon.RelayInfo, request *dto.GeneralOpenAIRequest) {
 	if info == nil || request == nil {
 		return
 	}
-	if info.ChannelSetting.SystemPrompt == "" {
-		return
-	}
 
 	systemRole := request.GetSystemRoleName()
-
-	containSystemPrompt := false
-	for _, message := range request.Messages {
+	clientPromptIndex := -1
+	for i, message := range request.Messages {
 		if message.Role == systemRole {
-			containSystemPrompt = true
+			clientPromptIndex = i
 			break
 		}
 	}
-	if !containSystemPrompt {
+
+	leadingPrompt := info.LeadingSystemPrompt(clientPromptIndex >= 0)
+	if leadingPrompt == "" {
+		return
+	}
+
+	if clientPromptIndex < 0 {
 		systemMessage := dto.Message{
 			Role:    systemRole,
-			Content: info.ChannelSetting.SystemPrompt,
+			Content: leadingPrompt,
 		}
 		request.Messages = append([]dto.Message{systemMessage}, request.Messages...)
 		return
 	}
 
-	if !info.ChannelSetting.SystemPromptOverride {
+	common.SetContextKey(c, constant.ContextKeySystemPromptOverride, true)
+	message := request.Messages[clientPromptIndex]
+	if message.IsStringContent() {
+		request.Messages[clientPromptIndex].SetStringContent(leadingPrompt + "\n" + message.StringContent())
+		return
+	}
+	contents := append([]dto.MediaContent{
+		{
+			Type: dto.ContentTypeText,
+			Text: leadingPrompt,
+		},
+	}, message.ParseContent()...)
+	request.Messages[clientPromptIndex].Content = contents
+}
+
+// applyResponsesInstructionsIfNeeded prepends the configured system prompt
+// layers to the `instructions` field of an OpenAI Responses request. Most
+// adaptors do not compose system prompts for this endpoint, so the handler
+// applies them centrally; RelayInfo.LeadingSystemPrompt is guarded against
+// reapplying, which keeps an adaptor that also composes them from injecting a
+// second time.
+func applyResponsesInstructionsIfNeeded(c *gin.Context, info *relaycommon.RelayInfo, request *dto.OpenAIResponsesRequest) {
+	if info == nil || request == nil {
 		return
 	}
 
-	common.SetContextKey(c, constant.ContextKeySystemPromptOverride, true)
-	for i, message := range request.Messages {
-		if message.Role != systemRole {
-			continue
-		}
-		if message.IsStringContent() {
-			request.Messages[i].SetStringContent(info.ChannelSetting.SystemPrompt + "\n" + message.StringContent())
-			return
-		}
-		contents := message.ParseContent()
-		contents = append([]dto.MediaContent{
-			{
-				Type: dto.ContentTypeText,
-				Text: info.ChannelSetting.SystemPrompt,
-			},
-		}, contents...)
-		request.Messages[i].Content = contents
+	existing := responsesInstructionsText(request.Instructions)
+	leadingPrompt := info.LeadingSystemPrompt(existing != "")
+	if leadingPrompt == "" {
 		return
 	}
+	if existing != "" {
+		common.SetContextKey(c, constant.ContextKeySystemPromptOverride, true)
+		leadingPrompt += "\n" + existing
+	}
+	instructions, err := common.Marshal(leadingPrompt)
+	if err != nil {
+		return
+	}
+	request.Instructions = instructions
+}
+
+// responsesInstructionsText returns the textual instructions, or "" when the
+// field is absent or not a JSON string. Non-string instructions cannot be
+// merged textually, so they are treated as absent and left in place.
+func responsesInstructionsText(instructions json.RawMessage) string {
+	if len(instructions) == 0 {
+		return ""
+	}
+	var text string
+	if err := common.Unmarshal(instructions, &text); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(text)
 }
 
 func chatCompletionsViaResponses(c *gin.Context, info *relaycommon.RelayInfo, adaptor channel.Adaptor, request *dto.GeneralOpenAIRequest) (*dto.Usage, *types.NewAPIError) {

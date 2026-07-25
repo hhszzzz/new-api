@@ -63,6 +63,7 @@ func applyUserModelRoute(c *gin.Context, sourceModel, usingGroup string) (*model
 	common.SetContextKey(c, constant.ContextKeyUserModelRouteTarget, strings.TrimSpace(route.TargetModel))
 	common.SetContextKey(c, constant.ContextKeyUserModelRouteGroup, executionGroup)
 	common.SetContextKey(c, constant.ContextKeyUserModelRoutePool, strings.TrimSpace(route.PoolName))
+	common.SetContextKey(c, constant.ContextKeyUserModelRoutePrompt, strings.TrimSpace(route.InjectPrompt))
 	if usingGroup == "auto" {
 		// A routed request has already resolved the otherwise dynamic auto group.
 		// Publish that concrete group so quota calculation and logs use the same

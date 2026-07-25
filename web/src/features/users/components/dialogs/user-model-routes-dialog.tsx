@@ -48,6 +48,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
+import { Textarea } from '@/components/ui/textarea'
 import { useDebounce } from '@/hooks'
 
 import {
@@ -71,6 +72,7 @@ type RouteDraft = {
   source_model: string
   target_model: string
   pool_name: string
+  inject_prompt: string
   execution_group: string
   all_groups: boolean
   groups: string[]
@@ -82,6 +84,7 @@ const EMPTY_DRAFT: RouteDraft = {
   source_model: '',
   target_model: '',
   pool_name: '',
+  inject_prompt: '',
   execution_group: '',
   all_groups: true,
   groups: [],
@@ -92,11 +95,16 @@ const EMPTY_DRAFT: RouteDraft = {
 const EMPTY_ROUTES: UserModelRoute[] = []
 const EMPTY_GROUPS: string[] = []
 
+// Mirrors UserModelRouteMaxInjectPrompt in model/user_model_route.go so the form
+// rejects an over-long prompt before the request reaches the server.
+const INJECT_PROMPT_MAX_LENGTH = 8000
+
 function draftFromRoute(route: UserModelRoute): RouteDraft {
   return {
     source_model: route.source_model,
     target_model: route.target_model,
     pool_name: route.pool_name,
+    inject_prompt: route.inject_prompt || '',
     execution_group: route.execution_group,
     all_groups: route.all_groups,
     groups: route.groups || [],
@@ -110,6 +118,7 @@ function routePayload(draft: RouteDraft) {
     source_model: draft.source_model.trim(),
     target_model: draft.target_model.trim(),
     pool_name: draft.pool_name.trim(),
+    inject_prompt: draft.inject_prompt.trim(),
     execution_group: draft.execution_group,
     all_groups: draft.all_groups,
     groups: draft.all_groups ? [] : draft.groups,
@@ -722,6 +731,40 @@ export function UserModelRoutesDialog(props: UserModelRoutesDialogProps) {
                     }
                     maxLength={191}
                   />
+                </div>
+
+                <div className='space-y-2'>
+                  <Label htmlFor='route-inject-prompt'>
+                    {t('Injected system prompt')}
+                  </Label>
+                  <Textarea
+                    id='route-inject-prompt'
+                    value={draft.inject_prompt}
+                    onChange={(event) => {
+                      const injectPrompt = event.currentTarget.value
+                      setDraft((current) => ({
+                        ...current,
+                        inject_prompt: injectPrompt,
+                      }))
+                    }}
+                    placeholder={t(
+                      'Optional. Placed ahead of both the caller and channel system prompts.'
+                    )}
+                    maxLength={INJECT_PROMPT_MAX_LENGTH}
+                    rows={4}
+                    aria-describedby='route-inject-prompt-hint'
+                  />
+                  <p
+                    id='route-inject-prompt-hint'
+                    className='text-muted-foreground text-xs'
+                  >
+                    {t(
+                      'Applied only when this route is used. It takes priority over the channel system prompt.'
+                    )}{' '}
+                    <span className='tabular-nums'>
+                      {draft.inject_prompt.length}/{INJECT_PROMPT_MAX_LENGTH}
+                    </span>
+                  </p>
                 </div>
 
                 <div className='grid gap-4 sm:grid-cols-2'>

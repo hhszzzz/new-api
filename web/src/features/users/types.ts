@@ -150,6 +150,7 @@ export interface UserModelRoute {
   source_model: string
   target_model: string
   pool_name: string
+  inject_prompt?: string
   all_groups: boolean
   execution_group: string
   enabled: boolean

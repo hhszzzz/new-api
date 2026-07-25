@@ -12,12 +12,20 @@ import (
 
 var ErrUserModelRouteConflict = errors.New("user model route overlaps an existing rule")
 
+// UserModelRouteMaxInjectPrompt bounds the stored prompt so a single route
+// cannot push an unbounded prefix into every upstream request.
+const UserModelRouteMaxInjectPrompt = 8000
+
 type UserModelRoute struct {
-	Id             int      `json:"id"`
-	UserId         int      `json:"user_id" gorm:"not null;index:idx_user_model_route_lookup,priority:1"`
-	SourceModel    string   `json:"source_model" gorm:"type:varchar(191);not null;index:idx_user_model_route_lookup,priority:2"`
-	TargetModel    string   `json:"target_model" gorm:"type:varchar(191);not null"`
-	PoolName       string   `json:"pool_name" gorm:"type:varchar(191);not null"`
+	Id          int    `json:"id"`
+	UserId      int    `json:"user_id" gorm:"not null;index:idx_user_model_route_lookup,priority:1"`
+	SourceModel string `json:"source_model" gorm:"type:varchar(191);not null;index:idx_user_model_route_lookup,priority:2"`
+	TargetModel string `json:"target_model" gorm:"type:varchar(191);not null"`
+	PoolName    string `json:"pool_name" gorm:"type:varchar(191);not null"`
+	// InjectPrompt is prepended ahead of both the client system prompt and the
+	// channel system prompt when the route is used, so a routed request can
+	// state the identity the client asked for.
+	InjectPrompt   string   `json:"inject_prompt" gorm:"type:text"`
 	AllGroups      bool     `json:"all_groups"`
 	ExecutionGroup string   `json:"execution_group" gorm:"type:varchar(64);not null"`
 	Enabled        bool     `json:"enabled" gorm:"index:idx_user_model_route_lookup,priority:3"`
@@ -336,6 +344,7 @@ func SaveUserModelRoute(route *UserModelRoute) error {
 		route.PoolName = route.SourceModel + " → " + route.TargetModel
 	}
 	route.ExecutionGroup = strings.TrimSpace(route.ExecutionGroup)
+	route.InjectPrompt = strings.TrimSpace(route.InjectPrompt)
 	route.Groups = normalizePolicyValues(route.Groups)
 	route.ChannelIds = normalizeRouteChannelIds(route.ChannelIds)
 	if route.SourceModel == "" || route.TargetModel == "" || route.ExecutionGroup == "" || len(route.ChannelIds) == 0 {
@@ -343,6 +352,9 @@ func SaveUserModelRoute(route *UserModelRoute) error {
 	}
 	if len(route.PoolName) > 191 {
 		return errors.New("user model route pool name is too long")
+	}
+	if len(route.InjectPrompt) > UserModelRouteMaxInjectPrompt {
+		return errors.New("user model route inject prompt is too long")
 	}
 	if !route.AllGroups && len(route.Groups) == 0 {
 		return errors.New("a scoped user model route requires groups")
@@ -399,6 +411,7 @@ func SaveUserModelRoute(route *UserModelRoute) error {
 				"pool_name":       route.PoolName,
 				"all_groups":      route.AllGroups,
 				"execution_group": route.ExecutionGroup,
+				"inject_prompt":   route.InjectPrompt,
 				"enabled":         route.Enabled,
 				"updated_at":      route.UpdatedAt,
 			}).Error; err != nil {

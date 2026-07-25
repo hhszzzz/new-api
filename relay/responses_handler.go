@@ -87,6 +87,11 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		}
 		requestBody = common.ReaderOnly(storage)
 	} else {
+		// Most adaptors never compose system prompts for this endpoint, so apply
+		// the configured layers here. The helper is guarded against reapplying,
+		// which keeps adaptors that do compose them (Codex) from injecting twice.
+		applyResponsesInstructionsIfNeeded(c, info, request)
+
 		convertedRequest, err := adaptor.ConvertOpenAIResponsesRequest(c, info, *request)
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
