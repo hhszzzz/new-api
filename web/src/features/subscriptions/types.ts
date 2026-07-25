@@ -34,6 +34,7 @@ export const subscriptionPlanSchema = z.object({
   quota_reset_period: z.enum(['never', 'daily', 'weekly', 'monthly', 'custom']),
   quota_reset_custom_seconds: z.number().optional(),
   enabled: z.boolean(),
+  purchasable: z.boolean().optional().default(true),
   sort_order: z.number(),
   allow_balance_pay: z.boolean().optional().default(true),
   allow_wallet_overflow: z.boolean().optional().default(true),
@@ -62,6 +63,7 @@ export const userSubscriptionSchema = z.object({
   plan_id: z.number(),
   status: z.string(),
   source: z.string().optional(),
+  source_note: z.string().optional(),
   start_time: z.number(),
   end_time: z.number(),
   amount_total: z.number(),
@@ -115,6 +117,7 @@ export interface SubscriptionPayResponse {
 
 export interface CreateUserSubscriptionRequest {
   plan_id: number
+  source_note?: string
 }
 
 export interface ResetUserSubscriptionsRequest {

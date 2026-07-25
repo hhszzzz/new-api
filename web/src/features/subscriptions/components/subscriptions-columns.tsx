@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { type ColumnDef } from '@tanstack/react-table'
+import type { ColumnDef } from '@tanstack/react-table'
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -129,6 +129,27 @@ export function useSubscriptionsColumns(): ColumnDef<PlanRecord>[] {
             />
           ),
         size: 80,
+      },
+      {
+        accessorFn: (row) => row.plan.purchasable !== false,
+        id: 'purchasable',
+        header: t('Availability'),
+        meta: { mobileHidden: true },
+        cell: ({ row }) =>
+          row.original.plan.purchasable !== false ? (
+            <StatusBadge
+              label={t('Public purchase')}
+              variant='success'
+              copyable={false}
+            />
+          ) : (
+            <StatusBadge
+              label={t('Admin assignment only')}
+              variant='neutral'
+              copyable={false}
+            />
+          ),
+        size: 130,
       },
       {
         id: 'payment',

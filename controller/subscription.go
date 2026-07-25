@@ -36,7 +36,8 @@ func GetSubscriptionPlans(c *gin.Context) {
 	}
 
 	var plans []model.SubscriptionPlan
-	if err := model.DB.Where("enabled = ?", true).Order("sort_order desc, id desc").Find(&plans).Error; err != nil {
+	if err := model.DB.Where("enabled = ? AND (purchasable IS NULL OR purchasable = ?)", true, true).
+		Order("sort_order desc, id desc").Find(&plans).Error; err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -139,10 +140,6 @@ type AdminUpsertSubscriptionPlanRequest struct {
 }
 
 func AdminCreateSubscriptionPlan(c *gin.Context) {
-	if !requirePaymentCompliance(c) {
-		return
-	}
-
 	var req AdminUpsertSubscriptionPlanRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		common.ApiErrorMsg(c, "参数错误")
@@ -167,6 +164,9 @@ func AdminCreateSubscriptionPlan(c *gin.Context) {
 	req.Plan.Currency = "USD"
 	if req.Plan.AllowBalancePay == nil {
 		req.Plan.AllowBalancePay = common.GetPointer(true)
+	}
+	if req.Plan.Purchasable == nil {
+		req.Plan.Purchasable = common.GetPointer(true)
 	}
 	if req.Plan.AllowWalletOverflow == nil {
 		req.Plan.AllowWalletOverflow = common.GetPointer(true)
@@ -194,10 +194,8 @@ func AdminCreateSubscriptionPlan(c *gin.Context) {
 	}
 	req.Plan.DowngradeGroup = strings.TrimSpace(req.Plan.DowngradeGroup)
 	if req.Plan.DowngradeGroup != "" {
-		if _, ok := ratio_setting.GetGroupRatioCopy()[req.Plan.DowngradeGroup]; !ok {
-			common.ApiErrorMsg(c, "降级分组不存在")
-			return
-		}
+		common.ApiErrorMsg(c, "新套餐不再支持降级分组；订阅到期只撤销该订阅授予的临时分组")
+		return
 	}
 	req.Plan.QuotaResetPeriod = model.NormalizeResetPeriod(req.Plan.QuotaResetPeriod)
 	if req.Plan.QuotaResetPeriod == model.SubscriptionResetCustom && req.Plan.QuotaResetCustomSeconds <= 0 {
@@ -214,10 +212,6 @@ func AdminCreateSubscriptionPlan(c *gin.Context) {
 }
 
 func AdminUpdateSubscriptionPlan(c *gin.Context) {
-	if !requirePaymentCompliance(c) {
-		return
-	}
-
 	id, _ := strconv.Atoi(c.Param("id"))
 	if id <= 0 {
 		common.ApiErrorMsg(c, "无效的ID")
@@ -241,6 +235,11 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 		return
 	}
 	req.Plan.Id = id
+	var existing model.SubscriptionPlan
+	if err := model.DB.First(&existing, "id = ?", id).Error; err != nil {
+		common.ApiError(c, err)
+		return
+	}
 	if req.Plan.Currency == "" {
 		req.Plan.Currency = "USD"
 	}
@@ -267,11 +266,10 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 		}
 	}
 	req.Plan.DowngradeGroup = strings.TrimSpace(req.Plan.DowngradeGroup)
-	if req.Plan.DowngradeGroup != "" {
-		if _, ok := ratio_setting.GetGroupRatioCopy()[req.Plan.DowngradeGroup]; !ok {
-			common.ApiErrorMsg(c, "降级分组不存在")
-			return
-		}
+	existingDowngradeGroup := strings.TrimSpace(existing.DowngradeGroup)
+	if req.Plan.DowngradeGroup != "" && req.Plan.DowngradeGroup != existingDowngradeGroup {
+		common.ApiErrorMsg(c, "旧降级分组只能保留原值或清除，不能设置新的目标")
+		return
 	}
 	req.Plan.QuotaResetPeriod = model.NormalizeResetPeriod(req.Plan.QuotaResetPeriod)
 	if req.Plan.QuotaResetPeriod == model.SubscriptionResetCustom && req.Plan.QuotaResetCustomSeconds <= 0 {
@@ -291,6 +289,7 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 			"custom_seconds":             req.Plan.CustomSeconds,
 			"enabled":                    req.Plan.Enabled,
 			"sort_order":                 req.Plan.SortOrder,
+			"purchasable":                req.Plan.IsPurchasable(),
 			"stripe_price_id":            req.Plan.StripePriceId,
 			"creem_product_id":           req.Plan.CreemProductId,
 			"waffo_pancake_product_id":   req.Plan.WaffoPancakeProductId,
@@ -326,10 +325,6 @@ type AdminUpdateSubscriptionPlanStatusRequest struct {
 }
 
 func AdminUpdateSubscriptionPlanStatus(c *gin.Context) {
-	if !requirePaymentCompliance(c) {
-		return
-	}
-
 	id, _ := strconv.Atoi(c.Param("id"))
 	if id <= 0 {
 		common.ApiErrorMsg(c, "无效的ID")
@@ -349,25 +344,62 @@ func AdminUpdateSubscriptionPlanStatus(c *gin.Context) {
 }
 
 type AdminBindSubscriptionRequest struct {
-	UserId int `json:"user_id"`
-	PlanId int `json:"plan_id"`
+	UserId     int    `json:"user_id"`
+	PlanId     int    `json:"plan_id"`
+	SourceNote string `json:"source_note"`
+}
+
+func getManageableSubscriptionUser(c *gin.Context, userId int) (*model.User, bool) {
+	if userId <= 0 {
+		common.ApiErrorMsg(c, "无效的用户ID")
+		return nil, false
+	}
+	user, err := model.GetUserById(userId, false)
+	if err != nil {
+		common.ApiError(c, err)
+		return nil, false
+	}
+	if !canManageTargetRole(c.GetInt("role"), user.Role) {
+		common.ApiErrorMsg(c, "无权管理同级或更高权限用户的订阅")
+		return nil, false
+	}
+	return user, true
+}
+
+func getManageableSubscriptionById(c *gin.Context, userSubscriptionId int) (int, bool) {
+	userId, err := model.GetUserSubscriptionUserId(userSubscriptionId)
+	if err != nil {
+		common.ApiError(c, err)
+		return 0, false
+	}
+	if _, ok := getManageableSubscriptionUser(c, userId); !ok {
+		return 0, false
+	}
+	return userId, true
 }
 
 func AdminBindSubscription(c *gin.Context) {
-	if !requirePaymentCompliance(c) {
-		return
-	}
-
 	var req AdminBindSubscriptionRequest
 	if err := c.ShouldBindJSON(&req); err != nil || req.UserId <= 0 || req.PlanId <= 0 {
 		common.ApiErrorMsg(c, "参数错误")
 		return
 	}
-	msg, err := model.AdminBindSubscription(req.UserId, req.PlanId, "")
+	if _, ok := getManageableSubscriptionUser(c, req.UserId); !ok {
+		return
+	}
+	if strings.TrimSpace(req.SourceNote) == "" {
+		common.ApiErrorMsg(c, "管理员分配备注不能为空")
+		return
+	}
+	msg, err := model.AdminBindSubscription(req.UserId, req.PlanId, req.SourceNote)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
+	recordManageAuditFor(c, req.UserId, "subscription.user_assign", map[string]interface{}{
+		"plan_id":     req.PlanId,
+		"source_note": strings.TrimSpace(req.SourceNote),
+	})
 	if msg != "" {
 		common.ApiSuccess(c, gin.H{"message": msg})
 		return
@@ -383,6 +415,9 @@ func AdminListUserSubscriptions(c *gin.Context) {
 		common.ApiErrorMsg(c, "无效的用户ID")
 		return
 	}
+	if _, ok := getManageableSubscriptionUser(c, userId); !ok {
+		return
+	}
 	subs, err := model.GetAllUserSubscriptions(userId)
 	if err != nil {
 		common.ApiError(c, err)
@@ -392,7 +427,8 @@ func AdminListUserSubscriptions(c *gin.Context) {
 }
 
 type AdminCreateUserSubscriptionRequest struct {
-	PlanId int `json:"plan_id"`
+	PlanId     int    `json:"plan_id"`
+	SourceNote string `json:"source_note"`
 }
 
 type AdminResetSubscriptionRequest struct {
@@ -419,13 +455,12 @@ func recordSubscriptionResetUserLogs(result *model.SubscriptionResetResult, admi
 
 // AdminCreateUserSubscription creates a new user subscription from a plan (no payment).
 func AdminCreateUserSubscription(c *gin.Context) {
-	if !requirePaymentCompliance(c) {
-		return
-	}
-
 	userId, _ := strconv.Atoi(c.Param("id"))
 	if userId <= 0 {
 		common.ApiErrorMsg(c, "无效的用户ID")
+		return
+	}
+	if _, ok := getManageableSubscriptionUser(c, userId); !ok {
 		return
 	}
 	var req AdminCreateUserSubscriptionRequest
@@ -433,11 +468,19 @@ func AdminCreateUserSubscription(c *gin.Context) {
 		common.ApiErrorMsg(c, "参数错误")
 		return
 	}
-	msg, err := model.AdminBindSubscription(userId, req.PlanId, "")
+	if strings.TrimSpace(req.SourceNote) == "" {
+		common.ApiErrorMsg(c, "管理员分配备注不能为空")
+		return
+	}
+	msg, err := model.AdminBindSubscription(userId, req.PlanId, req.SourceNote)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
+	recordManageAuditFor(c, userId, "subscription.user_assign", map[string]interface{}{
+		"plan_id":     req.PlanId,
+		"source_note": strings.TrimSpace(req.SourceNote),
+	})
 	if msg != "" {
 		common.ApiSuccess(c, gin.H{"message": msg})
 		return
@@ -449,6 +492,9 @@ func AdminResetUserSubscriptionsByPlan(c *gin.Context) {
 	userId, _ := strconv.Atoi(c.Param("id"))
 	if userId <= 0 {
 		common.ApiErrorMsg(c, "无效的用户ID")
+		return
+	}
+	if _, ok := getManageableSubscriptionUser(c, userId); !ok {
 		return
 	}
 	var req AdminResetSubscriptionRequest
@@ -515,6 +561,9 @@ func AdminInvalidateUserSubscription(c *gin.Context) {
 		common.ApiErrorMsg(c, "无效的订阅ID")
 		return
 	}
+	if _, ok := getManageableSubscriptionById(c, subId); !ok {
+		return
+	}
 	msg, err := model.AdminInvalidateUserSubscription(subId)
 	if err != nil {
 		common.ApiError(c, err)
@@ -532,6 +581,9 @@ func AdminDeleteUserSubscription(c *gin.Context) {
 	subId, _ := strconv.Atoi(c.Param("id"))
 	if subId <= 0 {
 		common.ApiErrorMsg(c, "无效的订阅ID")
+		return
+	}
+	if _, ok := getManageableSubscriptionById(c, subId); !ok {
 		return
 	}
 	msg, err := model.AdminDeleteUserSubscription(subId)

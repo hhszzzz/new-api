@@ -39,6 +39,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuShortcut,
 } from '@/components/ui/dropdown-menu'
+import { Input } from '@/components/ui/input'
 import {
   Select,
   SelectContent,
@@ -75,15 +76,20 @@ interface Props {
   onSuccess?: () => void
 }
 
+function isSubscriptionActive(
+  subscription: UserSubscriptionRecord['subscription']
+) {
+  const now = Date.now() / 1000
+  const isExpired =
+    (subscription.end_time || 0) > 0 && subscription.end_time < now
+  return subscription.status === 'active' && !isExpired
+}
+
 function SubscriptionStatusBadge(props: {
   sub: UserSubscriptionRecord['subscription']
   t: (key: string) => string
 }) {
-  // eslint-disable-next-line react-hooks/purity
-  const now = Date.now() / 1000
-  const isExpired = (props.sub.end_time || 0) > 0 && props.sub.end_time < now
-  const isActive = props.sub.status === 'active' && !isExpired
-  if (isActive) {
+  if (isSubscriptionActive(props.sub)) {
     return (
       <StatusBadge
         label={props.t('Active')}
@@ -117,6 +123,12 @@ export function UserSubscriptionsDialog(props: Props) {
   const [plans, setPlans] = useState<PlanRecord[]>([])
   const [subs, setSubs] = useState<UserSubscriptionRecord[]>([])
   const [selectedPlanId, setSelectedPlanId] = useState<string>('')
+  const [sourceNote, setSourceNote] = useState('')
+  const [pendingAssignment, setPendingAssignment] = useState<{
+    planId: number
+    planTitle: string
+    sourceNote: string
+  } | null>(null)
   const [resetting, setResetting] = useState(false)
   const [advanceResetTime, setAdvanceResetTime] = useState(true)
   const [resetAction, setResetAction] = useState<{
@@ -135,6 +147,10 @@ export function UserSubscriptionsDialog(props: Props) {
     })
     return map
   }, [plans])
+  const assignablePlans = useMemo(
+    () => plans.filter((record) => record.plan.enabled),
+    [plans]
+  )
 
   const loadData = useCallback(async () => {
     if (!props.user?.id) return
@@ -156,26 +172,31 @@ export function UserSubscriptionsDialog(props: Props) {
   useEffect(() => {
     if (props.open && props.user?.id) {
       setSelectedPlanId('')
+      setSourceNote('')
       loadData()
     }
   }, [props.open, props.user?.id, loadData])
 
-  const handleCreate = async () => {
-    if (!props.user?.id || !selectedPlanId) {
-      toast.error(t('Please select a subscription plan'))
-      return
-    }
+  const createAssignment = async (assignment: {
+    planId: number
+    sourceNote: string
+  }) => {
+    if (!props.user?.id) return
     setCreating(true)
     try {
       const res = await createUserSubscription(props.user.id, {
-        plan_id: Number(selectedPlanId),
+        plan_id: assignment.planId,
+        source_note: assignment.sourceNote,
       })
-      if (res.success) {
-        toast.success(res.data?.message || t('Added successfully'))
-        setSelectedPlanId('')
-        await loadData()
-        props.onSuccess?.()
+      if (!res.success) {
+        toast.error(res.message || t('Request failed'))
+        return
       }
+      toast.success(res.data?.message || t('Added successfully'))
+      setSelectedPlanId('')
+      setSourceNote('')
+      await loadData()
+      props.onSuccess?.()
     } catch {
       toast.error(t('Request failed'))
     } finally {
@@ -183,23 +204,51 @@ export function UserSubscriptionsDialog(props: Props) {
     }
   }
 
+  const handleCreate = async () => {
+    if (!props.user?.id || !selectedPlanId) {
+      toast.error(t('Please select a subscription plan'))
+      return
+    }
+    const note = sourceNote.trim()
+    if (!note) {
+      toast.error(t('Assignment note is required'))
+      return
+    }
+    const planId = Number(selectedPlanId)
+    const planTitle = planTitleMap.get(planId) || `#${planId}`
+    const hasActiveDuplicate = subs.some(
+      (record) =>
+        record.subscription.plan_id === planId &&
+        isSubscriptionActive(record.subscription)
+    )
+    if (hasActiveDuplicate) {
+      setPendingAssignment({ planId, planTitle, sourceNote: note })
+      return
+    }
+    await createAssignment({ planId, sourceNote: note })
+  }
+
   const handleConfirmAction = async () => {
     if (!confirmAction) return
     try {
       if (confirmAction.type === 'invalidate') {
         const res = await invalidateUserSubscription(confirmAction.subId)
-        if (res.success) {
-          toast.success(res.data?.message || t('Has been invalidated'))
-          await loadData()
-          props.onSuccess?.()
+        if (!res.success) {
+          toast.error(res.message || t('Request failed'))
+          return
         }
+        toast.success(res.data?.message || t('Has been invalidated'))
+        await loadData()
+        props.onSuccess?.()
       } else {
         const res = await deleteUserSubscription(confirmAction.subId)
-        if (res.success) {
-          toast.success(t('Deleted'))
-          await loadData()
-          props.onSuccess?.()
+        if (!res.success) {
+          toast.error(res.message || t('Request failed'))
+          return
         }
+        toast.success(t('Deleted'))
+        await loadData()
+        props.onSuccess?.()
       }
     } catch {
       toast.error(t('Operation failed'))
@@ -216,15 +265,17 @@ export function UserSubscriptionsDialog(props: Props) {
         plan_id: resetAction.planId,
         advance_reset_time: advanceResetTime,
       })
-      if (res.success) {
-        toast.success(
-          t('Reset {{count}} active subscriptions', {
-            count: res.data?.reset_count || 0,
-          })
-        )
-        await loadData()
-        props.onSuccess?.()
+      if (!res.success) {
+        toast.error(res.message || t('Request failed'))
+        return
       }
+      toast.success(
+        t('Reset {{count}} active subscriptions', {
+          count: res.data?.reset_count || 0,
+        })
+      )
+      await loadData()
+      props.onSuccess?.()
     } catch {
       toast.error(t('Operation failed'))
     } finally {
@@ -245,9 +296,9 @@ export function UserSubscriptionsDialog(props: Props) {
           </SheetHeader>
 
           <div className={sideDrawerFormClassName()}>
-            <div className='flex gap-2'>
+            <div className='flex flex-col gap-2 sm:flex-row'>
               <Select
-                items={plans.map((p) => ({
+                items={assignablePlans.map((p) => ({
                   value: String(p.plan.id),
                   label: (
                     <>
@@ -259,12 +310,12 @@ export function UserSubscriptionsDialog(props: Props) {
                 value={selectedPlanId}
                 onValueChange={(v) => v !== null && setSelectedPlanId(v)}
               >
-                <SelectTrigger className='flex-1'>
+                <SelectTrigger className='min-w-0 flex-1'>
                   <SelectValue placeholder={t('Select subscription plan')} />
                 </SelectTrigger>
                 <SelectContent alignItemWithTrigger={false}>
                   <SelectGroup>
-                    {plans.map((p) => (
+                    {assignablePlans.map((p) => (
                       <SelectItem key={p.plan.id} value={String(p.plan.id)}>
                         {p.plan.title} ($
                         {Number(p.plan.price_amount || 0).toFixed(2)})
@@ -273,9 +324,18 @@ export function UserSubscriptionsDialog(props: Props) {
                   </SelectGroup>
                 </SelectContent>
               </Select>
+              <Input
+                value={sourceNote}
+                onChange={(event) => setSourceNote(event.target.value)}
+                maxLength={255}
+                placeholder={t('Administrator assignment note')}
+                aria-label={t('Administrator assignment note')}
+                aria-required='true'
+                className='sm:max-w-64'
+              />
               <Button
                 onClick={handleCreate}
-                disabled={creating || !selectedPlanId}
+                disabled={creating || !selectedPlanId || !sourceNote.trim()}
               >
                 <Plus className='mr-1 h-4 w-4' />
                 {t('Add subscription')}
@@ -307,7 +367,18 @@ export function UserSubscriptionsDialog(props: Props) {
                           {planTitleMap.get(sub.plan_id) || `#${sub.plan_id}`}
                         </div>
                         <div className='text-muted-foreground text-sm'>
-                          {t('Source')}: {sub.source || '-'}
+                          {t('Source')}:{' '}
+                          {sub.source === 'admin'
+                            ? t('Administrator assignment')
+                            : sub.source || '-'}
+                          {sub.source_note ? (
+                            <span
+                              className='block truncate'
+                              title={sub.source_note}
+                            >
+                              {sub.source_note}
+                            </span>
+                          ) : null}
                         </div>
                       </div>
                     )
@@ -357,10 +428,7 @@ export function UserSubscriptionsDialog(props: Props) {
                   cellClassName: 'text-right',
                   cell: (record) => {
                     const sub = record.subscription
-                    const now = Date.now() / 1000
-                    const isExpired =
-                      (sub.end_time || 0) > 0 && sub.end_time < now
-                    const isActive = sub.status === 'active' && !isExpired
+                    const isActive = isSubscriptionActive(sub)
 
                     return (
                       <DataTableRowActionMenu ariaLabel={t('Actions')}>
@@ -440,6 +508,25 @@ export function UserSubscriptionsDialog(props: Props) {
           }
           handleConfirm={handleConfirmAction}
           destructive={confirmAction.type === 'delete'}
+        />
+      )}
+
+      {pendingAssignment && (
+        <ConfirmDialog
+          open
+          onOpenChange={(open) => !open && setPendingAssignment(null)}
+          title={t('Add another subscription')}
+          desc={t(
+            'This user already has an active subscription for {{plan}}. Add another one?',
+            { plan: pendingAssignment.planTitle }
+          )}
+          confirmText={t('Add subscription')}
+          handleConfirm={async () => {
+            const assignment = pendingAssignment
+            setPendingAssignment(null)
+            await createAssignment(assignment)
+          }}
+          isLoading={creating}
         />
       )}
 
