@@ -16,11 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import {
-  Alert02Icon,
-  Radar02Icon,
-  RefreshIcon,
-} from '@hugeicons/core-free-icons'
+import { RefreshIcon } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useQuery } from '@tanstack/react-query'
 import { isAxiosError } from 'axios'
@@ -39,24 +35,13 @@ import {
   EmptyTitle,
 } from '@/components/ui/empty'
 import { Skeleton } from '@/components/ui/skeleton'
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from '@/components/ui/tooltip'
-import { cn } from '@/lib/utils'
 
 import { getModelRadar } from './api'
 import { CapabilityMatrix } from './components/capability-matrix'
 import { DegradationAlerts } from './components/degradation-alerts'
-import { EfficiencyScatter } from './components/efficiency-scatter'
-import { HistoryComparison } from './components/history-comparison'
-import { IQTrends } from './components/iq-trends'
 import { useRadarFormatters } from './hooks/use-radar-formatters'
 
 const REFRESH_INTERVAL_MS = 10 * 60 * 1000
-const SOURCE_URL = 'https://codexradar.com'
 
 export function ModelRadar() {
   const { t } = useTranslation()
@@ -77,7 +62,6 @@ export function ModelRadar() {
     radarQuery.isError &&
     isAxiosError(radarQuery.error) &&
     radarQuery.error.response?.status === 503
-  const sourceURL = snapshot?.source.url || SOURCE_URL
   const hasConfigurations = (snapshot?.configurations.length ?? 0) > 0
 
   let content: React.ReactNode
@@ -100,35 +84,24 @@ export function ModelRadar() {
           <StaleNotice sourceUpdatedAt={sourceUpdatedAt} />
         ) : null}
         {radarQuery.isError ? <RefreshFailureNotice /> : null}
-        <DegradationAlerts alerts={snapshot.degradation_alerts} />
+        <DegradationAlerts
+          alerts={snapshot.degradation_alerts}
+          history={snapshot.history}
+          configurations={snapshot.configurations}
+        />
         <CapabilityMatrix configurations={snapshot.configurations} />
-        <EfficiencyScatter configurations={snapshot.configurations} />
-        <IQTrends
-          configurations={snapshot.configurations}
-          history={snapshot.history}
-        />
-        <HistoryComparison
-          configurations={snapshot.configurations}
-          history={snapshot.history}
-        />
       </>
     )
   }
 
   return (
     <PublicLayout showMainContainer={false}>
-      <PageTransition className='mx-auto w-full max-w-7xl px-3 pt-20 pb-10 sm:px-6 sm:pt-24 sm:pb-12 xl:px-8'>
+      <PageTransition className='mx-auto w-full max-w-6xl px-3 pt-20 pb-10 sm:px-6 sm:pt-24 sm:pb-12 xl:px-8'>
         <main aria-busy={radarQuery.isFetching}>
           <header className='border-border/70 flex flex-col gap-4 border-b pb-5 sm:flex-row sm:items-end sm:justify-between'>
             <div className='min-w-0'>
-              <div className='flex flex-wrap items-center gap-2'>
-                <HugeiconsIcon
-                  icon={Radar02Icon}
-                  className='text-primary size-5'
-                  strokeWidth={2}
-                  aria-hidden='true'
-                />
-                <h1 className='text-xl font-semibold sm:text-2xl'>
+              <div className='flex flex-wrap items-center gap-2.5'>
+                <h1 className='text-xl font-semibold tracking-tight sm:text-2xl'>
                   {t('Model Radar')}
                 </h1>
                 {snapshot?.stale ? (
@@ -140,65 +113,21 @@ export function ModelRadar() {
                   'Model capability, cost, and efficiency across reasoning efforts.'
                 )}
               </p>
-              <div className='text-muted-foreground mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs'>
-                <a
-                  href={sourceURL}
-                  target='_blank'
-                  rel='noreferrer'
-                  className='text-foreground decoration-border hover:decoration-foreground focus-visible:ring-ring underline underline-offset-4 focus-visible:ring-2 focus-visible:outline-none'
-                >
-                  {t('Data from Codex Radar codexradar.com')}
-                </a>
-                {snapshot ? (
-                  <span>
-                    {t('{{models}} models, {{configurations}} configurations', {
-                      models: snapshot.model_count,
-                      configurations: snapshot.configuration_count,
-                    })}
-                  </span>
-                ) : null}
-              </div>
-            </div>
-
-            <div className='flex shrink-0 items-center gap-2 sm:justify-end'>
               {snapshot ? (
                 <p
-                  className='text-muted-foreground text-xs tabular-nums'
+                  className='text-muted-foreground mt-2 text-xs tabular-nums'
                   aria-live='polite'
                 >
+                  {t('{{models}} models, {{configurations}} configurations', {
+                    models: snapshot.model_count,
+                    configurations: snapshot.configuration_count,
+                  })}
+                  <span className='mx-1.5' aria-hidden='true'>
+                    ·
+                  </span>
                   {t('Updated {{time}}', { time: updatedAt })}
                 </p>
               ) : null}
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <Button
-                        type='button'
-                        variant='outline'
-                        size='icon-sm'
-                        aria-label={
-                          radarQuery.isFetching
-                            ? t('Refreshing...')
-                            : t('Refresh')
-                        }
-                        onClick={() => void radarQuery.refetch()}
-                        disabled={radarQuery.isFetching}
-                      />
-                    }
-                  >
-                    <span
-                      className={cn(
-                        radarQuery.isFetching && 'motion-safe:animate-spin'
-                      )}
-                      aria-hidden='true'
-                    >
-                      <HugeiconsIcon icon={RefreshIcon} strokeWidth={2} />
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent>{t('Refresh local snapshot')}</TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
             </div>
           </header>
 
@@ -214,25 +143,17 @@ function StaleNotice(props: { sourceUpdatedAt: string | null }) {
   return (
     <div
       role='status'
-      className='mt-5 flex items-start gap-3 rounded-lg border border-amber-500/30 bg-amber-500/8 px-4 py-3 text-amber-900 dark:text-amber-200'
+      className='mt-5 rounded-lg border border-amber-500/30 bg-amber-500/8 px-4 py-3 text-amber-900 dark:text-amber-200'
     >
-      <HugeiconsIcon
-        icon={Alert02Icon}
-        className='mt-0.5 size-4 shrink-0'
-        strokeWidth={2}
-        aria-hidden='true'
-      />
-      <div>
-        <p className='text-sm font-medium'>{t('This snapshot is stale')}</p>
-        <p className='mt-0.5 text-xs opacity-80'>
-          {t(
-            'The last source update was {{time}}. Showing the latest valid data.',
-            {
-              time: props.sourceUpdatedAt ?? t('unknown'),
-            }
-          )}
-        </p>
-      </div>
+      <p className='text-sm font-medium'>{t('This data is outdated')}</p>
+      <p className='mt-0.5 text-xs opacity-80'>
+        {t(
+          'The last source update was {{time}}. Showing the latest valid data.',
+          {
+            time: props.sourceUpdatedAt ?? t('unknown'),
+          }
+        )}
+      </p>
     </div>
   )
 }
@@ -259,17 +180,23 @@ function RadarLoading() {
       className='py-6'
     >
       <span className='sr-only'>{t('Loading model radar')}</span>
-      <div className='flex flex-col gap-6' aria-hidden='true'>
-        <Skeleton className='h-24 w-full rounded-lg' />
+      <div className='flex flex-col gap-8' aria-hidden='true'>
         <div>
-          <Skeleton className='mb-3 h-5 w-40' />
-          <div className='grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6'>
-            {Array.from({ length: 12 }, (_, index) => (
-              <Skeleton key={index} className='h-24 rounded-lg' />
+          <Skeleton className='mb-4 h-5 w-32' />
+          <div className='grid gap-3 lg:grid-cols-2'>
+            {Array.from({ length: 4 }, (_, index) => (
+              <Skeleton key={index} className='h-32 rounded-xl' />
             ))}
           </div>
         </div>
-        <Skeleton className='h-80 w-full rounded-lg' />
+        <div>
+          <Skeleton className='mb-4 h-5 w-32' />
+          <div className='flex flex-col gap-3'>
+            {Array.from({ length: 3 }, (_, index) => (
+              <Skeleton key={index} className='h-24 rounded-xl' />
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   )
@@ -292,7 +219,7 @@ function RadarError(props: {
       <EmptyHeader>
         <EmptyMedia variant='icon'>
           <HugeiconsIcon
-            icon={Radar02Icon}
+            icon={RefreshIcon}
             strokeWidth={2}
             aria-hidden='true'
           />
@@ -332,7 +259,7 @@ function RadarEmpty() {
       <EmptyHeader>
         <EmptyMedia variant='icon'>
           <HugeiconsIcon
-            icon={Radar02Icon}
+            icon={RefreshIcon}
             strokeWidth={2}
             aria-hidden='true'
           />

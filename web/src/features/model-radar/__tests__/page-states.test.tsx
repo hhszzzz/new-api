@@ -111,7 +111,7 @@ function renderPage() {
 beforeEach(() => queryMocks.useQuery.mockReset())
 
 describe('model radar page states', () => {
-  test('keeps source attribution visible during initial loading', () => {
+  test('shows the loading skeleton during the initial fetch', () => {
     queryMocks.useQuery.mockReturnValue({
       data: undefined,
       error: null,
@@ -126,11 +126,7 @@ describe('model radar page states', () => {
     expect(
       screen.getByRole('status', { name: 'Loading model radar' })
     ).toBeVisible()
-    expect(
-      screen.getByRole('link', {
-        name: 'Data from Codex Radar codexradar.com',
-      })
-    ).toHaveAttribute('href', 'https://codexradar.com')
+    expect(screen.queryByRole('link')).toBeNull()
   })
 
   test('distinguishes the first-sync 503 state from a general load failure', () => {
@@ -169,7 +165,7 @@ describe('model radar page states', () => {
     })
     renderPage()
 
-    expect(screen.getByText('This snapshot is stale')).toBeVisible()
+    expect(screen.getByText('This data is outdated')).toBeVisible()
     expect(screen.getByText('No degradation alerts')).toBeVisible()
     expect(screen.getByText('Stale data')).toBeVisible()
     expect(screen.queryByText(/recommend/i)).toBeNull()

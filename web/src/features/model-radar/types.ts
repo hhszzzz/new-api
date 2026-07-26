@@ -92,16 +92,3 @@ export type ModelRadarResponse = {
   code?: string
   data: ModelRadarData
 }
-
-export type RadarMetric =
-  | 'iq'
-  | 'average_price_usd'
-  | 'average_minutes'
-  | 'average_agent_steps'
-  | 'cache_hit_rate'
-  | 'average_total_tokens'
-
-export type ScatterMetric =
-  | 'combined_cost_index'
-  | 'average_price_usd'
-  | 'average_minutes'

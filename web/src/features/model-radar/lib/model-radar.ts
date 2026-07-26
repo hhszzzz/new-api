@@ -16,12 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import type {
-  ModelRadarConfiguration,
-  ModelRadarHistoryFrame,
-  ModelRadarHistoryPoint,
-  RadarMetric,
-} from '../types'
+import type { ModelRadarConfiguration, ModelRadarHistoryFrame } from '../types'
 
 export const EFFORT_ORDER = [
   'low',
@@ -45,17 +40,47 @@ export const MODEL_COLORS = [
   '#dc2626',
 ] as const
 
-export const EFFORT_LINE_DASH: Record<string, number[]> = {
-  low: [],
-  medium: [6, 3],
-  high: [2, 2],
-  xhigh: [9, 3, 2, 3],
-  max: [1, 3],
-  ultra: [10, 4],
-}
+// Lowercase model-name prefixes mapped to @lobehub/icons vendor keys.
+// Ordered longest-first so specific prefixes win over generic ones.
+const MODEL_ICON_PREFIXES: Array<[prefix: string, icon: string]> = [
+  ['gpt', 'OpenAI'],
+  ['o1', 'OpenAI'],
+  ['o3', 'OpenAI'],
+  ['o4', 'OpenAI'],
+  ['chatgpt', 'OpenAI'],
+  ['claude', 'Claude'],
+  ['gemini', 'Gemini'],
+  ['gemma', 'Google'],
+  ['deepseek', 'DeepSeek'],
+  ['qwq', 'Qwen'],
+  ['qwen', 'Qwen'],
+  ['doubao', 'Doubao'],
+  ['kimi', 'Moonshot'],
+  ['moonshot', 'Moonshot'],
+  ['grok', 'XAI'],
+  ['mistral', 'Mistral'],
+  ['minimax', 'Minimax'],
+  ['hunyuan', 'Hunyuan'],
+  ['llama', 'Ollama'],
+  ['yi', 'Yi'],
+  ['glm', 'Zhipu'],
+  ['chatglm', 'Zhipu'],
+  ['ernie', 'Baidu'],
+  ['wenxin', 'Wenxin'],
+  ['spark', 'Spark'],
+  ['command', 'Cohere'],
+  ['cohere', 'Cohere'],
+  ['sonar', 'Perplexity'],
+  ['perplexity', 'Perplexity'],
+]
 
-export function configurationKey(model: string, effort: string): string {
-  return `${model}\u0000${effort}`
+// Resolves a radar model name to its vendor's @lobehub/icons key.
+export function getModelIconKey(model: string): string | null {
+  const normalized = model.trim().toLowerCase()
+  for (const [prefix, icon] of MODEL_ICON_PREFIXES) {
+    if (normalized.startsWith(prefix)) return icon
+  }
+  return null
 }
 
 export function compareEfforts(left: string, right: string): number {
@@ -112,39 +137,38 @@ export function createModelColorMap(
   )
 }
 
-export type RadarHistoryDatum = ModelRadarHistoryPoint & {
-  ts: number
-  configuration: string
+export function getPassRate(configuration: ModelRadarConfiguration): number {
+  if (configuration.valid_tasks <= 0) return 0
+  return configuration.passed / configuration.valid_tasks
 }
 
-export function flattenHistory(
-  history: ModelRadarHistoryFrame[]
-): RadarHistoryDatum[] {
+export function compareModelsByBestIq(
+  left: ModelRadarGroup,
+  right: ModelRadarGroup
+): number {
+  const leftBest = Math.max(...left.configurations.map((item) => item.iq))
+  const rightBest = Math.max(...right.configurations.map((item) => item.iq))
+  if (leftBest !== rightBest) return rightBest - leftBest
+  return left.model.localeCompare(right.model)
+}
+
+// Builds the 48h IQ sparkline for one configuration, oldest first.
+export function getHistorySeries(
+  history: ModelRadarHistoryFrame[],
+  model: string,
+  effort: string
+): number[] {
   return history.flatMap((frame) =>
-    frame.points.map((point) => ({
-      ...point,
-      ts: frame.ts,
-      configuration: configurationKey(point.model, point.effort),
-    }))
+    frame.points
+      .filter((point) => point.model === model && point.effort === effort)
+      .map((point) => point.iq)
   )
 }
 
-export function getMetricValue(
-  point: ModelRadarHistoryPoint,
-  metric: RadarMetric
-): number | null {
-  const value = point[metric]
-  return typeof value === 'number' && Number.isFinite(value) ? value : null
-}
-
-export function getEffortLineDash(effort: string): number[] {
-  return EFFORT_LINE_DASH[effort.toLowerCase()] ?? [4, 3, 1, 3]
-}
-
-export function getEffortBorderStyle(
-  effort: string
-): 'solid' | 'dashed' | 'dotted' {
-  if (effort.toLowerCase() === 'low') return 'solid'
-  if (effort.toLowerCase() === 'high') return 'dotted'
-  return 'dashed'
+// Maps an IQ value onto the shared capability heat scale.
+// low (<50) → destructive, mid (50–85) → amber, high (≥85) → emerald.
+export function getIqTone(iq: number): 'low' | 'mid' | 'high' {
+  if (iq >= 85) return 'high'
+  if (iq >= 50) return 'mid'
+  return 'low'
 }

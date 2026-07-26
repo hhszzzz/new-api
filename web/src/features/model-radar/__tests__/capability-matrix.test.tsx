@@ -32,6 +32,7 @@ vi.mock('react-i18next', () => ({
       ),
   }),
 }))
+vi.mock('@/hooks', () => ({ useMediaQuery: () => true }))
 
 const fixture: ModelRadarConfiguration = {
   model: 'gpt-radar',
@@ -56,17 +57,15 @@ const fixture: ModelRadarConfiguration = {
 }
 
 describe('model radar capability matrix', () => {
-  test('uses two, three, and six responsive columns for the matrix', () => {
+  test('lays out the matrix as a table with one row per model', () => {
     render(<CapabilityMatrix configurations={[fixture]} />)
 
-    const detailsButton = screen.getByRole('button', {
-      name: 'View details for gpt-radar medium',
-    })
-    expect(detailsButton.parentElement).toHaveClass(
-      'grid-cols-2',
-      'sm:grid-cols-3',
-      'lg:grid-cols-6'
-    )
+    const table = screen.getByRole('table')
+    expect(table).toBeVisible()
+    expect(screen.getByRole('rowheader', { name: /gpt-radar/ })).toBeVisible()
+    expect(
+      screen.getByRole('button', { name: 'View details for gpt-radar medium' })
+    ).toBeVisible()
   })
 
   test('opens complete metrics from the keyboard and restores focus after Escape', async () => {
@@ -83,7 +82,11 @@ describe('model radar capability matrix', () => {
     expect(dialog).toHaveAccessibleName('gpt-radar medium')
     expect(screen.getByText('Combined cost index')).toBeVisible()
     expect(screen.getByText('45')).toBeVisible()
-    expect(screen.getByText('Cost samples')).toBeVisible()
+    expect(
+      screen.getByText(
+        (_, element) => element?.textContent === 'Cost samples: 10'
+      )
+    ).toBeVisible()
     expect(
       screen.getByText(
         'IQ is the latest valid pass rate per task multiplied by 150. The combined cost index is provided by the source after normalizing weighted price and duration to 100.'
