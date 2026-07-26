@@ -7,6 +7,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -20,8 +21,29 @@ import (
 func RegisterScheduledSystemTasks() {
 	service.RegisterSystemTaskHandler(channelTestHandler{})
 	service.RegisterSystemTaskHandler(modelUpdateHandler{})
+	service.RegisterSystemTaskHandler(modelRadarSyncHandler{})
 	service.RegisterSystemTaskHandler(midjourneyPollHandler{})
 	service.RegisterSystemTaskHandler(asyncTaskPollHandler{})
+}
+
+type modelRadarSyncHandler struct{}
+
+func (modelRadarSyncHandler) Type() string { return model.SystemTaskTypeModelRadarSync }
+
+func (modelRadarSyncHandler) Enabled() bool { return service.ModelRadarSyncEnabled() }
+
+func (modelRadarSyncHandler) Interval() time.Duration { return service.ModelRadarSyncInterval() }
+
+func (modelRadarSyncHandler) NewPayload() any { return nil }
+
+func (modelRadarSyncHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
+	result, err := service.SyncModelRadar(ctx)
+	if err != nil {
+		logger.LogWarn(ctx, fmt.Sprintf("model radar sync failed: %v", err))
+		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, nil, err)
+		return
+	}
+	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, result, nil)
 }
 
 // channelTestHandler runs the scheduled "test all channels" job. Enablement and

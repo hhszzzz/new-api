@@ -20,13 +20,18 @@ import { getStatus } from '@/lib/api'
 
 export type ModuleAccess = { enabled: boolean; requireAuth: boolean }
 
-export type HeaderNavModule = 'rankings' | 'pricing' | 'modelStatus'
+export type HeaderNavModule =
+  | 'rankings'
+  | 'pricing'
+  | 'modelStatus'
+  | 'modelRadar'
 
 export type HeaderNavModules = {
   home: boolean
   console: boolean
   pricing: ModuleAccess
   modelStatus: ModuleAccess
+  modelRadar: ModuleAccess
   rankings: ModuleAccess
   docs: boolean
   about: boolean
@@ -38,6 +43,7 @@ const DEFAULT_HEADER_NAV_MODULES: HeaderNavModules = {
   console: true,
   pricing: { enabled: true, requireAuth: false },
   modelStatus: { enabled: true, requireAuth: false },
+  modelRadar: { enabled: true, requireAuth: false },
   rankings: { enabled: true, requireAuth: false },
   docs: true,
   about: true,
@@ -46,6 +52,7 @@ const DEFAULT_HEADER_NAV_MODULES: HeaderNavModules = {
 const DEFAULTS: Record<HeaderNavModule, ModuleAccess> = {
   pricing: DEFAULT_HEADER_NAV_MODULES.pricing,
   modelStatus: DEFAULT_HEADER_NAV_MODULES.modelStatus,
+  modelRadar: DEFAULT_HEADER_NAV_MODULES.modelRadar,
   rankings: DEFAULT_HEADER_NAV_MODULES.rankings,
 }
 
@@ -54,6 +61,7 @@ function cloneHeaderNavDefaults(): HeaderNavModules {
     ...DEFAULT_HEADER_NAV_MODULES,
     pricing: { ...DEFAULT_HEADER_NAV_MODULES.pricing },
     modelStatus: { ...DEFAULT_HEADER_NAV_MODULES.modelStatus },
+    modelRadar: { ...DEFAULT_HEADER_NAV_MODULES.modelRadar },
     rankings: { ...DEFAULT_HEADER_NAV_MODULES.rankings },
   }
 }
@@ -115,10 +123,16 @@ export function parseHeaderNavModules(raw: unknown): HeaderNavModules {
 
   result.pricing = parseAccess(parsed.pricing, result.pricing)
   result.modelStatus = parseAccess(parsed.modelStatus, result.pricing)
+  result.modelRadar = parseAccess(parsed.modelRadar, result.modelStatus)
   result.rankings = parseAccess(parsed.rankings, result.rankings)
 
   Object.entries(parsed).forEach(([key, value]) => {
-    if (key === 'pricing' || key === 'modelStatus' || key === 'rankings') {
+    if (
+      key === 'pricing' ||
+      key === 'modelStatus' ||
+      key === 'modelRadar' ||
+      key === 'rankings'
+    ) {
       return
     }
 

@@ -199,6 +199,27 @@ func TestHeaderNavModuleAuthInheritsPricingAndAllowsModelStatusOverrides(t *test
 	}
 }
 
+func TestHeaderNavModuleAuthModelRadarInheritsModelStatusAndAllowsOverrides(t *testing.T) {
+	tests := []struct {
+		name       string
+		config     string
+		wantStatus int
+	}{
+		{name: "defaults to public", config: "", wantStatus: http.StatusOK},
+		{name: "inherits disabled model status", config: `{"modelStatus":{"enabled":false,"requireAuth":false}}`, wantStatus: http.StatusForbidden},
+		{name: "inherits model status login requirement", config: `{"modelStatus":{"enabled":true,"requireAuth":true}}`, wantStatus: http.StatusUnauthorized},
+		{name: "overrides inherited status", config: `{"modelStatus":{"enabled":false,"requireAuth":true},"modelRadar":{"enabled":true,"requireAuth":false}}`, wantStatus: http.StatusOK},
+		{name: "can be disabled independently", config: `{"modelStatus":{"enabled":true,"requireAuth":false},"modelRadar":{"enabled":false,"requireAuth":false}}`, wantStatus: http.StatusForbidden},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			withHeaderNavModules(t, test.config)
+			recorder := performHeaderNavRequest(t, HeaderNavModuleAuth(HeaderNavModuleModelRadar), false)
+			require.Equal(t, test.wantStatus, recorder.Code)
+		})
+	}
+}
+
 func TestHeaderNavModuleAuthRejectsLegacyDisabledModule(t *testing.T) {
 	raw := `{"rankings":false}`
 	withHeaderNavModules(t, raw)

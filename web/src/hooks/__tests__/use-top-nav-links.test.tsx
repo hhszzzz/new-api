@@ -41,6 +41,7 @@ const status = {
     console: false,
     pricing: { enabled: true, requireAuth: false },
     modelStatus: { enabled: true, requireAuth: true },
+    modelRadar: { enabled: true, requireAuth: false },
     rankings: { enabled: true, requireAuth: false },
     docs: false,
     about: false,
@@ -79,6 +80,11 @@ describe('top navigation model status link', () => {
         href: '/model-status',
         requiresAuth: true,
       },
+      {
+        title: 'Model Radar',
+        href: '/model-radar',
+        requiresAuth: true,
+      },
     ])
   })
 
@@ -90,6 +96,7 @@ describe('top navigation model status link', () => {
     expect(result.current.map((link) => link.href)).toEqual([
       '/pricing',
       '/model-status',
+      '/model-radar',
       '/rankings',
     ])
   })
@@ -114,5 +121,17 @@ describe('top navigation model status link', () => {
     expect(
       result.current.find((link) => link.href === '/model-status')
     ).toMatchObject({ requiresAuth: false })
+  })
+
+  test('places model radar after model status and applies its independent access', () => {
+    useStatusMock.mockReturnValue({ status })
+
+    const { result } = renderHook(() => useTopNavLinks())
+
+    expect(result.current.find((link) => link.href === '/model-radar')).toEqual({
+      title: 'Model Radar',
+      href: '/model-radar',
+      requiresAuth: false,
+    })
   })
 })

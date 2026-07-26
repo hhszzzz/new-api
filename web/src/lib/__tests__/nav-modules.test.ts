@@ -109,4 +109,28 @@ describe('runtime header navigation model status configuration', () => {
       requireAuth: false,
     })
   })
+
+  test('model radar inherits model status for legacy configurations and supports overrides', () => {
+    const inherited = parseHeaderNavModules(
+      JSON.stringify({
+        pricing: { enabled: true, requireAuth: false },
+        modelStatus: { enabled: false, requireAuth: true },
+      })
+    )
+    assert.deepEqual(inherited.modelRadar, {
+      enabled: false,
+      requireAuth: true,
+    })
+
+    const overridden = parseHeaderNavModules(
+      JSON.stringify({
+        modelStatus: { enabled: false, requireAuth: true },
+        modelRadar: { enabled: true, requireAuth: false },
+      })
+    )
+    assert.deepEqual(overridden.modelRadar, {
+      enabled: true,
+      requireAuth: false,
+    })
+  })
 })

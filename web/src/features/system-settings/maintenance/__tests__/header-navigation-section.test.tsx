@@ -81,6 +81,44 @@ describe('header navigation settings form', () => {
     })
     expect(saved.pricing).toEqual(HEADER_NAV_DEFAULT.pricing)
 
+    expect(saved.modelRadar).toEqual(HEADER_NAV_DEFAULT.modelRadar)
+
+    actionsContainer.remove()
+  })
+
+  test('saves model radar login access independently', async () => {
+    mutateAsyncMock.mockResolvedValue({ success: true })
+    const user = userEvent.setup()
+    const actionsContainer = document.createElement('div')
+    document.body.appendChild(actionsContainer)
+
+    render(
+      <SettingsPageProvider
+        actionsContainer={actionsContainer}
+        suppressSectionHeader={false}
+      >
+        <HeaderNavigationSection
+          config={HEADER_NAV_DEFAULT}
+          initialSerialized={serializeHeaderNavModules(HEADER_NAV_DEFAULT)}
+        />
+      </SettingsPageProvider>
+    )
+
+    await user.click(
+      screen.getByRole('switch', {
+        name: 'Require login to view model radar',
+      })
+    )
+    await user.click(screen.getByRole('button', { name: 'Save navigation' }))
+
+    await waitFor(() => expect(mutateAsyncMock).toHaveBeenCalled())
+    const request = mutateAsyncMock.mock.calls.at(-1)?.[0] as {
+      value: string
+    }
+    const saved = JSON.parse(request.value) as typeof HEADER_NAV_DEFAULT
+    expect(saved.modelRadar).toEqual({ enabled: true, requireAuth: true })
+    expect(saved.modelStatus).toEqual(HEADER_NAV_DEFAULT.modelStatus)
+
     actionsContainer.remove()
   })
 })

@@ -14,7 +14,10 @@ type headerNavAccess struct {
 	RequireAuth bool
 }
 
-const HeaderNavModuleModelStatus = "modelStatus"
+const (
+	HeaderNavModuleModelStatus = "modelStatus"
+	HeaderNavModuleModelRadar  = "modelRadar"
+)
 
 func getHeaderNavAccess(module string) headerNavAccess {
 	fallback := headerNavAccess{
@@ -39,7 +42,16 @@ func getHeaderNavAccess(module string) headerNavAccess {
 		pricingAccess := parseHeaderNavAccess(parsed["pricing"], fallback)
 		return parseHeaderNavAccess(parsed[module], pricingAccess)
 	}
+	if module == HeaderNavModuleModelRadar {
+		modelStatusAccess := getModelStatusHeaderNavAccess(parsed, fallback)
+		return parseHeaderNavAccess(parsed[module], modelStatusAccess)
+	}
 	return parseHeaderNavAccess(parsed[module], fallback)
+}
+
+func getModelStatusHeaderNavAccess(parsed map[string]any, fallback headerNavAccess) headerNavAccess {
+	pricingAccess := parseHeaderNavAccess(parsed["pricing"], fallback)
+	return parseHeaderNavAccess(parsed[HeaderNavModuleModelStatus], pricingAccess)
 }
 
 func parseHeaderNavAccess(raw any, fallback headerNavAccess) headerNavAccess {

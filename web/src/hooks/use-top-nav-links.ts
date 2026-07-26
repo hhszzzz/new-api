@@ -39,6 +39,7 @@ export type TopNavLink = {
  *   console: true,
  *   pricing: { enabled: true, requireAuth: false },
  *   modelStatus: { enabled: true, requireAuth: false },
+ *   modelRadar: { enabled: true, requireAuth: false },
  *   rankings: { enabled: true, requireAuth: false },
  *   docs: true,
  *   about: true
@@ -87,6 +88,17 @@ export function useTopNavLinks(): TopNavLink[] {
     links.push({
       title: t('Model Status'),
       href: '/model-status',
+      requiresAuth,
+    })
+  }
+
+  // Model radar
+  const modelRadar = modules?.modelRadar
+  if (modelRadar && typeof modelRadar === 'object' && modelRadar.enabled) {
+    const requiresAuth = modelRadar.requireAuth && !isAuthed
+    links.push({
+      title: t('Model Radar'),
+      href: '/model-radar',
       requiresAuth,
     })
   }

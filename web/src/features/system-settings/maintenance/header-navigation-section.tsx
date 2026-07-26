@@ -55,6 +55,8 @@ const headerNavSchema = z.object({
   pricingRequireAuth: z.boolean(),
   modelStatusEnabled: z.boolean(),
   modelStatusRequireAuth: z.boolean(),
+  modelRadarEnabled: z.boolean(),
+  modelRadarRequireAuth: z.boolean(),
   rankingsEnabled: z.boolean(),
   rankingsRequireAuth: z.boolean(),
   docs: z.boolean(),
@@ -91,6 +93,14 @@ const toFormValues = (config: HeaderNavModulesConfig): HeaderNavFormValues => ({
     config.modelStatus?.requireAuth === undefined
       ? HEADER_NAV_DEFAULT.modelStatus.requireAuth
       : Boolean(config.modelStatus.requireAuth),
+  modelRadarEnabled:
+    config.modelRadar?.enabled === undefined
+      ? HEADER_NAV_DEFAULT.modelRadar.enabled
+      : Boolean(config.modelRadar.enabled),
+  modelRadarRequireAuth:
+    config.modelRadar?.requireAuth === undefined
+      ? HEADER_NAV_DEFAULT.modelRadar.requireAuth
+      : Boolean(config.modelRadar.requireAuth),
   rankingsEnabled:
     config.rankings?.enabled === undefined
       ? HEADER_NAV_DEFAULT.rankings.enabled
@@ -140,6 +150,11 @@ export function HeaderNavigationSection({
         ...(config.modelStatus ?? HEADER_NAV_DEFAULT.modelStatus),
         enabled: values.modelStatusEnabled,
         requireAuth: values.modelStatusRequireAuth,
+      },
+      modelRadar: {
+        ...(config.modelRadar ?? HEADER_NAV_DEFAULT.modelRadar),
+        enabled: values.modelRadarEnabled,
+        requireAuth: values.modelRadarRequireAuth,
       },
       rankings: {
         ...(config.rankings ?? HEADER_NAV_DEFAULT.rankings),
@@ -196,6 +211,7 @@ export function HeaderNavigationSection({
     requireAuthDependsOn:
       | 'pricingEnabled'
       | 'modelStatusEnabled'
+      | 'modelRadarEnabled'
       | 'rankingsEnabled'
     title: string
     description: string
@@ -222,6 +238,17 @@ export function HeaderNavigationSection({
       requireAuthTitle: t('Require login to view model status'),
       requireAuthDescription: t(
         'Visitors must authenticate before accessing the model status page.'
+      ),
+    },
+    {
+      enabledKey: 'modelRadarEnabled',
+      requireAuthKey: 'modelRadarRequireAuth',
+      requireAuthDependsOn: 'modelRadarEnabled',
+      title: t('Model Radar'),
+      description: t('Model capability and efficiency data from Codex Radar.'),
+      requireAuthTitle: t('Require login to view model radar'),
+      requireAuthDescription: t(
+        'Visitors must authenticate before accessing the model radar page.'
       ),
     },
     {

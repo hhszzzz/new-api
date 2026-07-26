@@ -26,6 +26,7 @@ export type HeaderNavModulesConfig = {
   console: boolean
   pricing: HeaderNavAccessConfig
   modelStatus: HeaderNavAccessConfig
+  modelRadar: HeaderNavAccessConfig
   rankings: HeaderNavAccessConfig
   docs: boolean
   about: boolean
@@ -47,6 +48,10 @@ export const HEADER_NAV_DEFAULT: HeaderNavModulesConfig = {
     requireAuth: false,
   },
   modelStatus: {
+    enabled: true,
+    requireAuth: false,
+  },
+  modelRadar: {
     enabled: true,
     requireAuth: false,
   },
@@ -107,6 +112,7 @@ const cloneHeaderNavDefault = (): HeaderNavModulesConfig => ({
   ...HEADER_NAV_DEFAULT,
   pricing: { ...HEADER_NAV_DEFAULT.pricing },
   modelStatus: { ...HEADER_NAV_DEFAULT.modelStatus },
+  modelRadar: { ...HEADER_NAV_DEFAULT.modelRadar },
   rankings: { ...HEADER_NAV_DEFAULT.rankings },
 })
 
@@ -156,15 +162,22 @@ export function parseHeaderNavModules(
       ...base,
       pricing: { ...base.pricing },
       modelStatus: { ...base.modelStatus },
+      modelRadar: { ...base.modelRadar },
       rankings: { ...base.rankings },
     }
 
     result.pricing = parseAccessModule(parsed.pricing, result.pricing)
     result.modelStatus = parseAccessModule(parsed.modelStatus, result.pricing)
+    result.modelRadar = parseAccessModule(parsed.modelRadar, result.modelStatus)
     result.rankings = parseAccessModule(parsed.rankings, result.rankings)
 
     Object.entries(parsed).forEach(([key, raw]) => {
-      if (key === 'pricing' || key === 'modelStatus' || key === 'rankings') {
+      if (
+        key === 'pricing' ||
+        key === 'modelStatus' ||
+        key === 'modelRadar' ||
+        key === 'rankings'
+      ) {
         return
       }
 

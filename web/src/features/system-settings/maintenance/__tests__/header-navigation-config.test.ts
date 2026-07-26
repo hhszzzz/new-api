@@ -117,4 +117,25 @@ describe('header navigation model status configuration', () => {
       requireAuth: false,
     })
   })
+
+  test('model radar inherits model status and serializes independent access', () => {
+    const inherited = parseHeaderNavModules(
+      JSON.stringify({
+        modelStatus: { enabled: false, requireAuth: true },
+      })
+    )
+    assert.deepEqual(inherited.modelRadar, {
+      enabled: false,
+      requireAuth: true,
+    })
+
+    const serialized = serializeHeaderNavModules({
+      ...HEADER_NAV_DEFAULT,
+      modelRadar: { enabled: true, requireAuth: true },
+    })
+    assert.deepEqual(JSON.parse(serialized).modelRadar, {
+      enabled: true,
+      requireAuth: true,
+    })
+  })
 })
