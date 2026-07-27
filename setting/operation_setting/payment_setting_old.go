@@ -6,6 +6,10 @@ This file is the old version of the payment settings file. If you need to add ne
 package operation_setting
 
 import (
+	"math"
+	"sync"
+	"sync/atomic"
+
 	"github.com/QuantumNous/new-api/common"
 )
 
@@ -17,7 +21,11 @@ var Price = 7.3
 var MinTopUp = 1
 var USDExchangeRate = 7.3
 
-var PayMethods = []map[string]string{
+var priceBits atomic.Uint64
+var minTopUpValue atomic.Int64
+var usdExchangeRateBits atomic.Uint64
+
+var payMethods = []map[string]string{
 	{
 		"name": "支付宝",
 		"icon": "SiAlipay",
@@ -35,14 +43,54 @@ var PayMethods = []map[string]string{
 		"min_topup": "50",
 	},
 }
+var payMethodsMutex sync.RWMutex
+
+func init() {
+	SetPrice(Price)
+	SetMinTopUp(MinTopUp)
+	SetUSDExchangeRate(USDExchangeRate)
+}
+
+func SetPrice(value float64) {
+	Price = value
+	priceBits.Store(math.Float64bits(value))
+}
+
+func GetPrice() float64 {
+	return math.Float64frombits(priceBits.Load())
+}
+
+func SetMinTopUp(value int) {
+	MinTopUp = value
+	minTopUpValue.Store(int64(value))
+}
+
+func GetMinTopUp() int {
+	return int(minTopUpValue.Load())
+}
+
+func SetUSDExchangeRate(value float64) {
+	USDExchangeRate = value
+	usdExchangeRateBits.Store(math.Float64bits(value))
+}
+
+func GetUSDExchangeRate() float64 {
+	return math.Float64frombits(usdExchangeRateBits.Load())
+}
 
 func UpdatePayMethodsByJsonString(jsonString string) error {
-	PayMethods = make([]map[string]string, 0)
-	return common.Unmarshal([]byte(jsonString), &PayMethods)
+	var parsed []map[string]string
+	if err := common.UnmarshalJsonStr(jsonString, &parsed); err != nil {
+		return err
+	}
+	payMethodsMutex.Lock()
+	payMethods = parsed
+	payMethodsMutex.Unlock()
+	return nil
 }
 
 func PayMethods2JsonString() string {
-	jsonBytes, err := common.Marshal(PayMethods)
+	jsonBytes, err := common.Marshal(GetPayMethods())
 	if err != nil {
 		return "[]"
 	}
@@ -50,10 +98,26 @@ func PayMethods2JsonString() string {
 }
 
 func ContainsPayMethod(method string) bool {
-	for _, payMethod := range PayMethods {
+	payMethodsMutex.RLock()
+	defer payMethodsMutex.RUnlock()
+	for _, payMethod := range payMethods {
 		if payMethod["type"] == method {
 			return true
 		}
 	}
 	return false
+}
+
+func GetPayMethods() []map[string]string {
+	payMethodsMutex.RLock()
+	defer payMethodsMutex.RUnlock()
+
+	result := make([]map[string]string, len(payMethods))
+	for index, method := range payMethods {
+		result[index] = make(map[string]string, len(method))
+		for key, value := range method {
+			result[index][key] = value
+		}
+	}
+	return result
 }

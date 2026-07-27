@@ -4,8 +4,6 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/QuantumNous/new-api/types"
 )
 
 // from songquanpeng/one-api
@@ -321,10 +319,6 @@ var defaultAudioCompletionRatio = map[string]float64{
 	"tts-1-hd-1106":        0,
 }
 
-var modelPriceMap = types.NewRWMap[string, float64]()
-var modelRatioMap = types.NewRWMap[string, float64]()
-var completionRatioMap = types.NewRWMap[string, float64]()
-
 var defaultCompletionRatio = map[string]float64{
 	"gpt-4-gizmo-*":  2,
 	"gpt-4o-gizmo-*": 3,
@@ -334,55 +328,40 @@ var defaultCompletionRatio = map[string]float64{
 
 // InitRatioSettings initializes all model related settings maps
 func InitRatioSettings() {
-	modelPriceMap.AddAll(defaultModelPrice)
-	modelRatioMap.AddAll(defaultModelRatio)
-	completionRatioMap.AddAll(defaultCompletionRatio)
-	cacheRatioMap.AddAll(defaultCacheRatio)
-	createCacheRatioMap.AddAll(defaultCreateCacheRatio)
-	imageRatioMap.AddAll(defaultImageRatio)
-	audioRatioMap.AddAll(defaultAudioRatio)
-	audioCompletionRatioMap.AddAll(defaultAudioCompletionRatio)
+	pricingSnapshotMu.Lock()
+	pricingSnapshot.Store(&PricingSnapshot{
+		modelPrices:          clonePricingMap(defaultModelPrice),
+		modelRatios:          clonePricingMap(defaultModelRatio),
+		completionRatios:     clonePricingMap(defaultCompletionRatio),
+		cacheRatios:          clonePricingMap(defaultCacheRatio),
+		createCacheRatios:    clonePricingMap(defaultCreateCacheRatio),
+		imageRatios:          clonePricingMap(defaultImageRatio),
+		audioRatios:          clonePricingMap(defaultAudioRatio),
+		audioCompletionRatio: clonePricingMap(defaultAudioCompletionRatio),
+	})
+	pricingSnapshotMu.Unlock()
+	InvalidateExposedDataCache()
 }
 
 func GetModelPriceMap() map[string]float64 {
-	return modelPriceMap.ReadAll()
+	return clonePricingMap(GetPricingSnapshot().modelPrices)
 }
 
 func ModelPrice2JSONString() string {
-	return modelPriceMap.MarshalJSONString()
+	return pricingMapJSONString(GetPricingSnapshot().modelPrices)
 }
 
 func UpdateModelPriceByJSONString(jsonStr string) error {
-	return types.LoadFromJsonStringWithCallback(modelPriceMap, jsonStr, InvalidateExposedDataCache)
+	return UpdatePricingOptionsByJSONString(map[string]string{ModelPriceOptionKey: jsonStr})
 }
 
 // GetModelPrice 返回模型的价格，如果模型不存在则返回-1，false
 func GetModelPrice(name string, printErr bool) (float64, bool) {
-	name = FormatMatchingModelName(name)
-
-	if price, ok := modelPriceMap.Get(name); ok {
-		return price, true
-	}
-
-	if strings.HasSuffix(name, CompactModelSuffix) {
-		price, ok := modelPriceMap.Get(CompactWildcardModelKey)
-		if !ok {
-			if printErr {
-				common.SysError("model price not found: " + name)
-			}
-			return -1, false
-		}
-		return price, true
-	}
-
-	if printErr {
-		common.SysError("model price not found: " + name)
-	}
-	return -1, false
+	return GetPricingSnapshot().GetModelPrice(name, printErr)
 }
 
 func UpdateModelRatioByJSONString(jsonStr string) error {
-	return types.LoadFromJsonStringWithCallback(modelRatioMap, jsonStr, InvalidateExposedDataCache)
+	return UpdatePricingOptionsByJSONString(map[string]string{ModelRatioOptionKey: jsonStr})
 }
 
 // 处理带有思考预算的模型名称，方便统一定价
@@ -394,19 +373,7 @@ func handleThinkingBudgetModel(name, prefix, wildcard string) string {
 }
 
 func GetModelRatio(name string) (float64, bool, string) {
-	name = FormatMatchingModelName(name)
-
-	ratio, ok := modelRatioMap.Get(name)
-	if !ok {
-		if strings.HasSuffix(name, CompactModelSuffix) {
-			if wildcardRatio, ok := modelRatioMap.Get(CompactWildcardModelKey); ok {
-				return wildcardRatio, true, name
-			}
-			//return 0, true, name
-		}
-		return 37.5, operation_setting.SelfUseModeEnabled, name
-	}
-	return ratio, true, name
+	return GetPricingSnapshot().GetModelRatio(name)
 }
 
 func DefaultModelRatio2JSONString() string {
@@ -426,29 +393,15 @@ func GetDefaultModelPriceMap() map[string]float64 {
 }
 
 func CompletionRatio2JSONString() string {
-	return completionRatioMap.MarshalJSONString()
+	return pricingMapJSONString(GetPricingSnapshot().completionRatios)
 }
 
 func UpdateCompletionRatioByJSONString(jsonStr string) error {
-	return types.LoadFromJsonStringWithCallback(completionRatioMap, jsonStr, InvalidateExposedDataCache)
+	return UpdatePricingOptionsByJSONString(map[string]string{CompletionRatioOptionKey: jsonStr})
 }
 
 func GetCompletionRatio(name string) float64 {
-	name = FormatMatchingModelName(name)
-
-	if strings.Contains(name, "/") {
-		if ratio, ok := completionRatioMap.Get(name); ok {
-			return ratio
-		}
-	}
-	hardCodedRatio, contain := getHardcodedCompletionModelRatio(name)
-	if contain {
-		return hardCodedRatio
-	}
-	if ratio, ok := completionRatioMap.Get(name); ok {
-		return ratio
-	}
-	return hardCodedRatio
+	return GetPricingSnapshot().GetCompletionRatio(name)
 }
 
 type CompletionRatioInfo struct {
@@ -457,36 +410,7 @@ type CompletionRatioInfo struct {
 }
 
 func GetCompletionRatioInfo(name string) CompletionRatioInfo {
-	name = FormatMatchingModelName(name)
-
-	if strings.Contains(name, "/") {
-		if ratio, ok := completionRatioMap.Get(name); ok {
-			return CompletionRatioInfo{
-				Ratio:  ratio,
-				Locked: false,
-			}
-		}
-	}
-
-	hardCodedRatio, locked := getHardcodedCompletionModelRatio(name)
-	if locked {
-		return CompletionRatioInfo{
-			Ratio:  hardCodedRatio,
-			Locked: true,
-		}
-	}
-
-	if ratio, ok := completionRatioMap.Get(name); ok {
-		return CompletionRatioInfo{
-			Ratio:  ratio,
-			Locked: false,
-		}
-	}
-
-	return CompletionRatioInfo{
-		Ratio:  hardCodedRatio,
-		Locked: false,
-	}
+	return GetPricingSnapshot().GetCompletionRatioInfo(name)
 }
 
 func getHardcodedCompletionModelRatio(name string) (float64, bool) {
@@ -621,98 +545,79 @@ func getHardcodedCompletionModelRatio(name string) (float64, bool) {
 }
 
 func GetAudioRatio(name string) float64 {
-	name = FormatMatchingModelName(name)
-	if ratio, ok := audioRatioMap.Get(name); ok {
-		return ratio
-	}
-	return 1
+	return GetPricingSnapshot().GetAudioRatio(name)
 }
 
 func GetAudioCompletionRatio(name string) float64 {
-	name = FormatMatchingModelName(name)
-	if ratio, ok := audioCompletionRatioMap.Get(name); ok {
-		return ratio
-	}
-	return 1
+	return GetPricingSnapshot().GetAudioCompletionRatio(name)
 }
 
 func ContainsAudioRatio(name string) bool {
-	name = FormatMatchingModelName(name)
-	_, ok := audioRatioMap.Get(name)
-	return ok
+	return GetPricingSnapshot().ContainsAudioRatio(name)
 }
 
 func ContainsAudioCompletionRatio(name string) bool {
-	name = FormatMatchingModelName(name)
-	_, ok := audioCompletionRatioMap.Get(name)
-	return ok
+	return GetPricingSnapshot().ContainsAudioCompletionRatio(name)
 }
 
 func ModelRatio2JSONString() string {
-	return modelRatioMap.MarshalJSONString()
+	return pricingMapJSONString(GetPricingSnapshot().modelRatios)
 }
 
 var defaultImageRatio = map[string]float64{
 	"gpt-image-1": 2,
 }
-var imageRatioMap = types.NewRWMap[string, float64]()
-var audioRatioMap = types.NewRWMap[string, float64]()
-var audioCompletionRatioMap = types.NewRWMap[string, float64]()
 
 func ImageRatio2JSONString() string {
-	return imageRatioMap.MarshalJSONString()
+	return pricingMapJSONString(GetPricingSnapshot().imageRatios)
 }
 
 func UpdateImageRatioByJSONString(jsonStr string) error {
-	return types.LoadFromJsonString(imageRatioMap, jsonStr)
+	return UpdatePricingOptionsByJSONString(map[string]string{ImageRatioOptionKey: jsonStr})
 }
 
 func GetImageRatio(name string) (float64, bool) {
-	ratio, ok := imageRatioMap.Get(name)
-	if !ok {
-		return 1, false // Default to 1 if not found
-	}
-	return ratio, true
+	return GetPricingSnapshot().GetImageRatio(name)
 }
 
 func AudioRatio2JSONString() string {
-	return audioRatioMap.MarshalJSONString()
+	return pricingMapJSONString(GetPricingSnapshot().audioRatios)
 }
 
 func UpdateAudioRatioByJSONString(jsonStr string) error {
-	return types.LoadFromJsonStringWithCallback(audioRatioMap, jsonStr, InvalidateExposedDataCache)
+	return UpdatePricingOptionsByJSONString(map[string]string{AudioRatioOptionKey: jsonStr})
 }
 
 func AudioCompletionRatio2JSONString() string {
-	return audioCompletionRatioMap.MarshalJSONString()
+	return pricingMapJSONString(GetPricingSnapshot().audioCompletionRatio)
 }
 
 func UpdateAudioCompletionRatioByJSONString(jsonStr string) error {
-	return types.LoadFromJsonStringWithCallback(audioCompletionRatioMap, jsonStr, InvalidateExposedDataCache)
+	return UpdatePricingOptionsByJSONString(map[string]string{AudioCompletionRatioOptionKey: jsonStr})
 }
 
 func GetModelRatioCopy() map[string]float64 {
-	return modelRatioMap.ReadAll()
+	return clonePricingMap(GetPricingSnapshot().modelRatios)
 }
 
 func GetModelPriceCopy() map[string]float64 {
-	return modelPriceMap.ReadAll()
+	return clonePricingMap(GetPricingSnapshot().modelPrices)
 }
 
 func GetCompletionRatioCopy() map[string]float64 {
-	return completionRatioMap.ReadAll()
+	return clonePricingMap(GetPricingSnapshot().completionRatios)
 }
 
 func GetImageRatioCopy() map[string]float64 {
-	return imageRatioMap.ReadAll()
+	return clonePricingMap(GetPricingSnapshot().imageRatios)
 }
 
 func GetAudioRatioCopy() map[string]float64 {
-	return audioRatioMap.ReadAll()
+	return clonePricingMap(GetPricingSnapshot().audioRatios)
 }
 
 func GetAudioCompletionRatioCopy() map[string]float64 {
-	return audioCompletionRatioMap.ReadAll()
+	return clonePricingMap(GetPricingSnapshot().audioCompletionRatio)
 }
 
 // 转换模型名，减少渠道必须配置各种带参数模型

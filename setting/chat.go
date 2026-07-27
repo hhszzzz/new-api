@@ -1,12 +1,12 @@
 package setting
 
 import (
-	"encoding/json"
+	"sync"
 
 	"github.com/QuantumNous/new-api/common"
 )
 
-var Chats = []map[string]string{
+var chats = []map[string]string{
 	//{
 	//	"ChatGPT Next Web 官方示例": "https://app.nextchat.dev/#/?settings={\"key\":\"{key}\",\"url\":\"{address}\"}",
 	//},
@@ -38,17 +38,38 @@ var Chats = []map[string]string{
 		"OpenCat": "opencat://team/join?domain={address}&token={key}",
 	},
 }
+var chatsMutex sync.RWMutex
 
 func UpdateChatsByJsonString(jsonString string) error {
-	Chats = make([]map[string]string, 0)
-	return json.Unmarshal([]byte(jsonString), &Chats)
+	var parsed []map[string]string
+	if err := common.UnmarshalJsonStr(jsonString, &parsed); err != nil {
+		return err
+	}
+	chatsMutex.Lock()
+	chats = parsed
+	chatsMutex.Unlock()
+	return nil
 }
 
 func Chats2JsonString() string {
-	jsonBytes, err := json.Marshal(Chats)
+	jsonBytes, err := common.Marshal(GetChats())
 	if err != nil {
 		common.SysLog("error marshalling chats: " + err.Error())
 		return "[]"
 	}
 	return string(jsonBytes)
+}
+
+func GetChats() []map[string]string {
+	chatsMutex.RLock()
+	defer chatsMutex.RUnlock()
+
+	result := make([]map[string]string, len(chats))
+	for index, chat := range chats {
+		result[index] = make(map[string]string, len(chat))
+		for key, value := range chat {
+			result[index][key] = value
+		}
+	}
+	return result
 }

@@ -1,6 +1,10 @@
 package operation_setting
 
-import "github.com/QuantumNous/new-api/setting/config"
+import (
+	"sync/atomic"
+
+	"github.com/QuantumNous/new-api/setting/config"
+)
 
 type PaymentSetting struct {
 	AmountOptions  []int           `json:"amount_options"`
@@ -21,16 +25,46 @@ var paymentSetting = PaymentSetting{
 	AmountDiscount: map[int]float64{},
 }
 
+var paymentSettingSnapshot atomic.Pointer[PaymentSetting]
+
 func init() {
 	// 注册到全局配置管理器
 	config.GlobalConfig.Register("payment_setting", &paymentSetting)
+	paymentSetting.PublishConfig()
 }
 
-func GetPaymentSetting() *PaymentSetting {
-	return &paymentSetting
+func (setting *PaymentSetting) PublishConfig() {
+	snapshot := clonePaymentSetting(*setting)
+	paymentSettingSnapshot.Store(&snapshot)
+}
+
+func clonePaymentSetting(setting PaymentSetting) PaymentSetting {
+	amountDiscount := setting.AmountDiscount
+	setting.AmountOptions = append([]int(nil), setting.AmountOptions...)
+	setting.AmountDiscount = make(map[int]float64, len(amountDiscount))
+	for amount, discount := range amountDiscount {
+		setting.AmountDiscount[amount] = discount
+	}
+	return setting
+}
+
+func getPaymentSettingSnapshot() *PaymentSetting {
+	return paymentSettingSnapshot.Load()
+}
+
+// GetPaymentSetting returns a mutable copy so callers cannot alter the
+// published runtime snapshot.
+func GetPaymentSetting() PaymentSetting {
+	return clonePaymentSetting(*getPaymentSettingSnapshot())
+}
+
+func GetTopUpDiscount(amount int) (float64, bool) {
+	discount, ok := getPaymentSettingSnapshot().AmountDiscount[amount]
+	return discount, ok
 }
 
 func IsPaymentComplianceConfirmed() bool {
-	return paymentSetting.ComplianceConfirmed &&
-		paymentSetting.ComplianceTermsVersion == CurrentComplianceTermsVersion
+	snapshot := getPaymentSettingSnapshot()
+	return snapshot.ComplianceConfirmed &&
+		snapshot.ComplianceTermsVersion == CurrentComplianceTermsVersion
 }

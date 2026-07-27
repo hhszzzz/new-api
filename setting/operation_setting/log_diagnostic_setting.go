@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync/atomic"
 
 	"github.com/QuantumNous/new-api/setting/config"
 )
@@ -23,15 +24,48 @@ var logDiagnosticSetting = LogDiagnosticSetting{
 	ExtraHeaders:  []string{},
 }
 
+var logDiagnosticSettingSnapshot atomic.Pointer[LogDiagnosticSetting]
+
 func init() {
 	config.GlobalConfig.Register("log_diagnostic_setting", &logDiagnosticSetting)
+	publishLogDiagnosticSettingSnapshot()
 }
 
+// GetLogDiagnosticSetting returns the mutable ConfigManager target. Request
+// paths must use GetLogDiagnosticSettingSnapshot so hot updates cannot race
+// with readers.
 func GetLogDiagnosticSetting() *LogDiagnosticSetting {
-	if logDiagnosticSetting.ExtraHeaders == nil {
-		logDiagnosticSetting.ExtraHeaders = []string{}
-	}
 	return &logDiagnosticSetting
+}
+
+// GetLogDiagnosticSettingSnapshot returns an immutable runtime snapshot.
+func GetLogDiagnosticSettingSnapshot() *LogDiagnosticSetting {
+	return logDiagnosticSettingSnapshot.Load()
+}
+
+func NormalizeLogDiagnosticSetting() {
+	logDiagnosticSetting.PublishConfig()
+}
+
+func (setting *LogDiagnosticSetting) ValidateConfig() error {
+	return ValidateLogDiagnosticHeaders(setting.ExtraHeaders)
+}
+
+func (setting *LogDiagnosticSetting) PublishConfig() {
+	setting.ExtraHeaders = NormalizeLogDiagnosticHeaders(setting.ExtraHeaders)
+	publishLogDiagnosticSettingSnapshot()
+}
+
+func publishLogDiagnosticSettingSnapshot() {
+	extraHeaders := append([]string(nil), logDiagnosticSetting.ExtraHeaders...)
+	if extraHeaders == nil {
+		extraHeaders = []string{}
+	}
+	logDiagnosticSettingSnapshot.Store(&LogDiagnosticSetting{
+		RecordIP:      logDiagnosticSetting.RecordIP,
+		RecordHeaders: logDiagnosticSetting.RecordHeaders,
+		ExtraHeaders:  extraHeaders,
+	})
 }
 
 // NormalizeLogDiagnosticHeaders applies the server-side bounds used by both
@@ -85,7 +119,7 @@ func IsDiagnosticHeaderAllowed(name string) bool {
 }
 
 func isValidHeaderName(value string) bool {
-	if len(value) > 128 {
+	if value == "" || len(value) > 128 {
 		return false
 	}
 	for _, char := range value {

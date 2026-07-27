@@ -1,7 +1,6 @@
 package setting
 
 import (
-	"encoding/json"
 	"fmt"
 	"math"
 	"sync"
@@ -13,14 +12,14 @@ var ModelRequestRateLimitEnabled = false
 var ModelRequestRateLimitDurationMinutes = 1
 var ModelRequestRateLimitCount = 0
 var ModelRequestRateLimitSuccessCount = 1000
-var ModelRequestRateLimitGroup = map[string][2]int{}
+var modelRequestRateLimitGroup = map[string][2]int{}
 var ModelRequestRateLimitMutex sync.RWMutex
 
 func ModelRequestRateLimitGroup2JSONString() string {
 	ModelRequestRateLimitMutex.RLock()
 	defer ModelRequestRateLimitMutex.RUnlock()
 
-	jsonBytes, err := json.Marshal(ModelRequestRateLimitGroup)
+	jsonBytes, err := common.Marshal(modelRequestRateLimitGroup)
 	if err != nil {
 		common.SysLog("error marshalling model ratio: " + err.Error())
 	}
@@ -28,22 +27,25 @@ func ModelRequestRateLimitGroup2JSONString() string {
 }
 
 func UpdateModelRequestRateLimitGroupByJSONString(jsonStr string) error {
-	ModelRequestRateLimitMutex.RLock()
-	defer ModelRequestRateLimitMutex.RUnlock()
-
-	ModelRequestRateLimitGroup = make(map[string][2]int)
-	return json.Unmarshal([]byte(jsonStr), &ModelRequestRateLimitGroup)
+	parsed, err := ParseModelRequestRateLimitGroup(jsonStr)
+	if err != nil {
+		return err
+	}
+	ModelRequestRateLimitMutex.Lock()
+	modelRequestRateLimitGroup = parsed
+	ModelRequestRateLimitMutex.Unlock()
+	return nil
 }
 
 func GetGroupRateLimit(group string) (totalCount, successCount int, found bool) {
 	ModelRequestRateLimitMutex.RLock()
 	defer ModelRequestRateLimitMutex.RUnlock()
 
-	if ModelRequestRateLimitGroup == nil {
+	if modelRequestRateLimitGroup == nil {
 		return 0, 0, false
 	}
 
-	limits, found := ModelRequestRateLimitGroup[group]
+	limits, found := modelRequestRateLimitGroup[group]
 	if !found {
 		return 0, 0, false
 	}
@@ -51,19 +53,22 @@ func GetGroupRateLimit(group string) (totalCount, successCount int, found bool) 
 }
 
 func CheckModelRequestRateLimitGroup(jsonStr string) error {
-	checkModelRequestRateLimitGroup := make(map[string][2]int)
-	err := json.Unmarshal([]byte(jsonStr), &checkModelRequestRateLimitGroup)
-	if err != nil {
-		return err
+	_, err := ParseModelRequestRateLimitGroup(jsonStr)
+	return err
+}
+
+func ParseModelRequestRateLimitGroup(jsonStr string) (map[string][2]int, error) {
+	parsed := make(map[string][2]int)
+	if err := common.UnmarshalJsonStr(jsonStr, &parsed); err != nil {
+		return nil, err
 	}
-	for group, limits := range checkModelRequestRateLimitGroup {
+	for group, limits := range parsed {
 		if limits[0] < 0 || limits[1] < 1 {
-			return fmt.Errorf("group %s has negative rate limit values: [%d, %d]", group, limits[0], limits[1])
+			return nil, fmt.Errorf("group %s has invalid rate limit values: [%d, %d]", group, limits[0], limits[1])
 		}
 		if limits[0] > math.MaxInt32 || limits[1] > math.MaxInt32 {
-			return fmt.Errorf("group %s [%d, %d] has max rate limits value 2147483647", group, limits[0], limits[1])
+			return nil, fmt.Errorf("group %s [%d, %d] has max rate limits value 2147483647", group, limits[0], limits[1])
 		}
 	}
-
-	return nil
+	return parsed, nil
 }

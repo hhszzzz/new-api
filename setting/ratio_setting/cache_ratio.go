@@ -1,9 +1,5 @@
 package ratio_setting
 
-import (
-	"github.com/QuantumNous/new-api/types"
-)
-
 var defaultCacheRatio = map[string]float64{
 	"gemini-3-flash-preview":              0.1,
 	"gemini-3-pro-preview":                0.1,
@@ -127,55 +123,44 @@ var defaultCreateCacheRatio = map[string]float64{
 
 //var defaultCreateCacheRatio = map[string]float64{}
 
-var cacheRatioMap = types.NewRWMap[string, float64]()
-var createCacheRatioMap = types.NewRWMap[string, float64]()
-
 // GetCacheRatioMap returns a copy of the cache ratio map
 func GetCacheRatioMap() map[string]float64 {
-	return cacheRatioMap.ReadAll()
+	return clonePricingMap(GetPricingSnapshot().cacheRatios)
 }
 
 // CacheRatio2JSONString converts the cache ratio map to a JSON string
 func CacheRatio2JSONString() string {
-	return cacheRatioMap.MarshalJSONString()
+	return pricingMapJSONString(GetPricingSnapshot().cacheRatios)
 }
 
 // CreateCacheRatio2JSONString converts the create cache ratio map to a JSON string
 func CreateCacheRatio2JSONString() string {
-	return createCacheRatioMap.MarshalJSONString()
+	return pricingMapJSONString(GetPricingSnapshot().createCacheRatios)
 }
 
 // UpdateCacheRatioByJSONString updates the cache ratio map from a JSON string
 func UpdateCacheRatioByJSONString(jsonStr string) error {
-	return types.LoadFromJsonStringWithCallback(cacheRatioMap, jsonStr, InvalidateExposedDataCache)
+	return UpdatePricingOptionsByJSONString(map[string]string{CacheRatioOptionKey: jsonStr})
 }
 
 // UpdateCreateCacheRatioByJSONString updates the create cache ratio map from a JSON string
 func UpdateCreateCacheRatioByJSONString(jsonStr string) error {
-	return types.LoadFromJsonStringWithCallback(createCacheRatioMap, jsonStr, InvalidateExposedDataCache)
+	return UpdatePricingOptionsByJSONString(map[string]string{CreateCacheRatioOptionKey: jsonStr})
 }
 
 // GetCacheRatio returns the cache ratio for a model
 func GetCacheRatio(name string) (float64, bool) {
-	ratio, ok := cacheRatioMap.Get(name)
-	if !ok {
-		return 1, false // Default to 1 if not found
-	}
-	return ratio, true
+	return GetPricingSnapshot().GetCacheRatio(name)
 }
 
 func GetCreateCacheRatio(name string) (float64, bool) {
-	ratio, ok := createCacheRatioMap.Get(name)
-	if !ok {
-		return 1.25, false // Default to 1.25 if not found
-	}
-	return ratio, true
+	return GetPricingSnapshot().GetCreateCacheRatio(name)
 }
 
 func GetCacheRatioCopy() map[string]float64 {
-	return cacheRatioMap.ReadAll()
+	return clonePricingMap(GetPricingSnapshot().cacheRatios)
 }
 
 func GetCreateCacheRatioCopy() map[string]float64 {
-	return createCacheRatioMap.ReadAll()
+	return clonePricingMap(GetPricingSnapshot().createCacheRatios)
 }

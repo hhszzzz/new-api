@@ -2,6 +2,8 @@ package billing_setting
 
 import (
 	"fmt"
+	"strings"
+	"sync/atomic"
 
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	"github.com/QuantumNous/new-api/setting/config"
@@ -26,9 +28,11 @@ var billingSetting = BillingSetting{
 	BillingMode: make(map[string]string),
 	BillingExpr: make(map[string]string),
 }
+var billingSettingSnapshot atomic.Pointer[BillingSetting]
 
 func init() {
 	config.GlobalConfig.Register("billing_setting", &billingSetting)
+	billingSetting.PublishConfig()
 }
 
 // ---------------------------------------------------------------------------
@@ -36,23 +40,53 @@ func init() {
 // ---------------------------------------------------------------------------
 
 func GetBillingMode(model string) string {
-	if mode, ok := billingSetting.BillingMode[model]; ok {
+	if mode, ok := billingSettingSnapshot.Load().BillingMode[model]; ok {
 		return mode
 	}
 	return BillingModeRatio
 }
 
 func GetBillingExpr(model string) (string, bool) {
-	expr, ok := billingSetting.BillingExpr[model]
+	expr, ok := billingSettingSnapshot.Load().BillingExpr[model]
 	return expr, ok
 }
 
 func GetBillingModeCopy() map[string]string {
-	return lo.Assign(billingSetting.BillingMode)
+	return lo.Assign(billingSettingSnapshot.Load().BillingMode)
 }
 
 func GetBillingExprCopy() map[string]string {
-	return lo.Assign(billingSetting.BillingExpr)
+	return lo.Assign(billingSettingSnapshot.Load().BillingExpr)
+}
+
+func (setting *BillingSetting) ValidateConfig() error {
+	for model, mode := range setting.BillingMode {
+		if strings.TrimSpace(model) == "" {
+			return fmt.Errorf("billing mode contains an empty model name")
+		}
+		if mode != BillingModeRatio && mode != BillingModeTieredExpr {
+			return fmt.Errorf("invalid billing mode for %s", model)
+		}
+	}
+	for model, expression := range setting.BillingExpr {
+		if strings.TrimSpace(model) == "" {
+			return fmt.Errorf("billing expression contains an empty model name")
+		}
+		if strings.TrimSpace(expression) == "" {
+			continue
+		}
+		if err := smokeTestExpr(expression); err != nil {
+			return fmt.Errorf("invalid billing expression for %s: %w", model, err)
+		}
+	}
+	return nil
+}
+
+func (setting *BillingSetting) PublishConfig() {
+	billingSettingSnapshot.Store(&BillingSetting{
+		BillingMode: lo.Assign(setting.BillingMode),
+		BillingExpr: lo.Assign(setting.BillingExpr),
+	})
 }
 
 func GetPricingSyncData(base map[string]any) map[string]any {

@@ -74,6 +74,10 @@ func UpdateAndSync() {
 	syncToCommon()
 }
 
+func (setting *PerformanceSetting) PublishConfig() {
+	syncToCommon()
+}
+
 // GetCacheStats 获取缓存统计信息（代理到 common 包）
 func GetCacheStats() common.DiskCacheStats {
 	return common.GetDiskCacheStats()

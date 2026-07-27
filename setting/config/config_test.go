@@ -2,6 +2,9 @@ package config
 
 import (
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type testConfigWithMap struct {
@@ -93,4 +96,78 @@ func TestUpdateConfigFromMap_ScalarFieldsUnchanged(t *testing.T) {
 	if cfg.Modes["m"] != "v" {
 		t.Errorf("Modes should be unchanged, got %v", cfg.Modes)
 	}
+}
+
+func TestUpdateConfigFromMapRejectsPartialUpdate(t *testing.T) {
+	type atomicConfig struct {
+		Name  string `json:"name"`
+		Limit int8   `json:"limit"`
+	}
+
+	cfg := &atomicConfig{Name: "before", Limit: 7}
+	err := UpdateConfigFromMap(cfg, map[string]string{
+		"name":  "after",
+		"limit": "128",
+	})
+
+	require.Error(t, err)
+	assert.Equal(t, &atomicConfig{Name: "before", Limit: 7}, cfg)
+}
+
+func TestUpdateConfigFromMapUsesJSONTagNameWithoutOptions(t *testing.T) {
+	type taggedConfig struct {
+		ChannelIDs []int `json:"channel_ids,omitempty"`
+	}
+
+	cfg := &taggedConfig{ChannelIDs: []int{1}}
+	require.NoError(t, UpdateConfigFromMap(cfg, map[string]string{
+		"channel_ids": `[2,3]`,
+	}))
+	assert.Equal(t, []int{2, 3}, cfg.ChannelIDs)
+
+	values, err := ConfigToMap(cfg)
+	require.NoError(t, err)
+	assert.JSONEq(t, `[2,3]`, values["channel_ids"])
+	assert.NotContains(t, values, "channel_ids,omitempty")
+}
+
+func TestConfigManagerPersistedLoadIgnoresUnknownFields(t *testing.T) {
+	type rollingConfig struct {
+		Name string `json:"name"`
+	}
+
+	manager := NewConfigManager()
+	cfg := &rollingConfig{Name: "before"}
+	manager.Register("rolling", cfg)
+
+	require.NoError(t, manager.LoadFromDB(map[string]string{
+		"rolling.name":             "after",
+		"rolling.newer_node_field": "future-value",
+	}))
+	assert.Equal(t, "after", cfg.Name)
+
+	handled, err := manager.UpdateFromDB("rolling", map[string]string{
+		"newer_node_field": "future-value",
+	})
+	require.True(t, handled)
+	require.NoError(t, err)
+	assert.Equal(t, "after", cfg.Name)
+}
+
+func TestConfigManagerOnlineUpdateRejectsUnknownFields(t *testing.T) {
+	type strictConfig struct {
+		Name string `json:"name"`
+	}
+
+	manager := NewConfigManager()
+	cfg := &strictConfig{Name: "before"}
+	manager.Register("strict", cfg)
+
+	handled, err := manager.Update("strict", map[string]string{
+		"name": "after",
+		"typo": "value",
+	})
+	require.True(t, handled)
+	require.ErrorContains(t, err, "unknown config field typo")
+	assert.Equal(t, "before", cfg.Name)
 }

@@ -1,15 +1,17 @@
 package model
 
 import (
+	"fmt"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/QuantumNous/new-api/setting/performance_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 	"gorm.io/gorm"
@@ -19,6 +21,8 @@ type Option struct {
 	Key   string `json:"key" gorm:"primaryKey"`
 	Value string `json:"value"`
 }
+
+var optionUpdateMu sync.Mutex
 
 func AllOption() ([]*Option, error) {
 	var options []*Option
@@ -80,9 +84,9 @@ func InitOptionMap() {
 	common.OptionMap["CustomCallbackAddress"] = ""
 	common.OptionMap["EpayId"] = ""
 	common.OptionMap["EpayKey"] = ""
-	common.OptionMap["Price"] = strconv.FormatFloat(operation_setting.Price, 'f', -1, 64)
-	common.OptionMap["USDExchangeRate"] = strconv.FormatFloat(operation_setting.USDExchangeRate, 'f', -1, 64)
-	common.OptionMap["MinTopUp"] = strconv.Itoa(operation_setting.MinTopUp)
+	common.OptionMap["Price"] = strconv.FormatFloat(operation_setting.GetPrice(), 'f', -1, 64)
+	common.OptionMap["USDExchangeRate"] = strconv.FormatFloat(operation_setting.GetUSDExchangeRate(), 'f', -1, 64)
+	common.OptionMap["MinTopUp"] = strconv.Itoa(operation_setting.GetMinTopUp())
 	common.OptionMap["StripeMinTopUp"] = strconv.Itoa(setting.StripeMinTopUp)
 	common.OptionMap["StripeApiSecret"] = setting.StripeApiSecret
 	common.OptionMap["StripeWebhookSecret"] = setting.StripeWebhookSecret
@@ -153,7 +157,7 @@ func InitOptionMap() {
 	common.OptionMap["TopUpLink"] = common.TopUpLink
 	//common.OptionMap["ChatLink"] = common.ChatLink
 	//common.OptionMap["ChatLink2"] = common.ChatLink2
-	common.OptionMap["QuotaPerUnit"] = strconv.FormatFloat(common.QuotaPerUnit, 'f', -1, 64)
+	common.OptionMap["QuotaPerUnit"] = strconv.FormatFloat(common.GetQuotaPerUnit(), 'f', -1, 64)
 	common.OptionMap["RetryTimes"] = strconv.Itoa(common.RetryTimes)
 	common.OptionMap["DataExportInterval"] = strconv.Itoa(common.DataExportInterval)
 	common.OptionMap["DataExportDefaultTime"] = common.DataExportDefaultTime
@@ -187,12 +191,87 @@ func InitOptionMap() {
 }
 
 func loadOptionsFromDatabase() {
-	options, _ := AllOption()
+	optionUpdateMu.Lock()
+	defer optionUpdateMu.Unlock()
+
+	options, err := AllOption()
+	if err != nil {
+		common.SysLog("failed to load options from database: " + err.Error())
+		return
+	}
+	publishPersistedOptions(options)
+}
+
+// publishPersistedOptions groups modular settings before validation so a
+// valid multi-field config never depends on database row order.
+func publishPersistedOptions(options []*Option) {
+	values := make(map[string]string, len(options))
+	pricingValues := make(map[string]string)
 	for _, option := range options {
-		err := updateOptionMap(option.Key, option.Value)
+		values[option.Key] = option.Value
+		if ratio_setting.IsPricingOptionKey(option.Key) {
+			pricingValues[option.Key] = option.Value
+		}
+	}
+
+	configValues := make(map[string]map[string]string)
+	for key, value := range values {
+		if ratio_setting.IsPricingOptionKey(key) {
+			continue
+		}
+		parts := strings.SplitN(key, ".", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		if configValues[parts[0]] == nil {
+			configValues[parts[0]] = make(map[string]string)
+		}
+		configValues[parts[0]][parts[1]] = value
+	}
+
+	handledConfigNames := make(map[string]struct{})
+	configNames := make([]string, 0, len(configValues))
+	for configName := range configValues {
+		configNames = append(configNames, configName)
+	}
+	sort.Strings(configNames)
+	for _, configName := range configNames {
+		handled, err := config.GlobalConfig.UpdateFromDB(configName, configValues[configName])
+		if !handled {
+			continue
+		}
+		handledConfigNames[configName] = struct{}{}
 		if err != nil {
+			common.SysLog("failed to update config " + configName + ": " + err.Error())
+			continue
+		}
+		common.OptionMapRWMutex.Lock()
+		if common.OptionMap == nil {
+			common.OptionMap = make(map[string]string)
+		}
+		for field, value := range configValues[configName] {
+			common.OptionMap[configName+"."+field] = value
+		}
+		common.OptionMapRWMutex.Unlock()
+		afterConfigUpdate(configName)
+	}
+
+	for _, key := range sortedOptionKeys(values) {
+		if ratio_setting.IsPricingOptionKey(key) {
+			continue
+		}
+		parts := strings.SplitN(key, ".", 2)
+		if len(parts) == 2 {
+			if _, handled := handledConfigNames[parts[0]]; handled {
+				continue
+			}
+		}
+		if err := updateOptionMapFromDB(key, values[key]); err != nil {
 			common.SysLog("failed to update option map: " + err.Error())
 		}
+	}
+	if err := publishPricingOptions(pricingValues); err != nil {
+		common.SysLog("failed to update pricing option maps: " + err.Error())
 	}
 }
 
@@ -205,55 +284,202 @@ func SyncOptions(frequency int) {
 }
 
 func UpdateOption(key string, value string) error {
-	// Save to database first
-	option := Option{
-		Key: key,
-	}
-	// https://gorm.io/docs/update.html#Save-All-Fields
-	DB.FirstOrCreate(&option, Option{Key: key})
-	option.Value = value
-	// Save is a combination function.
-	// If save value does not contain primary key, it will execute Create,
-	// otherwise it will execute Update (with all fields).
-	DB.Save(&option)
-	// Update OptionMap
-	return updateOptionMap(key, value)
+	return UpdateOptionsBulk(map[string]string{key: value})
 }
 
-// UpdateOptionsBulk persists multiple key/value pairs in a single database
-// transaction, then dispatches them through updateOptionMap in one pass. If
-// any DB write fails the whole transaction rolls back and no in-memory state
-// is touched — safe for callers that must commit a set of related options
-// atomically (e.g. payment gateway binding).
+// UpdateOptionsBulk persists all database values in one transaction. Pricing
+// options are additionally published as one immutable runtime snapshot.
 func UpdateOptionsBulk(values map[string]string) error {
 	if len(values) == 0 {
 		return nil
 	}
-	err := DB.Transaction(func(tx *gorm.DB) error {
-		for k, v := range values {
-			option := Option{Key: k}
-			if err := tx.FirstOrCreate(&option, Option{Key: k}).Error; err != nil {
-				return err
-			}
-			option.Value = v
-			if err := tx.Save(&option).Error; err != nil {
-				return err
+
+	optionUpdateMu.Lock()
+	defer optionUpdateMu.Unlock()
+
+	pricingValues := pricingOptionsFrom(values)
+	if err := ratio_setting.ValidatePricingOptionsByJSONString(pricingValues); err != nil {
+		return err
+	}
+	configValues := make(map[string]map[string]string)
+	for key, value := range values {
+		parts := strings.SplitN(key, ".", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		if configValues[parts[0]] == nil {
+			configValues[parts[0]] = make(map[string]string)
+		}
+		configValues[parts[0]][parts[1]] = value
+	}
+	handledConfigNames := make(map[string]struct{})
+	for configName, fields := range configValues {
+		handled, err := config.GlobalConfig.ValidateUpdate(configName, fields)
+		if err != nil {
+			return err
+		}
+		if handled {
+			handledConfigNames[configName] = struct{}{}
+		}
+	}
+	for _, key := range sortedOptionKeys(values) {
+		if ratio_setting.IsPricingOptionKey(key) {
+			continue
+		}
+		parts := strings.SplitN(key, ".", 2)
+		if len(parts) == 2 {
+			if _, handled := handledConfigNames[parts[0]]; handled {
+				continue
 			}
 		}
-		return nil
+		if err := validateLegacyOptionUpdate(key, values[key]); err != nil {
+			return err
+		}
+	}
+
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		return persistOptionsWithTx(tx, values)
 	})
 	if err != nil {
 		return err
 	}
-	for k, v := range values {
-		if err := updateOptionMap(k, v); err != nil {
+	configNames := make([]string, 0, len(handledConfigNames))
+	for configName := range handledConfigNames {
+		configNames = append(configNames, configName)
+	}
+	sort.Strings(configNames)
+	for _, configName := range configNames {
+		handled, err := config.GlobalConfig.Update(configName, configValues[configName])
+		if err != nil {
+			return err
+		}
+		if !handled {
+			return fmt.Errorf("config %s was unregistered during update", configName)
+		}
+		afterConfigUpdate(configName)
+	}
+	for _, key := range sortedOptionKeys(values) {
+		if ratio_setting.IsPricingOptionKey(key) {
+			continue
+		}
+		parts := strings.SplitN(key, ".", 2)
+		if len(parts) == 2 {
+			if _, handled := handledConfigNames[parts[0]]; handled {
+				common.OptionMapRWMutex.Lock()
+				common.OptionMap[key] = values[key]
+				common.OptionMapRWMutex.Unlock()
+				continue
+			}
+		}
+		if err := updateOptionMap(key, values[key]); err != nil {
+			return err
+		}
+	}
+	return publishPricingOptions(pricingValues)
+}
+
+func UpdateClientPolicySetting(setting operation_setting.ClientPolicySetting) error {
+	prepared, err := operation_setting.PrepareClientPolicySetting(setting)
+	if err != nil {
+		return err
+	}
+	rulesJSON, err := common.Marshal(prepared.Rules)
+	if err != nil {
+		return err
+	}
+	policiesJSON, err := common.Marshal(prepared.GroupPolicies)
+	if err != nil {
+		return err
+	}
+	values := map[string]string{
+		operation_setting.ClientPolicyRulesOptionKey:  string(rulesJSON),
+		operation_setting.ClientPolicyGroupsOptionKey: string(policiesJSON),
+	}
+
+	optionUpdateMu.Lock()
+	defer optionUpdateMu.Unlock()
+
+	if err := DB.Transaction(func(tx *gorm.DB) error {
+		return persistOptionsWithTx(tx, values)
+	}); err != nil {
+		return err
+	}
+
+	if err := operation_setting.PublishClientPolicySetting(prepared); err != nil {
+		return err
+	}
+	common.OptionMapRWMutex.Lock()
+	if common.OptionMap == nil {
+		common.OptionMap = make(map[string]string)
+	}
+	for key, value := range values {
+		common.OptionMap[key] = value
+	}
+	common.OptionMapRWMutex.Unlock()
+	return nil
+}
+
+func sortedOptionKeys(values map[string]string) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func pricingOptionsFrom(values map[string]string) map[string]string {
+	pricingValues := make(map[string]string)
+	for key, value := range values {
+		if ratio_setting.IsPricingOptionKey(key) {
+			pricingValues[key] = value
+		}
+	}
+	return pricingValues
+}
+
+func persistOptionsWithTx(tx *gorm.DB, values map[string]string) error {
+	for _, key := range sortedOptionKeys(values) {
+		option := Option{Key: key}
+		if err := tx.FirstOrCreate(&option, Option{Key: key}).Error; err != nil {
+			return err
+		}
+		option.Value = values[key]
+		if err := tx.Save(&option).Error; err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
+func publishPricingOptions(values map[string]string) error {
+	if len(values) == 0 {
+		return nil
+	}
+	if err := ratio_setting.UpdatePricingOptionsByJSONString(values); err != nil {
+		return err
+	}
+	common.OptionMapRWMutex.Lock()
+	if common.OptionMap == nil {
+		common.OptionMap = make(map[string]string)
+	}
+	for key, value := range values {
+		common.OptionMap[key] = value
+	}
+	common.OptionMapRWMutex.Unlock()
+	InvalidatePricingCache()
+	return nil
+}
+
 func updateOptionMap(key string, value string) (err error) {
+	return updateOptionMapWithSource(key, value, false)
+}
+
+func updateOptionMapFromDB(key string, value string) error {
+	return updateOptionMapWithSource(key, value, true)
+}
+
+func updateOptionMapWithSource(key string, value string, fromDB bool) (err error) {
 	if key == retiredThemeOptionKey {
 		common.OptionMapRWMutex.Lock()
 		delete(common.OptionMap, key)
@@ -261,18 +487,17 @@ func updateOptionMap(key string, value string) (err error) {
 		return nil
 	}
 	pricingOptionUpdated := false
-	common.OptionMapRWMutex.Lock()
-	defer func() {
-		common.OptionMapRWMutex.Unlock()
-		if err == nil && pricingOptionUpdated {
-			InvalidatePricingCache()
-		}
-	}()
-	common.OptionMap[key] = value
 
 	// 检查是否是模型配置 - 使用更规范的方式处理
-	if handleConfigUpdate(key, value) {
-		return nil // 已由配置系统处理
+	handled, err := handleConfigUpdate(key, value, fromDB)
+	if err != nil {
+		return err
+	}
+	if handled {
+		common.OptionMapRWMutex.Lock()
+		common.OptionMap[key] = value
+		common.OptionMapRWMutex.Unlock()
+		return nil
 	}
 
 	// 处理传统配置项...
@@ -327,9 +552,7 @@ func updateOptionMap(key string, value string) (err error) {
 			if !boolValue {
 				newVal = "TOKENS"
 			}
-			if cfg := config.GlobalConfig.Get("general_setting"); cfg != nil {
-				_ = config.UpdateConfigFromMap(cfg, map[string]string{"quota_display_type": newVal})
-			}
+			_, _ = config.GlobalConfig.Update("general_setting", map[string]string{"quota_display_type": newVal})
 		case "DisplayTokenStatEnabled":
 			common.DisplayTokenStatEnabled = boolValue
 		case "DrawingEnabled":
@@ -411,11 +634,14 @@ func updateOptionMap(key string, value string) (err error) {
 	case "EpayKey":
 		operation_setting.EpayKey = value
 	case "Price":
-		operation_setting.Price, _ = strconv.ParseFloat(value, 64)
+		parsed, _ := strconv.ParseFloat(value, 64)
+		operation_setting.SetPrice(parsed)
 	case "USDExchangeRate":
-		operation_setting.USDExchangeRate, _ = strconv.ParseFloat(value, 64)
+		parsed, _ := strconv.ParseFloat(value, 64)
+		operation_setting.SetUSDExchangeRate(parsed)
 	case "MinTopUp":
-		operation_setting.MinTopUp, _ = strconv.Atoi(value)
+		parsed, _ := strconv.Atoi(value)
+		operation_setting.SetMinTopUp(parsed)
 	case "StripeApiSecret":
 		setting.StripeApiSecret = value
 	case "StripeWebhookSecret":
@@ -575,7 +801,12 @@ func updateOptionMap(key string, value string) (err error) {
 	case "ChannelDisableThreshold":
 		common.ChannelDisableThreshold, _ = strconv.ParseFloat(value, 64)
 	case "QuotaPerUnit":
-		common.QuotaPerUnit, _ = strconv.ParseFloat(value, 64)
+		var quotaPerUnit float64
+		quotaPerUnit, err = strconv.ParseFloat(value, 64)
+		if err == nil {
+			err = common.SetQuotaPerUnit(quotaPerUnit)
+		}
+		pricingOptionUpdated = err == nil
 	case "SensitiveWords":
 		setting.SensitiveWordsFromString(value)
 	case "AutomaticDisableKeywords":
@@ -590,48 +821,85 @@ func updateOptionMap(key string, value string) (err error) {
 		err = operation_setting.UpdatePayMethodsByJsonString(value)
 	case "WaffoPayMethods":
 		// WaffoPayMethods is read directly from OptionMap via setting.GetWaffoPayMethods().
-		// The value is already stored in OptionMap at the top of this function (line: common.OptionMap[key] = value).
-		// No additional in-memory variable to update.
+		// No additional in-memory variable needs to be updated.
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	common.OptionMapRWMutex.Lock()
+	common.OptionMap[key] = value
+	common.OptionMapRWMutex.Unlock()
+	if pricingOptionUpdated {
+		InvalidatePricingCache()
+	}
+	return nil
+}
+
+func validateLegacyOptionUpdate(key, value string) error {
+	switch key {
+	case "Chats":
+		var candidate []map[string]string
+		return common.UnmarshalJsonStr(value, &candidate)
+	case "AutoGroups":
+		var candidate []string
+		return common.UnmarshalJsonStr(value, &candidate)
+	case "TopupGroupRatio":
+		var candidate map[string]float64
+		return common.UnmarshalJsonStr(value, &candidate)
+	case "ModelRequestRateLimitGroup":
+		return setting.CheckModelRequestRateLimitGroup(value)
+	case "GroupRatio":
+		return ratio_setting.CheckGroupRatio(value)
+	case "GroupGroupRatio":
+		var candidate map[string]map[string]float64
+		return common.UnmarshalJsonStr(value, &candidate)
+	case "UserUsableGroups":
+		var candidate map[string]string
+		return common.UnmarshalJsonStr(value, &candidate)
+	case "AutomaticDisableStatusCodes", "AutomaticRetryStatusCodes":
+		_, err := operation_setting.ParseHTTPStatusCodeRanges(value)
+		return err
+	case "QuotaPerUnit":
+		quotaPerUnit, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			return fmt.Errorf("invalid quota per unit: %w", err)
+		}
+		return common.ValidateQuotaPerUnit(quotaPerUnit)
+	case "PayMethods":
+		var candidate []map[string]string
+		return common.UnmarshalJsonStr(value, &candidate)
+	default:
+		return nil
+	}
 }
 
 // handleConfigUpdate 处理分层配置更新，返回是否已处理
-func handleConfigUpdate(key, value string) bool {
+func handleConfigUpdate(key, value string, fromDB bool) (bool, error) {
 	parts := strings.SplitN(key, ".", 2)
 	if len(parts) != 2 {
-		return false // 不是分层配置
+		return false, nil // 不是分层配置
 	}
 
 	configName := parts[0]
 	configKey := parts[1]
-
-	// 获取配置对象
-	cfg := config.GlobalConfig.Get(configName)
-	if cfg == nil {
-		return false // 未注册的配置
+	configMap := map[string]string{configKey: value}
+	var handled bool
+	var err error
+	if fromDB {
+		handled, err = config.GlobalConfig.UpdateFromDB(configName, configMap)
+	} else {
+		handled, err = config.GlobalConfig.Update(configName, configMap)
 	}
-
-	// 更新配置
-	configMap := map[string]string{
-		configKey: value,
+	if err != nil || !handled {
+		return handled, err
 	}
-	config.UpdateConfigFromMap(cfg, configMap)
+	afterConfigUpdate(configName)
+	return true, nil
+}
 
-	// 特定配置的后处理
-	if configName == "performance_setting" {
-		performance_setting.UpdateAndSync()
-	} else if configName == "tool_price_setting" {
-		operation_setting.RebuildToolPriceIndex()
-	} else if configName == "billing_setting" {
+func afterConfigUpdate(configName string) {
+	if configName == "billing_setting" {
 		InvalidatePricingCache()
 		ratio_setting.InvalidateExposedDataCache()
-	} else if configName == "log_diagnostic_setting" {
-		setting := operation_setting.GetLogDiagnosticSetting()
-		setting.ExtraHeaders = operation_setting.NormalizeLogDiagnosticHeaders(setting.ExtraHeaders)
-	} else if configName == "client_policy_setting" {
-		operation_setting.NormalizeClientPolicySetting()
 	}
-
-	return true // 已处理
 }

@@ -1,8 +1,8 @@
 package ratio_setting
 
 import (
-	"encoding/json"
 	"errors"
+	"sync/atomic"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting/config"
@@ -34,6 +34,7 @@ type GroupRatioSetting struct {
 }
 
 var groupRatioSetting GroupRatioSetting
+var groupRatioSettingSnapshot atomic.Pointer[GroupRatioSetting]
 
 func init() {
 	groupSpecialUsableGroup := types.NewRWMap[string, map[string]string]()
@@ -49,35 +50,53 @@ func init() {
 	}
 
 	config.GlobalConfig.Register("group_ratio_setting", &groupRatioSetting)
+	groupRatioSetting.PublishConfig()
 }
 
 func GetGroupRatioSetting() *GroupRatioSetting {
-	if groupRatioSetting.GroupSpecialUsableGroup == nil {
-		groupRatioSetting.GroupSpecialUsableGroup = types.NewRWMap[string, map[string]string]()
-		groupRatioSetting.GroupSpecialUsableGroup.AddAll(defaultGroupSpecialUsableGroup)
+	return groupRatioSettingSnapshot.Load()
+}
+
+func (setting *GroupRatioSetting) PublishConfig() {
+	if setting.GroupRatio == nil {
+		setting.GroupRatio = types.NewRWMap[string, float64]()
 	}
-	return &groupRatioSetting
+	if setting.GroupGroupRatio == nil {
+		setting.GroupGroupRatio = types.NewRWMap[string, map[string]float64]()
+	}
+	if setting.GroupSpecialUsableGroup == nil {
+		setting.GroupSpecialUsableGroup = types.NewRWMap[string, map[string]string]()
+	}
+
+	snapshot := *setting
+	groupRatioSettingSnapshot.Store(&snapshot)
 }
 
 func GetGroupRatioCopy() map[string]float64 {
-	return groupRatioMap.ReadAll()
+	return GetGroupRatioSetting().GroupRatio.ReadAll()
 }
 
 func ContainsGroupRatio(name string) bool {
-	_, ok := groupRatioMap.Get(name)
+	_, ok := GetGroupRatioSetting().GroupRatio.Get(name)
 	return ok
 }
 
 func GroupRatio2JSONString() string {
-	return groupRatioMap.MarshalJSONString()
+	return GetGroupRatioSetting().GroupRatio.MarshalJSONString()
 }
 
 func UpdateGroupRatioByJSONString(jsonStr string) error {
-	return types.LoadFromJsonString(groupRatioMap, jsonStr)
+	handled, err := config.GlobalConfig.Update("group_ratio_setting", map[string]string{
+		"group_ratio": jsonStr,
+	})
+	if !handled {
+		return errors.New("group ratio setting is not registered")
+	}
+	return err
 }
 
 func GetGroupRatio(name string) float64 {
-	ratio, ok := groupRatioMap.Get(name)
+	ratio, ok := GetGroupRatioSetting().GroupRatio.Get(name)
 	if !ok {
 		common.SysLog("group ratio not found: " + name)
 		return 1
@@ -86,7 +105,7 @@ func GetGroupRatio(name string) float64 {
 }
 
 func GetGroupGroupRatio(userGroup, usingGroup string) (float64, bool) {
-	gp, ok := groupGroupRatioMap.Get(userGroup)
+	gp, ok := GetGroupRatioSetting().GroupGroupRatio.Get(userGroup)
 	if !ok {
 		return -1, false
 	}
@@ -98,16 +117,22 @@ func GetGroupGroupRatio(userGroup, usingGroup string) (float64, bool) {
 }
 
 func GroupGroupRatio2JSONString() string {
-	return groupGroupRatioMap.MarshalJSONString()
+	return GetGroupRatioSetting().GroupGroupRatio.MarshalJSONString()
 }
 
 func UpdateGroupGroupRatioByJSONString(jsonStr string) error {
-	return types.LoadFromJsonString(groupGroupRatioMap, jsonStr)
+	handled, err := config.GlobalConfig.Update("group_ratio_setting", map[string]string{
+		"group_group_ratio": jsonStr,
+	})
+	if !handled {
+		return errors.New("group ratio setting is not registered")
+	}
+	return err
 }
 
 func CheckGroupRatio(jsonStr string) error {
 	checkGroupRatio := make(map[string]float64)
-	err := json.Unmarshal([]byte(jsonStr), &checkGroupRatio)
+	err := common.UnmarshalJsonStr(jsonStr, &checkGroupRatio)
 	if err != nil {
 		return err
 	}

@@ -1,6 +1,8 @@
 package operation_setting
 
 import (
+	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -65,16 +67,41 @@ type prefixEntry struct {
 	price  float64
 }
 
-type toolPriceIndex struct {
+type ToolPriceSnapshot struct {
 	defaults map[string]float64
 	prefixes map[string][]prefixEntry
 }
 
-var currentIndex atomic.Pointer[toolPriceIndex]
+var currentToolPriceSnapshot atomic.Pointer[ToolPriceSnapshot]
+
+func (setting *ToolPriceSetting) ValidateConfig() error {
+	for identifier, price := range setting.Prices {
+		trimmedIdentifier := strings.TrimSpace(identifier)
+		if trimmedIdentifier == "" || trimmedIdentifier != identifier {
+			return fmt.Errorf("tool price identifier must be non-empty and trimmed")
+		}
+		toolName, modelPrefix, hasModelPrefix := strings.Cut(identifier, ":")
+		if toolName == "" || (hasModelPrefix && strings.TrimSuffix(modelPrefix, "*") == "") {
+			return fmt.Errorf("invalid tool price identifier %q", identifier)
+		}
+		if price < 0 || math.IsNaN(price) || math.IsInf(price, 0) {
+			return fmt.Errorf("tool price for %s must be a non-negative finite number", identifier)
+		}
+	}
+	return nil
+}
+
+func (setting *ToolPriceSetting) PublishConfig() {
+	currentToolPriceSnapshot.Store(buildToolPriceSnapshot(setting.Prices))
+}
 
 // RebuildToolPriceIndex rebuilds the lookup index from the current config.
 // Called on init and after config updates. Not on the billing hot path.
 func RebuildToolPriceIndex() {
+	toolPriceSetting.PublishConfig()
+}
+
+func buildToolPriceSnapshot(configuredPrices map[string]float64) *ToolPriceSnapshot {
 	merged := make(map[string]float64, len(defaultToolPrices)+len(defaultToolPriceOverrides)+len(toolPriceSetting.Prices))
 	for k, v := range defaultToolPrices {
 		merged[k] = v
@@ -82,11 +109,11 @@ func RebuildToolPriceIndex() {
 	for k, v := range defaultToolPriceOverrides {
 		merged[k] = v
 	}
-	for k, v := range toolPriceSetting.Prices {
+	for k, v := range configuredPrices {
 		merged[k] = v
 	}
 
-	idx := &toolPriceIndex{
+	snapshot := &ToolPriceSnapshot{
 		defaults: make(map[string]float64),
 		prefixes: make(map[string][]prefixEntry),
 	}
@@ -94,38 +121,48 @@ func RebuildToolPriceIndex() {
 	for key, price := range merged {
 		colonIdx := strings.IndexByte(key, ':')
 		if colonIdx < 0 {
-			idx.defaults[key] = price
+			snapshot.defaults[key] = price
 			continue
 		}
 		toolName := key[:colonIdx]
 		modelPart := key[colonIdx+1:]
 		prefix := strings.TrimSuffix(modelPart, "*")
-		idx.prefixes[toolName] = append(idx.prefixes[toolName], prefixEntry{prefix: prefix, price: price})
+		snapshot.prefixes[toolName] = append(snapshot.prefixes[toolName], prefixEntry{prefix: prefix, price: price})
 	}
 
-	for tool := range idx.prefixes {
-		entries := idx.prefixes[tool]
+	for tool := range snapshot.prefixes {
+		entries := snapshot.prefixes[tool]
 		sort.Slice(entries, func(i, j int) bool {
 			return len(entries[i].prefix) > len(entries[j].prefix)
 		})
-		idx.prefixes[tool] = entries
+		snapshot.prefixes[tool] = entries
 	}
+	return snapshot
+}
 
-	currentIndex.Store(idx)
+func GetToolPriceSnapshot() *ToolPriceSnapshot {
+	return currentToolPriceSnapshot.Load()
 }
 
 // GetToolPriceForModel returns the price ($/1K calls) for a tool given a model name.
 // Lookup: longest prefix match → tool default → 0.
 func GetToolPriceForModel(toolName, modelName string) float64 {
-	idx := currentIndex.Load()
-	if idx == nil {
+	snapshot := GetToolPriceSnapshot()
+	if snapshot == nil {
 		if v, ok := defaultToolPrices[toolName]; ok {
 			return v
 		}
 		return 0
 	}
 
-	if entries, ok := idx.prefixes[toolName]; ok && modelName != "" {
+	return snapshot.GetToolPriceForModel(toolName, modelName)
+}
+
+func (snapshot *ToolPriceSnapshot) GetToolPriceForModel(toolName, modelName string) float64 {
+	if snapshot == nil {
+		return GetToolPriceForModel(toolName, modelName)
+	}
+	if entries, ok := snapshot.prefixes[toolName]; ok && modelName != "" {
 		for _, e := range entries {
 			if strings.HasPrefix(modelName, e.prefix) {
 				return e.price
@@ -133,7 +170,7 @@ func GetToolPriceForModel(toolName, modelName string) float64 {
 		}
 	}
 
-	if p, ok := idx.defaults[toolName]; ok {
+	if p, ok := snapshot.defaults[toolName]; ok {
 		return p
 	}
 	return 0
@@ -142,6 +179,10 @@ func GetToolPriceForModel(toolName, modelName string) float64 {
 // GetToolPrice is a convenience wrapper when no model name is needed.
 func GetToolPrice(toolName string) float64 {
 	return GetToolPriceForModel(toolName, "")
+}
+
+func (snapshot *ToolPriceSnapshot) GetToolPrice(toolName string) float64 {
+	return snapshot.GetToolPriceForModel(toolName, "")
 }
 
 // ---------------------------------------------------------------------------

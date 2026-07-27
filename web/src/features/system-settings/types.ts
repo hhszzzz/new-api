@@ -34,6 +34,29 @@ export type UpdateOptionRequest = {
   value: string | boolean | number
 }
 
+export type UpdateModelPricingOptionsRequest = {
+  options: UpdateOptionRequest[]
+}
+
+export type UpdateClientPolicyOptionsRequest = {
+  rules: Array<{
+    name: string
+    matches: Array<{
+      source: 'path' | 'user_agent' | 'header'
+      header?: string
+      mode: 'exact' | 'prefix'
+      value: string
+    }>
+  }>
+  group_policies: Record<
+    string,
+    {
+      mode: 'unrestricted' | 'allow' | 'deny'
+      clients: string[]
+    }
+  >
+}
+
 export type UpdateOptionResponse = {
   success: boolean
   message: string

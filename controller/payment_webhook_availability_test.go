@@ -1,24 +1,41 @@
 package controller
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/stretchr/testify/require"
 )
 
+func setPaymentComplianceForTest(t *testing.T, confirmed bool) {
+	t.Helper()
+	current := operation_setting.GetPaymentSetting()
+	t.Cleanup(func() {
+		handled, err := config.GlobalConfig.Update("payment_setting", map[string]string{
+			"compliance_confirmed":     fmt.Sprint(current.ComplianceConfirmed),
+			"compliance_terms_version": current.ComplianceTermsVersion,
+		})
+		require.NoError(t, err)
+		require.True(t, handled)
+	})
+	termsVersion := ""
+	if confirmed {
+		termsVersion = operation_setting.CurrentComplianceTermsVersion
+	}
+	handled, err := config.GlobalConfig.Update("payment_setting", map[string]string{
+		"compliance_confirmed":     fmt.Sprint(confirmed),
+		"compliance_terms_version": termsVersion,
+	})
+	require.NoError(t, err)
+	require.True(t, handled)
+}
+
 func confirmPaymentComplianceForTest(t *testing.T) {
 	t.Helper()
-	paymentSetting := operation_setting.GetPaymentSetting()
-	originalConfirmed := paymentSetting.ComplianceConfirmed
-	originalTermsVersion := paymentSetting.ComplianceTermsVersion
-	t.Cleanup(func() {
-		paymentSetting.ComplianceConfirmed = originalConfirmed
-		paymentSetting.ComplianceTermsVersion = originalTermsVersion
-	})
-	paymentSetting.ComplianceConfirmed = true
-	paymentSetting.ComplianceTermsVersion = operation_setting.CurrentComplianceTermsVersion
+	setPaymentComplianceForTest(t, true)
 }
 
 func TestStripeWebhookEnabledRequiresTopUpAndWebhookConfig(t *testing.T) {
@@ -147,23 +164,23 @@ func TestEpayWebhookEnabledRequiresTopUpAndWebhookConfig(t *testing.T) {
 	originalPayAddress := operation_setting.PayAddress
 	originalEpayID := operation_setting.EpayId
 	originalEpayKey := operation_setting.EpayKey
-	originalPayMethods := operation_setting.PayMethods
+	originalPayMethods := operation_setting.PayMethods2JsonString()
 	t.Cleanup(func() {
 		operation_setting.PayAddress = originalPayAddress
 		operation_setting.EpayId = originalEpayID
 		operation_setting.EpayKey = originalEpayKey
-		operation_setting.PayMethods = originalPayMethods
+		require.NoError(t, operation_setting.UpdatePayMethodsByJsonString(originalPayMethods))
 	})
 
 	operation_setting.PayAddress = "https://pay.example.com"
 	operation_setting.EpayId = "epay_id"
 	operation_setting.EpayKey = ""
-	operation_setting.PayMethods = []map[string]string{{"type": "alipay"}}
+	require.NoError(t, operation_setting.UpdatePayMethodsByJsonString(`[{"type":"alipay"}]`))
 	require.False(t, isEpayWebhookEnabled())
 
 	operation_setting.EpayKey = "epay_key"
 	require.True(t, isEpayWebhookEnabled())
 
-	operation_setting.PayMethods = nil
+	require.NoError(t, operation_setting.UpdatePayMethodsByJsonString(`[]`))
 	require.False(t, isEpayWebhookEnabled())
 }

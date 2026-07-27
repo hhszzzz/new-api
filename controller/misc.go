@@ -44,6 +44,7 @@ func TestStatus(c *gin.Context) {
 func GetStatus(c *gin.Context) {
 
 	cs := console_setting.GetConsoleSetting()
+	generalSetting := operation_setting.GetGeneralSetting()
 	common.OptionMapRWMutex.RLock()
 	defer common.OptionMapRWMutex.RUnlock()
 
@@ -72,13 +73,13 @@ func GetStatus(c *gin.Context) {
 		"server_address":              system_setting.ServerAddress,
 		"turnstile_check":             common.TurnstileCheckEnabled,
 		"turnstile_site_key":          common.TurnstileSiteKey,
-		"docs_link":                   operation_setting.GetGeneralSetting().DocsLink,
-		"quota_per_unit":              common.QuotaPerUnit,
+		"docs_link":                   generalSetting.DocsLink,
+		"quota_per_unit":              common.GetQuotaPerUnit(),
 		// 兼容旧前端：保留 display_in_currency，同时提供新的 quota_display_type
 		"display_in_currency":           operation_setting.IsCurrencyDisplay(),
 		"quota_display_type":            operation_setting.GetQuotaDisplayType(),
-		"custom_currency_symbol":        operation_setting.GetGeneralSetting().CustomCurrencySymbol,
-		"custom_currency_exchange_rate": operation_setting.GetGeneralSetting().CustomCurrencyExchangeRate,
+		"custom_currency_symbol":        generalSetting.CustomCurrencySymbol,
+		"custom_currency_exchange_rate": generalSetting.CustomCurrencyExchangeRate,
 		"enable_batch_update":           common.BatchUpdateEnabled,
 		"enable_drawing":                common.DrawingEnabled,
 		"enable_task":                   common.TaskEnabled,
@@ -86,7 +87,7 @@ func GetStatus(c *gin.Context) {
 		"data_export_default_time":      common.DataExportDefaultTime,
 		"default_collapse_sidebar":      common.DefaultCollapseSidebar,
 		"mj_notify_enabled":             setting.MjNotifyEnabled,
-		"chats":                         setting.Chats,
+		"chats":                         setting.GetChats(),
 		"demo_site_enabled":             operation_setting.DemoSiteEnabled,
 		"self_use_mode_enabled":         operation_setting.SelfUseModeEnabled,
 		"register_enabled":              common.RegisterEnabled,
@@ -94,8 +95,8 @@ func GetStatus(c *gin.Context) {
 		"password_register_enabled":     common.PasswordRegisterEnabled,
 		"default_use_auto_group":        setting.DefaultUseAutoGroup,
 
-		"usd_exchange_rate": operation_setting.USDExchangeRate,
-		"price":             operation_setting.Price,
+		"usd_exchange_rate": operation_setting.GetUSDExchangeRate(),
+		"price":             operation_setting.GetPrice(),
 		"stripe_unit_price": setting.StripeUnitPrice,
 
 		// 面板启用开关

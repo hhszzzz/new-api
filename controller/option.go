@@ -3,6 +3,7 @@ package controller
 import (
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -120,6 +121,48 @@ type OptionUpdateRequest struct {
 	Value any    `json:"value"`
 }
 
+type OptionBatchUpdateRequest struct {
+	Options []OptionUpdateRequest `json:"options"`
+}
+
+func normalizeOptionValue(value any) string {
+	switch value := value.(type) {
+	case bool:
+		return common.Interface2String(value)
+	case float64:
+		return common.Interface2String(value)
+	case int:
+		return common.Interface2String(value)
+	default:
+		return fmt.Sprintf("%v", value)
+	}
+}
+
+func validateModelPricingOption(key string, value string) error {
+	if !ratio_setting.IsPricingOptionKey(key) {
+		return fmt.Errorf("不支持的模型定价配置: %s", key)
+	}
+	if err := ratio_setting.ValidatePricingOptionsByJSONString(map[string]string{key: value}); err != nil {
+		return fmt.Errorf("模型定价配置 %s 必须是模型名到非负有限数值的 JSON 对象: %w", key, err)
+	}
+	return nil
+}
+
+func normalizeModelPricingOptions(options []OptionUpdateRequest) (map[string]string, error) {
+	values := make(map[string]string, len(options))
+	for _, option := range options {
+		if _, duplicate := values[option.Key]; duplicate {
+			return nil, fmt.Errorf("模型定价配置包含重复键: %s", option.Key)
+		}
+		value := normalizeOptionValue(option.Value)
+		if err := validateModelPricingOption(option.Key, value); err != nil {
+			return nil, err
+		}
+		values[option.Key] = value
+	}
+	return values, nil
+}
+
 func UpdateOption(c *gin.Context) {
 	var option OptionUpdateRequest
 	err := common.DecodeJson(c.Request.Body, &option)
@@ -130,15 +173,12 @@ func UpdateOption(c *gin.Context) {
 		})
 		return
 	}
-	switch option.Value.(type) {
-	case bool:
-		option.Value = common.Interface2String(option.Value.(bool))
-	case float64:
-		option.Value = common.Interface2String(option.Value.(float64))
-	case int:
-		option.Value = common.Interface2String(option.Value.(int))
-	default:
-		option.Value = fmt.Sprintf("%v", option.Value)
+	option.Value = normalizeOptionValue(option.Value)
+	if ratio_setting.IsPricingOptionKey(option.Key) {
+		if err := validateModelPricingOption(option.Key, option.Value.(string)); err != nil {
+			common.ApiError(c, err)
+			return
+		}
 	}
 	switch option.Key {
 	case "QuotaForInviter", "QuotaForInvitee":
@@ -235,42 +275,6 @@ func UpdateOption(c *gin.Context) {
 			})
 			return
 		}
-	case "ImageRatio":
-		err = ratio_setting.UpdateImageRatioByJSONString(option.Value.(string))
-		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": "图片倍率设置失败: " + err.Error(),
-			})
-			return
-		}
-	case "AudioRatio":
-		err = ratio_setting.UpdateAudioRatioByJSONString(option.Value.(string))
-		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": "音频倍率设置失败: " + err.Error(),
-			})
-			return
-		}
-	case "AudioCompletionRatio":
-		err = ratio_setting.UpdateAudioCompletionRatioByJSONString(option.Value.(string))
-		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": "音频补全倍率设置失败: " + err.Error(),
-			})
-			return
-		}
-	case "CreateCacheRatio":
-		err = ratio_setting.UpdateCreateCacheRatioByJSONString(option.Value.(string))
-		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": "缓存创建倍率设置失败: " + err.Error(),
-			})
-			return
-		}
 	case "ModelRequestRateLimitGroup":
 		err = setting.CheckModelRequestRateLimitGroup(option.Value.(string))
 		if err != nil {
@@ -358,12 +362,12 @@ func UpdateOption(c *gin.Context) {
 		}
 	}
 	if strings.HasPrefix(option.Key, "client_policy_setting.") {
-		if option.Key != "client_policy_setting.rules" && option.Key != "client_policy_setting.group_policies" {
+		if option.Key != operation_setting.ClientPolicyRulesOptionKey && option.Key != operation_setting.ClientPolicyGroupsOptionKey {
 			common.ApiErrorMsg(c, "不支持的客户端策略配置")
 			return
 		}
-		candidate := *operation_setting.GetClientPolicySetting()
-		if option.Key == "client_policy_setting.rules" {
+		candidate := *operation_setting.GetClientPolicySettingSnapshot()
+		if option.Key == operation_setting.ClientPolicyRulesOptionKey {
 			var rules []operation_setting.ClientIdentificationRule
 			if err := common.UnmarshalJsonStr(option.Value.(string), &rules); err != nil {
 				common.ApiErrorMsg(c, "客户端识别规则必须是 JSON 数组")
@@ -392,6 +396,60 @@ func UpdateOption(c *gin.Context) {
 	recordManageAudit(c, "option.update", map[string]interface{}{
 		"key": option.Key,
 	})
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "",
+	})
+}
+
+func UpdateModelPricingOptions(c *gin.Context) {
+	var request OptionBatchUpdateRequest
+	if err := common.DecodeJson(c.Request.Body, &request); err != nil {
+		common.ApiErrorMsg(c, "无效的参数")
+		return
+	}
+	if len(request.Options) == 0 || len(request.Options) > ratio_setting.PricingOptionKeyCount() {
+		common.ApiErrorMsg(c, "模型定价配置数量无效")
+		return
+	}
+
+	values, err := normalizeModelPricingOptions(request.Options)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	if err := model.UpdateOptionsBulk(values); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	recordManageAudit(c, "option.model_pricing.update", map[string]interface{}{
+		"keys": keys,
+	})
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "",
+	})
+}
+
+func UpdateClientPolicyOptions(c *gin.Context) {
+	var request operation_setting.ClientPolicySetting
+	if err := common.DecodeJson(c.Request.Body, &request); err != nil {
+		common.ApiErrorMsg(c, "无效的参数")
+		return
+	}
+	if err := model.UpdateClientPolicySetting(request); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	recordManageAudit(c, "option.client_policy.update", nil)
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",

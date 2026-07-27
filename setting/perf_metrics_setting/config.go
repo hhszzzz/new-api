@@ -1,6 +1,10 @@
 package perf_metrics_setting
 
-import "github.com/QuantumNous/new-api/setting/config"
+import (
+	"sync/atomic"
+
+	"github.com/QuantumNous/new-api/setting/config"
+)
 
 type PerfMetricsSetting struct {
 	Enabled       bool   `json:"enabled"`
@@ -15,17 +19,24 @@ var perfMetricsSetting = PerfMetricsSetting{
 	BucketTime:    "hour",
 	RetentionDays: 0,
 }
+var perfMetricsSettingSnapshot atomic.Pointer[PerfMetricsSetting]
 
 func init() {
 	config.GlobalConfig.Register("perf_metrics_setting", &perfMetricsSetting)
+	perfMetricsSetting.PublishConfig()
+}
+
+func (setting *PerfMetricsSetting) PublishConfig() {
+	snapshot := *setting
+	perfMetricsSettingSnapshot.Store(&snapshot)
 }
 
 func GetSetting() PerfMetricsSetting {
-	return perfMetricsSetting
+	return *perfMetricsSettingSnapshot.Load()
 }
 
 func GetBucketSeconds() int64 {
-	switch perfMetricsSetting.BucketTime {
+	switch GetSetting().BucketTime {
 	case "minute":
 		return 60
 	case "5min":
@@ -38,8 +49,9 @@ func GetBucketSeconds() int64 {
 }
 
 func GetFlushIntervalMinutes() int {
-	if perfMetricsSetting.FlushInterval < 1 {
+	flushInterval := GetSetting().FlushInterval
+	if flushInterval < 1 {
 		return 1
 	}
-	return perfMetricsSetting.FlushInterval
+	return flushInterval
 }
