@@ -74,6 +74,7 @@ func TestGetModelListGroupsUsesExplicitTokenGroup(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 	common.SetContextKey(ctx, constant.ContextKeyUserGroup, "default")
+	common.SetContextKey(ctx, constant.ContextKeyUserGroups, []string{"default", "vip"})
 	common.SetContextKey(ctx, constant.ContextKeyTokenGroup, "vip")
 
 	groups, err := getModelListGroups(ctx)

@@ -29,3 +29,12 @@ export function buildQueryParams(
 
   return queryParams
 }
+
+export function isSameUsageLogsQueryScope(
+  previousQueryKey: readonly unknown[] | undefined,
+  currentScope: readonly unknown[]
+): boolean {
+  return currentScope.every((value, index) =>
+    Object.is(previousQueryKey?.[index], value)
+  )
+}

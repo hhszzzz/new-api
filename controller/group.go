@@ -27,35 +27,21 @@ func GetGroups(c *gin.Context) {
 func GetUserGroups(c *gin.Context) {
 	usableGroups := make(map[string]map[string]interface{})
 	userId := c.GetInt("id")
-	if userId <= 0 {
-		for groupName, desc := range setting.GetUserUsableGroupsCopy() {
-			if groupName == "auto" {
-				continue
-			}
-			usableGroups[groupName] = map[string]interface{}{
-				"ratio": service.GetUserGroupRatio("", groupName),
-				"desc":  desc,
-			}
+	userGroups := []string{"default"}
+	primaryGroup := "default"
+	if userId > 0 {
+		user, err := model.GetUserCache(userId)
+		if err != nil {
+			common.ApiError(c, err)
+			return
 		}
-		if len(setting.GetAutoGroups()) > 0 {
-			usableGroups["auto"] = map[string]interface{}{
-				"ratio": "自动",
-				"desc":  setting.GetUsableGroupDescription("auto"),
-			}
+		userGroups = user.Groups
+		primaryGroup = ""
+		if len(user.Groups) > 0 {
+			primaryGroup = user.Groups[0]
 		}
-		common.ApiSuccess(c, usableGroups)
-		return
 	}
-	user, err := model.GetUserCache(userId)
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	usable := service.GetAuthorizedUserGroups(user.Groups)
-	primaryGroup := ""
-	if len(user.Groups) > 0 {
-		primaryGroup = user.Groups[0]
-	}
+	usable := service.GetAuthorizedUserGroups(userGroups)
 	for groupName, desc := range usable {
 		if groupName == "auto" {
 			continue
@@ -71,9 +57,5 @@ func GetUserGroups(c *gin.Context) {
 			"desc":  setting.GetUsableGroupDescription("auto"),
 		}
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-		"data":    usableGroups,
-	})
+	common.ApiSuccess(c, usableGroups)
 }

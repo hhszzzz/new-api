@@ -43,7 +43,7 @@ func TestBuildChannelCandidateFilterCombinesProtocolAndClientPolicy(t *testing.T
 
 func TestGroupAllowsRequestClientEnforcesAllowAndDenyModes(t *testing.T) {
 	setting := operation_setting.GetClientPolicySetting()
-	originalPolicies := setting.GroupPolicies
+	original := *operation_setting.GetClientPolicySettingSnapshot()
 	setting.GroupPolicies = map[string]operation_setting.ClientAccessPolicy{
 		"codex-only": {
 			Mode:    operation_setting.ClientPolicyModeAllow,
@@ -54,7 +54,11 @@ func TestGroupAllowsRequestClientEnforcesAllowAndDenyModes(t *testing.T) {
 			Clients: []string{clientpolicy.ClientClaudeCode},
 		},
 	}
-	t.Cleanup(func() { setting.GroupPolicies = originalPolicies })
+	operation_setting.NormalizeClientPolicySetting()
+	t.Cleanup(func() {
+		*setting = original
+		operation_setting.NormalizeClientPolicySetting()
+	})
 
 	codexContext, _ := gin.CreateTestContext(httptest.NewRecorder())
 	codexContext.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)

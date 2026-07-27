@@ -13,19 +13,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDetectRecognizesBuiltInAndConfiguredClients(t *testing.T) {
+func replaceClientPolicySettingForTest(
+	t *testing.T,
+	value operation_setting.ClientPolicySetting,
+) {
+	t.Helper()
 	setting := operation_setting.GetClientPolicySetting()
-	originalRules := setting.Rules
-	setting.Rules = []operation_setting.ClientIdentificationRule{
-		{
-			Name: "desktop_agent",
-			Matches: []operation_setting.ClientIdentificationMatch{
-				{Source: "path", Mode: "prefix", Value: "/v1/responses"},
-				{Source: "header", Header: "X-Client-Request-Id", Mode: "prefix", Value: "desktop-"},
+	original := *operation_setting.GetClientPolicySettingSnapshot()
+	*setting = value
+	operation_setting.NormalizeClientPolicySetting()
+	t.Cleanup(func() {
+		*setting = original
+		operation_setting.NormalizeClientPolicySetting()
+	})
+}
+
+func TestDetectRecognizesBuiltInAndConfiguredClients(t *testing.T) {
+	replaceClientPolicySettingForTest(t, operation_setting.ClientPolicySetting{
+		Rules: []operation_setting.ClientIdentificationRule{
+			{
+				Name: "desktop_agent",
+				Matches: []operation_setting.ClientIdentificationMatch{
+					{Source: "path", Mode: "prefix", Value: "/v1/responses"},
+					{Source: "header", Header: "X-Client-Request-Id", Mode: "prefix", Value: "desktop-"},
+				},
 			},
 		},
-	}
-	t.Cleanup(func() { setting.Rules = originalRules })
+	})
 
 	configured := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 	configured.Header.Set("X-Client-Request-Id", "desktop-123")
@@ -45,17 +59,16 @@ func TestDetectRecognizesBuiltInAndConfiguredClients(t *testing.T) {
 }
 
 func TestDetectRejectsUnsafeCustomHeaderRules(t *testing.T) {
-	setting := operation_setting.GetClientPolicySetting()
-	originalRules := setting.Rules
-	setting.Rules = []operation_setting.ClientIdentificationRule{
-		{
-			Name: "secret_match",
-			Matches: []operation_setting.ClientIdentificationMatch{
-				{Source: "header", Header: "Authorization", Mode: "prefix", Value: "Bearer "},
+	replaceClientPolicySettingForTest(t, operation_setting.ClientPolicySetting{
+		Rules: []operation_setting.ClientIdentificationRule{
+			{
+				Name: "secret_match",
+				Matches: []operation_setting.ClientIdentificationMatch{
+					{Source: "header", Header: "Authorization", Mode: "prefix", Value: "Bearer "},
+				},
 			},
 		},
-	}
-	t.Cleanup(func() { setting.Rules = originalRules })
+	})
 
 	request := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 	request.Header.Set("Authorization", "Bearer secret")
@@ -63,17 +76,16 @@ func TestDetectRejectsUnsafeCustomHeaderRules(t *testing.T) {
 }
 
 func TestDetectAcceptsValidatedCustomHeaderRules(t *testing.T) {
-	setting := operation_setting.GetClientPolicySetting()
-	originalRules := setting.Rules
-	setting.Rules = []operation_setting.ClientIdentificationRule{
-		{
-			Name: "desktop_agent",
-			Matches: []operation_setting.ClientIdentificationMatch{
-				{Source: "header", Header: "X-Desktop-Agent", Mode: "prefix", Value: "demo/"},
+	replaceClientPolicySettingForTest(t, operation_setting.ClientPolicySetting{
+		Rules: []operation_setting.ClientIdentificationRule{
+			{
+				Name: "desktop_agent",
+				Matches: []operation_setting.ClientIdentificationMatch{
+					{Source: "header", Header: "X-Desktop-Agent", Mode: "prefix", Value: "demo/"},
+				},
 			},
 		},
-	}
-	t.Cleanup(func() { setting.Rules = originalRules })
+	})
 
 	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	request.Header.Set("X-Desktop-Agent", "demo/1.2.3")
@@ -95,22 +107,22 @@ func TestIsAllowedPreservesUnknownClientSemantics(t *testing.T) {
 	assert.False(t, IsAllowed(deny, ClientClaudeCode))
 	assert.True(t, IsAllowed(deny, ClientUnknown))
 	assert.True(t, IsAllowed(operation_setting.ClientAccessPolicy{}, ClientUnknown))
+	assert.False(t, IsAllowed(operation_setting.ClientAccessPolicy{Mode: "invalid"}, ClientUnknown))
 }
 
 func TestIsGroupAllowedUsesConfiguredAllowAndDenyPolicies(t *testing.T) {
-	setting := operation_setting.GetClientPolicySetting()
-	originalPolicies := setting.GroupPolicies
-	setting.GroupPolicies = map[string]operation_setting.ClientAccessPolicy{
-		"codex-only": {
-			Mode:    operation_setting.ClientPolicyModeAllow,
-			Clients: []string{ClientCodex},
+	replaceClientPolicySettingForTest(t, operation_setting.ClientPolicySetting{
+		GroupPolicies: map[string]operation_setting.ClientAccessPolicy{
+			"codex-only": {
+				Mode:    operation_setting.ClientPolicyModeAllow,
+				Clients: []string{ClientCodex},
+			},
+			"no-claude": {
+				Mode:    operation_setting.ClientPolicyModeDeny,
+				Clients: []string{ClientClaudeCode},
+			},
 		},
-		"no-claude": {
-			Mode:    operation_setting.ClientPolicyModeDeny,
-			Clients: []string{ClientClaudeCode},
-		},
-	}
-	t.Cleanup(func() { setting.GroupPolicies = originalPolicies })
+	})
 
 	assert.True(t, IsGroupAllowed("codex-only", ClientCodex))
 	assert.False(t, IsGroupAllowed("codex-only", ClientUnknown))

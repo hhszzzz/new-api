@@ -167,6 +167,15 @@ export function UserModelRoutesDialog(props: UserModelRoutesDialogProps) {
       draft.execution_group.length > 0,
     staleTime: 30 * 1000,
   })
+  const targetModel = draft.target_model.trim()
+  const targetQuerySettled =
+    targetModel.length > 0 && debouncedTargetModel === targetModel
+  const channelQueryReady =
+    targetQuerySettled && draft.execution_group.trim().length > 0
+  const channelData =
+    channelQueryReady && channelsQuery.data?.success === true
+      ? channelsQuery.data.data
+      : undefined
 
   const routes =
     routesQuery.data?.success === true
@@ -179,11 +188,8 @@ export function UserModelRoutesDialog(props: UserModelRoutesDialogProps) {
   const applicableGroups = candidateData?.applicable_groups ?? EMPTY_GROUPS
   const executionGroups = candidateData?.execution_groups ?? EMPTY_GROUPS
   const executionGroupCounts = useMemo(
-    () =>
-      channelsQuery.data?.success === true
-        ? (channelsQuery.data.data?.execution_group_channel_counts ?? {})
-        : {},
-    [channelsQuery.data]
+    () => channelData?.execution_group_channel_counts ?? {},
+    [channelData]
   )
   const sourceModelOptions = useMemo(() => {
     const values = new Set([
@@ -211,10 +217,10 @@ export function UserModelRoutesDialog(props: UserModelRoutesDialogProps) {
     () =>
       executionGroups.map((group) => {
         const channelCount = executionGroupCounts[group] ?? 0
-        const targetSelected = draft.target_model.trim().length > 0
-        const disabled = targetSelected && channelCount === 0
+        const channelCountsLoaded = channelData !== undefined
+        const disabled = channelCountsLoaded && channelCount === 0
         let label = group
-        if (targetSelected) {
+        if (channelCountsLoaded) {
           const countLabel = t('{{count}} channels', { count: channelCount })
           label = disabled
             ? `${group} (${countLabel} · ${t(
@@ -224,7 +230,7 @@ export function UserModelRoutesDialog(props: UserModelRoutesDialogProps) {
         }
         return { value: group, label, disabled }
       }),
-    [draft.target_model, executionGroupCounts, executionGroups, t]
+    [channelData, executionGroupCounts, executionGroups, t]
   )
   const applicableGroupOptions = useMemo(
     () => applicableGroups.map((group) => ({ value: group, label: group })),
@@ -232,10 +238,7 @@ export function UserModelRoutesDialog(props: UserModelRoutesDialogProps) {
   )
   const channelOptions = useMemo(() => {
     const selectedIds = new Set(draft.channel_ids)
-    const channels =
-      channelsQuery.data?.success === true
-        ? channelsQuery.data.data?.channels || []
-        : []
+    const channels = channelData?.channels ?? []
     const aggregateChildren = new Map<
       number,
       { name: string; channelIds: string[] }
@@ -283,22 +286,16 @@ export function UserModelRoutesDialog(props: UserModelRoutesDialogProps) {
         .filter((id) => !channels.some((channel) => String(channel.id) === id))
         .map((id) => ({ value: id, label: `#${id}` })),
     ]
-  }, [
-    channelsQuery.data?.success,
-    channelsQuery.data?.data?.channels,
-    draft.channel_ids,
-    t,
-  ])
+  }, [channelData, draft.channel_ids, t])
 
   const routesFailed =
     routesQuery.isError || routesQuery.data?.success === false
   const editorFailed =
     candidatesQuery.isError || candidatesQuery.data?.success === false
   const editorLoading = candidatesQuery.isLoading
-  const channelQueryReady =
-    debouncedTargetModel.length > 0 && draft.execution_group.trim().length > 0
   const channelsFailed =
-    channelsQuery.isError || channelsQuery.data?.success === false
+    channelQueryReady &&
+    (channelsQuery.isError || channelsQuery.data?.success === false)
   const channelsLoading =
     channelQueryReady && (channelsQuery.isLoading || channelsQuery.isFetching)
   const draftComplete =
@@ -318,18 +315,14 @@ export function UserModelRoutesDialog(props: UserModelRoutesDialogProps) {
     channelQueryReady &&
     !channelsLoading &&
     !channelsFailed &&
-    channelsQuery.data?.success === true &&
+    channelData !== undefined &&
     draftComplete
   const availableChannelIds = useMemo(
     () =>
       new Set(
-        channelsQuery.data?.success === true
-          ? (channelsQuery.data.data?.channels ?? []).map((channel) =>
-              String(channel.id)
-            )
-          : []
+        (channelData?.channels ?? []).map((channel) => String(channel.id))
       ),
-    [channelsQuery.data]
+    [channelData]
   )
   const invalidSelectedChannelIds = useMemo(
     () =>
@@ -357,14 +350,13 @@ export function UserModelRoutesDialog(props: UserModelRoutesDialogProps) {
   }, [draft.execution_group, executionGroups])
 
   useEffect(() => {
-    if (channelsQuery.isFetching || channelsQuery.data?.success !== true) return
+    if (!channelData || channelsQuery.isFetching) return
 
     const queryTarget = debouncedTargetModel
     const queryGroup = draft.execution_group
-    const recommendedGroup =
-      channelsQuery.data.data?.recommended_execution_group || ''
+    const recommendedGroup = channelData.recommended_execution_group || ''
     const currentGroupCount =
-      channelsQuery.data.data?.execution_group_channel_counts?.[queryGroup] ?? 0
+      channelData.execution_group_channel_counts?.[queryGroup] ?? 0
     if (
       editingId === null &&
       recommendedGroup &&
@@ -388,9 +380,7 @@ export function UserModelRoutesDialog(props: UserModelRoutesDialogProps) {
     }
 
     const eligibleIds = new Set(
-      (channelsQuery.data.data?.channels || []).map((channel) =>
-        String(channel.id)
-      )
+      (channelData.channels || []).map((channel) => String(channel.id))
     )
     setDraft((current) => {
       if (
@@ -405,7 +395,7 @@ export function UserModelRoutesDialog(props: UserModelRoutesDialogProps) {
       return { ...current, channel_ids: channelIds }
     })
   }, [
-    channelsQuery.data,
+    channelData,
     channelsQuery.isFetching,
     debouncedTargetModel,
     draft.execution_group,
@@ -416,7 +406,7 @@ export function UserModelRoutesDialog(props: UserModelRoutesDialogProps) {
     const selected = new Set(
       values.filter((value) => !value.startsWith('aggregate:'))
     )
-    const channels = channelsQuery.data?.data?.channels ?? []
+    const channels = channelData?.channels ?? []
     for (const value of values) {
       if (!value.startsWith('aggregate:')) continue
       const aggregateId = Number(value.slice('aggregate:'.length))
@@ -741,7 +731,9 @@ export function UserModelRoutesDialog(props: UserModelRoutesDialogProps) {
                     id='route-inject-prompt'
                     value={draft.inject_prompt}
                     onChange={(event) => {
-                      const injectPrompt = event.currentTarget.value
+                      const injectPrompt = [...event.currentTarget.value]
+                        .slice(0, INJECT_PROMPT_MAX_LENGTH)
+                        .join('')
                       setDraft((current) => ({
                         ...current,
                         inject_prompt: injectPrompt,
@@ -750,7 +742,6 @@ export function UserModelRoutesDialog(props: UserModelRoutesDialogProps) {
                     placeholder={t(
                       'Optional. Placed ahead of both the caller and channel system prompts.'
                     )}
-                    maxLength={INJECT_PROMPT_MAX_LENGTH}
                     rows={4}
                     aria-describedby='route-inject-prompt-hint'
                   />
@@ -762,7 +753,8 @@ export function UserModelRoutesDialog(props: UserModelRoutesDialogProps) {
                       'Applied only when this route is used. It takes priority over the channel system prompt.'
                     )}{' '}
                     <span className='tabular-nums'>
-                      {draft.inject_prompt.length}/{INJECT_PROMPT_MAX_LENGTH}
+                      {[...draft.inject_prompt].length}/
+                      {INJECT_PROMPT_MAX_LENGTH}
                     </span>
                   </p>
                 </div>

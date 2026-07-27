@@ -249,3 +249,47 @@ func TestTryUserAuthCredentialClassification(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, databaseFailureResponse.Code)
 	assert.Contains(t, databaseFailureResponse.Body.String(), "AUTH_INTERNAL_ERROR")
 }
+
+func TestTryUserAuthRejectsMatchedPATForInvalidUser(t *testing.T) {
+	tests := []struct {
+		name     string
+		mutate   func(*model.User)
+		wantCode string
+	}{
+		{
+			name: "disabled user",
+			mutate: func(user *model.User) {
+				user.Status = common.UserStatusDisabled
+			},
+			wantCode: "AUTH_USER_DISABLED",
+		},
+		{
+			name: "empty username",
+			mutate: func(user *model.User) {
+				user.Username = " "
+			},
+			wantCode: "AUTH_USER_INVALID",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setupDashboardAuthMiddlewareTest(t)
+			user := createMiddlewarePATUser(t, "optional-invalid-user", "optional-invalid-pat")
+			test.mutate(user)
+			require.NoError(t, model.DB.Save(user).Error)
+
+			router := gin.New()
+			router.GET("/optional", TryUserAuth(), func(c *gin.Context) {
+				c.Status(http.StatusNoContent)
+			})
+			request := httptest.NewRequest(http.MethodGet, "/optional", nil)
+			request.Header.Set("Authorization", "Bearer optional-invalid-pat")
+			response := httptest.NewRecorder()
+
+			router.ServeHTTP(response, request)
+
+			assert.Equal(t, http.StatusUnauthorized, response.Code)
+			assert.Contains(t, response.Body.String(), test.wantCode)
+		})
+	}
+}

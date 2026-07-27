@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/i18n"
@@ -253,7 +254,11 @@ func validateUserModelRoute(c *gin.Context, user *model.User, route *model.UserM
 		common.ApiErrorMsg(c, "模型路由信息不完整")
 		return false
 	}
-	if len(route.InjectPrompt) > model.UserModelRouteMaxInjectPrompt {
+	if !model.IsConcreteUserModelRouteTarget(route.TargetModel) {
+		common.ApiErrorMsg(c, "目标模型必须是具体模型，不能使用通配能力名")
+		return false
+	}
+	if utf8.RuneCountInString(route.InjectPrompt) > model.UserModelRouteMaxInjectPrompt {
 		common.ApiErrorMsg(c, fmt.Sprintf("注入提示词过长，最多 %d 个字符", model.UserModelRouteMaxInjectPrompt))
 		return false
 	}

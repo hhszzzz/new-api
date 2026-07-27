@@ -18,7 +18,7 @@ func Detect(request *http.Request) string {
 	if request == nil {
 		return ClientUnknown
 	}
-	for _, rule := range operation_setting.GetClientPolicySetting().Rules {
+	for _, rule := range operation_setting.GetClientPolicySettingSnapshot().Rules {
 		name := normalizeClientName(rule.Name)
 		if name == "" || len(rule.Matches) == 0 {
 			continue
@@ -68,12 +68,16 @@ func IsGroupAllowed(group string, client string) bool {
 	if group == "" {
 		return true
 	}
-	policy := operation_setting.GetClientPolicySetting().GroupPolicies[group]
+	policy := operation_setting.GetClientPolicySettingSnapshot().GroupPolicies[group]
 	return IsAllowed(policy, client)
 }
 
 func IsAllowed(policy operation_setting.ClientAccessPolicy, client string) bool {
 	mode := operation_setting.NormalizeClientPolicyMode(policy.Mode)
+	if strings.TrimSpace(policy.Mode) != "" && mode == operation_setting.ClientPolicyModeUnrestricted &&
+		!strings.EqualFold(strings.TrimSpace(policy.Mode), operation_setting.ClientPolicyModeUnrestricted) {
+		return false
+	}
 	if mode == operation_setting.ClientPolicyModeUnrestricted {
 		return true
 	}

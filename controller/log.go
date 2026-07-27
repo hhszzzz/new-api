@@ -47,6 +47,14 @@ func GetUserLogs(c *gin.Context) {
 	upstreamRequestId := c.Query("upstream_request_id")
 	canViewRouting := canViewModelRouting(c)
 	sortOptions := model.NewLogSortOptions(c.Query("sort_by"), c.Query("sort_order"))
+	if !canViewRouting &&
+		(sortOptions.SortBy == "channel" || sortOptions.SortBy == "model_name" || upstreamRequestId != "") {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "log field is not available",
+		})
+		return
+	}
 	if !canViewRouting && modelName != "" && !isAllowedUserLogModelFilter(modelName, visiblePerfModelSet(c)) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
@@ -141,6 +149,13 @@ func GetLogsSelfStat(c *gin.Context) {
 	channel, _ := strconv.Atoi(c.Query("channel"))
 	group := c.Query("group")
 	canViewRouting := canViewModelRouting(c)
+	if !canViewRouting && channel != 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "channel filter is not available",
+		})
+		return
+	}
 	if !canViewRouting && modelName != "" && !isAllowedUserLogModelFilter(modelName, visiblePerfModelSet(c)) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,

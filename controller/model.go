@@ -216,7 +216,7 @@ func getAllowedModelNames(c *gin.Context, acceptUnsetRatioModel bool) ([]string,
 		return nil, nil, err
 	}
 	models := service.GetGroupsEnabledModels(groups.ownerGroups)
-	if userId := c.GetInt("id"); userId > 0 && c.GetInt("role") != common.RoleRootUser {
+	if userId := c.GetInt("id"); userId > 0 {
 		routeSources, routeErr := model.GetEnabledUserModelRouteSources(userId, groups.ownerGroups)
 		if routeErr != nil {
 			return nil, nil, routeErr

@@ -243,7 +243,7 @@ func collectDiagnosticHeaders(c *gin.Context) map[string]string {
 	if c == nil || c.Request == nil {
 		return result
 	}
-	setting := operation_setting.GetLogDiagnosticSetting()
+	setting := operation_setting.GetLogDiagnosticSettingSnapshot()
 	allowed := make(map[string]struct{}, len(diagnosticHeaderAllowlist)+len(setting.ExtraHeaders))
 	for name := range diagnosticHeaderAllowlist {
 		allowed[name] = struct{}{}
@@ -406,7 +406,7 @@ func appendLogDiagnostics(c *gin.Context, channelId int, other map[string]interf
 		if started := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime); !started.IsZero() {
 			diagnostics["duration_ms"] = time.Since(started).Milliseconds()
 		}
-		if operation_setting.GetLogDiagnosticSetting().RecordIP {
+		if operation_setting.GetLogDiagnosticSettingSnapshot().RecordIP {
 			diagnostics["ip"] = c.ClientIP()
 		}
 		if upstreamRequestSize, ok := common.GetContextKeyType[int64](c, constant.ContextKeyUpstreamRequestSize); ok && upstreamRequestSize >= 0 {
@@ -439,7 +439,7 @@ func appendLogDiagnostics(c *gin.Context, channelId int, other map[string]interf
 	if len(diagnostics) > 0 {
 		other["diagnostics"] = diagnostics
 	}
-	setting := operation_setting.GetLogDiagnosticSetting()
+	setting := operation_setting.GetLogDiagnosticSettingSnapshot()
 	if setting.RecordHeaders {
 		if headers := collectDiagnosticHeaders(c); len(headers) > 0 {
 			adminInfo["request_headers"] = headers
@@ -455,7 +455,7 @@ func appendLogDiagnostics(c *gin.Context, channelId int, other map[string]interf
 // per-user flag remains in the compatibility schema but no longer controls
 // request or error log collection.
 func logIPForStorage(c *gin.Context) string {
-	if c == nil || !operation_setting.GetLogDiagnosticSetting().RecordIP {
+	if c == nil || !operation_setting.GetLogDiagnosticSettingSnapshot().RecordIP {
 		return ""
 	}
 	return c.ClientIP()
@@ -785,6 +785,8 @@ func formatUserLogs(logs []*Log, startIdx int, canViewModelRouting bool) {
 				logs[i].ChannelName = adminLogSurfaceName(logs[i], otherMap)
 				sanitizeAdminSelfLogInfo(otherMap)
 				retainPublicLogDiagnostics(otherMap)
+				delete(otherMap, "audit_info")
+				delete(otherMap, "stream_status")
 				delete(otherMap, "request_conversion")
 				delete(otherMap, "request_path")
 			}

@@ -17,23 +17,37 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, within } from '@testing-library/react'
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { ReactNode } from 'react'
-import { describe, expect, test, vi } from 'vitest'
+import { beforeEach, describe, expect, test, vi } from 'vitest'
 
 import { ClientPolicySettingsSection } from '../client-policy-settings-section'
+
+const { updateClientPolicyOptionsMock, toastErrorMock, toastSuccessMock } =
+  vi.hoisted(() => ({
+    updateClientPolicyOptionsMock: vi.fn(),
+    toastErrorMock: vi.fn(),
+    toastSuccessMock: vi.fn(),
+  }))
+
+vi.mock('../../api', () => ({
+  updateClientPolicyOptions: updateClientPolicyOptionsMock,
+}))
+
+vi.mock('sonner', () => ({
+  toast: { error: toastErrorMock, success: toastSuccessMock },
+}))
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string) => `translated:${key}`,
-  }),
-}))
-
-vi.mock('../../hooks/use-update-option', () => ({
-  useUpdateOption: () => ({
-    isPending: false,
-    mutateAsync: vi.fn().mockResolvedValue({ success: true }),
   }),
 }))
 
@@ -108,6 +122,13 @@ vi.mock('@/components/ui/select', () => ({
 }))
 
 describe('client policy settings selected labels', () => {
+  beforeEach(() => {
+    updateClientPolicyOptionsMock.mockReset()
+    updateClientPolicyOptionsMock.mockResolvedValue({ success: true })
+    toastErrorMock.mockReset()
+    toastSuccessMock.mockReset()
+  })
+
   test('shows translated labels instead of raw stored enum values', () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
@@ -229,6 +250,54 @@ describe('client policy settings selected labels', () => {
     expect(screen.getAllByText('translated:Prefix')).toHaveLength(2)
   })
 
+  test('preserves unsaved rules when system options refresh in the background', () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    const initialValues = {
+      'client_policy_setting.rules': JSON.stringify([
+        {
+          name: 'server_client',
+          matches: [{ source: 'user_agent', mode: 'prefix', value: 'server/' }],
+        },
+      ]),
+      'client_policy_setting.group_policies': '{}',
+    }
+    const { rerender } = render(
+      <QueryClientProvider client={queryClient}>
+        <ClientPolicySettingsSection defaultValues={initialValues} />
+      </QueryClientProvider>
+    )
+
+    fireEvent.change(screen.getByDisplayValue('server_client'), {
+      target: { value: 'local_draft' },
+    })
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <ClientPolicySettingsSection
+          defaultValues={{
+            ...initialValues,
+            'client_policy_setting.rules': JSON.stringify([
+              {
+                name: 'refreshed_server_client',
+                matches: [
+                  {
+                    source: 'user_agent',
+                    mode: 'prefix',
+                    value: 'refreshed/',
+                  },
+                ],
+              },
+            ]),
+          }}
+        />
+      </QueryClientProvider>
+    )
+
+    expect(screen.getByDisplayValue('local_draft')).toBeVisible()
+    expect(screen.queryByDisplayValue('refreshed_server_client')).toBeNull()
+  })
+
   test('shows every current and previously configured group without add or remove controls', async () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
@@ -277,5 +346,94 @@ describe('client policy settings selected labels', () => {
       within(vipRow).queryByRole('button', { name: 'translated:Remove' })
     ).not.toBeInTheDocument()
     expect(screen.queryByText('translated:Add group')).not.toBeInTheDocument()
+  })
+
+  test.each([
+    {
+      name: 'empty match value',
+      match: { source: 'user_agent', mode: 'prefix', value: '' },
+    },
+    {
+      name: 'header match without a header',
+      match: { source: 'header', mode: 'exact', value: 'codex' },
+    },
+  ])('rejects an incomplete rule with $name', async ({ match }) => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    const { container } = render(
+      <QueryClientProvider client={queryClient}>
+        <ClientPolicySettingsSection
+          defaultValues={{
+            'client_policy_setting.rules': JSON.stringify([
+              { name: 'incomplete', matches: [match] },
+            ]),
+            'client_policy_setting.group_policies': '{}',
+          }}
+        />
+      </QueryClientProvider>
+    )
+
+    const form = container.querySelector('form')
+    if (!form) throw new Error('settings form was not rendered')
+    fireEvent.submit(form)
+
+    await waitFor(() =>
+      expect(toastErrorMock).toHaveBeenCalledWith(
+        'translated:Complete every client rule match before saving.'
+      )
+    )
+    expect(updateClientPolicyOptionsMock).not.toHaveBeenCalled()
+  })
+
+  test('submits rules and policies in one atomic mutation', async () => {
+    updateClientPolicyOptionsMock.mockResolvedValueOnce({
+      success: false,
+      message: 'rejected',
+    })
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    const { container } = render(
+      <QueryClientProvider client={queryClient}>
+        <ClientPolicySettingsSection
+          defaultValues={{
+            'client_policy_setting.rules': JSON.stringify([
+              {
+                name: 'codex',
+                matches: [
+                  { source: 'user_agent', mode: 'prefix', value: 'codex/' },
+                ],
+              },
+            ]),
+            'client_policy_setting.group_policies': '{}',
+          }}
+        />
+      </QueryClientProvider>
+    )
+
+    const form = container.querySelector('form')
+    if (!form) throw new Error('settings form was not rendered')
+    fireEvent.submit(form)
+
+    await waitFor(() =>
+      expect(updateClientPolicyOptionsMock).toHaveBeenCalledOnce()
+    )
+    expect(updateClientPolicyOptionsMock.mock.calls[0]?.[0]).toEqual({
+      rules: [
+        {
+          name: 'codex',
+          matches: [
+            {
+              source: 'user_agent',
+              header: undefined,
+              mode: 'prefix',
+              value: 'codex/',
+            },
+          ],
+        },
+      ],
+      group_policies: {},
+    })
   })
 })

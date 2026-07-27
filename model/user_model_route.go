@@ -4,13 +4,17 @@ import (
 	"errors"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"gorm.io/gorm"
 )
 
-var ErrUserModelRouteConflict = errors.New("user model route overlaps an existing rule")
+var (
+	ErrUserModelRouteConflict       = errors.New("user model route overlaps an existing rule")
+	ErrUserModelRouteWildcardTarget = errors.New("user model route target must be a concrete model")
+)
 
 // UserModelRouteMaxInjectPrompt bounds the stored prompt so a single route
 // cannot push an unbounded prefix into every upstream request.
@@ -257,13 +261,22 @@ func GetUserModelRouteTargetModels() ([]string, error) {
 		Distinct().
 		Order("abilities.model asc").
 		Pluck("abilities.model", &models).Error
-	return models, err
+	if err != nil {
+		return nil, err
+	}
+	concreteModels := make([]string, 0, len(models))
+	for _, modelName := range models {
+		if IsConcreteUserModelRouteTarget(modelName) {
+			concreteModels = append(concreteModels, modelName)
+		}
+	}
+	return concreteModels, nil
 }
 
 func GetUserModelRouteCandidateChannels(group, modelName string) ([]UserModelRouteCandidateChannel, error) {
 	group = strings.TrimSpace(group)
 	modelName = strings.TrimSpace(modelName)
-	if group == "" || modelName == "" {
+	if group == "" || !IsConcreteUserModelRouteTarget(modelName) {
 		return []UserModelRouteCandidateChannel{}, nil
 	}
 
@@ -297,7 +310,7 @@ func GetUserModelRouteCandidateChannels(group, modelName string) ([]UserModelRou
 func GetUserModelRouteExecutionGroupChannelCounts(modelName string) (map[string]int64, error) {
 	modelName = strings.TrimSpace(modelName)
 	counts := make(map[string]int64)
-	if modelName == "" {
+	if !IsConcreteUserModelRouteTarget(modelName) {
 		return counts, nil
 	}
 	type groupCount struct {
@@ -314,23 +327,31 @@ func GetUserModelRouteExecutionGroupChannelCounts(modelName string) (map[string]
 			Scan(&rows).Error
 		return rows, err
 	}
-	rows, err := load(modelName)
+	exactRows, err := load(modelName)
 	if err != nil {
 		return nil, err
 	}
-	if len(rows) == 0 {
-		normalizedModel := ratio_setting.FormatMatchingModelName(modelName)
-		if normalizedModel != "" && normalizedModel != modelName {
-			rows, err = load(normalizedModel)
-			if err != nil {
-				return nil, err
+	for _, row := range exactRows {
+		counts[row.GroupName] = row.Count
+	}
+	normalizedModel := ratio_setting.FormatMatchingModelName(modelName)
+	if normalizedModel != "" && normalizedModel != modelName {
+		fallbackRows, err := load(normalizedModel)
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range fallbackRows {
+			if _, hasExactMatch := counts[row.GroupName]; !hasExactMatch {
+				counts[row.GroupName] = row.Count
 			}
 		}
 	}
-	for _, row := range rows {
-		counts[row.GroupName] = row.Count
-	}
 	return counts, nil
+}
+
+func IsConcreteUserModelRouteTarget(modelName string) bool {
+	modelName = strings.TrimSpace(modelName)
+	return modelName != "" && !strings.Contains(modelName, "*")
 }
 
 func SaveUserModelRoute(route *UserModelRoute) error {
@@ -350,10 +371,13 @@ func SaveUserModelRoute(route *UserModelRoute) error {
 	if route.SourceModel == "" || route.TargetModel == "" || route.ExecutionGroup == "" || len(route.ChannelIds) == 0 {
 		return errors.New("incomplete user model route")
 	}
+	if !IsConcreteUserModelRouteTarget(route.TargetModel) {
+		return ErrUserModelRouteWildcardTarget
+	}
 	if len(route.PoolName) > 191 {
 		return errors.New("user model route pool name is too long")
 	}
-	if len(route.InjectPrompt) > UserModelRouteMaxInjectPrompt {
+	if utf8.RuneCountInString(route.InjectPrompt) > UserModelRouteMaxInjectPrompt {
 		return errors.New("user model route inject prompt is too long")
 	}
 	if !route.AllGroups && len(route.Groups) == 0 {
@@ -445,6 +469,10 @@ func DeleteUserModelRoute(userId int, routeId int) error {
 		return errors.New("invalid user model route")
 	}
 	return DB.Transaction(func(tx *gorm.DB) error {
+		var user User
+		if err := lockForUpdate(tx).Select("id").Where("id = ?", userId).First(&user).Error; err != nil {
+			return err
+		}
 		var route UserModelRoute
 		if err := tx.Where("id = ? AND user_id = ?", routeId, userId).First(&route).Error; err != nil {
 			return err

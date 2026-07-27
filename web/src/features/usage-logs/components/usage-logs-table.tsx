@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { useQuery } from '@tanstack/react-query'
 import { getRouteApi } from '@tanstack/react-router'
 import type { ColumnDef, OnChangeFn, SortingState } from '@tanstack/react-table'
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -27,6 +27,7 @@ import {
   DataTablePage,
   DataTableRow,
   useDataTable,
+  usePersistedTableSorting,
 } from '@/components/data-table'
 import { useMediaQuery } from '@/hooks'
 import { useTableUrlState } from '@/hooks/use-table-url-state'
@@ -39,6 +40,7 @@ import {
 } from '../constants'
 import { useColumnsByCategory } from '../lib/columns'
 import { parseLogOther } from '../lib/format'
+import { isSameUsageLogsQueryScope } from '../lib/query-params'
 import { fetchLogsByCategory } from '../lib/utils'
 import type { LogCategory, LogSortOrder, UsageLogSortBy } from '../types'
 import { CommonLogsFilterBar } from './common-logs-filter-bar'
@@ -112,8 +114,22 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
   const { t } = useTranslation()
   const { isAdminView, canViewModelRoute } = useLogsViewScope()
   const isMobile = useMediaQuery('(max-width: 640px)')
+  const defaultPageSize = isMobile ? 20 : 100
   const searchParams = route.useSearch()
-  const [sorting, setSorting] = useState<SortingState>([])
+  const tableStateStorageKey = `usage-logs:${logCategory}:${isAdminView ? 'admin' : 'user'}`
+  const sortableColumns = useMemo(() => {
+    const configured = LOG_SORTABLE_COLUMNS[logCategory]
+    if (logCategory !== 'common' || canViewModelRoute) return configured
+
+    const publicColumns = new Set(configured)
+    publicColumns.delete('channel')
+    publicColumns.delete('model_name')
+    return publicColumns
+  }, [canViewModelRoute, logCategory])
+  const [sorting, setSorting] = usePersistedTableSorting(
+    tableStateStorageKey,
+    sortableColumns
+  )
 
   const {
     columnFilters,
@@ -126,7 +142,7 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
     navigate: route.useNavigate(),
     pagination: {
       defaultPage: 1,
-      defaultPageSize: isMobile ? 20 : 100,
+      defaultPageSize,
       pageSizeStorageKey: `usage-logs:${logCategory}:${isAdminView ? 'admin' : 'user'}:page-size`,
     },
     globalFilter: { enabled: false },
@@ -159,14 +175,19 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
 
   const activeSort = sorting[0]
   const sortBy =
-    activeSort &&
-    LOG_SORTABLE_COLUMNS[logCategory].has(activeSort.id as UsageLogSortBy)
+    activeSort && sortableColumns.has(activeSort.id as UsageLogSortBy)
       ? (activeSort.id as UsageLogSortBy)
       : undefined
   let sortOrder: LogSortOrder | undefined
   if (sortBy) {
     sortOrder = activeSort?.desc ? 'desc' : 'asc'
   }
+  const queryScope = [
+    'logs',
+    logCategory,
+    isAdminView,
+    canViewModelRoute,
+  ] as const
 
   const handleSortingChange: OnChangeFn<SortingState> = (updater) => {
     setSorting(updater)
@@ -177,10 +198,7 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
 
   const { data, isLoading, isFetching } = useQuery({
     queryKey: [
-      'logs',
-      logCategory,
-      isAdminView,
-      canViewModelRoute,
+      ...queryScope,
       pagination.pageIndex + 1,
       pagination.pageSize,
       columnFilters,
@@ -208,7 +226,7 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
       return result.data || DEFAULT_LOGS_DATA
     },
     placeholderData: (previousData, previousQuery) => {
-      if (previousQuery?.queryKey[1] === logCategory) {
+      if (isSameUsageLogsQueryScope(previousQuery?.queryKey, queryScope)) {
         return previousData
       }
       return undefined
@@ -232,19 +250,18 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
         return {
           ...column,
           enableSorting: Boolean(
-            columnId &&
-            LOG_SORTABLE_COLUMNS[logCategory].has(columnId as UsageLogSortBy)
+            columnId && sortableColumns.has(columnId as UsageLogSortBy)
           ),
         }
       }),
-    [logCategory, rawColumns]
+    [rawColumns, sortableColumns]
   )
   const isLoadingData = isLoading || (isFetching && !data)
 
   const { table } = useDataTable({
     data: logs as Record<string, unknown>[],
     columns: columns as ColumnDef<Record<string, unknown>>[],
-    tableStateStorageKey: `usage-logs:${logCategory}:${isAdminView ? 'admin' : 'user'}`,
+    tableStateStorageKey,
     columnFilters,
     columnVisibilityStorageKey: getColumnVisibilityStorageKey(
       logCategory,
@@ -256,6 +273,7 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
         : undefined,
     pagination,
     sorting,
+    initialPagination: { pageIndex: 0, pageSize: defaultPageSize },
     enableRowSelection: false,
     onPaginationChange,
     onColumnFiltersChange,

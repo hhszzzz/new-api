@@ -44,7 +44,6 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
-import { Checkbox } from '@/components/ui/checkbox'
 import {
   Collapsible,
   CollapsibleContent,
@@ -72,11 +71,11 @@ import { safeJsonParse } from '../utils/json-parser'
 
 type GroupRatioVisualEditorProps = {
   groupRatio: string
-  topupGroupRatio: string
+  // Legacy option name. This map now supplies descriptions only; user
+  // memberships managed by administrators are the authorization source.
   userUsableGroups: string
   groupGroupRatio: string
   autoGroups: string
-  groupSpecialUsableGroup: string
   onChange: (field: string, value: string) => void
 }
 
@@ -84,8 +83,6 @@ type GroupPricingRow = {
   _id: string
   name: string
   ratio: string
-  topupRatio: string
-  selectable: boolean
   description: string
 }
 
@@ -134,22 +131,19 @@ function parseNestedRatioMap(
 
 function buildGroupPricingRows(
   groupRatio: string,
-  userUsableGroups: string,
-  _topupGroupRatio: string
+  userUsableGroups: string
 ): GroupPricingRow[] {
   const ratioMap = parseRatioMap(groupRatio)
   const usableMap = parseUsableMap(userUsableGroups)
   // Top-up ratios are retained as a legacy backend value, but are no longer
   // part of the group-management UI. Do not let a legacy-only group reappear
   // as an editable pricing group.
-  const names = new Set([...Object.keys(ratioMap), ...Object.keys(usableMap)])
+  const names = Object.keys(ratioMap)
 
-  return [...names].map((name) => ({
+  return names.map((name) => ({
     _id: createGroupPricingId(),
     name,
     ratio: String(normalizeRatio(ratioMap[name])),
-    topupRatio: '',
-    selectable: Object.hasOwn(usableMap, name),
     description: String(usableMap[name] ?? ''),
   }))
 }
@@ -162,15 +156,12 @@ function serializeGroupPricingRows(rows: GroupPricingRow[]) {
     const name = row.name.trim()
     if (!name) continue
     groupRatio[name] = normalizeRatio(row.ratio)
-    if (row.selectable) {
-      userUsableGroups[name] = row.description
-    }
+    userUsableGroups[name] = row.description
   }
 
   return {
     GroupRatio: JSON.stringify(groupRatio, null, 2),
     UserUsableGroups: JSON.stringify(userUsableGroups, null, 2),
-    TopupGroupRatio: '',
   }
 }
 
@@ -184,8 +175,7 @@ function groupPricingSignature(rows: GroupPricingRow[]): string {
 
 function sourceGroupPricingSignature(
   groupRatio: string,
-  userUsableGroups: string,
-  _topupGroupRatio: string
+  userUsableGroups: string
 ): string {
   return JSON.stringify({
     groupRatio: parseRatioMap(groupRatio),
@@ -244,11 +234,9 @@ function GroupNameSelect(props: GroupNameSelectProps) {
 
 export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
   groupRatio,
-  topupGroupRatio,
   userUsableGroups,
   groupGroupRatio,
   autoGroups,
-  groupSpecialUsableGroup,
   onChange,
 }: GroupRatioVisualEditorProps) {
   const { t } = useTranslation()
@@ -256,13 +244,11 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
 
   const registry = useMemo<RegistryEntry[]>(() => {
     const ratioMap = parseRatioMap(groupRatio)
-    const usableMap = parseUsableMap(userUsableGroups)
-    const names = new Set([...Object.keys(ratioMap), ...Object.keys(usableMap)])
-    return [...names].map((name) => ({
+    return Object.keys(ratioMap).map((name) => ({
       name,
       ratio: normalizeRatio(ratioMap[name]),
     }))
-  }, [groupRatio, userUsableGroups])
+  }, [groupRatio])
 
   const registryNames = useMemo(
     () => registry.map((entry) => entry.name),
@@ -314,7 +300,6 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
       <GroupPricingTable
         groupRatio={groupRatio}
         userUsableGroups={userUsableGroups}
-        topupGroupRatio={topupGroupRatio}
         onChange={onChange}
         onShowDetail={setDetailGroup}
       />
@@ -331,7 +316,7 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
           <CardTitle>{t('Auto assignment order')}</CardTitle>
           <CardDescription>
             {t(
-              'Priority order for tokens in the auto group. The system tries groups from top to bottom.'
+              "When a token uses auto, the system tries only the user's assigned groups in the configured order."
             )}
           </CardDescription>
         </CardHeader>
@@ -392,11 +377,9 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
           if (!open) setDetailGroup(null)
         }}
         registry={registry}
-        topupGroupRatio={topupGroupRatio}
         userUsableGroups={userUsableGroups}
         groupGroupRatio={groupGroupRatio}
         autoGroups={autoGroupsList}
-        groupSpecialUsableGroup={groupSpecialUsableGroup}
       />
     </div>
   )
@@ -405,7 +388,6 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
 type GroupPricingTableProps = {
   groupRatio: string
   userUsableGroups: string
-  topupGroupRatio: string
   onChange: (field: string, value: string) => void
   onShowDetail: (name: string) => void
 }
@@ -413,32 +395,26 @@ type GroupPricingTableProps = {
 function GroupPricingTable({
   groupRatio,
   userUsableGroups,
-  topupGroupRatio,
   onChange,
   onShowDetail,
 }: GroupPricingTableProps) {
   const { t } = useTranslation()
   const [rows, setRows] = useState<GroupPricingRow[]>(() =>
-    buildGroupPricingRows(groupRatio, userUsableGroups, topupGroupRatio)
+    buildGroupPricingRows(groupRatio, userUsableGroups)
   )
 
   useEffect(() => {
     const incomingSignature = sourceGroupPricingSignature(
       groupRatio,
-      userUsableGroups,
-      topupGroupRatio
+      userUsableGroups
     )
     setRows((currentRows) => {
       if (groupPricingSignature(currentRows) === incomingSignature) {
         return currentRows
       }
-      return buildGroupPricingRows(
-        groupRatio,
-        userUsableGroups,
-        topupGroupRatio
-      )
+      return buildGroupPricingRows(groupRatio, userUsableGroups)
     })
-  }, [groupRatio, userUsableGroups, topupGroupRatio])
+  }, [groupRatio, userUsableGroups])
 
   const emitRows = useCallback(
     (nextRows: GroupPricingRow[]) => {
@@ -477,8 +453,6 @@ function GroupPricingTable({
         _id: createGroupPricingId(),
         name,
         ratio: '1',
-        topupRatio: '',
-        selectable: true,
         description: '',
       },
     ])
@@ -511,7 +485,7 @@ function GroupPricingTable({
             <CardTitle>{t('Pricing groups')}</CardTitle>
             <CardDescription>
               {t(
-                'Edit billing ratios and user-selectable groups in one table.'
+                'Edit billing ratios and descriptions for administrator-assigned groups.'
               )}
             </CardDescription>
           </div>
@@ -560,39 +534,19 @@ function GroupPricingTable({
                 ),
               },
               {
-                id: 'selectable',
-                header: t('User selectable'),
-                className: 'w-28 text-center',
-                cell: (row) => (
-                  <div className='flex justify-center'>
-                    <Checkbox
-                      checked={row.selectable}
-                      onCheckedChange={(checked) =>
-                        updateRow(row._id, 'selectable', checked === true)
-                      }
-                      aria-label={t('User selectable')}
-                    />
-                  </div>
-                ),
-              },
-              {
                 id: 'description',
                 header: t('Description'),
                 className: 'min-w-56',
-                cell: (row) =>
-                  row.selectable ? (
-                    <Input
-                      value={row.description}
-                      placeholder={t('Group description')}
-                      onChange={(event) =>
-                        updateRow(row._id, 'description', event.target.value)
-                      }
-                    />
-                  ) : (
-                    <span className='text-muted-foreground px-3 text-sm'>
-                      -
-                    </span>
-                  ),
+                cell: (row) => (
+                  <Input
+                    value={row.description}
+                    placeholder={t('Group description')}
+                    aria-label={`${t('Description')}: ${row.name || t('Group name')}`}
+                    onChange={(event) =>
+                      updateRow(row._id, 'description', event.target.value)
+                    }
+                  />
+                ),
               },
               {
                 id: 'actions',
@@ -1086,30 +1040,9 @@ type GroupDetailSheetProps = {
   groupName: string | null
   onOpenChange: (open: boolean) => void
   registry: RegistryEntry[]
-  topupGroupRatio: string
   userUsableGroups: string
   groupGroupRatio: string
   autoGroups: string[]
-  groupSpecialUsableGroup: string
-}
-
-type VisibilityRule = {
-  userGroup: string
-  visible: boolean
-  description: string
-}
-
-function parseSpecialGroupKey(rawKey: string): {
-  visible: boolean
-  groupName: string
-} {
-  if (rawKey.startsWith('-:')) {
-    return { visible: false, groupName: rawKey.slice(2) }
-  }
-  if (rawKey.startsWith('+:')) {
-    return { visible: true, groupName: rawKey.slice(2) }
-  }
-  return { visible: true, groupName: rawKey }
 }
 
 function GroupDetailSheet(props: GroupDetailSheetProps) {
@@ -1122,10 +1055,6 @@ function GroupDetailSheet(props: GroupDetailSheetProps) {
     const entry = props.registry.find((item) => item.name === name)
     const usableMap = parseUsableMap(props.userUsableGroups)
     const overrideMap = parseNestedRatioMap(props.groupGroupRatio)
-    const specialMap = safeJsonParse<Record<string, Record<string, string>>>(
-      props.groupSpecialUsableGroup,
-      { fallback: {}, silent: true }
-    )
 
     // Overrides that apply when other user groups bill as this group
     const incomingOverrides: { userGroup: string; ratio: number }[] = []
@@ -1140,30 +1069,13 @@ function GroupDetailSheet(props: GroupDetailSheetProps) {
       ([targetGroup, ratio]) => ({ targetGroup, ratio })
     )
 
-    // Visibility rules targeting this group
-    const visibilityRules: VisibilityRule[] = []
-    for (const [userGroup, inner] of Object.entries(specialMap)) {
-      if (typeof inner !== 'object' || inner === null) continue
-      for (const [rawKey, desc] of Object.entries(inner)) {
-        const parsed = parseSpecialGroupKey(rawKey)
-        if (parsed.groupName !== name) continue
-        visibilityRules.push({
-          userGroup,
-          visible: parsed.visible,
-          description: typeof desc === 'string' ? desc : '',
-        })
-      }
-    }
-
     const autoIndex = props.autoGroups.indexOf(name)
 
     return {
       ratio: entry?.ratio,
-      selectable: Object.hasOwn(usableMap, name),
       description: String(usableMap[name] ?? ''),
       incomingOverrides,
       outgoingOverrides,
-      visibilityRules,
       autoIndex,
     }
   }, [
@@ -1172,7 +1084,6 @@ function GroupDetailSheet(props: GroupDetailSheetProps) {
     props.userUsableGroups,
     props.groupGroupRatio,
     props.autoGroups,
-    props.groupSpecialUsableGroup,
   ])
 
   return (
@@ -1200,15 +1111,7 @@ function GroupDetailSheet(props: GroupDetailSheetProps) {
                   <dt className='text-muted-foreground'>{t('Ratio')}</dt>
                   <dd className='font-medium'>{detail.ratio ?? '-'}</dd>
                 </div>
-                <div className='flex justify-between'>
-                  <dt className='text-muted-foreground'>
-                    {t('User selectable')}
-                  </dt>
-                  <dd className='font-medium'>
-                    {detail.selectable ? t('Yes') : t('No')}
-                  </dd>
-                </div>
-                {detail.selectable && detail.description && (
+                {detail.description && (
                   <div className='flex justify-between gap-4'>
                     <dt className='text-muted-foreground'>
                       {t('Description')}
@@ -1275,40 +1178,6 @@ function GroupDetailSheet(props: GroupDetailSheetProps) {
                         })}
                       </span>
                       <span className='font-medium'>{item.ratio}</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </section>
-
-            <section className='space-y-2'>
-              <h3 className='text-sm font-semibold'>
-                {t('Special visibility rules')}
-              </h3>
-              {detail.visibilityRules.length === 0 ? (
-                <p className='text-muted-foreground text-sm'>{t('None')}</p>
-              ) : (
-                <ul className='space-y-1 text-sm'>
-                  {detail.visibilityRules.map((rule) => (
-                    <li
-                      key={`${rule.userGroup}-${rule.visible}`}
-                      className='flex items-center justify-between rounded-md border px-3 py-1.5'
-                    >
-                      <span>
-                        {rule.visible
-                          ? t('Extra visible to {{group}}', {
-                              group: rule.userGroup,
-                            })
-                          : t('Hidden from {{group}}', {
-                              group: rule.userGroup,
-                            })}
-                      </span>
-                      <StatusBadge
-                        variant={rule.visible ? 'info' : 'danger'}
-                        copyable={false}
-                      >
-                        {rule.visible ? t('Visible') : t('Hidden')}
-                      </StatusBadge>
                     </li>
                   ))}
                 </ul>

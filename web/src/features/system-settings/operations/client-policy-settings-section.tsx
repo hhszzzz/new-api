@@ -16,9 +16,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useQuery } from '@tanstack/react-query'
-import { useEffect, useMemo, useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 
 import { ClientMultiSelect } from '@/components/client-multi-select'
 import { MultiSelect, type Option } from '@/components/multi-select'
@@ -44,10 +45,10 @@ import {
   type ClientPolicyMode,
 } from '@/lib/client-policy'
 
+import { updateClientPolicyOptions } from '../api'
 import { SettingsForm } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
-import { useUpdateOption } from '../hooks/use-update-option'
 
 type MatchConfig = {
   source: ClientMatchSource
@@ -279,7 +280,27 @@ function uniqueRuleName(base: string, rules: Rule[]): string {
 
 export function ClientPolicySettingsSection(props: Props) {
   const { t } = useTranslation()
-  const updateOption = useUpdateOption()
+  const queryClient = useQueryClient()
+  const editRevisionRef = useRef(0)
+  const synchronizedRevisionRef = useRef(0)
+  const submittedRevisionRef = useRef(0)
+  const clientPolicyMutation = useMutation({
+    mutationFn: updateClientPolicyOptions,
+    onSuccess: (response) => {
+      if (!response.success) {
+        toast.error(response.message || t('Failed to update setting'))
+        return
+      }
+      if (editRevisionRef.current === submittedRevisionRef.current) {
+        synchronizedRevisionRef.current = submittedRevisionRef.current
+      }
+      queryClient.invalidateQueries({ queryKey: ['system-options'] })
+      toast.success(t('Setting updated successfully'))
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || t('Failed to update setting'))
+    },
+  })
   const rawRules = props.defaultValues['client_policy_setting.rules']
   const rawPolicies =
     props.defaultValues['client_policy_setting.group_policies']
@@ -294,9 +315,19 @@ export function ClientPolicySettingsSection(props: Props) {
   const groupsQuery = useQuery({ queryKey: ['groups'], queryFn: getGroups })
 
   useEffect(() => {
+    if (editRevisionRef.current !== synchronizedRevisionRef.current) return
     setRules(parsedRules)
     setPolicies(parsedPolicies)
   }, [parsedPolicies, parsedRules])
+
+  const editRules: typeof setRules = (updater) => {
+    editRevisionRef.current += 1
+    setRules(updater)
+  }
+  const editPolicies: typeof setPolicies = (updater) => {
+    editRevisionRef.current += 1
+    setPolicies(updater)
+  }
 
   const availableGroups = useMemo(() => {
     const configuredGroups = groupsQuery.data?.data ?? []
@@ -310,7 +341,7 @@ export function ClientPolicySettingsSection(props: Props) {
   )
 
   const updateRule = (ruleIndex: number, patch: Partial<Rule>) => {
-    setRules((current) =>
+    editRules((current) =>
       current.map((rule, index) =>
         index === ruleIndex ? { ...rule, ...patch } : rule
       )
@@ -322,7 +353,7 @@ export function ClientPolicySettingsSection(props: Props) {
     matchIndex: number,
     patch: Partial<Match>
   ) => {
-    setRules((current) =>
+    editRules((current) =>
       current.map((rule, index) => {
         if (index !== ruleIndex) return rule
         return {
@@ -353,7 +384,7 @@ export function ClientPolicySettingsSection(props: Props) {
   )
 
   const updateSelectedRules = (values: string[]) => {
-    setRules((current) => {
+    editRules((current) => {
       const currentByValue = new Map(
         current.map((rule) => [`${RULE_VALUE_PREFIX}${rule.draftId}`, rule])
       )
@@ -398,18 +429,31 @@ export function ClientPolicySettingsSection(props: Props) {
     })
   }
 
-  const onSubmit = async () => {
-    const cleanRules = rules
-      .map((rule) => ({
-        name: rule.name.trim(),
-        matches: rule.matches.map((match) => ({
-          source: match.source,
-          header: match.header?.trim().toLowerCase(),
-          mode: match.mode,
-          value: match.value.trim(),
-        })),
-      }))
-      .filter((rule) => rule.name && rule.matches.some((match) => match.value))
+  const onSubmit = () => {
+    const hasIncompleteRule = rules.some(
+      (rule) =>
+        !rule.name.trim() ||
+        rule.matches.length === 0 ||
+        rule.matches.some(
+          (match) =>
+            !match.value.trim() ||
+            (match.source === 'header' && !match.header?.trim())
+        )
+    )
+    if (hasIncompleteRule) {
+      toast.error(t('Complete every client rule match before saving.'))
+      return
+    }
+
+    const cleanRules = rules.map((rule) => ({
+      name: rule.name.trim(),
+      matches: rule.matches.map((match) => ({
+        source: match.source,
+        header: match.header?.trim().toLowerCase(),
+        mode: match.mode,
+        value: match.value.trim(),
+      })),
+    }))
     const cleanPolicies: Record<string, Policy> = {}
     for (const [group, policy] of Object.entries(policies)) {
       const normalizedGroup = group.trim()
@@ -425,13 +469,11 @@ export function ClientPolicySettingsSection(props: Props) {
         ],
       }
     }
-    await updateOption.mutateAsync({
-      key: 'client_policy_setting.rules',
-      value: JSON.stringify(cleanRules),
-    })
-    await updateOption.mutateAsync({
-      key: 'client_policy_setting.group_policies',
-      value: JSON.stringify(cleanPolicies),
+    if (clientPolicyMutation.isPending) return
+    submittedRevisionRef.current = editRevisionRef.current
+    clientPolicyMutation.mutate({
+      rules: cleanRules,
+      group_policies: cleanPolicies,
     })
   }
 
@@ -447,12 +489,12 @@ export function ClientPolicySettingsSection(props: Props) {
       <SettingsForm
         onSubmit={(event) => {
           event.preventDefault()
-          void onSubmit()
+          onSubmit()
         }}
       >
         <SettingsPageFormActions
-          onSave={() => void onSubmit()}
-          isSaving={updateOption.isPending}
+          onSave={onSubmit}
+          isSaving={clientPolicyMutation.isPending}
         />
         <div className='space-y-4 lg:col-span-2'>
           <div className='space-y-2'>
@@ -490,7 +532,7 @@ export function ClientPolicySettingsSection(props: Props) {
                   type='button'
                   variant='ghost'
                   onClick={() =>
-                    setRules((current) =>
+                    editRules((current) =>
                       current.filter((_, index) => index !== ruleIndex)
                     )
                   }
@@ -648,7 +690,7 @@ export function ClientPolicySettingsSection(props: Props) {
                   <Select
                     value={policy.mode}
                     onValueChange={(value) =>
-                      setPolicies((current) => ({
+                      editPolicies((current) => ({
                         ...current,
                         [group]: { ...policy, mode: value as Policy['mode'] },
                       }))
@@ -675,7 +717,7 @@ export function ClientPolicySettingsSection(props: Props) {
                     availableClients={availableClients}
                     disabled={policy.mode === 'unrestricted'}
                     onChange={(clients) =>
-                      setPolicies((current) => ({
+                      editPolicies((current) => ({
                         ...current,
                         [group]: { ...policy, clients },
                       }))

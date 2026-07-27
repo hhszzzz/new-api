@@ -8,52 +8,44 @@ import (
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 )
 
-func applySpecialUsableGroups(groups map[string]string, userGroup string) {
-	if strings.TrimSpace(userGroup) == "" {
-		return
-	}
-	specialSettings, ok := ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup.Get(userGroup)
-	if ok {
-		for specialGroup, description := range specialSettings {
-			switch {
-			case strings.HasPrefix(specialGroup, "-:"):
-				delete(groups, strings.TrimPrefix(specialGroup, "-:"))
-			case strings.HasPrefix(specialGroup, "+:"):
-				groups[strings.TrimPrefix(specialGroup, "+:")] = description
-			default:
-				groups[specialGroup] = description
-			}
+func getAssignedUserGroups(userGroups []string) map[string]string {
+	descriptions := setting.GetUserUsableGroupsCopy()
+	configuredGroups := ratio_setting.GetGroupRatioCopy()
+	groups := make(map[string]string, len(userGroups))
+	for _, group := range userGroups {
+		group = strings.TrimSpace(group)
+		if group == "" || group == "auto" {
+			continue
 		}
+		if _, exists := configuredGroups[group]; !exists {
+			continue
+		}
+		description := strings.TrimSpace(descriptions[group])
+		if description == "" {
+			description = group
+		}
+		groups[group] = description
 	}
+	return groups
 }
 
 // GetUserUsableGroups retains the legacy single-user-group contract.
 func GetUserUsableGroups(userGroup string) map[string]string {
-	groups := setting.GetUserUsableGroupsCopy()
-	applySpecialUsableGroups(groups, userGroup)
-	return groups
+	return GetAuthorizedUserGroups([]string{userGroup})
 }
 
-// GetUserUsableGroupsForGroups combines each membership's independently
-// usable token groups. A restriction on one membership must not revoke access
-// granted by another membership. This preserves the existing special usable
-// group rules while allowing multiple base memberships.
+// GetUserUsableGroupsForGroups retains the historical helper name. User group
+// memberships assigned by administrators are the authorization source.
 func GetUserUsableGroupsForGroups(userGroups []string) map[string]string {
-	groups := make(map[string]string)
-	for _, userGroup := range userGroups {
-		userGroup = strings.TrimSpace(userGroup)
-		if userGroup == "" {
-			continue
-		}
-		for group, description := range GetUserUsableGroups(userGroup) {
-			groups[group] = description
-		}
-	}
-	return groups
+	return GetAuthorizedUserGroups(userGroups)
 }
 
 func GetAuthorizedUserGroups(userGroups []string) map[string]string {
-	return GetUserUsableGroupsForGroups(userGroups)
+	groups := getAssignedUserGroups(userGroups)
+	if len(getAutoGroups(groups)) > 0 {
+		groups["auto"] = setting.GetUsableGroupDescription("auto")
+	}
+	return groups
 }
 
 func GroupInUserUsableGroups(userGroup, groupName string) bool {
@@ -62,7 +54,7 @@ func GroupInUserUsableGroups(userGroup, groupName string) bool {
 }
 
 func GroupInUserUsableGroupsForGroups(userGroups []string, groupName string) bool {
-	_, ok := GetUserUsableGroupsForGroups(userGroups)[groupName]
+	_, ok := GetAuthorizedUserGroups(userGroups)[groupName]
 	return ok
 }
 
@@ -77,11 +69,11 @@ func UserHasGroup(groups []string, groupName string) bool {
 
 // GetUserAutoGroup retains the legacy single-user-group contract.
 func GetUserAutoGroup(userGroup string) []string {
-	return getAutoGroups(GetUserUsableGroups(userGroup))
+	return GetUserAutoGroups([]string{userGroup})
 }
 
 func GetUserAutoGroups(userGroups []string) []string {
-	return getAutoGroups(GetUserUsableGroupsForGroups(userGroups))
+	return getAutoGroups(getAssignedUserGroups(userGroups))
 }
 
 func getAutoGroups(usableGroups map[string]string) []string {

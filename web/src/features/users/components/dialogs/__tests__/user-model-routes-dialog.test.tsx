@@ -38,6 +38,10 @@ import {
 import type { UserModelRoute, UserModelRouteCandidates } from '../../../types'
 import { UserModelRoutesDialog } from '../user-model-routes-dialog'
 
+const { debounceControl } = vi.hoisted(() => ({
+  debounceControl: { hold: false },
+}))
+
 vi.mock('../../../api', () => ({
   createUserModelRoute: vi.fn(),
   deleteUserModelRoute: vi.fn(),
@@ -56,9 +60,16 @@ vi.mock('react-i18next', () => ({
   }),
 }))
 
-vi.mock('@/hooks', () => ({
-  useDebounce: <T,>(value: T) => value,
-}))
+vi.mock('@/hooks', async () => {
+  const { useRef } = await import('react')
+  return {
+    useDebounce: <T,>(value: T) => {
+      const settledValue = useRef(value)
+      if (!debounceControl.hold) settledValue.current = value
+      return settledValue.current
+    },
+  }
+})
 
 vi.mock('@/components/dialog', () => ({
   Dialog: (props: {
@@ -239,6 +250,7 @@ function renderDialog() {
 }
 
 beforeEach(() => {
+  debounceControl.hold = false
   mockedCreateRoute.mockReset()
   mockedDeleteRoute.mockReset()
   mockedGetCandidates.mockReset()
@@ -357,6 +369,32 @@ describe('user model routes dialog', () => {
     })
   })
 
+  test('does not expose stale channels while a target change is debouncing', async () => {
+    renderDialog()
+    const user = userEvent.setup()
+
+    fireEvent.change(await screen.findByLabelText('Source model'), {
+      target: { value: 'gpt-5.4' },
+    })
+    const targetInput = screen.getByLabelText('Target model')
+    fireEvent.change(targetInput, { target: { value: 'target-a' } })
+    const channelSelect = await screen.findByLabelText('Channel pool')
+    await waitFor(() => {
+      expect(screen.getByRole('option', { name: /Channel A/ })).toBeVisible()
+    })
+    await user.selectOptions(channelSelect, '11')
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Add route' })).toBeEnabled()
+    })
+
+    debounceControl.hold = true
+    fireEvent.change(targetInput, { target: { value: 'target-b' } })
+
+    expect(channelSelect).toBeDisabled()
+    expect(screen.queryByRole('option', { name: /Channel A/ })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Add route' })).toBeDisabled()
+  })
+
   test('shows channel request failures and prevents saving', async () => {
     mockedGetCandidates.mockImplementation(async (_userId, params = {}) => {
       if (!params.target_model) return candidateResponse([])
@@ -454,7 +492,7 @@ describe('user model routes dialog', () => {
       expect(screen.getByLabelText('Execution group')).toHaveValue('ready')
     })
     expect(
-      screen.getByRole('option', {
+      await screen.findByRole('option', {
         name: /empty \(0 channels · No enabled channels for this model in this group\)/,
       })
     ).toBeDisabled()
@@ -524,5 +562,19 @@ describe('user model routes dialog', () => {
         enabled: true,
       })
     })
+  })
+
+  test('limits injected prompts by Unicode characters', async () => {
+    renderDialog()
+
+    const prompt = '🚀'.repeat(8001)
+    fireEvent.change(await screen.findByLabelText('Injected system prompt'), {
+      target: { value: prompt },
+    })
+
+    expect(screen.getByLabelText('Injected system prompt')).toHaveValue(
+      '🚀'.repeat(8000)
+    )
+    expect(screen.getByText('8000/8000')).toBeVisible()
   })
 })

@@ -231,31 +231,30 @@ func TestGetUserModelsFiltersByRequestedGroup(t *testing.T) {
 func TestGetUserModelsExpandsAutoGroupsInConfiguredOrder(t *testing.T) {
 	originalAutoGroups := setting.AutoGroups2JsonString()
 	originalUsableGroups := setting.UserUsableGroups2JSONString()
-	originalSpecialGroups := ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup.ReadAll()
+	originalGroupRatios := ratio_setting.GroupRatio2JSONString()
 	t.Cleanup(func() {
 		require.NoError(t, setting.UpdateAutoGroupsByJsonString(originalAutoGroups))
 		require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(originalUsableGroups))
-		specialGroups := ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup
-		specialGroups.Clear()
-		specialGroups.AddAll(originalSpecialGroups)
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(originalGroupRatios))
 	})
 
 	require.NoError(t, setting.UpdateAutoGroupsByJsonString(`["vip","default","unavailable"]`))
 	require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"auto":"自动分组","default":"默认分组","unavailable":"不可用分组"}`))
-	specialGroups := ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup
-	specialGroups.Clear()
-	specialGroups.Set("default", map[string]string{
-		"+:vip":         "VIP 分组",
-		"-:unavailable": "",
-	})
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1,"vip":1,"unavailable":1}`))
 
 	db := setupModelListControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.UserGroupMembership{}))
 	require.NoError(t, db.Create(&model.User{
 		Id:       1003,
 		Username: "playground-auto-model-user",
 		Password: "password",
 		Group:    "default",
 		Status:   common.UserStatusEnabled,
+	}).Error)
+	manual := true
+	require.NoError(t, db.Create(&[]model.UserGroupMembership{
+		{UserId: 1003, GroupName: "vip", SortOrder: 0, Manual: &manual},
+		{UserId: 1003, GroupName: "default", SortOrder: 1, Manual: &manual},
 	}).Error)
 	require.NoError(t, db.Create(&[]model.Ability{
 		{Group: "vip", Model: "zz-vip-model", ChannelId: 1, Enabled: true},
@@ -504,6 +503,43 @@ func TestListModelsIntersectsUserAndTokenModelPermissions(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestListModelsIncludesRoutedSourceForRootUser(t *testing.T) {
+	withSelfUseModeEnabled(t)
+	db := setupModelListControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(
+		&model.UserModelRoute{},
+		&model.UserModelRouteGroup{},
+		&model.UserModelRouteChannel{},
+	))
+	require.NoError(t, db.Create(&model.User{
+		Id:       907,
+		Username: "root-route-user",
+		Role:     common.RoleRootUser,
+		Status:   common.UserStatusEnabled,
+		Group:    "default",
+	}).Error)
+	require.NoError(t, model.SaveUserModelRoute(&model.UserModelRoute{
+		UserId:         907,
+		SourceModel:    "root-routed-source",
+		TargetModel:    "upstream-target",
+		AllGroups:      true,
+		ExecutionGroup: "internal",
+		Enabled:        true,
+		ChannelIds:     []int{701},
+	}))
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	ctx.Set("id", 907)
+	ctx.Set("role", common.RoleRootUser)
+	common.SetContextKey(ctx, constant.ContextKeyUserGroups, []string{"default"})
+
+	ListModels(ctx, constant.ChannelTypeOpenAI)
+
+	assert.Contains(t, decodeListModelsResponse(t, recorder), "root-routed-source")
 }
 
 func TestCheckUpdatePasswordRequiresCurrentPassword(t *testing.T) {

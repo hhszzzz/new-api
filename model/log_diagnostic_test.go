@@ -21,11 +21,15 @@ func TestAppendLogDiagnosticsKeepsOnlySafeRequestMetadata(t *testing.T) {
 	common.NodeName = "demo-node"
 	t.Cleanup(func() { common.NodeName = originalNodeName })
 	setting := operation_setting.GetLogDiagnosticSetting()
-	original := *setting
-	t.Cleanup(func() { *setting = original })
+	original := *operation_setting.GetLogDiagnosticSettingSnapshot()
+	t.Cleanup(func() {
+		*setting = original
+		operation_setting.NormalizeLogDiagnosticSetting()
+	})
 	setting.RecordIP = true
 	setting.RecordHeaders = true
 	setting.ExtraHeaders = []string{"x-safe-extra"}
+	operation_setting.NormalizeLogDiagnosticSetting()
 
 	recorder := httptest.NewRecorder()
 	context, _ := gin.CreateTestContext(recorder)
@@ -182,6 +186,8 @@ func TestFormatAdminSelfLogsKeepsRoutingAndPublicDiagnostics(t *testing.T) {
 			},
 			"request_conversion": []string{"responses_to_chat"},
 			"request_path":       "/v1/responses",
+			"audit_info":         map[string]interface{}{"route": "private"},
+			"stream_status":      map[string]interface{}{"upstream": "private"},
 		}),
 	}}
 
@@ -195,6 +201,8 @@ func TestFormatAdminSelfLogsKeepsRoutingAndPublicDiagnostics(t *testing.T) {
 	assert.NotContains(t, diagnostics, "ip")
 	assert.NotContains(t, other, "request_conversion")
 	assert.NotContains(t, other, "request_path")
+	assert.NotContains(t, other, "audit_info")
+	assert.NotContains(t, other, "stream_status")
 	adminInfo, ok := other["admin_info"].(map[string]interface{})
 	require.True(t, ok)
 	assert.Equal(t, true, adminInfo["is_model_mapped"])
@@ -206,8 +214,11 @@ func TestFormatAdminSelfLogsKeepsRoutingAndPublicDiagnostics(t *testing.T) {
 func TestCollectDiagnosticHeadersEnforcesConfiguredSafetyAndSizeBounds(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	setting := operation_setting.GetLogDiagnosticSetting()
-	original := *setting
-	t.Cleanup(func() { *setting = original })
+	original := *operation_setting.GetLogDiagnosticSettingSnapshot()
+	t.Cleanup(func() {
+		*setting = original
+		operation_setting.NormalizeLogDiagnosticSetting()
+	})
 	setting.RecordHeaders = true
 	setting.ExtraHeaders = make([]string, 0, 16)
 
@@ -219,6 +230,7 @@ func TestCollectDiagnosticHeadersEnforcesConfiguredSafetyAndSizeBounds(t *testin
 		setting.ExtraHeaders = append(setting.ExtraHeaders, name)
 		context.Request.Header.Set(name, strings.Repeat(string(rune('a'+index)), 700))
 	}
+	operation_setting.NormalizeLogDiagnosticSetting()
 	context.Request.Header.Set("X-Service-Token", "must-not-be-recorded")
 	context.Request.Header.Set("X-Client-Signature", "must-not-be-recorded")
 
