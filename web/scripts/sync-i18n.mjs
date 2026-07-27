@@ -129,19 +129,7 @@ function stableStringify(obj) {
   for (const key of OBFUSCATED_KEYS) {
     text = text.replaceAll(`"${key.runtime}":`, `"${key.serialized}":`)
   }
-  return text + '\n'
-}
-
-function countLeafKeys(obj) {
-  if (Array.isArray(obj)) return obj.length
-  if (!isPlainObject(obj)) return 0
-  let count = 0
-  for (const k of Object.keys(obj)) {
-    const v = obj[k]
-    if (isPlainObject(v) || Array.isArray(v)) count += countLeafKeys(v)
-    else count += 1
-  }
-  return count
+  return `${text}\n`
 }
 
 function reorderLikeBase(
@@ -160,7 +148,7 @@ function reorderLikeBase(
 
     for (const key of Object.keys(base)) {
       const nextPath = [...currentPath, key]
-      if (Object.prototype.hasOwnProperty.call(t, key)) {
+      if (Object.hasOwn(t, key)) {
         out[key] = reorderLikeBase(
           base[key],
           t[key],
@@ -183,7 +171,7 @@ function reorderLikeBase(
     }
 
     for (const key of Object.keys(t)) {
-      if (!Object.prototype.hasOwnProperty.call(base, key)) {
+      if (!Object.hasOwn(base, key)) {
         const nextPath = [...currentPath, key].join('.')
         extras[nextPath] = t[key]
       }
@@ -216,10 +204,10 @@ function isLikelyUntranslated({ locale, baseValue, value }) {
     /^[\w.-]+@[\w.-]+$/.test(s) ||
     /^smtp\./i.test(s) ||
     /^socks5:/i.test(s) ||
-    /^org-/.test(s) ||
+    s.startsWith('org-') ||
     /^gpt-/i.test(s) ||
-    /^checkout\./.test(s) ||
-    /^footer\./.test(s) ||
+    s.startsWith('checkout.') ||
+    s.startsWith('footer.') ||
     /^[A-Z0-9_ *./:-]+$/.test(s) ||
     s.startsWith('{') ||
     s.startsWith('[') ||
@@ -231,7 +219,7 @@ function isLikelyUntranslated({ locale, baseValue, value }) {
   if (!/[A-Za-z]{3,}/.test(s)) return false
 
   // For locales with non-latin scripts, equality with EN is a strong signal.
-  if (locale === 'ja' || locale === 'zh') return true
+  if (locale === 'ja' || locale === 'zh' || locale === 'zh-TW') return true
   if (locale === 'ru') return true
 
   // For fr/vi: still useful but noisier; keep it conservative.
@@ -249,7 +237,6 @@ async function main() {
     .map((e) => e.name)
     .sort((a, b) => a.localeCompare(b))
 
-  // Auto-pick base locale as the one with the most leaf keys under translation (most "rich").
   const parsedByLocale = {}
   for (const filename of localeFiles) {
     const locale = filename.replace(/\.json$/i, '')
@@ -257,17 +244,10 @@ async function main() {
     parsedByLocale[locale] = JSON.parse(raw)
   }
 
-  const baseLocale = Object.keys(parsedByLocale)
-    .map((locale) => {
-      const json = parsedByLocale[locale]
-      const trans = json?.translation ?? {}
-      return { locale, score: countLeafKeys(trans) }
-    })
-    .sort(
-      (a, b) => b.score - a.score || a.locale.localeCompare(b.locale)
-    )[0]?.locale
-
-  if (!baseLocale) throw new Error('No locale files found.')
+  const baseLocale = FALLBACK_COMPARE_LOCALE
+  if (!parsedByLocale[baseLocale]) {
+    throw new Error(`Base locale ${baseLocale}.json was not found.`)
+  }
 
   const baseFile = `${baseLocale}.json`
   const baseJson = parsedByLocale[baseLocale]
