@@ -40,7 +40,7 @@ func TestRankingAggregatesQuotaOnlyRowsAndScopedUserGroups(t *testing.T) {
 	assert.Equal(t, int64(0), totals[1].TotalTokens)
 	assert.Equal(t, int64(1250000), totals[1].TotalQuota)
 
-	buckets, err := GetRankingQuotaBuckets(0, 7200, 3600, []string{"visible-model"}, false)
+	buckets, err := GetRankingQuotaBuckets(0, 7200, 3600, 0, []string{"visible-model"}, false)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1500000), sumRankingTestQuota(buckets))
 
@@ -62,6 +62,27 @@ func TestRankingAggregatesQuotaOnlyRowsAndScopedUserGroups(t *testing.T) {
 	for _, row := range adminUsers {
 		assert.False(t, row.HiddenModel)
 	}
+}
+
+func TestRankingQuotaBucketsCanAnchorToRequestedRangeStart(t *testing.T) {
+	require.NoError(t, DB.Exec("DELETE FROM quota_data").Error)
+	require.NoError(t, DB.Exec("DELETE FROM quota_data_scoped").Error)
+	t.Cleanup(func() {
+		DB.Exec("DELETE FROM quota_data")
+		DB.Exec("DELETE FROM quota_data_scoped")
+	})
+
+	const start = int64(28_800)
+	require.NoError(t, DB.Create(&[]QuotaData{
+		{ModelName: "anchored-model", CreatedAt: start + 60, TokenUsed: 1, Count: 1},
+		{ModelName: "anchored-model", CreatedAt: start + 3600 + 60, TokenUsed: 1, Count: 1},
+	}).Error)
+
+	buckets, err := GetRankingQuotaBuckets(start, start+7200, 3600, start, nil, true)
+	require.NoError(t, err)
+	require.Len(t, buckets, 2)
+	assert.Equal(t, start, buckets[0].Bucket)
+	assert.Equal(t, start+3600, buckets[1].Bucket)
 }
 
 func sumRankingTestQuota(rows []RankingQuotaBucket) int64 {

@@ -58,6 +58,57 @@ export function formatUSD(value: number): string {
   }).format(value)
 }
 
+/**
+ * Padding for tooltip columns.
+ *
+ * A regular space collapses in the DOM tooltips VChart renders, so columns are
+ * padded with FIGURE SPACE (U+2007), which survives collapsing and is exactly
+ * one digit wide in the numeric fonts these values use.
+ */
+const COLUMN_PAD = ' '
+
+/** Right-align `text` within `width` columns. */
+function padColumn(text: string, width: number): string {
+  return text.length >= width
+    ? text
+    : `${COLUMN_PAD.repeat(width - text.length)}${text}`
+}
+
+export type UsageAmount = {
+  tokens: number
+  usd: number
+  /** Optional leading share column, used by the market share tooltip. */
+  share?: number
+}
+
+/**
+ * Render a set of tooltip rows as right-aligned `tokens · usd` columns, with an
+ * optional leading share column when every row carries one.
+ *
+ * Token counts and charged amounts vary in width (`4.70M` next to `670.5M`), so
+ * formatting each row on its own leaves the `$` wandering between lines. Widths
+ * are measured across the whole set instead, which keeps the columns aligned no
+ * matter which rows a tooltip happens to show.
+ */
+export function formatUsageColumns(amounts: UsageAmount[]): string[] {
+  const columns: string[][] = []
+  if (amounts.every((amount) => amount.share !== undefined)) {
+    columns.push(amounts.map((amount) => formatShare(amount.share ?? 0)))
+  }
+  columns.push(amounts.map((amount) => formatTokens(amount.tokens)))
+  columns.push(amounts.map((amount) => formatUSD(amount.usd)))
+
+  const widths = columns.map((column) =>
+    Math.max(0, ...column.map((text) => text.length))
+  )
+
+  return amounts.map((_, row) =>
+    columns
+      .map((column, index) => padColumn(column[row], widths[index]))
+      .join(' · ')
+  )
+}
+
 /** Format a 0..1 share as a percentage with two decimals. */
 export function formatShare(share: number): string {
   if (!Number.isFinite(share) || share <= 0) return '0%'

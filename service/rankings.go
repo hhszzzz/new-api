@@ -11,6 +11,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -204,6 +205,7 @@ type rankingResolvedRange struct {
 	end           int64
 	previousStart int64
 	previousEnd   int64
+	bucketAnchor  int64
 }
 
 type rankingCacheItem struct {
@@ -241,8 +243,9 @@ type rankingUserAggregate struct {
 }
 
 var (
-	rankingCacheMu sync.Mutex
-	rankingCache   = map[string]rankingCacheItem{}
+	rankingCacheMu     sync.Mutex
+	rankingCache       = map[string]rankingCacheItem{}
+	rankingCacheFlight singleflight.Group
 )
 
 // GetRankingsSnapshot preserves the original service entry point. New callers
@@ -273,20 +276,13 @@ func GetRankingsSnapshotWithOptions(options RankingsRequest) (*RankingsResponse,
 	if err != nil {
 		return nil, err
 	}
+	quotaPerUnit := common.GetQuotaPerUnit()
 	visibleModelNames, visibilityCacheKey := rankingVisibilityCacheKey(options.VisibleModels, canViewPrivate)
-	cacheRange := resolved
-	if options.Period != "custom" {
-		// Keep the response range current while sharing the cache entry for
-		// requests within the same five-minute snapshot window.
-		cacheRange, err = resolveRankingRange(
-			options.Period,
-			options.StartTimestamp,
-			options.EndTimestamp,
-			rankingResolutionNow(options.Period, requestNow),
-		)
-		if err != nil {
-			return nil, err
-		}
+	// Keep the response range current while sharing the cache entry for
+	// requests within the same five-minute snapshot window.
+	cacheRange, err := resolveRankingCacheRange(options, resolved, requestNow)
+	if err != nil {
+		return nil, err
 	}
 	cacheKey := fmt.Sprintf(
 		"%s:%d:%d:%s:%s:%x",
@@ -295,34 +291,12 @@ func GetRankingsSnapshotWithOptions(options RankingsRequest) (*RankingsResponse,
 		cacheRange.end,
 		viewer,
 		visibilityCacheKey,
-		math.Float64bits(common.QuotaPerUnit),
+		math.Float64bits(quotaPerUnit),
 	)
 
-	now := time.Now()
-	rankingCacheMu.Lock()
-	cleanRankingCacheLocked(now)
-	if item, ok := rankingCache[cacheKey]; ok {
-		rankingCacheMu.Unlock()
-		return item.data, nil
-	}
-	rankingCacheMu.Unlock()
-
-	data, err := buildRankingsSnapshot(resolved, visibleModelNames, canViewPrivate, viewer)
-	if err != nil {
-		return nil, err
-	}
-
-	rankingCacheMu.Lock()
-	now = time.Now()
-	cleanRankingCacheLocked(now)
-	rankingCache[cacheKey] = rankingCacheItem{
-		expiresAt: now.Add(rankingCacheTTL),
-		data:      data,
-	}
-	trimRankingCacheLocked()
-	rankingCacheMu.Unlock()
-
-	return data, nil
+	return loadRankingsSnapshot(cacheKey, func() (*RankingsResponse, error) {
+		return buildRankingsSnapshot(resolved, visibleModelNames, canViewPrivate, viewer, quotaPerUnit)
+	})
 }
 
 func normalizeRankingViewer(viewer RankingViewer) RankingViewer {
@@ -337,15 +311,79 @@ func normalizeRankingViewer(viewer RankingViewer) RankingViewer {
 	}
 }
 
-// Preset periods are intentionally resolved on the cache window boundary. A
-// rolling range that changes every second would otherwise create a new cache
-// key for every request and defeat the five-minute snapshot TTL. Custom ranges
-// remain exact because their timestamps are part of the caller's query.
-func rankingResolutionNow(period string, now time.Time) time.Time {
-	if period == "custom" {
-		return now
-	}
+// Rolling and future-clamped ranges are resolved on the cache window boundary
+// so their cache keys do not change every second.
+func rankingCacheNow(now time.Time) time.Time {
 	return now.Truncate(rankingCacheTTL)
+}
+
+func resolveRankingCacheRange(options RankingsRequest, resolved rankingResolvedRange, now time.Time) (rankingResolvedRange, error) {
+	cacheNow := rankingCacheNow(now)
+	if options.Period != "custom" {
+		return resolveRankingRange(
+			options.Period,
+			options.StartTimestamp,
+			options.EndTimestamp,
+			cacheNow,
+		)
+	}
+
+	cacheRange := resolved
+	if options.EndTimestamp != nil && *options.EndTimestamp > now.Unix() {
+		cacheRange.end = cacheNow.Unix()
+		if cacheRange.end < cacheRange.start {
+			// The requested start may fall inside the current cache window. The
+			// actual range was already validated against `now`; clamp only the
+			// cache key so a valid request is not rejected by the older boundary.
+			cacheRange.end = cacheRange.start
+		}
+	}
+	return cacheRange, nil
+}
+
+func loadRankingsSnapshot(cacheKey string, load func() (*RankingsResponse, error)) (*RankingsResponse, error) {
+	if data := cachedRankingsSnapshot(cacheKey, time.Now()); data != nil {
+		return data, nil
+	}
+
+	value, err, _ := rankingCacheFlight.Do(cacheKey, func() (any, error) {
+		if data := cachedRankingsSnapshot(cacheKey, time.Now()); data != nil {
+			return data, nil
+		}
+		data, loadErr := load()
+		if loadErr != nil {
+			return nil, loadErr
+		}
+
+		now := time.Now()
+		rankingCacheMu.Lock()
+		cleanRankingCacheLocked(now)
+		rankingCache[cacheKey] = rankingCacheItem{
+			expiresAt: now.Add(rankingCacheTTL),
+			data:      data,
+		}
+		trimRankingCacheLocked()
+		rankingCacheMu.Unlock()
+		return data, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	data, ok := value.(*RankingsResponse)
+	if !ok {
+		return nil, fmt.Errorf("invalid rankings cache value")
+	}
+	return data, nil
+}
+
+func cachedRankingsSnapshot(cacheKey string, now time.Time) *RankingsResponse {
+	rankingCacheMu.Lock()
+	defer rankingCacheMu.Unlock()
+	cleanRankingCacheLocked(now)
+	if item, ok := rankingCache[cacheKey]; ok {
+		return item.data
+	}
+	return nil
 }
 
 func cleanRankingCacheLocked(now time.Time) {
@@ -464,7 +502,9 @@ func resolveRankingRange(period string, startTimestamp *int64, endTimestamp *int
 		config.labelLayout = "Jan 2"
 		config.bucketName = "week"
 	}
-	return makeResolvedRankingRange(config, start, end), nil
+	resolved := makeResolvedRankingRange(config, start, end)
+	resolved.bucketAnchor = start
+	return resolved, nil
 }
 
 func makeResolvedRankingRange(config rankingPeriodConfig, start int64, end int64) rankingResolvedRange {
@@ -480,12 +520,12 @@ func makeResolvedRankingRange(config rankingPeriodConfig, start int64, end int64
 	}
 }
 
-func buildRankingsSnapshot(resolved rankingResolvedRange, visibleModelNames []string, canViewPrivate bool, viewer RankingViewer) (*RankingsResponse, error) {
+func buildRankingsSnapshot(resolved rankingResolvedRange, visibleModelNames []string, canViewPrivate bool, viewer RankingViewer, quotaPerUnit float64) (*RankingsResponse, error) {
 	currentTotals, err := model.GetRankingQuotaTotals(resolved.start, resolved.end, visibleModelNames, canViewPrivate)
 	if err != nil {
 		return nil, err
 	}
-	currentBuckets, err := model.GetRankingQuotaBuckets(resolved.start, resolved.end, resolved.config.bucketSize, visibleModelNames, canViewPrivate)
+	currentBuckets, err := model.GetRankingQuotaBuckets(resolved.start, resolved.end, resolved.config.bucketSize, resolved.bucketAnchor, visibleModelNames, canViewPrivate)
 	if err != nil {
 		return nil, err
 	}
@@ -508,10 +548,10 @@ func buildRankingsSnapshot(resolved rankingResolvedRange, visibleModelNames []st
 	previousRankByModel := rankingRankMap(previousTotals)
 	previousTokensByModel := rankingTokenMap(previousTotals)
 
-	rankedModels := buildRankedModels(currentTotals, totalTokens, totalQuota, previousRankByModel, previousTokensByModel, meta, resolved.config.hasPrevious)
-	vendors := buildRankedVendors(currentTotals, previousTotals, totalTokens, totalQuota, meta, resolved.config.hasPrevious)
-	modelHistory := buildModelHistory(currentBuckets, currentTotals, meta, resolved.config)
-	vendorHistory := buildVendorShareHistory(currentBuckets, vendors, totalTokens, totalQuota, meta, resolved.config)
+	rankedModels := buildRankedModels(currentTotals, totalTokens, totalQuota, previousRankByModel, previousTokensByModel, meta, resolved.config.hasPrevious, quotaPerUnit)
+	vendors := buildRankedVendors(currentTotals, previousTotals, totalTokens, totalQuota, meta, resolved.config.hasPrevious, quotaPerUnit)
+	modelHistory := buildModelHistory(currentBuckets, currentTotals, meta, resolved.config, quotaPerUnit)
+	vendorHistory := buildVendorShareHistory(currentBuckets, vendors, totalTokens, totalQuota, meta, resolved.config, quotaPerUnit)
 	movers, droppers := buildRankingMovers(rankedModels)
 
 	response := &RankingsResponse{
@@ -526,7 +566,7 @@ func buildRankingsSnapshot(resolved rankingResolvedRange, visibleModelNames []st
 		},
 		TotalTokens:        totalTokens,
 		TotalQuota:         totalQuota,
-		TotalUSD:           rankingQuotaUSD(totalQuota),
+		TotalUSD:           rankingQuotaUSD(totalQuota, quotaPerUnit),
 		Models:             limitRankedModels(rankedModels, rankingLeaderboardLimit),
 		Vendors:            vendors,
 		TopMovers:          movers,
@@ -539,7 +579,7 @@ func buildRankingsSnapshot(resolved rankingResolvedRange, visibleModelNames []st
 		if queryErr != nil {
 			return nil, queryErr
 		}
-		response.UserUsage = buildRankingUserUsage(userRows, totalTokens, totalQuota, viewer == RankingViewerAdmin)
+		response.UserUsage = buildRankingUserUsage(userRows, totalTokens, totalQuota, viewer == RankingViewerAdmin, quotaPerUnit)
 	}
 	return response, nil
 }
@@ -635,7 +675,7 @@ func normalizeRedactedRankingBuckets(rows []model.RankingQuotaBucket) []model.Ra
 	return result
 }
 
-func buildRankedModels(totals []model.RankingQuotaTotal, totalTokens int64, totalQuota int64, previousRanks map[string]int, previousTokens map[string]int64, meta map[string]rankingModelMeta, showGrowth bool) []RankedModel {
+func buildRankedModels(totals []model.RankingQuotaTotal, totalTokens int64, totalQuota int64, previousRanks map[string]int, previousTokens map[string]int64, meta map[string]rankingModelMeta, showGrowth bool, quotaPerUnit float64) []RankedModel {
 	rows := make([]RankedModel, 0, len(totals))
 	for idx, item := range totals {
 		modelMeta := modelMeta(item.ModelName, meta)
@@ -657,7 +697,7 @@ func buildRankedModels(totals []model.RankingQuotaTotal, totalTokens int64, tota
 			Category:     "all",
 			TotalTokens:  item.TotalTokens,
 			TotalQuota:   item.TotalQuota,
-			TotalUSD:     rankingQuotaUSD(item.TotalQuota),
+			TotalUSD:     rankingQuotaUSD(item.TotalQuota, quotaPerUnit),
 			Share:        rankingShare(item.TotalTokens, totalTokens),
 			QuotaShare:   rankingShare(item.TotalQuota, totalQuota),
 			GrowthPct:    growth,
@@ -666,7 +706,7 @@ func buildRankedModels(totals []model.RankingQuotaTotal, totalTokens int64, tota
 	return rows
 }
 
-func buildRankedVendors(currentTotals []model.RankingQuotaTotal, previousTotals []model.RankingQuotaTotal, totalTokens int64, totalQuota int64, meta map[string]rankingModelMeta, showGrowth bool) []RankedVendor {
+func buildRankedVendors(currentTotals []model.RankingQuotaTotal, previousTotals []model.RankingQuotaTotal, totalTokens int64, totalQuota int64, meta map[string]rankingModelMeta, showGrowth bool, quotaPerUnit float64) []RankedVendor {
 	aggregates := make(map[string]*vendorAggregate)
 	for _, item := range currentTotals {
 		modelMeta := modelMeta(item.ModelName, meta)
@@ -699,7 +739,7 @@ func buildRankedVendors(currentTotals []model.RankingQuotaTotal, previousTotals 
 			VendorIcon:  agg.icon,
 			TotalTokens: agg.totalTokens,
 			TotalQuota:  agg.totalQuota,
-			TotalUSD:    rankingQuotaUSD(agg.totalQuota),
+			TotalUSD:    rankingQuotaUSD(agg.totalQuota, quotaPerUnit),
 			Share:       rankingShare(agg.totalTokens, totalTokens),
 			QuotaShare:  rankingShare(agg.totalQuota, totalQuota),
 			GrowthPct:   growth,
@@ -742,7 +782,7 @@ func ensureVendorAggregate(aggregates map[string]*vendorAggregate, meta rankingM
 	return agg
 }
 
-func buildModelHistory(buckets []model.RankingQuotaBucket, totals []model.RankingQuotaTotal, meta map[string]rankingModelMeta, config rankingPeriodConfig) ModelHistorySeries {
+func buildModelHistory(buckets []model.RankingQuotaBucket, totals []model.RankingQuotaTotal, meta map[string]rankingModelMeta, config rankingPeriodConfig, quotaPerUnit float64) ModelHistorySeries {
 	topModels := make(map[string]struct{})
 	models := make([]ModelHistoryModel, 0, minInt(len(totals), rankingHistoryLimit)+1)
 	otherTotal := historyAggregate{}
@@ -755,7 +795,7 @@ func buildModelHistory(buckets []model.RankingQuotaBucket, totals []model.Rankin
 				Vendor:     modelMeta.vendor,
 				Total:      item.TotalTokens,
 				TotalQuota: item.TotalQuota,
-				TotalUSD:   rankingQuotaUSD(item.TotalQuota),
+				TotalUSD:   rankingQuotaUSD(item.TotalQuota, quotaPerUnit),
 			})
 			continue
 		}
@@ -768,12 +808,12 @@ func buildModelHistory(buckets []model.RankingQuotaBucket, totals []model.Rankin
 				if models[i].Name == rankingOthersLabel {
 					models[i].Total += otherTotal.tokens
 					models[i].TotalQuota += otherTotal.quota
-					models[i].TotalUSD = rankingQuotaUSD(models[i].TotalQuota)
+					models[i].TotalUSD = rankingQuotaUSD(models[i].TotalQuota, quotaPerUnit)
 					break
 				}
 			}
 		} else {
-			models = append(models, ModelHistoryModel{Name: rankingOthersLabel, Vendor: "Various", Total: otherTotal.tokens, TotalQuota: otherTotal.quota, TotalUSD: rankingQuotaUSD(otherTotal.quota)})
+			models = append(models, ModelHistoryModel{Name: rankingOthersLabel, Vendor: "Various", Total: otherTotal.tokens, TotalQuota: otherTotal.quota, TotalUSD: rankingQuotaUSD(otherTotal.quota, quotaPerUnit)})
 		}
 	}
 
@@ -809,7 +849,7 @@ func buildModelHistory(buckets []model.RankingQuotaBucket, totals []model.Rankin
 				Vendor: historyModel.Vendor,
 				Tokens: agg.tokens,
 				Quota:  agg.quota,
-				USD:    rankingQuotaUSD(agg.quota),
+				USD:    rankingQuotaUSD(agg.quota, quotaPerUnit),
 			})
 		}
 	}
@@ -817,7 +857,7 @@ func buildModelHistory(buckets []model.RankingQuotaBucket, totals []model.Rankin
 	return ModelHistorySeries{Points: points, Models: models, Buckets: len(sortedBuckets)}
 }
 
-func buildVendorShareHistory(buckets []model.RankingQuotaBucket, vendors []RankedVendor, totalTokens int64, totalQuota int64, meta map[string]rankingModelMeta, config rankingPeriodConfig) VendorShareSeries {
+func buildVendorShareHistory(buckets []model.RankingQuotaBucket, vendors []RankedVendor, totalTokens int64, totalQuota int64, meta map[string]rankingModelMeta, config rankingPeriodConfig, quotaPerUnit float64) VendorShareSeries {
 	topVendors := make(map[string]struct{})
 	vendorRows := make([]VendorShareVendor, 0, minInt(len(vendors), rankingVendorLimit)+1)
 	otherTotal := historyAggregate{}
@@ -831,7 +871,7 @@ func buildVendorShareHistory(buckets []model.RankingQuotaBucket, vendors []Ranke
 		otherTotal.quota += vendor.TotalQuota
 	}
 	if otherTotal.tokens > 0 || otherTotal.quota > 0 {
-		vendorRows = append(vendorRows, VendorShareVendor{Name: rankingOthersLabel, Total: otherTotal.tokens, TotalQuota: otherTotal.quota, TotalUSD: rankingQuotaUSD(otherTotal.quota), Share: rankingShare(otherTotal.tokens, totalTokens), QuotaShare: rankingShare(otherTotal.quota, totalQuota)})
+		vendorRows = append(vendorRows, VendorShareVendor{Name: rankingOthersLabel, Total: otherTotal.tokens, TotalQuota: otherTotal.quota, TotalUSD: rankingQuotaUSD(otherTotal.quota, quotaPerUnit), Share: rankingShare(otherTotal.tokens, totalTokens), QuotaShare: rankingShare(otherTotal.quota, totalQuota)})
 	}
 
 	bucketSet := make(map[int64]struct{})
@@ -874,7 +914,7 @@ func buildVendorShareHistory(buckets []model.RankingQuotaBucket, vendors []Ranke
 				QuotaShare: rankingShare(agg.quota, bucketTotal.quota),
 				Tokens:     agg.tokens,
 				Quota:      agg.quota,
-				USD:        rankingQuotaUSD(agg.quota),
+				USD:        rankingQuotaUSD(agg.quota, quotaPerUnit),
 			})
 		}
 	}
@@ -882,7 +922,7 @@ func buildVendorShareHistory(buckets []model.RankingQuotaBucket, vendors []Ranke
 	return VendorShareSeries{Points: points, Vendors: vendorRows, Buckets: len(sortedBuckets)}
 }
 
-func buildRankingUserUsage(rows []model.RankingUserQuotaRow, totalTokens int64, totalQuota int64, canViewPrivate bool) *RankingUserUsage {
+func buildRankingUserUsage(rows []model.RankingUserQuotaRow, totalTokens int64, totalQuota int64, canViewPrivate bool, quotaPerUnit float64) *RankingUserUsage {
 	aggregates := make(map[string]*rankingUserAggregate)
 	for _, row := range rows {
 		rawUsername := strings.TrimSpace(row.Username)
@@ -927,7 +967,7 @@ func buildRankingUserUsage(rows []model.RankingUserQuotaRow, totalTokens int64, 
 		group.quota += row.TotalQuota
 	}
 
-	usage := &RankingUserUsage{TotalTokens: totalTokens, TotalQuota: totalQuota, TotalUSD: rankingQuotaUSD(totalQuota), Users: make([]RankingUser, 0, minInt(len(aggregates), rankingUserLimit))}
+	usage := &RankingUserUsage{TotalTokens: totalTokens, TotalQuota: totalQuota, TotalUSD: rankingQuotaUSD(totalQuota, quotaPerUnit), Users: make([]RankingUser, 0, minInt(len(aggregates), rankingUserLimit))}
 	aggregateRows := make([]*rankingUserAggregate, 0, len(aggregates))
 	for _, aggregate := range aggregates {
 		aggregateRows = append(aggregateRows, aggregate)
@@ -966,7 +1006,7 @@ func buildRankingUserUsage(rows []model.RankingUserQuotaRow, totalTokens int64, 
 			Username:    displayUsername,
 			TotalTokens: aggregate.totalTokens,
 			TotalQuota:  aggregate.totalQuota,
-			TotalUSD:    rankingQuotaUSD(aggregate.totalQuota),
+			TotalUSD:    rankingQuotaUSD(aggregate.totalQuota, quotaPerUnit),
 			QuotaShare:  rankingShare(aggregate.totalQuota, totalQuota),
 			TokenShare:  rankingShare(aggregate.totalTokens, totalTokens),
 			Groups:      make([]RankingUserGroup, 0, len(aggregate.groups)),
@@ -992,7 +1032,7 @@ func buildRankingUserUsage(rows []model.RankingUserQuotaRow, totalTokens int64, 
 				UseGroup:    groupName,
 				TotalTokens: group.tokens,
 				TotalQuota:  group.quota,
-				TotalUSD:    rankingQuotaUSD(group.quota),
+				TotalUSD:    rankingQuotaUSD(group.quota, quotaPerUnit),
 				QuotaShare:  rankingShare(group.quota, aggregate.totalQuota),
 				TokenShare:  rankingShare(group.tokens, aggregate.totalTokens),
 			})
@@ -1008,6 +1048,9 @@ func maskRankingUsername(username string) string {
 		return "Unknown user"
 	}
 	if len(runes) == 1 {
+		return "***"
+	}
+	if len(runes) == 2 {
 		return string(runes[0]) + "***"
 	}
 	return string(runes[0]) + "***" + string(runes[len(runes)-1])
@@ -1112,11 +1155,11 @@ func rankingGrowthPct(current int64, previous int64) float64 {
 	return roundRankingFloat((float64(current-previous) / float64(previous)) * 100)
 }
 
-func rankingQuotaUSD(quota int64) float64 {
-	if common.QuotaPerUnit <= 0 || math.IsNaN(common.QuotaPerUnit) || math.IsInf(common.QuotaPerUnit, 0) {
+func rankingQuotaUSD(quota int64, quotaPerUnit float64) float64 {
+	if quotaPerUnit <= 0 || math.IsNaN(quotaPerUnit) || math.IsInf(quotaPerUnit, 0) {
 		return 0
 	}
-	return float64(quota) / common.QuotaPerUnit
+	return float64(quota) / quotaPerUnit
 }
 
 func roundRankingFloat(value float64) float64 {

@@ -336,7 +336,7 @@ export function UserUsageSection(props: UserUsageSectionProps) {
               className='grid grid-cols-1 gap-x-8 md:grid-cols-2'
             >
               {pagedUserColumns.map((column, columnIndex) => (
-                <div
+                <ul
                   key={`column-${column[0]?.rank ?? 'empty'}`}
                   className='divide-border/70 divide-y'
                 >
@@ -346,39 +346,43 @@ export function UserUsageSection(props: UserUsageSectionProps) {
                       columnIndex * userColumnSize +
                       rowIndex
                     return (
-                      <UserRow
-                        key={`${user.rank}-${user.username}`}
-                        user={user}
-                        selected={selectedUser?.rank === user.rank}
-                        share={topUserUSD > 0 ? user.total_usd / topUserUSD : 0}
-                        colour={
-                          colourMap[
-                            slices.find((slice) => slice.userRank === user.rank)
-                              ?.key ?? 'other'
-                          ]
-                        }
-                        onSelect={() => selectByIndex(userIndex)}
-                        onMove={(direction) => {
-                          const next =
-                            direction === 'next'
-                              ? Math.min(users.length - 1, userIndex + 1)
-                              : Math.max(0, userIndex - 1)
-                          selectByIndex(next)
-                          const nextUser = users[next]
-                          if (nextUser) {
-                            window.requestAnimationFrame(() => {
-                              document
-                                .querySelector<HTMLElement>(
-                                  `#ranking-user-${nextUser.rank}`
-                                )
-                                ?.focus()
-                            })
+                      <li key={`${user.rank}-${user.username}`}>
+                        <UserRow
+                          user={user}
+                          selected={selectedUser?.rank === user.rank}
+                          share={
+                            topUserUSD > 0 ? user.total_usd / topUserUSD : 0
                           }
-                        }}
-                      />
+                          colour={
+                            colourMap[
+                              slices.find(
+                                (slice) => slice.userRank === user.rank
+                              )?.key ?? 'other'
+                            ]
+                          }
+                          onSelect={() => selectByIndex(userIndex)}
+                          onMove={(direction) => {
+                            const next =
+                              direction === 'next'
+                                ? Math.min(users.length - 1, userIndex + 1)
+                                : Math.max(0, userIndex - 1)
+                            selectByIndex(next)
+                            const nextUser = users[next]
+                            if (nextUser) {
+                              window.requestAnimationFrame(() => {
+                                document
+                                  .querySelector<HTMLElement>(
+                                    `#ranking-user-${nextUser.rank}`
+                                  )
+                                  ?.focus()
+                              })
+                            }
+                          }}
+                        />
+                      </li>
                     )
                   })}
-                </div>
+                </ul>
               ))}
             </div>
             {totalPages > 1 && (

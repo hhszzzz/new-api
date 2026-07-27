@@ -55,7 +55,7 @@ func TestBuildModelHistoryDoesNotDuplicatePreAggregatedOthers(t *testing.T) {
 
 	history := buildModelHistory(nil, totals, map[string]rankingModelMeta{
 		rankingOthersLabel: {vendor: "Various"},
-	}, rankingPeriodConfig{})
+	}, rankingPeriodConfig{}, 500000)
 	require.Len(t, history.Models, rankingHistoryLimit)
 	othersCount := 0
 	for _, item := range history.Models {

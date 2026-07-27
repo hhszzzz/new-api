@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -118,7 +119,9 @@ func UpdateQuotaData() {
 	for {
 		if common.DataExportEnabled {
 			common.SysLog("正在更新数据看板数据...")
-			SaveQuotaDataCache()
+			if err := SaveQuotaDataCache(); err != nil {
+				common.SysError(fmt.Sprintf("保存数据看板数据失败: %v", err))
+			}
 		}
 		time.Sleep(time.Duration(common.DataExportInterval) * time.Minute)
 	}
@@ -126,6 +129,7 @@ func UpdateQuotaData() {
 
 var CacheQuotaData = make(map[string]*QuotaData)
 var CacheQuotaDataLock = sync.Mutex{}
+var quotaDataFlushLock sync.Mutex
 
 func logQuotaDataCache(quotaData *QuotaData) {
 	key := fmt.Sprintf("%d\x00%s\x00%s\x00%d\x00%d\x00%s\x00%d\x00%d\x00%s",
@@ -175,46 +179,65 @@ func LogQuotaData(params QuotaDataLogParams) {
 	logQuotaDataCache(quotaData)
 }
 
-func SaveQuotaDataCache() {
+func SaveQuotaDataCache() error {
+	quotaDataFlushLock.Lock()
+	defer quotaDataFlushLock.Unlock()
+
 	CacheQuotaDataLock.Lock()
-	defer CacheQuotaDataLock.Unlock()
-	size := len(CacheQuotaData)
-	// 如果缓存中有数据，就保存到数据库中
-	// 1. 先查询数据库中是否有数据
-	// 2. 如果有数据，就更新数据
-	// 3. 如果没有数据，就插入数据
-	for _, quotaData := range CacheQuotaData {
-		scoped := scopedQuotaData(quotaData)
-		quotaDataDB := &ScopedQuotaData{}
-		DB.Model(&ScopedQuotaData{}).
-			Where("user_id = ? and username = ? and model_name = ? and model_scope = ? and created_at = ? and use_group = ? and token_id = ? and channel_id = ? and node_name = ?",
-				scoped.UserID, scoped.Username, scoped.ModelName, scoped.ModelScope, scoped.CreatedAt, scoped.UseGroup, scoped.TokenID, scoped.ChannelID, scoped.NodeName).
-			First(quotaDataDB)
-		if quotaDataDB.Id > 0 {
-			//quotaDataDB.Count += quotaData.Count
-			//quotaDataDB.Quota += quotaData.Quota
-			//DB.Table("quota_data").Save(quotaDataDB)
-			increaseQuotaData(scoped)
-		} else {
-			DB.Create(scoped)
-		}
-	}
+	batch := CacheQuotaData
 	CacheQuotaData = make(map[string]*QuotaData)
-	common.SysLog(fmt.Sprintf("保存数据看板数据成功，共保存%d条数据", size))
+	CacheQuotaDataLock.Unlock()
+
+	if len(batch) == 0 {
+		return nil
+	}
+
+	var flushErrors []error
+	saved := 0
+	for key, quotaData := range batch {
+		if err := persistQuotaData(scopedQuotaData(quotaData)); err != nil {
+			CacheQuotaDataLock.Lock()
+			logQuotaDataCache(quotaData)
+			CacheQuotaDataLock.Unlock()
+			flushErrors = append(flushErrors, fmt.Errorf("quota data %q: %w", key, err))
+			continue
+		}
+		saved++
+	}
+	if len(flushErrors) > 0 {
+		return fmt.Errorf("已保存%d/%d条，%d条已重新入队: %w", saved, len(batch), len(flushErrors), errors.Join(flushErrors...))
+	}
+	common.SysLog(fmt.Sprintf("保存数据看板数据成功，共保存%d条数据", saved))
+	return nil
 }
 
-func increaseQuotaData(quotaData *ScopedQuotaData) {
-	err := DB.Model(&ScopedQuotaData{}).
+func persistQuotaData(quotaData *ScopedQuotaData) error {
+	var existing ScopedQuotaData
+	result := DB.Model(&ScopedQuotaData{}).
 		Where("user_id = ? and username = ? and model_name = ? and model_scope = ? and created_at = ? and use_group = ? and token_id = ? and channel_id = ? and node_name = ?",
 			quotaData.UserID, quotaData.Username, quotaData.ModelName, quotaData.ModelScope, quotaData.CreatedAt, quotaData.UseGroup, quotaData.TokenID, quotaData.ChannelID, quotaData.NodeName).
+		First(&existing)
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		return DB.Create(quotaData).Error
+	}
+	if result.Error != nil {
+		return result.Error
+	}
+
+	result = DB.Model(&ScopedQuotaData{}).
+		Where("id = ?", existing.Id).
 		Updates(map[string]interface{}{
 			"count":      gorm.Expr("count + ?", quotaData.Count),
 			"quota":      gorm.Expr("quota + ?", quotaData.Quota),
 			"token_used": gorm.Expr("token_used + ?", quotaData.TokenUsed),
-		}).Error
-	if err != nil {
-		common.SysLog(fmt.Sprintf("increaseQuotaData error: %s", err))
+		})
+	if result.Error != nil {
+		return result.Error
 	}
+	if result.RowsAffected != 1 {
+		return fmt.Errorf("expected to update one row, updated %d", result.RowsAffected)
+	}
+	return nil
 }
 
 func GetQuotaDataByUsername(username string, startTime int64, endTime int64) (quotaData []*QuotaData, err error) {

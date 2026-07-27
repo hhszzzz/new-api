@@ -24,7 +24,12 @@ import { useTranslation } from 'react-i18next'
 import { useChartTheme } from '@/lib/use-chart-theme'
 import { VCHART_OPTION } from '@/lib/vchart'
 
-import { formatShare, formatTokens, formatUSD } from '../lib/format'
+import {
+  formatShare,
+  formatTokens,
+  formatUSD,
+  formatUsageColumns,
+} from '../lib/format'
 import type { RankingPeriod, VendorRanking, VendorShareSeries } from '../types'
 import { VendorLink } from './entity-links'
 
@@ -197,20 +202,27 @@ export function MarketShareSection(props: MarketShareSectionProps) {
             },
           ],
           updateContent: (array: RankingTooltipLine[]) => {
-            return [...array]
-              .sort((left, right) => {
-                const shareDifference =
-                  Number(right.datum?.share ?? right.value) -
-                  Number(left.datum?.share ?? left.value)
-                if (shareDifference !== 0) return shareDifference
-                return (
-                  Number(right.datum?.usd ?? 0) - Number(left.datum?.usd ?? 0)
-                )
-              })
-              .map((item) => ({
-                key: item.key,
-                value: `${formatShare(Number(item.datum?.share ?? item.value) || 0)} · ${formatTokens(Number(item.datum?.tokens) || 0)} · ${formatUSD(Number(item.datum?.usd) || 0)}`,
+            const ranked = [...array].sort((left, right) => {
+              const shareDifference =
+                Number(right.datum?.share ?? right.value) -
+                Number(left.datum?.share ?? left.value)
+              if (shareDifference !== 0) return shareDifference
+              return (
+                Number(right.datum?.usd ?? 0) - Number(left.datum?.usd ?? 0)
+              )
+            })
+            const columns = formatUsageColumns(
+              ranked.map((item) => ({
+                share: Number(item.datum?.share ?? item.value) || 0,
+                tokens: Number(item.datum?.tokens) || 0,
+                usd: Number(item.datum?.usd) || 0,
               }))
+            )
+
+            return ranked.map((item, index) => ({
+              key: item.key,
+              value: columns[index],
+            }))
           },
         },
       },

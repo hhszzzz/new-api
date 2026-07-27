@@ -99,7 +99,63 @@ describe('rankings charged-amount presentation', () => {
     )
 
     assert.match(tooltip, /Usage by group/)
-    assert.match(tooltip, /team: \$1\.5 · 150 tokens · 75\.0%/)
+    assert.match(tooltip, /team: 75\.0% · 150 · \$1\.5/)
+  })
+
+  // A tooltip lists several groups at once, and each value is formatted to its
+  // own width (`4.70M` beside `670.5M`). Padding every row against the same set
+  // is what keeps the charge column under the charge column.
+  test('aligns group rows into shared share, token, and charge columns', () => {
+    const usage: RankingUserUsage = {
+      total_tokens: 675_200_000,
+      total_quota: 1_000_000,
+      total_usd: 601.2,
+      users: [
+        {
+          rank: 1,
+          username: 'user-1',
+          total_tokens: 675_200_000,
+          total_quota: 1_000_000,
+          total_usd: 601.2,
+          quota_share: 1,
+          token_share: 1,
+          groups: [
+            {
+              use_group: 'team',
+              total_tokens: 670_500_000,
+              total_quota: 990_000,
+              total_usd: 590.4,
+              quota_share: 0.99,
+              token_share: 0.99,
+            },
+            {
+              use_group: 'default',
+              total_tokens: 4_700_000,
+              total_quota: 10_000,
+              total_usd: 10.8,
+              quota_share: 0.01,
+              token_share: 0.01,
+            },
+          ],
+        },
+      ],
+    }
+
+    const rows = formatRankingUserTooltip(
+      buildRankingPieSlices(usage)[0],
+      (key) => key
+    ).split('\n')
+    const [team, fallback] = rows.slice(2).map((row) => row.split(': ')[1])
+
+    // The narrower row is padded, not reformatted: same values, same total
+    // width, and each column as wide as the one above it.
+    assert.equal(team, '99.0% · 670.5M · $590.4')
+    assert.equal(fallback.replaceAll(' ', ''), '1.0% · 4.70M · $10.8')
+    assert.equal(fallback.length, team.length)
+    assert.deepEqual(
+      fallback.split(' · ').map((cell) => cell.length),
+      team.split(' · ').map((cell) => cell.length)
+    )
   })
 
   test('normalizes shares when the reported total is lower than user rows', () => {

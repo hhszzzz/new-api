@@ -6,12 +6,14 @@ import (
 	"strconv"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 )
 
 func GetRankings(c *gin.Context) {
-	canViewPrivate := c.GetInt("role") >= common.RoleAdminUser
+	_, hasDashboardSession := middleware.GetSessionAuthIdentity(c)
+	canViewPrivate := c.GetInt("role") >= common.RoleAdminUser && hasDashboardSession
 	var visibleModelNames []string
 	if !canViewPrivate {
 		visibleModelNames = getVisibleModelNames(c)

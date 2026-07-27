@@ -24,7 +24,7 @@ import { useTranslation } from 'react-i18next'
 import { useChartTheme } from '@/lib/use-chart-theme'
 import { VCHART_OPTION } from '@/lib/vchart'
 
-import { formatTokens, formatUSD } from '../lib/format'
+import { formatTokens, formatUSD, formatUsageColumns } from '../lib/format'
 import type { ModelHistorySeries, ModelRanking, RankingPeriod } from '../types'
 import { ModelLeaderboard } from './model-leaderboard'
 
@@ -158,30 +158,39 @@ export function ModelsSection(props: ModelsSectionProps) {
             )
             const visible = ranked.slice(0, TOOLTIP_MAX_ROWS)
             const overflow = ranked.slice(TOOLTIP_MAX_ROWS)
-            const result: RankingTooltipLine[] = visible.map((item) => ({
-              key: item.key,
-              value: `${formatTokens(Number(item.datum?.tokens ?? item.value) || 0)} · ${formatUSD(Number(item.datum?.usd) || 0)}`,
-            }))
-            if (overflow.length > 0) {
-              const otherTokens = overflow.reduce(
-                (sum, item) =>
-                  sum + Number((item.datum?.tokens ?? item.value) || 0),
-                0
-              )
-              const otherUSD = overflow.reduce(
-                (sum, item) => sum + Number(item.datum?.usd ?? 0),
-                0
-              )
-              result.push({
-                key: t('+{{count}} more', { count: overflow.length }),
-                value: `${formatTokens(otherTokens)} · ${formatUSD(otherUSD)}`,
-              })
-            }
-            result.unshift({
-              key: t('Total:'),
-              value: `${formatTokens(totalTokens)} · ${formatUSD(totalUSD)}`,
-            })
-            return result
+            const keys = [
+              t('Total:'),
+              ...visible.map((item) => item.key),
+              ...(overflow.length > 0
+                ? [t('+{{count}} more', { count: overflow.length })]
+                : []),
+            ]
+            // Every row is padded against the same set so the token and charge
+            // columns line up across the total, the models, and the overflow.
+            const columns = formatUsageColumns([
+              { tokens: totalTokens, usd: totalUSD },
+              ...visible.map((item) => ({
+                tokens: Number(item.datum?.tokens ?? item.value) || 0,
+                usd: Number(item.datum?.usd) || 0,
+              })),
+              ...(overflow.length > 0
+                ? [
+                    {
+                      tokens: overflow.reduce(
+                        (sum, item) =>
+                          sum + Number((item.datum?.tokens ?? item.value) || 0),
+                        0
+                      ),
+                      usd: overflow.reduce(
+                        (sum, item) => sum + Number(item.datum?.usd ?? 0),
+                        0
+                      ),
+                    },
+                  ]
+                : []),
+            ])
+
+            return keys.map((key, index) => ({ key, value: columns[index] }))
           },
         },
       },

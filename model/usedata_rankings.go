@@ -62,11 +62,11 @@ func GetRankingQuotaTotals(startTime int64, endTime int64, visibleModelNames []s
 	return sanitizeRankingQuotaTotals(append(legacyRows, scopedRows...), visibleModelNames, canViewPrivate), nil
 }
 
-func GetRankingQuotaBuckets(startTime int64, endTime int64, bucketSize int64, visibleModelNames []string, canViewPrivate bool) ([]RankingQuotaBucket, error) {
+func GetRankingQuotaBuckets(startTime int64, endTime int64, bucketSize int64, bucketAnchor int64, visibleModelNames []string, canViewPrivate bool) ([]RankingQuotaBucket, error) {
 	if bucketSize <= 0 {
 		bucketSize = 3600
 	}
-	bucketExpr := rankingBucketExpr(bucketSize)
+	bucketExpr := rankingBucketExpr(bucketSize, bucketAnchor)
 	var legacyRows []RankingQuotaBucket
 	query := DB.Table("quota_data").
 		Select(fmt.Sprintf("model_name, %s as bucket, sum(token_used) as tokens, sum(quota) as quota", bucketExpr)).
@@ -120,11 +120,11 @@ func GetRankingUserQuotaTotals(startTime int64, endTime int64, visibleModelNames
 	return sanitizeRankingUserQuotaRows(append(legacyRows, scopedRows...), visibleModelNames, canViewPrivate), nil
 }
 
-func rankingBucketExpr(bucketSize int64) string {
+func rankingBucketExpr(bucketSize int64, bucketAnchor int64) string {
 	if common.UsingMainDatabase(common.DatabaseTypeMySQL) {
-		return fmt.Sprintf("FLOOR(created_at / %d) * %d", bucketSize, bucketSize)
+		return fmt.Sprintf("FLOOR((created_at - %d) / %d) * %d + %d", bucketAnchor, bucketSize, bucketSize, bucketAnchor)
 	}
-	return fmt.Sprintf("(created_at / %d) * %d", bucketSize, bucketSize)
+	return fmt.Sprintf("((created_at - %d) / %d) * %d + %d", bucketAnchor, bucketSize, bucketSize, bucketAnchor)
 }
 
 func applyRankingQuotaTimeRange(query *gorm.DB, startTime int64, endTime int64) *gorm.DB {

@@ -146,15 +146,15 @@ export function Rankings() {
                 totalUSD={snapshot.total_usd}
               />
 
+              <UserUsageSection
+                usage={snapshot.user_usage}
+                isAuthenticated={Boolean(user)}
+              />
+
               <MarketShareSection
                 history={snapshot.vendor_share_history}
                 rows={snapshot.vendors}
                 period={period}
-              />
-
-              <UserUsageSection
-                usage={snapshot.user_usage}
-                isAuthenticated={Boolean(user)}
               />
 
               <PulseSection

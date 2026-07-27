@@ -55,6 +55,18 @@ func TestRankingsUserUsageIsViewerScopedAndHidesPrivateUsernames(t *testing.T) {
 	assert.Contains(t, admin.Body.String(), "bob")
 	assert.NotContains(t, admin.Body.String(), "a***e")
 
+	patAdminRecorder := httptest.NewRecorder()
+	patAdminContext, _ := gin.CreateTestContext(patAdminRecorder)
+	patAdminContext.Request = httptest.NewRequest(http.MethodGet, requestURL, nil)
+	patAdminContext.Set("id", 9)
+	patAdminContext.Set("role", common.RoleAdminUser)
+	patAdminContext.Set("use_access_token", true)
+	GetRankings(patAdminContext)
+	require.Equal(t, http.StatusOK, patAdminRecorder.Code)
+	assert.NotContains(t, patAdminRecorder.Body.String(), "\"username\":\"alice\"")
+	assert.Contains(t, patAdminRecorder.Body.String(), "a***e")
+	assert.NotContains(t, patAdminRecorder.Body.String(), "secret")
+
 	// The same resolved range has separate cache entries for each viewer level.
 	assert.NotEqual(t, regular.Body.String(), admin.Body.String())
 }
@@ -93,6 +105,11 @@ func invokeRankingsUsageRequest(t *testing.T, requestURL string, userID int, rol
 	ctx.Request = httptest.NewRequest(http.MethodGet, requestURL, nil)
 	ctx.Set("id", userID)
 	ctx.Set("role", role)
+	if userID > 0 {
+		ctx.Set("session_id", fmt.Sprintf("ranking-session-%d", userID))
+		ctx.Set("auth_version", int64(1))
+		ctx.Set("session_version", int64(1))
+	}
 	GetRankings(ctx)
 	return recorder
 }

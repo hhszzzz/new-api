@@ -175,7 +175,7 @@ func TestLogQuotaDataSplitsRowsByUseGroupTokenChannelAndNode(t *testing.T) {
 		TokenUsed: 10,
 	})
 
-	SaveQuotaDataCache()
+	require.NoError(t, SaveQuotaDataCache())
 
 	var rows []ScopedQuotaData
 	require.NoError(t, DB.Order("quota DESC").Find(&rows).Error)

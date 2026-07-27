@@ -109,7 +109,7 @@ func TestQuotaDataModelScopeProtectsSelfFlowAndAnonymousRankings(t *testing.T) {
 	assert.Equal(t, "public-model", totals[1].ModelName)
 	assert.Equal(t, int64(15), totals[1].TotalTokens)
 
-	buckets, err := GetRankingQuotaBuckets(0, 7200, 3600, []string{"public-model"}, false)
+	buckets, err := GetRankingQuotaBuckets(0, 7200, 3600, 0, []string{"public-model"}, false)
 	require.NoError(t, err)
 	require.Len(t, buckets, 2)
 	assert.Equal(t, int64(115), buckets[0].Tokens+buckets[1].Tokens)
@@ -151,7 +151,7 @@ func TestAnonymousRankingsPreserveUsageWhoseLegacyModelNameIsBlank(t *testing.T)
 	assert.Equal(t, "visible-model", totals[1].ModelName)
 	assert.Equal(t, int64(3), totals[1].TotalTokens)
 
-	buckets, err := GetRankingQuotaBuckets(0, 7200, 3600, []string{"visible-model"}, false)
+	buckets, err := GetRankingQuotaBuckets(0, 7200, 3600, 0, []string{"visible-model"}, false)
 	require.NoError(t, err)
 	require.Len(t, buckets, 2)
 	assert.Equal(t, int64(10), buckets[0].Tokens+buckets[1].Tokens)
@@ -182,7 +182,7 @@ func TestLogQuotaDataPersistsModelScopeAsPartOfAggregationKey(t *testing.T) {
 	CacheQuotaDataLock.Lock()
 	require.Len(t, CacheQuotaData, 3)
 	CacheQuotaDataLock.Unlock()
-	SaveQuotaDataCache()
+	require.NoError(t, SaveQuotaDataCache())
 
 	var rows []ScopedQuotaData
 	require.NoError(t, DB.Order("model_scope ASC").Find(&rows).Error)
@@ -216,7 +216,7 @@ func TestScopedQuotaTablePreventsRollingUpgradeAggregationPollution(t *testing.T
 		CreatedAt: 3600, UseGroup: "default", TokenID: 7, ChannelID: 8, NodeName: "node-a",
 		Quota: 10, TokenUsed: 10,
 	})
-	SaveQuotaDataCache()
+	require.NoError(t, SaveQuotaDataCache())
 
 	// Simulate an old process, whose key has no model_scope, writing the same
 	// dimensions to the legacy table during a rolling upgrade.

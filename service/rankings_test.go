@@ -2,10 +2,11 @@ package service
 
 import (
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,6 +21,7 @@ func TestResolveRankingRangeUsesCustomBucketsAndPreviousEqualSpan(t *testing.T) 
 	assert.Equal(t, now.Unix(), resolved.end)
 	assert.Equal(t, int64(3600), resolved.config.bucketSize)
 	assert.Equal(t, "hour", resolved.config.bucketName)
+	assert.Equal(t, start, resolved.bucketAnchor)
 	span := resolved.end - resolved.start + 1
 	assert.Equal(t, span, resolved.previousEnd-resolved.previousStart+1)
 	assert.Equal(t, resolved.start-1, resolved.previousEnd)
@@ -57,12 +59,102 @@ func TestResolveRankingRangeRejectsInvalidAndOversizedCustomRanges(t *testing.T)
 	require.Error(t, err)
 }
 
-func TestRankingResolutionNowKeepsPresetCacheKeysStable(t *testing.T) {
+func TestRankingCacheNowKeepsRollingAndFutureCustomRangesStable(t *testing.T) {
 	first := time.Unix(2_000_000_110, 0)
 	second := first.Add(2 * time.Minute)
+	start := first.Add(-24 * time.Hour).Unix()
+	futureEnd := first.Add(24 * time.Hour).Unix()
 
-	assert.Equal(t, rankingResolutionNow("week", first), rankingResolutionNow("week", second))
-	assert.Equal(t, second, rankingResolutionNow("custom", second))
+	assert.Equal(t, rankingCacheNow(first), rankingCacheNow(second))
+	firstResolved, err := resolveRankingRange("custom", &start, &futureEnd, first)
+	require.NoError(t, err)
+	firstRange, err := resolveRankingCacheRange(RankingsRequest{
+		Period:         "custom",
+		StartTimestamp: &start,
+		EndTimestamp:   &futureEnd,
+	}, firstResolved, first)
+	require.NoError(t, err)
+	secondResolved, err := resolveRankingRange("custom", &start, &futureEnd, second)
+	require.NoError(t, err)
+	secondRange, err := resolveRankingCacheRange(RankingsRequest{
+		Period:         "custom",
+		StartTimestamp: &start,
+		EndTimestamp:   &futureEnd,
+	}, secondResolved, second)
+	require.NoError(t, err)
+	assert.Equal(t, firstRange.end, secondRange.end)
+
+	pastEnd := first.Add(-time.Hour).Unix()
+	pastResolved, err := resolveRankingRange("custom", &start, &pastEnd, first)
+	require.NoError(t, err)
+	pastRange, err := resolveRankingCacheRange(RankingsRequest{
+		Period:         "custom",
+		StartTimestamp: &start,
+		EndTimestamp:   &pastEnd,
+	}, pastResolved, first)
+	require.NoError(t, err)
+	assert.Equal(t, pastEnd, pastRange.end)
+}
+
+func TestRankingCacheRangeAcceptsStartInsideCurrentCacheWindow(t *testing.T) {
+	now := time.Unix(2_000_000_110, 0)
+	start := rankingCacheNow(now).Add(5 * time.Second).Unix()
+	end := now.Add(time.Hour).Unix()
+	resolved, err := resolveRankingRange("custom", &start, &end, now)
+	require.NoError(t, err)
+
+	cacheRange, err := resolveRankingCacheRange(RankingsRequest{
+		Period:         "custom",
+		StartTimestamp: &start,
+		EndTimestamp:   &end,
+	}, resolved, now)
+
+	require.NoError(t, err)
+	assert.Equal(t, start, cacheRange.start)
+	assert.Equal(t, start, cacheRange.end)
+}
+
+func TestLoadRankingsSnapshotCoalescesConcurrentCacheMisses(t *testing.T) {
+	InvalidateRankingsCache()
+	t.Cleanup(InvalidateRankingsCache)
+
+	const workerCount = 16
+	var loadCount atomic.Int32
+	ready := sync.WaitGroup{}
+	ready.Add(workerCount)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	type result struct {
+		data *RankingsResponse
+		err  error
+	}
+	results := make(chan result, workerCount)
+	load := func() (*RankingsResponse, error) {
+		if loadCount.Add(1) == 1 {
+			close(started)
+		}
+		<-release
+		return &RankingsResponse{TotalTokens: 42}, nil
+	}
+
+	for range workerCount {
+		go func() {
+			ready.Done()
+			data, err := loadRankingsSnapshot(t.Name(), load)
+			results <- result{data: data, err: err}
+		}()
+	}
+	ready.Wait()
+	<-started
+	close(release)
+
+	for range workerCount {
+		result := <-results
+		require.NoError(t, result.err)
+		require.NotNil(t, result.data)
+		assert.Equal(t, int64(42), result.data.TotalTokens)
+	}
+	assert.Equal(t, int32(1), loadCount.Load())
 }
 
 func TestNormalizeRankingViewerFailsClosed(t *testing.T) {
@@ -72,16 +164,30 @@ func TestNormalizeRankingViewerFailsClosed(t *testing.T) {
 	assert.Equal(t, RankingViewerAdmin, normalizeRankingViewer(RankingViewerAdmin))
 }
 
-func TestBuildRankingUserUsageMasksHiddenUsersAndComputesGroupShares(t *testing.T) {
-	originalQuotaPerUnit := common.QuotaPerUnit
-	common.QuotaPerUnit = 500000
-	t.Cleanup(func() { common.QuotaPerUnit = originalQuotaPerUnit })
+func TestMaskRankingUsernameDoesNotRevealShortNames(t *testing.T) {
+	tests := []struct {
+		username string
+		want     string
+	}{
+		{username: "", want: "Unknown user"},
+		{username: "a", want: "***"},
+		{username: "ab", want: "a***"},
+		{username: "abc", want: "a***c"},
+		{username: "张三", want: "张***"},
+	}
+	for _, test := range tests {
+		t.Run(test.username, func(t *testing.T) {
+			assert.Equal(t, test.want, maskRankingUsername(test.username))
+		})
+	}
+}
 
+func TestBuildRankingUserUsageMasksHiddenUsersAndComputesGroupShares(t *testing.T) {
 	usage := buildRankingUserUsage([]model.RankingUserQuotaRow{
 		{UserID: 1, Username: "alice", UseGroup: "team", TotalTokens: 100, TotalQuota: 500000},
 		{UserID: 1, Username: "alice", UseGroup: "", TotalTokens: 50, TotalQuota: 250000},
 		{UserID: 2, Username: "bob", UseGroup: "secret", HiddenModel: true, TotalTokens: 0, TotalQuota: 750000},
-	}, 150, 1500000, false)
+	}, 150, 1500000, false, 500000)
 	require.NotNil(t, usage)
 	require.Len(t, usage.Users, 2)
 	usersByName := make(map[string]RankingUser, len(usage.Users))
@@ -96,7 +202,7 @@ func TestBuildRankingUserUsageMasksHiddenUsersAndComputesGroupShares(t *testing.
 
 	adminUsage := buildRankingUserUsage([]model.RankingUserQuotaRow{
 		{UserID: 1, Username: "alice", UseGroup: "team", TotalTokens: 1, TotalQuota: 500000},
-	}, 1, 500000, true)
+	}, 1, 500000, true, 500000)
 	assert.Equal(t, "alice", adminUsage.Users[0].Username)
 }
 
@@ -104,7 +210,7 @@ func TestBuildRankingUserUsageDisambiguatesMaskedUsernameCollisions(t *testing.T
 	usage := buildRankingUserUsage([]model.RankingUserQuotaRow{
 		{UserID: 1, Username: "alice", UseGroup: "default", TotalQuota: 2},
 		{UserID: 2, Username: "annie", UseGroup: "default", TotalQuota: 1},
-	}, 0, 3, false)
+	}, 0, 3, false, 500000)
 
 	require.Len(t, usage.Users, 2)
 	assert.Equal(t, "a***e", usage.Users[0].Username)
@@ -115,7 +221,7 @@ func TestBuildRankingUserUsageAggregatesUsernamesByStableUserID(t *testing.T) {
 	usage := buildRankingUserUsage([]model.RankingUserQuotaRow{
 		{UserID: 7, Username: "alice", UseGroup: "team-a", TotalTokens: 10, TotalQuota: 100},
 		{UserID: 7, Username: "alice-renamed", UseGroup: "team-b", TotalTokens: 20, TotalQuota: 200},
-	}, 30, 300, true)
+	}, 30, 300, true, 500000)
 
 	require.Len(t, usage.Users, 1)
 	assert.Equal(t, int64(300), usage.Users[0].TotalQuota)

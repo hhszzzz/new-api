@@ -1,5 +1,5 @@
 import type { RankingUser, RankingUserGroup, RankingUserUsage } from '../types'
-import { formatShare, formatTokens, formatUSD } from './format'
+import { formatShare, formatUSD, formatUsageColumns } from './format'
 
 export type RankingPieSlice = {
   key: string
@@ -79,11 +79,17 @@ export function formatRankingUserTooltip(
   const summary = `${formatShare(slice.share)} · ${formatUSD(slice.usd)}`
   if (slice.groups.length === 0) return summary
 
+  // Group rows are padded as one set, so their charge and token columns line up
+  // under each other instead of drifting with each group's own value widths.
+  const columns = formatUsageColumns(
+    slice.groups.map((group) => ({
+      share: group.quota_share,
+      tokens: group.total_tokens,
+      usd: group.total_usd,
+    }))
+  )
   const groups = slice.groups
-    .map(
-      (group) =>
-        `${group.use_group}: ${formatUSD(group.total_usd)} · ${formatTokens(group.total_tokens)} ${translate('tokens')} · ${formatShare(group.quota_share)}`
-    )
+    .map((group, index) => `${group.use_group}: ${columns[index]}`)
     .join('\n')
   return `${summary}\n${translate('Usage by group')}:\n${groups}`
 }
