@@ -68,6 +68,23 @@ describe('model radar capability matrix', () => {
     ).toBeVisible()
   })
 
+  test('keeps the pinned model column opaque and above scrolling score cells', () => {
+    render(<CapabilityMatrix configurations={[fixture]} />)
+
+    expect(screen.getByRole('columnheader', { name: 'Model' })).toHaveClass(
+      'sticky',
+      'left-0',
+      'z-20',
+      'bg-card'
+    )
+    expect(screen.getByRole('rowheader', { name: /gpt-radar/ })).toHaveClass(
+      'sticky',
+      'left-0',
+      'z-10',
+      'bg-card'
+    )
+  })
+
   test('opens complete metrics from the keyboard and restores focus after Escape', async () => {
     const user = userEvent.setup()
     render(<CapabilityMatrix configurations={[fixture]} />)
@@ -97,5 +114,56 @@ describe('model radar capability matrix', () => {
 
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     expect(detailsButton).toHaveFocus()
+  })
+
+  test('keeps an open detail dialog synchronized with refreshed configuration data', async () => {
+    const user = userEvent.setup()
+    const view = render(<CapabilityMatrix configurations={[fixture]} />)
+
+    await user.click(
+      screen.getByRole('button', {
+        name: 'View details for gpt-radar medium',
+      })
+    )
+    expect(screen.getByRole('dialog')).toBeVisible()
+
+    view.rerender(
+      <CapabilityMatrix
+        configurations={[{ ...fixture, iq: 81.25, combined_cost_index: 12 }]}
+      />
+    )
+
+    expect(screen.getByRole('dialog')).toHaveTextContent('81.25')
+    expect(screen.getByRole('dialog')).toHaveTextContent('12')
+    expect(screen.getByRole('dialog')).not.toHaveTextContent('93.75')
+  })
+
+  test('closes an open detail dialog when its configuration disappears', async () => {
+    const user = userEvent.setup()
+    const view = render(<CapabilityMatrix configurations={[fixture]} />)
+
+    await user.click(
+      screen.getByRole('button', {
+        name: 'View details for gpt-radar medium',
+      })
+    )
+    expect(screen.getByRole('dialog')).toBeVisible()
+
+    view.rerender(<CapabilityMatrix configurations={[]} />)
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  })
+
+  test('adds a column when the source introduces a new reasoning effort', () => {
+    render(
+      <CapabilityMatrix
+        configurations={[fixture, { ...fixture, effort: 'turbo', iq: 95 }]}
+      />
+    )
+
+    expect(screen.getByRole('columnheader', { name: 'turbo' })).toBeVisible()
+    expect(
+      screen.getByRole('button', { name: 'View details for gpt-radar turbo' })
+    ).toBeVisible()
   })
 })

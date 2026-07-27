@@ -176,6 +176,43 @@ describe('model status card', () => {
     expect(within(tooltip).getByText('24.5 t/s')).toBeVisible()
   })
 
+  test('does not invent exact counts when the public response redacts them', () => {
+    const redactedModel: ModelStatusModel = {
+      ...model,
+      request_count: null,
+      success_count: null,
+      timeline: model.timeline.map((point) => ({
+        ...point,
+        request_count: null,
+        success_count: null,
+      })),
+    }
+    render(
+      <ModelStatusCard
+        model={redactedModel}
+        generatedAt={GENERATED_AT}
+        hourFormatter={hourFormatter}
+        numberFormatter={numberFormatter}
+      />
+    )
+
+    const article = screen.getByRole('article', { name: model.model_name })
+    const requestsLabel = within(article).getByText('Requests')
+    const successesLabel = within(article).getByText('Successful requests')
+    expect(requestsLabel.closest('dt')?.nextElementSibling).toHaveTextContent(
+      '—'
+    )
+    expect(successesLabel.closest('dt')?.nextElementSibling).toHaveTextContent(
+      '—'
+    )
+    const timeline = within(article).getByRole('list', {
+      name: 'Status over the last 24 hours',
+    })
+    expect(
+      within(timeline).getAllByRole('listitem').at(-1)
+    ).toHaveAccessibleName(expect.stringContaining('Requests: —'))
+  })
+
   test('shows zero counts and unavailable metrics on keyboard focus without data', async () => {
     const user = userEvent.setup()
     render(

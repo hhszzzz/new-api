@@ -117,13 +117,37 @@ export function groupConfigurations(
     }
   }
 
-  return Array.from(groups, ([model, modelConfigurations], index) => ({
+  return Array.from(groups, ([model, modelConfigurations]) => ({
     model,
-    color: MODEL_COLORS[index % MODEL_COLORS.length],
+    color: stableModelColor(model),
     configurations: [...modelConfigurations].sort((left, right) =>
       compareEfforts(left.effort, right.effort)
     ),
   }))
+}
+
+function stableModelColor(model: string): string {
+  let hash = 2166136261
+  for (let index = 0; index < model.length; index += 1) {
+    hash ^= model.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  return MODEL_COLORS[(hash >>> 0) % MODEL_COLORS.length]
+}
+
+export function matrixEfforts(
+  configurations: ModelRadarConfiguration[]
+): string[] {
+  const knownEfforts = new Set<string>(EFFORT_ORDER)
+  const unknownEfforts = new Set<string>()
+  for (const configuration of configurations) {
+    const effort = configuration.effort.trim().toLowerCase()
+    if (effort && !knownEfforts.has(effort)) unknownEfforts.add(effort)
+  }
+  return [
+    ...EFFORT_ORDER,
+    ...[...unknownEfforts].sort((left, right) => compareEfforts(left, right)),
+  ]
 }
 
 export function createModelColorMap(

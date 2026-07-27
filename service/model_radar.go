@@ -514,8 +514,13 @@ func normalizeModelRadarInsights(payload modelRadarInsightsPayload) ([]ModelRada
 			return nil, 0, fmt.Errorf("duplicate degradation alert %s", key)
 		}
 		seen[key] = struct{}{}
+		if item.IQ == nil {
+			return nil, 0, fmt.Errorf("degradation alert %s is missing iq", key)
+		}
+		if !isFiniteInRange(*item.IQ, 0, 150) {
+			return nil, 0, fmt.Errorf("degradation alert %s has invalid iq", key)
+		}
 		for field, value := range map[string]*float64{
-			"iq":                 item.IQ,
 			"degradation_12h_iq": item.Degradation12hIQ,
 			"degradation_24h_iq": item.Degradation24hIQ,
 			"degradation_48h_iq": item.Degradation48hIQ,
@@ -523,7 +528,7 @@ func normalizeModelRadarInsights(payload modelRadarInsightsPayload) ([]ModelRada
 			if value == nil {
 				return nil, 0, fmt.Errorf("degradation alert %s is missing %s", key, field)
 			}
-			if !isFiniteInRange(*value, 0, 150) {
+			if !isFiniteInRange(*value, -150, 150) {
 				return nil, 0, fmt.Errorf("degradation alert %s has invalid %s", key, field)
 			}
 		}

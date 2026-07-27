@@ -207,6 +207,31 @@ func TestNormalizeModelRadarInsightsAllowsNoAlerts(t *testing.T) {
 	assert.Equal(t, int64(1785024060), updatedAt)
 }
 
+func TestNormalizeModelRadarInsightsPreservesSignedDegradation(t *testing.T) {
+	iq := 39.0
+	degradation12h := 6.5
+	degradation24h := 6.5
+	degradation48h := -0.2
+	payload := modelRadarInsightsPayload{
+		Schema:          modelRadarInsightsSchema,
+		SourceUpdatedAt: "2026-07-26T13:22:03Z",
+	}
+	payload.DegradationAlerts.Items = []modelRadarUpstreamAlert{{
+		Model:            "gpt-5.6-terra",
+		Effort:           "low",
+		IQ:               &iq,
+		Degradation12hIQ: &degradation12h,
+		Degradation24hIQ: &degradation24h,
+		Degradation48hIQ: &degradation48h,
+	}}
+
+	alerts, _, err := normalizeModelRadarInsights(payload)
+
+	require.NoError(t, err)
+	require.Len(t, alerts, 1)
+	assert.Equal(t, -0.2, alerts[0].Degradation48hIQ)
+}
+
 func TestSyncModelRadarDoesNotReplaceSnapshotWhenOneSourceFails(t *testing.T) {
 	setupModelRadarServiceTestDB(t)
 	ctx := context.Background()

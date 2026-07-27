@@ -126,6 +126,17 @@ export function ModelRadar() {
                     ·
                   </span>
                   {t('Updated {{time}}', { time: updatedAt })}
+                  <span className='mx-1.5' aria-hidden='true'>
+                    ·
+                  </span>
+                  <a
+                    href={snapshot.source.url}
+                    target='_blank'
+                    rel='noreferrer'
+                    className='text-foreground decoration-border hover:decoration-foreground focus-visible:ring-ring underline underline-offset-4 focus-visible:ring-2 focus-visible:outline-none'
+                  >
+                    {t('Data from Codex Radar codexradar.com')}
+                  </a>
                 </p>
               ) : null}
             </div>

@@ -168,6 +168,11 @@ describe('model radar page states', () => {
     expect(screen.getByText('This data is outdated')).toBeVisible()
     expect(screen.getByText('No degradation alerts')).toBeVisible()
     expect(screen.getByText('Stale data')).toBeVisible()
+    expect(
+      screen.getByRole('link', {
+        name: 'Data from Codex Radar codexradar.com',
+      })
+    ).toHaveAttribute('href', 'https://codexradar.com')
     expect(screen.queryByText(/recommend/i)).toBeNull()
   })
 })

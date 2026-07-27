@@ -16,6 +16,79 @@ import (
 
 const perfMetricsUnavailableMessage = "performance metrics are temporarily unavailable"
 
+type perfMetricsStatusPointView struct {
+	Ts           int64              `json:"ts"`
+	Status       perfmetrics.Status `json:"status"`
+	RequestCount *int64             `json:"request_count"`
+	SuccessCount *int64             `json:"success_count"`
+	SuccessRate  *float64           `json:"success_rate"`
+	AvgTtftMs    *int64             `json:"avg_ttft_ms"`
+	AvgLatencyMs *int64             `json:"avg_latency_ms"`
+	AvgTps       *float64           `json:"avg_tps"`
+}
+
+type perfMetricsStatusModelView struct {
+	ModelName    string                       `json:"model_name"`
+	Vendor       string                       `json:"vendor"`
+	Icon         string                       `json:"icon"`
+	RequestCount *int64                       `json:"request_count"`
+	SuccessCount *int64                       `json:"success_count"`
+	SuccessRate  *float64                     `json:"success_rate"`
+	AvgTtftMs    *int64                       `json:"avg_ttft_ms"`
+	AvgLatencyMs *int64                       `json:"avg_latency_ms"`
+	AvgTps       *float64                     `json:"avg_tps"`
+	Status       perfmetrics.Status           `json:"status"`
+	Timeline     []perfMetricsStatusPointView `json:"timeline"`
+}
+
+type perfMetricsStatusView struct {
+	GeneratedAt int64                        `json:"generated_at"`
+	WindowHours int                          `json:"window_hours"`
+	Models      []perfMetricsStatusModelView `json:"models"`
+}
+
+func buildPerfMetricsStatusView(result perfmetrics.StatusResult, includeCounts bool) perfMetricsStatusView {
+	view := perfMetricsStatusView{
+		GeneratedAt: result.GeneratedAt,
+		WindowHours: result.WindowHours,
+		Models:      make([]perfMetricsStatusModelView, 0, len(result.Models)),
+	}
+	for _, item := range result.Models {
+		modelView := perfMetricsStatusModelView{
+			ModelName:    item.ModelName,
+			Vendor:       item.Vendor,
+			Icon:         item.Icon,
+			SuccessRate:  item.SuccessRate,
+			AvgTtftMs:    item.AvgTtftMs,
+			AvgLatencyMs: item.AvgLatencyMs,
+			AvgTps:       item.AvgTps,
+			Status:       item.Status,
+			Timeline:     make([]perfMetricsStatusPointView, 0, len(item.Timeline)),
+		}
+		if includeCounts {
+			modelView.RequestCount = lo.ToPtr(item.RequestCount)
+			modelView.SuccessCount = lo.ToPtr(item.SuccessCount)
+		}
+		for _, point := range item.Timeline {
+			pointView := perfMetricsStatusPointView{
+				Ts:           point.Ts,
+				Status:       point.Status,
+				SuccessRate:  point.SuccessRate,
+				AvgTtftMs:    point.AvgTtftMs,
+				AvgLatencyMs: point.AvgLatencyMs,
+				AvgTps:       point.AvgTps,
+			}
+			if includeCounts {
+				pointView.RequestCount = lo.ToPtr(point.RequestCount)
+				pointView.SuccessCount = lo.ToPtr(point.SuccessCount)
+			}
+			modelView.Timeline = append(modelView.Timeline, pointView)
+		}
+		view.Models = append(view.Models, modelView)
+	}
+	return view
+}
+
 func GetPerfMetricsSummary(c *gin.Context) {
 	hours := 24
 	if rawHours := c.Query("hours"); rawHours != "" {
@@ -166,7 +239,7 @@ func GetPerfMetricsStatus(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"data":    result,
+		"data":    buildPerfMetricsStatusView(result, c.GetInt("id") > 0),
 	})
 }
 

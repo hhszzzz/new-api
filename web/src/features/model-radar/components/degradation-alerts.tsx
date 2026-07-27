@@ -21,6 +21,8 @@ import { HugeiconsIcon } from '@hugeicons/react'
 import { useId, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { cn } from '@/lib/utils'
+
 import { useRadarFormatters } from '../hooks/use-radar-formatters'
 import { createModelColorMap, getHistorySeries } from '../lib/model-radar'
 import type {
@@ -108,7 +110,7 @@ function AlertCard(props: {
   const startIq =
     props.series.length > 0
       ? props.series[0]
-      : alert.iq + Math.abs(alert.degradation_48h_iq)
+      : alert.iq + alert.degradation_48h_iq
 
   return (
     <article
@@ -227,11 +229,23 @@ function Sparkline(props: { values: number[]; label: string }) {
 }
 
 function Decline(props: { label: string; value: number }) {
+  let valueClass = 'text-muted-foreground'
+  let displayValue = '0.0'
+  if (props.value > 0) {
+    valueClass = 'text-destructive'
+    displayValue = `-${props.value.toFixed(1)}`
+  } else if (props.value < 0) {
+    valueClass = 'text-emerald-700 dark:text-emerald-400'
+    displayValue = `+${Math.abs(props.value).toFixed(1)}`
+  }
+
   return (
     <div className='sm:text-right'>
       <dt className='text-muted-foreground text-[10px]'>{props.label}</dt>
-      <dd className='text-destructive mt-0.5 text-xs font-semibold tabular-nums'>
-        -{Math.abs(props.value).toFixed(1)}
+      <dd
+        className={cn('mt-0.5 text-xs font-semibold tabular-nums', valueClass)}
+      >
+        {displayValue}
       </dd>
     </div>
   )

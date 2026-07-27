@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { describe, expect, test } from 'vitest'
 
-import { groupConfigurations } from '../lib/model-radar'
+import { groupConfigurations, matrixEfforts } from '../lib/model-radar'
 import type { ModelRadarConfiguration } from '../types'
 
 function configuration(model: string, effort: string): ModelRadarConfiguration {
@@ -64,6 +64,44 @@ describe('model radar configuration grouping', () => {
     expect(groups[1].configurations.map((item) => item.effort)).toEqual([
       'medium',
       'high',
+    ])
+  })
+
+  test('keeps fallback model colors stable when source order changes', () => {
+    const forward = groupConfigurations([
+      configuration('model-a', 'low'),
+      configuration('model-b', 'low'),
+    ])
+    const reversed = groupConfigurations([
+      configuration('model-b', 'low'),
+      configuration('model-a', 'low'),
+    ])
+
+    const forwardColors = Object.fromEntries(
+      forward.map((group) => [group.model, group.color])
+    )
+    const reversedColors = Object.fromEntries(
+      reversed.map((group) => [group.model, group.color])
+    )
+    expect(reversedColors).toEqual(forwardColors)
+  })
+
+  test('appends unknown efforts after the canonical matrix columns', () => {
+    expect(
+      matrixEfforts([
+        configuration('model-a', 'turbo'),
+        configuration('model-b', 'high'),
+        configuration('model-c', 'adaptive'),
+      ])
+    ).toEqual([
+      'low',
+      'medium',
+      'high',
+      'xhigh',
+      'max',
+      'ultra',
+      'adaptive',
+      'turbo',
     ])
   })
 })

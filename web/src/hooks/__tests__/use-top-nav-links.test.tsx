@@ -128,10 +128,12 @@ describe('top navigation model status link', () => {
 
     const { result } = renderHook(() => useTopNavLinks())
 
-    expect(result.current.find((link) => link.href === '/model-radar')).toEqual({
-      title: 'Model Radar',
-      href: '/model-radar',
-      requiresAuth: false,
-    })
+    expect(result.current.find((link) => link.href === '/model-radar')).toEqual(
+      {
+        title: 'Model Radar',
+        href: '/model-radar',
+        requiresAuth: false,
+      }
+    )
   })
 })

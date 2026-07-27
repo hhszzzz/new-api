@@ -82,12 +82,14 @@ export function StatusTimeline(props: StatusTimelineProps) {
               point.ts,
               props.hourFormatter
             )
-            const requestCount = props.numberFormatter.format(
-              point.request_count
-            )
-            const successCount = props.numberFormatter.format(
-              point.success_count
-            )
+            const requestCount =
+              point.request_count === null
+                ? '—'
+                : props.numberFormatter.format(point.request_count)
+            const successCount =
+              point.success_count === null
+                ? '—'
+                : props.numberFormatter.format(point.success_count)
             const successRate =
               point.success_rate === null
                 ? '—'

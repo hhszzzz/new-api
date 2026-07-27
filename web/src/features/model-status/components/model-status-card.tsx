@@ -91,12 +91,20 @@ export function ModelStatusCard(props: ModelStatusCardProps) {
             <Metric
               icon={ChartHistogramIcon}
               label={t('Requests')}
-              value={props.numberFormatter.format(props.model.request_count)}
+              value={
+                props.model.request_count === null
+                  ? '—'
+                  : props.numberFormatter.format(props.model.request_count)
+              }
             />
             <Metric
               icon={Tick02Icon}
               label={t('Successful requests')}
-              value={props.numberFormatter.format(props.model.success_count)}
+              value={
+                props.model.success_count === null
+                  ? '—'
+                  : props.numberFormatter.format(props.model.success_count)
+              }
             />
             <Metric
               icon={HeartPulseIcon}

@@ -29,7 +29,7 @@ import {
   LayerIcon,
 } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
@@ -46,12 +46,12 @@ import { cn } from '@/lib/utils'
 
 import { useRadarFormatters } from '../hooks/use-radar-formatters'
 import {
-  EFFORT_ORDER,
   compareModelsByBestIq,
   getIqTone,
   getModelIconKey,
   getPassRate,
   groupConfigurations,
+  matrixEfforts,
 } from '../lib/model-radar'
 import type { ModelRadarConfiguration } from '../types'
 
@@ -91,11 +91,26 @@ export function CapabilityMatrix(props: {
   configurations: ModelRadarConfiguration[]
 }) {
   const { t } = useTranslation()
-  const [selected, setSelected] = useState<ModelRadarConfiguration | null>(null)
+  const [selected, setSelected] = useState<{
+    model: string
+    effort: string
+  } | null>(null)
   const groups = groupConfigurations(props.configurations).sort(
     compareModelsByBestIq
   )
+  const efforts = matrixEfforts(props.configurations)
   const topGroup = groups[0]
+  const selectedConfiguration = selected
+    ? (props.configurations.find(
+        (configuration) =>
+          configuration.model === selected.model &&
+          configuration.effort === selected.effort
+      ) ?? null)
+    : null
+
+  useEffect(() => {
+    if (selected && !selectedConfiguration) setSelected(null)
+  }, [selected, selectedConfiguration])
 
   return (
     <section
@@ -120,16 +135,19 @@ export function CapabilityMatrix(props: {
       </header>
 
       <div className='bg-card overflow-x-auto rounded-xl border'>
-        <table className='w-full min-w-xl table-fixed border-collapse'>
+        <table
+          className='w-full table-fixed border-collapse'
+          style={{ minWidth: 176 + efforts.length * 88 }}
+        >
           <thead>
             <tr className='border-border/70 border-b'>
-              <th className='text-muted-foreground bg-card sticky left-0 w-44 p-2.5 text-left text-xs font-medium sm:p-3'>
+              <th className='text-muted-foreground bg-card sticky left-0 z-20 w-44 p-2.5 text-left text-xs font-medium shadow-[8px_0_10px_-10px_hsl(var(--foreground))] sm:p-3'>
                 {t('Model')}
               </th>
-              {EFFORT_ORDER.map((effort) => (
+              {efforts.map((effort) => (
                 <th
                   key={effort}
-                  className='text-muted-foreground p-2.5 text-center text-xs font-medium capitalize sm:p-3'
+                  className='text-muted-foreground p-2.5 text-center text-xs leading-tight font-medium break-words capitalize sm:p-3'
                 >
                   {effort}
                 </th>
@@ -146,13 +164,17 @@ export function CapabilityMatrix(props: {
                 <tr
                   key={group.model}
                   className={cn(
-                    'border-border/50 hover:bg-muted/30 border-b transition-colors last:border-b-0',
+                    'border-border/50 hover:bg-muted/30 group border-b transition-colors last:border-b-0',
                     isTopModel && 'bg-primary/[0.03]'
                   )}
                 >
                   <th
                     scope='row'
-                    className='sticky left-0 bg-inherit p-2.5 text-left sm:p-3'
+                    className={cn(
+                      'bg-card sticky left-0 z-10 p-2.5 text-left shadow-[8px_0_10px_-10px_hsl(var(--foreground))] group-hover:[background-color:color-mix(in_oklch,var(--muted)_30%,var(--card))] sm:p-3',
+                      isTopModel &&
+                        '[background-color:color-mix(in_oklch,var(--primary)_3%,var(--card))]'
+                    )}
                   >
                     <div className='flex min-w-0 items-center gap-2'>
                       <ModelBadge color={group.color} model={group.model} />
@@ -169,7 +191,7 @@ export function CapabilityMatrix(props: {
                       ) : null}
                     </div>
                   </th>
-                  {EFFORT_ORDER.map((effort) => {
+                  {efforts.map((effort) => {
                     const configuration = group.configurations.find(
                       (item) => item.effort.toLowerCase() === effort
                     )
@@ -179,7 +201,12 @@ export function CapabilityMatrix(props: {
                           <MatrixCell
                             configuration={configuration}
                             isBest={configuration.iq === bestIq}
-                            onSelect={setSelected}
+                            onSelect={(configuration) =>
+                              setSelected({
+                                model: configuration.model,
+                                effort: configuration.effort,
+                              })
+                            }
                           />
                         ) : (
                           <span
@@ -200,8 +227,8 @@ export function CapabilityMatrix(props: {
       </div>
 
       <ConfigurationDetails
-        configuration={selected}
-        open={selected !== null}
+        configuration={selectedConfiguration}
+        open={selectedConfiguration !== null}
         onOpenChange={(open) => {
           if (!open) setSelected(null)
         }}

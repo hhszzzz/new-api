@@ -77,8 +77,10 @@ func TestGetPerfMetricsStatusReturnsOnlyVisibleEnabledModels(t *testing.T) {
 	assert.Equal(t, "visible-status-model", payload.Data.Models[0].ModelName)
 	assert.Equal(t, perfmetrics.StatusFailed, payload.Data.Models[0].Status)
 	assert.Equal(t, "Claude.Color", payload.Data.Models[0].Icon)
-	assert.Equal(t, int64(2), payload.Data.Models[0].RequestCount)
-	assert.Equal(t, int64(1), payload.Data.Models[0].SuccessCount)
+	assert.Zero(t, payload.Data.Models[0].RequestCount)
+	assert.Zero(t, payload.Data.Models[0].SuccessCount)
+	assert.Contains(t, recorder.Body.String(), `"request_count":null`)
+	assert.Contains(t, recorder.Body.String(), `"success_count":null`)
 	require.NotNil(t, payload.Data.Models[0].SuccessRate)
 	require.NotNil(t, payload.Data.Models[0].AvgTtftMs)
 	require.NotNil(t, payload.Data.Models[0].AvgLatencyMs)
@@ -97,8 +99,8 @@ func TestGetPerfMetricsStatusReturnsOnlyVisibleEnabledModels(t *testing.T) {
 	}
 	require.NotEqual(t, -1, metricPointIndex)
 	metricPoint := payload.Data.Models[0].Timeline[metricPointIndex]
-	assert.Equal(t, int64(2), metricPoint.RequestCount)
-	assert.Equal(t, int64(1), metricPoint.SuccessCount)
+	assert.Zero(t, metricPoint.RequestCount)
+	assert.Zero(t, metricPoint.SuccessCount)
 	require.NotNil(t, metricPoint.AvgTtftMs)
 	require.NotNil(t, metricPoint.AvgLatencyMs)
 	require.NotNil(t, metricPoint.AvgTps)
@@ -110,6 +112,28 @@ func TestGetPerfMetricsStatusReturnsOnlyVisibleEnabledModels(t *testing.T) {
 	assert.Equal(t, "Anthropic.Color", payload.Data.Models[1].Icon)
 	assert.Zero(t, payload.Data.Models[1].RequestCount)
 	assert.Zero(t, payload.Data.Models[1].SuccessCount)
+
+	authenticatedRecorder := httptest.NewRecorder()
+	authenticatedContext, _ := gin.CreateTestContext(authenticatedRecorder)
+	authenticatedContext.Request = httptest.NewRequest(http.MethodGet, "/api/perf-metrics/status", nil)
+	authenticatedContext.Set("id", 1)
+	GetPerfMetricsStatus(authenticatedContext)
+	require.Equal(t, http.StatusOK, authenticatedRecorder.Code)
+	var authenticatedPayload perfMetricsStatusResponse
+	require.NoError(t, common.Unmarshal(authenticatedRecorder.Body.Bytes(), &authenticatedPayload))
+	require.Len(t, authenticatedPayload.Data.Models, 2)
+	assert.Equal(t, int64(2), authenticatedPayload.Data.Models[0].RequestCount)
+	assert.Equal(t, int64(1), authenticatedPayload.Data.Models[0].SuccessCount)
+	metricPointIndex = -1
+	for index, point := range authenticatedPayload.Data.Models[0].Timeline {
+		if point.Ts == completedHour {
+			metricPointIndex = index
+			break
+		}
+	}
+	require.NotEqual(t, -1, metricPointIndex)
+	assert.Equal(t, int64(2), authenticatedPayload.Data.Models[0].Timeline[metricPointIndex].RequestCount)
+	assert.Equal(t, int64(1), authenticatedPayload.Data.Models[0].Timeline[metricPointIndex].SuccessCount)
 }
 
 func TestGetPerfMetricsStatusReturnsEmptyWhenNoModelsAreVisible(t *testing.T) {
@@ -212,23 +236,14 @@ func TestGetPerfMetricsStatusExcludesDisabledAbilitiesAndUnavailableChannels(t *
 	assert.Equal(t, perfmetrics.StatusNoData, payload.Data.Models[0].Status)
 }
 
-func TestGetPerfMetricsStatusUsesLoggedInUsersSpecialGroups(t *testing.T) {
+func TestGetPerfMetricsStatusUsesLoggedInUsersAssignedGroups(t *testing.T) {
 	originalUsableGroups := setting.UserUsableGroups2JSONString()
 	originalGroupRatios := ratio_setting.GroupRatio2JSONString()
-	originalSpecialGroups := ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup.ReadAll()
 	require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"default":"Default"}`))
 	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1,"vip":1}`))
-	specialGroups := ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup
-	specialGroups.Clear()
-	specialGroups.Set("member", map[string]string{
-		"+:vip":     "VIP",
-		"-:default": "",
-	})
 	t.Cleanup(func() {
 		require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(originalUsableGroups))
 		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(originalGroupRatios))
-		specialGroups.Clear()
-		specialGroups.AddAll(originalSpecialGroups)
 		model.InvalidatePricingCache()
 	})
 
@@ -236,9 +251,9 @@ func TestGetPerfMetricsStatusUsesLoggedInUsersSpecialGroups(t *testing.T) {
 	require.NoError(t, db.AutoMigrate(&model.PerfMetric{}, &model.PerfMetricInstance{}))
 	require.NoError(t, db.Create(&model.User{
 		Id:          805,
-		Username:    "status-special-group-user",
+		Username:    "status-assigned-group-user",
 		Password:    "password",
-		Group:       "member",
+		Group:       "vip",
 		Status:      common.UserStatusEnabled,
 		AuthVersion: 1,
 	}).Error)
