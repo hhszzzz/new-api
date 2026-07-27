@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import DOMPurify, { type Config } from 'dompurify'
 import { useEffect, useMemo, useRef } from 'react'
+import { useTranslation } from 'react-i18next'
 
 import { cn } from '@/lib/utils'
 
@@ -29,8 +30,25 @@ interface HtmlContentProps {
   variant?: HtmlContentVariant
 }
 
+// `allow-scripts` without `allow-same-origin` keeps the frame on an opaque
+// origin: embedded players and dashboards can run their own code, but they
+// cannot reach the application's DOM, storage, or cookies.
 const isolatedContentSandbox =
-  'allow-forms allow-popups allow-popups-to-escape-sandbox allow-presentation'
+  'allow-forms allow-popups allow-popups-to-escape-sandbox allow-presentation allow-scripts'
+
+// Isolated content is rendered full-bleed, below a fixed public header. Without
+// this offset the first rows of a pasted page sit underneath the header, and a
+// short fragment disappears behind it entirely.
+const isolatedContentOffset = 'pt-16'
+
+// Admins paste either a fragment (`<p>About us…</p>`) or a whole page exported
+// from a site builder. A whole page carries `html`/`body` rules and a `<title>`,
+// which only behave correctly inside a real document.
+const htmlDocumentPattern = /^\s*(?:<!doctype\s+html|<html[\s>]|<body[\s>])/i
+
+function isHtmlDocument(content: string): boolean {
+  return htmlDocumentPattern.test(content)
+}
 
 const isolatedContentBaseStyles = `
 <style>
@@ -87,15 +105,49 @@ const isolatedSanitizeOptions = {
   FORCE_BODY: true,
 } satisfies Config
 
-function hardenIsolatedHtml(html: string): string {
-  if (typeof document === 'undefined') {
-    return html
-  }
+/**
+ * A pasted page is rendered in a sandboxed frame, so it keeps far more of what
+ * its author wrote than a fragment can.
+ *
+ * It keeps its own `html`/`head`/`body` structure, so the `body { … }` rules and
+ * `<title>` it ships with still mean what the author intended. It also keeps its
+ * stylesheets and scripts: pages exported from a site builder are usually a thin
+ * shell around a CDN stylesheet plus an on-load script, and stripping those
+ * leaves a blank page. The frame — opaque origin, no `allow-same-origin` — is
+ * what makes that safe, so the document cannot reach the application's DOM,
+ * storage, or cookies regardless of what it loads.
+ */
+const isolatedDocumentSanitizeOptions = {
+  ADD_ATTR: [
+    ...isolatedSanitizeOptions.ADD_ATTR,
+    'async',
+    'charset',
+    'content',
+    'crossorigin',
+    'defer',
+    'href',
+    'integrity',
+    'media',
+    'name',
+    'sizes',
+    'type',
+  ],
+  ADD_TAGS: [
+    ...isolatedSanitizeOptions.ADD_TAGS,
+    'head',
+    'html',
+    'link',
+    'meta',
+    'noscript',
+    'script',
+    'title',
+  ],
+  FORCE_BODY: false,
+  WHOLE_DOCUMENT: true,
+} satisfies Config
 
-  const template = document.createElement('template')
-  template.innerHTML = html
-
-  template.content.querySelectorAll('a[target="_blank"]').forEach((link) => {
+function hardenIsolatedFragment(root: ParentNode): void {
+  root.querySelectorAll('a[target="_blank"]').forEach((link) => {
     const rel = new Set(
       link.getAttribute('rel')?.split(/\s+/).filter(Boolean) ?? []
     )
@@ -105,7 +157,7 @@ function hardenIsolatedHtml(html: string): string {
     link.setAttribute('rel', [...rel].join(' '))
   })
 
-  template.content.querySelectorAll('iframe').forEach((frame) => {
+  root.querySelectorAll('iframe').forEach((frame) => {
     frame.removeAttribute('srcdoc')
     frame.setAttribute('sandbox', isolatedContentSandbox)
     frame.setAttribute('referrerpolicy', 'no-referrer')
@@ -114,26 +166,71 @@ function hardenIsolatedHtml(html: string): string {
       frame.setAttribute('loading', 'lazy')
     }
   })
+}
+
+function hardenIsolatedHtml(html: string, isDocument: boolean): string {
+  if (typeof document === 'undefined') {
+    return html
+  }
+
+  // A document is hardened in place: routing it through a `<template>` would
+  // discard the `html`/`head`/`body` structure the pasted page depends on.
+  if (isDocument) {
+    const parsed = new DOMParser().parseFromString(html, 'text/html')
+    hardenIsolatedFragment(parsed)
+
+    return parsed.documentElement.outerHTML
+  }
+
+  const template = document.createElement('template')
+  template.innerHTML = html
+  hardenIsolatedFragment(template.content)
 
   return template.innerHTML
 }
 
-function sanitizeHtmlContent(
-  content: string,
-  variant: HtmlContentVariant
-): string {
-  if (variant === 'isolated') {
-    const html = DOMPurify.sanitize(content, isolatedSanitizeOptions)
+function sanitizeIsolatedHtml(content: string): string {
+  const isDocument = isHtmlDocument(content)
+  const html = DOMPurify.sanitize(
+    content,
+    isDocument ? isolatedDocumentSanitizeOptions : isolatedSanitizeOptions
+  )
 
-    return hardenIsolatedHtml(html)
-  }
-
-  return DOMPurify.sanitize(content)
+  return hardenIsolatedHtml(html, isDocument)
 }
 
 function syncDarkClass(wrapper: HTMLElement): void {
   const isDark = document.documentElement.classList.contains('dark')
   wrapper.classList.toggle('dark', isDark)
+}
+
+/**
+ * Render a pasted page inside a sandboxed frame.
+ *
+ * A shadow root cannot host `html`/`head`/`body`, so a whole document rendered
+ * there loses every `body { … }` rule it ships with and leaks its `<title>` as
+ * visible text. A frame gives it the real document it was written against,
+ * matching how an admin-provided URL is already embedded.
+ */
+function IsolatedHtmlDocument(props: {
+  className?: string
+  html: string
+}): React.ReactElement {
+  const { t } = useTranslation()
+
+  return (
+    <div className={isolatedContentOffset}>
+      <iframe
+        // `allow-scripts` without `allow-same-origin` keeps the frame on an
+        // opaque origin, so the pasted page cannot reach the application's DOM,
+        // storage, or cookies.
+        sandbox={isolatedContentSandbox}
+        srcDoc={props.html}
+        title={t('Embedded content')}
+        className={cn('h-[calc(100svh-4rem)] w-full border-0', props.className)}
+      />
+    </div>
+  )
 }
 
 function IsolatedHtmlContent(props: {
@@ -179,19 +276,30 @@ function IsolatedHtmlContent(props: {
   }, [props.html])
 
   return (
-    <div ref={containerRef} className={cn('block w-full', props.className)} />
+    <div
+      ref={containerRef}
+      className={cn('block w-full', isolatedContentOffset, props.className)}
+    />
   )
 }
 
 export function HtmlContent(props: HtmlContentProps) {
   const variant = props.variant ?? 'inline'
+  const isolated = variant === 'isolated'
   const html = useMemo(
-    () => sanitizeHtmlContent(props.content, variant),
-    [props.content, variant]
+    () =>
+      isolated
+        ? sanitizeIsolatedHtml(props.content)
+        : DOMPurify.sanitize(props.content),
+    [isolated, props.content]
   )
 
-  if (variant === 'isolated') {
-    return <IsolatedHtmlContent className={props.className} html={html} />
+  if (isolated) {
+    return isHtmlDocument(props.content) ? (
+      <IsolatedHtmlDocument className={props.className} html={html} />
+    ) : (
+      <IsolatedHtmlContent className={props.className} html={html} />
+    )
   }
 
   return (
