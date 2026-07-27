@@ -17,11 +17,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import {
+  type ColumnSizingState,
   flexRender,
   type Header,
   type Table as TanstackTable,
 } from '@tanstack/react-table'
-import type { KeyboardEvent, MouseEvent } from 'react'
+import type { KeyboardEvent, MouseEvent, PointerEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -74,15 +75,16 @@ export function DataTableHeader<TData>({
                   onDoubleClick={(event) =>
                     handleColumnAutoSize(event, table, header)
                   }
-                  onMouseDown={header.getResizeHandler()}
-                  onTouchStart={header.getResizeHandler()}
+                  onPointerDown={(event) =>
+                    handleColumnResizeStart(event, table, header)
+                  }
                   onKeyDown={(event) =>
                     handleColumnResizeKeyDown(event, table, header)
                   }
                   className={cn(
                     'absolute top-0 right-0 h-full w-2 cursor-col-resize touch-none select-none',
                     'after:bg-border hover:after:bg-primary after:absolute after:top-2 after:right-0 after:h-[calc(100%-1rem)] after:w-px after:transition-colors',
-                    header.column.getIsResizing() && 'after:bg-primary'
+                    'data-[resizing=true]:after:bg-primary'
                   )}
                 />
               )}
@@ -103,13 +105,13 @@ function handleColumnResizeKeyDown<TData>(
 
   if (event.key === 'ArrowLeft') {
     event.preventDefault()
-    resizeColumnByKeyboard(table, header, -step)
+    resizeColumnByKeyboard(event.currentTarget, table, header, -step)
     return
   }
 
   if (event.key === 'ArrowRight') {
     event.preventDefault()
-    resizeColumnByKeyboard(table, header, step)
+    resizeColumnByKeyboard(event.currentTarget, table, header, step)
     return
   }
 
@@ -119,17 +121,118 @@ function handleColumnResizeKeyDown<TData>(
   }
 }
 
+function handleColumnResizeStart<TData>(
+  event: PointerEvent<HTMLDivElement>,
+  table: TanstackTable<TData>,
+  header: Header<TData, unknown>
+) {
+  if (
+    event.isPrimary === false ||
+    (event.pointerType === 'mouse' && event.button !== 0)
+  ) {
+    return
+  }
+
+  const renderedSizing =
+    measureRenderedColumnSizing(event.currentTarget, table) ??
+    Object.fromEntries(
+      table
+        .getVisibleLeafColumns()
+        .map((column) => [column.id, column.getSize()])
+    )
+
+  event.preventDefault()
+  const resizerElement = event.currentTarget
+  resizerElement.dataset.resizing = 'true'
+  const ownerDocument = event.currentTarget.ownerDocument
+  const pointerId = event.pointerId
+  try {
+    resizerElement.setPointerCapture(pointerId)
+  } catch {
+    // Synthetic pointer events may not have an active pointer to capture.
+  }
+  const startOffset = event.clientX
+  const deltaDirection = table.options.columnResizeDirection === 'rtl' ? -1 : 1
+  const columnSizingStart = header.getLeafHeaders().map((leafHeader) => ({
+    header: leafHeader,
+    size: renderedSizing[leafHeader.column.id] ?? leafHeader.column.getSize(),
+  }))
+  const startSize = columnSizingStart.reduce(
+    (total, column) => total + column.size,
+    0
+  )
+  let didMove = false
+
+  const updateSizing = (clientX: number) => {
+    const deltaOffset = (clientX - startOffset) * deltaDirection
+    const deltaPercentage = Math.max(deltaOffset / startSize, -0.999999)
+    const resizedColumns = Object.fromEntries(
+      columnSizingStart.map((column) => [
+        column.header.column.id,
+        getClampedColumnSize(
+          column.header,
+          column.size + column.size * deltaPercentage
+        ),
+      ])
+    )
+
+    table.setColumnSizing((previous) => {
+      const nextSizing = { ...renderedSizing, ...resizedColumns }
+      const didChange = Object.entries(nextSizing).some(
+        ([columnId, size]) => previous[columnId] !== size
+      )
+
+      return didChange ? { ...previous, ...nextSizing } : previous
+    })
+  }
+
+  const finishResize = (pointerEvent: globalThis.PointerEvent) => {
+    if (pointerEvent.pointerId !== pointerId) return
+    if (didMove && pointerEvent.type === 'pointerup') {
+      updateSizing(pointerEvent.clientX)
+    }
+    ownerDocument.removeEventListener('pointermove', handlePointerMove)
+    ownerDocument.removeEventListener('pointerup', finishResize)
+    ownerDocument.removeEventListener('pointercancel', finishResize)
+    if (
+      typeof resizerElement.hasPointerCapture === 'function' &&
+      resizerElement.hasPointerCapture(pointerId)
+    ) {
+      resizerElement.releasePointerCapture(pointerId)
+    }
+    delete resizerElement.dataset.resizing
+  }
+
+  const handlePointerMove = (pointerEvent: globalThis.PointerEvent) => {
+    if (pointerEvent.pointerId !== pointerId) return
+    if (pointerEvent.cancelable) {
+      pointerEvent.preventDefault()
+    }
+    didMove = true
+    updateSizing(pointerEvent.clientX)
+  }
+
+  ownerDocument.addEventListener('pointermove', handlePointerMove, {
+    passive: false,
+  })
+  ownerDocument.addEventListener('pointerup', finishResize)
+  ownerDocument.addEventListener('pointercancel', finishResize)
+}
+
 function resizeColumnByKeyboard<TData>(
+  resizerElement: HTMLElement,
   table: TanstackTable<TData>,
   header: Header<TData, unknown>,
   delta: number
 ) {
+  const renderedSizing = measureRenderedColumnSizing(resizerElement, table)
+  const currentSize =
+    renderedSizing?.[header.column.id] ?? header.column.getSize()
+
   table.setColumnSizing((previous) => ({
     ...previous,
-    [header.column.id]: getClampedColumnSize(
-      header,
-      header.column.getSize() + delta
-    ),
+    ...renderedSizing,
+    [header.column.id]: getClampedColumnSize(header, currentSize + delta),
   }))
 }
 
@@ -158,8 +261,50 @@ function autoSizeColumn<TData>(
 
   table.setColumnSizing((previous) => ({
     ...previous,
+    ...measureRenderedColumnSizing(resizerElement, table),
     [header.column.id]: getClampedColumnSize(header, measuredSize),
   }))
+}
+
+function measureRenderedColumnSizing<TData>(
+  resizerElement: HTMLElement,
+  table: TanstackTable<TData>
+): ColumnSizingState | undefined {
+  const tableElement = resizerElement.closest('table')
+  if (!tableElement) {
+    return undefined
+  }
+
+  const sizing: ColumnSizingState = {}
+
+  for (const column of table.getVisibleLeafColumns()) {
+    const cells = tableElement.querySelectorAll<HTMLElement>(
+      getColumnElementSelector(column.id)
+    )
+    if (cells.length === 0) {
+      return undefined
+    }
+
+    const renderedWidth = [...cells].reduce(
+      (width, cell) => Math.max(width, cell.getBoundingClientRect().width),
+      0
+    )
+    const contentWidth = isContentSizedColumn(column.id)
+      ? [...cells].reduce(
+          (width, cell) => Math.max(width, cell.scrollWidth),
+          renderedWidth
+        )
+      : renderedWidth
+    const measuredWidth = Math.round(contentWidth * 100) / 100
+
+    if (!Number.isFinite(measuredWidth) || measuredWidth <= 0) {
+      return undefined
+    }
+
+    sizing[column.id] = measuredWidth
+  }
+
+  return sizing
 }
 
 function getClampedColumnSize<TData>(

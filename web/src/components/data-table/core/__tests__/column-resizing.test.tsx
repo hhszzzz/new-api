@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import type { ColumnDef } from '@tanstack/react-table'
 import { fireEvent, render, screen } from '@testing-library/react'
+import { useRef } from 'react'
 import { describe, expect, test, vi } from 'vitest'
 
 import { useDataTable } from '../../hooks/use-data-table'
@@ -71,7 +72,19 @@ const multiColumnColumns: ColumnDef<MultiColumnRowData>[] = [
   },
 ]
 
+const responsiveMultiColumnColumns: ColumnDef<MultiColumnRowData>[] = [
+  ...multiColumnColumns,
+  {
+    id: 'actions',
+    header: 'Actions',
+    cell: () => 'Open',
+    enableResizing: false,
+  },
+]
+
 function MultiColumnResizableTable() {
+  const renderCount = useRef(0)
+  renderCount.current += 1
   const { table } = useDataTable({
     data: [{ name: 'Primary channel', status: 'Enabled' }],
     columns: multiColumnColumns,
@@ -86,6 +99,30 @@ function MultiColumnResizableTable() {
       </output>
       <output data-testid='status-column-size'>
         {table.getColumn('status')?.getSize()}
+      </output>
+      <output data-testid='render-count'>{renderCount.current}</output>
+      <DataTableView table={table} applyHeaderSize />
+    </>
+  )
+}
+
+function ResponsiveMultiColumnResizableTable() {
+  const { table } = useDataTable({
+    data: [{ name: 'Primary channel', status: 'Enabled' }],
+    columns: responsiveMultiColumnColumns,
+    enableColumnResizing: true,
+  })
+
+  return (
+    <>
+      <output data-testid='name-column-size'>
+        {table.getColumn('name')?.getSize()}
+      </output>
+      <output data-testid='status-column-size'>
+        {table.getColumn('status')?.getSize()}
+      </output>
+      <output data-testid='actions-column-size'>
+        {table.getColumn('actions')?.getSize()}
       </output>
       <DataTableView table={table} applyHeaderSize />
     </>
@@ -127,13 +164,129 @@ describe('data table column resizing', () => {
     expect(columns[0]).toHaveStyle({ width: '120px' })
     expect(columns[1]).toHaveStyle({ width: '140px' })
 
-    fireEvent.mouseDown(nameResizer, { clientX: 120 })
-    fireEvent.mouseMove(document, { clientX: 150 })
-    fireEvent.mouseUp(document, { clientX: 150 })
+    fireEvent.pointerDown(nameResizer, {
+      button: 0,
+      clientX: 120,
+      isPrimary: true,
+      pointerId: 1,
+      pointerType: 'mouse',
+    })
+    fireEvent.pointerMove(document, {
+      clientX: 150,
+      pointerId: 1,
+      pointerType: 'mouse',
+    })
+    fireEvent.pointerUp(document, {
+      clientX: 150,
+      pointerId: 1,
+      pointerType: 'mouse',
+    })
 
     expect(screen.getByTestId('name-column-size')).toHaveTextContent('150')
     expect(screen.getByTestId('status-column-size')).toHaveTextContent('140')
     expect(columns[0]).toHaveStyle({ width: '150px' })
     expect(columns[1]).toHaveStyle({ width: '140px' })
+  })
+
+  test('ignores repeated pointer positions after a drag changes the layout', () => {
+    render(<MultiColumnResizableTable />)
+    const [nameResizer] = screen.getAllByRole('separator', {
+      name: 'Resize column',
+    })
+
+    fireEvent.pointerDown(nameResizer, {
+      button: 0,
+      clientX: 120,
+      isPrimary: true,
+      pointerId: 1,
+      pointerType: 'mouse',
+    })
+    fireEvent.pointerMove(document, {
+      clientX: 150,
+      pointerId: 1,
+      pointerType: 'mouse',
+    })
+
+    expect(screen.getByTestId('render-count')).toHaveTextContent('2')
+
+    fireEvent.pointerMove(document, {
+      clientX: 150,
+      pointerId: 1,
+      pointerType: 'mouse',
+    })
+    fireEvent.pointerUp(document, {
+      clientX: 150,
+      pointerId: 1,
+      pointerType: 'mouse',
+    })
+
+    expect(screen.getByTestId('render-count')).toHaveTextContent('2')
+  })
+
+  test('uses rendered column widths as the drag baseline after the table fills its container', () => {
+    render(<ResponsiveMultiColumnResizableTable />)
+    const table = screen.getByRole('table')
+    const nameHeader = table.querySelector<HTMLElement>(
+      'thead [data-column-id="name"]'
+    )
+    const statusHeader = table.querySelector<HTMLElement>(
+      'thead [data-column-id="status"]'
+    )
+    const actionsHeader = table.querySelector<HTMLElement>(
+      'thead [data-column-id="actions"]'
+    )
+    const [nameResizer] = screen.getAllByRole('separator', {
+      name: 'Resize column',
+    })
+
+    expect(nameHeader).not.toBeNull()
+    expect(statusHeader).not.toBeNull()
+    expect(actionsHeader).not.toBeNull()
+    if (!nameHeader || !statusHeader || !actionsHeader) {
+      throw new Error('Expected every visible column header to render')
+    }
+    vi.spyOn(nameHeader, 'getBoundingClientRect').mockReturnValue({
+      width: 300,
+    } as DOMRect)
+    vi.spyOn(statusHeader, 'getBoundingClientRect').mockReturnValue({
+      width: 400,
+    } as DOMRect)
+    vi.spyOn(actionsHeader, 'getBoundingClientRect').mockReturnValue({
+      width: 80,
+    } as DOMRect)
+
+    expect(table).toHaveStyle({ tableLayout: 'auto', width: '100%' })
+
+    fireEvent.pointerDown(nameResizer, {
+      button: 0,
+      clientX: 120,
+      isPrimary: true,
+      pointerId: 1,
+      pointerType: 'mouse',
+    })
+    fireEvent.pointerMove(document, {
+      clientX: 150,
+      pointerId: 1,
+      pointerType: 'mouse',
+    })
+    fireEvent.pointerUp(document, {
+      clientX: 150,
+      pointerId: 1,
+      pointerType: 'mouse',
+    })
+
+    expect(screen.getByTestId('name-column-size')).toHaveTextContent('330')
+    expect(screen.getByTestId('status-column-size')).toHaveTextContent('400')
+    expect(screen.getByTestId('actions-column-size')).toHaveTextContent('80')
+    expect(table).toHaveStyle({
+      minWidth: '810px',
+      tableLayout: 'fixed',
+      width: '810px',
+    })
+
+    const renderedColumns = table.querySelectorAll('col')
+    expect(renderedColumns[0]).toHaveStyle({ width: '330px' })
+    expect(renderedColumns[1]).toHaveStyle({ width: '400px' })
+    expect(renderedColumns[2]).toHaveStyle({ width: '80px' })
   })
 })

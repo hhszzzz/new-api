@@ -24,6 +24,16 @@ import { isContentSizedColumn } from './content-sized-columns'
 export function getTableSizeStyle<TData>(
   table: TanstackTable<TData>
 ): React.CSSProperties {
+  if (hasResolvedColumnSizing(table)) {
+    const width = getResolvedTableWidth(table)
+
+    return {
+      minWidth: `${width}px`,
+      tableLayout: 'fixed',
+      width: `${width}px`,
+    }
+  }
+
   const width = table
     .getVisibleLeafColumns()
     .filter((column) => !isContentSizedColumn(column.id))
@@ -31,7 +41,29 @@ export function getTableSizeStyle<TData>(
 
   return {
     minWidth: `max(100%, ${width}px)`,
-    tableLayout: table.options.enableColumnResizing === true ? 'fixed' : 'auto',
+    tableLayout: 'auto',
     width: '100%',
   }
+}
+
+export function hasResolvedColumnSizing<TData>(
+  table: TanstackTable<TData>
+): boolean {
+  if (table.options.enableColumnResizing !== true) {
+    return false
+  }
+
+  const columnSizing = table.getState().columnSizing
+  const visibleColumns = table.getVisibleLeafColumns()
+
+  return (
+    visibleColumns.length > 0 &&
+    visibleColumns.every((column) => Number.isFinite(columnSizing[column.id]))
+  )
+}
+
+function getResolvedTableWidth<TData>(table: TanstackTable<TData>): number {
+  return table
+    .getVisibleLeafColumns()
+    .reduce((total, column) => total + column.getSize(), 0)
 }

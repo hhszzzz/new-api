@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import type { Table as TanstackTable } from '@tanstack/react-table'
 
 import { isContentSizedColumn } from './content-sized-columns'
+import { hasResolvedColumnSizing } from './table-sizing'
 
 export function DataTableColgroup<TData>({
   table,
@@ -30,6 +31,7 @@ export function DataTableColgroup<TData>({
     (column) => !isContentSizedColumn(column.id)
   )
   const totalSize = sizedColumns.reduce((sum, col) => sum + col.getSize(), 0)
+  const hasResolvedSizing = hasResolvedColumnSizing(table)
 
   return (
     <colgroup>
@@ -38,7 +40,8 @@ export function DataTableColgroup<TData>({
           table,
           column.id,
           column.getSize(),
-          totalSize
+          totalSize,
+          hasResolvedSizing
         )
 
         return <col key={column.id} style={{ width }} />
@@ -51,8 +54,13 @@ function getColumnWidth<TData>(
   table: TanstackTable<TData>,
   columnId: string,
   columnSize: number,
-  totalSize: number
+  totalSize: number,
+  hasResolvedSizing: boolean
 ) {
+  if (hasResolvedSizing) {
+    return `${columnSize}px`
+  }
+
   if (isContentSizedColumn(columnId)) {
     return '1%'
   }
