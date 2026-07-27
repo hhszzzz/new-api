@@ -1,7 +1,6 @@
 package model
 
 import (
-	"errors"
 	"fmt"
 	"math/rand"
 	"sort"
@@ -22,8 +21,12 @@ var channelsIDM map[int]*Channel                     // all channels include dis
 // path-aware selection avoids re-parsing JSON per request. Refreshed on full sync.
 var channel2advancedCustomConfig map[int]*dto.AdvancedCustomConfig
 var channelSyncLock sync.RWMutex
+var channelRefreshLock sync.Mutex
 
 func InitChannelCache() {
+	channelRefreshLock.Lock()
+	defer channelRefreshLock.Unlock()
+
 	if !common.MemoryCacheEnabled {
 		InvalidatePricingCache()
 		return
@@ -31,9 +34,13 @@ func InitChannelCache() {
 	newChannelId2channel := make(map[int]*Channel)
 	newChannel2advancedCustomConfig := make(map[int]*dto.AdvancedCustomConfig)
 	var channels []*Channel
-	DB.Find(&channels)
+	if err := DB.Find(&channels).Error; err != nil {
+		common.SysError(fmt.Sprintf("failed to load channels for cache: %v", err))
+		return
+	}
 	if err := HydrateChannelAggregateSnapshots(channels); err != nil {
 		common.SysError(fmt.Sprintf("failed to hydrate channel aggregates: %v", err))
+		return
 	}
 	for _, channel := range channels {
 		newChannelId2channel[channel.Id] = channel
@@ -44,7 +51,10 @@ func InitChannelCache() {
 		}
 	}
 	var abilities []*Ability
-	DB.Where("enabled = ?", true).Find(&abilities)
+	if err := DB.Where("enabled = ?", true).Find(&abilities).Error; err != nil {
+		common.SysError(fmt.Sprintf("failed to load channel abilities for cache: %v", err))
+		return
+	}
 	newGroup2model2channels := make(map[string]map[string][]int)
 	for _, ability := range abilities {
 		channel := newChannelId2channel[ability.ChannelId]
@@ -168,15 +178,16 @@ func GetRandomSatisfiedChannelInPoolWithFilter(group string, model string, retry
 	if retry >= len(uniquePriorities) {
 		retry = len(uniquePriorities) - 1
 	}
+	if retry < 0 {
+		retry = 0
+	}
 	targetPriority := int64(sortedUniquePriorities[retry])
 
 	// get the priority for the given retry number
-	var sumWeight = 0
 	var targetChannels []*Channel
 	for _, channelId := range channels {
 		if channel, ok := channelsIDM[channelId]; ok {
 			if channel.GetPriority() == targetPriority {
-				sumWeight += channel.GetWeight()
 				targetChannels = append(targetChannels, channel)
 			}
 		} else {
@@ -185,38 +196,54 @@ func GetRandomSatisfiedChannelInPoolWithFilter(group string, model string, retry
 	}
 
 	if len(targetChannels) == 0 {
-		return nil, errors.New(fmt.Sprintf("no channel found, group: %s, model: %s, priority: %d", group, model, targetPriority))
+		return nil, fmt.Errorf("no channel found, group: %s, model: %s, priority: %d", group, model, targetPriority)
+	}
+	channel := selectWeightedChannel(targetChannels)
+	if channel == nil {
+		return nil, fmt.Errorf("channel not found after weighted selection")
+	}
+	return channel, nil
+}
+
+// selectWeightedChannel preserves the established low-weight smoothing while
+// avoiding integer overflow for administrator-configured uint weights.
+func selectWeightedChannel(channels []*Channel) *Channel {
+	if len(channels) == 0 {
+		return nil
+	}
+	if len(channels) == 1 {
+		return channels[0]
 	}
 
-	// smoothing factor and adjustment
-	smoothingFactor := 1
-	smoothingAdjustment := 0
+	totalWeight := 0.0
+	for _, channel := range channels {
+		totalWeight += float64(channel.GetWeight())
+	}
 
-	if sumWeight == 0 {
-		// when all channels have weight 0, set sumWeight to the number of channels and set smoothing adjustment to 100
-		// each channel's effective weight = 100
-		sumWeight = len(targetChannels) * 100
+	smoothingFactor := 1.0
+	smoothingAdjustment := 0.0
+	if totalWeight == 0 {
+		totalWeight = float64(len(channels)) * 100
 		smoothingAdjustment = 100
-	} else if sumWeight/len(targetChannels) < 10 {
-		// when the average weight is less than 10, set smoothing factor to 100
+	} else if totalWeight/float64(len(channels)) < 10 {
 		smoothingFactor = 100
+		totalWeight *= smoothingFactor
 	}
 
-	// Calculate the total weight of all channels up to endIdx
-	totalWeight := sumWeight * smoothingFactor
-
-	// Generate a random value in the range [0, totalWeight)
-	randomWeight := rand.Intn(totalWeight)
-
-	// Find a channel based on its weight
-	for _, channel := range targetChannels {
-		randomWeight -= channel.GetWeight()*smoothingFactor + smoothingAdjustment
-		if randomWeight < 0 {
-			return channel, nil
+	remainingWeight := rand.Float64() * totalWeight
+	var fallback *Channel
+	for _, channel := range channels {
+		effectiveWeight := float64(channel.GetWeight())*smoothingFactor + smoothingAdjustment
+		if effectiveWeight <= 0 {
+			continue
+		}
+		fallback = channel
+		remainingWeight -= effectiveWeight
+		if remainingWeight < 0 {
+			return channel
 		}
 	}
-	// return null if no channel is not found
-	return nil, errors.New("channel not found")
+	return fallback
 }
 
 func filterChannelIdsByCandidate(channelIds []int, candidateFilter ChannelCandidateFilter) []int {

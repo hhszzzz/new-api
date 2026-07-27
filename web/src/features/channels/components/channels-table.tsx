@@ -20,7 +20,7 @@ import { useQuery } from '@tanstack/react-query'
 import { getRouteApi } from '@tanstack/react-router'
 import type { OnChangeFn, SortingState, Row } from '@tanstack/react-table'
 import { AlertTriangle, Eye, EyeOff, RefreshCw } from 'lucide-react'
-import { useState, useMemo, useEffect } from 'react'
+import { useMemo, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import {
@@ -29,6 +29,7 @@ import {
   DataTablePage,
   useDebouncedColumnFilter,
   useDataTable,
+  usePersistedTableSorting,
 } from '@/components/data-table'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -68,6 +69,7 @@ const route = getRouteApi('/_authenticated/channels/')
 const CHANNELS_COLUMN_VISIBILITY_STORAGE_KEY = 'channels:column-visibility'
 const CHANNELS_COLUMN_SIZING_STORAGE_KEY = 'channels:column-sizing'
 const CHANNELS_VIEW_MODE_STORAGE_KEY = 'channels:view-mode'
+const CHANNELS_TABLE_STATE_STORAGE_KEY = 'channels:admin'
 
 const CHANNEL_SORTABLE_COLUMNS = new Set<ChannelSortBy>([
   'id',
@@ -96,9 +98,13 @@ export function ChannelsTable() {
     setSensitiveVisible,
   } = useChannels()
   const isMobile = useMediaQuery('(max-width: 640px)')
+  const defaultPageSize = isMobile ? 10 : DEFAULT_PAGE_SIZE
 
   // Table state
-  const [sorting, setSorting] = useState<SortingState>([])
+  const [sorting, setSorting] = usePersistedTableSorting(
+    CHANNELS_TABLE_STATE_STORAGE_KEY,
+    CHANNEL_SORTABLE_COLUMNS
+  )
 
   // URL state management
   const {
@@ -114,7 +120,7 @@ export function ChannelsTable() {
     navigate: route.useNavigate(),
     pagination: {
       defaultPage: 1,
-      defaultPageSize: isMobile ? 10 : DEFAULT_PAGE_SIZE,
+      defaultPageSize,
       pageSizeStorageKey: 'channels:admin:page-size',
     },
     globalFilter: { enabled: true, key: 'filter' },
@@ -214,6 +220,7 @@ export function ChannelsTable() {
           ? Number(typeFilter[0])
           : undefined,
       tag_mode: enableTagMode,
+      aggregate_mode: !enableTagMode,
       id_sort: idSort,
       ...sortParams,
       p: pagination.pageIndex + 1,
@@ -237,6 +244,7 @@ export function ChannelsTable() {
               ? Number(typeFilter[0])
               : undefined,
           tag_mode: enableTagMode,
+          aggregate_mode: !enableTagMode,
           id_sort: idSort,
           ...sortParams,
           p: pagination.pageIndex + 1,
@@ -261,6 +269,7 @@ export function ChannelsTable() {
               ? Number(typeFilter[0])
               : undefined,
           tag_mode: enableTagMode,
+          aggregate_mode: !enableTagMode,
           id_sort: idSort,
           ...sortParams,
           p: pagination.pageIndex + 1,
@@ -300,9 +309,10 @@ export function ChannelsTable() {
   const { table } = useDataTable({
     data: channels,
     columns,
-    tableStateStorageKey: 'channels:admin',
+    tableStateStorageKey: CHANNELS_TABLE_STATE_STORAGE_KEY,
     totalCount,
     sorting,
+    initialPagination: { pageIndex: 0, pageSize: defaultPageSize },
     initialColumnVisibility: {
       models: false,
       tag: false,

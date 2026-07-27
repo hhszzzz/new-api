@@ -674,7 +674,7 @@ export function ChannelMutateDrawer({
   })
 
   const { data: aggregatesData } = useQuery({
-    queryKey: ['channel-aggregates'],
+    queryKey: channelsQueryKeys.aggregates(),
     queryFn: getChannelAggregates,
     enabled: open,
   })
@@ -1585,6 +1585,9 @@ export function ChannelMutateDrawer({
   // Handle successful submission
   const handleSuccess = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
+    queryClient.invalidateQueries({
+      queryKey: channelsQueryKeys.aggregates(),
+    })
     if (channelId) {
       queryClient.invalidateQueries({
         queryKey: channelsQueryKeys.detail(channelId),

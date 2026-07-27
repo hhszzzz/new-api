@@ -37,8 +37,9 @@ func normalizeChannelAggregate(aggregate *ChannelAggregate) error {
 		return errors.New("channel aggregate remark is too long")
 	}
 	if aggregate.BaseURL != "" {
-		parsed, err := url.ParseRequestURI(aggregate.BaseURL)
-		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		parsed, err := url.Parse(aggregate.BaseURL)
+		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") ||
+			parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" {
 			return errors.New("channel aggregate base URL must be a valid HTTP or HTTPS URL")
 		}
 	}
@@ -55,19 +56,18 @@ func SaveChannelAggregate(aggregate *ChannelAggregate) error {
 		aggregate.CreatedAt = now
 		return DB.Create(aggregate).Error
 	}
-	result := DB.Model(&ChannelAggregate{}).Where("id = ?", aggregate.Id).Updates(map[string]interface{}{
-		"name":       aggregate.Name,
-		"base_url":   aggregate.BaseURL,
-		"remark":     aggregate.Remark,
-		"updated_at": aggregate.UpdatedAt,
+	return DB.Transaction(func(tx *gorm.DB) error {
+		var existing ChannelAggregate
+		if err := lockForUpdate(tx).Select("id").First(&existing, "id = ?", aggregate.Id).Error; err != nil {
+			return err
+		}
+		return tx.Model(&ChannelAggregate{}).Where("id = ?", aggregate.Id).Updates(map[string]interface{}{
+			"name":       aggregate.Name,
+			"base_url":   aggregate.BaseURL,
+			"remark":     aggregate.Remark,
+			"updated_at": aggregate.UpdatedAt,
+		}).Error
 	})
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected == 0 {
-		return gorm.ErrRecordNotFound
-	}
-	return nil
 }
 
 func GetChannelAggregateById(id int) (*ChannelAggregate, error) {
@@ -155,6 +155,10 @@ func HydrateChannelAggregateSnapshots(channels []*Channel) error {
 }
 
 func ValidateChannelAggregateLink(channel *Channel) error {
+	return validateChannelAggregateLinkWithTx(DB, channel, false)
+}
+
+func validateChannelAggregateLinkWithTx(tx *gorm.DB, channel *Channel, lock bool) error {
 	if channel == nil {
 		return errors.New("channel is required")
 	}
@@ -169,7 +173,12 @@ func ValidateChannelAggregateLink(channel *Channel) error {
 	if *channel.AggregateId <= 0 {
 		return errors.New("invalid channel aggregate id")
 	}
-	aggregate, err := GetChannelAggregateById(*channel.AggregateId)
+	aggregate := &ChannelAggregate{}
+	query := tx.Select("id", "name", "base_url")
+	if lock {
+		query = lockForUpdate(query)
+	}
+	err := query.First(aggregate, "id = ?", *channel.AggregateId).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return fmt.Errorf("channel aggregate %d does not exist", *channel.AggregateId)
@@ -185,14 +194,22 @@ func UpdateChannelAggregateLink(channelId int, aggregateId *int, inheritBaseURL 
 	if channelId <= 0 {
 		return errors.New("invalid channel id")
 	}
-	channel := &Channel{Id: channelId, AggregateId: aggregateId, InheritAggregateBaseURL: inheritBaseURL}
-	if err := ValidateChannelAggregateLink(channel); err != nil {
-		return err
-	}
-	return DB.Model(&Channel{}).Where("id = ?", channelId).Updates(map[string]interface{}{
-		"aggregate_id":               aggregateId,
-		"inherit_aggregate_base_url": inheritBaseURL,
-	}).Error
+	return DB.Transaction(func(tx *gorm.DB) error {
+		channel := &Channel{Id: channelId, AggregateId: aggregateId, InheritAggregateBaseURL: inheritBaseURL}
+		// Lock the aggregate before the channel, matching DeleteChannelAggregate.
+		// This makes link and delete operations serialize without a lock-order cycle.
+		if err := validateChannelAggregateLinkWithTx(tx, channel, true); err != nil {
+			return err
+		}
+		var existing Channel
+		if err := lockForUpdate(tx).Select("id").First(&existing, "id = ?", channelId).Error; err != nil {
+			return err
+		}
+		return tx.Model(&Channel{}).Where("id = ?", channelId).Updates(map[string]interface{}{
+			"aggregate_id":               aggregateId,
+			"inherit_aggregate_base_url": inheritBaseURL,
+		}).Error
+	})
 }
 
 func DeleteChannelAggregate(id int) error {

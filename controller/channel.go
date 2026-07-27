@@ -91,6 +91,21 @@ func buildChannelListQuery(group string, statusFilter int, typeFilter int) *gorm
 	return query
 }
 
+func getChannelTypeCounts(query *gorm.DB) (map[int64]int64, error) {
+	rows := make([]struct {
+		Type  int64
+		Count int64
+	}, 0)
+	if err := query.Select("type, count(*) as count").Group("type").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	counts := make(map[int64]int64, len(rows))
+	for _, row := range rows {
+		counts[row.Type] = row.Count
+	}
+	return counts, nil
+}
+
 func GetChannelOps(c *gin.Context) {
 	common.ApiSuccess(c, gin.H{
 		"retry_times": common.RetryTimes,
@@ -103,6 +118,7 @@ func GetAllChannels(c *gin.Context) {
 	idSort, _ := strconv.ParseBool(c.Query("id_sort"))
 	sortOptions := model.NewChannelSortOptions(c.Query("sort_by"), c.Query("sort_order"), idSort)
 	enableTagMode, _ := strconv.ParseBool(c.Query("tag_mode"))
+	aggregateMode, _ := strconv.ParseBool(c.Query("aggregate_mode"))
 	groupFilter := model.NormalizeChannelGroupFilter(c.Query("group"))
 	statusParam := c.Query("status")
 	// statusFilter: -1 all, 1 enabled, 0 disabled (include auto & manual)
@@ -146,6 +162,19 @@ func GetAllChannels(c *gin.Context) {
 			}
 			channelData = append(channelData, tagChannels...)
 		}
+	} else if aggregateMode {
+		var err error
+		channelData, total, err = model.GetPaginatedTopLevelChannels(
+			buildChannelListQuery(groupFilter, statusFilter, typeFilter),
+			pageInfo.GetStartIdx(),
+			pageInfo.GetPageSize(),
+			sortOptions,
+		)
+		if err != nil {
+			common.SysError("failed to get aggregate-aware channel page: " + err.Error())
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": "获取渠道列表失败，请稍后重试"})
+			return
+		}
 	} else {
 		if err := buildChannelListQuery(groupFilter, statusFilter, typeFilter).Count(&total).Error; err != nil {
 			common.SysError("failed to count channels: " + err.Error())
@@ -173,19 +202,11 @@ func GetAllChannels(c *gin.Context) {
 		return
 	}
 
-	countQuery := buildChannelListQuery(groupFilter, statusFilter, -1)
-	var results []struct {
-		Type  int64
-		Count int64
-	}
-	if err := countQuery.Select("type, count(*) as count").Group("type").Find(&results).Error; err != nil {
+	typeCounts, err := getChannelTypeCounts(buildChannelListQuery(groupFilter, statusFilter, -1))
+	if err != nil {
 		common.SysError("failed to count channel types: " + err.Error())
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "获取渠道类型统计失败，请稍后重试"})
 		return
-	}
-	typeCounts := make(map[int64]int64)
-	for _, r := range results {
-		typeCounts[r.Type] = r.Count
 	}
 	common.ApiSuccess(c, gin.H{
 		"items":       channelData,
@@ -285,7 +306,56 @@ func SearchChannels(c *gin.Context) {
 	idSort, _ := strconv.ParseBool(c.Query("id_sort"))
 	sortOptions := model.NewChannelSortOptions(c.Query("sort_by"), c.Query("sort_order"), idSort)
 	enableTagMode, _ := strconv.ParseBool(c.Query("tag_mode"))
+	aggregateMode, _ := strconv.ParseBool(c.Query("aggregate_mode"))
 	channelData := make([]*model.Channel, 0)
+	if aggregateMode && !enableTagMode {
+		typeFilter := -1
+		if typeParam := c.Query("type"); typeParam != "" {
+			if parsedType, err := strconv.Atoi(typeParam); err == nil {
+				typeFilter = parsedType
+			}
+		}
+		searchQuery := applyChannelStatusFilter(
+			model.BuildChannelSearchQuery(keyword, group, modelKeyword),
+			statusFilter,
+		)
+		typeCounts, err := getChannelTypeCounts(searchQuery.Session(&gorm.Session{}))
+		if err != nil {
+			common.SysError("failed to count searched channel types: " + err.Error())
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": "获取渠道类型统计失败，请稍后重试"})
+			return
+		}
+		if typeFilter >= 0 {
+			searchQuery = searchQuery.Where("type = ?", typeFilter)
+		}
+		pageInfo := common.GetPageQuery(c)
+		channels, total, err := model.GetPaginatedTopLevelChannels(
+			searchQuery,
+			pageInfo.GetStartIdx(),
+			pageInfo.GetPageSize(),
+			sortOptions,
+		)
+		if err != nil {
+			common.SysError("failed to search aggregate-aware channel page: " + err.Error())
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": "搜索渠道失败，请稍后重试"})
+			return
+		}
+		for _, channel := range channels {
+			clearChannelInfo(channel)
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"message": "",
+			"data": gin.H{
+				"items":       channels,
+				"total":       total,
+				"page":        pageInfo.GetPage(),
+				"page_size":   pageInfo.GetPageSize(),
+				"type_counts": typeCounts,
+			},
+		})
+		return
+	}
 	if enableTagMode {
 		tags, err := model.SearchTags(keyword, group, modelKeyword, idSort)
 		if err != nil {
@@ -1101,21 +1171,10 @@ func UpdateChannel(c *gin.Context) {
 			// 覆盖模式：直接使用新密钥（默认行为，不需要特殊处理）
 		}
 	}
-	err = channel.Update()
+	err = channel.UpdateWithAggregateLink()
 	if err != nil {
 		common.ApiError(c, err)
 		return
-	}
-	if _, aggregateProvided := requestData["aggregate_id"]; aggregateProvided {
-		if err := model.UpdateChannelAggregateLink(channel.Id, channel.AggregateId, channel.InheritAggregateBaseURL); err != nil {
-			common.ApiError(c, err)
-			return
-		}
-	} else if _, inheritProvided := requestData["inherit_aggregate_base_url"]; inheritProvided {
-		if err := model.UpdateChannelAggregateLink(channel.Id, originChannel.AggregateId, channel.InheritAggregateBaseURL); err != nil {
-			common.ApiError(c, err)
-			return
-		}
 	}
 	if err := model.HydrateChannelAggregateSnapshots([]*model.Channel{&channel.Channel}); err != nil {
 		common.ApiError(c, err)

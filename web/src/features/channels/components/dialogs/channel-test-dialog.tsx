@@ -48,6 +48,7 @@ import {
   DataTableBulkActions as BulkActionsToolbar,
   DataTablePagination,
   DataTableView,
+  getInitialTablePageSize,
   useDataTable,
 } from '@/components/data-table'
 import { Dialog } from '@/components/dialog'
@@ -114,6 +115,9 @@ type ModelRow = {
 }
 
 type TestStatus = 'idle' | 'testing' | 'success' | 'error'
+
+const CHANNEL_TEST_TABLE_STATE_STORAGE_KEY = 'channel-test:admin'
+const CHANNEL_TEST_DEFAULT_PAGE_SIZE = 30
 
 type TestResult = {
   status: TestStatus
@@ -351,10 +355,13 @@ function ChannelTestDialogContent({
   const [isDeletingFailed, setIsDeletingFailed] = useState(false)
   const [failureDetails, setFailureDetails] =
     useState<FailureDetailsState | null>(null)
-  const [pagination, setPagination] = useState({
+  const [pagination, setPagination] = useState(() => ({
     pageIndex: 0,
-    pageSize: 30,
-  })
+    pageSize: getInitialTablePageSize(
+      CHANNEL_TEST_TABLE_STATE_STORAGE_KEY,
+      CHANNEL_TEST_DEFAULT_PAGE_SIZE
+    ),
+  }))
   const endpointSelectItems = useMemo(
     () =>
       endpointTypeOptions.map((option) => ({
@@ -412,7 +419,9 @@ function ChannelTestDialogContent({
     setIsDeleteFailedDialogOpen(false)
     setIsDeletingFailed(false)
     setFailureDetails(null)
-    setPagination({ pageIndex: 0, pageSize: 30 })
+    setPagination((current) =>
+      current.pageIndex === 0 ? current : { ...current, pageIndex: 0 }
+    )
   }, [])
 
   const streamDisabled = STREAM_INCOMPATIBLE_ENDPOINTS.has(endpointType)
@@ -961,9 +970,13 @@ function ChannelTestDialogContent({
   const { table } = useDataTable({
     data: tableData,
     columns,
-    tableStateStorageKey: 'channel-test:admin',
+    tableStateStorageKey: CHANNEL_TEST_TABLE_STATE_STORAGE_KEY,
     rowSelection,
     pagination,
+    initialPagination: {
+      pageIndex: 0,
+      pageSize: CHANNEL_TEST_DEFAULT_PAGE_SIZE,
+    },
     enableRowSelection: true,
     getRowId: (row) => row.model,
     onRowSelectionChange: setRowSelection,

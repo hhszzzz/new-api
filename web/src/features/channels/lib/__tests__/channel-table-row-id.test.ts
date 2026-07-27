@@ -38,11 +38,7 @@ describe('channel table row identity', () => {
     const beforeUpdate = [first, updated, third].map(getChannelTableRowId)
     const afterUpdate = [updated, first, third].map(getChannelTableRowId)
 
-    expect(beforeUpdate).toEqual([
-      'channel:101',
-      'channel:202',
-      'channel:303',
-    ])
+    expect(beforeUpdate).toEqual(['channel:101', 'channel:202', 'channel:303'])
     expect(afterUpdate).toEqual(['channel:202', 'channel:101', 'channel:303'])
   })
 

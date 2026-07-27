@@ -17,14 +17,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Pencil, Plus, Trash2 } from 'lucide-react'
+import { Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Dialog } from '@/components/dialog'
-import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Alert, AlertAction, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -41,6 +41,7 @@ import {
   getChannelAggregates,
   updateChannelAggregate,
 } from '../../api'
+import { channelsQueryKeys } from '../../lib'
 import type { ChannelAggregate, ChannelAggregateInput } from '../../types'
 
 type Props = { open: boolean; onOpenChange: (open: boolean) => void }
@@ -57,8 +58,14 @@ export function ChannelAggregatesDialog(props: Props) {
     ADMIN_PERMISSION_ACTIONS.SENSITIVE_WRITE
   )
   const query = useQuery({
-    queryKey: ['channel-aggregates'],
-    queryFn: getChannelAggregates,
+    queryKey: channelsQueryKeys.aggregates(),
+    queryFn: async () => {
+      const response = await getChannelAggregates()
+      if (!response.success) {
+        throw new Error(response.message || t('Failed to load'))
+      }
+      return response
+    },
     enabled: props.open,
   })
   const [form, setForm] = useState<ChannelAggregateInput>(emptyForm)
@@ -94,8 +101,10 @@ export function ChannelAggregatesDialog(props: Props) {
       )
       setForm(emptyForm)
       setEditingId(null)
-      queryClient.invalidateQueries({ queryKey: ['channel-aggregates'] })
-      queryClient.invalidateQueries({ queryKey: ['channels'] })
+      queryClient.invalidateQueries({
+        queryKey: channelsQueryKeys.aggregates(),
+      })
+      queryClient.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
     },
     onError: (error: Error) =>
       toast.error(error.message || t('Operation failed')),
@@ -116,8 +125,10 @@ export function ChannelAggregatesDialog(props: Props) {
       }
       toast.success(t('Aggregate detached; child channels were kept'))
       setDeleteTarget(null)
-      queryClient.invalidateQueries({ queryKey: ['channel-aggregates'] })
-      queryClient.invalidateQueries({ queryKey: ['channels'] })
+      queryClient.invalidateQueries({
+        queryKey: channelsQueryKeys.aggregates(),
+      })
+      queryClient.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
     },
     onError: (error: Error) =>
       toast.error(error.message || t('Operation failed')),
@@ -242,7 +253,28 @@ export function ChannelAggregatesDialog(props: Props) {
               {t('Loading...')}
             </div>
           ) : null}
-          {!query.isLoading && (query.data?.data ?? []).length === 0 ? (
+          {query.isError ? (
+            <Alert variant='destructive'>
+              <AlertDescription>{t('Failed to load')}</AlertDescription>
+              <AlertAction>
+                <Button
+                  type='button'
+                  variant='outline'
+                  size='sm'
+                  disabled={query.isFetching}
+                  onClick={() => void query.refetch()}
+                >
+                  <RefreshCw
+                    className={query.isFetching ? 'animate-spin' : undefined}
+                  />
+                  {t('Retry')}
+                </Button>
+              </AlertAction>
+            </Alert>
+          ) : null}
+          {!query.isLoading &&
+          !query.isError &&
+          (query.data?.data ?? []).length === 0 ? (
             <div className='text-muted-foreground text-sm'>
               {t('No channel aggregates')}
             </div>

@@ -144,6 +144,104 @@ func TestDeleteChannelBatchReportsAndAuditsActualDeletedCount(t *testing.T) {
 	assert.Equal(t, float64(1), auditData.Operation.Params["count"])
 }
 
+func TestAggregateAwareChannelPagination(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.ChannelAggregate{}))
+	firstAggregate := &model.ChannelAggregate{Name: "First aggregate"}
+	secondAggregate := &model.ChannelAggregate{Name: "Second aggregate"}
+	require.NoError(t, db.Create(firstAggregate).Error)
+	require.NoError(t, db.Create(secondAggregate).Error)
+	require.NoError(t, db.Create(&[]model.Channel{
+		{Id: 101, Name: "needle-first-high", Key: "secret-101", Type: constant.ChannelTypeOpenAI, Status: common.ChannelStatusEnabled, Priority: common.GetPointer(int64(100)), AggregateId: &firstAggregate.Id},
+		{Id: 102, Name: "needle-first-low", Key: "secret-102", Type: constant.ChannelTypeOpenAI, Status: common.ChannelStatusEnabled, Priority: common.GetPointer(int64(10)), AggregateId: &firstAggregate.Id},
+		{Id: 103, Name: "needle-second-high", Key: "secret-103", Type: constant.ChannelTypeAnthropic, Status: common.ChannelStatusEnabled, Priority: common.GetPointer(int64(90)), AggregateId: &secondAggregate.Id},
+		{Id: 104, Name: "needle-second-low", Key: "secret-104", Type: constant.ChannelTypeOpenAI, Status: common.ChannelStatusEnabled, Priority: common.GetPointer(int64(80)), AggregateId: &secondAggregate.Id},
+		{Id: 105, Name: "needle-standalone", Key: "secret-105", Type: constant.ChannelTypeOpenAI, Status: common.ChannelStatusEnabled, Priority: common.GetPointer(int64(95))},
+	}).Error)
+
+	type responseBody struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Items      []model.Channel `json:"items"`
+			Total      int64           `json:"total"`
+			Page       int             `json:"page"`
+			PageSize   int             `json:"page_size"`
+			TypeCounts map[int64]int64 `json:"type_counts"`
+		} `json:"data"`
+	}
+
+	firstPageRecorder := httptest.NewRecorder()
+	firstPageContext, _ := gin.CreateTestContext(firstPageRecorder)
+	firstPageContext.Request = httptest.NewRequest(
+		http.MethodGet,
+		"/api/channel?aggregate_mode=true&p=1&page_size=2&sort_by=priority&sort_order=desc",
+		nil,
+	)
+	GetAllChannels(firstPageContext)
+
+	var firstPage responseBody
+	require.NoError(t, common.Unmarshal(firstPageRecorder.Body.Bytes(), &firstPage))
+	require.True(t, firstPage.Success)
+	assert.EqualValues(t, 3, firstPage.Data.Total)
+	assert.Equal(t, 1, firstPage.Data.Page)
+	assert.Equal(t, 2, firstPage.Data.PageSize)
+	require.Len(t, firstPage.Data.Items, 3)
+	assert.Equal(t, []int{101, 102, 105}, []int{
+		firstPage.Data.Items[0].Id,
+		firstPage.Data.Items[1].Id,
+		firstPage.Data.Items[2].Id,
+	})
+	assert.EqualValues(t, 4, firstPage.Data.TypeCounts[constant.ChannelTypeOpenAI])
+	assert.EqualValues(t, 1, firstPage.Data.TypeCounts[constant.ChannelTypeAnthropic])
+	for _, channel := range firstPage.Data.Items {
+		assert.Empty(t, channel.Key)
+	}
+
+	secondPageRecorder := httptest.NewRecorder()
+	secondPageContext, _ := gin.CreateTestContext(secondPageRecorder)
+	secondPageContext.Request = httptest.NewRequest(
+		http.MethodGet,
+		"/api/channel?aggregate_mode=true&p=2&page_size=2&sort_by=priority&sort_order=desc",
+		nil,
+	)
+	GetAllChannels(secondPageContext)
+
+	var secondPage responseBody
+	require.NoError(t, common.Unmarshal(secondPageRecorder.Body.Bytes(), &secondPage))
+	require.True(t, secondPage.Success)
+	assert.EqualValues(t, 3, secondPage.Data.Total)
+	require.Len(t, secondPage.Data.Items, 2)
+	assert.Equal(t, []int{103, 104}, []int{
+		secondPage.Data.Items[0].Id,
+		secondPage.Data.Items[1].Id,
+	})
+
+	searchRecorder := httptest.NewRecorder()
+	searchContext, _ := gin.CreateTestContext(searchRecorder)
+	searchContext.Request = httptest.NewRequest(
+		http.MethodGet,
+		"/api/channel/search?aggregate_mode=true&keyword=needle&p=1&page_size=2&sort_by=priority&sort_order=desc",
+		nil,
+	)
+	SearchChannels(searchContext)
+
+	var search responseBody
+	require.NoError(t, common.Unmarshal(searchRecorder.Body.Bytes(), &search))
+	require.True(t, search.Success)
+	assert.EqualValues(t, 3, search.Data.Total)
+	require.Len(t, search.Data.Items, 3)
+	assert.Equal(t, []int{101, 102, 105}, []int{
+		search.Data.Items[0].Id,
+		search.Data.Items[1].Id,
+		search.Data.Items[2].Id,
+	})
+	assert.EqualValues(t, 4, search.Data.TypeCounts[constant.ChannelTypeOpenAI])
+	assert.EqualValues(t, 1, search.Data.TypeCounts[constant.ChannelTypeAnthropic])
+	for _, channel := range search.Data.Items {
+		assert.Empty(t, channel.Key)
+	}
+}
+
 func TestSettleTestQuotaUsesTieredBilling(t *testing.T) {
 	info := &relaycommon.RelayInfo{
 		TieredBillingSnapshot: &billingexpr.BillingSnapshot{

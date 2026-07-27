@@ -163,22 +163,17 @@ func GetChannelInPoolWithFilter(group string, modelName string, retry int, reque
 		return nil, nil
 	}
 
-	weightSum := uint(0)
+	targetChannels := make([]*Channel, 0, len(targetAbilities))
 	for _, ability := range targetAbilities {
-		weightSum += ability.Weight + 10
-	}
-	weight := common.GetRandomInt(int(weightSum))
-	channelId := 0
-	for _, ability := range targetAbilities {
-		weight -= int(ability.Weight) + 10
-		if weight <= 0 {
-			channelId = ability.ChannelId
-			break
+		channel := channels[ability.ChannelId]
+		if channel == nil {
+			return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", ability.ChannelId)
 		}
+		targetChannels = append(targetChannels, channel)
 	}
-	channel := channels[channelId]
+	channel := selectWeightedChannel(targetChannels)
 	if channel == nil {
-		return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channelId)
+		return nil, errors.New("channel not found after weighted selection")
 	}
 	return channel, nil
 }
@@ -306,7 +301,7 @@ func (channel *Channel) AddAbilities(tx *gorm.DB) error {
 				ChannelId: channel.Id,
 				Enabled:   channel.Status == common.ChannelStatusEnabled,
 				Priority:  channel.Priority,
-				Weight:    uint(channel.GetWeight()),
+				Weight:    channel.GetWeight(),
 				Tag:       channel.Tag,
 			}
 			abilities = append(abilities, ability)
@@ -378,7 +373,7 @@ func (channel *Channel) UpdateAbilities(tx *gorm.DB) error {
 				ChannelId: channel.Id,
 				Enabled:   channel.Status == common.ChannelStatusEnabled,
 				Priority:  channel.Priority,
-				Weight:    uint(channel.GetWeight()),
+				Weight:    channel.GetWeight(),
 				Tag:       channel.Tag,
 			}
 			abilities = append(abilities, ability)

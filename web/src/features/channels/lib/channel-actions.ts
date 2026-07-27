@@ -52,6 +52,7 @@ export const channelsQueryKeys = {
   lists: () => [...channelsQueryKeys.all, 'list'] as const,
   list: (params: Record<string, unknown>) =>
     [...channelsQueryKeys.lists(), params] as const,
+  aggregates: () => [...channelsQueryKeys.all, 'aggregates'] as const,
   details: () => [...channelsQueryKeys.all, 'detail'] as const,
   detail: (id: number) => [...channelsQueryKeys.details(), id] as const,
 }
@@ -190,6 +191,9 @@ export async function handleDeleteChannel(
     if (response.success) {
       toast.success(i18next.t(SUCCESS_MESSAGES.DELETED))
       queryClient?.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
+      queryClient?.invalidateQueries({
+        queryKey: channelsQueryKeys.aggregates(),
+      })
       onSuccess?.()
     } else {
       toast.error(response.message || i18next.t(ERROR_MESSAGES.DELETE_FAILED))
@@ -353,6 +357,9 @@ export async function handleCopyChannel(
     if (response.success) {
       toast.success(i18next.t(SUCCESS_MESSAGES.COPIED))
       queryClient?.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
+      queryClient?.invalidateQueries({
+        queryKey: channelsQueryKeys.aggregates(),
+      })
       onSuccess?.(response.data?.id ?? 0)
     } else {
       toast.error(response.message || i18next.t('Failed to copy channel'))
@@ -423,6 +430,9 @@ export async function handleBatchDelete(
         })
       )
       queryClient?.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
+      queryClient?.invalidateQueries({
+        queryKey: channelsQueryKeys.aggregates(),
+      })
       onSuccess?.(response.data || ids.length)
     } else {
       toast.error(response.message || i18next.t(ERROR_MESSAGES.DELETE_FAILED))
@@ -617,6 +627,9 @@ export async function handleDeleteAllDisabled(
         })
       )
       queryClient?.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
+      queryClient?.invalidateQueries({
+        queryKey: channelsQueryKeys.aggregates(),
+      })
       onSuccess?.(response.data || 0)
     } else {
       toast.error(

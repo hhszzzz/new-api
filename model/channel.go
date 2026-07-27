@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"sort"
 	"strings"
 	"sync"
 
@@ -107,22 +108,28 @@ func NewChannelSortOptions(sortBy string, sortOrder string, idSort bool) Channel
 }
 
 func (options ChannelSortOptions) Apply(query *gorm.DB) *gorm.DB {
-	if columnName, ok := channelSortColumns[options.SortBy]; ok {
-		return query.Order(clause.OrderByColumn{
-			Column: clause.Column{Name: columnName},
-			Desc:   options.SortOrder != "asc",
-		})
-	}
-	if options.IDSort {
-		return query.Order(clause.OrderByColumn{
-			Column: clause.Column{Name: "id"},
-			Desc:   true,
-		})
+	columnName, descending := options.effectiveSort()
+	query = query.Order(clause.OrderByColumn{
+		Column: clause.Column{Name: columnName},
+		Desc:   descending,
+	})
+	if columnName == "id" {
+		return query
 	}
 	return query.Order(clause.OrderByColumn{
-		Column: clause.Column{Name: "priority"},
+		Column: clause.Column{Name: "id"},
 		Desc:   true,
 	})
+}
+
+func (options ChannelSortOptions) effectiveSort() (string, bool) {
+	if columnName, ok := channelSortColumns[options.SortBy]; ok {
+		return columnName, options.SortOrder != "asc"
+	}
+	if options.IDSort {
+		return "id", true
+	}
+	return "priority", true
 }
 
 func resolveChannelSortOptions(idSort bool, sortOptions []ChannelSortOptions) ChannelSortOptions {
@@ -376,6 +383,126 @@ func GetAllChannels(startIdx int, num int, selectAll bool, idSort bool, sortOpti
 	return channels, nil
 }
 
+type channelTopLevelRow struct {
+	AggregateId *int `gorm:"column:aggregate_id"`
+	ChannelId   int  `gorm:"column:channel_id"`
+}
+
+type channelTopLevelKey struct {
+	AggregateId int
+	ChannelId   int
+}
+
+// GetPaginatedTopLevelChannels paginates presentation rows before loading
+// their children. A standalone channel is one row, while all matching
+// channels with the same aggregate_id form one expandable row.
+func GetPaginatedTopLevelChannels(query *gorm.DB, startIdx int, num int, sortOptions ChannelSortOptions) ([]*Channel, int64, error) {
+	if query == nil {
+		return nil, 0, errors.New("channel query is required")
+	}
+	if startIdx < 0 {
+		startIdx = 0
+	}
+
+	var standaloneCount int64
+	if err := query.Session(&gorm.Session{}).
+		Where("aggregate_id IS NULL").
+		Count(&standaloneCount).Error; err != nil {
+		return nil, 0, err
+	}
+	var aggregateCount int64
+	if err := query.Session(&gorm.Session{}).
+		Where("aggregate_id IS NOT NULL").
+		Distinct("aggregate_id").
+		Count(&aggregateCount).Error; err != nil {
+		return nil, 0, err
+	}
+	total := standaloneCount + aggregateCount
+	if num <= 0 || int64(startIdx) >= total {
+		return []*Channel{}, total, nil
+	}
+
+	sortColumn, descending := sortOptions.effectiveSort()
+	sortExpression := sortColumn
+	if sortColumn == "priority" {
+		sortExpression = "COALESCE(priority, 0)"
+	}
+	aggregateFunction := "MIN"
+	if descending {
+		aggregateFunction = "MAX"
+	}
+	standaloneIdExpression := "CASE WHEN aggregate_id IS NULL THEN id ELSE 0 END"
+	selectExpression := fmt.Sprintf(
+		"aggregate_id, %s AS channel_id, %s(%s) AS sort_value, MAX(id) AS tie_id",
+		standaloneIdExpression,
+		aggregateFunction,
+		sortExpression,
+	)
+	topRows := make([]channelTopLevelRow, 0, num)
+	topQuery := query.Session(&gorm.Session{}).
+		Select(selectExpression).
+		Group("aggregate_id").
+		Group(standaloneIdExpression).
+		Order(clause.OrderByColumn{Column: clause.Column{Name: "sort_value"}, Desc: descending}).
+		Order(clause.OrderByColumn{Column: clause.Column{Name: "tie_id"}, Desc: true}).
+		Limit(num).
+		Offset(startIdx)
+	if err := topQuery.Scan(&topRows).Error; err != nil {
+		return nil, 0, err
+	}
+	if len(topRows) == 0 {
+		return []*Channel{}, total, nil
+	}
+
+	aggregateIds := make([]int, 0, len(topRows))
+	channelIds := make([]int, 0, len(topRows))
+	for _, row := range topRows {
+		if row.AggregateId != nil {
+			aggregateIds = append(aggregateIds, *row.AggregateId)
+		} else {
+			channelIds = append(channelIds, row.ChannelId)
+		}
+	}
+	selectedQuery := query.Session(&gorm.Session{})
+	switch {
+	case len(aggregateIds) > 0 && len(channelIds) > 0:
+		selectedQuery = selectedQuery.Where(
+			"aggregate_id IN ? OR (aggregate_id IS NULL AND id IN ?)",
+			aggregateIds,
+			channelIds,
+		)
+	case len(aggregateIds) > 0:
+		selectedQuery = selectedQuery.Where("aggregate_id IN ?", aggregateIds)
+	default:
+		selectedQuery = selectedQuery.Where("aggregate_id IS NULL AND id IN ?", channelIds)
+	}
+
+	selected := make([]*Channel, 0)
+	if err := sortOptions.Apply(selectedQuery).Omit("key").Find(&selected).Error; err != nil {
+		return nil, 0, err
+	}
+	buckets := make(map[channelTopLevelKey][]*Channel, len(topRows))
+	for _, channel := range selected {
+		key := channelTopLevelKey{ChannelId: channel.Id}
+		if channel.AggregateId != nil {
+			key = channelTopLevelKey{AggregateId: *channel.AggregateId}
+		}
+		buckets[key] = append(buckets[key], channel)
+	}
+	channels := make([]*Channel, 0, len(selected))
+	for _, row := range topRows {
+		key := channelTopLevelKey{ChannelId: row.ChannelId}
+		if row.AggregateId != nil {
+			key = channelTopLevelKey{AggregateId: *row.AggregateId}
+		}
+		channels = append(channels, buckets[key]...)
+	}
+	if err := HydrateChannelAggregateSnapshots(channels); err != nil {
+		return nil, 0, err
+	}
+	return channels, total, nil
+}
+
 func GetChannelsByTag(tag string, idSort bool, selectAll bool, sortOptions ...ChannelSortOptions) ([]*Channel, error) {
 	var channels []*Channel
 	order := resolveChannelSortOptions(idSort, sortOptions)
@@ -392,8 +519,7 @@ func GetChannelsByTag(tag string, idSort bool, selectAll bool, sortOptions ...Ch
 	return channels, nil
 }
 
-func SearchChannels(keyword string, group string, model string, idSort bool, sortOptions ...ChannelSortOptions) ([]*Channel, error) {
-	var channels []*Channel
+func BuildChannelSearchQuery(keyword string, group string, model string) *gorm.DB {
 	modelsCol := "`models`"
 
 	// 如果是 PostgreSQL，使用双引号
@@ -407,18 +533,20 @@ func SearchChannels(keyword string, group string, model string, idSort bool, sor
 		baseURLCol = `"base_url"`
 	}
 
-	order := resolveChannelSortOptions(idSort, sortOptions)
-
-	// 构造基础查询
 	baseQuery := DB.Model(&Channel{}).Omit("key")
 
 	// 构造WHERE子句
 	whereClause := "(id = ? OR name LIKE ? OR " + commonKeyCol + " = ? OR " + baseURLCol + " LIKE ?) AND " + modelsCol + " LIKE ?"
 	args := []any{common.String2Int(keyword), "%" + keyword + "%", keyword, "%" + keyword + "%", "%" + model + "%"}
-	baseQuery = ApplyChannelGroupFilter(baseQuery.Where(whereClause, args...), group)
+	return ApplyChannelGroupFilter(baseQuery.Where(whereClause, args...), group)
+}
+
+func SearchChannels(keyword string, group string, model string, idSort bool, sortOptions ...ChannelSortOptions) ([]*Channel, error) {
+	var channels []*Channel
+	order := resolveChannelSortOptions(idSort, sortOptions)
 
 	// 执行查询
-	err := order.Apply(baseQuery).Find(&channels).Error
+	err := order.Apply(BuildChannelSearchQuery(keyword, group, model)).Find(&channels).Error
 	if err != nil {
 		return nil, err
 	}
@@ -456,8 +584,38 @@ func BatchInsertChannels(channels []Channel) error {
 	defer func() {
 		if r := recover(); r != nil {
 			tx.Rollback()
+			panic(r)
 		}
 	}()
+
+	aggregateIds := make(map[int]struct{})
+	for index := range channels {
+		channel := &channels[index]
+		if channel.AggregateId == nil {
+			if channel.InheritAggregateBaseURL {
+				tx.Rollback()
+				return errors.New("cannot inherit an aggregate base URL without an aggregate")
+			}
+			continue
+		}
+		if *channel.AggregateId <= 0 {
+			tx.Rollback()
+			return errors.New("invalid channel aggregate id")
+		}
+		aggregateIds[*channel.AggregateId] = struct{}{}
+	}
+	orderedAggregateIds := make([]int, 0, len(aggregateIds))
+	for aggregateId := range aggregateIds {
+		orderedAggregateIds = append(orderedAggregateIds, aggregateId)
+	}
+	sort.Ints(orderedAggregateIds)
+	for _, aggregateId := range orderedAggregateIds {
+		var aggregate ChannelAggregate
+		if err := lockForUpdate(tx).Select("id").First(&aggregate, "id = ?", aggregateId).Error; err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
 
 	for _, chunk := range lo.Chunk(channels, 50) {
 		if err := tx.Create(&chunk).Error; err != nil {
@@ -482,28 +640,115 @@ func BatchDeleteChannels(ids []int) (int64, error) {
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	// 使用事务 分批删除channel表和abilities表
-	tx := DB.Begin()
-	if tx.Error != nil {
-		return 0, tx.Error
-	}
+
+	return deleteChannels(func(tx *gorm.DB) ([]int, error) {
+		channelIds := make([]int, 0, len(ids))
+		for _, chunk := range lo.Chunk(ids, 200) {
+			var existingIds []int
+			query := lockForUpdate(tx.Model(&Channel{})).
+				Where("id IN ?", chunk).
+				Order("id ASC")
+			if err := query.Pluck("id", &existingIds).Error; err != nil {
+				return nil, err
+			}
+			channelIds = append(channelIds, existingIds...)
+		}
+		return channelIds, nil
+	})
+}
+
+// deleteChannels keeps channel rows and all channel-owned routing data in one
+// transaction. The route-table checks happen before the transaction because a
+// missing-table query aborts PostgreSQL transactions even when the error is
+// otherwise safe to ignore during rolling upgrades and narrow model tests.
+func deleteChannels(loadChannelIds func(tx *gorm.DB) ([]int, error)) (int64, error) {
+	hasRouteChannels := DB.Migrator().HasTable(&UserModelRouteChannel{})
+	hasRoutes := hasRouteChannels && DB.Migrator().HasTable(&UserModelRoute{})
 	var deletedCount int64
-	for _, chunk := range lo.Chunk(ids, 200) {
-		result := tx.Where("id in (?)", chunk).Delete(&Channel{})
-		if result.Error != nil {
-			tx.Rollback()
-			return 0, result.Error
+
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		channelIds, err := loadChannelIds(tx)
+		if err != nil {
+			return err
 		}
-		deletedCount += result.RowsAffected
-		if err := tx.Where("channel_id in (?)", chunk).Delete(&Ability{}).Error; err != nil {
-			tx.Rollback()
-			return 0, err
+		if len(channelIds) == 0 {
+			return nil
 		}
-	}
-	if err := tx.Commit().Error; err != nil {
+
+		sort.Ints(channelIds)
+		channelIds = lo.Uniq(channelIds)
+		for _, chunk := range lo.Chunk(channelIds, 200) {
+			if err := tx.Where("channel_id IN ?", chunk).Delete(&Ability{}).Error; err != nil {
+				return err
+			}
+		}
+
+		if hasRouteChannels {
+			affectedRouteIds := make([]int, 0)
+			for _, chunk := range lo.Chunk(channelIds, 200) {
+				var routeIds []int
+				if err := tx.Model(&UserModelRouteChannel{}).
+					Where("channel_id IN ?", chunk).
+					Distinct().
+					Pluck("route_id", &routeIds).Error; err != nil {
+					return err
+				}
+				affectedRouteIds = append(affectedRouteIds, routeIds...)
+				if err := tx.Where("channel_id IN ?", chunk).Delete(&UserModelRouteChannel{}).Error; err != nil {
+					return err
+				}
+			}
+
+			if hasRoutes && len(affectedRouteIds) > 0 {
+				sort.Ints(affectedRouteIds)
+				affectedRouteIds = lo.Uniq(affectedRouteIds)
+				for _, routeChunk := range lo.Chunk(affectedRouteIds, 200) {
+					var routesWithChannels []int
+					if err := tx.Model(&UserModelRouteChannel{}).
+						Where("route_id IN ?", routeChunk).
+						Distinct().
+						Pluck("route_id", &routesWithChannels).Error; err != nil {
+						return err
+					}
+					remaining := make(map[int]struct{}, len(routesWithChannels))
+					for _, routeId := range routesWithChannels {
+						remaining[routeId] = struct{}{}
+					}
+					emptyRouteIds := make([]int, 0, len(routeChunk))
+					for _, routeId := range routeChunk {
+						if _, ok := remaining[routeId]; !ok {
+							emptyRouteIds = append(emptyRouteIds, routeId)
+						}
+					}
+					if len(emptyRouteIds) > 0 {
+						if err := tx.Model(&UserModelRoute{}).
+							Where("id IN ?", emptyRouteIds).
+							Updates(map[string]interface{}{
+								"enabled":    false,
+								"updated_at": common.GetTimestamp(),
+							}).Error; err != nil {
+							return err
+						}
+					}
+				}
+			}
+		}
+
+		for _, chunk := range lo.Chunk(channelIds, 200) {
+			result := tx.Where("id IN ?", chunk).Delete(&Channel{})
+			if result.Error != nil {
+				return result.Error
+			}
+			deletedCount += result.RowsAffected
+		}
+		return nil
+	})
+	if err != nil {
 		return 0, err
 	}
-	InvalidatePricingCache()
+	if deletedCount > 0 {
+		InvalidatePricingCache()
+	}
 	return deletedCount, nil
 }
 
@@ -514,11 +759,11 @@ func (channel *Channel) GetPriority() int64 {
 	return *channel.Priority
 }
 
-func (channel *Channel) GetWeight() int {
+func (channel *Channel) GetWeight() uint {
 	if channel.Weight == nil {
 		return 0
 	}
-	return int(*channel.Weight)
+	return *channel.Weight
 }
 
 func (channel *Channel) GetBaseURL() string {
@@ -552,17 +797,23 @@ func (channel *Channel) GetStatusCodeMapping() string {
 }
 
 func (channel *Channel) Insert() error {
-	var err error
-	err = DB.Create(channel).Error
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := validateChannelAggregateLinkWithTx(tx, channel, true); err != nil {
+			return err
+		}
+		if err := tx.Create(channel).Error; err != nil {
+			return err
+		}
+		return channel.AddAbilities(tx)
+	})
 	if err != nil {
 		return err
 	}
-	defer InvalidatePricingCache()
-	err = channel.AddAbilities(nil)
-	return err
+	InvalidatePricingCache()
+	return nil
 }
 
-func (channel *Channel) Update() error {
+func (channel *Channel) prepareMultiKeyState() {
 	// If this is a multi-key channel, recalculate MultiKeySize based on the current key list to avoid inconsistency after editing keys
 	if channel.ChannelInfo.IsMultiKey {
 		var keyStr string
@@ -601,15 +852,62 @@ func (channel *Channel) Update() error {
 			}
 		}
 	}
-	var err error
-	err = DB.Model(channel).Updates(channel).Error
+}
+
+func (channel *Channel) update(includeAggregateLink bool) error {
+	channel.prepareMultiKeyState()
+	aggregateId := channel.AggregateId
+	inheritAggregateBaseURL := channel.InheritAggregateBaseURL
+
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if includeAggregateLink {
+			// Keep the same aggregate -> channel lock order as aggregate deletion.
+			if err := validateChannelAggregateLinkWithTx(tx, channel, true); err != nil {
+				return err
+			}
+			var existing Channel
+			if err := lockForUpdate(tx).Select("id").First(&existing, "id = ?", channel.Id).Error; err != nil {
+				return err
+			}
+		}
+
+		// A generic update must not restore an aggregate relation from a stale
+		// channel snapshot. Full edits opt in through UpdateWithAggregateLink.
+		if err := tx.Model(channel).
+			Omit("aggregate_id", "inherit_aggregate_base_url").
+			Updates(channel).Error; err != nil {
+			return err
+		}
+		if includeAggregateLink {
+			if err := tx.Model(&Channel{}).Where("id = ?", channel.Id).Updates(map[string]interface{}{
+				"aggregate_id":               aggregateId,
+				"inherit_aggregate_base_url": inheritAggregateBaseURL,
+			}).Error; err != nil {
+				return err
+			}
+		}
+
+		// Reload zero-value fields such as status before rebuilding abilities.
+		if err := tx.First(channel, "id = ?", channel.Id).Error; err != nil {
+			return err
+		}
+		return channel.UpdateAbilities(tx)
+	})
 	if err != nil {
 		return err
 	}
-	defer InvalidatePricingCache()
-	DB.Model(channel).First(channel, "id = ?", channel.Id)
-	err = channel.UpdateAbilities(nil)
-	return err
+	InvalidatePricingCache()
+	return nil
+}
+
+func (channel *Channel) Update() error {
+	return channel.update(false)
+}
+
+// UpdateWithAggregateLink atomically persists a complete channel edit,
+// including its aggregate relation and derived abilities.
+func (channel *Channel) UpdateWithAggregateLink() error {
+	return channel.update(true)
 }
 
 func (channel *Channel) UpdateResponseTime(responseTime int64) {
@@ -633,13 +931,7 @@ func (channel *Channel) UpdateBalance(balance float64) {
 }
 
 func (channel *Channel) Delete() error {
-	var err error
-	err = DB.Delete(channel).Error
-	if err != nil {
-		return err
-	}
-	defer InvalidatePricingCache()
-	err = channel.DeleteAbilities()
+	_, err := BatchDeleteChannels([]int{channel.Id})
 	return err
 }
 
@@ -912,19 +1204,29 @@ func updateChannelUsedQuota(id int, quota int) {
 }
 
 func DeleteChannelByStatus(status int64) (int64, error) {
-	result := DB.Where("status = ?", status).Delete(&Channel{})
-	if result.Error == nil && result.RowsAffected > 0 {
-		InvalidatePricingCache()
-	}
-	return result.RowsAffected, result.Error
+	return deleteChannels(func(tx *gorm.DB) ([]int, error) {
+		var channelIds []int
+		query := lockForUpdate(tx.Model(&Channel{})).
+			Where("status = ?", status).
+			Order("id ASC")
+		if err := query.Pluck("id", &channelIds).Error; err != nil {
+			return nil, err
+		}
+		return channelIds, nil
+	})
 }
 
 func DeleteDisabledChannel() (int64, error) {
-	result := DB.Where("status = ? or status = ?", common.ChannelStatusAutoDisabled, common.ChannelStatusManuallyDisabled).Delete(&Channel{})
-	if result.Error == nil && result.RowsAffected > 0 {
-		InvalidatePricingCache()
-	}
-	return result.RowsAffected, result.Error
+	return deleteChannels(func(tx *gorm.DB) ([]int, error) {
+		var channelIds []int
+		query := lockForUpdate(tx.Model(&Channel{})).
+			Where("status IN ?", []int{common.ChannelStatusAutoDisabled, common.ChannelStatusManuallyDisabled}).
+			Order("id ASC")
+		if err := query.Pluck("id", &channelIds).Error; err != nil {
+			return nil, err
+		}
+		return channelIds, nil
+	})
 }
 
 func GetPaginatedTags(offset int, limit int) ([]*string, error) {
