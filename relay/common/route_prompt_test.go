@@ -1,9 +1,11 @@
 package common
 
 import (
+	"net/http/httptest"
 	"testing"
 
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -117,6 +119,41 @@ func TestLeadingSystemPromptAppliesOnlyOncePerRequest(t *testing.T) {
 	assert.Equal(t, routePrompt+"\nChannel policy.", info.LeadingSystemPrompt(false))
 	assert.Empty(t, info.LeadingSystemPrompt(false), "a second stage must not reapply the prompts")
 	assert.Empty(t, info.LeadingSystemPrompt(true))
+}
+
+func TestSystemPromptPrefixDoesNotConsumePromptState(t *testing.T) {
+	info := &RelayInfo{
+		UserModelRouteId:     7,
+		RouteTargetModelName: "model-two",
+		RouteInjectPrompt:    "You are model-one.",
+	}
+	info.ChannelMeta = &ChannelMeta{ChannelSetting: dto.ChannelSettings{
+		SystemPrompt:         "Channel policy.",
+		SystemPromptOverride: true,
+	}}
+
+	const expected = "You are model-one.\nChannel policy."
+	assert.Equal(t, expected, info.SystemPromptPrefix(true))
+	assert.Equal(t, expected, info.SystemPromptPrefix(true))
+	assert.Equal(t, expected, info.LeadingSystemPrompt(true))
+	assert.Empty(t, info.LeadingSystemPrompt(true))
+}
+
+func TestLeadingSystemPromptAppliesAgainOnChannelRetry(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	info := &RelayInfo{
+		UserModelRouteId:     7,
+		RouteTargetModelName: "model-two",
+		RouteInjectPrompt:    "You are model-one.",
+	}
+
+	info.InitChannelMeta(ctx)
+	assert.Equal(t, "You are model-one.", info.LeadingSystemPrompt(false))
+	assert.Empty(t, info.LeadingSystemPrompt(false), "one attempt must not inject twice")
+
+	info.InitChannelMeta(ctx)
+	assert.Equal(t, "You are model-one.", info.LeadingSystemPrompt(false), "a retry rebuilds the outbound request and must inject again")
 }
 
 // A request with nothing configured must stay unguarded, so a later stage that

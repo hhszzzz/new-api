@@ -77,7 +77,10 @@ func applyResponsesInstructionsIfNeeded(c *gin.Context, info *relaycommon.RelayI
 		return
 	}
 
-	existing := responsesInstructionsText(request.Instructions)
+	existing, mergeable := responsesInstructionsText(request.Instructions)
+	if !mergeable {
+		return
+	}
 	leadingPrompt := info.LeadingSystemPrompt(existing != "")
 	if leadingPrompt == "" {
 		return
@@ -93,18 +96,21 @@ func applyResponsesInstructionsIfNeeded(c *gin.Context, info *relaycommon.RelayI
 	request.Instructions = instructions
 }
 
-// responsesInstructionsText returns the textual instructions, or "" when the
-// field is absent or not a JSON string. Non-string instructions cannot be
-// merged textually, so they are treated as absent and left in place.
-func responsesInstructionsText(instructions json.RawMessage) string {
+// responsesInstructionsText reports whether instructions can accept a text
+// prompt. Missing and null values are mergeable; other non-string JSON values
+// are preserved so request validation or the upstream can reject them.
+func responsesInstructionsText(instructions json.RawMessage) (string, bool) {
 	if len(instructions) == 0 {
-		return ""
+		return "", true
 	}
-	var text string
+	var text *string
 	if err := common.Unmarshal(instructions, &text); err != nil {
-		return ""
+		return "", false
 	}
-	return strings.TrimSpace(text)
+	if text == nil {
+		return "", true
+	}
+	return strings.TrimSpace(*text), true
 }
 
 func chatCompletionsViaResponses(c *gin.Context, info *relaycommon.RelayInfo, adaptor channel.Adaptor, request *dto.GeneralOpenAIRequest) (*dto.Usage, *types.NewAPIError) {

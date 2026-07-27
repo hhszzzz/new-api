@@ -1,10 +1,12 @@
 package common
 
 import (
+	"net/http/httptest"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -82,4 +84,14 @@ func TestRecordClaudeReasoningEffortToleratesMissingArguments(t *testing.T) {
 		RecordClaudeReasoningEffort(nil, &dto.ClaudeRequest{})
 		RecordClaudeReasoningEffort(&RelayInfo{}, nil)
 	})
+}
+
+func TestInitChannelMetaClearsReasoningEffortForRetry(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	info := &RelayInfo{ReasoningEffort: "high"}
+
+	info.InitChannelMeta(ctx)
+
+	assert.Empty(t, info.ReasoningEffort)
 }

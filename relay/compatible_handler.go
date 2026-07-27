@@ -106,15 +106,12 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 		}
 		requestBody = common.ReaderOnly(storage)
 	} else {
+		applySystemPromptIfNeeded(c, info, request)
 		convertedRequest, err := adaptor.ConvertOpenAIRequest(c, info, request)
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
 		relaycommon.AppendRequestConversionFromRequest(info, convertedRequest)
-
-		if openAIRequest, ok := convertedRequest.(*dto.GeneralOpenAIRequest); ok {
-			applySystemPromptIfNeeded(c, info, openAIRequest)
-		}
 
 		jsonData, err := common.Marshal(convertedRequest)
 		if err != nil {

@@ -1,6 +1,10 @@
 package dto
 
-import "github.com/QuantumNous/new-api/types"
+import (
+	"encoding/json"
+
+	"github.com/QuantumNous/new-api/types"
+)
 
 const (
 	RealtimeEventTypeError              = "error"
@@ -47,7 +51,7 @@ type RealtimeUsage struct {
 
 type RealtimeSession struct {
 	Modalities              []string                `json:"modalities"`
-	Instructions            string                  `json:"instructions"`
+	Instructions            json.RawMessage         `json:"instructions"`
 	Voice                   string                  `json:"voice"`
 	InputAudioFormat        string                  `json:"input_audio_format"`
 	OutputAudioFormat       string                  `json:"output_audio_format"`

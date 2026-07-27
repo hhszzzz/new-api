@@ -125,9 +125,12 @@ func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFai
 	}
 	message := errResponse.ToMessage()
 	if message == "" {
-		// The body parsed as JSON but carried no usable error message; log the
-		// raw body so the upstream failure remains diagnosable.
-		logger.LogError(ctx, fmt.Sprintf("bad response status code %d with empty error message, body: %s", resp.StatusCode, responseBodyPreview))
+		// A structurally valid response can still contain credentials or private
+		// provider details. Without an explicit message, keep the body out of the
+		// returned error and persistent logs.
+		logger.LogError(ctx, fmt.Sprintf("bad response status code %d with empty error message", resp.StatusCode))
+		message = fmt.Sprintf("bad response status code %d", resp.StatusCode)
+		return types.NewOpenAIError(errors.New(message), types.ErrorCodeBadResponseStatusCode, resp.StatusCode)
 	}
 	newApiErr = types.NewOpenAIError(errors.New(message), types.ErrorCodeBadResponseStatusCode, resp.StatusCode)
 	if showBodyWhenFail {

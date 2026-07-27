@@ -122,6 +122,34 @@ func TestRelayErrorHandlerKeepsOpenAIErrorMessage(t *testing.T) {
 	require.Equal(t, message, newAPIError.Error())
 }
 
+func TestRelayErrorHandlerDoesNotExposeBodyWithoutErrorMessage(t *testing.T) {
+	withDebugEnabled(t, false)
+	const secretBody = `{"error":{},"api_key":"must-not-be-logged"}`
+	var logBuffer bytes.Buffer
+
+	common.LogWriterMu.Lock()
+	oldWriter := gin.DefaultErrorWriter
+	gin.DefaultErrorWriter = &logBuffer
+	common.LogWriterMu.Unlock()
+	t.Cleanup(func() {
+		common.LogWriterMu.Lock()
+		gin.DefaultErrorWriter = oldWriter
+		common.LogWriterMu.Unlock()
+	})
+
+	resp := &http.Response{
+		StatusCode: http.StatusBadGateway,
+		Body:       io.NopCloser(strings.NewReader(secretBody)),
+	}
+
+	newAPIError := RelayErrorHandler(context.Background(), resp, true)
+
+	require.NotNil(t, newAPIError)
+	require.Equal(t, "bad response status code 502", newAPIError.Error())
+	require.NotContains(t, newAPIError.Error(), secretBody)
+	require.NotContains(t, logBuffer.String(), secretBody)
+}
+
 func TestRelayErrorHandlerKeepsInvalidJSONBodyInDebugLog(t *testing.T) {
 	withDebugEnabled(t, true)
 

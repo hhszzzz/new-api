@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -15,11 +16,22 @@ import (
 
 	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func setStreamPingSettingForTest(t *testing.T, enabled bool, seconds int) {
+	t.Helper()
+	handled, err := config.GlobalConfig.Update("general_setting", map[string]string{
+		"ping_interval_enabled": strconv.FormatBool(enabled),
+		"ping_interval_seconds": strconv.Itoa(seconds),
+	})
+	require.NoError(t, err)
+	require.True(t, handled)
+}
 
 func init() {
 	gin.SetMode(gin.TestMode)
@@ -287,14 +299,10 @@ func TestStreamScannerHandler_ClientCancelAbortsUpstreamAndReturns(t *testing.T)
 
 func TestStreamScannerHandler_PingSentDuringSlowUpstream(t *testing.T) {
 	setting := operation_setting.GetGeneralSetting()
-	oldEnabled := setting.PingIntervalEnabled
-	oldSeconds := setting.PingIntervalSeconds
-	setting.PingIntervalEnabled = true
-	setting.PingIntervalSeconds = 1
 	t.Cleanup(func() {
-		setting.PingIntervalEnabled = oldEnabled
-		setting.PingIntervalSeconds = oldSeconds
+		setStreamPingSettingForTest(t, setting.PingIntervalEnabled, setting.PingIntervalSeconds)
 	})
+	setStreamPingSettingForTest(t, true, 1)
 
 	pr, pw := io.Pipe()
 	go func() {
@@ -338,14 +346,10 @@ func TestStreamScannerHandler_PingSentDuringSlowUpstream(t *testing.T) {
 
 func TestStreamScannerHandler_PingDisabledByRelayInfo(t *testing.T) {
 	setting := operation_setting.GetGeneralSetting()
-	oldEnabled := setting.PingIntervalEnabled
-	oldSeconds := setting.PingIntervalSeconds
-	setting.PingIntervalEnabled = true
-	setting.PingIntervalSeconds = 1
 	t.Cleanup(func() {
-		setting.PingIntervalEnabled = oldEnabled
-		setting.PingIntervalSeconds = oldSeconds
+		setStreamPingSettingForTest(t, setting.PingIntervalEnabled, setting.PingIntervalSeconds)
 	})
+	setStreamPingSettingForTest(t, true, 1)
 
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)

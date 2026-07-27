@@ -313,7 +313,7 @@ func (info *RelayInfo) RouteSystemPrompt() string {
 	return strings.TrimSpace(info.RouteInjectPrompt)
 }
 
-// LeadingSystemPrompt returns the text to place ahead of the client's own system
+// SystemPromptPrefix returns the text to place ahead of the client's own system
 // prompt, resolving the two configured layers by priority:
 //
 //	route inject prompt  (highest, always applied when a route is active)
@@ -324,13 +324,11 @@ func (info *RelayInfo) RouteSystemPrompt() string {
 // while the route layer still applies, which is what makes the route prompt
 // outrank a caller-supplied system prompt.
 //
-// The first call marks the prompts as applied and every later call returns "".
-// A single request can traverse several stages that each compose system prompts
-// (chat completions -> responses conversion, then the adaptor), and the earlier
-// stage folds its prompt into a field the later stage reads back, so without
-// this guard the same prompt would be prepended twice.
-func (info *RelayInfo) LeadingSystemPrompt(hasClientPrompt bool) string {
-	if info == nil || info.systemPromptsApplied {
+// Unlike LeadingSystemPrompt, this method does not consume the request-scoped
+// applied state. Realtime sessions can explicitly replace their instructions
+// more than once and need to compose the same configured prefix each time.
+func (info *RelayInfo) SystemPromptPrefix(hasClientPrompt bool) string {
+	if info == nil {
 		return ""
 	}
 	routePrompt := info.RouteSystemPrompt()
@@ -346,7 +344,22 @@ func (info *RelayInfo) LeadingSystemPrompt(hasClientPrompt bool) string {
 	if hasClientPrompt && !channelOverride {
 		channelPrompt = ""
 	}
-	leading := JoinSystemPrompts(routePrompt, channelPrompt)
+	return JoinSystemPrompts(routePrompt, channelPrompt)
+}
+
+// LeadingSystemPrompt returns SystemPromptPrefix at most once per channel
+// attempt.
+//
+// The first call marks the prompts as applied and every later call returns "".
+// A single request can traverse several stages that each compose system prompts
+// (chat completions -> responses conversion, then the adaptor), and the earlier
+// stage folds its prompt into a field the later stage reads back, so without
+// this guard the same prompt would be prepended twice.
+func (info *RelayInfo) LeadingSystemPrompt(hasClientPrompt bool) string {
+	if info == nil || info.systemPromptsApplied {
+		return ""
+	}
+	leading := info.SystemPromptPrefix(hasClientPrompt)
 	if leading != "" {
 		info.systemPromptsApplied = true
 	}
@@ -372,6 +385,15 @@ func (info *RelayInfo) ShouldPassThroughBody() bool {
 }
 
 func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
+	// Each retry rebuilds the outbound request from the original parsed request.
+	// Keep the duplicate-injection guard scoped to one channel attempt so route
+	// and channel prompts are applied again when the distributor retries.
+	info.systemPromptsApplied = false
+	// The selected channel determines the final upstream reasoning shape. A
+	// retry that does not enable reasoning must not inherit the previous
+	// channel's effort badge.
+	info.ReasoningEffort = ""
+
 	channelType := common.GetContextKeyInt(c, constant.ContextKeyChannelType)
 	paramOverride := common.GetContextKeyStringMap(c, constant.ContextKeyChannelParamOverride)
 	headerOverride := common.GetContextKeyStringMap(c, constant.ContextKeyChannelHeaderOverride)

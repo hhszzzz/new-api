@@ -306,8 +306,10 @@ func CountTokenRealtime(info *relaycommon.RelayInfo, request dto.RealtimeEvent, 
 	switch request.Type {
 	case dto.RealtimeEventTypeSessionUpdate:
 		if request.Session != nil {
-			msgTokens := CountTextToken(request.Session.Instructions, model)
-			textToken += msgTokens
+			var instructions *string
+			if err := common.Unmarshal(request.Session.Instructions, &instructions); err == nil && instructions != nil {
+				textToken += CountTextToken(*instructions, model)
+			}
 		}
 	case dto.RealtimeEventResponseAudioDelta:
 		// count audio token

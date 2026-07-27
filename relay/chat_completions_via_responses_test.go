@@ -1,14 +1,50 @@
 package relay
 
 import (
+	"encoding/json"
 	"math"
+	"net/http/httptest"
 	"testing"
 
+	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/types"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestApplyResponsesInstructionsPreservesNonStringValues(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tests := []struct {
+		name         string
+		instructions json.RawMessage
+	}{
+		{name: "object", instructions: json.RawMessage(`{"role":"system"}`)},
+		{name: "array", instructions: json.RawMessage(`["system"]`)},
+		{name: "number", instructions: json.RawMessage(`1`)},
+		{name: "boolean", instructions: json.RawMessage(`true`)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			info := &relaycommon.RelayInfo{
+				UserModelRouteId:     7,
+				RouteTargetModelName: "upstream-model",
+				RouteInjectPrompt:    "route prompt",
+			}
+			request := &dto.OpenAIResponsesRequest{
+				Instructions: append(json.RawMessage(nil), tt.instructions...),
+			}
+
+			applyResponsesInstructionsIfNeeded(ctx, info, request)
+
+			assert.JSONEq(t, string(tt.instructions), string(request.Instructions))
+			assert.Equal(t, "route prompt", info.LeadingSystemPrompt(false), "preserving an invalid value must not consume the prompt for a later validation stage")
+		})
+	}
+}
 
 func TestIsResponsesEventStreamContentType(t *testing.T) {
 	tests := []struct {

@@ -145,9 +145,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
 	needCountToken := constant.CountToken
-	// Avoid building huge CombineText (strings.Join) when token counting and sensitive check are both disabled.
+	// Sensitive filtering has its own user-text extractor, so only exact token
+	// counting needs the potentially large combined request text.
 	var meta *types.TokenCountMeta
-	if needSensitiveCheck || needCountToken {
+	if needCountToken {
 		meta = request.GetTokenCountMeta()
 	} else {
 		meta = fastTokenCountMetaForPricing(request)
