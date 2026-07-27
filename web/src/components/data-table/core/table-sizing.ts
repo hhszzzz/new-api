@@ -31,7 +31,7 @@ export function getTableSizeStyle<TData>(
 
   return {
     minWidth: `max(100%, ${width}px)`,
-    tableLayout: 'auto',
+    tableLayout: table.options.enableColumnResizing === true ? 'fixed' : 'auto',
     width: '100%',
   }
 }

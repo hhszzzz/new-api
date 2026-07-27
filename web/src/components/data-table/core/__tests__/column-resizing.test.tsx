@@ -25,6 +25,11 @@ import { DataTableView } from '../data-table-view'
 
 type RowData = { name: string }
 
+type MultiColumnRowData = {
+  name: string
+  status: string
+}
+
 const columns: ColumnDef<RowData>[] = [
   {
     accessorKey: 'name',
@@ -53,6 +58,40 @@ function ResizableTable() {
   )
 }
 
+const multiColumnColumns: ColumnDef<MultiColumnRowData>[] = [
+  {
+    accessorKey: 'name',
+    header: 'Name',
+    size: 120,
+  },
+  {
+    accessorKey: 'status',
+    header: 'Status',
+    size: 140,
+  },
+]
+
+function MultiColumnResizableTable() {
+  const { table } = useDataTable({
+    data: [{ name: 'Primary channel', status: 'Enabled' }],
+    columns: multiColumnColumns,
+    initialColumnSizing: { name: 120, status: 140 },
+    enableColumnResizing: true,
+  })
+
+  return (
+    <>
+      <output data-testid='name-column-size'>
+        {table.getColumn('name')?.getSize()}
+      </output>
+      <output data-testid='status-column-size'>
+        {table.getColumn('status')?.getSize()}
+      </output>
+      <DataTableView table={table} applyHeaderSize />
+    </>
+  )
+}
+
 describe('data table column resizing', () => {
   test('supports keyboard resizing and clamps the result to column bounds', () => {
     render(<ResizableTable />)
@@ -74,5 +113,27 @@ describe('data table column resizing', () => {
     )
 
     expect(screen.getByTestId('column-size')).toHaveTextContent('180')
+  })
+
+  test('dragging one resize handle keeps the neighboring column width stable', () => {
+    render(<MultiColumnResizableTable />)
+    const table = screen.getByRole('table')
+    const columns = table.querySelectorAll('col')
+    const [nameResizer] = screen.getAllByRole('separator', {
+      name: 'Resize column',
+    })
+
+    expect(table).toHaveStyle({ tableLayout: 'fixed' })
+    expect(columns[0]).toHaveStyle({ width: '120px' })
+    expect(columns[1]).toHaveStyle({ width: '140px' })
+
+    fireEvent.mouseDown(nameResizer, { clientX: 120 })
+    fireEvent.mouseMove(document, { clientX: 150 })
+    fireEvent.mouseUp(document, { clientX: 150 })
+
+    expect(screen.getByTestId('name-column-size')).toHaveTextContent('150')
+    expect(screen.getByTestId('status-column-size')).toHaveTextContent('140')
+    expect(columns[0]).toHaveStyle({ width: '150px' })
+    expect(columns[1]).toHaveStyle({ width: '140px' })
   })
 })
