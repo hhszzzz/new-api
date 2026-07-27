@@ -23,6 +23,8 @@ import type {
 } from '@tanstack/react-table'
 import { useEffect, useMemo, useState } from 'react'
 
+import { isDataTablePageSize } from '@/components/data-table/page-size'
+
 type SearchRecord = Record<string, unknown>
 
 // Page size persists globally under the established storage key (raw number
@@ -32,15 +34,15 @@ const PAGE_SIZE_STORAGE_KEY = 'page-size'
 function getStoredPageSize(storageKey: string | false): number | undefined {
   if (!storageKey) return undefined
   try {
-    const n = Number.parseInt(localStorage.getItem(storageKey) ?? '', 10)
-    return n > 0 ? n : undefined // n > 0 also rejects NaN
+    const value = Number(localStorage.getItem(storageKey))
+    return isDataTablePageSize(value) ? value : undefined
   } catch {
     return undefined
   }
 }
 
 function setStoredPageSize(storageKey: string | false, size: number) {
-  if (!storageKey) return
+  if (!storageKey || !isDataTablePageSize(size)) return
   try {
     localStorage.setItem(storageKey, String(size))
   } catch {
@@ -163,11 +165,13 @@ export function useTableUrlState(
   const pagination: PaginationState = useMemo(() => {
     const rawPage = (search as SearchRecord)[pageKey]
     const rawPageSize = (search as SearchRecord)[pageSizeKey]
-    const pageNum = typeof rawPage === 'number' ? rawPage : defaultPage
-    const pageSizeNum =
-      typeof rawPageSize === 'number'
-        ? rawPageSize
-        : (getStoredPageSize(pageSizeStorageKey) ?? defaultPageSize)
+    const pageNum =
+      typeof rawPage === 'number' && Number.isInteger(rawPage) && rawPage > 0
+        ? rawPage
+        : defaultPage
+    const pageSizeNum = isDataTablePageSize(rawPageSize)
+      ? rawPageSize
+      : (getStoredPageSize(pageSizeStorageKey) ?? defaultPageSize)
     return { pageIndex: Math.max(0, pageNum - 1), pageSize: pageSizeNum }
   }, [
     search,
@@ -180,8 +184,14 @@ export function useTableUrlState(
 
   const onPaginationChange: OnChangeFn<PaginationState> = (updater) => {
     const next = typeof updater === 'function' ? updater(pagination) : updater
-    const nextPage = next.pageIndex + 1
-    const nextPageSize = next.pageSize
+    const nextPageIndex =
+      Number.isInteger(next.pageIndex) && next.pageIndex >= 0
+        ? next.pageIndex
+        : pagination.pageIndex
+    const nextPage = nextPageIndex + 1
+    const nextPageSize = isDataTablePageSize(next.pageSize)
+      ? next.pageSize
+      : pagination.pageSize
     if (nextPageSize !== pagination.pageSize) {
       setStoredPageSize(pageSizeStorageKey, nextPageSize)
     }
@@ -194,11 +204,11 @@ export function useTableUrlState(
     })
   }
 
-  const [globalFilter, setGlobalFilter] = useState<string | undefined>(() => {
+  const globalFilter = useMemo<string | undefined>(() => {
     if (!globalFilterEnabled) return undefined
     const raw = (search as SearchRecord)[globalFilterKey]
     return typeof raw === 'string' ? raw : ''
-  })
+  }, [globalFilterEnabled, globalFilterKey, search])
 
   const onGlobalFilterChange: OnChangeFn<string> | undefined =
     globalFilterEnabled
@@ -208,7 +218,6 @@ export function useTableUrlState(
               ? updater(globalFilter ?? '')
               : updater
           const value = trimGlobal ? next.trim() : next
-          setGlobalFilter(value)
           navigate({
             search: (prev) => ({
               ...(prev as SearchRecord),

@@ -19,10 +19,14 @@ For commercial licensing, please contact support@quantumnous.com
 import { useQuery } from '@tanstack/react-query'
 import { getRouteApi } from '@tanstack/react-router'
 import type { OnChangeFn, SortingState } from '@tanstack/react-table'
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { DataTablePage, useDataTable } from '@/components/data-table'
+import {
+  DataTablePage,
+  useDataTable,
+  usePersistedTableSorting,
+} from '@/components/data-table'
 import { useMediaQuery } from '@/hooks'
 import { useTableUrlState } from '@/hooks/use-table-url-state'
 
@@ -39,6 +43,7 @@ import { useModelsColumns } from './models-columns'
 import { useModels } from './models-provider'
 
 const route = getRouteApi('/_authenticated/models/$section')
+const MODELS_TABLE_STATE_STORAGE_KEY = 'models:admin'
 
 const MODEL_SORTABLE_COLUMNS = new Set<ModelSortBy>([
   'id',
@@ -55,7 +60,11 @@ export function ModelsTable() {
   const { t } = useTranslation()
   const { selectedVendor } = useModels()
   const isMobile = useMediaQuery('(max-width: 640px)')
-  const [sorting, setSorting] = useState<SortingState>([])
+  const defaultPageSize = isMobile ? 10 : DEFAULT_PAGE_SIZE
+  const [sorting, setSorting] = usePersistedTableSorting(
+    MODELS_TABLE_STATE_STORAGE_KEY,
+    MODEL_SORTABLE_COLUMNS
+  )
 
   // URL state management
   const {
@@ -71,7 +80,7 @@ export function ModelsTable() {
     navigate: route.useNavigate(),
     pagination: {
       defaultPage: 1,
-      defaultPageSize: isMobile ? 10 : DEFAULT_PAGE_SIZE,
+      defaultPageSize,
       pageSizeStorageKey: 'models:admin:page-size',
     },
     globalFilter: { enabled: true, key: 'filter' },
@@ -197,9 +206,10 @@ export function ModelsTable() {
   const { table } = useDataTable({
     data: models,
     columns,
-    tableStateStorageKey: 'models:admin',
+    tableStateStorageKey: MODELS_TABLE_STATE_STORAGE_KEY,
     totalCount,
     sorting,
+    initialPagination: { pageIndex: 0, pageSize: defaultPageSize },
     initialColumnVisibility: {
       description: false,
       bound_channels: false,
@@ -213,6 +223,7 @@ export function ModelsTable() {
     onPaginationChange,
     onGlobalFilterChange,
     onSortingChange: handleSortingChange,
+    getRowId: (row) => String(row.id),
     manualPagination: true,
     manualSorting: true,
     manualFiltering: true,

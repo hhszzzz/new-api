@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { type Table } from '@tanstack/react-table'
+import type { Table } from '@tanstack/react-table'
 import {
   ChevronLeft as ChevronLeftIcon,
   ChevronRight as ChevronRightIcon,
@@ -36,12 +36,13 @@ import {
 } from '@/components/ui/select'
 import { cn, getPageNumbers } from '@/lib/utils'
 
+import { DATA_TABLE_PAGE_SIZE_OPTIONS } from '../page-size'
+
 type DataTablePaginationProps<TData> = {
   table: Table<TData>
 }
 
-const PAGE_SIZE_OPTIONS = [10, 20, 30, 40, 50, 100] as const
-const PAGE_SIZE_SELECT_ITEMS = PAGE_SIZE_OPTIONS.map((pageSize) => ({
+const PAGE_SIZE_SELECT_ITEMS = DATA_TABLE_PAGE_SIZE_OPTIONS.map((pageSize) => ({
   value: `${pageSize}`,
   label: pageSize,
 }))
@@ -88,7 +89,7 @@ export function DataTablePagination<TData>({
             </SelectTrigger>
             <SelectContent side='top' alignItemWithTrigger={false}>
               <SelectGroup>
-                {PAGE_SIZE_OPTIONS.map((pageSize) => (
+                {DATA_TABLE_PAGE_SIZE_OPTIONS.map((pageSize) => (
                   <SelectItem key={pageSize} value={`${pageSize}`}>
                     {pageSize}
                   </SelectItem>
@@ -119,7 +120,14 @@ export function DataTablePagination<TData>({
           </Button>
 
           {pageNumbers.map((pageNumber, index) => (
-            <div key={`${pageNumber}-${index}`} className='flex items-center'>
+            <div
+              key={
+                pageNumber === '...'
+                  ? `ellipsis-${pageNumbers[index - 1] ?? 'start'}-${pageNumbers[index + 1] ?? 'end'}`
+                  : `page-${pageNumber}`
+              }
+              className='flex items-center'
+            >
               {pageNumber === '...' ? (
                 <span className='text-muted-foreground/60 px-0.5 text-sm @lg/pagination:px-1'>
                   ...

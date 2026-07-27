@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { useQuery } from '@tanstack/react-query'
 import { getRouteApi } from '@tanstack/react-router'
 import type { OnChangeFn, SortingState } from '@tanstack/react-table'
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -28,6 +28,7 @@ import {
   DISABLED_ROW_MOBILE,
   DataTablePage,
   useDataTable,
+  usePersistedTableSorting,
 } from '@/components/data-table'
 import { useMediaQuery } from '@/hooks'
 import { useTableUrlState } from '@/hooks/use-table-url-state'
@@ -45,6 +46,7 @@ import { useUsersColumns } from './users-columns'
 import { useUsers } from './users-provider'
 
 const route = getRouteApi('/_authenticated/users/')
+const USERS_TABLE_STATE_STORAGE_KEY = 'users:admin'
 
 const USER_SORTABLE_COLUMNS = new Set<UserSortBy>([
   'id',
@@ -64,7 +66,11 @@ export function UsersTable() {
   const columns = useUsersColumns()
   const { refreshTrigger } = useUsers()
   const isMobile = useMediaQuery('(max-width: 640px)')
-  const [sorting, setSorting] = useState<SortingState>([])
+  const defaultPageSize = isMobile ? 10 : 20
+  const [sorting, setSorting] = usePersistedTableSorting(
+    USERS_TABLE_STATE_STORAGE_KEY,
+    USER_SORTABLE_COLUMNS
+  )
 
   const {
     globalFilter,
@@ -79,7 +85,7 @@ export function UsersTable() {
     navigate: route.useNavigate(),
     pagination: {
       defaultPage: 1,
-      defaultPageSize: isMobile ? 10 : 20,
+      defaultPageSize,
       pageSizeStorageKey: 'users:admin:page-size',
     },
     globalFilter: { enabled: true, key: 'filter' },
@@ -177,12 +183,13 @@ export function UsersTable() {
   const { table } = useDataTable({
     data: users,
     columns,
-    tableStateStorageKey: 'users:admin',
+    tableStateStorageKey: USERS_TABLE_STATE_STORAGE_KEY,
     enableRowSelection: true,
     columnFilters,
     globalFilter,
     pagination,
     sorting,
+    initialPagination: { pageIndex: 0, pageSize: defaultPageSize },
     globalFilterFn: (row, _columnId, filterValue) => {
       const searchValue = String(filterValue).toLowerCase()
       const fields = [

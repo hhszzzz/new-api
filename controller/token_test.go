@@ -17,6 +17,8 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -30,6 +32,7 @@ type tokenAPIResponse struct {
 
 type tokenPageResponse struct {
 	Items []tokenResponseItem `json:"items"`
+	Total int                 `json:"total"`
 }
 
 type tokenResponseItem struct {
@@ -445,6 +448,58 @@ func TestSearchTokensMasksKeyInResponse(t *testing.T) {
 	if strings.Contains(recorder.Body.String(), token.Key) {
 		t.Fatalf("search response leaked raw token key: %s", recorder.Body.String())
 	}
+}
+
+func TestGetAllTokensFiltersStatusBeforePagination(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	enabled := seedToken(t, db, 1, "enabled-token", "status-list-enabled")
+	disabledFirst := seedToken(t, db, 1, "disabled-first", "status-list-disabled-1")
+	disabledSecond := seedToken(t, db, 1, "disabled-second", "status-list-disabled-2")
+	require.NoError(t, db.Model(&model.Token{}).
+		Where("id IN ?", []int{disabledFirst.Id, disabledSecond.Id}).
+		Update("status", common.TokenStatusDisabled).Error)
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/api/token/?p=1&size=1&status=2", nil, 1)
+	GetAllTokens(ctx)
+
+	response := decodeAPIResponse(t, recorder)
+	require.True(t, response.Success, response.Message)
+	var page tokenPageResponse
+	require.NoError(t, common.Unmarshal(response.Data, &page))
+	assert.Equal(t, 2, page.Total)
+	require.Len(t, page.Items, 1)
+	assert.Equal(t, common.TokenStatusDisabled, page.Items[0].Status)
+	assert.NotEqual(t, enabled.Id, page.Items[0].ID)
+}
+
+func TestSearchTokensFiltersStatusBeforeCounting(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	enabled := seedToken(t, db, 1, "shared-status-search", "status-search-enabled")
+	disabled := seedToken(t, db, 1, "shared-status-search", "status-search-disabled")
+	require.NoError(t, db.Model(disabled).Update("status", common.TokenStatusDisabled).Error)
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/api/token/search?keyword=shared-status-search&p=1&size=10&status=2", nil, 1)
+	SearchTokens(ctx)
+
+	response := decodeAPIResponse(t, recorder)
+	require.True(t, response.Success, response.Message)
+	var page tokenPageResponse
+	require.NoError(t, common.Unmarshal(response.Data, &page))
+	assert.Equal(t, 1, page.Total)
+	require.Len(t, page.Items, 1)
+	assert.Equal(t, disabled.Id, page.Items[0].ID)
+	assert.NotEqual(t, enabled.Id, page.Items[0].ID)
+}
+
+func TestGetAllTokensRejectsInvalidStatusFilter(t *testing.T) {
+	setupTokenControllerTestDB(t)
+	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/api/token/?status=unknown", nil, 1)
+
+	GetAllTokens(ctx)
+
+	response := decodeAPIResponse(t, recorder)
+	assert.False(t, response.Success)
+	assert.Contains(t, response.Message, "无效的令牌状态")
 }
 
 func TestGetTokenMasksKeyInResponse(t *testing.T) {

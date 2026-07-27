@@ -23,7 +23,11 @@ import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
-import { DataTablePage, useDataTable } from '@/components/data-table'
+import {
+  DataTablePage,
+  useDataTable,
+  usePersistedTableSorting,
+} from '@/components/data-table'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -49,6 +53,7 @@ import { ViewDetailsDialog } from './dialogs/view-details-dialog'
 import { ViewLogsDialog } from './dialogs/view-logs-dialog'
 
 const route = getRouteApi('/_authenticated/models/$section')
+const DEPLOYMENTS_TABLE_STATE_STORAGE_KEY = 'model-deployments:admin'
 
 const DEPLOYMENT_SORTABLE_COLUMNS = new Set<DeploymentSortBy>([
   'id',
@@ -61,7 +66,11 @@ export function DeploymentsTable() {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const isMobile = useMediaQuery('(max-width: 640px)')
-  const [sorting, setSorting] = useState<SortingState>([])
+  const defaultPageSize = isMobile ? 8 : 10
+  const [sorting, setSorting] = usePersistedTableSorting(
+    DEPLOYMENTS_TABLE_STATE_STORAGE_KEY,
+    DEPLOYMENT_SORTABLE_COLUMNS
+  )
 
   // URL state (use dedicated keys so it won't collide with metadata table)
   const {
@@ -79,7 +88,7 @@ export function DeploymentsTable() {
       pageKey: 'dPage',
       pageSizeKey: 'dPageSize',
       defaultPage: 1,
-      defaultPageSize: isMobile ? 8 : 10,
+      defaultPageSize,
       pageSizeStorageKey: 'model-deployments:admin:page-size',
     },
     globalFilter: { enabled: true, key: 'dFilter' },
@@ -229,9 +238,10 @@ export function DeploymentsTable() {
   const { table } = useDataTable({
     data: deployments,
     columns,
-    tableStateStorageKey: 'model-deployments:admin',
+    tableStateStorageKey: DEPLOYMENTS_TABLE_STATE_STORAGE_KEY,
     totalCount,
     sorting,
+    initialPagination: { pageIndex: 0, pageSize: defaultPageSize },
     columnFilters,
     pagination,
     globalFilter,

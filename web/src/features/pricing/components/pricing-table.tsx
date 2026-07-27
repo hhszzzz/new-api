@@ -25,12 +25,15 @@ import {
   DataTableRow,
   DataTableView,
   DataTableViewOptions,
+  getInitialTablePageSize,
   useDataTable,
 } from '@/components/data-table'
 
 import { DEFAULT_PRICING_PAGE_SIZE, DEFAULT_TOKEN_UNIT } from '../constants'
 import type { PricingModel, TokenUnit } from '../types'
 import { usePricingColumns } from './pricing-columns'
+
+const PRICING_TABLE_STATE_STORAGE_KEY = 'pricing:user'
 
 export interface PricingTableProps {
   models: PricingModel[]
@@ -56,10 +59,13 @@ export function PricingTable(props: PricingTableProps) {
     onModelClick,
   } = props
 
-  const [pagination, setPagination] = useState<PaginationState>({
+  const [pagination, setPagination] = useState<PaginationState>(() => ({
     pageIndex: 0,
-    pageSize: DEFAULT_PRICING_PAGE_SIZE,
-  })
+    pageSize: getInitialTablePageSize(
+      PRICING_TABLE_STATE_STORAGE_KEY,
+      DEFAULT_PRICING_PAGE_SIZE
+    ),
+  }))
 
   const columns = usePricingColumns({
     tokenUnit,
@@ -73,9 +79,13 @@ export function PricingTable(props: PricingTableProps) {
   const { table } = useDataTable({
     data: models,
     columns,
-    tableStateStorageKey: 'pricing:user',
+    tableStateStorageKey: PRICING_TABLE_STATE_STORAGE_KEY,
     pageCount: Math.ceil(models.length / pagination.pageSize),
     pagination,
+    initialPagination: {
+      pageIndex: 0,
+      pageSize: DEFAULT_PRICING_PAGE_SIZE,
+    },
     onPaginationChange: setPagination,
     manualPagination: false,
     withFilteredRowModel: false,

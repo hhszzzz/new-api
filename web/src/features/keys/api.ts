@@ -45,12 +45,21 @@ export async function getApiKeys(
 export async function searchApiKeys(
   params: SearchApiKeysParams
 ): Promise<GetApiKeysResponse> {
-  const { keyword = '', token = '', p, size, sort_by, sort_order } = params
+  const {
+    keyword = '',
+    token = '',
+    p,
+    size,
+    status,
+    sort_by,
+    sort_order,
+  } = params
   const queryParams = new URLSearchParams()
   if (keyword) queryParams.set('keyword', keyword)
   if (token) queryParams.set('token', token)
   if (p != null) queryParams.set('p', String(p))
   if (size != null) queryParams.set('size', String(size))
+  if (status != null) queryParams.set('status', String(status))
   if (sort_by) queryParams.set('sort_by', sort_by)
   if (sort_order) queryParams.set('sort_order', sort_order)
   const res = await api.get(`/api/token/search?${queryParams.toString()}`)

@@ -133,11 +133,16 @@ func (token *Token) GetIpLimits() []string {
 	return ipLimits
 }
 
-func GetAllUserTokens(userId int, startIdx int, num int, sortOptions ...TokenSortOptions) ([]*Token, error) {
-	var tokens []*Token
-	var err error
-	err = resolveTokenSortOptions(sortOptions).Apply(DB.Where("user_id = ?", userId)).Limit(num).Offset(startIdx).Find(&tokens).Error
-	return tokens, err
+func GetAllUserTokens(userId int, startIdx int, num int, status int, sortOptions ...TokenSortOptions) (tokens []*Token, total int64, err error) {
+	baseQuery := DB.Model(&Token{}).Where("user_id = ?", userId)
+	if status != 0 {
+		baseQuery = baseQuery.Where("status = ?", status)
+	}
+	if err = baseQuery.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	err = resolveTokenSortOptions(sortOptions).Apply(baseQuery).Limit(num).Offset(startIdx).Find(&tokens).Error
+	return tokens, total, err
 }
 
 // sanitizeLikePattern 校验并清洗用户输入的 LIKE 搜索模式。
@@ -186,7 +191,7 @@ func validateLikePattern(input string) error {
 
 const searchHardLimit = 100
 
-func SearchUserTokens(userId int, keyword string, token string, offset int, limit int, sortOptions ...TokenSortOptions) (tokens []*Token, total int64, err error) {
+func SearchUserTokens(userId int, keyword string, token string, status int, offset int, limit int, sortOptions ...TokenSortOptions) (tokens []*Token, total int64, err error) {
 	// model 层强制截断
 	if limit <= 0 || limit > searchHardLimit {
 		limit = searchHardLimit
@@ -214,6 +219,9 @@ func SearchUserTokens(userId int, keyword string, token string, offset int, limi
 	}
 
 	baseQuery := DB.Model(&Token{}).Where("user_id = ?", userId)
+	if status != 0 {
+		baseQuery = baseQuery.Where("status = ?", status)
+	}
 
 	// 非空才加 LIKE 条件，空则跳过（不过滤该字段）
 	if keyword != "" {

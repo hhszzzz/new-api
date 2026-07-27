@@ -69,12 +69,15 @@ func GetAllTokens(c *gin.Context) {
 	userId := c.GetInt("id")
 	pageInfo := common.GetPageQuery(c)
 	sortOptions := model.NewTokenSortOptions(c.Query("sort_by"), c.Query("sort_order"))
-	tokens, err := model.GetAllUserTokens(userId, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), sortOptions)
+	status, ok := parseTokenStatusFilter(c)
+	if !ok {
+		return
+	}
+	tokens, total, err := model.GetAllUserTokens(userId, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), status, sortOptions)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	total, _ := model.CountUserTokens(userId)
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(buildMaskedTokenResponses(tokens))
 	common.ApiSuccess(c, pageInfo)
@@ -87,8 +90,12 @@ func SearchTokens(c *gin.Context) {
 
 	pageInfo := common.GetPageQuery(c)
 	sortOptions := model.NewTokenSortOptions(c.Query("sort_by"), c.Query("sort_order"))
+	status, ok := parseTokenStatusFilter(c)
+	if !ok {
+		return
+	}
 
-	tokens, total, err := model.SearchUserTokens(userId, keyword, token, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), sortOptions)
+	tokens, total, err := model.SearchUserTokens(userId, keyword, token, status, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), sortOptions)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -96,6 +103,19 @@ func SearchTokens(c *gin.Context) {
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(buildMaskedTokenResponses(tokens))
 	common.ApiSuccess(c, pageInfo)
+}
+
+func parseTokenStatusFilter(c *gin.Context) (int, bool) {
+	rawStatus := strings.TrimSpace(c.Query("status"))
+	if rawStatus == "" {
+		return 0, true
+	}
+	status, err := strconv.Atoi(rawStatus)
+	if err != nil || status < common.TokenStatusEnabled || status > common.TokenStatusExhausted {
+		common.ApiErrorMsg(c, "无效的令牌状态")
+		return 0, false
+	}
+	return status, true
 }
 
 func GetToken(c *gin.Context) {
@@ -217,7 +237,7 @@ func AddToken(c *gin.Context) {
 			common.ApiErrorI18n(c, i18n.MsgTokenQuotaNegative)
 			return
 		}
-		maxQuotaValue := int((1000000000 * common.QuotaPerUnit))
+		maxQuotaValue := common.MaxQuota
 		if token.RemainQuota > maxQuotaValue {
 			common.ApiErrorI18n(c, i18n.MsgTokenQuotaExceedMax, map[string]any{"Max": maxQuotaValue})
 			return
@@ -304,7 +324,7 @@ func UpdateToken(c *gin.Context) {
 			common.ApiErrorI18n(c, i18n.MsgTokenQuotaNegative)
 			return
 		}
-		maxQuotaValue := int((1000000000 * common.QuotaPerUnit))
+		maxQuotaValue := common.MaxQuota
 		if token.RemainQuota > maxQuotaValue {
 			common.ApiErrorI18n(c, i18n.MsgTokenQuotaExceedMax, map[string]any{"Max": maxQuotaValue})
 			return

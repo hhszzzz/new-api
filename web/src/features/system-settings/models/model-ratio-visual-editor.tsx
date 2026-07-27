@@ -22,7 +22,6 @@ import type {
   PaginationState,
   RowSelectionState,
   VisibilityState,
-  SortingState,
 } from '@tanstack/react-table'
 import { Copy, Plus } from 'lucide-react'
 import {
@@ -44,7 +43,9 @@ import {
   DataTablePagination,
   DataTableRow,
   DataTableView,
+  getInitialTablePageSize,
   useDataTable,
+  usePersistedTableSorting,
 } from '@/components/data-table'
 import { Button } from '@/components/ui/button'
 import { combineBillingExpr } from '@/features/pricing/lib/billing-expr'
@@ -65,6 +66,14 @@ import {
   type ModelRow,
 } from './model-pricing-snapshots'
 import { buildModelRatioColumns } from './model-ratio-table-columns'
+
+const MODEL_RATIO_TABLE_STATE_STORAGE_KEY = 'model-ratio-editor:admin'
+const MODEL_RATIO_DEFAULT_PAGE_SIZE = 20
+const MODEL_RATIO_SORTABLE_COLUMNS = new Set([
+  'name',
+  'billingMode',
+  'priceSummary',
+])
 
 type ModelRatioVisualEditorProps = {
   savedModelPrice: string
@@ -140,15 +149,21 @@ const ModelRatioVisualEditorComponent = forwardRef<
   const [sheetOpen, setSheetOpen] = useState(false)
   const [editorOpen, setEditorOpen] = useState(false)
   const [editData, setEditData] = useState<ModelRatioData | null>(null)
-  const [sorting, setSorting] = useState<SortingState>([])
+  const [sorting, setSorting] = usePersistedTableSorting(
+    MODEL_RATIO_TABLE_STATE_STORAGE_KEY,
+    MODEL_RATIO_SORTABLE_COLUMNS
+  )
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
   const [globalFilter, setGlobalFilter] = useState('')
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({})
   const editorPanelRef = useRef<ModelPricingEditorPanelHandle>(null)
-  const [pagination, setPagination] = useState<PaginationState>({
+  const [pagination, setPagination] = useState<PaginationState>(() => ({
     pageIndex: 0,
-    pageSize: 20,
-  })
+    pageSize: getInitialTablePageSize(
+      MODEL_RATIO_TABLE_STATE_STORAGE_KEY,
+      MODEL_RATIO_DEFAULT_PAGE_SIZE
+    ),
+  }))
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(
     () => {
       const saved = localStorage.getItem(STORAGE_KEY)
@@ -456,7 +471,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
   const { table } = useDataTable({
     data: models,
     columns,
-    tableStateStorageKey: 'model-ratio-editor:admin',
+    tableStateStorageKey: MODEL_RATIO_TABLE_STATE_STORAGE_KEY,
     getRowId: (row) => row.name,
     ensurePageInRange,
     sorting,
@@ -464,6 +479,10 @@ const ModelRatioVisualEditorComponent = forwardRef<
     globalFilter,
     columnVisibility,
     pagination,
+    initialPagination: {
+      pageIndex: 0,
+      pageSize: MODEL_RATIO_DEFAULT_PAGE_SIZE,
+    },
     rowSelection,
     enableRowSelection: true,
     onSortingChange: setSorting,

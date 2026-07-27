@@ -62,6 +62,7 @@ export interface ApiResponse<T = unknown> {
 export interface GetApiKeysParams {
   p?: number
   size?: number
+  status?: number
   sort_by?: ApiKeySortBy
   sort_order?: SortOrder
 }
@@ -94,6 +95,7 @@ export interface SearchApiKeysParams {
   token?: string
   p?: number
   size?: number
+  status?: number
   sort_by?: ApiKeySortBy
   sort_order?: SortOrder
 }

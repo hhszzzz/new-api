@@ -34,6 +34,7 @@ import {
   DataTablePage,
   useDebouncedColumnFilter,
   useDataTable,
+  usePersistedTableSorting,
 } from '@/components/data-table'
 import { StatusBadge } from '@/components/status-badge'
 import {
@@ -79,6 +80,9 @@ const API_KEY_SORT_COLUMNS: Record<string, ApiKeySortBy> = {
   accessed_time: 'accessed_time',
   expired_time: 'expired_time',
 }
+const API_KEY_SORTABLE_COLUMNS = new Set(Object.keys(API_KEY_SORT_COLUMNS))
+const API_KEYS_TABLE_STATE_STORAGE_KEY = 'api-keys:user'
+const API_KEYS_DEFAULT_PAGE_SIZE = 20
 
 function isDisabledApiKeyRow(apiKey: ApiKey) {
   return apiKey.status !== API_KEY_STATUS.ENABLED
@@ -204,7 +208,10 @@ export function ApiKeysTable() {
   const { t } = useTranslation()
   const { refreshTrigger } = useApiKeys()
   const [now, setNow] = useState(() => Date.now())
-  const [sorting, setSorting] = useState<SortingState>([])
+  const [sorting, setSorting] = usePersistedTableSorting(
+    API_KEYS_TABLE_STATE_STORAGE_KEY,
+    API_KEY_SORTABLE_COLUMNS
+  )
   const columns = useApiKeysColumns(now)
 
   useEffect(() => {
@@ -228,7 +235,7 @@ export function ApiKeysTable() {
     navigate: route.useNavigate(),
     pagination: {
       defaultPage: 1,
-      defaultPageSize: 20,
+      defaultPageSize: API_KEYS_DEFAULT_PAGE_SIZE,
       pageSizeStorageKey: 'api-keys:user:page-size',
     },
     globalFilter: { enabled: true, key: 'filter' },
@@ -248,6 +255,14 @@ export function ApiKeysTable() {
     onColumnFiltersChange,
   })
   const shouldSearch = Boolean(globalFilter?.trim() || tokenFilter.trim())
+  const statusFilter = Number(
+    (
+      columnFilters.find((filter) => filter.id === 'status')?.value as
+        | string[]
+        | undefined
+    )?.[0]
+  )
+  const status = Number.isInteger(statusFilter) ? statusFilter : undefined
   const sortParams = useMemo(() => {
     const activeSort = sorting[0]
     if (!activeSort) return {}
@@ -275,6 +290,7 @@ export function ApiKeysTable() {
       pagination.pageSize,
       globalFilter,
       tokenFilter,
+      status,
       sortParams,
       refreshTrigger,
     ],
@@ -285,11 +301,13 @@ export function ApiKeysTable() {
             token: tokenFilter,
             p: pagination.pageIndex + 1,
             size: pagination.pageSize,
+            status,
             ...sortParams,
           })
         : await getApiKeys({
             p: pagination.pageIndex + 1,
             size: pagination.pageSize,
+            status,
             ...sortParams,
           })
 
@@ -318,13 +336,17 @@ export function ApiKeysTable() {
   const { table } = useDataTable({
     data: apiKeys,
     columns,
-    tableStateStorageKey: 'api-keys:user',
+    tableStateStorageKey: API_KEYS_TABLE_STATE_STORAGE_KEY,
     enableRowSelection: true,
     columnFilters,
     columnVisibilityStorageKey: API_KEYS_COLUMN_VISIBILITY_STORAGE_KEY,
     globalFilter,
     pagination,
     sorting,
+    initialPagination: {
+      pageIndex: 0,
+      pageSize: API_KEYS_DEFAULT_PAGE_SIZE,
+    },
     globalFilterFn: () => true,
     onPaginationChange,
     onGlobalFilterChange,
@@ -333,6 +355,7 @@ export function ApiKeysTable() {
     manualPagination: true,
     manualSorting: true,
     totalCount: data?.total || 0,
+    getRowId: (row) => String(row.id),
     ensurePageInRange,
   })
 

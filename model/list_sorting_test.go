@@ -42,7 +42,7 @@ func TestPaginatedListSortingAppliesBeforeRowsAreLimited(t *testing.T) {
 		{Id: 1, UserId: 10, Key: "sort-token-alpha", Name: "alpha"},
 		{Id: 2, UserId: 10, Key: "sort-token-zeta", Name: "zeta"},
 	}).Error)
-	tokens, err := GetAllUserTokens(10, 0, 1, NewTokenSortOptions("name", "desc"))
+	tokens, _, err := GetAllUserTokens(10, 0, 1, 0, NewTokenSortOptions("name", "desc"))
 	require.NoError(t, err)
 	require.Len(t, tokens, 1)
 	assert.Equal(t, "zeta", tokens[0].Name)

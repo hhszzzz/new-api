@@ -40,6 +40,8 @@ import {
 } from '@tanstack/react-table'
 import * as React from 'react'
 
+import { isDataTablePageSize } from '../page-size'
+
 type DataTableFeatureOptions<TData> = Pick<
   TableOptions<TData>,
   | 'enableRowSelection'
@@ -51,6 +53,7 @@ type DataTableFeatureOptions<TData> = Pick<
   | 'manualPagination'
   | 'manualSorting'
   | 'enableSorting'
+  | 'enableMultiSort'
   | 'enableColumnResizing'
 >
 
@@ -120,6 +123,7 @@ type ColumnWithSizing<TData> = ColumnDef<TData, unknown> & {
 }
 
 const COLUMN_SIZING_PERSIST_DELAY_MS = 250
+const EMPTY_SORTING: SortingState = []
 
 function resolveUpdater<TValue>(
   updater: Updater<TValue>,
@@ -229,13 +233,14 @@ function readJsonStorage(storageKey: string | undefined): unknown {
 function readColumnOrder(
   storageKey: string | undefined,
   validColumnIds: string[]
-): ColumnOrderState {
+): ColumnOrderState | undefined {
   const parsed = readJsonStorage(storageKey)
-  if (!Array.isArray(parsed)) return validColumnIds
+  if (!Array.isArray(parsed)) return undefined
   const valid = new Set(validColumnIds)
   const restored = parsed.filter(
     (value): value is string => typeof value === 'string' && valid.has(value)
   )
+  if (restored.length === 0 && parsed.length > 0) return undefined
   const seen = new Set(restored)
   return [...restored, ...validColumnIds.filter((id) => !seen.has(id))]
 }
@@ -243,25 +248,65 @@ function readColumnOrder(
 function readSorting(
   storageKey: string | undefined,
   validColumnIds: Set<string>
-): SortingState {
+): SortingState | undefined {
   const parsed = readJsonStorage(storageKey)
-  if (!Array.isArray(parsed)) return []
-  return parsed.flatMap((value) => {
+  if (!Array.isArray(parsed)) return undefined
+  const restored = parsed.flatMap((value) => {
     if (!value || typeof value !== 'object') return []
     const item = value as { id?: unknown; desc?: unknown }
     if (typeof item.id !== 'string' || !validColumnIds.has(item.id)) return []
     return [{ id: item.id, desc: item.desc === true }]
   })
+  return restored.length > 0 || parsed.length === 0 ? restored : undefined
+}
+
+export function usePersistedTableSorting(
+  tableStateStorageKey: string,
+  validColumnIds: ReadonlySet<string>,
+  initialSorting: SortingState = EMPTY_SORTING
+): [SortingState, React.Dispatch<React.SetStateAction<SortingState>>] {
+  const restoredSorting = React.useMemo(() => {
+    const restored = readSorting(
+      `${tableStateStorageKey}:sorting`,
+      new Set(validColumnIds)
+    )
+    return restored ?? initialSorting
+  }, [initialSorting, tableStateStorageKey, validColumnIds])
+  const [sortingByTable, setSortingByTable] = React.useState<
+    Record<string, SortingState>
+  >({})
+  const sorting = sortingByTable[tableStateStorageKey] ?? restoredSorting
+  const setSorting = React.useCallback<
+    React.Dispatch<React.SetStateAction<SortingState>>
+  >(
+    (updater) => {
+      setSortingByTable((current) => {
+        const previous = current[tableStateStorageKey] ?? restoredSorting
+        const next = resolveUpdater(updater, previous)
+        return { ...current, [tableStateStorageKey]: next }
+      })
+    },
+    [restoredSorting, tableStateStorageKey]
+  )
+
+  return [sorting, setSorting]
 }
 
 function readPageSize(storageKey: string | undefined): number | undefined {
   if (!storageKey || typeof window === 'undefined') return undefined
   try {
     const value = Number(window.localStorage.getItem(storageKey))
-    return Number.isInteger(value) && value > 0 ? value : undefined
+    return isDataTablePageSize(value) ? value : undefined
   } catch {
     return undefined
   }
+}
+
+export function getInitialTablePageSize(
+  tableStateStorageKey: string,
+  fallback: number
+): number {
+  return readPageSize(`${tableStateStorageKey}:page-size`) ?? fallback
 }
 
 function resolveStorageKey(
@@ -426,7 +471,7 @@ export function useDataTable<TData>(options: UseDataTableOptions<TData>) {
   )
   const resolvedInitialSorting = React.useMemo(() => {
     const restored = readSorting(sortingStorageKey, validColumnIds)
-    return restored.length > 0 ? restored : initialSorting
+    return restored ?? initialSorting
   }, [initialSorting, sortingStorageKey, validColumnIds])
   const resolvedInitialColumnVisibility = React.useMemo(
     () => ({
@@ -455,12 +500,18 @@ export function useDataTable<TData>(options: UseDataTableOptions<TData>) {
       validColumnIds,
     ]
   )
-  const resolvedInitialColumnOrder = React.useMemo(() => {
-    const defaultOrder =
+  const defaultColumnOrder = React.useMemo(() => {
+    const configuredOrder =
       initialColumnOrder.length > 0 ? initialColumnOrder : leafColumnIds
+    const valid = new Set(leafColumnIds)
+    const restored = configuredOrder.filter((id) => valid.has(id))
+    const seen = new Set(restored)
+    return [...restored, ...leafColumnIds.filter((id) => !seen.has(id))]
+  }, [initialColumnOrder, leafColumnIds])
+  const resolvedInitialColumnOrder = React.useMemo(() => {
     const restored = readColumnOrder(columnOrderStorageKey, leafColumnIds)
-    return columnOrderStorageKey ? restored : defaultOrder
-  }, [columnOrderStorageKey, initialColumnOrder, leafColumnIds])
+    return restored ?? defaultColumnOrder
+  }, [columnOrderStorageKey, defaultColumnOrder, leafColumnIds])
   const resolvedInitialPagination = React.useMemo(
     () => ({
       ...initialPagination,
@@ -500,13 +551,9 @@ export function useDataTable<TData>(options: UseDataTableOptions<TData>) {
     undefined
   )
   const skipNextColumnOrderPersistRef = React.useRef(false)
-  const hydratedSortingStorageKeyRef = React.useRef<string | undefined>(
-    undefined
-  )
+  const hydratedSortingStorageKeyRef = React.useRef(sortingStorageKey)
   const skipNextSortingPersistRef = React.useRef(false)
-  const hydratedPageSizeStorageKeyRef = React.useRef<string | undefined>(
-    undefined
-  )
+  const hydratedPageSizeStorageKeyRef = React.useRef(pageSizeStorageKey)
   const skipNextPageSizePersistRef = React.useRef(false)
   const columnSizingPersistTimerRef = React.useRef<number | undefined>(
     undefined
@@ -563,6 +610,7 @@ export function useDataTable<TData>(options: UseDataTableOptions<TData>) {
     },
     enableRowSelection: options.enableRowSelection,
     enableSorting: resolvedEnableSorting,
+    enableMultiSort: options.enableMultiSort ?? !manualSorting,
     getRowId: options.getRowId,
     getSubRows: options.getSubRows,
     globalFilterFn: options.globalFilterFn,
@@ -591,12 +639,17 @@ export function useDataTable<TData>(options: UseDataTableOptions<TData>) {
             sortingStorageKey,
             pageSizeStorageKey,
           ]) {
-            if (key) window.localStorage.removeItem(key)
+            if (!key) continue
+            try {
+              window.localStorage.removeItem(key)
+            } catch {
+              // Storage can be unavailable; resetting the live table must still work.
+            }
           }
         }
         onColumnVisibilityChange(() => initialColumnVisibility)
         onColumnSizingChange(() => initialColumnSizing)
-        onColumnOrderChange(() => initialColumnOrder)
+        onColumnOrderChange(() => defaultColumnOrder)
         onSortingChange(() => initialSorting)
         onPaginationChange(() => ({ ...initialPagination, pageIndex: 0 }))
       },
@@ -679,8 +732,7 @@ export function useDataTable<TData>(options: UseDataTableOptions<TData>) {
 
   React.useEffect(() => {
     if (
-      options.sorting === undefined ||
-      !sortingStorageKey ||
+      options.sorting !== undefined ||
       sortingStorageKey === hydratedSortingStorageKeyRef.current
     ) {
       return
@@ -697,22 +749,19 @@ export function useDataTable<TData>(options: UseDataTableOptions<TData>) {
 
   React.useEffect(() => {
     if (
-      options.pagination === undefined ||
-      !pageSizeStorageKey ||
+      options.pagination !== undefined ||
       pageSizeStorageKey === hydratedPageSizeStorageKeyRef.current
     ) {
       return
     }
     hydratedPageSizeStorageKeyRef.current = pageSizeStorageKey
-    const storedPageSize = readPageSize(pageSizeStorageKey)
-    if (!storedPageSize || storedPageSize === pagination.pageSize) return
     skipNextPageSizePersistRef.current = true
-    onPaginationChange(() => ({ pageIndex: 0, pageSize: storedPageSize }))
+    onPaginationChange(() => resolvedInitialPagination)
   }, [
     onPaginationChange,
     options.pagination,
     pageSizeStorageKey,
-    pagination.pageSize,
+    resolvedInitialPagination,
   ])
 
   React.useEffect(() => {
@@ -801,6 +850,7 @@ export function useDataTable<TData>(options: UseDataTableOptions<TData>) {
       skipNextPageSizePersistRef.current = false
       return
     }
+    if (!isDataTablePageSize(pagination.pageSize)) return
     try {
       window.localStorage.setItem(
         pageSizeStorageKey,
