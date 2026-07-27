@@ -21,6 +21,26 @@ export type HeaderNavAccessConfig = {
   requireAuth: boolean
 }
 
+export type HeaderNavCustomItemConfig = {
+  id: string
+  title: string
+  url: string
+  enabled: boolean
+}
+
+export const HEADER_NAV_BUILT_IN_KEYS = [
+  'home',
+  'console',
+  'pricing',
+  'modelStatus',
+  'modelRadar',
+  'rankings',
+  'docs',
+  'about',
+] as const
+
+export const HEADER_NAV_DEFAULT_ORDER: string[] = [...HEADER_NAV_BUILT_IN_KEYS]
+
 export type HeaderNavModulesConfig = {
   home: boolean
   console: boolean
@@ -30,7 +50,13 @@ export type HeaderNavModulesConfig = {
   rankings: HeaderNavAccessConfig
   docs: boolean
   about: boolean
-  [key: string]: boolean | HeaderNavAccessConfig
+  custom: HeaderNavCustomItemConfig[]
+  order: string[]
+  [key: string]:
+    | boolean
+    | HeaderNavAccessConfig
+    | HeaderNavCustomItemConfig[]
+    | string[]
 }
 
 export type SidebarSectionConfig = {
@@ -61,6 +87,8 @@ export const HEADER_NAV_DEFAULT: HeaderNavModulesConfig = {
   },
   docs: true,
   about: true,
+  custom: [],
+  order: HEADER_NAV_DEFAULT_ORDER,
 }
 
 export const SIDEBAR_MODULES_DEFAULT: SidebarModulesAdminConfig = {
@@ -114,7 +142,59 @@ const cloneHeaderNavDefault = (): HeaderNavModulesConfig => ({
   modelStatus: { ...HEADER_NAV_DEFAULT.modelStatus },
   modelRadar: { ...HEADER_NAV_DEFAULT.modelRadar },
   rankings: { ...HEADER_NAV_DEFAULT.rankings },
+  custom: [],
+  order: [...HEADER_NAV_DEFAULT_ORDER],
 })
+
+export function getCustomHeaderNavOrderKey(id: string): string {
+  return `custom:${id}`
+}
+
+function parseCustomHeaderNavItems(raw: unknown): HeaderNavCustomItemConfig[] {
+  if (!Array.isArray(raw)) return []
+
+  const seenIds = new Set<string>()
+  return raw.slice(0, 20).flatMap((value) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return []
+
+    const item = value as Record<string, unknown>
+    const id = typeof item.id === 'string' ? item.id.trim() : ''
+    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(id) || seenIds.has(id)) return []
+
+    seenIds.add(id)
+    return [
+      {
+        id,
+        title: typeof item.title === 'string' ? item.title : '',
+        url: typeof item.url === 'string' ? item.url : '',
+        enabled: toBoolean(item.enabled, true),
+      },
+    ]
+  })
+}
+
+function normalizeHeaderNavOrder(
+  raw: unknown,
+  customItems: HeaderNavCustomItemConfig[]
+): string[] {
+  const customKeys = customItems.map((item) =>
+    getCustomHeaderNavOrderKey(item.id)
+  )
+  const fallback = [...HEADER_NAV_DEFAULT_ORDER, ...customKeys]
+  if (!Array.isArray(raw)) return fallback
+
+  const allowed = new Set(fallback)
+  const seen = new Set<string>()
+  const restored = raw.flatMap((value) => {
+    if (typeof value !== 'string' || !allowed.has(value) || seen.has(value)) {
+      return []
+    }
+    seen.add(value)
+    return [value]
+  })
+
+  return [...restored, ...fallback.filter((key) => !seen.has(key))]
+}
 
 const parseAccessModule = (
   raw: unknown,
@@ -170,6 +250,8 @@ export function parseHeaderNavModules(
     result.modelStatus = parseAccessModule(parsed.modelStatus, result.pricing)
     result.modelRadar = parseAccessModule(parsed.modelRadar, result.modelStatus)
     result.rankings = parseAccessModule(parsed.rankings, result.rankings)
+    result.custom = parseCustomHeaderNavItems(parsed.custom)
+    result.order = normalizeHeaderNavOrder(parsed.order, result.custom)
 
     Object.entries(parsed).forEach(([key, raw]) => {
       if (

@@ -17,14 +17,35 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { getStatus } from '@/lib/api'
+import { isHttpUrl } from '@/lib/content-format'
 
 export type ModuleAccess = { enabled: boolean; requireAuth: boolean }
+
+export type CustomHeaderNavItem = {
+  id: string
+  title: string
+  url: string
+  enabled: boolean
+}
 
 export type HeaderNavModule =
   | 'rankings'
   | 'pricing'
   | 'modelStatus'
   | 'modelRadar'
+
+export const HEADER_NAV_BUILT_IN_KEYS = [
+  'home',
+  'console',
+  'pricing',
+  'modelStatus',
+  'modelRadar',
+  'rankings',
+  'docs',
+  'about',
+] as const
+
+export const DEFAULT_HEADER_NAV_ORDER: string[] = [...HEADER_NAV_BUILT_IN_KEYS]
 
 export type HeaderNavModules = {
   home: boolean
@@ -35,7 +56,9 @@ export type HeaderNavModules = {
   rankings: ModuleAccess
   docs: boolean
   about: boolean
-  [key: string]: boolean | ModuleAccess
+  custom: CustomHeaderNavItem[]
+  order: string[]
+  [key: string]: boolean | ModuleAccess | CustomHeaderNavItem[] | string[]
 }
 
 const DEFAULT_HEADER_NAV_MODULES: HeaderNavModules = {
@@ -47,6 +70,8 @@ const DEFAULT_HEADER_NAV_MODULES: HeaderNavModules = {
   rankings: { enabled: true, requireAuth: false },
   docs: true,
   about: true,
+  custom: [],
+  order: DEFAULT_HEADER_NAV_ORDER,
 }
 
 const DEFAULTS: Record<HeaderNavModule, ModuleAccess> = {
@@ -63,7 +88,17 @@ function cloneHeaderNavDefaults(): HeaderNavModules {
     modelStatus: { ...DEFAULT_HEADER_NAV_MODULES.modelStatus },
     modelRadar: { ...DEFAULT_HEADER_NAV_MODULES.modelRadar },
     rankings: { ...DEFAULT_HEADER_NAV_MODULES.rankings },
+    custom: [],
+    order: [...DEFAULT_HEADER_NAV_ORDER],
   }
+}
+
+export function getCustomHeaderNavOrderKey(id: string): string {
+  return `custom:${id}`
+}
+
+export function getCustomHeaderNavPath(id: string): string {
+  return `/custom/${encodeURIComponent(id)}`
 }
 
 export function parseHeaderNavBoolean(
@@ -107,13 +142,72 @@ function parseAccess(raw: unknown, fallback: ModuleAccess): ModuleAccess {
 
 function parseHeaderNavRecord(raw: unknown): Record<string, unknown> | null {
   if (!raw || String(raw).trim() === '') return null
-  if (raw && typeof raw === 'object') return raw as Record<string, unknown>
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    return raw as Record<string, unknown>
+  }
 
   try {
     return JSON.parse(String(raw)) as Record<string, unknown>
   } catch {
     return null
   }
+}
+
+function parseCustomHeaderNavItems(raw: unknown): CustomHeaderNavItem[] {
+  if (!Array.isArray(raw)) return []
+
+  const seenIds = new Set<string>()
+  return raw.slice(0, 20).flatMap((value) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return []
+
+    const item = value as Record<string, unknown>
+    const id = typeof item.id === 'string' ? item.id.trim() : ''
+    const title = typeof item.title === 'string' ? item.title.trim() : ''
+    const url = typeof item.url === 'string' ? item.url.trim() : ''
+    if (
+      !/^[a-zA-Z0-9_-]{1,64}$/.test(id) ||
+      seenIds.has(id) ||
+      title.length === 0 ||
+      [...title].length > 40 ||
+      url.length > 2048 ||
+      !isHttpUrl(url)
+    ) {
+      return []
+    }
+
+    seenIds.add(id)
+    return [
+      {
+        id,
+        title,
+        url,
+        enabled: parseHeaderNavBoolean(item.enabled, true),
+      },
+    ]
+  })
+}
+
+function normalizeHeaderNavOrder(
+  raw: unknown,
+  customItems: CustomHeaderNavItem[]
+): string[] {
+  const customKeys = customItems.map((item) =>
+    getCustomHeaderNavOrderKey(item.id)
+  )
+  const fallback = [...DEFAULT_HEADER_NAV_ORDER, ...customKeys]
+  if (!Array.isArray(raw)) return fallback
+
+  const allowed = new Set(fallback)
+  const seen = new Set<string>()
+  const restored = raw.flatMap((value) => {
+    if (typeof value !== 'string' || !allowed.has(value) || seen.has(value)) {
+      return []
+    }
+    seen.add(value)
+    return [value]
+  })
+
+  return [...restored, ...fallback.filter((key) => !seen.has(key))]
 }
 
 export function parseHeaderNavModules(raw: unknown): HeaderNavModules {
@@ -125,6 +219,8 @@ export function parseHeaderNavModules(raw: unknown): HeaderNavModules {
   result.modelStatus = parseAccess(parsed.modelStatus, result.pricing)
   result.modelRadar = parseAccess(parsed.modelRadar, result.modelStatus)
   result.rankings = parseAccess(parsed.rankings, result.rankings)
+  result.custom = parseCustomHeaderNavItems(parsed.custom)
+  result.order = normalizeHeaderNavOrder(parsed.order, result.custom)
 
   Object.entries(parsed).forEach(([key, value]) => {
     if (
@@ -157,6 +253,16 @@ export function parseHeaderNavModulesFromStatus(
   status: Record<string, unknown> | null
 ): HeaderNavModules {
   return parseHeaderNavModules(status?.HeaderNavModules)
+}
+
+export function getCustomHeaderNavItemFromStatus(
+  status: Record<string, unknown> | null,
+  id: string
+): CustomHeaderNavItem | null {
+  const item = parseHeaderNavModulesFromStatus(status).custom.find(
+    (candidate) => candidate.enabled && candidate.id === id
+  )
+  return item ? { ...item } : null
 }
 
 function getCachedStatus(): Record<string, unknown> | null {
@@ -199,6 +305,18 @@ export async function getFreshModuleAccess(
     return getModuleAccessFromStatus(status, module)
   } catch {
     return { enabled: false, requireAuth: true }
+  }
+}
+
+export async function getFreshCustomHeaderNavItem(
+  id: string
+): Promise<CustomHeaderNavItem | null> {
+  try {
+    const status = (await getStatus()) as Record<string, unknown> | null
+    cacheStatus(status)
+    return getCustomHeaderNavItemFromStatus(status, id)
+  } catch {
+    return null
   }
 }
 

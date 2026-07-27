@@ -20,6 +20,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Construction } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
+import { EmbeddedPage } from '@/components/embedded-page'
 import { PublicLayout } from '@/components/layout'
 import { RichContent } from '@/components/rich-content'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -148,11 +149,10 @@ export function About() {
   if (isUrl) {
     return (
       <PublicLayout showMainContainer={false}>
-        <iframe
+        <EmbeddedPage
           src={rawContent}
           className='h-[calc(100vh-3.5rem)] w-full border-0'
           title={t('About')}
-          sandbox='allow-forms allow-popups allow-popups-to-escape-sandbox allow-scripts'
         />
       </PublicLayout>
     )

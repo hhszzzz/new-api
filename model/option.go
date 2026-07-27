@@ -869,6 +869,8 @@ func validateLegacyOptionUpdate(key, value string) error {
 	case "PayMethods":
 		var candidate []map[string]string
 		return common.UnmarshalJsonStr(value, &candidate)
+	case "HeaderNavModules":
+		return setting.ValidateHeaderNavModules(value)
 	default:
 		return nil
 	}

@@ -136,4 +136,39 @@ describe('top navigation model status link', () => {
       }
     )
   })
+
+  test('places custom iframe navigation at its configured position', () => {
+    useStatusMock.mockReturnValue({
+      status: {
+        HeaderNavModules: JSON.stringify({
+          home: false,
+          console: false,
+          pricing: false,
+          modelStatus: false,
+          modelRadar: false,
+          rankings: false,
+          docs: false,
+          about: false,
+          custom: [
+            {
+              id: 'portal',
+              title: 'Team Portal',
+              url: 'https://portal.example.com',
+              enabled: true,
+            },
+          ],
+          order: ['custom:portal', 'home'],
+        }),
+      },
+    })
+
+    const { result } = renderHook(() => useTopNavLinks())
+
+    expect(result.current).toEqual([
+      {
+        title: 'Team Portal',
+        href: '/custom/portal',
+      },
+    ])
+  })
 })

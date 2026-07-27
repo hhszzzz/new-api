@@ -121,4 +121,59 @@ describe('header navigation settings form', () => {
 
     actionsContainer.remove()
   })
+
+  test('adds an iframe navigation item and saves its custom position', async () => {
+    mutateAsyncMock.mockResolvedValue({ success: true })
+    const user = userEvent.setup()
+    const actionsContainer = document.createElement('div')
+    document.body.appendChild(actionsContainer)
+
+    render(
+      <SettingsPageProvider
+        actionsContainer={actionsContainer}
+        suppressSectionHeader={false}
+      >
+        <HeaderNavigationSection
+          config={HEADER_NAV_DEFAULT}
+          initialSerialized={serializeHeaderNavModules(HEADER_NAV_DEFAULT)}
+        />
+      </SettingsPageProvider>
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Add navigation' }))
+    await user.type(
+      screen.getByRole('textbox', { name: 'Navigation name' }),
+      'Team Portal'
+    )
+    await user.type(
+      screen.getByRole('textbox', { name: 'Embedded URL' }),
+      'https://portal.example.com/app'
+    )
+    const moveEarlierButtons = screen.getAllByRole('button', {
+      name: 'Move navigation earlier',
+    })
+    const customMoveEarlierButton = moveEarlierButtons.at(-1)
+    if (!customMoveEarlierButton) {
+      throw new Error('Custom navigation reorder button was not rendered')
+    }
+    await user.click(customMoveEarlierButton)
+    await user.click(screen.getByRole('button', { name: 'Save navigation' }))
+
+    await waitFor(() => expect(mutateAsyncMock).toHaveBeenCalled())
+    const request = mutateAsyncMock.mock.calls.at(-1)?.[0] as {
+      value: string
+    }
+    const saved = JSON.parse(request.value) as typeof HEADER_NAV_DEFAULT
+    expect(saved.custom).toEqual([
+      expect.objectContaining({
+        title: 'Team Portal',
+        url: 'https://portal.example.com/app',
+        enabled: true,
+      }),
+    ])
+    expect(saved.order.at(-2)).toBe(`custom:${saved.custom[0]?.id}`)
+    expect(saved.order.at(-1)).toBe('about')
+
+    actionsContainer.remove()
+  })
 })

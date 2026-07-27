@@ -249,3 +249,28 @@ func TestUpdateOptionRejectsInvalidQuotaPerUnitBeforePersistence(t *testing.T) {
 		assert.Equal(t, valid, published)
 	}
 }
+
+func TestUpdateOptionRejectsInvalidHeaderNavigationBeforePersistence(t *testing.T) {
+	db := useFrontendOptionMigrationDB(t)
+	common.OptionMapRWMutex.Lock()
+	previousOptionMap := common.OptionMap
+	common.OptionMap = map[string]string{}
+	common.OptionMapRWMutex.Unlock()
+	t.Cleanup(func() {
+		common.OptionMapRWMutex.Lock()
+		common.OptionMap = previousOptionMap
+		common.OptionMapRWMutex.Unlock()
+	})
+
+	const valid = `{"custom":[{"id":"portal","title":"Portal","url":"https://portal.example.com","enabled":true}],"order":["home","custom:portal"]}`
+	require.NoError(t, UpdateOption("HeaderNavModules", valid))
+
+	invalid := `{"custom":[{"id":"portal","title":"Portal","url":"javascript:alert(1)","enabled":true}]}`
+	require.Error(t, UpdateOption("HeaderNavModules", invalid))
+
+	assert.JSONEq(t, valid, requireOptionValue(t, db, "HeaderNavModules"))
+	common.OptionMapRWMutex.RLock()
+	published := common.OptionMap["HeaderNavModules"]
+	common.OptionMapRWMutex.RUnlock()
+	assert.JSONEq(t, valid, published)
+}

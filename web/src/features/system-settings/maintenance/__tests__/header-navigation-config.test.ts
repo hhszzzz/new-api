@@ -138,4 +138,38 @@ describe('header navigation model status configuration', () => {
       requireAuth: true,
     })
   })
+
+  test('preserves custom navigation and its position when parsing and serializing', () => {
+    const config = parseHeaderNavModules(
+      JSON.stringify({
+        custom: [
+          {
+            id: 'portal',
+            title: 'Team Portal',
+            url: 'https://portal.example.com',
+            enabled: true,
+          },
+        ],
+        order: ['home', 'custom:portal', 'console'],
+      })
+    )
+
+    assert.deepEqual(config.custom, [
+      {
+        id: 'portal',
+        title: 'Team Portal',
+        url: 'https://portal.example.com',
+        enabled: true,
+      },
+    ])
+    assert.deepEqual(config.order.slice(0, 3), [
+      'home',
+      'custom:portal',
+      'console',
+    ])
+    assert.deepEqual(
+      JSON.parse(serializeHeaderNavModules(config)).custom,
+      config.custom
+    )
+  })
 })

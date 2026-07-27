@@ -29,6 +29,7 @@ import { Route as errors503RouteImport } from './routes/(errors)/503'
 import { Route as AuthenticatedChat2linkRouteImport } from './routes/_authenticated/chat2link'
 import { Route as AuthenticatedSystemSettingsRouteRouteImport } from './routes/_authenticated/system-settings/route'
 import { Route as AboutIndexRouteImport } from './routes/about/index'
+import { Route as CustomNavIdRouteImport } from './routes/custom/$navId'
 import { Route as ModelRadarIndexRouteImport } from './routes/model-radar/index'
 import { Route as ModelStatusIndexRouteImport } from './routes/model-status/index'
 import { Route as OauthProviderRouteImport } from './routes/oauth/$provider'
@@ -167,6 +168,11 @@ const AuthenticatedSystemSettingsRouteRoute =
 const AboutIndexRoute = AboutIndexRouteImport.update({
   id: '/about/',
   path: '/about/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CustomNavIdRoute = CustomNavIdRouteImport.update({
+  id: '/custom/$navId',
+  path: '/custom/$navId',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ModelRadarIndexRoute = ModelRadarIndexRouteImport.update({
@@ -417,6 +423,7 @@ export interface FileRoutesByFullPath {
   '/500': typeof errors500Route
   '/503': typeof errors503Route
   '/chat2link': typeof AuthenticatedChat2linkRoute
+  '/custom/$navId': typeof CustomNavIdRoute
   '/oauth/$provider': typeof OauthProviderRoute
   '/about/': typeof AboutIndexRoute
   '/model-radar/': typeof ModelRadarIndexRoute
@@ -476,6 +483,7 @@ export interface FileRoutesByTo {
   '/500': typeof errors500Route
   '/503': typeof errors503Route
   '/chat2link': typeof AuthenticatedChat2linkRoute
+  '/custom/$navId': typeof CustomNavIdRoute
   '/oauth/$provider': typeof OauthProviderRoute
   '/about': typeof AboutIndexRoute
   '/model-radar': typeof ModelRadarIndexRoute
@@ -539,6 +547,7 @@ export interface FileRoutesById {
   '/(errors)/500': typeof errors500Route
   '/(errors)/503': typeof errors503Route
   '/_authenticated/chat2link': typeof AuthenticatedChat2linkRoute
+  '/custom/$navId': typeof CustomNavIdRoute
   '/oauth/$provider': typeof OauthProviderRoute
   '/about/': typeof AboutIndexRoute
   '/model-radar/': typeof ModelRadarIndexRoute
@@ -601,6 +610,7 @@ export interface FileRouteTypes {
     | '/500'
     | '/503'
     | '/chat2link'
+    | '/custom/$navId'
     | '/oauth/$provider'
     | '/about/'
     | '/model-radar/'
@@ -660,6 +670,7 @@ export interface FileRouteTypes {
     | '/500'
     | '/503'
     | '/chat2link'
+    | '/custom/$navId'
     | '/oauth/$provider'
     | '/about'
     | '/model-radar'
@@ -722,6 +733,7 @@ export interface FileRouteTypes {
     | '/(errors)/500'
     | '/(errors)/503'
     | '/_authenticated/chat2link'
+    | '/custom/$navId'
     | '/oauth/$provider'
     | '/about/'
     | '/model-radar/'
@@ -776,6 +788,7 @@ export interface RootRouteChildren {
   errors404Route: typeof errors404Route
   errors500Route: typeof errors500Route
   errors503Route: typeof errors503Route
+  CustomNavIdRoute: typeof CustomNavIdRoute
   OauthProviderRoute: typeof OauthProviderRoute
   AboutIndexRoute: typeof AboutIndexRoute
   ModelRadarIndexRoute: typeof ModelRadarIndexRoute
@@ -926,6 +939,13 @@ declare module '@tanstack/react-router' {
       path: '/about'
       fullPath: '/about/'
       preLoaderRoute: typeof AboutIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/custom/$navId': {
+      id: '/custom/$navId'
+      path: '/custom/$navId'
+      fullPath: '/custom/$navId'
+      preLoaderRoute: typeof CustomNavIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/model-radar/': {
@@ -1354,6 +1374,7 @@ const rootRouteChildren: RootRouteChildren = {
   errors404Route: errors404Route,
   errors500Route: errors500Route,
   errors503Route: errors503Route,
+  CustomNavIdRoute: CustomNavIdRoute,
   OauthProviderRoute: OauthProviderRoute,
   AboutIndexRoute: AboutIndexRoute,
   ModelRadarIndexRoute: ModelRadarIndexRoute,

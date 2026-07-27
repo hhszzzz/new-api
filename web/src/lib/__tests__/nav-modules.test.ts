@@ -24,8 +24,11 @@ vi.mock('@/lib/api', () => ({
   getStatus: async () => null,
 }))
 
-const { getModuleAccessFromStatus, parseHeaderNavModules } =
-  await import('../nav-modules.ts')
+const {
+  getCustomHeaderNavItemFromStatus,
+  getModuleAccessFromStatus,
+  parseHeaderNavModules,
+} = await import('../nav-modules.ts')
 
 describe('runtime header navigation model status configuration', () => {
   test('defaults model status to enabled and public when no navigation configuration exists', () => {
@@ -132,5 +135,68 @@ describe('runtime header navigation model status configuration', () => {
       enabled: true,
       requireAuth: false,
     })
+  })
+
+  test('parses custom iframe links and restores a complete navigation order', () => {
+    const config = parseHeaderNavModules(
+      JSON.stringify({
+        custom: [
+          {
+            id: 'docs-hub',
+            title: ' Docs Hub ',
+            url: ' https://docs.example.com/app ',
+            enabled: true,
+          },
+          {
+            id: 'unsafe',
+            title: 'Unsafe',
+            url: 'javascript:alert(1)',
+            enabled: true,
+          },
+        ],
+        order: ['custom:docs-hub', 'home', 'custom:missing'],
+      })
+    )
+
+    assert.deepEqual(config.custom, [
+      {
+        id: 'docs-hub',
+        title: 'Docs Hub',
+        url: 'https://docs.example.com/app',
+        enabled: true,
+      },
+    ])
+    assert.deepEqual(config.order.slice(0, 3), [
+      'custom:docs-hub',
+      'home',
+      'console',
+    ])
+  })
+
+  test('resolves only enabled custom navigation from public status', () => {
+    const status = {
+      HeaderNavModules: JSON.stringify({
+        custom: [
+          {
+            id: 'portal',
+            title: 'Portal',
+            url: 'https://portal.example.com',
+            enabled: true,
+          },
+          {
+            id: 'disabled',
+            title: 'Disabled',
+            url: 'https://disabled.example.com',
+            enabled: false,
+          },
+        ],
+      }),
+    }
+
+    assert.equal(
+      getCustomHeaderNavItemFromStatus(status, 'portal')?.title,
+      'Portal'
+    )
+    assert.equal(getCustomHeaderNavItemFromStatus(status, 'disabled'), null)
   })
 })

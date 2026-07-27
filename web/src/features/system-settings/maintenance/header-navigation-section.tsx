@@ -20,7 +20,6 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { useEffect, useMemo } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
-import * as z from 'zod'
 
 import {
   Form,
@@ -47,23 +46,12 @@ import {
   type HeaderNavModulesConfig,
   serializeHeaderNavModules,
 } from './config'
-
-const headerNavSchema = z.object({
-  home: z.boolean(),
-  console: z.boolean(),
-  pricingEnabled: z.boolean(),
-  pricingRequireAuth: z.boolean(),
-  modelStatusEnabled: z.boolean(),
-  modelStatusRequireAuth: z.boolean(),
-  modelRadarEnabled: z.boolean(),
-  modelRadarRequireAuth: z.boolean(),
-  rankingsEnabled: z.boolean(),
-  rankingsRequireAuth: z.boolean(),
-  docs: z.boolean(),
-  about: z.boolean(),
-})
-
-type HeaderNavFormValues = z.infer<typeof headerNavSchema>
+import { HeaderNavigationCustomEditor } from './header-navigation-custom-editor'
+import {
+  headerNavSchema,
+  type HeaderNavBooleanField,
+  type HeaderNavFormValues,
+} from './header-navigation-form'
 
 type HeaderNavigationSectionProps = {
   config: HeaderNavModulesConfig
@@ -115,6 +103,8 @@ const toFormValues = (config: HeaderNavModulesConfig): HeaderNavFormValues => ({
     config.about === undefined
       ? HEADER_NAV_DEFAULT.about
       : Boolean(config.about),
+  custom: config.custom.map((item) => ({ ...item })),
+  order: [...config.order],
 })
 
 export function HeaderNavigationSection({
@@ -161,6 +151,12 @@ export function HeaderNavigationSection({
         enabled: values.rankingsEnabled,
         requireAuth: values.rankingsRequireAuth,
       },
+      custom: values.custom.map((item) => ({
+        ...item,
+        title: item.title.trim(),
+        url: item.url.trim(),
+      })),
+      order: values.order,
     }
 
     const serialized = serializeHeaderNavModules(payload)
@@ -179,7 +175,7 @@ export function HeaderNavigationSection({
   }
 
   const simpleModules: Array<{
-    key: keyof HeaderNavFormValues
+    key: HeaderNavBooleanField
     title: string
     description: string
   }> = [
@@ -206,8 +202,8 @@ export function HeaderNavigationSection({
   ]
 
   const accessModules: Array<{
-    enabledKey: keyof HeaderNavFormValues
-    requireAuthKey: keyof HeaderNavFormValues
+    enabledKey: HeaderNavBooleanField
+    requireAuthKey: HeaderNavBooleanField
     requireAuthDependsOn:
       | 'pricingEnabled'
       | 'modelStatusEnabled'
@@ -350,6 +346,8 @@ export function HeaderNavigationSection({
               </SettingsControlGroup>
             ))}
           </div>
+
+          <HeaderNavigationCustomEditor form={form} />
         </SettingsForm>
       </Form>
     </SettingsSection>

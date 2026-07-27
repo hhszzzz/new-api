@@ -20,7 +20,11 @@ import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { useStatus } from '@/hooks/use-status'
-import { parseHeaderNavModulesFromStatus } from '@/lib/nav-modules'
+import {
+  getCustomHeaderNavOrderKey,
+  getCustomHeaderNavPath,
+  parseHeaderNavModulesFromStatus,
+} from '@/lib/nav-modules'
 import { useAuthStore } from '@/stores/auth-store'
 
 export type TopNavLink = {
@@ -62,30 +66,34 @@ export function useTopNavLinks(): TopNavLink[] {
 
   const isAuthed = !!auth?.user
 
-  const links: TopNavLink[] = []
+  const linksByKey = new Map<string, TopNavLink>()
 
   // Home
   if (modules?.home !== false) {
-    links.push({ title: t('Home'), href: '/' })
+    linksByKey.set('home', { title: t('Home'), href: '/' })
   }
 
   // Console -> /dashboard (new console path)
   if (modules?.console !== false) {
-    links.push({ title: t('Console'), href: '/dashboard' })
+    linksByKey.set('console', { title: t('Console'), href: '/dashboard' })
   }
 
   // Pricing
   const pricing = modules?.pricing
   if (pricing && typeof pricing === 'object' && pricing.enabled) {
     const requiresAuth = pricing.requireAuth && !isAuthed
-    links.push({ title: t('Model Square'), href: '/pricing', requiresAuth })
+    linksByKey.set('pricing', {
+      title: t('Model Square'),
+      href: '/pricing',
+      requiresAuth,
+    })
   }
 
   // Model status
   const modelStatus = modules?.modelStatus
   if (modelStatus && typeof modelStatus === 'object' && modelStatus.enabled) {
     const requiresAuth = modelStatus.requireAuth && !isAuthed
-    links.push({
+    linksByKey.set('modelStatus', {
       title: t('Model Status'),
       href: '/model-status',
       requiresAuth,
@@ -96,7 +104,7 @@ export function useTopNavLinks(): TopNavLink[] {
   const modelRadar = modules?.modelRadar
   if (modelRadar && typeof modelRadar === 'object' && modelRadar.enabled) {
     const requiresAuth = modelRadar.requireAuth && !isAuthed
-    links.push({
+    linksByKey.set('modelRadar', {
       title: t('Model Radar'),
       href: '/model-radar',
       requiresAuth,
@@ -107,22 +115,41 @@ export function useTopNavLinks(): TopNavLink[] {
   const rankings = modules?.rankings
   if (rankings && typeof rankings === 'object' && rankings.enabled) {
     const requiresAuth = rankings.requireAuth && !isAuthed
-    links.push({ title: t('Rankings'), href: '/rankings', requiresAuth })
+    linksByKey.set('rankings', {
+      title: t('Rankings'),
+      href: '/rankings',
+      requiresAuth,
+    })
   }
 
   // Docs (supports external links)
   if (modules?.docs !== false) {
     if (docsLink) {
-      links.push({ title: t('Docs'), href: docsLink, external: true })
+      linksByKey.set('docs', {
+        title: t('Docs'),
+        href: docsLink,
+        external: true,
+      })
     } else {
-      links.push({ title: t('Docs'), href: '/docs' })
+      linksByKey.set('docs', { title: t('Docs'), href: '/docs' })
     }
   }
 
   // About
   if (modules?.about !== false) {
-    links.push({ title: t('About'), href: '/about' })
+    linksByKey.set('about', { title: t('About'), href: '/about' })
   }
 
-  return links
+  for (const item of modules.custom) {
+    if (!item.enabled) continue
+    linksByKey.set(getCustomHeaderNavOrderKey(item.id), {
+      title: item.title,
+      href: getCustomHeaderNavPath(item.id),
+    })
+  }
+
+  return modules.order.flatMap((key) => {
+    const link = linksByKey.get(key)
+    return link ? [link] : []
+  })
 }
