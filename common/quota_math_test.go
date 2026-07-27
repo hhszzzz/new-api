@@ -124,3 +124,16 @@ func TestQuotaFromDecimalChecked(t *testing.T) {
 		assert.Equal(t, QuotaClampOverflow, clamp.Kind)
 	}
 }
+
+func TestQuotaFromDecimalStrictReturnsTypedClampError(t *testing.T) {
+	quota, err := QuotaFromDecimalStrict(decimal.NewFromFloat(41.7))
+	require.NoError(t, err)
+	assert.Equal(t, 42, quota)
+
+	quota, err = QuotaFromDecimalStrict(decimal.NewFromInt(2000).Mul(decimal.NewFromFloat(1.8446744073686647e19)))
+	assert.Zero(t, quota)
+	var clamp *QuotaClamp
+	require.ErrorAs(t, err, &clamp)
+	assert.Equal(t, QuotaClampOverflow, clamp.Kind)
+	assert.Equal(t, MaxQuota, clamp.Clamped)
+}

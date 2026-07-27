@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
@@ -294,6 +295,79 @@ func TestTaskBillingContextPriceDataFiltersMultiplier(t *testing.T) {
 		"size":     3,
 		"identity": 1,
 	}, priceData.OtherRatios())
+}
+
+func TestRecalculateTaskQuotaByTokensUsesPersistedBillingSnapshot(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, tokenID, channelID = 40, 40, 40
+	const initialQuota, tokenRemain, preConsumed = 10_000, 5_000, 100
+	seedUser(t, userID, initialQuota)
+	seedToken(t, tokenID, userID, "sk-task-snapshot", tokenRemain)
+	seedChannel(t, channelID)
+
+	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	task.PrivateData.BillingContext.ModelRatio = 2
+	task.PrivateData.BillingContext.GroupRatio = 3
+	task.PrivateData.BillingContext.OtherRatios = map[string]float64{
+		"duration": 2,
+		"invalid":  0,
+	}
+	require.NoError(t, model.DB.Create(task).Error)
+
+	previousModelRatios := ratio_setting.ModelRatio2JSONString()
+	previousGroupRatios := ratio_setting.GroupRatio2JSONString()
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"test-model":99}`))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":99}`))
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(previousModelRatios))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(previousGroupRatios))
+	})
+
+	RecalculateTaskQuotaByTokens(ctx, task, 20)
+
+	// 20 tokens * model ratio 2 * group ratio 3 * duration 2 = 240.
+	assert.Equal(t, 240, task.Quota)
+	assert.Equal(t, initialQuota-(240-preConsumed), getUserQuota(t, userID))
+	assert.Equal(t, tokenRemain-(240-preConsumed), getTokenRemainQuota(t, tokenID))
+	assert.Equal(t, 240, getTaskQuota(t, task.ID))
+}
+
+func TestRecalculateLegacyTaskUsesUserAndExecutionGroupPair(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, tokenID, channelID = 41, 41, 41
+	const initialQuota, tokenRemain, preConsumed = 10_000, 5_000, 10
+	seedUser(t, userID, initialQuota)
+	require.NoError(t, model.DB.Model(&model.User{}).Where("id = ?", userID).Update("group", "vip").Error)
+	seedToken(t, tokenID, userID, "sk-task-legacy", tokenRemain)
+	seedChannel(t, channelID)
+
+	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	task.Group = "execution"
+	task.PrivateData.BillingContext = nil
+	require.NoError(t, model.DB.Create(task).Error)
+
+	previousModelRatios := ratio_setting.ModelRatio2JSONString()
+	previousGroupRatios := ratio_setting.GroupRatio2JSONString()
+	previousSpecialRatios := ratio_setting.GroupGroupRatio2JSONString()
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"test-model":2}`))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"execution":3}`))
+	require.NoError(t, ratio_setting.UpdateGroupGroupRatioByJSONString(`{"vip":{"execution":4},"execution":{"execution":9}}`))
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(previousModelRatios))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(previousGroupRatios))
+		require.NoError(t, ratio_setting.UpdateGroupGroupRatioByJSONString(previousSpecialRatios))
+	})
+
+	RecalculateTaskQuotaByTokens(ctx, task, 10)
+
+	// The vip -> execution special ratio is 4; execution -> execution is 9.
+	assert.Equal(t, 80, task.Quota)
+	assert.Equal(t, initialQuota-(80-preConsumed), getUserQuota(t, userID))
+	assert.Equal(t, tokenRemain-(80-preConsumed), getTokenRemainQuota(t, tokenID))
 }
 
 // ---------------------------------------------------------------------------

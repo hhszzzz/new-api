@@ -28,6 +28,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
 import { useUpdateOption } from '../hooks/use-update-option'
+import { isToolPriceRecord, isValidToolPriceEntry } from '../utils/tool-price'
 
 const OPTION_KEY = 'tool_price_setting.prices'
 
@@ -52,8 +53,7 @@ function rowsToObject(rows: ToolPriceRow[]): Record<string, number> {
   const prices: Record<string, number> = {}
   for (const row of rows) {
     const k = row.key.trim()
-    if (!k) continue
-    prices[k] = Number(row.price) || 0
+    prices[k] = row.price
   }
   return prices
 }
@@ -72,13 +72,8 @@ function parseInitialPrices(
   if (!rawValue) return { ...DEFAULT_PRICES }
   try {
     const parsed = JSON.parse(rawValue) as unknown
-    if (
-      parsed &&
-      typeof parsed === 'object' &&
-      !Array.isArray(parsed) &&
-      Object.keys(parsed as object).length > 0
-    ) {
-      return parsed as Record<string, number>
+    if (isToolPriceRecord(parsed) && Object.keys(parsed).length > 0) {
+      return parsed
     }
   } catch {
     // fall through to defaults
@@ -111,6 +106,10 @@ export const ToolPriceSettings = memo(function ToolPriceSettings({
   }, [defaultValue])
 
   const currentPrices = useMemo(() => rowsToObject(rows), [rows])
+  const rowsAreValid = useMemo(
+    () => rows.every((row) => isValidToolPriceEntry(row.key, row.price)),
+    [rows]
+  )
 
   const syncFromRows = useCallback((nextRows: ToolPriceRow[]) => {
     setRows(nextRows)
@@ -123,11 +122,15 @@ export const ToolPriceSettings = memo(function ToolPriceSettings({
       setJsonText(text)
       try {
         const parsed = JSON.parse(text) as unknown
-        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-          setJsonError(t('JSON must be an object'))
+        if (!isToolPriceRecord(parsed)) {
+          setJsonError(
+            t(
+              'Tool prices require non-empty identifiers and non-negative finite numbers'
+            )
+          )
           return
         }
-        const nextRows = objectToRows(parsed as Record<string, number>)
+        const nextRows = objectToRows(parsed)
         setRows(nextRows)
         setNextRowId(nextRows.length + 1)
         setJsonError('')
@@ -178,7 +181,7 @@ export const ToolPriceSettings = memo(function ToolPriceSettings({
   }, [jsonText, t])
 
   const handleSave = useCallback(async () => {
-    if (editMode === 'json' && jsonError) {
+    if (!rowsAreValid || (editMode === 'json' && jsonError)) {
       toast.error(t('Please fix JSON errors before saving'))
       return
     }
@@ -186,7 +189,7 @@ export const ToolPriceSettings = memo(function ToolPriceSettings({
       key: OPTION_KEY,
       value: JSON.stringify(currentPrices),
     })
-  }, [currentPrices, editMode, jsonError, t, updateOption])
+  }, [currentPrices, editMode, jsonError, rowsAreValid, t, updateOption])
 
   const toggleEditMode = useCallback(() => {
     setEditMode((prev) => (prev === 'visual' ? 'json' : 'visual'))
@@ -255,57 +258,70 @@ export const ToolPriceSettings = memo(function ToolPriceSettings({
       </div>
 
       {editMode === 'visual' ? (
-        <StaticDataTable
-          data={rows}
-          getRowKey={(row) => row.id}
-          emptyClassName='text-muted-foreground py-8'
-          emptyContent={t('No tools configured')}
-          columns={[
-            {
-              id: 'tool',
-              header: t('Tool identifier'),
-              cell: (row) => (
-                <Input
-                  value={row.key}
-                  placeholder='web_search_preview:gpt-4o*'
-                  onChange={(e) => updateRow(row.id, 'key', e.target.value)}
-                />
-              ),
-            },
-            {
-              id: 'price',
-              header: t('Price ($/1K calls)'),
-              className: 'w-[200px]',
-              cell: (row) => (
-                <Input
-                  type='number'
-                  min={0}
-                  step={0.5}
-                  value={row.price}
-                  onChange={(e) =>
-                    updateRow(row.id, 'price', Number(e.target.value) || 0)
-                  }
-                />
-              ),
-            },
-            {
-              id: 'actions',
-              header: t('Actions'),
-              className: 'text-right',
-              cellClassName: 'text-right',
-              cell: (row) => (
-                <Button
-                  variant='ghost'
-                  size='icon'
-                  onClick={() => removeRow(row.id)}
-                  aria-label={t('Delete')}
-                >
-                  <Trash2 className='text-destructive h-4 w-4' />
-                </Button>
-              ),
-            },
-          ]}
-        />
+        <>
+          <StaticDataTable
+            data={rows}
+            getRowKey={(row) => row.id}
+            emptyClassName='text-muted-foreground py-8'
+            emptyContent={t('No tools configured')}
+            columns={[
+              {
+                id: 'tool',
+                header: t('Tool identifier'),
+                cell: (row) => (
+                  <Input
+                    value={row.key}
+                    placeholder='web_search_preview:gpt-4o*'
+                    onChange={(e) => updateRow(row.id, 'key', e.target.value)}
+                  />
+                ),
+              },
+              {
+                id: 'price',
+                header: t('Price ($/1K calls)'),
+                className: 'w-[200px]',
+                cell: (row) => (
+                  <Input
+                    type='number'
+                    min={0}
+                    step={0.5}
+                    value={row.price}
+                    onChange={(e) =>
+                      updateRow(
+                        row.id,
+                        'price',
+                        Math.max(0, Number(e.target.value) || 0)
+                      )
+                    }
+                  />
+                ),
+              },
+              {
+                id: 'actions',
+                header: t('Actions'),
+                className: 'text-right',
+                cellClassName: 'text-right',
+                cell: (row) => (
+                  <Button
+                    variant='ghost'
+                    size='icon'
+                    onClick={() => removeRow(row.id)}
+                    aria-label={t('Delete')}
+                  >
+                    <Trash2 className='text-destructive h-4 w-4' />
+                  </Button>
+                ),
+              },
+            ]}
+          />
+          {!rowsAreValid && (
+            <p className='text-destructive text-sm'>
+              {t(
+                'Tool prices require non-empty identifiers and non-negative finite numbers'
+              )}
+            </p>
+          )}
+        </>
       ) : (
         <div className='space-y-2'>
           <JsonCodeEditor
@@ -322,7 +338,9 @@ export const ToolPriceSettings = memo(function ToolPriceSettings({
         <Button
           onClick={handleSave}
           disabled={
-            updateOption.isPending || (editMode === 'json' && !!jsonError)
+            updateOption.isPending ||
+            !rowsAreValid ||
+            (editMode === 'json' && !!jsonError)
           }
         >
           {t('Save tool prices')}

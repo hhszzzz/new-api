@@ -66,7 +66,11 @@ type CreemAdaptor struct {
 }
 
 func validateCreemProductPrice(product CreemProduct) error {
-	displayAmount := float64(product.Quota) / common.QuotaPerUnit
+	quota, err := common.QuotaFromDecimalStrict(decimal.NewFromInt(product.Quota))
+	if err != nil || quota <= 0 {
+		return fmt.Errorf("configured quota is outside the supported range")
+	}
+	displayAmount := float64(product.Quota) / common.GetQuotaPerUnit()
 	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
 		displayAmount = float64(product.Quota)
 	}
@@ -119,7 +123,11 @@ func (*CreemAdaptor) RequestPay(c *gin.Context, req *CreemPayRequest) {
 	}
 
 	id := c.GetInt("id")
-	user, _ := model.GetUserById(id, false)
+	user, err := model.GetUserById(id, false)
+	if err != nil || user == nil {
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "用户不存在"})
+		return
+	}
 
 	// 生成唯一的订单引用ID
 	reference := fmt.Sprintf("creem-api-ref-%d-%d-%s", user.Id, time.Now().UnixMilli(), randstr.String(4))
@@ -129,6 +137,7 @@ func (*CreemAdaptor) RequestPay(c *gin.Context, req *CreemPayRequest) {
 	topUp := &model.TopUp{
 		UserId:          id,
 		Amount:          selectedProduct.Quota, // 充值额度
+		Quota:           selectedProduct.Quota,
 		Money:           selectedProduct.Price, // 支付金额
 		TradeNo:         referenceId,
 		PaymentMethod:   model.PaymentMethodCreem,
@@ -146,6 +155,10 @@ func (*CreemAdaptor) RequestPay(c *gin.Context, req *CreemPayRequest) {
 	// 创建支付链接，传入用户邮箱
 	checkoutUrl, err := genCreemLink(c.Request.Context(), referenceId, selectedProduct, user.Email, user.Username)
 	if err != nil {
+		topUp.Status = common.TopUpStatusFailed
+		if updateErr := topUp.Update(); updateErr != nil {
+			logger.LogError(c.Request.Context(), fmt.Sprintf("Creem 标记失败订单状态失败 trade_no=%s error=%q", referenceId, updateErr.Error()))
+		}
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Creem 创建支付链接失败 user_id=%d trade_no=%s product_id=%s error=%q", id, referenceId, selectedProduct.ProductId, err.Error()))
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "拉起支付失败"})
 		return

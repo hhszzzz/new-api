@@ -90,6 +90,39 @@ func BuildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 	}
 }
 
+func BuildTieredRealtimeTokenParams(usage *dto.RealtimeUsage, usedVars map[string]bool) billingexpr.TokenParams {
+	p := float64(usage.InputTokens)
+	c := float64(usage.OutputTokens)
+	cr := float64(usage.InputTokenDetails.CachedTokens)
+	ai := float64(usage.InputTokenDetails.AudioTokens)
+	ao := float64(usage.OutputTokenDetails.AudioTokens)
+
+	if usedVars["cr"] {
+		p -= cr
+	}
+	if usedVars["ai"] {
+		p -= ai
+	}
+	if usedVars["ao"] {
+		c -= ao
+	}
+	if p < 0 {
+		p = 0
+	}
+	if c < 0 {
+		c = 0
+	}
+
+	return billingexpr.TokenParams{
+		P:   p,
+		C:   c,
+		Len: float64(usage.InputTokens),
+		CR:  cr,
+		AI:  ai,
+		AO:  ao,
+	}
+}
+
 // TryTieredSettle checks if the request uses tiered_expr billing and, if so,
 // computes the actual quota using the frozen BillingSnapshot. Returns:
 //   - ok=true, quota, result  when tiered billing applies

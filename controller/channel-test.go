@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -542,15 +541,25 @@ func settleTestQuota(info *relaycommon.RelayInfo, priceData types.PriceData, usa
 
 	quota := 0
 	if !priceData.UsePrice {
-		quota = usage.PromptTokens + int(math.Round(float64(usage.CompletionTokens)*priceData.CompletionRatio))
-		quota = int(math.Round(float64(quota) * priceData.ModelRatio))
-		if priceData.ModelRatio != 0 && quota <= 0 {
+		completionQuota, clamp := common.QuotaRoundChecked(float64(usage.CompletionTokens) * priceData.CompletionRatio)
+		if info != nil && info.QuotaClamp == nil {
+			info.QuotaClamp = clamp
+		}
+		quota, clamp = common.QuotaRoundChecked((float64(usage.PromptTokens) + float64(completionQuota)) * priceData.ModelRatio)
+		if info != nil && info.QuotaClamp == nil {
+			info.QuotaClamp = clamp
+		}
+		if clamp == nil && priceData.ModelRatio != 0 && quota <= 0 {
 			quota = 1
 		}
 		return quota, nil
 	}
 
-	return int(priceData.ModelPrice * common.QuotaPerUnit), nil
+	quota, clamp := common.QuotaFromFloatChecked(priceData.ModelPrice * common.GetQuotaPerUnit())
+	if info != nil && info.QuotaClamp == nil {
+		info.QuotaClamp = clamp
+	}
+	return quota, nil
 }
 
 func buildTestLogOther(c *gin.Context, info *relaycommon.RelayInfo, priceData types.PriceData, usage *dto.Usage, tieredResult *billingexpr.TieredResult) map[string]interface{} {
@@ -559,6 +568,7 @@ func buildTestLogOther(c *gin.Context, info *relaycommon.RelayInfo, priceData ty
 	if tieredResult != nil {
 		service.InjectTieredBillingInfo(other, info, tieredResult)
 	}
+	service.AttachQuotaSaturation(c, info, other)
 	return other
 }
 

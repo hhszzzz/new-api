@@ -1118,11 +1118,12 @@ func calcSubscriptionBalanceQuota(priceAmount float64) (int, error) {
 	if priceAmount <= 0 {
 		return 0, nil
 	}
-	if common.QuotaPerUnit <= 0 || math.IsNaN(common.QuotaPerUnit) || math.IsInf(common.QuotaPerUnit, 0) {
+	quotaPerUnit := common.GetQuotaPerUnit()
+	if quotaPerUnit <= 0 || math.IsNaN(quotaPerUnit) || math.IsInf(quotaPerUnit, 0) {
 		return 0, errors.New("额度单位配置错误")
 	}
 	quotaDecimal := decimal.NewFromFloat(priceAmount).
-		Mul(decimal.NewFromFloat(common.QuotaPerUnit)).
+		Mul(decimal.NewFromFloat(quotaPerUnit)).
 		Ceil()
 	quota, clamp := common.QuotaFromDecimalChecked(quotaDecimal)
 	if clamp != nil {

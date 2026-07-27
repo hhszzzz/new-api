@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -14,7 +15,6 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
@@ -45,16 +45,21 @@ type StripeAdaptor struct {
 }
 
 func (*StripeAdaptor) RequestAmount(c *gin.Context, req *StripePayRequest) {
-	if req.Amount < getStripeMinTopup() {
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("充值数量不能小于 %d", getStripeMinTopup())})
+	minTopUp := getStripeMinTopup()
+	if req.Amount < minTopUp {
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("充值数量不能小于 %d", minTopUp)})
 		return
 	}
-	payMoney := getUnifiedTopupPayMoney(float64(req.Amount))
-	if payMoney <= 0.01 {
+	quote, err := quoteTopUp(req.Amount)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": err.Error()})
+		return
+	}
+	if quote.PayMoney <= 0.01 {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值金额过低"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"message": "success", "data": strconv.FormatFloat(payMoney, 'f', 2, 64)})
+	c.JSON(http.StatusOK, gin.H{"message": "success", "data": strconv.FormatFloat(quote.PayMoney, 'f', 2, 64)})
 }
 
 func (*StripeAdaptor) RequestPay(c *gin.Context, req *StripePayRequest) {
@@ -62,11 +67,17 @@ func (*StripeAdaptor) RequestPay(c *gin.Context, req *StripePayRequest) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "不支持的支付渠道"})
 		return
 	}
-	if req.Amount < getStripeMinTopup() {
-		c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("充值数量不能小于 %d", getStripeMinTopup()), "data": 10})
+	minTopUp := getStripeMinTopup()
+	if req.Amount < minTopUp {
+		c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("充值数量不能小于 %d", minTopUp), "data": 10})
 		return
 	}
-	if req.Amount > 10000 {
+	quote, err := quoteTopUp(req.Amount)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": err.Error()})
+		return
+	}
+	if quote.LegacyAmount > 10000 {
 		c.JSON(http.StatusOK, gin.H{"message": "充值数量不能大于 10000", "data": 10})
 		return
 	}
@@ -82,36 +93,42 @@ func (*StripeAdaptor) RequestPay(c *gin.Context, req *StripePayRequest) {
 	}
 
 	id := c.GetInt("id")
-	user, _ := model.GetUserById(id, false)
-	chargedMoney := getUnifiedTopupPayMoney(float64(req.Amount))
+	user, err := model.GetUserById(id, false)
+	if err != nil || user == nil {
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "用户不存在"})
+		return
+	}
 
 	reference := fmt.Sprintf("new-api-ref-%d-%d-%s", user.Id, time.Now().UnixMilli(), randstr.String(4))
 	referenceId := "ref_" + common.Sha1([]byte(reference))
 
-	payLink, err := genStripeLink(referenceId, user.StripeCustomer, user.Email, chargedMoney, req.SuccessURL, req.CancelURL)
-	if err != nil {
-		logger.LogError(c.Request.Context(), fmt.Sprintf("Stripe 创建 Checkout Session 失败 user_id=%d trade_no=%s amount=%d error=%q", id, referenceId, req.Amount, err.Error()))
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "拉起支付失败"})
-		return
-	}
-
 	topUp := &model.TopUp{
 		UserId:          id,
-		Amount:          req.Amount,
-		Money:           chargedMoney,
+		Amount:          quote.LegacyAmount,
+		Quota:           int64(quote.Quota),
+		Money:           quote.PayMoney,
 		TradeNo:         referenceId,
 		PaymentMethod:   model.PaymentMethodStripe,
 		PaymentProvider: model.PaymentProviderStripe,
 		CreateTime:      time.Now().Unix(),
 		Status:          common.TopUpStatusPending,
 	}
-	err = topUp.Insert()
-	if err != nil {
+	if err = topUp.Insert(); err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Stripe 创建充值订单失败 user_id=%d trade_no=%s amount=%d error=%q", id, referenceId, req.Amount, err.Error()))
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "创建订单失败"})
 		return
 	}
-	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Stripe 充值订单创建成功 user_id=%d trade_no=%s amount=%d money=%.2f", id, referenceId, req.Amount, chargedMoney))
+	payLink, err := genStripeLink(referenceId, user.StripeCustomer, user.Email, quote.PayMoney, req.SuccessURL, req.CancelURL)
+	if err != nil {
+		topUp.Status = common.TopUpStatusFailed
+		if updateErr := topUp.Update(); updateErr != nil {
+			logger.LogError(c.Request.Context(), fmt.Sprintf("Stripe 标记失败订单状态失败 trade_no=%s error=%q", referenceId, updateErr.Error()))
+		}
+		logger.LogError(c.Request.Context(), fmt.Sprintf("Stripe 创建 Checkout Session 失败 user_id=%d trade_no=%s amount=%d error=%q", id, referenceId, req.Amount, err.Error()))
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "拉起支付失败"})
+		return
+	}
+	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Stripe 充值订单创建成功 user_id=%d trade_no=%s amount=%d money=%.2f", id, referenceId, req.Amount, quote.PayMoney))
 	c.JSON(http.StatusOK, gin.H{
 		"message": "success",
 		"data": gin.H{
@@ -338,6 +355,9 @@ func genStripeLink(referenceId string, customerId string, email string, payMoney
 	if !strings.HasPrefix(setting.StripeApiSecret, "sk_") && !strings.HasPrefix(setting.StripeApiSecret, "rk_") {
 		return "", fmt.Errorf("无效的Stripe API密钥")
 	}
+	if payMoney <= 0 || math.IsNaN(payMoney) || math.IsInf(payMoney, 0) {
+		return "", fmt.Errorf("Stripe 支付金额无效")
+	}
 
 	stripe.Key = setting.StripeApiSecret
 	configuredPrice, err := price.Get(setting.StripePriceId, nil)
@@ -347,10 +367,14 @@ func genStripeLink(referenceId string, customerId string, email string, payMoney
 	if configuredPrice == nil || configuredPrice.Product == nil || configuredPrice.Product.ID == "" || configuredPrice.Currency == "" {
 		return "", fmt.Errorf("Stripe Price ID 缺少商品或货币信息")
 	}
-	minorUnits := decimal.NewFromFloat(payMoney).Mul(decimal.NewFromInt(100)).Round(0).IntPart()
+	minorUnitsDecimal := decimal.NewFromFloat(payMoney).Mul(decimal.NewFromInt(100)).Round(0)
 	if isZeroDecimalStripeCurrency(string(configuredPrice.Currency)) {
-		minorUnits = decimal.NewFromFloat(payMoney).Round(0).IntPart()
+		minorUnitsDecimal = decimal.NewFromFloat(payMoney).Round(0)
 	}
+	if !minorUnitsDecimal.IsPositive() || minorUnitsDecimal.GreaterThan(decimal.NewFromInt(math.MaxInt64)) {
+		return "", fmt.Errorf("Stripe 支付金额超出支持范围")
+	}
+	minorUnits := minorUnitsDecimal.IntPart()
 	if minorUnits <= 0 {
 		return "", fmt.Errorf("Stripe 支付金额过低")
 	}
@@ -417,9 +441,5 @@ func getStripePayMoney(amount float64, _ string) float64 {
 }
 
 func getStripeMinTopup() int64 {
-	minTopup := setting.StripeMinTopUp
-	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
-		minTopup = minTopup * int(common.QuotaPerUnit)
-	}
-	return int64(minTopup)
+	return getTopUpMinimum(setting.StripeMinTopUp)
 }

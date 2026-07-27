@@ -11,9 +11,13 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/setting/config"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
+	"github.com/shopspring/decimal"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -68,6 +72,72 @@ func TestCalculateTextQuotaSummaryUnifiedForClaudeSemantic(t *testing.T) {
 	require.Equal(t, messageSummary.CacheCreationTokens1h, chatSummary.CacheCreationTokens1h)
 	require.True(t, chatSummary.IsClaudeUsageSemantic)
 	require.Equal(t, 1488, chatSummary.Quota)
+}
+
+func TestCalculateTextQuotaSummaryUsesFrozenQuotaPerUnit(t *testing.T) {
+	previousQuotaPerUnit := common.GetQuotaPerUnit()
+	require.NoError(t, common.SetQuotaPerUnit(10_000))
+	t.Cleanup(func() { require.NoError(t, common.SetQuotaPerUnit(previousQuotaPerUnit)) })
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	relayInfo := &relaycommon.RelayInfo{
+		OriginModelName: "fixed-price-snapshot-model",
+		PriceData: types.PriceData{
+			UsePrice:       true,
+			ModelPrice:     0.25,
+			QuotaPerUnit:   100,
+			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 2},
+		},
+		StartTime: time.Now(),
+	}
+
+	summary := calculateTextQuotaSummary(ctx, relayInfo, &dto.Usage{
+		PromptTokens: 1,
+		TotalTokens:  1,
+	})
+
+	require.Equal(t, 50, summary.Quota)
+	require.Equal(t, 100.0, summary.QuotaPerUnit)
+}
+
+func TestCalculateTextToolCallSurchargeUsesFrozenToolPrices(t *testing.T) {
+	original := config.GlobalConfig.ExportAllConfigs()["tool_price_setting.prices"]
+	t.Cleanup(func() {
+		handled, err := config.GlobalConfig.Update("tool_price_setting", map[string]string{"prices": original})
+		require.True(t, handled)
+		require.NoError(t, err)
+	})
+
+	handled, err := config.GlobalConfig.Update("tool_price_setting", map[string]string{
+		"prices": `{"web_search_preview":1000}`,
+	})
+	require.True(t, handled)
+	require.NoError(t, err)
+	relayInfo := &relaycommon.RelayInfo{
+		ToolPriceSnapshot: operation_setting.GetToolPriceSnapshot(),
+		ResponsesUsageInfo: &relaycommon.ResponsesUsageInfo{
+			BuiltInTools: map[string]*relaycommon.BuildInToolInfo{
+				dto.BuildInToolWebSearchPreview: {CallCount: 1},
+			},
+		},
+	}
+
+	handled, err = config.GlobalConfig.Update("tool_price_setting", map[string]string{
+		"prices": `{"web_search_preview":2000}`,
+	})
+	require.True(t, handled)
+	require.NoError(t, err)
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	summary := textQuotaSummary{
+		BillingModelName: "snapshot-model",
+		GroupRatio:       1,
+		QuotaPerUnit:     500_000,
+	}
+	surcharge := calculateTextToolCallSurcharge(ctx, relayInfo, &summary)
+
+	assert.Equal(t, 1000.0, summary.WebSearchPrice)
+	assert.True(t, decimal.NewFromInt(500_000).Equal(surcharge))
 }
 
 func TestCalculateTextQuotaSummaryUsesSplitClaudeCacheCreationRatios(t *testing.T) {
@@ -501,6 +571,108 @@ func TestCalculateTextQuotaSummarySeparatesOpenRouterCacheCreationFromPromptBill
 	// quota = (2604 - 100) + 100*1.25 + 383 = 3012
 	require.Equal(t, 2604, summary.PromptTokens)
 	require.Equal(t, 3012, summary.Quota)
+}
+
+func TestCalcOpenRouterCacheCreateTokensUsesCheckedRounding(t *testing.T) {
+	priceData := types.PriceData{
+		ModelRatio:         2,
+		CompletionRatio:    2,
+		CacheRatio:         0.1,
+		CacheCreationRatio: 1.25,
+		QuotaPerUnit:       500_000,
+	}
+	baseUsage := dto.Usage{
+		PromptTokens:     1000,
+		CompletionTokens: 50,
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedTokens: 100,
+		},
+	}
+
+	tests := []struct {
+		name      string
+		cost      any
+		want      int
+		wantClamp common.QuotaClampKind
+	}{
+		{name: "normal", cost: 0.00424, want: 200},
+		{name: "non-float cost", cost: "0.00424"},
+		{name: "zero cost", cost: float64(0)},
+		{name: "NaN", cost: math.NaN(), wantClamp: common.QuotaClampNaN},
+		{name: "infinity", cost: math.Inf(1), want: common.MaxQuota, wantClamp: common.QuotaClampOverflow},
+		{name: "finite overflow", cost: math.MaxFloat64, want: common.MaxQuota, wantClamp: common.QuotaClampOverflow},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			usage := baseUsage
+			usage.Cost = tt.cost
+
+			got, clamp := CalcOpenRouterCacheCreateTokens(usage, priceData)
+
+			assert.Equal(t, tt.want, got)
+			if tt.wantClamp == "" {
+				assert.Nil(t, clamp)
+				return
+			}
+			require.NotNil(t, clamp)
+			assert.Equal(t, tt.wantClamp, clamp.Kind)
+		})
+	}
+}
+
+func TestCalculateTextQuotaSummaryAuditsInvalidOpenRouterCacheInference(t *testing.T) {
+	tests := []struct {
+		name             string
+		cost             float64
+		wantCacheCreated int
+		wantPrompt       int
+		wantClamp        common.QuotaClampKind
+	}{
+		{name: "valid inference", cost: 0.00318, wantCacheCreated: 200, wantPrompt: 700},
+		{name: "NaN inference", cost: math.NaN(), wantPrompt: 900, wantClamp: common.QuotaClampNaN},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			relayInfo := &relaycommon.RelayInfo{
+				FinalRequestRelayFormat: types.RelayFormatClaude,
+				OriginModelName:         "claude-3-7-sonnet-20250219",
+				ChannelMeta: &relaycommon.ChannelMeta{
+					ChannelType: constant.ChannelTypeOpenRouter,
+				},
+				PriceData: types.PriceData{
+					ModelRatio:         1.5,
+					CompletionRatio:    2,
+					CacheRatio:         0.1,
+					CacheCreationRatio: 1.25,
+					QuotaPerUnit:       500_000,
+					GroupRatioInfo:     types.GroupRatioInfo{GroupRatio: 1},
+				},
+				StartTime: time.Now(),
+			}
+			usage := &dto.Usage{
+				PromptTokens:     1000,
+				CompletionTokens: 50,
+				PromptTokensDetails: dto.InputTokenDetails{
+					CachedTokens: 100,
+				},
+				Cost: tt.cost,
+			}
+
+			summary := calculateTextQuotaSummary(ctx, relayInfo, usage)
+
+			assert.Equal(t, tt.wantCacheCreated, summary.CacheCreationTokens)
+			assert.Equal(t, tt.wantPrompt, summary.PromptTokens)
+			if tt.wantClamp == "" {
+				assert.Nil(t, relayInfo.QuotaClamp)
+				return
+			}
+			require.NotNil(t, relayInfo.QuotaClamp)
+			assert.Equal(t, tt.wantClamp, relayInfo.QuotaClamp.Kind)
+		})
+	}
 }
 
 func TestCalculateTextQuotaSummaryKeepsPrePRClaudeOpenRouterBilling(t *testing.T) {

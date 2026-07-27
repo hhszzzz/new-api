@@ -278,35 +278,40 @@ func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTo
 		return
 	}
 
-	modelName := taskModelName(task)
+	var modelRatio float64
+	var finalGroupRatio float64
+	if billingContext := task.PrivateData.BillingContext; billingContext != nil {
+		if billingContext.PerCallBilling {
+			return
+		}
+		modelRatio = billingContext.ModelRatio
+		finalGroupRatio = billingContext.GroupRatio
+	} else {
+		modelRatioSetting, hasRatioSetting, _ := ratio_setting.GetModelRatio(taskModelName(task))
+		if !hasRatioSetting {
+			return
+		}
+		modelRatio = modelRatioSetting
 
-	// 获取模型价格和倍率
-	modelRatio, hasRatioSetting, _ := ratio_setting.GetModelRatio(modelName)
-	// 只有配置了倍率(非固定价格)时才按 token 重新计费
-	if !hasRatioSetting || modelRatio <= 0 {
-		return
-	}
+		executionGroup := task.Group
+		userGroup := ""
+		if user, err := model.GetUserById(task.UserId, false); err == nil {
+			userGroup = user.Group
+			if executionGroup == "" {
+				executionGroup = userGroup
+			}
+		}
+		if executionGroup == "" {
+			return
+		}
 
-	// 获取用户和组的倍率信息
-	group := task.Group
-	if group == "" {
-		user, err := model.GetUserById(task.UserId, false)
-		if err == nil {
-			group = user.Group
+		finalGroupRatio = ratio_setting.GetGroupRatio(executionGroup)
+		if specialRatio, ok := ratio_setting.GetGroupGroupRatio(userGroup, executionGroup); ok {
+			finalGroupRatio = specialRatio
 		}
 	}
-	if group == "" {
+	if modelRatio <= 0 {
 		return
-	}
-
-	groupRatio := ratio_setting.GetGroupRatio(group)
-	userGroupRatio, hasUserGroupRatio := ratio_setting.GetGroupGroupRatio(group, group)
-
-	var finalGroupRatio float64
-	if hasUserGroupRatio {
-		finalGroupRatio = userGroupRatio
-	} else {
-		finalGroupRatio = groupRatio
 	}
 
 	// 计算 OtherRatios 乘积（视频折扣、时长等）

@@ -3,6 +3,7 @@ package controller
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -151,7 +152,7 @@ func TestSettleTestQuotaUsesTieredBilling(t *testing.T) {
 			ExprHash:      billingexpr.ExprHashString(`param("stream") == true ? tier("stream", p * 3) : tier("base", p * 2)`),
 			GroupRatio:    1,
 			EstimatedTier: "stream",
-			QuotaPerUnit:  common.QuotaPerUnit,
+			QuotaPerUnit:  common.GetQuotaPerUnit(),
 			ExprVersion:   1,
 		},
 		BillingRequestInput: &billingexpr.RequestInput{
@@ -171,6 +172,20 @@ func TestSettleTestQuotaUsesTieredBilling(t *testing.T) {
 	require.Equal(t, "stream", result.MatchedTier)
 }
 
+func TestSettleTestQuotaSaturatesAndAuditsFixedPrice(t *testing.T) {
+	info := &relaycommon.RelayInfo{}
+
+	quota, result := settleTestQuota(info, types.PriceData{
+		UsePrice:   true,
+		ModelPrice: math.MaxFloat64,
+	}, &dto.Usage{})
+
+	assert.Equal(t, common.MaxQuota, quota)
+	assert.Nil(t, result)
+	require.NotNil(t, info.QuotaClamp)
+	assert.Equal(t, common.QuotaClampOverflow, info.QuotaClamp.Kind)
+}
+
 func TestBuildTestLogOtherInjectsTieredInfo(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
@@ -181,6 +196,11 @@ func TestBuildTestLogOtherInjectsTieredInfo(t *testing.T) {
 			ExprString:  `tier("base", p * 2)`,
 		},
 		ChannelMeta: &relaycommon.ChannelMeta{},
+		QuotaClamp: &common.QuotaClamp{
+			Op:      "QuotaFromFloat",
+			Kind:    common.QuotaClampOverflow,
+			Clamped: common.MaxQuota,
+		},
 	}
 	priceData := types.PriceData{
 		GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1},
@@ -198,6 +218,9 @@ func TestBuildTestLogOtherInjectsTieredInfo(t *testing.T) {
 	require.Equal(t, "tiered_expr", other["billing_mode"])
 	require.Equal(t, "base", other["matched_tier"])
 	require.NotEmpty(t, other["expr_b64"])
+	adminInfo, ok := other["admin_info"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Contains(t, adminInfo, "quota_saturation")
 }
 
 func TestResolveChannelTestUserIDUsesRequestUser(t *testing.T) {

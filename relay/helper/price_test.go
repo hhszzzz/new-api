@@ -61,7 +61,7 @@ func TestModelPriceHelperTieredUsesPreloadedRequestInput(t *testing.T) {
 	require.NotNil(t, info.TieredBillingSnapshot)
 	require.Equal(t, "stream", info.TieredBillingSnapshot.EstimatedTier)
 	require.Equal(t, billing_setting.BillingModeTieredExpr, info.TieredBillingSnapshot.BillingMode)
-	require.Equal(t, common.QuotaPerUnit, info.TieredBillingSnapshot.QuotaPerUnit)
+	require.Equal(t, common.GetQuotaPerUnit(), info.TieredBillingSnapshot.QuotaPerUnit)
 }
 
 func TestModelPriceHelperTieredPreConsumeMaxTokensFallback(t *testing.T) {
@@ -193,7 +193,7 @@ func TestModelPriceHelperRequestBillingRatiosOnlyApplyToFixedPrice(t *testing.T)
 	modelPrices, err := common.Marshal(map[string]float64{
 		"fixed-image-price":      0.04,
 		"fractional-image-price": 0.0000012,
-		"overflow-image-price":   float64(common.MaxQuota) / common.QuotaPerUnit / 2,
+		"overflow-image-price":   float64(common.MaxQuota) / common.GetQuotaPerUnit() / 2,
 	})
 	require.NoError(t, err)
 	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(string(modelPrices)))

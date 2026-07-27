@@ -464,6 +464,7 @@ func updatePricing() bool {
 	}
 
 	pricingMap = make([]Pricing, 0)
+	pricingSnapshot := ratio_setting.GetPricingSnapshot()
 	for model, groups := range modelGroupsMap {
 		pricing := Pricing{
 			ModelName:              model,
@@ -482,31 +483,31 @@ func updatePricing() bool {
 			pricing.Tags = meta.Tags
 			pricing.VendorID = meta.VendorID
 		}
-		modelPrice, findPrice := ratio_setting.GetModelPrice(model, false)
+		modelPrice, findPrice := pricingSnapshot.GetModelPrice(model, false)
 		if findPrice {
 			pricing.ModelPrice = modelPrice
 			pricing.QuotaType = 1
 		} else {
-			modelRatio, _, _ := ratio_setting.GetModelRatio(model)
+			modelRatio, _, _ := pricingSnapshot.GetModelRatio(model)
 			pricing.ModelRatio = modelRatio
-			pricing.CompletionRatio = ratio_setting.GetCompletionRatio(model)
+			pricing.CompletionRatio = pricingSnapshot.GetCompletionRatio(model)
 			pricing.QuotaType = 0
 		}
-		if cacheRatio, ok := ratio_setting.GetCacheRatio(model); ok {
+		if cacheRatio, ok := pricingSnapshot.GetCacheRatio(model); ok {
 			pricing.CacheRatio = &cacheRatio
 		}
-		if createCacheRatio, ok := ratio_setting.GetCreateCacheRatio(model); ok {
+		if createCacheRatio, ok := pricingSnapshot.GetCreateCacheRatio(model); ok {
 			pricing.CreateCacheRatio = &createCacheRatio
 		}
-		if imageRatio, ok := ratio_setting.GetImageRatio(model); ok {
+		if imageRatio, ok := pricingSnapshot.GetImageRatio(model); ok {
 			pricing.ImageRatio = &imageRatio
 		}
-		if ratio_setting.ContainsAudioRatio(model) {
-			audioRatio := ratio_setting.GetAudioRatio(model)
+		if pricingSnapshot.ContainsAudioRatio(model) {
+			audioRatio := pricingSnapshot.GetAudioRatio(model)
 			pricing.AudioRatio = &audioRatio
 		}
-		if ratio_setting.ContainsAudioCompletionRatio(model) {
-			audioCompletionRatio := ratio_setting.GetAudioCompletionRatio(model)
+		if pricingSnapshot.ContainsAudioCompletionRatio(model) {
+			audioCompletionRatio := pricingSnapshot.GetAudioCompletionRatio(model)
 			pricing.AudioCompletionRatio = &audioCompletionRatio
 		}
 		if billingMode := billing_setting.GetBillingMode(model); billingMode == "tiered_expr" {

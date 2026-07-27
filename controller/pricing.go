@@ -6,7 +6,6 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
@@ -50,25 +49,23 @@ func getVisiblePricing(c *gin.Context) ([]model.Pricing, map[string]string, stri
 			}
 			usableGroup := service.GetAuthorizedUserGroups(user.Groups)
 			pricing = filterPricingByUsableGroups(pricing, usableGroup)
-			if user.Role != common.RoleRootUser {
-				// A routed source model may have no native ability in the user's
-				// groups; it is still a public model when an enabled route exposes it.
-				routeSources, routeErr := model.GetEnabledUserModelRouteSources(user.Id, user.Groups)
-				if routeErr == nil && len(routeSources) > 0 {
-					visible := make(map[string]struct{}, len(pricing))
-					for _, item := range pricing {
-						visible[item.ModelName] = struct{}{}
+			// A routed source model may have no native ability in the user's
+			// groups; it is still a public model when an enabled route exposes it.
+			routeSources, routeErr := model.GetEnabledUserModelRouteSources(user.Id, user.Groups)
+			if routeErr == nil && len(routeSources) > 0 {
+				visible := make(map[string]struct{}, len(pricing))
+				for _, item := range pricing {
+					visible[item.ModelName] = struct{}{}
+				}
+				for _, source := range routeSources {
+					if _, exists := visible[source]; exists {
+						continue
 					}
-					for _, source := range routeSources {
-						if _, exists := visible[source]; exists {
-							continue
-						}
-						for _, item := range allPricing {
-							if item.ModelName == source {
-								pricing = append(pricing, item)
-								visible[source] = struct{}{}
-								break
-							}
+					for _, item := range allPricing {
+						if item.ModelName == source {
+							pricing = append(pricing, item)
+							visible[source] = struct{}{}
+							break
 						}
 					}
 				}
@@ -99,14 +96,14 @@ func getVisiblePricing(c *gin.Context) ([]model.Pricing, map[string]string, stri
 		}
 	}
 
-	usableGroup := setting.GetUserUsableGroupsCopy()
+	usableGroup := service.GetAuthorizedUserGroups([]string{"default"})
 	pricing = filterPricingByUsableGroups(pricing, usableGroup)
 	return pricing, usableGroup, group, hasUser
 }
 
 func GetPricing(c *gin.Context) {
 	pricing, usableGroup, group, hasUser := getVisiblePricing(c)
-	autoGroups := setting.GetAutoGroups()
+	autoGroups := service.GetUserAutoGroups([]string{"default"})
 	if hasUser {
 		if userId, ok := c.Get("id"); ok {
 			if user, err := model.GetUserCache(userId.(int)); err == nil {
@@ -146,14 +143,6 @@ func GetPricing(c *gin.Context) {
 func ResetModelRatio(c *gin.Context) {
 	defaultStr := ratio_setting.DefaultModelRatio2JSONString()
 	err := model.UpdateOption("ModelRatio", defaultStr)
-	if err != nil {
-		c.JSON(200, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
-		return
-	}
-	err = ratio_setting.UpdateModelRatioByJSONString(defaultStr)
 	if err != nil {
 		c.JSON(200, gin.H{
 			"success": false,
