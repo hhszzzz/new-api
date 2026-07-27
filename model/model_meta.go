@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -99,6 +100,12 @@ func resolveModelSortOptions(sortOptions []ModelSortOptions) ModelSortOptions {
 }
 
 func (mi *Model) Insert() error {
+	return DB.Transaction(func(tx *gorm.DB) error {
+		return mi.insertWithTx(tx)
+	})
+}
+
+func (mi *Model) insertWithTx(tx *gorm.DB) error {
 	now := common.GetTimestamp()
 	mi.CreatedTime = now
 	mi.UpdatedTime = now
@@ -108,15 +115,34 @@ func (mi *Model) Insert() error {
 	originalSyncOfficial := mi.SyncOfficial
 
 	// 先创建记录（GORM 会对零值字段应用默认值）
-	if err := DB.Create(mi).Error; err != nil {
+	if err := tx.Create(mi).Error; err != nil {
 		return err
 	}
 
 	// 使用保存的原始值进行更新，确保零值能正确保存
-	return DB.Model(&Model{}).Where("id = ?", mi.Id).Updates(map[string]interface{}{
+	return tx.Model(&Model{}).Where("id = ?", mi.Id).Updates(map[string]interface{}{
 		"status":        originalStatus,
 		"sync_official": originalSyncOfficial,
 	}).Error
+}
+
+func (mi *Model) InsertWithPricingOptions(values map[string]string) error {
+	if err := ratio_setting.ValidatePricingOptionsByJSONString(values); err != nil {
+		return err
+	}
+	optionUpdateMu.Lock()
+	defer optionUpdateMu.Unlock()
+
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := mi.insertWithTx(tx); err != nil {
+			return err
+		}
+		return persistOptionsWithTx(tx, values)
+	})
+	if err != nil {
+		return err
+	}
+	return publishPricingOptions(values)
 }
 
 func IsModelNameDuplicated(id int, name string) (bool, error) {
@@ -129,11 +155,34 @@ func IsModelNameDuplicated(id int, name string) (bool, error) {
 }
 
 func (mi *Model) Update() error {
+	return mi.updateWithTx(DB)
+}
+
+func (mi *Model) updateWithTx(tx *gorm.DB) error {
 	mi.UpdatedTime = common.GetTimestamp()
 	// 使用 Select 强制更新所有字段，包括零值
-	return DB.Model(&Model{}).Where("id = ?", mi.Id).
+	return tx.Model(&Model{}).Where("id = ?", mi.Id).
 		Select("model_name", "description", "icon", "tags", "vendor_id", "endpoints", "status", "sync_official", "name_rule", "updated_time").
 		Updates(mi).Error
+}
+
+func (mi *Model) UpdateWithPricingOptions(values map[string]string) error {
+	if err := ratio_setting.ValidatePricingOptionsByJSONString(values); err != nil {
+		return err
+	}
+	optionUpdateMu.Lock()
+	defer optionUpdateMu.Unlock()
+
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := mi.updateWithTx(tx); err != nil {
+			return err
+		}
+		return persistOptionsWithTx(tx, values)
+	})
+	if err != nil {
+		return err
+	}
+	return publishPricingOptions(values)
 }
 
 func (mi *Model) Delete() error {

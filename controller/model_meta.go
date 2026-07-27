@@ -13,6 +13,11 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+type modelMutationRequest struct {
+	model.Model
+	PricingOptions []OptionUpdateRequest `json:"pricing_options,omitempty"`
+}
+
 // GetAllModelsMeta 获取模型列表（分页）
 func GetAllModelsMeta(c *gin.Context) {
 
@@ -90,11 +95,12 @@ func GetModelMeta(c *gin.Context) {
 
 // CreateModelMeta 新建模型
 func CreateModelMeta(c *gin.Context) {
-	var m model.Model
-	if err := c.ShouldBindJSON(&m); err != nil {
+	var request modelMutationRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
 		common.ApiError(c, err)
 		return
 	}
+	m := &request.Model
 	if m.ModelName == "" {
 		common.ApiErrorMsg(c, "模型名称不能为空")
 		return
@@ -108,29 +114,39 @@ func CreateModelMeta(c *gin.Context) {
 		return
 	}
 
-	if err := m.Insert(); err != nil {
+	pricingValues, err := normalizeModelPricingOptions(request.PricingOptions)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if err := m.InsertWithPricingOptions(pricingValues); err != nil {
 		common.ApiError(c, err)
 		return
 	}
 	model.RefreshPricing()
-	common.ApiSuccess(c, &m)
+	common.ApiSuccess(c, m)
 }
 
 // UpdateModelMeta 更新模型
 func UpdateModelMeta(c *gin.Context) {
 	statusOnly := c.Query("status_only") == "true"
 
-	var m model.Model
-	if err := c.ShouldBindJSON(&m); err != nil {
+	var request modelMutationRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
 		common.ApiError(c, err)
 		return
 	}
+	m := &request.Model
 	if m.Id == 0 {
 		common.ApiErrorMsg(c, "缺少模型 ID")
 		return
 	}
 
 	if statusOnly {
+		if len(request.PricingOptions) > 0 {
+			common.ApiErrorMsg(c, "仅更新状态时不能修改模型定价")
+			return
+		}
 		// 只更新状态，防止误清空其他字段
 		if err := model.DB.Model(&model.Model{}).Where("id = ?", m.Id).Update("status", m.Status).Error; err != nil {
 			common.ApiError(c, err)
@@ -146,13 +162,18 @@ func UpdateModelMeta(c *gin.Context) {
 			return
 		}
 
-		if err := m.Update(); err != nil {
+		pricingValues, err := normalizeModelPricingOptions(request.PricingOptions)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		if err := m.UpdateWithPricingOptions(pricingValues); err != nil {
 			common.ApiError(c, err)
 			return
 		}
 	}
 	model.RefreshPricing()
-	common.ApiSuccess(c, &m)
+	common.ApiSuccess(c, m)
 }
 
 // DeleteModelMeta 删除模型

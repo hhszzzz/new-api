@@ -54,6 +54,15 @@ export interface Model {
   matched_count?: number
 }
 
+export interface ModelPricingOptionUpdate {
+  key: string
+  value: string
+}
+
+export type ModelMutation = Partial<Model> & {
+  pricing_options?: ModelPricingOptionUpdate[]
+}
+
 /**
  * Vendor entity from API
  */
