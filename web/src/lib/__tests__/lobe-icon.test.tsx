@@ -74,4 +74,11 @@ describe('getLobeIcon', () => {
     await waitFor(() => expect(container.querySelector('svg')).not.toBeNull())
     expect(screen.getByLabelText('LM Studio')).toHaveAttribute('width', '24')
   })
+
+  test('renders the Sub2API custom icon at the requested size', () => {
+    const { container } = render(getLobeIcon('Sub2API', 22))
+
+    expect(container.querySelector('svg')).toHaveAttribute('width', '22')
+    expect(container.querySelector('svg')).toHaveAttribute('height', '22')
+  })
 })

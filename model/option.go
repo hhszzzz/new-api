@@ -293,7 +293,6 @@ func UpdateOptionsBulk(values map[string]string) error {
 	if len(values) == 0 {
 		return nil
 	}
-
 	optionUpdateMu.Lock()
 	defer optionUpdateMu.Unlock()
 
@@ -837,6 +836,8 @@ func updateOptionMapWithSource(key string, value string, fromDB bool) (err error
 
 func validateLegacyOptionUpdate(key, value string) error {
 	switch key {
+	case operation_setting.ToolPriceOptionKey:
+		return operation_setting.ValidateToolPricesJSON(value)
 	case "Chats":
 		var candidate []map[string]string
 		return common.UnmarshalJsonStr(value, &candidate)

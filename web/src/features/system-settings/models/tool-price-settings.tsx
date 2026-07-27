@@ -25,6 +25,7 @@ import { StaticDataTable } from '@/components/data-table'
 import { JsonCodeEditor } from '@/components/json-code-editor'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { Field, FieldError } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 
 import { useUpdateOption } from '../hooks/use-update-option'
@@ -41,19 +42,30 @@ const DEFAULT_PRICES: Record<string, number> = {
   'web_search_preview:gpt-4.1-mini*': 25.0,
   file_search: 2.5,
   google_search: 14.0,
+  image_generation: 150.0,
 }
 
 type ToolPriceRow = {
   id: number
   key: string
-  price: number
+  price: string
+}
+
+function parseToolPrice(value: string): number | null {
+  if (value.trim() === '') return null
+  const price = Number(value)
+  if (!Number.isFinite(price) || price < 0) return null
+  return price
 }
 
 function rowsToObject(rows: ToolPriceRow[]): Record<string, number> {
   const prices: Record<string, number> = {}
   for (const row of rows) {
     const k = row.key.trim()
-    prices[k] = row.price
+    if (!k) continue
+    const price = parseToolPrice(row.price)
+    if (price === null) continue
+    prices[k] = price
   }
   return prices
 }
@@ -62,7 +74,7 @@ function objectToRows(prices: Record<string, number>): ToolPriceRow[] {
   return Object.entries(prices).map(([key, price], index) => ({
     id: index + 1,
     key,
-    price: Number(price) || 0,
+    price: String(price),
   }))
 }
 
@@ -72,8 +84,24 @@ function parseInitialPrices(
   if (!rawValue) return { ...DEFAULT_PRICES }
   try {
     const parsed = JSON.parse(rawValue) as unknown
-    if (isToolPriceRecord(parsed) && Object.keys(parsed).length > 0) {
-      return parsed
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      !Array.isArray(parsed) &&
+      Object.keys(parsed as object).length > 0
+    ) {
+      const validPrices: Record<string, number> = {}
+      for (const [key, value] of Object.entries(parsed)) {
+        if (isValidToolPriceEntry(key, value)) {
+          validPrices[key] = value
+        }
+      }
+      // Merge defaults first so newly introduced tools appear for old stored
+      // configs, while explicit stored values (including 0) still win.
+      return {
+        ...DEFAULT_PRICES,
+        ...validPrices,
+      }
     }
   } catch {
     // fall through to defaults
@@ -107,7 +135,20 @@ export const ToolPriceSettings = memo(function ToolPriceSettings({
 
   const currentPrices = useMemo(() => rowsToObject(rows), [rows])
   const rowsAreValid = useMemo(
-    () => rows.every((row) => isValidToolPriceEntry(row.key, row.price)),
+    () =>
+      rows.every((row) => {
+        const price = parseToolPrice(row.price)
+        return price !== null && isValidToolPriceEntry(row.key, price)
+      }),
+    [rows]
+  )
+  const invalidRowIds = useMemo(
+    () =>
+      new Set(
+        rows
+          .filter((row) => parseToolPrice(row.price) === null)
+          .map((row) => row.id)
+      ),
     [rows]
   )
 
@@ -142,7 +183,7 @@ export const ToolPriceSettings = memo(function ToolPriceSettings({
   )
 
   const updateRow = useCallback(
-    (id: number, field: 'key' | 'price', value: string | number) => {
+    (id: number, field: 'key' | 'price', value: string) => {
       syncFromRows(
         rows.map((r) => (r.id === id ? { ...r, [field]: value } : r))
       )
@@ -151,7 +192,7 @@ export const ToolPriceSettings = memo(function ToolPriceSettings({
   )
 
   const addRow = useCallback(() => {
-    const newRow: ToolPriceRow = { id: nextRowId, key: '', price: 0 }
+    const newRow: ToolPriceRow = { id: nextRowId, key: '', price: '0' }
     setNextRowId((prev) => prev + 1)
     syncFromRows([...rows, newRow])
   }, [nextRowId, rows, syncFromRows])
@@ -223,7 +264,7 @@ export const ToolPriceSettings = memo(function ToolPriceSettings({
           {editMode === 'visual' ? (
             <>
               <Button variant='outline' size='sm' onClick={addRow}>
-                <Plus className='mr-2 h-4 w-4' />
+                <Plus data-icon='inline-start' />
                 {t('Add')}
               </Button>
               <Button variant='ghost' size='sm' onClick={resetToDefault}>
@@ -233,7 +274,7 @@ export const ToolPriceSettings = memo(function ToolPriceSettings({
           ) : (
             <>
               <Button variant='ghost' size='sm' onClick={handleCopyJson}>
-                <Copy className='mr-2 h-4 w-4' />
+                <Copy data-icon='inline-start' />
                 {t('Copy')}
               </Button>
               <Button variant='ghost' size='sm' onClick={resetToDefault}>
@@ -245,12 +286,12 @@ export const ToolPriceSettings = memo(function ToolPriceSettings({
         <Button variant='outline' size='sm' onClick={toggleEditMode}>
           {editMode === 'visual' ? (
             <>
-              <Code2 className='mr-2 h-4 w-4' />
+              <Code2 data-icon='inline-start' />
               {t('Switch to JSON')}
             </>
           ) : (
             <>
-              <Eye className='mr-2 h-4 w-4' />
+              <Eye data-icon='inline-start' />
               {t('Switch to Visual')}
             </>
           )}
@@ -280,21 +321,29 @@ export const ToolPriceSettings = memo(function ToolPriceSettings({
                 id: 'price',
                 header: t('Price ($/1K calls)'),
                 className: 'w-[200px]',
-                cell: (row) => (
-                  <Input
-                    type='number'
-                    min={0}
-                    step={0.5}
-                    value={row.price}
-                    onChange={(e) =>
-                      updateRow(
-                        row.id,
-                        'price',
-                        Math.max(0, Number(e.target.value) || 0)
-                      )
-                    }
-                  />
-                ),
+                cell: (row) => {
+                  const isInvalid = invalidRowIds.has(row.id)
+                  return (
+                    <Field data-invalid={isInvalid}>
+                      <Input
+                        type='number'
+                        min={0}
+                        step={0.5}
+                        value={row.price}
+                        aria-invalid={isInvalid}
+                        aria-label={`${t('Price ($/1K calls)')}: ${row.key || t('Tool identifier')}`}
+                        onChange={(e) =>
+                          updateRow(row.id, 'price', e.target.value)
+                        }
+                      />
+                      {isInvalid ? (
+                        <FieldError>
+                          {t('Please enter a valid number')}
+                        </FieldError>
+                      ) : null}
+                    </Field>
+                  )
+                },
               },
               {
                 id: 'actions',
@@ -308,7 +357,7 @@ export const ToolPriceSettings = memo(function ToolPriceSettings({
                     onClick={() => removeRow(row.id)}
                     aria-label={t('Delete')}
                   >
-                    <Trash2 className='text-destructive h-4 w-4' />
+                    <Trash2 className='text-destructive' />
                   </Button>
                 ),
               },

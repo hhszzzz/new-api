@@ -154,7 +154,14 @@ import {
   useReducer,
 } from 'react'
 
+import { IconSub2api } from '@/assets/custom/icon-sub2api'
+
 type IconComponent = ComponentType<Record<string, unknown>>
+type CustomIconComponent = ComponentType<{ size?: number }>
+
+const CUSTOM_ICONS: Record<string, CustomIconComponent> = {
+  Sub2API: IconSub2api,
+}
 
 type LobeIconStyle = {
   AVATAR_BACKGROUND: string
@@ -445,6 +452,7 @@ function LobeIcon(iconProps: LobeIconProps) {
   const baseKey = segments[0]
   const requestedVariant =
     segments.length > 1 && /^[A-Z]/.test(segments[1]) ? segments[1] : undefined
+  const CustomIcon = baseKey ? CUSTOM_ICONS[baseKey] : undefined
   const commonIcon = baseKey ? COMMON_LOBE_ICONS[baseKey] : undefined
   const fallbackKey = baseKey ? `${baseKey}.${requestedVariant ?? 'Mono'}` : ''
   const fallbackIcon = fallbackKey
@@ -454,9 +462,10 @@ function LobeIcon(iconProps: LobeIconProps) {
     ? fallbackLobeIcons.has(fallbackKey)
     : false
   const needsFallback =
-    !commonIcon ||
-    (requestedVariant !== undefined &&
-      !commonIconVariants.has(requestedVariant))
+    !CustomIcon &&
+    (!commonIcon ||
+      (requestedVariant !== undefined &&
+        !commonIconVariants.has(requestedVariant)))
 
   useEffect(() => {
     if (!baseKey || !needsFallback || fallbackResolved) return
@@ -479,6 +488,10 @@ function LobeIcon(iconProps: LobeIconProps) {
         ?
       </div>
     )
+  }
+
+  if (CustomIcon) {
+    return <CustomIcon size={iconProps.size} />
   }
 
   let IconComponent: IconComponent | undefined

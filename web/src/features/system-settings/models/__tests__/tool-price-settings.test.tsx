@@ -60,13 +60,26 @@ describe('tool price settings validation', () => {
     const identifiers = screen.getAllByPlaceholderText(
       'web_search_preview:gpt-4o*'
     )
-    await user.type(identifiers[1], 'file_search')
+    const customIdentifier = identifiers.at(-1)
+    if (!customIdentifier) {
+      throw new Error('missing custom tool identifier input')
+    }
+    await user.type(customIdentifier, 'custom_tool')
 
     expect(saveButton).toBeEnabled()
     await user.click(saveButton)
-    expect(mutateAsyncMock).toHaveBeenCalledWith({
-      key: 'tool_price_setting.prices',
-      value: JSON.stringify({ web_search: 10, file_search: 0 }),
-    })
+    expect(mutateAsyncMock).toHaveBeenCalledTimes(1)
+    const request = mutateAsyncMock.mock.calls[0][0] as {
+      key: string
+      value: string
+    }
+    expect(request.key).toBe('tool_price_setting.prices')
+    expect(JSON.parse(request.value)).toEqual(
+      expect.objectContaining({
+        web_search: 10,
+        image_generation: 150,
+        custom_tool: 0,
+      })
+    )
   })
 })

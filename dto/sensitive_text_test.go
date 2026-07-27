@@ -79,3 +79,17 @@ func TestGeminiChatRequestGetSensitiveTextOnlyReturnsUserContents(t *testing.T) 
 
 	assert.Equal(t, "用户正文", request.GetSensitiveText())
 }
+
+func TestAlphaSearchRequestGetSensitiveTextReturnsUserInputAndQueries(t *testing.T) {
+	request := AlphaSearchRequest{RawBody: []byte(`{
+		"model":"gpt-5.1",
+		"input":[
+			{"role":"system","content":"hidden system hello"},
+			{"role":"user","content":"用户正文"}
+		],
+		"commands":{"search_query":[{"q":"查询关键词"}]},
+		"settings":{"hidden":"hello"}
+	}`)}
+
+	assert.Equal(t, "用户正文\n查询关键词", request.GetSensitiveText())
+}
