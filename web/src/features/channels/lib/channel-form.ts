@@ -24,8 +24,12 @@ import {
   ERROR_MESSAGES,
   MODEL_FETCHABLE_TYPES,
 } from '../constants'
-import type { Channel, ProtocolCapabilities, UpstreamProtocol } from '../types'
-import { channelScheduleSchema } from '../types'
+import {
+  channelScheduleSchema,
+  type Channel,
+  type ProtocolCapabilities,
+  type UpstreamProtocol,
+} from '../types'
 import {
   CHANNEL_TYPE_ADVANCED_CUSTOM,
   advancedCustomConfigUsesRelativeUpstreamPath,
@@ -35,16 +39,16 @@ import {
   validateAdvancedCustomConfig,
 } from './advanced-custom'
 import {
+  createEmptyChannelSchedule,
+  normalizeChannelSchedule,
+} from './channel-schedule'
+import {
   UPSTREAM_PROTOCOLS,
   formatProtocolModelOverrides,
   parseProtocolModelOverrides,
   protocolConversionMode,
   protocolModelOverridesTextSchema,
 } from './protocol-capabilities'
-import {
-  createEmptyChannelSchedule,
-  normalizeChannelSchedule,
-} from './channel-schedule'
 
 // ============================================================================
 // Form Validation Schema
