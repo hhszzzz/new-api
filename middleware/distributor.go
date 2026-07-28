@@ -24,6 +24,8 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+var ErrChannelOutsideSchedule = errors.New("channel is outside its scheduled availability")
+
 type ModelRequest struct {
 	Model string `json:"model"`
 	Group string `json:"group,omitempty"`
@@ -106,7 +108,7 @@ func Distribute() func(c *gin.Context) {
 				abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidChannelId))
 				return
 			}
-			if channel.Status != common.ChannelStatusEnabled {
+			if !channel.IsSchedulableAt(time.Now()) {
 				abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorChannelDisabled))
 				return
 			}
@@ -127,7 +129,7 @@ func Distribute() func(c *gin.Context) {
 				if preferredChannelID, found := service.GetPreferredChannelByAffinity(c, selectionModel, selectionGroup); found {
 					affinityUsable := false
 					preferred, err := model.CacheGetChannel(preferredChannelID)
-					if err == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled &&
+					if err == nil && preferred != nil && preferred.IsSchedulableAt(time.Now()) &&
 						(candidateFilter == nil || candidateFilter(preferred)) &&
 						channelSupportsRequestPath(preferred, c.Request.URL.Path, selectionModel) {
 						resolvedGroup, groupUsable := resolveAffinitySelectionGroup(c, selectionGroup, selectionModel, preferred.Id)
@@ -177,7 +179,7 @@ func Distribute() func(c *gin.Context) {
 		}
 		common.SetContextKey(c, constant.ContextKeyRequestStartTime, time.Now())
 		if channel != nil {
-			if setupErr := SetupContextForSelectedChannel(c, channel, modelRequest.Model); setupErr != nil {
+			if setupErr := SetupContextForSelectedChannel(c, channel, modelRequest.Model, true); setupErr != nil {
 				abortWithOpenAiMessage(c, setupErr.StatusCode, setupErr.Error(), setupErr.GetErrorCode())
 				return
 			}
@@ -501,10 +503,17 @@ func getTaskOriginModelName(c *gin.Context) (string, error) {
 	return "", nil
 }
 
-func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, modelName string) *types.NewAPIError {
+func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, modelName string, enforceSchedule bool) *types.NewAPIError {
 	c.Set("original_model", modelName) // for retry
 	if channel == nil {
 		return types.NewError(errors.New("channel is nil"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+	}
+	if enforceSchedule && !channel.Schedule.IsAvailableAt(time.Now()) {
+		return types.NewErrorWithStatusCode(
+			ErrChannelOutsideSchedule,
+			types.ErrorCodeGetChannelFailed,
+			http.StatusServiceUnavailable,
+		)
 	}
 	selectionModel := routeSelectionModel(c, modelName)
 	selectionGroup := routeSelectionGroup(c, common.GetContextKeyString(c, constant.ContextKeyUsingGroup))

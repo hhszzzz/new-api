@@ -539,6 +539,18 @@ export const STATIC_I18N_KEYS = [
   'Redirecting to chat page...',
 
   // Channel upstream updates
+  'Scheduled Disabled',
+  'Available now',
+  'Not started',
+  'Temporarily paused',
+  'Outside weekly window',
+  'Monday',
+  'Tuesday',
+  'Wednesday',
+  'Thursday',
+  'Friday',
+  'Saturday',
+  'Sunday',
   'No processable upstream model updates for this channel',
   'Upstream model updates applied: {{added}} added, {{removed}} removed, {{ignored}} ignored this time, {{totalIgnored}} total ignored models',
   'Batch processing failed',
@@ -547,6 +559,11 @@ export const STATIC_I18N_KEYS = [
   'Detection complete: {{add}} to add, {{remove}} to remove',
   'Batch detection failed',
   'Batch detection complete: {{channels}} channels, {{add}} to add, {{remove}} to remove, {{fails}} failed',
+
+  // Channel aggregate merge validation
+  'Aggregate name is too long',
+  'Aggregate remark is too long',
+  'Enter a valid HTTP or HTTPS URL without query parameters or fragments',
 
   // Advanced Custom model discovery
   'Only one OpenAI Models route is allowed',

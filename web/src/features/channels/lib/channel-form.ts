@@ -23,7 +23,7 @@ import {
   ERROR_MESSAGES,
   MODEL_FETCHABLE_TYPES,
 } from '../constants'
-import type { Channel } from '../types'
+import { channelScheduleSchema, type Channel } from '../types'
 import {
   CHANNEL_TYPE_ADVANCED_CUSTOM,
   advancedCustomConfigUsesRelativeUpstreamPath,
@@ -32,6 +32,10 @@ import {
   stringifyAdvancedCustomConfig,
   validateAdvancedCustomConfig,
 } from './advanced-custom'
+import {
+  createEmptyChannelSchedule,
+  normalizeChannelSchedule,
+} from './channel-schedule'
 
 // ============================================================================
 // Form Validation Schema
@@ -194,6 +198,7 @@ export const channelFormSchema = z
       .string()
       .max(255, 'Remark must be less than 255 characters')
       .optional(),
+    schedule: channelScheduleSchema,
     setting: z
       .string()
       .optional()
@@ -251,6 +256,18 @@ export const channelFormSchema = z
     upstream_model_update_ignored_models: z.string().optional(),
   })
   .superRefine((data, ctx) => {
+    if (
+      data.schedule.starts_at &&
+      data.schedule.expires_at &&
+      data.schedule.starts_at >= data.schedule.expires_at
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['schedule', 'expires_at'],
+        message: 'Disable time must be later than enable time',
+      })
+    }
+
     if ([3, 8, 36, 45].includes(data.type) && !data.base_url?.trim()) {
       addRequiredIssue(
         ctx,
@@ -342,7 +359,8 @@ export const channelFormSchema = z
     }
   })
 
-export type ChannelFormValues = z.infer<typeof channelFormSchema>
+export type ChannelFormInput = z.input<typeof channelFormSchema>
+export type ChannelFormValues = z.output<typeof channelFormSchema>
 
 // ============================================================================
 // Default Form Values
@@ -365,6 +383,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   status_code_mapping: '',
   tag: '',
   remark: '',
+  schedule: createEmptyChannelSchedule(),
   setting: '',
   param_override: '',
   header_override: '',
@@ -521,6 +540,7 @@ export function transformChannelToFormDefaults(
     status_code_mapping: channel.status_code_mapping || '',
     tag: channel.tag || '',
     remark: channel.remark || '',
+    schedule: normalizeChannelSchedule(channel.schedule),
     setting: channel.setting || '',
     param_override: channel.param_override || '',
     header_override: channel.header_override || '',
@@ -756,6 +776,7 @@ export function transformFormDataToCreatePayload(formData: ChannelFormValues): {
     status_code_mapping: formData.status_code_mapping || null,
     tag: formData.tag || null,
     remark: formData.remark || '',
+    schedule: normalizeChannelSchedule(formData.schedule),
     setting: buildSettingJSON(formData),
     param_override: formData.param_override || null,
     header_override: formData.header_override || null,
@@ -805,6 +826,7 @@ export function transformFormDataToUpdatePayload(
     status_code_mapping: formData.status_code_mapping || null,
     tag: formData.tag || null,
     remark: formData.remark || '',
+    schedule: normalizeChannelSchedule(formData.schedule),
     setting: buildSettingJSON(formData),
     param_override: formData.param_override || null,
     header_override: formData.header_override || null,

@@ -148,6 +148,29 @@ export const CHANNEL_STATUS_CONFIG = {
   },
 }
 
+export const CHANNEL_EFFECTIVE_STATUS_CONFIG = {
+  unknown: {
+    variant: 'neutral' as const,
+    label: 'Unknown',
+  },
+  enabled: {
+    variant: 'success' as const,
+    label: 'Enabled',
+  },
+  manual_disabled: {
+    variant: 'danger' as const,
+    label: 'Disabled',
+  },
+  auto_disabled: {
+    variant: 'warning' as const,
+    label: 'Auto Disabled',
+  },
+  scheduled_disabled: {
+    variant: 'info' as const,
+    label: 'Scheduled Disabled',
+  },
+}
+
 // ============================================================================
 // Multi-Key Status
 // ============================================================================

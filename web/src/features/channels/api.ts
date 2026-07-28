@@ -25,9 +25,18 @@ import type {
   BatchSetTagParams,
   Channel,
   ChannelAggregateInput,
+  ChannelAggregateDetachParams,
+  ChannelAggregateDetachResponse,
+  ChannelAggregateMergeParams,
+  ChannelAggregateMergeResponse,
   ChannelAggregateResponse,
   ChannelAggregatesResponse,
   ChannelBalanceResponse,
+  ChannelBatchFilter,
+  ChannelBatchPreviewResponse,
+  ChannelBatchTarget,
+  ChannelBatchUpdateResponse,
+  ChannelBatchUpdates,
   ChannelOpsResponse,
   ChannelTestResponse,
   CopyChannelParams,
@@ -146,6 +155,28 @@ export async function deleteChannelAggregate(
   return res.data
 }
 
+export async function mergeChannelsIntoAggregate(
+  data: ChannelAggregateMergeParams
+): Promise<ChannelAggregateMergeResponse> {
+  const res = await api.post(
+    '/api/channel/aggregates/merge',
+    data,
+    channelActionConfig()
+  )
+  return res.data
+}
+
+export async function detachChannelsFromAggregates(
+  data: ChannelAggregateDetachParams
+): Promise<ChannelAggregateDetachResponse> {
+  const res = await api.post(
+    '/api/channel/aggregates/detach',
+    data,
+    channelActionConfig()
+  )
+  return res.data
+}
+
 /**
  * Get channel operations summary for administrators
  */
@@ -239,6 +270,29 @@ export async function batchSetChannelTag(
   const res = await api.post(
     '/api/channel/batch/tag',
     data,
+    channelActionConfig()
+  )
+  return res.data
+}
+
+export async function previewChannelBatch(
+  filter: ChannelBatchFilter
+): Promise<ChannelBatchPreviewResponse> {
+  const res = await api.post(
+    '/api/channel/batch/preview',
+    { filter },
+    channelActionConfig()
+  )
+  return res.data
+}
+
+export async function batchUpdateChannels(
+  target: ChannelBatchTarget,
+  updates: ChannelBatchUpdates
+): Promise<ChannelBatchUpdateResponse> {
+  const res = await api.patch(
+    '/api/channel/batch',
+    { target, updates },
     channelActionConfig()
   )
   return res.data

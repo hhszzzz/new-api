@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -213,6 +214,9 @@ func findEligibleChannelAbilities(group, abilityModel, requestModel, requestPath
 	}
 	channels := make(map[int]*Channel, len(channelRows))
 	for _, channel := range channelRows {
+		if !channel.IsSchedulableAt(time.Now()) {
+			continue
+		}
 		channels[channel.Id] = channel
 	}
 

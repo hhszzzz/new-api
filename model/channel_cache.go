@@ -153,6 +153,21 @@ func GetRandomSatisfiedChannelInPoolWithFilter(group string, model string, retry
 	if len(channels) == 0 {
 		return nil, nil
 	}
+	now := time.Now()
+	schedulableChannels := make([]int, 0, len(channels))
+	for _, channelId := range channels {
+		channel, ok := channelsIDM[channelId]
+		if !ok {
+			return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channelId)
+		}
+		if channel.IsSchedulableAt(now) {
+			schedulableChannels = append(schedulableChannels, channelId)
+		}
+	}
+	channels = schedulableChannels
+	if len(channels) == 0 {
+		return nil, nil
+	}
 
 	if len(channels) == 1 {
 		if channel, ok := channelsIDM[channels[0]]; ok {

@@ -23,8 +23,8 @@ import { useTranslation } from 'react-i18next'
 import { GroupBadge } from '@/components/group-badge'
 import { cn } from '@/lib/utils'
 
-import { CHANNEL_STATUS } from '../constants'
 import {
+  getChannelEffectiveStatus,
   isChannelAggregateRow,
   isTagAggregateRow,
   parseGroupsList,
@@ -72,6 +72,7 @@ function ChannelCardComponent({
   }
 
   const groups = parseGroupsList(row.original.group ?? '')
+  const effectiveStatus = getChannelEffectiveStatus(row.original)
 
   const selectCell = renderCell('select')
   const typeCell = renderCell('type')
@@ -91,8 +92,7 @@ function ChannelCardComponent({
   // only the informative states (e.g. auto-disabled, unknown) and tag rows.
   const showStatusBadge =
     isSummaryRow ||
-    (row.original.status !== CHANNEL_STATUS.ENABLED &&
-      row.original.status !== CHANNEL_STATUS.MANUAL_DISABLED)
+    (effectiveStatus !== 'enabled' && effectiveStatus !== 'manual_disabled')
 
   return (
     <ChannelRowActionsLayoutContext.Provider value='card'>

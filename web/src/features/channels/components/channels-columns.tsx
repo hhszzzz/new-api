@@ -56,13 +56,18 @@ import { formatTimestampToDate } from '@/lib/format'
 import { truncateText } from '@/lib/utils'
 
 import { getCodexUsage } from '../api'
-import { CHANNEL_STATUS_CONFIG, MODEL_FETCHABLE_TYPES } from '../constants'
+import {
+  CHANNEL_EFFECTIVE_STATUS_CONFIG,
+  MODEL_FETCHABLE_TYPES,
+} from '../constants'
 import {
   formatRelativeTime,
+  formatShanghaiTimestamp,
   formatResponseTime,
   getBalanceVariant,
   getChannelTypeIcon,
   getChannelTypeLabel,
+  getChannelEffectiveStatus,
   getResponseTimeConfig,
   isMultiKeyChannel,
   parseModelsList,
@@ -88,6 +93,14 @@ import {
   type CodexUsageDialogData,
 } from './dialogs/codex-usage-dialog'
 import { NumericSpinnerInput } from './numeric-spinner-input'
+
+const SCHEDULE_REASON_LABELS = {
+  none: 'Available now',
+  before_start: 'Not started',
+  paused: 'Temporarily paused',
+  expired: 'Expired',
+  outside_weekly_window: 'Outside weekly window',
+} as const
 
 function parseIonetMeta(otherInfo: string | null | undefined): null | {
   source?: string
@@ -406,11 +419,7 @@ function BalanceCell({ channel }: { channel: Channel }) {
           <TooltipTrigger
             render={
               <StatusBadge
-                label={
-                  sensitiveVisible
-                    ? `${t('Used:')} ${usedDisplay}`
-                    : maskedUsedLabel
-                }
+                label={sensitiveVisible ? usedDisplay : SENSITIVE_MASK}
                 variant='neutral'
                 size='sm'
                 copyable={false}
@@ -589,16 +598,40 @@ export function useChannelsColumns(
                 const isTagRow = isTagAggregateRow(row.original)
                 const isChannelAggregate = isChannelAggregateRow(row.original)
 
-                // Synthetic parent rows are not concrete selectable channels.
-                if (isTagRow || isChannelAggregate) {
-                  return null
-                }
+                if (isTagRow) return null
+
+                const checked = isChannelAggregate
+                  ? row.subRows.length > 0 &&
+                    row.subRows.every((child) => child.getIsSelected())
+                  : row.getIsSelected()
+                const indeterminate = isChannelAggregate
+                  ? !checked &&
+                    row.subRows.some(
+                      (child) =>
+                        child.getIsSelected() || child.getIsSomeSelected()
+                    )
+                  : row.getIsSomeSelected()
 
                 return (
                   <Checkbox
-                    checked={row.getIsSelected()}
-                    onCheckedChange={(value) => row.toggleSelected(!!value)}
-                    aria-label={t('Select row')}
+                    checked={checked}
+                    indeterminate={indeterminate}
+                    onCheckedChange={(value) => {
+                      if (isChannelAggregate) {
+                        row.subRows.forEach((child) =>
+                          child.toggleSelected(!!value, {
+                            selectChildren: true,
+                          })
+                        )
+                        return
+                      }
+                      row.toggleSelected(!!value, { selectChildren: true })
+                    }}
+                    aria-label={
+                      isChannelAggregate
+                        ? t('Select all channels in this aggregate')
+                        : t('Select row')
+                    }
                   />
                 )
               },
@@ -666,36 +699,27 @@ export function useChannelsColumns(
 
           if (isChannelAggregate) {
             const aggregateName = channel.aggregate_name || t('Aggregate')
-            const childrenCount = (channel as ChannelAggregateRow).children
-              .length
+            const isExpanded = row.getIsExpanded()
             return (
               <div className='flex items-center gap-2'>
-                <Button
-                  variant='ghost'
-                  size='sm'
-                  className='h-6 w-6 p-0'
-                  onClick={row.getToggleExpandedHandler()}
-                  aria-label={row.getIsExpanded() ? t('Collapse') : t('Expand')}
-                  aria-expanded={row.getIsExpanded()}
-                >
-                  {row.getIsExpanded() ? (
-                    <ChevronDown className='h-4 w-4' />
-                  ) : (
-                    <ChevronRight className='h-4 w-4' />
-                  )}
-                </Button>
                 <div className='flex min-w-0 items-center gap-1.5'>
                   <span className='truncate font-semibold'>
                     {sensitiveVisible ? aggregateName : SENSITIVE_MASK}
                   </span>
-                  <StatusBadge
-                    label={t('{{count}} child channels', {
-                      count: childrenCount,
-                    })}
-                    variant='purple'
-                    size='sm'
-                    copyable={false}
-                  />
+                  <Button
+                    variant={isExpanded ? 'secondary' : 'outline'}
+                    size='icon-xs'
+                    onClick={row.getToggleExpandedHandler()}
+                    data-state={isExpanded ? 'open' : 'closed'}
+                    aria-label={isExpanded ? t('Collapse') : t('Expand')}
+                    aria-expanded={isExpanded}
+                  >
+                    {isExpanded ? (
+                      <ChevronDown className='h-4 w-4' />
+                    ) : (
+                      <ChevronRight className='h-4 w-4' />
+                    )}
+                  </Button>
                 </div>
               </div>
             )
@@ -762,15 +786,6 @@ export function useChannelsColumns(
                       </TooltipContent>
                     </Tooltip>
                   </TooltipProvider>
-                )}
-                {channel.aggregate_name && (
-                  <StatusBadge
-                    label={`${t('Aggregate')}: ${channel.aggregate_name}`}
-                    variant='purple'
-                    size='sm'
-                    copyable={false}
-                    className='w-fit'
-                  />
                 )}
               </div>
             </div>
@@ -988,15 +1003,14 @@ export function useChannelsColumns(
           }
 
           if (isChannelAggregate) {
-            const childrenCount = (channel as ChannelAggregateRow).children
-              .length
+            const activeCount = (channel as ChannelAggregateRow).active_count
             const hasEnabled = status === 1
             return (
               <StatusBadge
                 label={t(
                   hasEnabled ? 'Active ({{count}})' : 'Inactive ({{count}})',
                   {
-                    count: childrenCount,
+                    count: activeCount,
                   }
                 )}
                 variant={hasEnabled ? 'success' : 'neutral'}
@@ -1007,10 +1021,8 @@ export function useChannelsColumns(
           }
 
           // Regular channel row
-          const config =
-            CHANNEL_STATUS_CONFIG[
-              status as keyof typeof CHANNEL_STATUS_CONFIG
-            ] || CHANNEL_STATUS_CONFIG[0]
+          const effectiveStatus = getChannelEffectiveStatus(channel)
+          const config = CHANNEL_EFFECTIVE_STATUS_CONFIG[effectiveStatus]
 
           const isMultiKey = isMultiKeyChannel(channel)
           const keySize = channel.channel_info?.multi_key_size ?? 0
@@ -1023,10 +1035,11 @@ export function useChannelsColumns(
               ? `${t(config.label)} (${enabledCount}/${keySize})`
               : t(config.label)
 
-          // Auto-disabled: show reason and time tooltip
-          if (status === 3) {
-            let statusReason = ''
-            let statusTime = ''
+          let statusReason = ''
+          let statusTime = ''
+          let statusTimeLabel = t('Time:')
+
+          if (effectiveStatus === 'auto_disabled') {
             try {
               const otherInfo = channel.other_info
                 ? JSON.parse(channel.other_info)
@@ -1040,37 +1053,47 @@ export function useChannelsColumns(
             } catch {
               /* empty */
             }
-
-            if (statusReason || statusTime) {
-              return (
-                <TooltipProvider delay={100}>
-                  <Tooltip>
-                    <TooltipTrigger render={<span />}>
-                      <StatusBadge
-                        label={label}
-                        variant={config.variant}
-                        size='sm'
-                        copyable={false}
-                      />
-                    </TooltipTrigger>
-                    <TooltipContent side='top' className='max-w-xs'>
-                      <div className='space-y-1 text-xs'>
-                        {statusReason && (
-                          <div>
-                            {t('Reason:')} {statusReason}
-                          </div>
-                        )}
-                        {statusTime && (
-                          <div>
-                            {t('Time:')} {statusTime}
-                          </div>
-                        )}
-                      </div>
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
+          } else if (effectiveStatus === 'scheduled_disabled') {
+            const scheduleState = channel.schedule_state
+            if (scheduleState) {
+              statusReason = t(SCHEDULE_REASON_LABELS[scheduleState.reason])
+              statusTime = formatShanghaiTimestamp(
+                scheduleState.next_transition_at,
+                locale
               )
+              statusTimeLabel = t('Next status change:')
             }
+          }
+
+          if (statusReason || statusTime) {
+            return (
+              <TooltipProvider delay={100}>
+                <Tooltip>
+                  <TooltipTrigger render={<span />}>
+                    <StatusBadge
+                      label={label}
+                      variant={config.variant}
+                      size='sm'
+                      copyable={false}
+                    />
+                  </TooltipTrigger>
+                  <TooltipContent side='top' className='max-w-xs'>
+                    <div className='space-y-1 text-xs'>
+                      {statusReason && (
+                        <div>
+                          {t('Reason:')} {statusReason}
+                        </div>
+                      )}
+                      {statusTime && (
+                        <div>
+                          {statusTimeLabel} {statusTime}
+                        </div>
+                      )}
+                    </div>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )
           }
 
           return (

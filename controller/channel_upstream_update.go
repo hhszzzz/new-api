@@ -57,6 +57,7 @@ var channelUpstreamModelUpdateSelectFields = []string{
 	"tag",
 	"channel_info",
 	"header_override",
+	"schedule",
 }
 
 var channelUpstreamModelUpdateNotifyState = struct {
@@ -701,6 +702,9 @@ scanLoop:
 			}
 			if ctx != nil && ctx.Err() != nil {
 				break scanLoop
+			}
+			if !force && !channel.Schedule.IsAvailableAt(time.Now()) {
+				continue
 			}
 
 			processed++

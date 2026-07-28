@@ -53,8 +53,9 @@ export function DataTableBulkActions<TData>({
   children,
 }: DataTableBulkActionsProps<TData>): React.ReactNode | null {
   const { t } = useTranslation()
-  const selectedRows = table.getFilteredSelectedRowModel().rows
-  const selectedCount = selectedRows.length
+  const selectedCount = table
+    .getFilteredSelectedRowModel()
+    .flatRows.filter((row) => row.getIsSelected()).length
   const toolbarRef = useRef<HTMLDivElement>(null)
   const buttonsRef = useRef<NodeListOf<HTMLButtonElement> | null>(null)
   const [announcement, setAnnouncement] = useState('')
