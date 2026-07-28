@@ -469,6 +469,85 @@ func TestResponsesStatePersistsCompletedNonStreamResponseAfterClientCancellation
 	assert.Equal(t, 3, binding.ChannelID)
 }
 
+func TestResponsesStateWorksForExplicitConversionWhenGlobalBridgeIsDisabled(t *testing.T) {
+	resetProtocolStateCaches(t)
+	model_setting.GetGlobalSettings().ProtocolBridgePolicy.Enabled = false
+	ctx := protocolStateTestContext("explicit-conversion", 54, 55)
+	request := &dto.OpenAIResponsesRequest{Model: "gpt-a", Input: mustProtocolStateJSON(t, "hello")}
+	plan := channelcompat.ProtocolPlan{
+		RequestProtocol:  channelcompat.ProtocolResponses,
+		UpstreamProtocol: channelcompat.ProtocolChat,
+		Status:           channelcompat.StatusConvertible,
+		StateMode:        channelcompat.StateModeReplay,
+		StateEnabled:     true,
+	}
+	require.NoError(t, PrepareResponsesRequest(ctx, protocolStateRelayInfo("gpt-a", 56), plan, request))
+	response := &dto.OpenAIResponsesResponse{
+		ID:     "chatcmpl_explicit",
+		Status: mustProtocolStateJSON(t, "completed"),
+		Output: []dto.ResponsesOutput{{Type: "message", Role: "assistant"}},
+	}
+	publicID := CaptureResponsesResponse(ctx, response.ID, response)
+	require.NotEmpty(t, publicID)
+	require.NoError(t, Commit(ctx))
+
+	next := protocolStateTestContext("explicit-conversion-next", 54, 55)
+	body := mustProtocolStateJSON(t, map[string]any{"previous_response_id": publicID})
+	binding, err := ResolveSelectionBinding(next, "/v1/responses", "gpt-a", body)
+	require.NoError(t, err)
+	require.NotNil(t, binding)
+	assert.Equal(t, 56, binding.ChannelID)
+}
+
+func TestResponsesStateRemainsDisabledForLegacyPlanWhenGlobalBridgeIsDisabled(t *testing.T) {
+	resetProtocolStateCaches(t)
+	model_setting.GetGlobalSettings().ProtocolBridgePolicy.Enabled = false
+	ctx := protocolStateTestContext("legacy-disabled", 64, 65)
+	request := &dto.OpenAIResponsesRequest{Model: "gpt-a", Input: mustProtocolStateJSON(t, "hello")}
+	plan := channelcompat.ProtocolPlan{
+		RequestProtocol:  channelcompat.ProtocolResponses,
+		UpstreamProtocol: channelcompat.ProtocolResponses,
+		Status:           channelcompat.StatusNative,
+	}
+
+	require.NoError(t, PrepareResponsesRequest(ctx, protocolStateRelayInfo("gpt-a", 66), plan, request))
+
+	assert.False(t, Active(ctx))
+	assert.Empty(t, PublicResponseID(ctx, ""))
+}
+
+func TestResponsesStateClearsFailedManagedAttemptBeforeLegacyRetry(t *testing.T) {
+	resetProtocolStateCaches(t)
+	model_setting.GetGlobalSettings().ProtocolBridgePolicy.Enabled = false
+	ctx := protocolStateTestContext("responses-retry", 74, 75)
+	managedPlan := channelcompat.ProtocolPlan{
+		RequestProtocol:  channelcompat.ProtocolResponses,
+		UpstreamProtocol: channelcompat.ProtocolChat,
+		Status:           channelcompat.StatusConvertible,
+		StateEnabled:     true,
+	}
+	relayInfo := protocolStateRelayInfo("gpt-a", 76)
+
+	require.NoError(t, PrepareResponsesRequest(ctx, relayInfo, managedPlan, &dto.OpenAIResponsesRequest{
+		Model: "gpt-a",
+		Input: mustProtocolStateJSON(t, "hello"),
+	}))
+	require.True(t, Active(ctx))
+	require.NotEmpty(t, PublicResponseID(ctx, ""))
+
+	legacyPlan := managedPlan
+	legacyPlan.UpstreamProtocol = channelcompat.ProtocolResponses
+	legacyPlan.Status = channelcompat.StatusNative
+	legacyPlan.StateEnabled = false
+	require.NoError(t, PrepareResponsesRequest(ctx, relayInfo, legacyPlan, &dto.OpenAIResponsesRequest{
+		Model: "gpt-a",
+		Input: mustProtocolStateJSON(t, "hello"),
+	}))
+
+	assert.False(t, Active(ctx))
+	assert.Empty(t, PublicResponseID(ctx, ""))
+}
+
 func TestResponsesStateDoesNotPersistCancelledStream(t *testing.T) {
 	resetProtocolStateCaches(t)
 	ctx := protocolStateTestContext("cancelled-stream", 14, 15)
@@ -708,6 +787,43 @@ func TestClaudeCodeResponsesContinuationRequiresStrictAppend(t *testing.T) {
 	binding, err = ResolveSelectionBinding(nonAppendContext, "/v1/messages", "claude-public", mustProtocolStateJSON(t, nonAppend))
 	require.NoError(t, err)
 	assert.Nil(t, binding)
+}
+
+func TestClaudeCodeResponsesBindingWorksForExplicitConversionWhenGlobalBridgeIsDisabled(t *testing.T) {
+	resetProtocolStateCaches(t)
+	model_setting.GetGlobalSettings().ProtocolBridgePolicy.Enabled = false
+	plan := channelcompat.ProtocolPlan{
+		RequestProtocol:  channelcompat.ProtocolMessages,
+		UpstreamProtocol: channelcompat.ProtocolResponses,
+		Status:           channelcompat.StatusConvertible,
+		StateEnabled:     true,
+	}
+	initialContext := protocolStateTestContext("claude-explicit-root", 88, 89)
+	initialRequest := claudeSessionRequest("hello")
+	require.NoError(t, PrepareMessagesRequest(initialContext, protocolStateRelayInfo("claude-public", 90), plan, initialRequest))
+	upstream := &dto.OpenAIResponsesResponse{
+		ID:     "resp_explicit_claude",
+		Status: mustProtocolStateJSON(t, "completed"),
+		Store:  true,
+	}
+	assistantText := "answer"
+	CaptureMessagesResponse(initialContext, upstream, &dto.ClaudeResponse{
+		Type:    "message",
+		Content: []dto.ClaudeMediaMessage{{Type: "text", Text: &assistantText}},
+	})
+	require.NoError(t, Commit(initialContext))
+
+	nextRequest := claudeSessionRequest("hello")
+	nextRequest.Messages = append(nextRequest.Messages,
+		dto.ClaudeMessage{Role: "assistant", Content: []dto.ClaudeMediaMessage{{Type: "text", Text: &assistantText}}},
+		dto.ClaudeMessage{Role: "user", Content: "next"},
+	)
+	nextContext := protocolStateTestContext("claude-explicit-next", 88, 89)
+	binding, err := ResolveSelectionBinding(nextContext, "/v1/messages", "claude-public", mustProtocolStateJSON(t, nextRequest))
+
+	require.NoError(t, err)
+	require.NotNil(t, binding)
+	assert.Equal(t, 90, binding.ChannelID)
 }
 
 func TestClaudeCodeResponsesReplaysWhenUpstreamResponseWasNotStored(t *testing.T) {

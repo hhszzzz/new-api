@@ -7,12 +7,23 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service/channelcompat"
 	"github.com/QuantumNous/new-api/service/clientpolicy"
-	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/gin-gonic/gin"
 )
+
+type autoProtocolAttempt struct {
+	Channel                *model.Channel
+	ChannelID              int
+	EffectiveUpstreamModel string
+	RequestProtocol        channelcompat.Protocol
+	ProtocolOrder          []channelcompat.Protocol
+	CurrentIndex           int
+	RetryPending           bool
+}
 
 func BuildChannelCandidateFilter(c *gin.Context, modelName string) model.ChannelCandidateFilter {
 	if c == nil || c.Request == nil || c.Request.URL == nil {
@@ -23,8 +34,7 @@ func BuildChannelCandidateFilter(c *gin.Context, modelName string) model.Channel
 	features := requestProtocolFeatures(c, protocol)
 	modelName = strings.TrimSpace(modelName)
 	client := requestClient(c)
-	bridgeClassifierOwnsProtocolFiltering := model_setting.GetGlobalSettings().ProtocolBridgePolicy.Enabled &&
-		(protocol == channelcompat.ProtocolResponses || protocol == channelcompat.ProtocolMessages)
+	bridgeClassifierOwnsProtocolFiltering := protocol == channelcompat.ProtocolResponses || protocol == channelcompat.ProtocolMessages
 	return func(channel *model.Channel) bool {
 		if !clientpolicy.IsChannelAllowed(channel, client) {
 			return false
@@ -41,8 +51,7 @@ func BuildChannelCandidateClassifier(c *gin.Context, modelName string) model.Cha
 		return nil
 	}
 	protocol := channelcompat.DetectRequestProtocol(c.Request.URL.Path)
-	if !model_setting.GetGlobalSettings().ProtocolBridgePolicy.Enabled ||
-		(protocol != channelcompat.ProtocolResponses && protocol != channelcompat.ProtocolMessages) {
+	if protocol != channelcompat.ProtocolResponses && protocol != channelcompat.ProtocolMessages {
 		return nil
 	}
 	requestPath := c.Request.URL.Path
@@ -110,7 +119,13 @@ func applySelectedChannelCompatibility(c *gin.Context, channel *model.Channel, m
 	if protocol == "" {
 		return nil
 	}
-	plan := channelcompat.PlanForRequest(channel, protocol, modelName, c.Request.URL.Path, requestProtocolFeatures(c, protocol))
+	plans := channelcompat.PlansForRequest(channel, protocol, modelName, c.Request.URL.Path, requestProtocolFeatures(c, protocol))
+	plan := plans[0]
+	if plan.SelectionMode == dto.ProtocolSelectionModeAuto && plan.Status != channelcompat.StatusIncompatible {
+		plan = selectAutomaticProtocolPlan(c, channel, plans)
+	} else {
+		common.SetContextKey(c, constant.ContextKeyProtocolAutoAttempt, nil)
+	}
 	if plan.Status == channelcompat.StatusIncompatible {
 		reason := plan.Reason
 		if reason == "" {
@@ -130,4 +145,114 @@ func applySelectedChannelCompatibility(c *gin.Context, channel *model.Channel, m
 	common.SetContextKey(c, constant.ContextKeyProtocolStateMode, plan.StateMode)
 	common.SetContextKey(c, constant.ContextKeyProtocolPlan, plan)
 	return nil
+}
+
+func selectAutomaticProtocolPlan(c *gin.Context, channel *model.Channel, plans []channelcompat.ProtocolPlan) channelcompat.ProtocolPlan {
+	firstPlan := plans[0]
+	if attempt, ok := common.GetContextKeyType[*autoProtocolAttempt](c, constant.ContextKeyProtocolAutoAttempt); ok &&
+		attempt != nil && attempt.ChannelID == channel.Id &&
+		attempt.EffectiveUpstreamModel == firstPlan.EffectiveUpstreamModel &&
+		attempt.RequestProtocol == firstPlan.RequestProtocol &&
+		attempt.CurrentIndex >= 0 && attempt.CurrentIndex < len(attempt.ProtocolOrder) {
+		if plan, found := findAutomaticProtocolPlan(plans, attempt.ProtocolOrder[attempt.CurrentIndex]); found {
+			attempt.Channel = channel
+			attempt.RetryPending = false
+			common.SetContextKey(c, constant.ContextKeyProtocolAutoAttempt, attempt)
+			return plan
+		}
+	}
+
+	protocolOrder := make([]channelcompat.Protocol, 0, len(plans))
+	for _, plan := range plans {
+		if plan.Status == channelcompat.StatusIncompatible {
+			continue
+		}
+		protocolOrder = append(protocolOrder, plan.UpstreamProtocol)
+	}
+	if preferred, found := channelcompat.LookupProtocolAffinity(channel, firstPlan.EffectiveUpstreamModel, firstPlan.RequestProtocol); found {
+		for index, protocol := range protocolOrder {
+			if protocol != preferred {
+				continue
+			}
+			reordered := make([]channelcompat.Protocol, 0, len(protocolOrder))
+			reordered = append(reordered, preferred)
+			reordered = append(reordered, protocolOrder[:index]...)
+			reordered = append(reordered, protocolOrder[index+1:]...)
+			protocolOrder = reordered
+			break
+		}
+	}
+
+	attempt := &autoProtocolAttempt{
+		Channel:                channel,
+		ChannelID:              channel.Id,
+		EffectiveUpstreamModel: firstPlan.EffectiveUpstreamModel,
+		RequestProtocol:        firstPlan.RequestProtocol,
+		ProtocolOrder:          protocolOrder,
+	}
+	common.SetContextKey(c, constant.ContextKeyProtocolAutoAttempt, attempt)
+	if len(protocolOrder) > 0 {
+		if plan, found := findAutomaticProtocolPlan(plans, protocolOrder[0]); found {
+			return plan
+		}
+	}
+	return firstPlan
+}
+
+func findAutomaticProtocolPlan(plans []channelcompat.ProtocolPlan, protocol channelcompat.Protocol) (channelcompat.ProtocolPlan, bool) {
+	for _, plan := range plans {
+		if plan.Status != channelcompat.StatusIncompatible && plan.UpstreamProtocol == protocol {
+			return plan, true
+		}
+	}
+	return channelcompat.ProtocolPlan{}, false
+}
+
+func AdvanceAutoProtocolAttempt(c *gin.Context, apiError *types.NewAPIError) bool {
+	if c == nil || c.Writer == nil || c.Writer.Written() || !channelcompat.IsProtocolUnsupportedError(apiError) {
+		return false
+	}
+	attempt, ok := common.GetContextKeyType[*autoProtocolAttempt](c, constant.ContextKeyProtocolAutoAttempt)
+	if !ok || attempt == nil || attempt.CurrentIndex < 0 || attempt.CurrentIndex >= len(attempt.ProtocolOrder) {
+		return false
+	}
+	plan, ok := common.GetContextKeyType[channelcompat.ProtocolPlan](c, constant.ContextKeyProtocolPlan)
+	if !ok || plan.SelectionMode != dto.ProtocolSelectionModeAuto || plan.UpstreamProtocol != attempt.ProtocolOrder[attempt.CurrentIndex] {
+		return false
+	}
+
+	channelcompat.ForgetProtocolAffinity(attempt.Channel, attempt.EffectiveUpstreamModel, attempt.RequestProtocol)
+	if attempt.CurrentIndex+1 >= len(attempt.ProtocolOrder) {
+		return false
+	}
+	attempt.CurrentIndex++
+	attempt.RetryPending = true
+	common.SetContextKey(c, constant.ContextKeyProtocolAutoAttempt, attempt)
+	return true
+}
+
+func PendingAutoProtocolRetryChannelID(c *gin.Context) (int, bool) {
+	if c == nil {
+		return 0, false
+	}
+	attempt, ok := common.GetContextKeyType[*autoProtocolAttempt](c, constant.ContextKeyProtocolAutoAttempt)
+	if !ok || attempt == nil || !attempt.RetryPending || attempt.ChannelID <= 0 {
+		return 0, false
+	}
+	return attempt.ChannelID, true
+}
+
+func CommitAutoProtocolAffinity(c *gin.Context) {
+	if c == nil {
+		return
+	}
+	attempt, ok := common.GetContextKeyType[*autoProtocolAttempt](c, constant.ContextKeyProtocolAutoAttempt)
+	if !ok || attempt == nil || attempt.CurrentIndex < 0 || attempt.CurrentIndex >= len(attempt.ProtocolOrder) {
+		return
+	}
+	plan, ok := common.GetContextKeyType[channelcompat.ProtocolPlan](c, constant.ContextKeyProtocolPlan)
+	if !ok || plan.SelectionMode != dto.ProtocolSelectionModeAuto || plan.UpstreamProtocol != attempt.ProtocolOrder[attempt.CurrentIndex] {
+		return
+	}
+	channelcompat.RememberProtocolAffinity(attempt.Channel, attempt.EffectiveUpstreamModel, attempt.RequestProtocol, plan.UpstreamProtocol)
 }

@@ -98,11 +98,15 @@ const (
 	ProtocolCapabilityChat      = "chat"
 	ProtocolCapabilityMessages  = "messages"
 	ProtocolCapabilityResponses = "responses"
+
+	ProtocolSelectionModeStrict = "strict"
+	ProtocolSelectionModeAuto   = "auto"
 )
 
 type ProtocolCapabilities struct {
 	UpstreamProtocols []string                          `json:"upstream_protocols,omitempty"`
 	AllowConversion   *bool                             `json:"allow_conversion,omitempty"`
+	SelectionMode     string                            `json:"selection_mode,omitempty"`
 	ModelOverrides    []ProtocolCapabilityModelOverride `json:"model_overrides,omitempty"`
 }
 
@@ -116,11 +120,17 @@ func (c *ProtocolCapabilities) Validate() error {
 	if c == nil {
 		return nil
 	}
-	if len(c.UpstreamProtocols) == 0 {
+	selectionMode := c.GetSelectionMode()
+	if selectionMode != ProtocolSelectionModeStrict && selectionMode != ProtocolSelectionModeAuto {
+		return fmt.Errorf("protocol_capabilities.selection_mode has unsupported value %q", c.SelectionMode)
+	}
+	if selectionMode == ProtocolSelectionModeStrict && len(c.UpstreamProtocols) == 0 {
 		return fmt.Errorf("protocol_capabilities.upstream_protocols must not be empty")
 	}
-	if err := validateProtocolCapabilityList("protocol_capabilities.upstream_protocols", c.UpstreamProtocols); err != nil {
-		return err
+	if len(c.UpstreamProtocols) > 0 {
+		if err := validateProtocolCapabilityList("protocol_capabilities.upstream_protocols", c.UpstreamProtocols); err != nil {
+			return err
+		}
 	}
 	for i, override := range c.ModelOverrides {
 		pattern := strings.TrimSpace(override.ModelPattern)
@@ -140,6 +150,17 @@ func (c *ProtocolCapabilities) Validate() error {
 		}
 	}
 	return nil
+}
+
+func (c *ProtocolCapabilities) GetSelectionMode() string {
+	if c == nil {
+		return ProtocolSelectionModeStrict
+	}
+	selectionMode := strings.ToLower(strings.TrimSpace(c.SelectionMode))
+	if selectionMode == "" {
+		return ProtocolSelectionModeStrict
+	}
+	return selectionMode
 }
 
 func validateProtocolCapabilityList(field string, protocols []string) error {

@@ -124,6 +124,9 @@ func OpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Met
 			// into a synthetic user message.
 			continue
 		default:
+			if isDroppableResponsesHostedHistoryItem(itemType) {
+				continue
+			}
 			role := responsesClaudeRole(item)
 			parts, err := responsesInputContentToClaudeMediaMessages(c, item["content"])
 			if err != nil {

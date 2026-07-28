@@ -20,6 +20,7 @@ import { z } from 'zod'
 
 import type {
   ProtocolCapabilityModelOverride,
+  ProtocolSelectionMode,
   UpstreamProtocol,
 } from '../types'
 
@@ -28,6 +29,11 @@ export const UPSTREAM_PROTOCOLS = [
   'messages',
   'responses',
 ] as const satisfies readonly UpstreamProtocol[]
+
+export const PROTOCOL_SELECTION_MODES = [
+  'strict',
+  'auto',
+] as const satisfies readonly ProtocolSelectionMode[]
 
 export type ProtocolConversionMode = 'inherit' | 'allow' | 'deny'
 
@@ -80,6 +86,10 @@ export function protocolConversionMode(value: unknown): ProtocolConversionMode {
   if (value === true) return 'allow'
   if (value === false) return 'deny'
   return 'inherit'
+}
+
+export function protocolSelectionMode(value: unknown): ProtocolSelectionMode {
+  return value === 'auto' ? 'auto' : 'strict'
 }
 
 export function defaultUpstreamProtocols(

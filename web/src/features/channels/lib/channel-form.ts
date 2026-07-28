@@ -28,6 +28,7 @@ import {
   channelScheduleSchema,
   type Channel,
   type ProtocolCapabilities,
+  type ProtocolSelectionMode,
   type UpstreamProtocol,
 } from '../types'
 import {
@@ -48,6 +49,7 @@ import {
   parseProtocolModelOverrides,
   protocolConversionMode,
   protocolModelOverridesTextSchema,
+  protocolSelectionMode,
 } from './protocol-capabilities'
 
 // ============================================================================
@@ -266,6 +268,7 @@ export const channelFormSchema = z
     client_policy_mode: z.enum(['unrestricted', 'allow', 'deny']).optional(),
     client_policy_clients: z.string().optional(),
     protocol_capabilities_enabled: z.boolean().optional(),
+    protocol_selection_mode: z.enum(['strict', 'auto']).optional(),
     protocol_upstream_protocols: z
       .array(z.enum(UPSTREAM_PROTOCOLS))
       .refine(
@@ -314,6 +317,7 @@ export const channelFormSchema = z
   .superRefine((data, ctx) => {
     if (
       data.protocol_capabilities_enabled === true &&
+      (data.protocol_selection_mode ?? 'strict') === 'strict' &&
       (!data.protocol_upstream_protocols ||
         data.protocol_upstream_protocols.length === 0)
     ) {
@@ -482,6 +486,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   client_policy_mode: 'unrestricted',
   client_policy_clients: '',
   protocol_capabilities_enabled: false,
+  protocol_selection_mode: 'strict',
   protocol_upstream_protocols: [],
   protocol_allow_conversion: 'inherit',
   protocol_model_overrides: '[]',
@@ -583,6 +588,7 @@ export function transformChannelToFormDefaults(
   let clientPolicyMode: 'unrestricted' | 'allow' | 'deny' = 'unrestricted'
   let clientPolicyClients = ''
   let protocolCapabilitiesEnabled = false
+  let protocolSelectionModeValue: ProtocolSelectionMode = 'strict'
   let protocolUpstreamProtocols: UpstreamProtocol[] = []
   let protocolAllowConversion: 'inherit' | 'allow' | 'deny' = 'inherit'
   let protocolModelOverrides = '[]'
@@ -630,6 +636,9 @@ export function transformChannelToFormDefaults(
         !Array.isArray(protocolCapabilities)
       ) {
         protocolCapabilitiesEnabled = true
+        protocolSelectionModeValue = protocolSelectionMode(
+          protocolCapabilities.selection_mode
+        )
         protocolUpstreamProtocols = Array.isArray(
           protocolCapabilities.upstream_protocols
         )
@@ -702,6 +711,7 @@ export function transformChannelToFormDefaults(
     client_policy_mode: clientPolicyMode,
     client_policy_clients: clientPolicyClients,
     protocol_capabilities_enabled: protocolCapabilitiesEnabled,
+    protocol_selection_mode: protocolSelectionModeValue,
     protocol_upstream_protocols: protocolUpstreamProtocols,
     protocol_allow_conversion: protocolAllowConversion,
     protocol_model_overrides: protocolModelOverrides,
@@ -887,6 +897,7 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
 
   if (formData.protocol_capabilities_enabled === true) {
     const protocolCapabilities: ProtocolCapabilities = {
+      selection_mode: formData.protocol_selection_mode || 'strict',
       upstream_protocols: [...(formData.protocol_upstream_protocols || [])],
     }
     if (formData.protocol_allow_conversion === 'allow') {

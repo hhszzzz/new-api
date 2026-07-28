@@ -11,6 +11,7 @@ import (
 )
 
 func TestChatCompletionsRequestToResponsesRequestInstructionsAndTools(t *testing.T) {
+	strict := true
 	req := &dto.GeneralOpenAIRequest{
 		Model: "gpt-test",
 		N:     lo.ToPtr(1),
@@ -24,6 +25,16 @@ func TestChatCompletionsRequestToResponsesRequestInstructionsAndTools(t *testing
 			assistantMessageWithTool("partial text", "call_1", "lookup", `{"q":"x"}`),
 			{Role: "tool", ToolCallId: "call_1", Content: "tool result"},
 		},
+		Tools: []dto.ToolCallRequest{
+			{
+				Type: "function",
+				Function: dto.FunctionRequest{
+					Name:       "lookup",
+					Parameters: map[string]any{"type": "object"},
+					Strict:     &strict,
+				},
+			},
+		},
 	}
 
 	got, err := ChatCompletionsRequestToResponsesRequest(req)
@@ -35,6 +46,7 @@ func TestChatCompletionsRequestToResponsesRequestInstructionsAndTools(t *testing
 	assert.Equal(t, "function_call", gjson.GetBytes(got.Input, "2.type").String())
 	assert.Equal(t, "call_1", gjson.GetBytes(got.Input, "2.call_id").String())
 	assert.Equal(t, "function_call_output", gjson.GetBytes(got.Input, "3.type").String())
+	assert.True(t, gjson.GetBytes(got.Tools, "0.strict").Bool())
 }
 
 func TestChatCompletionsRequestToResponsesRequestRejectsMultipleChoices(t *testing.T) {

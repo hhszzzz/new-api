@@ -9,17 +9,31 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/relay/channel"
+	"github.com/QuantumNous/new-api/relay/channel/claude"
+	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service/channelcompat"
+	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestGetAdaptorForProtocolUsesWireProtocolForGenericOpenAIAndAnthropicChannels(t *testing.T) {
+	assert.IsType(t, &openai.Adaptor{}, GetAdaptorForProtocol(constant.APITypeOpenAI, channelcompat.ProtocolChat))
+	assert.IsType(t, &openai.Adaptor{}, GetAdaptorForProtocol(constant.APITypeOpenAI, channelcompat.ProtocolResponses))
+	assert.IsType(t, &claude.Adaptor{}, GetAdaptorForProtocol(constant.APITypeOpenAI, channelcompat.ProtocolMessages))
+
+	assert.IsType(t, &claude.Adaptor{}, GetAdaptorForProtocol(constant.APITypeAnthropic, channelcompat.ProtocolMessages))
+	assert.IsType(t, &openai.Adaptor{}, GetAdaptorForProtocol(constant.APITypeAnthropic, channelcompat.ProtocolChat))
+	assert.IsType(t, &openai.Adaptor{}, GetAdaptorForProtocol(constant.APITypeAnthropic, channelcompat.ProtocolResponses))
+}
 
 func TestProtocolBridgeRequestMatrixAppliesUpstreamModeAndConversion(t *testing.T) {
 	tests := []struct {
@@ -144,6 +158,65 @@ func TestProtocolBridgeRequestMatrixAppliesUpstreamModeAndConversion(t *testing.
 			})
 		}
 	}
+}
+
+func TestProtocolBridgeCompactUsesChatEndpointForConvertiblePlan(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		RelayMode:      relayconstant.RelayModeResponsesCompact,
+		RequestURLPath: "/v1/responses/compact",
+	}
+	plan := channelcompat.ProtocolPlan{
+		RequestProtocol:  channelcompat.ProtocolResponses,
+		UpstreamProtocol: channelcompat.ProtocolChat,
+		Status:           channelcompat.StatusConvertible,
+	}
+
+	restore := applyProtocolPlan(info, plan)
+	assert.Equal(t, relayconstant.RelayModeChatCompletions, info.RelayMode)
+	assert.Equal(t, "/v1/chat/completions", info.RequestURLPath)
+
+	restore()
+	assert.Equal(t, relayconstant.RelayModeResponsesCompact, info.RelayMode)
+	assert.Equal(t, "/v1/responses/compact", info.RequestURLPath)
+}
+
+func TestResponsesHelperAllowsCompactBridgeForChatOnlyAPIType(t *testing.T) {
+	settings := model_setting.GetGlobalSettings()
+	originalPolicy := settings.ProtocolBridgePolicy
+	settings.ProtocolBridgePolicy.Enabled = false
+	t.Cleanup(func() { settings.ProtocolBridgePolicy = originalPolicy })
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses/compact", nil)
+	common.SetContextKey(c, constant.ContextKeyChannelType, constant.ChannelTypeDeepSeek)
+	common.SetContextKey(c, constant.ContextKeyOriginalModel, "gpt-public")
+	common.SetContextKey(c, constant.ContextKeyProtocolPlan, channelcompat.ProtocolPlan{
+		RequestProtocol:  channelcompat.ProtocolResponses,
+		UpstreamProtocol: channelcompat.ProtocolChat,
+		RequestConverter: relayconvert.ConverterOpenAIResponsesToOpenAIChat,
+		Status:           channelcompat.StatusConvertible,
+	})
+
+	info := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatOpenAIResponses,
+		RelayMode:       relayconstant.RelayModeResponsesCompact,
+		RequestURLPath:  "/v1/responses/compact",
+		OriginModelName: "gpt-public",
+		Request: &dto.OpenAIResponsesCompactionRequest{
+			Model: "gpt-public",
+			Tools: json.RawMessage(`[
+				{"type":"function","name":"crm__lookup"},
+				{"type":"namespace","name":"crm","tools":[{"type":"function","name":"lookup"}]}
+			]`),
+		},
+	}
+
+	apiErr := ResponsesHelper(c, info)
+
+	require.NotNil(t, apiErr)
+	assert.Equal(t, types.ErrorCodeConvertRequestFailed, apiErr.GetErrorCode())
+	assert.Contains(t, apiErr.Error(), "conflicts after Chat name encoding")
+	assert.NotContains(t, apiErr.Error(), "unsupported endpoint")
 }
 
 func TestProtocolBridgeMessagesToChatStripsAnthropicCacheControl(t *testing.T) {

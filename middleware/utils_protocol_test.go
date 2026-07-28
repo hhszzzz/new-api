@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -103,7 +104,7 @@ func TestApplySelectedChannelCompatibilityRecomputesProtocolPlanForEachChannel(t
 	assert.Equal(t, string(channelcompat.ProtocolMessages), common.GetContextKeyString(ctx, constant.ContextKeyUpstreamProtocol))
 }
 
-func TestBuildChannelCandidateClassifierPreservesLegacyAndChatOrdering(t *testing.T) {
+func TestBuildChannelCandidateClassifierAlwaysClassifiesResponsesAndMessages(t *testing.T) {
 	settings := model_setting.GetGlobalSettings()
 	originalPolicy := settings.ProtocolBridgePolicy
 	t.Cleanup(func() { settings.ProtocolBridgePolicy = originalPolicy })
@@ -117,7 +118,7 @@ func TestBuildChannelCandidateClassifierPreservesLegacyAndChatOrdering(t *testin
 	}
 
 	settings.ProtocolBridgePolicy.Enabled = false
-	assert.Nil(t, BuildChannelCandidateClassifier(newContext("/v1/responses"), "public-model"))
+	assert.NotNil(t, BuildChannelCandidateClassifier(newContext("/v1/responses"), "public-model"))
 
 	settings.ProtocolBridgePolicy.Enabled = true
 	assert.Nil(t, BuildChannelCandidateClassifier(newContext("/v1/chat/completions"), "public-model"))
@@ -125,7 +126,27 @@ func TestBuildChannelCandidateClassifierPreservesLegacyAndChatOrdering(t *testin
 	assert.NotNil(t, BuildChannelCandidateClassifier(newContext("/v1/messages"), "public-model"))
 }
 
-func TestBridgeCandidateFilterLeavesProtocolIncompatibilityToClassifier(t *testing.T) {
+func TestBuildChannelCandidateClassifierUsesExplicitChatCapabilityWhenGlobalBridgeIsDisabled(t *testing.T) {
+	settings := model_setting.GetGlobalSettings()
+	originalPolicy := settings.ProtocolBridgePolicy
+	settings.ProtocolBridgePolicy.Enabled = false
+	settings.ProtocolBridgePolicy.DefaultAllowConversion = false
+	t.Cleanup(func() { settings.ProtocolBridgePolicy = originalPolicy })
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"public-model"}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	channel := &model.Channel{Type: constant.ChannelTypeOpenAI}
+	channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
+		UpstreamProtocols: []string{dto.ProtocolCapabilityChat},
+	}})
+
+	classifier := BuildChannelCandidateClassifier(ctx, "public-model")
+	require.NotNil(t, classifier)
+	assert.Equal(t, model.ChannelCandidateConvertible, classifier(channel))
+}
+
+func TestBridgeCandidateFilterTreatsExplicitChatCapabilityAsConvertible(t *testing.T) {
 	settings := model_setting.GetGlobalSettings()
 	originalPolicy := settings.ProtocolBridgePolicy
 	settings.ProtocolBridgePolicy.Enabled = true
@@ -146,7 +167,7 @@ func TestBridgeCandidateFilterLeavesProtocolIncompatibilityToClassifier(t *testi
 	require.NotNil(t, filter)
 	require.NotNil(t, classifier)
 	assert.True(t, filter(chatOnly))
-	assert.Equal(t, model.ChannelCandidateIncompatible, classifier(chatOnly))
+	assert.Equal(t, model.ChannelCandidateConvertible, classifier(chatOnly))
 }
 
 func TestAdvancedCustomCountTokensPathUsesMessagesRouteAsSelectionFallback(t *testing.T) {
@@ -165,4 +186,105 @@ func TestAdvancedCustomCountTokensPathUsesMessagesRouteAsSelectionFallback(t *te
 
 	assert.True(t, channelSupportsRequestPath(channel, "/v1/messages/count_tokens", "public-model"))
 	assert.False(t, channelSupportsRequestPath(channel, "/v1/messages/count_tokens", "other-model"))
+}
+
+func TestAutomaticProtocolSelectionUsesAffinityThenRetriesSameChannel(t *testing.T) {
+	originalRedisEnabled := common.RedisEnabled
+	common.RedisEnabled = false
+	t.Cleanup(func() { common.RedisEnabled = originalRedisEnabled })
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"public-model"}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	channel := &model.Channel{Id: 9901, Type: constant.ChannelTypeOpenAI}
+	channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
+		SelectionMode: dto.ProtocolSelectionModeAuto,
+	}})
+	channelcompat.RememberProtocolAffinity(channel, "public-model", channelcompat.ProtocolResponses, channelcompat.ProtocolChat)
+
+	require.NoError(t, applySelectedChannelCompatibility(ctx, channel, "public-model"))
+	plan, ok := common.GetContextKeyType[channelcompat.ProtocolPlan](ctx, constant.ContextKeyProtocolPlan)
+	require.True(t, ok)
+	assert.Equal(t, channelcompat.ProtocolChat, plan.UpstreamProtocol)
+
+	unsupported := types.NewErrorWithStatusCode(errors.New("unknown endpoint"), types.ErrorCodeBadResponseStatusCode, http.StatusNotFound)
+	assert.True(t, AdvanceAutoProtocolAttempt(ctx, unsupported))
+	retryChannelID, retrySameChannel := PendingAutoProtocolRetryChannelID(ctx)
+	assert.True(t, retrySameChannel)
+	assert.Equal(t, channel.Id, retryChannelID)
+
+	require.NoError(t, applySelectedChannelCompatibility(ctx, channel, "public-model"))
+	retriedPlan, ok := common.GetContextKeyType[channelcompat.ProtocolPlan](ctx, constant.ContextKeyProtocolPlan)
+	require.True(t, ok)
+	assert.Equal(t, channelcompat.ProtocolResponses, retriedPlan.UpstreamProtocol)
+	_, retryStillPending := PendingAutoProtocolRetryChannelID(ctx)
+	assert.False(t, retryStillPending)
+}
+
+func TestAutomaticProtocolAffinityDoesNotCrossResponsesAndMessagesEntries(t *testing.T) {
+	originalRedisEnabled := common.RedisEnabled
+	common.RedisEnabled = false
+	t.Cleanup(func() { common.RedisEnabled = originalRedisEnabled })
+
+	channel := &model.Channel{Id: 9904, Type: constant.ChannelTypeOpenAI}
+	channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
+		SelectionMode: dto.ProtocolSelectionModeAuto,
+	}})
+	channelcompat.RememberProtocolAffinity(channel, "public-model", channelcompat.ProtocolResponses, channelcompat.ProtocolChat)
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"public-model","messages":[]}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	require.NoError(t, applySelectedChannelCompatibility(ctx, channel, "public-model"))
+	plan, ok := common.GetContextKeyType[channelcompat.ProtocolPlan](ctx, constant.ContextKeyProtocolPlan)
+	require.True(t, ok)
+	assert.Equal(t, channelcompat.ProtocolMessages, plan.UpstreamProtocol)
+}
+
+func TestAutomaticProtocolSelectionDoesNotAdvanceForOrdinaryErrorsOrWrittenStreams(t *testing.T) {
+	newContext := func() *gin.Context {
+		recorder := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(recorder)
+		ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"public-model","messages":[]}`))
+		ctx.Request.Header.Set("Content-Type", "application/json")
+		return ctx
+	}
+	channel := &model.Channel{Id: 9902, Type: constant.ChannelTypeOpenAI}
+	channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
+		SelectionMode: dto.ProtocolSelectionModeAuto,
+	}})
+
+	ordinaryContext := newContext()
+	require.NoError(t, applySelectedChannelCompatibility(ordinaryContext, channel, "public-model"))
+	ordinaryError := types.NewErrorWithStatusCode(errors.New("unsupported parameter"), types.ErrorCodeBadResponseStatusCode, http.StatusBadRequest)
+	assert.False(t, AdvanceAutoProtocolAttempt(ordinaryContext, ordinaryError))
+
+	writtenContext := newContext()
+	require.NoError(t, applySelectedChannelCompatibility(writtenContext, channel, "public-model"))
+	writtenContext.String(http.StatusOK, "partial stream")
+	unsupported := types.NewErrorWithStatusCode(errors.New("unknown endpoint"), types.ErrorCodeBadResponseStatusCode, http.StatusNotFound)
+	assert.False(t, AdvanceAutoProtocolAttempt(writtenContext, unsupported))
+}
+
+func TestCommitAutomaticProtocolAffinityRemembersSuccessfulWireFormat(t *testing.T) {
+	originalRedisEnabled := common.RedisEnabled
+	common.RedisEnabled = false
+	t.Cleanup(func() { common.RedisEnabled = originalRedisEnabled })
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"public-model","messages":[]}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	channel := &model.Channel{Id: 9903, Type: constant.ChannelTypeOpenAI}
+	channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
+		SelectionMode: dto.ProtocolSelectionModeAuto,
+	}})
+
+	require.NoError(t, applySelectedChannelCompatibility(ctx, channel, "public-model"))
+	CommitAutoProtocolAffinity(ctx)
+
+	protocol, found := channelcompat.LookupProtocolAffinity(channel, "public-model", channelcompat.ProtocolMessages)
+	require.True(t, found)
+	assert.Equal(t, channelcompat.ProtocolMessages, protocol)
 }

@@ -21,6 +21,7 @@ const (
 	ContextKeyProtocolStatePublicID       ContextKey = "protocol_state_public_id"
 	ContextKeyProtocolStateForceReplay    ContextKey = "protocol_state_force_replay"
 	ContextKeyProtocolResponseStreamState ContextKey = "protocol_response_stream_state"
+	ContextKeyProtocolAutoAttempt         ContextKey = "protocol_auto_attempt"
 	ContextKeyClientName                  ContextKey = "client_name"
 	ContextKeyUpstreamRequestSize         ContextKey = "upstream_request_size"
 

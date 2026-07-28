@@ -256,10 +256,12 @@ export interface ChannelOtherSettings {
 }
 
 export type UpstreamProtocol = 'chat' | 'messages' | 'responses'
+export type ProtocolSelectionMode = 'strict' | 'auto'
 
 export interface ProtocolCapabilities {
-  upstream_protocols: UpstreamProtocol[]
+  upstream_protocols?: UpstreamProtocol[]
   allow_conversion?: boolean
+  selection_mode?: ProtocolSelectionMode
   model_overrides?: ProtocolCapabilityModelOverride[]
 }
 

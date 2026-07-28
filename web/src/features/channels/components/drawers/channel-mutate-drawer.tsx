@@ -310,6 +310,7 @@ const SENSITIVE_FORM_FIELDS = [
   'setting',
   'advanced_custom',
   'protocol_capabilities_enabled',
+  'protocol_selection_mode',
   'protocol_upstream_protocols',
   'protocol_allow_conversion',
   'protocol_model_overrides',
@@ -810,6 +811,7 @@ export function ChannelMutateDrawer({
   const currentProtocolCapabilitiesEnabled = form.watch(
     'protocol_capabilities_enabled'
   )
+  const currentProtocolSelectionMode = form.watch('protocol_selection_mode')
   const currentProtocolUpstreamProtocols = form.watch(
     'protocol_upstream_protocols'
   )
@@ -945,9 +947,19 @@ export function ChannelMutateDrawer({
   )
   const protocolConversionOptions = useMemo(
     () => [
-      { value: 'inherit', label: t('Inherit global policy') },
+      {
+        value: 'inherit',
+        label: t('Automatic conversion (recommended)'),
+      },
       { value: 'allow', label: t('Allow conversion') },
       { value: 'deny', label: t('Deny conversion') },
+    ],
+    [t]
+  )
+  const protocolSelectionOptions = useMemo(
+    () => [
+      { value: 'strict', label: t('Strict declaration') },
+      { value: 'auto', label: t('Automatic matching') },
     ],
     [t]
   )
@@ -4807,6 +4819,78 @@ export function ChannelMutateDrawer({
                               <>
                                 <FormField
                                   control={form.control}
+                                  name='protocol_selection_mode'
+                                  render={({ field }) => (
+                                    <FormItem>
+                                      <FormLabel>
+                                        {t('Protocol selection mode')}
+                                      </FormLabel>
+                                      <Select
+                                        items={protocolSelectionOptions}
+                                        value={field.value || 'strict'}
+                                        onValueChange={(value) => {
+                                          field.onChange(value)
+                                          if (
+                                            value === 'strict' &&
+                                            !currentProtocolUpstreamProtocols?.length
+                                          ) {
+                                            form.setValue(
+                                              'protocol_upstream_protocols',
+                                              detectedUpstreamProtocols,
+                                              {
+                                                shouldDirty: true,
+                                                shouldValidate: true,
+                                              }
+                                            )
+                                          }
+                                        }}
+                                      >
+                                        <FormControl>
+                                          <SelectTrigger className='w-full'>
+                                            <SelectValue />
+                                          </SelectTrigger>
+                                        </FormControl>
+                                        <SelectContent
+                                          alignItemWithTrigger={false}
+                                        >
+                                          <SelectGroup>
+                                            {protocolSelectionOptions.map(
+                                              (option) => (
+                                                <SelectItem
+                                                  key={option.value}
+                                                  value={option.value}
+                                                >
+                                                  {option.label}
+                                                </SelectItem>
+                                              )
+                                            )}
+                                          </SelectGroup>
+                                        </SelectContent>
+                                      </Select>
+                                      <FormDescription>
+                                        {currentProtocolSelectionMode === 'auto'
+                                          ? t(
+                                              'Automatic mode uses a remembered match first. Otherwise Codex tries Responses, Chat, then Messages; Claude Code tries Messages, Chat, then Responses.'
+                                            )
+                                          : t(
+                                              'Strict mode uses only the declared upstream protocols and never probes another wire format.'
+                                            )}
+                                      </FormDescription>
+                                      {currentProtocolSelectionMode ===
+                                        'auto' && (
+                                        <FormDescription>
+                                          {t(
+                                            'Only endpoint or protocol unsupported errors can advance to the next format. A successful match is remembered by channel and mapped upstream model.'
+                                          )}
+                                        </FormDescription>
+                                      )}
+                                      <FormMessage />
+                                    </FormItem>
+                                  )}
+                                />
+
+                                <FormField
+                                  control={form.control}
                                   name='protocol_upstream_protocols'
                                   render={({ field }) => (
                                     <FormItem>
@@ -4839,9 +4923,13 @@ export function ChannelMutateDrawer({
                                         </ToggleGroup>
                                       </FormControl>
                                       <FormDescription>
-                                        {t(
-                                          'Declare only protocols that this upstream endpoint accepts directly.'
-                                        )}
+                                        {currentProtocolSelectionMode === 'auto'
+                                          ? t(
+                                              'In automatic mode, leave this empty to try all three protocols; selecting protocols limits the probe set.'
+                                            )
+                                          : t(
+                                              'Declare only protocols that this upstream endpoint accepts directly.'
+                                            )}
                                       </FormDescription>
                                       <FormMessage />
                                     </FormItem>
@@ -4885,7 +4973,7 @@ export function ChannelMutateDrawer({
                                       </Select>
                                       <FormDescription>
                                         {t(
-                                          'Native protocol routes are always preferred; conversion is considered only when no native candidate is available.'
+                                          'Native upstream protocols are preferred. When the client uses a different protocol, conversion is automatic unless you deny it.'
                                         )}
                                       </FormDescription>
                                       <FormMessage />

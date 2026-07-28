@@ -79,6 +79,12 @@ func ResponsesRequestToChatCompletionsRequestWithContext(c context.Context, req 
 		PromptCacheRetention: req.PromptCacheRetention,
 		EnableThinking:       req.EnableThinking,
 	}
+	if req.Stream != nil && *req.Stream {
+		if out.StreamOptions == nil {
+			out.StreamOptions = &dto.StreamOptions{}
+		}
+		out.StreamOptions.IncludeUsage = true
+	}
 
 	if req.Reasoning != nil {
 		out.ReasoningEffort = req.Reasoning.Effort
@@ -97,6 +103,10 @@ func ResponsesRequestToChatCompletionsRequestWithContext(c context.Context, req 
 		if err := kitutil.Unmarshal(req.PromptCacheKey, &promptCacheKey); err == nil {
 			out.PromptCacheKey = promptCacheKey
 		}
+	}
+	if len(out.Tools) == 0 {
+		out.ToolChoice = nil
+		out.ParallelTooCalls = nil
 	}
 
 	return out, nil
@@ -208,6 +218,9 @@ func responsesInputItemToChatMessages(item map[string]any, messages []dto.Messag
 		content := responseToolOutputToChatContent(output)
 		return append(messages, dto.Message{Role: "tool", ToolCallId: callID, Content: content}), nil
 	case "additional_tools":
+		return messages, nil
+	}
+	if isDroppableResponsesHostedHistoryItem(itemType) {
 		return messages, nil
 	}
 

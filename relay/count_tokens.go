@@ -76,6 +76,9 @@ func CountTokensHelper(c *gin.Context, info *relaycommon.RelayInfo) *types.NewAP
 	}
 
 	canForwardNativeMessages := info.ApiType == constant.APITypeAnthropic || info.ApiType == constant.APITypeSub2API
+	if plan.ExplicitCapabilities && info.ApiType == constant.APITypeOpenAI {
+		canForwardNativeMessages = true
+	}
 	if info.ApiType == constant.APITypeAdvancedCustom && info.ChannelOtherSettings.AdvancedCustom != nil {
 		route, matched := info.ChannelOtherSettings.AdvancedCustom.MatchPathForModel(c.Request.URL.Path, request.Model)
 		converter := strings.TrimSpace(route.Converter)
@@ -85,7 +88,7 @@ func CountTokensHelper(c *gin.Context, info *relaycommon.RelayInfo) *types.NewAP
 	if plan.Status == channelcompat.StatusNative &&
 		plan.UpstreamProtocol == channelcompat.ProtocolMessages &&
 		canForwardNativeMessages {
-		adaptor := GetAdaptor(info.ApiType)
+		adaptor := GetAdaptorForProtocol(info.ApiType, plan.UpstreamProtocol)
 		if adaptor == nil {
 			return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
 		}

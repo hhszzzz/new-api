@@ -23,6 +23,8 @@ func TestProtocolCapabilitiesValidate(t *testing.T) {
 		},
 	}
 	require.NoError(t, valid.Validate())
+	require.NoError(t, (&ProtocolCapabilities{SelectionMode: ProtocolSelectionModeAuto}).Validate())
+	assert.Equal(t, ProtocolSelectionModeStrict, (&ProtocolCapabilities{}).GetSelectionMode())
 
 	tests := []struct {
 		name         string
@@ -33,6 +35,14 @@ func TestProtocolCapabilitiesValidate(t *testing.T) {
 			name:         "empty protocols",
 			capabilities: &ProtocolCapabilities{},
 			want:         "must not be empty",
+		},
+		{
+			name: "unknown selection mode",
+			capabilities: &ProtocolCapabilities{
+				SelectionMode:     "probe",
+				UpstreamProtocols: []string{ProtocolCapabilityChat},
+			},
+			want: "selection_mode",
 		},
 		{
 			name: "unknown protocol",

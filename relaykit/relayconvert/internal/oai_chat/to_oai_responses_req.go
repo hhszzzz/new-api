@@ -312,12 +312,16 @@ func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*d
 		for _, tool := range req.Tools {
 			switch tool.Type {
 			case "function":
-				tools = append(tools, map[string]any{
+				converted := map[string]any{
 					"type":        "function",
 					"name":        tool.Function.Name,
 					"description": tool.Function.Description,
 					"parameters":  tool.Function.Parameters,
-				})
+				}
+				if tool.Function.Strict != nil {
+					converted["strict"] = *tool.Function.Strict
+				}
+				tools = append(tools, converted)
 			default:
 				// Best-effort: keep original tool shape for unknown types.
 				var m map[string]any

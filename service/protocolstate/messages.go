@@ -71,7 +71,8 @@ func resolveMessageSelectionBinding(c *gin.Context, publicModel string, body []b
 }
 
 func PrepareMessagesRequest(c *gin.Context, info *relaycommon.RelayInfo, plan channelcompat.ProtocolPlan, request *dto.ClaudeRequest) error {
-	if !Enabled() || c == nil || info == nil || request == nil || plan.RequestProtocol != channelcompat.ProtocolMessages {
+	manageState := Enabled() || plan.StateEnabled
+	if !manageState || c == nil || info == nil || request == nil || plan.RequestProtocol != channelcompat.ProtocolMessages {
 		return nil
 	}
 	if plan.UpstreamProtocol != channelcompat.ProtocolResponses {

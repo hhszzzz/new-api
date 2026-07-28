@@ -351,7 +351,7 @@ export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
                     <FormLabel>{t('Enable protocol bridge')}</FormLabel>
                     <FormDescription>
                       {t(
-                        'Allow Responses and Messages clients to use compatible Chat, Messages, or Responses upstreams.'
+                        'Enable automatic conversion for channels that use detected protocol capabilities. Explicit upstream protocol declarations work independently.'
                       )}
                     </FormDescription>
                   </SettingsSwitchContent>
@@ -374,7 +374,7 @@ export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
                     <FormLabel>{t('Allow conversion by default')}</FormLabel>
                     <FormDescription>
                       {t(
-                        'Channels without an explicit conversion setting inherit this value.'
+                        'Channels without explicit protocol capabilities use this default when automatic bridging is enabled.'
                       )}
                     </FormDescription>
                   </SettingsSwitchContent>

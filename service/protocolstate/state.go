@@ -109,8 +109,12 @@ func Enabled() bool {
 	return model_setting.GetGlobalSettings().ProtocolBridgePolicy.Enabled
 }
 
+func Active(c *gin.Context) bool {
+	return getPending(c, "") != nil
+}
+
 func ResolveSelectionBinding(c *gin.Context, requestPath, publicModel string, body []byte) (*SelectionBinding, error) {
-	if !Enabled() || c == nil {
+	if c == nil {
 		return nil, nil
 	}
 	path := strings.Split(strings.TrimSpace(requestPath), "?")[0]
@@ -126,9 +130,15 @@ func ResolveSelectionBinding(c *gin.Context, requestPath, publicModel string, bo
 		if previousID == "" {
 			return nil, nil
 		}
-		node, err := loadResponseNode(c, previousID, publicModel)
+		node, managed, err := findResponseNode(c, previousID, publicModel)
 		if err != nil {
 			return nil, err
+		}
+		if !managed {
+			if Enabled() {
+				return nil, fmt.Errorf("previous_response_id is unknown or expired")
+			}
+			return nil, nil
 		}
 		common.SetContextKey(c, constant.ContextKeyProtocolStateParent, node)
 		return &SelectionBinding{ChannelID: node.ChannelID}, nil
@@ -140,7 +150,14 @@ func ResolveSelectionBinding(c *gin.Context, requestPath, publicModel string, bo
 }
 
 func PrepareResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, plan channelcompat.ProtocolPlan, request *dto.OpenAIResponsesRequest) error {
-	if !Enabled() || c == nil || info == nil || request == nil || plan.RequestProtocol != channelcompat.ProtocolResponses {
+	if c == nil || info == nil || request == nil || plan.RequestProtocol != channelcompat.ProtocolResponses {
+		return nil
+	}
+	_, hasManagedParent := common.GetContextKeyType[*ResponseNode](c, constant.ContextKeyProtocolStateParent)
+	manageState := Enabled() || plan.StateEnabled || hasManagedParent
+	if !manageState {
+		common.SetContextKey(c, constant.ContextKeyProtocolStatePending, nil)
+		common.SetContextKey(c, constant.ContextKeyProtocolStatePublicID, "")
 		return nil
 	}
 
@@ -212,7 +229,7 @@ func PrepareResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, plan c
 }
 
 func PublicResponseID(c *gin.Context, fallback string) string {
-	if !Enabled() || c == nil {
+	if c == nil {
 		return fallback
 	}
 	if value := common.GetContextKeyString(c, constant.ContextKeyProtocolStatePublicID); value != "" {
@@ -610,50 +627,64 @@ func responseNodeKey(identity identity, publicID string) string {
 }
 
 func loadResponseNode(c *gin.Context, publicID, publicModel string) (*ResponseNode, error) {
+	node, managed, err := findResponseNode(c, publicID, publicModel)
+	if err != nil {
+		return nil, err
+	}
+	if !managed {
+		return nil, fmt.Errorf("previous_response_id is unknown or expired")
+	}
+	return node, nil
+}
+
+func findResponseNode(c *gin.Context, publicID, publicModel string) (*ResponseNode, bool, error) {
 	publicID = strings.TrimSpace(publicID)
 	if publicID == "" {
-		return nil, fmt.Errorf("previous_response_id is empty")
+		return nil, false, fmt.Errorf("previous_response_id is empty")
 	}
 	identity := requestIdentity(c)
 	stateCache, ownerCache, _ := protocolCaches()
 	node, found, err := stateCache.Get(responseNodeKey(identity, publicID))
 	if err != nil {
-		return nil, fmt.Errorf("failed to load previous_response_id state: %w", err)
+		return nil, false, fmt.Errorf("failed to load previous_response_id state: %w", err)
 	}
 	if !found {
 		owner, ownerFound, ownerErr := ownerCache.Get(publicID)
 		if ownerErr != nil {
-			return nil, fmt.Errorf("failed to verify previous_response_id ownership: %w", ownerErr)
+			return nil, false, fmt.Errorf("failed to verify previous_response_id ownership: %w", ownerErr)
 		}
 		if ownerFound && owner != identity.String() {
-			return nil, fmt.Errorf("previous_response_id belongs to a different user or API token")
+			return nil, true, fmt.Errorf("previous_response_id belongs to a different user or API token")
 		}
-		return nil, fmt.Errorf("previous_response_id is unknown or expired")
+		if ownerFound {
+			return nil, true, fmt.Errorf("previous_response_id is unknown or expired")
+		}
+		return nil, false, nil
 	}
 	if node.Version != stateVersion {
-		return nil, fmt.Errorf("previous_response_id uses an unsupported state version")
+		return nil, true, fmt.Errorf("previous_response_id uses an unsupported state version")
 	}
 	if node.UserID != identity.userID || node.TokenID != identity.tokenID {
-		return nil, fmt.Errorf("previous_response_id belongs to a different user or API token")
+		return nil, true, fmt.Errorf("previous_response_id belongs to a different user or API token")
 	}
 	if strings.TrimSpace(publicModel) != strings.TrimSpace(node.PublicModel) {
-		return nil, fmt.Errorf("previous_response_id model %q does not match requested model %q", node.PublicModel, publicModel)
+		return nil, true, fmt.Errorf("previous_response_id model %q does not match requested model %q", node.PublicModel, publicModel)
 	}
 	policy := currentPolicy()
 	if node.Turn < 1 || node.Turn > policy.MaxStateTurns {
-		return nil, fmt.Errorf("previous_response_id exceeds the maximum conversation length")
+		return nil, true, fmt.Errorf("previous_response_id exceeds the maximum conversation length")
 	}
 	if node.CumulativeStateBytes < 0 || node.CumulativeStateBytes > policy.MaxStateBytes {
-		return nil, fmt.Errorf("previous_response_id exceeds the maximum serialized state size")
+		return nil, true, fmt.Errorf("previous_response_id exceeds the maximum serialized state size")
 	}
 	ttl := time.Duration(policy.StateTTLSeconds) * time.Second
 	if err := stateCache.SetWithTTL(responseNodeKey(identity, publicID), node, ttl); err != nil {
-		return nil, fmt.Errorf("failed to refresh previous_response_id state: %w", err)
+		return nil, true, fmt.Errorf("failed to refresh previous_response_id state: %w", err)
 	}
 	if err := ownerCache.SetWithTTL(publicID, identity.String(), ttl); err != nil {
-		return nil, fmt.Errorf("failed to refresh previous_response_id ownership: %w", err)
+		return nil, true, fmt.Errorf("failed to refresh previous_response_id ownership: %w", err)
 	}
-	return cloneResponseNode(&node), nil
+	return cloneResponseNode(&node), true, nil
 }
 
 func ensurePublicResponseID(c *gin.Context) string {
@@ -671,7 +702,7 @@ func ensurePublicResponseID(c *gin.Context) string {
 }
 
 func getPending(c *gin.Context, kind pendingKind) *pendingState {
-	if !Enabled() || c == nil {
+	if c == nil {
 		return nil
 	}
 	pending, ok := common.GetContextKeyType[*pendingState](c, constant.ContextKeyProtocolStatePending)
@@ -733,7 +764,7 @@ func protocolCaches() (*cachex.HybridCache[ResponseNode], *cachex.HybridCache[st
 	if messageStateCache == nil {
 		messageStateCache = newMessageStateCache()
 	}
-	if !common.RedisEnabled && Enabled() && (os.Getenv("NODE_TYPE") != "" || os.Getenv("NODE_NAME") != "") {
+	if !common.RedisEnabled && (os.Getenv("NODE_TYPE") != "" || os.Getenv("NODE_NAME") != "") {
 		warnNoRedisOnce.Do(func() {
 			common.SysError("protocol bridge state is using process-local memory in a multi-node configuration; configure Redis to share continuation state")
 		})

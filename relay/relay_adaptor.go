@@ -50,6 +50,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/xunfei"
 	"github.com/QuantumNous/new-api/relay/channel/zhipu"
 	"github.com/QuantumNous/new-api/relay/channel/zhipu_4v"
+	"github.com/QuantumNous/new-api/service/channelcompat"
 	"github.com/gin-gonic/gin"
 )
 
@@ -131,6 +132,18 @@ func GetAdaptor(apiType int) channel.Adaptor {
 		return &newapi.Adaptor{}
 	}
 	return nil
+}
+
+func GetAdaptorForProtocol(apiType int, protocol channelcompat.Protocol) channel.Adaptor {
+	if apiType == constant.APITypeOpenAI || apiType == constant.APITypeAnthropic {
+		switch protocol {
+		case channelcompat.ProtocolChat, channelcompat.ProtocolResponses:
+			return &openai.Adaptor{}
+		case channelcompat.ProtocolMessages:
+			return &claude.Adaptor{}
+		}
+	}
+	return GetAdaptor(apiType)
 }
 
 func GetTaskPlatform(c *gin.Context) constant.TaskPlatform {

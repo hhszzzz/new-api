@@ -45,16 +45,47 @@ type ProtocolPlan struct {
 	EffectiveUpstreamModel string                            `json:"effective_upstream_model,omitempty"`
 	Quality                relayconvert.TextConverterQuality `json:"quality,omitempty"`
 	Status                 Status                            `json:"status"`
+	SelectionMode          string                            `json:"selection_mode,omitempty"`
+	ExplicitCapabilities   bool                              `json:"explicit_capabilities,omitempty"`
 	StateMode              string                            `json:"state_mode,omitempty"`
+	StateEnabled           bool                              `json:"state_enabled,omitempty"`
 	Features               RequestFeatureSet                 `json:"features"`
 	Reason                 string                            `json:"reason,omitempty"`
 }
 
 func PlanForRequest(channel *model.Channel, protocol Protocol, modelName, requestPath string, features RequestFeatureSet) ProtocolPlan {
+	plans := PlansForRequest(channel, protocol, modelName, requestPath, features)
+	if len(plans) > 0 {
+		return plans[0]
+	}
+	return ProtocolPlan{
+		RequestProtocol: protocol,
+		Status:          StatusIncompatible,
+		SelectionMode:   dto.ProtocolSelectionModeStrict,
+		StateMode:       StateModeNone,
+		Features:        features,
+		Reason:          "no protocol plan is available",
+	}
+}
+
+func PlansForRequest(channel *model.Channel, protocol Protocol, modelName, requestPath string, features RequestFeatureSet) []ProtocolPlan {
+	if channel != nil &&
+		channel.Type != constant.ChannelTypeAdvancedCustom &&
+		(protocol == ProtocolResponses || protocol == ProtocolMessages) {
+		capabilities := channel.GetOtherSettings().ProtocolCapabilities
+		if capabilities != nil && capabilities.GetSelectionMode() == dto.ProtocolSelectionModeAuto {
+			return autoPlansForRequest(channel, protocol, modelName, features, capabilities)
+		}
+	}
+	return []ProtocolPlan{planForStrictRequest(channel, protocol, modelName, requestPath, features)}
+}
+
+func planForStrictRequest(channel *model.Channel, protocol Protocol, modelName, requestPath string, features RequestFeatureSet) ProtocolPlan {
 	plan := ProtocolPlan{
 		RequestProtocol:        protocol,
 		EffectiveUpstreamModel: strings.TrimSpace(modelName),
 		Status:                 StatusIncompatible,
+		SelectionMode:          dto.ProtocolSelectionModeStrict,
 		StateMode:              StateModeNone,
 		Features:               features,
 	}
@@ -64,7 +95,22 @@ func PlanForRequest(channel *model.Channel, protocol Protocol, modelName, reques
 	}
 
 	policy := model_setting.GetGlobalSettings().ProtocolBridgePolicy
-	if !policy.Enabled || (protocol != ProtocolResponses && protocol != ProtocolMessages) {
+	if protocol != ProtocolResponses && protocol != ProtocolMessages {
+		legacy := ForRequest(channel, protocol, modelName, requestPath)
+		plan.Status = legacy.Status
+		plan.UpstreamProtocol = legacy.UpstreamProtocol
+		plan.RequestConverter = legacy.Converter
+		plan.ResponseConverter = legacy.Converter
+		plan.StateMode = stateModeFor(protocol, legacy.UpstreamProtocol)
+		if legacy.Status == StatusIncompatible {
+			plan.Reason = fmt.Sprintf("channel does not support %s requests", protocol)
+		}
+		return plan
+	}
+
+	capabilities := channel.GetOtherSettings().ProtocolCapabilities
+	plan.ExplicitCapabilities = capabilities != nil
+	if !policy.Enabled && capabilities == nil {
 		legacy := ForRequest(channel, protocol, modelName, requestPath)
 		plan.Status = legacy.Status
 		plan.UpstreamProtocol = legacy.UpstreamProtocol
@@ -84,11 +130,15 @@ func PlanForRequest(channel *model.Channel, protocol Protocol, modelName, reques
 	}
 	plan.EffectiveUpstreamModel = resolved.Model
 
-	settings := channel.GetOtherSettings().ProtocolCapabilities
-	upstreamProtocols, allowConversionOverride := settings.Resolve(resolved.Model)
+	upstreamProtocols, allowConversionOverride := capabilities.Resolve(resolved.Model)
 	allowConversion := policy.DefaultAllowConversion
 	if allowConversionOverride != nil {
 		allowConversion = *allowConversionOverride
+	} else if capabilities != nil {
+		// Declaring the authoritative upstream protocol is itself an explicit
+		// request to bridge incompatible client protocols. Administrators can
+		// still opt out with allow_conversion=false.
+		allowConversion = true
 	}
 
 	if channel.Type == constant.ChannelTypeAdvancedCustom {
@@ -106,10 +156,7 @@ func PlanForRequest(channel *model.Channel, protocol Protocol, modelName, reques
 			plan.Status = StatusNative
 			plan.UpstreamProtocol = compatibility.UpstreamProtocol
 			plan.StateMode = stateModeFor(protocol, compatibility.UpstreamProtocol)
-			return plan
-		}
-		if strings.HasPrefix(strings.Split(strings.TrimSpace(requestPath), "?")[0], "/v1/responses/compact") {
-			plan.Reason = "responses compact requires a native Responses upstream"
+			plan.StateEnabled = policy.Enabled
 			return plan
 		}
 		if !allowConversion {
@@ -131,6 +178,7 @@ func PlanForRequest(channel *model.Channel, protocol Protocol, modelName, reques
 		plan.ResponseConverter = converter.ID
 		plan.Quality = converter.Quality
 		plan.StateMode = stateModeFor(protocol, compatibility.UpstreamProtocol)
+		plan.StateEnabled = true
 		return plan
 	}
 
@@ -146,13 +194,10 @@ func PlanForRequest(channel *model.Channel, protocol Protocol, modelName, reques
 		plan.Status = StatusNative
 		plan.UpstreamProtocol = upstream
 		plan.StateMode = stateModeFor(protocol, upstream)
+		plan.StateEnabled = policy.Enabled
 		return plan
 	}
 
-	if strings.HasPrefix(strings.Split(strings.TrimSpace(requestPath), "?")[0], "/v1/responses/compact") {
-		plan.Reason = "responses compact requires a native Responses upstream"
-		return plan
-	}
 	if !allowConversion {
 		plan.Reason = "protocol conversion is disabled for this channel and model"
 		return plan
@@ -186,6 +231,7 @@ func PlanForRequest(channel *model.Channel, protocol Protocol, modelName, reques
 		plan.ResponseConverter = converter.ID
 		plan.Quality = converter.Quality
 		plan.StateMode = stateModeFor(protocol, upstream)
+		plan.StateEnabled = true
 		return plan
 	}
 
@@ -195,6 +241,120 @@ func PlanForRequest(channel *model.Channel, protocol Protocol, modelName, reques
 	}
 	plan.Reason = fmt.Sprintf("no conversion route from %s to declared upstream protocols", protocol)
 	return plan
+}
+
+func autoPlansForRequest(channel *model.Channel, protocol Protocol, modelName string, features RequestFeatureSet, capabilities *dto.ProtocolCapabilities) []ProtocolPlan {
+	basePlan := ProtocolPlan{
+		RequestProtocol:        protocol,
+		EffectiveUpstreamModel: strings.TrimSpace(modelName),
+		Status:                 StatusIncompatible,
+		SelectionMode:          dto.ProtocolSelectionModeAuto,
+		ExplicitCapabilities:   true,
+		StateMode:              StateModeNone,
+		Features:               features,
+	}
+	if channel == nil || capabilities == nil {
+		basePlan.Reason = "missing channel or automatic protocol capabilities"
+		return []ProtocolPlan{basePlan}
+	}
+
+	resolved, err := modelmapping.Resolve(channel.GetModelMapping(), modelName)
+	if err != nil {
+		basePlan.Reason = err.Error()
+		return []ProtocolPlan{basePlan}
+	}
+	basePlan.EffectiveUpstreamModel = resolved.Model
+
+	configuredProtocols, allowConversionOverride := capabilities.Resolve(resolved.Model)
+	allowedProtocols := make(map[Protocol]struct{}, len(configuredProtocols))
+	if len(configuredProtocols) == 0 {
+		for _, candidate := range []Protocol{ProtocolChat, ProtocolMessages, ProtocolResponses} {
+			allowedProtocols[candidate] = struct{}{}
+		}
+	} else {
+		for _, configured := range configuredProtocols {
+			allowedProtocols[Protocol(strings.TrimSpace(configured))] = struct{}{}
+		}
+	}
+
+	policy := model_setting.GetGlobalSettings().ProtocolBridgePolicy
+	allowConversion := policy.DefaultAllowConversion
+	if allowConversionOverride != nil {
+		allowConversion = *allowConversionOverride
+	} else {
+		// Automatic selection is an explicit request to try compatible wire
+		// protocols. Administrators can still restrict it to the entry protocol
+		// with allow_conversion=false.
+		allowConversion = true
+	}
+
+	fromFormat, ok := protocolRelayFormat(protocol)
+	if !ok {
+		basePlan.Reason = fmt.Sprintf("request protocol %s cannot be converted", protocol)
+		return []ProtocolPlan{basePlan}
+	}
+
+	plans := make([]ProtocolPlan, 0, len(allowedProtocols))
+	firstFeatureReason := ""
+	for _, upstream := range automaticProtocolOrder(protocol) {
+		if _, allowed := allowedProtocols[upstream]; !allowed {
+			continue
+		}
+
+		plan := basePlan
+		plan.UpstreamProtocol = upstream
+		plan.StateMode = stateModeFor(protocol, upstream)
+		plan.StateEnabled = true
+		if upstream == protocol {
+			plan.Status = StatusNative
+			plans = append(plans, plan)
+			continue
+		}
+		if !allowConversion {
+			continue
+		}
+		if reason := conversionFeatureIncompatibility(protocol, upstream, features); reason != "" {
+			if firstFeatureReason == "" {
+				firstFeatureReason = reason
+			}
+			continue
+		}
+		toFormat, ok := protocolRelayFormat(upstream)
+		if !ok {
+			continue
+		}
+		converter, ok := relayconvert.LookupTextConverterRoute(fromFormat, toFormat)
+		if !ok {
+			continue
+		}
+		plan.Status = StatusConvertible
+		plan.RequestConverter = converter.ID
+		plan.ResponseConverter = converter.ID
+		plan.Quality = converter.Quality
+		plans = append(plans, plan)
+	}
+	if len(plans) > 0 {
+		return plans
+	}
+	if firstFeatureReason != "" {
+		basePlan.Reason = firstFeatureReason
+	} else if !allowConversion {
+		basePlan.Reason = "protocol conversion is disabled for this channel and model"
+	} else {
+		basePlan.Reason = fmt.Sprintf("no automatic protocol route is available for %s", protocol)
+	}
+	return []ProtocolPlan{basePlan}
+}
+
+func automaticProtocolOrder(protocol Protocol) []Protocol {
+	switch protocol {
+	case ProtocolResponses:
+		return []Protocol{ProtocolResponses, ProtocolChat, ProtocolMessages}
+	case ProtocolMessages:
+		return []Protocol{ProtocolMessages, ProtocolChat, ProtocolResponses}
+	default:
+		return []Protocol{protocol}
+	}
 }
 
 func ExtractRequestFeatureSet(protocol Protocol, body []byte) (RequestFeatureSet, error) {
@@ -311,7 +471,8 @@ func inspectTools(protocol Protocol, tools []any, features *RequestFeatureSet, h
 			}
 		case "tool_search":
 			features.HasToolSearch = true
-			if protocol == ProtocolResponses && strings.TrimSpace(common.Interface2String(tool["execution"])) != "client" {
+			execution := strings.TrimSpace(common.Interface2String(tool["execution"]))
+			if protocol == ProtocolResponses && execution != "" && execution != "client" {
 				addHostedToolType("tool_search", features, hostedSeen)
 			} else if protocol == ProtocolMessages {
 				addHostedToolType("tool_search", features, hostedSeen)
@@ -430,8 +591,16 @@ func conversionFeatureIncompatibility(protocol, upstream Protocol, features Requ
 			return "hosted prompt is only supported by a native Responses upstream"
 		case features.HasContextManagement:
 			return "context_management is only supported by a native Responses upstream"
-		case len(features.HostedToolTypes) > 0:
-			return fmt.Sprintf("server-side Responses tools require a native Responses upstream: %s", strings.Join(features.HostedToolTypes, ", "))
+		}
+		unsupportedHostedTools := make([]string, 0, len(features.HostedToolTypes))
+		for _, toolType := range features.HostedToolTypes {
+			if isDroppableResponsesHostedToolType(toolType) {
+				continue
+			}
+			unsupportedHostedTools = append(unsupportedHostedTools, toolType)
+		}
+		if len(unsupportedHostedTools) > 0 {
+			return fmt.Sprintf("Responses server tools cannot be converted to %s: %s", upstream, strings.Join(unsupportedHostedTools, ", "))
 		}
 	}
 	if protocol == ProtocolMessages {
@@ -458,6 +627,31 @@ func conversionFeatureIncompatibility(protocol, upstream Protocol, features Requ
 		)
 	}
 	return ""
+}
+
+func isDroppableResponsesHostedToolType(toolType string) bool {
+	toolType = strings.ToLower(strings.TrimSpace(toolType))
+	for _, prefix := range []string{
+		"web_search",
+		"web_fetch",
+		"file_search",
+		"computer",
+		"code_interpreter",
+		"code_execution",
+		"image_generation",
+		"local_shell",
+		"shell",
+		"apply_patch",
+		"mcp",
+		"program",
+		"browser",
+		"tool_search",
+	} {
+		if strings.HasPrefix(toolType, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func convertedContentTypeSupported(protocol, upstream Protocol, contentType string) bool {

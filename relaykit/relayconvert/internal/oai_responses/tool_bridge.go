@@ -33,6 +33,9 @@ func prepareResponsesToolsForChat(c context.Context, req *dto.OpenAIResponsesReq
 		}
 		chatTools = append(chatTools, converted...)
 	}
+	if len(chatTools) == 0 {
+		return nil, nil, nil
+	}
 	sharedbridge.SetToolState(c, state)
 	return chatTools, state, nil
 }
@@ -57,12 +60,13 @@ func collectResponsesToolDeclarations(req *dto.OpenAIResponsesRequest) ([]map[st
 		return nil, fmt.Errorf("invalid input array: %w", err)
 	}
 	for _, item := range inputItems {
-		if strings.TrimSpace(kitutil.Interface2String(item["type"])) != "additional_tools" {
+		itemType := strings.TrimSpace(kitutil.Interface2String(item["type"]))
+		if itemType != "additional_tools" && itemType != "tool_search_output" {
 			continue
 		}
 		additional, err := toolMapsFromAny(item["tools"])
 		if err != nil {
-			return nil, fmt.Errorf("invalid additional_tools: %w", err)
+			return nil, fmt.Errorf("invalid %s tools: %w", itemType, err)
 		}
 		tools = append(tools, additional...)
 	}
@@ -117,6 +121,9 @@ func responsesToolToChatFunctions(tool map[string]any, namespace string, state *
 		return out, nil
 	case "function", "custom", "freeform", "tool_search":
 	default:
+		if isDroppableResponsesHostedToolType(toolType) {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("Responses tool type %q requires a native Responses upstream", toolType)
 	}
 
@@ -124,8 +131,8 @@ func responsesToolToChatFunctions(tool map[string]any, namespace string, state *
 		if namespace != "" {
 			return nil, fmt.Errorf("tool_search cannot be nested in namespace %q", namespace)
 		}
-		if execution := strings.TrimSpace(kitutil.Interface2String(tool["execution"])); execution != "client" {
-			return nil, fmt.Errorf("server-executed tool_search requires a native Responses upstream")
+		if execution := strings.TrimSpace(kitutil.Interface2String(tool["execution"])); execution != "" && execution != "client" {
+			return nil, nil
 		}
 		name = "tool_search"
 	}
@@ -151,7 +158,11 @@ func responsesToolToChatFunctions(tool map[string]any, namespace string, state *
 	}
 
 	description := kitutil.Interface2String(tool["description"])
-	parameters := tool["parameters"]
+	parameters := normalizeChatFunctionParameters(tool["parameters"])
+	var strict *bool
+	if value, ok := tool["strict"].(bool); ok {
+		strict = kitutil.GetPointer(value)
+	}
 	if kind == sharedbridge.ToolKindCustom {
 		parameters = map[string]any{
 			"type": "object",
@@ -163,11 +174,6 @@ func responsesToolToChatFunctions(tool map[string]any, namespace string, state *
 			},
 			"required":             []string{"input"},
 			"additionalProperties": false,
-		}
-	} else if parameters == nil {
-		parameters = map[string]any{
-			"type":       "object",
-			"properties": map[string]any{},
 		}
 	}
 	if kind == sharedbridge.ToolKindToolSearch && strings.TrimSpace(description) == "" {
@@ -181,9 +187,59 @@ func responsesToolToChatFunctions(tool map[string]any, namespace string, state *
 				Name:        upstreamName,
 				Description: description,
 				Parameters:  parameters,
+				Strict:      strict,
 			},
 		},
 	}, nil
+}
+
+func normalizeChatFunctionParameters(parameters any) map[string]any {
+	if source, ok := parameters.(map[string]any); ok {
+		normalized := make(map[string]any, len(source)+1)
+		for key, value := range source {
+			normalized[key] = value
+		}
+		normalized["type"] = "object"
+		return normalized
+	}
+	return map[string]any{
+		"type":       "object",
+		"properties": map[string]any{},
+	}
+}
+
+func isDroppableResponsesHostedToolType(toolType string) bool {
+	toolType = strings.ToLower(strings.TrimSpace(toolType))
+	for _, prefix := range []string{
+		"web_search",
+		"web_fetch",
+		"file_search",
+		"computer",
+		"code_interpreter",
+		"code_execution",
+		"image_generation",
+		"local_shell",
+		"shell",
+		"apply_patch",
+		"mcp",
+		"program",
+		"browser",
+	} {
+		if strings.HasPrefix(toolType, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func isDroppableResponsesHostedHistoryItem(itemType string) bool {
+	itemType = strings.ToLower(strings.TrimSpace(itemType))
+	for _, suffix := range []string{"_call", "_call_output", "_approval_request", "_approval_response", "_list_tools"} {
+		if strings.HasSuffix(itemType, suffix) && isDroppableResponsesHostedToolType(strings.TrimSuffix(itemType, suffix)) {
+			return true
+		}
+	}
+	return itemType == "program" || itemType == "program_output"
 }
 
 func encodedChatToolName(kind sharedbridge.ToolKind, namespace, name string) string {

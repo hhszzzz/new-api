@@ -81,6 +81,7 @@ describe('channel protocol capabilities form contract', () => {
 
     const defaults = transformChannelToFormDefaults(channel())
     expect(defaults.protocol_capabilities_enabled).toBe(false)
+    expect(defaults.protocol_selection_mode).toBe('strict')
     expect(defaults.protocol_upstream_protocols).toEqual([])
   })
 
@@ -106,6 +107,7 @@ describe('channel protocol capabilities form contract', () => {
     )
 
     expect(defaults.protocol_capabilities_enabled).toBe(true)
+    expect(defaults.protocol_selection_mode).toBe('strict')
     expect(defaults.protocol_allow_conversion).toBe('deny')
     expect(JSON.parse(defaults.protocol_model_overrides || '[]')).toEqual([
       {
@@ -122,6 +124,7 @@ describe('channel protocol capabilities form contract', () => {
     const payload = transformFormDataToUpdatePayload(defaults, 7)
     const saved = JSON.parse(payload.settings || '{}')
     expect(saved.protocol_capabilities).toEqual({
+      selection_mode: 'strict',
       upstream_protocols: ['chat', 'responses'],
       allow_conversion: false,
       model_overrides: [
@@ -173,5 +176,31 @@ describe('channel protocol capabilities form contract', () => {
       ]),
     })
     expect(invalidRules.success).toBe(false)
+  })
+
+  test('allows automatic matching without a protocol allowlist and preserves it', () => {
+    const defaults = transformChannelToFormDefaults(
+      channel({
+        protocol_capabilities: {
+          selection_mode: 'auto',
+        },
+      })
+    )
+
+    expect(defaults.protocol_selection_mode).toBe('auto')
+    expect(defaults.protocol_upstream_protocols).toEqual([])
+    expect(
+      channelFormSchema.safeParse({
+        ...defaults,
+        protocol_capabilities_enabled: true,
+      }).success
+    ).toBe(true)
+
+    const payload = transformFormDataToUpdatePayload(defaults, 7)
+    const saved = JSON.parse(payload.settings || '{}')
+    expect(saved.protocol_capabilities).toEqual({
+      selection_mode: 'auto',
+      upstream_protocols: [],
+    })
   })
 })

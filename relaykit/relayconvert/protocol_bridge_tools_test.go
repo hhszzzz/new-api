@@ -120,43 +120,143 @@ func TestResponsesChatBridgeRestoresExtendedToolKinds(t *testing.T) {
 	assert.JSONEq(t, `{"query":"billing"}`, string(response.Output[3].Arguments))
 }
 
-func TestResponsesChatBridgeRejectsToolNameCollisionsAndServerToolSearch(t *testing.T) {
-	tests := []struct {
-		name  string
-		tools []map[string]any
-		want  string
-	}{
+func TestResponsesChatBridgeRejectsToolNameCollisions(t *testing.T) {
+	request := &dto.OpenAIResponsesRequest{Model: "gpt-test", Tools: protocolBridgeRaw(t, []map[string]any{
+		{"type": "function", "name": "crm__lookup"},
 		{
-			name: "namespace collision",
-			tools: []map[string]any{
-				{"type": "function", "name": "crm__lookup"},
-				{
-					"type": "namespace",
-					"name": "crm",
-					"tools": []map[string]any{
-						{"type": "function", "name": "lookup"},
+			"type": "namespace",
+			"name": "crm",
+			"tools": []map[string]any{
+				{"type": "function", "name": "lookup"},
+			},
+		},
+	})}
+
+	_, err := ConvertRequest(nil, &convmeta.Values{}, types.RelayFormatOpenAI, request)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "conflicts after Chat name encoding")
+}
+
+func TestResponsesChatBridgeNormalizesFunctionsAndDropsHostedTools(t *testing.T) {
+	stream := true
+	request := &dto.OpenAIResponsesRequest{
+		Model:  "gpt-test",
+		Stream: &stream,
+		Input: protocolBridgeRaw(t, []map[string]any{
+			{"type": "web_search_call", "id": "ws_1", "status": "completed"},
+			{"role": "user", "content": "hello"},
+		}),
+		Tools: protocolBridgeRaw(t, []map[string]any{
+			{
+				"type":   "function",
+				"name":   "lookup",
+				"strict": true,
+				"parameters": map[string]any{
+					"type": nil,
+					"properties": map[string]any{
+						"query": map[string]any{"type": "string"},
 					},
 				},
 			},
-			want: "conflicts after Chat name encoding",
-		},
-		{
-			name: "server tool search",
-			tools: []map[string]any{
-				{"type": "tool_search", "execution": "server"},
-			},
-			want: "native Responses upstream",
-		},
+			{"type": "web_search_preview"},
+			{"type": "file_search"},
+			{"type": "tool_search"},
+			{"type": "tool_search", "execution": "server"},
+		}),
 	}
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			request := &dto.OpenAIResponsesRequest{Model: "gpt-test", Tools: protocolBridgeRaw(t, test.tools)}
-			_, err := ConvertRequest(nil, &convmeta.Values{}, types.RelayFormatOpenAI, request)
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), test.want)
-		})
+	result, err := ConvertRequest(context.Background(), &convmeta.Values{}, types.RelayFormatOpenAI, request)
+	require.NoError(t, err)
+	chatRequest, ok := result.Value.(*dto.GeneralOpenAIRequest)
+	require.True(t, ok)
+	require.Len(t, chatRequest.Tools, 2)
+	require.Len(t, chatRequest.Messages, 1)
+	assert.Equal(t, "hello", chatRequest.Messages[0].StringContent())
+	require.NotNil(t, chatRequest.StreamOptions)
+	assert.True(t, chatRequest.StreamOptions.IncludeUsage)
+
+	encoded, err := kitutil.Marshal(chatRequest.Tools[0])
+	require.NoError(t, err)
+	var tool map[string]any
+	require.NoError(t, kitutil.Unmarshal(encoded, &tool))
+	function := tool["function"].(map[string]any)
+	assert.Equal(t, true, function["strict"])
+	parameters := function["parameters"].(map[string]any)
+	assert.Equal(t, "object", parameters["type"])
+	assert.Equal(t, "string", parameters["properties"].(map[string]any)["query"].(map[string]any)["type"])
+	assert.Equal(t, "tool_search", chatRequest.Tools[1].Function.Name)
+}
+
+func TestResponsesChatBridgeLoadsToolsFromToolSearchOutput(t *testing.T) {
+	ctx := WithProtocolBridgeContext(context.Background())
+	request := &dto.OpenAIResponsesRequest{
+		Model: "gpt-test",
+		Tools: protocolBridgeRaw(t, []map[string]any{
+			{"type": "tool_search"},
+		}),
+		Input: protocolBridgeRaw(t, []map[string]any{
+			{
+				"type":      "tool_search_call",
+				"call_id":   "call_search",
+				"execution": "client",
+				"arguments": map[string]any{"query": "Gmail"},
+			},
+			{
+				"type":      "tool_search_output",
+				"call_id":   "call_search",
+				"execution": "client",
+				"tools": []map[string]any{
+					{
+						"type": "namespace",
+						"name": "gmail",
+						"tools": []map[string]any{
+							{
+								"type":       "function",
+								"name":       "search_emails",
+								"parameters": map[string]any{"type": "object"},
+							},
+						},
+					},
+				},
+			},
+			{"role": "user", "content": "Find the latest message"},
+		}),
 	}
+
+	requestResult, err := ConvertRequest(ctx, &convmeta.Values{}, types.RelayFormatOpenAI, request)
+	require.NoError(t, err)
+	chatRequest, ok := requestResult.Value.(*dto.GeneralOpenAIRequest)
+	require.True(t, ok)
+	require.Len(t, chatRequest.Tools, 2)
+	assert.Equal(t, "tool_search", chatRequest.Tools[0].Function.Name)
+	assert.Equal(t, "gmail__search_emails", chatRequest.Tools[1].Function.Name)
+
+	upstream := &dto.OpenAITextResponse{
+		Id:    "resp-loaded-tool",
+		Model: "provider-model",
+		Choices: []dto.OpenAITextResponseChoice{
+			{FinishReason: "tool_calls", Message: dto.Message{Role: "assistant"}},
+		},
+	}
+	upstream.Choices[0].Message.SetToolCalls([]dto.ToolCallRequest{
+		{
+			ID:   "call_gmail",
+			Type: "function",
+			Function: dto.FunctionRequest{
+				Name:      "gmail__search_emails",
+				Arguments: `{"query":"latest"}`,
+			},
+		},
+	})
+
+	responseResult, err := ConvertResponse(ctx, &convmeta.Values{}, types.RelayFormatOpenAIResponses, upstream)
+	require.NoError(t, err)
+	response, ok := responseResult.Value.(*dto.OpenAIResponsesResponse)
+	require.True(t, ok)
+	require.Len(t, response.Output, 1)
+	assert.Equal(t, "function_call", response.Output[0].Type)
+	assert.Equal(t, "gmail", response.Output[0].Namespace)
+	assert.Equal(t, "search_emails", response.Output[0].Name)
 }
 
 func TestResponsesBridgeWrapsFreeformToolsAndRestoresCustomCalls(t *testing.T) {

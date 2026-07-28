@@ -22,7 +22,16 @@ import (
 
 func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
 	info.InitChannelMeta(c)
+	plan, hasPlan := selectedProtocolPlan(c)
+	if !hasPlan {
+		plan = channelcompat.ProtocolPlan{
+			RequestProtocol:  channelcompat.ProtocolResponses,
+			UpstreamProtocol: channelcompat.ProtocolResponses,
+			Status:           channelcompat.StatusNative,
+		}
+	}
 	if info.RelayMode == relayconstant.RelayModeResponsesCompact &&
+		!protocolPlanRequiresConversion(plan) &&
 		!common.IsResponsesCompactAPIType(info.ApiType) {
 		return types.NewErrorWithStatusCode(
 			fmt.Errorf("unsupported endpoint %q for api type %d", "/v1/responses/compact", info.ApiType),
@@ -53,6 +62,15 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 			PromptCacheOptions:   req.PromptCacheOptions,
 			PromptCacheRetention: req.PromptCacheRetention,
 		}
+		if protocolPlanRequiresConversion(plan) {
+			// CC Switch-compatible compact bridging: a Chat/Messages upstream has
+			// no compact endpoint, so treat the compact body as a regular Responses
+			// request and retain the Codex tool/reasoning fields needed by the
+			// converter. Native compact requests keep the documented field filter.
+			responsesReq.Tools = req.Tools
+			responsesReq.Reasoning = req.Reasoning
+			responsesReq.Text = req.Text
+		}
 	default:
 		return types.NewErrorWithStatusCode(
 			fmt.Errorf("invalid request type, expected dto.OpenAIResponsesRequest or dto.OpenAIResponsesCompactionRequest, got %T", info.Request),
@@ -72,26 +90,18 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
 	}
 
-	adaptor := GetAdaptor(info.ApiType)
+	adaptor := GetAdaptorForProtocol(info.ApiType, plan.UpstreamProtocol)
 	if adaptor == nil {
 		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
 	}
 	adaptor.Init(info)
-	plan, hasPlan := selectedProtocolPlan(c)
-	if !hasPlan {
-		plan = channelcompat.ProtocolPlan{
-			RequestProtocol:  channelcompat.ProtocolResponses,
-			UpstreamProtocol: channelcompat.ProtocolResponses,
-			Status:           channelcompat.StatusNative,
-		}
-	}
 	if err := protocolstate.PrepareResponsesRequest(c, info, plan, request); err != nil {
 		return types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 	}
 	restoreProtocolPlan := applyProtocolPlan(info, plan)
 	defer restoreProtocolPlan()
 	var requestBody io.Reader
-	if info.ShouldPassThroughBody() && !protocolPlanRequiresConversion(plan) && !protocolstate.Enabled() {
+	if info.ShouldPassThroughBody() && !protocolPlanRequiresConversion(plan) && !protocolstate.Active(c) {
 		storage, err := common.GetBodyStorage(c)
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeReadRequestBodyFailed, types.ErrOptionWithSkipRetry())

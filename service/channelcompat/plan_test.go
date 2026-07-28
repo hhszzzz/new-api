@@ -84,7 +84,13 @@ func TestExtractRequestFeatureSetMessagesContentTypes(t *testing.T) {
 	assert.Equal(t, []string{"server_tool_use"}, features.HostedToolTypes)
 }
 
-func TestExtractRequestFeatureSetDistinguishesClientAndServerToolSearch(t *testing.T) {
+func TestExtractRequestFeatureSetTreatsUnspecifiedToolSearchAsClientExecuted(t *testing.T) {
+	defaultBody := []byte(`{"tools":[{"type":"tool_search"}]}`)
+	defaultFeatures, err := ExtractRequestFeatureSet(ProtocolResponses, defaultBody)
+	require.NoError(t, err)
+	assert.True(t, defaultFeatures.HasToolSearch)
+	assert.Empty(t, defaultFeatures.HostedToolTypes)
+
 	clientBody := []byte(`{"tools":[{"type":"tool_search","execution":"client"}]}`)
 	clientFeatures, err := ExtractRequestFeatureSet(ProtocolResponses, clientBody)
 	require.NoError(t, err)
@@ -163,6 +169,7 @@ func TestPlanForRequestHonorsBridgePolicyCapabilitiesAndMappedModelOverrides(t *
 	assert.Equal(t, StatusConvertible, plan.Status)
 	assert.Equal(t, ProtocolChat, plan.UpstreamProtocol)
 	assert.Equal(t, relayconvert.ConverterOpenAIResponsesToOpenAIChat, plan.RequestConverter)
+	assert.True(t, plan.StateEnabled)
 	assert.Equal(t, "provider-chat-model", plan.EffectiveUpstreamModel)
 	assert.Equal(t, StateModeReplay, plan.StateMode)
 }
@@ -288,33 +295,46 @@ func TestPlanForRequestAdvancedCustomCountTokensPrefersExplicitAuxiliaryRoute(t 
 	assert.Empty(t, plan.RequestConverter)
 }
 
-func TestPlanForRequestGlobalDisablePreservesLegacyCompatibility(t *testing.T) {
+func TestPlanForRequestExplicitCapabilitiesOverrideGlobalDisable(t *testing.T) {
 	withProtocolBridgePolicy(t, false, false)
-	allow := true
-	channel := &model.Channel{Type: constant.ChannelTypeAnthropic}
+	channel := &model.Channel{Type: constant.ChannelTypeOpenAI}
 	channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
-		UpstreamProtocols: []string{dto.ProtocolCapabilityMessages},
-		AllowConversion:   &allow,
+		UpstreamProtocols: []string{dto.ProtocolCapabilityChat},
 	}})
 
-	plan := PlanForRequest(channel, ProtocolResponses, "claude-sonnet-4", "/v1/responses", RequestFeatureSet{})
+	plan := PlanForRequest(channel, ProtocolResponses, "gpt-test", "/v1/responses", RequestFeatureSet{})
 
-	assert.Equal(t, StatusIncompatible, plan.Status)
-	assert.Empty(t, plan.UpstreamProtocol)
+	assert.Equal(t, StatusConvertible, plan.Status)
+	assert.Equal(t, ProtocolChat, plan.UpstreamProtocol)
+	assert.Equal(t, relayconvert.ConverterOpenAIResponsesToOpenAIChat, plan.RequestConverter)
 }
 
-func TestPlanForRequestCompactRequiresNativeResponses(t *testing.T) {
+func TestPlanForRequestExplicitConversionDisableStillWins(t *testing.T) {
+	withProtocolBridgePolicy(t, true, true)
+	disallow := false
+	channel := &model.Channel{Type: constant.ChannelTypeOpenAI}
+	channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
+		UpstreamProtocols: []string{dto.ProtocolCapabilityChat},
+		AllowConversion:   &disallow,
+	}})
+
+	plan := PlanForRequest(channel, ProtocolResponses, "gpt-test", "/v1/responses", RequestFeatureSet{})
+
+	assert.Equal(t, StatusIncompatible, plan.Status)
+	assert.Contains(t, plan.Reason, "disabled")
+}
+
+func TestPlanForRequestCompactCanUseChatBridge(t *testing.T) {
 	withProtocolBridgePolicy(t, true, false)
-	allow := true
 	chatChannel := &model.Channel{Type: constant.ChannelTypeOpenAI}
 	chatChannel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
 		UpstreamProtocols: []string{dto.ProtocolCapabilityChat},
-		AllowConversion:   &allow,
 	}})
 
 	converted := PlanForRequest(chatChannel, ProtocolResponses, "gpt-test", "/v1/responses/compact", RequestFeatureSet{})
-	assert.Equal(t, StatusIncompatible, converted.Status)
-	assert.Contains(t, converted.Reason, "native Responses")
+	assert.Equal(t, StatusConvertible, converted.Status)
+	assert.Equal(t, ProtocolChat, converted.UpstreamProtocol)
+	assert.Equal(t, relayconvert.ConverterOpenAIResponsesToOpenAIChat, converted.RequestConverter)
 
 	responsesChannel := &model.Channel{Type: constant.ChannelTypeCodex}
 	native := PlanForRequest(responsesChannel, ProtocolResponses, "gpt-test", "/v1/responses/compact", RequestFeatureSet{})
@@ -322,7 +342,7 @@ func TestPlanForRequestCompactRequiresNativeResponses(t *testing.T) {
 	assert.Equal(t, ProtocolResponses, native.UpstreamProtocol)
 }
 
-func TestPlanForRequestRejectsNativeOnlyResponsesFeaturesBeforeConversion(t *testing.T) {
+func TestPlanForRequestRejectsStatefulResponsesFeaturesButAllowsDroppableHostedTools(t *testing.T) {
 	withProtocolBridgePolicy(t, true, true)
 	channel := &model.Channel{Type: constant.ChannelTypeOpenAI}
 	channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
@@ -337,7 +357,6 @@ func TestPlanForRequestRejectsNativeOnlyResponsesFeaturesBeforeConversion(t *tes
 		{name: "conversation", features: RequestFeatureSet{HasConversation: true}, want: "conversation"},
 		{name: "prompt", features: RequestFeatureSet{HasPrompt: true}, want: "prompt"},
 		{name: "context management", features: RequestFeatureSet{HasContextManagement: true}, want: "context_management"},
-		{name: "hosted tool", features: RequestFeatureSet{HostedToolTypes: []string{"web_search"}}, want: "native Responses"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -346,6 +365,18 @@ func TestPlanForRequestRejectsNativeOnlyResponsesFeaturesBeforeConversion(t *tes
 			assert.Contains(t, plan.Reason, test.want)
 		})
 	}
+
+	hostedPlan := PlanForRequest(channel, ProtocolResponses, "gpt-test", "/v1/responses", RequestFeatureSet{
+		HostedToolTypes: []string{"web_search_preview", "file_search"},
+	})
+	assert.Equal(t, StatusConvertible, hostedPlan.Status)
+	assert.Equal(t, ProtocolChat, hostedPlan.UpstreamProtocol)
+
+	unknownPlan := PlanForRequest(channel, ProtocolResponses, "gpt-test", "/v1/responses", RequestFeatureSet{
+		HostedToolTypes: []string{"future_server_tool"},
+	})
+	assert.Equal(t, StatusIncompatible, unknownPlan.Status)
+	assert.Contains(t, unknownPlan.Reason, "future_server_tool")
 }
 
 func TestPlanForRequestRejectsMessagesServerToolsBeforeConversion(t *testing.T) {
@@ -434,6 +465,69 @@ func TestPlanForRequestDefaultUpstreamProtocols(t *testing.T) {
 			assert.Equal(t, test.status, plan.Status)
 		})
 	}
+}
+
+func TestPlansForRequestAutomaticOrderFollowsEntryProtocol(t *testing.T) {
+	withProtocolBridgePolicy(t, false, false)
+	tests := []struct {
+		name        string
+		protocol    Protocol
+		requestPath string
+		want        []Protocol
+	}{
+		{
+			name:        "Codex Responses",
+			protocol:    ProtocolResponses,
+			requestPath: "/v1/responses",
+			want:        []Protocol{ProtocolResponses, ProtocolChat, ProtocolMessages},
+		},
+		{
+			name:        "Claude Code Messages",
+			protocol:    ProtocolMessages,
+			requestPath: "/v1/messages",
+			want:        []Protocol{ProtocolMessages, ProtocolChat, ProtocolResponses},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			channel := &model.Channel{Id: 901, Type: constant.ChannelTypeOpenAI}
+			channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
+				SelectionMode: dto.ProtocolSelectionModeAuto,
+			}})
+
+			plans := PlansForRequest(channel, test.protocol, "public-model", test.requestPath, RequestFeatureSet{})
+
+			require.Len(t, plans, len(test.want))
+			actual := make([]Protocol, 0, len(plans))
+			for _, plan := range plans {
+				actual = append(actual, plan.UpstreamProtocol)
+				assert.Equal(t, dto.ProtocolSelectionModeAuto, plan.SelectionMode)
+				assert.True(t, plan.StateEnabled)
+			}
+			assert.Equal(t, test.want, actual)
+			assert.Equal(t, StatusNative, plans[0].Status)
+			assert.Equal(t, StatusConvertible, plans[1].Status)
+			assert.Equal(t, StatusConvertible, plans[2].Status)
+		})
+	}
+}
+
+func TestPlansForRequestAutomaticModeRespectsAllowedProtocolsAndConversionSwitch(t *testing.T) {
+	withProtocolBridgePolicy(t, true, true)
+	disallow := false
+	channel := &model.Channel{Id: 902, Type: constant.ChannelTypeOpenAI}
+	channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
+		SelectionMode:     dto.ProtocolSelectionModeAuto,
+		UpstreamProtocols: []string{dto.ProtocolCapabilityResponses, dto.ProtocolCapabilityChat},
+		AllowConversion:   &disallow,
+	}})
+
+	plans := PlansForRequest(channel, ProtocolResponses, "public-model", "/v1/responses", RequestFeatureSet{})
+
+	require.Len(t, plans, 1)
+	assert.Equal(t, ProtocolResponses, plans[0].UpstreamProtocol)
+	assert.Equal(t, StatusNative, plans[0].Status)
 }
 
 func withProtocolBridgePolicy(t *testing.T, enabled, defaultAllowConversion bool) {
