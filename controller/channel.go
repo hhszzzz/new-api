@@ -11,12 +11,12 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	relaychannel "github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/ollama"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/authz"
 
@@ -201,6 +201,7 @@ func GetAllChannels(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	populateChannelScheduleStates(channelData)
 
 	typeCounts, err := getChannelTypeCounts(buildChannelListQuery(groupFilter, statusFilter, -1))
 	if err != nil {
@@ -343,6 +344,7 @@ func SearchChannels(c *gin.Context) {
 		for _, channel := range channels {
 			clearChannelInfo(channel)
 		}
+		populateChannelScheduleStates(channels)
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
 			"message": "",
@@ -455,6 +457,7 @@ func SearchChannels(c *gin.Context) {
 	for _, datum := range pagedData {
 		clearChannelInfo(datum)
 	}
+	populateChannelScheduleStates(pagedData)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -481,6 +484,7 @@ func GetChannel(c *gin.Context) {
 	}
 	if channel != nil {
 		clearChannelInfo(channel)
+		channel.PopulateScheduleStateAt(time.Now())
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -553,6 +557,13 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 	// 校验 channel settings
 	if err := channel.ValidateSettings(); err != nil {
 		return fmt.Errorf("渠道额外设置[channel setting] 格式错误：%s", err.Error())
+	}
+	if err := channel.Schedule.Normalize(); err != nil {
+		return fmt.Errorf("渠道定时设置格式错误：%s", err.Error())
+	}
+
+	if channel.Type == constant.ChannelTypeNewAPI && strings.TrimSpace(channel.GetBaseURL()) == "" {
+		return fmt.Errorf("New API channel base URL cannot be empty")
 	}
 
 	// 如果是添加操作，检查 channel 和 key 是否为空
@@ -1057,6 +1068,9 @@ func UpdateChannel(c *gin.Context) {
 		return
 	}
 	originProxy := originChannel.GetSetting().Proxy
+	if _, scheduleProvided := requestData["schedule"]; !scheduleProvided {
+		channel.Schedule = originChannel.Schedule
+	}
 	if _, aggregateProvided := requestData["aggregate_id"]; !aggregateProvided {
 		channel.AggregateId = originChannel.AggregateId
 	}
@@ -1180,6 +1194,7 @@ func UpdateChannel(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	channel.PopulateScheduleStateAt(time.Now())
 	model.InitChannelCache()
 	if proxyChanged {
 		service.InvalidateProxyClient(originProxy)

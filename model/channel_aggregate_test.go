@@ -280,3 +280,110 @@ func TestChannelUpdateWithAggregateLinkRollsBackFieldsWhenAbilitiesFail(t *testi
 	require.Len(t, abilities, 1)
 	assert.Equal(t, "model-before", abilities[0].Model)
 }
+
+func TestMergeChannelsIntoAggregateSupportsExistingAndNewTargets(t *testing.T) {
+	db := setupChannelAggregateTestDB(t)
+	existing := &ChannelAggregate{Name: "existing aggregate"}
+	require.NoError(t, SaveChannelAggregate(existing))
+	require.NoError(t, db.Create(&[]Channel{
+		{Id: 51, Name: "first", Key: "key-1"},
+		{Id: 52, Name: "second", Key: "key-2"},
+		{Id: 53, Name: "third", Key: "key-3"},
+	}).Error)
+
+	merged, updated, err := MergeChannelsIntoAggregate(
+		[]int{52, 51, 51},
+		&existing.Id,
+		nil,
+		false,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 2, updated)
+	assert.Equal(t, existing.Id, merged.Id)
+	assert.Equal(t, int64(2), merged.ChildCount)
+
+	created, updated, err := MergeChannelsIntoAggregate(
+		[]int{53},
+		nil,
+		&ChannelAggregate{
+			Name:    "new aggregate",
+			BaseURL: "https://shared.example.com/v1/",
+		},
+		true,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 1, updated)
+	assert.Positive(t, created.Id)
+	assert.Equal(t, "https://shared.example.com/v1", created.BaseURL)
+	assert.Equal(t, int64(1), created.ChildCount)
+
+	var stored []Channel
+	require.NoError(t, db.Where("id IN ?", []int{51, 52, 53}).Order("id asc").Find(&stored).Error)
+	require.Len(t, stored, 3)
+	for _, child := range stored[:2] {
+		require.NotNil(t, child.AggregateId)
+		assert.Equal(t, existing.Id, *child.AggregateId)
+		assert.False(t, child.InheritAggregateBaseURL)
+	}
+	require.NotNil(t, stored[2].AggregateId)
+	assert.Equal(t, created.Id, *stored[2].AggregateId)
+	assert.True(t, stored[2].InheritAggregateBaseURL)
+}
+
+func TestMergeChannelsIntoNewAggregateRollsBackWhenATargetIsMissing(t *testing.T) {
+	db := setupChannelAggregateTestDB(t)
+	require.NoError(t, db.Create(&Channel{Id: 61, Name: "existing", Key: "key"}).Error)
+
+	merged, updated, err := MergeChannelsIntoAggregate(
+		[]int{61, 999},
+		nil,
+		&ChannelAggregate{Name: "must roll back"},
+		false,
+	)
+	require.ErrorContains(t, err, "one or more target channels no longer exist")
+	assert.Nil(t, merged)
+	assert.Zero(t, updated)
+
+	var aggregateCount int64
+	require.NoError(t, db.Model(&ChannelAggregate{}).Count(&aggregateCount).Error)
+	assert.Zero(t, aggregateCount)
+	var stored Channel
+	require.NoError(t, db.First(&stored, "id = ?", 61).Error)
+	assert.Nil(t, stored.AggregateId)
+}
+
+func TestDetachChannelsFromAggregatesIsAtomicAndKeepsStandaloneChannels(t *testing.T) {
+	db := setupChannelAggregateTestDB(t)
+	aggregate := &ChannelAggregate{Name: "detachable aggregate"}
+	relatedAggregate := &ChannelAggregate{Name: "unselected aggregate"}
+	require.NoError(t, SaveChannelAggregate(aggregate))
+	require.NoError(t, SaveChannelAggregate(relatedAggregate))
+	childURL := "https://child.example.com/v1"
+	require.NoError(t, db.Create(&[]Channel{
+		{Id: 71, Name: "selected child", Key: "key-71", AggregateId: &aggregate.Id, InheritAggregateBaseURL: true, BaseURL: &childURL},
+		{Id: 72, Name: "selected standalone", Key: "key-72"},
+		{Id: 73, Name: "unselected child", Key: "key-73", AggregateId: &relatedAggregate.Id, InheritAggregateBaseURL: true},
+	}).Error)
+
+	detached, err := DetachChannelsFromAggregates([]int{72, 71, 71})
+	require.NoError(t, err)
+	assert.Equal(t, 1, detached)
+
+	var stored []Channel
+	require.NoError(t, db.Order("id asc").Find(&stored).Error)
+	require.Len(t, stored, 3)
+	assert.Nil(t, stored[0].AggregateId)
+	assert.False(t, stored[0].InheritAggregateBaseURL)
+	require.NotNil(t, stored[0].BaseURL)
+	assert.Equal(t, childURL, *stored[0].BaseURL)
+	assert.Nil(t, stored[1].AggregateId)
+	require.NotNil(t, stored[2].AggregateId)
+	assert.Equal(t, relatedAggregate.Id, *stored[2].AggregateId)
+
+	failedCount, err := DetachChannelsFromAggregates([]int{73, 999})
+	require.ErrorContains(t, err, "one or more target channels no longer exist")
+	assert.Zero(t, failedCount)
+	require.NoError(t, db.First(&stored[2], 73).Error)
+	require.NotNil(t, stored[2].AggregateId)
+	assert.Equal(t, relatedAggregate.Id, *stored[2].AggregateId)
+}

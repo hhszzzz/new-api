@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/samber/lo"
 	"gorm.io/gorm"
 )
 
@@ -210,6 +211,127 @@ func UpdateChannelAggregateLink(channelId int, aggregateId *int, inheritBaseURL 
 			"inherit_aggregate_base_url": inheritBaseURL,
 		}).Error
 	})
+}
+
+func MergeChannelsIntoAggregate(
+	channelIds []int,
+	aggregateId *int,
+	newAggregate *ChannelAggregate,
+	inheritBaseURL bool,
+) (*ChannelAggregate, int, error) {
+	channelIds = normalizeChannelBatchIDs(channelIds)
+	if len(channelIds) == 0 {
+		return nil, 0, errors.New("no target channels selected")
+	}
+	if (aggregateId == nil) == (newAggregate == nil) {
+		return nil, 0, errors.New("select either an existing aggregate or a new aggregate")
+	}
+
+	var mergedAggregate *ChannelAggregate
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if aggregateId != nil {
+			if *aggregateId <= 0 {
+				return errors.New("invalid channel aggregate id")
+			}
+			mergedAggregate = &ChannelAggregate{}
+			if err := lockForUpdate(tx).First(mergedAggregate, "id = ?", *aggregateId).Error; err != nil {
+				return err
+			}
+		} else {
+			candidate := *newAggregate
+			candidate.Id = 0
+			candidate.ChildCount = 0
+			if err := normalizeChannelAggregate(&candidate); err != nil {
+				return err
+			}
+			now := common.GetTimestamp()
+			candidate.CreatedAt = now
+			candidate.UpdatedAt = now
+			if err := tx.Create(&candidate).Error; err != nil {
+				return err
+			}
+			mergedAggregate = &candidate
+		}
+
+		lockedCount := 0
+		for _, chunk := range lo.Chunk(channelIds, 200) {
+			channels := make([]Channel, 0, len(chunk))
+			if err := lockForUpdate(tx.Model(&Channel{})).
+				Select("id").
+				Where("id IN ?", chunk).
+				Order("id ASC").
+				Find(&channels).Error; err != nil {
+				return err
+			}
+			lockedCount += len(channels)
+		}
+		if lockedCount != len(channelIds) {
+			return errors.New("one or more target channels no longer exist")
+		}
+
+		for _, chunk := range lo.Chunk(channelIds, 200) {
+			if err := tx.Model(&Channel{}).
+				Where("id IN ?", chunk).
+				Updates(map[string]interface{}{
+					"aggregate_id":               mergedAggregate.Id,
+					"inherit_aggregate_base_url": inheritBaseURL,
+				}).Error; err != nil {
+				return err
+			}
+		}
+
+		return tx.Model(&Channel{}).
+			Where("aggregate_id = ?", mergedAggregate.Id).
+			Count(&mergedAggregate.ChildCount).Error
+	})
+	if err != nil {
+		return nil, 0, err
+	}
+	return mergedAggregate, len(channelIds), nil
+}
+
+func DetachChannelsFromAggregates(channelIds []int) (int, error) {
+	channelIds = normalizeChannelBatchIDs(channelIds)
+	if len(channelIds) == 0 {
+		return 0, errors.New("no target channels selected")
+	}
+
+	detached := 0
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		lockedCount := 0
+		for _, chunk := range lo.Chunk(channelIds, 200) {
+			channels := make([]Channel, 0, len(chunk))
+			if err := lockForUpdate(tx.Model(&Channel{})).
+				Select("id").
+				Where("id IN ?", chunk).
+				Order("id ASC").
+				Find(&channels).Error; err != nil {
+				return err
+			}
+			lockedCount += len(channels)
+		}
+		if lockedCount != len(channelIds) {
+			return errors.New("one or more target channels no longer exist")
+		}
+
+		for _, chunk := range lo.Chunk(channelIds, 200) {
+			result := tx.Model(&Channel{}).
+				Where("id IN ? AND aggregate_id IS NOT NULL", chunk).
+				Updates(map[string]interface{}{
+					"aggregate_id":               nil,
+					"inherit_aggregate_base_url": false,
+				})
+			if result.Error != nil {
+				return result.Error
+			}
+			detached += int(result.RowsAffected)
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return detached, nil
 }
 
 func DeleteChannelAggregate(id int) error {

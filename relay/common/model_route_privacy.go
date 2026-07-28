@@ -8,7 +8,7 @@ import (
 	"unicode/utf8"
 
 	appcommon "github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/types"
+	"github.com/QuantumNous/new-api/relaykit/types"
 )
 
 // RedactUserModelRouteText replaces routed upstream model identifiers with the

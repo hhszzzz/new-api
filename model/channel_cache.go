@@ -10,8 +10,8 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 )
 
@@ -154,6 +154,21 @@ func GetRandomSatisfiedChannelInPoolWithClassifier(group string, model string, r
 		channels = filterChannelIdsByCandidate(channels, candidateFilter)
 	}
 
+	if len(channels) == 0 {
+		return nil, nil
+	}
+	now := time.Now()
+	schedulableChannels := make([]int, 0, len(channels))
+	for _, channelId := range channels {
+		channel, ok := channelsIDM[channelId]
+		if !ok {
+			return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channelId)
+		}
+		if channel.IsSchedulableAt(now) {
+			schedulableChannels = append(schedulableChannels, channelId)
+		}
+	}
+	channels = schedulableChannels
 	if len(channels) == 0 {
 		return nil, nil
 	}

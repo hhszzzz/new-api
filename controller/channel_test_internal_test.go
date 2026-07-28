@@ -7,13 +7,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/types"
@@ -55,6 +56,96 @@ func TestValidateChannelProxy(t *testing.T) {
 			require.NoError(t, err)
 		})
 	}
+}
+
+func TestPerformChannelTestsSkipsChannelsOutsideSchedule(t *testing.T) {
+	future := time.Now().Add(time.Hour).Unix()
+	channel := &model.Channel{
+		Id:       9001,
+		Name:     "scheduled test skip",
+		Status:   common.ChannelStatusEnabled,
+		Schedule: model.ChannelSchedule{StartsAt: &future},
+	}
+
+	summary := performChannelTests(t.Context(), []*model.Channel{channel}, 0, true, true, nil)
+
+	assert.Zero(t, summary.Tested)
+	assert.Zero(t, summary.Failed)
+	assert.Zero(t, summary.Disabled)
+}
+
+func TestValidateChannelRequiresNewAPIBaseURL(t *testing.T) {
+	tests := []struct {
+		name    string
+		baseURL *string
+		wantErr bool
+	}{
+		{name: "missing", wantErr: true},
+		{name: "blank", baseURL: common.GetPointer("  "), wantErr: true},
+		{name: "configured", baseURL: common.GetPointer("https://new-api.example")},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			channel := &model.Channel{
+				Type:    constant.ChannelTypeNewAPI,
+				BaseURL: test.baseURL,
+			}
+
+			err := validateChannel(channel, false)
+
+			if test.wantErr {
+				require.ErrorContains(t, err, "New API channel base URL cannot be empty")
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestNewAPIChannelRegistration(t *testing.T) {
+	apiType, ok := common.ChannelType2APIType(constant.ChannelTypeNewAPI)
+
+	require.True(t, ok)
+	assert.Equal(t, constant.APITypeNewAPI, apiType)
+	assert.Equal(t, "New API", constant.GetChannelTypeName(constant.ChannelTypeNewAPI))
+	require.Greater(t, len(constant.ChannelBaseURLs), constant.ChannelTypeNewAPI)
+	assert.Empty(t, constant.ChannelBaseURLs[constant.ChannelTypeNewAPI])
+}
+
+func TestResponsesCompactAPITypeSupport(t *testing.T) {
+	tests := []struct {
+		name    string
+		apiType int
+		want    bool
+	}{
+		{name: "OpenAI", apiType: constant.APITypeOpenAI, want: true},
+		{name: "Codex", apiType: constant.APITypeCodex, want: true},
+		{name: "Advanced Custom", apiType: constant.APITypeAdvancedCustom, want: true},
+		{name: "Sub2API", apiType: constant.APITypeSub2API, want: true},
+		{name: "New API", apiType: constant.APITypeNewAPI, want: true},
+		{name: "Anthropic", apiType: constant.APITypeAnthropic, want: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, common.IsResponsesCompactAPIType(test.apiType))
+		})
+	}
+}
+
+func TestMultiprotocolGatewayEndpointTypes(t *testing.T) {
+	want := []constant.EndpointType{
+		constant.EndpointTypeOpenAI,
+		constant.EndpointTypeOpenAIResponse,
+		constant.EndpointTypeOpenAIResponseCompact,
+		constant.EndpointTypeAnthropic,
+		constant.EndpointTypeGemini,
+		constant.EndpointTypeOpenAIAlphaSearch,
+	}
+
+	assert.Equal(t, want, common.GetEndpointTypesByChannelType(constant.ChannelTypeNewAPI, "gpt-5"))
+	assert.Equal(t, want, common.GetEndpointTypesByChannelType(constant.ChannelTypeSub2API, "gpt-5"))
 }
 
 func TestCopyChannelRejectsInvalidLegacyProxySettings(t *testing.T) {
@@ -142,6 +233,51 @@ func TestDeleteChannelBatchReportsAndAuditsActualDeletedCount(t *testing.T) {
 	}
 	require.NoError(t, common.UnmarshalJsonStr(auditLog.Other, &auditData))
 	assert.Equal(t, float64(1), auditData.Operation.Params["count"])
+}
+
+func TestUpdateChannelScheduleOmissionAndExplicitClear(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	startsAt := time.Now().Add(time.Hour).Unix()
+	channel := &model.Channel{
+		Name:   "scheduled channel",
+		Key:    "test-key",
+		Type:   constant.ChannelTypeOpenAI,
+		Status: common.ChannelStatusEnabled,
+		Models: "gpt-test",
+		Group:  "default",
+		Schedule: model.ChannelSchedule{
+			StartsAt: &startsAt,
+		},
+	}
+	require.NoError(t, db.Create(channel).Error)
+
+	update := func(body string) {
+		t.Helper()
+		recorder := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(recorder)
+		ctx.Request = httptest.NewRequest(http.MethodPut, "/api/channel/", bytes.NewBufferString(body))
+		ctx.Request.Header.Set("Content-Type", "application/json")
+
+		UpdateChannel(ctx)
+
+		var response struct {
+			Success bool   `json:"success"`
+			Message string `json:"message"`
+		}
+		require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+		require.True(t, response.Success, response.Message)
+	}
+
+	update(fmt.Sprintf(`{"id":%d,"priority":9}`, channel.Id))
+	var preserved model.Channel
+	require.NoError(t, db.First(&preserved, "id = ?", channel.Id).Error)
+	require.NotNil(t, preserved.Schedule.StartsAt)
+	assert.Equal(t, startsAt, *preserved.Schedule.StartsAt)
+
+	update(fmt.Sprintf(`{"id":%d,"schedule":{}}`, channel.Id))
+	var cleared model.Channel
+	require.NoError(t, db.First(&cleared, "id = ?", channel.Id).Error)
+	assert.Nil(t, cleared.Schedule.StartsAt)
 }
 
 func TestAggregateAwareChannelPagination(t *testing.T) {

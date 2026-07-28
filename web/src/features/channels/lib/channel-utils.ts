@@ -33,6 +33,7 @@ import type {
   ChannelSettings,
   ChannelOtherSettings,
 } from '../types'
+import { isChannelEffectivelyEnabled } from './channel-schedule'
 
 // ============================================================================
 // Channel Type Utilities
@@ -58,6 +59,7 @@ export function getChannelTypeIcon(type: number): string {
     8: 'OpenAI', // Custom
     58: 'NewAPI', // Advanced Custom
     59: 'Sub2API', // Sub2API
+    60: 'NewAPI', // New API
     3: 'Azure', // Azure
 
     // Anthropic
@@ -623,6 +625,7 @@ export type TagRow = Channel & {
  */
 export type ChannelAggregateRow = Channel & {
   children: Channel[]
+  active_count: number
   row_kind: 'channel_aggregate'
 }
 
@@ -697,7 +700,7 @@ export function aggregateChannelsByAggregate(
         key: `aggregate:${aggregateId}`,
         name: channel.aggregate_name || '',
         type: 0,
-        status: channel.status,
+        status: isChannelEffectivelyEnabled(channel) ? 1 : 2,
         group: channel.group || '',
         models: channel.models || '',
         tag: null,
@@ -714,6 +717,7 @@ export function aggregateChannelsByAggregate(
         aggregate_base_url: channel.aggregate_base_url || '',
         row_kind: 'channel_aggregate',
         children: [],
+        active_count: 0,
       } as ChannelAggregateRow
       aggregateRows.set(aggregateId, aggregateRow)
       result.push(aggregateRow)
@@ -727,7 +731,8 @@ export function aggregateChannelsByAggregate(
       (aggregateRow.response_time * (childCount - 1) +
         (channel.response_time || 0)) /
       childCount
-    if (channel.status === 1) {
+    if (isChannelEffectivelyEnabled(channel)) {
+      aggregateRow.active_count += 1
       aggregateRow.status = 1
     } else if (aggregateRow.status === undefined) {
       aggregateRow.status = channel.status
@@ -846,7 +851,7 @@ export function aggregateChannelsByTag(
     }
 
     // Aggregate status (enabled if any child is enabled)
-    if (channel.status === 1) {
+    if (isChannelEffectivelyEnabled(channel)) {
       tagRow.status = 1
     } else if (tagRow.status === undefined) {
       tagRow.status = channel.status

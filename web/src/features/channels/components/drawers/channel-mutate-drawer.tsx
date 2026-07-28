@@ -22,6 +22,7 @@ import {
   ArrowRight,
   AlertCircle,
   Boxes,
+  CalendarClock,
   CheckCircle2,
   Circle,
   ClipboardPaste,
@@ -40,6 +41,7 @@ import {
   Code,
   Route,
   Settings,
+  ShieldCheck,
   SlidersHorizontal,
   Wand2,
 } from 'lucide-react'
@@ -158,6 +160,7 @@ import {
   channelsQueryKeys,
   getAdvancedCustomStats,
   transformChannelToFormDefaults,
+  type ChannelFormInput,
   type ChannelFormValues,
   deduplicateKeys,
   getChannelAggregateById,
@@ -173,11 +176,13 @@ import {
   validateModelMappingJson,
   hasAdvancedSettingsErrors,
 } from '../../lib'
+import { normalizeChannelSchedule } from '../../lib/channel-schedule'
 import {
   collectInvalidStatusCodeEntries,
   collectNewDisallowedStatusCodeRedirects,
 } from '../../lib/status-code-risk-guard'
 import type { Channel } from '../../types'
+import { ChannelScheduleEditor } from '../channel-schedule-editor'
 import { useChannels } from '../channels-provider'
 import { AdvancedCustomEditorDialog } from '../dialogs/advanced-custom-editor-dialog'
 import { FetchModelsDialog } from '../dialogs/fetch-models-dialog'
@@ -277,7 +282,9 @@ const CHANNEL_EDITOR_MAIN_SECTION_IDS = [
   CHANNEL_EDITOR_SECTION_IDS.advanced,
 ]
 const ADVANCED_SETTINGS_SECTION_IDS = {
+  schedule: 'channel-section-advanced-schedule',
   routingStrategy: 'channel-section-advanced-routing-strategy',
+  clientAccessPolicy: 'channel-section-advanced-client-access-policy',
   internalNotes: 'channel-section-advanced-internal-notes',
   overrideRules: 'channel-section-advanced-override-rules',
   extraSettings: 'channel-section-advanced-extra-settings',
@@ -313,6 +320,8 @@ const SENSITIVE_FORM_FIELDS = [
   'force_format',
   'thinking_to_content',
   'proxy',
+  'http_protocol',
+  'http2_connection_shards',
   'pass_through_body_enabled',
   'system_prompt',
   'system_prompt_override',
@@ -356,8 +365,20 @@ function hasConfiguredOverrideValue(value: unknown): boolean {
   return true
 }
 
+function hasConfiguredSchedule(
+  schedule: ChannelFormInput['schedule']
+): boolean {
+  return Boolean(
+    schedule?.starts_at ||
+    schedule?.expires_at ||
+    schedule?.paused_until ||
+    schedule?.weekly_enabled
+  )
+}
+
 function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
   return Boolean(
+    hasConfiguredSchedule(values.schedule) ||
     hasConfiguredOverrideValue(values.param_override) ||
     hasConfiguredOverrideValue(values.header_override) ||
     values.advanced_custom?.trim() ||
@@ -373,10 +394,14 @@ function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
     values.pass_through_body_enabled ||
     values.system_prompt_override ||
     values.protocol_capabilities_enabled ||
+    (values.http_protocol && values.http_protocol !== 'auto') ||
+    (values.http2_connection_shards != null &&
+      values.http2_connection_shards > 1) ||
     values.claude_beta_query ||
     values.upstream_model_update_check_enabled ||
     values.upstream_model_update_auto_sync_enabled ||
-    values.upstream_model_update_ignored_models?.trim()
+    values.upstream_model_update_ignored_models?.trim() ||
+    (values.client_policy_mode ?? 'unrestricted') !== 'unrestricted'
   )
 }
 
@@ -744,7 +769,7 @@ export function ChannelMutateDrawer({
     isEditing && channelData?.data?.channel_info?.is_multi_key === true
 
   // Form setup
-  const form = useForm<ChannelFormValues>({
+  const form = useForm<ChannelFormInput, unknown, ChannelFormValues>({
     resolver: zodResolver(channelFormSchema),
     defaultValues: CHANNEL_FORM_DEFAULT_VALUES,
   })
@@ -777,6 +802,7 @@ export function ChannelMutateDrawer({
   )
   const currentSettings = form.watch('settings')
   const currentAdvancedCustom = form.watch('advanced_custom')
+  const currentSchedule = form.watch('schedule')
   const currentPriority = form.watch('priority')
   const currentWeight = form.watch('weight')
   const currentClientPolicyMode = form.watch('client_policy_mode')
@@ -801,6 +827,8 @@ export function ChannelMutateDrawer({
     'disable_task_polling_sleep'
   )
   const currentProxy = form.watch('proxy')
+  const currentHttpProtocol = form.watch('http_protocol')
+  const currentHttp2ConnectionShards = form.watch('http2_connection_shards')
   const currentSystemPrompt = form.watch('system_prompt')
   const currentSystemPromptOverride = form.watch('system_prompt_override')
   const currentAllowServiceTier = form.watch('allow_service_tier')
@@ -1069,14 +1097,15 @@ export function ChannelMutateDrawer({
     ? 'error'
     : 'idle'
   const advancedSummary = advancedHaveErrors ? t('Error') : undefined
+  const scheduleConfigured = hasConfiguredSchedule(currentSchedule)
   const routingStrategyConfigured = Boolean(
     currentPriority ||
     currentWeight ||
     currentTestModel?.trim() ||
-    (currentAutoBan ?? 1) !== 1 ||
-    currentClientPolicyMode !== 'unrestricted' ||
-    currentClientPolicyClients?.trim()
+    (currentAutoBan ?? 1) !== 1
   )
+  const clientAccessPolicyConfigured =
+    (currentClientPolicyMode ?? 'unrestricted') !== 'unrestricted'
   const internalNotesConfigured = Boolean(
     currentTag?.trim() || currentRemark?.trim()
   )
@@ -1092,7 +1121,9 @@ export function ChannelMutateDrawer({
     currentDisableTaskPollingSleep ||
     currentProxy?.trim() ||
     currentSystemPrompt?.trim() ||
-    currentSystemPromptOverride
+    currentSystemPromptOverride ||
+    (currentHttpProtocol && currentHttpProtocol !== 'auto') ||
+    (currentHttp2ConnectionShards != null && currentHttp2ConnectionShards > 1)
   )
   const protocolCapabilitiesConfigured = Boolean(
     currentProtocolCapabilitiesEnabled
@@ -1120,7 +1151,9 @@ export function ChannelMutateDrawer({
     currentUpstreamModelUpdateIgnoredModels?.trim()
   )
   const advancedConfigured = Boolean(
+    scheduleConfigured ||
     routingStrategyConfigured ||
+    clientAccessPolicyConfigured ||
     internalNotesConfigured ||
     overrideRulesConfigured ||
     extraSettingsConfigured ||
@@ -1129,6 +1162,16 @@ export function ChannelMutateDrawer({
     upstreamModelDetectionConfigured
   )
   const advancedNavChildren: ChannelEditorNavChildItem[] = [
+    {
+      id: ADVANCED_SETTINGS_SECTION_IDS.schedule,
+      title: t('Scheduled access'),
+      configured: scheduleConfigured,
+    },
+    {
+      id: ADVANCED_SETTINGS_SECTION_IDS.clientAccessPolicy,
+      title: t('Client access policy'),
+      configured: clientAccessPolicyConfigured,
+    },
     {
       id: ADVANCED_SETTINGS_SECTION_IDS.routingStrategy,
       title: t('Routing Strategy'),
@@ -1921,7 +1964,7 @@ export function ChannelMutateDrawer({
     }
   }, [isChannelDetailLoading, open, updateActiveEditorSection])
 
-  const onInvalid: SubmitErrorHandler<ChannelFormValues> = useCallback(
+  const onInvalid: SubmitErrorHandler<ChannelFormInput> = useCallback(
     (errors) => {
       if (hasAdvancedSettingsErrors(errors)) {
         handleAdvancedSettingsOpenChange(true)
@@ -3823,6 +3866,122 @@ export function ChannelMutateDrawer({
                         onOpenChange={handleAdvancedSettingsOpenChange}
                         summary={advancedSummary}
                       >
+                        <div
+                          id={ADVANCED_SETTINGS_SECTION_IDS.schedule}
+                          className={sideDrawerSectionClassName('scroll-mt-4')}
+                        >
+                          <CardHeading
+                            title={t('Scheduled access')}
+                            icon={<CalendarClock className='h-4 w-4' />}
+                            iconTone='info'
+                          />
+                          <FormField
+                            control={form.control}
+                            name='schedule'
+                            render={({ field }) => (
+                              <FormItem>
+                                <ChannelScheduleEditor
+                                  value={normalizeChannelSchedule(field.value)}
+                                  onChange={field.onChange}
+                                  state={channelData?.data?.schedule_state}
+                                />
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
+                        </div>
+
+                        <div
+                          id={ADVANCED_SETTINGS_SECTION_IDS.clientAccessPolicy}
+                          className={sideDrawerSectionClassName('scroll-mt-4')}
+                        >
+                          <CardHeading
+                            title={t('Client access policy')}
+                            icon={<ShieldCheck className='h-4 w-4' />}
+                            iconTone='success'
+                          />
+                          <fieldset
+                            disabled={sensitiveLocked}
+                            className='space-y-4 disabled:opacity-60'
+                          >
+                            <FormDescription>
+                              {t(
+                                'Filter this channel by detected client. Unknown clients are rejected by allow lists and accepted by deny lists.'
+                              )}
+                            </FormDescription>
+                            <div className='grid gap-4 sm:grid-cols-2'>
+                              <FormField
+                                control={form.control}
+                                name='client_policy_mode'
+                                render={({ field }) => (
+                                  <FormItem>
+                                    <FormLabel>{t('Policy mode')}</FormLabel>
+                                    <FormControl>
+                                      <Select
+                                        value={field.value || 'unrestricted'}
+                                        onValueChange={field.onChange}
+                                      >
+                                        <SelectTrigger>
+                                          <SelectValue>
+                                            {t(
+                                              CLIENT_POLICY_MODE_LABEL_KEYS[
+                                                field.value || 'unrestricted'
+                                              ]
+                                            )}
+                                          </SelectValue>
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                          <SelectGroup>
+                                            <SelectItem value='unrestricted'>
+                                              {t('Unrestricted')}
+                                            </SelectItem>
+                                            <SelectItem value='allow'>
+                                              {t('Allow only')}
+                                            </SelectItem>
+                                            <SelectItem value='deny'>
+                                              {t('Deny')}
+                                            </SelectItem>
+                                          </SelectGroup>
+                                        </SelectContent>
+                                      </Select>
+                                    </FormControl>
+                                  </FormItem>
+                                )}
+                              />
+                              <FormField
+                                control={form.control}
+                                name='client_policy_clients'
+                                render={() => (
+                                  <FormItem>
+                                    <FormLabel>{t('Client names')}</FormLabel>
+                                    <FormControl>
+                                      <ClientMultiSelect
+                                        selected={currentClientPolicyClientList}
+                                        onChange={(clients) =>
+                                          form.setValue(
+                                            'client_policy_clients',
+                                            clients.join(', '),
+                                            { shouldDirty: true }
+                                          )
+                                        }
+                                        disabled={
+                                          currentClientPolicyMode ===
+                                          'unrestricted'
+                                        }
+                                      />
+                                    </FormControl>
+                                    <FormDescription>
+                                      {t(
+                                        'Choose built-in clients or add a custom name that matches an identification rule.'
+                                      )}
+                                    </FormDescription>
+                                  </FormItem>
+                                )}
+                              />
+                            </div>
+                          </fieldset>
+                        </div>
+
                         {/* ── Routing & Overrides ── */}
                         <div className={sideDrawerSectionClassName()}>
                           <CardHeading
@@ -3936,89 +4095,6 @@ export function ChannelMutateDrawer({
                                 </FormItem>
                               )}
                             />
-
-                            <div className='border-border/60 bg-muted/10 space-y-3 rounded-lg border p-3 sm:col-span-2'>
-                              <div>
-                                <FormLabel>
-                                  {t('Client access policy')}
-                                </FormLabel>
-                                <FormDescription>
-                                  {t(
-                                    'Filter this channel by detected client. Unknown clients are rejected by allow lists and accepted by deny lists.'
-                                  )}
-                                </FormDescription>
-                              </div>
-                              <div className='grid gap-3 sm:grid-cols-2'>
-                                <FormField
-                                  control={form.control}
-                                  name='client_policy_mode'
-                                  render={({ field }) => (
-                                    <FormItem>
-                                      <FormLabel>{t('Policy mode')}</FormLabel>
-                                      <FormControl>
-                                        <Select
-                                          value={field.value || 'unrestricted'}
-                                          onValueChange={field.onChange}
-                                        >
-                                          <SelectTrigger>
-                                            <SelectValue>
-                                              {t(
-                                                CLIENT_POLICY_MODE_LABEL_KEYS[
-                                                  field.value || 'unrestricted'
-                                                ]
-                                              )}
-                                            </SelectValue>
-                                          </SelectTrigger>
-                                          <SelectContent>
-                                            <SelectItem value='unrestricted'>
-                                              {t('Unrestricted')}
-                                            </SelectItem>
-                                            <SelectItem value='allow'>
-                                              {t('Allow only')}
-                                            </SelectItem>
-                                            <SelectItem value='deny'>
-                                              {t('Deny')}
-                                            </SelectItem>
-                                          </SelectContent>
-                                        </Select>
-                                      </FormControl>
-                                    </FormItem>
-                                  )}
-                                />
-                                <FormField
-                                  control={form.control}
-                                  name='client_policy_clients'
-                                  render={() => (
-                                    <FormItem>
-                                      <FormLabel>{t('Client names')}</FormLabel>
-                                      <FormControl>
-                                        <ClientMultiSelect
-                                          selected={
-                                            currentClientPolicyClientList
-                                          }
-                                          onChange={(clients) =>
-                                            form.setValue(
-                                              'client_policy_clients',
-                                              clients.join(', '),
-                                              { shouldDirty: true }
-                                            )
-                                          }
-                                          disabled={
-                                            currentClientPolicyMode ===
-                                            'unrestricted'
-                                          }
-                                        />
-                                      </FormControl>
-                                      <FormDescription>
-                                        {t(
-                                          'Choose built-in clients or add a custom name that matches an identification rule.'
-                                        )}
-                                      </FormDescription>
-                                    </FormItem>
-                                  )}
-                                />
-                              </div>
-                            </div>
                           </div>
 
                           <div
@@ -4479,6 +4555,127 @@ export function ChannelMutateDrawer({
                                   <FormMessage />
                                 </FormItem>
                               )}
+                            />
+
+                            <FormField
+                              control={form.control}
+                              name='http_protocol'
+                              render={({ field }) => (
+                                <FormItem>
+                                  <FormLabel>{t('HTTP Protocol')}</FormLabel>
+                                  <Select
+                                    items={[
+                                      {
+                                        value: 'auto',
+                                        label: t('Auto'),
+                                      },
+                                      {
+                                        value: 'http1',
+                                        label: t('HTTP/1.1'),
+                                      },
+                                    ]}
+                                    value={field.value || 'auto'}
+                                    onValueChange={(value) => {
+                                      const nextProtocol =
+                                        value === 'http1' ? 'http1' : 'auto'
+                                      field.onChange(nextProtocol)
+                                      if (nextProtocol === 'http1') {
+                                        form.setValue(
+                                          'http2_connection_shards',
+                                          1,
+                                          {
+                                            shouldDirty: true,
+                                            shouldValidate: true,
+                                          }
+                                        )
+                                      }
+                                    }}
+                                  >
+                                    <FormControl>
+                                      <SelectTrigger>
+                                        <SelectValue />
+                                      </SelectTrigger>
+                                    </FormControl>
+                                    <SelectContent alignItemWithTrigger={false}>
+                                      <SelectGroup>
+                                        <SelectItem value='auto'>
+                                          {t('Auto')}
+                                        </SelectItem>
+                                        <SelectItem value='http1'>
+                                          {t('HTTP/1.1')}
+                                        </SelectItem>
+                                      </SelectGroup>
+                                    </SelectContent>
+                                  </Select>
+                                  <FormDescription>
+                                    {t(
+                                      'Auto negotiates HTTP/2 when available. HTTP/1.1 forces multiple keep-alive connections under concurrency.'
+                                    )}
+                                  </FormDescription>
+                                  <FormMessage />
+                                </FormItem>
+                              )}
+                            />
+
+                            <FormField
+                              control={form.control}
+                              name='http2_connection_shards'
+                              render={({ field }) => {
+                                const http1Selected =
+                                  currentHttpProtocol === 'http1'
+                                const shardItems = Array.from(
+                                  { length: 8 },
+                                  (_, index) => {
+                                    const value = String(index + 1)
+                                    return { value, label: value }
+                                  }
+                                )
+                                return (
+                                  <FormItem>
+                                    <FormLabel>
+                                      {t('HTTP/2 Connection Shards')}
+                                    </FormLabel>
+                                    <Select
+                                      items={shardItems}
+                                      value={String(field.value || 1)}
+                                      disabled={http1Selected}
+                                      onValueChange={(value) => {
+                                        field.onChange(Number(value))
+                                      }}
+                                    >
+                                      <FormControl>
+                                        <SelectTrigger disabled={http1Selected}>
+                                          <SelectValue />
+                                        </SelectTrigger>
+                                      </FormControl>
+                                      <SelectContent
+                                        alignItemWithTrigger={false}
+                                      >
+                                        <SelectGroup>
+                                          {shardItems.map((item) => (
+                                            <SelectItem
+                                              key={item.value}
+                                              value={item.value}
+                                            >
+                                              {item.label}
+                                            </SelectItem>
+                                          ))}
+                                        </SelectGroup>
+                                      </SelectContent>
+                                    </Select>
+                                    <FormDescription>
+                                      {http1Selected
+                                        ? t(
+                                            'HTTP/2 connection shards are unavailable when HTTP/1.1 is selected.'
+                                          )
+                                        : t(
+                                            'Spread HTTP/2 traffic across multiple reusable connections to the same upstream origin (1-8).'
+                                          )}
+                                    </FormDescription>
+                                    <FormMessage />
+                                  </FormItem>
+                                )
+                              }}
                             />
 
                             <FormField

@@ -34,6 +34,79 @@ export const channelInfoSchema = z.object({
 
 export type ChannelInfo = z.infer<typeof channelInfoSchema>
 
+export const channelScheduleWindowSchema = z
+  .object({
+    start: z.string().optional(),
+    end: z.string().optional(),
+    all_day: z.boolean().optional(),
+  })
+  .superRefine((window, ctx) => {
+    if (window.all_day) return
+    const clockPattern = /^([01]\d|2[0-3]):[0-5]\d$/
+    if (!window.start || !clockPattern.test(window.start)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['start'],
+        message: 'Invalid start time',
+      })
+    }
+    if (!window.end || !clockPattern.test(window.end)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['end'],
+        message: 'Invalid end time',
+      })
+    }
+    if (window.start && window.start === window.end) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['end'],
+        message: 'Start and end times must be different',
+      })
+    }
+  })
+
+export const channelScheduleSchema = z.object({
+  timezone: z.literal('Asia/Shanghai').default('Asia/Shanghai'),
+  starts_at: z.number().int().positive().nullish(),
+  expires_at: z.number().int().positive().nullish(),
+  paused_until: z.number().int().positive().nullish(),
+  weekly_enabled: z.boolean().default(false),
+  weekly_windows: z
+    .record(z.string(), z.array(channelScheduleWindowSchema).max(24))
+    .default({}),
+})
+
+export type ChannelScheduleWindow = z.infer<typeof channelScheduleWindowSchema>
+export type ChannelSchedule = z.infer<typeof channelScheduleSchema>
+export type ChannelScheduleInput = z.input<typeof channelScheduleSchema>
+
+export const channelEffectiveStatusSchema = z.enum([
+  'enabled',
+  'manual_disabled',
+  'auto_disabled',
+  'scheduled_disabled',
+  'unknown',
+])
+
+export type ChannelEffectiveStatus = z.infer<
+  typeof channelEffectiveStatusSchema
+>
+
+export const channelScheduleStateSchema = z.object({
+  available: z.boolean(),
+  reason: z.enum([
+    'none',
+    'before_start',
+    'paused',
+    'expired',
+    'outside_weekly_window',
+  ]),
+  next_transition_at: z.number().int().positive().nullish(),
+})
+
+export type ChannelScheduleState = z.infer<typeof channelScheduleStateSchema>
+
 export const channelSchema = z.object({
   id: z.number(),
   type: z.number(),
@@ -63,6 +136,13 @@ export const channelSchema = z.object({
   param_override: z.string().nullish(),
   header_override: z.string().nullish(),
   remark: z.string().default(''),
+  schedule: channelScheduleSchema.default({
+    timezone: 'Asia/Shanghai',
+    weekly_enabled: false,
+    weekly_windows: {},
+  }),
+  effective_status: channelEffectiveStatusSchema.optional(),
+  schedule_state: channelScheduleStateSchema.optional(),
   aggregate_id: z.number().nullish(),
   inherit_aggregate_base_url: z.boolean().default(false),
   aggregate_name: z.string().optional(),
@@ -106,6 +186,34 @@ export type ChannelAggregatesResponse = {
   data?: ChannelAggregate[]
 }
 
+export type ChannelAggregateMergeParams = {
+  ids: number[]
+  aggregate_id?: number
+  new_aggregate?: ChannelAggregateInput
+  inherit_aggregate_base_url: boolean
+}
+
+export type ChannelAggregateMergeResponse = {
+  success: boolean
+  message?: string
+  data?: {
+    aggregate: ChannelAggregate
+    updated: number
+  }
+}
+
+export type ChannelAggregateDetachParams = {
+  ids: number[]
+}
+
+export type ChannelAggregateDetachResponse = {
+  success: boolean
+  message?: string
+  data?: {
+    updated: number
+  }
+}
+
 // ============================================================================
 // Channel Settings Types
 // ============================================================================
@@ -117,6 +225,8 @@ export interface ChannelSettings {
   pass_through_body_enabled?: boolean
   system_prompt?: string
   system_prompt_override?: boolean
+  http_protocol?: 'auto' | 'http1' | string
+  http2_connection_shards?: number
 }
 
 export interface ChannelOtherSettings {
@@ -375,6 +485,70 @@ export interface BatchDeleteParams {
 export interface BatchSetTagParams {
   ids: number[]
   tag: string | null
+}
+
+export interface ChannelBatchFilter {
+  keyword?: string
+  group?: string
+  model?: string
+  status?: string
+  type?: number
+}
+
+export type ChannelBatchTarget =
+  | {
+      mode: 'selected'
+      ids: number[]
+    }
+  | {
+      mode: 'filtered'
+      filter: ChannelBatchFilter
+      fingerprint: string
+    }
+
+export type ChannelBatchListMode = 'replace' | 'add' | 'remove'
+
+export interface ChannelBatchUpdates {
+  group?: { mode: ChannelBatchListMode; values: string[] }
+  priority?: { value: number }
+  weight?: { value: number }
+  tag?: { value: string }
+  models?: { mode: ChannelBatchListMode; values: string[] }
+  model_mapping?: { value: string }
+  auto_ban?: { value: number }
+  test_model?: { value: string }
+  remark?: { value: string }
+  starts_at?: { value: number | null }
+  expires_at?: { value: number | null }
+  paused_until?: { value: number | null }
+  weekly_schedule?: {
+    enabled: boolean
+    windows: Record<string, ChannelScheduleWindow[]>
+  }
+  client_policy?: {
+    mode: 'unrestricted' | 'allow' | 'deny'
+    clients: string[]
+  }
+  upstream_model_update_check_enabled?: { value: boolean }
+  upstream_model_update_auto_sync_enabled?: { value: boolean }
+  upstream_model_update_ignored_models?: { value: string[] }
+}
+
+export interface ChannelBatchPreviewResponse {
+  success: boolean
+  message?: string
+  data?: {
+    count: number
+    fingerprint: string
+  }
+}
+
+export interface ChannelBatchUpdateResponse {
+  success: boolean
+  message?: string
+  data?: {
+    updated: number
+  }
 }
 
 export interface TagOperationParams {

@@ -28,7 +28,7 @@ import {
 } from '../channel-utils'
 
 function channel(id: number, overrides: Partial<Channel> = {}): Channel {
-  return {
+  const baseChannel: Channel = {
     id,
     type: 1,
     key: '',
@@ -56,8 +56,17 @@ function channel(id: number, overrides: Partial<Channel> = {}): Channel {
       multi_key_polling_index: 0,
       multi_key_mode: 'random',
     },
+    schedule: {
+      timezone: 'Asia/Shanghai',
+      weekly_enabled: false,
+      weekly_windows: {},
+    },
     settings: '{}',
+  }
+  return {
+    ...baseChannel,
     ...overrides,
+    schedule: overrides.schedule ?? baseChannel.schedule,
   }
 }
 
@@ -123,5 +132,28 @@ describe('channel aggregate presentation tree', () => {
     expect(isTagAggregateRow(aggregateRows[0])).toBe(false)
     expect(isTagAggregateRow(tagRows[0])).toBe(true)
     expect(isChannelAggregateRow(tagRows[0])).toBe(false)
+  })
+
+  test('counts only effectively available children as active', () => {
+    const rows = aggregateChannelsByAggregate([
+      channel(1, {
+        aggregate_id: 8,
+        aggregate_name: 'Shared upstream',
+        effective_status: 'enabled',
+      }),
+      channel(2, {
+        aggregate_id: 8,
+        aggregate_name: 'Shared upstream',
+        status: 1,
+        effective_status: 'scheduled_disabled',
+      }),
+    ])
+
+    expect(isChannelAggregateRow(rows[0])).toBe(true)
+    if (!isChannelAggregateRow(rows[0])) throw new Error('missing parent row')
+
+    expect(rows[0].children).toHaveLength(2)
+    expect(rows[0].active_count).toBe(1)
+    expect(rows[0].status).toBe(1)
   })
 })

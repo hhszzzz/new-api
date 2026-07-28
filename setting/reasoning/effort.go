@@ -1,35 +1,25 @@
 package reasoning
 
-import "strings"
+import kitreasoning "github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
 
 // Effort levels recorded on the consume log. They match the OpenAI
 // reasoning_effort vocabulary so the log UI renders one shared badge for every
 // provider instead of a per-provider dialect.
 const (
-	EffortMinimal = "minimal"
-	EffortLow     = "low"
-	EffortMedium  = "medium"
-	EffortHigh    = "high"
-	EffortXHigh   = "xhigh"
-	EffortMax     = "max"
-	EffortNone    = "none"
-)
-
-// Thinking-budget boundaries used to describe a token budget as an effort
-// level. Anthropic requires at least 1024 budget tokens and Gemini accepts up
-// to 32768, so the buckets cover both scales: the value is a request-shaping
-// hint, and the log only needs the magnitude to be recognizable.
-const (
-	budgetLowMax    = 2048
-	budgetMediumMax = 8192
-	budgetHighMax   = 24576
+	EffortMinimal = kitreasoning.EffortMinimal
+	EffortLow     = kitreasoning.EffortLow
+	EffortMedium  = kitreasoning.EffortMedium
+	EffortHigh    = kitreasoning.EffortHigh
+	EffortXHigh   = kitreasoning.EffortXHigh
+	EffortMax     = kitreasoning.EffortMax
+	EffortNone    = kitreasoning.EffortNone
 )
 
 // NormalizeEffort maps a provider-specific effort string onto the shared
 // vocabulary. Unknown values are returned lowercased so a new upstream level
 // still reaches the log instead of being silently dropped.
 func NormalizeEffort(effort string) string {
-	return strings.ToLower(strings.TrimSpace(effort))
+	return kitreasoning.NormalizeEffort(effort)
 }
 
 // ClaudeEffort resolves the effort level of an Anthropic request. Anthropic
@@ -37,13 +27,7 @@ func NormalizeEffort(effort string) string {
 // thinking) or as a token budget on enabled thinking, so both spellings are
 // folded into the shared vocabulary. An empty result means thinking is off.
 func ClaudeEffort(nativeEffort string, thinkingEnabled bool, budgetTokens int) string {
-	if effort := NormalizeEffort(nativeEffort); effort != "" {
-		return effort
-	}
-	if thinkingEnabled {
-		return EffortFromBudgetTokens(budgetTokens)
-	}
-	return ""
+	return kitreasoning.ClaudeEffort(nativeEffort, thinkingEnabled, budgetTokens)
 }
 
 // EffortFromBudgetTokens describes a thinking-token budget as an effort level.
@@ -51,16 +35,5 @@ func ClaudeEffort(nativeEffort string, thinkingEnabled bool, budgetTokens int) s
 // thinkingBudget) can then report the same levels as providers with a native
 // effort field. A non-positive budget means thinking is disabled.
 func EffortFromBudgetTokens(budgetTokens int) string {
-	switch {
-	case budgetTokens <= 0:
-		return EffortNone
-	case budgetTokens <= budgetLowMax:
-		return EffortLow
-	case budgetTokens <= budgetMediumMax:
-		return EffortMedium
-	case budgetTokens <= budgetHighMax:
-		return EffortHigh
-	default:
-		return EffortXHigh
-	}
+	return kitreasoning.EffortFromBudgetTokens(budgetTokens)
 }

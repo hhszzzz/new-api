@@ -56,6 +56,11 @@ function channel(settings: ChannelOtherSettings = {}): Channel {
       multi_key_polling_index: 0,
       multi_key_mode: 'random',
     },
+    schedule: {
+      timezone: 'Asia/Shanghai',
+      weekly_enabled: false,
+      weekly_windows: {},
+    },
     settings: JSON.stringify(settings),
   }
 }

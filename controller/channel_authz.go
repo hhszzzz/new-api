@@ -96,6 +96,8 @@ var channelReadOnlyFields = map[string]struct{}{
 	"balance":              {},
 	"balance_updated_time": {},
 	"used_quota":           {},
+	"effective_status":     {},
+	"schedule_state":       {},
 }
 
 func clearChannelReadOnlyFields(channel *PatchChannel, requestData map[string]any) {
@@ -139,6 +141,7 @@ var channelNonSensitiveFields = map[string]struct{}{
 	"other_info":          {},
 	"tag":                 {},
 	"remark":              {},
+	"schedule":            {},
 	"channel_info":        {},
 	"multi_key_mode":      {},
 	"aggregate_name":      {},

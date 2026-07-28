@@ -12,20 +12,23 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
+	taskdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/channelcompat"
 	"github.com/QuantumNous/new-api/service/modelmapping"
 	"github.com/QuantumNous/new-api/service/protocolstate"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
-	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
+
+var ErrChannelOutsideSchedule = errors.New("channel is outside its scheduled availability")
 
 type ModelRequest struct {
 	Model string `json:"model"`
@@ -127,7 +130,7 @@ func Distribute() func(c *gin.Context) {
 				abortWithProtocolMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidChannelId))
 				return
 			}
-			if channel.Status != common.ChannelStatusEnabled {
+			if !channel.IsSchedulableAt(time.Now()) {
 				abortWithProtocolMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorChannelDisabled))
 				return
 			}
@@ -148,7 +151,7 @@ func Distribute() func(c *gin.Context) {
 				candidateClassifier := BuildChannelCandidateClassifier(c, selectionModel)
 				if protocolBinding != nil && protocolBinding.ChannelID > 0 {
 					bound, boundErr := model.CacheGetChannel(protocolBinding.ChannelID)
-					if boundErr == nil && bound != nil && bound.Status == common.ChannelStatusEnabled &&
+					if boundErr == nil && bound != nil && bound.IsSchedulableAt(time.Now()) &&
 						(candidateFilter == nil || candidateFilter(bound)) &&
 						channelMatchesCandidateClassifier(bound, candidateClassifier) &&
 						channelSupportsRequestPath(bound, c.Request.URL.Path, selectionModel) {
@@ -165,7 +168,7 @@ func Distribute() func(c *gin.Context) {
 					if preferredChannelID, found := service.GetPreferredChannelByAffinity(c, selectionModel, selectionGroup); found {
 						affinityUsable := false
 						preferred, err := model.CacheGetChannel(preferredChannelID)
-						if err == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled &&
+						if err == nil && preferred != nil && preferred.IsSchedulableAt(time.Now()) &&
 							(candidateFilter == nil || candidateFilter(preferred)) &&
 							channelMatchesCandidateClassifier(preferred, candidateClassifier) &&
 							channelSupportsRequestPath(preferred, c.Request.URL.Path, selectionModel) {
@@ -222,7 +225,7 @@ func Distribute() func(c *gin.Context) {
 		}
 		common.SetContextKey(c, constant.ContextKeyRequestStartTime, time.Now())
 		if channel != nil {
-			if setupErr := SetupContextForSelectedChannel(c, channel, modelRequest.Model); setupErr != nil {
+			if setupErr := SetupContextForSelectedChannel(c, channel, modelRequest.Model, true); setupErr != nil {
 				abortWithProtocolMessage(c, setupErr.StatusCode, setupErr.Error(), setupErr.GetErrorCode())
 				return
 			}
@@ -370,7 +373,7 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 			relayMode == relayconstant.RelayModeMidjourneyTaskImageSeed {
 			shouldSelectChannel = false
 		} else {
-			midjourneyRequest := dto.MidjourneyRequest{}
+			midjourneyRequest := taskdto.MidjourneyRequest{}
 			err = common.UnmarshalBodyReusable(c, &midjourneyRequest)
 			if err != nil {
 				return nil, false, errors.New(i18n.T(c, i18n.MsgDistributorInvalidMidjourney, map[string]any{"Error": err.Error()}))
@@ -568,10 +571,17 @@ func getTaskOriginModelName(c *gin.Context) (string, error) {
 	return "", nil
 }
 
-func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, modelName string) *types.NewAPIError {
+func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, modelName string, enforceSchedule bool) *types.NewAPIError {
 	c.Set("original_model", modelName) // for retry
 	if channel == nil {
 		return types.NewError(errors.New("channel is nil"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+	}
+	if enforceSchedule && !channel.Schedule.IsAvailableAt(time.Now()) {
+		return types.NewErrorWithStatusCode(
+			ErrChannelOutsideSchedule,
+			types.ErrorCodeGetChannelFailed,
+			http.StatusServiceUnavailable,
+		)
 	}
 	selectionModel := routeSelectionModel(c, modelName)
 	selectionGroup := routeSelectionGroup(c, common.GetContextKeyString(c, constant.ContextKeyUsingGroup))

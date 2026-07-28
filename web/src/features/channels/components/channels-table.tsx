@@ -18,9 +18,9 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
 import { getRouteApi } from '@tanstack/react-router'
-import type { OnChangeFn, SortingState, Row } from '@tanstack/react-table'
-import { AlertTriangle, Eye, EyeOff, RefreshCw } from 'lucide-react'
-import { useMemo, useEffect } from 'react'
+import type { OnChangeFn, Row, SortingState } from '@tanstack/react-table'
+import { AlertTriangle, Eye, EyeOff, Pencil, RefreshCw } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import {
@@ -44,11 +44,7 @@ import { useTableUrlState } from '@/hooks/use-table-url-state'
 import { getLobeIcon } from '@/lib/lobe-icon'
 
 import { getChannels, searchChannels, getGroups } from '../api'
-import {
-  DEFAULT_PAGE_SIZE,
-  CHANNEL_STATUS,
-  CHANNEL_STATUS_OPTIONS,
-} from '../constants'
+import { DEFAULT_PAGE_SIZE, CHANNEL_STATUS_OPTIONS } from '../constants'
 import {
   channelsQueryKeys,
   aggregateChannelsByAggregate,
@@ -58,12 +54,14 @@ import {
   isTagAggregateRow,
   getChannelTypeIcon,
   getChannelTypeLabel,
+  isChannelEffectivelyEnabled,
 } from '../lib'
-import type { Channel, ChannelSortBy } from '../types'
+import type { Channel, ChannelBatchFilter, ChannelSortBy } from '../types'
 import { ChannelCard } from './channel-card'
 import { useChannelsColumns } from './channels-columns'
 import { useChannels } from './channels-provider'
 import { DataTableBulkActions } from './data-table-bulk-actions'
+import { ChannelBatchEditDialog } from './dialogs/channel-batch-edit-dialog'
 
 const route = getRouteApi('/_authenticated/channels/')
 const CHANNELS_COLUMN_VISIBILITY_STORAGE_KEY = 'channels:column-visibility'
@@ -84,7 +82,7 @@ function isDisabledChannelRow(channel: Channel) {
   return (
     !isTagAggregateRow(channel) &&
     !isChannelAggregateRow(channel) &&
-    channel.status !== CHANNEL_STATUS.ENABLED
+    !isChannelEffectivelyEnabled(channel)
   )
 }
 
@@ -99,6 +97,7 @@ export function ChannelsTable() {
   } = useChannels()
   const isMobile = useMediaQuery('(max-width: 640px)')
   const defaultPageSize = isMobile ? 10 : DEFAULT_PAGE_SIZE
+  const [showFilteredBatchEdit, setShowFilteredBatchEdit] = useState(false)
 
   // Table state
   const [sorting, setSorting] = usePersistedTableSorting(
@@ -137,14 +136,20 @@ export function ChannelsTable() {
   })
 
   // Extract filters from column filters
-  const statusFilter =
-    (columnFilters.find((f) => f.id === 'status')?.value as string[]) || []
+  const statusFilter = useMemo(
+    () =>
+      (columnFilters.find((f) => f.id === 'status')?.value as string[]) || [],
+    [columnFilters]
+  )
   const typeFilter = useMemo(
     () => (columnFilters.find((f) => f.id === 'type')?.value as string[]) || [],
     [columnFilters]
   )
-  const groupFilter =
-    (columnFilters.find((f) => f.id === 'group')?.value as string[]) || []
+  const groupFilter = useMemo(
+    () =>
+      (columnFilters.find((f) => f.id === 'group')?.value as string[]) || [],
+    [columnFilters]
+  )
   const {
     value: modelFilter,
     inputValue: modelFilterInput,
@@ -160,6 +165,26 @@ export function ChannelsTable() {
 
   // Determine whether to use search or regular list API
   const shouldSearch = Boolean(globalFilter?.trim() || modelFilter.trim())
+
+  const batchFilter = useMemo<ChannelBatchFilter>(
+    () => ({
+      keyword: globalFilter?.trim() || '',
+      model: modelFilter.trim(),
+      group:
+        groupFilter.length > 0 && !groupFilter.includes('all')
+          ? groupFilter[0]
+          : '',
+      status:
+        statusFilter.length > 0 && !statusFilter.includes('all')
+          ? statusFilter[0]
+          : '',
+      type:
+        typeFilter.length > 0 && !typeFilter.includes('all')
+          ? Number(typeFilter[0])
+          : undefined,
+    }),
+    [globalFilter, groupFilter, modelFilter, statusFilter, typeFilter]
+  )
 
   const sortParams = useMemo(() => {
     const activeSort = sorting[0]
@@ -302,6 +327,27 @@ export function ChannelsTable() {
   const totalCount = data?.data?.total || 0
   const typeCounts = data?.data?.type_counts
 
+  const nextScheduleTransition = useMemo(() => {
+    const now = Date.now() / 1000
+    let next: number | undefined
+    for (const channel of data?.data?.items || []) {
+      const transition = channel.schedule_state?.next_transition_at
+      if (!transition || transition <= now) continue
+      if (!next || transition < next) next = transition
+    }
+    return next
+  }, [data])
+
+  useEffect(() => {
+    if (!nextScheduleTransition) return
+    const delay = Math.min(
+      Math.max((nextScheduleTransition - Date.now() / 1000) * 1000 + 250, 250),
+      2_147_000_000
+    )
+    const timer = window.setTimeout(() => void refetch(), delay)
+    return () => window.clearTimeout(timer)
+  }, [nextScheduleTransition, refetch])
+
   // Columns configuration
   const columns = useChannelsColumns({ enableSelection: batchMode })
 
@@ -344,9 +390,21 @@ export function ChannelsTable() {
   })
 
   useEffect(() => {
-    if (!batchMode) {
-      table.resetRowSelection()
-    }
+    table.setColumnOrder((current) => {
+      const orderWithoutSelection = current.filter((id) => id !== 'select')
+      const nextOrder = batchMode
+        ? ['select', ...orderWithoutSelection]
+        : orderWithoutSelection
+
+      const isUnchanged =
+        current.length === nextOrder.length &&
+        current.every((id, index) => id === nextOrder[index])
+      return isUnchanged ? current : nextOrder
+    })
+  }, [batchMode, table])
+
+  useEffect(() => {
+    if (!batchMode) table.resetRowSelection()
   }, [batchMode, table])
 
   // Prepare filter options from existing channel types only.
@@ -414,91 +472,125 @@ export function ChannelsTable() {
     error instanceof Error ? error.message : t('Failed to load channels')
 
   const tablePage = (
-    <DataTablePage
-      table={table}
-      columns={columns}
-      isLoading={isLoadingData}
-      isFetching={isFetching}
-      emptyTitle={t('No Channels Found')}
-      emptyDescription={t(
-        'No channels available. Create your first channel to get started.'
-      )}
-      skeletonKeyPrefix='channel-skeleton'
-      enableCardView
-      viewModeStorageKey={CHANNELS_VIEW_MODE_STORAGE_KEY}
-      renderCard={(row, { isSelected }) => (
-        <ChannelCard row={row} isSelected={isSelected} />
-      )}
-      cardGridClassName='grid grid-cols-1 gap-3 sm:gap-4 lg:grid-cols-3'
-      applyHeaderSize
-      toolbarProps={{
-        searchPlaceholder: t('Filter by name, ID, or key...'),
-        searchDebounceMs: 500,
-        onReset: () => {
-          resetModelFilterInput()
-        },
-        additionalSearch: (
-          <Input
-            placeholder={t('Filter by model...')}
-            value={modelFilterInput}
-            onChange={onModelFilterInputChange}
-            onCompositionStart={onModelFilterCompositionStart}
-            onCompositionEnd={onModelFilterCompositionEnd}
-            className='w-full sm:w-[150px] lg:w-[180px]'
-          />
-        ),
-        filters: [
-          {
-            columnId: 'status',
-            title: t('Status'),
-            options: [...CHANNEL_STATUS_OPTIONS],
-            singleSelect: true,
+    <>
+      <DataTablePage
+        table={table}
+        columns={columns}
+        isLoading={isLoadingData}
+        isFetching={isFetching}
+        emptyTitle={t('No Channels Found')}
+        emptyDescription={t(
+          'No channels available. Create your first channel to get started.'
+        )}
+        skeletonKeyPrefix='channel-skeleton'
+        enableCardView
+        viewModeStorageKey={CHANNELS_VIEW_MODE_STORAGE_KEY}
+        renderCard={(row, { isSelected }) => (
+          <ChannelCard row={row} isSelected={isSelected} />
+        )}
+        cardGridClassName='grid grid-cols-1 gap-3 sm:gap-4 lg:grid-cols-3'
+        applyHeaderSize
+        toolbarProps={{
+          searchPlaceholder: t('Filter by name, ID, or key...'),
+          searchDebounceMs: 500,
+          onReset: () => {
+            resetModelFilterInput()
           },
-          {
-            columnId: 'type',
-            title: t('Type'),
-            options: typeFilterOptions,
-            singleSelect: true,
-          },
-          {
-            columnId: 'group',
-            title: t('Group'),
-            options: groupFilterOptions,
-            singleSelect: true,
-          },
-        ],
-        preActions: (
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  variant='ghost'
-                  size='icon'
-                  onClick={() => setSensitiveVisible(!sensitiveVisible)}
-                  aria-label={sensitiveVisible ? t('Hide') : t('Show')}
-                  className='text-muted-foreground hover:text-foreground size-8'
-                />
-              }
-            >
-              {sensitiveVisible ? <Eye /> : <EyeOff />}
-            </TooltipTrigger>
-            <TooltipContent>
-              {sensitiveVisible ? t('Hide') : t('Show')}
-            </TooltipContent>
-          </Tooltip>
-        ),
-      }}
-      getRowClassName={(row, { isMobile }) => {
-        if (!isDisabledChannelRow(row.original)) {
-          return undefined
+          additionalSearch: (
+            <Input
+              placeholder={t('Filter by model...')}
+              value={modelFilterInput}
+              onChange={onModelFilterInputChange}
+              onCompositionStart={onModelFilterCompositionStart}
+              onCompositionEnd={onModelFilterCompositionEnd}
+              className='w-full sm:w-[150px] lg:w-[180px]'
+            />
+          ),
+          filters: [
+            {
+              columnId: 'status',
+              title: t('Status'),
+              options: [...CHANNEL_STATUS_OPTIONS],
+              singleSelect: true,
+            },
+            {
+              columnId: 'type',
+              title: t('Type'),
+              options: typeFilterOptions,
+              singleSelect: true,
+            },
+            {
+              columnId: 'group',
+              title: t('Group'),
+              options: groupFilterOptions,
+              singleSelect: true,
+            },
+          ],
+          preActions: (
+            <>
+              {batchMode && (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        variant='ghost'
+                        size='icon'
+                        onClick={() => setShowFilteredBatchEdit(true)}
+                        aria-label={t('Batch Edit Channels')}
+                        className='text-muted-foreground hover:text-foreground size-8'
+                      />
+                    }
+                  >
+                    <Pencil />
+                  </TooltipTrigger>
+                  <TooltipContent>{t('Batch Edit Channels')}</TooltipContent>
+                </Tooltip>
+              )}
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      variant='ghost'
+                      size='icon'
+                      onClick={() => setSensitiveVisible(!sensitiveVisible)}
+                      aria-label={sensitiveVisible ? t('Hide') : t('Show')}
+                      className='text-muted-foreground hover:text-foreground size-8'
+                    />
+                  }
+                >
+                  {sensitiveVisible ? <Eye /> : <EyeOff />}
+                </TooltipTrigger>
+                <TooltipContent>
+                  {sensitiveVisible ? t('Hide') : t('Show')}
+                </TooltipContent>
+              </Tooltip>
+            </>
+          ),
+        }}
+        getRowClassName={(row, { isMobile }) => {
+          if (!isDisabledChannelRow(row.original)) {
+            return undefined
+          }
+          if (isMobile) {
+            return DISABLED_ROW_MOBILE
+          }
+          return DISABLED_ROW_DESKTOP
+        }}
+        bulkActions={
+          batchMode ? (
+            <DataTableBulkActions table={table} filter={batchFilter} />
+          ) : null
         }
-        if (isMobile) {
-          return DISABLED_ROW_MOBILE
-        }
-        return DISABLED_ROW_DESKTOP
-      }}
-      bulkActions={batchMode ? <DataTableBulkActions table={table} /> : null}
-    />
+        bulkActionsOnMobile
+      />
+      <ChannelBatchEditDialog
+        open={showFilteredBatchEdit}
+        onOpenChange={setShowFilteredBatchEdit}
+        selectedIds={[]}
+        filter={batchFilter}
+        onSuccess={() => table.resetRowSelection()}
+      />
+    </>
   )
 
   if (isError && !data) {

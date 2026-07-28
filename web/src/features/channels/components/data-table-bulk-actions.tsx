@@ -16,9 +16,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { CombineIcon } from '@hugeicons/core-free-icons'
+import { HugeiconsIcon } from '@hugeicons/react'
 import { useQueryClient } from '@tanstack/react-query'
-import { type Table } from '@tanstack/react-table'
-import { Power, PowerOff, Tag, Trash2 } from 'lucide-react'
+import type { Table } from '@tanstack/react-table'
+import { Pencil, Power, PowerOff, Tag, Trash2, Unlink2 } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -46,19 +48,27 @@ import {
   handleBatchEnable,
   handleBatchSetTag,
 } from '../lib'
-import type { Channel } from '../types'
+import type { Channel, ChannelBatchFilter } from '../types'
+import { ChannelBatchDetachDialog } from './dialogs/channel-batch-detach-dialog'
+import { ChannelBatchEditDialog } from './dialogs/channel-batch-edit-dialog'
+import { ChannelBatchMergeDialog } from './dialogs/channel-batch-merge-dialog'
 
 interface DataTableBulkActionsProps<TData> {
   table: Table<TData>
+  filter: ChannelBatchFilter
 }
 
 export function DataTableBulkActions<TData>({
   table,
+  filter,
 }: DataTableBulkActionsProps<TData>) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [showTagDialog, setShowTagDialog] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [showBatchEdit, setShowBatchEdit] = useState(false)
+  const [showBatchMerge, setShowBatchMerge] = useState(false)
+  const [showBatchDetach, setShowBatchDetach] = useState(false)
   const [tagValue, setTagValue] = useState('')
   const currentUser = useAuthStore((s) => s.auth.user)
   const canEditSensitive = hasPermission(
@@ -67,16 +77,21 @@ export function DataTableBulkActions<TData>({
     ADMIN_PERMISSION_ACTIONS.SENSITIVE_WRITE
   )
 
-  const selectedRows = table.getFilteredSelectedRowModel().rows
-  const selectedIds = selectedRows.reduce<number[]>((ids, row) => {
-    const id = (row.original as Channel).id
-
-    if (typeof id === 'number') {
-      ids.push(id)
-    }
-
-    return ids
-  }, [])
+  const selectedRows = table
+    .getFilteredSelectedRowModel()
+    .flatRows.filter((row) => row.getIsSelected())
+  const selectedChannelMap = new Map<number, Channel>()
+  for (const row of selectedRows) {
+    const channel = row.original as Channel
+    if (channel.id > 0) selectedChannelMap.set(channel.id, channel)
+  }
+  const selectedChannels = [...selectedChannelMap.values()].sort(
+    (left, right) => left.id - right.id
+  )
+  const selectedIds = selectedChannels.map((channel) => channel.id)
+  const aggregatedSelectedChannels = selectedChannels.filter(
+    (channel) => channel.aggregate_id != null
+  )
 
   const handleClearSelection = () => {
     table.resetRowSelection()
@@ -109,6 +124,97 @@ export function DataTableBulkActions<TData>({
   return (
     <>
       <BulkActionsToolbar table={table} entityName='channel'>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                variant='outline'
+                size='icon'
+                onClick={() => {
+                  if (!canEditSensitive) return
+                  setShowBatchMerge(true)
+                }}
+                aria-disabled={!canEditSensitive}
+                className={cn(
+                  'size-8',
+                  !canEditSensitive && 'cursor-not-allowed opacity-50'
+                )}
+                aria-label={t('Merge selected channels')}
+                title={
+                  canEditSensitive
+                    ? t('Merge selected channels')
+                    : t('No permission to perform this action')
+                }
+              />
+            }
+          >
+            <HugeiconsIcon icon={CombineIcon} strokeWidth={2} />
+            <span className='sr-only'>{t('Merge selected channels')}</span>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>
+              {canEditSensitive
+                ? t('Merge selected channels')
+                : t('No permission to perform this action')}
+            </p>
+          </TooltipContent>
+        </Tooltip>
+
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                variant='outline'
+                size='icon'
+                onClick={() => {
+                  if (
+                    !canEditSensitive ||
+                    aggregatedSelectedChannels.length === 0
+                  ) {
+                    return
+                  }
+                  setShowBatchDetach(true)
+                }}
+                disabled={
+                  !canEditSensitive || aggregatedSelectedChannels.length === 0
+                }
+                className='size-8'
+                aria-label={t('Detach selected channels')}
+                title={t('Detach selected channels')}
+              />
+            }
+          >
+            <Unlink2 />
+            <span className='sr-only'>{t('Detach selected channels')}</span>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>{t('Detach selected channels')}</p>
+          </TooltipContent>
+        </Tooltip>
+
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                variant='outline'
+                size='icon'
+                onClick={() => setShowBatchEdit(true)}
+                className='size-8'
+                aria-label={t('Edit selected or filtered channels')}
+                title={t('Edit selected or filtered channels')}
+              />
+            }
+          >
+            <Pencil />
+            <span className='sr-only'>
+              {t('Edit selected or filtered channels')}
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>{t('Edit selected or filtered channels')}</p>
+          </TooltipContent>
+        </Tooltip>
+
         <Tooltip>
           <TooltipTrigger
             render={
@@ -252,6 +358,28 @@ export function DataTableBulkActions<TData>({
           </div>
         </div>
       </Dialog>
+
+      <ChannelBatchEditDialog
+        open={showBatchEdit}
+        onOpenChange={setShowBatchEdit}
+        selectedIds={selectedIds}
+        filter={filter}
+        onSuccess={handleClearSelection}
+      />
+
+      <ChannelBatchMergeDialog
+        open={showBatchMerge}
+        onOpenChange={setShowBatchMerge}
+        selectedChannels={selectedChannels}
+        onSuccess={handleClearSelection}
+      />
+
+      <ChannelBatchDetachDialog
+        open={showBatchDetach}
+        onOpenChange={setShowBatchDetach}
+        selectedChannels={aggregatedSelectedChannels}
+        onSuccess={handleClearSelection}
+      />
 
       {/* Delete Confirmation Dialog */}
       <Dialog

@@ -7,9 +7,9 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert"
 	"github.com/QuantumNous/new-api/service/channelcompat"
 	"github.com/QuantumNous/new-api/service/clientpolicy"
-	"github.com/QuantumNous/new-api/service/relayconvert"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/gin-gonic/gin"
 )
@@ -101,7 +101,8 @@ func applySelectedChannelCompatibility(c *gin.Context, channel *model.Channel, m
 	if c == nil || c.Request == nil || c.Request.URL == nil || channel == nil {
 		return nil
 	}
-	relayconvert.ResetProtocolBridgeContext(c)
+	c.Request = c.Request.WithContext(relayconvert.WithProtocolBridgeContext(c.Request.Context()))
+	common.SetContextKey(c, constant.ContextKeyProtocolResponseStreamState, nil)
 	if !clientpolicy.IsChannelAllowed(channel, requestClient(c)) {
 		return fmt.Errorf("channel %d does not allow client %s", channel.Id, requestClient(c))
 	}

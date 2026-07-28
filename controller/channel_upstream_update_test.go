@@ -7,12 +7,14 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -350,6 +352,36 @@ func TestFailedAdvancedCustomDetectionDoesNotStageFullRemoval(t *testing.T) {
 	require.Equal(t, "gpt-4.1,o3", reloaded.Models)
 }
 
+func TestScheduledUpstreamModelDetectionSkipsUnavailableChannelsButManualDetectionDoesNot(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requestCount++
+		_, _ = w.Write([]byte(`{"data":[{"id":"gpt-4.1"}]}`))
+	}))
+	t.Cleanup(server.Close)
+
+	channel := newAdvancedCustomModelListChannel(server.URL, "secret-key", "/v1/models", nil)
+	channel.Name = "scheduled model detection"
+	channel.Status = common.ChannelStatusEnabled
+	channel.Models = "gpt-4.1"
+	channel.Group = "default"
+	startsAt := time.Now().Add(time.Hour).Unix()
+	channel.Schedule = model.ChannelSchedule{StartsAt: &startsAt}
+	settings := channel.GetOtherSettings()
+	settings.UpstreamModelUpdateCheckEnabled = true
+	channel.SetOtherSettings(settings)
+	require.NoError(t, db.Create(channel).Error)
+
+	scheduledSummary := runChannelUpstreamModelUpdateTaskOnce(t.Context(), false, true, nil)
+	assert.Zero(t, scheduledSummary.CheckedChannels)
+	assert.Zero(t, requestCount)
+
+	manualSummary := runChannelUpstreamModelUpdateTaskOnce(t.Context(), true, false, nil)
+	assert.Equal(t, 1, manualSummary.CheckedChannels)
+	assert.Equal(t, 1, requestCount)
+}
+
 func TestFetchModelsUsesSharedChannelFetchBehavior(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/models" {
@@ -382,6 +414,29 @@ func TestFetchModelsUsesSharedChannelFetchBehavior(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, recorder.Code)
 	require.JSONEq(t, `{"success":true,"message":"","data":["claude-sonnet"]}`, recorder.Body.String())
+}
+
+func TestFetchNewAPIModelsUsesOpenAIContract(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/v1/models", r.URL.Path)
+		assert.Equal(t, "Bearer new-api-key", r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "application/json")
+		_, err := w.Write([]byte(`{"data":[{"id":"gpt-5"},{"id":" gpt-5-mini "}]}`))
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(server.Close)
+
+	baseURL := server.URL
+	channel := &model.Channel{
+		Type:    constant.ChannelTypeNewAPI,
+		Key:     "new-api-key",
+		BaseURL: &baseURL,
+	}
+
+	models, err := fetchChannelUpstreamModelIDs(channel)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"gpt-5", "gpt-5-mini"}, models)
 }
 
 func TestNormalizeModelNames(t *testing.T) {
