@@ -3,6 +3,7 @@ package protocolstate
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"sync"
 	"testing"
@@ -40,6 +41,7 @@ func TestResponsesStateSeparatesPublicAndUpstreamIDsAndReplaysHistory(t *testing
 		ID:     "upstream_resp_1",
 		Model:  "provider-model",
 		Status: mustProtocolStateJSON(t, "completed"),
+		Store:  true,
 		Output: []dto.ResponsesOutput{{
 			Type:   "message",
 			Role:   "assistant",
@@ -95,6 +97,120 @@ func TestResponsesStateSeparatesPublicAndUpstreamIDsAndReplaysHistory(t *testing
 	assert.Equal(t, "first", replayed[0]["content"])
 	assert.Equal(t, "message", replayed[1]["type"])
 	assert.Equal(t, "second", replayed[2]["content"])
+}
+
+func TestResponsesStateReplaysUnstoredNativeResponse(t *testing.T) {
+	resetProtocolStateCaches(t)
+	rootContext := protocolStateTestContext("unstored-root", 61, 62)
+	plan := channelcompat.ProtocolPlan{
+		RequestProtocol:  channelcompat.ProtocolResponses,
+		UpstreamProtocol: channelcompat.ProtocolResponses,
+		Status:           channelcompat.StatusNative,
+	}
+	rootRequest := &dto.OpenAIResponsesRequest{
+		Model: "gpt-public",
+		Input: mustProtocolStateJSON(t, "remember this"),
+	}
+	require.NoError(t, PrepareResponsesRequest(rootContext, protocolStateRelayInfo("gpt-public", 63), plan, rootRequest))
+	rootResponse := &dto.OpenAIResponsesResponse{
+		ID:     "upstream_unstored",
+		Status: mustProtocolStateJSON(t, "completed"),
+		Store:  false,
+		Output: []dto.ResponsesOutput{{
+			Type:   "message",
+			Role:   "assistant",
+			Status: "completed",
+			Content: []dto.ResponsesOutputContent{{
+				Type: "output_text",
+				Text: "acknowledged",
+			}},
+		}},
+	}
+	publicID := CaptureResponsesResponse(rootContext, rootResponse.ID, rootResponse)
+	require.NoError(t, Commit(rootContext))
+
+	continuationContext := protocolStateTestContext("unstored-next", 61, 62)
+	body := mustProtocolStateJSON(t, map[string]any{
+		"model":                "gpt-public",
+		"previous_response_id": publicID,
+	})
+	_, err := ResolveSelectionBinding(continuationContext, "/v1/responses", "gpt-public", body)
+	require.NoError(t, err)
+	continuation := &dto.OpenAIResponsesRequest{
+		Model:              "gpt-public",
+		PreviousResponseID: publicID,
+		Input:              mustProtocolStateJSON(t, "what did I say?"),
+	}
+	require.NoError(t, PrepareResponsesRequest(continuationContext, protocolStateRelayInfo("gpt-public", 63), plan, continuation))
+	assert.Empty(t, continuation.PreviousResponseID)
+	var replayed []map[string]any
+	require.NoError(t, common.Unmarshal(continuation.Input, &replayed))
+	require.Len(t, replayed, 3)
+	assert.Equal(t, "remember this", replayed[0]["content"])
+	assert.Equal(t, "message", replayed[1]["type"])
+	assert.Equal(t, "what did I say?", replayed[2]["content"])
+}
+
+func TestResponsesContinuationFallsBackWhenUpstreamDoesNotAcknowledgeIt(t *testing.T) {
+	resetProtocolStateCaches(t)
+	rootContext := protocolStateTestContext("ack-root", 64, 65)
+	plan := channelcompat.ProtocolPlan{
+		RequestProtocol:  channelcompat.ProtocolResponses,
+		UpstreamProtocol: channelcompat.ProtocolResponses,
+		Status:           channelcompat.StatusNative,
+	}
+	rootRequest := &dto.OpenAIResponsesRequest{Model: "gpt-public", Input: mustProtocolStateJSON(t, "first")}
+	require.NoError(t, PrepareResponsesRequest(rootContext, protocolStateRelayInfo("gpt-public", 66), plan, rootRequest))
+	rootResponse := &dto.OpenAIResponsesResponse{
+		ID:     "upstream_ack_root",
+		Status: mustProtocolStateJSON(t, "completed"),
+		Store:  true,
+		Output: []dto.ResponsesOutput{{Type: "message", Role: "assistant", Status: "completed"}},
+	}
+	publicID := CaptureResponsesResponse(rootContext, rootResponse.ID, rootResponse)
+	require.NoError(t, Commit(rootContext))
+
+	continuationContext := protocolStateTestContext("ack-next", 64, 65)
+	body := mustProtocolStateJSON(t, map[string]any{
+		"model":                "gpt-public",
+		"previous_response_id": publicID,
+	})
+	_, err := ResolveSelectionBinding(continuationContext, "/v1/responses", "gpt-public", body)
+	require.NoError(t, err)
+	continuation := &dto.OpenAIResponsesRequest{
+		Model:              "gpt-public",
+		PreviousResponseID: publicID,
+		Input:              mustProtocolStateJSON(t, "second"),
+	}
+	require.NoError(t, PrepareResponsesRequest(continuationContext, protocolStateRelayInfo("gpt-public", 66), plan, continuation))
+	assert.Equal(t, "upstream_ack_root", continuation.PreviousResponseID)
+	require.NoError(t, ValidateResponsesContinuation(continuationContext, mustProtocolStateJSON(t, "upstream_ack_root")))
+	// Later stream events may carry a partial response object without repeating
+	// previous_response_id; one valid acknowledgement is sufficient.
+	require.NoError(t, ValidateResponsesContinuation(continuationContext, mustProtocolStateJSON(t, nil)))
+
+	rejectedContext := protocolStateTestContext("ack-rejected", 64, 65)
+	_, err = ResolveSelectionBinding(rejectedContext, "/v1/responses", "gpt-public", body)
+	require.NoError(t, err)
+	rejected := &dto.OpenAIResponsesRequest{
+		Model:              "gpt-public",
+		PreviousResponseID: publicID,
+		Input:              mustProtocolStateJSON(t, "second"),
+	}
+	require.NoError(t, PrepareResponsesRequest(rejectedContext, protocolStateRelayInfo("gpt-public", 66), plan, rejected))
+	acknowledgementErr := ValidateResponsesContinuation(rejectedContext, mustProtocolStateJSON(t, nil))
+	require.Error(t, acknowledgementErr)
+	assert.Contains(t, acknowledgementErr.Error(), "did not acknowledge")
+	apiErr := types.NewErrorWithStatusCode(acknowledgementErr, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
+	assert.True(t, EnableReplayFallback(rejectedContext, apiErr))
+
+	replayed := &dto.OpenAIResponsesRequest{
+		Model:              "gpt-public",
+		PreviousResponseID: publicID,
+		Input:              mustProtocolStateJSON(t, "second"),
+	}
+	require.NoError(t, PrepareResponsesRequest(rejectedContext, protocolStateRelayInfo("gpt-public", 66), plan, replayed))
+	assert.Empty(t, replayed.PreviousResponseID)
 }
 
 func TestResponsesStatePreservesPhaseAndUnmodeledOutputFields(t *testing.T) {
@@ -523,7 +639,7 @@ func TestClaudeCodeResponsesContinuationRequiresStrictAppend(t *testing.T) {
 		Status:           channelcompat.StatusConvertible,
 	}
 	require.NoError(t, PrepareMessagesRequest(initialContext, protocolStateRelayInfo("claude-public", 12), plan, initialRequest))
-	upstream := &dto.OpenAIResponsesResponse{ID: "resp_upstream_claude", Status: mustProtocolStateJSON(t, "completed")}
+	upstream := &dto.OpenAIResponsesResponse{ID: "resp_upstream_claude", Status: mustProtocolStateJSON(t, "completed"), Store: true}
 	assistantText := "answer"
 	claudeResponse := &dto.ClaudeResponse{
 		Type: "message",
@@ -592,6 +708,40 @@ func TestClaudeCodeResponsesContinuationRequiresStrictAppend(t *testing.T) {
 	binding, err = ResolveSelectionBinding(nonAppendContext, "/v1/messages", "claude-public", mustProtocolStateJSON(t, nonAppend))
 	require.NoError(t, err)
 	assert.Nil(t, binding)
+}
+
+func TestClaudeCodeResponsesReplaysWhenUpstreamResponseWasNotStored(t *testing.T) {
+	resetProtocolStateCaches(t)
+	initialContext := protocolStateTestContext("claude-unstored-root", 71, 72)
+	initialRequest := claudeSessionRequest("hello")
+	plan := channelcompat.ProtocolPlan{
+		RequestProtocol:  channelcompat.ProtocolMessages,
+		UpstreamProtocol: channelcompat.ProtocolResponses,
+		Status:           channelcompat.StatusConvertible,
+	}
+	require.NoError(t, PrepareMessagesRequest(initialContext, protocolStateRelayInfo("claude-public", 73), plan, initialRequest))
+	answer := "answer"
+	CaptureMessagesResponse(initialContext,
+		&dto.OpenAIResponsesResponse{
+			ID:     "resp_upstream_claude_unstored",
+			Status: mustProtocolStateJSON(t, "completed"),
+			Store:  false,
+		},
+		&dto.ClaudeResponse{Type: "message", Content: []dto.ClaudeMediaMessage{{Type: "text", Text: &answer}}},
+	)
+	require.NoError(t, Commit(initialContext))
+
+	nextRequest := claudeSessionRequest("hello")
+	nextRequest.Messages = append(nextRequest.Messages,
+		dto.ClaudeMessage{Role: "assistant", Content: []dto.ClaudeMediaMessage{{Type: "text", Text: &answer}}},
+		dto.ClaudeMessage{Role: "user", Content: "next"},
+	)
+	nextContext := protocolStateTestContext("claude-unstored-next", 71, 72)
+	require.NoError(t, PrepareMessagesRequest(nextContext, protocolStateRelayInfo("claude-public", 73), plan, nextRequest))
+	assert.Len(t, nextRequest.Messages, 3)
+	responsesRequest := &dto.OpenAIResponsesRequest{}
+	ApplyMessagesContinuation(nextContext, responsesRequest)
+	assert.Empty(t, responsesRequest.PreviousResponseID)
 }
 
 func TestClaudeCodeResponsesSessionTTLRefreshesWhileActive(t *testing.T) {

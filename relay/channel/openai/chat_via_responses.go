@@ -41,6 +41,9 @@ func OaiResponsesToChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	if oaiError := responsesResp.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
+	if err := protocolstate.ValidateResponsesContinuation(c, responsesResp.PreviousResponseID); err != nil {
+		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
+	}
 
 	chatResult, err := relayconvert.ConvertResponse(c, info, types.RelayFormatOpenAI, &responsesResp)
 	if err != nil {
@@ -115,6 +118,12 @@ func OaiResponsesToChatBufferedStreamHandler(c *gin.Context, info *relaycommon.R
 			logger.LogError(c, "failed to unmarshal buffered responses stream event: "+err.Error())
 			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 			break
+		}
+		if streamResp.Response != nil {
+			if err := protocolstate.ValidateResponsesContinuation(c, streamResp.Response.PreviousResponseID); err != nil {
+				streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
+				break
+			}
 		}
 		accumulator.ProcessEvent(&streamResp)
 		switch streamResp.Type {
@@ -307,6 +316,13 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			streamErr = types.NewOpenAIError(fmt.Errorf("responses stream error: %s", streamResp.Type), types.ErrorCodeBadResponse, http.StatusInternalServerError)
 			sr.Stop(streamErr)
 			return
+		}
+		if streamResp.Response != nil {
+			if err := protocolstate.ValidateResponsesContinuation(c, streamResp.Response.PreviousResponseID); err != nil {
+				streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
+				sr.Stop(streamErr)
+				return
+			}
 		}
 		protocolstate.ObserveResponsesStream(c, &streamResp)
 

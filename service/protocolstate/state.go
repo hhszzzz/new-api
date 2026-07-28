@@ -39,6 +39,7 @@ type ResponseNode struct {
 	RequestProtocol      string          `json:"request_protocol"`
 	UpstreamProtocol     string          `json:"upstream_protocol"`
 	UpstreamResponseID   string          `json:"upstream_response_id,omitempty"`
+	UpstreamStored       bool            `json:"upstream_stored"`
 	PublicModel          string          `json:"public_model"`
 	NormalizedInput      json.RawMessage `json:"normalized_input"`
 	NormalizedOutput     json.RawMessage `json:"normalized_output"`
@@ -59,21 +60,24 @@ const (
 )
 
 type pendingState struct {
-	kind               pendingKind
-	stream             bool
-	publicID           string
-	publicModel        string
-	channelID          int
-	requestProtocol    string
-	upstreamProtocol   string
-	parent             *ResponseNode
-	parentResponseID   string
-	originalInput      json.RawMessage
-	upstreamResponseID string
-	normalizedOutput   json.RawMessage
-	streamOutput       []json.RawMessage
-	completed          bool
-	usedContinuation   bool
+	kind                     pendingKind
+	stream                   bool
+	publicID                 string
+	publicModel              string
+	channelID                int
+	requestProtocol          string
+	upstreamProtocol         string
+	parent                   *ResponseNode
+	parentResponseID         string
+	originalInput            json.RawMessage
+	continuationID           string
+	upstreamResponseID       string
+	upstreamStored           bool
+	normalizedOutput         json.RawMessage
+	streamOutput             []json.RawMessage
+	completed                bool
+	usedContinuation         bool
+	continuationAcknowledged bool
 
 	messageSelection *messageSelection
 	assistantMessage json.RawMessage
@@ -187,9 +191,11 @@ func PrepareResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, plan c
 			plan.UpstreamProtocol == channelcompat.ProtocolResponses &&
 			info.ChannelId == parent.ChannelID &&
 			parent.UpstreamProtocol == string(channelcompat.ProtocolResponses) &&
+			parent.UpstreamStored &&
 			strings.TrimSpace(parent.UpstreamResponseID) != ""
 		if canContinueNatively {
 			request.PreviousResponseID = parent.UpstreamResponseID
+			pending.continuationID = parent.UpstreamResponseID
 			pending.usedContinuation = true
 		} else {
 			replayedInput, err := replayResponsesHistory(c, parent, originalInput)
@@ -222,6 +228,25 @@ func SetUpstreamResponseID(c *gin.Context, upstreamResponseID string) {
 		return
 	}
 	pending.upstreamResponseID = upstreamResponseID
+}
+
+// ValidateResponsesContinuation verifies that an upstream Responses server
+// acknowledged the continuation ID before any response bytes are sent to the
+// client. Some compatible servers accept previous_response_id but silently
+// ignore it; treating that as unsupported lets the retry path replay the
+// gateway-owned history instead of returning a context-free answer.
+func ValidateResponsesContinuation(c *gin.Context, previousResponseID json.RawMessage) error {
+	pending := getPending(c, "")
+	if pending == nil || !pending.usedContinuation || pending.continuationAcknowledged {
+		return nil
+	}
+	expected := strings.TrimSpace(pending.continuationID)
+	actual := strings.TrimSpace(common.JsonRawMessageToString(previousResponseID))
+	if expected != "" && actual == expected {
+		pending.continuationAcknowledged = true
+		return nil
+	}
+	return fmt.Errorf("previous_response_id is unsupported because the upstream response did not acknowledge the continuation")
 }
 
 func CaptureResponsesResponse(c *gin.Context, upstreamResponseID string, response *dto.OpenAIResponsesResponse) string {
@@ -271,6 +296,7 @@ func captureResponsesResponse(pending *pendingState, upstreamResponseID string, 
 	} else if pending.upstreamResponseID == "" {
 		pending.upstreamResponseID = strings.TrimSpace(response.ID)
 	}
+	pending.upstreamStored = response.Store
 	if common.GetJsonType(rawOutput) == "array" {
 		pending.normalizedOutput = append(json.RawMessage(nil), rawOutput...)
 	} else if len(response.Output) > 0 {
@@ -452,6 +478,7 @@ func Commit(c *gin.Context) error {
 		RequestProtocol:      pending.requestProtocol,
 		UpstreamProtocol:     pending.upstreamProtocol,
 		UpstreamResponseID:   pending.upstreamResponseID,
+		UpstreamStored:       pending.upstreamStored,
 		PublicModel:          pending.publicModel,
 		NormalizedInput:      append(json.RawMessage(nil), pending.originalInput...),
 		NormalizedOutput:     append(json.RawMessage(nil), pending.normalizedOutput...),

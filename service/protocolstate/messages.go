@@ -26,6 +26,7 @@ type MessageSession struct {
 	SessionKey         string            `json:"session_key"`
 	ChannelID          int               `json:"channel_id"`
 	UpstreamResponseID string            `json:"upstream_response_id"`
+	UpstreamStored     bool              `json:"upstream_stored"`
 	PublicModel        string            `json:"public_model"`
 	History            []json.RawMessage `json:"history"`
 	Turn               int               `json:"turn"`
@@ -103,11 +104,12 @@ func PrepareMessagesRequest(c *gin.Context, info *relaycommon.RelayInfo, plan ch
 	}
 	forceReplay := common.GetContextKeyBool(c, constant.ContextKeyProtocolStateForceReplay)
 	if !forceReplay && selection.strictAppend && selection.session != nil &&
-		selection.session.ChannelID == info.ChannelId && strings.TrimSpace(selection.session.UpstreamResponseID) != "" {
+		selection.session.ChannelID == info.ChannelId && selection.session.UpstreamStored &&
+		strings.TrimSpace(selection.session.UpstreamResponseID) != "" {
 		prefixLength := len(selection.session.History)
 		if prefixLength < len(request.Messages) {
 			request.Messages = append([]dto.ClaudeMessage(nil), request.Messages[prefixLength:]...)
-			pending.upstreamResponseID = selection.session.UpstreamResponseID
+			pending.continuationID = selection.session.UpstreamResponseID
 			pending.usedContinuation = true
 		}
 	}
@@ -120,7 +122,7 @@ func ApplyMessagesContinuation(c *gin.Context, request *dto.OpenAIResponsesReque
 	if pending == nil || request == nil || !pending.usedContinuation {
 		return
 	}
-	request.PreviousResponseID = pending.upstreamResponseID
+	request.PreviousResponseID = pending.continuationID
 }
 
 func CaptureMessagesResponse(c *gin.Context, upstream *dto.OpenAIResponsesResponse, response *dto.ClaudeResponse) {
@@ -130,6 +132,7 @@ func CaptureMessagesResponse(c *gin.Context, upstream *dto.OpenAIResponsesRespon
 	}
 	if upstream != nil {
 		pending.upstreamResponseID = strings.TrimSpace(upstream.ID)
+		pending.upstreamStored = upstream.Store
 		pending.completed = common.JsonRawMessageToString(upstream.Status) == "completed"
 	}
 	if response == nil {
@@ -216,6 +219,7 @@ func observeMessagesUpstreamResponse(pending *pendingState, event *dto.Responses
 	if upstreamID != "" {
 		pending.upstreamResponseID = upstreamID
 	}
+	pending.upstreamStored = event.Response.Store
 	status := common.JsonRawMessageToString(event.Response.Status)
 	pending.completed = event.Type == "response.completed" || event.Type == "response.done" || status == "completed"
 }
@@ -250,6 +254,7 @@ func commitMessageSession(c *gin.Context, pending *pendingState) error {
 		SessionKey:         selection.key,
 		ChannelID:          pending.channelID,
 		UpstreamResponseID: pending.upstreamResponseID,
+		UpstreamStored:     pending.upstreamStored,
 		PublicModel:        pending.publicModel,
 		History:            history,
 		Turn:               turn,

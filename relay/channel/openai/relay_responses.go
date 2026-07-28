@@ -34,6 +34,9 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	if oaiError := responsesResponse.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
+	if err := protocolstate.ValidateResponsesContinuation(c, responsesResponse.PreviousResponseID); err != nil {
+		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
+	}
 	if protocolstate.PublicResponseID(c, "") != "" {
 		upstreamResponseID := responsesResponse.ID
 		responseBody, err = protocolstate.CaptureResponsesResponseData(c, upstreamResponseID, &responsesResponse, responseBody)
@@ -118,6 +121,13 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			}
 			sr.Stop(streamErr)
 			return
+		}
+		if streamResponse.Response != nil {
+			if err := protocolstate.ValidateResponsesContinuation(c, streamResponse.Response.PreviousResponseID); err != nil {
+				streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
+				sr.Stop(streamErr)
+				return
+			}
 		}
 		if protocolstate.PublicResponseID(c, "") != "" {
 			encoded, encodeErr := protocolstate.ObserveResponsesStreamData(c, &streamResponse, []byte(data))
