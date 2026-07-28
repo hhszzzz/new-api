@@ -87,6 +87,12 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 	case relayconstant.RelayModeResponsesCompact:
 		return openai.OaiResponsesCompactionHandlerWithInfo(c, resp, info)
 	case relayconstant.RelayModeResponses:
+		if info.RelayFormat != types.RelayFormatOpenAIResponses {
+			if info.IsStream {
+				return openai.OaiResponsesToChatStreamHandler(c, info, resp)
+			}
+			return openai.OaiResponsesToChatHandler(c, info, resp)
+		}
 		if info.IsStream {
 			return openai.OaiResponsesStreamHandler(c, info, resp)
 		}

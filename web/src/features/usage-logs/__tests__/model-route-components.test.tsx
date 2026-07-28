@@ -79,6 +79,9 @@ const routedLog: UsageLog = {
       request_headers: {
         'user-agent': 'codex-cli/1.0',
       },
+      upstream_protocol: 'chat',
+      protocol_converter: 'responses_to_chat',
+      protocol_state_mode: 'replay',
     },
     diagnostics: {
       method: 'POST',
@@ -86,7 +89,6 @@ const routedLog: UsageLog = {
       ip: '203.0.113.10',
       client: 'codex',
       request_protocol: 'responses',
-      upstream_protocol: 'chat',
     },
     request_conversion: ['responses', 'chat'],
     reasoning_effort: 'high',
@@ -327,6 +329,26 @@ describe('usage-log model route component visibility', () => {
       reasoningLabel.compareDocumentPosition(diagnosticsHeading) &
         Node.DOCUMENT_POSITION_FOLLOWING
     ).not.toBe(0)
+  })
+
+  test('reads upstream protocol metadata from administrator-only log data', async () => {
+    renderDetailsDialog(ROLE.ADMIN, 'all')
+
+    await waitFor(() => {
+      expect(screen.getByTestId('details-permissions')).toHaveAttribute(
+        'data-admin-view',
+        'true'
+      )
+    })
+
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByText('Upstream Protocol')).toBeVisible()
+    expect(within(dialog).getByText('Protocol Converter')).toBeVisible()
+    expect(within(dialog).getByText('Protocol State Mode')).toBeVisible()
+    expect(within(dialog).getByText('replay')).toBeVisible()
+    expect(
+      within(dialog).getByText('responses → responses_to_chat → chat')
+    ).toBeVisible()
   })
 
   test.each([

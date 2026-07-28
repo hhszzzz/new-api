@@ -14,6 +14,8 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/channelcompat"
+	"github.com/QuantumNous/new-api/service/protocolstate"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/reasoning"
 	"github.com/QuantumNous/new-api/types"
@@ -46,6 +48,14 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
 	}
 	adaptor.Init(info)
+	plan, hasPlan := selectedProtocolPlan(c)
+	if !hasPlan {
+		plan = channelcompat.ProtocolPlan{
+			RequestProtocol:  channelcompat.ProtocolMessages,
+			UpstreamProtocol: channelcompat.ProtocolMessages,
+			Status:           channelcompat.StatusNative,
+		}
+	}
 
 	if request.MaxTokens == nil || *request.MaxTokens == 0 {
 		defaultMaxTokens := uint(model_setting.GetClaudeSettings().GetDefaultMaxTokens(request.Model))
@@ -112,34 +122,13 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 	// for.
 	relaycommon.RecordClaudeReasoningEffort(info, request)
 
-	// The route-injected prompt always leads, so it outranks both the channel
-	// system prompt and any system prompt the client sent.
-	if leadingPrompt := info.LeadingSystemPrompt(request.System != nil); leadingPrompt != "" {
-		if request.System == nil {
-			request.SetStringSystem(leadingPrompt)
-		} else {
-			common.SetContextKey(c, constant.ContextKeySystemPromptOverride, true)
-			if request.IsStringSystem() {
-				existing := strings.TrimSpace(request.GetStringSystem())
-				if existing == "" {
-					request.SetStringSystem(leadingPrompt)
-				} else {
-					request.SetStringSystem(leadingPrompt + "\n" + existing)
-				}
-			} else {
-				systemContents := request.ParseSystem()
-				newSystem := dto.ClaudeMediaMessage{Type: dto.ContentTypeText}
-				newSystem.SetText(leadingPrompt)
-				if len(systemContents) == 0 {
-					request.System = []dto.ClaudeMediaMessage{newSystem}
-				} else {
-					request.System = append([]dto.ClaudeMediaMessage{newSystem}, systemContents...)
-				}
-			}
-		}
+	applyClaudeLeadingSystemPrompt(c, info, request)
+	if err := protocolstate.PrepareMessagesRequest(c, info, plan, request); err != nil {
+		return types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 	}
 
-	if !info.ShouldPassThroughBody() &&
+	if !model_setting.GetGlobalSettings().ProtocolBridgePolicy.Enabled &&
+		!info.ShouldPassThroughBody() &&
 		service.ShouldChatCompletionsUseResponsesGlobal(info.ChannelId, info.ChannelType, info.UpstreamModelName) {
 		result, convErr := service.ConvertRequest(c, info, types.RelayFormatOpenAI, request)
 		if convErr != nil {
@@ -159,8 +148,11 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		return nil
 	}
 
+	restoreProtocolPlan := applyProtocolPlan(info, plan)
+	defer restoreProtocolPlan()
+
 	var requestBody io.Reader
-	if info.ShouldPassThroughBody() {
+	if info.ShouldPassThroughBody() && !protocolPlanRequiresConversion(plan) {
 		storage, err := common.GetBodyStorage(c)
 		if err != nil {
 			return types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
@@ -168,9 +160,12 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		info.UpstreamRequestBodySize = storage.Size()
 		requestBody = common.ReaderOnly(storage)
 	} else {
-		convertedRequest, err := adaptor.ConvertClaudeRequest(c, info, request)
+		convertedRequest, err := convertRequestForProtocolPlan(c, info, adaptor, plan, request)
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		}
+		if responsesRequest, ok := convertedRequest.(*dto.OpenAIResponsesRequest); ok {
+			protocolstate.ApplyMessagesContinuation(c, responsesRequest)
 		}
 		relaycommon.AppendRequestConversionFromRequest(info, convertedRequest)
 		jsonData, err := common.Marshal(convertedRequest)
@@ -230,4 +225,40 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 
 	service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), nil)
 	return nil
+}
+
+func applyClaudeLeadingSystemPrompt(c *gin.Context, info *relaycommon.RelayInfo, request *dto.ClaudeRequest) {
+	if request == nil || info == nil {
+		return
+	}
+	// The route-injected prompt always leads, so it outranks both the channel
+	// system prompt and any system prompt the client sent.
+	leadingPrompt := info.LeadingSystemPrompt(request.System != nil)
+	if leadingPrompt == "" {
+		return
+	}
+	if request.System == nil {
+		request.SetStringSystem(leadingPrompt)
+		return
+	}
+
+	common.SetContextKey(c, constant.ContextKeySystemPromptOverride, true)
+	if request.IsStringSystem() {
+		existing := strings.TrimSpace(request.GetStringSystem())
+		if existing == "" {
+			request.SetStringSystem(leadingPrompt)
+		} else {
+			request.SetStringSystem(leadingPrompt + "\n" + existing)
+		}
+		return
+	}
+
+	systemContents := request.ParseSystem()
+	newSystem := dto.ClaudeMediaMessage{Type: dto.ContentTypeText}
+	newSystem.SetText(leadingPrompt)
+	if len(systemContents) == 0 {
+		request.System = []dto.ClaudeMediaMessage{newSystem}
+		return
+	}
+	request.System = append([]dto.ClaudeMediaMessage{newSystem}, systemContents...)
 }

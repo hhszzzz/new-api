@@ -9,6 +9,97 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestProtocolCapabilitiesValidate(t *testing.T) {
+	allow := true
+	valid := &ProtocolCapabilities{
+		UpstreamProtocols: []string{ProtocolCapabilityChat, ProtocolCapabilityResponses},
+		AllowConversion:   &allow,
+		ModelOverrides: []ProtocolCapabilityModelOverride{
+			{
+				ModelPattern:      `^gpt-5`,
+				UpstreamProtocols: []string{ProtocolCapabilityResponses},
+			},
+		},
+	}
+	require.NoError(t, valid.Validate())
+
+	tests := []struct {
+		name         string
+		capabilities *ProtocolCapabilities
+		want         string
+	}{
+		{
+			name:         "empty protocols",
+			capabilities: &ProtocolCapabilities{},
+			want:         "must not be empty",
+		},
+		{
+			name: "unknown protocol",
+			capabilities: &ProtocolCapabilities{
+				UpstreamProtocols: []string{"completions"},
+			},
+			want: "unsupported protocol",
+		},
+		{
+			name: "duplicate protocol",
+			capabilities: &ProtocolCapabilities{
+				UpstreamProtocols: []string{ProtocolCapabilityChat, ProtocolCapabilityChat},
+			},
+			want: "duplicate protocol",
+		},
+		{
+			name: "missing override pattern",
+			capabilities: &ProtocolCapabilities{
+				UpstreamProtocols: []string{ProtocolCapabilityChat},
+				ModelOverrides:    []ProtocolCapabilityModelOverride{{}},
+			},
+			want: "model_pattern is required",
+		},
+		{
+			name: "invalid override regex",
+			capabilities: &ProtocolCapabilities{
+				UpstreamProtocols: []string{ProtocolCapabilityChat},
+				ModelOverrides:    []ProtocolCapabilityModelOverride{{ModelPattern: "["}},
+			},
+			want: "model_pattern is invalid",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.capabilities.Validate()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), test.want)
+		})
+	}
+}
+
+func TestProtocolCapabilitiesResolveUsesFirstMatchingOverride(t *testing.T) {
+	allow := true
+	disallow := false
+	capabilities := &ProtocolCapabilities{
+		UpstreamProtocols: []string{ProtocolCapabilityChat},
+		AllowConversion:   &disallow,
+		ModelOverrides: []ProtocolCapabilityModelOverride{
+			{
+				ModelPattern:      `^provider-model$`,
+				UpstreamProtocols: []string{ProtocolCapabilityResponses},
+				AllowConversion:   &allow,
+			},
+			{
+				ModelPattern:      `provider-.*`,
+				UpstreamProtocols: []string{ProtocolCapabilityMessages},
+			},
+		},
+	}
+
+	protocols, conversion := capabilities.Resolve("provider-model")
+
+	assert.Equal(t, []string{ProtocolCapabilityResponses}, protocols)
+	require.NotNil(t, conversion)
+	assert.True(t, *conversion)
+}
+
 func TestAdvancedCustomValidateResponsesToChatConverterPath(t *testing.T) {
 	valid := &AdvancedCustomConfig{
 		Routes: []AdvancedCustomRoute{
@@ -54,6 +145,39 @@ func TestAdvancedCustomValidateResponsesToChatConverterPath(t *testing.T) {
 			err := config.Validate()
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "converter does not match incoming_path")
+		})
+	}
+}
+
+func TestAdvancedCustomValidateMessagesResponsesConverters(t *testing.T) {
+	tests := []struct {
+		name         string
+		incomingPath string
+		upstreamPath string
+		converter    string
+	}{
+		{
+			name:         "Messages to Responses",
+			incomingPath: "/v1/messages",
+			upstreamPath: "/v1/responses",
+			converter:    advancedCustomConverterClaudeMessagesToResponses,
+		},
+		{
+			name:         "Responses to Messages",
+			incomingPath: "/v1/responses",
+			upstreamPath: "/v1/messages",
+			converter:    advancedCustomConverterOpenAIResponsesToClaude,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			config := &AdvancedCustomConfig{Routes: []AdvancedCustomRoute{{
+				IncomingPath: test.incomingPath,
+				UpstreamPath: test.upstreamPath,
+				Converter:    test.converter,
+			}}}
+			require.NoError(t, config.Validate())
 		})
 	}
 }
@@ -495,9 +619,11 @@ func TestAdvancedCustomValidateAlphaSearchConverterPath(t *testing.T) {
 
 	nonNoneConverters := []string{
 		advancedCustomConverterClaudeMessagesToOpenAIChat,
+		advancedCustomConverterClaudeMessagesToResponses,
 		advancedCustomConverterOpenAIChatToClaudeMessages,
 		advancedCustomConverterOpenAIChatToOpenAIResponses,
 		advancedCustomConverterOpenAIResponsesToOpenAIChat,
+		advancedCustomConverterOpenAIResponsesToClaude,
 		advancedCustomConverterOpenAIResponsesToGemini,
 		advancedCustomConverterGeminiContentToOpenAIChat,
 		advancedCustomConverterOpenAIChatToGeminiContent,

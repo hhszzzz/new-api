@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -13,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/service/channelcompat"
 	"github.com/QuantumNous/new-api/service/relayconvert"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/types"
@@ -464,6 +466,43 @@ func TestAdaptorConvertsResponsesRequestToOpenAIChatUpstream(t *testing.T) {
 	assert.Equal(t, "/v1/chat/completions", parsedURL.Path)
 }
 
+func TestAdaptorAcceptsRequestPreconvertedByProtocolPlan(t *testing.T) {
+	adaptor := &Adaptor{}
+	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
+		Routes: []dto.AdvancedCustomRoute{
+			{
+				IncomingPath: "/v1/responses",
+				UpstreamPath: "/v1/chat/completions",
+				Converter:    relayconvert.ConverterOpenAIResponsesToOpenAIChat,
+				Models:       []string{"provider-chat-model"},
+			},
+		},
+	})
+	info.RelayFormat = types.RelayFormatOpenAIResponses
+	info.RelayMode = relayconstant.RelayModeChatCompletions
+	info.RequestURLPath = "/v1/chat/completions"
+	info.OriginModelName = "public-model"
+	c := advancedCustomGinContext("/v1/responses")
+	common.SetContextKey(c, constant.ContextKeyProtocolPlan, channelcompat.ProtocolPlan{
+		RequestProtocol:        channelcompat.ProtocolResponses,
+		UpstreamProtocol:       channelcompat.ProtocolChat,
+		RequestConverter:       relayconvert.ConverterOpenAIResponsesToOpenAIChat,
+		EffectiveUpstreamModel: "provider-chat-model",
+		Status:                 channelcompat.StatusConvertible,
+	})
+
+	converted, err := adaptor.ConvertOpenAIRequest(c, info, &dto.GeneralOpenAIRequest{
+		Model:    "provider-chat-model",
+		Messages: []dto.Message{{Role: "user", Content: "hello"}},
+	})
+
+	require.NoError(t, err)
+	chatRequest, ok := converted.(*dto.GeneralOpenAIRequest)
+	require.True(t, ok)
+	assert.Equal(t, "provider-chat-model", chatRequest.Model)
+	assert.Equal(t, relayconvert.ConverterOpenAIResponsesToOpenAIChat, adaptor.converter)
+}
+
 func TestAdaptorSelectsDuplicateResponsesRoutesByModel(t *testing.T) {
 	config := &dto.AdvancedCustomConfig{
 		Routes: []dto.AdvancedCustomRoute{
@@ -751,6 +790,206 @@ func TestAdaptorConvertsClaudeRequestToOpenAIChatUpstream(t *testing.T) {
 	assert.Equal(t, "user", chatReq.Messages[0].Role)
 }
 
+func TestAdaptorConvertsClaudeRequestToResponsesUpstream(t *testing.T) {
+	adaptor := &Adaptor{}
+	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
+		Routes: []dto.AdvancedCustomRoute{
+			{
+				IncomingPath: "/v1/messages",
+				UpstreamPath: "/v1/responses",
+				Converter:    relayconvert.ConverterClaudeMessagesToOpenAIResponses,
+			},
+		},
+	})
+	info.RelayFormat = types.RelayFormatClaude
+	info.RequestURLPath = "/v1/messages"
+	c := advancedCustomGinContext("/v1/messages")
+
+	converted, err := adaptor.ConvertClaudeRequest(c, info, &dto.ClaudeRequest{
+		Model:     "gpt-test",
+		Messages:  []dto.ClaudeMessage{{Role: "user", Content: "hello"}},
+		MaxTokens: common.GetPointer[uint](64),
+		Stream:    common.GetPointer(false),
+	})
+	require.NoError(t, err)
+
+	responsesReq, ok := converted.(dto.OpenAIResponsesRequest)
+	require.True(t, ok)
+	assert.Equal(t, "gpt-test", responsesReq.Model)
+	assert.NotEmpty(t, responsesReq.Input)
+	require.NotNil(t, responsesReq.Stream)
+	assert.False(t, *responsesReq.Stream)
+}
+
+func TestAdaptorConvertsResponsesRequestToClaudeUpstreamAndAddsHeaders(t *testing.T) {
+	adaptor := &Adaptor{}
+	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
+		Routes: []dto.AdvancedCustomRoute{
+			{
+				IncomingPath: "/v1/responses",
+				UpstreamPath: "/v1/messages",
+				Converter:    relayconvert.ConverterOpenAIResponsesToClaudeMessages,
+				Auth: &dto.AdvancedCustomRouteAuth{
+					Type:  dto.AdvancedCustomAuthTypeHeader,
+					Name:  "x-api-key",
+					Value: "{api_key}",
+				},
+			},
+		},
+	})
+	info.RelayFormat = types.RelayFormatOpenAIResponses
+	info.RequestURLPath = "/v1/responses"
+	c := advancedCustomGinContext("/v1/responses")
+
+	converted, err := adaptor.ConvertOpenAIResponsesRequest(c, info, dto.OpenAIResponsesRequest{
+		Model:           "claude-test",
+		Input:           mustAdvancedCustomRawMessage(t, "hello"),
+		MaxOutputTokens: common.GetPointer[uint](64),
+		Stream:          common.GetPointer(false),
+	})
+	require.NoError(t, err)
+
+	claudeReq, ok := converted.(*dto.ClaudeRequest)
+	require.True(t, ok)
+	assert.Equal(t, "claude-test", claudeReq.Model)
+	require.Len(t, claudeReq.Messages, 1)
+	assert.Equal(t, "user", claudeReq.Messages[0].Role)
+	require.NotNil(t, claudeReq.Stream)
+	assert.False(t, *claudeReq.Stream)
+
+	header := http.Header{}
+	require.NoError(t, adaptor.SetupRequestHeader(c, &header, info))
+	assert.Equal(t, "sk-test", header.Get("x-api-key"))
+	assert.Equal(t, "2023-06-01", header.Get("anthropic-version"))
+}
+
+func TestAdaptorRoutesResponsesUpstreamBackToMessages(t *testing.T) {
+	previousStreamingTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = previousStreamingTimeout })
+
+	for _, stream := range []bool{false, true} {
+		name := "non-streaming"
+		if stream {
+			name = "streaming"
+		}
+		t.Run(name, func(t *testing.T) {
+			adaptor := &Adaptor{}
+			info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
+				Routes: []dto.AdvancedCustomRoute{
+					{
+						IncomingPath: "/v1/messages",
+						UpstreamPath: "/v1/responses",
+						Converter:    relayconvert.ConverterClaudeMessagesToOpenAIResponses,
+					},
+				},
+			})
+			info.RelayFormat = types.RelayFormatClaude
+			info.RelayMode = relayconstant.RelayModeResponses
+			info.RequestURLPath = "/v1/responses"
+			info.OriginModelName = "claude-public"
+			info.UpstreamModelName = "provider-responses-model"
+			info.IsStream = stream
+			info.DisablePing = true
+			c, recorder := advancedCustomResponseContext("/v1/messages")
+
+			body := `{"id":"resp_upstream","object":"response","created_at":1710000000,"model":"provider-responses-model","status":"completed","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"hello","annotations":[]}]}],"usage":{"input_tokens":8,"output_tokens":3,"total_tokens":11}}`
+			contentType := "application/json"
+			if stream {
+				body = strings.Join([]string{
+					`data: {"type":"response.created","response":{"id":"resp_upstream","model":"provider-responses-model","created_at":1710000000}}`,
+					`data: {"type":"response.output_text.delta","delta":"hello"}`,
+					`data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":8,"output_tokens":3,"total_tokens":11}}}`,
+					`data: [DONE]`,
+					``,
+				}, "\n")
+				contentType = "text/event-stream"
+			}
+
+			usage, apiErr := adaptor.DoResponse(c, advancedCustomHTTPResponse(body, contentType), info)
+			require.Nil(t, apiErr)
+			require.NotNil(t, usage)
+			assert.Equal(t, 11, usage.(*dto.Usage).TotalTokens)
+			if stream {
+				assert.Contains(t, recorder.Body.String(), "event: message_start")
+				assert.Contains(t, recorder.Body.String(), `"text":"hello"`)
+				assert.Contains(t, recorder.Body.String(), "event: message_stop")
+				return
+			}
+			var response dto.ClaudeResponse
+			require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+			assert.Equal(t, "claude-public", response.Model)
+			require.Len(t, response.Content, 1)
+			assert.Equal(t, "hello", response.Content[0].GetText())
+		})
+	}
+}
+
+func TestAdaptorRoutesMessagesUpstreamBackToResponses(t *testing.T) {
+	previousStreamingTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = previousStreamingTimeout })
+
+	for _, stream := range []bool{false, true} {
+		name := "non-streaming"
+		if stream {
+			name = "streaming"
+		}
+		t.Run(name, func(t *testing.T) {
+			adaptor := &Adaptor{}
+			info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
+				Routes: []dto.AdvancedCustomRoute{
+					{
+						IncomingPath: "/v1/responses",
+						UpstreamPath: "/v1/messages",
+						Converter:    relayconvert.ConverterOpenAIResponsesToClaudeMessages,
+					},
+				},
+			})
+			info.RelayFormat = types.RelayFormatOpenAIResponses
+			info.RelayMode = relayconstant.RelayModeUnknown
+			info.RequestURLPath = "/v1/messages"
+			info.OriginModelName = "gpt-public"
+			info.UpstreamModelName = "provider-claude-model"
+			info.IsStream = stream
+			info.DisablePing = true
+			c, recorder := advancedCustomResponseContext("/v1/responses")
+
+			body := `{"id":"msg_upstream","type":"message","role":"assistant","model":"provider-claude-model","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","usage":{"input_tokens":8,"output_tokens":3}}`
+			contentType := "application/json"
+			if stream {
+				body = strings.Join([]string{
+					`data: {"type":"message_start","message":{"id":"msg_upstream","type":"message","role":"assistant","model":"provider-claude-model","content":[],"stop_reason":null,"usage":{"input_tokens":8,"output_tokens":1}}}`,
+					`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+					`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}`,
+					`data: {"type":"content_block_stop","index":0}`,
+					`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}`,
+					`data: {"type":"message_stop"}`,
+					`data: [DONE]`,
+					``,
+				}, "\n")
+				contentType = "text/event-stream"
+			}
+
+			usage, apiErr := adaptor.DoResponse(c, advancedCustomHTTPResponse(body, contentType), info)
+			require.Nil(t, apiErr)
+			require.NotNil(t, usage)
+			if stream {
+				assert.Contains(t, recorder.Body.String(), "event: response.created")
+				assert.Contains(t, recorder.Body.String(), `"delta":"hello"`)
+				assert.Contains(t, recorder.Body.String(), "event: response.completed")
+				return
+			}
+			var response dto.OpenAIResponsesResponse
+			require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+			assert.Equal(t, "response", response.Object)
+			assert.Equal(t, "gpt-public", response.Model)
+			require.Len(t, response.Output, 1)
+			assert.Equal(t, "hello", response.Output[0].Content[0].Text)
+		})
+	}
+}
+
 func TestAdaptorConvertsGeminiRequestToOpenAIChatUpstream(t *testing.T) {
 	adaptor := &Adaptor{}
 	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
@@ -801,6 +1040,22 @@ func advancedCustomRelayInfo(config *dto.AdvancedCustomConfig) *relaycommon.Rela
 				AdvancedCustom: config,
 			},
 		},
+	}
+}
+
+func advancedCustomResponseContext(path string) (*gin.Context, *httptest.ResponseRecorder) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, path, nil)
+	return c, recorder
+}
+
+func advancedCustomHTTPResponse(body, contentType string) *http.Response {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Header:     http.Header{"Content-Type": []string{contentType}},
 	}
 }
 

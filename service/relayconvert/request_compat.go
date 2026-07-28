@@ -1,6 +1,9 @@
 package relayconvert
 
 import (
+	"strings"
+
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	claudemessages "github.com/QuantumNous/new-api/service/relayconvert/internal/claude_messages"
@@ -45,7 +48,54 @@ func ResponsesRequestToChatCompletionsRequest(req *dto.OpenAIResponsesRequest) (
 }
 
 func OpenAIResponsesRequestToClaudeMessages(c *gin.Context, req *dto.OpenAIResponsesRequest) (*dto.ClaudeRequest, error) {
-	return oairesponses.OpenAIResponsesRequestToClaudeMessages(c, req)
+	chatRequest, err := oairesponses.ResponsesRequestToChatCompletionsRequestWithContext(c, req)
+	if err != nil {
+		return nil, err
+	}
+	claudeRequest, err := oaichat.OpenAIChatRequestToClaudeMessages(c, *chatRequest)
+	if err != nil {
+		return nil, err
+	}
+	normalizeResponsesClaudeContent(claudeRequest)
+	return claudeRequest, nil
+}
+
+func normalizeResponsesClaudeContent(request *dto.ClaudeRequest) {
+	if request == nil {
+		return
+	}
+	for i := range request.Messages {
+		if request.Messages[i].IsStringContent() {
+			text := request.Messages[i].GetStringContent()
+			request.Messages[i].Content = []dto.ClaudeMediaMessage{
+				{
+					Type: "text",
+					Text: common.GetPointer(text),
+				},
+			}
+		}
+		parts, err := request.Messages[i].ParseContent()
+		if err != nil {
+			continue
+		}
+		for j := range parts {
+			if parts[j].Type != "tool_result" {
+				continue
+			}
+			text, ok := parts[j].Content.(string)
+			if !ok || strings.TrimSpace(text) == "" {
+				continue
+			}
+			var parsed any
+			if common.Unmarshal([]byte(text), &parsed) == nil {
+				switch parsed.(type) {
+				case map[string]any, []any:
+					parts[j].Content = parsed
+				}
+			}
+		}
+		request.Messages[i].Content = parts
+	}
 }
 
 func OpenAIResponsesRequestToGeminiChat(c *gin.Context, req *dto.OpenAIResponsesRequest, info *relaycommon.RelayInfo) (*dto.GeminiChatRequest, error) {

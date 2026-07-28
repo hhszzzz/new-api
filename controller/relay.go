@@ -21,6 +21,7 @@ import (
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/protocolstate"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/types"
@@ -106,22 +107,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			}
 			publicMessage = relaycommon.RedactUserModelRouteText(publicMessage, privacyInfo)
 			newAPIError.SetMessage(common.MessageWithRequestId(publicMessage, requestId))
-			switch relayFormat {
-			case types.RelayFormatOpenAIRealtime:
-				publicError := relaycommon.SanitizeUserModelRouteOpenAIError(newAPIError.ToOpenAIError(), privacyInfo)
-				helper.WssError(c, ws, publicError)
-			case types.RelayFormatClaude:
-				publicError := relaycommon.SanitizeUserModelRouteClaudeError(newAPIError.ToClaudeError(), privacyInfo)
-				c.JSON(newAPIError.StatusCode, gin.H{
-					"type":  "error",
-					"error": publicError,
-				})
-			default:
-				publicError := relaycommon.SanitizeUserModelRouteOpenAIError(newAPIError.ToOpenAIError(), privacyInfo)
-				c.JSON(newAPIError.StatusCode, gin.H{
-					"error": publicError,
-				})
-			}
+			writeRelayErrorResponse(c, relayFormat, newAPIError, privacyInfo, ws)
 		}
 	}()
 
@@ -241,13 +227,24 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 		if newAPIError == nil {
 			relayInfo.LastError = nil
+			if commitErr := protocolstate.Commit(c); commitErr != nil {
+				logger.LogError(c, "failed to persist protocol bridge state: "+commitErr.Error())
+			}
 			return
 		}
 
 		newAPIError = service.NormalizeViolationFeeError(newAPIError)
 		relayInfo.LastError = newAPIError
 
-		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError, relayInfo)
+		replayFallback := protocolstate.EnableReplayFallback(c, newAPIError)
+		if !replayFallback {
+			processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError, relayInfo)
+		}
+		if replayFallback {
+			retryParam.SetRetry(0)
+			retryParam.ResetRetryNextTry()
+			continue
+		}
 
 		if !shouldRetry(c, newAPIError, common.RetryTimes-retryParam.GetRetry()) {
 			break
@@ -263,6 +260,43 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		gopool.Go(func() {
 			perfmetrics.RecordRelaySample(relayInfo, false, 0)
 		})
+	}
+}
+
+func writeRelayErrorResponse(c *gin.Context, relayFormat types.RelayFormat, apiError *types.NewAPIError, privacyInfo *relaycommon.RelayInfo, ws *websocket.Conn) {
+	if apiError == nil {
+		return
+	}
+	switch relayFormat {
+	case types.RelayFormatOpenAIRealtime:
+		publicError := relaycommon.SanitizeUserModelRouteOpenAIError(apiError.ToOpenAIError(), privacyInfo)
+		helper.WssError(c, ws, publicError)
+	case types.RelayFormatClaude:
+		publicError := relaycommon.SanitizeUserModelRouteClaudeError(apiError.ToClaudeError(), privacyInfo)
+		if c.Writer.Written() || privacyInfo != nil && privacyInfo.IsStream {
+			helper.SetEventStreamHeaders(c)
+			if err := helper.ClaudeData(c, dto.ClaudeResponse{Type: "error", Error: publicError}); err != nil {
+				logger.LogError(c, "failed to write Messages stream error: "+err.Error())
+			}
+			return
+		}
+		c.JSON(apiError.StatusCode, gin.H{
+			"type":  "error",
+			"error": publicError,
+		})
+	case types.RelayFormatOpenAIResponses:
+		publicError := relaycommon.SanitizeUserModelRouteOpenAIError(apiError.ToOpenAIError(), privacyInfo)
+		if c.Writer.Written() || privacyInfo != nil && privacyInfo.IsStream {
+			helper.SetEventStreamHeaders(c)
+			if err := helper.ResponsesErrorData(c, publicError); err != nil {
+				logger.LogError(c, "failed to write Responses stream error: "+err.Error())
+			}
+			return
+		}
+		c.JSON(apiError.StatusCode, gin.H{"error": publicError})
+	default:
+		publicError := relaycommon.SanitizeUserModelRouteOpenAIError(apiError.ToOpenAIError(), privacyInfo)
+		c.JSON(apiError.StatusCode, gin.H{"error": publicError})
 	}
 }
 
@@ -327,6 +361,9 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 	info.PriceData.GroupRatioInfo = helper.HandleGroupRatio(c, info)
 
 	if err != nil {
+		if errors.Is(err, model.ErrNoCompatibleChannel) {
+			return nil, types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		}
 		if common.GetContextKeyInt(c, constant.ContextKeyUserModelRouteId) > 0 {
 			return nil, types.NewError(fmt.Errorf("用户模型路由没有可用渠道"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 		}
@@ -348,6 +385,9 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 
 func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) bool {
 	if openaiErr == nil {
+		return false
+	}
+	if c != nil && c.Writer != nil && c.Writer.Written() {
 		return false
 	}
 	if service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
@@ -664,13 +704,14 @@ func buildRelayRetryParam(c *gin.Context, info *relaycommon.RelayInfo) *service.
 	}
 	channelIds, _ := common.GetContextKeyType[[]int](c, constant.ContextKeyUserModelRouteChannel)
 	return &service.RetryParam{
-		Ctx:               c,
-		TokenGroup:        group,
-		ModelName:         modelName,
-		RequestPath:       c.Request.URL.Path,
-		AllowedChannelIds: channelIds,
-		CandidateFilter:   middleware.BuildChannelCandidateFilter(c, modelName),
-		Retry:             common.GetPointer(0),
+		Ctx:                 c,
+		TokenGroup:          group,
+		ModelName:           modelName,
+		RequestPath:         c.Request.URL.Path,
+		AllowedChannelIds:   channelIds,
+		CandidateFilter:     middleware.BuildChannelCandidateFilter(c, modelName),
+		CandidateClassifier: middleware.BuildChannelCandidateClassifier(c, modelName),
+		Retry:               common.GetPointer(0),
 	}
 }
 

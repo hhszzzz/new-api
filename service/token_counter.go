@@ -177,8 +177,18 @@ func getImageToken(c *gin.Context, fileMeta *types.FileMeta, model string, strea
 }
 
 func EstimateRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *relaycommon.RelayInfo) (int, error) {
+	return estimateRequestToken(c, meta, info, false)
+}
+
+// EstimateRequestTokenForCount performs an explicit API token count even when
+// relay-side token estimation is disabled globally.
+func EstimateRequestTokenForCount(c *gin.Context, meta *types.TokenCountMeta, info *relaycommon.RelayInfo) (int, error) {
+	return estimateRequestToken(c, meta, info, true)
+}
+
+func estimateRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *relaycommon.RelayInfo, explicitCount bool) (int, error) {
 	// 是否统计token
-	if !constant.CountToken {
+	if !explicitCount && !constant.CountToken {
 		return 0, nil
 	}
 
@@ -220,6 +230,9 @@ func EstimateRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *rela
 	}
 
 	model := common.GetContextKeyString(c, constant.ContextKeyOriginalModel)
+	if explicitCount && strings.TrimSpace(info.UpstreamModelName) != "" {
+		model = info.UpstreamModelName
+	}
 	tkm := 0
 
 	if meta.TokenType == types.TokenTypeTextNumber {
@@ -232,6 +245,13 @@ func EstimateRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *rela
 		tkm += meta.ToolsCount * 8
 		tkm += meta.MessagesCount * 3 // 每条消息的格式化token数量
 		tkm += meta.NameCount * 3
+		tkm += 3
+	} else if explicitCount && info.RelayFormat == types.RelayFormatClaude {
+		// Anthropic does not publish an exact local counting formula. Keep the
+		// structural estimate deterministic and include message/tool framing that
+		// is absent from the serialized user text.
+		tkm += meta.ToolsCount * 8
+		tkm += meta.MessagesCount * 3
 		tkm += 3
 	}
 

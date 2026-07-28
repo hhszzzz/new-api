@@ -72,6 +72,11 @@ const (
 )
 
 const (
+	ConverterClaudeMessagesToOpenAIResponses = requestConverterClaudeToResponses
+	ConverterOpenAIResponsesToClaudeMessages = requestConverterResponsesToClaude
+)
+
+const (
 	ConverterNone                        = "none"
 	ConverterClaudeMessagesToOpenAIChat  = "anthropic_messages_to_openai_chat_completions"
 	ConverterOpenAIChatToClaudeMessages  = "openai_chat_completions_to_anthropic_messages"
@@ -469,7 +474,16 @@ func convertOpenAIResponsesRequestToClaudeMessages(c *gin.Context, _ *relaycommo
 	if err != nil {
 		return nil, err
 	}
-	return oairesponses.OpenAIResponsesRequestToClaudeMessages(c, responsesRequest)
+	chatRequest, err := oairesponses.ResponsesRequestToChatCompletionsRequestWithContext(c, responsesRequest)
+	if err != nil {
+		return nil, err
+	}
+	claudeRequest, err := oaichat.OpenAIChatRequestToClaudeMessages(c, *chatRequest)
+	if err != nil {
+		return nil, err
+	}
+	normalizeResponsesClaudeContent(claudeRequest)
+	return claudeRequest, nil
 }
 
 func convertOpenAIResponsesRequestToGeminiChat(c *gin.Context, info *relaycommon.RelayInfo, request any) (any, error) {
@@ -485,7 +499,7 @@ func convertOpenAIResponsesRequestToGeminiChat(c *gin.Context, info *relaycommon
 	return oairesponses.OpenAIResponsesRequestToGeminiChat(c, &prepared, info)
 }
 
-func convertResponsesRequestToChat(_ *gin.Context, _ *relaycommon.RelayInfo, request any) (any, error) {
+func convertResponsesRequestToChat(c *gin.Context, _ *relaycommon.RelayInfo, request any) (any, error) {
 	responsesRequest, ok := request.(*dto.OpenAIResponsesRequest)
 	if !ok {
 		if value, ok := request.(dto.OpenAIResponsesRequest); ok {
@@ -495,5 +509,5 @@ func convertResponsesRequestToChat(_ *gin.Context, _ *relaycommon.RelayInfo, req
 	if responsesRequest == nil {
 		return nil, fmt.Errorf("expected OpenAI responses request, got %T", request)
 	}
-	return oairesponses.ResponsesRequestToChatCompletionsRequest(responsesRequest)
+	return oairesponses.ResponsesRequestToChatCompletionsRequestWithContext(c, responsesRequest)
 }

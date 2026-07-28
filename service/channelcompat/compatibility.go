@@ -61,6 +61,17 @@ func DetectRequestProtocol(requestPath string) Protocol {
 	}
 }
 
+// MainProtocolPathForAuxiliaryRequest returns the primary text endpoint whose
+// configured route determines whether an auxiliary endpoint can be served
+// locally when no dedicated upstream route exists.
+func MainProtocolPathForAuxiliaryRequest(requestPath string) (string, bool) {
+	requestPath = strings.Split(strings.TrimSpace(requestPath), "?")[0]
+	if requestPath == "/v1/messages/count_tokens" {
+		return "/v1/messages", true
+	}
+	return "", false
+}
+
 func Matrix(channel *model.Channel, modelName string) map[string]Compatibility {
 	result := make(map[string]Compatibility, len(protocols))
 	for _, protocol := range protocols {
@@ -220,12 +231,16 @@ func advancedCustomCompatibility(channel *model.Channel, protocol Protocol, mode
 	switch converter {
 	case relayconvert.ConverterClaudeMessagesToOpenAIChat:
 		return converted(ProtocolChat, converter)
+	case relayconvert.ConverterClaudeMessagesToOpenAIResponses:
+		return converted(ProtocolResponses, converter)
 	case relayconvert.ConverterOpenAIChatToClaudeMessages:
 		return converted(ProtocolMessages, converter)
 	case relayconvert.ConverterOpenAIChatToOpenAIResponses:
 		return converted(ProtocolResponses, converter)
 	case relayconvert.ConverterOpenAIResponsesToOpenAIChat:
 		return converted(ProtocolChat, converter)
+	case relayconvert.ConverterOpenAIResponsesToClaudeMessages:
+		return converted(ProtocolMessages, converter)
 	case relayconvert.ConverterOpenAIResponsesToGemini:
 		return converted(ProtocolGemini, converter)
 	case relayconvert.ConverterGeminiContentToOpenAIChat:

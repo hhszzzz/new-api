@@ -606,10 +606,12 @@ export function useCommonLogsColumns(
       accessorFn: (row) =>
         parseLogOther(row.other)?.diagnostics?.request_protocol ?? '',
       cell: ({ row }) => {
-        const diagnostics = parseLogOther(row.original.other)?.diagnostics
+        const other = parseLogOther(row.original.other)
+        const diagnostics = other?.diagnostics
         const requestProtocol = diagnostics?.request_protocol
         const upstreamProtocol = isAdminView
-          ? diagnostics?.upstream_protocol
+          ? (other?.admin_info?.upstream_protocol ??
+            diagnostics?.upstream_protocol)
           : undefined
         if (!requestProtocol && !upstreamProtocol) {
           return <span className='text-muted-foreground'>—</span>

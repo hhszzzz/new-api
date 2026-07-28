@@ -12,6 +12,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/protocolstate"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
@@ -33,7 +34,14 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	if oaiError := responsesResponse.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
-	if info.HasUserModelRoute() {
+	if protocolstate.PublicResponseID(c, "") != "" {
+		upstreamResponseID := responsesResponse.ID
+		responseBody, err = protocolstate.CaptureResponsesResponseData(c, upstreamResponseID, &responsesResponse, responseBody)
+		if err != nil {
+			return nil, types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
+		}
+	}
+	if info.HasModelRouting() {
 		responsesResponse.Model = info.PublicResponseModelName()
 		responseBody, err = relaycommon.RedactUserModelRouteJSON(responseBody, info)
 		if err != nil {
@@ -91,28 +99,54 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	var responseTextBuilder strings.Builder
 	imageCounter := &relaycommon.ImageGenerationCallCounter{}
 	imageCommitted := false
+	var streamErr *types.NewAPIError
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
-
 		// 检查当前数据是否包含 completed 状态和 usage 信息
 		var streamResponse dto.ResponsesStreamResponse
 		if err := common.UnmarshalJsonStr(data, &streamResponse); err != nil {
 			logger.LogError(c, "failed to unmarshal stream response: "+err.Error())
-			sr.Error(err)
+			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+			sr.Stop(streamErr)
 			return
 		}
-		if info.HasUserModelRoute() {
+		if streamResponse.Type == "error" || streamResponse.Type == "response.error" || streamResponse.Type == "response.failed" {
+			if openAIError := streamResponse.GetOpenAIError(); openAIError != nil {
+				streamErr = types.WithOpenAIError(*openAIError, http.StatusInternalServerError)
+			} else {
+				streamErr = types.NewOpenAIError(fmt.Errorf("responses stream error: %s", streamResponse.Type), types.ErrorCodeBadResponse, http.StatusInternalServerError)
+			}
+			sr.Stop(streamErr)
+			return
+		}
+		if protocolstate.PublicResponseID(c, "") != "" {
+			encoded, encodeErr := protocolstate.ObserveResponsesStreamData(c, &streamResponse, []byte(data))
+			if encodeErr != nil {
+				streamErr = types.NewOpenAIError(encodeErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+				sr.Stop(streamErr)
+				return
+			}
+			data = string(encoded)
+		} else {
+			protocolstate.ObserveResponsesStream(c, &streamResponse)
+		}
+		if info.HasModelRouting() {
 			if streamResponse.Response != nil {
 				streamResponse.Response.Model = info.PublicResponseModelName()
 			}
 			redacted, redactErr := relaycommon.RedactUserModelRouteJSON([]byte(data), info)
 			if redactErr != nil {
-				sr.Error(redactErr)
+				streamErr = types.NewOpenAIError(redactErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+				sr.Stop(streamErr)
 				return
 			}
 			data = string(redacted)
 		}
-		sendResponsesStreamData(c, streamResponse, data)
+		if err := sendResponsesStreamData(c, streamResponse, data); err != nil {
+			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+			sr.Stop(streamErr)
+			return
+		}
 		switch streamResponse.Type {
 		case "response.completed", "response.done":
 			if streamResponse.Response != nil {
@@ -149,7 +183,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 				imageCounter.Commit(info)
 				imageCommitted = true
 			}
-		case "response.failed", "response.incomplete", "response.cancelled", "response.canceled":
+		case "response.incomplete", "response.cancelled", "response.canceled":
 			if !imageCommitted {
 				imageCounter.Reset()
 				imageCounter.Commit(info)
@@ -175,6 +209,12 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			}
 		}
 	})
+	if streamErr != nil {
+		return nil, streamErr
+	}
+	if err := streamStatusError(info); err != nil {
+		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+	}
 
 	if usage.CompletionTokens == 0 {
 		// 计算输出文本的 token 数量

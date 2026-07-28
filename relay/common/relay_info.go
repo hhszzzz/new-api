@@ -297,8 +297,8 @@ func (info *RelayInfo) PublicResponseModelName() string {
 	if info == nil {
 		return ""
 	}
-	if info.HasUserModelRoute() {
-		return info.OriginModelName
+	if modelName := strings.TrimSpace(info.OriginModelName); modelName != "" {
+		return modelName
 	}
 	return info.UpstreamModelName
 }
@@ -389,10 +389,45 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 	// Keep the duplicate-injection guard scoped to one channel attempt so route
 	// and channel prompts are applied again when the distributor retries.
 	info.systemPromptsApplied = false
-	// The selected channel determines the final upstream reasoning shape. A
-	// retry that does not enable reasoning must not inherit the previous
-	// channel's effort badge.
+	// All response parsing and conversion state below belongs to one upstream
+	// attempt. A retry can select a different protocol, so none of it may leak
+	// into the next channel's request, billing usage, stream state, or logs.
 	info.ReasoningEffort = ""
+	info.RequestConversionChain = nil
+	info.InitRequestConversionChain()
+	info.FinalRequestRelayFormat = ""
+	info.StreamStatus = nil
+	info.ThinkingContentInfo = ThinkingContentInfo{IsFirstThinkingContent: true}
+	info.SendResponseCount = 0
+	info.ReceivedResponseCount = 0
+	info.isFirstResponse = true
+	info.ShouldIncludeUsage = false
+	info.DisablePing = false
+	info.UpstreamRequestBodySize = 0
+	info.RuntimeHeadersOverride = nil
+	info.UseRuntimeHeadersOverride = false
+	info.ParamOverrideAudit = nil
+	if info.Request != nil && c != nil && c.Request != nil && c.Request.URL != nil {
+		info.IsStream = info.Request.IsStream(c)
+	}
+	if info.RelayFormat == types.RelayFormatClaude {
+		info.ClaudeConvertInfo = &ClaudeConvertInfo{LastMessagesType: LastMessageTypeNone}
+	} else {
+		info.ClaudeConvertInfo = nil
+	}
+	if request, ok := info.Request.(*dto.OpenAIResponsesRequest); ok && info.RelayFormat == types.RelayFormatOpenAIResponses {
+		info.ResponsesUsageInfo = newResponsesUsageInfo(request)
+	} else if info.RelayFormat == types.RelayFormatOpenAIAlphaSearch {
+		info.ResponsesUsageInfo = &ResponsesUsageInfo{
+			BuiltInTools: map[string]*BuildInToolInfo{
+				dto.BuildInToolWebSearchPreview: {
+					ToolName: dto.BuildInToolWebSearchPreview,
+				},
+			},
+		}
+	} else {
+		info.ResponsesUsageInfo = nil
+	}
 
 	channelType := common.GetContextKeyInt(c, constant.ContextKeyChannelType)
 	paramOverride := common.GetContextKeyStringMap(c, constant.ContextKeyChannelParamOverride)
@@ -597,14 +632,21 @@ func GenRelayInfoResponses(c *gin.Context, request *dto.OpenAIResponsesRequest) 
 	info := genBaseRelayInfo(c, request)
 	info.RelayMode = relayconstant.RelayModeResponses
 	info.RelayFormat = types.RelayFormatOpenAIResponses
+	info.ResponsesUsageInfo = newResponsesUsageInfo(request)
+	return info
+}
 
-	info.ResponsesUsageInfo = &ResponsesUsageInfo{
+func newResponsesUsageInfo(request *dto.OpenAIResponsesRequest) *ResponsesUsageInfo {
+	usageInfo := &ResponsesUsageInfo{
 		BuiltInTools: make(map[string]*BuildInToolInfo),
+	}
+	if request == nil {
+		return usageInfo
 	}
 	if len(request.Tools) > 0 {
 		for _, tool := range request.GetToolsMap() {
 			toolType := common.Interface2String(tool["type"])
-			info.ResponsesUsageInfo.BuiltInTools[toolType] = &BuildInToolInfo{
+			usageInfo.BuiltInTools[toolType] = &BuildInToolInfo{
 				ToolName:  toolType,
 				CallCount: 0,
 			}
@@ -614,11 +656,11 @@ func GenRelayInfoResponses(c *gin.Context, request *dto.OpenAIResponsesRequest) 
 				if searchContextSize == "" {
 					searchContextSize = "medium"
 				}
-				info.ResponsesUsageInfo.BuiltInTools[toolType].SearchContextSize = searchContextSize
+				usageInfo.BuiltInTools[toolType].SearchContextSize = searchContextSize
 			}
 		}
 	}
-	return info
+	return usageInfo
 }
 
 func GenRelayInfoGemini(c *gin.Context, request dto.Request) *RelayInfo {

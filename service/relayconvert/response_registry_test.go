@@ -1,14 +1,51 @@
 package relayconvert
 
 import (
+	"net/http/httptest"
 	"testing"
 
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/types"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestConvertClaudeResponseToResponsesPreservesContentBlockOrder(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	response := &dto.ClaudeResponse{
+		Id:    "msg_1",
+		Model: "claude-test",
+		Content: []dto.ClaudeMediaMessage{
+			{Type: "text", Text: respPtr("before")},
+			{Type: "tool_use", Id: "toolu_1", Name: "lookup", Input: map[string]any{"q": "x"}},
+			{Type: "thinking", Thinking: respPtr("inspect")},
+			{Type: "text", Text: respPtr("after")},
+			{Type: "tool_use", Id: "toolu_2", Name: "fetch", Input: map[string]any{"id": 2}},
+		},
+	}
+
+	result, err := ConvertResponse(c, nil, types.RelayFormatOpenAIResponses, response)
+	require.NoError(t, err)
+	converted := result.Value.(*dto.OpenAIResponsesResponse)
+
+	require.Len(t, converted.Output, 5)
+	assert.Equal(t, "message", converted.Output[0].Type)
+	assert.Equal(t, "before", converted.Output[0].Content[0].Text)
+	assert.Equal(t, "function_call", converted.Output[1].Type)
+	assert.Equal(t, "toolu_1", converted.Output[1].CallId)
+	assert.Equal(t, "reasoning", converted.Output[2].Type)
+	require.Len(t, converted.Output[2].Summary, 1)
+	assert.Equal(t, "summary_text", converted.Output[2].Summary[0].Type)
+	assert.Equal(t, "inspect", converted.Output[2].Summary[0].Text)
+	assert.Empty(t, converted.Output[2].Content)
+	assert.Equal(t, "message", converted.Output[3].Type)
+	assert.Equal(t, "after", converted.Output[3].Content[0].Text)
+	assert.Equal(t, "function_call", converted.Output[4].Type)
+	assert.Equal(t, "toolu_2", converted.Output[4].CallId)
+}
 
 func TestLookupBuiltinResponseConverters(t *testing.T) {
 	tests := []struct {

@@ -87,7 +87,7 @@ func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*d
 	var instructionsParts []string
 	inputItems := make([]map[string]any, 0, len(req.Messages))
 
-	for _, msg := range req.Messages {
+	for messageIndex, msg := range req.Messages {
 		role := strings.TrimSpace(msg.Role)
 		if role == "" {
 			continue
@@ -150,6 +150,27 @@ func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*d
 				instructionsParts = append(instructionsParts, s)
 			}
 			continue
+		}
+		if role == "assistant" {
+			if reasoning := msg.GetReasoningContent(); reasoning != "" {
+				inputItems = append(inputItems, map[string]any{
+					"type":   "reasoning",
+					"id":     fmt.Sprintf("rs_bridge_%d", messageIndex),
+					"status": "completed",
+					"summary": []map[string]any{
+						{
+							"type": "summary_text",
+							"text": reasoning,
+						},
+					},
+					"content": []map[string]any{
+						{
+							"type": "reasoning_text",
+							"text": reasoning,
+						},
+					},
+				})
+			}
 		}
 
 		item := map[string]any{

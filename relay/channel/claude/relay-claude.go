@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/protocolstate"
 	"github.com/QuantumNous/new-api/service/relayconvert"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/types"
@@ -106,7 +108,7 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 			// message_start, 获取usage
 			if claudeResponse.Message != nil {
 				info.UpstreamModelName = claudeResponse.Message.Model
-				if info.HasUserModelRoute() {
+				if info.HasUserModelRoute() || info.RelayFormat == types.RelayFormatClaude {
 					claudeResponse.Message.Model = info.PublicResponseModelName()
 				}
 			}
@@ -118,14 +120,16 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 			}
 		}
 		countClaudeStreamBillableTools(c, info, &claudeResponse)
-		if info.HasUserModelRoute() {
+		if info.PublicResponseModelName() != "" {
 			redacted, redactErr := relaycommon.RedactUserModelRouteJSON([]byte(data), info)
 			if redactErr != nil {
 				return types.NewError(redactErr, types.ErrorCodeBadResponseBody)
 			}
 			data = string(redacted)
 		}
-		helper.ClaudeChunkData(c, claudeResponse, data)
+		if err := helper.ClaudeChunkData(c, claudeResponse, data); err != nil {
+			return types.NewError(err, types.ErrorCodeBadResponse)
+		}
 	} else if info.RelayFormat == types.RelayFormatOpenAI {
 		response := StreamResponseClaude2OpenAI(&claudeResponse)
 
@@ -137,7 +141,41 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 
 		err = helper.ObjectData(c, response)
 		if err != nil {
-			logger.LogError(c, "send_stream_response_failed: "+err.Error())
+			return types.NewError(err, types.ErrorCodeBadResponse)
+		}
+	} else if info.RelayFormat == types.RelayFormatOpenAIResponses {
+		FormatClaudeResponseInfo(&claudeResponse, nil, claudeInfo)
+		state, ok := common.GetContextKeyType[*relayconvert.ResponseStreamState](c, constant.ContextKeyProtocolResponseStreamState)
+		if !ok || state == nil {
+			state, err = relayconvert.NewResponseStreamState(types.RelayFormatClaude, types.RelayFormatOpenAIResponses, relayconvert.ResponseStreamOptions{
+				ID:    protocolstate.PublicResponseID(c, helper.GetResponseID(c)),
+				Model: info.PublicResponseModelName(),
+			})
+			if err != nil {
+				return types.NewError(err, types.ErrorCodeBadResponse)
+			}
+			common.SetContextKey(c, constant.ContextKeyProtocolResponseStreamState, state)
+		}
+		if claudeResponse.Type == "message_start" && claudeResponse.Message != nil {
+			if claudeResponse.Message.Model != "" {
+				info.UpstreamModelName = claudeResponse.Message.Model
+			}
+			protocolstate.SetUpstreamResponseID(c, claudeResponse.Message.Id)
+		}
+		countClaudeStreamBillableTools(c, info, &claudeResponse)
+		results, convertErr := relayconvert.ConvertStreamResponseChunk(c, info, state, &claudeResponse)
+		if convertErr != nil {
+			return types.NewError(convertErr, types.ErrorCodeBadResponse)
+		}
+		state.SetUsage(claudeInfo.Usage)
+		for _, result := range results {
+			event, ok := result.Value.(relayconvert.ChatToResponsesStreamEvent)
+			if !ok {
+				return types.NewError(fmt.Errorf("expected Responses stream event, got %T", result.Value), types.ErrorCodeBadResponse)
+			}
+			if sendErr := sendClaudeResponsesStreamEvent(c, event); sendErr != nil {
+				return types.NewError(sendErr, types.ErrorCodeBadResponse)
+			}
 		}
 	}
 	return nil
@@ -160,7 +198,33 @@ func countClaudeStreamBillableTools(c *gin.Context, info *relaycommon.RelayInfo,
 	}
 }
 
-func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, claudeInfo *ClaudeResponseInfo) {
+func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, claudeInfo *ClaudeResponseInfo) *types.NewAPIError {
+	if info.RelayFormat == types.RelayFormatOpenAIResponses {
+		state, ok := common.GetContextKeyType[*relayconvert.ResponseStreamState](c, constant.ContextKeyProtocolResponseStreamState)
+		if !ok || state == nil {
+			return types.NewError(fmt.Errorf("Claude Responses stream ended without conversion state"), types.ErrorCodeBadResponse)
+		}
+		usage := state.Usage()
+		if usage == nil || usage.TotalTokens == 0 {
+			usage = service.ResponseText2Usage(c, state.UsageText(), info.UpstreamModelName, info.GetEstimatePromptTokens())
+			state.SetUsage(usage)
+		}
+		finalResults, err := relayconvert.FinalizeStreamResponse(c, info, state)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeBadResponse)
+		}
+		for _, result := range finalResults {
+			event, ok := result.Value.(relayconvert.ChatToResponsesStreamEvent)
+			if !ok {
+				return types.NewError(fmt.Errorf("expected Responses stream event, got %T", result.Value), types.ErrorCodeBadResponse)
+			}
+			if sendErr := sendClaudeResponsesStreamEvent(c, event); sendErr != nil {
+				return types.NewError(sendErr, types.ErrorCodeBadResponse)
+			}
+		}
+		claudeInfo.Usage = usage
+		return nil
+	}
 	if claudeInfo.Usage.PromptTokens == 0 {
 		//上游出错
 	}
@@ -194,11 +258,14 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 			response := helper.GenerateFinalUsageResponse(claudeInfo.ResponseId, claudeInfo.Created, info.PublicResponseModelName(), openAIUsage)
 			err := helper.ObjectData(c, response)
 			if err != nil {
-				common.SysLog("send final response failed: " + err.Error())
+				return types.NewError(err, types.ErrorCodeBadResponse)
 			}
 		}
-		helper.Done(c)
+		if err := helper.Done(c); err != nil {
+			return types.NewError(err, types.ErrorCodeBadResponse)
+		}
 	}
+	return nil
 }
 
 func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*dto.Usage, *types.NewAPIError) {
@@ -219,9 +286,27 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 	if err != nil {
 		return nil, err
 	}
+	if info.StreamStatus != nil && !info.StreamStatus.IsNormalEnd() {
+		streamErr := info.StreamStatus.EndError
+		if streamErr == nil {
+			streamErr = fmt.Errorf("Claude stream ended abnormally: %s", info.StreamStatus.Summary())
+		}
+		return nil, types.NewError(streamErr, types.ErrorCodeBadResponse)
+	}
 
-	HandleStreamFinalResponse(c, info, claudeInfo)
+	if finalErr := HandleStreamFinalResponse(c, info, claudeInfo); finalErr != nil {
+		return nil, finalErr
+	}
 	return claudeInfo.Usage, nil
+}
+
+func sendClaudeResponsesStreamEvent(c *gin.Context, event relayconvert.ChatToResponsesStreamEvent) error {
+	protocolstate.ObserveResponsesStream(c, &event.Payload)
+	data, err := common.Marshal(event.Payload)
+	if err != nil {
+		return err
+	}
+	return helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: event.Type}, string(data))
 }
 
 func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claudeInfo *ClaudeResponseInfo, httpResp *http.Response, data []byte) *types.NewAPIError {
@@ -248,7 +333,7 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		claudeInfo.Usage.ClaudeCacheCreation5mTokens = claudeResponse.Usage.GetCacheCreation5mTokens()
 		claudeInfo.Usage.ClaudeCacheCreation1hTokens = claudeResponse.Usage.GetCacheCreation1hTokens()
 	}
-	if info.HasUserModelRoute() {
+	if info.HasUserModelRoute() || info.RelayFormat == types.RelayFormatClaude {
 		claudeResponse.Model = info.PublicResponseModelName()
 	}
 	var responseData []byte
@@ -261,13 +346,28 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 			return types.NewError(err, types.ErrorCodeBadResponseBody)
 		}
 	case types.RelayFormatClaude:
-		if info.HasUserModelRoute() {
+		if info.PublicResponseModelName() != "" {
 			responseData, err = relaycommon.RedactUserModelRouteJSON(data, info)
 			if err != nil {
 				return types.NewError(err, types.ErrorCodeBadResponseBody)
 			}
 		} else {
 			responseData = data
+		}
+	case types.RelayFormatOpenAIResponses:
+		convertResult, convertErr := relayconvert.ConvertResponse(c, info, types.RelayFormatOpenAIResponses, &claudeResponse)
+		if convertErr != nil {
+			return types.NewError(convertErr, types.ErrorCodeBadResponseBody)
+		}
+		responsesResponse, ok := convertResult.Value.(*dto.OpenAIResponsesResponse)
+		if !ok {
+			return types.NewError(fmt.Errorf("expected OpenAI Responses response, got %T", convertResult.Value), types.ErrorCodeBadResponseBody)
+		}
+		responsesResponse.Model = info.PublicResponseModelName()
+		protocolstate.CaptureResponsesResponse(c, claudeResponse.Id, responsesResponse)
+		responseData, err = common.Marshal(responsesResponse)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeBadResponseBody)
 		}
 	}
 

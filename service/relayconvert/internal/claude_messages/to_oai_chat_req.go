@@ -66,11 +66,28 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info *re
 			}
 			openAIRequest.Reasoning = reasoningJSON
 		}
-	} else if info != nil {
-		thinkingSuffix := "-thinking"
-		if strings.HasSuffix(relaymeta.RelayInfoUpstreamModelName(info), thinkingSuffix) &&
-			!strings.HasSuffix(openAIRequest.Model, thinkingSuffix) {
-			openAIRequest.Model = openAIRequest.Model + thinkingSuffix
+	} else {
+		if claudeRequest.Thinking != nil {
+			switch claudeRequest.Thinking.Type {
+			case "adaptive":
+				openAIRequest.ReasoningEffort = "high"
+			case "enabled":
+				switch budget := claudeRequest.Thinking.GetBudgetTokens(); {
+				case budget <= 1280:
+					openAIRequest.ReasoningEffort = "low"
+				case budget <= 2048:
+					openAIRequest.ReasoningEffort = "medium"
+				default:
+					openAIRequest.ReasoningEffort = "high"
+				}
+			}
+		}
+		if info != nil {
+			thinkingSuffix := "-thinking"
+			if strings.HasSuffix(relaymeta.RelayInfoUpstreamModelName(info), thinkingSuffix) &&
+				!strings.HasSuffix(openAIRequest.Model, thinkingSuffix) {
+				openAIRequest.Model = openAIRequest.Model + thinkingSuffix
+			}
 		}
 	}
 
@@ -78,6 +95,42 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info *re
 		openAIRequest.Stop = claudeRequest.StopSequences[0]
 	} else if len(claudeRequest.StopSequences) > 1 {
 		openAIRequest.Stop = claudeRequest.StopSequences
+	}
+	if claudeRequest.ToolChoice != nil {
+		var toolChoice dto.ClaudeToolChoice
+		if value, ok := claudeRequest.ToolChoice.(string); ok {
+			toolChoice.Type = value
+		} else {
+			converted, err := common.Any2Type[dto.ClaudeToolChoice](claudeRequest.ToolChoice)
+			if err != nil {
+				return nil, fmt.Errorf("invalid Claude tool_choice: %w", err)
+			}
+			toolChoice = converted
+		}
+
+		switch toolChoice.Type {
+		case "auto":
+			openAIRequest.ToolChoice = "auto"
+		case "any":
+			openAIRequest.ToolChoice = "required"
+		case "none":
+			openAIRequest.ToolChoice = "none"
+		case "tool":
+			if strings.TrimSpace(toolChoice.Name) == "" {
+				return nil, fmt.Errorf("Claude tool_choice type tool requires a name")
+			}
+			openAIRequest.ToolChoice = map[string]any{
+				"type": "function",
+				"function": map[string]any{
+					"name": toolChoice.Name,
+				},
+			}
+		default:
+			return nil, fmt.Errorf("unsupported Claude tool_choice type %q", toolChoice.Type)
+		}
+		if toolChoice.Type != "none" {
+			openAIRequest.ParallelTooCalls = common.GetPointer(!toolChoice.DisableParallelToolUse)
+		}
 	}
 
 	tools, _ := common.Any2Type[[]dto.Tool](claudeRequest.Tools)
@@ -135,7 +188,7 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info *re
 		}
 	}
 
-	for _, claudeMessage := range claudeRequest.Messages {
+	for messageIndex, claudeMessage := range claudeRequest.Messages {
 		openAIMessage := dto.Message{
 			Role: claudeMessage.Role,
 		}
@@ -148,8 +201,9 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info *re
 			}
 			var toolCalls []dto.ToolCallRequest
 			mediaMessages := make([]dto.MediaContent, 0, len(content))
+			var reasoning strings.Builder
 
-			for _, mediaMsg := range content {
+			for contentIndex, mediaMsg := range content {
 				switch mediaMsg.Type {
 				case "text", "input_text":
 					message := dto.MediaContent{
@@ -159,12 +213,35 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info *re
 					}
 					mediaMessages = append(mediaMessages, message)
 				case "image":
-					imageData := fmt.Sprintf("data:%s;base64,%s", mediaMsg.Source.MediaType, mediaMsg.Source.Data)
+					if mediaMsg.Source == nil {
+						return nil, fmt.Errorf("Claude message %d image content %d is missing image source", messageIndex, contentIndex)
+					}
+					var imageData string
+					switch mediaMsg.Source.Type {
+					case "base64":
+						mediaType := strings.TrimSpace(mediaMsg.Source.MediaType)
+						data := strings.TrimSpace(common.Interface2String(mediaMsg.Source.Data))
+						if mediaType == "" || data == "" {
+							return nil, fmt.Errorf("Claude message %d image content %d has an incomplete base64 image source", messageIndex, contentIndex)
+						}
+						imageData = fmt.Sprintf("data:%s;base64,%s", mediaType, data)
+					case "url":
+						imageData = strings.TrimSpace(mediaMsg.Source.Url)
+						if imageData == "" {
+							return nil, fmt.Errorf("Claude message %d image content %d has an empty URL image source", messageIndex, contentIndex)
+						}
+					default:
+						return nil, fmt.Errorf("Claude message %d image content %d uses unsupported image source type %q", messageIndex, contentIndex, mediaMsg.Source.Type)
+					}
 					mediaMessage := dto.MediaContent{
 						Type:     "image_url",
 						ImageUrl: &dto.MessageImageUrl{Url: imageData},
 					}
 					mediaMessages = append(mediaMessages, mediaMessage)
+				case "thinking":
+					if mediaMsg.Thinking != nil {
+						reasoning.WriteString(*mediaMsg.Thinking)
+					}
 				case "tool_use":
 					toolCall := dto.ToolCallRequest{
 						ID:   mediaMsg.Id,
@@ -199,8 +276,12 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info *re
 			if len(toolCalls) > 0 {
 				openAIMessage.SetToolCalls(toolCalls)
 			}
-			if len(mediaMessages) > 0 && len(toolCalls) == 0 {
+			if len(mediaMessages) > 0 {
 				openAIMessage.SetMediaContent(mediaMessages)
+			}
+			if reasoning.Len() > 0 {
+				reasoningContent := reasoning.String()
+				openAIMessage.ReasoningContent = &reasoningContent
 			}
 		}
 		if len(openAIMessage.ParseContent()) > 0 || len(openAIMessage.ToolCalls) > 0 {

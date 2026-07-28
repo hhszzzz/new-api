@@ -138,10 +138,25 @@ export interface ChannelOtherSettings {
   upstream_model_update_last_check_time?: number
   upstream_model_update_last_detected_models?: string[]
   advanced_custom?: AdvancedCustomConfig
+  protocol_capabilities?: ProtocolCapabilities
   client_policy?: {
     mode?: 'unrestricted' | 'allow' | 'deny'
     clients?: string[]
   }
+}
+
+export type UpstreamProtocol = 'chat' | 'messages' | 'responses'
+
+export interface ProtocolCapabilities {
+  upstream_protocols: UpstreamProtocol[]
+  allow_conversion?: boolean
+  model_overrides?: ProtocolCapabilityModelOverride[]
+}
+
+export interface ProtocolCapabilityModelOverride {
+  model_pattern: string
+  upstream_protocols?: UpstreamProtocol[]
+  allow_conversion?: boolean
 }
 
 export interface AdvancedCustomConfig {
@@ -165,9 +180,11 @@ export interface AdvancedCustomRouteAuth {
 export type AdvancedCustomConverter =
   | 'none'
   | 'anthropic_messages_to_openai_chat_completions'
+  | 'claude_messages_to_openai_responses'
   | 'openai_chat_completions_to_anthropic_messages'
   | 'openai_chat_completions_to_openai_responses'
   | 'openai_responses_to_openai_chat_completions'
+  | 'openai_responses_to_claude_messages'
   | 'openai_responses_to_gemini_generate_content'
   | 'gemini_generate_content_to_openai_chat_completions'
   | 'openai_chat_completions_to_gemini_generate_content'

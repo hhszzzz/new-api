@@ -128,6 +128,43 @@ func TestResponsesRequestToChatCompletionsRequestAssistantTextAndFunctionCallCoe
 	assert.JSONEq(t, `{"ok":true}`, got.Messages[1].StringContent())
 }
 
+func TestResponsesRequestToChatCompletionsRequestPreservesVisibleReasoningWithoutEncryptedContent(t *testing.T) {
+	got, err := ResponsesRequestToChatCompletionsRequest(&dto.OpenAIResponsesRequest{
+		Model: "gpt-test",
+		Input: mustRawMessage(t, []map[string]any{
+			{
+				"type":              "reasoning",
+				"summary":           []map[string]any{{"type": "summary_text", "text": "inspect inputs"}},
+				"content":           []map[string]any{{"type": "reasoning_text", "text": "inspect inputs"}},
+				"encrypted_content": "opaque-provider-state",
+			},
+			{
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "output_text", "text": "I will call."},
+				},
+			},
+			{
+				"type":      "function_call",
+				"call_id":   "call_1",
+				"name":      "lookup",
+				"arguments": map[string]any{"q": "x"},
+			},
+		}),
+	})
+	require.NoError(t, err)
+
+	require.Len(t, got.Messages, 1)
+	assert.Equal(t, "assistant", got.Messages[0].Role)
+	assert.Equal(t, "inspect inputs", got.Messages[0].GetReasoningContent())
+	assert.Equal(t, "I will call.", got.Messages[0].StringContent())
+	require.Len(t, got.Messages[0].ParseToolCalls(), 1)
+	encoded, err := common.Marshal(got)
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), "encrypted_content")
+	assert.NotContains(t, string(encoded), "opaque-provider-state")
+}
+
 func TestResponsesRequestToChatCompletionsRequestOnlyFunctionCallCreatesAssistant(t *testing.T) {
 	got, err := ResponsesRequestToChatCompletionsRequest(&dto.OpenAIResponsesRequest{
 		Model: "gpt-test",
@@ -199,7 +236,7 @@ func TestResponsesRequestToChatCompletionsRequestToolsToolChoiceAndTextFormat(t 
 	assert.True(t, gjson.GetBytes(got.ResponseFormat.JsonSchema, "strict").Bool())
 }
 
-func TestResponsesRequestToChatCompletionsRequestCustomToolCallPreservesRawShape(t *testing.T) {
+func TestResponsesRequestToChatCompletionsRequestCustomToolCallUsesTemporaryFunctionShape(t *testing.T) {
 	got, err := ResponsesRequestToChatCompletionsRequest(&dto.OpenAIResponsesRequest{
 		Model: "gpt-test",
 		Input: mustRawMessage(t, []map[string]any{
@@ -216,12 +253,11 @@ func TestResponsesRequestToChatCompletionsRequestCustomToolCallPreservesRawShape
 	require.Len(t, got.Messages, 1)
 	toolCalls := got.Messages[0].ParseToolCalls()
 	require.Len(t, toolCalls, 1)
-	assert.Equal(t, dto.CustomType, toolCalls[0].Type)
+	assert.Equal(t, "function", toolCalls[0].Type)
 	assert.Equal(t, "call_custom", toolCalls[0].ID)
 	assert.Equal(t, "apply_patch", toolCalls[0].Function.Name)
-	assert.Equal(t, "patch body", toolCalls[0].Function.Arguments)
-	assert.Equal(t, "custom_tool_call", gjson.GetBytes(toolCalls[0].Custom, "type").String())
-	assert.Equal(t, "patch body", gjson.GetBytes(toolCalls[0].Custom, "input").String())
+	assert.Equal(t, "patch body", gjson.Get(toolCalls[0].Function.Arguments, "input").String())
+	assert.Empty(t, toolCalls[0].Custom)
 }
 
 func TestResponsesRequestToChatCompletionsRequestRejectsStatefulFields(t *testing.T) {

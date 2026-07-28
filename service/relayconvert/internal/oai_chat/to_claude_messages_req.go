@@ -100,6 +100,7 @@ func OpenAIChatRequestToClaudeMessages(c *gin.Context, textRequest dto.GeneralOp
 		Model:         textRequest.Model,
 		StopSequences: nil,
 		Temperature:   textRequest.Temperature,
+		Stream:        textRequest.Stream,
 		Tools:         claudeTools,
 	}
 	if maxTokens := textRequest.GetMaxTokens(); maxTokens > 0 {
@@ -111,10 +112,6 @@ func OpenAIChatRequestToClaudeMessages(c *gin.Context, textRequest dto.GeneralOp
 	if textRequest.TopK != nil {
 		claudeRequest.TopK = common.GetPointer(*textRequest.TopK)
 	}
-	if textRequest.IsStream(nil) {
-		claudeRequest.Stream = common.GetPointer(true)
-	}
-
 	if textRequest.ToolChoice != nil || textRequest.ParallelTooCalls != nil {
 		claudeToolChoice := sharedclaude.MapOpenAIToolChoice(textRequest.ToolChoice, textRequest.ParallelTooCalls)
 		if claudeToolChoice != nil {
@@ -229,6 +226,11 @@ func OpenAIChatRequestToClaudeMessages(c *gin.Context, textRequest dto.GeneralOp
 	for i, message := range textRequest.Messages {
 		if message.Role == "" {
 			textRequest.Messages[i].Role = "user"
+		}
+		if message.Role == "assistant" && message.GetReasoningContent() != "" &&
+			(message.Content == nil || (message.IsStringContent() && message.StringContent() == "")) &&
+			len(message.ParseToolCalls()) == 0 {
+			continue
 		}
 		fmtMessage := dto.Message{
 			Role:    message.Role,

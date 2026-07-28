@@ -129,9 +129,13 @@ func GetRandomSatisfiedChannelInPool(group string, model string, retry int, requ
 }
 
 func GetRandomSatisfiedChannelInPoolWithFilter(group string, model string, retry int, requestPath string, allowedChannelIds []int, candidateFilter ChannelCandidateFilter) (*Channel, error) {
+	return GetRandomSatisfiedChannelInPoolWithClassifier(group, model, retry, requestPath, allowedChannelIds, candidateFilter, nil)
+}
+
+func GetRandomSatisfiedChannelInPoolWithClassifier(group string, model string, retry int, requestPath string, allowedChannelIds []int, candidateFilter ChannelCandidateFilter, candidateClassifier ChannelCandidateClassifier) (*Channel, error) {
 	// if memory cache is disabled, get channel directly from database
 	if !common.MemoryCacheEnabled {
-		return GetChannelInPoolWithFilter(group, model, retry, requestPath, allowedChannelIds, candidateFilter)
+		return GetChannelInPoolWithClassifier(group, model, retry, requestPath, allowedChannelIds, candidateFilter, candidateClassifier)
 	}
 
 	channelSyncLock.RLock()
@@ -154,49 +158,44 @@ func GetRandomSatisfiedChannelInPoolWithFilter(group string, model string, retry
 		return nil, nil
 	}
 
-	if len(channels) == 1 {
-		if channel, ok := channelsIDM[channels[0]]; ok {
-			return channel, nil
-		}
-		return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channels[0])
-	}
-
-	uniquePriorities := make(map[int]bool)
+	eligibleChannels := make([]*Channel, 0, len(channels))
 	for _, channelId := range channels {
 		if channel, ok := channelsIDM[channelId]; ok {
-			uniquePriorities[int(channel.GetPriority())] = true
-		} else {
-			return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channelId)
-		}
-	}
-	var sortedUniquePriorities []int
-	for priority := range uniquePriorities {
-		sortedUniquePriorities = append(sortedUniquePriorities, priority)
-	}
-	sort.Sort(sort.Reverse(sort.IntSlice(sortedUniquePriorities)))
-
-	if retry >= len(uniquePriorities) {
-		retry = len(uniquePriorities) - 1
-	}
-	if retry < 0 {
-		retry = 0
-	}
-	targetPriority := int64(sortedUniquePriorities[retry])
-
-	// get the priority for the given retry number
-	var targetChannels []*Channel
-	for _, channelId := range channels {
-		if channel, ok := channelsIDM[channelId]; ok {
-			if channel.GetPriority() == targetPriority {
-				targetChannels = append(targetChannels, channel)
+			if classifyChannel(channel, candidateClassifier) != ChannelCandidateIncompatible {
+				eligibleChannels = append(eligibleChannels, channel)
 			}
 		} else {
 			return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channelId)
 		}
 	}
+	if len(eligibleChannels) == 0 {
+		if candidateClassifier != nil && len(channels) > 0 {
+			return nil, ErrNoCompatibleChannel
+		}
+		return nil, nil
+	}
+	if len(eligibleChannels) == 1 {
+		return eligibleChannels[0], nil
+	}
+
+	tiers := buildChannelSelectionTiers(eligibleChannels, candidateClassifier)
+	if retry >= len(tiers) {
+		retry = len(tiers) - 1
+	}
+	if retry < 0 {
+		retry = 0
+	}
+	targetTier := tiers[retry]
+
+	targetChannels := make([]*Channel, 0, len(eligibleChannels))
+	for _, channel := range eligibleChannels {
+		if channel.GetPriority() == targetTier.Priority && classifyChannel(channel, candidateClassifier) == targetTier.Class {
+			targetChannels = append(targetChannels, channel)
+		}
+	}
 
 	if len(targetChannels) == 0 {
-		return nil, fmt.Errorf("no channel found, group: %s, model: %s, priority: %d", group, model, targetPriority)
+		return nil, fmt.Errorf("no channel found, group: %s, model: %s, class: %d, priority: %d", group, model, targetTier.Class, targetTier.Priority)
 	}
 	channel := selectWeightedChannel(targetChannels)
 	if channel == nil {

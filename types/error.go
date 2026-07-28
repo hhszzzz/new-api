@@ -245,16 +245,9 @@ func (e *NewAPIError) ToClaudeError() ClaudeError {
 	var result ClaudeError
 	switch e.errorType {
 	case ErrorTypeOpenAIError:
-		if openAIError, ok := e.RelayError.(OpenAIError); ok {
-			result = ClaudeError{
-				Message: e.Error(),
-				Type:    fmt.Sprintf("%v", openAIError.Code),
-			}
-		} else if openAIError, ok := e.RelayError.(*OpenAIError); ok && openAIError != nil {
-			result = ClaudeError{
-				Message: e.Error(),
-				Type:    fmt.Sprintf("%v", openAIError.Code),
-			}
+		result = ClaudeError{
+			Message: e.Error(),
+			Type:    ClaudeErrorTypeForStatus(e.StatusCode),
 		}
 	case ErrorTypeClaudeError:
 		if claudeError, ok := e.RelayError.(ClaudeError); ok {
@@ -265,7 +258,7 @@ func (e *NewAPIError) ToClaudeError() ClaudeError {
 	default:
 		result = ClaudeError{
 			Message: e.Error(),
-			Type:    string(e.errorType),
+			Type:    ClaudeErrorTypeForStatus(e.StatusCode),
 		}
 	}
 	if e.Err != nil {
@@ -277,7 +270,32 @@ func (e *NewAPIError) ToClaudeError() ClaudeError {
 	if result.Message == "" {
 		result.Message = string(e.errorType)
 	}
+	if result.Type == "" {
+		result.Type = ClaudeErrorTypeForStatus(e.StatusCode)
+	}
 	return result
+}
+
+func ClaudeErrorTypeForStatus(statusCode int) string {
+	switch statusCode {
+	case http.StatusUnauthorized:
+		return "authentication_error"
+	case http.StatusForbidden:
+		return "permission_error"
+	case http.StatusNotFound:
+		return "not_found_error"
+	case http.StatusRequestEntityTooLarge:
+		return "request_too_large"
+	case http.StatusTooManyRequests:
+		return "rate_limit_error"
+	case 529:
+		return "overloaded_error"
+	default:
+		if statusCode >= http.StatusInternalServerError {
+			return "api_error"
+		}
+		return "invalid_request_error"
+	}
 }
 
 type NewAPIErrorOptions func(*NewAPIError)

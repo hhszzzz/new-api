@@ -13,14 +13,15 @@ import (
 )
 
 type RetryParam struct {
-	Ctx               *gin.Context
-	TokenGroup        string
-	ModelName         string
-	RequestPath       string
-	AllowedChannelIds []int
-	CandidateFilter   model.ChannelCandidateFilter
-	Retry             *int
-	resetNextTry      bool
+	Ctx                 *gin.Context
+	TokenGroup          string
+	ModelName           string
+	RequestPath         string
+	AllowedChannelIds   []int
+	CandidateFilter     model.ChannelCandidateFilter
+	CandidateClassifier model.ChannelCandidateClassifier
+	Retry               *int
+	resetNextTry        bool
 }
 
 func (p *RetryParam) GetRetry() int {
@@ -66,13 +67,14 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 		if !clientpolicy.IsGroupAllowed(param.TokenGroup, client) {
 			return nil, selectGroup, nil
 		}
-		channel, err := model.GetRandomSatisfiedChannelInPoolWithFilter(
+		channel, err := model.GetRandomSatisfiedChannelInPoolWithClassifier(
 			param.TokenGroup,
 			param.ModelName,
 			param.GetRetry(),
 			param.RequestPath,
 			param.AllowedChannelIds,
 			param.CandidateFilter,
+			param.CandidateClassifier,
 		)
 		return channel, selectGroup, err
 	}
@@ -94,12 +96,63 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 
 	startGroupIndex := 0
 	crossGroupRetry := common.GetContextKeyBool(param.Ctx, constant.ContextKeyTokenCrossGroupRetry)
+	_, hasAutoGroupSelection := common.GetContextKey(param.Ctx, constant.ContextKeyAutoGroupIndex)
 	if lastGroupIndex, exists := common.GetContextKey(param.Ctx, constant.ContextKeyAutoGroupIndex); exists {
 		if index, ok := lastGroupIndex.(int); ok {
 			startGroupIndex = index
 		}
 	}
 
+	// A new auto-group request must exhaust the native protocol layer across
+	// groups before an earlier group's convertible channel can win. Once a group
+	// has been selected, retries continue through the existing per-group tiers.
+	if !hasAutoGroupSelection && param.CandidateClassifier != nil {
+		nativeClassifier := func(channel *model.Channel) model.ChannelCandidateClass {
+			if param.CandidateClassifier(channel) == model.ChannelCandidateNative {
+				return model.ChannelCandidateNative
+			}
+			return model.ChannelCandidateIncompatible
+		}
+		for index, autoGroup := range autoGroups {
+			if !clientpolicy.IsGroupAllowed(autoGroup, client) {
+				continue
+			}
+			priorityRetry := param.GetRetry()
+			if index > 0 {
+				priorityRetry = 0
+			}
+			channel, err := model.GetRandomSatisfiedChannelInPoolWithClassifier(
+				autoGroup,
+				param.ModelName,
+				priorityRetry,
+				param.RequestPath,
+				param.AllowedChannelIds,
+				param.CandidateFilter,
+				nativeClassifier,
+			)
+			if err != nil {
+				if errors.Is(err, model.ErrNoCompatibleChannel) {
+					continue
+				}
+				return nil, autoGroup, err
+			}
+			if channel == nil {
+				continue
+			}
+
+			common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroup, autoGroup)
+			if crossGroupRetry && priorityRetry >= common.RetryTimes {
+				common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroupIndex, index+1)
+				param.SetRetry(0)
+				param.ResetRetryNextTry()
+			} else {
+				common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroupIndex, index)
+			}
+			return channel, autoGroup, nil
+		}
+	}
+
+	incompatibleCandidateSeen := false
 	for index := startGroupIndex; index < len(autoGroups); index++ {
 		autoGroup := autoGroups[index]
 		if !clientpolicy.IsGroupAllowed(autoGroup, client) {
@@ -111,15 +164,23 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 		}
 		logger.LogDebug(param.Ctx, "Auto selecting group: %s, priorityRetry: %d", autoGroup, priorityRetry)
 
-		channel, err := model.GetRandomSatisfiedChannelInPoolWithFilter(
+		channel, err := model.GetRandomSatisfiedChannelInPoolWithClassifier(
 			autoGroup,
 			param.ModelName,
 			priorityRetry,
 			param.RequestPath,
 			param.AllowedChannelIds,
 			param.CandidateFilter,
+			param.CandidateClassifier,
 		)
 		if err != nil {
+			if errors.Is(err, model.ErrNoCompatibleChannel) {
+				incompatibleCandidateSeen = true
+				common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroupIndex, index+1)
+				common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroupRetryIndex, 0)
+				param.SetRetry(0)
+				continue
+			}
 			return nil, autoGroup, err
 		}
 		if channel == nil {
@@ -141,5 +202,8 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 		return channel, selectGroup, nil
 	}
 
+	if incompatibleCandidateSeen {
+		return nil, selectGroup, model.ErrNoCompatibleChannel
+	}
 	return nil, selectGroup, nil
 }

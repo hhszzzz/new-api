@@ -300,6 +300,8 @@ export function ModelMutateDrawer({
       'global.pass_through_request_enabled': false,
       'global.thinking_model_blacklist': '[]',
       'global.chat_completions_to_responses_policy': '{}',
+      'global.protocol_bridge_policy':
+        '{"enabled":false,"default_allow_conversion":false,"state_ttl_seconds":3600,"max_state_turns":128,"max_state_bytes":4194304}',
       'general_setting.ping_interval_enabled': false,
       'general_setting.ping_interval_seconds': 60,
       'gemini.safety_settings': '',

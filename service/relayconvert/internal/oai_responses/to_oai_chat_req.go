@@ -8,6 +8,8 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
+	sharedbridge "github.com/QuantumNous/new-api/service/relayconvert/internal/shared/bridge"
+	"github.com/gin-gonic/gin"
 )
 
 const (
@@ -25,6 +27,10 @@ const (
 )
 
 func ResponsesRequestToChatCompletionsRequest(req *dto.OpenAIResponsesRequest) (*dto.GeneralOpenAIRequest, error) {
+	return ResponsesRequestToChatCompletionsRequestWithContext(nil, req)
+}
+
+func ResponsesRequestToChatCompletionsRequestWithContext(c *gin.Context, req *dto.OpenAIResponsesRequest) (*dto.GeneralOpenAIRequest, error) {
 	if req == nil {
 		return nil, errors.New("request is nil")
 	}
@@ -35,17 +41,17 @@ func ResponsesRequestToChatCompletionsRequest(req *dto.OpenAIResponsesRequest) (
 		return nil, err
 	}
 
-	messages, err := responsesRequestMessagesToChat(req)
+	tools, toolState, err := prepareResponsesToolsForChat(c, req)
 	if err != nil {
 		return nil, err
 	}
 
-	tools, err := responsesRequestToolsToChat(req.Tools)
+	messages, err := responsesRequestMessagesToChat(req, toolState)
 	if err != nil {
 		return nil, err
 	}
 
-	toolChoice, err := responsesRequestToolChoiceToChat(req.ToolChoice)
+	toolChoice, err := responsesRequestToolChoiceToChat(req.ToolChoice, toolState)
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +127,7 @@ func ValidateRequestChatUnsupportedFields(req *dto.OpenAIResponsesRequest) error
 	return validateResponsesRequestChatUnsupportedFields(req)
 }
 
-func responsesRequestMessagesToChat(req *dto.OpenAIResponsesRequest) ([]dto.Message, error) {
+func responsesRequestMessagesToChat(req *dto.OpenAIResponsesRequest, toolState *sharedbridge.ToolState) ([]dto.Message, error) {
 	messages := make([]dto.Message, 0)
 	if rawJSONPresent(req.Instructions) {
 		instructions, err := responsesJSONString(req.Instructions)
@@ -151,7 +157,7 @@ func responsesRequestMessagesToChat(req *dto.OpenAIResponsesRequest) ([]dto.Mess
 			return nil, fmt.Errorf("invalid input array: %w", err)
 		}
 		for _, item := range items {
-			nextMessages, err := responsesInputItemToChatMessages(item, messages)
+			nextMessages, err := responsesInputItemToChatMessages(item, messages, toolState)
 			if err != nil {
 				return nil, err
 			}
@@ -163,25 +169,47 @@ func responsesRequestMessagesToChat(req *dto.OpenAIResponsesRequest) ([]dto.Mess
 	}
 }
 
-func responsesInputItemToChatMessages(item map[string]any, messages []dto.Message) ([]dto.Message, error) {
+func responsesInputItemToChatMessages(item map[string]any, messages []dto.Message, toolState *sharedbridge.ToolState) ([]dto.Message, error) {
 	itemType := strings.TrimSpace(common.Interface2String(item["type"]))
 	switch itemType {
+	case "reasoning":
+		reasoning := responsesReasoningItemText(item)
+		if reasoning == "" {
+			return messages, nil
+		}
+		if len(messages) > 0 && messages[len(messages)-1].Role == "assistant" && messages[len(messages)-1].GetReasoningContent() == "" {
+			messages[len(messages)-1].ReasoningContent = &reasoning
+			return messages, nil
+		}
+		return append(messages, dto.Message{Role: "assistant", ReasoningContent: &reasoning}), nil
 	case responsesInputTypeFunctionCall:
-		toolCall, err := responsesFunctionCallItemToChatToolCall(item)
+		toolCall, err := responsesFunctionCallItemToChatToolCall(item, toolState)
 		if err != nil {
 			return nil, err
 		}
 		return appendToolCallToLastAssistant(messages, toolCall), nil
 	case responsesInputTypeCustomToolCall:
-		toolCall, err := responsesCustomToolCallItemToChatToolCall(item)
+		toolCall, err := responsesCustomToolCallItemToChatToolCall(item, toolState)
 		if err != nil {
 			return nil, err
 		}
 		return appendToolCallToLastAssistant(messages, toolCall), nil
-	case responsesInputTypeFunctionCallOutput:
+	case "tool_search_call":
+		toolCall, err := responsesToolSearchCallItemToChatToolCall(item, toolState)
+		if err != nil {
+			return nil, err
+		}
+		return appendToolCallToLastAssistant(messages, toolCall), nil
+	case responsesInputTypeFunctionCallOutput, responsesInputTypeCustomToolOutput, "tool_search_output":
 		callID := strings.TrimSpace(common.Interface2String(item["call_id"]))
-		content := responseToolOutputToChatContent(item["output"])
+		output := item["output"]
+		if itemType == "tool_search_output" {
+			output = item["tools"]
+		}
+		content := responseToolOutputToChatContent(output)
 		return append(messages, dto.Message{Role: "tool", ToolCallId: callID, Content: content}), nil
+	case "additional_tools":
+		return messages, nil
 	}
 
 	role := strings.TrimSpace(common.Interface2String(item["role"]))
@@ -192,7 +220,56 @@ func responsesInputItemToChatMessages(item map[string]any, messages []dto.Messag
 	if err != nil {
 		return nil, err
 	}
+	if role == "assistant" && len(messages) > 0 {
+		last := &messages[len(messages)-1]
+		if last.Role == "assistant" && last.GetReasoningContent() != "" && last.Content == nil && len(last.ParseToolCalls()) == 0 {
+			last.Content = content
+			return messages, nil
+		}
+	}
 	return append(messages, dto.Message{Role: role, Content: content}), nil
+}
+
+func responsesReasoningItemText(item map[string]any) string {
+	if item == nil {
+		return ""
+	}
+	summary := responsesReasoningPartsText(item["summary"], "summary_text")
+	visible := responsesReasoningPartsText(item["content"], "reasoning_text", "summary_text")
+	if visible == "" || visible == summary {
+		return summary
+	}
+	if summary == "" {
+		return visible
+	}
+	return summary + "\n\n" + visible
+}
+
+func responsesReasoningPartsText(value any, acceptedTypes ...string) string {
+	accepted := make(map[string]struct{}, len(acceptedTypes))
+	for _, partType := range acceptedTypes {
+		accepted[partType] = struct{}{}
+	}
+	parts, ok := value.([]any)
+	if !ok {
+		if typedParts, typedOK := value.([]map[string]any); typedOK {
+			parts = make([]any, 0, len(typedParts))
+			for _, part := range typedParts {
+				parts = append(parts, part)
+			}
+		}
+	}
+	var text strings.Builder
+	for _, rawPart := range parts {
+		part, ok := rawPart.(map[string]any)
+		if !ok {
+			continue
+		}
+		if _, ok := accepted[strings.TrimSpace(common.Interface2String(part["type"]))]; ok {
+			text.WriteString(common.Interface2String(part["text"]))
+		}
+	}
+	return text.String()
 }
 
 func responsesInputContentToChatContent(content any) (any, error) {
@@ -274,33 +351,57 @@ func responsesContentPartsToChatContent(parts []any) (any, error) {
 	return chatParts, nil
 }
 
-func responsesFunctionCallItemToChatToolCall(item map[string]any) (dto.ToolCallRequest, error) {
+func responsesFunctionCallItemToChatToolCall(item map[string]any, toolState *sharedbridge.ToolState) (dto.ToolCallRequest, error) {
 	name := strings.TrimSpace(common.Interface2String(item["name"]))
 	if name == "" {
 		return dto.ToolCallRequest{}, errors.New("function_call item is missing name")
+	}
+	namespace := strings.TrimSpace(common.Interface2String(item["namespace"]))
+	upstreamName, err := upstreamToolName(toolState, sharedbridge.ToolKindFunction, namespace, name)
+	if err != nil {
+		return dto.ToolCallRequest{}, err
 	}
 	return dto.ToolCallRequest{
 		ID:   responsesCallID(item),
 		Type: "function",
 		Function: dto.FunctionRequest{
-			Name:      name,
+			Name:      upstreamName,
 			Arguments: responsesArgumentsString(item["arguments"]),
 		},
 	}, nil
 }
 
-func responsesCustomToolCallItemToChatToolCall(item map[string]any) (dto.ToolCallRequest, error) {
-	raw, err := common.Marshal(item)
+func responsesCustomToolCallItemToChatToolCall(item map[string]any, toolState *sharedbridge.ToolState) (dto.ToolCallRequest, error) {
+	name := strings.TrimSpace(common.Interface2String(item["name"]))
+	if name == "" {
+		return dto.ToolCallRequest{}, errors.New("custom_tool_call item is missing name")
+	}
+	namespace := strings.TrimSpace(common.Interface2String(item["namespace"]))
+	upstreamName, err := upstreamToolName(toolState, sharedbridge.ToolKindCustom, namespace, name)
 	if err != nil {
 		return dto.ToolCallRequest{}, err
 	}
 	return dto.ToolCallRequest{
-		ID:     responsesCallID(item),
-		Type:   dto.CustomType,
-		Custom: raw,
+		ID:   responsesCallID(item),
+		Type: "function",
 		Function: dto.FunctionRequest{
-			Name:      strings.TrimSpace(common.Interface2String(item["name"])),
-			Arguments: responsesArgumentsString(item["input"]),
+			Name:      upstreamName,
+			Arguments: customInputArguments(item["input"]),
+		},
+	}, nil
+}
+
+func responsesToolSearchCallItemToChatToolCall(item map[string]any, toolState *sharedbridge.ToolState) (dto.ToolCallRequest, error) {
+	upstreamName, err := upstreamToolName(toolState, sharedbridge.ToolKindToolSearch, "", "tool_search")
+	if err != nil {
+		return dto.ToolCallRequest{}, err
+	}
+	return dto.ToolCallRequest{
+		ID:   responsesCallID(item),
+		Type: "function",
+		Function: dto.FunctionRequest{
+			Name:      upstreamName,
+			Arguments: toolSearchArguments(item["arguments"]),
 		},
 	}, nil
 }
@@ -355,7 +456,7 @@ func responsesRequestToolsToChat(raw json.RawMessage) ([]dto.ToolCallRequest, er
 	return out, nil
 }
 
-func responsesRequestToolChoiceToChat(raw json.RawMessage) (any, error) {
+func responsesRequestToolChoiceToChat(raw json.RawMessage, toolState *sharedbridge.ToolState) (any, error) {
 	if !rawJSONPresent(raw) {
 		return nil, nil
 	}
@@ -371,13 +472,26 @@ func responsesRequestToolChoiceToChat(raw json.RawMessage) (any, error) {
 	if err := common.Unmarshal(raw, &choice); err != nil {
 		return nil, fmt.Errorf("invalid tool_choice: %w", err)
 	}
-	if common.Interface2String(choice["type"]) == "function" {
+	choiceType := strings.TrimSpace(common.Interface2String(choice["type"]))
+	if choiceType == "function" || choiceType == "custom" || choiceType == "freeform" || choiceType == "tool_search" {
 		name := strings.TrimSpace(common.Interface2String(choice["name"]))
+		namespace := strings.TrimSpace(common.Interface2String(choice["namespace"]))
+		kind := sharedbridge.ToolKindFunction
+		if choiceType == "custom" || choiceType == "freeform" {
+			kind = sharedbridge.ToolKindCustom
+		} else if choiceType == "tool_search" {
+			kind = sharedbridge.ToolKindToolSearch
+			name = "tool_search"
+		}
 		if name != "" {
+			upstreamName, err := upstreamToolName(toolState, kind, namespace, name)
+			if err != nil {
+				return nil, err
+			}
 			return map[string]any{
 				"type": "function",
 				"function": map[string]any{
-					"name": name,
+					"name": upstreamName,
 				},
 			}, nil
 		}
@@ -386,7 +500,7 @@ func responsesRequestToolChoiceToChat(raw json.RawMessage) (any, error) {
 }
 
 func RequestToolChoiceToChat(raw json.RawMessage) (any, error) {
-	return responsesRequestToolChoiceToChat(raw)
+	return responsesRequestToolChoiceToChat(raw, nil)
 }
 
 func responsesRequestTextToChatResponseFormat(raw json.RawMessage) (*dto.ResponseFormat, error) {

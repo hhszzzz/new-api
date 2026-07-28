@@ -149,20 +149,25 @@ func TestOaiChatToResponsesStreamHandlerConvertsSSEOrderAndUsage(t *testing.T) {
 	got := recorder.Body.String()
 	require.Equal(t, "text/event-stream", recorder.Header().Get("Content-Type"))
 	require.Contains(t, got, `event: response.created`)
+	require.Contains(t, got, `event: response.in_progress`)
 	require.Contains(t, got, `event: response.output_text.delta`)
 	require.Contains(t, got, `"delta":"hello"`)
 	require.Contains(t, got, `event: response.function_call_arguments.delta`)
 	require.Contains(t, got, `"delta":"{\"q\":\"x\"}"`)
 	require.Contains(t, got, `event: response.completed`)
+	require.Contains(t, got, `"phase":"commentary"`)
 	require.Contains(t, got, `"input_tokens":2`)
 	require.Contains(t, got, `"output_tokens":3`)
 	requireOrderedSubstrings(t, got,
 		`event: response.created`,
+		`event: response.in_progress`,
 		`event: response.output_item.added`,
+		`event: response.content_part.added`,
 		`event: response.output_text.delta`,
 		`event: response.output_item.added`,
 		`event: response.function_call_arguments.delta`,
 		`event: response.output_text.done`,
+		`event: response.content_part.done`,
 		`event: response.function_call_arguments.done`,
 		`event: response.completed`,
 	)

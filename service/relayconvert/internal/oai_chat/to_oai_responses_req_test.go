@@ -46,6 +46,30 @@ func TestChatCompletionsRequestToResponsesRequestRejectsMultipleChoices(t *testi
 	assert.Contains(t, err.Error(), "n>1")
 }
 
+func TestChatCompletionsRequestToResponsesRequestPreservesAssistantReasoning(t *testing.T) {
+	reasoning := "inspect the inputs"
+	assistant := assistantMessageWithTool("I will call lookup.", "call_1", "lookup", `{"q":"x"}`)
+	assistant.ReasoningContent = &reasoning
+
+	got, err := ChatCompletionsRequestToResponsesRequest(&dto.GeneralOpenAIRequest{
+		Model:    "gpt-test",
+		Messages: []dto.Message{assistant},
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, "reasoning", gjson.GetBytes(got.Input, "0.type").String())
+	assert.Equal(t, "rs_bridge_0", gjson.GetBytes(got.Input, "0.id").String())
+	assert.Equal(t, "completed", gjson.GetBytes(got.Input, "0.status").String())
+	assert.Equal(t, "summary_text", gjson.GetBytes(got.Input, "0.summary.0.type").String())
+	assert.Equal(t, reasoning, gjson.GetBytes(got.Input, "0.summary.0.text").String())
+	assert.Equal(t, "reasoning_text", gjson.GetBytes(got.Input, "0.content.0.type").String())
+	assert.Equal(t, reasoning, gjson.GetBytes(got.Input, "0.content.0.text").String())
+	assert.False(t, gjson.GetBytes(got.Input, "0.encrypted_content").Exists())
+	assert.Equal(t, "assistant", gjson.GetBytes(got.Input, "1.role").String())
+	assert.Equal(t, "I will call lookup.", gjson.GetBytes(got.Input, "1.content").String())
+	assert.Equal(t, "function_call", gjson.GetBytes(got.Input, "2.type").String())
+}
+
 func assistantMessageWithTool(content string, id string, name string, args string) dto.Message {
 	msg := dto.Message{Role: "assistant", Content: content}
 	msg.SetToolCalls([]dto.ToolCallRequest{

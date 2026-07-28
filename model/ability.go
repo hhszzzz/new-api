@@ -34,6 +34,23 @@ type AbilityWithChannel struct {
 
 type ChannelCandidateFilter func(channel *Channel) bool
 
+type ChannelCandidateClass int
+
+const (
+	ChannelCandidateIncompatible ChannelCandidateClass = iota
+	ChannelCandidateConvertible
+	ChannelCandidateNative
+)
+
+type ChannelCandidateClassifier func(channel *Channel) ChannelCandidateClass
+
+var ErrNoCompatibleChannel = errors.New("no channel supports the requested protocol or request features")
+
+type channelSelectionTier struct {
+	Class    ChannelCandidateClass
+	Priority int64
+}
+
 func GetAllEnableAbilityWithChannels() ([]AbilityWithChannel, error) {
 	var abilities []AbilityWithChannel
 	err := DB.Table("abilities").
@@ -110,6 +127,10 @@ func GetChannelInPool(group string, model string, retry int, requestPath string,
 }
 
 func GetChannelInPoolWithFilter(group string, modelName string, retry int, requestPath string, channelIds []int, candidateFilter ChannelCandidateFilter) (*Channel, error) {
+	return GetChannelInPoolWithClassifier(group, modelName, retry, requestPath, channelIds, candidateFilter, nil)
+}
+
+func GetChannelInPoolWithClassifier(group string, modelName string, retry int, requestPath string, channelIds []int, candidateFilter ChannelCandidateFilter, candidateClassifier ChannelCandidateClassifier) (*Channel, error) {
 	abilities, channels, err := findEligibleChannelAbilities(group, modelName, modelName, requestPath, channelIds, candidateFilter)
 	if err != nil {
 		return nil, err
@@ -127,35 +148,40 @@ func GetChannelInPoolWithFilter(group string, modelName string, retry int, reque
 		return nil, nil
 	}
 
-	priorities := make(map[int64]struct{})
+	eligibleAbilities := make([]Ability, 0, len(abilities))
 	for _, ability := range abilities {
-		priority := int64(0)
-		if ability.Priority != nil {
-			priority = *ability.Priority
+		channel := channels[ability.ChannelId]
+		if channel == nil {
+			return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", ability.ChannelId)
 		}
-		priorities[priority] = struct{}{}
+		if classifyChannel(channel, candidateClassifier) == ChannelCandidateIncompatible {
+			continue
+		}
+		eligibleAbilities = append(eligibleAbilities, ability)
 	}
-	sortedPriorities := make([]int64, 0, len(priorities))
-	for priority := range priorities {
-		sortedPriorities = append(sortedPriorities, priority)
+	if len(eligibleAbilities) == 0 {
+		if candidateClassifier != nil {
+			return nil, ErrNoCompatibleChannel
+		}
+		return nil, nil
 	}
-	sort.Slice(sortedPriorities, func(i, j int) bool {
-		return sortedPriorities[i] > sortedPriorities[j]
-	})
-	if retry >= len(sortedPriorities) {
-		retry = len(sortedPriorities) - 1
+
+	tiers := buildAbilitySelectionTiers(eligibleAbilities, channels, candidateClassifier)
+	if retry >= len(tiers) {
+		retry = len(tiers) - 1
 	}
 	if retry < 0 {
 		retry = 0
 	}
-	targetPriority := sortedPriorities[retry]
-	targetAbilities := make([]Ability, 0, len(abilities))
-	for _, ability := range abilities {
+	targetTier := tiers[retry]
+	targetAbilities := make([]Ability, 0, len(eligibleAbilities))
+	for _, ability := range eligibleAbilities {
 		priority := int64(0)
 		if ability.Priority != nil {
 			priority = *ability.Priority
 		}
-		if priority == targetPriority {
+		channel := channels[ability.ChannelId]
+		if priority == targetTier.Priority && classifyChannel(channel, candidateClassifier) == targetTier.Class {
 			targetAbilities = append(targetAbilities, ability)
 		}
 	}
@@ -176,6 +202,82 @@ func GetChannelInPoolWithFilter(group string, modelName string, retry int, reque
 		return nil, errors.New("channel not found after weighted selection")
 	}
 	return channel, nil
+}
+
+func classifyChannel(channel *Channel, classifier ChannelCandidateClassifier) ChannelCandidateClass {
+	if channel == nil {
+		return ChannelCandidateIncompatible
+	}
+	if classifier == nil {
+		return ChannelCandidateNative
+	}
+	class := classifier(channel)
+	if class != ChannelCandidateNative && class != ChannelCandidateConvertible {
+		return ChannelCandidateIncompatible
+	}
+	return class
+}
+
+func buildChannelSelectionTiers(channels []*Channel, classifier ChannelCandidateClassifier) []channelSelectionTier {
+	prioritiesByClass := map[ChannelCandidateClass]map[int64]struct{}{
+		ChannelCandidateNative:      {},
+		ChannelCandidateConvertible: {},
+	}
+	for _, channel := range channels {
+		class := classifyChannel(channel, classifier)
+		if class == ChannelCandidateIncompatible {
+			continue
+		}
+		prioritiesByClass[class][channel.GetPriority()] = struct{}{}
+	}
+
+	tiers := make([]channelSelectionTier, 0)
+	for _, class := range []ChannelCandidateClass{ChannelCandidateNative, ChannelCandidateConvertible} {
+		priorities := make([]int64, 0, len(prioritiesByClass[class]))
+		for priority := range prioritiesByClass[class] {
+			priorities = append(priorities, priority)
+		}
+		sort.Slice(priorities, func(i, j int) bool {
+			return priorities[i] > priorities[j]
+		})
+		for _, priority := range priorities {
+			tiers = append(tiers, channelSelectionTier{Class: class, Priority: priority})
+		}
+	}
+	return tiers
+}
+
+func buildAbilitySelectionTiers(abilities []Ability, channels map[int]*Channel, classifier ChannelCandidateClassifier) []channelSelectionTier {
+	prioritiesByClass := map[ChannelCandidateClass]map[int64]struct{}{
+		ChannelCandidateNative:      {},
+		ChannelCandidateConvertible: {},
+	}
+	for _, ability := range abilities {
+		class := classifyChannel(channels[ability.ChannelId], classifier)
+		if class == ChannelCandidateIncompatible {
+			continue
+		}
+		priority := int64(0)
+		if ability.Priority != nil {
+			priority = *ability.Priority
+		}
+		prioritiesByClass[class][priority] = struct{}{}
+	}
+
+	tiers := make([]channelSelectionTier, 0)
+	for _, class := range []ChannelCandidateClass{ChannelCandidateNative, ChannelCandidateConvertible} {
+		priorities := make([]int64, 0, len(prioritiesByClass[class]))
+		for priority := range prioritiesByClass[class] {
+			priorities = append(priorities, priority)
+		}
+		sort.Slice(priorities, func(i, j int) bool {
+			return priorities[i] > priorities[j]
+		})
+		for _, priority := range priorities {
+			tiers = append(tiers, channelSelectionTier{Class: class, Priority: priority})
+		}
+	}
+	return tiers
 }
 
 // findEligibleChannelAbilities loads all priorities first, then removes

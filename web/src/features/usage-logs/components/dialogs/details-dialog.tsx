@@ -620,10 +620,14 @@ export function DetailsDialog(props: DetailsDialogProps) {
     conversionChain.length <= 1
       ? t('Native format')
       : conversionChain.join(' -> ')
+  const upstreamProtocol =
+    adminInfo?.upstream_protocol ?? diagnostics?.upstream_protocol
+  const protocolConverter =
+    adminInfo?.protocol_converter ?? diagnostics?.protocol_converter
   const protocolConversion = [
     diagnostics?.request_protocol,
-    diagnostics?.protocol_converter,
-    diagnostics?.upstream_protocol,
+    protocolConverter,
+    upstreamProtocol,
   ].filter(Boolean) as string[]
   const displayedConversionLabel =
     protocolConversion.length > 0
@@ -874,17 +878,24 @@ export function DetailsDialog(props: DetailsDialogProps) {
                 mono
               />
             )}
-            {diagnostics.upstream_protocol && (
+            {upstreamProtocol && (
               <DetailRow
                 label={t('Upstream Protocol')}
-                value={diagnostics.upstream_protocol}
+                value={upstreamProtocol}
                 mono
               />
             )}
-            {diagnostics.protocol_converter && (
+            {protocolConverter && (
               <DetailRow
                 label={t('Protocol Converter')}
-                value={diagnostics.protocol_converter}
+                value={protocolConverter}
+                mono
+              />
+            )}
+            {adminInfo?.protocol_state_mode && (
+              <DetailRow
+                label={t('Protocol State Mode')}
+                value={adminInfo.protocol_state_mode}
                 mono
               />
             )}

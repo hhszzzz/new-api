@@ -15,7 +15,8 @@ const (
 	responsesEventDone                     = "response.done"
 	responsesEventIncomplete               = "response.incomplete"
 	responsesEventFailed                   = "response.failed"
-	responsesEventError                    = "response.error"
+	responsesEventError                    = "error"
+	responsesEventLegacyError              = "response.error"
 	responsesEventOutputTextDelta          = "response.output_text.delta"
 	responsesEventOutputItemAdded          = "response.output_item.added"
 	responsesEventOutputItemDone           = "response.output_item.done"
@@ -219,13 +220,36 @@ func ExtractReasoningTextFromResponses(resp *dto.OpenAIResponsesResponse) string
 		if out.Type != responsesOutputTypeReasoning {
 			continue
 		}
-		for _, c := range out.Content {
-			if c.Text != "" {
-				sb.WriteString(c.Text)
-			}
-		}
+		sb.WriteString(extractReasoningTextFromOutput(&out))
 	}
 	return sb.String()
+}
+
+func extractReasoningTextFromOutput(out *dto.ResponsesOutput) string {
+	if out == nil || out.Type != responsesOutputTypeReasoning {
+		return ""
+	}
+
+	var summary strings.Builder
+	for _, part := range out.Summary {
+		if part.Type == "summary_text" && part.Text != "" {
+			summary.WriteString(part.Text)
+		}
+	}
+
+	var visible strings.Builder
+	for _, part := range out.Content {
+		if (part.Type == "reasoning_text" || part.Type == "summary_text") && part.Text != "" {
+			visible.WriteString(part.Text)
+		}
+	}
+	if visible.Len() == 0 || visible.String() == summary.String() {
+		return summary.String()
+	}
+	if summary.Len() == 0 {
+		return visible.String()
+	}
+	return summary.String() + "\n\n" + visible.String()
 }
 
 func responseStatusString(resp *dto.OpenAIResponsesResponse) string {

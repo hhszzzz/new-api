@@ -7,6 +7,7 @@ import (
 	geminichat "github.com/QuantumNous/new-api/service/relayconvert/internal/gemini_chat"
 	oaichat "github.com/QuantumNous/new-api/service/relayconvert/internal/oai_chat"
 	oairesponses "github.com/QuantumNous/new-api/service/relayconvert/internal/oai_responses"
+	sharedbridge "github.com/QuantumNous/new-api/service/relayconvert/internal/shared/bridge"
 )
 
 type ClaudeResponseInfo = claudemessages.ClaudeResponseInfo
@@ -82,6 +83,14 @@ func StreamResponseGeminiChat2OpenAI(geminiResponse *dto.GeminiChatResponse) (*d
 
 func ChatCompletionsResponseToResponsesResponse(resp *dto.OpenAITextResponse, id string) (*dto.OpenAIResponsesResponse, *dto.Usage, error) {
 	return oaichat.ChatCompletionsResponseToResponsesResponse(resp, id)
+}
+
+func chatCompletionsResponseToResponsesResponseWithToolState(resp *dto.OpenAITextResponse, id string, state *sharedbridge.ToolState) (*dto.OpenAIResponsesResponse, *dto.Usage, error) {
+	return oaichat.ChatCompletionsResponseToResponsesResponseWithToolState(resp, id, state)
+}
+
+func chatCompletionsResponseToResponsesResponseWithBridgeState(resp *dto.OpenAITextResponse, id string, toolState *sharedbridge.ToolState, outputState *sharedbridge.ResponseOutputState) (*dto.OpenAIResponsesResponse, *dto.Usage, error) {
+	return oaichat.ChatCompletionsResponseToResponsesResponseWithBridgeState(resp, id, toolState, outputState)
 }
 
 func ResponsesStatusFromChatFinishReason(finishReason string) (string, *dto.IncompleteDetails) {

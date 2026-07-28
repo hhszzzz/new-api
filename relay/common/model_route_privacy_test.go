@@ -21,6 +21,16 @@ func routedPrivacyInfo() *RelayInfo {
 	}
 }
 
+func mappedPrivacyInfo() *RelayInfo {
+	return &RelayInfo{
+		OriginModelName: "gpt-public",
+		ChannelMeta: &ChannelMeta{
+			UpstreamModelName: "provider-gpt-private",
+			IsModelMapped:     true,
+		},
+	}
+}
+
 func TestRedactUserModelRouteJSONPreservesNumbersAndNestedMetadata(t *testing.T) {
 	input := []byte(`{"model":"provider-gpt-5.5","session":{"model":"provider-gpt-5.5"},"metadata":{"model":"client-label","model_name":"provider-gpt-5.5"},"count":18446744073709551615}`)
 	output, err := RedactUserModelRouteJSON(input, routedPrivacyInfo())
@@ -32,6 +42,15 @@ func TestRedactUserModelRouteJSONPreservesNumbersAndNestedMetadata(t *testing.T)
 	assert.JSONEq(t, `{"model":"gpt-5.4"}`, string(decoded["session"]))
 	assert.JSONEq(t, `{"model":"client-label","model_name":"provider-gpt-5.5"}`, string(decoded["metadata"]))
 	assert.Equal(t, "18446744073709551615", string(decoded["count"]))
+}
+
+func TestRedactUserModelRouteJSONAlsoProtectsChannelModelMapping(t *testing.T) {
+	input := []byte(`{"model":"provider-gpt-private","response":{"model":"provider-gpt-private"},"error":{"message":"provider-gpt-private unavailable"},"metadata":{"model":"provider-gpt-private"}}`)
+
+	output, err := RedactUserModelRouteJSON(input, mappedPrivacyInfo())
+
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"model":"gpt-public","response":{"model":"gpt-public"},"error":{"message":"gpt-public unavailable"},"metadata":{"model":"provider-gpt-private"}}`, string(output))
 }
 
 func TestRewriteUserModelRouteRequestJSONOnlyRewritesProtocolModelFields(t *testing.T) {

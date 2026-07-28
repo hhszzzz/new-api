@@ -56,7 +56,7 @@ func TestResponsesResponseToChatCompletionsPreservesReasoningSummary(t *testing.
 		Output: []dto.ResponsesOutput{
 			{
 				Type: responsesOutputTypeReasoning,
-				Content: []dto.ResponsesOutputContent{
+				Summary: []dto.ResponsesReasoningSummaryPart{
 					{Type: "summary_text", Text: "first summary"},
 					{Type: "summary_text", Text: "\n\nsecond summary"},
 				},
@@ -75,6 +75,23 @@ func TestResponsesResponseToChatCompletionsPreservesReasoningSummary(t *testing.
 	require.NoError(t, err)
 	assert.Equal(t, "first summary\n\nsecond summary", chat.Choices[0].Message.GetReasoningContent())
 	assert.Equal(t, "final", chat.Choices[0].Message.StringContent())
+}
+
+func TestResponsesResponseToChatCompletionsSupportsVisibleReasoningText(t *testing.T) {
+	resp := &dto.OpenAIResponsesResponse{
+		Output: []dto.ResponsesOutput{
+			{
+				Type: responsesOutputTypeReasoning,
+				Content: []dto.ResponsesOutputContent{
+					{Type: "reasoning_text", Text: "visible reasoning"},
+				},
+			},
+		},
+	}
+
+	chat, _, err := ResponsesResponseToChatCompletionsResponse(resp, "chatcmpl_1")
+	require.NoError(t, err)
+	assert.Equal(t, "visible reasoning", chat.Choices[0].Message.GetReasoningContent())
 }
 
 func TestResponsesFinishReasonFromIncompleteStatus(t *testing.T) {

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service/relayconvert"
@@ -442,6 +444,45 @@ func TestClaudeNativeStreamRedactsRoutedMessageModel(t *testing.T) {
 	require.NotContains(t, recorder.Body.String(), `"model":"provider-claude-private","content"`)
 }
 
+func TestClaudeNativeStreamLifecycleKeepsPublicModel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	oldTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = oldTimeout })
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	info := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatClaude,
+		OriginModelName: "claude-public",
+		IsStream:        true,
+		DisablePing:     true,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "provider-claude-model",
+			IsModelMapped:     true,
+		},
+	}
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(claudeSuccessfulStreamBody())),
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+	}
+
+	usage, apiErr := ClaudeStreamHandler(c, resp, info)
+
+	require.Nil(t, apiErr)
+	require.NotNil(t, usage)
+	assert.Equal(t, 8, usage.PromptTokens)
+	assert.Equal(t, 3, usage.CompletionTokens)
+	got := recorder.Body.String()
+	assert.Contains(t, got, `event: message_start`)
+	assert.Contains(t, got, `"model":"claude-public"`)
+	assert.NotContains(t, got, `"model":"provider-claude-model"`)
+	assert.Contains(t, got, `event: content_block_delta`)
+	assert.Contains(t, got, `"text":"hello"`)
+	assert.Contains(t, got, `event: message_stop`)
+}
+
 func TestClaudeNativeStreamTreatsReportedVersionAliasAsUnrouted(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
@@ -466,4 +507,161 @@ func TestClaudeNativeStreamTreatsReportedVersionAliasAsUnrouted(t *testing.T) {
 	require.Nil(t, newAPIError)
 	require.Equal(t, "claude-opus-4.8", info.UpstreamModelName)
 	require.False(t, info.HasModelRouting())
+}
+
+func TestClaudeUpstreamReturnsResponsesJSONWithPublicModel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	info := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatOpenAIResponses,
+		OriginModelName: "gpt-public",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "provider-claude-model",
+		},
+	}
+	claudeInfo := &ClaudeResponseInfo{Usage: &dto.Usage{}}
+	body := []byte(`{
+		"id":"msg_upstream",
+		"type":"message",
+		"role":"assistant",
+		"model":"provider-claude-model",
+		"content":[
+			{"type":"thinking","thinking":"check the data"},
+			{"type":"text","text":"hello"},
+			{"type":"tool_use","id":"toolu_1","name":"lookup","input":{"q":"x"}}
+		],
+		"stop_reason":"tool_use",
+		"usage":{
+			"input_tokens":8,
+			"cache_creation_input_tokens":3,
+			"cache_read_input_tokens":2,
+			"output_tokens":4,
+			"cache_creation":{"ephemeral_5m_input_tokens":3}
+		}
+	}`)
+
+	apiErr := HandleClaudeResponseData(c, info, claudeInfo, nil, body)
+	require.Nil(t, apiErr)
+
+	var response dto.OpenAIResponsesResponse
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	assert.Equal(t, "response", response.Object)
+	assert.Equal(t, "gpt-public", response.Model)
+	require.JSONEq(t, `"completed"`, string(response.Status))
+	require.Len(t, response.Output, 3)
+	assert.Equal(t, "reasoning", response.Output[0].Type)
+	require.Len(t, response.Output[0].Summary, 1)
+	assert.Equal(t, "summary_text", response.Output[0].Summary[0].Type)
+	assert.Equal(t, "check the data", response.Output[0].Summary[0].Text)
+	assert.Empty(t, response.Output[0].Content)
+	assert.Equal(t, "message", response.Output[1].Type)
+	assert.Equal(t, "hello", response.Output[1].Content[0].Text)
+	assert.Equal(t, "function_call", response.Output[2].Type)
+	assert.Equal(t, "toolu_1", response.Output[2].CallId)
+	assert.Equal(t, "lookup", response.Output[2].Name)
+	require.JSONEq(t, `"{\"q\":\"x\"}"`, string(response.Output[2].Arguments))
+
+	require.NotNil(t, response.Usage)
+	assert.Equal(t, 13, response.Usage.InputTokens)
+	assert.Equal(t, 4, response.Usage.OutputTokens)
+	assert.Equal(t, 17, response.Usage.TotalTokens)
+	require.NotNil(t, response.Usage.InputTokensDetails)
+	assert.Equal(t, 2, response.Usage.InputTokensDetails.CachedTokens)
+	assert.Equal(t, 3, response.Usage.InputTokensDetails.CachedCreationTokens)
+	assert.Equal(t, 3, response.Usage.InputTokensDetails.CacheWriteTokens)
+	assert.Equal(t, 12, claudeInfo.Usage.TotalTokens)
+}
+
+func TestClaudeUpstreamReturnsResponsesSSEWithPublicModel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	oldTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = oldTimeout })
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatOpenAIResponses,
+		OriginModelName: "gpt-public",
+		IsStream:        true,
+		DisablePing:     true,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "provider-claude-model",
+			IsModelMapped:     true,
+		},
+	}
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(claudeSuccessfulStreamBody())),
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+	}
+
+	usage, apiErr := ClaudeStreamHandler(c, resp, info)
+
+	require.Nil(t, apiErr)
+	require.NotNil(t, usage)
+	assert.Equal(t, 8, usage.PromptTokens)
+	assert.Equal(t, 3, usage.CompletionTokens)
+	got := recorder.Body.String()
+	assert.Contains(t, got, `event: response.created`)
+	assert.Contains(t, got, `"model":"gpt-public"`)
+	assert.Contains(t, got, `event: response.output_text.delta`)
+	assert.Contains(t, got, `"delta":"hello"`)
+	assert.Contains(t, got, `event: response.completed`)
+	assert.Contains(t, got, `"input_tokens":8`)
+	assert.Contains(t, got, `"output_tokens":3`)
+}
+
+func claudeSuccessfulStreamBody() string {
+	return strings.Join([]string{
+		`data: {"type":"message_start","message":{"id":"msg_upstream","type":"message","role":"assistant","model":"provider-claude-model","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":8,"cache_read_input_tokens":2,"output_tokens":1}}}`,
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}`,
+		`data: {"type":"content_block_stop","index":0}`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":3}}`,
+		`data: {"type":"message_stop"}`,
+		`data: [DONE]`,
+		``,
+	}, "\n")
+}
+
+func TestClaudeStreamErrorStopsResponsesConversion(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	oldTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = oldTimeout })
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatOpenAIResponses,
+		OriginModelName: "gpt-public",
+		IsStream:        true,
+		DisablePing:     true,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "provider-claude-model",
+		},
+	}
+	body := strings.Join([]string{
+		`data: {"type":"message_start","message":{"id":"msg_upstream","type":"message","role":"assistant","model":"provider-claude-model","content":[],"usage":{"input_tokens":2,"output_tokens":0}}}`,
+		`data: {"type":"error","error":{"type":"api_error","message":"provider failed"}}`,
+		`data: [DONE]`,
+		``,
+	}, "\n")
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+	}
+
+	usage, apiErr := ClaudeStreamHandler(c, resp, info)
+
+	require.Nil(t, usage)
+	require.NotNil(t, apiErr)
+	assert.Equal(t, "provider failed", apiErr.ToClaudeError().Message)
+	assert.Contains(t, recorder.Body.String(), `event: response.created`)
+	assert.NotContains(t, recorder.Body.String(), `event: response.completed`)
 }

@@ -181,6 +181,7 @@ export interface LogOtherData {
     actual_channel_name?: string
     upstream_protocol?: string
     protocol_converter?: string
+    protocol_state_mode?: string
     route_pool_name?: string
     route_rule_id?: number
   }

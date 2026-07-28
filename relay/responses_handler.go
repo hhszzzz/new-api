@@ -14,6 +14,8 @@ import (
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/channelcompat"
+	"github.com/QuantumNous/new-api/service/protocolstate"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
@@ -79,8 +81,21 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
 	}
 	adaptor.Init(info)
+	plan, hasPlan := selectedProtocolPlan(c)
+	if !hasPlan {
+		plan = channelcompat.ProtocolPlan{
+			RequestProtocol:  channelcompat.ProtocolResponses,
+			UpstreamProtocol: channelcompat.ProtocolResponses,
+			Status:           channelcompat.StatusNative,
+		}
+	}
+	if err := protocolstate.PrepareResponsesRequest(c, info, plan, request); err != nil {
+		return types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+	}
+	restoreProtocolPlan := applyProtocolPlan(info, plan)
+	defer restoreProtocolPlan()
 	var requestBody io.Reader
-	if info.ShouldPassThroughBody() {
+	if info.ShouldPassThroughBody() && !protocolPlanRequiresConversion(plan) && !protocolstate.Enabled() {
 		storage, err := common.GetBodyStorage(c)
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeReadRequestBodyFailed, types.ErrOptionWithSkipRetry())
@@ -92,7 +107,7 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		// which keeps adaptors that do compose them (Codex) from injecting twice.
 		applyResponsesInstructionsIfNeeded(c, info, request)
 
-		convertedRequest, err := adaptor.ConvertOpenAIResponsesRequest(c, info, *request)
+		convertedRequest, err := convertRequestForProtocolPlan(c, info, adaptor, plan, request)
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}

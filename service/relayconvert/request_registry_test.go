@@ -48,6 +48,7 @@ func TestRequestConverterRegistryListsSupportedTextConverters(t *testing.T) {
 				ConverterClaudeMessagesToOpenAIChat,
 				ConverterOpenAIChatToOpenAIResponses,
 			},
+			advancedCustom: true,
 		},
 		{
 			converter: requestConverterGeminiToClaude,
@@ -70,10 +71,11 @@ func TestRequestConverterRegistryListsSupportedTextConverters(t *testing.T) {
 			},
 		},
 		{
-			converter: requestConverterResponsesToClaude,
-			from:      types.RelayFormatOpenAIResponses,
-			to:        types.RelayFormatClaude,
-			quality:   RequestConverterQualityFair,
+			converter:      requestConverterResponsesToClaude,
+			from:           types.RelayFormatOpenAIResponses,
+			to:             types.RelayFormatClaude,
+			quality:        RequestConverterQualityFair,
+			advancedCustom: true,
 		},
 		{
 			converter:      ConverterOpenAIResponsesToGemini,
@@ -518,6 +520,11 @@ func TestConvertRequestResponsesToClaudeUsesDirectConverter(t *testing.T) {
 				"content": "question",
 			},
 			{
+				"type":              "reasoning",
+				"summary":           []map[string]any{{"type": "summary_text", "text": "inspect inputs"}},
+				"encrypted_content": "opaque-openai-state",
+			},
+			{
 				"role": "assistant",
 				"content": []map[string]any{
 					{"type": "output_text", "text": "I will call."},
@@ -597,6 +604,14 @@ func TestConvertRequestResponsesToClaudeUsesDirectConverter(t *testing.T) {
 	assert.Equal(t, "call_1", assistantParts[1].Id)
 	assert.Equal(t, "lookup", assistantParts[1].Name)
 	assert.Equal(t, map[string]any{"q": "x"}, assistantParts[1].Input)
+	for _, part := range assistantParts {
+		assert.NotEqual(t, "thinking", part.Type)
+		assert.Empty(t, part.Signature)
+	}
+	encodedClaudeRequest, err := common.Marshal(claudeReq)
+	require.NoError(t, err)
+	assert.NotContains(t, string(encodedClaudeRequest), "encrypted_content")
+	assert.NotContains(t, string(encodedClaudeRequest), "opaque-openai-state")
 
 	assert.Equal(t, "user", claudeReq.Messages[2].Role)
 	toolResultParts, err := claudeReq.Messages[2].ParseContent()

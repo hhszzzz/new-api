@@ -8,6 +8,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
+	sharedbridge "github.com/QuantumNous/new-api/service/relayconvert/internal/shared/bridge"
 )
 
 const (
@@ -15,15 +16,21 @@ const (
 	chatFinishReasonContentFilter = "content_filter"
 
 	responsesEventCreated                  = "response.created"
+	responsesEventInProgress               = "response.in_progress"
 	responsesEventCompleted                = "response.completed"
 	responsesEventIncomplete               = "response.incomplete"
+	responsesEventContentPartAdded         = "response.content_part.added"
+	responsesEventContentPartDone          = "response.content_part.done"
 	responsesEventOutputTextDelta          = "response.output_text.delta"
+	responsesEventOutputTextDone           = "response.output_text.done"
 	responsesEventOutputItemAdded          = "response.output_item.added"
 	responsesEventOutputItemDone           = "response.output_item.done"
 	responsesEventFunctionArgsDelta        = "response.function_call_arguments.delta"
 	responsesEventFunctionArgsDone         = "response.function_call_arguments.done"
 	responsesEventReasoningSummaryDelta    = "response.reasoning_summary_text.delta"
 	responsesEventReasoningSummaryDone     = "response.reasoning_summary_text.done"
+	responsesEventReasoningPartAdded       = "response.reasoning_summary_part.added"
+	responsesEventReasoningPartDone        = "response.reasoning_summary_part.done"
 	responsesOutputTypeFunctionCall        = "function_call"
 	responsesOutputTypeMessage             = "message"
 	responsesOutputTypeReasoning           = "reasoning"
@@ -32,6 +39,14 @@ const (
 )
 
 func ChatCompletionsResponseToResponsesResponse(resp *dto.OpenAITextResponse, id string) (*dto.OpenAIResponsesResponse, *dto.Usage, error) {
+	return ChatCompletionsResponseToResponsesResponseWithToolState(resp, id, nil)
+}
+
+func ChatCompletionsResponseToResponsesResponseWithToolState(resp *dto.OpenAITextResponse, id string, toolState *sharedbridge.ToolState) (*dto.OpenAIResponsesResponse, *dto.Usage, error) {
+	return ChatCompletionsResponseToResponsesResponseWithBridgeState(resp, id, toolState, nil)
+}
+
+func ChatCompletionsResponseToResponsesResponseWithBridgeState(resp *dto.OpenAITextResponse, id string, toolState *sharedbridge.ToolState, outputState *sharedbridge.ResponseOutputState) (*dto.OpenAIResponsesResponse, *dto.Usage, error) {
 	if resp == nil {
 		return nil, nil, errors.New("response is nil")
 	}
@@ -52,49 +67,111 @@ func ChatCompletionsResponseToResponsesResponse(resp *dto.OpenAITextResponse, id
 	}
 
 	choice := resp.Choices[0]
+	toolCalls := choice.Message.ParseToolCalls()
 	if status, details := ResponsesStatusFromChatFinishReason(choice.FinishReason); status != "" {
 		out.Status = []byte(fmt.Sprintf("%q", status))
 		out.IncompleteDetails = details
 	}
 
-	if text := choice.Message.StringContent(); text != "" {
-		out.Output = append(out.Output, dto.ResponsesOutput{
-			Type:   responsesOutputTypeMessage,
-			ID:     fmt.Sprintf("%s_msg_0", id),
-			Status: responseOutputStatus(out),
-			Role:   "assistant",
-			Content: []dto.ResponsesOutputContent{
-				{
-					Type:        "output_text",
-					Text:        text,
-					Annotations: []interface{}{},
-				},
-			},
-		})
-	}
-	if reasoning := choice.Message.GetReasoningContent(); reasoning != "" {
-		out.Output = append(out.Output, dto.ResponsesOutput{
-			Type:   responsesOutputTypeReasoning,
-			ID:     fmt.Sprintf("%s_reasoning_0", id),
-			Status: responseOutputStatus(out),
-			Content: []dto.ResponsesOutputContent{
-				{
-					Type: "summary_text",
-					Text: reasoning,
-				},
-			},
-		})
-	}
-
-	for i, toolCall := range choice.Message.ParseToolCalls() {
-		toolOutput, err := chatToolCallToResponsesOutput(toolCall, id, i, responseOutputStatus(out))
+	toolOutputs := make([]dto.ResponsesOutput, 0, len(toolCalls))
+	for i, toolCall := range toolCalls {
+		toolOutput, err := chatToolCallToResponsesOutput(toolCall, id, i, responseOutputStatus(out), toolState)
 		if err != nil {
 			return nil, nil, err
 		}
-		out.Output = append(out.Output, toolOutput)
+		toolOutputs = append(toolOutputs, toolOutput)
+	}
+
+	text := choice.Message.StringContent()
+	reasoning := choice.Message.GetReasoningContent()
+	if outputState == nil || len(outputState.Items) == 0 {
+		if reasoning != "" {
+			out.Output = append(out.Output, chatResponseReasoningOutput(id, 0, reasoning, responseOutputStatus(out)))
+		}
+		if text != "" {
+			out.Output = append(out.Output, chatResponseMessageOutput(id, 0, text, len(toolCalls) > 0, responseOutputStatus(out)))
+		}
+		out.Output = append(out.Output, toolOutputs...)
+		return out, usage, nil
+	}
+
+	usedTools := make([]bool, len(toolOutputs))
+	messageIndex := 0
+	reasoningIndex := 0
+	usedMessage := false
+	usedReasoning := false
+	for _, item := range outputState.Items {
+		switch item.Kind {
+		case sharedbridge.ResponseOutputKindMessage:
+			if item.Text == "" {
+				continue
+			}
+			out.Output = append(out.Output, chatResponseMessageOutput(id, messageIndex, item.Text, len(toolCalls) > 0, responseOutputStatus(out)))
+			messageIndex++
+			usedMessage = true
+		case sharedbridge.ResponseOutputKindReasoning:
+			if item.Text == "" {
+				continue
+			}
+			out.Output = append(out.Output, chatResponseReasoningOutput(id, reasoningIndex, item.Text, responseOutputStatus(out)))
+			reasoningIndex++
+			usedReasoning = true
+		case sharedbridge.ResponseOutputKindTool:
+			if item.ToolIndex < 0 || item.ToolIndex >= len(toolOutputs) || usedTools[item.ToolIndex] {
+				continue
+			}
+			out.Output = append(out.Output, toolOutputs[item.ToolIndex])
+			usedTools[item.ToolIndex] = true
+		}
+	}
+	if reasoning != "" && !usedReasoning {
+		out.Output = append(out.Output, chatResponseReasoningOutput(id, reasoningIndex, reasoning, responseOutputStatus(out)))
+	}
+	if text != "" && !usedMessage {
+		out.Output = append(out.Output, chatResponseMessageOutput(id, messageIndex, text, len(toolCalls) > 0, responseOutputStatus(out)))
+	}
+	for i := range toolOutputs {
+		if !usedTools[i] {
+			out.Output = append(out.Output, toolOutputs[i])
+		}
 	}
 
 	return out, usage, nil
+}
+
+func chatResponseMessageOutput(responseID string, index int, text string, hasToolCalls bool, status string) dto.ResponsesOutput {
+	phase := "final_answer"
+	if hasToolCalls {
+		phase = "commentary"
+	}
+	return dto.ResponsesOutput{
+		Type:   responsesOutputTypeMessage,
+		ID:     fmt.Sprintf("%s_msg_%d", responseID, index),
+		Status: status,
+		Role:   "assistant",
+		Phase:  phase,
+		Content: []dto.ResponsesOutputContent{
+			{
+				Type:        "output_text",
+				Text:        text,
+				Annotations: []interface{}{},
+			},
+		},
+	}
+}
+
+func chatResponseReasoningOutput(responseID string, index int, reasoning string, status string) dto.ResponsesOutput {
+	return dto.ResponsesOutput{
+		Type:   responsesOutputTypeReasoning,
+		ID:     fmt.Sprintf("%s_reasoning_%d", responseID, index),
+		Status: status,
+		Summary: []dto.ResponsesReasoningSummaryPart{
+			{
+				Type: "summary_text",
+				Text: reasoning,
+			},
+		},
+	}
 }
 
 func ResponsesStatusFromChatFinishReason(finishReason string) (string, *dto.IncompleteDetails) {
@@ -169,12 +246,45 @@ func responseStatusString(resp *dto.OpenAIResponsesResponse) string {
 	return strings.TrimSpace(status)
 }
 
-func chatToolCallToResponsesOutput(toolCall dto.ToolCallRequest, responseID string, index int, status string) (dto.ResponsesOutput, error) {
+func chatToolCallToResponsesOutput(toolCall dto.ToolCallRequest, responseID string, index int, status string, toolState *sharedbridge.ToolState) (dto.ResponsesOutput, error) {
 	callID := strings.TrimSpace(toolCall.ID)
 	if callID == "" {
 		callID = fmt.Sprintf("%s_call_%d", responseID, index)
 	}
 	if toolCall.Type == "" || toolCall.Type == "function" {
+		if identity, ok := toolState.ResolveUpstream(toolCall.Function.Name); ok {
+			switch identity.Kind {
+			case sharedbridge.ToolKindCustom:
+				return dto.ResponsesOutput{
+					Type:      "custom_tool_call",
+					ID:        callID,
+					Status:    status,
+					CallId:    callID,
+					Name:      identity.Name,
+					Namespace: identity.Namespace,
+					Input:     sharedbridge.DecodeCustomInput(toolCall.Function.Arguments),
+				}, nil
+			case sharedbridge.ToolKindToolSearch:
+				return dto.ResponsesOutput{
+					Type:      "tool_search_call",
+					ID:        callID,
+					Status:    status,
+					CallId:    callID,
+					Execution: "client",
+					Arguments: sharedbridge.ToolSearchArgumentsRaw(toolCall.Function.Arguments),
+				}, nil
+			case sharedbridge.ToolKindFunction:
+				return dto.ResponsesOutput{
+					Type:      responsesOutputTypeFunctionCall,
+					ID:        callID,
+					Status:    status,
+					CallId:    callID,
+					Name:      identity.Name,
+					Namespace: identity.Namespace,
+					Arguments: chatArgumentsRawMessage(toolCall.Function.Arguments),
+				}, nil
+			}
+		}
 		return dto.ResponsesOutput{
 			Type:      responsesOutputTypeFunctionCall,
 			ID:        callID,

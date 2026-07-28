@@ -48,6 +48,10 @@ import {
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
+import {
+  protocolBridgePolicyFormSchema,
+  serializeProtocolBridgePolicy,
+} from './protocol-bridge-policy'
 
 const thinkingBlacklistExample = JSON.stringify(
   ['moonshotai/kimi-k2-thinking', 'kimi-k2-thinking'],
@@ -92,6 +96,7 @@ const schema = z.object({
     pass_through_request_enabled: z.boolean(),
     thinking_model_blacklist: jsonString,
     chat_completions_to_responses_policy: jsonString,
+    protocol_bridge_policy: protocolBridgePolicyFormSchema,
   }),
   general_setting: z.object({
     ping_interval_enabled: z.boolean(),
@@ -106,6 +111,7 @@ type FlatGlobalModelSettings = {
   'global.pass_through_request_enabled': boolean
   'global.thinking_model_blacklist': string
   'global.chat_completions_to_responses_policy': string
+  'global.protocol_bridge_policy': string
   'general_setting.ping_interval_enabled': boolean
   'general_setting.ping_interval_seconds': number
 }
@@ -122,6 +128,9 @@ const flattenGlobalValues = (
   'global.chat_completions_to_responses_policy': normalizeJsonText(
     values.global.chat_completions_to_responses_policy,
     '{}'
+  ),
+  'global.protocol_bridge_policy': serializeProtocolBridgePolicy(
+    values.global.protocol_bridge_policy
   ),
   'general_setting.ping_interval_enabled':
     values.general_setting.ping_interval_enabled,
@@ -156,6 +165,9 @@ export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
   }, [defaultValues, form])
 
   const pingEnabled = form.watch('general_setting.ping_interval_enabled')
+  const protocolBridgeEnabled = form.watch(
+    'global.protocol_bridge_policy.enabled'
+  )
 
   const onSubmit = async (values: GlobalModelSettingsFormValues) => {
     const flattenedDefaults = flattenGlobalValues(defaultValues)
@@ -314,6 +326,154 @@ export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
                 </FormItem>
               )}
             />
+          </div>
+
+          <Separator />
+
+          <div className='space-y-4'>
+            <div className='flex items-center gap-2'>
+              <h3 className='text-base font-semibold'>
+                {t('Bidirectional Protocol Bridge')}
+              </h3>
+              <StatusBadge
+                label={t('Preview')}
+                variant='neutral'
+                copyable={false}
+              />
+            </div>
+
+            <FormField
+              control={form.control}
+              name='global.protocol_bridge_policy.enabled'
+              render={({ field }) => (
+                <SettingsSwitchItem>
+                  <SettingsSwitchContent>
+                    <FormLabel>{t('Enable protocol bridge')}</FormLabel>
+                    <FormDescription>
+                      {t(
+                        'Allow Responses and Messages clients to use compatible Chat, Messages, or Responses upstreams.'
+                      )}
+                    </FormDescription>
+                  </SettingsSwitchContent>
+                  <FormControl>
+                    <Switch
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                    />
+                  </FormControl>
+                </SettingsSwitchItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='global.protocol_bridge_policy.default_allow_conversion'
+              render={({ field }) => (
+                <SettingsSwitchItem>
+                  <SettingsSwitchContent>
+                    <FormLabel>{t('Allow conversion by default')}</FormLabel>
+                    <FormDescription>
+                      {t(
+                        'Channels without an explicit conversion setting inherit this value.'
+                      )}
+                    </FormDescription>
+                  </SettingsSwitchContent>
+                  <FormControl>
+                    <Switch
+                      checked={field.value}
+                      disabled={!protocolBridgeEnabled}
+                      onCheckedChange={field.onChange}
+                    />
+                  </FormControl>
+                </SettingsSwitchItem>
+              )}
+            />
+
+            <div className='grid gap-4 sm:grid-cols-3'>
+              <FormField
+                control={form.control}
+                name='global.protocol_bridge_policy.state_ttl_seconds'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('State idle TTL (seconds)')}</FormLabel>
+                    <FormControl>
+                      <Input
+                        type='number'
+                        min={60}
+                        max={86400}
+                        step={60}
+                        disabled={!protocolBridgeEnabled}
+                        value={String(field.value)}
+                        onChange={(event) => field.onChange(event.target.value)}
+                        onBlur={field.onBlur}
+                        name={field.name}
+                        ref={field.ref}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t('Valid range: 60 to 86400 seconds.')}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='global.protocol_bridge_policy.max_state_turns'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Maximum state turns')}</FormLabel>
+                    <FormControl>
+                      <Input
+                        type='number'
+                        min={1}
+                        max={512}
+                        step={1}
+                        disabled={!protocolBridgeEnabled}
+                        value={String(field.value)}
+                        onChange={(event) => field.onChange(event.target.value)}
+                        onBlur={field.onBlur}
+                        name={field.name}
+                        ref={field.ref}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t('Valid range: 1 to 512 turns.')}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='global.protocol_bridge_policy.max_state_mebibytes'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Maximum state size (MiB)')}</FormLabel>
+                    <FormControl>
+                      <Input
+                        type='number'
+                        min={0.0625}
+                        max={16}
+                        step={0.0625}
+                        disabled={!protocolBridgeEnabled}
+                        value={String(field.value)}
+                        onChange={(event) => field.onChange(event.target.value)}
+                        onBlur={field.onBlur}
+                        name={field.name}
+                        ref={field.ref}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t('Valid range: 0.0625 to 16 MiB.')}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
           </div>
 
           <Separator />

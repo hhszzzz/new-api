@@ -1,14 +1,12 @@
 package helper
 
 import (
-	"errors"
-	"fmt"
 	"strings"
 
-	appcommon "github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/service/modelmapping"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 )
@@ -29,41 +27,14 @@ func ModelMappedHelper(c *gin.Context, info *common.RelayInfo, request dto.Reque
 
 	// map model name
 	modelMapping := c.GetString("model_mapping")
-	if modelMapping != "" && modelMapping != "{}" {
-		modelMap := make(map[string]string)
-		err := appcommon.Unmarshal([]byte(modelMapping), &modelMap)
-		if err != nil {
-			return fmt.Errorf("unmarshal_model_mapping_failed")
-		}
-
-		// 支持链式模型重定向，最终使用链尾的模型
-		currentModel := mappingModelName
-		visitedModels := map[string]bool{
-			currentModel: true,
-		}
-		for {
-			if mappedModel, exists := modelMap[currentModel]; exists && mappedModel != "" {
-				// 模型重定向循环检测，避免无限循环
-				if visitedModels[mappedModel] {
-					if mappedModel == currentModel {
-						if currentModel == mappingModelName {
-							break
-						} else {
-							info.IsModelMapped = true
-							break
-						}
-					}
-					return errors.New("model_mapping_contains_cycle")
-				}
-				visitedModels[mappedModel] = true
-				currentModel = mappedModel
-				info.IsModelMapped = true
-			} else {
-				break
-			}
-		}
-		info.UpstreamModelName = currentModel
+	resolved, err := modelmapping.Resolve(modelMapping, mappingModelName)
+	if err != nil {
+		return err
 	}
+	if resolved.Mapped {
+		info.IsModelMapped = true
+	}
+	info.UpstreamModelName = resolved.Model
 
 	if isResponsesCompact {
 		finalUpstreamModelName := mappingModelName

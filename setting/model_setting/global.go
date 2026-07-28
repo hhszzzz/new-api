@@ -1,11 +1,46 @@
 package model_setting
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 
 	"github.com/QuantumNous/new-api/setting/config"
 )
+
+const (
+	DefaultProtocolBridgeStateTTLSeconds = 3600
+	DefaultProtocolBridgeMaxStateTurns   = 128
+	DefaultProtocolBridgeMaxStateBytes   = 4 * 1024 * 1024
+
+	MinProtocolBridgeStateTTLSeconds = 60
+	MaxProtocolBridgeStateTTLSeconds = 24 * 60 * 60
+	MinProtocolBridgeMaxStateTurns   = 1
+	MaxProtocolBridgeMaxStateTurns   = 512
+	MinProtocolBridgeMaxStateBytes   = 64 * 1024
+	MaxProtocolBridgeMaxStateBytes   = 16 * 1024 * 1024
+)
+
+type ProtocolBridgePolicy struct {
+	Enabled                bool `json:"enabled"`
+	DefaultAllowConversion bool `json:"default_allow_conversion"`
+	StateTTLSeconds        int  `json:"state_ttl_seconds"`
+	MaxStateTurns          int  `json:"max_state_turns"`
+	MaxStateBytes          int  `json:"max_state_bytes"`
+}
+
+func (p ProtocolBridgePolicy) Validate() error {
+	if p.StateTTLSeconds < MinProtocolBridgeStateTTLSeconds || p.StateTTLSeconds > MaxProtocolBridgeStateTTLSeconds {
+		return fmt.Errorf("protocol_bridge_policy.state_ttl_seconds must be between %d and %d", MinProtocolBridgeStateTTLSeconds, MaxProtocolBridgeStateTTLSeconds)
+	}
+	if p.MaxStateTurns < MinProtocolBridgeMaxStateTurns || p.MaxStateTurns > MaxProtocolBridgeMaxStateTurns {
+		return fmt.Errorf("protocol_bridge_policy.max_state_turns must be between %d and %d", MinProtocolBridgeMaxStateTurns, MaxProtocolBridgeMaxStateTurns)
+	}
+	if p.MaxStateBytes < MinProtocolBridgeMaxStateBytes || p.MaxStateBytes > MaxProtocolBridgeMaxStateBytes {
+		return fmt.Errorf("protocol_bridge_policy.max_state_bytes must be between %d and %d", MinProtocolBridgeMaxStateBytes, MaxProtocolBridgeMaxStateBytes)
+	}
+	return nil
+}
 
 type ChatCompletionsToResponsesPolicy struct {
 	Enabled       bool     `json:"enabled"`
@@ -36,6 +71,7 @@ type GlobalSettings struct {
 	PassThroughRequestEnabled        bool                             `json:"pass_through_request_enabled"`
 	ThinkingModelBlacklist           []string                         `json:"thinking_model_blacklist"`
 	ChatCompletionsToResponsesPolicy ChatCompletionsToResponsesPolicy `json:"chat_completions_to_responses_policy"`
+	ProtocolBridgePolicy             ProtocolBridgePolicy             `json:"protocol_bridge_policy"`
 }
 
 // 默认配置
@@ -49,6 +85,13 @@ var defaultOpenaiSettings = GlobalSettings{
 		Enabled:     false,
 		AllChannels: true,
 	},
+	ProtocolBridgePolicy: ProtocolBridgePolicy{
+		Enabled:                false,
+		DefaultAllowConversion: false,
+		StateTTLSeconds:        DefaultProtocolBridgeStateTTLSeconds,
+		MaxStateTurns:          DefaultProtocolBridgeMaxStateTurns,
+		MaxStateBytes:          DefaultProtocolBridgeMaxStateBytes,
+	},
 }
 
 // 全局实例
@@ -61,6 +104,10 @@ func init() {
 
 func GetGlobalSettings() *GlobalSettings {
 	return &globalSettings
+}
+
+func (s *GlobalSettings) ValidateConfig() error {
+	return s.ProtocolBridgePolicy.Validate()
 }
 
 // ShouldPreserveThinkingSuffix 判断模型是否配置为保留 thinking/-nothinking/-low/-high/-medium 后缀

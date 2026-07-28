@@ -103,6 +103,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import {
   Tooltip,
   TooltipContent,
@@ -163,6 +164,7 @@ import {
   getChannelTypeIcon,
   getKeyPromptForType,
   parseModelsString,
+  defaultUpstreamProtocols,
   formatModelsArray,
   extractRedirectModels,
   extractMappingSourceModels,
@@ -243,6 +245,24 @@ const MODEL_MAPPING_PREVIEW_FALLBACK: Array<{
   target: string
 }> = [{ source: 'client-model', target: 'upstream-model' }]
 
+const PROTOCOL_MODEL_OVERRIDES_EXAMPLE = JSON.stringify(
+  [
+    {
+      model_pattern: '^claude-',
+      upstream_protocols: ['messages'],
+      allow_conversion: true,
+    },
+  ],
+  null,
+  2
+)
+
+const PROTOCOL_LABEL_KEYS = {
+  chat: 'Chat Completions',
+  messages: 'Messages',
+  responses: 'Responses',
+} as const
+
 const ADVANCED_SETTINGS_EXPANDED_KEY = 'channel-advanced-settings-expanded'
 const CHANNEL_EDITOR_SECTION_IDS = {
   identity: 'channel-section-identity',
@@ -261,6 +281,7 @@ const ADVANCED_SETTINGS_SECTION_IDS = {
   internalNotes: 'channel-section-advanced-internal-notes',
   overrideRules: 'channel-section-advanced-override-rules',
   extraSettings: 'channel-section-advanced-extra-settings',
+  protocolCapabilities: 'channel-section-advanced-protocol-capabilities',
   fieldPassthrough: 'channel-section-advanced-field-passthrough',
   upstreamModelDetection: 'channel-section-advanced-upstream-model-detection',
 } as const
@@ -281,6 +302,10 @@ const SENSITIVE_FORM_FIELDS = [
   'settings',
   'setting',
   'advanced_custom',
+  'protocol_capabilities_enabled',
+  'protocol_upstream_protocols',
+  'protocol_allow_conversion',
+  'protocol_model_overrides',
   'is_enterprise_account',
   'vertex_key_type',
   'aws_key_type',
@@ -347,6 +372,7 @@ function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
     values.thinking_to_content ||
     values.pass_through_body_enabled ||
     values.system_prompt_override ||
+    values.protocol_capabilities_enabled ||
     values.claude_beta_query ||
     values.upstream_model_update_check_enabled ||
     values.upstream_model_update_auto_sync_enabled ||
@@ -755,6 +781,12 @@ export function ChannelMutateDrawer({
   const currentWeight = form.watch('weight')
   const currentClientPolicyMode = form.watch('client_policy_mode')
   const currentClientPolicyClients = form.watch('client_policy_clients')
+  const currentProtocolCapabilitiesEnabled = form.watch(
+    'protocol_capabilities_enabled'
+  )
+  const currentProtocolUpstreamProtocols = form.watch(
+    'protocol_upstream_protocols'
+  )
   const currentTestModel = form.watch('test_model')
   const currentAutoBan = form.watch('auto_ban')
   const currentTag = form.watch('tag')
@@ -878,6 +910,18 @@ export function ChannelMutateDrawer({
         ? ADD_MODE_OPTIONS
         : ADD_MODE_OPTIONS.filter((option) => option.value === 'single'),
     [supportsMultiKeyAddMode]
+  )
+  const detectedUpstreamProtocols = useMemo(
+    () => defaultUpstreamProtocols(currentType, currentBaseUrl),
+    [currentBaseUrl, currentType]
+  )
+  const protocolConversionOptions = useMemo(
+    () => [
+      { value: 'inherit', label: t('Inherit global policy') },
+      { value: 'allow', label: t('Allow conversion') },
+      { value: 'deny', label: t('Deny conversion') },
+    ],
+    [t]
   )
 
   const advancedCustomStats = useMemo(
@@ -1050,6 +1094,9 @@ export function ChannelMutateDrawer({
     currentSystemPrompt?.trim() ||
     currentSystemPromptOverride
   )
+  const protocolCapabilitiesConfigured = Boolean(
+    currentProtocolCapabilitiesEnabled
+  )
   let fieldPassthroughConfigured = false
   if (currentType === 1 || currentType === 57) {
     fieldPassthroughConfigured = Boolean(
@@ -1077,6 +1124,7 @@ export function ChannelMutateDrawer({
     internalNotesConfigured ||
     overrideRulesConfigured ||
     extraSettingsConfigured ||
+    protocolCapabilitiesConfigured ||
     fieldPassthroughConfigured ||
     upstreamModelDetectionConfigured
   )
@@ -1100,6 +1148,11 @@ export function ChannelMutateDrawer({
       id: ADVANCED_SETTINGS_SECTION_IDS.extraSettings,
       title: t('Channel Extra Settings'),
       configured: extraSettingsConfigured,
+    },
+    {
+      id: ADVANCED_SETTINGS_SECTION_IDS.protocolCapabilities,
+      title: t('Protocol Capabilities'),
+      configured: protocolCapabilitiesConfigured,
     },
   ]
   if (currentType === 1 || currentType === 14 || currentType === 57) {
@@ -4477,6 +4530,205 @@ export function ChannelMutateDrawer({
                                 </FormItem>
                               )}
                             />
+                          </fieldset>
+                        </div>
+
+                        <div
+                          id={
+                            ADVANCED_SETTINGS_SECTION_IDS.protocolCapabilities
+                          }
+                          className={sideDrawerSectionClassName(
+                            configuredAdvancedSectionClassName(
+                              'scroll-mt-4',
+                              protocolCapabilitiesConfigured
+                            )
+                          )}
+                        >
+                          <CardHeading
+                            title={t('Protocol Capabilities')}
+                            icon={<Route className='h-4 w-4' />}
+                            iconTone='info'
+                          />
+                          {sensitiveLocked && (
+                            <Alert className='border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-50'>
+                              <AlertDescription>
+                                {t('No permission to perform this action')}
+                              </AlertDescription>
+                            </Alert>
+                          )}
+                          <fieldset
+                            disabled={sensitiveLocked}
+                            className='space-y-4 disabled:opacity-60'
+                          >
+                            <FormField
+                              control={form.control}
+                              name='protocol_capabilities_enabled'
+                              render={({ field }) => (
+                                <FormItem className='flex items-center justify-between gap-3 border-y px-4 py-3'>
+                                  <div className='space-y-0.5'>
+                                    <FormLabel>
+                                      {t(
+                                        'Override detected protocol capabilities'
+                                      )}
+                                    </FormLabel>
+                                    <FormDescription>
+                                      {t(
+                                        'Leave this off to use the channel type and upstream URL defaults.'
+                                      )}{' '}
+                                      {t('Detected by default: {{protocols}}', {
+                                        protocols:
+                                          detectedUpstreamProtocols.join(', '),
+                                      })}
+                                    </FormDescription>
+                                  </div>
+                                  <FormControl>
+                                    <Switch
+                                      checked={field.value === true}
+                                      onCheckedChange={(checked) => {
+                                        field.onChange(checked)
+                                        if (
+                                          checked &&
+                                          !currentProtocolUpstreamProtocols?.length
+                                        ) {
+                                          form.setValue(
+                                            'protocol_upstream_protocols',
+                                            detectedUpstreamProtocols,
+                                            {
+                                              shouldDirty: true,
+                                              shouldValidate: true,
+                                            }
+                                          )
+                                        }
+                                      }}
+                                    />
+                                  </FormControl>
+                                </FormItem>
+                              )}
+                            />
+
+                            {currentProtocolCapabilitiesEnabled && (
+                              <>
+                                <FormField
+                                  control={form.control}
+                                  name='protocol_upstream_protocols'
+                                  render={({ field }) => (
+                                    <FormItem>
+                                      <FormLabel>
+                                        {t('Supported upstream protocols')}
+                                      </FormLabel>
+                                      <FormControl>
+                                        <ToggleGroup
+                                          multiple
+                                          value={field.value || []}
+                                          onValueChange={field.onChange}
+                                          variant='outline'
+                                          spacing={2}
+                                          className='grid w-full grid-cols-1 sm:grid-cols-3'
+                                          aria-label={t(
+                                            'Supported upstream protocols'
+                                          )}
+                                        >
+                                          {Object.entries(
+                                            PROTOCOL_LABEL_KEYS
+                                          ).map(([protocol, labelKey]) => (
+                                            <ToggleGroupItem
+                                              key={protocol}
+                                              value={protocol}
+                                              className='w-full'
+                                            >
+                                              {t(labelKey)}
+                                            </ToggleGroupItem>
+                                          ))}
+                                        </ToggleGroup>
+                                      </FormControl>
+                                      <FormDescription>
+                                        {t(
+                                          'Declare only protocols that this upstream endpoint accepts directly.'
+                                        )}
+                                      </FormDescription>
+                                      <FormMessage />
+                                    </FormItem>
+                                  )}
+                                />
+
+                                <FormField
+                                  control={form.control}
+                                  name='protocol_allow_conversion'
+                                  render={({ field }) => (
+                                    <FormItem>
+                                      <FormLabel>
+                                        {t('Protocol conversion policy')}
+                                      </FormLabel>
+                                      <Select
+                                        items={protocolConversionOptions}
+                                        value={field.value || 'inherit'}
+                                        onValueChange={field.onChange}
+                                      >
+                                        <FormControl>
+                                          <SelectTrigger className='w-full'>
+                                            <SelectValue />
+                                          </SelectTrigger>
+                                        </FormControl>
+                                        <SelectContent
+                                          alignItemWithTrigger={false}
+                                        >
+                                          <SelectGroup>
+                                            {protocolConversionOptions.map(
+                                              (option) => (
+                                                <SelectItem
+                                                  key={option.value}
+                                                  value={option.value}
+                                                >
+                                                  {option.label}
+                                                </SelectItem>
+                                              )
+                                            )}
+                                          </SelectGroup>
+                                        </SelectContent>
+                                      </Select>
+                                      <FormDescription>
+                                        {t(
+                                          'Native protocol routes are always preferred; conversion is considered only when no native candidate is available.'
+                                        )}
+                                      </FormDescription>
+                                      <FormMessage />
+                                    </FormItem>
+                                  )}
+                                />
+
+                                <FormField
+                                  control={form.control}
+                                  name='protocol_model_overrides'
+                                  render={({ field }) => (
+                                    <FormItem>
+                                      <FormLabel>
+                                        {t('Model protocol overrides')}
+                                      </FormLabel>
+                                      <FormControl>
+                                        <JsonCodeEditor
+                                          value={field.value || '[]'}
+                                          onChange={field.onChange}
+                                          name={field.name}
+                                          onBlur={field.onBlur}
+                                          textareaRef={field.ref}
+                                          ariaLabel={t(
+                                            'Model protocol overrides'
+                                          )}
+                                          placeholder={`${t('Example:')}\n${PROTOCOL_MODEL_OVERRIDES_EXAMPLE}`}
+                                          heightClassName='h-48 min-h-48 max-h-48'
+                                        />
+                                      </FormControl>
+                                      <FormDescription>
+                                        {t(
+                                          'Rules match the mapped upstream model in order. The first matching regular expression wins; omitted fields inherit the channel values.'
+                                        )}
+                                      </FormDescription>
+                                      <FormMessage />
+                                    </FormItem>
+                                  )}
+                                />
+                              </>
+                            )}
                           </fieldset>
                         </div>
 

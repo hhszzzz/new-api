@@ -388,8 +388,6 @@ func appendLogDiagnostics(c *gin.Context, channelId int, other map[string]interf
 		}
 		for key, target := range map[constant.ContextKey]string{
 			constant.ContextKeyRequestProtocol:    "request_protocol",
-			constant.ContextKeyUpstreamProtocol:   "upstream_protocol",
-			constant.ContextKeyProtocolConverter:  "protocol_converter",
 			constant.ContextKeyUserModelRoutePool: "route_pool_name",
 			constant.ContextKeyUserModelRouteId:   "route_rule_id",
 		} {
@@ -401,6 +399,15 @@ func appendLogDiagnostics(c *gin.Context, channelId int, other map[string]interf
 			}
 			if value := common.GetContextKeyString(c, key); value != "" {
 				diagnostics[target] = value
+			}
+		}
+		for key, target := range map[constant.ContextKey]string{
+			constant.ContextKeyUpstreamProtocol:  "upstream_protocol",
+			constant.ContextKeyProtocolConverter: "protocol_converter",
+			constant.ContextKeyProtocolStateMode: "protocol_state_mode",
+		} {
+			if value := common.GetContextKeyString(c, key); value != "" {
+				adminInfo[target] = value
 			}
 		}
 		if started := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime); !started.IsZero() {

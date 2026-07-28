@@ -322,40 +322,26 @@ func (c *ClaudeRequest) GetTokenCountMeta() *types.TokenCountMeta {
 
 	// tools
 	if c.Tools != nil {
-		tools := c.GetTools()
-		normalTools, webSearchTools := ProcessTools(tools)
-		if normalTools != nil {
-			for _, t := range normalTools {
-				tokenCountMeta.ToolsCount++
-				if t.Name != "" {
-					texts = append(texts, t.Name)
-				}
-				if t.Description != "" {
-					texts = append(texts, t.Description)
-				}
-				if t.InputSchema != nil {
-					b, _ := common.Marshal(t.InputSchema)
-					texts = append(texts, string(b))
-				}
+		for _, tool := range c.GetTools() {
+			tokenCountMeta.ToolsCount++
+			if data, err := common.Marshal(tool); err == nil {
+				texts = append(texts, string(data))
 			}
 		}
-		if webSearchTools != nil {
-			for _, t := range webSearchTools {
-				tokenCountMeta.ToolsCount++
-				if t.Name != "" {
-					texts = append(texts, t.Name)
-				}
-				if t.UserLocation != nil {
-					b, _ := common.Marshal(t.UserLocation)
-					texts = append(texts, string(b))
-				}
-			}
+	}
+	if c.ToolChoice != nil {
+		if data, err := common.Marshal(c.ToolChoice); err == nil {
+			texts = append(texts, string(data))
 		}
 	}
 
 	tokenCountMeta.CombineText = strings.Join(texts, "\n")
 	tokenCountMeta.Files = fileMeta
 	return &tokenCountMeta
+}
+
+type ClaudeCountTokensResponse struct {
+	InputTokens int `json:"input_tokens"`
 }
 
 func (c *ClaudeRequest) GetSensitiveText() string {

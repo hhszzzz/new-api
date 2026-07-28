@@ -94,24 +94,11 @@ func doAwsClientRequest(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor,
 	}
 	a.AwsClient = awsCli
 
-	// 获取对应的AWS模型ID
-	awsModelId := getAwsModelID(info.UpstreamModelName)
+	awsModelId := resolveAwsModelID(info.UpstreamModelName, awsCli.Options().Region)
 
-	awsRegionPrefix := getAwsRegionPrefix(awsCli.Options().Region)
-	canCrossRegion := awsModelCanCrossRegion(awsModelId, awsRegionPrefix)
-	if canCrossRegion {
-		awsModelId = awsModelCrossRegion(awsModelId, awsRegionPrefix)
-	}
-
-	// init empty request.header
-	requestHeader := http.Header{}
-	a.SetupRequestHeader(c, &requestHeader, info)
-	headerOverride, err := channel.ResolveHeaderOverride(info, c)
+	requestHeader, err := buildAwsRequestHeader(c, info, a)
 	if err != nil {
 		return nil, err
-	}
-	for key, value := range headerOverride {
-		requestHeader.Set(key, value)
 	}
 
 	if isNovaModel(awsModelId) {
@@ -169,6 +156,21 @@ func doAwsClientRequest(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor,
 	}
 }
 
+func buildAwsRequestHeader(c *gin.Context, info *relaycommon.RelayInfo, adaptor *Adaptor) (http.Header, error) {
+	requestHeader := http.Header{}
+	if err := adaptor.SetupRequestHeader(c, &requestHeader, info); err != nil {
+		return nil, err
+	}
+	headerOverride, err := channel.ResolveHeaderOverride(info, c)
+	if err != nil {
+		return nil, err
+	}
+	for key, value := range headerOverride {
+		requestHeader.Set(key, value)
+	}
+	return requestHeader, nil
+}
+
 // buildAwsRequestBody prepares the payload for AWS requests, applying passthrough rules when enabled.
 func buildAwsRequestBody(c *gin.Context, info *relaycommon.RelayInfo, awsClaudeReq any) ([]byte, error) {
 	if info.ShouldPassThroughBody() {
@@ -218,6 +220,15 @@ func getAwsModelID(requestModel string) string {
 		return awsModelIDName
 	}
 	return requestModel
+}
+
+func resolveAwsModelID(requestModel, region string) string {
+	modelID := getAwsModelID(requestModel)
+	regionPrefix := getAwsRegionPrefix(region)
+	if awsModelCanCrossRegion(modelID, regionPrefix) {
+		return awsModelCrossRegion(modelID, regionPrefix)
+	}
+	return modelID
 }
 
 func awsHandler(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (*types.NewAPIError, *dto.Usage) {
@@ -288,7 +299,9 @@ func awsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (
 		}
 	}
 
-	claude.HandleStreamFinalResponse(c, info, claudeInfo)
+	if finalErr := claude.HandleStreamFinalResponse(c, info, claudeInfo); finalErr != nil {
+		return finalErr, nil
+	}
 	return nil, claudeInfo.Usage
 }
 

@@ -23,7 +23,7 @@ import {
   ERROR_MESSAGES,
   MODEL_FETCHABLE_TYPES,
 } from '../constants'
-import type { Channel } from '../types'
+import type { Channel, ProtocolCapabilities, UpstreamProtocol } from '../types'
 import {
   CHANNEL_TYPE_ADVANCED_CUSTOM,
   advancedCustomConfigUsesRelativeUpstreamPath,
@@ -32,6 +32,13 @@ import {
   stringifyAdvancedCustomConfig,
   validateAdvancedCustomConfig,
 } from './advanced-custom'
+import {
+  UPSTREAM_PROTOCOLS,
+  formatProtocolModelOverrides,
+  parseProtocolModelOverrides,
+  protocolConversionMode,
+  protocolModelOverridesTextSchema,
+} from './protocol-capabilities'
 
 // ============================================================================
 // Form Validation Schema
@@ -216,6 +223,16 @@ export const channelFormSchema = z
     inherit_aggregate_base_url: z.boolean().optional(),
     client_policy_mode: z.enum(['unrestricted', 'allow', 'deny']).optional(),
     client_policy_clients: z.string().optional(),
+    protocol_capabilities_enabled: z.boolean().optional(),
+    protocol_upstream_protocols: z
+      .array(z.enum(UPSTREAM_PROTOCOLS))
+      .refine(
+        (protocols) => new Set(protocols).size === protocols.length,
+        'Upstream protocols must not contain duplicates'
+      )
+      .optional(),
+    protocol_allow_conversion: z.enum(['inherit', 'allow', 'deny']).optional(),
+    protocol_model_overrides: protocolModelOverridesTextSchema.optional(),
     // Multi-key options (not sent to backend directly)
     multi_key_mode: z.enum(['single', 'batch', 'multi_to_single']).optional(),
     multi_key_type: z.enum(['random', 'polling']).optional(),
@@ -251,6 +268,18 @@ export const channelFormSchema = z
     upstream_model_update_ignored_models: z.string().optional(),
   })
   .superRefine((data, ctx) => {
+    if (
+      data.protocol_capabilities_enabled === true &&
+      (!data.protocol_upstream_protocols ||
+        data.protocol_upstream_protocols.length === 0)
+    ) {
+      addRequiredIssue(
+        ctx,
+        'protocol_upstream_protocols',
+        'Select at least one upstream protocol'
+      )
+    }
+
     if ([3, 8, 36, 45].includes(data.type) && !data.base_url?.trim()) {
       addRequiredIssue(
         ctx,
@@ -374,6 +403,10 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   inherit_aggregate_base_url: false,
   client_policy_mode: 'unrestricted',
   client_policy_clients: '',
+  protocol_capabilities_enabled: false,
+  protocol_upstream_protocols: [],
+  protocol_allow_conversion: 'inherit',
+  protocol_model_overrides: '[]',
   multi_key_mode: 'single',
   multi_key_type: 'random',
   batch_add_set_key_prefix_2_name: false,
@@ -461,6 +494,10 @@ export function transformChannelToFormDefaults(
   let advancedCustom = ''
   let clientPolicyMode: 'unrestricted' | 'allow' | 'deny' = 'unrestricted'
   let clientPolicyClients = ''
+  let protocolCapabilitiesEnabled = false
+  let protocolUpstreamProtocols: UpstreamProtocol[] = []
+  let protocolAllowConversion: 'inherit' | 'allow' | 'deny' = 'inherit'
+  let protocolModelOverrides = '[]'
 
   if (channel.settings) {
     try {
@@ -497,6 +534,28 @@ export function transformChannelToFormDefaults(
       }
       if (Array.isArray(parsed.client_policy?.clients)) {
         clientPolicyClients = parsed.client_policy.clients.join(', ')
+      }
+      const protocolCapabilities = parsed.protocol_capabilities
+      if (
+        protocolCapabilities &&
+        typeof protocolCapabilities === 'object' &&
+        !Array.isArray(protocolCapabilities)
+      ) {
+        protocolCapabilitiesEnabled = true
+        protocolUpstreamProtocols = Array.isArray(
+          protocolCapabilities.upstream_protocols
+        )
+          ? protocolCapabilities.upstream_protocols.filter(
+              (protocol: unknown): protocol is UpstreamProtocol =>
+                UPSTREAM_PROTOCOLS.includes(protocol as UpstreamProtocol)
+            )
+          : []
+        protocolAllowConversion = protocolConversionMode(
+          protocolCapabilities.allow_conversion
+        )
+        protocolModelOverrides = formatProtocolModelOverrides(
+          protocolCapabilities.model_overrides
+        )
       }
     } catch (error) {
       // eslint-disable-next-line no-console
@@ -553,6 +612,10 @@ export function transformChannelToFormDefaults(
     advanced_custom: advancedCustom,
     client_policy_mode: clientPolicyMode,
     client_policy_clients: clientPolicyClients,
+    protocol_capabilities_enabled: protocolCapabilitiesEnabled,
+    protocol_upstream_protocols: protocolUpstreamProtocols,
+    protocol_allow_conversion: protocolAllowConversion,
+    protocol_model_overrides: protocolModelOverrides,
   }
 }
 
@@ -717,6 +780,26 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
     }
   } else if ('client_policy' in settingsObj) {
     delete settingsObj.client_policy
+  }
+
+  if (formData.protocol_capabilities_enabled === true) {
+    const protocolCapabilities: ProtocolCapabilities = {
+      upstream_protocols: [...(formData.protocol_upstream_protocols || [])],
+    }
+    if (formData.protocol_allow_conversion === 'allow') {
+      protocolCapabilities.allow_conversion = true
+    } else if (formData.protocol_allow_conversion === 'deny') {
+      protocolCapabilities.allow_conversion = false
+    }
+    const modelOverrides = parseProtocolModelOverrides(
+      formData.protocol_model_overrides
+    )
+    if (modelOverrides.length > 0) {
+      protocolCapabilities.model_overrides = modelOverrides
+    }
+    settingsObj.protocol_capabilities = protocolCapabilities
+  } else if ('protocol_capabilities' in settingsObj) {
+    delete settingsObj.protocol_capabilities
   }
 
   return JSON.stringify(settingsObj)

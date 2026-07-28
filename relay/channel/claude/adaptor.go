@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/relay/channel"
@@ -43,7 +44,11 @@ func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
 }
 
 func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
-	requestURL := fmt.Sprintf("%s/v1/messages", info.ChannelBaseUrl)
+	requestPath := "/v1/messages"
+	if info != nil && strings.HasPrefix(strings.Split(strings.TrimSpace(info.RequestURLPath), "?")[0], "/v1/messages/count_tokens") {
+		requestPath = "/v1/messages/count_tokens"
+	}
+	requestURL := fmt.Sprintf("%s%s", info.ChannelBaseUrl, requestPath)
 	if !shouldAppendClaudeBetaQuery(info) {
 		return requestURL, nil
 	}
@@ -73,9 +78,11 @@ func shouldAppendClaudeBetaQuery(info *relaycommon.RelayInfo) bool {
 
 func CommonClaudeHeadersOperation(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) {
 	// common headers operation
-	anthropicBeta := c.Request.Header.Get("anthropic-beta")
-	if anthropicBeta != "" {
-		req.Set("anthropic-beta", anthropicBeta)
+	if c != nil && c.Request != nil && info != nil && info.RelayFormat == types.RelayFormatClaude {
+		anthropicBeta := c.Request.Header.Get("anthropic-beta")
+		if anthropicBeta != "" {
+			req.Set("anthropic-beta", anthropicBeta)
+		}
 	}
 	model_setting.GetClaudeSettings().WriteHeaders(info.UpstreamModelName, req)
 }
@@ -119,8 +126,11 @@ func (a *Adaptor) ConvertEmbeddingRequest(c *gin.Context, info *relaycommon.Rela
 }
 
 func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
-	// TODO implement me
-	return nil, errors.New("not implemented")
+	result, err := relayconvert.ConvertRequest(c, info, types.RelayFormatClaude, &request)
+	if err != nil {
+		return nil, err
+	}
+	return result.Value, nil
 }
 
 func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {

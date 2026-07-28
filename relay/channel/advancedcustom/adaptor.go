@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/relay/channel"
@@ -17,6 +18,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/channelcompat"
 	"github.com/QuantumNous/new-api/service/relayconvert"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
@@ -49,6 +51,9 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 	if err != nil {
 		return nil, err
 	}
+	if usesPreconvertedProtocolPlan(c, converter, channelcompat.ProtocolChat) {
+		return a.convertOpenAICompatibleRequest(c, info, request)
+	}
 	if converter == relayconvert.ConverterNone {
 		return a.convertOpenAICompatibleRequest(c, info, request)
 	}
@@ -72,6 +77,9 @@ func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayIn
 	if err != nil {
 		return nil, err
 	}
+	if usesPreconvertedProtocolPlan(c, converter, channelcompat.ProtocolMessages) {
+		return a.claudeAdaptor.ConvertClaudeRequest(c, info, request)
+	}
 
 	switch converter {
 	case relayconvert.ConverterNone:
@@ -86,6 +94,16 @@ func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayIn
 			return nil, fmt.Errorf("expected OpenAI chat completions request, got %T", result.Value)
 		}
 		return a.convertOpenAICompatibleRequest(c, info, chatRequest)
+	case relayconvert.ConverterClaudeMessagesToOpenAIResponses:
+		result, err := service.ConvertRequestByID(c, info, converter, request)
+		if err != nil {
+			return nil, err
+		}
+		responsesRequest, ok := result.Value.(*dto.OpenAIResponsesRequest)
+		if !ok {
+			return nil, fmt.Errorf("expected OpenAI Responses request, got %T", result.Value)
+		}
+		return a.convertOpenAICompatibleResponsesRequest(c, info, *responsesRequest)
 	default:
 		return nil, fmt.Errorf("converter %q does not support Anthropic Messages requests", converter)
 	}
@@ -95,6 +113,9 @@ func (a *Adaptor) ConvertGeminiRequest(c *gin.Context, info *relaycommon.RelayIn
 	converter, err := a.resolveForConversion(c, info)
 	if err != nil {
 		return nil, err
+	}
+	if usesPreconvertedProtocolPlan(c, converter, channelcompat.ProtocolGemini) {
+		return a.geminiAdaptor.ConvertGeminiRequest(c, info, request)
 	}
 
 	switch converter {
@@ -120,6 +141,9 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	if err != nil {
 		return nil, err
 	}
+	if usesPreconvertedProtocolPlan(c, converter, channelcompat.ProtocolResponses) {
+		return a.convertOpenAICompatibleResponsesRequest(c, info, request)
+	}
 	switch converter {
 	case relayconvert.ConverterNone:
 		return a.convertOpenAICompatibleResponsesRequest(c, info, request)
@@ -133,6 +157,16 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 			return nil, fmt.Errorf("expected OpenAI chat completions request, got %T", result.Value)
 		}
 		return a.convertOpenAICompatibleRequest(c, info, chatRequest)
+	case relayconvert.ConverterOpenAIResponsesToClaudeMessages:
+		result, err := service.ConvertRequestByID(c, info, converter, &request)
+		if err != nil {
+			return nil, err
+		}
+		claudeRequest, ok := result.Value.(*dto.ClaudeRequest)
+		if !ok {
+			return nil, fmt.Errorf("expected Anthropic Messages request, got %T", result.Value)
+		}
+		return a.claudeAdaptor.ConvertClaudeRequest(c, info, claudeRequest)
 	case relayconvert.ConverterOpenAIResponsesToGemini:
 		result, err := service.ConvertRequestByID(c, info, converter, request)
 		if err != nil {
@@ -146,6 +180,21 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	default:
 		return nil, fmt.Errorf("converter %q does not support OpenAI Responses requests", converter)
 	}
+}
+
+func usesPreconvertedProtocolPlan(c *gin.Context, converter string, upstream channelcompat.Protocol) bool {
+	plan, ok := advancedCustomProtocolPlan(c)
+	return ok &&
+		plan.Status == channelcompat.StatusConvertible &&
+		plan.UpstreamProtocol == upstream &&
+		plan.RequestConverter == converter
+}
+
+func advancedCustomProtocolPlan(c *gin.Context) (channelcompat.ProtocolPlan, bool) {
+	if c == nil {
+		return channelcompat.ProtocolPlan{}, false
+	}
+	return common.GetContextKeyType[channelcompat.ProtocolPlan](c, constant.ContextKeyProtocolPlan)
 }
 
 func (a *Adaptor) ConvertEmbeddingRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.EmbeddingRequest) (any, error) {
@@ -293,9 +342,12 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 	case relayconvert.ConverterNone:
 		return a.doNativeResponse(c, resp, info)
 	case relayconvert.ConverterClaudeMessagesToOpenAIChat,
-		relayconvert.ConverterGeminiContentToOpenAIChat:
+		relayconvert.ConverterGeminiContentToOpenAIChat,
+		relayconvert.ConverterClaudeMessagesToOpenAIResponses:
 		return a.openaiAdaptor.DoResponse(c, resp, info)
 	case relayconvert.ConverterOpenAIChatToClaudeMessages:
+		return a.claudeAdaptor.DoResponse(c, resp, info)
+	case relayconvert.ConverterOpenAIResponsesToClaudeMessages:
 		return a.claudeAdaptor.DoResponse(c, resp, info)
 	case relayconvert.ConverterOpenAIChatToGeminiContent:
 		return a.geminiAdaptor.DoResponse(c, resp, info)
@@ -364,6 +416,9 @@ func (a *Adaptor) resolve(c *gin.Context, info *relaycommon.RelayInfo) error {
 
 	incomingPath := incomingRequestPath(c, info)
 	selectionModel := info.SelectionModelName()
+	if plan, ok := advancedCustomProtocolPlan(c); ok && strings.TrimSpace(plan.EffectiveUpstreamModel) != "" {
+		selectionModel = plan.EffectiveUpstreamModel
+	}
 	route, ok := config.MatchPathForModel(incomingPath, selectionModel)
 	if ok {
 		route.Converter = strings.TrimSpace(route.Converter)
@@ -490,6 +545,7 @@ func useGeminiStreamGenerateContentURL(parsedURL *url.URL) {
 
 func shouldApplyClaudeHeaders(converter string, info *relaycommon.RelayInfo) bool {
 	return converter == relayconvert.ConverterOpenAIChatToClaudeMessages ||
+		converter == relayconvert.ConverterOpenAIResponsesToClaudeMessages ||
 		(converter == relayconvert.ConverterNone && info != nil && info.RelayFormat == types.RelayFormatClaude)
 }
 

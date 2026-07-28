@@ -325,17 +325,23 @@ type IncompleteDetails struct {
 }
 
 type ResponsesOutput struct {
-	Type      string                   `json:"type"`
-	ID        string                   `json:"id"`
-	Status    string                   `json:"status"`
-	Role      string                   `json:"role"`
-	Content   []ResponsesOutputContent `json:"content"`
-	Quality   string                   `json:"quality"`
-	Size      string                   `json:"size"`
-	Result    string                   `json:"result,omitempty"`
-	CallId    string                   `json:"call_id,omitempty"`
-	Name      string                   `json:"name,omitempty"`
-	Arguments json.RawMessage          `json:"arguments,omitempty"`
+	Type      string                          `json:"type"`
+	ID        string                          `json:"id"`
+	Status    string                          `json:"status"`
+	Role      string                          `json:"role"`
+	Phase     string                          `json:"phase,omitempty"`
+	Content   []ResponsesOutputContent        `json:"content,omitempty"`
+	Summary   []ResponsesReasoningSummaryPart `json:"summary,omitempty"`
+	Quality   string                          `json:"quality"`
+	Size      string                          `json:"size"`
+	Result    string                          `json:"result,omitempty"`
+	CallId    string                          `json:"call_id,omitempty"`
+	Name      string                          `json:"name,omitempty"`
+	Namespace string                          `json:"namespace,omitempty"`
+	Input     string                          `json:"input,omitempty"`
+	Execution string                          `json:"execution,omitempty"`
+	Arguments json.RawMessage                 `json:"arguments,omitempty"`
+	CreatedBy string                          `json:"created_by,omitempty"`
 }
 
 // ArgumentsString returns function call arguments in the string form expected by Chat Completions.
@@ -384,17 +390,74 @@ const (
 
 // ResponsesStreamResponse 用于处理 /v1/responses 流式响应
 type ResponsesStreamResponse struct {
-	Type     string                   `json:"type"`
-	Response *OpenAIResponsesResponse `json:"response,omitempty"`
-	Delta    string                   `json:"delta,omitempty"`
-	Item     *ResponsesOutput         `json:"item,omitempty"`
+	Type           string                   `json:"type"`
+	Response       *OpenAIResponsesResponse `json:"response,omitempty"`
+	Delta          string                   `json:"delta,omitempty"`
+	Text           string                   `json:"text,omitempty"`
+	Input          string                   `json:"input,omitempty"`
+	Name           string                   `json:"name,omitempty"`
+	Arguments      string                   `json:"arguments,omitempty"`
+	Item           *ResponsesOutput         `json:"item,omitempty"`
+	SequenceNumber *int                     `json:"sequence_number,omitempty"`
 	// - response.function_call_arguments.delta
 	// - response.function_call_arguments.done
-	OutputIndex  *int                           `json:"output_index,omitempty"`
-	ContentIndex *int                           `json:"content_index,omitempty"`
-	SummaryIndex *int                           `json:"summary_index,omitempty"`
-	ItemID       string                         `json:"item_id,omitempty"`
-	Part         *ResponsesReasoningSummaryPart `json:"part,omitempty"`
+	OutputIndex  *int   `json:"output_index,omitempty"`
+	ContentIndex *int   `json:"content_index,omitempty"`
+	SummaryIndex *int   `json:"summary_index,omitempty"`
+	ItemID       string `json:"item_id,omitempty"`
+	Part         any    `json:"part,omitempty"`
+	Code         any    `json:"code,omitempty"`
+	Message      string `json:"message,omitempty"`
+	Param        any    `json:"param,omitempty"`
+}
+
+type ResponsesErrorEvent struct {
+	Type           string `json:"type"`
+	Code           any    `json:"code"`
+	Message        string `json:"message"`
+	Param          any    `json:"param"`
+	SequenceNumber int    `json:"sequence_number"`
+}
+
+func (r *ResponsesStreamResponse) GetOpenAIError() *types.OpenAIError {
+	if r == nil {
+		return nil
+	}
+
+	switch r.Type {
+	case "error":
+		return responsesStreamError(r.Code, r.Message, r.Param)
+	case "response.error", "response.failed":
+		if r.Response != nil {
+			if openAIError := r.Response.GetOpenAIError(); openAIError != nil &&
+				(openAIError.Type != "" || openAIError.Message != "" || openAIError.Code != nil) {
+				return openAIError
+			}
+		}
+		if r.Code != nil || r.Message != "" || r.Param != nil {
+			return responsesStreamError(r.Code, r.Message, r.Param)
+		}
+	}
+	return nil
+}
+
+func responsesStreamError(code any, message string, param any) *types.OpenAIError {
+	errorType := "server_error"
+	if value := fmt.Sprintf("%v", code); code != nil && value != "" {
+		errorType = value
+	}
+	if code == nil {
+		code = errorType
+	}
+	if message == "" {
+		message = "upstream Responses stream error"
+	}
+	return &types.OpenAIError{
+		Type:    errorType,
+		Code:    code,
+		Message: message,
+		Param:   param,
+	}
 }
 
 // GetOpenAIError 从动态错误类型中提取OpenAIError结构

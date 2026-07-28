@@ -24,7 +24,7 @@ func OaiResponsesCompactionHandlerWithInfo(c *gin.Context, resp *http.Response, 
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
 	}
-	if info != nil && info.HasUserModelRoute() {
+	if info != nil && info.HasModelRouting() {
 		responseBody, err = relaycommon.RedactUserModelRouteJSON(responseBody, info)
 		if err != nil {
 			return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)

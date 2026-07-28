@@ -8,6 +8,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relaymedia "github.com/QuantumNous/new-api/service/relayconvert/internal/media"
+	sharedbridge "github.com/QuantumNous/new-api/service/relayconvert/internal/shared/bridge"
 	sharedclaude "github.com/QuantumNous/new-api/service/relayconvert/internal/shared/claude"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/gin-gonic/gin"
@@ -46,15 +47,22 @@ func OpenAIResponsesRequestToClaudeMessages(c *gin.Context, req *dto.OpenAIRespo
 		claudeRequest.MaxTokens = &defaultMaxTokens
 	}
 
-	functions, err := RequestFunctionDeclarations(req.Tools)
+	tools, toolState, err := prepareResponsesToolsForChat(c, req)
 	if err != nil {
 		return nil, err
 	}
-	if len(functions) > 0 {
+	if len(tools) > 0 {
+		functions := make([]dto.FunctionRequest, 0, len(tools))
+		for _, tool := range tools {
+			if tool.Type != "function" {
+				return nil, fmt.Errorf("Responses tool type %q cannot be converted to Claude Messages", tool.Type)
+			}
+			functions = append(functions, tool.Function)
+		}
 		claudeRequest.Tools = responsesFunctionDeclarationsToClaudeTools(functions)
 	}
 
-	toolChoice, err := RequestToolChoiceToChat(req.ToolChoice)
+	toolChoice, err := responsesRequestToolChoiceToChat(req.ToolChoice, toolState)
 	if err != nil {
 		return nil, err
 	}
@@ -85,11 +93,29 @@ func OpenAIResponsesRequestToClaudeMessages(c *gin.Context, req *dto.OpenAIRespo
 		itemType := strings.TrimSpace(common.Interface2String(item["type"]))
 		switch itemType {
 		case ResponsesInputTypeFunctionCall:
-			claudeRequest.Messages = appendClaudeToolUse(claudeRequest.Messages, responsesFunctionCallItemToClaudeToolUse(item, "arguments"))
+			toolUse, err := responsesCallItemToClaudeToolUse(item, "arguments", sharedbridge.ToolKindFunction, toolState)
+			if err != nil {
+				return nil, err
+			}
+			claudeRequest.Messages = appendClaudeToolUse(claudeRequest.Messages, toolUse)
 		case ResponsesInputTypeCustomToolCall:
-			claudeRequest.Messages = appendClaudeToolUse(claudeRequest.Messages, responsesFunctionCallItemToClaudeToolUse(item, "input"))
+			toolUse, err := responsesCallItemToClaudeToolUse(item, "input", sharedbridge.ToolKindCustom, toolState)
+			if err != nil {
+				return nil, err
+			}
+			claudeRequest.Messages = appendClaudeToolUse(claudeRequest.Messages, toolUse)
+		case "tool_search_call":
+			toolUse, err := responsesCallItemToClaudeToolUse(item, "arguments", sharedbridge.ToolKindToolSearch, toolState)
+			if err != nil {
+				return nil, err
+			}
+			claudeRequest.Messages = appendClaudeToolUse(claudeRequest.Messages, toolUse)
 		case ResponsesInputTypeFunctionCallOutput, ResponsesInputTypeCustomToolOutput:
-			claudeRequest.Messages = appendClaudeToolResult(claudeRequest.Messages, responsesFunctionOutputItemToClaudeToolResult(item))
+			claudeRequest.Messages = appendClaudeToolResult(claudeRequest.Messages, responsesFunctionOutputItemToClaudeToolResult(item, "output"))
+		case "tool_search_output":
+			claudeRequest.Messages = appendClaudeToolResult(claudeRequest.Messages, responsesFunctionOutputItemToClaudeToolResult(item, "tools"))
+		case "additional_tools":
+			continue
 		default:
 			role := responsesClaudeRole(item)
 			parts, err := responsesInputContentToClaudeMediaMessages(c, item["content"])
@@ -220,20 +246,39 @@ func responsesInputContentToClaudeMediaMessages(c *gin.Context, content any) ([]
 	return parts, nil
 }
 
-func responsesFunctionCallItemToClaudeToolUse(item map[string]any, inputKey string) dto.ClaudeMediaMessage {
+func responsesCallItemToClaudeToolUse(item map[string]any, inputKey string, kind sharedbridge.ToolKind, toolState *sharedbridge.ToolState) (dto.ClaudeMediaMessage, error) {
+	name := strings.TrimSpace(common.Interface2String(item["name"]))
+	namespace := strings.TrimSpace(common.Interface2String(item["namespace"]))
+	if kind == sharedbridge.ToolKindToolSearch {
+		name = "tool_search"
+		namespace = ""
+	}
+	if name == "" {
+		return dto.ClaudeMediaMessage{}, fmt.Errorf("Responses tool call is missing name")
+	}
+	upstreamName, err := upstreamToolName(toolState, kind, namespace, name)
+	if err != nil {
+		return dto.ClaudeMediaMessage{}, err
+	}
+	input := ObjectValue(item[inputKey], inputKey)
+	if kind == sharedbridge.ToolKindCustom {
+		input = ObjectValue(customInputArguments(item[inputKey]), inputKey)
+	} else if kind == sharedbridge.ToolKindToolSearch {
+		input = ObjectValue(toolSearchArguments(item[inputKey]), inputKey)
+	}
 	return dto.ClaudeMediaMessage{
 		Type:  "tool_use",
 		Id:    CallID(item),
-		Name:  strings.TrimSpace(common.Interface2String(item["name"])),
-		Input: ObjectValue(item[inputKey], inputKey),
-	}
+		Name:  upstreamName,
+		Input: input,
+	}, nil
 }
 
-func responsesFunctionOutputItemToClaudeToolResult(item map[string]any) dto.ClaudeMediaMessage {
+func responsesFunctionOutputItemToClaudeToolResult(item map[string]any, outputKey string) dto.ClaudeMediaMessage {
 	return dto.ClaudeMediaMessage{
 		Type:      "tool_result",
 		ToolUseId: CallID(item),
-		Content:   responsesToolOutputValue(item["output"]),
+		Content:   responsesToolOutputValue(item[outputKey]),
 	}
 }
 

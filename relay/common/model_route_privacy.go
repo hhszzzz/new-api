@@ -11,11 +11,11 @@ import (
 	"github.com/QuantumNous/new-api/types"
 )
 
-// RedactUserModelRouteText replaces administrator-selected upstream model
-// identifiers with the model name requested by the client. It is intentionally
-// boundary-aware so a model such as "gpt-5" does not rewrite "gpt-5.1".
+// RedactUserModelRouteText replaces routed upstream model identifiers with the
+// model name requested by the client. It is intentionally boundary-aware so a
+// model such as "gpt-5" does not rewrite "gpt-5.1".
 func RedactUserModelRouteText(text string, info *RelayInfo) string {
-	if info == nil || !info.HasUserModelRoute() || text == "" {
+	if info == nil || !info.HasModelRouting() || text == "" {
 		return text
 	}
 	publicName := info.PublicResponseModelName()
@@ -37,7 +37,7 @@ func RedactUserModelRouteText(text string, info *RelayInfo) string {
 // without decoding numbers into float64. Arbitrary metadata, tool arguments,
 // and message content are left untouched.
 func RedactUserModelRouteJSON(data []byte, info *RelayInfo) ([]byte, error) {
-	if info == nil || !info.HasUserModelRoute() || len(data) == 0 {
+	if info == nil || !info.HasModelRouting() || len(data) == 0 {
 		return data, nil
 	}
 	return redactUserModelRouteJSON(json.RawMessage(data), info)
@@ -48,7 +48,7 @@ func RedactUserModelRouteJSON(data []byte, info *RelayInfo) ([]byte, error) {
 // client. Error metadata is owned by the error envelope; unrelated response
 // metadata is handled separately and remains opaque.
 func SanitizeUserModelRouteOpenAIError(relayError types.OpenAIError, info *RelayInfo) types.OpenAIError {
-	if info == nil || !info.HasUserModelRoute() {
+	if info == nil || !info.HasModelRouting() {
 		return relayError
 	}
 	relayError.Message = RedactUserModelRouteText(relayError.Message, info)
@@ -66,7 +66,7 @@ func SanitizeUserModelRouteOpenAIError(relayError types.OpenAIError, info *Relay
 // SanitizeUserModelRouteClaudeError removes private routed model identifiers
 // from the structured fields exposed by the Claude error protocol.
 func SanitizeUserModelRouteClaudeError(relayError types.ClaudeError, info *RelayInfo) types.ClaudeError {
-	if info == nil || !info.HasUserModelRoute() {
+	if info == nil || !info.HasModelRouting() {
 		return relayError
 	}
 	relayError.Message = RedactUserModelRouteText(relayError.Message, info)

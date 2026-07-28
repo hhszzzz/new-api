@@ -651,7 +651,13 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 	case relayconstant.RelayModeRerank:
 		usage, err = common_handler.RerankHandler(c, info, resp)
 	case relayconstant.RelayModeResponses:
-		if info.IsStream {
+		if info.RelayFormat != types.RelayFormatOpenAIResponses {
+			if info.IsStream {
+				usage, err = OaiResponsesToChatStreamHandler(c, info, resp)
+			} else {
+				usage, err = OaiResponsesToChatHandler(c, info, resp)
+			}
+		} else if info.IsStream {
 			usage, err = OaiResponsesStreamHandler(c, info, resp)
 		} else {
 			usage, err = OaiResponsesHandler(c, info, resp)
@@ -659,7 +665,13 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 	case relayconstant.RelayModeResponsesCompact:
 		usage, err = OaiResponsesCompactionHandlerWithInfo(c, resp, info)
 	default:
-		if info.IsStream {
+		if info.RelayFormat == types.RelayFormatOpenAIResponses && info.RelayMode == relayconstant.RelayModeChatCompletions {
+			if info.IsStream {
+				usage, err = OaiChatToResponsesStreamHandler(c, info, resp)
+			} else {
+				usage, err = OaiChatToResponsesHandler(c, info, resp)
+			}
+		} else if info.IsStream {
 			usage, err = OaiStreamHandler(c, info, resp)
 		} else {
 			usage, err = OpenaiHandler(c, info, resp)

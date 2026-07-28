@@ -4,14 +4,59 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/relay/channel/claude"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestBedrockClaudeEventsProduceResponsesSSE(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	info := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatOpenAIResponses,
+		OriginModelName: "claude-public",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "claude-upstream",
+		},
+	}
+	claudeInfo := &claude.ClaudeResponseInfo{
+		Model:        info.PublicResponseModelName(),
+		ResponseText: strings.Builder{},
+		Usage:        &dto.Usage{},
+	}
+	events := []string{
+		`{"type":"message_start","message":{"id":"msg_bedrock","model":"claude-upstream","content":[],"usage":{"input_tokens":4,"output_tokens":0}}}`,
+		`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}`,
+		`{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":2}}`,
+	}
+	for _, event := range events {
+		require.Nil(t, claude.HandleStreamResponseData(c, info, claudeInfo, event))
+	}
+	require.Nil(t, claude.HandleStreamFinalResponse(c, info, claudeInfo))
+
+	body := recorder.Body.String()
+	assert.Contains(t, body, "event: response.created")
+	assert.Contains(t, body, "event: response.output_text.delta")
+	assert.Contains(t, body, `"delta":"hello"`)
+	assert.Contains(t, body, "event: response.completed")
+	assert.Contains(t, body, `"model":"claude-public"`)
+	require.NotNil(t, claudeInfo.Usage)
+	assert.Equal(t, 4, claudeInfo.Usage.PromptTokens)
+	assert.Equal(t, 2, claudeInfo.Usage.CompletionTokens)
+}
 
 func TestDoAwsClientRequest_AppliesRuntimeHeaderOverrideToAnthropicBeta(t *testing.T) {
 	t.Parallel()

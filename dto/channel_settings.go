@@ -54,7 +54,96 @@ type ChannelOtherSettings struct {
 	UpstreamModelUpdateLastRemovedModels  []string                             `json:"upstream_model_update_last_removed_models,omitempty"`  // 上次检测到的可删除模型
 	UpstreamModelUpdateIgnoredModels      []string                             `json:"upstream_model_update_ignored_models,omitempty"`       // 手动忽略的模型
 	AdvancedCustom                        *AdvancedCustomConfig                `json:"advanced_custom,omitempty"`
+	ProtocolCapabilities                  *ProtocolCapabilities                `json:"protocol_capabilities,omitempty"`
 	ClientPolicy                          operation_setting.ClientAccessPolicy `json:"client_policy,omitempty"`
+}
+
+const (
+	ProtocolCapabilityChat      = "chat"
+	ProtocolCapabilityMessages  = "messages"
+	ProtocolCapabilityResponses = "responses"
+)
+
+type ProtocolCapabilities struct {
+	UpstreamProtocols []string                          `json:"upstream_protocols,omitempty"`
+	AllowConversion   *bool                             `json:"allow_conversion,omitempty"`
+	ModelOverrides    []ProtocolCapabilityModelOverride `json:"model_overrides,omitempty"`
+}
+
+type ProtocolCapabilityModelOverride struct {
+	ModelPattern      string   `json:"model_pattern"`
+	UpstreamProtocols []string `json:"upstream_protocols,omitempty"`
+	AllowConversion   *bool    `json:"allow_conversion,omitempty"`
+}
+
+func (c *ProtocolCapabilities) Validate() error {
+	if c == nil {
+		return nil
+	}
+	if len(c.UpstreamProtocols) == 0 {
+		return fmt.Errorf("protocol_capabilities.upstream_protocols must not be empty")
+	}
+	if err := validateProtocolCapabilityList("protocol_capabilities.upstream_protocols", c.UpstreamProtocols); err != nil {
+		return err
+	}
+	for i, override := range c.ModelOverrides {
+		pattern := strings.TrimSpace(override.ModelPattern)
+		if pattern == "" {
+			return fmt.Errorf("protocol_capabilities.model_overrides[%d].model_pattern is required", i)
+		}
+		if _, err := regexp.Compile(pattern); err != nil {
+			return fmt.Errorf("protocol_capabilities.model_overrides[%d].model_pattern is invalid: %w", i, err)
+		}
+		if len(override.UpstreamProtocols) > 0 {
+			if err := validateProtocolCapabilityList(
+				fmt.Sprintf("protocol_capabilities.model_overrides[%d].upstream_protocols", i),
+				override.UpstreamProtocols,
+			); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func validateProtocolCapabilityList(field string, protocols []string) error {
+	seen := make(map[string]struct{}, len(protocols))
+	for i, protocol := range protocols {
+		protocol = strings.TrimSpace(protocol)
+		switch protocol {
+		case ProtocolCapabilityChat, ProtocolCapabilityMessages, ProtocolCapabilityResponses:
+		default:
+			return fmt.Errorf("%s[%d] has unsupported protocol %q", field, i, protocol)
+		}
+		if _, exists := seen[protocol]; exists {
+			return fmt.Errorf("%s contains duplicate protocol %q", field, protocol)
+		}
+		seen[protocol] = struct{}{}
+	}
+	return nil
+}
+
+func (c *ProtocolCapabilities) Resolve(modelName string) ([]string, *bool) {
+	if c == nil {
+		return nil, nil
+	}
+	protocols := append([]string(nil), c.UpstreamProtocols...)
+	allowConversion := c.AllowConversion
+	for _, override := range c.ModelOverrides {
+		pattern := strings.TrimSpace(override.ModelPattern)
+		matched, err := regexp.MatchString(pattern, modelName)
+		if err != nil || !matched {
+			continue
+		}
+		if len(override.UpstreamProtocols) > 0 {
+			protocols = append(protocols[:0], override.UpstreamProtocols...)
+		}
+		if override.AllowConversion != nil {
+			allowConversion = override.AllowConversion
+		}
+		break
+	}
+	return protocols, allowConversion
 }
 
 func (s *ChannelOtherSettings) IsOpenRouterEnterprise() bool {
@@ -67,9 +156,11 @@ func (s *ChannelOtherSettings) IsOpenRouterEnterprise() bool {
 const (
 	advancedCustomConverterNone                        = "none"
 	advancedCustomConverterClaudeMessagesToOpenAIChat  = "anthropic_messages_to_openai_chat_completions"
+	advancedCustomConverterClaudeMessagesToResponses   = "claude_messages_to_openai_responses"
 	advancedCustomConverterOpenAIChatToClaudeMessages  = "openai_chat_completions_to_anthropic_messages"
 	advancedCustomConverterOpenAIChatToOpenAIResponses = "openai_chat_completions_to_openai_responses"
 	advancedCustomConverterOpenAIResponsesToOpenAIChat = "openai_responses_to_openai_chat_completions"
+	advancedCustomConverterOpenAIResponsesToClaude     = "openai_responses_to_claude_messages"
 	advancedCustomConverterOpenAIResponsesToGemini     = "openai_responses_to_gemini_generate_content"
 	advancedCustomConverterGeminiContentToOpenAIChat   = "gemini_generate_content_to_openai_chat_completions"
 	advancedCustomConverterOpenAIChatToGeminiContent   = "openai_chat_completions_to_gemini_generate_content"
@@ -308,9 +399,11 @@ func IsAdvancedCustomConverterAllowed(converter string) bool {
 	switch converter {
 	case advancedCustomConverterNone,
 		advancedCustomConverterClaudeMessagesToOpenAIChat,
+		advancedCustomConverterClaudeMessagesToResponses,
 		advancedCustomConverterOpenAIChatToClaudeMessages,
 		advancedCustomConverterOpenAIChatToOpenAIResponses,
 		advancedCustomConverterOpenAIResponsesToOpenAIChat,
+		advancedCustomConverterOpenAIResponsesToClaude,
 		advancedCustomConverterOpenAIResponsesToGemini,
 		advancedCustomConverterGeminiContentToOpenAIChat,
 		advancedCustomConverterOpenAIChatToGeminiContent:
@@ -489,7 +582,8 @@ func validateAdvancedCustomConverterPath(index int, incomingPath string, convert
 	switch converter {
 	case advancedCustomConverterNone:
 		return nil
-	case advancedCustomConverterClaudeMessagesToOpenAIChat:
+	case advancedCustomConverterClaudeMessagesToOpenAIChat,
+		advancedCustomConverterClaudeMessagesToResponses:
 		if incomingPath == "/v1/messages" {
 			return nil
 		}
@@ -499,7 +593,8 @@ func validateAdvancedCustomConverterPath(index int, incomingPath string, convert
 		if incomingPath == "/v1/chat/completions" {
 			return nil
 		}
-	case advancedCustomConverterOpenAIResponsesToOpenAIChat:
+	case advancedCustomConverterOpenAIResponsesToOpenAIChat,
+		advancedCustomConverterOpenAIResponsesToClaude:
 		if incomingPath == "/v1/responses" {
 			return nil
 		}

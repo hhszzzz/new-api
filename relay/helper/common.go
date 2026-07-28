@@ -14,6 +14,8 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+const responsesLastSequenceNumberKey = "responses_last_sequence_number"
+
 func FlushWriter(c *gin.Context) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -60,28 +62,26 @@ func SetEventStreamHeaders(c *gin.Context) {
 
 func ClaudeData(c *gin.Context, resp dto.ClaudeResponse) error {
 	if requestContextDone(c) {
-		return nil
+		return fmt.Errorf("request context done: %w", c.Request.Context().Err())
 	}
 
 	jsonData, err := common.Marshal(resp)
 	if err != nil {
-		common.SysError("error marshalling stream response: " + err.Error())
-	} else {
-		c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("event: %s\n", resp.Type)})
-		c.Render(-1, common.CustomEvent{Data: "data: " + string(jsonData)})
+		return fmt.Errorf("error marshalling Claude stream response: %w", err)
 	}
-	_ = FlushWriter(c)
-	return nil
+	c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("event: %s\n", resp.Type)})
+	c.Render(-1, common.CustomEvent{Data: "data: " + string(jsonData)})
+	return FlushWriter(c)
 }
 
-func ClaudeChunkData(c *gin.Context, resp dto.ClaudeResponse, data string) {
+func ClaudeChunkData(c *gin.Context, resp dto.ClaudeResponse, data string) error {
 	if requestContextDone(c) {
-		return
+		return fmt.Errorf("request context done: %w", c.Request.Context().Err())
 	}
 
 	c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("event: %s\n", resp.Type)})
 	c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("data: %s\n", data)})
-	_ = FlushWriter(c)
+	return FlushWriter(c)
 }
 
 func ResponseChunkData(c *gin.Context, resp dto.ResponsesStreamResponse, data string) error {
@@ -89,9 +89,51 @@ func ResponseChunkData(c *gin.Context, resp dto.ResponsesStreamResponse, data st
 		return fmt.Errorf("request context done: %w", c.Request.Context().Err())
 	}
 
+	sequenceNumber := resp.SequenceNumber
+	if sequenceNumber == nil {
+		var envelope struct {
+			SequenceNumber *int `json:"sequence_number"`
+		}
+		if common.UnmarshalJsonStr(data, &envelope) == nil {
+			sequenceNumber = envelope.SequenceNumber
+		}
+	}
+	if sequenceNumber != nil {
+		c.Set(responsesLastSequenceNumberKey, *sequenceNumber)
+	}
+
 	c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("event: %s\n", resp.Type)})
 	c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("data: %s", data)})
 	return FlushWriter(c)
+}
+
+func ResponsesErrorData(c *gin.Context, openAIError types.OpenAIError) error {
+	sequenceNumber := 0
+	if previous, ok := c.Get(responsesLastSequenceNumberKey); ok {
+		if value, ok := previous.(int); ok {
+			sequenceNumber = value + 1
+		}
+	}
+	code := openAIError.Code
+	if code == nil {
+		code = "server_error"
+	}
+	param := openAIError.Param
+	if value, ok := param.(string); ok && value == "" {
+		param = nil
+	}
+	payload := dto.ResponsesErrorEvent{
+		Type:           "error",
+		Code:           code,
+		Message:        openAIError.Message,
+		Param:          param,
+		SequenceNumber: sequenceNumber,
+	}
+	data, err := common.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	return ResponseChunkData(c, dto.ResponsesStreamResponse{Type: payload.Type, SequenceNumber: &sequenceNumber}, string(data))
 }
 
 func StringData(c *gin.Context, str string) error {
@@ -133,8 +175,8 @@ func ObjectData(c *gin.Context, object interface{}) error {
 	return StringData(c, string(jsonData))
 }
 
-func Done(c *gin.Context) {
-	_ = StringData(c, "[DONE]")
+func Done(c *gin.Context) error {
+	return StringData(c, "[DONE]")
 }
 
 func WssString(c *gin.Context, ws *websocket.Conn, str string) error {

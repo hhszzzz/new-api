@@ -104,7 +104,7 @@ func ResponsesStreamEventToChatChunks(event *dto.ResponsesStreamResponse, state 
 		chunks := state.terminalOutputChunks(response)
 		chunks = append(chunks, state.finalize(response)...)
 		return chunks, nil
-	case responsesEventFailed, responsesEventError:
+	case responsesEventFailed, responsesEventError, responsesEventLegacyError:
 		return nil, fmt.Errorf("responses stream error: %s", event.Type)
 	default:
 		return nil, nil
@@ -125,7 +125,7 @@ func (s *ResponsesToChatStreamState) applyResponseMetadata(response *dto.OpenAIR
 	if response.ID != "" && s.ID == "" {
 		s.ID = response.ID
 	}
-	if response.Model != "" {
+	if response.Model != "" && s.Model == "" {
 		s.Model = response.Model
 	}
 	if response.CreatedAt != 0 {
@@ -178,13 +178,7 @@ func (s *ResponsesToChatStreamState) terminalOutputChunks(response *dto.OpenAIRe
 			}
 			chunks = append(chunks, s.textDelta(text.String())...)
 		case out.Type == responsesOutputTypeReasoning && !s.hasSentReasoning:
-			var reasoning strings.Builder
-			for _, c := range out.Content {
-				if c.Text != "" {
-					reasoning.WriteString(c.Text)
-				}
-			}
-			chunks = append(chunks, s.reasoningDelta(reasoning.String())...)
+			chunks = append(chunks, s.reasoningDelta(extractReasoningTextFromOutput(out))...)
 		case isResponsesToolOutputType(out.Type):
 			chunks = append(chunks, s.toolItem(&dto.ResponsesStreamResponse{Item: out})...)
 		}
@@ -624,7 +618,7 @@ func (a *ResponsesBufferedAccumulator) BuildOutput() []dto.ResponsesOutput {
 	if a.reasoning.Len() > 0 {
 		out = append(out, dto.ResponsesOutput{
 			Type: responsesOutputTypeReasoning,
-			Content: []dto.ResponsesOutputContent{
+			Summary: []dto.ResponsesReasoningSummaryPart{
 				{Type: "summary_text", Text: a.reasoning.String()},
 			},
 		})
