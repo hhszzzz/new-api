@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/config"
 )
 
@@ -31,10 +32,7 @@ type ClientIdentificationRule struct {
 	Matches []ClientIdentificationMatch `json:"matches"`
 }
 
-type ClientAccessPolicy struct {
-	Mode    string   `json:"mode"`
-	Clients []string `json:"clients"`
-}
+type ClientAccessPolicy = dto.ClientAccessPolicy
 
 type ClientPolicySetting struct {
 	Rules         []ClientIdentificationRule    `json:"rules"`

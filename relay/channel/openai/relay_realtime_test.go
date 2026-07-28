@@ -8,9 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/types"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	relaytypes "github.com/QuantumNous/new-api/relaykit/types"
+	hosttypes "github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -59,11 +60,11 @@ func TestPreConsumeUsageReservesCumulativeQuotaWithoutSettling(t *testing.T) {
 	recorder := &realtimeReserveRecorder{}
 	info := &relaycommon.RelayInfo{
 		Billing: recorder,
-		PriceData: types.PriceData{
+		PriceData: hosttypes.PriceData{
 			ModelRatio:      1,
 			CompletionRatio: 2,
 			AudioRatio:      1,
-			GroupRatioInfo:  types.GroupRatioInfo{GroupRatio: 1},
+			GroupRatioInfo:  hosttypes.GroupRatioInfo{GroupRatio: 1},
 		},
 	}
 	total := &dto.RealtimeUsage{}
@@ -95,11 +96,11 @@ func TestPreConsumeUsageCommitsTotalOnlyAfterReserveSucceeds(t *testing.T) {
 	recorder := &realtimeReserveRecorder{reserveErr: errors.New("reserve failed")}
 	info := &relaycommon.RelayInfo{
 		Billing: recorder,
-		PriceData: types.PriceData{
+		PriceData: hosttypes.PriceData{
 			ModelRatio:      1,
 			CompletionRatio: 2,
 			AudioRatio:      1,
-			GroupRatioInfo:  types.GroupRatioInfo{GroupRatio: 1},
+			GroupRatioInfo:  hosttypes.GroupRatioInfo{GroupRatio: 1},
 		},
 	}
 	total := &dto.RealtimeUsage{}
@@ -131,15 +132,15 @@ func TestOpenaiRealtimeHandlerReleasesUsageLockAfterBillingPanic(t *testing.T) {
 		ClientWs: clientConn,
 		TargetWs: targetConn,
 		Billing:  recorder,
-		PriceData: types.PriceData{
+		PriceData: hosttypes.PriceData{
 			ModelRatio:      1,
 			CompletionRatio: 2,
 			AudioRatio:      1,
-			GroupRatioInfo:  types.GroupRatioInfo{GroupRatio: 1},
+			GroupRatioInfo:  hosttypes.GroupRatioInfo{GroupRatio: 1},
 		},
 	}
 	type handlerResult struct {
-		err   *types.NewAPIError
+		err   *relaytypes.NewAPIError
 		usage *dto.RealtimeUsage
 	}
 	resultChan := make(chan handlerResult, 1)
@@ -153,7 +154,7 @@ func TestOpenaiRealtimeHandlerReleasesUsageLockAfterBillingPanic(t *testing.T) {
 	select {
 	case result := <-resultChan:
 		require.NotNil(t, result.err)
-		assert.Equal(t, types.ErrorCodeBadResponse, result.err.GetErrorCode())
+		assert.Equal(t, relaytypes.ErrorCodeBadResponse, result.err.GetErrorCode())
 		assert.Contains(t, result.err.Error(), "panic in target reader: reserve panic")
 		assert.Nil(t, result.usage)
 		assert.Empty(t, recorder.settles)
@@ -295,7 +296,7 @@ func TestOpenaiRealtimeHandlerForwardsNonStringInstructions(t *testing.T) {
 		ChannelMeta:          &relaycommon.ChannelMeta{UpstreamModelName: "upstream-model"},
 	}
 	type handlerResult struct {
-		err   *types.NewAPIError
+		err   *relaytypes.NewAPIError
 		usage *dto.RealtimeUsage
 	}
 	resultChan := make(chan handlerResult, 1)
