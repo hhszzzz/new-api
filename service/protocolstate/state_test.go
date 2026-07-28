@@ -323,9 +323,9 @@ func TestResponsesStateDoesNotPersistErrorStream(t *testing.T) {
 	assert.Contains(t, err.Error(), "unknown or expired")
 }
 
-func TestResponsesStateDoesNotPersistAfterClientCancellation(t *testing.T) {
+func TestResponsesStatePersistsCompletedNonStreamResponseAfterClientCancellation(t *testing.T) {
 	resetProtocolStateCaches(t)
-	ctx := protocolStateTestContext("cancelled", 14, 15)
+	ctx := protocolStateTestContext("completed-non-stream", 14, 15)
 	requestContext, cancel := context.WithCancel(ctx.Request.Context())
 	ctx.Request = ctx.Request.WithContext(requestContext)
 	request := &dto.OpenAIResponsesRequest{Model: "gpt-a", Input: mustProtocolStateJSON(t, "hello")}
@@ -334,9 +334,11 @@ func TestResponsesStateDoesNotPersistAfterClientCancellation(t *testing.T) {
 		UpstreamProtocol: channelcompat.ProtocolResponses,
 		Status:           channelcompat.StatusNative,
 	}
-	require.NoError(t, PrepareResponsesRequest(ctx, protocolStateRelayInfo("gpt-a", 3), plan, request))
+	relayInfo := protocolStateRelayInfo("gpt-a", 3)
+	relayInfo.IsStream = false
+	require.NoError(t, PrepareResponsesRequest(ctx, relayInfo, plan, request))
 	response := &dto.OpenAIResponsesResponse{
-		ID:     "upstream-cancelled",
+		ID:     "upstream-completed-non-stream",
 		Status: mustProtocolStateJSON(t, "completed"),
 		Output: []dto.ResponsesOutput{{Type: "message", Role: "assistant"}},
 	}
@@ -345,7 +347,38 @@ func TestResponsesStateDoesNotPersistAfterClientCancellation(t *testing.T) {
 	require.NoError(t, Commit(ctx))
 
 	body := mustProtocolStateJSON(t, map[string]any{"previous_response_id": publicID})
-	_, err := ResolveSelectionBinding(protocolStateTestContext("cancelled-next", 14, 15), "/v1/responses", "gpt-a", body)
+	binding, err := ResolveSelectionBinding(protocolStateTestContext("completed-non-stream-next", 14, 15), "/v1/responses", "gpt-a", body)
+	require.NoError(t, err)
+	require.NotNil(t, binding)
+	assert.Equal(t, 3, binding.ChannelID)
+}
+
+func TestResponsesStateDoesNotPersistCancelledStream(t *testing.T) {
+	resetProtocolStateCaches(t)
+	ctx := protocolStateTestContext("cancelled-stream", 14, 15)
+	requestContext, cancel := context.WithCancel(ctx.Request.Context())
+	ctx.Request = ctx.Request.WithContext(requestContext)
+	stream := true
+	request := &dto.OpenAIResponsesRequest{Model: "gpt-a", Input: mustProtocolStateJSON(t, "hello"), Stream: &stream}
+	plan := channelcompat.ProtocolPlan{
+		RequestProtocol:  channelcompat.ProtocolResponses,
+		UpstreamProtocol: channelcompat.ProtocolResponses,
+		Status:           channelcompat.StatusNative,
+	}
+	relayInfo := protocolStateRelayInfo("gpt-a", 3)
+	relayInfo.IsStream = true
+	require.NoError(t, PrepareResponsesRequest(ctx, relayInfo, plan, request))
+	response := &dto.OpenAIResponsesResponse{
+		ID:     "upstream-cancelled-stream",
+		Status: mustProtocolStateJSON(t, "completed"),
+		Output: []dto.ResponsesOutput{{Type: "message", Role: "assistant"}},
+	}
+	publicID := CaptureResponsesResponse(ctx, response.ID, response)
+	cancel()
+	require.NoError(t, Commit(ctx))
+
+	body := mustProtocolStateJSON(t, map[string]any{"previous_response_id": publicID})
+	_, err := ResolveSelectionBinding(protocolStateTestContext("cancelled-stream-next", 14, 15), "/v1/responses", "gpt-a", body)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown or expired")
 }

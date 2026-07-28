@@ -60,6 +60,7 @@ const (
 
 type pendingState struct {
 	kind               pendingKind
+	stream             bool
 	publicID           string
 	publicModel        string
 	channelID          int
@@ -162,6 +163,7 @@ func PrepareResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, plan c
 
 	pending := &pendingState{
 		kind:             pendingResponses,
+		stream:           info.IsStream,
 		publicID:         publicID,
 		publicModel:      info.OriginModelName,
 		channelID:        info.ChannelId,
@@ -405,7 +407,10 @@ func Commit(c *gin.Context) error {
 	if pending == nil || !pending.completed {
 		return nil
 	}
-	if c == nil || c.Request == nil || c.Request.Context().Err() != nil {
+	if c == nil || c.Request == nil {
+		return nil
+	}
+	if pending.stream && c.Request.Context().Err() != nil {
 		return nil
 	}
 	if pending.kind == pendingMessages {

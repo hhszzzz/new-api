@@ -93,6 +93,7 @@ func PrepareMessagesRequest(c *gin.Context, info *relaycommon.RelayInfo, plan ch
 
 	pending := &pendingState{
 		kind:             pendingMessages,
+		stream:           info.IsStream,
 		publicModel:      info.OriginModelName,
 		channelID:        info.ChannelId,
 		requestProtocol:  string(plan.RequestProtocol),
