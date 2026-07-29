@@ -326,6 +326,7 @@ const SENSITIVE_FORM_FIELDS = [
   'pass_through_body_enabled',
   'system_prompt',
   'system_prompt_override',
+  'allow_alpha_search',
   'allow_service_tier',
   'disable_store',
   'allow_safety_identifier',
@@ -833,6 +834,7 @@ export function ChannelMutateDrawer({
   const currentHttp2ConnectionShards = form.watch('http2_connection_shards')
   const currentSystemPrompt = form.watch('system_prompt')
   const currentSystemPromptOverride = form.watch('system_prompt_override')
+  const currentAllowAlphaSearch = form.watch('allow_alpha_search')
   const currentAllowServiceTier = form.watch('allow_service_tier')
   const currentDisableStore = form.watch('disable_store')
   const currentAllowSafetyIdentifier = form.watch('allow_safety_identifier')
@@ -1131,6 +1133,7 @@ export function ChannelMutateDrawer({
     currentThinkingToContent ||
     currentPassThroughBodyEnabled ||
     currentDisableTaskPollingSleep ||
+    (currentType === 1 && currentAllowAlphaSearch) ||
     currentProxy?.trim() ||
     currentSystemPrompt?.trim() ||
     currentSystemPromptOverride ||
@@ -4455,6 +4458,33 @@ export function ChannelMutateDrawer({
                                         <FormDescription>
                                           {t(
                                             'Force format response to OpenAI standard (OpenAI channel only)'
+                                          )}
+                                        </FormDescription>
+                                      </div>
+                                      <FormControl>
+                                        <Switch
+                                          checked={field.value}
+                                          onCheckedChange={field.onChange}
+                                        />
+                                      </FormControl>
+                                    </FormItem>
+                                  )}
+                                />
+                              )}
+
+                              {currentType === 1 && (
+                                <FormField
+                                  control={form.control}
+                                  name='allow_alpha_search'
+                                  render={({ field }) => (
+                                    <FormItem className='flex items-center justify-between gap-3 px-4 py-3'>
+                                      <div className='space-y-0.5'>
+                                        <FormLabel>
+                                          {t('Allow Alpha Search')}
+                                        </FormLabel>
+                                        <FormDescription>
+                                          {t(
+                                            'Forward /v1/alpha/search to this OpenAI-compatible upstream. Enable only when the upstream natively supports it.'
                                           )}
                                         </FormDescription>
                                       </div>
