@@ -78,6 +78,7 @@ func ResponsesRequestToChatCompletionsRequestWithContext(c context.Context, req 
 		SafetyIdentifier:     req.SafetyIdentifier,
 		PromptCacheRetention: req.PromptCacheRetention,
 		EnableThinking:       req.EnableThinking,
+		ThinkingBudget:       req.ThinkingBudget,
 	}
 	if req.Stream != nil && *req.Stream {
 		if out.StreamOptions == nil {
