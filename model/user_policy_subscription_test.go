@@ -27,6 +27,7 @@ func setupUserPolicySubscriptionTestDB(t *testing.T) *gorm.DB {
 		&User{},
 		&UserGroupMembership{},
 		&UserModelPermission{},
+		&UserModelBlock{},
 		&UserModelRoute{},
 		&UserModelRouteGroup{},
 		&UserModelRouteChannel{},
@@ -308,6 +309,28 @@ func TestPrimaryGroupIsExplicitAndKeepsLegacyColumnInSync(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "premium", loaded.Group)
 	assert.Equal(t, []string{"premium", "legacy"}, loaded.Groups)
+}
+
+func TestUserPolicyPersistsAllowlistAndBlocklistIndependently(t *testing.T) {
+	setupUserPolicySubscriptionTestDB(t)
+	user := createPolicySubscriptionTestUser(t, "legacy")
+
+	require.NoError(t, ReplaceUserPolicy(user.Id, UserPolicyUpdate{
+		Groups:                []string{"legacy"},
+		PrimaryGroup:          "legacy",
+		TopupGroup:            "legacy",
+		ModelLimitsEnabled:    true,
+		ModelLimits:           []string{"gpt-5.5", "gpt-5.4", "gpt-5.5"},
+		ModelBlocklistEnabled: true,
+		ModelBlocklist:        []string{"gpt-5.5", "gpt-5.5"},
+	}))
+
+	loaded, err := GetUserById(user.Id, false)
+	require.NoError(t, err)
+	assert.True(t, loaded.ModelLimitsEnabled)
+	assert.Equal(t, []string{"gpt-5.4", "gpt-5.5"}, loaded.ModelLimits)
+	assert.True(t, loaded.ModelBlocklistEnabled)
+	assert.Equal(t, []string{"gpt-5.5"}, loaded.ModelBlocklist)
 }
 
 func TestPolicyEditPreservesRoutesScopedToAuthorizedRequestGroups(t *testing.T) {

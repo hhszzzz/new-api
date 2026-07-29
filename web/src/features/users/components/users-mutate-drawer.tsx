@@ -168,6 +168,9 @@ export function UsersMutateDrawer({
           defaults.group = defaults.primary_group
           defaults.model_limits_enabled = policyResult.data.model_limits_enabled
           defaults.model_limits = policyResult.data.model_limits
+          defaults.model_blocklist_enabled =
+            policyResult.data.model_blocklist_enabled ?? false
+          defaults.model_blocklist = policyResult.data.model_blocklist ?? []
         }
         form.reset(defaults)
       })
@@ -190,6 +193,9 @@ export function UsersMutateDrawer({
   const primaryGroup = form.watch('primary_group')
   const modelLimitsEnabled = form.watch('model_limits_enabled') ?? false
   const selectedModelLimits = form.watch('model_limits') ?? EMPTY_STRING_LIST
+  const modelBlocklistEnabled = form.watch('model_blocklist_enabled') ?? false
+  const selectedModelBlocklist =
+    form.watch('model_blocklist') ?? EMPTY_STRING_LIST
   const groupOptions = useMemo(() => {
     const values = new Set([...(groupsData?.data || []), ...selectedGroups])
     return [...values].map((group) => ({ value: group, label: group }))
@@ -198,11 +204,12 @@ export function UsersMutateDrawer({
     const values = new Set([
       ...(pricingData?.data || []).map((model) => model.model_name),
       ...selectedModelLimits,
+      ...selectedModelBlocklist,
     ])
     return [...values]
       .sort((left, right) => left.localeCompare(right))
       .map((model) => ({ value: model, label: model }))
-  }, [pricingData?.data, selectedModelLimits])
+  }, [pricingData?.data, selectedModelLimits, selectedModelBlocklist])
   const canEditAdminPermissions = currentUser?.role === ROLE.SUPER_ADMIN
   const targetIsAdmin = (selectedRole ?? currentRow?.role ?? 0) >= ROLE.ADMIN
 
@@ -603,6 +610,53 @@ export function UsersMutateDrawer({
                         <FormDescription>
                           {t('No selection blocks access to every model')}
                         </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                )}
+
+                <FormField
+                  control={form.control}
+                  name='model_blocklist_enabled'
+                  render={({ field }) => (
+                    <FormItem className='flex items-center justify-between gap-4'>
+                      <div className='space-y-1'>
+                        <FormLabel>{t('Block selected models')}</FormLabel>
+                        <FormDescription>
+                          {t(
+                            'Selected models are hidden and cannot be used, even when they are allowed above'
+                          )}
+                        </FormDescription>
+                      </div>
+                      <FormControl>
+                        <Switch
+                          checked={field.value === true}
+                          onCheckedChange={field.onChange}
+                          aria-label={t('Block selected models')}
+                        />
+                      </FormControl>
+                    </FormItem>
+                  )}
+                />
+
+                {modelBlocklistEnabled && (
+                  <FormField
+                    control={form.control}
+                    name='model_blocklist'
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t('Blocked Models')}</FormLabel>
+                        <FormControl>
+                          <MultiSelect
+                            id='user-model-blocklist'
+                            options={modelOptions}
+                            selected={field.value || []}
+                            onChange={field.onChange}
+                            placeholder={t('Select blocked models')}
+                            maxVisibleChips={5}
+                          />
+                        </FormControl>
                         <FormMessage />
                       </FormItem>
                     )}

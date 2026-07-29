@@ -81,12 +81,16 @@ func writeUserCache(user *UserBase, includeQuota bool) error {
 	if err != nil {
 		return err
 	}
+	modelBlocklistJSON, err := common.Marshal(user.ModelBlocklist)
+	if err != nil {
+		return err
+	}
 	const script = `
 local incoming = tonumber(ARGV[1])
 local pending = tonumber(redis.call('GET', KEYS[2]) or '0')
 local committed = tonumber(redis.call('GET', KEYS[3]) or '0')
 local current = tonumber(redis.call('HGET', KEYS[1], 'AuthVersion') or '0')
-local incomingPolicy = tonumber(ARGV[17])
+local incomingPolicy = tonumber(ARGV[19])
 local pendingPolicy = tonumber(redis.call('GET', KEYS[4]) or '0')
 local committedPolicy = tonumber(redis.call('GET', KEYS[5]) or '0')
 local currentPolicy = tonumber(redis.call('HGET', KEYS[1], 'PolicyVersion') or '0')
@@ -103,7 +107,7 @@ if pending > 0 and pending <= incoming then
   redis.call('DEL', KEYS[2])
 end
 if committedPolicy < incomingPolicy then
-  redis.call('SET', KEYS[5], ARGV[17])
+	redis.call('SET', KEYS[5], ARGV[19])
 end
 if pendingPolicy > 0 and pendingPolicy <= incomingPolicy then
   redis.call('DEL', KEYS[4])
@@ -116,7 +120,8 @@ redis.call('HSET', KEYS[1],
   'Status', ARGV[5], 'Role', ARGV[6], 'Username', ARGV[7],
 	'Setting', ARGV[8], 'AuthVersion', ARGV[1], 'CacheSchema', ARGV[9],
 	'Groups', ARGV[13], 'TopupGroup', ARGV[14],
-	'ModelLimitsEnabled', ARGV[15], 'ModelLimits', ARGV[16], 'PolicyVersion', ARGV[17])
+	'ModelLimitsEnabled', ARGV[15], 'ModelLimits', ARGV[16],
+	'ModelBlocklistEnabled', ARGV[17], 'ModelBlocklist', ARGV[18], 'PolicyVersion', ARGV[19])
 if ARGV[10] == '1' and redis.call('HEXISTS', KEYS[1], 'Quota') == 0 then
   redis.call('HSET', KEYS[1], 'Quota', ARGV[11])
 end
@@ -129,7 +134,8 @@ return 1`
 		},
 		user.AuthVersion, user.Id, user.Group, user.Email, user.Status, user.Role,
 		user.Username, user.Setting, user.CacheSchema, includeQuotaArg, user.Quota, ttl,
-		string(groupsJSON), user.TopupGroup, user.ModelLimitsEnabled, string(modelLimitsJSON), user.PolicyVersion,
+		string(groupsJSON), user.TopupGroup, user.ModelLimitsEnabled, string(modelLimitsJSON),
+		user.ModelBlocklistEnabled, string(modelBlocklistJSON), user.PolicyVersion,
 	).Int()
 	if err != nil {
 		return err

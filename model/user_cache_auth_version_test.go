@@ -86,6 +86,27 @@ func TestPendingUserAuthFenceRejectsStaleCacheWrite(t *testing.T) {
 	assert.False(t, server.Exists(getUserCacheKey(userID)))
 }
 
+func TestUserCacheRoundTripsModelBlocklist(t *testing.T) {
+	useUserCacheMiniRedis(t)
+	const userID = 4203
+
+	require.NoError(t, writeUserCache(&UserBase{
+		Id:                    userID,
+		Group:                 "default",
+		Groups:                []string{"default"},
+		Username:              "blocked-model-cache",
+		AuthVersion:           1,
+		PolicyVersion:         2,
+		ModelBlocklistEnabled: true,
+		ModelBlocklist:        []string{"gpt-5.5"},
+	}, true))
+
+	cached, err := cacheGetUserBase(userID)
+	require.NoError(t, err)
+	assert.True(t, cached.ModelBlocklistEnabled)
+	assert.Equal(t, []string{"gpt-5.5"}, cached.ModelBlocklist)
+}
+
 func TestUserAuthFieldUpdateRejectsVersionMismatch(t *testing.T) {
 	useUserCacheMiniRedis(t)
 	const userID = 4202

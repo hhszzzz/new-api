@@ -44,6 +44,8 @@ export const userFormSchema = z.object({
   primary_group: z.string().optional(),
   model_limits_enabled: z.boolean().optional(),
   model_limits: z.array(z.string()).optional(),
+  model_blocklist_enabled: z.boolean().optional(),
+  model_blocklist: z.array(z.string()).optional(),
   remark: z.string().optional(),
   admin_permissions: z
     .record(z.string(), z.record(z.string(), z.boolean()))
@@ -67,6 +69,8 @@ export const USER_FORM_DEFAULT_VALUES: UserFormValues = {
   primary_group: DEFAULT_GROUP,
   model_limits_enabled: false,
   model_limits: [],
+  model_blocklist_enabled: false,
+  model_blocklist: [],
   remark: '',
   // Filled against the backend catalog at render time; see UsersMutateDrawer.
   admin_permissions: {},
@@ -106,6 +110,8 @@ export function transformFormDataToPayload(
   payload.primary_group = data.primary_group || data.groups?.[0] || data.group
   payload.model_limits_enabled = data.model_limits_enabled === true
   payload.model_limits = data.model_limits || []
+  payload.model_blocklist_enabled = data.model_blocklist_enabled === true
+  payload.model_blocklist = data.model_blocklist || []
 
   // Profile and policy fields are accepted by both create and update APIs so
   // the backend can persist them atomically.
@@ -142,6 +148,8 @@ export function transformUserToFormDefaults(user: User): UserFormValues {
     primary_group: user.group || groups[0] || DEFAULT_GROUP,
     model_limits_enabled: user.model_limits_enabled ?? false,
     model_limits: user.model_limits ?? [],
+    model_blocklist_enabled: user.model_blocklist_enabled ?? false,
+    model_blocklist: user.model_blocklist ?? [],
     remark: user.remark || '',
     admin_permissions: user.admin_permissions ?? {},
   }

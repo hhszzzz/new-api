@@ -50,6 +50,8 @@ export const userSchema = z.object({
   topup_group: z.string().optional(),
   model_limits_enabled: z.boolean().optional(),
   model_limits: z.array(z.string()).optional(),
+  model_blocklist_enabled: z.boolean().optional(),
+  model_blocklist: z.array(z.string()).optional(),
   aff_code: z.string().optional(),
   aff_count: z.number().optional(),
   aff_quota: z.number().optional(),
@@ -132,6 +134,8 @@ export interface UserFormData {
   primary_group?: string
   model_limits_enabled?: boolean
   model_limits?: string[]
+  model_blocklist_enabled?: boolean
+  model_blocklist?: string[]
   remark?: string // Only used when updating user
   admin_permissions?: AdminPermissionMatrix
 }
@@ -142,6 +146,8 @@ export interface UserPolicy {
   topup_group: string
   model_limits_enabled: boolean
   model_limits: string[]
+  model_blocklist_enabled: boolean
+  model_blocklist: string[]
 }
 
 export interface UserModelRoute {

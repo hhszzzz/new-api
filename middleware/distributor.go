@@ -58,6 +58,18 @@ func Distribute() func(c *gin.Context) {
 					return
 				}
 			}
+			if common.GetContextKeyBool(c, constant.ContextKeyUserModelBlocklistEnabled) {
+				blocked, _ := common.GetContextKeyType[map[string]bool](c, constant.ContextKeyUserModelBlocklist)
+				if blocked[matchName] {
+					abortWithProtocolMessage(
+						c,
+						http.StatusNotFound,
+						"The requested model does not exist or you do not have access to it",
+						types.ErrorCodeModelNotFound,
+					)
+					return
+				}
+			}
 			if common.GetContextKeyBool(c, constant.ContextKeyTokenModelLimitEnabled) {
 				allowed, _ := common.GetContextKeyType[map[string]bool](c, constant.ContextKeyTokenModelLimit)
 				if !allowed[matchName] {
@@ -546,7 +558,8 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 func getTaskOriginModelName(c *gin.Context) (string, error) {
 	isRemix := strings.Contains(c.Request.URL.Path, "/v1/videos/") && strings.HasSuffix(c.Request.URL.Path, "/remix")
 	if !isRemix && !common.GetContextKeyBool(c, constant.ContextKeyTokenModelLimitEnabled) &&
-		!common.GetContextKeyBool(c, constant.ContextKeyUserModelLimitEnabled) {
+		!common.GetContextKeyBool(c, constant.ContextKeyUserModelLimitEnabled) &&
+		!common.GetContextKeyBool(c, constant.ContextKeyUserModelBlocklistEnabled) {
 		return "", nil
 	}
 

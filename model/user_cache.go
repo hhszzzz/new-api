@@ -12,24 +12,26 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const userCacheSchemaVersion = 3
+const userCacheSchemaVersion = 4
 
 type UserBase struct {
-	Id                 int      `json:"id"`
-	Group              string   `json:"group"`
-	Groups             []string `json:"groups"`
-	TopupGroup         string   `json:"topup_group"`
-	ModelLimitsEnabled bool     `json:"model_limits_enabled"`
-	ModelLimits        []string `json:"model_limits"`
-	PolicyVersion      int64    `json:"-"`
-	Email              string   `json:"email"`
-	Quota              int      `json:"quota"`
-	Status             int      `json:"status"`
-	Role               int      `json:"role"`
-	Username           string   `json:"username"`
-	Setting            string   `json:"setting"`
-	AuthVersion        int64    `json:"-"`
-	CacheSchema        int      `json:"-"`
+	Id                    int      `json:"id"`
+	Group                 string   `json:"group"`
+	Groups                []string `json:"groups"`
+	TopupGroup            string   `json:"topup_group"`
+	ModelLimitsEnabled    bool     `json:"model_limits_enabled"`
+	ModelLimits           []string `json:"model_limits"`
+	ModelBlocklistEnabled bool     `json:"model_blocklist_enabled"`
+	ModelBlocklist        []string `json:"model_blocklist"`
+	PolicyVersion         int64    `json:"-"`
+	Email                 string   `json:"email"`
+	Quota                 int      `json:"quota"`
+	Status                int      `json:"status"`
+	Role                  int      `json:"role"`
+	Username              string   `json:"username"`
+	Setting               string   `json:"setting"`
+	AuthVersion           int64    `json:"-"`
+	CacheSchema           int      `json:"-"`
 }
 
 func (user *UserBase) WriteContext(c *gin.Context) {
@@ -46,6 +48,16 @@ func (user *UserBase) WriteContext(c *gin.Context) {
 		}
 	}
 	common.SetContextKey(c, constant.ContextKeyUserModelLimit, modelLimits)
+	modelBlocklistEnabled := user.ModelBlocklistEnabled && user.Role != common.RoleRootUser
+	common.SetContextKey(c, constant.ContextKeyUserModelBlocklistEnabled, modelBlocklistEnabled)
+	modelBlocklist := make(map[string]bool, len(user.ModelBlocklist))
+	for _, modelName := range user.ModelBlocklist {
+		modelBlocklist[modelName] = true
+		if normalized := ratio_setting.FormatMatchingModelName(modelName); normalized != "" {
+			modelBlocklist[normalized] = true
+		}
+	}
+	common.SetContextKey(c, constant.ContextKeyUserModelBlocklist, modelBlocklist)
 	common.SetContextKey(c, constant.ContextKeyUserQuota, user.Quota)
 	common.SetContextKey(c, constant.ContextKeyUserStatus, user.Status)
 	common.SetContextKey(c, constant.ContextKeyUserEmail, user.Email)
@@ -95,7 +107,7 @@ func populateUserCache(user User) error {
 	if !common.RedisEnabled {
 		return nil
 	}
-	if user.Groups == nil || user.ModelLimits == nil {
+	if user.Groups == nil || user.ModelLimits == nil || user.ModelBlocklist == nil {
 		if err := HydrateUserPolicy(&user); err != nil {
 			return err
 		}
@@ -110,7 +122,7 @@ func updateUserCache(user User) error {
 	if !common.RedisEnabled {
 		return nil
 	}
-	if user.Groups == nil || user.ModelLimits == nil {
+	if user.Groups == nil || user.ModelLimits == nil || user.ModelBlocklist == nil {
 		if err := HydrateUserPolicy(&user); err != nil {
 			return err
 		}

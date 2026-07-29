@@ -523,35 +523,37 @@ func buildSelfUserData(user *model.User) map[string]interface{} {
 	permissions := calculateUserPermissions(user.Role)
 	permissions["admin_permissions"] = authz.Capabilities(user.Id, user.Role)
 	return map[string]interface{}{
-		"id":                   user.Id,
-		"username":             user.Username,
-		"display_name":         user.DisplayName,
-		"role":                 user.Role,
-		"status":               user.Status,
-		"email":                user.Email,
-		"github_id":            user.GitHubId,
-		"discord_id":           user.DiscordId,
-		"oidc_id":              user.OidcId,
-		"wechat_id":            user.WeChatId,
-		"telegram_id":          user.TelegramId,
-		"group":                user.Group,
-		"groups":               user.Groups,
-		"topup_group":          user.TopupGroup,
-		"model_limits_enabled": user.ModelLimitsEnabled,
-		"model_limits":         user.ModelLimits,
-		"quota":                user.Quota,
-		"used_quota":           user.UsedQuota,
-		"request_count":        user.RequestCount,
-		"aff_code":             user.AffCode,
-		"aff_count":            user.AffCount,
-		"aff_quota":            user.AffQuota,
-		"aff_history_quota":    user.AffHistoryQuota,
-		"inviter_id":           user.InviterId,
-		"linux_do_id":          user.LinuxDOId,
-		"setting":              user.Setting,
-		"stripe_customer":      user.StripeCustomer,
-		"sidebar_modules":      userSetting.SidebarModules, // 正确提取sidebar_modules字段
-		"permissions":          permissions,
+		"id":                      user.Id,
+		"username":                user.Username,
+		"display_name":            user.DisplayName,
+		"role":                    user.Role,
+		"status":                  user.Status,
+		"email":                   user.Email,
+		"github_id":               user.GitHubId,
+		"discord_id":              user.DiscordId,
+		"oidc_id":                 user.OidcId,
+		"wechat_id":               user.WeChatId,
+		"telegram_id":             user.TelegramId,
+		"group":                   user.Group,
+		"groups":                  user.Groups,
+		"topup_group":             user.TopupGroup,
+		"model_limits_enabled":    user.ModelLimitsEnabled,
+		"model_limits":            user.ModelLimits,
+		"model_blocklist_enabled": user.ModelBlocklistEnabled,
+		"model_blocklist":         user.ModelBlocklist,
+		"quota":                   user.Quota,
+		"used_quota":              user.UsedQuota,
+		"request_count":           user.RequestCount,
+		"aff_code":                user.AffCode,
+		"aff_count":               user.AffCount,
+		"aff_quota":               user.AffQuota,
+		"aff_history_quota":       user.AffHistoryQuota,
+		"inviter_id":              user.InviterId,
+		"linux_do_id":             user.LinuxDOId,
+		"setting":                 user.Setting,
+		"stripe_customer":         user.StripeCustomer,
+		"sidebar_modules":         userSetting.SidebarModules, // 正确提取sidebar_modules字段
+		"permissions":             permissions,
 	}
 }
 
@@ -732,6 +734,29 @@ func GetUserModels(c *gin.Context) {
 		}
 		models = filtered
 	}
+	if user.Role != common.RoleRootUser && user.ModelBlocklistEnabled {
+		blocked := make(map[string]struct{}, len(user.ModelBlocklist))
+		for _, modelName := range user.ModelBlocklist {
+			modelName = strings.TrimSpace(modelName)
+			if modelName == "" {
+				continue
+			}
+			blocked[modelName] = struct{}{}
+			blocked[ratio_setting.FormatMatchingModelName(modelName)] = struct{}{}
+		}
+		filtered := make([]string, 0, len(models))
+		for _, modelName := range models {
+			matchName := ratio_setting.FormatMatchingModelName(modelName)
+			if _, denied := blocked[modelName]; denied {
+				continue
+			}
+			if _, denied := blocked[matchName]; denied {
+				continue
+			}
+			filtered = append(filtered, modelName)
+		}
+		models = filtered
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -755,11 +780,13 @@ func GetUserPolicy(c *gin.Context) {
 		return
 	}
 	common.ApiSuccess(c, model.UserPolicyUpdate{
-		Groups:             user.Groups,
-		PrimaryGroup:       user.Group,
-		TopupGroup:         user.TopupGroup,
-		ModelLimitsEnabled: user.ModelLimitsEnabled,
-		ModelLimits:        user.ModelLimits,
+		Groups:                user.Groups,
+		PrimaryGroup:          user.Group,
+		TopupGroup:            user.TopupGroup,
+		ModelLimitsEnabled:    user.ModelLimitsEnabled,
+		ModelLimits:           user.ModelLimits,
+		ModelBlocklistEnabled: user.ModelBlocklistEnabled,
+		ModelBlocklist:        user.ModelBlocklist,
 	})
 }
 
@@ -786,16 +813,20 @@ func userPolicyFromMutation(user model.User, raw map[string]json.RawMessage, fal
 	_, hasTopupGroup := raw["topup_group"]
 	_, hasModelLimitsEnabled := raw["model_limits_enabled"]
 	_, hasModelLimits := raw["model_limits"]
-	if !hasGroups && !hasPrimaryGroup && !hasLegacyGroup && !hasTopupGroup && !hasModelLimitsEnabled && !hasModelLimits {
+	_, hasModelBlocklistEnabled := raw["model_blocklist_enabled"]
+	_, hasModelBlocklist := raw["model_blocklist"]
+	if !hasGroups && !hasPrimaryGroup && !hasLegacyGroup && !hasTopupGroup && !hasModelLimitsEnabled && !hasModelLimits && !hasModelBlocklistEnabled && !hasModelBlocklist {
 		return nil, nil
 	}
 
 	update := model.UserPolicyUpdate{
-		Groups:             append([]string(nil), user.Groups...),
-		PrimaryGroup:       user.Group,
-		TopupGroup:         user.TopupGroup,
-		ModelLimitsEnabled: user.ModelLimitsEnabled,
-		ModelLimits:        append([]string(nil), user.ModelLimits...),
+		Groups:                append([]string(nil), user.Groups...),
+		PrimaryGroup:          user.Group,
+		TopupGroup:            user.TopupGroup,
+		ModelLimitsEnabled:    user.ModelLimitsEnabled,
+		ModelLimits:           append([]string(nil), user.ModelLimits...),
+		ModelBlocklistEnabled: user.ModelBlocklistEnabled,
+		ModelBlocklist:        append([]string(nil), user.ModelBlocklist...),
 	}
 	if !hasGroups {
 		switch {
@@ -834,6 +865,12 @@ func userPolicyFromMutation(user model.User, raw map[string]json.RawMessage, fal
 	}
 	if !hasModelLimits && fallback != nil {
 		update.ModelLimits = append([]string(nil), fallback.ModelLimits...)
+	}
+	if !hasModelBlocklistEnabled && fallback != nil {
+		update.ModelBlocklistEnabled = fallback.ModelBlocklistEnabled
+	}
+	if !hasModelBlocklist && fallback != nil {
+		update.ModelBlocklist = append([]string(nil), fallback.ModelBlocklist...)
 	}
 
 	normalized, err := normalizeUserPolicyUpdate(update)
@@ -889,21 +926,34 @@ func normalizeUserPolicyUpdate(update model.UserPolicyUpdate) (model.UserPolicyU
 	for _, pricing := range model.GetPricing() {
 		publicModels[pricing.ModelName] = struct{}{}
 	}
-	seenModels := make(map[string]struct{}, len(update.ModelLimits))
-	models := make([]string, 0, len(update.ModelLimits))
-	for _, modelName := range update.ModelLimits {
+	models, err := normalizeUserPolicyModels(update.ModelLimits, publicModels)
+	if err != nil {
+		return model.UserPolicyUpdate{}, err
+	}
+	blockedModels, err := normalizeUserPolicyModels(update.ModelBlocklist, publicModels)
+	if err != nil {
+		return model.UserPolicyUpdate{}, err
+	}
+	update.ModelLimits = models
+	update.ModelBlocklist = blockedModels
+	return update, nil
+}
+
+func normalizeUserPolicyModels(models []string, publicModels map[string]struct{}) ([]string, error) {
+	seenModels := make(map[string]struct{}, len(models))
+	normalized := make([]string, 0, len(models))
+	for _, modelName := range models {
 		modelName = strings.TrimSpace(modelName)
 		if _, exists := publicModels[modelName]; !exists {
-			return model.UserPolicyUpdate{}, fmt.Errorf("模型不是公开可用模型：%s", modelName)
+			return nil, fmt.Errorf("模型不是公开可用模型：%s", modelName)
 		}
 		if _, exists := seenModels[modelName]; exists {
 			continue
 		}
 		seenModels[modelName] = struct{}{}
-		models = append(models, modelName)
+		normalized = append(normalized, modelName)
 	}
-	update.ModelLimits = models
-	return update, nil
+	return normalized, nil
 }
 
 func UpdateUserPolicy(c *gin.Context) {
@@ -921,10 +971,26 @@ func UpdateUserPolicy(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgUserNoPermissionHigherLevel)
 		return
 	}
-	var update model.UserPolicyUpdate
-	if err := common.DecodeJson(c.Request.Body, &update); err != nil {
+	var raw map[string]json.RawMessage
+	if err := common.DecodeJson(c.Request.Body, &raw); err != nil {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
+	}
+	payload, err := common.Marshal(raw)
+	if err != nil {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	var update model.UserPolicyUpdate
+	if err := common.Unmarshal(payload, &update); err != nil {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	if _, exists := raw["model_blocklist_enabled"]; !exists {
+		update.ModelBlocklistEnabled = user.ModelBlocklistEnabled
+	}
+	if _, exists := raw["model_blocklist"]; !exists {
+		update.ModelBlocklist = append([]string(nil), user.ModelBlocklist...)
 	}
 	update, err = normalizeUserPolicyUpdate(update)
 	if err != nil {
@@ -936,11 +1002,13 @@ func UpdateUserPolicy(c *gin.Context) {
 		return
 	}
 	recordManageAuditFor(c, id, "user.policy.update", map[string]interface{}{
-		"groups":               update.Groups,
-		"primary_group":        update.PrimaryGroup,
-		"topup_group":          update.TopupGroup,
-		"model_limits_enabled": update.ModelLimitsEnabled,
-		"model_limit_count":    len(update.ModelLimits),
+		"groups":                  update.Groups,
+		"primary_group":           update.PrimaryGroup,
+		"topup_group":             update.TopupGroup,
+		"model_limits_enabled":    update.ModelLimitsEnabled,
+		"model_limit_count":       len(update.ModelLimits),
+		"model_blocklist_enabled": update.ModelBlocklistEnabled,
+		"model_blocklist_count":   len(update.ModelBlocklist),
 	})
 	common.ApiSuccess(c, nil)
 }
@@ -979,11 +1047,13 @@ func UpdateUser(c *gin.Context) {
 		return
 	}
 	originPolicy := model.UserPolicyUpdate{
-		Groups:             append([]string(nil), originUser.Groups...),
-		PrimaryGroup:       originUser.Group,
-		TopupGroup:         originUser.TopupGroup,
-		ModelLimitsEnabled: originUser.ModelLimitsEnabled,
-		ModelLimits:        append([]string(nil), originUser.ModelLimits...),
+		Groups:                append([]string(nil), originUser.Groups...),
+		PrimaryGroup:          originUser.Group,
+		TopupGroup:            originUser.TopupGroup,
+		ModelLimitsEnabled:    originUser.ModelLimitsEnabled,
+		ModelLimits:           append([]string(nil), originUser.ModelLimits...),
+		ModelBlocklistEnabled: originUser.ModelBlocklistEnabled,
+		ModelBlocklist:        append([]string(nil), originUser.ModelBlocklist...),
 	}
 	policyUpdate, err := userPolicyFromMutation(updatedUser, rawMutation, &originPolicy)
 	if err != nil {

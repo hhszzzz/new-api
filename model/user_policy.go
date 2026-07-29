@@ -37,20 +37,36 @@ type UserModelPermission struct {
 	CreatedAt int64  `json:"created_at" gorm:"bigint"`
 }
 
+type UserModelBlock struct {
+	Id        int    `json:"id"`
+	UserId    int    `json:"user_id" gorm:"not null;uniqueIndex:idx_user_model_block,priority:1;index"`
+	ModelName string `json:"model_name" gorm:"type:varchar(191);not null;uniqueIndex:idx_user_model_block,priority:2;index"`
+	CreatedAt int64  `json:"created_at" gorm:"bigint"`
+}
+
 type UserPolicyUpdate struct {
 	Groups []string `json:"groups"`
 	// PrimaryGroup is the compatibility/default group used by legacy clients
 	// and tokens that do not select a billing group explicitly. It must be one
 	// of Groups; membership order is kept aligned with it for old code paths.
-	PrimaryGroup       string   `json:"primary_group"`
-	TopupGroup         string   `json:"topup_group"`
-	ModelLimitsEnabled bool     `json:"model_limits_enabled"`
-	ModelLimits        []string `json:"model_limits"`
+	PrimaryGroup          string   `json:"primary_group"`
+	TopupGroup            string   `json:"topup_group"`
+	ModelLimitsEnabled    bool     `json:"model_limits_enabled"`
+	ModelLimits           []string `json:"model_limits"`
+	ModelBlocklistEnabled bool     `json:"model_blocklist_enabled"`
+	ModelBlocklist        []string `json:"model_blocklist"`
 }
 
 func (p *UserModelPermission) BeforeCreate(tx *gorm.DB) error {
 	if p.CreatedAt == 0 {
 		p.CreatedAt = common.GetTimestamp()
+	}
+	return nil
+}
+
+func (b *UserModelBlock) BeforeCreate(tx *gorm.DB) error {
+	if b.CreatedAt == 0 {
+		b.CreatedAt = common.GetTimestamp()
 	}
 	return nil
 }
@@ -217,6 +233,24 @@ func getUserModelPermissionsWithTx(tx *gorm.DB, userId int) ([]string, error) {
 	return models, nil
 }
 
+func getUserModelBlocksWithTx(tx *gorm.DB, userId int) ([]string, error) {
+	if tx == nil || userId <= 0 {
+		return nil, errors.New("invalid user model block query")
+	}
+	var blocks []UserModelBlock
+	if err := tx.Where("user_id = ?", userId).Order("model_name asc").Find(&blocks).Error; err != nil {
+		if policyTableMissing(err) {
+			return []string{}, nil
+		}
+		return nil, err
+	}
+	models := make([]string, 0, len(blocks))
+	for _, block := range blocks {
+		models = append(models, block.ModelName)
+	}
+	return models, nil
+}
+
 func hydrateUserPolicyWithTx(tx *gorm.DB, user *User) error {
 	if user == nil || user.Id <= 0 {
 		return errors.New("invalid user policy hydrate")
@@ -229,6 +263,7 @@ func hydrateUserPolicyWithTx(tx *gorm.DB, user *User) error {
 		if policyTableMissing(err) {
 			user.Groups = legacyUserGroups(user.Group)
 			user.ModelLimits = []string{}
+			user.ModelBlocklist = []string{}
 			if user.PolicyVersion < 1 {
 				user.PolicyVersion = 1
 			}
@@ -240,8 +275,13 @@ func hydrateUserPolicyWithTx(tx *gorm.DB, user *User) error {
 	if err != nil {
 		return err
 	}
+	blockedModels, err := getUserModelBlocksWithTx(tx, user.Id)
+	if err != nil {
+		return err
+	}
 	user.Groups = groups
 	user.ModelLimits = models
+	user.ModelBlocklist = blockedModels
 	return nil
 }
 
@@ -261,6 +301,7 @@ func HydrateUsersPolicy(users []*User) error {
 		}
 		user.Groups = []string{}
 		user.ModelLimits = []string{}
+		user.ModelBlocklist = []string{}
 		ids = append(ids, user.Id)
 		byId[user.Id] = user
 	}
@@ -274,6 +315,7 @@ func HydrateUsersPolicy(users []*User) error {
 				if user != nil {
 					user.Groups = legacyUserGroups(user.Group)
 					user.ModelLimits = []string{}
+					user.ModelBlocklist = []string{}
 					if user.PolicyVersion < 1 {
 						user.PolicyVersion = 1
 					}
@@ -311,6 +353,23 @@ func HydrateUsersPolicy(users []*User) error {
 	for _, permission := range permissions {
 		if user := byId[permission.UserId]; user != nil {
 			user.ModelLimits = append(user.ModelLimits, permission.ModelName)
+		}
+	}
+	var blocks []UserModelBlock
+	if err := DB.Where("user_id IN ?", ids).Order("model_name asc").Find(&blocks).Error; err != nil {
+		if policyTableMissing(err) {
+			for _, user := range users {
+				if user != nil {
+					user.ModelBlocklist = []string{}
+				}
+			}
+			return nil
+		}
+		return err
+	}
+	for _, block := range blocks {
+		if user := byId[block.UserId]; user != nil {
+			user.ModelBlocklist = append(user.ModelBlocklist, block.ModelName)
 		}
 	}
 	return nil
@@ -417,6 +476,24 @@ func replaceUserModelPermissionsWithTx(tx *gorm.DB, userId int, models []string)
 	return tx.Create(&permissions).Error
 }
 
+func replaceUserModelBlocksWithTx(tx *gorm.DB, userId int, models []string) error {
+	if tx == nil || userId <= 0 {
+		return errors.New("invalid user model block update")
+	}
+	models = normalizePolicyValues(models)
+	if err := tx.Where("user_id = ?", userId).Delete(&UserModelBlock{}).Error; err != nil {
+		return err
+	}
+	if len(models) == 0 {
+		return nil
+	}
+	blocks := make([]UserModelBlock, 0, len(models))
+	for _, modelName := range models {
+		blocks = append(blocks, UserModelBlock{UserId: userId, ModelName: modelName})
+	}
+	return tx.Create(&blocks).Error
+}
+
 func replaceUserPolicyWithTx(tx *gorm.DB, userId int, update UserPolicyUpdate) (int64, error) {
 	if tx == nil || userId <= 0 {
 		return 0, errors.New("invalid user policy update")
@@ -450,18 +527,23 @@ func replaceUserPolicyWithTx(tx *gorm.DB, userId int, update UserPolicyUpdate) (
 		groups = orderedGroups
 	}
 	models := normalizePolicyValues(update.ModelLimits)
+	blockedModels := normalizePolicyValues(update.ModelBlocklist)
 	if err := replaceUserGroupsWithTx(tx, userId, groups); err != nil {
 		return 0, err
 	}
 	if err := replaceUserModelPermissionsWithTx(tx, userId, models); err != nil {
 		return 0, err
 	}
+	if err := replaceUserModelBlocksWithTx(tx, userId, blockedModels); err != nil {
+		return 0, err
+	}
 	if _, _, err := syncUserPrimaryGroupWithTx(tx, userId); err != nil {
 		return 0, err
 	}
 	if err := tx.Model(&User{}).Where("id = ?", userId).Updates(map[string]interface{}{
-		"topup_group":          strings.TrimSpace(update.TopupGroup),
-		"model_limits_enabled": update.ModelLimitsEnabled,
+		"topup_group":             strings.TrimSpace(update.TopupGroup),
+		"model_limits_enabled":    update.ModelLimitsEnabled,
+		"model_blocklist_enabled": update.ModelBlocklistEnabled,
 	}).Error; err != nil {
 		return 0, err
 	}
@@ -470,8 +552,8 @@ func replaceUserPolicyWithTx(tx *gorm.DB, userId int, update UserPolicyUpdate) (
 
 // ReplaceUserPolicyWithTx applies the complete account policy inside an
 // existing transaction. Callers that also update the user profile can use it
-// to keep the legacy group column, memberships, model allowlist, and policy
-// version in one atomic write.
+// to keep the legacy group column, memberships, model allowlist/blocklist,
+// and policy version in one atomic write.
 func ReplaceUserPolicyWithTx(tx *gorm.DB, userId int, update UserPolicyUpdate) (int64, error) {
 	return replaceUserPolicyWithTx(tx, userId, update)
 }
@@ -510,6 +592,7 @@ func initializeUserPolicyWithTx(tx *gorm.DB, user *User) error {
 		if policyTableMissing(err) {
 			user.Groups = legacyUserGroups(user.Group)
 			user.ModelLimits = []string{}
+			user.ModelBlocklist = []string{}
 			if user.PolicyVersion < 1 {
 				user.PolicyVersion = 1
 			}
@@ -534,6 +617,7 @@ func initializeUserPolicyWithTx(tx *gorm.DB, user *User) error {
 	}
 	user.Groups = groups
 	user.ModelLimits = []string{}
+	user.ModelBlocklist = []string{}
 	updates := map[string]interface{}{}
 	if strings.TrimSpace(user.TopupGroup) == "" {
 		topupGroup := strings.TrimSpace(user.Group)

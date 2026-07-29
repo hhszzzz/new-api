@@ -35,6 +35,8 @@ const BASE_FORM: UserFormValues = {
   primary_group: 'premium',
   model_limits_enabled: false,
   model_limits: [],
+  model_blocklist_enabled: false,
+  model_blocklist: [],
   remark: '',
   admin_permissions: {},
 }
@@ -64,6 +66,20 @@ describe('user policy form transformations', () => {
     expect(payload.model_limits).toEqual([])
   })
 
+  test('preserves the selected model blocklist independently from the allowlist', () => {
+    const payload = transformFormDataToPayload({
+      ...BASE_FORM,
+      model_limits_enabled: true,
+      model_limits: ['gpt-5.4', 'gpt-5.5'],
+      model_blocklist_enabled: true,
+      model_blocklist: ['gpt-5.5'],
+    })
+
+    expect(payload.model_limits).toEqual(['gpt-5.4', 'gpt-5.5'])
+    expect(payload.model_blocklist_enabled).toBe(true)
+    expect(payload.model_blocklist).toEqual(['gpt-5.5'])
+  })
+
   test('hydrates policy fields without falling back to the legacy group', () => {
     const defaults = transformUserToFormDefaults({
       id: 7,
@@ -77,6 +93,8 @@ describe('user policy form transformations', () => {
       topup_group: 'legacy',
       model_limits_enabled: true,
       model_limits: ['gpt-5.4'],
+      model_blocklist_enabled: true,
+      model_blocklist: ['gpt-5.5'],
       status: 1,
       role: 1,
     })
@@ -86,5 +104,7 @@ describe('user policy form transformations', () => {
     expect(defaults).not.toHaveProperty('topup_group')
     expect(defaults.model_limits_enabled).toBe(true)
     expect(defaults.model_limits).toEqual(['gpt-5.4'])
+    expect(defaults.model_blocklist_enabled).toBe(true)
+    expect(defaults.model_blocklist).toEqual(['gpt-5.5'])
   })
 })

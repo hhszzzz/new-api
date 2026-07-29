@@ -35,3 +35,27 @@ func TestDistributorRejectsDirectRequestWhenUserModelPermissionIsEmpty(t *testin
 	assert.Contains(t, recorder.Body.String(), string(types.ErrorCodeModelNotFound))
 	assert.NotContains(t, recorder.Body.String(), "restricted-model")
 }
+
+func TestDistributorRejectsBlockedModelEvenWhenUserAllowlistIncludesIt(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(
+		http.MethodPost,
+		"/v1/chat/completions",
+		strings.NewReader(`{"model":"blocked-model","messages":[]}`),
+	)
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	common.SetContextKey(ctx, constant.ContextKeyUserModelLimitEnabled, true)
+	common.SetContextKey(ctx, constant.ContextKeyUserModelLimit, map[string]bool{"blocked-model": true})
+	common.SetContextKey(ctx, constant.ContextKeyUserModelBlocklistEnabled, true)
+	common.SetContextKey(ctx, constant.ContextKeyUserModelBlocklist, map[string]bool{"blocked-model": true})
+	t.Cleanup(func() { common.CleanupBodyStorage(ctx) })
+
+	Distribute()(ctx)
+
+	assert.Equal(t, http.StatusNotFound, recorder.Code)
+	require.True(t, ctx.IsAborted())
+	assert.Contains(t, recorder.Body.String(), string(types.ErrorCodeModelNotFound))
+	assert.NotContains(t, recorder.Body.String(), "blocked-model")
+}

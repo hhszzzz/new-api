@@ -228,6 +228,40 @@ func TestGetUserModelsFiltersByRequestedGroup(t *testing.T) {
 	require.Empty(t, decodeUserModelsResponse(t, vipRecorder))
 }
 
+func TestGetUserModelsExcludesBlockedModels(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(
+		&model.UserGroupMembership{},
+		&model.UserModelPermission{},
+		&model.UserModelBlock{},
+	))
+	require.NoError(t, db.Create(&model.User{
+		Id:                    1004,
+		Username:              "blocked-model-user",
+		Password:              "password",
+		Group:                 "default",
+		Status:                common.UserStatusEnabled,
+		ModelBlocklistEnabled: true,
+	}).Error)
+	require.NoError(t, db.Create(&model.UserModelBlock{
+		UserId:    1004,
+		ModelName: "zz-blocked-model",
+	}).Error)
+	require.NoError(t, db.Create(&[]model.Ability{
+		{Group: "default", Model: "zz-allowed-model", ChannelId: 1, Enabled: true},
+		{Group: "default", Model: "zz-blocked-model", ChannelId: 1, Enabled: true},
+	}).Error)
+
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(http.MethodGet, "/api/user/models?group=default", nil)
+	context.Set("id", 1004)
+
+	GetUserModels(context)
+
+	assert.ElementsMatch(t, []string{"zz-allowed-model"}, decodeUserModelsResponse(t, recorder))
+}
+
 func TestGetUserModelsExpandsAutoGroupsInConfiguredOrder(t *testing.T) {
 	originalAutoGroups := setting.AutoGroups2JsonString()
 	originalUsableGroups := setting.UserUsableGroups2JSONString()
@@ -462,11 +496,13 @@ func TestListModelsIntersectsUserAndTokenModelPermissions(t *testing.T) {
 	model.InitChannelCache()
 
 	tests := []struct {
-		name       string
-		userLimits map[string]bool
-		tokenLimit bool
-		tokenRules map[string]bool
-		want       []string
+		name                 string
+		userLimits           map[string]bool
+		userBlocklistEnabled bool
+		userBlocklist        map[string]bool
+		tokenLimit           bool
+		tokenRules           map[string]bool
+		want                 []string
 	}{
 		{
 			name:       "enabled empty user permission denies every model",
@@ -480,6 +516,15 @@ func TestListModelsIntersectsUserAndTokenModelPermissions(t *testing.T) {
 			tokenRules: map[string]bool{"permission-b": true, "permission-c": true},
 			want:       []string{"permission-b"},
 		},
+		{
+			name:                 "user blocklist wins over user and token allowlists",
+			userLimits:           map[string]bool{"permission-a": true, "permission-b": true},
+			userBlocklistEnabled: true,
+			userBlocklist:        map[string]bool{"permission-b": true},
+			tokenLimit:           true,
+			tokenRules:           map[string]bool{"permission-a": true, "permission-b": true},
+			want:                 []string{"permission-a"},
+		},
 	}
 
 	for _, test := range tests {
@@ -491,6 +536,8 @@ func TestListModelsIntersectsUserAndTokenModelPermissions(t *testing.T) {
 			common.SetContextKey(ctx, constant.ContextKeyUserGroups, []string{"default"})
 			common.SetContextKey(ctx, constant.ContextKeyUserModelLimitEnabled, true)
 			common.SetContextKey(ctx, constant.ContextKeyUserModelLimit, test.userLimits)
+			common.SetContextKey(ctx, constant.ContextKeyUserModelBlocklistEnabled, test.userBlocklistEnabled)
+			common.SetContextKey(ctx, constant.ContextKeyUserModelBlocklist, test.userBlocklist)
 			common.SetContextKey(ctx, constant.ContextKeyTokenModelLimitEnabled, test.tokenLimit)
 			common.SetContextKey(ctx, constant.ContextKeyTokenModelLimit, test.tokenRules)
 

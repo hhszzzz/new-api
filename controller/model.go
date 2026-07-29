@@ -239,6 +239,8 @@ func getAllowedModelNames(c *gin.Context, acceptUnsetRatioModel bool) ([]string,
 	}
 	userLimitEnabled := common.GetContextKeyBool(c, constant.ContextKeyUserModelLimitEnabled)
 	userLimits, _ := common.GetContextKeyType[map[string]bool](c, constant.ContextKeyUserModelLimit)
+	userBlocklistEnabled := common.GetContextKeyBool(c, constant.ContextKeyUserModelBlocklistEnabled)
+	userBlocklist, _ := common.GetContextKeyType[map[string]bool](c, constant.ContextKeyUserModelBlocklist)
 	tokenLimitEnabled := common.GetContextKeyBool(c, constant.ContextKeyTokenModelLimitEnabled)
 	tokenLimits, _ := common.GetContextKeyType[map[string]bool](c, constant.ContextKeyTokenModelLimit)
 	// A token allowlist has historically been able to expose a priced model
@@ -274,6 +276,9 @@ func getAllowedModelNames(c *gin.Context, acceptUnsetRatioModel bool) ([]string,
 		}
 		matchName := ratio_setting.FormatMatchingModelName(modelName)
 		if userLimitEnabled && !userLimits[matchName] {
+			continue
+		}
+		if userBlocklistEnabled && userBlocklist[matchName] {
 			continue
 		}
 		if tokenLimitEnabled && !tokenLimits[matchName] {

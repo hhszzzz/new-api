@@ -92,6 +92,28 @@ func getVisiblePricing(c *gin.Context) ([]model.Pricing, map[string]string, stri
 				}
 				pricing = filtered
 			}
+			if user.Role != common.RoleRootUser && user.ModelBlocklistEnabled {
+				blocked := make(map[string]struct{}, len(user.ModelBlocklist))
+				for _, modelName := range user.ModelBlocklist {
+					modelName = strings.TrimSpace(modelName)
+					if modelName == "" {
+						continue
+					}
+					blocked[modelName] = struct{}{}
+					blocked[ratio_setting.FormatMatchingModelName(modelName)] = struct{}{}
+				}
+				filtered := make([]model.Pricing, 0, len(pricing))
+				for _, item := range pricing {
+					if _, denied := blocked[item.ModelName]; denied {
+						continue
+					}
+					if _, denied := blocked[ratio_setting.FormatMatchingModelName(item.ModelName)]; denied {
+						continue
+					}
+					filtered = append(filtered, item)
+				}
+				pricing = filtered
+			}
 			return pricing, usableGroup, group, true
 		}
 	}
