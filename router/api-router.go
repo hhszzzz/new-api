@@ -299,6 +299,13 @@ func SetApiRouter(router *gin.Engine) {
 			systemInfoRoute.DELETE("/stale-instances", controller.DeleteStaleSystemInstances)
 			systemInfoRoute.DELETE("/instances/:node_name", controller.DeleteStaleSystemInstance)
 		}
+		systemUpdateRoute := apiRouter.Group("/system-update")
+		systemUpdateRoute.Use(middleware.RootAuth())
+		{
+			systemUpdateRoute.GET("/check", controller.GetSystemUpdate)
+			systemUpdateRoute.GET("/state", controller.GetSystemUpdateState)
+			systemUpdateRoute.POST("/apply", middleware.CriticalRateLimit(), controller.ApplySystemUpdate)
+		}
 
 		dataRoute := apiRouter.Group("/data")
 		dataRoute.GET("/", middleware.AdminAuth(), controller.GetAllQuotaDates)

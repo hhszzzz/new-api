@@ -341,6 +341,10 @@ export const STATIC_I18N_KEYS = [
   'No models to add',
   'No models to remove',
 
+  // System update audit
+  'A system update is already in progress.',
+  'Triggered system update to {{target_version}}',
+
   // Header manipulation
   'Pass Headers',
   'Set Header',

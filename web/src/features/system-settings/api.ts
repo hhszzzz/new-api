@@ -25,6 +25,11 @@ import type {
   SystemOptionsResponse,
   SystemTaskListResponse,
   SystemTaskResponse,
+  SystemUpdateInfo,
+  SystemUpdateResponse,
+  SystemUpdateStartResponse,
+  SystemUpdateTriggerState,
+  SystemUpdateTriggerStateResponse,
   UpdateClientPolicyOptionsRequest,
   UpdateModelPricingOptionsRequest,
   UpdateOptionRequest,
@@ -104,6 +109,40 @@ export async function listSystemTasks(limit = 20) {
     params: { limit },
   })
   return res.data
+}
+
+export async function getSystemUpdateInfo(): Promise<SystemUpdateInfo> {
+  const res = await api.get<SystemUpdateResponse>('/api/system-update/check')
+  if (!res.data.success || !res.data.data) {
+    throw new Error(res.data.message || 'Failed to check GHCR image updates')
+  }
+  return res.data.data
+}
+
+export async function startSystemUpdate() {
+  const res = await api.post<SystemUpdateStartResponse>(
+    '/api/system-update/apply'
+  )
+  if (!res.data.success || !res.data.data) {
+    throw new Error(res.data.message || 'Failed to trigger system update')
+  }
+  return res.data.data
+}
+
+export async function getRunningSystemVersion(): Promise<string | null> {
+  const res = await api.get<{
+    success: boolean
+    data?: { version?: string }
+  }>('/api/status', { skipErrorHandler: true })
+  return res.data.data?.version ?? null
+}
+
+export async function getSystemUpdateTriggerState(): Promise<SystemUpdateTriggerState | null> {
+  const res = await api.get<SystemUpdateTriggerStateResponse>(
+    '/api/system-update/state',
+    { skipErrorHandler: true }
+  )
+  return res.data.data ?? null
 }
 
 export async function resetModelRatios() {

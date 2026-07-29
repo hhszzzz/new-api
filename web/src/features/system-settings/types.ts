@@ -129,6 +129,48 @@ export type SystemTaskListResponse = {
   data?: SystemTask[]
 }
 
+export type SystemUpdateTriggerState = {
+  status: 'idle' | 'triggering' | 'requested' | 'failed'
+  target_version?: string
+  error?: string
+  started_at?: number
+}
+
+export type SystemUpdateInfo = {
+  current_version: string
+  current_revision?: string
+  latest_version: string
+  latest_revision: string
+  update_available: boolean
+  update_enabled: boolean
+  image: string
+  title?: string
+  published_at?: string
+  workflow_url?: string
+  trigger: SystemUpdateTriggerState
+}
+
+export type SystemUpdateResponse = {
+  success: boolean
+  message: string
+  data?: SystemUpdateInfo
+}
+
+export type SystemUpdateTriggerStateResponse = {
+  success: boolean
+  message: string
+  data?: SystemUpdateTriggerState
+}
+
+export type SystemUpdateStartResponse = {
+  success: boolean
+  message: string
+  data?: {
+    started: boolean
+    update: SystemUpdateInfo
+  }
+}
+
 export type SiteSettings = {
   Notice: string
   SystemName: string
