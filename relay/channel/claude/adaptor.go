@@ -6,13 +6,13 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strings"
 
 	"github.com/QuantumNous/new-api/relay/channel"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 
 	"github.com/gin-gonic/gin"
@@ -21,9 +21,16 @@ import (
 type Adaptor struct {
 }
 
-func (a *Adaptor) ConvertGeminiRequest(*gin.Context, *relaycommon.RelayInfo, *dto.GeminiChatRequest) (any, error) {
-	//TODO implement me
-	return nil, errors.New("not implemented")
+func (a *Adaptor) ConvertGeminiRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.GeminiChatRequest) (any, error) {
+	result, err := service.ConvertRequest(c, info, types.RelayFormatClaude, request)
+	if err != nil {
+		return nil, err
+	}
+	claudeRequest, ok := result.Value.(*dto.ClaudeRequest)
+	if !ok {
+		return nil, fmt.Errorf("expected Claude Messages request, got %T", result.Value)
+	}
+	return a.ConvertClaudeRequest(c, info, claudeRequest)
 }
 
 func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.ClaudeRequest) (any, error) {
@@ -45,10 +52,13 @@ func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
 
 func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 	requestPath := "/v1/messages"
-	if info != nil && strings.HasPrefix(strings.Split(strings.TrimSpace(info.RequestURLPath), "?")[0], "/v1/messages/count_tokens") {
+	if info.IsMessagesCountTokensRequest() {
 		requestPath = "/v1/messages/count_tokens"
 	}
-	requestURL := fmt.Sprintf("%s%s", info.ChannelBaseUrl, requestPath)
+	requestURL, fullEndpoint := relaycommon.ResolveFullEndpointURL(info.ChannelBaseUrl, requestPath, requestPath)
+	if !fullEndpoint {
+		requestURL = fmt.Sprintf("%s%s", info.ChannelBaseUrl, requestPath)
+	}
 	if !shouldAppendClaudeBetaQuery(info) {
 		return requestURL, nil
 	}
@@ -87,15 +97,28 @@ func CommonClaudeHeadersOperation(c *gin.Context, req *http.Header, info *relayc
 	model_setting.GetClaudeSettings().WriteHeaders(info.UpstreamModelName, req)
 }
 
+// ApplyClaudeRequestHeaders adds the protocol headers required by an
+// Anthropic-compatible Messages upstream without changing its authentication
+// scheme. Provider adaptors can keep Bearer or cloud-specific auth while still
+// sharing the version and native-client beta semantics.
+func ApplyClaudeRequestHeaders(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) {
+	if req.Get("anthropic-version") == "" {
+		anthropicVersion := ""
+		if c != nil && c.Request != nil {
+			anthropicVersion = c.Request.Header.Get("anthropic-version")
+		}
+		if anthropicVersion == "" {
+			anthropicVersion = "2023-06-01"
+		}
+		req.Set("anthropic-version", anthropicVersion)
+	}
+	CommonClaudeHeadersOperation(c, req, info)
+}
+
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) error {
 	channel.SetupApiRequestHeader(info, c, req)
 	req.Set("x-api-key", info.ApiKey)
-	anthropicVersion := c.Request.Header.Get("anthropic-version")
-	if anthropicVersion == "" {
-		anthropicVersion = "2023-06-01"
-	}
-	req.Set("anthropic-version", anthropicVersion)
-	CommonClaudeHeadersOperation(c, req, info)
+	ApplyClaudeRequestHeaders(c, req, info)
 	return nil
 }
 

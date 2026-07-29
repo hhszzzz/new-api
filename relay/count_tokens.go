@@ -75,9 +75,27 @@ func CountTokensHelper(c *gin.Context, info *relaycommon.RelayInfo) *types.NewAP
 		}
 	}
 
-	canForwardNativeMessages := info.ApiType == constant.APITypeAnthropic || info.ApiType == constant.APITypeSub2API
-	if plan.ExplicitCapabilities && info.ApiType == constant.APITypeOpenAI {
+	canForwardNativeMessages := false
+	switch info.ApiType {
+	case constant.APITypeAnthropic,
+		constant.APITypeAli,
+		constant.APITypeDeepSeek,
+		constant.APITypeMoonshot,
+		constant.APITypeMiniMax,
+		constant.APITypeVolcEngine,
+		constant.APITypeZhipuV4,
+		constant.APITypeSub2API,
+		constant.APITypeNewAPI:
 		canForwardNativeMessages = true
+	}
+	if plan.ExplicitCapabilities {
+		switch info.ApiType {
+		case constant.APITypeOpenAI,
+			constant.APITypeOpenRouter,
+			constant.APITypeXinference,
+			constant.APITypeGemini:
+			canForwardNativeMessages = true
+		}
 	}
 	if info.ApiType == constant.APITypeAdvancedCustom && info.ChannelOtherSettings.AdvancedCustom != nil {
 		route, matched := info.ChannelOtherSettings.AdvancedCustom.MatchPathForModel(c.Request.URL.Path, request.Model)

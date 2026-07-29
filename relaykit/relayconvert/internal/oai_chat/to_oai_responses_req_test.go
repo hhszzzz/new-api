@@ -96,7 +96,7 @@ func TestChatCompletionsRequestToResponsesRequestRejectsMultipleChoices(t *testi
 	assert.Contains(t, err.Error(), "n>1")
 }
 
-func TestChatCompletionsRequestToResponsesRequestPreservesAssistantReasoning(t *testing.T) {
+func TestChatCompletionsRequestToResponsesRequestDropsUntrustedAssistantReasoning(t *testing.T) {
 	reasoning := "inspect the inputs"
 	assistant := assistantMessageWithTool("I will call lookup.", "call_1", "lookup", `{"q":"x"}`)
 	assistant.ReasoningContent = &reasoning
@@ -107,17 +107,57 @@ func TestChatCompletionsRequestToResponsesRequestPreservesAssistantReasoning(t *
 	})
 	require.NoError(t, err)
 
-	assert.Equal(t, "reasoning", gjson.GetBytes(got.Input, "0.type").String())
-	assert.Equal(t, "rs_bridge_0", gjson.GetBytes(got.Input, "0.id").String())
-	assert.Equal(t, "completed", gjson.GetBytes(got.Input, "0.status").String())
-	assert.Equal(t, "summary_text", gjson.GetBytes(got.Input, "0.summary.0.type").String())
-	assert.Equal(t, reasoning, gjson.GetBytes(got.Input, "0.summary.0.text").String())
-	assert.Equal(t, "reasoning_text", gjson.GetBytes(got.Input, "0.content.0.type").String())
-	assert.Equal(t, reasoning, gjson.GetBytes(got.Input, "0.content.0.text").String())
-	assert.False(t, gjson.GetBytes(got.Input, "0.encrypted_content").Exists())
-	assert.Equal(t, "assistant", gjson.GetBytes(got.Input, "1.role").String())
-	assert.Equal(t, "I will call lookup.", gjson.GetBytes(got.Input, "1.content").String())
-	assert.Equal(t, "function_call", gjson.GetBytes(got.Input, "2.type").String())
+	assert.Equal(t, "assistant", gjson.GetBytes(got.Input, "0.role").String())
+	assert.Equal(t, "I will call lookup.", gjson.GetBytes(got.Input, "0.content").String())
+	assert.Equal(t, "function_call", gjson.GetBytes(got.Input, "1.type").String())
+	assert.False(t, gjson.GetBytes(got.Input, `#(type=="reasoning")`).Exists())
+	assert.Equal(t, "lookup", gjson.GetBytes(got.Tools, "0.name").String())
+	assert.Empty(t, got.ToolChoice)
+	assert.Empty(t, got.ParallelToolCalls)
+}
+
+func TestChatCompletionsRequestToResponsesRequestLinksLegacyFunctionResult(t *testing.T) {
+	var req dto.GeneralOpenAIRequest
+	require.NoError(t, kitutil.Unmarshal([]byte(`{
+		"model":"gpt-test",
+		"messages":[
+			{"role":"assistant","content":null,"function_call":{"name":"lookup","arguments":"{\"q\":\"x\"}"}},
+			{"role":"function","name":"lookup","content":"found"}
+		]
+	}`), &req))
+
+	got, err := ChatCompletionsRequestToResponsesRequest(&req)
+	require.NoError(t, err)
+	assert.Equal(t, "function_call", gjson.GetBytes(got.Input, "1.type").String())
+	assert.Equal(t, "call_0", gjson.GetBytes(got.Input, "1.call_id").String())
+	assert.Equal(t, "lookup", gjson.GetBytes(got.Input, "1.name").String())
+	assert.Equal(t, "function_call_output", gjson.GetBytes(got.Input, "2.type").String())
+	assert.Equal(t, "call_0", gjson.GetBytes(got.Input, "2.call_id").String())
+	assert.Equal(t, "found", gjson.GetBytes(got.Input, "2.output").String())
+}
+
+func TestChatCompletionsRequestToResponsesRequestRejectsUnmatchedLegacyFunctionResult(t *testing.T) {
+	_, err := ChatCompletionsRequestToResponsesRequest(&dto.GeneralOpenAIRequest{
+		Model: "gpt-test",
+		Messages: []dto.Message{{
+			Role:    "function",
+			Content: "orphaned result",
+		}},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing tool_call_id")
+}
+
+func TestChatCompletionsRequestToResponsesRequestPreservesSystemWhitespace(t *testing.T) {
+	got, err := ChatCompletionsRequestToResponsesRequest(&dto.GeneralOpenAIRequest{
+		Model: "gpt-test",
+		Messages: []dto.Message{
+			{Role: "system", Content: "  first  "},
+			{Role: "developer", Content: "\tsecond\n"},
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "  first  \n\n\tsecond\n", gjson.ParseBytes(got.Instructions).String())
 }
 
 func assistantMessageWithTool(content string, id string, name string, args string) dto.Message {

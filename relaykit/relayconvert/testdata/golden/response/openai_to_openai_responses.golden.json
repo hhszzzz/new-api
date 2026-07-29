@@ -1,5 +1,5 @@
 {
-  "id": "chatcmpl-fixed",
+  "id": "resp_chatcmpl-fixed",
   "object": "response",
   "created_at": 0,
   "status": "completed",
@@ -9,21 +9,18 @@
   "output": [
     {
       "type": "reasoning",
-      "id": "chatcmpl-fixed_reasoning_0",
+      "id": "rs_chatcmpl-fixed_0",
       "status": "completed",
-      "role": "",
       "summary": [
         {
           "type": "summary_text",
           "text": "Deep thought."
         }
-      ],
-      "quality": "",
-      "size": ""
+      ]
     },
     {
       "type": "message",
-      "id": "chatcmpl-fixed_msg_0",
+      "id": "msg_chatcmpl-fixed_0",
       "status": "completed",
       "role": "assistant",
       "phase": "commentary",
@@ -33,17 +30,12 @@
           "text": "The answer is 42.",
           "annotations": []
         }
-      ],
-      "quality": "",
-      "size": ""
+      ]
     },
     {
       "type": "function_call",
-      "id": "call_abc",
+      "id": "fc_chatcmpl-fixed_0",
       "status": "completed",
-      "role": "",
-      "quality": "",
-      "size": "",
       "call_id": "call_abc",
       "name": "get_weather",
       "arguments": "{\"city\":\"Paris\"}"

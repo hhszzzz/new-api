@@ -1,8 +1,8 @@
 package aws
 
 import (
+	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/claude"
+	openaichannel "github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -52,28 +53,31 @@ func newAwsClient(c *gin.Context, info *relaycommon.RelayInfo) (*bedrockruntime.
 		return nil, fmt.Errorf("new proxy http client failed: %w", err)
 	}
 
-	awsSecret := strings.Split(info.ApiKey, "|")
 	var client *bedrockruntime.Client
-	switch len(awsSecret) {
-	case 2:
-		apiKey := awsSecret[0]
-		region := awsSecret[1]
+	if info.ChannelOtherSettings.AwsKeyType == dto.AwsKeyTypeApiKey {
+		apiKey, region, err := parseBedrockAPIKey(info.ApiKey)
+		if err != nil {
+			return nil, err
+		}
 		client = bedrockruntime.New(bedrockruntime.Options{
 			Region:                  region,
 			BearerAuthTokenProvider: bearer.StaticTokenProvider{Token: bearer.Token{Value: apiKey}},
+			AuthSchemePreference:    []string{"httpBearerAuth"},
 			HTTPClient:              httpClient,
 		})
-	case 3:
-		ak := awsSecret[0]
-		sk := awsSecret[1]
-		region := awsSecret[2]
+	} else {
+		awsSecret := strings.SplitN(info.ApiKey, "|", 3)
+		if len(awsSecret) != 3 || strings.TrimSpace(awsSecret[0]) == "" || strings.TrimSpace(awsSecret[1]) == "" || strings.TrimSpace(awsSecret[2]) == "" {
+			return nil, errors.New("invalid aws secret key, should be in format of <access-key>|<secret-key>|<region>")
+		}
+		ak := strings.TrimSpace(awsSecret[0])
+		sk := strings.TrimSpace(awsSecret[1])
+		region := strings.TrimSpace(awsSecret[2])
 		client = bedrockruntime.New(bedrockruntime.Options{
 			Region:      region,
 			Credentials: aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider(ak, sk, "")),
 			HTTPClient:  httpClient,
 		})
-	default:
-		return nil, errors.New("invalid aws secret key")
 	}
 
 	return client, nil
@@ -291,7 +295,7 @@ func awsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (
 		}
 	}
 
-	if finalErr := claude.HandleStreamFinalResponse(c, info, claudeInfo); finalErr != nil {
+	if finalErr := claude.CompleteClaudeStream(c, info, claudeInfo, stream.Err()); finalErr != nil {
 		return finalErr, nil
 	}
 	return nil, claudeInfo.Usage
@@ -309,47 +313,120 @@ func handleNovaRequest(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) 
 		return types.NewOpenAIError(errors.Wrap(err, "InvokeModel"), types.ErrorCodeAwsInvokeError, statusCode), nil
 	}
 
-	// 解析Nova响应
+	return relayNovaResponse(c, info, awsResp.Body)
+}
+
+func relayNovaResponse(c *gin.Context, info *relaycommon.RelayInfo, body []byte) (*types.NewAPIError, *dto.Usage) {
+	// Parse the native Nova response, then hand a synthetic Chat Completions
+	// response to the shared OpenAI response pipeline. The protocol plan sets
+	// RelayFormat to the client protocol, so the shared handler also restores
+	// Responses or Messages JSON/SSE rather than leaking Chat JSON to clients.
 	var novaResp struct {
 		Output struct {
 			Message struct {
-				Content []struct {
-					Text string `json:"text"`
-				} `json:"content"`
+				Content []NovaContent `json:"content"`
 			} `json:"message"`
 		} `json:"output"`
 		Usage struct {
-			InputTokens  int `json:"inputTokens"`
-			OutputTokens int `json:"outputTokens"`
-			TotalTokens  int `json:"totalTokens"`
+			InputTokens           int `json:"inputTokens"`
+			OutputTokens          int `json:"outputTokens"`
+			TotalTokens           int `json:"totalTokens"`
+			CacheReadInputTokens  int `json:"cacheReadInputTokenCount"`
+			CacheWriteInputTokens int `json:"cacheWriteInputTokenCount"`
 		} `json:"usage"`
+		StopReason string `json:"stopReason"`
 	}
 
-	if err := json.Unmarshal(awsResp.Body, &novaResp); err != nil {
+	if err := common.Unmarshal(body, &novaResp); err != nil {
 		return types.NewError(errors.Wrap(err, "unmarshal nova response"), types.ErrorCodeBadResponseBody), nil
 	}
+	if len(novaResp.Output.Message.Content) == 0 {
+		return types.NewError(errors.New("nova response contains no content"), types.ErrorCodeBadResponseBody), nil
+	}
 
-	// 构造OpenAI格式响应
+	var content strings.Builder
+	toolCalls := make([]dto.ToolCallResponse, 0)
+	for _, block := range novaResp.Output.Message.Content {
+		content.WriteString(block.Text)
+		if block.ToolUse == nil {
+			continue
+		}
+		arguments, err := common.Marshal(block.ToolUse.Input)
+		if err != nil {
+			return types.NewError(errors.Wrap(err, "marshal nova tool input"), types.ErrorCodeBadResponseBody), nil
+		}
+		toolCalls = append(toolCalls, dto.ToolCallResponse{
+			ID:   block.ToolUse.ToolUseID,
+			Type: "function",
+			Function: dto.FunctionResponse{
+				Name:      block.ToolUse.Name,
+				Arguments: string(arguments),
+			},
+		})
+	}
+	finishReason := "stop"
+	switch strings.ToLower(strings.TrimSpace(novaResp.StopReason)) {
+	case "max_tokens":
+		finishReason = "length"
+	case "tool_use":
+		finishReason = "tool_calls"
+	case "content_filtered", "guardrail_intervened":
+		finishReason = "content_filter"
+	}
+	if len(toolCalls) > 0 {
+		finishReason = "tool_calls"
+	}
+	message := dto.Message{Role: "assistant"}
+	if content.Len() > 0 {
+		message.Content = content.String()
+	}
+	if len(toolCalls) > 0 {
+		message.SetToolCalls(toolCalls)
+	}
+
 	response := dto.OpenAITextResponse{
 		Id:      helper.GetResponseID(c),
 		Object:  "chat.completion",
 		Created: common.GetTimestamp(),
 		Model:   info.PublicResponseModelName(),
 		Choices: []dto.OpenAITextResponseChoice{{
-			Index: 0,
-			Message: dto.Message{
-				Role:    "assistant",
-				Content: novaResp.Output.Message.Content[0].Text,
-			},
-			FinishReason: "stop",
+			Index:        0,
+			Message:      message,
+			FinishReason: finishReason,
 		}},
 		Usage: dto.Usage{
 			PromptTokens:     novaResp.Usage.InputTokens,
 			CompletionTokens: novaResp.Usage.OutputTokens,
 			TotalTokens:      novaResp.Usage.TotalTokens,
+			PromptTokensDetails: dto.InputTokenDetails{
+				CachedTokens:         novaResp.Usage.CacheReadInputTokens,
+				CachedCreationTokens: novaResp.Usage.CacheWriteInputTokens,
+			},
 		},
 	}
 
-	c.JSON(http.StatusOK, response)
-	return nil, &response.Usage
+	responseBody, err := common.Marshal(response)
+	if err != nil {
+		return types.NewError(errors.Wrap(err, "marshal nova chat response"), types.ErrorCodeBadResponseBody), nil
+	}
+	httpResponse := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(bytes.NewReader(responseBody)),
+	}
+	if info.IsStream {
+		if err := helper.PromoteJSONResponseToSSE(httpResponse, types.RelayFormatOpenAI); err != nil {
+			return types.NewError(errors.Wrap(err, "promote nova chat response to stream"), types.ErrorCodeBadResponseBody), nil
+		}
+	}
+
+	usage, responseErr := (&openaichannel.Adaptor{}).DoResponse(c, httpResponse, info)
+	if responseErr != nil {
+		return responseErr, nil
+	}
+	chatUsage, ok := usage.(*dto.Usage)
+	if !ok {
+		return types.NewError(fmt.Errorf("expected Nova usage, got %T", usage), types.ErrorCodeBadResponseBody), nil
+	}
+	return nil, chatUsage
 }

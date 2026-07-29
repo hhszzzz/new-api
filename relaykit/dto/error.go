@@ -65,7 +65,11 @@ func (e GeneralErrorResponse) ToMessage() string {
 				return msg
 			}
 		default:
-			return string(e.Error)
+			// A JSON `null` error field (typical on Responses success bodies)
+			// carries no message.
+			if kitutil.GetJsonType(e.Error) != "null" {
+				return string(e.Error)
+			}
 		}
 	}
 	if e.Message != "" {

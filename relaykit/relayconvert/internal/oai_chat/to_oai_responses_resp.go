@@ -23,6 +23,8 @@ const (
 	responsesEventContentPartDone          = "response.content_part.done"
 	responsesEventOutputTextDelta          = "response.output_text.delta"
 	responsesEventOutputTextDone           = "response.output_text.done"
+	responsesEventRefusalDelta             = "response.refusal.delta"
+	responsesEventRefusalDone              = "response.refusal.done"
 	responsesEventOutputItemAdded          = "response.output_item.added"
 	responsesEventOutputItemDone           = "response.output_item.done"
 	responsesEventFunctionArgsDelta        = "response.function_call_arguments.delta"
@@ -52,8 +54,9 @@ func ChatCompletionsResponseToResponsesResponseWithBridgeState(resp *dto.OpenAIT
 	}
 
 	usage := UsageFromChatUsage(&resp.Usage)
+	responseID := normalizeResponsesResponseID(id)
 	out := &dto.OpenAIResponsesResponse{
-		ID:        id,
+		ID:        responseID,
 		Object:    "response",
 		CreatedAt: chatCreatedAt(resp.Created),
 		Status:    []byte(`"completed"`),
@@ -74,8 +77,9 @@ func ChatCompletionsResponseToResponsesResponseWithBridgeState(resp *dto.OpenAIT
 	}
 
 	toolOutputs := make([]dto.ResponsesOutput, 0, len(toolCalls))
+	usedToolCallIDs := make(map[string]struct{}, len(toolCalls))
 	for i, toolCall := range toolCalls {
-		toolOutput, err := chatToolCallToResponsesOutput(toolCall, id, i, responseOutputStatus(out), toolState)
+		toolOutput, err := chatToolCallToResponsesOutput(toolCall, responseID, i, responseOutputStatus(out), toolState, usedToolCallIDs)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -83,13 +87,14 @@ func ChatCompletionsResponseToResponsesResponseWithBridgeState(resp *dto.OpenAIT
 	}
 
 	text := choice.Message.StringContent()
+	refusal := choice.Message.GetRefusalContent()
 	reasoning := choice.Message.GetReasoningContent()
 	if outputState == nil || len(outputState.Items) == 0 {
 		if reasoning != "" {
-			out.Output = append(out.Output, chatResponseReasoningOutput(id, 0, reasoning, responseOutputStatus(out)))
+			out.Output = append(out.Output, chatResponseReasoningOutput(responseID, 0, reasoning, "", responseOutputStatus(out)))
 		}
-		if text != "" {
-			out.Output = append(out.Output, chatResponseMessageOutput(id, 0, text, len(toolCalls) > 0, responseOutputStatus(out)))
+		if text != "" || refusal != "" {
+			out.Output = append(out.Output, chatResponseMessageOutput(responseID, 0, text, refusal, len(toolCalls) > 0, responseOutputStatus(out)))
 		}
 		out.Output = append(out.Output, toolOutputs...)
 		return out, usage, nil
@@ -99,21 +104,27 @@ func ChatCompletionsResponseToResponsesResponseWithBridgeState(resp *dto.OpenAIT
 	messageIndex := 0
 	reasoningIndex := 0
 	usedMessage := false
+	usedRefusal := false
 	usedReasoning := false
 	for _, item := range outputState.Items {
 		switch item.Kind {
 		case sharedbridge.ResponseOutputKindMessage:
-			if item.Text == "" {
+			messageRefusal := ""
+			if !usedRefusal {
+				messageRefusal = refusal
+				usedRefusal = refusal != ""
+			}
+			if item.Text == "" && messageRefusal == "" {
 				continue
 			}
-			out.Output = append(out.Output, chatResponseMessageOutput(id, messageIndex, item.Text, len(toolCalls) > 0, responseOutputStatus(out)))
+			out.Output = append(out.Output, chatResponseMessageOutput(responseID, messageIndex, item.Text, messageRefusal, len(toolCalls) > 0, responseOutputStatus(out)))
 			messageIndex++
 			usedMessage = true
 		case sharedbridge.ResponseOutputKindReasoning:
-			if item.Text == "" {
+			if item.Text == "" && item.EncryptedContent == "" {
 				continue
 			}
-			out.Output = append(out.Output, chatResponseReasoningOutput(id, reasoningIndex, item.Text, responseOutputStatus(out)))
+			out.Output = append(out.Output, chatResponseReasoningOutput(responseID, reasoningIndex, item.Text, item.EncryptedContent, responseOutputStatus(out)))
 			reasoningIndex++
 			usedReasoning = true
 		case sharedbridge.ResponseOutputKindTool:
@@ -125,10 +136,18 @@ func ChatCompletionsResponseToResponsesResponseWithBridgeState(resp *dto.OpenAIT
 		}
 	}
 	if reasoning != "" && !usedReasoning {
-		out.Output = append(out.Output, chatResponseReasoningOutput(id, reasoningIndex, reasoning, responseOutputStatus(out)))
+		out.Output = append(out.Output, chatResponseReasoningOutput(responseID, reasoningIndex, reasoning, "", responseOutputStatus(out)))
 	}
-	if text != "" && !usedMessage {
-		out.Output = append(out.Output, chatResponseMessageOutput(id, messageIndex, text, len(toolCalls) > 0, responseOutputStatus(out)))
+	if (text != "" && !usedMessage) || (refusal != "" && !usedRefusal) {
+		messageText := ""
+		if !usedMessage {
+			messageText = text
+		}
+		messageRefusal := ""
+		if !usedRefusal {
+			messageRefusal = refusal
+		}
+		out.Output = append(out.Output, chatResponseMessageOutput(responseID, messageIndex, messageText, messageRefusal, len(toolCalls) > 0, responseOutputStatus(out)))
 	}
 	for i := range toolOutputs {
 		if !usedTools[i] {
@@ -139,39 +158,51 @@ func ChatCompletionsResponseToResponsesResponseWithBridgeState(resp *dto.OpenAIT
 	return out, usage, nil
 }
 
-func chatResponseMessageOutput(responseID string, index int, text string, hasToolCalls bool, status string) dto.ResponsesOutput {
+func chatResponseMessageOutput(responseID string, index int, text string, refusal string, hasToolCalls bool, status string) dto.ResponsesOutput {
 	phase := "final_answer"
 	if hasToolCalls {
 		phase = "commentary"
 	}
+	content := make([]dto.ResponsesOutputContent, 0, 2)
+	if text != "" {
+		content = append(content, dto.ResponsesOutputContent{
+			Type:        "output_text",
+			Text:        text,
+			Annotations: []interface{}{},
+		})
+	}
+	if refusal != "" {
+		content = append(content, dto.ResponsesOutputContent{
+			Type:    "refusal",
+			Refusal: refusal,
+		})
+	}
 	return dto.ResponsesOutput{
-		Type:   responsesOutputTypeMessage,
-		ID:     fmt.Sprintf("%s_msg_%d", responseID, index),
-		Status: status,
-		Role:   "assistant",
-		Phase:  phase,
-		Content: []dto.ResponsesOutputContent{
-			{
-				Type:        "output_text",
-				Text:        text,
-				Annotations: []interface{}{},
-			},
-		},
+		Type:    responsesOutputTypeMessage,
+		ID:      responsesSyntheticItemID("msg", responseID, index),
+		Status:  status,
+		Role:    "assistant",
+		Phase:   phase,
+		Content: content,
 	}
 }
 
-func chatResponseReasoningOutput(responseID string, index int, reasoning string, status string) dto.ResponsesOutput {
-	return dto.ResponsesOutput{
-		Type:   responsesOutputTypeReasoning,
-		ID:     fmt.Sprintf("%s_reasoning_%d", responseID, index),
-		Status: status,
-		Summary: []dto.ResponsesReasoningSummaryPart{
+func chatResponseReasoningOutput(responseID string, index int, reasoning string, encryptedContent string, status string) dto.ResponsesOutput {
+	output := dto.ResponsesOutput{
+		Type:             responsesOutputTypeReasoning,
+		ID:               responsesSyntheticItemID("rs", responseID, index),
+		Status:           status,
+		EncryptedContent: encryptedContent,
+	}
+	if reasoning != "" {
+		output.Summary = []dto.ResponsesReasoningSummaryPart{
 			{
 				Type: "summary_text",
 				Text: reasoning,
 			},
-		},
+		}
 	}
+	return output
 }
 
 func ResponsesStatusFromChatFinishReason(finishReason string) (string, *dto.IncompleteDetails) {
@@ -246,18 +277,15 @@ func responseStatusString(resp *dto.OpenAIResponsesResponse) string {
 	return strings.TrimSpace(status)
 }
 
-func chatToolCallToResponsesOutput(toolCall dto.ToolCallRequest, responseID string, index int, status string, toolState *sharedbridge.ToolState) (dto.ResponsesOutput, error) {
-	callID := strings.TrimSpace(toolCall.ID)
-	if callID == "" {
-		callID = fmt.Sprintf("%s_call_%d", responseID, index)
-	}
+func chatToolCallToResponsesOutput(toolCall dto.ToolCallRequest, responseID string, index int, status string, toolState *sharedbridge.ToolState, usedCallIDs map[string]struct{}) (dto.ResponsesOutput, error) {
+	callID := uniqueResponsesToolCallID(usedCallIDs, toolCall.ID, responseID, index)
 	if toolCall.Type == "" || toolCall.Type == "function" {
 		if identity, ok := toolState.ResolveUpstream(toolCall.Function.Name); ok {
 			switch identity.Kind {
 			case sharedbridge.ToolKindCustom:
 				return dto.ResponsesOutput{
 					Type:      "custom_tool_call",
-					ID:        callID,
+					ID:        responsesSyntheticItemID("ctc", responseID, index),
 					Status:    status,
 					CallId:    callID,
 					Name:      identity.Name,
@@ -267,7 +295,7 @@ func chatToolCallToResponsesOutput(toolCall dto.ToolCallRequest, responseID stri
 			case sharedbridge.ToolKindToolSearch:
 				return dto.ResponsesOutput{
 					Type:      "tool_search_call",
-					ID:        callID,
+					ID:        responsesSyntheticItemID("tsc", responseID, index),
 					Status:    status,
 					CallId:    callID,
 					Execution: "client",
@@ -276,7 +304,7 @@ func chatToolCallToResponsesOutput(toolCall dto.ToolCallRequest, responseID stri
 			case sharedbridge.ToolKindFunction:
 				return dto.ResponsesOutput{
 					Type:      responsesOutputTypeFunctionCall,
-					ID:        callID,
+					ID:        responsesSyntheticItemID("fc", responseID, index),
 					Status:    status,
 					CallId:    callID,
 					Name:      identity.Name,
@@ -287,7 +315,7 @@ func chatToolCallToResponsesOutput(toolCall dto.ToolCallRequest, responseID stri
 		}
 		return dto.ResponsesOutput{
 			Type:      responsesOutputTypeFunctionCall,
-			ID:        callID,
+			ID:        responsesSyntheticItemID("fc", responseID, index),
 			Status:    status,
 			CallId:    callID,
 			Name:      toolCall.Function.Name,
@@ -296,11 +324,72 @@ func chatToolCallToResponsesOutput(toolCall dto.ToolCallRequest, responseID stri
 	}
 	return dto.ResponsesOutput{
 		Type:      toolCall.Type,
-		ID:        callID,
+		ID:        responsesSyntheticItemID("tc", responseID, index),
 		Status:    status,
 		CallId:    callID,
 		Arguments: toolCall.Custom,
 	}, nil
+}
+
+func uniqueResponsesToolCallID(used map[string]struct{}, candidate string, responseID string, index int) string {
+	if used == nil {
+		used = make(map[string]struct{})
+	}
+	candidate = strings.TrimSpace(candidate)
+	if candidate != "" {
+		if _, exists := used[candidate]; !exists {
+			used[candidate] = struct{}{}
+			return candidate
+		}
+	}
+
+	base := responsesSyntheticItemID("call", responseID, index)
+	candidate = base
+	for suffix := 1; ; suffix++ {
+		if _, exists := used[candidate]; !exists {
+			used[candidate] = struct{}{}
+			return candidate
+		}
+		candidate = fmt.Sprintf("%s_%d", base, suffix)
+	}
+}
+
+func normalizeResponsesResponseID(id string) string {
+	id = strings.TrimSpace(id)
+	if strings.HasPrefix(id, "resp_") && len(id) > len("resp_") {
+		return id
+	}
+	seed := responsesIDSeed(id)
+	if seed == "" {
+		seed = responsesIDSeed(kitutil.GetUUID())
+	}
+	return "resp_" + seed
+}
+
+func responsesSyntheticItemID(prefix, responseID string, index int) string {
+	seed := strings.TrimPrefix(normalizeResponsesResponseID(responseID), "resp_")
+	return fmt.Sprintf("%s_%s_%d", prefix, seed, index)
+}
+
+func responsesIDSeed(id string) string {
+	id = strings.TrimSpace(id)
+	var seed strings.Builder
+	seed.Grow(len(id))
+	for _, char := range id {
+		switch {
+		case char >= 'a' && char <= 'z':
+			seed.WriteRune(char)
+		case char >= 'A' && char <= 'Z':
+			seed.WriteRune(char)
+		case char >= '0' && char <= '9':
+			seed.WriteRune(char)
+		case char == '_' || char == '-':
+			seed.WriteRune(char)
+		default:
+			seed.WriteByte('_')
+		}
+	}
+	return strings.Trim(seed.String(), "_-")
 }
 
 func chatArgumentsRawMessage(arguments string) []byte {

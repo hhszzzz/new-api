@@ -94,6 +94,9 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) error {
 	channel.SetupApiRequestHeader(info, c, req)
 	req.Set("Authorization", "Bearer "+info.ApiKey)
+	if info.GetFinalRequestRelayFormat() == types.RelayFormatClaude {
+		claude.ApplyClaudeRequestHeaders(c, req, info)
+	}
 	return nil
 }
 
@@ -128,7 +131,7 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 		return miniMaxImageHandler(c, resp, info)
 	}
 
-	switch info.RelayFormat {
+	switch info.GetFinalRequestRelayFormat() {
 	case types.RelayFormatClaude:
 		adaptor := claude.Adaptor{}
 		return adaptor.DoResponse(c, resp, info)

@@ -9,9 +9,39 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert"
 	"github.com/QuantumNous/new-api/setting/model_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestMergeRequestFeatureSetsPreservesUniqueCapabilities(t *testing.T) {
+	merged := MergeRequestFeatureSets(
+		RequestFeatureSet{
+			Stream:               true,
+			HasCustomTools:       true,
+			ContentTypes:         []string{"input_text", "input_image"},
+			DeclaredHostedTools:  []string{"web_search_preview"},
+			MessagesNativeFields: []string{"container"},
+		},
+		RequestFeatureSet{
+			HasPreviousResponse:   true,
+			HasNamespaceTools:     true,
+			ContentTypes:          []string{"input_image", "output_text"},
+			DeclaredHostedTools:   []string{"web_search_preview", "file_search"},
+			HistoricalHostedTools: []string{"web_search_call"},
+			MessagesNativeFields:  []string{"container", "mcp_servers"},
+		},
+	)
+
+	assert.True(t, merged.Stream)
+	assert.True(t, merged.HasPreviousResponse)
+	assert.True(t, merged.HasCustomTools)
+	assert.True(t, merged.HasNamespaceTools)
+	assert.Equal(t, []string{"input_text", "input_image", "output_text"}, merged.ContentTypes)
+	assert.Equal(t, []string{"web_search_preview", "file_search"}, merged.DeclaredHostedTools)
+	assert.Equal(t, []string{"web_search_call"}, merged.HistoricalHostedTools)
+	assert.Equal(t, []string{"container", "mcp_servers"}, merged.MessagesNativeFields)
+}
 
 func TestExtractRequestFeatureSetResponses(t *testing.T) {
 	body, err := common.Marshal(map[string]any{
@@ -64,7 +94,23 @@ func TestExtractRequestFeatureSetResponses(t *testing.T) {
 	assert.True(t, features.HasToolSearch)
 	assert.True(t, features.HasAdditionalTools)
 	assert.Equal(t, []string{"input_text", "input_image"}, features.ContentTypes)
-	assert.Equal(t, []string{"web_search_preview"}, features.HostedToolTypes)
+	assert.Equal(t, []string{"web_search_preview"}, features.DeclaredHostedTools)
+	assert.Empty(t, features.HistoricalHostedTools)
+}
+
+func TestExtractRequestFeatureSetRecognizesStringToolsAndNamespaceChildren(t *testing.T) {
+	body := []byte(`{
+		"tools":[
+			"apply_patch",
+			{"type":"namespace","name":"workspace","children":["shell"]}
+		]
+	}`)
+
+	features, err := ExtractRequestFeatureSet(ProtocolResponses, body)
+
+	require.NoError(t, err)
+	assert.True(t, features.HasCustomTools)
+	assert.True(t, features.HasNamespaceTools)
 }
 
 func TestExtractRequestFeatureSetMessagesContentTypes(t *testing.T) {
@@ -81,7 +127,41 @@ func TestExtractRequestFeatureSetMessagesContentTypes(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, features.HasThinking)
 	assert.Equal(t, []string{"text", "thinking", "tool_use", "tool_result", "document", "server_tool_use"}, features.ContentTypes)
-	assert.Equal(t, []string{"server_tool_use"}, features.HostedToolTypes)
+	assert.Empty(t, features.DeclaredHostedTools)
+	assert.Equal(t, []string{"server_tool_use"}, features.HistoricalHostedTools)
+}
+
+func TestExtractRequestFeatureSetMessagesDetectsLossyTopLevelFields(t *testing.T) {
+	body := []byte(`{
+		"stop_sequences":["END"],
+		"top_k":0,
+		"output_format":{"type":"json_schema"},
+		"output_config":{"effort":"high","format":{"type":"json"}},
+		"container":{"id":"container_1"},
+		"mcp_servers":[{"name":"tools"}],
+		"inference_geo":"us",
+		"speed":"fast",
+		"service_tier":"priority"
+	}`)
+
+	features, err := ExtractRequestFeatureSet(ProtocolMessages, body)
+
+	require.NoError(t, err)
+	assert.True(t, features.HasStopSequences)
+	assert.True(t, features.HasTopK)
+	assert.Equal(t, []string{
+		"output_format",
+		"container",
+		"mcp_servers",
+		"inference_geo",
+		"speed",
+		"service_tier",
+		"output_config",
+	}, features.MessagesNativeFields)
+
+	effortOnly, err := ExtractRequestFeatureSet(ProtocolMessages, []byte(`{"output_config":{"effort":"max"}}`))
+	require.NoError(t, err)
+	assert.Empty(t, effortOnly.MessagesNativeFields)
 }
 
 func TestExtractRequestFeatureSetTreatsUnspecifiedToolSearchAsClientExecuted(t *testing.T) {
@@ -89,19 +169,19 @@ func TestExtractRequestFeatureSetTreatsUnspecifiedToolSearchAsClientExecuted(t *
 	defaultFeatures, err := ExtractRequestFeatureSet(ProtocolResponses, defaultBody)
 	require.NoError(t, err)
 	assert.True(t, defaultFeatures.HasToolSearch)
-	assert.Empty(t, defaultFeatures.HostedToolTypes)
+	assert.Empty(t, defaultFeatures.DeclaredHostedTools)
 
 	clientBody := []byte(`{"tools":[{"type":"tool_search","execution":"client"}]}`)
 	clientFeatures, err := ExtractRequestFeatureSet(ProtocolResponses, clientBody)
 	require.NoError(t, err)
 	assert.True(t, clientFeatures.HasToolSearch)
-	assert.Empty(t, clientFeatures.HostedToolTypes)
+	assert.Empty(t, clientFeatures.DeclaredHostedTools)
 
 	serverBody := []byte(`{"tools":[{"type":"tool_search","execution":"server"}]}`)
 	serverFeatures, err := ExtractRequestFeatureSet(ProtocolResponses, serverBody)
 	require.NoError(t, err)
 	assert.True(t, serverFeatures.HasToolSearch)
-	assert.Equal(t, []string{"tool_search"}, serverFeatures.HostedToolTypes)
+	assert.Equal(t, []string{"tool_search"}, serverFeatures.DeclaredHostedTools)
 }
 
 func TestExtractRequestFeatureSetDetectsMessagesServerTools(t *testing.T) {
@@ -111,7 +191,8 @@ func TestExtractRequestFeatureSetDetectsMessagesServerTools(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.True(t, features.HasToolSearch)
-	assert.Equal(t, []string{"web_search_20250305", "tool_search_tool_regex_20251119"}, features.HostedToolTypes)
+	assert.Equal(t, []string{"web_search_20250305", "tool_search_tool_regex_20251119"}, features.DeclaredHostedTools)
+	assert.Empty(t, features.HistoricalHostedTools)
 }
 
 func TestExtractRequestFeatureSetDetectsResponsesHostedToolHistory(t *testing.T) {
@@ -139,7 +220,27 @@ func TestExtractRequestFeatureSetDetectsResponsesHostedToolHistory(t *testing.T)
 		"computer_call_output",
 		"code_interpreter_call",
 		"image_generation_call",
-	}, features.HostedToolTypes)
+	}, features.HistoricalHostedTools)
+	assert.Empty(t, features.DeclaredHostedTools)
+}
+
+func TestExtractRequestFeatureSetDetectsHostedToolsLoadedFromToolSearchOutput(t *testing.T) {
+	body := []byte(`{
+		"input":[{
+			"type":"tool_search_output",
+			"call_id":"call_search",
+			"tools":[
+				{"type":"function","name":"lookup","parameters":{"type":"object"}},
+				{"type":"web_search_preview"}
+			]
+		}]
+	}`)
+
+	features, err := ExtractRequestFeatureSet(ProtocolResponses, body)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"web_search_preview"}, features.DeclaredHostedTools)
+	assert.Empty(t, features.HistoricalHostedTools)
 }
 
 func TestPlanForRequestHonorsBridgePolicyCapabilitiesAndMappedModelOverrides(t *testing.T) {
@@ -172,6 +273,36 @@ func TestPlanForRequestHonorsBridgePolicyCapabilitiesAndMappedModelOverrides(t *
 	assert.True(t, plan.StateEnabled)
 	assert.Equal(t, "provider-chat-model", plan.EffectiveUpstreamModel)
 	assert.Equal(t, StateModeReplay, plan.StateMode)
+}
+
+func TestPlanForCompactUsesActualMappedUpstreamModelForOverrides(t *testing.T) {
+	withProtocolBridgePolicy(t, true, false)
+	allow := true
+	disallow := false
+	mapping := `{"public-model":"provider-chat-model"}`
+	channel := &model.Channel{Type: constant.ChannelTypeOpenAI, ModelMapping: &mapping}
+	channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
+		UpstreamProtocols: []string{dto.ProtocolCapabilityResponses},
+		AllowConversion:   &disallow,
+		ModelOverrides: []dto.ProtocolCapabilityModelOverride{{
+			ModelPattern:      `^provider-chat-model$`,
+			UpstreamProtocols: []string{dto.ProtocolCapabilityChat},
+			AllowConversion:   &allow,
+		}},
+	}})
+
+	plan := PlanForRequest(
+		channel,
+		ProtocolResponses,
+		ratio_setting.WithCompactModelSuffix("public-model"),
+		"/v1/responses/compact",
+		RequestFeatureSet{},
+	)
+
+	assert.Equal(t, StatusConvertible, plan.Status)
+	assert.Equal(t, ProtocolChat, plan.UpstreamProtocol)
+	assert.Equal(t, "provider-chat-model", plan.EffectiveUpstreamModel)
+	assert.Equal(t, relayconvert.ConverterOpenAIResponsesToOpenAIChat, plan.RequestConverter)
 }
 
 func TestPlanForRequestAdvancedCustomRouteOverridesDeclaredProtocols(t *testing.T) {
@@ -342,7 +473,7 @@ func TestPlanForRequestCompactCanUseChatBridge(t *testing.T) {
 	assert.Equal(t, ProtocolResponses, native.UpstreamProtocol)
 }
 
-func TestPlanForRequestRejectsStatefulResponsesFeaturesButAllowsDroppableHostedTools(t *testing.T) {
+func TestPlanForRequestRejectsStatefulAndDeclaredResponsesHostedTools(t *testing.T) {
 	withProtocolBridgePolicy(t, true, true)
 	channel := &model.Channel{Type: constant.ChannelTypeOpenAI}
 	channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
@@ -366,14 +497,21 @@ func TestPlanForRequestRejectsStatefulResponsesFeaturesButAllowsDroppableHostedT
 		})
 	}
 
-	hostedPlan := PlanForRequest(channel, ProtocolResponses, "gpt-test", "/v1/responses", RequestFeatureSet{
-		HostedToolTypes: []string{"web_search_preview", "file_search"},
+	declaredHostedPlan := PlanForRequest(channel, ProtocolResponses, "gpt-test", "/v1/responses", RequestFeatureSet{
+		DeclaredHostedTools: []string{"web_search_preview", "file_search"},
 	})
-	assert.Equal(t, StatusConvertible, hostedPlan.Status)
-	assert.Equal(t, ProtocolChat, hostedPlan.UpstreamProtocol)
+	assert.Equal(t, StatusIncompatible, declaredHostedPlan.Status)
+	assert.Contains(t, declaredHostedPlan.Reason, "native Responses")
+	assert.Contains(t, declaredHostedPlan.Reason, "web_search_preview, file_search")
+
+	historicalHostedPlan := PlanForRequest(channel, ProtocolResponses, "gpt-test", "/v1/responses", RequestFeatureSet{
+		HistoricalHostedTools: []string{"web_search_call", "file_search_call"},
+	})
+	assert.Equal(t, StatusIncompatible, historicalHostedPlan.Status)
+	assert.Contains(t, historicalHostedPlan.Reason, "web_search_call, file_search_call")
 
 	unknownPlan := PlanForRequest(channel, ProtocolResponses, "gpt-test", "/v1/responses", RequestFeatureSet{
-		HostedToolTypes: []string{"future_server_tool"},
+		HistoricalHostedTools: []string{"future_server_tool"},
 	})
 	assert.Equal(t, StatusIncompatible, unknownPlan.Status)
 	assert.Contains(t, unknownPlan.Reason, "future_server_tool")
@@ -387,11 +525,55 @@ func TestPlanForRequestRejectsMessagesServerToolsBeforeConversion(t *testing.T) 
 	}})
 
 	plan := PlanForRequest(channel, ProtocolMessages, "claude-public", "/v1/messages", RequestFeatureSet{
-		HostedToolTypes: []string{"web_search_20250305"},
+		DeclaredHostedTools: []string{"web_search_20250305"},
 	})
 
 	assert.Equal(t, StatusIncompatible, plan.Status)
 	assert.Contains(t, plan.Reason, "native Messages")
+}
+
+func TestPlanForRequestRejectsMessagesFieldsOnlyOnLossyRoutes(t *testing.T) {
+	withProtocolBridgePolicy(t, true, true)
+	responsesChannel := &model.Channel{Type: constant.ChannelTypeCodex}
+	responsesChannel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
+		UpstreamProtocols: []string{dto.ProtocolCapabilityResponses},
+	}})
+	chatChannel := &model.Channel{Type: constant.ChannelTypeOpenAI}
+	chatChannel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
+		UpstreamProtocols: []string{dto.ProtocolCapabilityChat},
+	}})
+	messagesChannel := &model.Channel{Type: constant.ChannelTypeAnthropic}
+	messagesChannel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
+		UpstreamProtocols: []string{dto.ProtocolCapabilityMessages},
+	}})
+
+	stopPlan := PlanForRequest(responsesChannel, ProtocolMessages, "claude-public", "/v1/messages", RequestFeatureSet{HasStopSequences: true})
+	assert.Equal(t, StatusIncompatible, stopPlan.Status)
+	assert.Contains(t, stopPlan.Reason, "stop_sequences")
+
+	topKPlan := PlanForRequest(responsesChannel, ProtocolMessages, "claude-public", "/v1/messages", RequestFeatureSet{HasTopK: true})
+	assert.Equal(t, StatusIncompatible, topKPlan.Status)
+	assert.Contains(t, topKPlan.Reason, "top_k")
+
+	chatPlan := PlanForRequest(chatChannel, ProtocolMessages, "claude-public", "/v1/messages", RequestFeatureSet{
+		HasStopSequences: true,
+		HasTopK:          true,
+	})
+	assert.Equal(t, StatusConvertible, chatPlan.Status)
+	assert.Equal(t, ProtocolChat, chatPlan.UpstreamProtocol)
+
+	nativeOnlyPlan := PlanForRequest(chatChannel, ProtocolMessages, "claude-public", "/v1/messages", RequestFeatureSet{
+		MessagesNativeFields: []string{"output_format", "container"},
+	})
+	assert.Equal(t, StatusIncompatible, nativeOnlyPlan.Status)
+	assert.Contains(t, nativeOnlyPlan.Reason, "output_format, container")
+
+	nativePlan := PlanForRequest(messagesChannel, ProtocolMessages, "claude-public", "/v1/messages", RequestFeatureSet{
+		HasStopSequences:     true,
+		HasTopK:              true,
+		MessagesNativeFields: []string{"output_format"},
+	})
+	assert.Equal(t, StatusNative, nativePlan.Status)
 }
 
 func TestPlanForRequestRejectsLossyContentTypesOnlyForConversion(t *testing.T) {
@@ -405,7 +587,8 @@ func TestPlanForRequestRejectsLossyContentTypesOnlyForConversion(t *testing.T) {
 		ContentTypes: []string{"text", "document", "redacted_thinking"},
 	})
 	assert.Equal(t, StatusIncompatible, messagesPlan.Status)
-	assert.Contains(t, messagesPlan.Reason, "document, redacted_thinking")
+	assert.Contains(t, messagesPlan.Reason, "redacted_thinking")
+	assert.NotContains(t, messagesPlan.Reason, "document")
 
 	messagesChannel := &model.Channel{Type: constant.ChannelTypeAnthropic}
 	messagesChannel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
@@ -439,7 +622,7 @@ func TestPlanForRequestTriesNextProtocolWhenContentIsLossyForFirst(t *testing.T)
 }
 
 func TestPlanForRequestDefaultUpstreamProtocols(t *testing.T) {
-	withProtocolBridgePolicy(t, true, false)
+	withProtocolBridgePolicy(t, true, true)
 	officialURL := "https://api.openai.com/v1"
 	emptyURL := ""
 	compatibleURL := "https://gateway.example/v1"
@@ -452,17 +635,142 @@ func TestPlanForRequestDefaultUpstreamProtocols(t *testing.T) {
 		{name: "Codex Responses", channel: &model.Channel{Type: constant.ChannelTypeCodex}, protocol: ProtocolResponses, status: StatusNative},
 		{name: "Anthropic Messages", channel: &model.Channel{Type: constant.ChannelTypeAnthropic}, protocol: ProtocolMessages, status: StatusNative},
 		{name: "AWS Messages", channel: &model.Channel{Type: constant.ChannelTypeAws}, protocol: ProtocolMessages, status: StatusNative},
+		{name: "AWS Nova bridges Responses through Chat", channel: &model.Channel{Type: constant.ChannelTypeAws}, protocol: ProtocolResponses, status: StatusConvertible},
+		{name: "AWS Nova bridges Messages through Chat", channel: &model.Channel{Type: constant.ChannelTypeAws}, protocol: ProtocolMessages, status: StatusConvertible},
 		{name: "Azure Responses", channel: &model.Channel{Type: constant.ChannelTypeAzure}, protocol: ProtocolResponses, status: StatusNative},
 		{name: "default OpenAI Responses", channel: &model.Channel{Type: constant.ChannelTypeOpenAI}, protocol: ProtocolResponses, status: StatusNative},
 		{name: "empty OpenAI Responses", channel: &model.Channel{Type: constant.ChannelTypeOpenAI, BaseURL: &emptyURL}, protocol: ProtocolResponses, status: StatusNative},
 		{name: "official OpenAI Responses", channel: &model.Channel{Type: constant.ChannelTypeOpenAI, BaseURL: &officialURL}, protocol: ProtocolResponses, status: StatusNative},
 		{name: "compatible OpenAI Chat", channel: &model.Channel{Type: constant.ChannelTypeOpenAI, BaseURL: &compatibleURL}, protocol: ProtocolChat, status: StatusNative},
-		{name: "compatible OpenAI does not assume Responses", channel: &model.Channel{Type: constant.ChannelTypeOpenAI, BaseURL: &compatibleURL}, protocol: ProtocolResponses, status: StatusIncompatible},
+		{name: "compatible OpenAI bridges Responses through Chat", channel: &model.Channel{Type: constant.ChannelTypeOpenAI, BaseURL: &compatibleURL}, protocol: ProtocolResponses, status: StatusConvertible},
+		{name: "Gemini bridges Responses through generateContent", channel: &model.Channel{Type: constant.ChannelTypeGemini}, protocol: ProtocolResponses, status: StatusConvertible},
+		{name: "Vertex Gemini bridges Responses through generateContent", channel: &model.Channel{Type: constant.ChannelTypeVertexAi}, protocol: ProtocolResponses, status: StatusConvertible},
+		{name: "Vertex Claude Messages", channel: &model.Channel{Type: constant.ChannelTypeVertexAi}, protocol: ProtocolMessages, status: StatusNative},
+		{name: "Vertex open source bridges Responses through Chat", channel: &model.Channel{Type: constant.ChannelTypeVertexAi}, protocol: ProtocolResponses, status: StatusConvertible},
+		{name: "Ali Responses", channel: &model.Channel{Type: constant.ChannelTypeAli}, protocol: ProtocolResponses, status: StatusNative},
+		{name: "VolcEngine Responses", channel: &model.Channel{Type: constant.ChannelTypeVolcEngine}, protocol: ProtocolResponses, status: StatusNative},
+		{name: "XAI Responses", channel: &model.Channel{Type: constant.ChannelTypeXai}, protocol: ProtocolResponses, status: StatusNative},
+		{name: "Sub2API Messages", channel: &model.Channel{Type: constant.ChannelTypeSub2API}, protocol: ProtocolMessages, status: StatusNative},
+		{name: "New API Responses", channel: &model.Channel{Type: constant.ChannelTypeNewAPI}, protocol: ProtocolResponses, status: StatusNative},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			plan := PlanForRequest(test.channel, test.protocol, "model", canonicalPath(test.protocol, "model"), RequestFeatureSet{})
+			modelName := "model"
+			switch test.name {
+			case "AWS Nova bridges Responses through Chat", "AWS Nova bridges Messages through Chat":
+				modelName = "nova-pro-v1:0"
+			case "Vertex Claude Messages":
+				modelName = "claude-sonnet-4"
+			case "Vertex open source bridges Responses through Chat":
+				modelName = "meta/llama3-405b-instruct-maas"
+			}
+			plan := PlanForRequest(test.channel, test.protocol, modelName, canonicalPath(test.protocol, modelName), RequestFeatureSet{})
 			assert.Equal(t, test.status, plan.Status)
+		})
+	}
+}
+
+func TestPlanForRequestExplicitMessagesOverridesProviderHeuristics(t *testing.T) {
+	withProtocolBridgePolicy(t, true, false)
+	volcBaseURL := "https://ark.example"
+	tests := []struct {
+		name    string
+		channel *model.Channel
+		model   string
+	}{
+		{name: "Ali", channel: &model.Channel{Type: constant.ChannelTypeAli}, model: "wan2.6"},
+		{name: "VolcEngine", channel: &model.Channel{Type: constant.ChannelTypeVolcEngine, BaseURL: &volcBaseURL}, model: "doubao-seed-code"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			test.channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
+				UpstreamProtocols: []string{dto.ProtocolCapabilityMessages},
+			}})
+
+			plan := PlanForRequest(test.channel, ProtocolMessages, test.model, "/v1/messages", RequestFeatureSet{})
+
+			assert.Equal(t, StatusNative, plan.Status)
+			assert.Equal(t, ProtocolMessages, plan.UpstreamProtocol)
+			assert.True(t, plan.ExplicitCapabilities)
+		})
+	}
+}
+
+func TestPlanForRequestUnconfiguredProviderHeuristicsKeepLegacyChatFallback(t *testing.T) {
+	withProtocolBridgePolicy(t, false, false)
+	volcBaseURL := "https://ark.example"
+	tests := []struct {
+		name    string
+		channel *model.Channel
+		model   string
+	}{
+		{name: "Ali", channel: &model.Channel{Type: constant.ChannelTypeAli}, model: "wan2.6"},
+		{name: "VolcEngine", channel: &model.Channel{Type: constant.ChannelTypeVolcEngine, BaseURL: &volcBaseURL}, model: "doubao-seed-code"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			plan := PlanForRequest(test.channel, ProtocolMessages, test.model, "/v1/messages", RequestFeatureSet{})
+
+			assert.Equal(t, StatusConvertible, plan.Status)
+			assert.Equal(t, ProtocolChat, plan.UpstreamProtocol)
+			assert.False(t, plan.ExplicitCapabilities)
+		})
+	}
+}
+
+func TestPlanForRequestPreservesLegacyCapabilitiesWhenConversionRequiresExplicitOptIn(t *testing.T) {
+	withProtocolBridgePolicy(t, true, false)
+	compatibleURL := "https://gateway.example/v1"
+	tests := []struct {
+		name             string
+		channel          *model.Channel
+		protocol         Protocol
+		wantStatus       Status
+		wantUpstream     Protocol
+		wantConverter    string
+		wantStateEnabled bool
+	}{
+		{
+			name:         "OpenAI-compatible Responses remains native",
+			channel:      &model.Channel{Type: constant.ChannelTypeOpenAI, BaseURL: &compatibleURL},
+			protocol:     ProtocolResponses,
+			wantStatus:   StatusNative,
+			wantUpstream: ProtocolResponses,
+		},
+		{
+			name:          "Gemini Responses keeps existing converter",
+			channel:       &model.Channel{Type: constant.ChannelTypeGemini},
+			protocol:      ProtocolResponses,
+			wantStatus:    StatusConvertible,
+			wantUpstream:  ProtocolGemini,
+			wantConverter: relayconvert.ConverterOpenAIResponsesToGemini,
+		},
+		{
+			name:         "Ali Responses remains native",
+			channel:      &model.Channel{Type: constant.ChannelTypeAli},
+			protocol:     ProtocolResponses,
+			wantStatus:   StatusNative,
+			wantUpstream: ProtocolResponses,
+		},
+		{
+			name:         "VolcEngine Responses remains native",
+			channel:      &model.Channel{Type: constant.ChannelTypeVolcEngine},
+			protocol:     ProtocolResponses,
+			wantStatus:   StatusNative,
+			wantUpstream: ProtocolResponses,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			plan := PlanForRequest(test.channel, test.protocol, "model", canonicalPath(test.protocol, "model"), RequestFeatureSet{})
+
+			assert.Equal(t, test.wantStatus, plan.Status)
+			assert.Equal(t, test.wantUpstream, plan.UpstreamProtocol)
+			assert.Equal(t, test.wantConverter, plan.RequestConverter)
+			assert.Equal(t, test.wantStateEnabled, plan.StateEnabled)
 		})
 	}
 }
@@ -479,13 +787,13 @@ func TestPlansForRequestAutomaticOrderFollowsEntryProtocol(t *testing.T) {
 			name:        "Codex Responses",
 			protocol:    ProtocolResponses,
 			requestPath: "/v1/responses",
-			want:        []Protocol{ProtocolResponses, ProtocolChat, ProtocolMessages},
+			want:        []Protocol{ProtocolResponses, ProtocolChat, ProtocolMessages, ProtocolGemini},
 		},
 		{
 			name:        "Claude Code Messages",
 			protocol:    ProtocolMessages,
 			requestPath: "/v1/messages",
-			want:        []Protocol{ProtocolMessages, ProtocolChat, ProtocolResponses},
+			want:        []Protocol{ProtocolMessages, ProtocolChat, ProtocolResponses, ProtocolGemini},
 		},
 	}
 
@@ -509,6 +817,76 @@ func TestPlansForRequestAutomaticOrderFollowsEntryProtocol(t *testing.T) {
 			assert.Equal(t, StatusNative, plans[0].Status)
 			assert.Equal(t, StatusConvertible, plans[1].Status)
 			assert.Equal(t, StatusConvertible, plans[2].Status)
+		})
+	}
+}
+
+func TestPlansForRequestAutomaticModeOnlyProbesExecutableProviderProtocols(t *testing.T) {
+	withProtocolBridgePolicy(t, false, false)
+	tests := []struct {
+		name    string
+		channel *model.Channel
+		model   string
+		want    []Protocol
+	}{
+		{name: "Codex", channel: &model.Channel{Type: constant.ChannelTypeCodex}, model: "gpt-5", want: []Protocol{ProtocolResponses}},
+		{name: "AWS Claude", channel: &model.Channel{Type: constant.ChannelTypeAws}, model: "claude-sonnet", want: []Protocol{ProtocolMessages}},
+		{name: "AWS Nova", channel: &model.Channel{Type: constant.ChannelTypeAws}, model: "amazon.nova-pro-v1:0", want: []Protocol{ProtocolChat}},
+		{name: "DeepSeek", channel: &model.Channel{Type: constant.ChannelTypeDeepSeek}, model: "deepseek-v4", want: []Protocol{ProtocolChat, ProtocolMessages}},
+		{name: "xAI", channel: &model.Channel{Type: constant.ChannelTypeXai}, model: "grok-4", want: []Protocol{ProtocolResponses, ProtocolChat}},
+		{name: "Ali without Messages model support", channel: &model.Channel{Type: constant.ChannelTypeAli}, model: "wan2.6", want: []Protocol{ProtocolResponses, ProtocolChat}},
+		{name: "Ali with Messages model support", channel: &model.Channel{Type: constant.ChannelTypeAli}, model: "qwen-max", want: []Protocol{ProtocolResponses, ProtocolChat, ProtocolMessages}},
+		{name: "Vertex Claude", channel: &model.Channel{Type: constant.ChannelTypeVertexAi}, model: "claude-sonnet-4-6", want: []Protocol{ProtocolMessages}},
+		{name: "Vertex Gemini", channel: &model.Channel{Type: constant.ChannelTypeVertexAi}, model: "gemini-2.5-pro", want: []Protocol{ProtocolGemini}},
+		{name: "ordinary Chat adaptor", channel: &model.Channel{Type: constant.ChannelTypeOllama}, model: "llama3", want: []Protocol{ProtocolChat}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			test.channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
+				SelectionMode: dto.ProtocolSelectionModeAuto,
+			}})
+
+			plans := PlansForRequest(test.channel, ProtocolResponses, test.model, "/v1/responses", RequestFeatureSet{})
+
+			actual := make([]Protocol, 0, len(plans))
+			for _, plan := range plans {
+				actual = append(actual, plan.UpstreamProtocol)
+			}
+			assert.Equal(t, test.want, actual)
+		})
+	}
+}
+
+func TestPlansForRequestAutomaticModeUsesCCSwitchFullEndpointSignal(t *testing.T) {
+	withProtocolBridgePolicy(t, false, false)
+	tests := []struct {
+		name    string
+		baseURL string
+		want    Protocol
+	}{
+		{name: "Chat endpoint", baseURL: "https://gateway.example/proxy/v1/chat/completions?region=cn", want: ProtocolChat},
+		{name: "Responses endpoint", baseURL: "https://gateway.example/backend-api/codex/responses", want: ProtocolResponses},
+		{name: "Messages endpoint", baseURL: "https://gateway.example/anthropic/v1/messages", want: ProtocolMessages},
+		{name: "Gemini endpoint", baseURL: "https://gateway.example/v1beta/models/gemini-fixed:streamGenerateContent?alt=sse", want: ProtocolGemini},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			channel := &model.Channel{Id: 904, Type: constant.ChannelTypeOpenAI, BaseURL: &test.baseURL}
+			channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
+				SelectionMode: dto.ProtocolSelectionModeAuto,
+			}})
+
+			plans := PlansForRequest(channel, ProtocolResponses, "public-model", "/v1/responses", RequestFeatureSet{})
+
+			require.Len(t, plans, 1)
+			assert.Equal(t, test.want, plans[0].UpstreamProtocol)
+			if test.want == ProtocolResponses {
+				assert.Equal(t, StatusNative, plans[0].Status)
+			} else {
+				assert.Equal(t, StatusConvertible, plans[0].Status)
+			}
 		})
 	}
 }

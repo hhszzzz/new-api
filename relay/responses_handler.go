@@ -22,6 +22,7 @@ import (
 
 func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
 	info.InitChannelMeta(c)
+	clientStream := info.IsStream
 	plan, hasPlan := selectedProtocolPlan(c)
 	if !hasPlan {
 		plan = channelcompat.ProtocolPlan{
@@ -101,7 +102,11 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 	restoreProtocolPlan := applyProtocolPlan(info, plan)
 	defer restoreProtocolPlan()
 	var requestBody io.Reader
-	if info.ShouldPassThroughBody() && !protocolPlanRequiresConversion(plan) && !protocolstate.Active(c) {
+	if info.ShouldPassThroughBody() &&
+		!protocolPlanRequiresConversion(plan) &&
+		!protocolPlanRequiresStructuredRequest(info, plan) &&
+		!protocolstate.Active(c) &&
+		!protocolstate.ResponsesRequestNormalized(c) {
 		storage, err := common.GetBodyStorage(c)
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeReadRequestBodyFailed, types.ErrOptionWithSkipRetry())
@@ -156,8 +161,12 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 
 	statusCodeMappingStr := c.GetString("status_code_mapping")
 
+	var usage any
+	bufferedResponseHandled := false
 	if resp != nil {
 		httpResp = resp.(*http.Response)
+		upstreamStream := service.ResponseIsEventStream(httpResp)
+		info.IsStream = clientStream || upstreamStream
 
 		if httpResp.StatusCode != http.StatusOK {
 			newAPIError = service.RelayErrorHandler(c.Request.Context(), httpResp, false)
@@ -165,13 +174,40 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 			service.ResetStatusCode(newAPIError, statusCodeMappingStr)
 			return newAPIError
 		}
+		if plan.SelectionMode == dto.ProtocolSelectionModeAuto {
+			if envelopeError := service.DetectProtocolUnsupportedSuccessEnvelope(httpResp); envelopeError != nil {
+				return envelopeError
+			}
+		}
+		if clientStream && !upstreamStream && service.ResponseIsJSON(httpResp) {
+			if err := helper.PromoteJSONResponseToSSE(httpResp, protocolFormatForPlan(plan)); err != nil {
+				newAPIError = types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
+				service.ResetStatusCode(newAPIError, statusCodeMappingStr)
+				return newAPIError
+			}
+			upstreamStream = true
+			info.IsStream = true
+		}
+		if !clientStream && upstreamStream {
+			info.IsStream = false
+			bufferedUsage, handled, bufferedError := handleBufferedStreamResponse(c, info, httpResp, protocolFormatForPlan(plan), statusCodeMappingStr)
+			if bufferedError != nil {
+				return bufferedError
+			}
+			if handled {
+				bufferedResponseHandled = true
+				usage = bufferedUsage
+			}
+		}
 	}
 
-	usage, newAPIError := adaptor.DoResponse(c, httpResp, info)
-	if newAPIError != nil {
-		// reset status code 重置状态码
-		service.ResetStatusCode(newAPIError, statusCodeMappingStr)
-		return newAPIError
+	if !bufferedResponseHandled {
+		usage, newAPIError = adaptor.DoResponse(c, httpResp, info)
+		if newAPIError != nil {
+			// reset status code 重置状态码
+			service.ResetStatusCode(newAPIError, statusCodeMappingStr)
+			return newAPIError
+		}
 	}
 
 	usageDto := usage.(*dto.Usage)

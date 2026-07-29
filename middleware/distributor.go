@@ -130,6 +130,9 @@ func Distribute() func(c *gin.Context) {
 				abortWithProtocolMessage(c, http.StatusBadRequest, err.Error(), types.ErrorCodeInvalidRequest)
 				return
 			}
+			if protocolBinding != nil {
+				common.SetContextKey(c, constant.ContextKeyProtocolStateBinding, protocolBinding)
+			}
 		}
 		if ok {
 			id, err := strconv.Atoi(channelId.(string))
@@ -612,6 +615,15 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	if err := applySelectedChannelCompatibility(c, channel, selectionModel); err != nil {
 		return types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 	}
+	// A retry reuses the Gin context. Clear provider-specific values before
+	// installing the newly selected channel so URL, header, and adaptor state
+	// cannot leak from the previous attempt.
+	common.SetContextKey(c, constant.ContextKeyChannelOrganization, "")
+	common.SetContextKey(c, constant.ContextKeyChannelMultiKeyIndex, 0)
+	c.Set("api_version", "")
+	c.Set("region", "")
+	c.Set("plugin", "")
+	c.Set("bot_id", "")
 	common.SetContextKey(c, constant.ContextKeyChannelId, channel.Id)
 	common.SetContextKey(c, constant.ContextKeyChannelName, channel.Name)
 	common.SetContextKey(c, constant.ContextKeyChannelType, channel.Type)

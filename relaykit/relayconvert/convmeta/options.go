@@ -8,6 +8,22 @@ type Options struct {
 	Claude ClaudeOptions
 	Gemini GeminiOptions
 
+	// ProviderStateSecret authenticates provider-bound opaque state embedded in
+	// cross-protocol responses. A stable shared secret is required to restore
+	// Anthropic signed-thinking blocks on the same channel without allowing a
+	// client to rewrite their channel binding. Empty disables state emission.
+	ProviderStateSecret string
+	// IncludeReasoningEncryptedContent requests OpenAI Responses reasoning state
+	// from strict stateless backends that require the explicit include marker.
+	// Generic Responses-compatible servers may reject the marker, so hosts must
+	// enable it only for upstreams whose wire contract is known to support it.
+	IncludeReasoningEncryptedContent bool
+	// PreserveChatReasoningContent enables the non-standard reasoning_content
+	// field on assistant tool-call history. CC Switch enables this only for
+	// upstreams known to require it (Moonshot/Kimi, DeepSeek, and MiMo); generic
+	// OpenAI-compatible servers may reject the field.
+	PreserveChatReasoningContent bool
+
 	// OpenRouterDialect marks the upstream as OpenRouter's OpenAI-compatible
 	// surface, which accepts extra fields (reasoning config, cache_control on
 	// system parts) that converters emit only for that dialect. The host sets

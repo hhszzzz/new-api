@@ -102,6 +102,8 @@ func ForRequest(channel *model.Channel, protocol Protocol, modelName, requestPat
 			return native(ProtocolMessages)
 		case ProtocolChat:
 			return converted(ProtocolMessages, relayconvert.ConverterOpenAIChatToClaudeMessages)
+		case ProtocolGemini:
+			return converted(ProtocolMessages, "gemini_generate_content_to_claude_messages")
 		default:
 			return incompatible()
 		}

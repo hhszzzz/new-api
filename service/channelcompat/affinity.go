@@ -38,14 +38,14 @@ func LookupProtocolAffinity(channel *model.Channel, effectiveModel string, reque
 		return "", false
 	}
 	protocol := Protocol(strings.TrimSpace(value))
-	if !found || (protocol != ProtocolChat && protocol != ProtocolMessages && protocol != ProtocolResponses) {
+	if !found || !isAffinityProtocol(protocol) {
 		return "", false
 	}
 	return protocol, true
 }
 
 func RememberProtocolAffinity(channel *model.Channel, effectiveModel string, requestProtocol, upstreamProtocol Protocol) {
-	if upstreamProtocol != ProtocolChat && upstreamProtocol != ProtocolMessages && upstreamProtocol != ProtocolResponses {
+	if !isAffinityProtocol(upstreamProtocol) {
 		return
 	}
 	key, ok := protocolAffinityKey(channel, effectiveModel, requestProtocol)
@@ -75,62 +75,22 @@ func IsProtocolUnsupportedError(apiError *types.NewAPIError) bool {
 	if apiError == nil {
 		return false
 	}
-	switch apiError.StatusCode {
-	case http.StatusNotFound, http.StatusMethodNotAllowed, http.StatusNotImplemented:
+	if apiError.HasProtocolUnsupportedEvidence() {
 		return true
 	}
-
-	message := strings.ToLower(strings.TrimSpace(apiError.Error()))
-	if message == "" {
-		return false
-	}
-	for _, marker := range []string{
-		"unsupported endpoint",
-		"endpoint not supported",
-		"unknown endpoint",
-		"unrecognized endpoint",
-		"method not allowed",
-		"not implemented",
-		"unsupported protocol",
-		"protocol not supported",
-	} {
-		if strings.Contains(message, marker) {
-			return true
+	switch apiError.StatusCode {
+	case http.StatusNotFound:
+		if apiError.ProtocolUnsupportedChecked() {
+			return false
 		}
-	}
-
-	mentionsWireAPI := false
-	for _, marker := range []string{
-		"/v1/responses",
-		"/responses",
-		"responses api",
-		"/v1/messages",
-		"/messages",
-		"messages api",
-		"/v1/chat/completions",
-		"/chat/completions",
-		"chat completions",
-	} {
-		if strings.Contains(message, marker) {
-			mentionsWireAPI = true
-			break
-		}
-	}
-	if !mentionsWireAPI {
-		return false
-	}
-	for _, marker := range []string{
-		"not supported",
-		"does not support",
-		"unsupported",
-		"not found",
-		"does not exist",
-		"unknown route",
-		"only supports",
-	} {
-		if strings.Contains(message, marker) {
-			return true
-		}
+		message := strings.ToLower(strings.TrimSpace(apiError.Error()))
+		// A bare 404 is the usual response from nginx and compatible gateways
+		// when the probed wire endpoint does not exist. Resource-specific 404s
+		// are not protocol evidence and must stay on the normal retry path.
+		return message == "not found" || message == "404 not found" ||
+			strings.HasPrefix(message, "bad response status code 404")
+	case http.StatusMethodNotAllowed, http.StatusNotImplemented:
+		return true
 	}
 	return false
 }
@@ -163,6 +123,15 @@ func protocolAffinityKey(channel *model.Channel, effectiveModel string, requestP
 	}, "\n")
 	sum := sha256.Sum256([]byte(fingerprintInput))
 	return fmt.Sprintf("%d:%x", channel.Id, sum[:]), true
+}
+
+func isAffinityProtocol(protocol Protocol) bool {
+	switch protocol {
+	case ProtocolChat, ProtocolMessages, ProtocolResponses, ProtocolGemini:
+		return true
+	default:
+		return false
+	}
 }
 
 func getProtocolAffinityCache() *cachex.HybridCache[string] {

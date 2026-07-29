@@ -28,14 +28,11 @@ func TestLookupBuiltinTextConverters(t *testing.T) {
 		{id: ConverterOpenAIChatToOpenAIResponses, from: types.RelayFormatOpenAI, to: types.RelayFormatOpenAIResponses, quality: TextConverterQualityGood, reqDirect: true, respDirect: true, respAlias: ResponseConverterOAIChatToOAIResponses, streamDirect: true},
 		{id: ConverterOpenAIResponsesToOpenAIChat, from: types.RelayFormatOpenAIResponses, to: types.RelayFormatOpenAI, quality: TextConverterQualityGood, reqDirect: true, respDirect: true, respAlias: ResponseConverterOAIResponsesToOAIChat, streamDirect: true},
 		{
-			id:      requestConverterClaudeToGemini,
-			from:    types.RelayFormatClaude,
-			to:      types.RelayFormatGemini,
-			quality: TextConverterQualityDiscouraged,
-			reqSteps: []string{
-				ConverterClaudeMessagesToOpenAIChat,
-				ConverterOpenAIChatToGeminiContent,
-			},
+			id:        requestConverterClaudeToGemini,
+			from:      types.RelayFormatClaude,
+			to:        types.RelayFormatGemini,
+			quality:   TextConverterQualityDiscouraged,
+			reqDirect: true,
 			respSteps: []string{
 				ConverterClaudeMessagesToOpenAIChat,
 				ConverterOpenAIChatToGeminiContent,
@@ -43,14 +40,11 @@ func TestLookupBuiltinTextConverters(t *testing.T) {
 			respAlias: responseConverterClaudeToGemini,
 		},
 		{
-			id:      requestConverterClaudeToResponses,
-			from:    types.RelayFormatClaude,
-			to:      types.RelayFormatOpenAIResponses,
-			quality: TextConverterQualityFair,
-			reqSteps: []string{
-				ConverterClaudeMessagesToOpenAIChat,
-				ConverterOpenAIChatToOpenAIResponses,
-			},
+			id:        requestConverterClaudeToResponses,
+			from:      types.RelayFormatClaude,
+			to:        types.RelayFormatOpenAIResponses,
+			quality:   TextConverterQualityFair,
+			reqDirect: true,
 			respSteps: []string{
 				ConverterClaudeMessagesToOpenAIChat,
 				ConverterOpenAIChatToOpenAIResponses,
@@ -58,19 +52,17 @@ func TestLookupBuiltinTextConverters(t *testing.T) {
 			respAlias: responseConverterClaudeToResponses,
 		},
 		{
-			id:      requestConverterGeminiToClaude,
-			from:    types.RelayFormatGemini,
-			to:      types.RelayFormatClaude,
-			quality: TextConverterQualityDiscouraged,
+			id:         requestConverterGeminiToClaude,
+			from:       types.RelayFormatGemini,
+			to:         types.RelayFormatClaude,
+			quality:    TextConverterQualityDiscouraged,
+			respDirect: true,
 			reqSteps: []string{
 				ConverterGeminiContentToOpenAIChat,
 				ConverterOpenAIChatToClaudeMessages,
 			},
-			respSteps: []string{
-				ConverterGeminiContentToOpenAIChat,
-				ConverterOpenAIChatToClaudeMessages,
-			},
-			respAlias: responseConverterGeminiToClaude,
+			respAlias:    responseConverterGeminiToClaude,
+			streamDirect: true,
 		},
 		{
 			id:      requestConverterGeminiToResponses,

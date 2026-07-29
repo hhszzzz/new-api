@@ -25,6 +25,7 @@ type ClaudeMediaMessage struct {
 	Role         string               `json:"role,omitempty"`
 	Thinking     *string              `json:"thinking,omitempty"`
 	Signature    string               `json:"signature,omitempty"`
+	Data         string               `json:"data,omitempty"`
 	Delta        string               `json:"delta,omitempty"`
 	CacheControl json.RawMessage      `json:"cache_control,omitempty"`
 	// tool_calls
@@ -33,6 +34,9 @@ type ClaudeMediaMessage struct {
 	Input     any    `json:"input,omitempty"`
 	Content   any    `json:"content,omitempty"`
 	ToolUseId string `json:"tool_use_id,omitempty"`
+	IsError   *bool  `json:"is_error,omitempty"`
+	Title     string `json:"title,omitempty"`
+	Filename  string `json:"filename,omitempty"`
 }
 
 func (c *ClaudeMediaMessage) SetText(s string) {
@@ -121,6 +125,15 @@ type ClaudeMessageSource struct {
 type ClaudeMessage struct {
 	Role    string `json:"role"`
 	Content any    `json:"content"`
+	// ProviderResponsesOutput is gateway-owned state for replaying an assistant
+	// turn to the same Responses channel. It is never exposed on the Anthropic
+	// wire format and must only be populated after the host verifies session,
+	// tenant, model, and channel affinity.
+	ProviderResponsesOutput []ResponsesOutput `json:"-"`
+	// ProviderResponsesRawOutput is the lossless form of the same server-owned
+	// state. Hosts should prefer it when replay must retain provider extensions
+	// that are not modeled by ResponsesOutput.
+	ProviderResponsesRawOutput []json.RawMessage `json:"-"`
 }
 
 func (c *ClaudeMessage) IsStringContent() bool {
@@ -173,6 +186,7 @@ type Tool struct {
 	Name        string                 `json:"name"`
 	Description string                 `json:"description,omitempty"`
 	InputSchema map[string]interface{} `json:"input_schema"`
+	Strict      *bool                  `json:"strict,omitempty"`
 }
 
 type InputSchema struct {

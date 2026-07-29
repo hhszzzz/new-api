@@ -9,7 +9,7 @@
     },
     {
       "type": "tool_use",
-      "id": "call_<uuid>",
+      "id": "gemini_synth_<uuid>",
       "name": "get_weather",
       "input": {
         "city": "Paris"

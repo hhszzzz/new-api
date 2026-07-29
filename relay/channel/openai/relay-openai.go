@@ -17,6 +17,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/relayconvert"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/protocolstate"
 
 	"github.com/gin-gonic/gin"
 )
@@ -135,6 +136,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	seenStreamToolCalls := make(map[string]struct{})
 	var streamFunctionCallNames []string
 	var streamErr *types.NewAPIError
+	upstreamCompleted := false
 
 	// 检查是否为音频模型
 	isAudioModel := strings.Contains(strings.ToLower(model), "audio")
@@ -152,6 +154,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			if err := common.UnmarshalJsonStr(data, &errorResponse); err == nil {
 				if openAIError := errorResponse.GetOpenAIError(); openAIError != nil && openAIError.Type != "" {
 					streamErr = types.WithOpenAIError(*openAIError, http.StatusInternalServerError)
+					service.MarkProtocolUnsupportedStreamError(streamErr)
 					sr.Stop(streamErr)
 					return
 				}
@@ -163,6 +166,12 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			}
 
 			lastStreamData = data
+			if info.RelayFormat == types.RelayFormatClaude {
+				var streamResponse dto.ChatCompletionsStreamResponse
+				if common.UnmarshalJsonStr(data, &streamResponse) == nil && streamResponse.IsFinished() {
+					upstreamCompleted = true
+				}
+			}
 			collectStreamFunctionCallNames(data, seenStreamToolCalls, &streamFunctionCallNames)
 			if err := processTokenData(info.RelayMode, data, &responseTextBuilder, &toolCount); err != nil {
 				logger.LogError(c, "error processing stream token data: "+err.Error())
@@ -177,6 +186,13 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	}
 	if err := streamStatusError(info); err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+	}
+	if info.RelayFormat == types.RelayFormatClaude && !upstreamCompleted {
+		return nil, types.NewOpenAIError(
+			fmt.Errorf("Chat Completions stream ended without a terminal finish_reason"),
+			types.ErrorCodeBadResponse,
+			http.StatusInternalServerError,
+		)
 	}
 
 	// 对音频模型，从倒数第二个stream data中提取usage信息
@@ -227,6 +243,9 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	if err := HandleFinalResponse(c, info, lastStreamData, responseId, createAt, model, systemFingerprint, usage, containStreamUsage); err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
+	if info.RelayFormat == types.RelayFormatClaude {
+		protocolstate.MarkStreamCompleted(c)
+	}
 
 	return usage, nil
 }
@@ -237,7 +256,7 @@ func collectStreamFunctionCallNames(data string, seen map[string]struct{}, names
 		return
 	}
 	for _, choice := range streamResponse.Choices {
-		for i, tc := range choice.Delta.ToolCalls {
+		for i, tc := range choice.Delta.ParseToolCalls() {
 			name := tc.Function.Name
 			if name == "" {
 				continue

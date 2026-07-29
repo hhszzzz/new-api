@@ -15,6 +15,10 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info con
 	return claudemessages.ClaudeMessagesRequestToOpenAIChat(claudeRequest, info)
 }
 
+func ClaudeMessagesRequestToOpenAIChatWithContext(c context.Context, claudeRequest dto.ClaudeRequest, info convmeta.Meta) (*dto.GeneralOpenAIRequest, error) {
+	return claudemessages.ClaudeMessagesRequestToOpenAIChatWithContext(c, claudeRequest, info)
+}
+
 func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, textRequest dto.GeneralOpenAIRequest) (*dto.ClaudeRequest, error) {
 	return oaichat.OpenAIChatRequestToClaudeMessages(c, info, textRequest)
 }

@@ -37,6 +37,116 @@ func CleanFunctionParameters(params interface{}) interface{} {
 	return cleanGeminiFunctionParametersWithDepth(params, 0)
 }
 
+// PrepareFunctionDeclaration follows Gemini's two schema channels: the
+// restricted OpenAPI-style parameters field for simple schemas and
+// parametersJsonSchema for richer JSON Schema. CC Switch uses the same split
+// to avoid silently deleting constraints such as additionalProperties, $ref,
+// oneOf, or exclusiveMinimum.
+func PrepareFunctionDeclaration(function *dto.FunctionRequest) {
+	if function == nil {
+		return
+	}
+	schema := normalizeFunctionJSONSchema(function.Parameters)
+	if schemaMap, ok := schema.(map[string]interface{}); ok {
+		typeName, _ := schemaMap["type"].(string)
+		if strings.TrimSpace(typeName) == "" {
+			schemaMap["type"] = "object"
+			typeName = "object"
+		}
+		if strings.EqualFold(strings.TrimSpace(typeName), "object") {
+			if _, exists := schemaMap["properties"]; !exists {
+				schemaMap["properties"] = map[string]interface{}{}
+			}
+		}
+		schema = schemaMap
+	} else if schema == nil {
+		schema = map[string]interface{}{
+			"type":       "object",
+			"properties": map[string]interface{}{},
+		}
+	}
+
+	if requiresParametersJSONSchema(schema) {
+		function.Parameters = nil
+		function.ParametersJsonSchema = schema
+		return
+	}
+	function.Parameters = CleanFunctionParameters(schema)
+	function.ParametersJsonSchema = nil
+}
+
+func normalizeFunctionJSONSchema(value interface{}) interface{} {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		result := make(map[string]interface{}, len(typed))
+		for key, item := range typed {
+			if key == "$schema" || key == "$id" {
+				continue
+			}
+			result[key] = normalizeFunctionJSONSchema(item)
+		}
+		return result
+	case []interface{}:
+		result := make([]interface{}, len(typed))
+		for index, item := range typed {
+			result[index] = normalizeFunctionJSONSchema(item)
+		}
+		return result
+	default:
+		return value
+	}
+}
+
+func requiresParametersJSONSchema(value interface{}) bool {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		for key, item := range typed {
+			switch key {
+			case "type":
+				if _, ok := item.([]interface{}); ok {
+					return true
+				}
+			case "format", "title", "description", "nullable", "enum", "maxItems", "minItems",
+				"required", "minProperties", "maxProperties", "minLength", "maxLength", "pattern",
+				"example", "propertyOrdering", "default", "minimum", "maximum":
+			case "properties":
+				properties, ok := item.(map[string]interface{})
+				if !ok {
+					return true
+				}
+				for _, property := range properties {
+					if requiresParametersJSONSchema(property) {
+						return true
+					}
+				}
+			case "items":
+				if _, ok := item.(map[string]interface{}); !ok || requiresParametersJSONSchema(item) {
+					return true
+				}
+			case "anyOf":
+				items, ok := item.([]interface{})
+				if !ok {
+					return true
+				}
+				for _, nested := range items {
+					if requiresParametersJSONSchema(nested) {
+						return true
+					}
+				}
+			default:
+				return true
+			}
+		}
+	case []interface{}:
+		for _, item := range typed {
+			if requiresParametersJSONSchema(item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func cleanGeminiFunctionParametersWithDepth(params interface{}, depth int) interface{} {
 	if params == nil {
 		return nil

@@ -32,20 +32,12 @@ func TestRequestConverterRegistryListsSupportedTextConverters(t *testing.T) {
 			from:      types.RelayFormatClaude,
 			to:        types.RelayFormatGemini,
 			quality:   RequestConverterQualityDiscouraged,
-			stepConverters: []string{
-				ConverterClaudeMessagesToOpenAIChat,
-				ConverterOpenAIChatToGeminiContent,
-			},
 		},
 		{
-			converter: requestConverterClaudeToResponses,
-			from:      types.RelayFormatClaude,
-			to:        types.RelayFormatOpenAIResponses,
-			quality:   RequestConverterQualityFair,
-			stepConverters: []string{
-				ConverterClaudeMessagesToOpenAIChat,
-				ConverterOpenAIChatToOpenAIResponses,
-			},
+			converter:      requestConverterClaudeToResponses,
+			from:           types.RelayFormatClaude,
+			to:             types.RelayFormatOpenAIResponses,
+			quality:        RequestConverterQualityFair,
 			advancedCustom: true,
 		},
 		{
@@ -135,7 +127,7 @@ func TestConvertRequestToTargetRecordsConversionChain(t *testing.T) {
 	assert.Equal(t, []types.RelayFormat{types.RelayFormatOpenAI, types.RelayFormatOpenAIResponses}, info.ConversionChain)
 }
 
-func TestConvertRequestPlansMultiHopPath(t *testing.T) {
+func TestConvertRequestClaudeToResponsesUsesDirectConverter(t *testing.T) {
 	info := &convmeta.Values{
 		ConversionChain: []types.RelayFormat{types.RelayFormatClaude},
 	}
@@ -156,17 +148,12 @@ func TestConvertRequestPlansMultiHopPath(t *testing.T) {
 	assert.Equal(t, RequestConverterQualityFair, result.Quality)
 	assert.Equal(t, []RequestStep{
 		{
-			Converter: ConverterClaudeMessagesToOpenAIChat,
+			Converter: requestConverterClaudeToResponses,
 			From:      types.RelayFormatClaude,
-			To:        types.RelayFormatOpenAI,
-		},
-		{
-			Converter: ConverterOpenAIChatToOpenAIResponses,
-			From:      types.RelayFormatOpenAI,
 			To:        types.RelayFormatOpenAIResponses,
 		},
 	}, result.Steps)
-	assert.Equal(t, []types.RelayFormat{types.RelayFormatClaude, types.RelayFormatOpenAI, types.RelayFormatOpenAIResponses}, info.ConversionChain)
+	assert.Equal(t, []types.RelayFormat{types.RelayFormatClaude, types.RelayFormatOpenAIResponses}, info.ConversionChain)
 }
 
 func TestConvertRequestViaExecutesExplicitPath(t *testing.T) {
@@ -194,7 +181,7 @@ func TestConvertRequestViaExecutesExplicitPath(t *testing.T) {
 	assert.Equal(t, []types.RelayFormat{types.RelayFormatOpenAI, types.RelayFormatOpenAIResponses}, info.ConversionChain)
 }
 
-func TestConvertRequestResponsesToGeminiAppliesResponsesPreprocess(t *testing.T) {
+func TestConvertRequestResponsesToGeminiLowersCustomToolsAndHistory(t *testing.T) {
 	info := &convmeta.Values{
 		ConversionChain:     []types.RelayFormat{types.RelayFormatOpenAIResponses},
 		ChannelMetaAttached: true,
@@ -206,6 +193,10 @@ func TestConvertRequestResponsesToGeminiAppliesResponsesPreprocess(t *testing.T)
 			{
 				"role":    "user",
 				"content": "next turn",
+			},
+			{
+				"type":    "reasoning",
+				"summary": []map[string]any{{"type": "summary_text", "text": "inspect"}},
 			},
 			{
 				"type":    "custom_tool_call",
@@ -220,12 +211,12 @@ func TestConvertRequestResponsesToGeminiAppliesResponsesPreprocess(t *testing.T)
 			},
 			{
 				"type":    "function_call_output",
-				"call_id": "call_custom",
-				"output":  "legacy custom output",
+				"call_id": "call_orphan",
+				"output":  "orphaned output",
 			},
 		}),
 		Tools: mustRawMessage(t, []map[string]any{
-			{"type": "custom", "name": "apply_patch"},
+			{"type": "custom", "name": "apply_patch", "description": "apply a patch"},
 		}),
 	}
 
@@ -234,20 +225,26 @@ func TestConvertRequestResponsesToGeminiAppliesResponsesPreprocess(t *testing.T)
 	require.NoError(t, err)
 	geminiReq, ok := result.Value.(*dto.GeminiChatRequest)
 	require.True(t, ok)
-	assert.Empty(t, geminiReq.GetTools())
-	require.Len(t, geminiReq.Contents, 1)
+
+	tools := geminiReq.GetTools()
+	require.Len(t, tools, 1)
+	functions, err := kitutil.Any2Type[[]dto.FunctionRequest](tools[0].FunctionDeclarations)
+	require.NoError(t, err)
+	require.Len(t, functions, 1)
+	assert.Equal(t, "apply_patch", functions[0].Name)
+
+	require.Len(t, geminiReq.Contents, 3)
 	assert.Equal(t, "user", geminiReq.Contents[0].Role)
-	require.Len(t, geminiReq.Contents[0].Parts, 1)
 	assert.Equal(t, "next turn", geminiReq.Contents[0].Parts[0].Text)
-	assert.Equal(t, ConverterOpenAIResponsesToGemini, result.Converter)
-	assert.Equal(t, RequestConverterQualityFair, result.Quality)
-	assert.Equal(t, []RequestStep{
-		{
-			Converter: ConverterOpenAIResponsesToGemini,
-			From:      types.RelayFormatOpenAIResponses,
-			To:        types.RelayFormatGemini,
-		},
-	}, result.Steps)
+	assert.Equal(t, "model", geminiReq.Contents[1].Role)
+	functionCall := geminiReq.Contents[1].Parts[0].FunctionCall
+	require.NotNil(t, functionCall)
+	assert.Equal(t, "apply_patch", functionCall.FunctionName)
+	assert.Equal(t, map[string]any{"input": "patch body"}, functionCall.Arguments)
+	assert.Equal(t, "user", geminiReq.Contents[2].Role)
+	functionResponse := geminiReq.Contents[2].Parts[0].FunctionResponse
+	require.NotNil(t, functionResponse)
+	assert.Equal(t, "apply_patch", functionResponse.Name)
 	assert.Equal(t, []types.RelayFormat{types.RelayFormatOpenAIResponses, types.RelayFormatGemini}, info.ConversionChain)
 }
 
@@ -346,22 +343,23 @@ func TestConvertRequestResponsesToGeminiUsesDirectConverter(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, functions, 1)
 	assert.Equal(t, "lookup", functions[0].Name)
-	params, ok := functions[0].Parameters.(map[string]any)
+	assert.Nil(t, functions[0].Parameters)
+	params, ok := functions[0].ParametersJsonSchema.(map[string]any)
 	require.True(t, ok)
-	assert.Equal(t, "OBJECT", params["type"])
-	assert.NotContains(t, params, "additionalProperties")
-	assert.NotContains(t, params, "propertyNames")
+	assert.Equal(t, "object", params["type"])
+	assert.Equal(t, false, params["additionalProperties"])
+	assert.Contains(t, params, "propertyNames")
 	properties, ok := params["properties"].(map[string]any)
 	require.True(t, ok)
 	queryParam, ok := properties["q"].(map[string]any)
 	require.True(t, ok)
-	assert.Equal(t, "STRING", queryParam["type"])
-	assert.NotContains(t, queryParam, "exclusiveMinimum")
+	assert.Equal(t, "string", queryParam["type"])
+	assert.Equal(t, float64(0), queryParam["exclusiveMinimum"])
 	filterParam, ok := properties["filters"].(map[string]any)
 	require.True(t, ok)
 	filterItems, ok := filterParam["items"].(map[string]any)
 	require.True(t, ok)
-	assert.NotContains(t, filterItems, "additionalProperties")
+	assert.Equal(t, true, filterItems["additionalProperties"])
 
 	require.Len(t, geminiReq.Contents, 2)
 	assert.Equal(t, "model", geminiReq.Contents[0].Role)
@@ -400,6 +398,11 @@ func TestConvertRequestResponsesToGeminiSkipsThoughtSignatureWhenDisabled(t *tes
 				"name":      "lookup",
 				"arguments": map[string]any{"q": "x"},
 			},
+			{
+				"type":    "function_call_output",
+				"call_id": "call_1",
+				"output":  map[string]any{"ok": true},
+			},
 		}),
 		Tools: mustRawMessage(t, []map[string]any{
 			{"type": "function", "name": "lookup", "parameters": map[string]any{"type": "object"}},
@@ -411,7 +414,7 @@ func TestConvertRequestResponsesToGeminiSkipsThoughtSignatureWhenDisabled(t *tes
 	require.NoError(t, err)
 	geminiReq, ok := result.Value.(*dto.GeminiChatRequest)
 	require.True(t, ok)
-	require.Len(t, geminiReq.Contents, 1)
+	require.Len(t, geminiReq.Contents, 2)
 	require.Len(t, geminiReq.Contents[0].Parts, 1)
 	require.NotNil(t, geminiReq.Contents[0].Parts[0].FunctionCall)
 	assert.Empty(t, geminiReq.Contents[0].Parts[0].ThoughtSignature)
@@ -547,9 +550,7 @@ func TestConvertRequestResponsesToClaudeUsesDirectConverter(t *testing.T) {
 	require.NotNil(t, claudeReq.Stream)
 	assert.True(t, *claudeReq.Stream)
 	assert.Equal(t, maxOutputTokens, *claudeReq.MaxTokens)
-	require.NotNil(t, claudeReq.Thinking)
-	assert.Equal(t, "enabled", claudeReq.Thinking.Type)
-	assert.Equal(t, 2048, claudeReq.Thinking.GetBudgetTokens())
+	assert.Nil(t, claudeReq.Thinking)
 
 	tools, err := kitutil.Any2Type[[]*dto.Tool](claudeReq.Tools)
 	require.NoError(t, err)
@@ -587,7 +588,9 @@ func TestConvertRequestResponsesToClaudeUsesDirectConverter(t *testing.T) {
 	require.Len(t, toolResultParts, 1)
 	assert.Equal(t, "tool_result", toolResultParts[0].Type)
 	assert.Equal(t, "call_1", toolResultParts[0].ToolUseId)
-	assert.Equal(t, map[string]any{"ok": true}, toolResultParts[0].Content)
+	toolResultJSON, ok := toolResultParts[0].Content.(string)
+	require.True(t, ok)
+	assert.JSONEq(t, `{"ok":true}`, toolResultJSON)
 }
 
 func TestConvertRequestViaResponsesToGeminiStillUsesDirectSteps(t *testing.T) {
@@ -644,7 +647,7 @@ func TestConvertRequestByIDDeduplicatesConversionChain(t *testing.T) {
 	assert.Equal(t, []types.RelayFormat{types.RelayFormatOpenAI, types.RelayFormatOpenAIResponses}, info.ConversionChain)
 }
 
-func TestConvertRequestByIDExecutesMultiHopConverter(t *testing.T) {
+func TestConvertRequestByIDExecutesDirectClaudeToResponsesConverter(t *testing.T) {
 	info := &convmeta.Values{
 		ConversionChain: []types.RelayFormat{types.RelayFormatClaude},
 	}
@@ -663,17 +666,12 @@ func TestConvertRequestByIDExecutesMultiHopConverter(t *testing.T) {
 	assert.Equal(t, RequestConverterQualityFair, result.Quality)
 	assert.Equal(t, []RequestStep{
 		{
-			Converter: ConverterClaudeMessagesToOpenAIChat,
+			Converter: requestConverterClaudeToResponses,
 			From:      types.RelayFormatClaude,
-			To:        types.RelayFormatOpenAI,
-		},
-		{
-			Converter: ConverterOpenAIChatToOpenAIResponses,
-			From:      types.RelayFormatOpenAI,
 			To:        types.RelayFormatOpenAIResponses,
 		},
 	}, result.Steps)
-	assert.Equal(t, []types.RelayFormat{types.RelayFormatClaude, types.RelayFormatOpenAI, types.RelayFormatOpenAIResponses}, info.ConversionChain)
+	assert.Equal(t, []types.RelayFormat{types.RelayFormatClaude, types.RelayFormatOpenAIResponses}, info.ConversionChain)
 }
 
 func TestConvertRequestRejectsUnsupportedConverterAndNilRequest(t *testing.T) {
@@ -708,6 +706,127 @@ func TestConvertRequestRejectsUnregisteredExplicitPath(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "from claude to embedding is not registered")
+}
+
+func TestConvertRequestClaudeToGeminiKeepsToolResultMediaWithFunctionResponse(t *testing.T) {
+	var request dto.ClaudeRequest
+	require.NoError(t, kitutil.Unmarshal([]byte(`{
+		"model":"gemini-3.6-flash",
+		"messages":[
+			{"role":"assistant","content":[{
+				"type":"tool_use",
+				"id":"call_image",
+				"name":"inspect",
+				"input":{}
+			}]},
+			{"role":"user","content":[{
+				"type":"tool_result",
+				"tool_use_id":"call_image",
+				"content":[
+					{"type":"text","text":"caption"},
+					{"type":"image","source":{"type":"base64","media_type":"image/png","data":"GEMINI_TOOL_IMAGE_SENTINEL"}}
+				]
+			}]}
+		]
+	}`), &request))
+
+	result, err := ConvertRequest(nil, &convmeta.Values{
+		ChannelMetaAttached: true,
+		UpstreamModelName:   "gemini-3.6-flash",
+	}, types.RelayFormatGemini, &request)
+	require.NoError(t, err)
+	converted := result.Value.(*dto.GeminiChatRequest)
+	require.Len(t, converted.Contents, 2)
+	require.Len(t, converted.Contents[1].Parts, 1)
+	require.NotNil(t, converted.Contents[1].Parts[0].FunctionResponse)
+	functionResponse := converted.Contents[1].Parts[0].FunctionResponse
+	assert.Contains(t, functionResponse.Response["content"], "tool result media attached")
+	var mediaParts []dto.GeminiPart
+	require.NoError(t, kitutil.Unmarshal(functionResponse.Parts, &mediaParts))
+	require.Len(t, mediaParts, 1)
+	require.NotNil(t, mediaParts[0].InlineData)
+	assert.Equal(t, "image/png", mediaParts[0].InlineData.MimeType)
+	assert.Equal(t, "aGVsbG8=", mediaParts[0].InlineData.Data)
+}
+
+func TestConvertRequestClaudeToGeminiKeepsRemoteToolImageInLegacyResponse(t *testing.T) {
+	var request dto.ClaudeRequest
+	require.NoError(t, kitutil.Unmarshal([]byte(`{
+		"model":"gemini-3.6-flash",
+		"messages":[
+			{"role":"assistant","content":[{
+				"type":"tool_use",
+				"id":"call_remote",
+				"name":"inspect",
+				"input":{}
+			}]},
+			{"role":"user","content":[{
+				"type":"tool_result",
+				"tool_use_id":"call_remote",
+				"content":[{
+					"type":"image",
+					"source":{"type":"url","url":"https://example.test/tool-image.png"}
+				}]
+			}]}
+		]
+	}`), &request))
+
+	result, err := ConvertRequest(nil, &convmeta.Values{
+		ChannelMetaAttached: true,
+		UpstreamModelName:   "gemini-3.6-flash",
+	}, types.RelayFormatGemini, &request)
+	require.NoError(t, err)
+	converted := result.Value.(*dto.GeminiChatRequest)
+	require.Len(t, converted.Contents, 2)
+	require.Len(t, converted.Contents[1].Parts, 1)
+	functionResponse := converted.Contents[1].Parts[0].FunctionResponse
+	require.NotNil(t, functionResponse)
+	assert.Empty(t, functionResponse.Parts)
+	content, ok := functionResponse.Response["content"].([]any)
+	require.True(t, ok)
+	require.Len(t, content, 1)
+	image, ok := content[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "https://example.test/tool-image.png", image["source"].(map[string]any)["url"])
+}
+
+func TestConvertRequestClaudeToGemini2KeepsToolMediaAdjacentToFunctionResponse(t *testing.T) {
+	var request dto.ClaudeRequest
+	require.NoError(t, kitutil.Unmarshal([]byte(`{
+		"model":"gemini-2.5-pro",
+		"messages":[
+			{"role":"assistant","content":[{
+				"type":"tool_use",
+				"id":"call_image",
+				"name":"inspect",
+				"input":{}
+			}]},
+			{"role":"user","content":[{
+				"type":"tool_result",
+				"tool_use_id":"call_image",
+				"content":[{
+					"type":"image",
+					"source":{"type":"base64","media_type":"image/png","data":"GEMINI_2_IMAGE_SENTINEL"}
+				}]
+			}]}
+		]
+	}`), &request))
+
+	result, err := ConvertRequest(nil, &convmeta.Values{
+		ChannelMetaAttached: true,
+		UpstreamModelName:   "gemini-2.5-pro",
+	}, types.RelayFormatGemini, &request)
+	require.NoError(t, err)
+	converted := result.Value.(*dto.GeminiChatRequest)
+	require.Len(t, converted.Contents, 2)
+	require.Len(t, converted.Contents[1].Parts, 3)
+	functionResponse := converted.Contents[1].Parts[0].FunctionResponse
+	require.NotNil(t, functionResponse)
+	assert.Contains(t, functionResponse.Response["content"], "tool result media attached")
+	assert.Equal(t, "[new-api: media output of tool call call_image]", converted.Contents[1].Parts[1].Text)
+	require.NotNil(t, converted.Contents[1].Parts[2].InlineData)
+	assert.Equal(t, "image/png", converted.Contents[1].Parts[2].InlineData.MimeType)
+	assert.Equal(t, "aGVsbG8=", converted.Contents[1].Parts[2].InlineData.Data)
 }
 
 func mustRawMessage(t *testing.T, value any) []byte {

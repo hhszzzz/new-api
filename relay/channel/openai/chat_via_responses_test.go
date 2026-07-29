@@ -20,7 +20,8 @@ func newResponsesChatTestContext(t *testing.T, body string, isStream bool) (*gin
 	t.Helper()
 
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
+	c, engine := gin.CreateTestContext(recorder)
+	engine.ContextWithFallback = true
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	c.Set(common.RequestIdKey, "responses-test")
 
@@ -163,6 +164,7 @@ func TestOaiResponsesToChatBufferedStreamHandlerReturnsJSONFromSSE(t *testing.T)
 	require.Equal(t, 3, usage.TotalTokens)
 
 	got := recorder.Body.String()
+	require.Equal(t, "application/json", recorder.Header().Get("Content-Type"))
 	require.NotContains(t, got, `data:`)
 	require.Contains(t, got, `"object":"chat.completion"`)
 	require.Contains(t, got, `"content":"buffered text"`)

@@ -20,18 +20,20 @@ import (
 )
 
 type MessageSession struct {
-	Version            int               `json:"version"`
-	UserID             int               `json:"user_id"`
-	TokenID            int               `json:"token_id"`
-	SessionKey         string            `json:"session_key"`
-	ChannelID          int               `json:"channel_id"`
-	UpstreamResponseID string            `json:"upstream_response_id"`
-	UpstreamStored     bool              `json:"upstream_stored"`
-	PublicModel        string            `json:"public_model"`
-	History            []json.RawMessage `json:"history"`
-	Turn               int               `json:"turn"`
-	SerializedBytes    int               `json:"serialized_bytes"`
-	CreatedAt          int64             `json:"created_at"`
+	Version            int                       `json:"version"`
+	UserID             int                       `json:"user_id"`
+	TokenID            int                       `json:"token_id"`
+	SessionKey         string                    `json:"session_key"`
+	ChannelID          int                       `json:"channel_id"`
+	UpstreamResponseID string                    `json:"upstream_response_id"`
+	UpstreamStored     bool                      `json:"upstream_stored"`
+	PublicModel        string                    `json:"public_model"`
+	UpstreamModel      string                    `json:"upstream_model,omitempty"`
+	History            []json.RawMessage         `json:"history"`
+	ProviderOutputs    map[int][]json.RawMessage `json:"provider_outputs,omitempty"`
+	Turn               int                       `json:"turn"`
+	SerializedBytes    int                       `json:"serialized_bytes"`
+	CreatedAt          int64                     `json:"created_at"`
 }
 
 type messageSelection struct {
@@ -65,7 +67,10 @@ func resolveMessageSelectionBinding(c *gin.Context, publicModel string, body []b
 	}
 	common.SetContextKey(c, constant.ContextKeyProtocolStateSession, selection)
 	if selection.strictAppend && selection.session != nil {
-		return &SelectionBinding{ChannelID: selection.session.ChannelID}, nil
+		return &SelectionBinding{
+			ChannelID:        selection.session.ChannelID,
+			UpstreamProtocol: channelcompat.ProtocolResponses,
+		}, nil
 	}
 	return nil, nil
 }
@@ -97,6 +102,7 @@ func PrepareMessagesRequest(c *gin.Context, info *relaycommon.RelayInfo, plan ch
 		kind:             pendingMessages,
 		stream:           info.IsStream,
 		publicModel:      info.OriginModelName,
+		upstreamModel:    strings.TrimSpace(info.UpstreamModelName),
 		channelID:        info.ChannelId,
 		requestProtocol:  string(plan.RequestProtocol),
 		upstreamProtocol: string(plan.UpstreamProtocol),
@@ -104,8 +110,11 @@ func PrepareMessagesRequest(c *gin.Context, info *relaycommon.RelayInfo, plan ch
 		claudeBlocks:     make(map[int]*dto.ClaudeMediaMessage),
 	}
 	forceReplay := common.GetContextKeyBool(c, constant.ContextKeyProtocolStateForceReplay)
+	sameUpstream := selection.session != nil &&
+		selection.session.ChannelID == info.ChannelId &&
+		strings.TrimSpace(selection.session.UpstreamModel) == strings.TrimSpace(info.UpstreamModelName)
 	if !forceReplay && selection.strictAppend && selection.session != nil &&
-		selection.session.ChannelID == info.ChannelId && selection.session.UpstreamStored &&
+		sameUpstream && selection.session.UpstreamStored &&
 		strings.TrimSpace(selection.session.UpstreamResponseID) != "" {
 		prefixLength := len(selection.session.History)
 		if prefixLength < len(request.Messages) {
@@ -113,6 +122,8 @@ func PrepareMessagesRequest(c *gin.Context, info *relaycommon.RelayInfo, plan ch
 			pending.continuationID = selection.session.UpstreamResponseID
 			pending.usedContinuation = true
 		}
+	} else if selection.strictAppend && sameUpstream {
+		attachProviderResponsesOutput(request.Messages, selection.session.ProviderOutputs)
 	}
 	common.SetContextKey(c, constant.ContextKeyProtocolStatePending, pending)
 	return nil
@@ -120,13 +131,30 @@ func PrepareMessagesRequest(c *gin.Context, info *relaycommon.RelayInfo, plan ch
 
 func ApplyMessagesContinuation(c *gin.Context, request *dto.OpenAIResponsesRequest) {
 	pending := getPending(c, pendingMessages)
-	if pending == nil || request == nil || !pending.usedContinuation {
+	if pending == nil || request == nil {
 		return
 	}
-	request.PreviousResponseID = pending.continuationID
+	if pending.messageSelection != nil && strings.TrimSpace(pending.messageSelection.key) != "" {
+		identity := requestIdentity(c)
+		material := fmt.Sprintf("%d:%d:%s:%s", identity.userID, identity.tokenID, pending.publicModel, pending.messageSelection.key)
+		digest := sha256.Sum256([]byte(material))
+		if encoded, err := common.Marshal("newapi_messages_" + hex.EncodeToString(digest[:])); err == nil {
+			request.PromptCacheKey = encoded
+		}
+	}
+	if pending.usedContinuation {
+		request.PreviousResponseID = pending.continuationID
+	}
 }
 
 func CaptureMessagesResponse(c *gin.Context, upstream *dto.OpenAIResponsesResponse, response *dto.ClaudeResponse) {
+	CaptureMessagesResponseData(c, upstream, nil, response)
+}
+
+// CaptureMessagesResponseData preserves the upstream Responses output exactly
+// for same-channel stateless replay while keeping the public Claude response
+// free of provider-owned state.
+func CaptureMessagesResponseData(c *gin.Context, upstream *dto.OpenAIResponsesResponse, rawOutput json.RawMessage, response *dto.ClaudeResponse) {
 	pending := getPending(c, pendingMessages)
 	if pending == nil {
 		return
@@ -134,12 +162,18 @@ func CaptureMessagesResponse(c *gin.Context, upstream *dto.OpenAIResponsesRespon
 	if upstream != nil {
 		pending.upstreamResponseID = strings.TrimSpace(upstream.ID)
 		pending.upstreamStored = upstream.Store
-		pending.completed = common.JsonRawMessageToString(upstream.Status) == "completed"
+		status := common.JsonRawMessageToString(upstream.Status)
+		pending.completed = status == "completed"
+		pending.terminal = isResponsesTerminalStatus(status)
+		if common.GetJsonType(rawOutput) == "array" || len(pending.upstreamOutput) == 0 {
+			pending.upstreamOutput = responsesOutputRawMessages(rawOutput, upstream.Output)
+		}
 	}
 	if response == nil {
 		return
 	}
-	content := sanitizeClaudeContent(response.Content)
+	content := cloneClaudeContent(response.Content)
+	content = sanitizeResponsesBackedClaudeContent(content)
 	assistant := dto.ClaudeMessage{Role: "assistant", Content: content}
 	encoded, err := canonicalJSONRaw(assistant)
 	if err == nil {
@@ -157,7 +191,12 @@ func ObserveClaudeStream(c *gin.Context, response *dto.ClaudeResponse) {
 	case "content_block_start":
 		if response.ContentBlock != nil {
 			block := *response.ContentBlock
-			block.Signature = ""
+			if block.Type == "redacted_thinking" {
+				return
+			}
+			if block.Type == "thinking" {
+				block.Signature = ""
+			}
 			pending.claudeBlocks[index] = &block
 		}
 	case "content_block_delta":
@@ -213,7 +252,7 @@ func ObserveClaudeStream(c *gin.Context, response *dto.ClaudeResponse) {
 	}
 }
 
-func observeMessagesUpstreamResponse(pending *pendingState, event *dto.ResponsesStreamResponse, upstreamID string) {
+func observeMessagesUpstreamResponse(pending *pendingState, event *dto.ResponsesStreamResponse, upstreamID string, rawOutput json.RawMessage) {
 	if pending == nil || event == nil || pending.kind != pendingMessages {
 		return
 	}
@@ -223,6 +262,21 @@ func observeMessagesUpstreamResponse(pending *pendingState, event *dto.Responses
 	pending.upstreamStored = event.Response.Store
 	status := common.JsonRawMessageToString(event.Response.Status)
 	pending.completed = event.Type == "response.completed" || event.Type == "response.done" || status == "completed"
+	pending.terminal = isResponsesTerminalStatus(status)
+	if event.Type == "response.completed" || event.Type == "response.done" || event.Type == "response.incomplete" || event.Type == "response.cancelled" || event.Type == "response.canceled" || event.Type == "response.failed" || event.Type == "response.error" {
+		pending.terminal = true
+	}
+	if common.GetJsonType(rawOutput) != "array" && len(event.Response.Output) > 0 {
+		rawOutput, _ = common.Marshal(event.Response.Output)
+	}
+	if len(pending.streamOutput) > 0 {
+		if merged, err := mergeResponsesStreamOutput(pending, rawOutput); err == nil {
+			rawOutput = merged
+		}
+	}
+	if len(rawOutput) > 0 {
+		pending.upstreamOutput = responsesOutputRawMessages(rawOutput, event.Response.Output)
+	}
 }
 
 func commitMessageSession(c *gin.Context, pending *pendingState) error {
@@ -232,7 +286,22 @@ func commitMessageSession(c *gin.Context, pending *pendingState) error {
 	}
 	history := cloneRawMessages(selection.currentHistory)
 	history = append(history, append(json.RawMessage(nil), pending.assistantMessage...))
-	serialized, err := common.Marshal(history)
+	providerOutputs := make(map[int][]json.RawMessage)
+	if selection.strictAppend && selection.session != nil &&
+		selection.session.ChannelID == pending.channelID &&
+		strings.TrimSpace(selection.session.UpstreamModel) == strings.TrimSpace(pending.upstreamModel) {
+		providerOutputs = cloneProviderOutputs(selection.session.ProviderOutputs)
+	}
+	if len(pending.upstreamOutput) > 0 {
+		providerOutputs[len(history)-1] = cloneRawMessages(pending.upstreamOutput)
+	}
+	serialized, err := common.Marshal(struct {
+		History         []json.RawMessage         `json:"history"`
+		ProviderOutputs map[int][]json.RawMessage `json:"provider_outputs,omitempty"`
+	}{
+		History:         history,
+		ProviderOutputs: providerOutputs,
+	})
 	if err != nil {
 		return err
 	}
@@ -257,7 +326,9 @@ func commitMessageSession(c *gin.Context, pending *pendingState) error {
 		UpstreamResponseID: pending.upstreamResponseID,
 		UpstreamStored:     pending.upstreamStored,
 		PublicModel:        pending.publicModel,
+		UpstreamModel:      pending.upstreamModel,
 		History:            history,
+		ProviderOutputs:    providerOutputs,
 		Turn:               turn,
 		SerializedBytes:    len(serialized),
 		CreatedAt:          time.Now().Unix(),
@@ -293,11 +364,26 @@ func buildMessageSelection(c *gin.Context, publicModel string, request *dto.Clau
 	if !found {
 		return selection, nil
 	}
+	policy := currentPolicy()
 	if session.Version != stateVersion || session.UserID != identity.userID || session.TokenID != identity.tokenID ||
-		strings.TrimSpace(session.PublicModel) != strings.TrimSpace(publicModel) {
+		strings.TrimSpace(session.PublicModel) != strings.TrimSpace(publicModel) ||
+		strings.TrimSpace(session.SessionKey) != stableKey || session.ChannelID <= 0 ||
+		strings.TrimSpace(session.UpstreamResponseID) == "" ||
+		session.Turn < 1 || session.Turn > policy.MaxStateTurns ||
+		session.SerializedBytes < 1 || session.SerializedBytes > policy.MaxStateBytes {
 		return selection, nil
 	}
-	ttl := time.Duration(currentPolicy().StateTTLSeconds) * time.Second
+	storedState, err := common.Marshal(struct {
+		History         []json.RawMessage         `json:"history"`
+		ProviderOutputs map[int][]json.RawMessage `json:"provider_outputs,omitempty"`
+	}{
+		History:         session.History,
+		ProviderOutputs: session.ProviderOutputs,
+	})
+	if err != nil || len(storedState) != session.SerializedBytes || len(storedState) > policy.MaxStateBytes {
+		return selection, nil
+	}
+	ttl := time.Duration(policy.StateTTLSeconds) * time.Second
 	if err := messageCache.SetWithTTL(messageSessionKey(identity, stableKey, publicModel), session, ttl); err != nil {
 		return nil, fmt.Errorf("failed to refresh Claude Code Responses session: %w", err)
 	}
@@ -404,11 +490,24 @@ func isStrictMessageAppend(previous, current []json.RawMessage) bool {
 	return true
 }
 
-func sanitizeClaudeContent(content []dto.ClaudeMediaMessage) []dto.ClaudeMediaMessage {
+func cloneClaudeContent(content []dto.ClaudeMediaMessage) []dto.ClaudeMediaMessage {
 	result := make([]dto.ClaudeMediaMessage, len(content))
 	for index := range content {
 		result[index] = content[index]
-		result[index].Signature = ""
+	}
+	return result
+}
+
+func sanitizeResponsesBackedClaudeContent(content []dto.ClaudeMediaMessage) []dto.ClaudeMediaMessage {
+	result := make([]dto.ClaudeMediaMessage, 0, len(content))
+	for _, block := range content {
+		if block.Type == "redacted_thinking" {
+			continue
+		}
+		if block.Type == "thinking" {
+			block.Signature = ""
+		}
+		result = append(result, block)
 	}
 	return result
 }
@@ -427,7 +526,45 @@ func cloneMessageSession(session *MessageSession) *MessageSession {
 	}
 	clone := *session
 	clone.History = cloneRawMessages(session.History)
+	clone.ProviderOutputs = cloneProviderOutputs(session.ProviderOutputs)
 	return &clone
+}
+
+func attachProviderResponsesOutput(messages []dto.ClaudeMessage, providerOutputs map[int][]json.RawMessage) {
+	for index, output := range providerOutputs {
+		if index < 0 || index >= len(messages) || strings.TrimSpace(messages[index].Role) != "assistant" || len(output) == 0 {
+			continue
+		}
+		messages[index].ProviderResponsesRawOutput = cloneRawMessages(output)
+	}
+}
+
+func cloneProviderOutputs(values map[int][]json.RawMessage) map[int][]json.RawMessage {
+	if len(values) == 0 {
+		return make(map[int][]json.RawMessage)
+	}
+	clone := make(map[int][]json.RawMessage, len(values))
+	for index, output := range values {
+		clone[index] = cloneRawMessages(output)
+	}
+	return clone
+}
+
+func responsesOutputRawMessages(raw json.RawMessage, fallback []dto.ResponsesOutput) []json.RawMessage {
+	if common.GetJsonType(raw) == "array" {
+		var output []json.RawMessage
+		if common.Unmarshal(raw, &output) == nil {
+			return cloneRawMessages(output)
+		}
+	}
+	output := make([]json.RawMessage, 0, len(fallback))
+	for _, item := range fallback {
+		encoded, err := common.Marshal(item)
+		if err == nil {
+			output = append(output, encoded)
+		}
+	}
+	return output
 }
 
 func messageSessionKey(identity identity, stableKey, publicModel string) string {

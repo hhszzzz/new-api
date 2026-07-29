@@ -256,7 +256,7 @@ export interface ChannelOtherSettings {
   }
 }
 
-export type UpstreamProtocol = 'chat' | 'messages' | 'responses'
+export type UpstreamProtocol = 'chat' | 'messages' | 'responses' | 'gemini'
 export type ProtocolSelectionMode = 'strict' | 'auto'
 
 export interface ProtocolCapabilities {

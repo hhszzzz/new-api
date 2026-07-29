@@ -29,6 +29,10 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 	return oaichat.StreamResponseOpenAI2Claude(openAIResponse, info)
 }
 
+func ClaudeUsageFromOpenAIUsage(usage *dto.Usage) *dto.ClaudeUsage {
+	return oaichat.ClaudeUsageFromOpenAIUsage(usage)
+}
+
 func StopReasonClaudeToOpenAI(reason string) string {
 	return claudemessages.StopReasonClaudeToOpenAI(reason)
 }
@@ -113,6 +117,10 @@ func FinalizeChatCompletionsStreamToResponses(state *ChatToResponsesStreamState)
 	return oaichat.FinalizeChatCompletionsStreamToResponses(state)
 }
 
+func FinalizeChatCompletionsStreamToResponsesChecked(state *ChatToResponsesStreamState) ([]ChatToResponsesStreamEvent, error) {
+	return oaichat.FinalizeChatCompletionsStreamToResponsesChecked(state)
+}
+
 func ResponsesFinishReasonFromStatus(resp *dto.OpenAIResponsesResponse) (string, bool) {
 	return oairesponses.ResponsesFinishReasonFromStatus(resp)
 }
@@ -143,6 +151,10 @@ func ResponsesStreamEventToChatChunks(event *dto.ResponsesStreamResponse, state 
 
 func FinalizeResponsesToChatStream(state *ResponsesToChatStreamState) []dto.ChatCompletionsStreamResponse {
 	return oairesponses.FinalizeResponsesToChatStream(state)
+}
+
+func FinalizeResponsesToChatStreamChecked(state *ResponsesToChatStreamState) ([]dto.ChatCompletionsStreamResponse, error) {
+	return oairesponses.FinalizeResponsesToChatStreamChecked(state)
 }
 
 func NewResponsesBufferedAccumulator() *ResponsesBufferedAccumulator {

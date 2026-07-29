@@ -45,6 +45,13 @@ type OpenAITextResponse struct {
 	Choices []OpenAITextResponseChoice `json:"choices"`
 	Error   any                        `json:"error,omitempty"`
 	Usage   `json:"usage"`
+	// ProviderReasoningStates carries visible Responses reasoning text between
+	// relaykit conversion steps and is never serialized as Chat Completions JSON.
+	ProviderReasoningStates []ProviderReasoningState `json:"-"`
+}
+
+type ProviderReasoningState struct {
+	Text string
 }
 
 // GetOpenAIError 从动态错误类型中提取OpenAIError结构
@@ -86,11 +93,14 @@ type ChatCompletionsStreamResponseChoice struct {
 }
 
 type ChatCompletionsStreamResponseChoiceDelta struct {
-	Content          *string            `json:"content,omitempty"`
-	ReasoningContent *string            `json:"reasoning_content,omitempty"`
-	Reasoning        *string            `json:"reasoning,omitempty"`
-	Role             string             `json:"role,omitempty"`
-	ToolCalls        []ToolCallResponse `json:"tool_calls,omitempty"`
+	Content          *string             `json:"content,omitempty"`
+	ReasoningContent *string             `json:"reasoning_content,omitempty"`
+	Reasoning        json.RawMessage     `json:"reasoning,omitempty"`
+	ReasoningDetails json.RawMessage     `json:"reasoning_details,omitempty"`
+	Refusal          *string             `json:"refusal,omitempty"`
+	Role             string              `json:"role,omitempty"`
+	ToolCalls        []ToolCallResponse  `json:"tool_calls,omitempty"`
+	FunctionCall     *LegacyFunctionCall `json:"function_call,omitempty"`
 }
 
 func (c *ChatCompletionsStreamResponseChoiceDelta) SetContentString(s string) {
@@ -105,18 +115,33 @@ func (c *ChatCompletionsStreamResponseChoiceDelta) GetContentString() string {
 }
 
 func (c *ChatCompletionsStreamResponseChoiceDelta) GetReasoningContent() string {
-	if c.ReasoningContent == nil && c.Reasoning == nil {
-		return ""
-	}
-	if c.ReasoningContent != nil {
-		return *c.ReasoningContent
-	}
-	return *c.Reasoning
+	return extractChatReasoningText(c.ReasoningContent, c.Reasoning, c.ReasoningDetails)
 }
 
 func (c *ChatCompletionsStreamResponseChoiceDelta) SetReasoningContent(s string) {
 	c.ReasoningContent = &s
 	//c.Reasoning = &s
+}
+
+func (c *ChatCompletionsStreamResponseChoiceDelta) GetRefusalContent() string {
+	if c == nil || c.Refusal == nil {
+		return ""
+	}
+	return *c.Refusal
+}
+
+func (c *ChatCompletionsStreamResponseChoiceDelta) ParseToolCalls() []ToolCallResponse {
+	if c == nil {
+		return nil
+	}
+	if len(c.ToolCalls) > 0 {
+		return c.ToolCalls
+	}
+	if c.FunctionCall == nil {
+		return nil
+	}
+	index := 0
+	return []ToolCallResponse{c.FunctionCall.ToolCallResponse(&index)}
 }
 
 type ToolCallResponse struct {
@@ -147,6 +172,12 @@ type ChatCompletionsStreamResponse struct {
 	SystemFingerprint *string                               `json:"system_fingerprint"`
 	Choices           []ChatCompletionsStreamResponseChoice `json:"choices"`
 	Usage             *Usage                                `json:"usage"`
+	// ReasoningEncryptedContent carries internal provider-bound state between
+	// relaykit conversion steps and is never serialized as Chat Completions JSON.
+	ReasoningEncryptedContent string `json:"-"`
+	// ProviderReasoningItem carries an upstream Responses reasoning item to the
+	// next conversion step without exposing its encrypted_content on Chat JSON.
+	ProviderReasoningItem *ResponsesOutput `json:"-"`
 }
 
 func (c *ChatCompletionsStreamResponse) IsFinished() bool {
@@ -160,12 +191,16 @@ func (c *ChatCompletionsStreamResponse) IsToolCall() bool {
 	if len(c.Choices) == 0 {
 		return false
 	}
-	return len(c.Choices[0].Delta.ToolCalls) > 0
+	return len(c.Choices[0].Delta.ParseToolCalls()) > 0
 }
 
 func (c *ChatCompletionsStreamResponse) GetFirstToolCall() *ToolCallResponse {
-	if c.IsToolCall() {
-		return &c.Choices[0].Delta.ToolCalls[0]
+	if len(c.Choices) == 0 {
+		return nil
+	}
+	toolCalls := c.Choices[0].Delta.ParseToolCalls()
+	if len(toolCalls) > 0 {
+		return &toolCalls[0]
 	}
 	return nil
 }
@@ -180,6 +215,7 @@ func (c *ChatCompletionsStreamResponse) ClearToolCalls() {
 			c.Choices[choiceIdx].Delta.ToolCalls[callIdx].Type = nil
 			c.Choices[choiceIdx].Delta.ToolCalls[callIdx].Function.Name = ""
 		}
+		c.Choices[choiceIdx].Delta.FunctionCall = nil
 	}
 }
 
@@ -187,13 +223,15 @@ func (c *ChatCompletionsStreamResponse) Copy() *ChatCompletionsStreamResponse {
 	choices := make([]ChatCompletionsStreamResponseChoice, len(c.Choices))
 	copy(choices, c.Choices)
 	return &ChatCompletionsStreamResponse{
-		Id:                c.Id,
-		Object:            c.Object,
-		Created:           c.Created,
-		Model:             c.Model,
-		SystemFingerprint: c.SystemFingerprint,
-		Choices:           choices,
-		Usage:             c.Usage,
+		Id:                        c.Id,
+		Object:                    c.Object,
+		Created:                   c.Created,
+		Model:                     c.Model,
+		SystemFingerprint:         c.SystemFingerprint,
+		Choices:                   choices,
+		Usage:                     c.Usage,
+		ReasoningEncryptedContent: c.ReasoningEncryptedContent,
+		ProviderReasoningItem:     c.ProviderReasoningItem,
 	}
 }
 
@@ -325,23 +363,24 @@ type IncompleteDetails struct {
 }
 
 type ResponsesOutput struct {
-	Type      string                          `json:"type"`
-	ID        string                          `json:"id"`
-	Status    string                          `json:"status"`
-	Role      string                          `json:"role"`
-	Phase     string                          `json:"phase,omitempty"`
-	Content   []ResponsesOutputContent        `json:"content,omitempty"`
-	Summary   []ResponsesReasoningSummaryPart `json:"summary,omitempty"`
-	Quality   string                          `json:"quality"`
-	Size      string                          `json:"size"`
-	Result    string                          `json:"result,omitempty"`
-	CallId    string                          `json:"call_id,omitempty"`
-	Name      string                          `json:"name,omitempty"`
-	Namespace string                          `json:"namespace,omitempty"`
-	Input     string                          `json:"input,omitempty"`
-	Execution string                          `json:"execution,omitempty"`
-	Arguments json.RawMessage                 `json:"arguments,omitempty"`
-	CreatedBy string                          `json:"created_by,omitempty"`
+	Type             string                          `json:"type"`
+	ID               string                          `json:"id,omitempty"`
+	Status           string                          `json:"status,omitempty"`
+	Role             string                          `json:"role,omitempty"`
+	Phase            string                          `json:"phase,omitempty"`
+	Content          []ResponsesOutputContent        `json:"content,omitempty"`
+	Summary          []ResponsesReasoningSummaryPart `json:"summary,omitempty"`
+	Quality          string                          `json:"quality,omitempty"`
+	Size             string                          `json:"size,omitempty"`
+	Result           string                          `json:"result,omitempty"`
+	CallId           string                          `json:"call_id,omitempty"`
+	Name             string                          `json:"name,omitempty"`
+	Namespace        string                          `json:"namespace,omitempty"`
+	Input            string                          `json:"input,omitempty"`
+	Execution        string                          `json:"execution,omitempty"`
+	Arguments        json.RawMessage                 `json:"arguments,omitempty"`
+	CreatedBy        string                          `json:"created_by,omitempty"`
+	EncryptedContent string                          `json:"encrypted_content,omitempty"`
 }
 
 // ArgumentsString returns function call arguments in the string form expected by Chat Completions.
@@ -360,7 +399,22 @@ func ResponsesArgumentsString(arguments json.RawMessage) string {
 type ResponsesOutputContent struct {
 	Type        string        `json:"type"`
 	Text        string        `json:"text"`
+	Refusal     string        `json:"refusal,omitempty"`
 	Annotations []interface{} `json:"annotations"`
+}
+
+func (c ResponsesOutputContent) MarshalJSON() ([]byte, error) {
+	if c.Type == "refusal" {
+		return kitutil.Marshal(struct {
+			Type    string `json:"type"`
+			Refusal string `json:"refusal"`
+		}{
+			Type:    c.Type,
+			Refusal: c.Refusal,
+		})
+	}
+	type responseOutputContentAlias ResponsesOutputContent
+	return kitutil.Marshal(responseOutputContentAlias(c))
 }
 
 type ResponsesReasoningSummaryPart struct {
@@ -394,6 +448,7 @@ type ResponsesStreamResponse struct {
 	Response       *OpenAIResponsesResponse `json:"response,omitempty"`
 	Delta          string                   `json:"delta,omitempty"`
 	Text           string                   `json:"text,omitempty"`
+	Refusal        string                   `json:"refusal,omitempty"`
 	Input          string                   `json:"input,omitempty"`
 	Name           string                   `json:"name,omitempty"`
 	Arguments      string                   `json:"arguments,omitempty"`

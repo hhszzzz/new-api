@@ -26,6 +26,7 @@ import (
 func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
 
 	info.InitChannelMeta(c)
+	clientStream := info.IsStream
 
 	claudeReq, ok := info.Request.(*dto.ClaudeRequest)
 
@@ -165,9 +166,6 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
-		if responsesRequest, ok := convertedRequest.(*dto.OpenAIResponsesRequest); ok {
-			protocolstate.ApplyMessagesContinuation(c, responsesRequest)
-		}
 		relaycommon.AppendRequestConversionFromRequest(info, convertedRequest)
 		jsonData, err := common.Marshal(convertedRequest)
 		if err != nil {
@@ -208,12 +206,38 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 
 	if resp != nil {
 		httpResp = resp.(*http.Response)
-		info.IsStream = info.IsStream || strings.HasPrefix(httpResp.Header.Get("Content-Type"), "text/event-stream")
+		upstreamStream := service.ResponseIsEventStream(httpResp)
+		info.IsStream = clientStream || upstreamStream
 		if httpResp.StatusCode != http.StatusOK {
 			newAPIError = service.RelayErrorHandler(c.Request.Context(), httpResp, false)
 			// reset status code 重置状态码
 			service.ResetStatusCode(newAPIError, statusCodeMappingStr)
 			return newAPIError
+		}
+		if plan.SelectionMode == dto.ProtocolSelectionModeAuto {
+			if envelopeError := service.DetectProtocolUnsupportedSuccessEnvelope(httpResp); envelopeError != nil {
+				return envelopeError
+			}
+		}
+		if clientStream && !upstreamStream && service.ResponseIsJSON(httpResp) {
+			if err := helper.PromoteJSONResponseToSSE(httpResp, protocolFormatForPlan(plan)); err != nil {
+				newAPIError = types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
+				service.ResetStatusCode(newAPIError, statusCodeMappingStr)
+				return newAPIError
+			}
+			upstreamStream = true
+			info.IsStream = true
+		}
+		if !clientStream && upstreamStream {
+			info.IsStream = false
+			usage, handled, bufferedError := handleBufferedStreamResponse(c, info, httpResp, protocolFormatForPlan(plan), statusCodeMappingStr)
+			if bufferedError != nil {
+				return bufferedError
+			}
+			if handled {
+				service.PostTextConsumeQuota(c, info, usage, nil)
+				return nil
+			}
 		}
 	}
 

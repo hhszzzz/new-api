@@ -23,6 +23,42 @@ func GeminiGenerateContentRequestToOpenAIChat(geminiRequest *dto.GeminiChatReque
 	}
 
 	var messages []dto.Message
+	callNames := make(map[string]string)
+	pendingCallIDs := make([]string, 0)
+	pendingCallIDsByName := make(map[string][]string)
+	pendingCallIDSet := make(map[string]struct{})
+	consumePendingCallID := func(explicitID string, name string) string {
+		if explicitID != "" {
+			if _, exists := pendingCallIDSet[explicitID]; !exists {
+				return ""
+			}
+			delete(pendingCallIDSet, explicitID)
+			return explicitID
+		}
+		if name != "" {
+			ids := pendingCallIDsByName[name]
+			for len(ids) > 0 {
+				callID := ids[0]
+				ids = ids[1:]
+				pendingCallIDsByName[name] = ids
+				if _, exists := pendingCallIDSet[callID]; exists {
+					delete(pendingCallIDSet, callID)
+					return callID
+				}
+			}
+			return ""
+		}
+		for len(pendingCallIDs) > 0 {
+			callID := pendingCallIDs[0]
+			pendingCallIDs = pendingCallIDs[1:]
+			if _, exists := pendingCallIDSet[callID]; exists {
+				delete(pendingCallIDSet, callID)
+				return callID
+			}
+		}
+		return ""
+	}
+	fallbackCallIndex := 0
 	for _, content := range geminiRequest.Contents {
 		message := dto.Message{
 			Role: convertGeminiRoleToOpenAI(content.Role),
@@ -58,19 +94,49 @@ func GeminiGenerateContentRequestToOpenAIChat(geminiRequest *dto.GeminiChatReque
 				}
 				mediaContents = append(mediaContents, mediaContent)
 			} else if part.FunctionCall != nil {
+				callID := strings.TrimSpace(part.FunctionCall.ID)
+				if callID == "" {
+					for {
+						fallbackCallIndex++
+						callID = fmt.Sprintf("call_%d", fallbackCallIndex)
+						if _, exists := callNames[callID]; !exists {
+							break
+						}
+					}
+				}
+				if _, exists := callNames[callID]; exists {
+					return nil, fmt.Errorf("duplicate Gemini functionCall id %q", callID)
+				}
+				functionName := strings.TrimSpace(part.FunctionCall.FunctionName)
 				toolCall := dto.ToolCallRequest{
-					ID:   fmt.Sprintf("call_%d", len(toolCalls)+1),
+					ID:   callID,
 					Type: "function",
 					Function: dto.FunctionRequest{
-						Name:      part.FunctionCall.FunctionName,
+						Name:      functionName,
 						Arguments: jsonutil.ToJSONString(part.FunctionCall.Arguments),
 					},
 				}
 				toolCalls = append(toolCalls, toolCall)
+				callNames[callID] = functionName
+				pendingCallIDs = append(pendingCallIDs, callID)
+				pendingCallIDsByName[functionName] = append(pendingCallIDsByName[functionName], callID)
+				pendingCallIDSet[callID] = struct{}{}
 			} else if part.FunctionResponse != nil {
+				callID := strings.TrimSpace(kitutil.JsonRawMessageToString(part.FunctionResponse.ID))
+				functionName := strings.TrimSpace(part.FunctionResponse.Name)
+				callID = consumePendingCallID(callID, functionName)
+				if callID == "" {
+					return nil, fmt.Errorf("unable to resolve OpenAI tool_call_id for Gemini functionResponse %q", functionName)
+				}
 				toolMessage := dto.Message{
 					Role:       "tool",
-					ToolCallId: fmt.Sprintf("call_%d", len(toolCalls)),
+					ToolCallId: callID,
+				}
+				if functionName == "" {
+					functionName = callNames[callID]
+				}
+				if functionName != "" {
+					toolMessage.Name = &functionName
 				}
 				toolMessage.SetStringContent(jsonutil.ToJSONString(part.FunctionResponse.Response))
 				messages = append(messages, toolMessage)
@@ -95,19 +161,19 @@ func GeminiGenerateContentRequestToOpenAIChat(geminiRequest *dto.GeminiChatReque
 	if geminiRequest.GenerationConfig.Temperature != nil {
 		openaiRequest.Temperature = geminiRequest.GenerationConfig.Temperature
 	}
-	if geminiRequest.GenerationConfig.TopP != nil && *geminiRequest.GenerationConfig.TopP > 0 {
+	if geminiRequest.GenerationConfig.TopP != nil {
 		openaiRequest.TopP = kitutil.GetPointer(*geminiRequest.GenerationConfig.TopP)
 	}
-	if geminiRequest.GenerationConfig.TopK != nil && *geminiRequest.GenerationConfig.TopK > 0 {
-		openaiRequest.TopK = kitutil.GetPointer(int(*geminiRequest.GenerationConfig.TopK))
-	}
-	if geminiRequest.GenerationConfig.MaxOutputTokens != nil && *geminiRequest.GenerationConfig.MaxOutputTokens > 0 {
+	// OpenAI Chat Completions has no standard top_k field. CC Switch follows the
+	// same strict-compatible rule for Anthropic conversion and omits it rather
+	// than sending an extension that many Chat-only upstreams reject.
+	if geminiRequest.GenerationConfig.MaxOutputTokens != nil {
 		openaiRequest.MaxTokens = kitutil.GetPointer(*geminiRequest.GenerationConfig.MaxOutputTokens)
 	}
 	if len(geminiRequest.GenerationConfig.StopSequences) > 0 {
 		openaiRequest.Stop = geminiRequest.GenerationConfig.StopSequences[:min(len(geminiRequest.GenerationConfig.StopSequences), 4)]
 	}
-	if geminiRequest.GenerationConfig.CandidateCount != nil && *geminiRequest.GenerationConfig.CandidateCount > 0 {
+	if geminiRequest.GenerationConfig.CandidateCount != nil {
 		openaiRequest.N = kitutil.GetPointer(*geminiRequest.GenerationConfig.CandidateCount)
 	}
 
@@ -123,12 +189,16 @@ func GeminiGenerateContentRequestToOpenAIChat(geminiRequest *dto.GeminiChatReque
 				continue
 			}
 			for _, function := range functionDeclarations {
+				parameters := function.Parameters
+				if function.ParametersJsonSchema != nil {
+					parameters = function.ParametersJsonSchema
+				}
 				openAITool := dto.ToolCallRequest{
 					Type: "function",
 					Function: dto.FunctionRequest{
 						Name:        function.Name,
 						Description: function.Description,
-						Parameters:  function.Parameters,
+						Parameters:  parameters,
 					},
 				}
 				tools = append(tools, openAITool)

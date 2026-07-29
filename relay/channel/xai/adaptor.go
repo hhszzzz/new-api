@@ -104,6 +104,9 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	if request.Model == "" && info != nil {
 		request.Model = info.UpstreamModelName
 	}
+	if err := prepareXAIResponsesRequest(c, &request); err != nil {
+		return nil, err
+	}
 	return request, nil
 }
 
@@ -116,17 +119,23 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 	case constant.RelayModeImagesGenerations, constant.RelayModeImagesEdits:
 		usage, err = openai.OpenaiImageHandler(c, info, resp)
 	case constant.RelayModeResponses:
-		if info.IsStream {
-			usage, err = openai.OaiResponsesStreamHandler(c, info, resp)
-		} else {
-			usage, err = openai.OaiResponsesHandler(c, info, resp)
+		if restoreErr := restoreXAIResponsesBody(c, resp, info.IsStream); restoreErr != nil {
+			return nil, types.NewOpenAIError(restoreErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 		}
+		usage, err = (&openai.Adaptor{}).DoResponse(c, resp, info)
 	default:
-		if info.IsStream {
-			usage, err = xAIStreamHandler(c, info, resp)
-		} else {
-			usage, err = xAIHandler(c, info, resp)
+		if info.RelayFormat == types.RelayFormatOpenAI {
+			if info.IsStream {
+				usage, err = xAIStreamHandler(c, info, resp)
+			} else {
+				usage, err = xAIHandler(c, info, resp)
+			}
+			break
 		}
+		if normalizeErr := normalizeXAIChatResponse(resp, info.IsStream); normalizeErr != nil {
+			return nil, types.NewOpenAIError(normalizeErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		}
+		usage, err = (&openai.Adaptor{}).DoResponse(c, resp, info)
 	}
 	return
 }

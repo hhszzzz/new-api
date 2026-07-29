@@ -56,6 +56,57 @@ func TestSanitizeURLForLogKeepsURLWithoutSensitiveQuery(t *testing.T) {
 	assert.Equal(t, rawURL, got)
 }
 
+func TestResolveFullEndpointURLAvoidsDuplicateProtocolPaths(t *testing.T) {
+	tests := []struct {
+		name           string
+		baseURL        string
+		requestURL     string
+		endpointSuffix string
+		want           string
+	}{
+		{
+			name:           "messages endpoint",
+			baseURL:        "https://relay.example/api/v1/messages",
+			requestURL:     "/v1/messages",
+			endpointSuffix: "/v1/messages",
+			want:           "https://relay.example/api/v1/messages",
+		},
+		{
+			name:           "chat endpoint with existing query",
+			baseURL:        "https://relay.example/v1/chat/completions?api-version=2024",
+			requestURL:     "/v1/chat/completions?trace=1",
+			endpointSuffix: "/chat/completions",
+			want:           "https://relay.example/v1/chat/completions?api-version=2024&trace=1",
+		},
+		{
+			name:           "responses endpoint with fragment",
+			baseURL:        " https://relay.example/v1/responses#upstream ",
+			requestURL:     "/v1/responses?foo=bar",
+			endpointSuffix: "/v1/responses",
+			want:           "https://relay.example/v1/responses?foo=bar#upstream",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := ResolveFullEndpointURL(test.baseURL, test.requestURL, test.endpointSuffix)
+
+			require.True(t, ok)
+			assert.Equal(t, test.want, got)
+		})
+	}
+}
+
+func TestResolveFullEndpointURLRejectsBasePrefixes(t *testing.T) {
+	_, ok := ResolveFullEndpointURL(
+		"https://relay.example/v1",
+		"/v1/messages",
+		"/v1/messages",
+	)
+
+	assert.False(t, ok)
+}
+
 func TestValidateMultipartDirectNormalizesImageField(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := strings.NewReader(`{"model":"wan2.7-i2v","prompt":"animate","image":" https://example.com/first.png "}`)

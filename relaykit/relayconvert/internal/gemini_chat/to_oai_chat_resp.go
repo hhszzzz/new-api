@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	sharedgemini "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/gemini"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/QuantumNous/new-api/relaykit/types"
 )
@@ -83,7 +84,19 @@ func ResponseGeminiChat2OpenAI(id string, created int64, response *dto.GeminiCha
 		Created: created,
 		Choices: make([]dto.OpenAITextResponseChoice, 0, len(response.Candidates)),
 	}
-	isToolCall := false
+	if blockReason := geminiPromptBlockReason(response); len(response.Candidates) == 0 && blockReason != "" {
+		refusal := geminiPromptBlockText(blockReason)
+		fullTextResponse.Choices = append(fullTextResponse.Choices, dto.OpenAITextResponseChoice{
+			Index: 0,
+			Message: dto.Message{
+				Role:    "assistant",
+				Content: "",
+				Refusal: &refusal,
+			},
+			FinishReason: types.FinishReasonContentFilter,
+		})
+		return &fullTextResponse
+	}
 	for _, candidate := range response.Candidates {
 		choice := dto.OpenAITextResponseChoice{
 			Index: int(candidate.Index),
@@ -93,8 +106,11 @@ func ResponseGeminiChat2OpenAI(id string, created int64, response *dto.GeminiCha
 			},
 			FinishReason: types.FinishReasonStop,
 		}
+		hasToolCall := false
+		allowToolFinish := candidate.FinishReason == nil
 		if len(candidate.Content.Parts) > 0 {
 			var content strings.Builder
+			var reasoning strings.Builder
 			var inlineGrow int
 			for _, part := range candidate.Content.Parts {
 				if part.InlineData != nil {
@@ -105,24 +121,25 @@ func ResponseGeminiChat2OpenAI(id string, created int64, response *dto.GeminiCha
 				content.Grow(inlineGrow)
 			}
 			appended := 0
-			writeSep := func() {
-				if appended > 0 {
-					content.WriteByte('\n')
-				}
-				appended++
-			}
+			reasoningParts := 0
 			var toolCalls []dto.ToolCallResponse
 			for _, part := range candidate.Content.Parts {
 				if part.InlineData != nil {
 					if strings.HasPrefix(part.InlineData.MimeType, "image") {
-						writeSep()
+						if appended > 0 {
+							content.WriteByte('\n')
+						}
+						appended++
 						content.WriteString("![image](data:")
 						content.WriteString(part.InlineData.MimeType)
 						content.WriteString(";base64,")
 						content.WriteString(part.InlineData.Data)
 						content.WriteByte(')')
 					} else {
-						writeSep()
+						if appended > 0 {
+							content.WriteByte('\n')
+						}
+						appended++
 						content.WriteString("[media](data:")
 						content.WriteString(part.InlineData.MimeType)
 						content.WriteString(";base64,")
@@ -131,49 +148,62 @@ func ResponseGeminiChat2OpenAI(id string, created int64, response *dto.GeminiCha
 					}
 				} else if part.FunctionCall != nil {
 					choice.FinishReason = types.FinishReasonToolCalls
-					if call := geminiResponseToolCall(&part); call != nil {
+					if call := geminiResponseToolCall(&part, sharedgemini.SynthesizeToolCallID()); call != nil {
 						toolCalls = append(toolCalls, *call)
 					}
 				} else if part.Thought {
-					choice.Message.ReasoningContent = &part.Text
+					if part.Text != "" && part.Text != "\n" {
+						if reasoningParts > 0 {
+							reasoning.WriteByte('\n')
+						}
+						reasoningParts++
+						reasoning.WriteString(part.Text)
+					}
 				} else {
 					if part.ExecutableCode != nil {
-						writeSep()
+						if appended > 0 {
+							content.WriteByte('\n')
+						}
+						appended++
 						content.WriteString("```")
 						content.WriteString(part.ExecutableCode.Language)
 						content.WriteByte('\n')
 						content.WriteString(part.ExecutableCode.Code)
 						content.WriteString("\n```")
 					} else if part.CodeExecutionResult != nil {
-						writeSep()
+						if appended > 0 {
+							content.WriteByte('\n')
+						}
+						appended++
 						content.WriteString("```output\n")
 						content.WriteString(part.CodeExecutionResult.Output)
 						content.WriteString("\n```")
 					} else if part.Text != "\n" {
-						writeSep()
+						if appended > 0 {
+							content.WriteByte('\n')
+						}
+						appended++
 						content.WriteString(part.Text)
 					}
 				}
 			}
 			if len(toolCalls) > 0 {
 				choice.Message.SetToolCalls(toolCalls)
-				isToolCall = true
+				hasToolCall = true
 			}
 			choice.Message.SetStringContent(content.String())
-		}
-		if candidate.FinishReason != nil {
-			switch *candidate.FinishReason {
-			case "STOP":
-				choice.FinishReason = types.FinishReasonStop
-			case "MAX_TOKENS":
-				choice.FinishReason = types.FinishReasonLength
-			case "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "OTHER":
-				choice.FinishReason = types.FinishReasonContentFilter
-			default:
-				choice.FinishReason = types.FinishReasonContentFilter
+			if reasoning.Len() > 0 {
+				reasoningText := reasoning.String()
+				choice.Message.ReasoningContent = &reasoningText
 			}
 		}
-		if isToolCall {
+		if candidate.FinishReason != nil {
+			choice.FinishReason, allowToolFinish = geminiFinishReasonToChat(*candidate.FinishReason)
+			if refusal := geminiRefusalText(*candidate.FinishReason); refusal != "" {
+				choice.Message.Refusal = &refusal
+			}
+		}
+		if hasToolCall && allowToolFinish {
 			choice.FinishReason = types.FinishReasonToolCalls
 		}
 
@@ -183,6 +213,22 @@ func ResponseGeminiChat2OpenAI(id string, created int64, response *dto.GeminiCha
 }
 
 func StreamResponseGeminiChat2OpenAI(geminiResponse *dto.GeminiChatResponse) (*dto.ChatCompletionsStreamResponse, bool) {
+	if blockReason := geminiPromptBlockReason(geminiResponse); len(geminiResponse.Candidates) == 0 && blockReason != "" {
+		refusal := geminiPromptBlockText(blockReason)
+		finishReason := types.FinishReasonContentFilter
+		return &dto.ChatCompletionsStreamResponse{
+			Object: "chat.completion.chunk",
+			Choices: []dto.ChatCompletionsStreamResponseChoice{
+				{
+					Index: 0,
+					Delta: dto.ChatCompletionsStreamResponseChoiceDelta{
+						Refusal: &refusal,
+					},
+					FinishReason: &finishReason,
+				},
+			},
+		}, false
+	}
 	choices := make([]dto.ChatCompletionsStreamResponseChoice, 0, len(geminiResponse.Candidates))
 	isStop := false
 	for _, candidate := range geminiResponse.Candidates {
@@ -195,6 +241,7 @@ func StreamResponseGeminiChat2OpenAI(geminiResponse *dto.GeminiChatResponse) (*d
 			Delta: dto.ChatCompletionsStreamResponseChoiceDelta{},
 		}
 		var content strings.Builder
+		var reasoning strings.Builder
 		var inlineGrow int
 		for _, part := range candidate.Content.Parts {
 			if part.InlineData != nil {
@@ -205,30 +252,24 @@ func StreamResponseGeminiChat2OpenAI(geminiResponse *dto.GeminiChatResponse) (*d
 			content.Grow(inlineGrow)
 		}
 		appended := 0
-		writeSep := func() {
-			if appended > 0 {
-				content.WriteByte('\n')
-			}
-			appended++
-		}
+		reasoningParts := 0
 		isTools := false
-		isThought := false
+		allowToolFinish := candidate.FinishReason == nil
 		if candidate.FinishReason != nil {
-			switch *candidate.FinishReason {
-			case "STOP":
-				choice.FinishReason = &types.FinishReasonStop
-			case "MAX_TOKENS":
-				choice.FinishReason = &types.FinishReasonLength
-			case "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "OTHER":
-				choice.FinishReason = &types.FinishReasonContentFilter
-			default:
-				choice.FinishReason = &types.FinishReasonContentFilter
+			finishReason, allowed := geminiFinishReasonToChat(*candidate.FinishReason)
+			allowToolFinish = allowed
+			choice.FinishReason = &finishReason
+			if refusal := geminiRefusalText(*candidate.FinishReason); refusal != "" {
+				choice.Delta.Refusal = &refusal
 			}
 		}
 		for _, part := range candidate.Content.Parts {
 			if part.InlineData != nil {
 				if strings.HasPrefix(part.InlineData.MimeType, "image") {
-					writeSep()
+					if appended > 0 {
+						content.WriteByte('\n')
+					}
+					appended++
 					content.WriteString("![image](data:")
 					content.WriteString(part.InlineData.MimeType)
 					content.WriteString(";base64,")
@@ -237,39 +278,54 @@ func StreamResponseGeminiChat2OpenAI(geminiResponse *dto.GeminiChatResponse) (*d
 				}
 			} else if part.FunctionCall != nil {
 				isTools = true
-				if call := geminiResponseToolCall(&part); call != nil {
+				fallbackID := sharedgemini.SynthesizeToolCallID()
+				if call := geminiResponseToolCall(&part, fallbackID); call != nil {
 					call.SetIndex(len(choice.Delta.ToolCalls))
 					choice.Delta.ToolCalls = append(choice.Delta.ToolCalls, *call)
 				}
 			} else if part.Thought {
-				isThought = true
-				writeSep()
-				content.WriteString(part.Text)
+				if part.Text != "" && part.Text != "\n" {
+					if reasoningParts > 0 {
+						reasoning.WriteByte('\n')
+					}
+					reasoningParts++
+					reasoning.WriteString(part.Text)
+				}
 			} else {
 				if part.ExecutableCode != nil {
-					writeSep()
+					if appended > 0 {
+						content.WriteByte('\n')
+					}
+					appended++
 					content.WriteString("```")
 					content.WriteString(part.ExecutableCode.Language)
 					content.WriteByte('\n')
 					content.WriteString(part.ExecutableCode.Code)
 					content.WriteString("\n```\n")
 				} else if part.CodeExecutionResult != nil {
-					writeSep()
+					if appended > 0 {
+						content.WriteByte('\n')
+					}
+					appended++
 					content.WriteString("```output\n")
 					content.WriteString(part.CodeExecutionResult.Output)
 					content.WriteString("\n```\n")
 				} else if part.Text != "\n" {
-					writeSep()
+					if appended > 0 {
+						content.WriteByte('\n')
+					}
+					appended++
 					content.WriteString(part.Text)
 				}
 			}
 		}
-		if isThought {
-			choice.Delta.SetReasoningContent(content.String())
-		} else {
+		if reasoning.Len() > 0 {
+			choice.Delta.SetReasoningContent(reasoning.String())
+		}
+		if content.Len() > 0 {
 			choice.Delta.SetContentString(content.String())
 		}
-		if isTools {
+		if isTools && allowToolFinish {
 			choice.FinishReason = &types.FinishReasonToolCalls
 		}
 		choices = append(choices, choice)
@@ -288,6 +344,16 @@ type GeminiToChatStreamState struct {
 	sawToolCall   bool
 	finishEmitted bool
 	latestUsage   *dto.Usage
+	toolCalls     map[int]map[int]*geminiStreamToolState
+	content       map[int]string
+	reasoning     map[int]string
+	refusals      map[int]string
+}
+
+type geminiStreamToolState struct {
+	id        string
+	name      string
+	arguments string
 }
 
 func NewGeminiToChatStreamState(id string, created int64) *GeminiToChatStreamState {
@@ -298,7 +364,14 @@ func NewGeminiToChatStreamState(id string, created int64) *GeminiToChatStreamSta
 	if created == 0 {
 		created = kitutil.GetTimestamp()
 	}
-	return &GeminiToChatStreamState{id: id, created: created}
+	return &GeminiToChatStreamState{
+		id:        id,
+		created:   created,
+		toolCalls: make(map[int]map[int]*geminiStreamToolState),
+		content:   make(map[int]string),
+		reasoning: make(map[int]string),
+		refusals:  make(map[int]string),
+	}
 }
 
 func (s *GeminiToChatStreamState) ConvertChunk(geminiResponse *dto.GeminiChatResponse, model string, usage *dto.Usage) []*dto.ChatCompletionsStreamResponse {
@@ -320,6 +393,8 @@ func (s *GeminiToChatStreamState) ConvertChunk(geminiResponse *dto.GeminiChatRes
 	response.Created = s.created
 	response.Model = model
 	response.Usage = usage
+	s.stabilizeToolCallIDs(geminiResponse, response)
+	s.stabilizeTextDeltas(response)
 
 	if response.IsToolCall() {
 		s.sawToolCall = true
@@ -383,17 +458,182 @@ func (s *GeminiToChatStreamState) terminalChunk(model string) *dto.ChatCompletio
 	}
 }
 
-func geminiResponseToolCall(item *dto.GeminiPart) *dto.ToolCallResponse {
+func (s *GeminiToChatStreamState) stabilizeToolCallIDs(geminiResponse *dto.GeminiChatResponse, response *dto.ChatCompletionsStreamResponse) {
+	if s == nil || geminiResponse == nil || response == nil {
+		return
+	}
+	candidates := make(map[int64]dto.GeminiChatCandidate, len(geminiResponse.Candidates))
+	for _, candidate := range geminiResponse.Candidates {
+		candidates[candidate.Index] = candidate
+	}
+	for choiceIndex := range response.Choices {
+		choice := &response.Choices[choiceIndex]
+		candidate := candidates[int64(choice.Index)]
+		upstreamIDs := make([]string, 0, len(choice.Delta.ToolCalls))
+		for _, part := range candidate.Content.Parts {
+			if part.FunctionCall != nil {
+				upstreamIDs = append(upstreamIDs, strings.TrimSpace(part.FunctionCall.ID))
+			}
+		}
+		toolsBySlot := s.toolCalls[choice.Index]
+		if toolsBySlot == nil {
+			toolsBySlot = make(map[int]*geminiStreamToolState)
+			s.toolCalls[choice.Index] = toolsBySlot
+		}
+		for toolPosition := range choice.Delta.ToolCalls {
+			tool := &choice.Delta.ToolCalls[toolPosition]
+			slot := toolPosition
+			if tool.Index != nil && *tool.Index >= 0 {
+				slot = *tool.Index
+			}
+			upstreamID := ""
+			if toolPosition < len(upstreamIDs) {
+				upstreamID = upstreamIDs[toolPosition]
+			}
+			toolState := toolsBySlot[slot]
+			if toolState == nil || (upstreamID != "" && toolState.id != upstreamID) {
+				stableID := upstreamID
+				if stableID == "" {
+					stableID = sharedgemini.SynthesizeToolCallID()
+				}
+				toolState = &geminiStreamToolState{
+					id:        stableID,
+					name:      tool.Function.Name,
+					arguments: tool.Function.Arguments,
+				}
+				toolsBySlot[slot] = toolState
+			} else {
+				if tool.Function.Name == toolState.name {
+					tool.Function.Name = ""
+				} else if tool.Function.Name != "" {
+					toolState.name = tool.Function.Name
+				}
+				if tool.Function.Arguments == toolState.arguments {
+					tool.Function.Arguments = ""
+				} else if strings.HasPrefix(tool.Function.Arguments, toolState.arguments) {
+					delta := strings.TrimPrefix(tool.Function.Arguments, toolState.arguments)
+					toolState.arguments = tool.Function.Arguments
+					tool.Function.Arguments = delta
+				} else if tool.Function.Arguments != "" {
+					toolState.arguments = tool.Function.Arguments
+				}
+			}
+			tool.ID = toolState.id
+			tool.SetIndex(slot)
+		}
+	}
+}
+
+func (s *GeminiToChatStreamState) stabilizeTextDeltas(response *dto.ChatCompletionsStreamResponse) {
+	if s == nil || response == nil {
+		return
+	}
+	for index := range response.Choices {
+		choice := &response.Choices[index]
+		choiceIndex := choice.Index
+
+		if content := choice.Delta.GetContentString(); content != "" {
+			delta, accumulated := GeminiStreamDelta(s.content[choiceIndex], content)
+			s.content[choiceIndex] = accumulated
+			if delta == "" {
+				choice.Delta.Content = nil
+			} else {
+				choice.Delta.SetContentString(delta)
+			}
+		}
+
+		if reasoning := choice.Delta.GetReasoningContent(); reasoning != "" {
+			delta, accumulated := GeminiStreamDelta(s.reasoning[choiceIndex], reasoning)
+			s.reasoning[choiceIndex] = accumulated
+			if delta == "" {
+				choice.Delta.ReasoningContent = nil
+				choice.Delta.Reasoning = nil
+				choice.Delta.ReasoningDetails = nil
+			} else {
+				choice.Delta.SetReasoningContent(delta)
+			}
+		}
+
+		if refusal := choice.Delta.GetRefusalContent(); refusal != "" {
+			delta, accumulated := GeminiStreamDelta(s.refusals[choiceIndex], refusal)
+			s.refusals[choiceIndex] = accumulated
+			if delta == "" {
+				choice.Delta.Refusal = nil
+			} else {
+				choice.Delta.Refusal = &delta
+			}
+		}
+	}
+}
+
+// GeminiStreamDelta follows CC Switch's Gemini stream handling: chunks are
+// treated as cumulative snapshots when the incoming text extends everything
+// accumulated so far, and as incremental deltas otherwise.
+func GeminiStreamDelta(accumulated string, current string) (string, string) {
+	if strings.HasPrefix(current, accumulated) {
+		return strings.TrimPrefix(current, accumulated), current
+	}
+	return current, accumulated + current
+}
+
+func geminiResponseToolCall(item *dto.GeminiPart, fallbackID string) *dto.ToolCallResponse {
 	argsBytes, err := kitutil.Marshal(item.FunctionCall.Arguments)
 	if err != nil {
 		return nil
 	}
+	callID := strings.TrimSpace(item.FunctionCall.ID)
+	if callID == "" {
+		callID = fallbackID
+	}
 	return &dto.ToolCallResponse{
-		ID:   fmt.Sprintf("call_%s", kitutil.GetUUID()),
+		ID:   callID,
 		Type: "function",
 		Function: dto.FunctionResponse{
 			Arguments: string(argsBytes),
 			Name:      item.FunctionCall.FunctionName,
 		},
 	}
+}
+
+func geminiFinishReasonToChat(reason string) (string, bool) {
+	switch strings.ToUpper(strings.TrimSpace(reason)) {
+	case "", "STOP":
+		return types.FinishReasonStop, true
+	case "MAX_TOKENS":
+		return types.FinishReasonLength, false
+	default:
+		return types.FinishReasonContentFilter, false
+	}
+}
+
+func geminiRefusalText(reason string) string {
+	switch normalized := strings.ToUpper(strings.TrimSpace(reason)); normalized {
+	case "", "STOP", "MAX_TOKENS":
+		return ""
+	case "SAFETY":
+		return "Gemini blocked the response for safety reasons."
+	case "RECITATION":
+		return "Gemini blocked the response because of recitation concerns."
+	case "BLOCKLIST":
+		return "Gemini blocked the response because it matched a blocklist."
+	case "PROHIBITED_CONTENT":
+		return "Gemini blocked the response because it contained prohibited content."
+	case "SPII":
+		return "Gemini blocked the response because it may contain sensitive personal information."
+	case "OTHER":
+		return "Gemini blocked the response for an unspecified reason."
+	default:
+		return fmt.Sprintf("Gemini ended the response with finish reason %s.", normalized)
+	}
+}
+
+func geminiPromptBlockReason(response *dto.GeminiChatResponse) string {
+	if response == nil || response.PromptFeedback == nil || response.PromptFeedback.BlockReason == nil {
+		return ""
+	}
+	return strings.TrimSpace(*response.PromptFeedback.BlockReason)
+}
+
+func geminiPromptBlockText(reason string) string {
+	return fmt.Sprintf("Request blocked by Gemini safety filters: %s", strings.TrimSpace(reason))
 }

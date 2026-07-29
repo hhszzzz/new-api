@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -24,6 +23,7 @@ import (
 
 func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
 	info.InitChannelMeta(c)
+	clientStream := info.IsStream
 
 	textReq, ok := info.Request.(*dto.GeneralOpenAIRequest)
 	if !ok {
@@ -145,6 +145,8 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 	}
 
 	var httpResp *http.Response
+	var usage any
+	bufferedResponseHandled := false
 	resp, err := adaptor.DoRequest(c, info, requestBody)
 	if err != nil {
 		return types.NewOpenAIError(err, types.ErrorCodeDoRequestFailed, http.StatusInternalServerError)
@@ -154,20 +156,43 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 
 	if resp != nil {
 		httpResp = resp.(*http.Response)
-		info.IsStream = info.IsStream || strings.HasPrefix(httpResp.Header.Get("Content-Type"), "text/event-stream")
+		upstreamStream := service.ResponseIsEventStream(httpResp)
+		info.IsStream = clientStream || upstreamStream
 		if httpResp.StatusCode != http.StatusOK {
 			newApiErr := service.RelayErrorHandler(c.Request.Context(), httpResp, false)
 			// reset status code 重置状态码
 			service.ResetStatusCode(newApiErr, statusCodeMappingStr)
 			return newApiErr
 		}
+		if clientStream && !upstreamStream && service.ResponseIsJSON(httpResp) {
+			if err := helper.PromoteJSONResponseToSSE(httpResp, info.GetFinalRequestRelayFormat()); err != nil {
+				newApiErr := types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
+				service.ResetStatusCode(newApiErr, statusCodeMappingStr)
+				return newApiErr
+			}
+			upstreamStream = true
+			info.IsStream = true
+		}
+		if !clientStream && upstreamStream {
+			info.IsStream = false
+			bufferedUsage, handled, bufferedError := handleBufferedStreamResponse(c, info, httpResp, info.GetFinalRequestRelayFormat(), statusCodeMappingStr)
+			if bufferedError != nil {
+				return bufferedError
+			}
+			if handled {
+				bufferedResponseHandled = true
+				usage = bufferedUsage
+			}
+		}
 	}
 
-	usage, newApiErr := adaptor.DoResponse(c, httpResp, info)
-	if newApiErr != nil {
-		// reset status code 重置状态码
-		service.ResetStatusCode(newApiErr, statusCodeMappingStr)
-		return newApiErr
+	if !bufferedResponseHandled {
+		usage, newAPIError = adaptor.DoResponse(c, httpResp, info)
+		if newAPIError != nil {
+			// reset status code 重置状态码
+			service.ResetStatusCode(newAPIError, statusCodeMappingStr)
+			return newAPIError
+		}
 	}
 
 	var containAudioTokens = usage.(*dto.Usage).CompletionTokenDetails.AudioTokens > 0 || usage.(*dto.Usage).PromptTokensDetails.AudioTokens > 0

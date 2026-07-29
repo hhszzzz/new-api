@@ -12,28 +12,8 @@
           "type": "input_image"
         }
       ],
-      "role": "user"
-    },
-    {
-      "content": [
-        {
-          "text": "Let me look.",
-          "type": "reasoning_text"
-        }
-      ],
-      "id": "rs_bridge_2",
-      "status": "completed",
-      "summary": [
-        {
-          "text": "Let me look.",
-          "type": "summary_text"
-        }
-      ],
-      "type": "reasoning"
-    },
-    {
-      "content": "",
-      "role": "assistant"
+      "role": "user",
+      "type": "message"
     },
     {
       "arguments": "{\"city\":\"Paris\"}",
@@ -49,10 +29,6 @@
   ],
   "instructions": "You are a helpful assistant.",
   "max_output_tokens": 1024,
-  "reasoning": {
-    "effort": "low",
-    "summary": "detailed"
-  },
   "stream": true,
   "tools": [
     {

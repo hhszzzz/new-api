@@ -50,12 +50,16 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 	}
 	specialPlan, hasSpecialPlan := channelconstant.ChannelSpecialBases[baseURL]
 
-	switch info.RelayFormat {
+	switch info.GetFinalRequestRelayFormat() {
 	case types.RelayFormatClaude:
-		if hasSpecialPlan && specialPlan.ClaudeBaseURL != "" {
-			return fmt.Sprintf("%s/v1/messages", specialPlan.ClaudeBaseURL), nil
+		requestPath := "/v1/messages"
+		if info.IsMessagesCountTokensRequest() {
+			requestPath += "/count_tokens"
 		}
-		return fmt.Sprintf("%s/api/anthropic/v1/messages", baseURL), nil
+		if hasSpecialPlan && specialPlan.ClaudeBaseURL != "" {
+			return fmt.Sprintf("%s%s", specialPlan.ClaudeBaseURL, requestPath), nil
+		}
+		return fmt.Sprintf("%s/api/anthropic%s", baseURL, requestPath), nil
 	default:
 		switch info.RelayMode {
 		case relayconstant.RelayModeEmbeddings:
@@ -80,6 +84,9 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) error {
 	channel.SetupApiRequestHeader(info, c, req)
 	req.Set("Authorization", "Bearer "+info.ApiKey)
+	if info.GetFinalRequestRelayFormat() == types.RelayFormatClaude {
+		claude.ApplyClaudeRequestHeaders(c, req, info)
+	}
 	return nil
 }
 
@@ -111,7 +118,7 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 }
 
 func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage any, err *types.NewAPIError) {
-	switch info.RelayFormat {
+	switch info.GetFinalRequestRelayFormat() {
 	case types.RelayFormatClaude:
 		adaptor := claude.Adaptor{}
 		return adaptor.DoResponse(c, resp, info)

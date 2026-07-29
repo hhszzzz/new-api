@@ -13,7 +13,6 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/gemini"
 	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
@@ -225,7 +224,7 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *rel
 		req.Set("x-goog-user-project", a.AccountCredentials.ProjectID)
 	}
 	if strings.Contains(info.UpstreamModelName, "claude") {
-		claude.CommonClaudeHeadersOperation(c, req, info)
+		claude.ApplyClaudeRequestHeaders(c, req, info)
 	}
 	return nil
 }
@@ -337,38 +336,15 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 }
 
 func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage any, err *types.NewAPIError) {
-	claudeAdaptor := claude.Adaptor{}
-	if info.IsStream {
-		switch a.RequestMode {
-		case RequestModeClaude:
-			return claudeAdaptor.DoResponse(c, resp, info)
-		case RequestModeGemini:
-			if info.RelayMode == constant.RelayModeGemini {
-				return gemini.GeminiTextGenerationStreamHandler(c, info, resp)
-			} else {
-				return gemini.GeminiChatStreamHandler(c, info, resp)
-			}
-		case RequestModeOpenSource:
-			return openai.OaiStreamHandler(c, info, resp)
-		}
-	} else {
-		switch a.RequestMode {
-		case RequestModeClaude:
-			return claudeAdaptor.DoResponse(c, resp, info)
-		case RequestModeGemini:
-			if info.RelayMode == constant.RelayModeGemini {
-				return gemini.GeminiTextGenerationHandler(c, info, resp)
-			} else {
-				if strings.HasPrefix(info.UpstreamModelName, "imagen") {
-					return gemini.GeminiImageHandler(c, info, resp)
-				}
-				return gemini.GeminiChatHandler(c, info, resp)
-			}
-		case RequestModeOpenSource:
-			return openai.OpenaiHandler(c, info, resp)
-		}
+	switch a.RequestMode {
+	case RequestModeClaude:
+		return (&claude.Adaptor{}).DoResponse(c, resp, info)
+	case RequestModeGemini:
+		return (&gemini.Adaptor{}).DoResponse(c, resp, info)
+	case RequestModeOpenSource:
+		return (&openai.Adaptor{}).DoResponse(c, resp, info)
 	}
-	return
+	return nil, types.NewOpenAIError(errors.New("unsupported request mode"), types.ErrorCodeBadResponse, http.StatusInternalServerError)
 }
 
 func (a *Adaptor) GetModelList() []string {

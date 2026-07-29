@@ -124,3 +124,57 @@ func TestTextHelperAppliesSystemPromptsBeforeProviderConversion(t *testing.T) {
 		})
 	}
 }
+
+func TestTextHelperBuffersUnexpectedChatStreamForNonStreamClient(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service.InitHttpClient()
+
+	globalSettings := model_setting.GetGlobalSettings()
+	originalPassThrough := globalSettings.PassThroughRequestEnabled
+	originalResponsesPolicy := globalSettings.ChatCompletionsToResponsesPolicy
+	globalSettings.PassThroughRequestEnabled = false
+	globalSettings.ChatCompletionsToResponsesPolicy = model_setting.ChatCompletionsToResponsesPolicy{}
+	t.Cleanup(func() {
+		globalSettings.PassThroughRequestEnabled = originalPassThrough
+		globalSettings.ChatCompletionsToResponsesPolicy = originalResponsesPolicy
+	})
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("data: {\"id\":\"chatcmpl_partial\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"},\"finish_reason\":null}]}\n\n"))
+	}))
+	defer upstream.Close()
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	common.SetContextKey(ctx, constant.ContextKeyChannelType, constant.ChannelTypeOpenAI)
+	common.SetContextKey(ctx, constant.ContextKeyChannelBaseUrl, upstream.URL)
+	common.SetContextKey(ctx, constant.ContextKeyChannelKey, "test-key")
+	common.SetContextKey(ctx, constant.ContextKeyOriginalModel, "gpt-test")
+
+	stream := false
+	request := &dto.GeneralOpenAIRequest{
+		Model:  "gpt-test",
+		Stream: &stream,
+		Messages: []dto.Message{{
+			Role:    "user",
+			Content: "hello",
+		}},
+	}
+	info := &relaycommon.RelayInfo{
+		RelayMode:       relayconstant.RelayModeChatCompletions,
+		RelayFormat:     types.RelayFormatOpenAI,
+		OriginModelName: "gpt-test",
+		Request:         request,
+	}
+
+	relayErr := TextHelper(ctx, info)
+
+	require.NotNil(t, relayErr)
+	assert.Contains(t, relayErr.Error(), "terminal finish_reason")
+	assert.Empty(t, recorder.Body.String())
+	assert.NotContains(t, recorder.Header().Get("Content-Type"), "text/event-stream")
+}

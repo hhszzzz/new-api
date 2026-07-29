@@ -97,11 +97,12 @@ func ProcessStreamResponse(streamResponse dto.ChatCompletionsStreamResponse, res
 	for _, choice := range streamResponse.Choices {
 		responseTextBuilder.WriteString(choice.Delta.GetContentString())
 		responseTextBuilder.WriteString(choice.Delta.GetReasoningContent())
-		if choice.Delta.ToolCalls != nil {
-			if len(choice.Delta.ToolCalls) > *toolCount {
-				*toolCount = len(choice.Delta.ToolCalls)
+		toolCalls := choice.Delta.ParseToolCalls()
+		if len(toolCalls) > 0 {
+			if len(toolCalls) > *toolCount {
+				*toolCount = len(toolCalls)
 			}
-			for _, tool := range choice.Delta.ToolCalls {
+			for _, tool := range toolCalls {
 				responseTextBuilder.WriteString(tool.Function.Name)
 				responseTextBuilder.WriteString(tool.Function.Arguments)
 			}

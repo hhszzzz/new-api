@@ -19,6 +19,7 @@ type ClaudeResponseInfo struct {
 	ResponseText strings.Builder
 	Usage        *dto.Usage
 	Done         bool
+	MessageStop  bool
 }
 
 func StopReasonClaudeToOpenAI(reason string) string {
@@ -376,8 +377,14 @@ func FormatClaudeResponseInfo(claudeResponse *dto.ClaudeResponse, oaiResponse *d
 			claudeInfo.Usage.BillingUsage = claudeBillingUsageFromSemanticUsage(claudeInfo.Usage)
 		}
 
-		claudeInfo.Done = true
+		if claudeResponse.Delta != nil && claudeResponse.Delta.StopReason != nil {
+			stopReason := strings.TrimSpace(*claudeResponse.Delta.StopReason)
+			claudeInfo.Done = stopReason != "" && !strings.EqualFold(stopReason, "null")
+		}
 	} else if claudeResponse.Type == "content_block_start" {
+	} else if claudeResponse.Type == "message_stop" {
+		claudeInfo.MessageStop = true
+		return false
 	} else {
 		return false
 	}

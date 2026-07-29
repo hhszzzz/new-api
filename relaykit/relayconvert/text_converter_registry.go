@@ -56,9 +56,11 @@ var builtinTextConverters = []TextConverterSpec{
 			Convert: convertClaudeRequestToOpenAI,
 		},
 		Resp: TextResponseSide{
-			Convert:       convertClaudeMessagesResponseToOAIChat,
-			ConvertStream: convertClaudeMessagesStreamResponseToOAIChat,
-			Aliases:       []string{ResponseConverterClaudeMessagesToOAIChat},
+			Convert:            convertClaudeMessagesResponseToOAIChat,
+			ConvertStream:      convertClaudeMessagesStreamResponseToOAIChat,
+			NewStreamState:     newClaudeMessagesToOAIChatStreamState,
+			ConvertStreamChunk: convertClaudeMessagesStreamResponseChunkToOAIChat,
+			Aliases:            []string{ResponseConverterClaudeMessagesToOAIChat},
 		},
 	},
 	{
@@ -145,10 +147,7 @@ var builtinTextConverters = []TextConverterSpec{
 		To:      types.RelayFormatGemini,
 		Quality: TextConverterQualityDiscouraged,
 		Req: TextRequestSide{
-			StepConverters: []string{
-				ConverterClaudeMessagesToOpenAIChat,
-				ConverterOpenAIChatToGeminiContent,
-			},
+			Convert: convertClaudeRequestToGemini,
 		},
 		Resp: TextResponseSide{
 			StepConverters: []string{
@@ -164,10 +163,7 @@ var builtinTextConverters = []TextConverterSpec{
 		To:      types.RelayFormatOpenAIResponses,
 		Quality: TextConverterQualityFair,
 		Req: TextRequestSide{
-			StepConverters: []string{
-				ConverterClaudeMessagesToOpenAIChat,
-				ConverterOpenAIChatToOpenAIResponses,
-			},
+			Convert: convertClaudeRequestToResponses,
 		},
 		Resp: TextResponseSide{
 			StepConverters: []string{
@@ -189,11 +185,14 @@ var builtinTextConverters = []TextConverterSpec{
 			},
 		},
 		Resp: TextResponseSide{
-			StepConverters: []string{
-				ConverterGeminiContentToOpenAIChat,
-				ConverterOpenAIChatToClaudeMessages,
-			},
-			Aliases: []string{responseConverterGeminiToClaude},
+			Convert: convertGeminiChatResponseToClaudeMessages,
+			// No stateless ConvertStream: this route needs per-stream state; a
+			// per-chunk stateless conversion would emit a full message envelope
+			// for every chunk. Stateless callers fail loudly instead.
+			NewStreamState:     newGeminiToClaudeStreamState,
+			ConvertStreamChunk: convertGeminiChatStreamResponseChunkToClaudeMessages,
+			FinalizeStream:     finalizeGeminiChatStreamResponseToClaudeMessages,
+			Aliases:            []string{responseConverterGeminiToClaude},
 		},
 	},
 	{

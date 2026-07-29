@@ -59,19 +59,80 @@ func TestCountTokensHelperForwardsNativeAnthropicRequest(t *testing.T) {
 
 func TestCountTokensHelperForwardsNativeMessagesCompatibleGateways(t *testing.T) {
 	tests := []struct {
-		name          string
-		channelType   int
-		otherSettings dto.ChannelOtherSettings
-		wantPath      string
-		wantAuth      string
-		wantAPIKey    string
+		name                 string
+		channelType          int
+		otherSettings        dto.ChannelOtherSettings
+		explicitCapabilities bool
+		wantPath             string
+		wantAuth             string
+		wantAPIKey           string
+		wantAnthropicVersion string
 	}{
 		{
-			name:        "Sub2API",
-			channelType: constant.ChannelTypeSub2API,
-			wantPath:    "/v1/messages/count_tokens",
-			wantAuth:    "Bearer test-key",
-			wantAPIKey:  "test-key",
+			name:                 "Sub2API",
+			channelType:          constant.ChannelTypeSub2API,
+			wantPath:             "/v1/messages/count_tokens",
+			wantAuth:             "Bearer test-key",
+			wantAPIKey:           "test-key",
+			wantAnthropicVersion: "2023-06-01",
+		},
+		{
+			name:                 "NewAPI",
+			channelType:          constant.ChannelTypeNewAPI,
+			wantPath:             "/v1/messages/count_tokens",
+			wantAuth:             "Bearer test-key",
+			wantAPIKey:           "test-key",
+			wantAnthropicVersion: "2023-06-01",
+		},
+		{
+			name:                 "OpenAI compatible explicitly declared as Messages",
+			channelType:          constant.ChannelTypeOpenAI,
+			explicitCapabilities: true,
+			wantPath:             "/v1/messages/count_tokens",
+			wantAPIKey:           "test-key",
+			wantAnthropicVersion: "2023-06-01",
+		},
+		{
+			name:                 "Ali",
+			channelType:          constant.ChannelTypeAli,
+			wantPath:             "/apps/anthropic/v1/messages/count_tokens",
+			wantAuth:             "Bearer test-key",
+			wantAnthropicVersion: "2023-06-01",
+		},
+		{
+			name:                 "DeepSeek",
+			channelType:          constant.ChannelTypeDeepSeek,
+			wantPath:             "/anthropic/v1/messages/count_tokens",
+			wantAuth:             "Bearer test-key",
+			wantAnthropicVersion: "2023-06-01",
+		},
+		{
+			name:                 "Moonshot",
+			channelType:          constant.ChannelTypeMoonshot,
+			wantPath:             "/anthropic/v1/messages/count_tokens",
+			wantAuth:             "Bearer test-key",
+			wantAnthropicVersion: "2023-06-01",
+		},
+		{
+			name:                 "MiniMax",
+			channelType:          constant.ChannelTypeMiniMax,
+			wantPath:             "/anthropic/v1/messages/count_tokens",
+			wantAuth:             "Bearer test-key",
+			wantAnthropicVersion: "2023-06-01",
+		},
+		{
+			name:                 "VolcEngine",
+			channelType:          constant.ChannelTypeVolcEngine,
+			wantPath:             "/v1/messages/count_tokens",
+			wantAuth:             "Bearer test-key",
+			wantAnthropicVersion: "2023-06-01",
+		},
+		{
+			name:                 "Zhipu v4",
+			channelType:          constant.ChannelTypeZhipu_v4,
+			wantPath:             "/api/anthropic/v1/messages/count_tokens",
+			wantAuth:             "Bearer test-key",
+			wantAnthropicVersion: "2023-06-01",
 		},
 		{
 			name:        "Advanced Custom",
@@ -88,24 +149,27 @@ func TestCountTokensHelperForwardsNativeMessagesCompatibleGateways(t *testing.T)
 					},
 				},
 			}}},
-			wantPath:   "/provider/messages/count_tokens",
-			wantAPIKey: "test-key",
+			wantPath:             "/provider/messages/count_tokens",
+			wantAPIKey:           "test-key",
+			wantAnthropicVersion: "2023-06-01",
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			var (
-				receivedPath   string
-				receivedAuth   string
-				receivedAPIKey string
-				receivedBody   map[string]any
-				decodeErr      error
+				receivedPath             string
+				receivedAuth             string
+				receivedAPIKey           string
+				receivedAnthropicVersion string
+				receivedBody             map[string]any
+				decodeErr                error
 			)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				receivedPath = r.URL.Path
 				receivedAuth = r.Header.Get("Authorization")
 				receivedAPIKey = r.Header.Get("x-api-key")
+				receivedAnthropicVersion = r.Header.Get("anthropic-version")
 				decodeErr = common.DecodeJson(r.Body, &receivedBody)
 				w.Header().Set("Content-Type", "application/json")
 				_, _ = w.Write([]byte(`{"input_tokens":41}`))
@@ -114,9 +178,10 @@ func TestCountTokensHelperForwardsNativeMessagesCompatibleGateways(t *testing.T)
 
 			c, info, recorder := newCountTokensTestContext(t, server.URL, test.channelType, dto.ChannelSettings{}, test.otherSettings)
 			common.SetContextKey(c, constant.ContextKeyProtocolPlan, channelcompat.ProtocolPlan{
-				RequestProtocol:  channelcompat.ProtocolMessages,
-				UpstreamProtocol: channelcompat.ProtocolMessages,
-				Status:           channelcompat.StatusNative,
+				RequestProtocol:      channelcompat.ProtocolMessages,
+				UpstreamProtocol:     channelcompat.ProtocolMessages,
+				Status:               channelcompat.StatusNative,
+				ExplicitCapabilities: test.explicitCapabilities,
 			})
 
 			require.Nil(t, CountTokensHelper(c, info))
@@ -124,6 +189,7 @@ func TestCountTokensHelperForwardsNativeMessagesCompatibleGateways(t *testing.T)
 			assert.Equal(t, test.wantPath, receivedPath)
 			assert.Equal(t, test.wantAuth, receivedAuth)
 			assert.Equal(t, test.wantAPIKey, receivedAPIKey)
+			assert.Equal(t, test.wantAnthropicVersion, receivedAnthropicVersion)
 			assert.Equal(t, "claude-upstream", receivedBody["model"])
 			assert.JSONEq(t, `{"input_tokens":41}`, recorder.Body.String())
 			assert.Nil(t, info.Billing)

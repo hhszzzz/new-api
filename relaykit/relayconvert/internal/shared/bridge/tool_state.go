@@ -14,6 +14,8 @@ const (
 	ToolKindFunction   ToolKind = "function"
 	ToolKindCustom     ToolKind = "custom"
 	ToolKindToolSearch ToolKind = "tool_search"
+
+	ClaudeToolResultErrorMarker = "[new-api:tool-result-error]"
 )
 
 type ToolIdentity struct {

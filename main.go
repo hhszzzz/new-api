@@ -172,6 +172,10 @@ func main() {
 
 	// Initialize HTTP server
 	server := gin.New()
+	// Protocol conversion keeps attempt-scoped tool/reasoning state in the
+	// request context. Let gin.Context expose that state to relaykit converters
+	// while preserving the gin context itself for media resolution.
+	server.ContextWithFallback = true
 	if err := middleware.ConfigureTrustedProxies(server); err != nil {
 		common.FatalLog("failed to configure trusted proxies: " + err.Error())
 		return

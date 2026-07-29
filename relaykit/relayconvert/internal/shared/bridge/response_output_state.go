@@ -11,9 +11,10 @@ const (
 )
 
 type ResponseOutputItem struct {
-	Kind      ResponseOutputKind
-	Text      string
-	ToolIndex int
+	Kind             ResponseOutputKind
+	Text             string
+	EncryptedContent string
+	ToolIndex        int
 }
 
 type ResponseOutputState struct {

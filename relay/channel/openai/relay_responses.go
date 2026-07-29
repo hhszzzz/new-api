@@ -53,7 +53,9 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	}
 
 	// 写入新的 response body
-	service.IOCopyBytesGracefully(c, resp, responseBody)
+	if err := service.IOCopyBytesGracefully(c, resp, responseBody); err != nil {
+		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+	}
 
 	// compute usage
 	usage := dto.Usage{}
@@ -103,6 +105,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	imageCounter := &relaycommon.ImageGenerationCallCounter{}
 	imageCommitted := false
 	var streamErr *types.NewAPIError
+	terminalSeen := false
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		// 检查当前数据是否包含 completed 状态和 usage 信息
@@ -119,8 +122,15 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			} else {
 				streamErr = types.NewOpenAIError(fmt.Errorf("responses stream error: %s", streamResponse.Type), types.ErrorCodeBadResponse, http.StatusInternalServerError)
 			}
+			service.MarkProtocolUnsupportedStreamError(streamErr)
 			sr.Stop(streamErr)
 			return
+		}
+		switch streamResponse.Type {
+		case "response.completed", "response.done":
+			terminalSeen = true
+		case "response.incomplete", "response.cancelled", "response.canceled":
+			terminalSeen = true
 		}
 		if streamResponse.Response != nil {
 			if err := protocolstate.ValidateResponsesContinuation(c, streamResponse.Response.PreviousResponseID); err != nil {
@@ -225,6 +235,13 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	if err := streamStatusError(info); err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
+	if !terminalSeen {
+		return nil, types.NewOpenAIError(
+			fmt.Errorf("Responses stream ended without a terminal response event"),
+			types.ErrorCodeBadResponse,
+			http.StatusInternalServerError,
+		)
+	}
 
 	if usage.CompletionTokens == 0 {
 		// 计算输出文本的 token 数量
@@ -241,6 +258,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	}
 
 	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	protocolstate.MarkStreamCompleted(c)
 
 	return usage, nil
 }

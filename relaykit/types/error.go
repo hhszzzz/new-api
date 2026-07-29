@@ -88,14 +88,117 @@ const (
 )
 
 type NewAPIError struct {
-	Err            error
-	RelayError     any
-	skipRetry      bool
-	recordErrorLog *bool
-	errorType      ErrorType
-	errorCode      ErrorCode
-	StatusCode     int
-	Metadata       json.RawMessage
+	Err                        error
+	RelayError                 any
+	skipRetry                  bool
+	protocolUnsupported        bool
+	protocolUnsupportedChecked bool
+	recordErrorLog             *bool
+	errorType                  ErrorType
+	errorCode                  ErrorCode
+	StatusCode                 int
+	Metadata                   json.RawMessage
+}
+
+func (e *NewAPIError) MarkProtocolUnsupported() {
+	if e != nil {
+		e.protocolUnsupported = true
+		e.protocolUnsupportedChecked = true
+	}
+}
+
+// MarkProtocolUnsupportedChecked records that an upstream body was inspected
+// and contained no endpoint/protocol evidence. This prevents a non-empty 404
+// such as "model not found" from being mistaken for a bare missing endpoint.
+func (e *NewAPIError) MarkProtocolUnsupportedChecked() {
+	if e != nil {
+		e.protocolUnsupportedChecked = true
+	}
+}
+
+func (e *NewAPIError) HasProtocolUnsupportedEvidence() bool {
+	return e != nil && e.protocolUnsupported
+}
+
+func (e *NewAPIError) ProtocolUnsupportedChecked() bool {
+	return e != nil && e.protocolUnsupportedChecked
+}
+
+func IsProtocolUnsupportedMessage(message string) bool {
+	message = strings.ToLower(strings.TrimSpace(message))
+	if message == "" {
+		return false
+	}
+	for _, marker := range []string{
+		"unsupported endpoint",
+		"unsupported_endpoint",
+		"endpoint not supported",
+		"endpoint_not_supported",
+		"unknown endpoint",
+		"unknown_endpoint",
+		"unrecognized endpoint",
+		"endpoint not found",
+		"endpoint_not_found",
+		"route not found",
+		"route_not_found",
+		"unknown route",
+		"unknown_route",
+		"no route for",
+		"method not allowed",
+		"method_not_allowed",
+	} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+
+	wireAPIs := []string{
+		"/v1/responses",
+		"/responses",
+		"responses api",
+		"/v1/messages",
+		"/messages",
+		"messages api",
+		"/v1/chat/completions",
+		"/chat/completions",
+		"chat completions",
+		"/v1beta/models",
+		":generatecontent",
+		":streamgeneratecontent",
+		"models.generatecontent",
+		"gemini api",
+	}
+	for _, wireAPI := range wireAPIs {
+		for _, suffix := range []string{
+			" is not supported",
+			" isn't supported",
+			" is unsupported",
+			" was not found",
+			" is not found",
+			" does not exist",
+			" is unavailable",
+			" is not available",
+		} {
+			if strings.Contains(message, wireAPI+suffix) {
+				return true
+			}
+		}
+		for _, prefix := range []string{
+			"does not support ",
+			"does not support the ",
+			"doesn't support ",
+			"doesn't support the ",
+			"not support ",
+			"not support the ",
+			"protocol not supported: ",
+			"unsupported protocol: ",
+		} {
+			if strings.Contains(message, prefix+wireAPI) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Unwrap enables errors.Is / errors.As to work with NewAPIError by exposing the underlying error.

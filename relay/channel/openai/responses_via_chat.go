@@ -62,7 +62,9 @@ func OaiChatToResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		return nil, types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
 	}
 
-	service.IOCopyBytesGracefully(c, resp, responseBody)
+	if err := service.IOCopyBytesGracefully(c, resp, responseBody); err != nil {
+		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+	}
 	return usage, nil
 }
 
@@ -81,6 +83,7 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
 	streamErr := (*types.NewAPIError)(nil)
+	upstreamCompleted := false
 
 	sendEvent := func(event relayconvert.ChatToResponsesStreamEvent) bool {
 		protocolstate.ObserveResponsesStream(c, &event.Payload)
@@ -106,6 +109,7 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		if err := common.UnmarshalJsonStr(data, &errorResp); err == nil {
 			if oaiError := errorResp.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
 				streamErr = types.WithOpenAIError(*oaiError, resp.StatusCode)
+				service.MarkProtocolUnsupportedStreamError(streamErr)
 				sr.Stop(streamErr)
 				return
 			}
@@ -117,6 +121,9 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 			sr.Stop(streamErr)
 			return
+		}
+		if chunk.IsFinished() {
+			upstreamCompleted = true
 		}
 		protocolstate.SetUpstreamResponseID(c, chunk.Id)
 
@@ -146,6 +153,13 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 	if err := streamStatusError(info); err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
+	if !upstreamCompleted {
+		return nil, types.NewOpenAIError(
+			fmt.Errorf("Chat Completions stream ended without a terminal finish_reason"),
+			types.ErrorCodeBadResponse,
+			http.StatusInternalServerError,
+		)
+	}
 
 	usage := state.Usage()
 	if usage == nil || usage.TotalTokens == 0 {
@@ -166,6 +180,7 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			return nil, streamErr
 		}
 	}
+	protocolstate.MarkStreamCompleted(c)
 
 	return usage, nil
 }

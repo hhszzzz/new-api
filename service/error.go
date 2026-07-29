@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -94,6 +95,18 @@ func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFai
 	CloseResponseBodyGracefully(resp)
 	var errResponse dto.GeneralErrorResponse
 	responseBodyText := string(responseBody)
+	protocolUnsupported := types.IsProtocolUnsupportedMessage(responseBodyText)
+	protocolUnsupportedChecked := strings.TrimSpace(responseBodyText) != ""
+	defer func() {
+		if newApiErr == nil || !protocolUnsupportedChecked {
+			return
+		}
+		if protocolUnsupported {
+			newApiErr.MarkProtocolUnsupported()
+		} else {
+			newApiErr.MarkProtocolUnsupportedChecked()
+		}
+	}()
 	responseBodyPreview := common.LocalLogPreview(responseBodyText)
 	buildErrWithBody := func(message string) error {
 		if message == "" {
@@ -102,8 +115,15 @@ func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFai
 		return fmt.Errorf("bad response status code %d, message: %s, body: %s", resp.StatusCode, message, responseBodyText)
 	}
 
-	err = common.Unmarshal(responseBody, &errResponse)
+	decodeBody := responseBody
+	if payload, ok := firstEventStreamJSONPayload(responseBody); ok {
+		decodeBody = payload
+	}
+	err = common.Unmarshal(decodeBody, &errResponse)
 	if err != nil {
+		if resp.StatusCode == http.StatusNotFound && isBareProtocolNotFoundBody(responseBodyText) {
+			protocolUnsupported = true
+		}
 		if showBodyWhenFail {
 			newApiErr.Err = buildErrWithBody("")
 		} else {
@@ -118,6 +138,9 @@ func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFai
 		oaiError := errResponse.TryToOpenAIError()
 		if oaiError != nil {
 			newApiErr = types.WithOpenAIError(*oaiError, resp.StatusCode)
+			if resp.StatusCode == http.StatusNotFound && isBareProtocolNotFoundBody(newApiErr.Error()) {
+				protocolUnsupported = true
+			}
 			if showBodyWhenFail {
 				newApiErr.Err = buildErrWithBody(newApiErr.Error())
 			}
@@ -133,11 +156,66 @@ func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFai
 		message = fmt.Sprintf("bad response status code %d", resp.StatusCode)
 		return types.NewOpenAIError(errors.New(message), types.ErrorCodeBadResponseStatusCode, resp.StatusCode)
 	}
+	if resp.StatusCode == http.StatusNotFound && isBareProtocolNotFoundBody(message) {
+		protocolUnsupported = true
+	}
 	newApiErr = types.NewOpenAIError(errors.New(message), types.ErrorCodeBadResponseStatusCode, resp.StatusCode)
 	if showBodyWhenFail {
 		newApiErr.Err = buildErrWithBody(newApiErr.Error())
 	}
 	return
+}
+
+func isBareProtocolNotFoundBody(body string) bool {
+	value := strings.ToLower(strings.TrimSpace(body))
+	switch value {
+	case "404", "not found", "404 not found", "404 page not found":
+		return true
+	}
+	return strings.Contains(value, "<title>404 not found</title>") ||
+		strings.Contains(value, "<h1>404 not found</h1>")
+}
+
+func firstEventStreamJSONPayload(body []byte) ([]byte, bool) {
+	lines := bytes.Split(bytes.TrimPrefix(body, []byte{0xef, 0xbb, 0xbf}), []byte("\n"))
+	dataLines := make([][]byte, 0, 1)
+	for _, line := range lines {
+		line = bytes.TrimSuffix(line, []byte("\r"))
+		if len(line) == 0 {
+			if len(dataLines) == 0 {
+				continue
+			}
+			payload := bytes.TrimSpace(bytes.Join(dataLines, []byte("\n")))
+			if len(payload) > 0 && !bytes.Equal(payload, []byte("[DONE]")) {
+				var decoded any
+				if common.Unmarshal(payload, &decoded) == nil {
+					return payload, true
+				}
+			}
+			dataLines = dataLines[:0]
+			continue
+		}
+		if !bytes.HasPrefix(line, []byte("data:")) {
+			continue
+		}
+		value := line[len("data:"):]
+		if len(value) > 0 && value[0] == ' ' {
+			value = value[1:]
+		}
+		dataLines = append(dataLines, value)
+	}
+	if len(dataLines) == 0 {
+		return nil, false
+	}
+	payload := bytes.TrimSpace(bytes.Join(dataLines, []byte("\n")))
+	if len(payload) == 0 || bytes.Equal(payload, []byte("[DONE]")) {
+		return nil, false
+	}
+	var decoded any
+	if common.Unmarshal(payload, &decoded) != nil {
+		return nil, false
+	}
+	return payload, true
 }
 
 func ResetStatusCode(newApiErr *types.NewAPIError, statusCodeMappingStr string) {

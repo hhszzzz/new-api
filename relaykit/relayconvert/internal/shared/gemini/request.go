@@ -39,7 +39,37 @@ var SafetySettingCategories = []string{
 	"HARM_CATEGORY_DANGEROUS_CONTENT",
 }
 
+// ThoughtSignatureBypassValue is Google's documented escape token for
+// function-call history whose original thoughtSignature is unavailable
+// (cross-provider or gateway-converted conversations). Attach helpers only
+// apply it when the part carries no signature, so a real signature that
+// survives conversion is always preferred over the bypass.
 const ThoughtSignatureBypassValue = "context_engineering_is_the_way_to_go"
+
+// SynthesizedToolCallIDPrefix marks tool-call IDs generated for Gemini
+// functionCall parts that did not include a provider ID. The marker lets the
+// next tool-result request keep a stable client-visible ID without sending the
+// invented value back to Gemini as functionResponse.id.
+const SynthesizedToolCallIDPrefix = "gemini_synth_"
+
+func SynthesizeToolCallID() string {
+	return SynthesizedToolCallIDPrefix + kitutil.GetUUID()
+}
+
+func IsSynthesizedToolCallID(id string) bool {
+	return strings.HasPrefix(strings.TrimSpace(id), SynthesizedToolCallIDPrefix)
+}
+
+func IsGemini3Series(model string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(model))
+	if strings.HasPrefix(normalized, "gemini-3") {
+		return true
+	}
+	if slash := strings.LastIndexByte(normalized, '/'); slash >= 0 {
+		return strings.HasPrefix(normalized[slash+1:], "gemini-3")
+	}
+	return false
+}
 
 const (
 	pro25MinBudget       = 128

@@ -12,7 +12,10 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/service/channelcompat"
+	"github.com/QuantumNous/new-api/service/protocolstate"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -40,7 +43,7 @@ func TestResponsesUpstreamReturnsMessagesJSONWithPublicModel(t *testing.T) {
 	require.Len(t, response.Content, 1)
 	assert.Equal(t, "hello", response.Content[0].GetText())
 	require.NotNil(t, response.Usage)
-	assert.Equal(t, 8, response.Usage.InputTokens)
+	assert.Equal(t, 6, response.Usage.InputTokens)
 	assert.Equal(t, 2, response.Usage.CacheReadInputTokens)
 	assert.Equal(t, 3, response.Usage.OutputTokens)
 }
@@ -82,6 +85,131 @@ func TestResponsesUpstreamReturnsMessagesSSEWithPublicModel(t *testing.T) {
 		`event: message_delta`,
 		`event: message_stop`,
 	)
+}
+
+func TestResponsesIncompleteStreamIsSuccessfulProtocolAttempt(t *testing.T) {
+	withOpenAIProtocolStreamTestMode(t)
+	body := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_incomplete","model":"provider-responses-model","created_at":1710000000}}`,
+		`data: {"type":"response.output_text.delta","delta":"partial"}`,
+		`data: {"type":"response.incomplete","response":{"id":"resp_incomplete","status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"usage":{"input_tokens":8,"output_tokens":3,"total_tokens":11}}}`,
+		`data: [DONE]`,
+		``,
+	}, "\n")
+	c, recorder, resp, info := newResponsesChatTestContext(t, body, true)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	common.SetContextKey(c, constant.ContextKeyUserId, 9501)
+	common.SetContextKey(c, constant.ContextKeyTokenId, 9502)
+	info.RelayFormat = types.RelayFormatClaude
+	info.OriginModelName = "claude-public"
+	info.ChannelMeta.ChannelId = 9503
+	info.ChannelMeta.UpstreamModelName = "provider-responses-model"
+	plan := channelcompat.ProtocolPlan{
+		RequestProtocol:  channelcompat.ProtocolMessages,
+		UpstreamProtocol: channelcompat.ProtocolResponses,
+		Status:           channelcompat.StatusConvertible,
+		StateEnabled:     true,
+		Features:         channelcompat.RequestFeatureSet{Stream: true},
+	}
+	common.SetContextKey(c, constant.ContextKeyProtocolPlan, plan)
+	systemText := "stable system"
+	request := &dto.ClaudeRequest{
+		Model: "claude-public",
+		System: []dto.ClaudeMediaMessage{{
+			Type:         "text",
+			Text:         &systemText,
+			CacheControl: []byte(`{"type":"ephemeral"}`),
+		}},
+		Messages: []dto.ClaudeMessage{{Role: "user", Content: "hello"}},
+	}
+	require.NoError(t, protocolstate.PrepareMessagesRequest(c, info, plan, request))
+
+	usage, apiErr := OaiResponsesToChatStreamHandler(c, info, resp)
+
+	require.Nil(t, apiErr)
+	require.NotNil(t, usage)
+	assert.True(t, protocolstate.AttemptCompleted(c))
+	assert.Contains(t, recorder.Body.String(), `event: message_stop`)
+	require.NoError(t, protocolstate.Commit(c))
+}
+
+func TestBufferedResponsesPreservesRawProviderOutputForMessagesReplay(t *testing.T) {
+	body := strings.Join([]string{
+		`data: {"type":"response.output_item.done","output_index":0,"item":{"type":"reasoning","id":"rs_buffered","summary":[{"type":"summary_text","text":"inspect"}],"encrypted_content":"provider-secret","provider_extension":{"opaque":true}}}`,
+		`data: {"type":"response.output_item.done","output_index":1,"item":{"type":"message","id":"msg_buffered","role":"assistant","status":"completed","content":[{"type":"output_text","text":"answer"}]}}`,
+		`data: {"type":"response.completed","response":{"id":"resp_buffered","model":"provider-responses-model","status":"completed","store":false,"usage":{"input_tokens":8,"output_tokens":3,"total_tokens":11}}}`,
+		`data: [DONE]`,
+		``,
+	}, "\n")
+	c, recorder, resp, info := newResponsesChatTestContext(t, body, false)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	common.SetContextKey(c, constant.ContextKeyUserId, 9511)
+	common.SetContextKey(c, constant.ContextKeyTokenId, 9512)
+	info.RelayFormat = types.RelayFormatClaude
+	info.OriginModelName = "claude-public"
+	info.ChannelMeta.ChannelId = 9513
+	info.ChannelMeta.UpstreamModelName = "provider-responses-model"
+	plan := channelcompat.ProtocolPlan{
+		RequestProtocol:  channelcompat.ProtocolMessages,
+		UpstreamProtocol: channelcompat.ProtocolResponses,
+		Status:           channelcompat.StatusConvertible,
+		StateEnabled:     true,
+	}
+	common.SetContextKey(c, constant.ContextKeyProtocolPlan, plan)
+	systemText := "stable system"
+	request := &dto.ClaudeRequest{
+		Model: "claude-public",
+		System: []dto.ClaudeMediaMessage{{
+			Type:         "text",
+			Text:         &systemText,
+			CacheControl: []byte(`{"type":"ephemeral"}`),
+		}},
+		Messages: []dto.ClaudeMessage{{Role: "user", Content: "hello"}},
+	}
+	require.NoError(t, protocolstate.PrepareMessagesRequest(c, info, plan, request))
+
+	usage, apiErr := OaiResponsesToChatBufferedStreamHandler(c, info, resp)
+	require.Nil(t, apiErr)
+	require.NotNil(t, usage)
+	var response dto.ClaudeResponse
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	require.NoError(t, protocolstate.Commit(c))
+
+	nextRequest := &dto.ClaudeRequest{
+		Model:  "claude-public",
+		System: request.System,
+		Messages: []dto.ClaudeMessage{
+			{Role: "user", Content: "hello"},
+			{Role: "assistant", Content: response.Content},
+			{Role: "user", Content: "next"},
+		},
+	}
+	nextRecorder := httptest.NewRecorder()
+	nextContext, _ := gin.CreateTestContext(nextRecorder)
+	nextContext.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	common.SetContextKey(nextContext, constant.ContextKeyUserId, 9511)
+	common.SetContextKey(nextContext, constant.ContextKeyTokenId, 9512)
+	nextInfo := &relaycommon.RelayInfo{
+		OriginModelName: "claude-public",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelId:         9513,
+			UpstreamModelName: "provider-responses-model",
+		},
+	}
+	require.NoError(t, protocolstate.PrepareMessagesRequest(nextContext, nextInfo, plan, nextRequest))
+	require.Len(t, nextRequest.Messages, 3)
+	require.Len(t, nextRequest.Messages[1].ProviderResponsesRawOutput, 2)
+	var reasoning map[string]any
+	require.NoError(t, common.Unmarshal(nextRequest.Messages[1].ProviderResponsesRawOutput[0], &reasoning))
+	assert.Equal(t, map[string]any{"opaque": true}, reasoning["provider_extension"])
+
+	converted, err := relayconvert.ConvertRequest(nextContext, nextInfo, types.RelayFormatOpenAIResponses, nextRequest)
+	require.NoError(t, err)
+	responsesRequest := converted.Value.(*dto.OpenAIResponsesRequest)
+	var replayInput []map[string]any
+	require.NoError(t, common.Unmarshal(responsesRequest.Input, &replayInput))
+	require.Len(t, replayInput, 4)
+	assert.Equal(t, map[string]any{"opaque": true}, replayInput[1]["provider_extension"])
 }
 
 func TestChatUpstreamReturnsMessagesJSONWithPublicModel(t *testing.T) {
@@ -250,6 +378,69 @@ func TestResponsesFlatErrorStopsMessagesStream(t *testing.T) {
 	assert.NotContains(t, recorder.Body.String(), `event: message_stop`)
 }
 
+func TestResponsesFirstSSEUnsupportedErrorCarriesAutoRetryEvidence(t *testing.T) {
+	withOpenAIProtocolStreamTestMode(t)
+	body := strings.Join([]string{
+		`data: {"type":"error","code":"unsupported_endpoint","message":"unsupported endpoint /v1/responses","param":null}`,
+		`data: [DONE]`,
+		``,
+	}, "\n")
+	c, recorder, resp, info := newResponsesChatTestContext(t, body, true)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	info.RelayFormat = types.RelayFormatClaude
+
+	usage, apiErr := OaiResponsesToChatStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, apiErr)
+	assert.True(t, apiErr.HasProtocolUnsupportedEvidence())
+	assert.Empty(t, recorder.Body.String())
+}
+
+func TestChatFirstSSEUnsupportedErrorCarriesAutoRetryEvidence(t *testing.T) {
+	withOpenAIProtocolStreamTestMode(t)
+	body := strings.Join([]string{
+		`data: {"error":{"message":"unsupported endpoint /v1/chat/completions","type":"unsupported_endpoint","code":"unsupported_endpoint"}}`,
+		`data: [DONE]`,
+		``,
+	}, "\n")
+	c, recorder, resp, info := newResponsesChatTestContext(t, body, true)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info.RelayFormat = types.RelayFormatOpenAIResponses
+	info.OriginModelName = "gpt-public"
+	info.ChannelMeta.UpstreamModelName = "provider-chat-model"
+
+	usage, apiErr := OaiChatToResponsesStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, apiErr)
+	assert.True(t, apiErr.HasProtocolUnsupportedEvidence())
+	assert.Empty(t, recorder.Body.String())
+}
+
+func TestResponsesToMessagesTruncatedStreamDoesNotSynthesizeMessageStop(t *testing.T) {
+	withOpenAIProtocolStreamTestMode(t)
+	body := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_upstream","model":"provider-responses-model","created_at":1710000000}}`,
+		`data: {"type":"response.output_text.delta","delta":"partial"}`,
+		`data: [DONE]`,
+		``,
+	}, "\n")
+	c, recorder, resp, info := newResponsesChatTestContext(t, body, true)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	info.RelayFormat = types.RelayFormatClaude
+	info.OriginModelName = "claude-public"
+	info.ChannelMeta.UpstreamModelName = "provider-responses-model"
+
+	usage, apiErr := OaiResponsesToChatStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, apiErr)
+	assert.Contains(t, apiErr.Error(), "terminal response event")
+	assert.Contains(t, recorder.Body.String(), `event: message_start`)
+	assert.NotContains(t, recorder.Body.String(), `event: message_stop`)
+}
+
 func TestChatToResponsesMalformedChunkAfterStreamStartIsFatal(t *testing.T) {
 	withOpenAIProtocolStreamTestMode(t)
 	body := strings.Join([]string{
@@ -269,6 +460,28 @@ func TestChatToResponsesMalformedChunkAfterStreamStartIsFatal(t *testing.T) {
 	require.Nil(t, usage)
 	require.NotNil(t, apiErr)
 	assert.Contains(t, recorder.Body.String(), `event: response.created`)
+	assert.Contains(t, recorder.Body.String(), `"delta":"partial"`)
+	assert.NotContains(t, recorder.Body.String(), `event: response.completed`)
+}
+
+func TestChatToResponsesTruncatedStreamDoesNotSynthesizeCompletion(t *testing.T) {
+	withOpenAIProtocolStreamTestMode(t)
+	body := strings.Join([]string{
+		`data: {"id":"chatcmpl_upstream","object":"chat.completion.chunk","created":1710000000,"model":"provider-chat-model","choices":[{"index":0,"delta":{"content":"partial"},"finish_reason":null}]}`,
+		`data: [DONE]`,
+		``,
+	}, "\n")
+	c, recorder, resp, info := newResponsesChatTestContext(t, body, true)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info.RelayFormat = types.RelayFormatOpenAIResponses
+	info.OriginModelName = "gpt-public"
+	info.ChannelMeta.UpstreamModelName = "provider-chat-model"
+
+	usage, apiErr := OaiChatToResponsesStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, apiErr)
+	assert.Contains(t, apiErr.Error(), "terminal finish_reason")
 	assert.Contains(t, recorder.Body.String(), `"delta":"partial"`)
 	assert.NotContains(t, recorder.Body.String(), `event: response.completed`)
 }
@@ -293,6 +506,54 @@ func TestChatToMessagesMalformedChunkAfterStreamStartIsFatal(t *testing.T) {
 
 	require.Nil(t, usage)
 	require.NotNil(t, apiErr)
+	assert.Contains(t, recorder.Body.String(), `event: message_start`)
+	assert.NotContains(t, recorder.Body.String(), `event: message_stop`)
+}
+
+func TestChatToMessagesTruncatedStreamDoesNotSynthesizeMessageStop(t *testing.T) {
+	withOpenAIProtocolStreamTestMode(t)
+	body := strings.Join([]string{
+		`data: {"id":"chatcmpl_upstream","object":"chat.completion.chunk","created":1710000000,"model":"provider-chat-model","choices":[{"index":0,"delta":{"role":"assistant","content":"partial"},"finish_reason":null}]}`,
+		`data: [DONE]`,
+		``,
+	}, "\n")
+	c, recorder, resp, info := newResponsesChatTestContext(t, body, true)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	info.RelayMode = relayconstant.RelayModeChatCompletions
+	info.RelayFormat = types.RelayFormatClaude
+	info.OriginModelName = "claude-public"
+	info.ChannelMeta.UpstreamModelName = "provider-chat-model"
+	info.ClaudeConvertInfo = &relaycommon.ClaudeConvertInfo{LastMessagesType: relaycommon.LastMessageTypeNone}
+
+	usage, apiErr := OaiStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, apiErr)
+	assert.Contains(t, apiErr.Error(), "terminal finish_reason")
+	assert.NotContains(t, recorder.Body.String(), `event: message_stop`)
+}
+
+func TestResponsesCancelledStreamDoesNotSynthesizeMessageStop(t *testing.T) {
+	withOpenAIProtocolStreamTestMode(t)
+	body := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_upstream","object":"response","status":"in_progress","model":"provider-responses-model","output":[]}}`,
+		`data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"partial"}`,
+		`data: {"type":"response.cancelled","response":{"id":"resp_upstream","object":"response","status":"cancelled","model":"provider-responses-model","output":[]}}`,
+		`data: [DONE]`,
+		``,
+	}, "\n")
+	c, recorder, resp, info := newResponsesChatTestContext(t, body, true)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	info.RelayMode = relayconstant.RelayModeResponses
+	info.RelayFormat = types.RelayFormatClaude
+	info.OriginModelName = "claude-public"
+	info.ChannelMeta.UpstreamModelName = "provider-responses-model"
+
+	usage, apiErr := OaiResponsesToChatStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, apiErr)
+	assert.Contains(t, apiErr.Error(), "cancelled")
 	assert.Contains(t, recorder.Body.String(), `event: message_start`)
 	assert.NotContains(t, recorder.Body.String(), `event: message_stop`)
 }
@@ -333,6 +594,42 @@ func TestBufferedResponsesFlatErrorIsFatal(t *testing.T) {
 	require.NotNil(t, apiErr)
 	assert.Equal(t, "provider failed", apiErr.ToOpenAIError().Message)
 	assert.Empty(t, recorder.Body.String())
+}
+
+func TestBufferedResponsesTruncatedStreamDoesNotFabricateCompletedJSON(t *testing.T) {
+	body := strings.Join([]string{
+		`data: {"type":"response.output_text.delta","delta":"partial"}`,
+		`data: [DONE]`,
+		``,
+	}, "\n")
+	c, recorder, resp, info := newResponsesChatTestContext(t, body, false)
+
+	usage, apiErr := OaiResponsesToChatBufferedStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, apiErr)
+	assert.Contains(t, apiErr.Error(), "terminal response event")
+	assert.Empty(t, recorder.Body.String())
+}
+
+func TestNativeResponsesTruncatedStreamIsFatal(t *testing.T) {
+	withOpenAIProtocolStreamTestMode(t)
+	body := strings.Join([]string{
+		`data: {"type":"response.output_text.delta","delta":"partial","sequence_number":0}`,
+		`data: [DONE]`,
+		``,
+	}, "\n")
+	c, recorder, resp, info := newResponsesChatTestContext(t, body, true)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info.RelayFormat = types.RelayFormatOpenAIResponses
+
+	usage, apiErr := OaiResponsesStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, apiErr)
+	assert.Contains(t, apiErr.Error(), "terminal response event")
+	assert.Contains(t, recorder.Body.String(), `event: response.output_text.delta`)
+	assert.NotContains(t, recorder.Body.String(), `event: response.completed`)
 }
 
 func withOpenAIProtocolStreamTestMode(t *testing.T) {

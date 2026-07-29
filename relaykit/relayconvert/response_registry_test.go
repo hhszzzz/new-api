@@ -6,6 +6,7 @@ import (
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
+	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -43,6 +44,45 @@ func TestConvertClaudeResponseToResponsesPreservesContentBlockOrder(t *testing.T
 	assert.Equal(t, "after", converted.Output[3].Content[0].Text)
 	assert.Equal(t, "function_call", converted.Output[4].Type)
 	assert.Equal(t, "toolu_2", converted.Output[4].CallId)
+}
+
+func TestConvertResponsesResponseToClaudePreservesOutputItemOrder(t *testing.T) {
+	c := WithProtocolBridgeContext(context.Background())
+	result, err := ConvertResponse(c, &convmeta.Values{
+		ChannelMetaAttached: true,
+		ChannelID:           17,
+		Options:             &convmeta.Options{ProviderStateSecret: "bridge-secret"},
+	}, types.RelayFormatClaude, &dto.OpenAIResponsesResponse{
+		ID:     "resp_1",
+		Model:  "gpt-test",
+		Status: []byte(`"completed"`),
+		Output: []dto.ResponsesOutput{
+			{Type: "message", Role: "assistant", Content: []dto.ResponsesOutputContent{{Type: "output_text", Text: "before"}}},
+			{Type: "function_call", ID: "fc_1", CallId: "call_1", Name: "lookup", Arguments: []byte(`{"q":"x"}`)},
+			{Type: "reasoning", ID: "rs_1", Summary: []dto.ResponsesReasoningSummaryPart{{Type: "summary_text", Text: "inspect"}}, EncryptedContent: "provider-secret"},
+			{Type: "message", Role: "assistant", Content: []dto.ResponsesOutputContent{{Type: "output_text", Text: "after"}}},
+			{Type: "function_call", ID: "fc_2", CallId: "call_2", Name: "fetch", Arguments: []byte(`{"id":2}`)},
+		},
+		Usage: &dto.Usage{InputTokens: 4, OutputTokens: 7, TotalTokens: 11},
+	})
+	require.NoError(t, err)
+	converted := result.Value.(*dto.ClaudeResponse)
+
+	require.Len(t, converted.Content, 5)
+	assert.Equal(t, "text", converted.Content[0].Type)
+	assert.Equal(t, "before", converted.Content[0].GetText())
+	assert.Equal(t, "tool_use", converted.Content[1].Type)
+	assert.Equal(t, "call_1", converted.Content[1].Id)
+	assert.Equal(t, "thinking", converted.Content[2].Type)
+	require.NotNil(t, converted.Content[2].Thinking)
+	assert.Equal(t, "inspect", *converted.Content[2].Thinking)
+	assert.Empty(t, converted.Content[2].Signature)
+	assert.Equal(t, "text", converted.Content[3].Type)
+	assert.Equal(t, "after", converted.Content[3].GetText())
+	assert.Equal(t, "tool_use", converted.Content[4].Type)
+	assert.Equal(t, "call_2", converted.Content[4].Id)
+	assert.Equal(t, "tool_use", converted.StopReason)
+	assert.Equal(t, 11, result.Usage.TotalTokens)
 }
 
 func TestLookupBuiltinResponseConverters(t *testing.T) {
@@ -88,10 +128,6 @@ func TestLookupBuiltinResponseConverters(t *testing.T) {
 			from:     types.RelayFormatGemini,
 			to:       types.RelayFormatClaude,
 			quality:  ResponseConverterQualityDiscouraged,
-			stepConverters: []string{
-				ConverterGeminiContentToOpenAIChat,
-				ConverterOpenAIChatToClaudeMessages,
-			},
 		},
 		{
 			lookupID: responseConverterGeminiToResponses,
@@ -380,6 +416,156 @@ func TestConvertResponseProviderToOAIChatUsage(t *testing.T) {
 	assert.Equal(t, 17, toChat.Usage.BillingUsage.GeminiUsageMetadata.TotalTokenCount)
 }
 
+func TestConvertResponseMapsGeminiBlockedPromptToClaudeRefusal(t *testing.T) {
+	blockReason := "SAFETY"
+	result, err := ConvertResponse(nil, &convmeta.Values{ChannelMetaAttached: true, UpstreamModelName: "gemini-test"}, types.RelayFormatClaude, &dto.GeminiChatResponse{
+		PromptFeedback: &dto.GeminiChatPromptFeedback{BlockReason: &blockReason},
+		UsageMetadata: dto.GeminiUsageMetadata{
+			PromptTokenCount: 4,
+			TotalTokenCount:  4,
+		},
+		HasUsageMetadata: true,
+	})
+
+	require.NoError(t, err)
+	response, ok := result.Value.(*dto.ClaudeResponse)
+	require.True(t, ok)
+	assert.Equal(t, "refusal", response.StopReason)
+	require.Len(t, response.Content, 1)
+	assert.Equal(t, "text", response.Content[0].Type)
+	assert.Equal(t, "Request blocked by Gemini safety filters: SAFETY", response.Content[0].GetText())
+	require.NotNil(t, response.Usage)
+	assert.Equal(t, 4, response.Usage.InputTokens)
+	assert.Zero(t, response.Usage.OutputTokens)
+}
+
+func TestConvertGeminiResponseToClaudeMatchesCCSwitchVisibleParts(t *testing.T) {
+	stop := "STOP"
+	result, err := ConvertResponse(nil, &convmeta.Values{ChannelMetaAttached: true, UpstreamModelName: "gemini-test"}, types.RelayFormatClaude, &dto.GeminiChatResponse{
+		Candidates: []dto.GeminiChatCandidate{
+			{
+				FinishReason: &stop,
+				Content: dto.GeminiChatContent{Parts: []dto.GeminiPart{
+					{Thought: true, Text: "private chain of thought"},
+					{Text: "before"},
+					{InlineData: &dto.GeminiInlineData{MimeType: "image/png", Data: "aGVsbG8="}},
+					{FunctionCall: &dto.FunctionCall{ID: "call_1", FunctionName: "lookup", Arguments: map[string]interface{}{"q": "x"}}},
+					{Text: "after"},
+				}},
+			},
+			{Content: dto.GeminiChatContent{Parts: []dto.GeminiPart{{Text: "second candidate"}}}},
+		},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, requestConverterGeminiToClaude, result.Converter)
+	assert.Equal(t, []ResponseStep{{Converter: requestConverterGeminiToClaude, From: types.RelayFormatGemini, To: types.RelayFormatClaude}}, result.Steps)
+	response := result.Value.(*dto.ClaudeResponse)
+	require.Len(t, response.Content, 3)
+	assert.Equal(t, "text", response.Content[0].Type)
+	assert.Equal(t, "before", response.Content[0].GetText())
+	assert.Equal(t, "tool_use", response.Content[1].Type)
+	assert.Equal(t, "call_1", response.Content[1].Id)
+	assert.Equal(t, "lookup", response.Content[1].Name)
+	assert.Equal(t, map[string]interface{}{"q": "x"}, response.Content[1].Input)
+	assert.Equal(t, "text", response.Content[2].Type)
+	assert.Equal(t, "after", response.Content[2].GetText())
+	assert.Equal(t, "tool_use", response.StopReason)
+}
+
+func TestConvertGeminiResponseToClaudeDoesNotInventSafetyText(t *testing.T) {
+	safety := "SAFETY"
+	result, err := ConvertResponse(nil, nil, types.RelayFormatClaude, &dto.GeminiChatResponse{
+		Candidates: []dto.GeminiChatCandidate{{FinishReason: &safety}},
+	})
+
+	require.NoError(t, err)
+	response := result.Value.(*dto.ClaudeResponse)
+	assert.Equal(t, "refusal", response.StopReason)
+	assert.Empty(t, response.Content)
+}
+
+func TestConvertGeminiStreamToClaudeSkipsThoughtsAndDefersTools(t *testing.T) {
+	state, err := NewResponseStreamState(types.RelayFormatGemini, types.RelayFormatClaude, ResponseStreamOptions{
+		ID:    "msg_1",
+		Model: "public-model",
+	})
+	require.NoError(t, err)
+
+	first, err := ConvertStreamResponseChunk(nil, nil, state, &dto.GeminiChatResponse{
+		Candidates: []dto.GeminiChatCandidate{{Content: dto.GeminiChatContent{Parts: []dto.GeminiPart{
+			{Thought: true, Text: "private"},
+			{Text: "Hel"},
+			{FunctionCall: &dto.FunctionCall{ID: "call_1", FunctionName: "lookup", Arguments: map[string]interface{}{"q": "x"}}},
+		}}}},
+	})
+	require.NoError(t, err)
+	assertClaudeStreamHasTextDelta(t, first, "Hel")
+	assertClaudeStreamLacksType(t, first, "thinking_delta")
+	assertClaudeStreamLacksType(t, first, "input_json_delta")
+
+	stop := "STOP"
+	second, err := ConvertStreamResponseChunk(nil, nil, state, &dto.GeminiChatResponse{
+		Candidates: []dto.GeminiChatCandidate{{
+			FinishReason: &stop,
+			Content: dto.GeminiChatContent{Parts: []dto.GeminiPart{
+				{Thought: true, Text: "private reasoning"},
+				{Text: "Hello"},
+				{FunctionCall: &dto.FunctionCall{ID: "call_1", FunctionName: "lookup", Arguments: map[string]interface{}{"q": "x"}}},
+			}},
+		}},
+		UsageMetadata:    dto.GeminiUsageMetadata{PromptTokenCount: 2, CandidatesTokenCount: 3, TotalTokenCount: 5},
+		HasUsageMetadata: true,
+	})
+	require.NoError(t, err)
+	assertClaudeStreamHasTextDelta(t, second, "lo")
+	assertClaudeStreamLacksType(t, second, "thinking_delta")
+	assertClaudeStreamHasType(t, second, "input_json_delta")
+	assertClaudeStreamHasType(t, second, "message_stop")
+
+	finalized, err := FinalizeStreamResponse(nil, nil, state)
+	require.NoError(t, err)
+	assert.Empty(t, finalized)
+}
+
+func assertClaudeStreamHasTextDelta(t *testing.T, results []ResponseResult, expected string) {
+	t.Helper()
+	for _, result := range results {
+		response, ok := result.Value.(*dto.ClaudeResponse)
+		if ok && response.Delta != nil && response.Delta.Text != nil && *response.Delta.Text == expected {
+			return
+		}
+	}
+	t.Fatalf("Claude stream did not contain text delta %q", expected)
+}
+
+func assertClaudeStreamHasType(t *testing.T, results []ResponseResult, eventType string) {
+	t.Helper()
+	for _, result := range results {
+		response, ok := result.Value.(*dto.ClaudeResponse)
+		if !ok {
+			continue
+		}
+		if response.Type == eventType || response.Delta != nil && response.Delta.Type == eventType {
+			return
+		}
+	}
+	t.Fatalf("Claude stream did not contain type %q", eventType)
+}
+
+func assertClaudeStreamLacksType(t *testing.T, results []ResponseResult, eventType string) {
+	t.Helper()
+	for _, result := range results {
+		response, ok := result.Value.(*dto.ClaudeResponse)
+		if !ok {
+			continue
+		}
+		if response.Type == eventType || response.Delta != nil && response.Delta.Type == eventType {
+			t.Fatalf("Claude stream unexpectedly contained type %q", eventType)
+		}
+	}
+}
+
 func TestConvertResponsePreservesBillingUsageAcrossChatResponsesBridge(t *testing.T) {
 	chat := textRegistryChatResponse()
 	chat.Usage.BillingUsage = dto.NewClaudeMessagesBillingUsage(&dto.ClaudeUsage{
@@ -506,7 +692,10 @@ func TestConvertStreamResponseStatefulDirectConverters(t *testing.T) {
 	require.NotEmpty(t, finalResults)
 	lastEvent, ok := finalResults[len(finalResults)-1].Value.(ChatToResponsesStreamEvent)
 	require.True(t, ok)
-	assert.Equal(t, "response.completed", lastEvent.Type)
+	assert.Equal(t, "response.incomplete", lastEvent.Type)
+	require.NotNil(t, lastEvent.Payload.Response)
+	require.NotNil(t, lastEvent.Payload.Response.IncompleteDetails)
+	assert.Equal(t, "max_output_tokens", lastEvent.Payload.Response.IncompleteDetails.Reason)
 
 	responsesState, err := NewResponseStreamState(types.RelayFormatOpenAIResponses, types.RelayFormatOpenAI, ResponseStreamOptions{
 		ID:    "chatcmpl_1",
@@ -564,6 +753,182 @@ func TestConvertStreamResponseStatefulMultiHopResponsesToClaude(t *testing.T) {
 	_, err = FinalizeStreamResponse(nil, info, state)
 	require.NoError(t, err)
 	assert.Equal(t, 5, state.Usage().TotalTokens)
+}
+
+func TestConvertResponseResponsesToClaudeKeepsToolSearchAmongMixedOutput(t *testing.T) {
+	result, err := ConvertResponse(WithProtocolBridgeContext(context.Background()), nil, types.RelayFormatClaude, &dto.OpenAIResponsesResponse{
+		ID:     "resp_tool_search",
+		Model:  "gpt-test",
+		Status: []byte(`"completed"`),
+		Output: []dto.ResponsesOutput{
+			{
+				Type: "message",
+				Role: "assistant",
+				Content: []dto.ResponsesOutputContent{
+					{Type: "output_text", Text: "I will search."},
+				},
+			},
+			{
+				Type:      "tool_search_call",
+				ID:        "ts_1",
+				CallId:    "call_search_1",
+				Arguments: []byte(`{"query":"mail"}`),
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	response, ok := result.Value.(*dto.ClaudeResponse)
+	require.True(t, ok)
+	require.Len(t, response.Content, 2)
+	assert.Equal(t, "text", response.Content[0].Type)
+	assert.Equal(t, "I will search.", response.Content[0].GetText())
+	assert.Equal(t, "tool_use", response.Content[1].Type)
+	assert.Equal(t, "call_search_1", response.Content[1].Id)
+	assert.Equal(t, "tool_search", response.Content[1].Name)
+	assert.Equal(t, map[string]any{"query": "mail"}, response.Content[1].Input)
+}
+
+func TestConvertResponseResponsesToClaudeIgnoresNamelessToolWithoutShiftingValidTool(t *testing.T) {
+	result, err := ConvertResponse(WithProtocolBridgeContext(context.Background()), nil, types.RelayFormatClaude, &dto.OpenAIResponsesResponse{
+		ID:     "resp_tools",
+		Model:  "gpt-test",
+		Status: []byte(`"completed"`),
+		Output: []dto.ResponsesOutput{
+			{Type: "function_call", ID: "fc_bad", CallId: "call_bad", Arguments: []byte(`{}`)},
+			{
+				Type: "message",
+				Role: "assistant",
+				Content: []dto.ResponsesOutputContent{
+					{Type: "output_text", Text: "Using the valid tool."},
+				},
+			},
+			{Type: "function_call", ID: "fc_good", CallId: "call_good", Name: "lookup", Arguments: []byte(`{"q":"x"}`)},
+		},
+	})
+	require.NoError(t, err)
+
+	response, ok := result.Value.(*dto.ClaudeResponse)
+	require.True(t, ok)
+	require.Len(t, response.Content, 2)
+	assert.Equal(t, "text", response.Content[0].Type)
+	assert.Equal(t, "Using the valid tool.", response.Content[0].GetText())
+	assert.Equal(t, "tool_use", response.Content[1].Type)
+	assert.Equal(t, "call_good", response.Content[1].Id)
+	assert.Equal(t, "lookup", response.Content[1].Name)
+}
+
+func TestResponsesToClaudeReasoningDoesNotExposeProviderState(t *testing.T) {
+	meta := &convmeta.Values{
+		ChannelMetaAttached: true,
+		ChannelID:           17,
+		Options:             &convmeta.Options{ProviderStateSecret: "bridge-secret"},
+	}
+	responseResult, err := ConvertResponse(WithProtocolBridgeContext(context.Background()), meta, types.RelayFormatClaude, &dto.OpenAIResponsesResponse{
+		ID:     "resp_1",
+		Model:  "gpt-test",
+		Status: []byte(`"completed"`),
+		Output: []dto.ResponsesOutput{
+			{
+				Type:             "reasoning",
+				ID:               "rs_1",
+				Summary:          []dto.ResponsesReasoningSummaryPart{{Type: "summary_text", Text: "inspect inputs"}},
+				EncryptedContent: "provider-secret",
+			},
+			{Type: "function_call", ID: "fc_1", CallId: "call_1", Name: "lookup", Arguments: []byte(`{"q":"x"}`)},
+		},
+	})
+	require.NoError(t, err)
+	claudeResponse, ok := responseResult.Value.(*dto.ClaudeResponse)
+	require.True(t, ok)
+	require.Len(t, claudeResponse.Content, 2)
+	assert.Equal(t, "thinking", claudeResponse.Content[0].Type)
+	assert.Equal(t, "inspect inputs", *claudeResponse.Content[0].Thinking)
+	assert.Empty(t, claudeResponse.Content[0].Signature)
+	assert.Equal(t, "tool_use", claudeResponse.Content[1].Type)
+	encodedResponse, err := kitutil.Marshal(claudeResponse)
+	require.NoError(t, err)
+	assert.NotContains(t, string(encodedResponse), "provider-secret")
+	assert.NotContains(t, string(encodedResponse), "signature")
+
+	nextRequest := &dto.ClaudeRequest{
+		Model: "gpt-test",
+		Messages: []dto.ClaudeMessage{
+			{Role: "assistant", Content: claudeResponse.Content},
+			{Role: "user", Content: []dto.ClaudeMediaMessage{{Type: "tool_result", ToolUseId: "call_1", Content: "done"}}},
+		},
+		Tools: []dto.Tool{{Name: "lookup", InputSchema: map[string]any{"type": "object"}}},
+	}
+	requestResult, err := ConvertRequest(WithProtocolBridgeContext(context.Background()), meta, types.RelayFormatOpenAIResponses, nextRequest)
+	require.NoError(t, err)
+	converted, ok := requestResult.Value.(*dto.OpenAIResponsesRequest)
+	require.True(t, ok)
+	var input []map[string]any
+	require.NoError(t, kitutil.Unmarshal(converted.Input, &input))
+	require.NotEmpty(t, input)
+	for _, item := range input {
+		assert.NotEqual(t, "reasoning", item["type"])
+		assert.NotEqual(t, "provider-secret", item["encrypted_content"])
+	}
+}
+
+func TestResponsesToClaudeStreamClosesReasoningWithoutSignatureBeforeToolBlock(t *testing.T) {
+	meta := &convmeta.Values{
+		ChannelMetaAttached: true,
+		ChannelID:           17,
+		Options:             &convmeta.Options{ProviderStateSecret: "bridge-secret"},
+	}
+	state, err := NewResponseStreamState(types.RelayFormatOpenAIResponses, types.RelayFormatClaude, ResponseStreamOptions{Model: "gpt-test"})
+	require.NoError(t, err)
+
+	events := []*dto.ResponsesStreamResponse{
+		{Type: "response.created", Response: &dto.OpenAIResponsesResponse{ID: "resp_1", Model: "gpt-test"}},
+		{Type: "response.reasoning_summary_text.delta", Delta: "inspect inputs"},
+		{Type: "response.output_item.done", OutputIndex: respPtr(0), Item: &dto.ResponsesOutput{
+			Type:             "reasoning",
+			ID:               "rs_1",
+			Summary:          []dto.ResponsesReasoningSummaryPart{{Type: "summary_text", Text: "inspect inputs"}},
+			EncryptedContent: "provider-secret",
+		}},
+		{Type: "response.output_item.added", OutputIndex: respPtr(1), Item: &dto.ResponsesOutput{
+			Type:      "function_call",
+			ID:        "fc_1",
+			CallId:    "call_1",
+			Name:      "lookup",
+			Arguments: []byte(`{}`),
+		}},
+	}
+
+	convertedEvents := make([]*dto.ClaudeResponse, 0)
+	for _, event := range events {
+		results, convertErr := ConvertStreamResponseChunk(context.Background(), meta, state, event)
+		require.NoError(t, convertErr)
+		for _, result := range results {
+			if converted, ok := result.Value.(*dto.ClaudeResponse); ok && converted != nil {
+				convertedEvents = append(convertedEvents, converted)
+			}
+		}
+	}
+
+	thinkingStopIndex := -1
+	toolStartIndex := -1
+	for index, event := range convertedEvents {
+		if event.Type == "content_block_delta" && event.Delta != nil && event.Delta.Type == "signature_delta" {
+			t.Fatalf("Responses provider state leaked as Anthropic signature_delta: %#v", event.Delta)
+		}
+		if event.Type == "content_block_start" && event.ContentBlock != nil && event.ContentBlock.Type == "redacted_thinking" {
+			t.Fatalf("Responses provider state leaked as Anthropic redacted_thinking: %#v", event.ContentBlock)
+		}
+		if event.Type == "content_block_stop" && thinkingStopIndex == -1 {
+			thinkingStopIndex = index
+		}
+		if event.Type == "content_block_start" && event.ContentBlock != nil && event.ContentBlock.Type == "tool_use" {
+			toolStartIndex = index
+		}
+	}
+	require.NotEqual(t, -1, thinkingStopIndex)
+	require.NotEqual(t, -1, toolStartIndex)
+	assert.Less(t, thinkingStopIndex, toolStartIndex)
 }
 
 func TestResponseUsageMatrixChatAndResponsesDetails(t *testing.T) {

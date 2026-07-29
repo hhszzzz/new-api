@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -154,4 +155,31 @@ func TestRelayInfoMetaTypedNilReceiver(t *testing.T) {
 	assert.NotNil(t, firstOptions.Gemini.SupportsImagine)
 	assert.NotNil(t, firstOptions.Gemini.SafetySetting)
 	assert.NotNil(t, firstOptions.PreserveThinkingSuffix)
+}
+
+func TestRelayInfoConvOptionsUsesCCSwitchReasoningVendorHints(t *testing.T) {
+	tests := []struct {
+		name        string
+		channelType int
+		model       string
+		baseURL     string
+		want        bool
+	}{
+		{name: "generic strict chat", channelType: constant.ChannelTypeOpenAI, model: "openpangu-2.0-flash", baseURL: "https://example.test/v1", want: false},
+		{name: "deepseek channel", channelType: constant.ChannelTypeDeepSeek, model: "provider-alias", want: true},
+		{name: "kimi model through openrouter", channelType: constant.ChannelTypeOpenRouter, model: "moonshotai/kimi-k2-thinking", baseURL: "https://openrouter.ai/api/v1", want: true},
+		{name: "mimo endpoint", channelType: constant.ChannelTypeOpenAI, model: "provider-alias", baseURL: "https://api.xiaomimimo.com/v1", want: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			info := &RelayInfo{ChannelMeta: &ChannelMeta{
+				ChannelType:       test.channelType,
+				ChannelBaseUrl:    test.baseURL,
+				UpstreamModelName: test.model,
+			}}
+
+			assert.Equal(t, test.want, info.ConvOptions().PreserveChatReasoningContent)
+		})
+	}
 }

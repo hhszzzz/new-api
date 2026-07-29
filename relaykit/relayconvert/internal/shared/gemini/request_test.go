@@ -78,3 +78,16 @@ func TestRecordReasoningEffortToleratesMissingArguments(t *testing.T) {
 		RecordReasoningEffort(&dto.GeminiChatRequest{}, nil)
 	})
 }
+
+func TestIsGemini3SeriesNormalizesProviderModelNames(t *testing.T) {
+	for _, model := range []string{
+		"gemini-3-pro-preview",
+		"GEMINI-3.6-FLASH",
+		"publishers/google/models/gemini-3.6-flash",
+	} {
+		assert.True(t, IsGemini3Series(model), model)
+	}
+	for _, model := range []string{"gemini-2.5-pro", "custom-gemini-3"} {
+		assert.False(t, IsGemini3Series(model), model)
+	}
+}

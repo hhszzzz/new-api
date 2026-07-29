@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	sharedbridge "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/bridge"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/samber/lo"
 )
@@ -84,10 +85,34 @@ func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*d
 		return nil, fmt.Errorf("n>1 is not supported in responses compatibility mode")
 	}
 
-	var instructionsParts []string
-	inputItems := make([]map[string]any, 0, len(req.Messages))
+	messages := append([]dto.Message(nil), req.Messages...)
+	pendingLegacyCallID := ""
+	for index := range messages {
+		role := strings.TrimSpace(messages[index].Role)
+		switch role {
+		case "assistant":
+			if messages[index].FunctionCall != nil {
+				toolCalls := messages[index].ParseToolCalls()
+				if len(toolCalls) > 0 {
+					pendingLegacyCallID = toolCalls[0].ID
+				}
+			}
+		case "function":
+			if strings.TrimSpace(messages[index].ToolCallId) == "" {
+				messages[index].ToolCallId = pendingLegacyCallID
+			}
+			pendingLegacyCallID = ""
+		case "tool":
+			pendingLegacyCallID = ""
+		default:
+			pendingLegacyCallID = ""
+		}
+	}
 
-	for messageIndex, msg := range req.Messages {
+	var instructionsParts []string
+	inputItems := make([]map[string]any, 0, len(messages))
+
+	for _, msg := range messages {
 		role := strings.TrimSpace(msg.Role)
 		if role == "" {
 			continue
@@ -110,11 +135,7 @@ func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*d
 			}
 
 			if callID == "" {
-				inputItems = append(inputItems, map[string]any{
-					"role":    "user",
-					"content": fmt.Sprintf("[tool_output_missing_call_id] %v", output),
-				})
-				continue
+				return nil, fmt.Errorf("%s message is missing tool_call_id and cannot be matched to a function call", role)
 			}
 
 			inputItems = append(inputItems, map[string]any{
@@ -131,8 +152,9 @@ func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*d
 				continue
 			}
 			if msg.IsStringContent() {
-				if s := strings.TrimSpace(msg.StringContent()); s != "" {
-					instructionsParts = append(instructionsParts, s)
+				content := msg.StringContent()
+				if strings.TrimSpace(content) != "" {
+					instructionsParts = append(instructionsParts, content)
 				}
 				continue
 			}
@@ -146,31 +168,11 @@ func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*d
 					sb.WriteString(part.Text)
 				}
 			}
-			if s := strings.TrimSpace(sb.String()); s != "" {
-				instructionsParts = append(instructionsParts, s)
+			content := sb.String()
+			if strings.TrimSpace(content) != "" {
+				instructionsParts = append(instructionsParts, content)
 			}
 			continue
-		}
-		if role == "assistant" {
-			if reasoning := msg.GetReasoningContent(); reasoning != "" {
-				inputItems = append(inputItems, map[string]any{
-					"type":   "reasoning",
-					"id":     fmt.Sprintf("rs_bridge_%d", messageIndex),
-					"status": "completed",
-					"summary": []map[string]any{
-						{
-							"type": "summary_text",
-							"text": reasoning,
-						},
-					},
-					"content": []map[string]any{
-						{
-							"type": "reasoning_text",
-							"text": reasoning,
-						},
-					},
-				})
-			}
 		}
 
 		item := map[string]any{
@@ -307,8 +309,9 @@ func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*d
 	}
 
 	var toolsRaw json.RawMessage
+	hasCurrentTools := len(req.Tools) > 0
+	responsesTools := make([]map[string]any, 0, len(req.Tools))
 	if req.Tools != nil {
-		tools := make([]map[string]any, 0, len(req.Tools))
 		for _, tool := range req.Tools {
 			switch tool.Type {
 			case "function":
@@ -321,7 +324,7 @@ func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*d
 				if tool.Function.Strict != nil {
 					converted["strict"] = *tool.Function.Strict
 				}
-				tools = append(tools, converted)
+				responsesTools = append(responsesTools, converted)
 			default:
 				// Best-effort: keep original tool shape for unknown types.
 				var m map[string]any
@@ -331,10 +334,16 @@ func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*d
 				if len(m) == 0 {
 					m = map[string]any{"type": tool.Type}
 				}
-				tools = append(tools, m)
+				responsesTools = append(responsesTools, m)
 			}
 		}
-		toolsRaw, _ = kitutil.Marshal(tools)
+	}
+	responsesTools, err = sharedbridge.EnsureResponsesFunctionTools(responsesTools, inputItems)
+	if err != nil {
+		return nil, err
+	}
+	if len(responsesTools) > 0 {
+		toolsRaw, _ = kitutil.Marshal(responsesTools)
 	}
 
 	var toolChoiceRaw json.RawMessage
@@ -374,10 +383,16 @@ func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*d
 			}
 		}
 	}
+	if !hasCurrentTools {
+		toolChoiceRaw = nil
+	}
 
 	var parallelToolCallsRaw json.RawMessage
 	if req.ParallelTooCalls != nil {
 		parallelToolCallsRaw, _ = kitutil.Marshal(*req.ParallelTooCalls)
+	}
+	if !hasCurrentTools {
+		parallelToolCallsRaw = nil
 	}
 
 	textRaw := convertChatResponseFormatToResponsesText(req.ResponseFormat)

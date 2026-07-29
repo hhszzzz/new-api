@@ -10,9 +10,11 @@ import (
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
+	claudemessages "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/claude_messages"
 	geminichat "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/gemini_chat"
 	oaichat "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/oai_chat"
 	sharedbridge "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/bridge"
+	sharedclaude "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/claude"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/QuantumNous/new-api/relaykit/types"
 )
@@ -383,6 +385,10 @@ func (s *ResponseStreamState) Usage() *dto.Usage {
 			if typed.Usage != nil {
 				return typed.Usage
 			}
+		case *geminiToClaudeStreamState:
+			if typed.latestUsage != nil {
+				return typed.latestUsage
+			}
 		}
 	}
 	return nil
@@ -399,6 +405,8 @@ func (s *ResponseStreamState) SetUsage(usage *dto.Usage) {
 			typed.Usage = UsageFromChatUsage(usage)
 		case *ResponsesToChatStreamState:
 			typed.Usage = usage
+		case *geminiToClaudeStreamState:
+			typed.latestUsage = UsageFromChatUsage(usage)
 		}
 	}
 }
@@ -810,7 +818,7 @@ func convertOAIChatResponseToOAIResponses(c context.Context, _ convmeta.Meta, re
 	)
 }
 
-func convertOAIResponsesResponseToOAIChat(_ context.Context, _ convmeta.Meta, response any) (any, *dto.Usage, error) {
+func convertOAIResponsesResponseToOAIChat(c context.Context, _ convmeta.Meta, response any) (any, *dto.Usage, error) {
 	responsesResponse, err := asOAIResponsesResponse(response)
 	if err != nil {
 		return nil, nil, err
@@ -819,7 +827,51 @@ func convertOAIResponsesResponseToOAIChat(_ context.Context, _ convmeta.Meta, re
 	if id == "" {
 		id = fmt.Sprintf("chatcmpl-%s", kitutil.GetUUID())
 	}
-	return ResponsesResponseToChatCompletionsResponse(responsesResponse, id)
+	chatResponse, usage, err := ResponsesResponseToChatCompletionsResponse(responsesResponse, id)
+	if err != nil {
+		return nil, nil, err
+	}
+	outputState := &sharedbridge.ResponseOutputState{
+		Items: make([]sharedbridge.ResponseOutputItem, 0, len(responsesResponse.Output)),
+	}
+	toolIndex := 0
+	for _, item := range responsesResponse.Output {
+		switch strings.TrimSpace(item.Type) {
+		case "reasoning":
+			state := dto.ProviderReasoningState{Text: sharedbridge.OpenAIReasoningText(item)}
+			if state.Text != "" {
+				chatResponse.ProviderReasoningStates = append(chatResponse.ProviderReasoningStates, state)
+				outputState.Items = append(outputState.Items, sharedbridge.ResponseOutputItem{
+					Kind: sharedbridge.ResponseOutputKindReasoning,
+					Text: state.Text,
+				})
+			}
+		case "message":
+			var text strings.Builder
+			for _, part := range item.Content {
+				if part.Type == "output_text" {
+					text.WriteString(part.Text)
+				} else if part.Type == "refusal" {
+					text.WriteString(part.Refusal)
+				}
+			}
+			outputState.Items = append(outputState.Items, sharedbridge.ResponseOutputItem{
+				Kind: sharedbridge.ResponseOutputKindMessage,
+				Text: text.String(),
+			})
+		case "function_call", "custom_tool_call", "tool_search_call":
+			if item.Type != "tool_search_call" && strings.TrimSpace(item.Name) == "" {
+				continue
+			}
+			outputState.Items = append(outputState.Items, sharedbridge.ResponseOutputItem{
+				Kind:      sharedbridge.ResponseOutputKindTool,
+				ToolIndex: toolIndex,
+			})
+			toolIndex++
+		}
+	}
+	sharedbridge.SetResponseOutputState(c, outputState)
+	return chatResponse, usage, nil
 }
 
 func newOAIChatToOAIResponsesStreamState(options ResponseStreamOptions) any {
@@ -856,7 +908,10 @@ func finalizeOAIChatStreamResponseToOAIResponses(_ context.Context, _ convmeta.M
 	if !ok || streamState == nil {
 		return nil, nil, errors.New("OAI chat to OAI responses stream state is required")
 	}
-	events := FinalizeChatCompletionsStreamToResponses(streamState)
+	events, err := FinalizeChatCompletionsStreamToResponsesChecked(streamState)
+	if err != nil {
+		return nil, streamState.Usage, err
+	}
 	return streamValuesFromAny(events), streamState.Usage, nil
 }
 
@@ -890,16 +945,23 @@ func finalizeOAIResponsesStreamResponseToOAIChat(_ context.Context, _ convmeta.M
 	if !ok || streamState == nil {
 		return nil, nil, errors.New("OAI responses to OAI chat stream state is required")
 	}
-	chunks := FinalizeResponsesToChatStream(streamState)
+	chunks, err := FinalizeResponsesToChatStreamChecked(streamState)
+	if err != nil {
+		return nil, streamState.Usage, err
+	}
 	return streamValuesFromAny(chunks), streamState.Usage, nil
 }
 
-func convertOAIChatResponseToClaudeMessages(_ context.Context, info convmeta.Meta, response any) (any, *dto.Usage, error) {
+func convertOAIChatResponseToClaudeMessages(c context.Context, info convmeta.Meta, response any) (any, *dto.Usage, error) {
 	chatResponse, err := asOAIChatResponse(response)
 	if err != nil {
 		return nil, nil, err
 	}
-	return ResponseOpenAI2Claude(chatResponse, info), UsageFromChatUsage(&chatResponse.Usage), nil
+	return oaichat.ResponseOpenAI2ClaudeWithBridgeState(
+		chatResponse,
+		info,
+		sharedbridge.ResponseOutputStateFromContext(c),
+	), UsageFromChatUsage(&chatResponse.Usage), nil
 }
 
 func convertOAIChatStreamResponseToClaudeMessages(_ context.Context, info convmeta.Meta, response any) (any, *dto.Usage, error) {
@@ -935,7 +997,7 @@ func convertOAIChatStreamResponseToGeminiChat(_ context.Context, info convmeta.M
 	return StreamResponseOpenAI2Gemini(chatResponse, info), canonicalUsageFromResponse(chatResponse), nil
 }
 
-func convertClaudeMessagesResponseToOAIChat(c context.Context, _ convmeta.Meta, response any) (any, *dto.Usage, error) {
+func convertClaudeMessagesResponseToOAIChat(c context.Context, info convmeta.Meta, response any) (any, *dto.Usage, error) {
 	claudeResponse, err := asClaudeResponse(response)
 	if err != nil {
 		return nil, nil, err
@@ -946,11 +1008,26 @@ func convertClaudeMessagesResponseToOAIChat(c context.Context, _ convmeta.Meta, 
 	toolIndex := 0
 	for _, content := range claudeResponse.Content {
 		switch content.Type {
-		case "thinking":
-			if content.Thinking != nil && *content.Thinking != "" {
+		case "thinking", "redacted_thinking":
+			encryptedContent := ""
+			if info != nil && info.HasChannelMeta() {
+				encoded, ok, err := sharedclaude.EncodeThinkingBlock(content, info.GetChannelID(), convmeta.OptionsOf(info).ProviderStateSecret)
+				if err != nil {
+					return nil, nil, err
+				}
+				if ok {
+					encryptedContent = encoded
+				}
+			}
+			thinking := ""
+			if content.Thinking != nil {
+				thinking = *content.Thinking
+			}
+			if thinking != "" || encryptedContent != "" {
 				outputState.Items = append(outputState.Items, sharedbridge.ResponseOutputItem{
-					Kind: sharedbridge.ResponseOutputKindReasoning,
-					Text: *content.Thinking,
+					Kind:             sharedbridge.ResponseOutputKindReasoning,
+					Text:             thinking,
+					EncryptedContent: encryptedContent,
 				})
 			}
 		case "text":
@@ -988,6 +1065,32 @@ func convertClaudeMessagesStreamResponseToOAIChat(_ context.Context, _ convmeta.
 		openAIResponse.Usage = usage
 	}
 	return openAIResponse, usage, nil
+}
+
+func newClaudeMessagesToOAIChatStreamState(_ ResponseStreamOptions) any {
+	return claudemessages.NewClaudeToOpenAIStreamState()
+}
+
+func convertClaudeMessagesStreamResponseChunkToOAIChat(_ context.Context, info convmeta.Meta, response any, state any) ([]any, *dto.Usage, error) {
+	claudeResponse, err := asClaudeResponse(response)
+	if err != nil {
+		return nil, nil, err
+	}
+	streamState, ok := state.(*claudemessages.ClaudeToOpenAIStreamState)
+	if !ok || streamState == nil {
+		return nil, nil, errors.New("Claude Messages to OAI chat stream state is required")
+	}
+	responses, err := streamState.ConvertChunk(claudeResponse, info)
+	if err != nil {
+		return nil, nil, err
+	}
+	usage := usageFromClaudeResponse(claudeResponse)
+	if usage != nil {
+		for _, converted := range responses {
+			converted.Usage = usage
+		}
+	}
+	return streamValuesFromAny(responses), usage, nil
 }
 
 func convertGeminiChatResponseToOAIChat(_ context.Context, info convmeta.Meta, response any) (any, *dto.Usage, error) {

@@ -37,6 +37,46 @@ func GetFullRequestURL(baseURL string, requestURL string, channelType int) strin
 	return fullRequestURL
 }
 
+// ResolveFullEndpointURL mirrors CC Switch's full-endpoint guard. It treats a
+// configured base URL that already ends in the target wire endpoint as the
+// final URL, while preserving any query carried by the rewritten request path.
+// This prevents paths such as /v1/messages/v1/messages when an administrator
+// pastes a complete upstream endpoint into the channel base URL.
+func ResolveFullEndpointURL(baseURL, requestURL, endpointSuffix string) (string, bool) {
+	baseURL = strings.TrimSpace(baseURL)
+	endpointSuffix = strings.ToLower(strings.TrimSpace(endpointSuffix))
+	if baseURL == "" || endpointSuffix == "" {
+		return "", false
+	}
+
+	basePath := baseURL
+	if index := strings.IndexAny(basePath, "?#"); index >= 0 {
+		basePath = basePath[:index]
+	}
+	if !strings.HasSuffix(strings.ToLower(strings.TrimRight(basePath, "/")), endpointSuffix) {
+		return "", false
+	}
+
+	query := ""
+	if index := strings.IndexByte(requestURL, '?'); index >= 0 && index+1 < len(requestURL) {
+		query = requestURL[index+1:]
+	}
+	if query == "" {
+		return baseURL, true
+	}
+
+	fragment := ""
+	if index := strings.IndexByte(baseURL, '#'); index >= 0 {
+		fragment = baseURL[index:]
+		baseURL = baseURL[:index]
+	}
+	separator := "?"
+	if strings.Contains(baseURL, "?") {
+		separator = "&"
+	}
+	return baseURL + separator + query + fragment, true
+}
+
 func SanitizeURLForLog(rawURL string) string {
 	if rawURL == "" {
 		return rawURL

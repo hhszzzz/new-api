@@ -71,6 +71,15 @@ describe('channel protocol capabilities form contract', () => {
     expect(defaultUpstreamProtocols(14, '')).toEqual(['messages'])
     expect(defaultUpstreamProtocols(33, '')).toEqual(['messages'])
     expect(defaultUpstreamProtocols(3, '')).toEqual(['chat', 'responses'])
+    expect(defaultUpstreamProtocols(24, '')).toEqual(['gemini'])
+    expect(defaultUpstreamProtocols(41, '')).toEqual(['gemini'])
+    expect(defaultUpstreamProtocols(48, '')).toEqual(['chat', 'responses'])
+    expect(defaultUpstreamProtocols(59, '')).toEqual([
+      'chat',
+      'messages',
+      'responses',
+      'gemini',
+    ])
     expect(defaultUpstreamProtocols(1, 'https://api.openai.com/v1')).toEqual([
       'chat',
       'responses',

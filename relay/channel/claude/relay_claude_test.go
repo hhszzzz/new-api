@@ -120,6 +120,9 @@ func TestFormatClaudeResponseInfo_MessageDelta_FullUsage(t *testing.T) {
 	// message_delta 带完整 usage（原生 Anthropic 场景）
 	claudeResponse := &dto.ClaudeResponse{
 		Type: "message_delta",
+		Delta: &dto.ClaudeMediaMessage{
+			StopReason: commonPointer("end_turn"),
+		},
 		Usage: &dto.ClaudeUsage{
 			InputTokens:              100,
 			OutputTokens:             200,
@@ -164,6 +167,9 @@ func TestFormatClaudeResponseInfo_MessageDelta_OnlyOutputTokens(t *testing.T) {
 	// Bedrock 的 message_delta 只有 output_tokens，缺少 input_tokens 和 cache 字段
 	claudeResponse := &dto.ClaudeResponse{
 		Type: "message_delta",
+		Delta: &dto.ClaudeMediaMessage{
+			StopReason: commonPointer("end_turn"),
+		},
 		Usage: &dto.ClaudeUsage{
 			OutputTokens: 200,
 			// InputTokens, CacheCreationInputTokens, CacheReadInputTokens 都是 0
@@ -208,6 +214,55 @@ func TestFormatClaudeResponseInfo_NilClaudeInfo(t *testing.T) {
 	if ok {
 		t.Error("expected false for nil claudeInfo")
 	}
+}
+
+func TestFormatClaudeResponseInfo_MessageDeltaWithoutStopReasonIsNotTerminal(t *testing.T) {
+	claudeInfo := &ClaudeResponseInfo{Usage: &dto.Usage{}}
+	claudeResponse := &dto.ClaudeResponse{
+		Type:  "message_delta",
+		Usage: &dto.ClaudeUsage{OutputTokens: 3},
+	}
+
+	assert.True(t, FormatClaudeResponseInfo(claudeResponse, nil, claudeInfo))
+	assert.False(t, claudeInfo.Done)
+}
+
+func TestClaudeFirstSSEUnsupportedErrorCarriesAutoRetryEvidence(t *testing.T) {
+	oldMode := gin.Mode()
+	gin.SetMode(gin.TestMode)
+	t.Cleanup(func() { gin.SetMode(oldMode) })
+	oldTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = oldTimeout })
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	body := strings.Join([]string{
+		`data: {"type":"error","error":{"type":"invalid_request_error","message":"messages API is not supported"}}`,
+		`data: [DONE]`,
+		``,
+	}, "\n")
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+	}
+	info := &relaycommon.RelayInfo{
+		RelayFormat: types.RelayFormatOpenAIResponses,
+		IsStream:    true,
+		DisablePing: true,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "claude-upstream",
+		},
+	}
+
+	usage, apiErr := ClaudeStreamHandler(c, resp, info)
+
+	require.Nil(t, usage)
+	require.NotNil(t, apiErr)
+	assert.True(t, apiErr.HasProtocolUnsupportedEvidence())
+	assert.Empty(t, recorder.Body.String())
 }
 
 func TestFormatClaudeResponseInfo_ContentBlockDelta(t *testing.T) {
@@ -481,6 +536,156 @@ func TestClaudeNativeStreamLifecycleKeepsPublicModel(t *testing.T) {
 	assert.Contains(t, got, `event: content_block_delta`)
 	assert.Contains(t, got, `"text":"hello"`)
 	assert.Contains(t, got, `event: message_stop`)
+}
+
+func TestClaudeTruncatedStreamDoesNotSynthesizeTerminalEvent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	oldTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = oldTimeout })
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	info := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatClaude,
+		OriginModelName: "claude-public",
+		IsStream:        true,
+		DisablePing:     true,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "provider-claude-model",
+		},
+	}
+	body := strings.Join([]string{
+		`data: {"type":"message_start","message":{"id":"msg_1","model":"provider-claude-model","content":[],"usage":{"input_tokens":2,"output_tokens":0}}}`,
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}`,
+		``,
+	}, "\n")
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+	}
+
+	usage, apiErr := ClaudeStreamHandler(c, resp, info)
+
+	require.Nil(t, usage)
+	require.NotNil(t, apiErr)
+	assert.Contains(t, apiErr.Error(), "terminal stop_reason")
+	assert.Contains(t, recorder.Body.String(), `"text":"partial"`)
+	assert.NotContains(t, recorder.Body.String(), `event: message_stop`)
+}
+
+func TestClaudeNativeStreamRejectsMissingMessageStopAfterTerminalDelta(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	oldTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = oldTimeout })
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	info := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatClaude,
+		OriginModelName: "claude-public",
+		IsStream:        true,
+		DisablePing:     true,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "provider-claude-model",
+		},
+	}
+	body := strings.Join([]string{
+		`data: {"type":"message_start","message":{"id":"msg_1","model":"provider-claude-model","content":[],"usage":{"input_tokens":2,"output_tokens":0}}}`,
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"complete"}}`,
+		`data: {"type":"content_block_stop","index":0}`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}`,
+		``,
+	}, "\n")
+
+	usage, apiErr := ClaudeStreamHandler(c, &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+	}, info)
+
+	require.Nil(t, usage)
+	require.NotNil(t, apiErr)
+	assert.Contains(t, apiErr.Error(), "message_stop")
+	assert.NotContains(t, recorder.Body.String(), `event: message_stop`)
+}
+
+func TestClaudeResponsesStreamRejectsMissingMessageStop(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	oldTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = oldTimeout })
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatOpenAIResponses,
+		OriginModelName: "gpt-public",
+		IsStream:        true,
+		DisablePing:     true,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "provider-claude-model",
+		},
+	}
+	body := strings.Join([]string{
+		`data: {"type":"message_start","message":{"id":"msg_1","model":"provider-claude-model","content":[],"usage":{"input_tokens":2,"output_tokens":0}}}`,
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"complete"}}`,
+		`data: {"type":"content_block_stop","index":0}`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}`,
+		``,
+	}, "\n")
+
+	usage, apiErr := ClaudeStreamHandler(c, &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+	}, info)
+
+	require.Nil(t, usage)
+	require.NotNil(t, apiErr)
+	assert.Contains(t, apiErr.Error(), "message_stop")
+	assert.Contains(t, recorder.Body.String(), `event: response.output_text.delta`)
+	assert.NotContains(t, recorder.Body.String(), `event: response.completed`)
+}
+
+func TestClaudeStreamRejectsMessageStopWithoutTerminalStopReason(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	oldTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = oldTimeout })
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	info := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatClaude,
+		OriginModelName: "claude-public",
+		IsStream:        true,
+		DisablePing:     true,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "provider-claude-model",
+		},
+	}
+	body := strings.Join([]string{
+		`data: {"type":"message_start","message":{"id":"msg_1","model":"provider-claude-model","content":[],"usage":{"input_tokens":2,"output_tokens":0}}}`,
+		`data: {"type":"message_delta","usage":{"output_tokens":1}}`,
+		`data: {"type":"message_stop"}`,
+		``,
+	}, "\n")
+
+	usage, apiErr := ClaudeStreamHandler(c, &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+	}, info)
+
+	require.Nil(t, usage)
+	require.NotNil(t, apiErr)
+	assert.Contains(t, apiErr.Error(), "terminal stop_reason")
 }
 
 func TestClaudeNativeStreamTreatsReportedVersionAliasAsUnrouted(t *testing.T) {

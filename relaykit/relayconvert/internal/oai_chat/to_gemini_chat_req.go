@@ -22,13 +22,15 @@ func OpenAIChatRequestToGeminiGenerateContent(c context.Context, textRequest dto
 		},
 	}
 
-	if textRequest.TopP != nil && *textRequest.TopP > 0 {
+	if textRequest.TopP != nil {
 		geminiRequest.GenerationConfig.TopP = kitutil.GetPointer(*textRequest.TopP)
 	}
-	if maxTokens := textRequest.GetMaxTokens(); maxTokens > 0 {
-		geminiRequest.GenerationConfig.MaxOutputTokens = kitutil.GetPointer(maxTokens)
+	if textRequest.MaxCompletionTokens != nil {
+		geminiRequest.GenerationConfig.MaxOutputTokens = kitutil.GetPointer(*textRequest.MaxCompletionTokens)
+	} else if textRequest.MaxTokens != nil {
+		geminiRequest.GenerationConfig.MaxOutputTokens = kitutil.GetPointer(*textRequest.MaxTokens)
 	}
-	if textRequest.Seed != nil && *textRequest.Seed != 0 {
+	if textRequest.Seed != nil {
 		geminiRequest.GenerationConfig.Seed = kitutil.GetPointer(int64(*textRequest.Seed))
 	}
 
@@ -184,14 +186,7 @@ func OpenAIChatRequestToGeminiGenerateContent(c context.Context, textRequest dto
 				urlContext = true
 				continue
 			}
-			if tool.Function.Parameters != nil {
-				if params, ok := tool.Function.Parameters.(map[string]interface{}); ok {
-					if props, hasProps := params["properties"].(map[string]interface{}); hasProps && len(props) == 0 {
-						tool.Function.Parameters = nil
-					}
-				}
-			}
-			tool.Function.Parameters = sharedgemini.CleanFunctionParameters(tool.Function.Parameters)
+			sharedgemini.PrepareFunctionDeclaration(&tool.Function)
 			functions = append(functions, tool.Function)
 		}
 		geminiTools := geminiRequest.GetTools()
@@ -250,9 +245,15 @@ func OpenAIChatRequestToGeminiGenerateContent(c context.Context, textRequest dto
 			parts := &geminiRequest.Contents[len(geminiRequest.Contents)-1].Parts
 			name := ""
 			if message.Name != nil {
-				name = *message.Name
-			} else if val, exists := toolCallIDs[message.ToolCallId]; exists {
-				name = val
+				name = strings.TrimSpace(*message.Name)
+			}
+			if name == "" {
+				if val, exists := toolCallIDs[message.ToolCallId]; exists {
+					name = val
+				}
+			}
+			if name == "" {
+				return nil, fmt.Errorf("unable to resolve Gemini functionResponse.name for tool_call_id %q", message.ToolCallId)
 			}
 			var contentMap map[string]interface{}
 			contentStr := message.StringContent()
@@ -260,7 +261,21 @@ func OpenAIChatRequestToGeminiGenerateContent(c context.Context, textRequest dto
 			if err := kitutil.Unmarshal([]byte(contentStr), &contentMap); err != nil {
 				var contentSlice []interface{}
 				if err := kitutil.Unmarshal([]byte(contentStr), &contentSlice); err == nil {
-					contentMap = map[string]interface{}{"result": contentSlice}
+					textParts := make([]string, 0, len(contentSlice))
+					for _, item := range contentSlice {
+						part, ok := item.(map[string]any)
+						if !ok || strings.TrimSpace(kitutil.Interface2String(part["type"])) != "text" {
+							continue
+						}
+						if text := kitutil.Interface2String(part["text"]); text != "" {
+							textParts = append(textParts, text)
+						}
+					}
+					if len(textParts) > 0 {
+						contentMap = map[string]interface{}{"content": strings.Join(textParts, "\n")}
+					} else {
+						contentMap = map[string]interface{}{"content": contentSlice}
+					}
 				} else {
 					contentMap = map[string]interface{}{"content": contentStr}
 				}
@@ -269,6 +284,13 @@ func OpenAIChatRequestToGeminiGenerateContent(c context.Context, textRequest dto
 			functionResp := &dto.GeminiFunctionResponse{
 				Name:     name,
 				Response: contentMap,
+			}
+			if message.ToolCallId != "" && !sharedgemini.IsSynthesizedToolCallID(message.ToolCallId) {
+				encodedID, err := kitutil.Marshal(message.ToolCallId)
+				if err != nil {
+					return nil, fmt.Errorf("marshal Gemini function response id: %w", err)
+				}
+				functionResp.ID = encodedID
 			}
 
 			*parts = append(*parts, dto.GeminiPart{
@@ -291,8 +313,13 @@ func OpenAIChatRequestToGeminiGenerateContent(c context.Context, textRequest dto
 						return nil, fmt.Errorf("invalid arguments for function %s, args: %s", call.Function.Name, call.Function.Arguments)
 					}
 				}
+				callID := call.ID
+				if sharedgemini.IsSynthesizedToolCallID(callID) {
+					callID = ""
+				}
 				toolCall := dto.GeminiPart{
 					FunctionCall: &dto.FunctionCall{
+						ID:           callID,
 						FunctionName: call.Function.Name,
 						Arguments:    args,
 					},
@@ -393,7 +420,32 @@ func OpenAIChatRequestToGeminiGenerateContent(c context.Context, textRequest dto
 			content.Role = "model"
 		}
 		if len(content.Parts) > 0 {
-			geminiRequest.Contents = append(geminiRequest.Contents, content)
+			mergeToolMedia := false
+			if content.Role == "user" && len(geminiRequest.Contents) > 0 && geminiRequest.Contents[len(geminiRequest.Contents)-1].Role == "user" {
+				last := &geminiRequest.Contents[len(geminiRequest.Contents)-1]
+				hasFunctionResponse := false
+				for _, part := range last.Parts {
+					if part.FunctionResponse != nil {
+						hasFunctionResponse = true
+						break
+					}
+				}
+				mergeToolMedia = hasFunctionResponse && strings.HasPrefix(content.Parts[0].Text, "[new-api: media output of tool call ")
+			}
+			if mergeToolMedia {
+				last := &geminiRequest.Contents[len(geminiRequest.Contents)-1]
+				if sharedgemini.IsGemini3Series(upstreamModelName) && attachGemini3FunctionResponseMedia(last, content.Parts) {
+					continue
+				}
+				for _, part := range last.Parts {
+					if part.FunctionResponse != nil {
+						replaceToolMediaMarker(part.FunctionResponse.Response)
+					}
+				}
+				last.Parts = append(last.Parts, content.Parts...)
+			} else {
+				geminiRequest.Contents = append(geminiRequest.Contents, content)
+			}
 		}
 	}
 
@@ -408,4 +460,100 @@ func OpenAIChatRequestToGeminiGenerateContent(c context.Context, textRequest dto
 	}
 
 	return &geminiRequest, nil
+}
+
+func attachGemini3FunctionResponseMedia(content *dto.GeminiChatContent, mediaParts []dto.GeminiPart) bool {
+	if content == nil || len(mediaParts) < 2 {
+		return false
+	}
+
+	type mediaGroup struct {
+		callID string
+		parts  []dto.GeminiPart
+	}
+	groups := make([]mediaGroup, 0)
+	for _, part := range mediaParts {
+		if strings.HasPrefix(part.Text, "[new-api: media output of tool call ") && strings.HasSuffix(part.Text, "]") {
+			callID := strings.TrimSuffix(strings.TrimPrefix(part.Text, "[new-api: media output of tool call "), "]")
+			groups = append(groups, mediaGroup{callID: callID})
+			continue
+		}
+		if len(groups) == 0 || part.InlineData == nil || !strings.HasPrefix(strings.ToLower(part.InlineData.MimeType), "image/") {
+			return false
+		}
+		groups[len(groups)-1].parts = append(groups[len(groups)-1].parts, part)
+	}
+	if len(groups) == 0 {
+		return false
+	}
+
+	type mediaAssignment struct {
+		index int
+		raw   []byte
+	}
+	used := make(map[int]struct{}, len(groups))
+	assignments := make([]mediaAssignment, 0, len(groups))
+	for _, group := range groups {
+		if len(group.parts) == 0 {
+			return false
+		}
+		match := -1
+		for index := range content.Parts {
+			if _, exists := used[index]; exists || content.Parts[index].FunctionResponse == nil {
+				continue
+			}
+			callID := kitutil.JsonRawMessageToString(content.Parts[index].FunctionResponse.ID)
+			if callID == group.callID {
+				match = index
+				break
+			}
+			if callID == "" && match == -1 {
+				match = index
+			}
+		}
+		if match == -1 {
+			return false
+		}
+		used[match] = struct{}{}
+		raw, err := kitutil.Marshal(group.parts)
+		if err != nil {
+			return false
+		}
+		assignments = append(assignments, mediaAssignment{index: match, raw: raw})
+	}
+	for _, assignment := range assignments {
+		response := content.Parts[assignment.index].FunctionResponse
+		response.Parts = assignment.raw
+		replaceToolMediaMarker(response.Response)
+	}
+	return true
+}
+
+func replaceToolMediaMarker(value any) {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, item := range typed {
+			if text, ok := item.(string); ok {
+				typed[key] = strings.ReplaceAll(
+					text,
+					"[new-api: tool result media moved to the following user message]",
+					"[new-api: tool result media attached as native media]",
+				)
+				continue
+			}
+			replaceToolMediaMarker(item)
+		}
+	case []any:
+		for index, item := range typed {
+			if text, ok := item.(string); ok {
+				typed[index] = strings.ReplaceAll(
+					text,
+					"[new-api: tool result media moved to the following user message]",
+					"[new-api: tool result media attached as native media]",
+				)
+				continue
+			}
+			replaceToolMediaMarker(item)
+		}
+	}
 }

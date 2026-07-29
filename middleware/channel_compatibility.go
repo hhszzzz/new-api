@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service/channelcompat"
 	"github.com/QuantumNous/new-api/service/clientpolicy"
+	"github.com/QuantumNous/new-api/service/protocolstate"
 	"github.com/gin-gonic/gin"
 )
 
@@ -58,7 +59,26 @@ func BuildChannelCandidateClassifier(c *gin.Context, modelName string) model.Cha
 	features := requestProtocolFeatures(c, protocol)
 	modelName = strings.TrimSpace(modelName)
 	return func(channel *model.Channel) model.ChannelCandidateClass {
-		plan := channelcompat.PlanForRequest(channel, protocol, modelName, requestPath, features)
+		plans := channelcompat.PlansForRequest(channel, protocol, modelName, requestPath, features)
+		if len(plans) == 0 {
+			return model.ChannelCandidateIncompatible
+		}
+		plan := plans[0]
+		if plan.SelectionMode == dto.ProtocolSelectionModeAuto && plan.Status != channelcompat.StatusIncompatible {
+			if preferred, found := channelcompat.LookupProtocolAffinity(channel, plan.EffectiveUpstreamModel, protocol); found {
+				if preferredPlan, ok := findAutomaticProtocolPlan(plans, preferred); ok {
+					plan = preferredPlan
+				}
+			} else if capabilities := channel.GetOtherSettings().ProtocolCapabilities; capabilities != nil {
+				configuredProtocols, _ := capabilities.Resolve(plan.EffectiveUpstreamModel)
+				if len(configuredProtocols) == 0 {
+					// An unprobed automatic channel has no evidence that the entry
+					// protocol is native. Keep it eligible, but do not let it outrank
+					// a channel that explicitly declares native support.
+					return model.ChannelCandidateConvertible
+				}
+			}
+		}
 		switch plan.Status {
 		case channelcompat.StatusNative:
 			return model.ChannelCandidateNative
@@ -170,17 +190,11 @@ func selectAutomaticProtocolPlan(c *gin.Context, channel *model.Channel, plans [
 		protocolOrder = append(protocolOrder, plan.UpstreamProtocol)
 	}
 	if preferred, found := channelcompat.LookupProtocolAffinity(channel, firstPlan.EffectiveUpstreamModel, firstPlan.RequestProtocol); found {
-		for index, protocol := range protocolOrder {
-			if protocol != preferred {
-				continue
-			}
-			reordered := make([]channelcompat.Protocol, 0, len(protocolOrder))
-			reordered = append(reordered, preferred)
-			reordered = append(reordered, protocolOrder[:index]...)
-			reordered = append(reordered, protocolOrder[index+1:]...)
-			protocolOrder = reordered
-			break
-		}
+		protocolOrder = prioritizeAutomaticProtocol(protocolOrder, preferred)
+	}
+	if binding, ok := common.GetContextKeyType[*protocolstate.SelectionBinding](c, constant.ContextKeyProtocolStateBinding); ok &&
+		binding != nil && binding.ChannelID == channel.Id && binding.UpstreamProtocol != "" {
+		protocolOrder = prioritizeAutomaticProtocol(protocolOrder, binding.UpstreamProtocol)
 	}
 
 	attempt := &autoProtocolAttempt{
@@ -197,6 +211,20 @@ func selectAutomaticProtocolPlan(c *gin.Context, channel *model.Channel, plans [
 		}
 	}
 	return firstPlan
+}
+
+func prioritizeAutomaticProtocol(protocols []channelcompat.Protocol, preferred channelcompat.Protocol) []channelcompat.Protocol {
+	for index, protocol := range protocols {
+		if protocol != preferred || index == 0 {
+			continue
+		}
+		reordered := make([]channelcompat.Protocol, 0, len(protocols))
+		reordered = append(reordered, preferred)
+		reordered = append(reordered, protocols[:index]...)
+		reordered = append(reordered, protocols[index+1:]...)
+		return reordered
+	}
+	return protocols
 }
 
 func findAutomaticProtocolPlan(plans []channelcompat.ProtocolPlan, protocol channelcompat.Protocol) (channelcompat.ProtocolPlan, bool) {
@@ -243,7 +271,7 @@ func PendingAutoProtocolRetryChannelID(c *gin.Context) (int, bool) {
 }
 
 func CommitAutoProtocolAffinity(c *gin.Context) {
-	if c == nil {
+	if c == nil || !protocolstate.AttemptCompleted(c) {
 		return
 	}
 	attempt, ok := common.GetContextKeyType[*autoProtocolAttempt](c, constant.ContextKeyProtocolAutoAttempt)

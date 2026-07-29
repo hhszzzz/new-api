@@ -48,18 +48,27 @@ func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
 
 func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 	baseURL := info.ChannelBaseUrl
+	finalFormat := info.GetFinalRequestRelayFormat()
 	if specialPlan, ok := channelconstant.ChannelSpecialBases[baseURL]; ok {
-		if info.RelayFormat == types.RelayFormatClaude {
-			return fmt.Sprintf("%s/v1/messages", specialPlan.ClaudeBaseURL), nil
+		if finalFormat == types.RelayFormatClaude {
+			requestPath := "/v1/messages"
+			if info.IsMessagesCountTokensRequest() {
+				requestPath += "/count_tokens"
+			}
+			return fmt.Sprintf("%s%s", specialPlan.ClaudeBaseURL, requestPath), nil
 		}
-		if info.RelayFormat == types.RelayFormatOpenAI {
+		if finalFormat == types.RelayFormatOpenAI {
 			return fmt.Sprintf("%s/chat/completions", specialPlan.OpenAIBaseURL), nil
 		}
 	}
 
-	switch info.RelayFormat {
+	switch finalFormat {
 	case types.RelayFormatClaude:
-		return fmt.Sprintf("%s/anthropic/v1/messages", info.ChannelBaseUrl), nil
+		requestPath := "/anthropic/v1/messages"
+		if info.IsMessagesCountTokensRequest() {
+			requestPath += "/count_tokens"
+		}
+		return fmt.Sprintf("%s%s", info.ChannelBaseUrl, requestPath), nil
 	default:
 		if info.RelayMode == constant.RelayModeRerank {
 			return fmt.Sprintf("%s/v1/rerank", info.ChannelBaseUrl), nil
@@ -77,6 +86,9 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) error {
 	channel.SetupApiRequestHeader(info, c, req)
 	req.Set("Authorization", fmt.Sprintf("Bearer %s", info.ApiKey))
+	if info.GetFinalRequestRelayFormat() == types.RelayFormatClaude {
+		claude.ApplyClaudeRequestHeaders(c, req, info)
+	}
 	return nil
 }
 
@@ -116,7 +128,7 @@ func (a *Adaptor) ConvertEmbeddingRequest(c *gin.Context, info *relaycommon.Rela
 }
 
 func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage any, err *types.NewAPIError) {
-	switch info.RelayFormat {
+	switch info.GetFinalRequestRelayFormat() {
 	case types.RelayFormatClaude:
 		adaptor := claude.Adaptor{}
 		return adaptor.DoResponse(c, resp, info)

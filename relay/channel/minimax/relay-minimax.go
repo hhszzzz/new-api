@@ -14,9 +14,13 @@ func GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 	if baseUrl == "" {
 		baseUrl = channelconstant.ChannelBaseURLs[channelconstant.ChannelTypeMiniMax]
 	}
-	switch info.RelayFormat {
+	switch info.GetFinalRequestRelayFormat() {
 	case types.RelayFormatClaude:
-		return fmt.Sprintf("%s/anthropic/v1/messages", info.ChannelBaseUrl), nil
+		requestPath := "/anthropic/v1/messages"
+		if info.IsMessagesCountTokensRequest() {
+			requestPath += "/count_tokens"
+		}
+		return fmt.Sprintf("%s%s", info.ChannelBaseUrl, requestPath), nil
 	default:
 		switch info.RelayMode {
 		case constant.RelayModeChatCompletions:

@@ -38,11 +38,7 @@ func (a *Adaptor) ConvertGeminiRequest(*gin.Context, *relaycommon.RelayInfo, *dt
 }
 
 func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayInfo, req *dto.ClaudeRequest) (any, error) {
-	if _, ok := channelconstant.ChannelSpecialBases[info.ChannelBaseUrl]; ok {
-		adaptor := claude.Adaptor{}
-		return adaptor.ConvertClaudeRequest(c, info, req)
-	}
-	adaptor := openai.Adaptor{}
+	adaptor := claude.Adaptor{}
 	return adaptor.ConvertClaudeRequest(c, info, req)
 }
 
@@ -243,15 +239,16 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 	}
 	specialPlan, hasSpecialPlan := channelconstant.ChannelSpecialBases[baseUrl]
 
-	switch info.RelayFormat {
+	switch info.GetFinalRequestRelayFormat() {
 	case types.RelayFormatClaude:
+		requestPath := "/v1/messages"
+		if info.IsMessagesCountTokensRequest() {
+			requestPath += "/count_tokens"
+		}
 		if hasSpecialPlan && specialPlan.ClaudeBaseURL != "" {
-			return fmt.Sprintf("%s/v1/messages", specialPlan.ClaudeBaseURL), nil
+			return fmt.Sprintf("%s%s", specialPlan.ClaudeBaseURL, requestPath), nil
 		}
-		if strings.HasPrefix(info.UpstreamModelName, "bot") {
-			return fmt.Sprintf("%s/api/v3/bots/chat/completions", baseUrl), nil
-		}
-		return fmt.Sprintf("%s/api/v3/chat/completions", baseUrl), nil
+		return fmt.Sprintf("%s%s", strings.TrimRight(baseUrl, "/"), requestPath), nil
 	default:
 		switch info.RelayMode {
 		case constant.RelayModeChatCompletions:
@@ -299,6 +296,9 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *rel
 	}
 
 	req.Set("Authorization", "Bearer "+info.ApiKey)
+	if info.GetFinalRequestRelayFormat() == types.RelayFormatClaude {
+		claude.ApplyClaudeRequestHeaders(c, req, info)
+	}
 	return nil
 }
 
@@ -346,11 +346,9 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 }
 
 func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage any, err *types.NewAPIError) {
-	if info.RelayFormat == types.RelayFormatClaude {
-		if _, ok := channelconstant.ChannelSpecialBases[info.ChannelBaseUrl]; ok {
-			adaptor := claude.Adaptor{}
-			return adaptor.DoResponse(c, resp, info)
-		}
+	if info.GetFinalRequestRelayFormat() == types.RelayFormatClaude {
+		adaptor := claude.Adaptor{}
+		return adaptor.DoResponse(c, resp, info)
 	}
 
 	if info.RelayMode == constant.RelayModeAudioSpeech {

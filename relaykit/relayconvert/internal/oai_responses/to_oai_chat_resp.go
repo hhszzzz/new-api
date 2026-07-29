@@ -14,10 +14,13 @@ const (
 	responsesEventCompleted                = "response.completed"
 	responsesEventDone                     = "response.done"
 	responsesEventIncomplete               = "response.incomplete"
+	responsesEventCancelled                = "response.cancelled"
+	responsesEventCanceled                 = "response.canceled"
 	responsesEventFailed                   = "response.failed"
 	responsesEventError                    = "error"
 	responsesEventLegacyError              = "response.error"
 	responsesEventOutputTextDelta          = "response.output_text.delta"
+	responsesEventOutputTextDone           = "response.output_text.done"
 	responsesEventOutputItemAdded          = "response.output_item.added"
 	responsesEventOutputItemDone           = "response.output_item.done"
 	responsesEventFunctionArgsDelta        = "response.function_call_arguments.delta"
@@ -28,8 +31,11 @@ const (
 	responsesEventReasoningSummaryDone     = "response.reasoning_summary_text.done"
 	responsesEventReasoningTextDelta       = "response.reasoning_text.delta"
 	responsesEventReasoningTextDone        = "response.reasoning_text.done"
+	responsesEventRefusalDelta             = "response.refusal.delta"
+	responsesEventRefusalDone              = "response.refusal.done"
 	responsesOutputTypeFunctionCall        = "function_call"
 	responsesOutputTypeCustomToolCall      = "custom_tool_call"
+	responsesOutputTypeToolSearchCall      = "tool_search_call"
 	responsesOutputTypeMessage             = "message"
 	responsesOutputTypeReasoning           = "reasoning"
 	responsesIncompleteReasonContentFilter = "content_filter"
@@ -60,6 +66,9 @@ func ResponsesResponseToChatCompletionsResponse(resp *dto.OpenAIResponsesRespons
 	if resp == nil {
 		return nil, nil, errors.New("response is nil")
 	}
+	if err := validateResponsesTerminalResponse(resp); err != nil {
+		return nil, nil, err
+	}
 
 	text := ExtractOutputTextFromResponses(resp)
 	reasoning := ExtractReasoningTextFromResponses(resp)
@@ -74,7 +83,7 @@ func ResponsesResponseToChatCompletionsResponse(resp *dto.OpenAIResponsesRespons
 			if !isResponsesToolOutputType(out.Type) {
 				continue
 			}
-			name := strings.TrimSpace(out.Name)
+			name := responsesToolCallName(&out)
 			if name == "" {
 				continue
 			}
@@ -87,7 +96,7 @@ func ResponsesResponseToChatCompletionsResponse(resp *dto.OpenAIResponsesRespons
 				Type: "function",
 				Function: dto.FunctionResponse{
 					Name:      name,
-					Arguments: out.ArgumentsString(),
+					Arguments: responsesToolCallArguments(&out),
 				},
 			})
 		}
@@ -194,6 +203,8 @@ func ExtractOutputTextFromResponses(resp *dto.OpenAIResponsesResponse) string {
 		for _, c := range out.Content {
 			if c.Type == "output_text" && c.Text != "" {
 				sb.WriteString(c.Text)
+			} else if c.Type == "refusal" && c.Refusal != "" {
+				sb.WriteString(c.Refusal)
 			}
 		}
 	}
@@ -201,9 +212,15 @@ func ExtractOutputTextFromResponses(resp *dto.OpenAIResponsesResponse) string {
 		return sb.String()
 	}
 	for _, out := range resp.Output {
+		if out.Type == responsesOutputTypeReasoning {
+			// Reasoning text must never leak into visible message content.
+			continue
+		}
 		for _, c := range out.Content {
 			if c.Text != "" {
 				sb.WriteString(c.Text)
+			} else if c.Refusal != "" {
+				sb.WriteString(c.Refusal)
 			}
 		}
 	}
@@ -261,6 +278,28 @@ func responseStatusString(resp *dto.OpenAIResponsesResponse) string {
 	return strings.TrimSpace(status)
 }
 
+func validateResponsesTerminalResponse(resp *dto.OpenAIResponsesResponse) error {
+	if resp == nil {
+		return errors.New("response is nil")
+	}
+	status := responseStatusString(resp)
+	if status != "failed" && status != "cancelled" && status != "canceled" && resp.Error == nil {
+		return nil
+	}
+	fallback := "Responses upstream returned an error"
+	if status == "failed" {
+		fallback = "Responses upstream failed"
+	} else if status == "cancelled" || status == "canceled" {
+		fallback = "Responses upstream cancelled the response"
+	}
+	if upstreamError := resp.GetOpenAIError(); upstreamError != nil {
+		if message := strings.TrimSpace(upstreamError.Message); message != "" {
+			return fmt.Errorf("%s: %s", fallback, message)
+		}
+	}
+	return errors.New(fallback)
+}
+
 func ensureIncompleteResponse(resp *dto.OpenAIResponsesResponse) *dto.OpenAIResponsesResponse {
 	if resp == nil {
 		resp = &dto.OpenAIResponsesResponse{}
@@ -272,7 +311,38 @@ func ensureIncompleteResponse(resp *dto.OpenAIResponsesResponse) *dto.OpenAIResp
 }
 
 func isResponsesToolOutputType(outputType string) bool {
-	return outputType == responsesOutputTypeFunctionCall || outputType == responsesOutputTypeCustomToolCall
+	return outputType == responsesOutputTypeFunctionCall || outputType == responsesOutputTypeCustomToolCall || outputType == responsesOutputTypeToolSearchCall
+}
+
+func responsesToolCallName(output *dto.ResponsesOutput) string {
+	if output == nil {
+		return ""
+	}
+	if output.Type == responsesOutputTypeToolSearchCall {
+		return "tool_search"
+	}
+	return strings.TrimSpace(output.Name)
+}
+
+func responsesToolCallArguments(output *dto.ResponsesOutput) string {
+	if output == nil {
+		return "{}"
+	}
+	switch output.Type {
+	case responsesOutputTypeCustomToolCall:
+		return customInputArguments(output.Input)
+	case responsesOutputTypeToolSearchCall:
+		if args := toolSearchArguments(output.Arguments); args != "" {
+			return args
+		}
+		return "{}"
+	default:
+		arguments := output.ArgumentsString()
+		if strings.TrimSpace(arguments) == "" {
+			return "{}"
+		}
+		return arguments
+	}
 }
 
 func responseStreamEventItemID(event *dto.ResponsesStreamResponse) string {

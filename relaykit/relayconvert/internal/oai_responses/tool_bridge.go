@@ -20,11 +20,12 @@ func prepareResponsesToolsForChat(c context.Context, req *dto.OpenAIResponsesReq
 	if err != nil {
 		return nil, nil, err
 	}
+	state := sharedbridge.NewToolState()
+	sharedbridge.SetToolState(c, state)
 	if len(tools) == 0 {
-		return nil, nil, nil
+		return nil, state, nil
 	}
 
-	state := sharedbridge.NewToolState()
 	chatTools := make([]dto.ToolCallRequest, 0, len(tools))
 	for _, tool := range tools {
 		converted, err := responsesToolToChatFunctions(tool, "", state)
@@ -34,9 +35,8 @@ func prepareResponsesToolsForChat(c context.Context, req *dto.OpenAIResponsesReq
 		chatTools = append(chatTools, converted...)
 	}
 	if len(chatTools) == 0 {
-		return nil, nil, nil
+		return nil, state, nil
 	}
-	sharedbridge.SetToolState(c, state)
 	return chatTools, state, nil
 }
 
@@ -46,11 +46,15 @@ func collectResponsesToolDeclarations(req *dto.OpenAIResponsesRequest) ([]map[st
 	}
 	tools := make([]map[string]any, 0)
 	if rawJSONPresent(req.Tools) {
-		var declared []map[string]any
+		var declared any
 		if err := kitutil.Unmarshal(req.Tools, &declared); err != nil {
 			return nil, fmt.Errorf("invalid tools: %w", err)
 		}
-		tools = append(tools, declared...)
+		parsed, err := toolMapsFromAny(declared)
+		if err != nil {
+			return nil, fmt.Errorf("invalid tools: %w", err)
+		}
+		tools = append(tools, parsed...)
 	}
 	if !rawJSONPresent(req.Input) || kitutil.GetJsonType(req.Input) != "array" {
 		return tools, nil
@@ -81,9 +85,24 @@ func toolMapsFromAny(value any) ([]map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	var tools []map[string]any
-	if err := kitutil.Unmarshal(raw, &tools); err != nil {
+	var entries []any
+	if err := kitutil.Unmarshal(raw, &entries); err != nil {
 		return nil, err
+	}
+	tools := make([]map[string]any, 0, len(entries))
+	for index, entry := range entries {
+		switch typed := entry.(type) {
+		case map[string]any:
+			tools = append(tools, typed)
+		case string:
+			name := strings.TrimSpace(typed)
+			if name == "" {
+				return nil, fmt.Errorf("tool %d has an empty string name", index)
+			}
+			tools = append(tools, map[string]any{"type": "custom", "name": name})
+		default:
+			return nil, fmt.Errorf("tool %d must be an object or string", index)
+		}
 	}
 	return tools, nil
 }
@@ -93,7 +112,16 @@ func responsesToolToChatFunctions(tool map[string]any, namespace string, state *
 	if toolType == "" {
 		toolType = "function"
 	}
-	name := strings.TrimSpace(kitutil.Interface2String(tool["name"]))
+	definition := tool
+	if toolType == "function" {
+		if nested, ok := tool["function"].(map[string]any); ok {
+			definition = nested
+		}
+	}
+	name := strings.TrimSpace(kitutil.Interface2String(definition["name"]))
+	if name == "" {
+		name = strings.TrimSpace(kitutil.Interface2String(tool["name"]))
+	}
 
 	switch toolType {
 	case "namespace":
@@ -103,7 +131,11 @@ func responsesToolToChatFunctions(tool map[string]any, namespace string, state *
 		if name == "" {
 			return nil, fmt.Errorf("namespace tool is missing name")
 		}
-		children, err := toolMapsFromAny(tool["tools"])
+		childrenValue, exists := tool["tools"]
+		if !exists {
+			childrenValue = tool["children"]
+		}
+		children, err := toolMapsFromAny(childrenValue)
 		if err != nil {
 			return nil, fmt.Errorf("invalid namespace tool %q: %w", name, err)
 		}
@@ -121,9 +153,6 @@ func responsesToolToChatFunctions(tool map[string]any, namespace string, state *
 		return out, nil
 	case "function", "custom", "freeform", "tool_search":
 	default:
-		if isDroppableResponsesHostedToolType(toolType) {
-			return nil, nil
-		}
 		return nil, fmt.Errorf("Responses tool type %q requires a native Responses upstream", toolType)
 	}
 
@@ -132,7 +161,7 @@ func responsesToolToChatFunctions(tool map[string]any, namespace string, state *
 			return nil, fmt.Errorf("tool_search cannot be nested in namespace %q", namespace)
 		}
 		if execution := strings.TrimSpace(kitutil.Interface2String(tool["execution"])); execution != "" && execution != "client" {
-			return nil, nil
+			return nil, fmt.Errorf("server-executed Responses tool_search requires a native Responses upstream")
 		}
 		name = "tool_search"
 	}
@@ -153,31 +182,77 @@ func responsesToolToChatFunctions(tool map[string]any, namespace string, state *
 		Namespace:    namespace,
 		UpstreamName: upstreamName,
 	}
+	if registeredName, exists := state.UpstreamName(kind, namespace, name); exists {
+		if registeredName == upstreamName {
+			return nil, nil
+		}
+		return nil, fmt.Errorf(
+			"Responses tool %q has inconsistent Chat names %q and %q",
+			qualifiedToolName(namespace, name),
+			registeredName,
+			upstreamName,
+		)
+	}
+	if existing, exists := state.ResolveUpstream(upstreamName); exists {
+		return nil, fmt.Errorf(
+			"Responses tool %q conflicts after Chat name encoding as %q with %q",
+			qualifiedToolName(namespace, name),
+			upstreamName,
+			qualifiedToolName(existing.Namespace, existing.Name),
+		)
+	}
 	if !state.Register(identity) {
 		return nil, fmt.Errorf("Responses tool %q conflicts after Chat name encoding as %q", qualifiedToolName(namespace, name), upstreamName)
 	}
 
-	description := kitutil.Interface2String(tool["description"])
-	parameters := normalizeChatFunctionParameters(tool["parameters"])
+	description := kitutil.Interface2String(definition["description"])
+	if strings.TrimSpace(description) == "" && definition != nil {
+		description = kitutil.Interface2String(tool["description"])
+	}
+	parameters := normalizeChatFunctionParameters(definition["parameters"])
 	var strict *bool
-	if value, ok := tool["strict"].(bool); ok {
+	if value, ok := definition["strict"].(bool); ok {
+		strict = kitutil.GetPointer(value)
+	} else if value, ok := tool["strict"].(bool); ok {
 		strict = kitutil.GetPointer(value)
 	}
 	if kind == sharedbridge.ToolKindCustom {
+		rawDefinition, err := kitutil.Marshal(tool)
+		if err != nil {
+			return nil, fmt.Errorf("encode Responses custom tool %q: %w", qualifiedToolName(namespace, name), err)
+		}
+		description = "Original tool definition:\n```json\n" + string(rawDefinition) + "\n```"
 		parameters = map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"input": map[string]any{
 					"type":        "string",
-					"description": "Raw input for the custom tool.",
+					"description": "Raw string input for the original custom tool. Preserve formatting exactly and follow the original tool definition embedded in the description.",
 				},
 			},
 			"required":             []string{"input"},
 			"additionalProperties": false,
 		}
 	}
-	if kind == sharedbridge.ToolKindToolSearch && strings.TrimSpace(description) == "" {
-		description = "Search and load tools available to the client for the current task."
+	if kind == sharedbridge.ToolKindToolSearch {
+		if strings.TrimSpace(description) == "" {
+			description = "Search and load Codex tools, plugins, connectors, and MCP namespaces for the current task."
+		}
+		parameters = map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"query": map[string]any{
+					"type":        "string",
+					"description": "Search query for tools or connectors to load.",
+				},
+				"limit": map[string]any{
+					"type":        "integer",
+					"description": "Maximum number of tool groups to return.",
+				},
+			},
+			"required":             []string{"query"},
+			"additionalProperties": false,
+		}
 	}
 
 	return []dto.ToolCallRequest{
@@ -208,7 +283,7 @@ func normalizeChatFunctionParameters(parameters any) map[string]any {
 	}
 }
 
-func isDroppableResponsesHostedToolType(toolType string) bool {
+func isResponsesHostedToolType(toolType string) bool {
 	toolType = strings.ToLower(strings.TrimSpace(toolType))
 	for _, prefix := range []string{
 		"web_search",
@@ -232,10 +307,10 @@ func isDroppableResponsesHostedToolType(toolType string) bool {
 	return false
 }
 
-func isDroppableResponsesHostedHistoryItem(itemType string) bool {
+func isResponsesHostedHistoryItem(itemType string) bool {
 	itemType = strings.ToLower(strings.TrimSpace(itemType))
 	for _, suffix := range []string{"_call", "_call_output", "_approval_request", "_approval_response", "_list_tools"} {
-		if strings.HasSuffix(itemType, suffix) && isDroppableResponsesHostedToolType(strings.TrimSuffix(itemType, suffix)) {
+		if strings.HasSuffix(itemType, suffix) && isResponsesHostedToolType(strings.TrimSuffix(itemType, suffix)) {
 			return true
 		}
 	}
@@ -280,11 +355,49 @@ func qualifiedToolName(namespace, name string) string {
 
 func upstreamToolName(state *sharedbridge.ToolState, kind sharedbridge.ToolKind, namespace, name string) (string, error) {
 	if state == nil {
-		return name, nil
+		return encodedChatToolName(kind, namespace, name), nil
+	}
+	upstream, ok := state.UpstreamName(kind, namespace, name)
+	if ok {
+		return upstream, nil
+	}
+
+	// Codex may replay a historical call after its declaration has fallen out of
+	// the current tools list. The historical call still has to reach the upstream
+	// model so that the adjacent tool result remains meaningful, but it must not
+	// become callable again in the current turn. Register only the reversible name
+	// mapping used by the history/response bridge; do not add a tool declaration.
+	upstream = encodedChatToolName(kind, namespace, name)
+	identity := sharedbridge.ToolIdentity{
+		Kind:         kind,
+		Name:         name,
+		Namespace:    namespace,
+		UpstreamName: upstream,
+	}
+	if existing, exists := state.ResolveUpstream(upstream); exists {
+		if existing.Kind == identity.Kind && existing.Name == identity.Name && existing.Namespace == identity.Namespace {
+			return upstream, nil
+		}
+		return "", fmt.Errorf(
+			"Responses historical tool %q conflicts with %q after name encoding as %q",
+			qualifiedToolName(namespace, name),
+			qualifiedToolName(existing.Namespace, existing.Name),
+			upstream,
+		)
+	}
+	if !state.Register(identity) {
+		return "", fmt.Errorf("Responses historical tool %q conflicts after name encoding as %q", qualifiedToolName(namespace, name), upstream)
+	}
+	return upstream, nil
+}
+
+func declaredUpstreamToolName(state *sharedbridge.ToolState, kind sharedbridge.ToolKind, namespace, name string) (string, error) {
+	if state == nil {
+		return "", fmt.Errorf("Responses tool_choice references undeclared tool %q", qualifiedToolName(namespace, name))
 	}
 	upstream, ok := state.UpstreamName(kind, namespace, name)
 	if !ok {
-		return "", fmt.Errorf("Responses tool call references undeclared tool %q", qualifiedToolName(namespace, name))
+		return "", fmt.Errorf("Responses tool_choice references undeclared tool %q", qualifiedToolName(namespace, name))
 	}
 	return upstream, nil
 }
@@ -307,21 +420,40 @@ func customInputArguments(input any) string {
 	return string(raw)
 }
 
+// toolSearchArguments normalizes a tool_search_call arguments payload to a JSON
+// object string, returning "" when the payload is absent so callers can keep
+// previously accumulated argument deltas instead of clobbering them.
 func toolSearchArguments(arguments any) string {
 	if arguments == nil {
-		return "{}"
+		return ""
 	}
-	if text, ok := arguments.(string); ok {
+	switch typed := arguments.(type) {
+	case json.RawMessage:
+		return rawJSONArguments([]byte(typed))
+	case []byte:
+		return rawJSONArguments(typed)
+	case string:
+		if strings.TrimSpace(typed) == "" {
+			return ""
+		}
 		var parsed any
-		if kitutil.Unmarshal([]byte(text), &parsed) == nil {
-			return text
+		if kitutil.Unmarshal([]byte(typed), &parsed) == nil {
+			return typed
 		}
 	}
 	raw, err := kitutil.Marshal(arguments)
 	if err != nil {
-		return "{}"
+		return ""
 	}
-	return string(raw)
+	return rawJSONArguments(raw)
+}
+
+func rawJSONArguments(raw []byte) string {
+	text := strings.TrimSpace(string(raw))
+	if text == "" || text == "null" {
+		return ""
+	}
+	return text
 }
 
 func decodeCustomToolInput(arguments string) string {

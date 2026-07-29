@@ -99,6 +99,7 @@ const (
 	ProtocolCapabilityChat      = "chat"
 	ProtocolCapabilityMessages  = "messages"
 	ProtocolCapabilityResponses = "responses"
+	ProtocolCapabilityGemini    = "gemini"
 
 	ProtocolSelectionModeStrict = "strict"
 	ProtocolSelectionModeAuto   = "auto"
@@ -169,7 +170,7 @@ func validateProtocolCapabilityList(field string, protocols []string) error {
 	for i, protocol := range protocols {
 		protocol = strings.TrimSpace(protocol)
 		switch protocol {
-		case ProtocolCapabilityChat, ProtocolCapabilityMessages, ProtocolCapabilityResponses:
+		case ProtocolCapabilityChat, ProtocolCapabilityMessages, ProtocolCapabilityResponses, ProtocolCapabilityGemini:
 		default:
 			return fmt.Errorf("%s[%d] has unsupported protocol %q", field, i, protocol)
 		}

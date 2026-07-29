@@ -60,6 +60,18 @@ type ClaudeConvertInfo struct {
 
 	ToolCallBaseIndex      int
 	ToolCallMaxIndexOffset int
+	ToolCallNextIndex      int
+	ToolCallStartedCount   int
+	ToolCalls              map[int]*ClaudeToolCallStreamState
+	UsedToolCallIDs        map[string]struct{}
+}
+
+type ClaudeToolCallStreamState struct {
+	ID               string
+	Name             string
+	PendingArguments string
+	Started          bool
+	BlockIndex       int
 }
 
 const (

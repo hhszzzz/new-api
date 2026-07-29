@@ -15,10 +15,6 @@
       "role": "assistant",
       "content": [
         {
-          "type": "text",
-          "text": "..."
-        },
-        {
           "type": "tool_use",
           "id": "call_1",
           "name": "get_weather",
@@ -34,7 +30,7 @@
         {
           "type": "tool_result",
           "content": "{\"result\":\"15 degrees\"}",
-          "tool_use_id": "call_0"
+          "tool_use_id": "call_1"
         }
       ]
     }

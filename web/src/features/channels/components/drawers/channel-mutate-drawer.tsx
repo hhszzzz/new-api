@@ -266,6 +266,7 @@ const PROTOCOL_LABEL_KEYS = {
   chat: 'Chat Completions',
   messages: 'Messages',
   responses: 'Responses',
+  gemini: 'Gemini',
 } as const
 
 const ADVANCED_SETTINGS_EXPANDED_KEY = 'channel-advanced-settings-expanded'
@@ -4900,7 +4901,7 @@ export function ChannelMutateDrawer({
                                       <FormDescription>
                                         {currentProtocolSelectionMode === 'auto'
                                           ? t(
-                                              'Automatic mode uses a remembered match first. Otherwise Codex tries Responses, Chat, then Messages; Claude Code tries Messages, Chat, then Responses.'
+                                              'Automatic mode uses a remembered match first. Otherwise Codex tries Responses, Chat, Messages, then Gemini; Claude Code tries Messages, Chat, Responses, then Gemini.'
                                             )
                                           : t(
                                               'Strict mode uses only the declared upstream protocols and never probes another wire format.'
@@ -4934,7 +4935,7 @@ export function ChannelMutateDrawer({
                                           onValueChange={field.onChange}
                                           variant='outline'
                                           spacing={2}
-                                          className='grid w-full grid-cols-1 sm:grid-cols-3'
+                                          className='grid w-full grid-cols-1 sm:grid-cols-4'
                                           aria-label={t(
                                             'Supported upstream protocols'
                                           )}
@@ -4955,7 +4956,7 @@ export function ChannelMutateDrawer({
                                       <FormDescription>
                                         {currentProtocolSelectionMode === 'auto'
                                           ? t(
-                                              'In automatic mode, leave this empty to try all three protocols; selecting protocols limits the probe set.'
+                                              'In automatic mode, leave this empty to try all supported protocols; selecting protocols limits the probe set.'
                                             )
                                           : t(
                                               'Declare only protocols that this upstream endpoint accepts directly.'

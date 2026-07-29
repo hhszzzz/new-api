@@ -294,11 +294,12 @@ type ToolCallRequest struct {
 }
 
 type FunctionRequest struct {
-	Description string `json:"description,omitempty"`
-	Name        string `json:"name"`
-	Parameters  any    `json:"parameters,omitempty"`
-	Arguments   string `json:"arguments,omitempty"`
-	Strict      *bool  `json:"strict,omitempty"`
+	Description          string `json:"description,omitempty"`
+	Name                 string `json:"name"`
+	Parameters           any    `json:"parameters,omitempty"`
+	ParametersJsonSchema any    `json:"parametersJsonSchema,omitempty"`
+	Arguments            string `json:"arguments,omitempty"`
+	Strict               *bool  `json:"strict,omitempty"`
 }
 
 type StreamOptions struct {
@@ -336,14 +337,17 @@ func (r *GeneralOpenAIRequest) ParseInput() []string {
 }
 
 type Message struct {
-	Role             string          `json:"role"`
-	Content          any             `json:"content"`
-	Name             *string         `json:"name,omitempty"`
-	Prefix           *bool           `json:"prefix,omitempty"`
-	ReasoningContent *string         `json:"reasoning_content,omitempty"`
-	Reasoning        *string         `json:"reasoning,omitempty"`
-	ToolCalls        json.RawMessage `json:"tool_calls,omitempty"`
-	ToolCallId       string          `json:"tool_call_id,omitempty"`
+	Role             string              `json:"role"`
+	Content          any                 `json:"content"`
+	Name             *string             `json:"name,omitempty"`
+	Prefix           *bool               `json:"prefix,omitempty"`
+	ReasoningContent *string             `json:"reasoning_content,omitempty"`
+	Reasoning        json.RawMessage     `json:"reasoning,omitempty"`
+	ReasoningDetails json.RawMessage     `json:"reasoning_details,omitempty"`
+	Refusal          *string             `json:"refusal,omitempty"`
+	ToolCalls        json.RawMessage     `json:"tool_calls,omitempty"`
+	FunctionCall     *LegacyFunctionCall `json:"function_call,omitempty"`
+	ToolCallId       string              `json:"tool_call_id,omitempty"`
 	parsedContent    []MediaContent
 	//parsedStringContent *string
 }
@@ -493,13 +497,14 @@ const (
 )
 
 func (m *Message) GetReasoningContent() string {
-	if m.ReasoningContent == nil && m.Reasoning == nil {
+	return extractChatReasoningText(m.ReasoningContent, m.Reasoning, m.ReasoningDetails)
+}
+
+func (m *Message) GetRefusalContent() string {
+	if m == nil || m.Refusal == nil {
 		return ""
 	}
-	if m.ReasoningContent != nil {
-		return *m.ReasoningContent
-	}
-	return *m.Reasoning
+	return *m.Refusal
 }
 
 func (m *Message) GetPrefix() bool {
@@ -514,14 +519,16 @@ func (m *Message) SetPrefix(prefix bool) {
 }
 
 func (m *Message) ParseToolCalls() []ToolCallRequest {
-	if m.ToolCalls == nil {
-		return nil
-	}
 	var toolCalls []ToolCallRequest
-	if err := json.Unmarshal(m.ToolCalls, &toolCalls); err == nil {
-		return toolCalls
+	if m.ToolCalls != nil {
+		if err := json.Unmarshal(m.ToolCalls, &toolCalls); err == nil && len(toolCalls) > 0 {
+			return toolCalls
+		}
 	}
-	return toolCalls
+	if m.FunctionCall != nil {
+		return []ToolCallRequest{m.FunctionCall.ToolCallRequest()}
+	}
+	return nil
 }
 
 func (m *Message) SetToolCalls(toolCalls any) {

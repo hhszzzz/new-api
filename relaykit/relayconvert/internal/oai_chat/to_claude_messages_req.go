@@ -36,6 +36,7 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 			claudeTool := dto.Tool{
 				Name:        tool.Function.Name,
 				Description: tool.Function.Description,
+				Strict:      tool.Function.Strict,
 			}
 			claudeTool.InputSchema = make(map[string]interface{})
 			if params["type"] != nil {
@@ -225,14 +226,40 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 		}
 	}
 
+	normalizedMessages := append([]dto.Message(nil), textRequest.Messages...)
+	pendingLegacyCallID := ""
+	for index := range normalizedMessages {
+		role := strings.TrimSpace(normalizedMessages[index].Role)
+		if role == "" {
+			role = "user"
+			normalizedMessages[index].Role = role
+		}
+		switch role {
+		case "assistant":
+			if normalizedMessages[index].FunctionCall != nil {
+				toolCalls := normalizedMessages[index].ParseToolCalls()
+				if len(toolCalls) > 0 {
+					pendingLegacyCallID = toolCalls[0].ID
+				}
+			}
+		case "function":
+			normalizedMessages[index].Role = "tool"
+			if strings.TrimSpace(normalizedMessages[index].ToolCallId) == "" {
+				normalizedMessages[index].ToolCallId = pendingLegacyCallID
+			}
+			pendingLegacyCallID = ""
+		case "tool":
+			pendingLegacyCallID = ""
+		default:
+			pendingLegacyCallID = ""
+		}
+	}
+
 	formatMessages := make([]dto.Message, 0)
 	lastMessage := dto.Message{
 		Role: "tool",
 	}
-	for i, message := range textRequest.Messages {
-		if message.Role == "" {
-			textRequest.Messages[i].Role = "user"
-		}
+	for _, message := range normalizedMessages {
 		if message.Role == "assistant" && message.GetReasoningContent() != "" &&
 			(message.Content == nil || (message.IsStringContent() && message.StringContent() == "")) &&
 			len(message.ParseToolCalls()) == 0 {
@@ -245,8 +272,10 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 		if message.Role == "tool" {
 			fmtMessage.ToolCallId = message.ToolCallId
 		}
-		if message.Role == "assistant" && message.ToolCalls != nil {
-			fmtMessage.ToolCalls = message.ToolCalls
+		if message.Role == "assistant" {
+			if toolCalls := message.ParseToolCalls(); len(toolCalls) > 0 {
+				fmtMessage.SetToolCalls(toolCalls)
+			}
 		}
 		if lastMessage.Role == message.Role && lastMessage.Role != "tool" {
 			if lastMessage.IsStringContent() && message.IsStringContent() {
@@ -254,7 +283,8 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 				formatMessages = formatMessages[:len(formatMessages)-1]
 			}
 		}
-		if fmtMessage.Content == nil || (fmtMessage.IsStringContent() && fmtMessage.StringContent() == "") {
+		if len(fmtMessage.ParseToolCalls()) == 0 &&
+			(fmtMessage.Content == nil || (fmtMessage.IsStringContent() && fmtMessage.StringContent() == "")) {
 			fmtMessage.SetStringContent("...")
 		}
 		formatMessages = append(formatMessages, fmtMessage)
@@ -307,6 +337,9 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 			Role: message.Role,
 		}
 		if message.Role == "tool" {
+			if strings.TrimSpace(message.ToolCallId) == "" {
+				return nil, fmt.Errorf("tool message is missing tool_call_id and cannot be matched to a tool use")
+			}
 			if len(claudeMessages) > 0 && claudeMessages[len(claudeMessages)-1].Role == "user" {
 				lastClaudeMessage := claudeMessages[len(claudeMessages)-1]
 				if content, ok := lastClaudeMessage.Content.(string); ok {
@@ -334,7 +367,7 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 					Content:   message.Content,
 				},
 			}
-		} else if message.IsStringContent() && message.ToolCalls == nil {
+		} else if message.IsStringContent() && len(message.ParseToolCalls()) == 0 {
 			text := message.StringContent()
 			if text == "" {
 				text = "..."
@@ -378,8 +411,8 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 				}
 			}
 
-			if message.ToolCalls != nil {
-				for _, toolCall := range message.ParseToolCalls() {
+			if toolCalls := message.ParseToolCalls(); len(toolCalls) > 0 {
+				for _, toolCall := range toolCalls {
 					inputObj := make(map[string]any)
 					if args := toolCall.Function.Arguments; args != "" {
 						if err := kitutil.Unmarshal([]byte(args), &inputObj); err != nil {

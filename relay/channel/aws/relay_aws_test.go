@@ -8,8 +8,10 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/relay/channel/claude"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
@@ -56,6 +58,94 @@ func TestBedrockClaudeEventsProduceResponsesSSE(t *testing.T) {
 	require.NotNil(t, claudeInfo.Usage)
 	assert.Equal(t, 4, claudeInfo.Usage.PromptTokens)
 	assert.Equal(t, 2, claudeInfo.Usage.CompletionTokens)
+}
+
+func TestRelayNovaResponseRestoresClientProtocol(t *testing.T) {
+	oldStreamingTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = oldStreamingTimeout })
+
+	tests := []struct {
+		name           string
+		format         types.RelayFormat
+		stream         bool
+		expectedOutput []string
+	}{
+		{
+			name:           "Responses JSON",
+			format:         types.RelayFormatOpenAIResponses,
+			expectedOutput: []string{`"object":"response"`, `"model":"public-nova"`, `"type":"output_text"`, `"text":"hello world"`},
+		},
+		{
+			name:           "Messages JSON",
+			format:         types.RelayFormatClaude,
+			expectedOutput: []string{`"type":"message"`, `"model":"public-nova"`, `"text":"hello world"`},
+		},
+		{
+			name:           "Responses SSE",
+			format:         types.RelayFormatOpenAIResponses,
+			stream:         true,
+			expectedOutput: []string{"event: response.created", "event: response.output_text.delta", `"delta":"hello world"`, "event: response.completed"},
+		},
+		{
+			name:           "Messages SSE",
+			format:         types.RelayFormatClaude,
+			stream:         true,
+			expectedOutput: []string{`"type":"message_start"`, `"type":"text_delta"`, `"text":"hello world"`, `"type":"message_stop"`},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+			info := &relaycommon.RelayInfo{
+				RelayFormat:     test.format,
+				RelayMode:       relayconstant.RelayModeChatCompletions,
+				IsStream:        test.stream,
+				OriginModelName: "public-nova",
+				ChannelMeta: &relaycommon.ChannelMeta{
+					UpstreamModelName: "amazon.nova-pro-v1:0",
+				},
+			}
+
+			responseErr, usage := relayNovaResponse(c, info, []byte(`{
+				"output":{"message":{"content":[{"text":"hello "},{"text":"world"}]}},
+				"stopReason":"end_turn",
+				"usage":{"inputTokens":4,"outputTokens":2,"totalTokens":6}
+			}`))
+
+			require.Nil(t, responseErr)
+			require.NotNil(t, usage)
+			assert.Equal(t, 4, usage.PromptTokens)
+			assert.Equal(t, 2, usage.CompletionTokens)
+			assert.Equal(t, 6, usage.TotalTokens)
+			for _, expected := range test.expectedOutput {
+				assert.Contains(t, recorder.Body.String(), expected)
+			}
+		})
+	}
+}
+
+func TestRelayNovaResponseRejectsMissingContent(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatOpenAIResponses,
+		RelayMode:       relayconstant.RelayModeChatCompletions,
+		OriginModelName: "public-nova",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "amazon.nova-pro-v1:0",
+		},
+	}
+
+	responseErr, usage := relayNovaResponse(c, info, []byte(`{"output":{"message":{"content":[]}}}`))
+
+	require.NotNil(t, responseErr)
+	assert.Contains(t, responseErr.Error(), "no content")
+	assert.Nil(t, usage)
 }
 
 func TestDoAwsClientRequest_AppliesRuntimeHeaderOverrideToAnthropicBeta(t *testing.T) {

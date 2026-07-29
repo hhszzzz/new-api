@@ -1,11 +1,17 @@
 package claudemessages
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
+	relaymedia "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/media"
+	sharedbridge "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/bridge"
+	sharedchat "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/chat"
+	sharedclaude "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/claude"
+	sharedtoolmedia "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/toolmedia"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 )
 
@@ -23,24 +29,46 @@ type openRouterRequestReasoning struct {
 }
 
 func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info convmeta.Meta) (*dto.GeneralOpenAIRequest, error) {
+	return ClaudeMessagesRequestToOpenAIChatWithContext(context.Background(), claudeRequest, info)
+}
+
+func ClaudeMessagesRequestToOpenAIChatWithContext(c context.Context, claudeRequest dto.ClaudeRequest, info convmeta.Meta) (*dto.GeneralOpenAIRequest, error) {
+	return claudeMessagesRequestToOpenAIChat(c, claudeRequest, info, sharedtoolmedia.AllSupported)
+}
+
+func ClaudeMessagesRequestToOpenAIChatForGeminiBridge(c context.Context, claudeRequest dto.ClaudeRequest, info convmeta.Meta) (*dto.GeneralOpenAIRequest, error) {
+	return claudeMessagesRequestToOpenAIChat(c, claudeRequest, info, sharedtoolmedia.InlineImagesOnly)
+}
+
+func claudeMessagesRequestToOpenAIChat(c context.Context, claudeRequest dto.ClaudeRequest, info convmeta.Meta, toolMediaScope sharedtoolmedia.Scope) (*dto.GeneralOpenAIRequest, error) {
+	if err := validateClaudeRequestConversion(&claudeRequest, "Chat Completions"); err != nil {
+		return nil, err
+	}
 	openAIRequest := dto.GeneralOpenAIRequest{
 		Model:       claudeRequest.Model,
 		Temperature: claudeRequest.Temperature,
+		Metadata:    append([]byte(nil), claudeRequest.Metadata...),
 	}
 	if claudeRequest.MaxTokens != nil {
-		openAIRequest.MaxTokens = kitutil.GetPointer(*claudeRequest.MaxTokens)
+		if sharedchat.UsesMaxCompletionTokens(claudeRequest.Model) {
+			openAIRequest.MaxCompletionTokens = kitutil.GetPointer(*claudeRequest.MaxTokens)
+		} else {
+			openAIRequest.MaxTokens = kitutil.GetPointer(*claudeRequest.MaxTokens)
+		}
 	}
 	if claudeRequest.TopP != nil {
 		openAIRequest.TopP = kitutil.GetPointer(*claudeRequest.TopP)
 	}
-	if claudeRequest.TopK != nil {
-		openAIRequest.TopK = kitutil.GetPointer(*claudeRequest.TopK)
-	}
 	if claudeRequest.Stream != nil {
 		openAIRequest.Stream = kitutil.GetPointer(*claudeRequest.Stream)
+		if *claudeRequest.Stream {
+			openAIRequest.StreamOptions = &dto.StreamOptions{IncludeUsage: true}
+		}
 	}
 
-	isOpenRouter := convmeta.OptionsOf(info).OpenRouterDialect
+	options := convmeta.OptionsOf(info)
+	isOpenRouter := options.OpenRouterDialect
+	preserveReasoningContent := options.PreserveChatReasoningContent
 	if isOpenRouter {
 		if effort := claudeRequest.GetEfforts(); effort != "" {
 			effortBytes, _ := kitutil.Marshal(effort)
@@ -65,20 +93,8 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info con
 			openAIRequest.Reasoning = reasoningJSON
 		}
 	} else {
-		if claudeRequest.Thinking != nil {
-			switch claudeRequest.Thinking.Type {
-			case "adaptive":
-				openAIRequest.ReasoningEffort = "high"
-			case "enabled":
-				switch budget := claudeRequest.Thinking.GetBudgetTokens(); {
-				case budget <= 1280:
-					openAIRequest.ReasoningEffort = "low"
-				case budget <= 2048:
-					openAIRequest.ReasoningEffort = "medium"
-				default:
-					openAIRequest.ReasoningEffort = "high"
-				}
-			}
+		if sharedchat.SupportsReasoningEffort(claudeRequest.Model) {
+			openAIRequest.ReasoningEffort = claudeRequestReasoningEffort(&claudeRequest)
 		}
 		if info != nil {
 			thinkingSuffix := "-thinking"
@@ -94,6 +110,28 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info con
 	} else if len(claudeRequest.StopSequences) > 1 {
 		openAIRequest.Stop = claudeRequest.StopSequences
 	}
+	responseTools, declaredTools, err := claudeToolsToResponses(claudeRequest.Tools)
+	if err != nil {
+		return nil, err
+	}
+	openAITools := make([]dto.ToolCallRequest, 0, len(responseTools))
+	for _, tool := range responseTools {
+		var strict *bool
+		if value, ok := tool["strict"].(bool); ok {
+			strict = kitutil.GetPointer(value)
+		}
+		openAITools = append(openAITools, dto.ToolCallRequest{
+			Type: "function",
+			Function: dto.FunctionRequest{
+				Name:        kitutil.Interface2String(tool["name"]),
+				Description: kitutil.Interface2String(tool["description"]),
+				Parameters:  tool["parameters"],
+				Strict:      strict,
+			},
+		})
+	}
+	openAIRequest.Tools = openAITools
+
 	if claudeRequest.ToolChoice != nil {
 		var toolChoice dto.ClaudeToolChoice
 		if value, ok := claudeRequest.ToolChoice.(string); ok {
@@ -114,13 +152,19 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info con
 		case "none":
 			openAIRequest.ToolChoice = "none"
 		case "tool":
-			if strings.TrimSpace(toolChoice.Name) == "" {
+			toolName := strings.TrimSpace(toolChoice.Name)
+			if toolName == "" {
 				return nil, fmt.Errorf("Claude tool_choice type tool requires a name")
+			}
+			if len(declaredTools) > 0 {
+				if _, exists := declaredTools[toolName]; !exists {
+					return nil, fmt.Errorf("Claude tool_choice references undeclared tool %q", toolName)
+				}
 			}
 			openAIRequest.ToolChoice = map[string]any{
 				"type": "function",
 				"function": map[string]any{
-					"name": toolChoice.Name,
+					"name": toolName,
 				},
 			}
 		default:
@@ -130,58 +174,62 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info con
 			openAIRequest.ParallelTooCalls = kitutil.GetPointer(!toolChoice.DisableParallelToolUse)
 		}
 	}
-
-	tools, _ := kitutil.Any2Type[[]dto.Tool](claudeRequest.Tools)
-	openAITools := make([]dto.ToolCallRequest, 0)
-	for _, claudeTool := range tools {
-		openAITool := dto.ToolCallRequest{
-			Type: "function",
-			Function: dto.FunctionRequest{
-				Name:        claudeTool.Name,
-				Description: claudeTool.Description,
-				Parameters:  claudeTool.InputSchema,
-			},
-		}
-		openAITools = append(openAITools, openAITool)
+	if len(openAITools) == 0 {
+		openAIRequest.ToolChoice = nil
+		openAIRequest.ParallelTooCalls = nil
 	}
-	openAIRequest.Tools = openAITools
 
 	openAIMessages := make([]dto.Message, 0)
 	if claudeRequest.System != nil {
 		if claudeRequest.IsStringSystem() && claudeRequest.GetStringSystem() != "" {
-			openAIMessage := dto.Message{
-				Role: "system",
+			systemText := sharedclaude.StripLeadingBillingHeader(claudeRequest.GetStringSystem())
+			if systemText != "" {
+				openAIMessage := dto.Message{Role: "system"}
+				openAIMessage.SetStringContent(systemText)
+				openAIMessages = append(openAIMessages, openAIMessage)
 			}
-			openAIMessage.SetStringContent(claudeRequest.GetStringSystem())
-			openAIMessages = append(openAIMessages, openAIMessage)
 		} else {
 			systems := claudeRequest.ParseSystem()
 			if len(systems) > 0 {
-				openAIMessage := dto.Message{
-					Role: "system",
+				for index, system := range systems {
+					if system.Type != "text" {
+						return nil, fmt.Errorf("Claude system content %d type %q cannot be converted to Chat Completions", index, system.Type)
+					}
 				}
 				isOpenRouterClaude := isOpenRouter && strings.HasPrefix(convmeta.UpstreamModelName(info), "anthropic/claude")
 				if isOpenRouterClaude {
 					systemMediaMessages := make([]dto.MediaContent, 0, len(systems))
 					for _, system := range systems {
+						text := sharedclaude.StripLeadingBillingHeader(system.GetText())
+						if text == "" {
+							continue
+						}
 						message := dto.MediaContent{
 							Type:         "text",
-							Text:         system.GetText(),
+							Text:         text,
 							CacheControl: system.CacheControl,
 						}
 						systemMediaMessages = append(systemMediaMessages, message)
 					}
-					openAIMessage.SetMediaContent(systemMediaMessages)
+					if len(systemMediaMessages) > 0 {
+						openAIMessage := dto.Message{Role: "system"}
+						openAIMessage.SetMediaContent(systemMediaMessages)
+						openAIMessages = append(openAIMessages, openAIMessage)
+					}
 				} else {
-					systemStr := ""
+					systemParts := make([]string, 0, len(systems))
 					for _, system := range systems {
-						if system.Text != nil {
-							systemStr += *system.Text
+						text := sharedclaude.StripLeadingBillingHeader(system.GetText())
+						if strings.TrimSpace(text) != "" {
+							systemParts = append(systemParts, text)
 						}
 					}
-					openAIMessage.SetStringContent(systemStr)
+					if len(systemParts) > 0 {
+						openAIMessage := dto.Message{Role: "system"}
+						openAIMessage.SetStringContent(strings.Join(systemParts, "\n\n"))
+						openAIMessages = append(openAIMessages, openAIMessage)
+					}
 				}
-				openAIMessages = append(openAIMessages, openAIMessage)
 			}
 		}
 	}
@@ -199,7 +247,8 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info con
 			}
 			var toolCalls []dto.ToolCallRequest
 			mediaMessages := make([]dto.MediaContent, 0, len(content))
-			var reasoning strings.Builder
+			pendingToolMedia := make([]dto.MediaContent, 0)
+			reasoningParts := make([]string, 0)
 
 			for contentIndex, mediaMsg := range content {
 				switch mediaMsg.Type {
@@ -210,35 +259,19 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info con
 						CacheControl: mediaMsg.CacheControl,
 					}
 					mediaMessages = append(mediaMessages, message)
-				case "image":
-					if mediaMsg.Source == nil {
-						return nil, fmt.Errorf("Claude message %d image content %d is missing image source", messageIndex, contentIndex)
-					}
-					var imageData string
-					switch mediaMsg.Source.Type {
-					case "base64":
-						mediaType := strings.TrimSpace(mediaMsg.Source.MediaType)
-						data := strings.TrimSpace(kitutil.Interface2String(mediaMsg.Source.Data))
-						if mediaType == "" || data == "" {
-							return nil, fmt.Errorf("Claude message %d image content %d has an incomplete base64 image source", messageIndex, contentIndex)
-						}
-						imageData = fmt.Sprintf("data:%s;base64,%s", mediaType, data)
-					case "url":
-						imageData = strings.TrimSpace(mediaMsg.Source.Url)
-						if imageData == "" {
-							return nil, fmt.Errorf("Claude message %d image content %d has an empty URL image source", messageIndex, contentIndex)
-						}
-					default:
-						return nil, fmt.Errorf("Claude message %d image content %d uses unsupported image source type %q", messageIndex, contentIndex, mediaMsg.Source.Type)
-					}
-					mediaMessage := dto.MediaContent{
-						Type:     "image_url",
-						ImageUrl: &dto.MessageImageUrl{Url: imageData},
+				case "image", "document":
+					mediaMessage, err := claudeMediaToChatContent(c, mediaMsg)
+					if err != nil {
+						return nil, fmt.Errorf("Claude message %d %s content %d: %w", messageIndex, mediaMsg.Type, contentIndex, err)
 					}
 					mediaMessages = append(mediaMessages, mediaMessage)
 				case "thinking":
-					if mediaMsg.Thinking != nil {
-						reasoning.WriteString(*mediaMsg.Thinking)
+					if preserveReasoningContent && mediaMsg.Thinking != nil && strings.TrimSpace(*mediaMsg.Thinking) != "" {
+						reasoningParts = append(reasoningParts, *mediaMsg.Thinking)
+					}
+				case "redacted_thinking":
+					if preserveReasoningContent {
+						reasoningParts = append(reasoningParts, "[redacted thinking]")
 					}
 				case "tool_use":
 					toolCall := dto.ToolCallRequest{
@@ -260,15 +293,25 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info con
 						Name:       &toolName,
 						ToolCallId: mediaMsg.ToolUseId,
 					}
-					if mediaMsg.IsStringContent() {
-						oaiToolMessage.SetStringContent(mediaMsg.GetStringContent())
-					} else {
-						mediaContents := mediaMsg.ParseMediaContent()
-						encodedJSON, _ := kitutil.Marshal(mediaContents)
-						oaiToolMessage.SetStringContent(string(encodedJSON))
+					toolText, toolMedia, err := claudeToolResultToChatContent(mediaMsg, toolMediaScope)
+					if err != nil {
+						return nil, fmt.Errorf("Claude message %d tool_result content %d: %w", messageIndex, contentIndex, err)
 					}
+					oaiToolMessage.SetStringContent(toolText)
 					openAIMessages = append(openAIMessages, oaiToolMessage)
+					if len(toolMedia) > 0 {
+						pendingToolMedia = append(pendingToolMedia, dto.MediaContent{
+							Type: "text",
+							Text: fmt.Sprintf("[new-api: media output of tool call %s]", mediaMsg.ToolUseId),
+						})
+						pendingToolMedia = append(pendingToolMedia, toolMedia...)
+					}
 				}
+			}
+			if len(pendingToolMedia) > 0 {
+				mediaMessage := dto.Message{Role: "user"}
+				mediaMessage.SetMediaContent(pendingToolMedia)
+				openAIMessages = append(openAIMessages, mediaMessage)
 			}
 
 			if len(toolCalls) > 0 {
@@ -277,8 +320,11 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info con
 			if len(mediaMessages) > 0 {
 				openAIMessage.SetMediaContent(mediaMessages)
 			}
-			if reasoning.Len() > 0 {
-				reasoningContent := reasoning.String()
+			if preserveReasoningContent && claudeMessage.Role == "assistant" && len(toolCalls) > 0 {
+				reasoningContent := "tool call"
+				if len(reasoningParts) > 0 {
+					reasoningContent = strings.Join(reasoningParts, "\n")
+				}
 				openAIMessage.ReasoningContent = &reasoningContent
 			}
 		}
@@ -297,4 +343,97 @@ func requestToJSONString(v interface{}) string {
 		return "{}"
 	}
 	return string(b)
+}
+
+func claudeMediaToChatContent(c context.Context, media dto.ClaudeMediaMessage) (dto.MediaContent, error) {
+	if media.Source == nil {
+		return dto.MediaContent{}, fmt.Errorf("%s source is missing", media.Type)
+	}
+	var data string
+	switch strings.TrimSpace(media.Source.Type) {
+	case "base64":
+		mediaType := strings.TrimSpace(media.Source.MediaType)
+		payload := strings.TrimSpace(kitutil.Interface2String(media.Source.Data))
+		if mediaType == "" || payload == "" {
+			return dto.MediaContent{}, fmt.Errorf("base64 source is incomplete")
+		}
+		data = fmt.Sprintf("data:%s;base64,%s", mediaType, payload)
+	case "url":
+		data = strings.TrimSpace(media.Source.Url)
+		if data == "" {
+			return dto.MediaContent{}, fmt.Errorf("URL source is empty")
+		}
+	default:
+		return dto.MediaContent{}, fmt.Errorf("unsupported source type %q", media.Source.Type)
+	}
+	if media.Type == "image" {
+		return dto.MediaContent{
+			Type:     dto.ContentTypeImageURL,
+			ImageUrl: &dto.MessageImageUrl{Url: data},
+		}, nil
+	}
+	filename := strings.TrimSpace(media.Title)
+	if filename == "" {
+		filename = strings.TrimSpace(media.Filename)
+	}
+	if filename == "" {
+		filename = "document.pdf"
+	}
+	if strings.TrimSpace(media.Source.Type) == "url" {
+		base64Data, mimeType, err := relaymedia.ResolveBase64Data(c, media.ToFileSource(), "formatting Claude document for Chat Completions")
+		if err != nil {
+			return dto.MediaContent{}, fmt.Errorf("get document data failed: %w", err)
+		}
+		if strings.TrimSpace(mimeType) == "" {
+			mimeType = "application/pdf"
+		}
+		data = fmt.Sprintf("data:%s;base64,%s", mimeType, base64Data)
+	}
+	return dto.MediaContent{
+		Type: dto.ContentTypeFile,
+		File: &dto.MessageFile{
+			FileName: filename,
+			FileData: data,
+		},
+	}, nil
+}
+
+func claudeToolResultToChatContent(result dto.ClaudeMediaMessage, scope sharedtoolmedia.Scope) (string, []dto.MediaContent, error) {
+	prefix := ""
+	if result.IsError != nil && *result.IsError {
+		prefix = sharedbridge.ClaudeToolResultErrorMarker
+	}
+	if result.Content == nil {
+		return prefix, nil, nil
+	}
+	plan, err := sharedtoolmedia.PlanChatToolOutputWithScope(result.Content, scope)
+	if err != nil {
+		return "", nil, err
+	}
+	if plan != nil {
+		content := plan.Content
+		if prefix != "" && content != "" {
+			content = prefix + "\n" + content
+		} else if prefix != "" {
+			content = prefix
+		}
+		return content, plan.Media, nil
+	}
+
+	content := ""
+	if result.IsStringContent() {
+		content = result.GetStringContent()
+	} else {
+		encoded, err := kitutil.Marshal(result.Content)
+		if err != nil {
+			return "", nil, err
+		}
+		content = string(encoded)
+	}
+	if prefix != "" && content != "" {
+		content = prefix + "\n" + content
+	} else if prefix != "" {
+		content = prefix
+	}
+	return content, nil, nil
 }

@@ -1,11 +1,13 @@
 package gemini
 
 import (
+	"net/http/httptest"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -43,7 +45,6 @@ func TestConvertOpenAIResponsesRequestToGeminiFunctionToolAndChoice(t *testing.T
 					},
 				},
 			},
-			{"type": "custom", "name": "freeform"},
 		}),
 		ToolChoice: mustGeminiRawMessage(t, map[string]any{
 			"type": "function",
@@ -59,6 +60,29 @@ func TestConvertOpenAIResponsesRequestToGeminiFunctionToolAndChoice(t *testing.T
 	require.NotNil(t, got.ToolConfig.FunctionCallingConfig)
 	assert.Equal(t, dto.FunctionCallingConfigMode("ANY"), got.ToolConfig.FunctionCallingConfig.Mode)
 	assert.Equal(t, []string{"lookup"}, got.ToolConfig.FunctionCallingConfig.AllowedFunctionNames)
+}
+
+func TestConvertOpenAIResponsesRequestToGeminiRejectsUndeclaredToolChoice(t *testing.T) {
+	request := dto.OpenAIResponsesRequest{
+		Model: "gemini-test",
+		Input: mustGeminiRawMessage(t, "lookup weather"),
+		ToolChoice: mustGeminiRawMessage(t, map[string]any{
+			"type": "function",
+			"name": "lookup",
+		}),
+	}
+
+	info := &relaycommon.RelayInfo{
+		OriginModelName: request.Model,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: request.Model,
+		},
+	}
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	_, err := (&Adaptor{}).ConvertOpenAIResponsesRequest(ctx, info, request)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `undeclared tool "lookup"`)
 }
 
 func TestConvertOpenAIResponsesRequestToGeminiFunctionCallConversation(t *testing.T) {
@@ -103,54 +127,123 @@ func TestConvertOpenAIResponsesRequestToGeminiFunctionCallConversation(t *testin
 	assert.Equal(t, map[string]interface{}{"ok": true}, got.Contents[1].Parts[0].FunctionResponse.Response)
 }
 
-func TestConvertOpenAIResponsesRequestToGeminiSkipsCustomToolCalls(t *testing.T) {
+func TestConvertOpenAIResponsesRequestToGeminiLowersClientToolHistory(t *testing.T) {
 	got := mustConvertResponsesToGemini(t, dto.OpenAIResponsesRequest{
 		Model: "gemini-test",
 		Input: mustGeminiRawMessage(t, []map[string]any{
 			{
-				"role": "assistant",
-				"content": []map[string]any{
-					{"type": "output_text", "text": "before custom"},
-				},
+				"type":    "reasoning",
+				"summary": []map[string]any{{"type": "summary_text", "text": "inspect"}},
 			},
 			{
-				"type":    "custom_tool_call",
-				"call_id": "call_custom",
-				"name":    "apply_patch",
-				"input":   "patch body",
+				"type":  "additional_tools",
+				"tools": []map[string]any{{"type": "function", "name": "lookup", "parameters": map[string]any{"type": "object"}}},
 			},
 			{
-				"type":    "custom_tool_call_output",
-				"call_id": "call_custom",
-				"output":  "ok",
+				"type":      "tool_search_call",
+				"call_id":   "ts_1",
+				"arguments": map[string]any{"queries": []string{"look"}},
+			},
+			{
+				"type":    "tool_search_output",
+				"call_id": "ts_1",
+				"tools":   []map[string]any{{"type": "function", "name": "lookup"}},
 			},
 			{
 				"type":    "function_call_output",
-				"call_id": "call_custom",
-				"output":  "legacy custom output",
+				"call_id": "call_orphan",
+				"output":  "zombie output",
 			},
 			{
 				"role":    "user",
-				"content": "next turn",
+				"content": "hi",
 			},
-		}),
-		Tools: mustGeminiRawMessage(t, []map[string]any{
-			{"type": "custom", "name": "apply_patch"},
-			{"type": "unknown", "name": "unknown"},
 		}),
 	})
 
-	assert.Empty(t, got.GetTools())
-	require.Len(t, got.Contents, 2)
+	// additional_tools declarations are lifted into the Gemini tools list.
+	assert.Equal(t, "lookup", gjson.GetBytes(got.Tools, "0.functionDeclarations.0.name").String())
+
+	require.Len(t, got.Contents, 3)
 	assert.Equal(t, "model", got.Contents[0].Role)
-	require.Len(t, got.Contents[0].Parts, 1)
-	assert.Equal(t, "before custom", got.Contents[0].Parts[0].Text)
-	assert.Nil(t, got.Contents[0].Parts[0].FunctionCall)
+	functionCall := got.Contents[0].Parts[0].FunctionCall
+	require.NotNil(t, functionCall)
+	assert.Equal(t, "tool_search", functionCall.FunctionName)
+	assert.Equal(t, map[string]any{"queries": []any{"look"}}, functionCall.Arguments)
 
 	assert.Equal(t, "user", got.Contents[1].Role)
-	require.Len(t, got.Contents[1].Parts, 1)
-	assert.Equal(t, "next turn", got.Contents[1].Parts[0].Text)
-	assert.Nil(t, got.Contents[1].Parts[0].FunctionResponse)
+	functionResponse := got.Contents[1].Parts[0].FunctionResponse
+	require.NotNil(t, functionResponse)
+	assert.Equal(t, "tool_search", functionResponse.Name)
+	require.NotNil(t, functionResponse.Response)
+
+	assert.Equal(t, "user", got.Contents[2].Role)
+	assert.Equal(t, "hi", got.Contents[2].Parts[0].Text)
+}
+
+func TestConvertOpenAIResponsesRequestToGeminiRejectsLossyToolsAndHistory(t *testing.T) {
+	tests := []struct {
+		name  string
+		tools any
+		input any
+		want  string
+	}{
+		{
+			name:  "hosted tool declaration",
+			tools: []map[string]any{{"type": "web_search"}},
+			input: "hello",
+			want:  `tool type "web_search" requires a native Responses upstream`,
+		},
+		{
+			name:  "namespace tool without children",
+			tools: []map[string]any{{"type": "namespace", "name": "workspace", "tools": []any{}}},
+			input: "hello",
+			want:  `namespace tool "workspace" has no child tools`,
+		},
+		{
+			name: "hosted history item",
+			input: []map[string]any{{
+				"type": "web_search_call",
+			}},
+			want: `input item type "web_search_call" cannot be converted losslessly`,
+		},
+		{
+			name: "unsupported content block",
+			input: []map[string]any{{
+				"type": "message",
+				"role": "assistant",
+				"content": []map[string]any{{
+					"type":    "refusal",
+					"refusal": "cannot comply",
+				}},
+			}},
+			want: `content type "refusal" cannot be converted losslessly`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := dto.OpenAIResponsesRequest{
+				Model: "gemini-test",
+				Input: mustGeminiRawMessage(t, test.input),
+			}
+			if test.tools != nil {
+				request.Tools = mustGeminiRawMessage(t, test.tools)
+			}
+			info := &relaycommon.RelayInfo{
+				OriginModelName: request.Model,
+				ChannelMeta: &relaycommon.ChannelMeta{
+					UpstreamModelName: request.Model,
+				},
+			}
+
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			_, err := (&Adaptor{}).ConvertOpenAIResponsesRequest(ctx, info, request)
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), test.want)
+		})
+	}
 }
 
 func mustConvertResponsesToGemini(t *testing.T, req dto.OpenAIResponsesRequest) *dto.GeminiChatRequest {
@@ -161,7 +254,8 @@ func mustConvertResponsesToGemini(t *testing.T, req dto.OpenAIResponsesRequest) 
 			UpstreamModelName: req.Model,
 		},
 	}
-	got, err := (&Adaptor{}).ConvertOpenAIResponsesRequest(nil, info, req)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	got, err := (&Adaptor{}).ConvertOpenAIResponsesRequest(ctx, info, req)
 	require.NoError(t, err)
 	geminiReq, ok := got.(*dto.GeminiChatRequest)
 	require.True(t, ok)

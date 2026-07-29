@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service/modelmapping"
 	"github.com/QuantumNous/new-api/setting/model_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 )
 
 const (
@@ -23,18 +24,62 @@ const (
 )
 
 type RequestFeatureSet struct {
-	Stream               bool     `json:"stream"`
-	HasPreviousResponse  bool     `json:"has_previous_response"`
-	HasConversation      bool     `json:"has_conversation"`
-	HasPrompt            bool     `json:"has_prompt"`
-	HasContextManagement bool     `json:"has_context_management"`
-	HasThinking          bool     `json:"has_thinking"`
-	HasCustomTools       bool     `json:"has_custom_tools"`
-	HasNamespaceTools    bool     `json:"has_namespace_tools"`
-	HasToolSearch        bool     `json:"has_tool_search"`
-	HasAdditionalTools   bool     `json:"has_additional_tools"`
-	ContentTypes         []string `json:"content_types,omitempty"`
-	HostedToolTypes      []string `json:"hosted_tool_types,omitempty"`
+	Stream                bool     `json:"stream"`
+	HasPreviousResponse   bool     `json:"has_previous_response"`
+	HasConversation       bool     `json:"has_conversation"`
+	HasPrompt             bool     `json:"has_prompt"`
+	HasContextManagement  bool     `json:"has_context_management"`
+	HasThinking           bool     `json:"has_thinking"`
+	HasCustomTools        bool     `json:"has_custom_tools"`
+	HasNamespaceTools     bool     `json:"has_namespace_tools"`
+	HasToolSearch         bool     `json:"has_tool_search"`
+	HasAdditionalTools    bool     `json:"has_additional_tools"`
+	HasStopSequences      bool     `json:"has_stop_sequences"`
+	HasTopK               bool     `json:"has_top_k"`
+	ContentTypes          []string `json:"content_types,omitempty"`
+	DeclaredHostedTools   []string `json:"declared_hosted_tools,omitempty"`
+	HistoricalHostedTools []string `json:"historical_hosted_tools,omitempty"`
+	MessagesNativeFields  []string `json:"messages_native_fields,omitempty"`
+}
+
+func MergeRequestFeatureSets(featureSets ...RequestFeatureSet) RequestFeatureSet {
+	merged := RequestFeatureSet{}
+	contentTypes := make(map[string]struct{})
+	declaredHostedTools := make(map[string]struct{})
+	historicalHostedTools := make(map[string]struct{})
+	messagesNativeFields := make(map[string]struct{})
+	appendUnique := func(target *[]string, seen map[string]struct{}, values []string) {
+		for _, value := range values {
+			value = strings.TrimSpace(value)
+			if value == "" {
+				continue
+			}
+			if _, exists := seen[value]; exists {
+				continue
+			}
+			seen[value] = struct{}{}
+			*target = append(*target, value)
+		}
+	}
+	for _, features := range featureSets {
+		merged.Stream = merged.Stream || features.Stream
+		merged.HasPreviousResponse = merged.HasPreviousResponse || features.HasPreviousResponse
+		merged.HasConversation = merged.HasConversation || features.HasConversation
+		merged.HasPrompt = merged.HasPrompt || features.HasPrompt
+		merged.HasContextManagement = merged.HasContextManagement || features.HasContextManagement
+		merged.HasThinking = merged.HasThinking || features.HasThinking
+		merged.HasCustomTools = merged.HasCustomTools || features.HasCustomTools
+		merged.HasNamespaceTools = merged.HasNamespaceTools || features.HasNamespaceTools
+		merged.HasToolSearch = merged.HasToolSearch || features.HasToolSearch
+		merged.HasAdditionalTools = merged.HasAdditionalTools || features.HasAdditionalTools
+		merged.HasStopSequences = merged.HasStopSequences || features.HasStopSequences
+		merged.HasTopK = merged.HasTopK || features.HasTopK
+		appendUnique(&merged.ContentTypes, contentTypes, features.ContentTypes)
+		appendUnique(&merged.DeclaredHostedTools, declaredHostedTools, features.DeclaredHostedTools)
+		appendUnique(&merged.HistoricalHostedTools, historicalHostedTools, features.HistoricalHostedTools)
+		appendUnique(&merged.MessagesNativeFields, messagesNativeFields, features.MessagesNativeFields)
+	}
+	return merged
 }
 
 type ProtocolPlan struct {
@@ -69,6 +114,9 @@ func PlanForRequest(channel *model.Channel, protocol Protocol, modelName, reques
 }
 
 func PlansForRequest(channel *model.Channel, protocol Protocol, modelName, requestPath string, features RequestFeatureSet) []ProtocolPlan {
+	if strings.HasPrefix(requestPath, "/v1/responses/compact") {
+		modelName = strings.TrimSuffix(modelName, ratio_setting.CompactModelSuffix)
+	}
 	if channel != nil &&
 		channel.Type != constant.ChannelTypeAdvancedCustom &&
 		(protocol == ProtocolResponses || protocol == ProtocolMessages) {
@@ -110,7 +158,7 @@ func planForStrictRequest(channel *model.Channel, protocol Protocol, modelName, 
 
 	capabilities := channel.GetOtherSettings().ProtocolCapabilities
 	plan.ExplicitCapabilities = capabilities != nil
-	if !policy.Enabled && capabilities == nil {
+	if capabilities == nil && (!policy.Enabled || !policy.DefaultAllowConversion) {
 		legacy := ForRequest(channel, protocol, modelName, requestPath)
 		plan.Status = legacy.Status
 		plan.UpstreamProtocol = legacy.UpstreamProtocol
@@ -183,7 +231,7 @@ func planForStrictRequest(channel *model.Channel, protocol Protocol, modelName, 
 	}
 
 	if len(upstreamProtocols) == 0 {
-		upstreamProtocols = defaultUpstreamProtocols(channel)
+		upstreamProtocols = defaultUpstreamProtocols(channel, resolved.Model)
 	}
 
 	for _, configured := range upstreamProtocols {
@@ -268,7 +316,7 @@ func autoPlansForRequest(channel *model.Channel, protocol Protocol, modelName st
 	configuredProtocols, allowConversionOverride := capabilities.Resolve(resolved.Model)
 	allowedProtocols := make(map[Protocol]struct{}, len(configuredProtocols))
 	if len(configuredProtocols) == 0 {
-		for _, candidate := range []Protocol{ProtocolChat, ProtocolMessages, ProtocolResponses} {
+		for _, candidate := range automaticProbeProtocols(channel, resolved.Model) {
 			allowedProtocols[candidate] = struct{}{}
 		}
 	} else {
@@ -346,12 +394,68 @@ func autoPlansForRequest(channel *model.Channel, protocol Protocol, modelName st
 	return []ProtocolPlan{basePlan}
 }
 
+func automaticProbeProtocols(channel *model.Channel, modelName string) []Protocol {
+	if channel == nil {
+		return nil
+	}
+	if protocol, ok := protocolFromConfiguredEndpoint(channel.GetBaseURL()); ok {
+		return []Protocol{protocol}
+	}
+	apiType, _ := common.ChannelType2APIType(channel.Type)
+	switch apiType {
+	case constant.APITypeOpenAI,
+		constant.APITypeOpenRouter,
+		constant.APITypeXinference,
+		constant.APITypeAnthropic,
+		constant.APITypeGemini,
+		constant.APITypeNewAPI,
+		constant.APITypeSub2API:
+		return []Protocol{ProtocolChat, ProtocolMessages, ProtocolResponses, ProtocolGemini}
+	}
+
+	configured := defaultUpstreamProtocols(channel, modelName)
+	protocols := make([]Protocol, 0, len(configured))
+	seen := make(map[Protocol]struct{}, len(configured))
+	for _, value := range configured {
+		protocol := Protocol(strings.TrimSpace(value))
+		if _, ok := protocolRelayFormat(protocol); !ok {
+			continue
+		}
+		if _, exists := seen[protocol]; exists {
+			continue
+		}
+		seen[protocol] = struct{}{}
+		protocols = append(protocols, protocol)
+	}
+	return protocols
+}
+
+func protocolFromConfiguredEndpoint(baseURL string) (Protocol, bool) {
+	parsed, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil {
+		return "", false
+	}
+	path := strings.ToLower(strings.TrimRight(parsed.Path, "/"))
+	switch {
+	case strings.HasSuffix(path, "/chat/completions"):
+		return ProtocolChat, true
+	case strings.HasSuffix(path, "/responses"):
+		return ProtocolResponses, true
+	case strings.HasSuffix(path, "/messages"):
+		return ProtocolMessages, true
+	case strings.HasSuffix(path, ":generatecontent"), strings.HasSuffix(path, ":streamgeneratecontent"):
+		return ProtocolGemini, true
+	default:
+		return "", false
+	}
+}
+
 func automaticProtocolOrder(protocol Protocol) []Protocol {
 	switch protocol {
 	case ProtocolResponses:
-		return []Protocol{ProtocolResponses, ProtocolChat, ProtocolMessages}
+		return []Protocol{ProtocolResponses, ProtocolChat, ProtocolMessages, ProtocolGemini}
 	case ProtocolMessages:
-		return []Protocol{ProtocolMessages, ProtocolChat, ProtocolResponses}
+		return []Protocol{ProtocolMessages, ProtocolChat, ProtocolResponses, ProtocolGemini}
 	default:
 		return []Protocol{protocol}
 	}
@@ -372,10 +476,24 @@ func ExtractRequestFeatureSet(protocol Protocol, body []byte) (RequestFeatureSet
 	features.HasPrompt = nonNullValue(request, "prompt")
 	features.HasContextManagement = nonNullValue(request, "context_management")
 	features.HasThinking = nonNullValue(request, "thinking") || nonNullValue(request, "reasoning")
-	hostedSeen := make(map[string]struct{})
+	if protocol == ProtocolMessages {
+		if stopSequences, ok := request["stop_sequences"].([]any); ok {
+			features.HasStopSequences = len(stopSequences) > 0
+		}
+		features.HasTopK = nonNullValue(request, "top_k")
+		inspectMessagesNativeFields(request, &features)
+	}
+	declaredHostedSeen := make(map[string]struct{})
+	historicalHostedSeen := make(map[string]struct{})
 	contentSeen := make(map[string]struct{})
-	inspectRequestContentTypes(protocol, request, &features, contentSeen, hostedSeen)
-	features.HasAdditionalTools = inspectRequestInput(protocol, request["input"], &features, hostedSeen)
+	inspectRequestContentTypes(protocol, request, &features, contentSeen, historicalHostedSeen)
+	features.HasAdditionalTools = inspectRequestInput(
+		protocol,
+		request["input"],
+		&features,
+		declaredHostedSeen,
+		historicalHostedSeen,
+	)
 
 	toolValue, exists := request["tools"]
 	if !exists {
@@ -385,11 +503,11 @@ func ExtractRequestFeatureSet(protocol Protocol, body []byte) (RequestFeatureSet
 	if !ok {
 		return features, nil
 	}
-	inspectTools(protocol, tools, &features, hostedSeen)
+	inspectTools(protocol, tools, &features, declaredHostedSeen)
 	return features, nil
 }
 
-func inspectRequestContentTypes(protocol Protocol, request map[string]any, features *RequestFeatureSet, contentSeen, hostedSeen map[string]struct{}) {
+func inspectRequestContentTypes(protocol Protocol, request map[string]any, features *RequestFeatureSet, contentSeen, historicalHostedSeen map[string]struct{}) {
 	switch protocol {
 	case ProtocolResponses:
 		items, ok := request["input"].([]any)
@@ -401,10 +519,10 @@ func inspectRequestContentTypes(protocol Protocol, request map[string]any, featu
 			if !ok {
 				continue
 			}
-			inspectContentBlocks(protocol, item["content"], features, contentSeen, hostedSeen)
+			inspectContentBlocks(protocol, item["content"], features, contentSeen, historicalHostedSeen)
 		}
 	case ProtocolMessages:
-		inspectContentBlocks(protocol, request["system"], features, contentSeen, hostedSeen)
+		inspectContentBlocks(protocol, request["system"], features, contentSeen, historicalHostedSeen)
 		messages, ok := request["messages"].([]any)
 		if !ok {
 			return
@@ -414,12 +532,12 @@ func inspectRequestContentTypes(protocol Protocol, request map[string]any, featu
 			if !ok {
 				continue
 			}
-			inspectContentBlocks(protocol, message["content"], features, contentSeen, hostedSeen)
+			inspectContentBlocks(protocol, message["content"], features, contentSeen, historicalHostedSeen)
 		}
 	}
 }
 
-func inspectContentBlocks(protocol Protocol, value any, features *RequestFeatureSet, contentSeen, hostedSeen map[string]struct{}) {
+func inspectContentBlocks(protocol Protocol, value any, features *RequestFeatureSet, contentSeen, historicalHostedSeen map[string]struct{}) {
 	blocks, ok := value.([]any)
 	if !ok {
 		if block, blockOK := value.(map[string]any); blockOK {
@@ -443,17 +561,23 @@ func inspectContentBlocks(protocol Protocol, value any, features *RequestFeature
 				features.HasThinking = true
 			}
 			if protocol == ProtocolMessages && (contentType == "server_tool_use" || isMessagesServerTool(contentType)) {
-				addHostedToolType(contentType, features, hostedSeen)
+				addUniqueToolType(contentType, &features.HistoricalHostedTools, historicalHostedSeen)
 			}
 		}
 		if nested, exists := block["content"]; exists {
-			inspectContentBlocks(protocol, nested, features, contentSeen, hostedSeen)
+			inspectContentBlocks(protocol, nested, features, contentSeen, historicalHostedSeen)
 		}
 	}
 }
 
-func inspectTools(protocol Protocol, tools []any, features *RequestFeatureSet, hostedSeen map[string]struct{}) {
+func inspectTools(protocol Protocol, tools []any, features *RequestFeatureSet, declaredHostedSeen map[string]struct{}) {
 	for _, item := range tools {
+		if name, ok := item.(string); ok {
+			if strings.TrimSpace(name) != "" {
+				features.HasCustomTools = true
+			}
+			continue
+		}
 		tool, ok := item.(map[string]any)
 		if !ok {
 			continue
@@ -466,23 +590,27 @@ func inspectTools(protocol Protocol, tools []any, features *RequestFeatureSet, h
 			features.HasCustomTools = true
 		case "namespace":
 			features.HasNamespaceTools = true
-			if nested, ok := tool["tools"].([]any); ok {
-				inspectTools(protocol, nested, features, hostedSeen)
+			nestedValue, exists := tool["tools"]
+			if !exists {
+				nestedValue = tool["children"]
+			}
+			if nested, ok := nestedValue.([]any); ok {
+				inspectTools(protocol, nested, features, declaredHostedSeen)
 			}
 		case "tool_search":
 			features.HasToolSearch = true
 			execution := strings.TrimSpace(common.Interface2String(tool["execution"]))
 			if protocol == ProtocolResponses && execution != "" && execution != "client" {
-				addHostedToolType("tool_search", features, hostedSeen)
+				addUniqueToolType("tool_search", &features.DeclaredHostedTools, declaredHostedSeen)
 			} else if protocol == ProtocolMessages {
-				addHostedToolType("tool_search", features, hostedSeen)
+				addUniqueToolType("tool_search", &features.DeclaredHostedTools, declaredHostedSeen)
 			}
 		default:
 			if strings.Contains(toolType, "tool_search") {
 				features.HasToolSearch = true
 			}
 			if protocol == ProtocolResponses || protocol == ProtocolMessages && isMessagesServerTool(toolType) {
-				addHostedToolType(toolType, features, hostedSeen)
+				addUniqueToolType(toolType, &features.DeclaredHostedTools, declaredHostedSeen)
 			}
 		}
 	}
@@ -506,12 +634,18 @@ func isMessagesServerTool(toolType string) bool {
 	return false
 }
 
-func inspectRequestInput(protocol Protocol, value any, features *RequestFeatureSet, hostedSeen map[string]struct{}) bool {
+func inspectRequestInput(
+	protocol Protocol,
+	value any,
+	features *RequestFeatureSet,
+	declaredHostedSeen map[string]struct{},
+	historicalHostedSeen map[string]struct{},
+) bool {
 	found := false
 	switch typed := value.(type) {
 	case []any:
 		for _, item := range typed {
-			if inspectRequestInput(protocol, item, features, hostedSeen) {
+			if inspectRequestInput(protocol, item, features, declaredHostedSeen, historicalHostedSeen) {
 				found = true
 			}
 		}
@@ -521,16 +655,16 @@ func inspectRequestInput(protocol Protocol, value any, features *RequestFeatureS
 			features.HasThinking = true
 		}
 		if protocol == ProtocolResponses && isResponsesHostedHistoryItem(typedType) {
-			addHostedToolType(typedType, features, hostedSeen)
+			addUniqueToolType(typedType, &features.HistoricalHostedTools, historicalHostedSeen)
 		}
-		if typedType == "additional_tools" {
-			found = true
+		if typedType == "additional_tools" || typedType == "tool_search_output" {
+			found = found || typedType == "additional_tools"
 			if tools, ok := typed["tools"].([]any); ok {
-				inspectTools(protocol, tools, features, hostedSeen)
+				inspectTools(protocol, tools, features, declaredHostedSeen)
 			}
 		}
 		for _, nested := range typed {
-			if inspectRequestInput(protocol, nested, features, hostedSeen) {
+			if inspectRequestInput(protocol, nested, features, declaredHostedSeen, historicalHostedSeen) {
 				found = true
 			}
 		}
@@ -564,12 +698,12 @@ func isResponsesHostedHistoryItem(itemType string) bool {
 	}
 }
 
-func addHostedToolType(toolType string, features *RequestFeatureSet, hostedSeen map[string]struct{}) {
-	if _, exists := hostedSeen[toolType]; exists {
+func addUniqueToolType(toolType string, target *[]string, seen map[string]struct{}) {
+	if _, exists := seen[toolType]; exists {
 		return
 	}
-	hostedSeen[toolType] = struct{}{}
-	features.HostedToolTypes = append(features.HostedToolTypes, toolType)
+	seen[toolType] = struct{}{}
+	*target = append(*target, toolType)
 }
 
 func nonNullValue(values map[string]any, key string) bool {
@@ -582,6 +716,48 @@ func nonEmptyString(value any) bool {
 	return ok && strings.TrimSpace(text) != ""
 }
 
+func inspectMessagesNativeFields(request map[string]any, features *RequestFeatureSet) {
+	if features == nil {
+		return
+	}
+	for _, field := range []string{"output_format", "container", "mcp_servers", "inference_geo", "speed", "service_tier"} {
+		if meaningfulRequestValue(request[field]) {
+			features.MessagesNativeFields = append(features.MessagesNativeFields, field)
+		}
+	}
+	if outputConfig, exists := request["output_config"]; exists && messagesOutputConfigHasUnsupportedFields(outputConfig) {
+		features.MessagesNativeFields = append(features.MessagesNativeFields, "output_config")
+	}
+}
+
+func meaningfulRequestValue(value any) bool {
+	switch typed := value.(type) {
+	case nil:
+		return false
+	case string:
+		return strings.TrimSpace(typed) != ""
+	case []any:
+		return len(typed) > 0
+	case map[string]any:
+		return len(typed) > 0
+	default:
+		return true
+	}
+}
+
+func messagesOutputConfigHasUnsupportedFields(value any) bool {
+	config, ok := value.(map[string]any)
+	if !ok {
+		return value != nil
+	}
+	for field, fieldValue := range config {
+		if field != "effort" && fieldValue != nil {
+			return true
+		}
+	}
+	return false
+}
+
 func conversionFeatureIncompatibility(protocol, upstream Protocol, features RequestFeatureSet) string {
 	if protocol == ProtocolResponses {
 		switch {
@@ -592,23 +768,37 @@ func conversionFeatureIncompatibility(protocol, upstream Protocol, features Requ
 		case features.HasContextManagement:
 			return "context_management is only supported by a native Responses upstream"
 		}
-		unsupportedHostedTools := make([]string, 0, len(features.HostedToolTypes))
-		for _, toolType := range features.HostedToolTypes {
-			if isDroppableResponsesHostedToolType(toolType) {
-				continue
-			}
-			unsupportedHostedTools = append(unsupportedHostedTools, toolType)
+		if len(features.DeclaredHostedTools) > 0 {
+			return fmt.Sprintf(
+				"Responses server tools require a native Responses upstream: %s",
+				strings.Join(features.DeclaredHostedTools, ", "),
+			)
 		}
-		if len(unsupportedHostedTools) > 0 {
-			return fmt.Sprintf("Responses server tools cannot be converted to %s: %s", upstream, strings.Join(unsupportedHostedTools, ", "))
+		if len(features.HistoricalHostedTools) > 0 {
+			return fmt.Sprintf(
+				"Responses server tool history cannot be replayed to %s: %s",
+				upstream,
+				strings.Join(features.HistoricalHostedTools, ", "),
+			)
 		}
 	}
 	if protocol == ProtocolMessages {
 		if features.HasContextManagement {
 			return "context_management is only supported by a native Messages upstream"
 		}
-		if len(features.HostedToolTypes) > 0 {
-			return fmt.Sprintf("server-side Messages tools require a native Messages upstream: %s", strings.Join(features.HostedToolTypes, ", "))
+		if upstream == ProtocolResponses && features.HasStopSequences {
+			return "stop_sequences cannot be represented by a Responses upstream"
+		}
+		if upstream == ProtocolResponses && features.HasTopK {
+			return "top_k cannot be represented by a Responses upstream"
+		}
+		if len(features.MessagesNativeFields) > 0 {
+			return fmt.Sprintf("Messages fields require a native Messages upstream: %s", strings.Join(features.MessagesNativeFields, ", "))
+		}
+		messagesHostedTools := append([]string{}, features.DeclaredHostedTools...)
+		messagesHostedTools = append(messagesHostedTools, features.HistoricalHostedTools...)
+		if len(messagesHostedTools) > 0 {
+			return fmt.Sprintf("server-side Messages tools require a native Messages upstream: %s", strings.Join(messagesHostedTools, ", "))
 		}
 	}
 	unsupportedContentTypes := make([]string, 0)
@@ -629,31 +819,6 @@ func conversionFeatureIncompatibility(protocol, upstream Protocol, features Requ
 	return ""
 }
 
-func isDroppableResponsesHostedToolType(toolType string) bool {
-	toolType = strings.ToLower(strings.TrimSpace(toolType))
-	for _, prefix := range []string{
-		"web_search",
-		"web_fetch",
-		"file_search",
-		"computer",
-		"code_interpreter",
-		"code_execution",
-		"image_generation",
-		"local_shell",
-		"shell",
-		"apply_patch",
-		"mcp",
-		"program",
-		"browser",
-		"tool_search",
-	} {
-		if strings.HasPrefix(toolType, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
 func convertedContentTypeSupported(protocol, upstream Protocol, contentType string) bool {
 	switch protocol {
 	case ProtocolResponses:
@@ -665,13 +830,18 @@ func convertedContentTypeSupported(protocol, upstream Protocol, contentType stri
 			}
 		case ProtocolMessages:
 			switch contentType {
-			case "input_text", "output_text", "text", "input_image":
+			case "input_text", "output_text", "text", "input_image", "input_file":
 				return true
 			}
 		}
 	case ProtocolMessages:
 		switch upstream {
-		case ProtocolChat, ProtocolResponses, ProtocolGemini:
+		case ProtocolChat, ProtocolResponses:
+			switch contentType {
+			case "text", "input_text", "image", "document", "thinking", "tool_use", "tool_result":
+				return true
+			}
+		case ProtocolGemini:
 			switch contentType {
 			case "text", "input_text", "image", "thinking", "tool_use", "tool_result":
 				return true
@@ -681,17 +851,57 @@ func convertedContentTypeSupported(protocol, upstream Protocol, contentType stri
 	return false
 }
 
-func defaultUpstreamProtocols(channel *model.Channel) []string {
+func defaultUpstreamProtocols(channel *model.Channel, modelName string) []string {
 	if channel == nil {
 		return nil
 	}
 	switch channel.Type {
 	case constant.ChannelTypeCodex:
 		return []string{dto.ProtocolCapabilityResponses}
-	case constant.ChannelTypeAnthropic, constant.ChannelTypeAws:
+	case constant.ChannelTypeAnthropic:
+		return []string{dto.ProtocolCapabilityMessages}
+	case constant.ChannelTypeAws:
+		if strings.Contains(strings.ToLower(strings.TrimSpace(modelName)), "nova-") {
+			return []string{dto.ProtocolCapabilityChat}
+		}
 		return []string{dto.ProtocolCapabilityMessages}
 	case constant.ChannelTypeAzure:
 		return []string{dto.ProtocolCapabilityChat, dto.ProtocolCapabilityResponses}
+	case constant.ChannelTypeGemini:
+		return []string{dto.ProtocolCapabilityGemini}
+	case constant.ChannelTypeVertexAi:
+		modelName = strings.ToLower(strings.TrimSpace(modelName))
+		switch {
+		case strings.HasPrefix(modelName, "claude"):
+			return []string{dto.ProtocolCapabilityMessages}
+		case strings.Contains(modelName, "llama"), strings.Contains(modelName, "-maas"):
+			return []string{dto.ProtocolCapabilityChat}
+		default:
+			return []string{dto.ProtocolCapabilityGemini}
+		}
+	case constant.ChannelTypeAli:
+		protocols := []string{dto.ProtocolCapabilityChat, dto.ProtocolCapabilityResponses}
+		if aliSupportsMessages(modelName) {
+			protocols = append(protocols, dto.ProtocolCapabilityMessages)
+		}
+		return protocols
+	case constant.ChannelTypeVolcEngine:
+		protocols := []string{dto.ProtocolCapabilityChat, dto.ProtocolCapabilityResponses}
+		if _, ok := constant.ChannelSpecialBases[channel.GetBaseURL()]; ok {
+			protocols = append(protocols, dto.ProtocolCapabilityMessages)
+		}
+		return protocols
+	case constant.ChannelTypeDeepSeek, constant.ChannelTypeMoonshot, constant.ChannelTypeMiniMax, constant.ChannelTypeZhipu_v4:
+		return []string{dto.ProtocolCapabilityChat, dto.ProtocolCapabilityMessages}
+	case constant.ChannelTypeXai:
+		return []string{dto.ProtocolCapabilityChat, dto.ProtocolCapabilityResponses}
+	case constant.ChannelTypeSub2API, constant.ChannelTypeNewAPI:
+		return []string{
+			dto.ProtocolCapabilityChat,
+			dto.ProtocolCapabilityMessages,
+			dto.ProtocolCapabilityResponses,
+			dto.ProtocolCapabilityGemini,
+		}
 	case constant.ChannelTypeOpenAI:
 		baseURL := strings.TrimSpace(channel.GetBaseURL())
 		if baseURL == "" && channel.Type >= 0 && channel.Type < len(constant.ChannelBaseURLs) {
@@ -722,6 +932,8 @@ func protocolRelayFormat(protocol Protocol) (types.RelayFormat, bool) {
 		return types.RelayFormatClaude, true
 	case ProtocolResponses:
 		return types.RelayFormatOpenAIResponses, true
+	case ProtocolGemini:
+		return types.RelayFormatGemini, true
 	default:
 		return "", false
 	}

@@ -1,18 +1,24 @@
 package relay
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/relay/channel"
+	claudechannel "github.com/QuantumNous/new-api/relay/channel/claude"
+	geminichannel "github.com/QuantumNous/new-api/relay/channel/gemini"
+	openai "github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/channelcompat"
+	"github.com/QuantumNous/new-api/service/protocolstate"
 	"github.com/gin-gonic/gin"
 )
 
@@ -39,6 +45,19 @@ func applyProtocolPlan(info *relaycommon.RelayInfo, plan channelcompat.ProtocolP
 	case channelcompat.ProtocolResponses:
 		info.RelayMode = relayconstant.RelayModeResponses
 		info.RequestURLPath = "/v1/responses"
+	case channelcompat.ProtocolGemini:
+		modelName := strings.TrimSpace(plan.EffectiveUpstreamModel)
+		if modelName == "" {
+			modelName = strings.TrimSpace(info.UpstreamModelName)
+		}
+		if modelName == "" {
+			modelName = "model"
+		}
+		action := "generateContent"
+		if plan.Features.Stream {
+			action = "streamGenerateContent?alt=sse"
+		}
+		info.RequestURLPath = "/v1beta/models/" + modelName + ":" + action
 	}
 	return func() {
 		info.RelayMode = savedRelayMode
@@ -101,6 +120,9 @@ func convertRequestForProtocolPlan(c *gin.Context, info *relaycommon.RelayInfo, 
 		if !ok {
 			return nil, fmt.Errorf("expected OpenAI Responses request for protocol plan, got %T", converted)
 		}
+		if plan.RequestProtocol == channelcompat.ProtocolMessages {
+			protocolstate.ApplyMessagesContinuation(c, responsesRequest)
+		}
 		return adaptor.ConvertOpenAIResponsesRequest(c, info, *responsesRequest)
 	case channelcompat.ProtocolGemini:
 		geminiRequest, ok := converted.(*dto.GeminiChatRequest)
@@ -115,6 +137,12 @@ func convertRequestForProtocolPlan(c *gin.Context, info *relaycommon.RelayInfo, 
 
 func protocolPlanRequiresConversion(plan channelcompat.ProtocolPlan) bool {
 	return plan.Status == channelcompat.StatusConvertible && plan.RequestProtocol != plan.UpstreamProtocol
+}
+
+func protocolPlanRequiresStructuredRequest(info *relaycommon.RelayInfo, plan channelcompat.ProtocolPlan) bool {
+	return info != nil &&
+		plan.UpstreamProtocol == channelcompat.ProtocolResponses &&
+		info.ApiType == constant.APITypeXai
 }
 
 func protocolPlanUses(c *gin.Context, requestProtocol, upstreamProtocol channelcompat.Protocol) bool {
@@ -135,4 +163,34 @@ func protocolFormatForPlan(plan channelcompat.ProtocolPlan) types.RelayFormat {
 	default:
 		return ""
 	}
+}
+
+// handleBufferedStreamResponse converts an upstream SSE stream into a buffered
+// JSON response for a non-streaming client. When it reports handled=true the
+// upstream body has been consumed, so the caller must not fall through to
+// adaptor.DoResponse; a handled response without usage is a hard error because
+// billing would otherwise be skipped silently.
+func handleBufferedStreamResponse(c *gin.Context, info *relaycommon.RelayInfo, httpResp *http.Response, upstreamFormat types.RelayFormat, statusCodeMappingStr string) (*dto.Usage, bool, *types.NewAPIError) {
+	var usage *dto.Usage
+	var apiError *types.NewAPIError
+	switch upstreamFormat {
+	case types.RelayFormatOpenAI:
+		usage, apiError = openai.OaiChatBufferedStreamHandler(c, info, httpResp)
+	case types.RelayFormatOpenAIResponses:
+		usage, apiError = openai.OaiResponsesToChatBufferedStreamHandler(c, info, httpResp)
+	case types.RelayFormatClaude:
+		usage, apiError = claudechannel.ClaudeBufferedStreamHandler(c, info, httpResp)
+	case types.RelayFormatGemini:
+		usage, apiError = geminichannel.GeminiBufferedStreamHandler(c, info, httpResp)
+	default:
+		return nil, false, nil
+	}
+	if apiError != nil {
+		service.ResetStatusCode(apiError, statusCodeMappingStr)
+		return nil, true, apiError
+	}
+	if usage == nil {
+		return nil, true, types.NewOpenAIError(errors.New("buffered stream handler returned no usage"), types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+	}
+	return usage, true, nil
 }

@@ -135,12 +135,19 @@ func GetAdaptor(apiType int) channel.Adaptor {
 }
 
 func GetAdaptorForProtocol(apiType int, protocol channelcompat.Protocol) channel.Adaptor {
-	if apiType == constant.APITypeOpenAI || apiType == constant.APITypeAnthropic {
+	switch apiType {
+	case constant.APITypeOpenAI,
+		constant.APITypeOpenRouter,
+		constant.APITypeXinference,
+		constant.APITypeAnthropic,
+		constant.APITypeGemini:
 		switch protocol {
 		case channelcompat.ProtocolChat, channelcompat.ProtocolResponses:
 			return &openai.Adaptor{}
 		case channelcompat.ProtocolMessages:
 			return &claude.Adaptor{}
+		case channelcompat.ProtocolGemini:
+			return &gemini.Adaptor{}
 		}
 	}
 	return GetAdaptor(apiType)

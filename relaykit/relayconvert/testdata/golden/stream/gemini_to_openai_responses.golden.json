@@ -5,7 +5,7 @@
       "Payload": {
         "type": "response.created",
         "response": {
-          "id": "stream_fixed",
+          "id": "resp_stream_fixed",
           "object": "response",
           "created_at": 0,
           "status": "in_progress",
@@ -34,7 +34,7 @@
       "Payload": {
         "type": "response.in_progress",
         "response": {
-          "id": "stream_fixed",
+          "id": "resp_stream_fixed",
           "object": "response",
           "created_at": 0,
           "status": "in_progress",
@@ -64,11 +64,9 @@
         "type": "response.output_item.added",
         "item": {
           "type": "message",
-          "id": "stream_fixed_msg_0",
+          "id": "msg_stream_fixed_0",
           "status": "in_progress",
-          "role": "assistant",
-          "quality": "",
-          "size": ""
+          "role": "assistant"
         },
         "sequence_number": 2,
         "output_index": 0
@@ -81,7 +79,7 @@
         "sequence_number": 3,
         "output_index": 0,
         "content_index": 0,
-        "item_id": "stream_fixed_msg_0",
+        "item_id": "msg_stream_fixed_0",
         "part": {
           "type": "output_text",
           "text": "",
@@ -97,7 +95,7 @@
         "sequence_number": 4,
         "output_index": 0,
         "content_index": 0,
-        "item_id": "stream_fixed_msg_0"
+        "item_id": "msg_stream_fixed_0"
       }
     },
     {
@@ -108,7 +106,7 @@
         "sequence_number": 5,
         "output_index": 0,
         "content_index": 0,
-        "item_id": "stream_fixed_msg_0"
+        "item_id": "msg_stream_fixed_0"
       }
     },
     {
@@ -119,7 +117,7 @@
         "sequence_number": 6,
         "output_index": 0,
         "content_index": 0,
-        "item_id": "stream_fixed_msg_0"
+        "item_id": "msg_stream_fixed_0"
       }
     },
     {
@@ -129,7 +127,7 @@
         "sequence_number": 7,
         "output_index": 0,
         "content_index": 0,
-        "item_id": "stream_fixed_msg_0",
+        "item_id": "msg_stream_fixed_0",
         "part": {
           "type": "output_text",
           "text": "Hello world",
@@ -143,7 +141,7 @@
         "type": "response.output_item.done",
         "item": {
           "type": "message",
-          "id": "stream_fixed_msg_0",
+          "id": "msg_stream_fixed_0",
           "status": "completed",
           "role": "assistant",
           "phase": "final_answer",
@@ -153,9 +151,7 @@
               "text": "Hello world",
               "annotations": []
             }
-          ],
-          "quality": "",
-          "size": ""
+          ]
         },
         "sequence_number": 8,
         "output_index": 0
@@ -166,7 +162,7 @@
       "Payload": {
         "type": "response.completed",
         "response": {
-          "id": "stream_fixed",
+          "id": "resp_stream_fixed",
           "object": "response",
           "created_at": 0,
           "status": "completed",
@@ -176,7 +172,7 @@
           "output": [
             {
               "type": "message",
-              "id": "stream_fixed_msg_0",
+              "id": "msg_stream_fixed_0",
               "status": "completed",
               "role": "assistant",
               "phase": "final_answer",
@@ -186,9 +182,7 @@
                   "text": "Hello world",
                   "annotations": []
                 }
-              ],
-              "quality": "",
-              "size": ""
+              ]
             }
           ],
           "parallel_tool_calls": false,

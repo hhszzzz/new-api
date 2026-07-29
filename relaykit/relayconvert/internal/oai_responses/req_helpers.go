@@ -96,38 +96,6 @@ func ContentParts(content any) ([]map[string]any, error) {
 	return responsesContentParts(content)
 }
 
-func responsesRequestFunctionDeclarations(raw []byte) ([]dto.FunctionRequest, error) {
-	if !rawJSONPresent(raw) {
-		return nil, nil
-	}
-
-	var tools []map[string]any
-	if err := kitutil.Unmarshal(raw, &tools); err != nil {
-		return nil, fmt.Errorf("invalid tools: %w", err)
-	}
-
-	functions := make([]dto.FunctionRequest, 0, len(tools))
-	for _, tool := range tools {
-		if strings.TrimSpace(kitutil.Interface2String(tool["type"])) != "function" {
-			continue
-		}
-		name := strings.TrimSpace(kitutil.Interface2String(tool["name"]))
-		if name == "" {
-			continue
-		}
-		functions = append(functions, dto.FunctionRequest{
-			Name:        name,
-			Description: kitutil.Interface2String(tool["description"]),
-			Parameters:  tool["parameters"],
-		})
-	}
-	return functions, nil
-}
-
-func RequestFunctionDeclarations(raw []byte) ([]dto.FunctionRequest, error) {
-	return responsesRequestFunctionDeclarations(raw)
-}
-
 func responsesReasoningEffort(req *dto.OpenAIResponsesRequest) string {
 	if req == nil || req.Reasoning == nil {
 		return ""
@@ -164,6 +132,138 @@ func responsesObjectValue(value any, fallbackKey string) map[string]any {
 
 func ObjectValue(value any, fallbackKey string) map[string]any {
 	return responsesObjectValue(value, fallbackKey)
+}
+
+func responsesFunctionArgumentsObject(value any) (map[string]any, error) {
+	switch typed := value.(type) {
+	case nil:
+		return map[string]any{}, nil
+	case map[string]any:
+		return typed, nil
+	case string:
+		if strings.TrimSpace(typed) == "" {
+			return map[string]any{}, nil
+		}
+		var object map[string]any
+		if err := kitutil.Unmarshal([]byte(typed), &object); err != nil || object == nil {
+			return nil, fmt.Errorf("function_call arguments must be a JSON object")
+		}
+		return object, nil
+	default:
+		encoded, err := kitutil.Marshal(value)
+		if err != nil {
+			return nil, fmt.Errorf("marshal function_call arguments: %w", err)
+		}
+		var object map[string]any
+		if err := kitutil.Unmarshal(encoded, &object); err != nil || object == nil {
+			return nil, fmt.Errorf("function_call arguments must be a JSON object")
+		}
+		return object, nil
+	}
+}
+
+func responsesFunctionArgumentsString(value any) (string, error) {
+	object, err := responsesFunctionArgumentsObject(value)
+	if err != nil {
+		return "", err
+	}
+	encoded, err := kitutil.Marshal(object)
+	if err != nil {
+		return "", fmt.Errorf("marshal function_call arguments: %w", err)
+	}
+	return string(encoded), nil
+}
+
+func filterIncompleteResponsesToolHistory(items []map[string]any, dropUnanswered bool) ([]map[string]any, error) {
+	type callBatch struct {
+		indexes []int
+		ids     []string
+	}
+
+	batches := make([]callBatch, 0)
+	currentBatch := -1
+	knownCallIDs := make(map[string]struct{})
+	outputCounts := make(map[string]int)
+	for index, item := range items {
+		itemType := strings.TrimSpace(kitutil.Interface2String(item["type"]))
+		switch itemType {
+		case ResponsesInputTypeFunctionCall, ResponsesInputTypeCustomToolCall, "tool_search_call":
+			if currentBatch < 0 {
+				batches = append(batches, callBatch{})
+				currentBatch = len(batches) - 1
+			}
+			callID := CallID(item)
+			batches[currentBatch].indexes = append(batches[currentBatch].indexes, index)
+			batches[currentBatch].ids = append(batches[currentBatch].ids, callID)
+			if callID != "" {
+				knownCallIDs[callID] = struct{}{}
+			}
+		case "reasoning":
+			// Reasoning belongs to the surrounding assistant turn and does not
+			// split a batch of parallel tool calls.
+		case ResponsesInputTypeFunctionCallOutput, ResponsesInputTypeCustomToolOutput, "tool_search_output":
+			currentBatch = -1
+			if callID := CallID(item); callID != "" {
+				outputCounts[callID]++
+			}
+		default:
+			currentBatch = -1
+		}
+	}
+
+	droppedIndexes := make(map[int]struct{})
+	droppedCallIDs := make(map[string]struct{})
+	for _, batch := range batches {
+		complete := len(batch.ids) > 0
+		seen := make(map[string]struct{}, len(batch.ids))
+		batchOutputCount := 0
+		for _, callID := range batch.ids {
+			batchOutputCount += outputCounts[callID]
+		}
+		for offset, callID := range batch.ids {
+			item := items[batch.indexes[offset]]
+			if callID == "" || strings.TrimSpace(kitutil.Interface2String(item["status"])) == "incomplete" ||
+				(batchOutputCount > 0 || dropUnanswered) && outputCounts[callID] != 1 {
+				complete = false
+				continue
+			}
+			if _, exists := seen[callID]; exists {
+				complete = false
+				continue
+			}
+			seen[callID] = struct{}{}
+		}
+		if complete {
+			continue
+		}
+		for offset, index := range batch.indexes {
+			droppedIndexes[index] = struct{}{}
+			if callID := batch.ids[offset]; callID != "" {
+				droppedCallIDs[callID] = struct{}{}
+			}
+		}
+	}
+
+	filtered := make([]map[string]any, 0, len(items))
+	for index, item := range items {
+		itemType := strings.TrimSpace(kitutil.Interface2String(item["type"]))
+		switch itemType {
+		case ResponsesInputTypeFunctionCall, ResponsesInputTypeCustomToolCall, "tool_search_call":
+			if _, drop := droppedIndexes[index]; drop {
+				continue
+			}
+		case ResponsesInputTypeFunctionCallOutput, ResponsesInputTypeCustomToolOutput, "tool_search_output":
+			callID := CallID(item)
+			if _, drop := droppedCallIDs[callID]; drop {
+				continue
+			}
+			if _, declared := knownCallIDs[callID]; !declared {
+				continue
+			}
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered, nil
 }
 
 func responsesGeminiResponseMap(value any) map[string]interface{} {

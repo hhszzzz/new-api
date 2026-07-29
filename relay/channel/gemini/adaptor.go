@@ -131,6 +131,7 @@ func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
 }
 
 func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
+	info.UpstreamModelName = normalizeGeminiModelID(info.UpstreamModelName)
 
 	if model_setting.GetGeminiSettings().ThinkingAdapterEnabled &&
 		!model_setting.ShouldPreserveThinkingSuffix(info.UpstreamModelName) {
@@ -150,7 +151,8 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 	version := model_setting.GetGeminiVersionSetting(info.UpstreamModelName)
 
 	if strings.HasPrefix(info.UpstreamModelName, "imagen") {
-		return fmt.Sprintf("%s/%s/models/%s:predict", info.ChannelBaseUrl, version, info.UpstreamModelName), nil
+		endpoint := fmt.Sprintf("/%s/models/%s:predict", version, info.UpstreamModelName)
+		return resolveGeminiNativeURL(info.ChannelBaseUrl, endpoint), nil
 	}
 
 	if strings.HasPrefix(info.UpstreamModelName, "text-embedding") ||
@@ -160,7 +162,8 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 		if info.IsGeminiBatchEmbedding {
 			action = "batchEmbedContents"
 		}
-		return fmt.Sprintf("%s/%s/models/%s:%s", info.ChannelBaseUrl, version, info.UpstreamModelName, action), nil
+		endpoint := fmt.Sprintf("/%s/models/%s:%s", version, info.UpstreamModelName, action)
+		return resolveGeminiNativeURL(info.ChannelBaseUrl, endpoint), nil
 	}
 
 	action := "generateContent"
@@ -170,7 +173,8 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 			info.DisablePing = true
 		}
 	}
-	return fmt.Sprintf("%s/%s/models/%s:%s", info.ChannelBaseUrl, version, info.UpstreamModelName, action), nil
+	endpoint := fmt.Sprintf("/%s/models/%s:%s", version, info.UpstreamModelName, action)
+	return resolveGeminiNativeURL(info.ChannelBaseUrl, endpoint), nil
 }
 
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) error {

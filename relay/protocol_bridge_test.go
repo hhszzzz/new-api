@@ -3,6 +3,7 @@ package relay
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,27 +13,52 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/claude"
+	"github.com/QuantumNous/new-api/relay/channel/gemini"
 	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service/channelcompat"
+	"github.com/QuantumNous/new-api/service/protocolstate"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestGetAdaptorForProtocolUsesWireProtocolForGenericOpenAIAndAnthropicChannels(t *testing.T) {
+func TestGetAdaptorForProtocolUsesWireProtocolForGenericProtocolChannels(t *testing.T) {
 	assert.IsType(t, &openai.Adaptor{}, GetAdaptorForProtocol(constant.APITypeOpenAI, channelcompat.ProtocolChat))
 	assert.IsType(t, &openai.Adaptor{}, GetAdaptorForProtocol(constant.APITypeOpenAI, channelcompat.ProtocolResponses))
 	assert.IsType(t, &claude.Adaptor{}, GetAdaptorForProtocol(constant.APITypeOpenAI, channelcompat.ProtocolMessages))
+	assert.IsType(t, &gemini.Adaptor{}, GetAdaptorForProtocol(constant.APITypeOpenAI, channelcompat.ProtocolGemini))
 
 	assert.IsType(t, &claude.Adaptor{}, GetAdaptorForProtocol(constant.APITypeAnthropic, channelcompat.ProtocolMessages))
 	assert.IsType(t, &openai.Adaptor{}, GetAdaptorForProtocol(constant.APITypeAnthropic, channelcompat.ProtocolChat))
 	assert.IsType(t, &openai.Adaptor{}, GetAdaptorForProtocol(constant.APITypeAnthropic, channelcompat.ProtocolResponses))
+	assert.IsType(t, &gemini.Adaptor{}, GetAdaptorForProtocol(constant.APITypeAnthropic, channelcompat.ProtocolGemini))
+
+	assert.IsType(t, &gemini.Adaptor{}, GetAdaptorForProtocol(constant.APITypeGemini, channelcompat.ProtocolGemini))
+	assert.IsType(t, &openai.Adaptor{}, GetAdaptorForProtocol(constant.APITypeGemini, channelcompat.ProtocolChat))
+	assert.IsType(t, &openai.Adaptor{}, GetAdaptorForProtocol(constant.APITypeGemini, channelcompat.ProtocolResponses))
+	assert.IsType(t, &claude.Adaptor{}, GetAdaptorForProtocol(constant.APITypeGemini, channelcompat.ProtocolMessages))
+
+	assert.IsType(t, &openai.Adaptor{}, GetAdaptorForProtocol(constant.APITypeOpenRouter, channelcompat.ProtocolResponses))
+	assert.IsType(t, &claude.Adaptor{}, GetAdaptorForProtocol(constant.APITypeOpenRouter, channelcompat.ProtocolMessages))
+	assert.IsType(t, &gemini.Adaptor{}, GetAdaptorForProtocol(constant.APITypeOpenRouter, channelcompat.ProtocolGemini))
+	assert.IsType(t, &openai.Adaptor{}, GetAdaptorForProtocol(constant.APITypeXinference, channelcompat.ProtocolChat))
+	assert.IsType(t, &claude.Adaptor{}, GetAdaptorForProtocol(constant.APITypeXinference, channelcompat.ProtocolMessages))
+}
+
+func TestProtocolPlanRequiresStructuredRequestForXAIResponses(t *testing.T) {
+	plan := channelcompat.ProtocolPlan{UpstreamProtocol: channelcompat.ProtocolResponses}
+	xaiInfo := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ApiType: constant.APITypeXai}}
+	openAIInfo := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ApiType: constant.APITypeOpenAI}}
+	assert.True(t, protocolPlanRequiresStructuredRequest(xaiInfo, plan))
+	assert.False(t, protocolPlanRequiresStructuredRequest(openAIInfo, plan))
+	assert.False(t, protocolPlanRequiresStructuredRequest(xaiInfo, channelcompat.ProtocolPlan{UpstreamProtocol: channelcompat.ProtocolChat}))
 }
 
 func TestProtocolBridgeRequestMatrixAppliesUpstreamModeAndConversion(t *testing.T) {
@@ -180,6 +206,62 @@ func TestProtocolBridgeCompactUsesChatEndpointForConvertiblePlan(t *testing.T) {
 	assert.Equal(t, "/v1/responses/compact", info.RequestURLPath)
 }
 
+func TestApplyProtocolPlanUsesGeminiWirePathWithoutChangingEntryResponseMode(t *testing.T) {
+	tests := []struct {
+		name            string
+		requestProtocol channelcompat.Protocol
+		entryMode       int
+		entryPath       string
+	}{
+		{
+			name:            "Responses entry",
+			requestProtocol: channelcompat.ProtocolResponses,
+			entryMode:       relayconstant.RelayModeResponses,
+			entryPath:       "/v1/responses",
+		},
+		{
+			name:            "Messages entry",
+			requestProtocol: channelcompat.ProtocolMessages,
+			entryMode:       relayconstant.RelayModeUnknown,
+			entryPath:       "/v1/messages",
+		},
+	}
+
+	for _, test := range tests {
+		for _, stream := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/stream=%t", test.name, stream), func(t *testing.T) {
+				info := &relaycommon.RelayInfo{
+					RelayMode:      test.entryMode,
+					RequestURLPath: test.entryPath,
+					ChannelMeta: &relaycommon.ChannelMeta{
+						UpstreamModelName: "gemini-2.5-pro",
+					},
+				}
+				plan := channelcompat.ProtocolPlan{
+					RequestProtocol:        test.requestProtocol,
+					UpstreamProtocol:       channelcompat.ProtocolGemini,
+					EffectiveUpstreamModel: "gemini-2.5-flash",
+					Status:                 channelcompat.StatusConvertible,
+					Features:               channelcompat.RequestFeatureSet{Stream: stream},
+				}
+
+				restore := applyProtocolPlan(info, plan)
+
+				assert.Equal(t, test.entryMode, info.RelayMode)
+				if stream {
+					assert.Equal(t, "/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse", info.RequestURLPath)
+				} else {
+					assert.Equal(t, "/v1beta/models/gemini-2.5-flash:generateContent", info.RequestURLPath)
+				}
+
+				restore()
+				assert.Equal(t, test.entryMode, info.RelayMode)
+				assert.Equal(t, test.entryPath, info.RequestURLPath)
+			})
+		}
+	}
+}
+
 func TestResponsesHelperAllowsCompactBridgeForChatOnlyAPIType(t *testing.T) {
 	settings := model_setting.GetGlobalSettings()
 	originalPolicy := settings.ProtocolBridgePolicy
@@ -254,6 +336,77 @@ func TestProtocolBridgeMessagesToChatStripsAnthropicCacheControl(t *testing.T) {
 	upstream, err := common.Marshal(adaptor.chatRequest)
 	require.NoError(t, err)
 	assert.NotContains(t, string(upstream), "cache_control")
+}
+
+func TestProtocolBridgeMessagesToResponsesAppliesSessionStateBeforeAdaptorConversion(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	common.SetContextKey(c, constant.ContextKeyUserId, 501)
+	common.SetContextKey(c, constant.ContextKeyTokenId, 502)
+	request := &dto.ClaudeRequest{
+		Model:        "claude-public",
+		Messages:     []dto.ClaudeMessage{{Role: "user", Content: "hello"}},
+		MaxTokens:    common.GetPointer[uint](64),
+		CacheControl: json.RawMessage(`{"type":"ephemeral"}`),
+	}
+	info := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatClaude,
+		OriginModelName: "claude-public",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelId:         503,
+			UpstreamModelName: "provider-responses-model",
+		},
+	}
+	plan := channelcompat.ProtocolPlan{
+		RequestProtocol:  channelcompat.ProtocolMessages,
+		UpstreamProtocol: channelcompat.ProtocolResponses,
+		RequestConverter: relayconvert.ConverterClaudeMessagesToOpenAIResponses,
+		Status:           channelcompat.StatusConvertible,
+		StateEnabled:     true,
+	}
+	require.NoError(t, protocolstate.PrepareMessagesRequest(c, info, plan, request))
+	adaptor := &protocolBridgeRecordingAdaptor{}
+
+	_, err := convertRequestForProtocolPlan(c, info, adaptor, plan, request)
+
+	require.NoError(t, err)
+	require.NotNil(t, adaptor.responsesRequest)
+	assert.NotEmpty(t, common.JsonRawMessageToString(adaptor.responsesRequest.PromptCacheKey))
+}
+
+func TestResponsesToChatUsesMappedModelBeforeOpenAIAdaptorRoleNormalization(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c.Set("model_mapping", `{"gpt-5.4":"openpangu-2.0-flash"}`)
+	request := &dto.OpenAIResponsesRequest{
+		Model: "gpt-5.4",
+		Input: json.RawMessage(`[
+			{"role":"developer","content":[{"type":"input_text","text":"Follow project instructions."}]},
+			{"role":"user","content":"hello"}
+		]`),
+	}
+	info := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatOpenAIResponses,
+		OriginModelName: "gpt-5.4",
+		ChannelMeta:     &relaycommon.ChannelMeta{},
+	}
+	require.NoError(t, helper.ModelMappedHelper(c, info, request))
+	assert.Equal(t, "openpangu-2.0-flash", request.Model)
+	assert.Equal(t, "openpangu-2.0-flash", info.UpstreamModelName)
+
+	converted, err := convertRequestForProtocolPlan(c, info, &openai.Adaptor{}, channelcompat.ProtocolPlan{
+		RequestProtocol:  channelcompat.ProtocolResponses,
+		UpstreamProtocol: channelcompat.ProtocolChat,
+		RequestConverter: relayconvert.ConverterOpenAIResponsesToOpenAIChat,
+		Status:           channelcompat.StatusConvertible,
+	}, request)
+	require.NoError(t, err)
+	chatRequest, ok := converted.(*dto.GeneralOpenAIRequest)
+	require.True(t, ok)
+	assert.Equal(t, "openpangu-2.0-flash", chatRequest.Model)
+	require.Len(t, chatRequest.Messages, 2)
+	assert.Equal(t, "system", chatRequest.Messages[0].Role)
+	assert.Equal(t, "Follow project instructions.", chatRequest.Messages[0].StringContent())
 }
 
 func TestProtocolBridgeRequestConversionConflictIsClientError(t *testing.T) {

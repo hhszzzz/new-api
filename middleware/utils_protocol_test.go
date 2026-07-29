@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/relayconvert"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service/channelcompat"
+	"github.com/QuantumNous/new-api/service/protocolstate"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -94,6 +95,22 @@ func TestApplySelectedChannelCompatibilityRecomputesProtocolPlanForEachChannel(t
 	assert.Equal(t, channelcompat.ProtocolChat, firstPlan.UpstreamProtocol)
 	assert.Equal(t, relayconvert.ConverterOpenAIResponsesToOpenAIChat, firstPlan.RequestConverter)
 	assert.Equal(t, "provider-chat-model", firstPlan.EffectiveUpstreamModel)
+	customTools, err := common.Marshal([]map[string]any{{
+		"type": "custom",
+		"name": "local/tool",
+	}})
+	require.NoError(t, err)
+	firstRequest := &dto.OpenAIResponsesRequest{
+		Model: "public-model",
+		Tools: customTools,
+	}
+	firstConversion, err := relayconvert.ConvertRequest(ctx, nil, types.RelayFormatOpenAI, firstRequest)
+	require.NoError(t, err)
+	chatRequest, ok := firstConversion.Value.(*dto.GeneralOpenAIRequest)
+	require.True(t, ok)
+	require.Len(t, chatRequest.Tools, 1)
+	firstAttemptToolName := chatRequest.Tools[0].Function.Name
+	assert.NotEqual(t, "local/tool", firstAttemptToolName)
 
 	require.NoError(t, applySelectedChannelCompatibility(ctx, messagesChannel, "public-model"))
 	secondPlan, ok := common.GetContextKeyType[channelcompat.ProtocolPlan](ctx, constant.ContextKeyProtocolPlan)
@@ -102,6 +119,27 @@ func TestApplySelectedChannelCompatibilityRecomputesProtocolPlanForEachChannel(t
 	assert.NotEqual(t, firstPlan.RequestConverter, secondPlan.RequestConverter)
 	assert.Equal(t, "provider-messages-model", secondPlan.EffectiveUpstreamModel)
 	assert.Equal(t, string(channelcompat.ProtocolMessages), common.GetContextKeyString(ctx, constant.ContextKeyUpstreamProtocol))
+
+	secondAttemptResponse := &dto.ClaudeResponse{
+		Id:         "msg_retry",
+		Type:       "message",
+		Role:       "assistant",
+		Model:      "provider-messages-model",
+		StopReason: "tool_use",
+		Content: []dto.ClaudeMediaMessage{{
+			Type:  "tool_use",
+			Id:    "call_retry",
+			Name:  firstAttemptToolName,
+			Input: map[string]any{"input": "must stay a normal function"},
+		}},
+	}
+	secondConversion, err := relayconvert.ConvertResponse(ctx, nil, types.RelayFormatOpenAIResponses, secondAttemptResponse)
+	require.NoError(t, err)
+	responsesOutput, ok := secondConversion.Value.(*dto.OpenAIResponsesResponse)
+	require.True(t, ok)
+	require.Len(t, responsesOutput.Output, 1)
+	assert.Equal(t, "function_call", responsesOutput.Output[0].Type)
+	assert.Equal(t, firstAttemptToolName, responsesOutput.Output[0].Name)
 }
 
 func TestBuildChannelCandidateClassifierAlwaysClassifiesResponsesAndMessages(t *testing.T) {
@@ -209,6 +247,7 @@ func TestAutomaticProtocolSelectionUsesAffinityThenRetriesSameChannel(t *testing
 	assert.Equal(t, channelcompat.ProtocolChat, plan.UpstreamProtocol)
 
 	unsupported := types.NewErrorWithStatusCode(errors.New("unknown endpoint"), types.ErrorCodeBadResponseStatusCode, http.StatusNotFound)
+	unsupported.MarkProtocolUnsupported()
 	assert.True(t, AdvanceAutoProtocolAttempt(ctx, unsupported))
 	retryChannelID, retrySameChannel := PendingAutoProtocolRetryChannelID(ctx)
 	assert.True(t, retrySameChannel)
@@ -220,6 +259,37 @@ func TestAutomaticProtocolSelectionUsesAffinityThenRetriesSameChannel(t *testing
 	assert.Equal(t, channelcompat.ProtocolResponses, retriedPlan.UpstreamProtocol)
 	_, retryStillPending := PendingAutoProtocolRetryChannelID(ctx)
 	assert.False(t, retryStillPending)
+}
+
+func TestAutomaticProtocolClassifierRequiresEvidenceBeforeNativeTier(t *testing.T) {
+	originalRedisEnabled := common.RedisEnabled
+	common.RedisEnabled = false
+	t.Cleanup(func() { common.RedisEnabled = originalRedisEnabled })
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"public-model"}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	classifier := BuildChannelCandidateClassifier(ctx, "public-model")
+	require.NotNil(t, classifier)
+
+	unknown := &model.Channel{Id: 9910, Type: constant.ChannelTypeOpenAI}
+	unknown.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
+		SelectionMode: dto.ProtocolSelectionModeAuto,
+	}})
+	declaredNative := &model.Channel{Id: 9911, Type: constant.ChannelTypeOpenAI}
+	declaredNative.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
+		SelectionMode:     dto.ProtocolSelectionModeAuto,
+		UpstreamProtocols: []string{dto.ProtocolCapabilityResponses},
+	}})
+
+	assert.Equal(t, model.ChannelCandidateConvertible, classifier(unknown))
+	assert.Equal(t, model.ChannelCandidateNative, classifier(declaredNative))
+
+	channelcompat.RememberProtocolAffinity(unknown, "public-model", channelcompat.ProtocolResponses, channelcompat.ProtocolResponses)
+	assert.Equal(t, model.ChannelCandidateNative, classifier(unknown))
+
+	channelcompat.RememberProtocolAffinity(unknown, "public-model", channelcompat.ProtocolResponses, channelcompat.ProtocolChat)
+	assert.Equal(t, model.ChannelCandidateConvertible, classifier(unknown))
 }
 
 func TestAutomaticProtocolAffinityDoesNotCrossResponsesAndMessagesEntries(t *testing.T) {
@@ -243,6 +313,39 @@ func TestAutomaticProtocolAffinityDoesNotCrossResponsesAndMessagesEntries(t *tes
 	assert.Equal(t, channelcompat.ProtocolMessages, plan.UpstreamProtocol)
 }
 
+func TestAutomaticProtocolSelectionKeepsBoundSessionProtocolAheadOfAffinityAndNative(t *testing.T) {
+	originalRedisEnabled := common.RedisEnabled
+	common.RedisEnabled = false
+	t.Cleanup(func() { common.RedisEnabled = originalRedisEnabled })
+
+	channel := &model.Channel{Id: 9905, Type: constant.ChannelTypeOpenAI}
+	channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
+		SelectionMode: dto.ProtocolSelectionModeAuto,
+	}})
+	channelcompat.RememberProtocolAffinity(channel, "public-model", channelcompat.ProtocolResponses, channelcompat.ProtocolMessages)
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"public-model"}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	common.SetContextKey(ctx, constant.ContextKeyProtocolStateBinding, &protocolstate.SelectionBinding{
+		ChannelID:        channel.Id,
+		UpstreamProtocol: channelcompat.ProtocolChat,
+	})
+
+	require.NoError(t, applySelectedChannelCompatibility(ctx, channel, "public-model"))
+	plan, ok := common.GetContextKeyType[channelcompat.ProtocolPlan](ctx, constant.ContextKeyProtocolPlan)
+	require.True(t, ok)
+	assert.Equal(t, channelcompat.ProtocolChat, plan.UpstreamProtocol)
+
+	unsupported := types.NewErrorWithStatusCode(errors.New("unknown endpoint"), types.ErrorCodeBadResponseStatusCode, http.StatusNotFound)
+	unsupported.MarkProtocolUnsupported()
+	assert.True(t, AdvanceAutoProtocolAttempt(ctx, unsupported))
+	require.NoError(t, applySelectedChannelCompatibility(ctx, channel, "public-model"))
+	retriedPlan, ok := common.GetContextKeyType[channelcompat.ProtocolPlan](ctx, constant.ContextKeyProtocolPlan)
+	require.True(t, ok)
+	assert.Equal(t, channelcompat.ProtocolMessages, retriedPlan.UpstreamProtocol)
+}
+
 func TestAutomaticProtocolSelectionDoesNotAdvanceForOrdinaryErrorsOrWrittenStreams(t *testing.T) {
 	newContext := func() *gin.Context {
 		recorder := httptest.NewRecorder()
@@ -261,10 +364,16 @@ func TestAutomaticProtocolSelectionDoesNotAdvanceForOrdinaryErrorsOrWrittenStrea
 	ordinaryError := types.NewErrorWithStatusCode(errors.New("unsupported parameter"), types.ErrorCodeBadResponseStatusCode, http.StatusBadRequest)
 	assert.False(t, AdvanceAutoProtocolAttempt(ordinaryContext, ordinaryError))
 
+	modelNotFoundContext := newContext()
+	require.NoError(t, applySelectedChannelCompatibility(modelNotFoundContext, channel, "public-model"))
+	modelNotFound := types.NewErrorWithStatusCode(errors.New("model not found"), types.ErrorCodeModelNotFound, http.StatusNotFound)
+	assert.False(t, AdvanceAutoProtocolAttempt(modelNotFoundContext, modelNotFound))
+
 	writtenContext := newContext()
 	require.NoError(t, applySelectedChannelCompatibility(writtenContext, channel, "public-model"))
 	writtenContext.String(http.StatusOK, "partial stream")
 	unsupported := types.NewErrorWithStatusCode(errors.New("unknown endpoint"), types.ErrorCodeBadResponseStatusCode, http.StatusNotFound)
+	unsupported.MarkProtocolUnsupported()
 	assert.False(t, AdvanceAutoProtocolAttempt(writtenContext, unsupported))
 }
 
@@ -287,4 +396,33 @@ func TestCommitAutomaticProtocolAffinityRemembersSuccessfulWireFormat(t *testing
 	protocol, found := channelcompat.LookupProtocolAffinity(channel, "public-model", channelcompat.ProtocolMessages)
 	require.True(t, found)
 	assert.Equal(t, channelcompat.ProtocolMessages, protocol)
+}
+
+func TestCommitAutomaticProtocolAffinityRequiresVerifiedStreamCompletion(t *testing.T) {
+	originalRedisEnabled := common.RedisEnabled
+	common.RedisEnabled = false
+	t.Cleanup(func() { common.RedisEnabled = originalRedisEnabled })
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(
+		http.MethodPost,
+		"/v1/responses",
+		strings.NewReader(`{"model":"public-model","stream":true}`),
+	)
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	channel := &model.Channel{Id: 9912, Type: constant.ChannelTypeOpenAI}
+	channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
+		SelectionMode: dto.ProtocolSelectionModeAuto,
+	}})
+
+	require.NoError(t, applySelectedChannelCompatibility(ctx, channel, "public-model"))
+	CommitAutoProtocolAffinity(ctx)
+	_, found := channelcompat.LookupProtocolAffinity(channel, "public-model", channelcompat.ProtocolResponses)
+	assert.False(t, found)
+
+	protocolstate.MarkStreamCompleted(ctx)
+	CommitAutoProtocolAffinity(ctx)
+	protocol, found := channelcompat.LookupProtocolAffinity(channel, "public-model", channelcompat.ProtocolResponses)
+	require.True(t, found)
+	assert.Equal(t, channelcompat.ProtocolResponses, protocol)
 }

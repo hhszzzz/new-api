@@ -76,6 +76,7 @@ func TestResponsesChatBridgeRestoresExtendedToolKinds(t *testing.T) {
 	assert.Equal(t, "tool_search", chatRequest.Tools[4].Function.Name)
 	assert.Equal(t, "added_lookup", chatRequest.Tools[5].Function.Name)
 	assert.Equal(t, []string{"input"}, chatRequest.Tools[1].Function.Parameters.(map[string]any)["required"])
+	assert.Equal(t, []string{"query"}, chatRequest.Tools[4].Function.Parameters.(map[string]any)["required"])
 	require.Len(t, chatRequest.Messages, 1)
 	assert.Equal(t, "hello", chatRequest.Messages[0].StringContent())
 
@@ -120,6 +121,84 @@ func TestResponsesChatBridgeRestoresExtendedToolKinds(t *testing.T) {
 	assert.JSONEq(t, `{"query":"billing"}`, string(response.Output[3].Arguments))
 }
 
+func TestResponsesBridgesPreserveStringCustomMetadataAndNamespaceChildren(t *testing.T) {
+	for _, target := range []struct {
+		name   string
+		format types.RelayFormat
+	}{
+		{name: "Chat", format: types.RelayFormatOpenAI},
+		{name: "Messages", format: types.RelayFormatClaude},
+	} {
+		t.Run(target.name, func(t *testing.T) {
+			maxOutputTokens := uint(1024)
+			request := &dto.OpenAIResponsesRequest{
+				Model:           "gpt-test",
+				Input:           protocolBridgeRaw(t, "hello"),
+				MaxOutputTokens: &maxOutputTokens,
+				Tools: protocolBridgeRaw(t, []any{
+					"apply_patch",
+					map[string]any{
+						"type":        "custom",
+						"name":        "shell",
+						"description": "Run a command",
+						"format": map[string]any{
+							"type":       "grammar",
+							"syntax":     "lark",
+							"definition": "start: command",
+						},
+					},
+					map[string]any{
+						"type": "namespace",
+						"name": "workspace",
+						"children": []any{
+							map[string]any{"type": "function", "name": "read_file"},
+						},
+					},
+					map[string]any{
+						"type": "function",
+						"function": map[string]any{
+							"name":        "nested_lookup",
+							"description": "Nested Chat-style function declaration",
+							"parameters":  map[string]any{"properties": map[string]any{}},
+						},
+						"strict": true,
+					},
+				}),
+			}
+
+			result, err := ConvertRequest(WithProtocolBridgeContext(context.Background()), &convmeta.Values{}, target.format, request)
+			require.NoError(t, err)
+
+			var names []string
+			var shellDescription string
+			switch converted := result.Value.(type) {
+			case *dto.GeneralOpenAIRequest:
+				for _, tool := range converted.Tools {
+					names = append(names, tool.Function.Name)
+					if tool.Function.Name == "shell" {
+						shellDescription = tool.Function.Description
+					}
+				}
+			case *dto.ClaudeRequest:
+				tools, convertErr := kitutil.Any2Type[[]*dto.Tool](converted.Tools)
+				require.NoError(t, convertErr)
+				for _, tool := range tools {
+					names = append(names, tool.Name)
+					if tool.Name == "shell" {
+						shellDescription = tool.Description
+					}
+				}
+			default:
+				require.Failf(t, "unexpected converted request", "%T", result.Value)
+			}
+
+			assert.Equal(t, []string{"apply_patch", "shell", "workspace__read_file", "nested_lookup"}, names)
+			assert.Contains(t, shellDescription, "Original tool definition:")
+			assert.Contains(t, shellDescription, `"format":{"definition":"start: command","syntax":"lark","type":"grammar"}`)
+		})
+	}
+}
+
 func TestResponsesChatBridgeRejectsToolNameCollisions(t *testing.T) {
 	request := &dto.OpenAIResponsesRequest{Model: "gpt-test", Tools: protocolBridgeRaw(t, []map[string]any{
 		{"type": "function", "name": "crm__lookup"},
@@ -137,54 +216,106 @@ func TestResponsesChatBridgeRejectsToolNameCollisions(t *testing.T) {
 	assert.Contains(t, err.Error(), "conflicts after Chat name encoding")
 }
 
-func TestResponsesChatBridgeNormalizesFunctionsAndDropsHostedTools(t *testing.T) {
-	stream := true
+func TestResponsesChatBridgeDeduplicatesRepeatedToolDeclarations(t *testing.T) {
 	request := &dto.OpenAIResponsesRequest{
-		Model:  "gpt-test",
-		Stream: &stream,
+		Model: "gpt-test",
 		Input: protocolBridgeRaw(t, []map[string]any{
-			{"type": "web_search_call", "id": "ws_1", "status": "completed"},
-			{"role": "user", "content": "hello"},
-		}),
-		Tools: protocolBridgeRaw(t, []map[string]any{
 			{
-				"type":   "function",
-				"name":   "lookup",
-				"strict": true,
-				"parameters": map[string]any{
-					"type": nil,
-					"properties": map[string]any{
-						"query": map[string]any{"type": "string"},
+				"type": "tool_search_output",
+				"tools": []map[string]any{
+					{"type": "function", "name": "lookup", "parameters": map[string]any{"type": "object"}},
+					{
+						"type": "namespace",
+						"name": "crm",
+						"tools": []map[string]any{
+							{"type": "function", "name": "customer", "parameters": map[string]any{"type": "object"}},
+						},
 					},
 				},
 			},
-			{"type": "web_search_preview"},
-			{"type": "file_search"},
-			{"type": "tool_search"},
-			{"type": "tool_search", "execution": "server"},
+			{"role": "user", "content": "hello"},
+		}),
+		Tools: protocolBridgeRaw(t, []map[string]any{
+			{"type": "function", "name": "lookup", "parameters": map[string]any{"type": "object"}},
+			{
+				"type": "namespace",
+				"name": "crm",
+				"tools": []map[string]any{
+					{"type": "function", "name": "customer", "parameters": map[string]any{"type": "object"}},
+				},
+			},
 		}),
 	}
 
-	result, err := ConvertRequest(context.Background(), &convmeta.Values{}, types.RelayFormatOpenAI, request)
+	result, err := ConvertRequest(WithProtocolBridgeContext(context.Background()), &convmeta.Values{}, types.RelayFormatOpenAI, request)
 	require.NoError(t, err)
-	chatRequest, ok := result.Value.(*dto.GeneralOpenAIRequest)
+	converted, ok := result.Value.(*dto.GeneralOpenAIRequest)
 	require.True(t, ok)
-	require.Len(t, chatRequest.Tools, 2)
-	require.Len(t, chatRequest.Messages, 1)
-	assert.Equal(t, "hello", chatRequest.Messages[0].StringContent())
-	require.NotNil(t, chatRequest.StreamOptions)
-	assert.True(t, chatRequest.StreamOptions.IncludeUsage)
+	require.Len(t, converted.Tools, 2)
+	assert.Equal(t, "lookup", converted.Tools[0].Function.Name)
+	assert.Equal(t, "crm__customer", converted.Tools[1].Function.Name)
+}
 
-	encoded, err := kitutil.Marshal(chatRequest.Tools[0])
-	require.NoError(t, err)
-	var tool map[string]any
-	require.NoError(t, kitutil.Unmarshal(encoded, &tool))
-	function := tool["function"].(map[string]any)
-	assert.Equal(t, true, function["strict"])
-	parameters := function["parameters"].(map[string]any)
-	assert.Equal(t, "object", parameters["type"])
-	assert.Equal(t, "string", parameters["properties"].(map[string]any)["query"].(map[string]any)["type"])
-	assert.Equal(t, "tool_search", chatRequest.Tools[1].Function.Name)
+func TestResponsesBridgesRejectHostedToolHistory(t *testing.T) {
+	for _, target := range []struct {
+		name   string
+		format types.RelayFormat
+	}{
+		{name: "Chat", format: types.RelayFormatOpenAI},
+		{name: "Messages", format: types.RelayFormatClaude},
+	} {
+		t.Run(target.name, func(t *testing.T) {
+			stream := true
+			request := &dto.OpenAIResponsesRequest{
+				Model:  "gpt-test",
+				Stream: &stream,
+				Input: protocolBridgeRaw(t, []map[string]any{
+					{"type": "web_search_call", "id": "ws_1", "status": "completed"},
+					{"role": "user", "content": "hello"},
+				}),
+			}
+
+			result, err := ConvertRequest(context.Background(), &convmeta.Values{}, target.format, request)
+			require.Error(t, err)
+			assert.Nil(t, result)
+			assert.Contains(t, err.Error(), "web_search_call")
+			assert.Contains(t, err.Error(), "without losing context")
+		})
+	}
+}
+
+func TestResponsesBridgesRejectHostedToolDeclarations(t *testing.T) {
+	targets := []struct {
+		name   string
+		format types.RelayFormat
+	}{
+		{name: "Chat", format: types.RelayFormatOpenAI},
+		{name: "Messages", format: types.RelayFormatClaude},
+	}
+	tools := []struct {
+		name string
+		tool map[string]any
+	}{
+		{name: "web search", tool: map[string]any{"type": "web_search_preview"}},
+		{name: "file search", tool: map[string]any{"type": "file_search"}},
+		{name: "server tool search", tool: map[string]any{"type": "tool_search", "execution": "server"}},
+	}
+
+	for _, target := range targets {
+		for _, test := range tools {
+			t.Run(target.name+"/"+test.name, func(t *testing.T) {
+				request := &dto.OpenAIResponsesRequest{
+					Model: "gpt-test",
+					Input: protocolBridgeRaw(t, "hello"),
+					Tools: protocolBridgeRaw(t, []map[string]any{test.tool}),
+				}
+
+				_, err := ConvertRequest(context.Background(), &convmeta.Values{}, target.format, request)
+
+				require.ErrorContains(t, err, "native Responses upstream")
+			})
+		}
+	}
 }
 
 func TestResponsesChatBridgeLoadsToolsFromToolSearchOutput(t *testing.T) {
@@ -455,6 +586,7 @@ func TestResponsesMessagesBridgeRestoresCustomToolStreamLifecycle(t *testing.T) 
 	request := &dto.OpenAIResponsesRequest{
 		Model:           "claude-test",
 		MaxOutputTokens: &maxOutputTokens,
+		Input:           protocolBridgeRaw(t, "use the tool"),
 		Tools: protocolBridgeRaw(t, []map[string]any{
 			{"type": "custom", "name": "apply_patch"},
 		}),
@@ -545,6 +677,287 @@ func TestResponsesMessagesBridgeRestoresCustomToolStreamLifecycle(t *testing.T) 
 	assert.Equal(t, "patch body", events[3].Payload.Delta)
 	assert.Equal(t, "patch body", events[4].Payload.Input)
 	assert.Equal(t, "patch body", events[5].Payload.Item.Input)
+}
+
+func TestResponsesMessagesBridgeReplaysSignedThinkingOnlyOnOriginChannel(t *testing.T) {
+	const stateSecret = "protocol-bridge-test-secret"
+	ctx := WithProtocolBridgeContext(context.Background())
+	meta := &convmeta.Values{
+		ChannelMetaAttached: true,
+		ChannelID:           17,
+		Options:             &convmeta.Options{ProviderStateSecret: stateSecret},
+	}
+	upstream := &dto.ClaudeResponse{
+		Id:         "msg_signed_tool",
+		Model:      "claude-test",
+		StopReason: "tool_use",
+		Content: []dto.ClaudeMediaMessage{
+			{Type: "thinking", Thinking: kitutil.GetPointer("inspect inputs"), Signature: "signed-thinking-state"},
+			{Type: "tool_use", Id: "call_1", Name: "lookup", Input: map[string]any{"q": "x"}},
+		},
+	}
+
+	responseResult, err := ConvertResponse(ctx, meta, types.RelayFormatOpenAIResponses, upstream)
+	require.NoError(t, err)
+	response, ok := responseResult.Value.(*dto.OpenAIResponsesResponse)
+	require.True(t, ok)
+	require.Len(t, response.Output, 2)
+	assert.Equal(t, "reasoning", response.Output[0].Type)
+	assert.Equal(t, "inspect inputs", response.Output[0].Summary[0].Text)
+	require.NotEmpty(t, response.Output[0].EncryptedContent)
+	assert.Equal(t, "function_call", response.Output[1].Type)
+
+	maxOutputTokens := uint(4096)
+	nextRequest := &dto.OpenAIResponsesRequest{
+		Model:           "claude-test",
+		MaxOutputTokens: &maxOutputTokens,
+		Reasoning:       &dto.Reasoning{Effort: "medium"},
+		Input: protocolBridgeRaw(t, []any{
+			map[string]any{"role": "user", "content": "run it"},
+			response.Output[0],
+			response.Output[1],
+			map[string]any{"type": "function_call_output", "call_id": "call_1", "output": "done"},
+		}),
+		Tools: protocolBridgeRaw(t, []map[string]any{
+			{"type": "function", "name": "lookup", "parameters": map[string]any{"type": "object"}},
+		}),
+	}
+
+	requestResult, err := ConvertRequest(ctx, meta, types.RelayFormatClaude, nextRequest)
+	require.NoError(t, err)
+	converted, ok := requestResult.Value.(*dto.ClaudeRequest)
+	require.True(t, ok)
+	require.Len(t, converted.Messages, 3)
+	assistant, err := converted.Messages[1].ParseContent()
+	require.NoError(t, err)
+	require.Len(t, assistant, 2)
+	assert.Equal(t, "thinking", assistant[0].Type)
+	assert.Equal(t, "inspect inputs", *assistant[0].Thinking)
+	assert.Equal(t, "signed-thinking-state", assistant[0].Signature)
+	assert.Equal(t, "tool_use", assistant[1].Type)
+	require.NotNil(t, converted.Thinking)
+	assert.Equal(t, "enabled", converted.Thinking.Type)
+
+	otherChannel := &convmeta.Values{
+		ChannelMetaAttached: true,
+		ChannelID:           18,
+		Options:             &convmeta.Options{ProviderStateSecret: stateSecret},
+	}
+	requestResult, err = ConvertRequest(WithProtocolBridgeContext(context.Background()), otherChannel, types.RelayFormatClaude, nextRequest)
+	require.NoError(t, err)
+	converted, ok = requestResult.Value.(*dto.ClaudeRequest)
+	require.True(t, ok)
+	assistant, err = converted.Messages[1].ParseContent()
+	require.NoError(t, err)
+	require.Len(t, assistant, 1)
+	assert.Equal(t, "tool_use", assistant[0].Type)
+	assert.Nil(t, converted.Thinking)
+}
+
+func TestResponsesMessagesBridgePreservesSignedThinkingInStream(t *testing.T) {
+	const stateSecret = "protocol-bridge-test-secret"
+	ctx := WithProtocolBridgeContext(context.Background())
+	meta := &convmeta.Values{
+		ChannelMetaAttached: true,
+		ChannelID:           17,
+		Options:             &convmeta.Options{ProviderStateSecret: stateSecret},
+	}
+	state, err := NewResponseStreamState(types.RelayFormatClaude, types.RelayFormatOpenAIResponses, ResponseStreamOptions{
+		ID:    "resp-signed-thinking",
+		Model: "claude-test",
+	})
+	require.NoError(t, err)
+
+	thinkingIndex := 0
+	toolIndex := 1
+	stopReason := "tool_use"
+	chunks := []*dto.ClaudeResponse{
+		{Type: "message_start", Message: &dto.ClaudeMediaMessage{Id: "msg_stream", Model: "claude-test"}},
+		{Type: "content_block_start", Index: &thinkingIndex, ContentBlock: &dto.ClaudeMediaMessage{Type: "thinking", Thinking: kitutil.GetPointer("")}},
+		{Type: "content_block_delta", Index: &thinkingIndex, Delta: &dto.ClaudeMediaMessage{Type: "thinking_delta", Thinking: kitutil.GetPointer("inspect inputs")}},
+		{Type: "content_block_delta", Index: &thinkingIndex, Delta: &dto.ClaudeMediaMessage{Type: "signature_delta", Signature: "signed-thinking-state"}},
+		{Type: "content_block_stop", Index: &thinkingIndex},
+		{Type: "content_block_start", Index: &toolIndex, ContentBlock: &dto.ClaudeMediaMessage{Type: "tool_use", Id: "call_1", Name: "lookup", Input: map[string]any{}}},
+		{Type: "content_block_delta", Index: &toolIndex, Delta: &dto.ClaudeMediaMessage{Type: "input_json_delta", PartialJson: kitutil.GetPointer(`{"q":"x"}`)}},
+		{Type: "content_block_stop", Index: &toolIndex},
+		{Type: "message_delta", Delta: &dto.ClaudeMediaMessage{StopReason: &stopReason}},
+		{Type: "message_stop"},
+	}
+
+	events := make([]ChatToResponsesStreamEvent, 0)
+	for _, chunk := range chunks {
+		results, err := ConvertStreamResponseChunk(ctx, meta, state, chunk)
+		require.NoError(t, err)
+		for _, result := range results {
+			event, ok := result.Value.(ChatToResponsesStreamEvent)
+			require.True(t, ok)
+			events = append(events, event)
+		}
+	}
+	final, err := FinalizeStreamResponse(ctx, meta, state)
+	require.NoError(t, err)
+	for _, result := range final {
+		event, ok := result.Value.(ChatToResponsesStreamEvent)
+		require.True(t, ok)
+		events = append(events, event)
+	}
+
+	var completed *dto.OpenAIResponsesResponse
+	for _, event := range events {
+		if event.Type == "response.output_item.done" && event.Payload.Item != nil && event.Payload.Item.Type == "reasoning" {
+			require.NotEmpty(t, event.Payload.Item.EncryptedContent)
+			assert.Equal(t, "inspect inputs", event.Payload.Item.Summary[0].Text)
+		}
+		if event.Type == "response.completed" {
+			completed = event.Payload.Response
+		}
+	}
+	require.NotNil(t, completed)
+	require.Len(t, completed.Output, 2)
+	assert.Equal(t, "reasoning", completed.Output[0].Type)
+	require.NotEmpty(t, completed.Output[0].EncryptedContent)
+	assert.Equal(t, "function_call", completed.Output[1].Type)
+
+	maxOutputTokens := uint(4096)
+	nextRequest := &dto.OpenAIResponsesRequest{
+		Model:           "claude-test",
+		MaxOutputTokens: &maxOutputTokens,
+		Reasoning:       &dto.Reasoning{Effort: "medium"},
+		Input: protocolBridgeRaw(t, []any{
+			map[string]any{"role": "user", "content": "run it"},
+			completed.Output[0],
+			completed.Output[1],
+			map[string]any{"type": "function_call_output", "call_id": "call_1", "output": "done"},
+		}),
+		Tools: protocolBridgeRaw(t, []map[string]any{
+			{"type": "function", "name": "lookup", "parameters": map[string]any{"type": "object"}},
+		}),
+	}
+	requestResult, err := ConvertRequest(WithProtocolBridgeContext(context.Background()), meta, types.RelayFormatClaude, nextRequest)
+	require.NoError(t, err)
+	converted, ok := requestResult.Value.(*dto.ClaudeRequest)
+	require.True(t, ok)
+	assistant, err := converted.Messages[1].ParseContent()
+	require.NoError(t, err)
+	require.Len(t, assistant, 2)
+	assert.Equal(t, "thinking", assistant[0].Type)
+	assert.Equal(t, "signed-thinking-state", assistant[0].Signature)
+}
+
+func TestMessagesResponsesBridgePreservesMultipleThinkingBlocksInStream(t *testing.T) {
+	ctx := WithProtocolBridgeContext(context.Background())
+	meta := &convmeta.Values{
+		ChannelMetaAttached: true,
+		ChannelID:           17,
+		Options:             &convmeta.Options{ProviderStateSecret: "protocol-bridge-test-secret"},
+	}
+	state, err := NewResponseStreamState(types.RelayFormatClaude, types.RelayFormatOpenAIResponses, ResponseStreamOptions{
+		ID:    "resp-multiple-thinking",
+		Model: "claude-test",
+	})
+	require.NoError(t, err)
+
+	firstIndex := 0
+	secondIndex := 1
+	stopReason := "end_turn"
+	chunks := []*dto.ClaudeResponse{
+		{Type: "message_start", Message: &dto.ClaudeMediaMessage{Id: "msg_stream", Model: "claude-test"}},
+		{Type: "content_block_start", Index: &firstIndex, ContentBlock: &dto.ClaudeMediaMessage{Type: "thinking", Thinking: kitutil.GetPointer("")}},
+		{Type: "content_block_delta", Index: &firstIndex, Delta: &dto.ClaudeMediaMessage{Type: "thinking_delta", Thinking: kitutil.GetPointer("first thought")}},
+		{Type: "content_block_delta", Index: &firstIndex, Delta: &dto.ClaudeMediaMessage{Type: "signature_delta", Signature: "first-signature"}},
+		{Type: "content_block_stop", Index: &firstIndex},
+		{Type: "content_block_start", Index: &secondIndex, ContentBlock: &dto.ClaudeMediaMessage{Type: "thinking", Thinking: kitutil.GetPointer("")}},
+		{Type: "content_block_delta", Index: &secondIndex, Delta: &dto.ClaudeMediaMessage{Type: "thinking_delta", Thinking: kitutil.GetPointer("second thought")}},
+		{Type: "content_block_delta", Index: &secondIndex, Delta: &dto.ClaudeMediaMessage{Type: "signature_delta", Signature: "second-signature"}},
+		{Type: "content_block_stop", Index: &secondIndex},
+		{Type: "message_delta", Delta: &dto.ClaudeMediaMessage{StopReason: &stopReason}, Usage: &dto.ClaudeUsage{OutputTokens: 4}},
+		{Type: "message_stop"},
+	}
+
+	events := make([]ChatToResponsesStreamEvent, 0)
+	for _, chunk := range chunks {
+		results, convertErr := ConvertStreamResponseChunk(ctx, meta, state, chunk)
+		require.NoError(t, convertErr)
+		for _, result := range results {
+			event, ok := result.Value.(ChatToResponsesStreamEvent)
+			require.True(t, ok)
+			events = append(events, event)
+		}
+	}
+	final, err := FinalizeStreamResponse(ctx, meta, state)
+	require.NoError(t, err)
+	for _, result := range final {
+		event, ok := result.Value.(ChatToResponsesStreamEvent)
+		require.True(t, ok)
+		events = append(events, event)
+	}
+
+	var completed *dto.OpenAIResponsesResponse
+	for _, event := range events {
+		if event.Type == "response.completed" {
+			completed = event.Payload.Response
+		}
+	}
+	require.NotNil(t, completed)
+	require.Len(t, completed.Output, 2)
+	assert.Equal(t, "reasoning", completed.Output[0].Type)
+	assert.Equal(t, "first thought", completed.Output[0].Summary[0].Text)
+	require.NotEmpty(t, completed.Output[0].EncryptedContent)
+	assert.Equal(t, "reasoning", completed.Output[1].Type)
+	assert.Equal(t, "second thought", completed.Output[1].Summary[0].Text)
+	require.NotEmpty(t, completed.Output[1].EncryptedContent)
+	assert.NotEqual(t, completed.Output[0].EncryptedContent, completed.Output[1].EncryptedContent)
+}
+
+func TestResponsesMessagesBridgeReplaysRedactedThinkingWithoutVisibleSummary(t *testing.T) {
+	const stateSecret = "protocol-bridge-test-secret"
+	ctx := WithProtocolBridgeContext(context.Background())
+	meta := &convmeta.Values{
+		ChannelMetaAttached: true,
+		ChannelID:           17,
+		Options:             &convmeta.Options{ProviderStateSecret: stateSecret},
+	}
+	responseResult, err := ConvertResponse(ctx, meta, types.RelayFormatOpenAIResponses, &dto.ClaudeResponse{
+		Id:         "msg_redacted_tool",
+		Model:      "claude-test",
+		StopReason: "tool_use",
+		Content: []dto.ClaudeMediaMessage{
+			{Type: "redacted_thinking", Data: "opaque-redacted-state"},
+			{Type: "tool_use", Id: "call_1", Name: "lookup", Input: map[string]any{}},
+		},
+	})
+	require.NoError(t, err)
+	response, ok := responseResult.Value.(*dto.OpenAIResponsesResponse)
+	require.True(t, ok)
+	require.Len(t, response.Output, 2)
+	assert.Equal(t, "reasoning", response.Output[0].Type)
+	assert.Empty(t, response.Output[0].Summary)
+	require.NotEmpty(t, response.Output[0].EncryptedContent)
+
+	maxOutputTokens := uint(4096)
+	requestResult, err := ConvertRequest(WithProtocolBridgeContext(context.Background()), meta, types.RelayFormatClaude, &dto.OpenAIResponsesRequest{
+		Model:           "claude-test",
+		MaxOutputTokens: &maxOutputTokens,
+		Reasoning:       &dto.Reasoning{Effort: "medium"},
+		Input: protocolBridgeRaw(t, []any{
+			map[string]any{"role": "user", "content": "run it"},
+			response.Output[0],
+			response.Output[1],
+			map[string]any{"type": "function_call_output", "call_id": "call_1", "output": "done"},
+		}),
+		Tools: protocolBridgeRaw(t, []map[string]any{
+			{"type": "function", "name": "lookup", "parameters": map[string]any{"type": "object"}},
+		}),
+	})
+	require.NoError(t, err)
+	converted, ok := requestResult.Value.(*dto.ClaudeRequest)
+	require.True(t, ok)
+	assistant, err := converted.Messages[1].ParseContent()
+	require.NoError(t, err)
+	require.Len(t, assistant, 2)
+	assert.Equal(t, "redacted_thinking", assistant[0].Type)
+	assert.Equal(t, "opaque-redacted-state", assistant[0].Data)
+	require.NotNil(t, converted.Thinking)
 }
 
 func TestResetProtocolBridgeContextDropsAttemptScopedToolState(t *testing.T) {

@@ -28,6 +28,7 @@ export const UPSTREAM_PROTOCOLS = [
   'chat',
   'messages',
   'responses',
+  'gemini',
 ] as const satisfies readonly UpstreamProtocol[]
 
 export const PROTOCOL_SELECTION_MODES = [
@@ -99,6 +100,12 @@ export function defaultUpstreamProtocols(
   if (channelType === 57) return ['responses']
   if (channelType === 14 || channelType === 33) return ['messages']
   if (channelType === 3) return ['chat', 'responses']
+  if (channelType === 24 || channelType === 41) return ['gemini']
+  if ([17, 45, 48].includes(channelType)) return ['chat', 'responses']
+  if ([25, 26, 35, 43].includes(channelType)) return ['chat', 'messages']
+  if (channelType === 59 || channelType === 60) {
+    return ['chat', 'messages', 'responses', 'gemini']
+  }
   if (channelType !== 1) return ['chat']
 
   const normalizedUrl = baseUrl?.trim()

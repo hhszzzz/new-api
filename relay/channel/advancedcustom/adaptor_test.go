@@ -503,6 +503,95 @@ func TestAdaptorAcceptsRequestPreconvertedByProtocolPlan(t *testing.T) {
 	assert.Equal(t, relayconvert.ConverterOpenAIResponsesToOpenAIChat, adaptor.converter)
 }
 
+func TestAdaptorAcceptsEveryPreconvertedBridgeDirection(t *testing.T) {
+	tests := []struct {
+		name             string
+		incomingPath     string
+		upstreamPath     string
+		converter        string
+		requestProtocol  channelcompat.Protocol
+		upstreamProtocol channelcompat.Protocol
+		convert          func(*Adaptor, *gin.Context, *relaycommon.RelayInfo) (any, error)
+		assertType       func(*testing.T, any)
+	}{
+		{
+			name:             "messages to chat",
+			incomingPath:     "/v1/messages",
+			upstreamPath:     "/v1/chat/completions",
+			converter:        relayconvert.ConverterClaudeMessagesToOpenAIChat,
+			requestProtocol:  channelcompat.ProtocolMessages,
+			upstreamProtocol: channelcompat.ProtocolChat,
+			convert: func(adaptor *Adaptor, c *gin.Context, info *relaycommon.RelayInfo) (any, error) {
+				return adaptor.ConvertOpenAIRequest(c, info, &dto.GeneralOpenAIRequest{Model: "provider-model", Messages: []dto.Message{{Role: "user", Content: "hello"}}})
+			},
+			assertType: func(t *testing.T, value any) { require.IsType(t, &dto.GeneralOpenAIRequest{}, value) },
+		},
+		{
+			name:             "messages to responses",
+			incomingPath:     "/v1/messages",
+			upstreamPath:     "/v1/responses",
+			converter:        relayconvert.ConverterClaudeMessagesToOpenAIResponses,
+			requestProtocol:  channelcompat.ProtocolMessages,
+			upstreamProtocol: channelcompat.ProtocolResponses,
+			convert: func(adaptor *Adaptor, c *gin.Context, info *relaycommon.RelayInfo) (any, error) {
+				return adaptor.ConvertOpenAIResponsesRequest(c, info, dto.OpenAIResponsesRequest{Model: "provider-model", Input: mustAdvancedCustomRawMessage(t, "hello")})
+			},
+			assertType: func(t *testing.T, value any) { require.IsType(t, dto.OpenAIResponsesRequest{}, value) },
+		},
+		{
+			name:             "responses to chat",
+			incomingPath:     "/v1/responses",
+			upstreamPath:     "/v1/chat/completions",
+			converter:        relayconvert.ConverterOpenAIResponsesToOpenAIChat,
+			requestProtocol:  channelcompat.ProtocolResponses,
+			upstreamProtocol: channelcompat.ProtocolChat,
+			convert: func(adaptor *Adaptor, c *gin.Context, info *relaycommon.RelayInfo) (any, error) {
+				return adaptor.ConvertOpenAIRequest(c, info, &dto.GeneralOpenAIRequest{Model: "provider-model", Messages: []dto.Message{{Role: "user", Content: "hello"}}})
+			},
+			assertType: func(t *testing.T, value any) { require.IsType(t, &dto.GeneralOpenAIRequest{}, value) },
+		},
+		{
+			name:             "responses to messages",
+			incomingPath:     "/v1/responses",
+			upstreamPath:     "/v1/messages",
+			converter:        relayconvert.ConverterOpenAIResponsesToClaudeMessages,
+			requestProtocol:  channelcompat.ProtocolResponses,
+			upstreamProtocol: channelcompat.ProtocolMessages,
+			convert: func(adaptor *Adaptor, c *gin.Context, info *relaycommon.RelayInfo) (any, error) {
+				return adaptor.ConvertClaudeRequest(c, info, &dto.ClaudeRequest{Model: "provider-model", Messages: []dto.ClaudeMessage{{Role: "user", Content: "hello"}}})
+			},
+			assertType: func(t *testing.T, value any) { require.IsType(t, &dto.ClaudeRequest{}, value) },
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			adaptor := &Adaptor{}
+			info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{Routes: []dto.AdvancedCustomRoute{{
+				IncomingPath: test.incomingPath,
+				UpstreamPath: test.upstreamPath,
+				Converter:    test.converter,
+				Models:       []string{"provider-model"},
+			}}})
+			info.UpstreamModelName = "provider-model"
+			c := advancedCustomGinContext(test.incomingPath)
+			common.SetContextKey(c, constant.ContextKeyProtocolPlan, channelcompat.ProtocolPlan{
+				RequestProtocol:        test.requestProtocol,
+				UpstreamProtocol:       test.upstreamProtocol,
+				RequestConverter:       test.converter,
+				EffectiveUpstreamModel: "provider-model",
+				Status:                 channelcompat.StatusConvertible,
+			})
+
+			converted, err := test.convert(adaptor, c, info)
+
+			require.NoError(t, err)
+			test.assertType(t, converted)
+			assert.Equal(t, test.converter, adaptor.converter)
+		})
+	}
+}
+
 func TestAdaptorSelectsDuplicateResponsesRoutesByModel(t *testing.T) {
 	config := &dto.AdvancedCustomConfig{
 		Routes: []dto.AdvancedCustomRoute{

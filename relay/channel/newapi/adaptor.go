@@ -5,6 +5,8 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/claude"
 	"github.com/QuantumNous/new-api/relay/channel/gemini"
@@ -13,6 +15,7 @@ import (
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/service/channelcompat"
 
 	"github.com/gin-gonic/gin"
 )
@@ -40,8 +43,21 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *rel
 	channel.SetupApiRequestHeader(info, c, req)
 	req.Set("Authorization", "Bearer "+info.ApiKey)
 
-	switch info.RelayFormat {
-	case types.RelayFormatClaude:
+	upstreamProtocol := channelcompat.Protocol("")
+	if plan, ok := common.GetContextKeyType[channelcompat.ProtocolPlan](c, constant.ContextKeyProtocolPlan); ok {
+		upstreamProtocol = plan.UpstreamProtocol
+	}
+	if upstreamProtocol == "" {
+		switch info.RelayFormat {
+		case types.RelayFormatClaude:
+			upstreamProtocol = channelcompat.ProtocolMessages
+		case types.RelayFormatGemini:
+			upstreamProtocol = channelcompat.ProtocolGemini
+		}
+	}
+
+	switch upstreamProtocol {
+	case channelcompat.ProtocolMessages:
 		req.Set("x-api-key", info.ApiKey)
 		if req.Get("anthropic-version") == "" {
 			anthropicVersion := c.Request.Header.Get("anthropic-version")
@@ -50,7 +66,8 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *rel
 			}
 			req.Set("anthropic-version", anthropicVersion)
 		}
-	case types.RelayFormatGemini:
+		claude.ApplyClaudeRequestHeaders(c, req, info)
+	case channelcompat.ProtocolGemini:
 		req.Set("x-goog-api-key", info.ApiKey)
 	}
 	return nil
@@ -102,6 +119,16 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 }
 
 func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage any, err *types.NewAPIError) {
+	if plan, ok := common.GetContextKeyType[channelcompat.ProtocolPlan](c, constant.ContextKeyProtocolPlan); ok {
+		switch plan.UpstreamProtocol {
+		case channelcompat.ProtocolChat, channelcompat.ProtocolResponses:
+			return a.openaiAdaptor.DoResponse(c, resp, info)
+		case channelcompat.ProtocolMessages:
+			return a.claudeAdaptor.DoResponse(c, resp, info)
+		case channelcompat.ProtocolGemini:
+			return a.geminiAdaptor.DoResponse(c, resp, info)
+		}
+	}
 	switch info.RelayFormat {
 	case types.RelayFormatClaude:
 		return a.claudeAdaptor.DoResponse(c, resp, info)

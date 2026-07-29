@@ -13,7 +13,7 @@ import (
 func TestProtocolCapabilitiesValidate(t *testing.T) {
 	allow := true
 	valid := &ProtocolCapabilities{
-		UpstreamProtocols: []string{ProtocolCapabilityChat, ProtocolCapabilityResponses},
+		UpstreamProtocols: []string{ProtocolCapabilityChat, ProtocolCapabilityResponses, ProtocolCapabilityGemini},
 		AllowConversion:   &allow,
 		ModelOverrides: []ProtocolCapabilityModelOverride{
 			{

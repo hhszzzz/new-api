@@ -21,6 +21,7 @@
     {
       "role": "assistant",
       "content": null,
+      "reasoning_content": "tool call",
       "tool_calls": [
         {
           "id": "call_abc",
@@ -42,7 +43,7 @@
   "stream_options": {
     "include_usage": true
   },
-  "max_completion_tokens": 1024,
+  "max_tokens": 1024,
   "tools": [
     {
       "type": "function",

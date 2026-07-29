@@ -899,6 +899,14 @@ func (info *RelayInfo) GetFinalRequestRelayFormat() types.RelayFormat {
 	return info.RelayFormat
 }
 
+func (info *RelayInfo) IsMessagesCountTokensRequest() bool {
+	if info == nil {
+		return false
+	}
+	requestPath := strings.Split(strings.TrimSpace(info.RequestURLPath), "?")[0]
+	return requestPath == "/v1/messages/count_tokens"
+}
+
 func GenRelayInfoResponsesCompaction(c *gin.Context, request *dto.OpenAIResponsesCompactionRequest) *RelayInfo {
 	info := genBaseRelayInfo(c, request)
 	if info.RelayMode == relayconstant.RelayModeUnknown {
@@ -1036,6 +1044,9 @@ func (info *RelayInfo) ConvOptions() *convmeta.Options {
 	claudeSettings := model_setting.GetClaudeSettings()
 	geminiSettings := model_setting.GetGeminiSettings()
 	options := &convmeta.Options{
+		ProviderStateSecret:              common.CryptoSecret,
+		IncludeReasoningEncryptedContent: info != nil && info.GetChannelType() == constant.ChannelTypeCodex,
+		PreserveChatReasoningContent:     info.shouldPreserveChatReasoningContent(),
 		Claude: convmeta.ClaudeOptions{
 			ThinkingAdapterEnabled:                claudeSettings.ThinkingAdapterEnabled,
 			ThinkingAdapterBudgetTokensPercentage: claudeSettings.ThinkingAdapterBudgetTokensPercentage,
@@ -1055,6 +1066,32 @@ func (info *RelayInfo) ConvOptions() *convmeta.Options {
 		info.convOptions = options
 	}
 	return options
+}
+
+func (info *RelayInfo) shouldPreserveChatReasoningContent() bool {
+	if info == nil {
+		return false
+	}
+	// CC Switch also checks the provider name. Channel type is the equivalent
+	// authoritative provider signal available in new-api's relay context.
+	switch info.GetChannelType() {
+	case constant.ChannelTypeMoonshot, constant.ChannelTypeDeepSeek:
+		return true
+	}
+	baseURL := ""
+	if info.ChannelMeta != nil {
+		baseURL = info.ChannelBaseUrl
+	}
+	identifier := strings.ToLower(strings.Join([]string{
+		info.GetUpstreamModelName(),
+		baseURL,
+	}, " "))
+	for _, hint := range []string{"moonshot", "kimi", "deepseek", "mimo", "xiaomimimo"} {
+		if strings.Contains(identifier, hint) {
+			return true
+		}
+	}
+	return false
 }
 
 func (info *RelayInfo) SetFirstResponseTime() {
