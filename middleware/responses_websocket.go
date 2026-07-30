@@ -199,6 +199,133 @@ func responsesWebSocketChannelAllowed(retryParam *service.RetryParam, channel *m
 	return retryParam.CandidateClassifier == nil || retryParam.CandidateClassifier(channel) == model.ChannelCandidateNative
 }
 
+// NewResponsesBridgeRetryParam mirrors the HTTP distributor's candidate policy:
+// convertible channels stay eligible, so a Responses WebSocket connection can be
+// served by bridging each response.create onto the HTTP relay pipeline.
+func NewResponsesBridgeRetryParam(c *gin.Context, modelName string) *service.RetryParam {
+	selectionModel := routeSelectionModel(c, modelName)
+	selectionGroup := routeSelectionGroup(c, common.GetContextKeyString(c, constant.ContextKeyUsingGroup))
+	return &service.RetryParam{
+		Ctx:                 c,
+		TokenGroup:          selectionGroup,
+		ModelName:           selectionModel,
+		RequestPath:         c.Request.URL.Path,
+		AllowedChannelIds:   routeSelectionChannelIds(c),
+		CandidateFilter:     BuildChannelCandidateFilter(c, selectionModel),
+		CandidateClassifier: BuildChannelCandidateClassifier(c, selectionModel),
+		Retry:               common.GetPointer(0),
+	}
+}
+
+// SelectResponsesBridgeChannel selects a channel for a Responses WebSocket
+// logical request that will be executed over HTTP. Unlike the native WebSocket
+// selection it accepts convertible channels and non-Responses state bindings;
+// SetupContextForSelectedChannel applies the protocol plan exactly as the HTTP
+// distributor does.
+func SelectResponsesBridgeChannel(c *gin.Context, modelName string, retryParam *service.RetryParam) (*model.Channel, *types.NewAPIError) {
+	if retryParam == nil {
+		return nil, types.NewError(errors.New("invalid responses websocket retry parameters"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+	}
+	selectionModel := retryParam.ModelName
+	selectionGroup := retryParam.TokenGroup
+
+	if channelIDRaw, ok := common.GetContextKey(c, constant.ContextKeyTokenSpecificChannelId); ok {
+		channelID, ok := channelIDRaw.(string)
+		if !ok {
+			return nil, types.NewErrorWithStatusCode(errors.New("invalid specified channel id"), types.ErrorCodeGetChannelFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		}
+		id, err := strconv.Atoi(channelID)
+		if err != nil {
+			return nil, types.NewErrorWithStatusCode(err, types.ErrorCodeGetChannelFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		}
+		channel, err := model.GetChannelById(id, true)
+		if err != nil {
+			return nil, types.NewErrorWithStatusCode(err, types.ErrorCodeGetChannelFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		}
+		if !channel.IsSchedulableAt(time.Now()) {
+			return nil, types.NewErrorWithStatusCode(errors.New("specified channel is disabled or outside its schedule"), types.ErrorCodeGetChannelFailed, http.StatusForbidden, types.ErrOptionWithSkipRetry())
+		}
+		if err := validateSelectedRouteChannel(c, channel, c.Request.URL.Path); err != nil || !responsesBridgeChannelAllowed(retryParam, channel) {
+			return nil, types.NewErrorWithStatusCode(errors.New("specified channel cannot serve Responses requests"), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		}
+		if apiErr := SetupContextForSelectedChannel(c, channel, modelName, true); apiErr != nil {
+			return nil, apiErr
+		}
+		return channel, nil
+	}
+
+	if binding, ok := common.GetContextKeyType[*protocolstate.SelectionBinding](c, constant.ContextKeyProtocolStateBinding); ok && binding != nil && binding.ChannelID > 0 {
+		bound, err := model.CacheGetChannel(binding.ChannelID)
+		if err != nil || bound == nil || !bound.IsSchedulableAt(time.Now()) ||
+			!responsesBridgeChannelAllowed(retryParam, bound) ||
+			!channelSupportsRequestPath(bound, c.Request.URL.Path, selectionModel) {
+			return nil, types.NewErrorWithStatusCode(errors.New("the channel bound to the referenced response cannot serve Responses requests"), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		}
+		resolvedGroup, groupUsable := resolveAffinitySelectionGroup(c, selectionGroup, selectionModel, bound.Id)
+		if !routeChannelAllowed(c, bound.Id) || !groupUsable {
+			return nil, types.NewErrorWithStatusCode(errors.New("the channel bound to the referenced response is unavailable"), types.ErrorCodeGetChannelFailed, http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry())
+		}
+		if selectionGroup == "auto" {
+			common.SetContextKey(c, constant.ContextKeyAutoGroup, resolvedGroup)
+		}
+		if apiErr := SetupContextForSelectedChannel(c, bound, modelName, true); apiErr != nil {
+			return nil, apiErr
+		}
+		return bound, nil
+	}
+
+	if retryParam.GetRetry() == 0 {
+		if preferredChannelID, found := service.GetPreferredChannelByAffinity(c, selectionModel, selectionGroup); found {
+			preferred, err := model.CacheGetChannel(preferredChannelID)
+			if err == nil && preferred != nil && preferred.IsSchedulableAt(time.Now()) &&
+				responsesBridgeChannelAllowed(retryParam, preferred) &&
+				channelSupportsRequestPath(preferred, c.Request.URL.Path, selectionModel) {
+				resolvedGroup, groupUsable := resolveAffinitySelectionGroup(c, selectionGroup, selectionModel, preferred.Id)
+				if routeChannelAllowed(c, preferred.Id) && groupUsable {
+					if selectionGroup == "auto" {
+						common.SetContextKey(c, constant.ContextKeyAutoGroup, resolvedGroup)
+					}
+					service.MarkChannelAffinityUsed(c, resolvedGroup, preferred.Id)
+					if apiErr := SetupContextForSelectedChannel(c, preferred, modelName, true); apiErr != nil {
+						return nil, apiErr
+					}
+					return preferred, nil
+				}
+			}
+			service.ClearCurrentChannelAffinityCache(c)
+		}
+	}
+
+	channel, selectedGroup, err := service.CacheGetRandomSatisfiedChannel(retryParam)
+	if err != nil {
+		if errors.Is(err, model.ErrNoCompatibleChannel) {
+			message := err.Error()
+			if reason, ok := common.GetContextKeyType[string](c, constant.ContextKeyProtocolIncompatibleReason); ok && reason != "" {
+				message = fmt.Sprintf("%s: %s", message, reason)
+			}
+			return nil, types.NewErrorWithStatusCode(errors.New(message), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		}
+		return nil, types.NewErrorWithStatusCode(fmt.Errorf("failed to select a channel for model %s from group %s: %w", selectionModel, selectedGroup, err), types.ErrorCodeGetChannelFailed, http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry())
+	}
+	if channel == nil {
+		return nil, types.NewErrorWithStatusCode(fmt.Errorf("no channel is available for model %s in group %s", selectionModel, selectedGroup), types.ErrorCodeGetChannelFailed, http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry())
+	}
+	if apiErr := SetupContextForSelectedChannel(c, channel, modelName, true); apiErr != nil {
+		return nil, apiErr
+	}
+	return channel, nil
+}
+
+func responsesBridgeChannelAllowed(retryParam *service.RetryParam, channel *model.Channel) bool {
+	if channel == nil {
+		return false
+	}
+	if retryParam.CandidateFilter != nil && !retryParam.CandidateFilter(channel) {
+		return false
+	}
+	return channelMatchesCandidateClassifier(channel, retryParam.CandidateClassifier)
+}
+
 func responsesWebSocketNativePlan(c *gin.Context, channel *model.Channel, modelName string) *channelcompat.ProtocolPlan {
 	if channel == nil || (channel.Type != constant.ChannelTypeOpenAI && channel.Type != constant.ChannelTypeCodex) {
 		return nil

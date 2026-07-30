@@ -2,6 +2,7 @@ package relay
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -59,6 +60,10 @@ type responsesWSCallState struct {
 	outputText strings.Builder
 	images     relaycommon.ImageGenerationCallCounter
 	commitRate middleware.ModelRequestRateLimitCommit
+	// cancelHTTP is set only for calls served by the HTTP transport bridge.
+	// Those calls settle their own billing in runHTTPBridgeCall; outside
+	// observers may only cancel them.
+	cancelHTTP context.CancelFunc
 }
 
 type responsesWSSession struct {
@@ -71,6 +76,9 @@ type responsesWSSession struct {
 	lockedChannel  *appmodel.Channel
 	nextEventIndex int
 	closeOnce      sync.Once
+	// bridgeWG tracks in-flight HTTP bridge goroutines; the handler must not
+	// return (releasing the pooled gin context) while one still runs.
+	bridgeWG sync.WaitGroup
 
 	clientWriteMu sync.Mutex
 	targetWriteMu sync.Mutex
@@ -84,8 +92,11 @@ func ResponsesWebSocketHelper(c *gin.Context, client *websocket.Conn) *types.New
 		client: client,
 	}
 	defer session.closeTarget()
-	defer session.failCurrent()
 	defer common.CleanupBodyStorage(c)
+	// failCurrent runs first and cancels any in-flight HTTP bridge call, so the
+	// Wait below is bounded; body storage stays alive until the bridge exits.
+	defer session.bridgeWG.Wait()
+	defer session.failCurrent()
 
 	for {
 		messageType, message, err := client.ReadMessage()
@@ -104,6 +115,9 @@ func ResponsesWebSocketHelper(c *gin.Context, client *websocket.Conn) *types.New
 
 		if eventType != responsesWSEventTypeResponseCreate {
 			if !session.hasTarget() {
+				if session.cancelHTTPBridgeCall(eventType) {
+					continue
+				}
 				session.sendError("", newResponsesWSInvalidRequestError(errors.New("first responses websocket event must be response.create")))
 				continue
 			}
@@ -254,7 +268,7 @@ func (s *responsesWSSession) handleResponseCreate(create responsesWSCreateReques
 	}
 
 	if !s.hasTarget() {
-		return s.connectAndSendFirst(create, commitRate)
+		return s.connectAndSendFirst(create, eventID, commitRate)
 	}
 
 	state, payload, apiErr := s.prepareCall(create, commitRate)
@@ -329,7 +343,7 @@ func (s *responsesWSSession) handleTargetWriteFailureWithState(state *responsesW
 	return s.handleTargetWriteFailure(err)
 }
 
-func (s *responsesWSSession) connectAndSendFirst(create responsesWSCreateRequest, commitRate middleware.ModelRequestRateLimitCommit) *types.NewAPIError {
+func (s *responsesWSSession) connectAndSendFirst(create responsesWSCreateRequest, eventID string, commitRate middleware.ModelRequestRateLimitCommit) *types.NewAPIError {
 	req := create.Request
 	retryParam := middleware.NewResponsesWebSocketRetryParam(s.c, req.Model)
 
@@ -338,6 +352,13 @@ func (s *responsesWSSession) connectAndSendFirst(create responsesWSCreateRequest
 		protocolstate.ResetAttempt(s.c)
 		channel, apiErr := middleware.SelectResponsesWebSocketChannel(s.c, req.Model, retryParam)
 		if apiErr != nil {
+			if retryParam.GetRetry() == 0 {
+				// No channel can serve a native Responses WebSocket. Serve this
+				// logical request over the HTTP relay pipeline instead, which
+				// keeps protocol bridging (chat/messages/gemini upstreams)
+				// available to WebSocket clients.
+				return s.startHTTPBridgeCall(create, eventID, commitRate)
+			}
 			lastErr = apiErr
 			break
 		}
@@ -436,6 +457,24 @@ func (s *responsesWSSession) processChannelError(channel *appmodel.Channel, apiE
 }
 
 func (s *responsesWSSession) prepareCall(create responsesWSCreateRequest, commitRate middleware.ModelRequestRateLimitCommit) (*responsesWSCallState, []byte, *types.NewAPIError) {
+	state, apiErr := s.prepareCallState(create)
+	if apiErr != nil {
+		return nil, nil, apiErr
+	}
+	state.commitRate = commitRate
+
+	payload, apiErr := buildResponsesWSCreatePayload(s.c, state.info, create.Request, create.Generate)
+	if apiErr != nil {
+		state.refund(s.c)
+		return nil, nil, apiErr
+	}
+	return state, payload, nil
+}
+
+// prepareCallState performs the per-attempt request accounting shared by the
+// native WebSocket transport and the HTTP bridge: relay info, sensitive check,
+// token estimate, pricing, and pre-consume.
+func (s *responsesWSSession) prepareCallState(create responsesWSCreateRequest) (*responsesWSCallState, *types.NewAPIError) {
 	req := create.Request
 	common.SetContextKey(s.c, appconstant.ContextKeyRequestStartTime, time.Now())
 	if s.baseRequestID == "" {
@@ -458,39 +497,30 @@ func (s *responsesWSSession) prepareCall(create responsesWSCreateRequest, commit
 		contains, words := service.CheckSensitiveText(req.GetSensitiveText())
 		if contains {
 			logger.LogWarn(s.c, fmt.Sprintf("user sensitive words detected: %s", strings.Join(words, ", ")))
-			return nil, nil, types.NewErrorWithStatusCode(errors.New("sensitive words detected"), types.ErrorCodeSensitiveWordsDetected, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+			return nil, types.NewErrorWithStatusCode(errors.New("sensitive words detected"), types.ErrorCodeSensitiveWordsDetected, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 		}
 	}
 
 	tokens, err := service.EstimateRequestToken(s.c, meta, relayInfo)
 	if err != nil {
-		return nil, nil, types.NewError(err, types.ErrorCodeCountTokenFailed)
+		return nil, types.NewError(err, types.ErrorCodeCountTokenFailed)
 	}
 	relayInfo.SetEstimatePromptTokens(tokens)
 
 	priceData, err := helper.ModelPriceHelper(s.c, relayInfo, tokens, meta)
 	if err != nil {
-		return nil, nil, types.NewError(err, types.ErrorCodeModelPriceError, types.ErrOptionWithStatusCode(http.StatusBadRequest))
+		return nil, types.NewError(err, types.ErrorCodeModelPriceError, types.ErrOptionWithStatusCode(http.StatusBadRequest))
 	}
 	if !priceData.FreeModel {
 		if apiErr := service.PreConsumeBilling(s.c, priceData.QuotaToPreConsume, relayInfo); apiErr != nil {
-			return nil, nil, apiErr
+			return nil, apiErr
 		}
-	}
-
-	payload, apiErr := buildResponsesWSCreatePayload(s.c, relayInfo, req, create.Generate)
-	if apiErr != nil {
-		if relayInfo.Billing != nil {
-			relayInfo.Billing.Refund(s.c)
-		}
-		return nil, nil, apiErr
 	}
 
 	return &responsesWSCallState{
-		info:       relayInfo,
-		usage:      &dto.Usage{},
-		commitRate: commitRate,
-	}, payload, nil
+		info:  relayInfo,
+		usage: &dto.Usage{},
+	}, nil
 }
 
 func buildResponsesWSCreatePayload(c *gin.Context, relayInfo *relaycommon.RelayInfo, req dto.OpenAIResponsesRequest, generate json.RawMessage) ([]byte, *types.NewAPIError) {
@@ -758,6 +788,12 @@ func (s *responsesWSSession) finishCall(state *responsesWSCallState, success boo
 	if state == nil {
 		return
 	}
+	if state.cancelHTTP != nil {
+		// HTTP bridge calls settle billing in runHTTPBridgeCall; external
+		// finishers may only abort the in-flight HTTP request.
+		state.cancelHTTP()
+		return
+	}
 	if !s.clearCurrent(state) {
 		return
 	}
@@ -926,8 +962,14 @@ func buildResponsesWSErrorPayloadWithInfo(eventID string, apiErr *types.NewAPIEr
 }
 
 func (s *responsesWSSession) privacyInfo() *relaycommon.RelayInfo {
-	if state := s.getCurrent(); state != nil && state.info != nil {
-		return state.info
+	s.stateMu.Lock()
+	var info *relaycommon.RelayInfo
+	if s.current != nil {
+		info = s.current.info
+	}
+	s.stateMu.Unlock()
+	if info != nil {
+		return info
 	}
 	target := common.GetContextKeyString(s.c, appconstant.ContextKeyUserModelRouteTarget)
 	origin := common.GetContextKeyString(s.c, appconstant.ContextKeyOriginalModel)
