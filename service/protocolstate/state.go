@@ -681,6 +681,26 @@ func ResetAttempt(c *gin.Context) {
 	common.SetContextKey(c, constant.ContextKeyProtocolStreamCompleted, false)
 }
 
+// ResetLogicalRequest clears state that belongs to one client request while
+// preserving the selected transport plan for a reused connection.
+func ResetLogicalRequest(c *gin.Context) {
+	if c == nil {
+		return
+	}
+	common.SetContextKey(c, constant.ContextKeyProtocolStateParent, nil)
+	common.SetContextKey(c, constant.ContextKeyProtocolStateSession, nil)
+	common.SetContextKey(c, constant.ContextKeyProtocolStateBinding, nil)
+	common.SetContextKey(c, constant.ContextKeyProtocolStatePending, nil)
+	common.SetContextKey(c, constant.ContextKeyProtocolStatePublicID, "")
+	common.SetContextKey(c, constant.ContextKeyProtocolStateForceReplay, false)
+	common.SetContextKey(c, constant.ContextKeyProtocolRequestNormalized, false)
+	common.SetContextKey(c, constant.ContextKeyProtocolResponseStreamState, nil)
+	common.SetContextKey(c, constant.ContextKeyProtocolStreamCompleted, false)
+	common.SetContextKey(c, constant.ContextKeyProtocolAutoAttempt, nil)
+	common.SetContextKey(c, constant.ContextKeyProtocolIncompatibleReason, nil)
+	common.SetContextKey(c, constant.ContextKeyRequestFeatureSet, nil)
+}
+
 func MarkStreamCompleted(c *gin.Context) {
 	if c != nil {
 		common.SetContextKey(c, constant.ContextKeyProtocolStreamCompleted, true)

@@ -2121,6 +2121,44 @@ func TestResetAttemptClearsPendingStateAndPreservesRequestState(t *testing.T) {
 	assert.False(t, common.GetContextKeyBool(ctx, constant.ContextKeyProtocolStreamCompleted))
 }
 
+func TestResetLogicalRequestClearsConversationStateButPreservesPlan(t *testing.T) {
+	ctx := protocolStateTestContext("reset-logical-request", 11, 22)
+	plan := channelcompat.ProtocolPlan{
+		RequestProtocol:  channelcompat.ProtocolResponses,
+		UpstreamProtocol: channelcompat.ProtocolResponses,
+		Status:           channelcompat.StatusNative,
+	}
+	common.SetContextKey(ctx, constant.ContextKeyProtocolPlan, plan)
+	common.SetContextKey(ctx, constant.ContextKeyProtocolStatePending, &pendingState{usedContinuation: true})
+	common.SetContextKey(ctx, constant.ContextKeyProtocolStateParent, &ResponseNode{PublicResponseID: "resp_parent"})
+	common.SetContextKey(ctx, constant.ContextKeyProtocolStateSession, &messageSelection{key: "session-key"})
+	common.SetContextKey(ctx, constant.ContextKeyProtocolStateBinding, &SelectionBinding{ChannelID: 7})
+	common.SetContextKey(ctx, constant.ContextKeyProtocolStatePublicID, "resp_public")
+	common.SetContextKey(ctx, constant.ContextKeyProtocolStateForceReplay, true)
+	common.SetContextKey(ctx, constant.ContextKeyProtocolRequestNormalized, true)
+	common.SetContextKey(ctx, constant.ContextKeyProtocolStreamCompleted, true)
+
+	ResetLogicalRequest(ctx)
+
+	assert.Nil(t, getPending(ctx, ""))
+	parent, parentOK := common.GetContextKeyType[*ResponseNode](ctx, constant.ContextKeyProtocolStateParent)
+	assert.False(t, parentOK)
+	assert.Nil(t, parent)
+	session, sessionOK := common.GetContextKeyType[*messageSelection](ctx, constant.ContextKeyProtocolStateSession)
+	assert.False(t, sessionOK)
+	assert.Nil(t, session)
+	binding, bindingOK := common.GetContextKeyType[*SelectionBinding](ctx, constant.ContextKeyProtocolStateBinding)
+	assert.False(t, bindingOK)
+	assert.Nil(t, binding)
+	assert.Empty(t, common.GetContextKeyString(ctx, constant.ContextKeyProtocolStatePublicID))
+	assert.False(t, common.GetContextKeyBool(ctx, constant.ContextKeyProtocolStateForceReplay))
+	assert.False(t, ResponsesRequestNormalized(ctx))
+	assert.False(t, common.GetContextKeyBool(ctx, constant.ContextKeyProtocolStreamCompleted))
+	storedPlan, ok := common.GetContextKeyType[channelcompat.ProtocolPlan](ctx, constant.ContextKeyProtocolPlan)
+	require.True(t, ok)
+	assert.Equal(t, plan, storedPlan)
+}
+
 func TestStreamStateRequiresVerifiedUpstreamTerminalBeforeCommit(t *testing.T) {
 	resetProtocolStateCaches(t)
 	ctx := protocolStateTestContext("verified-stream-terminal", 91, 92)

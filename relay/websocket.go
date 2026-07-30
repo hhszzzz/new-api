@@ -2,7 +2,10 @@ package relay
 
 import (
 	"fmt"
+	"sync"
+	"time"
 
+	"github.com/QuantumNous/new-api/pkg/wsmanager"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -33,6 +36,23 @@ func WssHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.
 	if resp != nil {
 		info.TargetWs = resp.(*websocket.Conn)
 		defer info.TargetWs.Close()
+		var closeOnce sync.Once
+		closeForPolicy := func(reason string) {
+			closeOnce.Do(func() {
+				deadline := time.Now().Add(time.Second)
+				closeMessage := websocket.FormatCloseMessage(websocket.ClosePolicyViolation, reason)
+				_ = info.ClientWs.WriteControl(websocket.CloseMessage, closeMessage, deadline)
+				_ = info.TargetWs.WriteControl(websocket.CloseMessage, closeMessage, deadline)
+				_ = info.ClientWs.Close()
+				_ = info.TargetWs.Close()
+			})
+		}
+		unregister := wsmanager.Register(info.ChannelId, wsmanager.KindRealtime, closeForPolicy)
+		defer unregister()
+		if !service.IsChannelAvailableForActiveWebSocket(info.ChannelId) {
+			closeForPolicy(service.ChannelDisabledCloseReason)
+			return types.NewError(fmt.Errorf("channel %d is disabled or deleted", info.ChannelId), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		}
 	}
 
 	usage, newAPIError := adaptor.DoResponse(c, nil, info)

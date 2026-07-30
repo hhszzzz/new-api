@@ -72,6 +72,11 @@ func SetRelayRouter(router *gin.Engine) {
 	relayV1Router.Use(middleware.TokenAuth())
 	relayV1Router.Use(middleware.ModelRequestRateLimit())
 	{
+		// Responses WebSocket selects its channel after the first response.create
+		// event because the model is carried inside that event.
+		relayV1Router.GET("/responses", controller.ResponsesWebSocket)
+	}
+	{
 		// WebSocket 路由（统一到 Relay）
 		wsRouter := relayV1Router.Group("")
 		wsRouter.Use(middleware.Distribute())

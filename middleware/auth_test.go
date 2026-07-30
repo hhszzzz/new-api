@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -42,6 +44,35 @@ func setupDashboardAuthMiddlewareTest(t *testing.T) {
 	})
 }
 
+func initializeMiddlewareModelColumnNames(t *testing.T) {
+	t.Helper()
+	previousDB := model.DB
+	previousIsMaster := common.IsMasterNode
+	previousSQLitePath := common.SQLitePath
+	previousMainType := common.MainDatabaseType()
+	previousLogType := common.LogDatabaseType()
+	previousSQLDSN, hadSQLDSN := os.LookupEnv("SQL_DSN")
+	defer func() {
+		model.DB = previousDB
+		common.IsMasterNode = previousIsMaster
+		common.SQLitePath = previousSQLitePath
+		common.SetDatabaseTypes(previousMainType, previousLogType)
+		if hadSQLDSN {
+			require.NoError(t, os.Setenv("SQL_DSN", previousSQLDSN))
+		} else {
+			require.NoError(t, os.Unsetenv("SQL_DSN"))
+		}
+	}()
+	common.IsMasterNode = false
+	common.SQLitePath = fmt.Sprintf("file:%s_columns?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
+	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
+	require.NoError(t, os.Setenv("SQL_DSN", "local"))
+	require.NoError(t, model.InitDB())
+	if sqlDB, err := model.DB.DB(); err == nil {
+		require.NoError(t, sqlDB.Close())
+	}
+}
+
 func issueExpiredDashboardAccessToken(t *testing.T, identity service.AuthIdentity) string {
 	t.Helper()
 	claims := jwt.MapClaims{
@@ -71,6 +102,112 @@ func tamperDashboardToken(token string) string {
 		replacement = "y"
 	}
 	return token[:tamperAt] + replacement + token[tamperAt+1:]
+}
+
+func TestWebSocketSubprotocolAuthorization(t *testing.T) {
+	tests := []struct {
+		name          string
+		protocols     string
+		initialBearer string
+		wantBearer    string
+		wantApplied   bool
+	}{
+		{
+			name:          "responses protocol preserves bearer",
+			protocols:     "responses",
+			initialBearer: "Bearer sk-original",
+			wantBearer:    "Bearer sk-original",
+		},
+		{
+			name:          "realtime protocol preserves bearer",
+			protocols:     "realtime, openai-beta.realtime-v1",
+			initialBearer: "Bearer sk-original",
+			wantBearer:    "Bearer sk-original",
+		},
+		{
+			name:          "insecure protocol key overrides bearer",
+			protocols:     "responses, openai-insecure-api-key.sk-from-protocol",
+			initialBearer: "Bearer sk-original",
+			wantBearer:    "Bearer sk-from-protocol",
+			wantApplied:   true,
+		},
+		{
+			name:          "empty insecure key is ignored",
+			protocols:     "responses, openai-insecure-api-key.",
+			initialBearer: "Bearer sk-original",
+			wantBearer:    "Bearer sk-original",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			header := http.Header{}
+			header.Set("Authorization", test.initialBearer)
+			header.Set("Sec-WebSocket-Protocol", test.protocols)
+
+			assert.Equal(t, test.wantApplied, applyWebSocketSubprotocolAuthorization(header))
+			assert.Equal(t, test.wantBearer, header.Get("Authorization"))
+		})
+	}
+}
+
+func TestTokenAuthAcceptsResponsesWebSocketCredentials(t *testing.T) {
+	initializeMiddlewareModelColumnNames(t)
+	setupDashboardAuthMiddlewareTest(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.Token{}))
+	user := createMiddlewarePATUser(t, "responses-ws-token-user", "responses-ws-pat")
+	for _, token := range []*model.Token{
+		{UserId: user.Id, Key: "headerkey", Status: common.TokenStatusEnabled, Name: "header", ExpiredTime: -1, UnlimitedQuota: true, Group: "default"},
+		{UserId: user.Id, Key: "protocolkey", Status: common.TokenStatusEnabled, Name: "protocol", ExpiredTime: -1, UnlimitedQuota: true, Group: "default"},
+	} {
+		require.NoError(t, model.DB.Create(token).Error)
+	}
+
+	router := gin.New()
+	router.GET("/v1/responses", TokenAuth(), func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"user_id":   c.GetInt("id"),
+			"token_key": c.GetString("token_key"),
+		})
+	})
+	tests := []struct {
+		name      string
+		bearer    string
+		protocols string
+		wantKey   string
+	}{
+		{
+			name:      "protocol marker keeps authorization header",
+			bearer:    "Bearer sk-headerkey",
+			protocols: "responses",
+			wantKey:   "headerkey",
+		},
+		{
+			name:      "insecure protocol credential takes precedence",
+			bearer:    "Bearer sk-invalid",
+			protocols: "responses, openai-insecure-api-key.sk-protocolkey",
+			wantKey:   "protocolkey",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+			request.Header.Set("Authorization", test.bearer)
+			request.Header.Set("Sec-WebSocket-Protocol", test.protocols)
+			response := httptest.NewRecorder()
+
+			router.ServeHTTP(response, request)
+
+			assert.Equal(t, http.StatusOK, response.Code)
+			var body struct {
+				UserID   int    `json:"user_id"`
+				TokenKey string `json:"token_key"`
+			}
+			require.NoError(t, common.Unmarshal(response.Body.Bytes(), &body))
+			assert.Equal(t, user.Id, body.UserID)
+			assert.Equal(t, test.wantKey, body.TokenKey)
+		})
+	}
 }
 
 func createMiddlewarePATUser(t *testing.T, username, token string) *model.User {
