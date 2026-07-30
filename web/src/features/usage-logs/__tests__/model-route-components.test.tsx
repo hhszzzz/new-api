@@ -72,6 +72,7 @@ const routedLog: UsageLog = {
   group: 'default',
   ip: '',
   other: JSON.stringify({
+    transport: 'websocket',
     admin_info: {
       is_model_mapped: true,
       upstream_model_name: NESTED_ACTUAL_MODEL,
@@ -291,7 +292,7 @@ describe('usage-log model route component visibility', () => {
     }
   )
 
-  test('keeps diagnostic headings and the IP row text-only for administrators', async () => {
+  test('keeps diagnostic payloads collapsed by default for administrators', async () => {
     renderDetailsDialog(ROLE.ADMIN, 'all')
 
     await waitFor(() => {
@@ -302,13 +303,46 @@ describe('usage-log model route component visibility', () => {
     })
 
     const dialog = screen.getByRole('dialog')
-    const diagnosticHeading = within(dialog).getByText('Request Diagnostics')
-    const headerHeading = within(dialog).getByText('Safe Request Headers')
+    const diagnosticTrigger = within(dialog).getByRole('button', {
+      name: /Request Diagnostics/,
+    })
+    const headerTrigger = within(dialog).getByRole('button', {
+      name: /Safe Request Headers/,
+    })
     const ipLabel = within(dialog).getByText('IP Address')
 
-    expect(diagnosticHeading.closest('label')?.querySelector('svg')).toBeNull()
-    expect(headerHeading.closest('label')?.querySelector('svg')).toBeNull()
+    expect(diagnosticTrigger).toHaveAttribute('aria-expanded', 'false')
+    expect(headerTrigger).toHaveAttribute('aria-expanded', 'false')
+    expect(within(dialog).queryByText('codex-cli/1.0')).not.toBeInTheDocument()
     expect(ipLabel.closest('div')?.querySelector('svg')).toBeNull()
+  })
+
+  test('expands safe request headers on demand without changing stored data', async () => {
+    const user = userEvent.setup()
+    renderDetailsDialog(ROLE.ADMIN, 'all')
+
+    const dialog = screen.getByRole('dialog')
+    const headerTrigger = within(dialog).getByRole('button', {
+      name: /Safe Request Headers/,
+    })
+
+    await user.click(headerTrigger)
+
+    expect(headerTrigger).toHaveAttribute('aria-expanded', 'true')
+    expect(within(dialog).getByText('user-agent')).toBeVisible()
+    expect(within(dialog).getByText('codex-cli/1.0')).toBeVisible()
+  })
+
+  test('shows the explicit transport and aligns reasoning effort with plain detail rows', async () => {
+    renderDetailsDialog(ROLE.ADMIN, 'all')
+
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByText('Connection Type')).toBeVisible()
+    expect(within(dialog).getByText('WebSocket')).toBeVisible()
+
+    const reasoningValue = within(dialog).getByText('high')
+    expect(reasoningValue.closest('[data-slot="status-badge"]')).toBeNull()
+    expect(reasoningValue).toHaveClass('font-mono')
   })
 
   test('places reasoning effort before request diagnostics', async () => {
@@ -332,6 +366,7 @@ describe('usage-log model route component visibility', () => {
   })
 
   test('reads upstream protocol metadata from administrator-only log data', async () => {
+    const user = userEvent.setup()
     renderDetailsDialog(ROLE.ADMIN, 'all')
 
     await waitFor(() => {
@@ -342,6 +377,9 @@ describe('usage-log model route component visibility', () => {
     })
 
     const dialog = screen.getByRole('dialog')
+    await user.click(
+      within(dialog).getByRole('button', { name: /Request Diagnostics/ })
+    )
     expect(within(dialog).getByText('Upstream Protocol')).toBeVisible()
     expect(within(dialog).getByText('Protocol Converter')).toBeVisible()
     expect(within(dialog).getByText('Protocol State Mode')).toBeVisible()

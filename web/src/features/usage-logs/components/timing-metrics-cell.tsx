@@ -34,7 +34,7 @@ import { formatUseTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 import { getFirstResponseTimeColor, getResponseTimeColor } from '../lib/format'
-import type { LogOtherData } from '../types'
+import type { LogOtherData, LogTransport } from '../types'
 
 /**
  * Softened fills for the full-height timing bar. The bar sits directly beside
@@ -151,6 +151,7 @@ export function TimingMetricsCell(props: TimingMetricsCellProps) {
 
 interface StreamTpsCellProps {
   isStream: boolean
+  transport?: LogTransport
   tokensPerSecond?: number | null
   streamStatus?: LogOtherData['stream_status']
   className?: string
@@ -158,13 +159,19 @@ interface StreamTpsCellProps {
 
 export function StreamTpsCell(props: StreamTpsCellProps) {
   const { t } = useTranslation()
+  const transport = props.transport ?? (props.isStream ? 'sse' : 'http')
   const showStreamError =
     props.isStream && props.streamStatus && props.streamStatus.status !== 'ok'
   const tpsLabel =
     props.tokensPerSecond != null
       ? `${Math.round(props.tokensPerSecond)} t/s`
       : '—'
-  const streamLabel = props.isStream ? t('Stream') : t('Non-stream')
+  let transportLabel = 'HTTP'
+  if (transport === 'websocket') {
+    transportLabel = 'WebSocket'
+  } else if (transport === 'sse') {
+    transportLabel = 'SSE'
+  }
 
   return (
     <div
@@ -176,10 +183,10 @@ export function StreamTpsCell(props: StreamTpsCellProps) {
       <span
         className={cn(
           'inline-flex items-center gap-1 font-medium',
-          props.isStream ? 'text-info' : 'text-muted-foreground'
+          transport !== 'http' ? 'text-info' : 'text-muted-foreground'
         )}
       >
-        {streamLabel}
+        {transportLabel}
         {showStreamError && (
           <TooltipProvider>
             <Tooltip>

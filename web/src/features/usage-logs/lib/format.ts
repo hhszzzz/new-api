@@ -24,9 +24,29 @@ import {
   type ParsedTier,
 } from '@/features/pricing/lib/billing-expr'
 
-import type { LogOtherData } from '../types'
+import type { LogOtherData, LogTransport } from '../types'
 
 export { normalizeTierLabel }
+
+export function resolveLogTransport(
+  other: LogOtherData | null | undefined,
+  isStream: boolean,
+  requestId?: string | null
+): LogTransport {
+  const storedTransport = other?.transport?.trim().toLowerCase()
+  if (storedTransport === 'websocket' || storedTransport === 'ws') {
+    return 'websocket'
+  }
+  if (storedTransport === 'sse') return 'sse'
+  if (storedTransport === 'http') return 'http'
+
+  // Older realtime logs used `ws`, while the Responses WebSocket relay used
+  // a stable request-id suffix before an explicit transport field existed.
+  if (other?.ws === true || /-ws-\d+$/.test(requestId ?? '')) {
+    return 'websocket'
+  }
+  return isStream ? 'sse' : 'http'
+}
 
 const PARAM_OVERRIDE_ACTION_MAP: Record<string, string> = {
   set: 'Set',

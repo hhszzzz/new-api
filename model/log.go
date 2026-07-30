@@ -363,8 +363,17 @@ func routePoolAggregateName(c *gin.Context) string {
 	return aggregateName
 }
 
-func appendLogDiagnostics(c *gin.Context, channelId int, other map[string]interface{}) map[string]interface{} {
+func appendLogDiagnostics(c *gin.Context, channelId int, isStream bool, other map[string]interface{}) map[string]interface{} {
 	other = ensureOtherMap(other)
+	transport := "http"
+	if c != nil && c.Request != nil &&
+		strings.EqualFold(strings.TrimSpace(c.Request.Header.Get("Upgrade")), "websocket") &&
+		strings.Contains(strings.ToLower(c.Request.Header.Get("Connection")), "upgrade") {
+		transport = "websocket"
+	} else if isStream {
+		transport = "sse"
+	}
+	other["transport"] = transport
 	adminInfo := ensureAdminInfo(other)
 	diagnostics := map[string]interface{}{}
 	if c != nil && c.Request != nil {
@@ -1062,7 +1071,7 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 	username := c.GetString("username")
 	requestId := c.GetString(common.RequestIdKey)
 	upstreamRequestId := c.GetString(common.UpstreamRequestIdKey)
-	other = appendLogDiagnostics(c, channelId, other)
+	other = appendLogDiagnostics(c, channelId, isStream, other)
 	otherStr := common.MapToJsonStr(withRequestedModelNameScope(other, modelName))
 	log := &Log{
 		UserId:            userId,
@@ -1115,7 +1124,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	requestId := c.GetString(common.RequestIdKey)
 	upstreamRequestId := c.GetString(common.UpstreamRequestIdKey)
 	createdAt := common.GetTimestamp()
-	params.Other = appendLogDiagnostics(c, params.ChannelId, params.Other)
+	params.Other = appendLogDiagnostics(c, params.ChannelId, params.IsStream, params.Other)
 	otherStr := common.MapToJsonStr(withRequestedModelNameScope(params.Other, params.ModelName))
 	log := &Log{
 		UserId:            userId,

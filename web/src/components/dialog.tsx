@@ -42,8 +42,9 @@ type DialogProps = React.ComponentProps<typeof DialogRoot> & {
   descriptionClassName?: string
   bodyClassName?: string
   footerClassName?: string
-  initialFocus?: boolean
+  initialFocus?: React.ComponentProps<typeof DialogContent>['initialFocus']
   showCloseButton?: boolean
+  scrollResetKey?: React.Key
 }
 
 const dialogContentMotionClassName =
@@ -64,18 +65,25 @@ export function Dialog({
   footerClassName,
   initialFocus,
   showCloseButton,
+  scrollResetKey,
   ...dialogProps
 }: DialogProps) {
   const bodyRef = React.useRef<HTMLDivElement>(null)
+  const headerRef = React.useRef<HTMLDivElement>(null)
 
-  // The body keeps its scroll offset between openings because the element is
-  // reused, so a dialog reopened after scrolling would appear mid-content.
-  // Reset it whenever the dialog opens so every dialog starts at the top.
-  React.useEffect(() => {
-    if (dialogProps.open) {
-      bodyRef.current?.scrollTo({ top: 0 })
-    }
-  }, [dialogProps.open])
+  // Dialog content is retained during close transitions. Reset both the main
+  // body and any nested Base UI viewports before paint when opening or when a
+  // retained dialog switches records.
+  React.useLayoutEffect(() => {
+    if (!dialogProps.open || !bodyRef.current) return
+
+    bodyRef.current.scrollTop = 0
+    bodyRef.current
+      .querySelectorAll<HTMLElement>('[data-slot="scroll-area-viewport"]')
+      .forEach((viewport) => {
+        viewport.scrollTop = 0
+      })
+  }, [dialogProps.open, scrollResetKey])
 
   return (
     <DialogRoot {...dialogProps}>
@@ -86,7 +94,7 @@ export function Dialog({
           contentClassName,
           dialogContentMotionClassName
         )}
-        initialFocus={initialFocus}
+        initialFocus={initialFocus ?? headerRef}
         showCloseButton={showCloseButton}
         style={
           {
@@ -95,7 +103,12 @@ export function Dialog({
         }
       >
         <DialogHeader
-          className={cn('flex-shrink-0 text-start', headerClassName)}
+          ref={headerRef}
+          tabIndex={-1}
+          className={cn(
+            'flex-shrink-0 text-start outline-none',
+            headerClassName
+          )}
         >
           <DialogTitle className={titleClassName}>{title}</DialogTitle>
           {description ? (
@@ -107,6 +120,7 @@ export function Dialog({
 
         <div
           ref={bodyRef}
+          data-slot='dialog-body'
           className={cn(
             '-mx-1 min-h-0 overflow-x-hidden overflow-y-auto overscroll-contain',
             'h-[var(--dialog-content-height)] max-h-[calc(100vh-14rem)]'

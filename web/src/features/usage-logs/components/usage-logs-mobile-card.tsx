@@ -40,7 +40,7 @@ import { cn } from '@/lib/utils'
 
 import { LOG_TYPE_ENUM } from '../constants'
 import type { UsageLog } from '../data/schema'
-import { parseLogOther } from '../lib/format'
+import { parseLogOther, resolveLogTransport } from '../lib/format'
 import {
   getLogTypeConfig,
   isDisplayableLogType,
@@ -300,6 +300,7 @@ function MobileStreamTimingField({ log }: { log: UsageLog }) {
       />
       <StreamTpsCell
         isStream={log.is_stream}
+        transport={resolveLogTransport(other, log.is_stream, log.request_id)}
         tokensPerSecond={tokensPerSecond}
         streamStatus={other?.stream_status}
         className='shrink-0'

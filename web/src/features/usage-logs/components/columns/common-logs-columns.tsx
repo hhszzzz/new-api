@@ -47,6 +47,7 @@ import {
   hasAnyCacheTokens,
   parseLogOther,
   isViolationFeeLog,
+  resolveLogTransport,
   renderAuditContent,
 } from '../../lib/format'
 import { formatModelName } from '../../lib/model-route'
@@ -736,7 +737,7 @@ export function useCommonLogsColumns(
     },
     {
       accessorKey: 'is_stream',
-      header: t('Stream'),
+      header: t('Connection Type'),
       cell: ({ row }) => {
         const log = row.original
         if (!isTimingLogType(log.type)) return null
@@ -751,12 +752,17 @@ export function useCommonLogsColumns(
         return (
           <StreamTpsCell
             isStream={log.is_stream}
+            transport={resolveLogTransport(
+              other,
+              log.is_stream,
+              log.request_id
+            )}
             tokensPerSecond={tokensPerSecond}
             streamStatus={other?.stream_status}
           />
         )
       },
-      meta: { label: t('Stream') },
+      meta: { label: t('Connection Type') },
     },
     {
       accessorKey: 'prompt_tokens',

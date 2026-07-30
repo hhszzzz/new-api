@@ -133,6 +133,8 @@ export const USAGE_BILLING_PATH = {
 export type UsageBillingPath =
   (typeof USAGE_BILLING_PATH)[keyof typeof USAGE_BILLING_PATH]
 
+export type LogTransport = 'websocket' | 'sse' | 'http'
+
 export interface ToolSurchargeItem {
   name: string
   count: number
@@ -140,6 +142,7 @@ export interface ToolSurchargeItem {
 }
 
 export interface LogOtherData {
+  transport?: LogTransport | string
   admin_info?: {
     // Model routing is nested here so the backend can strip it from
     // non-admin responses together with other administrator-only metadata.

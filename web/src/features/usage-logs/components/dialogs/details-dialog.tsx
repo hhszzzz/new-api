@@ -48,12 +48,18 @@ import {
   UserCog,
   Info,
   LogIn,
+  ChevronDown,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { Dialog } from '@/components/dialog'
 import { StatusBadge, type StatusBadgeProps } from '@/components/status-badge'
 import { Button } from '@/components/ui/button'
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible'
 import { IconBadge, type IconBadgeTone } from '@/components/ui/icon-badge'
 import { Label } from '@/components/ui/label'
 import { DynamicPricingBreakdown } from '@/features/pricing/components/dynamic-pricing-breakdown'
@@ -73,6 +79,7 @@ import {
   isViolationFeeLog,
   getFirstResponseTimeColor,
   getResponseTimeColor,
+  resolveLogTransport,
   renderAuditContent,
 } from '../../lib/format'
 import { getModelRouteInfo } from '../../lib/model-route'
@@ -163,6 +170,32 @@ function DetailSection(props: {
         {props.children}
       </div>
     </div>
+  )
+}
+
+function CollapsibleDetailSection(props: {
+  label: string
+  count: number
+  children: React.ReactNode
+}) {
+  return (
+    <Collapsible className='min-w-0'>
+      <CollapsibleTrigger className='group focus-visible:ring-ring/50 bg-muted/30 hover:bg-muted/50 flex w-full items-center gap-2 rounded-md border px-2.5 py-2 text-left text-xs font-semibold outline-none focus-visible:ring-3'>
+        <span className='min-w-0 flex-1'>{props.label}</span>
+        <span className='text-muted-foreground bg-background/70 rounded px-1.5 py-0.5 font-mono text-[11px] leading-none tabular-nums'>
+          {props.count}
+        </span>
+        <ChevronDown
+          className='text-muted-foreground size-3.5 shrink-0 transition-transform group-aria-expanded:rotate-180'
+          aria-hidden='true'
+        />
+      </CollapsibleTrigger>
+      <CollapsibleContent className='data-open:animate-accordion-down data-closed:animate-accordion-up overflow-hidden'>
+        <div className='bg-muted/20 mt-1 min-w-0 space-y-1 overflow-hidden rounded-md border p-2.5 max-sm:p-2'>
+          {props.children}
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
   )
 }
 
@@ -492,6 +525,17 @@ export function DetailsDialog(props: DetailsDialogProps) {
   const details = props.log.content ?? ''
   const other = parseLogOther(props.log.other)
   const diagnostics = other?.diagnostics
+  const transport = resolveLogTransport(
+    other,
+    props.log.is_stream,
+    props.log.request_id
+  )
+  let transportLabel = 'HTTP'
+  if (transport === 'websocket') {
+    transportLabel = 'WebSocket'
+  } else if (transport === 'sse') {
+    transportLabel = 'SSE'
+  }
   const modelRoute = getModelRouteInfo(other, props.canViewModelRoute)
   const typeConfig = getLogTypeConfig(props.log.type)
 
@@ -643,13 +687,6 @@ export function DetailsDialog(props: DetailsDialogProps) {
   const useChannel = adminInfo?.retry_chain ?? other?.admin_info?.use_channel
   const channelChain =
     useChannel && useChannel.length > 0 ? useChannel.join(' → ') : undefined
-  let reasoningEffortVariant: StatusBadgeProps['variant'] = 'green'
-  if (other?.reasoning_effort === 'high') {
-    reasoningEffortVariant = 'orange'
-  } else if (other?.reasoning_effort === 'medium') {
-    reasoningEffortVariant = 'yellow'
-  }
-
   return (
     <Dialog
       open={props.open}
@@ -676,6 +713,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
       descriptionClassName='sr-only'
       contentHeight='min(72dvh, 720px)'
       bodyClassName='pr-2 sm:pr-4'
+      scrollResetKey={props.log.id}
     >
       <div className='w-full max-w-full min-w-0 space-y-2.5 overflow-x-hidden py-1 sm:space-y-3'>
         {/* Overview section - key identifiers */}
@@ -786,25 +824,31 @@ export function DetailsDialog(props: DetailsDialogProps) {
               }
             />
           )}
+
+          {showTiming && (
+            <DetailRow
+              label={t('Connection Type')}
+              value={transportLabel}
+              mono
+            />
+          )}
         </div>
 
         {/* Reasoning effort */}
         {other?.reasoning_effort && (
           <DetailRow
             label={t('Reasoning Effort')}
-            value={
-              <StatusBadge
-                label={other.reasoning_effort}
-                variant={reasoningEffortVariant}
-                size='sm'
-                copyable={false}
-              />
-            }
+            value={other.reasoning_effort}
+            mono
           />
         )}
 
         {props.isAdminView && diagnostics && (
-          <DetailSection label={t('Request Diagnostics')}>
+          <CollapsibleDetailSection
+            key={`diagnostics-${props.log.id}-${props.open}`}
+            label={t('Request Diagnostics')}
+            count={Object.keys(diagnostics).length}
+          >
             {(diagnostics.method || diagnostics.path) && (
               <DetailRow
                 label={t('Request')}
@@ -913,19 +957,23 @@ export function DetailsDialog(props: DetailsDialogProps) {
                 mono
               />
             )}
-          </DetailSection>
+          </CollapsibleDetailSection>
         )}
 
         {props.isAdminView &&
           adminInfo?.request_headers &&
           Object.keys(adminInfo.request_headers).length > 0 && (
-            <DetailSection label={t('Safe Request Headers')}>
+            <CollapsibleDetailSection
+              key={`headers-${props.log.id}-${props.open}`}
+              label={t('Safe Request Headers')}
+              count={Object.keys(adminInfo.request_headers).length}
+            >
               {Object.entries(adminInfo.request_headers).map(
                 ([name, value]) => (
                   <DetailRow key={name} label={name} value={value} mono />
                 )
               )}
-            </DetailSection>
+            </CollapsibleDetailSection>
           )}
 
         {/* Request conversion (admin only, not for refund) */}

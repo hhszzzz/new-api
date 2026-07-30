@@ -52,7 +52,7 @@ func TestAppendLogDiagnosticsKeepsOnlySafeRequestMetadata(t *testing.T) {
 	common.SetContextKey(context, constant.ContextKeyUpstreamRequestSize, int64(321))
 	context.Set("use_channel", []string{"2", "3"})
 
-	other := appendLogDiagnostics(context, 0, map[string]interface{}{})
+	other := appendLogDiagnostics(context, 0, false, map[string]interface{}{})
 
 	diagnostics, ok := other["diagnostics"].(map[string]interface{})
 	require.True(t, ok)
@@ -82,6 +82,36 @@ func TestAppendLogDiagnosticsKeepsOnlySafeRequestMetadata(t *testing.T) {
 	assert.Regexp(t, `^sha256:[0-9a-f]{16}$`, headers["x-codex-parent-thread-id"])
 }
 
+func TestAppendLogDiagnosticsRecordsRequestTransport(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tests := []struct {
+		name      string
+		isStream  bool
+		websocket bool
+		expected  string
+	}{
+		{name: "http", expected: "http"},
+		{name: "sse", isStream: true, expected: "sse"},
+		{name: "websocket", isStream: true, websocket: true, expected: "websocket"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			context, _ := gin.CreateTestContext(recorder)
+			context.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", http.NoBody)
+			if test.websocket {
+				context.Request.Header.Set("Connection", "keep-alive, Upgrade")
+				context.Request.Header.Set("Upgrade", "websocket")
+			}
+
+			other := appendLogDiagnostics(context, 0, test.isStream, nil)
+
+			assert.Equal(t, test.expected, other["transport"])
+		})
+	}
+}
+
 func TestAppendLogDiagnosticsUsesAggregateOnlyForSingleAggregateRoutePool(t *testing.T) {
 	db := setupChannelAggregateTestDB(t)
 	originalMemoryCacheEnabled := common.MemoryCacheEnabled
@@ -108,12 +138,12 @@ func TestAppendLogDiagnosticsUsesAggregateOnlyForSingleAggregateRoutePool(t *tes
 		return context
 	}
 
-	sameAggregate := appendLogDiagnostics(newRouteContext([]int{9101, 9102}), 9101, map[string]interface{}{})
+	sameAggregate := appendLogDiagnostics(newRouteContext([]int{9101, 9102}), 9101, false, map[string]interface{}{})
 	sameAdminInfo, ok := sameAggregate["admin_info"].(map[string]interface{})
 	require.True(t, ok)
 	assert.Equal(t, "Aggregate A", sameAdminInfo["surface_channel_name"])
 
-	crossAggregate := appendLogDiagnostics(newRouteContext([]int{9101, 9201}), 9101, map[string]interface{}{})
+	crossAggregate := appendLogDiagnostics(newRouteContext([]int{9101, 9201}), 9101, false, map[string]interface{}{})
 	crossAdminInfo, ok := crossAggregate["admin_info"].(map[string]interface{})
 	require.True(t, ok)
 	assert.Equal(t, "Route Pool", crossAdminInfo["surface_channel_name"])
