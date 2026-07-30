@@ -47,7 +47,7 @@ import {
   hasAnyCacheTokens,
   parseLogOther,
   isViolationFeeLog,
-  resolveLogTransport,
+  resolveLogTimingMetrics,
   renderAuditContent,
 } from '../../lib/format'
 import { formatModelName } from '../../lib/model-route'
@@ -744,20 +744,19 @@ export function useCommonLogsColumns(
 
         const useTime = row.getValue('use_time') as number
         const other = parseLogOther(log.other)
-        const tokensPerSecond =
-          useTime > 0 && log.completion_tokens > 0
-            ? log.completion_tokens / useTime
-            : null
+        const timing = resolveLogTimingMetrics({
+          other,
+          useTimeSeconds: useTime,
+          completionTokens: log.completion_tokens,
+          isStream: log.is_stream,
+          requestId: log.request_id,
+        })
 
         return (
           <StreamTpsCell
-            isStream={log.is_stream}
-            transport={resolveLogTransport(
-              other,
-              log.is_stream,
-              log.request_id
-            )}
-            tokensPerSecond={tokensPerSecond}
+            isStream={timing.isStreaming}
+            transport={timing.transport}
+            tokensPerSecond={timing.tokensPerSecond}
             streamStatus={other?.stream_status}
           />
         )
@@ -833,13 +832,20 @@ export function useCommonLogsColumns(
 
         const useTime = row.getValue('use_time') as number
         const other = parseLogOther(log.other)
+        const timing = resolveLogTimingMetrics({
+          other,
+          useTimeSeconds: useTime,
+          completionTokens: log.completion_tokens,
+          isStream: log.is_stream,
+          requestId: log.request_id,
+        })
 
         return (
           <TimingMetricsCell
-            useTimeSec={useTime}
+            useTimeSec={timing.durationSeconds}
             completionTokens={log.completion_tokens}
             frtMs={other?.frt}
-            isStream={log.is_stream}
+            isStream={timing.isStreaming}
           />
         )
       },

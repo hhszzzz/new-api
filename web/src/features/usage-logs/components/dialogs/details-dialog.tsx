@@ -79,7 +79,7 @@ import {
   isViolationFeeLog,
   getFirstResponseTimeColor,
   getResponseTimeColor,
-  resolveLogTransport,
+  resolveLogTimingMetrics,
   renderAuditContent,
 } from '../../lib/format'
 import { getModelRouteInfo } from '../../lib/model-route'
@@ -107,6 +107,14 @@ function timingTextColorClass(
   if (variant === 'success') return 'text-emerald-600'
   if (variant === 'warning') return 'text-amber-600'
   return 'text-rose-600'
+}
+
+function reasoningEffortVariant(
+  reasoningEffort: string
+): StatusBadgeProps['variant'] {
+  if (reasoningEffort === 'high') return 'orange'
+  if (reasoningEffort === 'medium') return 'yellow'
+  return 'green'
 }
 
 function DetailRow(props: {
@@ -525,11 +533,14 @@ export function DetailsDialog(props: DetailsDialogProps) {
   const details = props.log.content ?? ''
   const other = parseLogOther(props.log.other)
   const diagnostics = other?.diagnostics
-  const transport = resolveLogTransport(
+  const timing = resolveLogTimingMetrics({
     other,
-    props.log.is_stream,
-    props.log.request_id
-  )
+    useTimeSeconds: props.log.use_time,
+    completionTokens: props.log.completion_tokens,
+    isStream: props.log.is_stream,
+    requestId: props.log.request_id,
+  })
+  const transport = timing.transport
   let transportLabel = 'HTTP'
   if (transport === 'websocket') {
     transportLabel = 'WebSocket'
@@ -556,6 +567,15 @@ export function DetailsDialog(props: DetailsDialogProps) {
   const showAdminIp =
     Boolean(diagnosticIp) && (showTiming || props.isAdminView || isTopup)
   const adminInfo = other?.admin_info
+  const requestHeaderEntries = adminInfo?.request_headers
+    ? Object.entries(adminInfo.request_headers)
+    : []
+  const userAgentHeader = requestHeaderEntries.find(
+    ([name]) => name.toLowerCase() === 'user-agent'
+  )
+  const hiddenRequestHeaders = requestHeaderEntries.filter(
+    ([name]) => name.toLowerCase() !== 'user-agent'
+  )
   const paramOverrides = props.canViewModelRoute
     ? (adminInfo?.po ?? other?.po)
     : undefined
@@ -789,7 +809,11 @@ export function DetailsDialog(props: DetailsDialogProps) {
             />
           )}
 
-          {showTiming && props.log.use_time > 0 && (
+          {props.isAdminView && userAgentHeader && (
+            <DetailRow label='user-agent' value={userAgentHeader[1]} mono />
+          )}
+
+          {showTiming && timing.durationSeconds > 0 && (
             <DetailRow
               label={t('Response Time')}
               value={
@@ -798,14 +822,14 @@ export function DetailsDialog(props: DetailsDialogProps) {
                     'font-medium',
                     timingTextColorClass(
                       getResponseTimeColor(
-                        props.log.use_time,
+                        timing.durationSeconds,
                         props.log.completion_tokens
                       )
                     )
                   )}
                 >
-                  {formatUseTime(props.log.use_time)}
-                  {props.log.is_stream &&
+                  {formatUseTime(timing.durationSeconds)}
+                  {timing.isStreaming &&
                     other?.frt != null &&
                     other.frt > 0 && (
                       <span
@@ -832,16 +856,39 @@ export function DetailsDialog(props: DetailsDialogProps) {
               mono
             />
           )}
-        </div>
 
-        {/* Reasoning effort */}
-        {other?.reasoning_effort && (
-          <DetailRow
-            label={t('Reasoning Effort')}
-            value={other.reasoning_effort}
-            mono
-          />
-        )}
+          {other?.reasoning_effort && (
+            <DetailRow
+              label={t('Reasoning Effort')}
+              value={
+                <StatusBadge
+                  label={other.reasoning_effort}
+                  variant={reasoningEffortVariant(other.reasoning_effort)}
+                  size='sm'
+                  type='text'
+                  copyable={false}
+                  className='font-mono !text-xs leading-normal'
+                />
+              }
+            />
+          )}
+
+          {other?.is_system_prompt_overwritten && (
+            <DetailRow
+              label={t('System Prompt')}
+              value={
+                <StatusBadge
+                  label={t('Overwritten')}
+                  variant='neutral'
+                  size='sm'
+                  type='text'
+                  copyable={false}
+                  className='font-mono !text-xs leading-normal'
+                />
+              }
+            />
+          )}
+        </div>
 
         {props.isAdminView && diagnostics && (
           <CollapsibleDetailSection
@@ -950,31 +997,20 @@ export function DetailsDialog(props: DetailsDialogProps) {
                 mono
               />
             )}
-            {diagnostics.route_rule_id != null && (
-              <DetailRow
-                label={t('Route Rule')}
-                value={`#${diagnostics.route_rule_id}`}
-                mono
-              />
-            )}
           </CollapsibleDetailSection>
         )}
 
-        {props.isAdminView &&
-          adminInfo?.request_headers &&
-          Object.keys(adminInfo.request_headers).length > 0 && (
-            <CollapsibleDetailSection
-              key={`headers-${props.log.id}-${props.open}`}
-              label={t('Safe Request Headers')}
-              count={Object.keys(adminInfo.request_headers).length}
-            >
-              {Object.entries(adminInfo.request_headers).map(
-                ([name, value]) => (
-                  <DetailRow key={name} label={name} value={value} mono />
-                )
-              )}
-            </CollapsibleDetailSection>
-          )}
+        {props.isAdminView && hiddenRequestHeaders.length > 0 && (
+          <CollapsibleDetailSection
+            key={`headers-${props.log.id}-${props.open}`}
+            label={t('Safe Request Headers')}
+            count={hiddenRequestHeaders.length}
+          >
+            {hiddenRequestHeaders.map(([name, value]) => (
+              <DetailRow key={name} label={name} value={value} mono />
+            ))}
+          </CollapsibleDetailSection>
+        )}
 
         {/* Request conversion (admin only, not for refund) */}
         {showConversion && (
@@ -1248,21 +1284,6 @@ export function DetailsDialog(props: DetailsDialogProps) {
               />
             )}
           </DetailSection>
-        )}
-
-        {/* System prompt override */}
-        {other?.is_system_prompt_overwritten && (
-          <DetailRow
-            label={t('System Prompt')}
-            value={
-              <StatusBadge
-                label={t('Overwritten')}
-                variant='orange'
-                size='sm'
-                copyable={false}
-              />
-            }
-          />
         )}
 
         {/* Model mapping */}

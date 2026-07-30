@@ -63,7 +63,7 @@ const routedLog: UsageLog = {
   model_name: REQUESTED_MODEL,
   quota: 0,
   prompt_tokens: 0,
-  completion_tokens: 0,
+  completion_tokens: 13,
   use_time: 0,
   is_stream: false,
   channel: 7,
@@ -73,12 +73,15 @@ const routedLog: UsageLog = {
   ip: '',
   other: JSON.stringify({
     transport: 'websocket',
+    duration_ms: 900,
+    frt: 250,
     admin_info: {
       is_model_mapped: true,
       upstream_model_name: NESTED_ACTUAL_MODEL,
       po: [`set ${NESTED_PARAM_OVERRIDE}`],
       request_headers: {
         'user-agent': 'codex-cli/1.0',
+        'x-codex-thread-id': 'sha256:test-thread',
       },
       upstream_protocol: 'chat',
       protocol_converter: 'responses_to_chat',
@@ -90,9 +93,12 @@ const routedLog: UsageLog = {
       ip: '203.0.113.10',
       client: 'codex',
       request_protocol: 'responses',
+      route_pool_name: '测试路由转换',
+      route_rule_id: 3,
     },
     request_conversion: ['responses', 'chat'],
     reasoning_effort: 'high',
+    is_system_prompt_overwritten: true,
     is_model_mapped: true,
     upstream_model_name: LEGACY_ACTUAL_MODEL,
     po: [`set ${LEGACY_PARAM_OVERRIDE}`],
@@ -292,7 +298,7 @@ describe('usage-log model route component visibility', () => {
     }
   )
 
-  test('keeps diagnostic payloads collapsed by default for administrators', async () => {
+  test('keeps diagnostics and non-user-agent headers collapsed by default', async () => {
     renderDetailsDialog(ROLE.ADMIN, 'all')
 
     await waitFor(() => {
@@ -313,11 +319,18 @@ describe('usage-log model route component visibility', () => {
 
     expect(diagnosticTrigger).toHaveAttribute('aria-expanded', 'false')
     expect(headerTrigger).toHaveAttribute('aria-expanded', 'false')
-    expect(within(dialog).queryByText('codex-cli/1.0')).not.toBeInTheDocument()
+    expect(within(dialog).getByText('user-agent')).toBeVisible()
+    expect(within(dialog).getByText('codex-cli/1.0')).toBeVisible()
+    expect(
+      within(dialog).queryByText('x-codex-thread-id')
+    ).not.toBeInTheDocument()
+    expect(
+      within(dialog).queryByText('sha256:test-thread')
+    ).not.toBeInTheDocument()
     expect(ipLabel.closest('div')?.querySelector('svg')).toBeNull()
   })
 
-  test('expands safe request headers on demand without changing stored data', async () => {
+  test('expands remaining safe request headers without duplicating user-agent', async () => {
     const user = userEvent.setup()
     renderDetailsDialog(ROLE.ADMIN, 'all')
 
@@ -329,20 +342,47 @@ describe('usage-log model route component visibility', () => {
     await user.click(headerTrigger)
 
     expect(headerTrigger).toHaveAttribute('aria-expanded', 'true')
-    expect(within(dialog).getByText('user-agent')).toBeVisible()
-    expect(within(dialog).getByText('codex-cli/1.0')).toBeVisible()
+    expect(within(dialog).getByText('x-codex-thread-id')).toBeVisible()
+    expect(within(dialog).getByText('sha256:test-thread')).toBeVisible()
+    expect(within(dialog).getAllByText('user-agent')).toHaveLength(1)
   })
 
-  test('shows the explicit transport and aligns reasoning effort with plain detail rows', async () => {
+  test('shows WebSocket timing and aligns colored reasoning effort with overview rows', async () => {
     renderDetailsDialog(ROLE.ADMIN, 'all')
 
     const dialog = screen.getByRole('dialog')
     expect(within(dialog).getByText('Connection Type')).toBeVisible()
     expect(within(dialog).getByText('WebSocket')).toBeVisible()
 
+    const responseTimeRow = within(dialog)
+      .getByText('Response Time')
+      .closest('.grid')
+    expect(responseTimeRow).toHaveTextContent('0.9s')
+    expect(responseTimeRow).toHaveTextContent('FRT: 0.3s')
+
     const reasoningValue = within(dialog).getByText('high')
-    expect(reasoningValue.closest('[data-slot="status-badge"]')).toBeNull()
-    expect(reasoningValue).toHaveClass('font-mono')
+    const reasoningBadge = reasoningValue.closest('[data-slot="status-badge"]')
+    expect(reasoningBadge).toHaveClass('text-warning')
+    expect(reasoningBadge).not.toHaveClass('rounded-4xl')
+
+    const connectionRow = within(dialog)
+      .getByText('Connection Type')
+      .closest('.grid')
+    const reasoningRow = within(dialog)
+      .getByText('Reasoning Effort')
+      .closest('.grid')
+    expect(reasoningRow?.parentElement).toBe(connectionRow?.parentElement)
+
+    const systemPromptRow = within(dialog)
+      .getByText('System Prompt')
+      .closest('.grid')
+    expect(systemPromptRow?.parentElement).toBe(connectionRow?.parentElement)
+    const systemPromptValue = within(dialog).getByText('Overwritten')
+    const systemPromptBadge = systemPromptValue.closest(
+      '[data-slot="status-badge"]'
+    )
+    expect(systemPromptBadge).toHaveClass('font-mono', 'text-muted-foreground')
+    expect(systemPromptBadge).not.toHaveClass('rounded-4xl')
   })
 
   test('places reasoning effort before request diagnostics', async () => {
@@ -384,6 +424,10 @@ describe('usage-log model route component visibility', () => {
     expect(within(dialog).getByText('Protocol Converter')).toBeVisible()
     expect(within(dialog).getByText('Protocol State Mode')).toBeVisible()
     expect(within(dialog).getByText('replay')).toBeVisible()
+    expect(within(dialog).getByText('Route Pool')).toBeVisible()
+    expect(within(dialog).getByText('测试路由转换')).toBeVisible()
+    expect(within(dialog).queryByText('Route Rule')).not.toBeInTheDocument()
+    expect(within(dialog).queryByText('#3')).not.toBeInTheDocument()
     expect(
       within(dialog).getByText('responses → responses_to_chat → chat')
     ).toBeVisible()

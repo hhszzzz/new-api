@@ -143,6 +143,7 @@ export interface ToolSurchargeItem {
 
 export interface LogOtherData {
   transport?: LogTransport | string
+  duration_ms?: number
   admin_info?: {
     // Model routing is nested here so the backend can strip it from
     // non-admin responses together with other administrator-only metadata.

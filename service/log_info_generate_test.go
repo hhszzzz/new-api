@@ -74,6 +74,23 @@ func TestGenerateTextOtherInfoOmitsClaudeReportedVersionAlias(t *testing.T) {
 	assert.NotContains(t, adminInfo, "upstream_model_name")
 }
 
+func TestGenerateTextOtherInfoRecordsMillisecondDuration(t *testing.T) {
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	start := time.Now().Add(-1250 * time.Millisecond)
+	relayInfo := &relaycommon.RelayInfo{
+		StartTime:         start,
+		FirstResponseTime: start.Add(250 * time.Millisecond),
+		ChannelMeta:       &relaycommon.ChannelMeta{},
+	}
+
+	other := GenerateTextOtherInfo(ctx, relayInfo, 1, 1, 1, 0, 0, 0, 1)
+
+	durationMs, ok := other["duration_ms"].(int64)
+	require.True(t, ok)
+	assert.GreaterOrEqual(t, durationMs, int64(1250))
+}
+
 func TestAppendModelRoutingAdminInfoPreservesExistingAdminFields(t *testing.T) {
 	other := map[string]interface{}{
 		"admin_info": map[string]interface{}{

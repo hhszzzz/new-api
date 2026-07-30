@@ -48,6 +48,70 @@ export function resolveLogTransport(
   return isStream ? 'sse' : 'http'
 }
 
+interface ResolveLogTimingMetricsInput {
+  other: LogOtherData | null | undefined
+  useTimeSeconds: number
+  completionTokens: number
+  isStream: boolean
+  requestId?: string | null
+}
+
+export interface ResolvedLogTimingMetrics {
+  transport: LogTransport
+  isStreaming: boolean
+  durationSeconds: number
+  tokensPerSecond: number | null
+}
+
+export function resolveLogTimingMetrics(
+  input: ResolveLogTimingMetricsInput
+): ResolvedLogTimingMetrics {
+  const transport = resolveLogTransport(
+    input.other,
+    input.isStream,
+    input.requestId
+  )
+  const isStreaming = input.isStream || transport !== 'http'
+  const storedDurationMs =
+    input.other?.duration_ms ?? input.other?.diagnostics?.duration_ms
+  const fallbackDurationSeconds =
+    Number.isFinite(input.useTimeSeconds) && input.useTimeSeconds >= 0
+      ? input.useTimeSeconds
+      : 0
+  const durationSeconds =
+    typeof storedDurationMs === 'number' &&
+    Number.isFinite(storedDurationMs) &&
+    storedDurationMs >= 0
+      ? storedDurationMs / 1000
+      : fallbackDurationSeconds
+
+  let generationSeconds = durationSeconds
+  const firstResponseMs = input.other?.frt
+  if (
+    isStreaming &&
+    typeof firstResponseMs === 'number' &&
+    Number.isFinite(firstResponseMs) &&
+    firstResponseMs >= 0
+  ) {
+    const postFirstResponseSeconds = durationSeconds - firstResponseMs / 1000
+    if (postFirstResponseSeconds > 0) {
+      generationSeconds = postFirstResponseSeconds
+    }
+  }
+
+  const tokensPerSecond =
+    input.completionTokens > 0 && generationSeconds > 0
+      ? input.completionTokens / generationSeconds
+      : null
+
+  return {
+    transport,
+    isStreaming,
+    durationSeconds,
+    tokensPerSecond,
+  }
+}
+
 const PARAM_OVERRIDE_ACTION_MAP: Record<string, string> = {
   set: 'Set',
   delete: 'Delete',

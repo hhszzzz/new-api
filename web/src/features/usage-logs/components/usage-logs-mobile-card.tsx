@@ -40,7 +40,7 @@ import { cn } from '@/lib/utils'
 
 import { LOG_TYPE_ENUM } from '../constants'
 import type { UsageLog } from '../data/schema'
-import { parseLogOther, resolveLogTransport } from '../lib/format'
+import { parseLogOther, resolveLogTimingMetrics } from '../lib/format'
 import {
   getLogTypeConfig,
   isDisplayableLogType,
@@ -283,25 +283,28 @@ function MobileStreamTimingField({ log }: { log: UsageLog }) {
 
   const other = parseLogOther(log.other)
   const useTime = log.use_time || 0
-  const tokensPerSecond =
-    useTime > 0 && log.completion_tokens > 0
-      ? log.completion_tokens / useTime
-      : null
+  const timing = resolveLogTimingMetrics({
+    other,
+    useTimeSeconds: useTime,
+    completionTokens: log.completion_tokens,
+    isStream: log.is_stream,
+    requestId: log.request_id,
+  })
 
   return (
     <div className='bg-muted/20 flex min-w-0 items-center gap-2.5 rounded-md px-2 py-1.5'>
       <TimingMetricsCell
-        useTimeSec={useTime}
+        useTimeSec={timing.durationSeconds}
         completionTokens={log.completion_tokens}
         frtMs={other?.frt}
-        isStream={log.is_stream}
+        isStream={timing.isStreaming}
         indicator='dot'
         className='min-w-0 flex-1'
       />
       <StreamTpsCell
-        isStream={log.is_stream}
-        transport={resolveLogTransport(other, log.is_stream, log.request_id)}
-        tokensPerSecond={tokensPerSecond}
+        isStream={timing.isStreaming}
+        transport={timing.transport}
+        tokensPerSecond={timing.tokensPerSecond}
         streamStatus={other?.stream_status}
         className='shrink-0'
       />
