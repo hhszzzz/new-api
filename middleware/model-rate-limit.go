@@ -115,7 +115,7 @@ func CheckModelRequestRateLimit(c *gin.Context) (ModelRequestRateLimitCommit, *t
 	duration, totalMaxCount, successMaxCount := modelRequestRateLimitConfig(c)
 	userID := strconv.Itoa(c.GetInt("id"))
 
-	if common.RedisEnabled {
+	if common.RedisEnabled && common.RDB != nil {
 		ctx := context.Background()
 		rdb := common.RDB
 		successKey := fmt.Sprintf("rateLimit:%s:%s", ModelRequestRateLimitSuccessCountMark, userID)

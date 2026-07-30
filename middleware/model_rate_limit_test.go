@@ -124,6 +124,22 @@ func TestCheckModelRequestRateLimitCountsFailedRequestsTowardTotal(t *testing.T)
 	assert.Equal(t, http.StatusTooManyRequests, apiErr.StatusCode)
 }
 
+func TestCheckModelRequestRateLimitFallsBackWhenRedisClientIsNil(t *testing.T) {
+	configureModelRequestRateLimitTest(t, 1, 0)
+	common.RedisEnabled = true
+	common.RDB = nil
+
+	assert.NotPanics(t, func() {
+		commit, apiErr := CheckModelRequestRateLimit(newModelRateLimitTestContext(103))
+		require.Nil(t, apiErr)
+		commit(false)
+	})
+	commit, apiErr := CheckModelRequestRateLimit(newModelRateLimitTestContext(103))
+	assert.Nil(t, commit)
+	require.NotNil(t, apiErr)
+	assert.Equal(t, http.StatusTooManyRequests, apiErr.StatusCode)
+}
+
 func TestModelRequestRateLimitDoesNotChargeResponsesWebSocketHandshake(t *testing.T) {
 	configureModelRequestRateLimitTest(t, 1, 0)
 	router := gin.New()
