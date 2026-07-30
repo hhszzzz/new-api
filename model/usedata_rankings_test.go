@@ -44,24 +44,44 @@ func TestRankingAggregatesQuotaOnlyRowsAndScopedUserGroups(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(1500000), sumRankingTestQuota(buckets))
 
-	users, err := GetRankingUserQuotaTotals(0, 7200, []string{"visible-model"}, false)
+	users, err := GetRankingUserQuotaTotals(0, 7200)
 	require.NoError(t, err)
 	require.Len(t, users, 3)
-	var hiddenQuota int64
+	var userQuota int64
 	for _, row := range users {
-		if row.HiddenModel {
-			hiddenQuota += row.TotalQuota
-			assert.Contains(t, []string{"", "secret"}, row.UseGroup)
-		}
+		userQuota += row.TotalQuota
 	}
-	assert.Equal(t, int64(1250000), hiddenQuota)
+	assert.Equal(t, int64(1500000), userQuota)
+}
 
-	adminUsers, err := GetRankingUserQuotaTotals(0, 7200, nil, true)
+func TestRankingUserQuotaTotalsResolvesMissingUsernameAndDropsUnattributedRows(t *testing.T) {
+	require.NoError(t, DB.Exec("DELETE FROM quota_data").Error)
+	require.NoError(t, DB.Exec("DELETE FROM quota_data_scoped").Error)
+	const userID = 909001
+	require.NoError(t, DB.Unscoped().Delete(&User{}, userID).Error)
+	require.NoError(t, DB.Create(&User{Id: userID, Username: "resolved-user", Password: "password"}).Error)
+	t.Cleanup(func() {
+		DB.Exec("DELETE FROM quota_data")
+		DB.Exec("DELETE FROM quota_data_scoped")
+		DB.Unscoped().Delete(&User{}, userID)
+	})
+
+	require.NoError(t, DB.Create(&[]ScopedQuotaData{
+		{UserID: userID, Username: "", CreatedAt: 3600, UseGroup: "default", Quota: 100, Count: 1},
+		{UserID: 0, Username: "", CreatedAt: 3600, UseGroup: "default", Quota: 200, Count: 1},
+		{UserID: 0, Username: "legacy-user", CreatedAt: 3600, UseGroup: "default", Quota: 300, Count: 1},
+	}).Error)
+
+	rows, err := GetRankingUserQuotaTotals(0, 7200)
 	require.NoError(t, err)
-	assert.Len(t, adminUsers, 3)
-	for _, row := range adminUsers {
-		assert.False(t, row.HiddenModel)
+	require.Len(t, rows, 2)
+	quotaByUsername := make(map[string]int64, len(rows))
+	for _, row := range rows {
+		quotaByUsername[row.Username] += row.TotalQuota
 	}
+	assert.Equal(t, int64(100), quotaByUsername["resolved-user"])
+	assert.Equal(t, int64(300), quotaByUsername["legacy-user"])
+	assert.NotContains(t, quotaByUsername, "")
 }
 
 func TestRankingQuotaBucketsCanAnchorToRequestedRangeStart(t *testing.T) {

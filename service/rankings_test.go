@@ -169,7 +169,7 @@ func TestMaskRankingUsernameDoesNotRevealShortNames(t *testing.T) {
 		username string
 		want     string
 	}{
-		{username: "", want: "Unknown user"},
+		{username: "", want: ""},
 		{username: "a", want: "***"},
 		{username: "ab", want: "a***"},
 		{username: "abc", want: "a***c"},
@@ -182,28 +182,44 @@ func TestMaskRankingUsernameDoesNotRevealShortNames(t *testing.T) {
 	}
 }
 
-func TestBuildRankingUserUsageMasksHiddenUsersAndComputesGroupShares(t *testing.T) {
-	usage := buildRankingUserUsage([]model.RankingUserQuotaRow{
+func TestBuildRankingUserUsageMasksNamesWithoutChangingAdminRanking(t *testing.T) {
+	rows := []model.RankingUserQuotaRow{
 		{UserID: 1, Username: "alice", UseGroup: "team", TotalTokens: 100, TotalQuota: 500000},
 		{UserID: 1, Username: "alice", UseGroup: "", TotalTokens: 50, TotalQuota: 250000},
-		{UserID: 2, Username: "bob", UseGroup: "secret", HiddenModel: true, TotalTokens: 0, TotalQuota: 750000},
-	}, 150, 1500000, false, 500000)
-	require.NotNil(t, usage)
-	require.Len(t, usage.Users, 2)
-	usersByName := make(map[string]RankingUser, len(usage.Users))
-	for _, user := range usage.Users {
-		usersByName[user.Username] = user
+		{UserID: 2, Username: "bob", UseGroup: "secret", TotalTokens: 0, TotalQuota: 750000},
 	}
-	assert.Equal(t, int64(750000), usersByName["Other users"].TotalQuota)
-	require.Len(t, usersByName["Other users"].Groups, 1)
-	assert.Equal(t, "Unknown", usersByName["Other users"].Groups[0].UseGroup)
-	assert.InDelta(t, 2.0/3.0, usersByName["a***e"].Groups[0].QuotaShare, 0.0001)
-	assert.Equal(t, 3.0, usage.TotalUSD)
-
-	adminUsage := buildRankingUserUsage([]model.RankingUserQuotaRow{
-		{UserID: 1, Username: "alice", UseGroup: "team", TotalTokens: 1, TotalQuota: 500000},
-	}, 1, 500000, true, 500000)
+	regularUsage := buildRankingUserUsage(rows, 150, 1500000, false, 500000)
+	adminUsage := buildRankingUserUsage(rows, 150, 1500000, true, 500000)
+	require.Len(t, regularUsage.Users, 2)
+	require.Len(t, adminUsage.Users, 2)
+	assert.Equal(t, adminUsage.TotalTokens, regularUsage.TotalTokens)
+	assert.Equal(t, adminUsage.TotalQuota, regularUsage.TotalQuota)
+	assert.Equal(t, adminUsage.TotalUSD, regularUsage.TotalUSD)
+	assert.Equal(t, "a***e", regularUsage.Users[0].Username)
+	assert.Equal(t, "b***b", regularUsage.Users[1].Username)
 	assert.Equal(t, "alice", adminUsage.Users[0].Username)
+	assert.Equal(t, "bob", adminUsage.Users[1].Username)
+	for index := range adminUsage.Users {
+		regularUser := regularUsage.Users[index]
+		adminUser := adminUsage.Users[index]
+		regularUser.Username = adminUser.Username
+		assert.Equal(t, adminUser, regularUser)
+	}
+	assert.InDelta(t, 2.0/3.0, regularUsage.Users[0].Groups[0].QuotaShare, 0.0001)
+	assert.Equal(t, "secret", regularUsage.Users[1].Groups[0].UseGroup)
+}
+
+func TestBuildRankingUserUsageOmitsUnattributedRows(t *testing.T) {
+	usage := buildRankingUserUsage([]model.RankingUserQuotaRow{
+		{Username: "", TotalTokens: 100, TotalQuota: 500000},
+		{UserID: 2, Username: "bob", UseGroup: "default", TotalTokens: 50, TotalQuota: 250000},
+	}, 150, 750000, false, 500000)
+
+	require.Len(t, usage.Users, 1)
+	assert.Equal(t, "b***b", usage.Users[0].Username)
+	assert.Equal(t, int64(250000), usage.Users[0].TotalQuota)
+	assert.InDelta(t, 1.0/3.0, usage.Users[0].QuotaShare, 0.0001)
+	assert.Equal(t, int64(750000), usage.TotalQuota)
 }
 
 func TestBuildRankingUserUsageDisambiguatesMaskedUsernameCollisions(t *testing.T) {

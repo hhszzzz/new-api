@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRankingsUserUsageIsViewerScopedAndHidesPrivateUsernames(t *testing.T) {
+func TestRankingsUserUsageMatchesAdminTotalsAndMasksPrivateUsernames(t *testing.T) {
 	service.InvalidateRankingsCache()
 	db := setupModelListControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.QuotaData{}, &model.ScopedQuotaData{}))
@@ -45,8 +45,10 @@ func TestRankingsUserUsageIsViewerScopedAndHidesPrivateUsernames(t *testing.T) {
 	assert.NotContains(t, regular.Body.String(), "alice")
 	assert.NotContains(t, regular.Body.String(), "bob")
 	assert.Contains(t, regular.Body.String(), "a***e")
-	assert.Contains(t, regular.Body.String(), "Other users")
-	assert.NotContains(t, regular.Body.String(), "secret")
+	assert.Contains(t, regular.Body.String(), "b***b")
+	assert.NotContains(t, regular.Body.String(), "Other users")
+	assert.NotContains(t, regular.Body.String(), "Unknown user")
+	assert.NotContains(t, regular.Body.String(), "admin-secret-model")
 	assert.NotContains(t, regular.Body.String(), "user_id")
 
 	admin := invokeRankingsUsageRequest(t, requestURL, 9, common.RoleAdminUser)
@@ -54,6 +56,27 @@ func TestRankingsUserUsageIsViewerScopedAndHidesPrivateUsernames(t *testing.T) {
 	assert.Contains(t, admin.Body.String(), "alice")
 	assert.Contains(t, admin.Body.String(), "bob")
 	assert.NotContains(t, admin.Body.String(), "a***e")
+	var regularPayload struct {
+		Data service.RankingsResponse `json:"data"`
+	}
+	var adminPayload struct {
+		Data service.RankingsResponse `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(regular.Body.Bytes(), &regularPayload))
+	require.NoError(t, common.Unmarshal(admin.Body.Bytes(), &adminPayload))
+	require.NotNil(t, regularPayload.Data.UserUsage)
+	require.NotNil(t, adminPayload.Data.UserUsage)
+	require.Len(t, regularPayload.Data.UserUsage.Users, 2)
+	require.Len(t, adminPayload.Data.UserUsage.Users, 2)
+	assert.Equal(t, adminPayload.Data.UserUsage.TotalTokens, regularPayload.Data.UserUsage.TotalTokens)
+	assert.Equal(t, adminPayload.Data.UserUsage.TotalQuota, regularPayload.Data.UserUsage.TotalQuota)
+	assert.Equal(t, adminPayload.Data.UserUsage.TotalUSD, regularPayload.Data.UserUsage.TotalUSD)
+	for index := range adminPayload.Data.UserUsage.Users {
+		regularUser := regularPayload.Data.UserUsage.Users[index]
+		adminUser := adminPayload.Data.UserUsage.Users[index]
+		regularUser.Username = adminUser.Username
+		assert.Equal(t, adminUser, regularUser)
+	}
 
 	patAdminRecorder := httptest.NewRecorder()
 	patAdminContext, _ := gin.CreateTestContext(patAdminRecorder)
@@ -65,7 +88,7 @@ func TestRankingsUserUsageIsViewerScopedAndHidesPrivateUsernames(t *testing.T) {
 	require.Equal(t, http.StatusOK, patAdminRecorder.Code)
 	assert.NotContains(t, patAdminRecorder.Body.String(), "\"username\":\"alice\"")
 	assert.Contains(t, patAdminRecorder.Body.String(), "a***e")
-	assert.NotContains(t, patAdminRecorder.Body.String(), "secret")
+	assert.NotContains(t, patAdminRecorder.Body.String(), "admin-secret-model")
 
 	// The same resolved range has separate cache entries for each viewer level.
 	assert.NotEqual(t, regular.Body.String(), admin.Body.String())

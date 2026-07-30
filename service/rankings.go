@@ -24,7 +24,6 @@ const (
 	rankingUserLimit        = 20
 	rankingOthersLabel      = "Others"
 	rankingUnknownVendor    = "Unknown"
-	rankingOtherUsersLabel  = "Other users"
 	rankingUnknownGroup     = "Unknown"
 	rankingMaxCustomDays    = 366
 )
@@ -575,7 +574,7 @@ func buildRankingsSnapshot(resolved rankingResolvedRange, visibleModelNames []st
 		VendorShareHistory: vendorHistory,
 	}
 	if viewer != RankingViewerAnonymous {
-		userRows, queryErr := model.GetRankingUserQuotaTotals(resolved.start, resolved.end, visibleModelNames, canViewPrivate)
+		userRows, queryErr := model.GetRankingUserQuotaTotals(resolved.start, resolved.end)
 		if queryErr != nil {
 			return nil, queryErr
 		}
@@ -927,7 +926,7 @@ func buildRankingUserUsage(rows []model.RankingUserQuotaRow, totalTokens int64, 
 	for _, row := range rows {
 		rawUsername := strings.TrimSpace(row.Username)
 		if rawUsername == "" {
-			rawUsername = "Unknown user"
+			continue
 		}
 		key := fmt.Sprintf("name\x00%s", rawUsername)
 		if row.UserID > 0 {
@@ -937,25 +936,19 @@ func buildRankingUserUsage(rows []model.RankingUserQuotaRow, totalTokens int64, 
 			key = fmt.Sprintf("user\x00%d", row.UserID)
 		}
 		username := rawUsername
-		if !canViewPrivate && row.HiddenModel {
-			key = "__other_users__"
-			username = rankingOtherUsersLabel
-		}
 		aggregate, ok := aggregates[key]
 		if !ok {
 			aggregate = &rankingUserAggregate{key: key, username: username, groups: make(map[string]*historyAggregate)}
 			aggregates[key] = aggregate
-		} else if key != "__other_users__" && username != "Unknown user" && (aggregate.username == "Unknown user" || username < aggregate.username) {
-			// Keep the display name deterministic when a historical user row has
-			// a stale or empty username.
+		} else if username < aggregate.username {
+			// Keep the display name deterministic when historical rows retain a
+			// stale username.
 			aggregate.username = username
 		}
 		aggregate.totalTokens += row.TotalTokens
 		aggregate.totalQuota += row.TotalQuota
 		groupName := strings.TrimSpace(row.UseGroup)
-		if !canViewPrivate && row.HiddenModel {
-			groupName = rankingUnknownGroup
-		} else if groupName == "" {
+		if groupName == "" {
 			groupName = rankingUnknownGroup
 		}
 		group, ok := aggregate.groups[groupName]
@@ -990,7 +983,7 @@ func buildRankingUserUsage(rows []model.RankingUserQuotaRow, totalTokens int64, 
 			break
 		}
 		displayUsername := aggregate.username
-		if !canViewPrivate && displayUsername != rankingOtherUsersLabel {
+		if !canViewPrivate {
 			displayUsername = maskRankingUsername(displayUsername)
 		}
 		baseDisplayUsername := displayUsername
@@ -1045,7 +1038,7 @@ func buildRankingUserUsage(rows []model.RankingUserQuotaRow, totalTokens int64, 
 func maskRankingUsername(username string) string {
 	runes := []rune(strings.TrimSpace(username))
 	if len(runes) == 0 {
-		return "Unknown user"
+		return ""
 	}
 	if len(runes) == 1 {
 		return "***"

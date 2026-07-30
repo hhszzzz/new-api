@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"gorm.io/gorm"
@@ -23,15 +24,11 @@ type RankingQuotaBucket struct {
 }
 
 // RankingUserQuotaRow is the user/group-level aggregate used by the rankings
-// service. Hidden model provenance is collapsed by sanitizeRankingUserQuotaRows
-// before this type leaves the model package.
+// service. User rankings intentionally do not carry model provenance.
 type RankingUserQuotaRow struct {
 	UserID      int    `json:"-"`
 	Username    string `json:"-"`
 	UseGroup    string `json:"-"`
-	ModelName   string `json:"-"`
-	ModelScope  int    `json:"-"`
-	HiddenModel bool   `json:"-"`
 	TotalTokens int64  `json:"total_tokens"`
 	TotalQuota  int64  `json:"total_quota"`
 }
@@ -92,15 +89,15 @@ func GetRankingQuotaBuckets(startTime int64, endTime int64, bucketSize int64, bu
 	return sanitizeRankingQuotaBuckets(append(legacyRows, scopedRows...), visibleModelNames, canViewPrivate), nil
 }
 
-// GetRankingUserQuotaTotals returns user/group aggregates for a range. It
-// reads both the legacy and scoped export tables so deployments can be
-// upgraded without losing historical usage. For non-admin viewers, rows whose
-// model provenance is not visible are marked HiddenModel and merged together.
-func GetRankingUserQuotaTotals(startTime int64, endTime int64, visibleModelNames []string, canViewPrivate bool) ([]RankingUserQuotaRow, error) {
+// GetRankingUserQuotaTotals returns attributable user/group aggregates for a
+// range. User rankings are independent of model visibility because the result
+// exposes no model provenance. Both export tables are read so historical usage
+// remains part of the same leaderboard after an upgrade.
+func GetRankingUserQuotaTotals(startTime int64, endTime int64) ([]RankingUserQuotaRow, error) {
 	var legacyRows []RankingUserQuotaRow
 	query := DB.Table("quota_data").
-		Select("user_id, username, use_group, model_name, sum(token_used) as total_tokens, sum(quota) as total_quota").
-		Group("user_id, username, use_group, model_name").
+		Select("user_id, username, use_group, sum(token_used) as total_tokens, sum(quota) as total_quota").
+		Group("user_id, username, use_group").
 		Having("sum(token_used) > 0 OR sum(quota) > 0")
 	query = applyRankingQuotaTimeRange(query, startTime, endTime)
 	if err := query.Find(&legacyRows).Error; err != nil {
@@ -109,15 +106,55 @@ func GetRankingUserQuotaTotals(startTime int64, endTime int64, visibleModelNames
 
 	var scopedRows []RankingUserQuotaRow
 	query = DB.Model(&ScopedQuotaData{}).
-		Select("user_id, username, use_group, model_name, model_scope, sum(token_used) as total_tokens, sum(quota) as total_quota").
-		Group("user_id, username, use_group, model_name, model_scope").
+		Select("user_id, username, use_group, sum(token_used) as total_tokens, sum(quota) as total_quota").
+		Group("user_id, username, use_group").
 		Having("sum(token_used) > 0 OR sum(quota) > 0")
 	query = applyRankingQuotaTimeRange(query, startTime, endTime)
 	if err := query.Find(&scopedRows).Error; err != nil {
 		return nil, err
 	}
 
-	return sanitizeRankingUserQuotaRows(append(legacyRows, scopedRows...), visibleModelNames, canViewPrivate), nil
+	rows := append(legacyRows, scopedRows...)
+	userIDSet := make(map[int]struct{})
+	for _, row := range rows {
+		if row.UserID > 0 && strings.TrimSpace(row.Username) == "" {
+			userIDSet[row.UserID] = struct{}{}
+		}
+	}
+	userIDs := make([]int, 0, len(userIDSet))
+	for userID := range userIDSet {
+		userIDs = append(userIDs, userID)
+	}
+	usernamesByID := make(map[int]string, len(userIDs))
+	const userLookupBatchSize = 500
+	for start := 0; start < len(userIDs); start += userLookupBatchSize {
+		end := min(start+userLookupBatchSize, len(userIDs))
+		var users []User
+		if err := DB.Unscoped().Model(&User{}).
+			Select("id", "username").
+			Where("id IN ?", userIDs[start:end]).
+			Find(&users).Error; err != nil {
+			return nil, err
+		}
+		for _, user := range users {
+			if username := strings.TrimSpace(user.Username); username != "" {
+				usernamesByID[user.Id] = username
+			}
+		}
+	}
+
+	attributedRows := make([]RankingUserQuotaRow, 0, len(rows))
+	for _, row := range rows {
+		row.Username = strings.TrimSpace(row.Username)
+		if row.Username == "" {
+			row.Username = usernamesByID[row.UserID]
+		}
+		if row.Username == "" {
+			continue
+		}
+		attributedRows = append(attributedRows, row)
+	}
+	return attributedRows, nil
 }
 
 func rankingBucketExpr(bucketSize int64, bucketAnchor int64) string {
