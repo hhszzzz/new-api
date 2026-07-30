@@ -14,6 +14,7 @@ const (
 	ToolKindFunction   ToolKind = "function"
 	ToolKindCustom     ToolKind = "custom"
 	ToolKindToolSearch ToolKind = "tool_search"
+	ToolKindLocalShell ToolKind = "local_shell"
 
 	ClaudeToolResultErrorMarker = "[new-api:tool-result-error]"
 )

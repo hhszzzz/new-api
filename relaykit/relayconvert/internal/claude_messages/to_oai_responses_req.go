@@ -510,7 +510,15 @@ func claudeToolsToResponses(value any) ([]map[string]any, map[string]struct{}, e
 			continue
 		}
 		if toolType != "" && toolType != "custom" {
-			return nil, nil, fmt.Errorf("Claude tool %d type %q requires a native Messages upstream", index, toolType)
+			if isClaudeServerToolType(toolType) {
+				// Server-executed Anthropic tools (web_search, code_execution,
+				// ...) cannot run on a converted upstream. Drop them, CC Switch
+				// style, and let the model work without them.
+				continue
+			}
+			// Client-executed typed tools (bash_*, text_editor_*, memory_*)
+			// lower to plain functions: the client still executes the calls,
+			// and Claude-family models know these tool shapes by name.
 		}
 		name := strings.TrimSpace(kitutil.Interface2String(tool["name"]))
 		if name == "" {
@@ -544,6 +552,17 @@ func claudeToolsToResponses(value any) ([]map[string]any, map[string]struct{}, e
 		converted = append(converted, responseTool)
 	}
 	return converted, declared, nil
+}
+
+// isClaudeServerToolType reports whether an Anthropic typed tool executes on
+// Anthropic's servers, which a converted upstream can never reproduce.
+func isClaudeServerToolType(toolType string) bool {
+	for _, marker := range []string{"web_search", "web_fetch", "computer", "code_execution", "tool_search"} {
+		if strings.Contains(toolType, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func claudeToolChoiceToResponses(value any, declared map[string]struct{}) (any, *bool, error) {

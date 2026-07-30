@@ -166,12 +166,15 @@ func OpenAIResponsesRequestToGeminiChat(c context.Context, req *dto.OpenAIRespon
 			for _, part := range parts {
 				appendGeminiContentPart(geminiRequest, "user", part)
 			}
-		case ResponsesInputTypeCustomToolCall, "tool_search_call":
+		case ResponsesInputTypeCustomToolCall, "tool_search_call", "local_shell_call":
 			var toolCall dto.ToolCallRequest
 			var convErr error
-			if itemType == "tool_search_call" {
+			switch itemType {
+			case "tool_search_call":
 				toolCall, convErr = responsesToolSearchCallItemToChatToolCall(item, toolState)
-			} else {
+			case "local_shell_call":
+				toolCall, convErr = responsesLocalShellCallItemToChatToolCall(item, toolState)
+			default:
 				toolCall, convErr = responsesCustomToolCallItemToChatToolCall(item, toolState)
 			}
 			if convErr != nil {
@@ -190,7 +193,7 @@ func OpenAIResponsesRequestToGeminiChat(c context.Context, req *dto.OpenAIRespon
 				callNames[callID] = part.FunctionCall.FunctionName
 			}
 			appendGeminiContentPart(geminiRequest, "model", part)
-		case ResponsesInputTypeCustomToolOutput, "tool_search_output":
+		case ResponsesInputTypeCustomToolOutput, "tool_search_output", "local_shell_call_output":
 			callID := CallID(item)
 			if _, converted := callNames[callID]; !converted {
 				continue

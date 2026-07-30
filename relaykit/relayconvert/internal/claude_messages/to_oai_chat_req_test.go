@@ -391,16 +391,23 @@ func TestClaudeMessagesRequestToOpenAIChatNormalizesToolSchemas(t *testing.T) {
 	assert.Equal(t, map[string]any{"type": "object", "properties": map[string]any{}}, got.Tools[1].Function.Parameters)
 }
 
-func TestClaudeMessagesRequestToOpenAIChatRejectsNativeServerTool(t *testing.T) {
+func TestClaudeMessagesRequestToOpenAIChatDropsServerToolsAndLowersClientTypedTools(t *testing.T) {
 	var request dto.ClaudeRequest
 	require.NoError(t, kitutil.Unmarshal([]byte(`{
 		"model":"gpt-5.4",
-		"tools":[{"type":"web_search_20250305","name":"web_search"}],
+		"tools":[
+			{"type":"web_search_20250305","name":"web_search"},
+			{"type":"bash_20250124","name":"bash"},
+			{"name":"lookup","input_schema":{"type":"object"}}
+		],
 		"messages":[{"role":"user","content":"hello"}]
 	}`), &request))
 
-	_, err := ClaudeMessagesRequestToOpenAIChat(request, nil)
-	require.ErrorContains(t, err, "requires a native Messages upstream")
+	got, err := ClaudeMessagesRequestToOpenAIChat(request, nil)
+	require.NoError(t, err)
+	require.Len(t, got.Tools, 2)
+	assert.Equal(t, "bash", got.Tools[0].Function.Name)
+	assert.Equal(t, "lookup", got.Tools[1].Function.Name)
 }
 
 func TestClaudeMessagesRequestToOpenAIChatRejectsUndeclaredToolChoice(t *testing.T) {
@@ -483,4 +490,56 @@ func TestClaudeMessagesRequestToOpenAIChatBatchesToolResultMediaBeforeUserConten
 	userContent := got.Messages[4].ParseContent()
 	require.Len(t, userContent, 1)
 	assert.Equal(t, "continue", userContent[0].Text)
+}
+
+func TestClaudeMessagesRequestToOpenAIChatMapsThinkingToVendorParams(t *testing.T) {
+	tests := []struct {
+		name         string
+		model        string
+		thinking     string
+		wantEffort   string
+		wantThinking string
+	}{
+		{name: "kimi thinking enabled", model: "kimi-k2.5", thinking: `{"type":"enabled","budget_tokens":20000}`, wantThinking: `{"type":"enabled"}`},
+		{name: "glm explicit disable", model: "glm-5.2", thinking: `{"type":"disabled"}`, wantThinking: `{"type":"disabled"}`},
+		{name: "deepseek budget maps to clamped effort", model: "deepseek-v4", thinking: `{"type":"enabled","budget_tokens":32000}`, wantEffort: "high", wantThinking: `{"type":"enabled"}`},
+		{name: "openai style keeps reasoning_effort", model: "gpt-5.4", thinking: `{"type":"enabled","budget_tokens":32000}`, wantEffort: "high"},
+		{name: "unknown model drops thinking", model: "openpangu-2.0-flash", thinking: `{"type":"enabled","budget_tokens":32000}`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var request dto.ClaudeRequest
+			require.NoError(t, kitutil.Unmarshal([]byte(`{
+				"model":"`+test.model+`",
+				"max_tokens":512,
+				"thinking":`+test.thinking+`,
+				"messages":[{"role":"user","content":"hi"}]
+			}`), &request))
+
+			got, err := ClaudeMessagesRequestToOpenAIChat(request, nil)
+			require.NoError(t, err)
+
+			assert.Equal(t, test.wantEffort, got.ReasoningEffort)
+			assert.Equal(t, test.wantThinking, string(got.THINKING))
+		})
+	}
+}
+
+func TestClaudeMessagesRequestToOpenAIChatStripsCacheControlForNonOpenRouterUpstreams(t *testing.T) {
+	var request dto.ClaudeRequest
+	require.NoError(t, kitutil.Unmarshal([]byte(`{
+		"model":"deepseek-v4",
+		"messages":[{"role":"user","content":[
+			{"type":"text","text":"hello","cache_control":{"type":"ephemeral"}},
+			{"type":"text","text":"world"}
+		]}]
+	}`), &request))
+
+	got, err := ClaudeMessagesRequestToOpenAIChat(request, nil)
+	require.NoError(t, err)
+
+	encoded, err := kitutil.Marshal(got)
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), "cache_control")
 }

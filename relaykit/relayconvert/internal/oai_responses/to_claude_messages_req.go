@@ -95,7 +95,7 @@ func OpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Met
 	}
 	for _, item := range inputItems {
 		itemType := strings.TrimSpace(kitutil.Interface2String(item["type"]))
-		if (itemType == ResponsesInputTypeFunctionCall || itemType == ResponsesInputTypeCustomToolCall || itemType == "tool_search_call") &&
+		if (itemType == ResponsesInputTypeFunctionCall || itemType == ResponsesInputTypeCustomToolCall || itemType == "tool_search_call" || itemType == "local_shell_call") &&
 			strings.TrimSpace(kitutil.Interface2String(item["status"])) == "incomplete" {
 			continue
 		}
@@ -118,7 +118,13 @@ func OpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Met
 				return nil, err
 			}
 			claudeRequest.Messages = appendClaudeToolUse(claudeRequest.Messages, toolUse)
-		case ResponsesInputTypeFunctionCallOutput, ResponsesInputTypeCustomToolOutput:
+		case "local_shell_call":
+			toolUse, err := responsesCallItemToClaudeToolUse(item, "action", sharedbridge.ToolKindLocalShell, toolState)
+			if err != nil {
+				return nil, err
+			}
+			claudeRequest.Messages = appendClaudeToolUse(claudeRequest.Messages, toolUse)
+		case ResponsesInputTypeFunctionCallOutput, ResponsesInputTypeCustomToolOutput, "local_shell_call_output":
 			toolResult, err := responsesFunctionOutputItemToClaudeToolResult(c, item, "output")
 			if err != nil {
 				return nil, err
@@ -459,6 +465,10 @@ func responsesCallItemToClaudeToolUse(item map[string]any, inputKey string, kind
 		name = "tool_search"
 		namespace = ""
 	}
+	if kind == sharedbridge.ToolKindLocalShell {
+		name = sharedbridge.LocalShellToolName
+		namespace = ""
+	}
 	if name == "" {
 		return dto.ClaudeMediaMessage{}, fmt.Errorf("Responses tool call is missing name")
 	}
@@ -471,6 +481,8 @@ func responsesCallItemToClaudeToolUse(item map[string]any, inputKey string, kind
 		input = ObjectValue(customInputArguments(item[inputKey]), inputKey)
 	} else if kind == sharedbridge.ToolKindToolSearch {
 		input = ObjectValue(toolSearchArguments(item[inputKey]), inputKey)
+	} else if kind == sharedbridge.ToolKindLocalShell {
+		input = ObjectValue(sharedbridge.LocalShellCallArguments(item[inputKey]), inputKey)
 	} else if err != nil {
 		return dto.ClaudeMediaMessage{}, fmt.Errorf("function_call %q: %w", CallID(item), err)
 	}

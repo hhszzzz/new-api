@@ -85,6 +85,13 @@ func BuildChannelCandidateClassifier(c *gin.Context, modelName string) model.Cha
 		case channelcompat.StatusConvertible:
 			return model.ChannelCandidateConvertible
 		default:
+			// Selection reports a single aggregate error when every candidate is
+			// incompatible; remember one concrete reason so the client sees why.
+			if plan.Reason != "" {
+				if _, exists := common.GetContextKeyType[string](c, constant.ContextKeyProtocolIncompatibleReason); !exists {
+					common.SetContextKey(c, constant.ContextKeyProtocolIncompatibleReason, plan.Reason)
+				}
+			}
 			return model.ChannelCandidateIncompatible
 		}
 	}

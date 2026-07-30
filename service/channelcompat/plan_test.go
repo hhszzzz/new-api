@@ -191,7 +191,9 @@ func TestExtractRequestFeatureSetDetectsMessagesServerTools(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.True(t, features.HasToolSearch)
-	assert.Equal(t, []string{"web_search_20250305", "tool_search_tool_regex_20251119"}, features.DeclaredHostedTools)
+	// Typed Messages tool declarations are dropped or lowered by the request
+	// converters, so they no longer register as hosted-tool features.
+	assert.Empty(t, features.DeclaredHostedTools)
 	assert.Empty(t, features.HistoricalHostedTools)
 }
 
@@ -473,7 +475,7 @@ func TestPlanForRequestCompactCanUseChatBridge(t *testing.T) {
 	assert.Equal(t, ProtocolResponses, native.UpstreamProtocol)
 }
 
-func TestPlanForRequestRejectsStatefulAndDeclaredResponsesHostedTools(t *testing.T) {
+func TestPlanForRequestRejectsStatefulFieldsAndHostedToolHistory(t *testing.T) {
 	withProtocolBridgePolicy(t, true, true)
 	channel := &model.Channel{Type: constant.ChannelTypeOpenAI}
 	channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
@@ -497,12 +499,12 @@ func TestPlanForRequestRejectsStatefulAndDeclaredResponsesHostedTools(t *testing
 		})
 	}
 
+	// Declared hosted tools no longer block selection: the request converters
+	// drop them (CC Switch semantics), so the plan stays convertible.
 	declaredHostedPlan := PlanForRequest(channel, ProtocolResponses, "gpt-test", "/v1/responses", RequestFeatureSet{
 		DeclaredHostedTools: []string{"web_search_preview", "file_search"},
 	})
-	assert.Equal(t, StatusIncompatible, declaredHostedPlan.Status)
-	assert.Contains(t, declaredHostedPlan.Reason, "native Responses")
-	assert.Contains(t, declaredHostedPlan.Reason, "web_search_preview, file_search")
+	assert.Equal(t, StatusConvertible, declaredHostedPlan.Status)
 
 	historicalHostedPlan := PlanForRequest(channel, ProtocolResponses, "gpt-test", "/v1/responses", RequestFeatureSet{
 		HistoricalHostedTools: []string{"web_search_call", "file_search_call"},
@@ -524,12 +526,18 @@ func TestPlanForRequestRejectsMessagesServerToolsBeforeConversion(t *testing.T) 
 		UpstreamProtocols: []string{dto.ProtocolCapabilityChat},
 	}})
 
-	plan := PlanForRequest(channel, ProtocolMessages, "claude-public", "/v1/messages", RequestFeatureSet{
+	// Declared server tools are dropped by the converter, so selection stays
+	// convertible; executed server tool history still requires a native upstream.
+	declaredPlan := PlanForRequest(channel, ProtocolMessages, "claude-public", "/v1/messages", RequestFeatureSet{
 		DeclaredHostedTools: []string{"web_search_20250305"},
 	})
+	assert.Equal(t, StatusConvertible, declaredPlan.Status)
 
-	assert.Equal(t, StatusIncompatible, plan.Status)
-	assert.Contains(t, plan.Reason, "native Messages")
+	historyPlan := PlanForRequest(channel, ProtocolMessages, "claude-public", "/v1/messages", RequestFeatureSet{
+		HistoricalHostedTools: []string{"server_tool_use"},
+	})
+	assert.Equal(t, StatusIncompatible, historyPlan.Status)
+	assert.Contains(t, historyPlan.Reason, "native Messages")
 }
 
 func TestPlanForRequestRejectsMessagesFieldsOnlyOnLossyRoutes(t *testing.T) {
@@ -917,4 +925,31 @@ func withProtocolBridgePolicy(t *testing.T, enabled, defaultAllowConversion bool
 	t.Cleanup(func() {
 		settings.ProtocolBridgePolicy = original
 	})
+}
+
+func TestConversionFeatureGateDropsDeclaredHostedToolsButKeepsHistoryGuard(t *testing.T) {
+	// Codex always declares hosted tools (local_shell, web_search); the request
+	// converters drop them, so declarations must not block channel selection.
+	codexBody := `{"model":"gpt-5.1","stream":true,"tools":[{"type":"local_shell"},{"type":"web_search"},{"type":"function","name":"update_plan","parameters":{"type":"object"}}],"input":"hi"}`
+	features, err := ExtractRequestFeatureSet(ProtocolResponses, []byte(codexBody))
+	require.NoError(t, err)
+	require.NotEmpty(t, features.DeclaredHostedTools)
+	assert.Empty(t, conversionFeatureIncompatibility(ProtocolResponses, ProtocolChat, features))
+
+	// Replaying an executed hosted call to a non-native upstream would corrupt
+	// conversation context, so historical hosted items still gate. local_shell
+	// is the exception: it is client-executed and lowered/restored by the
+	// bridge, so its history converts.
+	historyBody := `{"model":"gpt-5.1","stream":true,"input":[{"type":"web_search_call","id":"ws1","status":"completed"}]}`
+	features, err = ExtractRequestFeatureSet(ProtocolResponses, []byte(historyBody))
+	require.NoError(t, err)
+	assert.Contains(t,
+		conversionFeatureIncompatibility(ProtocolResponses, ProtocolChat, features),
+		"server tool history cannot be replayed",
+	)
+
+	shellHistoryBody := `{"model":"gpt-5.1","stream":true,"input":[{"type":"local_shell_call","call_id":"c1","action":{"command":["ls"]}}]}`
+	features, err = ExtractRequestFeatureSet(ProtocolResponses, []byte(shellHistoryBody))
+	require.NoError(t, err)
+	assert.Empty(t, conversionFeatureIncompatibility(ProtocolResponses, ProtocolChat, features))
 }

@@ -130,6 +130,12 @@ func TestConvertOpenAIResponsesRequestToGeminiFunctionCallConversation(t *testin
 func TestConvertOpenAIResponsesRequestToGeminiLowersClientToolHistory(t *testing.T) {
 	got := mustConvertResponsesToGemini(t, dto.OpenAIResponsesRequest{
 		Model: "gemini-test",
+		// Hosted web_search drops (CC Switch semantics); client-executed
+		// local_shell lowers to a function declaration.
+		Tools: mustGeminiRawMessage(t, []map[string]any{
+			{"type": "web_search"},
+			{"type": "local_shell"},
+		}),
 		Input: mustGeminiRawMessage(t, []map[string]any{
 			{
 				"type":    "reasoning",
@@ -161,8 +167,12 @@ func TestConvertOpenAIResponsesRequestToGeminiLowersClientToolHistory(t *testing
 		}),
 	})
 
-	// additional_tools declarations are lifted into the Gemini tools list.
-	assert.Equal(t, "lookup", gjson.GetBytes(got.Tools, "0.functionDeclarations.0.name").String())
+	// additional_tools declarations are lifted into the Gemini tools list; the
+	// dropped web_search leaves nothing behind while client-executed
+	// local_shell lowers to a callable function declaration.
+	assert.Equal(t, "local_shell", gjson.GetBytes(got.Tools, "0.functionDeclarations.0.name").String())
+	assert.Equal(t, "lookup", gjson.GetBytes(got.Tools, "0.functionDeclarations.1.name").String())
+	assert.Len(t, gjson.GetBytes(got.Tools, "0.functionDeclarations").Array(), 2)
 
 	require.Len(t, got.Contents, 3)
 	assert.Equal(t, "model", got.Contents[0].Role)
@@ -188,12 +198,6 @@ func TestConvertOpenAIResponsesRequestToGeminiRejectsLossyToolsAndHistory(t *tes
 		input any
 		want  string
 	}{
-		{
-			name:  "hosted tool declaration",
-			tools: []map[string]any{{"type": "web_search"}},
-			input: "hello",
-			want:  `tool type "web_search" requires a native Responses upstream`,
-		},
 		{
 			name:  "namespace tool without children",
 			tools: []map[string]any{{"type": "namespace", "name": "workspace", "tools": []any{}}},

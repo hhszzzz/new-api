@@ -25,6 +25,7 @@ const (
 	ContextKeyProtocolResponseStreamState ContextKey = "protocol_response_stream_state"
 	ContextKeyProtocolStreamCompleted     ContextKey = "protocol_stream_completed"
 	ContextKeyProtocolAutoAttempt         ContextKey = "protocol_auto_attempt"
+	ContextKeyProtocolIncompatibleReason  ContextKey = "protocol_incompatible_reason"
 	ContextKeyClientName                  ContextKey = "client_name"
 	ContextKeyUpstreamRequestSize         ContextKey = "upstream_request_size"
 

@@ -732,3 +732,32 @@ func mustRawMessage(t *testing.T, value any) []byte {
 	require.NoError(t, err)
 	return raw
 }
+
+func TestResponsesRequestToChatCompletionsRequestMapsReasoningEffortToVendorThinking(t *testing.T) {
+	tests := []struct {
+		name         string
+		model        string
+		effort       string
+		wantEffort   string
+		wantThinking string
+	}{
+		{name: "glm gets thinking toggle", model: "glm-5.2", effort: "high", wantThinking: `{"type":"enabled"}`},
+		{name: "kimi explicit disable", model: "kimi-k2.5", effort: "none", wantThinking: `{"type":"disabled"}`},
+		{name: "deepseek gets thinking plus clamped effort", model: "deepseek-v4", effort: "xhigh", wantEffort: "max", wantThinking: `{"type":"enabled"}`},
+		{name: "unknown model drops effort", model: "openpangu-2.0-flash", effort: "high"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := ResponsesRequestToChatCompletionsRequest(&dto.OpenAIResponsesRequest{
+				Model:     test.model,
+				Input:     mustRawMessage(t, "hello"),
+				Reasoning: &dto.Reasoning{Effort: test.effort},
+			})
+			require.NoError(t, err)
+
+			assert.Equal(t, test.wantEffort, got.ReasoningEffort)
+			assert.Equal(t, test.wantThinking, string(got.THINKING))
+		})
+	}
+}

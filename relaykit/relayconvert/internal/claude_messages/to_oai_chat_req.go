@@ -68,6 +68,10 @@ func claudeMessagesRequestToOpenAIChat(c context.Context, claudeRequest dto.Clau
 
 	options := convmeta.OptionsOf(info)
 	isOpenRouter := options.OpenRouterDialect
+	// cache_control is an Anthropic-only content field; strict OpenAI-compatible
+	// vendors reject it. OpenRouter's anthropic/claude chat surface is the one
+	// upstream that understands it, so only that dialect keeps the markers.
+	isOpenRouterClaude := isOpenRouter && strings.HasPrefix(convmeta.UpstreamModelName(info), "anthropic/claude")
 	preserveReasoningContent := options.PreserveChatReasoningContent
 	if isOpenRouter {
 		if effort := claudeRequest.GetEfforts(); effort != "" {
@@ -93,9 +97,13 @@ func claudeMessagesRequestToOpenAIChat(c context.Context, claudeRequest dto.Clau
 			openAIRequest.Reasoning = reasoningJSON
 		}
 	} else {
-		if sharedchat.SupportsReasoningEffort(claudeRequest.Model) {
-			openAIRequest.ReasoningEffort = claudeRequestReasoningEffort(&claudeRequest)
+		effort := claudeRequestReasoningEffort(&claudeRequest)
+		if effort == "" && claudeRequest.Thinking != nil && claudeRequest.Thinking.Type == "disabled" {
+			// Thinking-by-default models (Kimi/GLM/DeepSeek) need the explicit
+			// disable; an absent thinking block stays a no-op.
+			effort = "none"
 		}
+		sharedchat.ApplyReasoningEffort(&openAIRequest, effort)
 		if info != nil {
 			thinkingSuffix := "-thinking"
 			if strings.HasSuffix(convmeta.UpstreamModelName(info), thinkingSuffix) &&
@@ -196,7 +204,6 @@ func claudeMessagesRequestToOpenAIChat(c context.Context, claudeRequest dto.Clau
 						return nil, fmt.Errorf("Claude system content %d type %q cannot be converted to Chat Completions", index, system.Type)
 					}
 				}
-				isOpenRouterClaude := isOpenRouter && strings.HasPrefix(convmeta.UpstreamModelName(info), "anthropic/claude")
 				if isOpenRouterClaude {
 					systemMediaMessages := make([]dto.MediaContent, 0, len(systems))
 					for _, system := range systems {
@@ -254,9 +261,11 @@ func claudeMessagesRequestToOpenAIChat(c context.Context, claudeRequest dto.Clau
 				switch mediaMsg.Type {
 				case "text", "input_text":
 					message := dto.MediaContent{
-						Type:         "text",
-						Text:         mediaMsg.GetText(),
-						CacheControl: mediaMsg.CacheControl,
+						Type: "text",
+						Text: mediaMsg.GetText(),
+					}
+					if isOpenRouterClaude {
+						message.CacheControl = mediaMsg.CacheControl
 					}
 					mediaMessages = append(mediaMessages, message)
 				case "image", "document":

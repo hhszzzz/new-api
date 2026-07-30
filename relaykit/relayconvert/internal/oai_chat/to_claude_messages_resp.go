@@ -8,6 +8,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/reasonmap"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
 	sharedbridge "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/bridge"
+	sharedchat "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/chat"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/samber/lo"
 )
@@ -108,6 +109,11 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 	state := info.EnsureClaudeConvertInfo()
 	if state.Done {
 		return nil
+	}
+	for choiceIndex := range openAIResponse.Choices {
+		choice := &openAIResponse.Choices[choiceIndex]
+		finished := choice.FinishReason != nil && strings.TrimSpace(*choice.FinishReason) != ""
+		sharedchat.SplitThinkTagStreamDelta(&state.ThinkTagSplitter, &choice.Delta, finished)
 	}
 
 	var claudeResponses []*dto.ClaudeResponse
@@ -646,13 +652,19 @@ func ResponseOpenAI2ClaudeWithBridgeState(openAIResponse *dto.OpenAITextResponse
 	}
 	for _, choice := range openAIResponse.Choices {
 		stopReason = stopReasonOpenAI2Claude(choice.FinishReason)
-		if reasoning := choice.Message.GetReasoningContent(); reasoning != "" && len(openAIResponse.ProviderReasoningStates) == 0 {
+		reasoning := choice.Message.GetReasoningContent()
+		textContent := choice.Message.StringContent()
+		if reasoning == "" {
+			if split, answer, ok := sharedchat.SplitThinkTagText(textContent); ok {
+				reasoning, textContent = split, answer
+			}
+		}
+		if reasoning != "" && len(openAIResponse.ProviderReasoningStates) == 0 {
 			contents = append(contents, dto.ClaudeMediaMessage{
 				Type:     "thinking",
 				Thinking: kitutil.GetPointer(reasoning),
 			})
 		}
-		textContent := choice.Message.StringContent()
 		refusalContent := choice.Message.GetRefusalContent()
 		toolCalls := choice.Message.ParseToolCalls()
 		if textContent != "" {

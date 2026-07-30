@@ -187,7 +187,7 @@ func filterIncompleteResponsesToolHistory(items []map[string]any, dropUnanswered
 	for index, item := range items {
 		itemType := strings.TrimSpace(kitutil.Interface2String(item["type"]))
 		switch itemType {
-		case ResponsesInputTypeFunctionCall, ResponsesInputTypeCustomToolCall, "tool_search_call":
+		case ResponsesInputTypeFunctionCall, ResponsesInputTypeCustomToolCall, "tool_search_call", "local_shell_call":
 			if currentBatch < 0 {
 				batches = append(batches, callBatch{})
 				currentBatch = len(batches) - 1
@@ -201,7 +201,7 @@ func filterIncompleteResponsesToolHistory(items []map[string]any, dropUnanswered
 		case "reasoning":
 			// Reasoning belongs to the surrounding assistant turn and does not
 			// split a batch of parallel tool calls.
-		case ResponsesInputTypeFunctionCallOutput, ResponsesInputTypeCustomToolOutput, "tool_search_output":
+		case ResponsesInputTypeFunctionCallOutput, ResponsesInputTypeCustomToolOutput, "tool_search_output", "local_shell_call_output":
 			currentBatch = -1
 			if callID := CallID(item); callID != "" {
 				outputCounts[callID]++
@@ -248,11 +248,11 @@ func filterIncompleteResponsesToolHistory(items []map[string]any, dropUnanswered
 	for index, item := range items {
 		itemType := strings.TrimSpace(kitutil.Interface2String(item["type"]))
 		switch itemType {
-		case ResponsesInputTypeFunctionCall, ResponsesInputTypeCustomToolCall, "tool_search_call":
+		case ResponsesInputTypeFunctionCall, ResponsesInputTypeCustomToolCall, "tool_search_call", "local_shell_call":
 			if _, drop := droppedIndexes[index]; drop {
 				continue
 			}
-		case ResponsesInputTypeFunctionCallOutput, ResponsesInputTypeCustomToolOutput, "tool_search_output":
+		case ResponsesInputTypeFunctionCallOutput, ResponsesInputTypeCustomToolOutput, "tool_search_output", "local_shell_call_output":
 			callID := CallID(item)
 			if _, drop := droppedCallIDs[callID]; drop {
 				continue

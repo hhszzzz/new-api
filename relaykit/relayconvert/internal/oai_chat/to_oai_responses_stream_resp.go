@@ -9,6 +9,7 @@ import (
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	sharedbridge "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/bridge"
+	sharedchat "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/chat"
 )
 
 type ChatToResponsesStreamEvent struct {
@@ -22,6 +23,8 @@ type ChatToResponsesStreamState struct {
 	Created   int64
 	Usage     *dto.Usage
 	ToolState *sharedbridge.ToolState
+
+	thinkSplitter sharedchat.ThinkTagSplitter
 
 	status               string
 	incompleteDetails    *dto.IncompleteDetails
@@ -128,6 +131,8 @@ func ChatCompletionsStreamChunkToResponsesEvents(chunk *dto.ChatCompletionsStrea
 		events = append(events, state.finishReasoningItem(reasoning, "completed")...)
 	}
 	for _, choice := range chunk.Choices {
+		finished := choice.FinishReason != nil && strings.TrimSpace(*choice.FinishReason) != ""
+		sharedchat.SplitThinkTagStreamDelta(&state.thinkSplitter, &choice.Delta, finished)
 		if choice.Delta.GetReasoningContent() != "" {
 			events = append(events, state.appendReasoningDelta(choice.Delta.GetReasoningContent())...)
 		}
@@ -782,6 +787,12 @@ func (s *ChatToResponsesStreamState) toolOutput(tool *chatToResponsesStreamTool,
 		output.Namespace = ""
 		output.Execution = "client"
 		output.Arguments = sharedbridge.ToolSearchArgumentsRaw(tool.Arguments.String())
+	case sharedbridge.ToolKindLocalShell:
+		output.Type = "local_shell_call"
+		output.Name = ""
+		output.Namespace = ""
+		output.Arguments = nil
+		output.Action = sharedbridge.LocalShellActionRaw(tool.Arguments.String())
 	}
 	return output
 }
@@ -792,6 +803,8 @@ func toolItemIDPrefix(tool *chatToResponsesStreamTool) string {
 		return "ctc"
 	case sharedbridge.ToolKindToolSearch:
 		return "tsc"
+	case sharedbridge.ToolKindLocalShell:
+		return "lsc"
 	default:
 		return "fc"
 	}

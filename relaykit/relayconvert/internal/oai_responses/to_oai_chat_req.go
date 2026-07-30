@@ -99,8 +99,8 @@ func ResponsesRequestToChatCompletionsRequestWithContext(c context.Context, req 
 		out.StreamOptions.IncludeUsage = true
 	}
 
-	if req.Reasoning != nil && sharedchat.SupportsReasoningEffort(req.Model) {
-		out.ReasoningEffort = req.Reasoning.Effort
+	if req.Reasoning != nil {
+		sharedchat.ApplyReasoningEffort(out, req.Reasoning.Effort)
 	}
 	if req.ServiceTier != "" {
 		out.ServiceTier, _ = kitutil.Marshal(req.ServiceTier)
@@ -231,7 +231,17 @@ func responsesInputItemToChatMessages(c context.Context, item map[string]any, me
 		messages = appendToolCallToLastAssistant(messages, toolCall)
 		attachPendingResponsesReasoningToMessage(&messages[len(messages)-1], pendingReasoning)
 		return messages, nil
-	case responsesInputTypeFunctionCallOutput, responsesInputTypeCustomToolOutput, "tool_search_output":
+	case "local_shell_call":
+		appendPendingResponsesReasoning(pendingReasoning, responsesItemReasoningText(item))
+		messages = flushResponsesToolMedia(messages, pendingToolMedia)
+		toolCall, err := responsesLocalShellCallItemToChatToolCall(item, toolState)
+		if err != nil {
+			return nil, err
+		}
+		messages = appendToolCallToLastAssistant(messages, toolCall)
+		attachPendingResponsesReasoningToMessage(&messages[len(messages)-1], pendingReasoning)
+		return messages, nil
+	case responsesInputTypeFunctionCallOutput, responsesInputTypeCustomToolOutput, "tool_search_output", "local_shell_call_output":
 		attachPendingResponsesReasoningToLastAssistant(messages, pendingReasoning)
 		callID := responsesCallID(item)
 		if !responsesChatToolCallExists(messages, callID) {
@@ -742,6 +752,21 @@ func responsesToolSearchCallItemToChatToolCall(item map[string]any, toolState *s
 		Function: dto.FunctionRequest{
 			Name:      upstreamName,
 			Arguments: arguments,
+		},
+	}, nil
+}
+
+func responsesLocalShellCallItemToChatToolCall(item map[string]any, toolState *sharedbridge.ToolState) (dto.ToolCallRequest, error) {
+	upstreamName, err := upstreamToolName(toolState, sharedbridge.ToolKindLocalShell, "", sharedbridge.LocalShellToolName)
+	if err != nil {
+		return dto.ToolCallRequest{}, err
+	}
+	return dto.ToolCallRequest{
+		ID:   responsesCallID(item),
+		Type: "function",
+		Function: dto.FunctionRequest{
+			Name:      upstreamName,
+			Arguments: sharedbridge.LocalShellCallArguments(item["action"]),
 		},
 	}, nil
 }

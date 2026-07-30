@@ -8,6 +8,7 @@ import (
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	sharedbridge "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/bridge"
+	sharedchat "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/chat"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 )
 
@@ -89,6 +90,11 @@ func ChatCompletionsResponseToResponsesResponseWithBridgeState(resp *dto.OpenAIT
 	text := choice.Message.StringContent()
 	refusal := choice.Message.GetRefusalContent()
 	reasoning := choice.Message.GetReasoningContent()
+	if reasoning == "" {
+		if split, answer, ok := sharedchat.SplitThinkTagText(text); ok {
+			reasoning, text = split, answer
+		}
+	}
 	if outputState == nil || len(outputState.Items) == 0 {
 		if reasoning != "" {
 			out.Output = append(out.Output, chatResponseReasoningOutput(responseID, 0, reasoning, "", responseOutputStatus(out)))
@@ -300,6 +306,14 @@ func chatToolCallToResponsesOutput(toolCall dto.ToolCallRequest, responseID stri
 					CallId:    callID,
 					Execution: "client",
 					Arguments: sharedbridge.ToolSearchArgumentsRaw(toolCall.Function.Arguments),
+				}, nil
+			case sharedbridge.ToolKindLocalShell:
+				return dto.ResponsesOutput{
+					Type:   "local_shell_call",
+					ID:     responsesSyntheticItemID("lsc", responseID, index),
+					Status: status,
+					CallId: callID,
+					Action: sharedbridge.LocalShellActionRaw(toolCall.Function.Arguments),
 				}, nil
 			case sharedbridge.ToolKindFunction:
 				return dto.ResponsesOutput{

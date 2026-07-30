@@ -6,6 +6,7 @@ package convmeta
 
 import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	sharedchat "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/chat"
 	"github.com/QuantumNous/new-api/relaykit/types"
 )
 
@@ -64,6 +65,8 @@ type ClaudeConvertInfo struct {
 	ToolCallStartedCount   int
 	ToolCalls              map[int]*ClaudeToolCallStreamState
 	UsedToolCallIDs        map[string]struct{}
+
+	ThinkTagSplitter sharedchat.ThinkTagSplitter
 }
 
 type ClaudeToolCallStreamState struct {

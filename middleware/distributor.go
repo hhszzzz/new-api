@@ -219,7 +219,11 @@ func Distribute() func(c *gin.Context) {
 					})
 					if err != nil {
 						if errors.Is(err, model.ErrNoCompatibleChannel) {
-							abortWithProtocolMessage(c, http.StatusBadRequest, err.Error(), types.ErrorCodeInvalidRequest)
+							message := err.Error()
+							if reason, ok := common.GetContextKeyType[string](c, constant.ContextKeyProtocolIncompatibleReason); ok && reason != "" {
+								message = fmt.Sprintf("%s: %s", message, reason)
+							}
+							abortWithProtocolMessage(c, http.StatusBadRequest, message, types.ErrorCodeInvalidRequest)
 							return
 						}
 						message := i18n.T(c, i18n.MsgDistributorGetChannelFailed, map[string]any{"Group": usingGroup, "Model": modelRequest.Model, "Error": err.Error()})

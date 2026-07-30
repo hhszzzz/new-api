@@ -284,7 +284,7 @@ func TestResponsesBridgesRejectHostedToolHistory(t *testing.T) {
 	}
 }
 
-func TestResponsesBridgesRejectHostedToolDeclarations(t *testing.T) {
+func TestResponsesBridgesDropHostedToolDeclarations(t *testing.T) {
 	targets := []struct {
 		name   string
 		format types.RelayFormat
@@ -292,29 +292,62 @@ func TestResponsesBridgesRejectHostedToolDeclarations(t *testing.T) {
 		{name: "Chat", format: types.RelayFormatOpenAI},
 		{name: "Messages", format: types.RelayFormatClaude},
 	}
-	tools := []struct {
+	hostedTools := []struct {
 		name string
 		tool map[string]any
 	}{
 		{name: "web search", tool: map[string]any{"type": "web_search_preview"}},
 		{name: "file search", tool: map[string]any{"type": "file_search"}},
-		{name: "server tool search", tool: map[string]any{"type": "tool_search", "execution": "server"}},
 	}
 
 	for _, target := range targets {
-		for _, test := range tools {
+		for _, test := range hostedTools {
 			t.Run(target.name+"/"+test.name, func(t *testing.T) {
+				maxOutputTokens := uint(512)
 				request := &dto.OpenAIResponsesRequest{
-					Model: "gpt-test",
-					Input: protocolBridgeRaw(t, "hello"),
-					Tools: protocolBridgeRaw(t, []map[string]any{test.tool}),
+					Model:           "gpt-test",
+					MaxOutputTokens: &maxOutputTokens,
+					Input:           protocolBridgeRaw(t, "hello"),
+					Tools: protocolBridgeRaw(t, []map[string]any{
+						test.tool,
+						{"type": "function", "name": "lookup", "parameters": map[string]any{"type": "object"}},
+					}),
 				}
 
-				_, err := ConvertRequest(context.Background(), &convmeta.Values{}, target.format, request)
+				result, err := ConvertRequest(context.Background(), &convmeta.Values{}, target.format, request)
 
-				require.ErrorContains(t, err, "native Responses upstream")
+				// CC Switch semantics: hosted tools are dropped, the rest of the
+				// request converts and keeps its convertible tools.
+				require.NoError(t, err)
+				switch converted := result.Value.(type) {
+				case *dto.GeneralOpenAIRequest:
+					require.Len(t, converted.Tools, 1)
+					assert.Equal(t, "lookup", converted.Tools[0].Function.Name)
+				case *dto.ClaudeRequest:
+					require.Len(t, converted.Tools, 1)
+				default:
+					t.Fatalf("unexpected converted request type %T", result.Value)
+				}
 			})
 		}
+
+		t.Run(target.name+"/server tool search", func(t *testing.T) {
+			maxOutputTokens := uint(512)
+			request := &dto.OpenAIResponsesRequest{
+				Model:           "gpt-test",
+				MaxOutputTokens: &maxOutputTokens,
+				Input:           protocolBridgeRaw(t, "hello"),
+				Tools: protocolBridgeRaw(t, []map[string]any{
+					{"type": "tool_search", "execution": "server"},
+				}),
+			}
+
+			_, err := ConvertRequest(context.Background(), &convmeta.Values{}, target.format, request)
+
+			// Server-executed tool_search cannot be dropped without changing
+			// semantics the client explicitly asked for.
+			require.ErrorContains(t, err, "native Responses upstream")
+		})
 	}
 }
 
@@ -995,4 +1028,135 @@ func protocolBridgeRaw(t *testing.T, value any) []byte {
 	raw, err := kitutil.Marshal(value)
 	require.NoError(t, err)
 	return raw
+}
+
+func TestResponsesChatBridgeLowersAndRestoresLocalShell(t *testing.T) {
+	ctx := WithProtocolBridgeContext(context.Background())
+	request := &dto.OpenAIResponsesRequest{
+		Model: "gpt-5.5-codex",
+		Tools: protocolBridgeRaw(t, []map[string]any{
+			{"type": "local_shell"},
+			{"type": "web_search"},
+			{"type": "function", "name": "lookup", "parameters": map[string]any{"type": "object"}},
+		}),
+		Input: protocolBridgeRaw(t, []map[string]any{
+			{
+				"type":    "local_shell_call",
+				"call_id": "lsh_1",
+				"status":  "completed",
+				"action":  map[string]any{"type": "exec", "command": []string{"bash", "-lc", "ls"}},
+			},
+			{
+				"type":    "local_shell_call_output",
+				"call_id": "lsh_1",
+				"output":  "main.go",
+			},
+			{"role": "user", "content": "run the tests"},
+		}),
+	}
+
+	requestResult, err := ConvertRequest(ctx, &convmeta.Values{}, types.RelayFormatOpenAI, request)
+	require.NoError(t, err)
+	chatRequest, ok := requestResult.Value.(*dto.GeneralOpenAIRequest)
+	require.True(t, ok)
+
+	// Declaration: local_shell lowers to a function tool, web_search drops.
+	require.Len(t, chatRequest.Tools, 2)
+	assert.Equal(t, "local_shell", chatRequest.Tools[0].Function.Name)
+	assert.Equal(t, []string{"command"}, chatRequest.Tools[0].Function.Parameters.(map[string]any)["required"])
+	assert.Equal(t, "lookup", chatRequest.Tools[1].Function.Name)
+
+	// History: local_shell_call lowers to a paired assistant tool call.
+	require.Len(t, chatRequest.Messages, 3)
+	toolCalls := chatRequest.Messages[0].ParseToolCalls()
+	require.Len(t, toolCalls, 1)
+	assert.Equal(t, "local_shell", toolCalls[0].Function.Name)
+	assert.JSONEq(t, `{"command":["bash","-lc","ls"]}`, toolCalls[0].Function.Arguments)
+	assert.Equal(t, "tool", chatRequest.Messages[1].Role)
+	assert.Equal(t, "lsh_1", chatRequest.Messages[1].ToolCallId)
+
+	upstream := &dto.OpenAITextResponse{
+		Id:    "resp-shell",
+		Model: "provider-model",
+		Choices: []dto.OpenAITextResponseChoice{
+			{FinishReason: "tool_calls", Message: dto.Message{Role: "assistant"}},
+		},
+	}
+	upstream.Choices[0].Message.SetToolCalls([]dto.ToolCallRequest{
+		{ID: "call_shell", Type: "function", Function: dto.FunctionRequest{Name: "local_shell", Arguments: `{"command":["bash","-lc","go test ./..."],"timeout_ms":60000}`}},
+	})
+
+	responseResult, err := ConvertResponse(ctx, &convmeta.Values{}, types.RelayFormatOpenAIResponses, upstream)
+	require.NoError(t, err)
+	response, ok := responseResult.Value.(*dto.OpenAIResponsesResponse)
+	require.True(t, ok)
+	require.Len(t, response.Output, 1)
+	assert.Equal(t, "local_shell_call", response.Output[0].Type)
+	assert.Equal(t, "call_shell", response.Output[0].CallId)
+	assert.Empty(t, response.Output[0].Name)
+	assert.JSONEq(t, `{"type":"exec","command":["bash","-lc","go test ./..."],"timeout_ms":60000}`, string(response.Output[0].Action))
+}
+
+func TestResponsesChatBridgeStreamRestoresLocalShellCall(t *testing.T) {
+	ctx := WithProtocolBridgeContext(context.Background())
+	request := &dto.OpenAIResponsesRequest{
+		Model: "gpt-5.5-codex",
+		Tools: protocolBridgeRaw(t, []map[string]any{{"type": "local_shell"}}),
+		Input: protocolBridgeRaw(t, "list files"),
+	}
+	_, err := ConvertRequest(ctx, &convmeta.Values{}, types.RelayFormatOpenAI, request)
+	require.NoError(t, err)
+
+	state, err := NewResponseStreamState(types.RelayFormatOpenAI, types.RelayFormatOpenAIResponses, ResponseStreamOptions{
+		ID:    "resp_shell",
+		Model: "gpt-5.5-codex",
+	})
+	require.NoError(t, err)
+
+	index := 0
+	_, err = ConvertStreamResponseChunk(ctx, nil, state, &dto.ChatCompletionsStreamResponse{
+		Id:    "chatcmpl_1",
+		Model: "provider-model",
+		Choices: []dto.ChatCompletionsStreamResponseChoice{{
+			Delta: dto.ChatCompletionsStreamResponseChoiceDelta{
+				ToolCalls: []dto.ToolCallResponse{{
+					Index: &index,
+					ID:    "call_shell",
+					Type:  "function",
+					Function: dto.FunctionResponse{
+						Name:      "local_shell",
+						Arguments: `{"command":["bash","-lc","ls"]}`,
+					},
+				}},
+			},
+		}},
+	})
+	require.NoError(t, err)
+
+	finishReason := "tool_calls"
+	finishResults, err := ConvertStreamResponseChunk(ctx, nil, state, &dto.ChatCompletionsStreamResponse{
+		Id:      "chatcmpl_1",
+		Model:   "provider-model",
+		Choices: []dto.ChatCompletionsStreamResponseChoice{{FinishReason: &finishReason}},
+	})
+	require.NoError(t, err)
+
+	finalResults, err := FinalizeStreamResponse(ctx, nil, state)
+	require.NoError(t, err)
+
+	var restored *dto.ResponsesOutput
+	for _, result := range append(finishResults, finalResults...) {
+		event, ok := result.Value.(ChatToResponsesStreamEvent)
+		if !ok || event.Payload.Item == nil || event.Payload.Item.Type != "local_shell_call" {
+			continue
+		}
+		if event.Type == "response.output_item.done" {
+			restored = event.Payload.Item
+		}
+	}
+	require.NotNil(t, restored, "stream must emit a completed local_shell_call item")
+	assert.Equal(t, "call_shell", restored.CallId)
+	assert.Empty(t, restored.Name)
+	assert.Nil(t, restored.Arguments)
+	assert.JSONEq(t, `{"type":"exec","command":["bash","-lc","ls"]}`, string(restored.Action))
 }

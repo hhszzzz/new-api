@@ -602,14 +602,15 @@ func inspectTools(protocol Protocol, tools []any, features *RequestFeatureSet, d
 			execution := strings.TrimSpace(common.Interface2String(tool["execution"]))
 			if protocol == ProtocolResponses && execution != "" && execution != "client" {
 				addUniqueToolType("tool_search", &features.DeclaredHostedTools, declaredHostedSeen)
-			} else if protocol == ProtocolMessages {
-				addUniqueToolType("tool_search", &features.DeclaredHostedTools, declaredHostedSeen)
 			}
 		default:
 			if strings.Contains(toolType, "tool_search") {
 				features.HasToolSearch = true
 			}
-			if protocol == ProtocolResponses || protocol == ProtocolMessages && isMessagesServerTool(toolType) {
+			// Responses local_shell is client-executed and lowered to a
+			// function tool; Messages typed tools are dropped or lowered by
+			// the converter, so declarations never force a native upstream.
+			if protocol == ProtocolResponses && toolType != "local_shell" {
 				addUniqueToolType(toolType, &features.DeclaredHostedTools, declaredHostedSeen)
 			}
 		}
@@ -680,8 +681,6 @@ func isResponsesHostedHistoryItem(itemType string) bool {
 		"computer_call_output",
 		"code_interpreter_call",
 		"image_generation_call",
-		"local_shell_call",
-		"local_shell_call_output",
 		"shell_call",
 		"shell_call_output",
 		"apply_patch_call",
@@ -768,12 +767,12 @@ func conversionFeatureIncompatibility(protocol, upstream Protocol, features Requ
 		case features.HasContextManagement:
 			return "context_management is only supported by a native Responses upstream"
 		}
-		if len(features.DeclaredHostedTools) > 0 {
-			return fmt.Sprintf(
-				"Responses server tools require a native Responses upstream: %s",
-				strings.Join(features.DeclaredHostedTools, ", "),
-			)
-		}
+		// Declared hosted tools (web_search, local_shell, ...) are dropped by
+		// the request converters, matching CC Switch: a Codex client always
+		// declares them, so rejecting the request would make every non-native
+		// upstream unusable. Historical hosted calls are different — dropping
+		// them would corrupt conversation context, so those still require a
+		// native Responses upstream.
 		if len(features.HistoricalHostedTools) > 0 {
 			return fmt.Sprintf(
 				"Responses server tool history cannot be replayed to %s: %s",
@@ -795,10 +794,13 @@ func conversionFeatureIncompatibility(protocol, upstream Protocol, features Requ
 		if len(features.MessagesNativeFields) > 0 {
 			return fmt.Sprintf("Messages fields require a native Messages upstream: %s", strings.Join(features.MessagesNativeFields, ", "))
 		}
-		messagesHostedTools := append([]string{}, features.DeclaredHostedTools...)
-		messagesHostedTools = append(messagesHostedTools, features.HistoricalHostedTools...)
-		if len(messagesHostedTools) > 0 {
-			return fmt.Sprintf("server-side Messages tools require a native Messages upstream: %s", strings.Join(messagesHostedTools, ", "))
+		// Declared server tools are dropped by the request converters — CC
+		// Switch semantics — and client-executed typed tools are lowered to
+		// plain functions, so declarations no longer force a native upstream.
+		// Executed server tool history still does: dropping server_tool_use
+		// context would corrupt the conversation.
+		if len(features.HistoricalHostedTools) > 0 {
+			return fmt.Sprintf("server-side Messages tool history requires a native Messages upstream: %s", strings.Join(features.HistoricalHostedTools, ", "))
 		}
 	}
 	unsupportedContentTypes := make([]string, 0)

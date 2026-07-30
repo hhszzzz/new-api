@@ -152,8 +152,18 @@ func responsesToolToChatFunctions(tool map[string]any, namespace string, state *
 		}
 		return out, nil
 	case "function", "custom", "freeform", "tool_search":
+	case "local_shell":
+		// Client-executed: the model issues commands and Codex runs them
+		// locally, so the declaration lowers to a plain function tool.
+		if namespace != "" {
+			return nil, fmt.Errorf("local_shell cannot be nested in namespace %q", namespace)
+		}
+		name = sharedbridge.LocalShellToolName
 	default:
-		return nil, fmt.Errorf("Responses tool type %q requires a native Responses upstream", toolType)
+		// Hosted tools (web_search, ...) cannot execute on a non-Responses
+		// upstream. Drop them and keep the request usable, the same way CC
+		// Switch does; the model simply works without them.
+		return nil, nil
 	}
 
 	if toolType == "tool_search" {
@@ -174,6 +184,8 @@ func responsesToolToChatFunctions(tool map[string]any, namespace string, state *
 		kind = sharedbridge.ToolKindCustom
 	} else if toolType == "tool_search" {
 		kind = sharedbridge.ToolKindToolSearch
+	} else if toolType == "local_shell" {
+		kind = sharedbridge.ToolKindLocalShell
 	}
 	upstreamName := encodedChatToolName(kind, namespace, name)
 	identity := sharedbridge.ToolIdentity{
@@ -255,6 +267,11 @@ func responsesToolToChatFunctions(tool map[string]any, namespace string, state *
 		}
 	}
 
+	if kind == sharedbridge.ToolKindLocalShell {
+		description = sharedbridge.LocalShellFunctionDescription
+		parameters = sharedbridge.LocalShellFunctionParameters()
+	}
+
 	return []dto.ToolCallRequest{
 		{
 			Type: "function",
@@ -293,7 +310,6 @@ func isResponsesHostedToolType(toolType string) bool {
 		"code_interpreter",
 		"code_execution",
 		"image_generation",
-		"local_shell",
 		"shell",
 		"apply_patch",
 		"mcp",

@@ -741,3 +741,35 @@ func TestNormalizeCacheCreationSplit(t *testing.T) {
 func ptr[T any](value T) *T {
 	return &value
 }
+
+func TestStreamResponseOpenAI2ClaudeLiftsThinkTagsIntoThinkingBlocks(t *testing.T) {
+	info := &convmeta.Values{
+		SendResponseCount: 1,
+		ClaudeConvertInfo: &convmeta.ClaudeConvertInfo{
+			LastMessagesType: convmeta.LastMessageTypeNone,
+		},
+	}
+	chunks := []string{
+		`{"id":"c","model":"m","choices":[{"index":0,"delta":{"content":"<thi"}}]}`,
+		`{"id":"c","model":"m","choices":[{"index":0,"delta":{"content":"nk>plan</th"}}]}`,
+		`{"id":"c","model":"m","choices":[{"index":0,"delta":{"content":"ink>\n\nanswer"}}]}`,
+	}
+	var thinking, text string
+	for _, chunk := range chunks {
+		var response dto.ChatCompletionsStreamResponse
+		require.NoError(t, kitutil.Unmarshal([]byte(chunk), &response))
+		for _, event := range StreamResponseOpenAI2Claude(&response, info) {
+			if event.Type != "content_block_delta" || event.Delta == nil {
+				continue
+			}
+			switch event.Delta.Type {
+			case "thinking_delta":
+				thinking += *event.Delta.Thinking
+			case "text_delta":
+				text += *event.Delta.Text
+			}
+		}
+	}
+	assert.Equal(t, "plan", thinking)
+	assert.Equal(t, "answer", text)
+}
