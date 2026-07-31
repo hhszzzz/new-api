@@ -19,6 +19,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/authz"
+	"github.com/QuantumNous/new-api/setting/model_setting"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -155,8 +156,11 @@ func getChannelTypeCounts(query *gorm.DB) (map[int64]int64, error) {
 }
 
 func GetChannelOps(c *gin.Context) {
+	bridgePolicy := model_setting.GetGlobalSettings().ProtocolBridgePolicy
 	common.ApiSuccess(c, gin.H{
-		"retry_times": common.RetryTimes,
+		"retry_times":                              common.RetryTimes,
+		"protocol_bridge_enabled":                  bridgePolicy.Enabled,
+		"protocol_bridge_default_allow_conversion": bridgePolicy.DefaultAllowConversion,
 	})
 }
 

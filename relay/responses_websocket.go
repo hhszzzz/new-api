@@ -76,6 +76,10 @@ type responsesWSSession struct {
 	lockedChannel  *appmodel.Channel
 	nextEventIndex int
 	closeOnce      sync.Once
+	// nativeTransportFailed records that native WebSocket attempts were
+	// exhausted on this connection; later creates go straight to the HTTP
+	// transport bridge instead of re-dialing a broken upstream per request.
+	nativeTransportFailed bool
 	// bridgeWG tracks in-flight HTTP bridge goroutines; the handler must not
 	// return (releasing the pooled gin context) while one still runs.
 	bridgeWG sync.WaitGroup
@@ -345,6 +349,9 @@ func (s *responsesWSSession) handleTargetWriteFailureWithState(state *responsesW
 
 func (s *responsesWSSession) connectAndSendFirst(create responsesWSCreateRequest, eventID string, commitRate middleware.ModelRequestRateLimitCommit) *types.NewAPIError {
 	req := create.Request
+	if s.nativeTransportFailed {
+		return s.startHTTPBridgeCall(create, eventID, commitRate)
+	}
 	retryParam := middleware.NewResponsesWebSocketRetryParam(s.c, req.Model)
 
 	var lastErr *types.NewAPIError
@@ -423,11 +430,17 @@ func (s *responsesWSSession) connectAndSendFirst(create responsesWSCreateRequest
 		return nil
 	}
 
-	if lastErr == nil {
-		lastErr = types.NewError(errors.New("failed to connect responses websocket upstream"), types.ErrorCodeDoRequestFailed, types.ErrOptionWithSkipRetry())
+	// Native transport attempts are exhausted and nothing reached the client
+	// (the target reader never started). Fall back to the HTTP relay pipeline,
+	// which also covers channels that serve Responses over HTTP but do not
+	// speak the WebSocket transport.
+	if lastErr != nil {
+		logger.LogWarn(s.c, "responses websocket native transport unavailable, falling back to HTTP transport: "+lastErr.Error())
 	}
-	commitRate(false)
-	return lastErr
+	s.lockedModel = ""
+	s.lockedChannel = nil
+	s.nativeTransportFailed = true
+	return s.startHTTPBridgeCall(create, eventID, commitRate)
 }
 
 func (s *responsesWSSession) processChannelError(channel *appmodel.Channel, apiErr *types.NewAPIError, retryParam *service.RetryParam, relayInfo *relaycommon.RelayInfo) (*types.NewAPIError, bool) {

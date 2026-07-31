@@ -428,18 +428,25 @@ func TestPlanForRequestAdvancedCustomCountTokensPrefersExplicitAuxiliaryRoute(t 
 	assert.Empty(t, plan.RequestConverter)
 }
 
-func TestPlanForRequestExplicitCapabilitiesOverrideGlobalDisable(t *testing.T) {
+func TestPlanForRequestGlobalDisableHardGatesExplicitCapabilities(t *testing.T) {
 	withProtocolBridgePolicy(t, false, false)
 	channel := &model.Channel{Type: constant.ChannelTypeOpenAI}
 	channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
 		UpstreamProtocols: []string{dto.ProtocolCapabilityChat},
 	}})
 
+	// With the global bridge switch off, configured capabilities are ignored:
+	// Responses passes through natively on OpenAI-type channels.
 	plan := PlanForRequest(channel, ProtocolResponses, "gpt-test", "/v1/responses", RequestFeatureSet{})
+	assert.Equal(t, StatusNative, plan.Status)
+	assert.Equal(t, ProtocolResponses, plan.UpstreamProtocol)
+	assert.Empty(t, plan.RequestConverter)
 
-	assert.Equal(t, StatusConvertible, plan.Status)
-	assert.Equal(t, ProtocolChat, plan.UpstreamProtocol)
-	assert.Equal(t, relayconvert.ConverterOpenAIResponsesToOpenAIChat, plan.RequestConverter)
+	// The legacy adaptor layer keeps working: Messages still converts to chat.
+	messagesPlan := PlanForRequest(channel, ProtocolMessages, "gpt-test", "/v1/messages", RequestFeatureSet{})
+	assert.Equal(t, StatusConvertible, messagesPlan.Status)
+	assert.Equal(t, ProtocolChat, messagesPlan.UpstreamProtocol)
+	assert.Equal(t, relayconvert.ConverterClaudeMessagesToOpenAIChat, messagesPlan.RequestConverter)
 }
 
 func TestPlanForRequestExplicitConversionDisableStillWins(t *testing.T) {
@@ -784,7 +791,7 @@ func TestPlanForRequestPreservesLegacyCapabilitiesWhenConversionRequiresExplicit
 }
 
 func TestPlansForRequestAutomaticOrderFollowsEntryProtocol(t *testing.T) {
-	withProtocolBridgePolicy(t, false, false)
+	withProtocolBridgePolicy(t, true, false)
 	tests := []struct {
 		name        string
 		protocol    Protocol
@@ -830,7 +837,7 @@ func TestPlansForRequestAutomaticOrderFollowsEntryProtocol(t *testing.T) {
 }
 
 func TestPlansForRequestAutomaticModeOnlyProbesExecutableProviderProtocols(t *testing.T) {
-	withProtocolBridgePolicy(t, false, false)
+	withProtocolBridgePolicy(t, true, false)
 	tests := []struct {
 		name    string
 		channel *model.Channel
@@ -867,7 +874,7 @@ func TestPlansForRequestAutomaticModeOnlyProbesExecutableProviderProtocols(t *te
 }
 
 func TestPlansForRequestAutomaticModeUsesCCSwitchFullEndpointSignal(t *testing.T) {
-	withProtocolBridgePolicy(t, false, false)
+	withProtocolBridgePolicy(t, true, false)
 	tests := []struct {
 		name    string
 		baseURL string

@@ -119,7 +119,8 @@ func PlansForRequest(channel *model.Channel, protocol Protocol, modelName, reque
 	}
 	if channel != nil &&
 		channel.Type != constant.ChannelTypeAdvancedCustom &&
-		(protocol == ProtocolResponses || protocol == ProtocolMessages) {
+		(protocol == ProtocolResponses || protocol == ProtocolMessages) &&
+		model_setting.GetGlobalSettings().ProtocolBridgePolicy.Enabled {
 		capabilities := channel.GetOtherSettings().ProtocolCapabilities
 		if capabilities != nil && capabilities.GetSelectionMode() == dto.ProtocolSelectionModeAuto {
 			return autoPlansForRequest(channel, protocol, modelName, features, capabilities)
@@ -158,7 +159,10 @@ func planForStrictRequest(channel *model.Channel, protocol Protocol, modelName, 
 
 	capabilities := channel.GetOtherSettings().ProtocolCapabilities
 	plan.ExplicitCapabilities = capabilities != nil
-	if capabilities == nil && (!policy.Enabled || !policy.DefaultAllowConversion) {
+	// The global bridge switch is a hard gate: with it off, every channel serves
+	// the request protocol through the legacy adaptor layer even when it has
+	// explicit protocol capabilities configured.
+	if !policy.Enabled || (capabilities == nil && !policy.DefaultAllowConversion) {
 		legacy := ForRequest(channel, protocol, modelName, requestPath)
 		plan.Status = legacy.Status
 		plan.UpstreamProtocol = legacy.UpstreamProtocol

@@ -21,6 +21,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// enableProtocolBridgePolicyForTest opens the global bridge hard gate so plans
+// driven by per-channel protocol capabilities (including auto probing) apply.
+func enableProtocolBridgePolicyForTest(t *testing.T) {
+	t.Helper()
+	settings := model_setting.GetGlobalSettings()
+	originalPolicy := settings.ProtocolBridgePolicy
+	settings.ProtocolBridgePolicy.Enabled = true
+	settings.ProtocolBridgePolicy.DefaultAllowConversion = false
+	t.Cleanup(func() { settings.ProtocolBridgePolicy = originalPolicy })
+}
+
 func TestAbortWithProtocolMessageUsesAnthropicErrorEnvelope(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
@@ -164,7 +175,7 @@ func TestBuildChannelCandidateClassifierAlwaysClassifiesResponsesAndMessages(t *
 	assert.NotNil(t, BuildChannelCandidateClassifier(newContext("/v1/messages"), "public-model"))
 }
 
-func TestBuildChannelCandidateClassifierUsesExplicitChatCapabilityWhenGlobalBridgeIsDisabled(t *testing.T) {
+func TestBuildChannelCandidateClassifierGlobalDisableIgnoresExplicitCapabilities(t *testing.T) {
 	settings := model_setting.GetGlobalSettings()
 	originalPolicy := settings.ProtocolBridgePolicy
 	settings.ProtocolBridgePolicy.Enabled = false
@@ -179,9 +190,11 @@ func TestBuildChannelCandidateClassifierUsesExplicitChatCapabilityWhenGlobalBrid
 		UpstreamProtocols: []string{dto.ProtocolCapabilityChat},
 	}})
 
+	// The global switch is a hard gate: with it off the configured chat-only
+	// capability is ignored and Responses passes through natively.
 	classifier := BuildChannelCandidateClassifier(ctx, "public-model")
 	require.NotNil(t, classifier)
-	assert.Equal(t, model.ChannelCandidateConvertible, classifier(channel))
+	assert.Equal(t, model.ChannelCandidateNative, classifier(channel))
 }
 
 func TestBridgeCandidateFilterTreatsExplicitChatCapabilityAsConvertible(t *testing.T) {
@@ -230,6 +243,7 @@ func TestAutomaticProtocolSelectionUsesAffinityThenRetriesSameChannel(t *testing
 	originalRedisEnabled := common.RedisEnabled
 	common.RedisEnabled = false
 	t.Cleanup(func() { common.RedisEnabled = originalRedisEnabled })
+	enableProtocolBridgePolicyForTest(t)
 
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
@@ -265,6 +279,7 @@ func TestAutomaticProtocolClassifierRequiresEvidenceBeforeNativeTier(t *testing.
 	originalRedisEnabled := common.RedisEnabled
 	common.RedisEnabled = false
 	t.Cleanup(func() { common.RedisEnabled = originalRedisEnabled })
+	enableProtocolBridgePolicyForTest(t)
 
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"public-model"}`))
@@ -296,6 +311,7 @@ func TestAutomaticProtocolAffinityDoesNotCrossResponsesAndMessagesEntries(t *tes
 	originalRedisEnabled := common.RedisEnabled
 	common.RedisEnabled = false
 	t.Cleanup(func() { common.RedisEnabled = originalRedisEnabled })
+	enableProtocolBridgePolicyForTest(t)
 
 	channel := &model.Channel{Id: 9904, Type: constant.ChannelTypeOpenAI}
 	channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
@@ -317,6 +333,7 @@ func TestAutomaticProtocolSelectionKeepsBoundSessionProtocolAheadOfAffinityAndNa
 	originalRedisEnabled := common.RedisEnabled
 	common.RedisEnabled = false
 	t.Cleanup(func() { common.RedisEnabled = originalRedisEnabled })
+	enableProtocolBridgePolicyForTest(t)
 
 	channel := &model.Channel{Id: 9905, Type: constant.ChannelTypeOpenAI}
 	channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
@@ -381,6 +398,7 @@ func TestCommitAutomaticProtocolAffinityRemembersSuccessfulWireFormat(t *testing
 	originalRedisEnabled := common.RedisEnabled
 	common.RedisEnabled = false
 	t.Cleanup(func() { common.RedisEnabled = originalRedisEnabled })
+	enableProtocolBridgePolicyForTest(t)
 
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"public-model","messages":[]}`))
@@ -402,6 +420,7 @@ func TestCommitAutomaticProtocolAffinityRequiresVerifiedStreamCompletion(t *test
 	originalRedisEnabled := common.RedisEnabled
 	common.RedisEnabled = false
 	t.Cleanup(func() { common.RedisEnabled = originalRedisEnabled })
+	enableProtocolBridgePolicyForTest(t)
 
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 	ctx.Request = httptest.NewRequest(
