@@ -941,7 +941,8 @@ func TestConversionFeatureGateDropsDeclaredHostedToolsButKeepsHistoryGuard(t *te
 	features, err := ExtractRequestFeatureSet(ProtocolResponses, []byte(codexBody))
 	require.NoError(t, err)
 	require.NotEmpty(t, features.DeclaredHostedTools)
-	assert.Empty(t, conversionFeatureIncompatibility(ProtocolResponses, ProtocolChat, features))
+	reason, _ := conversionFeatureIncompatibility(ProtocolResponses, ProtocolChat, features, false)
+	assert.Empty(t, reason)
 
 	// Replaying an executed hosted call to a non-native upstream would corrupt
 	// conversation context, so historical hosted items still gate. local_shell
@@ -950,13 +951,58 @@ func TestConversionFeatureGateDropsDeclaredHostedToolsButKeepsHistoryGuard(t *te
 	historyBody := `{"model":"gpt-5.1","stream":true,"input":[{"type":"web_search_call","id":"ws1","status":"completed"}]}`
 	features, err = ExtractRequestFeatureSet(ProtocolResponses, []byte(historyBody))
 	require.NoError(t, err)
-	assert.Contains(t,
-		conversionFeatureIncompatibility(ProtocolResponses, ProtocolChat, features),
-		"server tool history cannot be replayed",
-	)
+	reason, _ = conversionFeatureIncompatibility(ProtocolResponses, ProtocolChat, features, false)
+	assert.Contains(t, reason, "server tool history cannot be replayed")
 
 	shellHistoryBody := `{"model":"gpt-5.1","stream":true,"input":[{"type":"local_shell_call","call_id":"c1","action":{"command":["ls"]}}]}`
 	features, err = ExtractRequestFeatureSet(ProtocolResponses, []byte(shellHistoryBody))
 	require.NoError(t, err)
-	assert.Empty(t, conversionFeatureIncompatibility(ProtocolResponses, ProtocolChat, features))
+	reason, _ = conversionFeatureIncompatibility(ProtocolResponses, ProtocolChat, features, false)
+	assert.Empty(t, reason)
+}
+
+func TestPlanForRequestLossyConversionAdmitsEncryptedContent(t *testing.T) {
+	withProtocolBridgePolicy(t, true, false)
+	encryptedSeedBody := `{"model":"public-model","stream":true,"input":[{"type":"reasoning","id":"rs1","content":[{"type":"encrypted_content","data":"opaque"}]},{"role":"user","content":[{"type":"input_text","text":"hi"}]}]}`
+	features, err := ExtractRequestFeatureSet(ProtocolResponses, []byte(encryptedSeedBody))
+	require.NoError(t, err)
+	require.Contains(t, features.ContentTypes, "encrypted_content")
+
+	strictChat := func(lossy bool) *model.Channel {
+		channel := &model.Channel{Type: constant.ChannelTypeOpenAI}
+		channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
+			UpstreamProtocols:    []string{dto.ProtocolCapabilityChat},
+			AllowLossyConversion: lossy,
+		}})
+		return channel
+	}
+
+	plan := PlanForRequest(strictChat(false), ProtocolResponses, "public-model", "/v1/responses", features)
+	assert.Equal(t, StatusIncompatible, plan.Status)
+	assert.Contains(t, plan.Reason, "encrypted_content")
+
+	plan = PlanForRequest(strictChat(true), ProtocolResponses, "public-model", "/v1/responses", features)
+	assert.Equal(t, StatusConvertible, plan.Status)
+	assert.Equal(t, ProtocolChat, plan.UpstreamProtocol)
+	assert.Equal(t, []string{"encrypted_content"}, plan.LossyContentTypes)
+
+	// Hosted tool history still gates even with lossy conversion enabled:
+	// dropping executed server tool context would corrupt the conversation.
+	hostedHistoryBody := `{"model":"public-model","stream":true,"input":[{"type":"web_search_call","id":"ws1","status":"completed"}]}`
+	hostedFeatures, err := ExtractRequestFeatureSet(ProtocolResponses, []byte(hostedHistoryBody))
+	require.NoError(t, err)
+	plan = PlanForRequest(strictChat(true), ProtocolResponses, "public-model", "/v1/responses", hostedFeatures)
+	assert.Equal(t, StatusIncompatible, plan.Status)
+	assert.Contains(t, plan.Reason, "server tool history cannot be replayed")
+
+	// Gemini upstream conversion errors on unknown content parts, so lossy
+	// drops stay limited to Chat and Messages upstreams.
+	geminiChannel := &model.Channel{Type: constant.ChannelTypeOpenAI}
+	geminiChannel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
+		UpstreamProtocols:    []string{dto.ProtocolCapabilityGemini},
+		AllowLossyConversion: true,
+	}})
+	plan = PlanForRequest(geminiChannel, ProtocolResponses, "public-model", "/v1/responses", features)
+	assert.Equal(t, StatusIncompatible, plan.Status)
+	assert.Contains(t, plan.Reason, "encrypted_content")
 }

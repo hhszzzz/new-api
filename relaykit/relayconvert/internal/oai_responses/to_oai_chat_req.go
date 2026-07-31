@@ -592,6 +592,10 @@ func responsesContentPartsToChatContent(c context.Context, parts []any) (any, er
 				"type":      dto.ContentTypeVideoUrl,
 				"video_url": responsesVideoPartToChatVideoURL(part),
 			})
+		case "encrypted_content":
+			// Opaque provider-bound reasoning state: unreadable by any other
+			// provider, dropped when lossy conversion admitted the request.
+			continue
 		default:
 			onlyText = false
 			chatParts = append(chatParts, part)

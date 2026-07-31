@@ -12,6 +12,7 @@ const (
 	ContextKeyRequestProtocol             ContextKey = "request_protocol"
 	ContextKeyUpstreamProtocol            ContextKey = "upstream_protocol"
 	ContextKeyProtocolConverter           ContextKey = "protocol_converter"
+	ContextKeyProtocolLossyConversion     ContextKey = "protocol_lossy_conversion"
 	ContextKeyProtocolStateMode           ContextKey = "protocol_state_mode"
 	ContextKeyProtocolPlan                ContextKey = "protocol_plan"
 	ContextKeyRequestFeatureSet           ContextKey = "request_feature_set"

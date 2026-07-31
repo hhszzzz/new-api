@@ -94,8 +94,11 @@ type ProtocolPlan struct {
 	ExplicitCapabilities   bool                              `json:"explicit_capabilities,omitempty"`
 	StateMode              string                            `json:"state_mode,omitempty"`
 	StateEnabled           bool                              `json:"state_enabled,omitempty"`
-	Features               RequestFeatureSet                 `json:"features"`
-	Reason                 string                            `json:"reason,omitempty"`
+	// LossyContentTypes lists request content types the conversion will drop
+	// because the channel opted into lossy conversion.
+	LossyContentTypes []string          `json:"lossy_content_types,omitempty"`
+	Features          RequestFeatureSet `json:"features"`
+	Reason            string            `json:"reason,omitempty"`
 }
 
 func PlanForRequest(channel *model.Channel, protocol Protocol, modelName, requestPath string, features RequestFeatureSet) ProtocolPlan {
@@ -215,7 +218,8 @@ func planForStrictRequest(channel *model.Channel, protocol Protocol, modelName, 
 			plan.Reason = "protocol conversion is disabled for this channel and model"
 			return plan
 		}
-		if reason := conversionFeatureIncompatibility(protocol, compatibility.UpstreamProtocol, features); reason != "" {
+		reason, lossyContentTypes := conversionFeatureIncompatibility(protocol, compatibility.UpstreamProtocol, features, capabilities.LossyConversionAllowed())
+		if reason != "" {
 			plan.Reason = reason
 			return plan
 		}
@@ -231,6 +235,7 @@ func planForStrictRequest(channel *model.Channel, protocol Protocol, modelName, 
 		plan.Quality = converter.Quality
 		plan.StateMode = stateModeFor(protocol, compatibility.UpstreamProtocol)
 		plan.StateEnabled = true
+		plan.LossyContentTypes = lossyContentTypes
 		return plan
 	}
 
@@ -267,7 +272,8 @@ func planForStrictRequest(channel *model.Channel, protocol Protocol, modelName, 
 		if !ok || upstream == protocol {
 			continue
 		}
-		if reason := conversionFeatureIncompatibility(protocol, upstream, features); reason != "" {
+		reason, lossyContentTypes := conversionFeatureIncompatibility(protocol, upstream, features, capabilities.LossyConversionAllowed())
+		if reason != "" {
 			if featureReason == "" {
 				featureReason = reason
 			}
@@ -284,6 +290,7 @@ func planForStrictRequest(channel *model.Channel, protocol Protocol, modelName, 
 		plan.Quality = converter.Quality
 		plan.StateMode = stateModeFor(protocol, upstream)
 		plan.StateEnabled = true
+		plan.LossyContentTypes = lossyContentTypes
 		return plan
 	}
 
@@ -365,7 +372,8 @@ func autoPlansForRequest(channel *model.Channel, protocol Protocol, modelName st
 		if !allowConversion {
 			continue
 		}
-		if reason := conversionFeatureIncompatibility(protocol, upstream, features); reason != "" {
+		reason, lossyContentTypes := conversionFeatureIncompatibility(protocol, upstream, features, capabilities.LossyConversionAllowed())
+		if reason != "" {
 			if firstFeatureReason == "" {
 				firstFeatureReason = reason
 			}
@@ -383,6 +391,7 @@ func autoPlansForRequest(channel *model.Channel, protocol Protocol, modelName st
 		plan.RequestConverter = converter.ID
 		plan.ResponseConverter = converter.ID
 		plan.Quality = converter.Quality
+		plan.LossyContentTypes = lossyContentTypes
 		plans = append(plans, plan)
 	}
 	if len(plans) > 0 {
@@ -761,42 +770,42 @@ func messagesOutputConfigHasUnsupportedFields(value any) bool {
 	return false
 }
 
-func conversionFeatureIncompatibility(protocol, upstream Protocol, features RequestFeatureSet) string {
+func conversionFeatureIncompatibility(protocol, upstream Protocol, features RequestFeatureSet, allowLossy bool) (string, []string) {
 	if protocol == ProtocolResponses {
 		switch {
 		case features.HasConversation:
-			return "conversation is only supported by a native Responses upstream"
+			return "conversation is only supported by a native Responses upstream", nil
 		case features.HasPrompt:
-			return "hosted prompt is only supported by a native Responses upstream"
+			return "hosted prompt is only supported by a native Responses upstream", nil
 		case features.HasContextManagement:
-			return "context_management is only supported by a native Responses upstream"
+			return "context_management is only supported by a native Responses upstream", nil
 		}
 		// Declared hosted tools (web_search, local_shell, ...) are dropped by
 		// the request converters, matching CC Switch: a Codex client always
 		// declares them, so rejecting the request would make every non-native
 		// upstream unusable. Historical hosted calls are different — dropping
 		// them would corrupt conversation context, so those still require a
-		// native Responses upstream.
+		// native Responses upstream even when lossy conversion is allowed.
 		if len(features.HistoricalHostedTools) > 0 {
 			return fmt.Sprintf(
 				"Responses server tool history cannot be replayed to %s: %s",
 				upstream,
 				strings.Join(features.HistoricalHostedTools, ", "),
-			)
+			), nil
 		}
 	}
 	if protocol == ProtocolMessages {
 		if features.HasContextManagement {
-			return "context_management is only supported by a native Messages upstream"
+			return "context_management is only supported by a native Messages upstream", nil
 		}
 		if upstream == ProtocolResponses && features.HasStopSequences {
-			return "stop_sequences cannot be represented by a Responses upstream"
+			return "stop_sequences cannot be represented by a Responses upstream", nil
 		}
 		if upstream == ProtocolResponses && features.HasTopK {
-			return "top_k cannot be represented by a Responses upstream"
+			return "top_k cannot be represented by a Responses upstream", nil
 		}
 		if len(features.MessagesNativeFields) > 0 {
-			return fmt.Sprintf("Messages fields require a native Messages upstream: %s", strings.Join(features.MessagesNativeFields, ", "))
+			return fmt.Sprintf("Messages fields require a native Messages upstream: %s", strings.Join(features.MessagesNativeFields, ", ")), nil
 		}
 		// Declared server tools are dropped by the request converters — CC
 		// Switch semantics — and client-executed typed tools are lowered to
@@ -804,12 +813,17 @@ func conversionFeatureIncompatibility(protocol, upstream Protocol, features Requ
 		// Executed server tool history still does: dropping server_tool_use
 		// context would corrupt the conversation.
 		if len(features.HistoricalHostedTools) > 0 {
-			return fmt.Sprintf("server-side Messages tool history requires a native Messages upstream: %s", strings.Join(features.HistoricalHostedTools, ", "))
+			return fmt.Sprintf("server-side Messages tool history requires a native Messages upstream: %s", strings.Join(features.HistoricalHostedTools, ", ")), nil
 		}
 	}
 	unsupportedContentTypes := make([]string, 0)
+	var lossyContentTypes []string
 	for _, contentType := range features.ContentTypes {
 		if convertedContentTypeSupported(protocol, upstream, contentType) {
+			continue
+		}
+		if allowLossy && lossyDroppableContentType(protocol, upstream, contentType) {
+			lossyContentTypes = append(lossyContentTypes, contentType)
 			continue
 		}
 		unsupportedContentTypes = append(unsupportedContentTypes, contentType)
@@ -820,9 +834,25 @@ func conversionFeatureIncompatibility(protocol, upstream Protocol, features Requ
 			protocol,
 			upstream,
 			strings.Join(unsupportedContentTypes, ", "),
-		)
+		), nil
 	}
-	return ""
+	return "", lossyContentTypes
+}
+
+// lossyDroppableContentType reports whether the content type carries only
+// opaque provider-bound state that a conversion may discard when the channel
+// opted into lossy conversion. Encrypted reasoning state is unreadable by any
+// other provider, so dropping it loses nothing the target model could use.
+// Gemini upstream conversion errors on unknown content parts, so lossy drops
+// stay limited to Chat and Messages upstreams.
+func lossyDroppableContentType(protocol, upstream Protocol, contentType string) bool {
+	if protocol != ProtocolResponses {
+		return false
+	}
+	if upstream != ProtocolChat && upstream != ProtocolMessages {
+		return false
+	}
+	return contentType == "encrypted_content"
 }
 
 func convertedContentTypeSupported(protocol, upstream Protocol, contentType string) bool {

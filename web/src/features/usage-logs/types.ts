@@ -186,6 +186,7 @@ export interface LogOtherData {
     upstream_protocol?: string
     protocol_converter?: string
     protocol_state_mode?: string
+    protocol_lossy_conversion?: string
     route_pool_name?: string
     route_rule_id?: number
   }

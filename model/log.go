@@ -411,9 +411,10 @@ func appendLogDiagnostics(c *gin.Context, channelId int, isStream bool, other ma
 			}
 		}
 		for key, target := range map[constant.ContextKey]string{
-			constant.ContextKeyUpstreamProtocol:  "upstream_protocol",
-			constant.ContextKeyProtocolConverter: "protocol_converter",
-			constant.ContextKeyProtocolStateMode: "protocol_state_mode",
+			constant.ContextKeyUpstreamProtocol:        "upstream_protocol",
+			constant.ContextKeyProtocolConverter:       "protocol_converter",
+			constant.ContextKeyProtocolStateMode:       "protocol_state_mode",
+			constant.ContextKeyProtocolLossyConversion: "protocol_lossy_conversion",
 		} {
 			if value := common.GetContextKeyString(c, key); value != "" {
 				adminInfo[target] = value

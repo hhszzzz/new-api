@@ -1014,6 +1014,13 @@ export function DetailsDialog(props: DetailsDialogProps) {
                   }
                 />
               )}
+            {adminInfo?.protocol_lossy_conversion && (
+              <DetailRow
+                label={t('Lossy Conversion')}
+                value={adminInfo.protocol_lossy_conversion}
+                mono
+              />
+            )}
             {diagnostics.route_pool_name && (
               <DetailRow
                 label={t('Route Pool')}

@@ -352,6 +352,7 @@ func setupResponsesWebSocketChannel(c *gin.Context, channel *model.Channel, publ
 	common.SetContextKey(c, constant.ContextKeyRequestProtocol, string(channelcompat.ProtocolResponses))
 	common.SetContextKey(c, constant.ContextKeyUpstreamProtocol, string(channelcompat.ProtocolResponses))
 	common.SetContextKey(c, constant.ContextKeyProtocolConverter, "")
+	common.SetContextKey(c, constant.ContextKeyProtocolLossyConversion, "")
 	common.SetContextKey(c, constant.ContextKeyProtocolStateMode, plan.StateMode)
 	common.SetContextKey(c, constant.ContextKeyProtocolPlan, *plan)
 	return nil

@@ -106,10 +106,18 @@ const (
 )
 
 type ProtocolCapabilities struct {
-	UpstreamProtocols []string                          `json:"upstream_protocols,omitempty"`
-	AllowConversion   *bool                             `json:"allow_conversion,omitempty"`
-	SelectionMode     string                            `json:"selection_mode,omitempty"`
-	ModelOverrides    []ProtocolCapabilityModelOverride `json:"model_overrides,omitempty"`
+	UpstreamProtocols []string `json:"upstream_protocols,omitempty"`
+	AllowConversion   *bool    `json:"allow_conversion,omitempty"`
+	// AllowLossyConversion permits protocol conversion to drop opaque
+	// provider-bound state (e.g. Responses encrypted_content) instead of
+	// rejecting the request. Applies to every model on the channel.
+	AllowLossyConversion bool                              `json:"allow_lossy_conversion,omitempty"`
+	SelectionMode        string                            `json:"selection_mode,omitempty"`
+	ModelOverrides       []ProtocolCapabilityModelOverride `json:"model_overrides,omitempty"`
+}
+
+func (c *ProtocolCapabilities) LossyConversionAllowed() bool {
+	return c != nil && c.AllowLossyConversion
 }
 
 type ProtocolCapabilityModelOverride struct {

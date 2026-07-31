@@ -315,6 +315,7 @@ const SENSITIVE_FORM_FIELDS = [
   'protocol_selection_mode',
   'protocol_upstream_protocols',
   'protocol_allow_conversion',
+  'protocol_allow_lossy_conversion',
   'protocol_model_overrides',
   'is_enterprise_account',
   'vertex_key_type',
@@ -5029,6 +5030,31 @@ export function ChannelMutateDrawer({
                                         )}
                                       </FormDescription>
                                       <FormMessage />
+                                    </FormItem>
+                                  )}
+                                />
+
+                                <FormField
+                                  control={form.control}
+                                  name='protocol_allow_lossy_conversion'
+                                  render={({ field }) => (
+                                    <FormItem className='flex items-center justify-between gap-3 border-y px-4 py-3'>
+                                      <div className='space-y-0.5'>
+                                        <FormLabel>
+                                          {t('Allow lossy conversion')}
+                                        </FormLabel>
+                                        <FormDescription>
+                                          {t(
+                                            'Convert requests even when opaque provider-bound state (encrypted reasoning content) must be dropped. The target model cannot read that state anyway; dropped types are recorded in the request log.'
+                                          )}
+                                        </FormDescription>
+                                      </div>
+                                      <FormControl>
+                                        <Switch
+                                          checked={field.value === true}
+                                          onCheckedChange={field.onChange}
+                                        />
+                                      </FormControl>
                                     </FormItem>
                                   )}
                                 />

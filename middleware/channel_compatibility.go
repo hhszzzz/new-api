@@ -169,6 +169,7 @@ func applySelectedChannelCompatibility(c *gin.Context, channel *model.Channel, m
 	common.SetContextKey(c, constant.ContextKeyRequestProtocol, string(protocol))
 	common.SetContextKey(c, constant.ContextKeyUpstreamProtocol, string(plan.UpstreamProtocol))
 	common.SetContextKey(c, constant.ContextKeyProtocolConverter, plan.RequestConverter)
+	common.SetContextKey(c, constant.ContextKeyProtocolLossyConversion, strings.Join(plan.LossyContentTypes, ","))
 	common.SetContextKey(c, constant.ContextKeyProtocolStateMode, plan.StateMode)
 	common.SetContextKey(c, constant.ContextKeyProtocolPlan, plan)
 	return nil

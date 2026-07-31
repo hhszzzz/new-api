@@ -432,6 +432,10 @@ func responsesInputContentToClaudeMediaMessages(c context.Context, content any) 
 			claudePart.Title = strings.TrimSpace(kitutil.Interface2String(contentPart["filename"]))
 			claudePart.Filename = claudePart.Title
 			parts = append(parts, claudePart)
+		case "encrypted_content":
+			// Opaque provider-bound reasoning state: unreadable by any other
+			// provider, dropped when lossy conversion admitted the request.
+			continue
 		default:
 			return nil, fmt.Errorf("Responses content type %q cannot be converted to Claude Messages", partType)
 		}

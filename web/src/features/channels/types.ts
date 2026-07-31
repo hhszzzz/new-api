@@ -262,6 +262,7 @@ export type ProtocolSelectionMode = 'strict' | 'auto'
 export interface ProtocolCapabilities {
   upstream_protocols?: UpstreamProtocol[]
   allow_conversion?: boolean
+  allow_lossy_conversion?: boolean
   selection_mode?: ProtocolSelectionMode
   model_overrides?: ProtocolCapabilityModelOverride[]
 }

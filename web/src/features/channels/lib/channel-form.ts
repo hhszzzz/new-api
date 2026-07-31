@@ -277,6 +277,7 @@ export const channelFormSchema = z
       )
       .optional(),
     protocol_allow_conversion: z.enum(['inherit', 'allow', 'deny']).optional(),
+    protocol_allow_lossy_conversion: z.boolean().optional(),
     protocol_model_overrides: protocolModelOverridesTextSchema.optional(),
     // Multi-key options (not sent to backend directly)
     multi_key_mode: z.enum(['single', 'batch', 'multi_to_single']).optional(),
@@ -490,6 +491,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   protocol_selection_mode: 'strict',
   protocol_upstream_protocols: [],
   protocol_allow_conversion: 'inherit',
+  protocol_allow_lossy_conversion: false,
   protocol_model_overrides: '[]',
   multi_key_mode: 'single',
   multi_key_type: 'random',
@@ -594,6 +596,7 @@ export function transformChannelToFormDefaults(
   let protocolSelectionModeValue: ProtocolSelectionMode = 'strict'
   let protocolUpstreamProtocols: UpstreamProtocol[] = []
   let protocolAllowConversion: 'inherit' | 'allow' | 'deny' = 'inherit'
+  let protocolAllowLossyConversion = false
   let protocolModelOverrides = '[]'
 
   if (channel.settings) {
@@ -654,6 +657,8 @@ export function transformChannelToFormDefaults(
         protocolAllowConversion = protocolConversionMode(
           protocolCapabilities.allow_conversion
         )
+        protocolAllowLossyConversion =
+          protocolCapabilities.allow_lossy_conversion === true
         protocolModelOverrides = formatProtocolModelOverrides(
           protocolCapabilities.model_overrides
         )
@@ -719,6 +724,7 @@ export function transformChannelToFormDefaults(
     protocol_selection_mode: protocolSelectionModeValue,
     protocol_upstream_protocols: protocolUpstreamProtocols,
     protocol_allow_conversion: protocolAllowConversion,
+    protocol_allow_lossy_conversion: protocolAllowLossyConversion,
     protocol_model_overrides: protocolModelOverrides,
   }
 }
@@ -915,6 +921,9 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
       protocolCapabilities.allow_conversion = true
     } else if (formData.protocol_allow_conversion === 'deny') {
       protocolCapabilities.allow_conversion = false
+    }
+    if (formData.protocol_allow_lossy_conversion === true) {
+      protocolCapabilities.allow_lossy_conversion = true
     }
     const modelOverrides = parseProtocolModelOverrides(
       formData.protocol_model_overrides
