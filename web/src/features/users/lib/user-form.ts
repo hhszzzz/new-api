@@ -46,6 +46,10 @@ export const userFormSchema = z.object({
   model_limits: z.array(z.string()).optional(),
   model_blocklist_enabled: z.boolean().optional(),
   model_blocklist: z.array(z.string()).optional(),
+  checkin_mode: z.enum(['global', 'allow', 'deny']).optional(),
+  checkin_min_quota: z.number().int().min(0).optional(),
+  checkin_max_quota: z.number().int().min(0).optional(),
+  quota_cap: z.number().int().min(0).optional(),
   remark: z.string().optional(),
   admin_permissions: z
     .record(z.string(), z.record(z.string(), z.boolean()))
@@ -71,6 +75,10 @@ export const USER_FORM_DEFAULT_VALUES: UserFormValues = {
   model_limits: [],
   model_blocklist_enabled: false,
   model_blocklist: [],
+  checkin_mode: 'global',
+  checkin_min_quota: undefined,
+  checkin_max_quota: undefined,
+  quota_cap: undefined,
   remark: '',
   // Filled against the backend catalog at render time; see UsersMutateDrawer.
   admin_permissions: {},
@@ -112,6 +120,18 @@ export function transformFormDataToPayload(
   payload.model_limits = data.model_limits || []
   payload.model_blocklist_enabled = data.model_blocklist_enabled === true
   payload.model_blocklist = data.model_blocklist || []
+  // Tri-state check-in override: null means "follow the global setting". The
+  // keys are always sent so the backend presence detection can clear values.
+  let checkinEnabled: boolean | null = null
+  if (data.checkin_mode === 'allow') {
+    checkinEnabled = true
+  } else if (data.checkin_mode === 'deny') {
+    checkinEnabled = false
+  }
+  payload.checkin_enabled = checkinEnabled
+  payload.checkin_min_quota = data.checkin_min_quota ?? null
+  payload.checkin_max_quota = data.checkin_max_quota ?? null
+  payload.quota_cap = data.quota_cap ?? null
 
   // Profile and policy fields are accepted by both create and update APIs so
   // the backend can persist them atomically.
@@ -137,6 +157,12 @@ export function transformUserToFormDefaults(user: User): UserFormValues {
   const groups = user.groups?.length
     ? user.groups
     : [user.group || DEFAULT_GROUP]
+  let checkinMode: UserFormValues['checkin_mode'] = 'global'
+  if (user.checkin_enabled === true) {
+    checkinMode = 'allow'
+  } else if (user.checkin_enabled === false) {
+    checkinMode = 'deny'
+  }
   return {
     username: user.username,
     display_name: user.display_name,
@@ -150,6 +176,10 @@ export function transformUserToFormDefaults(user: User): UserFormValues {
     model_limits: user.model_limits ?? [],
     model_blocklist_enabled: user.model_blocklist_enabled ?? false,
     model_blocklist: user.model_blocklist ?? [],
+    checkin_mode: checkinMode,
+    checkin_min_quota: user.checkin_min_quota ?? undefined,
+    checkin_max_quota: user.checkin_max_quota ?? undefined,
+    quota_cap: user.quota_cap ?? undefined,
     remark: user.remark || '',
     admin_permissions: user.admin_permissions ?? {},
   }

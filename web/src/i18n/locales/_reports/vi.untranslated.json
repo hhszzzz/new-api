@@ -1,0 +1,16 @@
+{
+  "Apply the selected changes to {{count}} selected user(s). Sections left as \"Keep unchanged\" are untouched.": "Apply the selected changes to {{count}} selected user(s). Sections left as \"Keep unchanged\" are untouched.",
+  "Apply to all groups": "Apply to all groups",
+  "Check-in reward range in quota units; set both to the same value for a fixed reward. Leave empty to follow the global setting.": "Check-in reward range in quota units; set both to the same value for a fixed reward. Leave empty to follow the global setting.",
+  "Create the same model route for {{count}} selected user(s). Users with a conflicting route are skipped and reported.": "Create the same model route for {{count}} selected user(s). Users with a conflicting route are skipped and reported.",
+  "Custom check-in reward requires both min and max values": "Custom check-in reward requires both min and max values",
+  "Gift credits (check-in, redemption codes, invite transfers) cannot push the balance above this cap. Paid top-ups are unaffected.": "Gift credits (check-in, redemption codes, invite transfers) cannot push the balance above this cap. Paid top-ups are unaffected.",
+  "Leave empty to follow global": "Leave empty to follow global",
+  "Master switch for protocol bridging. When off, every channel forwards requests in their original protocol and channel protocol capability settings are ignored.": "Master switch for protocol bridging. When off, every channel forwards requests in their original protocol and channel protocol capability settings are ignored.",
+  "Model requested by the client": "Model requested by the client",
+  "Pick a target model and execution group first": "Pick a target model and execution group first",
+  "Protocol bridging is disabled globally, so this channel forwards each request in its original protocol and these settings have no effect. Enable protocol bridging in System Settings → Models first.": "Protocol bridging is disabled globally, so this channel forwards each request in its original protocol and these settings have no effect. Enable protocol bridging in System Settings → Models first.",
+  "Saving replaces the whole route set with this JSON array. Fields: source_model, target_model, execution_group, all_groups, groups, channel_ids, inject_prompt, pool_name, enabled.": "Saving replaces the whole route set with this JSON array. Fields: source_model, target_model, execution_group, all_groups, groups, channel_ids, inject_prompt, pool_name, enabled.",
+  "When protocol bridging is enabled, channels without explicit protocol capabilities convert automatically using the protocols detected from their channel type and upstream URL.": "When protocol bridging is enabled, channels without explicit protocol capabilities convert automatically using the protocols detected from their channel type and upstream URL.",
+  "When this is off, bridging follows the global \"allow conversion by default\" policy using the protocols detected from the channel type and upstream URL.": "When this is off, bridging follows the global \"allow conversion by default\" policy using the protocols detected from the channel type and upstream URL."
+}

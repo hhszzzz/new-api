@@ -423,7 +423,9 @@ describe('usage-log model route component visibility', () => {
     expect(within(dialog).getByText('Upstream Protocol')).toBeVisible()
     expect(within(dialog).getByText('Protocol Converter')).toBeVisible()
     expect(within(dialog).getByText('Protocol State Mode')).toBeVisible()
-    expect(within(dialog).getByText('replay')).toBeVisible()
+    expect(
+      within(dialog).getByText('Replayed conversation state')
+    ).toBeVisible()
     expect(within(dialog).getByText('Route Pool')).toBeVisible()
     expect(within(dialog).getByText('测试路由转换')).toBeVisible()
     expect(within(dialog).queryByText('Route Rule')).not.toBeInTheDocument()

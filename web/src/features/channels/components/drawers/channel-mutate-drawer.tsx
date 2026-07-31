@@ -138,6 +138,7 @@ import {
   getChannel,
   getChannelAggregates,
   getChannelKey,
+  getChannelOps,
   getGroups,
   getPrefillGroups,
   refreshCodexCredential,
@@ -744,6 +745,17 @@ export function ChannelMutateDrawer({
     queryKey: ['prefill_groups', 'model'],
     queryFn: () => getPrefillGroups('model'),
   })
+
+  // The channel protocol capability form is gated by the global bridge switch.
+  const { data: channelOpsData } = useQuery({
+    queryKey: ['channel-ops'],
+    queryFn: getChannelOps,
+    retry: false,
+    staleTime: 5 * 60 * 1000,
+    enabled: open,
+  })
+  const protocolBridgeGloballyEnabled =
+    channelOpsData?.data?.protocol_bridge_enabled === true
 
   const { copyToClipboard } = useCopyToClipboard()
 
@@ -4797,9 +4809,18 @@ export function ChannelMutateDrawer({
                             </Alert>
                           )}
                           <fieldset
-                            disabled={sensitiveLocked}
+                            disabled={
+                              sensitiveLocked || !protocolBridgeGloballyEnabled
+                            }
                             className='space-y-4 disabled:opacity-60'
                           >
+                            {!protocolBridgeGloballyEnabled && (
+                              <p className='text-muted-foreground px-4 pt-3 text-sm'>
+                                {t(
+                                  'Protocol bridging is disabled globally, so this channel forwards each request in its original protocol and these settings have no effect. Enable protocol bridging in System Settings → Models first.'
+                                )}
+                              </p>
+                            )}
                             <FormField
                               control={form.control}
                               name='protocol_capabilities_enabled'
@@ -4813,7 +4834,7 @@ export function ChannelMutateDrawer({
                                     </FormLabel>
                                     <FormDescription>
                                       {t(
-                                        'Leave this off to use the channel type and upstream URL defaults.'
+                                        'When this is off, bridging follows the global "allow conversion by default" policy using the protocols detected from the channel type and upstream URL.'
                                       )}{' '}
                                       {t('Detected by default: {{protocols}}', {
                                         protocols:

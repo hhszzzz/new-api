@@ -95,13 +95,12 @@ export function ModelMappingEditor(props: ModelMappingEditorProps) {
       }
       setRows((previousRows) => {
         const remainingRows = [...previousRows]
-        return entries.map(([from, to], index) => {
+        return entries.map(([from, to]) => {
           const toString = String(to)
+          // Reuse an existing row only on an exact source-model match so ids
+          // stay stable while typing; never adopt rows positionally.
           const existingIndex = remainingRows.findIndex(
-            (row) =>
-              row.from === from ||
-              (row.from === from && row.to === toString) ||
-              previousRows[index]?.id === row.id
+            (row) => row.from === from
           )
           if (existingIndex >= 0) {
             const [existing] = remainingRows.splice(existingIndex, 1)
@@ -126,11 +125,15 @@ export function ModelMappingEditor(props: ModelMappingEditorProps) {
     }
   }
 
-  // Parse JSON to rows when value changes externally
+  // Parse JSON to rows when value changes externally. If the incoming value
+  // cannot be parsed, clear the rows: the visual tab must never keep showing
+  // mappings that belong to a previously edited channel.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setJsonValue(props.value)
-    parseJsonToRows(props.value)
+    if (!parseJsonToRows(props.value)) {
+      setRows([])
+    }
   }, [props.value])
 
   const convertRowsToJson = (updatedRows: MappingRow[]): string => {

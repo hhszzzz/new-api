@@ -18,10 +18,12 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
 import {
+  Code,
   GitBranch,
   Loader2,
   Pencil,
   Plus,
+  Table,
   TriangleAlert,
   Trash2,
 } from 'lucide-react'
@@ -33,6 +35,7 @@ import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Dialog } from '@/components/dialog'
 import { EmptyState } from '@/components/empty-state'
 import { ErrorState } from '@/components/error-state'
+import { JsonCodeEditor } from '@/components/json-code-editor'
 import { MultiSelect } from '@/components/multi-select'
 import { StatusBadge } from '@/components/status-badge'
 import { Button } from '@/components/ui/button'
@@ -48,6 +51,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { useDebounce } from '@/hooks'
 
@@ -56,6 +60,7 @@ import {
   deleteUserModelRoute,
   getUserModelRouteCandidates,
   getUserModelRoutes,
+  replaceUserModelRoutes,
   updateUserModelRoute,
 } from '../../api'
 import type { UserModelRoute } from '../../types'
@@ -134,6 +139,9 @@ export function UserModelRoutesDialog(props: UserModelRoutesDialogProps) {
   const [saving, setSaving] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<UserModelRoute | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [editorMode, setEditorMode] = useState<'form' | 'json'>('form')
+  const [jsonDraft, setJsonDraft] = useState('')
+  const [jsonSaving, setJsonSaving] = useState(false)
 
   const routesQuery = useQuery({
     queryKey: ['user-model-routes', props.userId],
@@ -491,8 +499,71 @@ export function UserModelRoutesDialog(props: UserModelRoutesDialogProps) {
   }
 
   const handleClose = (open: boolean) => {
-    if (!open && !saving && !deleting) resetDraft()
+    if (!open && !saving && !deleting) {
+      resetDraft()
+      setEditorMode('form')
+      setJsonDraft('')
+    }
     props.onOpenChange(open)
+  }
+
+  const serializeRoutesToJson = (list: UserModelRoute[]) =>
+    JSON.stringify(
+      list.map((route) => ({
+        source_model: route.source_model,
+        target_model: route.target_model,
+        pool_name: route.pool_name,
+        inject_prompt: route.inject_prompt || '',
+        execution_group: route.execution_group,
+        all_groups: route.all_groups,
+        groups: route.groups || [],
+        channel_ids: route.channel_ids || [],
+        enabled: route.enabled,
+      })),
+      null,
+      2
+    )
+
+  const handleEditorModeChange = (mode: string) => {
+    if (mode !== 'form' && mode !== 'json') return
+    if (mode === 'json') {
+      setJsonDraft(serializeRoutesToJson(routes))
+    }
+    setEditorMode(mode)
+  }
+
+  const handleJsonSave = async () => {
+    if (!props.userId) return
+    let parsed: unknown
+    try {
+      parsed = jsonDraft.trim() === '' ? [] : JSON.parse(jsonDraft)
+    } catch {
+      toast.error(t('Routes must be a valid JSON array'))
+      return
+    }
+    if (!Array.isArray(parsed)) {
+      toast.error(t('Routes must be a valid JSON array'))
+      return
+    }
+    setJsonSaving(true)
+    try {
+      const result = await replaceUserModelRoutes(
+        props.userId,
+        parsed as Parameters<typeof replaceUserModelRoutes>[1]
+      )
+      if (!result.success) {
+        toast.error(result.message || t('Failed to save model route'))
+        return
+      }
+      toast.success(t('Model routes replaced'))
+      setJsonDraft(serializeRoutesToJson(result.data ?? []))
+      await routesQuery.refetch()
+      props.onSuccess?.()
+    } catch {
+      toast.error(t('Operation failed'))
+    } finally {
+      setJsonSaving(false)
+    }
   }
 
   const renderRouteList = () => {
@@ -599,339 +670,393 @@ export function UserModelRoutesDialog(props: UserModelRoutesDialogProps) {
         contentClassName='sm:max-w-3xl'
         bodyClassName='space-y-5'
         footer={
-          <>
-            <Button
-              variant='outline'
-              onClick={() => handleClose(false)}
-              disabled={saving}
-            >
-              {t('Close')}
-            </Button>
-            <Button onClick={handleSave} disabled={!canSaveRoute}>
-              {saving ? <Loader2 className='animate-spin' /> : <GitBranch />}
-              {editingId ? t('Save route') : t('Add route')}
-            </Button>
-          </>
+          editorMode === 'json' ? (
+            <>
+              <Button
+                variant='outline'
+                onClick={() => handleClose(false)}
+                disabled={jsonSaving}
+              >
+                {t('Close')}
+              </Button>
+              <Button
+                onClick={handleJsonSave}
+                disabled={jsonSaving || props.userId === null}
+              >
+                {jsonSaving ? <Loader2 className='animate-spin' /> : <Code />}
+                {t('Save JSON')}
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button
+                variant='outline'
+                onClick={() => handleClose(false)}
+                disabled={saving}
+              >
+                {t('Close')}
+              </Button>
+              <Button onClick={handleSave} disabled={!canSaveRoute}>
+                {saving ? <Loader2 className='animate-spin' /> : <GitBranch />}
+                {editingId ? t('Save route') : t('Add route')}
+              </Button>
+            </>
+          )
         }
       >
         <div className='space-y-5'>
-          <section className='space-y-4 rounded-md border p-4'>
-            <div className='flex items-center justify-between gap-3'>
-              <div>
-                <h3 className='text-sm font-medium'>
-                  {editingId ? t('Edit model route') : t('New model route')}
-                </h3>
-                <p className='text-muted-foreground text-xs'>
-                  {t(
-                    'Keep the requested model name while selecting a different upstream target'
-                  )}
-                </p>
-              </div>
-              {editingId ? (
-                <Button
-                  variant='ghost'
-                  size='sm'
-                  onClick={resetDraft}
-                  disabled={saving}
-                >
-                  {t('Clear')}
-                </Button>
-              ) : null}
-            </div>
-
-            {editorFailed && (
-              <ErrorState
-                title={t('Failed to load')}
-                onRetry={() => {
-                  void candidatesQuery.refetch()
-                }}
-                className='min-h-32 py-6'
+          <Tabs
+            value={editorMode}
+            onValueChange={handleEditorModeChange}
+            className='space-y-2'
+          >
+            <TabsList>
+              <TabsTrigger value='form'>
+                <Table className='h-4 w-4' aria-hidden='true' />
+                {t('Form')}
+              </TabsTrigger>
+              <TabsTrigger value='json'>
+                <Code className='h-4 w-4' aria-hidden='true' />
+                {t('JSON')}
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+          {editorMode === 'json' ? (
+            <div className='space-y-2'>
+              <JsonCodeEditor
+                value={jsonDraft}
+                onChange={setJsonDraft}
+                ariaLabel={t('User Model Routes')}
               />
-            )}
-            {!editorFailed && editorLoading && (
-              <div className='text-muted-foreground flex min-h-32 items-center justify-center text-sm'>
-                <Loader2 className='mr-2 size-4 animate-spin' />
-                {t('Loading...')}
-              </div>
-            )}
-            {!editorFailed && !editorLoading && (
-              <>
-                <div className='grid gap-4 sm:grid-cols-2'>
-                  <div className='space-y-2'>
-                    <Label htmlFor='route-source-model'>
-                      {t('Source model')}
-                    </Label>
-                    <ComboboxInput
-                      id='route-source-model'
-                      options={sourceModelOptions}
-                      value={draft.source_model}
-                      onValueChange={(value) =>
-                        setDraft((current) => ({
-                          ...current,
-                          source_model: value,
-                        }))
-                      }
-                      placeholder={t('Select source model')}
-                      emptyText={t('No models found')}
-                    />
-                  </div>
-                  <div className='space-y-2'>
-                    <Label htmlFor='route-target-model'>
-                      {t('Target model')}
-                    </Label>
-                    <ComboboxInput
-                      id='route-target-model'
-                      options={targetModelOptions}
-                      value={draft.target_model}
-                      onValueChange={(value) =>
-                        setDraft((current) => ({
-                          ...current,
-                          target_model: value,
-                          channel_ids:
-                            current.target_model === value
-                              ? current.channel_ids
-                              : [],
-                        }))
-                      }
-                      placeholder={t('Select or enter target model')}
-                      emptyText={t('No models found')}
-                      allowCustomValue
-                    />
-                  </div>
-                </div>
-
-                <div className='space-y-2'>
-                  <Label htmlFor='route-pool-name'>
-                    {t('Channel pool name')}
-                  </Label>
-                  <Input
-                    id='route-pool-name'
-                    value={draft.pool_name}
-                    onChange={(event) => {
-                      const poolName = event.currentTarget.value
-                      setDraft((current) => ({
-                        ...current,
-                        pool_name: poolName,
-                      }))
-                    }}
-                    placeholder={
-                      draft.source_model && draft.target_model
-                        ? `${draft.source_model} -> ${draft.target_model}`
-                        : t('Optional channel pool name')
-                    }
-                    maxLength={191}
-                  />
-                </div>
-
-                <div className='space-y-2'>
-                  <Label htmlFor='route-inject-prompt'>
-                    {t('Injected system prompt')}
-                  </Label>
-                  <Textarea
-                    id='route-inject-prompt'
-                    value={draft.inject_prompt}
-                    onChange={(event) => {
-                      const injectPrompt = [...event.currentTarget.value]
-                        .slice(0, INJECT_PROMPT_MAX_LENGTH)
-                        .join('')
-                      setDraft((current) => ({
-                        ...current,
-                        inject_prompt: injectPrompt,
-                      }))
-                    }}
-                    placeholder={t(
-                      'Optional. Placed ahead of both the caller and channel system prompts.'
-                    )}
-                    rows={4}
-                    aria-describedby='route-inject-prompt-hint'
-                  />
-                  <p
-                    id='route-inject-prompt-hint'
-                    className='text-muted-foreground text-xs'
-                  >
-                    {t(
-                      'Applied only when this route is used. It takes priority over the channel system prompt.'
-                    )}{' '}
-                    <span className='tabular-nums'>
-                      {[...draft.inject_prompt].length}/
-                      {INJECT_PROMPT_MAX_LENGTH}
-                    </span>
-                  </p>
-                </div>
-
-                <div className='grid gap-4 sm:grid-cols-2'>
-                  <div className='space-y-2'>
-                    <Label htmlFor='route-execution-group'>
-                      {t('Execution group')}
-                    </Label>
-                    <Select
-                      items={executionGroupOptions}
-                      value={draft.execution_group || null}
-                      onValueChange={(value) =>
-                        value !== null &&
-                        setDraft((current) => ({
-                          ...current,
-                          execution_group: value,
-                          channel_ids:
-                            current.execution_group === value
-                              ? current.channel_ids
-                              : [],
-                        }))
-                      }
-                    >
-                      <SelectTrigger id='route-execution-group'>
-                        <SelectValue
-                          placeholder={t('Select execution group')}
-                        />
-                      </SelectTrigger>
-                      <SelectContent alignItemWithTrigger={false}>
-                        <SelectGroup>
-                          {executionGroupOptions.map((group) => (
-                            <SelectItem
-                              key={group.value}
-                              value={group.value}
-                              disabled={group.disabled}
-                            >
-                              {group.label}
-                            </SelectItem>
-                          ))}
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className='flex items-center justify-between gap-3 rounded-md border px-3 py-2'>
-                    <div className='space-y-1'>
-                      <Label htmlFor='route-enabled'>{t('Enabled')}</Label>
-                      <p className='text-muted-foreground text-xs'>
-                        {t(
-                          'Disabled routes are ignored during model selection'
-                        )}
-                      </p>
-                    </div>
-                    <Switch
-                      id='route-enabled'
-                      checked={draft.enabled}
-                      onCheckedChange={(enabled) =>
-                        setDraft((current) => ({ ...current, enabled }))
-                      }
-                      aria-label={t('Enabled')}
-                    />
-                  </div>
-                </div>
-
-                <div className='flex items-center justify-between gap-3 rounded-md border px-3 py-2'>
-                  <div className='space-y-1'>
-                    <Label htmlFor='route-all-groups'>
-                      {t('All user groups')}
-                    </Label>
+              <p className='text-muted-foreground text-xs'>
+                {t(
+                  'Saving replaces the whole route set with this JSON array. Fields: source_model, target_model, execution_group, all_groups, groups, channel_ids, inject_prompt, pool_name, enabled.'
+                )}
+              </p>
+            </div>
+          ) : (
+            <>
+              <section className='space-y-4 rounded-md border p-4'>
+                <div className='flex items-center justify-between gap-3'>
+                  <div>
+                    <h3 className='text-sm font-medium'>
+                      {editingId ? t('Edit model route') : t('New model route')}
+                    </h3>
                     <p className='text-muted-foreground text-xs'>
                       {t(
-                        'Apply this route to every group assigned to the user'
+                        'Keep the requested model name while selecting a different upstream target'
                       )}
                     </p>
                   </div>
-                  <Switch
-                    id='route-all-groups'
-                    checked={draft.all_groups}
-                    onCheckedChange={(allGroups) =>
-                      setDraft((current) => ({
-                        ...current,
-                        all_groups: allGroups,
-                      }))
-                    }
-                    aria-label={t('All user groups')}
-                  />
-                </div>
-
-                {!draft.all_groups && (
-                  <div className='space-y-2'>
-                    <Label htmlFor='route-applicable-groups'>
-                      {t('Applicable groups')}
-                    </Label>
-                    <MultiSelect
-                      id='route-applicable-groups'
-                      options={applicableGroupOptions}
-                      selected={draft.groups}
-                      onChange={(groupsValue) =>
-                        setDraft((current) => ({
-                          ...current,
-                          groups: groupsValue,
-                        }))
-                      }
-                      placeholder={t('Select applicable groups')}
-                    />
-                  </div>
-                )}
-
-                <div className='space-y-2'>
-                  <Label htmlFor='route-channel-pool'>
-                    {t('Channel pool')}
-                  </Label>
-                  {channelsFailed && channelQueryReady ? (
-                    <ErrorState
-                      title={t('Failed to load')}
-                      onRetry={() => channelsQuery.refetch()}
-                      className='min-h-32 py-6'
-                    />
-                  ) : (
-                    <MultiSelect
-                      id='route-channel-pool'
-                      options={channelOptions}
-                      selected={draft.channel_ids}
-                      onChange={updateChannelSelection}
-                      placeholder={t('Select channels')}
-                      emptyText={
-                        channelsLoading
-                          ? t('Loading...')
-                          : t('No channels found')
-                      }
-                      disabled={!channelQueryReady || channelsLoading}
-                      maxVisibleChips={4}
-                    />
-                  )}
-                  <p className='text-muted-foreground text-xs'>
-                    {t(
-                      'Channel priority, weight, affinity, and retry rules remain active'
-                    )}
-                  </p>
-                  {invalidSelectedChannelIds.length > 0 ? (
-                    <div
-                      role='alert'
-                      className='text-destructive flex items-start gap-2 text-xs'
+                  {editingId ? (
+                    <Button
+                      variant='ghost'
+                      size='sm'
+                      onClick={resetDraft}
+                      disabled={saving}
                     >
-                      <TriangleAlert className='mt-0.5 size-3.5 shrink-0' />
-                      <span>
-                        {t(
-                          'This route contains unavailable channels: {{channels}}. Select a valid channel pool before saving.',
-                          { channels: invalidSelectedChannelIds.join(', ') }
-                        )}
-                      </span>
-                    </div>
+                      {t('Clear')}
+                    </Button>
                   ) : null}
                 </div>
-              </>
-            )}
-          </section>
 
-          <section className='space-y-3'>
-            <div className='flex items-center justify-between gap-3'>
-              <h3 className='text-sm font-medium'>{t('Configured routes')}</h3>
-              <span className='text-muted-foreground text-xs tabular-nums'>
-                {routes.length}
-              </span>
-            </div>
-            {renderRouteList()}
-          </section>
+                {editorFailed && (
+                  <ErrorState
+                    title={t('Failed to load')}
+                    onRetry={() => {
+                      void candidatesQuery.refetch()
+                    }}
+                    className='min-h-32 py-6'
+                  />
+                )}
+                {!editorFailed && editorLoading && (
+                  <div className='text-muted-foreground flex min-h-32 items-center justify-center text-sm'>
+                    <Loader2 className='mr-2 size-4 animate-spin' />
+                    {t('Loading...')}
+                  </div>
+                )}
+                {!editorFailed && !editorLoading && (
+                  <>
+                    <div className='grid gap-4 sm:grid-cols-2'>
+                      <div className='space-y-2'>
+                        <Label htmlFor='route-source-model'>
+                          {t('Source model')}
+                        </Label>
+                        <ComboboxInput
+                          id='route-source-model'
+                          options={sourceModelOptions}
+                          value={draft.source_model}
+                          onValueChange={(value) =>
+                            setDraft((current) => ({
+                              ...current,
+                              source_model: value,
+                            }))
+                          }
+                          placeholder={t('Select source model')}
+                          emptyText={t('No models found')}
+                        />
+                      </div>
+                      <div className='space-y-2'>
+                        <Label htmlFor='route-target-model'>
+                          {t('Target model')}
+                        </Label>
+                        <ComboboxInput
+                          id='route-target-model'
+                          options={targetModelOptions}
+                          value={draft.target_model}
+                          onValueChange={(value) =>
+                            setDraft((current) => ({
+                              ...current,
+                              target_model: value,
+                              channel_ids:
+                                current.target_model === value
+                                  ? current.channel_ids
+                                  : [],
+                            }))
+                          }
+                          placeholder={t('Select or enter target model')}
+                          emptyText={t('No models found')}
+                          allowCustomValue
+                        />
+                      </div>
+                    </div>
 
-          <Button
-            variant='outline'
-            className='w-full'
-            onClick={resetDraft}
-            disabled={saving}
-          >
-            <Plus />
-            {t('Start a new route')}
-          </Button>
+                    <div className='space-y-2'>
+                      <Label htmlFor='route-pool-name'>
+                        {t('Channel pool name')}
+                      </Label>
+                      <Input
+                        id='route-pool-name'
+                        value={draft.pool_name}
+                        onChange={(event) => {
+                          const poolName = event.currentTarget.value
+                          setDraft((current) => ({
+                            ...current,
+                            pool_name: poolName,
+                          }))
+                        }}
+                        placeholder={
+                          draft.source_model && draft.target_model
+                            ? `${draft.source_model} -> ${draft.target_model}`
+                            : t('Optional channel pool name')
+                        }
+                        maxLength={191}
+                      />
+                    </div>
+
+                    <div className='space-y-2'>
+                      <Label htmlFor='route-inject-prompt'>
+                        {t('Injected system prompt')}
+                      </Label>
+                      <Textarea
+                        id='route-inject-prompt'
+                        value={draft.inject_prompt}
+                        onChange={(event) => {
+                          const injectPrompt = [...event.currentTarget.value]
+                            .slice(0, INJECT_PROMPT_MAX_LENGTH)
+                            .join('')
+                          setDraft((current) => ({
+                            ...current,
+                            inject_prompt: injectPrompt,
+                          }))
+                        }}
+                        placeholder={t(
+                          'Optional. Placed ahead of both the caller and channel system prompts.'
+                        )}
+                        rows={4}
+                        aria-describedby='route-inject-prompt-hint'
+                      />
+                      <p
+                        id='route-inject-prompt-hint'
+                        className='text-muted-foreground text-xs'
+                      >
+                        {t(
+                          'Applied only when this route is used. It takes priority over the channel system prompt.'
+                        )}{' '}
+                        <span className='tabular-nums'>
+                          {[...draft.inject_prompt].length}/
+                          {INJECT_PROMPT_MAX_LENGTH}
+                        </span>
+                      </p>
+                    </div>
+
+                    <div className='grid gap-4 sm:grid-cols-2'>
+                      <div className='space-y-2'>
+                        <Label htmlFor='route-execution-group'>
+                          {t('Execution group')}
+                        </Label>
+                        <Select
+                          items={executionGroupOptions}
+                          value={draft.execution_group || null}
+                          onValueChange={(value) =>
+                            value !== null &&
+                            setDraft((current) => ({
+                              ...current,
+                              execution_group: value,
+                              channel_ids:
+                                current.execution_group === value
+                                  ? current.channel_ids
+                                  : [],
+                            }))
+                          }
+                        >
+                          <SelectTrigger id='route-execution-group'>
+                            <SelectValue
+                              placeholder={t('Select execution group')}
+                            />
+                          </SelectTrigger>
+                          <SelectContent alignItemWithTrigger={false}>
+                            <SelectGroup>
+                              {executionGroupOptions.map((group) => (
+                                <SelectItem
+                                  key={group.value}
+                                  value={group.value}
+                                  disabled={group.disabled}
+                                >
+                                  {group.label}
+                                </SelectItem>
+                              ))}
+                            </SelectGroup>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className='flex items-center justify-between gap-3 rounded-md border px-3 py-2'>
+                        <div className='space-y-1'>
+                          <Label htmlFor='route-enabled'>{t('Enabled')}</Label>
+                          <p className='text-muted-foreground text-xs'>
+                            {t(
+                              'Disabled routes are ignored during model selection'
+                            )}
+                          </p>
+                        </div>
+                        <Switch
+                          id='route-enabled'
+                          checked={draft.enabled}
+                          onCheckedChange={(enabled) =>
+                            setDraft((current) => ({ ...current, enabled }))
+                          }
+                          aria-label={t('Enabled')}
+                        />
+                      </div>
+                    </div>
+
+                    <div className='flex items-center justify-between gap-3 rounded-md border px-3 py-2'>
+                      <div className='space-y-1'>
+                        <Label htmlFor='route-all-groups'>
+                          {t('All user groups')}
+                        </Label>
+                        <p className='text-muted-foreground text-xs'>
+                          {t(
+                            'Apply this route to every group assigned to the user'
+                          )}
+                        </p>
+                      </div>
+                      <Switch
+                        id='route-all-groups'
+                        checked={draft.all_groups}
+                        onCheckedChange={(allGroups) =>
+                          setDraft((current) => ({
+                            ...current,
+                            all_groups: allGroups,
+                          }))
+                        }
+                        aria-label={t('All user groups')}
+                      />
+                    </div>
+
+                    {!draft.all_groups && (
+                      <div className='space-y-2'>
+                        <Label htmlFor='route-applicable-groups'>
+                          {t('Applicable groups')}
+                        </Label>
+                        <MultiSelect
+                          id='route-applicable-groups'
+                          options={applicableGroupOptions}
+                          selected={draft.groups}
+                          onChange={(groupsValue) =>
+                            setDraft((current) => ({
+                              ...current,
+                              groups: groupsValue,
+                            }))
+                          }
+                          placeholder={t('Select applicable groups')}
+                        />
+                      </div>
+                    )}
+
+                    <div className='space-y-2'>
+                      <Label htmlFor='route-channel-pool'>
+                        {t('Channel pool')}
+                      </Label>
+                      {channelsFailed && channelQueryReady ? (
+                        <ErrorState
+                          title={t('Failed to load')}
+                          onRetry={() => channelsQuery.refetch()}
+                          className='min-h-32 py-6'
+                        />
+                      ) : (
+                        <MultiSelect
+                          id='route-channel-pool'
+                          options={channelOptions}
+                          selected={draft.channel_ids}
+                          onChange={updateChannelSelection}
+                          placeholder={t('Select channels')}
+                          emptyText={
+                            channelsLoading
+                              ? t('Loading...')
+                              : t('No channels found')
+                          }
+                          disabled={!channelQueryReady || channelsLoading}
+                          maxVisibleChips={4}
+                        />
+                      )}
+                      <p className='text-muted-foreground text-xs'>
+                        {t(
+                          'Channel priority, weight, affinity, and retry rules remain active'
+                        )}
+                      </p>
+                      {invalidSelectedChannelIds.length > 0 ? (
+                        <div
+                          role='alert'
+                          className='text-destructive flex items-start gap-2 text-xs'
+                        >
+                          <TriangleAlert className='mt-0.5 size-3.5 shrink-0' />
+                          <span>
+                            {t(
+                              'This route contains unavailable channels: {{channels}}. Select a valid channel pool before saving.',
+                              { channels: invalidSelectedChannelIds.join(', ') }
+                            )}
+                          </span>
+                        </div>
+                      ) : null}
+                    </div>
+                  </>
+                )}
+              </section>
+
+              <section className='space-y-3'>
+                <div className='flex items-center justify-between gap-3'>
+                  <h3 className='text-sm font-medium'>
+                    {t('Configured routes')}
+                  </h3>
+                  <span className='text-muted-foreground text-xs tabular-nums'>
+                    {routes.length}
+                  </span>
+                </div>
+                {renderRouteList()}
+              </section>
+
+              <Button
+                variant='outline'
+                className='w-full'
+                onClick={resetDraft}
+                disabled={saving}
+              >
+                <Plus />
+                {t('Start a new route')}
+              </Button>
+            </>
+          )}
         </div>
       </Dialog>
 

@@ -171,6 +171,17 @@ export function UsersMutateDrawer({
           defaults.model_blocklist_enabled =
             policyResult.data.model_blocklist_enabled ?? false
           defaults.model_blocklist = policyResult.data.model_blocklist ?? []
+          defaults.checkin_mode = 'global'
+          if (policyResult.data.checkin_enabled === true) {
+            defaults.checkin_mode = 'allow'
+          } else if (policyResult.data.checkin_enabled === false) {
+            defaults.checkin_mode = 'deny'
+          }
+          defaults.checkin_min_quota =
+            policyResult.data.checkin_min_quota ?? undefined
+          defaults.checkin_max_quota =
+            policyResult.data.checkin_max_quota ?? undefined
+          defaults.quota_cap = policyResult.data.quota_cap ?? undefined
         }
         form.reset(defaults)
       })
@@ -196,6 +207,7 @@ export function UsersMutateDrawer({
   const modelBlocklistEnabled = form.watch('model_blocklist_enabled') ?? false
   const selectedModelBlocklist =
     form.watch('model_blocklist') ?? EMPTY_STRING_LIST
+  const checkinMode = form.watch('checkin_mode') ?? 'global'
   const groupOptions = useMemo(() => {
     const values = new Set([...(groupsData?.data || []), ...selectedGroups])
     return [...values].map((group) => ({ value: group, label: group }))
@@ -662,6 +674,137 @@ export function UsersMutateDrawer({
                     )}
                   />
                 )}
+              </SideDrawerSection>
+
+              <SideDrawerSection>
+                <h3 className='text-sm font-medium'>
+                  {t('Check-in & Quota Cap')}
+                </h3>
+
+                <FormField
+                  control={form.control}
+                  name='checkin_mode'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Check-in permission')}</FormLabel>
+                      <Select
+                        value={field.value || 'global'}
+                        onValueChange={field.onChange}
+                      >
+                        <FormControl>
+                          <SelectTrigger className='w-full'>
+                            <SelectValue />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          <SelectItem value='global'>
+                            {t('Follow global setting')}
+                          </SelectItem>
+                          <SelectItem value='allow'>
+                            {t('Allow check-in')}
+                          </SelectItem>
+                          <SelectItem value='deny'>
+                            {t('Deny check-in')}
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                {checkinMode !== 'deny' && (
+                  <div className='grid grid-cols-2 gap-2'>
+                    <FormField
+                      control={form.control}
+                      name='checkin_min_quota'
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>{t('Min check-in reward')}</FormLabel>
+                          <FormControl>
+                            <Input
+                              type='number'
+                              min={0}
+                              value={field.value ?? ''}
+                              onChange={(e) =>
+                                field.onChange(
+                                  e.target.value === ''
+                                    ? undefined
+                                    : Number(e.target.value)
+                                )
+                              }
+                              placeholder={t('Leave empty to follow global')}
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={form.control}
+                      name='checkin_max_quota'
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>{t('Max check-in reward')}</FormLabel>
+                          <FormControl>
+                            <Input
+                              type='number'
+                              min={0}
+                              value={field.value ?? ''}
+                              onChange={(e) =>
+                                field.onChange(
+                                  e.target.value === ''
+                                    ? undefined
+                                    : Number(e.target.value)
+                                )
+                              }
+                              placeholder={t('Leave empty to follow global')}
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </div>
+                )}
+                {checkinMode !== 'deny' && (
+                  <p className='text-muted-foreground text-xs'>
+                    {t(
+                      'Check-in reward range in quota units; set both to the same value for a fixed reward. Leave empty to follow the global setting.'
+                    )}
+                  </p>
+                )}
+
+                <FormField
+                  control={form.control}
+                  name='quota_cap'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Balance cap (quota units)')}</FormLabel>
+                      <FormControl>
+                        <Input
+                          type='number'
+                          min={0}
+                          value={field.value ?? ''}
+                          onChange={(e) =>
+                            field.onChange(
+                              e.target.value === ''
+                                ? undefined
+                                : Number(e.target.value)
+                            )
+                          }
+                          placeholder={t('Leave empty for no cap')}
+                        />
+                      </FormControl>
+                      <FormDescription>
+                        {t(
+                          'Gift credits (check-in, redemption codes, invite transfers) cannot push the balance above this cap. Paid top-ups are unaffected.'
+                        )}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
               </SideDrawerSection>
 
               {canEditAdminPermissions &&

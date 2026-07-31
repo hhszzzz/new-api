@@ -351,7 +351,7 @@ export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
                     <FormLabel>{t('Enable protocol bridge')}</FormLabel>
                     <FormDescription>
                       {t(
-                        'Enable automatic conversion for channels that use detected protocol capabilities. Explicit upstream protocol declarations work independently.'
+                        'Master switch for protocol bridging. When off, every channel forwards requests in their original protocol and channel protocol capability settings are ignored.'
                       )}
                     </FormDescription>
                   </SettingsSwitchContent>
@@ -374,7 +374,7 @@ export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
                     <FormLabel>{t('Allow conversion by default')}</FormLabel>
                     <FormDescription>
                       {t(
-                        'Channels without explicit protocol capabilities use this default when automatic bridging is enabled.'
+                        'When protocol bridging is enabled, channels without explicit protocol capabilities convert automatically using the protocols detected from their channel type and upstream URL.'
                       )}
                     </FormDescription>
                   </SettingsSwitchContent>

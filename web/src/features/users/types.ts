@@ -52,6 +52,10 @@ export const userSchema = z.object({
   model_limits: z.array(z.string()).optional(),
   model_blocklist_enabled: z.boolean().optional(),
   model_blocklist: z.array(z.string()).optional(),
+  checkin_enabled: z.boolean().nullable().optional(),
+  checkin_min_quota: z.number().nullable().optional(),
+  checkin_max_quota: z.number().nullable().optional(),
+  quota_cap: z.number().nullable().optional(),
   aff_code: z.string().optional(),
   aff_count: z.number().optional(),
   aff_quota: z.number().optional(),
@@ -136,6 +140,10 @@ export interface UserFormData {
   model_limits?: string[]
   model_blocklist_enabled?: boolean
   model_blocklist?: string[]
+  checkin_enabled?: boolean | null
+  checkin_min_quota?: number | null
+  checkin_max_quota?: number | null
+  quota_cap?: number | null
   remark?: string // Only used when updating user
   admin_permissions?: AdminPermissionMatrix
 }
@@ -148,6 +156,54 @@ export interface UserPolicy {
   model_limits: string[]
   model_blocklist_enabled: boolean
   model_blocklist: string[]
+  checkin_enabled?: boolean | null
+  checkin_min_quota?: number | null
+  checkin_max_quota?: number | null
+  quota_cap?: number | null
+}
+
+export type UserBatchListMode = 'append' | 'remove' | 'replace'
+
+export interface UserBatchListOp {
+  mode: UserBatchListMode
+  models: string[]
+  enabled?: boolean | null
+}
+
+export interface UserBatchCheckinOp {
+  mode: 'keep' | 'global' | 'allow' | 'deny'
+  quota_mode: 'keep' | 'global' | 'custom'
+  min_quota?: number
+  max_quota?: number
+}
+
+export interface UserBatchQuotaCapOp {
+  mode: 'unlimited' | 'custom'
+  value?: number
+}
+
+export interface UserBatchPolicyPayload {
+  user_ids: number[]
+  model_limits?: UserBatchListOp
+  model_blocklist?: UserBatchListOp
+  checkin?: UserBatchCheckinOp
+  quota_cap?: UserBatchQuotaCapOp
+}
+
+export interface UserBatchSkip {
+  id: number
+  username?: string
+  reason: string
+}
+
+export interface UserBatchPolicyResult {
+  updated: number
+  skipped: UserBatchSkip[]
+}
+
+export interface UserBatchModelRoutesResult {
+  created: number
+  skipped: UserBatchSkip[]
 }
 
 export interface UserModelRoute {

@@ -341,6 +341,8 @@ export interface ChannelOpsResponse {
   message?: string
   data?: {
     retry_times: number
+    protocol_bridge_enabled?: boolean
+    protocol_bridge_default_allow_conversion?: boolean
   }
 }
 

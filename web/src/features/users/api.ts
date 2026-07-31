@@ -31,6 +31,9 @@ import type {
   UserPolicy,
   UserModelRoute,
   UserModelRouteCandidates,
+  UserBatchModelRoutesResult,
+  UserBatchPolicyPayload,
+  UserBatchPolicyResult,
 } from './types'
 
 // ============================================================================
@@ -146,6 +149,44 @@ export async function deleteUserModelRoute(
   routeId: number
 ): Promise<ApiResponse> {
   const res = await api.delete(`/api/user/${id}/model-routes/${routeId}`)
+  return res.data
+}
+
+/**
+ * Replace the user's whole model route set (JSON editing mode)
+ */
+export async function replaceUserModelRoutes(
+  id: number,
+  routes: Array<
+    Omit<UserModelRoute, 'id' | 'user_id' | 'created_at' | 'updated_at'>
+  >
+): Promise<ApiResponse<UserModelRoute[]>> {
+  const res = await api.put(`/api/user/${id}/model-routes`, { routes })
+  return res.data
+}
+
+/**
+ * Apply a partial policy update (model limits/blocklist, check-in, quota cap)
+ * to many users at once
+ */
+export async function batchUpdateUserPolicy(
+  payload: UserBatchPolicyPayload
+): Promise<ApiResponse<UserBatchPolicyResult>> {
+  const res = await api.post('/api/user/batch/policy', payload)
+  return res.data
+}
+
+/**
+ * Create the same model route for many users at once
+ */
+export async function batchAddUserModelRoutes(
+  userIds: number[],
+  route: Omit<UserModelRoute, 'id' | 'user_id' | 'created_at' | 'updated_at'>
+): Promise<ApiResponse<UserBatchModelRoutesResult>> {
+  const res = await api.post('/api/user/batch/model-routes', {
+    user_ids: userIds,
+    route,
+  })
   return res.data
 }
 

@@ -101,6 +101,13 @@ const CHANNEL_FIELD_LABELS: Record<string, string> = {
   key: 'Key',
 }
 
+// Human-readable labels for the internal protocol state-mode enum.
+const PROTOCOL_STATE_MODE_LABELS: Record<string, string> = {
+  native_responses: 'Native Responses session state',
+  replay: 'Replayed conversation state',
+  strict_append: 'Strict append session state',
+}
+
 function timingTextColorClass(
   variant: 'success' | 'warning' | 'danger'
 ): string {
@@ -688,15 +695,24 @@ export function DetailsDialog(props: DetailsDialogProps) {
     adminInfo?.upstream_protocol ?? diagnostics?.upstream_protocol
   const protocolConverter =
     adminInfo?.protocol_converter ?? diagnostics?.protocol_converter
+  const requestProtocol = diagnostics?.request_protocol
+  const isNativeProtocolPassthrough =
+    Boolean(requestProtocol) &&
+    !protocolConverter &&
+    (!upstreamProtocol || upstreamProtocol === requestProtocol)
   const protocolConversion = [
-    diagnostics?.request_protocol,
+    requestProtocol,
     protocolConverter,
     upstreamProtocol,
   ].filter(Boolean) as string[]
-  const displayedConversionLabel =
-    protocolConversion.length > 0
-      ? protocolConversion.join(' → ')
-      : conversionLabel
+  let displayedConversionLabel = conversionLabel
+  if (isNativeProtocolPassthrough) {
+    displayedConversionLabel = t('Native ({{protocol}})', {
+      protocol: requestProtocol,
+    })
+  } else if (protocolConversion.length > 0) {
+    displayedConversionLabel = protocolConversion.join(' → ')
+  }
   const showConversion =
     props.isAdminView &&
     props.log.type !== 6 &&
@@ -983,13 +999,21 @@ export function DetailsDialog(props: DetailsDialogProps) {
                 mono
               />
             )}
-            {adminInfo?.protocol_state_mode && (
-              <DetailRow
-                label={t('Protocol State Mode')}
-                value={adminInfo.protocol_state_mode}
-                mono
-              />
-            )}
+            {adminInfo?.protocol_state_mode &&
+              adminInfo.protocol_state_mode !== 'none' && (
+                <DetailRow
+                  label={t('Protocol State Mode')}
+                  value={
+                    PROTOCOL_STATE_MODE_LABELS[adminInfo.protocol_state_mode]
+                      ? t(
+                          PROTOCOL_STATE_MODE_LABELS[
+                            adminInfo.protocol_state_mode
+                          ]
+                        )
+                      : adminInfo.protocol_state_mode
+                  }
+                />
+              )}
             {diagnostics.route_pool_name && (
               <DetailRow
                 label={t('Route Pool')}
