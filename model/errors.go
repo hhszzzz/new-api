@@ -25,6 +25,10 @@ var (
 // Redemption errors
 var ErrRedeemFailed = errors.New("redeem.failed")
 
+// ErrQuotaCapExceeded reports that a gift credit (check-in, redemption code,
+// invite transfer) would push the user's balance past their quota cap.
+var ErrQuotaCapExceeded = errors.New("account quota cap exceeded")
+
 // 2FA errors
 var ErrTwoFANotEnabled = errors.New("2fa not enabled")
 var ErrTwoFAAlreadyEnabled = errors.New("2fa already enabled")

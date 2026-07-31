@@ -144,6 +144,7 @@ func SetApiRouter(router *gin.Engine) {
 				adminRoute.GET("/:id", controller.GetUser)
 				adminRoute.GET("/:id/policy", controller.GetUserPolicy)
 				adminRoute.PUT("/:id/policy", controller.UpdateUserPolicy)
+				adminRoute.POST("/batch/policy", controller.BatchUpdateUserPolicy)
 				registerUserModelRouteRoutes(adminRoute)
 				adminRoute.POST("/", controller.CreateUser)
 				adminRoute.POST("/manage", controller.ManageUser)

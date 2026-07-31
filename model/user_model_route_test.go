@@ -205,6 +205,46 @@ func TestChannelDeleteSupportsSchemasWithoutUserModelRouteTables(t *testing.T) {
 	assert.Zero(t, abilityCount)
 }
 
+func TestReplaceUserModelRoutesSwapsWholeSetAtomically(t *testing.T) {
+	setupUserModelRouteTestDB(t)
+
+	existing := newTestUserModelRoute(true)
+	require.NoError(t, SaveUserModelRoute(existing))
+
+	first := newTestUserModelRoute(false, "premium")
+	first.SourceModel = "gpt-5.5"
+	first.TargetModel = "gpt-5.4"
+	second := newTestUserModelRoute(true)
+	second.SourceModel = "claude-4.5"
+	second.ChannelIds = []int{10, 11}
+	require.NoError(t, ReplaceUserModelRoutes(1, []*UserModelRoute{first, second}))
+
+	routes, err := GetUserModelRoutes(1)
+	require.NoError(t, err)
+	require.Len(t, routes, 2)
+	assert.Equal(t, "claude-4.5", routes[0].SourceModel)
+	assert.Equal(t, []int{10, 11}, routes[0].ChannelIds)
+	assert.Equal(t, "gpt-5.5", routes[1].SourceModel)
+	assert.Equal(t, []string{"premium"}, routes[1].Groups)
+}
+
+func TestReplaceUserModelRoutesRollsBackOnPayloadConflict(t *testing.T) {
+	setupUserModelRouteTestDB(t)
+
+	existing := newTestUserModelRoute(true)
+	require.NoError(t, SaveUserModelRoute(existing))
+
+	first := newTestUserModelRoute(true)
+	duplicate := newTestUserModelRoute(false, "premium")
+	err := ReplaceUserModelRoutes(1, []*UserModelRoute{first, duplicate})
+	assert.ErrorIs(t, err, ErrUserModelRouteConflict)
+
+	routes, err := GetUserModelRoutes(1)
+	require.NoError(t, err)
+	require.Len(t, routes, 1)
+	assert.Equal(t, existing.Id, routes[0].Id)
+}
+
 func TestSaveUserModelRouteRejectsAllGroupsAndScopedOverlap(t *testing.T) {
 	setupUserModelRouteTestDB(t)
 

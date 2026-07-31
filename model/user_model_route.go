@@ -355,6 +355,66 @@ func IsConcreteUserModelRouteTarget(modelName string) bool {
 }
 
 func SaveUserModelRoute(route *UserModelRoute) error {
+	if err := normalizeUserModelRouteForSave(route); err != nil {
+		return err
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		var user User
+		if err := lockForUpdate(tx).Select("id").Where("id = ?", route.UserId).First(&user).Error; err != nil {
+			return err
+		}
+		return saveUserModelRouteWithTx(tx, route)
+	})
+}
+
+// ReplaceUserModelRoutes swaps the user's complete route set in one
+// transaction: every existing route is removed and the payload is written
+// through the same per-route validation and conflict checks as single saves,
+// so an overlapping pair inside the payload rolls the whole replace back.
+func ReplaceUserModelRoutes(userId int, routes []*UserModelRoute) error {
+	if userId <= 0 {
+		return errors.New("invalid user id")
+	}
+	for _, route := range routes {
+		if route == nil {
+			return errors.New("invalid user model route")
+		}
+		route.Id = 0
+		route.UserId = userId
+		if err := normalizeUserModelRouteForSave(route); err != nil {
+			return err
+		}
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		var user User
+		if err := lockForUpdate(tx).Select("id").Where("id = ?", userId).First(&user).Error; err != nil {
+			return err
+		}
+		var routeIds []int
+		if err := tx.Model(&UserModelRoute{}).Where("user_id = ?", userId).Pluck("id", &routeIds).Error; err != nil {
+			return err
+		}
+		if len(routeIds) > 0 {
+			if err := tx.Where("route_id IN ?", routeIds).Delete(&UserModelRouteGroup{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("route_id IN ?", routeIds).Delete(&UserModelRouteChannel{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("user_id = ?", userId).Delete(&UserModelRoute{}).Error; err != nil {
+				return err
+			}
+		}
+		for _, route := range routes {
+			if err := saveUserModelRouteWithTx(tx, route); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func normalizeUserModelRouteForSave(route *UserModelRoute) error {
 	if route == nil || route.UserId <= 0 {
 		return errors.New("invalid user model route")
 	}
@@ -383,85 +443,83 @@ func SaveUserModelRoute(route *UserModelRoute) error {
 	if !route.AllGroups && len(route.Groups) == 0 {
 		return errors.New("a scoped user model route requires groups")
 	}
-	return DB.Transaction(func(tx *gorm.DB) error {
-		var user User
-		if err := lockForUpdate(tx).Select("id").Where("id = ?", route.UserId).First(&user).Error; err != nil {
-			return err
-		}
-		if route.Id > 0 {
-			var existing UserModelRoute
-			if err := tx.Where("id = ? AND user_id = ?", route.Id, route.UserId).First(&existing).Error; err != nil {
-				return err
-			}
-		}
+	return nil
+}
 
-		conflictQuery := tx.Model(&UserModelRoute{}).
-			Where("user_id = ? AND source_model = ?", route.UserId, route.SourceModel)
-		if route.Id > 0 {
-			conflictQuery = conflictQuery.Where("id <> ?", route.Id)
+func saveUserModelRouteWithTx(tx *gorm.DB, route *UserModelRoute) error {
+	if route.Id > 0 {
+		var existing UserModelRoute
+		if err := tx.Where("id = ? AND user_id = ?", route.Id, route.UserId).First(&existing).Error; err != nil {
+			return err
 		}
-		var conflictCount int64
-		if route.AllGroups {
-			// An all-groups rule owns the source model for every scope. It must
-			// therefore conflict with both existing all-groups and scoped rules.
-			if err := conflictQuery.Count(&conflictCount).Error; err != nil {
-				return err
-			}
-		} else {
-			// Use a LEFT JOIN so an existing all-groups rule (which has no child
-			// rows) is still considered a conflict. Distinct avoids counting one
-			// route more than once when several selected groups overlap.
-			conflictQuery = conflictQuery.
-				Joins("LEFT JOIN user_model_route_groups ON user_model_route_groups.route_id = user_model_routes.id").
-				Where("user_model_routes.all_groups = ? OR user_model_route_groups.group_name IN ?", true, route.Groups).
-				Distinct("user_model_routes.id")
-			if err := conflictQuery.Count(&conflictCount).Error; err != nil {
-				return err
-			}
-		}
-		if conflictCount > 0 {
-			return ErrUserModelRouteConflict
-		}
+	}
 
-		route.UpdatedAt = common.GetTimestamp()
-		if route.Id == 0 {
-			if err := tx.Create(route).Error; err != nil {
-				return err
-			}
-		} else if err := tx.Model(&UserModelRoute{}).Where("id = ? AND user_id = ?", route.Id, route.UserId).
-			Updates(map[string]interface{}{
-				"source_model":    route.SourceModel,
-				"target_model":    route.TargetModel,
-				"pool_name":       route.PoolName,
-				"all_groups":      route.AllGroups,
-				"execution_group": route.ExecutionGroup,
-				"inject_prompt":   route.InjectPrompt,
-				"enabled":         route.Enabled,
-				"updated_at":      route.UpdatedAt,
-			}).Error; err != nil {
+	conflictQuery := tx.Model(&UserModelRoute{}).
+		Where("user_id = ? AND source_model = ?", route.UserId, route.SourceModel)
+	if route.Id > 0 {
+		conflictQuery = conflictQuery.Where("id <> ?", route.Id)
+	}
+	var conflictCount int64
+	if route.AllGroups {
+		// An all-groups rule owns the source model for every scope. It must
+		// therefore conflict with both existing all-groups and scoped rules.
+		if err := conflictQuery.Count(&conflictCount).Error; err != nil {
 			return err
 		}
-		if err := tx.Where("route_id = ?", route.Id).Delete(&UserModelRouteGroup{}).Error; err != nil {
+	} else {
+		// Use a LEFT JOIN so an existing all-groups rule (which has no child
+		// rows) is still considered a conflict. Distinct avoids counting one
+		// route more than once when several selected groups overlap.
+		conflictQuery = conflictQuery.
+			Joins("LEFT JOIN user_model_route_groups ON user_model_route_groups.route_id = user_model_routes.id").
+			Where("user_model_routes.all_groups = ? OR user_model_route_groups.group_name IN ?", true, route.Groups).
+			Distinct("user_model_routes.id")
+		if err := conflictQuery.Count(&conflictCount).Error; err != nil {
 			return err
 		}
-		if err := tx.Where("route_id = ?", route.Id).Delete(&UserModelRouteChannel{}).Error; err != nil {
+	}
+	if conflictCount > 0 {
+		return ErrUserModelRouteConflict
+	}
+
+	route.UpdatedAt = common.GetTimestamp()
+	if route.Id == 0 {
+		if err := tx.Create(route).Error; err != nil {
 			return err
 		}
-		if !route.AllGroups {
-			groups := make([]UserModelRouteGroup, 0, len(route.Groups))
-			for _, group := range route.Groups {
-				groups = append(groups, UserModelRouteGroup{RouteId: route.Id, GroupName: group})
-			}
-			if err := tx.Create(&groups).Error; err != nil {
-				return err
-			}
+	} else if err := tx.Model(&UserModelRoute{}).Where("id = ? AND user_id = ?", route.Id, route.UserId).
+		Updates(map[string]interface{}{
+			"source_model":    route.SourceModel,
+			"target_model":    route.TargetModel,
+			"pool_name":       route.PoolName,
+			"all_groups":      route.AllGroups,
+			"execution_group": route.ExecutionGroup,
+			"inject_prompt":   route.InjectPrompt,
+			"enabled":         route.Enabled,
+			"updated_at":      route.UpdatedAt,
+		}).Error; err != nil {
+		return err
+	}
+	if err := tx.Where("route_id = ?", route.Id).Delete(&UserModelRouteGroup{}).Error; err != nil {
+		return err
+	}
+	if err := tx.Where("route_id = ?", route.Id).Delete(&UserModelRouteChannel{}).Error; err != nil {
+		return err
+	}
+	if !route.AllGroups {
+		groups := make([]UserModelRouteGroup, 0, len(route.Groups))
+		for _, group := range route.Groups {
+			groups = append(groups, UserModelRouteGroup{RouteId: route.Id, GroupName: group})
 		}
-		channels := make([]UserModelRouteChannel, 0, len(route.ChannelIds))
-		for _, channelId := range route.ChannelIds {
-			channels = append(channels, UserModelRouteChannel{RouteId: route.Id, ChannelId: channelId})
+		if err := tx.Create(&groups).Error; err != nil {
+			return err
 		}
-		return tx.Create(&channels).Error
-	})
+	}
+	channels := make([]UserModelRouteChannel, 0, len(route.ChannelIds))
+	for _, channelId := range route.ChannelIds {
+		channels = append(channels, UserModelRouteChannel{RouteId: route.Id, ChannelId: channelId})
+	}
+	return tx.Create(&channels).Error
 }
 
 func DeleteUserModelRoute(userId int, routeId int) error {

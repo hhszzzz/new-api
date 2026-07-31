@@ -787,6 +787,10 @@ func GetUserPolicy(c *gin.Context) {
 		ModelLimits:           user.ModelLimits,
 		ModelBlocklistEnabled: user.ModelBlocklistEnabled,
 		ModelBlocklist:        user.ModelBlocklist,
+		CheckinEnabled:        user.CheckinEnabled,
+		CheckinMinQuota:       user.CheckinMinQuota,
+		CheckinMaxQuota:       user.CheckinMaxQuota,
+		QuotaCap:              user.QuotaCap,
 	})
 }
 
@@ -815,7 +819,12 @@ func userPolicyFromMutation(user model.User, raw map[string]json.RawMessage, fal
 	_, hasModelLimits := raw["model_limits"]
 	_, hasModelBlocklistEnabled := raw["model_blocklist_enabled"]
 	_, hasModelBlocklist := raw["model_blocklist"]
-	if !hasGroups && !hasPrimaryGroup && !hasLegacyGroup && !hasTopupGroup && !hasModelLimitsEnabled && !hasModelLimits && !hasModelBlocklistEnabled && !hasModelBlocklist {
+	_, hasCheckinEnabled := raw["checkin_enabled"]
+	_, hasCheckinMinQuota := raw["checkin_min_quota"]
+	_, hasCheckinMaxQuota := raw["checkin_max_quota"]
+	_, hasQuotaCap := raw["quota_cap"]
+	if !hasGroups && !hasPrimaryGroup && !hasLegacyGroup && !hasTopupGroup && !hasModelLimitsEnabled && !hasModelLimits && !hasModelBlocklistEnabled && !hasModelBlocklist &&
+		!hasCheckinEnabled && !hasCheckinMinQuota && !hasCheckinMaxQuota && !hasQuotaCap {
 		return nil, nil
 	}
 
@@ -827,6 +836,10 @@ func userPolicyFromMutation(user model.User, raw map[string]json.RawMessage, fal
 		ModelLimits:           append([]string(nil), user.ModelLimits...),
 		ModelBlocklistEnabled: user.ModelBlocklistEnabled,
 		ModelBlocklist:        append([]string(nil), user.ModelBlocklist...),
+		CheckinEnabled:        user.CheckinEnabled,
+		CheckinMinQuota:       user.CheckinMinQuota,
+		CheckinMaxQuota:       user.CheckinMaxQuota,
+		QuotaCap:              user.QuotaCap,
 	}
 	if !hasGroups {
 		switch {
@@ -871,6 +884,18 @@ func userPolicyFromMutation(user model.User, raw map[string]json.RawMessage, fal
 	}
 	if !hasModelBlocklist && fallback != nil {
 		update.ModelBlocklist = append([]string(nil), fallback.ModelBlocklist...)
+	}
+	if !hasCheckinEnabled && fallback != nil {
+		update.CheckinEnabled = fallback.CheckinEnabled
+	}
+	if !hasCheckinMinQuota && fallback != nil {
+		update.CheckinMinQuota = fallback.CheckinMinQuota
+	}
+	if !hasCheckinMaxQuota && fallback != nil {
+		update.CheckinMaxQuota = fallback.CheckinMaxQuota
+	}
+	if !hasQuotaCap && fallback != nil {
+		update.QuotaCap = fallback.QuotaCap
 	}
 
 	normalized, err := normalizeUserPolicyUpdate(update)
@@ -936,7 +961,52 @@ func normalizeUserPolicyUpdate(update model.UserPolicyUpdate) (model.UserPolicyU
 	}
 	update.ModelLimits = models
 	update.ModelBlocklist = blockedModels
+	if err := validateUserCheckinOverride(update.CheckinMinQuota, update.CheckinMaxQuota); err != nil {
+		return model.UserPolicyUpdate{}, err
+	}
+	if err := validateUserQuotaCap(update.QuotaCap); err != nil {
+		return model.UserPolicyUpdate{}, err
+	}
 	return update, nil
+}
+
+// maxUserCheckinQuotaOverride bounds admin-set per-user check-in rewards so a
+// typo cannot approach the 32-bit quota columns.
+const maxUserCheckinQuotaOverride = 1_000_000_000
+
+// maxUserQuotaCap keeps the balance cap inside the 32-bit quota column range.
+const maxUserQuotaCap = 2_000_000_000
+
+func validateUserQuotaCap(cap *int) error {
+	if cap == nil {
+		return nil
+	}
+	if *cap < 0 {
+		return errors.New("额度上限不能为负数")
+	}
+	if *cap > maxUserQuotaCap {
+		return fmt.Errorf("额度上限不能超过 %d", maxUserQuotaCap)
+	}
+	return nil
+}
+
+func validateUserCheckinOverride(minQuota, maxQuota *int) error {
+	if (minQuota == nil) != (maxQuota == nil) {
+		return errors.New("签到额度的最小值和最大值必须同时设置或同时留空")
+	}
+	if minQuota == nil {
+		return nil
+	}
+	if *minQuota < 0 || *maxQuota < 0 {
+		return errors.New("签到额度不能为负数")
+	}
+	if *maxQuota < *minQuota {
+		return errors.New("签到最大额度不能小于最小额度")
+	}
+	if *maxQuota > maxUserCheckinQuotaOverride {
+		return fmt.Errorf("签到额度不能超过 %d", maxUserCheckinQuotaOverride)
+	}
+	return nil
 }
 
 func normalizeUserPolicyModels(models []string, publicModels map[string]struct{}) ([]string, error) {
@@ -991,6 +1061,18 @@ func UpdateUserPolicy(c *gin.Context) {
 	}
 	if _, exists := raw["model_blocklist"]; !exists {
 		update.ModelBlocklist = append([]string(nil), user.ModelBlocklist...)
+	}
+	if _, exists := raw["checkin_enabled"]; !exists {
+		update.CheckinEnabled = user.CheckinEnabled
+	}
+	if _, exists := raw["checkin_min_quota"]; !exists {
+		update.CheckinMinQuota = user.CheckinMinQuota
+	}
+	if _, exists := raw["checkin_max_quota"]; !exists {
+		update.CheckinMaxQuota = user.CheckinMaxQuota
+	}
+	if _, exists := raw["quota_cap"]; !exists {
+		update.QuotaCap = user.QuotaCap
 	}
 	update, err = normalizeUserPolicyUpdate(update)
 	if err != nil {
@@ -1054,6 +1136,10 @@ func UpdateUser(c *gin.Context) {
 		ModelLimits:           append([]string(nil), originUser.ModelLimits...),
 		ModelBlocklistEnabled: originUser.ModelBlocklistEnabled,
 		ModelBlocklist:        append([]string(nil), originUser.ModelBlocklist...),
+		CheckinEnabled:        originUser.CheckinEnabled,
+		CheckinMinQuota:       originUser.CheckinMinQuota,
+		CheckinMaxQuota:       originUser.CheckinMaxQuota,
+		QuotaCap:              originUser.QuotaCap,
 	}
 	policyUpdate, err := userPolicyFromMutation(updatedUser, rawMutation, &originPolicy)
 	if err != nil {
@@ -1776,6 +1862,12 @@ func TopUp(c *gin.Context) {
 	}
 	quota, err := model.Redeem(req.Key, id)
 	if err != nil {
+		// The quota cap is the user's own account state, so surfacing it leaks
+		// nothing about the redemption code itself (the code stays unused).
+		if errors.Is(err, model.ErrQuotaCapExceeded) {
+			common.ApiErrorMsg(c, "兑换失败：该账户已达额度上限")
+			return
+		}
 		// 不向用户暴露兑换失败的细分原因，避免攻击者根据错误类型判断兑换码状态。
 		common.ApiErrorI18n(c, i18n.MsgRedeemFailed)
 		logger.LogError(c, fmt.Sprintf("failed to redeem key %s for user %d: %s", req.Key, id, err.Error()))

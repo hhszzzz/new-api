@@ -49,6 +49,42 @@ func HasCheckedInToday(userId int) (bool, error) {
 	return count > 0, err
 }
 
+// EffectiveCheckinPolicy resolves the per-user check-in override against the
+// global setting. allowed reports whether this user may check in at all; the
+// returned quota range is the one the next check-in will draw from.
+func EffectiveCheckinPolicy(userId int) (allowed bool, minQuota, maxQuota int, err error) {
+	setting := operation_setting.GetCheckinSetting()
+	minQuota, maxQuota = setting.MinQuota, setting.MaxQuota
+
+	var override struct {
+		CheckinEnabled  *bool
+		CheckinMinQuota *int
+		CheckinMaxQuota *int
+	}
+	if err = DB.Model(&User{}).
+		Select("checkin_enabled", "checkin_min_quota", "checkin_max_quota").
+		Where("id = ?", userId).
+		Take(&override).Error; err != nil {
+		return false, 0, 0, err
+	}
+	if override.CheckinEnabled != nil && !*override.CheckinEnabled {
+		return false, 0, 0, nil
+	}
+	if override.CheckinMinQuota != nil {
+		minQuota = *override.CheckinMinQuota
+	}
+	if override.CheckinMaxQuota != nil {
+		maxQuota = *override.CheckinMaxQuota
+	}
+	if minQuota < 0 {
+		minQuota = 0
+	}
+	if maxQuota < minQuota {
+		maxQuota = minQuota
+	}
+	return true, minQuota, maxQuota, nil
+}
+
 // UserCheckin 执行用户签到
 // MySQL 和 PostgreSQL 使用事务保证原子性
 // SQLite 不支持嵌套事务，使用顺序操作 + 手动回滚
@@ -56,6 +92,13 @@ func UserCheckin(userId int) (*Checkin, error) {
 	setting := operation_setting.GetCheckinSetting()
 	if !setting.Enabled {
 		return nil, errors.New("签到功能未启用")
+	}
+	allowed, minQuota, maxQuota, err := EffectiveCheckinPolicy(userId)
+	if err != nil {
+		return nil, err
+	}
+	if !allowed {
+		return nil, errors.New("该账户已被限制签到")
 	}
 
 	// 检查今天是否已签到
@@ -68,9 +111,21 @@ func UserCheckin(userId int) (*Checkin, error) {
 	}
 
 	// 计算随机额度奖励
-	quotaAwarded := setting.MinQuota
-	if setting.MaxQuota > setting.MinQuota {
-		quotaAwarded = setting.MinQuota + rand.Intn(setting.MaxQuota-setting.MinQuota+1)
+	quotaAwarded := minQuota
+	if maxQuota > minQuota {
+		quotaAwarded = minQuota + rand.Intn(maxQuota-minQuota+1)
+	}
+	headroom, capped, err := giftQuotaHeadroom(DB, userId)
+	if err != nil {
+		return nil, err
+	}
+	if capped {
+		if headroom <= 0 {
+			return nil, errors.New("账户额度已达上限，无法签到")
+		}
+		if quotaAwarded > headroom {
+			quotaAwarded = headroom
+		}
 	}
 
 	today := time.Now().Format("2006-01-02")

@@ -202,6 +202,52 @@ func UpdateUserModelRoute(c *gin.Context) {
 	common.ApiSuccess(c, &route)
 }
 
+type replaceUserModelRoutesRequest struct {
+	Routes []*model.UserModelRoute `json:"routes"`
+}
+
+// ReplaceUserModelRoutes swaps the user's whole route set atomically; it backs
+// the JSON editing mode of the admin route dialog.
+func ReplaceUserModelRoutes(c *gin.Context) {
+	userId, user, ok := getManageableRouteUser(c)
+	if !ok {
+		return
+	}
+	var request replaceUserModelRoutesRequest
+	if err := common.DecodeJson(c.Request.Body, &request); err != nil {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	for _, route := range request.Routes {
+		if route == nil {
+			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+			return
+		}
+		route.Id = 0
+		route.UserId = userId
+		if !validateUserModelRoute(c, user, route) {
+			return
+		}
+	}
+	if err := model.ReplaceUserModelRoutes(userId, request.Routes); err != nil {
+		if errors.Is(err, model.ErrUserModelRouteConflict) {
+			common.ApiErrorMsg(c, "同一请求模型的适用分组不能与已有规则重叠")
+			return
+		}
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAuditFor(c, userId, "user.model_route.replace", map[string]interface{}{
+		"count": len(request.Routes),
+	})
+	routes, err := model.GetUserModelRoutes(userId)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, routes)
+}
+
 func DeleteUserModelRoute(c *gin.Context) {
 	userId, _, ok := getManageableRouteUser(c)
 	if !ok {
@@ -245,41 +291,45 @@ func validateUserModelRoute(c *gin.Context, user *model.User, route *model.UserM
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return false
 	}
+	if err := validateUserModelRouteForUser(user, route); err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return false
+	}
+	return true
+}
+
+// validateUserModelRouteForUser normalizes the route in place and checks it
+// against the target user's authorized groups and the current channel state.
+func validateUserModelRouteForUser(user *model.User, route *model.UserModelRoute) error {
 	route.SourceModel = strings.TrimSpace(route.SourceModel)
 	route.TargetModel = strings.TrimSpace(route.TargetModel)
 	route.PoolName = strings.TrimSpace(route.PoolName)
 	route.ExecutionGroup = strings.TrimSpace(route.ExecutionGroup)
 	route.InjectPrompt = strings.TrimSpace(route.InjectPrompt)
 	if route.SourceModel == "" || route.TargetModel == "" || route.ExecutionGroup == "" || len(route.ChannelIds) == 0 {
-		common.ApiErrorMsg(c, "模型路由信息不完整")
-		return false
+		return errors.New("模型路由信息不完整")
 	}
 	if !model.IsConcreteUserModelRouteTarget(route.TargetModel) {
-		common.ApiErrorMsg(c, "目标模型必须是具体模型，不能使用通配能力名")
-		return false
+		return errors.New("目标模型必须是具体模型，不能使用通配能力名")
 	}
 	if utf8.RuneCountInString(route.InjectPrompt) > model.UserModelRouteMaxInjectPrompt {
-		common.ApiErrorMsg(c, fmt.Sprintf("注入提示词过长，最多 %d 个字符", model.UserModelRouteMaxInjectPrompt))
-		return false
+		return fmt.Errorf("注入提示词过长，最多 %d 个字符", model.UserModelRouteMaxInjectPrompt)
 	}
 	publicModels := make(map[string]struct{})
 	for _, pricing := range model.GetPricing() {
 		publicModels[pricing.ModelName] = struct{}{}
 	}
 	if _, exists := publicModels[route.SourceModel]; !exists {
-		common.ApiErrorMsg(c, fmt.Sprintf("请求模型不是公开可用模型：%s", route.SourceModel))
-		return false
+		return fmt.Errorf("请求模型不是公开可用模型：%s", route.SourceModel)
 	}
 	if route.ExecutionGroup == "auto" || !ratio_setting.ContainsGroupRatio(route.ExecutionGroup) {
-		common.ApiErrorMsg(c, fmt.Sprintf("执行分组不存在：%s", route.ExecutionGroup))
-		return false
+		return fmt.Errorf("执行分组不存在：%s", route.ExecutionGroup)
 	}
 	if route.AllGroups {
 		route.Groups = []string{}
 	} else {
 		if len(route.Groups) == 0 {
-			common.ApiErrorMsg(c, "请至少选择一个适用分组")
-			return false
+			return errors.New("请至少选择一个适用分组")
 		}
 		applicableGroups := make(map[string]struct{})
 		for _, group := range getUserModelRouteApplicableGroups(user.Groups) {
@@ -288,21 +338,18 @@ func validateUserModelRoute(c *gin.Context, user *model.User, route *model.UserM
 		for _, group := range route.Groups {
 			group = strings.TrimSpace(group)
 			if _, ok := applicableGroups[group]; !ok {
-				common.ApiErrorMsg(c, fmt.Sprintf("用户未获授权使用分组：%s", group))
-				return false
+				return fmt.Errorf("用户未获授权使用分组：%s", group)
 			}
 		}
 	}
 	for _, channelId := range route.ChannelIds {
 		channel, err := model.GetChannelById(channelId, false)
 		if err != nil || channel == nil || channel.Status != common.ChannelStatusEnabled {
-			common.ApiErrorMsg(c, fmt.Sprintf("渠道不可用：%d", channelId))
-			return false
+			return fmt.Errorf("渠道不可用：%d", channelId)
 		}
 		if !model.IsChannelEnabledForGroupModel(route.ExecutionGroup, route.TargetModel, channelId) {
-			common.ApiErrorMsg(c, fmt.Sprintf("渠道 %d 不支持执行分组 %s 下的目标模型 %s", channelId, route.ExecutionGroup, route.TargetModel))
-			return false
+			return fmt.Errorf("渠道 %d 不支持执行分组 %s 下的目标模型 %s", channelId, route.ExecutionGroup, route.TargetModel)
 		}
 	}
-	return true
+	return nil
 }

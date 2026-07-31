@@ -23,6 +23,15 @@ func GetCheckinStatus(c *gin.Context) {
 	// 获取月份参数，默认为当前月份
 	month := c.DefaultQuery("month", time.Now().Format("2006-01"))
 
+	allowed, minQuota, maxQuota, err := model.EffectiveCheckinPolicy(userId)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
+	}
+
 	stats, err := model.GetUserCheckinStats(userId, month)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
@@ -35,9 +44,9 @@ func GetCheckinStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{
-			"enabled":   setting.Enabled,
-			"min_quota": setting.MinQuota,
-			"max_quota": setting.MaxQuota,
+			"enabled":   setting.Enabled && allowed,
+			"min_quota": minQuota,
+			"max_quota": maxQuota,
 			"stats":     stats,
 		},
 	})

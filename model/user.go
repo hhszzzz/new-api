@@ -77,46 +77,54 @@ func resolveUserSortOptions(sortOptions []UserSortOptions) UserSortOptions {
 // User if you add sensitive fields, don't forget to clean them in setupLogin function.
 // Otherwise, the sensitive information will be saved on local storage in plain text!
 type User struct {
-	Id                    int                        `json:"id"`
-	Username              string                     `json:"username" gorm:"unique;index" validate:"max=20"`
-	Password              string                     `json:"password" gorm:"not null;" validate:"min=8,max=20"`
-	OriginalPassword      string                     `json:"original_password" gorm:"-:all"` // this field is only for Password change verification, don't save it to database!
-	DisplayName           string                     `json:"display_name" gorm:"index" validate:"max=20"`
-	Role                  int                        `json:"role" gorm:"type:int;default:1"`   // admin, common
-	Status                int                        `json:"status" gorm:"type:int;default:1"` // enabled, disabled
-	Email                 string                     `json:"email" gorm:"index" validate:"max=50"`
-	GitHubId              string                     `json:"github_id" gorm:"column:github_id;index"`
-	DiscordId             string                     `json:"discord_id" gorm:"column:discord_id;index"`
-	OidcId                string                     `json:"oidc_id" gorm:"column:oidc_id;index"`
-	WeChatId              string                     `json:"wechat_id" gorm:"column:wechat_id;index"`
-	TelegramId            string                     `json:"telegram_id" gorm:"column:telegram_id;index"`
-	VerificationCode      string                     `json:"verification_code" gorm:"-:all"`                         // this field is only for Email verification, don't save it to database!
-	AccessToken           *string                    `json:"-" gorm:"type:char(32);column:access_token;uniqueIndex"` // this token is for system management
-	Quota                 int                        `json:"quota" gorm:"type:int;default:0"`
-	UsedQuota             int                        `json:"used_quota" gorm:"type:int;default:0;column:used_quota"` // used quota
-	RequestCount          int                        `json:"request_count" gorm:"type:int;default:0;"`               // request number
-	Group                 string                     `json:"group" gorm:"type:varchar(64);default:'default'"`
-	TopupGroup            string                     `json:"topup_group" gorm:"type:varchar(64);default:''"`
-	ModelLimitsEnabled    bool                       `json:"model_limits_enabled"`
-	ModelBlocklistEnabled bool                       `json:"model_blocklist_enabled"`
-	PolicyVersion         int64                      `json:"-" gorm:"type:bigint;not null;default:1;column:policy_version"`
-	Groups                []string                   `json:"groups" gorm:"-:all"`
-	ModelLimits           []string                   `json:"model_limits" gorm:"-:all"`
-	ModelBlocklist        []string                   `json:"model_blocklist" gorm:"-:all"`
-	AffCode               string                     `json:"aff_code" gorm:"type:varchar(32);column:aff_code;uniqueIndex"`
-	AffCount              int                        `json:"aff_count" gorm:"type:int;default:0;column:aff_count"`
-	AffQuota              int                        `json:"aff_quota" gorm:"type:int;default:0;column:aff_quota"`           // 邀请剩余额度
-	AffHistoryQuota       int                        `json:"aff_history_quota" gorm:"type:int;default:0;column:aff_history"` // 邀请历史额度
-	InviterId             int                        `json:"inviter_id" gorm:"type:int;column:inviter_id;index"`
-	DeletedAt             gorm.DeletedAt             `gorm:"index"`
-	LinuxDOId             string                     `json:"linux_do_id" gorm:"column:linux_do_id;index"`
-	Setting               string                     `json:"setting" gorm:"type:text;column:setting"`
-	Remark                string                     `json:"remark,omitempty" gorm:"type:varchar(255)" validate:"max=255"`
-	StripeCustomer        string                     `json:"stripe_customer" gorm:"type:varchar(64);column:stripe_customer;index"`
-	CreatedAt             int64                      `json:"created_at" gorm:"autoCreateTime;column:created_at"`
-	LastLoginAt           int64                      `json:"last_login_at" gorm:"default:0;column:last_login_at"`
-	AuthVersion           int64                      `json:"-" gorm:"type:bigint;not null;default:1;column:auth_version"`
-	AdminPermissions      map[string]map[string]bool `json:"admin_permissions,omitempty" gorm:"-:all"`
+	Id                    int     `json:"id"`
+	Username              string  `json:"username" gorm:"unique;index" validate:"max=20"`
+	Password              string  `json:"password" gorm:"not null;" validate:"min=8,max=20"`
+	OriginalPassword      string  `json:"original_password" gorm:"-:all"` // this field is only for Password change verification, don't save it to database!
+	DisplayName           string  `json:"display_name" gorm:"index" validate:"max=20"`
+	Role                  int     `json:"role" gorm:"type:int;default:1"`   // admin, common
+	Status                int     `json:"status" gorm:"type:int;default:1"` // enabled, disabled
+	Email                 string  `json:"email" gorm:"index" validate:"max=50"`
+	GitHubId              string  `json:"github_id" gorm:"column:github_id;index"`
+	DiscordId             string  `json:"discord_id" gorm:"column:discord_id;index"`
+	OidcId                string  `json:"oidc_id" gorm:"column:oidc_id;index"`
+	WeChatId              string  `json:"wechat_id" gorm:"column:wechat_id;index"`
+	TelegramId            string  `json:"telegram_id" gorm:"column:telegram_id;index"`
+	VerificationCode      string  `json:"verification_code" gorm:"-:all"`                         // this field is only for Email verification, don't save it to database!
+	AccessToken           *string `json:"-" gorm:"type:char(32);column:access_token;uniqueIndex"` // this token is for system management
+	Quota                 int     `json:"quota" gorm:"type:int;default:0"`
+	UsedQuota             int     `json:"used_quota" gorm:"type:int;default:0;column:used_quota"` // used quota
+	RequestCount          int     `json:"request_count" gorm:"type:int;default:0;"`               // request number
+	Group                 string  `json:"group" gorm:"type:varchar(64);default:'default'"`
+	TopupGroup            string  `json:"topup_group" gorm:"type:varchar(64);default:''"`
+	ModelLimitsEnabled    bool    `json:"model_limits_enabled"`
+	ModelBlocklistEnabled bool    `json:"model_blocklist_enabled"`
+	// Check-in policy overrides; nil means "follow the global check-in setting".
+	CheckinEnabled  *bool `json:"checkin_enabled" gorm:"column:checkin_enabled"`
+	CheckinMinQuota *int  `json:"checkin_min_quota" gorm:"column:checkin_min_quota"`
+	CheckinMaxQuota *int  `json:"checkin_max_quota" gorm:"column:checkin_max_quota"`
+	// QuotaCap bounds the balance reachable through gift credits (check-in,
+	// redemption codes, invite transfers); nil means unlimited. Paid top-ups
+	// are not subject to the cap.
+	QuotaCap         *int                       `json:"quota_cap" gorm:"column:quota_cap"`
+	PolicyVersion    int64                      `json:"-" gorm:"type:bigint;not null;default:1;column:policy_version"`
+	Groups           []string                   `json:"groups" gorm:"-:all"`
+	ModelLimits      []string                   `json:"model_limits" gorm:"-:all"`
+	ModelBlocklist   []string                   `json:"model_blocklist" gorm:"-:all"`
+	AffCode          string                     `json:"aff_code" gorm:"type:varchar(32);column:aff_code;uniqueIndex"`
+	AffCount         int                        `json:"aff_count" gorm:"type:int;default:0;column:aff_count"`
+	AffQuota         int                        `json:"aff_quota" gorm:"type:int;default:0;column:aff_quota"`           // 邀请剩余额度
+	AffHistoryQuota  int                        `json:"aff_history_quota" gorm:"type:int;default:0;column:aff_history"` // 邀请历史额度
+	InviterId        int                        `json:"inviter_id" gorm:"type:int;column:inviter_id;index"`
+	DeletedAt        gorm.DeletedAt             `gorm:"index"`
+	LinuxDOId        string                     `json:"linux_do_id" gorm:"column:linux_do_id;index"`
+	Setting          string                     `json:"setting" gorm:"type:text;column:setting"`
+	Remark           string                     `json:"remark,omitempty" gorm:"type:varchar(255)" validate:"max=255"`
+	StripeCustomer   string                     `json:"stripe_customer" gorm:"type:varchar(64);column:stripe_customer;index"`
+	CreatedAt        int64                      `json:"created_at" gorm:"autoCreateTime;column:created_at"`
+	LastLoginAt      int64                      `json:"last_login_at" gorm:"default:0;column:last_login_at"`
+	AuthVersion      int64                      `json:"-" gorm:"type:bigint;not null;default:1;column:auth_version"`
+	AdminPermissions map[string]map[string]bool `json:"admin_permissions,omitempty" gorm:"-:all"`
 }
 
 func (user *User) ToBaseUser() *UserBase {
@@ -152,6 +160,27 @@ func (user *User) ToBaseUser() *UserBase {
 		CacheSchema:           userCacheSchemaVersion,
 	}
 	return cache
+}
+
+// giftQuotaHeadroom reports how much gift-type credit (check-in, redemption,
+// invite transfer) still fits under the user's quota cap. capped=false means
+// the user has no cap configured.
+func giftQuotaHeadroom(db *gorm.DB, userId int) (headroom int, capped bool, err error) {
+	var row struct {
+		Quota    int
+		QuotaCap *int
+	}
+	if err := db.Model(&User{}).Select("quota", "quota_cap").Where("id = ?", userId).Take(&row).Error; err != nil {
+		return 0, false, err
+	}
+	if row.QuotaCap == nil {
+		return 0, false, nil
+	}
+	headroom = *row.QuotaCap - row.Quota
+	if headroom < 0 {
+		headroom = 0
+	}
+	return headroom, true, nil
 }
 
 func (user *User) GetAccessToken() string {
@@ -582,6 +611,9 @@ func (user *User) TransferAffQuotaToQuota(quota int) error {
 	// 再次检查用户的AffQuota是否足够
 	if user.AffQuota < quota {
 		return errors.New("邀请额度不足！")
+	}
+	if user.QuotaCap != nil && user.Quota+quota > *user.QuotaCap {
+		return errors.New("转移后将超过账户额度上限")
 	}
 
 	// 更新用户额度

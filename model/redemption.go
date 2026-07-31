@@ -230,9 +230,19 @@ func Redeem(key string, userId int) (quota int, err error) {
 		if result.RowsAffected == 0 {
 			return errors.New("该兑换码已被使用")
 		}
+		headroom, capped, err := giftQuotaHeadroom(tx, userId)
+		if err != nil {
+			return err
+		}
+		if capped && redemption.Quota > headroom {
+			return ErrQuotaCapExceeded
+		}
 		return tx.Model(&User{}).Where("id = ?", userId).Update("quota", gorm.Expr("quota + ?", redemption.Quota)).Error
 	})
 	if err != nil {
+		if errors.Is(err, ErrQuotaCapExceeded) {
+			return 0, err
+		}
 		common.SysError("redemption failed: " + err.Error())
 		return 0, ErrRedeemFailed
 	}

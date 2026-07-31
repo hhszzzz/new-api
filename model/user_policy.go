@@ -55,6 +55,12 @@ type UserPolicyUpdate struct {
 	ModelLimits           []string `json:"model_limits"`
 	ModelBlocklistEnabled bool     `json:"model_blocklist_enabled"`
 	ModelBlocklist        []string `json:"model_blocklist"`
+	// Check-in overrides; nil means "follow the global check-in setting".
+	CheckinEnabled  *bool `json:"checkin_enabled"`
+	CheckinMinQuota *int  `json:"checkin_min_quota"`
+	CheckinMaxQuota *int  `json:"checkin_max_quota"`
+	// QuotaCap bounds gift-credit balance growth; nil means unlimited.
+	QuotaCap *int `json:"quota_cap"`
 }
 
 func (p *UserModelPermission) BeforeCreate(tx *gorm.DB) error {
@@ -544,6 +550,10 @@ func replaceUserPolicyWithTx(tx *gorm.DB, userId int, update UserPolicyUpdate) (
 		"topup_group":             strings.TrimSpace(update.TopupGroup),
 		"model_limits_enabled":    update.ModelLimitsEnabled,
 		"model_blocklist_enabled": update.ModelBlocklistEnabled,
+		"checkin_enabled":         update.CheckinEnabled,
+		"checkin_min_quota":       update.CheckinMinQuota,
+		"checkin_max_quota":       update.CheckinMaxQuota,
+		"quota_cap":               update.QuotaCap,
 	}).Error; err != nil {
 		return 0, err
 	}
@@ -564,6 +574,100 @@ func ReplaceUserPolicy(userId int, update UserPolicyUpdate) error {
 	if err := DB.Transaction(func(tx *gorm.DB) error {
 		var err error
 		policyVersion, err = replaceUserPolicyWithTx(tx, userId, update)
+		if err != nil {
+			return err
+		}
+		if !common.RedisEnabled {
+			return nil
+		}
+		return tx.Select("id", commonKeyCol).Where("user_id = ?", userId).Find(&invalidTokens).Error
+	}); err != nil {
+		return err
+	}
+	if err := publishCommittedUserPolicyVersion(userId, policyVersion); err != nil {
+		return err
+	}
+	if err := invalidateTokensCache(invalidTokens); err != nil {
+		return err
+	}
+	return PublishUserPolicyCache(userId)
+}
+
+// UserPolicyPartialUpdate applies only the requested policy sections; nil list
+// and enabled fields leave the corresponding state untouched, and group
+// memberships are never modified. The Set* flags make writing NULL
+// (follow-global) check-in values expressible.
+type UserPolicyPartialUpdate struct {
+	ModelLimits           *[]string
+	ModelLimitsEnabled    *bool
+	ModelBlocklist        *[]string
+	ModelBlocklistEnabled *bool
+	SetCheckinEnabled     bool
+	CheckinEnabled        *bool
+	SetCheckinQuota       bool
+	CheckinMinQuota       *int
+	CheckinMaxQuota       *int
+	SetQuotaCap           bool
+	QuotaCap              *int
+}
+
+func (p UserPolicyPartialUpdate) Empty() bool {
+	return p.ModelLimits == nil && p.ModelLimitsEnabled == nil &&
+		p.ModelBlocklist == nil && p.ModelBlocklistEnabled == nil &&
+		!p.SetCheckinEnabled && !p.SetCheckinQuota && !p.SetQuotaCap
+}
+
+// UpdateUserPolicyPartial changes the requested policy sections in one
+// transaction, bumps the policy version, and invalidates the same caches as a
+// full policy replace.
+func UpdateUserPolicyPartial(userId int, update UserPolicyPartialUpdate) error {
+	if userId <= 0 {
+		return errors.New("invalid user id")
+	}
+	if update.Empty() {
+		return nil
+	}
+	var invalidTokens []Token
+	var policyVersion int64
+	if err := DB.Transaction(func(tx *gorm.DB) error {
+		var user User
+		if err := lockForUpdate(tx).Select("id").Where("id = ?", userId).First(&user).Error; err != nil {
+			return err
+		}
+		if update.ModelLimits != nil {
+			if err := replaceUserModelPermissionsWithTx(tx, userId, normalizePolicyValues(*update.ModelLimits)); err != nil {
+				return err
+			}
+		}
+		if update.ModelBlocklist != nil {
+			if err := replaceUserModelBlocksWithTx(tx, userId, normalizePolicyValues(*update.ModelBlocklist)); err != nil {
+				return err
+			}
+		}
+		columns := map[string]interface{}{}
+		if update.ModelLimitsEnabled != nil {
+			columns["model_limits_enabled"] = *update.ModelLimitsEnabled
+		}
+		if update.ModelBlocklistEnabled != nil {
+			columns["model_blocklist_enabled"] = *update.ModelBlocklistEnabled
+		}
+		if update.SetCheckinEnabled {
+			columns["checkin_enabled"] = update.CheckinEnabled
+		}
+		if update.SetCheckinQuota {
+			columns["checkin_min_quota"] = update.CheckinMinQuota
+			columns["checkin_max_quota"] = update.CheckinMaxQuota
+		}
+		if update.SetQuotaCap {
+			columns["quota_cap"] = update.QuotaCap
+		}
+		if len(columns) > 0 {
+			if err := tx.Model(&User{}).Where("id = ?", userId).Updates(columns).Error; err != nil {
+				return err
+			}
+		}
+		var err error
+		policyVersion, err = IncrementUserPolicyVersionWithTx(tx, userId)
 		if err != nil {
 			return err
 		}
