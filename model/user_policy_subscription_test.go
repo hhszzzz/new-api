@@ -30,6 +30,7 @@ func setupUserPolicySubscriptionTestDB(t *testing.T) *gorm.DB {
 		&UserModelBlock{},
 		&UserModelRoute{},
 		&UserModelRouteGroup{},
+		&UserModelRouteExecutionGroup{},
 		&UserModelRouteChannel{},
 		&SubscriptionPlan{},
 		&UserSubscription{},

@@ -37,19 +37,10 @@ import { EmptyState } from '@/components/empty-state'
 import { ErrorState } from '@/components/error-state'
 import { JsonCodeEditor } from '@/components/json-code-editor'
 import { MultiSelect } from '@/components/multi-select'
-import { StatusBadge } from '@/components/status-badge'
 import { Button } from '@/components/ui/button'
 import { ComboboxInput } from '@/components/ui/combobox-input'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
@@ -61,6 +52,7 @@ import {
   getUserModelRouteCandidates,
   getUserModelRoutes,
   replaceUserModelRoutes,
+  setUserModelRouteEnabled,
   updateUserModelRoute,
 } from '../../api'
 import type { UserModelRoute } from '../../types'
@@ -78,7 +70,7 @@ type RouteDraft = {
   target_model: string
   pool_name: string
   inject_prompt: string
-  execution_group: string
+  execution_groups: string[]
   all_groups: boolean
   groups: string[]
   channel_ids: string[]
@@ -90,7 +82,7 @@ const EMPTY_DRAFT: RouteDraft = {
   target_model: '',
   pool_name: '',
   inject_prompt: '',
-  execution_group: '',
+  execution_groups: [],
   all_groups: true,
   groups: [],
   channel_ids: [],
@@ -104,13 +96,20 @@ const EMPTY_GROUPS: string[] = []
 // rejects an over-long prompt before the request reaches the server.
 const INJECT_PROMPT_MAX_LENGTH = 8000
 
+function executionGroupsFromRoute(route: UserModelRoute): string[] {
+  if (route.execution_groups && route.execution_groups.length > 0) {
+    return route.execution_groups
+  }
+  return route.execution_group ? [route.execution_group] : []
+}
+
 function draftFromRoute(route: UserModelRoute): RouteDraft {
   return {
     source_model: route.source_model,
     target_model: route.target_model,
     pool_name: route.pool_name,
     inject_prompt: route.inject_prompt || '',
-    execution_group: route.execution_group,
+    execution_groups: executionGroupsFromRoute(route),
     all_groups: route.all_groups,
     groups: route.groups || [],
     channel_ids: (route.channel_ids || []).map(String),
@@ -119,12 +118,14 @@ function draftFromRoute(route: UserModelRoute): RouteDraft {
 }
 
 function routePayload(draft: RouteDraft) {
+  const executionGroups = draft.execution_groups.filter(Boolean)
   return {
     source_model: draft.source_model.trim(),
     target_model: draft.target_model.trim(),
     pool_name: draft.pool_name.trim(),
     inject_prompt: draft.inject_prompt.trim(),
-    execution_group: draft.execution_group,
+    execution_group: executionGroups[0] || '',
+    execution_groups: executionGroups,
     all_groups: draft.all_groups,
     groups: draft.all_groups ? [] : draft.groups,
     channel_ids: draft.channel_ids.map(Number).filter((id) => id > 0),
@@ -142,6 +143,7 @@ export function UserModelRoutesDialog(props: UserModelRoutesDialogProps) {
   const [editorMode, setEditorMode] = useState<'form' | 'json'>('form')
   const [jsonDraft, setJsonDraft] = useState('')
   const [jsonSaving, setJsonSaving] = useState(false)
+  const [togglingRouteId, setTogglingRouteId] = useState<number | null>(null)
 
   const routesQuery = useQuery({
     queryKey: ['user-model-routes', props.userId],
@@ -161,25 +163,25 @@ export function UserModelRoutesDialog(props: UserModelRoutesDialogProps) {
       'user-model-route-candidate-channels',
       props.userId,
       debouncedTargetModel,
-      draft.execution_group,
+      draft.execution_groups,
     ],
     queryFn: () =>
       getUserModelRouteCandidates(props.userId as number, {
         target_model: debouncedTargetModel,
-        execution_group: draft.execution_group,
+        execution_groups: draft.execution_groups.join(','),
       }),
     enabled:
       props.open &&
       props.userId !== null &&
       debouncedTargetModel.length > 0 &&
-      draft.execution_group.length > 0,
+      draft.execution_groups.length > 0,
     staleTime: 30 * 1000,
   })
   const targetModel = draft.target_model.trim()
   const targetQuerySettled =
     targetModel.length > 0 && debouncedTargetModel === targetModel
   const channelQueryReady =
-    targetQuerySettled && draft.execution_group.trim().length > 0
+    targetQuerySettled && draft.execution_groups.length > 0
   const channelData =
     channelQueryReady && channelsQuery.data?.success === true
       ? channelsQuery.data.data
@@ -226,17 +228,17 @@ export function UserModelRoutesDialog(props: UserModelRoutesDialogProps) {
       executionGroups.map((group) => {
         const channelCount = executionGroupCounts[group] ?? 0
         const channelCountsLoaded = channelData !== undefined
-        const disabled = channelCountsLoaded && channelCount === 0
         let label = group
         if (channelCountsLoaded) {
           const countLabel = t('{{count}} channels', { count: channelCount })
-          label = disabled
-            ? `${group} (${countLabel} · ${t(
-                'No enabled channels for this model in this group'
-              )})`
-            : `${group} (${countLabel})`
+          label =
+            channelCount === 0
+              ? `${group} (${countLabel} · ${t(
+                  'No enabled channels for this model in this group'
+                )})`
+              : `${group} (${countLabel})`
         }
-        return { value: group, label, disabled }
+        return { value: group, label }
       }),
     [channelData, executionGroupCounts, executionGroups, t]
   )
@@ -288,7 +290,9 @@ export function UserModelRoutesDialog(props: UserModelRoutesDialogProps) {
           channel.name || `#${channel.id}`
         } (#${channel.id}) · ${t('Priority')} ${channel.priority ?? 0} · ${t(
           'Weight'
-        )} ${channel.weight} · ${compatibilitySummary(channel)}`,
+        )} ${channel.weight} · ${t('Execution groups')}: ${(
+          channel.execution_groups ?? []
+        ).join(', ')} · ${compatibilitySummary(channel)}`,
       })),
       ...[...selectedIds]
         .filter((id) => !channels.some((channel) => String(channel.id) === id))
@@ -309,7 +313,7 @@ export function UserModelRoutesDialog(props: UserModelRoutesDialogProps) {
   const draftComplete =
     draft.source_model.trim().length > 0 &&
     draft.target_model.trim().length > 0 &&
-    draft.execution_group.trim().length > 0 &&
+    draft.execution_groups.length > 0 &&
     (draft.all_groups || draft.groups.length > 0) &&
     draft.channel_ids.length > 0
   const canSave =
@@ -349,38 +353,41 @@ export function UserModelRoutesDialog(props: UserModelRoutesDialogProps) {
   }, [props.open, props.userId])
 
   useEffect(() => {
-    if (!draft.execution_group && executionGroups.length > 0) {
+    if (draft.execution_groups.length === 0 && executionGroups.length > 0) {
       setDraft((current) => ({
         ...current,
-        execution_group: executionGroups[0],
+        execution_groups: [executionGroups[0]],
       }))
     }
-  }, [draft.execution_group, executionGroups])
+  }, [draft.execution_groups.length, executionGroups])
 
   useEffect(() => {
     if (!channelData || channelsQuery.isFetching) return
 
     const queryTarget = debouncedTargetModel
-    const queryGroup = draft.execution_group
+    const queryGroups = draft.execution_groups.join(',')
     const recommendedGroup = channelData.recommended_execution_group || ''
-    const currentGroupCount =
-      channelData.execution_group_channel_counts?.[queryGroup] ?? 0
+    const selectedChannelCount = draft.execution_groups.reduce(
+      (count, group) =>
+        count + (channelData.execution_group_channel_counts?.[group] ?? 0),
+      0
+    )
     if (
       editingId === null &&
       recommendedGroup &&
-      currentGroupCount === 0 &&
-      recommendedGroup !== queryGroup
+      selectedChannelCount === 0 &&
+      !draft.execution_groups.includes(recommendedGroup)
     ) {
       setDraft((current) => {
         if (
           current.target_model.trim() !== queryTarget ||
-          current.execution_group !== queryGroup
+          current.execution_groups.join(',') !== queryGroups
         ) {
           return current
         }
         return {
           ...current,
-          execution_group: recommendedGroup,
+          execution_groups: [recommendedGroup],
           channel_ids: [],
         }
       })
@@ -393,7 +400,7 @@ export function UserModelRoutesDialog(props: UserModelRoutesDialogProps) {
     setDraft((current) => {
       if (
         current.target_model.trim() !== queryTarget ||
-        current.execution_group !== queryGroup
+        current.execution_groups.join(',') !== queryGroups
       ) {
         return current
       }
@@ -406,7 +413,7 @@ export function UserModelRoutesDialog(props: UserModelRoutesDialogProps) {
     channelData,
     channelsQuery.isFetching,
     debouncedTargetModel,
-    draft.execution_group,
+    draft.execution_groups,
     editingId,
   ])
 
@@ -430,7 +437,7 @@ export function UserModelRoutesDialog(props: UserModelRoutesDialogProps) {
   const resetDraft = () => {
     setDraft({
       ...EMPTY_DRAFT,
-      execution_group: executionGroups[0] || '',
+      execution_groups: executionGroups[0] ? [executionGroups[0]] : [],
     })
     setEditingId(null)
   }
@@ -442,8 +449,8 @@ export function UserModelRoutesDialog(props: UserModelRoutesDialogProps) {
       toast.error(t('Source and target models are required'))
       return
     }
-    if (!payload.execution_group) {
-      toast.error(t('Select an execution group'))
+    if (payload.execution_groups.length === 0) {
+      toast.error(t('Select at least one execution group'))
       return
     }
     if (!payload.all_groups && payload.groups.length === 0) {
@@ -498,6 +505,32 @@ export function UserModelRoutesDialog(props: UserModelRoutesDialogProps) {
     }
   }
 
+  const handleRouteEnabledChange = async (
+    route: UserModelRoute,
+    enabled: boolean
+  ) => {
+    if (!props.userId || route.enabled === enabled) return
+    setTogglingRouteId(route.id)
+    try {
+      const result = await setUserModelRouteEnabled(
+        props.userId,
+        route.id,
+        enabled
+      )
+      if (!result.success) {
+        toast.error(result.message || t('Failed to save model route'))
+        return
+      }
+      toast.success(t('Model route updated'))
+      await routesQuery.refetch()
+      props.onSuccess?.()
+    } catch {
+      toast.error(t('Operation failed'))
+    } finally {
+      setTogglingRouteId(null)
+    }
+  }
+
   const handleClose = (open: boolean) => {
     if (!open && !saving && !deleting) {
       resetDraft()
@@ -515,6 +548,7 @@ export function UserModelRoutesDialog(props: UserModelRoutesDialogProps) {
         pool_name: route.pool_name,
         inject_prompt: route.inject_prompt || '',
         execution_group: route.execution_group,
+        execution_groups: executionGroupsFromRoute(route),
         all_groups: route.all_groups,
         groups: route.groups || [],
         channel_ids: route.channel_ids || [],
@@ -609,7 +643,8 @@ export function UserModelRoutesDialog(props: UserModelRoutesDialogProps) {
               </div>
               <div className='text-muted-foreground flex flex-wrap items-center gap-x-3 gap-y-1 text-xs'>
                 <span>
-                  {t('Execution group')}: {route.execution_group}
+                  {t('Execution groups')}:{' '}
+                  {executionGroupsFromRoute(route).join(', ')}
                 </span>
                 <span>
                   {t('Channel pool name')}: {route.pool_name}
@@ -629,11 +664,23 @@ export function UserModelRoutesDialog(props: UserModelRoutesDialogProps) {
               </div>
             </div>
             <div className='flex items-center gap-2 self-end sm:self-auto'>
-              <StatusBadge
-                label={route.enabled ? t('Enabled') : t('Disabled')}
-                variant={route.enabled ? 'success' : 'neutral'}
-                copyable={false}
-              />
+              <div className='flex items-center gap-2'>
+                <Label
+                  htmlFor={`route-enabled-${route.id}`}
+                  className='text-muted-foreground text-xs'
+                >
+                  {route.enabled ? t('Enabled') : t('Disabled')}
+                </Label>
+                <Switch
+                  id={`route-enabled-${route.id}`}
+                  checked={route.enabled}
+                  disabled={togglingRouteId === route.id}
+                  onCheckedChange={(enabled) =>
+                    void handleRouteEnabledChange(route, enabled)
+                  }
+                  aria-label={`${t('Enabled')}: ${route.source_model} -> ${route.target_model}`}
+                />
+              </div>
               <Button
                 variant='ghost'
                 size='icon-sm'
@@ -730,7 +777,7 @@ export function UserModelRoutesDialog(props: UserModelRoutesDialogProps) {
               />
               <p className='text-muted-foreground text-xs'>
                 {t(
-                  'Saving replaces the whole route set with this JSON array. Fields: source_model, target_model, execution_group, all_groups, groups, channel_ids, inject_prompt, pool_name, enabled.'
+                  'Saving replaces the whole route set with this JSON array. Fields: source_model, target_model, execution_groups, all_groups, groups, channel_ids, inject_prompt, pool_name, enabled.'
                 )}
               </p>
             </div>
@@ -880,64 +927,28 @@ export function UserModelRoutesDialog(props: UserModelRoutesDialogProps) {
                       </p>
                     </div>
 
-                    <div className='grid gap-4 sm:grid-cols-2'>
-                      <div className='space-y-2'>
-                        <Label htmlFor='route-execution-group'>
-                          {t('Execution group')}
-                        </Label>
-                        <Select
-                          items={executionGroupOptions}
-                          value={draft.execution_group || null}
-                          onValueChange={(value) =>
-                            value !== null &&
-                            setDraft((current) => ({
-                              ...current,
-                              execution_group: value,
-                              channel_ids:
-                                current.execution_group === value
-                                  ? current.channel_ids
-                                  : [],
-                            }))
-                          }
-                        >
-                          <SelectTrigger id='route-execution-group'>
-                            <SelectValue
-                              placeholder={t('Select execution group')}
-                            />
-                          </SelectTrigger>
-                          <SelectContent alignItemWithTrigger={false}>
-                            <SelectGroup>
-                              {executionGroupOptions.map((group) => (
-                                <SelectItem
-                                  key={group.value}
-                                  value={group.value}
-                                  disabled={group.disabled}
-                                >
-                                  {group.label}
-                                </SelectItem>
-                              ))}
-                            </SelectGroup>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className='flex items-center justify-between gap-3 rounded-md border px-3 py-2'>
-                        <div className='space-y-1'>
-                          <Label htmlFor='route-enabled'>{t('Enabled')}</Label>
-                          <p className='text-muted-foreground text-xs'>
-                            {t(
-                              'Disabled routes are ignored during model selection'
-                            )}
-                          </p>
-                        </div>
-                        <Switch
-                          id='route-enabled'
-                          checked={draft.enabled}
-                          onCheckedChange={(enabled) =>
-                            setDraft((current) => ({ ...current, enabled }))
-                          }
-                          aria-label={t('Enabled')}
-                        />
-                      </div>
+                    <div className='space-y-2'>
+                      <Label htmlFor='route-execution-groups'>
+                        {t('Execution groups')}
+                      </Label>
+                      <MultiSelect
+                        id='route-execution-groups'
+                        options={executionGroupOptions}
+                        selected={draft.execution_groups}
+                        onChange={(executionGroupsValue) =>
+                          setDraft((current) => ({
+                            ...current,
+                            execution_groups: executionGroupsValue,
+                          }))
+                        }
+                        placeholder={t('Select execution groups')}
+                        maxVisibleChips={5}
+                      />
+                      <p className='text-muted-foreground text-xs'>
+                        {t(
+                          'Channels can be selected across the chosen execution groups'
+                        )}
+                      </p>
                     </div>
 
                     <div className='flex items-center justify-between gap-3 rounded-md border px-3 py-2'>

@@ -26,13 +26,6 @@ import { MultiSelect } from '@/components/multi-select'
 import { Button } from '@/components/ui/button'
 import { ComboboxInput } from '@/components/ui/combobox-input'
 import { Label } from '@/components/ui/label'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { useDebounce } from '@/hooks'
@@ -54,7 +47,9 @@ export function UserBatchRouteDialog(props: UserBatchRouteDialogProps) {
   const { t } = useTranslation()
   const [sourceModel, setSourceModel] = useState('')
   const [targetModel, setTargetModel] = useState('')
-  const [executionGroup, setExecutionGroup] = useState('')
+  const [selectedExecutionGroups, setSelectedExecutionGroups] = useState<
+    string[]
+  >([])
   const [allGroups, setAllGroups] = useState(true)
   const [groups, setGroups] = useState<string[]>([])
   const [channelIds, setChannelIds] = useState<string[]>([])
@@ -80,18 +75,18 @@ export function UserBatchRouteDialog(props: UserBatchRouteDialogProps) {
       'user-model-route-candidate-channels',
       anchorUserId,
       debouncedTargetModel,
-      executionGroup,
+      selectedExecutionGroups,
     ],
     queryFn: () =>
       getUserModelRouteCandidates(anchorUserId as number, {
         target_model: debouncedTargetModel,
-        execution_group: executionGroup,
+        execution_groups: selectedExecutionGroups.join(','),
       }),
     enabled:
       props.open &&
       anchorUserId !== null &&
       debouncedTargetModel.length > 0 &&
-      executionGroup.length > 0,
+      selectedExecutionGroups.length > 0,
     staleTime: 30 * 1000,
   })
 
@@ -102,15 +97,18 @@ export function UserBatchRouteDialog(props: UserBatchRouteDialogProps) {
   const channelData =
     channelsQuery.data?.success === true ? channelsQuery.data.data : undefined
 
-  const executionGroups = useMemo(
+  const availableExecutionGroups = useMemo(
     () => candidateData?.execution_groups ?? [],
     [candidateData?.execution_groups]
   )
   useEffect(() => {
-    if (!executionGroup && executionGroups.length > 0) {
-      setExecutionGroup(executionGroups[0])
+    if (
+      selectedExecutionGroups.length === 0 &&
+      availableExecutionGroups.length > 0
+    ) {
+      setSelectedExecutionGroups([availableExecutionGroups[0]])
     }
-  }, [executionGroup, executionGroups])
+  }, [availableExecutionGroups, selectedExecutionGroups.length])
 
   const sourceModelOptions = useMemo(
     () =>
@@ -136,19 +134,26 @@ export function UserBatchRouteDialog(props: UserBatchRouteDialogProps) {
       })),
     [candidateData?.applicable_groups]
   )
+  const executionGroupOptions = useMemo(
+    () =>
+      availableExecutionGroups.map((group) => ({ value: group, label: group })),
+    [availableExecutionGroups]
+  )
   const channelOptions = useMemo(
     () =>
       (channelData?.channels ?? []).map((channel) => ({
         value: String(channel.id),
-        label: `${channel.name || `#${channel.id}`} (#${channel.id})`,
+        label: `${channel.name || `#${channel.id}`} (#${channel.id}) · ${t(
+          'Execution groups'
+        )}: ${(channel.execution_groups ?? []).join(', ')}`,
       })),
-    [channelData?.channels]
+    [channelData?.channels, t]
   )
 
   const resetState = () => {
     setSourceModel('')
     setTargetModel('')
-    setExecutionGroup('')
+    setSelectedExecutionGroups([])
     setAllGroups(true)
     setGroups([])
     setChannelIds([])
@@ -167,8 +172,8 @@ export function UserBatchRouteDialog(props: UserBatchRouteDialogProps) {
       toast.error(t('Source and target models are required'))
       return
     }
-    if (!executionGroup) {
-      toast.error(t('Select an execution group'))
+    if (selectedExecutionGroups.length === 0) {
+      toast.error(t('Select at least one execution group'))
       return
     }
     if (!allGroups && groups.length === 0) {
@@ -190,7 +195,8 @@ export function UserBatchRouteDialog(props: UserBatchRouteDialogProps) {
         target_model: targetModel.trim(),
         pool_name: '',
         inject_prompt: injectPrompt.trim(),
-        execution_group: executionGroup,
+        execution_group: selectedExecutionGroups[0],
+        execution_groups: selectedExecutionGroups,
         all_groups: allGroups,
         groups: allGroups ? [] : groups,
         channel_ids: channelIds.map(Number).filter((id) => id > 0),
@@ -268,22 +274,17 @@ export function UserBatchRouteDialog(props: UserBatchRouteDialogProps) {
         </div>
 
         <div className='space-y-1'>
-          <Label>{t('Execution group')}</Label>
-          <Select
-            value={executionGroup}
-            onValueChange={(value) => setExecutionGroup(value ?? '')}
-          >
-            <SelectTrigger className='w-full'>
-              <SelectValue placeholder={t('Select an execution group')} />
-            </SelectTrigger>
-            <SelectContent>
-              {executionGroups.map((group) => (
-                <SelectItem key={group} value={group}>
-                  {group}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <Label htmlFor='batch-route-execution-groups'>
+            {t('Execution groups')}
+          </Label>
+          <MultiSelect
+            id='batch-route-execution-groups'
+            options={executionGroupOptions}
+            selected={selectedExecutionGroups}
+            onChange={setSelectedExecutionGroups}
+            placeholder={t('Select execution groups')}
+            maxVisibleChips={5}
+          />
         </div>
 
         <div className='flex items-center justify-between gap-3'>
@@ -315,9 +316,9 @@ export function UserBatchRouteDialog(props: UserBatchRouteDialogProps) {
             selected={channelIds}
             onChange={setChannelIds}
             placeholder={
-              debouncedTargetModel && executionGroup
+              debouncedTargetModel && selectedExecutionGroups.length > 0
                 ? t('Select at least one channel')
-                : t('Pick a target model and execution group first')
+                : t('Pick a target model and execution groups first')
             }
             maxVisibleChips={5}
           />

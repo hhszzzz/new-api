@@ -116,6 +116,31 @@ func TestAutoGroupSelectionReportsOnlyIncompatibleCandidatesAfterCheckingAllGrou
 	require.ErrorIs(t, err, model.ErrNoCompatibleChannel)
 }
 
+func TestExplicitAllowedGroupsSelectAcrossRouteGroupsWithoutGlobalAutoGroups(t *testing.T) {
+	setupAutoGroupSelectionTest(t)
+	createAutoGroupSelectionChannel(t, 341, "default", "routed-model")
+	createAutoGroupSelectionChannel(t, 342, "vip", "routed-model")
+	model.InitChannelCache()
+	require.NoError(t, setting.UpdateAutoGroupsByJsonString(`[]`))
+
+	context := autoGroupSelectionContext()
+	common.SetContextKey(context, constant.ContextKeyUserModelRouteId, 9)
+	selected, group, err := CacheGetRandomSatisfiedChannel(&RetryParam{
+		Ctx:           context,
+		TokenGroup:    "auto",
+		ModelName:     "routed-model",
+		AllowedGroups: []string{"vip"},
+		Retry:         common.GetPointer(0),
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, selected)
+	assert.Equal(t, 342, selected.Id)
+	assert.Equal(t, "vip", group)
+	assert.Equal(t, "vip", common.GetContextKeyString(context, constant.ContextKeyAutoGroup))
+	assert.Equal(t, "vip", common.GetContextKeyString(context, constant.ContextKeyUserModelRouteGroup))
+}
+
 func setupAutoGroupSelectionTest(t *testing.T) {
 	t.Helper()
 	previousDB := model.DB

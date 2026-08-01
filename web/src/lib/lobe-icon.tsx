@@ -104,6 +104,7 @@ import NewAPIMono from '@lobehub/icons/es/NewAPI/components/Mono.js'
 import * as NewAPIStyle from '@lobehub/icons/es/NewAPI/style.js'
 import OllamaMono from '@lobehub/icons/es/Ollama/components/Mono.js'
 import * as OllamaStyle from '@lobehub/icons/es/Ollama/style.js'
+import OpenAIColor from '@lobehub/icons/es/OpenAI/components/Color.js'
 import OpenAIMono from '@lobehub/icons/es/OpenAI/components/Mono.js'
 import * as OpenAIStyle from '@lobehub/icons/es/OpenAI/style.js'
 import OpenRouterColor from '@lobehub/icons/es/OpenRouter/components/Color.js'
@@ -213,7 +214,7 @@ const COMMON_LOBE_ICONS: Record<string, CommonLobeIcon> = {
   Moonshot: { Mono: MoonshotMono, style: MoonshotStyle },
   NewAPI: { Color: NewAPIColor, Mono: NewAPIMono, style: NewAPIStyle },
   Ollama: { Mono: OllamaMono, style: OllamaStyle },
-  OpenAI: { Mono: OpenAIMono, style: OpenAIStyle },
+  OpenAI: { Color: OpenAIColor, Mono: OpenAIMono, style: OpenAIStyle },
   OpenRouter: {
     Color: OpenRouterColor,
     Mono: OpenRouterMono,

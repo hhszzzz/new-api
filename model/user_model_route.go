@@ -29,14 +29,18 @@ type UserModelRoute struct {
 	// InjectPrompt is prepended ahead of both the client system prompt and the
 	// channel system prompt when the route is used, so a routed request can
 	// state the identity the client asked for.
-	InjectPrompt   string   `json:"inject_prompt" gorm:"type:text"`
-	AllGroups      bool     `json:"all_groups"`
-	ExecutionGroup string   `json:"execution_group" gorm:"type:varchar(64);not null"`
-	Enabled        bool     `json:"enabled" gorm:"index:idx_user_model_route_lookup,priority:3"`
-	CreatedAt      int64    `json:"created_at" gorm:"bigint"`
-	UpdatedAt      int64    `json:"updated_at" gorm:"bigint"`
-	Groups         []string `json:"groups" gorm:"-:all"`
-	ChannelIds     []int    `json:"channel_ids" gorm:"-:all"`
+	InjectPrompt string `json:"inject_prompt" gorm:"type:text"`
+	AllGroups    bool   `json:"all_groups"`
+	// ExecutionGroup remains the first configured execution group for backward
+	// compatibility with older clients and persisted rows. New callers should use
+	// ExecutionGroups, which is hydrated from the ordered child table below.
+	ExecutionGroup  string   `json:"execution_group" gorm:"type:varchar(64);not null"`
+	Enabled         bool     `json:"enabled" gorm:"index:idx_user_model_route_lookup,priority:3"`
+	CreatedAt       int64    `json:"created_at" gorm:"bigint"`
+	UpdatedAt       int64    `json:"updated_at" gorm:"bigint"`
+	Groups          []string `json:"groups" gorm:"-:all"`
+	ExecutionGroups []string `json:"execution_groups" gorm:"-:all"`
+	ChannelIds      []int    `json:"channel_ids" gorm:"-:all"`
 }
 
 type UserModelRouteGroup struct {
@@ -51,12 +55,20 @@ type UserModelRouteChannel struct {
 	ChannelId int `json:"channel_id" gorm:"not null;uniqueIndex:idx_user_model_route_channel,priority:2;index"`
 }
 
+type UserModelRouteExecutionGroup struct {
+	Id        int    `json:"id"`
+	RouteId   int    `json:"route_id" gorm:"not null;uniqueIndex:idx_user_model_route_execution_group,priority:1;index"`
+	GroupName string `json:"group_name" gorm:"type:varchar(64);not null;uniqueIndex:idx_user_model_route_execution_group,priority:2;index"`
+	Position  int    `json:"position" gorm:"not null"`
+}
+
 type UserModelRouteCandidateChannel struct {
 	Id                    int               `json:"id"`
 	Name                  string            `json:"name"`
 	Type                  int               `json:"type"`
 	Priority              *int64            `json:"priority"`
 	Weight                uint              `json:"weight"`
+	ExecutionGroups       []string          `json:"execution_groups" gorm:"-"`
 	AggregateId           *int              `json:"aggregate_id,omitempty"`
 	AggregateName         string            `json:"aggregate_name,omitempty"`
 	ProtocolCompatibility map[string]string `json:"protocol_compatibility" gorm:"-"`
@@ -105,6 +117,7 @@ func hydrateUserModelRoutesWithTx(tx *gorm.DB, routes []*UserModelRoute) error {
 			continue
 		}
 		route.Groups = []string{}
+		route.ExecutionGroups = []string{}
 		route.ChannelIds = []int{}
 		routeById[route.Id] = route
 		ids = append(ids, route.Id)
@@ -122,6 +135,26 @@ func hydrateUserModelRoutesWithTx(tx *gorm.DB, routes []*UserModelRoute) error {
 	for _, group := range groups {
 		if route := routeById[group.RouteId]; route != nil {
 			route.Groups = append(route.Groups, group.GroupName)
+		}
+	}
+	var executionGroups []UserModelRouteExecutionGroup
+	if err := tx.Where("route_id IN ?", ids).Order("route_id asc, position asc, id asc").Find(&executionGroups).Error; err != nil {
+		if !policyTableMissing(err) {
+			return err
+		}
+	} else {
+		for _, group := range executionGroups {
+			if route := routeById[group.RouteId]; route != nil {
+				route.ExecutionGroups = append(route.ExecutionGroups, group.GroupName)
+			}
+		}
+	}
+	for _, route := range routes {
+		if route == nil || len(route.ExecutionGroups) > 0 {
+			continue
+		}
+		if legacyGroup := strings.TrimSpace(route.ExecutionGroup); legacyGroup != "" {
+			route.ExecutionGroups = []string{legacyGroup}
 		}
 	}
 	var channels []UserModelRouteChannel
@@ -154,6 +187,56 @@ func GetUserModelRoutes(userId int) ([]*UserModelRoute, error) {
 		return nil, err
 	}
 	return routes, nil
+}
+
+func GetUserModelRoute(userId int, routeId int) (*UserModelRoute, error) {
+	if userId <= 0 || routeId <= 0 {
+		return nil, errors.New("invalid user model route")
+	}
+	route := &UserModelRoute{}
+	if err := DB.Where("id = ? AND user_id = ?", routeId, userId).First(route).Error; err != nil {
+		return nil, err
+	}
+	if err := hydrateUserModelRoutesWithTx(DB, []*UserModelRoute{route}); err != nil {
+		return nil, err
+	}
+	return route, nil
+}
+
+// SetUserModelRouteEnabled changes only the route's runtime status. Keeping
+// this separate from SaveUserModelRoute lets administrators disable a stale
+// route even when its former channel or execution group is no longer valid.
+func SetUserModelRouteEnabled(userId int, routeId int, enabled bool) (*UserModelRoute, error) {
+	if userId <= 0 || routeId <= 0 {
+		return nil, errors.New("invalid user model route")
+	}
+	var route *UserModelRoute
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var user User
+		if err := lockForUpdate(tx).Select("id").Where("id = ?", userId).First(&user).Error; err != nil {
+			return err
+		}
+		stored := &UserModelRoute{}
+		if err := lockForUpdate(tx).Where("id = ? AND user_id = ?", routeId, userId).First(stored).Error; err != nil {
+			return err
+		}
+		stored.Enabled = enabled
+		stored.UpdatedAt = common.GetTimestamp()
+		if err := tx.Model(&UserModelRoute{}).
+			Where("id = ? AND user_id = ?", routeId, userId).
+			Updates(map[string]interface{}{
+				"enabled":    stored.Enabled,
+				"updated_at": stored.UpdatedAt,
+			}).Error; err != nil {
+			return err
+		}
+		if err := hydrateUserModelRoutesWithTx(tx, []*UserModelRoute{stored}); err != nil {
+			return err
+		}
+		route = stored
+		return nil
+	})
+	return route, err
 }
 
 func GetApplicableUserModelRoute(userId int, sourceModel string, group string) (*UserModelRoute, error) {
@@ -307,6 +390,36 @@ func GetUserModelRouteCandidateChannels(group, modelName string) ([]UserModelRou
 	return channels, nil
 }
 
+// GetUserModelRouteCandidateChannelsForGroups returns the union of channels
+// that can serve the target model in any configured execution group. A channel
+// keeps the first group's priority/weight metadata because execution-group order
+// is also the route's cross-group preference order.
+func GetUserModelRouteCandidateChannelsForGroups(groups []string, modelName string) ([]UserModelRouteCandidateChannel, error) {
+	groups = normalizeOrderedPolicyValues(groups)
+	if len(groups) == 0 || !IsConcreteUserModelRouteTarget(modelName) {
+		return []UserModelRouteCandidateChannel{}, nil
+	}
+
+	channels := make([]UserModelRouteCandidateChannel, 0)
+	channelIndexes := make(map[int]int)
+	for _, group := range groups {
+		groupChannels, err := GetUserModelRouteCandidateChannels(group, modelName)
+		if err != nil {
+			return nil, err
+		}
+		for _, candidate := range groupChannels {
+			if index, exists := channelIndexes[candidate.Id]; exists {
+				channels[index].ExecutionGroups = append(channels[index].ExecutionGroups, group)
+				continue
+			}
+			candidate.ExecutionGroups = []string{group}
+			channelIndexes[candidate.Id] = len(channels)
+			channels = append(channels, candidate)
+		}
+	}
+	return channels, nil
+}
+
 func GetUserModelRouteExecutionGroupChannelCounts(modelName string) (map[string]int64, error) {
 	modelName = strings.TrimSpace(modelName)
 	counts := make(map[string]int64)
@@ -367,6 +480,24 @@ func SaveUserModelRoute(route *UserModelRoute) error {
 	})
 }
 
+// NormalizeUserModelRouteExecutionGroups keeps the ordered multi-group field
+// authoritative while preserving the legacy singular field for compatibility.
+func NormalizeUserModelRouteExecutionGroups(route *UserModelRoute) {
+	if route == nil {
+		return
+	}
+	legacyGroup := strings.TrimSpace(route.ExecutionGroup)
+	route.ExecutionGroups = normalizeOrderedPolicyValues(route.ExecutionGroups)
+	if len(route.ExecutionGroups) == 0 && legacyGroup != "" {
+		route.ExecutionGroups = []string{legacyGroup}
+	}
+	if len(route.ExecutionGroups) == 0 {
+		route.ExecutionGroup = ""
+		return
+	}
+	route.ExecutionGroup = route.ExecutionGroups[0]
+}
+
 // ReplaceUserModelRoutes swaps the user's complete route set in one
 // transaction: every existing route is removed and the payload is written
 // through the same per-route validation and conflict checks as single saves,
@@ -398,6 +529,9 @@ func ReplaceUserModelRoutes(userId int, routes []*UserModelRoute) error {
 			if err := tx.Where("route_id IN ?", routeIds).Delete(&UserModelRouteGroup{}).Error; err != nil {
 				return err
 			}
+			if err := tx.Where("route_id IN ?", routeIds).Delete(&UserModelRouteExecutionGroup{}).Error; err != nil {
+				return err
+			}
 			if err := tx.Where("route_id IN ?", routeIds).Delete(&UserModelRouteChannel{}).Error; err != nil {
 				return err
 			}
@@ -424,11 +558,11 @@ func normalizeUserModelRouteForSave(route *UserModelRoute) error {
 	if route.PoolName == "" {
 		route.PoolName = route.SourceModel + " → " + route.TargetModel
 	}
-	route.ExecutionGroup = strings.TrimSpace(route.ExecutionGroup)
+	NormalizeUserModelRouteExecutionGroups(route)
 	route.InjectPrompt = strings.TrimSpace(route.InjectPrompt)
 	route.Groups = normalizePolicyValues(route.Groups)
 	route.ChannelIds = normalizeRouteChannelIds(route.ChannelIds)
-	if route.SourceModel == "" || route.TargetModel == "" || route.ExecutionGroup == "" || len(route.ChannelIds) == 0 {
+	if route.SourceModel == "" || route.TargetModel == "" || len(route.ExecutionGroups) == 0 || len(route.ChannelIds) == 0 {
 		return errors.New("incomplete user model route")
 	}
 	if !IsConcreteUserModelRouteTarget(route.TargetModel) {
@@ -457,7 +591,7 @@ func saveUserModelRouteWithTx(tx *gorm.DB, route *UserModelRoute) error {
 	conflictQuery := tx.Model(&UserModelRoute{}).
 		Where("user_id = ? AND source_model = ?", route.UserId, route.SourceModel)
 	if route.Id > 0 {
-		conflictQuery = conflictQuery.Where("id <> ?", route.Id)
+		conflictQuery = conflictQuery.Where("user_model_routes.id <> ?", route.Id)
 	}
 	var conflictCount int64
 	if route.AllGroups {
@@ -503,6 +637,9 @@ func saveUserModelRouteWithTx(tx *gorm.DB, route *UserModelRoute) error {
 	if err := tx.Where("route_id = ?", route.Id).Delete(&UserModelRouteGroup{}).Error; err != nil {
 		return err
 	}
+	if err := tx.Where("route_id = ?", route.Id).Delete(&UserModelRouteExecutionGroup{}).Error; err != nil {
+		return err
+	}
 	if err := tx.Where("route_id = ?", route.Id).Delete(&UserModelRouteChannel{}).Error; err != nil {
 		return err
 	}
@@ -514,6 +651,17 @@ func saveUserModelRouteWithTx(tx *gorm.DB, route *UserModelRoute) error {
 		if err := tx.Create(&groups).Error; err != nil {
 			return err
 		}
+	}
+	executionGroups := make([]UserModelRouteExecutionGroup, 0, len(route.ExecutionGroups))
+	for position, group := range route.ExecutionGroups {
+		executionGroups = append(executionGroups, UserModelRouteExecutionGroup{
+			RouteId:   route.Id,
+			GroupName: group,
+			Position:  position,
+		})
+	}
+	if err := tx.Create(&executionGroups).Error; err != nil {
+		return err
 	}
 	channels := make([]UserModelRouteChannel, 0, len(route.ChannelIds))
 	for _, channelId := range route.ChannelIds {
@@ -536,6 +684,9 @@ func DeleteUserModelRoute(userId int, routeId int) error {
 			return err
 		}
 		if err := tx.Where("route_id = ?", routeId).Delete(&UserModelRouteGroup{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("route_id = ?", routeId).Delete(&UserModelRouteExecutionGroup{}).Error; err != nil {
 			return err
 		}
 		if err := tx.Where("route_id = ?", routeId).Delete(&UserModelRouteChannel{}).Error; err != nil {

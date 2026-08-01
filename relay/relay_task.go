@@ -92,6 +92,7 @@ func ResolveOriginTask(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskErr
 			common.SetContextKey(c, constant.ContextKeyUserModelRouteId, info.UserModelRouteId)
 			common.SetContextKey(c, constant.ContextKeyUserModelRouteTarget, targetModel)
 			common.SetContextKey(c, constant.ContextKeyUserModelRouteGroup, executionGroup)
+			common.SetContextKey(c, constant.ContextKeyUserModelRouteGroups, []string{executionGroup})
 			common.SetContextKey(c, constant.ContextKeyUserModelRouteChannel, []int{originTask.ChannelId})
 			if common.GetContextKeyString(c, constant.ContextKeyUsingGroup) == "auto" {
 				common.SetContextKey(c, constant.ContextKeyAutoGroup, executionGroup)
@@ -153,6 +154,7 @@ func clearOriginRouteContext(c *gin.Context) {
 		constant.ContextKeyUserModelRouteId,
 		constant.ContextKeyUserModelRouteTarget,
 		constant.ContextKeyUserModelRouteGroup,
+		constant.ContextKeyUserModelRouteGroups,
 		constant.ContextKeyUserModelRouteChannel,
 		constant.ContextKeyAutoGroup,
 	} {

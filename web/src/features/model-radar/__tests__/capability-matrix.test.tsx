@@ -20,7 +20,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, test, vi } from 'vitest'
 
-import { CapabilityMatrix } from '../components/capability-matrix'
+import { CapabilityMatrix, ModelBadge } from '../components/capability-matrix'
 import type { ModelRadarConfiguration } from '../types'
 
 vi.mock('react-i18next', () => ({
@@ -57,6 +57,15 @@ const fixture: ModelRadarConfiguration = {
 }
 
 describe('model radar capability matrix', () => {
+  test('renders a complete colorful vendor badge without clipping it', () => {
+    const { container } = render(<ModelBadge color='#2563eb' model='gpt-5.4' />)
+    const wrapper = container.firstElementChild
+
+    expect(wrapper).toHaveClass('size-6')
+    expect(wrapper).not.toHaveClass('overflow-hidden')
+    expect(wrapper?.querySelector('svg')).not.toBeNull()
+  })
+
   test('lays out the matrix as a table with one row per model', () => {
     render(<CapabilityMatrix configurations={[fixture]} />)
 

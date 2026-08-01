@@ -163,6 +163,7 @@ func BatchAddUserModelRoutes(c *gin.Context) {
 		}
 		userRoute := *request.Route
 		userRoute.Groups = append([]string(nil), request.Route.Groups...)
+		userRoute.ExecutionGroups = append([]string(nil), request.Route.ExecutionGroups...)
 		userRoute.ChannelIds = append([]int(nil), request.Route.ChannelIds...)
 		userRoute.Id = 0
 		userRoute.UserId = id

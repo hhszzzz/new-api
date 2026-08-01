@@ -27,6 +27,7 @@ func setupUserModelRouteTestDB(t *testing.T) {
 		&Ability{},
 		&UserModelRoute{},
 		&UserModelRouteGroup{},
+		&UserModelRouteExecutionGroup{},
 		&UserModelRouteChannel{},
 	))
 	require.NoError(t, db.Create(&User{Id: 1, Username: "route-user", Group: "default"}).Error)
@@ -90,6 +91,32 @@ func TestGetUserModelRouteExecutionGroupCountsFallBackPerGroup(t *testing.T) {
 		"exact-group":    1,
 		"fallback-group": 1,
 	}, counts)
+}
+
+func TestGetUserModelRouteCandidateChannelsForGroupsReturnsOrderedUnion(t *testing.T) {
+	setupUserModelRouteTestDB(t)
+	require.NoError(t, DB.Create(&[]Channel{
+		{Id: 10, Name: "default-only", Key: "key-1", Type: 1, Status: common.ChannelStatusEnabled},
+		{Id: 11, Name: "vip-only", Key: "key-2", Type: 1, Status: common.ChannelStatusEnabled},
+		{Id: 12, Name: "shared", Key: "key-3", Type: 1, Status: common.ChannelStatusEnabled},
+	}).Error)
+	require.NoError(t, DB.Create(&[]Ability{
+		{Group: "default", Model: "target-model", ChannelId: 10, Enabled: true},
+		{Group: "default", Model: "target-model", ChannelId: 12, Enabled: true},
+		{Group: "vip", Model: "target-model", ChannelId: 11, Enabled: true},
+		{Group: "vip", Model: "target-model", ChannelId: 12, Enabled: true},
+	}).Error)
+
+	channels, err := GetUserModelRouteCandidateChannelsForGroups(
+		[]string{"vip", "default", "vip"},
+		"target-model",
+	)
+	require.NoError(t, err)
+	require.Len(t, channels, 3)
+	assert.Equal(t, []int{11, 12, 10}, []int{channels[0].Id, channels[1].Id, channels[2].Id})
+	assert.Equal(t, []string{"vip"}, channels[0].ExecutionGroups)
+	assert.Equal(t, []string{"vip", "default"}, channels[1].ExecutionGroups)
+	assert.Equal(t, []string{"default"}, channels[2].ExecutionGroups)
 }
 
 func newTestUserModelRoute(allGroups bool, groups ...string) *UserModelRoute {
@@ -271,6 +298,50 @@ func TestSaveUserModelRouteDefaultsPoolName(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, routes, 1)
 	assert.Equal(t, "gpt-5.4 → gpt-5.5", routes[0].PoolName)
+}
+
+func TestSaveUserModelRoutePersistsOrderedExecutionGroups(t *testing.T) {
+	setupUserModelRouteTestDB(t)
+
+	route := newTestUserModelRoute(true)
+	route.ExecutionGroups = []string{"vip", "default", "vip", " internal "}
+	require.NoError(t, SaveUserModelRoute(route))
+	assert.Equal(t, "vip", route.ExecutionGroup)
+
+	routes, err := GetUserModelRoutes(1)
+	require.NoError(t, err)
+	require.Len(t, routes, 1)
+	assert.Equal(t, "vip", routes[0].ExecutionGroup)
+	assert.Equal(t, []string{"vip", "default", "internal"}, routes[0].ExecutionGroups)
+
+	routes[0].ExecutionGroups = []string{"internal", "vip"}
+	require.NoError(t, SaveUserModelRoute(routes[0]))
+
+	updated, err := GetUserModelRoutes(1)
+	require.NoError(t, err)
+	require.Len(t, updated, 1)
+	assert.Equal(t, "internal", updated[0].ExecutionGroup)
+	assert.Equal(t, []string{"internal", "vip"}, updated[0].ExecutionGroups)
+}
+
+func TestSetUserModelRouteEnabledPreservesStaleRouteConfiguration(t *testing.T) {
+	setupUserModelRouteTestDB(t)
+
+	route := newTestUserModelRoute(true)
+	route.ExecutionGroups = []string{"default", "vip"}
+	route.ChannelIds = []int{10, 11}
+	require.NoError(t, SaveUserModelRoute(route))
+
+	updated, err := SetUserModelRouteEnabled(1, route.Id, false)
+	require.NoError(t, err)
+	assert.False(t, updated.Enabled)
+	assert.Equal(t, []string{"default", "vip"}, updated.ExecutionGroups)
+	assert.Equal(t, []int{10, 11}, updated.ChannelIds)
+
+	loaded, err := GetUserModelRoute(1, route.Id)
+	require.NoError(t, err)
+	assert.False(t, loaded.Enabled)
+	assert.Equal(t, route.SourceModel, loaded.SourceModel)
 }
 
 func TestSaveUserModelRouteCountsInjectPromptCharactersInsteadOfBytes(t *testing.T) {

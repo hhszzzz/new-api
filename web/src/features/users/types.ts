@@ -215,6 +215,7 @@ export interface UserModelRoute {
   inject_prompt?: string
   all_groups: boolean
   execution_group: string
+  execution_groups?: string[]
   enabled: boolean
   created_at?: number
   updated_at?: number
@@ -228,6 +229,7 @@ export interface UserModelRouteCandidateChannel {
   type: number
   priority: number | null
   weight: number
+  execution_groups?: string[]
   aggregate_id?: number
   aggregate_name?: string
   protocol_compatibility?: Partial<

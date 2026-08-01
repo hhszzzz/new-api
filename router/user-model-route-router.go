@@ -27,5 +27,6 @@ var userModelRoutePermissionRoutes = []permissionRoute{
 	{method: http.MethodPut, path: "/:id/model-routes", permission: authz.ChannelWrite, handler: controller.ReplaceUserModelRoutes},
 	{method: http.MethodPost, path: "/batch/model-routes", permission: authz.ChannelWrite, handler: controller.BatchAddUserModelRoutes},
 	{method: http.MethodPut, path: "/:id/model-routes/:route_id", permission: authz.ChannelWrite, handler: controller.UpdateUserModelRoute},
+	{method: http.MethodPatch, path: "/:id/model-routes/:route_id/enabled", permission: authz.ChannelWrite, handler: controller.SetUserModelRouteEnabled},
 	{method: http.MethodDelete, path: "/:id/model-routes/:route_id", permission: authz.ChannelWrite, handler: controller.DeleteUserModelRoute},
 }

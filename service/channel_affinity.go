@@ -360,10 +360,12 @@ func buildChannelAffinityCacheKeySuffixForContext(c *gin.Context, rule operation
 		return suffix
 	}
 	channelIds, _ := common.GetContextKeyType[[]int](c, constant.ContextKeyUserModelRouteChannel)
-	fingerprintSource := fmt.Sprintf("%d|%s|%s|%v",
+	executionGroups, _ := common.GetContextKeyType[[]string](c, constant.ContextKeyUserModelRouteGroups)
+	fingerprintSource := fmt.Sprintf("%d|%s|%s|%v|%v",
 		routeId,
 		common.GetContextKeyString(c, constant.ContextKeyUserModelRouteTarget),
 		common.GetContextKeyString(c, constant.ContextKeyUserModelRouteGroup),
+		executionGroups,
 		channelIds,
 	)
 	fingerprint := common.Sha1([]byte(fingerprintSource))

@@ -31,6 +31,7 @@ func setupUserModelRouteResolutionTest(t *testing.T) func(role int) *gin.Context
 		&model.User{},
 		&model.UserModelRoute{},
 		&model.UserModelRouteGroup{},
+		&model.UserModelRouteExecutionGroup{},
 		&model.UserModelRouteChannel{},
 	))
 	require.NoError(t, db.Create(&model.User{Id: 1, Username: "route-user", Group: "default"}).Error)
@@ -95,4 +96,25 @@ func TestApplyUserModelRouteDoesNotBypassRootUser(t *testing.T) {
 	assert.Equal(t, "gpt-5.5", info.RouteTargetModelName)
 	assert.Equal(t, "gpt-5.5", request.Model)
 	assert.True(t, info.IsModelMapped)
+}
+
+func TestApplyUserModelRouteKeepsMultipleExecutionGroupsUnresolvedUntilSelection(t *testing.T) {
+	newContext := setupUserModelRouteResolutionTest(t)
+	routes, err := model.GetUserModelRoutes(1)
+	require.NoError(t, err)
+	require.Len(t, routes, 1)
+	routes[0].ExecutionGroups = []string{"internal", "backup"}
+	require.NoError(t, model.SaveUserModelRoute(routes[0]))
+
+	ctx := newContext(common.RoleCommonUser)
+	route, err := applyUserModelRoute(ctx, "gpt-5.4", "auto")
+	require.NoError(t, err)
+	require.NotNil(t, route)
+	assert.Equal(t, []string{"internal", "backup"}, routeSelectionExecutionGroups(ctx))
+	assert.Equal(t, "auto", routeSelectionGroup(ctx, "auto"))
+	assert.Empty(t, common.GetContextKeyString(ctx, constant.ContextKeyAutoGroup))
+
+	commitRouteSelectionGroup(ctx, "auto", "backup")
+	assert.Equal(t, "backup", common.GetContextKeyString(ctx, constant.ContextKeyAutoGroup))
+	assert.Equal(t, "backup", common.GetContextKeyString(ctx, constant.ContextKeyUserModelRouteGroup))
 }

@@ -401,6 +401,9 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 		return channel, nil
 	}
 	channel, selectGroup, err := service.CacheGetRandomSatisfiedChannel(retryParam)
+	if routeGroup := common.GetContextKeyString(c, constant.ContextKeyUserModelRouteGroup); routeGroup != "" {
+		info.RouteExecutionGroup = routeGroup
+	}
 
 	info.PriceData.GroupRatioInfo = helper.HandleGroupRatio(c, info)
 
@@ -559,6 +562,9 @@ func RelayTask(c *gin.Context) {
 			respondTaskError(c, service.TaskErrorWrapperLocal(err, "task_channel_outside_user_route", http.StatusForbidden))
 			return
 		}
+		if routeGroup := common.GetContextKeyString(c, constant.ContextKeyUserModelRouteGroup); routeGroup != "" {
+			relayInfo.RouteExecutionGroup = routeGroup
+		}
 		if setupErr := middleware.SetupContextForSelectedChannel(c, lockedCh, relayInfo.OriginModelName, true); setupErr != nil {
 			respondTaskError(c, service.TaskErrorWrapperLocal(setupErr.Err, "setup_locked_channel_failed", http.StatusInternalServerError))
 			return
@@ -671,7 +677,10 @@ func buildRelayRetryParam(c *gin.Context, info *relaycommon.RelayInfo) *service.
 		modelName = routedModel
 	}
 	group := info.TokenGroup
-	if routedGroup := common.GetContextKeyString(c, constant.ContextKeyUserModelRouteGroup); routedGroup != "" {
+	executionGroups, _ := common.GetContextKeyType[[]string](c, constant.ContextKeyUserModelRouteGroups)
+	if len(executionGroups) > 1 {
+		group = "auto"
+	} else if routedGroup := common.GetContextKeyString(c, constant.ContextKeyUserModelRouteGroup); routedGroup != "" {
 		group = routedGroup
 	}
 	channelIds, _ := common.GetContextKeyType[[]int](c, constant.ContextKeyUserModelRouteChannel)
@@ -681,6 +690,7 @@ func buildRelayRetryParam(c *gin.Context, info *relaycommon.RelayInfo) *service.
 		ModelName:           modelName,
 		RequestPath:         c.Request.URL.Path,
 		AllowedChannelIds:   channelIds,
+		AllowedGroups:       executionGroups,
 		CandidateFilter:     middleware.BuildChannelCandidateFilter(c, modelName),
 		CandidateClassifier: middleware.BuildChannelCandidateClassifier(c, modelName),
 		Retry:               common.GetPointer(0),

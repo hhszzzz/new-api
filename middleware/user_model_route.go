@@ -51,20 +51,28 @@ func applyUserModelRoute(c *gin.Context, sourceModel, usingGroup string) (*model
 			}
 		}
 	}
-	if route == nil || strings.TrimSpace(route.TargetModel) == "" || strings.TrimSpace(route.ExecutionGroup) == "" {
+	if route == nil || strings.TrimSpace(route.TargetModel) == "" {
 		return nil, nil
 	}
-	executionGroup := strings.TrimSpace(route.ExecutionGroup)
-	if !groupAllowsRequestClient(c, executionGroup) {
-		return nil, fmt.Errorf("client is not allowed to use routed execution group %s", executionGroup)
+	model.NormalizeUserModelRouteExecutionGroups(route)
+	executionGroups := make([]string, 0, len(route.ExecutionGroups))
+	for _, executionGroup := range route.ExecutionGroups {
+		if groupAllowsRequestClient(c, executionGroup) {
+			executionGroups = append(executionGroups, executionGroup)
+		}
 	}
+	if len(executionGroups) == 0 {
+		return nil, fmt.Errorf("client is not allowed to use any routed execution group")
+	}
+	executionGroup := executionGroups[0]
 	channels := append([]int(nil), route.ChannelIds...)
 	common.SetContextKey(c, constant.ContextKeyUserModelRouteId, route.Id)
 	common.SetContextKey(c, constant.ContextKeyUserModelRouteTarget, strings.TrimSpace(route.TargetModel))
 	common.SetContextKey(c, constant.ContextKeyUserModelRouteGroup, executionGroup)
+	common.SetContextKey(c, constant.ContextKeyUserModelRouteGroups, executionGroups)
 	common.SetContextKey(c, constant.ContextKeyUserModelRoutePool, strings.TrimSpace(route.PoolName))
 	common.SetContextKey(c, constant.ContextKeyUserModelRoutePrompt, strings.TrimSpace(route.InjectPrompt))
-	if usingGroup == "auto" {
+	if usingGroup == "auto" && len(executionGroups) == 1 {
 		// A routed request has already resolved the otherwise dynamic auto group.
 		// Publish that concrete group so quota calculation and logs use the same
 		// group that channel selection uses.
@@ -95,10 +103,33 @@ func routeSelectionModel(c *gin.Context, sourceModel string) string {
 }
 
 func routeSelectionGroup(c *gin.Context, fallback string) string {
+	if len(routeSelectionExecutionGroups(c)) > 1 {
+		return "auto"
+	}
 	if group := common.GetContextKeyString(c, constant.ContextKeyUserModelRouteGroup); group != "" {
 		return group
 	}
 	return fallback
+}
+
+func routeSelectionExecutionGroups(c *gin.Context) []string {
+	groups, ok := common.GetContextKeyType[[]string](c, constant.ContextKeyUserModelRouteGroups)
+	if !ok {
+		return nil
+	}
+	return groups
+}
+
+func commitRouteSelectionGroup(c *gin.Context, selectionGroup, resolvedGroup string) {
+	if c == nil || resolvedGroup == "" {
+		return
+	}
+	if selectionGroup == "auto" {
+		common.SetContextKey(c, constant.ContextKeyAutoGroup, resolvedGroup)
+	}
+	if userModelRouteActive(c) {
+		common.SetContextKey(c, constant.ContextKeyUserModelRouteGroup, resolvedGroup)
+	}
 }
 
 func routeSelectionChannelIds(c *gin.Context) []int {
@@ -128,12 +159,8 @@ func validateSelectedRouteChannel(c *gin.Context, channel *model.Channel, reques
 	if !userModelRouteActive(c) {
 		return nil
 	}
-	selectionGroup := routeSelectionGroup(c, common.GetContextKeyString(c, constant.ContextKeyUsingGroup))
 	selectionModel := routeSelectionModel(c, common.GetContextKeyString(c, constant.ContextKeyOriginalModel))
-	if !groupAllowsRequestClient(c, selectionGroup) {
-		return fmt.Errorf("selected route execution group does not allow this client")
-	}
-	if !routeChannelAllowed(c, channel.Id) || !model.IsChannelEnabledForGroupModel(selectionGroup, selectionModel, channel.Id) {
+	if !routeChannelAllowed(c, channel.Id) {
 		return fmt.Errorf("selected channel is outside the user's model route")
 	}
 	if !channelSupportsRequestPath(channel, requestPath, selectionModel) {
@@ -142,7 +169,17 @@ func validateSelectedRouteChannel(c *gin.Context, channel *model.Channel, reques
 	if !BuildChannelCandidateFilter(c, selectionModel)(channel) {
 		return fmt.Errorf("selected channel does not allow this protocol or client")
 	}
-	return nil
+	selectionGroups := routeSelectionExecutionGroups(c)
+	if len(selectionGroups) == 0 {
+		selectionGroups = []string{routeSelectionGroup(c, common.GetContextKeyString(c, constant.ContextKeyUsingGroup))}
+	}
+	for _, selectionGroup := range selectionGroups {
+		if groupAllowsRequestClient(c, selectionGroup) && model.IsChannelEnabledForGroupModel(selectionGroup, selectionModel, channel.Id) {
+			commitRouteSelectionGroup(c, routeSelectionGroup(c, selectionGroup), selectionGroup)
+			return nil
+		}
+	}
+	return fmt.Errorf("selected channel is outside the user's model route execution groups")
 }
 
 // ValidateSelectedRouteChannel lets deferred task handlers enforce the same

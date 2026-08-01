@@ -18,7 +18,11 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { describe, expect, test } from 'vitest'
 
-import { groupConfigurations, matrixEfforts } from '../lib/model-radar'
+import {
+  getModelIconKey,
+  groupConfigurations,
+  matrixEfforts,
+} from '../lib/model-radar'
 import type { ModelRadarConfiguration } from '../types'
 
 function configuration(model: string, effort: string): ModelRadarConfiguration {
@@ -46,6 +50,17 @@ function configuration(model: string, effort: string): ModelRadarConfiguration {
 }
 
 describe('model radar configuration grouping', () => {
+  test.each([
+    ['gpt-5.4', 'OpenAI.Color'],
+    ['openai/gpt-5.4', 'OpenAI.Color'],
+    ['anthropic/claude-opus-4.1', 'Claude.Color'],
+    ['google/gemini-2.5-pro', 'Gemini.Color'],
+    ['meta-llama/llama-4', 'Meta.Color'],
+    ['unknown-model', null],
+  ])('resolves %s to its colorful vendor icon', (model, expected) => {
+    expect(getModelIconKey(model)).toBe(expected)
+  })
+
   test('preserves first model appearance while sorting known efforts before unknown efforts', () => {
     const groups = groupConfigurations([
       configuration('model-b', 'turbo'),

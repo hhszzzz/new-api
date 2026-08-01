@@ -67,13 +67,15 @@ const CELL_TEXT_CLASSES = {
   low: 'text-destructive',
 } as const
 
-// Vendor icon for a radar model, falling back to its group color dot.
-// Matches the model-square rendering: mono vendor icon at size 20.
+// Color vendor icon for a radar model, falling back to its group color dot.
 export function ModelBadge(props: { color: string; model: string }) {
   const iconKey = getModelIconKey(props.model)
   if (iconKey) {
     return (
-      <span className='flex size-5 shrink-0 items-center justify-center overflow-hidden'>
+      <span
+        className='flex size-6 shrink-0 items-center justify-center'
+        aria-hidden='true'
+      >
         {getLobeIcon(iconKey, 20)}
       </span>
     )

@@ -81,7 +81,27 @@ func GetUserModelRouteCandidates(c *gin.Context) {
 	channelCounts := make(map[string]int64)
 	recommendedExecutionGroup := ""
 	targetModel := strings.TrimSpace(c.Query("target_model"))
-	executionGroup := strings.TrimSpace(c.Query("execution_group"))
+	requestedExecutionGroups := make([]string, 0)
+	executionGroupQuery := strings.TrimSpace(c.Query("execution_groups"))
+	if executionGroupQuery == "" {
+		executionGroupQuery = strings.TrimSpace(c.Query("execution_group"))
+	}
+	seenExecutionGroups := make(map[string]struct{})
+	for _, group := range strings.Split(executionGroupQuery, ",") {
+		group = strings.TrimSpace(group)
+		if group == "" {
+			continue
+		}
+		if group == "auto" || !ratio_setting.ContainsGroupRatio(group) {
+			common.ApiErrorMsg(c, fmt.Sprintf("执行分组不存在：%s", group))
+			return
+		}
+		if _, exists := seenExecutionGroups[group]; exists {
+			continue
+		}
+		seenExecutionGroups[group] = struct{}{}
+		requestedExecutionGroups = append(requestedExecutionGroups, group)
+	}
 	if targetModel != "" {
 		channelCounts, err = model.GetUserModelRouteExecutionGroupChannelCounts(targetModel)
 		if err != nil {
@@ -95,12 +115,8 @@ func GetUserModelRouteCandidates(c *gin.Context) {
 			}
 		}
 	}
-	if targetModel != "" && executionGroup != "" {
-		if executionGroup == "auto" || !ratio_setting.ContainsGroupRatio(executionGroup) {
-			common.ApiErrorMsg(c, fmt.Sprintf("执行分组不存在：%s", executionGroup))
-			return
-		}
-		channels, err = model.GetUserModelRouteCandidateChannels(executionGroup, targetModel)
+	if targetModel != "" && len(requestedExecutionGroups) > 0 {
+		channels, err = model.GetUserModelRouteCandidateChannelsForGroups(requestedExecutionGroups, targetModel)
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -200,6 +216,47 @@ func UpdateUserModelRoute(c *gin.Context) {
 		"source":   route.SourceModel,
 	})
 	common.ApiSuccess(c, &route)
+}
+
+type setUserModelRouteEnabledRequest struct {
+	Enabled *bool `json:"enabled"`
+}
+
+func SetUserModelRouteEnabled(c *gin.Context) {
+	userId, user, ok := getManageableRouteUser(c)
+	if !ok {
+		return
+	}
+	routeId, err := strconv.Atoi(c.Param("route_id"))
+	if err != nil || routeId <= 0 {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	var request setUserModelRouteEnabledRequest
+	if err := common.DecodeJson(c.Request.Body, &request); err != nil || request.Enabled == nil {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	if *request.Enabled {
+		route, err := model.GetUserModelRoute(userId, routeId)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		if !validateUserModelRoute(c, user, route) {
+			return
+		}
+	}
+	route, err := model.SetUserModelRouteEnabled(userId, routeId, *request.Enabled)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAuditFor(c, userId, "user.model_route.status", map[string]interface{}{
+		"route_id": route.Id,
+		"enabled":  route.Enabled,
+	})
+	common.ApiSuccess(c, route)
 }
 
 type replaceUserModelRoutesRequest struct {
@@ -304,9 +361,9 @@ func validateUserModelRouteForUser(user *model.User, route *model.UserModelRoute
 	route.SourceModel = strings.TrimSpace(route.SourceModel)
 	route.TargetModel = strings.TrimSpace(route.TargetModel)
 	route.PoolName = strings.TrimSpace(route.PoolName)
-	route.ExecutionGroup = strings.TrimSpace(route.ExecutionGroup)
+	model.NormalizeUserModelRouteExecutionGroups(route)
 	route.InjectPrompt = strings.TrimSpace(route.InjectPrompt)
-	if route.SourceModel == "" || route.TargetModel == "" || route.ExecutionGroup == "" || len(route.ChannelIds) == 0 {
+	if route.SourceModel == "" || route.TargetModel == "" || len(route.ExecutionGroups) == 0 || len(route.ChannelIds) == 0 {
 		return errors.New("模型路由信息不完整")
 	}
 	if !model.IsConcreteUserModelRouteTarget(route.TargetModel) {
@@ -322,8 +379,10 @@ func validateUserModelRouteForUser(user *model.User, route *model.UserModelRoute
 	if _, exists := publicModels[route.SourceModel]; !exists {
 		return fmt.Errorf("请求模型不是公开可用模型：%s", route.SourceModel)
 	}
-	if route.ExecutionGroup == "auto" || !ratio_setting.ContainsGroupRatio(route.ExecutionGroup) {
-		return fmt.Errorf("执行分组不存在：%s", route.ExecutionGroup)
+	for _, executionGroup := range route.ExecutionGroups {
+		if executionGroup == "auto" || !ratio_setting.ContainsGroupRatio(executionGroup) {
+			return fmt.Errorf("执行分组不存在：%s", executionGroup)
+		}
 	}
 	if route.AllGroups {
 		route.Groups = []string{}
@@ -347,8 +406,8 @@ func validateUserModelRouteForUser(user *model.User, route *model.UserModelRoute
 		if err != nil || channel == nil || channel.Status != common.ChannelStatusEnabled {
 			return fmt.Errorf("渠道不可用：%d", channelId)
 		}
-		if !model.IsChannelEnabledForGroupModel(route.ExecutionGroup, route.TargetModel, channelId) {
-			return fmt.Errorf("渠道 %d 不支持执行分组 %s 下的目标模型 %s", channelId, route.ExecutionGroup, route.TargetModel)
+		if !model.IsChannelEnabledForAnyGroupModel(route.ExecutionGroups, route.TargetModel, channelId) {
+			return fmt.Errorf("渠道 %d 不支持所选执行分组下的目标模型 %s", channelId, route.TargetModel)
 		}
 	}
 	return nil

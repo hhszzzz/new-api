@@ -33,6 +33,7 @@ import {
   deleteUserModelRoute,
   getUserModelRouteCandidates,
   getUserModelRoutes,
+  setUserModelRouteEnabled,
   updateUserModelRoute,
 } from '../../../api'
 import type { UserModelRoute, UserModelRouteCandidates } from '../../../types'
@@ -47,6 +48,7 @@ vi.mock('../../../api', () => ({
   deleteUserModelRoute: vi.fn(),
   getUserModelRouteCandidates: vi.fn(),
   getUserModelRoutes: vi.fn(),
+  setUserModelRouteEnabled: vi.fn(),
   updateUserModelRoute: vi.fn(),
 }))
 
@@ -196,12 +198,14 @@ vi.mock('@/components/ui/switch', () => ({
     id?: string
     checked: boolean
     onCheckedChange: (checked: boolean) => void
+    disabled?: boolean
     'aria-label'?: string
   }) => (
     <input
       id={props.id}
       type='checkbox'
       checked={props.checked}
+      disabled={props.disabled}
       aria-label={props['aria-label']}
       onChange={(event) => props.onCheckedChange(event.currentTarget.checked)}
     />
@@ -212,6 +216,7 @@ const mockedCreateRoute = vi.mocked(createUserModelRoute)
 const mockedDeleteRoute = vi.mocked(deleteUserModelRoute)
 const mockedGetCandidates = vi.mocked(getUserModelRouteCandidates)
 const mockedGetRoutes = vi.mocked(getUserModelRoutes)
+const mockedSetRouteEnabled = vi.mocked(setUserModelRouteEnabled)
 const mockedUpdateRoute = vi.mocked(updateUserModelRoute)
 
 const BASE_CANDIDATES: UserModelRouteCandidates = {
@@ -255,6 +260,7 @@ beforeEach(() => {
   mockedDeleteRoute.mockReset()
   mockedGetCandidates.mockReset()
   mockedGetRoutes.mockReset()
+  mockedSetRouteEnabled.mockReset()
   mockedUpdateRoute.mockReset()
 
   mockedGetRoutes.mockResolvedValue({ success: true, data: [] })
@@ -262,12 +268,26 @@ beforeEach(() => {
     if (!params.target_model) return candidateResponse([])
     if (params.target_model === 'target-a') {
       return candidateResponse([
-        { id: 11, name: 'Channel A', type: 1, priority: 10, weight: 100 },
+        {
+          id: 11,
+          name: 'Channel A',
+          type: 1,
+          priority: 10,
+          weight: 100,
+          execution_groups: ['default'],
+        },
       ])
     }
     if (params.target_model === 'target-b') {
       return candidateResponse([
-        { id: 22, name: 'Channel B', type: 1, priority: 5, weight: 50 },
+        {
+          id: 22,
+          name: 'Channel B',
+          type: 1,
+          priority: 5,
+          weight: 50,
+          execution_groups: ['default'],
+        },
       ])
     }
     return candidateResponse([])
@@ -361,11 +381,11 @@ describe('user model routes dialog', () => {
     })
     expect(mockedGetCandidates).toHaveBeenCalledWith(1, {
       target_model: 'target-a',
-      execution_group: 'default',
+      execution_groups: 'default',
     })
     expect(mockedGetCandidates).toHaveBeenCalledWith(1, {
       target_model: 'target-b',
-      execution_group: 'default',
+      execution_groups: 'default',
     })
   })
 
@@ -457,7 +477,7 @@ describe('user model routes dialog', () => {
         execution_group_channel_counts: { empty: 0, ready: 1 },
         recommended_execution_group: 'ready',
       }
-      if (params.execution_group !== 'ready') {
+      if (params.execution_groups !== 'ready') {
         return { success: true, data: { ...base, channels: [] } }
       }
       return {
@@ -471,6 +491,7 @@ describe('user model routes dialog', () => {
               type: 1,
               priority: 1,
               weight: 100,
+              execution_groups: ['ready'],
               aggregate_id: 7,
               aggregate_name: 'Shared API',
               protocol_compatibility: {
@@ -489,13 +510,13 @@ describe('user model routes dialog', () => {
     })
 
     await waitFor(() => {
-      expect(screen.getByLabelText('Execution group')).toHaveValue('ready')
+      expect(screen.getByLabelText('Execution groups')).toHaveValue(['ready'])
     })
     expect(
       await screen.findByRole('option', {
         name: /empty \(0 channels · No enabled channels for this model in this group\)/,
       })
-    ).toBeDisabled()
+    ).toBeVisible()
     expect(
       await screen.findByRole('option', { name: /Shared API \/ Ready Channel/ })
     ).toBeVisible()
@@ -514,6 +535,7 @@ describe('user model routes dialog', () => {
           type: 1,
           priority: 1,
           weight: 100,
+          execution_groups: ['default'],
           aggregate_id: 7,
           aggregate_name: 'Shared API',
         },
@@ -556,11 +578,136 @@ describe('user model routes dialog', () => {
         pool_name: 'Primary Pool',
         inject_prompt: '',
         execution_group: 'default',
+        execution_groups: ['default'],
         all_groups: true,
         groups: [],
         channel_ids: [31],
         enabled: true,
       })
+    })
+  })
+
+  test('selects channels across multiple execution groups', async () => {
+    mockedGetCandidates.mockImplementation(async (_userId, params = {}) => {
+      const base = {
+        ...BASE_CANDIDATES,
+        execution_groups: ['default', 'vip'],
+        execution_group_channel_counts: { default: 1, vip: 1 },
+      }
+      if (!params.target_model) {
+        return { success: true, data: { ...base, channels: [] } }
+      }
+      const channels = [
+        {
+          id: 11,
+          name: 'Default Channel',
+          type: 1,
+          priority: 10,
+          weight: 100,
+          execution_groups: ['default'],
+        },
+      ]
+      if (params.execution_groups === 'default,vip') {
+        channels.push({
+          id: 22,
+          name: 'VIP Channel',
+          type: 1,
+          priority: 8,
+          weight: 80,
+          execution_groups: ['vip'],
+        })
+      }
+      return { success: true, data: { ...base, channels } }
+    })
+    mockedCreateRoute.mockResolvedValue({
+      success: true,
+      data: {
+        id: 12,
+        user_id: 1,
+        source_model: 'gpt-5.4',
+        target_model: 'target-a',
+        pool_name: 'gpt-5.4 → target-a',
+        execution_group: 'default',
+        execution_groups: ['default', 'vip'],
+        all_groups: true,
+        groups: [],
+        channel_ids: [11, 22],
+        enabled: true,
+      },
+    })
+
+    renderDialog()
+    const user = userEvent.setup()
+    fireEvent.change(await screen.findByLabelText('Source model'), {
+      target: { value: 'gpt-5.4' },
+    })
+    fireEvent.change(screen.getByLabelText('Target model'), {
+      target: { value: 'target-a' },
+    })
+
+    const executionGroupSelect =
+      await screen.findByLabelText('Execution groups')
+    await user.selectOptions(executionGroupSelect, ['default', 'vip'])
+    await waitFor(() => {
+      expect(mockedGetCandidates).toHaveBeenCalledWith(1, {
+        target_model: 'target-a',
+        execution_groups: 'default,vip',
+      })
+      expect(screen.getByRole('option', { name: /VIP Channel/ })).toBeVisible()
+    })
+
+    await user.selectOptions(screen.getByLabelText('Channel pool'), [
+      '11',
+      '22',
+    ])
+    await user.click(screen.getByRole('button', { name: 'Add route' }))
+
+    await waitFor(() => {
+      expect(mockedCreateRoute).toHaveBeenCalledWith(1, {
+        source_model: 'gpt-5.4',
+        target_model: 'target-a',
+        pool_name: '',
+        inject_prompt: '',
+        execution_group: 'default',
+        execution_groups: ['default', 'vip'],
+        all_groups: true,
+        groups: [],
+        channel_ids: [11, 22],
+        enabled: true,
+      })
+    })
+  })
+
+  test('toggles enabled state from the configured route row', async () => {
+    const route: UserModelRoute = {
+      id: 13,
+      user_id: 1,
+      source_model: 'gpt-5.4',
+      target_model: 'target-a',
+      pool_name: 'Cross-group pool',
+      execution_group: 'default',
+      execution_groups: ['default', 'vip'],
+      all_groups: true,
+      groups: [],
+      channel_ids: [11, 22],
+      enabled: true,
+    }
+    mockedGetRoutes.mockResolvedValue({ success: true, data: [route] })
+    mockedSetRouteEnabled.mockResolvedValue({
+      success: true,
+      data: { ...route, enabled: false },
+    })
+
+    renderDialog()
+    const user = userEvent.setup()
+    await user.click(
+      await screen.findByRole('checkbox', {
+        name: 'Enabled: gpt-5.4 -> target-a',
+      })
+    )
+
+    await waitFor(() => {
+      expect(mockedSetRouteEnabled).toHaveBeenCalledWith(1, 13, false)
     })
   })
 

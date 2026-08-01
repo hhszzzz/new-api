@@ -84,6 +84,7 @@ func NewResponsesWebSocketRetryParam(c *gin.Context, modelName string) *service.
 		ModelName:         selectionModel,
 		RequestPath:       c.Request.URL.Path,
 		AllowedChannelIds: routeSelectionChannelIds(c),
+		AllowedGroups:     routeSelectionExecutionGroups(c),
 		CandidateFilter: func(channel *model.Channel) bool {
 			return (baseFilter == nil || baseFilter(channel)) && channelSupportsRequestPath(channel, c.Request.URL.Path, selectionModel)
 		},
@@ -141,9 +142,7 @@ func SelectResponsesWebSocketChannel(c *gin.Context, modelName string, retryPara
 		if !routeChannelAllowed(c, bound.Id) || !groupUsable {
 			return nil, types.NewErrorWithStatusCode(errors.New("the channel bound to the referenced response is unavailable"), types.ErrorCodeGetChannelFailed, http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry())
 		}
-		if selectionGroup == "auto" {
-			common.SetContextKey(c, constant.ContextKeyAutoGroup, resolvedGroup)
-		}
+		commitRouteSelectionGroup(c, selectionGroup, resolvedGroup)
 		if apiErr := setupResponsesWebSocketChannel(c, bound, modelName, selectionModel); apiErr != nil {
 			return nil, apiErr
 		}
@@ -156,9 +155,7 @@ func SelectResponsesWebSocketChannel(c *gin.Context, modelName string, retryPara
 			if err == nil && preferred != nil && preferred.IsSchedulableAt(time.Now()) && responsesWebSocketChannelAllowed(retryParam, preferred) {
 				resolvedGroup, groupUsable := resolveAffinitySelectionGroup(c, selectionGroup, selectionModel, preferred.Id)
 				if routeChannelAllowed(c, preferred.Id) && groupUsable {
-					if selectionGroup == "auto" {
-						common.SetContextKey(c, constant.ContextKeyAutoGroup, resolvedGroup)
-					}
+					commitRouteSelectionGroup(c, selectionGroup, resolvedGroup)
 					service.MarkChannelAffinityUsed(c, resolvedGroup, preferred.Id)
 					if apiErr := setupResponsesWebSocketChannel(c, preferred, modelName, selectionModel); apiErr != nil {
 						return nil, apiErr
@@ -211,6 +208,7 @@ func NewResponsesBridgeRetryParam(c *gin.Context, modelName string) *service.Ret
 		ModelName:           selectionModel,
 		RequestPath:         c.Request.URL.Path,
 		AllowedChannelIds:   routeSelectionChannelIds(c),
+		AllowedGroups:       routeSelectionExecutionGroups(c),
 		CandidateFilter:     BuildChannelCandidateFilter(c, selectionModel),
 		CandidateClassifier: BuildChannelCandidateClassifier(c, selectionModel),
 		Retry:               common.GetPointer(0),
@@ -265,9 +263,7 @@ func SelectResponsesBridgeChannel(c *gin.Context, modelName string, retryParam *
 		if !routeChannelAllowed(c, bound.Id) || !groupUsable {
 			return nil, types.NewErrorWithStatusCode(errors.New("the channel bound to the referenced response is unavailable"), types.ErrorCodeGetChannelFailed, http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry())
 		}
-		if selectionGroup == "auto" {
-			common.SetContextKey(c, constant.ContextKeyAutoGroup, resolvedGroup)
-		}
+		commitRouteSelectionGroup(c, selectionGroup, resolvedGroup)
 		if apiErr := SetupContextForSelectedChannel(c, bound, modelName, true); apiErr != nil {
 			return nil, apiErr
 		}
@@ -282,9 +278,7 @@ func SelectResponsesBridgeChannel(c *gin.Context, modelName string, retryParam *
 				channelSupportsRequestPath(preferred, c.Request.URL.Path, selectionModel) {
 				resolvedGroup, groupUsable := resolveAffinitySelectionGroup(c, selectionGroup, selectionModel, preferred.Id)
 				if routeChannelAllowed(c, preferred.Id) && groupUsable {
-					if selectionGroup == "auto" {
-						common.SetContextKey(c, constant.ContextKeyAutoGroup, resolvedGroup)
-					}
+					commitRouteSelectionGroup(c, selectionGroup, resolvedGroup)
 					service.MarkChannelAffinityUsed(c, resolvedGroup, preferred.Id)
 					if apiErr := SetupContextForSelectedChannel(c, preferred, modelName, true); apiErr != nil {
 						return nil, apiErr

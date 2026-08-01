@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -18,10 +19,21 @@ type RetryParam struct {
 	ModelName           string
 	RequestPath         string
 	AllowedChannelIds   []int
+	AllowedGroups       []string
 	CandidateFilter     model.ChannelCandidateFilter
 	CandidateClassifier model.ChannelCandidateClassifier
 	Retry               *int
 	resetNextTry        bool
+}
+
+func publishSelectedGroupContext(ctx *gin.Context, group string) {
+	if ctx == nil || group == "" {
+		return
+	}
+	common.SetContextKey(ctx, constant.ContextKeyAutoGroup, group)
+	if common.GetContextKeyInt(ctx, constant.ContextKeyUserModelRouteId) > 0 {
+		common.SetContextKey(ctx, constant.ContextKeyUserModelRouteGroup, group)
+	}
 }
 
 func (p *RetryParam) GetRetry() int {
@@ -63,7 +75,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 		client = clientpolicy.Detect(param.Ctx.Request)
 		common.SetContextKey(param.Ctx, constant.ContextKeyClientName, client)
 	}
-	if param.TokenGroup != "auto" {
+	if param.TokenGroup != "auto" && len(param.AllowedGroups) <= 1 {
 		if !clientpolicy.IsGroupAllowed(param.TokenGroup, client) {
 			return nil, selectGroup, nil
 		}
@@ -79,18 +91,37 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 		return channel, selectGroup, err
 	}
 
-	if len(setting.GetAutoGroups()) == 0 {
-		return nil, selectGroup, errors.New("auto groups is not enabled")
-	}
-	userGroups := common.GetContextKeyStringSlice(param.Ctx, constant.ContextKeyUserGroups)
-	if len(userGroups) == 0 {
-		userGroup := common.GetContextKeyString(param.Ctx, constant.ContextKeyUserGroup)
-		if userGroup != "" {
-			userGroups = []string{userGroup}
+	autoGroups := make([]string, 0, len(param.AllowedGroups))
+	if len(param.AllowedGroups) > 0 {
+		seen := make(map[string]struct{}, len(param.AllowedGroups))
+		for _, group := range param.AllowedGroups {
+			group = strings.TrimSpace(group)
+			if group == "" {
+				continue
+			}
+			if _, exists := seen[group]; exists {
+				continue
+			}
+			seen[group] = struct{}{}
+			autoGroups = append(autoGroups, group)
 		}
+	} else {
+		if len(setting.GetAutoGroups()) == 0 {
+			return nil, selectGroup, errors.New("auto groups is not enabled")
+		}
+		userGroups := common.GetContextKeyStringSlice(param.Ctx, constant.ContextKeyUserGroups)
+		if len(userGroups) == 0 {
+			userGroup := common.GetContextKeyString(param.Ctx, constant.ContextKeyUserGroup)
+			if userGroup != "" {
+				userGroups = []string{userGroup}
+			}
+		}
+		autoGroups = GetUserAutoGroups(userGroups)
 	}
-	autoGroups := GetUserAutoGroups(userGroups)
 	if len(autoGroups) == 0 {
+		if len(param.AllowedGroups) > 0 {
+			return nil, selectGroup, errors.New("no usable routed execution groups")
+		}
 		return nil, selectGroup, errors.New("no usable auto groups")
 	}
 
@@ -140,7 +171,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 				continue
 			}
 
-			common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroup, autoGroup)
+			publishSelectedGroupContext(param.Ctx, autoGroup)
 			if crossGroupRetry && priorityRetry >= common.RetryTimes {
 				common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroupIndex, index+1)
 				param.SetRetry(0)
@@ -190,7 +221,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			continue
 		}
 
-		common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroup, autoGroup)
+		publishSelectedGroupContext(param.Ctx, autoGroup)
 		selectGroup = autoGroup
 		if crossGroupRetry && priorityRetry >= common.RetryTimes {
 			common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroupIndex, index+1)

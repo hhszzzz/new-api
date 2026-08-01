@@ -558,6 +558,7 @@ func TestListModelsIncludesRoutedSourceForRootUser(t *testing.T) {
 	require.NoError(t, db.AutoMigrate(
 		&model.UserModelRoute{},
 		&model.UserModelRouteGroup{},
+		&model.UserModelRouteExecutionGroup{},
 		&model.UserModelRouteChannel{},
 	))
 	require.NoError(t, db.Create(&model.User{

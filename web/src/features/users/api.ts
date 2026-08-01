@@ -119,7 +119,7 @@ export async function getUserModelRoutes(
 
 export async function getUserModelRouteCandidates(
   id: number,
-  params: { target_model?: string; execution_group?: string } = {}
+  params: { target_model?: string; execution_groups?: string } = {}
 ): Promise<ApiResponse<UserModelRouteCandidates>> {
   const res = await api.get(`/api/user/${id}/model-route-candidates`, {
     params,
@@ -141,6 +141,18 @@ export async function updateUserModelRoute(
   data: Omit<UserModelRoute, 'id' | 'user_id' | 'created_at' | 'updated_at'>
 ): Promise<ApiResponse<UserModelRoute>> {
   const res = await api.put(`/api/user/${id}/model-routes/${routeId}`, data)
+  return res.data
+}
+
+export async function setUserModelRouteEnabled(
+  id: number,
+  routeId: number,
+  enabled: boolean
+): Promise<ApiResponse<UserModelRoute>> {
+  const res = await api.patch(
+    `/api/user/${id}/model-routes/${routeId}/enabled`,
+    { enabled }
+  )
   return res.data
 }
 

@@ -1021,7 +1021,7 @@ func deleteUserAuthenticationData(tx *gorm.DB, userId int) error {
 		routeIds = nil
 	}
 	if len(routeIds) > 0 {
-		for _, routeData := range []any{&UserModelRouteGroup{}, &UserModelRouteChannel{}} {
+		for _, routeData := range []any{&UserModelRouteGroup{}, &UserModelRouteExecutionGroup{}, &UserModelRouteChannel{}} {
 			if err := tx.Unscoped().Where("route_id IN ?", routeIds).Delete(routeData).Error; err != nil {
 				if !policyTableMissing(err) {
 					return err

@@ -173,9 +173,7 @@ func Distribute() func(c *gin.Context) {
 						resolvedGroup, groupUsable := resolveAffinitySelectionGroup(c, selectionGroup, selectionModel, bound.Id)
 						if routeChannelAllowed(c, bound.Id) && groupUsable {
 							channel = bound
-							if selectionGroup == "auto" {
-								common.SetContextKey(c, constant.ContextKeyAutoGroup, resolvedGroup)
-							}
+							commitRouteSelectionGroup(c, selectionGroup, resolvedGroup)
 						}
 					}
 				}
@@ -191,9 +189,7 @@ func Distribute() func(c *gin.Context) {
 							if routeChannelAllowed(c, preferred.Id) && groupUsable {
 								channel = preferred
 								affinityUsable = true
-								if selectionGroup == "auto" {
-									common.SetContextKey(c, constant.ContextKeyAutoGroup, resolvedGroup)
-								}
+								commitRouteSelectionGroup(c, selectionGroup, resolvedGroup)
 								service.MarkChannelAffinityUsed(c, resolvedGroup, preferred.Id)
 							}
 						}
@@ -213,6 +209,7 @@ func Distribute() func(c *gin.Context) {
 						TokenGroup:          selectionGroup,
 						RequestPath:         c.Request.URL.Path,
 						AllowedChannelIds:   routeSelectionChannelIds(c),
+						AllowedGroups:       routeSelectionExecutionGroups(c),
 						CandidateFilter:     candidateFilter,
 						CandidateClassifier: candidateClassifier,
 						Retry:               common.GetPointer(0),
@@ -267,12 +264,22 @@ func channelMatchesCandidateClassifier(channel *model.Channel, classifier model.
 	return class == model.ChannelCandidateNative || class == model.ChannelCandidateConvertible
 }
 
-// resolveAffinitySelectionGroup preserves auto-group selection semantics for an
-// affinity hit. Routed requests pass a concrete execution group; ordinary auto
-// tokens must test the user's usable auto groups in configured order.
+// resolveAffinitySelectionGroup preserves cross-group selection semantics for an
+// affinity hit. Multi-group routes use their configured order; ordinary auto
+// tokens use the user's usable auto groups.
 func resolveAffinitySelectionGroup(c *gin.Context, selectionGroup, selectionModel string, channelId int) (string, bool) {
 	if selectionGroup != "auto" {
 		return selectionGroup, groupAllowsRequestClient(c, selectionGroup) && model.IsChannelEnabledForGroupModel(selectionGroup, selectionModel, channelId)
+	}
+
+	selectionGroups := routeSelectionExecutionGroups(c)
+	if len(selectionGroups) > 0 {
+		for _, group := range selectionGroups {
+			if groupAllowsRequestClient(c, group) && model.IsChannelEnabledForGroupModel(group, selectionModel, channelId) {
+				return group, true
+			}
+		}
+		return "", false
 	}
 
 	userGroups := common.GetContextKeyStringSlice(c, constant.ContextKeyUserGroups)
