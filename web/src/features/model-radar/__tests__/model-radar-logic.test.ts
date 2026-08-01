@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { describe, expect, test } from 'vitest'
 
 import {
+  createModelRadarIconRegistry,
   getModelIconKey,
   groupConfigurations,
   matrixEfforts,
@@ -64,6 +65,39 @@ describe('model radar configuration grouping', () => {
       expect(getModelIconKey(model)).toBe(expected)
     }
   )
+
+  test('uses the configured vendor icon variant before the radar fallback', () => {
+    const iconRegistry = {
+      modelIcons: new Map<string, string>(),
+      providerIcons: new Map([['deepseek', 'DeepSeek.Color']]),
+    }
+
+    expect(getModelIconKey('deepseek-v3.2', iconRegistry)).toBe(
+      'DeepSeek.Color'
+    )
+  })
+
+  test('builds the radar icon registry from pricing vendor configuration', () => {
+    const iconRegistry = createModelRadarIconRegistry({
+      vendors: [{ id: 1, name: 'DeepSeek', icon: 'DeepSeek.Color' }],
+      data: [
+        {
+          id: 1,
+          model_name: 'deepseek-v3.2',
+          icon: 'DeepSeek',
+          vendor_id: 1,
+          quota_type: 0,
+          model_ratio: 1,
+          completion_ratio: 1,
+          enable_groups: ['default'],
+        },
+      ],
+    })
+
+    expect(getModelIconKey('provider/deepseek-v3.2', iconRegistry)).toBe(
+      'DeepSeek.Color'
+    )
+  })
 
   test('preserves first model appearance while sorting known efforts before unknown efforts', () => {
     const groups = groupConfigurations([

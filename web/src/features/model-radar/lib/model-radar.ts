@@ -16,6 +16,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import type { PricingData } from '@/features/pricing/types'
+import { resolveProviderIconKey } from '@/lib/provider-icon'
+
 import type { ModelRadarConfiguration, ModelRadarHistoryFrame } from '../types'
 
 export const EFFORT_ORDER = [
@@ -81,13 +84,67 @@ const MODEL_ICON_PREFIXES: Array<[prefix: string, icon: string]> = [
   ['yi', 'Yi'],
 ]
 
+export type ModelRadarIconRegistry = {
+  modelIcons: ReadonlyMap<string, string>
+  providerIcons: ReadonlyMap<string, string>
+}
+
+function getModelIconLookupKeys(model: string): string[] {
+  const normalized = model.trim().toLowerCase()
+  if (!normalized) return []
+
+  const lastSegment = normalized.match(/[^/:]+$/)?.[0]
+  return lastSegment && lastSegment !== normalized
+    ? [normalized, lastSegment]
+    : [normalized]
+}
+
+export function createModelRadarIconRegistry(
+  pricing: Pick<PricingData, 'data' | 'vendors'> | null | undefined
+): ModelRadarIconRegistry {
+  const modelIcons = new Map<string, string>()
+  const providerIcons = new Map<string, string>()
+  if (!Array.isArray(pricing?.data) || !Array.isArray(pricing.vendors)) {
+    return { modelIcons, providerIcons }
+  }
+
+  const vendors = new Map(pricing.vendors.map((vendor) => [vendor.id, vendor]))
+  for (const vendor of pricing.vendors) {
+    const iconKey = resolveProviderIconKey(vendor.icon)
+    const providerKey = iconKey?.split('.')[0]?.trim().toLowerCase()
+    if (iconKey && providerKey && !providerIcons.has(providerKey)) {
+      providerIcons.set(providerKey, iconKey)
+    }
+  }
+
+  for (const model of pricing.data) {
+    const vendor = model.vendor_id ? vendors.get(model.vendor_id) : undefined
+    const iconKey = resolveProviderIconKey(vendor?.icon, model.icon)
+    if (!iconKey) continue
+
+    for (const lookupKey of getModelIconLookupKeys(model.model_name)) {
+      if (!modelIcons.has(lookupKey)) modelIcons.set(lookupKey, iconKey)
+    }
+  }
+
+  return { modelIcons, providerIcons }
+}
+
 // Resolves a radar model name to its vendor's @lobehub/icons key.
-export function getModelIconKey(model: string): string | null {
+export function getModelIconKey(
+  model: string,
+  iconRegistry?: ModelRadarIconRegistry
+): string | null {
+  for (const lookupKey of getModelIconLookupKeys(model)) {
+    const configuredIcon = iconRegistry?.modelIcons.get(lookupKey)
+    if (configuredIcon) return configuredIcon
+  }
+
   const normalized = model.trim().toLowerCase()
   const candidates = [normalized, ...normalized.split(/[/:_]+/)]
   for (const [prefix, icon] of MODEL_ICON_PREFIXES) {
     if (candidates.some((candidate) => candidate.startsWith(prefix))) {
-      return icon
+      return iconRegistry?.providerIcons.get(icon.toLowerCase()) ?? icon
     }
   }
   return null

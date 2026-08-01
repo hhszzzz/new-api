@@ -24,7 +24,11 @@ import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 
 import { useRadarFormatters } from '../hooks/use-radar-formatters'
-import { createModelColorMap, getHistorySeries } from '../lib/model-radar'
+import {
+  createModelColorMap,
+  getHistorySeries,
+  type ModelRadarIconRegistry,
+} from '../lib/model-radar'
 import type {
   ModelRadarConfiguration,
   ModelRadarDegradationAlert,
@@ -36,6 +40,7 @@ export function DegradationAlerts(props: {
   alerts: ModelRadarDegradationAlert[]
   history: ModelRadarHistoryFrame[]
   configurations: ModelRadarConfiguration[]
+  iconRegistry?: ModelRadarIconRegistry
 }) {
   const { t } = useTranslation()
   const modelColors = createModelColorMap(props.configurations)
@@ -91,6 +96,7 @@ export function DegradationAlerts(props: {
                 alert.model,
                 alert.effort
               )}
+              iconRegistry={props.iconRegistry}
             />
           ))}
         </div>
@@ -103,6 +109,7 @@ function AlertCard(props: {
   alert: ModelRadarDegradationAlert
   color: string
   series: number[]
+  iconRegistry?: ModelRadarIconRegistry
 }) {
   const { t } = useTranslation()
   const format = useRadarFormatters()
@@ -119,7 +126,11 @@ function AlertCard(props: {
     >
       <div className='flex min-w-0 items-start justify-between gap-4'>
         <div className='flex min-w-0 items-center gap-2'>
-          <ModelBadge color={props.color} model={alert.model} />
+          <ModelBadge
+            color={props.color}
+            model={alert.model}
+            iconRegistry={props.iconRegistry}
+          />
           <div className='min-w-0'>
             <p className='truncate text-sm font-semibold'>{alert.model}</p>
             <p className='text-muted-foreground text-[11px] capitalize'>

@@ -52,6 +52,7 @@ import {
   getPassRate,
   groupConfigurations,
   matrixEfforts,
+  type ModelRadarIconRegistry,
 } from '../lib/model-radar'
 import type { ModelRadarConfiguration } from '../types'
 
@@ -68,8 +69,12 @@ const CELL_TEXT_CLASSES = {
 } as const
 
 // Provider icon for a radar model, falling back to its group color dot.
-export function ModelBadge(props: { color: string; model: string }) {
-  const iconKey = getModelIconKey(props.model)
+export function ModelBadge(props: {
+  color: string
+  model: string
+  iconRegistry?: ModelRadarIconRegistry
+}) {
+  const iconKey = getModelIconKey(props.model, props.iconRegistry)
   if (iconKey) {
     return (
       <span
@@ -91,6 +96,7 @@ export function ModelBadge(props: { color: string; model: string }) {
 
 export function CapabilityMatrix(props: {
   configurations: ModelRadarConfiguration[]
+  iconRegistry?: ModelRadarIconRegistry
 }) {
   const { t } = useTranslation()
   const [selected, setSelected] = useState<{
@@ -179,7 +185,11 @@ export function CapabilityMatrix(props: {
                     )}
                   >
                     <div className='flex min-w-0 items-center gap-2'>
-                      <ModelBadge color={group.color} model={group.model} />
+                      <ModelBadge
+                        color={group.color}
+                        model={group.model}
+                        iconRegistry={props.iconRegistry}
+                      />
                       <span className='max-w-40 truncate text-sm font-semibold'>
                         {group.model}
                       </span>

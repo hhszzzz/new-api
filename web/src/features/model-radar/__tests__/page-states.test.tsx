@@ -54,6 +54,9 @@ vi.mock('@/lib/use-chart-theme', () => ({
   useChartTheme: () => ({ resolvedTheme: 'light', themeReady: false }),
 }))
 vi.mock('@/hooks', () => ({ useMediaQuery: () => false }))
+vi.mock('@/lib/lobe-icon', () => ({
+  getLobeIcon: (iconName: string) => <svg data-icon-key={iconName} />,
+}))
 vi.mock('@visactor/react-vchart', () => ({
   VChart: () => <div data-testid='radar-chart' />,
 }))
@@ -174,5 +177,59 @@ describe('model radar page states', () => {
       })
     ).toHaveAttribute('href', 'https://codexradar.com')
     expect(screen.queryByText(/recommend/i)).toBeNull()
+  })
+
+  test('renders the model icon variant configured for the matching pricing vendor', () => {
+    const radarResponse = response(false)
+    radarResponse.data.configurations[0].model = 'deepseek-v3.2'
+    queryMocks.useQuery.mockImplementation(
+      (query?: { queryKey: readonly string[] }) => {
+        if (query?.queryKey[0] === 'pricing') {
+          return {
+            data: {
+              success: true,
+              data: [
+                {
+                  id: 1,
+                  model_name: 'deepseek-v3.2',
+                  icon: 'DeepSeek',
+                  vendor_id: 1,
+                  quota_type: 0,
+                  model_ratio: 1,
+                  completion_ratio: 1,
+                  enable_groups: ['default'],
+                },
+              ],
+              vendors: [{ id: 1, name: 'DeepSeek', icon: 'DeepSeek.Color' }],
+              group_ratio: {},
+              usable_group: {},
+              supported_endpoint: {},
+              auto_groups: [],
+            },
+            error: null,
+            isError: false,
+            isFetched: true,
+            isFetching: false,
+            isLoading: false,
+            refetch: vi.fn(),
+          }
+        }
+        return {
+          data: radarResponse,
+          error: null,
+          isError: false,
+          isFetched: true,
+          isFetching: false,
+          isLoading: false,
+          refetch: vi.fn(),
+        }
+      }
+    )
+
+    const view = renderPage()
+
+    expect(
+      view.container.querySelector('[data-icon-key="DeepSeek.Color"]')
+    ).not.toBeNull()
   })
 })

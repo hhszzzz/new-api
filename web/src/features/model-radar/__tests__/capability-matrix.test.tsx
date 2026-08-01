@@ -33,6 +33,9 @@ vi.mock('react-i18next', () => ({
   }),
 }))
 vi.mock('@/hooks', () => ({ useMediaQuery: () => true }))
+vi.mock('@/lib/lobe-icon', () => ({
+  getLobeIcon: (iconName: string) => <svg data-icon-key={iconName} />,
+}))
 
 const fixture: ModelRadarConfiguration = {
   model: 'gpt-radar',
@@ -57,13 +60,29 @@ const fixture: ModelRadarConfiguration = {
 }
 
 describe('model radar capability matrix', () => {
-  test('renders a complete colorful vendor badge without clipping it', () => {
+  test('renders a complete vendor badge without clipping it', () => {
     const { container } = render(<ModelBadge color='#2563eb' model='gpt-5.4' />)
     const wrapper = container.firstElementChild
 
     expect(wrapper).toHaveClass('size-6')
     expect(wrapper).not.toHaveClass('overflow-hidden')
     expect(wrapper?.querySelector('svg')).not.toBeNull()
+  })
+
+  test('renders the vendor configured icon variant instead of the radar fallback', () => {
+    const { container } = render(
+      <CapabilityMatrix
+        configurations={[{ ...fixture, model: 'deepseek-v3.2' }]}
+        iconRegistry={{
+          modelIcons: new Map<string, string>(),
+          providerIcons: new Map([['deepseek', 'DeepSeek.Color']]),
+        }}
+      />
+    )
+
+    expect(
+      container.querySelector('[data-icon-key="DeepSeek.Color"]')
+    ).not.toBeNull()
   })
 
   test('lays out the matrix as a table with one row per model', () => {

@@ -20,6 +20,7 @@ import { RefreshIcon } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useQuery } from '@tanstack/react-query'
 import { isAxiosError } from 'axios'
+import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { PublicLayout } from '@/components/layout'
@@ -35,13 +36,16 @@ import {
   EmptyTitle,
 } from '@/components/ui/empty'
 import { Skeleton } from '@/components/ui/skeleton'
+import { getPricing } from '@/features/pricing/api'
 
 import { getModelRadar } from './api'
 import { CapabilityMatrix } from './components/capability-matrix'
 import { DegradationAlerts } from './components/degradation-alerts'
 import { useRadarFormatters } from './hooks/use-radar-formatters'
+import { createModelRadarIconRegistry } from './lib/model-radar'
 
 const REFRESH_INTERVAL_MS = 10 * 60 * 1000
+const PRICING_STALE_TIME_MS = 5 * 60 * 1000
 
 export function ModelRadar() {
   const { t } = useTranslation()
@@ -52,6 +56,15 @@ export function ModelRadar() {
     refetchInterval: REFRESH_INTERVAL_MS,
     staleTime: REFRESH_INTERVAL_MS,
   })
+  const pricingQuery = useQuery({
+    queryKey: ['pricing'],
+    queryFn: getPricing,
+    staleTime: PRICING_STALE_TIME_MS,
+  })
+  const iconRegistry = useMemo(
+    () => createModelRadarIconRegistry(pricingQuery.data),
+    [pricingQuery.data]
+  )
   const snapshot = radarQuery.data?.data
   const updatedAt = snapshot ? format.dateTime(snapshot.fetched_at) : null
   const sourceUpdatedAt = snapshot
@@ -88,8 +101,12 @@ export function ModelRadar() {
           alerts={snapshot.degradation_alerts}
           history={snapshot.history}
           configurations={snapshot.configurations}
+          iconRegistry={iconRegistry}
         />
-        <CapabilityMatrix configurations={snapshot.configurations} />
+        <CapabilityMatrix
+          configurations={snapshot.configurations}
+          iconRegistry={iconRegistry}
+        />
       </>
     )
   }

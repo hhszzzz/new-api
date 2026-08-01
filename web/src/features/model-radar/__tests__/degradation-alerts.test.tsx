@@ -30,6 +30,9 @@ vi.mock('react-i18next', () => ({
       ),
   }),
 }))
+vi.mock('@/lib/lobe-icon', () => ({
+  getLobeIcon: (iconName: string) => <svg data-icon-key={iconName} />,
+}))
 
 describe('model radar degradation alerts', () => {
   test('renders a negative degradation as an improvement with the correct prior IQ', () => {
@@ -54,5 +57,32 @@ describe('model radar degradation alerts', () => {
     expect(within(alert).getByText('48 hours ago 38.8')).toBeVisible()
     expect(within(alert).getByText('+0.2')).toBeVisible()
     expect(within(alert).getAllByText('-6.5')).toHaveLength(2)
+  })
+
+  test('renders the vendor configured icon variant in degradation alerts', () => {
+    const view = render(
+      <DegradationAlerts
+        alerts={[
+          {
+            model: 'deepseek-v3.2',
+            effort: 'low',
+            iq: 75,
+            degradation_12h_iq: 1,
+            degradation_24h_iq: 2,
+            degradation_48h_iq: 3,
+          },
+        ]}
+        configurations={[]}
+        history={[]}
+        iconRegistry={{
+          modelIcons: new Map<string, string>(),
+          providerIcons: new Map([['deepseek', 'DeepSeek.Color']]),
+        }}
+      />
+    )
+
+    expect(
+      view.container.querySelector('[data-icon-key="DeepSeek.Color"]')
+    ).not.toBeNull()
   })
 })
