@@ -23,6 +23,7 @@ import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { useStatus } from '@/hooks/use-status'
 import { getLobeIcon } from '@/lib/lobe-icon'
+import { resolveDefaultProviderIconKey } from '@/lib/provider-icon'
 
 import { HeroTerminalDemo } from '../hero-terminal-demo'
 
@@ -193,7 +194,10 @@ export function Hero(props: HeroProps) {
                 className='group border-border/40 bg-muted/15 text-foreground/80 hover:border-border hover:bg-muted/30 hover:text-foreground flex items-center gap-3 rounded-full border px-5 py-2.5 text-sm font-medium shadow-[0_1px_2.5px_rgba(0,0,0,0.01)] backdrop-blur-xs transition-all duration-300 hover:scale-[1.02]'
               >
                 <span className='shrink-0'>
-                  {getLobeIcon('CherryStudio', 24)}
+                  {getLobeIcon(
+                    resolveDefaultProviderIconKey('CherryStudio'),
+                    24
+                  )}
                 </span>
                 <span>Cherry Studio</span>
               </a>

@@ -17,7 +17,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { PricingData } from '@/features/pricing/types'
-import { resolveProviderIconKey } from '@/lib/provider-icon'
+import {
+  resolveDefaultProviderIconKey,
+  resolveProviderIconKey,
+} from '@/lib/provider-icon'
 
 import type { ModelRadarConfiguration, ModelRadarHistoryFrame } from '../types'
 
@@ -144,7 +147,10 @@ export function getModelIconKey(
   const candidates = [normalized, ...normalized.split(/[/:_]+/)]
   for (const [prefix, icon] of MODEL_ICON_PREFIXES) {
     if (candidates.some((candidate) => candidate.startsWith(prefix))) {
-      return iconRegistry?.providerIcons.get(icon.toLowerCase()) ?? icon
+      return (
+        iconRegistry?.providerIcons.get(icon.toLowerCase()) ??
+        resolveDefaultProviderIconKey(icon)
+      )
     }
   }
   return null

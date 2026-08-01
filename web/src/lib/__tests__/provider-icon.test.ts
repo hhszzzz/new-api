@@ -18,7 +18,10 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { describe, expect, test } from 'vitest'
 
-import { resolveProviderIconKey } from '../provider-icon'
+import {
+  resolveDefaultProviderIconKey,
+  resolveProviderIconKey,
+} from '../provider-icon'
 
 describe('resolveProviderIconKey', () => {
   test('uses the configured vendor icon before a model-specific icon', () => {
@@ -34,4 +37,15 @@ describe('resolveProviderIconKey', () => {
       'Anthropic.Color'
     )
   })
+
+  test('uses the color variant for an inferred plain provider icon', () => {
+    expect(resolveDefaultProviderIconKey('Gemini')).toBe('Gemini.Color')
+  })
+
+  test.each(['OpenAI.Mono', 'Claude.Color', "XAI.Avatar.type={'platform'}"])(
+    'preserves the explicit provider icon variant %s',
+    (iconKey) => {
+      expect(resolveDefaultProviderIconKey(iconKey)).toBe(iconKey)
+    }
+  )
 })

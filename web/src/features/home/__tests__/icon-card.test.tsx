@@ -16,20 +16,23 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { render, screen } from '@testing-library/react'
+import { describe, expect, test, vi } from 'vitest'
 
-export function resolveProviderIconKey(
-  vendorIcon?: string | null,
-  modelIcon?: string | null
-): string | null {
-  const resolvedVendorIcon = vendorIcon?.trim()
-  if (resolvedVendorIcon) return resolvedVendorIcon
+import { IconCard } from '../components/icon-card'
 
-  return modelIcon?.trim() || null
-}
+vi.mock('@/lib/lobe-icon', () => ({
+  getLobeIcon: (iconName: string) => (
+    <span data-testid='home-provider-icon'>{iconName}</span>
+  ),
+}))
 
-export function resolveDefaultProviderIconKey(iconKey: string): string {
-  const resolvedIconKey = iconKey.trim()
-  if (!resolvedIconKey || resolvedIconKey.includes('.')) return resolvedIconKey
+describe('home provider icon cards', () => {
+  test('uses the default provider variant for a plain provider key', () => {
+    render(<IconCard iconName='Gemini' />)
 
-  return `${resolvedIconKey}.Color`
-}
+    expect(screen.getByTestId('home-provider-icon')).toHaveTextContent(
+      'Gemini.Color'
+    )
+  })
+})

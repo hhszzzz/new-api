@@ -33,11 +33,13 @@ vi.mock('@/lib/lobe-icon', () => ({
 
 describe('usage-log model badge provider icons', () => {
   test.each([
-    ['gpt-5.4', 'OpenAI'],
-    ['claude-opus-4.1', 'Claude'],
-    ['grok-4', 'XAI'],
-    ['kimi-k2', 'Moonshot'],
-  ])('uses the direct provider icon for %s', (modelName, expectedIcon) => {
+    ['gpt-5.4', 'OpenAI.Color'],
+    ['claude-opus-4.1', 'Claude.Color'],
+    ['gemini-2.5-pro', 'Gemini.Color'],
+    ['deepseek-v3.2', 'DeepSeek.Color'],
+    ['grok-4', 'XAI.Color'],
+    ['kimi-k2', 'Moonshot.Color'],
+  ])('uses the default provider icon for %s', (modelName, expectedIcon) => {
     render(<ModelBadge modelName={modelName} />)
 
     expect(screen.getByTestId('provider-icon')).toHaveTextContent(expectedIcon)

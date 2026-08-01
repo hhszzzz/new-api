@@ -57,7 +57,7 @@ describe('New API channel', () => {
       CHANNEL_TYPE_OPTIONS.findIndex((item) => item.value === 58)
     )
     assert.equal(MODEL_FETCHABLE_TYPES.has(CHANNEL_TYPE_NEW_API), true)
-    assert.equal(getChannelTypeIcon(CHANNEL_TYPE_NEW_API), 'NewAPI')
+    assert.equal(getChannelTypeIcon(CHANNEL_TYPE_NEW_API), 'NewAPI.Color')
     assert.equal(
       getKeyPromptForType(CHANNEL_TYPE_NEW_API),
       'Enter API key for this channel'

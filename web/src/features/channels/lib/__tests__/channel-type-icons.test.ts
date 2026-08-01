@@ -16,20 +16,17 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { describe, expect, test } from 'vitest'
 
-export function resolveProviderIconKey(
-  vendorIcon?: string | null,
-  modelIcon?: string | null
-): string | null {
-  const resolvedVendorIcon = vendorIcon?.trim()
-  if (resolvedVendorIcon) return resolvedVendorIcon
+import { getChannelTypeIcon } from '../channel-utils'
 
-  return modelIcon?.trim() || null
-}
-
-export function resolveDefaultProviderIconKey(iconKey: string): string {
-  const resolvedIconKey = iconKey.trim()
-  if (!resolvedIconKey || resolvedIconKey.includes('.')) return resolvedIconKey
-
-  return `${resolvedIconKey}.Color`
-}
+describe('channel type provider icons', () => {
+  test.each([
+    [14, 'Claude.Color'],
+    [24, 'Gemini.Color'],
+    [43, 'DeepSeek.Color'],
+    [1, 'OpenAI.Color'],
+  ])('uses the default provider variant for channel type %i', (type, icon) => {
+    expect(getChannelTypeIcon(type)).toBe(icon)
+  })
+})

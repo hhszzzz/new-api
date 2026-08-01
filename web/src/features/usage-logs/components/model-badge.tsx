@@ -26,6 +26,7 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover'
 import { getLobeIcon } from '@/lib/lobe-icon'
+import { resolveDefaultProviderIconKey } from '@/lib/provider-icon'
 import { cn } from '@/lib/utils'
 
 interface ModelBadgeProps {
@@ -144,7 +145,7 @@ function ModelBadgeContent(props: ModelBadgeProps) {
             title={provider.label}
             aria-label={provider.label}
           >
-            {getLobeIcon(provider.icon, 18)}
+            {getLobeIcon(resolveDefaultProviderIconKey(provider.icon), 18)}
           </span>
         )}
         <span className='whitespace-nowrap'>{props.modelName}</span>

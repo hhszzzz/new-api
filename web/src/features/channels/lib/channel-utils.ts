@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { formatCurrencyFromUSD, formatQuotaWithCurrency } from '@/lib/currency'
 import { formatTimestampToDate } from '@/lib/format'
+import { resolveDefaultProviderIconKey } from '@/lib/provider-icon'
 
 import {
   CHANNEL_STATUS_CONFIG,
@@ -47,8 +48,8 @@ export function getChannelTypeLabel(type: number): string {
 }
 
 /**
- * Get channel type icon name for getLobeIcon
- * Maps channel types to Lobe icon names using type number (language-independent)
+ * Get the default channel type icon key for getLobeIcon.
+ * Maps channel types to provider icons using type number (language-independent).
  */
 export function getChannelTypeIcon(type: number): string {
   const TYPE_TO_ICON: Record<number, string> = {
@@ -126,7 +127,7 @@ export function getChannelTypeIcon(type: number): string {
     9: 'OpenAI', // AILS
   }
 
-  return TYPE_TO_ICON[type] || 'OpenAI'
+  return resolveDefaultProviderIconKey(TYPE_TO_ICON[type] || 'OpenAI')
 }
 
 // ============================================================================
