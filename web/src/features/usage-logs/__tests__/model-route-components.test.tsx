@@ -385,6 +385,33 @@ describe('usage-log model route component visibility', () => {
     expect(systemPromptBadge).not.toHaveClass('rounded-4xl')
   })
 
+  test('shows WebSocket stream status to the log owner', async () => {
+    const streamStatusLog: UsageLog = {
+      ...routedLog,
+      is_stream: true,
+      other: JSON.stringify({
+        transport: 'websocket',
+        stream_status: {
+          status: 'error',
+          end_reason: 'timeout',
+          error_count: 1,
+          end_error: 'upstream timed out',
+          errors: ['recoverable frame error'],
+        },
+      }),
+    }
+
+    renderDetailsDialog(ROLE.USER, 'all', streamStatusLog)
+
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByText('Connection Type')).toBeVisible()
+    expect(within(dialog).getByText('WebSocket')).toBeVisible()
+    expect(within(dialog).getByText('Stream Status')).toBeVisible()
+    expect(within(dialog).getByText('timeout')).toBeVisible()
+    expect(within(dialog).getByText('upstream timed out')).toBeVisible()
+    expect(within(dialog).getByText('recoverable frame error')).toBeVisible()
+  })
+
   test('places reasoning effort before request diagnostics', async () => {
     renderDetailsDialog(ROLE.ADMIN, 'all')
 

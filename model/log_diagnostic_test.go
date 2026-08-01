@@ -222,7 +222,12 @@ func TestFormatAdminSelfLogsKeepsRoutingAndPublicDiagnostics(t *testing.T) {
 			"request_conversion": []string{"responses_to_chat"},
 			"request_path":       "/v1/responses",
 			"audit_info":         map[string]interface{}{"route": "private"},
-			"stream_status":      map[string]interface{}{"upstream": "private"},
+			"stream_status": map[string]interface{}{
+				"status":      "error",
+				"end_reason":  "timeout",
+				"error_count": 1,
+				"end_error":   "private-model timed out",
+			},
 		}),
 	}}
 
@@ -237,7 +242,11 @@ func TestFormatAdminSelfLogsKeepsRoutingAndPublicDiagnostics(t *testing.T) {
 	assert.NotContains(t, other, "request_conversion")
 	assert.NotContains(t, other, "request_path")
 	assert.NotContains(t, other, "audit_info")
-	assert.NotContains(t, other, "stream_status")
+	streamStatus, ok := other["stream_status"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "error", streamStatus["status"])
+	assert.Equal(t, "timeout", streamStatus["end_reason"])
+	assert.Equal(t, "private-model timed out", streamStatus["end_error"])
 	adminInfo, ok := other["admin_info"].(map[string]interface{})
 	require.True(t, ok)
 	assert.Equal(t, true, adminInfo["is_model_mapped"])

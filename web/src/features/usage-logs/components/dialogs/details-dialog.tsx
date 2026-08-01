@@ -1381,23 +1381,21 @@ export function DetailsDialog(props: DetailsDialogProps) {
             />
           )}
 
-        {/* Stream status details (admin only) */}
-        {props.isAdminView &&
-          other?.stream_status &&
-          other.stream_status.status !== 'ok' && (
-            <DetailSection label={t('Stream Status')}>
-              <DetailRow
-                label={t('Status')}
-                value={
-                  <StatusBadge
-                    label={other.stream_status.status || t('Error')}
-                    variant='red'
-                    size='sm'
-                    copyable={false}
-                  />
-                }
-              />
-              {other.stream_status.end_reason && (
+        {/* Stream status details */}
+        {other?.stream_status && other.stream_status.status !== 'ok' && (
+          <DetailSection label={t('Stream Status')}>
+            <DetailRow
+              label={t('Status')}
+              value={
+                <StatusBadge
+                  label={other.stream_status.status || t('Error')}
+                  variant='red'
+                  size='sm'
+                  copyable={false}
+                />
+              }
+            />
+            {other.stream_status.end_reason && (
               <DetailRow
                 label={t('End Reason')}
                 value={other.stream_status.end_reason}

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -39,6 +40,9 @@ func TestPostWssConsumeQuotaKeepsRoutedModelAdminOnly(t *testing.T) {
 	ctx.Set("username", "test_user")
 	ctx.Set("token_name", "test_token")
 	now := time.Now()
+	streamStatus := relaycommon.NewStreamStatus()
+	streamStatus.RecordError("private-upstream-model frame failed")
+	streamStatus.SetEndReason(relaycommon.StreamEndReasonTimeout, errors.New("private-upstream-model timed out"))
 	relayInfo := &relaycommon.RelayInfo{
 		UserId:            1,
 		UsingGroup:        "default",
@@ -46,6 +50,7 @@ func TestPostWssConsumeQuotaKeepsRoutedModelAdminOnly(t *testing.T) {
 		StartTime:         now,
 		FirstResponseTime: now,
 		IsStream:          true,
+		StreamStatus:      streamStatus,
 		ChannelMeta: &relaycommon.ChannelMeta{
 			ChannelId:         1,
 			IsModelMapped:     true,
@@ -69,6 +74,9 @@ func TestPostWssConsumeQuotaKeepsRoutedModelAdminOnly(t *testing.T) {
 	rawAdminInfo, ok := rawOther["admin_info"].(map[string]interface{})
 	require.True(t, ok)
 	assert.Equal(t, "private-upstream-model", rawAdminInfo["upstream_model_name"])
+	rawStreamStatus, ok := rawOther["stream_status"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "error", rawStreamStatus["status"])
 
 	publicLogs, total, err := model.GetUserLogs(1, model.LogTypeConsume, 0, 0, "", "", 0, 10, "", "", "", false)
 	require.NoError(t, err)
@@ -76,6 +84,13 @@ func TestPostWssConsumeQuotaKeepsRoutedModelAdminOnly(t *testing.T) {
 	require.Len(t, publicLogs, 1)
 	assert.Equal(t, "requested-realtime-model", publicLogs[0].ModelName)
 	assert.NotContains(t, publicLogs[0].Other, "private-upstream-model")
+	publicOther, err := common.StrToMap(publicLogs[0].Other)
+	require.NoError(t, err)
+	publicStreamStatus, ok := publicOther["stream_status"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "timeout", publicStreamStatus["end_reason"])
+	assert.Equal(t, "requested-realtime-model timed out", publicStreamStatus["end_error"])
+	assert.Equal(t, []interface{}{"requested-realtime-model frame failed"}, publicStreamStatus["errors"])
 
 	adminLogs, total, err := model.GetUserLogs(1, model.LogTypeConsume, 0, 0, "", "", 0, 10, "", "", "", true)
 	require.NoError(t, err)
@@ -86,6 +101,9 @@ func TestPostWssConsumeQuotaKeepsRoutedModelAdminOnly(t *testing.T) {
 	adminInfo, ok := adminOther["admin_info"].(map[string]interface{})
 	require.True(t, ok)
 	assert.Equal(t, "private-upstream-model", adminInfo["upstream_model_name"])
+	adminStreamStatus, ok := adminOther["stream_status"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "private-upstream-model timed out", adminStreamStatus["end_error"])
 
 	model.CacheQuotaDataLock.Lock()
 	quotaModels := make([]string, 0, len(model.CacheQuotaData))

@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { render, screen, waitFor } from '@testing-library/react'
+import type { ComponentProps } from 'react'
 import { describe, expect, test, vi } from 'vitest'
 
 import { getLobeIcon } from '../lobe-icon'
@@ -25,6 +26,13 @@ vi.mock('@lobehub/icons/es/icons.js', () => ({
   LmStudio: (props: { size?: number }) => (
     <svg aria-label='LM Studio' height={props.size} width={props.size} />
   ),
+}))
+
+vi.mock('@lobehub/ui', () => ({
+  Center: ({
+    flex: _flex,
+    ...props
+  }: ComponentProps<'span'> & { flex?: string }) => <span {...props} />,
 }))
 
 describe('getLobeIcon', () => {
@@ -60,6 +68,32 @@ describe('getLobeIcon', () => {
     expect(screen.getByLabelText('OpenAI')).toHaveStyle({
       background: '#0000FE',
     })
+  })
+
+  test('renders OpenAI.Color with the colorful platform avatar', () => {
+    const { container } = render(getLobeIcon('OpenAI.Color', 20))
+
+    expect(screen.getByLabelText('OpenAI')).toHaveStyle({
+      background: '#0000FE',
+      height: '20px',
+      width: '20px',
+    })
+    expect(container.querySelector('svg')).toHaveStyle({
+      transform: 'scale(0.75)',
+    })
+  })
+
+  test('uses each vendor original avatar implementation', () => {
+    const { container, rerender } = render(
+      getLobeIcon("Gemini.Avatar.type={'platform'}", 20)
+    )
+
+    expect(screen.getByLabelText('Gemini')).toBeVisible()
+    expect(container.querySelector('path[fill="#3186FF"]')).not.toBeNull()
+
+    rerender(getLobeIcon("Stepfun.Avatar.type={'platform'}", 20))
+
+    expect(screen.getByLabelText('StepFun')).toBeVisible()
   })
 
   test('renders a fixed-size fallback when no icon is configured', () => {

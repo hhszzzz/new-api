@@ -41,9 +41,11 @@ import * as AzureStyle from '@lobehub/icons/es/Azure/style.js'
 import AzureAIColor from '@lobehub/icons/es/AzureAI/components/Color.js'
 import AzureAIMono from '@lobehub/icons/es/AzureAI/components/Mono.js'
 import * as AzureAIStyle from '@lobehub/icons/es/AzureAI/style.js'
+import BaichuanAvatar from '@lobehub/icons/es/Baichuan/components/Avatar.js'
 import BaiduColor from '@lobehub/icons/es/Baidu/components/Color.js'
 import BaiduMono from '@lobehub/icons/es/Baidu/components/Mono.js'
 import * as BaiduStyle from '@lobehub/icons/es/Baidu/style.js'
+import ClaudeAvatar from '@lobehub/icons/es/Claude/components/Avatar.js'
 import ClaudeColor from '@lobehub/icons/es/Claude/components/Color.js'
 import ClaudeMono from '@lobehub/icons/es/Claude/components/Mono.js'
 import * as ClaudeStyle from '@lobehub/icons/es/Claude/style.js'
@@ -52,32 +54,39 @@ import * as ClineStyle from '@lobehub/icons/es/Cline/style.js'
 import CloudflareColor from '@lobehub/icons/es/Cloudflare/components/Color.js'
 import CloudflareMono from '@lobehub/icons/es/Cloudflare/components/Mono.js'
 import * as CloudflareStyle from '@lobehub/icons/es/Cloudflare/style.js'
+import CohereAvatar from '@lobehub/icons/es/Cohere/components/Avatar.js'
 import CohereColor from '@lobehub/icons/es/Cohere/components/Color.js'
 import CohereMono from '@lobehub/icons/es/Cohere/components/Mono.js'
 import * as CohereStyle from '@lobehub/icons/es/Cohere/style.js'
 import CozeMono from '@lobehub/icons/es/Coze/components/Mono.js'
 import * as CozeStyle from '@lobehub/icons/es/Coze/style.js'
+import DeepSeekAvatar from '@lobehub/icons/es/DeepSeek/components/Avatar.js'
 import DeepSeekColor from '@lobehub/icons/es/DeepSeek/components/Color.js'
 import DeepSeekMono from '@lobehub/icons/es/DeepSeek/components/Mono.js'
 import * as DeepSeekStyle from '@lobehub/icons/es/DeepSeek/style.js'
 import DifyColor from '@lobehub/icons/es/Dify/components/Color.js'
 import DifyMono from '@lobehub/icons/es/Dify/components/Mono.js'
 import * as DifyStyle from '@lobehub/icons/es/Dify/style.js'
+import DoubaoAvatar from '@lobehub/icons/es/Doubao/components/Avatar.js'
 import DoubaoColor from '@lobehub/icons/es/Doubao/components/Color.js'
 import DoubaoMono from '@lobehub/icons/es/Doubao/components/Mono.js'
 import * as DoubaoStyle from '@lobehub/icons/es/Doubao/style.js'
 import FastGPTColor from '@lobehub/icons/es/FastGPT/components/Color.js'
 import FastGPTMono from '@lobehub/icons/es/FastGPT/components/Mono.js'
 import * as FastGPTStyle from '@lobehub/icons/es/FastGPT/style.js'
+import GeminiAvatar from '@lobehub/icons/es/Gemini/components/Avatar.js'
 import GeminiColor from '@lobehub/icons/es/Gemini/components/Color.js'
 import GeminiMono from '@lobehub/icons/es/Gemini/components/Mono.js'
 import * as GeminiStyle from '@lobehub/icons/es/Gemini/style.js'
+import GoogleAvatar from '@lobehub/icons/es/Google/components/Avatar.js'
 import GoogleColor from '@lobehub/icons/es/Google/components/Color.js'
 import GoogleMono from '@lobehub/icons/es/Google/components/Mono.js'
 import * as GoogleStyle from '@lobehub/icons/es/Google/style.js'
+import HunyuanAvatar from '@lobehub/icons/es/Hunyuan/components/Avatar.js'
 import HunyuanColor from '@lobehub/icons/es/Hunyuan/components/Color.js'
 import HunyuanMono from '@lobehub/icons/es/Hunyuan/components/Mono.js'
 import * as HunyuanStyle from '@lobehub/icons/es/Hunyuan/style.js'
+import InternLMAvatar from '@lobehub/icons/es/InternLM/components/Avatar.js'
 import JimengColor from '@lobehub/icons/es/Jimeng/components/Color.js'
 import JimengMono from '@lobehub/icons/es/Jimeng/components/Mono.js'
 import * as JimengStyle from '@lobehub/icons/es/Jimeng/style.js'
@@ -89,14 +98,18 @@ import * as KlingStyle from '@lobehub/icons/es/Kling/style.js'
 import LobeHubColor from '@lobehub/icons/es/LobeHub/components/Color.js'
 import LobeHubMono from '@lobehub/icons/es/LobeHub/components/Mono.js'
 import * as LobeHubStyle from '@lobehub/icons/es/LobeHub/style.js'
+import MetaAvatar from '@lobehub/icons/es/Meta/components/Avatar.js'
 import MidjourneyMono from '@lobehub/icons/es/Midjourney/components/Mono.js'
 import * as MidjourneyStyle from '@lobehub/icons/es/Midjourney/style.js'
+import MinimaxAvatar from '@lobehub/icons/es/Minimax/components/Avatar.js'
 import MinimaxColor from '@lobehub/icons/es/Minimax/components/Color.js'
 import MinimaxMono from '@lobehub/icons/es/Minimax/components/Mono.js'
 import * as MinimaxStyle from '@lobehub/icons/es/Minimax/style.js'
+import MistralAvatar from '@lobehub/icons/es/Mistral/components/Avatar.js'
 import MistralColor from '@lobehub/icons/es/Mistral/components/Color.js'
 import MistralMono from '@lobehub/icons/es/Mistral/components/Mono.js'
 import * as MistralStyle from '@lobehub/icons/es/Mistral/style.js'
+import MoonshotAvatar from '@lobehub/icons/es/Moonshot/components/Avatar.js'
 import MoonshotMono from '@lobehub/icons/es/Moonshot/components/Mono.js'
 import * as MoonshotStyle from '@lobehub/icons/es/Moonshot/style.js'
 import NewAPIColor from '@lobehub/icons/es/NewAPI/components/Color.js'
@@ -104,7 +117,7 @@ import NewAPIMono from '@lobehub/icons/es/NewAPI/components/Mono.js'
 import * as NewAPIStyle from '@lobehub/icons/es/NewAPI/style.js'
 import OllamaMono from '@lobehub/icons/es/Ollama/components/Mono.js'
 import * as OllamaStyle from '@lobehub/icons/es/Ollama/style.js'
-import OpenAIColor from '@lobehub/icons/es/OpenAI/components/Color.js'
+import OpenAIAvatar from '@lobehub/icons/es/OpenAI/components/Avatar.js'
 import OpenAIMono from '@lobehub/icons/es/OpenAI/components/Mono.js'
 import * as OpenAIStyle from '@lobehub/icons/es/OpenAI/style.js'
 import OpenRouterColor from '@lobehub/icons/es/OpenRouter/components/Color.js'
@@ -112,9 +125,11 @@ import OpenRouterMono from '@lobehub/icons/es/OpenRouter/components/Mono.js'
 import * as OpenRouterStyle from '@lobehub/icons/es/OpenRouter/style.js'
 import OpenWebUIMono from '@lobehub/icons/es/OpenWebUI/components/Mono.js'
 import * as OpenWebUIStyle from '@lobehub/icons/es/OpenWebUI/style.js'
+import PerplexityAvatar from '@lobehub/icons/es/Perplexity/components/Avatar.js'
 import PerplexityColor from '@lobehub/icons/es/Perplexity/components/Color.js'
 import PerplexityMono from '@lobehub/icons/es/Perplexity/components/Mono.js'
 import * as PerplexityStyle from '@lobehub/icons/es/Perplexity/style.js'
+import QwenAvatar from '@lobehub/icons/es/Qwen/components/Avatar.js'
 import QwenColor from '@lobehub/icons/es/Qwen/components/Color.js'
 import QwenMono from '@lobehub/icons/es/Qwen/components/Mono.js'
 import * as QwenStyle from '@lobehub/icons/es/Qwen/style.js'
@@ -123,9 +138,11 @@ import * as ReplicateStyle from '@lobehub/icons/es/Replicate/style.js'
 import SiliconCloudColor from '@lobehub/icons/es/SiliconCloud/components/Color.js'
 import SiliconCloudMono from '@lobehub/icons/es/SiliconCloud/components/Mono.js'
 import * as SiliconCloudStyle from '@lobehub/icons/es/SiliconCloud/style.js'
+import SparkAvatar from '@lobehub/icons/es/Spark/components/Avatar.js'
 import SparkColor from '@lobehub/icons/es/Spark/components/Color.js'
 import SparkMono from '@lobehub/icons/es/Spark/components/Mono.js'
 import * as SparkStyle from '@lobehub/icons/es/Spark/style.js'
+import StepfunAvatar from '@lobehub/icons/es/Stepfun/components/Avatar.js'
 import SunoMono from '@lobehub/icons/es/Suno/components/Mono.js'
 import * as SunoStyle from '@lobehub/icons/es/Suno/style.js'
 import ViduColor from '@lobehub/icons/es/Vidu/components/Color.js'
@@ -134,17 +151,22 @@ import * as ViduStyle from '@lobehub/icons/es/Vidu/style.js'
 import VolcengineColor from '@lobehub/icons/es/Volcengine/components/Color.js'
 import VolcengineMono from '@lobehub/icons/es/Volcengine/components/Mono.js'
 import * as VolcengineStyle from '@lobehub/icons/es/Volcengine/style.js'
+import WenxinAvatar from '@lobehub/icons/es/Wenxin/components/Avatar.js'
 import WenxinColor from '@lobehub/icons/es/Wenxin/components/Color.js'
 import WenxinMono from '@lobehub/icons/es/Wenxin/components/Mono.js'
 import * as WenxinStyle from '@lobehub/icons/es/Wenxin/style.js'
+import XAIAvatar from '@lobehub/icons/es/XAI/components/Avatar.js'
 import XAIMono from '@lobehub/icons/es/XAI/components/Mono.js'
 import * as XAIStyle from '@lobehub/icons/es/XAI/style.js'
+import XiaomiMiMoAvatar from '@lobehub/icons/es/XiaomiMiMo/components/Avatar.js'
 import XinferenceColor from '@lobehub/icons/es/Xinference/components/Color.js'
 import XinferenceMono from '@lobehub/icons/es/Xinference/components/Mono.js'
 import * as XinferenceStyle from '@lobehub/icons/es/Xinference/style.js'
+import YiAvatar from '@lobehub/icons/es/Yi/components/Avatar.js'
 import YiColor from '@lobehub/icons/es/Yi/components/Color.js'
 import YiMono from '@lobehub/icons/es/Yi/components/Mono.js'
 import * as YiStyle from '@lobehub/icons/es/Yi/style.js'
+import ZhipuAvatar from '@lobehub/icons/es/Zhipu/components/Avatar.js'
 import ZhipuColor from '@lobehub/icons/es/Zhipu/components/Color.js'
 import ZhipuMono from '@lobehub/icons/es/Zhipu/components/Mono.js'
 import * as ZhipuStyle from '@lobehub/icons/es/Zhipu/style.js'
@@ -157,7 +179,8 @@ import {
 
 import { IconSub2api } from '@/assets/custom/icon-sub2api'
 
-type IconComponent = ComponentType<Record<string, unknown>>
+type IconComponentProps = Record<string, unknown> & { size: number }
+type IconComponent = ComponentType<IconComponentProps>
 type CustomIconComponent = ComponentType<{ size?: number }>
 
 const CUSTOM_ICONS: Record<string, CustomIconComponent> = {
@@ -214,7 +237,7 @@ const COMMON_LOBE_ICONS: Record<string, CommonLobeIcon> = {
   Moonshot: { Mono: MoonshotMono, style: MoonshotStyle },
   NewAPI: { Color: NewAPIColor, Mono: NewAPIMono, style: NewAPIStyle },
   Ollama: { Mono: OllamaMono, style: OllamaStyle },
-  OpenAI: { Color: OpenAIColor, Mono: OpenAIMono, style: OpenAIStyle },
+  OpenAI: { Mono: OpenAIMono, style: OpenAIStyle },
   OpenRouter: {
     Color: OpenRouterColor,
     Mono: OpenRouterMono,
@@ -250,6 +273,34 @@ const COMMON_LOBE_ICONS: Record<string, CommonLobeIcon> = {
   },
   Yi: { Color: YiColor, Mono: YiMono, style: YiStyle },
   Zhipu: { Color: ZhipuColor, Mono: ZhipuMono, style: ZhipuStyle },
+}
+
+// Radar and compact model badges use the package's real Avatar components so
+// vendor-specific Color, Inner, offsets, and platform variants stay intact.
+const COMMON_LOBE_AVATARS: Record<string, IconComponent> = {
+  Baichuan: BaichuanAvatar,
+  Claude: ClaudeAvatar,
+  Cohere: CohereAvatar,
+  DeepSeek: DeepSeekAvatar,
+  Doubao: DoubaoAvatar,
+  Gemini: GeminiAvatar,
+  Google: GoogleAvatar,
+  Hunyuan: HunyuanAvatar,
+  InternLM: InternLMAvatar,
+  Meta: MetaAvatar,
+  Minimax: MinimaxAvatar,
+  Mistral: MistralAvatar,
+  Moonshot: MoonshotAvatar,
+  OpenAI: OpenAIAvatar,
+  Perplexity: PerplexityAvatar,
+  Qwen: QwenAvatar,
+  Spark: SparkAvatar,
+  Stepfun: StepfunAvatar,
+  Wenxin: WenxinAvatar,
+  XAI: XAIAvatar,
+  XiaomiMiMo: XiaomiMiMoAvatar,
+  Yi: YiAvatar,
+  Zhipu: ZhipuAvatar,
 }
 
 type LoadedFallbackIcon = {
@@ -455,6 +506,12 @@ function LobeIcon(iconProps: LobeIconProps) {
     segments.length > 1 && /^[A-Z]/.test(segments[1]) ? segments[1] : undefined
   const CustomIcon = baseKey ? CUSTOM_ICONS[baseKey] : undefined
   const commonIcon = baseKey ? COMMON_LOBE_ICONS[baseKey] : undefined
+  const useOpenAIColorAvatar =
+    baseKey === 'OpenAI' && requestedVariant === 'Color'
+  const directAvatar =
+    baseKey && (requestedVariant === 'Avatar' || useOpenAIColorAvatar)
+      ? COMMON_LOBE_AVATARS[baseKey]
+      : undefined
   const fallbackKey = baseKey ? `${baseKey}.${requestedVariant ?? 'Mono'}` : ''
   const fallbackIcon = fallbackKey
     ? fallbackLobeIcons.get(fallbackKey)
@@ -464,6 +521,7 @@ function LobeIcon(iconProps: LobeIconProps) {
     : false
   const needsFallback =
     !CustomIcon &&
+    !directAvatar &&
     (!commonIcon ||
       (requestedVariant !== undefined &&
         !commonIconVariants.has(requestedVariant)))
@@ -500,7 +558,10 @@ function LobeIcon(iconProps: LobeIconProps) {
   let avatarDefinition: CommonLobeIcon | undefined
   let propStartIndex: number
 
-  if (commonIcon && !needsFallback) {
+  if (directAvatar) {
+    IconComponent = directAvatar
+    propStartIndex = requestedVariant ? 2 : 1
+  } else if (commonIcon && !needsFallback) {
     renderAvatar = requestedVariant === 'Avatar'
     avatarDefinition = renderAvatar ? commonIcon : undefined
     IconComponent =
@@ -552,6 +613,10 @@ function LobeIcon(iconProps: LobeIconProps) {
     componentProps.size = iconProps.size
   }
 
+  if (useOpenAIColorAvatar && componentProps.type == null) {
+    componentProps.type = 'platform'
+  }
+
   if (renderAvatar && avatarDefinition) {
     return (
       <LobeAvatar
@@ -562,5 +627,5 @@ function LobeIcon(iconProps: LobeIconProps) {
     )
   }
 
-  return <IconComponent {...componentProps} />
+  return <IconComponent {...(componentProps as IconComponentProps)} />
 }

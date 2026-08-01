@@ -778,6 +778,70 @@ func retainPublicLogDiagnostics(other map[string]interface{}) {
 	other["diagnostics"] = publicDiagnostics
 }
 
+func retainPublicStreamStatus(other map[string]interface{}, allowErrorText bool, upstreamModelNames []string, publicModelName string) {
+	streamStatus, ok := other["stream_status"].(map[string]interface{})
+	if !ok {
+		delete(other, "stream_status")
+		return
+	}
+
+	publicStatus := make(map[string]interface{}, 5)
+	for _, field := range []string{"status", "end_reason"} {
+		if value, ok := streamStatus[field].(string); ok {
+			publicStatus[field] = value
+		}
+	}
+	if value, exists := streamStatus["error_count"]; exists {
+		switch value.(type) {
+		case int, int8, int16, int32, int64,
+			uint, uint8, uint16, uint32, uint64,
+			float32, float64:
+			publicStatus["error_count"] = value
+		}
+	}
+
+	if allowErrorText {
+		if endError, ok := streamStatus["end_error"].(string); ok {
+			if len(upstreamModelNames) == 0 {
+				publicStatus["end_error"] = endError
+			} else if sanitized, safe := sanitizeRoutedErrorText(endError, upstreamModelNames, publicModelName); safe {
+				publicStatus["end_error"] = sanitized
+			}
+		}
+
+		errorMessages := make([]string, 0)
+		switch errors := streamStatus["errors"].(type) {
+		case []string:
+			errorMessages = append(errorMessages, errors...)
+		case []interface{}:
+			for _, value := range errors {
+				if message, ok := value.(string); ok {
+					errorMessages = append(errorMessages, message)
+				}
+			}
+		}
+		publicErrors := make([]string, 0, len(errorMessages))
+		for _, message := range errorMessages {
+			if len(upstreamModelNames) == 0 {
+				publicErrors = append(publicErrors, message)
+				continue
+			}
+			if sanitized, safe := sanitizeRoutedErrorText(message, upstreamModelNames, publicModelName); safe {
+				publicErrors = append(publicErrors, sanitized)
+			}
+		}
+		if len(publicErrors) > 0 {
+			publicStatus["errors"] = publicErrors
+		}
+	}
+
+	if len(publicStatus) == 0 {
+		delete(other, "stream_status")
+		return
+	}
+	other["stream_status"] = publicStatus
+}
+
 func formatUserLogs(logs []*Log, startIdx int, canViewModelRouting bool) {
 	for i := range logs {
 		if !canViewModelRouting {
@@ -803,7 +867,6 @@ func formatUserLogs(logs []*Log, startIdx int, canViewModelRouting bool) {
 				sanitizeAdminSelfLogInfo(otherMap)
 				retainPublicLogDiagnostics(otherMap)
 				delete(otherMap, "audit_info")
-				delete(otherMap, "stream_status")
 				delete(otherMap, "request_conversion")
 				delete(otherMap, "request_path")
 			}
@@ -824,11 +887,16 @@ func formatUserLogs(logs []*Log, startIdx int, canViewModelRouting bool) {
 				}
 			}
 			if !canViewModelRouting {
+				retainPublicStreamStatus(
+					otherMap,
+					modelNameIsRequested && modelRoutingChecked,
+					upstreamModelNames,
+					logs[i].ModelName,
+				)
 				// Remove administrator-only diagnostics and historical top-level
 				// channel fields. Frontend hiding is only a second line of defense.
 				delete(otherMap, "admin_info")
 				delete(otherMap, "audit_info")
-				delete(otherMap, "stream_status")
 				delete(otherMap, "channel_id")
 				delete(otherMap, "channel_name")
 				delete(otherMap, "request_conversion")

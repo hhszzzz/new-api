@@ -511,6 +511,72 @@ func TestFormatUserLogsSanitizesTrustedRoutedErrorDiagnostics(t *testing.T) {
 	require.NotContains(t, publicOther, "error_type", "embedded route names must fail closed")
 }
 
+func TestFormatUserLogsKeepsSanitizedStreamStatusForOwner(t *testing.T) {
+	logs := []*Log{{
+		ModelName: "requested-model",
+		Other: common.MapToJsonStr(map[string]interface{}{
+			"admin_info": map[string]interface{}{
+				"model_name_scope":      logModelNameScopeRequested,
+				"model_routing_checked": true,
+				"is_model_mapped":       true,
+				"upstream_model_name":   "private-upstream-model",
+			},
+			"stream_status": map[string]interface{}{
+				"status":      "error",
+				"end_reason":  "timeout",
+				"error_count": 2,
+				"end_error":   "model private-upstream-model timed out",
+				"errors": []string{
+					"private-upstream-model frame failed",
+					"safe retry warning",
+				},
+			},
+		}),
+	}}
+
+	formatUserLogs(logs, 0, false)
+
+	other, err := common.StrToMap(logs[0].Other)
+	require.NoError(t, err)
+	require.NotContains(t, other, "admin_info")
+	streamStatus, ok := other["stream_status"].(map[string]interface{})
+	require.True(t, ok)
+	require.Equal(t, "error", streamStatus["status"])
+	require.Equal(t, "timeout", streamStatus["end_reason"])
+	require.EqualValues(t, 2, streamStatus["error_count"])
+	require.Equal(t, "model requested-model timed out", streamStatus["end_error"])
+	require.Equal(t, []interface{}{
+		"requested-model frame failed",
+		"safe retry warning",
+	}, streamStatus["errors"])
+}
+
+func TestFormatUserLogsKeepsStatusButDropsUntrustedStreamErrors(t *testing.T) {
+	logs := []*Log{{
+		Other: common.MapToJsonStr(map[string]interface{}{
+			"stream_status": map[string]interface{}{
+				"status":      "error",
+				"end_reason":  "scanner_error",
+				"error_count": 1,
+				"end_error":   "unknown upstream detail",
+				"errors":      []string{"unknown upstream frame"},
+			},
+		}),
+	}}
+
+	formatUserLogs(logs, 0, false)
+
+	other, err := common.StrToMap(logs[0].Other)
+	require.NoError(t, err)
+	streamStatus, ok := other["stream_status"].(map[string]interface{})
+	require.True(t, ok)
+	require.Equal(t, "error", streamStatus["status"])
+	require.Equal(t, "scanner_error", streamStatus["end_reason"])
+	require.EqualValues(t, 1, streamStatus["error_count"])
+	require.NotContains(t, streamStatus, "end_error")
+	require.NotContains(t, streamStatus, "errors")
+}
+
 func TestFormatUserLogsDoesNotMistakeLongerModelForRoutedErrorModel(t *testing.T) {
 	logs := []*Log{{
 		Type:      LogTypeError,

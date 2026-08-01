@@ -40,53 +40,53 @@ export const MODEL_COLORS = [
   '#dc2626',
 ] as const
 
-// Lowercase model-name prefixes mapped to colorful @lobehub/icons variants.
+// Lowercase model-name prefixes mapped to @lobehub/icons vendors.
 // Ordered longest-first so specific prefixes win over generic ones.
-const MODEL_ICON_PREFIXES: Array<[prefix: string, icon: string]> = [
-  ['chatgpt', 'OpenAI.Color'],
-  ['gpt', 'OpenAI.Color'],
-  ['o1', 'OpenAI.Color'],
-  ['o3', 'OpenAI.Color'],
-  ['o4', 'OpenAI.Color'],
-  ['claude', 'Claude.Color'],
-  ['gemini', 'Gemini.Color'],
-  ['gemma', 'Google.Color'],
-  ['deepseek', 'DeepSeek.Color'],
-  ['qwq', 'Qwen.Color'],
-  ['qwen', 'Qwen.Color'],
-  ['doubao', 'Doubao.Color'],
-  ['kimi', "Moonshot.Avatar.type={'platform'}"],
-  ['moonshot', "Moonshot.Avatar.type={'platform'}"],
-  ['grok', "XAI.Avatar.type={'platform'}"],
-  ['mistral', 'Mistral.Color'],
-  ['mixtral', 'Mistral.Color'],
-  ['minimax', 'Minimax.Color'],
-  ['hunyuan', 'Hunyuan.Color'],
-  ['meta-llama', 'Meta.Color'],
-  ['llama', 'Meta.Color'],
-  ['chatglm', 'Zhipu.Color'],
-  ['glm', 'Zhipu.Color'],
-  ['ernie', 'Wenxin.Color'],
-  ['wenxin', 'Wenxin.Color'],
-  ['spark', 'Spark.Color'],
-  ['command', 'Cohere.Color'],
-  ['cohere', 'Cohere.Color'],
-  ['sonar', 'Perplexity.Color'],
-  ['perplexity', 'Perplexity.Color'],
-  ['baichuan', 'Baichuan.Color'],
-  ['internlm', 'InternLM.Color'],
-  ['step', 'Stepfun.Color'],
+const MODEL_ICON_PREFIXES: Array<[prefix: string, vendor: string]> = [
+  ['chatgpt', 'OpenAI'],
+  ['gpt', 'OpenAI'],
+  ['o1', 'OpenAI'],
+  ['o3', 'OpenAI'],
+  ['o4', 'OpenAI'],
+  ['claude', 'Claude'],
+  ['gemini', 'Gemini'],
+  ['gemma', 'Google'],
+  ['deepseek', 'DeepSeek'],
+  ['qwq', 'Qwen'],
+  ['qwen', 'Qwen'],
+  ['doubao', 'Doubao'],
+  ['kimi', 'Moonshot'],
+  ['moonshot', 'Moonshot'],
+  ['grok', 'XAI'],
+  ['mistral', 'Mistral'],
+  ['mixtral', 'Mistral'],
+  ['minimax', 'Minimax'],
+  ['hunyuan', 'Hunyuan'],
+  ['meta-llama', 'Meta'],
+  ['llama', 'Meta'],
+  ['chatglm', 'Zhipu'],
+  ['glm', 'Zhipu'],
+  ['ernie', 'Wenxin'],
+  ['wenxin', 'Wenxin'],
+  ['spark', 'Spark'],
+  ['command', 'Cohere'],
+  ['cohere', 'Cohere'],
+  ['sonar', 'Perplexity'],
+  ['perplexity', 'Perplexity'],
+  ['baichuan', 'Baichuan'],
+  ['internlm', 'InternLM'],
+  ['step', 'Stepfun'],
   ['mimo', 'XiaomiMiMo'],
-  ['yi', 'Yi.Color'],
+  ['yi', 'Yi'],
 ]
 
 // Resolves a radar model name to its vendor's @lobehub/icons key.
 export function getModelIconKey(model: string): string | null {
   const normalized = model.trim().toLowerCase()
   const candidates = [normalized, ...normalized.split(/[/:_]+/)]
-  for (const [prefix, icon] of MODEL_ICON_PREFIXES) {
+  for (const [prefix, vendor] of MODEL_ICON_PREFIXES) {
     if (candidates.some((candidate) => candidate.startsWith(prefix))) {
-      return icon
+      return `${vendor}.Avatar.type={'platform'}`
     }
   }
   return null
