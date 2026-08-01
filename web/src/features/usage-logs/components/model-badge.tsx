@@ -56,67 +56,67 @@ function resolveModelProvider(modelName: string): ModelProvider | null {
     ]) ||
     /\bo[134](?:-|$)/.test(model)
   ) {
-    return { icon: 'OpenAI.Color', label: 'OpenAI' }
+    return { icon: 'OpenAI', label: 'OpenAI' }
   }
   if (hasAny(['claude-', 'anthropic'])) {
-    return { icon: 'Claude.Color', label: 'Claude' }
+    return { icon: 'Claude', label: 'Claude' }
   }
   if (hasAny(['gemini-', 'learnlm-'])) {
-    return { icon: 'Gemini.Color', label: 'Gemini' }
+    return { icon: 'Gemini', label: 'Gemini' }
   }
   if (hasAny(['grok-', 'xai-'])) {
-    return { icon: 'Grok.Color', label: 'Grok' }
+    return { icon: 'XAI', label: 'Grok' }
   }
   if (hasAny(['deepseek-'])) {
-    return { icon: 'DeepSeek.Color', label: 'DeepSeek' }
+    return { icon: 'DeepSeek', label: 'DeepSeek' }
   }
   if (hasAny(['qwen', 'qwq-'])) {
-    return { icon: 'Qwen.Color', label: 'Qwen' }
+    return { icon: 'Qwen', label: 'Qwen' }
   }
   if (hasAny(['doubao-', 'volcengine'])) {
-    return { icon: 'Doubao.Color', label: 'Doubao' }
+    return { icon: 'Doubao', label: 'Doubao' }
   }
   if (hasAny(['moonshot-', 'kimi-'])) {
-    return { icon: 'Moonshot.Color', label: 'Moonshot' }
+    return { icon: 'Moonshot', label: 'Moonshot' }
   }
   if (hasAny(['minimax', 'abab'])) {
-    return { icon: 'Minimax.Color', label: 'MiniMax' }
+    return { icon: 'Minimax', label: 'MiniMax' }
   }
   if (hasAny(['glm-', 'chatglm', 'cogview', 'cogvideo'])) {
-    return { icon: 'Zhipu.Color', label: 'Zhipu' }
+    return { icon: 'Zhipu', label: 'Zhipu' }
   }
   if (hasAny(['mimo-'])) {
     return { icon: 'XiaomiMiMo', label: 'MiMo' }
   }
   if (hasAny(['ernie'])) {
-    return { icon: 'Wenxin.Color', label: 'Baidu' }
+    return { icon: 'Baidu', label: 'Baidu' }
   }
   if (hasAny(['spark'])) {
-    return { icon: 'Spark.Color', label: 'iFlyTek' }
+    return { icon: 'Spark', label: 'iFlyTek' }
   }
   if (hasAny(['hunyuan'])) {
-    return { icon: 'Hunyuan.Color', label: 'Tencent' }
+    return { icon: 'Hunyuan', label: 'Tencent' }
   }
   if (hasAny(['baichuan'])) {
-    return { icon: 'Baichuan.Color', label: 'Baichuan' }
+    return { icon: 'Baichuan', label: 'Baichuan' }
   }
   if (hasAny(['internlm'])) {
-    return { icon: 'InternLM.Color', label: 'InternLM' }
+    return { icon: 'InternLM', label: 'InternLM' }
   }
   if (hasAny(['step-'])) {
-    return { icon: 'Stepfun.Color', label: 'StepFun' }
+    return { icon: 'Stepfun', label: 'StepFun' }
   }
   if (hasAny(['yi-'])) {
-    return { icon: 'Yi.Color', label: 'Yi' }
+    return { icon: 'Yi', label: 'Yi' }
   }
   if (hasAny(['mistral-', 'mixtral-'])) {
-    return { icon: 'Mistral.Color', label: 'Mistral' }
+    return { icon: 'Mistral', label: 'Mistral' }
   }
   if (hasAny(['llama-', 'meta-'])) {
-    return { icon: 'Meta.Color', label: 'Meta' }
+    return { icon: 'Meta', label: 'Meta' }
   }
   if (hasAny(['command-', 'cohere-'])) {
-    return { icon: 'Cohere.Color', label: 'Cohere' }
+    return { icon: 'Cohere', label: 'Cohere' }
   }
 
   return null

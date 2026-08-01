@@ -56,6 +56,7 @@ import {
   getSuccessRateTextClass,
 } from '@/features/performance-metrics/lib/format'
 import { getLobeIcon } from '@/lib/lobe-icon'
+import { resolveProviderIconKey } from '@/lib/provider-icon'
 import { cn } from '@/lib/utils'
 
 import { DEFAULT_TOKEN_UNIT } from '../constants'
@@ -448,7 +449,7 @@ function ModelBackendDetailsSection(props: { model: PricingModel }) {
 function ModelHeader(props: { model: PricingModel }) {
   const { t } = useTranslation()
   const model = props.model
-  const modelIconKey = model.icon || model.vendor_icon
+  const modelIconKey = resolveProviderIconKey(model.vendor_icon, model.icon)
   const modelIcon = modelIconKey ? getLobeIcon(modelIconKey, 20) : null
   const description = getModelDescription(model)
   const vendorName = model.vendor_name?.trim()

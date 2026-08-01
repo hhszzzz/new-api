@@ -502,7 +502,7 @@ function ChannelTypeLogo(props: {
 
   return (
     <span className={cn('inline-flex shrink-0', props.className)}>
-      {getLobeIcon(`${getChannelTypeIcon(props.type)}.Color`, props.size ?? 16)}
+      {getLobeIcon(getChannelTypeIcon(props.type), props.size ?? 16)}
     </span>
   )
 }

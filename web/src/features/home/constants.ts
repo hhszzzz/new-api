@@ -20,27 +20,27 @@ For commercial licensing, please contact support@quantumnous.com
  * Home page constants
  * All hardcoded data for home page sections
  */
-import { type TFunction } from 'i18next'
+import type { TFunction } from 'i18next'
 
 // Layout - Main base classes
 export const MAIN_BASE_CLASSES = 'bg-background text-foreground w-full'
 
 // Hero section - AI Applications (Left side)
 export const AI_APPLICATIONS = [
-  'LobeHub.Color',
-  'Dify.Color',
+  'LobeHub',
+  'Dify',
   'OpenWebUI',
   'Cline',
 ] as const
 
 // Hero section - AI Models (Right side)
 export const AI_MODELS = [
-  'Qwen.Color',
-  'DeepSeek.Color',
-  'Doubao.Color',
+  'Qwen',
+  'DeepSeek',
+  'Doubao',
   'OpenAI',
-  'Claude.Color',
-  'Gemini.Color',
+  'Claude',
+  'Gemini',
 ] as const
 
 // Hero section - Gateway Features

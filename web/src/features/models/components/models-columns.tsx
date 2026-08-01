@@ -33,6 +33,7 @@ import {
 } from '@/components/ui/tooltip'
 import { formatTimestampToDate } from '@/lib/format'
 import { getLobeIcon } from '@/lib/lobe-icon'
+import { resolveProviderIconKey } from '@/lib/provider-icon'
 
 import {
   getModelStatusConfig,
@@ -43,12 +44,6 @@ import { parseModelTags, formatEndpointsDisplay } from '../lib'
 import type { Model, Vendor } from '../types'
 import { DataTableRowActions } from './data-table-row-actions'
 import { DescriptionCell } from './description-cell'
-
-function getCompactModelIcon(iconKey: string) {
-  const baseIconKey = iconKey.split('.')[0]
-
-  return getLobeIcon(`${baseIconKey}.Avatar.type={'platform'}`, 20)
-}
 
 /**
  * Generate models columns configuration
@@ -110,16 +105,13 @@ export function useModelsColumns(vendors: Vendor[] = []): ColumnDef<Model>[] {
       cell: ({ row }) => {
         const model = row.original
         const name = row.getValue('model_name') as string
-        const iconKey =
-          model.icon ||
-          vendorMap[model.vendor_id || 0]?.icon ||
-          model.model_name?.[0] ||
-          'N'
-        const icon = getCompactModelIcon(iconKey)
+        const vendor = vendorMap[model.vendor_id || 0]
+        const iconKey = resolveProviderIconKey(vendor?.icon, model.icon)
+        const icon = getLobeIcon(iconKey, 20)
 
         return (
           <div className='flex max-w-full min-w-0 items-center gap-2'>
-            <div className='flex size-5 shrink-0 items-center justify-center overflow-hidden'>
+            <div className='flex size-5 shrink-0 items-center justify-center'>
               {icon}
             </div>
             <StatusBadge

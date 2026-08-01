@@ -23,6 +23,7 @@ import { BadgeCell, DataTableColumnHeader } from '@/components/data-table'
 import { StatusBadge } from '@/components/status-badge'
 import { Button } from '@/components/ui/button'
 import { getLobeIcon } from '@/lib/lobe-icon'
+import { resolveProviderIconKey } from '@/lib/provider-icon'
 
 import { DEFAULT_TOKEN_UNIT } from '../constants'
 import {
@@ -75,7 +76,10 @@ export function usePricingColumns(
       ),
       cell: ({ row }) => {
         const model = row.original
-        const modelIconKey = model.icon || model.vendor_icon
+        const modelIconKey = resolveProviderIconKey(
+          model.vendor_icon,
+          model.icon
+        )
         const modelIcon = modelIconKey ? getLobeIcon(modelIconKey, 14) : null
 
         return (

@@ -453,7 +453,7 @@ export function ChannelsTable() {
           label: getChannelTypeLabel(item.type),
           value: String(item.type),
           count: item.count,
-          iconNode: getLobeIcon(`${iconName}.Color`, 16),
+          iconNode: getLobeIcon(iconName, 16),
         }
       }),
     ]

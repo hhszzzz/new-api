@@ -76,7 +76,7 @@ func TestGetPerfMetricsStatusReturnsOnlyVisibleEnabledModels(t *testing.T) {
 	require.Len(t, payload.Data.Models, 2)
 	assert.Equal(t, "visible-status-model", payload.Data.Models[0].ModelName)
 	assert.Equal(t, perfmetrics.StatusFailed, payload.Data.Models[0].Status)
-	assert.Equal(t, "Claude.Color", payload.Data.Models[0].Icon)
+	assert.Equal(t, "Anthropic.Color", payload.Data.Models[0].Icon)
 	assert.Zero(t, payload.Data.Models[0].RequestCount)
 	assert.Zero(t, payload.Data.Models[0].SuccessCount)
 	assert.Contains(t, recorder.Body.String(), `"request_count":null`)

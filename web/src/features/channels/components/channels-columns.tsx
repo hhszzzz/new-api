@@ -894,7 +894,7 @@ export function useChannelsColumns(
                     }
                   >
                     <ProviderBadge
-                      iconKey={`${iconName}.Color`}
+                      iconKey={iconName}
                       iconSize={18}
                       label={typeName}
                       colorText={false}

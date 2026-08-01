@@ -209,9 +209,9 @@ func GetPerfMetricsStatus(c *gin.Context) {
 	models := make([]perfmetrics.StatusModelSource, 0, len(pricing))
 	for _, item := range pricing {
 		vendor := vendors[item.VendorID]
-		icon := item.Icon
+		icon := vendor.Icon
 		if strings.TrimSpace(icon) == "" {
-			icon = vendor.Icon
+			icon = item.Icon
 		}
 		models = append(models, perfmetrics.StatusModelSource{
 			ModelName: item.ModelName,

@@ -67,7 +67,7 @@ const CELL_TEXT_CLASSES = {
   low: 'text-destructive',
 } as const
 
-// Color vendor icon for a radar model, falling back to its group color dot.
+// Provider icon for a radar model, falling back to its group color dot.
 export function ModelBadge(props: { color: string; model: string }) {
   const iconKey = getModelIconKey(props.model)
   if (iconKey) {

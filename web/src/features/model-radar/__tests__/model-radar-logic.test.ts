@@ -51,15 +51,15 @@ function configuration(model: string, effort: string): ModelRadarConfiguration {
 
 describe('model radar configuration grouping', () => {
   test.each([
-    ['gpt-5.4', 'OpenAI.Color'],
-    ['openai/gpt-5.4', 'OpenAI.Color'],
-    ['anthropic/claude-opus-4.1', 'Claude.Color'],
-    ['google/gemini-2.5-pro', 'Gemini.Color'],
-    ['meta-llama/llama-4', 'Meta.Color'],
-    ['stepfun/step-3.5-flash', 'Stepfun.Color'],
+    ['gpt-5.4', 'OpenAI'],
+    ['openai/gpt-5.4', 'OpenAI'],
+    ['anthropic/claude-opus-4.1', 'Claude'],
+    ['google/gemini-2.5-pro', 'Gemini'],
+    ['meta-llama/llama-4', 'Meta'],
+    ['stepfun/step-3.5-flash', 'Stepfun'],
     ['unknown-model', null],
   ])(
-    'resolves %s to the same Lobe variant used by Model Square',
+    'resolves %s to the direct provider icon used by Rankings',
     (model, expected) => {
       expect(getModelIconKey(model)).toBe(expected)
     }
