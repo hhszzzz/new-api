@@ -51,16 +51,19 @@ function configuration(model: string, effort: string): ModelRadarConfiguration {
 
 describe('model radar configuration grouping', () => {
   test.each([
-    ['gpt-5.4', "OpenAI.Avatar.type={'platform'}"],
-    ['openai/gpt-5.4', "OpenAI.Avatar.type={'platform'}"],
-    ['anthropic/claude-opus-4.1', "Claude.Avatar.type={'platform'}"],
-    ['google/gemini-2.5-pro', "Gemini.Avatar.type={'platform'}"],
-    ['meta-llama/llama-4', "Meta.Avatar.type={'platform'}"],
-    ['stepfun/step-3.5-flash', "Stepfun.Avatar.type={'platform'}"],
+    ['gpt-5.4', 'OpenAI.Color'],
+    ['openai/gpt-5.4', 'OpenAI.Color'],
+    ['anthropic/claude-opus-4.1', 'Claude.Color'],
+    ['google/gemini-2.5-pro', 'Gemini.Color'],
+    ['meta-llama/llama-4', 'Meta.Color'],
+    ['stepfun/step-3.5-flash', 'Stepfun.Color'],
     ['unknown-model', null],
-  ])('resolves %s to its colorful vendor icon', (model, expected) => {
-    expect(getModelIconKey(model)).toBe(expected)
-  })
+  ])(
+    'resolves %s to the same Lobe variant used by Model Square',
+    (model, expected) => {
+      expect(getModelIconKey(model)).toBe(expected)
+    }
+  )
 
   test('preserves first model appearance while sorting known efforts before unknown efforts', () => {
     const groups = groupConfigurations([
