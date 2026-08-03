@@ -168,6 +168,8 @@ type RelayInfo struct {
 	RuntimeHeadersOverride                map[string]interface{}
 	UseRuntimeHeadersOverride             bool
 	ParamOverrideAudit                    []string
+	DifyWorkflowRunID                     string
+	DifyWorkflowStatus                    string
 
 	// UpstreamRequestBodySize is the byte size of the marshaled upstream request
 	// body. It is set when the body is wrapped in a BodyStorage (see
@@ -406,6 +408,8 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 	info.RuntimeHeadersOverride = nil
 	info.UseRuntimeHeadersOverride = false
 	info.ParamOverrideAudit = nil
+	info.DifyWorkflowRunID = ""
+	info.DifyWorkflowStatus = ""
 	if info.Request != nil && c != nil && c.Request != nil && c.Request.URL != nil {
 		info.IsStream = info.Request.IsStream(c.Request)
 	}

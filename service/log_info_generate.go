@@ -54,6 +54,26 @@ func AppendModelRoutingAdminInfo(other map[string]interface{}, isModelMapped boo
 	adminInfo["upstream_model_name"] = upstreamModelName
 }
 
+// AppendDifyWorkflowAdminInfo records Dify workflow identity and terminal
+// status under the administrator-only section of a log payload.
+func AppendDifyWorkflowAdminInfo(relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
+	if relayInfo == nil || other == nil ||
+		(relayInfo.DifyWorkflowRunID == "" && relayInfo.DifyWorkflowStatus == "") {
+		return
+	}
+	adminInfo, ok := other["admin_info"].(map[string]interface{})
+	if !ok || adminInfo == nil {
+		adminInfo = map[string]interface{}{}
+		other["admin_info"] = adminInfo
+	}
+	if relayInfo.DifyWorkflowRunID != "" {
+		adminInfo["dify_workflow_run_id"] = relayInfo.DifyWorkflowRunID
+	}
+	if relayInfo.DifyWorkflowStatus != "" {
+		adminInfo["dify_workflow_status"] = relayInfo.DifyWorkflowStatus
+	}
+}
+
 // attachQuotaSaturation records the request's quota clamp (if any) onto the
 // consume log's other.admin_info and emits a request-correlated backend audit
 // line. Called right before RecordConsumeLog on the text/audio/wss paths.
@@ -144,6 +164,7 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 
 	other["admin_info"] = adminInfo
 	AppendModelRoutingAdminInfo(other, relayInfo.HasModelRouting(), relayInfo.UpstreamModelName)
+	AppendDifyWorkflowAdminInfo(relayInfo, other)
 	appendRequestPath(ctx, relayInfo, other)
 	appendRequestConversionChain(relayInfo, other)
 	appendFinalRequestFormat(relayInfo, other)

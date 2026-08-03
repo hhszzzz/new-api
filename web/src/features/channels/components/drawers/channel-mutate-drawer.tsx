@@ -338,6 +338,7 @@ const SENSITIVE_FORM_FIELDS = [
   'allow_speed',
   'claude_beta_query',
   'disable_task_polling_sleep',
+  'dify_require_successful_workflow',
   'upstream_model_update_check_enabled',
   'upstream_model_update_auto_sync_enabled',
   'upstream_model_update_ignored_models',
@@ -397,6 +398,7 @@ function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
     values.force_format ||
     values.thinking_to_content ||
     values.pass_through_body_enabled ||
+    values.dify_require_successful_workflow ||
     values.system_prompt_override ||
     values.protocol_capabilities_enabled ||
     (values.http_protocol && values.http_protocol !== 'auto') ||
@@ -843,6 +845,9 @@ export function ChannelMutateDrawer({
   const currentDisableTaskPollingSleep = form.watch(
     'disable_task_polling_sleep'
   )
+  const currentDifyRequireSuccessfulWorkflow = form.watch(
+    'dify_require_successful_workflow'
+  )
   const currentProxy = form.watch('proxy')
   const currentHttpProtocol = form.watch('http_protocol')
   const currentHttp2ConnectionShards = form.watch('http2_connection_shards')
@@ -882,6 +887,17 @@ export function ChannelMutateDrawer({
       resetDoubaoApiUnlock()
     }
   }, [open, resetDoubaoApiUnlock])
+
+  useEffect(() => {
+    if (
+      currentType !== 37 &&
+      form.getValues('dify_require_successful_workflow')
+    ) {
+      form.setValue('dify_require_successful_workflow', false, {
+        shouldDirty: true,
+      })
+    }
+  }, [currentType, form])
 
   const applyConnectionInfo = useCallback(
     (connectionInfo: ChannelConnectionInfo) => {
@@ -1147,6 +1163,7 @@ export function ChannelMutateDrawer({
     currentThinkingToContent ||
     currentPassThroughBodyEnabled ||
     currentDisableTaskPollingSleep ||
+    currentDifyRequireSuccessfulWorkflow ||
     (currentType === 1 && currentAllowAlphaSearch) ||
     currentProxy?.trim() ||
     currentSystemPrompt?.trim() ||
@@ -4587,6 +4604,35 @@ export function ChannelMutateDrawer({
                                   </FormItem>
                                 )}
                               />
+
+                              {currentType === 37 && (
+                                <FormField
+                                  control={form.control}
+                                  name='dify_require_successful_workflow'
+                                  render={({ field }) => (
+                                    <FormItem className='flex items-center justify-between gap-3 px-4 py-3'>
+                                      <div className='space-y-0.5'>
+                                        <FormLabel>
+                                          {t(
+                                            'Require successful Dify workflow'
+                                          )}
+                                        </FormLabel>
+                                        <FormDescription>
+                                          {t(
+                                            'Require a successful Dify workflow status, a non-empty answer, and upstream token usage before billing.'
+                                          )}
+                                        </FormDescription>
+                                      </div>
+                                      <FormControl>
+                                        <Switch
+                                          checked={field.value}
+                                          onCheckedChange={field.onChange}
+                                        />
+                                      </FormControl>
+                                    </FormItem>
+                                  )}
+                                />
+                              )}
                             </div>
 
                             <FormField

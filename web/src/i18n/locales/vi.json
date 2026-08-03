@@ -5775,5 +5775,7 @@
     "Icon name must be 80 characters or fewer": "Tên biểu tượng không được vượt quá 80 ký tự",
     "Use a React Icons name such as LuRadar": "Nhập tên React Icons như LuRadar",
     "Use a React Icons name such as LuRadar or FaGithub. Leave empty for the default link icon.": "Nhập tên React Icons như LuRadar hoặc FaGithub. Để trống để dùng biểu tượng liên kết mặc định."
-  }
+  },
+  "Require successful Dify workflow": "Yêu cầu quy trình Dify thành công",
+  "Require a successful Dify workflow status, a non-empty answer, and upstream token usage before billing.": "Chỉ tính phí khi quy trình Dify thành công, câu trả lời không trống và phía thượng nguồn trả về mức sử dụng token."
 }

@@ -5775,5 +5775,7 @@
     "Icon name must be 80 characters or fewer": "Le nom de l’icône ne doit pas dépasser 80 caractères",
     "Use a React Icons name such as LuRadar": "Utilisez un nom React Icons tel que LuRadar",
     "Use a React Icons name such as LuRadar or FaGithub. Leave empty for the default link icon.": "Utilisez un nom React Icons tel que LuRadar ou FaGithub. Laissez ce champ vide pour utiliser l’icône de lien par défaut."
-  }
+  },
+  "Require successful Dify workflow": "Exiger la réussite du workflow Dify",
+  "Require a successful Dify workflow status, a non-empty answer, and upstream token usage before billing.": "Ne facturer que si le workflow Dify réussit, que la réponse n’est pas vide et que l’amont fournit une utilisation de jetons."
 }

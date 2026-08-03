@@ -331,6 +331,17 @@ func writeRelayErrorResponse(c *gin.Context, relayFormat types.RelayFormat, apiE
 		c.JSON(apiError.StatusCode, gin.H{"error": publicError})
 	default:
 		publicError := relaycommon.SanitizeUserModelRouteOpenAIError(apiError.ToOpenAIError(), privacyInfo)
+		if c.Writer.Written() || privacyInfo != nil && privacyInfo.IsStream {
+			helper.SetEventStreamHeaders(c)
+			if err := helper.ObjectData(c, gin.H{"error": publicError}); err != nil {
+				logger.LogError(c, "failed to write Chat Completions stream error: "+err.Error())
+				return
+			}
+			if err := helper.Done(c); err != nil {
+				logger.LogError(c, "failed to write Chat Completions stream terminator: "+err.Error())
+			}
+			return
+		}
 		c.JSON(apiError.StatusCode, gin.H{"error": publicError})
 	}
 }

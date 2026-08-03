@@ -5775,5 +5775,7 @@
     "Icon name must be 80 characters or fewer": "Название значка не должно превышать 80 символов",
     "Use a React Icons name such as LuRadar": "Укажите имя React Icons, например LuRadar",
     "Use a React Icons name such as LuRadar or FaGithub. Leave empty for the default link icon.": "Укажите имя React Icons, например LuRadar или FaGithub. Оставьте поле пустым, чтобы использовать стандартный значок ссылки."
-  }
+  },
+  "Require successful Dify workflow": "Требовать успешного выполнения рабочего процесса Dify",
+  "Require a successful Dify workflow status, a non-empty answer, and upstream token usage before billing.": "Списывать средства только при успешном статусе процесса Dify, непустом ответе и наличии данных об использовании токенов от вышестоящего сервиса."
 }

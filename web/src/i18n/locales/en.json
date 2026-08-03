@@ -5775,5 +5775,7 @@
     "Icon name must be 80 characters or fewer": "Icon name must be 80 characters or fewer",
     "Use a React Icons name such as LuRadar": "Use a React Icons name such as LuRadar",
     "Use a React Icons name such as LuRadar or FaGithub. Leave empty for the default link icon.": "Use a React Icons name such as LuRadar or FaGithub. Leave empty for the default link icon."
-  }
+  },
+  "Require successful Dify workflow": "Require successful Dify workflow",
+  "Require a successful Dify workflow status, a non-empty answer, and upstream token usage before billing.": "Require a successful Dify workflow status, a non-empty answer, and upstream token usage before billing."
 }

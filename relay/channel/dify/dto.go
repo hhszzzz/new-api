@@ -25,23 +25,34 @@ type DifyMetaData struct {
 }
 
 type DifyData struct {
-	WorkflowId string `json:"workflow_id"`
-	NodeId     string `json:"node_id"`
-	NodeType   string `json:"node_type"`
-	Status     string `json:"status"`
+	Id          string `json:"id"`
+	WorkflowId  string `json:"workflow_id"`
+	NodeId      string `json:"node_id"`
+	NodeType    string `json:"node_type"`
+	Status      string `json:"status"`
+	Error       string `json:"error"`
+	TotalTokens int    `json:"total_tokens"`
 }
 
 type DifyChatCompletionResponse struct {
+	Event          string       `json:"event"`
 	ConversationId string       `json:"conversation_id"`
 	Answer         string       `json:"answer"`
 	CreateAt       int64        `json:"create_at"`
 	MetaData       DifyMetaData `json:"metadata"`
+	Code           string       `json:"code"`
+	Message        string       `json:"message"`
+	Status         any          `json:"status"`
 }
 
 type DifyChunkChatCompletionResponse struct {
 	Event          string       `json:"event"`
+	WorkflowRunId  string       `json:"workflow_run_id"`
 	ConversationId string       `json:"conversation_id"`
 	Answer         string       `json:"answer"`
 	Data           DifyData     `json:"data"`
 	MetaData       DifyMetaData `json:"metadata"`
+	Code           string       `json:"code"`
+	Message        string       `json:"message"`
+	Status         any          `json:"status"`
 }

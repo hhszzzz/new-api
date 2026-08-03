@@ -5775,5 +5775,7 @@
     "Icon name must be 80 characters or fewer": "圖示名稱不得超過 80 個字元",
     "Use a React Icons name such as LuRadar": "請輸入類似 LuRadar 的 React Icons 圖示名稱",
     "Use a React Icons name such as LuRadar or FaGithub. Leave empty for the default link icon.": "輸入類似 LuRadar 或 FaGithub 的 React Icons 圖示名稱；留空則使用預設連結圖示。"
-  }
+  },
+  "Require successful Dify workflow": "要求 Dify 工作流程成功",
+  "Require a successful Dify workflow status, a non-empty answer, and upstream token usage before billing.": "僅在 Dify 工作流程狀態成功、回答非空且上游回傳權杖用量時才計費。"
 }

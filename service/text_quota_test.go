@@ -23,6 +23,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type countingFundingSource struct {
+	settleCalls  int
+	settledDelta int
+}
+
+func (f *countingFundingSource) Source() string       { return BillingSourceWallet }
+func (f *countingFundingSource) PreConsume(int) error { return nil }
+func (f *countingFundingSource) Refund() error        { return nil }
+func (f *countingFundingSource) Settle(delta int) error {
+	f.settleCalls++
+	f.settledDelta += delta
+	return nil
+}
+
 func TestCalculateTextQuotaSummaryUnifiedForClaudeSemantic(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
@@ -100,6 +114,47 @@ func TestCalculateTextQuotaSummaryUsesFrozenQuotaPerUnit(t *testing.T) {
 
 	require.Equal(t, 50, summary.Quota)
 	require.Equal(t, 100.0, summary.QuotaPerUnit)
+}
+
+func TestCalculateTextQuotaSummaryBillsFixedTenDollarsOnceForAnyValidUsage(t *testing.T) {
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	relayInfo := &relaycommon.RelayInfo{
+		OriginModelName: "dify-fusion",
+		PriceData: hosttypes.PriceData{
+			UsePrice:     true,
+			ModelPrice:   10,
+			QuotaPerUnit: 500_000,
+			GroupRatioInfo: hosttypes.GroupRatioInfo{
+				GroupRatio: 1,
+			},
+		},
+		StartTime: time.Now(),
+	}
+
+	shortAnswer := calculateTextQuotaSummary(ctx, relayInfo, &dto.Usage{
+		PromptTokens: 1,
+		TotalTokens:  1,
+	})
+	longAnswer := calculateTextQuotaSummary(ctx, relayInfo, &dto.Usage{
+		PromptTokens:     20_000,
+		CompletionTokens: 2_000,
+		TotalTokens:      22_000,
+	})
+	emptyAnswer := calculateTextQuotaSummary(ctx, relayInfo, &dto.Usage{})
+
+	assert.Equal(t, 5_000_000, shortAnswer.Quota)
+	assert.Equal(t, shortAnswer.Quota, longAnswer.Quota)
+	assert.Zero(t, emptyAnswer.Quota)
+
+	funding := &countingFundingSource{}
+	billing := &BillingSession{
+		relayInfo: &relaycommon.RelayInfo{IsPlayground: true},
+		funding:   funding,
+	}
+	require.NoError(t, billing.Settle(shortAnswer.Quota))
+	require.NoError(t, billing.Settle(shortAnswer.Quota))
+	assert.Equal(t, 1, funding.settleCalls)
+	assert.Equal(t, shortAnswer.Quota, funding.settledDelta)
 }
 
 func TestCalculateTextToolCallSurchargeUsesFrozenToolPrices(t *testing.T) {

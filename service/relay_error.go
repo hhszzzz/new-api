@@ -88,6 +88,7 @@ func ProcessChannelError(c *gin.Context, channelError types.ChannelError, apiErr
 	if relayInfo != nil {
 		AppendModelRoutingAdminInfo(other, relayInfo.HasModelRouting(), relayInfo.UpstreamModelName)
 	}
+	AppendDifyWorkflowAdminInfo(relayInfo, other)
 	AppendParamOverrideAdminInfo(relayInfo, other)
 	startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
 	if startTime.IsZero() {

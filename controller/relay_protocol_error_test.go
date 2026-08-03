@@ -62,6 +62,26 @@ func TestWriteRelayErrorResponseUsesMessagesStreamEnvelopeBeforeFirstChunk(t *te
 	assert.Contains(t, body, `{"type":"error","error":{"type":"api_error","message":"upstream failed"}}`)
 }
 
+func TestWriteRelayErrorResponseUsesChatCompletionsStreamEnvelope(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+
+	apiError := types.WithOpenAIError(types.OpenAIError{
+		Type:    "server_error",
+		Code:    "bad_response",
+		Message: "Dify workflow failed",
+	}, http.StatusBadGateway)
+	writeRelayErrorResponse(c, types.RelayFormatOpenAI, apiError, &relaycommon.RelayInfo{IsStream: true}, nil)
+
+	body := recorder.Body.String()
+	assert.Equal(t, "text/event-stream", recorder.Header().Get("Content-Type"))
+	assert.Contains(t, body, `data: {"error":{"message":"Dify workflow failed"`)
+	assert.Contains(t, body, `"code":"bad_response"`)
+	assert.Contains(t, body, "data: [DONE]")
+}
+
 func TestWriteRelayErrorResponseUsesEntryProtocolForJSONErrors(t *testing.T) {
 	tests := []struct {
 		name        string

@@ -5775,5 +5775,7 @@
     "Icon name must be 80 characters or fewer": "アイコン名は80文字以内で入力してください",
     "Use a React Icons name such as LuRadar": "LuRadar のような React Icons の名前を入力してください",
     "Use a React Icons name such as LuRadar or FaGithub. Leave empty for the default link icon.": "LuRadar または FaGithub のような React Icons の名前を入力します。空欄の場合は既定のリンクアイコンを使用します。"
-  }
+  },
+  "Require successful Dify workflow": "Dify ワークフローの成功を必須にする",
+  "Require a successful Dify workflow status, a non-empty answer, and upstream token usage before billing.": "Dify ワークフローが成功し、回答が空でなく、アップストリームのトークン使用量がある場合にのみ課金します。"
 }

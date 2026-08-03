@@ -52,6 +52,28 @@ func TestGenerateTextOtherInfoStoresModelRoutingInAdminInfo(t *testing.T) {
 	assert.Equal(t, []interface{}{"set model = upstream-model"}, parsedAdminInfo["po"])
 }
 
+func TestGenerateTextOtherInfoStoresDifyWorkflowOnlyInAdminInfo(t *testing.T) {
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	now := time.Now()
+	relayInfo := &relaycommon.RelayInfo{
+		StartTime:          now,
+		FirstResponseTime:  now,
+		DifyWorkflowRunID:  "run-123",
+		DifyWorkflowStatus: "succeeded",
+		ChannelMeta:        &relaycommon.ChannelMeta{},
+	}
+
+	other := GenerateTextOtherInfo(ctx, relayInfo, 1, 1, 1, 0, 0, 0, 1)
+
+	assert.NotContains(t, other, "dify_workflow_run_id")
+	assert.NotContains(t, other, "dify_workflow_status")
+	adminInfo, ok := other["admin_info"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "run-123", adminInfo["dify_workflow_run_id"])
+	assert.Equal(t, "succeeded", adminInfo["dify_workflow_status"])
+}
+
 func TestGenerateTextOtherInfoOmitsClaudeReportedVersionAlias(t *testing.T) {
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
