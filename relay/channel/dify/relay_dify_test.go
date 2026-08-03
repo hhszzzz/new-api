@@ -76,6 +76,27 @@ func TestDifyStreamHandlerStrictSuccess(t *testing.T) {
 	assert.Contains(t, recorder.Body.String(), "data: [DONE]")
 }
 
+func TestDifyStreamHandlerStrictSuccessWhenMessageEndPrecedesWorkflowFinished(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, recorder, info := newDifyHandlerTestContext(true)
+	body := difySSE(
+		`{"event":"workflow_started","workflow_run_id":"run-123","data":{"id":"run-123","workflow_id":"workflow-1"}}`,
+		`{"event":"agent_message","workflow_run_id":"run-123","answer":"real answer"}`,
+		`{"event":"message_end","workflow_run_id":"run-123","metadata":{"usage":{"prompt_tokens":4,"completion_tokens":5,"total_tokens":9}}}`,
+		`{"event":"workflow_finished","workflow_run_id":"run-123","data":{"id":"run-123","workflow_id":"workflow-1","status":"succeeded","total_tokens":9}}`,
+	)
+
+	usage, apiErr := difyStreamHandler(c, info, newDifyResponse(body))
+
+	require.Nil(t, apiErr)
+	require.NotNil(t, usage)
+	assert.Equal(t, 9, usage.TotalTokens)
+	assert.Equal(t, "run-123", info.DifyWorkflowRunID)
+	assert.Equal(t, "succeeded", info.DifyWorkflowStatus)
+	assert.Contains(t, recorder.Body.String(), "real answer")
+	assert.Contains(t, recorder.Body.String(), "data: [DONE]")
+}
+
 func TestDifyStreamHandlerRejectsUnsuccessfulWorkflowStatuses(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, status := range []string{"partial-succeeded", "failed", "stopped"} {
@@ -83,6 +104,7 @@ func TestDifyStreamHandlerRejectsUnsuccessfulWorkflowStatuses(t *testing.T) {
 			c, recorder, info := newDifyHandlerTestContext(true)
 			body := difySSE(
 				`{"event":"agent_message","workflow_run_id":"run-bad","answer":"placeholder"}`,
+				`{"event":"message_end","workflow_run_id":"run-bad","metadata":{"usage":{"prompt_tokens":4,"completion_tokens":4,"total_tokens":8}}}`,
 				`{"event":"workflow_finished","workflow_run_id":"run-bad","data":{"status":"`+status+`","total_tokens":8}}`,
 			)
 

@@ -289,10 +289,15 @@ func difyStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 				sr.Stop(streamErr)
 				return
 			}
+			if strictWorkflow && messageEndSeen {
+				sr.Done()
+			}
 		case "message_end":
 			usage = &difyResponse.MetaData.Usage
 			messageEndSeen = true
-			sr.Done()
+			if !strictWorkflow || workflowFinishedSeen {
+				sr.Done()
+			}
 			return
 		case "error":
 			if info.DifyWorkflowStatus == "" {
