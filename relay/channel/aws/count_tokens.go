@@ -60,7 +60,11 @@ func countTokensWithClient(c *gin.Context, info *relaycommon.RelayInfo, request 
 	}
 
 	modelID := resolveAwsModelID(info.UpstreamModelName, client.Options().Region)
-	ctx, cancel := newAwsInvokeContext()
+	requestContext := context.Background()
+	if c != nil && c.Request != nil {
+		requestContext = c.Request.Context()
+	}
+	ctx, cancel := newAwsInvokeContext(requestContext)
 	defer cancel()
 	output, err := client.CountTokens(ctx, &bedrockruntime.CountTokensInput{
 		ModelId: awsSDK.String(modelID),
@@ -69,6 +73,9 @@ func countTokensWithClient(c *gin.Context, info *relaycommon.RelayInfo, request 
 		},
 	})
 	if err != nil {
+		if requestContext.Err() != nil {
+			return 0, newAwsInvokeError(requestContext, err, "CountTokens")
+		}
 		statusCode := getAwsErrorStatusCode(err)
 		if statusCode == http.StatusNotFound || statusCode == http.StatusMethodNotAllowed || statusCode == http.StatusNotImplemented {
 			unsupported := fmt.Errorf("%w: %v", ErrCountTokensUnsupported, err)

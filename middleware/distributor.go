@@ -288,7 +288,7 @@ func resolveAffinitySelectionGroup(c *gin.Context, selectionGroup, selectionMode
 			userGroups = []string{userGroup}
 		}
 	}
-	for _, group := range service.GetUserAutoGroups(userGroups) {
+	for _, group := range service.GetRequestAutoGroupsForGroups(c, userGroups) {
 		if groupAllowsRequestClient(c, group) && model.IsChannelEnabledForGroupModel(group, selectionModel, channelId) {
 			return group, true
 		}

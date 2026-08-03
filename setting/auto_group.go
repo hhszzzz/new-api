@@ -1,10 +1,15 @@
 package setting
 
 import (
+	"fmt"
+	"strconv"
 	"sync"
+	"sync/atomic"
 
 	"github.com/QuantumNous/new-api/common"
 )
+
+const DefaultMaxTokenAutoGroups = 5
 
 var autoGroups = []string{
 	"default",
@@ -12,6 +17,12 @@ var autoGroups = []string{
 var autoGroupsMutex sync.RWMutex
 
 var DefaultUseAutoGroup = false
+
+var maxTokenAutoGroups atomic.Int64
+
+func init() {
+	maxTokenAutoGroups.Store(DefaultMaxTokenAutoGroups)
+}
 
 func ContainsAutoGroup(group string) bool {
 	autoGroupsMutex.RLock()
@@ -48,4 +59,25 @@ func GetAutoGroups() []string {
 	autoGroupsMutex.RLock()
 	defer autoGroupsMutex.RUnlock()
 	return append([]string(nil), autoGroups...)
+}
+
+func GetMaxTokenAutoGroups() int {
+	return int(maxTokenAutoGroups.Load())
+}
+
+func ValidateMaxTokenAutoGroups(value string) error {
+	maxCount, err := strconv.Atoi(value)
+	if err != nil || maxCount <= 0 {
+		return fmt.Errorf("MaxTokenAutoGroups must be a positive integer")
+	}
+	return nil
+}
+
+func UpdateMaxTokenAutoGroups(value string) error {
+	if err := ValidateMaxTokenAutoGroups(value); err != nil {
+		return err
+	}
+	maxCount, _ := strconv.Atoi(value)
+	maxTokenAutoGroups.Store(int64(maxCount))
+	return nil
 }

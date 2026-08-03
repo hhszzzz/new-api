@@ -25,7 +25,7 @@ func applyUserModelRoute(c *gin.Context, sourceModel, usingGroup string) (*model
 	if usingGroup == "auto" {
 		userGroups := common.GetContextKeyStringSlice(c, constant.ContextKeyUserGroups)
 		applicableGroups = applicableGroups[:0]
-		for _, group := range service.GetUserAutoGroups(userGroups) {
+		for _, group := range service.GetRequestAutoGroupsForGroups(c, userGroups) {
 			if groupAllowsRequestClient(c, group) {
 				applicableGroups = append(applicableGroups, group)
 			}

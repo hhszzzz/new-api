@@ -199,7 +199,7 @@ func getModelListGroups(c *gin.Context) (modelListGroups, error) {
 	ownerGroups := userGroups
 	switch {
 	case tokenGroup == "auto":
-		ownerGroups = service.GetUserAutoGroups(userGroups)
+		ownerGroups = service.GetRequestAutoGroupsForGroups(c, userGroups)
 	case tokenGroup != "" && service.GroupInUserUsableGroupsForGroups(userGroups, tokenGroup):
 		ownerGroups = []string{tokenGroup}
 	}
@@ -329,12 +329,18 @@ func ListModels(c *gin.Context, modelType int) {
 				Type:        "model",
 			}
 		}
-		response := gin.H{"data": useranthropicModels, "has_more": false}
+		firstID := ""
+		lastID := ""
 		if len(useranthropicModels) > 0 {
-			response["first_id"] = useranthropicModels[0].ID
-			response["last_id"] = useranthropicModels[len(useranthropicModels)-1].ID
+			firstID = useranthropicModels[0].ID
+			lastID = useranthropicModels[len(useranthropicModels)-1].ID
 		}
-		c.JSON(200, response)
+		c.JSON(200, gin.H{
+			"data":     useranthropicModels,
+			"first_id": firstID,
+			"has_more": false,
+			"last_id":  lastID,
+		})
 	case constant.ChannelTypeGemini:
 		userGeminiModels := make([]dto.GeminiModel, len(userOpenAiModels))
 		for i, model := range userOpenAiModels {

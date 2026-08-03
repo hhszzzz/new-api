@@ -3,9 +3,12 @@ package service
 import (
 	"strings"
 
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"github.com/gin-gonic/gin"
 )
 
 func getAssignedUserGroups(userGroups []string) map[string]string {
@@ -78,12 +81,74 @@ func GetUserAutoGroups(userGroups []string) []string {
 
 func getAutoGroups(usableGroups map[string]string) []string {
 	autoGroups := make([]string, 0)
+	seen := make(map[string]struct{})
 	for _, group := range setting.GetAutoGroups() {
-		if _, ok := usableGroups[group]; ok {
-			autoGroups = append(autoGroups, group)
+		if _, ok := usableGroups[group]; !ok {
+			continue
 		}
+		if _, ok := seen[group]; ok {
+			continue
+		}
+		seen[group] = struct{}{}
+		autoGroups = append(autoGroups, group)
 	}
 	return autoGroups
+}
+
+func IsUserSelectableGroup(userGroup, groupName string) bool {
+	return IsUserSelectableGroupForGroups([]string{userGroup}, groupName)
+}
+
+func IsUserSelectableGroupForGroups(userGroups []string, groupName string) bool {
+	if groupName == "" || groupName == "auto" {
+		return false
+	}
+	return GroupInUserUsableGroupsForGroups(userGroups, groupName) && ratio_setting.ContainsGroupRatio(groupName)
+}
+
+// FilterUserTokenAutoGroups applies current permissions before the current
+// per-token limit. It intentionally does not fall back to the global Auto list.
+func FilterUserTokenAutoGroups(userGroup string, groups []string) []string {
+	return FilterUserTokenAutoGroupsForGroups([]string{userGroup}, groups)
+}
+
+func FilterUserTokenAutoGroupsForGroups(userGroups []string, groups []string) []string {
+	maxCount := setting.GetMaxTokenAutoGroups()
+	filtered := make([]string, 0, min(len(groups), maxCount))
+	seen := make(map[string]struct{})
+	for _, group := range groups {
+		if !IsUserSelectableGroupForGroups(userGroups, group) {
+			continue
+		}
+		if _, ok := seen[group]; ok {
+			continue
+		}
+		seen[group] = struct{}{}
+		filtered = append(filtered, group)
+		if len(filtered) == maxCount {
+			break
+		}
+	}
+	return filtered
+}
+
+// GetRequestAutoGroups resolves the ordered Auto groups for the current token.
+// The absence of the context value means that the token inherits the complete
+// global Auto list; a present (even empty) value is an explicit token snapshot.
+func GetRequestAutoGroups(c *gin.Context, userGroup string) []string {
+	return GetRequestAutoGroupsForGroups(c, []string{userGroup})
+}
+
+func GetRequestAutoGroupsForGroups(c *gin.Context, userGroups []string) []string {
+	value, ok := common.GetContextKey(c, constant.ContextKeyTokenAutoGroups)
+	if !ok {
+		return GetUserAutoGroups(userGroups)
+	}
+	groups, ok := value.([]string)
+	if !ok {
+		return []string{}
+	}
+	return FilterUserTokenAutoGroupsForGroups(userGroups, groups)
 }
 
 // GetGroupsEnabledModels gets enabled models in group order and removes duplicates.

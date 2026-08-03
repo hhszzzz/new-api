@@ -53,6 +53,7 @@ describe('group pricing authorization presentation', () => {
         userUsableGroups='{"default":"Default","vip":"Legacy VIP"}'
         groupGroupRatio='{}'
         autoGroups='["default","vip"]'
+        maxTokenAutoGroupsField={null}
         onChange={vi.fn()}
       />
     )
