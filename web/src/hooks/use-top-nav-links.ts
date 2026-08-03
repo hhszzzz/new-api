@@ -62,11 +62,6 @@ export function useTopNavLinks(): TopNavLink[] {
 
   const linksByKey = new Map<string, TopNavLink>()
 
-  // Home
-  if (modules?.home !== false) {
-    linksByKey.set('home', { title: t('Home'), href: '/' })
-  }
-
   // Console -> /dashboard (new console path)
   if (modules?.console !== false) {
     linksByKey.set('console', {

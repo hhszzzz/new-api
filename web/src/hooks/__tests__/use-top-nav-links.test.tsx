@@ -54,7 +54,7 @@ afterEach(() => {
 })
 
 describe('top navigation model status link', () => {
-  test('adds the approved icon to every built-in link except home', () => {
+  test('omits home and adds the approved icon to every visible built-in link', () => {
     useStatusMock.mockReturnValue({ status: { HeaderNavModules: '{}' } })
 
     const { result } = renderHook(() => useTopNavLinks())
@@ -62,7 +62,7 @@ describe('top navigation model status link', () => {
       result.current.map((link) => [link.href, link] as const)
     )
 
-    expect(linksByHref.get('/')?.icon).toBeUndefined()
+    expect(linksByHref.has('/')).toBe(false)
     expect(linksByHref.get('/dashboard')?.icon).toBe(TOP_NAV_ICONS.console)
     expect(linksByHref.get('/pricing')?.icon).toBe(TOP_NAV_ICONS.pricing)
     expect(linksByHref.get('/model-status')?.icon).toBe(
