@@ -47,6 +47,7 @@ type DifyChatCompletionResponse struct {
 
 type DifyChunkChatCompletionResponse struct {
 	Event          string       `json:"event"`
+	TaskId         string       `json:"task_id"`
 	WorkflowRunId  string       `json:"workflow_run_id"`
 	ConversationId string       `json:"conversation_id"`
 	Answer         string       `json:"answer"`

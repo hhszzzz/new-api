@@ -1,10 +1,13 @@
 package dify
 
 import (
+	"bytes"
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,6 +19,58 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type blockingDifyStream struct {
+	first  []byte
+	offset int
+	closed chan struct{}
+	once   sync.Once
+}
+
+func newBlockingDifyStream(first string) *blockingDifyStream {
+	return &blockingDifyStream{
+		first:  []byte(first),
+		closed: make(chan struct{}),
+	}
+}
+
+func (b *blockingDifyStream) Read(p []byte) (int, error) {
+	if b.offset < len(b.first) {
+		n := copy(p, b.first[b.offset:])
+		b.offset += n
+		return n, nil
+	}
+	<-b.closed
+	return 0, io.ErrClosedPipe
+}
+
+func (b *blockingDifyStream) Close() error {
+	b.once.Do(func() {
+		close(b.closed)
+	})
+	return nil
+}
+
+type cancelAfterDifyChunkWriter struct {
+	gin.ResponseWriter
+	cancel context.CancelFunc
+	once   sync.Once
+}
+
+func (w *cancelAfterDifyChunkWriter) Write(data []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(data)
+	if bytes.Contains(data, []byte("chat.completion.chunk")) {
+		w.once.Do(w.cancel)
+	}
+	return n, err
+}
+
+type recordedDifyStopRequest struct {
+	method        string
+	path          string
+	authorization string
+	body          string
+}
 
 func newDifyHandlerTestContext(strict bool) (*gin.Context, *httptest.ResponseRecorder, *relaycommon.RelayInfo) {
 	if constant.StreamingTimeout <= 0 {
@@ -53,6 +108,101 @@ func difySSE(events ...string) string {
 		body.WriteString("\n\n")
 	}
 	return body.String()
+}
+
+func TestRequestOpenAI2DifyStoresUserForTaskCancellation(t *testing.T) {
+	c, _, info := newDifyHandlerTestContext(false)
+	request := relaydto.GeneralOpenAIRequest{User: []byte(`"client-user"`)}
+
+	difyRequest := requestOpenAI2Dify(c, info, request)
+
+	require.NotNil(t, difyRequest)
+	assert.Equal(t, "client-user", difyRequest.User)
+	assert.Equal(t, difyRequest.User, info.DifyUser)
+}
+
+func TestStopDifyTaskUsesServiceAPIContract(t *testing.T) {
+	requests := make(chan recordedDifyStopRequest, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		requests <- recordedDifyStopRequest{
+			method:        r.Method,
+			path:          r.URL.Path,
+			authorization: r.Header.Get("Authorization"),
+			body:          string(body),
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	info := &relaycommon.RelayInfo{
+		DifyTaskID: "task-123",
+		DifyUser:   "client-user",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelBaseUrl: server.URL,
+			ApiKey:         "dify-key",
+		},
+	}
+
+	require.NoError(t, stopDifyTask(info))
+	request := <-requests
+	assert.Equal(t, http.MethodPost, request.method)
+	assert.Equal(t, "/v1/chat-messages/task-123/stop", request.path)
+	assert.Equal(t, "Bearer dify-key", request.authorization)
+	assert.JSONEq(t, `{"user":"client-user"}`, request.body)
+}
+
+func TestDifyStreamHandlerStopsUpstreamTaskAfterClientDisconnect(t *testing.T) {
+	requests := make(chan recordedDifyStopRequest, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		requests <- recordedDifyStopRequest{
+			method:        r.Method,
+			path:          r.URL.Path,
+			authorization: r.Header.Get("Authorization"),
+			body:          string(body),
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	requestContext, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c, recorder, info := newDifyHandlerTestContext(false)
+	c.Request = c.Request.WithContext(requestContext)
+	c.Writer = &cancelAfterDifyChunkWriter{ResponseWriter: c.Writer, cancel: cancel}
+	info.ChannelBaseUrl = server.URL
+	info.ApiKey = "dify-key"
+	info.DifyUser = "client-user"
+	body := newBlockingDifyStream(difySSE(
+		`{"event":"workflow_started","task_id":"task-123","workflow_run_id":"run-123","data":{"id":"run-123","workflow_id":"workflow-1"}}`,
+	))
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       body,
+	}
+
+	usage, apiErr := difyStreamHandler(c, info, resp)
+
+	assert.Nil(t, usage)
+	require.NotNil(t, apiErr)
+	assert.Equal(t, types.ErrorCodeClientDisconnected, apiErr.GetErrorCode())
+	assert.Equal(t, 499, apiErr.StatusCode)
+	assert.True(t, types.IsSkipRetryError(apiErr), "client disconnect must not trigger channel retry/auto-ban")
+	assert.False(t, types.IsRecordErrorLog(apiErr), "client disconnect must not be recorded as a user-visible error")
+	assert.Equal(t, "task-123", info.DifyTaskID)
+	assert.NotContains(t, recorder.Body.String(), "data: [DONE]")
+	request := <-requests
+	assert.Equal(t, http.MethodPost, request.method)
+	assert.Equal(t, "/v1/chat-messages/task-123/stop", request.path)
+	assert.Equal(t, "Bearer dify-key", request.authorization)
+	assert.JSONEq(t, `{"user":"client-user"}`, request.body)
+	select {
+	case <-body.closed:
+	default:
+		t.Fatal("upstream Dify response body was not closed after client disconnect")
+	}
 }
 
 func TestDifyStreamHandlerStrictSuccess(t *testing.T) {

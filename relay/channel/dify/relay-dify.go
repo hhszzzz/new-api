@@ -2,6 +2,7 @@ package dify
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -9,12 +10,15 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -23,6 +27,11 @@ import (
 	"github.com/samber/lo"
 
 	"github.com/gin-gonic/gin"
+)
+
+const (
+	difyHeartbeatInterval = 15 * time.Second
+	difyStopTimeout       = 5 * time.Second
 )
 
 func uploadDifyFile(c *gin.Context, info *relaycommon.RelayInfo, user string, media dto.MediaContent) *DifyFile {
@@ -143,6 +152,7 @@ func requestOpenAI2Dify(c *gin.Context, info *relaycommon.RelayInfo, request dto
 		stringUser = helper.GetResponseID(c)
 	}
 	difyReq.User = stringUser
+	info.DifyUser = stringUser
 
 	files := make([]DifyFile, 0)
 	var content strings.Builder
@@ -233,6 +243,49 @@ func newDifyResponseError(code types.ErrorCode, message string) *types.NewAPIErr
 	return types.NewOpenAIError(errors.New(message), code, http.StatusBadGateway)
 }
 
+func stopDifyTask(info *relaycommon.RelayInfo) error {
+	if info == nil || info.ChannelMeta == nil {
+		return errors.New("missing Dify channel metadata")
+	}
+	if info.DifyTaskID == "" {
+		return errors.New("missing Dify task ID")
+	}
+	if info.DifyUser == "" {
+		return errors.New("missing Dify user")
+	}
+
+	body, err := common.Marshal(struct {
+		User string `json:"user"`
+	}{User: info.DifyUser})
+	if err != nil {
+		return fmt.Errorf("marshal Dify stop request: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), difyStopTimeout)
+	defer cancel()
+	stopURL := strings.TrimRight(info.ChannelBaseUrl, "/") + "/v1/chat-messages/" + url.PathEscape(info.DifyTaskID) + "/stop"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, stopURL, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("create Dify stop request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+info.ApiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	client, err := service.GetHttpClientWithProxySettings(info.ChannelSetting.Proxy, info.ChannelSetting)
+	if err != nil {
+		return fmt.Errorf("create Dify stop client: %w", err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("send Dify stop request: %w", err)
+	}
+	defer service.CloseResponseBodyGracefully(resp)
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("Dify stop request returned HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
 func difyErrorStatus(status any) bool {
 	switch value := status.(type) {
 	case nil:
@@ -263,13 +316,29 @@ func difyStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 	var workflowTotalTokens int
 	strictWorkflow := difyRequiresSuccessfulWorkflow(info)
 	helper.SetEventStreamHeaders(c)
-	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+	helper.StreamScannerHandlerWithOptions(c, resp, info, helper.StreamScannerOptions{
+		PingInterval: difyHeartbeatInterval,
+		OnClientGone: func() {
+			if info.DifyTaskID == "" {
+				logger.LogWarn(c, "cannot stop Dify task after client disconnect: task_id was not received")
+				return
+			}
+			if err := stopDifyTask(info); err != nil {
+				logger.LogWarn(c, fmt.Sprintf("failed to stop Dify task %s after client disconnect: %v", info.DifyTaskID, err))
+				return
+			}
+			logger.LogInfo(c, fmt.Sprintf("stopped Dify task %s after client disconnect", info.DifyTaskID))
+		},
+	}, func(data string, sr *helper.StreamResult) {
 		var difyResponse DifyChunkChatCompletionResponse
 		if err := common.Unmarshal([]byte(data), &difyResponse); err != nil {
 			common.SysLog("error unmarshalling stream response: " + err.Error())
 			streamErr = newDifyResponseError(types.ErrorCodeBadResponse, "invalid Dify stream event")
 			sr.Stop(err)
 			return
+		}
+		if difyResponse.TaskId != "" {
+			info.DifyTaskID = difyResponse.TaskId
 		}
 		if difyResponse.WorkflowRunId != "" {
 			info.DifyWorkflowRunID = difyResponse.WorkflowRunId
@@ -327,6 +396,21 @@ func difyStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 			sr.Stop(err)
 		}
 	})
+	if info.StreamStatus != nil && info.StreamStatus.EndReason == relaycommon.StreamEndReasonClientGone {
+		endErr := info.StreamStatus.EndError
+		if endErr == nil {
+			endErr = context.Canceled
+		}
+		// 客户端主动断开不是渠道故障：跳过重试、不记用户错误日志，
+		// 避免污染渠道健康度或触发自动禁用。499 即 nginx 的 client closed request。
+		return nil, types.NewOpenAIError(
+			fmt.Errorf("client disconnected before Dify stream completed: %w", endErr),
+			types.ErrorCodeClientDisconnected,
+			499,
+			types.ErrOptionWithSkipRetry(),
+			types.ErrOptionWithNoRecordErrorLog(),
+		)
+	}
 	if streamErr != nil {
 		return nil, streamErr
 	}

@@ -249,10 +249,15 @@ func TestStreamScannerHandler_ClientCancelAbortsUpstreamAndReturns(t *testing.T)
 	}
 
 	var count atomic.Int64
+	var clientGoneCallbacks atomic.Int64
 	firstHandled := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
-		StreamScannerHandler(c, resp, info, func(data string, sr *StreamResult) {
+		StreamScannerHandlerWithOptions(c, resp, info, StreamScannerOptions{
+			OnClientGone: func() {
+				clientGoneCallbacks.Add(1)
+			},
+		}, func(data string, sr *StreamResult) {
 			count.Add(1)
 			_ = StringData(c, data)
 			if data == "first" {
@@ -289,6 +294,7 @@ func TestStreamScannerHandler_ClientCancelAbortsUpstreamAndReturns(t *testing.T)
 	assert.Equal(t, int64(1), count.Load(), "no chunk after disconnect should be processed")
 	require.NotNil(t, info.StreamStatus)
 	assert.Equal(t, relaycommon.StreamEndReasonClientGone, info.StreamStatus.EndReason)
+	assert.Equal(t, int64(1), clientGoneCallbacks.Load(), "client disconnect callback should run exactly once")
 
 	body := recorder.Body.String()
 	assert.Contains(t, body, "first")
@@ -381,6 +387,33 @@ func TestStreamScannerHandler_PingDisabledByRelayInfo(t *testing.T) {
 	body := recorder.Body.String()
 	pingCount := strings.Count(body, ": PING")
 	assert.Equal(t, 0, pingCount, "pings should be disabled when DisablePing=true")
+}
+
+func TestStreamScannerHandler_OptionForcesPingWhenGlobalSettingDisabled(t *testing.T) {
+	setting := operation_setting.GetGeneralSetting()
+	t.Cleanup(func() {
+		setStreamPingSettingForTest(t, setting.PingIntervalEnabled, setting.PingIntervalSeconds)
+	})
+	setStreamPingSettingForTest(t, false, 60)
+
+	pr, pw := io.Pipe()
+	go func() {
+		defer pw.Close()
+		time.Sleep(50 * time.Millisecond)
+		_, _ = fmt.Fprint(pw, "data: [DONE]\n")
+	}()
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	resp := &http.Response{Body: pr}
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
+
+	StreamScannerHandlerWithOptions(c, resp, info, StreamScannerOptions{
+		PingInterval: 10 * time.Millisecond,
+	}, func(data string, sr *StreamResult) {})
+
+	assert.GreaterOrEqual(t, strings.Count(recorder.Body.String(), ": PING"), 1)
 }
 
 // ---------- StreamStatus integration ----------

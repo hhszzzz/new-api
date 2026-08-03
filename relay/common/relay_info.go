@@ -168,6 +168,8 @@ type RelayInfo struct {
 	RuntimeHeadersOverride                map[string]interface{}
 	UseRuntimeHeadersOverride             bool
 	ParamOverrideAudit                    []string
+	DifyTaskID                            string
+	DifyUser                              string
 	DifyWorkflowRunID                     string
 	DifyWorkflowStatus                    string
 

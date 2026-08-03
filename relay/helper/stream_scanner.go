@@ -74,7 +74,22 @@ func ExtendWriteDeadline(c *gin.Context) {
 	_ = http.NewResponseController(c.Writer).SetWriteDeadline(time.Now().Add(streamWriteTimeout))
 }
 
+type StreamScannerOptions struct {
+	// PingInterval forces SSE comment heartbeats for this stream even when the
+	// global ping setting is disabled. A non-positive value keeps the global
+	// setting behavior.
+	PingInterval time.Duration
+	// OnClientGone runs after the upstream response body is closed and all
+	// scanner goroutines have exited. The callback must not use gin.Context from
+	// another goroutine.
+	OnClientGone func()
+}
+
 func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo, dataHandler func(data string, sr *StreamResult)) {
+	StreamScannerHandlerWithOptions(c, resp, info, StreamScannerOptions{}, dataHandler)
+}
+
+func StreamScannerHandlerWithOptions(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo, options StreamScannerOptions, dataHandler func(data string, sr *StreamResult)) {
 
 	if resp == nil || dataHandler == nil {
 		return
@@ -105,8 +120,12 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 	}
 
 	generalSettings := operation_setting.GetGeneralSetting()
-	pingEnabled := generalSettings.PingIntervalEnabled && !info.DisablePing
-	pingInterval := time.Duration(generalSettings.PingIntervalSeconds) * time.Second
+	pingInterval := options.PingInterval
+	forcedPing := pingInterval > 0
+	if !forcedPing {
+		pingInterval = time.Duration(generalSettings.PingIntervalSeconds) * time.Second
+	}
+	pingEnabled := !info.DisablePing && (generalSettings.PingIntervalEnabled || forcedPing)
 	if pingInterval <= 0 {
 		pingInterval = DefaultPingInterval
 	}
@@ -290,6 +309,7 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 	})
 
 	// 主循环等待完成或超时
+	clientGone := false
 	select {
 	case <-ticker.C:
 		info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonTimeout, nil)
@@ -298,10 +318,14 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 	case <-c.Request.Context().Done():
 		// 客户端断开：立即 cleanup 关闭上游 resp.Body，解除 scanner 阻塞并让上游停止生成，
 		// 避免为已放弃的请求继续消费上游 token。
+		clientGone = true
 		info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, c.Request.Context().Err())
 	}
 
 	cleanup()
+	if clientGone && options.OnClientGone != nil {
+		options.OnClientGone()
+	}
 	if info.StreamStatus.IsNormalEnd() && !info.StreamStatus.HasErrors() {
 		logger.LogInfo(c, fmt.Sprintf("stream ended: %s", info.StreamStatus.Summary()))
 	} else {
