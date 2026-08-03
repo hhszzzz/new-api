@@ -16,6 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { normalizeReactIconName } from '@/lib/react-icon-name'
+
 export type HeaderNavAccessConfig = {
   enabled: boolean
   requireAuth: boolean
@@ -25,6 +27,7 @@ export type HeaderNavCustomItemConfig = {
   id: string
   title: string
   url: string
+  icon?: string
   enabled: boolean
 }
 
@@ -167,6 +170,7 @@ function parseCustomHeaderNavItems(raw: unknown): HeaderNavCustomItemConfig[] {
         id,
         title: typeof item.title === 'string' ? item.title : '',
         url: typeof item.url === 'string' ? item.url : '',
+        icon: normalizeReactIconName(item.icon),
         enabled: toBoolean(item.enabled, true),
       },
     ]

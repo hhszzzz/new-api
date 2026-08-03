@@ -103,7 +103,7 @@ const toFormValues = (config: HeaderNavModulesConfig): HeaderNavFormValues => ({
     config.about === undefined
       ? HEADER_NAV_DEFAULT.about
       : Boolean(config.about),
-  custom: config.custom.map((item) => ({ ...item })),
+  custom: config.custom.map((item) => ({ ...item, icon: item.icon ?? '' })),
   order: [...config.order],
 })
 
@@ -155,6 +155,7 @@ export function HeaderNavigationSection({
         ...item,
         title: item.title.trim(),
         url: item.url.trim(),
+        icon: item.icon.trim(),
       })),
       order: values.order,
     }

@@ -16,8 +16,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import type { IconBaseProps, IconType } from 'react-icons'
+
+import { normalizeReactIconName } from '@/lib/react-icon-name'
 
 type IconPackModule = Record<string, unknown>
 type IconPackLoader = () => Promise<IconPackModule>
@@ -97,12 +99,6 @@ const ICON_PACK_CANDIDATES: Array<[RegExp, IconPackId[]]> = [
   [/^Wi[A-Z0-9]/, ['wi']],
 ]
 
-function normalizeIconName(name: string | null | undefined): string | null {
-  const trimmed = name?.trim()
-  if (!trimmed || !/^[A-Z][A-Za-z0-9]*$/.test(trimmed)) return null
-  return trimmed
-}
-
 function getCandidatePacks(iconName: string): IconPackId[] {
   return (
     ICON_PACK_CANDIDATES.find(([pattern]) => pattern.test(iconName))?.[1] ?? []
@@ -136,6 +132,7 @@ async function resolveReactIcon(iconName: string): Promise<IconType | null> {
 
 type ReactIconByNameProps = IconBaseProps & {
   name?: string | null
+  fallback?: ReactNode
 }
 
 type ResolvedIconState = {
@@ -143,8 +140,12 @@ type ResolvedIconState = {
   Icon: IconType | null
 }
 
-export function ReactIconByName({ name, ...props }: ReactIconByNameProps) {
-  const iconName = normalizeIconName(name)
+export function ReactIconByName({
+  name,
+  fallback = null,
+  ...props
+}: ReactIconByNameProps) {
+  const iconName = normalizeReactIconName(name)
   const [resolvedIcon, setResolvedIcon] = useState<ResolvedIconState | null>(
     null
   )
@@ -164,7 +165,7 @@ export function ReactIconByName({ name, ...props }: ReactIconByNameProps) {
   }, [iconName])
 
   if (!iconName || resolvedIcon?.iconName !== iconName || !resolvedIcon.Icon) {
-    return null
+    return fallback
   }
 
   const Icon = resolvedIcon.Icon

@@ -16,15 +16,19 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { DashboardBrowsingIcon } from '@hugeicons/core-free-icons'
 import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { ComponentProps } from 'react'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
+import type { TopNavLink } from '../../types'
 import { PublicHeader } from '../public-header'
 
 const { topNavLinksMock, translateMock } = vi.hoisted(() => ({
-  topNavLinksMock: vi.fn(() => [{ title: 'Models', href: '/pricing' }]),
+  topNavLinksMock: vi.fn<() => TopNavLink[]>(() => [
+    { title: 'Models', href: '/pricing' },
+  ]),
   translateMock: vi.fn((key: string) => key),
 }))
 
@@ -115,7 +119,7 @@ afterEach(() => {
 })
 
 function renderPublicHeader() {
-  render(
+  return render(
     <PublicHeader
       showAuthButtons={false}
       showLanguageSwitcher={false}
@@ -169,6 +173,26 @@ describe('public header navigation', () => {
 
     expect(screen.getByRole('link', { name: '模型广场' })).toBeInTheDocument()
     expect(translateMock).not.toHaveBeenCalledWith('模型广场')
+  })
+
+  test('shows icons on non-home links in desktop and collapsed navigation', () => {
+    topNavLinksMock.mockReturnValue([
+      { title: 'Home', href: '/' },
+      {
+        title: 'Models',
+        href: '/pricing',
+        icon: DashboardBrowsingIcon,
+      },
+    ])
+
+    const view = renderPublicHeader()
+
+    expect(view.container.querySelectorAll('[data-top-nav-icon]')).toHaveLength(
+      2
+    )
+    for (const homeLink of screen.getAllByRole('link', { name: 'Home' })) {
+      expect(homeLink.querySelector('[data-top-nav-icon]')).toBeNull()
+    }
   })
 
   test('closes the collapsed menu and unlocks scrolling at the desktop breakpoint', async () => {

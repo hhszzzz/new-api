@@ -68,7 +68,9 @@ export function ModelRadar() {
   const snapshot = radarQuery.data?.data
   const updatedAt = snapshot ? format.dateTime(snapshot.fetched_at) : null
   const sourceUpdatedAt = snapshot
-    ? format.dateTime(snapshot.source_updated_at)
+    ? format.dateTime(
+        Math.max(snapshot.source_updated_at, snapshot.alerts_updated_at)
+      )
     : null
   const initialLoading = radarQuery.isLoading && !radarQuery.isFetched
   const unavailable =

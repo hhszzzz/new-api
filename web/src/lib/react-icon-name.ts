@@ -16,24 +16,22 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { EmbeddedPage } from '@/components/embedded-page'
-import { PublicLayout } from '@/components/layout'
-import type { CustomHeaderNavItem } from '@/lib/nav-modules'
+export const REACT_ICON_NAME_MAX_LENGTH = 80
 
-type CustomNavigationPageProps = {
-  item: CustomHeaderNavItem
-}
+const REACT_ICON_NAME_PATTERN =
+  /^(?:Ai|Bi|Bs|Cg|Ci|Di|Fa|Fc|Fi|Gi|Go|Gr|Hi|Im|Io|Lia|Lu|Md|Pi|Ri|Rx|Si|Sl|Tb|Tfi|Ti|Vsc|Wi)[A-Z0-9][A-Za-z0-9]*$/
 
-export function CustomNavigationPage(props: CustomNavigationPageProps) {
-  return (
-    <PublicLayout showMainContainer={false}>
-      <main className='flex h-svh min-h-0 flex-col pt-16'>
-        <EmbeddedPage
-          src={props.item.url}
-          title={props.item.title}
-          className='min-h-0 flex-1'
-        />
-      </main>
-    </PublicLayout>
-  )
+export function normalizeReactIconName(value: unknown): string {
+  if (typeof value !== 'string') return ''
+
+  const name = value.trim()
+  if (
+    name.length === 0 ||
+    name.length > REACT_ICON_NAME_MAX_LENGTH ||
+    !REACT_ICON_NAME_PATTERN.test(name)
+  ) {
+    return ''
+  }
+
+  return name
 }

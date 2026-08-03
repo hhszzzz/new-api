@@ -10,14 +10,19 @@ import (
 	"github.com/QuantumNous/new-api/common"
 )
 
-const maxCustomHeaderNavItems = 20
+const (
+	maxCustomHeaderNavItems          = 20
+	maxCustomHeaderNavIconNameLength = 80
+)
 
 var customHeaderNavIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
+var customHeaderNavIconPattern = regexp.MustCompile(`^(Ai|Bi|Bs|Cg|Ci|Di|Fa|Fc|Fi|Gi|Go|Gr|Hi|Im|Io|Lia|Lu|Md|Pi|Ri|Rx|Si|Sl|Tb|Tfi|Ti|Vsc|Wi)[A-Z0-9][A-Za-z0-9]*$`)
 
 type customHeaderNavItem struct {
 	ID      string `json:"id"`
 	Title   string `json:"title"`
 	URL     string `json:"url"`
+	Icon    string `json:"icon,omitempty"`
 	Enabled bool   `json:"enabled"`
 }
 
@@ -65,6 +70,11 @@ func ValidateHeaderNavModules(raw string) error {
 		}
 		if parsedURL.User != nil {
 			return fmt.Errorf("custom header navigation item %d URL cannot contain credentials", index+1)
+		}
+
+		icon := strings.TrimSpace(item.Icon)
+		if icon != "" && (len(icon) > maxCustomHeaderNavIconNameLength || !customHeaderNavIconPattern.MatchString(icon)) {
+			return fmt.Errorf("custom header navigation item %d has an invalid React Icons icon name", index+1)
 		}
 	}
 

@@ -36,6 +36,7 @@ import { useAuthStore } from '@/stores/auth-store'
 import { defaultTopNavLinks } from '../config/top-nav.config'
 import type { TopNavLink } from '../types'
 import { HeaderLogo } from './header-logo'
+import { TopNavLinkContent } from './top-nav-link-content'
 
 const AUTH_PROMPT_SECONDS = 5
 
@@ -275,7 +276,12 @@ export function PublicHeader(props: PublicHeaderProps) {
                           link.disabled && 'pointer-events-none opacity-50'
                         )}
                       >
-                        {linkTitlesAreLocalized ? link.title : t(link.title)}
+                        <TopNavLinkContent
+                          icon={link.icon}
+                          title={
+                            linkTitlesAreLocalized ? link.title : t(link.title)
+                          }
+                        />
                       </a>
                     )
                   }
@@ -293,7 +299,12 @@ export function PublicHeader(props: PublicHeaderProps) {
                         link.disabled && 'pointer-events-none opacity-50'
                       )}
                     >
-                      {linkTitlesAreLocalized ? link.title : t(link.title)}
+                      <TopNavLinkContent
+                        icon={link.icon}
+                        title={
+                          linkTitlesAreLocalized ? link.title : t(link.title)
+                        }
+                      />
                     </Link>
                   )
                 })}
@@ -409,7 +420,12 @@ export function PublicHeader(props: PublicHeaderProps) {
                     className={linkClassName}
                     style={transitionStyle}
                   >
-                    {linkTitlesAreLocalized ? link.title : t(link.title)}
+                    <TopNavLinkContent
+                      icon={link.icon}
+                      title={
+                        linkTitlesAreLocalized ? link.title : t(link.title)
+                      }
+                    />
                   </a>
                 )
               }
@@ -422,7 +438,10 @@ export function PublicHeader(props: PublicHeaderProps) {
                   className={linkClassName}
                   style={transitionStyle}
                 >
-                  {linkTitlesAreLocalized ? link.title : t(link.title)}
+                  <TopNavLinkContent
+                    icon={link.icon}
+                    title={linkTitlesAreLocalized ? link.title : t(link.title)}
+                  />
                 </Link>
               )
             })}

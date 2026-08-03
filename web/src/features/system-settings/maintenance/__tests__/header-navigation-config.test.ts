@@ -147,6 +147,7 @@ describe('header navigation model status configuration', () => {
             id: 'portal',
             title: 'Team Portal',
             url: 'https://portal.example.com',
+            icon: 'LuRadar',
             enabled: true,
           },
         ],
@@ -159,6 +160,7 @@ describe('header navigation model status configuration', () => {
         id: 'portal',
         title: 'Team Portal',
         url: 'https://portal.example.com',
+        icon: 'LuRadar',
         enabled: true,
       },
     ])

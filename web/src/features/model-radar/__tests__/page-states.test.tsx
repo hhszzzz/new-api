@@ -53,6 +53,17 @@ vi.mock('@/components/page-transition', () => ({
 vi.mock('@/lib/use-chart-theme', () => ({
   useChartTheme: () => ({ resolvedTheme: 'light', themeReady: false }),
 }))
+vi.mock('../hooks/use-radar-formatters', () => ({
+  useRadarFormatters: () => ({
+    compact: (value: number | null) => String(value),
+    dateTime: (value: number | null) => `time:${value}`,
+    decimal: (value: number | null) => String(value),
+    historyTime: (value: number) => String(value),
+    integer: (value: number | null) => String(value),
+    percent: (value: number | null) => String(value),
+    usd: (value: number | null) => String(value),
+  }),
+}))
 vi.mock('@/hooks', () => ({ useMediaQuery: () => false }))
 vi.mock('@/lib/lobe-icon', () => ({
   getLobeIcon: (iconName: string) => <svg data-icon-key={iconName} />,
@@ -67,9 +78,9 @@ function response(stale: boolean): ModelRadarResponse {
     message: '',
     data: {
       schema_version: 1,
-      fetched_at: 1_800_000_000,
+      fetched_at: 1_800_001_000,
       source_updated_at: 1_799_999_000,
-      alerts_updated_at: 1_799_999_000,
+      alerts_updated_at: 1_800_000_100,
       stale,
       source: {
         name: 'Codex Radar',
@@ -169,6 +180,11 @@ describe('model radar page states', () => {
     renderPage()
 
     expect(screen.getByText('This data is outdated')).toBeVisible()
+    expect(
+      screen.getByText(
+        'The last source update was time:1800000100. Showing the latest valid data.'
+      )
+    ).toBeVisible()
     expect(screen.getByText('No degradation alerts')).toBeVisible()
     expect(screen.getByText('Stale data')).toBeVisible()
     expect(

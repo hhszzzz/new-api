@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 
+import { TOP_NAV_ICONS } from '@/lib/top-nav-icons'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { useTopNavLinks } from '../use-top-nav-links'
@@ -53,6 +54,26 @@ afterEach(() => {
 })
 
 describe('top navigation model status link', () => {
+  test('adds the approved icon to every built-in link except home', () => {
+    useStatusMock.mockReturnValue({ status: { HeaderNavModules: '{}' } })
+
+    const { result } = renderHook(() => useTopNavLinks())
+    const linksByHref = new Map(
+      result.current.map((link) => [link.href, link] as const)
+    )
+
+    expect(linksByHref.get('/')?.icon).toBeUndefined()
+    expect(linksByHref.get('/dashboard')?.icon).toBe(TOP_NAV_ICONS.console)
+    expect(linksByHref.get('/pricing')?.icon).toBe(TOP_NAV_ICONS.pricing)
+    expect(linksByHref.get('/model-status')?.icon).toBe(
+      TOP_NAV_ICONS.modelStatus
+    )
+    expect(linksByHref.get('/model-radar')?.icon).toBe(TOP_NAV_ICONS.modelRadar)
+    expect(linksByHref.get('/rankings')?.icon).toBe(TOP_NAV_ICONS.rankings)
+    expect(linksByHref.get('/docs')?.icon).toBe(TOP_NAV_ICONS.docs)
+    expect(linksByHref.get('/about')?.icon).toBe(TOP_NAV_ICONS.about)
+  })
+
   test('inherits model square access when legacy status omits model status', () => {
     useStatusMock.mockReturnValue({
       status: {
@@ -69,7 +90,13 @@ describe('top navigation model status link', () => {
 
     const { result } = renderHook(() => useTopNavLinks())
 
-    expect(result.current).toEqual([
+    expect(
+      result.current.map(({ title, href, requiresAuth }) => ({
+        title,
+        href,
+        requiresAuth,
+      }))
+    ).toEqual([
       {
         title: 'Model Square',
         href: '/pricing',
@@ -86,6 +113,7 @@ describe('top navigation model status link', () => {
         requiresAuth: true,
       },
     ])
+    expect(result.current.every((link) => link.icon)).toBe(true)
   })
 
   test('places model status immediately after model square', () => {
@@ -128,13 +156,16 @@ describe('top navigation model status link', () => {
 
     const { result } = renderHook(() => useTopNavLinks())
 
-    expect(result.current.find((link) => link.href === '/model-radar')).toEqual(
-      {
-        title: 'Model Radar',
-        href: '/model-radar',
-        requiresAuth: false,
-      }
-    )
+    expect(
+      result.current.find((link) => link.href === '/model-radar')
+    ).toMatchObject({
+      title: 'Model Radar',
+      href: '/model-radar',
+      requiresAuth: false,
+    })
+    expect(
+      result.current.find((link) => link.href === '/model-radar')?.icon
+    ).toBeDefined()
   })
 
   test('places custom iframe navigation at its configured position', () => {
@@ -154,6 +185,7 @@ describe('top navigation model status link', () => {
               id: 'portal',
               title: 'Team Portal',
               url: 'https://portal.example.com',
+              icon: 'LuRadar',
               enabled: true,
             },
           ],
@@ -168,6 +200,7 @@ describe('top navigation model status link', () => {
       {
         title: 'Team Portal',
         href: '/custom/portal',
+        icon: 'LuRadar',
       },
     ])
   })

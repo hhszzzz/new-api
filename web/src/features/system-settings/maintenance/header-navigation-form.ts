@@ -19,6 +19,10 @@ For commercial licensing, please contact support@quantumnous.com
 import * as z from 'zod'
 
 import { isHttpUrl } from '@/lib/content-format'
+import {
+  normalizeReactIconName,
+  REACT_ICON_NAME_MAX_LENGTH,
+} from '@/lib/react-icon-name'
 
 const customHeaderNavItemSchema = z.object({
   id: z.string().min(1),
@@ -33,6 +37,14 @@ const customHeaderNavItemSchema = z.object({
     .min(1, 'URL is required')
     .max(2048, 'URL must be 2048 characters or fewer')
     .refine(isHttpUrl, 'Provide a valid URL starting with http:// or https://'),
+  icon: z
+    .string()
+    .trim()
+    .max(REACT_ICON_NAME_MAX_LENGTH, 'Icon name must be 80 characters or fewer')
+    .refine(
+      (value) => value.length === 0 || normalizeReactIconName(value) !== '',
+      'Use a React Icons name such as LuRadar'
+    ),
   enabled: z.boolean(),
 })
 

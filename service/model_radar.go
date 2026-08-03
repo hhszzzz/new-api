@@ -189,15 +189,16 @@ func ModelRadarStaleAfter() time.Duration {
 	return staleAfter
 }
 
-func IsModelRadarStale(now int64, fetchedAt int64, sourceUpdatedAt int64, alertsUpdatedAt int64, staleAfter time.Duration) bool {
-	if now <= 0 || fetchedAt <= 0 || sourceUpdatedAt <= 0 || alertsUpdatedAt <= 0 {
+// IsModelRadarStale tracks the last successful local sync; upstream data has its own update cadence.
+func IsModelRadarStale(now int64, fetchedAt int64, staleAfter time.Duration) bool {
+	if now <= 0 || fetchedAt <= 0 {
 		return true
 	}
 	threshold := int64(staleAfter.Seconds())
 	if threshold <= 0 {
 		threshold = int64(modelRadarMinimumStaleAfter.Seconds())
 	}
-	return now-fetchedAt > threshold || now-sourceUpdatedAt > threshold || now-alertsUpdatedAt > threshold
+	return now-fetchedAt > threshold
 }
 
 func SyncModelRadar(ctx context.Context) (*ModelRadarSyncResult, error) {
@@ -266,8 +267,6 @@ func GetModelRadar(ctx context.Context) (*ModelRadarData, error) {
 	data.Stale = IsModelRadarStale(
 		common.GetTimestamp(),
 		snapshot.FetchedAt,
-		snapshot.SourceUpdatedAt,
-		snapshot.AlertsUpdatedAt,
 		ModelRadarStaleAfter(),
 	)
 	return &data, nil

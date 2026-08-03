@@ -16,24 +16,24 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { EmbeddedPage } from '@/components/embedded-page'
-import { PublicLayout } from '@/components/layout'
-import type { CustomHeaderNavItem } from '@/lib/nav-modules'
+import {
+  Activity03Icon,
+  AiBrain01Icon,
+  BookOpen01Icon,
+  DashboardBrowsingIcon,
+  InformationCircleIcon,
+  LinkSquare01Icon,
+  Radar01Icon,
+  RankingIcon,
+} from '@hugeicons/core-free-icons'
 
-type CustomNavigationPageProps = {
-  item: CustomHeaderNavItem
-}
-
-export function CustomNavigationPage(props: CustomNavigationPageProps) {
-  return (
-    <PublicLayout showMainContainer={false}>
-      <main className='flex h-svh min-h-0 flex-col pt-16'>
-        <EmbeddedPage
-          src={props.item.url}
-          title={props.item.title}
-          className='min-h-0 flex-1'
-        />
-      </main>
-    </PublicLayout>
-  )
-}
+export const TOP_NAV_ICONS = {
+  console: DashboardBrowsingIcon,
+  pricing: AiBrain01Icon,
+  modelStatus: Activity03Icon,
+  modelRadar: Radar01Icon,
+  rankings: RankingIcon,
+  docs: BookOpen01Icon,
+  about: InformationCircleIcon,
+  custom: LinkSquare01Icon,
+} as const

@@ -5749,6 +5749,10 @@
     "Zero retention": "データ保持なし",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム"
+    "Zoom": "ズーム",
+    "Icon name": "アイコン名",
+    "Icon name must be 80 characters or fewer": "アイコン名は80文字以内で入力してください",
+    "Use a React Icons name such as LuRadar": "LuRadar のような React Icons の名前を入力してください",
+    "Use a React Icons name such as LuRadar or FaGithub. Leave empty for the default link icon.": "LuRadar または FaGithub のような React Icons の名前を入力します。空欄の場合は既定のリンクアイコンを使用します。"
   }
 }

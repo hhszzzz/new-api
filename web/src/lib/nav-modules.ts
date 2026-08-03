@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { getStatus } from '@/lib/api'
 import { isHttpUrl } from '@/lib/content-format'
+import { normalizeReactIconName } from '@/lib/react-icon-name'
 
 export type ModuleAccess = { enabled: boolean; requireAuth: boolean }
 
@@ -25,6 +26,7 @@ export type CustomHeaderNavItem = {
   id: string
   title: string
   url: string
+  icon?: string
   enabled: boolean
 }
 
@@ -164,6 +166,7 @@ function parseCustomHeaderNavItems(raw: unknown): CustomHeaderNavItem[] {
     const id = typeof item.id === 'string' ? item.id.trim() : ''
     const title = typeof item.title === 'string' ? item.title.trim() : ''
     const url = typeof item.url === 'string' ? item.url.trim() : ''
+    const icon = normalizeReactIconName(item.icon)
     if (
       !/^[a-zA-Z0-9_-]{1,64}$/.test(id) ||
       seenIds.has(id) ||
@@ -181,6 +184,7 @@ function parseCustomHeaderNavItems(raw: unknown): CustomHeaderNavItem[] {
         id,
         title,
         url,
+        icon,
         enabled: parseHeaderNavBoolean(item.enabled, true),
       },
     ]

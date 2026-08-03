@@ -21,6 +21,7 @@ import { Link } from '@tanstack/react-router'
 import { cn } from '@/lib/utils'
 
 import type { TopNavLink } from '../types'
+import { TopNavLinkContent } from './top-nav-link-content'
 
 interface NavLinkItemProps {
   link: TopNavLink
@@ -47,14 +48,14 @@ export function NavLinkItem({ link, className }: NavLinkItemProps) {
         className={linkClassName}
         aria-disabled={link.disabled}
       >
-        {link.title}
+        <TopNavLinkContent icon={link.icon} title={link.title} />
       </a>
     )
   }
 
   return (
     <Link to={link.href} className={linkClassName} disabled={link.disabled}>
-      {link.title}
+      <TopNavLinkContent icon={link.icon} title={link.title} />
     </Link>
   )
 }
@@ -76,9 +77,9 @@ export function NavLinkList({
 }: NavLinkListProps) {
   return (
     <>
-      {links.map((link, index) => (
+      {links.map((link) => (
         <NavLinkItem
-          key={index}
+          key={`${link.title}-${link.href}`}
           link={link}
           className={cn(className, itemClassName)}
         />

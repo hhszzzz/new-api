@@ -5749,6 +5749,10 @@
     "Zero retention": "零数据保留",
     "Zhipu": "智谱",
     "Zhipu V4": "智谱 V4",
-    "Zoom": "缩放"
+    "Zoom": "缩放",
+    "Icon name": "图标名称",
+    "Icon name must be 80 characters or fewer": "图标名称不能超过 80 个字符",
+    "Use a React Icons name such as LuRadar": "请输入类似 LuRadar 的 React Icons 图标名称",
+    "Use a React Icons name such as LuRadar or FaGithub. Leave empty for the default link icon.": "输入类似 LuRadar 或 FaGithub 的 React Icons 图标名称；留空则使用默认链接图标。"
   }
 }

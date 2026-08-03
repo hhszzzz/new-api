@@ -27,9 +27,11 @@ import { nanoid } from 'nanoid'
 import { useFieldArray, useWatch, type UseFormReturn } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 
+import { ReactIconByName } from '@/components/react-icon-by-name'
 import { Button } from '@/components/ui/button'
 import {
   FormControl,
+  FormDescription,
   FormField,
   FormItem,
   FormLabel,
@@ -37,6 +39,8 @@ import {
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
+import { REACT_ICON_NAME_MAX_LENGTH } from '@/lib/react-icon-name'
+import { TOP_NAV_ICONS } from '@/lib/top-nav-icons'
 
 import { getCustomHeaderNavOrderKey } from './config'
 import type { HeaderNavFormValues } from './header-navigation-form'
@@ -69,6 +73,7 @@ export function HeaderNavigationCustomEditor(
       id,
       title: '',
       url: '',
+      icon: '',
       enabled: true,
     })
     props.form.setValue(
@@ -153,7 +158,7 @@ export function HeaderNavigationCustomEditor(
                 key={item.fieldKey}
                 className='grid min-w-0 gap-3 rounded-lg border p-3'
               >
-                <div className='grid min-w-0 gap-3 md:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]'>
+                <div className='grid min-w-0 gap-3 md:grid-cols-2'>
                   <FormField
                     control={props.form.control}
                     name={`custom.${index}.title`}
@@ -173,9 +178,52 @@ export function HeaderNavigationCustomEditor(
                   />
                   <FormField
                     control={props.form.control}
-                    name={`custom.${index}.url`}
+                    name={`custom.${index}.icon`}
                     render={({ field }) => (
                       <FormItem>
+                        <FormLabel>{t('Icon name')}</FormLabel>
+                        <div className='flex min-w-0 items-center gap-2'>
+                          <div
+                            className='border-input bg-background text-muted-foreground flex size-8 shrink-0 items-center justify-center rounded-lg border'
+                            aria-hidden='true'
+                          >
+                            <ReactIconByName
+                              name={field.value}
+                              fallback={
+                                <HugeiconsIcon
+                                  icon={TOP_NAV_ICONS.custom}
+                                  className='size-4'
+                                  strokeWidth={2}
+                                />
+                              }
+                              className='size-4'
+                            />
+                          </div>
+                          <FormControl>
+                            <Input
+                              {...field}
+                              maxLength={REACT_ICON_NAME_MAX_LENGTH}
+                              placeholder='LuRadar'
+                              autoCapitalize='none'
+                              autoCorrect='off'
+                              spellCheck={false}
+                            />
+                          </FormControl>
+                        </div>
+                        <FormDescription className='text-xs'>
+                          {t(
+                            'Use a React Icons name such as LuRadar or FaGithub. Leave empty for the default link icon.'
+                          )}
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={props.form.control}
+                    name={`custom.${index}.url`}
+                    render={({ field }) => (
+                      <FormItem className='md:col-span-2'>
                         <FormLabel>{t('Embedded URL')}</FormLabel>
                         <FormControl>
                           <Input

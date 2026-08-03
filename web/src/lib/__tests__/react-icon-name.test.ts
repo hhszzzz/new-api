@@ -16,24 +16,19 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { EmbeddedPage } from '@/components/embedded-page'
-import { PublicLayout } from '@/components/layout'
-import type { CustomHeaderNavItem } from '@/lib/nav-modules'
+import { describe, expect, test } from 'vitest'
 
-type CustomNavigationPageProps = {
-  item: CustomHeaderNavItem
-}
+import { normalizeReactIconName } from '../react-icon-name'
 
-export function CustomNavigationPage(props: CustomNavigationPageProps) {
-  return (
-    <PublicLayout showMainContainer={false}>
-      <main className='flex h-svh min-h-0 flex-col pt-16'>
-        <EmbeddedPage
-          src={props.item.url}
-          title={props.item.title}
-          className='min-h-0 flex-1'
-        />
-      </main>
-    </PublicLayout>
-  )
-}
+describe('React Icons name normalization', () => {
+  test('accepts a supported pack export name and trims surrounding whitespace', () => {
+    expect(normalizeReactIconName(' LuRadar ')).toBe('LuRadar')
+    expect(normalizeReactIconName('FaGithub')).toBe('FaGithub')
+  })
+
+  test('rejects unknown packs, malformed names, and oversized values', () => {
+    expect(normalizeReactIconName('Radar01Icon')).toBe('')
+    expect(normalizeReactIconName('lu-radar')).toBe('')
+    expect(normalizeReactIconName(`Lu${'A'.repeat(79)}`)).toBe('')
+  })
+})

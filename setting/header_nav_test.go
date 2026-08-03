@@ -10,9 +10,10 @@ func TestValidateHeaderNavModulesAcceptsCustomIframeNavigation(t *testing.T) {
 	raw := `{
 		"home": true,
 		"custom": [
-			{"id":"docs-hub","title":"Docs Hub","url":"https://docs.example.com/app","enabled":true}
+			{"id":"docs-hub","title":"Docs Hub","url":"https://docs.example.com/app","enabled":true},
+			{"id":"monitor","title":"Monitor","url":"https://status.example.com","icon":"LuRadar","enabled":true}
 		],
-		"order": ["home","custom:docs-hub","console"]
+		"order": ["home","custom:docs-hub","custom:monitor","console"]
 	}`
 
 	require.NoError(t, ValidateHeaderNavModules(raw))
@@ -34,6 +35,18 @@ func TestValidateHeaderNavModulesRejectsUnsafeOrAmbiguousCustomNavigation(t *tes
 		{
 			name: "duplicate custom id",
 			raw:  `{"custom":[{"id":"same","title":"One","url":"https://one.example.com","enabled":true},{"id":"same","title":"Two","url":"https://two.example.com","enabled":true}]}`,
+		},
+		{
+			name: "invalid icon name",
+			raw:  `{"custom":[{"id":"bad-icon","title":"Bad","url":"https://example.com","icon":"not-an-icon","enabled":true}]}`,
+		},
+		{
+			name: "unsupported icon library",
+			raw:  `{"custom":[{"id":"bad-icon","title":"Bad","url":"https://example.com","icon":"Radar01Icon","enabled":true}]}`,
+		},
+		{
+			name: "non-string icon name",
+			raw:  `{"custom":[{"id":"bad-icon","title":"Bad","url":"https://example.com","icon":42,"enabled":true}]}`,
 		},
 		{
 			name: "unknown order item",

@@ -269,14 +269,30 @@ func TestSyncModelRadarPersistsValidatedSnapshot(t *testing.T) {
 	assert.NotContains(t, string(snapshot.Payload), "recommendations")
 }
 
-func TestIsModelRadarStaleChecksFetchAndBothSourceTimes(t *testing.T) {
+func TestGetModelRadarTreatsFreshFetchAsCurrentWhenSourceHasNotChanged(t *testing.T) {
+	setupModelRadarServiceTestDB(t)
+	t.Setenv("MODEL_RADAR_SYNC_INTERVAL_MINUTES", "10")
+	payload, err := common.Marshal(ModelRadarData{SchemaVersion: modelRadarSchemaVersion})
+	require.NoError(t, err)
+	require.NoError(t, model.SaveModelRadarSnapshot(context.Background(), &model.ModelRadarSnapshot{
+		SchemaVersion:   modelRadarSchemaVersion,
+		Payload:         payload,
+		SourceUpdatedAt: 1,
+		AlertsUpdatedAt: 1,
+		FetchedAt:       common.GetTimestamp(),
+	}))
+
+	data, err := GetModelRadar(context.Background())
+	require.NoError(t, err)
+	assert.False(t, data.Stale)
+}
+
+func TestIsModelRadarStaleUsesLastSuccessfulFetch(t *testing.T) {
 	now := int64(10_000)
 	threshold := 30 * time.Minute
-	assert.False(t, IsModelRadarStale(now, 9_000, 9_000, 9_000, threshold))
-	assert.True(t, IsModelRadarStale(now, 8_000, 9_000, 9_000, threshold))
-	assert.True(t, IsModelRadarStale(now, 9_000, 8_000, 9_000, threshold))
-	assert.True(t, IsModelRadarStale(now, 9_000, 9_000, 8_000, threshold))
-	assert.True(t, IsModelRadarStale(now, 0, 9_000, 9_000, threshold))
+	assert.False(t, IsModelRadarStale(now, 9_000, threshold))
+	assert.True(t, IsModelRadarStale(now, 8_000, threshold))
+	assert.True(t, IsModelRadarStale(now, 0, threshold))
 }
 
 func TestModelRadarSyncIntervalUsesTenMinuteFloor(t *testing.T) {

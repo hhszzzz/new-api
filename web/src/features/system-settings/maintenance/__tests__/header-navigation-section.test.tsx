@@ -149,6 +149,10 @@ describe('header navigation settings form', () => {
       screen.getByRole('textbox', { name: 'Embedded URL' }),
       'https://portal.example.com/app'
     )
+    await user.type(
+      screen.getByRole('textbox', { name: 'Icon name' }),
+      'LuRadar'
+    )
     const moveEarlierButtons = screen.getAllByRole('button', {
       name: 'Move navigation earlier',
     })
@@ -168,6 +172,7 @@ describe('header navigation settings form', () => {
       expect.objectContaining({
         title: 'Team Portal',
         url: 'https://portal.example.com/app',
+        icon: 'LuRadar',
         enabled: true,
       }),
     ])

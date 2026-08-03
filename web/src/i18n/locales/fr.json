@@ -5749,6 +5749,10 @@
     "Zero retention": "Aucune rétention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Icon name": "Nom de l’icône",
+    "Icon name must be 80 characters or fewer": "Le nom de l’icône ne doit pas dépasser 80 caractères",
+    "Use a React Icons name such as LuRadar": "Utilisez un nom React Icons tel que LuRadar",
+    "Use a React Icons name such as LuRadar or FaGithub. Leave empty for the default link icon.": "Utilisez un nom React Icons tel que LuRadar ou FaGithub. Laissez ce champ vide pour utiliser l’icône de lien par défaut."
   }
 }
