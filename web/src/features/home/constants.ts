@@ -128,7 +128,10 @@ export const DEFAULT_FEATURES = [
 ] as const
 
 export function getGatewayFeatures(t: TFunction) {
-  return GATEWAY_FEATURES.map((feature) => t(feature))
+  return GATEWAY_FEATURES.map((feature) => ({
+    id: feature,
+    label: t(feature),
+  }))
 }
 
 export function getDefaultStats(t: TFunction) {

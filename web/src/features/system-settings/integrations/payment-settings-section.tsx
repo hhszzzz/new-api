@@ -303,23 +303,31 @@ export function PaymentSettingsSection({
   const complianceRequiredTextParts = React.useMemo(
     () => [
       {
+        id: 'read-compliance-reminder',
         type: 'input' as const,
         text: t('I have read and understood the above compliance reminder'),
       },
-      { type: 'static' as const, text: t('，') },
+      { id: 'separator-comma-1', type: 'static' as const, text: t('，') },
       {
+        id: 'acknowledge-legal-risks',
         type: 'input' as const,
         text: t('acknowledge the related legal risks'),
       },
-      { type: 'static' as const, text: t('，and ') },
       {
+        id: 'separator-and',
+        type: 'static' as const,
+        text: t('，and '),
+      },
+      {
+        id: 'confirm-deployment-responsibility',
         type: 'input' as const,
         text: t(
           'confirm that I bear legal responsibility arising from deployment'
         ),
       },
-      { type: 'static' as const, text: t('、') },
+      { id: 'separator-comma-2', type: 'static' as const, text: t('、') },
       {
+        id: 'confirm-operation-responsibility',
         type: 'input' as const,
         text: t('operation and charging behavior'),
       },
