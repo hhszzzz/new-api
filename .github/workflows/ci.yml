@@ -58,7 +58,7 @@ jobs:
         run: make test
 
   frontend:
-    name: Frontend typecheck and test
+    name: Frontend lint, typecheck, and test
     if: github.event.action != 'closed' || github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -80,6 +80,9 @@ jobs:
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
+
+      - name: Lint
+        run: bun run lint
 
       - name: Typecheck
         run: bun run typecheck
