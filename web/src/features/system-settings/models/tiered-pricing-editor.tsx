@@ -109,6 +109,100 @@ const MEDIA_PRICE_VARS = BILLING_EXTRA_VARS.filter(
   (variable) => variable.group === 'media'
 )
 
+type EditorTierCondition = TierConditionInput & { __uiKey: string }
+interface EditorVisualTier extends VisualTier {
+  __uiKey: string
+  conditions: EditorTierCondition[]
+}
+type EditorVisualConfig = Omit<VisualConfig, 'tiers'> & {
+  tiers: EditorVisualTier[]
+}
+type EditorRequestCondition = RequestCondition & { __uiKey: string }
+type EditorRequestRuleGroup = Omit<RequestRuleGroup, 'conditions'> & {
+  __uiKey: string
+  conditions: EditorRequestCondition[]
+}
+
+let nextEditorItemKey = 0
+
+function createEditorItemKey(prefix: string): string {
+  nextEditorItemKey += 1
+  return `${prefix}-${nextEditorItemKey}`
+}
+
+function readEditorItemKey(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const key = (value as { __uiKey?: unknown }).__uiKey
+  return typeof key === 'string' && key ? key : undefined
+}
+
+function normalizeEditorTierCondition(
+  condition: TierConditionInput,
+  existingKey?: string
+): EditorTierCondition {
+  return {
+    ...condition,
+    __uiKey:
+      existingKey ??
+      readEditorItemKey(condition) ??
+      createEditorItemKey('tier-condition'),
+  }
+}
+
+function normalizeEditorVisualTier(
+  tier: Partial<VisualTier> = {}
+): EditorVisualTier {
+  const normalized = normalizeVisualTier(tier)
+  return {
+    ...normalized,
+    __uiKey: readEditorItemKey(tier) ?? createEditorItemKey('tier'),
+    conditions: normalized.conditions.map((condition) =>
+      normalizeEditorTierCondition(condition)
+    ),
+  }
+}
+
+function normalizeEditorVisualConfig(
+  config: VisualConfig | null | undefined
+): EditorVisualConfig {
+  const normalized = normalizeVisualConfig(config)
+  return {
+    ...normalized,
+    tiers: normalized.tiers.map(normalizeEditorVisualTier),
+  }
+}
+
+function normalizeEditorRequestCondition(
+  condition: RequestCondition,
+  existingKey?: string
+): EditorRequestCondition {
+  return {
+    ...condition,
+    __uiKey:
+      existingKey ??
+      readEditorItemKey(condition) ??
+      createEditorItemKey('request-condition'),
+  }
+}
+
+function normalizeEditorRequestRuleGroup(
+  group: RequestRuleGroup
+): EditorRequestRuleGroup {
+  return {
+    ...group,
+    __uiKey: readEditorItemKey(group) ?? createEditorItemKey('request-group'),
+    conditions: (group.conditions || []).map((condition) =>
+      normalizeEditorRequestCondition(condition)
+    ),
+  }
+}
+
+function normalizeEditorRequestRuleGroups(
+  groups: RequestRuleGroup[] | null | undefined
+): EditorRequestRuleGroup[] {
+  return (groups || []).map(normalizeEditorRequestRuleGroup)
+}
+
 const CONDITION_INPUT_OPTIONS: {
   value: TierConditionInput['var']
   labelKey: string
@@ -332,8 +426,9 @@ function formatTokenHint(n: number | string | null | undefined): string {
 
 function formatNumberDraft(value: number | string): string {
   if (value === '') return ''
-  if (typeof value === 'number')
+  if (typeof value === 'number') {
     return Number.isFinite(value) ? String(value) : '0'
+  }
   return value
 }
 
@@ -436,12 +531,10 @@ function ConditionRow({ condition, onChange, onRemove }: ConditionRowProps) {
   return (
     <div className='flex items-center gap-2'>
       <Select
-        items={[
-          ...CONDITION_INPUT_OPTIONS.map((option) => ({
-            value: option.value,
-            label: t(option.labelKey),
-          })),
-        ]}
+        items={CONDITION_INPUT_OPTIONS.map((option) => ({
+          value: option.value,
+          label: t(option.labelKey),
+        }))}
         value={condition.var}
         onValueChange={(value) =>
           onChange({ ...condition, var: value as TierConditionInput['var'] })
@@ -539,10 +632,10 @@ function PriceField({ label, hint, value, onChange }: PriceFieldProps) {
 // ---------------------------------------------------------------------------
 
 type VisualTierCardProps = {
-  tier: VisualTier
+  tier: EditorVisualTier
   index: number
   total: number
-  onChange: (next: VisualTier) => void
+  onChange: (next: EditorVisualTier) => void
   onRemove: () => void
   onAddCondition: () => void
 }
@@ -563,7 +656,10 @@ function VisualTierCard({
     next: TierConditionInput
   ) => {
     const conditions = [...tier.conditions]
-    conditions[conditionIndex] = next
+    conditions[conditionIndex] = normalizeEditorTierCondition(
+      next,
+      tier.conditions[conditionIndex].__uiKey
+    )
     onChange({ ...tier, conditions })
   }
 
@@ -667,7 +763,7 @@ function VisualTierCard({
         ) : (
           tier.conditions.map((condition, conditionIndex) => (
             <ConditionRow
-              key={conditionIndex}
+              key={condition.__uiKey}
               condition={condition}
               onChange={(next) => handleConditionChange(conditionIndex, next)}
               onRemove={() => handleConditionRemove(conditionIndex)}
@@ -777,13 +873,13 @@ type VisualEditorProps = {
 function VisualEditor({ visualConfig, onChange }: VisualEditorProps) {
   const { t } = useTranslation()
   const config = useMemo(
-    () => normalizeVisualConfig(visualConfig),
+    () => normalizeEditorVisualConfig(visualConfig),
     [visualConfig]
   )
 
-  const handleTierChange = (index: number, next: VisualTier) => {
+  const handleTierChange = (index: number, next: EditorVisualTier) => {
     const tiers = [...config.tiers]
-    tiers[index] = normalizeVisualTier(next)
+    tiers[index] = normalizeEditorVisualTier(next)
     onChange({ ...config, tiers })
   }
 
@@ -794,13 +890,13 @@ function VisualEditor({ visualConfig, onChange }: VisualEditorProps) {
     // upper-bound condition so the expression compiles into a sane two-tier
     // shape with an immediately useful fallback.
     if (lastIndex >= 0 && tiers[lastIndex].conditions.length === 0) {
-      tiers[lastIndex] = normalizeVisualTier({
+      tiers[lastIndex] = normalizeEditorVisualTier({
         ...tiers[lastIndex],
         conditions: [{ var: 'len', op: '<', value: 200000 }],
       })
     }
     tiers.push(
-      normalizeVisualTier({
+      normalizeEditorVisualTier({
         label: `tier_${tiers.length + 1}`,
         conditions: [],
         input_unit_cost: 0,
@@ -832,7 +928,11 @@ function VisualEditor({ visualConfig, onChange }: VisualEditorProps) {
               ...current,
               conditions: [
                 ...tier.conditions,
-                { var: nextVar, op: '<', value: 200000 },
+                normalizeEditorTierCondition({
+                  var: nextVar,
+                  op: '<',
+                  value: 200000,
+                }),
               ],
             }
           : current
@@ -849,7 +949,7 @@ function VisualEditor({ visualConfig, onChange }: VisualEditorProps) {
       </p>
       {config.tiers.map((tier, index) => (
         <VisualTierCard
-          key={index}
+          key={tier.__uiKey}
           tier={tier}
           index={index}
           total={config.tiers.length}
@@ -967,12 +1067,12 @@ function RuleConditionRow({
         return timeFunc
     }
   }
-  const sourceLabel =
-    condition.source === SOURCE_PARAM
-      ? t('Body param')
-      : condition.source === SOURCE_HEADER
-        ? t('Header')
-        : t('Time')
+  let sourceLabel = t('Time')
+  if (condition.source === SOURCE_PARAM) {
+    sourceLabel = t('Body param')
+  } else if (condition.source === SOURCE_HEADER) {
+    sourceLabel = t('Header')
+  }
 
   const handleSourceChange = (source: string) => {
     if (source === SOURCE_TIME) {
@@ -992,12 +1092,10 @@ function RuleConditionRow({
   const renderTimeCondition = (timeCond: TimeCondition) => (
     <>
       <Select
-        items={[
-          ...TIME_FUNCS.map((fn) => ({
-            value: fn,
-            label: getTimeFuncLabel(fn),
-          })),
-        ]}
+        items={TIME_FUNCS.map((fn) => ({
+          value: fn,
+          label: getTimeFuncLabel(fn),
+        }))}
         value={timeCond.timeFunc}
         onValueChange={(value) =>
           onChange({ ...timeCond, timeFunc: value as TimeFunc })
@@ -1017,12 +1115,10 @@ function RuleConditionRow({
         </SelectContent>
       </Select>
       <Select
-        items={[
-          ...COMMON_TIMEZONES.map((tz) => ({
-            value: tz.value,
-            label: tz.label,
-          })),
-        ]}
+        items={COMMON_TIMEZONES.map((tz) => ({
+          value: tz.value,
+          label: tz.label,
+        }))}
         value={timeCond.timezone}
         onValueChange={(value) =>
           value !== null && onChange({ ...timeCond, timezone: value })
@@ -1045,12 +1141,10 @@ function RuleConditionRow({
         </SelectContent>
       </Select>
       <Select
-        items={[
-          ...matchOptions.map((option) => ({
-            value: option.value,
-            label: getMatchLabel(option.value),
-          })),
-        ]}
+        items={matchOptions.map((option) => ({
+          value: option.value,
+          label: getMatchLabel(option.value),
+        }))}
         value={timeCond.mode}
         onValueChange={(v) => v !== null && handleModeChange(v)}
       >
@@ -1111,12 +1205,10 @@ function RuleConditionRow({
         className='w-44'
       />
       <Select
-        items={[
-          ...matchOptions.map((option) => ({
-            value: option.value,
-            label: getMatchLabel(option.value),
-          })),
-        ]}
+        items={matchOptions.map((option) => ({
+          value: option.value,
+          label: getMatchLabel(option.value),
+        }))}
         value={phCond.mode}
         onValueChange={(v) => v !== null && handleModeChange(v)}
       >
@@ -1189,9 +1281,9 @@ function RuleConditionRow({
 // ---------------------------------------------------------------------------
 
 type RuleGroupCardProps = {
-  group: RequestRuleGroup
+  group: EditorRequestRuleGroup
   index: number
-  onChange: (next: RequestRuleGroup) => void
+  onChange: (next: EditorRequestRuleGroup) => void
   onRemove: () => void
 }
 
@@ -1208,7 +1300,10 @@ function RuleGroupCard({
     next: RequestCondition
   ) => {
     const conditions = [...group.conditions]
-    conditions[conditionIndex] = next
+    conditions[conditionIndex] = normalizeEditorRequestCondition(
+      next,
+      group.conditions[conditionIndex].__uiKey
+    )
     onChange({ ...group, conditions })
   }
 
@@ -1217,7 +1312,9 @@ function RuleGroupCard({
       ...group,
       conditions: [
         ...group.conditions,
-        timeMode ? createEmptyTimeCondition() : createEmptyCondition(),
+        normalizeEditorRequestCondition(
+          timeMode ? createEmptyTimeCondition() : createEmptyCondition()
+        ),
       ],
     })
   }
@@ -1241,7 +1338,7 @@ function RuleGroupCard({
       <div className='space-y-2'>
         {group.conditions.map((condition, conditionIndex) => (
           <RuleConditionRow
-            key={conditionIndex}
+            key={condition.__uiKey}
             condition={condition}
             onChange={(next) => handleConditionChange(conditionIndex, next)}
             onRemove={() =>
@@ -1562,7 +1659,7 @@ function LlmPromptHelper({ modelName }: LlmPromptHelperProps) {
 
   const prompt = useMemo(() => {
     if (modelName) {
-      return LLM_PROMPT_TEMPLATE + `\n\nCurrent model: ${modelName}`
+      return `${LLM_PROMPT_TEMPLATE}\n\nCurrent model: ${modelName}`
     }
     return LLM_PROMPT_TEMPLATE
   }, [modelName])
@@ -1647,8 +1744,12 @@ export const TieredPricingEditor = memo(function TieredPricingEditor({
     combineBillingExpr(currentExpr || '', currentRequestRuleExpr || '')
   )
   const [requestRuleGroups, setRequestRuleGroups] = useState<
-    RequestRuleGroup[]
-  >(() => tryParseRequestRuleExpr(currentRequestRuleExpr) || [])
+    EditorRequestRuleGroup[]
+  >(() =>
+    normalizeEditorRequestRuleGroups(
+      tryParseRequestRuleExpr(currentRequestRuleExpr)
+    )
+  )
   const initRef = useRef(false)
 
   useEffect(() => {
@@ -1668,7 +1769,11 @@ export const TieredPricingEditor = memo(function TieredPricingEditor({
     setRawExpr(
       combineBillingExpr(currentExpr || '', currentRequestRuleExpr || '')
     )
-    setRequestRuleGroups(tryParseRequestRuleExpr(currentRequestRuleExpr) || [])
+    setRequestRuleGroups(
+      normalizeEditorRequestRuleGroups(
+        tryParseRequestRuleExpr(currentRequestRuleExpr)
+      )
+    )
   }, [currentExpr, currentRequestRuleExpr])
 
   useEffect(() => {
@@ -1733,7 +1838,7 @@ export const TieredPricingEditor = memo(function TieredPricingEditor({
           setVisualConfig(createDefaultVisualConfig())
         }
         const parsedGroups = tryParseRequestRuleExpr(ruleStr)
-        setRequestRuleGroups(parsedGroups || [])
+        setRequestRuleGroups(normalizeEditorRequestRuleGroups(parsedGroups))
         onRequestRuleExprChange(ruleStr)
       } else {
         const expr = generateExprFromVisualConfig(visualConfig)
@@ -1759,15 +1864,18 @@ export const TieredPricingEditor = memo(function TieredPricingEditor({
         setEditorMode('raw')
         setVisualConfig(null)
       }
-      setRequestRuleGroups(presetGroups)
+      setRequestRuleGroups(normalizeEditorRequestRuleGroups(presetGroups))
       onRequestRuleExprChange(ruleExpr)
     },
     [onRequestRuleExprChange]
   )
 
-  const handleRuleGroupsChange = useCallback((next: RequestRuleGroup[]) => {
-    setRequestRuleGroups(next)
-  }, [])
+  const handleRuleGroupsChange = useCallback(
+    (next: EditorRequestRuleGroup[]) => {
+      setRequestRuleGroups(next)
+    },
+    []
+  )
 
   return (
     <div className='space-y-5'>
@@ -1837,7 +1945,7 @@ export const TieredPricingEditor = memo(function TieredPricingEditor({
               <>
                 {requestRuleGroups.map((group, groupIndex) => (
                   <RuleGroupCard
-                    key={groupIndex}
+                    key={group.__uiKey}
                     group={group}
                     index={groupIndex}
                     onChange={(next) => {
@@ -1859,7 +1967,7 @@ export const TieredPricingEditor = memo(function TieredPricingEditor({
                   onClick={() =>
                     handleRuleGroupsChange([
                       ...requestRuleGroups,
-                      createEmptyRuleGroup(),
+                      normalizeEditorRequestRuleGroup(createEmptyRuleGroup()),
                     ])
                   }
                 >
