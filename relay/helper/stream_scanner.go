@@ -31,7 +31,18 @@ const (
 	// but connected client (full TCP buffer, no server WriteTimeout) could hang
 	// the handler forever.
 	streamWriteTimeout = 30 * time.Second
+	// DefaultPingMaxDuration bounds the heartbeat goroutine so it can never
+	// outlive a stuck stream. Override with STREAM_PING_MAX_DURATION when the
+	// upstream legitimately stays silent for longer (long agent workflows).
+	DefaultPingMaxDuration = 30 * time.Minute
 )
+
+func getPingMaxDuration() time.Duration {
+	if constant.StreamPingMaxDurationSeconds > 0 {
+		return time.Duration(constant.StreamPingMaxDurationSeconds) * time.Second
+	}
+	return DefaultPingMaxDuration
+}
 
 func getScannerBufferSize() int {
 	if constant.StreamScannerMaxBufferMB > 0 {
@@ -180,7 +191,7 @@ func StreamScannerHandlerWithOptions(c *gin.Context, resp *http.Response, info *
 			}()
 
 			// 添加超时保护，防止 goroutine 无限运行
-			maxPingDuration := 30 * time.Minute // 最大 ping 持续时间
+			maxPingDuration := getPingMaxDuration()
 			pingTimeout := time.NewTimer(maxPingDuration)
 			defer pingTimeout.Stop()
 

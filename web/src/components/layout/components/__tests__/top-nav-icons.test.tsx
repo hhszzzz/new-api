@@ -40,6 +40,12 @@ describe('TopNav icons', () => {
             href: '/dashboard',
             icon: DashboardBrowsingIcon,
           },
+          {
+            title: 'Docs',
+            href: 'https://docs.example.com',
+            external: true,
+            icon: DashboardBrowsingIcon,
+          },
         ]}
       />
     )
@@ -50,5 +56,14 @@ describe('TopNav icons', () => {
     expect(
       view.container.querySelector('a[href="/dashboard"] [data-top-nav-icon]')
     ).not.toBeNull()
+
+    const internalLink = view.container.querySelector(
+      'nav a[href="/dashboard"]'
+    )
+    const externalLink = view.container.querySelector(
+      'nav a[href="https://docs.example.com"]'
+    )
+    expect(internalLink).toHaveClass('inline-flex', 'items-center')
+    expect(externalLink).toHaveClass('inline-flex', 'items-center')
   })
 })

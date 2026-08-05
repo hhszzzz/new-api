@@ -1,6 +1,11 @@
 package constant
 
 var StreamingTimeout int
+
+// StreamPingMaxDurationSeconds 限制心跳 goroutine 的最长存活时间，防止其无限运行。
+// 超过后心跳停止，若上游此时仍在静默，中间的反向代理（如 Cloudflare 的 100s 空闲窗口）
+// 会切断连接。长链路上游（Dify 多 Agent 工作流等）需要调大。
+var StreamPingMaxDurationSeconds int
 var DifyDebug bool
 var MaxFileDownloadMB int
 var StreamScannerMaxBufferMB int

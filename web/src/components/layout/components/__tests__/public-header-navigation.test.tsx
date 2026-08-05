@@ -155,14 +155,28 @@ describe('public header navigation', () => {
     expect(menu).not.toHaveAttribute('inert')
   })
 
-  test('keeps desktop navigation and actions in the right-aligned header group', () => {
-    renderPublicHeader()
+  test('centers desktop links in the right-aligned header group', () => {
+    topNavLinksMock.mockReturnValue([
+      { title: 'Models', href: '/pricing' },
+      {
+        title: 'Docs',
+        href: 'https://docs.example.com',
+        external: true,
+      },
+    ])
+    const view = renderPublicHeader()
 
     expect(
       screen
         .getByRole('link', { name: 'Models' })
         .closest('[data-slot="public-header-actions"]')
     ).toHaveClass('ml-auto')
+    expect(
+      view.container.querySelector('header a[href="/pricing"]')
+    ).toHaveClass('inline-flex', 'items-center')
+    expect(
+      view.container.querySelector('header a[href="https://docs.example.com"]')
+    ).toHaveClass('inline-flex', 'items-center')
   })
 
   test('does not translate already-localized dynamic navigation titles again', () => {
