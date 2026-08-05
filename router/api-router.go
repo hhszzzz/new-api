@@ -200,6 +200,7 @@ func SetApiRouter(router *gin.Engine) {
 			optionRoute.GET("/", controller.GetOptions)
 			optionRoute.PUT("/", controller.UpdateOption)
 			optionRoute.PUT("/client-policy", controller.UpdateClientPolicyOptions)
+			optionRoute.PUT("/group-rate-limits", controller.UpdateGroupRateLimitOptions)
 			optionRoute.PUT("/model-pricing", controller.UpdateModelPricingOptions)
 			optionRoute.POST("/payment_compliance", controller.ConfirmPaymentCompliance)
 			optionRoute.GET("/channel_affinity_cache", controller.GetChannelAffinityCacheStats)

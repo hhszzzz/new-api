@@ -38,6 +38,24 @@ export type UpdateModelPricingOptionsRequest = {
   options: UpdateOptionRequest[]
 }
 
+export type GroupRateLimitValues = {
+  rpm_limit?: number | null
+  concurrency_limit?: number | null
+  stream_tps_limit?: number | null
+}
+
+export type GroupRateLimitPolicy = {
+  member_limits?: GroupRateLimitValues | null
+  shared_pool?: GroupRateLimitValues | null
+}
+
+export type UpdateGroupRateLimitOptionsRequest = {
+  member_enabled: boolean
+  shared_pool_enabled: boolean
+  model_request_rate_limit_group: Record<string, [number, number]>
+  policies: Record<string, GroupRateLimitPolicy>
+}
+
 export type UpdateClientPolicyOptionsRequest = {
   rules: Array<{
     name: string
@@ -439,6 +457,9 @@ export type SecuritySettings = {
   ModelRequestRateLimitSuccessCount: number
   ModelRequestRateLimitDurationMinutes: number
   ModelRequestRateLimitGroup: string
+  'group_rate_limit_setting.member_enabled': boolean
+  'group_rate_limit_setting.shared_pool_enabled': boolean
+  'group_rate_limit_setting.policies': string
   CheckSensitiveEnabled: boolean
   CheckSensitiveOnPromptEnabled: boolean
   SensitiveWords: string

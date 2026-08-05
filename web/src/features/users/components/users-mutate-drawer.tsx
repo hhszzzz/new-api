@@ -569,7 +569,7 @@ export function UsersMutateDrawer({
                 <h3 className='text-sm font-medium'>{t('Request Limits')}</h3>
                 <p className='text-muted-foreground text-xs'>
                   {t(
-                    'These administrator-only limits apply to standard text generation requests.'
+                    'These administrator-only user overrides apply to standard text generation requests and can only tighten group limits.'
                   )}
                 </p>
                 <div className='grid grid-cols-1 gap-3 sm:grid-cols-3'>
@@ -592,11 +592,13 @@ export function UsersMutateDrawer({
                                   : Number(event.target.value)
                               )
                             }
-                            placeholder={t('Follow group/global limit')}
+                            placeholder={t('No user override')}
                           />
                         </FormControl>
                         <FormDescription>
-                          {t('Leave empty to follow group/global limits')}
+                          {t(
+                            'Leave empty to use group member and existing group/global request limits'
+                          )}
                         </FormDescription>
                         <FormMessage />
                       </FormItem>
@@ -621,11 +623,13 @@ export function UsersMutateDrawer({
                                   : Number(event.target.value)
                               )
                             }
-                            placeholder={t('No limit')}
+                            placeholder={t('No user override')}
                           />
                         </FormControl>
                         <FormDescription>
-                          {t('Leave empty for no concurrency limit')}
+                          {t(
+                            'Leave empty to use the group member limit; the shared pool still applies'
+                          )}
                         </FormDescription>
                         <FormMessage />
                       </FormItem>
@@ -652,11 +656,13 @@ export function UsersMutateDrawer({
                                   : Number(event.target.value)
                               )
                             }
-                            placeholder={t('No limit')}
+                            placeholder={t('No user override')}
                           />
                         </FormControl>
                         <FormDescription>
-                          {t('Leave empty for no streaming speed limit')}
+                          {t(
+                            'Leave empty to use the group member streaming limit; the shared pool still applies'
+                          )}
                         </FormDescription>
                         <FormMessage />
                       </FormItem>

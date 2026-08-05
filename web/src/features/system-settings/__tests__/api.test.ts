@@ -22,6 +22,7 @@ import {
   getSystemUpdateInfo,
   getSystemUpdateTriggerState,
   startSystemUpdate,
+  updateGroupRateLimitOptions,
   updateModelPricingOptions,
 } from '../api'
 
@@ -125,5 +126,29 @@ describe('system settings API', () => {
 
     expect(apiPut).toHaveBeenCalledTimes(1)
     expect(apiPut).toHaveBeenCalledWith('/api/option/model-pricing', request)
+  })
+
+  test('submits group rate-limit settings atomically', async () => {
+    const request = {
+      member_enabled: true,
+      shared_pool_enabled: true,
+      model_request_rate_limit_group: {
+        default: [200, 100] as [number, number],
+      },
+      policies: {
+        default: {
+          member_limits: { rpm_limit: 60 },
+          shared_pool: { concurrency_limit: 100 },
+        },
+      },
+    }
+
+    await updateGroupRateLimitOptions(request)
+
+    expect(apiPut).toHaveBeenCalledTimes(1)
+    expect(apiPut).toHaveBeenCalledWith(
+      '/api/option/group-rate-limits',
+      request
+    )
   })
 })

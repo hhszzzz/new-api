@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/config"
+	"github.com/QuantumNous/new-api/setting/group_rate_limit_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
@@ -427,6 +428,45 @@ func UpdateClientPolicySetting(setting operation_setting.ClientPolicySetting) er
 	}
 	common.OptionMapRWMutex.Unlock()
 	return nil
+}
+
+func UpdateGroupRateLimitOptions(
+	memberEnabled bool,
+	sharedPoolEnabled bool,
+	requestCountLimits map[string][2]int,
+	policies map[string]group_rate_limit_setting.GroupPolicy,
+) error {
+	if requestCountLimits == nil {
+		requestCountLimits = map[string][2]int{}
+	}
+	if policies == nil {
+		policies = map[string]group_rate_limit_setting.GroupPolicy{}
+	}
+	prepared, err := group_rate_limit_setting.PrepareSetting(group_rate_limit_setting.Setting{
+		MemberEnabled:     memberEnabled,
+		SharedPoolEnabled: sharedPoolEnabled,
+		Policies:          policies,
+	})
+	if err != nil {
+		return err
+	}
+	requestCountJSON, err := common.Marshal(requestCountLimits)
+	if err != nil {
+		return err
+	}
+	if err := setting.CheckModelRequestRateLimitGroup(string(requestCountJSON)); err != nil {
+		return err
+	}
+	policiesJSON, err := common.Marshal(prepared.Policies)
+	if err != nil {
+		return err
+	}
+	return UpdateOptionsBulk(map[string]string{
+		"ModelRequestRateLimitGroup":                        string(requestCountJSON),
+		group_rate_limit_setting.MemberEnabledOptionKey:     strconv.FormatBool(prepared.MemberEnabled),
+		group_rate_limit_setting.SharedPoolEnabledOptionKey: strconv.FormatBool(prepared.SharedPoolEnabled),
+		group_rate_limit_setting.PoliciesOptionKey:          string(policiesJSON),
+	})
 }
 
 func sortedOptionKeys(values map[string]string) []string {

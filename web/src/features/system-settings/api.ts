@@ -31,6 +31,7 @@ import type {
   SystemUpdateTriggerState,
   SystemUpdateTriggerStateResponse,
   UpdateClientPolicyOptionsRequest,
+  UpdateGroupRateLimitOptionsRequest,
   UpdateModelPricingOptionsRequest,
   UpdateOptionRequest,
   UpdateOptionResponse,
@@ -63,6 +64,16 @@ export async function updateClientPolicyOptions(
 ) {
   const res = await api.put<UpdateOptionResponse>(
     '/api/option/client-policy',
+    request
+  )
+  return res.data
+}
+
+export async function updateGroupRateLimitOptions(
+  request: UpdateGroupRateLimitOptionsRequest
+) {
+  const res = await api.put<UpdateOptionResponse>(
+    '/api/option/group-rate-limits',
     request
   )
   return res.data

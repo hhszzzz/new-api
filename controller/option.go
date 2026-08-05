@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/console_setting"
+	"github.com/QuantumNous/new-api/setting/group_rate_limit_setting"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -124,6 +125,13 @@ type OptionUpdateRequest struct {
 
 type OptionBatchUpdateRequest struct {
 	Options []OptionUpdateRequest `json:"options"`
+}
+
+type GroupRateLimitOptionsRequest struct {
+	MemberEnabled              *bool                                           `json:"member_enabled"`
+	SharedPoolEnabled          *bool                                           `json:"shared_pool_enabled"`
+	ModelRequestRateLimitGroup map[string][2]int                               `json:"model_request_rate_limit_group"`
+	Policies                   map[string]group_rate_limit_setting.GroupPolicy `json:"policies"`
 }
 
 func normalizeOptionValue(value any) string {
@@ -478,6 +486,51 @@ func UpdateClientPolicyOptions(c *gin.Context) {
 	}
 
 	recordManageAudit(c, "option.client_policy.update", nil)
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "",
+	})
+}
+
+func UpdateGroupRateLimitOptions(c *gin.Context) {
+	var request GroupRateLimitOptionsRequest
+	if err := common.DecodeJson(c.Request.Body, &request); err != nil {
+		common.ApiErrorMsg(c, "无效的参数")
+		return
+	}
+	if request.MemberEnabled == nil || request.SharedPoolEnabled == nil || request.ModelRequestRateLimitGroup == nil || request.Policies == nil {
+		common.ApiErrorMsg(c, "分组限速配置必须完整提交")
+		return
+	}
+	if err := model.UpdateGroupRateLimitOptions(
+		*request.MemberEnabled,
+		*request.SharedPoolEnabled,
+		request.ModelRequestRateLimitGroup,
+		request.Policies,
+	); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	groups := make(map[string]struct{}, len(request.ModelRequestRateLimitGroup)+len(request.Policies))
+	for group := range request.ModelRequestRateLimitGroup {
+		groups[group] = struct{}{}
+	}
+	for group := range request.Policies {
+		groups[group] = struct{}{}
+	}
+	groupNames := make([]string, 0, len(groups))
+	for group := range groups {
+		groupNames = append(groupNames, group)
+	}
+	sort.Strings(groupNames)
+	recordManageAudit(c, "option.group_rate_limits.update", map[string]interface{}{
+		"member_enabled":                 *request.MemberEnabled,
+		"shared_pool_enabled":            *request.SharedPoolEnabled,
+		"groups":                         groupNames,
+		"model_request_rate_limit_group": request.ModelRequestRateLimitGroup,
+		"policies":                       request.Policies,
+	})
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",

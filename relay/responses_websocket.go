@@ -268,8 +268,18 @@ func (s *responsesWSSession) handleResponseCreate(create responsesWSCreateReques
 		}
 	}
 
-	policy, err := service.LoadUserRateLimitPolicy(common.GetContextKeyInt(s.c, appconstant.ContextKeyUserId))
+	commitRate, apiErr := middleware.CheckModelRequestRateLimit(s.c)
+	if apiErr != nil {
+		return apiErr
+	}
+
+	group := common.GetContextKeyString(s.c, appconstant.ContextKeyTokenGroup)
+	if group == "" {
+		group = common.GetContextKeyString(s.c, appconstant.ContextKeyUserGroup)
+	}
+	policy, err := service.LoadUserRateLimitPolicy(common.GetContextKeyInt(s.c, appconstant.ContextKeyUserId), group)
 	if err != nil {
+		commitRate(false)
 		return types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
 	}
 	rateGuard, apiErr := service.BeginUserRequestRateLimit(s.c, policy, validated.Model, service.UserConcurrencyWaitOptions{
@@ -278,6 +288,7 @@ func (s *responsesWSSession) handleResponseCreate(create responsesWSCreateReques
 		},
 	})
 	if apiErr != nil {
+		commitRate(false)
 		return apiErr
 	}
 	create.rateGuard = rateGuard
@@ -286,11 +297,6 @@ func (s *responsesWSSession) handleResponseCreate(create responsesWSCreateReques
 			rateGuard.Release()
 		}
 	}()
-
-	commitRate, apiErr := middleware.CheckModelRequestRateLimit(s.c)
-	if apiErr != nil {
-		return apiErr
-	}
 
 	if !s.hasTarget() {
 		return s.connectAndSendFirst(create, eventID, commitRate)

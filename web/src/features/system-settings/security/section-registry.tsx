@@ -38,6 +38,12 @@ const SECURITY_SECTIONS = [
           ModelRequestRateLimitDurationMinutes:
             settings.ModelRequestRateLimitDurationMinutes,
           ModelRequestRateLimitGroup: settings.ModelRequestRateLimitGroup,
+          'group_rate_limit_setting.member_enabled':
+            settings['group_rate_limit_setting.member_enabled'],
+          'group_rate_limit_setting.shared_pool_enabled':
+            settings['group_rate_limit_setting.shared_pool_enabled'],
+          'group_rate_limit_setting.policies':
+            settings['group_rate_limit_setting.policies'],
         }}
       />
     ),

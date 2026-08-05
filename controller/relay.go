@@ -160,7 +160,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	if shouldApplyUserRateLimits(c, relayInfo) {
 		policy := service.UserRateLimitPolicyFromContext(c)
 		waitOptions := service.UserConcurrencyWaitOptions{}
-		if policy.ConcurrencyLimit > 0 && relayInfo.IsStream {
+		if policy.HasConcurrencyLimit() && relayInfo.IsStream {
 			helper.EnsureStreamWriteMutex(c)
 			if relayFormat == types.RelayFormatOpenAIRealtime {
 				waitOptions.Heartbeat = func() error {

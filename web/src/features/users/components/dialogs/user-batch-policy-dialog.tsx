@@ -543,7 +543,7 @@ export function UserBatchPolicyDialog(props: UserBatchPolicyDialogProps) {
             <div className='text-sm font-medium'>{t('Request Limits')}</div>
             <p className='text-muted-foreground text-xs'>
               {t(
-                'Keep unchanged preserves each user value; clear removes the user override.'
+                'Keep unchanged preserves each user value; clear removes only the user override, while group member limits and shared pools still apply.'
               )}
             </p>
           </div>
