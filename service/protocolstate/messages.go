@@ -37,10 +37,11 @@ type MessageSession struct {
 }
 
 type messageSelection struct {
-	key            string
-	currentHistory []json.RawMessage
-	session        *MessageSession
-	strictAppend   bool
+	key                    string
+	currentHistory         []json.RawMessage
+	serializedHistoryBytes int
+	session                *MessageSession
+	strictAppend           bool
 }
 
 type messageSessionCodec struct{}
@@ -96,6 +97,10 @@ func PrepareMessagesRequest(c *gin.Context, info *relaycommon.RelayInfo, plan ch
 			return nil
 		}
 		common.SetContextKey(c, constant.ContextKeyProtocolStateSession, selection)
+	}
+	policy := currentPolicy()
+	if selection.serializedHistoryBytes > policy.MaxStateBytes {
+		return fmt.Errorf("Claude Code message history exceeds the maximum serialized state size of %d bytes", policy.MaxStateBytes)
 	}
 
 	pending := &pendingState{
@@ -351,16 +356,17 @@ func buildMessageSelection(c *gin.Context, publicModel string, request *dto.Clau
 	if err != nil {
 		return nil, err
 	}
-	if len(serializedHistory) > currentPolicy().MaxStateBytes {
-		return nil, fmt.Errorf("Claude Code message history exceeds the maximum serialized state size of %d bytes", currentPolicy().MaxStateBytes)
-	}
 	identity := requestIdentity(c)
 	_, _, messageCache := protocolCaches()
 	session, found, err := messageCache.Get(messageSessionKey(identity, stableKey, publicModel))
 	if err != nil {
 		return nil, fmt.Errorf("failed to load Claude Code Responses session: %w", err)
 	}
-	selection := &messageSelection{key: stableKey, currentHistory: history}
+	selection := &messageSelection{
+		key:                    stableKey,
+		currentHistory:         history,
+		serializedHistoryBytes: len(serializedHistory),
+	}
 	if !found {
 		return selection, nil
 	}

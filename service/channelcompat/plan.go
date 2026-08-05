@@ -211,7 +211,6 @@ func planForStrictRequest(channel *model.Channel, protocol Protocol, modelName, 
 			plan.Status = StatusNative
 			plan.UpstreamProtocol = compatibility.UpstreamProtocol
 			plan.StateMode = stateModeFor(protocol, compatibility.UpstreamProtocol)
-			plan.StateEnabled = policy.Enabled
 			return plan
 		}
 		if !allowConversion {
@@ -251,7 +250,6 @@ func planForStrictRequest(channel *model.Channel, protocol Protocol, modelName, 
 		plan.Status = StatusNative
 		plan.UpstreamProtocol = upstream
 		plan.StateMode = stateModeFor(protocol, upstream)
-		plan.StateEnabled = policy.Enabled
 		return plan
 	}
 
@@ -363,7 +361,6 @@ func autoPlansForRequest(channel *model.Channel, protocol Protocol, modelName st
 		plan := basePlan
 		plan.UpstreamProtocol = upstream
 		plan.StateMode = stateModeFor(protocol, upstream)
-		plan.StateEnabled = true
 		if upstream == protocol {
 			plan.Status = StatusNative
 			plans = append(plans, plan)
@@ -388,6 +385,7 @@ func autoPlansForRequest(channel *model.Channel, protocol Protocol, modelName st
 			continue
 		}
 		plan.Status = StatusConvertible
+		plan.StateEnabled = true
 		plan.RequestConverter = converter.ID
 		plan.ResponseConverter = converter.ID
 		plan.Quality = converter.Quality

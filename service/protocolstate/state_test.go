@@ -1120,7 +1120,7 @@ func TestObserveResponsesStreamMergesTypedPartialTerminalOutput(t *testing.T) {
 	assert.Equal(t, "call_typed", terminal.Response.Output[1].CallId)
 }
 
-func TestResponsesStateRejectsCrossTokenModelAndOversizedInput(t *testing.T) {
+func TestResponsesStateRejectsCrossTokenAndModel(t *testing.T) {
 	resetProtocolStateCaches(t)
 	rootContext := protocolStateTestContext("root-ownership", 1, 2)
 	request := &dto.OpenAIResponsesRequest{Model: "gpt-a", Input: mustProtocolStateJSON(t, "hello")}
@@ -1142,16 +1142,184 @@ func TestResponsesStateRejectsCrossTokenModelAndOversizedInput(t *testing.T) {
 	_, err = ResolveSelectionBinding(protocolStateTestContext("wrong-model", 1, 2), "/v1/responses", "gpt-b", body)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "does not match")
+}
 
+func TestResponsesStateLimitsOnlyBridgeManagedRequests(t *testing.T) {
+	resetProtocolStateCaches(t)
 	policy := model_setting.GetGlobalSettings().ProtocolBridgePolicy
-	oversized := make([]byte, policy.MaxStateBytes+1)
-	for index := range oversized {
-		oversized[index] = 'x'
+	policy.MaxStateBytes = 64
+	policy.MaxStateTurns = 1
+	model_setting.GetGlobalSettings().ProtocolBridgePolicy = policy
+
+	oversizedInput := mustProtocolStateJSON(t, strings.Repeat("x", policy.MaxStateBytes))
+	nativePlan := channelcompat.ProtocolPlan{
+		RequestProtocol:  channelcompat.ProtocolResponses,
+		UpstreamProtocol: channelcompat.ProtocolResponses,
+		Status:           channelcompat.StatusNative,
 	}
-	oversizedRequest := &dto.OpenAIResponsesRequest{Model: "gpt-a", Input: mustProtocolStateJSON(t, string(oversized))}
-	err = PrepareResponsesRequest(protocolStateTestContext("oversized", 1, 2), protocolStateRelayInfo("gpt-a", 3), plan, oversizedRequest)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "maximum serialized state size")
+	nativeContext := protocolStateTestContext("native-oversized", 31, 32)
+	nativeRequest := &dto.OpenAIResponsesRequest{Model: "gpt-a", Input: oversizedInput}
+	require.NoError(t, PrepareResponsesRequest(nativeContext, protocolStateRelayInfo("gpt-a", 33), nativePlan, nativeRequest))
+	nativeResponse := &dto.OpenAIResponsesResponse{
+		ID:     "upstream-native-oversized",
+		Status: mustProtocolStateJSON(t, "completed"),
+		Store:  true,
+		Output: []dto.ResponsesOutput{{Type: "message", Role: "assistant", Status: "completed"}},
+	}
+	publicID := CaptureResponsesResponse(nativeContext, nativeResponse.ID, nativeResponse)
+	require.NoError(t, Commit(nativeContext))
+	nativeNode, err := loadResponseNode(nativeContext, publicID, "gpt-a")
+	require.NoError(t, err)
+	assert.False(t, nativeNode.BridgeManaged)
+	assert.Greater(t, nativeNode.CumulativeStateBytes, policy.MaxStateBytes)
+
+	continuationBody := mustProtocolStateJSON(t, map[string]any{
+		"model":                "gpt-a",
+		"previous_response_id": publicID,
+	})
+	nativeContinuationContext := protocolStateTestContext("native-oversized-continuation", 31, 32)
+	binding, err := ResolveSelectionBinding(nativeContinuationContext, "/v1/responses", "gpt-a", continuationBody)
+	require.NoError(t, err)
+	require.NotNil(t, binding)
+	nativeContinuation := &dto.OpenAIResponsesRequest{
+		Model:              "gpt-a",
+		PreviousResponseID: publicID,
+		Input:              mustProtocolStateJSON(t, "continue natively"),
+	}
+	require.NoError(t, PrepareResponsesRequest(nativeContinuationContext, protocolStateRelayInfo("gpt-a", 33), nativePlan, nativeContinuation))
+	assert.Equal(t, "upstream-native-oversized", nativeContinuation.PreviousResponseID)
+
+	bridgePlan := channelcompat.ProtocolPlan{
+		RequestProtocol:  channelcompat.ProtocolResponses,
+		UpstreamProtocol: channelcompat.ProtocolChat,
+		Status:           channelcompat.StatusConvertible,
+		StateEnabled:     true,
+	}
+	bridgeRoot := &dto.OpenAIResponsesRequest{Model: "gpt-a", Input: oversizedInput}
+	err = PrepareResponsesRequest(protocolStateTestContext("bridge-oversized", 31, 32), protocolStateRelayInfo("gpt-a", 34), bridgePlan, bridgeRoot)
+	require.ErrorContains(t, err, "maximum serialized state size")
+	bridgeCommitContext := protocolStateTestContext("bridge-oversized-output", 31, 32)
+	bridgeCommitRequest := &dto.OpenAIResponsesRequest{Model: "gpt-a", Input: mustProtocolStateJSON(t, "small")}
+	require.NoError(t, PrepareResponsesRequest(bridgeCommitContext, protocolStateRelayInfo("gpt-a", 34), bridgePlan, bridgeCommitRequest))
+	bridgeCommitResponse := &dto.OpenAIResponsesResponse{
+		ID:     "upstream-bridge-oversized-output",
+		Status: mustProtocolStateJSON(t, "completed"),
+		Output: []dto.ResponsesOutput{{
+			Type: "message",
+			Role: "assistant",
+			Content: []dto.ResponsesOutputContent{{
+				Type: "output_text",
+				Text: strings.Repeat("x", policy.MaxStateBytes),
+			}},
+		}},
+	}
+	CaptureResponsesResponse(bridgeCommitContext, bridgeCommitResponse.ID, bridgeCommitResponse)
+	err = Commit(bridgeCommitContext)
+	require.ErrorContains(t, err, "protocol bridge state exceeds")
+
+	bridgeContinuationContext := protocolStateTestContext("bridge-oversized-continuation", 31, 32)
+	_, err = ResolveSelectionBinding(bridgeContinuationContext, "/v1/responses", "gpt-a", continuationBody)
+	require.NoError(t, err)
+	bridgeContinuation := &dto.OpenAIResponsesRequest{
+		Model:              "gpt-a",
+		PreviousResponseID: publicID,
+		Input:              mustProtocolStateJSON(t, "bridge this history"),
+	}
+	err = PrepareResponsesRequest(bridgeContinuationContext, protocolStateRelayInfo("gpt-a", 34), bridgePlan, bridgeContinuation)
+	require.ErrorContains(t, err, "maximum conversation length")
+}
+
+func TestResponsesLegacyBridgeStateWithoutMarkerStillEnforcesLimits(t *testing.T) {
+	resetProtocolStateCaches(t)
+	policy := model_setting.GetGlobalSettings().ProtocolBridgePolicy
+	policy.MaxStateBytes = 64
+	policy.MaxStateTurns = 1
+	model_setting.GetGlobalSettings().ProtocolBridgePolicy = policy
+
+	owner := identity{userID: 35, tokenID: 36}
+	stateCache, _, _ := protocolCaches()
+	tests := []struct {
+		name            string
+		publicID        string
+		turn            int
+		cumulativeBytes int
+		wantError       string
+	}{
+		{
+			name:            "serialized size",
+			publicID:        "resp_legacy_bridge_size",
+			turn:            1,
+			cumulativeBytes: policy.MaxStateBytes + 1,
+			wantError:       "maximum serialized state size",
+		},
+		{
+			name:            "conversation turns",
+			publicID:        "resp_legacy_bridge_turns",
+			turn:            policy.MaxStateTurns + 1,
+			cumulativeBytes: 1,
+			wantError:       "maximum conversation length",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			encoded, err := (responseNodeCodec{}).Encode(ResponseNode{
+				Version:              stateVersion,
+				UserID:               owner.userID,
+				TokenID:              owner.tokenID,
+				PublicResponseID:     test.publicID,
+				ChannelID:            37,
+				RequestProtocol:      string(channelcompat.ProtocolResponses),
+				UpstreamProtocol:     string(channelcompat.ProtocolChat),
+				PublicModel:          "gpt-a",
+				NormalizedInput:      mustProtocolStateJSON(t, "legacy input"),
+				NormalizedOutput:     mustProtocolStateJSON(t, []any{}),
+				Turn:                 test.turn,
+				CumulativeStateBytes: test.cumulativeBytes,
+			})
+			require.NoError(t, err)
+			assert.NotContains(t, encoded, "bridge_managed")
+			legacyNode, err := (responseNodeCodec{}).Decode(encoded)
+			require.NoError(t, err)
+			assert.False(t, legacyNode.BridgeManaged)
+			require.NoError(t, stateCache.SetWithTTL(responseNodeKey(owner, test.publicID), legacyNode, time.Hour))
+
+			body := mustProtocolStateJSON(t, map[string]any{"previous_response_id": test.publicID})
+			_, err = ResolveSelectionBinding(protocolStateTestContext("legacy-bridge", owner.userID, owner.tokenID), "/v1/responses", "gpt-a", body)
+			require.ErrorContains(t, err, test.wantError)
+		})
+	}
+}
+
+func TestMessagesStateLimitsOnlyResponsesBridge(t *testing.T) {
+	resetProtocolStateCaches(t)
+	policy := model_setting.GetGlobalSettings().ProtocolBridgePolicy
+	policy.MaxStateBytes = 64
+	model_setting.GetGlobalSettings().ProtocolBridgePolicy = policy
+
+	request := claudeSessionRequest(strings.Repeat("x", policy.MaxStateBytes))
+	body := mustProtocolStateJSON(t, request)
+	nativeContext := protocolStateTestContext("native-messages-oversized", 41, 42)
+	binding, err := ResolveSelectionBinding(nativeContext, "/v1/messages", "claude-public", body)
+	require.NoError(t, err)
+	assert.Nil(t, binding)
+	nativePlan := channelcompat.ProtocolPlan{
+		RequestProtocol:  channelcompat.ProtocolMessages,
+		UpstreamProtocol: channelcompat.ProtocolMessages,
+		Status:           channelcompat.StatusNative,
+	}
+	require.NoError(t, PrepareMessagesRequest(nativeContext, protocolStateRelayInfo("claude-public", 43), nativePlan, request))
+
+	bridgeContext := protocolStateTestContext("bridge-messages-oversized", 41, 42)
+	_, err = ResolveSelectionBinding(bridgeContext, "/v1/messages", "claude-public", body)
+	require.NoError(t, err)
+	bridgePlan := channelcompat.ProtocolPlan{
+		RequestProtocol:  channelcompat.ProtocolMessages,
+		UpstreamProtocol: channelcompat.ProtocolResponses,
+		Status:           channelcompat.StatusConvertible,
+		StateEnabled:     true,
+	}
+	err = PrepareMessagesRequest(bridgeContext, protocolStateRelayInfo("claude-public", 44), bridgePlan, request)
+	require.ErrorContains(t, err, "maximum serialized state size")
 }
 
 func TestResponsesStateDoesNotPersistIncompleteStreamAndExpiresDeterministically(t *testing.T) {
@@ -1386,14 +1554,15 @@ func TestResponsesStateDoesNotPersistCancelledStream(t *testing.T) {
 	assert.Contains(t, err.Error(), "unknown or expired")
 }
 
-func TestResponsesStateEnforcesMaximumTurnsBeforeRelay(t *testing.T) {
+func TestResponsesBridgeStateEnforcesMaximumTurnsBeforeRelay(t *testing.T) {
 	resetProtocolStateCaches(t)
 	model_setting.GetGlobalSettings().ProtocolBridgePolicy.MaxStateTurns = 1
 	rootContext := protocolStateTestContext("turn-root", 24, 25)
 	plan := channelcompat.ProtocolPlan{
 		RequestProtocol:  channelcompat.ProtocolResponses,
-		UpstreamProtocol: channelcompat.ProtocolResponses,
-		Status:           channelcompat.StatusNative,
+		UpstreamProtocol: channelcompat.ProtocolMessages,
+		Status:           channelcompat.StatusConvertible,
+		StateEnabled:     true,
 	}
 	rootRequest := &dto.OpenAIResponsesRequest{Model: "gpt-a", Input: mustProtocolStateJSON(t, "first")}
 	require.NoError(t, PrepareResponsesRequest(rootContext, protocolStateRelayInfo("gpt-a", 3), plan, rootRequest))

@@ -39,6 +39,7 @@ type ResponseNode struct {
 	ChannelID            int             `json:"channel_id"`
 	RequestProtocol      string          `json:"request_protocol"`
 	UpstreamProtocol     string          `json:"upstream_protocol"`
+	BridgeManaged        bool            `json:"bridge_managed,omitempty"`
 	UpstreamResponseID   string          `json:"upstream_response_id,omitempty"`
 	UpstreamStored       bool            `json:"upstream_stored"`
 	PublicModel          string          `json:"public_model"`
@@ -72,6 +73,7 @@ type pendingState struct {
 	channelID                int
 	requestProtocol          string
 	upstreamProtocol         string
+	bridgeManaged            bool
 	parent                   *ResponseNode
 	parentResponseID         string
 	originalInput            json.RawMessage
@@ -159,7 +161,7 @@ func ResolveSelectionBinding(c *gin.Context, requestPath, publicModel string, bo
 		if err != nil {
 			return nil, err
 		}
-		chain, err := loadResponseHistoryChain(c, node)
+		chain, err := loadResponseHistoryChain(c, node, responseNodeUsesBridgeState(node))
 		if err != nil {
 			return nil, err
 		}
@@ -212,9 +214,6 @@ func PrepareResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, plan c
 	publicID := ensurePublicResponseID(c)
 	originalInput := append(json.RawMessage(nil), request.Input...)
 	policy := currentPolicy()
-	if len(originalInput) > policy.MaxStateBytes {
-		return fmt.Errorf("Responses input exceeds the maximum serialized state size of %d bytes", policy.MaxStateBytes)
-	}
 	previousID := strings.TrimSpace(request.PreviousResponseID)
 	var parent *ResponseNode
 	if previousID != "" {
@@ -229,6 +228,12 @@ func PrepareResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, plan c
 			common.SetContextKey(c, constant.ContextKeyProtocolStateParent, parent)
 		}
 	}
+	bridgeManaged := plan.StateEnabled ||
+		(plan.UpstreamProtocol != "" && plan.RequestProtocol != plan.UpstreamProtocol) ||
+		responseNodeUsesBridgeState(parent)
+	if bridgeManaged && len(originalInput) > policy.MaxStateBytes {
+		return fmt.Errorf("Responses input exceeds the maximum serialized state size of %d bytes", policy.MaxStateBytes)
+	}
 
 	pending := &pendingState{
 		kind:             pendingResponses,
@@ -239,6 +244,7 @@ func PrepareResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, plan c
 		channelID:        info.ChannelId,
 		requestProtocol:  string(plan.RequestProtocol),
 		upstreamProtocol: string(plan.UpstreamProtocol),
+		bridgeManaged:    bridgeManaged,
 		parent:           parent,
 		parentResponseID: previousID,
 		originalInput:    originalInput,
@@ -246,10 +252,10 @@ func PrepareResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, plan c
 	historicalTools := make([]json.RawMessage, 0)
 
 	if parent != nil {
-		if parent.Turn >= policy.MaxStateTurns {
+		if bridgeManaged && parent.Turn >= policy.MaxStateTurns {
 			return fmt.Errorf("previous_response_id exceeds the maximum conversation length of %d turns", policy.MaxStateTurns)
 		}
-		if parent.CumulativeStateBytes+len(originalInput) > policy.MaxStateBytes {
+		if bridgeManaged && parent.CumulativeStateBytes+len(originalInput) > policy.MaxStateBytes {
 			return fmt.Errorf("previous_response_id state exceeds the maximum serialized size of %d bytes", policy.MaxStateBytes)
 		}
 
@@ -262,7 +268,7 @@ func PrepareResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, plan c
 			parent.UpstreamStored &&
 			strings.TrimSpace(parent.UpstreamResponseID) != ""
 		if canContinueNatively {
-			chain, err := loadResponseHistoryChain(c, parent)
+			chain, err := loadResponseHistoryChain(c, parent, bridgeManaged)
 			if err != nil {
 				return err
 			}
@@ -271,7 +277,7 @@ func PrepareResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, plan c
 			pending.continuationID = parent.UpstreamResponseID
 			pending.usedContinuation = true
 		} else {
-			replayedInput, replayedTools, err := replayResponsesHistory(c, parent, originalInput, info.ChannelId, plan.UpstreamProtocol, info.UpstreamModelName)
+			replayedInput, replayedTools, err := replayResponsesHistory(c, parent, originalInput, info.ChannelId, plan.UpstreamProtocol, info.UpstreamModelName, bridgeManaged)
 			if err != nil {
 				return err
 			}
@@ -286,7 +292,7 @@ func PrepareResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, plan c
 	}
 	common.SetContextKey(c, constant.ContextKeyProtocolRequestNormalized, normalized)
 	pending.normalizedTools = append(json.RawMessage(nil), request.Tools...)
-	if len(pending.originalInput)+len(pending.normalizedTools) > policy.MaxStateBytes {
+	if bridgeManaged && len(pending.originalInput)+len(pending.normalizedTools) > policy.MaxStateBytes {
 		return fmt.Errorf("Responses input and tools exceed the maximum serialized state size of %d bytes", policy.MaxStateBytes)
 	}
 
@@ -756,10 +762,10 @@ func Commit(c *gin.Context) error {
 		cumulativeBytes += pending.parent.CumulativeStateBytes
 	}
 	policy := currentPolicy()
-	if turn > policy.MaxStateTurns {
+	if pending.bridgeManaged && turn > policy.MaxStateTurns {
 		return fmt.Errorf("protocol bridge state exceeds %d turns", policy.MaxStateTurns)
 	}
-	if cumulativeBytes > policy.MaxStateBytes {
+	if pending.bridgeManaged && cumulativeBytes > policy.MaxStateBytes {
 		return fmt.Errorf("protocol bridge state exceeds %d serialized bytes", policy.MaxStateBytes)
 	}
 
@@ -772,6 +778,7 @@ func Commit(c *gin.Context) error {
 		ChannelID:            pending.channelID,
 		RequestProtocol:      pending.requestProtocol,
 		UpstreamProtocol:     pending.upstreamProtocol,
+		BridgeManaged:        pending.bridgeManaged,
 		UpstreamResponseID:   pending.upstreamResponseID,
 		UpstreamStored:       pending.upstreamStored,
 		PublicModel:          pending.publicModel,
@@ -791,8 +798,8 @@ func Commit(c *gin.Context) error {
 	return ownerCache.SetWithTTL(pending.publicID, identity.String(), ttl)
 }
 
-func replayResponsesHistory(c *gin.Context, parent *ResponseNode, currentInput json.RawMessage, targetChannelID int, targetProtocol channelcompat.Protocol, targetUpstreamModel string) (json.RawMessage, []json.RawMessage, error) {
-	chain, err := loadResponseHistoryChain(c, parent)
+func replayResponsesHistory(c *gin.Context, parent *ResponseNode, currentInput json.RawMessage, targetChannelID int, targetProtocol channelcompat.Protocol, targetUpstreamModel string, bridgeManaged bool) (json.RawMessage, []json.RawMessage, error) {
+	chain, err := loadResponseHistoryChain(c, parent, bridgeManaged)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -826,19 +833,20 @@ func replayResponsesHistory(c *gin.Context, parent *ResponseNode, currentInput j
 		return nil, nil, err
 	}
 	policy := currentPolicy()
-	if len(replayed) > policy.MaxStateBytes {
+	if bridgeManaged && len(replayed) > policy.MaxStateBytes {
 		return nil, nil, fmt.Errorf("replayed Responses history exceeds %d serialized bytes", policy.MaxStateBytes)
 	}
 	return replayed, historicalTools, nil
 }
 
-func loadResponseHistoryChain(c *gin.Context, parent *ResponseNode) ([]*ResponseNode, error) {
-	chain := make([]*ResponseNode, 0, parent.Turn)
-	seen := make(map[string]struct{}, parent.Turn)
-	current := cloneResponseNode(parent)
+func loadResponseHistoryChain(c *gin.Context, parent *ResponseNode, bridgeManaged bool) ([]*ResponseNode, error) {
 	policy := currentPolicy()
+	capacityHint := min(parent.Turn, policy.MaxStateTurns)
+	chain := make([]*ResponseNode, 0, capacityHint)
+	seen := make(map[string]struct{}, capacityHint)
+	current := cloneResponseNode(parent)
 	for current != nil {
-		if len(chain) >= policy.MaxStateTurns {
+		if bridgeManaged && len(chain) >= policy.MaxStateTurns {
 			return nil, fmt.Errorf("previous_response_id exceeds the maximum conversation length of %d turns", policy.MaxStateTurns)
 		}
 		if _, exists := seen[current.PublicResponseID]; exists {
@@ -1178,12 +1186,20 @@ func findResponseNode(c *gin.Context, publicID, publicModel string) (*ResponseNo
 	if strings.TrimSpace(publicModel) != strings.TrimSpace(node.PublicModel) {
 		return nil, true, fmt.Errorf("previous_response_id model %q does not match requested model %q", node.PublicModel, publicModel)
 	}
-	policy := currentPolicy()
-	if node.Turn < 1 || node.Turn > policy.MaxStateTurns {
+	if node.Turn < 1 {
 		return nil, true, fmt.Errorf("previous_response_id exceeds the maximum conversation length")
 	}
-	if node.CumulativeStateBytes < 0 || node.CumulativeStateBytes > policy.MaxStateBytes {
+	if node.CumulativeStateBytes < 0 {
 		return nil, true, fmt.Errorf("previous_response_id exceeds the maximum serialized state size")
+	}
+	policy := currentPolicy()
+	if responseNodeUsesBridgeState(&node) {
+		if node.Turn > policy.MaxStateTurns {
+			return nil, true, fmt.Errorf("previous_response_id exceeds the maximum conversation length")
+		}
+		if node.CumulativeStateBytes > policy.MaxStateBytes {
+			return nil, true, fmt.Errorf("previous_response_id exceeds the maximum serialized state size")
+		}
 	}
 	ttl := time.Duration(policy.StateTTLSeconds) * time.Second
 	if err := stateCache.SetWithTTL(responseNodeKey(identity, publicID), node, ttl); err != nil {
@@ -1193,6 +1209,12 @@ func findResponseNode(c *gin.Context, publicID, publicModel string) (*ResponseNo
 		return nil, true, fmt.Errorf("failed to refresh previous_response_id ownership: %w", err)
 	}
 	return cloneResponseNode(&node), true, nil
+}
+
+func responseNodeUsesBridgeState(node *ResponseNode) bool {
+	// The protocol mismatch keeps converted v1 cache entries written before the
+	// explicit marker backward compatible.
+	return node != nil && (node.BridgeManaged || node.RequestProtocol != node.UpstreamProtocol)
 }
 
 func ensurePublicResponseID(c *gin.Context) string {

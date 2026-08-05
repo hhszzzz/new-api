@@ -456,7 +456,7 @@ export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
                       <Input
                         type='number'
                         min={0.0625}
-                        max={16}
+                        max={128}
                         step={0.0625}
                         disabled={!protocolBridgeEnabled}
                         value={String(field.value)}
@@ -467,7 +467,7 @@ export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
                       />
                     </FormControl>
                     <FormDescription>
-                      {t('Valid range: 0.0625 to 16 MiB.')}
+                      {t('Valid range: 0.0625 to 128 MiB.')}
                     </FormDescription>
                     <FormMessage />
                   </FormItem>

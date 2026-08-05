@@ -18,7 +18,7 @@ const (
 	MinProtocolBridgeMaxStateTurns   = 1
 	MaxProtocolBridgeMaxStateTurns   = 512
 	MinProtocolBridgeMaxStateBytes   = 64 * 1024
-	MaxProtocolBridgeMaxStateBytes   = 16 * 1024 * 1024
+	MaxProtocolBridgeMaxStateBytes   = 128 * 1024 * 1024
 )
 
 type ProtocolBridgePolicy struct {

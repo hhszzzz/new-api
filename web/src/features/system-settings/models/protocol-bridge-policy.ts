@@ -43,8 +43,8 @@ export const protocolBridgePolicyFormSchema = z.object({
     .max(512, 'Maximum state turns must be between 1 and 512'),
   max_state_mebibytes: z.coerce
     .number()
-    .min(0.0625, 'Maximum state size must be between 0.0625 and 16 MiB')
-    .max(16, 'Maximum state size must be between 0.0625 and 16 MiB')
+    .min(0.0625, 'Maximum state size must be between 0.0625 and 128 MiB')
+    .max(128, 'Maximum state size must be between 0.0625 and 128 MiB')
     .refine(
       (value) => Number.isInteger(value * BYTES_PER_MEBIBYTE),
       'Maximum state size must resolve to a whole number of bytes'

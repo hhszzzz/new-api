@@ -8,12 +8,19 @@ import (
 )
 
 func TestProtocolBridgePolicyValidate(t *testing.T) {
+	assert.Equal(t, 4*1024*1024, DefaultProtocolBridgeMaxStateBytes)
+	assert.Equal(t, 128*1024*1024, MaxProtocolBridgeMaxStateBytes)
+
 	valid := ProtocolBridgePolicy{
 		StateTTLSeconds: DefaultProtocolBridgeStateTTLSeconds,
 		MaxStateTurns:   DefaultProtocolBridgeMaxStateTurns,
 		MaxStateBytes:   DefaultProtocolBridgeMaxStateBytes,
 	}
 	require.NoError(t, valid.Validate())
+
+	maximum := valid
+	maximum.MaxStateBytes = MaxProtocolBridgeMaxStateBytes
+	require.NoError(t, maximum.Validate())
 
 	tests := []struct {
 		name   string

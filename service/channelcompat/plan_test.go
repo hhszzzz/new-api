@@ -333,6 +333,25 @@ func TestPlanForRequestAdvancedCustomRouteOverridesDeclaredProtocols(t *testing.
 	assert.Equal(t, ProtocolChat, plan.UpstreamProtocol)
 	assert.Equal(t, relayconvert.ConverterOpenAIResponsesToOpenAIChat, plan.RequestConverter)
 	assert.Equal(t, "provider-chat-model", plan.EffectiveUpstreamModel)
+	assert.True(t, plan.StateEnabled)
+}
+
+func TestPlanForRequestAdvancedCustomNativeRouteDoesNotEnableBridgeState(t *testing.T) {
+	withProtocolBridgePolicy(t, true, false)
+	channel := &model.Channel{Type: constant.ChannelTypeAdvancedCustom}
+	channel.SetOtherSettings(dto.ChannelOtherSettings{
+		AdvancedCustom: &dto.AdvancedCustomConfig{Routes: []dto.AdvancedCustomRoute{{
+			IncomingPath: "/v1/messages",
+			UpstreamPath: "/v1/messages",
+			Converter:    relayconvert.ConverterNone,
+		}}},
+	})
+
+	plan := PlanForRequest(channel, ProtocolMessages, "claude-public", "/v1/messages", RequestFeatureSet{})
+
+	assert.Equal(t, StatusNative, plan.Status)
+	assert.Equal(t, ProtocolMessages, plan.UpstreamProtocol)
+	assert.False(t, plan.StateEnabled)
 }
 
 func TestPlanForRequestAdvancedCustomConversionUsesCapabilitySwitch(t *testing.T) {
@@ -748,11 +767,32 @@ func TestPlanForRequestPreservesLegacyCapabilitiesWhenConversionRequiresExplicit
 		wantStateEnabled bool
 	}{
 		{
+			name:         "OpenAI-compatible Chat remains native",
+			channel:      &model.Channel{Type: constant.ChannelTypeOpenAI, BaseURL: &compatibleURL},
+			protocol:     ProtocolChat,
+			wantStatus:   StatusNative,
+			wantUpstream: ProtocolChat,
+		},
+		{
 			name:         "OpenAI-compatible Responses remains native",
 			channel:      &model.Channel{Type: constant.ChannelTypeOpenAI, BaseURL: &compatibleURL},
 			protocol:     ProtocolResponses,
 			wantStatus:   StatusNative,
 			wantUpstream: ProtocolResponses,
+		},
+		{
+			name:         "Anthropic Messages remains native",
+			channel:      &model.Channel{Type: constant.ChannelTypeAnthropic},
+			protocol:     ProtocolMessages,
+			wantStatus:   StatusNative,
+			wantUpstream: ProtocolMessages,
+		},
+		{
+			name:         "Gemini generateContent remains native",
+			channel:      &model.Channel{Type: constant.ChannelTypeGemini},
+			protocol:     ProtocolGemini,
+			wantStatus:   StatusNative,
+			wantUpstream: ProtocolGemini,
 		},
 		{
 			name:          "Gemini Responses keeps existing converter",
@@ -826,7 +866,7 @@ func TestPlansForRequestAutomaticOrderFollowsEntryProtocol(t *testing.T) {
 			for _, plan := range plans {
 				actual = append(actual, plan.UpstreamProtocol)
 				assert.Equal(t, dto.ProtocolSelectionModeAuto, plan.SelectionMode)
-				assert.True(t, plan.StateEnabled)
+				assert.Equal(t, plan.UpstreamProtocol != test.protocol, plan.StateEnabled)
 			}
 			assert.Equal(t, test.want, actual)
 			assert.Equal(t, StatusNative, plans[0].Status)

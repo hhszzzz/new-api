@@ -71,6 +71,12 @@ describe('protocol bridge policy settings contract', () => {
     expect(
       protocolBridgePolicyFormSchema.safeParse({
         ...DEFAULT_PROTOCOL_BRIDGE_POLICY_FORM,
+        max_state_mebibytes: 128,
+      }).success
+    ).toBe(true)
+    expect(
+      protocolBridgePolicyFormSchema.safeParse({
+        ...DEFAULT_PROTOCOL_BRIDGE_POLICY_FORM,
         state_ttl_seconds: 59,
       }).success
     ).toBe(false)
@@ -83,7 +89,7 @@ describe('protocol bridge policy settings contract', () => {
     expect(
       protocolBridgePolicyFormSchema.safeParse({
         ...DEFAULT_PROTOCOL_BRIDGE_POLICY_FORM,
-        max_state_mebibytes: 16.1,
+        max_state_mebibytes: 128.1,
       }).success
     ).toBe(false)
   })
