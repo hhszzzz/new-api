@@ -5774,7 +5774,20 @@
     "Icon name": "Название значка",
     "Icon name must be 80 characters or fewer": "Название значка не должно превышать 80 символов",
     "Use a React Icons name such as LuRadar": "Укажите имя React Icons, например LuRadar",
-    "Use a React Icons name such as LuRadar or FaGithub. Leave empty for the default link icon.": "Укажите имя React Icons, например LuRadar или FaGithub. Оставьте поле пустым, чтобы использовать стандартный значок ссылки."
+    "Use a React Icons name such as LuRadar or FaGithub. Leave empty for the default link icon.": "Укажите имя React Icons, например LuRadar или FaGithub. Оставьте поле пустым, чтобы использовать стандартный значок ссылки.",
+    "These administrator-only limits apply to standard text generation requests.": "Эти доступные только администраторам ограничения применяются к стандартным запросам генерации текста.",
+    "Follow group/global limit": "Использовать лимит группы/общий лимит",
+    "Leave empty to follow group/global limits": "Оставьте пустым, чтобы использовать лимиты группы/общие лимиты",
+    "Concurrent requests": "Одновременные запросы",
+    "No limit": "Без ограничений",
+    "Leave empty for no concurrency limit": "Оставьте пустым, чтобы не ограничивать число одновременных запросов",
+    "Streaming tokens per second": "Токенов в секунду при потоковой передаче",
+    "Leave empty for no streaming speed limit": "Оставьте пустым, чтобы не ограничивать скорость потоковой передачи",
+    "Clear override": "Удалить переопределение",
+    "Custom limit": "Свой лимит",
+    "Limit value": "Значение лимита",
+    "Custom request limits must be integers from 1 to 2147483647": "Пользовательские лимиты запросов должны быть целыми числами от 1 до 2147483647",
+    "Keep unchanged preserves each user value; clear removes the user override.": "Сохранение оставляет текущее значение каждого пользователя, а очистка удаляет пользовательское переопределение."
   },
   "Require successful Dify workflow": "Требовать успешного выполнения рабочего процесса Dify",
   "Require a successful Dify workflow status, a non-empty answer, and upstream token usage before billing.": "Списывать средства только при успешном статусе процесса Dify, непустом ответе и наличии данных об использовании токенов от вышестоящего сервиса."

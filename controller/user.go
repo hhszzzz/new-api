@@ -791,6 +791,9 @@ func GetUserPolicy(c *gin.Context) {
 		CheckinMinQuota:       user.CheckinMinQuota,
 		CheckinMaxQuota:       user.CheckinMaxQuota,
 		QuotaCap:              user.QuotaCap,
+		RpmLimit:              user.RpmLimit,
+		ConcurrencyLimit:      user.ConcurrencyLimit,
+		StreamTpsLimit:        user.StreamTpsLimit,
 	})
 }
 
@@ -823,8 +826,11 @@ func userPolicyFromMutation(user model.User, raw map[string]json.RawMessage, fal
 	_, hasCheckinMinQuota := raw["checkin_min_quota"]
 	_, hasCheckinMaxQuota := raw["checkin_max_quota"]
 	_, hasQuotaCap := raw["quota_cap"]
+	_, hasRpmLimit := raw["rpm_limit"]
+	_, hasConcurrencyLimit := raw["concurrency_limit"]
+	_, hasStreamTpsLimit := raw["stream_tps_limit"]
 	if !hasGroups && !hasPrimaryGroup && !hasLegacyGroup && !hasTopupGroup && !hasModelLimitsEnabled && !hasModelLimits && !hasModelBlocklistEnabled && !hasModelBlocklist &&
-		!hasCheckinEnabled && !hasCheckinMinQuota && !hasCheckinMaxQuota && !hasQuotaCap {
+		!hasCheckinEnabled && !hasCheckinMinQuota && !hasCheckinMaxQuota && !hasQuotaCap && !hasRpmLimit && !hasConcurrencyLimit && !hasStreamTpsLimit {
 		return nil, nil
 	}
 
@@ -840,6 +846,24 @@ func userPolicyFromMutation(user model.User, raw map[string]json.RawMessage, fal
 		CheckinMinQuota:       user.CheckinMinQuota,
 		CheckinMaxQuota:       user.CheckinMaxQuota,
 		QuotaCap:              user.QuotaCap,
+		RpmLimit:              user.RpmLimit,
+		ConcurrencyLimit:      user.ConcurrencyLimit,
+		StreamTpsLimit:        user.StreamTpsLimit,
+	}
+	if hasRpmLimit {
+		if err := common.Unmarshal(raw["rpm_limit"], &update.RpmLimit); err != nil {
+			return nil, err
+		}
+	}
+	if hasConcurrencyLimit {
+		if err := common.Unmarshal(raw["concurrency_limit"], &update.ConcurrencyLimit); err != nil {
+			return nil, err
+		}
+	}
+	if hasStreamTpsLimit {
+		if err := common.Unmarshal(raw["stream_tps_limit"], &update.StreamTpsLimit); err != nil {
+			return nil, err
+		}
 	}
 	if !hasGroups {
 		switch {
@@ -896,6 +920,15 @@ func userPolicyFromMutation(user model.User, raw map[string]json.RawMessage, fal
 	}
 	if !hasQuotaCap && fallback != nil {
 		update.QuotaCap = fallback.QuotaCap
+	}
+	if !hasRpmLimit && fallback != nil {
+		update.RpmLimit = fallback.RpmLimit
+	}
+	if !hasConcurrencyLimit && fallback != nil {
+		update.ConcurrencyLimit = fallback.ConcurrencyLimit
+	}
+	if !hasStreamTpsLimit && fallback != nil {
+		update.StreamTpsLimit = fallback.StreamTpsLimit
 	}
 
 	normalized, err := normalizeUserPolicyUpdate(update)
@@ -967,6 +1000,15 @@ func normalizeUserPolicyUpdate(update model.UserPolicyUpdate) (model.UserPolicyU
 	if err := validateUserQuotaCap(update.QuotaCap); err != nil {
 		return model.UserPolicyUpdate{}, err
 	}
+	if err := validateUserRateLimit("RPM", update.RpmLimit); err != nil {
+		return model.UserPolicyUpdate{}, err
+	}
+	if err := validateUserRateLimit("并发", update.ConcurrencyLimit); err != nil {
+		return model.UserPolicyUpdate{}, err
+	}
+	if err := validateUserRateLimit("流式 TPS", update.StreamTpsLimit); err != nil {
+		return model.UserPolicyUpdate{}, err
+	}
 	return update, nil
 }
 
@@ -976,6 +1018,43 @@ const maxUserCheckinQuotaOverride = 1_000_000_000
 
 // maxUserQuotaCap keeps the balance cap inside the 32-bit quota column range.
 const maxUserQuotaCap = 2_000_000_000
+
+const maxUserRateLimit = 2_147_483_647
+
+func validateUserRateLimit(name string, limit *int) error {
+	if limit == nil {
+		return nil
+	}
+	if *limit < 1 || *limit > maxUserRateLimit {
+		return fmt.Errorf("%s 限制必须在 1 到 %d 之间", name, maxUserRateLimit)
+	}
+	return nil
+}
+
+func userRateLimitAudit(raw map[string]json.RawMessage, update *model.UserPolicyUpdate) map[string]interface{} {
+	if update == nil {
+		return nil
+	}
+	entries := make(map[string]interface{})
+	add := func(key string, value *int) {
+		if _, exists := raw[key]; !exists {
+			return
+		}
+		entry := map[string]interface{}{"mode": "clear"}
+		if value != nil {
+			entry["mode"] = "custom"
+			entry["value"] = *value
+		}
+		entries[key] = entry
+	}
+	add("rpm_limit", update.RpmLimit)
+	add("concurrency_limit", update.ConcurrencyLimit)
+	add("stream_tps_limit", update.StreamTpsLimit)
+	if len(entries) == 0 {
+		return nil
+	}
+	return entries
+}
 
 func validateUserQuotaCap(cap *int) error {
 	if cap == nil {
@@ -1074,6 +1153,15 @@ func UpdateUserPolicy(c *gin.Context) {
 	if _, exists := raw["quota_cap"]; !exists {
 		update.QuotaCap = user.QuotaCap
 	}
+	if _, exists := raw["rpm_limit"]; !exists {
+		update.RpmLimit = user.RpmLimit
+	}
+	if _, exists := raw["concurrency_limit"]; !exists {
+		update.ConcurrencyLimit = user.ConcurrencyLimit
+	}
+	if _, exists := raw["stream_tps_limit"]; !exists {
+		update.StreamTpsLimit = user.StreamTpsLimit
+	}
 	update, err = normalizeUserPolicyUpdate(update)
 	if err != nil {
 		common.ApiErrorMsg(c, err.Error())
@@ -1091,6 +1179,7 @@ func UpdateUserPolicy(c *gin.Context) {
 		"model_limit_count":       len(update.ModelLimits),
 		"model_blocklist_enabled": update.ModelBlocklistEnabled,
 		"model_blocklist_count":   len(update.ModelBlocklist),
+		"rate_limits":             userRateLimitAudit(raw, &update),
 	})
 	common.ApiSuccess(c, nil)
 }
@@ -1140,6 +1229,9 @@ func UpdateUser(c *gin.Context) {
 		CheckinMinQuota:       originUser.CheckinMinQuota,
 		CheckinMaxQuota:       originUser.CheckinMaxQuota,
 		QuotaCap:              originUser.QuotaCap,
+		RpmLimit:              originUser.RpmLimit,
+		ConcurrencyLimit:      originUser.ConcurrencyLimit,
+		StreamTpsLimit:        originUser.StreamTpsLimit,
 	}
 	policyUpdate, err := userPolicyFromMutation(updatedUser, rawMutation, &originPolicy)
 	if err != nil {
@@ -1199,6 +1291,7 @@ func UpdateUser(c *gin.Context) {
 		"username":       originUser.Username,
 		"id":             updatedUser.Id,
 		"policy_updated": policyUpdate != nil,
+		"rate_limits":    userRateLimitAudit(rawMutation, policyUpdate),
 	})
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -1539,6 +1632,7 @@ func CreateUser(c *gin.Context) {
 		"username":       cleanUser.Username,
 		"role":           cleanUser.Role,
 		"policy_updated": policyUpdate != nil,
+		"rate_limits":    userRateLimitAudit(rawMutation, policyUpdate),
 	})
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,

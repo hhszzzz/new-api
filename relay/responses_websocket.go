@@ -43,8 +43,9 @@ type responsesWSCreateEvent struct {
 }
 
 type responsesWSCreateRequest struct {
-	Request  dto.OpenAIResponsesRequest
-	Generate json.RawMessage
+	Request   dto.OpenAIResponsesRequest
+	Generate  json.RawMessage
+	rateGuard *service.UserRequestRateGuard
 }
 
 type responsesWSErrorEvent struct {
@@ -64,6 +65,7 @@ type responsesWSCallState struct {
 	// Those calls settle their own billing in runHTTPBridgeCall; outside
 	// observers may only cancel them.
 	cancelHTTP context.CancelFunc
+	rateGuard  *service.UserRequestRateGuard
 }
 
 type responsesWSSession struct {
@@ -266,6 +268,25 @@ func (s *responsesWSSession) handleResponseCreate(create responsesWSCreateReques
 		}
 	}
 
+	policy, err := service.LoadUserRateLimitPolicy(common.GetContextKeyInt(s.c, appconstant.ContextKeyUserId))
+	if err != nil {
+		return types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
+	}
+	rateGuard, apiErr := service.BeginUserRequestRateLimit(s.c, policy, validated.Model, service.UserConcurrencyWaitOptions{
+		Heartbeat: func() error {
+			return s.writeClientControl(websocket.PingMessage, nil)
+		},
+	})
+	if apiErr != nil {
+		return apiErr
+	}
+	create.rateGuard = rateGuard
+	defer func() {
+		if rateGuard != nil && !rateGuard.Claimed() {
+			rateGuard.Release()
+		}
+	}()
+
 	commitRate, apiErr := middleware.CheckModelRequestRateLimit(s.c)
 	if apiErr != nil {
 		return apiErr
@@ -415,7 +436,7 @@ func (s *responsesWSSession) connectAndSendFirst(create responsesWSCreateRequest
 			return types.NewError(fmt.Errorf("channel %d is disabled or deleted", channel.Id), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 		}
 		if err := s.writeTarget(websocket.TextMessage, payload); err != nil {
-			s.finishCall(state, false)
+			s.abortRetryableCall(state)
 			s.closeTarget()
 			apiErr = types.NewError(err, types.ErrorCodeBadResponse)
 			var shouldRetry bool
@@ -441,6 +462,20 @@ func (s *responsesWSSession) connectAndSendFirst(create responsesWSCreateRequest
 	s.lockedChannel = nil
 	s.nativeTransportFailed = true
 	return s.startHTTPBridgeCall(create, eventID, commitRate)
+}
+
+// abortRetryableCall clears one failed upstream attempt without releasing the
+// logical request's user concurrency lease. The same response.create may still
+// retry another channel or fall back to the HTTP bridge.
+func (s *responsesWSSession) abortRetryableCall(state *responsesWSCallState) {
+	if state == nil || !s.clearCurrent(state) {
+		return
+	}
+	state.refund(s.c)
+	if state.commitRate != nil {
+		state.commitRate(false)
+	}
+	state.rateGuard.Unclaim()
 }
 
 func (s *responsesWSSession) processChannelError(channel *appmodel.Channel, apiErr *types.NewAPIError, retryParam *service.RetryParam, relayInfo *relaycommon.RelayInfo) (*types.NewAPIError, bool) {
@@ -475,6 +510,7 @@ func (s *responsesWSSession) prepareCall(create responsesWSCreateRequest, commit
 		return nil, nil, apiErr
 	}
 	state.commitRate = commitRate
+	state.rateGuard = create.rateGuard
 
 	payload, apiErr := buildResponsesWSCreatePayload(s.c, state.info, create.Request, create.Generate)
 	if apiErr != nil {
@@ -696,12 +732,21 @@ func (s *responsesWSSession) startTargetReader() {
 				_ = s.client.Close()
 				return
 			}
+			state := s.getCurrent()
 			publicMessage, apiErr := s.observeUpstreamMessage(message)
 			if apiErr != nil {
 				s.sendError("", apiErr)
 				s.failCurrent()
 				s.closeTarget()
 				return
+			}
+			if state != nil && state.rateGuard != nil {
+				if err := state.rateGuard.Pace(s.c.Request.Context(), publicMessage); err != nil {
+					logger.LogError(s.c, "responses websocket pacing failed: "+err.Error())
+					s.failCurrent()
+					s.closeTarget()
+					return
+				}
 			}
 			if err := s.writeClient(messageType, publicMessage); err != nil {
 				logger.LogError(s.c, "responses websocket client write failed: "+err.Error())
@@ -810,6 +855,7 @@ func (s *responsesWSSession) finishCall(state *responsesWSCallState, success boo
 	if !s.clearCurrent(state) {
 		return
 	}
+	defer state.rateGuard.Release()
 	if !success {
 		state.refund(s.c)
 		if state.commitRate != nil {
@@ -861,6 +907,9 @@ func (s *responsesWSSession) tryReserveCurrent(state *responsesWSCallState) bool
 		return false
 	}
 	s.current = state
+	if state != nil && state.rateGuard != nil {
+		state.rateGuard.Claim()
+	}
 	return true
 }
 

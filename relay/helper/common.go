@@ -4,17 +4,44 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
 
 const responsesLastSequenceNumberKey = "responses_last_sequence_number"
+
+const streamWriteMutexKey = "stream_write_mutex"
+
+func EnsureStreamWriteMutex(c *gin.Context) {
+	if c == nil {
+		return
+	}
+	if _, exists := c.Get(streamWriteMutexKey); !exists {
+		c.Set(streamWriteMutexKey, &sync.Mutex{})
+	}
+}
+
+func withStreamWriteLock(c *gin.Context, write func() error) error {
+	EnsureStreamWriteMutex(c)
+	value, _ := c.Get(streamWriteMutexKey)
+	mutex, _ := value.(*sync.Mutex)
+	if mutex == nil {
+		ExtendWriteDeadline(c)
+		return write()
+	}
+	mutex.Lock()
+	defer mutex.Unlock()
+	ExtendWriteDeadline(c)
+	return write()
+}
 
 func FlushWriter(c *gin.Context) (err error) {
 	defer func() {
@@ -69,9 +96,14 @@ func ClaudeData(c *gin.Context, resp dto.ClaudeResponse) error {
 	if err != nil {
 		return fmt.Errorf("error marshalling Claude stream response: %w", err)
 	}
-	c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("event: %s\n", resp.Type)})
-	c.Render(-1, common.CustomEvent{Data: "data: " + string(jsonData)})
-	return FlushWriter(c)
+	if err := service.PaceUserStreamPayload(c, jsonData); err != nil {
+		return err
+	}
+	return withStreamWriteLock(c, func() error {
+		c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("event: %s\n", resp.Type)})
+		c.Render(-1, common.CustomEvent{Data: "data: " + string(jsonData)})
+		return FlushWriter(c)
+	})
 }
 
 func ClaudeChunkData(c *gin.Context, resp dto.ClaudeResponse, data string) error {
@@ -79,9 +111,14 @@ func ClaudeChunkData(c *gin.Context, resp dto.ClaudeResponse, data string) error
 		return fmt.Errorf("request context done: %w", c.Request.Context().Err())
 	}
 
-	c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("event: %s\n", resp.Type)})
-	c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("data: %s\n", data)})
-	return FlushWriter(c)
+	if err := service.PaceUserStreamPayload(c, []byte(data)); err != nil {
+		return err
+	}
+	return withStreamWriteLock(c, func() error {
+		c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("event: %s\n", resp.Type)})
+		c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("data: %s\n", data)})
+		return FlushWriter(c)
+	})
 }
 
 func ResponseChunkData(c *gin.Context, resp dto.ResponsesStreamResponse, data string) error {
@@ -102,9 +139,14 @@ func ResponseChunkData(c *gin.Context, resp dto.ResponsesStreamResponse, data st
 		c.Set(responsesLastSequenceNumberKey, *sequenceNumber)
 	}
 
-	c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("event: %s\n", resp.Type)})
-	c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("data: %s", data)})
-	return FlushWriter(c)
+	if err := service.PaceUserStreamPayload(c, []byte(data)); err != nil {
+		return err
+	}
+	return withStreamWriteLock(c, func() error {
+		c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("event: %s\n", resp.Type)})
+		c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("data: %s", data)})
+		return FlushWriter(c)
+	})
 }
 
 func ResponsesErrorData(c *gin.Context, openAIError types.OpenAIError) error {
@@ -145,8 +187,13 @@ func StringData(c *gin.Context, str string) error {
 		return fmt.Errorf("request context done: %w", c.Request.Context().Err())
 	}
 
-	c.Render(-1, common.CustomEvent{Data: "data: " + str})
-	return FlushWriter(c)
+	if err := service.PaceUserStreamPayload(c, []byte(str)); err != nil {
+		return err
+	}
+	return withStreamWriteLock(c, func() error {
+		c.Render(-1, common.CustomEvent{Data: "data: " + str})
+		return FlushWriter(c)
+	})
 }
 
 func PingData(c *gin.Context) error {
@@ -158,10 +205,12 @@ func PingData(c *gin.Context) error {
 		return fmt.Errorf("request context done: %w", c.Request.Context().Err())
 	}
 
-	if _, err := c.Writer.Write([]byte(": PING\n\n")); err != nil {
-		return fmt.Errorf("write ping data failed: %w", err)
-	}
-	return FlushWriter(c)
+	return withStreamWriteLock(c, func() error {
+		if _, err := c.Writer.Write([]byte(": PING\n\n")); err != nil {
+			return fmt.Errorf("write ping data failed: %w", err)
+		}
+		return FlushWriter(c)
+	})
 }
 
 func ObjectData(c *gin.Context, object interface{}) error {

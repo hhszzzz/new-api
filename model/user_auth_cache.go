@@ -85,6 +85,18 @@ func writeUserCache(user *UserBase, includeQuota bool) error {
 	if err != nil {
 		return err
 	}
+	rpmLimit := ""
+	if user.RpmLimit != nil {
+		rpmLimit = strconv.Itoa(*user.RpmLimit)
+	}
+	concurrencyLimit := ""
+	if user.ConcurrencyLimit != nil {
+		concurrencyLimit = strconv.Itoa(*user.ConcurrencyLimit)
+	}
+	streamTpsLimit := ""
+	if user.StreamTpsLimit != nil {
+		streamTpsLimit = strconv.Itoa(*user.StreamTpsLimit)
+	}
 	const script = `
 local incoming = tonumber(ARGV[1])
 local pending = tonumber(redis.call('GET', KEYS[2]) or '0')
@@ -120,8 +132,9 @@ redis.call('HSET', KEYS[1],
   'Status', ARGV[5], 'Role', ARGV[6], 'Username', ARGV[7],
 	'Setting', ARGV[8], 'AuthVersion', ARGV[1], 'CacheSchema', ARGV[9],
 	'Groups', ARGV[13], 'TopupGroup', ARGV[14],
-	'ModelLimitsEnabled', ARGV[15], 'ModelLimits', ARGV[16],
-	'ModelBlocklistEnabled', ARGV[17], 'ModelBlocklist', ARGV[18], 'PolicyVersion', ARGV[19])
+		'ModelLimitsEnabled', ARGV[15], 'ModelLimits', ARGV[16],
+		'ModelBlocklistEnabled', ARGV[17], 'ModelBlocklist', ARGV[18], 'PolicyVersion', ARGV[19],
+		'RpmLimit', ARGV[20], 'ConcurrencyLimit', ARGV[21], 'StreamTpsLimit', ARGV[22])
 if ARGV[10] == '1' and redis.call('HEXISTS', KEYS[1], 'Quota') == 0 then
   redis.call('HSET', KEYS[1], 'Quota', ARGV[11])
 end
@@ -136,6 +149,7 @@ return 1`
 		user.Username, user.Setting, user.CacheSchema, includeQuotaArg, user.Quota, ttl,
 		string(groupsJSON), user.TopupGroup, user.ModelLimitsEnabled, string(modelLimitsJSON),
 		user.ModelBlocklistEnabled, string(modelBlocklistJSON), user.PolicyVersion,
+		rpmLimit, concurrencyLimit, streamTpsLimit,
 	).Int()
 	if err != nil {
 		return err

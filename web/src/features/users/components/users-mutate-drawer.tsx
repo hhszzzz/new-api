@@ -158,32 +158,12 @@ export function UsersMutateDrawer({
     void Promise.all([getUser(currentRowId), getUserPolicy(currentRowId)])
       .then(([userResult, policyResult]) => {
         if (!active || !userResult.success || !userResult.data) return
-        const defaults = transformUserToFormDefaults(userResult.data)
-        if (policyResult.success && policyResult.data) {
-          defaults.groups = policyResult.data.groups
-          defaults.primary_group =
-            policyResult.data.primary_group ||
-            policyResult.data.groups[0] ||
-            defaults.primary_group
-          defaults.group = defaults.primary_group
-          defaults.model_limits_enabled = policyResult.data.model_limits_enabled
-          defaults.model_limits = policyResult.data.model_limits
-          defaults.model_blocklist_enabled =
-            policyResult.data.model_blocklist_enabled ?? false
-          defaults.model_blocklist = policyResult.data.model_blocklist ?? []
-          defaults.checkin_mode = 'global'
-          if (policyResult.data.checkin_enabled === true) {
-            defaults.checkin_mode = 'allow'
-          } else if (policyResult.data.checkin_enabled === false) {
-            defaults.checkin_mode = 'deny'
-          }
-          defaults.checkin_min_quota =
-            policyResult.data.checkin_min_quota ?? undefined
-          defaults.checkin_max_quota =
-            policyResult.data.checkin_max_quota ?? undefined
-          defaults.quota_cap = policyResult.data.quota_cap ?? undefined
-        }
-        form.reset(defaults)
+        form.reset(
+          transformUserToFormDefaults(
+            userResult.data,
+            policyResult.success ? policyResult.data : undefined
+          )
+        )
       })
       .catch(() => {
         if (active) toast.error(t('Failed to load'))
@@ -289,9 +269,17 @@ export function UsersMutateDrawer({
 
   const refreshUserData = async () => {
     if (!currentRow) return
-    const result = await getUser(currentRow.id)
-    if (result.success && result.data) {
-      form.reset(transformUserToFormDefaults(result.data))
+    const [userResult, policyResult] = await Promise.all([
+      getUser(currentRow.id),
+      getUserPolicy(currentRow.id),
+    ])
+    if (userResult.success && userResult.data) {
+      form.reset(
+        transformUserToFormDefaults(
+          userResult.data,
+          policyResult.success ? policyResult.data : undefined
+        )
+      )
     }
     triggerRefresh()
   }
@@ -575,6 +563,106 @@ export function UsersMutateDrawer({
                     />
                   </>
                 )}
+              </SideDrawerSection>
+
+              <SideDrawerSection>
+                <h3 className='text-sm font-medium'>{t('Request Limits')}</h3>
+                <p className='text-muted-foreground text-xs'>
+                  {t(
+                    'These administrator-only limits apply to standard text generation requests.'
+                  )}
+                </p>
+                <div className='grid grid-cols-1 gap-3 sm:grid-cols-3'>
+                  <FormField
+                    control={form.control}
+                    name='rpm_limit'
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t('Requests per minute')}</FormLabel>
+                        <FormControl>
+                          <Input
+                            type='number'
+                            min={1}
+                            max={2_147_483_647}
+                            value={field.value ?? ''}
+                            onChange={(event) =>
+                              field.onChange(
+                                event.target.value === ''
+                                  ? undefined
+                                  : Number(event.target.value)
+                              )
+                            }
+                            placeholder={t('Follow group/global limit')}
+                          />
+                        </FormControl>
+                        <FormDescription>
+                          {t('Leave empty to follow group/global limits')}
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name='concurrency_limit'
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t('Concurrent requests')}</FormLabel>
+                        <FormControl>
+                          <Input
+                            type='number'
+                            min={1}
+                            max={2_147_483_647}
+                            value={field.value ?? ''}
+                            onChange={(event) =>
+                              field.onChange(
+                                event.target.value === ''
+                                  ? undefined
+                                  : Number(event.target.value)
+                              )
+                            }
+                            placeholder={t('No limit')}
+                          />
+                        </FormControl>
+                        <FormDescription>
+                          {t('Leave empty for no concurrency limit')}
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name='stream_tps_limit'
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>
+                          {t('Streaming tokens per second')}
+                        </FormLabel>
+                        <FormControl>
+                          <Input
+                            type='number'
+                            min={1}
+                            max={2_147_483_647}
+                            value={field.value ?? ''}
+                            onChange={(event) =>
+                              field.onChange(
+                                event.target.value === ''
+                                  ? undefined
+                                  : Number(event.target.value)
+                              )
+                            }
+                            placeholder={t('No limit')}
+                          />
+                        </FormControl>
+                        <FormDescription>
+                          {t('Leave empty for no streaming speed limit')}
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
               </SideDrawerSection>
 
               <SideDrawerSection>

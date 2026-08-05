@@ -5774,7 +5774,20 @@
     "Icon name": "Nom de l’icône",
     "Icon name must be 80 characters or fewer": "Le nom de l’icône ne doit pas dépasser 80 caractères",
     "Use a React Icons name such as LuRadar": "Utilisez un nom React Icons tel que LuRadar",
-    "Use a React Icons name such as LuRadar or FaGithub. Leave empty for the default link icon.": "Utilisez un nom React Icons tel que LuRadar ou FaGithub. Laissez ce champ vide pour utiliser l’icône de lien par défaut."
+    "Use a React Icons name such as LuRadar or FaGithub. Leave empty for the default link icon.": "Utilisez un nom React Icons tel que LuRadar ou FaGithub. Laissez ce champ vide pour utiliser l’icône de lien par défaut.",
+    "These administrator-only limits apply to standard text generation requests.": "Ces limites, visibles uniquement par les administrateurs, s’appliquent aux requêtes standard de génération de texte.",
+    "Follow group/global limit": "Suivre la limite du groupe/globale",
+    "Leave empty to follow group/global limits": "Laisser vide pour suivre les limites du groupe/globales",
+    "Concurrent requests": "Requêtes simultanées",
+    "No limit": "Aucune limite",
+    "Leave empty for no concurrency limit": "Laisser vide pour ne pas limiter les requêtes simultanées",
+    "Streaming tokens per second": "Jetons diffusés par seconde",
+    "Leave empty for no streaming speed limit": "Laisser vide pour ne pas limiter la vitesse de diffusion",
+    "Clear override": "Effacer la dérogation",
+    "Custom limit": "Limite personnalisée",
+    "Limit value": "Valeur de la limite",
+    "Custom request limits must be integers from 1 to 2147483647": "Les limites personnalisées doivent être des entiers compris entre 1 et 2147483647",
+    "Keep unchanged preserves each user value; clear removes the user override.": "Conserver préserve la valeur de chaque utilisateur ; effacer supprime la dérogation utilisateur."
   },
   "Require successful Dify workflow": "Exiger la réussite du workflow Dify",
   "Require a successful Dify workflow status, a non-empty answer, and upstream token usage before billing.": "Ne facturer que si le workflow Dify réussit, que la réponse n’est pas vide et que l’amont fournit une utilisation de jetons."

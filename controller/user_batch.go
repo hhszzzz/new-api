@@ -25,6 +25,7 @@ const (
 	userBatchCheckinDeny       = "deny"
 	userBatchCheckinCustom     = "custom"
 	userBatchQuotaCapUnlimited = "unlimited"
+	userBatchRateLimitClear    = "clear"
 )
 
 type userBatchListOp struct {
@@ -45,12 +46,24 @@ type userBatchQuotaCapOp struct {
 	Value *int   `json:"value"`
 }
 
+type userBatchRateLimitOp struct {
+	Mode  string `json:"mode"` // keep | clear | custom
+	Value *int   `json:"value,omitempty"`
+}
+
+type userBatchRateLimitsOp struct {
+	RpmLimit         *userBatchRateLimitOp `json:"rpm_limit"`
+	ConcurrencyLimit *userBatchRateLimitOp `json:"concurrency_limit"`
+	StreamTpsLimit   *userBatchRateLimitOp `json:"stream_tps_limit"`
+}
+
 type userBatchPolicyRequest struct {
-	UserIds        []int                `json:"user_ids"`
-	ModelLimits    *userBatchListOp     `json:"model_limits"`
-	ModelBlocklist *userBatchListOp     `json:"model_blocklist"`
-	Checkin        *userBatchCheckinOp  `json:"checkin"`
-	QuotaCap       *userBatchQuotaCapOp `json:"quota_cap"`
+	UserIds        []int                  `json:"user_ids"`
+	ModelLimits    *userBatchListOp       `json:"model_limits"`
+	ModelBlocklist *userBatchListOp       `json:"model_blocklist"`
+	Checkin        *userBatchCheckinOp    `json:"checkin"`
+	QuotaCap       *userBatchQuotaCapOp   `json:"quota_cap"`
+	RateLimits     *userBatchRateLimitsOp `json:"rate_limits"`
 }
 
 type userBatchSkip struct {
@@ -70,7 +83,7 @@ func BatchUpdateUserPolicy(c *gin.Context) {
 		common.ApiErrorMsg(c, err.Error())
 		return
 	}
-	if request.ModelLimits == nil && request.ModelBlocklist == nil && request.Checkin == nil && request.QuotaCap == nil {
+	if request.ModelLimits == nil && request.ModelBlocklist == nil && request.Checkin == nil && request.QuotaCap == nil && request.RateLimits == nil {
 		common.ApiErrorMsg(c, "未选择任何批量修改内容")
 		return
 	}
@@ -88,6 +101,15 @@ func BatchUpdateUserPolicy(c *gin.Context) {
 	}
 	if err := validateUserBatchQuotaCapOp(request.QuotaCap); err != nil {
 		common.ApiErrorMsg(c, err.Error())
+		return
+	}
+	rateLimitsChanged, err := validateUserBatchRateLimitsOp(request.RateLimits)
+	if err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
+	}
+	if request.ModelLimits == nil && request.ModelBlocklist == nil && request.Checkin == nil && request.QuotaCap == nil && !rateLimitsChanged {
+		common.ApiErrorMsg(c, "未选择任何批量修改内容")
 		return
 	}
 
@@ -113,13 +135,15 @@ func BatchUpdateUserPolicy(c *gin.Context) {
 	}
 
 	recordManageAudit(c, "user.batch_policy", map[string]interface{}{
-		"targets":        len(ids),
-		"updated":        updated,
-		"skipped":        len(skipped),
-		"model_limits":   request.ModelLimits != nil,
-		"blocklist":      request.ModelBlocklist != nil,
-		"checkin_policy": request.Checkin != nil,
-		"quota_cap":      request.QuotaCap != nil,
+		"targets":         len(ids),
+		"target_user_ids": ids,
+		"updated":         updated,
+		"skipped":         len(skipped),
+		"model_limits":    request.ModelLimits != nil,
+		"blocklist":       request.ModelBlocklist != nil,
+		"checkin_policy":  request.Checkin != nil,
+		"quota_cap":       request.QuotaCap != nil,
+		"rate_limits":     request.RateLimits,
 	})
 	common.ApiSuccess(c, gin.H{"updated": updated, "skipped": skipped})
 }
@@ -299,6 +323,49 @@ func validateUserBatchQuotaCapOp(op *userBatchQuotaCapOp) error {
 	}
 }
 
+func validateUserBatchRateLimitsOp(op *userBatchRateLimitsOp) (bool, error) {
+	if op == nil {
+		return false, nil
+	}
+	changed := false
+	limits := []struct {
+		name  string
+		limit *userBatchRateLimitOp
+	}{
+		{name: "RPM", limit: op.RpmLimit},
+		{name: "并发", limit: op.ConcurrencyLimit},
+		{name: "流式 TPS", limit: op.StreamTpsLimit},
+	}
+	for _, item := range limits {
+		name, limit := item.name, item.limit
+		if limit == nil {
+			continue
+		}
+		switch limit.Mode {
+		case userBatchCheckinKeep:
+			if limit.Value != nil {
+				return false, fmt.Errorf("%s 保持不变时不得提供数值", name)
+			}
+		case userBatchRateLimitClear:
+			if limit.Value != nil {
+				return false, fmt.Errorf("%s 清除覆盖时不得提供数值", name)
+			}
+			changed = true
+		case userBatchCheckinCustom:
+			if limit.Value == nil {
+				return false, fmt.Errorf("%s 自定义限制需要提供数值", name)
+			}
+			if err := validateUserRateLimit(name, limit.Value); err != nil {
+				return false, err
+			}
+			changed = true
+		default:
+			return false, fmt.Errorf("无效的%s限制模式：%s", name, limit.Mode)
+		}
+	}
+	return changed, nil
+}
+
 func buildUserBatchPolicyPartial(user *model.User, request userBatchPolicyRequest) model.UserPolicyPartialUpdate {
 	partial := model.UserPolicyPartialUpdate{}
 	if op := request.ModelLimits; op != nil {
@@ -340,6 +407,20 @@ func buildUserBatchPolicyPartial(user *model.User, request userBatchPolicyReques
 		if op.Mode == userBatchCheckinCustom {
 			partial.QuotaCap = op.Value
 		}
+	}
+	if op := request.RateLimits; op != nil {
+		apply := func(rateLimit *userBatchRateLimitOp, set *bool, value **int) {
+			if rateLimit == nil || rateLimit.Mode == userBatchCheckinKeep {
+				return
+			}
+			*set = true
+			if rateLimit.Mode == userBatchCheckinCustom {
+				*value = rateLimit.Value
+			}
+		}
+		apply(op.RpmLimit, &partial.SetRpmLimit, &partial.RpmLimit)
+		apply(op.ConcurrencyLimit, &partial.SetConcurrencyLimit, &partial.ConcurrencyLimit)
+		apply(op.StreamTpsLimit, &partial.SetStreamTpsLimit, &partial.StreamTpsLimit)
 	}
 	return partial
 }

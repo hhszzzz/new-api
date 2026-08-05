@@ -21,6 +21,7 @@ import { describe, expect, test } from 'vitest'
 import {
   transformFormDataToPayload,
   transformUserToFormDefaults,
+  userFormSchema,
   type UserFormValues,
 } from '../user-form'
 
@@ -106,5 +107,81 @@ describe('user policy form transformations', () => {
     expect(defaults.model_limits).toEqual(['gpt-5.4'])
     expect(defaults.model_blocklist_enabled).toBe(true)
     expect(defaults.model_blocklist).toEqual(['gpt-5.5'])
+  })
+
+  test('hydrates hidden request limits from the admin policy response', () => {
+    const defaults = transformUserToFormDefaults(
+      {
+        id: 7,
+        username: 'limited-user',
+        display_name: 'Limited User',
+        quota: 0,
+        used_quota: 0,
+        request_count: 0,
+        group: 'legacy',
+        status: 1,
+        role: 1,
+      },
+      {
+        groups: ['premium'],
+        primary_group: 'premium',
+        topup_group: '',
+        model_limits_enabled: false,
+        model_limits: [],
+        model_blocklist_enabled: false,
+        model_blocklist: [],
+        rpm_limit: 60,
+        concurrency_limit: 2,
+        stream_tps_limit: 12,
+      }
+    )
+
+    expect(defaults).toMatchObject({
+      group: 'premium',
+      groups: ['premium'],
+      primary_group: 'premium',
+      rpm_limit: 60,
+      concurrency_limit: 2,
+      stream_tps_limit: 12,
+    })
+  })
+
+  test('sends custom request limits and explicit nulls for cleared overrides', () => {
+    const custom = transformFormDataToPayload({
+      ...BASE_FORM,
+      rpm_limit: 60,
+      concurrency_limit: 2,
+      stream_tps_limit: 12,
+    })
+    expect(custom).toMatchObject({
+      rpm_limit: 60,
+      concurrency_limit: 2,
+      stream_tps_limit: 12,
+    })
+
+    const cleared = transformFormDataToPayload(BASE_FORM)
+    expect(cleared).toMatchObject({
+      rpm_limit: null,
+      concurrency_limit: null,
+      stream_tps_limit: null,
+    })
+  })
+
+  test('accepts only positive int32 request limits', () => {
+    expect(
+      userFormSchema.safeParse({ ...BASE_FORM, rpm_limit: 1 }).success
+    ).toBe(true)
+    expect(
+      userFormSchema.safeParse({
+        ...BASE_FORM,
+        stream_tps_limit: 2_147_483_647,
+      }).success
+    ).toBe(true)
+    for (const value of [0, -1, 1.5, 2_147_483_648]) {
+      expect(
+        userFormSchema.safeParse({ ...BASE_FORM, concurrency_limit: value })
+          .success
+      ).toBe(false)
+    }
   })
 })

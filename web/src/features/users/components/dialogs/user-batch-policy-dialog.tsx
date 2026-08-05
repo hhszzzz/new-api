@@ -39,6 +39,8 @@ import { batchUpdateUserPolicy } from '../../api'
 import type {
   UserBatchListMode,
   UserBatchPolicyPayload,
+  UserBatchRateLimitMode,
+  UserBatchRateLimitsOp,
   UserBatchSkip,
 } from '../../types'
 
@@ -59,6 +61,72 @@ const EMPTY_LIST_SECTION: ListSectionState = {
   mode: 'keep',
   models: [],
   enabled: 'keep',
+}
+
+type RateLimitState = {
+  mode: UserBatchRateLimitMode
+  value: string
+}
+
+type RateLimitsState = {
+  rpm_limit: RateLimitState
+  concurrency_limit: RateLimitState
+  stream_tps_limit: RateLimitState
+}
+
+const EMPTY_RATE_LIMITS: RateLimitsState = {
+  rpm_limit: { mode: 'keep', value: '' },
+  concurrency_limit: { mode: 'keep', value: '' },
+  stream_tps_limit: { mode: 'keep', value: '' },
+}
+
+function RateLimitField(props: {
+  id: string
+  label: string
+  state: RateLimitState
+  onChange: (state: RateLimitState) => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <div className='grid grid-cols-2 gap-2'>
+      <div className='space-y-1'>
+        <Label htmlFor={`${props.id}-mode`}>{props.label}</Label>
+        <Select
+          value={props.state.mode}
+          onValueChange={(value) =>
+            props.onChange({
+              ...props.state,
+              mode: value as UserBatchRateLimitMode,
+            })
+          }
+        >
+          <SelectTrigger id={`${props.id}-mode`} className='w-full'>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value='keep'>{t('Keep unchanged')}</SelectItem>
+            <SelectItem value='clear'>{t('Clear override')}</SelectItem>
+            <SelectItem value='custom'>{t('Custom limit')}</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      {props.state.mode === 'custom' && (
+        <div className='space-y-1'>
+          <Label htmlFor={`${props.id}-value`}>{t('Limit value')}</Label>
+          <Input
+            id={`${props.id}-value`}
+            type='number'
+            min={1}
+            max={2_147_483_647}
+            value={props.state.value}
+            onChange={(event) =>
+              props.onChange({ ...props.state, value: event.target.value })
+            }
+          />
+        </div>
+      )}
+    </div>
+  )
 }
 
 function listSectionToPayload(
@@ -163,6 +231,8 @@ export function UserBatchPolicyDialog(props: UserBatchPolicyDialogProps) {
     'keep' | 'unlimited' | 'custom'
   >('keep')
   const [quotaCapValue, setQuotaCapValue] = useState('')
+  const [rateLimits, setRateLimits] =
+    useState<RateLimitsState>(EMPTY_RATE_LIMITS)
   const [submitting, setSubmitting] = useState(false)
   const [skipped, setSkipped] = useState<UserBatchSkip[]>([])
 
@@ -192,6 +262,7 @@ export function UserBatchPolicyDialog(props: UserBatchPolicyDialogProps) {
     setCheckinMax('')
     setQuotaCapMode('keep')
     setQuotaCapValue('')
+    setRateLimits(EMPTY_RATE_LIMITS)
     setSkipped([])
   }
 
@@ -240,11 +311,38 @@ export function UserBatchPolicyDialog(props: UserBatchPolicyDialogProps) {
         payload.quota_cap = { mode: 'unlimited' }
       }
     }
+    const rateLimitPayload: UserBatchRateLimitsOp = {}
+    for (const key of [
+      'rpm_limit',
+      'concurrency_limit',
+      'stream_tps_limit',
+    ] as const) {
+      const limit = rateLimits[key]
+      if (limit.mode === 'keep') continue
+      if (limit.mode === 'clear') {
+        rateLimitPayload[key] = { mode: 'clear' }
+        continue
+      }
+      const value = Number(limit.value)
+      if (
+        limit.value === '' ||
+        !Number.isInteger(value) ||
+        value < 1 ||
+        value > 2_147_483_647
+      ) {
+        return t('Custom request limits must be integers from 1 to 2147483647')
+      }
+      rateLimitPayload[key] = { mode: 'custom', value }
+    }
+    if (Object.keys(rateLimitPayload).length > 0) {
+      payload.rate_limits = rateLimitPayload
+    }
     if (
       !payload.model_limits &&
       !payload.model_blocklist &&
       !payload.checkin &&
-      !payload.quota_cap
+      !payload.quota_cap &&
+      !payload.rate_limits
     ) {
       return t('No changes selected')
     }
@@ -438,6 +536,47 @@ export function UserBatchPolicyDialog(props: UserBatchPolicyDialogProps) {
               'Gift credits (check-in, redemption codes, invite transfers) cannot push the balance above this cap. Paid top-ups are unaffected.'
             )}
           </p>
+        </div>
+
+        <div className='space-y-3 rounded-md border p-3'>
+          <div>
+            <div className='text-sm font-medium'>{t('Request Limits')}</div>
+            <p className='text-muted-foreground text-xs'>
+              {t(
+                'Keep unchanged preserves each user value; clear removes the user override.'
+              )}
+            </p>
+          </div>
+          <RateLimitField
+            id='batch-rpm-limit'
+            label={t('Requests per minute')}
+            state={rateLimits.rpm_limit}
+            onChange={(state) =>
+              setRateLimits((current) => ({ ...current, rpm_limit: state }))
+            }
+          />
+          <RateLimitField
+            id='batch-concurrency-limit'
+            label={t('Concurrent requests')}
+            state={rateLimits.concurrency_limit}
+            onChange={(state) =>
+              setRateLimits((current) => ({
+                ...current,
+                concurrency_limit: state,
+              }))
+            }
+          />
+          <RateLimitField
+            id='batch-stream-tps-limit'
+            label={t('Streaming tokens per second')}
+            state={rateLimits.stream_tps_limit}
+            onChange={(state) =>
+              setRateLimits((current) => ({
+                ...current,
+                stream_tps_limit: state,
+              }))
+            }
+          />
         </div>
 
         {skipped.length > 0 && (

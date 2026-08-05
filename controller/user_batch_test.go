@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -43,6 +44,61 @@ func TestApplyUserBatchListMode(t *testing.T) {
 	}
 	// The source list must never be mutated by any mode.
 	assert.Equal(t, []string{"gpt-5.4", "claude-4.5"}, current)
+}
+
+func TestValidateAndBuildUserBatchRateLimits(t *testing.T) {
+	tests := []struct {
+		name        string
+		op          *userBatchRateLimitsOp
+		wantChanged bool
+		wantErr     string
+	}{
+		{name: "nil", op: nil},
+		{name: "keep only", op: &userBatchRateLimitsOp{RpmLimit: &userBatchRateLimitOp{Mode: userBatchCheckinKeep}}},
+		{name: "clear", op: &userBatchRateLimitsOp{ConcurrencyLimit: &userBatchRateLimitOp{Mode: userBatchRateLimitClear}}, wantChanged: true},
+		{name: "custom", op: &userBatchRateLimitsOp{StreamTpsLimit: &userBatchRateLimitOp{Mode: userBatchCheckinCustom, Value: common.GetPointer(12)}}, wantChanged: true},
+		{name: "custom missing value", op: &userBatchRateLimitsOp{RpmLimit: &userBatchRateLimitOp{Mode: userBatchCheckinCustom}}, wantErr: "RPM 自定义限制需要提供数值"},
+		{name: "custom zero", op: &userBatchRateLimitsOp{RpmLimit: &userBatchRateLimitOp{Mode: userBatchCheckinCustom, Value: common.GetPointer(0)}}, wantErr: "RPM 限制必须在 1 到 2147483647 之间"},
+		{name: "keep with value", op: &userBatchRateLimitsOp{RpmLimit: &userBatchRateLimitOp{Mode: userBatchCheckinKeep, Value: common.GetPointer(1)}}, wantErr: "RPM 保持不变时不得提供数值"},
+		{name: "clear with value", op: &userBatchRateLimitsOp{RpmLimit: &userBatchRateLimitOp{Mode: userBatchRateLimitClear, Value: common.GetPointer(1)}}, wantErr: "RPM 清除覆盖时不得提供数值"},
+		{name: "unknown", op: &userBatchRateLimitsOp{RpmLimit: &userBatchRateLimitOp{Mode: "inherit"}}, wantErr: "无效的RPM限制模式：inherit"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			changed, err := validateUserBatchRateLimitsOp(test.op)
+			assert.Equal(t, test.wantChanged, changed)
+			if test.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.EqualError(t, err, test.wantErr)
+		})
+	}
+
+	partial := buildUserBatchPolicyPartial(nil, userBatchPolicyRequest{RateLimits: &userBatchRateLimitsOp{
+		RpmLimit:         &userBatchRateLimitOp{Mode: userBatchCheckinCustom, Value: common.GetPointer(60)},
+		ConcurrencyLimit: &userBatchRateLimitOp{Mode: userBatchRateLimitClear},
+		StreamTpsLimit:   &userBatchRateLimitOp{Mode: userBatchCheckinKeep},
+	}})
+	assert.True(t, partial.SetRpmLimit)
+	require.NotNil(t, partial.RpmLimit)
+	assert.Equal(t, 60, *partial.RpmLimit)
+	assert.True(t, partial.SetConcurrencyLimit)
+	assert.Nil(t, partial.ConcurrencyLimit)
+	assert.False(t, partial.SetStreamTpsLimit)
+}
+
+func TestNormalizeUserBatchIdsAllowsAtMostOneThousandUniqueUsers(t *testing.T) {
+	ids := make([]int, 1000)
+	for index := range ids {
+		ids[index] = index + 1
+	}
+	normalized, err := normalizeUserBatchIds(append(append([]int(nil), ids...), ids[0]))
+	require.NoError(t, err)
+	assert.True(t, slices.Equal(ids, normalized))
+
+	_, err = normalizeUserBatchIds(append(ids, 1001))
+	require.EqualError(t, err, "单次批量操作最多支持 1000 个用户")
 }
 
 func TestValidateUserBatchCheckinOp(t *testing.T) {

@@ -179,8 +179,7 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		if marshalErr != nil {
 			return types.NewError(marshalErr, types.ErrorCodeBadResponseBody)
 		}
-		c.Render(-1, common.CustomEvent{Data: "data: " + string(geminiData)})
-		if flushErr := helper.FlushWriter(c); flushErr != nil {
+		if flushErr := helper.StringData(c, string(geminiData)); flushErr != nil {
 			return types.NewError(flushErr, types.ErrorCodeBadResponse)
 		}
 	} else if info.RelayFormat == types.RelayFormatOpenAIResponses {

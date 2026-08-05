@@ -276,6 +276,10 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 						return
 					}
 				}
+				if err := service.PaceUserStreamPayload(c, clientMessage); err != nil {
+					errChan <- fmt.Errorf("error pacing realtime response: %v", err)
+					return
+				}
 				err = helper.WssString(c, clientConn, string(clientMessage))
 				if err != nil {
 					errChan <- fmt.Errorf("error writing to client: %v", err)

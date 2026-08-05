@@ -157,6 +157,37 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		relay.ConfigureGeminiBillingModel(relayInfo)
 	}
 
+	if shouldApplyUserRateLimits(c, relayInfo) {
+		policy := service.UserRateLimitPolicyFromContext(c)
+		waitOptions := service.UserConcurrencyWaitOptions{}
+		if policy.ConcurrencyLimit > 0 && relayInfo.IsStream {
+			helper.EnsureStreamWriteMutex(c)
+			if relayFormat == types.RelayFormatOpenAIRealtime {
+				waitOptions.Heartbeat = func() error {
+					if ws == nil {
+						return errors.New("websocket connection is nil")
+					}
+					return ws.WriteControl(websocket.PingMessage, nil, time.Now().Add(time.Second))
+				}
+			} else {
+				waitOptions.Heartbeat = func() error {
+					helper.SetEventStreamHeaders(c)
+					return helper.PingData(c)
+				}
+			}
+		}
+		guard, apiErr := service.BeginUserRequestRateLimit(c, policy, relayInfo.OriginModelName, waitOptions)
+		if apiErr != nil {
+			newAPIError = apiErr
+			return
+		}
+		defer guard.Release()
+		if relayInfo.IsStream && guard.Pacer != nil {
+			service.InstallUserStreamPacer(c, guard.Pacer)
+			defer service.InstallUserStreamPacer(c, nil)
+		}
+	}
+
 	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
 	needCountToken := constant.CountToken
 	// Sensitive filtering has its own user-text extractor, so only exact token
@@ -295,6 +326,25 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		gopool.Go(func() {
 			perfmetrics.RecordRelaySample(relayInfo, false, 0)
 		})
+	}
+}
+
+func shouldApplyUserRateLimits(c *gin.Context, relayInfo *relaycommon.RelayInfo) bool {
+	if c == nil || relayInfo == nil || relayInfo.IsPlayground || relayInfo.IsChannelTest {
+		return false
+	}
+	switch relayInfo.RelayMode {
+	case relayconstant.RelayModeChatCompletions,
+		relayconstant.RelayModeCompletions,
+		relayconstant.RelayModeResponses,
+		relayconstant.RelayModeResponsesCompact,
+		relayconstant.RelayModeRealtime:
+		return true
+	case relayconstant.RelayModeGemini:
+		path := strings.ToLower(c.Request.URL.Path)
+		return strings.HasSuffix(path, ":generatecontent") || strings.HasSuffix(path, ":streamgeneratecontent")
+	default:
+		return relayInfo.RelayFormat == types.RelayFormatClaude && strings.HasSuffix(c.Request.URL.Path, "/messages")
 	}
 }
 

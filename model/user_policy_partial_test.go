@@ -127,3 +127,44 @@ func TestUpdateUserPolicyPartialEmptyIsNoOp(t *testing.T) {
 	require.NoError(t, DB.First(&after, 3).Error)
 	assert.Equal(t, before.PolicyVersion, after.PolicyVersion)
 }
+
+func TestUserRateLimitColumnsAreNullableAndPartialUpdatesPreserveUntouchedValues(t *testing.T) {
+	setupUserPolicyPartialTestDB(t)
+	for _, column := range []string{"rpm_limit", "concurrency_limit", "stream_tps_limit"} {
+		assert.True(t, DB.Migrator().HasColumn(&User{}, column))
+	}
+
+	user := User{
+		Id:               4,
+		Username:         "rate-limit-policy",
+		Group:            "default",
+		AffCode:          "pp4",
+		RpmLimit:         common.GetPointer(60),
+		ConcurrencyLimit: common.GetPointer(2),
+		StreamTpsLimit:   common.GetPointer(12),
+	}
+	require.NoError(t, DB.Create(&user).Error)
+	beforeVersion := user.PolicyVersion
+
+	require.NoError(t, UpdateUserPolicyPartial(user.Id, UserPolicyPartialUpdate{
+		SetRpmLimit:         true,
+		RpmLimit:            common.GetPointer(90),
+		SetConcurrencyLimit: true,
+		ConcurrencyLimit:    nil,
+	}))
+
+	var updated User
+	require.NoError(t, DB.First(&updated, user.Id).Error)
+	require.NotNil(t, updated.RpmLimit)
+	assert.Equal(t, 90, *updated.RpmLimit)
+	assert.Nil(t, updated.ConcurrencyLimit)
+	require.NotNil(t, updated.StreamTpsLimit)
+	assert.Equal(t, 12, *updated.StreamTpsLimit)
+	assert.Greater(t, updated.PolicyVersion, beforeVersion)
+
+	encoded, err := common.Marshal(updated)
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), "rpm_limit")
+	assert.NotContains(t, string(encoded), "concurrency_limit")
+	assert.NotContains(t, string(encoded), "stream_tps_limit")
+}

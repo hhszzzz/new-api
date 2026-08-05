@@ -12,7 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const userCacheSchemaVersion = 4
+const userCacheSchemaVersion = 5
 
 type UserBase struct {
 	Id                    int      `json:"id"`
@@ -23,6 +23,9 @@ type UserBase struct {
 	ModelLimits           []string `json:"model_limits"`
 	ModelBlocklistEnabled bool     `json:"model_blocklist_enabled"`
 	ModelBlocklist        []string `json:"model_blocklist"`
+	RpmLimit              *int     `json:"-"`
+	ConcurrencyLimit      *int     `json:"-"`
+	StreamTpsLimit        *int     `json:"-"`
 	PolicyVersion         int64    `json:"-"`
 	Email                 string   `json:"email"`
 	Quota                 int      `json:"quota"`
@@ -58,6 +61,15 @@ func (user *UserBase) WriteContext(c *gin.Context) {
 		}
 	}
 	common.SetContextKey(c, constant.ContextKeyUserModelBlocklist, modelBlocklist)
+	if user.RpmLimit != nil {
+		common.SetContextKey(c, constant.ContextKeyUserRpmLimit, *user.RpmLimit)
+	}
+	if user.ConcurrencyLimit != nil {
+		common.SetContextKey(c, constant.ContextKeyUserConcurrencyLimit, *user.ConcurrencyLimit)
+	}
+	if user.StreamTpsLimit != nil {
+		common.SetContextKey(c, constant.ContextKeyUserStreamTpsLimit, *user.StreamTpsLimit)
+	}
 	common.SetContextKey(c, constant.ContextKeyUserQuota, user.Quota)
 	common.SetContextKey(c, constant.ContextKeyUserStatus, user.Status)
 	common.SetContextKey(c, constant.ContextKeyUserEmail, user.Email)

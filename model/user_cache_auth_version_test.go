@@ -107,6 +107,44 @@ func TestUserCacheRoundTripsModelBlocklist(t *testing.T) {
 	assert.Equal(t, []string{"gpt-5.5"}, cached.ModelBlocklist)
 }
 
+func TestUserCacheSchemaFiveRoundTripsNullableRateLimits(t *testing.T) {
+	useUserCacheMiniRedis(t)
+	const userID = 4204
+
+	require.Equal(t, 5, userCacheSchemaVersion)
+	require.NoError(t, writeUserCache(&UserBase{
+		Id:               userID,
+		Group:            "default",
+		Groups:           []string{"default"},
+		Username:         "rate-limit-cache",
+		AuthVersion:      1,
+		PolicyVersion:    3,
+		RpmLimit:         common.GetPointer(60),
+		ConcurrencyLimit: common.GetPointer(2),
+		StreamTpsLimit:   common.GetPointer(12),
+	}, true))
+
+	cached, err := cacheGetUserBase(userID)
+	require.NoError(t, err)
+	assert.Equal(t, userCacheSchemaVersion, cached.CacheSchema)
+	require.NotNil(t, cached.RpmLimit)
+	assert.Equal(t, 60, *cached.RpmLimit)
+	require.NotNil(t, cached.ConcurrencyLimit)
+	assert.Equal(t, 2, *cached.ConcurrencyLimit)
+	require.NotNil(t, cached.StreamTpsLimit)
+	assert.Equal(t, 12, *cached.StreamTpsLimit)
+
+	require.NoError(t, writeUserCache(&UserBase{
+		Id: userID + 1, Group: "default", Groups: []string{"default"}, Username: "unlimited-cache",
+		AuthVersion: 1, PolicyVersion: 1,
+	}, true))
+	unlimited, err := cacheGetUserBase(userID + 1)
+	require.NoError(t, err)
+	assert.Nil(t, unlimited.RpmLimit)
+	assert.Nil(t, unlimited.ConcurrencyLimit)
+	assert.Nil(t, unlimited.StreamTpsLimit)
+}
+
 func TestUserAuthFieldUpdateRejectsVersionMismatch(t *testing.T) {
 	useUserCacheMiniRedis(t)
 	const userID = 4202

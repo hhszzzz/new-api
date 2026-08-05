@@ -5774,7 +5774,20 @@
     "Icon name": "圖示名稱",
     "Icon name must be 80 characters or fewer": "圖示名稱不得超過 80 個字元",
     "Use a React Icons name such as LuRadar": "請輸入類似 LuRadar 的 React Icons 圖示名稱",
-    "Use a React Icons name such as LuRadar or FaGithub. Leave empty for the default link icon.": "輸入類似 LuRadar 或 FaGithub 的 React Icons 圖示名稱；留空則使用預設連結圖示。"
+    "Use a React Icons name such as LuRadar or FaGithub. Leave empty for the default link icon.": "輸入類似 LuRadar 或 FaGithub 的 React Icons 圖示名稱；留空則使用預設連結圖示。",
+    "These administrator-only limits apply to standard text generation requests.": "這些僅管理員可見的限制適用於標準文字生成請求。",
+    "Follow group/global limit": "沿用群組/全域限制",
+    "Leave empty to follow group/global limits": "留空時沿用群組/全域限制",
+    "Concurrent requests": "並行請求數",
+    "No limit": "不限制",
+    "Leave empty for no concurrency limit": "留空時不限制並行數",
+    "Streaming tokens per second": "串流每秒 Token 數",
+    "Leave empty for no streaming speed limit": "留空時不限制串流速度",
+    "Clear override": "清除覆寫",
+    "Custom limit": "自訂限制",
+    "Limit value": "限制值",
+    "Custom request limits must be integers from 1 to 2147483647": "自訂請求限制必須是 1 到 2147483647 之間的整數",
+    "Keep unchanged preserves each user value; clear removes the user override.": "保持不變會保留每位使用者的目前值；清除會移除使用者覆寫。"
   },
   "Require successful Dify workflow": "要求 Dify 工作流程成功",
   "Require a successful Dify workflow status, a non-empty answer, and upstream token usage before billing.": "僅在 Dify 工作流程狀態成功、回答非空且上游回傳權杖用量時才計費。"

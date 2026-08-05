@@ -5774,7 +5774,20 @@
     "Icon name": "Tên biểu tượng",
     "Icon name must be 80 characters or fewer": "Tên biểu tượng không được vượt quá 80 ký tự",
     "Use a React Icons name such as LuRadar": "Nhập tên React Icons như LuRadar",
-    "Use a React Icons name such as LuRadar or FaGithub. Leave empty for the default link icon.": "Nhập tên React Icons như LuRadar hoặc FaGithub. Để trống để dùng biểu tượng liên kết mặc định."
+    "Use a React Icons name such as LuRadar or FaGithub. Leave empty for the default link icon.": "Nhập tên React Icons như LuRadar hoặc FaGithub. Để trống để dùng biểu tượng liên kết mặc định.",
+    "These administrator-only limits apply to standard text generation requests.": "Các giới hạn chỉ dành cho quản trị viên này áp dụng cho yêu cầu tạo văn bản tiêu chuẩn.",
+    "Follow group/global limit": "Dùng giới hạn nhóm/toàn cục",
+    "Leave empty to follow group/global limits": "Để trống để dùng giới hạn nhóm/toàn cục",
+    "Concurrent requests": "Yêu cầu đồng thời",
+    "No limit": "Không giới hạn",
+    "Leave empty for no concurrency limit": "Để trống để không giới hạn số yêu cầu đồng thời",
+    "Streaming tokens per second": "Token truyền phát mỗi giây",
+    "Leave empty for no streaming speed limit": "Để trống để không giới hạn tốc độ truyền phát",
+    "Clear override": "Xóa ghi đè",
+    "Custom limit": "Giới hạn tùy chỉnh",
+    "Limit value": "Giá trị giới hạn",
+    "Custom request limits must be integers from 1 to 2147483647": "Giới hạn yêu cầu tùy chỉnh phải là số nguyên từ 1 đến 2147483647",
+    "Keep unchanged preserves each user value; clear removes the user override.": "Giữ nguyên sẽ bảo toàn giá trị của từng người dùng; xóa sẽ loại bỏ phần ghi đè của người dùng."
   },
   "Require successful Dify workflow": "Yêu cầu quy trình Dify thành công",
   "Require a successful Dify workflow status, a non-empty answer, and upstream token usage before billing.": "Chỉ tính phí khi quy trình Dify thành công, câu trả lời không trống và phía thượng nguồn trả về mức sử dụng token."

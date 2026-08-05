@@ -5774,7 +5774,20 @@
     "Icon name": "Icon name",
     "Icon name must be 80 characters or fewer": "Icon name must be 80 characters or fewer",
     "Use a React Icons name such as LuRadar": "Use a React Icons name such as LuRadar",
-    "Use a React Icons name such as LuRadar or FaGithub. Leave empty for the default link icon.": "Use a React Icons name such as LuRadar or FaGithub. Leave empty for the default link icon."
+    "Use a React Icons name such as LuRadar or FaGithub. Leave empty for the default link icon.": "Use a React Icons name such as LuRadar or FaGithub. Leave empty for the default link icon.",
+    "These administrator-only limits apply to standard text generation requests.": "These administrator-only limits apply to standard text generation requests.",
+    "Follow group/global limit": "Follow group/global limit",
+    "Leave empty to follow group/global limits": "Leave empty to follow group/global limits",
+    "Concurrent requests": "Concurrent requests",
+    "No limit": "No limit",
+    "Leave empty for no concurrency limit": "Leave empty for no concurrency limit",
+    "Streaming tokens per second": "Streaming tokens per second",
+    "Leave empty for no streaming speed limit": "Leave empty for no streaming speed limit",
+    "Clear override": "Clear override",
+    "Custom limit": "Custom limit",
+    "Limit value": "Limit value",
+    "Custom request limits must be integers from 1 to 2147483647": "Custom request limits must be integers from 1 to 2147483647",
+    "Keep unchanged preserves each user value; clear removes the user override.": "Keep unchanged preserves each user value; clear removes the user override."
   },
   "Require successful Dify workflow": "Require successful Dify workflow",
   "Require a successful Dify workflow status, a non-empty answer, and upstream token usage before billing.": "Require a successful Dify workflow status, a non-empty answer, and upstream token usage before billing."

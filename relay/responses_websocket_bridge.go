@@ -54,6 +54,7 @@ func (s *responsesWSSession) startHTTPBridgeCall(create responsesWSCreateRequest
 		usage:      &dto.Usage{},
 		commitRate: commitRate,
 		cancelHTTP: cancel,
+		rateGuard:  create.rateGuard,
 	}
 	if !s.tryReserveCurrent(state) {
 		cancel()
@@ -76,6 +77,11 @@ func (s *responsesWSSession) runHTTPBridgeCall(state *responsesWSCallState, crea
 	bridgedRequest.Method = http.MethodPost
 	c.Request = bridgedRequest
 	forwarder := newResponsesWSSSEForwarder(func(payload []byte) error {
+		if state.rateGuard != nil {
+			if err := state.rateGuard.Pace(callCtx, payload); err != nil {
+				return err
+			}
+		}
 		return s.writeClient(websocket.TextMessage, payload)
 	}, state.cancelHTTP)
 	c.Writer = forwarder
@@ -105,7 +111,9 @@ func (s *responsesWSSession) runHTTPBridgeCall(state *responsesWSCallState, crea
 		if state.commitRate != nil {
 			state.commitRate(finalErr == nil)
 		}
-		s.clearCurrent(state)
+		if s.clearCurrent(state) {
+			state.rateGuard.Release()
+		}
 		if finalErr == nil && !clientGone {
 			forwarder.flushHeldEvents()
 		}

@@ -27,7 +27,7 @@ import { quotaUnitsToDollars } from '@/lib/format'
 import { ROLE } from '@/lib/roles'
 
 import { DEFAULT_GROUP } from '../constants'
-import type { User, UserFormData } from '../types'
+import type { User, UserFormData, UserPolicy } from '../types'
 
 // ============================================================================
 // Form Schema
@@ -50,6 +50,9 @@ export const userFormSchema = z.object({
   checkin_min_quota: z.number().int().min(0).optional(),
   checkin_max_quota: z.number().int().min(0).optional(),
   quota_cap: z.number().int().min(0).optional(),
+  rpm_limit: z.number().int().min(1).max(2_147_483_647).optional(),
+  concurrency_limit: z.number().int().min(1).max(2_147_483_647).optional(),
+  stream_tps_limit: z.number().int().min(1).max(2_147_483_647).optional(),
   remark: z.string().optional(),
   admin_permissions: z
     .record(z.string(), z.record(z.string(), z.boolean()))
@@ -79,6 +82,9 @@ export const USER_FORM_DEFAULT_VALUES: UserFormValues = {
   checkin_min_quota: undefined,
   checkin_max_quota: undefined,
   quota_cap: undefined,
+  rpm_limit: undefined,
+  concurrency_limit: undefined,
+  stream_tps_limit: undefined,
   remark: '',
   // Filled against the backend catalog at render time; see UsersMutateDrawer.
   admin_permissions: {},
@@ -132,6 +138,9 @@ export function transformFormDataToPayload(
   payload.checkin_min_quota = data.checkin_min_quota ?? null
   payload.checkin_max_quota = data.checkin_max_quota ?? null
   payload.quota_cap = data.quota_cap ?? null
+  payload.rpm_limit = data.rpm_limit ?? null
+  payload.concurrency_limit = data.concurrency_limit ?? null
+  payload.stream_tps_limit = data.stream_tps_limit ?? null
 
   // Profile and policy fields are accepted by both create and update APIs so
   // the backend can persist them atomically.
@@ -149,18 +158,25 @@ export function transformFormDataToPayload(
 }
 
 /**
- * Transform user data to form defaults. The admin permission matrix is passed
- * through as-is (the backend already returns a full matrix); it is filled against
- * the catalog at render time in UsersMutateDrawer.
+ * Transform user data and its admin-only policy to form defaults. The admin
+ * permission matrix is passed through as-is (the backend already returns a full
+ * matrix); it is filled against the catalog at render time in UsersMutateDrawer.
  */
-export function transformUserToFormDefaults(user: User): UserFormValues {
-  const groups = user.groups?.length
+export function transformUserToFormDefaults(
+  user: User,
+  policy?: UserPolicy
+): UserFormValues {
+  const userGroups = user.groups?.length
     ? user.groups
     : [user.group || DEFAULT_GROUP]
+  const groups = policy?.groups ?? userGroups
+  const primaryGroup =
+    policy?.primary_group || groups[0] || user.group || DEFAULT_GROUP
+  const checkinEnabled = policy ? policy.checkin_enabled : user.checkin_enabled
   let checkinMode: UserFormValues['checkin_mode'] = 'global'
-  if (user.checkin_enabled === true) {
+  if (checkinEnabled === true) {
     checkinMode = 'allow'
-  } else if (user.checkin_enabled === false) {
+  } else if (checkinEnabled === false) {
     checkinMode = 'deny'
   }
   return {
@@ -169,17 +185,24 @@ export function transformUserToFormDefaults(user: User): UserFormValues {
     password: '',
     role: user.role,
     quota_dollars: quotaUnitsToDollars(user.quota),
-    group: user.group || DEFAULT_GROUP,
+    group: primaryGroup,
     groups,
-    primary_group: user.group || groups[0] || DEFAULT_GROUP,
-    model_limits_enabled: user.model_limits_enabled ?? false,
-    model_limits: user.model_limits ?? [],
-    model_blocklist_enabled: user.model_blocklist_enabled ?? false,
-    model_blocklist: user.model_blocklist ?? [],
+    primary_group: primaryGroup,
+    model_limits_enabled:
+      policy?.model_limits_enabled ?? user.model_limits_enabled ?? false,
+    model_limits: policy?.model_limits ?? user.model_limits ?? [],
+    model_blocklist_enabled:
+      policy?.model_blocklist_enabled ?? user.model_blocklist_enabled ?? false,
+    model_blocklist: policy?.model_blocklist ?? user.model_blocklist ?? [],
     checkin_mode: checkinMode,
-    checkin_min_quota: user.checkin_min_quota ?? undefined,
-    checkin_max_quota: user.checkin_max_quota ?? undefined,
-    quota_cap: user.quota_cap ?? undefined,
+    checkin_min_quota:
+      policy?.checkin_min_quota ?? user.checkin_min_quota ?? undefined,
+    checkin_max_quota:
+      policy?.checkin_max_quota ?? user.checkin_max_quota ?? undefined,
+    quota_cap: policy?.quota_cap ?? user.quota_cap ?? undefined,
+    rpm_limit: policy?.rpm_limit ?? undefined,
+    concurrency_limit: policy?.concurrency_limit ?? undefined,
+    stream_tps_limit: policy?.stream_tps_limit ?? undefined,
     remark: user.remark || '',
     admin_permissions: user.admin_permissions ?? {},
   }

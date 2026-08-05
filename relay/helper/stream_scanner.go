@@ -118,7 +118,6 @@ func StreamScannerHandlerWithOptions(c *gin.Context, resp *http.Response, info *
 		scanner     = NewStreamScanner(resp.Body)
 		ticker      = time.NewTicker(streamingTimeout)
 		pingTicker  *time.Ticker
-		writeMutex  sync.Mutex     // Mutex to protect concurrent writes
 		wg          sync.WaitGroup // 用于等待所有 goroutine 退出
 		cleanupOnce sync.Once
 		stopOnce    sync.Once
@@ -173,6 +172,7 @@ func StreamScannerHandlerWithOptions(c *gin.Context, resp *http.Response, info *
 	scanner.Split(bufio.ScanLines)
 	copyCodexSSEHeaders(c, resp)
 	SetEventStreamHeaders(c)
+	EnsureStreamWriteMutex(c)
 
 	ctx = context.WithValue(ctx, "stop_chan", stopChan)
 
@@ -199,12 +199,7 @@ func StreamScannerHandlerWithOptions(c *gin.Context, resp *http.Response, info *
 				select {
 				case <-pingTicker.C:
 					var err error
-					func() {
-						writeMutex.Lock()
-						defer writeMutex.Unlock()
-						ExtendWriteDeadline(c)
-						err = PingData(c)
-					}()
+					err = PingData(c)
 					if err != nil {
 						logger.LogError(c, "ping data error: "+err.Error())
 						info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonPingFail, err)
@@ -241,12 +236,7 @@ func StreamScannerHandlerWithOptions(c *gin.Context, resp *http.Response, info *
 		sr := newStreamResult(info.StreamStatus)
 		for data := range dataChan {
 			sr.reset()
-			func() {
-				writeMutex.Lock()
-				defer writeMutex.Unlock()
-				ExtendWriteDeadline(c)
-				dataHandler(data, sr)
-			}()
+			dataHandler(data, sr)
 			if sr.IsStopped() {
 				return
 			}
@@ -319,16 +309,31 @@ func StreamScannerHandlerWithOptions(c *gin.Context, resp *http.Response, info *
 		info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonEOF, nil)
 	})
 
-	// 主循环等待完成或超时
+	// 主循环等待完成或超时。主动的用户级流速控制属于正常输出工作，
+	// 不应被上游空闲超时误判；客户端取消仍由独立分支立即终止。
 	clientGone := false
-	select {
-	case <-ticker.C:
-		info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonTimeout, nil)
-	case <-stopChan:
-		// EndReason already set by the goroutine that triggered stopChan
-	case <-c.Request.Context().Done():
-		// 客户端断开：立即 cleanup 关闭上游 resp.Body，解除 scanner 阻塞并让上游停止生成，
-		// 避免为已放弃的请求继续消费上游 token。
+	waiting := true
+	for waiting {
+		select {
+		case <-ticker.C:
+			if service.IsUserStreamPacing(c) {
+				ticker.Reset(streamingTimeout)
+				continue
+			}
+			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonTimeout, nil)
+			waiting = false
+		case <-stopChan:
+			waiting = false
+		case <-c.Request.Context().Done():
+			clientGone = true
+			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, c.Request.Context().Err())
+			waiting = false
+		}
+	}
+	// A handler-side stop and the client cancellation can become ready in the
+	// same scheduler turn. Client cancellation is the stronger terminal state:
+	// it must never be surfaced as an upstream failure eligible for retry.
+	if c.Request.Context().Err() != nil {
 		clientGone = true
 		info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, c.Request.Context().Err())
 	}

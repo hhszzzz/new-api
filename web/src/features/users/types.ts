@@ -144,6 +144,9 @@ export interface UserFormData {
   checkin_min_quota?: number | null
   checkin_max_quota?: number | null
   quota_cap?: number | null
+  rpm_limit?: number | null
+  concurrency_limit?: number | null
+  stream_tps_limit?: number | null
   remark?: string // Only used when updating user
   admin_permissions?: AdminPermissionMatrix
 }
@@ -160,6 +163,9 @@ export interface UserPolicy {
   checkin_min_quota?: number | null
   checkin_max_quota?: number | null
   quota_cap?: number | null
+  rpm_limit?: number | null
+  concurrency_limit?: number | null
+  stream_tps_limit?: number | null
 }
 
 export type UserBatchListMode = 'append' | 'remove' | 'replace'
@@ -182,12 +188,26 @@ export interface UserBatchQuotaCapOp {
   value?: number
 }
 
+export type UserBatchRateLimitMode = 'keep' | 'clear' | 'custom'
+
+export interface UserBatchRateLimitOp {
+  mode: UserBatchRateLimitMode
+  value?: number
+}
+
+export interface UserBatchRateLimitsOp {
+  rpm_limit?: UserBatchRateLimitOp
+  concurrency_limit?: UserBatchRateLimitOp
+  stream_tps_limit?: UserBatchRateLimitOp
+}
+
 export interface UserBatchPolicyPayload {
   user_ids: number[]
   model_limits?: UserBatchListOp
   model_blocklist?: UserBatchListOp
   checkin?: UserBatchCheckinOp
   quota_cap?: UserBatchQuotaCapOp
+  rate_limits?: UserBatchRateLimitsOp
 }
 
 export interface UserBatchSkip {

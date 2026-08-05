@@ -60,7 +60,10 @@ type UserPolicyUpdate struct {
 	CheckinMinQuota *int  `json:"checkin_min_quota"`
 	CheckinMaxQuota *int  `json:"checkin_max_quota"`
 	// QuotaCap bounds gift-credit balance growth; nil means unlimited.
-	QuotaCap *int `json:"quota_cap"`
+	QuotaCap         *int `json:"quota_cap"`
+	RpmLimit         *int `json:"rpm_limit"`
+	ConcurrencyLimit *int `json:"concurrency_limit"`
+	StreamTpsLimit   *int `json:"stream_tps_limit"`
 }
 
 func (p *UserModelPermission) BeforeCreate(tx *gorm.DB) error {
@@ -554,6 +557,9 @@ func replaceUserPolicyWithTx(tx *gorm.DB, userId int, update UserPolicyUpdate) (
 		"checkin_min_quota":       update.CheckinMinQuota,
 		"checkin_max_quota":       update.CheckinMaxQuota,
 		"quota_cap":               update.QuotaCap,
+		"rpm_limit":               update.RpmLimit,
+		"concurrency_limit":       update.ConcurrencyLimit,
+		"stream_tps_limit":        update.StreamTpsLimit,
 	}).Error; err != nil {
 		return 0, err
 	}
@@ -609,12 +615,19 @@ type UserPolicyPartialUpdate struct {
 	CheckinMaxQuota       *int
 	SetQuotaCap           bool
 	QuotaCap              *int
+	SetRpmLimit           bool
+	RpmLimit              *int
+	SetConcurrencyLimit   bool
+	ConcurrencyLimit      *int
+	SetStreamTpsLimit     bool
+	StreamTpsLimit        *int
 }
 
 func (p UserPolicyPartialUpdate) Empty() bool {
 	return p.ModelLimits == nil && p.ModelLimitsEnabled == nil &&
 		p.ModelBlocklist == nil && p.ModelBlocklistEnabled == nil &&
-		!p.SetCheckinEnabled && !p.SetCheckinQuota && !p.SetQuotaCap
+		!p.SetCheckinEnabled && !p.SetCheckinQuota && !p.SetQuotaCap &&
+		!p.SetRpmLimit && !p.SetConcurrencyLimit && !p.SetStreamTpsLimit
 }
 
 // UpdateUserPolicyPartial changes the requested policy sections in one
@@ -660,6 +673,15 @@ func UpdateUserPolicyPartial(userId int, update UserPolicyPartialUpdate) error {
 		}
 		if update.SetQuotaCap {
 			columns["quota_cap"] = update.QuotaCap
+		}
+		if update.SetRpmLimit {
+			columns["rpm_limit"] = update.RpmLimit
+		}
+		if update.SetConcurrencyLimit {
+			columns["concurrency_limit"] = update.ConcurrencyLimit
+		}
+		if update.SetStreamTpsLimit {
+			columns["stream_tps_limit"] = update.StreamTpsLimit
 		}
 		if len(columns) > 0 {
 			if err := tx.Model(&User{}).Where("id = ?", userId).Updates(columns).Error; err != nil {

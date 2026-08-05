@@ -107,6 +107,9 @@ type User struct {
 	// redemption codes, invite transfers); nil means unlimited. Paid top-ups
 	// are not subject to the cap.
 	QuotaCap         *int                       `json:"quota_cap" gorm:"column:quota_cap"`
+	RpmLimit         *int                       `json:"-" gorm:"column:rpm_limit"`
+	ConcurrencyLimit *int                       `json:"-" gorm:"column:concurrency_limit"`
+	StreamTpsLimit   *int                       `json:"-" gorm:"column:stream_tps_limit"`
 	PolicyVersion    int64                      `json:"-" gorm:"type:bigint;not null;default:1;column:policy_version"`
 	Groups           []string                   `json:"groups" gorm:"-:all"`
 	ModelLimits      []string                   `json:"model_limits" gorm:"-:all"`
@@ -149,6 +152,9 @@ func (user *User) ToBaseUser() *UserBase {
 		ModelLimits:           modelLimits,
 		ModelBlocklistEnabled: user.ModelBlocklistEnabled,
 		ModelBlocklist:        modelBlocklist,
+		RpmLimit:              user.RpmLimit,
+		ConcurrencyLimit:      user.ConcurrencyLimit,
+		StreamTpsLimit:        user.StreamTpsLimit,
 		PolicyVersion:         user.PolicyVersion,
 		Quota:                 user.Quota,
 		Status:                user.Status,
