@@ -29,6 +29,7 @@ import {
   chatLinkRequiresApiKey,
   resolveChatUrl,
 } from '@/features/chat/lib/chat-links'
+import { getIframeSandbox } from '@/lib/iframe-sandbox'
 
 export const Route = createFileRoute('/_authenticated/chat/$chatId')({
   loader: async ({ params }) => {
@@ -159,6 +160,7 @@ function ChatRouteComponent() {
       key={iframeSrc}
       className='h-full w-full border-0'
       allow='camera; microphone'
+      sandbox={getIframeSandbox(iframeSrc)}
       title={`Chat preset: ${preset.name}`}
     />
   )
