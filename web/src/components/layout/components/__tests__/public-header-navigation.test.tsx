@@ -140,11 +140,13 @@ describe('public header navigation', () => {
     const controls = toggle.getAttribute('aria-controls')
 
     expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(toggle).toHaveClass('xl:hidden')
     if (!controls) {
       throw new Error('Navigation toggle must identify its controlled menu')
     }
     const menu = document.querySelector(`[id="${controls}"]`)
     expect(menu).toBeInTheDocument()
+    expect(menu).toHaveClass('xl:hidden', 'xl:pointer-events-none')
     expect(menu).toHaveAttribute('aria-hidden', 'true')
     expect(menu).toHaveAttribute('inert')
 
@@ -177,6 +179,20 @@ describe('public header navigation', () => {
     expect(
       view.container.querySelector('header a[href="https://docs.example.com"]')
     ).toHaveClass('inline-flex', 'items-center')
+    expect(
+      view.container.querySelector('header a[href="/pricing"]')?.parentElement
+    ).toHaveClass('xl:flex')
+  })
+
+  test('keeps the compact header width independent of navigation count', () => {
+    vi.stubGlobal('scrollY', 100)
+    topNavLinksMock.mockReturnValue([{ title: 'Models', href: '/pricing' }])
+
+    const view = renderPublicHeader()
+    const compactContainer = view.container.querySelector('header > div')
+
+    expect(compactContainer).toHaveClass('max-w-5xl')
+    expect(compactContainer).not.toHaveClass('max-w-[52rem]')
   })
 
   test('does not translate already-localized dynamic navigation titles again', () => {
@@ -212,6 +228,7 @@ describe('public header navigation', () => {
   test('closes the collapsed menu and unlocks scrolling at the desktop breakpoint', async () => {
     const user = userEvent.setup()
     renderPublicHeader()
+    expect(window.matchMedia).toHaveBeenCalledWith('(min-width: 1280px)')
     const toggle = screen.getByRole('button', {
       name: 'Toggle navigation menu',
     })

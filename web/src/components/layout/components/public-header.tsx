@@ -100,8 +100,6 @@ export function PublicHeader(props: PublicHeaderProps) {
   const displaySiteName = customSiteName || systemName
   const links = dynamicLinks.length > 0 ? dynamicLinks : navLinks
   const linkTitlesAreLocalized = dynamicLinks.length > 0
-  const compactHeaderWidthClass =
-    links.length >= 7 ? 'max-w-[52rem] xl:max-w-7xl' : 'max-w-[52rem]'
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 20)
@@ -227,9 +225,7 @@ export function PublicHeader(props: PublicHeaderProps) {
         <div
           className={cn(
             'pointer-events-auto mx-auto transition-all duration-700 ease-[cubic-bezier(0.16,1,0.3,1)]',
-            scrolled
-              ? cn(compactHeaderWidthClass, 'px-3 pt-3')
-              : 'max-w-7xl px-4 pt-0 md:px-6'
+            scrolled ? 'max-w-5xl px-3 pt-3' : 'max-w-7xl px-4 pt-0 md:px-6'
           )}
         >
           <nav
