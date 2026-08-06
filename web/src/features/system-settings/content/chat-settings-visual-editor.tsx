@@ -17,55 +17,35 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Plus, Search } from 'lucide-react'
-import { useState, useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { StaticDataTable } from '@/components/data-table/static/static-data-table'
 import { StaticRowActions } from '@/components/data-table/static/static-row-actions'
+import type { Option } from '@/components/multi-select'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
-import { safeJsonParseWithValidation } from '../utils/json-parser'
-import { isArray } from '../utils/json-validators'
+import { parseChatEntries, serializeChatEntry } from './chat-config'
 import { ChatDialog, type ChatEntryData } from './chat-dialog'
 
 type ChatSettingsVisualEditorProps = {
   value: string
   onChange: (value: string) => void
+  groupOptions: Option[]
 }
 
 type ChatEntry = ChatEntryData
 
-export function ChatSettingsVisualEditor({
-  value,
-  onChange,
-}: ChatSettingsVisualEditorProps) {
+export function ChatSettingsVisualEditor(props: ChatSettingsVisualEditorProps) {
   const { t } = useTranslation()
   const [searchText, setSearchText] = useState('')
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editData, setEditData] = useState<ChatEntry | null>(null)
 
   const chats = useMemo(() => {
-    const parsed = safeJsonParseWithValidation<unknown[]>(value, {
-      fallback: [],
-      validator: isArray,
-      validatorMessage: 'Chats must be a JSON array',
-      context: 'chats',
-    })
-
-    return parsed
-      .map((item) => {
-        if (typeof item === 'object' && item !== null && !Array.isArray(item)) {
-          const entries = Object.entries(item)
-          if (entries.length === 1) {
-            const [name, url] = entries[0]
-            return { name, url: String(url) }
-          }
-        }
-        return null
-      })
-      .filter((item): item is ChatEntry => item !== null)
-  }, [value])
+    return parseChatEntries(props.value)
+  }, [props.value])
 
   const filteredChats = useMemo(() => {
     if (!searchText) return chats
@@ -73,16 +53,20 @@ export function ChatSettingsVisualEditor({
     return chats.filter(
       (chat) =>
         chat.name.toLowerCase().includes(lowerSearch) ||
-        chat.url.toLowerCase().includes(lowerSearch)
+        chat.url.toLowerCase().includes(lowerSearch) ||
+        chat.groups.some((group) => group.toLowerCase().includes(lowerSearch))
     )
   }, [chats, searchText])
 
   const handleSave = (data: ChatEntryData) => {
-    const chatsArray = safeJsonParseWithValidation<unknown[]>(value, {
-      fallback: [],
-      validator: isArray,
-      silent: true,
-    })
+    const chatsArray: unknown[] = (() => {
+      try {
+        const parsed: unknown = JSON.parse(props.value)
+        return Array.isArray(parsed) ? parsed : []
+      } catch {
+        return []
+      }
+    })()
 
     let updatedArray = [...chatsArray]
 
@@ -95,17 +79,20 @@ export function ChatSettingsVisualEditor({
       })
     }
 
-    updatedArray.push({ [data.name]: data.url })
+    updatedArray.push(serializeChatEntry(data))
 
-    onChange(JSON.stringify(updatedArray, null, 2))
+    props.onChange(JSON.stringify(updatedArray, null, 2))
   }
 
   const handleDelete = (name: string) => {
-    const chatsArray = safeJsonParseWithValidation<unknown[]>(value, {
-      fallback: [],
-      validator: isArray,
-      silent: true,
-    })
+    const chatsArray: unknown[] = (() => {
+      try {
+        const parsed: unknown = JSON.parse(props.value)
+        return Array.isArray(parsed) ? parsed : []
+      } catch {
+        return []
+      }
+    })()
 
     const updatedArray = chatsArray.filter((item) => {
       if (typeof item === 'object' && item !== null && !Array.isArray(item)) {
@@ -114,7 +101,7 @@ export function ChatSettingsVisualEditor({
       return true
     })
 
-    onChange(JSON.stringify(updatedArray, null, 2))
+    props.onChange(JSON.stringify(updatedArray, null, 2))
   }
 
   const handleEdit = (chat: ChatEntry) => {
@@ -169,6 +156,15 @@ export function ChatSettingsVisualEditor({
             cell: (chat) => chat.url,
           },
           {
+            id: 'groups',
+            header: t('User Groups'),
+            cellClassName: 'max-w-xs truncate text-sm',
+            cell: (chat) =>
+              chat.groups.length > 0
+                ? chat.groups.join(', ')
+                : t('All user groups'),
+          },
+          {
             id: 'actions',
             header: t('Actions'),
             className: 'text-right',
@@ -191,6 +187,7 @@ export function ChatSettingsVisualEditor({
         onOpenChange={setDialogOpen}
         onSave={handleSave}
         editData={editData}
+        groupOptions={props.groupOptions}
       />
     </div>
   )

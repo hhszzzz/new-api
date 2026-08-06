@@ -173,6 +173,20 @@ func GetStatus(c *gin.Context) {
 	return
 }
 
+func GetUserChatPresets(c *gin.Context) {
+	userGroups := common.GetContextKeyStringSlice(c, constant.ContextKeyUserGroups)
+	if len(userGroups) == 0 {
+		if userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup); userGroup != "" {
+			userGroups = []string{userGroup}
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "",
+		"data":    setting.GetChatPresetsForGroups(userGroups),
+	})
+}
+
 func GetNotice(c *gin.Context) {
 	common.OptionMapRWMutex.RLock()
 	defer common.OptionMapRWMutex.RUnlock()

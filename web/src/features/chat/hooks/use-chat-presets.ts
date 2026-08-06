@@ -16,28 +16,15 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { useQuery } from '@tanstack/react-query'
 import { useMemo } from 'react'
 
 import type { SystemStatus } from '@/features/auth/types'
 import { useStatus } from '@/hooks/use-status'
+import { useAuthStore } from '@/stores/auth-store'
 
-import {
-  type ChatPreset,
-  parseChatConfig,
-  type RawChatConfig,
-} from '../lib/chat-links'
-
-function getStoredStatusChats(): RawChatConfig {
-  if (typeof window === 'undefined') return undefined
-  try {
-    const raw = window.localStorage.getItem('status')
-    if (!raw) return undefined
-    const parsed = JSON.parse(raw)
-    return parsed?.chats ?? parsed?.Chats
-  } catch {
-    return undefined
-  }
-}
+import { getUserChatPresets } from '../api'
+import type { ChatPreset } from '../lib/chat-links'
 
 function extractServerAddress(status: SystemStatus | null) {
   const fromStatus =
@@ -57,28 +44,28 @@ function extractServerAddress(status: SystemStatus | null) {
   return ''
 }
 
-function extractChats(status: SystemStatus | null): RawChatConfig {
-  const raw =
-    status?.Chats ?? status?.chats ?? status?.data?.Chats ?? status?.data?.chats
-
-  return (raw as RawChatConfig) ?? getStoredStatusChats()
-}
-
 export function useChatPresets(): {
   chatPresets: ChatPreset[]
   serverAddress: string
+  isLoading: boolean
+  error: Error | null
 } {
   const { status } = useStatus()
+  const user = useAuthStore((state) => state.auth.user)
+  const userGroupKey = user?.groups?.length ? user.groups : (user?.group ?? '')
+  const chatPresetsQuery = useQuery({
+    queryKey: ['chat-presets', user?.id, userGroupKey],
+    queryFn: getUserChatPresets,
+    enabled: Boolean(user?.id),
+    staleTime: 5 * 60 * 1000,
+  })
 
   const serverAddress = useMemo(() => extractServerAddress(status), [status])
 
-  const chatPresets = useMemo(() => {
-    const raw = extractChats(status)
-    return parseChatConfig(raw)
-  }, [status])
-
   return {
-    chatPresets,
+    chatPresets: chatPresetsQuery.data ?? [],
     serverAddress,
+    isLoading: chatPresetsQuery.isLoading,
+    error: chatPresetsQuery.error,
   }
 }

@@ -37,6 +37,7 @@ const STATUS_RELATED_KEYS = new Set([
   'general_setting.custom_currency_symbol',
   'general_setting.custom_currency_exchange_rate',
   'oidc.display_name',
+  'Chats',
 ])
 
 export function useUpdateOption() {
@@ -57,6 +58,10 @@ export function useUpdateOption() {
           } catch {
             /* empty */
           }
+        }
+
+        if (variables.key === 'Chats') {
+          queryClient.invalidateQueries({ queryKey: ['chat-presets'] })
         }
 
         toast.success(i18next.t('Setting updated successfully'))

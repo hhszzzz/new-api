@@ -893,8 +893,7 @@ func validateLegacyOptionUpdate(key, value string) error {
 	}
 	switch key {
 	case "Chats":
-		var candidate []map[string]string
-		return common.UnmarshalJsonStr(value, &candidate)
+		return setting.ValidateChatsJsonString(value)
 	case "AutoGroups":
 		var candidate []string
 		return common.UnmarshalJsonStr(value, &candidate)

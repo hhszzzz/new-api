@@ -33,7 +33,11 @@ export const Route = createFileRoute('/_authenticated/chat2link')({
 function Chat2LinkPage() {
   const { t } = useTranslation()
   const navigate = useNavigate()
-  const { chatPresets, serverAddress } = useChatPresets()
+  const {
+    chatPresets,
+    serverAddress,
+    isLoading: isLoadingPresets,
+  } = useChatPresets()
 
   const firstWebPreset = useMemo(
     () => chatPresets.find((p) => p.type === 'web'),
@@ -45,10 +49,11 @@ function Chat2LinkPage() {
   )
 
   useEffect(() => {
+    if (isLoadingPresets) return
+
     if (!firstWebPreset) {
-      if (chatPresets.length > 0) {
-        toast.error(t('No available Web chat links'))
-      }
+      toast.error(t('No available Web chat links'))
+      navigate({ to: '/dashboard' })
       return
     }
 
@@ -81,6 +86,7 @@ function Chat2LinkPage() {
     chatPresets.length,
     navigate,
     t,
+    isLoadingPresets,
   ])
 
   return (

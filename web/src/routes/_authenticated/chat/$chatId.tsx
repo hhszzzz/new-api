@@ -43,12 +43,15 @@ export const Route = createFileRoute('/_authenticated/chat/$chatId')({
 function ChatRouteComponent() {
   const { t } = useTranslation()
   const { chatId } = Route.useParams()
-  const { chatPresets, serverAddress } = useChatPresets()
-  const preset = useMemo(() => {
-    const index = Number(chatId)
-    if (!Number.isInteger(index)) return undefined
-    return chatPresets[index]
-  }, [chatId, chatPresets])
+  const {
+    chatPresets,
+    serverAddress,
+    isLoading: isLoadingPresets,
+  } = useChatPresets()
+  const preset = useMemo(
+    () => chatPresets.find((candidate) => candidate.id === chatId),
+    [chatId, chatPresets]
+  )
 
   const isWebLink = preset?.type === 'web'
 
@@ -73,6 +76,17 @@ function ChatRouteComponent() {
       serverAddress,
     })
   }, [activeKey, isWebLink, preset, requiresActiveKey, serverAddress])
+
+  if (isLoadingPresets) {
+    return (
+      <div className='flex h-full flex-col items-center justify-center gap-4'>
+        <Loader2 className='text-muted-foreground h-8 w-8 animate-spin' />
+        <p className='text-muted-foreground text-sm'>
+          {t('Loading chat presets...')}
+        </p>
+      </div>
+    )
+  }
 
   if (!preset) {
     return (

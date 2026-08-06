@@ -27,6 +27,12 @@ export type ChatPreset = {
   type: ChatLinkType
 }
 
+export type ServerChatPreset = {
+  id: string
+  name: string
+  url: string
+}
+
 export type RawChatConfig =
   | string
   | Record<string, unknown>

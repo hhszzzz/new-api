@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import * as z from 'zod'
@@ -38,6 +38,7 @@ import { SettingsForm } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
+import { buildChatGroupOptions } from './chat-config'
 import { ChatSettingsVisualEditor } from './chat-settings-visual-editor'
 import { formatJsonForEditor, normalizeJsonString } from './utils'
 
@@ -75,6 +76,52 @@ const createChatSchema = (t: (key: string) => string) =>
             })
             return
           }
+          const rawConfig = entries[0][1]
+          if (typeof rawConfig === 'string') {
+            if (rawConfig.trim() === '') {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: t('URL is required'),
+              })
+              return
+            }
+            continue
+          }
+          if (
+            typeof rawConfig !== 'object' ||
+            rawConfig === null ||
+            Array.isArray(rawConfig)
+          ) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: t(
+                'Each chat preset value must be a URL string or an object with url and groups.'
+              ),
+            })
+            return
+          }
+          const config = rawConfig as Record<string, unknown>
+          if (
+            typeof config.url !== 'string' ||
+            config.url.trim() === '' ||
+            (config.groups !== undefined &&
+              (!Array.isArray(config.groups) ||
+                config.groups.length > 64 ||
+                config.groups.some(
+                  (group) =>
+                    typeof group !== 'string' ||
+                    group.trim() === '' ||
+                    group.length > 64
+                )))
+          ) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: t(
+                'Each chat preset value must be a URL string or an object with url and groups.'
+              ),
+            })
+            return
+          }
         }
       } catch {
         ctx.addIssue({
@@ -89,17 +136,21 @@ type ChatSettingsFormValues = z.infer<ReturnType<typeof createChatSchema>>
 
 type ChatSettingsSectionProps = {
   defaultValue: string
+  groupRatio: string
+  userUsableGroups: string
 }
 
-export function ChatSettingsSection({
-  defaultValue,
-}: ChatSettingsSectionProps) {
+export function ChatSettingsSection(props: ChatSettingsSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
   const [editMode, setEditMode] = useState<'visual' | 'json'>('visual')
 
   const chatSchema = createChatSchema(t)
-  const formatted = formatJsonForEditor(defaultValue, '[]')
+  const formatted = formatJsonForEditor(props.defaultValue, '[]')
+  const groupOptions = useMemo(
+    () => buildChatGroupOptions(props.groupRatio, props.userUsableGroups),
+    [props.groupRatio, props.userUsableGroups]
+  )
   const form = useForm<ChatSettingsFormValues>({
     resolver: zodResolver(chatSchema),
     mode: 'onChange', // Enable real-time validation
@@ -108,12 +159,14 @@ export function ChatSettingsSection({
     },
   })
 
-  const initialNormalizedRef = useRef(normalizeJsonString(defaultValue, '[]'))
+  const initialNormalizedRef = useRef(
+    normalizeJsonString(props.defaultValue, '[]')
+  )
 
   useEffect(() => {
-    form.reset({ Chats: formatJsonForEditor(defaultValue, '[]') })
-    initialNormalizedRef.current = normalizeJsonString(defaultValue, '[]')
-  }, [defaultValue, form])
+    form.reset({ Chats: formatJsonForEditor(props.defaultValue, '[]') })
+    initialNormalizedRef.current = normalizeJsonString(props.defaultValue, '[]')
+  }, [props.defaultValue, form])
 
   const onSubmit = async (values: ChatSettingsFormValues) => {
     const normalized = normalizeJsonString(values.Chats, '[]')
@@ -156,6 +209,7 @@ export function ChatSettingsSection({
                       <ChatSettingsVisualEditor
                         value={field.value}
                         onChange={field.onChange}
+                        groupOptions={groupOptions}
                       />
                     </FormControl>
                     <FormMessage />
@@ -179,7 +233,7 @@ export function ChatSettingsSection({
                         onBlur={field.onBlur}
                         textareaRef={field.ref}
                         placeholder={t(
-                          '[{"ChatGPT":"https://chat.openai.com"},{"Lobe Chat":"https://chat-preview.lobehub.com/?settings={...}"}]'
+                          '[{"ChatGPT":{"url":"https://chat.openai.com","groups":["vip"]}},{"Lobe Chat":"https://chat-preview.lobehub.com"}]'
                         )}
                         heightClassName='h-72 min-h-72 max-h-72'
                         aria-invalid={Boolean(form.formState.errors.Chats)}
@@ -187,7 +241,7 @@ export function ChatSettingsSection({
                     </FormControl>
                     <FormDescription>
                       {t(
-                        'Array of chat client presets. Each item is an object with one key-value pair: client name and its URL.'
+                        'Array of chat client presets. Each item maps a client name to a URL string, or to an object with url and optional groups.'
                       )}
                     </FormDescription>
                     <FormMessage />
