@@ -606,6 +606,35 @@ func TestFirstVisibleTextDelayUsesRequestDeadlineOnce(t *testing.T) {
 	assert.Equal(t, []time.Duration{1500 * time.Millisecond}, waits)
 }
 
+func TestInstalledStreamPacerDelaysOnlyTheFirstVisiblePayload(t *testing.T) {
+	fixedNow := time.Unix(150, 0)
+	var waits []time.Duration
+	c := newUserRateLimitTestContext(t.Context())
+	pacer := &UserStreamPacer{
+		modelName: "gpt-4o",
+		firstDelayWaiter: &firstTokenDelayWaiter{
+			deadline: fixedNow.Add(2 * time.Second),
+			now:      func() time.Time { return fixedNow },
+			wait: func(_ context.Context, delay time.Duration) error {
+				waits = append(waits, delay)
+				return nil
+			},
+		},
+		observation: &UserRateLimitObservation{},
+	}
+
+	InstallUserStreamPacer(c, pacer)
+	require.Same(t, pacer, GetUserStreamPacer(c))
+	require.NoError(t, PaceUserStreamPayload(c, []byte(`{"type":"response.function_call_arguments.delta","delta":"{\"x\":"}`)))
+	require.NoError(t, PaceUserStreamPayload(c, []byte(`{"type":"response.output_text.delta","delta":"answer"}`)))
+	require.NoError(t, PaceUserStreamPayload(c, []byte(`{"type":"response.output_text.delta","delta":"later"}`)))
+	assert.Equal(t, []time.Duration{2 * time.Second}, waits)
+
+	InstallUserStreamPacer(c, nil)
+	require.NoError(t, PaceUserStreamPayload(c, []byte(`{"type":"response.output_text.delta","delta":"unpaced"}`)))
+	assert.Equal(t, []time.Duration{2 * time.Second}, waits)
+}
+
 func TestFirstVisibleTextDelayAndTPSWaitConcurrently(t *testing.T) {
 	started := make(chan struct{}, 2)
 	release := make(chan struct{})
