@@ -111,7 +111,7 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeReadRequestBodyFailed, types.ErrOptionWithSkipRetry())
 		}
-		requestBody = common.ReaderOnly(storage)
+		requestBody = common.NewReplayableBodyReader(storage)
 	} else {
 		// Most adaptors never compose system prompts for this endpoint, so apply
 		// the configured layers here. The helper is guarded against reapplying,
@@ -143,13 +143,12 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		}
 
 		logger.LogDebug(c, "requestBody: %s", jsonData)
-		body, size, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
+		body, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
 		defer closer.Close()
 		jsonData = nil
-		info.UpstreamRequestBodySize = size
 		requestBody = body
 	}
 

@@ -130,12 +130,11 @@ func CountTokensHelper(c *gin.Context, info *relaycommon.RelayInfo) *types.NewAP
 			}
 		}
 
-		requestBody, size, closer, err := relaycommon.NewOutboundJSONBody(requestData)
+		requestBody, closer, err := relaycommon.NewOutboundJSONBody(requestData)
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
 		defer closer.Close()
-		info.UpstreamRequestBodySize = size
 
 		responseValue, err := adaptor.DoRequest(c, info, requestBody)
 		if err != nil {

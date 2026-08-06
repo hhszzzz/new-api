@@ -173,13 +173,6 @@ type RelayInfo struct {
 	DifyWorkflowRunID                     string
 	DifyWorkflowStatus                    string
 
-	// UpstreamRequestBodySize is the byte size of the marshaled upstream request
-	// body. It is set when the body is wrapped in a BodyStorage (see
-	// relay/common/outbound_body.go), so that DoApiRequest can populate
-	// http.Request.ContentLength manually (net/http only auto-detects it for
-	// *bytes.Reader/Buffer/strings.Reader). 0 means "let net/http decide".
-	UpstreamRequestBodySize int64
-
 	PriceData hosttypes.PriceData
 	// ToolPriceSnapshot freezes admin-configurable tool prices for the request.
 	ToolPriceSnapshot *operation_setting.ToolPriceSnapshot
@@ -406,7 +399,6 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 	info.isFirstResponse = true
 	info.ShouldIncludeUsage = false
 	info.DisablePing = false
-	info.UpstreamRequestBodySize = 0
 	info.RuntimeHeadersOverride = nil
 	info.UseRuntimeHeadersOverride = false
 	info.ParamOverrideAudit = nil

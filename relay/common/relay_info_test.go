@@ -68,7 +68,6 @@ func TestInitChannelMetaResetsAttemptScopedProtocolState(t *testing.T) {
 	info.ReceivedResponseCount = 5
 	info.ShouldIncludeUsage = true
 	info.DisablePing = true
-	info.UpstreamRequestBodySize = 128
 	info.RuntimeHeadersOverride = map[string]interface{}{"x-test": "stale"}
 	info.UseRuntimeHeadersOverride = true
 	info.ParamOverrideAudit = []string{"stale"}
@@ -88,7 +87,6 @@ func TestInitChannelMetaResetsAttemptScopedProtocolState(t *testing.T) {
 	assert.Zero(t, info.ReceivedResponseCount)
 	assert.False(t, info.ShouldIncludeUsage)
 	assert.False(t, info.DisablePing)
-	assert.Zero(t, info.UpstreamRequestBodySize)
 	assert.Nil(t, info.RuntimeHeadersOverride)
 	assert.False(t, info.UseRuntimeHeadersOverride)
 	assert.Nil(t, info.ParamOverrideAudit)
