@@ -54,3 +54,37 @@ export function parseUpstreamUpdateMeta(settings: unknown): {
     ),
   }
 }
+
+export type UpstreamUpdateSummary = {
+  addModelCount: number
+  removeModelCount: number
+  addChannelCount: number
+  removeChannelCount: number
+}
+
+export function summarizeUpstreamUpdates(
+  channels: ReadonlyArray<{ settings: unknown }>
+): UpstreamUpdateSummary {
+  const summary: UpstreamUpdateSummary = {
+    addModelCount: 0,
+    removeModelCount: 0,
+    addChannelCount: 0,
+    removeChannelCount: 0,
+  }
+
+  for (const channel of channels) {
+    const meta = parseUpstreamUpdateMeta(channel.settings)
+    if (!meta.enabled) continue
+
+    if (meta.pendingAddModels.length > 0) {
+      summary.addModelCount += meta.pendingAddModels.length
+      summary.addChannelCount++
+    }
+    if (meta.pendingRemoveModels.length > 0) {
+      summary.removeModelCount += meta.pendingRemoveModels.length
+      summary.removeChannelCount++
+    }
+  }
+
+  return summary
+}

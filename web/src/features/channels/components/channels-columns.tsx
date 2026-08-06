@@ -84,6 +84,7 @@ import {
 } from '../lib'
 import { parseUpstreamUpdateMeta } from '../lib/upstream-update-utils'
 import type { Channel } from '../types'
+import { AggregateUpstreamUpdateTags } from './aggregate-upstream-update-tags'
 import { ChannelRowActionsLayoutContext } from './channel-row-actions-context'
 import { useChannels } from './channels-provider'
 import { DataTableRowActions } from './data-table-row-actions'
@@ -698,7 +699,9 @@ export function useChannelsColumns(
           }
 
           if (isChannelAggregate) {
-            const aggregateName = channel.aggregate_name || t('Aggregate')
+            const aggregateChannel = channel as ChannelAggregateRow
+            const aggregateName =
+              aggregateChannel.aggregate_name || t('Aggregate')
             const isExpanded = row.getIsExpanded()
             return (
               <div className='flex items-center gap-2'>
@@ -706,6 +709,9 @@ export function useChannelsColumns(
                   <span className='truncate font-semibold'>
                     {sensitiveVisible ? aggregateName : SENSITIVE_MASK}
                   </span>
+                  <AggregateUpstreamUpdateTags
+                    channels={aggregateChannel.children}
+                  />
                   <Button
                     variant={isExpanded ? 'secondary' : 'outline'}
                     size='icon-xs'

@@ -382,6 +382,40 @@ func TestScheduledUpstreamModelDetectionSkipsUnavailableChannelsButManualDetecti
 	assert.Equal(t, 1, requestCount)
 }
 
+func TestScheduledUpstreamModelDetectionIncludesDisabledChannels(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requestCount++
+		_, _ = w.Write([]byte(`{"data":[{"id":"new-model"}]}`))
+	}))
+	t.Cleanup(server.Close)
+
+	channel := newAdvancedCustomModelListChannel(server.URL, "secret-key", "/v1/models", nil)
+	channel.Name = "disabled scheduled model detection"
+	channel.Status = common.ChannelStatusManuallyDisabled
+	channel.Models = "old-model"
+	settings := channel.GetOtherSettings()
+	settings.UpstreamModelUpdateCheckEnabled = true
+	channel.SetOtherSettings(settings)
+	require.NoError(t, db.Create(channel).Error)
+
+	summary := runChannelUpstreamModelUpdateTaskOnce(t.Context(), false, true, nil)
+
+	assert.Equal(t, 1, summary.CheckedChannels)
+	assert.Equal(t, 1, summary.ChangedChannels)
+	assert.Equal(t, 1, summary.DetectedAddModels)
+	assert.Equal(t, 1, summary.DetectedRemoveModels)
+	assert.Equal(t, 1, requestCount)
+
+	reloaded, err := model.GetChannelById(channel.Id, true)
+	require.NoError(t, err)
+	assert.Equal(t, common.ChannelStatusManuallyDisabled, reloaded.Status)
+	persistedSettings := reloaded.GetOtherSettings()
+	assert.Equal(t, []string{"new-model"}, persistedSettings.UpstreamModelUpdateLastDetectedModels)
+	assert.Equal(t, []string{"old-model"}, persistedSettings.UpstreamModelUpdateLastRemovedModels)
+}
+
 func TestFetchModelsUsesSharedChannelFetchBehavior(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/models" {

@@ -663,10 +663,11 @@ func runChannelUpstreamModelUpdateTaskOnce(ctx context.Context, force bool, allo
 	removeModelSamples := make([]string, 0)
 	refreshNeeded := false
 
-	// Count the enabled channels up front so progress can be reported as a
-	// percentage; a count error is non-fatal (progress just won't show a %).
+	// Count all channels up front so progress can be reported as a percentage.
+	// Disabled channels still need upstream model discovery; their routing status
+	// is independent from whether model changes should be staged for review.
 	var totalChannels int64
-	if err := model.DB.Model(&model.Channel{}).Where("status = ?", common.ChannelStatusEnabled).Count(&totalChannels).Error; err != nil {
+	if err := model.DB.Model(&model.Channel{}).Count(&totalChannels).Error; err != nil {
 		totalChannels = 0
 	}
 	processed := 0
@@ -680,7 +681,6 @@ scanLoop:
 		var channels []*model.Channel
 		query := model.DB.
 			Select(channelUpstreamModelUpdateSelectFields).
-			Where("status = ?", common.ChannelStatusEnabled).
 			Order("id asc").
 			Limit(channelUpstreamModelUpdateTaskBatchSize)
 		if lastID > 0 {
