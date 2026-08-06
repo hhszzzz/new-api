@@ -112,6 +112,7 @@ func (s *responsesWSSession) runHTTPBridgeCall(state *responsesWSCallState, crea
 			state.commitRate(finalErr == nil)
 		}
 		if s.clearCurrent(state) {
+			state.channelRateGuard.Release()
 			state.rateGuard.Release()
 		}
 		if finalErr == nil && !clientGone {
@@ -122,24 +123,54 @@ func (s *responsesWSSession) runHTTPBridgeCall(state *responsesWSCallState, crea
 	retryParam := middleware.NewResponsesBridgeRetryParam(c, create.Request.Model)
 	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
 		protocolstate.ResetAttempt(c)
-		channel, apiErr := s.selectHTTPBridgeChannel(create.Request.Model, retryParam)
+		retryParam.ClearChannelExclusions()
+		var (
+			channel          *appmodel.Channel
+			channelRateGuard *service.ChannelRateLimitGuard
+			apiErr           *types.NewAPIError
+			rejected         bool
+		)
+		for {
+			channel, apiErr = s.selectHTTPBridgeChannel(create.Request.Model, retryParam)
+			if apiErr != nil {
+				break
+			}
+			var allowed bool
+			channelRateGuard, allowed = service.TryAcquireChannelRateLimit(c, channel)
+			if allowed {
+				break
+			}
+			rejected = true
+			retryParam.ExcludeChannel(channel.Id)
+		}
+		retryParam.ClearChannelExclusions()
 		if apiErr != nil {
-			finalErr = apiErr
+			if rejected {
+				finalErr = service.NewChannelRateLimitError()
+			} else {
+				finalErr = apiErr
+			}
 			break
 		}
 		addResponsesWSUsedChannel(c, channel.Id)
 
 		attempt, apiErr := s.prepareCallState(create)
 		if apiErr != nil {
+			channelRateGuard.Release()
 			finalErr = apiErr
 			break
 		}
 		relayInfo = attempt.info
 		s.stateMu.Lock()
 		state.info = relayInfo
+		state.channelRateGuard = channelRateGuard
 		s.stateMu.Unlock()
 
 		apiErr = ResponsesHelper(c, relayInfo)
+		channelRateGuard.Release()
+		s.stateMu.Lock()
+		state.channelRateGuard = nil
+		s.stateMu.Unlock()
 		if apiErr == nil {
 			middleware.CommitAutoProtocolAffinity(c)
 			if commitErr := protocolstate.Commit(c); commitErr != nil {
@@ -177,7 +208,7 @@ func (s *responsesWSSession) runHTTPBridgeCall(state *responsesWSCallState, crea
 }
 
 func (s *responsesWSSession) selectHTTPBridgeChannel(publicModel string, retryParam *service.RetryParam) (*appmodel.Channel, *types.NewAPIError) {
-	if channelID, retrySameChannel := middleware.PendingAutoProtocolRetryChannelID(s.c); retrySameChannel {
+	if channelID, retrySameChannel := middleware.PendingAutoProtocolRetryChannelID(s.c); retrySameChannel && !retryParam.IsChannelExcluded(channelID) {
 		channel, err := appmodel.CacheGetChannel(channelID)
 		if err != nil {
 			return nil, types.NewError(fmt.Errorf("failed to reload channel %d for automatic protocol retry: %w", channelID, err), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())

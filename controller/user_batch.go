@@ -52,9 +52,10 @@ type userBatchRateLimitOp struct {
 }
 
 type userBatchRateLimitsOp struct {
-	RpmLimit         *userBatchRateLimitOp `json:"rpm_limit"`
-	ConcurrencyLimit *userBatchRateLimitOp `json:"concurrency_limit"`
-	StreamTpsLimit   *userBatchRateLimitOp `json:"stream_tps_limit"`
+	RpmLimit          *userBatchRateLimitOp `json:"rpm_limit"`
+	ConcurrencyLimit  *userBatchRateLimitOp `json:"concurrency_limit"`
+	StreamTpsLimit    *userBatchRateLimitOp `json:"stream_tps_limit"`
+	FirstTokenDelayMs *userBatchRateLimitOp `json:"first_token_delay_ms"`
 }
 
 type userBatchPolicyRequest struct {
@@ -335,6 +336,7 @@ func validateUserBatchRateLimitsOp(op *userBatchRateLimitsOp) (bool, error) {
 		{name: "RPM", limit: op.RpmLimit},
 		{name: "并发", limit: op.ConcurrencyLimit},
 		{name: "流式 TPS", limit: op.StreamTpsLimit},
+		{name: "首个文本延迟", limit: op.FirstTokenDelayMs},
 	}
 	for _, item := range limits {
 		name, limit := item.name, item.limit
@@ -421,6 +423,7 @@ func buildUserBatchPolicyPartial(user *model.User, request userBatchPolicyReques
 		apply(op.RpmLimit, &partial.SetRpmLimit, &partial.RpmLimit)
 		apply(op.ConcurrencyLimit, &partial.SetConcurrencyLimit, &partial.ConcurrencyLimit)
 		apply(op.StreamTpsLimit, &partial.SetStreamTpsLimit, &partial.StreamTpsLimit)
+		apply(op.FirstTokenDelayMs, &partial.SetFirstTokenDelayMs, &partial.FirstTokenDelayMs)
 	}
 	return partial
 }

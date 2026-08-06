@@ -24,6 +24,7 @@ import * as z from 'zod'
 
 import { Dialog } from '@/components/dialog'
 import { Button } from '@/components/ui/button'
+import { ComboboxInput } from '@/components/ui/combobox-input'
 import {
   Form,
   FormControl,
@@ -67,6 +68,7 @@ const createRateLimitDialogSchema = (t: (key: string) => string) => {
       memberRpmLimit: optionalLimit,
       memberConcurrencyLimit: optionalLimit,
       memberStreamTpsLimit: optionalLimit,
+      memberFirstTokenDelayMs: optionalLimit,
       sharedRpmLimit: optionalLimit,
       sharedConcurrencyLimit: optionalLimit,
       sharedStreamTpsLimit: optionalLimit,
@@ -98,6 +100,7 @@ export type RateLimitEntryData = {
   memberRpmLimit?: number
   memberConcurrencyLimit?: number
   memberStreamTpsLimit?: number
+  memberFirstTokenDelayMs?: number
   sharedRpmLimit?: number
   sharedConcurrencyLimit?: number
   sharedStreamTpsLimit?: number
@@ -108,6 +111,7 @@ type LimitFieldName =
   | 'memberRpmLimit'
   | 'memberConcurrencyLimit'
   | 'memberStreamTpsLimit'
+  | 'memberFirstTokenDelayMs'
   | 'sharedRpmLimit'
   | 'sharedConcurrencyLimit'
   | 'sharedStreamTpsLimit'
@@ -119,6 +123,10 @@ type RateLimitDialogProps = {
   onOpenChange: (open: boolean) => void
   onSave: (data: RateLimitEntryData) => void
   editData?: RateLimitEntryData | null
+  groupOptions: Array<{ value: string; label: string }>
+  groupListLoading: boolean
+  groupListFailed: boolean
+  editGroupMissing: boolean
 }
 
 type LimitFieldsProps = {
@@ -142,7 +150,7 @@ function LimitFields({
         <h4 className='text-sm font-medium'>{title}</h4>
         <p className='text-muted-foreground text-xs'>{description}</p>
       </div>
-      <div className='grid gap-3 sm:grid-cols-3'>
+      <div className='grid gap-3 sm:grid-cols-2'>
         {fields.map(({ name, label }) => (
           <FormField
             key={name}
@@ -183,6 +191,10 @@ export function RateLimitDialog({
   onOpenChange,
   onSave,
   editData,
+  groupOptions,
+  groupListLoading,
+  groupListFailed,
+  editGroupMissing,
 }: RateLimitDialogProps) {
   const { t } = useTranslation()
   const isEditMode = Boolean(editData)
@@ -216,6 +228,19 @@ export function RateLimitDialog({
     onOpenChange(false)
   }
 
+  let groupDescription = t('Select a group already configured in the system.')
+  if (isEditMode) {
+    groupDescription = editGroupMissing
+      ? t(
+          'This group no longer exists, but its saved policy can still be edited or deleted.'
+        )
+      : t('Group name cannot be changed when editing.')
+  } else if (groupListFailed) {
+    groupDescription = t(
+      'Existing groups could not be loaded. Retry before adding.'
+    )
+  }
+
   return (
     <Dialog
       open={open}
@@ -238,7 +263,14 @@ export function RateLimitDialog({
           >
             {t('Cancel')}
           </Button>
-          <Button type='submit' form={RATE_LIMIT_FORM_ID}>
+          <Button
+            type='submit'
+            form={RATE_LIMIT_FORM_ID}
+            disabled={
+              !isEditMode &&
+              (groupListLoading || groupListFailed || groupOptions.length === 0)
+            }
+          >
             {isEditMode ? t('Update') : t('Add')}
           </Button>
         </>
@@ -257,19 +289,19 @@ export function RateLimitDialog({
               <FormItem>
                 <FormLabel>{t('Group Name')}</FormLabel>
                 <FormControl>
-                  <Input
-                    placeholder={t('e.g., default, vip, premium')}
-                    {...field}
-                    disabled={isEditMode}
-                  />
+                  {isEditMode ? (
+                    <Input {...field} disabled />
+                  ) : (
+                    <ComboboxInput
+                      options={groupOptions}
+                      value={field.value}
+                      onValueChange={field.onChange}
+                      placeholder={t('Select an existing group')}
+                      emptyText={t('No available groups')}
+                    />
+                  )}
                 </FormControl>
-                <FormDescription>
-                  {isEditMode
-                    ? t('Group name cannot be changed when editing.')
-                    : t(
-                        'Use the account or token group name used for routing.'
-                      )}
-                </FormDescription>
+                <FormDescription>{groupDescription}</FormDescription>
                 <FormMessage />
               </FormItem>
             )}
@@ -364,6 +396,10 @@ export function RateLimitDialog({
               { name: 'memberRpmLimit', label: t('RPM') },
               { name: 'memberConcurrencyLimit', label: t('Concurrency') },
               { name: 'memberStreamTpsLimit', label: t('Streaming TPS') },
+              {
+                name: 'memberFirstTokenDelayMs',
+                label: t('First visible text delay (ms)'),
+              },
             ]}
           />
 

@@ -794,6 +794,7 @@ func GetUserPolicy(c *gin.Context) {
 		RpmLimit:              user.RpmLimit,
 		ConcurrencyLimit:      user.ConcurrencyLimit,
 		StreamTpsLimit:        user.StreamTpsLimit,
+		FirstTokenDelayMs:     user.FirstTokenDelayMs,
 	})
 }
 
@@ -829,8 +830,9 @@ func userPolicyFromMutation(user model.User, raw map[string]json.RawMessage, fal
 	_, hasRpmLimit := raw["rpm_limit"]
 	_, hasConcurrencyLimit := raw["concurrency_limit"]
 	_, hasStreamTpsLimit := raw["stream_tps_limit"]
+	_, hasFirstTokenDelayMs := raw["first_token_delay_ms"]
 	if !hasGroups && !hasPrimaryGroup && !hasLegacyGroup && !hasTopupGroup && !hasModelLimitsEnabled && !hasModelLimits && !hasModelBlocklistEnabled && !hasModelBlocklist &&
-		!hasCheckinEnabled && !hasCheckinMinQuota && !hasCheckinMaxQuota && !hasQuotaCap && !hasRpmLimit && !hasConcurrencyLimit && !hasStreamTpsLimit {
+		!hasCheckinEnabled && !hasCheckinMinQuota && !hasCheckinMaxQuota && !hasQuotaCap && !hasRpmLimit && !hasConcurrencyLimit && !hasStreamTpsLimit && !hasFirstTokenDelayMs {
 		return nil, nil
 	}
 
@@ -849,6 +851,7 @@ func userPolicyFromMutation(user model.User, raw map[string]json.RawMessage, fal
 		RpmLimit:              user.RpmLimit,
 		ConcurrencyLimit:      user.ConcurrencyLimit,
 		StreamTpsLimit:        user.StreamTpsLimit,
+		FirstTokenDelayMs:     user.FirstTokenDelayMs,
 	}
 	if hasRpmLimit {
 		if err := common.Unmarshal(raw["rpm_limit"], &update.RpmLimit); err != nil {
@@ -862,6 +865,11 @@ func userPolicyFromMutation(user model.User, raw map[string]json.RawMessage, fal
 	}
 	if hasStreamTpsLimit {
 		if err := common.Unmarshal(raw["stream_tps_limit"], &update.StreamTpsLimit); err != nil {
+			return nil, err
+		}
+	}
+	if hasFirstTokenDelayMs {
+		if err := common.Unmarshal(raw["first_token_delay_ms"], &update.FirstTokenDelayMs); err != nil {
 			return nil, err
 		}
 	}
@@ -929,6 +937,9 @@ func userPolicyFromMutation(user model.User, raw map[string]json.RawMessage, fal
 	}
 	if !hasStreamTpsLimit && fallback != nil {
 		update.StreamTpsLimit = fallback.StreamTpsLimit
+	}
+	if !hasFirstTokenDelayMs && fallback != nil {
+		update.FirstTokenDelayMs = fallback.FirstTokenDelayMs
 	}
 
 	normalized, err := normalizeUserPolicyUpdate(update)
@@ -1009,6 +1020,9 @@ func normalizeUserPolicyUpdate(update model.UserPolicyUpdate) (model.UserPolicyU
 	if err := validateUserRateLimit("流式 TPS", update.StreamTpsLimit); err != nil {
 		return model.UserPolicyUpdate{}, err
 	}
+	if err := validateUserRateLimit("首个文本延迟", update.FirstTokenDelayMs); err != nil {
+		return model.UserPolicyUpdate{}, err
+	}
 	return update, nil
 }
 
@@ -1050,6 +1064,7 @@ func userRateLimitAudit(raw map[string]json.RawMessage, update *model.UserPolicy
 	add("rpm_limit", update.RpmLimit)
 	add("concurrency_limit", update.ConcurrencyLimit)
 	add("stream_tps_limit", update.StreamTpsLimit)
+	add("first_token_delay_ms", update.FirstTokenDelayMs)
 	if len(entries) == 0 {
 		return nil
 	}
@@ -1162,6 +1177,9 @@ func UpdateUserPolicy(c *gin.Context) {
 	if _, exists := raw["stream_tps_limit"]; !exists {
 		update.StreamTpsLimit = user.StreamTpsLimit
 	}
+	if _, exists := raw["first_token_delay_ms"]; !exists {
+		update.FirstTokenDelayMs = user.FirstTokenDelayMs
+	}
 	update, err = normalizeUserPolicyUpdate(update)
 	if err != nil {
 		common.ApiErrorMsg(c, err.Error())
@@ -1232,6 +1250,7 @@ func UpdateUser(c *gin.Context) {
 		RpmLimit:              originUser.RpmLimit,
 		ConcurrencyLimit:      originUser.ConcurrencyLimit,
 		StreamTpsLimit:        originUser.StreamTpsLimit,
+		FirstTokenDelayMs:     originUser.FirstTokenDelayMs,
 	}
 	policyUpdate, err := userPolicyFromMutation(updatedUser, rawMutation, &originPolicy)
 	if err != nil {

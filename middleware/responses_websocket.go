@@ -190,7 +190,7 @@ func responsesWebSocketChannelAllowed(retryParam *service.RetryParam, channel *m
 	if channel == nil {
 		return false
 	}
-	if retryParam.CandidateFilter != nil && !retryParam.CandidateFilter(channel) {
+	if !retryParam.AllowsChannel(channel) {
 		return false
 	}
 	return retryParam.CandidateClassifier == nil || retryParam.CandidateClassifier(channel) == model.ChannelCandidateNative
@@ -314,7 +314,7 @@ func responsesBridgeChannelAllowed(retryParam *service.RetryParam, channel *mode
 	if channel == nil {
 		return false
 	}
-	if retryParam.CandidateFilter != nil && !retryParam.CandidateFilter(channel) {
+	if !retryParam.AllowsChannel(channel) {
 		return false
 	}
 	return channelMatchesCandidateClassifier(channel, retryParam.CandidateClassifier)

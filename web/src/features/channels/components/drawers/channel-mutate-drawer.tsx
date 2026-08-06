@@ -286,6 +286,7 @@ const CHANNEL_EDITOR_MAIN_SECTION_IDS = [
 const ADVANCED_SETTINGS_SECTION_IDS = {
   schedule: 'channel-section-advanced-schedule',
   routingStrategy: 'channel-section-advanced-routing-strategy',
+  requestLimits: 'channel-section-advanced-request-limits',
   clientAccessPolicy: 'channel-section-advanced-client-access-policy',
   internalNotes: 'channel-section-advanced-internal-notes',
   overrideRules: 'channel-section-advanced-override-rules',
@@ -393,6 +394,8 @@ function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
     values.remark?.trim() ||
     values.priority ||
     values.weight ||
+    values.rpm_limit ||
+    values.concurrency_limit ||
     values.proxy?.trim() ||
     values.system_prompt?.trim() ||
     values.force_format ||
@@ -823,6 +826,8 @@ export function ChannelMutateDrawer({
   const currentSchedule = form.watch('schedule')
   const currentPriority = form.watch('priority')
   const currentWeight = form.watch('weight')
+  const currentRpmLimit = form.watch('rpm_limit')
+  const currentConcurrencyLimit = form.watch('concurrency_limit')
   const currentClientPolicyMode = form.watch('client_policy_mode')
   const currentClientPolicyClients = form.watch('client_policy_clients')
   const currentProtocolCapabilitiesEnabled = form.watch(
@@ -1148,6 +1153,9 @@ export function ChannelMutateDrawer({
     currentTestModel?.trim() ||
     (currentAutoBan ?? 1) !== 1
   )
+  const requestLimitsConfigured = Boolean(
+    currentRpmLimit || currentConcurrencyLimit
+  )
   const clientAccessPolicyConfigured =
     (currentClientPolicyMode ?? 'unrestricted') !== 'unrestricted'
   const internalNotesConfigured = Boolean(
@@ -1199,6 +1207,7 @@ export function ChannelMutateDrawer({
   const advancedConfigured = Boolean(
     scheduleConfigured ||
     routingStrategyConfigured ||
+    requestLimitsConfigured ||
     clientAccessPolicyConfigured ||
     internalNotesConfigured ||
     overrideRulesConfigured ||
@@ -1222,6 +1231,11 @@ export function ChannelMutateDrawer({
       id: ADVANCED_SETTINGS_SECTION_IDS.routingStrategy,
       title: t('Routing Strategy'),
       configured: routingStrategyConfigured,
+    },
+    {
+      id: ADVANCED_SETTINGS_SECTION_IDS.requestLimits,
+      title: t('Channel Request Limits'),
+      configured: requestLimitsConfigured,
     },
     {
       id: ADVANCED_SETTINGS_SECTION_IDS.internalNotes,
@@ -4141,6 +4155,97 @@ export function ChannelMutateDrawer({
                                 </FormItem>
                               )}
                             />
+                          </div>
+
+                          <div
+                            id={ADVANCED_SETTINGS_SECTION_IDS.requestLimits}
+                            className={configuredAdvancedSectionClassName(
+                              'flex scroll-mt-4 flex-col gap-4 border-t pt-4',
+                              requestLimitsConfigured
+                            )}
+                          >
+                            <SubHeading
+                              title={t('Channel Request Limits')}
+                              icon={
+                                <SlidersHorizontal className='h-3.5 w-3.5' />
+                              }
+                              iconTone='chart-4'
+                            />
+                            <FormDescription>
+                              {t(
+                                'These limits are shared by all users, tokens, keys, and application nodes using this channel. Leave empty for unlimited.'
+                              )}
+                            </FormDescription>
+                            <div className='grid gap-4 sm:grid-cols-2'>
+                              <FormField
+                                control={form.control}
+                                name='rpm_limit'
+                                render={({ field }) => (
+                                  <FormItem>
+                                    <FormLabel>
+                                      {t('Requests per minute')}
+                                    </FormLabel>
+                                    <FormControl>
+                                      <Input
+                                        type='number'
+                                        min={1}
+                                        max={2_147_483_647}
+                                        step={1}
+                                        value={field.value ?? ''}
+                                        onChange={(event) =>
+                                          field.onChange(
+                                            event.target.value === ''
+                                              ? undefined
+                                              : Number(event.target.value)
+                                          )
+                                        }
+                                        placeholder={t('Unlimited')}
+                                      />
+                                    </FormControl>
+                                    <FormDescription>
+                                      {t(
+                                        'Counts each actual upstream relay attempt on this channel.'
+                                      )}
+                                    </FormDescription>
+                                    <FormMessage />
+                                  </FormItem>
+                                )}
+                              />
+                              <FormField
+                                control={form.control}
+                                name='concurrency_limit'
+                                render={({ field }) => (
+                                  <FormItem>
+                                    <FormLabel>
+                                      {t('Concurrent requests')}
+                                    </FormLabel>
+                                    <FormControl>
+                                      <Input
+                                        type='number'
+                                        min={1}
+                                        max={2_147_483_647}
+                                        step={1}
+                                        value={field.value ?? ''}
+                                        onChange={(event) =>
+                                          field.onChange(
+                                            event.target.value === ''
+                                              ? undefined
+                                              : Number(event.target.value)
+                                          )
+                                        }
+                                        placeholder={t('Unlimited')}
+                                      />
+                                    </FormControl>
+                                    <FormDescription>
+                                      {t(
+                                        'Capacity-full channels are skipped so another eligible channel can be tried.'
+                                      )}
+                                    </FormDescription>
+                                    <FormMessage />
+                                  </FormItem>
+                                )}
+                              />
+                            </div>
                           </div>
 
                           <div

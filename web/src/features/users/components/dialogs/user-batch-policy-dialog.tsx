@@ -72,12 +72,14 @@ type RateLimitsState = {
   rpm_limit: RateLimitState
   concurrency_limit: RateLimitState
   stream_tps_limit: RateLimitState
+  first_token_delay_ms: RateLimitState
 }
 
 const EMPTY_RATE_LIMITS: RateLimitsState = {
   rpm_limit: { mode: 'keep', value: '' },
   concurrency_limit: { mode: 'keep', value: '' },
   stream_tps_limit: { mode: 'keep', value: '' },
+  first_token_delay_ms: { mode: 'keep', value: '' },
 }
 
 function RateLimitField(props: {
@@ -316,6 +318,7 @@ export function UserBatchPolicyDialog(props: UserBatchPolicyDialogProps) {
       'rpm_limit',
       'concurrency_limit',
       'stream_tps_limit',
+      'first_token_delay_ms',
     ] as const) {
       const limit = rateLimits[key]
       if (limit.mode === 'keep') continue
@@ -574,6 +577,17 @@ export function UserBatchPolicyDialog(props: UserBatchPolicyDialogProps) {
               setRateLimits((current) => ({
                 ...current,
                 stream_tps_limit: state,
+              }))
+            }
+          />
+          <RateLimitField
+            id='batch-first-token-delay'
+            label={t('Minimum first visible text delay (ms)')}
+            state={rateLimits.first_token_delay_ms}
+            onChange={(state) =>
+              setRateLimits((current) => ({
+                ...current,
+                first_token_delay_ms: state,
               }))
             }
           />

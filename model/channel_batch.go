@@ -3,6 +3,7 @@ package model
 import (
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -18,6 +19,9 @@ const (
 	ChannelBatchListReplace = "replace"
 	ChannelBatchListAdd     = "add"
 	ChannelBatchListRemove  = "remove"
+	ChannelBatchLimitKeep   = "keep"
+	ChannelBatchLimitClear  = "clear"
+	ChannelBatchLimitCustom = "custom"
 )
 
 type ChannelBatchListUpdate struct {
@@ -39,6 +43,18 @@ type ChannelBatchUintUpdate struct {
 
 type ChannelBatchIntUpdate struct {
 	Value int `json:"value"`
+}
+
+type ChannelBatchNullableIntUpdate struct {
+	Mode  string `json:"mode"`
+	Value *int   `json:"value,omitempty"`
+}
+
+func (update *ChannelBatchNullableIntUpdate) changed() bool {
+	if update == nil {
+		return false
+	}
+	return strings.ToLower(strings.TrimSpace(update.Mode)) != ChannelBatchLimitKeep || update.Value != nil
 }
 
 type ChannelBatchBoolUpdate struct {
@@ -81,6 +97,8 @@ type ChannelBatchUpdate struct {
 	UpstreamModelUpdateCheckEnabled    *ChannelBatchBoolUpdate            `json:"upstream_model_update_check_enabled,omitempty"`
 	UpstreamModelUpdateAutoSyncEnabled *ChannelBatchBoolUpdate            `json:"upstream_model_update_auto_sync_enabled,omitempty"`
 	UpstreamModelUpdateIgnoredModels   *ChannelBatchStringListValueUpdate `json:"upstream_model_update_ignored_models,omitempty"`
+	RpmLimit                           *ChannelBatchNullableIntUpdate     `json:"rpm_limit,omitempty"`
+	ConcurrencyLimit                   *ChannelBatchNullableIntUpdate     `json:"concurrency_limit,omitempty"`
 }
 
 func (update ChannelBatchUpdate) Empty() bool {
@@ -100,7 +118,9 @@ func (update ChannelBatchUpdate) Empty() bool {
 		update.ClientPolicy == nil &&
 		update.UpstreamModelUpdateCheckEnabled == nil &&
 		update.UpstreamModelUpdateAutoSyncEnabled == nil &&
-		update.UpstreamModelUpdateIgnoredModels == nil
+		update.UpstreamModelUpdateIgnoredModels == nil &&
+		!update.RpmLimit.changed() &&
+		!update.ConcurrencyLimit.changed()
 }
 
 func (update ChannelBatchUpdate) ChangedFields() []string {
@@ -126,6 +146,8 @@ func (update ChannelBatchUpdate) ChangedFields() []string {
 		{name: "upstream_model_update_check_enabled", changed: update.UpstreamModelUpdateCheckEnabled != nil},
 		{name: "upstream_model_update_auto_sync_enabled", changed: update.UpstreamModelUpdateAutoSyncEnabled != nil},
 		{name: "upstream_model_update_ignored_models", changed: update.UpstreamModelUpdateIgnoredModels != nil},
+		{name: "rpm_limit", changed: update.RpmLimit.changed()},
+		{name: "concurrency_limit", changed: update.ConcurrencyLimit.changed()},
 	} {
 		if field.changed {
 			fields = append(fields, field.name)
@@ -298,6 +320,39 @@ func prepareChannelBatchUpdate(channel *Channel, update ChannelBatchUpdate) (pre
 		}
 		channel.Remark = &value
 		databaseUpdates["remark"] = value
+	}
+	applyLimit := func(name string, limitUpdate *ChannelBatchNullableIntUpdate) error {
+		if limitUpdate == nil {
+			return nil
+		}
+		mode := strings.ToLower(strings.TrimSpace(limitUpdate.Mode))
+		switch mode {
+		case ChannelBatchLimitKeep:
+			if limitUpdate.Value != nil {
+				return fmt.Errorf("%s keep mode must not include value", name)
+			}
+			return nil
+		case ChannelBatchLimitClear:
+			if limitUpdate.Value != nil {
+				return fmt.Errorf("%s clear mode must not include value", name)
+			}
+			databaseUpdates[name] = nil
+			return nil
+		case ChannelBatchLimitCustom:
+			if limitUpdate.Value == nil || *limitUpdate.Value < 1 || int64(*limitUpdate.Value) > math.MaxInt32 {
+				return fmt.Errorf("%s must be between 1 and 2147483647", name)
+			}
+			databaseUpdates[name] = *limitUpdate.Value
+			return nil
+		default:
+			return fmt.Errorf("unsupported %s mode %q", name, limitUpdate.Mode)
+		}
+	}
+	if err := applyLimit("rpm_limit", update.RpmLimit); err != nil {
+		return preparedChannelBatchUpdate{}, err
+	}
+	if err := applyLimit("concurrency_limit", update.ConcurrencyLimit); err != nil {
+		return preparedChannelBatchUpdate{}, err
 	}
 
 	scheduleChanged := false

@@ -572,7 +572,7 @@ export function UsersMutateDrawer({
                     'These administrator-only user overrides apply to standard text generation requests and can only tighten group limits.'
                   )}
                 </p>
-                <div className='grid grid-cols-1 gap-3 sm:grid-cols-3'>
+                <div className='grid grid-cols-1 gap-3 sm:grid-cols-2'>
                   <FormField
                     control={form.control}
                     name='rpm_limit'
@@ -662,6 +662,39 @@ export function UsersMutateDrawer({
                         <FormDescription>
                           {t(
                             'Leave empty to use the group member streaming limit; the shared pool still applies'
+                          )}
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name='first_token_delay_ms'
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>
+                          {t('Minimum first visible text delay (ms)')}
+                        </FormLabel>
+                        <FormControl>
+                          <Input
+                            type='number'
+                            min={1}
+                            max={2_147_483_647}
+                            value={field.value ?? ''}
+                            onChange={(event) =>
+                              field.onChange(
+                                event.target.value === ''
+                                  ? undefined
+                                  : Number(event.target.value)
+                              )
+                            }
+                            placeholder={t('No user override')}
+                          />
+                        </FormControl>
+                        <FormDescription>
+                          {t(
+                            'Leave empty to use the group member delay; only the first visible text event is delayed'
                           )}
                         </FormDescription>
                         <FormMessage />

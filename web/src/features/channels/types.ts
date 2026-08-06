@@ -129,6 +129,8 @@ export const channelSchema = z.object({
   model_mapping: z.string().nullish(),
   status_code_mapping: z.string().nullish(),
   priority: z.number().nullish(),
+  rpm_limit: z.number().nullish(),
+  concurrency_limit: z.number().nullish(),
   auto_ban: z.number().nullish(),
   other_info: z.string().default(''),
   tag: z.string().nullish(),
@@ -514,11 +516,14 @@ export type ChannelBatchTarget =
     }
 
 export type ChannelBatchListMode = 'replace' | 'add' | 'remove'
+export type ChannelBatchRateLimitMode = 'keep' | 'clear' | 'custom'
 
 export interface ChannelBatchUpdates {
   group?: { mode: ChannelBatchListMode; values: string[] }
   priority?: { value: number }
   weight?: { value: number }
+  rpm_limit?: { mode: ChannelBatchRateLimitMode; value?: number }
+  concurrency_limit?: { mode: ChannelBatchRateLimitMode; value?: number }
   tag?: { value: string }
   models?: { mode: ChannelBatchListMode; values: string[] }
   model_mapping?: { value: string }
@@ -563,6 +568,8 @@ export interface TagOperationParams {
   new_tag?: string
   priority?: number
   weight?: number
+  rpm_limit?: number | null
+  concurrency_limit?: number | null
   model_mapping?: string
   models?: string
   groups?: string

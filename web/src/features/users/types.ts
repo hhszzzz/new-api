@@ -147,6 +147,7 @@ export interface UserFormData {
   rpm_limit?: number | null
   concurrency_limit?: number | null
   stream_tps_limit?: number | null
+  first_token_delay_ms?: number | null
   remark?: string // Only used when updating user
   admin_permissions?: AdminPermissionMatrix
 }
@@ -166,6 +167,7 @@ export interface UserPolicy {
   rpm_limit?: number | null
   concurrency_limit?: number | null
   stream_tps_limit?: number | null
+  first_token_delay_ms?: number | null
 }
 
 export type UserBatchListMode = 'append' | 'remove' | 'replace'
@@ -199,6 +201,7 @@ export interface UserBatchRateLimitsOp {
   rpm_limit?: UserBatchRateLimitOp
   concurrency_limit?: UserBatchRateLimitOp
   stream_tps_limit?: UserBatchRateLimitOp
+  first_token_delay_ms?: UserBatchRateLimitOp
 }
 
 export interface UserBatchPolicyPayload {

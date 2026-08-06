@@ -94,6 +94,10 @@ func BatchUpdateChannels(c *gin.Context) {
 		"count":          updated,
 		"target_mode":    request.Target.Mode,
 		"changed_fields": request.Updates.ChangedFields(),
+		"rate_limits": gin.H{
+			"rpm_limit":         request.Updates.RpmLimit,
+			"concurrency_limit": request.Updates.ConcurrencyLimit,
+		},
 	})
 	common.ApiSuccess(c, gin.H{"updated": updated})
 }

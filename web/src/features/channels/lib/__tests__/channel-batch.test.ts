@@ -61,6 +61,42 @@ describe('channel batch update request builder', () => {
     })
   })
 
+  test('builds custom and clear channel request-limit operations', () => {
+    const values = {
+      ...CHANNEL_BATCH_EDIT_DEFAULT_VALUES,
+      rpmLimitMode: 'custom' as const,
+      rpmLimitValue: '60',
+      concurrencyLimitMode: 'clear' as const,
+      concurrencyLimitValue: 'ignored',
+    }
+
+    expect(hasChannelBatchUpdates(values)).toBe(true)
+    expect(buildChannelBatchUpdates(values)).toEqual({
+      rpm_limit: { mode: 'custom', value: 60 },
+      concurrency_limit: { mode: 'clear' },
+    })
+  })
+
+  test('validates custom channel request limits as positive int32 integers', () => {
+    for (const value of ['', '0', '-1', '1.5', '2147483648']) {
+      expect(
+        channelBatchEditSchema.safeParse({
+          ...CHANNEL_BATCH_EDIT_DEFAULT_VALUES,
+          rpmLimitMode: 'custom',
+          rpmLimitValue: value,
+        }).success
+      ).toBe(false)
+    }
+
+    expect(
+      channelBatchEditSchema.safeParse({
+        ...CHANNEL_BATCH_EDIT_DEFAULT_VALUES,
+        concurrencyLimitMode: 'custom',
+        concurrencyLimitValue: '2147483647',
+      }).success
+    ).toBe(true)
+  })
+
   test('sends empty datetime inputs as explicit null values', () => {
     const values = {
       ...CHANNEL_BATCH_EDIT_DEFAULT_VALUES,

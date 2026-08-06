@@ -45,6 +45,8 @@ type Channel struct {
 	//MaxInputTokens     *int    `json:"max_input_tokens" gorm:"default:0"`
 	StatusCodeMapping       *string         `json:"status_code_mapping" gorm:"type:varchar(1024);default:''"`
 	Priority                *int64          `json:"priority" gorm:"bigint;default:0"`
+	RpmLimit                *int            `json:"rpm_limit" gorm:"column:rpm_limit"`
+	ConcurrencyLimit        *int            `json:"concurrency_limit" gorm:"column:concurrency_limit"`
 	AutoBan                 *int            `json:"auto_ban" gorm:"default:1"`
 	OtherInfo               string          `json:"other_info"`
 	Tag                     *string         `json:"tag" gorm:"index"`
@@ -858,6 +860,10 @@ func (channel *Channel) prepareMultiKeyState() {
 }
 
 func (channel *Channel) update(includeAggregateLink bool) error {
+	return channel.updateWithNullableLimits(includeAggregateLink, false, false)
+}
+
+func (channel *Channel) updateWithNullableLimits(includeAggregateLink bool, setRpmLimit bool, setConcurrencyLimit bool) error {
 	channel.prepareMultiKeyState()
 	aggregateId := channel.AggregateId
 	inheritAggregateBaseURL := channel.InheritAggregateBaseURL
@@ -888,6 +894,18 @@ func (channel *Channel) update(includeAggregateLink bool) error {
 			}).Error; err != nil {
 				return err
 			}
+			nullableLimits := map[string]interface{}{}
+			if setRpmLimit {
+				nullableLimits["rpm_limit"] = channel.RpmLimit
+			}
+			if setConcurrencyLimit {
+				nullableLimits["concurrency_limit"] = channel.ConcurrencyLimit
+			}
+			if len(nullableLimits) > 0 {
+				if err := tx.Model(&Channel{}).Where("id = ?", channel.Id).Updates(nullableLimits).Error; err != nil {
+					return err
+				}
+			}
 		}
 
 		// Reload zero-value fields such as status before rebuilding abilities.
@@ -911,6 +929,13 @@ func (channel *Channel) Update() error {
 // including its aggregate relation and derived abilities.
 func (channel *Channel) UpdateWithAggregateLink() error {
 	return channel.update(true)
+}
+
+// UpdateWithAggregateLinkAndNullableLimits persists a complete channel edit
+// while preserving the distinction between an omitted nullable limit and an
+// explicitly cleared one.
+func (channel *Channel) UpdateWithAggregateLinkAndNullableLimits(setRpmLimit bool, setConcurrencyLimit bool) error {
+	return channel.updateWithNullableLimits(true, setRpmLimit, setConcurrencyLimit)
 }
 
 func (channel *Channel) UpdateResponseTime(responseTime int64) {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
@@ -92,6 +93,7 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 	var usageMu sync.Mutex
 	var readers sync.WaitGroup
 	promptApplied := false
+	responsePacing := newRealtimeResponsePacing(service.GetUserStreamPacer(c))
 	readers.Add(2)
 
 	gopool.Go(func() {
@@ -115,6 +117,7 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 					close(clientClosed)
 					return
 				}
+				responsePacing.observeClientEvent(message, time.Now())
 
 				upstreamMessage, err := applyRealtimeSessionPrompt(message, info, &promptApplied)
 				if err != nil {
@@ -276,7 +279,7 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 						return
 					}
 				}
-				if err := service.PaceUserStreamPayload(c, clientMessage); err != nil {
+				if err := responsePacing.paceServerEvent(c.Request.Context(), clientMessage, time.Now()); err != nil {
 					errChan <- fmt.Errorf("error pacing realtime response: %v", err)
 					return
 				}

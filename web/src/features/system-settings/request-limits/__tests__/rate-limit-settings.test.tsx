@@ -38,8 +38,12 @@ const apiMocks = vi.hoisted(() => ({
   updateGroupRateLimitOptions: vi.fn(),
   updateSystemOption: vi.fn(),
 }))
+const groupApiMocks = vi.hoisted(() => ({
+  getGroups: vi.fn(),
+}))
 
 vi.mock('../../api', () => apiMocks)
+vi.mock('@/features/users/api', () => groupApiMocks)
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -49,6 +53,11 @@ describe('group rate-limit settings', () => {
   beforeEach(() => {
     apiMocks.updateGroupRateLimitOptions.mockReset()
     apiMocks.updateSystemOption.mockReset()
+    groupApiMocks.getGroups.mockReset()
+    groupApiMocks.getGroups.mockResolvedValue({
+      success: true,
+      data: ['default', 'premium', 'vip'],
+    })
     vi.stubGlobal(
       'matchMedia',
       vi.fn().mockImplementation((query: string) => ({
@@ -63,6 +72,27 @@ describe('group rate-limit settings', () => {
       }))
     )
   })
+
+  const renderVisualEditor = (props: {
+    requestCounts: string
+    policies: string
+    onRequestCountsChange?: (value: string) => void
+    onPoliciesChange?: (value: string) => void
+  }) => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    return render(
+      <QueryClientProvider client={queryClient}>
+        <RateLimitVisualEditor
+          requestCounts={props.requestCounts}
+          policies={props.policies}
+          onRequestCountsChange={props.onRequestCountsChange ?? vi.fn()}
+          onPoliciesChange={props.onPoliciesChange ?? vi.fn()}
+        />
+      </QueryClientProvider>
+    )
+  }
 
   test('validates the legacy request-count format without changing it', () => {
     expect(isValidRequestCountJSON('{"default":[200,100]}')).toBe(true)
@@ -87,42 +117,91 @@ describe('group rate-limit settings', () => {
         '{"vip":{"member_limits":{}}," vip ":{"shared_pool":{}}}'
       )
     ).toBe(false)
+    expect(
+      isValidGroupPoliciesJSON(
+        '{"default":{"member_limits":{"first_token_delay_ms":1500}}}'
+      )
+    ).toBe(true)
+    expect(
+      isValidGroupPoliciesJSON(
+        '{"default":{"shared_pool":{"first_token_delay_ms":null}}}'
+      )
+    ).toBe(false)
   })
 
-  test('unions legacy-only and advanced-only groups in the visual table', () => {
-    render(
-      <RateLimitVisualEditor
-        requestCounts='{"legacy":[200,100]}'
-        policies='{"advanced":{"member_limits":{"rpm_limit":60},"shared_pool":{"concurrency_limit":10}}}'
-        onRequestCountsChange={vi.fn()}
-        onPoliciesChange={vi.fn()}
-      />
-    )
+  test('unions legacy-only and advanced-only groups in the visual table', async () => {
+    renderVisualEditor({
+      requestCounts: '{"legacy":[200,100]}',
+      policies:
+        '{"advanced":{"member_limits":{"rpm_limit":60,"first_token_delay_ms":1500},"shared_pool":{"concurrency_limit":10}}}',
+    })
 
     expect(screen.getByText('legacy')).toBeInTheDocument()
     expect(screen.getByText('advanced')).toBeInTheDocument()
-    expect(screen.getByText('RPM 60')).toBeInTheDocument()
+    expect(screen.getByText(/RPM 60/)).toBeInTheDocument()
+    expect(
+      screen.getByText(/First visible text delay 1,500 ms/)
+    ).toBeInTheDocument()
     expect(screen.getByText('Concurrency 10')).toBeInTheDocument()
     expect(screen.getByText('Use global values')).toBeInTheDocument()
+    expect(await screen.findAllByText('Group no longer exists')).toHaveLength(2)
   })
 
-  test('opens one editor with all three policy sections', () => {
-    render(
-      <RateLimitVisualEditor
-        requestCounts='{}'
-        policies='{}'
-        onRequestCountsChange={vi.fn()}
-        onPoliciesChange={vi.fn()}
-      />
-    )
+  test('opens one editor with all three policy sections', async () => {
+    renderVisualEditor({ requestCounts: '{}', policies: '{}' })
 
-    fireEvent.click(screen.getByRole('button', { name: 'Add group' }))
+    const addButton = await screen.findByRole('button', { name: 'Add group' })
+    await waitFor(() => expect(addButton).toBeEnabled())
+    fireEvent.click(addButton)
     const dialog = screen.getByRole('dialog')
     expect(
       within(dialog).getByText('Request-count override')
     ).toBeInTheDocument()
     expect(within(dialog).getByText('Group member limits')).toBeInTheDocument()
     expect(within(dialog).getByText('Group shared pool')).toBeInTheDocument()
+    expect(
+      within(dialog).getByText('First visible text delay (ms)')
+    ).toBeInTheDocument()
+  })
+
+  test('adds policies only from current unconfigured groups', async () => {
+    groupApiMocks.getGroups.mockResolvedValue({
+      success: true,
+      data: ['premium', 'default'],
+    })
+    renderVisualEditor({
+      requestCounts: '{"default":[10,5]}',
+      policies: '{"legacy":{"member_limits":{"rpm_limit":3}}}',
+    })
+
+    const addButton = await screen.findByRole('button', { name: 'Add group' })
+    await waitFor(() => expect(addButton).toBeEnabled())
+    fireEvent.click(addButton)
+    const dialog = screen.getByRole('dialog')
+    const groupInput = within(dialog).getByPlaceholderText(
+      'Select an existing group'
+    )
+    fireEvent.focus(groupInput)
+    expect(within(dialog).getByText('premium')).toBeInTheDocument()
+    expect(within(dialog).queryByText('default')).toBeNull()
+    expect(within(dialog).queryByText('legacy')).toBeNull()
+  })
+
+  test('keeps historical policies editable when the group list fails', async () => {
+    groupApiMocks.getGroups.mockRejectedValue(new Error('offline'))
+    renderVisualEditor({
+      requestCounts: '{}',
+      policies: '{"legacy":{"member_limits":{"rpm_limit":3}}}',
+    })
+
+    expect(await screen.findByText('legacy')).toBeInTheDocument()
+    expect(
+      await screen.findByText(
+        'Failed to load existing groups. Existing policies remain editable, but new policies cannot be added.'
+      )
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Add group' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Open menu' })).toBeEnabled()
   })
 
   test('submits the nested form fields through the flat atomic API contract', async () => {

@@ -97,6 +97,7 @@ func TestUpdateGroupRateLimitOptionsPersistsAndPublishesCompleteSetting(t *testi
 	db := setupGroupRateLimitOptionControllerTest(t)
 	rpm := 60
 	memberConcurrency := 2
+	firstTokenDelay := 1500
 	sharedRPM := 3000
 	sharedTPS := 1000
 
@@ -106,7 +107,7 @@ func TestUpdateGroupRateLimitOptionsPersistsAndPublishesCompleteSetting(t *testi
 		ModelRequestRateLimitGroup: map[string][2]int{"vip": {200, 100}},
 		Policies: map[string]group_rate_limit_setting.GroupPolicy{
 			" vip ": {
-				MemberLimits: group_rate_limit_setting.Limits{RPMLimit: &rpm, ConcurrencyLimit: &memberConcurrency},
+				MemberLimits: group_rate_limit_setting.Limits{RPMLimit: &rpm, ConcurrencyLimit: &memberConcurrency, FirstTokenDelayMs: &firstTokenDelay},
 				SharedPool:   group_rate_limit_setting.Limits{RPMLimit: &sharedRPM, StreamTPSLimit: &sharedTPS},
 			},
 		},
@@ -118,11 +119,12 @@ func TestUpdateGroupRateLimitOptionsPersistsAndPublishesCompleteSetting(t *testi
 	assert.True(t, snapshot.SharedPoolEnabled)
 	require.Contains(t, snapshot.Policies, "vip")
 	assert.Equal(t, rpm, *snapshot.Policies["vip"].MemberLimits.RPMLimit)
+	assert.Equal(t, firstTokenDelay, *snapshot.Policies["vip"].MemberLimits.FirstTokenDelayMs)
 	assert.Equal(t, sharedRPM, *snapshot.Policies["vip"].SharedPool.RPMLimit)
 	assert.JSONEq(t, `{"vip":[200,100]}`, requireClientPolicyOptionValue(t, db, "ModelRequestRateLimitGroup"))
 	assert.Equal(t, "true", requireClientPolicyOptionValue(t, db, group_rate_limit_setting.MemberEnabledOptionKey))
 	assert.Equal(t, "true", requireClientPolicyOptionValue(t, db, group_rate_limit_setting.SharedPoolEnabledOptionKey))
-	assert.JSONEq(t, `{"vip":{"member_limits":{"rpm_limit":60,"concurrency_limit":2},"shared_pool":{"rpm_limit":3000,"stream_tps_limit":1000}}}`, requireClientPolicyOptionValue(t, db, group_rate_limit_setting.PoliciesOptionKey))
+	assert.JSONEq(t, `{"vip":{"member_limits":{"rpm_limit":60,"concurrency_limit":2,"first_token_delay_ms":1500},"shared_pool":{"rpm_limit":3000,"stream_tps_limit":1000}}}`, requireClientPolicyOptionValue(t, db, group_rate_limit_setting.PoliciesOptionKey))
 }
 
 func TestUpdateGroupRateLimitOptionsRollsBackOnPersistenceFailure(t *testing.T) {

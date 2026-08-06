@@ -78,6 +78,7 @@ const (
 	ContextKeyUserRpmLimit              ContextKey = "user_rpm_limit"
 	ContextKeyUserConcurrencyLimit      ContextKey = "user_concurrency_limit"
 	ContextKeyUserStreamTpsLimit        ContextKey = "user_stream_tps_limit"
+	ContextKeyUserFirstTokenDelayMs     ContextKey = "user_first_token_delay_ms"
 	ContextKeyUserModelRouteId          ContextKey = "user_model_route_id"
 	ContextKeyUserModelRouteTarget      ContextKey = "user_model_route_target"
 	ContextKeyUserModelRouteGroup       ContextKey = "user_model_route_group"

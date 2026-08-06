@@ -82,9 +82,10 @@ func TestUserRateLimitPolicyMergesUserMemberAndSharedLimits(t *testing.T) {
 		Policies: map[string]group_rate_limit_setting.GroupPolicy{
 			"vip": {
 				MemberLimits: group_rate_limit_setting.Limits{
-					RPMLimit:         rateLimitInt(60),
-					ConcurrencyLimit: rateLimitInt(2),
-					StreamTPSLimit:   rateLimitInt(12),
+					RPMLimit:          rateLimitInt(60),
+					ConcurrencyLimit:  rateLimitInt(2),
+					StreamTPSLimit:    rateLimitInt(12),
+					FirstTokenDelayMs: rateLimitInt(1500),
 				},
 				SharedPool: group_rate_limit_setting.Limits{
 					RPMLimit:         rateLimitInt(3000),
@@ -95,16 +96,18 @@ func TestUserRateLimitPolicyMergesUserMemberAndSharedLimits(t *testing.T) {
 		},
 	})
 
-	policy := buildUserRateLimitPolicy(7, "vip", 30, 4, 0)
+	policy := buildUserRateLimitPolicy(7, "vip", 30, 4, 0, 1000)
 	assert.Equal(t, 30, policy.RPMLimit, "a user override may only tighten the member limit")
 	assert.Equal(t, 2, policy.ConcurrencyLimit)
 	assert.Equal(t, 12, policy.StreamTPSLimit, "clearing a user override falls back to the member limit")
 	assert.Equal(t, 3000, policy.SharedRPMLimit)
 	assert.Equal(t, 100, policy.SharedConcurrencyLimit)
 	assert.Equal(t, 1000, policy.SharedStreamTPSLimit)
+	assert.Equal(t, 1500, policy.FirstTokenDelayMs, "the longer user or member delay must win")
 
-	defaultPolicy := buildUserRateLimitPolicy(8, "default", 10, 1, 5)
+	defaultPolicy := buildUserRateLimitPolicy(8, "default", 10, 1, 5, 750)
 	assert.Equal(t, 10, defaultPolicy.RPMLimit)
+	assert.Equal(t, 750, defaultPolicy.FirstTokenDelayMs)
 	assert.Zero(t, defaultPolicy.SharedRPMLimit, "groups without a policy remain unrestricted")
 }
 
@@ -417,6 +420,28 @@ func TestGroupConcurrencyLeaseIsAtomicAcrossUsersAndReleasesBothLayers(t *testin
 	assert.Zero(t, groupActive)
 }
 
+func TestUserAndGroupConcurrencyKeysShareRedisClusterHashTag(t *testing.T) {
+	keys := concurrencyKeys(UserRateLimitPolicy{UserID: 201, Group: "vip"})
+	require.Len(t, keys, 4)
+
+	hashTag := func(key string) string {
+		start := strings.IndexByte(key, '{')
+		if start < 0 {
+			return ""
+		}
+		end := strings.IndexByte(key[start+1:], '}')
+		if end < 0 {
+			return ""
+		}
+		return key[start+1 : start+1+end]
+	}
+	want := hashTag(keys[0])
+	require.NotEmpty(t, want)
+	for _, key := range keys[1:] {
+		assert.Equal(t, want, hashTag(key), "all keys used by one atomic Lua script must share a Redis Cluster slot")
+	}
+}
+
 func TestGroupConcurrencyWaitingPoolRejectsWithoutPartialUserWaiter(t *testing.T) {
 	env := useUserRateLimitMiniRedis(t)
 	now, err := env.client.Time(t.Context()).Result()
@@ -535,6 +560,111 @@ func TestStreamPayloadTextExtractsClientVisibleTextOnly(t *testing.T) {
 			assert.Equal(t, test.want, streamPayloadText([]byte(test.payload)))
 		})
 	}
+}
+
+func TestStreamPayloadVisibleTextExcludesToolArgumentsAndAudio(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+		want    string
+	}{
+		{name: "chat content only", payload: `{"choices":[{"delta":{"content":"hello","tool_calls":[{"function":{"arguments":"{\"x\":1}"}}]}}]}`, want: "hello"},
+		{name: "responses tool arguments", payload: `{"type":"response.function_call_arguments.delta","delta":"{\"x\":"}`, want: ""},
+		{name: "claude partial json", payload: `{"type":"content_block_delta","delta":{"partial_json":"{\"x\":"}}`, want: ""},
+		{name: "reasoning", payload: `{"type":"response.reasoning_summary_text.delta","delta":"thinking"}`, want: "thinking"},
+		{name: "transcript", payload: `{"type":"response.audio_transcript.delta","delta":"spoken text"}`, want: "spoken text"},
+		{name: "audio bytes", payload: `{"type":"response.audio.delta","delta":"ignored"}`, want: ""},
+		{name: "gemini text without args", payload: `{"candidates":[{"content":{"parts":[{"text":"gemini","functionCall":{"args":{"city":"Paris"}}}]}}]}`, want: "gemini"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, streamPayloadVisibleText([]byte(test.payload)))
+		})
+	}
+}
+
+func TestFirstVisibleTextDelayUsesRequestDeadlineOnce(t *testing.T) {
+	fixedNow := time.Unix(100, 0)
+	var waits []time.Duration
+	pacer := &UserStreamPacer{
+		modelName: "gpt-4o",
+		firstDelayWaiter: &firstTokenDelayWaiter{
+			deadline: fixedNow.Add(1500 * time.Millisecond),
+			now:      func() time.Time { return fixedNow },
+			wait: func(_ context.Context, delay time.Duration) error {
+				waits = append(waits, delay)
+				return nil
+			},
+		},
+		observation: &UserRateLimitObservation{},
+	}
+
+	require.NoError(t, pacer.PacePayload(t.Context(), []byte(`{"type":"response.function_call_arguments.delta","delta":"{\"x\":"}`)))
+	assert.Empty(t, waits, "tool arguments must not start the first-text delay")
+	require.NoError(t, pacer.PacePayload(t.Context(), []byte(`{"type":"response.output_text.delta","delta":"answer"}`)))
+	require.NoError(t, pacer.PacePayload(t.Context(), []byte(`{"type":"response.output_text.delta","delta":"later"}`)))
+	assert.Equal(t, []time.Duration{1500 * time.Millisecond}, waits)
+}
+
+func TestFirstVisibleTextDelayAndTPSWaitConcurrently(t *testing.T) {
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	pacer := &UserStreamPacer{
+		limit:            1,
+		modelName:        "gpt-4o",
+		waiters:          []streamRateWaiter{&gatedStreamWaiter{started: started, release: release}},
+		firstDelayWaiter: &gatedStreamWaiter{started: started, release: release},
+		observation:      &UserRateLimitObservation{},
+	}
+	result := make(chan error, 1)
+	go func() {
+		result <- pacer.PacePayload(t.Context(), []byte(`{"choices":[{"delta":{"content":"text"}}]}`))
+	}()
+
+	for range 2 {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("first-text and TPS waits must start together")
+		}
+	}
+	close(release)
+	assert.NoError(t, <-result)
+}
+
+func TestRequestPacerAnchorsFirstTextDelayToLogicalRequestStart(t *testing.T) {
+	c := newUserRateLimitTestContext(t.Context())
+	startedAt := time.Unix(123, 0)
+	common.SetContextKey(c, constant.ContextKeyRequestStartTime, startedAt)
+	pacer := newRequestStreamPacer(c, UserRateLimitPolicy{FirstTokenDelayMs: 1250}, "gpt-4o", &UserRateLimitObservation{})
+	require.NotNil(t, pacer)
+	waiter, ok := pacer.firstDelayWaiter.(*firstTokenDelayWaiter)
+	require.True(t, ok)
+	assert.Equal(t, startedAt.Add(1250*time.Millisecond), waiter.deadline)
+}
+
+func TestRealtimeResponsePacersUseIndependentDeadlinesAndSharedTPSState(t *testing.T) {
+	base := &UserStreamPacer{
+		limit:       3,
+		modelName:   "gpt-4o",
+		waiters:     []streamRateWaiter{&recordingStreamWaiter{}},
+		firstDelay:  2 * time.Second,
+		observation: &UserRateLimitObservation{},
+	}
+	firstStart := time.Unix(200, 0)
+	secondStart := firstStart.Add(time.Second)
+	first := base.NewRealtimeResponsePacer(firstStart)
+	second := base.NewRealtimeResponsePacer(secondStart)
+	require.NotSame(t, first, second)
+	firstDelay, ok := first.firstDelayWaiter.(*firstTokenDelayWaiter)
+	require.True(t, ok)
+	secondDelay, ok := second.firstDelayWaiter.(*firstTokenDelayWaiter)
+	require.True(t, ok)
+	assert.Equal(t, firstStart.Add(2*time.Second), firstDelay.deadline)
+	assert.Equal(t, secondStart.Add(2*time.Second), secondDelay.deadline)
+	assert.Same(t, base.pacingCounter(), first.pacingCounter())
+	assert.Same(t, base.pacingCounter(), second.pacingCounter())
+	assert.Equal(t, base.waiters[0], first.waiters[0], "Realtime responses must share the connection TPS bucket")
 }
 
 func TestUserStreamPacerPropagatesWaiterError(t *testing.T) {

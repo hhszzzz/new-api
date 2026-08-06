@@ -70,3 +70,19 @@ func TestBatchUpdateChannelsReturnsConflictWhenFilteredTargetDrifts(t *testing.T
 	assert.Equal(t, http.StatusConflict, recorder.Code)
 	assert.Contains(t, recorder.Body.String(), "preview and confirm again")
 }
+
+func TestValidateChannelRateLimitBounds(t *testing.T) {
+	channel := &model.Channel{Type: 1}
+	assert.NoError(t, validateChannel(channel, false))
+
+	channel.RpmLimit = common.GetPointer(1)
+	channel.ConcurrencyLimit = common.GetPointer(2_147_483_647)
+	assert.NoError(t, validateChannel(channel, false))
+
+	channel.RpmLimit = common.GetPointer(0)
+	assert.ErrorContains(t, validateChannel(channel, false), "rpm_limit must be between")
+
+	channel.RpmLimit = common.GetPointer(1)
+	channel.ConcurrencyLimit = common.GetPointer(2_147_483_648)
+	assert.ErrorContains(t, validateChannel(channel, false), "concurrency_limit must be between")
+}

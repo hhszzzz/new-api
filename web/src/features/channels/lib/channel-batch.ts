@@ -46,6 +46,10 @@ export const channelBatchEditSchema = z
     priority: channelBatchNumberInputSchema,
     applyWeight: z.boolean(),
     weight: channelBatchNumberInputSchema,
+    rpmLimitMode: z.enum(['keep', 'clear', 'custom']),
+    rpmLimitValue: z.string(),
+    concurrencyLimitMode: z.enum(['keep', 'clear', 'custom']),
+    concurrencyLimitValue: z.string(),
     applyTag: z.boolean(),
     tag: z.string(),
     applyModels: z.boolean(),
@@ -108,6 +112,30 @@ export const channelBatchEditSchema = z
         path: ['weight'],
         message: 'Weight cannot be negative',
       })
+    }
+    for (const [mode, field, rawValue] of [
+      [values.rpmLimitMode, 'rpmLimitValue', values.rpmLimitValue],
+      [
+        values.concurrencyLimitMode,
+        'concurrencyLimitValue',
+        values.concurrencyLimitValue,
+      ],
+    ] as const) {
+      if (mode !== 'custom') continue
+      const value = Number(rawValue)
+      if (
+        rawValue.trim() === '' ||
+        !Number.isInteger(value) ||
+        value < 1 ||
+        value > 2_147_483_647
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [field],
+          message:
+            'Custom request limits must be integers from 1 to 2147483647',
+        })
+      }
     }
     if (
       values.applyGroup &&
@@ -235,6 +263,10 @@ export const CHANNEL_BATCH_EDIT_DEFAULT_VALUES: ChannelBatchEditValues = {
   priority: 0,
   applyWeight: false,
   weight: 0,
+  rpmLimitMode: 'keep',
+  rpmLimitValue: '',
+  concurrencyLimitMode: 'keep',
+  concurrencyLimitValue: '',
   applyTag: false,
   tag: '',
   applyModels: false,
@@ -291,7 +323,11 @@ const batchApplyFields = [
 export function hasChannelBatchUpdates(
   values: ChannelBatchEditValues
 ): boolean {
-  return batchApplyFields.some((field) => values[field])
+  return (
+    batchApplyFields.some((field) => values[field]) ||
+    values.rpmLimitMode !== 'keep' ||
+    values.concurrencyLimitMode !== 'keep'
+  )
 }
 
 export function parseChannelBatchListValues(value: string): string[] {
@@ -329,6 +365,18 @@ export function buildChannelBatchUpdates(
   }
   if (values.applyPriority) updates.priority = { value: values.priority }
   if (values.applyWeight) updates.weight = { value: values.weight }
+  if (values.rpmLimitMode !== 'keep') {
+    updates.rpm_limit =
+      values.rpmLimitMode === 'custom'
+        ? { mode: 'custom', value: Number(values.rpmLimitValue) }
+        : { mode: 'clear' }
+  }
+  if (values.concurrencyLimitMode !== 'keep') {
+    updates.concurrency_limit =
+      values.concurrencyLimitMode === 'custom'
+        ? { mode: 'custom', value: Number(values.concurrencyLimitValue) }
+        : { mode: 'clear' }
+  }
   if (values.applyTag) updates.tag = { value: values.tag }
   if (values.applyModels) {
     updates.models = {

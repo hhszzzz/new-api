@@ -64,8 +64,9 @@ type responsesWSCallState struct {
 	// cancelHTTP is set only for calls served by the HTTP transport bridge.
 	// Those calls settle their own billing in runHTTPBridgeCall; outside
 	// observers may only cancel them.
-	cancelHTTP context.CancelFunc
-	rateGuard  *service.UserRequestRateGuard
+	cancelHTTP       context.CancelFunc
+	rateGuard        *service.UserRequestRateGuard
+	channelRateGuard *service.ChannelRateLimitGuard
 }
 
 type responsesWSSession struct {
@@ -247,6 +248,7 @@ func (s *responsesWSSession) handleResponseCreate(create responsesWSCreateReques
 		)
 	}
 	protocolstate.ResetLogicalRequest(s.c)
+	common.SetContextKey(s.c, appconstant.ContextKeyRequestStartTime, time.Now())
 
 	validated, requestBody, apiErr := installResponsesWSRequestBody(s.c, &req)
 	if apiErr != nil {
@@ -301,13 +303,23 @@ func (s *responsesWSSession) handleResponseCreate(create responsesWSCreateReques
 	if !s.hasTarget() {
 		return s.connectAndSendFirst(create, eventID, commitRate)
 	}
+	channelRateGuard, allowed := service.TryAcquireChannelRateLimit(s.c, s.lockedChannel)
+	if !allowed {
+		s.closeTarget()
+		s.lockedModel = ""
+		s.lockedChannel = nil
+		return s.connectAndSendFirst(create, eventID, commitRate)
+	}
 
 	state, payload, apiErr := s.prepareCall(create, commitRate)
 	if apiErr != nil {
+		channelRateGuard.Release()
 		commitRate(false)
 		return apiErr
 	}
+	state.channelRateGuard = channelRateGuard
 	if !s.tryReserveCurrent(state) {
+		channelRateGuard.Release()
 		state.refund(s.c)
 		commitRate(false)
 		return types.NewErrorWithStatusCode(
@@ -384,7 +396,25 @@ func (s *responsesWSSession) connectAndSendFirst(create responsesWSCreateRequest
 	var lastErr *types.NewAPIError
 	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
 		protocolstate.ResetAttempt(s.c)
-		channel, apiErr := middleware.SelectResponsesWebSocketChannel(s.c, req.Model, retryParam)
+		retryParam.ClearChannelExclusions()
+		var (
+			channel          *appmodel.Channel
+			channelRateGuard *service.ChannelRateLimitGuard
+			apiErr           *types.NewAPIError
+		)
+		for {
+			channel, apiErr = middleware.SelectResponsesWebSocketChannel(s.c, req.Model, retryParam)
+			if apiErr != nil {
+				break
+			}
+			var allowed bool
+			channelRateGuard, allowed = service.TryAcquireChannelRateLimit(s.c, channel)
+			if allowed {
+				break
+			}
+			retryParam.ExcludeChannel(channel.Id)
+		}
+		retryParam.ClearChannelExclusions()
 		if apiErr != nil {
 			if retryParam.GetRetry() == 0 {
 				// No channel can serve a native Responses WebSocket. Serve this
@@ -400,12 +430,15 @@ func (s *responsesWSSession) connectAndSendFirst(create responsesWSCreateRequest
 
 		state, payload, apiErr := s.prepareCall(create, commitRate)
 		if apiErr != nil {
+			channelRateGuard.Release()
 			commitRate(false)
 			return apiErr
 		}
+		state.channelRateGuard = channelRateGuard
 
 		adaptor := GetAdaptorForProtocol(state.info.ApiType, channelcompat.ProtocolResponses)
 		if adaptor == nil {
+			channelRateGuard.Release()
 			state.refund(s.c)
 			apiErr = types.NewError(fmt.Errorf("invalid api type: %d", state.info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
 			var shouldRetry bool
@@ -418,6 +451,7 @@ func (s *responsesWSSession) connectAndSendFirst(create responsesWSCreateRequest
 		adaptor.Init(state.info)
 		target, apiErr := dialResponsesWebSocketUpstream(s.c, adaptor, state.info)
 		if apiErr != nil {
+			channelRateGuard.Release()
 			state.refund(s.c)
 			var shouldRetry bool
 			lastErr, shouldRetry = s.processChannelError(channel, apiErr, retryParam, state.info)
@@ -430,6 +464,7 @@ func (s *responsesWSSession) connectAndSendFirst(create responsesWSCreateRequest
 		s.setTarget(target)
 		if !s.tryReserveCurrent(state) {
 			s.closeTarget()
+			channelRateGuard.Release()
 			state.refund(s.c)
 			commitRate(false)
 			return types.NewErrorWithStatusCode(errors.New("another response.create is already in progress on this websocket connection"), types.ErrorCodeInvalidRequest, http.StatusConflict, types.ErrOptionWithSkipRetry())
@@ -478,6 +513,7 @@ func (s *responsesWSSession) abortRetryableCall(state *responsesWSCallState) {
 		return
 	}
 	state.refund(s.c)
+	state.channelRateGuard.Release()
 	if state.commitRate != nil {
 		state.commitRate(false)
 	}
@@ -531,7 +567,6 @@ func (s *responsesWSSession) prepareCall(create responsesWSCreateRequest, commit
 // token estimate, pricing, and pre-consume.
 func (s *responsesWSSession) prepareCallState(create responsesWSCreateRequest) (*responsesWSCallState, *types.NewAPIError) {
 	req := create.Request
-	common.SetContextKey(s.c, appconstant.ContextKeyRequestStartTime, time.Now())
 	if s.baseRequestID == "" {
 		s.baseRequestID = s.c.GetString(common.RequestIdKey)
 		if s.baseRequestID == "" {
@@ -862,6 +897,7 @@ func (s *responsesWSSession) finishCall(state *responsesWSCallState, success boo
 		return
 	}
 	defer state.rateGuard.Release()
+	defer state.channelRateGuard.Release()
 	if !success {
 		state.refund(s.c)
 		if state.commitRate != nil {

@@ -20,13 +20,15 @@ func TestUserPolicyMutationDistinguishesOmittedNullAndCustomRateLimits(t *testin
 		RpmLimit:              common.GetPointer(60),
 		ConcurrencyLimit:      common.GetPointer(2),
 		StreamTpsLimit:        common.GetPointer(12),
+		FirstTokenDelayMs:     common.GetPointer(1000),
 		ModelLimitsEnabled:    false,
 		ModelBlocklistEnabled: false,
 	}
 	user := model.User{Group: "default"}
 	raw := map[string]json.RawMessage{
-		"rpm_limit":         json.RawMessage("90"),
-		"concurrency_limit": json.RawMessage("null"),
+		"rpm_limit":            json.RawMessage("90"),
+		"concurrency_limit":    json.RawMessage("null"),
+		"first_token_delay_ms": json.RawMessage("1500"),
 	}
 
 	update, err := userPolicyFromMutation(user, raw, fallback)
@@ -37,11 +39,14 @@ func TestUserPolicyMutationDistinguishesOmittedNullAndCustomRateLimits(t *testin
 	assert.Nil(t, update.ConcurrencyLimit)
 	require.NotNil(t, update.StreamTpsLimit)
 	assert.Equal(t, 12, *update.StreamTpsLimit, "omitted fields must retain their previous values")
+	require.NotNil(t, update.FirstTokenDelayMs)
+	assert.Equal(t, 1500, *update.FirstTokenDelayMs)
 
 	audit := userRateLimitAudit(raw, update)
 	assert.Equal(t, map[string]interface{}{"mode": userBatchCheckinCustom, "value": 90}, audit["rpm_limit"])
 	assert.Equal(t, map[string]interface{}{"mode": userBatchRateLimitClear}, audit["concurrency_limit"])
 	assert.NotContains(t, audit, "stream_tps_limit")
+	assert.Equal(t, map[string]interface{}{"mode": userBatchCheckinCustom, "value": 1500}, audit["first_token_delay_ms"])
 }
 
 func TestValidateUserRateLimitBounds(t *testing.T) {
@@ -50,4 +55,5 @@ func TestValidateUserRateLimitBounds(t *testing.T) {
 	assert.NoError(t, validateUserRateLimit("RPM", common.GetPointer(maxUserRateLimit)))
 	assert.Error(t, validateUserRateLimit("RPM", common.GetPointer(0)))
 	assert.Error(t, validateUserRateLimit("RPM", common.GetPointer(-1)))
+	assert.Error(t, validateUserRateLimit("首个文本延迟", common.GetPointer(maxUserRateLimit+1)))
 }

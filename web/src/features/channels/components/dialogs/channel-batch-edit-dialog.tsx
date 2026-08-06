@@ -82,6 +82,7 @@ import {
 import type {
   ChannelBatchFilter,
   ChannelBatchListMode,
+  ChannelBatchRateLimitMode,
   ChannelBatchTarget,
 } from '../../types'
 import { WeeklyScheduleEditor } from '../channel-schedule-editor'
@@ -155,6 +156,55 @@ function ListModeControl(props: ListModeControlProps) {
   )
 }
 
+type BatchRateLimitFieldProps = {
+  id: string
+  label: string
+  mode: ChannelBatchRateLimitMode
+  value: string
+  onModeChange: (mode: ChannelBatchRateLimitMode) => void
+  onValueChange: (value: string) => void
+}
+
+function BatchRateLimitField(props: BatchRateLimitFieldProps) {
+  const { t } = useTranslation()
+
+  return (
+    <Field className='py-3'>
+      <FieldLabel htmlFor={`${props.id}-mode`}>{props.label}</FieldLabel>
+      <div className='grid gap-2 sm:grid-cols-2'>
+        <Select
+          value={props.mode}
+          onValueChange={(value) =>
+            props.onModeChange(value as ChannelBatchRateLimitMode)
+          }
+        >
+          <SelectTrigger id={`${props.id}-mode`} className='w-full'>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value='keep'>{t('Keep unchanged')}</SelectItem>
+            <SelectItem value='clear'>{t('Clear limit')}</SelectItem>
+            <SelectItem value='custom'>{t('Custom limit')}</SelectItem>
+          </SelectContent>
+        </Select>
+        {props.mode === 'custom' && (
+          <Input
+            id={`${props.id}-value`}
+            type='number'
+            min={1}
+            max={2_147_483_647}
+            step={1}
+            value={props.value}
+            onChange={(event) => props.onValueChange(event.target.value)}
+            placeholder={t('Limit value')}
+            aria-label={`${props.label} ${t('Limit value')}`}
+          />
+        )}
+      </div>
+    </Field>
+  )
+}
+
 function getApiErrorMessage(error: unknown): string | undefined {
   if (error instanceof Error) return error.message
   if (!error || typeof error !== 'object') return undefined
@@ -209,6 +259,10 @@ export function ChannelBatchEditDialog(props: ChannelBatchEditDialogProps) {
   const applyGroup = form.watch('applyGroup')
   const applyPriority = form.watch('applyPriority')
   const applyWeight = form.watch('applyWeight')
+  const rpmLimitMode = form.watch('rpmLimitMode')
+  const rpmLimitValue = form.watch('rpmLimitValue')
+  const concurrencyLimitMode = form.watch('concurrencyLimitMode')
+  const concurrencyLimitValue = form.watch('concurrencyLimitValue')
   const applyTag = form.watch('applyTag')
   const applyModels = form.watch('applyModels')
   const applyModelMapping = form.watch('applyModelMapping')
@@ -708,6 +762,56 @@ export function ChannelBatchEditDialog(props: ChannelBatchEditDialogProps) {
                 />
               </BatchField>
             </div>
+          </FieldGroup>
+        </FieldSet>
+
+        <Separator />
+
+        <FieldSet>
+          <FieldLegend>{t('Request Limits')}</FieldLegend>
+          <FieldDescription>
+            {t(
+              'Channel limits are shared by all users, tokens, keys, and application nodes using the channel. Capacity-full channels are skipped automatically.'
+            )}
+          </FieldDescription>
+          <FieldGroup className='gap-0'>
+            <BatchRateLimitField
+              id='batch-channel-rpm-limit'
+              label={t('Requests per minute')}
+              mode={rpmLimitMode}
+              value={rpmLimitValue}
+              onModeChange={(mode) =>
+                form.setValue('rpmLimitMode', mode, {
+                  shouldDirty: true,
+                  shouldValidate: true,
+                })
+              }
+              onValueChange={(value) =>
+                form.setValue('rpmLimitValue', value, {
+                  shouldDirty: true,
+                  shouldValidate: true,
+                })
+              }
+            />
+            <Separator />
+            <BatchRateLimitField
+              id='batch-channel-concurrency-limit'
+              label={t('Concurrent requests')}
+              mode={concurrencyLimitMode}
+              value={concurrencyLimitValue}
+              onModeChange={(mode) =>
+                form.setValue('concurrencyLimitMode', mode, {
+                  shouldDirty: true,
+                  shouldValidate: true,
+                })
+              }
+              onValueChange={(value) =>
+                form.setValue('concurrencyLimitValue', value, {
+                  shouldDirty: true,
+                  shouldValidate: true,
+                })
+              }
+            />
           </FieldGroup>
         </FieldSet>
 

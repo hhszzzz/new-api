@@ -42,6 +42,7 @@ export type GroupRateLimitValues = {
   rpm_limit?: number | null
   concurrency_limit?: number | null
   stream_tps_limit?: number | null
+  first_token_delay_ms?: number | null
 }
 
 export type GroupRateLimitPolicy = {

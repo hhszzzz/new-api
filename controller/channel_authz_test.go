@@ -82,6 +82,17 @@ func TestChannelHasSensitiveChanges(t *testing.T) {
 		assert.False(t, channelHasSensitiveChanges(&updated, origin, map[string]any{"status": updated.Status}))
 	})
 
+	t.Run("rate limits are operational", func(t *testing.T) {
+		updated := PatchChannel{Channel: *origin}
+		updated.RpmLimit = common.GetPointer(60)
+		updated.ConcurrencyLimit = common.GetPointer(2)
+
+		assert.False(t, channelHasSensitiveChanges(&updated, origin, map[string]any{
+			"rpm_limit":         60,
+			"concurrency_limit": 2,
+		}))
+	})
+
 	t.Run("read-only fields are ignored by sensitivity check", func(t *testing.T) {
 		updated := PatchChannel{Channel: *origin}
 		updated.Balance = 99

@@ -23,6 +23,7 @@ type RetryParam struct {
 	CandidateClassifier model.ChannelCandidateClassifier
 	Retry               *int
 	resetNextTry        bool
+	excludedChannelIds  map[int]struct{}
 }
 
 func publishSelectedGroupContext(ctx *gin.Context, group string) {
@@ -61,6 +62,53 @@ func (p *RetryParam) ResetRetryNextTry() {
 	p.resetNextTry = true
 }
 
+func (p *RetryParam) ExcludeChannel(channelID int) {
+	if p == nil || channelID <= 0 {
+		return
+	}
+	if p.excludedChannelIds == nil {
+		p.excludedChannelIds = make(map[int]struct{})
+	}
+	p.excludedChannelIds[channelID] = struct{}{}
+}
+
+func (p *RetryParam) IsChannelExcluded(channelID int) bool {
+	if p == nil || channelID <= 0 {
+		return false
+	}
+	_, excluded := p.excludedChannelIds[channelID]
+	return excluded
+}
+
+func (p *RetryParam) ClearChannelExclusions() {
+	if p != nil {
+		p.excludedChannelIds = nil
+	}
+}
+
+func (p *RetryParam) AllowsChannel(channel *model.Channel) bool {
+	filter := p.effectiveCandidateFilter()
+	return filter == nil || filter(channel)
+}
+
+func (p *RetryParam) effectiveCandidateFilter() model.ChannelCandidateFilter {
+	if p == nil || len(p.excludedChannelIds) == 0 {
+		if p == nil {
+			return nil
+		}
+		return p.CandidateFilter
+	}
+	return func(channel *model.Channel) bool {
+		if channel == nil {
+			return false
+		}
+		if _, excluded := p.excludedChannelIds[channel.Id]; excluded {
+			return false
+		}
+		return p.CandidateFilter == nil || p.CandidateFilter(channel)
+	}
+}
+
 // CacheGetRandomSatisfiedChannel preserves priority, weight, auto-group and
 // cross-group retry behavior while optionally restricting candidates to a
 // strict administrator-selected channel pool.
@@ -84,7 +132,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			param.GetRetry(),
 			param.RequestPath,
 			param.AllowedChannelIds,
-			param.CandidateFilter,
+			param.effectiveCandidateFilter(),
 			param.CandidateClassifier,
 		)
 		return channel, selectGroup, err
@@ -154,7 +202,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 				priorityRetry,
 				param.RequestPath,
 				param.AllowedChannelIds,
-				param.CandidateFilter,
+				param.effectiveCandidateFilter(),
 				nativeClassifier,
 			)
 			if err != nil {
@@ -197,7 +245,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			priorityRetry,
 			param.RequestPath,
 			param.AllowedChannelIds,
-			param.CandidateFilter,
+			param.effectiveCandidateFilter(),
 			param.CandidateClassifier,
 		)
 		if err != nil {

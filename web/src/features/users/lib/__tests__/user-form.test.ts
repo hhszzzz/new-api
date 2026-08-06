@@ -133,6 +133,7 @@ describe('user policy form transformations', () => {
         rpm_limit: 60,
         concurrency_limit: 2,
         stream_tps_limit: 12,
+        first_token_delay_ms: 1500,
       }
     )
 
@@ -143,6 +144,7 @@ describe('user policy form transformations', () => {
       rpm_limit: 60,
       concurrency_limit: 2,
       stream_tps_limit: 12,
+      first_token_delay_ms: 1500,
     })
   })
 
@@ -152,11 +154,13 @@ describe('user policy form transformations', () => {
       rpm_limit: 60,
       concurrency_limit: 2,
       stream_tps_limit: 12,
+      first_token_delay_ms: 1500,
     })
     expect(custom).toMatchObject({
       rpm_limit: 60,
       concurrency_limit: 2,
       stream_tps_limit: 12,
+      first_token_delay_ms: 1500,
     })
 
     const cleared = transformFormDataToPayload(BASE_FORM)
@@ -164,6 +168,7 @@ describe('user policy form transformations', () => {
       rpm_limit: null,
       concurrency_limit: null,
       stream_tps_limit: null,
+      first_token_delay_ms: null,
     })
   })
 
@@ -174,7 +179,7 @@ describe('user policy form transformations', () => {
     expect(
       userFormSchema.safeParse({
         ...BASE_FORM,
-        stream_tps_limit: 2_147_483_647,
+        first_token_delay_ms: 2_147_483_647,
       }).success
     ).toBe(true)
     for (const value of [0, -1, 1.5, 2_147_483_648]) {

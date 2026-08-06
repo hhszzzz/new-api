@@ -24,7 +24,7 @@ func TestGroupRateLimitSettingDefaultsAndPublishesImmutableSnapshot(t *testing.T
 		SharedPoolEnabled: true,
 		Policies: map[string]GroupPolicy{
 			" vip ": {
-				MemberLimits: Limits{RPMLimit: intPointer(60)},
+				MemberLimits: Limits{RPMLimit: intPointer(60), FirstTokenDelayMs: intPointer(1500)},
 				SharedPool:   Limits{ConcurrencyLimit: intPointer(100)},
 			},
 		},
@@ -44,8 +44,12 @@ func TestGroupRateLimitSettingDefaultsAndPublishesImmutableSnapshot(t *testing.T
 	snapshot = GetSettingSnapshot()
 	require.NotNil(t, snapshot.Policies["vip"].MemberLimits.RPMLimit)
 	assert.Equal(t, 60, *snapshot.Policies["vip"].MemberLimits.RPMLimit)
+	require.NotNil(t, snapshot.Policies["vip"].MemberLimits.FirstTokenDelayMs)
+	assert.Equal(t, 1500, *snapshot.Policies["vip"].MemberLimits.FirstTokenDelayMs)
 	*groupRateLimitSetting.Policies["vip"].MemberLimits.RPMLimit = 1
+	*groupRateLimitSetting.Policies["vip"].MemberLimits.FirstTokenDelayMs = 1
 	assert.Equal(t, 60, *snapshot.Policies["vip"].MemberLimits.RPMLimit)
+	assert.Equal(t, 1500, *snapshot.Policies["vip"].MemberLimits.FirstTokenDelayMs)
 }
 
 func TestGroupRateLimitSettingValidation(t *testing.T) {
@@ -78,6 +82,12 @@ func TestGroupRateLimitSettingValidation(t *testing.T) {
 				"default": {SharedPool: Limits{StreamTPSLimit: intPointer(-1)}},
 			}},
 		},
+		{
+			name: "first text delay in shared pool",
+			setting: Setting{Policies: map[string]GroupPolicy{
+				"default": {SharedPool: Limits{FirstTokenDelayMs: intPointer(1500)}},
+			}},
+		},
 	}
 
 	for _, test := range tests {
@@ -95,13 +105,15 @@ func TestGroupRateLimitSettingConfigManagerUpdateIsAtomic(t *testing.T) {
 	handled, err := manager.Update(ConfigName, map[string]string{
 		"member_enabled":      "true",
 		"shared_pool_enabled": "true",
-		"policies":            `{"default":{"member_limits":{"rpm_limit":60},"shared_pool":{"concurrency_limit":100}}}`,
+		"policies":            `{"default":{"member_limits":{"rpm_limit":60,"first_token_delay_ms":1500},"shared_pool":{"concurrency_limit":100}}}`,
 	})
 	require.True(t, handled)
 	require.NoError(t, err)
 	assert.True(t, setting.MemberEnabled)
 	assert.True(t, setting.SharedPoolEnabled)
 	require.NotNil(t, setting.Policies["default"].MemberLimits.RPMLimit)
+	require.NotNil(t, setting.Policies["default"].MemberLimits.FirstTokenDelayMs)
+	assert.Equal(t, 1500, *setting.Policies["default"].MemberLimits.FirstTokenDelayMs)
 
 	handled, err = manager.Update(ConfigName, map[string]string{
 		"member_enabled": "false",

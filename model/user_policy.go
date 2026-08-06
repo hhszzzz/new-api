@@ -60,10 +60,11 @@ type UserPolicyUpdate struct {
 	CheckinMinQuota *int  `json:"checkin_min_quota"`
 	CheckinMaxQuota *int  `json:"checkin_max_quota"`
 	// QuotaCap bounds gift-credit balance growth; nil means unlimited.
-	QuotaCap         *int `json:"quota_cap"`
-	RpmLimit         *int `json:"rpm_limit"`
-	ConcurrencyLimit *int `json:"concurrency_limit"`
-	StreamTpsLimit   *int `json:"stream_tps_limit"`
+	QuotaCap          *int `json:"quota_cap"`
+	RpmLimit          *int `json:"rpm_limit"`
+	ConcurrencyLimit  *int `json:"concurrency_limit"`
+	StreamTpsLimit    *int `json:"stream_tps_limit"`
+	FirstTokenDelayMs *int `json:"first_token_delay_ms"`
 }
 
 func (p *UserModelPermission) BeforeCreate(tx *gorm.DB) error {
@@ -560,6 +561,7 @@ func replaceUserPolicyWithTx(tx *gorm.DB, userId int, update UserPolicyUpdate) (
 		"rpm_limit":               update.RpmLimit,
 		"concurrency_limit":       update.ConcurrencyLimit,
 		"stream_tps_limit":        update.StreamTpsLimit,
+		"first_token_delay_ms":    update.FirstTokenDelayMs,
 	}).Error; err != nil {
 		return 0, err
 	}
@@ -621,13 +623,15 @@ type UserPolicyPartialUpdate struct {
 	ConcurrencyLimit      *int
 	SetStreamTpsLimit     bool
 	StreamTpsLimit        *int
+	SetFirstTokenDelayMs  bool
+	FirstTokenDelayMs     *int
 }
 
 func (p UserPolicyPartialUpdate) Empty() bool {
 	return p.ModelLimits == nil && p.ModelLimitsEnabled == nil &&
 		p.ModelBlocklist == nil && p.ModelBlocklistEnabled == nil &&
 		!p.SetCheckinEnabled && !p.SetCheckinQuota && !p.SetQuotaCap &&
-		!p.SetRpmLimit && !p.SetConcurrencyLimit && !p.SetStreamTpsLimit
+		!p.SetRpmLimit && !p.SetConcurrencyLimit && !p.SetStreamTpsLimit && !p.SetFirstTokenDelayMs
 }
 
 // UpdateUserPolicyPartial changes the requested policy sections in one
@@ -682,6 +686,9 @@ func UpdateUserPolicyPartial(userId int, update UserPolicyPartialUpdate) error {
 		}
 		if update.SetStreamTpsLimit {
 			columns["stream_tps_limit"] = update.StreamTpsLimit
+		}
+		if update.SetFirstTokenDelayMs {
+			columns["first_token_delay_ms"] = update.FirstTokenDelayMs
 		}
 		if len(columns) > 0 {
 			if err := tx.Model(&User{}).Where("id = ?", userId).Updates(columns).Error; err != nil {

@@ -16,14 +16,17 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Plus, Search } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
+import { Plus, RefreshCw, Search } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { StaticDataTable } from '@/components/data-table/static/static-data-table'
 import { StaticRowActions } from '@/components/data-table/static/static-row-actions'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { getGroups } from '@/features/users/api'
 
 import type { GroupRateLimitPolicy, GroupRateLimitValues } from '../types'
 import { RateLimitDialog, type RateLimitEntryData } from './rate-limit-dialog'
@@ -58,19 +61,24 @@ function hasConfiguredLimits(limits: GroupRateLimitValues) {
   return (
     limits.rpm_limit !== undefined ||
     limits.concurrency_limit !== undefined ||
-    limits.stream_tps_limit !== undefined
+    limits.stream_tps_limit !== undefined ||
+    limits.first_token_delay_ms !== undefined
   )
 }
 
 function limitsFromEntry(
   rpm: number | undefined,
   concurrency: number | undefined,
-  streamTps: number | undefined
+  streamTps: number | undefined,
+  firstTokenDelay?: number
 ): GroupRateLimitValues {
   const limits: GroupRateLimitValues = {}
   if (rpm !== undefined) limits.rpm_limit = rpm
   if (concurrency !== undefined) limits.concurrency_limit = concurrency
   if (streamTps !== undefined) limits.stream_tps_limit = streamTps
+  if (firstTokenDelay !== undefined) {
+    limits.first_token_delay_ms = firstTokenDelay
+  }
   return limits
 }
 
@@ -84,6 +92,22 @@ export function RateLimitVisualEditor({
   const [searchText, setSearchText] = useState('')
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editData, setEditData] = useState<RateLimitEntryData | null>(null)
+  const groupQuery = useQuery({
+    queryKey: ['groups'],
+    queryFn: getGroups,
+    staleTime: 5 * 60 * 1000,
+  })
+  const groupListFailed =
+    groupQuery.isError || groupQuery.data?.success === false
+  const currentGroups = useMemo(() => {
+    if (groupListFailed) return []
+    return [...(groupQuery.data?.data ?? [])].sort((left, right) => {
+      if (left === 'default') return -1
+      if (right === 'default') return 1
+      return left.localeCompare(right)
+    })
+  }, [groupListFailed, groupQuery.data?.data])
+  const currentGroupSet = useMemo(() => new Set(currentGroups), [currentGroups])
 
   const entries = useMemo(() => {
     const parsedCounts = parseJsonObject<RequestCountLimits>(requestCounts)
@@ -94,7 +118,11 @@ export function RateLimitVisualEditor({
     ])
 
     return [...groups]
-      .sort((left, right) => left.localeCompare(right))
+      .sort((left, right) => {
+        if (left === 'default') return -1
+        if (right === 'default') return 1
+        return left.localeCompare(right)
+      })
       .map((groupName): RateLimitEntryData => {
         const requestCount = parsedCounts[groupName]
         const policy = parsedPolicies[groupName] ?? {}
@@ -108,12 +136,20 @@ export function RateLimitVisualEditor({
           memberRpmLimit: configuredLimit(member.rpm_limit),
           memberConcurrencyLimit: configuredLimit(member.concurrency_limit),
           memberStreamTpsLimit: configuredLimit(member.stream_tps_limit),
+          memberFirstTokenDelayMs: configuredLimit(member.first_token_delay_ms),
           sharedRpmLimit: configuredLimit(shared.rpm_limit),
           sharedConcurrencyLimit: configuredLimit(shared.concurrency_limit),
           sharedStreamTpsLimit: configuredLimit(shared.stream_tps_limit),
         }
       })
   }, [policies, requestCounts])
+
+  const availableGroupOptions = useMemo(() => {
+    const configured = new Set(entries.map((entry) => entry.groupName))
+    return currentGroups
+      .filter((group) => !configured.has(group))
+      .map((group) => ({ value: group, label: group }))
+  }, [currentGroups, entries])
 
   const filteredEntries = useMemo(() => {
     const search = searchText.trim().toLowerCase()
@@ -141,7 +177,8 @@ export function RateLimitVisualEditor({
     const memberLimits = limitsFromEntry(
       data.memberRpmLimit,
       data.memberConcurrencyLimit,
-      data.memberStreamTpsLimit
+      data.memberStreamTpsLimit,
+      data.memberFirstTokenDelayMs
     )
     const sharedPool = limitsFromEntry(
       data.sharedRpmLimit,
@@ -187,6 +224,8 @@ export function RateLimitVisualEditor({
             `${t('Concurrency')} ${entry.memberConcurrencyLimit.toLocaleString()}`,
           entry.memberStreamTpsLimit &&
             `TPS ${entry.memberStreamTpsLimit.toLocaleString()}`,
+          entry.memberFirstTokenDelayMs &&
+            `${t('First visible text delay')} ${entry.memberFirstTokenDelayMs.toLocaleString()} ms`,
         ]
     const configured = values.filter(Boolean)
     return configured.length > 0 ? configured.join(' · ') : t('Unlimited')
@@ -210,11 +249,38 @@ export function RateLimitVisualEditor({
             setEditData(null)
             setDialogOpen(true)
           }}
+          disabled={
+            groupQuery.isLoading ||
+            groupListFailed ||
+            availableGroupOptions.length === 0
+          }
         >
           <Plus className='mr-2 h-4 w-4' />
           {t('Add group')}
         </Button>
       </div>
+
+      {groupListFailed && (
+        <div className='border-destructive/40 bg-destructive/5 flex items-center justify-between gap-3 rounded-md border px-3 py-2'>
+          <p className='text-muted-foreground text-xs'>
+            {t(
+              'Failed to load existing groups. Existing policies remain editable, but new policies cannot be added.'
+            )}
+          </p>
+          <Button
+            type='button'
+            variant='outline'
+            size='sm'
+            onClick={() => void groupQuery.refetch()}
+            disabled={groupQuery.isFetching}
+          >
+            <RefreshCw
+              className={groupQuery.isFetching ? 'animate-spin' : undefined}
+            />
+            {t('Retry')}
+          </Button>
+        </div>
+      )}
 
       <StaticDataTable
         data={filteredEntries}
@@ -229,7 +295,18 @@ export function RateLimitVisualEditor({
             id: 'group',
             header: t('Group Name'),
             cellClassName: 'font-medium',
-            cell: (entry) => entry.groupName,
+            cell: (entry) => (
+              <div className='flex flex-wrap items-center gap-2'>
+                <span>{entry.groupName}</span>
+                {!groupListFailed &&
+                  !groupQuery.isLoading &&
+                  !currentGroupSet.has(entry.groupName) && (
+                    <Badge variant='outline'>
+                      {t('Group no longer exists')}
+                    </Badge>
+                  )}
+              </div>
+            ),
           },
           {
             id: 'request-counts',
@@ -277,6 +354,15 @@ export function RateLimitVisualEditor({
         onOpenChange={setDialogOpen}
         onSave={handleSave}
         editData={editData}
+        groupOptions={availableGroupOptions}
+        groupListLoading={groupQuery.isLoading}
+        groupListFailed={groupListFailed}
+        editGroupMissing={
+          Boolean(editData) &&
+          !groupListFailed &&
+          !groupQuery.isLoading &&
+          !currentGroupSet.has(editData?.groupName ?? '')
+        }
       />
     </div>
   )

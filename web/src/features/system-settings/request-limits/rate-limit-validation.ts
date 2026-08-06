@@ -73,7 +73,7 @@ export const isValidGroupPoliciesJSON = (value: string | undefined) => {
       }
       normalizedGroups.add(normalizedGroup)
       const policy = policyValue as Record<string, unknown>
-      for (const layerName of ['member_limits', 'shared_pool']) {
+      for (const layerName of ['member_limits', 'shared_pool'] as const) {
         const layer = policy[layerName]
         if (layer === undefined || layer === null) continue
         if (typeof layer !== 'object' || Array.isArray(layer)) return false
@@ -81,7 +81,11 @@ export const isValidGroupPoliciesJSON = (value: string | undefined) => {
         if (
           !isValidLimitValue(limits.rpm_limit) ||
           !isValidLimitValue(limits.concurrency_limit) ||
-          !isValidLimitValue(limits.stream_tps_limit)
+          !isValidLimitValue(limits.stream_tps_limit) ||
+          (layerName === 'member_limits' &&
+            !isValidLimitValue(limits.first_token_delay_ms)) ||
+          (layerName === 'shared_pool' &&
+            Object.hasOwn(limits, 'first_token_delay_ms'))
         ) {
           return false
         }

@@ -97,6 +97,10 @@ func writeUserCache(user *UserBase, includeQuota bool) error {
 	if user.StreamTpsLimit != nil {
 		streamTpsLimit = strconv.Itoa(*user.StreamTpsLimit)
 	}
+	firstTokenDelayMs := ""
+	if user.FirstTokenDelayMs != nil {
+		firstTokenDelayMs = strconv.Itoa(*user.FirstTokenDelayMs)
+	}
 	const script = `
 local incoming = tonumber(ARGV[1])
 local pending = tonumber(redis.call('GET', KEYS[2]) or '0')
@@ -134,7 +138,8 @@ redis.call('HSET', KEYS[1],
 	'Groups', ARGV[13], 'TopupGroup', ARGV[14],
 		'ModelLimitsEnabled', ARGV[15], 'ModelLimits', ARGV[16],
 		'ModelBlocklistEnabled', ARGV[17], 'ModelBlocklist', ARGV[18], 'PolicyVersion', ARGV[19],
-		'RpmLimit', ARGV[20], 'ConcurrencyLimit', ARGV[21], 'StreamTpsLimit', ARGV[22])
+			'RpmLimit', ARGV[20], 'ConcurrencyLimit', ARGV[21], 'StreamTpsLimit', ARGV[22],
+			'FirstTokenDelayMs', ARGV[23])
 if ARGV[10] == '1' and redis.call('HEXISTS', KEYS[1], 'Quota') == 0 then
   redis.call('HSET', KEYS[1], 'Quota', ARGV[11])
 end
@@ -149,7 +154,7 @@ return 1`
 		user.Username, user.Setting, user.CacheSchema, includeQuotaArg, user.Quota, ttl,
 		string(groupsJSON), user.TopupGroup, user.ModelLimitsEnabled, string(modelLimitsJSON),
 		user.ModelBlocklistEnabled, string(modelBlocklistJSON), user.PolicyVersion,
-		rpmLimit, concurrencyLimit, streamTpsLimit,
+		rpmLimit, concurrencyLimit, streamTpsLimit, firstTokenDelayMs,
 	).Int()
 	if err != nil {
 		return err

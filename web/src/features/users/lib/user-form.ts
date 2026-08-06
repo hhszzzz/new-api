@@ -53,6 +53,7 @@ export const userFormSchema = z.object({
   rpm_limit: z.number().int().min(1).max(2_147_483_647).optional(),
   concurrency_limit: z.number().int().min(1).max(2_147_483_647).optional(),
   stream_tps_limit: z.number().int().min(1).max(2_147_483_647).optional(),
+  first_token_delay_ms: z.number().int().min(1).max(2_147_483_647).optional(),
   remark: z.string().optional(),
   admin_permissions: z
     .record(z.string(), z.record(z.string(), z.boolean()))
@@ -85,6 +86,7 @@ export const USER_FORM_DEFAULT_VALUES: UserFormValues = {
   rpm_limit: undefined,
   concurrency_limit: undefined,
   stream_tps_limit: undefined,
+  first_token_delay_ms: undefined,
   remark: '',
   // Filled against the backend catalog at render time; see UsersMutateDrawer.
   admin_permissions: {},
@@ -141,6 +143,7 @@ export function transformFormDataToPayload(
   payload.rpm_limit = data.rpm_limit ?? null
   payload.concurrency_limit = data.concurrency_limit ?? null
   payload.stream_tps_limit = data.stream_tps_limit ?? null
+  payload.first_token_delay_ms = data.first_token_delay_ms ?? null
 
   // Profile and policy fields are accepted by both create and update APIs so
   // the backend can persist them atomically.
@@ -203,6 +206,7 @@ export function transformUserToFormDefaults(
     rpm_limit: policy?.rpm_limit ?? undefined,
     concurrency_limit: policy?.concurrency_limit ?? undefined,
     stream_tps_limit: policy?.stream_tps_limit ?? undefined,
+    first_token_delay_ms: policy?.first_token_delay_ms ?? undefined,
     remark: user.remark || '',
     admin_permissions: user.admin_permissions ?? {},
   }

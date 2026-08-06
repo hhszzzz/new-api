@@ -27,6 +27,7 @@ import (
 const (
 	userRateLimitObservationKey = "user_rate_limit_observation"
 	userStreamPacerKey          = "user_stream_pacer"
+	userGroupConcurrencyHashTag = "{user_group_concurrency}"
 
 	userConcurrencyLeaseTTL      = 60 * time.Second
 	userConcurrencyRenewEvery    = 20 * time.Second
@@ -57,17 +58,20 @@ type UserRateLimitPolicy struct {
 	UserID int
 	Group  string
 
-	UserRPMLimit         int
-	UserConcurrencyLimit int
-	UserStreamTPSLimit   int
+	UserRPMLimit          int
+	UserConcurrencyLimit  int
+	UserStreamTPSLimit    int
+	UserFirstTokenDelayMs int
 
-	MemberRPMLimit         int
-	MemberConcurrencyLimit int
-	MemberStreamTPSLimit   int
+	MemberRPMLimit          int
+	MemberConcurrencyLimit  int
+	MemberStreamTPSLimit    int
+	MemberFirstTokenDelayMs int
 
-	RPMLimit         int
-	ConcurrencyLimit int
-	StreamTPSLimit   int
+	RPMLimit          int
+	ConcurrencyLimit  int
+	StreamTPSLimit    int
+	FirstTokenDelayMs int
 
 	SharedRPMLimit         int
 	SharedConcurrencyLimit int
@@ -81,28 +85,32 @@ func (policy UserRateLimitPolicy) HasConcurrencyLimit() bool {
 type UserRateLimitObservation struct {
 	mu sync.Mutex
 
-	group                  string
-	userRPMLimit           int
-	userConcurrencyLimit   int
-	userStreamTPSLimit     int
-	memberRPMLimit         int
-	memberConcurrencyLimit int
-	memberStreamTPSLimit   int
-	rpmLimit               int
-	concurrencyLimit       int
-	streamTPSLimit         int
-	sharedRPMLimit         int
-	sharedConcurrencyLimit int
-	sharedStreamTPSLimit   int
-	queueWait              time.Duration
-	userQueueWait          time.Duration
-	groupQueueWait         time.Duration
-	pacingTokens           int64
-	pacingWait             time.Duration
-	sharedPacingTokens     int64
-	sharedPacingWait       time.Duration
-	rejectedLayer          string
-	redisFailOpen          map[string]bool
+	group                   string
+	userRPMLimit            int
+	userConcurrencyLimit    int
+	userStreamTPSLimit      int
+	userFirstTokenDelayMs   int
+	memberRPMLimit          int
+	memberConcurrencyLimit  int
+	memberStreamTPSLimit    int
+	memberFirstTokenDelayMs int
+	rpmLimit                int
+	concurrencyLimit        int
+	streamTPSLimit          int
+	firstTokenDelayMs       int
+	sharedRPMLimit          int
+	sharedConcurrencyLimit  int
+	sharedStreamTPSLimit    int
+	queueWait               time.Duration
+	userQueueWait           time.Duration
+	groupQueueWait          time.Duration
+	pacingTokens            int64
+	pacingWait              time.Duration
+	sharedPacingTokens      int64
+	sharedPacingWait        time.Duration
+	firstTokenWait          time.Duration
+	rejectedLayer           string
+	redisFailOpen           map[string]bool
 }
 
 func (o *UserRateLimitObservation) notePolicy(policy UserRateLimitPolicy) {
@@ -115,12 +123,15 @@ func (o *UserRateLimitObservation) notePolicy(policy UserRateLimitPolicy) {
 	o.userRPMLimit = policy.UserRPMLimit
 	o.userConcurrencyLimit = policy.UserConcurrencyLimit
 	o.userStreamTPSLimit = policy.UserStreamTPSLimit
+	o.userFirstTokenDelayMs = policy.UserFirstTokenDelayMs
 	o.memberRPMLimit = policy.MemberRPMLimit
 	o.memberConcurrencyLimit = policy.MemberConcurrencyLimit
 	o.memberStreamTPSLimit = policy.MemberStreamTPSLimit
+	o.memberFirstTokenDelayMs = policy.MemberFirstTokenDelayMs
 	o.rpmLimit = policy.RPMLimit
 	o.concurrencyLimit = policy.ConcurrencyLimit
 	o.streamTPSLimit = policy.StreamTPSLimit
+	o.firstTokenDelayMs = policy.FirstTokenDelayMs
 	o.sharedRPMLimit = policy.SharedRPMLimit
 	o.sharedConcurrencyLimit = policy.SharedConcurrencyLimit
 	o.sharedStreamTPSLimit = policy.SharedStreamTPSLimit
@@ -165,6 +176,15 @@ func (o *UserRateLimitObservation) noteSharedPacing(tokens int, wait time.Durati
 	o.mu.Unlock()
 }
 
+func (o *UserRateLimitObservation) noteFirstTokenWait(wait time.Duration) {
+	if o == nil || wait <= 0 {
+		return
+	}
+	o.mu.Lock()
+	o.firstTokenWait += wait
+	o.mu.Unlock()
+}
+
 func (o *UserRateLimitObservation) noteRejectedLayer(layer string) {
 	if o == nil || layer == "" {
 		return
@@ -200,7 +220,7 @@ func AppendUserRateLimitAdminInfo(c *gin.Context, other map[string]interface{}) 
 	}
 	observation.mu.Lock()
 	defer observation.mu.Unlock()
-	if observation.rpmLimit <= 0 && observation.concurrencyLimit <= 0 && observation.streamTPSLimit <= 0 &&
+	if observation.rpmLimit <= 0 && observation.concurrencyLimit <= 0 && observation.streamTPSLimit <= 0 && observation.firstTokenDelayMs <= 0 &&
 		observation.sharedRPMLimit <= 0 && observation.sharedConcurrencyLimit <= 0 && observation.sharedStreamTPSLimit <= 0 &&
 		len(observation.redisFailOpen) == 0 {
 		return
@@ -209,11 +229,11 @@ func AppendUserRateLimitAdminInfo(c *gin.Context, other map[string]interface{}) 
 	if observation.group != "" {
 		limits["group"] = observation.group
 	}
-	userLimits := rateLimitValuesMap(observation.userRPMLimit, observation.userConcurrencyLimit, observation.userStreamTPSLimit)
+	userLimits := rateLimitValuesMap(observation.userRPMLimit, observation.userConcurrencyLimit, observation.userStreamTPSLimit, observation.userFirstTokenDelayMs)
 	if len(userLimits) > 0 {
 		limits["user_limits"] = userLimits
 	}
-	memberLimits := rateLimitValuesMap(observation.memberRPMLimit, observation.memberConcurrencyLimit, observation.memberStreamTPSLimit)
+	memberLimits := rateLimitValuesMap(observation.memberRPMLimit, observation.memberConcurrencyLimit, observation.memberStreamTPSLimit, observation.memberFirstTokenDelayMs)
 	if len(memberLimits) > 0 {
 		limits["member_limits"] = memberLimits
 	}
@@ -226,7 +246,10 @@ func AppendUserRateLimitAdminInfo(c *gin.Context, other map[string]interface{}) 
 	if observation.streamTPSLimit > 0 {
 		limits["stream_tps_limit"] = observation.streamTPSLimit
 	}
-	sharedPool := rateLimitValuesMap(observation.sharedRPMLimit, observation.sharedConcurrencyLimit, observation.sharedStreamTPSLimit)
+	if observation.firstTokenDelayMs > 0 {
+		limits["first_token_delay_ms"] = observation.firstTokenDelayMs
+	}
+	sharedPool := rateLimitValuesMap(observation.sharedRPMLimit, observation.sharedConcurrencyLimit, observation.sharedStreamTPSLimit, 0)
 	if len(sharedPool) > 0 {
 		limits["shared_pool"] = sharedPool
 	}
@@ -247,6 +270,9 @@ func AppendUserRateLimitAdminInfo(c *gin.Context, other map[string]interface{}) 
 		limits["shared_pacing_tokens"] = observation.sharedPacingTokens
 		limits["shared_pacing_wait_ms"] = observation.sharedPacingWait.Milliseconds()
 	}
+	if observation.firstTokenWait > 0 {
+		limits["first_token_wait_ms"] = observation.firstTokenWait.Milliseconds()
+	}
 	if observation.rejectedLayer != "" {
 		limits["rejected_layer"] = observation.rejectedLayer
 	}
@@ -265,8 +291,8 @@ func AppendUserRateLimitAdminInfo(c *gin.Context, other map[string]interface{}) 
 	adminInfo["user_rate_limits"] = limits
 }
 
-func rateLimitValuesMap(rpm, concurrency, streamTPS int) map[string]interface{} {
-	values := make(map[string]interface{}, 3)
+func rateLimitValuesMap(rpm, concurrency, streamTPS, firstTokenDelayMs int) map[string]interface{} {
+	values := make(map[string]interface{}, 4)
 	if rpm > 0 {
 		values["rpm_limit"] = rpm
 	}
@@ -275,6 +301,9 @@ func rateLimitValuesMap(rpm, concurrency, streamTPS int) map[string]interface{} 
 	}
 	if streamTPS > 0 {
 		values["stream_tps_limit"] = streamTPS
+	}
+	if firstTokenDelayMs > 0 {
+		values["first_token_delay_ms"] = firstTokenDelayMs
 	}
 	return values
 }
@@ -289,6 +318,7 @@ func UserRateLimitPolicyFromContext(c *gin.Context) UserRateLimitPolicy {
 		common.GetContextKeyInt(c, constant.ContextKeyUserRpmLimit),
 		common.GetContextKeyInt(c, constant.ContextKeyUserConcurrencyLimit),
 		common.GetContextKeyInt(c, constant.ContextKeyUserStreamTpsLimit),
+		common.GetContextKeyInt(c, constant.ContextKeyUserFirstTokenDelayMs),
 	)
 }
 
@@ -307,6 +337,7 @@ func LoadUserRateLimitPolicy(userID int, groupOverride ...string) (UserRateLimit
 	userRPM := 0
 	userConcurrency := 0
 	userStreamTPS := 0
+	userFirstTokenDelayMs := 0
 	if user.RpmLimit != nil {
 		userRPM = *user.RpmLimit
 	}
@@ -316,7 +347,10 @@ func LoadUserRateLimitPolicy(userID int, groupOverride ...string) (UserRateLimit
 	if user.StreamTpsLimit != nil {
 		userStreamTPS = *user.StreamTpsLimit
 	}
-	return buildUserRateLimitPolicy(userID, group, userRPM, userConcurrency, userStreamTPS), nil
+	if user.FirstTokenDelayMs != nil {
+		userFirstTokenDelayMs = *user.FirstTokenDelayMs
+	}
+	return buildUserRateLimitPolicy(userID, group, userRPM, userConcurrency, userStreamTPS, userFirstTokenDelayMs), nil
 }
 
 func requestRateLimitGroup(c *gin.Context) string {
@@ -327,16 +361,18 @@ func requestRateLimitGroup(c *gin.Context) string {
 	return strings.TrimSpace(group)
 }
 
-func buildUserRateLimitPolicy(userID int, group string, userRPM, userConcurrency, userStreamTPS int) UserRateLimitPolicy {
+func buildUserRateLimitPolicy(userID int, group string, userRPM, userConcurrency, userStreamTPS, userFirstTokenDelayMs int) UserRateLimitPolicy {
 	policy := UserRateLimitPolicy{
-		UserID:               userID,
-		Group:                strings.TrimSpace(group),
-		UserRPMLimit:         userRPM,
-		UserConcurrencyLimit: userConcurrency,
-		UserStreamTPSLimit:   userStreamTPS,
-		RPMLimit:             userRPM,
-		ConcurrencyLimit:     userConcurrency,
-		StreamTPSLimit:       userStreamTPS,
+		UserID:                userID,
+		Group:                 strings.TrimSpace(group),
+		UserRPMLimit:          userRPM,
+		UserConcurrencyLimit:  userConcurrency,
+		UserStreamTPSLimit:    userStreamTPS,
+		UserFirstTokenDelayMs: userFirstTokenDelayMs,
+		RPMLimit:              userRPM,
+		ConcurrencyLimit:      userConcurrency,
+		StreamTPSLimit:        userStreamTPS,
+		FirstTokenDelayMs:     userFirstTokenDelayMs,
 	}
 	snapshot := group_rate_limit_setting.GetSettingSnapshot()
 	if snapshot == nil || policy.Group == "" {
@@ -350,9 +386,11 @@ func buildUserRateLimitPolicy(userID int, group string, userRPM, userConcurrency
 		policy.MemberRPMLimit = configuredLimit(groupPolicy.MemberLimits.RPMLimit)
 		policy.MemberConcurrencyLimit = configuredLimit(groupPolicy.MemberLimits.ConcurrencyLimit)
 		policy.MemberStreamTPSLimit = configuredLimit(groupPolicy.MemberLimits.StreamTPSLimit)
+		policy.MemberFirstTokenDelayMs = configuredLimit(groupPolicy.MemberLimits.FirstTokenDelayMs)
 		policy.RPMLimit = minimumPositive(policy.UserRPMLimit, policy.MemberRPMLimit)
 		policy.ConcurrencyLimit = minimumPositive(policy.UserConcurrencyLimit, policy.MemberConcurrencyLimit)
 		policy.StreamTPSLimit = minimumPositive(policy.UserStreamTPSLimit, policy.MemberStreamTPSLimit)
+		policy.FirstTokenDelayMs = maximumPositive(policy.UserFirstTokenDelayMs, policy.MemberFirstTokenDelayMs)
 	}
 	if snapshot.SharedPoolEnabled {
 		policy.SharedRPMLimit = configuredLimit(groupPolicy.SharedPool.RPMLimit)
@@ -374,6 +412,13 @@ func minimumPositive(left, right int) int {
 		return right
 	}
 	if right <= 0 || left < right {
+		return left
+	}
+	return right
+}
+
+func maximumPositive(left, right int) int {
+	if left > right {
 		return left
 	}
 	return right
@@ -573,7 +618,7 @@ func BeginUserRequestRateLimit(c *gin.Context, policy UserRateLimitPolicy, model
 		}
 		guard.Lease = lease
 	}
-	if policy.StreamTPSLimit > 0 || policy.SharedStreamTPSLimit > 0 {
+	if policy.StreamTPSLimit > 0 || policy.SharedStreamTPSLimit > 0 || policy.FirstTokenDelayMs > 0 {
 		guard.Pacer = newRequestStreamPacer(c, policy, modelName, observation)
 	}
 	return guard, nil
@@ -605,6 +650,25 @@ func PaceUserStreamPayload(c *gin.Context, payload []byte) error {
 	return pacer.PacePayload(c.Request.Context(), payload)
 }
 
+func GetUserStreamPacer(c *gin.Context) *UserStreamPacer {
+	if c == nil {
+		return nil
+	}
+	value, ok := c.Get(userStreamPacerKey)
+	if !ok {
+		return nil
+	}
+	pacer, _ := value.(*UserStreamPacer)
+	return pacer
+}
+
+func PaceUserStreamPayloadWithPacer(ctx context.Context, pacer *UserStreamPacer, payload []byte) error {
+	if pacer == nil {
+		return nil
+	}
+	return pacer.PacePayload(ctx, payload)
+}
+
 func IsUserStreamPacing(c *gin.Context) bool {
 	if c == nil {
 		return false
@@ -614,7 +678,7 @@ func IsUserStreamPacing(c *gin.Context) bool {
 		return false
 	}
 	pacer, ok := value.(*UserStreamPacer)
-	return ok && pacer != nil && pacer.pacing.Load()
+	return ok && pacer != nil && pacer.pacingCounter().Load() > 0
 }
 
 func newUserRateLimitError() *types.NewAPIError {
@@ -675,19 +739,19 @@ func groupRPMKey(group string, minute int64) string {
 }
 
 func userConcurrencyActiveKey(userID int) string {
-	return fmt.Sprintf("user_rate_limit:concurrency:active:%d", userID)
+	return fmt.Sprintf("user_rate_limit:concurrency:%s:active:%d", userGroupConcurrencyHashTag, userID)
 }
 
 func userConcurrencyWaitingKey(userID int) string {
-	return fmt.Sprintf("user_rate_limit:concurrency:waiting:%d", userID)
+	return fmt.Sprintf("user_rate_limit:concurrency:%s:waiting:%d", userGroupConcurrencyHashTag, userID)
 }
 
 func groupConcurrencyActiveKey(group string) string {
-	return "group_rate_limit:concurrency:active:" + groupRateLimitKeyID(group)
+	return "group_rate_limit:concurrency:" + userGroupConcurrencyHashTag + ":active:" + groupRateLimitKeyID(group)
 }
 
 func groupConcurrencyWaitingKey(group string) string {
-	return "group_rate_limit:concurrency:waiting:" + groupRateLimitKeyID(group)
+	return "group_rate_limit:concurrency:" + userGroupConcurrencyHashTag + ":waiting:" + groupRateLimitKeyID(group)
 }
 
 func groupRateLimitKeyID(group string) string {
@@ -925,12 +989,65 @@ type streamRateWaiter interface {
 	WaitN(context.Context, int) error
 }
 
+type streamRateWaiterFunc func(context.Context, int) error
+
+func (f streamRateWaiterFunc) WaitN(ctx context.Context, tokens int) error {
+	return f(ctx, tokens)
+}
+
+type firstTokenDelayWaiter struct {
+	deadline time.Time
+	now      func() time.Time
+	wait     func(context.Context, time.Duration) error
+}
+
+func (w *firstTokenDelayWaiter) WaitN(ctx context.Context, _ int) error {
+	if w == nil {
+		return nil
+	}
+	now := time.Now
+	if w.now != nil {
+		now = w.now
+	}
+	remaining := w.deadline.Sub(now())
+	if remaining <= 0 {
+		return nil
+	}
+	wait := waitForContext
+	if w.wait != nil {
+		wait = w.wait
+	}
+	return wait(ctx, remaining)
+}
+
+func waitForContext(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 type UserStreamPacer struct {
-	limit       int
-	modelName   string
-	waiters     []streamRateWaiter
-	observation *UserRateLimitObservation
-	pacing      atomic.Bool
+	limit            int
+	modelName        string
+	waiters          []streamRateWaiter
+	firstDelayWaiter streamRateWaiter
+	firstDelay       time.Duration
+	observation      *UserRateLimitObservation
+	pacing           atomic.Int32
+	sharedPacing     *atomic.Int32
+
+	firstMu        sync.Mutex
+	firstDone      chan struct{}
+	firstCompleted bool
+	firstErr       error
 }
 
 func NewUserStreamPacer(limit int, modelName string, observation *UserRateLimitObservation) *UserStreamPacer {
@@ -951,7 +1068,7 @@ func newUserStreamPacerWithWaiter(limit int, modelName string, observation *User
 
 func newRequestStreamPacer(c *gin.Context, policy UserRateLimitPolicy, modelName string, observation *UserRateLimitObservation) *UserStreamPacer {
 	limit := minimumPositive(policy.StreamTPSLimit, policy.SharedStreamTPSLimit)
-	if limit <= 0 {
+	if limit <= 0 && policy.FirstTokenDelayMs <= 0 {
 		return nil
 	}
 	waiters := make([]streamRateWaiter, 0, 2)
@@ -966,29 +1083,106 @@ func newRequestStreamPacer(c *gin.Context, policy UserRateLimitPolicy, modelName
 			observation: observation,
 		})
 	}
-	return &UserStreamPacer{
+	pacer := &UserStreamPacer{
 		limit:       limit,
 		modelName:   modelName,
 		waiters:     waiters,
 		observation: observation,
 	}
+	if policy.FirstTokenDelayMs > 0 {
+		pacer.firstDelay = time.Duration(policy.FirstTokenDelayMs) * time.Millisecond
+		startedAt := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
+		if startedAt.IsZero() {
+			startedAt = time.Now()
+		}
+		pacer.firstDelayWaiter = &firstTokenDelayWaiter{
+			deadline: startedAt.Add(pacer.firstDelay),
+		}
+	}
+	return pacer
 }
 
 func (p *UserStreamPacer) PacePayload(ctx context.Context, payload []byte) error {
-	if p == nil || p.limit <= 0 || len(p.waiters) == 0 {
+	if p == nil {
 		return nil
 	}
 	text := streamPayloadText(payload)
-	if text == "" {
+	visibleText := streamPayloadVisibleText(payload)
+	hasRateLimit := p.limit > 0 && len(p.waiters) > 0 && text != ""
+	hasFirstDelay := p.firstDelayWaiter != nil && visibleText != ""
+	if !hasRateLimit && !hasFirstDelay {
 		return nil
 	}
-	tokens := CountTextToken(text, p.modelName)
-	if tokens < 1 {
-		tokens = 1
+	tokens := 1
+	if hasRateLimit {
+		tokens = CountTextToken(text, p.modelName)
+		if tokens < 1 {
+			tokens = 1
+		}
 	}
+	p.pacingCounter().Add(1)
+	defer p.pacingCounter().Add(-1)
+
+	if hasFirstDelay {
+		leader, done := p.beginFirstVisibleText()
+		if leader {
+			started := time.Now()
+			waiters := []streamRateWaiter{p.firstDelayWaiter}
+			if hasRateLimit {
+				waiters = append(waiters, streamRateWaiterFunc(p.waitForRateTokens))
+			}
+			err := waitForStreamRates(ctx, waiters, tokens)
+			p.finishFirstVisibleText(err)
+			if err == nil {
+				p.observation.noteFirstTokenWait(time.Since(started))
+			}
+			return err
+		}
+		if done != nil {
+			select {
+			case <-done:
+				if err := p.firstVisibleTextError(); err != nil {
+					return err
+				}
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+
+	if hasRateLimit {
+		return p.waitForRateTokens(ctx, tokens)
+	}
+	return nil
+}
+
+func (p *UserStreamPacer) NewRealtimeResponsePacer(startedAt time.Time) *UserStreamPacer {
+	if p == nil || p.firstDelay <= 0 {
+		return p
+	}
+	if startedAt.IsZero() {
+		startedAt = time.Now()
+	}
+	return &UserStreamPacer{
+		limit:            p.limit,
+		modelName:        p.modelName,
+		waiters:          p.waiters,
+		firstDelayWaiter: &firstTokenDelayWaiter{deadline: startedAt.Add(p.firstDelay)},
+		firstDelay:       p.firstDelay,
+		observation:      p.observation,
+		sharedPacing:     p.pacingCounter(),
+	}
+}
+
+func (p *UserStreamPacer) pacingCounter() *atomic.Int32 {
+	if p.sharedPacing != nil {
+		return p.sharedPacing
+	}
+	return &p.pacing
+}
+
+func (p *UserStreamPacer) waitForRateTokens(ctx context.Context, tokens int) error {
 	started := time.Now()
-	p.pacing.Store(true)
-	defer p.pacing.Store(false)
 	remaining := tokens
 	for remaining > 0 {
 		chunk := remaining
@@ -1002,6 +1196,35 @@ func (p *UserStreamPacer) PacePayload(ctx context.Context, payload []byte) error
 	}
 	p.observation.notePacing(tokens, time.Since(started))
 	return nil
+}
+
+func (p *UserStreamPacer) beginFirstVisibleText() (bool, <-chan struct{}) {
+	p.firstMu.Lock()
+	defer p.firstMu.Unlock()
+	if p.firstCompleted {
+		return false, nil
+	}
+	if p.firstDone != nil {
+		return false, p.firstDone
+	}
+	p.firstDone = make(chan struct{})
+	return true, p.firstDone
+}
+
+func (p *UserStreamPacer) finishFirstVisibleText(err error) {
+	p.firstMu.Lock()
+	p.firstErr = err
+	p.firstCompleted = true
+	if p.firstDone != nil {
+		close(p.firstDone)
+	}
+	p.firstMu.Unlock()
+}
+
+func (p *UserStreamPacer) firstVisibleTextError() error {
+	p.firstMu.Lock()
+	defer p.firstMu.Unlock()
+	return p.firstErr
 }
 
 func waitForStreamRates(ctx context.Context, waiters []streamRateWaiter, tokens int) error {
@@ -1106,6 +1329,14 @@ func groupStreamTPSKey(group string) string {
 }
 
 func streamPayloadText(payload []byte) string {
+	return streamPayloadTexts(payload, true)
+}
+
+func streamPayloadVisibleText(payload []byte) string {
+	return streamPayloadTexts(payload, false)
+}
+
+func streamPayloadTexts(payload []byte, includeToolArguments bool) string {
 	raw := strings.TrimSpace(string(payload))
 	if raw == "" || raw == "[DONE]" || !gjson.Valid(raw) {
 		return ""
@@ -1129,9 +1360,9 @@ func streamPayloadText(payload []byte) string {
 		case strings.Contains(eventType, "output_text"),
 			strings.Contains(eventType, "reasoning"),
 			strings.Contains(eventType, "thinking"),
-			strings.Contains(eventType, "transcript"),
-			strings.Contains(eventType, "function_call_arguments"),
-			strings.Contains(eventType, "tool"):
+			strings.Contains(eventType, "transcript"):
+			appendString(root.Get("delta"))
+		case includeToolArguments && (strings.Contains(eventType, "function_call_arguments") || strings.Contains(eventType, "tool")):
 			appendString(root.Get("delta"))
 		}
 	}
@@ -1141,24 +1372,30 @@ func streamPayloadText(payload []byte) string {
 		appendString(delta.Get("content"))
 		appendString(delta.Get("reasoning_content"))
 		appendString(delta.Get("reasoning"))
-		appendString(delta.Get("function_call.arguments"))
-		delta.Get("tool_calls").ForEach(func(_, tool gjson.Result) bool {
-			appendString(tool.Get("function.arguments"))
-			return true
-		})
+		if includeToolArguments {
+			appendString(delta.Get("function_call.arguments"))
+			delta.Get("tool_calls").ForEach(func(_, tool gjson.Result) bool {
+				appendString(tool.Get("function.arguments"))
+				return true
+			})
+		}
 		appendString(choice.Get("text"))
 		return true
 	})
 
 	appendString(root.Get("delta.text"))
 	appendString(root.Get("delta.thinking"))
-	appendString(root.Get("delta.partial_json"))
+	if includeToolArguments {
+		appendString(root.Get("delta.partial_json"))
+	}
 	appendString(root.Get("content_block.text"))
 
 	root.Get("candidates").ForEach(func(_, candidate gjson.Result) bool {
 		candidate.Get("content.parts").ForEach(func(_, part gjson.Result) bool {
 			appendString(part.Get("text"))
-			appendJSON(part.Get("functionCall.args"))
+			if includeToolArguments {
+				appendJSON(part.Get("functionCall.args"))
+			}
 			return true
 		})
 		return true

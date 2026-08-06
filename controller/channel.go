@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -613,6 +614,14 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 	if err := channel.Schedule.Normalize(); err != nil {
 		return fmt.Errorf("渠道定时设置格式错误：%s", err.Error())
 	}
+	for name, value := range map[string]*int{
+		"rpm_limit":         channel.RpmLimit,
+		"concurrency_limit": channel.ConcurrencyLimit,
+	} {
+		if value != nil && (*value < 1 || int64(*value) > math.MaxInt32) {
+			return fmt.Errorf("%s must be between 1 and 2147483647", name)
+		}
+	}
 
 	if channel.Type == constant.ChannelTypeNewAPI && strings.TrimSpace(channel.GetBaseURL()) == "" {
 		return fmt.Errorf("New API channel base URL cannot be empty")
@@ -843,6 +852,10 @@ func AddChannel(c *gin.Context) {
 		"name":  addChannelRequest.Channel.Name,
 		"type":  addChannelRequest.Channel.Type,
 		"count": len(channels),
+		"rate_limits": gin.H{
+			"rpm_limit":         addChannelRequest.Channel.RpmLimit,
+			"concurrency_limit": addChannelRequest.Channel.ConcurrencyLimit,
+		},
 	})
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -1137,6 +1150,14 @@ func UpdateChannel(c *gin.Context) {
 		return
 	}
 	originProxy := originChannel.GetSetting().Proxy
+	_, rpmLimitProvided := requestData["rpm_limit"]
+	_, concurrencyLimitProvided := requestData["concurrency_limit"]
+	if !rpmLimitProvided {
+		channel.RpmLimit = originChannel.RpmLimit
+	}
+	if !concurrencyLimitProvided {
+		channel.ConcurrencyLimit = originChannel.ConcurrencyLimit
+	}
 	if _, scheduleProvided := requestData["schedule"]; !scheduleProvided {
 		channel.Schedule = originChannel.Schedule
 	}
@@ -1254,7 +1275,7 @@ func UpdateChannel(c *gin.Context) {
 			// 覆盖模式：直接使用新密钥（默认行为，不需要特殊处理）
 		}
 	}
-	err = channel.UpdateWithAggregateLink()
+	err = channel.UpdateWithAggregateLinkAndNullableLimits(rpmLimitProvided, concurrencyLimitProvided)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -1285,10 +1306,20 @@ func UpdateChannel(c *gin.Context) {
 	if channel.Key != "" && channel.Key != originChannel.Key {
 		changedFields = append(changedFields, "key")
 	}
+	if !equalIntPtr(channel.RpmLimit, originChannel.RpmLimit) {
+		changedFields = append(changedFields, "rpm_limit")
+	}
+	if !equalIntPtr(channel.ConcurrencyLimit, originChannel.ConcurrencyLimit) {
+		changedFields = append(changedFields, "concurrency_limit")
+	}
 	recordManageAudit(c, "channel.update", map[string]interface{}{
 		"id":             channel.Id,
 		"name":           channel.Name,
 		"changed_fields": changedFields,
+		"rate_limits": gin.H{
+			"rpm_limit":         channel.RpmLimit,
+			"concurrency_limit": channel.ConcurrencyLimit,
+		},
 	})
 	channel.Key = ""
 	clearChannelInfo(&channel.Channel)

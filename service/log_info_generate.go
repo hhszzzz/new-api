@@ -172,6 +172,7 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	AppendParamOverrideAdminInfo(relayInfo, other)
 	appendStreamStatus(relayInfo, other)
 	AppendUserRateLimitAdminInfo(ctx, other)
+	AppendChannelRateLimitAdminInfo(ctx, other)
 	return other
 }
 

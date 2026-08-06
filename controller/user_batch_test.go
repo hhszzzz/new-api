@@ -57,6 +57,9 @@ func TestValidateAndBuildUserBatchRateLimits(t *testing.T) {
 		{name: "keep only", op: &userBatchRateLimitsOp{RpmLimit: &userBatchRateLimitOp{Mode: userBatchCheckinKeep}}},
 		{name: "clear", op: &userBatchRateLimitsOp{ConcurrencyLimit: &userBatchRateLimitOp{Mode: userBatchRateLimitClear}}, wantChanged: true},
 		{name: "custom", op: &userBatchRateLimitsOp{StreamTpsLimit: &userBatchRateLimitOp{Mode: userBatchCheckinCustom, Value: common.GetPointer(12)}}, wantChanged: true},
+		{name: "first text delay custom", op: &userBatchRateLimitsOp{FirstTokenDelayMs: &userBatchRateLimitOp{Mode: userBatchCheckinCustom, Value: common.GetPointer(1500)}}, wantChanged: true},
+		{name: "first text delay clear", op: &userBatchRateLimitsOp{FirstTokenDelayMs: &userBatchRateLimitOp{Mode: userBatchRateLimitClear}}, wantChanged: true},
+		{name: "first text delay zero", op: &userBatchRateLimitsOp{FirstTokenDelayMs: &userBatchRateLimitOp{Mode: userBatchCheckinCustom, Value: common.GetPointer(0)}}, wantErr: "首个文本延迟 限制必须在 1 到 2147483647 之间"},
 		{name: "custom missing value", op: &userBatchRateLimitsOp{RpmLimit: &userBatchRateLimitOp{Mode: userBatchCheckinCustom}}, wantErr: "RPM 自定义限制需要提供数值"},
 		{name: "custom zero", op: &userBatchRateLimitsOp{RpmLimit: &userBatchRateLimitOp{Mode: userBatchCheckinCustom, Value: common.GetPointer(0)}}, wantErr: "RPM 限制必须在 1 到 2147483647 之间"},
 		{name: "keep with value", op: &userBatchRateLimitsOp{RpmLimit: &userBatchRateLimitOp{Mode: userBatchCheckinKeep, Value: common.GetPointer(1)}}, wantErr: "RPM 保持不变时不得提供数值"},
@@ -76,9 +79,10 @@ func TestValidateAndBuildUserBatchRateLimits(t *testing.T) {
 	}
 
 	partial := buildUserBatchPolicyPartial(nil, userBatchPolicyRequest{RateLimits: &userBatchRateLimitsOp{
-		RpmLimit:         &userBatchRateLimitOp{Mode: userBatchCheckinCustom, Value: common.GetPointer(60)},
-		ConcurrencyLimit: &userBatchRateLimitOp{Mode: userBatchRateLimitClear},
-		StreamTpsLimit:   &userBatchRateLimitOp{Mode: userBatchCheckinKeep},
+		RpmLimit:          &userBatchRateLimitOp{Mode: userBatchCheckinCustom, Value: common.GetPointer(60)},
+		ConcurrencyLimit:  &userBatchRateLimitOp{Mode: userBatchRateLimitClear},
+		StreamTpsLimit:    &userBatchRateLimitOp{Mode: userBatchCheckinKeep},
+		FirstTokenDelayMs: &userBatchRateLimitOp{Mode: userBatchCheckinCustom, Value: common.GetPointer(1500)},
 	}})
 	assert.True(t, partial.SetRpmLimit)
 	require.NotNil(t, partial.RpmLimit)
@@ -86,6 +90,9 @@ func TestValidateAndBuildUserBatchRateLimits(t *testing.T) {
 	assert.True(t, partial.SetConcurrencyLimit)
 	assert.Nil(t, partial.ConcurrencyLimit)
 	assert.False(t, partial.SetStreamTpsLimit)
+	assert.True(t, partial.SetFirstTokenDelayMs)
+	require.NotNil(t, partial.FirstTokenDelayMs)
+	assert.Equal(t, 1500, *partial.FirstTokenDelayMs)
 }
 
 func TestNormalizeUserBatchIdsAllowsAtMostOneThousandUniqueUsers(t *testing.T) {

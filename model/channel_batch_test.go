@@ -226,3 +226,135 @@ func TestBatchUpdateChannelsRejectsInvalidClientPolicyWithoutChangingSettings(t 
 	require.NoError(t, DB.First(&stored, "id = ?", channel.Id).Error)
 	assert.JSONEq(t, `{"allow_service_tier":true}`, stored.OtherSettings)
 }
+
+func TestBatchUpdateChannelsAppliesNullableRateLimitModes(t *testing.T) {
+	resetPricingEndpointTestTables(t)
+	for _, column := range []string{"rpm_limit", "concurrency_limit"} {
+		assert.True(t, DB.Migrator().HasColumn(&Channel{}, column))
+	}
+
+	channel := Channel{
+		Id:               8151,
+		Name:             "rate-limit-modes",
+		Key:              "key",
+		Type:             1,
+		Status:           common.ChannelStatusEnabled,
+		Models:           "model-a",
+		Group:            "default",
+		RpmLimit:         common.GetPointer(10),
+		ConcurrencyLimit: common.GetPointer(2),
+	}
+	require.NoError(t, DB.Create(&channel).Error)
+
+	updated, err := BatchUpdateChannels([]int{channel.Id}, ChannelBatchUpdate{
+		RpmLimit:         &ChannelBatchNullableIntUpdate{Mode: ChannelBatchLimitCustom, Value: common.GetPointer(60)},
+		ConcurrencyLimit: &ChannelBatchNullableIntUpdate{Mode: ChannelBatchLimitKeep},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, updated)
+
+	var stored Channel
+	require.NoError(t, DB.First(&stored, "id = ?", channel.Id).Error)
+	require.NotNil(t, stored.RpmLimit)
+	assert.Equal(t, 60, *stored.RpmLimit)
+	require.NotNil(t, stored.ConcurrencyLimit)
+	assert.Equal(t, 2, *stored.ConcurrencyLimit)
+
+	updated, err = BatchUpdateChannels([]int{channel.Id}, ChannelBatchUpdate{
+		RpmLimit:         &ChannelBatchNullableIntUpdate{Mode: ChannelBatchLimitClear},
+		ConcurrencyLimit: &ChannelBatchNullableIntUpdate{Mode: ChannelBatchLimitCustom, Value: common.GetPointer(4)},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, updated)
+
+	require.NoError(t, DB.First(&stored, "id = ?", channel.Id).Error)
+	assert.Nil(t, stored.RpmLimit)
+	require.NotNil(t, stored.ConcurrencyLimit)
+	assert.Equal(t, 4, *stored.ConcurrencyLimit)
+	cached, err := CacheGetChannel(channel.Id)
+	require.NoError(t, err)
+	assert.Nil(t, cached.RpmLimit)
+	require.NotNil(t, cached.ConcurrencyLimit)
+	assert.Equal(t, 4, *cached.ConcurrencyLimit)
+}
+
+func TestBatchUpdateChannelsRejectsInvalidRateLimitModeWithoutChangingChannel(t *testing.T) {
+	resetPricingEndpointTestTables(t)
+	channel := Channel{
+		Id:               8152,
+		Name:             "invalid-rate-limit-mode",
+		Key:              "key",
+		Type:             1,
+		Status:           common.ChannelStatusEnabled,
+		Models:           "model-a",
+		Group:            "default",
+		RpmLimit:         common.GetPointer(10),
+		ConcurrencyLimit: common.GetPointer(2),
+	}
+	require.NoError(t, DB.Create(&channel).Error)
+
+	for _, test := range []struct {
+		name    string
+		update  *ChannelBatchNullableIntUpdate
+		wantErr string
+	}{
+		{
+			name:    "clear with value",
+			update:  &ChannelBatchNullableIntUpdate{Mode: ChannelBatchLimitClear, Value: common.GetPointer(1)},
+			wantErr: "clear mode must not include value",
+		},
+		{
+			name:    "keep with value",
+			update:  &ChannelBatchNullableIntUpdate{Mode: ChannelBatchLimitKeep, Value: common.GetPointer(1)},
+			wantErr: "keep mode must not include value",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			updated, err := BatchUpdateChannels([]int{channel.Id}, ChannelBatchUpdate{RpmLimit: test.update})
+			require.ErrorContains(t, err, test.wantErr)
+			assert.Zero(t, updated)
+		})
+	}
+
+	var stored Channel
+	require.NoError(t, DB.First(&stored, "id = ?", channel.Id).Error)
+	require.NotNil(t, stored.RpmLimit)
+	assert.Equal(t, 10, *stored.RpmLimit)
+	require.NotNil(t, stored.ConcurrencyLimit)
+	assert.Equal(t, 2, *stored.ConcurrencyLimit)
+}
+
+func TestChannelUpdatePreservesOmittedAndClearsExplicitNullableRateLimits(t *testing.T) {
+	resetPricingEndpointTestTables(t)
+	channel := Channel{
+		Id:               8153,
+		Name:             "nullable-rate-limit-update",
+		Key:              "key",
+		Type:             1,
+		Status:           common.ChannelStatusEnabled,
+		Models:           "model-a",
+		Group:            "default",
+		RpmLimit:         common.GetPointer(60),
+		ConcurrencyLimit: common.GetPointer(2),
+	}
+	require.NoError(t, DB.Create(&channel).Error)
+
+	var update Channel
+	require.NoError(t, DB.First(&update, "id = ?", channel.Id).Error)
+	update.RpmLimit = nil
+	update.ConcurrencyLimit = nil
+	require.NoError(t, update.UpdateWithAggregateLinkAndNullableLimits(false, true))
+
+	var stored Channel
+	require.NoError(t, DB.First(&stored, "id = ?", channel.Id).Error)
+	require.NotNil(t, stored.RpmLimit)
+	assert.Equal(t, 60, *stored.RpmLimit, "an omitted RPM field must retain its previous value")
+	assert.Nil(t, stored.ConcurrencyLimit, "an explicit null must clear the concurrency limit")
+
+	stored.RpmLimit = common.GetPointer(90)
+	require.NoError(t, stored.UpdateWithAggregateLinkAndNullableLimits(true, false))
+	require.NoError(t, DB.First(&stored, "id = ?", channel.Id).Error)
+	require.NotNil(t, stored.RpmLimit)
+	assert.Equal(t, 90, *stored.RpmLimit)
+	assert.Nil(t, stored.ConcurrencyLimit)
+}

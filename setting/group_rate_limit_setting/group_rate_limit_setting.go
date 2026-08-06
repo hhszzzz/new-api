@@ -18,9 +18,10 @@ const (
 )
 
 type Limits struct {
-	RPMLimit         *int `json:"rpm_limit,omitempty"`
-	ConcurrencyLimit *int `json:"concurrency_limit,omitempty"`
-	StreamTPSLimit   *int `json:"stream_tps_limit,omitempty"`
+	RPMLimit          *int `json:"rpm_limit,omitempty"`
+	ConcurrencyLimit  *int `json:"concurrency_limit,omitempty"`
+	StreamTPSLimit    *int `json:"stream_tps_limit,omitempty"`
+	FirstTokenDelayMs *int `json:"first_token_delay_ms,omitempty"`
 }
 
 type GroupPolicy struct {
@@ -69,10 +70,10 @@ func (setting *Setting) ValidateConfig() error {
 			return fmt.Errorf("duplicate normalized group rate limit policy name")
 		}
 		seenGroups[normalizedGroup] = struct{}{}
-		if err := validateLimits(policy.MemberLimits); err != nil {
+		if err := validateLimits(policy.MemberLimits, true); err != nil {
 			return fmt.Errorf("invalid member limits for group %s: %w", normalizedGroup, err)
 		}
-		if err := validateLimits(policy.SharedPool); err != nil {
+		if err := validateLimits(policy.SharedPool, false); err != nil {
 			return fmt.Errorf("invalid shared pool for group %s: %w", normalizedGroup, err)
 		}
 	}
@@ -92,11 +93,15 @@ func PrepareSetting(setting Setting) (Setting, error) {
 	return normalizeSetting(setting), nil
 }
 
-func validateLimits(limits Limits) error {
+func validateLimits(limits Limits, allowFirstTokenDelay bool) error {
+	if !allowFirstTokenDelay && limits.FirstTokenDelayMs != nil {
+		return fmt.Errorf("first_token_delay_ms is only supported for member limits")
+	}
 	for name, value := range map[string]*int{
-		"rpm_limit":         limits.RPMLimit,
-		"concurrency_limit": limits.ConcurrencyLimit,
-		"stream_tps_limit":  limits.StreamTPSLimit,
+		"rpm_limit":            limits.RPMLimit,
+		"concurrency_limit":    limits.ConcurrencyLimit,
+		"stream_tps_limit":     limits.StreamTPSLimit,
+		"first_token_delay_ms": limits.FirstTokenDelayMs,
 	} {
 		if value != nil && (*value < 1 || int64(*value) > math.MaxInt32) {
 			return fmt.Errorf("%s must be between 1 and 2147483647", name)
@@ -139,9 +144,10 @@ func copyPolicy(policy GroupPolicy) GroupPolicy {
 
 func copyLimits(limits Limits) Limits {
 	return Limits{
-		RPMLimit:         copyInt(limits.RPMLimit),
-		ConcurrencyLimit: copyInt(limits.ConcurrencyLimit),
-		StreamTPSLimit:   copyInt(limits.StreamTPSLimit),
+		RPMLimit:          copyInt(limits.RPMLimit),
+		ConcurrencyLimit:  copyInt(limits.ConcurrencyLimit),
+		StreamTPSLimit:    copyInt(limits.StreamTPSLimit),
+		FirstTokenDelayMs: copyInt(limits.FirstTokenDelayMs),
 	}
 }
 

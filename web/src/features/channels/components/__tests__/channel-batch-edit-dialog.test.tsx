@@ -77,6 +77,19 @@ vi.mock('sonner', () => ({
 describe('channel batch edit dialog', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn().mockImplementation((query: string) => ({
+        matches: false,
+        media: query,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      }))
+    )
     getGroupsMock.mockResolvedValue({
       success: true,
       data: ['default', 'premium'],
@@ -246,5 +259,63 @@ describe('channel batch edit dialog', () => {
       'data-allow-create',
       'true'
     )
+  })
+
+  test('submits channel request-limit custom and clear operations', async () => {
+    const user = userEvent.setup()
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    })
+    batchUpdateChannelsMock.mockResolvedValue({
+      success: true,
+      data: { updated: 1 },
+    })
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ChannelBatchEditDialog
+          open
+          onOpenChange={vi.fn()}
+          selectedIds={[9]}
+          filter={{}}
+          onSuccess={vi.fn()}
+        />
+      </QueryClientProvider>
+    )
+
+    await user.click(screen.getByLabelText('Requests per minute'))
+    await user.click(
+      await screen.findByRole('option', { name: 'Custom limit' })
+    )
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('option', { name: 'Custom limit' })
+      ).not.toBeInTheDocument()
+    })
+    await user.type(
+      screen.getByRole('spinbutton', {
+        name: 'Requests per minute Limit value',
+      }),
+      '60'
+    )
+    const concurrencySelect = screen.getByRole('combobox', {
+      name: 'Concurrent requests',
+    })
+    await user.click(concurrencySelect)
+    await user.click(await screen.findByRole('option', { name: 'Clear limit' }))
+    await user.click(screen.getByRole('button', { name: 'Apply Changes' }))
+
+    await waitFor(() => {
+      expect(batchUpdateChannelsMock).toHaveBeenCalledWith(
+        { mode: 'selected', ids: [9] },
+        {
+          rpm_limit: { mode: 'custom', value: 60 },
+          concurrency_limit: { mode: 'clear' },
+        }
+      )
+    })
   })
 })

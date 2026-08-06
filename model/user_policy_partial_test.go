@@ -130,27 +130,30 @@ func TestUpdateUserPolicyPartialEmptyIsNoOp(t *testing.T) {
 
 func TestUserRateLimitColumnsAreNullableAndPartialUpdatesPreserveUntouchedValues(t *testing.T) {
 	setupUserPolicyPartialTestDB(t)
-	for _, column := range []string{"rpm_limit", "concurrency_limit", "stream_tps_limit"} {
+	for _, column := range []string{"rpm_limit", "concurrency_limit", "stream_tps_limit", "first_token_delay_ms"} {
 		assert.True(t, DB.Migrator().HasColumn(&User{}, column))
 	}
 
 	user := User{
-		Id:               4,
-		Username:         "rate-limit-policy",
-		Group:            "default",
-		AffCode:          "pp4",
-		RpmLimit:         common.GetPointer(60),
-		ConcurrencyLimit: common.GetPointer(2),
-		StreamTpsLimit:   common.GetPointer(12),
+		Id:                4,
+		Username:          "rate-limit-policy",
+		Group:             "default",
+		AffCode:           "pp4",
+		RpmLimit:          common.GetPointer(60),
+		ConcurrencyLimit:  common.GetPointer(2),
+		StreamTpsLimit:    common.GetPointer(12),
+		FirstTokenDelayMs: common.GetPointer(1000),
 	}
 	require.NoError(t, DB.Create(&user).Error)
 	beforeVersion := user.PolicyVersion
 
 	require.NoError(t, UpdateUserPolicyPartial(user.Id, UserPolicyPartialUpdate{
-		SetRpmLimit:         true,
-		RpmLimit:            common.GetPointer(90),
-		SetConcurrencyLimit: true,
-		ConcurrencyLimit:    nil,
+		SetRpmLimit:          true,
+		RpmLimit:             common.GetPointer(90),
+		SetConcurrencyLimit:  true,
+		ConcurrencyLimit:     nil,
+		SetFirstTokenDelayMs: true,
+		FirstTokenDelayMs:    common.GetPointer(1500),
 	}))
 
 	var updated User
@@ -160,6 +163,8 @@ func TestUserRateLimitColumnsAreNullableAndPartialUpdatesPreserveUntouchedValues
 	assert.Nil(t, updated.ConcurrencyLimit)
 	require.NotNil(t, updated.StreamTpsLimit)
 	assert.Equal(t, 12, *updated.StreamTpsLimit)
+	require.NotNil(t, updated.FirstTokenDelayMs)
+	assert.Equal(t, 1500, *updated.FirstTokenDelayMs)
 	assert.Greater(t, updated.PolicyVersion, beforeVersion)
 
 	encoded, err := common.Marshal(updated)
@@ -167,4 +172,5 @@ func TestUserRateLimitColumnsAreNullableAndPartialUpdatesPreserveUntouchedValues
 	assert.NotContains(t, string(encoded), "rpm_limit")
 	assert.NotContains(t, string(encoded), "concurrency_limit")
 	assert.NotContains(t, string(encoded), "stream_tps_limit")
+	assert.NotContains(t, string(encoded), "first_token_delay_ms")
 }

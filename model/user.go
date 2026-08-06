@@ -106,28 +106,29 @@ type User struct {
 	// QuotaCap bounds the balance reachable through gift credits (check-in,
 	// redemption codes, invite transfers); nil means unlimited. Paid top-ups
 	// are not subject to the cap.
-	QuotaCap         *int                       `json:"quota_cap" gorm:"column:quota_cap"`
-	RpmLimit         *int                       `json:"-" gorm:"column:rpm_limit"`
-	ConcurrencyLimit *int                       `json:"-" gorm:"column:concurrency_limit"`
-	StreamTpsLimit   *int                       `json:"-" gorm:"column:stream_tps_limit"`
-	PolicyVersion    int64                      `json:"-" gorm:"type:bigint;not null;default:1;column:policy_version"`
-	Groups           []string                   `json:"groups" gorm:"-:all"`
-	ModelLimits      []string                   `json:"model_limits" gorm:"-:all"`
-	ModelBlocklist   []string                   `json:"model_blocklist" gorm:"-:all"`
-	AffCode          string                     `json:"aff_code" gorm:"type:varchar(32);column:aff_code;uniqueIndex"`
-	AffCount         int                        `json:"aff_count" gorm:"type:int;default:0;column:aff_count"`
-	AffQuota         int                        `json:"aff_quota" gorm:"type:int;default:0;column:aff_quota"`           // 邀请剩余额度
-	AffHistoryQuota  int                        `json:"aff_history_quota" gorm:"type:int;default:0;column:aff_history"` // 邀请历史额度
-	InviterId        int                        `json:"inviter_id" gorm:"type:int;column:inviter_id;index"`
-	DeletedAt        gorm.DeletedAt             `gorm:"index"`
-	LinuxDOId        string                     `json:"linux_do_id" gorm:"column:linux_do_id;index"`
-	Setting          string                     `json:"setting" gorm:"type:text;column:setting"`
-	Remark           string                     `json:"remark,omitempty" gorm:"type:varchar(255)" validate:"max=255"`
-	StripeCustomer   string                     `json:"stripe_customer" gorm:"type:varchar(64);column:stripe_customer;index"`
-	CreatedAt        int64                      `json:"created_at" gorm:"autoCreateTime;column:created_at"`
-	LastLoginAt      int64                      `json:"last_login_at" gorm:"default:0;column:last_login_at"`
-	AuthVersion      int64                      `json:"-" gorm:"type:bigint;not null;default:1;column:auth_version"`
-	AdminPermissions map[string]map[string]bool `json:"admin_permissions,omitempty" gorm:"-:all"`
+	QuotaCap          *int                       `json:"quota_cap" gorm:"column:quota_cap"`
+	RpmLimit          *int                       `json:"-" gorm:"column:rpm_limit"`
+	ConcurrencyLimit  *int                       `json:"-" gorm:"column:concurrency_limit"`
+	StreamTpsLimit    *int                       `json:"-" gorm:"column:stream_tps_limit"`
+	FirstTokenDelayMs *int                       `json:"-" gorm:"column:first_token_delay_ms"`
+	PolicyVersion     int64                      `json:"-" gorm:"type:bigint;not null;default:1;column:policy_version"`
+	Groups            []string                   `json:"groups" gorm:"-:all"`
+	ModelLimits       []string                   `json:"model_limits" gorm:"-:all"`
+	ModelBlocklist    []string                   `json:"model_blocklist" gorm:"-:all"`
+	AffCode           string                     `json:"aff_code" gorm:"type:varchar(32);column:aff_code;uniqueIndex"`
+	AffCount          int                        `json:"aff_count" gorm:"type:int;default:0;column:aff_count"`
+	AffQuota          int                        `json:"aff_quota" gorm:"type:int;default:0;column:aff_quota"`           // 邀请剩余额度
+	AffHistoryQuota   int                        `json:"aff_history_quota" gorm:"type:int;default:0;column:aff_history"` // 邀请历史额度
+	InviterId         int                        `json:"inviter_id" gorm:"type:int;column:inviter_id;index"`
+	DeletedAt         gorm.DeletedAt             `gorm:"index"`
+	LinuxDOId         string                     `json:"linux_do_id" gorm:"column:linux_do_id;index"`
+	Setting           string                     `json:"setting" gorm:"type:text;column:setting"`
+	Remark            string                     `json:"remark,omitempty" gorm:"type:varchar(255)" validate:"max=255"`
+	StripeCustomer    string                     `json:"stripe_customer" gorm:"type:varchar(64);column:stripe_customer;index"`
+	CreatedAt         int64                      `json:"created_at" gorm:"autoCreateTime;column:created_at"`
+	LastLoginAt       int64                      `json:"last_login_at" gorm:"default:0;column:last_login_at"`
+	AuthVersion       int64                      `json:"-" gorm:"type:bigint;not null;default:1;column:auth_version"`
+	AdminPermissions  map[string]map[string]bool `json:"admin_permissions,omitempty" gorm:"-:all"`
 }
 
 func (user *User) ToBaseUser() *UserBase {
@@ -155,6 +156,7 @@ func (user *User) ToBaseUser() *UserBase {
 		RpmLimit:              user.RpmLimit,
 		ConcurrencyLimit:      user.ConcurrencyLimit,
 		StreamTpsLimit:        user.StreamTpsLimit,
+		FirstTokenDelayMs:     user.FirstTokenDelayMs,
 		PolicyVersion:         user.PolicyVersion,
 		Quota:                 user.Quota,
 		Status:                user.Status,
