@@ -188,6 +188,78 @@ describe('channel batch edit dialog', () => {
     expect(batchUpdateChannelsMock).not.toHaveBeenCalled()
   })
 
+  test('ignores a stale filtered preview after the filter changes', async () => {
+    let resolveFirst!: (value: {
+      success: boolean
+      data: { count: number; fingerprint: string }
+    }) => void
+    const firstPreview = new Promise<{
+      success: boolean
+      data: { count: number; fingerprint: string }
+    }>((resolve) => {
+      resolveFirst = resolve
+    })
+    previewChannelBatchMock
+      .mockImplementationOnce(() => firstPreview)
+      .mockResolvedValueOnce({
+        success: true,
+        data: { count: 2, fingerprint: 'second-fingerprint' },
+      })
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    })
+    const view = render(
+      <QueryClientProvider client={queryClient}>
+        <ChannelBatchEditDialog
+          open
+          onOpenChange={vi.fn()}
+          selectedIds={[]}
+          filter={{ keyword: 'first' }}
+          onSuccess={vi.fn()}
+        />
+      </QueryClientProvider>
+    )
+    await waitFor(() => {
+      expect(previewChannelBatchMock).toHaveBeenCalledWith({ keyword: 'first' })
+    })
+
+    view.rerender(
+      <QueryClientProvider client={queryClient}>
+        <ChannelBatchEditDialog
+          open
+          onOpenChange={vi.fn()}
+          selectedIds={[]}
+          filter={{ keyword: 'second' }}
+          onSuccess={vi.fn()}
+        />
+      </QueryClientProvider>
+    )
+    await waitFor(() => {
+      expect(previewChannelBatchMock).toHaveBeenCalledWith({
+        keyword: 'second',
+      })
+    })
+    expect(
+      await screen.findByText('2 channels match the current filters')
+    ).toBeVisible()
+
+    resolveFirst({
+      success: true,
+      data: { count: 9, fingerprint: 'stale-fingerprint' },
+    })
+    await waitFor(() => {
+      expect(
+        screen.getByText('2 channels match the current filters')
+      ).toBeVisible()
+      expect(
+        screen.queryByText('9 channels match the current filters')
+      ).toBeNull()
+    })
+  })
+
   test('separates client policy and upstream detection without a fixed timezone label', () => {
     const queryClient = new QueryClient({
       defaultOptions: {

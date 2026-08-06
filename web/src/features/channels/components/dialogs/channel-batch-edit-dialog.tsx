@@ -62,6 +62,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
+import { useLatestAsyncTask } from '@/hooks/use-latest-async-task'
 import { CLIENT_POLICY_MODE_LABEL_KEYS } from '@/lib/client-policy'
 
 import {
@@ -331,6 +332,21 @@ export function ChannelBatchEditDialog(props: ChannelBatchEditDialogProps) {
     () => parseChannelBatchListValues(modelValues),
     [modelValues]
   )
+  const filterKey = [
+    props.filter.keyword ?? '',
+    props.filter.group ?? '',
+    props.filter.model ?? '',
+    props.filter.status ?? '',
+    props.filter.type ?? '',
+  ].join('\u0000')
+  const selectedIdsKey = [...props.selectedIds]
+    .sort((left, right) => left - right)
+    .join(',')
+  const targetScope = props.open ? `${selectedIdsKey}\u0000${filterKey}` : null
+  const { begin: beginPreviewTask, invalidate: invalidatePreviewTask } =
+    useLatestAsyncTask(targetScope)
+  const { begin: beginUpdateTask, invalidate: invalidateUpdateTask } =
+    useLatestAsyncTask(targetScope)
 
   const previewMutation = useMutation({
     mutationFn: () => previewChannelBatch(props.filter),
@@ -348,8 +364,10 @@ export function ChannelBatchEditDialog(props: ChannelBatchEditDialogProps) {
   translateRef.current = t
 
   const loadPreview = useCallback(async (): Promise<void> => {
+    const isCurrent = beginPreviewTask()
     try {
       const response = await previewMutationRef.current.mutateAsync()
+      if (!isCurrent()) return
       if (!response.success || !response.data) {
         throw new Error(
           response.message || translateRef.current('Failed to preview channels')
@@ -357,18 +375,21 @@ export function ChannelBatchEditDialog(props: ChannelBatchEditDialogProps) {
       }
       setPreview(response.data)
     } catch (error) {
+      if (!isCurrent()) return
       setPreview(null)
       toast.error(
         getApiErrorMessage(error) ||
           translateRef.current('Failed to preview channels')
       )
     }
-  }, [])
+  }, [beginPreviewTask])
 
   const initialTargetMode =
     props.selectedIds.length > 0 ? 'selected' : 'filtered'
 
   useEffect(() => {
+    invalidatePreviewTask()
+    invalidateUpdateTask()
     if (!props.open) return
     form.reset({
       ...CHANNEL_BATCH_EDIT_DEFAULT_VALUES,
@@ -376,11 +397,22 @@ export function ChannelBatchEditDialog(props: ChannelBatchEditDialogProps) {
     })
     setPreview(null)
     if (initialTargetMode === 'filtered') void loadPreview()
-  }, [form, initialTargetMode, loadPreview, props.open])
+  }, [
+    filterKey,
+    form,
+    initialTargetMode,
+    invalidatePreviewTask,
+    invalidateUpdateTask,
+    loadPreview,
+    props.open,
+    selectedIdsKey,
+  ])
 
   const handleTargetModeChange = (values: string[]): void => {
     const next = values.find((value) => value !== targetMode)
     if (next !== 'selected' && next !== 'filtered') return
+    invalidatePreviewTask()
+    invalidateUpdateTask()
     form.setValue('targetMode', next, { shouldValidate: true })
     setPreview(null)
     if (next === 'filtered') void loadPreview()
@@ -388,12 +420,15 @@ export function ChannelBatchEditDialog(props: ChannelBatchEditDialogProps) {
 
   const handleClose = (): void => {
     if (updateMutation.isPending) return
+    invalidatePreviewTask()
+    invalidateUpdateTask()
     props.onOpenChange(false)
   }
 
   const handleSubmit = async (
     values: ChannelBatchEditValues
   ): Promise<void> => {
+    const isCurrent = beginUpdateTask()
     let target: ChannelBatchTarget
     if (values.targetMode === 'selected') {
       target = { mode: 'selected', ids: props.selectedIds }
@@ -414,6 +449,7 @@ export function ChannelBatchEditDialog(props: ChannelBatchEditDialogProps) {
         target,
         updates: buildChannelBatchUpdates(values),
       })
+      if (!isCurrent()) return
       if (!response.success) {
         throw new Error(response.message || t('Failed to update channels'))
       }
@@ -425,15 +461,18 @@ export function ChannelBatchEditDialog(props: ChannelBatchEditDialogProps) {
         })
       )
       await queryClient.invalidateQueries({ queryKey: channelsQueryKeys.all })
+      if (!isCurrent()) return
       props.onSuccess()
       props.onOpenChange(false)
     } catch (error) {
+      if (!isCurrent()) return
       if (
         getApiErrorStatus(error) === 409 &&
         values.targetMode === 'filtered'
       ) {
         setPreview(null)
         await loadPreview()
+        if (!isCurrent()) return
         toast.warning(t('Filtered channels changed. Review the new count.'))
         return
       }

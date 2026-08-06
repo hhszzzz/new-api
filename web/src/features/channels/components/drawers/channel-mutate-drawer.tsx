@@ -117,6 +117,7 @@ import {
 } from '@/features/auth/secure-verification'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { useHiddenClickUnlock } from '@/hooks/use-hidden-click-unlock'
+import { useLatestAsyncTask } from '@/hooks/use-latest-async-task'
 import {
   ADMIN_PERMISSION_ACTIONS,
   ADMIN_PERMISSION_RESOURCES,
@@ -153,6 +154,7 @@ import {
   FIELD_PLACEHOLDERS,
   MODEL_FETCHABLE_TYPES,
 } from '../../constants'
+import { useChannelFormSession } from '../../hooks/use-channel-form-session'
 import { useChannelMutateForm } from '../../hooks/use-channel-mutate-form'
 import {
   CHANNEL_FORM_DEFAULT_VALUES,
@@ -702,6 +704,22 @@ export function ChannelMutateDrawer({
   const missingModelsResolveRef = useRef<
     ((action: MissingModelsAction) => void) | null
   >(null)
+  const resolvePendingChannelConfirmations = useCallback(() => {
+    const resolveMissingModels = missingModelsResolveRef.current
+    missingModelsResolveRef.current = null
+    resolveMissingModels?.('cancel')
+
+    const resolveStatusCodeRisk = statusCodeRiskResolveRef.current
+    statusCodeRiskResolveRef.current = null
+    resolveStatusCodeRisk?.(false)
+  }, [])
+  const cancelPendingChannelConfirmations = useCallback(() => {
+    resolvePendingChannelConfirmations()
+    setMissingModelsDialogOpen(false)
+    setMissingModelsList([])
+    setStatusCodeRiskOpen(false)
+    setStatusCodeRiskDetailItems([])
+  }, [resolvePendingChannelConfirmations])
   const channelFormRef = useRef<HTMLFormElement>(null)
   const advancedNavScrollPendingRef = useRef(false)
   const [activeEditorSectionId, setActiveEditorSectionId] = useState<string>(
@@ -719,6 +737,11 @@ export function ChannelMutateDrawer({
 
   const isEditing = Boolean(currentRow)
   const channelId = currentRow?.id ?? null
+  const submitScope = open ? (channelId ?? 'create') : null
+  const {
+    begin: beginChannelSubmitTask,
+    invalidate: invalidateChannelSubmitTask,
+  } = useLatestAsyncTask(submitScope)
   const sensitiveLocked = isEditing && !canEditSensitive
 
   // Fetch channel details if editing
@@ -793,6 +816,40 @@ export function ChannelMutateDrawer({
   const form = useForm<ChannelFormInput, unknown, ChannelFormValues>({
     resolver: zodResolver(channelFormSchema),
     defaultValues: CHANNEL_FORM_DEFAULT_VALUES,
+  })
+
+  const resetChannelEditorState = useCallback(() => {
+    initialModelsRef.current = []
+    initialModelMappingRef.current = ''
+    initialStatusCodeMappingRef.current = ''
+    advancedNavScrollPendingRef.current = false
+    setActiveEditorSectionId(CHANNEL_EDITOR_SECTION_IDS.identity)
+    setExpandedEditorNavItemId(undefined)
+    setAdvancedSettingsOpen(false)
+    setClipboardConnectionInfo(null)
+  }, [])
+  const hydrateChannelEditorState = useCallback(
+    (defaults: ChannelFormValues, channel: Channel) => {
+      setAdvancedSettingsOpen(
+        readAdvancedSettingsPreference() || hasAdvancedSettingsValues(defaults)
+      )
+      initialModelsRef.current = parseModelsString(channel.models || '')
+      initialModelMappingRef.current = channel.model_mapping || ''
+      initialStatusCodeMappingRef.current = channel.status_code_mapping || ''
+    },
+    []
+  )
+  const { resetSession: resetChannelFormSession } = useChannelFormSession({
+    defaultValues: CHANNEL_FORM_DEFAULT_VALUES,
+    form,
+    isDirty: form.formState.isDirty,
+    isEditing,
+    open,
+    onHydrate: hydrateChannelEditorState,
+    onReset: resetChannelEditorState,
+    record: channelData?.data,
+    recordId: channelId,
+    transform: transformChannelToFormDefaults,
   })
 
   // Watch form values for conditional rendering
@@ -968,7 +1025,11 @@ export function ChannelMutateDrawer({
   // Helper computed values
   const isBatchMode =
     multiKeyMode === 'batch' || multiKeyMode === 'multi_to_single'
-  const isChannelDetailLoading = isEditing && isChannelLoading
+  const isChannelDetailLoading =
+    isEditing &&
+    (isChannelLoading ||
+      !channelData?.data ||
+      channelData.data.id !== channelId)
   const supportsMultiKeyAddMode =
     currentType !== 57 && !(currentType === 41 && vertexKeyType === 'api_key')
   const addModeOptions = useMemo(
@@ -1423,30 +1484,6 @@ export function ChannelMutateDrawer({
     upstreamUpdateMeta.detectedModels.length -
     upstreamDetectedModelsPreview.length
 
-  // Load channel data into form when editing
-  useEffect(() => {
-    if (isEditing && channelData?.data) {
-      const defaults = transformChannelToFormDefaults(channelData.data)
-      form.reset(defaults)
-      setAdvancedSettingsOpen(
-        readAdvancedSettingsPreference() || hasAdvancedSettingsValues(defaults)
-      )
-      // Store initial values for comparison
-      initialModelsRef.current = parseModelsString(
-        channelData.data.models || ''
-      )
-      initialModelMappingRef.current = channelData.data.model_mapping || ''
-      initialStatusCodeMappingRef.current =
-        channelData.data.status_code_mapping || ''
-    } else if (!isEditing) {
-      form.reset(CHANNEL_FORM_DEFAULT_VALUES)
-      setAdvancedSettingsOpen(false)
-      initialModelsRef.current = []
-      initialModelMappingRef.current = ''
-      initialStatusCodeMappingRef.current = ''
-    }
-  }, [isEditing, channelData, form])
-
   // Handle type change - set default values for specific types
   useEffect(() => {
     if (isEditing) return // Don't auto-set defaults when editing
@@ -1740,6 +1777,7 @@ export function ChannelMutateDrawer({
 
   // Handle successful submission
   const handleSuccess = useCallback(() => {
+    invalidateChannelSubmitTask()
     queryClient.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
     queryClient.invalidateQueries({
       queryKey: channelsQueryKeys.aggregates(),
@@ -1749,14 +1787,25 @@ export function ChannelMutateDrawer({
         queryKey: channelsQueryKeys.detail(channelId),
       })
     }
+    resetChannelFormSession()
     onOpenChange(false)
     setOpen(null)
-  }, [channelId, queryClient, onOpenChange, setOpen])
+  }, [
+    channelId,
+    invalidateChannelSubmitTask,
+    onOpenChange,
+    queryClient,
+    resetChannelFormSession,
+    setOpen,
+  ])
 
   // Show missing models confirmation dialog
   const confirmMissingModelMappings = useCallback(
     (missingModels: string[]): Promise<MissingModelsAction> => {
       return new Promise((resolve) => {
+        const resolvePrevious = missingModelsResolveRef.current
+        missingModelsResolveRef.current = null
+        resolvePrevious?.('cancel')
         setMissingModelsList(missingModels)
         setMissingModelsDialogOpen(true)
         missingModelsResolveRef.current = resolve
@@ -1780,6 +1829,9 @@ export function ChannelMutateDrawer({
   const confirmStatusCodeRisk = useCallback(
     (detailItems: string[]): Promise<boolean> =>
       new Promise((resolve) => {
+        const resolvePrevious = statusCodeRiskResolveRef.current
+        statusCodeRiskResolveRef.current = null
+        resolvePrevious?.(false)
         statusCodeRiskResolveRef.current = resolve
         setStatusCodeRiskDetailItems(detailItems)
         setStatusCodeRiskOpen(true)
@@ -1796,27 +1848,33 @@ export function ChannelMutateDrawer({
     }
   }, [])
 
-  useEffect(() => {
-    return () => {
-      if (statusCodeRiskResolveRef.current) {
-        statusCodeRiskResolveRef.current(false)
-        statusCodeRiskResolveRef.current = null
-      }
-    }
-  }, [])
-
   const channelMutation = useChannelMutateForm({
     currentRow,
     isEditing,
     isMultiKeyChannel,
     onSuccess: handleSuccess,
   })
+  const resetChannelMutation = channelMutation.reset
+
+  useEffect(() => {
+    invalidateChannelSubmitTask()
+    resetChannelMutation()
+    cancelPendingChannelConfirmations()
+    return resolvePendingChannelConfirmations
+  }, [
+    cancelPendingChannelConfirmations,
+    invalidateChannelSubmitTask,
+    resetChannelMutation,
+    resolvePendingChannelConfirmations,
+    submitScope,
+  ])
 
   const isSubmitting = channelMutation.isPending
 
   // Submit handler
   const onSubmit = useCallback(
     async (data: ChannelFormValues) => {
+      const isCurrent = beginChannelSubmitTask()
       // Validate key is required when creating
       if (!isEditing && !data.key?.trim()) {
         form.setError('key', {
@@ -1861,6 +1919,7 @@ export function ChannelMutateDrawer({
         )
         if (riskyRedirects.length > 0) {
           const confirmed = await confirmStatusCodeRisk(riskyRedirects)
+          if (!isCurrent()) return
           if (!confirmed) return
         }
       }
@@ -1900,6 +1959,7 @@ export function ChannelMutateDrawer({
 
         if (shouldPromptMissing) {
           const confirmAction = await confirmMissingModelMappings(missingModels)
+          if (!isCurrent()) return
           if (confirmAction === 'cancel') {
             return
           }
@@ -1913,9 +1973,15 @@ export function ChannelMutateDrawer({
         }
       }
 
-      await channelMutation.mutateAsync(data)
+      if (!isCurrent()) return
+      try {
+        await channelMutation.mutateAsync({ data, isCurrent })
+      } catch {
+        // Current-session errors are reported by the guarded mutation callback.
+      }
     },
     [
+      beginChannelSubmitTask,
       isEditing,
       sensitiveLocked,
       form,
@@ -2037,17 +2103,23 @@ export function ChannelMutateDrawer({
   // Handle drawer close
   const handleOpenChange = useCallback(
     (v: boolean) => {
+      if (!v) {
+        invalidateChannelSubmitTask()
+        resetChannelMutation()
+        cancelPendingChannelConfirmations()
+      }
       onOpenChange(v)
       if (!v) {
-        form.reset(CHANNEL_FORM_DEFAULT_VALUES)
-        advancedNavScrollPendingRef.current = false
-        setActiveEditorSectionId(CHANNEL_EDITOR_SECTION_IDS.identity)
-        setExpandedEditorNavItemId(undefined)
-        setAdvancedSettingsOpen(false)
-        setClipboardConnectionInfo(null)
+        resetChannelFormSession()
       }
     },
-    [onOpenChange, form]
+    [
+      cancelPendingChannelConfirmations,
+      invalidateChannelSubmitTask,
+      onOpenChange,
+      resetChannelFormSession,
+      resetChannelMutation,
+    ]
   )
 
   return (
@@ -5648,7 +5720,11 @@ export function ChannelMutateDrawer({
             >
               {t('Cancel')}
             </SheetClose>
-            <Button form='channel-form' type='submit' disabled={isSubmitting}>
+            <Button
+              form='channel-form'
+              type='submit'
+              disabled={isSubmitting || isChannelDetailLoading}
+            >
               {isSubmitting && (
                 <Loader2 className='mr-2 h-4 w-4 animate-spin' />
               )}
@@ -5730,7 +5806,9 @@ export function ChannelMutateDrawer({
         open={missingModelsDialogOpen}
         missingModels={missingModelsList}
         onConfirm={handleMissingModelsAction}
-        onOpenChange={setMissingModelsDialogOpen}
+        onOpenChange={(v) => {
+          if (!v) handleMissingModelsAction('cancel')
+        }}
       />
 
       <StatusCodeRiskDialog

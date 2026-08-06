@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
-import { type FormEvent, useEffect, useState } from 'react'
+import { type FormEvent, useCallback, useEffect, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -50,12 +50,14 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
+import { useLatestAsyncTask } from '@/hooks/use-latest-async-task'
+import { useLatestFormLoad } from '@/hooks/use-latest-form-load'
 import { getCurrencyDisplay, getCurrencyLabel } from '@/lib/currency'
 import { formatQuota, parseQuotaFromDollars } from '@/lib/format'
 import { addTimeToDate } from '@/lib/time'
 
 import { createRedemption, updateRedemption, getRedemption } from '../api'
-import { SUCCESS_MESSAGES } from '../constants'
+import { ERROR_MESSAGES, SUCCESS_MESSAGES } from '../constants'
 import {
   getRedemptionFormSchema,
   type RedemptionFormValues,
@@ -81,32 +83,47 @@ export function RedemptionsMutateDrawer({
   const isUpdate = !!currentRow
   const { triggerRefresh } = useRedemptions()
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const submitScope = open ? (currentRow?.id ?? 'create') : null
+  const { begin: beginSubmitTask, invalidate: invalidateSubmitTask } =
+    useLatestAsyncTask(submitScope)
 
   const form = useForm<RedemptionFormValues>({
     resolver: zodResolver(getRedemptionFormSchema(t)),
     defaultValues: REDEMPTION_FORM_DEFAULT_VALUES,
   })
 
-  // Load existing data when updating
-  useEffect(() => {
-    if (open && isUpdate && currentRow) {
-      // For update, fetch fresh data
-      void getRedemption(currentRow.id)
-        .then((result) => {
-          if (result.success && result.data) {
-            form.reset(transformRedemptionToFormDefaults(result.data))
-            return
-          }
-          toast.error(result.message || t('Request failed'))
-        })
-        .catch(() => toast.error(t('Request failed')))
-    } else if (open && !isUpdate) {
-      // For create, reset to defaults
-      form.reset(REDEMPTION_FORM_DEFAULT_VALUES)
+  const loadRedemptionForm = useCallback(async (redemptionId: number) => {
+    const result = await getRedemption(redemptionId)
+    if (!result.success || !result.data) {
+      throw new Error(result.message || 'failed to load redemption')
     }
-  }, [open, isUpdate, currentRow, form, t])
+    return transformRedemptionToFormDefaults(result.data)
+  }, [])
+  const handleRedemptionLoaded = useCallback(
+    (values: RedemptionFormValues) => form.reset(values),
+    [form]
+  )
+  const handleRedemptionLoadError = useCallback(
+    (error: unknown) =>
+      toast.error(error instanceof Error ? error.message : t('Request failed')),
+    [t]
+  )
+  const { isLoading: isRedemptionLoading } = useLatestFormLoad({
+    enabled: open && isUpdate && Boolean(currentRow?.id),
+    load: loadRedemptionForm,
+    onError: handleRedemptionLoadError,
+    onLoad: handleRedemptionLoaded,
+    target: currentRow?.id ?? null,
+  })
+
+  useEffect(() => {
+    invalidateSubmitTask()
+    setIsSubmitting(false)
+    if (open) form.reset(REDEMPTION_FORM_DEFAULT_VALUES)
+  }, [currentRow?.id, form, invalidateSubmitTask, open])
 
   const onSubmit = async (data: RedemptionFormValues) => {
+    const isCurrent = beginSubmitTask()
     setIsSubmitting(true)
     try {
       const basePayload = transformFormDataToPayload(data)
@@ -116,29 +133,38 @@ export function RedemptionsMutateDrawer({
           ...basePayload,
           id: currentRow.id,
         })
-        if (result.success) {
-          toast.success(t(SUCCESS_MESSAGES.REDEMPTION_UPDATED))
-          onOpenChange(false)
-          triggerRefresh()
+        if (!isCurrent()) return
+        if (!result.success) {
+          toast.error(result.message || t(ERROR_MESSAGES.UPDATE_FAILED))
+          return
         }
+        toast.success(t(SUCCESS_MESSAGES.REDEMPTION_UPDATED))
+        onOpenChange(false)
+        triggerRefresh()
       } else {
         // Create mode
         const result = await createRedemption(basePayload)
-        if (result.success) {
-          const count = result.data?.length || 0
-          toast.success(
-            count > 1
-              ? t('Successfully created {{count}} redemption codes', {
-                  count,
-                })
-              : t(SUCCESS_MESSAGES.REDEMPTION_CREATED)
-          )
-          onOpenChange(false)
-          triggerRefresh()
+        if (!isCurrent()) return
+        if (!result.success) {
+          toast.error(result.message || t(ERROR_MESSAGES.CREATE_FAILED))
+          return
         }
+        const count = result.data?.length || 0
+        toast.success(
+          count > 1
+            ? t('Successfully created {{count}} redemption codes', {
+                count,
+              })
+            : t(SUCCESS_MESSAGES.REDEMPTION_CREATED)
+        )
+        onOpenChange(false)
+        triggerRefresh()
       }
+    } catch {
+      if (!isCurrent()) return
+      toast.error(t(ERROR_MESSAGES.UNEXPECTED))
     } finally {
-      setIsSubmitting(false)
+      if (isCurrent()) setIsSubmitting(false)
     }
   }
 
@@ -171,6 +197,7 @@ export function RedemptionsMutateDrawer({
     <Sheet
       open={open}
       onOpenChange={(v) => {
+        if (!v) invalidateSubmitTask()
         onOpenChange(v)
         if (!v) {
           form.reset()
@@ -198,6 +225,8 @@ export function RedemptionsMutateDrawer({
             id='redemption-form'
             onSubmit={handleSubmit}
             className={sideDrawerFormClassName()}
+            aria-busy={isRedemptionLoading}
+            inert={isRedemptionLoading}
           >
             <SideDrawerSection>
               <FormField
@@ -339,7 +368,11 @@ export function RedemptionsMutateDrawer({
           <SheetClose render={<Button variant='outline' />}>
             {t('Close')}
           </SheetClose>
-          <Button form='redemption-form' type='submit' disabled={isSubmitting}>
+          <Button
+            form='redemption-form'
+            type='submit'
+            disabled={isSubmitting || isRedemptionLoading}
+          >
             {isSubmitting ? t('Saving...') : t('Save changes')}
           </Button>
         </SheetFooter>

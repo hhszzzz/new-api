@@ -43,6 +43,11 @@ type UseChannelMutateFormParams = {
   onSuccess: () => void
 }
 
+type ChannelMutateRequest = {
+  data: ChannelFormValues
+  isCurrent: () => boolean
+}
+
 const SENSITIVE_UPDATE_FIELDS = [
   'type',
   'key',
@@ -92,7 +97,7 @@ export function useChannelMutateForm(props: UseChannelMutateFormParams) {
   )
 
   return useMutation({
-    mutationFn: async (data: ChannelFormValues): Promise<string> => {
+    mutationFn: async ({ data }: ChannelMutateRequest): Promise<string> => {
       if (props.isEditing && props.currentRow) {
         const payload = transformFormDataToUpdatePayload(
           data,
@@ -134,11 +139,13 @@ export function useChannelMutateForm(props: UseChannelMutateFormParams) {
       }
       return SUCCESS_MESSAGES.CREATED
     },
-    onSuccess: (messageKey) => {
+    onSuccess: (messageKey, request) => {
+      if (!request.isCurrent()) return
       toast.success(t(messageKey))
       props.onSuccess()
     },
-    onError: (error: unknown) => {
+    onError: (error: unknown, request) => {
+      if (!request.isCurrent()) return
       toast.error(getErrorMessage(error) || t(ERROR_MESSAGES.CREATE_FAILED))
     },
   })

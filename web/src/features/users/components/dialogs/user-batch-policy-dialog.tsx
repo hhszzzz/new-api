@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -34,6 +34,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { getPricing } from '@/features/pricing/api'
+import { useLatestAsyncTask } from '@/hooks/use-latest-async-task'
 
 import { batchUpdateUserPolicy } from '../../api'
 import type {
@@ -237,6 +238,12 @@ export function UserBatchPolicyDialog(props: UserBatchPolicyDialogProps) {
     useState<RateLimitsState>(EMPTY_RATE_LIMITS)
   const [submitting, setSubmitting] = useState(false)
   const [skipped, setSkipped] = useState<UserBatchSkip[]>([])
+  const targetKey = [...props.userIds]
+    .sort((left, right) => left - right)
+    .join(',')
+  const dialogScope = props.open ? targetKey : null
+  const { begin: beginSubmitTask, invalidate: invalidateSubmitTask } =
+    useLatestAsyncTask(dialogScope)
 
   const { data: pricingData } = useQuery({
     queryKey: ['pricing'],
@@ -255,7 +262,7 @@ export function UserBatchPolicyDialog(props: UserBatchPolicyDialogProps) {
       .map((model) => ({ value: model, label: model }))
   }, [pricingData?.data, limits.models, blocklist.models])
 
-  const resetState = () => {
+  const resetState = useCallback(() => {
     setLimits(EMPTY_LIST_SECTION)
     setBlocklist(EMPTY_LIST_SECTION)
     setCheckinMode('keep')
@@ -266,10 +273,19 @@ export function UserBatchPolicyDialog(props: UserBatchPolicyDialogProps) {
     setQuotaCapValue('')
     setRateLimits(EMPTY_RATE_LIMITS)
     setSkipped([])
-  }
+    setSubmitting(false)
+  }, [])
+
+  useEffect(() => {
+    invalidateSubmitTask()
+    resetState()
+  }, [dialogScope, invalidateSubmitTask, resetState])
 
   const handleOpenChange = (open: boolean) => {
-    if (!open) resetState()
+    if (!open) {
+      invalidateSubmitTask()
+      resetState()
+    }
     props.onOpenChange(open)
   }
 
@@ -358,9 +374,11 @@ export function UserBatchPolicyDialog(props: UserBatchPolicyDialogProps) {
       toast.error(payload)
       return
     }
+    const isCurrent = beginSubmitTask()
     setSubmitting(true)
     try {
       const result = await batchUpdateUserPolicy(payload)
+      if (!isCurrent()) return
       if (!result.success || !result.data) {
         toast.error(result.message || t('Operation failed'))
         return
@@ -381,9 +399,10 @@ export function UserBatchPolicyDialog(props: UserBatchPolicyDialogProps) {
         props.onSuccess?.()
       }
     } catch {
+      if (!isCurrent()) return
       toast.error(t('Operation failed'))
     } finally {
-      setSubmitting(false)
+      if (isCurrent()) setSubmitting(false)
     }
   }
 

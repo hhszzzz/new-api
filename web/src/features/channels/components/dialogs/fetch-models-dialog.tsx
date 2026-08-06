@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useQueryClient } from '@tanstack/react-query'
 import { Loader2, Search, Info, ChevronDown } from 'lucide-react'
-import { useState, useEffect, useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -38,6 +38,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { useLatestAsyncTask } from '@/hooks/use-latest-async-task'
 
 import { fetchUpstreamModels, updateChannel } from '../../api'
 import {
@@ -76,6 +77,7 @@ export function FetchModelsDialog({
   const { t } = useTranslation()
   const { currentRow } = useChannels()
   const activeChannel = customFetcher ? null : currentRow
+  const activeChannelId = activeChannel?.id
   const queryClient = useQueryClient()
   const [isFetching, setIsFetching] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
@@ -84,11 +86,34 @@ export function FetchModelsDialog({
   const [searchKeyword, setSearchKeyword] = useState('')
 
   // Parse existing models
-  const existingModels = useMemo(
+  const parsedExistingModels =
+    existingModelsOverride ?? parseModelsString(activeChannel?.models || '')
+  const existingModelsKey = JSON.stringify(parsedExistingModels)
+  const existingModelsSnapshotRef = useRef({
+    key: existingModelsKey,
+    models: parsedExistingModels,
+  })
+  if (existingModelsSnapshotRef.current.key !== existingModelsKey) {
+    existingModelsSnapshotRef.current = {
+      key: existingModelsKey,
+      models: parsedExistingModels,
+    }
+  }
+  const existingModels = existingModelsSnapshotRef.current.models
+  const fetchScope = useMemo(
     () =>
-      existingModelsOverride ?? parseModelsString(activeChannel?.models || ''),
-    [existingModelsOverride, activeChannel?.models]
+      open
+        ? {
+            existingModelsKey,
+            source: customFetcher ?? activeChannelId ?? null,
+          }
+        : null,
+    [activeChannelId, customFetcher, existingModelsKey, open]
   )
+  const { begin: beginFetchTask, invalidate: invalidateFetchTask } =
+    useLatestAsyncTask(fetchScope)
+  const { begin: beginSaveTask, invalidate: invalidateSaveTask } =
+    useLatestAsyncTask(fetchScope)
 
   // Categorize models with redirect models
   const modelCategories = useMemo(
@@ -121,26 +146,22 @@ export function FetchModelsDialog({
     })
   }, [fetchedModelSet, redirectSourceKeysSet, searchKeyword, selectedModels])
 
-  useEffect(() => {
-    if (open && (activeChannel || customFetcher)) {
-      handleFetchModels()
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, activeChannel?.id, customFetcher])
+  const handleFetchModels = useCallback(async () => {
+    if (!activeChannelId && !customFetcher) return
 
-  const handleFetchModels = async () => {
-    if (!activeChannel && !customFetcher) return
-
+    const isCurrent = beginFetchTask()
     setIsFetching(true)
     try {
       if (customFetcher) {
         const list = await customFetcher()
+        if (!isCurrent()) return
         setFetchedModels(list)
         setSelectedModels(existingModels)
         toast.success(t('Fetched {{count}} models', { count: list.length }))
       } else {
-        if (!activeChannel) return
-        const response = await fetchUpstreamModels(activeChannel.id)
+        if (!activeChannelId) return
+        const response = await fetchUpstreamModels(activeChannelId)
+        if (!isCurrent()) return
         if (response.success) {
           const list = Array.isArray(response.data) ? response.data : []
           setFetchedModels(list)
@@ -152,49 +173,78 @@ export function FetchModelsDialog({
         }
       }
     } catch (error: unknown) {
+      if (!isCurrent()) return
       toast.error(
         error instanceof Error ? error.message : t('Failed to fetch models')
       )
       setFetchedModels([])
     } finally {
+      if (isCurrent()) setIsFetching(false)
+    }
+  }, [activeChannelId, beginFetchTask, customFetcher, existingModels, t])
+
+  useEffect(() => {
+    invalidateSaveTask()
+    setIsSaving(false)
+    if (open && (activeChannelId || customFetcher)) {
+      void handleFetchModels()
+    } else {
+      invalidateFetchTask()
       setIsFetching(false)
     }
-  }
+    return invalidateFetchTask
+  }, [
+    activeChannelId,
+    customFetcher,
+    handleFetchModels,
+    invalidateFetchTask,
+    invalidateSaveTask,
+    open,
+  ])
 
   const handleSave = async () => {
     // If onModelsSelected callback is provided, use it (form filling mode)
     if (onModelsSelected) {
       onModelsSelected(selectedModels)
       toast.success(t('Models filled to form'))
+      invalidateFetchTask()
       onOpenChange(false)
       return
     }
 
     // Otherwise, directly save to API (standalone mode)
     if (!activeChannel) return
+    const isCurrent = beginSaveTask()
     setIsSaving(true)
     try {
       const modelsString = selectedModels.join(',')
       const response = await updateChannel(activeChannel.id, {
         models: modelsString,
       })
+      if (!isCurrent()) return
       if (response.success) {
         toast.success(t('Models updated successfully'))
         queryClient.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
+        invalidateFetchTask()
         onOpenChange(false)
       } else {
         toast.error(response.message || t('Failed to update models'))
       }
     } catch (error: unknown) {
+      if (!isCurrent()) return
       toast.error(
         error instanceof Error ? error.message : t('Failed to update models')
       )
     } finally {
-      setIsSaving(false)
+      if (isCurrent()) setIsSaving(false)
     }
   }
 
   const handleClose = () => {
+    invalidateFetchTask()
+    invalidateSaveTask()
+    setIsFetching(false)
+    setIsSaving(false)
     setFetchedModels([])
     setSelectedModels([])
     setSearchKeyword('')

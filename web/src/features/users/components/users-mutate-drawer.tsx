@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery } from '@tanstack/react-query'
 import { Pencil } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -65,6 +65,8 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { getPricing } from '@/features/pricing/api'
+import { useLatestAsyncTask } from '@/hooks/use-latest-async-task'
+import { useLatestFormLoad } from '@/hooks/use-latest-form-load'
 import {
   ADMIN_PERMISSION_ACTIONS,
   ADMIN_PERMISSION_RESOURCES,
@@ -117,6 +119,9 @@ export function UsersMutateDrawer({
   const currentUser = useAuthStore((s) => s.auth.user)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [quotaDialogOpen, setQuotaDialogOpen] = useState(false)
+  const submitScope = open ? (currentRowId ?? 'create') : null
+  const { begin: beginSubmitTask, invalidate: invalidateSubmitTask } =
+    useLatestAsyncTask(submitScope)
 
   // Fetch groups
   const { data: groupsData } = useQuery({
@@ -144,35 +149,44 @@ export function UsersMutateDrawer({
     defaultValues: USER_FORM_DEFAULT_VALUES,
   })
 
-  // Load the user record and policy together so the drawer never renders a
-  // partially populated policy form.
+  const loadUserForm = useCallback(async (userId: number) => {
+    const [userResult, policyResult] = await Promise.all([
+      getUser(userId),
+      getUserPolicy(userId),
+    ])
+    if (
+      !userResult.success ||
+      !userResult.data ||
+      !policyResult.success ||
+      !policyResult.data
+    ) {
+      throw new Error('failed to load complete user policy')
+    }
+    return transformUserToFormDefaults(userResult.data, policyResult.data)
+  }, [])
+  const handleUserFormLoaded = useCallback(
+    (values: UserFormValues) => form.reset(values),
+    [form]
+  )
+  const handleUserFormLoadError = useCallback(
+    () => toast.error(t('Failed to load')),
+    [t]
+  )
+  const { isLoading: isUserLoading, reload: reloadUserForm } =
+    useLatestFormLoad({
+      enabled: open && isUpdate && Boolean(currentRowId),
+      load: loadUserForm,
+      onError: handleUserFormLoadError,
+      onLoad: handleUserFormLoaded,
+      target: currentRowId ?? null,
+    })
+
   useEffect(() => {
-    let active = true
-    if (!open) return () => undefined
-
-    if (!isUpdate || !currentRowId) {
-      form.reset(USER_FORM_DEFAULT_VALUES)
-      return () => undefined
-    }
-
-    void Promise.all([getUser(currentRowId), getUserPolicy(currentRowId)])
-      .then(([userResult, policyResult]) => {
-        if (!active || !userResult.success || !userResult.data) return
-        form.reset(
-          transformUserToFormDefaults(
-            userResult.data,
-            policyResult.success ? policyResult.data : undefined
-          )
-        )
-      })
-      .catch(() => {
-        if (active) toast.error(t('Failed to load'))
-      })
-
-    return () => {
-      active = false
-    }
-  }, [open, isUpdate, currentRowId, form, t])
+    invalidateSubmitTask()
+    setIsSubmitting(false)
+    setQuotaDialogOpen(false)
+    if (open) form.reset(USER_FORM_DEFAULT_VALUES)
+  }, [currentRowId, form, invalidateSubmitTask, open])
 
   const { meta: currencyMeta } = getCurrencyDisplay()
   const currencyLabel = getCurrencyLabel()
@@ -233,6 +247,7 @@ export function UsersMutateDrawer({
       }
     }
 
+    const isCurrent = beginSubmitTask()
     setIsSubmitting(true)
     try {
       const payload = transformFormDataToPayload(
@@ -245,6 +260,7 @@ export function UsersMutateDrawer({
         const result = await updateUser(
           payload as typeof payload & { id: number }
         )
+        if (!isCurrent()) return
         if (!result.success) {
           toast.error(result.message || t(ERROR_MESSAGES.UPDATE_FAILED))
           return
@@ -252,6 +268,7 @@ export function UsersMutateDrawer({
         toast.success(t(SUCCESS_MESSAGES.USER_UPDATED))
       } else {
         const result = await createUser(payload)
+        if (!isCurrent()) return
         if (!result.success) {
           toast.error(result.message || t(ERROR_MESSAGES.CREATE_FAILED))
           return
@@ -261,27 +278,15 @@ export function UsersMutateDrawer({
       onOpenChange(false)
       triggerRefresh()
     } catch {
+      if (!isCurrent()) return
       toast.error(t(ERROR_MESSAGES.UNEXPECTED))
     } finally {
-      setIsSubmitting(false)
+      if (isCurrent()) setIsSubmitting(false)
     }
   }
 
   const refreshUserData = async () => {
-    if (!currentRow) return
-    const [userResult, policyResult] = await Promise.all([
-      getUser(currentRow.id),
-      getUserPolicy(currentRow.id),
-    ])
-    if (userResult.success && userResult.data) {
-      form.reset(
-        transformUserToFormDefaults(
-          userResult.data,
-          policyResult.success ? policyResult.data : undefined
-        )
-      )
-    }
-    triggerRefresh()
+    if (await reloadUserForm()) triggerRefresh()
   }
 
   return (
@@ -289,6 +294,7 @@ export function UsersMutateDrawer({
       <Sheet
         open={open}
         onOpenChange={(v) => {
+          if (!v) invalidateSubmitTask()
           onOpenChange(v)
           if (!v) {
             form.reset()
@@ -313,6 +319,8 @@ export function UsersMutateDrawer({
               id='user-form'
               onSubmit={form.handleSubmit(onSubmit)}
               className={sideDrawerFormClassName()}
+              aria-busy={isUserLoading}
+              inert={isUserLoading}
             >
               {/* Basic Information */}
               <SideDrawerSection>
@@ -1061,7 +1069,11 @@ export function UsersMutateDrawer({
             <SheetClose render={<Button variant='outline' />}>
               {t('Close')}
             </SheetClose>
-            <Button form='user-form' type='submit' disabled={isSubmitting}>
+            <Button
+              form='user-form'
+              type='submit'
+              disabled={isSubmitting || isUserLoading}
+            >
               {isSubmitting ? t('Saving...') : t('Save changes')}
             </Button>
           </SheetFooter>

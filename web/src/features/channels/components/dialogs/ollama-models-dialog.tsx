@@ -39,6 +39,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Progress } from '@/components/ui/progress'
 import { Separator } from '@/components/ui/separator'
+import { useLatestAsyncTask } from '@/hooks/use-latest-async-task'
 import { getFreshAuthHeaders } from '@/lib/api'
 
 import {
@@ -72,6 +73,13 @@ export function OllamaModelsDialog({
 
   const isOllamaChannel = currentRow?.type === CHANNEL_TYPE_OLLAMA
   const channelId = currentRow?.id
+  const dialogScope = open ? (channelId ?? null) : null
+  const { begin: beginModelFetch, invalidate: invalidateModelFetch } =
+    useLatestAsyncTask(dialogScope)
+  const { begin: beginModelMutation, invalidate: invalidateModelMutation } =
+    useLatestAsyncTask(dialogScope)
+  const { begin: beginModelPull, invalidate: invalidateModelPull } =
+    useLatestAsyncTask(dialogScope)
 
   const [isFetching, setIsFetching] = useState(false)
   const [models, setModels] = useState<OllamaModel[]>([])
@@ -86,6 +94,8 @@ export function OllamaModelsDialog({
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
+  const currentRowRef = useRef(currentRow)
+  currentRowRef.current = currentRow
 
   const filteredModels = useMemo(() => {
     if (!search.trim()) return models
@@ -98,41 +108,25 @@ export function OllamaModelsDialog({
     [currentRow?.models]
   )
 
-  useEffect(() => {
-    if (!open) {
-      setModels([])
-      setSelected([])
-      setSearch('')
-      setPullName('')
-      setIsPulling(false)
-      setPullProgress(null)
-      pullAbortRef.current?.abort()
-      pullAbortRef.current = null
-      return
-    }
-
-    if (open && isOllamaChannel && channelId) {
-      void fetchOllamaModels()
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, isOllamaChannel, channelId])
-
   const fetchOllamaModels = useCallback(async () => {
     if (!channelId) return
+    const isCurrent = beginModelFetch()
+    const activeRow = currentRowRef.current
     setIsFetching(true)
     try {
       let normalized: OllamaModel[] = []
       let lastErr = ''
 
       // 1) Prefer live fetch for Ollama if base_url is set (more accurate / supports unsaved changes)
-      const baseUrl = resolveOllamaBaseUrl(currentRow ?? null)
+      const baseUrl = resolveOllamaBaseUrl(activeRow ?? null)
       if (isOllamaChannel && baseUrl) {
         try {
           const payloadLive = await fetchModelsFromEndpoint({
             base_url: baseUrl,
             type: CHANNEL_TYPE_OLLAMA,
-            key: typeof currentRow?.key === 'string' ? currentRow.key : '',
+            key: typeof activeRow?.key === 'string' ? activeRow.key : '',
           })
+          if (!isCurrent()) return
           if (payloadLive?.success) {
             normalized = normalizeOllamaModels(payloadLive.data)
           } else if (payloadLive?.message) {
@@ -146,6 +140,7 @@ export function OllamaModelsDialog({
       // 2) Fallback to server-side fetch by channelId
       if (!normalized.length) {
         const payload = await fetchUpstreamModels(Number(channelId))
+        if (!isCurrent()) return
         if (payload?.success) {
           normalized = normalizeOllamaModels(payload.data)
           lastErr = ''
@@ -154,6 +149,7 @@ export function OllamaModelsDialog({
         }
       }
 
+      if (!isCurrent()) return
       if (!normalized.length && lastErr) {
         toast.error(lastErr || t('Failed to fetch models'))
       }
@@ -169,13 +165,66 @@ export function OllamaModelsDialog({
           : normalized.map((m) => m.id)
       })
     } catch (err: unknown) {
+      if (!isCurrent()) return
       const msg = err instanceof Error ? err.message : undefined
       toast.error(msg || t('Failed to fetch models'))
       setModels([])
     } finally {
-      setIsFetching(false)
+      if (isCurrent()) setIsFetching(false)
     }
-  }, [channelId, currentRow, isOllamaChannel, t])
+  }, [beginModelFetch, channelId, isOllamaChannel, t])
+
+  useEffect(() => {
+    if (!open) {
+      invalidateModelFetch()
+      invalidateModelMutation()
+      invalidateModelPull()
+      setModels([])
+      setSelected([])
+      setSearch('')
+      setPullName('')
+      setIsPulling(false)
+      setPullProgress(null)
+      pullAbortRef.current?.abort()
+      pullAbortRef.current = null
+      setDeleteOpen(false)
+      setDeleteTarget(null)
+      setIsDeleting(false)
+      return
+    }
+
+    pullAbortRef.current?.abort()
+    pullAbortRef.current = null
+    setIsFetching(false)
+    setModels([])
+    setSelected([])
+    setSearch('')
+    setPullName('')
+    setIsPulling(false)
+    setPullProgress(null)
+    setDeleteOpen(false)
+    setDeleteTarget(null)
+    setIsDeleting(false)
+
+    if (isOllamaChannel && channelId) {
+      void fetchOllamaModels()
+    }
+    return () => {
+      invalidateModelFetch()
+      invalidateModelMutation()
+      invalidateModelPull()
+      pullAbortRef.current?.abort()
+      pullAbortRef.current = null
+    }
+  }, [
+    channelId,
+    fetchOllamaModels,
+    invalidateModelFetch,
+    invalidateModelMutation,
+    invalidateModelPull,
+    isOllamaChannel,
+    open,
+  ])
 
   const toggleSelected = (modelId: string, checked: boolean) => {
     setSelected((prev) => {
@@ -200,6 +249,7 @@ export function OllamaModelsDialog({
       toast.info(t('No models selected'))
       return
     }
+    const isCurrent = beginModelMutation()
 
     const next =
       mode === 'replace'
@@ -208,6 +258,7 @@ export function OllamaModelsDialog({
 
     try {
       const res = await updateChannel(currentRow.id, { models: next.join(',') })
+      if (!isCurrent()) return
       if (res.success) {
         toast.success(
           mode === 'replace'
@@ -219,6 +270,7 @@ export function OllamaModelsDialog({
         toast.error(res.message || t('Failed to update models'))
       }
     } catch (err: unknown) {
+      if (!isCurrent()) return
       toast.error(
         err instanceof Error ? err.message : t('Failed to update models')
       )
@@ -231,6 +283,7 @@ export function OllamaModelsDialog({
       toast.error(t('Please enter model name'))
       return
     }
+    const isCurrent = beginModelPull()
 
     if (!resolveOllamaBaseUrl(currentRow)) {
       toast.error(t('Please set Ollama API Base URL first'))
@@ -246,6 +299,7 @@ export function OllamaModelsDialog({
 
     try {
       const authHeaders = await getFreshAuthHeaders()
+      if (!isCurrent()) return
       const response = await fetch('/api/channel/ollama/pull/stream', {
         method: 'POST',
         credentials: 'include',
@@ -259,6 +313,7 @@ export function OllamaModelsDialog({
         }),
         signal: controller.signal,
       })
+      if (!isCurrent()) return
 
       if (!response.ok || !response.body) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`)
@@ -270,6 +325,7 @@ export function OllamaModelsDialog({
 
       while (true) {
         const { done, value } = await reader.read()
+        if (!isCurrent()) return
         if (done) break
 
         buffer += decoder.decode(value, { stream: true })
@@ -284,7 +340,9 @@ export function OllamaModelsDialog({
           if (eventData === '[DONE]') {
             setIsPulling(false)
             setPullProgress(null)
-            pullAbortRef.current = null
+            if (pullAbortRef.current === controller) {
+              pullAbortRef.current = null
+            }
             return
           }
 
@@ -296,14 +354,18 @@ export function OllamaModelsDialog({
               toast.error(String(data.error))
               setIsPulling(false)
               setPullProgress(null)
-              pullAbortRef.current = null
+              if (pullAbortRef.current === controller) {
+                pullAbortRef.current = null
+              }
               return
             } else if (data?.message) {
               toast.success(String(data.message))
               setPullName('')
               setIsPulling(false)
               setPullProgress(null)
-              pullAbortRef.current = null
+              if (pullAbortRef.current === controller) {
+                pullAbortRef.current = null
+              }
               await fetchOllamaModels()
               queryClient.invalidateQueries({
                 queryKey: channelsQueryKeys.lists(),
@@ -318,10 +380,13 @@ export function OllamaModelsDialog({
 
       setIsPulling(false)
       setPullProgress(null)
-      pullAbortRef.current = null
+      if (pullAbortRef.current === controller) {
+        pullAbortRef.current = null
+      }
       await fetchOllamaModels()
       queryClient.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
     } catch (err: unknown) {
+      if (!isCurrent()) return
       const isAbort =
         typeof err === 'object' &&
         err !== null &&
@@ -333,18 +398,22 @@ export function OllamaModelsDialog({
       }
       setIsPulling(false)
       setPullProgress(null)
-      pullAbortRef.current = null
+      if (pullAbortRef.current === controller) {
+        pullAbortRef.current = null
+      }
     }
   }
 
   const deleteModel = async (modelName: string) => {
     if (!channelId) return
+    const isCurrent = beginModelMutation()
     try {
       setIsDeleting(true)
       const payload = await deleteOllamaModel({
         channel_id: Number(channelId),
         model_name: modelName,
       })
+      if (!isCurrent()) return
       if (payload?.success) {
         toast.success(t('Model deleted'))
         await fetchOllamaModels()
@@ -355,14 +424,19 @@ export function OllamaModelsDialog({
         toast.error(payload?.message || t('Failed to delete model'))
       }
     } catch (err: unknown) {
+      if (!isCurrent()) return
       const msg = err instanceof Error ? err.message : undefined
       toast.error(msg || t('Failed to delete model'))
     } finally {
-      setIsDeleting(false)
+      if (isCurrent()) setIsDeleting(false)
     }
   }
 
   const close = () => {
+    invalidateModelFetch()
+    invalidateModelMutation()
+    invalidateModelPull()
+    setIsFetching(false)
     pullAbortRef.current?.abort()
     pullAbortRef.current = null
     onOpenChange(false)
