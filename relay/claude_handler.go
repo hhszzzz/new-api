@@ -142,6 +142,7 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		}
 
 		usage, newApiErr := chatCompletionsViaResponses(c, info, adaptor, openAIRequest)
+		newApiErr = normalizeStreamResult(c, info, newApiErr)
 		if newApiErr != nil {
 			return newApiErr
 		}
@@ -240,6 +241,7 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 	}
 
 	usage, newAPIError := adaptor.DoResponse(c, httpResp, info)
+	newAPIError = normalizeStreamResult(c, info, newAPIError)
 	if newAPIError != nil {
 		// reset status code 重置状态码
 		service.ResetStatusCode(newAPIError, statusCodeMappingStr)

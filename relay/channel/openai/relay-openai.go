@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relay/channel/openrouter"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert"
@@ -145,6 +146,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 		if lastStreamData != "" {
 			if err := HandleStreamFormat(c, info, lastStreamData, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent); err != nil {
 				streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+				info.StreamStatus.MarkWriteError(err)
 				sr.Stop(streamErr)
 				return
 			}
@@ -154,6 +156,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			if err := common.UnmarshalJsonStr(data, &errorResponse); err == nil {
 				if openAIError := errorResponse.GetOpenAIError(); openAIError != nil && openAIError.Type != "" {
 					streamErr = types.WithOpenAIError(*openAIError, http.StatusInternalServerError)
+					info.StreamStatus.MarkTerminalFailure(streamErr)
 					service.MarkProtocolUnsupportedStreamError(streamErr)
 					sr.Stop(streamErr)
 					return
@@ -166,10 +169,20 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			}
 
 			lastStreamData = data
-			if info.RelayFormat == types.RelayFormatClaude {
+			if info.RelayMode == relayconstant.RelayModeChatCompletions {
 				var streamResponse dto.ChatCompletionsStreamResponse
 				if common.UnmarshalJsonStr(data, &streamResponse) == nil && streamResponse.IsFinished() {
 					upstreamCompleted = true
+					info.StreamStatus.MarkTerminalSuccess()
+				}
+				if service.ValidUsage(streamResponse.Usage) {
+					info.StreamStatus.MarkUsageComplete()
+				}
+				for _, choice := range streamResponse.Choices {
+					if choice.Delta.GetContentString() != "" || choice.Delta.GetReasoningContent() != "" || len(choice.Delta.ParseToolCalls()) > 0 {
+						info.StreamStatus.MarkSemanticOutput()
+						break
+					}
 				}
 			}
 			collectStreamFunctionCallNames(data, seenStreamToolCalls, &streamFunctionCallNames)
@@ -185,13 +198,15 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 		return nil, streamErr
 	}
 	if err := streamStatusError(info); err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusBadGateway)
 	}
-	if info.RelayFormat == types.RelayFormatClaude && !upstreamCompleted {
+	if info.RelayMode == relayconstant.RelayModeChatCompletions && !upstreamCompleted {
+		missingTerminalErr := fmt.Errorf("Chat Completions stream ended without a terminal finish_reason")
+		info.StreamStatus.MarkTerminalFailure(missingTerminalErr)
 		return nil, types.NewOpenAIError(
-			fmt.Errorf("Chat Completions stream ended without a terminal finish_reason"),
+			missingTerminalErr,
 			types.ErrorCodeBadResponse,
-			http.StatusInternalServerError,
+			http.StatusBadGateway,
 		)
 	}
 
@@ -224,6 +239,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	if info.RelayFormat == types.RelayFormatOpenAI {
 		if shouldSendLastResp {
 			if err := sendStreamData(c, info, lastStreamData, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent); err != nil {
+				info.StreamStatus.MarkWriteError(err)
 				return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 			}
 		}
@@ -241,8 +257,10 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	}
 
 	if err := HandleFinalResponse(c, info, lastStreamData, responseId, createAt, model, systemFingerprint, usage, containStreamUsage); err != nil {
+		info.StreamStatus.MarkWriteError(err)
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
+	info.StreamStatus.MarkTerminalDelivered()
 	if info.RelayFormat == types.RelayFormatClaude {
 		protocolstate.MarkStreamCompleted(c)
 	}

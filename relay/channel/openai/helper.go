@@ -254,8 +254,9 @@ func streamStatusError(info *relaycommon.RelayInfo) error {
 	if info == nil || info.StreamStatus == nil || info.StreamStatus.IsNormalEnd() {
 		return nil
 	}
-	if info.StreamStatus.EndError != nil {
-		return info.StreamStatus.EndError
+	_, endErr := info.StreamStatus.EndState()
+	if endErr != nil {
+		return endErr
 	}
 	return fmt.Errorf("stream ended abnormally: %s", info.StreamStatus.Summary())
 }

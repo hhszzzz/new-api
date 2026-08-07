@@ -87,7 +87,7 @@ func TestResponsesUpstreamReturnsMessagesSSEWithPublicModel(t *testing.T) {
 	)
 }
 
-func TestResponsesIncompleteStreamIsSuccessfulProtocolAttempt(t *testing.T) {
+func TestResponsesIncompleteStreamFailsProtocolAttempt(t *testing.T) {
 	withOpenAIProtocolStreamTestMode(t)
 	body := strings.Join([]string{
 		`data: {"type":"response.created","response":{"id":"resp_incomplete","model":"provider-responses-model","created_at":1710000000}}`,
@@ -126,11 +126,12 @@ func TestResponsesIncompleteStreamIsSuccessfulProtocolAttempt(t *testing.T) {
 
 	usage, apiErr := OaiResponsesToChatStreamHandler(c, info, resp)
 
-	require.Nil(t, apiErr)
-	require.NotNil(t, usage)
-	assert.True(t, protocolstate.AttemptCompleted(c))
-	assert.Contains(t, recorder.Body.String(), `event: message_stop`)
-	require.NoError(t, protocolstate.Commit(c))
+	assert.Nil(t, usage)
+	require.NotNil(t, apiErr)
+	assert.Equal(t, http.StatusBadGateway, apiErr.StatusCode)
+	assert.Equal(t, types.ErrorCodeBadResponse, apiErr.GetErrorCode())
+	assert.False(t, protocolstate.AttemptCompleted(c))
+	assert.NotContains(t, recorder.Body.String(), `event: message_stop`)
 }
 
 func TestBufferedResponsesPreservesRawProviderOutputForMessagesReplay(t *testing.T) {

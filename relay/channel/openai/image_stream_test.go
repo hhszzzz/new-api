@@ -140,40 +140,6 @@ func TestOpenaiImageStreamHandlerUsesCompletedEventCount(t *testing.T) {
 	require.Equal(t, 2.0, info.PriceData.OtherRatios()["n"])
 }
 
-// blockingBody serves one SSE chunk, then blocks until Close (the scanner's
-// cleanup) and returns EOF — keeping the upstream "open" while the client-side
-// disconnect is simulated elsewhere.
-type blockingBody struct {
-	mu     sync.Mutex
-	sent   bool
-	chunk  []byte
-	closed chan struct{}
-}
-
-func (b *blockingBody) Read(p []byte) (int, error) {
-	b.mu.Lock()
-	if !b.sent {
-		b.sent = true
-		n := copy(p, b.chunk)
-		b.mu.Unlock()
-		return n, nil
-	}
-	b.mu.Unlock()
-	<-b.closed
-	return 0, io.EOF
-}
-
-func (b *blockingBody) Close() error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	select {
-	case <-b.closed:
-	default:
-		close(b.closed)
-	}
-	return nil
-}
-
 // cancelAfterWriter cancels the request context right after the payload
 // containing needle has been written to the client, simulating a client that
 // disconnects after receiving that event. Cancelling from the write side (not
@@ -209,10 +175,7 @@ func newDisconnectingImageStream(t *testing.T, sseBody, disconnectAfter string) 
 	t.Cleanup(cancel)
 	c.Request = c.Request.WithContext(ctx)
 	c.Writer = &cancelAfterWriter{ResponseWriter: c.Writer, needle: disconnectAfter, cancel: cancel}
-	resp.Body = &blockingBody{
-		chunk:  []byte(sseBody),
-		closed: make(chan struct{}),
-	}
+	resp.Body = io.NopCloser(strings.NewReader(sseBody))
 	return c, recorder, resp, info
 }
 
@@ -244,7 +207,7 @@ func TestOpenaiImageStreamHandlerClientDisconnectKeepsRequestedCount(t *testing.
 	// handler_stop (failed client write); both must be treated as untrusted.
 	require.Contains(t,
 		[]relaycommon.StreamEndReason{relaycommon.StreamEndReasonClientGone, relaycommon.StreamEndReasonHandlerStop},
-		info.StreamStatus.EndReason)
+		info.StreamStatus.Snapshot().EndReason)
 	require.Contains(t, recorder.Body.String(), `"b64_json":"first"`)
 	require.Equal(t, 3.0, info.PriceData.OtherRatios()["n"], "client abort must not reduce the billed image count")
 }
@@ -279,7 +242,7 @@ func TestOpenaiImageStreamHandlerClientDisconnectRaisesCount(t *testing.T) {
 	require.NotNil(t, info.StreamStatus)
 	require.Contains(t,
 		[]relaycommon.StreamEndReason{relaycommon.StreamEndReasonClientGone, relaycommon.StreamEndReasonHandlerStop},
-		info.StreamStatus.EndReason)
+		info.StreamStatus.Snapshot().EndReason)
 	require.Equal(t, 2.0, info.PriceData.OtherRatios()["n"], "completed events beyond the recorded n must raise the charge even on abort")
 }
 
@@ -438,10 +401,11 @@ func TestOpenaiImageStreamHandlerRecordsUpstreamErrorEvent(t *testing.T) {
 	require.Nil(t, err)
 	require.NotNil(t, usage)
 	require.NotNil(t, info.StreamStatus)
-	require.Equal(t, relaycommon.StreamEndReasonEOF, info.StreamStatus.EndReason)
+	snapshot := info.StreamStatus.Snapshot()
+	require.Equal(t, relaycommon.StreamEndReasonEOF, snapshot.EndReason)
 	require.True(t, info.StreamStatus.HasErrors())
 	require.Equal(t, 1, info.StreamStatus.TotalErrorCount())
-	require.Contains(t, info.StreamStatus.Errors[0].Message, "INTERNAL_ERROR")
+	require.Contains(t, snapshot.Errors[0].Message, "INTERNAL_ERROR")
 	// The scanner strips the upstream "event: error" line; the event name is
 	// rebuilt from the JSON "type" field (upstream_error). The error message
 	// is still forwarded in the data: payload (stream ID 77).

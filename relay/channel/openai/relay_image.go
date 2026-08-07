@@ -150,8 +150,10 @@ func OpenaiImageStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp 
 
 	// StreamScannerHandler consumes the upstream [DONE]; re-emit it so the
 	// client still receives a terminal data: [DONE].
-	if info.StreamStatus != nil && info.StreamStatus.EndReason == relaycommon.StreamEndReasonDone {
-		helper.Done(c)
+	if info.StreamStatus != nil && info.StreamStatus.Snapshot().EndReason == relaycommon.StreamEndReasonDone {
+		if err := helper.Done(c); err == nil {
+			info.StreamStatus.MarkTerminalDelivered()
+		}
 	}
 
 	applyUsagePostProcessing(info, usage, lastStreamData)
@@ -163,8 +165,9 @@ func OpenaiImageStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp 
 	// guard only blocks lowering the charge: if completed events already
 	// exceed the recorded n, bill the higher actual count regardless.
 	if info.StreamStatus != nil {
-		upstreamFinished := info.StreamStatus.EndReason == relaycommon.StreamEndReasonDone ||
-			info.StreamStatus.EndReason == relaycommon.StreamEndReasonEOF
+		snapshot := info.StreamStatus.Snapshot()
+		upstreamFinished := snapshot.EndReason == relaycommon.StreamEndReasonDone ||
+			snapshot.EndReason == relaycommon.StreamEndReasonEOF
 		requestedN := 1.0
 		if n, ok := info.PriceData.OtherRatios()["n"]; ok {
 			requestedN = n
@@ -317,14 +320,16 @@ func openaiImageJSONAsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo,
 		}
 		if writeErr := helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: "image_generation.completed"}, string(payload)); writeErr != nil {
 			if info != nil && info.StreamStatus != nil {
-				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, writeErr)
+				info.StreamStatus.MarkWriteError(writeErr)
+				info.StreamStatus.MarkClientGone(writeErr)
 			}
 			return &usageResp.Usage, nil
 		}
 	}
 	if err := writeOpenaiImageStreamDone(c); err != nil {
 		if info != nil && info.StreamStatus != nil {
-			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, err)
+			info.StreamStatus.MarkWriteError(err)
+			info.StreamStatus.MarkClientGone(err)
 		}
 		return &usageResp.Usage, nil
 	}
@@ -334,6 +339,7 @@ func openaiImageJSONAsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo,
 			info.StreamStatus = relaycommon.NewStreamStatus()
 		}
 		info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonDone, nil)
+		info.StreamStatus.MarkTerminalDelivered()
 	}
 	return &usageResp.Usage, nil
 }

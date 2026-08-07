@@ -34,6 +34,8 @@ const (
 	difyStopTimeout       = 5 * time.Second
 )
 
+var difyStreamDrainTimeout = helper.DefaultStreamDrainTimeout
+
 func uploadDifyFile(c *gin.Context, info *relaycommon.RelayInfo, user string, media dto.MediaContent) *DifyFile {
 	uploadUrl := fmt.Sprintf("%s/v1/files/upload", info.ChannelBaseUrl)
 	switch media.Type {
@@ -318,6 +320,7 @@ func difyStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 	helper.SetEventStreamHeaders(c)
 	helper.StreamScannerHandlerWithOptions(c, resp, info, helper.StreamScannerOptions{
 		PingInterval: difyHeartbeatInterval,
+		DrainTimeout: difyStreamDrainTimeout,
 		OnClientGone: func() {
 			if info.DifyTaskID == "" {
 				logger.LogWarn(c, "cannot stop Dify task after client disconnect: task_id was not received")
@@ -334,6 +337,7 @@ func difyStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 		if err := common.Unmarshal([]byte(data), &difyResponse); err != nil {
 			common.SysLog("error unmarshalling stream response: " + err.Error())
 			streamErr = newDifyResponseError(types.ErrorCodeBadResponse, "invalid Dify stream event")
+			info.StreamStatus.MarkTerminalFailure(streamErr)
 			sr.Stop(err)
 			return
 		}
@@ -350,11 +354,12 @@ func difyStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 			workflowFinishedSeen = true
 			workflowTotalTokens = difyResponse.Data.TotalTokens
 			info.DifyWorkflowStatus = strings.ToLower(strings.TrimSpace(difyResponse.Data.Status))
-			if strictWorkflow && info.DifyWorkflowStatus != "succeeded" {
+			if info.DifyWorkflowStatus != "succeeded" {
 				streamErr = newDifyResponseError(
 					types.ErrorCodeBadResponse,
 					fmt.Sprintf("Dify workflow finished with status %q", info.DifyWorkflowStatus),
 				)
+				info.StreamStatus.MarkTerminalFailure(streamErr)
 				sr.Stop(streamErr)
 				return
 			}
@@ -364,6 +369,9 @@ func difyStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 		case "message_end":
 			usage = &difyResponse.MetaData.Usage
 			messageEndSeen = true
+			if usage.TotalTokens > 0 {
+				info.StreamStatus.MarkUsageComplete()
+			}
 			if !strictWorkflow || workflowFinishedSeen {
 				sr.Done()
 			}
@@ -380,12 +388,17 @@ func difyStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 				message = "Dify returned an error event"
 			}
 			streamErr = newDifyResponseError(types.ErrorCodeBadResponse, message)
+			info.StreamStatus.MarkTerminalFailure(streamErr)
 			sr.Stop(streamErr)
 			return
 		}
 		openaiResponse := *streamResponseDify2OpenAI(difyResponse)
 		if len(openaiResponse.Choices) != 0 {
-			responseText.WriteString(openaiResponse.Choices[0].Delta.GetContentString())
+			content := openaiResponse.Choices[0].Delta.GetContentString()
+			responseText.WriteString(content)
+			if content != "" || openaiResponse.Choices[0].Delta.ReasoningContent != nil {
+				info.StreamStatus.MarkSemanticOutput()
+			}
 			if openaiResponse.Choices[0].Delta.ReasoningContent != nil {
 				nodeToken += 1
 			}
@@ -393,11 +406,12 @@ func difyStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 		if err := helper.ObjectData(c, openaiResponse); err != nil {
 			common.SysLog(err.Error())
 			streamErr = newDifyResponseError(types.ErrorCodeBadResponse, "failed to write Dify stream response")
+			info.StreamStatus.MarkWriteError(err)
 			sr.Stop(err)
 		}
 	})
-	if info.StreamStatus != nil && info.StreamStatus.EndReason == relaycommon.StreamEndReasonClientGone {
-		endErr := info.StreamStatus.EndError
+	if info.StreamStatus != nil && info.StreamStatus.IsClientGone() && !info.StreamStatus.HasTerminalDelivered() {
+		_, endErr := info.StreamStatus.EndState()
 		if endErr == nil {
 			endErr = context.Canceled
 		}
@@ -415,25 +429,39 @@ func difyStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 		return nil, streamErr
 	}
 	if !messageEndSeen {
-		return nil, newDifyResponseError(types.ErrorCodeBadResponse, "Dify stream ended without message_end")
+		streamErr = newDifyResponseError(types.ErrorCodeBadResponse, "Dify stream ended without message_end")
+		info.StreamStatus.MarkTerminalFailure(streamErr)
+		return nil, streamErr
 	}
 	if info.StreamStatus == nil || !info.StreamStatus.IsNormalEnd() || info.StreamStatus.HasErrors() {
-		return nil, newDifyResponseError(types.ErrorCodeBadResponse, "Dify stream terminated abnormally")
+		streamErr = newDifyResponseError(types.ErrorCodeBadResponse, "Dify stream terminated abnormally")
+		if info.StreamStatus != nil {
+			info.StreamStatus.MarkTerminalFailure(streamErr)
+		}
+		return nil, streamErr
 	}
-	if strictWorkflow {
-		if !workflowFinishedSeen {
-			return nil, newDifyResponseError(types.ErrorCodeBadResponse, "Dify stream ended without workflow_finished")
-		}
-		if strings.TrimSpace(responseText.String()) == "" {
-			return nil, newDifyResponseError(types.ErrorCodeEmptyResponse, "Dify workflow returned an empty response")
-		}
-		if workflowTotalTokens <= 0 || usage.TotalTokens <= 0 {
-			return nil, newDifyResponseError(types.ErrorCodeBadResponse, "Dify workflow returned zero token usage")
-		}
+	if strictWorkflow && !workflowFinishedSeen {
+		streamErr = newDifyResponseError(types.ErrorCodeBadResponse, "Dify stream ended without workflow_finished")
+		info.StreamStatus.MarkTerminalFailure(streamErr)
+		return nil, streamErr
 	}
+	if strings.TrimSpace(responseText.String()) == "" {
+		streamErr = newDifyResponseError(types.ErrorCodeEmptyResponse, "Dify workflow returned an empty response")
+		info.StreamStatus.MarkTerminalFailure(streamErr)
+		return nil, streamErr
+	}
+	if usage.TotalTokens <= 0 || strictWorkflow && workflowTotalTokens <= 0 {
+		streamErr = newDifyResponseError(types.ErrorCodeBadResponse, "Dify stream returned zero token usage")
+		info.StreamStatus.MarkTerminalFailure(streamErr)
+		return nil, streamErr
+	}
+	info.StreamStatus.MarkTerminalSuccess()
 	if err := helper.Done(c); err != nil {
-		return nil, newDifyResponseError(types.ErrorCodeBadResponse, "failed to finish Dify stream response")
+		info.StreamStatus.MarkWriteError(err)
+		streamErr = newDifyResponseError(types.ErrorCodeBadResponse, "failed to finish Dify stream response")
+		return nil, streamErr
 	}
+	info.StreamStatus.MarkTerminalDelivered()
 	if usage.TotalTokens == 0 {
 		usage = service.ResponseText2Usage(c, responseText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
 	}

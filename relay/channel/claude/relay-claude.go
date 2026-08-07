@@ -90,10 +90,13 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 	err := common.UnmarshalJsonStr(data, &claudeResponse)
 	if err != nil {
 		common.SysLog("error unmarshalling stream response: " + err.Error())
-		return types.NewError(err, types.ErrorCodeBadResponseBody)
+		return types.NewErrorWithStatusCode(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
 	}
 	if claudeError := claudeResponse.GetClaudeError(); claudeError != nil && claudeError.Type != "" {
 		apiError := types.WithClaudeError(*claudeError, http.StatusInternalServerError)
+		if info != nil && info.StreamStatus != nil {
+			info.StreamStatus.MarkTerminalFailure(apiError)
+		}
 		service.MarkProtocolUnsupportedStreamError(apiError)
 		return apiError
 	}
@@ -102,6 +105,14 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 	}
 	if claudeResponse.Delta != nil && claudeResponse.Delta.StopReason != nil {
 		maybeMarkClaudeRefusal(c, *claudeResponse.Delta.StopReason)
+	}
+	if info != nil && info.StreamStatus != nil {
+		if claudeResponse.Usage != nil {
+			info.StreamStatus.MarkUsageComplete()
+		}
+		if strings.HasPrefix(claudeResponse.Type, "content_block_") {
+			info.StreamStatus.MarkSemanticOutput()
+		}
 	}
 	if info.RelayFormat == types.RelayFormatClaude {
 		FormatClaudeResponseInfo(&claudeResponse, nil, claudeInfo)
@@ -130,6 +141,7 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 			data = string(redacted)
 		}
 		if err := helper.ClaudeChunkData(c, claudeResponse, data); err != nil {
+			info.StreamStatus.MarkWriteError(err)
 			return types.NewError(err, types.ErrorCodeBadResponse)
 		}
 	} else if info.RelayFormat == types.RelayFormatOpenAI {
@@ -143,6 +155,7 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 
 		err = helper.ObjectData(c, response)
 		if err != nil {
+			info.StreamStatus.MarkWriteError(err)
 			return types.NewError(err, types.ErrorCodeBadResponse)
 		}
 	} else if info.RelayFormat == types.RelayFormatGemini {
@@ -180,6 +193,7 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 			return types.NewError(marshalErr, types.ErrorCodeBadResponseBody)
 		}
 		if flushErr := helper.StringData(c, string(geminiData)); flushErr != nil {
+			info.StreamStatus.MarkWriteError(flushErr)
 			return types.NewError(flushErr, types.ErrorCodeBadResponse)
 		}
 	} else if info.RelayFormat == types.RelayFormatOpenAIResponses {
@@ -213,6 +227,7 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 				return types.NewError(fmt.Errorf("expected Responses stream event, got %T", result.Value), types.ErrorCodeBadResponse)
 			}
 			if sendErr := sendClaudeResponsesStreamEvent(c, event); sendErr != nil {
+				info.StreamStatus.MarkWriteError(sendErr)
 				return types.NewError(sendErr, types.ErrorCodeBadResponse)
 			}
 		}
@@ -313,22 +328,50 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 // this contract even though they receive events through different scanners.
 func CompleteClaudeStream(c *gin.Context, info *relaycommon.RelayInfo, claudeInfo *ClaudeResponseInfo, streamErr error) *types.NewAPIError {
 	if streamErr != nil {
-		return types.NewError(streamErr, types.ErrorCodeBadResponse)
+		if info != nil && info.StreamStatus != nil && !info.StreamStatus.IsClientGone() {
+			info.StreamStatus.MarkTerminalFailure(streamErr)
+		}
+		return types.NewErrorWithStatusCode(streamErr, types.ErrorCodeBadResponse, http.StatusBadGateway)
 	}
 	if claudeInfo == nil || !claudeInfo.Done {
-		return types.NewError(
-			fmt.Errorf("Claude Messages stream ended without a terminal stop_reason"),
+		terminalErr := fmt.Errorf("Claude Messages stream ended without a terminal stop_reason")
+		if info != nil && info.StreamStatus != nil {
+			info.StreamStatus.MarkTerminalFailure(terminalErr)
+		}
+		return types.NewErrorWithStatusCode(
+			terminalErr,
 			types.ErrorCodeBadResponse,
+			http.StatusBadGateway,
 		)
 	}
 	if !claudeInfo.MessageStop {
-		return types.NewError(
-			fmt.Errorf("Claude Messages stream ended without message_stop"),
+		terminalErr := fmt.Errorf("Claude Messages stream ended without message_stop")
+		if info != nil && info.StreamStatus != nil {
+			info.StreamStatus.MarkTerminalFailure(terminalErr)
+		}
+		return types.NewErrorWithStatusCode(
+			terminalErr,
 			types.ErrorCodeBadResponse,
+			http.StatusBadGateway,
 		)
 	}
+	if info != nil && info.StreamStatus != nil {
+		info.StreamStatus.MarkTerminalSuccess()
+		if service.ValidUsage(claudeInfo.Usage) {
+			info.StreamStatus.MarkUsageComplete()
+		}
+		if claudeInfo.ResponseText.Len() > 0 {
+			info.StreamStatus.MarkSemanticOutput()
+		}
+	}
 	if finalErr := HandleStreamFinalResponse(c, info, claudeInfo); finalErr != nil {
+		if info != nil && info.StreamStatus != nil {
+			info.StreamStatus.MarkWriteError(finalErr)
+		}
 		return finalErr
+	}
+	if info != nil && info.StreamStatus != nil {
+		info.StreamStatus.MarkTerminalDelivered()
 	}
 	protocolstate.MarkStreamCompleted(c)
 	return nil
@@ -354,7 +397,7 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 	}
 	var streamErr error
 	if info.StreamStatus != nil && !info.StreamStatus.IsNormalEnd() {
-		streamErr = info.StreamStatus.EndError
+		_, streamErr = info.StreamStatus.EndState()
 		if streamErr == nil {
 			streamErr = fmt.Errorf("Claude stream ended abnormally: %s", info.StreamStatus.Summary())
 		}

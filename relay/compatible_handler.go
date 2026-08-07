@@ -77,6 +77,7 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 		service.ShouldChatCompletionsUseResponsesGlobal(info.ChannelId, info.ChannelType, info.UpstreamModelName) {
 		applySystemPromptIfNeeded(c, info, request)
 		usage, newApiErr := chatCompletionsViaResponses(c, info, adaptor, request)
+		newApiErr = normalizeStreamResult(c, info, newApiErr)
 		if newApiErr != nil {
 			return newApiErr
 		}
@@ -187,6 +188,7 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 
 	if !bufferedResponseHandled {
 		usage, newAPIError = adaptor.DoResponse(c, httpResp, info)
+		newAPIError = normalizeStreamResult(c, info, newAPIError)
 		if newAPIError != nil {
 			// reset status code 重置状态码
 			service.ResetStatusCode(newAPIError, statusCodeMappingStr)

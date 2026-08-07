@@ -244,6 +244,9 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 	}
 	streamErr := (*types.NewAPIError)(nil)
 	terminalSeen := false
+	terminalSucceeded := false
+	semanticOutputSeen := false
+	usageComplete := false
 
 	if info.RelayFormat == types.RelayFormatClaude && info.ClaudeConvertInfo == nil {
 		info.ClaudeConvertInfo = &relaycommon.ClaudeConvertInfo{LastMessagesType: relaycommon.LastMessageTypeNone}
@@ -260,6 +263,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		}
 		if err := helper.StringData(c, string(geminiResponseStr)); err != nil {
 			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+			info.StreamStatus.MarkWriteError(err)
 			return false
 		}
 		return true
@@ -273,6 +277,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			}
 			if err := helper.ObjectData(c, &value); err != nil {
 				streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+				info.StreamStatus.MarkWriteError(err)
 				return false
 			}
 			return true
@@ -282,6 +287,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			}
 			if err := helper.ObjectData(c, value); err != nil {
 				streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+				info.StreamStatus.MarkWriteError(err)
 				return false
 			}
 			return true
@@ -289,6 +295,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			protocolstate.ObserveClaudeStream(c, &value)
 			if err := helper.ClaudeData(c, value); err != nil {
 				streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+				info.StreamStatus.MarkWriteError(err)
 				return false
 			}
 			return true
@@ -299,6 +306,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			protocolstate.ObserveClaudeStream(c, value)
 			if err := helper.ClaudeData(c, *value); err != nil {
 				streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+				info.StreamStatus.MarkWriteError(err)
 				return false
 			}
 			return true
@@ -329,23 +337,54 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		if streamResp.Type == "error" || streamResp.Type == "response.error" || streamResp.Type == "response.failed" {
 			if oaiErr := streamResp.GetOpenAIError(); oaiErr != nil {
 				streamErr = types.WithOpenAIError(*oaiErr, http.StatusInternalServerError)
+				info.StreamStatus.MarkTerminalFailure(streamErr)
 				service.MarkProtocolUnsupportedStreamError(streamErr)
 				sr.Stop(streamErr)
 				return
 			}
 			streamErr = types.NewOpenAIError(fmt.Errorf("responses stream error: %s", streamResp.Type), types.ErrorCodeBadResponse, http.StatusInternalServerError)
+			info.StreamStatus.MarkTerminalFailure(streamErr)
 			sr.Stop(streamErr)
 			return
 		}
+		if streamResp.Response != nil {
+			if streamResp.Response.Usage != nil {
+				usageComplete = true
+				info.StreamStatus.MarkUsageComplete()
+			}
+			if len(streamResp.Response.Output) > 0 {
+				semanticOutputSeen = true
+				info.StreamStatus.MarkSemanticOutput()
+			}
+		}
+		if (streamResp.Type == "response.output_text.delta" && streamResp.Delta != "") ||
+			(streamResp.Type == dto.ResponsesOutputTypeItemDone && streamResp.Item != nil) {
+			semanticOutputSeen = true
+			info.StreamStatus.MarkSemanticOutput()
+		}
 		switch streamResp.Type {
-		case "response.completed", "response.done", "response.incomplete":
+		case "response.completed", "response.done":
 			terminalSeen = true
-		case "response.cancelled", "response.canceled":
+			if !usageComplete && !semanticOutputSeen {
+				streamErr = types.NewOpenAIError(
+					fmt.Errorf("Responses stream completed without usage or semantic output"),
+					types.ErrorCodeEmptyResponse,
+					http.StatusBadGateway,
+				)
+				info.StreamStatus.MarkTerminalFailure(streamErr)
+				sr.Stop(streamErr)
+				return
+			}
+			terminalSucceeded = true
+			info.StreamStatus.MarkTerminalSuccess()
+		case "response.incomplete", "response.cancelled", "response.canceled":
+			terminalSeen = true
 			streamErr = types.NewOpenAIError(
-				fmt.Errorf("Responses upstream cancelled the response"),
+				fmt.Errorf("Responses stream ended with terminal event %s", streamResp.Type),
 				types.ErrorCodeBadResponse,
 				http.StatusBadGateway,
 			)
+			info.StreamStatus.MarkTerminalFailure(streamErr)
 			sr.Stop(streamErr)
 			return
 		}
@@ -380,13 +419,15 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		return nil, streamErr
 	}
 	if err := streamStatusError(info); err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusBadGateway)
 	}
-	if !terminalSeen {
+	if !terminalSeen || !terminalSucceeded {
+		terminalErr := fmt.Errorf("Responses stream ended without a terminal response event")
+		info.StreamStatus.MarkTerminalFailure(terminalErr)
 		return nil, types.NewOpenAIError(
-			fmt.Errorf("Responses stream ended without a terminal response event"),
+			terminalErr,
 			types.ErrorCodeBadResponse,
-			http.StatusInternalServerError,
+			http.StatusBadGateway,
 		)
 	}
 
@@ -410,15 +451,18 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 	}
 	if info.RelayFormat == types.RelayFormatOpenAI && info.ShouldIncludeUsage && usage != nil {
 		if err := helper.ObjectData(c, helper.GenerateFinalUsageResponse(responseId, createAt, info.PublicResponseModelName(), *usage)); err != nil {
+			info.StreamStatus.MarkWriteError(err)
 			return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 		}
 	}
 
 	if info.RelayFormat == types.RelayFormatOpenAI {
 		if err := helper.Done(c); err != nil {
+			info.StreamStatus.MarkWriteError(err)
 			return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 		}
 	}
+	info.StreamStatus.MarkTerminalDelivered()
 	protocolstate.MarkStreamCompleted(c)
 	return usage, nil
 }

@@ -153,6 +153,10 @@ func TestStopDifyTaskUsesServiceAPIContract(t *testing.T) {
 }
 
 func TestDifyStreamHandlerStopsUpstreamTaskAfterClientDisconnect(t *testing.T) {
+	previousDrainTimeout := difyStreamDrainTimeout
+	difyStreamDrainTimeout = 25 * time.Millisecond
+	t.Cleanup(func() { difyStreamDrainTimeout = previousDrainTimeout })
+
 	requests := make(chan recordedDifyStopRequest, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -224,6 +228,28 @@ func TestDifyStreamHandlerStrictSuccess(t *testing.T) {
 	assert.Equal(t, "succeeded", info.DifyWorkflowStatus)
 	assert.Contains(t, recorder.Body.String(), "real answer")
 	assert.Contains(t, recorder.Body.String(), "data: [DONE]")
+}
+
+func TestDifyStreamHandlerChatSuccessWithoutWorkflowEvents(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, recorder, info := newDifyHandlerTestContext(false)
+	body := difySSE(
+		`{"event":"message","task_id":"task-123","answer":"chat answer"}`,
+		`{"event":"message_end","task_id":"task-123","metadata":{"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}}`,
+	)
+
+	usage, apiErr := difyStreamHandler(c, info, newDifyResponse(body))
+
+	require.Nil(t, apiErr)
+	require.NotNil(t, usage)
+	assert.Equal(t, 5, usage.TotalTokens)
+	assert.Contains(t, recorder.Body.String(), "chat answer")
+	assert.Contains(t, recorder.Body.String(), "data: [DONE]")
+	snapshot := info.StreamStatus.Snapshot()
+	assert.Equal(t, relaycommon.StreamTerminalSuccess, snapshot.TerminalState)
+	assert.True(t, snapshot.TerminalDelivered)
+	assert.True(t, snapshot.UsageComplete)
+	assert.True(t, snapshot.SemanticOutput)
 }
 
 func TestDifyStreamHandlerStrictSuccessWhenMessageEndPrecedesWorkflowFinished(t *testing.T) {
@@ -361,7 +387,7 @@ func TestDifyStreamHandlerRejectsUniversalStreamFailures(t *testing.T) {
 	}
 }
 
-func TestDifyStreamHandlerDefaultModePreservesLegacyWorkflowCompatibility(t *testing.T) {
+func TestDifyStreamHandlerDefaultModeRejectsUnsuccessfulWorkflow(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	c, recorder, info := newDifyHandlerTestContext(false)
 	body := difySSE(
@@ -372,11 +398,13 @@ func TestDifyStreamHandlerDefaultModePreservesLegacyWorkflowCompatibility(t *tes
 
 	usage, apiErr := difyStreamHandler(c, info, newDifyResponse(body))
 
-	require.Nil(t, apiErr)
-	require.NotNil(t, usage)
+	assert.Nil(t, usage)
+	require.NotNil(t, apiErr)
+	assert.Equal(t, http.StatusBadGateway, apiErr.StatusCode)
+	assert.Equal(t, types.ErrorCodeBadResponse, apiErr.GetErrorCode())
 	assert.Equal(t, "partial-succeeded", info.DifyWorkflowStatus)
 	assert.Contains(t, recorder.Body.String(), "legacy answer")
-	assert.Contains(t, recorder.Body.String(), "data: [DONE]")
+	assert.NotContains(t, recorder.Body.String(), "data: [DONE]")
 }
 
 func TestDifyNonStreamHandlerContract(t *testing.T) {

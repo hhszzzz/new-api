@@ -196,21 +196,34 @@ func appendStreamStatus(relayInfo *relaycommon.RelayInfo, other map[string]inter
 		return
 	}
 	ss := relayInfo.StreamStatus
+	snapshot := ss.Snapshot()
 	status := "ok"
 	if !ss.IsNormalEnd() || ss.HasErrors() {
 		status = "error"
 	}
 	streamInfo := map[string]interface{}{
-		"status":     status,
-		"end_reason": string(ss.EndReason),
+		"status":               status,
+		"end_reason":           string(snapshot.EndReason),
+		"terminal_seen":        snapshot.TerminalSeen,
+		"terminal_delivered":   snapshot.TerminalDelivered,
+		"client_gone":          snapshot.ClientGone,
+		"response_committed":   snapshot.ResponseCommitted,
+		"usage_complete":       snapshot.UsageComplete,
+		"semantic_output_seen": snapshot.SemanticOutput,
 	}
-	if ss.EndError != nil {
-		streamInfo["end_error"] = ss.EndError.Error()
+	if snapshot.DrainResult != "" {
+		streamInfo["drain_result"] = string(snapshot.DrainResult)
 	}
-	if ss.ErrorCount > 0 {
-		streamInfo["error_count"] = ss.ErrorCount
-		messages := make([]string, 0, len(ss.Errors))
-		for _, e := range ss.Errors {
+	if snapshot.EndError != nil {
+		streamInfo["end_error"] = snapshot.EndError.Error()
+	}
+	if snapshot.WriteError != nil {
+		streamInfo["write_error"] = snapshot.WriteError.Error()
+	}
+	if snapshot.ErrorCount > 0 {
+		streamInfo["error_count"] = snapshot.ErrorCount
+		messages := make([]string, 0, len(snapshot.Errors))
+		for _, e := range snapshot.Errors {
 			messages = append(messages, e.Message)
 		}
 		streamInfo["errors"] = messages

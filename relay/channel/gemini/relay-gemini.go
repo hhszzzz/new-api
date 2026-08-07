@@ -171,6 +171,7 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 						statusCode,
 					)
 				}
+				info.StreamStatus.MarkTerminalFailure(streamErr)
 				service.MarkProtocolUnsupportedStreamError(streamErr)
 				sr.Stop(streamErr)
 				return
@@ -182,7 +183,7 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 			streamErr = types.NewOpenAIError(
 				fmt.Errorf("failed to unmarshal Gemini stream response: %w", err),
 				types.ErrorCodeBadResponseBody,
-				http.StatusInternalServerError,
+				http.StatusBadGateway,
 			)
 			sr.Stop(streamErr)
 			return
@@ -199,18 +200,23 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 			for _, part := range candidate.Content.Parts {
 				if part.InlineData != nil && part.InlineData.MimeType != "" {
 					imageCount++
+					info.StreamStatus.MarkSemanticOutput()
 				}
 				if part.Text != "" {
 					responseText.WriteString(part.Text)
+					info.StreamStatus.MarkSemanticOutput()
 				}
 			}
 		}
 
 		// 更新使用量统计
-		if metadata := geminiResponse.GetUsageMetadata(); dto.HasGeminiUsageMetadataTokens(metadata) {
-			mappedUsage := buildUsageFromGeminiMetadata(metadata, info.GetEstimatePromptTokens())
-			*usage = mappedUsage
-			hasBillableUsageMetadata = true
+		if metadata := geminiResponse.GetUsageMetadata(); metadata != nil {
+			info.StreamStatus.MarkUsageComplete()
+			if dto.HasGeminiUsageMetadataTokens(metadata) {
+				mappedUsage := buildUsageFromGeminiMetadata(metadata, info.GetEstimatePromptTokens())
+				*usage = mappedUsage
+				hasBillableUsageMetadata = true
+			}
 		}
 
 		if !callback(data, &geminiResponse) {
@@ -221,11 +227,11 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		return usage, streamErr
 	}
 	if info.StreamStatus != nil && !info.StreamStatus.IsNormalEnd() {
-		err := info.StreamStatus.EndError
+		_, err := info.StreamStatus.EndState()
 		if err == nil {
 			err = fmt.Errorf("Gemini stream ended abnormally: %s", info.StreamStatus.Summary())
 		}
-		return usage, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		return usage, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusBadGateway)
 	}
 
 	if !hasBillableUsageMetadata {
@@ -268,10 +274,12 @@ func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *
 	usage, err := geminiStreamHandler(c, info, resp, func(data string, geminiResponse *dto.GeminiChatResponse) bool {
 		if geminiPromptBlockReason(geminiResponse) != "" {
 			upstreamCompleted = true
+			info.StreamStatus.MarkTerminalSuccess()
 		}
 		for _, candidate := range geminiResponse.Candidates {
 			if candidate.FinishReason != nil && strings.TrimSpace(*candidate.FinishReason) != "" {
 				upstreamCompleted = true
+				info.StreamStatus.MarkTerminalSuccess()
 				break
 			}
 		}
@@ -316,15 +324,20 @@ func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *
 						emptyResponse.Choices[0].Delta.ToolCalls = copiedToolCalls
 					}
 					if streamErr := handleStream(c, info, emptyResponse); streamErr != nil {
-						logger.LogError(c, streamErr.Error())
+						info.StreamStatus.MarkWriteError(streamErr)
+						conversionError = types.NewOpenAIError(streamErr, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+						return false
 					}
 					response.ClearToolCalls()
 				} else if streamErr := handleStream(c, info, emptyResponse); streamErr != nil {
-					logger.LogError(c, streamErr.Error())
+					info.StreamStatus.MarkWriteError(streamErr)
+					conversionError = types.NewOpenAIError(streamErr, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+					return false
 				}
 			}
 
 			if streamErr := handleStream(c, info, response); streamErr != nil {
+				info.StreamStatus.MarkWriteError(streamErr)
 				conversionError = types.NewOpenAIError(streamErr, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 				return false
 			}
@@ -339,10 +352,12 @@ func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *
 		return usage, conversionError
 	}
 	if !upstreamCompleted {
+		terminalErr := fmt.Errorf("Gemini stream ended without a terminal finish reason")
+		info.StreamStatus.MarkTerminalFailure(terminalErr)
 		return usage, types.NewOpenAIError(
-			fmt.Errorf("Gemini stream ended without a terminal finish reason"),
+			terminalErr,
 			types.ErrorCodeBadResponse,
-			http.StatusInternalServerError,
+			http.StatusBadGateway,
 		)
 	}
 	if usage != nil {
@@ -359,6 +374,7 @@ func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *
 				return usage, types.NewOpenAIError(fmt.Errorf("expected Claude Messages stream event, got %T", result.Value), types.ErrorCodeBadResponse, http.StatusInternalServerError)
 			}
 			if streamErr := helper.ClaudeData(c, *response); streamErr != nil {
+				info.StreamStatus.MarkWriteError(streamErr)
 				return usage, types.NewOpenAIError(streamErr, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 			}
 			info.SendResponseCount++
@@ -371,10 +387,12 @@ func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *
 		}
 		response.Model = info.PublicResponseModelName()
 		if streamErr := handleStream(c, info, response); streamErr != nil {
+			info.StreamStatus.MarkWriteError(streamErr)
 			return usage, types.NewOpenAIError(streamErr, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 		}
 	}
 	if streamTarget == types.RelayFormatClaude {
+		info.StreamStatus.MarkTerminalDelivered()
 		protocolstate.MarkStreamCompleted(c)
 		return usage, nil
 	}
@@ -382,9 +400,11 @@ func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *
 	response := helper.GenerateFinalUsageResponse(id, createAt, info.PublicResponseModelName(), *usage)
 	handleErr := handleFinalStream(c, info, response)
 	if handleErr != nil {
+		info.StreamStatus.MarkWriteError(handleErr)
 		common.SysLog("send final response failed: " + handleErr.Error())
 		return usage, types.NewOpenAIError(handleErr, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
+	info.StreamStatus.MarkTerminalDelivered()
 	protocolstate.MarkStreamCompleted(c)
 	return usage, nil
 }

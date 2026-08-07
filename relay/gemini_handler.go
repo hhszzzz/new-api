@@ -191,6 +191,7 @@ func GeminiHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 	}
 
 	usage, openaiErr := adaptor.DoResponse(c, resp.(*http.Response), info)
+	openaiErr = normalizeStreamResult(c, info, openaiErr)
 	if openaiErr != nil {
 		service.ResetStatusCode(openaiErr, statusCodeMappingStr)
 		return openaiErr

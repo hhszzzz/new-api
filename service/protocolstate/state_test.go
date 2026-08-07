@@ -1554,6 +1554,38 @@ func TestResponsesStateDoesNotPersistCancelledStream(t *testing.T) {
 	assert.Contains(t, err.Error(), "unknown or expired")
 }
 
+func TestResponsesStatePersistsDeliveredStreamAfterClientCancellation(t *testing.T) {
+	resetProtocolStateCaches(t)
+	ctx := protocolStateTestContext("delivered-then-cancelled-stream", 16, 17)
+	requestContext, cancel := context.WithCancel(ctx.Request.Context())
+	ctx.Request = ctx.Request.WithContext(requestContext)
+	stream := true
+	request := &dto.OpenAIResponsesRequest{Model: "gpt-a", Input: mustProtocolStateJSON(t, "hello"), Stream: &stream}
+	plan := channelcompat.ProtocolPlan{
+		RequestProtocol:  channelcompat.ProtocolResponses,
+		UpstreamProtocol: channelcompat.ProtocolResponses,
+		Status:           channelcompat.StatusNative,
+	}
+	relayInfo := protocolStateRelayInfo("gpt-a", 4)
+	relayInfo.IsStream = true
+	require.NoError(t, PrepareResponsesRequest(ctx, relayInfo, plan, request))
+	response := &dto.OpenAIResponsesResponse{
+		ID:     "upstream-delivered-stream",
+		Status: mustProtocolStateJSON(t, "completed"),
+		Output: []dto.ResponsesOutput{{Type: "message", Role: "assistant"}},
+	}
+	publicID := CaptureResponsesResponse(ctx, response.ID, response)
+	MarkStreamCompleted(ctx)
+	cancel()
+	require.NoError(t, Commit(ctx))
+
+	body := mustProtocolStateJSON(t, map[string]any{"previous_response_id": publicID})
+	binding, err := ResolveSelectionBinding(protocolStateTestContext("delivered-then-cancelled-stream-next", 16, 17), "/v1/responses", "gpt-a", body)
+	require.NoError(t, err)
+	require.NotNil(t, binding)
+	assert.Equal(t, 4, binding.ChannelID)
+}
+
 func TestResponsesBridgeStateEnforcesMaximumTurnsBeforeRelay(t *testing.T) {
 	resetProtocolStateCaches(t)
 	model_setting.GetGlobalSettings().ProtocolBridgePolicy.MaxStateTurns = 1

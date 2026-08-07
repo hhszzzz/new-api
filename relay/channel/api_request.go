@@ -311,16 +311,64 @@ func applyHeaderOverrideToRequest(req *http.Request, headerOverride map[string]s
 	}
 }
 
+type cancelOnCloseBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+	once   sync.Once
+}
+
+func (b *cancelOnCloseBody) Close() error {
+	b.once.Do(b.cancel)
+	return b.ReadCloser.Close()
+}
+
+func newUpstreamRequest(c *gin.Context, method, target string, body io.Reader, detached bool) (*http.Request, context.CancelFunc, error) {
+	parent := context.Background()
+	if c != nil && c.Request != nil {
+		parent = c.Request.Context()
+		if detached {
+			// Streaming requests need a short grace period after the downstream
+			// disconnects so the scanner can collect terminal/usage diagnostics.
+			// The response body Close below remains the explicit cancellation point.
+			parent = context.WithoutCancel(parent)
+		}
+	}
+	requestContext, cancel := context.WithCancel(parent)
+	req, err := http.NewRequestWithContext(requestContext, method, target, body)
+	if err != nil {
+		cancel()
+		return nil, nil, err
+	}
+	return req, cancel, nil
+}
+
+func bindUpstreamCancelToBody(resp *http.Response, cancel context.CancelFunc) {
+	if cancel == nil {
+		return
+	}
+	if resp == nil || resp.Body == nil {
+		cancel()
+		return
+	}
+	resp.Body = &cancelOnCloseBody{ReadCloser: resp.Body, cancel: cancel}
+}
+
 func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {
 	fullRequestURL, err := a.GetRequestURL(info)
 	if err != nil {
 		return nil, fmt.Errorf("get request url failed: %w", err)
 	}
 	logger.LogDebug(c, "fullRequestURL: %s", common.SanitizeURLForLog(fullRequestURL))
-	req, err := http.NewRequest(c.Request.Method, fullRequestURL, requestBody)
+	req, cancel, err := newUpstreamRequest(c, c.Request.Method, fullRequestURL, requestBody, info != nil && info.IsStream)
 	if err != nil {
 		return nil, fmt.Errorf("new request failed: %w", err)
 	}
+	cancelBoundToResponse := false
+	defer func() {
+		if !cancelBoundToResponse {
+			cancel()
+		}
+	}()
 	ApplyUpstreamBodyMetadata(req, requestBody)
 	headers := req.Header
 	err = a.SetupRequestHeader(c, &headers, info)
@@ -338,6 +386,8 @@ func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 	if err != nil {
 		return nil, fmt.Errorf("do request failed: %w", err)
 	}
+	bindUpstreamCancelToBody(resp, cancel)
+	cancelBoundToResponse = true
 	return resp, nil
 }
 
@@ -347,10 +397,16 @@ func DoFormRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBod
 		return nil, fmt.Errorf("get request url failed: %w", err)
 	}
 	logger.LogDebug(c, "fullRequestURL: %s", common.SanitizeURLForLog(fullRequestURL))
-	req, err := http.NewRequest(c.Request.Method, fullRequestURL, requestBody)
+	req, cancel, err := newUpstreamRequest(c, c.Request.Method, fullRequestURL, requestBody, info != nil && info.IsStream)
 	if err != nil {
 		return nil, fmt.Errorf("new request failed: %w", err)
 	}
+	cancelBoundToResponse := false
+	defer func() {
+		if !cancelBoundToResponse {
+			cancel()
+		}
+	}()
 	ApplyUpstreamBodyMetadata(req, requestBody)
 	// set form data
 	req.Header.Set("Content-Type", c.Request.Header.Get("Content-Type"))
@@ -370,6 +426,8 @@ func DoFormRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBod
 	if err != nil {
 		return nil, fmt.Errorf("do request failed: %w", err)
 	}
+	bindUpstreamCancelToBody(resp, cancel)
+	cancelBoundToResponse = true
 	return resp, nil
 }
 

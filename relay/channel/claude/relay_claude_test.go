@@ -536,6 +536,11 @@ func TestClaudeNativeStreamLifecycleKeepsPublicModel(t *testing.T) {
 	assert.Contains(t, got, `event: content_block_delta`)
 	assert.Contains(t, got, `"text":"hello"`)
 	assert.Contains(t, got, `event: message_stop`)
+	snapshot := info.StreamStatus.Snapshot()
+	assert.Equal(t, relaycommon.StreamTerminalSuccess, snapshot.TerminalState)
+	assert.True(t, snapshot.TerminalDelivered)
+	assert.True(t, snapshot.UsageComplete)
+	assert.True(t, snapshot.SemanticOutput)
 }
 
 func TestClaudeTruncatedStreamDoesNotSynthesizeTerminalEvent(t *testing.T) {
@@ -612,6 +617,7 @@ func TestClaudeNativeStreamRejectsMissingMessageStopAfterTerminalDelta(t *testin
 	require.NotNil(t, apiErr)
 	assert.Contains(t, apiErr.Error(), "message_stop")
 	assert.NotContains(t, recorder.Body.String(), `event: message_stop`)
+	assert.False(t, info.StreamStatus.Snapshot().TerminalDelivered)
 }
 
 func TestClaudeResponsesStreamRejectsMissingMessageStop(t *testing.T) {

@@ -79,7 +79,7 @@ func TestWriteRelayErrorResponseUsesChatCompletionsStreamEnvelope(t *testing.T) 
 	assert.Equal(t, "text/event-stream", recorder.Header().Get("Content-Type"))
 	assert.Contains(t, body, `data: {"error":{"message":"Dify workflow failed"`)
 	assert.Contains(t, body, `"code":"bad_response"`)
-	assert.Contains(t, body, "data: [DONE]")
+	assert.NotContains(t, body, "data: [DONE]")
 }
 
 func TestWriteRelayErrorResponseUsesEntryProtocolForJSONErrors(t *testing.T) {

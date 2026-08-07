@@ -2,6 +2,7 @@ package openai
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,11 +13,30 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type failResponsesTerminalWriter struct {
+	gin.ResponseWriter
+}
+
+func (w *failResponsesTerminalWriter) Write(data []byte) (int, error) {
+	if bytes.Contains(data, []byte("response.completed")) {
+		return 0, errors.New("terminal write failed")
+	}
+	return w.ResponseWriter.Write(data)
+}
+
+func (w *failResponsesTerminalWriter) WriteString(data string) (int, error) {
+	if strings.Contains(data, "response.completed") {
+		return 0, errors.New("terminal write failed")
+	}
+	return w.ResponseWriter.WriteString(data)
+}
 
 func TestOaiResponsesHandlerCountsOutputCallsNotDeclarations(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -194,7 +214,7 @@ func TestOaiResponsesHandlerIncompleteStatusCommitsZeroImageGeneration(t *testin
 	assert.Equal(t, 0, info.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolImageGeneration].CallCount)
 }
 
-func runResponsesImageBillingStream(t *testing.T, events ...string) *relaycommon.RelayInfo {
+func runResponsesImageBillingStream(t *testing.T, events ...string) (*relaycommon.RelayInfo, *types.NewAPIError) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	oldTimeout := constant.StreamingTimeout
@@ -229,39 +249,102 @@ func runResponsesImageBillingStream(t *testing.T, events ...string) *relaycommon
 	}
 
 	_, apiErr := OaiResponsesStreamHandler(c, info, resp)
-	require.Nil(t, apiErr)
-	require.NotNil(t, info.ResponsesUsageInfo)
-	require.Contains(t, info.ResponsesUsageInfo.BuiltInTools, dto.BuildInToolImageGeneration)
-	return info
+	return info, apiErr
 }
 
 func TestOaiResponsesStreamHandlerDeduplicatesCompletedImageOutput(t *testing.T) {
 	item := `{"type":"image_generation_call","id":"img_1","call_id":"call_1","status":"completed","result":"base64-a"}`
-	info := runResponsesImageBillingStream(
+	info, apiErr := runResponsesImageBillingStream(
 		t,
 		`{"type":"response.output_item.done","output_index":0,"item":`+item+`}`,
 		`{"type":"response.completed","response":{"status":"completed","output":[`+item+`],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
 	)
 
+	require.Nil(t, apiErr)
+	require.NotNil(t, info.ResponsesUsageInfo)
+	require.Contains(t, info.ResponsesUsageInfo.BuiltInTools, dto.BuildInToolImageGeneration)
 	assert.Equal(t, 1, info.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolImageGeneration].CallCount)
 }
 
 func TestOaiResponsesStreamHandlerDiscardsImageOutputOnIncomplete(t *testing.T) {
-	info := runResponsesImageBillingStream(
+	info, apiErr := runResponsesImageBillingStream(
 		t,
 		`{"type":"response.output_item.done","output_index":0,"item":{"type":"image_generation_call","id":"img_1","status":"completed","result":"base64-a"}}`,
 		`{"type":"response.incomplete","response":{"status":"incomplete"}}`,
 	)
 
+	require.NotNil(t, apiErr)
+	assert.Equal(t, types.ErrorCodeBadResponse, apiErr.GetErrorCode())
+	assert.Equal(t, http.StatusBadGateway, apiErr.StatusCode)
+	require.NotNil(t, info.ResponsesUsageInfo)
+	require.Contains(t, info.ResponsesUsageInfo.BuiltInTools, dto.BuildInToolImageGeneration)
 	assert.Equal(t, 0, info.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolImageGeneration].CallCount)
 }
 
 func TestOaiResponsesStreamHandlerDoesNotCountPartialImageEvent(t *testing.T) {
-	info := runResponsesImageBillingStream(
+	info, apiErr := runResponsesImageBillingStream(
 		t,
 		`{"type":"response.image_generation_call.partial_image","output_index":0,"partial_image_b64":"partial-bytes"}`,
 		`{"type":"response.completed","response":{"status":"completed","output":[]}}`,
 	)
 
-	assert.Equal(t, 0, info.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolImageGeneration].CallCount)
+	require.NotNil(t, apiErr)
+	assert.Equal(t, types.ErrorCodeEmptyResponse, apiErr.GetErrorCode())
+	assert.Equal(t, http.StatusBadGateway, apiErr.StatusCode)
+	assert.Nil(t, info.ResponsesUsageInfo)
+}
+
+func TestOaiResponsesStreamHandlerAcceptsZeroTextToolCall(t *testing.T) {
+	_, apiErr := runResponsesImageBillingStream(
+		t,
+		`{"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"lookup","arguments":"{}","status":"completed"}}`,
+		`{"type":"response.completed","response":{"status":"completed","output":[]}}`,
+	)
+
+	require.Nil(t, apiErr)
+}
+
+func TestOaiResponsesStreamHandlerAcceptsPresentZeroUsage(t *testing.T) {
+	_, apiErr := runResponsesImageBillingStream(
+		t,
+		`{"type":"response.completed","response":{"status":"completed","output":[],"usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0}}}`,
+	)
+
+	require.Nil(t, apiErr)
+}
+
+func TestOaiResponsesStreamHandlerDoesNotDeliverFailedTerminalWrite(t *testing.T) {
+	oldTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = oldTimeout })
+
+	body := strings.Join([]string{
+		`data: {"type":"response.output_text.delta","delta":"partial"}`,
+		`data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+		`data: [DONE]`,
+		``,
+	}, "\n")
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c.Writer = &failResponsesTerminalWriter{ResponseWriter: c.Writer}
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "gpt-5.1",
+		DisablePing:     true,
+		ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: "gpt-5.1"},
+	}
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+	}
+
+	usage, apiErr := OaiResponsesStreamHandler(c, info, resp)
+
+	assert.Nil(t, usage)
+	require.NotNil(t, apiErr)
+	snapshot := info.StreamStatus.Snapshot()
+	assert.False(t, snapshot.TerminalDelivered)
+	assert.Error(t, snapshot.WriteError)
+	assert.NotEqual(t, relaycommon.StreamEndReasonDone, snapshot.EndReason)
 }

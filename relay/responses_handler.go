@@ -202,6 +202,7 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 
 	if !bufferedResponseHandled {
 		usage, newAPIError = adaptor.DoResponse(c, httpResp, info)
+		newAPIError = normalizeStreamResult(c, info, newAPIError)
 		if newAPIError != nil {
 			// reset status code 重置状态码
 			service.ResetStatusCode(newAPIError, statusCodeMappingStr)

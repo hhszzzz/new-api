@@ -3,6 +3,7 @@ package helper
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -182,7 +183,7 @@ func TestStreamScannerHandler_StopStopsStream(t *testing.T) {
 
 	assert.Equal(t, stopAt, count.Load())
 	require.NotNil(t, info.StreamStatus)
-	assert.Equal(t, relaycommon.StreamEndReasonHandlerStop, info.StreamStatus.EndReason)
+	assert.Equal(t, relaycommon.StreamEndReasonHandlerStop, info.StreamStatus.Snapshot().EndReason)
 }
 
 func TestStreamScannerHandler_SkipsNonDataLines(t *testing.T) {
@@ -254,6 +255,7 @@ func TestStreamScannerHandler_ClientCancelAbortsUpstreamAndReturns(t *testing.T)
 	done := make(chan struct{})
 	go func() {
 		StreamScannerHandlerWithOptions(c, resp, info, StreamScannerOptions{
+			DrainTimeout: 25 * time.Millisecond,
 			OnClientGone: func() {
 				clientGoneCallbacks.Add(1)
 			},
@@ -278,8 +280,8 @@ func TestStreamScannerHandler_ClientCancelAbortsUpstreamAndReturns(t *testing.T)
 
 	cancel()
 
-	// The handler must return without any further upstream input: cleanup
-	// closes resp.Body, which unblocks the scanner goroutine.
+	// The test uses a short configurable drain bound. Once it expires, cleanup
+	// closes resp.Body and unblocks the scanner goroutine.
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
@@ -293,12 +295,180 @@ func TestStreamScannerHandler_ClientCancelAbortsUpstreamAndReturns(t *testing.T)
 
 	assert.Equal(t, int64(1), count.Load(), "no chunk after disconnect should be processed")
 	require.NotNil(t, info.StreamStatus)
-	assert.Equal(t, relaycommon.StreamEndReasonClientGone, info.StreamStatus.EndReason)
+	snapshot := info.StreamStatus.Snapshot()
+	assert.Equal(t, relaycommon.StreamEndReasonClientGone, snapshot.EndReason)
+	assert.Equal(t, relaycommon.StreamDrainTimedOut, snapshot.DrainResult)
 	assert.Equal(t, int64(1), clientGoneCallbacks.Load(), "client disconnect callback should run exactly once")
 
 	body := recorder.Body.String()
 	assert.Contains(t, body, "first")
 	assert.NotContains(t, body, "second")
+}
+
+func TestStreamScannerHandlerTerminalDeliveredBeforeCancelWins(t *testing.T) {
+	requestContext, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c, resp, info := setupStreamTest(t, strings.NewReader("data: terminal\ndata: [DONE]\n"))
+	c.Request = c.Request.WithContext(requestContext)
+
+	StreamScannerHandler(c, resp, info, func(data string, sr *StreamResult) {
+		info.StreamStatus.MarkTerminalSuccess()
+		info.StreamStatus.MarkTerminalDelivered()
+		cancel()
+		sr.Done()
+	})
+
+	snapshot := info.StreamStatus.Snapshot()
+	assert.Equal(t, relaycommon.StreamEndReasonDone, snapshot.EndReason)
+	assert.True(t, snapshot.TerminalDelivered)
+	assert.True(t, snapshot.ClientGone)
+	assert.Equal(t, relaycommon.StreamDrainNotNeeded, snapshot.DrainResult)
+}
+
+type stagedDrainReader struct {
+	release <-chan struct{}
+	stage   int
+	pending []byte
+	closed  atomic.Bool
+}
+
+func (r *stagedDrainReader) Read(p []byte) (int, error) {
+	if r.closed.Load() {
+		return 0, io.ErrClosedPipe
+	}
+	if len(r.pending) == 0 {
+		switch r.stage {
+		case 0:
+			r.pending = []byte("data: partial\n")
+			r.stage++
+		case 1:
+			<-r.release
+			r.pending = []byte("data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"total_tokens\":3},\"output\":[{\"type\":\"message\"}]}}\ndata: [DONE]\n")
+			r.stage++
+		default:
+			return 0, io.EOF
+		}
+	}
+	n := copy(p, r.pending)
+	r.pending = r.pending[n:]
+	return n, nil
+}
+
+func (r *stagedDrainReader) Close() error {
+	r.closed.Store(true)
+	return nil
+}
+
+func TestStreamScannerHandlerCancelBeforeTerminalDrainsDiagnosticFacts(t *testing.T) {
+	requestContext, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil).WithContext(requestContext)
+	info := &relaycommon.RelayInfo{DisablePing: true, ChannelMeta: &relaycommon.ChannelMeta{}}
+	releaseDrain := make(chan struct{})
+	body := &stagedDrainReader{release: releaseDrain}
+	resp := &http.Response{Body: body}
+
+	StreamScannerHandlerWithOptions(c, resp, info, StreamScannerOptions{
+		DrainTimeout: time.Second,
+		OnClientGone: func() {
+			close(releaseDrain)
+		},
+	}, func(data string, sr *StreamResult) {
+		info.StreamStatus.MarkSemanticOutput()
+		cancel()
+	})
+
+	snapshot := info.StreamStatus.Snapshot()
+	assert.Equal(t, relaycommon.StreamEndReasonClientGone, snapshot.EndReason)
+	assert.True(t, snapshot.ClientGone)
+	assert.False(t, snapshot.TerminalDelivered)
+	assert.Equal(t, relaycommon.StreamTerminalSuccess, snapshot.TerminalState)
+	assert.True(t, snapshot.UsageComplete)
+	assert.True(t, snapshot.SemanticOutput)
+	assert.Equal(t, relaycommon.StreamDrainCompleted, snapshot.DrainResult)
+}
+
+func TestStreamScannerHandlerDropsBufferedChunksAfterClientCancel(t *testing.T) {
+	requestContext, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c, resp, info := setupStreamTest(t, strings.NewReader(buildSSEBody(50)))
+	c.Request = c.Request.WithContext(requestContext)
+	info.DisablePing = true
+
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	done := make(chan struct{})
+	var handled atomic.Int64
+	go func() {
+		StreamScannerHandlerWithOptions(c, resp, info, StreamScannerOptions{DrainTimeout: time.Second}, func(data string, sr *StreamResult) {
+			if handled.Add(1) == 1 {
+				close(firstStarted)
+				<-releaseFirst
+			}
+		})
+		close(done)
+	}()
+
+	select {
+	case <-firstStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for first buffered chunk")
+	}
+	cancel()
+	close(releaseFirst)
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stream scanner did not finish after cancellation")
+	}
+
+	assert.Equal(t, int64(1), handled.Load(), "queued chunks must not reach the downstream handler after cancellation")
+	snapshot := info.StreamStatus.Snapshot()
+	assert.True(t, snapshot.ClientGone)
+	assert.False(t, snapshot.TerminalDelivered)
+	assert.Equal(t, relaycommon.StreamDrainCompleted, snapshot.DrainResult)
+}
+
+type cancelErrorReader struct {
+	release <-chan struct{}
+	stage   atomic.Int64
+	err     error
+}
+
+func (r *cancelErrorReader) Read(p []byte) (int, error) {
+	if r.stage.Add(1) == 1 {
+		return copy(p, "data: partial\n"), nil
+	}
+	<-r.release
+	return 0, r.err
+}
+
+func (r *cancelErrorReader) Close() error { return nil }
+
+func TestStreamScannerHandlerClientCancelBeatsConcurrentReadError(t *testing.T) {
+	requestContext, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil).WithContext(requestContext)
+	releaseRead := make(chan struct{})
+	readErr := errors.New("upstream connection reset")
+	resp := &http.Response{Body: &cancelErrorReader{release: releaseRead, err: readErr}}
+	info := &relaycommon.RelayInfo{DisablePing: true, ChannelMeta: &relaycommon.ChannelMeta{}}
+
+	StreamScannerHandlerWithOptions(c, resp, info, StreamScannerOptions{DrainTimeout: time.Second}, func(data string, sr *StreamResult) {
+		cancel()
+		close(releaseRead)
+	})
+
+	snapshot := info.StreamStatus.Snapshot()
+	assert.Equal(t, relaycommon.StreamEndReasonClientGone, snapshot.EndReason)
+	assert.ErrorIs(t, snapshot.EndError, context.Canceled)
+	assert.True(t, snapshot.ClientGone)
+	assert.False(t, snapshot.TerminalDelivered)
 }
 
 // ---------- Ping tests ----------
@@ -427,8 +597,8 @@ func TestStreamScannerHandler_StreamStatus_DoneReason(t *testing.T) {
 	StreamScannerHandler(c, resp, info, func(data string, sr *StreamResult) {})
 
 	require.NotNil(t, info.StreamStatus)
-	assert.Equal(t, relaycommon.StreamEndReasonDone, info.StreamStatus.EndReason)
-	assert.Nil(t, info.StreamStatus.EndError)
+	assert.Equal(t, relaycommon.StreamEndReasonDone, info.StreamStatus.Snapshot().EndReason)
+	assert.Nil(t, info.StreamStatus.Snapshot().EndError)
 	assert.True(t, info.StreamStatus.IsNormalEnd())
 	assert.False(t, info.StreamStatus.HasErrors())
 }
@@ -445,7 +615,7 @@ func TestStreamScannerHandler_StreamStatus_EOFWithoutDone(t *testing.T) {
 	StreamScannerHandler(c, resp, info, func(data string, sr *StreamResult) {})
 
 	require.NotNil(t, info.StreamStatus)
-	assert.Equal(t, relaycommon.StreamEndReasonEOF, info.StreamStatus.EndReason)
+	assert.Equal(t, relaycommon.StreamEndReasonEOF, info.StreamStatus.Snapshot().EndReason)
 	assert.True(t, info.StreamStatus.IsNormalEnd())
 }
 
@@ -464,7 +634,7 @@ func TestStreamScannerHandler_StreamStatus_HandlerStop(t *testing.T) {
 	})
 
 	require.NotNil(t, info.StreamStatus)
-	assert.Equal(t, relaycommon.StreamEndReasonHandlerStop, info.StreamStatus.EndReason)
+	assert.Equal(t, relaycommon.StreamEndReasonHandlerStop, info.StreamStatus.Snapshot().EndReason)
 	assert.True(t, info.StreamStatus.HasErrors())
 }
 
@@ -484,7 +654,7 @@ func TestStreamScannerHandler_StreamStatus_HandlerDone(t *testing.T) {
 
 	assert.Equal(t, int64(5), count.Load())
 	require.NotNil(t, info.StreamStatus)
-	assert.Equal(t, relaycommon.StreamEndReasonDone, info.StreamStatus.EndReason)
+	assert.Equal(t, relaycommon.StreamEndReasonDone, info.StreamStatus.Snapshot().EndReason)
 	assert.False(t, info.StreamStatus.HasErrors())
 }
 
@@ -521,7 +691,7 @@ func TestStreamScannerHandler_StreamStatus_Timeout(t *testing.T) {
 	}
 
 	require.NotNil(t, info.StreamStatus)
-	assert.Equal(t, relaycommon.StreamEndReasonTimeout, info.StreamStatus.EndReason)
+	assert.Equal(t, relaycommon.StreamEndReasonTimeout, info.StreamStatus.Snapshot().EndReason)
 	assert.False(t, info.StreamStatus.IsNormalEnd())
 }
 
@@ -536,7 +706,7 @@ func TestStreamScannerHandler_StreamStatus_SoftErrors(t *testing.T) {
 	})
 
 	require.NotNil(t, info.StreamStatus)
-	assert.Equal(t, relaycommon.StreamEndReasonDone, info.StreamStatus.EndReason)
+	assert.Equal(t, relaycommon.StreamEndReasonDone, info.StreamStatus.Snapshot().EndReason)
 	assert.True(t, info.StreamStatus.HasErrors())
 	assert.Equal(t, 10, info.StreamStatus.TotalErrorCount())
 }
@@ -553,15 +723,15 @@ func TestStreamScannerHandler_StreamStatus_MultipleErrorsPerChunk(t *testing.T) 
 	})
 
 	require.NotNil(t, info.StreamStatus)
-	assert.Equal(t, relaycommon.StreamEndReasonDone, info.StreamStatus.EndReason)
+	assert.Equal(t, relaycommon.StreamEndReasonDone, info.StreamStatus.Snapshot().EndReason)
 	assert.Equal(t, 10, info.StreamStatus.TotalErrorCount())
 }
 
 func TestStreamScannerHandler_StreamStatus_ErrorThenStop(t *testing.T) {
 	t.Parallel()
 
-	// Use a large body without [DONE] to avoid race between scanner's [DONE]
-	// and handler's Stop on the sync.Once EndReason.
+	// Use a large body without [DONE] so the handler-stop path also exercises
+	// scanner cancellation with queued data.
 	var b strings.Builder
 	for i := 0; i < 100; i++ {
 		fmt.Fprintf(&b, "data: {\"id\":%d}\n", i)
@@ -577,7 +747,7 @@ func TestStreamScannerHandler_StreamStatus_ErrorThenStop(t *testing.T) {
 
 	assert.Equal(t, int64(1), count.Load())
 	require.NotNil(t, info.StreamStatus)
-	assert.Equal(t, relaycommon.StreamEndReasonHandlerStop, info.StreamStatus.EndReason)
+	assert.Equal(t, relaycommon.StreamEndReasonHandlerStop, info.StreamStatus.Snapshot().EndReason)
 	assert.Equal(t, 2, info.StreamStatus.TotalErrorCount())
 }
 
@@ -605,6 +775,6 @@ func TestStreamScannerHandler_StreamStatus_ReplacesPreInitialized(t *testing.T) 
 
 	StreamScannerHandler(c, resp, info, func(data string, sr *StreamResult) {})
 
-	assert.Equal(t, relaycommon.StreamEndReasonDone, info.StreamStatus.EndReason)
+	assert.Equal(t, relaycommon.StreamEndReasonDone, info.StreamStatus.Snapshot().EndReason)
 	assert.Equal(t, 0, info.StreamStatus.TotalErrorCount())
 }

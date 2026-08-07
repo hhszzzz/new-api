@@ -1,14 +1,54 @@
 package channel
 
 import (
+	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestStreamingUpstreamRequestSurvivesClientCancelUntilBodyClose(t *testing.T) {
+	t.Parallel()
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	clientContext, cancelClient := context.WithCancel(context.Background())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil).WithContext(clientContext)
+	cancelClient()
+
+	req, cancelUpstream, err := newUpstreamRequest(c, http.MethodPost, "https://example.com/v1/responses", strings.NewReader("{}"), true)
+	require.NoError(t, err)
+	assert.NoError(t, req.Context().Err(), "client cancellation must not abort the bounded drain context")
+
+	resp := &http.Response{Body: io.NopCloser(strings.NewReader("data: [DONE]\n"))}
+	bindUpstreamCancelToBody(resp, cancelUpstream)
+	require.NoError(t, resp.Body.Close())
+	assert.ErrorIs(t, req.Context().Err(), context.Canceled)
+}
+
+func TestNonStreamingUpstreamRequestFollowsClientCancellation(t *testing.T) {
+	t.Parallel()
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	clientContext, cancelClient := context.WithCancel(context.Background())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil).WithContext(clientContext)
+
+	req, cancelUpstream, err := newUpstreamRequest(c, http.MethodPost, "https://example.com/v1/chat/completions", strings.NewReader("{}"), false)
+	require.NoError(t, err)
+	t.Cleanup(cancelUpstream)
+	require.NoError(t, req.Context().Err())
+
+	cancelClient()
+	assert.ErrorIs(t, req.Context().Err(), context.Canceled)
+}
 
 func TestProcessHeaderOverride_ChannelTestSkipsPassthroughRules(t *testing.T) {
 	t.Parallel()

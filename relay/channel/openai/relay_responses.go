@@ -106,13 +106,17 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	imageCommitted := false
 	var streamErr *types.NewAPIError
 	terminalSeen := false
+	terminalSucceeded := false
+	semanticOutputSeen := false
+	usageComplete := false
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		// 检查当前数据是否包含 completed 状态和 usage 信息
 		var streamResponse dto.ResponsesStreamResponse
 		if err := common.UnmarshalJsonStr(data, &streamResponse); err != nil {
 			logger.LogError(c, "failed to unmarshal stream response: "+err.Error())
-			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
+			info.StreamStatus.MarkTerminalFailure(streamErr)
 			sr.Stop(streamErr)
 			return
 		}
@@ -122,6 +126,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			} else {
 				streamErr = types.NewOpenAIError(fmt.Errorf("responses stream error: %s", streamResponse.Type), types.ErrorCodeBadResponse, http.StatusInternalServerError)
 			}
+			info.StreamStatus.MarkTerminalFailure(streamErr)
 			service.MarkProtocolUnsupportedStreamError(streamErr)
 			sr.Stop(streamErr)
 			return
@@ -131,10 +136,42 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			terminalSeen = true
 		case "response.incomplete", "response.cancelled", "response.canceled":
 			terminalSeen = true
+			streamErr = types.NewOpenAIError(
+				fmt.Errorf("Responses stream ended with terminal event %s", streamResponse.Type),
+				types.ErrorCodeBadResponse,
+				http.StatusBadGateway,
+			)
+			info.StreamStatus.MarkTerminalFailure(streamErr)
+		}
+		if streamResponse.Response != nil {
+			if streamResponse.Response.Usage != nil {
+				usageComplete = true
+				info.StreamStatus.MarkUsageComplete()
+			}
+			if len(streamResponse.Response.Output) > 0 {
+				semanticOutputSeen = true
+				info.StreamStatus.MarkSemanticOutput()
+			}
+		}
+		if (streamResponse.Type == "response.output_text.delta" && streamResponse.Delta != "") ||
+			(streamResponse.Type == dto.ResponsesOutputTypeItemDone && streamResponse.Item != nil) {
+			semanticOutputSeen = true
+			info.StreamStatus.MarkSemanticOutput()
+		}
+		if (streamResponse.Type == "response.completed" || streamResponse.Type == "response.done") && !usageComplete && !semanticOutputSeen {
+			streamErr = types.NewOpenAIError(
+				fmt.Errorf("Responses stream completed without usage or semantic output"),
+				types.ErrorCodeEmptyResponse,
+				http.StatusBadGateway,
+			)
+			info.StreamStatus.MarkTerminalFailure(streamErr)
+			sr.Stop(streamErr)
+			return
 		}
 		if streamResponse.Response != nil {
 			if err := protocolstate.ValidateResponsesContinuation(c, streamResponse.Response.PreviousResponseID); err != nil {
 				streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
+				info.StreamStatus.MarkTerminalFailure(streamErr)
 				sr.Stop(streamErr)
 				return
 			}
@@ -143,6 +180,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			encoded, encodeErr := protocolstate.ObserveResponsesStreamData(c, &streamResponse, []byte(data))
 			if encodeErr != nil {
 				streamErr = types.NewOpenAIError(encodeErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+				info.StreamStatus.MarkTerminalFailure(streamErr)
 				sr.Stop(streamErr)
 				return
 			}
@@ -157,6 +195,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			redacted, redactErr := relaycommon.RedactUserModelRouteJSON([]byte(data), info)
 			if redactErr != nil {
 				streamErr = types.NewOpenAIError(redactErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+				info.StreamStatus.MarkTerminalFailure(streamErr)
 				sr.Stop(streamErr)
 				return
 			}
@@ -164,6 +203,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		}
 		if err := sendResponsesStreamData(c, streamResponse, data); err != nil {
 			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+			info.StreamStatus.MarkWriteError(err)
 			sr.Stop(streamErr)
 			return
 		}
@@ -209,6 +249,8 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 				imageCounter.Commit(info)
 				imageCommitted = true
 			}
+			sr.Stop(streamErr)
+			return
 		case "response.output_text.delta":
 			// 处理输出文本
 			responseTextBuilder.WriteString(streamResponse.Delta)
@@ -228,18 +270,25 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 				}
 			}
 		}
+		if streamResponse.Type == "response.completed" || streamResponse.Type == "response.done" {
+			terminalSucceeded = true
+			info.StreamStatus.MarkTerminalSuccess()
+			info.StreamStatus.MarkTerminalDelivered()
+		}
 	})
 	if streamErr != nil {
 		return nil, streamErr
 	}
 	if err := streamStatusError(info); err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusBadGateway)
 	}
-	if !terminalSeen {
+	if !terminalSeen || !terminalSucceeded {
+		terminalErr := fmt.Errorf("Responses stream ended without a terminal response event")
+		info.StreamStatus.MarkTerminalFailure(terminalErr)
 		return nil, types.NewOpenAIError(
-			fmt.Errorf("Responses stream ended without a terminal response event"),
+			terminalErr,
 			types.ErrorCodeBadResponse,
-			http.StatusInternalServerError,
+			http.StatusBadGateway,
 		)
 	}
 

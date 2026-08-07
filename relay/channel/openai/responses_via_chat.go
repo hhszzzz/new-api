@@ -94,6 +94,7 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		}
 		if err := helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: event.Type}, string(data)); err != nil {
 			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+			info.StreamStatus.MarkWriteError(err)
 			return false
 		}
 		return true
@@ -124,6 +125,15 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		}
 		if chunk.IsFinished() {
 			upstreamCompleted = true
+			info.StreamStatus.MarkTerminalSuccess()
+		}
+		if service.ValidUsage(chunk.Usage) {
+			info.StreamStatus.MarkUsageComplete()
+		}
+		for _, choice := range chunk.Choices {
+			if choice.Delta.GetContentString() != "" || choice.Delta.GetReasoningContent() != "" || len(choice.Delta.ParseToolCalls()) > 0 {
+				info.StreamStatus.MarkSemanticOutput()
+			}
 		}
 		protocolstate.SetUpstreamResponseID(c, chunk.Id)
 
@@ -151,13 +161,14 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		return nil, streamErr
 	}
 	if err := streamStatusError(info); err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusBadGateway)
 	}
 	if !upstreamCompleted {
+		info.StreamStatus.MarkTerminalFailure(fmt.Errorf("Chat Completions stream ended without a terminal finish_reason"))
 		return nil, types.NewOpenAIError(
 			fmt.Errorf("Chat Completions stream ended without a terminal finish_reason"),
 			types.ErrorCodeBadResponse,
-			http.StatusInternalServerError,
+			http.StatusBadGateway,
 		)
 	}
 
@@ -180,6 +191,7 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			return nil, streamErr
 		}
 	}
+	info.StreamStatus.MarkTerminalDelivered()
 	protocolstate.MarkStreamCompleted(c)
 
 	return usage, nil

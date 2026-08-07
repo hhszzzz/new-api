@@ -1,50 +1,96 @@
 package common
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestStreamStatus_SetEndReason_FirstWins(t *testing.T) {
+func TestStreamStatusTerminalDeliveryOrdering(t *testing.T) {
 	t.Parallel()
-	s := NewStreamStatus()
 
-	s.SetEndReason(StreamEndReasonDone, nil)
-	s.SetEndReason(StreamEndReasonTimeout, nil)
-	s.SetEndReason(StreamEndReasonClientGone, fmt.Errorf("context canceled"))
+	t.Run("terminal delivered before cancel remains successful", func(t *testing.T) {
+		status := NewStreamStatus()
+		status.MarkTerminalSuccess()
+		status.MarkTerminalDelivered()
+		status.MarkClientGone(context.Canceled)
 
-	assert.Equal(t, StreamEndReasonDone, s.EndReason)
-	assert.Nil(t, s.EndError)
+		snapshot := status.Snapshot()
+		assert.Equal(t, StreamEndReasonDone, snapshot.EndReason)
+		assert.True(t, snapshot.TerminalDelivered)
+		assert.True(t, snapshot.ClientGone)
+	})
+
+	t.Run("cancel before terminal cannot become delivered", func(t *testing.T) {
+		status := NewStreamStatus()
+		status.MarkClientGone(context.Canceled)
+		status.MarkTerminalSuccess()
+		status.MarkTerminalDelivered()
+
+		snapshot := status.Snapshot()
+		assert.Equal(t, StreamEndReasonClientGone, snapshot.EndReason)
+		assert.False(t, snapshot.TerminalDelivered)
+		assert.Equal(t, StreamTerminalSuccess, snapshot.TerminalState)
+	})
 }
 
-func TestStreamStatus_SetEndReason_WithError(t *testing.T) {
+func TestStreamStatusDeterministicPrecedence(t *testing.T) {
 	t.Parallel()
-	s := NewStreamStatus()
 
-	expectedErr := fmt.Errorf("read: connection reset")
-	s.SetEndReason(StreamEndReasonScannerErr, expectedErr)
+	readErr := errors.New("connection reset")
+	status := NewStreamStatus()
+	status.SetEndReason(StreamEndReasonEOF, nil)
+	status.SetEndReason(StreamEndReasonScannerErr, readErr)
+	status.SetEndReason(StreamEndReasonDone, nil)
+	status.MarkClientGone(context.Canceled)
 
-	assert.Equal(t, StreamEndReasonScannerErr, s.EndReason)
-	assert.Equal(t, expectedErr, s.EndError)
+	snapshot := status.Snapshot()
+	assert.Equal(t, StreamEndReasonClientGone, snapshot.EndReason)
+	assert.ErrorIs(t, snapshot.EndError, context.Canceled)
 }
 
-func TestStreamStatus_SetEndReason_NilSafe(t *testing.T) {
+func TestStreamStatusExplicitFailureIsSticky(t *testing.T) {
 	t.Parallel()
-	var s *StreamStatus
-	s.SetEndReason(StreamEndReasonDone, nil)
+
+	failure := errors.New("response.incomplete")
+	status := NewStreamStatus()
+	status.MarkTerminalFailure(failure)
+	status.SetEndReason(StreamEndReasonDone, nil)
+	status.MarkTerminalSuccess()
+	status.MarkTerminalDelivered()
+
+	snapshot := status.Snapshot()
+	assert.Equal(t, StreamEndReasonProtocolError, snapshot.EndReason)
+	assert.Equal(t, StreamTerminalFailure, snapshot.TerminalState)
+	assert.ErrorIs(t, snapshot.EndError, failure)
+	assert.False(t, snapshot.TerminalDelivered)
 }
 
-func TestStreamStatus_SetEndReason_Concurrent(t *testing.T) {
+func TestStreamStatusWriteFailureBeatsEOF(t *testing.T) {
 	t.Parallel()
-	s := NewStreamStatus()
 
+	writeErr := errors.New("broken pipe")
+	status := NewStreamStatus()
+	status.SetEndReason(StreamEndReasonEOF, nil)
+	status.MarkWriteError(writeErr)
+
+	snapshot := status.Snapshot()
+	assert.Equal(t, StreamEndReasonHandlerStop, snapshot.EndReason)
+	assert.ErrorIs(t, snapshot.EndError, writeErr)
+}
+
+func TestStreamStatusConcurrentFactsHaveStableClassification(t *testing.T) {
+	t.Parallel()
+
+	status := NewStreamStatus()
 	reasons := []StreamEndReason{
 		StreamEndReasonDone,
 		StreamEndReasonTimeout,
-		StreamEndReasonClientGone,
 		StreamEndReasonScannerErr,
 		StreamEndReasonHandlerStop,
 		StreamEndReasonEOF,
@@ -53,130 +99,131 @@ func TestStreamStatus_SetEndReason_Concurrent(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
-	for _, r := range reasons {
+	for _, reason := range reasons {
 		wg.Add(1)
-		go func(reason StreamEndReason) {
+		go func() {
 			defer wg.Done()
-			s.SetEndReason(reason, nil)
-		}(r)
+			status.SetEndReason(reason, nil)
+		}()
 	}
 	wg.Wait()
 
-	assert.NotEqual(t, StreamEndReasonNone, s.EndReason)
+	assert.Equal(t, StreamEndReasonPanic, status.Snapshot().EndReason)
 }
 
-func TestStreamStatus_RecordError_Basic(t *testing.T) {
+func TestStreamStatusSnapshotContainsIndependentFacts(t *testing.T) {
 	t.Parallel()
-	s := NewStreamStatus()
 
-	s.RecordError("bad json")
-	s.RecordError("another bad json")
-	s.RecordError("client gone")
+	status := NewStreamStatus()
+	status.MarkResponseCommitted()
+	status.MarkUsageComplete()
+	status.MarkSemanticOutput()
+	status.SetDrainResult(StreamDrainCompleted)
+	status.RecordError("malformed optional event")
 
-	assert.True(t, s.HasErrors())
-	assert.Equal(t, 3, s.TotalErrorCount())
-	assert.Len(t, s.Errors, 3)
+	snapshot := status.Snapshot()
+	assert.True(t, snapshot.ResponseCommitted)
+	assert.True(t, snapshot.UsageComplete)
+	assert.True(t, snapshot.SemanticOutput)
+	assert.Equal(t, StreamDrainCompleted, snapshot.DrainResult)
+	assert.Equal(t, 1, snapshot.ErrorCount)
+	require.Len(t, snapshot.Errors, 1)
+	assert.Equal(t, "malformed optional event", snapshot.Errors[0].Message)
+
+	// A caller cannot mutate the status through the immutable snapshot.
+	snapshot.Errors[0].Message = "changed"
+	assert.Equal(t, "malformed optional event", status.Snapshot().Errors[0].Message)
 }
 
-func TestStreamStatus_RecordError_CapAtMax(t *testing.T) {
+func TestStreamStatusRecordErrorCapsStoredEntries(t *testing.T) {
 	t.Parallel()
-	s := NewStreamStatus()
 
+	status := NewStreamStatus()
 	for i := 0; i < 30; i++ {
-		s.RecordError(fmt.Sprintf("error_%d", i))
+		status.RecordError(fmt.Sprintf("error_%d", i))
 	}
 
-	assert.Equal(t, maxStreamErrorEntries, len(s.Errors))
-	assert.Equal(t, 30, s.TotalErrorCount())
+	snapshot := status.Snapshot()
+	assert.Equal(t, 30, snapshot.ErrorCount)
+	assert.Len(t, snapshot.Errors, maxStreamErrorEntries)
 }
 
-func TestStreamStatus_RecordError_NilSafe(t *testing.T) {
+func TestStreamStatusRecordErrorConcurrent(t *testing.T) {
 	t.Parallel()
-	var s *StreamStatus
-	s.RecordError("should not panic")
-}
 
-func TestStreamStatus_RecordError_Concurrent(t *testing.T) {
-	t.Parallel()
-	s := NewStreamStatus()
-
+	status := NewStreamStatus()
 	var wg sync.WaitGroup
 	for i := 0; i < 100; i++ {
 		wg.Add(1)
-		go func(idx int) {
+		go func(index int) {
 			defer wg.Done()
-			s.RecordError(fmt.Sprintf("error_%d", idx))
+			status.RecordError(fmt.Sprintf("error_%d", index))
 		}(i)
 	}
 	wg.Wait()
 
-	assert.Equal(t, 100, s.TotalErrorCount())
-	assert.LessOrEqual(t, len(s.Errors), maxStreamErrorEntries)
+	assert.Equal(t, 100, status.TotalErrorCount())
+	assert.Len(t, status.Snapshot().Errors, maxStreamErrorEntries)
 }
 
-func TestStreamStatus_HasErrors_Empty(t *testing.T) {
+func TestStreamStatusIsNormalEnd(t *testing.T) {
 	t.Parallel()
-	s := NewStreamStatus()
-	assert.False(t, s.HasErrors())
-	assert.Equal(t, 0, s.TotalErrorCount())
-}
 
-func TestStreamStatus_HasErrors_NilSafe(t *testing.T) {
-	t.Parallel()
-	var s *StreamStatus
-	assert.False(t, s.HasErrors())
-	assert.Equal(t, 0, s.TotalErrorCount())
-}
-
-func TestStreamStatus_IsNormalEnd(t *testing.T) {
-	t.Parallel()
 	tests := []struct {
+		name   string
 		reason StreamEndReason
+		err    error
 		normal bool
 	}{
-		{StreamEndReasonDone, true},
-		{StreamEndReasonEOF, true},
-		{StreamEndReasonHandlerStop, true},
-		{StreamEndReasonTimeout, false},
-		{StreamEndReasonClientGone, false},
-		{StreamEndReasonScannerErr, false},
-		{StreamEndReasonPanic, false},
-		{StreamEndReasonPingFail, false},
-		{StreamEndReasonNone, false},
+		{name: "done", reason: StreamEndReasonDone, normal: true},
+		{name: "eof legacy compatibility", reason: StreamEndReasonEOF, normal: true},
+		{name: "clean handler stop", reason: StreamEndReasonHandlerStop, normal: true},
+		{name: "failed handler stop", reason: StreamEndReasonHandlerStop, err: errors.New("failed"), normal: false},
+		{name: "timeout", reason: StreamEndReasonTimeout, normal: false},
+		{name: "client gone", reason: StreamEndReasonClientGone, normal: false},
+		{name: "scanner error", reason: StreamEndReasonScannerErr, normal: false},
+		{name: "panic", reason: StreamEndReasonPanic, normal: false},
+		{name: "ping failure", reason: StreamEndReasonPingFail, normal: false},
+		{name: "unset", reason: StreamEndReasonNone, normal: false},
 	}
-	for _, tt := range tests {
-		s := NewStreamStatus()
-		s.SetEndReason(tt.reason, nil)
-		assert.Equal(t, tt.normal, s.IsNormalEnd(), "reason=%s", tt.reason)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			status := NewStreamStatus()
+			status.SetEndReason(test.reason, test.err)
+			assert.Equal(t, test.normal, status.IsNormalEnd())
+		})
 	}
 }
 
-func TestStreamStatus_IsNormalEnd_NilSafe(t *testing.T) {
+func TestStreamStatusNilSafe(t *testing.T) {
 	t.Parallel()
-	var s *StreamStatus
-	assert.True(t, s.IsNormalEnd())
+
+	var status *StreamStatus
+	status.SetEndReason(StreamEndReasonDone, nil)
+	status.RecordError("ignored")
+	status.MarkTerminalSuccess()
+	status.MarkTerminalFailure(errors.New("ignored"))
+	status.MarkTerminalDelivered()
+	assert.True(t, status.IsNormalEnd())
+	assert.False(t, status.HasErrors())
+	assert.Zero(t, status.TotalErrorCount())
+	assert.Equal(t, "StreamStatus<nil>", status.Summary())
 }
 
-func TestStreamStatus_Summary(t *testing.T) {
+func TestStreamStatusSummary(t *testing.T) {
 	t.Parallel()
 
-	s := NewStreamStatus()
-	s.SetEndReason(StreamEndReasonDone, nil)
-	summary := s.Summary()
+	status := NewStreamStatus()
+	status.MarkTerminalSuccess()
+	status.MarkTerminalDelivered()
+	status.MarkClientGone(context.Canceled)
+	status.SetDrainResult(StreamDrainNotNeeded)
+	status.RecordError("optional event")
+
+	summary := status.Summary()
 	assert.Contains(t, summary, "reason=done")
-	assert.NotContains(t, summary, "soft_errors")
-
-	s2 := NewStreamStatus()
-	s2.SetEndReason(StreamEndReasonTimeout, nil)
-	s2.RecordError("bad json")
-	s2.RecordError("write failed")
-	summary2 := s2.Summary()
-	assert.Contains(t, summary2, "reason=timeout")
-	assert.Contains(t, summary2, "soft_errors=2")
-}
-
-func TestStreamStatus_Summary_NilSafe(t *testing.T) {
-	t.Parallel()
-	var s *StreamStatus
-	assert.Equal(t, "StreamStatus<nil>", s.Summary())
+	assert.Contains(t, summary, "terminal=success delivered=true")
+	assert.Contains(t, summary, "client_gone=true")
+	assert.Contains(t, summary, "drain=not_needed")
+	assert.Contains(t, summary, "soft_errors=1")
 }

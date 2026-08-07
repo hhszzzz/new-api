@@ -736,7 +736,11 @@ func Commit(c *gin.Context) error {
 		return nil
 	}
 	if pending.stream {
-		if c.Request.Context().Err() != nil || !common.GetContextKeyBool(c, constant.ContextKeyProtocolStreamCompleted) {
+		// Stream completion is marked only after the successful protocol terminal
+		// event has been written and flushed. A client context can be canceled in
+		// the tiny interval after that delivery; do not discard already-delivered
+		// state merely because Commit observes the cancellation later.
+		if !common.GetContextKeyBool(c, constant.ContextKeyProtocolStreamCompleted) {
 			return nil
 		}
 	}

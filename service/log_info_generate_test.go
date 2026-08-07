@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -111,6 +112,38 @@ func TestGenerateTextOtherInfoRecordsMillisecondDuration(t *testing.T) {
 	durationMs, ok := other["duration_ms"].(int64)
 	require.True(t, ok)
 	assert.GreaterOrEqual(t, durationMs, int64(1250))
+}
+
+func TestGenerateTextOtherInfoRecordsStreamTerminalDiagnostics(t *testing.T) {
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	now := time.Now()
+	streamStatus := relaycommon.NewStreamStatus()
+	streamStatus.MarkResponseCommitted()
+	streamStatus.MarkSemanticOutput()
+	streamStatus.MarkUsageComplete()
+	streamStatus.MarkClientGone(context.Canceled)
+	streamStatus.SetDrainResult(relaycommon.StreamDrainCompleted)
+	relayInfo := &relaycommon.RelayInfo{
+		IsStream:          true,
+		StartTime:         now,
+		FirstResponseTime: now,
+		StreamStatus:      streamStatus,
+		ChannelMeta:       &relaycommon.ChannelMeta{},
+	}
+
+	other := GenerateTextOtherInfo(ctx, relayInfo, 1, 1, 1, 0, 0, 0, 1)
+
+	streamInfo, ok := other["stream_status"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "error", streamInfo["status"])
+	assert.Equal(t, "client_gone", streamInfo["end_reason"])
+	assert.Equal(t, false, streamInfo["terminal_delivered"])
+	assert.Equal(t, true, streamInfo["client_gone"])
+	assert.Equal(t, true, streamInfo["response_committed"])
+	assert.Equal(t, true, streamInfo["usage_complete"])
+	assert.Equal(t, true, streamInfo["semantic_output_seen"])
+	assert.Equal(t, "completed", streamInfo["drain_result"])
 }
 
 func TestAppendModelRoutingAdminInfoPreservesExistingAdminFields(t *testing.T) {

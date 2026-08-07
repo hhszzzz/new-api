@@ -118,6 +118,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	defer func() {
 		if newAPIError != nil {
+			if newAPIError.GetErrorCode() == types.ErrorCodeClientDisconnected {
+				logger.LogInfo(c, "relay client disconnected before stream completion")
+				return
+			}
 			logger.LogError(c, fmt.Sprintf("relay error: %s", common.LocalLogPreview(newAPIError.Error())))
 			publicMessage := newAPIError.Error()
 			privacyInfo := relayInfo
@@ -347,7 +351,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			continue
 		}
 
-		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError, relayInfo)
+		if newAPIError.GetErrorCode() != types.ErrorCodeClientDisconnected {
+			processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError, relayInfo)
+		}
 
 		if !shouldRetry(c, newAPIError, common.RetryTimes-retryParam.GetRetry()) {
 			break
@@ -422,10 +428,6 @@ func writeRelayErrorResponse(c *gin.Context, relayFormat types.RelayFormat, apiE
 			helper.SetEventStreamHeaders(c)
 			if err := helper.ObjectData(c, gin.H{"error": publicError}); err != nil {
 				logger.LogError(c, "failed to write Chat Completions stream error: "+err.Error())
-				return
-			}
-			if err := helper.Done(c); err != nil {
-				logger.LogError(c, "failed to write Chat Completions stream terminator: "+err.Error())
 			}
 			return
 		}

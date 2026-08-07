@@ -58,13 +58,17 @@ func FlushWriter(c *gin.Context) (err error) {
 		return fmt.Errorf("request context done: %w", c.Request.Context().Err())
 	}
 
-	flusher, ok := c.Writer.(http.Flusher)
-	if !ok {
-		return errors.New("streaming error: flusher not found")
+	if err := http.NewResponseController(c.Writer).Flush(); err != nil {
+		return fmt.Errorf("flush stream response: %w", err)
 	}
-
-	flusher.Flush()
 	return nil
+}
+
+func renderStreamEvent(c *gin.Context, data string) error {
+	if c == nil || c.Writer == nil {
+		return errors.New("context or writer is nil")
+	}
+	return (common.CustomEvent{Data: data}).Render(c.Writer)
 }
 
 func requestContextDone(c *gin.Context) bool {
@@ -100,8 +104,12 @@ func ClaudeData(c *gin.Context, resp dto.ClaudeResponse) error {
 		return err
 	}
 	return withStreamWriteLock(c, func() error {
-		c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("event: %s\n", resp.Type)})
-		c.Render(-1, common.CustomEvent{Data: "data: " + string(jsonData)})
+		if err := renderStreamEvent(c, fmt.Sprintf("event: %s\n", resp.Type)); err != nil {
+			return err
+		}
+		if err := renderStreamEvent(c, "data: "+string(jsonData)); err != nil {
+			return err
+		}
 		return FlushWriter(c)
 	})
 }
@@ -115,8 +123,12 @@ func ClaudeChunkData(c *gin.Context, resp dto.ClaudeResponse, data string) error
 		return err
 	}
 	return withStreamWriteLock(c, func() error {
-		c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("event: %s\n", resp.Type)})
-		c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("data: %s\n", data)})
+		if err := renderStreamEvent(c, fmt.Sprintf("event: %s\n", resp.Type)); err != nil {
+			return err
+		}
+		if err := renderStreamEvent(c, fmt.Sprintf("data: %s\n", data)); err != nil {
+			return err
+		}
 		return FlushWriter(c)
 	})
 }
@@ -143,8 +155,12 @@ func ResponseChunkData(c *gin.Context, resp dto.ResponsesStreamResponse, data st
 		return err
 	}
 	return withStreamWriteLock(c, func() error {
-		c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("event: %s\n", resp.Type)})
-		c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("data: %s", data)})
+		if err := renderStreamEvent(c, fmt.Sprintf("event: %s\n", resp.Type)); err != nil {
+			return err
+		}
+		if err := renderStreamEvent(c, fmt.Sprintf("data: %s", data)); err != nil {
+			return err
+		}
 		return FlushWriter(c)
 	})
 }
@@ -191,7 +207,9 @@ func StringData(c *gin.Context, str string) error {
 		return err
 	}
 	return withStreamWriteLock(c, func() error {
-		c.Render(-1, common.CustomEvent{Data: "data: " + str})
+		if err := renderStreamEvent(c, "data: "+str); err != nil {
+			return err
+		}
 		return FlushWriter(c)
 	})
 }
