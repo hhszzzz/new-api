@@ -557,6 +557,9 @@ func promptAuditTerminalStatuses() []PromptAuditStatus {
 }
 
 func encodePromptAuditStrings(values []string) (string, error) {
+	if values == nil {
+		values = []string{}
+	}
 	data, err := common.Marshal(values)
 	if err != nil {
 		return "", err
@@ -571,6 +574,9 @@ func decodePromptAuditStrings(value string) []string {
 	var result []string
 	if err := common.UnmarshalJsonStr(value, &result); err != nil {
 		common.SysError(fmt.Sprintf("decode prompt audit categories failed: %v", err))
+		return []string{}
+	}
+	if result == nil {
 		return []string{}
 	}
 	return result

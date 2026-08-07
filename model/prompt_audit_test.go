@@ -101,6 +101,20 @@ func TestPromptAuditQueueLeaseRetryAndTerminalCleanup(t *testing.T) {
 	assert.Zero(t, retried.ChunkCount)
 }
 
+func TestPromptAuditCategoryArraysNeverSerializeAsNull(t *testing.T) {
+	audit := &PromptAudit{Categories: "null", UnknownCategories: "null"}
+	response := audit.ToResponse(false)
+
+	require.NotNil(t, response.Categories)
+	require.NotNil(t, response.UnknownCategories)
+	assert.Empty(t, response.Categories)
+	assert.Empty(t, response.UnknownCategories)
+
+	encoded, err := encodePromptAuditStrings(nil)
+	require.NoError(t, err)
+	assert.Equal(t, "[]", encoded)
+}
+
 func TestPromptAuditExpiredLeaseNeverExceedsAttemptCap(t *testing.T) {
 	db := withPromptAuditTestDB(t)
 	exhausted := &PromptAudit{

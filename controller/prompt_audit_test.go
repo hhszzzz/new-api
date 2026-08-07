@@ -28,6 +28,8 @@ func TestPromptAuditEndpointTokensAreWriteOnlyAndSurviveIDRename(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, string(encoded), "top-secret-token")
 	assert.Contains(t, string(encoded), `"has_token":true`)
+	assert.Contains(t, string(encoded), `"enabled_categories":[]`)
+	assert.Contains(t, string(encoded), `"groups":[]`)
 
 	clear := ""
 	updates[0].Token = &clear

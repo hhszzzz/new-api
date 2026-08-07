@@ -292,8 +292,8 @@ func DeletePromptAudits(c *gin.Context) {
 
 func promptAuditConfigResponse(setting prompt_audit_setting.PromptAuditSetting) gin.H {
 	return gin.H{
-		"mode": setting.Mode, "enabled_categories": setting.EnabledCategories,
-		"all_groups": setting.AllGroups, "groups": setting.Groups,
+		"mode": setting.Mode, "enabled_categories": append([]string{}, setting.EnabledCategories...),
+		"all_groups": setting.AllGroups, "groups": append([]string{}, setting.Groups...),
 		"endpoints": setting.SanitizedEndpoints(), "total_timeout_ms": setting.TotalTimeoutMS,
 		"chunk_overlap": setting.ChunkOverlap, "cache_ttl_seconds": setting.CacheTTLSeconds,
 		"worker_count": setting.WorkerCount, "max_attempts": setting.MaxAttempts,
