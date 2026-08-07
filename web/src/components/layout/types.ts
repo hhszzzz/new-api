@@ -35,6 +35,11 @@ type BaseNavItem = {
    * `useSidebarView`). Route-level guards still enforce access independently.
    */
   requiredRole?: number
+  /**
+   * Fine-grained backend permission required to expose this navigation item.
+   * Route guards remain authoritative; this only keeps the sidebar honest.
+   */
+  requiredPermission?: { resource: string; action: string }
 }
 
 /**

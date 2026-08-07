@@ -154,6 +154,10 @@ export function SidebarModulesSection({
         title: t('Subscription Management'),
         description: t('Manage subscription plans and pricing.'),
       },
+      promptAudit: {
+        title: t('Prompt audit'),
+        description: t('Review prompt risks and configure audit enforcement.'),
+      },
     },
   }
   const formDefaults = useMemo(() => config, [config])

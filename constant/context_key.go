@@ -9,6 +9,9 @@ const (
 
 	ContextKeyOriginalModel               ContextKey = "original_model"
 	ContextKeyRequestStartTime            ContextKey = "request_start_time"
+	ContextKeyValidatedRelayRequest       ContextKey = "validated_relay_request"
+	ContextKeyPromptAuditChecked          ContextKey = "prompt_audit_checked"
+	ContextKeyUserRateLimitApplied        ContextKey = "user_rate_limit_applied"
 	ContextKeyRequestProtocol             ContextKey = "request_protocol"
 	ContextKeyUpstreamProtocol            ContextKey = "upstream_protocol"
 	ContextKeyProtocolConverter           ContextKey = "protocol_converter"

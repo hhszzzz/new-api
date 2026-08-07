@@ -69,6 +69,14 @@ func GetAndValidAudioRequest(c *gin.Context, relayMode int) (*dto.AudioRequest, 
 			return nil, errors.New("model is required")
 		}
 	default:
+		if strings.Contains(c.GetHeader("Content-Type"), gin.MIMEMultipartPOSTForm) {
+			form, err := common.ParseMultipartFormReusable(c)
+			if err != nil {
+				return nil, err
+			}
+			defer form.RemoveAll()
+			audioRequest.AuditPrompt = strings.Join(form.Value["prompt"], "\n")
+		}
 		if audioRequest.Model == "" {
 			return nil, errors.New("model is required")
 		}

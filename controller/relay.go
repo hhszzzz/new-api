@@ -104,10 +104,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		newAPIError *types.NewAPIError
 		relayInfo   *relaycommon.RelayInfo
 		ws          *websocket.Conn
+		err         error
 	)
 
 	if relayFormat == types.RelayFormatOpenAIRealtime {
-		var err error
 		ws, err = upgrader.Upgrade(c.Writer, c.Request, nil)
 		if err != nil {
 			helper.WssError(c, ws, types.NewError(err, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry()).ToOpenAIError())
@@ -137,7 +137,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 	}()
 
-	request, err := helper.GetAndValidateRequest(c, relayFormat)
+	request, requestCached := common.GetContextKeyType[dto.Request](c, constant.ContextKeyValidatedRelayRequest)
+	if !requestCached {
+		request, err = helper.GetAndValidateRequest(c, relayFormat)
+	}
 	if err != nil {
 		// Map "request body too large" to 413 so clients can handle it correctly
 		if common.IsRequestBodyTooLargeError(err) || errors.Is(err, common.ErrRequestBodyTooLarge) {
@@ -157,7 +160,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		relay.ConfigureGeminiBillingModel(relayInfo)
 	}
 
-	if shouldApplyUserRateLimits(c, relayInfo) {
+	if shouldApplyUserRateLimits(c, relayInfo) && !common.GetContextKeyBool(c, constant.ContextKeyUserRateLimitApplied) {
 		policy := service.UserRateLimitPolicyFromContext(c)
 		waitOptions := service.UserConcurrencyWaitOptions{}
 		if policy.HasConcurrencyLimit() && relayInfo.IsStream {
@@ -188,7 +191,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 	}
 
-	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
+	needSensitiveCheck := setting.ShouldCheckPromptSensitive() && !common.GetContextKeyBool(c, constant.ContextKeyPromptAuditChecked)
 	needCountToken := constant.CountToken
 	// Sensitive filtering has its own user-text extractor, so only exact token
 	// counting needs the potentially large combined request text.
@@ -200,11 +203,26 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 
 	if needSensitiveCheck {
-		contains, words := service.CheckSensitiveText(request.GetSensitiveText())
+		contains, _ := service.CheckSensitiveText(request.GetSensitiveText())
 		if contains {
-			logger.LogWarn(c, fmt.Sprintf("user sensitive words detected: %s", strings.Join(words, ", ")))
+			logger.LogWarn(c, "user sensitive words detected")
 			newAPIError = types.NewError(errors.New("sensitive words detected"), types.ErrorCodeSensitiveWordsDetected,
 				types.ErrOptionWithStatusCode(http.StatusBadRequest), types.ErrOptionWithSkipRetry())
+			return
+		}
+	}
+
+	if !common.GetContextKeyBool(c, constant.ContextKeyPromptAuditChecked) {
+		promptAuditResult, promptAuditErr := service.CheckPromptAudit(c, service.PromptAuditRequest{
+			Snapshot: dto.PromptAuditSnapshotOf(request),
+			Protocol: string(relayInfo.RelayFormat),
+			Model:    relayInfo.OriginModelName,
+			Stage:    "http",
+			Stream:   relayInfo.IsStream,
+		})
+		if promptAuditErr != nil {
+			service.RecordPromptAuditError(c, promptAuditResult, promptAuditErr, relayInfo.OriginModelName, relayInfo.IsStream)
+			newAPIError = promptAuditErr
 			return
 		}
 	}

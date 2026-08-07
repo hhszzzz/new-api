@@ -163,6 +163,7 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	}
 
 	other["admin_info"] = adminInfo
+	AppendPromptAuditAdminInfo(ctx, other)
 	AppendModelRoutingAdminInfo(other, relayInfo.HasModelRouting(), relayInfo.UpstreamModelName)
 	AppendDifyWorkflowAdminInfo(relayInfo, other)
 	appendRequestPath(ctx, relayInfo, other)

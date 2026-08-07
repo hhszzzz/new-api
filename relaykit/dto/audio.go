@@ -9,10 +9,14 @@ import (
 )
 
 type AudioRequest struct {
-	Model          string          `json:"model"`
-	Input          string          `json:"input"`
-	Voice          string          `json:"voice"`
-	Instructions   string          `json:"instructions,omitempty"`
+	Model        string `json:"model"`
+	Input        string `json:"input"`
+	Voice        string `json:"voice"`
+	Instructions string `json:"instructions,omitempty"`
+	// AuditPrompt carries the optional multipart transcription/translation
+	// prompt for pre-dispatch auditing. It is deliberately excluded from JSON so
+	// adding the audit does not change any adapter's outbound request shape.
+	AuditPrompt    string          `json:"-"`
 	ResponseFormat string          `json:"response_format,omitempty"`
 	Speed          *float64        `json:"speed,omitempty"`
 	StreamFormat   string          `json:"stream_format,omitempty"`

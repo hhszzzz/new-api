@@ -27,8 +27,10 @@ import {
   ListTodo,
   MessageSquare,
   Radio,
+  ScanSearch,
   ServerCog,
   Settings,
+  ShieldCheck,
   Ticket,
   User,
   Users,
@@ -37,6 +39,10 @@ import {
 import { useTranslation } from 'react-i18next'
 
 import type { SidebarData } from '@/components/layout/types'
+import {
+  ADMIN_PERMISSION_ACTIONS,
+  ADMIN_PERMISSION_RESOURCES,
+} from '@/lib/admin-permissions'
 import { ROLE } from '@/lib/roles'
 
 /**
@@ -143,6 +149,24 @@ export function useSidebarData(): SidebarData {
             title: t('Subscriptions'),
             url: '/subscriptions',
             icon: CreditCard,
+          },
+          {
+            title: t('Prompt audit records'),
+            url: '/prompt-audit',
+            icon: ScanSearch,
+            requiredPermission: {
+              resource: ADMIN_PERMISSION_RESOURCES.PROMPT_AUDIT,
+              action: ADMIN_PERMISSION_ACTIONS.READ,
+            },
+          },
+          {
+            title: t('Prompt audit settings'),
+            url: '/prompt-audit/settings',
+            icon: ShieldCheck,
+            requiredPermission: {
+              resource: ADMIN_PERMISSION_RESOURCES.PROMPT_AUDIT,
+              action: ADMIN_PERMISSION_ACTIONS.MANAGE,
+            },
           },
           {
             title: t('System Info'),

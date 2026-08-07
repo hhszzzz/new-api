@@ -249,6 +249,11 @@ func (s *responsesWSSession) handleResponseCreate(create responsesWSCreateReques
 	}
 	protocolstate.ResetLogicalRequest(s.c)
 	common.SetContextKey(s.c, appconstant.ContextKeyRequestStartTime, time.Now())
+	s.beginLogicalRequest()
+	// A Gin context lives for the whole WebSocket connection. Clear the prior
+	// logical request's audit metadata before any validation or sensitive-word
+	// failure can be logged against the new response.create event.
+	service.AttachPromptAuditResult(s.c, service.PromptAuditResult{})
 
 	validated, requestBody, apiErr := installResponsesWSRequestBody(s.c, &req)
 	if apiErr != nil {
@@ -299,6 +304,30 @@ func (s *responsesWSSession) handleResponseCreate(create responsesWSCreateReques
 			rateGuard.Release()
 		}
 	}()
+	if setting.ShouldCheckPromptSensitive() {
+		if contains, _ := service.CheckSensitiveText(validated.GetSensitiveText()); contains {
+			commitRate(false)
+			return types.NewError(
+				errors.New("sensitive words detected"),
+				types.ErrorCodeSensitiveWordsDetected,
+				types.ErrOptionWithStatusCode(http.StatusBadRequest),
+				types.ErrOptionWithSkipRetry(),
+			)
+		}
+	}
+
+	promptAuditResult, promptAuditErr := service.CheckPromptAudit(s.c, service.PromptAuditRequest{
+		Snapshot: dto.PromptAuditSnapshotOf(validated),
+		Protocol: string(types.RelayFormatOpenAIResponses),
+		Model:    validated.Model,
+		Stage:    "responses_websocket",
+		Stream:   true,
+	})
+	if promptAuditErr != nil {
+		commitRate(false)
+		service.RecordPromptAuditError(s.c, promptAuditResult, promptAuditErr, validated.Model, true)
+		return promptAuditErr
+	}
 
 	if !s.hasTarget() {
 		return s.connectAndSendFirst(create, eventID, commitRate)
@@ -567,26 +596,21 @@ func (s *responsesWSSession) prepareCall(create responsesWSCreateRequest, commit
 // token estimate, pricing, and pre-consume.
 func (s *responsesWSSession) prepareCallState(create responsesWSCreateRequest) (*responsesWSCallState, *types.NewAPIError) {
 	req := create.Request
-	if s.baseRequestID == "" {
-		s.baseRequestID = s.c.GetString(common.RequestIdKey)
-		if s.baseRequestID == "" {
-			s.baseRequestID = common.NewRequestId()
-		}
+	eventRequestID := s.c.GetString(common.RequestIdKey)
+	if eventRequestID == "" {
+		eventRequestID = s.beginLogicalRequest()
 	}
-	eventRequestID := fmt.Sprintf("%s-ws-%d", s.baseRequestID, s.nextEventIndex)
-	s.c.Set(common.RequestIdKey, eventRequestID)
 	relayInfo := relaycommon.GenRelayInfoResponses(s.c, &req)
 	relayInfo.InitRequestConversionChain()
 	relayInfo.IsStream = true
 	common.SetContextKey(s.c, appconstant.ContextKeyIsStream, true)
 	relayInfo.RequestId = eventRequestID
-	s.nextEventIndex++
 
 	meta := req.GetTokenCountMeta()
 	if setting.ShouldCheckPromptSensitive() {
-		contains, words := service.CheckSensitiveText(req.GetSensitiveText())
+		contains, _ := service.CheckSensitiveText(req.GetSensitiveText())
 		if contains {
-			logger.LogWarn(s.c, fmt.Sprintf("user sensitive words detected: %s", strings.Join(words, ", ")))
+			logger.LogWarn(s.c, "user sensitive words detected")
 			return nil, types.NewErrorWithStatusCode(errors.New("sensitive words detected"), types.ErrorCodeSensitiveWordsDetected, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 		}
 	}
@@ -611,6 +635,19 @@ func (s *responsesWSSession) prepareCallState(create responsesWSCreateRequest) (
 		info:  relayInfo,
 		usage: &dto.Usage{},
 	}, nil
+}
+
+func (s *responsesWSSession) beginLogicalRequest() string {
+	if s.baseRequestID == "" {
+		s.baseRequestID = s.c.GetString(common.RequestIdKey)
+		if s.baseRequestID == "" {
+			s.baseRequestID = common.NewRequestId()
+		}
+	}
+	eventRequestID := fmt.Sprintf("%s-ws-%d", s.baseRequestID, s.nextEventIndex)
+	s.c.Set(common.RequestIdKey, eventRequestID)
+	s.nextEventIndex++
+	return eventRequestID
 }
 
 func buildResponsesWSCreatePayload(c *gin.Context, relayInfo *relaycommon.RelayInfo, req dto.OpenAIResponsesRequest, generate json.RawMessage) ([]byte, *types.NewAPIError) {

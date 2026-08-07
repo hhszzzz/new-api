@@ -104,6 +104,13 @@ func Distribute() func(c *gin.Context) {
 			abortWithProtocolMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorGroupAccessDenied))
 			return
 		}
+		promptAuditCleanup, promptAuditAllowed := inspectPromptBeforeDistribution(c, modelRequest)
+		if promptAuditCleanup != nil {
+			defer promptAuditCleanup()
+		}
+		if !promptAuditAllowed {
+			return
+		}
 
 		// Resolve the user-specific route before channel selection so every
 		// configured user receives strict target-model/channel-pool selection.

@@ -94,6 +94,12 @@ var auditRouteActions = map[string]string{
 
 	// 日志
 	"POST /api/system-task/log-cleanup": "log.cleanup_start",
+
+	// 提示词审查
+	"PUT /api/prompt-audit/config":            "prompt_audit.config_update",
+	"POST /api/prompt-audit/nodes/:id/test":   "prompt_audit.node_test",
+	"POST /api/prompt-audit/events/:id/retry": "prompt_audit.retry",
+	"DELETE /api/prompt-audit/events":         "prompt_audit.delete",
 }
 
 // beginAdminAudit 在管理/root 写操作进入 handler 前包装 ResponseWriter，

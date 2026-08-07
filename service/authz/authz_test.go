@@ -105,6 +105,12 @@ func TestSetUserPermissionsStoresOnlyOverrides(t *testing.T) {
 			ActionSensitiveWrite: true,
 			ActionSecretView:     false,
 		},
+		ResourcePromptAudit: {
+			ActionRead:                      true,
+			ActionPromptAuditViewFullPrompt: false,
+			ActionPromptAuditManage:         false,
+			ActionPromptAuditDelete:         false,
+		},
 	}, ExplicitUserPermissions(42))
 	assert.Equal(t, PermissionsMap{
 		ResourceChannel: {
@@ -133,8 +139,50 @@ func TestSetUserPermissionsStoresOnlyOverrides(t *testing.T) {
 			ActionSensitiveWrite: false,
 			ActionSecretView:     false,
 		},
+		ResourcePromptAudit: {
+			ActionRead:                      true,
+			ActionPromptAuditViewFullPrompt: false,
+			ActionPromptAuditManage:         false,
+			ActionPromptAuditDelete:         false,
+		},
 	}, ExplicitUserPermissions(42))
 	assert.Empty(t, ExplicitUserOverrides(42))
+}
+
+func TestPromptAuditPermissionsSupportAdminRestrictionAndIndividualGrant(t *testing.T) {
+	db := newAuthzTestDB(t)
+	require.NoError(t, Init(db))
+
+	assert.True(t, Can(1, common.RoleRootUser, PromptAuditRead))
+	assert.True(t, Can(1, common.RoleRootUser, PromptAuditViewFullPrompt))
+	assert.True(t, Can(1, common.RoleRootUser, PromptAuditManage))
+	assert.True(t, Can(1, common.RoleRootUser, PromptAuditDelete))
+
+	assert.True(t, Can(42, common.RoleAdminUser, PromptAuditRead))
+	assert.False(t, Can(42, common.RoleAdminUser, PromptAuditViewFullPrompt))
+	assert.False(t, Can(42, common.RoleAdminUser, PromptAuditManage))
+	assert.False(t, Can(42, common.RoleAdminUser, PromptAuditDelete))
+	for _, role := range []int{common.RoleCommonUser, 0} {
+		assert.False(t, Can(99, role, PromptAuditRead))
+		assert.False(t, Can(99, role, PromptAuditViewFullPrompt))
+		assert.False(t, Can(99, role, PromptAuditManage))
+		assert.False(t, Can(99, role, PromptAuditDelete))
+	}
+
+	require.NoError(t, SetUserPermissions(42, PermissionsMap{ResourcePromptAudit: {
+		ActionRead:                      false,
+		ActionPromptAuditViewFullPrompt: true,
+		ActionPromptAuditManage:         true,
+		ActionPromptAuditDelete:         true,
+	}}))
+	assert.False(t, Can(42, common.RoleAdminUser, PromptAuditRead))
+	assert.True(t, Can(42, common.RoleAdminUser, PromptAuditViewFullPrompt))
+	assert.True(t, Can(42, common.RoleAdminUser, PromptAuditManage))
+	assert.True(t, Can(42, common.RoleAdminUser, PromptAuditDelete))
+
+	require.NoError(t, ClearUserPermissions(42))
+	assert.True(t, Can(42, common.RoleAdminUser, PromptAuditRead))
+	assert.False(t, Can(42, common.RoleAdminUser, PromptAuditManage))
 }
 
 func TestClearUserAuthorizationRemovesOverrides(t *testing.T) {

@@ -18,6 +18,7 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/model_setting"
+	"github.com/QuantumNous/new-api/setting/prompt_audit_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
@@ -64,7 +65,7 @@ type responsesWSE2EBillingSnapshot struct {
 
 func TestResponsesWebSocketEndToEndReuseBillingAndChannelDisable(t *testing.T) {
 	db := setupModelListControllerTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.Token{}, &model.Log{}))
+	require.NoError(t, db.AutoMigrate(&model.Token{}, &model.Log{}, &model.PromptAudit{}))
 
 	previousMemoryCache := common.MemoryCacheEnabled
 	previousBatchUpdate := common.BatchUpdateEnabled
@@ -74,6 +75,7 @@ func TestResponsesWebSocketEndToEndReuseBillingAndChannelDisable(t *testing.T) {
 	previousRateLimit := setting.ModelRequestRateLimitEnabled
 	previousSensitive := setting.CheckSensitiveEnabled
 	previousSensitivePrompt := setting.CheckSensitiveOnPromptEnabled
+	previousPromptAudit := prompt_audit_setting.GetSetting()
 	previousModelRatios := ratio_setting.ModelRatio2JSONString()
 	previousCompletionRatios := ratio_setting.CompletionRatio2JSONString()
 	previousGroupRatios := ratio_setting.GroupRatio2JSONString()
@@ -87,6 +89,7 @@ func TestResponsesWebSocketEndToEndReuseBillingAndChannelDisable(t *testing.T) {
 		setting.ModelRequestRateLimitEnabled = previousRateLimit
 		setting.SetCheckSensitiveEnabled(previousSensitive)
 		setting.SetCheckSensitiveOnPromptEnabled(previousSensitivePrompt)
+		previousPromptAudit.PublishConfig()
 		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(previousModelRatios))
 		require.NoError(t, ratio_setting.UpdateCompletionRatioByJSONString(previousCompletionRatios))
 		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(previousGroupRatios))
@@ -101,6 +104,33 @@ func TestResponsesWebSocketEndToEndReuseBillingAndChannelDisable(t *testing.T) {
 	setting.ModelRequestRateLimitEnabled = false
 	setting.SetCheckSensitiveEnabled(false)
 	setting.SetCheckSensitiveOnPromptEnabled(false)
+	var promptAuditCalls atomic.Int32
+	promptAuditGuard := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		promptAuditCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"Safety: Safe\nCategories: None"}}]}`))
+	}))
+	t.Cleanup(promptAuditGuard.Close)
+	promptAuditConfig := prompt_audit_setting.PromptAuditSetting{
+		Mode:                prompt_audit_setting.ModeBlocking,
+		EnabledCategories:   append([]string(nil), prompt_audit_setting.AllCategoryIDs...),
+		AllGroups:           true,
+		TotalTimeoutMS:      2000,
+		ChunkOverlap:        64,
+		CacheTTLSeconds:     0,
+		WorkerCount:         4,
+		MaxAttempts:         4,
+		RetentionDays:       30,
+		GlobalConcurrency:   4,
+		EndpointConcurrency: 4,
+		Endpoints: []prompt_audit_setting.Endpoint{{
+			ID: "responses-ws-guard", Name: "Responses WS Guard",
+			BaseURL: promptAuditGuard.URL, Model: "qwen3guard-test",
+			TimeoutMS: 1000, InputLimit: 4000, Concurrency: 4, Enabled: true,
+		}},
+	}
+	require.NoError(t, promptAuditConfig.ValidateConfig())
+	promptAuditConfig.PublishConfig()
 	model_setting.GetGlobalSettings().ProtocolBridgePolicy.Enabled = false
 	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(fmt.Sprintf(`{"%s":1}`, responsesWSE2EPublicModel)))
 	require.NoError(t, ratio_setting.UpdateCompletionRatioByJSONString(fmt.Sprintf(`{"%s":1}`, responsesWSE2EPublicModel)))
@@ -282,6 +312,13 @@ func TestResponsesWebSocketEndToEndReuseBillingAndChannelDisable(t *testing.T) {
 	assert.Equal(t, 2, consumeLog.PromptTokens)
 	assert.Equal(t, 3, consumeLog.CompletionTokens)
 	assert.Equal(t, 5, consumeLog.Quota)
+	assert.EqualValues(t, 2, promptAuditCalls.Load(), "each response.create must be audited independently")
+	var promptAudits []model.PromptAudit
+	require.NoError(t, db.Order("id asc").Find(&promptAudits).Error)
+	require.Len(t, promptAudits, 2)
+	assert.Equal(t, model.PromptAuditStatusDone, promptAudits[0].Status)
+	assert.Equal(t, model.PromptAuditStatusDone, promptAudits[1].Status)
+	assert.NotEqual(t, promptAudits[0].PromptHash, promptAudits[1].PromptHash)
 
 	statusRequest, err := http.NewRequest(
 		http.MethodPost,

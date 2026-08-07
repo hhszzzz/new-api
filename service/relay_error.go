@@ -90,6 +90,7 @@ func ProcessChannelError(c *gin.Context, channelError types.ChannelError, apiErr
 	}
 	AppendDifyWorkflowAdminInfo(relayInfo, other)
 	AppendParamOverrideAdminInfo(relayInfo, other)
+	AppendPromptAuditAdminInfo(c, other)
 	startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
 	if startTime.IsZero() {
 		startTime = time.Now()
