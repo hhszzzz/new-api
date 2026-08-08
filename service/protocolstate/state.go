@@ -12,6 +12,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/pkg/cachex"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -74,6 +75,8 @@ type pendingState struct {
 	requestProtocol          string
 	upstreamProtocol         string
 	bridgeManaged            bool
+	persistState             bool
+	stateReason              string
 	parent                   *ResponseNode
 	parentResponseID         string
 	originalInput            json.RawMessage
@@ -98,6 +101,33 @@ type capturedResponsesOutput struct {
 	outputIndex    int
 	hasOutputIndex bool
 	item           json.RawMessage
+}
+
+type clientStoreMode int
+
+const (
+	clientStoreMissing clientStoreMode = iota
+	clientStoreTrue
+	clientStoreFalse
+	clientStoreInvalid
+)
+
+// parseResponsesClientStore classifies the client's original store intent.
+// Only a literal JSON false opts out of gateway persistence: null keeps the
+// documented default-storable Responses semantics, and any other JSON value is
+// forwarded unchanged for the upstream to validate rather than being treated
+// as an opt-out.
+func parseResponsesClientStore(raw json.RawMessage) clientStoreMode {
+	switch string(bytes.TrimSpace(raw)) {
+	case "", "null":
+		return clientStoreMissing
+	case "true":
+		return clientStoreTrue
+	case "false":
+		return clientStoreFalse
+	default:
+		return clientStoreInvalid
+	}
 }
 
 type responseNodeCodec struct{}
@@ -199,8 +229,11 @@ func PrepareResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, plan c
 	}
 	common.SetContextKey(c, constant.ContextKeyProtocolRequestNormalized, false)
 	_, hasManagedParent := common.GetContextKeyType[*ResponseNode](c, constant.ContextKeyProtocolStateParent)
-	manageState := Enabled() || plan.StateEnabled || hasManagedParent
-	if !manageState {
+	// The client's original store intent must be read here, before channel
+	// adaptors (e.g. Codex) overwrite the upstream store value.
+	clientAllowsPersistence := parseResponsesClientStore(request.Store) != clientStoreFalse
+	needsStateProcessing := plan.StateEnabled || hasManagedParent || (Enabled() && clientAllowsPersistence)
+	if !needsStateProcessing {
 		normalized, err := normalizeResponsesRequest(request, plan.UpstreamProtocol, nil)
 		if err != nil {
 			return err
@@ -235,6 +268,13 @@ func PrepareResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, plan c
 		return fmt.Errorf("Responses input exceeds the maximum serialized state size of %d bytes", policy.MaxStateBytes)
 	}
 
+	stateReason := "gateway_persistence"
+	switch {
+	case parent != nil:
+		stateReason = "managed_parent"
+	case plan.StateEnabled:
+		stateReason = "bridge_state"
+	}
 	pending := &pendingState{
 		kind:             pendingResponses,
 		stream:           info.IsStream,
@@ -245,6 +285,8 @@ func PrepareResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, plan c
 		requestProtocol:  string(plan.RequestProtocol),
 		upstreamProtocol: string(plan.UpstreamProtocol),
 		bridgeManaged:    bridgeManaged,
+		persistState:     clientAllowsPersistence,
+		stateReason:      stateReason,
 		parent:           parent,
 		parentResponseID: previousID,
 		originalInput:    originalInput,
@@ -746,6 +788,10 @@ func Commit(c *gin.Context) error {
 	}
 	if pending.kind == pendingMessages {
 		return commitMessageSession(c, pending)
+	}
+	if !pending.persistState {
+		logger.LogDebug(c, "protocol state not persisted: client_store_false (processing=%s)", pending.stateReason)
+		return nil
 	}
 	if len(pending.normalizedOutput) == 0 && len(pending.streamOutput) > 0 {
 		output, err := mergeResponsesStreamOutput(pending, nil)

@@ -103,6 +103,10 @@ func TestResponsesStateSeparatesPublicAndUpstreamIDsAndReplaysHistory(t *testing
 	assert.Equal(t, "second", replayed[2]["content"])
 }
 
+// The root request leaves store unset, so the client still allows gateway
+// persistence; only the upstream reports store:false. Such chains must stay
+// replayable — this is the Codex case where the adaptor forces upstream
+// store=false regardless of the client's intent.
 func TestResponsesStateReplaysUnstoredNativeResponse(t *testing.T) {
 	resetProtocolStateCaches(t)
 	rootContext := protocolStateTestContext("unstored-root", 61, 62)
@@ -153,6 +157,185 @@ func TestResponsesStateReplaysUnstoredNativeResponse(t *testing.T) {
 	assert.Equal(t, "remember this", replayed[0]["content"])
 	assert.Equal(t, "message", replayed[1]["type"])
 	assert.Equal(t, "what did I say?", replayed[2]["content"])
+}
+
+func TestParseResponsesClientStore(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  json.RawMessage
+		want clientStoreMode
+	}{
+		{name: "missing", raw: nil, want: clientStoreMissing},
+		{name: "empty", raw: jsonRaw(``), want: clientStoreMissing},
+		{name: "null keeps default storable semantics", raw: jsonRaw(`null`), want: clientStoreMissing},
+		{name: "true", raw: jsonRaw(`true`), want: clientStoreTrue},
+		{name: "false", raw: jsonRaw(`false`), want: clientStoreFalse},
+		{name: "false with whitespace", raw: jsonRaw(" false\n"), want: clientStoreFalse},
+		{name: "string false is not an opt-out", raw: jsonRaw(`"false"`), want: clientStoreInvalid},
+		{name: "number is not an opt-out", raw: jsonRaw(`0`), want: clientStoreInvalid},
+		{name: "object is not an opt-out", raw: jsonRaw(`{}`), want: clientStoreInvalid},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, parseResponsesClientStore(test.raw))
+		})
+	}
+}
+
+func TestResponsesStateSkipsPersistenceForClientStoreFalseNativeRoot(t *testing.T) {
+	resetProtocolStateCaches(t)
+	ctx := protocolStateTestContext("store-false-root", 81, 82)
+	plan := channelcompat.ProtocolPlan{
+		RequestProtocol:  channelcompat.ProtocolResponses,
+		UpstreamProtocol: channelcompat.ProtocolResponses,
+		Status:           channelcompat.StatusNative,
+	}
+	request := &dto.OpenAIResponsesRequest{
+		Model: "gpt-public",
+		Store: jsonRaw(`false`),
+		Input: mustProtocolStateJSON(t, "remember this"),
+	}
+	require.NoError(t, PrepareResponsesRequest(ctx, protocolStateRelayInfo("gpt-public", 83), plan, request))
+
+	assert.False(t, Active(ctx))
+	assert.Empty(t, PublicResponseID(ctx, ""))
+
+	response := &dto.OpenAIResponsesResponse{
+		ID:     "upstream_store_false",
+		Status: mustProtocolStateJSON(t, "completed"),
+		Store:  false,
+		Output: []dto.ResponsesOutput{{Type: "message", Role: "assistant", Status: "completed"}},
+	}
+	assert.Equal(t, "upstream_store_false", CaptureResponsesResponse(ctx, response.ID, response))
+	assert.Equal(t, "upstream_store_false", response.ID)
+	require.NoError(t, Commit(ctx))
+
+	_, managed, err := findResponseNode(protocolStateTestContext("store-false-root-lookup", 81, 82), "upstream_store_false", "gpt-public")
+	require.NoError(t, err)
+	assert.False(t, managed)
+
+	body := mustProtocolStateJSON(t, map[string]any{"previous_response_id": "upstream_store_false"})
+	_, err = ResolveSelectionBinding(protocolStateTestContext("store-false-root-ref", 81, 82), "/v1/responses", "gpt-public", body)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown or expired")
+}
+
+func TestResponsesStateBridgedStoreFalseRootConvertsWithoutPersisting(t *testing.T) {
+	resetProtocolStateCaches(t)
+	ctx := protocolStateTestContext("store-false-bridge", 84, 85)
+	plan := channelcompat.ProtocolPlan{
+		RequestProtocol:  channelcompat.ProtocolResponses,
+		UpstreamProtocol: channelcompat.ProtocolChat,
+		Status:           channelcompat.StatusConvertible,
+		StateEnabled:     true,
+	}
+	request := &dto.OpenAIResponsesRequest{
+		Model: "gpt-public",
+		Store: jsonRaw(`false`),
+		Input: mustProtocolStateJSON(t, "convert me"),
+	}
+	require.NoError(t, PrepareResponsesRequest(ctx, protocolStateRelayInfo("gpt-public", 86), plan, request))
+
+	require.True(t, Active(ctx))
+	publicID := PublicResponseID(ctx, "")
+	require.NotEmpty(t, publicID)
+
+	response := &dto.OpenAIResponsesResponse{
+		ID:     "chatcmpl_store_false",
+		Status: mustProtocolStateJSON(t, "completed"),
+		Output: []dto.ResponsesOutput{{Type: "message", Role: "assistant", Status: "completed"}},
+	}
+	assert.Equal(t, publicID, CaptureResponsesResponse(ctx, response.ID, response))
+	assert.Equal(t, publicID, response.ID)
+	require.NoError(t, Commit(ctx))
+
+	body := mustProtocolStateJSON(t, map[string]any{"previous_response_id": publicID})
+	_, err := ResolveSelectionBinding(protocolStateTestContext("store-false-bridge-next", 84, 85), "/v1/responses", "gpt-public", body)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown or expired")
+}
+
+func TestResponsesStateStoreFalseContinuationConsumesParentWithoutChild(t *testing.T) {
+	resetProtocolStateCaches(t)
+	plan := channelcompat.ProtocolPlan{
+		RequestProtocol:  channelcompat.ProtocolResponses,
+		UpstreamProtocol: channelcompat.ProtocolResponses,
+		Status:           channelcompat.StatusNative,
+	}
+	rootContext := protocolStateTestContext("store-false-parent-root", 87, 88)
+	rootRequest := &dto.OpenAIResponsesRequest{
+		Model: "gpt-public",
+		Store: jsonRaw(`true`),
+		Input: mustProtocolStateJSON(t, "first"),
+	}
+	require.NoError(t, PrepareResponsesRequest(rootContext, protocolStateRelayInfo("gpt-public", 89), plan, rootRequest))
+	rootResponse := &dto.OpenAIResponsesResponse{
+		ID:     "upstream_parent_1",
+		Status: mustProtocolStateJSON(t, "completed"),
+		Store:  true,
+		Output: []dto.ResponsesOutput{{Type: "message", Role: "assistant", Status: "completed"}},
+	}
+	parentID := CaptureResponsesResponse(rootContext, rootResponse.ID, rootResponse)
+	require.NoError(t, Commit(rootContext))
+
+	continuationContext := protocolStateTestContext("store-false-parent-next", 87, 88)
+	body := mustProtocolStateJSON(t, map[string]any{
+		"model":                "gpt-public",
+		"previous_response_id": parentID,
+	})
+	binding, err := ResolveSelectionBinding(continuationContext, "/v1/responses", "gpt-public", body)
+	require.NoError(t, err)
+	require.NotNil(t, binding)
+	continuation := &dto.OpenAIResponsesRequest{
+		Model:              "gpt-public",
+		Store:              jsonRaw(`false`),
+		PreviousResponseID: parentID,
+		Input:              mustProtocolStateJSON(t, "second"),
+	}
+	require.NoError(t, PrepareResponsesRequest(continuationContext, protocolStateRelayInfo("gpt-public", 89), plan, continuation))
+	assert.Equal(t, "upstream_parent_1", continuation.PreviousResponseID)
+
+	continuationResponse := &dto.OpenAIResponsesResponse{
+		ID:     "upstream_child_1",
+		Status: mustProtocolStateJSON(t, "completed"),
+		Store:  false,
+		Output: []dto.ResponsesOutput{{Type: "message", Role: "assistant", Status: "completed"}},
+	}
+	childID := CaptureResponsesResponse(continuationContext, continuationResponse.ID, continuationResponse)
+	require.NotEqual(t, "upstream_child_1", childID)
+	assert.Equal(t, parentID, common.JsonRawMessageToString(continuationResponse.PreviousResponseID))
+	require.NoError(t, Commit(continuationContext))
+
+	childBody := mustProtocolStateJSON(t, map[string]any{"previous_response_id": childID})
+	_, err = ResolveSelectionBinding(protocolStateTestContext("store-false-parent-ref", 87, 88), "/v1/responses", "gpt-public", childBody)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown or expired")
+
+	parentBody := mustProtocolStateJSON(t, map[string]any{"previous_response_id": parentID})
+	binding, err = ResolveSelectionBinding(protocolStateTestContext("store-false-parent-again", 87, 88), "/v1/responses", "gpt-public", parentBody)
+	require.NoError(t, err)
+	require.NotNil(t, binding)
+}
+
+func TestResponsesRequestStoreFalseKeepsPassthroughEligible(t *testing.T) {
+	resetProtocolStateCaches(t)
+	ctx := protocolStateTestContext("store-false-passthrough", 91, 92)
+	request := &dto.OpenAIResponsesRequest{
+		Model: "gpt-a",
+		Store: jsonRaw(`false`),
+		Input: mustProtocolStateJSON(t, []map[string]any{{
+			"type": "message", "id": "msg_valid", "role": "user", "content": "hello",
+		}}),
+		Tools: jsonRaw(`[{"type":"function","name":"lookup","parameters":{"type":"object"}}]`),
+	}
+	plan := channelcompat.ProtocolPlan{
+		RequestProtocol:  channelcompat.ProtocolResponses,
+		UpstreamProtocol: channelcompat.ProtocolResponses,
+		Status:           channelcompat.StatusNative,
+	}
+	require.NoError(t, PrepareResponsesRequest(ctx, protocolStateRelayInfo("gpt-a", 93), plan, request))
+	assert.False(t, Active(ctx))
+	assert.False(t, ResponsesRequestNormalized(ctx))
 }
 
 func TestResponsesContinuationFallsBackWhenUpstreamDoesNotAcknowledgeIt(t *testing.T) {
