@@ -384,6 +384,7 @@ func FormatClaudeResponseInfo(claudeResponse *dto.ClaudeResponse, oaiResponse *d
 	} else if claudeResponse.Type == "content_block_start" {
 	} else if claudeResponse.Type == "message_stop" {
 		claudeInfo.MessageStop = true
+		claudeInfo.Done = true
 		return false
 	} else {
 		return false
