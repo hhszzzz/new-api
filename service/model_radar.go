@@ -121,8 +121,8 @@ type modelRadarUpstreamPoint struct {
 	Model                 string   `json:"model"`
 	Effort                string   `json:"effort"`
 	IQ                    *float64 `json:"iq"`
-	Passed                *int     `json:"passed"`
-	ValidTasks            *int     `json:"valid_tasks"`
+	Passed                *float64 `json:"passed"`
+	ValidTasks            *float64 `json:"valid_tasks"`
 	AveragePriceUSD       *float64 `json:"average_price_usd"`
 	PriceSamples          *int     `json:"price_samples"`
 	AverageMinutes        *float64 `json:"average_minutes"`
@@ -432,12 +432,16 @@ func normalizeModelRadarConfiguration(point modelRadarUpstreamPoint) (ModelRadar
 		}
 		latestGradedAt = &parsed
 	}
+
+	passed := int(*point.Passed)
+	validTasks := int(*point.ValidTasks)
+
 	return ModelRadarConfiguration{
 		Model:                 modelName,
 		Effort:                effort,
 		IQ:                    *point.IQ,
-		Passed:                *point.Passed,
-		ValidTasks:            *point.ValidTasks,
+		Passed:                passed,
+		ValidTasks:            validTasks,
 		AveragePriceUSD:       point.AveragePriceUSD,
 		PriceSamples:          point.PriceSamples,
 		AverageMinutes:        point.AverageMinutes,
@@ -476,12 +480,16 @@ func normalizeModelRadarHistoryPoint(point modelRadarUpstreamPoint) (ModelRadarH
 	if err := validateOptionalFloat("cache_hit_rate", point.CacheHitRate, 0, 1); err != nil {
 		return ModelRadarHistoryPoint{}, "", fmt.Errorf("invalid history configuration %s: %w", key, err)
 	}
+
+	passed := int(*point.Passed)
+	validTasks := int(*point.ValidTasks)
+
 	return ModelRadarHistoryPoint{
 		Model:              modelName,
 		Effort:             effort,
 		IQ:                 *point.IQ,
-		Passed:             *point.Passed,
-		ValidTasks:         *point.ValidTasks,
+		Passed:             passed,
+		ValidTasks:         validTasks,
 		AveragePriceUSD:    point.AveragePriceUSD,
 		AverageMinutes:     point.AverageMinutes,
 		AverageAgentSteps:  point.AverageAgentSteps,
@@ -552,12 +560,15 @@ func validateModelRadarIdentity(modelName string, effort string) (string, string
 	return modelName, effort, modelName + "|" + effort, nil
 }
 
-func validateModelRadarCoreMetrics(iq *float64, passed *int, validTasks *int) error {
+func validateModelRadarCoreMetrics(iq *float64, passed *float64, validTasks *float64) error {
 	if iq == nil || passed == nil || validTasks == nil {
 		return errors.New("iq, passed, and valid_tasks are required")
 	}
 	if !isFiniteInRange(*iq, 0, 150) {
 		return errors.New("iq is out of range")
+	}
+	if !isFiniteInRange(*passed, 0, math.MaxFloat64) || !isFiniteInRange(*validTasks, 0, math.MaxFloat64) {
+		return errors.New("passed and valid_tasks must be non-negative finite numbers")
 	}
 	if *validTasks <= 0 || *passed < 0 || *passed > *validTasks {
 		return errors.New("passed and valid_tasks are inconsistent")
