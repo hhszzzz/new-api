@@ -126,3 +126,42 @@ export function formatReleaseDate(iso: string): string {
     day: 'numeric',
   })
 }
+
+/**
+ * Format a timestamp for chart axis labels in the user's local timezone.
+ *
+ * @param ts - RFC3339 timestamp string (e.g. "2026-08-16T12:00:00Z")
+ * @param bucket - Time bucket granularity
+ * @returns Localized label like "Aug 16 12:00", "Aug 16", or "Week of Aug 12"
+ */
+export function formatChartLabel(ts: string, bucket: 'hour' | 'day' | 'week'): string {
+  const timestamp = Date.parse(ts)
+  if (!Number.isFinite(timestamp)) return ts
+
+  const date = new Date(timestamp)
+
+  if (bucket === 'hour') {
+    // "Aug 16 12:00"
+    return date.toLocaleDateString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    })
+  }
+
+  if (bucket === 'day') {
+    // "Aug 16"
+    return date.toLocaleDateString(undefined, {
+      month: 'short',
+      day: 'numeric',
+    })
+  }
+
+  // bucket === 'week': "Week of Aug 12"
+  return `Week of ${date.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+  })}`
+}

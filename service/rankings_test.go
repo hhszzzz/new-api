@@ -266,3 +266,14 @@ func TestRankingCacheDropsExpiredEntriesAndEnforcesCapacity(t *testing.T) {
 	assert.False(t, oldestExists)
 	assert.Equal(t, rankingCacheMaxEntries, cacheSize)
 }
+
+func TestRankingBucketLabelUsesUTCToAvoidTimezoneInconsistency(t *testing.T) {
+	// 2026-08-16 12:00:00 UTC
+	bucket := int64(1786881600)
+	config := rankingPeriodConfig{labelLayout: "Jan 2 15:04"}
+
+	label := rankingBucketLabel(bucket, config)
+
+	// Label should reflect UTC time regardless of server timezone
+	assert.Equal(t, "Aug 16 12:00", label)
+}

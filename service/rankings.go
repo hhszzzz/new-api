@@ -1096,7 +1096,7 @@ func rankingBucketTs(bucket int64) string {
 }
 
 func rankingBucketLabel(bucket int64, config rankingPeriodConfig) string {
-	return time.Unix(bucket, 0).Format(config.labelLayout)
+	return time.Unix(bucket, 0).UTC().Format(config.labelLayout)
 }
 
 func rankingRankMap(totals []model.RankingQuotaTotal) map[string]int {

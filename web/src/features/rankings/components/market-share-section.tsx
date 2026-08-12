@@ -29,6 +29,7 @@ import {
   formatTokens,
   formatUSD,
   formatUsageColumns,
+  formatChartLabel,
 } from '../lib/format'
 import type { RankingPeriod, VendorRanking, VendorShareSeries } from '../types'
 import { VendorLink } from './entity-links'
@@ -105,6 +106,7 @@ type MarketShareSectionProps = {
   history: VendorShareSeries
   rows: VendorRanking[]
   period: RankingPeriod
+  bucket: 'hour' | 'day' | 'week'
 }
 
 /**
@@ -133,19 +135,24 @@ export function MarketShareSection(props: MarketShareSectionProps) {
     const order = new Map(
       props.history.vendors.map((v, idx) => [v.name, idx] as const)
     )
-    return [...props.history.points].sort((a, b) => {
-      const tsCmp = a.ts.localeCompare(b.ts)
-      if (tsCmp !== 0) return tsCmp
-      return (order.get(a.vendor) ?? 999) - (order.get(b.vendor) ?? 999)
-    })
-  }, [props.history])
+    return [...props.history.points]
+      .map((point) => ({
+        ...point,
+        localLabel: formatChartLabel(point.ts, props.bucket),
+      }))
+      .sort((a, b) => {
+        const tsCmp = a.ts.localeCompare(b.ts)
+        if (tsCmp !== 0) return tsCmp
+        return (order.get(a.vendor) ?? 999) - (order.get(b.vendor) ?? 999)
+      })
+  }, [props.history, props.bucket])
 
   const spec = useMemo(() => {
     if (orderedPoints.length === 0) return null
     return {
       type: 'bar' as const,
       data: [{ id: 'vendor-share', values: orderedPoints }],
-      xField: 'label',
+      xField: 'localLabel',
       yField: 'share',
       seriesField: 'vendor',
       stack: true,
@@ -191,7 +198,7 @@ export function MarketShareSection(props: MarketShareSectionProps) {
         dimension: {
           title: {
             value: (datum: Record<string, unknown>) =>
-              String(datum?.label ?? ''),
+              String(datum?.localLabel ?? ''),
           },
           content: [
             {

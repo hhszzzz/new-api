@@ -144,6 +144,7 @@ export function Rankings() {
                 period={period}
                 totalTokens={snapshot.total_tokens}
                 totalUSD={snapshot.total_usd}
+                bucket={snapshot.range.bucket}
               />
 
               <UserUsageSection
@@ -155,6 +156,7 @@ export function Rankings() {
                 history={snapshot.vendor_share_history}
                 rows={snapshot.vendors}
                 period={period}
+                bucket={snapshot.range.bucket}
               />
 
               <PulseSection

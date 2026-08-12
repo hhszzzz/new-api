@@ -24,7 +24,7 @@ import { useTranslation } from 'react-i18next'
 import { useChartTheme } from '@/lib/use-chart-theme'
 import { VCHART_OPTION } from '@/lib/vchart'
 
-import { formatTokens, formatUSD, formatUsageColumns } from '../lib/format'
+import { formatTokens, formatUSD, formatUsageColumns, formatChartLabel } from '../lib/format'
 import type { ModelHistorySeries, ModelRanking, RankingPeriod } from '../types'
 import { ModelLeaderboard } from './model-leaderboard'
 
@@ -50,6 +50,7 @@ type ModelsSectionProps = {
   period: RankingPeriod
   totalTokens: number
   totalUSD: number
+  bucket: 'hour' | 'day' | 'week'
 }
 
 /**
@@ -70,23 +71,29 @@ export function ModelsSection(props: ModelsSectionProps) {
       : 'rgba(15, 23, 42, 0.12)'
 
   // Order points so the largest model appears at the bottom of every stack.
+  // Generate localized labels based on user's timezone.
   const orderedPoints = useMemo(() => {
     const order = new Map(
       props.history.models.map((m, idx) => [m.name, idx] as const)
     )
-    return [...props.history.points].sort((a, b) => {
-      const tsCmp = a.ts.localeCompare(b.ts)
-      if (tsCmp !== 0) return tsCmp
-      return (order.get(a.model) ?? 999) - (order.get(b.model) ?? 999)
-    })
-  }, [props.history])
+    return [...props.history.points]
+      .map((point) => ({
+        ...point,
+        localLabel: formatChartLabel(point.ts, props.bucket),
+      }))
+      .sort((a, b) => {
+        const tsCmp = a.ts.localeCompare(b.ts)
+        if (tsCmp !== 0) return tsCmp
+        return (order.get(a.model) ?? 999) - (order.get(b.model) ?? 999)
+      })
+  }, [props.history, props.bucket])
 
   const spec = useMemo(() => {
     if (orderedPoints.length === 0) return null
     return {
       type: 'bar' as const,
       data: [{ id: 'models-history', values: orderedPoints }],
-      xField: 'label',
+      xField: 'localLabel',
       yField: 'tokens',
       seriesField: 'model',
       stack: true,
@@ -127,7 +134,7 @@ export function ModelsSection(props: ModelsSectionProps) {
         dimension: {
           title: {
             value: (datum: Record<string, unknown>) =>
-              String(datum?.label ?? ''),
+              String(datum?.localLabel ?? ''),
           },
           content: [
             {
