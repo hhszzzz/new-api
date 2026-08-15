@@ -310,8 +310,8 @@ func normalizeRankingViewer(viewer RankingViewer) RankingViewer {
 	}
 }
 
-// Rolling and future-clamped ranges are resolved on the cache window boundary
-// so their cache keys do not change every second.
+// Preset and future-clamped ranges are resolved on the cache window boundary so
+// their cache keys do not change every second.
 func rankingCacheNow(now time.Time) time.Time {
 	return now.Truncate(rankingCacheTTL)
 }
@@ -456,8 +456,15 @@ func resolveRankingRange(period string, startTimestamp *int64, endTimestamp *int
 	config, err := rankingConfig(period)
 	if err == nil {
 		end := now.Unix()
-		start := now.Add(-config.duration).Unix()
-		return makeResolvedRankingRange(config, start, end), nil
+		if config.id == "today" {
+			// "today" is the current calendar day in the server's local
+			// timezone, rather than a rolling 24-hour window.
+			start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).Unix()
+			resolved := makeResolvedRankingRange(config, start, end)
+			resolved.bucketAnchor = start
+			return resolved, nil
+		}
+		return makeResolvedRankingRange(config, now.Add(-config.duration).Unix(), end), nil
 	}
 	if period != "custom" {
 		return rankingResolvedRange{}, err

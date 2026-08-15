@@ -38,6 +38,21 @@ func TestResolveRankingRangeUsesCustomBucketsAndPreviousEqualSpan(t *testing.T) 
 	assert.Equal(t, int64(7*24*60*60), resolved.config.bucketSize)
 }
 
+func TestResolveRankingRangeTodayStartsAtLocalMidnight(t *testing.T) {
+	location := time.FixedZone("test-local", 8*60*60)
+	now := time.Date(2026, time.August, 15, 15, 30, 45, 0, location)
+	wantStart := time.Date(2026, time.August, 15, 0, 0, 0, 0, location).Unix()
+
+	resolved, err := resolveRankingRange("today", nil, nil, now)
+	require.NoError(t, err)
+
+	assert.Equal(t, wantStart, resolved.start)
+	assert.Equal(t, now.Unix(), resolved.end)
+	assert.Equal(t, wantStart, resolved.bucketAnchor)
+	assert.Equal(t, wantStart-1, resolved.previousEnd)
+	assert.Equal(t, resolved.end-resolved.start+1, resolved.previousEnd-resolved.previousStart+1)
+}
+
 func TestResolveRankingRangeRejectsInvalidAndOversizedCustomRanges(t *testing.T) {
 	now := time.Unix(2_000_000_000, 0)
 	boundaryStart := now.Unix() - int64(366*24*time.Hour/time.Second) + 1

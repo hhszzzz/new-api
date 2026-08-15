@@ -24,12 +24,17 @@ import { useTranslation } from 'react-i18next'
 import { useChartTheme } from '@/lib/use-chart-theme'
 import { VCHART_OPTION } from '@/lib/vchart'
 
-import { formatTokens, formatUSD, formatUsageColumns, formatChartLabel } from '../lib/format'
+import {
+  formatTokens,
+  formatUSD,
+  formatUsageColumns,
+  formatChartLabel,
+} from '../lib/format'
 import type { ModelHistorySeries, ModelRanking, RankingPeriod } from '../types'
 import { ModelLeaderboard } from './model-leaderboard'
 
 const PERIOD_DESCRIPTIONS: Record<RankingPeriod, string> = {
-  today: 'Hourly token usage by model across the last 24 hours',
+  today: 'Hourly token usage by model for today',
   week: 'Weekly token usage by model across the past few weeks',
   month: 'Daily token usage by model across the past month',
   year: 'Weekly token usage by model across the past year',
