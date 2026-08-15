@@ -94,8 +94,8 @@ type ProtocolPlan struct {
 	ExplicitCapabilities   bool                              `json:"explicit_capabilities,omitempty"`
 	StateMode              string                            `json:"state_mode,omitempty"`
 	StateEnabled           bool                              `json:"state_enabled,omitempty"`
-	// LossyContentTypes lists request content types the conversion will drop
-	// because the channel opted into lossy conversion.
+	// LossyContentTypes lists request content types and request fields the
+	// conversion will drop because the channel opted into lossy conversion.
 	LossyContentTypes []string          `json:"lossy_content_types,omitempty"`
 	Features          RequestFeatureSet `json:"features"`
 	Reason            string            `json:"reason,omitempty"`
@@ -792,9 +792,17 @@ func conversionFeatureIncompatibility(protocol, upstream Protocol, features Requ
 			), nil
 		}
 	}
+	var lossyFields []string
 	if protocol == ProtocolMessages {
 		if features.HasContextManagement {
-			return "context_management is only supported by a native Messages upstream", nil
+			// context_management is a best-effort server-side trimming directive:
+			// dropping it only means the upstream sees the untrimmed history, so a
+			// channel that opted into lossy conversion may discard it instead of
+			// requiring a native Messages upstream.
+			if !allowLossy {
+				return "context_management is only supported by a native Messages upstream", nil
+			}
+			lossyFields = append(lossyFields, "context_management")
 		}
 		if upstream == ProtocolResponses && features.HasStopSequences {
 			return "stop_sequences cannot be represented by a Responses upstream", nil
@@ -834,7 +842,7 @@ func conversionFeatureIncompatibility(protocol, upstream Protocol, features Requ
 			strings.Join(unsupportedContentTypes, ", "),
 		), nil
 	}
-	return "", lossyContentTypes
+	return "", append(lossyFields, lossyContentTypes...)
 }
 
 // lossyDroppableContentType reports whether the content type carries only

@@ -110,7 +110,8 @@ type ProtocolCapabilities struct {
 	UpstreamProtocols []string `json:"upstream_protocols,omitempty"`
 	AllowConversion   *bool    `json:"allow_conversion,omitempty"`
 	// AllowLossyConversion permits protocol conversion to drop opaque
-	// provider-bound state (e.g. Responses encrypted_content) instead of
+	// provider-bound state (e.g. Responses encrypted_content) and best-effort
+	// server-side directives (e.g. Messages context_management) instead of
 	// rejecting the request. Applies to every model on the channel.
 	AllowLossyConversion bool                              `json:"allow_lossy_conversion,omitempty"`
 	SelectionMode        string                            `json:"selection_mode,omitempty"`

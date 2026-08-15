@@ -21,11 +21,14 @@ func validateClaudeRequestConversion(request *dto.ClaudeRequest, target string) 
 			return fmt.Errorf("top_k cannot be represented by a Responses request")
 		}
 	}
+	// context_management is deliberately absent from the list below: it is a
+	// best-effort server-side trimming directive, so conversion drops it and the
+	// upstream simply sees the untrimmed history. Whether a lossy route may be
+	// chosen at all is gated by the host's protocol plan (AllowLossyConversion).
 	for _, field := range []struct {
 		name    string
 		present bool
 	}{
-		{name: "context_management", present: meaningfulClaudeRawField(request.ContextManagement)},
 		{name: "output_format", present: meaningfulClaudeRawField(request.OutputFormat)},
 		{name: "container", present: meaningfulClaudeRawField(request.Container)},
 		{name: "mcp_servers", present: meaningfulClaudeRawField(request.McpServers)},

@@ -1046,3 +1046,29 @@ func TestPlanForRequestLossyConversionAdmitsEncryptedContent(t *testing.T) {
 	assert.Equal(t, StatusIncompatible, plan.Status)
 	assert.Contains(t, plan.Reason, "encrypted_content")
 }
+
+func TestPlanForRequestLossyConversionAdmitsMessagesContextManagement(t *testing.T) {
+	withProtocolBridgePolicy(t, true, false)
+	body := `{"model":"claude-public","stream":true,"context_management":{"edits":[{"type":"clear_tool_uses_20250919"}]},"messages":[{"role":"user","content":"hi"}]}`
+	features, err := ExtractRequestFeatureSet(ProtocolMessages, []byte(body))
+	require.NoError(t, err)
+	require.True(t, features.HasContextManagement)
+
+	strictChat := func(lossy bool) *model.Channel {
+		channel := &model.Channel{Type: constant.ChannelTypeOpenAI}
+		channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
+			UpstreamProtocols:    []string{dto.ProtocolCapabilityChat},
+			AllowLossyConversion: lossy,
+		}})
+		return channel
+	}
+
+	plan := PlanForRequest(strictChat(false), ProtocolMessages, "claude-public", "/v1/messages", features)
+	assert.Equal(t, StatusIncompatible, plan.Status)
+	assert.Contains(t, plan.Reason, "context_management")
+
+	plan = PlanForRequest(strictChat(true), ProtocolMessages, "claude-public", "/v1/messages", features)
+	assert.Equal(t, StatusConvertible, plan.Status)
+	assert.Equal(t, ProtocolChat, plan.UpstreamProtocol)
+	assert.Equal(t, []string{"context_management"}, plan.LossyContentTypes)
+}

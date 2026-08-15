@@ -17,7 +17,6 @@ func TestClaudeMessagesRequestToOpenAIResponsesRejectsUnrepresentableFields(t *t
 	}{
 		{name: "stop sequences", request: dto.ClaudeRequest{StopSequences: []string{"END"}}, field: "stop_sequences"},
 		{name: "top k", request: dto.ClaudeRequest{TopK: &topK}, field: "top_k"},
-		{name: "context management", request: dto.ClaudeRequest{ContextManagement: []byte(`{"type":"compaction"}`)}, field: "context_management"},
 		{name: "output format", request: dto.ClaudeRequest{OutputFormat: []byte(`{"type":"json_schema"}`)}, field: "output_format"},
 		{name: "container", request: dto.ClaudeRequest{Container: []byte(`{"id":"container_1"}`)}, field: "container"},
 		{name: "mcp servers", request: dto.ClaudeRequest{McpServers: []byte(`[{"name":"tools"}]`)}, field: "mcp_servers"},
@@ -35,6 +34,22 @@ func TestClaudeMessagesRequestToOpenAIResponsesRejectsUnrepresentableFields(t *t
 			assert.Contains(t, err.Error(), test.field)
 		})
 	}
+}
+
+func TestClaudeMessagesRequestConversionDropsContextManagement(t *testing.T) {
+	request := dto.ClaudeRequest{
+		Model:             "claude-public",
+		ContextManagement: []byte(`{"edits":[{"type":"clear_tool_uses_20250919"}]}`),
+		Messages:          []dto.ClaudeMessage{{Role: "user", Content: "hello"}},
+	}
+
+	chatConverted, err := ClaudeMessagesRequestToOpenAIChat(request, nil)
+	require.NoError(t, err)
+	require.NotNil(t, chatConverted)
+
+	responsesConverted, err := ClaudeMessagesRequestToOpenAIResponses(request, nil)
+	require.NoError(t, err)
+	assert.Empty(t, responsesConverted.ContextManagement)
 }
 
 func TestClaudeMessagesRequestToOpenAIChatPreservesCompatibleFieldsAndMetadata(t *testing.T) {
