@@ -19,8 +19,9 @@ For commercial licensing, please contact support@quantumnous.com
 /**
  * Type definitions for usage logs
  */
-import type { UsageLog } from './data/schema'
+import type { RequestRuleTrace } from '@/features/pricing/lib/billing-expr'
 
+import type { UsageLog } from './data/schema'
 // ============================================================================
 // Log Category Types
 // ============================================================================
@@ -169,7 +170,7 @@ export interface LogOtherData {
     admin_role?: number
     auth_method?: 'session' | 'access_token' | string
     // Quota saturation marker: set when a quota conversion clamped at the
-    // int32 bound (overflow/underflow) or hit a NaN fallback while computing
+    // supported single-request bound (overflow/underflow) or hit a NaN fallback while computing
     // this request's charge. Admin-only (nested under admin_info).
     quota_saturation?: {
       op: string
@@ -189,6 +190,7 @@ export interface LogOtherData {
     protocol_lossy_conversion?: string
     route_pool_name?: string
     route_rule_id?: number
+    task_plugin?: TaskPluginInfo
   }
   diagnostics?: {
     method?: string
@@ -207,6 +209,11 @@ export interface LogOtherData {
     first_response_ms?: number
     ip?: string
     node?: string
+  }
+  root_info?: {
+    task_plugin?: TaskPluginRuntimeInfo
+    upstream_task_id?: string
+    node_name?: string
   }
   // Language-independent operation descriptor (audit/login logs).
   // Frontend renders localized content from action + params via i18n templates.
@@ -256,10 +263,13 @@ export interface LogOtherData {
   frt?: number
   // Tiered (expression-based) billing fields, set by backend when
   // billing_mode === 'tiered_expr'. expr_b64 is the base64-encoded billing
-  // expression and matched_tier is the label of the tier that fired.
+  // expression; the matched tier and request-rule traces come from the actual
+  // settlement run.
   billing_mode?: string
   expr_b64?: string
   matched_tier?: string
+  request_rules?: RequestRuleTrace[]
+  usage_facts?: Record<string, string | number>
   reasoning_effort?: string
   image?: boolean
   image_ratio?: number
@@ -361,16 +371,77 @@ export interface TaskLog {
   task_id: string
   action: string // MUSIC, LYRICS, GENERATE, TEXT_GENERATE, etc.
   channel_id: number
+  group: string
+  quota: number
   submit_time: number // seconds
+  start_time?: number // seconds
   finish_time?: number // seconds
   progress?: string
   progress_message_en?: string
-  data?: string // JSON string
+  data?: unknown
+  properties?: {
+    input?: string
+    upstream_model_name?: string
+    origin_model_name?: string
+  }
+  legacy_video_available?: boolean
   fail_reason?: string
   status: string // NOT_START, SUBMITTED, IN_PROGRESS, SUCCESS, FAILURE, QUEUED, UNKNOWN
-  other?: string
+  admin_info?: {
+    request_id?: string
+    request_path?: string
+    task_plugin?: TaskPluginInfo
+  }
+  root_info?: {
+    task_plugin?: TaskPluginRuntimeInfo
+    upstream_task_id?: string
+    node_name?: string
+  }
   created_at?: number
   updated_at?: number
+}
+
+export interface TaskPluginInfo {
+  key: string
+  name: string
+  version?: string
+  author?: TaskPluginAuthor
+}
+
+export interface TaskPluginAuthor {
+  name: string
+  url?: string
+}
+
+export interface TaskPluginRuntimeInfo {
+  key: string
+  version: string
+  api_version: number
+  generation: number
+}
+
+export type TaskArtifactType = 'image' | 'video' | 'audio' | 'file'
+
+export interface TaskArtifact {
+  key: string
+  type: TaskArtifactType
+  mime_type?: string
+  content_url: string
+}
+
+export interface TaskArtifactProjection {
+  artifacts: TaskArtifact[]
+  legacyContentUrl?: string
+}
+
+export interface TaskArtifactsResponse {
+  success: boolean
+  message?: string
+  code?: string
+  data?: {
+    artifacts?: unknown
+    legacy_content_url?: unknown
+  }
 }
 
 // ============================================================================

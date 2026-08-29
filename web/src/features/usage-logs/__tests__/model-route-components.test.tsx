@@ -46,6 +46,10 @@ vi.mock('@/lib/lobe-icon', () => ({
   getLobeIcon: () => null,
 }))
 
+vi.mock('@/features/pricing/hooks/use-pricing-data', () => ({
+  usePricingData: () => ({ models: [] }),
+}))
+
 const REQUESTED_MODEL = 'requested-model'
 const NESTED_ACTUAL_MODEL = 'nested-actual-model'
 const LEGACY_ACTUAL_MODEL = 'legacy-actual-model'
@@ -127,6 +131,7 @@ function ModelColumnHarness(props: RoutePresentationProps) {
   const permissions = useRequestedScope(props.scope)
   const columns = useCommonLogsColumns(
     permissions.isAdminView,
+    permissions.isRootView,
     permissions.canViewModelRoute
   )
   const table = useReactTable({
@@ -168,6 +173,7 @@ function DetailsDialogHarness(props: RoutePresentationProps) {
       <DetailsDialog
         log={props.log ?? routedLog}
         isAdminView={permissions.isAdminView}
+        isRoot={permissions.isRootView}
         canViewModelRoute={permissions.canViewModelRoute}
         open
         onOpenChange={() => undefined}

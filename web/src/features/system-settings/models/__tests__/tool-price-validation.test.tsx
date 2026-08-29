@@ -16,42 +16,49 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { render, screen } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
-import { describe, expect, it, vi } from 'vitest'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { fireEvent, render, screen } from '@testing-library/react'
+import i18next from 'i18next'
+import { beforeAll, describe, expect, test } from 'vitest'
 
 import { ToolPriceSettings } from '../tool-price-settings'
 
-vi.mock('../../hooks/use-update-option', () => ({
-  useUpdateOption: () => ({
-    isPending: false,
-    mutateAsync: vi.fn(),
-  }),
-}))
-
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
-}))
-
 describe('tool price validation', () => {
-  it('blocks an empty price without converting it to zero', async () => {
-    const user = userEvent.setup()
-    render(<ToolPriceSettings defaultValue='{"web_search":10}' />)
+  beforeAll(() => {
+    i18next.addResourceBundle('en', 'translation', {
+      'Price ($/1K calls)': 'Price ($/1K calls)',
+      'Please enter a valid number': 'Please enter a valid number',
+      'Tool identifier': 'Tool identifier',
+    })
+  })
+
+  test('blocks an empty price without converting it to an explicit zero', () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { mutations: { retry: false } },
+    })
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ToolPriceSettings defaultValue='{"web_search":10}' />
+      </QueryClientProvider>
+    )
 
     const priceInput = screen.getByRole('spinbutton', {
       name: 'Price ($/1K calls): web_search',
     })
     const saveButton = screen.getByRole('button', { name: 'Save tool prices' })
 
-    await user.clear(priceInput)
+    fireEvent.change(priceInput, { target: { value: '' } })
 
     expect(priceInput).toHaveAttribute('aria-invalid', 'true')
     expect(screen.getByText('Please enter a valid number')).toBeInTheDocument()
     expect(saveButton).toBeDisabled()
 
-    await user.type(priceInput, '0')
+    fireEvent.change(priceInput, { target: { value: '0' } })
 
     expect(priceInput).toHaveAttribute('aria-invalid', 'false')
     expect(saveButton).toBeEnabled()
+
+    queryClient.clear()
   })
 })

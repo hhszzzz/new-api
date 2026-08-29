@@ -98,6 +98,18 @@ func Path2RelayMode(path string) int {
 	return relayMode
 }
 
+func Path2RelaySuno(method, path string) int {
+	relayMode := RelayModeUnknown
+	if method == http.MethodPost && strings.HasSuffix(path, "/fetch") {
+		relayMode = RelayModeSunoFetch
+	} else if method == http.MethodGet && strings.Contains(path, "/fetch/") {
+		relayMode = RelayModeSunoFetchByID
+	} else if strings.Contains(path, "/submit/") {
+		relayMode = RelayModeSunoSubmit
+	}
+	return relayMode
+}
+
 func Path2RelayModeMidjourney(path string) int {
 	relayMode := RelayModeUnknown
 	if strings.HasSuffix(path, "/mj/submit/action") {
@@ -137,18 +149,6 @@ func Path2RelayModeMidjourney(path string) int {
 		relayMode = RelayModeMidjourneyTaskImageSeed
 	} else if strings.HasSuffix(path, "/list-by-condition") {
 		relayMode = RelayModeMidjourneyTaskFetchByCondition
-	}
-	return relayMode
-}
-
-func Path2RelaySuno(method, path string) int {
-	relayMode := RelayModeUnknown
-	if method == http.MethodPost && strings.HasSuffix(path, "/fetch") {
-		relayMode = RelayModeSunoFetch
-	} else if method == http.MethodGet && strings.Contains(path, "/fetch/") {
-		relayMode = RelayModeSunoFetchByID
-	} else if strings.Contains(path, "/submit/") {
-		relayMode = RelayModeSunoSubmit
 	}
 	return relayMode
 }

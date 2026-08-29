@@ -152,6 +152,8 @@ export function TimingMetricsCell(props: TimingMetricsCellProps) {
 interface StreamTpsCellProps {
   isStream: boolean
   transport?: LogTransport
+  /** Task logs are asynchronous jobs; stream vs non-stream does not apply. */
+  isTask?: boolean
   tokensPerSecond?: number | null
   streamStatus?: LogOtherData['stream_status']
   className?: string
@@ -161,7 +163,10 @@ export function StreamTpsCell(props: StreamTpsCellProps) {
   const { t } = useTranslation()
   const transport = props.transport ?? (props.isStream ? 'sse' : 'http')
   const showStreamError =
-    props.isStream && props.streamStatus && props.streamStatus.status !== 'ok'
+    !props.isTask &&
+    props.isStream &&
+    props.streamStatus &&
+    props.streamStatus.status !== 'ok'
   const tpsLabel =
     props.tokensPerSecond != null
       ? `${Math.round(props.tokensPerSecond)} t/s`
@@ -171,6 +176,9 @@ export function StreamTpsCell(props: StreamTpsCellProps) {
     transportLabel = 'WebSocket'
   } else if (transport === 'sse') {
     transportLabel = 'SSE'
+  }
+  if (props.isTask) {
+    transportLabel = t('Async')
   }
 
   return (
@@ -183,7 +191,9 @@ export function StreamTpsCell(props: StreamTpsCellProps) {
       <span
         className={cn(
           'inline-flex items-center gap-1 font-medium',
-          transport !== 'http' ? 'text-info' : 'text-muted-foreground'
+          props.isTask || transport !== 'http'
+            ? 'text-info'
+            : 'text-muted-foreground'
         )}
       >
         {transportLabel}

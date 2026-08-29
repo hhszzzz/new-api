@@ -46,7 +46,7 @@ import type { LogCategory, LogSortOrder, UsageLogSortBy } from '../types'
 import { CommonLogsFilterBar } from './common-logs-filter-bar'
 import { TaskLogsFilterBar } from './task-logs-filter-bar'
 import { UsageLogsMobileList } from './usage-logs-mobile-card'
-import { useLogsViewScope } from './usage-logs-provider'
+import { useLogsViewScope, type LogsViewAccess } from './usage-logs-provider'
 
 const route = getRouteApi('/_authenticated/usage-logs/$section')
 
@@ -91,9 +91,9 @@ const LOG_SORTABLE_COLUMNS: Record<LogCategory, Set<UsageLogSortBy>> = {
 
 function getColumnVisibilityStorageKey(
   logCategory: LogCategory,
-  isAdminView: boolean
+  viewAccess: LogsViewAccess
 ): string {
-  return `usage-logs:${logCategory}:${isAdminView ? 'admin' : 'user'}:column-visibility`
+  return `usage-logs:${logCategory}:${viewAccess}:column-visibility`
 }
 
 function deserializeLogTypeFilter(value: unknown): unknown[] {
@@ -112,11 +112,16 @@ interface UsageLogsTableProps {
 
 export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
   const { t } = useTranslation()
-  const { isAdminView, canViewModelRoute } = useLogsViewScope()
+  const {
+    isAdminView,
+    isRootView: isRoot,
+    viewAccess,
+    canViewModelRoute,
+  } = useLogsViewScope()
   const isMobile = useMediaQuery('(max-width: 640px)')
   const defaultPageSize = isMobile ? 20 : 100
   const searchParams = route.useSearch()
-  const tableStateStorageKey = `usage-logs:${logCategory}:${isAdminView ? 'admin' : 'user'}`
+  const tableStateStorageKey = `usage-logs:${logCategory}:${viewAccess}`
   const sortableColumns = useMemo(() => {
     const configured = LOG_SORTABLE_COLUMNS[logCategory]
     if (logCategory !== 'common' || canViewModelRoute) return configured
@@ -143,7 +148,7 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
     pagination: {
       defaultPage: 1,
       defaultPageSize,
-      pageSizeStorageKey: `usage-logs:${logCategory}:${isAdminView ? 'admin' : 'user'}:page-size`,
+      pageSizeStorageKey: `usage-logs:${logCategory}:${viewAccess}:page-size`,
     },
     globalFilter: { enabled: false },
     columnFilters: [
@@ -185,7 +190,7 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
   const queryScope = [
     'logs',
     logCategory,
-    isAdminView,
+    viewAccess,
     canViewModelRoute,
   ] as const
 
@@ -237,6 +242,7 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
   const rawColumns = useColumnsByCategory(
     logCategory,
     isAdminView,
+    isRoot,
     canViewModelRoute
   )
   const columns = useMemo(
@@ -265,7 +271,7 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
     columnFilters,
     columnVisibilityStorageKey: getColumnVisibilityStorageKey(
       logCategory,
-      isAdminView
+      viewAccess
     ),
     initialColumnVisibility:
       logCategory === 'common'

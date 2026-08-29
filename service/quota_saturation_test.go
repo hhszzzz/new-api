@@ -1,12 +1,15 @@
 package service
 
 import (
+	"math"
 	"net/http"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	hosttypes "github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -40,6 +43,31 @@ func TestAttachQuotaSaturationNestsUnderAdminInfo(t *testing.T) {
 	require.Equal(t, "QuotaFromDecimal", sat["op"])
 	require.Equal(t, common.QuotaClampOverflow, sat["kind"])
 	require.Equal(t, common.MaxQuota, sat["clamped"])
+}
+
+func TestCalcViolationFeeQuotaSaturates(t *testing.T) {
+	oldQuotaPerUnit := common.GetQuotaPerUnit()
+	require.NoError(t, common.SetQuotaPerUnit(500_000))
+	t.Cleanup(func() { require.NoError(t, common.SetQuotaPerUnit(oldQuotaPerUnit)) })
+
+	quota, clamp := calcViolationFeeQuota(1e20, 1)
+	require.Equal(t, common.MaxQuota, quota)
+	require.NotNil(t, clamp)
+}
+
+func TestCalcOpenRouterCacheCreateTokensDoesNotWrap(t *testing.T) {
+	oldQuotaPerUnit := common.GetQuotaPerUnit()
+	require.NoError(t, common.SetQuotaPerUnit(500_000))
+	t.Cleanup(func() { require.NoError(t, common.SetQuotaPerUnit(oldQuotaPerUnit)) })
+
+	got, clamp := CalcOpenRouterCacheCreateTokens(dto.Usage{Cost: math.Inf(1)}, hosttypes.PriceData{
+		ModelRatio:         1,
+		CacheCreationRatio: 2,
+		CacheRatio:         1,
+		CompletionRatio:    1,
+	})
+	require.Equal(t, common.MaxQuota, got)
+	require.NotNil(t, clamp)
 }
 
 // TestAttachQuotaSaturationPreservesExistingAdminInfo verifies the marker is

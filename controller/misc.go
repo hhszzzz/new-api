@@ -95,6 +95,8 @@ func GetStatus(c *gin.Context) {
 		"password_register_enabled":     common.PasswordRegisterEnabled,
 		"default_use_auto_group":        setting.DefaultUseAutoGroup,
 
+		"password_login_encryption_enabled": common.PasswordLoginEncryptionEnabled,
+
 		"usd_exchange_rate": operation_setting.GetUSDExchangeRate(),
 		"price":             operation_setting.GetPrice(),
 		"stripe_unit_price": setting.StripeUnitPrice,

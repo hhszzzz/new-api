@@ -218,8 +218,11 @@ func quoteTopUp(amount int64) (topUpQuote, error) {
 		quotaDecimal = dAmount
 	}
 
-	quota, err := common.QuotaFromDecimalStrict(quotaDecimal)
+	quota, err := common.WalletQuotaFromDecimalStrict(quotaDecimal)
 	if err != nil || quota <= 0 {
+		if maxAmount := getMaxTopUpAmount(); maxAmount > 0 && amount > maxAmount {
+			return topUpQuote{}, fmt.Errorf("单笔充值数量不能大于 %d", maxAmount)
+		}
 		return topUpQuote{}, errors.New("充值数量超出支持范围")
 	}
 	legacyAmount := dBaseAmount.Truncate(0)
@@ -246,15 +249,104 @@ func getPayMoney(amount int64, _ string) float64 {
 
 func getTopUpMinimum(minTopUp int) int64 {
 	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
-		return int64(common.QuotaFromDecimal(
+		quota, err := common.WalletQuotaFromDecimalStrict(
 			decimal.NewFromInt(int64(minTopUp)).Mul(decimal.NewFromFloat(common.GetQuotaPerUnit())),
-		))
+		)
+		if err != nil {
+			return int64(common.MaxWalletQuota)
+		}
+		return int64(quota)
 	}
 	return int64(minTopUp)
 }
 
 func getMinTopup() int64 {
 	return getTopUpMinimum(operation_setting.GetMinTopUp())
+}
+
+func getTopUpQuota(amount int64) (int, error) {
+	quota := decimal.NewFromInt(amount)
+	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
+		quotaPerUnit := decimal.NewFromFloat(common.GetQuotaPerUnit())
+		quota = decimal.NewFromInt(quota.Div(quotaPerUnit).IntPart()).Mul(quotaPerUnit)
+	} else {
+		quota = quota.Mul(decimal.NewFromFloat(common.GetQuotaPerUnit()))
+	}
+	return common.WalletQuotaFromDecimalStrict(quota)
+}
+
+func getMaxTopUpAmount() int64 {
+	quotaPerUnitValue := common.GetQuotaPerUnit()
+	if quotaPerUnitValue <= 0 {
+		return 0
+	}
+	quotaPerUnit := decimal.NewFromFloat(quotaPerUnitValue)
+	maxStoredAmount := decimal.NewFromInt(common.MaxWalletQuota).
+		Div(quotaPerUnit).
+		Floor()
+	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
+		return maxStoredAmount.Add(decimal.NewFromInt(1)).
+			Mul(quotaPerUnit).
+			Ceil().
+			Sub(decimal.NewFromInt(1)).
+			IntPart()
+	}
+	return maxStoredAmount.IntPart()
+}
+
+func validateCreditedQuota(quota decimal.Decimal) (int, error) {
+	value, err := common.WalletQuotaFromDecimalStrict(quota)
+	if err != nil {
+		return 0, errors.New("充值额度超出系统可表示范围")
+	}
+	if value <= 0 {
+		return 0, errors.New("充值额度必须大于 0")
+	}
+	return value, nil
+}
+
+func validateTopUpQuota(amount int64) (int, error) {
+	quota, err := getTopUpQuota(amount)
+	if err == nil && quota > 0 {
+		return quota, nil
+	}
+	maxAmount := getMaxTopUpAmount()
+	if maxAmount > 0 && amount > maxAmount {
+		return 0, fmt.Errorf("单笔充值数量不能大于 %d", maxAmount)
+	}
+	return 0, errors.New("充值数量无效")
+}
+
+func rejectInvalidCreditedQuota(c *gin.Context, userId int, quota decimal.Decimal) bool {
+	creditedQuota, err := validateCreditedQuota(quota)
+	if err == nil {
+		err = model.ValidateTopUpQuotaCapacity(userId, creditedQuota)
+	}
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": err.Error()})
+		return true
+	}
+	return false
+}
+
+func rejectInvalidTopUpQuota(c *gin.Context, userId int, amount int64) bool {
+	creditedQuota, err := validateTopUpQuota(amount)
+	if err == nil {
+		err = model.ValidateTopUpQuotaCapacity(userId, creditedQuota)
+	}
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": err.Error()})
+		return true
+	}
+	return false
+}
+
+func rejectInvalidTopUpQuote(c *gin.Context, userID int, quote topUpQuote) bool {
+	if err := model.ValidateTopUpQuotaCapacity(userID, quote.Quota); err != nil {
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": err.Error()})
+		return true
+	}
+	return false
 }
 
 func RequestEpay(c *gin.Context) {
@@ -268,10 +360,13 @@ func RequestEpay(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("充值数量不能小于 %d", getMinTopup())})
 		return
 	}
-
 	quote, err := quoteTopUp(req.Amount)
+	id := c.GetInt("id")
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": err.Error()})
+		return
+	}
+	if rejectInvalidTopUpQuote(c, id, quote) {
 		return
 	}
 	if quote.PayMoney < 0.01 {
@@ -287,7 +382,6 @@ func RequestEpay(c *gin.Context) {
 	callBackAddress := service.GetCallbackAddress()
 	returnUrl, _ := url.Parse(paymentReturnPath("/usage-logs"))
 	notifyUrl, _ := url.Parse(callBackAddress + "/api/user/epay/notify")
-	id := c.GetInt("id")
 	tradeNo := fmt.Sprintf("%s%d", common.GetRandomString(6), time.Now().Unix())
 	tradeNo = fmt.Sprintf("USR%dNO%s", id, tradeNo)
 	client := GetEpayClient()
@@ -437,10 +531,11 @@ func EpayNotify(c *gin.Context) {
 		_, _ = c.Writer.Write([]byte("success"))
 		return
 	}
+	logger.LogInfo(c.Request.Context(), fmt.Sprintf("易支付 webhook 验签成功 trade_no=%s callback_type=%s trade_status=%s client_ip=%s verify_info=%q", verifyInfo.ServiceTradeNo, verifyInfo.Type, verifyInfo.TradeStatus, c.ClientIP(), common.GetJsonString(verifyInfo)))
 
 	LockOrder(verifyInfo.ServiceTradeNo)
 	defer UnlockOrder(verifyInfo.ServiceTradeNo)
-	if err := model.RechargeEpay(verifyInfo.ServiceTradeNo, verifyInfo.Type, verifyInfo.Money, c.ClientIP()); err != nil {
+	if _, err := model.RechargeEpayVerified(verifyInfo.ServiceTradeNo, verifyInfo.Type, verifyInfo.Money, c.ClientIP()); err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("易支付 充值处理失败 trade_no=%s callback_type=%s client_ip=%s error=%q", verifyInfo.ServiceTradeNo, verifyInfo.Type, c.ClientIP(), err.Error()))
 		_, _ = c.Writer.Write([]byte("fail"))
 		return
@@ -464,8 +559,12 @@ func RequestAmount(c *gin.Context) {
 		return
 	}
 	quote, err := quoteTopUp(req.Amount)
+	id := c.GetInt("id")
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": err.Error()})
+		return
+	}
+	if rejectInvalidTopUpQuote(c, id, quote) {
 		return
 	}
 	if quote.PayMoney <= 0.01 {

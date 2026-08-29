@@ -206,31 +206,11 @@ func responsesFunctionDeclarationsToClaudeTools(functions []dto.FunctionRequest)
 		tools = append(tools, &dto.Tool{
 			Name:        function.Name,
 			Description: function.Description,
-			InputSchema: responsesFunctionParametersToClaudeInputSchema(function.Parameters),
+			InputSchema: sharedclaude.FunctionParametersToInputSchema(function.Parameters),
 			Strict:      function.Strict,
 		})
 	}
 	return tools
-}
-
-func responsesFunctionParametersToClaudeInputSchema(parameters any) map[string]interface{} {
-	if params, ok := parameters.(map[string]any); ok {
-		schema := make(map[string]interface{}, len(params))
-		for key, value := range params {
-			schema[key] = value
-		}
-		if schema["type"] == nil {
-			schema["type"] = "object"
-		}
-		if schema["properties"] == nil {
-			schema["properties"] = map[string]interface{}{}
-		}
-		return schema
-	}
-	return map[string]interface{}{
-		"type":       "object",
-		"properties": map[string]interface{}{},
-	}
 }
 
 func applyResponsesReasoningToClaude(req *dto.OpenAIResponsesRequest, claudeRequest *dto.ClaudeRequest) error {

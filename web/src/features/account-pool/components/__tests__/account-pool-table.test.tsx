@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import type { Table } from '@tanstack/react-table'
 import { render, screen } from '@testing-library/react'
 import type { ReactNode } from 'react'
-import { beforeEach, describe, expect, test, vi } from 'vitest'
+import { describe, expect, test, vi } from 'vitest'
 
 import type { AccountPoolAccount, AccountPoolSnapshot } from '../../types'
 import { AccountPoolTable } from '../account-pool-table'
@@ -52,14 +52,6 @@ vi.mock('@/components/data-table', async (importOriginal) => {
       </>
     ),
   }
-})
-
-beforeEach(() => {
-  window.matchMedia = vi.fn().mockReturnValue({
-    matches: false,
-    addEventListener: vi.fn(),
-    removeEventListener: vi.fn(),
-  })
 })
 
 function account(email?: string): AccountPoolAccount {

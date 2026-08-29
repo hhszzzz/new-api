@@ -82,6 +82,7 @@ function renderDialog(customFetcher: () => Promise<string[]>) {
       <FetchModelsDialog
         open
         onOpenChange={vi.fn()}
+        onModelsSelected={() => undefined}
         customFetcher={customFetcher}
         existingModelsOverride={[]}
       />
@@ -111,6 +112,7 @@ describe('fetch models dialog request lifecycle', () => {
         <FetchModelsDialog
           open
           onOpenChange={vi.fn()}
+          onModelsSelected={() => undefined}
           customFetcher={secondFetcher}
           existingModelsOverride={[]}
         />
@@ -144,6 +146,7 @@ describe('fetch models dialog request lifecycle', () => {
         <FetchModelsDialog
           open
           onOpenChange={vi.fn()}
+          onModelsSelected={() => undefined}
           customFetcher={customFetcher}
           existingModelsOverride={[]}
         />

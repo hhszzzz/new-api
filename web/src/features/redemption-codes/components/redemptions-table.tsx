@@ -221,6 +221,7 @@ export function RedemptionsTable() {
       applyHeaderSize
       toolbarProps={{
         searchPlaceholder: t('Filter by name or ID...'),
+        searchDebounceMs: 500,
         filters: [
           {
             columnId: 'status',

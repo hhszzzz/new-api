@@ -41,6 +41,7 @@ import { cn } from '@/lib/utils'
 import { LOG_TYPE_ENUM } from '../constants'
 import type { UsageLog } from '../data/schema'
 import { parseLogOther, resolveLogTimingMetrics } from '../lib/format'
+import { TASK_MOBILE_SUMMARY_FIELDS } from '../lib/task-mobile-layout'
 import {
   getLogTypeConfig,
   isDisplayableLogType,
@@ -305,6 +306,7 @@ function MobileStreamTimingField({ log }: { log: UsageLog }) {
         isStream={timing.isStreaming}
         transport={timing.transport}
         tokensPerSecond={timing.tokensPerSecond}
+        isTask={other?.is_task === true}
         streamStatus={other?.stream_status}
         className='shrink-0'
       />
@@ -382,7 +384,6 @@ function TaskLogsCard<TData>({
 
   const taskIdCell = cells.get('task_id')
   const statusCell = cells.get('status')
-  const submitTimeCell = cells.get('submit_time')
 
   return (
     <div className='space-y-2.5'>
@@ -392,10 +393,16 @@ function TaskLogsCard<TData>({
       </div>
 
       <div className='grid grid-cols-2 gap-1.5'>
-        <SummaryField label={t('Submit Time')} cell={submitTimeCell} />
-        <SummaryField label={t('User')} cell={cells.get('user')} primaryOnly />
+        {TASK_MOBILE_SUMMARY_FIELDS.map((field) => (
+          <SummaryField
+            key={field.id}
+            label={t(field.label)}
+            cell={cells.get(field.id)}
+            primaryOnly={field.primaryOnly}
+          />
+        ))}
         <SummaryField
-          label={t('Result')}
+          label={t('Details')}
           cell={cells.get('fail_reason')}
           className='col-span-2 bg-transparent px-0 py-0'
         />

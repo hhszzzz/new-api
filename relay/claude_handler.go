@@ -117,6 +117,11 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		}
 		info.UpstreamModelName = request.Model
 	}
+	if !model_setting.GetGlobalSettings().PassThroughRequestEnabled && !info.ChannelSetting.PassThroughBodyEnabled {
+		if effort := request.GetEfforts(); effort != "" {
+			info.SetReasoningEffort(effort)
+		}
+	}
 
 	// Record the effort only after the thinking config above is final, so the
 	// log reports what actually goes upstream rather than what the client asked

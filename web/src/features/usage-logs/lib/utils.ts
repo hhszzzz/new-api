@@ -42,6 +42,8 @@ import type {
   UsageLogSortBy,
 } from '../types'
 
+export { buildQueryParams } from './query-params'
+
 // ============================================================================
 // Type Checkers & Utilities
 // ============================================================================

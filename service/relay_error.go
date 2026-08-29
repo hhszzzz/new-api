@@ -26,6 +26,9 @@ func ShouldRetryRelayError(c *gin.Context, apiErr *types.NewAPIError, retryTimes
 		if _, ok := c.Get("specific_channel_id"); ok {
 			return false
 		}
+		if GetChannelConstraints(c).SuppressesRetry() {
+			return false
+		}
 	}
 	if types.IsChannelError(apiErr) {
 		return true
@@ -91,6 +94,7 @@ func ProcessChannelError(c *gin.Context, channelError types.ChannelError, apiErr
 	AppendDifyWorkflowAdminInfo(relayInfo, other)
 	AppendParamOverrideAdminInfo(relayInfo, other)
 	AppendPromptAuditAdminInfo(c, other)
+	AppendTaskPluginContextAuditInfo(c, other)
 	startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
 	if startTime.IsZero() {
 		startTime = time.Now()

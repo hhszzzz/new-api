@@ -39,6 +39,7 @@ var chats = []chatConfig{
 	{Name: "流畅阅读", URL: "fluentread"},
 	{Name: "CC Switch", URL: "ccswitch"},
 	{Name: "DeepChat", URL: "deepchat://provider/install?v=1&data={deepchatConfig}"},
+	{Name: "AQBot", URL: "aqbot://providers?{aqbotConfig}"},
 	{Name: "Lobe Chat 官方示例", URL: "https://chat-preview.lobehub.com/?settings={\"keyVaults\":{\"openai\":{\"apiKey\":\"{key}\",\"baseURL\":\"{address}/v1\"}}}"},
 	{Name: "AI as Workspace", URL: "https://aiaw.app/set-provider?provider={\"type\":\"openai\",\"settings\":{\"apiKey\":\"{key}\",\"baseURL\":\"{address}/v1\",\"compatibility\":\"strict\"}}"},
 	{Name: "AMA 问天", URL: "ama://set-api-key?server={address}&key={key}"},

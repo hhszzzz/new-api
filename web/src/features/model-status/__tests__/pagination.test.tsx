@@ -104,7 +104,7 @@ function renderModelStatus() {
 beforeEach(() => {
   mockedGetModelStatus.mockReset()
   scrollIntoView.mockReset()
-  Object.defineProperty(Element.prototype, 'scrollIntoView', {
+  Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
     configurable: true,
     value: scrollIntoView,
   })

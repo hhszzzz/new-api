@@ -99,6 +99,15 @@ func ResponsesRequestToChatCompletionsRequestWithContext(c context.Context, req 
 		out.StreamOptions.IncludeUsage = true
 	}
 
+	out.FrequencyPenalty, err = responsesRawFloat(req.FrequencyPenalty)
+	if err != nil {
+		return nil, fmt.Errorf("invalid frequency_penalty: %w", err)
+	}
+	out.PresencePenalty, err = responsesRawFloat(req.PresencePenalty)
+	if err != nil {
+		return nil, fmt.Errorf("invalid presence_penalty: %w", err)
+	}
+
 	if req.Reasoning != nil {
 		sharedchat.ApplyReasoningEffort(out, req.Reasoning.Effort)
 	}
@@ -1230,6 +1239,17 @@ func responsesChatMediaURLString(mediaURL any) string {
 	default:
 		return ""
 	}
+}
+
+func responsesRawFloat(raw json.RawMessage) (*float64, error) {
+	if !rawJSONPresent(raw) {
+		return nil, nil
+	}
+	var value float64
+	if err := kitutil.Unmarshal(raw, &value); err != nil {
+		return nil, err
+	}
+	return &value, nil
 }
 
 func responsesJSONString(raw json.RawMessage) (string, error) {

@@ -69,7 +69,7 @@ const routedChannelLog: UsageLog = {
 }
 
 function ChannelCellHarness() {
-  const columns = useCommonLogsColumns(true, true)
+  const columns = useCommonLogsColumns(true, false, true)
   const table = useReactTable({
     data: [routedChannelLog],
     columns,

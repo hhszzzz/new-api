@@ -55,6 +55,14 @@ func (*StripeAdaptor) RequestAmount(c *gin.Context, req *StripePayRequest) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": err.Error()})
 		return
 	}
+	if quote.LegacyAmount > 10000 {
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值数量不能大于 10000"})
+		return
+	}
+	id := c.GetInt("id")
+	if rejectInvalidTopUpQuote(c, id, quote) {
+		return
+	}
 	if quote.PayMoney <= 0.01 {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值金额过低"})
 		return
@@ -96,6 +104,9 @@ func (*StripeAdaptor) RequestPay(c *gin.Context, req *StripePayRequest) {
 	user, err := model.GetUserById(id, false)
 	if err != nil || user == nil {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "用户不存在"})
+		return
+	}
+	if rejectInvalidTopUpQuote(c, id, quote) {
 		return
 	}
 

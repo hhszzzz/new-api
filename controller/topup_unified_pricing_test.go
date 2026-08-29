@@ -120,7 +120,7 @@ func TestQuoteTopUpRejectsInvalidOrUnrepresentableQuota(t *testing.T) {
 
 	_, err := quoteTopUp(0)
 	require.Error(t, err)
-	_, err = quoteTopUp(int64(common.MaxQuota))
+	_, err = quoteTopUp(int64(common.MaxWalletQuota + 1))
 	require.Error(t, err)
 
 	operation_setting.SetPrice(0)

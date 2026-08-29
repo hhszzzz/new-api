@@ -61,20 +61,20 @@ func TestTasksToDtoRestrictsModelRoutingByRole(t *testing.T) {
 		},
 	}
 
-	userItems := tasksToDto([]*model.Task{task}, false, relay.TaskDtoAudiencePublic)
+	userItems := tasksToDto([]*model.Task{task}, false, relay.TaskDtoAudiencePublic, common.RoleCommonUser)
 	require.Len(t, userItems, 1)
 	userProperties, ok := userItems[0].Properties.(model.Properties)
 	require.True(t, ok)
 	assert.Equal(t, "requested-model", userProperties.OriginModelName)
 	assert.Empty(t, userProperties.UpstreamModelName)
 
-	adminItems := tasksToDto([]*model.Task{task}, false, relay.TaskDtoAudienceAdmin)
+	adminItems := tasksToDto([]*model.Task{task}, false, relay.TaskDtoAudienceAdmin, common.RoleAdminUser)
 	require.Len(t, adminItems, 1)
 	adminProperties, ok := adminItems[0].Properties.(model.Properties)
 	require.True(t, ok)
 	assert.Equal(t, "upstream-model", adminProperties.UpstreamModelName)
 
-	unknownAudienceItems := tasksToDto([]*model.Task{task}, false, relay.TaskDtoAudience(255))
+	unknownAudienceItems := tasksToDto([]*model.Task{task}, false, relay.TaskDtoAudience(255), common.RoleCommonUser)
 	require.Len(t, unknownAudienceItems, 1)
 	unknownAudienceProperties, ok := unknownAudienceItems[0].Properties.(model.Properties)
 	require.True(t, ok)

@@ -16,80 +16,66 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import type { ReactNode } from 'react'
-import { beforeEach, describe, expect, test, vi } from 'vitest'
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  type RenderResult,
+} from '@testing-library/react'
+import { afterEach, describe, expect, test } from 'vitest'
 
 import type { Redemption } from '../../types'
-import { RedemptionsMutateDrawer } from '../redemptions-mutate-drawer'
 
-const {
-  createRedemptionMock,
-  getRedemptionMock,
-  toastErrorMock,
-  triggerRefreshMock,
-  translateMock,
-  updateRedemptionMock,
-} = vi.hoisted(() => ({
-  createRedemptionMock: vi.fn(),
-  getRedemptionMock: vi.fn(),
-  toastErrorMock: vi.fn(),
-  triggerRefreshMock: vi.fn(),
-  translateMock: (key: string) => key,
-  updateRedemptionMock: vi.fn(),
-}))
+const i18n = (await import('i18next')).default
+const { I18nextProvider, initReactI18next } = await import('react-i18next')
+const { Toaster, toast } = await import('sonner')
+const { api } = await import('@/lib/api')
+const { useSystemConfigStore } = await import('@/stores/system-config-store')
+const { RedemptionsProvider } = await import('../redemptions-provider')
+const { RedemptionsMutateDrawer } = await import('../redemptions-mutate-drawer')
 
-vi.mock('../../api', () => ({
-  createRedemption: createRedemptionMock,
-  getRedemption: getRedemptionMock,
-  updateRedemption: updateRedemptionMock,
-}))
+await i18n.use(initReactI18next).init({
+  lng: 'en',
+  resources: {
+    en: {
+      translation: {
+        'Failed to load': 'Failed to load',
+        'Loading...': 'Loading...',
+        'Save changes': 'Save changes',
+        'Something went wrong!': 'Something went wrong!',
+      },
+    },
+  },
+})
 
-vi.mock('../redemptions-provider', () => ({
-  useRedemptions: () => ({ triggerRefresh: triggerRefreshMock }),
-}))
-
-vi.mock('@/components/datetime-picker', () => ({
-  DateTimePicker: () => null,
-}))
-
-vi.mock('@/components/ui/sheet', () => ({
-  Sheet: (props: { children: ReactNode; open: boolean }) =>
-    props.open ? <div>{props.children}</div> : null,
-  SheetClose: (props: { children: ReactNode }) => props.children,
-  SheetContent: (props: { children: ReactNode }) => <div>{props.children}</div>,
-  SheetDescription: (props: { children: ReactNode }) => (
-    <div>{props.children}</div>
-  ),
-  SheetFooter: (props: { children: ReactNode }) => <div>{props.children}</div>,
-  SheetHeader: (props: { children: ReactNode }) => <div>{props.children}</div>,
-  SheetTitle: (props: { children: ReactNode }) => <h1>{props.children}</h1>,
-}))
-
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: translateMock }),
-}))
-
-vi.mock('sonner', () => ({
-  toast: { error: toastErrorMock, success: vi.fn() },
-}))
-
-function deferred<T>() {
-  let resolve!: (value: T) => void
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise
-  })
-  return { promise, resolve }
+type ApiMethod = (url: string, data?: unknown) => Promise<{ data: unknown }>
+type MockableApi = {
+  get: ApiMethod
+  put: ApiMethod
+}
+type RenderedDrawer = {
+  result: RenderResult
+}
+type CurrencyFixture = {
+  quotaDisplayType: 'USD' | 'CNY'
+  usdExchangeRate: number
 }
 
-function redemption(id: number, name: string): Redemption {
+const apiClient = api as unknown as MockableApi
+const originalGet = apiClient.get
+const originalPut = apiClient.put
+const originalConsoleLog = Reflect.get(console, 'log')
+let renderedDrawer: RenderedDrawer | null = null
+
+function redemption(id: number, quota = 500001): Redemption {
   return {
     id,
     user_id: 1,
-    name,
+    name: `code-${id}`,
     key: `key-${id}`,
     status: 1,
-    quota: 500000,
+    quota,
     created_time: 1,
     redeemed_time: 0,
     expired_time: 0,
@@ -97,152 +83,232 @@ function redemption(id: number, name: string): Redemption {
   }
 }
 
-function submitRedemptionForm() {
-  const form = screen.getByLabelText('Name').closest('form')
-  if (!form) throw new Error('redemption form not found')
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (error: unknown) => void
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve
+    reject = promiseReject
+  })
+  return { promise, reject, resolve }
+}
+
+function drawerTree(currentRow: Redemption) {
+  return (
+    <I18nextProvider i18n={i18n}>
+      <RedemptionsProvider>
+        <RedemptionsMutateDrawer
+          open
+          currentRow={currentRow}
+          onOpenChange={() => undefined}
+        />
+      </RedemptionsProvider>
+      <Toaster duration={60_000} />
+    </I18nextProvider>
+  )
+}
+
+async function renderDrawer(
+  currentRow: Redemption,
+  currency: CurrencyFixture = {
+    quotaDisplayType: 'USD',
+    usdExchangeRate: 1,
+  }
+): Promise<void> {
+  useSystemConfigStore.getState().setConfig({
+    currency: {
+      displayInCurrency: true,
+      quotaDisplayType: currency.quotaDisplayType,
+      quotaPerUnit: 500000,
+      usdExchangeRate: currency.usdExchangeRate,
+      customCurrencySymbol: '¤',
+      customCurrencyExchangeRate: 1,
+    },
+  })
+
+  renderedDrawer = { result: render(drawerTree(currentRow)) }
+}
+
+async function rerenderDrawer(currentRow: Redemption): Promise<void> {
+  if (!renderedDrawer) {
+    throw new Error('Expected a rendered redemption drawer')
+  }
+  renderedDrawer.result.rerender(drawerTree(currentRow))
+}
+
+function getSaveButton(): HTMLButtonElement {
+  return screen.getByRole('button', { name: 'Save changes' })
+}
+
+function getControlByLabel(labelText: 'Name'): HTMLInputElement
+function getControlByLabel(labelText: 'Quota (CNY)'): HTMLInputElement
+function getControlByLabel(labelText: 'Quota (USD)'): HTMLInputElement
+function getControlByLabel(labelText: string): HTMLElement {
+  const label = [...document.querySelectorAll<HTMLLabelElement>('label')].find(
+    (candidate) => candidate.textContent?.trim() === labelText
+  )
+  if (!label) {
+    throw new Error(`Expected label "${labelText}"`)
+  }
+  const control =
+    label.control ??
+    label
+      .closest('[data-slot="form-item"]')
+      ?.querySelector<HTMLElement>('[data-slot="form-control"], input')
+  if (!control) {
+    throw new Error(`Expected control for label "${labelText}"`)
+  }
+  return control
+}
+
+function changeInput(input: HTMLInputElement, value: string): void {
+  fireEvent.input(input, { target: { value } })
+}
+
+function submitForm(): void {
+  const form = document.querySelector<HTMLFormElement>('#redemption-form')
+  if (!form) {
+    throw new Error('Expected redemption form')
+  }
   fireEvent.submit(form)
 }
 
-describe('redemption drawer load lifecycle', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-    createRedemptionMock.mockReset()
-    getRedemptionMock.mockReset()
-    updateRedemptionMock.mockReset()
+async function waitForLoadedForm(): Promise<void> {
+  await waitFor(() => expect(getSaveButton()).toBeEnabled())
+}
+
+afterEach(() => {
+  apiClient.get = originalGet
+  apiClient.put = originalPut
+  Reflect.set(console, 'log', originalConsoleLog)
+  toast.dismiss()
+  localStorage.clear()
+  renderedDrawer = null
+})
+
+describe('redemption drawer', () => {
+  test('shows the reported CNY quota without floating-point noise', async () => {
+    const original = redemption(1, 13888889)
+    apiClient.get = async () => ({ data: { success: true, data: original } })
+
+    await renderDrawer(original, {
+      quotaDisplayType: 'CNY',
+      usdExchangeRate: 7.2,
+    })
+    await waitForLoadedForm()
+
+    expect(getControlByLabel('Quota (CNY)').value).toBe('200')
   })
 
-  test('keeps the new record when the previous request resolves later', async () => {
-    const first = deferred<{ success: boolean; data: Redemption }>()
-    const second = deferred<{ success: boolean; data: Redemption }>()
-    getRedemptionMock.mockImplementation((id: number) =>
-      id === 1 ? first.promise : second.promise
-    )
-    const view = render(
-      <RedemptionsMutateDrawer
-        open
-        onOpenChange={vi.fn()}
-        currentRow={redemption(1, 'first')}
-      />
-    )
-    expect(screen.getByLabelText('Name').closest('form')).toHaveAttribute(
-      'inert'
+  test('blocks updates and reports an error when loading rejects', async () => {
+    const updates: unknown[] = []
+    Reflect.set(console, 'log', () => undefined)
+    apiClient.get = async () => {
+      throw new Error('network failure')
+    }
+    apiClient.put = async (_url, data) => {
+      updates.push(data)
+      return { data: { success: true } }
+    }
+
+    await renderDrawer(redemption(1))
+    await waitFor(() =>
+      expect(document.body).toHaveTextContent('Something went wrong!')
     )
 
-    view.rerender(
-      <RedemptionsMutateDrawer
-        open
-        onOpenChange={vi.fn()}
-        currentRow={redemption(2, 'second')}
-      />
-    )
-    await act(async () => {
-      second.resolve({ success: true, data: redemption(2, 'second loaded') })
-      await second.promise
-    })
-    expect(screen.getByLabelText('Name')).toHaveValue('second loaded')
-    expect(screen.getByLabelText('Name').closest('form')).not.toHaveAttribute(
-      'inert'
-    )
-
-    await act(async () => {
-      first.resolve({ success: true, data: redemption(1, 'stale first') })
-      await first.promise
-    })
-    expect(screen.getByLabelText('Name')).toHaveValue('second loaded')
+    expect(getSaveButton()).toBeDisabled()
+    submitForm()
+    expect(updates).toEqual([])
   })
 
-  test('clears the previous record while a different record is loading', async () => {
-    getRedemptionMock
-      .mockResolvedValueOnce({
-        success: true,
-        data: redemption(1, 'first loaded'),
-      })
-      .mockImplementationOnce(() => new Promise(() => {}))
-    const view = render(
-      <RedemptionsMutateDrawer
-        open
-        onOpenChange={vi.fn()}
-        currentRow={redemption(1, 'first')}
-      />
-    )
-    expect(await screen.findByDisplayValue('first loaded')).toBeEnabled()
+  test('blocks updates and uses localized feedback for unsuccessful responses', async () => {
+    apiClient.get = async () => ({
+      data: { success: false, message: 'raw server message' },
+    })
 
-    view.rerender(
-      <RedemptionsMutateDrawer
-        open
-        onOpenChange={vi.fn()}
-        currentRow={redemption(2, 'second')}
-      />
+    await renderDrawer(redemption(1))
+    await waitFor(() =>
+      expect(document.body).toHaveTextContent('Failed to load')
     )
 
-    expect(screen.getByLabelText('Name').closest('form')).toHaveAttribute(
-      'inert'
-    )
-    expect(screen.getByLabelText('Name')).toHaveValue('')
+    expect(getSaveButton()).toBeDisabled()
+    expect(document.body).not.toHaveTextContent('raw server message')
   })
 
-  test('does not let an obsolete save close a reopened drawer', async () => {
-    const save = deferred<{ success: boolean }>()
-    getRedemptionMock.mockResolvedValue({
-      success: true,
-      data: redemption(1, 'loaded redemption'),
-    })
-    updateRedemptionMock.mockImplementationOnce(() => save.promise)
-    const onOpenChange = vi.fn()
-    const renderDrawer = (open: boolean) => (
-      <RedemptionsMutateDrawer
-        open={open}
-        onOpenChange={onOpenChange}
-        currentRow={redemption(1, 'row redemption')}
-      />
-    )
-    const view = render(renderDrawer(true))
-    expect(await screen.findByDisplayValue('loaded redemption')).toBeEnabled()
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled()
-    })
+  test('keeps the original quota when another field changes', async () => {
+    const original = redemption(1)
+    const updates: Array<Record<string, unknown>> = []
+    apiClient.get = async () => ({ data: { success: true, data: original } })
+    apiClient.put = async (_url, data) => {
+      expect(data && typeof data === 'object').toBeTruthy()
+      updates.push(data as Record<string, unknown>)
+      return { data: { success: true, data: original } }
+    }
 
-    submitRedemptionForm()
-    await waitFor(() => expect(updateRedemptionMock).toHaveBeenCalledOnce())
+    await renderDrawer(original)
+    await waitForLoadedForm()
+    expect(getControlByLabel('Quota (USD)').value).toBe('1')
 
-    view.rerender(renderDrawer(false))
-    view.rerender(renderDrawer(true))
-    expect(await screen.findByDisplayValue('loaded redemption')).toBeEnabled()
-    expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled()
+    changeInput(getControlByLabel('Name'), 'renamed')
+    submitForm()
+    await waitFor(() => expect(updates).toHaveLength(1))
 
-    await act(async () => {
-      save.resolve({ success: true })
-      await save.promise
-    })
-
-    expect(onOpenChange).not.toHaveBeenCalled()
-    expect(triggerRefreshMock).not.toHaveBeenCalled()
+    expect(updates[0]?.name).toBe('renamed')
+    expect(updates[0]?.quota).toBe(500001)
   })
 
-  test('shows the server error when an update is rejected', async () => {
-    getRedemptionMock.mockResolvedValue({
-      success: true,
-      data: redemption(1, 'loaded redemption'),
-    })
-    updateRedemptionMock.mockResolvedValue({
-      success: false,
-      message: 'update rejected',
-    })
-    render(
-      <RedemptionsMutateDrawer
-        open
-        onOpenChange={vi.fn()}
-        currentRow={redemption(1, 'row redemption')}
-      />
-    )
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled()
-    })
+  test('recalculates quota when the quota field changes', async () => {
+    const original = redemption(1)
+    const updates: Array<Record<string, unknown>> = []
+    apiClient.get = async () => ({ data: { success: true, data: original } })
+    apiClient.put = async (_url, data) => {
+      expect(data && typeof data === 'object').toBeTruthy()
+      updates.push(data as Record<string, unknown>)
+      return { data: { success: true, data: original } }
+    }
 
-    submitRedemptionForm()
+    await renderDrawer(original)
+    await waitForLoadedForm()
+    changeInput(getControlByLabel('Quota (USD)'), '2')
+    submitForm()
+    await waitFor(() => expect(updates).toHaveLength(1))
 
-    await waitFor(() => {
-      expect(toastErrorMock).toHaveBeenCalledWith('update rejected')
-    })
+    expect(updates[0]?.quota).toBe(1000000)
+  })
+
+  test('ignores an older response after switching records', async () => {
+    const first = redemption(1, 500001)
+    const second = redemption(2, 1000001)
+    const firstRequest = deferred<{ data: unknown }>()
+    const secondRequest = deferred<{ data: unknown }>()
+    const requestedUrls: string[] = []
+    const updates: Array<Record<string, unknown>> = []
+    apiClient.get = (url) => {
+      requestedUrls.push(url)
+      if (url === '/api/redemption/1') return firstRequest.promise
+      if (url === '/api/redemption/2') return secondRequest.promise
+      throw new Error(`Unexpected GET ${url}`)
+    }
+    apiClient.put = async (_url, data) => {
+      expect(data && typeof data === 'object').toBeTruthy()
+      updates.push(data as Record<string, unknown>)
+      return { data: { success: true, data: second } }
+    }
+
+    await renderDrawer(first)
+    await rerenderDrawer(second)
+    await waitFor(() => expect(requestedUrls).toContain('/api/redemption/2'))
+    secondRequest.resolve({ data: { success: true, data: second } })
+    await waitForLoadedForm()
+
+    firstRequest.resolve({ data: { success: true, data: first } })
+    expect(getControlByLabel('Name').value).toBe('code-2')
+
+    changeInput(getControlByLabel('Name'), 'second')
+    submitForm()
+    await waitFor(() => expect(updates).toHaveLength(1))
+
+    expect(updates[0]?.id).toBe(2)
+    expect(updates[0]?.quota).toBe(1000001)
   })
 })

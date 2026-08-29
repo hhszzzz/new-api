@@ -21,7 +21,8 @@ func TestTopUpSettlementUsesSnapshotAndIsIdempotent(t *testing.T) {
 			provider:      PaymentProviderEpay,
 			paymentMethod: "alipay",
 			settle: func(tradeNo string) error {
-				return RechargeEpay(tradeNo, "wxpay", "77.70", "127.0.0.1")
+				_, err := RechargeEpayVerified(tradeNo, "wxpay", "77.70", "127.0.0.1")
+				return err
 			},
 		},
 		{
@@ -113,7 +114,7 @@ func TestTopUpSettlementRollsBackWhenUserQuotaWouldOverflow(t *testing.T) {
 		Id:       800,
 		Username: "overflow_user",
 		Status:   common.UserStatusEnabled,
-		Quota:    common.MaxQuota - 5,
+		Quota:    common.MaxWalletQuota - 5,
 	}
 	require.NoError(t, DB.Create(user).Error)
 	topUp := &TopUp{
@@ -129,11 +130,12 @@ func TestTopUpSettlementRollsBackWhenUserQuotaWouldOverflow(t *testing.T) {
 	}
 	require.NoError(t, topUp.Insert())
 
-	require.Error(t, RechargeEpay(topUp.TradeNo, "alipay", "1.00", "127.0.0.1"))
+	_, err := RechargeEpayVerified(topUp.TradeNo, "alipay", "1.00", "127.0.0.1")
+	require.Error(t, err)
 
 	var storedUser User
 	require.NoError(t, DB.First(&storedUser, user.Id).Error)
-	assert.Equal(t, common.MaxQuota-5, storedUser.Quota)
+	assert.Equal(t, common.MaxWalletQuota-5, storedUser.Quota)
 	storedTopUp := GetTopUpByTradeNo(topUp.TradeNo)
 	require.NotNil(t, storedTopUp)
 	assert.Equal(t, common.TopUpStatusPending, storedTopUp.Status)
@@ -156,7 +158,8 @@ func TestRechargeEpayRejectsPaidAmountMismatch(t *testing.T) {
 	}
 	require.NoError(t, topUp.Insert())
 
-	require.Error(t, RechargeEpay(topUp.TradeNo, "alipay", "19.99", "127.0.0.1"))
+	_, err := RechargeEpayVerified(topUp.TradeNo, "alipay", "19.99", "127.0.0.1")
+	require.Error(t, err)
 
 	storedTopUp := GetTopUpByTradeNo(topUp.TradeNo)
 	require.NotNil(t, storedTopUp)

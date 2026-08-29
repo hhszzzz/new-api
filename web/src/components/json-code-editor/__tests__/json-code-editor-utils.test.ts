@@ -89,9 +89,9 @@ describe('json code editor utils', () => {
     source.scrollTop = 80
     synchronizer.sync()
 
-    expect(queuedFrames).toHaveLength(1)
+    expect(queuedFrames.length).toBe(1)
 
-    queuedFrames[0]?.()
+    queuedFrames[0]()
 
     expect(contentLayer.style.transform).toBe('translate3d(-24px, -80px, 0)')
     expect(lineNumberLayer.style.transform).toBe('translate3d(0, -80px, 0)')

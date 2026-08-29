@@ -33,10 +33,13 @@ func RequestWaffoPancakeAmount(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("充值数量不能小于 %d", minTopUp)})
 		return
 	}
-
 	quote, err := quoteTopUp(req.Amount)
+	id := c.GetInt("id")
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": err.Error()})
+		return
+	}
+	if rejectInvalidTopUpQuote(c, id, quote) {
 		return
 	}
 	if quote.PayMoney <= 0.01 {
@@ -315,7 +318,6 @@ func RequestWaffoPancakePay(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("充值数量不能小于 %d", minTopUp)})
 		return
 	}
-
 	id := c.GetInt("id")
 	user, err := model.GetUserById(id, false)
 	if err != nil || user == nil {
@@ -326,6 +328,9 @@ func RequestWaffoPancakePay(c *gin.Context) {
 	quote, err := quoteTopUp(req.Amount)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": err.Error()})
+		return
+	}
+	if rejectInvalidTopUpQuote(c, id, quote) {
 		return
 	}
 	if quote.PayMoney < 0.01 {

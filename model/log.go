@@ -862,6 +862,7 @@ func formatUserLogs(logs []*Log, startIdx int, canViewModelRouting bool) {
 			continue
 		}
 		if otherMap != nil {
+			delete(otherMap, "root_info")
 			if canViewModelRouting {
 				logs[i].ChannelName = adminLogSurfaceName(logs[i], otherMap)
 				sanitizeAdminSelfLogInfo(otherMap)
@@ -983,7 +984,15 @@ func formatAdminLogs(logs []*Log) {
 		if surfaceName := adminLogSurfaceName(log, other); surfaceName != "" {
 			log.ChannelName = surfaceName
 		}
+		delete(other, "root_info")
+		log.Other = common.MapToJsonStr(other)
 	}
+}
+
+// FormatAdminLogs removes root-only diagnostics while retaining operational
+// admin_info. Root callers must not pass their results through this formatter.
+func FormatAdminLogs(logs []*Log) {
+	formatAdminLogs(logs)
 }
 
 func GetLogByTokenId(tokenId int) (logs []*Log, err error) {

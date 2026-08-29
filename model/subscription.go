@@ -938,6 +938,12 @@ func CompleteSubscriptionOrder(tradeNo string, providerPayload string, expectedP
 		if !plan.Enabled {
 			// still allow completion for already purchased orders
 		}
+		// 锁定用户行：并发完成同一用户的不同订单（包括多实例部署下）时，
+		// 使 CreateUserSubscriptionFromPlanTx 的 MaxPurchasePerUser 检查按用户串行。
+		var userRow User
+		if err := lockForUpdate(tx).Select("id").Where("id = ?", order.UserId).First(&userRow).Error; err != nil {
+			return err
+		}
 		subscription, err := CreateUserSubscriptionFromPlanTx(tx, order.UserId, plan, "order")
 		if err != nil {
 			return err
@@ -1060,6 +1066,12 @@ func AdminBindSubscription(userId int, planId int, sourceNote string) (string, e
 	policyChanged := false
 	groupMessage := ""
 	err = DB.Transaction(func(tx *gorm.DB) error {
+		// Match normal subscription purchases: serialize the user row before
+		// checking purchase limits or changing memberships.
+		var userRow User
+		if err := lockForUpdate(tx).Select("id").Where("id = ?", userId).First(&userRow).Error; err != nil {
+			return err
+		}
 		beforeGroups, err := getUserGroupsWithTx(tx, userId)
 		if err != nil {
 			return err
@@ -1125,11 +1137,7 @@ func calcSubscriptionBalanceQuota(priceAmount float64) (int, error) {
 	quotaDecimal := decimal.NewFromFloat(priceAmount).
 		Mul(decimal.NewFromFloat(quotaPerUnit)).
 		Ceil()
-	quota, clamp := common.QuotaFromDecimalChecked(quotaDecimal)
-	if clamp != nil {
-		return 0, clamp
-	}
-	return quota, nil
+	return common.WalletQuotaFromDecimalStrict(quotaDecimal)
 }
 
 // PurchaseSubscriptionWithBalance creates a subscription by deducting the user's wallet quota.
