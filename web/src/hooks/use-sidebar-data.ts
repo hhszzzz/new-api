@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import {
   Activity,
   Box,
+  Boxes,
   CreditCard,
   FileText,
   FlaskConical,
@@ -44,6 +45,7 @@ import {
   ADMIN_PERMISSION_RESOURCES,
 } from '@/lib/admin-permissions'
 import { ROLE } from '@/lib/roles'
+import { useAuthStore } from '@/stores/auth-store'
 
 /**
  * Root navigation groups for the application sidebar.
@@ -53,6 +55,9 @@ import { ROLE } from '@/lib/roles'
  */
 export function useSidebarData(): SidebarData {
   const { t } = useTranslation()
+  const canAccessAccountPool = useAuthStore(
+    (state) => state.auth.user?.permissions?.account_pool === true
+  )
 
   return {
     navGroups: [
@@ -81,6 +86,15 @@ export function useSidebarData(): SidebarData {
             url: '/dashboard/overview',
             icon: Activity,
           },
+          ...(canAccessAccountPool
+            ? [
+                {
+                  title: t('Account Pool'),
+                  url: '/account-pool',
+                  icon: Boxes,
+                },
+              ]
+            : []),
           {
             title: t('Dashboard'),
             url: '/dashboard/models',

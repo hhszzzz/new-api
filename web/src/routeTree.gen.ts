@@ -37,6 +37,7 @@ import { Route as PricingIndexRouteImport } from './routes/pricing/index'
 import { Route as RankingsIndexRouteImport } from './routes/rankings/index'
 import { Route as SetupIndexRouteImport } from './routes/setup/index'
 import { Route as authUserResetRouteImport } from './routes/(auth)/user/reset'
+import { Route as AuthenticatedAccountPoolIndexRouteImport } from './routes/_authenticated/account-pool/index'
 import { Route as AuthenticatedChannelsIndexRouteImport } from './routes/_authenticated/channels/index'
 import { Route as AuthenticatedChatChatIdRouteImport } from './routes/_authenticated/chat/$chatId'
 import { Route as AuthenticatedDashboardIndexRouteImport } from './routes/_authenticated/dashboard/index'
@@ -212,6 +213,12 @@ const authUserResetRoute = authUserResetRouteImport.update({
   path: '/user/reset',
   getParentRoute: () => authRouteRoute,
 } as any)
+const AuthenticatedAccountPoolIndexRoute =
+  AuthenticatedAccountPoolIndexRouteImport.update({
+    id: '/account-pool/',
+    path: '/account-pool/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedChannelsIndexRoute =
   AuthenticatedChannelsIndexRouteImport.update({
     id: '/channels/',
@@ -452,6 +459,7 @@ export interface FileRoutesByFullPath {
   '/models/$section': typeof AuthenticatedModelsSectionRoute
   '/prompt-audit/settings': typeof AuthenticatedPromptAuditSettingsRoute
   '/usage-logs/$section': typeof AuthenticatedUsageLogsSectionRoute
+  '/account-pool/': typeof AuthenticatedAccountPoolIndexRoute
   '/channels/': typeof AuthenticatedChannelsIndexRoute
   '/dashboard/': typeof AuthenticatedDashboardIndexRoute
   '/keys/': typeof AuthenticatedKeysIndexRoute
@@ -514,6 +522,7 @@ export interface FileRoutesByTo {
   '/models/$section': typeof AuthenticatedModelsSectionRoute
   '/prompt-audit/settings': typeof AuthenticatedPromptAuditSettingsRoute
   '/usage-logs/$section': typeof AuthenticatedUsageLogsSectionRoute
+  '/account-pool': typeof AuthenticatedAccountPoolIndexRoute
   '/channels': typeof AuthenticatedChannelsIndexRoute
   '/dashboard': typeof AuthenticatedDashboardIndexRoute
   '/keys': typeof AuthenticatedKeysIndexRoute
@@ -580,6 +589,7 @@ export interface FileRoutesById {
   '/_authenticated/models/$section': typeof AuthenticatedModelsSectionRoute
   '/_authenticated/prompt-audit/settings': typeof AuthenticatedPromptAuditSettingsRoute
   '/_authenticated/usage-logs/$section': typeof AuthenticatedUsageLogsSectionRoute
+  '/_authenticated/account-pool/': typeof AuthenticatedAccountPoolIndexRoute
   '/_authenticated/channels/': typeof AuthenticatedChannelsIndexRoute
   '/_authenticated/dashboard/': typeof AuthenticatedDashboardIndexRoute
   '/_authenticated/keys/': typeof AuthenticatedKeysIndexRoute
@@ -645,6 +655,7 @@ export interface FileRouteTypes {
     | '/models/$section'
     | '/prompt-audit/settings'
     | '/usage-logs/$section'
+    | '/account-pool/'
     | '/channels/'
     | '/dashboard/'
     | '/keys/'
@@ -707,6 +718,7 @@ export interface FileRouteTypes {
     | '/models/$section'
     | '/prompt-audit/settings'
     | '/usage-logs/$section'
+    | '/account-pool'
     | '/channels'
     | '/dashboard'
     | '/keys'
@@ -772,6 +784,7 @@ export interface FileRouteTypes {
     | '/_authenticated/models/$section'
     | '/_authenticated/prompt-audit/settings'
     | '/_authenticated/usage-logs/$section'
+    | '/_authenticated/account-pool/'
     | '/_authenticated/channels/'
     | '/_authenticated/dashboard/'
     | '/_authenticated/keys/'
@@ -1022,6 +1035,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/user/reset'
       preLoaderRoute: typeof authUserResetRouteImport
       parentRoute: typeof authRouteRoute
+    }
+    '/_authenticated/account-pool/': {
+      id: '/_authenticated/account-pool/'
+      path: '/account-pool'
+      fullPath: '/account-pool/'
+      preLoaderRoute: typeof AuthenticatedAccountPoolIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/channels/': {
       id: '/_authenticated/channels/'
@@ -1363,6 +1383,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedModelsSectionRoute: typeof AuthenticatedModelsSectionRoute
   AuthenticatedPromptAuditSettingsRoute: typeof AuthenticatedPromptAuditSettingsRoute
   AuthenticatedUsageLogsSectionRoute: typeof AuthenticatedUsageLogsSectionRoute
+  AuthenticatedAccountPoolIndexRoute: typeof AuthenticatedAccountPoolIndexRoute
   AuthenticatedChannelsIndexRoute: typeof AuthenticatedChannelsIndexRoute
   AuthenticatedDashboardIndexRoute: typeof AuthenticatedDashboardIndexRoute
   AuthenticatedKeysIndexRoute: typeof AuthenticatedKeysIndexRoute
@@ -1388,6 +1409,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedModelsSectionRoute: AuthenticatedModelsSectionRoute,
   AuthenticatedPromptAuditSettingsRoute: AuthenticatedPromptAuditSettingsRoute,
   AuthenticatedUsageLogsSectionRoute: AuthenticatedUsageLogsSectionRoute,
+  AuthenticatedAccountPoolIndexRoute: AuthenticatedAccountPoolIndexRoute,
   AuthenticatedChannelsIndexRoute: AuthenticatedChannelsIndexRoute,
   AuthenticatedDashboardIndexRoute: AuthenticatedDashboardIndexRoute,
   AuthenticatedKeysIndexRoute: AuthenticatedKeysIndexRoute,

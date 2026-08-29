@@ -21,6 +21,7 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/account_pool_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
@@ -496,7 +497,7 @@ func GetSelf(c *gin.Context) {
 	// The authenticated role is loaded from GetUserCache. It should equal the
 	// row role, but use it for capabilities so GetSelf and login/refresh remain
 	// consistent with the authorization decision made for this request.
-	permissions := calculateUserPermissions(userRole)
+	permissions := calculateUserPermissions(userRole, user.Groups)
 	permissions["admin_permissions"] = authz.Capabilities(id, userRole)
 	responseData["permissions"] = permissions
 
@@ -513,7 +514,7 @@ func GetSelf(c *gin.Context) {
 // administrator-only remarks.
 func buildSelfUserData(user *model.User) map[string]interface{} {
 	userSetting := user.GetSetting()
-	permissions := calculateUserPermissions(user.Role)
+	permissions := calculateUserPermissions(user.Role, user.Groups)
 	permissions["admin_permissions"] = authz.Capabilities(user.Id, user.Role)
 	return map[string]interface{}{
 		"id":                      user.Id,
@@ -551,8 +552,9 @@ func buildSelfUserData(user *model.User) map[string]interface{} {
 }
 
 // 计算用户权限的辅助函数
-func calculateUserPermissions(userRole int) map[string]interface{} {
+func calculateUserPermissions(userRole int, userGroups []string) map[string]interface{} {
 	permissions := map[string]interface{}{}
+	permissions["account_pool"] = account_pool_setting.CanAccess(userRole, userGroups)
 
 	// 根据用户角色计算权限
 	if userRole == common.RoleRootUser {
