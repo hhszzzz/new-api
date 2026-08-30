@@ -98,40 +98,41 @@ export function AccountPoolMobileList(props: AccountPoolMobileListProps) {
                     {account.email}
                   </div>
                 ) : null}
+                {account.stale ? (
+                  <div className='text-warning text-xs'>{t('Stale row')}</div>
+                ) : null}
               </div>
               <AccountStatusBadge status={account.status} />
             </header>
 
-            <div className='grid grid-cols-2 gap-3 text-xs'>
+            <div className='text-xs'>
               <div>
                 <div className='text-muted-foreground'>{t('Plan')}</div>
                 <Badge variant='secondary' className='mt-1 capitalize'>
                   {account.plan || t('Unknown')}
                 </Badge>
               </div>
-              <div className='text-right'>
-                <div className='text-muted-foreground'>{t('Updated')}</div>
-                <div className='mt-1 tabular-nums'>
-                  {new Date(account.updated_at).toLocaleString()}
-                </div>
-              </div>
             </div>
 
             <div className='space-y-4 border-t pt-4'>
-              <QuotaWindow
-                window={account.primary_window}
-                now={props.now}
-                label={t('5-hour quota')}
-                compact
-              />
-              <QuotaWindow
-                window={account.secondary_window}
-                now={props.now}
-                label={t(
-                  getAccountPoolSecondaryWindowLabel(account.secondary_window)
-                )}
-                compact
-              />
+              {account.primary_window || !account.secondary_window ? (
+                <QuotaWindow
+                  window={account.primary_window}
+                  now={props.now}
+                  label={t('5-hour quota')}
+                  compact
+                />
+              ) : null}
+              {account.secondary_window ? (
+                <QuotaWindow
+                  window={account.secondary_window}
+                  now={props.now}
+                  label={t(
+                    getAccountPoolSecondaryWindowLabel(account.secondary_window)
+                  )}
+                  compact
+                />
+              ) : null}
             </div>
           </article>
         )

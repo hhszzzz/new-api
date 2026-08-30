@@ -30,6 +30,16 @@ const apiMocks = vi.hoisted(() => ({
   getAccountPoolApiError: vi.fn(),
 }))
 
+const authMocks = vi.hoisted(() => ({
+  setUser: vi.fn(),
+  user: {
+    id: 1,
+    username: 'allowed-user',
+    role: 1,
+    permissions: { account_pool: true },
+  },
+}))
+
 vi.mock('../api', () => apiMocks)
 
 vi.mock('react-i18next', () => ({
@@ -40,7 +50,7 @@ vi.mock('react-i18next', () => ({
 
 vi.mock('@/stores/auth-store', () => ({
   useAuthStore: (selector: (state: unknown) => unknown) =>
-    selector({ auth: { user: { role: 1 } } }),
+    selector({ auth: { user: authMocks.user, setUser: authMocks.setUser } }),
 }))
 
 vi.mock('@/components/layout', () => {
@@ -100,6 +110,7 @@ describe('account pool page states', () => {
       code: error?.code ?? '',
       message: error?.message ?? '',
     }))
+    authMocks.setUser.mockReset()
   })
 
   test('keeps the loading state visible until the first snapshot arrives', () => {
@@ -145,5 +156,21 @@ describe('account pool page states', () => {
     renderAccountPool()
 
     expect(await screen.findByText(title)).toBeInTheDocument()
+  })
+
+  test('turns an authoritative forbidden response into an access-denied state', async () => {
+    apiMocks.getAccountPool.mockRejectedValue({
+      code: 'account_pool_forbidden',
+    })
+    renderAccountPool()
+
+    expect(await screen.findByText('Access Forbidden')).toBeInTheDocument()
+    expect(authMocks.setUser).toHaveBeenCalledWith({
+      ...authMocks.user,
+      permissions: { account_pool: false },
+    })
+    expect(
+      screen.queryByText('Account pool is temporarily unavailable')
+    ).not.toBeInTheDocument()
   })
 })

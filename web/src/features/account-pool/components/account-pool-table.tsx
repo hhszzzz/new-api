@@ -84,6 +84,9 @@ export function AccountPoolTable(props: AccountPoolTableProps) {
                 {row.original.email}
               </div>
             ) : null}
+            {row.original.stale ? (
+              <div className='text-warning text-xs'>{t('Stale row')}</div>
+            ) : null}
           </div>
         ),
       },
@@ -131,19 +134,6 @@ export function AccountPoolTable(props: AccountPoolTableProps) {
                 ).toLocaleString()
               : t('Unknown')}
           </span>
-        ),
-      },
-      {
-        accessorKey: 'updated_at',
-        header: t('Updated'),
-        size: 150,
-        cell: ({ row }) => (
-          <div className='text-muted-foreground text-xs tabular-nums'>
-            <div>{new Date(row.original.updated_at).toLocaleString()}</div>
-            {row.original.stale ? (
-              <span className='text-warning'>{t('Stale row')}</span>
-            ) : null}
-          </div>
         ),
       },
     ],
@@ -205,20 +195,30 @@ export function AccountPoolTable(props: AccountPoolTableProps) {
               </SelectContent>
             </Select>
           </div>
-          <Button
-            type='button'
-            size='sm'
-            variant='outline'
-            onClick={props.onRefresh}
-            disabled={props.refreshDisabled || props.isRefreshing}
-            aria-label={props.refreshLabel}
-          >
-            <RefreshCw
-              className={cn('size-4', props.isRefreshing && 'animate-spin')}
-              aria-hidden='true'
-            />
-            {props.refreshLabel}
-          </Button>
+          <div className='flex items-center gap-3'>
+            {props.snapshot?.updated_at ? (
+              <div className='text-muted-foreground text-xs tabular-nums'>
+                <span>{t('Updated')}: </span>
+                <time dateTime={props.snapshot.updated_at}>
+                  {new Date(props.snapshot.updated_at).toLocaleString()}
+                </time>
+              </div>
+            ) : null}
+            <Button
+              type='button'
+              size='sm'
+              variant='outline'
+              onClick={props.onRefresh}
+              disabled={props.refreshDisabled || props.isRefreshing}
+              aria-label={props.refreshLabel}
+            >
+              <RefreshCw
+                className={cn('size-4', props.isRefreshing && 'animate-spin')}
+                aria-hidden='true'
+              />
+              {props.refreshLabel}
+            </Button>
+          </div>
         </div>
       }
       mobile={

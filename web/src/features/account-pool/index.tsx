@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { AlertTriangle, Database, Settings2 } from 'lucide-react'
+import { AlertTriangle, Database, Settings2, ShieldX } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -51,38 +51,48 @@ import {
 
 const ACCOUNT_POOL_QUERY_KEY = ['account-pool'] as const
 
-function AccountPoolUnavailable(props: { notConfigured: boolean }) {
+type AccountPoolUnavailableReason =
+  | 'forbidden'
+  | 'not-configured'
+  | 'unavailable'
+
+function AccountPoolUnavailable(props: {
+  reason: AccountPoolUnavailableReason
+}) {
   const { t } = useTranslation()
   const isRoot = useAuthStore(
     (state) => state.auth.user?.role === ROLE.SUPER_ADMIN
   )
+  const forbidden = props.reason === 'forbidden'
+  const notConfigured = props.reason === 'not-configured'
+  let icon = <Database className='size-6' />
+  let title = t('Account pool is temporarily unavailable')
+  let description = t(
+    'No quota snapshot is available yet. Try again after the upstream service recovers.'
+  )
+  if (notConfigured) {
+    icon = <Settings2 className='size-6' />
+    title = t('Account pool is not configured')
+    description = t(
+      'The CLIProxyAPI management connection must be configured by the deployment administrator.'
+    )
+  }
+  if (forbidden) {
+    icon = <ShieldX className='size-6' />
+    title = t('Access Forbidden')
+    description = `${t("You don't have necessary permission")} ${t(
+      'to view this resource.'
+    )}`
+  }
   return (
     <div className='bg-card flex min-h-72 items-center justify-center rounded-xl border p-6'>
       <Empty>
         <EmptyHeader>
-          <EmptyMedia variant='icon'>
-            {props.notConfigured ? (
-              <Settings2 className='size-6' />
-            ) : (
-              <Database className='size-6' />
-            )}
-          </EmptyMedia>
-          <EmptyTitle>
-            {props.notConfigured
-              ? t('Account pool is not configured')
-              : t('Account pool is temporarily unavailable')}
-          </EmptyTitle>
-          <EmptyDescription>
-            {props.notConfigured
-              ? t(
-                  'The CLIProxyAPI management connection must be configured by the deployment administrator.'
-                )
-              : t(
-                  'No quota snapshot is available yet. Try again after the upstream service recovers.'
-                )}
-          </EmptyDescription>
+          <EmptyMedia variant='icon'>{icon}</EmptyMedia>
+          <EmptyTitle>{title}</EmptyTitle>
+          <EmptyDescription>{description}</EmptyDescription>
         </EmptyHeader>
-        {props.notConfigured && isRoot ? (
+        {notConfigured && isRoot ? (
           <EmptyContent>
             <Button
               variant='outline'
@@ -105,6 +115,8 @@ function AccountPoolUnavailable(props: { notConfigured: boolean }) {
 export function AccountPool() {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
+  const currentUser = useAuthStore((state) => state.auth.user)
+  const setUser = useAuthStore((state) => state.auth.setUser)
   const [now, setNow] = useState(() => Date.now())
   const accountPoolQuery = useQuery({
     queryKey: ACCOUNT_POOL_QUERY_KEY,
@@ -186,6 +198,33 @@ export function AccountPool() {
 
   const apiError = getAccountPoolApiError(accountPoolQuery.error)
   const hasFatalError = accountPoolQuery.isError && !snapshot
+  const accessForbidden =
+    hasFatalError && apiError.code === 'account_pool_forbidden'
+  let unavailableReason: AccountPoolUnavailableReason = 'unavailable'
+  if (apiError.code === 'account_pool_not_configured') {
+    unavailableReason = 'not-configured'
+  }
+  if (accessForbidden) {
+    unavailableReason = 'forbidden'
+  }
+
+  useEffect(() => {
+    if (
+      !accessForbidden ||
+      !currentUser ||
+      currentUser.permissions?.account_pool === false
+    ) {
+      return
+    }
+    setUser({
+      ...currentUser,
+      permissions: {
+        ...currentUser.permissions,
+        account_pool: false,
+      },
+    })
+  }, [accessForbidden, currentUser, setUser])
+
   let statusAlert = null
   if (snapshot?.partial) {
     statusAlert = (
@@ -219,9 +258,7 @@ export function AccountPool() {
           {statusAlert}
 
           {hasFatalError ? (
-            <AccountPoolUnavailable
-              notConfigured={apiError.code === 'account_pool_not_configured'}
-            />
+            <AccountPoolUnavailable reason={unavailableReason} />
           ) : (
             <div className='min-h-0 flex-1'>
               <AccountPoolTable

@@ -691,12 +691,9 @@ func buildAccountPoolAccount(file map[string]interface{}, idSecret string, now t
 		PublicID:                accountPoolPublicID(idSecret, name, authIndex),
 		Email:                   findAccountPoolString(file, "email"),
 		Status:                  "available",
-		Plan:                    strings.ToLower(plan),
+		Plan:                    normalizeAccountPoolPlan(plan),
 		SubscriptionActiveUntil: subscriptionActiveUntil,
 		UpdatedAt:               now,
-	}
-	if account.Plan == "" {
-		account.Plan = "unknown"
 	}
 	if firstAccountPoolBool(file, "disabled") {
 		account.Status = "disabled"
@@ -725,7 +722,7 @@ func buildAccountPoolAccount(file map[string]interface{}, idSecret string, now t
 func applyCodexUsagePayload(account *accountPoolAccount, payload map[string]interface{}, now time.Time) {
 	plan := firstAccountPoolString(payload, "plan_type", "planType")
 	if plan != "" {
-		account.Plan = plan
+		account.Plan = normalizeAccountPoolPlan(plan)
 	}
 	rateLimit := firstAccountPoolMap(payload, "rate_limit", "rateLimit")
 	if rateLimit == nil {
@@ -735,11 +732,7 @@ func applyCodexUsagePayload(account *accountPoolAccount, payload map[string]inte
 	secondary := firstAccountPoolMap(rateLimit, "secondary_window", "secondaryWindow")
 	primaryWindow := parseAccountPoolWindow(primary, rateLimit, now)
 	secondaryWindow := parseAccountPoolWindow(secondary, rateLimit, now)
-	if primaryWindow != nil && secondaryWindow != nil {
-		if isAccountPoolFiveHourWindow(secondaryWindow) && !isAccountPoolFiveHourWindow(primaryWindow) {
-			primaryWindow, secondaryWindow = secondaryWindow, primaryWindow
-		}
-	}
+	primaryWindow, secondaryWindow = normalizeAccountPoolQuotaWindows(primaryWindow, secondaryWindow)
 	account.PrimaryWindow = primaryWindow
 	account.SecondaryWindow = secondaryWindow
 }
@@ -1150,8 +1143,35 @@ func validAccountPoolTime(value time.Time) *time.Time {
 	return &value
 }
 
-func isAccountPoolFiveHourWindow(window *AccountPoolWindow) bool {
-	return window != nil && window.LimitWindowSeconds != nil && *window.LimitWindowSeconds == 18000
+func normalizeAccountPoolPlan(plan string) string {
+	normalized := strings.ToLower(strings.TrimSpace(plan))
+	compact := strings.NewReplacer("-", "", "_", "", " ", "").Replace(normalized)
+	if compact == "prolite" {
+		return "Pro 5x"
+	}
+	if normalized == "" {
+		return "unknown"
+	}
+	return normalized
+}
+
+func normalizeAccountPoolQuotaWindows(primary *AccountPoolWindow, secondary *AccountPoolWindow) (*AccountPoolWindow, *AccountPoolWindow) {
+	if isAccountPoolLongWindow(primary) {
+		if secondary == nil {
+			return nil, primary
+		}
+		if !isAccountPoolLongWindow(secondary) {
+			return secondary, primary
+		}
+	}
+	if primary == nil && secondary != nil && !isAccountPoolLongWindow(secondary) {
+		return secondary, nil
+	}
+	return primary, secondary
+}
+
+func isAccountPoolLongWindow(window *AccountPoolWindow) bool {
+	return window != nil && window.LimitWindowSeconds != nil && *window.LimitWindowSeconds >= int64((24*time.Hour)/time.Second)
 }
 
 func cloneAccountPoolSnapshot(snapshot *accountPoolSnapshot) *accountPoolSnapshot {

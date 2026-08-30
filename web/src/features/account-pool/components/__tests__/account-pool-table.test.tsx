@@ -74,8 +74,8 @@ function account(email?: string): AccountPoolAccount {
       reset_at: '2026-09-05T12:00:00Z',
       limit_window_seconds: 604800,
     },
-    updated_at: '2026-08-29T12:00:00Z',
-    stale: false,
+    updated_at: '2026-08-29T11:55:00Z',
+    stale: true,
   }
 }
 
@@ -93,7 +93,7 @@ function snapshot(item: AccountPoolAccount): AccountPoolSnapshot {
 
 describe('account pool table', () => {
   test('exposes only read-only columns and one global refresh control', () => {
-    render(
+    const { container } = render(
       <AccountPoolTable
         snapshot={snapshot(account('admin@example.com'))}
         isLoading={false}
@@ -107,8 +107,15 @@ describe('account pool table', () => {
     )
 
     expect(screen.getByTestId('column-order')).toHaveTextContent(
-      'account,status,plan,primary-window,secondary-window,subscription_active_until,updated_at'
+      'account,status,plan,primary-window,secondary-window,subscription_active_until'
     )
+    expect(
+      container.querySelector('time[datetime="2026-08-29T12:00:00Z"]')
+    ).toBeInTheDocument()
+    expect(
+      container.querySelector('time[datetime="2026-08-29T11:55:00Z"]')
+    ).not.toBeInTheDocument()
+    expect(screen.getByText('Stale row')).toBeInTheDocument()
     expect(screen.getAllByRole('button', { name: 'Refresh all' })).toHaveLength(
       1
     )
@@ -146,6 +153,29 @@ describe('account pool table', () => {
     )
     expect(screen.queryByText('admin@example.com')).not.toBeInTheDocument()
     expect(screen.getByText('Codex #1')).toBeInTheDocument()
+  })
+
+  test('renders a weekly-only Pro account without a 5-hour quota section', () => {
+    const weeklyOnly = account()
+    weeklyOnly.plan = 'Pro 5x'
+    weeklyOnly.primary_window = null
+
+    render(
+      <AccountPoolTable
+        snapshot={snapshot(weeklyOnly)}
+        isLoading={false}
+        isFetching={false}
+        isRefreshing={false}
+        refreshDisabled={false}
+        refreshLabel='Refresh all'
+        now={Date.parse('2026-08-29T12:00:00Z')}
+        onRefresh={vi.fn()}
+      />
+    )
+
+    expect(screen.getByText('Pro 5x')).toBeInTheDocument()
+    expect(screen.queryByText('5-hour quota')).not.toBeInTheDocument()
+    expect(screen.getByText('Weekly quota')).toBeInTheDocument()
   })
 
   test('renders loading skeletons and the empty-pool state', () => {

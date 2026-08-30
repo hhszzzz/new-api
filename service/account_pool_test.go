@@ -199,6 +199,52 @@ func TestAccountPoolManagerUsesOnlyFixedReadOnlyManagementContract(t *testing.T)
 	assert.Contains(t, string(adminJSON), `"email":"admin@example.com"`)
 }
 
+func TestApplyCodexUsagePayloadNormalizesProliteWeeklyOnlyQuota(t *testing.T) {
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	account := accountPoolAccount{}
+
+	applyCodexUsagePayload(&account, map[string]interface{}{
+		"plan_type": "Prolite",
+		"rate_limit": map[string]interface{}{
+			"primary_window": map[string]interface{}{
+				"used_percent":         float64(25),
+				"limit_window_seconds": float64(604800),
+			},
+		},
+	}, now)
+
+	assert.Equal(t, "Pro 5x", account.Plan)
+	assert.Nil(t, account.PrimaryWindow)
+	require.NotNil(t, account.SecondaryWindow)
+	require.NotNil(t, account.SecondaryWindow.LimitWindowSeconds)
+	assert.Equal(t, int64(604800), *account.SecondaryWindow.LimitWindowSeconds)
+}
+
+func TestApplyCodexUsagePayloadKeepsShortQuotaInPrimarySlot(t *testing.T) {
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	account := accountPoolAccount{}
+
+	applyCodexUsagePayload(&account, map[string]interface{}{
+		"rate_limit": map[string]interface{}{
+			"primary_window": map[string]interface{}{
+				"used_percent":         float64(25),
+				"limit_window_seconds": float64(604800),
+			},
+			"secondary_window": map[string]interface{}{
+				"used_percent":         float64(50),
+				"limit_window_seconds": float64(18000),
+			},
+		},
+	}, now)
+
+	require.NotNil(t, account.PrimaryWindow)
+	require.NotNil(t, account.PrimaryWindow.LimitWindowSeconds)
+	assert.Equal(t, int64(18000), *account.PrimaryWindow.LimitWindowSeconds)
+	require.NotNil(t, account.SecondaryWindow)
+	require.NotNil(t, account.SecondaryWindow.LimitWindowSeconds)
+	assert.Equal(t, int64(604800), *account.SecondaryWindow.LimitWindowSeconds)
+}
+
 func TestAccountPoolPublicIDDoesNotExposeCredentialIdentity(t *testing.T) {
 	credentialName := "codex-admin@example.com.json"
 	authIndex := "auth-index-secret"
