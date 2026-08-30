@@ -33,6 +33,7 @@ import {
 } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 
+import { formatAccountPoolCountdown } from '../lib/quota'
 import type { AccountPoolAccount, AccountPoolSnapshot } from '../types'
 import { AccountPoolMobileList } from './account-pool-mobile-list'
 import { AccountStatusBadge } from './account-status-badge'
@@ -67,6 +68,10 @@ export function AccountPoolTable(props: AccountPoolTableProps) {
     unavailable: t('Unavailable'),
     disabled: t('Disabled'),
   }[statusFilter]
+  const nextRefreshCountdown = formatAccountPoolCountdown(
+    props.snapshot?.next_refresh_at ?? null,
+    props.now
+  )
 
   const columns = useMemo<ColumnDef<AccountPoolAccount, unknown>[]>(
     () => [
@@ -195,7 +200,7 @@ export function AccountPoolTable(props: AccountPoolTableProps) {
               </SelectContent>
             </Select>
           </div>
-          <div className='flex items-center gap-3'>
+          <div className='flex flex-wrap items-center justify-end gap-x-3 gap-y-1'>
             {props.snapshot?.updated_at ? (
               <div className='text-muted-foreground text-xs tabular-nums'>
                 <span>{t('Updated')}: </span>
@@ -203,6 +208,16 @@ export function AccountPoolTable(props: AccountPoolTableProps) {
                   {new Date(props.snapshot.updated_at).toLocaleString()}
                 </time>
               </div>
+            ) : null}
+            {props.snapshot?.next_refresh_at && nextRefreshCountdown ? (
+              <time
+                dateTime={props.snapshot.next_refresh_at}
+                className='text-muted-foreground text-xs tabular-nums'
+              >
+                {t('Next refresh in {{time}}', {
+                  time: nextRefreshCountdown,
+                })}
+              </time>
             ) : null}
             <Button
               type='button'

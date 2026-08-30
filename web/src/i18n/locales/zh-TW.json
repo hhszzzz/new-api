@@ -3299,6 +3299,7 @@
     "Next": "下一步",
     "Next branch": "下一個分支",
     "Next page": "下一頁",
+    "Next refresh in {{time}}": "下次重新整理：{{time}}",
     "Next reset": "下一次重置",
     "Next status change": "下次狀態變更",
     "Next status change:": "下次狀態變更：",

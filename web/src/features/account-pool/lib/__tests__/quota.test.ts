@@ -29,6 +29,9 @@ describe('account pool quota formatting', () => {
     expect(formatAccountPoolCountdown('2026-08-29T13:02:03Z', now)).toBe(
       '1h 2m'
     )
+    expect(formatAccountPoolCountdown('2026-08-29T12:04:05Z', now)).toBe(
+      '4m 5s'
+    )
     expect(formatAccountPoolCountdown('2026-08-29T11:59:59Z', now)).toBe('0s')
   })
 

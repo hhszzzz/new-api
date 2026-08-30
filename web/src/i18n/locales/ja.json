@@ -3299,6 +3299,7 @@
     "Next": "次へ",
     "Next branch": "次のブランチ",
     "Next page": "次のページ",
+    "Next refresh in {{time}}": "次回更新まで {{time}}",
     "Next reset": "次のリセット",
     "Next status change": "次回の状態変更",
     "Next status change:": "次回の状態変更：",

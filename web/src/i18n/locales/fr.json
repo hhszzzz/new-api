@@ -3299,6 +3299,7 @@
     "Next": "Suivant",
     "Next branch": "Branche suivante",
     "Next page": "Page suivante",
+    "Next refresh in {{time}}": "Prochaine actualisation dans {{time}}",
     "Next reset": "Prochaine réinitialisation",
     "Next status change": "Prochain changement d'état",
     "Next status change:": "Prochain changement d'état :",

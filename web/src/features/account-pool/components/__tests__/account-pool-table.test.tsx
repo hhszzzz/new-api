@@ -26,7 +26,8 @@ import { AccountPoolTable } from '../account-pool-table'
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string) => key,
+    t: (key: string, values?: Record<string, unknown>) =>
+      key.replace('{{time}}', String(values?.time ?? '{{time}}')),
   }),
 }))
 
@@ -87,7 +88,7 @@ function account(email?: string): AccountPoolAccount {
 function snapshot(item: AccountPoolAccount): AccountPoolSnapshot {
   return {
     updated_at: '2026-08-29T12:00:00Z',
-    next_refresh_at: '2026-08-29T12:05:00Z',
+    next_refresh_at: '2026-08-29T12:04:05Z',
     manual_refresh_available_at: '2026-08-29T12:01:00Z',
     stale: false,
     partial: false,
@@ -122,6 +123,7 @@ describe('account pool table', () => {
     expect(
       container.querySelector('time[datetime="2026-08-29T11:55:00Z"]')
     ).not.toBeInTheDocument()
+    expect(screen.getByText('Next refresh in 4m 5s')).toBeInTheDocument()
     expect(screen.getByText('Stale row')).toBeInTheDocument()
     expect(screen.getAllByRole('button', { name: 'Refresh all' })).toHaveLength(
       1
