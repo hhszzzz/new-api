@@ -251,27 +251,25 @@ export function AccountPool() {
   }
 
   return (
-    <SectionPageLayout fixedContent>
+    <SectionPageLayout>
       <SectionPageLayout.Title>{t('Account Pool')}</SectionPageLayout.Title>
       <SectionPageLayout.Content>
-        <div className='flex h-full min-h-0 flex-col gap-2.5'>
+        <div className='space-y-2.5'>
           {statusAlert}
 
           {hasFatalError ? (
             <AccountPoolUnavailable reason={unavailableReason} />
           ) : (
-            <div className='min-h-0 flex-1'>
-              <AccountPoolTable
-                snapshot={snapshot}
-                isLoading={accountPoolQuery.isLoading && !snapshot}
-                isFetching={accountPoolQuery.isFetching}
-                isRefreshing={refreshMutation.isPending}
-                refreshDisabled={refreshDisabled}
-                refreshLabel={refreshLabel}
-                now={now}
-                onRefresh={() => refreshMutation.mutate()}
-              />
-            </div>
+            <AccountPoolTable
+              snapshot={snapshot}
+              isLoading={accountPoolQuery.isLoading && !snapshot}
+              isFetching={accountPoolQuery.isFetching}
+              isRefreshing={refreshMutation.isPending}
+              refreshDisabled={refreshDisabled}
+              refreshLabel={refreshLabel}
+              now={now}
+              onRefresh={() => refreshMutation.mutate()}
+            />
           )}
         </div>
       </SectionPageLayout.Content>

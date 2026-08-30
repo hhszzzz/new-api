@@ -149,6 +149,6 @@ func normalizeSetting(setting Setting) Setting {
 
 func copySetting(setting Setting) *Setting {
 	copy := setting
-	copy.AllowedGroups = append([]string(nil), setting.AllowedGroups...)
+	copy.AllowedGroups = append([]string{}, setting.AllowedGroups...)
 	return &copy
 }

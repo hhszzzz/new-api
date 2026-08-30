@@ -145,6 +145,7 @@ export function AccountPoolTable(props: AccountPoolTableProps) {
     columns,
     totalCount: filteredAccounts.length,
     tableStateStorageKey: 'account-pool-table',
+    columnSizingStorageKey: 'account-pool-table:v2:column-sizing',
     initialPagination: { pageIndex: 0, pageSize: 10 },
     enableRowSelection: false,
     enableSorting: false,
@@ -161,10 +162,9 @@ export function AccountPoolTable(props: AccountPoolTableProps) {
       emptyDescription={t(
         'Codex accounts will appear after the first successful sync.'
       )}
-      fixedHeight
+      fixedHeight={false}
       applyHeaderSize
       skeletonKeyPrefix='account-pool'
-      className='h-full min-h-0'
       tableClassName='[&_[data-slot=table-header]]:sticky [&_[data-slot=table-header]]:top-0 [&_[data-slot=table-header]]:z-10'
       toolbar={
         <div className='bg-card flex flex-wrap items-center justify-between gap-2 rounded-xl border px-3 py-2.5 shadow-xs'>

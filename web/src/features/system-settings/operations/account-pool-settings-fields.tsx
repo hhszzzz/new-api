@@ -134,7 +134,7 @@ export function AccountPoolSettingsFields(
                   label: group,
                   value: group,
                 }))}
-                selected={field.value}
+                selected={field.value ?? []}
                 onChange={field.onChange}
                 placeholder={t('Select groups')}
                 disabled={props.disabled}

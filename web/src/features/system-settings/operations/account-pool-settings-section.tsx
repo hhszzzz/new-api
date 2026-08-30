@@ -61,7 +61,7 @@ function toFormValues(
 ): AccountPoolSettingsValues {
   return {
     enabled: data.enabled,
-    allowed_groups: data.allowed_groups,
+    allowed_groups: data.allowed_groups ?? [],
     regular_refresh_seconds: data.regular_refresh_seconds,
     near_reset_threshold_seconds: data.near_reset_threshold_seconds,
     near_reset_refresh_seconds: data.near_reset_refresh_seconds,

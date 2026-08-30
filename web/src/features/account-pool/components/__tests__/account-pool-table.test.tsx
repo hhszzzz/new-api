@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import type { Table } from '@tanstack/react-table'
 import { render, screen } from '@testing-library/react'
 import type { ReactNode } from 'react'
-import { describe, expect, test, vi } from 'vitest'
+import { beforeEach, describe, expect, test, vi } from 'vitest'
 
 import type { AccountPoolAccount, AccountPoolSnapshot } from '../../types'
 import { AccountPoolTable } from '../account-pool-table'
@@ -39,6 +39,7 @@ vi.mock('@/components/data-table', async (importOriginal) => {
       table: Table<AccountPoolAccount>
       toolbar?: ReactNode
       mobile?: ReactNode
+      fixedHeight?: boolean
     }) => (
       <>
         <output data-testid='column-order'>
@@ -47,6 +48,10 @@ vi.mock('@/components/data-table', async (importOriginal) => {
             .map((column) => column.id)
             .join(',')}
         </output>
+        <output data-testid='column-sizing'>
+          {JSON.stringify(props.table.getState().columnSizing)}
+        </output>
+        <output data-testid='fixed-height'>{String(props.fixedHeight)}</output>
         {props.toolbar}
         {props.mobile}
       </>
@@ -92,6 +97,8 @@ function snapshot(item: AccountPoolAccount): AccountPoolSnapshot {
 }
 
 describe('account pool table', () => {
+  beforeEach(() => window.localStorage.clear())
+
   test('exposes only read-only columns and one global refresh control', () => {
     const { container } = render(
       <AccountPoolTable
@@ -153,6 +160,37 @@ describe('account pool table', () => {
     )
     expect(screen.queryByText('admin@example.com')).not.toBeInTheDocument()
     expect(screen.getByText('Codex #1')).toBeInTheDocument()
+  })
+
+  test('does not restore the obsolete seven-column sizing cache', () => {
+    window.localStorage.setItem(
+      'account-pool-table:column-sizing',
+      JSON.stringify({
+        account: 190,
+        status: 100,
+        plan: 90,
+        'primary-window': 220,
+        'secondary-window': 220,
+        subscription_active_until: 150,
+        updated_at: 150,
+      })
+    )
+
+    render(
+      <AccountPoolTable
+        snapshot={snapshot(account())}
+        isLoading={false}
+        isFetching={false}
+        isRefreshing={false}
+        refreshDisabled={false}
+        refreshLabel='Refresh all'
+        now={Date.parse('2026-08-29T12:00:00Z')}
+        onRefresh={vi.fn()}
+      />
+    )
+
+    expect(screen.getByTestId('column-sizing')).toHaveTextContent('{}')
+    expect(screen.getByTestId('fixed-height')).toHaveTextContent('false')
   })
 
   test('renders a weekly-only Pro account without a 5-hour quota section', () => {

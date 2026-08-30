@@ -71,6 +71,30 @@ func TestGetAccountPoolSettingsNeverReturnsManagementConnectionValues(t *testing
 	assert.NotContains(t, recorder.Body.String(), "internal-sensitive-host")
 }
 
+func TestGetAccountPoolSettingsSerializesEmptyAllowedGroupsAsArray(t *testing.T) {
+	previous := account_pool_setting.GetSettingSnapshot()
+	require.NotNil(t, previous)
+	t.Cleanup(func() { previous.PublishConfig() })
+	setting := account_pool_setting.Setting{
+		Enabled:                   true,
+		AllowedGroups:             []string{},
+		RegularRefreshSeconds:     300,
+		NearResetThresholdSeconds: 600,
+		NearResetRefreshSeconds:   60,
+		PostResetDelaySeconds:     10,
+		ManualRefreshCooldown:     60,
+	}
+	setting.PublishConfig()
+
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	GetAccountPoolSettings(context)
+
+	assert.Equal(t, 200, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), `"allowed_groups":[]`)
+	assert.NotContains(t, recorder.Body.String(), `"allowed_groups":null`)
+}
+
 func TestSelfUserDataIncludesServerCalculatedAccountPoolCapability(t *testing.T) {
 	publishAccountPoolControllerSetting(t)
 
