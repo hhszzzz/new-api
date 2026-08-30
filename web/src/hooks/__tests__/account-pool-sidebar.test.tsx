@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { act, renderHook } from '@testing-library/react'
+import { Timeline } from 'lucide-react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 
 import { useSidebarData } from '@/hooks/use-sidebar-data'
@@ -29,13 +30,16 @@ vi.mock('react-i18next', () => ({
 afterEach(() => useAuthStore.getState().auth.reset())
 
 describe('account pool sidebar capability', () => {
-  test('adds the account pool after overview only for capable users', () => {
+  test('adds a resources group between personal and admin only for capable users', () => {
     const { result } = renderHook(() => useSidebarData())
     const generalBefore = result.current.navGroups.find(
       (group) => group.id === 'general'
     )
     expect(
       generalBefore?.items.some((item) => item.url === '/account-pool')
+    ).toBe(false)
+    expect(
+      result.current.navGroups.some((group) => group.id === 'resources')
     ).toBe(false)
 
     act(() => {
@@ -47,14 +51,25 @@ describe('account pool sidebar capability', () => {
       })
     })
 
-    const generalAfter = result.current.navGroups.find(
-      (group) => group.id === 'general'
-    )
-    const urls = generalAfter?.items.flatMap((item) => item.url ?? []) ?? []
-    expect(urls.slice(0, 3)).toEqual([
-      '/dashboard/overview',
-      '/account-pool',
-      '/dashboard/models',
+    const groups = result.current.navGroups
+    const generalAfter = groups.find((group) => group.id === 'general')
+    const resources = groups.find((group) => group.id === 'resources')
+    expect(
+      generalAfter?.items.some((item) => item.url === '/account-pool')
+    ).toBe(false)
+    expect(groups.map((group) => group.id)).toEqual([
+      'chat',
+      'general',
+      'personal',
+      'resources',
+      'admin',
     ])
+    expect(resources?.title).toBe('Resources')
+    expect(resources?.items).toHaveLength(1)
+    expect(resources?.items[0]).toMatchObject({
+      title: 'Account Pool',
+      url: '/account-pool',
+      icon: Timeline,
+    })
   })
 })

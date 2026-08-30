@@ -19,7 +19,6 @@ For commercial licensing, please contact support@quantumnous.com
 import {
   Activity,
   Box,
-  Boxes,
   CreditCard,
   FileText,
   FlaskConical,
@@ -34,6 +33,7 @@ import {
   Settings,
   ShieldCheck,
   Ticket,
+  Timeline,
   User,
   Users,
   Wallet,
@@ -87,15 +87,6 @@ export function useSidebarData(): SidebarData {
             url: '/dashboard/overview',
             icon: Activity,
           },
-          ...(canAccessAccountPool
-            ? [
-                {
-                  title: t('Account Pool'),
-                  url: '/account-pool',
-                  icon: Boxes,
-                },
-              ]
-            : []),
           {
             title: t('Dashboard'),
             url: '/dashboard/models',
@@ -136,6 +127,21 @@ export function useSidebarData(): SidebarData {
           },
         ],
       },
+      ...(canAccessAccountPool
+        ? [
+            {
+              id: 'resources',
+              title: t('Resources'),
+              items: [
+                {
+                  title: t('Account Pool'),
+                  url: '/account-pool',
+                  icon: Timeline,
+                },
+              ],
+            },
+          ]
+        : []),
       {
         id: 'admin',
         title: t('Admin'),
