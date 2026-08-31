@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 export type AccountPoolStatus =
   | 'available'
+  | 'limited'
   | 'disabled'
   | 'unavailable'
   | 'error'
@@ -52,6 +53,7 @@ export type AccountPoolSnapshot = {
   summary: {
     total: number
     available: number
+    limited: number
     error: number
   }
   accounts: AccountPoolAccount[]

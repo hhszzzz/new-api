@@ -6376,7 +6376,8 @@
     "Versions": "Versions",
     "View the complete details for this task": "View the complete details for this task",
     "When disabled, all uploaded custom plugins are ignored and every platform falls back to its built-in factory plugin.": "When disabled, all uploaded custom plugins are ignored and every platform falls back to its built-in factory plugin.",
-    "When disabled, the entire task plugin system stops serving, including factory and custom plugins.": "When disabled, the entire task plugin system stops serving, including factory and custom plugins."
+    "When disabled, the entire task plugin system stops serving, including factory and custom plugins.": "When disabled, the entire task plugin system stops serving, including factory and custom plugins.",
+    "Quota exhausted": "Quota exhausted"
   },
   "Require successful Dify workflow": "Require successful Dify workflow",
   "Require a successful Dify workflow status, a non-empty answer, and upstream token usage before billing.": "Require a successful Dify workflow status, a non-empty answer, and upstream token usage before billing."

@@ -6376,7 +6376,8 @@
     "Versions": "Версии",
     "View the complete details for this task": "Просмотреть полные сведения об этой задаче",
     "When disabled, all uploaded custom plugins are ignored and every platform falls back to its built-in factory plugin.": "При отключении все загруженные пользовательские плагины игнорируются, а каждая платформа использует встроенный заводской плагин.",
-    "When disabled, the entire task plugin system stops serving, including factory and custom plugins.": "При отключении вся система плагинов задач перестаёт обслуживать запросы, включая заводские и пользовательские плагины."
+    "When disabled, the entire task plugin system stops serving, including factory and custom plugins.": "При отключении вся система плагинов задач перестаёт обслуживать запросы, включая заводские и пользовательские плагины.",
+    "Quota exhausted": "Квота исчерпана"
   },
   "Require successful Dify workflow": "Требовать успешного выполнения рабочего процесса Dify",
   "Require a successful Dify workflow status, a non-empty answer, and upstream token usage before billing.": "Списывать средства только при успешном статусе процесса Dify, непустом ответе и наличии данных об использовании токенов от вышестоящего сервиса."

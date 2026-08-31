@@ -6376,7 +6376,8 @@
     "Versions": "Versions",
     "View the complete details for this task": "Afficher tous les détails de cette tâche",
     "When disabled, all uploaded custom plugins are ignored and every platform falls back to its built-in factory plugin.": "Si cette option est désactivée, tous les plugins personnalisés téléversés sont ignorés et chaque plateforme utilise son plugin d’usine intégré.",
-    "When disabled, the entire task plugin system stops serving, including factory and custom plugins.": "Une fois désactivé, tout le système de plugins de tâche s’arrête, y compris les plugins d’usine et personnalisés."
+    "When disabled, the entire task plugin system stops serving, including factory and custom plugins.": "Une fois désactivé, tout le système de plugins de tâche s’arrête, y compris les plugins d’usine et personnalisés.",
+    "Quota exhausted": "Quota épuisé"
   },
   "Require successful Dify workflow": "Exiger la réussite du workflow Dify",
   "Require a successful Dify workflow status, a non-empty answer, and upstream token usage before billing.": "Ne facturer que si le workflow Dify réussit, que la réponse n’est pas vide et que l’amont fournit une utilisation de jetons."

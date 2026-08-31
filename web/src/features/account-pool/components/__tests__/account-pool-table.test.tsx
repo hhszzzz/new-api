@@ -93,7 +93,7 @@ function snapshot(item: AccountPoolAccount): AccountPoolSnapshot {
     manual_refresh_available_at: '2026-08-29T12:01:00Z',
     stale: false,
     partial: false,
-    summary: { total: 1, available: 1, error: 0 },
+    summary: { total: 1, available: 1, limited: 0, error: 0 },
     accounts: [item],
   }
 }
@@ -236,7 +236,7 @@ describe('account pool table', () => {
     ).toBeGreaterThan(0)
 
     const emptySnapshot = snapshot(account())
-    emptySnapshot.summary = { total: 0, available: 0, error: 0 }
+    emptySnapshot.summary = { total: 0, available: 0, limited: 0, error: 0 }
     emptySnapshot.accounts = []
     rerender(
       <AccountPoolTable

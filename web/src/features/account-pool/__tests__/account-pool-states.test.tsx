@@ -85,7 +85,7 @@ function snapshot(overrides: Partial<AccountPoolSnapshot> = {}) {
     manual_refresh_available_at: '2026-08-29T12:00:00Z',
     stale: false,
     partial: false,
-    summary: { total: 0, available: 0, error: 0 },
+    summary: { total: 0, available: 0, limited: 0, error: 0 },
     accounts: [],
     ...overrides,
   } satisfies AccountPoolSnapshot

@@ -28,6 +28,8 @@ type accountPoolFakeManagement struct {
 	paths         []string
 	usageRequests []map[string]interface{}
 	failUsage     bool
+	usageStatus   int
+	usageBody     string
 }
 
 type accountPoolRoundTripFunc func(*http.Request) (*http.Response, error)
@@ -86,12 +88,21 @@ func (fake *accountPoolFakeManagement) handle(writer http.ResponseWriter, reques
 		fake.mu.Lock()
 		fake.usageRequests = append(fake.usageRequests, payload)
 		failUsage := fake.failUsage
+		usageStatus := fake.usageStatus
+		usageBody := fake.usageBody
 		fake.mu.Unlock()
 		if failUsage {
 			writeAccountPoolTestJSON(fake.t, writer, http.StatusOK, map[string]interface{}{
 				"status_code": 401,
 				"header":      map[string]interface{}{"Set-Cookie": []string{"secret-cookie"}},
 				"body":        `{"error":"Bearer upstream-secret admin@example.com"}`,
+			})
+			return
+		}
+		if usageBody != "" {
+			writeAccountPoolTestJSON(fake.t, writer, http.StatusOK, map[string]interface{}{
+				"status_code": usageStatus,
+				"body":        usageBody,
 			})
 			return
 		}
@@ -160,13 +171,14 @@ func TestAccountPoolManagerUsesOnlyFixedReadOnlyManagementContract(t *testing.T)
 	require.NoError(t, err)
 	require.Len(t, snapshot.Accounts, 1)
 	account := snapshot.Accounts[0]
-	assert.Equal(t, "available", account.Status)
+	assert.Equal(t, "limited", account.Status)
 	assert.Equal(t, "plus", account.Plan)
 	require.NotNil(t, account.PrimaryWindow)
 	require.NotNil(t, account.PrimaryWindow.UsedPercent)
 	require.NotNil(t, account.PrimaryWindow.RemainingPercent)
 	assert.Equal(t, float64(100), *account.PrimaryWindow.UsedPercent)
 	assert.Equal(t, float64(0), *account.PrimaryWindow.RemainingPercent)
+	assert.Equal(t, AccountPoolSummary{Total: 1, Limited: 1}, snapshot.Summary)
 
 	fake.mu.Lock()
 	paths := append([]string(nil), fake.paths...)
@@ -198,6 +210,46 @@ func TestAccountPoolManagerUsesOnlyFixedReadOnlyManagementContract(t *testing.T)
 	adminJSON, err := common.Marshal(manager.buildView(snapshot, true))
 	require.NoError(t, err)
 	assert.Contains(t, string(adminJSON), `"email":"admin@example.com"`)
+}
+
+func TestAccountPoolManagerClassifiesUsageLimitReachedAsLimited(t *testing.T) {
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	fake := newAccountPoolFakeManagement(t)
+	fake.usageStatus = http.StatusTooManyRequests
+	fake.usageBody = `{"error":{"type":"usage_limit_reached","message":"The usage limit has been reached"}}`
+	manager := fake.manager(now)
+
+	snapshot, err := manager.get(context.Background())
+	require.NoError(t, err)
+	require.Len(t, snapshot.Accounts, 1)
+	assert.Equal(t, "limited", snapshot.Accounts[0].Status)
+	assert.False(t, snapshot.Accounts[0].Stale)
+	assert.False(t, snapshot.Partial)
+	assert.False(t, snapshot.Stale)
+	assert.Equal(t, AccountPoolSummary{Total: 1, Limited: 1}, snapshot.Summary)
+	assert.Equal(t, "success", manager.syncStatus().LastSyncStatus)
+}
+
+func TestAccountPoolUsageLimitPayloadClassification(t *testing.T) {
+	testCases := []struct {
+		name    string
+		payload map[string]interface{}
+		limited bool
+	}{
+		{name: "nested type", payload: map[string]interface{}{"error": map[string]interface{}{"type": "usage_limit_reached"}}, limited: true},
+		{name: "nested code", payload: map[string]interface{}{"error": map[string]interface{}{"code": "usage_limit_reached"}}, limited: true},
+		{name: "top level type", payload: map[string]interface{}{"type": "usage_limit_reached"}, limited: true},
+		{name: "top level code", payload: map[string]interface{}{"code": "usage_limit_reached"}, limited: true},
+		{name: "string error", payload: map[string]interface{}{"error": "usage_limit_reached"}, limited: true},
+		{name: "transient rate limit", payload: map[string]interface{}{"error": map[string]interface{}{"type": "rate_limit_exceeded"}}, limited: false},
+		{name: "message only", payload: map[string]interface{}{"error": map[string]interface{}{"message": "usage_limit_reached"}}, limited: false},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			assert.Equal(t, testCase.limited, isAccountPoolUsageLimitPayload(testCase.payload))
+		})
+	}
 }
 
 func TestApplyCodexUsagePayloadNormalizesProliteWeeklyOnlyQuota(t *testing.T) {
@@ -246,6 +298,45 @@ func TestApplyCodexUsagePayloadKeepsShortQuotaInPrimarySlot(t *testing.T) {
 	assert.Equal(t, int64(604800), *account.SecondaryWindow.LimitWindowSeconds)
 }
 
+func TestApplyCodexUsagePayloadMarksAnyExhaustedWindowAsLimited(t *testing.T) {
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	testCases := []struct {
+		name      string
+		rateLimit map[string]interface{}
+	}{
+		{
+			name: "five hour window",
+			rateLimit: map[string]interface{}{
+				"primary_window": map[string]interface{}{"used_percent": float64(100), "limit_window_seconds": float64(18000)},
+			},
+		},
+		{
+			name: "weekly window",
+			rateLimit: map[string]interface{}{
+				"primary_window":   map[string]interface{}{"used_percent": float64(10), "limit_window_seconds": float64(18000)},
+				"secondary_window": map[string]interface{}{"used_percent": float64(100), "limit_window_seconds": float64(604800)},
+			},
+		},
+		{
+			name: "explicit limit flag",
+			rateLimit: map[string]interface{}{
+				"limit_reached": true,
+			},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			account := accountPoolAccount{}
+			limited := applyCodexUsagePayload(&account, map[string]interface{}{
+				"rate_limit": testCase.rateLimit,
+			}, now)
+
+			assert.True(t, limited)
+		})
+	}
+}
+
 func TestAccountPoolPublicIDDoesNotExposeCredentialIdentity(t *testing.T) {
 	credentialName := "codex-admin@example.com.json"
 	authIndex := "auth-index-secret"
@@ -279,7 +370,7 @@ func TestAccountPoolManagerKeepsOldSnapshotWhenRefreshFails(t *testing.T) {
 	assert.True(t, fallback.Partial)
 	assert.Equal(t, first.UpdatedAt, fallback.UpdatedAt)
 	require.Len(t, fallback.Accounts, 1)
-	assert.Equal(t, "available", fallback.Accounts[0].Status)
+	assert.Equal(t, "limited", fallback.Accounts[0].Status)
 	assert.Equal(t, "failed", manager.syncStatus().LastSyncStatus)
 
 	encoded, err := common.Marshal(manager.buildView(fallback, false))

@@ -6376,7 +6376,8 @@
     "Versions": "バージョン",
     "View the complete details for this task": "このタスクの完全な詳細を表示します",
     "When disabled, all uploaded custom plugins are ignored and every platform falls back to its built-in factory plugin.": "無効にすると、アップロード済みのカスタムプラグインはすべて無視され、各プラットフォームは内蔵のファクトリープラグインにフォールバックします。",
-    "When disabled, the entire task plugin system stops serving, including factory and custom plugins.": "無効にすると、ファクトリープラグインとカスタムプラグインを含むタスクプラグインシステム全体が停止します。"
+    "When disabled, the entire task plugin system stops serving, including factory and custom plugins.": "無効にすると、ファクトリープラグインとカスタムプラグインを含むタスクプラグインシステム全体が停止します。",
+    "Quota exhausted": "上限到達"
   },
   "Require successful Dify workflow": "Dify ワークフローの成功を必須にする",
   "Require a successful Dify workflow status, a non-empty answer, and upstream token usage before billing.": "Dify ワークフローが成功し、回答が空でなく、アップストリームのトークン使用量がある場合にのみ課金します。"

@@ -31,6 +31,10 @@ const statusConfig: Record<
     label: 'Available',
     className: 'border-success/30 bg-success/10 text-success',
   },
+  limited: {
+    label: 'Quota exhausted',
+    className: 'border-warning/30 bg-warning/10 text-warning',
+  },
   disabled: {
     label: 'Disabled',
     className: 'border-border bg-muted/60 text-muted-foreground',
@@ -40,7 +44,7 @@ const statusConfig: Record<
     className: 'border-warning/30 bg-warning/10 text-warning',
   },
   error: {
-    label: 'Quota data unavailable',
+    label: 'Error',
     className: 'border-destructive/30 bg-destructive/10 text-destructive',
   },
 }

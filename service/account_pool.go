@@ -43,6 +43,7 @@ const (
 var (
 	ErrAccountPoolNotConfigured = errors.New("account pool management connection is not configured")
 	ErrAccountPoolUnavailable   = errors.New("account pool quota data is unavailable")
+	errAccountPoolUsageLimited  = errors.New("account pool usage limit reached")
 )
 
 type AccountPoolWindow struct {
@@ -68,6 +69,7 @@ type AccountPoolViewAccount struct {
 type AccountPoolSummary struct {
 	Total     int `json:"total"`
 	Available int `json:"available"`
+	Limited   int `json:"limited"`
 	Error     int `json:"error"`
 }
 
@@ -489,14 +491,25 @@ func (manager *accountPoolManager) fetchRound(ctx context.Context, config accoun
 
 	for quota := range resultChannel {
 		if quota.err != nil {
+			if errors.Is(quota.err, errAccountPoolUsageLimited) {
+				result.accounts[quota.index].Status = "limited"
+				result.accounts[quota.index].UpdatedAt = now
+				result.accounts[quota.index].Stale = false
+				result.succeeded++
+				continue
+			}
 			result.failed++
 			result.accounts[quota.index].Status = "error"
 			result.accounts[quota.index].Stale = true
 			continue
 		}
-		applyCodexUsagePayload(&result.accounts[quota.index], quota.payload, now)
-		result.accounts[quota.index].Status = "available"
+		if applyCodexUsagePayload(&result.accounts[quota.index], quota.payload, now) {
+			result.accounts[quota.index].Status = "limited"
+		} else {
+			result.accounts[quota.index].Status = "available"
+		}
 		result.accounts[quota.index].UpdatedAt = now
+		result.accounts[quota.index].Stale = false
 		result.succeeded++
 	}
 	if result.attempted > 0 && result.succeeded == 0 {
@@ -588,10 +601,20 @@ func (manager *accountPoolManager) fetchCodexUsage(
 	if err := decodeAccountPoolJSON(response.Body, &apiResponse); err != nil {
 		return nil, err
 	}
+	payload, err := normalizeAccountPoolPayload(apiResponse.Body)
+	if err != nil {
+		return nil, err
+	}
+	if isAccountPoolUsageLimitPayload(payload) {
+		return payload, errAccountPoolUsageLimited
+	}
 	if apiResponse.StatusCode < http.StatusOK || apiResponse.StatusCode >= http.StatusMultipleChoices {
 		return nil, ErrAccountPoolUnavailable
 	}
-	return normalizeAccountPoolPayload(apiResponse.Body)
+	if hasAccountPoolUsageErrorPayload(payload) {
+		return nil, ErrAccountPoolUnavailable
+	}
+	return payload, nil
 }
 
 func loadAccountPoolRuntimeConfig() (accountPoolRuntimeConfig, error) {
@@ -662,6 +685,39 @@ func normalizeAccountPoolPayload(body interface{}) (map[string]interface{}, erro
 	return payload, nil
 }
 
+func isAccountPoolUsageLimitPayload(payload map[string]interface{}) bool {
+	const usageLimitReached = "usage_limit_reached"
+	if strings.EqualFold(firstAccountPoolString(payload, "type", "code"), usageLimitReached) {
+		return true
+	}
+	errorValue, exists := payload["error"]
+	if !exists {
+		return false
+	}
+	if errorText, ok := errorValue.(string); ok {
+		return strings.EqualFold(strings.TrimSpace(errorText), usageLimitReached)
+	}
+	errorPayload, ok := errorValue.(map[string]interface{})
+	return ok && strings.EqualFold(firstAccountPoolString(errorPayload, "type", "code"), usageLimitReached)
+}
+
+func hasAccountPoolUsageErrorPayload(payload map[string]interface{}) bool {
+	if errorValue, exists := payload["error"]; exists {
+		switch typed := errorValue.(type) {
+		case nil:
+			return false
+		case string:
+			return strings.TrimSpace(typed) != ""
+		case map[string]interface{}:
+			return len(typed) > 0
+		default:
+			return true
+		}
+	}
+	return firstAccountPoolString(payload, "type", "code") != "" &&
+		firstAccountPoolMap(payload, "rate_limit", "rateLimit") == nil
+}
+
 func isCodexAuthFile(file map[string]interface{}) bool {
 	provider := strings.ToLower(firstAccountPoolString(file, "type", "provider"))
 	if provider == "codex" {
@@ -724,14 +780,14 @@ func buildAccountPoolAccount(file map[string]interface{}, idSecret string, now t
 	return account, authIndex, accountID, true
 }
 
-func applyCodexUsagePayload(account *accountPoolAccount, payload map[string]interface{}, now time.Time) {
+func applyCodexUsagePayload(account *accountPoolAccount, payload map[string]interface{}, now time.Time) bool {
 	plan := firstAccountPoolString(payload, "plan_type", "planType")
 	if plan != "" {
 		account.Plan = normalizeAccountPoolPlan(plan)
 	}
 	rateLimit := firstAccountPoolMap(payload, "rate_limit", "rateLimit")
 	if rateLimit == nil {
-		return
+		return false
 	}
 	primary := firstAccountPoolMap(rateLimit, "primary_window", "primaryWindow")
 	secondary := firstAccountPoolMap(rateLimit, "secondary_window", "secondaryWindow")
@@ -740,6 +796,17 @@ func applyCodexUsagePayload(account *accountPoolAccount, payload map[string]inte
 	primaryWindow, secondaryWindow = normalizeAccountPoolQuotaWindows(primaryWindow, secondaryWindow)
 	account.PrimaryWindow = primaryWindow
 	account.SecondaryWindow = secondaryWindow
+	return firstAccountPoolBool(rateLimit, "limit_reached", "limitReached") ||
+		hasExplicitAccountPoolFalse(rateLimit, "allowed") ||
+		isAccountPoolQuotaWindowLimited(primary, primaryWindow) ||
+		isAccountPoolQuotaWindowLimited(secondary, secondaryWindow)
+}
+
+func isAccountPoolQuotaWindowLimited(source map[string]interface{}, window *AccountPoolWindow) bool {
+	if firstAccountPoolBool(source, "limit_reached", "limitReached") || hasExplicitAccountPoolFalse(source, "allowed") {
+		return true
+	}
+	return window != nil && window.RemainingPercent != nil && *window.RemainingPercent <= 0
 }
 
 func parseAccountPoolWindow(window map[string]interface{}, limit map[string]interface{}, now time.Time) *AccountPoolWindow {
@@ -874,9 +941,12 @@ func sortAccountPoolAccounts(accounts []accountPoolAccount) {
 func summarizeAccountPoolAccounts(accounts []accountPoolAccount) AccountPoolSummary {
 	summary := AccountPoolSummary{Total: len(accounts)}
 	for _, account := range accounts {
-		if account.Status == "available" {
+		switch account.Status {
+		case "available":
 			summary.Available++
-		} else {
+		case "limited":
+			summary.Limited++
+		default:
 			summary.Error++
 		}
 	}

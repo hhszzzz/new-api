@@ -64,7 +64,8 @@ export function AccountPoolTable(props: AccountPoolTableProps) {
   const statusFilterLabel = {
     all: t('All statuses'),
     available: t('Available'),
-    error: t('Quota data unavailable'),
+    limited: t('Quota exhausted'),
+    error: t('Error'),
     unavailable: t('Unavailable'),
     disabled: t('Disabled'),
   }[statusFilter]
@@ -196,9 +197,8 @@ export function AccountPoolTable(props: AccountPoolTableProps) {
               <SelectContent align='start'>
                 <SelectItem value='all'>{t('All statuses')}</SelectItem>
                 <SelectItem value='available'>{t('Available')}</SelectItem>
-                <SelectItem value='error'>
-                  {t('Quota data unavailable')}
-                </SelectItem>
+                <SelectItem value='limited'>{t('Quota exhausted')}</SelectItem>
+                <SelectItem value='error'>{t('Error')}</SelectItem>
                 <SelectItem value='unavailable'>{t('Unavailable')}</SelectItem>
                 <SelectItem value='disabled'>{t('Disabled')}</SelectItem>
               </SelectContent>

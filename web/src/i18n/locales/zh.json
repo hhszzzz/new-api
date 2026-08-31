@@ -6376,7 +6376,8 @@
     "Versions": "版本",
     "View the complete details for this task": "查看此任务的完整详情",
     "When disabled, all uploaded custom plugins are ignored and every platform falls back to its built-in factory plugin.": "关闭后，所有上传的自定义插件都会被忽略，每个平台均回落到内置的出厂插件。",
-    "When disabled, the entire task plugin system stops serving, including factory and custom plugins.": "关闭后，整个任务插件系统停止服务，包括出厂插件和自定义插件。"
+    "When disabled, the entire task plugin system stops serving, including factory and custom plugins.": "关闭后，整个任务插件系统停止服务，包括出厂插件和自定义插件。",
+    "Quota exhausted": "限额"
   },
   "Require successful Dify workflow": "要求 Dify 工作流成功",
   "Require a successful Dify workflow status, a non-empty answer, and upstream token usage before billing.": "仅在 Dify 工作流状态成功、回答非空且上游返回令牌用量时才计费。"
