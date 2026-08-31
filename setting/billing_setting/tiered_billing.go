@@ -67,6 +67,18 @@ func GetBillingExprCopy() map[string]string {
 }
 
 func (setting *BillingSetting) ValidateConfig() error {
+	return setting.validateConfig(validateBillingExprWithoutPluginContext)
+}
+
+// ValidateLoadedConfig accepts task-usage expressions that were already
+// validated against their plugin schema at the administrator API boundary.
+// During startup or an option-store reload the billing setting layer has no
+// model-to-plugin context, so it can only re-check their syntax safely.
+func (setting *BillingSetting) ValidateLoadedConfig() error {
+	return setting.validateConfig(validateBillingExprWithoutPluginContext)
+}
+
+func (setting *BillingSetting) validateConfig(validateExpression func(string) error) error {
 	for model, mode := range setting.BillingMode {
 		if strings.TrimSpace(model) == "" {
 			return fmt.Errorf("billing mode contains an empty model name")
@@ -82,11 +94,19 @@ func (setting *BillingSetting) ValidateConfig() error {
 		if strings.TrimSpace(expression) == "" {
 			continue
 		}
-		if err := smokeTestExpr(expression); err != nil {
+		if err := validateExpression(expression); err != nil {
 			return fmt.Errorf("invalid billing expression for %s: %w", model, err)
 		}
 	}
 	return nil
+}
+
+func validateBillingExprWithoutPluginContext(expression string) error {
+	if len(billingexpr.UsedUsageKeys(expression)) > 0 {
+		_, err := billingexpr.CompileFromCache(expression)
+		return err
+	}
+	return smokeTestExpr(expression)
 }
 
 func (setting *BillingSetting) PublishConfig() {
