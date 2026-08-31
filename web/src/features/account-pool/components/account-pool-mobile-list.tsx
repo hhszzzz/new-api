@@ -99,7 +99,9 @@ export function AccountPoolMobileList(props: AccountPoolMobileListProps) {
                   </div>
                 ) : null}
                 {account.stale ? (
-                  <div className='text-warning text-xs'>{t('Stale row')}</div>
+                  <div className='text-warning text-xs'>
+                    {t('Last successful quota data')}
+                  </div>
                 ) : null}
               </div>
               <AccountStatusBadge status={account.status} />

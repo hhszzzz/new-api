@@ -1,7 +1,9 @@
 package controller
 
 import (
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -20,6 +22,7 @@ func publishAccountPoolControllerSetting(t *testing.T) {
 	t.Cleanup(func() { previous.PublishConfig() })
 	setting := account_pool_setting.Setting{
 		Enabled:                   true,
+		HideEmailFromNonAdmins:    true,
 		AllowedGroups:             []string{"vip", "team"},
 		RegularRefreshSeconds:     300,
 		NearResetThresholdSeconds: 600,
@@ -67,6 +70,7 @@ func TestGetAccountPoolSettingsNeverReturnsManagementConnectionValues(t *testing
 
 	assert.Equal(t, 200, recorder.Code)
 	assert.Contains(t, recorder.Body.String(), `"management_key_configured":true`)
+	assert.Contains(t, recorder.Body.String(), `"hide_email_from_non_admins":true`)
 	assert.NotContains(t, recorder.Body.String(), "management-key-secret")
 	assert.NotContains(t, recorder.Body.String(), "internal-sensitive-host")
 }
@@ -77,6 +81,7 @@ func TestGetAccountPoolSettingsSerializesEmptyAllowedGroupsAsArray(t *testing.T)
 	t.Cleanup(func() { previous.PublishConfig() })
 	setting := account_pool_setting.Setting{
 		Enabled:                   true,
+		HideEmailFromNonAdmins:    true,
 		AllowedGroups:             []string{},
 		RegularRefreshSeconds:     300,
 		NearResetThresholdSeconds: 600,
@@ -93,6 +98,46 @@ func TestGetAccountPoolSettingsSerializesEmptyAllowedGroupsAsArray(t *testing.T)
 	assert.Equal(t, 200, recorder.Code)
 	assert.Contains(t, recorder.Body.String(), `"allowed_groups":[]`)
 	assert.NotContains(t, recorder.Body.String(), `"allowed_groups":null`)
+}
+
+func TestAccountPoolSettingsRequestKeepsEmailHiddenWhenFieldIsMissing(t *testing.T) {
+	current := account_pool_setting.Setting{HideEmailFromNonAdmins: true}
+	request := accountPoolSettingsRequest{}
+
+	setting := request.withPrivacyDefault(&current)
+
+	assert.True(t, setting.HideEmailFromNonAdmins)
+
+	showEmail := false
+	request.HideEmailFromNonAdmins = &showEmail
+	setting = request.withPrivacyDefault(&current)
+	assert.False(t, setting.HideEmailFromNonAdmins)
+}
+
+func TestAccountPoolSettingsRequestBindsExplicitEmailVisibility(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(http.MethodPut, "/", strings.NewReader(`{
+		"enabled": true,
+		"hide_email_from_non_admins": false,
+		"allowed_groups": ["vip"],
+		"regular_refresh_seconds": 300,
+		"near_reset_threshold_seconds": 600,
+		"near_reset_refresh_seconds": 60,
+		"post_reset_delay_seconds": 10,
+		"manual_refresh_cooldown_seconds": 60
+	}`))
+	context.Request.Header.Set("Content-Type", "application/json")
+	var request accountPoolSettingsRequest
+
+	err := context.ShouldBindJSON(&request)
+
+	require.NoError(t, err)
+	setting := request.withPrivacyDefault(nil)
+	assert.True(t, setting.Enabled)
+	assert.False(t, setting.HideEmailFromNonAdmins)
+	assert.Equal(t, []string{"vip"}, setting.AllowedGroups)
+	assert.Equal(t, 300, setting.RegularRefreshSeconds)
 }
 
 func TestSelfUserDataIncludesServerCalculatedAccountPoolCapability(t *testing.T) {

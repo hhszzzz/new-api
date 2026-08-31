@@ -14,6 +14,7 @@ const (
 	ConfigName = "account_pool"
 
 	EnabledOptionKey                   = ConfigName + ".enabled"
+	HideEmailFromNonAdminsOptionKey    = ConfigName + ".hide_email_from_non_admins"
 	AllowedGroupsOptionKey             = ConfigName + ".allowed_groups"
 	RegularRefreshSecondsOptionKey     = ConfigName + ".regular_refresh_seconds"
 	NearResetThresholdSecondsOptionKey = ConfigName + ".near_reset_threshold_seconds"
@@ -24,6 +25,7 @@ const (
 
 type Setting struct {
 	Enabled                   bool     `json:"enabled"`
+	HideEmailFromNonAdmins    bool     `json:"hide_email_from_non_admins"`
 	AllowedGroups             []string `json:"allowed_groups"`
 	RegularRefreshSeconds     int      `json:"regular_refresh_seconds"`
 	NearResetThresholdSeconds int      `json:"near_reset_threshold_seconds"`
@@ -34,6 +36,7 @@ type Setting struct {
 
 var accountPoolSetting = Setting{
 	Enabled:                   false,
+	HideEmailFromNonAdmins:    true,
 	AllowedGroups:             []string{},
 	RegularRefreshSeconds:     300,
 	NearResetThresholdSeconds: 600,
@@ -126,6 +129,14 @@ func CanAccess(role int, userGroups []string) bool {
 		}
 	}
 	return false
+}
+
+func ShouldIncludeEmail(role int) bool {
+	if role >= common.RoleAdminUser {
+		return true
+	}
+	snapshot := accountPoolSnapshot.Load()
+	return snapshot != nil && !snapshot.HideEmailFromNonAdmins
 }
 
 func normalizeSetting(setting Setting) Setting {

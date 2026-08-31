@@ -12,6 +12,7 @@ import (
 func validSetting() Setting {
 	return Setting{
 		Enabled:                   true,
+		HideEmailFromNonAdmins:    true,
 		AllowedGroups:             []string{"vip", "default"},
 		RegularRefreshSeconds:     300,
 		NearResetThresholdSeconds: 600,
@@ -86,6 +87,22 @@ func TestCanAccessFailsClosedWhenDisabledOrAllowedGroupsEmpty(t *testing.T) {
 	assert.True(t, CanAccess(common.RoleAdminUser, nil))
 }
 
+func TestShouldIncludeEmailUsesPrivacySettingAndAdminBypass(t *testing.T) {
+	previous := GetSettingSnapshot()
+	require.NotNil(t, previous)
+	t.Cleanup(func() { previous.PublishConfig() })
+
+	setting := validSetting()
+	setting.HideEmailFromNonAdmins = true
+	setting.PublishConfig()
+	assert.False(t, ShouldIncludeEmail(common.RoleCommonUser))
+	assert.True(t, ShouldIncludeEmail(common.RoleAdminUser))
+
+	setting.HideEmailFromNonAdmins = false
+	setting.PublishConfig()
+	assert.True(t, ShouldIncludeEmail(common.RoleCommonUser))
+}
+
 func TestAccountPoolConfigManagerRejectsPartialInvalidPublication(t *testing.T) {
 	manager := config.NewConfigManager()
 	setting := validSetting()
@@ -101,6 +118,7 @@ func TestAccountPoolConfigManagerRejectsPartialInvalidPublication(t *testing.T) 
 	require.True(t, handled)
 	require.NoError(t, err)
 	assert.True(t, setting.Enabled)
+	assert.True(t, setting.HideEmailFromNonAdmins)
 	assert.Equal(t, []string{"team", "vip"}, setting.AllowedGroups)
 
 	handled, err = manager.Update(ConfigName, map[string]string{

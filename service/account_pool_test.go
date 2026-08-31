@@ -132,6 +132,7 @@ func (fake *accountPoolFakeManagement) manager(now time.Time) *accountPoolManage
 func accountPoolTestSetting() account_pool_setting.Setting {
 	return account_pool_setting.Setting{
 		Enabled:                   true,
+		HideEmailFromNonAdmins:    true,
 		AllowedGroups:             []string{"vip"},
 		RegularRefreshSeconds:     300,
 		NearResetThresholdSeconds: 600,
@@ -386,6 +387,31 @@ func TestCalculateAccountPoolNextRefreshAdaptsToResetWindows(t *testing.T) {
 	next, overdue = calculateAccountPoolNextRefresh(accounts, setting, now)
 	assert.True(t, overdue)
 	assert.Equal(t, now.Add(60*time.Second), next)
+}
+
+func TestAccountPoolRefreshScheduleUsesSharedServerBoundaries(t *testing.T) {
+	setting := accountPoolTestSetting()
+	firstViewer := time.Date(2026, 8, 29, 12, 2, 13, 0, time.UTC)
+	secondViewer := time.Date(2026, 8, 29, 12, 3, 44, 0, time.UTC)
+	expected := time.Date(2026, 8, 29, 12, 5, 0, 0, time.UTC)
+
+	firstNext, firstOverdue := calculateAccountPoolNextRefresh(nil, setting, firstViewer)
+	secondNext, secondOverdue := calculateAccountPoolNextRefresh(nil, setting, secondViewer)
+
+	assert.False(t, firstOverdue)
+	assert.False(t, secondOverdue)
+	assert.Equal(t, expected, firstNext)
+	assert.Equal(t, expected, secondNext)
+}
+
+func TestAccountPoolViewIncludesServerTime(t *testing.T) {
+	now := time.Date(2026, 8, 29, 12, 2, 13, 0, time.UTC)
+	manager := newAccountPoolManager()
+	manager.now = func() time.Time { return now }
+
+	view := manager.buildView(&accountPoolSnapshot{}, false)
+
+	assert.Equal(t, now, view.ServerTime)
 }
 
 func TestLoadAccountPoolRuntimeConfigFailsClosed(t *testing.T) {

@@ -43,6 +43,7 @@ export type AccountPoolAccount = {
 }
 
 export type AccountPoolSnapshot = {
+  server_time: string
   updated_at: string
   next_refresh_at: string
   manual_refresh_available_at: string
@@ -58,6 +59,7 @@ export type AccountPoolSnapshot = {
 
 export type AccountPoolSettings = {
   enabled: boolean
+  hide_email_from_non_admins: boolean
   allowed_groups: string[]
   regular_refresh_seconds: number
   near_reset_threshold_seconds: number

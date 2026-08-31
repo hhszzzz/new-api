@@ -46,6 +46,7 @@ import { AccountPoolTable } from './components/account-pool-table'
 import { formatAccountPoolCountdown } from './lib/quota'
 import {
   getAccountPoolRefetchInterval,
+  getAccountPoolServerNow,
   shouldRefreshAccountPoolOnVisibility,
 } from './lib/refresh'
 
@@ -117,12 +118,16 @@ export function AccountPool() {
   const queryClient = useQueryClient()
   const currentUser = useAuthStore((state) => state.auth.user)
   const setUser = useAuthStore((state) => state.auth.setUser)
-  const [now, setNow] = useState(() => Date.now())
+  const [clientNow, setClientNow] = useState(() => Date.now())
   const accountPoolQuery = useQuery({
     queryKey: ACCOUNT_POOL_QUERY_KEY,
     queryFn: getAccountPool,
     retry: false,
-    refetchInterval: (query) => getAccountPoolRefetchInterval(query.state.data),
+    refetchInterval: (query) =>
+      getAccountPoolRefetchInterval(
+        query.state.data,
+        query.state.dataUpdatedAt
+      ),
     refetchIntervalInBackground: false,
   })
   const snapshot = accountPoolQuery.data?.data
@@ -136,9 +141,9 @@ export function AccountPool() {
         interval = undefined
         return
       }
-      setNow(Date.now())
+      setClientNow(Date.now())
       if (interval === undefined) {
-        interval = window.setInterval(() => setNow(Date.now()), 1000)
+        interval = window.setInterval(() => setClientNow(Date.now()), 1000)
       }
     }
     updateClock()
@@ -154,14 +159,29 @@ export function AccountPool() {
       if (document.visibilityState !== 'visible') return
       const nextRefreshAt = snapshot?.next_refresh_at
       if (!nextRefreshAt) return
-      if (shouldRefreshAccountPoolOnVisibility(nextRefreshAt)) {
+      const serverNow = getAccountPoolServerNow(
+        snapshot.server_time,
+        accountPoolQuery.dataUpdatedAt
+      )
+      if (shouldRefreshAccountPoolOnVisibility(nextRefreshAt, serverNow)) {
         void refetchAccountPool()
       }
     }
     document.addEventListener('visibilitychange', handleVisibility)
     return () =>
       document.removeEventListener('visibilitychange', handleVisibility)
-  }, [refetchAccountPool, snapshot?.next_refresh_at])
+  }, [
+    accountPoolQuery.dataUpdatedAt,
+    refetchAccountPool,
+    snapshot?.next_refresh_at,
+    snapshot?.server_time,
+  ])
+
+  const serverNow = getAccountPoolServerNow(
+    snapshot?.server_time,
+    accountPoolQuery.dataUpdatedAt,
+    clientNow
+  )
 
   const refreshMutation = useMutation({
     mutationFn: refreshAccountPool,
@@ -183,11 +203,11 @@ export function AccountPool() {
   const manualAvailableAt = snapshot?.manual_refresh_available_at
     ? Date.parse(snapshot.manual_refresh_available_at)
     : 0
-  const manualCooldown = Math.max(0, manualAvailableAt - now)
+  const manualCooldown = Math.max(0, manualAvailableAt - serverNow)
   const refreshDisabled = manualCooldown > 0
   const refreshCountdown = formatAccountPoolCountdown(
     snapshot?.manual_refresh_available_at ?? null,
-    now
+    serverNow
   )
   const refreshLabel = useMemo(() => {
     if (refreshDisabled && refreshCountdown && refreshCountdown !== '0s') {
@@ -230,9 +250,13 @@ export function AccountPool() {
     statusAlert = (
       <Alert className='border-warning/40 bg-warning/5 text-warning'>
         <AlertTriangle aria-hidden='true' />
-        <AlertTitle>{t('Some accounts could not be refreshed')}</AlertTitle>
+        <AlertTitle>
+          {t('Some account quotas could not be refreshed')}
+        </AlertTitle>
         <AlertDescription>
-          {t('Successful accounts are current; failed rows are marked stale.')}
+          {t(
+            'Successful account quotas are current; failed rows show their last successful data.'
+          )}
         </AlertDescription>
       </Alert>
     )
@@ -240,10 +264,10 @@ export function AccountPool() {
     statusAlert = (
       <Alert className='border-warning/40 bg-warning/5 text-warning'>
         <AlertTriangle aria-hidden='true' />
-        <AlertTitle>{t('Showing stale quota data')}</AlertTitle>
+        <AlertTitle>{t('Quota data could not be refreshed')}</AlertTitle>
         <AlertDescription>
           {t(
-            'The latest refresh failed or a reset boundary has passed. The last safe snapshot remains visible.'
+            'The latest refresh failed or a reset boundary has passed. Showing the last successful quota data.'
           )}
         </AlertDescription>
       </Alert>
@@ -267,7 +291,7 @@ export function AccountPool() {
               isRefreshing={refreshMutation.isPending}
               refreshDisabled={refreshDisabled}
               refreshLabel={refreshLabel}
-              now={now}
+              now={serverNow}
               onRefresh={() => refreshMutation.mutate()}
             />
           )}

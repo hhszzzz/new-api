@@ -18,15 +18,31 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import type { AccountPoolApiResponse, AccountPoolSnapshot } from '../types'
 
+export function getAccountPoolServerNow(
+  serverTime: string | undefined,
+  dataUpdatedAt: number,
+  clientNow = Date.now()
+) {
+  const parsedServerTime = Date.parse(serverTime ?? '')
+  if (!Number.isFinite(parsedServerTime) || dataUpdatedAt <= 0) return clientNow
+  return parsedServerTime + Math.max(0, clientNow - dataUpdatedAt)
+}
+
 export function getAccountPoolRefetchInterval(
   response: AccountPoolApiResponse<AccountPoolSnapshot> | undefined,
-  now = Date.now()
+  dataUpdatedAt: number,
+  clientNow = Date.now()
 ) {
   const nextRefreshAt = response?.data.next_refresh_at
   if (!nextRefreshAt) return false
   const next = Date.parse(nextRefreshAt)
   if (!Number.isFinite(next)) return false
-  return Math.max(1000, next - now)
+  const serverNow = getAccountPoolServerNow(
+    response?.data.server_time,
+    dataUpdatedAt,
+    clientNow
+  )
+  return Math.max(1000, next - serverNow)
 }
 
 export function shouldRefreshAccountPoolOnVisibility(

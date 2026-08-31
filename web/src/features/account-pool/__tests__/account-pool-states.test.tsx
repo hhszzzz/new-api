@@ -79,6 +79,7 @@ vi.mock('../components/account-pool-table', () => ({
 
 function snapshot(overrides: Partial<AccountPoolSnapshot> = {}) {
   return {
+    server_time: '2026-08-29T12:00:00Z',
     updated_at: '2026-08-29T12:00:00Z',
     next_refresh_at: '2026-08-29T12:05:00Z',
     manual_refresh_available_at: '2026-08-29T12:00:00Z',
@@ -128,10 +129,10 @@ describe('account pool page states', () => {
     renderAccountPool()
 
     expect(
-      await screen.findByText('Some accounts could not be refreshed')
+      await screen.findByText('Some account quotas could not be refreshed')
     ).toBeInTheDocument()
     expect(
-      screen.queryByText('Showing stale quota data')
+      screen.queryByText('Quota data could not be refreshed')
     ).not.toBeInTheDocument()
   })
 
@@ -144,7 +145,7 @@ describe('account pool page states', () => {
     renderAccountPool()
 
     expect(
-      await screen.findByText('Showing stale quota data')
+      await screen.findByText('Quota data could not be refreshed')
     ).toBeInTheDocument()
   })
 

@@ -48,6 +48,7 @@ const SETTINGS_QUERY_KEY = ['account-pool-settings'] as const
 
 const defaultValues: AccountPoolSettingsValues = {
   enabled: false,
+  hide_email_from_non_admins: true,
   allowed_groups: [],
   regular_refresh_seconds: 300,
   near_reset_threshold_seconds: 600,
@@ -61,6 +62,7 @@ function toFormValues(
 ): AccountPoolSettingsValues {
   return {
     enabled: data.enabled,
+    hide_email_from_non_admins: data.hide_email_from_non_admins ?? true,
     allowed_groups: data.allowed_groups ?? [],
     regular_refresh_seconds: data.regular_refresh_seconds,
     near_reset_threshold_seconds: data.near_reset_threshold_seconds,

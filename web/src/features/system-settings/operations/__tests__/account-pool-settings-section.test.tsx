@@ -82,5 +82,10 @@ describe('account pool settings section', () => {
     )
 
     expect(await screen.findByTestId('allowed-groups')).toHaveTextContent('')
+    expect(
+      screen.getByRole('switch', {
+        name: 'Hide account emails from regular users',
+      })
+    ).toBeChecked()
   })
 })

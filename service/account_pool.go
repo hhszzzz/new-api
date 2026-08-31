@@ -72,6 +72,7 @@ type AccountPoolSummary struct {
 }
 
 type AccountPoolView struct {
+	ServerTime               time.Time                `json:"server_time"`
 	UpdatedAt                time.Time                `json:"updated_at"`
 	NextRefreshAt            time.Time                `json:"next_refresh_at"`
 	ManualRefreshAvailableAt time.Time                `json:"manual_refresh_available_at"`
@@ -308,7 +309,10 @@ func (manager *accountPoolManager) fallbackSnapshot(setting *account_pool_settin
 	if retrySeconds < 30 {
 		retrySeconds = 30
 	}
-	fallback.NextRefreshAt = now.Add(time.Duration(retrySeconds) * time.Second)
+	fallback.NextRefreshAt = nextAccountPoolRefreshBoundary(
+		now,
+		time.Duration(retrySeconds)*time.Second,
+	)
 	manager.snapshot = cloneAccountPoolSnapshot(fallback)
 	return fallback, nil
 }
@@ -331,6 +335,7 @@ func (manager *accountPoolManager) buildView(snapshot *accountPoolSnapshot, incl
 	}
 
 	view := AccountPoolView{
+		ServerTime:               now,
 		UpdatedAt:                snapshot.UpdatedAt,
 		NextRefreshAt:            snapshot.NextRefreshAt,
 		ManualRefreshAvailableAt: manualAvailableAt,
@@ -803,14 +808,21 @@ func calculateAccountPoolNextRefresh(accounts []accountPoolAccount, setting acco
 		}
 	}
 
-	next := now.Add(interval)
+	next := nextAccountPoolRefreshBoundary(now, interval)
 	if !earliestDue.IsZero() && earliestDue.After(now) && earliestDue.Before(next) {
 		next = earliestDue
 	}
 	if overdue {
-		next = now.Add(nearInterval)
+		next = nextAccountPoolRefreshBoundary(now, nearInterval)
 	}
 	return next, overdue
+}
+
+func nextAccountPoolRefreshBoundary(now time.Time, interval time.Duration) time.Time {
+	if interval <= 0 {
+		return now
+	}
+	return now.Truncate(interval).Add(interval)
 }
 
 func mergeStaleAccountPoolRows(accounts []accountPoolAccount, previous []accountPoolAccount) {

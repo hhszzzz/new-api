@@ -87,6 +87,7 @@ function account(email?: string): AccountPoolAccount {
 
 function snapshot(item: AccountPoolAccount): AccountPoolSnapshot {
   return {
+    server_time: '2026-08-29T12:00:00Z',
     updated_at: '2026-08-29T12:00:00Z',
     next_refresh_at: '2026-08-29T12:04:05Z',
     manual_refresh_available_at: '2026-08-29T12:01:00Z',
@@ -124,7 +125,7 @@ describe('account pool table', () => {
       container.querySelector('time[datetime="2026-08-29T11:55:00Z"]')
     ).not.toBeInTheDocument()
     expect(screen.getByText('Next refresh in 4m 5s')).toBeInTheDocument()
-    expect(screen.getByText('Stale row')).toBeInTheDocument()
+    expect(screen.getByText('Last successful quota data')).toBeInTheDocument()
     expect(screen.getAllByRole('button', { name: 'Refresh all' })).toHaveLength(
       1
     )

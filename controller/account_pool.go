@@ -22,6 +22,23 @@ type accountPoolSettingsResponse struct {
 	service.AccountPoolSyncStatus
 }
 
+type accountPoolSettingsRequest struct {
+	account_pool_setting.Setting
+	HideEmailFromNonAdmins *bool `json:"hide_email_from_non_admins"`
+}
+
+func (request accountPoolSettingsRequest) withPrivacyDefault(current *account_pool_setting.Setting) account_pool_setting.Setting {
+	setting := request.Setting
+	setting.HideEmailFromNonAdmins = true
+	if current != nil {
+		setting.HideEmailFromNonAdmins = current.HideEmailFromNonAdmins
+	}
+	if request.HideEmailFromNonAdmins != nil {
+		setting.HideEmailFromNonAdmins = *request.HideEmailFromNonAdmins
+	}
+	return setting
+}
+
 func GetAccountPool(c *gin.Context) {
 	role, allowed := authorizeAccountPool(c)
 	if !allowed {
@@ -29,7 +46,10 @@ func GetAccountPool(c *gin.Context) {
 		return
 	}
 
-	view, err := service.GetAccountPool(c.Request.Context(), role >= common.RoleAdminUser)
+	view, err := service.GetAccountPool(
+		c.Request.Context(),
+		account_pool_setting.ShouldIncludeEmail(role),
+	)
 	if err != nil {
 		respondAccountPoolServiceError(c, err)
 		return
@@ -44,7 +64,10 @@ func RefreshAccountPool(c *gin.Context) {
 		return
 	}
 
-	view, err := service.RefreshAccountPool(c.Request.Context(), role >= common.RoleAdminUser)
+	view, err := service.RefreshAccountPool(
+		c.Request.Context(),
+		account_pool_setting.ShouldIncludeEmail(role),
+	)
 	if err != nil {
 		var cooldownError *service.AccountPoolManualRefreshCooldownError
 		if errors.As(err, &cooldownError) {
@@ -76,12 +99,14 @@ func GetAccountPoolSettings(c *gin.Context) {
 }
 
 func UpdateAccountPoolSettings(c *gin.Context) {
-	var request account_pool_setting.Setting
+	var request accountPoolSettingsRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
 		respondAccountPoolError(c, http.StatusBadRequest, "account_pool_settings_invalid", "Invalid account pool settings")
 		return
 	}
-	prepared, err := account_pool_setting.PrepareSetting(request)
+	prepared, err := account_pool_setting.PrepareSetting(
+		request.withPrivacyDefault(account_pool_setting.GetSettingSnapshot()),
+	)
 	if err != nil {
 		respondAccountPoolError(c, http.StatusBadRequest, "account_pool_settings_invalid", err.Error())
 		return
@@ -99,8 +124,9 @@ func UpdateAccountPoolSettings(c *gin.Context) {
 	}
 	service.InvalidateAccountPoolCache()
 	recordManageAudit(c, "option.account_pool.update", map[string]interface{}{
-		"enabled":        prepared.Enabled,
-		"allowed_groups": prepared.AllowedGroups,
+		"enabled":                    prepared.Enabled,
+		"hide_email_from_non_admins": prepared.HideEmailFromNonAdmins,
+		"allowed_groups":             prepared.AllowedGroups,
 	})
 
 	response := accountPoolSettingsResponse{

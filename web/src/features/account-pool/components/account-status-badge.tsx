@@ -40,7 +40,7 @@ const statusConfig: Record<
     className: 'border-warning/30 bg-warning/10 text-warning',
   },
   error: {
-    label: 'Error',
+    label: 'Quota data unavailable',
     className: 'border-destructive/30 bg-destructive/10 text-destructive',
   },
 }

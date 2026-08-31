@@ -22,6 +22,7 @@ import { accountPoolSettingsSchema } from '../account-pool-settings-schema'
 
 const valid = {
   enabled: true,
+  hide_email_from_non_admins: true,
   allowed_groups: ['vip'],
   regular_refresh_seconds: 300,
   near_reset_threshold_seconds: 600,

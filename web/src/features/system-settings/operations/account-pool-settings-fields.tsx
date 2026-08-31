@@ -39,7 +39,7 @@ import type { AccountPoolSettingsValues } from './account-pool-settings-schema'
 
 type NumericFieldName = Exclude<
   keyof AccountPoolSettingsValues,
-  'enabled' | 'allowed_groups'
+  'enabled' | 'hide_email_from_non_admins' | 'allowed_groups'
 >
 
 const numericFields: Array<{
@@ -109,6 +109,30 @@ export function AccountPoolSettingsFields(
                 {t(
                   'Show the read-only Codex account pool to administrators and allowed groups.'
                 )}
+              </FormDescription>
+            </SettingsSwitchContent>
+            <FormControl>
+              <Switch
+                checked={field.value}
+                onCheckedChange={field.onChange}
+                disabled={props.disabled}
+              />
+            </FormControl>
+          </SettingsSwitchItem>
+        )}
+      />
+
+      <FormField
+        control={props.form.control}
+        name='hide_email_from_non_admins'
+        render={({ field }) => (
+          <SettingsSwitchItem>
+            <SettingsSwitchContent>
+              <FormLabel>
+                {t('Hide account emails from regular users')}
+              </FormLabel>
+              <FormDescription>
+                {t('Administrators can always see full account emails.')}
               </FormDescription>
             </SettingsSwitchContent>
             <FormControl>

@@ -19,6 +19,7 @@ func UpdateAccountPoolSetting(setting account_pool_setting.Setting) error {
 
 	return UpdateOptionsBulk(map[string]string{
 		account_pool_setting.EnabledOptionKey:                   strconv.FormatBool(prepared.Enabled),
+		account_pool_setting.HideEmailFromNonAdminsOptionKey:    strconv.FormatBool(prepared.HideEmailFromNonAdmins),
 		account_pool_setting.AllowedGroupsOptionKey:             string(groupsJSON),
 		account_pool_setting.RegularRefreshSecondsOptionKey:     strconv.Itoa(prepared.RegularRefreshSeconds),
 		account_pool_setting.NearResetThresholdSecondsOptionKey: strconv.Itoa(prepared.NearResetThresholdSeconds),

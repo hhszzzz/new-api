@@ -21,6 +21,7 @@ import { z } from 'zod'
 export const accountPoolSettingsSchema = z
   .object({
     enabled: z.boolean(),
+    hide_email_from_non_admins: z.boolean(),
     allowed_groups: z.array(z.string().min(1).max(64)),
     regular_refresh_seconds: z.coerce.number().int().min(60).max(3600),
     near_reset_threshold_seconds: z.coerce.number().int().min(60).max(3600),

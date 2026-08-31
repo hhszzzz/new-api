@@ -34,24 +34,28 @@ type QuotaWindowProps = {
 function quotaTone(remainingPercent: number | null) {
   if (remainingPercent === null) {
     return {
-      indicator: '[&_[data-slot=progress-indicator]]:bg-muted-foreground/50',
+      indicator: 'bg-muted-foreground/50',
+      track: 'bg-muted',
       text: 'text-muted-foreground',
     }
   }
   if (remainingPercent < 20) {
     return {
-      indicator: '[&_[data-slot=progress-indicator]]:bg-destructive',
+      indicator: 'bg-destructive',
+      track: 'bg-destructive/15',
       text: 'text-destructive',
     }
   }
   if (remainingPercent < 50) {
     return {
-      indicator: '[&_[data-slot=progress-indicator]]:bg-warning',
+      indicator: 'bg-warning',
+      track: 'bg-warning/15',
       text: 'text-warning',
     }
   }
   return {
-    indicator: '[&_[data-slot=progress-indicator]]:bg-success',
+    indicator: 'bg-success',
+    track: 'bg-success/15',
     text: 'text-success',
   }
 }
@@ -102,7 +106,9 @@ export function QuotaWindow(props: QuotaWindowProps) {
                 percent: Math.round(remaining * 10) / 10,
               })
         }
-        className={cn('gap-0', tone.indicator)}
+        className='gap-0'
+        trackClassName={cn('h-1.5 transition-colors', tone.track)}
+        indicatorClassName={cn('transition-colors', tone.indicator)}
       />
       <div className='text-muted-foreground flex min-h-4 items-center justify-between gap-2 text-[11px] tabular-nums'>
         <span>
