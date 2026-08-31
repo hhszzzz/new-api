@@ -771,15 +771,15 @@ func buildAccountPoolAccount(file map[string]interface{}, idSecret string, now t
 		return account, "", "", false
 	}
 	statusMessage := firstAccountPoolValue(file, "status_message", "statusMessage")
-	if (status == "error" || status == "unavailable" || unavailable) && isAccountPoolUsageLimitValue(statusMessage) {
+	usageLimited := (status == "error" || status == "unavailable" || unavailable) && isAccountPoolUsageLimitValue(statusMessage)
+	if usageLimited {
 		account.Status = "limited"
-		return account, "", "", false
 	}
-	if unavailable {
+	if !usageLimited && unavailable {
 		account.Status = "unavailable"
 		return account, "", "", false
 	}
-	if status == "disabled" || status == "error" || status == "unavailable" {
+	if !usageLimited && (status == "disabled" || status == "error" || status == "unavailable") {
 		account.Status = status
 		return account, "", "", false
 	}

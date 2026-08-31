@@ -253,6 +253,10 @@ func TestAccountPoolManagerClassifiesAuthFileUsageLimitStatusAsLimited(t *testin
 	require.Len(t, snapshot.Accounts, 1)
 	assert.Equal(t, "limited", snapshot.Accounts[0].Status)
 	assert.False(t, snapshot.Accounts[0].Stale)
+	require.NotNil(t, snapshot.Accounts[0].PrimaryWindow)
+	require.NotNil(t, snapshot.Accounts[0].PrimaryWindow.RemainingPercent)
+	assert.Equal(t, float64(0), *snapshot.Accounts[0].PrimaryWindow.RemainingPercent)
+	require.NotNil(t, snapshot.Accounts[0].SecondaryWindow)
 	assert.False(t, snapshot.Partial)
 	assert.False(t, snapshot.Stale)
 	assert.Equal(t, AccountPoolSummary{Total: 1, Limited: 1}, snapshot.Summary)
@@ -262,8 +266,12 @@ func TestAccountPoolManagerClassifiesAuthFileUsageLimitStatusAsLimited(t *testin
 	paths := append([]string(nil), fake.paths...)
 	requests := append([]map[string]interface{}(nil), fake.usageRequests...)
 	fake.mu.Unlock()
-	assert.Equal(t, []string{"GET /v0/management/auth-files"}, paths)
-	assert.Empty(t, requests)
+	assert.Equal(t, []string{
+		"GET /v0/management/auth-files",
+		"POST /v0/management/api-call",
+	}, paths)
+	require.Len(t, requests, 1)
+	assert.Equal(t, "auth-index-secret", requests[0]["auth_index"])
 }
 
 func TestAccountPoolUsageLimitPayloadClassification(t *testing.T) {
