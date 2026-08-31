@@ -22,14 +22,16 @@ import (
 )
 
 type accountPoolFakeManagement struct {
-	t             *testing.T
-	server        *httptest.Server
-	mu            sync.Mutex
-	paths         []string
-	usageRequests []map[string]interface{}
-	failUsage     bool
-	usageStatus   int
-	usageBody     string
+	t                 *testing.T
+	server            *httptest.Server
+	mu                sync.Mutex
+	paths             []string
+	usageRequests     []map[string]interface{}
+	authStatus        string
+	authStatusMessage string
+	failUsage         bool
+	usageStatus       int
+	usageBody         string
 }
 
 type accountPoolRoundTripFunc func(*http.Request) (*http.Response, error)
@@ -54,6 +56,10 @@ func (fake *accountPoolFakeManagement) handle(writer http.ResponseWriter, reques
 	switch request.URL.Path {
 	case "/v0/management/auth-files":
 		require.Equal(fake.t, http.MethodGet, request.Method)
+		fake.mu.Lock()
+		authStatus := fake.authStatus
+		authStatusMessage := fake.authStatusMessage
+		fake.mu.Unlock()
 		idTokenPayload, err := common.Marshal(map[string]interface{}{
 			"https://api.openai.com/auth": map[string]interface{}{
 				"chatgpt_account_id":                "account-id-secret",
@@ -63,17 +69,22 @@ func (fake *accountPoolFakeManagement) handle(writer http.ResponseWriter, reques
 		})
 		require.NoError(fake.t, err)
 		idToken := "header." + base64.RawURLEncoding.EncodeToString(idTokenPayload) + ".signature"
+		codexFile := map[string]interface{}{
+			"name":       "/private/codex-admin@example.com.json",
+			"type":       "codex",
+			"auth_index": "auth-index-secret",
+			"email":      "admin@example.com",
+			"metadata": map[string]interface{}{
+				"id_token": idToken,
+			},
+		}
+		if authStatus != "" {
+			codexFile["status"] = authStatus
+			codexFile["status_message"] = authStatusMessage
+		}
 		writeAccountPoolTestJSON(fake.t, writer, http.StatusOK, map[string]interface{}{
 			"files": []map[string]interface{}{
-				{
-					"name":       "/private/codex-admin@example.com.json",
-					"type":       "codex",
-					"auth_index": "auth-index-secret",
-					"email":      "admin@example.com",
-					"metadata": map[string]interface{}{
-						"id_token": idToken,
-					},
-				},
+				codexFile,
 				{
 					"name":       "claude.json",
 					"type":       "claude",
@@ -228,6 +239,31 @@ func TestAccountPoolManagerClassifiesUsageLimitReachedAsLimited(t *testing.T) {
 	assert.False(t, snapshot.Stale)
 	assert.Equal(t, AccountPoolSummary{Total: 1, Limited: 1}, snapshot.Summary)
 	assert.Equal(t, "success", manager.syncStatus().LastSyncStatus)
+}
+
+func TestAccountPoolManagerClassifiesAuthFileUsageLimitStatusAsLimited(t *testing.T) {
+	now := time.Date(2026, 8, 31, 9, 30, 0, 0, time.UTC)
+	fake := newAccountPoolFakeManagement(t)
+	fake.authStatus = "error"
+	fake.authStatusMessage = `{"error":{"type":"usage_limit_reached","message":"The usage limit has been reached"}}`
+	manager := fake.manager(now)
+
+	snapshot, err := manager.get(context.Background())
+	require.NoError(t, err)
+	require.Len(t, snapshot.Accounts, 1)
+	assert.Equal(t, "limited", snapshot.Accounts[0].Status)
+	assert.False(t, snapshot.Accounts[0].Stale)
+	assert.False(t, snapshot.Partial)
+	assert.False(t, snapshot.Stale)
+	assert.Equal(t, AccountPoolSummary{Total: 1, Limited: 1}, snapshot.Summary)
+	assert.Equal(t, "success", manager.syncStatus().LastSyncStatus)
+
+	fake.mu.Lock()
+	paths := append([]string(nil), fake.paths...)
+	requests := append([]map[string]interface{}(nil), fake.usageRequests...)
+	fake.mu.Unlock()
+	assert.Equal(t, []string{"GET /v0/management/auth-files"}, paths)
+	assert.Empty(t, requests)
 }
 
 func TestAccountPoolUsageLimitPayloadClassification(t *testing.T) {

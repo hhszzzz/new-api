@@ -125,7 +125,9 @@ describe('account pool table', () => {
       container.querySelector('time[datetime="2026-08-29T11:55:00Z"]')
     ).not.toBeInTheDocument()
     expect(screen.getByText('Next refresh in 4m 5s')).toBeInTheDocument()
-    expect(screen.getByText('Last successful quota data')).toBeInTheDocument()
+    expect(
+      screen.queryByText('Last successful quota data')
+    ).not.toBeInTheDocument()
     expect(screen.getAllByRole('button', { name: 'Refresh all' })).toHaveLength(
       1
     )

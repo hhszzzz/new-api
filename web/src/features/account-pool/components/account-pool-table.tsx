@@ -90,11 +90,6 @@ export function AccountPoolTable(props: AccountPoolTableProps) {
                 {row.original.email}
               </div>
             ) : null}
-            {row.original.stale ? (
-              <div className='text-warning text-xs'>
-                {t('Last successful quota data')}
-              </div>
-            ) : null}
           </div>
         ),
       },

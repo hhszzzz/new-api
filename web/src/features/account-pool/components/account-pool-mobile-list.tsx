@@ -98,11 +98,6 @@ export function AccountPoolMobileList(props: AccountPoolMobileListProps) {
                     {account.email}
                   </div>
                 ) : null}
-                {account.stale ? (
-                  <div className='text-warning text-xs'>
-                    {t('Last successful quota data')}
-                  </div>
-                ) : null}
               </div>
               <AccountStatusBadge status={account.status} />
             </header>

@@ -32,6 +32,7 @@ const (
 	accountPoolAuthFilesPath = "/auth-files"
 	accountPoolAPICallPath   = "/api-call"
 	accountPoolCodexUsageURL = "https://chatgpt.com/backend-api/wham/usage"
+	accountPoolUsageLimited  = "usage_limit_reached"
 
 	accountPoolPerRequestTimeout = 12 * time.Second
 	accountPoolRoundTimeout      = 20 * time.Second
@@ -686,8 +687,7 @@ func normalizeAccountPoolPayload(body interface{}) (map[string]interface{}, erro
 }
 
 func isAccountPoolUsageLimitPayload(payload map[string]interface{}) bool {
-	const usageLimitReached = "usage_limit_reached"
-	if strings.EqualFold(firstAccountPoolString(payload, "type", "code"), usageLimitReached) {
+	if strings.EqualFold(firstAccountPoolString(payload, "type", "code"), accountPoolUsageLimited) {
 		return true
 	}
 	errorValue, exists := payload["error"]
@@ -695,10 +695,18 @@ func isAccountPoolUsageLimitPayload(payload map[string]interface{}) bool {
 		return false
 	}
 	if errorText, ok := errorValue.(string); ok {
-		return strings.EqualFold(strings.TrimSpace(errorText), usageLimitReached)
+		return strings.EqualFold(strings.TrimSpace(errorText), accountPoolUsageLimited)
 	}
 	errorPayload, ok := errorValue.(map[string]interface{})
-	return ok && strings.EqualFold(firstAccountPoolString(errorPayload, "type", "code"), usageLimitReached)
+	return ok && strings.EqualFold(firstAccountPoolString(errorPayload, "type", "code"), accountPoolUsageLimited)
+}
+
+func isAccountPoolUsageLimitValue(value interface{}) bool {
+	if text, ok := value.(string); ok && strings.EqualFold(strings.TrimSpace(text), accountPoolUsageLimited) {
+		return true
+	}
+	payload, err := normalizeAccountPoolPayload(value)
+	return err == nil && isAccountPoolUsageLimitPayload(payload)
 }
 
 func hasAccountPoolUsageErrorPayload(payload map[string]interface{}) bool {
@@ -756,15 +764,21 @@ func buildAccountPoolAccount(file map[string]interface{}, idSecret string, now t
 		SubscriptionActiveUntil: subscriptionActiveUntil,
 		UpdatedAt:               now,
 	}
+	status := strings.ToLower(firstAccountPoolString(file, "status"))
+	unavailable := firstAccountPoolBool(file, "unavailable")
 	if firstAccountPoolBool(file, "disabled") {
 		account.Status = "disabled"
 		return account, "", "", false
 	}
-	if firstAccountPoolBool(file, "unavailable") {
+	statusMessage := firstAccountPoolValue(file, "status_message", "statusMessage")
+	if (status == "error" || status == "unavailable" || unavailable) && isAccountPoolUsageLimitValue(statusMessage) {
+		account.Status = "limited"
+		return account, "", "", false
+	}
+	if unavailable {
 		account.Status = "unavailable"
 		return account, "", "", false
 	}
-	status := strings.ToLower(firstAccountPoolString(file, "status"))
 	if status == "disabled" || status == "error" || status == "unavailable" {
 		account.Status = status
 		return account, "", "", false
