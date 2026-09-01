@@ -66,7 +66,11 @@ func (schedule ChannelSchedule) Value() (driver.Value, error) {
 	if err := schedule.Normalize(); err != nil {
 		return nil, err
 	}
-	return common.Marshal(schedule)
+	data, err := common.Marshal(schedule)
+	if err != nil {
+		return nil, err
+	}
+	return string(data), nil
 }
 
 func (schedule *ChannelSchedule) Scan(value any) error {

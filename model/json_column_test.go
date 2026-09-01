@@ -9,8 +9,9 @@ import (
 )
 
 // 保护契约:PostgreSQL 走 simple protocol(PrepareStmt 关闭)时,driver.Valuer
-// 返回 []byte 会被 pgx 按 bytea 十六进制字面量编码,写入 json 列触发
-// SQLSTATE 22P02。所有 json 列的 Value() 必须返回 string(或 nil)。
+// 返回 []byte 会被 pgx 按 bytea 十六进制字面量编码:写入 json 列会触发
+// SQLSTATE 22P02,写入 text 列则会静默保存 \\x...。所有 JSON 值的
+// Value() 必须返回 string(或 nil)。
 func TestJSONColumnValuersReturnString(t *testing.T) {
 	testCases := []struct {
 		name   string
@@ -21,6 +22,11 @@ func TestJSONColumnValuersReturnString(t *testing.T) {
 			name:   "ChannelInfo",
 			valuer: ChannelInfo{IsMultiKey: true, MultiKeySize: 2},
 			want:   `{"is_multi_key":true,"multi_key_size":2,"multi_key_status_list":null,"multi_key_polling_index":0,"multi_key_mode":""}`,
+		},
+		{
+			name:   "ChannelSchedule",
+			valuer: ChannelSchedule{},
+			want:   `{"timezone":"Asia/Shanghai"}`,
 		},
 		{
 			name:   "Properties",
@@ -65,7 +71,7 @@ func TestJSONColumnValuersZeroValueIsNil(t *testing.T) {
 	}
 }
 
-// 保护契约:json 列的 Scan 必须同时接受 []byte 与 string——不同驱动/协议
+// 保护契约:JSON 值的 Scan 必须同时接受 []byte 与 string——不同驱动/协议
 // 模式返回类型不同,静默丢弃 string 会把已有数据清零。
 func TestJSONColumnScannersAcceptStringAndBytes(t *testing.T) {
 	toInput := func(kind string, payload string) interface{} {
@@ -81,6 +87,12 @@ func TestJSONColumnScannersAcceptStringAndBytes(t *testing.T) {
 			require.NoError(t, info.Scan(toInput(kind, `{"is_multi_key":true,"multi_key_size":2}`)))
 			assert.True(t, info.IsMultiKey)
 			assert.Equal(t, 2, info.MultiKeySize)
+
+			var schedule ChannelSchedule
+			require.NoError(t, schedule.Scan(toInput(kind, `{"timezone":"Asia/Shanghai","starts_at":1785718800}`)))
+			assert.Equal(t, ChannelScheduleTimezone, schedule.Timezone)
+			require.NotNil(t, schedule.StartsAt)
+			assert.EqualValues(t, 1785718800, *schedule.StartsAt)
 
 			var props Properties
 			require.NoError(t, props.Scan(toInput(kind, `{"input":"hello"}`)))
