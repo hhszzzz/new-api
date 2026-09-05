@@ -27,14 +27,17 @@ const (
 	modelRadarSourceURL          = "https://codexradar.com"
 	modelRadarAttribution        = "数据来自 Codex 雷达 codexradar.com"
 	modelRadarRequestTimeout     = 15 * time.Second
-	modelRadarEfficiencyMaxBytes = 4 << 20
+	modelRadarEfficiencyMaxBytes = 8 << 20
 	modelRadarInsightsMaxBytes   = 1 << 20
 	modelRadarDefaultInterval    = 10 * time.Minute
 	modelRadarMinimumInterval    = 10 * time.Minute
 	modelRadarMinimumStaleAfter  = 30 * time.Minute
 	modelRadarMaxConfigurations  = 256
-	modelRadarMaxHistoryFrames   = 256
-	modelRadarMaxAlerts          = 64
+	// The upstream history array grows without bound (one frame per source
+	// refresh, ~2-4h apart). The frontend only charts the 48h degradation
+	// window, so sync drops frames older than this limit after validation.
+	modelRadarMaxHistoryAge = 72 * time.Hour
+	modelRadarMaxAlerts     = 64
 )
 
 var ErrModelRadarUnavailable = errors.New("model radar data unavailable")
@@ -362,7 +365,7 @@ func normalizeModelRadarEfficiency(payload modelRadarEfficiencyPayload) ([]Model
 	if len(payload.Points) == 0 || len(payload.Points) > modelRadarMaxConfigurations {
 		return nil, nil, 0, errors.New("configuration count is out of range")
 	}
-	if len(payload.History) == 0 || len(payload.History) > modelRadarMaxHistoryFrames {
+	if len(payload.History) == 0 {
 		return nil, nil, 0, errors.New("history frame count is out of range")
 	}
 
@@ -408,6 +411,19 @@ func normalizeModelRadarEfficiency(payload modelRadarEfficiencyPayload) ([]Model
 			points = append(points, historyPoint)
 		}
 		history = append(history, ModelRadarHistoryFrame{Ts: ts, Points: points})
+	}
+	// The upstream payload accumulates history since launch; keep only the
+	// frames inside the degradation window so the stored snapshot stays small.
+	if len(history) > 0 {
+		cutoff := history[len(history)-1].Ts - int64(modelRadarMaxHistoryAge.Seconds())
+		retained := history
+		for i, frame := range history {
+			if frame.Ts >= cutoff {
+				retained = history[i:]
+				break
+			}
+		}
+		history = retained
 	}
 	return configurations, history, sourceUpdatedAt, nil
 }

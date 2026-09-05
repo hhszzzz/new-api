@@ -197,6 +197,35 @@ func TestNormalizeModelRadarEfficiencyRejectsDuplicateAndOutOfRangeData(t *testi
 	})
 }
 
+func TestNormalizeModelRadarEfficiencyDropsHistoryOlderThanRetentionWindow(t *testing.T) {
+	// Upstream keeps every frame since launch, which eventually pushed the
+	// response past the fetch cap. Sync must retain only the recent window.
+	efficiency, _ := modelRadarTestPayloads(t)
+	var payload modelRadarEfficiencyPayload
+	require.NoError(t, common.Unmarshal(efficiency, &payload))
+
+	// The newest fixture frame is 2026-07-26; the 72h retention window starts
+	// 2026-07-23, so a 2026-07-01 frame must be dropped and the two fixture
+	// frames (2026-07-25/26) retained.
+	oldFrame := modelRadarUpstreamHistoryFrame{
+		At: "2026-07-01T00:00:00Z",
+		Points: []modelRadarUpstreamPoint{{
+			Model: "gpt-test", Effort: "high",
+			IQ: func() *float64 { v := 80.0; return &v }(),
+			Passed: func() *float64 { v := 2.0; return &v }(),
+			ValidTasks: func() *float64 { v := 4.0; return &v }(),
+		}},
+	}
+	payload.History = append([]modelRadarUpstreamHistoryFrame{oldFrame}, payload.History...)
+	require.Len(t, payload.History, 3)
+
+	_, history, _, err := normalizeModelRadarEfficiency(payload)
+	require.NoError(t, err)
+	require.Len(t, history, 2)
+	assert.Equal(t, "2026-07-25T00:00:00Z", time.Unix(history[0].Ts, 0).UTC().Format(time.RFC3339))
+	assert.Equal(t, "2026-07-26T00:00:00Z", time.Unix(history[1].Ts, 0).UTC().Format(time.RFC3339))
+}
+
 func TestNormalizeModelRadarInsightsAllowsNoAlerts(t *testing.T) {
 	alerts, updatedAt, err := normalizeModelRadarInsights(modelRadarInsightsPayload{
 		Schema:          modelRadarInsightsSchema,
