@@ -20,7 +20,7 @@ import { RefreshIcon } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useQuery } from '@tanstack/react-query'
 import { isAxiosError } from 'axios'
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { PublicLayout } from '@/components/layout'
@@ -39,10 +39,17 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { getPricing } from '@/features/pricing/api'
 
 import { getModelRadar } from './api'
-import { CapabilityMatrix } from './components/capability-matrix'
+import { CapabilityGrid } from './components/capability-grid'
 import { DegradationAlerts } from './components/degradation-alerts'
+import { StationTabs } from './components/station-tabs'
 import { useRadarFormatters } from './hooks/use-radar-formatters'
-import { createModelRadarIconRegistry } from './lib/model-radar'
+import {
+  ALL_STATIONS,
+  createModelRadarIconRegistry,
+  filterByStation,
+  filterAlertsByStation,
+  listStations,
+} from './lib/model-radar'
 
 const REFRESH_INTERVAL_MS = 10 * 60 * 1000
 const PRICING_STALE_TIME_MS = 5 * 60 * 1000
@@ -66,6 +73,16 @@ export function ModelRadar() {
     [pricingQuery.data]
   )
   const snapshot = radarQuery.data?.data
+  const [station, setStation] = useState(ALL_STATIONS)
+  const stations = listStations(snapshot?.configurations ?? [])
+  const stationExists =
+    station === ALL_STATIONS || stations.some((item) => item.key === station)
+  const activeStation = stationExists ? station : ALL_STATIONS
+  if (snapshot && !stationExists) setStation(ALL_STATIONS)
+  const configurations = filterByStation(
+    snapshot?.configurations ?? [],
+    activeStation
+  )
   const updatedAt = snapshot ? format.dateTime(snapshot.fetched_at) : null
   const sourceUpdatedAt = snapshot
     ? format.dateTime(
@@ -99,16 +116,33 @@ export function ModelRadar() {
           <StaleNotice sourceUpdatedAt={sourceUpdatedAt} />
         ) : null}
         {radarQuery.isError ? <RefreshFailureNotice /> : null}
-        <DegradationAlerts
-          alerts={snapshot.degradation_alerts}
-          history={snapshot.history}
-          configurations={snapshot.configurations}
-          iconRegistry={iconRegistry}
-        />
-        <CapabilityMatrix
-          configurations={snapshot.configurations}
-          iconRegistry={iconRegistry}
-        />
+        <StationTabs
+          stations={stations}
+          total={snapshot.configurations.length}
+          value={activeStation}
+          onValueChange={setStation}
+        >
+          <DegradationAlerts
+            alerts={filterAlertsByStation(
+              snapshot.degradation_alerts,
+              snapshot.configurations,
+              activeStation
+            )}
+            history={snapshot.history}
+            configurations={snapshot.configurations}
+            iconRegistry={iconRegistry}
+          />
+          {configurations.length > 0 ? (
+            <CapabilityGrid
+              configurations={configurations}
+              history={snapshot.history}
+              showStation={activeStation === ALL_STATIONS}
+              iconRegistry={iconRegistry}
+            />
+          ) : (
+            <RadarEmpty station />
+          )}
+        </StationTabs>
       </>
     )
   }
@@ -278,7 +312,7 @@ function RadarError(props: {
   )
 }
 
-function RadarEmpty() {
+function RadarEmpty(props: { station?: boolean }) {
   const { t } = useTranslation()
   return (
     <Empty
@@ -296,7 +330,11 @@ function RadarEmpty() {
         </EmptyMedia>
         <EmptyTitle>{t('No model radar data')}</EmptyTitle>
         <EmptyDescription>
-          {t('The current snapshot does not contain any model configurations.')}
+          {props.station
+            ? t('No configurations in this station yet.')
+            : t(
+                'The current snapshot does not contain any model configurations.'
+              )}
         </EmptyDescription>
       </EmptyHeader>
     </Empty>

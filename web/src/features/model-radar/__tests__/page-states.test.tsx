@@ -16,7 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import type { ReactNode } from 'react'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 
@@ -93,6 +94,10 @@ function response(stale: boolean): ModelRadarResponse {
         {
           model: 'model-a',
           effort: 'low',
+          harness: 'codex',
+          runs_24h: null,
+          runs_48h: null,
+          average_price_usd_by_band: null,
           iq: 75,
           passed: 1,
           valid_tasks: 2,
@@ -125,6 +130,91 @@ function renderPage() {
 beforeEach(() => queryMocks.useQuery.mockReset())
 
 describe('model radar page states', () => {
+  test('switching stations filters both model cards and degradation alerts', async () => {
+    const user = userEvent.setup()
+    const data = response(false)
+    data.data.configurations.push({
+      ...data.data.configurations[0],
+      model: 'model-dsh',
+      harness: 'dsh',
+    })
+    data.data.degradation_alerts = data.data.configurations.map((item) => ({
+      model: item.model,
+      effort: item.effort,
+      iq: item.iq,
+      degradation_12h_iq: 1,
+      degradation_24h_iq: 2,
+      degradation_48h_iq: 3,
+    }))
+    queryMocks.useQuery.mockReturnValue({ data, isFetched: true })
+    renderPage()
+    await user.click(screen.getByRole('tab', { name: 'DSH 1' }))
+    expect(screen.getByRole('tab', { name: 'DSH 1' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+    const panel = screen.getByRole('tabpanel')
+    expect(
+      within(panel).getByRole('heading', { name: 'model-dsh' })
+    ).toBeVisible()
+    expect(within(panel).queryByRole('heading', { name: 'model-a' })).toBeNull()
+    expect(
+      within(panel).getByRole('article', { name: 'model-dsh low' })
+    ).toBeVisible()
+    expect(
+      within(panel).queryByRole('article', { name: 'model-a low' })
+    ).toBeNull()
+  })
+
+  test('refreshing away the selected station falls back to All and does not reselect it when it returns', async () => {
+    const user = userEvent.setup()
+    const data = response(false)
+    data.data.configurations.push({
+      ...data.data.configurations[0],
+      model: 'model-dsh',
+      harness: 'dsh',
+    })
+    queryMocks.useQuery.mockReturnValue({ data, isFetched: true })
+    const view = renderPage()
+    await user.click(screen.getByRole('tab', { name: 'DSH 1' }))
+    queryMocks.useQuery.mockReturnValue({
+      data: response(false),
+      isFetched: true,
+    })
+    view.rerender(<ModelRadar />)
+    expect(screen.queryByRole('tablist')).toBeNull()
+    expect(screen.getByRole('heading', { name: 'model-a' })).toBeVisible()
+    queryMocks.useQuery.mockReturnValue({ data, isFetched: true })
+    view.rerender(<ModelRadar />)
+    expect(screen.getByRole('tab', { name: 'All 2' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+  })
+
+  test('shows an empty snapshot state when every station loses its configurations', async () => {
+    const user = userEvent.setup()
+    const data = response(false)
+    data.data.configurations.push({
+      ...data.data.configurations[0],
+      model: 'model-dsh',
+      harness: 'dsh',
+    })
+    queryMocks.useQuery.mockReturnValue({ data, isFetched: true })
+    const view = renderPage()
+    await user.click(screen.getByRole('tab', { name: 'DSH 1' }))
+    queryMocks.useQuery.mockReturnValue({
+      data: { ...data, data: { ...data.data, configurations: [] } },
+      isFetched: true,
+    })
+    view.rerender(<ModelRadar />)
+    expect(
+      screen.getByRole('status', { name: 'No model radar data' })
+    ).toBeVisible()
+    expect(screen.queryByRole('tablist')).toBeNull()
+    expect(screen.queryByRole('button', { name: /View details/ })).toBeNull()
+  })
+
   test('shows the loading skeleton during the initial fetch', () => {
     queryMocks.useQuery.mockReturnValue({
       data: undefined,

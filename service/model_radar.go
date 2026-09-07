@@ -48,26 +48,37 @@ type ModelRadarSource struct {
 	Attribution string `json:"attribution"`
 }
 
+// ModelRadarPriceBand carries the upstream off-peak / peak cost estimates that
+// some providers (DeepSeek) publish instead of a single average price.
+type ModelRadarPriceBand struct {
+	OffPeak *float64 `json:"off_peak"`
+	Peak    *float64 `json:"peak"`
+}
+
 type ModelRadarConfiguration struct {
-	Model                 string   `json:"model"`
-	Effort                string   `json:"effort"`
-	IQ                    float64  `json:"iq"`
-	Passed                int      `json:"passed"`
-	ValidTasks            int      `json:"valid_tasks"`
-	AveragePriceUSD       *float64 `json:"average_price_usd"`
-	PriceSamples          *int     `json:"price_samples"`
-	AverageMinutes        *float64 `json:"average_minutes"`
-	DurationSamples       *int     `json:"duration_samples"`
-	IncompleteCostSamples *int     `json:"incomplete_cost_samples"`
-	TotalRuns             *int     `json:"total_runs"`
-	LatestGradedAt        *int64   `json:"latest_graded_at"`
-	AverageAgentSteps     *float64 `json:"average_agent_steps"`
-	AgentStepsSamples     *int     `json:"agent_steps_samples"`
-	AverageTotalTokens    *float64 `json:"average_total_tokens"`
-	TokenSamples          *int     `json:"token_samples"`
-	CacheHitRate          *float64 `json:"cache_hit_rate"`
-	CacheTokenSamples     *int     `json:"cache_token_samples"`
-	CombinedCostIndex     *float64 `json:"combined_cost_index"`
+	Model                 string               `json:"model"`
+	Effort                string               `json:"effort"`
+	Harness               string               `json:"harness"`
+	IQ                    float64              `json:"iq"`
+	Passed                int                  `json:"passed"`
+	ValidTasks            int                  `json:"valid_tasks"`
+	AveragePriceUSD       *float64             `json:"average_price_usd"`
+	AveragePriceUSDByBand *ModelRadarPriceBand `json:"average_price_usd_by_band"`
+	PriceSamples          *int                 `json:"price_samples"`
+	AverageMinutes        *float64             `json:"average_minutes"`
+	DurationSamples       *int                 `json:"duration_samples"`
+	IncompleteCostSamples *int                 `json:"incomplete_cost_samples"`
+	TotalRuns             *int                 `json:"total_runs"`
+	Runs24h               *int                 `json:"runs_24h"`
+	Runs48h               *int                 `json:"runs_48h"`
+	LatestGradedAt        *int64               `json:"latest_graded_at"`
+	AverageAgentSteps     *float64             `json:"average_agent_steps"`
+	AgentStepsSamples     *int                 `json:"agent_steps_samples"`
+	AverageTotalTokens    *float64             `json:"average_total_tokens"`
+	TokenSamples          *int                 `json:"token_samples"`
+	CacheHitRate          *float64             `json:"cache_hit_rate"`
+	CacheTokenSamples     *int                 `json:"cache_token_samples"`
+	CombinedCostIndex     *float64             `json:"combined_cost_index"`
 }
 
 type ModelRadarHistoryPoint struct {
@@ -121,25 +132,29 @@ type ModelRadarSyncResult struct {
 }
 
 type modelRadarUpstreamPoint struct {
-	Model                 string   `json:"model"`
-	Effort                string   `json:"effort"`
-	IQ                    *float64 `json:"iq"`
-	Passed                *float64 `json:"passed"`
-	ValidTasks            *float64 `json:"valid_tasks"`
-	AveragePriceUSD       *float64 `json:"average_price_usd"`
-	PriceSamples          *int     `json:"price_samples"`
-	AverageMinutes        *float64 `json:"average_minutes"`
-	DurationSamples       *int     `json:"duration_samples"`
-	IncompleteCostSamples *int     `json:"incomplete_cost_samples"`
-	TotalRuns             *int     `json:"total_runs"`
-	LatestGradedAt        *string  `json:"latest_graded_at"`
-	AverageAgentSteps     *float64 `json:"average_agent_steps"`
-	AgentStepsSamples     *int     `json:"agent_steps_samples"`
-	AverageTotalTokens    *float64 `json:"average_total_tokens"`
-	TokenSamples          *int     `json:"token_samples"`
-	CacheHitRate          *float64 `json:"cache_hit_rate"`
-	CacheTokenSamples     *int     `json:"cache_token_samples"`
-	CombinedCostIndex     *float64 `json:"combined_cost_index"`
+	Model                 string               `json:"model"`
+	Effort                string               `json:"effort"`
+	Harness               string               `json:"harness"`
+	IQ                    *float64             `json:"iq"`
+	Passed                *float64             `json:"passed"`
+	ValidTasks            *float64             `json:"valid_tasks"`
+	AveragePriceUSD       *float64             `json:"average_price_usd"`
+	AveragePriceUSDByBand *ModelRadarPriceBand `json:"average_price_usd_by_band"`
+	PriceSamples          *int                 `json:"price_samples"`
+	AverageMinutes        *float64             `json:"average_minutes"`
+	DurationSamples       *int                 `json:"duration_samples"`
+	IncompleteCostSamples *int                 `json:"incomplete_cost_samples"`
+	TotalRuns             *int                 `json:"total_runs"`
+	Runs24h               *int                 `json:"runs_24h"`
+	Runs48h               *int                 `json:"runs_48h"`
+	LatestGradedAt        *string              `json:"latest_graded_at"`
+	AverageAgentSteps     *float64             `json:"average_agent_steps"`
+	AgentStepsSamples     *int                 `json:"agent_steps_samples"`
+	AverageTotalTokens    *float64             `json:"average_total_tokens"`
+	TokenSamples          *int                 `json:"token_samples"`
+	CacheHitRate          *float64             `json:"cache_hit_rate"`
+	CacheTokenSamples     *int                 `json:"cache_token_samples"`
+	CombinedCostIndex     *float64             `json:"combined_cost_index"`
 }
 
 type modelRadarUpstreamHistoryFrame struct {
@@ -433,6 +448,12 @@ func normalizeModelRadarConfiguration(point modelRadarUpstreamPoint) (ModelRadar
 	if err != nil {
 		return ModelRadarConfiguration{}, "", err
 	}
+	// The harness identifies the upstream "station" (codex, dsh, ...) that
+	// produced the sample; it is optional so older snapshots keep loading.
+	harness := strings.ToLower(strings.TrimSpace(point.Harness))
+	if len(harness) > 32 {
+		return ModelRadarConfiguration{}, "", fmt.Errorf("invalid configuration %s: harness exceeds length limit", key)
+	}
 	if err := validateModelRadarCoreMetrics(point.IQ, point.Passed, point.ValidTasks); err != nil {
 		return ModelRadarConfiguration{}, "", fmt.Errorf("invalid configuration %s: %w", key, err)
 	}
@@ -455,15 +476,19 @@ func normalizeModelRadarConfiguration(point modelRadarUpstreamPoint) (ModelRadar
 	return ModelRadarConfiguration{
 		Model:                 modelName,
 		Effort:                effort,
+		Harness:               harness,
 		IQ:                    *point.IQ,
 		Passed:                passed,
 		ValidTasks:            validTasks,
 		AveragePriceUSD:       point.AveragePriceUSD,
+		AveragePriceUSDByBand: point.AveragePriceUSDByBand,
 		PriceSamples:          point.PriceSamples,
 		AverageMinutes:        point.AverageMinutes,
 		DurationSamples:       point.DurationSamples,
 		IncompleteCostSamples: point.IncompleteCostSamples,
 		TotalRuns:             point.TotalRuns,
+		Runs24h:               point.Runs24h,
+		Runs48h:               point.Runs48h,
 		LatestGradedAt:        latestGradedAt,
 		AverageAgentSteps:     point.AverageAgentSteps,
 		AgentStepsSamples:     point.AgentStepsSamples,
@@ -603,6 +628,14 @@ func validateModelRadarOptionalMetrics(point modelRadarUpstreamPoint) error {
 			return err
 		}
 	}
+	if band := point.AveragePriceUSDByBand; band != nil {
+		if err := validateOptionalFloat("average_price_usd_by_band.off_peak", band.OffPeak, 0, math.MaxFloat64); err != nil {
+			return err
+		}
+		if err := validateOptionalFloat("average_price_usd_by_band.peak", band.Peak, 0, math.MaxFloat64); err != nil {
+			return err
+		}
+	}
 	if err := validateOptionalFloat("cache_hit_rate", point.CacheHitRate, 0, 1); err != nil {
 		return err
 	}
@@ -614,6 +647,8 @@ func validateModelRadarOptionalMetrics(point modelRadarUpstreamPoint) error {
 		"duration_samples":        point.DurationSamples,
 		"incomplete_cost_samples": point.IncompleteCostSamples,
 		"total_runs":              point.TotalRuns,
+		"runs_24h":                point.Runs24h,
+		"runs_48h":                point.Runs48h,
 		"agent_steps_samples":     point.AgentStepsSamples,
 		"token_samples":           point.TokenSamples,
 		"cache_token_samples":     point.CacheTokenSamples,

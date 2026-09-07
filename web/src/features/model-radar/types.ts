@@ -26,6 +26,13 @@ export type ModelRadarSource = {
 export type ModelRadarConfiguration = {
   model: string
   effort: string
+  harness: string
+  runs_24h: number | null
+  runs_48h: number | null
+  average_price_usd_by_band: {
+    off_peak: number | null
+    peak: number | null
+  } | null
   iq: number
   passed: number
   valid_tasks: number

@@ -16,12 +16,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, test, vi } from 'vitest'
 
-import { CapabilityMatrix, ModelBadge } from '../components/capability-matrix'
-import type { ModelRadarConfiguration } from '../types'
+import { CapabilityGrid } from '../components/capability-grid'
+import { ModelBadge } from '../components/model-badge'
+import { configurationFixture as fixture } from './fixtures'
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -37,29 +38,7 @@ vi.mock('@/lib/lobe-icon', () => ({
   getLobeIcon: (iconName: string) => <svg data-icon-key={iconName} />,
 }))
 
-const fixture: ModelRadarConfiguration = {
-  model: 'gpt-radar',
-  effort: 'medium',
-  iq: 93.75,
-  passed: 7,
-  valid_tasks: 10,
-  average_price_usd: 1.25,
-  price_samples: 10,
-  average_minutes: 4.5,
-  duration_samples: 9,
-  incomplete_cost_samples: 1,
-  total_runs: 12,
-  latest_graded_at: 1_800_000_000,
-  average_agent_steps: 22,
-  agent_steps_samples: 8,
-  average_total_tokens: 12_345,
-  token_samples: 7,
-  cache_hit_rate: 0.75,
-  cache_token_samples: 6,
-  combined_cost_index: 45,
-}
-
-describe('model radar capability matrix', () => {
+describe('model radar capability grid', () => {
   test('renders a complete vendor badge without clipping it', () => {
     const { container } = render(<ModelBadge color='#2563eb' model='gpt-5.4' />)
     const wrapper = container.firstElementChild
@@ -71,7 +50,8 @@ describe('model radar capability matrix', () => {
 
   test('renders the vendor configured icon variant instead of the radar fallback', () => {
     const { container } = render(
-      <CapabilityMatrix
+      <CapabilityGrid
+        history={[]}
         configurations={[{ ...fixture, model: 'deepseek-v3.2' }]}
         iconRegistry={{
           modelIcons: new Map<string, string>(),
@@ -85,37 +65,71 @@ describe('model radar capability matrix', () => {
     ).not.toBeNull()
   })
 
-  test('lays out the matrix as a table with one row per model', () => {
-    render(<CapabilityMatrix configurations={[fixture]} />)
+  test('renders one group heading per model with configuration metrics', () => {
+    render(<CapabilityGrid history={[]} configurations={[fixture]} />)
 
-    const table = screen.getByRole('table')
-    expect(table).toBeVisible()
-    expect(screen.getByRole('rowheader', { name: /gpt-radar/ })).toBeVisible()
-    expect(
-      screen.getByRole('button', { name: 'View details for gpt-radar medium' })
-    ).toBeVisible()
+    expect(screen.getAllByRole('heading', { name: 'gpt-radar' })).toHaveLength(
+      1
+    )
+    const card = screen.getByRole('button', {
+      name: 'View details for gpt-radar medium',
+    })
+    expect(within(card).getByText('93.8')).toBeVisible()
+    expect(within(card).getByText('$1.25')).toBeVisible()
+    expect(within(card).getByText('4.5 min')).toBeVisible()
+    expect(within(card).getByText('7/10')).toBeVisible()
+    expect(within(card).getByLabelText('3 runs in 24h')).toBeVisible()
   })
 
-  test('keeps the pinned model column opaque and above scrolling score cells', () => {
-    render(<CapabilityMatrix configurations={[fixture]} />)
+  test('aligns missing effort slots on desktop and hides them in the mobile two-column flow', () => {
+    render(
+      <CapabilityGrid
+        history={[]}
+        configurations={[
+          fixture,
+          { ...fixture, model: 'other', effort: 'high' },
+        ]}
+      />
+    )
+    const group = screen.getByRole('region', { name: 'gpt-radar' })
+    const card = within(group).getByRole('button')
+    const grid = card.parentElement
+    expect(grid).toHaveClass('grid-cols-2')
+    expect(grid?.style.getPropertyValue('--effort-count')).toBe('2')
+    const placeholder = grid?.lastElementChild
+    expect(placeholder).toHaveAttribute('aria-hidden', 'true')
+    expect(placeholder).toHaveClass('hidden', 'md:block')
+  })
 
-    expect(screen.getByRole('columnheader', { name: 'Model' })).toHaveClass(
-      'sticky',
-      'left-0',
-      'z-20',
-      'bg-card'
+  test('shows missing costs as dashes and omits absent run badges while preserving zero runs', () => {
+    const view = render(
+      <CapabilityGrid
+        history={[]}
+        configurations={[
+          {
+            ...fixture,
+            runs_24h: null,
+            average_price_usd: null,
+            average_minutes: null,
+          },
+        ]}
+      />
     )
-    expect(screen.getByRole('rowheader', { name: /gpt-radar/ })).toHaveClass(
-      'sticky',
-      'left-0',
-      'z-10',
-      'bg-card'
+    const card = screen.getByRole('button')
+    expect(within(card).getAllByText('—')).toHaveLength(2)
+    expect(within(card).queryByLabelText(/runs in 24h/)).toBeNull()
+    view.rerender(
+      <CapabilityGrid
+        history={[]}
+        configurations={[{ ...fixture, runs_24h: 0 }]}
+      />
     )
+    expect(screen.getByLabelText('0 runs in 24h')).toBeVisible()
   })
 
   test('opens complete metrics from the keyboard and restores focus after Escape', async () => {
     const user = userEvent.setup()
-    render(<CapabilityMatrix configurations={[fixture]} />)
+    render(<CapabilityGrid history={[]} configurations={[fixture]} />)
     const detailsButton = screen.getByRole('button', {
       name: 'View details for gpt-radar medium',
     })
@@ -124,7 +138,7 @@ describe('model radar capability matrix', () => {
     await user.keyboard('{Enter}')
 
     const dialog = await screen.findByRole('dialog')
-    expect(dialog).toHaveAccessibleName('gpt-radar medium')
+    expect(dialog).toHaveAccessibleName('gpt-radar medium Codex')
     expect(screen.getByText('Combined cost index')).toBeVisible()
     expect(screen.getByText('45')).toBeVisible()
     expect(
@@ -146,7 +160,9 @@ describe('model radar capability matrix', () => {
 
   test('keeps an open detail dialog synchronized with refreshed configuration data', async () => {
     const user = userEvent.setup()
-    const view = render(<CapabilityMatrix configurations={[fixture]} />)
+    const view = render(
+      <CapabilityGrid history={[]} configurations={[fixture]} />
+    )
 
     await user.click(
       screen.getByRole('button', {
@@ -156,7 +172,8 @@ describe('model radar capability matrix', () => {
     expect(screen.getByRole('dialog')).toBeVisible()
 
     view.rerender(
-      <CapabilityMatrix
+      <CapabilityGrid
+        history={[]}
         configurations={[{ ...fixture, iq: 81.25, combined_cost_index: 12 }]}
       />
     )
@@ -168,7 +185,9 @@ describe('model radar capability matrix', () => {
 
   test('closes an open detail dialog when its configuration disappears', async () => {
     const user = userEvent.setup()
-    const view = render(<CapabilityMatrix configurations={[fixture]} />)
+    const view = render(
+      <CapabilityGrid history={[]} configurations={[fixture]} />
+    )
 
     await user.click(
       screen.getByRole('button', {
@@ -177,19 +196,26 @@ describe('model radar capability matrix', () => {
     )
     expect(screen.getByRole('dialog')).toBeVisible()
 
-    view.rerender(<CapabilityMatrix configurations={[]} />)
+    view.rerender(<CapabilityGrid history={[]} configurations={[]} />)
 
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
   })
 
   test('adds a column when the source introduces a new reasoning effort', () => {
     render(
-      <CapabilityMatrix
+      <CapabilityGrid
+        history={[]}
         configurations={[fixture, { ...fixture, effort: 'turbo', iq: 95 }]}
       />
     )
 
-    expect(screen.getByRole('columnheader', { name: 'turbo' })).toBeVisible()
+    const card = screen.getByRole('button', {
+      name: 'View details for gpt-radar turbo',
+    })
+    expect(card.parentElement?.style.getPropertyValue('--effort-count')).toBe(
+      '2'
+    )
+    expect(within(card).getByText('turbo')).toBeVisible()
     expect(
       screen.getByRole('button', { name: 'View details for gpt-radar turbo' })
     ).toBeVisible()

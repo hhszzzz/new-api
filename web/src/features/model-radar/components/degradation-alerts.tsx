@@ -18,7 +18,6 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { Alert02Icon, TickDouble02Icon } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
-import { useId, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { cn } from '@/lib/utils'
@@ -27,6 +26,8 @@ import { useRadarFormatters } from '../hooks/use-radar-formatters'
 import {
   createModelColorMap,
   getHistorySeries,
+  getIqTone,
+  IQ_TEXT_CLASSES,
   type ModelRadarIconRegistry,
 } from '../lib/model-radar'
 import type {
@@ -34,7 +35,8 @@ import type {
   ModelRadarDegradationAlert,
   ModelRadarHistoryFrame,
 } from '../types'
-import { ModelBadge } from './capability-matrix'
+import { ModelBadge } from './model-badge'
+import { Sparkline } from './sparkline'
 
 export function DegradationAlerts(props: {
   alerts: ModelRadarDegradationAlert[]
@@ -94,7 +96,8 @@ export function DegradationAlerts(props: {
               series={getHistorySeries(
                 props.history,
                 alert.model,
-                alert.effort
+                alert.effort,
+                48
               )}
               iconRegistry={props.iconRegistry}
             />
@@ -139,7 +142,12 @@ function AlertCard(props: {
           </div>
         </div>
         <div className='shrink-0 text-right'>
-          <p className='text-lg leading-tight font-semibold tabular-nums'>
+          <p
+            className={cn(
+              'text-2xl leading-tight font-semibold tabular-nums',
+              IQ_TEXT_CLASSES[getIqTone(alert.iq)]
+            )}
+          >
             {alert.iq.toFixed(1)}
             <span className='text-muted-foreground ml-1 text-[10px] font-normal'>
               IQ
@@ -163,79 +171,6 @@ function AlertCard(props: {
         </dl>
       </div>
     </article>
-  )
-}
-
-function Sparkline(props: { values: number[]; label: string }) {
-  const { t } = useTranslation()
-  const gradientId = useId()
-  const geometry = useMemo(() => {
-    if (props.values.length < 2) return null
-    const width = 180
-    const height = 48
-    const padding = 4
-    const min = Math.min(...props.values)
-    const max = Math.max(...props.values)
-    const span = max - min || 1
-    const stepX = (width - padding * 2) / (props.values.length - 1)
-    const points = props.values.map((value, index) => {
-      const x = padding + index * stepX
-      const y = padding + (1 - (value - min) / span) * (height - padding * 2)
-      return [x, y] as const
-    })
-    const line = points
-      .map(
-        ([x, y], index) =>
-          `${index === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`
-      )
-      .join(' ')
-    const area = `${line} L${(padding + (props.values.length - 1) * stepX).toFixed(1)},${height} L${padding},${height} Z`
-    const last = points.at(-1)
-    if (!last) return null
-    return { width, height, line, area, last }
-  }, [props.values])
-
-  if (!geometry) {
-    return (
-      <div className='text-muted-foreground flex h-12 min-w-0 flex-1 items-center text-[11px]'>
-        {t('No history data available')}
-      </div>
-    )
-  }
-
-  return (
-    <svg
-      viewBox={`0 0 ${geometry.width} ${geometry.height}`}
-      className='h-12 min-w-0 flex-1'
-      role='img'
-      aria-label={t('48-hour IQ trend for {{configuration}}', {
-        configuration: props.label,
-      })}
-      preserveAspectRatio='none'
-    >
-      <defs>
-        <linearGradient id={gradientId} x1='0' y1='0' x2='0' y2='1'>
-          <stop offset='0%' stopColor='var(--destructive)' stopOpacity='0.25' />
-          <stop offset='100%' stopColor='var(--destructive)' stopOpacity='0' />
-        </linearGradient>
-      </defs>
-      <path d={geometry.area} fill={`url(#${gradientId})`} />
-      <path
-        d={geometry.line}
-        fill='none'
-        stroke='var(--destructive)'
-        strokeWidth='1.5'
-        strokeLinejoin='round'
-        strokeLinecap='round'
-        vectorEffect='non-scaling-stroke'
-      />
-      <circle
-        cx={geometry.last[0]}
-        cy={geometry.last[1]}
-        r='2.5'
-        fill='var(--destructive)'
-      />
-    </svg>
   )
 }
 

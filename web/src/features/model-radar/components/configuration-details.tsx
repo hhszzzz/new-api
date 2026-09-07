@@ -20,18 +20,16 @@ import {
   Cancel01Icon,
   CellsIcon,
   Clock03Icon,
-  CrownIcon,
   DollarSignIcon,
   GaugeIcon,
-  GridViewIcon,
   HierarchyIcon,
   InformationCircleIcon,
   LayerIcon,
 } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
-import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -41,262 +39,20 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { getLobeIcon } from '@/lib/lobe-icon'
 import { cn } from '@/lib/utils'
 
 import { useRadarFormatters } from '../hooks/use-radar-formatters'
 import {
-  compareModelsByBestIq,
-  getIqTone,
-  getModelIconKey,
   getPassRate,
-  groupConfigurations,
-  matrixEfforts,
-  type ModelRadarIconRegistry,
+  getStationLabel,
+  getHistorySeries,
 } from '../lib/model-radar'
-import type { ModelRadarConfiguration } from '../types'
+import type { ModelRadarConfiguration, ModelRadarHistoryFrame } from '../types'
+import { Sparkline } from './sparkline'
 
-const CELL_TONE_CLASSES = {
-  high: 'border-emerald-500/25 bg-emerald-500/10 hover:bg-emerald-500/20',
-  mid: 'border-amber-500/25 bg-amber-500/10 hover:bg-amber-500/20',
-  low: 'border-destructive/25 bg-destructive/10 hover:bg-destructive/20',
-} as const
-
-const CELL_TEXT_CLASSES = {
-  high: 'text-emerald-700 dark:text-emerald-300',
-  mid: 'text-amber-700 dark:text-amber-300',
-  low: 'text-destructive',
-} as const
-
-// Provider icon for a radar model, falling back to its group color dot.
-export function ModelBadge(props: {
-  color: string
-  model: string
-  iconRegistry?: ModelRadarIconRegistry
-}) {
-  const iconKey = getModelIconKey(props.model, props.iconRegistry)
-  if (iconKey) {
-    return (
-      <span
-        className='flex size-6 shrink-0 items-center justify-center'
-        aria-hidden='true'
-      >
-        {getLobeIcon(iconKey, 20)}
-      </span>
-    )
-  }
-  return (
-    <span
-      className='size-2.5 shrink-0 rounded-full'
-      style={{ backgroundColor: props.color }}
-      aria-hidden='true'
-    />
-  )
-}
-
-export function CapabilityMatrix(props: {
-  configurations: ModelRadarConfiguration[]
-  iconRegistry?: ModelRadarIconRegistry
-}) {
-  const { t } = useTranslation()
-  const [selected, setSelected] = useState<{
-    model: string
-    effort: string
-  } | null>(null)
-  const groups = groupConfigurations(props.configurations).sort(
-    compareModelsByBestIq
-  )
-  const efforts = matrixEfforts(props.configurations)
-  const topGroup = groups[0]
-  const selectedConfiguration = selected
-    ? (props.configurations.find(
-        (configuration) =>
-          configuration.model === selected.model &&
-          configuration.effort === selected.effort
-      ) ?? null)
-    : null
-
-  useEffect(() => {
-    if (selected && !selectedConfiguration) setSelected(null)
-  }, [selected, selectedConfiguration])
-
-  return (
-    <section
-      aria-labelledby='capability-matrix-title'
-      className='border-border/70 mt-2 border-t pt-6'
-    >
-      <header className='mb-4'>
-        <div className='flex items-center gap-2'>
-          <HugeiconsIcon
-            icon={GridViewIcon}
-            className='text-primary size-4'
-            strokeWidth={2}
-            aria-hidden='true'
-          />
-          <h2 id='capability-matrix-title' className='text-base font-semibold'>
-            {t('Capability matrix')}
-          </h2>
-        </div>
-        <p className='text-muted-foreground mt-1 text-sm'>
-          {t('Compare IQ across every model and reasoning effort.')}
-        </p>
-      </header>
-
-      <div className='bg-card overflow-x-auto rounded-xl border'>
-        <table
-          className='w-full table-fixed border-collapse'
-          style={{ minWidth: 176 + efforts.length * 88 }}
-        >
-          <thead>
-            <tr className='border-border/70 border-b'>
-              <th className='text-muted-foreground bg-card sticky left-0 z-20 w-44 p-2.5 text-left text-xs font-medium shadow-[8px_0_10px_-10px_hsl(var(--foreground))] sm:p-3'>
-                {t('Model')}
-              </th>
-              {efforts.map((effort) => (
-                <th
-                  key={effort}
-                  className='text-muted-foreground p-2.5 text-center text-xs leading-tight font-medium break-words capitalize sm:p-3'
-                >
-                  {effort}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {groups.map((group) => {
-              const isTopModel = group === topGroup
-              const bestIq = Math.max(
-                ...group.configurations.map((item) => item.iq)
-              )
-              return (
-                <tr
-                  key={group.model}
-                  className={cn(
-                    'border-border/50 hover:bg-muted/30 group border-b transition-colors last:border-b-0',
-                    isTopModel && 'bg-primary/[0.03]'
-                  )}
-                >
-                  <th
-                    scope='row'
-                    className={cn(
-                      'bg-card sticky left-0 z-10 p-2.5 text-left shadow-[8px_0_10px_-10px_hsl(var(--foreground))] group-hover:[background-color:color-mix(in_oklch,var(--muted)_30%,var(--card))] sm:p-3',
-                      isTopModel &&
-                        '[background-color:color-mix(in_oklch,var(--primary)_3%,var(--card))]'
-                    )}
-                  >
-                    <div className='flex min-w-0 items-center gap-2'>
-                      <ModelBadge
-                        color={group.color}
-                        model={group.model}
-                        iconRegistry={props.iconRegistry}
-                      />
-                      <span className='max-w-40 truncate text-sm font-semibold'>
-                        {group.model}
-                      </span>
-                      {isTopModel ? (
-                        <HugeiconsIcon
-                          icon={CrownIcon}
-                          className='text-primary size-3.5 shrink-0'
-                          strokeWidth={2}
-                          aria-label={t('IQ max')}
-                        />
-                      ) : null}
-                    </div>
-                  </th>
-                  {efforts.map((effort) => {
-                    const configuration = group.configurations.find(
-                      (item) => item.effort.toLowerCase() === effort
-                    )
-                    return (
-                      <td key={effort} className='p-1.5 sm:p-2'>
-                        {configuration ? (
-                          <MatrixCell
-                            configuration={configuration}
-                            isBest={configuration.iq === bestIq}
-                            onSelect={(configuration) =>
-                              setSelected({
-                                model: configuration.model,
-                                effort: configuration.effort,
-                              })
-                            }
-                          />
-                        ) : (
-                          <span
-                            className='text-muted-foreground/40 block py-3 text-center text-xs'
-                            aria-hidden='true'
-                          >
-                            —
-                          </span>
-                        )}
-                      </td>
-                    )
-                  })}
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
-      </div>
-
-      <ConfigurationDetails
-        configuration={selectedConfiguration}
-        open={selectedConfiguration !== null}
-        onOpenChange={(open) => {
-          if (!open) setSelected(null)
-        }}
-      />
-    </section>
-  )
-}
-
-function MatrixCell(props: {
-  configuration: ModelRadarConfiguration
-  isBest: boolean
-  onSelect: (configuration: ModelRadarConfiguration) => void
-}) {
-  const { t } = useTranslation()
-  const configuration = props.configuration
-  const tone = getIqTone(configuration.iq)
-
-  return (
-    <button
-      type='button'
-      className={cn(
-        'focus-visible:ring-ring relative flex w-full min-w-0 flex-col items-center gap-0.5 rounded-md border px-2 py-2 transition-colors outline-none focus-visible:ring-2 focus-visible:ring-offset-1',
-        CELL_TONE_CLASSES[tone],
-        props.isBest && 'ring-primary/50 ring-1 ring-inset'
-      )}
-      aria-label={t('View details for {{model}} {{effort}}', {
-        model: configuration.model,
-        effort: configuration.effort,
-      })}
-      onClick={() => props.onSelect(configuration)}
-    >
-      {props.isBest ? (
-        <HugeiconsIcon
-          icon={CrownIcon}
-          className='text-primary absolute top-1 right-1 size-2.5'
-          strokeWidth={2.5}
-          aria-hidden='true'
-        />
-      ) : null}
-      <span
-        className={cn(
-          'text-base leading-tight font-bold tabular-nums',
-          CELL_TEXT_CLASSES[tone]
-        )}
-      >
-        {configuration.iq.toFixed(1)}
-      </span>
-      <span className='text-muted-foreground text-[10px] tabular-nums'>
-        {configuration.passed}/{configuration.valid_tasks}
-      </span>
-    </button>
-  )
-}
-
-function ConfigurationDetails(props: {
+export function ConfigurationDetails(props: {
   configuration: ModelRadarConfiguration | null
+  history: ModelRadarHistoryFrame[]
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
@@ -321,6 +77,7 @@ function ConfigurationDetails(props: {
       value: format.usd(configuration.average_price_usd),
       samplesLabel: t('Cost samples'),
       samples: format.integer(configuration.price_samples),
+      priceBand: configuration.average_price_usd_by_band,
     },
     {
       icon: Clock03Icon,
@@ -380,7 +137,12 @@ function ConfigurationDetails(props: {
             {configuration.model}{' '}
             <span className='text-muted-foreground ml-2 text-sm font-normal capitalize'>
               {configuration.effort}
-            </span>
+            </span>{' '}
+            {configuration.harness ? (
+              <Badge variant='secondary' className='ml-2 align-middle'>
+                {getStationLabel(configuration.harness)}
+              </Badge>
+            ) : null}
           </DialogTitle>
           <DialogDescription>
             {t(
@@ -428,10 +190,12 @@ function ConfigurationDetails(props: {
           </div>
           <div className='bg-muted/30 rounded-lg border px-3 py-2.5'>
             <p className='text-muted-foreground text-[11px]'>
-              {t('Total runs')}
+              {t('Runs 24h / 48h / total')}
             </p>
             <p className='mt-0.5 text-lg leading-tight font-semibold tabular-nums'>
-              {format.integer(configuration.total_runs) ?? t('Not available')}
+              {format.integer(configuration.runs_24h ?? null) ?? '—'} /{' '}
+              {format.integer(configuration.runs_48h ?? null) ?? '—'} /{' '}
+              {format.integer(configuration.total_runs) ?? '—'}
             </p>
           </div>
         </div>
@@ -485,8 +249,31 @@ function ConfigurationDetails(props: {
                     {metric.samplesLabel}: {metric.samples}
                   </p>
                 ) : null}
+                {metric.priceBand ? (
+                  <p className='text-muted-foreground mt-1 text-[10px] tabular-nums'>
+                    {t('Off-peak')}{' '}
+                    {format.usd(metric.priceBand.off_peak ?? null) ?? '—'} ·{' '}
+                    {t('Peak')}{' '}
+                    {format.usd(metric.priceBand.peak ?? null) ?? '—'}
+                  </p>
+                ) : null}
               </div>
             ))}
+          </div>
+        </section>
+
+        <section aria-label={t('IQ trend (72h)')}>
+          <h3 className='mb-2 text-xs font-semibold'>{t('IQ trend (72h)')}</h3>
+          <div className='bg-muted/20 flex rounded-lg border p-3'>
+            <Sparkline
+              values={getHistorySeries(
+                props.history,
+                configuration.model,
+                configuration.effort
+              )}
+              label={`${configuration.model} ${configuration.effort}`}
+              windowHours={72}
+            />
           </div>
         </section>
 

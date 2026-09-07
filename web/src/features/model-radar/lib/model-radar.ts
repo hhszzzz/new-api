@@ -22,7 +22,78 @@ import {
   resolveProviderIconKey,
 } from '@/lib/provider-icon'
 
-import type { ModelRadarConfiguration, ModelRadarHistoryFrame } from '../types'
+import type {
+  ModelRadarConfiguration,
+  ModelRadarDegradationAlert,
+  ModelRadarHistoryFrame,
+} from '../types'
+
+export const ALL_STATIONS = 'all'
+const STATION_LABELS: Record<string, string> = {
+  codex: 'Codex',
+  dsh: 'DSH',
+  zcode: 'ZCode',
+  grok: 'Grok',
+  kimi: 'Kimi Code',
+}
+
+export const IQ_TEXT_CLASSES = {
+  high: 'text-emerald-700 dark:text-emerald-300',
+  mid: 'text-amber-700 dark:text-amber-300',
+  low: 'text-destructive',
+} as const
+
+export function getStationLabel(key: string): string {
+  return Object.hasOwn(STATION_LABELS, key)
+    ? STATION_LABELS[key]
+    : key.charAt(0).toUpperCase() + key.slice(1)
+}
+
+export function listStations(
+  configurations: ModelRadarConfiguration[]
+): Array<{ key: string; label: string; count: number }> {
+  const counts = new Map<string, number>()
+  for (const configuration of configurations) {
+    if (!configuration.harness) continue
+    counts.set(
+      configuration.harness,
+      (counts.get(configuration.harness) ?? 0) + 1
+    )
+  }
+  return Array.from(counts, ([key, count]) => ({
+    key,
+    label: getStationLabel(key),
+    count,
+  })).sort(
+    (left, right) =>
+      right.count - left.count || left.key.localeCompare(right.key)
+  )
+}
+
+export function filterByStation(
+  configurations: ModelRadarConfiguration[],
+  station: string
+): ModelRadarConfiguration[] {
+  return station === ALL_STATIONS
+    ? configurations
+    : configurations.filter((item) => item.harness === station)
+}
+
+export function filterAlertsByStation(
+  alerts: ModelRadarDegradationAlert[],
+  configurations: ModelRadarConfiguration[],
+  station: string
+): ModelRadarDegradationAlert[] {
+  if (station === ALL_STATIONS) return alerts
+  const keys = new Set(
+    filterByStation(configurations, station).map((item) =>
+      JSON.stringify([item.model, item.effort])
+    )
+  )
+  return alerts.filter((alert) =>
+    keys.has(JSON.stringify([alert.model, alert.effort]))
+  )
+}
 
 export const EFFORT_ORDER = [
   'low',
@@ -211,16 +282,12 @@ function stableModelColor(model: string): string {
 export function matrixEfforts(
   configurations: ModelRadarConfiguration[]
 ): string[] {
-  const knownEfforts = new Set<string>(EFFORT_ORDER)
-  const unknownEfforts = new Set<string>()
+  const efforts = new Set<string>()
   for (const configuration of configurations) {
     const effort = configuration.effort.trim().toLowerCase()
-    if (effort && !knownEfforts.has(effort)) unknownEfforts.add(effort)
+    if (effort) efforts.add(effort)
   }
-  return [
-    ...EFFORT_ORDER,
-    ...[...unknownEfforts].sort((left, right) => compareEfforts(left, right)),
-  ]
+  return [...efforts].sort(compareEfforts)
 }
 
 export function createModelColorMap(
@@ -249,17 +316,22 @@ export function compareModelsByBestIq(
   return left.model.localeCompare(right.model)
 }
 
-// Builds the 48h IQ sparkline for one configuration, oldest first.
+// Builds a source-relative IQ trend, oldest first, even for stale snapshots.
 export function getHistorySeries(
   history: ModelRadarHistoryFrame[],
   model: string,
-  effort: string
+  effort: string,
+  windowHours = 72
 ): number[] {
-  return history.flatMap((frame) =>
-    frame.points
-      .filter((point) => point.model === model && point.effort === effort)
-      .map((point) => point.iq)
-  )
+  const latest = Math.max(...history.map((frame) => frame.ts))
+  return history
+    .filter((frame) => frame.ts >= latest - windowHours * 3600)
+    .sort((left, right) => left.ts - right.ts)
+    .flatMap((frame) =>
+      frame.points
+        .filter((point) => point.model === model && point.effort === effort)
+        .map((point) => point.iq)
+    )
 }
 
 // Maps an IQ value onto the shared capability heat scale.

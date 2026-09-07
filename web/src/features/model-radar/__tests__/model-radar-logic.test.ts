@@ -23,6 +23,11 @@ import {
   getModelIconKey,
   groupConfigurations,
   matrixEfforts,
+  listStations,
+  filterByStation,
+  filterAlertsByStation,
+  getHistorySeries,
+  getStationLabel,
 } from '../lib/model-radar'
 import type { ModelRadarConfiguration } from '../types'
 
@@ -30,6 +35,10 @@ function configuration(model: string, effort: string): ModelRadarConfiguration {
   return {
     model,
     effort,
+    harness: '',
+    runs_24h: null,
+    runs_48h: null,
+    average_price_usd_by_band: null,
     iq: 100,
     passed: 2,
     valid_tasks: 3,
@@ -51,6 +60,10 @@ function configuration(model: string, effort: string): ModelRadarConfiguration {
 }
 
 describe('model radar configuration grouping', () => {
+  test('formats unknown station names without treating object properties as labels', () => {
+    expect(getStationLabel('constructor')).toBe('Constructor')
+    expect(getStationLabel('custom')).toBe('Custom')
+  })
   test.each([
     ['gpt-5.4', 'OpenAI.Color'],
     ['openai/gpt-5.4', 'OpenAI.Color'],
@@ -146,15 +159,67 @@ describe('model radar configuration grouping', () => {
         configuration('model-b', 'high'),
         configuration('model-c', 'adaptive'),
       ])
+    ).toEqual(['high', 'adaptive', 'turbo'])
+  })
+
+  test('counts stations, skips legacy empty harnesses, and sorts by size', () => {
+    expect(
+      listStations([
+        { ...configuration('a', 'low'), harness: 'dsh' },
+        { ...configuration('b', 'low'), harness: 'codex' },
+        { ...configuration('b', 'high'), harness: 'codex' },
+        configuration('legacy', 'low'),
+        { ...configuration('c', 'high'), harness: 'newstation' },
+      ])
     ).toEqual([
-      'low',
-      'medium',
-      'high',
-      'xhigh',
-      'max',
-      'ultra',
-      'adaptive',
-      'turbo',
+      { key: 'codex', label: 'Codex', count: 2 },
+      { key: 'dsh', label: 'DSH', count: 1 },
+      { key: 'newstation', label: 'Newstation', count: 1 },
     ])
+  })
+
+  test('filters alerts by model and effort together and retains legacy data in All', () => {
+    const codex = { ...configuration('shared', 'low'), harness: 'codex' }
+    const dsh = { ...configuration('shared', 'high'), harness: 'dsh' }
+    const configurations = [codex, dsh, configuration('legacy', 'low')]
+    const alerts = [
+      {
+        model: 'shared',
+        effort: 'low',
+        iq: 80,
+        degradation_12h_iq: 1,
+        degradation_24h_iq: 2,
+        degradation_48h_iq: 3,
+      },
+      {
+        model: 'shared',
+        effort: 'high',
+        iq: 90,
+        degradation_12h_iq: 1,
+        degradation_24h_iq: 2,
+        degradation_48h_iq: 3,
+      },
+    ]
+    expect(filterByStation(configurations, 'dsh')).toEqual([dsh])
+    expect(filterByStation(configurations, 'all')).toEqual(configurations)
+    expect(filterByStation(configurations, 'missing')).toEqual([])
+    expect(filterAlertsByStation(alerts, configurations, 'dsh')).toEqual([
+      alerts[1],
+    ])
+    expect(filterAlertsByStation(alerts, configurations, 'all')).toEqual(alerts)
+    expect(filterAlertsByStation(alerts, configurations, 'missing')).toEqual([])
+  })
+
+  test('limits history to the requested source-relative window and orders it chronologically', () => {
+    const point = configuration('a', 'low')
+    const history = [
+      { ts: 80 * 3600, points: [{ ...point, iq: 90 }] },
+      { ts: 8 * 3600, points: [{ ...point, iq: 70 }] },
+      { ts: 32 * 3600, points: [{ ...point, iq: 80 }] },
+      { ts: 7 * 3600, points: [{ ...point, iq: 60 }] },
+    ]
+    expect(getHistorySeries(history, 'a', 'low')).toEqual([70, 80, 90])
+    expect(getHistorySeries(history, 'a', 'low', 48)).toEqual([80, 90])
+    expect(getHistorySeries(history, 'missing', 'low')).toEqual([])
   })
 })

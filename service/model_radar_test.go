@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -26,7 +27,9 @@ func modelRadarTestPayloads(t *testing.T) ([]byte, []byte) {
 		"source_updated_at": "2026-07-26T08:00:00+08:00",
 		"points": []map[string]any{{
 			"model": "gpt-test", "effort": "high", "iq": 90.0,
-			"passed": 3, "valid_tasks": 5, "average_price_usd": 1.5,
+			"harness": " Codex ", "runs_24h": 2, "runs_48h": 4,
+			"average_price_usd_by_band": map[string]float64{"off_peak": 0.5, "peak": 1.5},
+			"passed":                    3, "valid_tasks": 5, "average_price_usd": 1.5,
 			"price_samples": 5, "average_minutes": 8.0, "duration_samples": 5,
 			"total_runs": 7, "latest_graded_at": "2026-07-26T00:00:00Z",
 			"average_agent_steps": 12.0, "agent_steps_samples": 5,
@@ -106,6 +109,17 @@ func TestFetchModelRadarNormalizesCapabilityDataAndDropsRecommendations(t *testi
 	require.Len(t, data.Configurations, 1)
 	assert.Equal(t, "gpt-test", data.Configurations[0].Model)
 	assert.Equal(t, 90.0, data.Configurations[0].IQ)
+	configuration := data.Configurations[0]
+	assert.Equal(t, "codex", configuration.Harness)
+	require.NotNil(t, configuration.Runs24h)
+	assert.Equal(t, 2, *configuration.Runs24h)
+	require.NotNil(t, configuration.Runs48h)
+	assert.Equal(t, 4, *configuration.Runs48h)
+	require.NotNil(t, configuration.AveragePriceUSDByBand)
+	require.NotNil(t, configuration.AveragePriceUSDByBand.OffPeak)
+	require.NotNil(t, configuration.AveragePriceUSDByBand.Peak)
+	assert.Equal(t, 0.5, *configuration.AveragePriceUSDByBand.OffPeak)
+	assert.Equal(t, 1.5, *configuration.AveragePriceUSDByBand.Peak)
 	require.NotNil(t, data.Configurations[0].LatestGradedAt)
 	assert.Equal(t, int64(1785024000), *data.Configurations[0].LatestGradedAt)
 	require.Len(t, data.History, 2)
@@ -197,6 +211,51 @@ func TestNormalizeModelRadarEfficiencyRejectsDuplicateAndOutOfRangeData(t *testi
 	})
 }
 
+func TestNormalizeModelRadarStationMetrics(t *testing.T) {
+	efficiency, _ := modelRadarTestPayloads(t)
+	var payload modelRadarEfficiencyPayload
+	require.NoError(t, common.Unmarshal(efficiency, &payload))
+	negative := -1
+	zero := 0
+	negativePrice := -0.1
+	infinitePrice := math.Inf(1)
+	nanPrice := math.NaN()
+	tests := []struct {
+		name    string
+		harness string
+		runs24h *int
+		runs48h *int
+		band    *ModelRadarPriceBand
+		want    string
+	}{
+		{name: "legacy fields absent"},
+		{name: "zero runs are preserved", harness: " DSH ", runs24h: &zero, runs48h: &zero, band: &ModelRadarPriceBand{}},
+		{name: "negative daily runs", runs24h: &negative, want: "runs_24h"},
+		{name: "negative two day runs", runs48h: &negative, want: "runs_48h"},
+		{name: "overlong harness", harness: strings.Repeat("a", 33), want: "harness"},
+		{name: "negative off peak price", band: &ModelRadarPriceBand{OffPeak: &negativePrice}, want: "off_peak"},
+		{name: "negative peak price", band: &ModelRadarPriceBand{Peak: &negativePrice}, want: "peak"},
+		{name: "infinite price", band: &ModelRadarPriceBand{Peak: &infinitePrice}, want: "peak"},
+		{name: "nan price", band: &ModelRadarPriceBand{OffPeak: &nanPrice}, want: "off_peak"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			point := payload.Points[0]
+			point.Harness, point.Runs24h, point.Runs48h, point.AveragePriceUSDByBand = test.harness, test.runs24h, test.runs48h, test.band
+			configuration, _, err := normalizeModelRadarConfiguration(point)
+			if test.want != "" {
+				require.ErrorContains(t, err, test.want)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, strings.ToLower(strings.TrimSpace(test.harness)), configuration.Harness)
+			assert.Equal(t, test.runs24h, configuration.Runs24h)
+			assert.Equal(t, test.runs48h, configuration.Runs48h)
+			assert.Equal(t, test.band, configuration.AveragePriceUSDByBand)
+		})
+	}
+}
+
 func TestNormalizeModelRadarEfficiencyDropsHistoryOlderThanRetentionWindow(t *testing.T) {
 	// Upstream keeps every frame since launch, which eventually pushed the
 	// response past the fetch cap. Sync must retain only the recent window.
@@ -211,8 +270,8 @@ func TestNormalizeModelRadarEfficiencyDropsHistoryOlderThanRetentionWindow(t *te
 		At: "2026-07-01T00:00:00Z",
 		Points: []modelRadarUpstreamPoint{{
 			Model: "gpt-test", Effort: "high",
-			IQ: func() *float64 { v := 80.0; return &v }(),
-			Passed: func() *float64 { v := 2.0; return &v }(),
+			IQ:         func() *float64 { v := 80.0; return &v }(),
+			Passed:     func() *float64 { v := 2.0; return &v }(),
 			ValidTasks: func() *float64 { v := 4.0; return &v }(),
 		}},
 	}
@@ -296,6 +355,15 @@ func TestSyncModelRadarPersistsValidatedSnapshot(t *testing.T) {
 	require.NotNil(t, snapshot)
 	assert.Equal(t, int64(2_000_000_000), snapshot.FetchedAt)
 	assert.NotContains(t, string(snapshot.Payload), "recommendations")
+	data, err := GetModelRadar(context.Background())
+	require.NoError(t, err)
+	require.Len(t, data.Configurations, 1)
+	assert.Equal(t, "codex", data.Configurations[0].Harness)
+	require.NotNil(t, data.Configurations[0].Runs24h)
+	assert.Equal(t, 2, *data.Configurations[0].Runs24h)
+	require.NotNil(t, data.Configurations[0].AveragePriceUSDByBand)
+	require.NotNil(t, data.Configurations[0].AveragePriceUSDByBand.Peak)
+	assert.Equal(t, 1.5, *data.Configurations[0].AveragePriceUSDByBand.Peak)
 }
 
 func TestGetModelRadarTreatsFreshFetchAsCurrentWhenSourceHasNotChanged(t *testing.T) {
