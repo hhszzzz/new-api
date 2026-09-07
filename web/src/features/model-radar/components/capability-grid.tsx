@@ -101,7 +101,7 @@ export function CapabilityGrid(props: {
                   iconRegistry={props.iconRegistry}
                 />
                 <h3
-                  className='min-w-0 text-sm font-semibold break-words lg:truncate'
+                  className='min-w-0 text-sm font-semibold break-words'
                   title={group.model}
                 >
                   {group.model}
@@ -187,7 +187,7 @@ function TierCard(props: {
       >
         {configuration.iq.toFixed(1)}
       </span>
-      <span className='text-muted-foreground flex flex-wrap items-center justify-center gap-x-1 text-[10px] leading-[14px] tabular-nums'>
+      <span className='text-muted-foreground mx-auto flex w-full max-w-32 flex-wrap items-center justify-between gap-x-1 text-[10px] leading-[14px] tabular-nums'>
         <span title={t('Passed / valid samples')}>
           {format.integer(configuration.passed)}/
           {format.integer(configuration.valid_tasks)}

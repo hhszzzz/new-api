@@ -83,6 +83,9 @@ describe('model radar capability grid', () => {
     expect(
       within(cards[0]).getByTitle('Passed / valid samples')
     ).toHaveTextContent('7/10')
+    expect(
+      within(cards[0]).getByTitle('Passed / valid samples').parentElement
+    ).toHaveClass('justify-between')
   })
   test('renders a complete vendor badge without clipping it', () => {
     const { container } = render(<ModelBadge color='#2563eb' model='gpt-5.4' />)
@@ -97,7 +100,7 @@ describe('model radar capability grid', () => {
     const { container } = render(
       <CapabilityGrid
         history={[]}
-        configurations={[{ ...fixture, model: 'deepseek-v3.2' }]}
+        configurations={[{ ...fixture, model: 'dsh-deepseek-v4-pro' }]}
         iconRegistry={{
           modelIcons: new Map<string, string>(),
           providerIcons: new Map([['deepseek', 'DeepSeek.Color']]),

@@ -84,6 +84,9 @@ describe('model radar configuration grouping', () => {
     ['google/gemini-2.5-pro', 'Gemini.Color'],
     ['meta-llama/llama-4', 'Meta.Color'],
     ['stepfun/step-3.5-flash', 'Stepfun.Color'],
+    ['dsh-deepseek-v4-flash', 'DeepSeek.Color'],
+    ['provider/dsh-deepseek-v4-pro', 'DeepSeek.Color'],
+    ['dsh-deepseek-v4-flash-vision-exp', 'DeepSeek.Color'],
     ['unknown-model', null],
   ])(
     'resolves %s to the default provider icon when no configuration exists',
@@ -99,6 +102,23 @@ describe('model radar configuration grouping', () => {
     }
 
     expect(getModelIconKey('deepseek-v3.2', iconRegistry)).toBe(
+      'DeepSeek.Color'
+    )
+  })
+
+  test('resolves DSH models through their underlying model while preserving exact icon overrides', () => {
+    const iconRegistry = {
+      modelIcons: new Map([['deepseek-v4-pro', 'DeepSeek']]),
+      providerIcons: new Map([['deepseek', 'DeepSeek.Color']]),
+    }
+    expect(getModelIconKey('dsh-deepseek-v4-pro', iconRegistry)).toBe(
+      'DeepSeek'
+    )
+    expect(getModelIconKey('dsh-deepseek-v4-flash', iconRegistry)).toBe(
+      'DeepSeek.Color'
+    )
+    iconRegistry.modelIcons.set('dsh-deepseek-v4-pro', 'DeepSeek.Color')
+    expect(getModelIconKey('dsh-deepseek-v4-pro', iconRegistry)).toBe(
       'DeepSeek.Color'
     )
   })

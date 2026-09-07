@@ -223,13 +223,22 @@ export function getModelIconKey(
   model: string,
   iconRegistry?: ModelRadarIconRegistry
 ): string | null {
-  for (const lookupKey of getModelIconLookupKeys(model)) {
+  const lookupKeys = getModelIconLookupKeys(model)
+  // DSH identifies the DeepSeek Harness, not a different model provider.
+  const underlyingModelKeys = lookupKeys
+    .filter((key) => key.startsWith('dsh-deepseek-'))
+    .map((key) => key.slice(4))
+  for (const lookupKey of [...lookupKeys, ...underlyingModelKeys]) {
     const configuredIcon = iconRegistry?.modelIcons.get(lookupKey)
     if (configuredIcon) return configuredIcon
   }
 
   const normalized = model.trim().toLowerCase()
-  const candidates = [normalized, ...normalized.split(/[/:_]+/)]
+  const candidates = [
+    normalized,
+    ...normalized.split(/[/:_]+/),
+    ...underlyingModelKeys,
+  ]
   for (const [prefix, icon] of MODEL_ICON_PREFIXES) {
     if (candidates.some((candidate) => candidate.startsWith(prefix))) {
       return (
