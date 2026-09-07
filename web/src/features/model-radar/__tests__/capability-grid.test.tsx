@@ -110,7 +110,7 @@ describe('model radar capability grid', () => {
     ).not.toBeNull()
   })
 
-  test('renders one group heading per model with configuration metrics', () => {
+  test('keeps compact cards large enough to tap and shows only summary metrics', () => {
     render(<CapabilityGrid history={[]} configurations={[fixture]} />)
 
     expect(screen.getAllByRole('heading', { name: 'gpt-radar' })).toHaveLength(
@@ -123,7 +123,8 @@ describe('model radar capability grid', () => {
     expect(within(card).queryByText('$1.25')).toBeNull()
     expect(within(card).getByText('4.5 min')).toBeVisible()
     expect(within(card).getByText('7/10')).toBeVisible()
-    expect(within(card).getByLabelText('3 runs in 24h')).toBeVisible()
+    expect(card).toHaveClass('min-h-11')
+    expect(within(card).queryByLabelText(/runs in 24h/)).toBeNull()
     expect(screen.queryByText('Codex')).toBeNull()
   })
 
@@ -147,8 +148,8 @@ describe('model radar capability grid', () => {
     expect(placeholder).toHaveClass('hidden', 'md:block')
   })
 
-  test('shows missing duration as a dash and omits absent run badges while preserving zero runs', () => {
-    const view = render(
+  test('shows missing duration as a dash', () => {
+    render(
       <CapabilityGrid
         history={[]}
         configurations={[
@@ -164,13 +165,6 @@ describe('model radar capability grid', () => {
     const card = screen.getByRole('button')
     expect(within(card).getByText('—')).toBeVisible()
     expect(within(card).queryByLabelText(/runs in 24h/)).toBeNull()
-    view.rerender(
-      <CapabilityGrid
-        history={[]}
-        configurations={[{ ...fixture, runs_24h: 0 }]}
-      />
-    )
-    expect(screen.getByLabelText('0 runs in 24h')).toBeVisible()
   })
 
   test('opens complete metrics from the keyboard and restores focus after Escape', async () => {
@@ -185,6 +179,8 @@ describe('model radar capability grid', () => {
 
     const dialog = await screen.findByRole('dialog')
     expect(dialog).toHaveAccessibleName('gpt-radar medium Codex')
+    expect(within(dialog).getByText('Runs 24h / 48h / total')).toBeVisible()
+    expect(within(dialog).getByText('3 / 6 / 12')).toBeVisible()
     expect(screen.getByText('Combined cost index')).toBeVisible()
     expect(screen.getByText('45')).toBeVisible()
     expect(

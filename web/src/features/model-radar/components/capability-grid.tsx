@@ -59,9 +59,9 @@ export function CapabilityGrid(props: {
   return (
     <section
       aria-labelledby='capability-grid-title'
-      className='border-border/70 mt-2 border-t pt-6'
+      className='border-border/70 mt-2 border-t pt-4'
     >
-      <header className='mb-3 flex items-center gap-2'>
+      <header className='mb-2 flex items-center gap-2'>
         <HugeiconsIcon
           icon={GridViewIcon}
           className='text-primary size-4'
@@ -73,7 +73,7 @@ export function CapabilityGrid(props: {
         </h2>
       </header>
       <div
-        className='bg-background text-muted-foreground sticky top-16 z-10 mb-2 hidden grid-cols-[repeat(var(--effort-count),minmax(0,1fr))] gap-2 py-2 text-center text-xs font-medium md:grid lg:pl-48'
+        className='bg-background text-muted-foreground sticky top-16 z-10 mb-1 hidden grid-cols-[repeat(var(--effort-count),minmax(0,1fr))] gap-1.5 py-1 text-center text-xs font-medium md:grid lg:pl-48'
         style={{ '--effort-count': efforts.length } as CSSProperties}
         aria-hidden='true'
       >
@@ -83,7 +83,7 @@ export function CapabilityGrid(props: {
           </span>
         ))}
       </div>
-      <div className='space-y-3 lg:space-y-2'>
+      <div className='space-y-2 lg:space-y-1'>
         {groups.map((group) => {
           const bestIq = Math.max(
             ...group.configurations.map((item) => item.iq)
@@ -94,18 +94,21 @@ export function CapabilityGrid(props: {
               aria-label={group.model}
               className='min-w-0 lg:grid lg:grid-cols-[11rem_minmax(0,1fr)] lg:items-center lg:gap-4'
             >
-              <header className='mb-2 flex items-center gap-2 lg:mb-0'>
+              <header className='mb-1.5 flex items-center gap-2 lg:mb-0'>
                 <ModelBadge
                   color={group.color}
                   model={group.model}
                   iconRegistry={props.iconRegistry}
                 />
-                <h3 className='min-w-0 text-sm font-semibold break-all'>
+                <h3
+                  className='min-w-0 text-sm font-semibold break-words lg:truncate'
+                  title={group.model}
+                >
                   {group.model}
                 </h3>
               </header>
               <div
-                className='grid grid-cols-2 gap-2 md:grid-cols-[repeat(var(--effort-count),minmax(0,1fr))]'
+                className='grid grid-cols-2 gap-1.5 md:grid-cols-[repeat(var(--effort-count),minmax(0,1fr))]'
                 style={{ '--effort-count': efforts.length } as CSSProperties}
               >
                 {efforts.map((effort) => {
@@ -164,7 +167,7 @@ function TierCard(props: {
     <button
       type='button'
       className={cn(
-        'bg-card hover:bg-muted/40 focus-visible:ring-ring flex min-w-0 flex-col justify-center gap-1 rounded-md border px-2 py-2 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
+        'bg-card hover:bg-muted/40 focus-visible:ring-ring flex min-h-11 min-w-0 flex-col justify-center gap-0.5 rounded-md border px-1.5 py-1 text-center transition-colors outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
         props.isBest && 'ring-primary/40 ring-1'
       )}
       aria-label={t('View details for {{model}} {{effort}}', {
@@ -176,38 +179,20 @@ function TierCard(props: {
       <span className='text-muted-foreground text-[10px] leading-none font-medium break-all capitalize md:hidden'>
         {configuration.effort}
       </span>
-      <span className='flex min-w-0 items-center justify-between gap-1'>
-        <span
-          className={cn(
-            'text-2xl leading-7 font-semibold tracking-tight tabular-nums',
-            IQ_TEXT_CLASSES[getIqTone(configuration.iq)]
-          )}
-        >
-          {configuration.iq.toFixed(1)}
-        </span>
-        {configuration.runs_24h != null ? (
-          <span
-            className='bg-muted text-muted-foreground shrink-0 rounded px-1 py-0.5 text-[9px] tabular-nums'
-            aria-label={t('{{count}} runs in 24h', {
-              count: configuration.runs_24h,
-            })}
-            title={t('{{count}} runs in 24h', {
-              count: configuration.runs_24h,
-            })}
-          >
-            {format.integer(configuration.runs_24h)}
-          </span>
-        ) : null}
+      <span
+        className={cn(
+          'text-base leading-5 font-semibold tabular-nums',
+          IQ_TEXT_CLASSES[getIqTone(configuration.iq)]
+        )}
+      >
+        {configuration.iq.toFixed(1)}
       </span>
-      <span className='text-muted-foreground flex flex-wrap items-center justify-between gap-x-1 text-[10px] leading-4 tabular-nums'>
+      <span className='text-muted-foreground flex flex-wrap items-center justify-center gap-x-1 text-[10px] leading-[14px] tabular-nums'>
         <span title={t('Passed / valid samples')}>
           {format.integer(configuration.passed)}/
           {format.integer(configuration.valid_tasks)}
         </span>
-        <span
-          className='ml-auto whitespace-nowrap'
-          title={t('Average duration')}
-        >
+        <span className='whitespace-nowrap' title={t('Average duration')}>
           {configuration.average_minutes == null ? (
             '—'
           ) : (
