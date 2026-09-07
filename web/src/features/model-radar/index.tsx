@@ -138,7 +138,6 @@ export function ModelRadar() {
             <CapabilityGrid
               configurations={configurations}
               history={snapshot.history}
-              showStation={activeStation === ALL_STATIONS}
               iconRegistry={iconRegistry}
             />
           ) : (
@@ -165,7 +164,7 @@ export function ModelRadar() {
               </div>
               <p className='text-muted-foreground mt-1.5 max-w-2xl text-sm'>
                 {t(
-                  'Software engineering (DeepSWE): IQ, cost, and duration across reasoning efforts.'
+                  'Software engineering (DeepSWE): IQ and duration across reasoning efforts.'
                 )}
               </p>
               {snapshot ? (

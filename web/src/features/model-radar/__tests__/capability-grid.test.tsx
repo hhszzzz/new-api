@@ -63,7 +63,7 @@ describe('model radar capability grid', () => {
     expect(screen.queryByLabelText('IQ max')).toBeNull()
   })
 
-  test('places stronger efforts first and keeps price and duration in separate cells', () => {
+  test('places stronger efforts first and pairs sample counts with duration without card prices', () => {
     render(
       <CapabilityGrid
         history={[]}
@@ -76,9 +76,7 @@ describe('model radar capability grid', () => {
     const cards = screen.getAllByRole('button', { name: /View details/ })
     expect(cards[0]).toHaveAccessibleName('View details for gpt-radar ultra')
     expect(cards[1]).toHaveAccessibleName('View details for gpt-radar low')
-    expect(within(cards[0]).getByTitle('Average cost')).toHaveTextContent(
-      '$1.25'
-    )
+    expect(within(cards[0]).queryByTitle('Average cost')).toBeNull()
     expect(within(cards[0]).getByTitle('Average duration')).toHaveTextContent(
       '4.5 min'
     )
@@ -122,10 +120,11 @@ describe('model radar capability grid', () => {
       name: 'View details for gpt-radar medium',
     })
     expect(within(card).getByText('93.8')).toBeVisible()
-    expect(within(card).getByText('$1.25')).toBeVisible()
+    expect(within(card).queryByText('$1.25')).toBeNull()
     expect(within(card).getByText('4.5 min')).toBeVisible()
     expect(within(card).getByText('7/10')).toBeVisible()
     expect(within(card).getByLabelText('3 runs in 24h')).toBeVisible()
+    expect(screen.queryByText('Codex')).toBeNull()
   })
 
   test('aligns missing effort slots on desktop and hides them in the mobile two-column flow', () => {
@@ -148,7 +147,7 @@ describe('model radar capability grid', () => {
     expect(placeholder).toHaveClass('hidden', 'md:block')
   })
 
-  test('shows missing costs as dashes and omits absent run badges while preserving zero runs', () => {
+  test('shows missing duration as a dash and omits absent run badges while preserving zero runs', () => {
     const view = render(
       <CapabilityGrid
         history={[]}
@@ -163,7 +162,7 @@ describe('model radar capability grid', () => {
       />
     )
     const card = screen.getByRole('button')
-    expect(within(card).getAllByText('—')).toHaveLength(2)
+    expect(within(card).getByText('—')).toBeVisible()
     expect(within(card).queryByLabelText(/runs in 24h/)).toBeNull()
     view.rerender(
       <CapabilityGrid

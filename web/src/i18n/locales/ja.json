@@ -5172,7 +5172,7 @@
     "smtp.example.com": "smtp.example.com",
     "socks5://user:pass@host:port": "socks5://user:pass@host:port",
     "Soft Errors": "ソフトエラー",
-    "Software engineering (DeepSWE): IQ, cost, and duration across reasoning efforts.": "ソフトウェア工学（DeepSWE）：推論レベルごとのIQ、費用、所要時間を比較。",
+    "Software engineering (DeepSWE): IQ and duration across reasoning efforts.": "ソフトウェアエンジニアリング（DeepSWE）：推論レベルごとの IQ と所要時間。",
     "Software engineering IQ uses up to the three latest valid samples per task, weighted equally, on a 150-point scale. The pass ratio counts samples, not distinct tasks.": "ソフトウェア工学IQは各課題の最新の有効サンプルを最大3件、等しい重みで集計し、150点満点に換算します。合格比率は課題数ではなくサンプル数に基づきます。",
     "Some account quotas could not be refreshed": "一部のアカウント配額を更新できませんでした",
     "Some accounts could not be refreshed": "一部のアカウントを更新できませんでした",

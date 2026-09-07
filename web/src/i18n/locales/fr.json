@@ -5172,7 +5172,7 @@
     "smtp.example.com": "smtp.example.com",
     "socks5://user:pass@host:port": "socks5://user:pass@host:port",
     "Soft Errors": "Erreurs douces",
-    "Software engineering (DeepSWE): IQ, cost, and duration across reasoning efforts.": "Génie logiciel (DeepSWE) : IQ, coût et durée par niveau de raisonnement.",
+    "Software engineering (DeepSWE): IQ and duration across reasoning efforts.": "Génie logiciel (DeepSWE) : IQ et durée selon le niveau de raisonnement.",
     "Software engineering IQ uses up to the three latest valid samples per task, weighted equally, on a 150-point scale. The pass ratio counts samples, not distinct tasks.": "L’IQ en génie logiciel utilise jusqu’aux trois derniers échantillons valides par tâche, avec un poids égal, sur 150 points. Le taux de réussite porte sur les échantillons, pas sur les tâches distinctes.",
     "Some account quotas could not be refreshed": "Certains quotas de compte n’ont pas pu être actualisés",
     "Some accounts could not be refreshed": "Certains comptes n’ont pas pu être actualisés",

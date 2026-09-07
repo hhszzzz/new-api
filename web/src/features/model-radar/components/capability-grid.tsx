@@ -16,19 +16,16 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { CrownIcon, GridViewIcon } from '@hugeicons/core-free-icons'
+import { GridViewIcon } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useState, type CSSProperties } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 
 import { useRadarFormatters } from '../hooks/use-radar-formatters'
 import {
-  getConfigurationStation,
   getIqTone,
-  getStationLabel,
   groupConfigurations,
   IQ_TEXT_CLASSES,
   matrixEfforts,
@@ -42,7 +39,6 @@ export function CapabilityGrid(props: {
   configurations: ModelRadarConfiguration[]
   history: ModelRadarHistoryFrame[]
   iconRegistry?: ModelRadarIconRegistry
-  showStation?: boolean
 }) {
   const { t } = useTranslation()
   const [selected, setSelected] = useState<{
@@ -65,7 +61,7 @@ export function CapabilityGrid(props: {
       aria-labelledby='capability-grid-title'
       className='border-border/70 mt-2 border-t pt-6'
     >
-      <header className='mb-5 flex items-center gap-2'>
+      <header className='mb-3 flex items-center gap-2'>
         <HugeiconsIcon
           icon={GridViewIcon}
           className='text-primary size-4'
@@ -76,23 +72,29 @@ export function CapabilityGrid(props: {
           {t('Model tiers')}
         </h2>
       </header>
-      <div className='space-y-4'>
+      <div
+        className='bg-background text-muted-foreground sticky top-16 z-10 mb-2 hidden grid-cols-[repeat(var(--effort-count),minmax(0,1fr))] gap-2 py-2 text-center text-xs font-medium md:grid lg:pl-48'
+        style={{ '--effort-count': efforts.length } as CSSProperties}
+        aria-hidden='true'
+      >
+        {efforts.map((effort) => (
+          <span key={effort} className='capitalize'>
+            {effort}
+          </span>
+        ))}
+      </div>
+      <div className='space-y-3 lg:space-y-2'>
         {groups.map((group) => {
           const bestIq = Math.max(
             ...group.configurations.map((item) => item.iq)
           )
-          const stations = [
-            ...new Set(
-              group.configurations.map(getConfigurationStation).filter(Boolean)
-            ),
-          ]
           return (
             <section
               key={group.model}
               aria-label={group.model}
-              className='min-w-0'
+              className='min-w-0 lg:grid lg:grid-cols-[11rem_minmax(0,1fr)] lg:items-center lg:gap-4'
             >
-              <header className='mb-2 flex flex-wrap items-center gap-2'>
+              <header className='mb-2 flex items-center gap-2 lg:mb-0'>
                 <ModelBadge
                   color={group.color}
                   model={group.model}
@@ -101,15 +103,6 @@ export function CapabilityGrid(props: {
                 <h3 className='min-w-0 text-sm font-semibold break-all'>
                   {group.model}
                 </h3>
-                {props.showStation ? (
-                  <div className='ml-auto flex flex-wrap gap-1'>
-                    {stations.map((station) => (
-                      <Badge key={station} variant='outline'>
-                        {getStationLabel(station)}
-                      </Badge>
-                    ))}
-                  </div>
-                ) : null}
               </header>
               <div
                 className='grid grid-cols-2 gap-2 md:grid-cols-[repeat(var(--effort-count),minmax(0,1fr))]'
@@ -171,7 +164,7 @@ function TierCard(props: {
     <button
       type='button'
       className={cn(
-        'bg-card hover:bg-muted/40 focus-visible:ring-ring grid min-h-24 min-w-0 grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)] overflow-hidden rounded-lg border text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
+        'bg-card hover:bg-muted/40 focus-visible:ring-ring flex min-w-0 flex-col justify-center gap-1 rounded-md border px-2 py-2 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
         props.isBest && 'ring-primary/40 ring-1'
       )}
       aria-label={t('View details for {{model}} {{effort}}', {
@@ -180,58 +173,39 @@ function TierCard(props: {
       })}
       onClick={props.onSelect}
     >
-      <span className='flex min-w-0 flex-col justify-between gap-1.5 px-2.5 py-2'>
-        <span className='flex flex-wrap items-center justify-between gap-1'>
-          <span className='flex min-w-0 items-center gap-1 text-xs font-medium'>
-            <span className='break-all capitalize'>{configuration.effort}</span>
-            {props.isBest ? (
-              <HugeiconsIcon
-                icon={CrownIcon}
-                className='text-primary size-3 shrink-0'
-                strokeWidth={2}
-                aria-hidden='true'
-              />
-            ) : null}
-          </span>
-          {configuration.runs_24h != null ? (
-            <span
-              className='bg-muted text-muted-foreground rounded px-1 py-0.5 text-[9px] tabular-nums'
-              aria-label={t('{{count}} runs in 24h', {
-                count: configuration.runs_24h,
-              })}
-              title={t('{{count}} runs in 24h', {
-                count: configuration.runs_24h,
-              })}
-            >
-              {format.integer(configuration.runs_24h)}
-            </span>
-          ) : null}
-        </span>
+      <span className='text-muted-foreground text-[10px] leading-none font-medium break-all capitalize md:hidden'>
+        {configuration.effort}
+      </span>
+      <span className='flex min-w-0 items-center justify-between gap-1'>
         <span
           className={cn(
-            'block text-center text-3xl leading-tight font-semibold tracking-tight tabular-nums',
+            'text-2xl leading-7 font-semibold tracking-tight tabular-nums',
             IQ_TEXT_CLASSES[getIqTone(configuration.iq)]
           )}
         >
           {configuration.iq.toFixed(1)}
         </span>
-        <span
-          className='text-muted-foreground block text-center text-[10px] tabular-nums'
-          title={t('Passed / valid samples')}
-        >
+        {configuration.runs_24h != null ? (
+          <span
+            className='bg-muted text-muted-foreground shrink-0 rounded px-1 py-0.5 text-[9px] tabular-nums'
+            aria-label={t('{{count}} runs in 24h', {
+              count: configuration.runs_24h,
+            })}
+            title={t('{{count}} runs in 24h', {
+              count: configuration.runs_24h,
+            })}
+          >
+            {format.integer(configuration.runs_24h)}
+          </span>
+        ) : null}
+      </span>
+      <span className='text-muted-foreground flex flex-wrap items-center justify-between gap-x-1 text-[10px] leading-4 tabular-nums'>
+        <span title={t('Passed / valid samples')}>
           {format.integer(configuration.passed)}/
           {format.integer(configuration.valid_tasks)}
         </span>
-      </span>
-      <span className='grid min-w-0 grid-rows-2 border-l text-center text-xs font-medium tabular-nums'>
         <span
-          className='flex min-w-0 items-center justify-center px-1 py-2 break-all'
-          title={t('Average cost')}
-        >
-          {format.usdShort(configuration.average_price_usd) ?? '—'}
-        </span>
-        <span
-          className='text-muted-foreground flex min-w-0 items-center justify-center border-t px-1 py-2 text-[11px]'
+          className='ml-auto whitespace-nowrap'
           title={t('Average duration')}
         >
           {configuration.average_minutes == null ? (

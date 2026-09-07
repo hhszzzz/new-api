@@ -5172,7 +5172,7 @@
     "smtp.example.com": "smtp.example.com",
     "socks5://user:pass@host:port": "socks5://user:pass@host:port",
     "Soft Errors": "Lỗi mềm",
-    "Software engineering (DeepSWE): IQ, cost, and duration across reasoning efforts.": "Kỹ thuật phần mềm (DeepSWE): so sánh IQ, chi phí và thời gian theo mức suy luận.",
+    "Software engineering (DeepSWE): IQ and duration across reasoning efforts.": "Kỹ thuật phần mềm (DeepSWE): IQ và thời gian theo từng mức suy luận.",
     "Software engineering IQ uses up to the three latest valid samples per task, weighted equally, on a 150-point scale. The pass ratio counts samples, not distinct tasks.": "IQ kỹ thuật phần mềm dùng tối đa ba mẫu hợp lệ gần nhất cho mỗi bài, với trọng số bằng nhau trên thang 150 điểm. Tỷ lệ đạt tính theo số mẫu, không phải số bài khác nhau.",
     "Some account quotas could not be refreshed": "Không thể làm mới hạn mức của một số tài khoản",
     "Some accounts could not be refreshed": "Không thể làm mới một số tài khoản",

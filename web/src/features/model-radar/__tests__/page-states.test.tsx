@@ -63,7 +63,6 @@ vi.mock('../hooks/use-radar-formatters', () => ({
     integer: (value: number | null) => String(value),
     percent: (value: number | null) => String(value),
     usd: (value: number | null) => String(value),
-    usdShort: (value: number | null) => (value === null ? null : String(value)),
   }),
 }))
 vi.mock('@/hooks', () => ({ useMediaQuery: () => false }))

@@ -5172,7 +5172,7 @@
     "smtp.example.com": "smtp.example.com",
     "socks5://user:pass@host:port": "socks5://user:pass@host:port",
     "Soft Errors": "软错误",
-    "Software engineering (DeepSWE): IQ, cost, and duration across reasoning efforts.": "软件工程能力（DeepSWE）：比较不同推理档位的 IQ、费用与耗时。",
+    "Software engineering (DeepSWE): IQ and duration across reasoning efforts.": "软件工程能力（DeepSWE）：比较不同推理档位的 IQ 与耗时。",
     "Software engineering IQ uses up to the three latest valid samples per task, weighted equally, on a 150-point scale. The pass ratio counts samples, not distinct tasks.": "软件工程 IQ 采用每题最近最多三次有效样本，按样本等权计算并换算为 150 分制。通过比统计的是样本数，而非不同题目的数量。",
     "Some account quotas could not be refreshed": "部分账号配额刷新失败",
     "Some accounts could not be refreshed": "部分账号无法刷新",

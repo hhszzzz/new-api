@@ -5172,7 +5172,7 @@
     "smtp.example.com": "smtp.example.com",
     "socks5://user:pass@host:port": "socks5://user:pass@host:port",
     "Soft Errors": "Мягкие ошибки",
-    "Software engineering (DeepSWE): IQ, cost, and duration across reasoning efforts.": "Программная инженерия (DeepSWE): IQ, стоимость и время по уровням рассуждения.",
+    "Software engineering (DeepSWE): IQ and duration across reasoning efforts.": "Разработка ПО (DeepSWE): IQ и длительность при разных уровнях рассуждения.",
     "Software engineering IQ uses up to the three latest valid samples per task, weighted equally, on a 150-point scale. The pass ratio counts samples, not distinct tasks.": "IQ по программной инженерии использует до трёх последних валидных результатов каждой задачи с равным весом по шкале 150 баллов. Доля успеха учитывает результаты запусков, а не уникальные задачи.",
     "Some account quotas could not be refreshed": "Не удалось обновить квоты некоторых аккаунтов",
     "Some accounts could not be refreshed": "Некоторые аккаунты не удалось обновить",
