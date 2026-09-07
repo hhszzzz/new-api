@@ -28,6 +28,7 @@ import {
   filterAlertsByStation,
   getHistorySeries,
   getStationLabel,
+  getConfigurationStation,
 } from '../lib/model-radar'
 import type { ModelRadarConfiguration } from '../types'
 
@@ -60,6 +61,18 @@ function configuration(model: string, effort: string): ModelRadarConfiguration {
 }
 
 describe('model radar configuration grouping', () => {
+  test('uses the source station mapping when runner metadata still says codex', () => {
+    const glm = { ...configuration('glm-5.3', 'high'), harness: 'codex' }
+    const grok = { ...configuration('grok-4.6', 'high'), harness: 'codex' }
+    expect(getConfigurationStation(glm)).toBe('zcode')
+    expect(getConfigurationStation(grok)).toBe('grok')
+    expect(filterByStation([glm, grok], 'codex')).toEqual([])
+    expect(filterByStation([glm, grok], 'zcode')).toEqual([glm])
+    expect(listStations([glm, grok])).toEqual([
+      { key: 'grok', label: 'Grok', count: 1 },
+      { key: 'zcode', label: 'ZCode', count: 1 },
+    ])
+  })
   test('formats unknown station names without treating object properties as labels', () => {
     expect(getStationLabel('constructor')).toBe('Constructor')
     expect(getStationLabel('custom')).toBe('Custom')
@@ -123,13 +136,13 @@ describe('model radar configuration grouping', () => {
 
     expect(groups.map((group) => group.model)).toEqual(['model-b', 'model-a'])
     expect(groups[0].configurations.map((item) => item.effort)).toEqual([
-      'low',
       'max',
+      'low',
       'turbo',
     ])
     expect(groups[1].configurations.map((item) => item.effort)).toEqual([
-      'medium',
       'high',
+      'medium',
     ])
   })
 

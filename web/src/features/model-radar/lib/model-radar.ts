@@ -34,6 +34,7 @@ const STATION_LABELS: Record<string, string> = {
   dsh: 'DSH',
   zcode: 'ZCode',
   grok: 'Grok',
+  'grok-build': 'Grok',
   kimi: 'Kimi Code',
 }
 
@@ -54,11 +55,9 @@ export function listStations(
 ): Array<{ key: string; label: string; count: number }> {
   const counts = new Map<string, number>()
   for (const configuration of configurations) {
-    if (!configuration.harness) continue
-    counts.set(
-      configuration.harness,
-      (counts.get(configuration.harness) ?? 0) + 1
-    )
+    const station = getConfigurationStation(configuration)
+    if (!station) continue
+    counts.set(station, (counts.get(station) ?? 0) + 1)
   }
   return Array.from(counts, ([key, count]) => ({
     key,
@@ -76,7 +75,22 @@ export function filterByStation(
 ): ModelRadarConfiguration[] {
   return station === ALL_STATIONS
     ? configurations
-    : configurations.filter((item) => item.harness === station)
+    : configurations.filter((item) => getConfigurationStation(item) === station)
+}
+
+// The source website groups these models into named stations even when its
+// published runner metadata still says "codex". Preserve harness separately.
+export function getConfigurationStation(
+  configuration: ModelRadarConfiguration
+): string {
+  if (configuration.model === 'glm-5.3') return 'zcode'
+  if (
+    configuration.model === 'grok-4.6' ||
+    configuration.harness === 'grok-build'
+  ) {
+    return 'grok'
+  }
+  return configuration.harness ?? ''
 }
 
 export function filterAlertsByStation(
@@ -96,12 +110,12 @@ export function filterAlertsByStation(
 }
 
 export const EFFORT_ORDER = [
-  'low',
-  'medium',
-  'high',
-  'xhigh',
-  'max',
   'ultra',
+  'max',
+  'xhigh',
+  'high',
+  'medium',
+  'low',
 ] as const
 
 export const MODEL_COLORS = [
@@ -304,16 +318,6 @@ export function createModelColorMap(
 export function getPassRate(configuration: ModelRadarConfiguration): number {
   if (configuration.valid_tasks <= 0) return 0
   return configuration.passed / configuration.valid_tasks
-}
-
-export function compareModelsByBestIq(
-  left: ModelRadarGroup,
-  right: ModelRadarGroup
-): number {
-  const leftBest = Math.max(...left.configurations.map((item) => item.iq))
-  const rightBest = Math.max(...right.configurations.map((item) => item.iq))
-  if (leftBest !== rightBest) return rightBest - leftBest
-  return left.model.localeCompare(right.model)
 }
 
 // Builds a source-relative IQ trend, oldest first, even for stale snapshots.

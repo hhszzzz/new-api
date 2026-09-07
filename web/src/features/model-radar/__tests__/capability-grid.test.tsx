@@ -39,6 +39,53 @@ vi.mock('@/lib/lobe-icon', () => ({
 }))
 
 describe('model radar capability grid', () => {
+  test('preserves source model order instead of crowning a two-sample configuration as the overall leader', () => {
+    render(
+      <CapabilityGrid
+        history={[]}
+        configurations={[
+          fixture,
+          {
+            ...fixture,
+            model: 'experimental',
+            iq: 150,
+            passed: 2,
+            valid_tasks: 2,
+          },
+        ]}
+      />
+    )
+    expect(
+      screen
+        .getAllByRole('heading', { level: 3 })
+        .map((node) => node.textContent)
+    ).toEqual(['gpt-radar', 'experimental'])
+    expect(screen.queryByLabelText('IQ max')).toBeNull()
+  })
+
+  test('places stronger efforts first and keeps price and duration in separate cells', () => {
+    render(
+      <CapabilityGrid
+        history={[]}
+        configurations={[
+          { ...fixture, effort: 'low' },
+          { ...fixture, effort: 'ultra' },
+        ]}
+      />
+    )
+    const cards = screen.getAllByRole('button', { name: /View details/ })
+    expect(cards[0]).toHaveAccessibleName('View details for gpt-radar ultra')
+    expect(cards[1]).toHaveAccessibleName('View details for gpt-radar low')
+    expect(within(cards[0]).getByTitle('Average cost')).toHaveTextContent(
+      '$1.25'
+    )
+    expect(within(cards[0]).getByTitle('Average duration')).toHaveTextContent(
+      '4.5 min'
+    )
+    expect(
+      within(cards[0]).getByTitle('Passed / valid samples')
+    ).toHaveTextContent('7/10')
+  })
   test('renders a complete vendor badge without clipping it', () => {
     const { container } = render(<ModelBadge color='#2563eb' model='gpt-5.4' />)
     const wrapper = container.firstElementChild
@@ -96,7 +143,7 @@ describe('model radar capability grid', () => {
     const grid = card.parentElement
     expect(grid).toHaveClass('grid-cols-2')
     expect(grid?.style.getPropertyValue('--effort-count')).toBe('2')
-    const placeholder = grid?.lastElementChild
+    const placeholder = grid?.firstElementChild
     expect(placeholder).toHaveAttribute('aria-hidden', 'true')
     expect(placeholder).toHaveClass('hidden', 'md:block')
   })
@@ -148,7 +195,7 @@ describe('model radar capability grid', () => {
     ).toBeVisible()
     expect(
       screen.getByText(
-        'IQ is the latest valid pass rate per task multiplied by 150. The combined cost index is provided by the source after normalizing weighted price and duration to 100.'
+        'Software engineering IQ uses up to the three latest valid samples per task, weighted equally, on a 150-point scale. The pass ratio counts samples, not distinct tasks.'
       )
     ).toBeVisible()
 

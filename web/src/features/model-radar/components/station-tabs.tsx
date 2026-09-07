@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import type { ReactNode } from 'react'
+import { useEffect, useRef, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Badge } from '@/components/ui/badge'
@@ -32,6 +32,26 @@ export function StationTabs(props: {
   children?: ReactNode
 }) {
   const { t } = useTranslation()
+  const scrollerRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const scroller = scrollerRef.current
+    if (!scroller) return
+    const revealSelectedStation = () => {
+      const selected = scroller.querySelector('[aria-selected="true"]')
+      if (!selected) return
+      const viewport = scroller.getBoundingClientRect()
+      const tab = selected.getBoundingClientRect()
+      if (tab.left < viewport.left) {
+        scroller.scrollLeft += tab.left - viewport.left
+      } else if (tab.right > viewport.right) {
+        scroller.scrollLeft += tab.right - viewport.right
+      }
+    }
+    revealSelectedStation()
+    const observer = new ResizeObserver(revealSelectedStation)
+    observer.observe(scroller)
+    return () => observer.disconnect()
+  }, [props.value, props.stations.length, t])
   if (props.stations.length <= 1) return props.children ?? null
 
   const stations = [
@@ -44,7 +64,7 @@ export function StationTabs(props: {
       onValueChange={(value) => props.onValueChange(String(value))}
       className='mt-5'
     >
-      <div className='overflow-x-auto pb-1'>
+      <div ref={scrollerRef} className='overflow-x-auto pb-1'>
         <TabsList variant='line' aria-label={t('Station')}>
           {stations.map((station) => (
             <TabsTrigger

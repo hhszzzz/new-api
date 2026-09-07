@@ -72,11 +72,23 @@ func modelRadarTestPayloads(t *testing.T) ([]byte, []byte) {
 
 func newModelRadarSourceServer(t *testing.T, efficiency []byte, insights []byte, insightsStatus int) *httptest.Server {
 	t.Helper()
+	validEfficiency, _ := modelRadarTestPayloads(t)
+	var published modelRadarEfficiencyPayload
+	require.NoError(t, common.Unmarshal(validEfficiency, &published))
+	point := published.Points[0]
+	metrics, err := common.Marshal(modelRadarMetricsPayload{
+		Schema: 3, Mode: "equal_latest_3", BenchmarkID: "deep-swe", ScoringMode: "binary-majority",
+		SourceUpdatedAt: published.SourceUpdatedAt,
+		Points:          []modelRadarMetricsPoint{{modelRadarUpstreamPoint: point, Total: point.ValidTasks, RunsTotal: point.TotalRuns}},
+	})
+	require.NoError(t, err)
 	return httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		switch request.URL.Path {
 		case "/efficiency":
 			_, _ = writer.Write(efficiency)
+		case "/metrics":
+			_, _ = writer.Write(metrics)
 		case "/insights":
 			writer.WriteHeader(insightsStatus)
 			_, _ = writer.Write(insights)
@@ -102,7 +114,7 @@ func TestFetchModelRadarNormalizesCapabilityDataAndDropsRecommendations(t *testi
 	server := newModelRadarSourceServer(t, efficiency, insights, http.StatusOK)
 	defer server.Close()
 
-	data, err := fetchModelRadar(context.Background(), server.Client(), server.URL+"/efficiency", server.URL+"/insights")
+	data, err := fetchModelRadar(context.Background(), server.Client(), server.URL+"/efficiency", server.URL+"/metrics", server.URL+"/insights")
 	require.NoError(t, err)
 	assert.Equal(t, 1, data.ModelCount)
 	assert.Equal(t, 1, data.ConfigurationCount)
@@ -150,7 +162,7 @@ func TestFetchModelRadarRejectsInvalidSourceContracts(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			server := newModelRadarSourceServer(t, test.efficiency, test.insights, test.status)
 			defer server.Close()
-			_, err := fetchModelRadar(context.Background(), server.Client(), server.URL+"/efficiency", server.URL+"/insights")
+			_, err := fetchModelRadar(context.Background(), server.Client(), server.URL+"/efficiency", server.URL+"/metrics", server.URL+"/insights")
 			require.ErrorContains(t, err, test.want)
 		})
 	}
@@ -161,7 +173,7 @@ func TestFetchModelRadarRejectsOversizedResponse(t *testing.T) {
 	server := newModelRadarSourceServer(t, []byte(strings.Repeat("x", modelRadarEfficiencyMaxBytes+1)), insights, http.StatusOK)
 	defer server.Close()
 
-	_, err := fetchModelRadar(context.Background(), server.Client(), server.URL+"/efficiency", server.URL+"/insights")
+	_, err := fetchModelRadar(context.Background(), server.Client(), server.URL+"/efficiency", server.URL+"/metrics", server.URL+"/insights")
 	require.ErrorContains(t, err, "response exceeds")
 }
 
@@ -331,7 +343,7 @@ func TestSyncModelRadarDoesNotReplaceSnapshotWhenOneSourceFails(t *testing.T) {
 	server := newModelRadarSourceServer(t, efficiency, insights, http.StatusBadGateway)
 	defer server.Close()
 
-	_, err := syncModelRadar(ctx, server.Client(), server.URL+"/efficiency", server.URL+"/insights", 1000)
+	_, err := syncModelRadar(ctx, server.Client(), server.URL+"/efficiency", server.URL+"/metrics", server.URL+"/insights", 1000)
 	require.Error(t, err)
 	snapshot, err := model.GetModelRadarSnapshot(ctx)
 	require.NoError(t, err)
@@ -345,7 +357,7 @@ func TestSyncModelRadarPersistsValidatedSnapshot(t *testing.T) {
 	server := newModelRadarSourceServer(t, efficiency, insights, http.StatusOK)
 	defer server.Close()
 
-	result, err := syncModelRadar(context.Background(), server.Client(), server.URL+"/efficiency", server.URL+"/insights", 2_000_000_000)
+	result, err := syncModelRadar(context.Background(), server.Client(), server.URL+"/efficiency", server.URL+"/metrics", server.URL+"/insights", 2_000_000_000)
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.ModelCount)
 	assert.Equal(t, 1, result.AlertCount)

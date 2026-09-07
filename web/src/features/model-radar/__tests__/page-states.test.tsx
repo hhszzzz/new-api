@@ -63,6 +63,7 @@ vi.mock('../hooks/use-radar-formatters', () => ({
     integer: (value: number | null) => String(value),
     percent: (value: number | null) => String(value),
     usd: (value: number | null) => String(value),
+    usdShort: (value: number | null) => (value === null ? null : String(value)),
   }),
 }))
 vi.mock('@/hooks', () => ({ useMediaQuery: () => false }))
@@ -277,6 +278,8 @@ describe('model radar page states', () => {
     ).toBeVisible()
     expect(screen.getByText('No degradation alerts')).toBeVisible()
     expect(screen.getByText('Stale data')).toBeVisible()
+    expect(screen.getByText(/Updated time:1799999000/)).toBeVisible()
+    expect(screen.queryByText(/Updated time:1800001000/)).toBeNull()
     expect(
       screen.getByRole('link', {
         name: 'Data from Codex Radar codexradar.com',

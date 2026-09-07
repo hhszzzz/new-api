@@ -83,7 +83,9 @@ export function ModelRadar() {
     snapshot?.configurations ?? [],
     activeStation
   )
-  const updatedAt = snapshot ? format.dateTime(snapshot.fetched_at) : null
+  const updatedAt = snapshot
+    ? format.dateTime(snapshot.source_updated_at)
+    : null
   const sourceUpdatedAt = snapshot
     ? format.dateTime(
         Math.max(snapshot.source_updated_at, snapshot.alerts_updated_at)
@@ -163,7 +165,7 @@ export function ModelRadar() {
               </div>
               <p className='text-muted-foreground mt-1.5 max-w-2xl text-sm'>
                 {t(
-                  'Model capability, cost, and efficiency across reasoning efforts.'
+                  'Software engineering (DeepSWE): IQ, cost, and duration across reasoning efforts.'
                 )}
               </p>
               {snapshot ? (

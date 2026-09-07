@@ -23,12 +23,14 @@ const (
 	modelRadarInsightsSchema     = 1
 	modelRadarEfficiencyType     = "distributed_intelligence_efficiency"
 	modelRadarEfficiencyURL      = "https://codexradar.com/data/intelligence-efficiency.json"
+	modelRadarMetricsURL         = "https://codexradar.com/api/intelligence-efficiency-metrics"
 	modelRadarInsightsURL        = "https://api.codexradar.com/api/v1/radar-insights"
 	modelRadarSourceURL          = "https://codexradar.com"
 	modelRadarAttribution        = "数据来自 Codex 雷达 codexradar.com"
 	modelRadarRequestTimeout     = 15 * time.Second
 	modelRadarEfficiencyMaxBytes = 8 << 20
 	modelRadarInsightsMaxBytes   = 1 << 20
+	modelRadarMetricsMaxBytes    = 1 << 20
 	modelRadarDefaultInterval    = 10 * time.Minute
 	modelRadarMinimumInterval    = 10 * time.Minute
 	modelRadarMinimumStaleAfter  = 30 * time.Minute
@@ -170,6 +172,22 @@ type modelRadarEfficiencyPayload struct {
 	History         []modelRadarUpstreamHistoryFrame `json:"history"`
 }
 
+type modelRadarMetricsPoint struct {
+	modelRadarUpstreamPoint
+	Total           *float64 `json:"total"`
+	RunsTotal       *int     `json:"runs_total"`
+	SourceUpdatedAt *string  `json:"source_updated_at"`
+}
+
+type modelRadarMetricsPayload struct {
+	Schema          int                      `json:"schema"`
+	Mode            string                   `json:"mode"`
+	BenchmarkID     string                   `json:"benchmark_id"`
+	ScoringMode     string                   `json:"scoring_mode"`
+	SourceUpdatedAt string                   `json:"source_updated_at"`
+	Points          []modelRadarMetricsPoint `json:"points"`
+}
+
 type modelRadarUpstreamAlert struct {
 	Model            string   `json:"model"`
 	Effort           string   `json:"effort"`
@@ -224,11 +242,11 @@ func SyncModelRadar(ctx context.Context) (*ModelRadarSyncResult, error) {
 	if client == nil {
 		client = http.DefaultClient
 	}
-	return syncModelRadar(ctx, client, modelRadarEfficiencyURL, modelRadarInsightsURL, common.GetTimestamp())
+	return syncModelRadar(ctx, client, modelRadarEfficiencyURL, modelRadarMetricsURL, modelRadarInsightsURL, common.GetTimestamp())
 }
 
-func syncModelRadar(ctx context.Context, client *http.Client, efficiencyURL string, insightsURL string, fetchedAt int64) (*ModelRadarSyncResult, error) {
-	data, err := fetchModelRadar(ctx, client, efficiencyURL, insightsURL)
+func syncModelRadar(ctx context.Context, client *http.Client, efficiencyURL string, metricsURL string, insightsURL string, fetchedAt int64) (*ModelRadarSyncResult, error) {
+	data, err := fetchModelRadar(ctx, client, efficiencyURL, metricsURL, insightsURL)
 	if err != nil {
 		return nil, err
 	}
@@ -290,7 +308,7 @@ func GetModelRadar(ctx context.Context) (*ModelRadarData, error) {
 	return &data, nil
 }
 
-func fetchModelRadar(ctx context.Context, client *http.Client, efficiencyURL string, insightsURL string) (*ModelRadarData, error) {
+func fetchModelRadar(ctx context.Context, client *http.Client, efficiencyURL string, metricsURL string, insightsURL string) (*ModelRadarData, error) {
 	if client == nil {
 		return nil, errors.New("model radar HTTP client is required")
 	}
@@ -298,10 +316,14 @@ func fetchModelRadar(ctx context.Context, client *http.Client, efficiencyURL str
 	defer cancel()
 
 	var efficiency modelRadarEfficiencyPayload
+	var metrics modelRadarMetricsPayload
 	var insights modelRadarInsightsPayload
 	group, groupCtx := errgroup.WithContext(requestCtx)
 	group.Go(func() error {
 		return fetchModelRadarJSON(groupCtx, client, efficiencyURL, modelRadarEfficiencyMaxBytes, &efficiency)
+	})
+	group.Go(func() error {
+		return fetchModelRadarJSON(groupCtx, client, metricsURL, modelRadarMetricsMaxBytes, &metrics)
 	})
 	group.Go(func() error {
 		return fetchModelRadarJSON(groupCtx, client, insightsURL, modelRadarInsightsMaxBytes, &insights)
@@ -310,10 +332,24 @@ func fetchModelRadar(ctx context.Context, client *http.Client, efficiencyURL str
 		return nil, err
 	}
 
-	configurations, history, sourceUpdatedAt, err := normalizeModelRadarEfficiency(efficiency)
+	published, history, _, err := normalizeModelRadarEfficiency(efficiency)
 	if err != nil {
 		return nil, fmt.Errorf("validate model radar efficiency data: %w", err)
 	}
+	configurations, currentFrame, err := normalizeModelRadarMetrics(metrics, published)
+	if err != nil {
+		return nil, fmt.Errorf("validate model radar live metrics: %w", err)
+	}
+	// Published JSON supplies history and runner metadata only. The current
+	// point and its timestamp must come from the same live metrics response.
+	cutoff := currentFrame.Ts - int64(modelRadarMaxHistoryAge.Seconds())
+	retained := history[:0]
+	for _, frame := range history {
+		if frame.Ts >= cutoff && frame.Ts < currentFrame.Ts {
+			retained = append(retained, frame)
+		}
+	}
+	history = append(retained, currentFrame)
 	alerts, alertsUpdatedAt, err := normalizeModelRadarInsights(insights)
 	if err != nil {
 		return nil, fmt.Errorf("validate model radar insights data: %w", err)
@@ -324,7 +360,7 @@ func fetchModelRadar(ctx context.Context, client *http.Client, efficiencyURL str
 		models[configuration.Model] = struct{}{}
 	}
 	return &ModelRadarData{
-		SourceUpdatedAt:    sourceUpdatedAt,
+		SourceUpdatedAt:    currentFrame.Ts,
 		AlertsUpdatedAt:    alertsUpdatedAt,
 		ModelCount:         len(models),
 		ConfigurationCount: len(configurations),
@@ -448,8 +484,8 @@ func normalizeModelRadarConfiguration(point modelRadarUpstreamPoint) (ModelRadar
 	if err != nil {
 		return ModelRadarConfiguration{}, "", err
 	}
-	// The harness identifies the upstream "station" (codex, dsh, ...) that
-	// produced the sample; it is optional so older snapshots keep loading.
+	// Harness describes the runner, which can differ from the website's station.
+	// It is optional so older snapshots keep loading.
 	harness := strings.ToLower(strings.TrimSpace(point.Harness))
 	if len(harness) > 32 {
 		return ModelRadarConfiguration{}, "", fmt.Errorf("invalid configuration %s: harness exceeds length limit", key)

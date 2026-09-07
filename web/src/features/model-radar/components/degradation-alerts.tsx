@@ -69,9 +69,9 @@ export function DegradationAlerts(props: {
       {props.alerts.length === 0 ? (
         <div
           role='status'
-          className='border-border/70 bg-muted/20 flex min-h-24 items-center gap-3 rounded-xl border px-4 py-5'
+          className='border-border/70 bg-muted/20 flex items-center gap-2 rounded-lg border px-3 py-2.5'
         >
-          <span className='flex size-9 shrink-0 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'>
+          <span className='flex size-5 shrink-0 items-center justify-center text-emerald-700 dark:text-emerald-400'>
             <HugeiconsIcon
               icon={TickDouble02Icon}
               className='size-4'
@@ -79,9 +79,9 @@ export function DegradationAlerts(props: {
               aria-hidden='true'
             />
           </span>
-          <div>
-            <p className='text-sm font-medium'>{t('No degradation alerts')}</p>
-            <p className='text-muted-foreground mt-0.5 text-xs'>
+          <div className='flex flex-wrap items-center gap-x-2 gap-y-0.5'>
+            <p className='text-xs font-medium'>{t('No degradation alerts')}</p>
+            <p className='text-muted-foreground text-xs'>
               {t('No current IQ decline meets the source alert threshold.')}
             </p>
           </div>

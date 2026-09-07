@@ -46,6 +46,7 @@ import {
   getPassRate,
   getStationLabel,
   getHistorySeries,
+  getConfigurationStation,
 } from '../lib/model-radar'
 import type { ModelRadarConfiguration, ModelRadarHistoryFrame } from '../types'
 import { Sparkline } from './sparkline'
@@ -138,9 +139,9 @@ export function ConfigurationDetails(props: {
             <span className='text-muted-foreground ml-2 text-sm font-normal capitalize'>
               {configuration.effort}
             </span>{' '}
-            {configuration.harness ? (
+            {getConfigurationStation(configuration) ? (
               <Badge variant='secondary' className='ml-2 align-middle'>
-                {getStationLabel(configuration.harness)}
+                {getStationLabel(getConfigurationStation(configuration))}
               </Badge>
             ) : null}
           </DialogTitle>
@@ -181,7 +182,7 @@ export function ConfigurationDetails(props: {
           </div>
           <div className='bg-muted/30 rounded-lg border px-3 py-2.5'>
             <p className='text-muted-foreground text-[11px]'>
-              {t('Passed / valid tasks')}
+              {t('Passed / valid samples')}
             </p>
             <p className='mt-0.5 text-lg leading-tight font-semibold tabular-nums'>
               {format.integer(configuration.passed)} /{' '}
@@ -300,7 +301,7 @@ export function ConfigurationDetails(props: {
           />
           <p className='text-muted-foreground text-xs leading-relaxed'>
             {t(
-              'IQ is the latest valid pass rate per task multiplied by 150. The combined cost index is provided by the source after normalizing weighted price and duration to 100.'
+              'Software engineering IQ uses up to the three latest valid samples per task, weighted equally, on a 150-point scale. The pass ratio counts samples, not distinct tasks.'
             )}
           </p>
         </div>

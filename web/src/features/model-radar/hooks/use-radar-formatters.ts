@@ -46,6 +46,13 @@ export function useRadarFormatters() {
       minimumFractionDigits: 2,
       maximumFractionDigits: 4,
     })
+    const shortCurrencyFormatter = new Intl.NumberFormat(locale, {
+      style: 'currency',
+      currency: 'USD',
+      currencyDisplay: 'narrowSymbol',
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })
     const dateTimeFormatter = new Intl.DateTimeFormat(locale, {
       month: 'short',
       day: 'numeric',
@@ -72,6 +79,11 @@ export function useRadarFormatters() {
         value === null ? null : percentFormatter.format(value),
       usd: (value: number | null) =>
         value === null ? null : currencyFormatter.format(value),
+      usdShort: (value: number | null) => {
+        if (value === null) return null
+        if (value > 0 && value < 0.01) return currencyFormatter.format(value)
+        return shortCurrencyFormatter.format(value)
+      },
     }
   }, [locale])
 }

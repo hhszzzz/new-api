@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
-import { describe, expect, test, vi } from 'vitest'
+import { afterEach, describe, expect, test, vi } from 'vitest'
 
 import { StationTabs } from '../components/station-tabs'
 
@@ -31,7 +31,36 @@ const stations = [
   { key: 'dsh', label: 'DSH', count: 1 },
 ]
 
+afterEach(() => vi.restoreAllMocks())
+
 describe('model radar station tabs', () => {
+  test('scrolls a selected station into the visible tab strip', async () => {
+    const user = userEvent.setup()
+    function StationPicker() {
+      const [value, setValue] = useState('all')
+      return (
+        <StationTabs
+          stations={stations}
+          total={4}
+          value={value}
+          onValueChange={setValue}
+        />
+      )
+    }
+    render(<StationPicker />)
+    const scroller = screen.getByRole('tablist').parentElement
+    if (!scroller) throw new Error('Station tabs must have a scroll container')
+    const dsh = screen.getByRole('tab', { name: 'DSH 1' })
+    vi.spyOn(scroller, 'getBoundingClientRect').mockReturnValue(
+      new DOMRect(0, 0, 200, 40)
+    )
+    vi.spyOn(dsh, 'getBoundingClientRect').mockReturnValue(
+      new DOMRect(250, 0, 80, 40)
+    )
+    await user.click(dsh)
+    expect(dsh).toHaveAttribute('aria-selected', 'true')
+    expect(scroller.scrollLeft).toBe(130)
+  })
   test('renders station counts and supports clicks and arrow-key activation', async () => {
     const user = userEvent.setup()
     const onChange = vi.fn()
