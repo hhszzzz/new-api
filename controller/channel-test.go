@@ -278,6 +278,13 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 			newAPIError: types.NewError(err, types.ErrorCodeChannelModelMappedError),
 		}
 	}
+	if err := helper.ApplyReasoningModelSuffix(c, info, request); err != nil {
+		return testResult{
+			context:     c,
+			localErr:    err,
+			newAPIError: types.NewErrorWithStatusCode(err, types.ErrorCodeConvertRequestFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry()),
+		}
+	}
 
 	testModel = info.UpstreamModelName
 	// 更新请求中的模型名称
@@ -580,7 +587,7 @@ func settleTestQuota(info *relaycommon.RelayInfo, priceData hosttypes.PriceData,
 	return quota, nil
 }
 
-func buildTestLogOther(c *gin.Context, info *relaycommon.RelayInfo, priceData hosttypes.PriceData, usage *dto.Usage, tieredResult *billingexpr.TieredResult) map[string]interface{} {
+func buildTestLogOther(c *gin.Context, info *relaycommon.RelayInfo, priceData hosttypes.PriceData, usage *dto.Usage, tieredResult *billingexpr.TieredResult) *model.LogOther {
 	other := service.GenerateTextOtherInfo(c, info, priceData.ModelRatio, priceData.GroupRatioInfo.GroupRatio, priceData.CompletionRatio,
 		usage.PromptTokensDetails.CachedTokens, priceData.CacheRatio, priceData.ModelPrice, priceData.GroupRatioInfo.GroupSpecialRatio)
 	if tieredResult != nil {

@@ -16,17 +16,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-/* eslint-disable react-refresh/only-export-components */
-/**
- * LobeHub Icon Loader
- * Render common @lobehub/icons entries directly and lazily load uncommon
- * configured entries on demand.
- *
- * Supports:
- * - Basic: "OpenAI", "OpenAI.Color"
- * - Chained properties: "OpenAI.Avatar.type={'platform'}"
- * - Size parameter: getLobeIcon("OpenAI", 20)
- */
 import Ai360Color from '@lobehub/icons/es/Ai360/components/Color.js'
 import Ai360Mono from '@lobehub/icons/es/Ai360/components/Mono.js'
 import * as Ai360Style from '@lobehub/icons/es/Ai360/style.js'
@@ -127,6 +116,18 @@ import SparkMono from '@lobehub/icons/es/Spark/components/Mono.js'
 import * as SparkStyle from '@lobehub/icons/es/Spark/style.js'
 import SunoMono from '@lobehub/icons/es/Suno/components/Mono.js'
 import * as SunoStyle from '@lobehub/icons/es/Suno/style.js'
+/* eslint-disable react-refresh/only-export-components */
+/**
+ * LobeHub Icon Loader
+ * Render common @lobehub/icons entries directly and lazily load uncommon
+ * configured entries on demand.
+ *
+ * Supports:
+ * - Basic: "OpenAI", "OpenAI.Color"
+ * - Chained properties: "OpenAI.Avatar.type={'platform'}"
+ * - Size parameter: getLobeIcon("OpenAI", 20)
+ */
+import { toc } from '@lobehub/icons/es/toc.js'
 import ViduColor from '@lobehub/icons/es/Vidu/components/Color.js'
 import ViduMono from '@lobehub/icons/es/Vidu/components/Mono.js'
 import * as ViduStyle from '@lobehub/icons/es/Vidu/style.js'
@@ -562,4 +563,12 @@ function LobeIcon(iconProps: LobeIconProps) {
   }
 
   return <IconComponent {...componentProps} />
+}
+
+// The selector uses the same installed icon registry as the renderer.
+export function getLobeIconNames(): string[] {
+  const names = toc.flatMap((icon) =>
+    icon.param.hasColor ? [icon.id, `${icon.id}.Color`] : [icon.id]
+  )
+  return [...new Set([...names, ...Object.keys(CUSTOM_ICONS)])].sort()
 }

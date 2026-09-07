@@ -24,17 +24,29 @@ type ClaudeMediaMessage struct {
 	PartialJson  *string              `json:"partial_json,omitempty"`
 	Role         string               `json:"role,omitempty"`
 	Thinking     *string              `json:"thinking,omitempty"`
-	Signature    string               `json:"signature,omitempty"`
 	Data         string               `json:"data,omitempty"`
+	Signature    string               `json:"signature,omitempty"`
 	Delta        string               `json:"delta,omitempty"`
 	CacheControl json.RawMessage      `json:"cache_control,omitempty"`
-	// tool_calls
+
+	// Text blocks and citations_delta events.
+	Citations json.RawMessage `json:"citations,omitempty"`
+	Citation  json.RawMessage `json:"citation,omitempty"`
+
+	// Server-tool and tool-result blocks.
+	Caller     json.RawMessage `json:"caller,omitempty"`
+	ServerName string          `json:"server_name,omitempty"`
+	IsError    *bool           `json:"is_error,omitempty"`
+	// ErrorCode is a relaykit compatibility extension. Claude places provider
+	// error codes inside nested tool-result error content.
+	ErrorCode string `json:"error_code,omitempty"`
+
+	// Tool-use and tool-result blocks.
 	Id        string `json:"id,omitempty"`
 	Name      string `json:"name,omitempty"`
 	Input     any    `json:"input,omitempty"`
 	Content   any    `json:"content,omitempty"`
 	ToolUseId string `json:"tool_use_id,omitempty"`
-	IsError   *bool  `json:"is_error,omitempty"`
 	Title     string `json:"title,omitempty"`
 	Filename  string `json:"filename,omitempty"`
 }
@@ -196,10 +208,14 @@ type InputSchema struct {
 }
 
 type ClaudeWebSearchTool struct {
-	Type         string                       `json:"type"`
-	Name         string                       `json:"name"`
-	MaxUses      int                          `json:"max_uses,omitempty"`
-	UserLocation *ClaudeWebSearchUserLocation `json:"user_location,omitempty"`
+	Type              string                       `json:"type"`
+	Name              string                       `json:"name"`
+	MaxUses           int                          `json:"max_uses,omitempty"`
+	AllowedDomains    []string                     `json:"allowed_domains,omitempty"`
+	BlockedDomains    []string                     `json:"blocked_domains,omitempty"`
+	AllowedCallers    []string                     `json:"allowed_callers,omitempty"`
+	ResponseInclusion string                       `json:"response_inclusion,omitempty"`
+	UserLocation      *ClaudeWebSearchUserLocation `json:"user_location,omitempty"`
 }
 
 type ClaudeWebSearchUserLocation struct {
@@ -442,7 +458,7 @@ func (c *ClaudeRequest) GetTools() []any {
 
 func (c *ClaudeRequest) GetEfforts() string {
 	var OutputConfig OutputConfigForEffort
-	if err := json.Unmarshal(c.OutputConfig, &OutputConfig); err == nil {
+	if err := kitutil.Unmarshal(c.OutputConfig, &OutputConfig); err == nil {
 		effort := OutputConfig.Effort
 		return effort
 	}
@@ -625,5 +641,8 @@ func (u *ClaudeUsage) GetCacheCreationTotalTokens() int {
 }
 
 type ClaudeServerToolUse struct {
-	WebSearchRequests int `json:"web_search_requests"`
+	WebSearchRequests     int `json:"web_search_requests,omitempty"`
+	WebFetchRequests      int `json:"web_fetch_requests,omitempty"`
+	CodeExecutionRequests int `json:"code_execution_requests,omitempty"`
+	ToolSearchRequests    int `json:"tool_search_requests,omitempty"`
 }

@@ -111,10 +111,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
-import {
-  SecureVerificationDialog,
-  useSecureVerification,
-} from '@/features/auth/secure-verification'
+import { SecureVerificationDialog } from '@/features/auth/secure-verification'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { useHiddenClickUnlock } from '@/hooks/use-hidden-click-unlock'
 import { useLatestAsyncTask } from '@/hooks/use-latest-async-task'
@@ -138,7 +135,6 @@ import {
   getAllModels,
   getChannel,
   getChannelAggregates,
-  getChannelKey,
   getChannelOps,
   getGroups,
   getPrefillGroups,
@@ -161,6 +157,7 @@ import {
   OPENAI_FIELD_PASSTHROUGH_TYPES,
 } from '../../constants'
 import { useChannelFormSession } from '../../hooks/use-channel-form-session'
+import { useChannelKeyDisclosure } from '../../hooks/use-channel-key-disclosure'
 import { useChannelMutateForm } from '../../hooks/use-channel-mutate-form'
 import {
   CHANNEL_FORM_DEFAULT_VALUES,
@@ -696,8 +693,6 @@ export function ChannelMutateDrawer({
   )
   const canRevealChannelKey = currentUser?.role === ROLE.SUPER_ADMIN
   const [fetchModelsDialogOpen, setFetchModelsDialogOpen] = useState(false)
-  const [channelKey, setChannelKey] = useState<string | null>(null)
-  const [isChannelKeyLoading, setIsChannelKeyLoading] = useState(false)
   const [isCodexCredentialRefreshing, setIsCodexCredentialRefreshing] =
     useState(false)
   const initialModelsRef = useRef<string[]>([])
@@ -799,25 +794,8 @@ export function ChannelMutateDrawer({
 
   const { copyToClipboard } = useCopyToClipboard()
 
-  const {
-    open: verificationOpen,
-    methods: verificationMethods,
-    state: verificationState,
-    executeVerification,
-    withVerification,
-    cancel: cancelVerification,
-    setCode: setVerificationCode,
-    switchMethod: switchVerificationMethod,
-  } = useSecureVerification()
-
-  useEffect(() => {
-    if (!open) {
-      setChannelKey(null)
-      setIsChannelKeyLoading(false)
-    } else if (channelId) {
-      setChannelKey(null)
-    }
-  }, [open, channelId])
+  const { channelKey, isChannelKeyLoading, handleRevealKey, verification } =
+    useChannelKeyDisclosure(open, channelId)
 
   // Check if this is a multi-key channel
   const isMultiKeyChannel =
@@ -1600,49 +1578,6 @@ export function ChannelMutateDrawer({
     }
   }
 
-  const fetchChannelKey = useCallback(
-    async (proofToken?: string) => {
-      if (!channelId) {
-        throw new Error('Channel is not selected')
-      }
-
-      setIsChannelKeyLoading(true)
-      try {
-        const res = await getChannelKey(channelId, proofToken)
-        if (!res.success) {
-          throw new Error(res.message || t('Failed to fetch channel key'))
-        }
-
-        const keyValue = res.data?.key ?? ''
-        setChannelKey(keyValue)
-        toast.success(t('Channel key unlocked'))
-        return res
-      } finally {
-        setIsChannelKeyLoading(false)
-      }
-    },
-    [channelId, t]
-  )
-
-  const handleRevealKey = useCallback(async () => {
-    if (!channelId) return
-
-    try {
-      await withVerification(fetchChannelKey, {
-        scope: 'channel.key.read',
-        preferredMethod: 'passkey',
-        title: t('Verify to view channel key'),
-        description: t(
-          'Use Passkey or 2FA to confirm your identity before revealing this channel key.'
-        ),
-      })
-    } catch (error) {
-      if (error instanceof Error) {
-        toast.error(error.message)
-      }
-    }
-  }, [channelId, withVerification, fetchChannelKey, t])
-
   const handleRefreshCodexCredential = useCallback(async () => {
     if (!channelId) return
     setIsCodexCredentialRefreshing(true)
@@ -2318,53 +2253,35 @@ export function ChannelMutateDrawer({
                                 <FormItem>
                                   <FormLabel>{t('Task plugin *')}</FormLabel>
                                   {canBindTaskPlugin ? (
-                                    <Select
-                                      value={field.value}
-                                      onValueChange={(value) => {
-                                        field.onChange(value)
-                                        const plugin =
-                                          taskPluginOptionsQuery.data?.find(
-                                            (item) => item.key === value
-                                          )
-                                        if (plugin?.models?.length) {
-                                          form.setValue(
-                                            'models',
-                                            formatModelsArray(plugin.models),
-                                            {
-                                              shouldDirty: true,
-                                            }
-                                          )
-                                        }
-                                      }}
-                                      items={(
-                                        taskPluginOptionsQuery.data ?? []
-                                      ).map((plugin) => ({
-                                        value: plugin.key,
-                                        label: `${plugin.name} (${plugin.key})`,
-                                      }))}
-                                    >
-                                      <FormControl>
-                                        <SelectTrigger>
-                                          <SelectValue
-                                            placeholder={t(
-                                              'Select task plugin'
-                                            )}
-                                          />
-                                        </SelectTrigger>
-                                      </FormControl>
-                                      <SelectContent>
-                                        {(
+                                    <FormControl>
+                                      <Combobox
+                                        value={field.value}
+                                        onValueChange={(value) => {
+                                          field.onChange(value)
+                                          const plugin =
+                                            taskPluginOptionsQuery.data?.find(
+                                              (item) => item.key === value
+                                            )
+                                          if (plugin?.models?.length) {
+                                            form.setValue(
+                                              'models',
+                                              formatModelsArray(plugin.models),
+                                              {
+                                                shouldDirty: true,
+                                              }
+                                            )
+                                          }
+                                        }}
+                                        options={(
                                           taskPluginOptionsQuery.data ?? []
-                                        ).map((plugin) => (
-                                          <SelectItem
-                                            key={plugin.key}
-                                            value={plugin.key}
-                                          >
-                                            {plugin.name} ({plugin.key})
-                                          </SelectItem>
-                                        ))}
-                                      </SelectContent>
-                                    </Select>
+                                        ).map((plugin) => ({
+                                          value: plugin.key,
+                                          label: `${plugin.name} (${plugin.key})`,
+                                        }))}
+                                        className='w-full'
+                                        placeholder={t('Select task plugin')}
+                                      />
+                                    </FormControl>
                                   ) : (
                                     <FormControl>
                                       <Input
@@ -3511,11 +3428,11 @@ export function ChannelMutateDrawer({
                                                 onClick={handleRevealKey}
                                                 disabled={
                                                   isChannelKeyLoading ||
-                                                  verificationState.loading
+                                                  verification.isActive
                                                 }
                                               >
                                                 {isChannelKeyLoading ||
-                                                verificationState.loading ? (
+                                                verification.isActive ? (
                                                   <Loader2 className='mr-2 h-4 w-4 animate-spin' />
                                                 ) : (
                                                   <Eye className='mr-2 h-4 w-4' />
@@ -5886,22 +5803,7 @@ export function ChannelMutateDrawer({
         existingModelsOverride={currentModelsArray}
       />
 
-      <SecureVerificationDialog
-        open={verificationOpen}
-        onOpenChange={(open) => {
-          if (!open) {
-            cancelVerification()
-          }
-        }}
-        methods={verificationMethods}
-        state={verificationState}
-        onVerify={async (method, code) => {
-          await executeVerification(method, code)
-        }}
-        onCancel={cancelVerification}
-        onCodeChange={setVerificationCode}
-        onMethodChange={switchVerificationMethod}
-      />
+      <SecureVerificationDialog {...verification.dialogProps} />
 
       {/* Missing Models Confirmation Dialog */}
       <MissingModelsConfirmationDialog

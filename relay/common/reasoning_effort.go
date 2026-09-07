@@ -28,7 +28,7 @@ func RecordClaudeReasoningEffort(info *RelayInfo, request *dto.ClaudeRequest) {
 		budgetTokens = request.Thinking.GetBudgetTokens()
 	}
 	effort := reasoning.ClaudeEffort(request.GetEfforts(), thinkingEnabled, budgetTokens)
-	if effort != "" && effort != reasoning.EffortNone {
+	if effort != "" && effort != string(reasoning.EffortNone) {
 		info.ReasoningEffort = effort
 	}
 }

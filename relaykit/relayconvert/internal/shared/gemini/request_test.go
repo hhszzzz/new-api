@@ -27,12 +27,12 @@ func TestRecordReasoningEffortReadsBothGeminiSpellings(t *testing.T) {
 		{
 			name:     "native level is reported as sent",
 			config:   &dto.GeminiThinkingConfig{ThinkingLevel: "high"},
-			expected: reasoning.EffortHigh,
+			expected: string(reasoning.EffortHigh),
 		},
 		{
 			name:     "native level is normalized",
 			config:   &dto.GeminiThinkingConfig{ThinkingLevel: "  HIGH  "},
-			expected: reasoning.EffortHigh,
+			expected: string(reasoning.EffortHigh),
 		},
 		{
 			name: "native level wins over a budget",
@@ -40,12 +40,12 @@ func TestRecordReasoningEffortReadsBothGeminiSpellings(t *testing.T) {
 				ThinkingLevel:  "low",
 				ThinkingBudget: kitutil.GetPointer(32768),
 			},
-			expected: reasoning.EffortLow,
+			expected: string(reasoning.EffortLow),
 		},
 		{
 			name:     "budget is described as a level",
 			config:   &dto.GeminiThinkingConfig{ThinkingBudget: kitutil.GetPointer(4096)},
-			expected: reasoning.EffortMedium,
+			expected: string(reasoning.EffortMedium),
 		},
 		{
 			name:     "a zero budget disables thinking and is not recorded",
@@ -54,7 +54,7 @@ func TestRecordReasoningEffortReadsBothGeminiSpellings(t *testing.T) {
 		},
 		{
 			name:     "includeThoughts alone is not an effort choice",
-			config:   &dto.GeminiThinkingConfig{IncludeThoughts: true},
+			config:   &dto.GeminiThinkingConfig{IncludeThoughts: kitutil.GetPointer(true)},
 			expected: "",
 		},
 	}

@@ -307,7 +307,8 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 		return nil, errors.New("request is nil")
 	}
 
-	if !model_setting.ShouldPreserveThinkingSuffix(info.UpstreamModelName) &&
+	if !model_setting.ShouldPreserveThinkingSuffix(info.OriginModelName) &&
+		!model_setting.ShouldPreserveThinkingSuffix(info.UpstreamModelName) &&
 		strings.HasSuffix(info.UpstreamModelName, "-thinking") &&
 		strings.HasPrefix(info.UpstreamModelName, "deepseek") {
 		info.UpstreamModelName = strings.TrimSuffix(info.UpstreamModelName, "-thinking")

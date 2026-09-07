@@ -54,7 +54,7 @@ func ProcessChannelError(c *gin.Context, channelError types.ChannelError, apiErr
 		return
 	}
 	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, apiErr.StatusCode, common.LocalLogPreview(apiErr.Error())))
-	if ShouldDisableChannel(apiErr) && channelError.AutoBan {
+	if apiErr.GetErrorCode() != types.ErrorCodeClientDisconnected && ShouldDisableChannel(apiErr) && channelError.AutoBan {
 		gopool.Go(func() {
 			DisableChannel(channelError, apiErr.ErrorWithStatusCode())
 		})
@@ -68,17 +68,17 @@ func ProcessChannelError(c *gin.Context, channelError types.ChannelError, apiErr
 	modelName := c.GetString("original_model")
 	tokenID := c.GetInt("token_id")
 	userGroup := c.GetString("group")
-	channelID := c.GetInt("channel_id")
-	other := make(map[string]interface{})
+	channelID := channelError.ChannelId
+	other := model.NewLogOther()
 	if c.Request != nil && c.Request.URL != nil {
-		other["request_path"] = c.Request.URL.Path
+		other.SetPublic("request_path", c.Request.URL.Path)
 	}
-	other["error_type"] = apiErr.GetErrorType()
-	other["error_code"] = apiErr.GetErrorCode()
-	other["status_code"] = apiErr.StatusCode
-	other["channel_id"] = channelID
-	other["channel_name"] = c.GetString("channel_name")
-	other["channel_type"] = c.GetInt("channel_type")
+	other.SetPublic("error_type", apiErr.GetErrorType())
+	other.SetPublic("error_code", apiErr.GetErrorCode())
+	other.SetPublic("status_code", apiErr.StatusCode)
+	other.SetAdmin("channel_id", channelID)
+	other.SetAdmin("channel_name", c.GetString("channel_name"))
+	other.SetAdmin("channel_type", c.GetInt("channel_type"))
 	adminInfo := map[string]interface{}{
 		"use_channel": c.GetStringSlice("use_channel"),
 	}
@@ -86,8 +86,8 @@ func ProcessChannelError(c *gin.Context, channelError types.ChannelError, apiErr
 		adminInfo["is_multi_key"] = true
 		adminInfo["multi_key_index"] = common.GetContextKeyInt(c, constant.ContextKeyChannelMultiKeyIndex)
 	}
-	AppendChannelAffinityAdminInfo(c, adminInfo)
-	other["admin_info"] = adminInfo
+	AppendChannelAffinityAdminInfo(c, other)
+	other.MergeAdmin(adminInfo)
 	if relayInfo != nil {
 		AppendModelRoutingAdminInfo(other, relayInfo.HasModelRouting(), relayInfo.UpstreamModelName)
 	}

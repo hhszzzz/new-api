@@ -3,7 +3,7 @@ package helper
 import (
 	"strings"
 
-	"github.com/QuantumNous/new-api/relay/common"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service/modelmapping"
@@ -11,9 +11,9 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func ModelMappedHelper(c *gin.Context, info *common.RelayInfo, request dto.Request) error {
+func ModelMappedHelper(c *gin.Context, info *relaycommon.RelayInfo, request dto.Request) error {
 	if info.ChannelMeta == nil {
-		info.ChannelMeta = &common.ChannelMeta{}
+		info.ChannelMeta = &relaycommon.ChannelMeta{}
 	}
 
 	isResponsesCompact := info.RelayMode == relayconstant.RelayModeResponsesCompact

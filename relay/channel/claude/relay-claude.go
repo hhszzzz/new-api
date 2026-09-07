@@ -145,21 +145,14 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 			return types.NewError(err, types.ErrorCodeBadResponse)
 		}
 	} else if info.RelayFormat == types.RelayFormatOpenAI {
-		response := StreamResponseClaude2OpenAI(&claudeResponse)
-
-		if !FormatClaudeResponseInfo(&claudeResponse, response, claudeInfo) {
-			return nil
-		}
-
-		countClaudeStreamBillableTools(c, info, &claudeResponse)
-
-		err = helper.ObjectData(c, response)
+		state, err := claudeToChatStreamState(info)
 		if err != nil {
-			info.StreamStatus.MarkWriteError(err)
-			return types.NewError(err, types.ErrorCodeBadResponse)
+			return types.NewError(err, types.ErrorCodeBadResponseBody)
 		}
-	} else if info.RelayFormat == types.RelayFormatGemini {
-		response := StreamResponseClaude2OpenAI(&claudeResponse)
+		response, err := state.ConvertChunk(&claudeResponse)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeBadResponseBody)
+		}
 
 		if !FormatClaudeResponseInfo(&claudeResponse, response, claudeInfo) {
 			return nil
@@ -170,31 +163,10 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		if response == nil {
 			return nil
 		}
-		// Claude carries the terminal usage on message_delta; surface it on the
-		// chunk so the converted Gemini response pairs finishReason with
-		// usageMetadata the way Google's native stream does.
-		if claudeResponse.Type == "message_delta" {
-			usage := buildOpenAIStyleUsageFromClaudeUsage(claudeInfo.Usage)
-			response.Usage = &usage
-		}
-		result, convertErr := relayconvert.ConvertStreamResponse(c, info, types.RelayFormatGemini, response)
-		if convertErr != nil {
-			return types.NewError(convertErr, types.ErrorCodeBadResponse)
-		}
-		geminiResponse, ok := result.Value.(*dto.GeminiChatResponse)
-		if !ok {
-			return types.NewError(fmt.Errorf("expected Gemini stream response, got %T", result.Value), types.ErrorCodeBadResponse)
-		}
-		if geminiResponse == nil {
-			return nil
-		}
-		geminiData, marshalErr := common.Marshal(geminiResponse)
-		if marshalErr != nil {
-			return types.NewError(marshalErr, types.ErrorCodeBadResponseBody)
-		}
-		if flushErr := helper.StringData(c, string(geminiData)); flushErr != nil {
-			info.StreamStatus.MarkWriteError(flushErr)
-			return types.NewError(flushErr, types.ErrorCodeBadResponse)
+		err = helper.ObjectData(c, response)
+		if err != nil {
+			info.StreamStatus.MarkWriteError(err)
+			return types.NewError(err, types.ErrorCodeBadResponse)
 		}
 	} else if info.RelayFormat == types.RelayFormatOpenAIResponses {
 		FormatClaudeResponseInfo(&claudeResponse, nil, claudeInfo)
@@ -231,6 +203,73 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 				return types.NewError(sendErr, types.ErrorCodeBadResponse)
 			}
 		}
+	} else if info.RelayFormat == types.RelayFormatGemini {
+		state, err := claudeToGeminiStreamState(info)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeBadResponseBody)
+		}
+		results, err := service.ConvertStreamResponseChunk(c, info, state, &claudeResponse)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeBadResponseBody)
+		}
+		FormatClaudeResponseInfo(&claudeResponse, nil, claudeInfo)
+		countClaudeStreamBillableTools(c, info, &claudeResponse)
+		if sendErr := sendGeminiStreamResults(c, results); sendErr != nil {
+			return sendErr
+		}
+	}
+	return nil
+}
+
+func claudeToChatStreamState(info *relaycommon.RelayInfo) (*relayconvert.ClaudeToChatStreamState, error) {
+	if info != nil && info.ClaudeToChatStreamState != nil {
+		state, ok := info.ClaudeToChatStreamState.(*relayconvert.ClaudeToChatStreamState)
+		if !ok || state == nil {
+			return nil, fmt.Errorf("invalid Claude-to-Chat stream state %T", info.ClaudeToChatStreamState)
+		}
+		return state, nil
+	}
+
+	state := relayconvert.NewClaudeToChatStreamState()
+	if info != nil {
+		info.ClaudeToChatStreamState = state
+	}
+	return state, nil
+}
+
+func claudeToGeminiStreamState(info *relaycommon.RelayInfo) (*relayconvert.ResponseStreamState, error) {
+	if info != nil && info.ChatToGeminiStreamState != nil {
+		state, ok := info.ChatToGeminiStreamState.(*relayconvert.ResponseStreamState)
+		if !ok || state == nil {
+			return nil, fmt.Errorf("invalid Claude-to-Gemini stream state %T", info.ChatToGeminiStreamState)
+		}
+		return state, nil
+	}
+
+	state, err := relayconvert.NewResponseStreamState(types.RelayFormatClaude, types.RelayFormatGemini, relayconvert.ResponseStreamOptions{Model: info.PublicResponseModelName()})
+	if err != nil {
+		return nil, err
+	}
+	if info != nil {
+		info.ChatToGeminiStreamState = state
+	}
+	return state, nil
+}
+
+func sendGeminiStreamResults(c *gin.Context, results []relayconvert.ResponseResult) *types.NewAPIError {
+	for _, result := range results {
+		geminiResponse, ok := result.Value.(*dto.GeminiChatResponse)
+		if !ok {
+			return types.NewError(fmt.Errorf("expected Gemini stream response, got %T", result.Value), types.ErrorCodeBadResponseBody)
+		}
+		if geminiResponse == nil {
+			continue
+		}
+		data, err := common.Marshal(geminiResponse)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeBadResponseBody)
+		}
+		if err := helper.StringData(c, string(data)); err != nil { return types.NewError(err, types.ErrorCodeBadResponse) }
 	}
 	return nil
 }
@@ -300,9 +339,7 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 	if claudeInfo.Usage != nil {
 		claudeInfo.Usage.UsageSemantic = "anthropic"
 	}
-	if claudeInfo.Usage != nil && claudeInfo.Usage.BillingUsage == nil {
-		claudeInfo.Usage.BillingUsage = dto.NewClaudeMessagesBillingUsage(buildMessageDeltaPatchUsage(nil, claudeInfo))
-	}
+	relayconvert.FinalizeClaudeStreamBillingUsage(claudeInfo)
 
 	if info.RelayFormat == types.RelayFormatClaude {
 		//
@@ -317,6 +354,18 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 		}
 		if err := helper.Done(c); err != nil {
 			return types.NewError(err, types.ErrorCodeBadResponse)
+		}
+	} else if info.RelayFormat == types.RelayFormatGemini {
+		state, err := claudeToGeminiStreamState(info)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeBadResponse)
+		}
+		results, err := service.FinalizeStreamResponse(c, info, state)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeBadResponse)
+		}
+		if sendErr := sendGeminiStreamResults(c, results); sendErr != nil {
+			return sendErr
 		}
 	}
 	return nil
@@ -437,7 +486,10 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		claudeInfo.Usage.CompletionTokens = claudeResponse.Usage.OutputTokens
 		claudeInfo.Usage.TotalTokens = claudeResponse.Usage.InputTokens + claudeResponse.Usage.OutputTokens
 		claudeInfo.Usage.UsageSemantic = "anthropic"
-		claudeInfo.Usage.BillingUsage = dto.NewClaudeMessagesBillingUsage(claudeResponse.Usage)
+		claudeInfo.Usage.BillingUsage = dto.CloneBillingUsage(claudeResponse.Usage.BillingUsage)
+		if claudeInfo.Usage.BillingUsage == nil {
+			claudeInfo.Usage.BillingUsage = dto.NewClaudeMessagesBillingUsage(claudeResponse.Usage)
+		}
 		claudeInfo.Usage.PromptTokensDetails.CachedTokens = claudeResponse.Usage.CacheReadInputTokens
 		claudeInfo.Usage.PromptTokensDetails.CachedCreationTokens = claudeResponse.Usage.CacheCreationInputTokens
 		claudeInfo.Usage.ClaudeCacheCreation5mTokens = claudeResponse.Usage.GetCacheCreation5mTokens()
@@ -455,6 +507,24 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeBadResponseBody)
 		}
+	case types.RelayFormatOpenAIResponses:
+		convertResult, err := service.ConvertResponse(c, info, types.RelayFormatOpenAIResponses, &claudeResponse)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeBadResponseBody)
+		}
+		responsesResponse, ok := convertResult.Value.(*dto.OpenAIResponsesResponse)
+		if !ok {
+			return types.NewError(fmt.Errorf("expected OpenAI Responses response, got %T", convertResult.Value), types.ErrorCodeBadResponseBody)
+		}
+		if responseID := helper.GetResponseID(c); responseID != "" {
+			responsesResponse.ID = responseID
+		}
+		responsesResponse.Model = info.PublicResponseModelName()
+		protocolstate.CaptureResponsesResponse(c, claudeResponse.Id, responsesResponse)
+		responseData, err = common.Marshal(responsesResponse)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeBadResponseBody)
+		}
 	case types.RelayFormatClaude:
 		if info.PublicResponseModelName() != "" {
 			responseData, err = relaycommon.RedactUserModelRouteJSON(data, info)
@@ -465,28 +535,19 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 			responseData = data
 		}
 	case types.RelayFormatGemini:
-		convertResult, convertErr := relayconvert.ConvertResponse(c, info, types.RelayFormatGemini, &claudeResponse)
-		if convertErr != nil {
-			return types.NewError(convertErr, types.ErrorCodeBadResponseBody)
-		}
-		responseData, err = common.Marshal(convertResult.Value)
-		if err != nil {
-			return types.NewError(err, types.ErrorCodeBadResponseBody)
-		}
-	case types.RelayFormatOpenAIResponses:
-		convertResult, convertErr := relayconvert.ConvertResponse(c, info, types.RelayFormatOpenAIResponses, &claudeResponse)
-		if convertErr != nil {
-			return types.NewError(convertErr, types.ErrorCodeBadResponseBody)
-		}
-		responsesResponse, ok := convertResult.Value.(*dto.OpenAIResponsesResponse)
-		if !ok {
-			return types.NewError(fmt.Errorf("expected OpenAI Responses response, got %T", convertResult.Value), types.ErrorCodeBadResponseBody)
-		}
-		responsesResponse.Model = info.PublicResponseModelName()
-		protocolstate.CaptureResponsesResponse(c, claudeResponse.Id, responsesResponse)
-		responseData, err = common.Marshal(responsesResponse)
-		if err != nil {
-			return types.NewError(err, types.ErrorCodeBadResponseBody)
+		{
+			convertResult, convertErr := service.ConvertResponse(c, info, types.RelayFormatGemini, &claudeResponse)
+			if convertErr != nil {
+				return types.NewError(convertErr, types.ErrorCodeBadResponseBody)
+			}
+			geminiResponse, ok := convertResult.Value.(*dto.GeminiChatResponse)
+			if !ok {
+				return types.NewError(fmt.Errorf("expected Gemini generateContent response, got %T", convertResult.Value), types.ErrorCodeBadResponseBody)
+			}
+			responseData, err = common.Marshal(geminiResponse)
+			if err != nil {
+				return types.NewError(err, types.ErrorCodeBadResponseBody)
+			}
 		}
 	}
 

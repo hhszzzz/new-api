@@ -132,6 +132,9 @@ export type DataTablePageProps<TData> = {
    */
   bulkActions?: React.ReactNode
 
+  /** Allow selection actions in the mobile list when opted in. */
+  showMobileBulkActions?: boolean
+
   /**
    * Render the bulk action bar on mobile when the mobile row layout exposes
    * selection controls.
@@ -148,6 +151,7 @@ export type DataTablePageProps<TData> = {
    * Ignored if `mobile` is provided.
    */
   mobileProps?: {
+    enableRowSelection?: boolean
     getRowKey?: (row: Row<TData>) => string | number
     getRowClassName?: (row: Row<TData>) => string | undefined
   }
@@ -358,7 +362,10 @@ export function DataTablePage<TData>(props: DataTablePageProps<TData>) {
 
       {/* Bulk actions are typically fixed-position. Consumers can opt in on
           mobile when their mobile row layout exposes selection controls. */}
-      {(!showMobile || props.bulkActionsOnMobile) && props.bulkActions}
+      {(!showMobile ||
+        props.bulkActionsOnMobile ||
+        props.showMobileBulkActions) &&
+        props.bulkActions}
 
       {paginationNode}
     </>
@@ -477,6 +484,7 @@ function renderMobile<TData>(
     } else {
       mobileContent = (
         <MobileCardList
+          enableRowSelection={props.mobileProps?.enableRowSelection}
           table={props.table}
           isLoading={props.isLoading}
           emptyTitle={props.emptyTitle}

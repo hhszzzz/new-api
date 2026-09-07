@@ -134,7 +134,10 @@ export function formatReleaseDate(iso: string): string {
  * @param bucket - Time bucket granularity
  * @returns Localized label like "Aug 16 12:00", "Aug 16", or "Week of Aug 12"
  */
-export function formatChartLabel(ts: string, bucket: 'hour' | 'day' | 'week'): string {
+export function formatChartLabel(
+  ts: string,
+  bucket: 'hour' | 'day' | 'week'
+): string {
   const timestamp = Date.parse(ts)
   if (!Number.isFinite(timestamp)) return ts
 

@@ -17,14 +17,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronDown, Loader2 } from 'lucide-react'
-import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { AxiosError } from 'axios'
+import { useEffect, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import * as z from 'zod'
 
+import { ConfirmDialog } from '@/components/confirm-dialog'
 import {
   SideDrawerSection,
   sideDrawerContentClassName,
@@ -33,14 +33,14 @@ import {
   sideDrawerHeaderClassName,
   sideDrawerSwitchItemClassName,
 } from '@/components/drawer-layout'
+import { ErrorState } from '@/components/error-state'
 import { JsonEditor } from '@/components/json-editor'
+import { LoadingState } from '@/components/loading-state'
+import { LobeIconField } from '@/components/lobe-icon-field'
 import { TagInput } from '@/components/tag-input'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from '@/components/ui/collapsible'
+import { Combobox } from '@/components/ui/combobox'
 import {
   Form,
   FormControl,
@@ -54,16 +54,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import {
   Sheet,
-  SheetClose,
   SheetContent,
   SheetDescription,
   SheetFooter,
@@ -71,1265 +62,617 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { Switch } from '@/components/ui/switch'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
-import {
-  useSystemOptions,
-  getOptionValue,
-} from '@/features/system-settings/hooks/use-system-options'
-import { normalizeJsonString } from '@/features/system-settings/models/utils'
-import type { ModelSettings } from '@/features/system-settings/types'
-import { safeJsonParse } from '@/features/system-settings/utils/json-parser'
+import { ModelPricingPanel } from '@/features/model-pricing/model-pricing-panel'
 
 import { createModel, updateModel, getModel, getVendors } from '../../api'
 import { getNameRuleOptions, ENDPOINT_TEMPLATES } from '../../constants'
+import { modelsQueryKeys, vendorsQueryKeys } from '../../lib'
 import {
-  modelsQueryKeys,
-  vendorsQueryKeys,
-  parseModelTags,
-  parseModelPricingNumber,
-  reconcileModelPricingMaps,
-} from '../../lib'
+  modelFormSchema,
+  transformModelToFormDefaults,
+  transformFormDataToModelPayload,
+  type ModelFormValues,
+} from '../../lib/model-form'
 import type { Model } from '../../types'
+import { ModelConnections } from '../model-connections'
 
-// Extended schema for ratio configuration (internal form state only)
-const extendedModelFormSchema = z.object({
-  id: z.number().optional(),
-  model_name: z.string().min(1, 'Model name is required'),
-  description: z.string(),
-  icon: z.string(),
-  tags: z.array(z.string()),
-  vendor_id: z.number().optional(),
-  endpoints: z.string(),
-  name_rule: z.number(),
-  status: z.boolean(),
-  sync_official: z.boolean(),
-  price: z.string().optional(),
-  ratio: z.string().optional(),
-  cacheRatio: z.string().optional(),
-  completionRatio: z.string().optional(),
-  imageRatio: z.string().optional(),
-  audioRatio: z.string().optional(),
-  audioCompletionRatio: z.string().optional(),
-})
-
-type ExtendedModelFormValues = z.infer<typeof extendedModelFormSchema>
-
-type PricingMode = 'per-token' | 'per-request'
-type PricingSubMode = 'ratio' | 'price'
-
-type PricingFields = Pick<
-  ExtendedModelFormValues,
-  | 'price'
-  | 'ratio'
-  | 'cacheRatio'
-  | 'completionRatio'
-  | 'imageRatio'
-  | 'audioRatio'
-  | 'audioCompletionRatio'
->
-
-// Form state describing the pricing currently configured for one model name.
-type PricingConfig = {
-  mode: PricingMode
-  fields: PricingFields
-  promptPrice: string
-  completionPrice: string
-  advancedOpen: boolean
-}
-
-const EMPTY_PRICING_FIELDS: PricingFields = {
-  price: '',
-  ratio: '',
-  cacheRatio: '',
-  completionRatio: '',
-  imageRatio: '',
-  audioRatio: '',
-  audioCompletionRatio: '',
-}
-
-const EMPTY_PRICING_CONFIG: PricingConfig = {
-  mode: 'per-token',
-  fields: EMPTY_PRICING_FIELDS,
-  promptPrice: '',
-  completionPrice: '',
-  advancedOpen: false,
-}
-
-function lookupModelRatio(
-  rawMap: string,
-  modelName: string
-): number | undefined {
-  return safeJsonParse<Record<string, number>>(rawMap, {
-    fallback: {},
-    silent: true,
-  })[modelName]
-}
-
-// Pricing is not stored on the model row: it lives in system options as
-// model-name keyed JSON maps, so it has to be read back out of those maps to
-// populate the form. Both create and edit rely on this, because submit rebuilds
-// the maps from the form and would otherwise drop pricing it never loaded.
-function readPricingConfig(
-  settings: ModelSettings | null,
-  modelName: string
-): PricingConfig {
-  if (!settings || !modelName) return EMPTY_PRICING_CONFIG
-
-  const price = lookupModelRatio(settings.ModelPrice, modelName)
-  const ratio = lookupModelRatio(settings.ModelRatio, modelName)
-  const cacheRatio = lookupModelRatio(settings.CacheRatio, modelName)
-  const completionRatio = lookupModelRatio(settings.CompletionRatio, modelName)
-  const imageRatio = lookupModelRatio(settings.ImageRatio, modelName)
-  const audioRatio = lookupModelRatio(settings.AudioRatio, modelName)
-  const audioCompletionRatio = lookupModelRatio(
-    settings.AudioCompletionRatio,
-    modelName
-  )
-
-  // A fixed per-request price wins outright at billing time (see
-  // GetModelRatioOrPrice), so a name that has one is shown, and saved back, as
-  // price-only: the ratios alongside it are dead weight.
-  if (price !== undefined && price !== null) {
-    return {
-      ...EMPTY_PRICING_CONFIG,
-      mode: 'per-request',
-      fields: { ...EMPTY_PRICING_FIELDS, price: price.toString() },
-    }
-  }
-
-  let promptPrice = ''
-  let completionPrice = ''
-  if (ratio !== undefined && ratio !== null) {
-    const tokenPrice = ratio * 2
-    promptPrice = tokenPrice.toString()
-    if (completionRatio !== undefined && completionRatio !== null) {
-      completionPrice = (tokenPrice * completionRatio).toString()
-    }
-  }
-
-  return {
-    mode: 'per-token',
-    fields: {
-      price: '',
-      ratio: ratio?.toString() || '',
-      cacheRatio: cacheRatio?.toString() || '',
-      completionRatio: completionRatio?.toString() || '',
-      imageRatio: imageRatio?.toString() || '',
-      audioRatio: audioRatio?.toString() || '',
-      audioCompletionRatio: audioCompletionRatio?.toString() || '',
-    },
-    promptPrice,
-    completionPrice,
-    // Configured is not the same as non-zero: a 0 ratio (free cache reads, for
-    // instance) still has to be visible rather than hidden behind the collapse.
-    advancedOpen: [
-      cacheRatio,
-      imageRatio,
-      audioRatio,
-      audioCompletionRatio,
-    ].some((value) => value !== undefined && value !== null),
-  }
-}
-
-type ModelMutateDrawerProps = {
+export function ModelMutateDrawer(props: {
   open: boolean
   onOpenChange: (open: boolean) => void
   currentRow?: Model | null
-}
-
-export function ModelMutateDrawer({
-  open,
-  onOpenChange,
-  currentRow,
-}: ModelMutateDrawerProps) {
+}) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
-  const currentModelId = currentRow?.id
-  const isEditing = Boolean(currentModelId)
-  const [isSubmitting, setIsSubmitting] = useState(false)
-  const [pricingMode, setPricingMode] = useState<PricingMode>('per-token')
-  const [pricingSubMode, setPricingSubMode] = useState<PricingSubMode>('ratio')
-  const [advancedOpen, setAdvancedOpen] = useState(false)
-  const [promptPrice, setPromptPrice] = useState('')
-  const [completionPrice, setCompletionPrice] = useState('')
-  const [oldModelName, setOldModelName] = useState<string>('')
-  // Model name whose pricing was read into the form when the drawer opened.
-  // Submit may only rewrite pricing for this name, or for a name the user
-  // explicitly priced; anything else it never saw and must leave alone.
-  const [loadedPricingName, setLoadedPricingName] = useState<string>('')
-  // Controlled value for the endpoint-template picker. Reset to null after each
-  // pick so the same template can be chosen again and the trigger returns to its
-  // placeholder instead of sticking on the last-added template.
-  const [endpointTemplateKey, setEndpointTemplateKey] = useState<string | null>(
+  const currentRow = props.currentRow
+  const isEditing = Boolean(currentRow?.id)
+  const [section, setSection] = useState('metadata')
+  const [pricingName, setPricingName] = useState('')
+  const [pricingVisited, setPricingVisited] = useState(false)
+  const [pricingDirty, setPricingDirty] = useState(false)
+  const [pendingPricingName, setPendingPricingName] = useState<string | null>(
     null
   )
-  // Keep a ref so the load effect can read the latest modelSettings without
-  // depending on it: modelSettings is a fresh object on every system-options
-  // refetch, and including it in the deps would reset the form under the user.
-  const modelSettingsRef = useRef<ModelSettings | null>(null)
-  const loadedFormKeyRef = useRef<string | null>(null)
-
-  // Fetch vendors for dropdown
-  const { data: vendorsData } = useQuery({
+  const [closeConfirm, setCloseConfirm] = useState(false)
+  const loadedKey = useRef('')
+  const form = useForm({
+    resolver: zodResolver(modelFormSchema),
+    defaultValues: transformModelToFormDefaults({
+      model_name: '',
+      status: 1,
+      sync_official: 1,
+      name_rule: 0,
+    } as Model),
+  })
+  const vendorsQuery = useQuery({
     queryKey: vendorsQueryKeys.list(),
     queryFn: () => getVendors({ page_size: 1000 }),
-    enabled: open,
+    enabled: props.open,
   })
-
-  const vendors = vendorsData?.data?.items || []
-
-  // Fetch model detail if editing
-  const { data: modelData } = useQuery({
-    queryKey: modelsQueryKeys.detail(currentModelId || 0),
-    queryFn: () => {
-      if (!currentModelId) {
-        throw new Error('Model ID is required')
-      }
-      return getModel(currentModelId)
-    },
-    enabled: open && isEditing,
-  })
-
-  // Fetch system options for ratio configuration
-  const { data: systemOptionsData } = useSystemOptions()
-
-  // Get model settings from system options
-  const modelSettings = useMemo(() => {
-    if (!systemOptionsData?.data) return null
-    const defaultModelSettings: ModelSettings = {
-      'global.pass_through_request_enabled': false,
-      'global.thinking_model_blacklist': '[]',
-      'global.chat_completions_to_responses_policy': '{}',
-      'global.protocol_bridge_policy':
-        '{"enabled":false,"default_allow_conversion":false,"state_ttl_seconds":3600,"max_state_turns":128,"max_state_bytes":4194304}',
-      'general_setting.ping_interval_enabled': false,
-      'general_setting.ping_interval_seconds': 60,
-      'gemini.safety_settings': '',
-      'gemini.version_settings': '',
-      'gemini.supported_imagine_models': '',
-      'gemini.thinking_adapter_enabled': false,
-      'gemini.thinking_adapter_budget_tokens_percentage': 0.6,
-      'gemini.function_call_thought_signature_enabled': false,
-      'gemini.remove_function_response_id_enabled': true,
-      'claude.model_headers_settings': '',
-      'claude.default_max_tokens': '',
-      'claude.thinking_adapter_enabled': true,
-      'claude.thinking_adapter_budget_tokens_percentage': 0.8,
-      ModelPrice: '',
-      ModelRatio: '',
-      CacheRatio: '',
-      CompletionRatio: '',
-      ImageRatio: '',
-      AudioRatio: '',
-      AudioCompletionRatio: '',
-      ExposeRatioEnabled: false,
-      'billing_setting.billing_mode': '{}',
-      'billing_setting.billing_expr': '{}',
-      'tool_price_setting.prices': '{}',
-      TopupGroupRatio: '',
-      GroupRatio: '',
-      UserUsableGroups: '',
-      GroupGroupRatio: '',
-      AutoGroups: '',
-      MaxTokenAutoGroups: 5,
-      DefaultUseAutoGroup: false,
-      CreateCacheRatio: '',
-      'group_ratio_setting.group_special_usable_group': '{}',
-      'grok.violation_deduction_enabled': false,
-      'grok.violation_deduction_amount': 0,
-      RetryTimes: 0,
-      ChannelDisableThreshold: '',
-      AutomaticDisableChannelEnabled: false,
-      AutomaticEnableChannelEnabled: false,
-      AutomaticDisableKeywords: '',
-      AutomaticDisableStatusCodes: '401',
-      AutomaticRetryStatusCodes:
-        '100-199,300-399,401-407,409-499,500-503,505-523,525-599',
-      'monitor_setting.auto_test_channel_enabled': false,
-      'monitor_setting.auto_test_channel_minutes': 10,
-      'monitor_setting.channel_test_concurrency': 1,
-      'monitor_setting.channel_test_mode': 'scheduled_all',
-      'channel_affinity_setting.enabled': false,
-      'channel_affinity_setting.switch_on_success': true,
-      'channel_affinity_setting.keep_on_channel_disabled': false,
-      'channel_affinity_setting.max_entries': 100000,
-      'channel_affinity_setting.default_ttl_seconds': 3600,
-      'channel_affinity_setting.rules': '[]',
-      'model_deployment.ionet.api_key': '',
-      'model_deployment.ionet.enabled': false,
-    }
-    return getOptionValue(systemOptionsData.data, defaultModelSettings)
-  }, [systemOptionsData])
-
-  // The load effect keys off this boolean, not the object: it re-runs once
-  // when the settings first arrive (so a drawer opened before that still gets
-  // its pricing prefilled), while later refetches only produce a new object
-  // reference and must not reset a form the user may be editing.
-  const hasModelSettings = modelSettings !== null
-  useEffect(() => {
-    modelSettingsRef.current = modelSettings
-  })
-
-  const currentRowModelName = currentRow?.model_name || ''
-  let modelFormLoadKey: string | null = null
-  if (open && isEditing && modelData?.data?.id === currentModelId) {
-    modelFormLoadKey = `edit:${currentModelId}:${hasModelSettings}`
-  } else if (open && !isEditing) {
-    modelFormLoadKey = `create:${currentRowModelName}:${hasModelSettings}`
-  }
-
-  const form = useForm<ExtendedModelFormValues>({
-    resolver: zodResolver(extendedModelFormSchema),
-    defaultValues: {
-      model_name: '',
-      description: '',
-      icon: '',
-      tags: [],
-      vendor_id: undefined,
-      endpoints: '',
-      name_rule: 0,
-      status: true,
-      sync_official: true,
-      price: '',
-      ratio: '',
-      cacheRatio: '',
-      completionRatio: '',
-      imageRatio: '',
-      audioRatio: '',
-      audioCompletionRatio: '',
-    },
-  })
-
-  const validateNumber = (value: string) => {
-    if (value === '') return true
-    return parseModelPricingNumber(value) !== undefined
-  }
-
-  const handlePromptPriceChange = (value: string) => {
-    const parsedPrice = parseModelPricingNumber(value)
-    if (value !== '' && parsedPrice === undefined) return
-    setPromptPrice(value)
-    if (parsedPrice !== undefined) {
-      const ratio = parsedPrice / 2
-      form.setValue('ratio', ratio.toString())
-    } else {
-      form.setValue('ratio', '')
-    }
-  }
-
-  const handleCompletionPriceChange = (value: string) => {
-    const parsedCompletionPrice = parseModelPricingNumber(value)
-    if (value !== '' && parsedCompletionPrice === undefined) return
-    setCompletionPrice(value)
-    const parsedPromptPrice = parseModelPricingNumber(promptPrice)
-    if (
-      parsedCompletionPrice !== undefined &&
-      parsedPromptPrice !== undefined &&
-      parsedPromptPrice > 0
-    ) {
-      const completionRatio = parsedCompletionPrice / parsedPromptPrice
-      form.setValue('completionRatio', completionRatio.toString())
-    } else {
-      form.setValue('completionRatio', '')
-    }
-  }
-
-  // Load model data for editing and ratio configuration
-  useEffect(() => {
-    if (!open) {
-      loadedFormKeyRef.current = null
-      return
-    }
-    if (!modelFormLoadKey || loadedFormKeyRef.current === modelFormLoadKey) {
-      return
-    }
-
-    if (isEditing && modelData?.data) {
-      const model = modelData.data
-      setOldModelName(model.model_name)
-
-      const pricing = readPricingConfig(
-        modelSettingsRef.current,
-        model.model_name
-      )
-      setLoadedPricingName(model.model_name)
-      setPricingMode(pricing.mode)
-      setPromptPrice(pricing.promptPrice)
-      setCompletionPrice(pricing.completionPrice)
-      setAdvancedOpen(pricing.advancedOpen)
-      form.reset({
-        id: model.id,
-        model_name: model.model_name,
-        description: model.description || '',
-        icon: model.icon || '',
-        tags: parseModelTags(model.tags),
-        vendor_id: model.vendor_id,
-        endpoints: model.endpoints || '',
-        name_rule: model.name_rule || 0,
-        status: model.status === 1,
-        sync_official: model.sync_official === 1,
-        ...pricing.fields,
-      })
-    } else if (!isEditing) {
-      // Pre-fill model name if passed from missing models, along with any
-      // pricing that name already has, so the user edits it instead of being
-      // shown an empty form that hides existing configuration.
-      const modelName = currentRowModelName
-      const pricing = readPricingConfig(modelSettingsRef.current, modelName)
-      setOldModelName('')
-      setLoadedPricingName(modelName)
-      setPricingSubMode('ratio')
-      setPricingMode(pricing.mode)
-      setPromptPrice(pricing.promptPrice)
-      setCompletionPrice(pricing.completionPrice)
-      setAdvancedOpen(pricing.advancedOpen)
-      form.reset({
-        model_name: modelName,
-        description: '',
-        icon: '',
-        tags: [],
-        vendor_id: undefined,
-        endpoints: '',
-        name_rule: 0,
-        status: true,
-        sync_official: true,
-        ...pricing.fields,
-      })
-    }
-    loadedFormKeyRef.current = modelFormLoadKey
-  }, [currentRowModelName, form, isEditing, modelData, modelFormLoadKey, open])
-
-  const onSubmit = useCallback(
-    async (values: ExtendedModelFormValues): Promise<void> => {
-      setIsSubmitting(true)
-      try {
-        const submitData = {
-          ...values,
-          id: isEditing ? currentModelId : undefined,
-          tags: Array.isArray(values.tags) ? values.tags.join(',') : '',
-          status: values.status ? 1 : 0,
-          sync_official: values.sync_official ? 1 : 0,
-        }
-
-        // Remove ratio fields from model data (they're stored in system settings)
-        const {
-          price,
-          ratio,
-          cacheRatio,
-          completionRatio,
-          imageRatio,
-          audioRatio,
-          audioCompletionRatio,
-          ...modelData
-        } = submitData
-
-        const pricingOptions: Array<{ key: string; value: string }> = []
-        if (modelSettings) {
-          const pricingMaps = reconcileModelPricingMaps({
-            maps: {
-              price: safeJsonParse<Record<string, number>>(
-                modelSettings.ModelPrice,
-                { fallback: {}, silent: true }
-              ),
-              ratio: safeJsonParse<Record<string, number>>(
-                modelSettings.ModelRatio,
-                { fallback: {}, silent: true }
-              ),
-              cache: safeJsonParse<Record<string, number>>(
-                modelSettings.CacheRatio,
-                { fallback: {}, silent: true }
-              ),
-              completion: safeJsonParse<Record<string, number>>(
-                modelSettings.CompletionRatio,
-                { fallback: {}, silent: true }
-              ),
-              image: safeJsonParse<Record<string, number>>(
-                modelSettings.ImageRatio,
-                { fallback: {}, silent: true }
-              ),
-              audio: safeJsonParse<Record<string, number>>(
-                modelSettings.AudioRatio,
-                { fallback: {}, silent: true }
-              ),
-              audioCompletion: safeJsonParse<Record<string, number>>(
-                modelSettings.AudioCompletionRatio,
-                { fallback: {}, silent: true }
-              ),
-            },
-            draft: {
-              price,
-              ratio,
-              cacheRatio,
-              completionRatio,
-              imageRatio,
-              audioRatio,
-              audioCompletionRatio,
-            },
-            mode: pricingMode,
-            isEditing,
-            sourceName: oldModelName,
-            targetName: values.model_name,
-            loadedPricingName,
-          })
-          const pricingEntries = [
-            ['ModelPrice', modelSettings.ModelPrice, pricingMaps.price],
-            ['ModelRatio', modelSettings.ModelRatio, pricingMaps.ratio],
-            ['CacheRatio', modelSettings.CacheRatio, pricingMaps.cache],
-            [
-              'CompletionRatio',
-              modelSettings.CompletionRatio,
-              pricingMaps.completion,
-            ],
-            ['ImageRatio', modelSettings.ImageRatio, pricingMaps.image],
-            ['AudioRatio', modelSettings.AudioRatio, pricingMaps.audio],
-            [
-              'AudioCompletionRatio',
-              modelSettings.AudioCompletionRatio,
-              pricingMaps.audioCompletion,
-            ],
-          ] as const
-          for (const [key, currentValue, nextMap] of pricingEntries) {
-            const nextValue = normalizeJsonString(JSON.stringify(nextMap))
-            if (nextValue !== normalizeJsonString(currentValue)) {
-              pricingOptions.push({ key, value: nextValue })
-            }
-          }
-        }
-
-        const mutationData = {
-          ...modelData,
-          pricing_options: pricingOptions,
-        }
-        const response =
-          isEditing && currentModelId
-            ? await updateModel({ ...mutationData, id: currentModelId })
-            : await createModel(mutationData)
-
-        if (response.success) {
-          toast.success(
-            isEditing ? t('Updated successfully') : t('Operation successful')
-          )
-          queryClient.invalidateQueries({ queryKey: modelsQueryKeys.lists() })
-          queryClient.invalidateQueries({ queryKey: ['system-options'] })
-          onOpenChange(false)
-        } else {
-          toast.error(response.message || t('Operation failed'))
-        }
-      } catch (error: unknown) {
-        toast.error((error as Error)?.message || t('Operation failed'))
-      } finally {
-        setIsSubmitting(false)
-      }
-    },
-    [
-      isEditing,
-      currentModelId,
-      queryClient,
-      onOpenChange,
-      pricingMode,
-      oldModelName,
-      loadedPricingName,
-      modelSettings,
-      t,
-    ]
+  const vendors = vendorsQuery.data?.data?.items ?? []
+  const selectedVendor = vendors.find(
+    (vendor) => vendor.id === form.watch('vendor_id')
   )
-
-  // Merge the picked template into whatever is already configured instead of
-  // replacing it. Overwriting made the picker effectively single-use: choosing a
-  // second endpoint silently discarded the first one.
-  const handleFillEndpointTemplate = (templateKey: string) => {
-    const template = ENDPOINT_TEMPLATES[templateKey]
-    if (!template) return
-
-    const current = form.getValues('endpoints')?.trim()
-    let merged: Record<string, unknown> = {}
-    if (current) {
-      try {
-        const parsed = JSON.parse(current)
-        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-          merged = parsed as Record<string, unknown>
-        }
-      } catch {
-        // Hand-edited JSON that does not parse is left untouched: replacing it
-        // would throw away the user's work. Only valid objects are extended.
-        toast.error(t('Fix the endpoint JSON before loading a template'))
-        return
+  const modelQuery = useQuery({
+    queryKey: modelsQueryKeys.detail(currentRow?.id ?? 0),
+    queryFn: async () => {
+      if (!currentRow?.id) throw new Error(t('Model ID is required'))
+      const response = await getModel(currentRow.id)
+      if (!response.success || !response.data) {
+        throw new Error(response.message || t('Failed to load model'))
       }
-    }
+      return response.data
+    },
+    enabled: props.open && isEditing,
+  })
+  const savedModel = modelQuery.data ?? currentRow
 
-    merged[templateKey] = template
-    form.setValue('endpoints', JSON.stringify(merged, null, 2), {
-      shouldDirty: true,
-    })
+  useEffect(() => {
+    if (!props.open) {
+      loadedKey.current = ''
+      return
+    }
+    const key = String(currentRow?.id ?? currentRow?.model_name ?? 'new')
+    if (loadedKey.current === key || (isEditing && !modelQuery.data)) return
+    form.reset(
+      transformModelToFormDefaults(
+        (isEditing
+          ? modelQuery.data
+          : {
+              model_name: currentRow?.model_name ?? '',
+              status: 1,
+              sync_official: 1,
+              name_rule: 0,
+            }) as Model
+      )
+    )
+    loadedKey.current = key
+    setSection('metadata')
+    setPricingName('')
+    setPricingVisited(false)
+    setPricingDirty(false)
+  }, [props.open, currentRow, isEditing, modelQuery.data, form])
+
+  const save = useMutation({
+    onMutate: () => form.clearErrors('root.server'),
+    mutationFn: async (values: ModelFormValues) => {
+      if (pricingDirty && values.model_name !== currentRow?.model_name) {
+        throw new Error(
+          t('Save or discard pricing changes before renaming metadata.')
+        )
+      }
+      const payload = transformFormDataToModelPayload(values)
+      const response = currentRow?.id
+        ? await updateModel({ ...payload, id: currentRow.id })
+        : await createModel(payload)
+      if (!response.success) {
+        throw new Error(response.message || t('Operation failed'))
+      }
+      return response
+    },
+    onSuccess: async (response) => {
+      form.reset(form.getValues())
+      if (response.data?.id) {
+        queryClient.setQueryData(
+          modelsQueryKeys.detail(response.data.id),
+          response.data
+        )
+      }
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: modelsQueryKeys.all }),
+        queryClient.invalidateQueries({ queryKey: ['pricing'] }),
+        queryClient.invalidateQueries({ queryKey: vendorsQueryKeys.all }),
+      ])
+      toast.success(t('Model metadata saved'))
+      if (!pricingDirty) props.onOpenChange(false)
+    },
+    onError: (error) => {
+      const message =
+        error instanceof AxiosError
+          ? error.response?.data?.message || error.message
+          : error.message
+      form.setError('root.server', {
+        message: message || t('Operation failed'),
+      })
+    },
+  })
+  const isSubmitting = save.isPending
+  const handleFillEndpointTemplate = (key: string) => {
+    const template = ENDPOINT_TEMPLATES[key]
+    if (template) {
+      let endpoints: Record<string, unknown> = {}
+      const current = form.getValues('endpoints')?.trim()
+      if (current) {
+        try {
+          const parsed: unknown = JSON.parse(current)
+          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            toast.error(t('Fix the endpoint JSON before loading a template'))
+            return
+          }
+          endpoints = parsed as Record<string, unknown>
+        } catch {
+          toast.error(t('Fix the endpoint JSON before loading a template'))
+          return
+        }
+      }
+      form.setValue(
+        'endpoints',
+        JSON.stringify({ ...endpoints, [key]: template }, null, 2),
+        {
+          shouldDirty: true,
+        }
+      )
+    }
+  }
+  const metadataDirty = form.formState.isDirty
+  const close = (open: boolean) => {
+    if (!open && isSubmitting) return
+    if (!open && (metadataDirty || pricingDirty)) {
+      setCloseConfirm(true)
+      return
+    }
+    props.onOpenChange(open)
   }
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className={sideDrawerContentClassName('sm:max-w-2xl')}>
-        <SheetHeader className={sideDrawerHeaderClassName()}>
-          <SheetTitle>
-            {isEditing ? t('Edit Model') : t('Create Model')}
-          </SheetTitle>
-          <SheetDescription>
-            {isEditing
-              ? t("Update model configuration and click save when you're done.")
-              : t(
-                  'Add a new model to the system by providing the necessary information.'
-                )}
-          </SheetDescription>
-        </SheetHeader>
-
-        <Form {...form}>
-          <form
-            id='model-form'
-            onSubmit={form.handleSubmit(
-              onSubmit as Parameters<typeof form.handleSubmit>[0]
-            )}
-            className={sideDrawerFormClassName()}
+    <>
+      <Sheet open={props.open} onOpenChange={close}>
+        <SheetContent className={sideDrawerContentClassName('sm:max-w-3xl')}>
+          <SheetHeader className={sideDrawerHeaderClassName()}>
+            <SheetTitle className='pr-6 break-all'>
+              {isEditing ? currentRow?.model_name : t('Create Model')}
+            </SheetTitle>
+            <SheetDescription>
+              {t(
+                'Manage metadata, pricing, and channel connections. Each section saves separately.'
+              )}
+            </SheetDescription>
+          </SheetHeader>
+          <Tabs
+            value={section}
+            onValueChange={(value) => {
+              setSection(value)
+              if (value === 'pricing') setPricingVisited(true)
+            }}
+            className='shrink-0 px-4'
           >
-            {/* Basic Information */}
-            <SideDrawerSection>
-              <h3 className='text-sm font-semibold'>
-                {t('Basic Information')}
-              </h3>
+            <TabsList className='w-full'>
+              <TabsTrigger value='metadata'>{t('Model metadata')}</TabsTrigger>
+              <TabsTrigger value='pricing' disabled={!isEditing}>
+                {t('Pricing')}
+              </TabsTrigger>
+              <TabsTrigger value='connections' disabled={!isEditing}>
+                {t('Channels and groups')}
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+          {props.open && section === 'metadata' && (
+            <>
+              {modelQuery.isError ? (
+                <ErrorState
+                  description={modelQuery.error.message}
+                  onRetry={() => void modelQuery.refetch()}
+                />
+              ) : null}
+              {isEditing && modelQuery.isPending && <LoadingState />}
+              {!modelQuery.isError && !(isEditing && modelQuery.isPending) && (
+                <Form {...form}>
+                  <form
+                    id='model-form'
+                    onSubmit={form.handleSubmit((values) =>
+                      save.mutate(values)
+                    )}
+                    className={sideDrawerFormClassName()}
+                  >
+                    {/* Basic Information */}
+                    <SideDrawerSection>
+                      <h3 className='text-sm font-semibold'>
+                        {t('Basic Information')}
+                      </h3>
 
-              <FormField
-                control={form.control}
-                name='model_name'
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t('Model Name *')}</FormLabel>
-                    <FormControl>
-                      <Input
-                        placeholder={t('gpt-4, claude-3-opus, etc.')}
-                        {...field}
-                      />
-                    </FormControl>
-                    <FormDescription>
-                      {t('The unique identifier for this model')}
-                    </FormDescription>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              <FormField
-                control={form.control}
-                name='description'
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t('Description')}</FormLabel>
-                    <FormControl>
-                      <Textarea
-                        placeholder={t('Describe this model...')}
-                        rows={3}
-                        {...field}
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              <FormField
-                control={form.control}
-                name='icon'
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t('Icon')}</FormLabel>
-                    <FormControl>
-                      <Input
-                        placeholder={t('OpenAI, Anthropic, etc.')}
-                        {...field}
-                      />
-                    </FormControl>
-                    <FormDescription className='text-xs'>
-                      {t('@lobehub/icons key')}
-                    </FormDescription>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              <FormField
-                control={form.control}
-                name='vendor_id'
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t('Vendor')}</FormLabel>
-                    <Select
-                      items={vendors.map((vendor) => ({
-                        value: String(vendor.id),
-                        label: vendor.name,
-                      }))}
-                      onValueChange={(value) =>
-                        field.onChange(
-                          value ? Number.parseInt(value) : undefined
-                        )
-                      }
-                      value={field.value ? String(field.value) : undefined}
-                    >
-                      <FormControl>
-                        <SelectTrigger>
-                          <SelectValue placeholder={t('Select vendor')} />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent alignItemWithTrigger={false}>
-                        <SelectGroup>
-                          {vendors.map((vendor) => (
-                            <SelectItem
-                              key={vendor.id}
-                              value={String(vendor.id)}
-                            >
-                              {vendor.name}
-                            </SelectItem>
-                          ))}
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              <FormField
-                control={form.control}
-                name='tags'
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t('Tags')}</FormLabel>
-                    <FormControl>
-                      <TagInput
-                        value={field.value || []}
-                        onChange={field.onChange}
-                        placeholder={t('Add tags...')}
-                      />
-                    </FormControl>
-                    <FormDescription>
-                      {t('Press Enter or comma to add tags')}
-                    </FormDescription>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            </SideDrawerSection>
-
-            {/* Matching Configuration */}
-            <SideDrawerSection>
-              <h3 className='text-sm font-semibold'>{t('Matching Rules')}</h3>
-
-              <FormField
-                control={form.control}
-                name='name_rule'
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t('Name Rule')}</FormLabel>
-                    <FormControl>
-                      <RadioGroup
-                        onValueChange={(value) =>
-                          field.onChange(Number.parseInt(value))
-                        }
-                        value={String(field.value)}
-                        className='grid grid-cols-2 gap-4'
-                      >
-                        {getNameRuleOptions(t).map((option) => (
-                          <div
-                            key={option.value}
-                            className='flex items-center space-x-2'
-                          >
-                            <RadioGroupItem
-                              value={String(option.value)}
-                              id={`rule-${option.value}`}
-                            />
-                            <Label
-                              htmlFor={`rule-${option.value}`}
-                              className='cursor-pointer font-normal'
-                            >
-                              {option.label}
-                            </Label>
-                          </div>
-                        ))}
-                      </RadioGroup>
-                    </FormControl>
-                    <FormDescription>
-                      {t('How this model name should match requests')}
-                    </FormDescription>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            </SideDrawerSection>
-
-            {/* Endpoints Configuration */}
-            <SideDrawerSection>
-              <div className='flex items-center justify-between'>
-                <h3 className='text-sm font-semibold'>{t('Endpoints')}</h3>
-                <Select<string>
-                  value={endpointTemplateKey}
-                  items={Object.keys(ENDPOINT_TEMPLATES).map((key) => ({
-                    value: key,
-                    label: key,
-                  }))}
-                  onValueChange={(v) => {
-                    if (v === null) return
-                    handleFillEndpointTemplate(v)
-                    // Snap back to the placeholder so the next (or same) template
-                    // can be added without first clearing the selection.
-                    setEndpointTemplateKey(null)
-                  }}
-                >
-                  <SelectTrigger size='sm' className='w-[200px]'>
-                    <SelectValue placeholder={t('Load template...')} />
-                  </SelectTrigger>
-                  <SelectContent alignItemWithTrigger={false}>
-                    <SelectGroup>
-                      {Object.keys(ENDPOINT_TEMPLATES).map((key) => (
-                        <SelectItem key={key} value={key}>
-                          {key}
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <FormField
-                control={form.control}
-                name='endpoints'
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t('Endpoint Configuration')}</FormLabel>
-                    <FormControl>
-                      <JsonEditor
-                        value={field.value || ''}
-                        onChange={field.onChange}
-                        keyPlaceholder='endpoint_type'
-                        valuePlaceholder='{"path": "/v1/...", "method": "POST"}'
-                        keyLabel='Endpoint Type'
-                        valueLabel='Configuration'
-                        valueType='any'
-                        emptyMessage={t(
-                          'No endpoints configured. Switch to JSON mode or add rows to define endpoints.'
+                      <FormField
+                        control={form.control}
+                        name='model_name'
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>{t('Model Name *')}</FormLabel>
+                            <FormControl>
+                              <Input
+                                placeholder={t('gpt-4, claude-3-opus, etc.')}
+                                {...field}
+                              />
+                            </FormControl>
+                            <FormDescription>
+                              {t('The unique identifier for this model')}
+                              {isEditing &&
+                                form.watch('model_name') !==
+                                  currentRow?.model_name && (
+                                  <span className='text-warning mt-1 block'>
+                                    {t(
+                                      'Renaming metadata does not rename channel models or move pricing. Existing prices stay with the original model name.'
+                                    )}
+                                  </span>
+                                )}
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
                         )}
                       />
-                    </FormControl>
-                    <FormDescription>
-                      {t('Define API endpoints for this model (JSON format)')}
-                    </FormDescription>
-                    <FormMessage />
-                  </FormItem>
+
+                      <FormField
+                        control={form.control}
+                        name='description'
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>{t('Description')}</FormLabel>
+                            <FormControl>
+                              <Textarea
+                                placeholder={t('Describe this model...')}
+                                rows={3}
+                                {...field}
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+
+                      <FormField
+                        control={form.control}
+                        name='icon'
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>{t('Icon')}</FormLabel>
+                            <FormControl>
+                              <LobeIconField
+                                key={`${currentRow?.id ?? 'new'}-${props.open}`}
+                                value={field.value ?? ''}
+                                onChange={field.onChange}
+                                allowInheritance
+                                inheritedIcon={selectedVendor?.icon}
+                                inheritedName={selectedVendor?.name}
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+
+                      <FormField
+                        control={form.control}
+                        name='vendor_id'
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>{t('Vendor')}</FormLabel>
+                            <FormControl>
+                              <Combobox
+                                options={vendors.map((vendor) => ({
+                                  value: String(vendor.id),
+                                  label: vendor.name,
+                                }))}
+                                onValueChange={(value) =>
+                                  field.onChange(
+                                    value ? Number.parseInt(value) : undefined
+                                  )
+                                }
+                                value={field.value ? String(field.value) : null}
+                                className='w-full'
+                                placeholder={t('Select vendor')}
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+
+                      <FormField
+                        control={form.control}
+                        name='tags'
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>{t('Tags')}</FormLabel>
+                            <FormControl>
+                              <TagInput
+                                value={field.value || []}
+                                onChange={field.onChange}
+                                placeholder={t('Add tags...')}
+                              />
+                            </FormControl>
+                            <FormDescription>
+                              {t('Press Enter or comma to add tags')}
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </SideDrawerSection>
+
+                    {/* Matching Configuration */}
+                    <SideDrawerSection>
+                      <h3 className='text-sm font-semibold'>
+                        {t('Matching Rules')}
+                      </h3>
+
+                      <FormField
+                        control={form.control}
+                        name='name_rule'
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>{t('Name Rule')}</FormLabel>
+                            <FormControl>
+                              <RadioGroup
+                                onValueChange={(value) =>
+                                  field.onChange(Number.parseInt(value))
+                                }
+                                value={String(field.value)}
+                                className='grid grid-cols-2 gap-4'
+                              >
+                                {getNameRuleOptions(t).map((option) => (
+                                  <div
+                                    key={option.value}
+                                    className='flex items-center space-x-2'
+                                  >
+                                    <RadioGroupItem
+                                      value={String(option.value)}
+                                      id={`rule-${option.value}`}
+                                    />
+                                    <Label
+                                      htmlFor={`rule-${option.value}`}
+                                      className='cursor-pointer font-normal'
+                                    >
+                                      {option.label}
+                                    </Label>
+                                  </div>
+                                ))}
+                              </RadioGroup>
+                            </FormControl>
+                            <FormDescription>
+                              {t(
+                                'Matching rules apply to metadata. Pricing is configured for each concrete model.'
+                              )}
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </SideDrawerSection>
+
+                    {/* Endpoints Configuration */}
+                    <SideDrawerSection>
+                      <div className='flex items-center justify-between'>
+                        <h3 className='text-sm font-semibold'>
+                          {t('Endpoints')}
+                        </h3>
+                        <Combobox
+                          options={Object.keys(ENDPOINT_TEMPLATES).map(
+                            (key) => ({ value: key, label: key })
+                          )}
+                          onValueChange={(value: string | null) => {
+                            if (value) handleFillEndpointTemplate(value)
+                          }}
+                          className='w-[200px]'
+                          placeholder={t('Load template...')}
+                          aria-label={t('Load template...')}
+                        />
+                      </div>
+
+                      <FormField
+                        control={form.control}
+                        name='endpoints'
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>{t('Endpoint Configuration')}</FormLabel>
+                            <FormControl>
+                              <JsonEditor
+                                value={field.value || ''}
+                                onChange={field.onChange}
+                                keyPlaceholder='endpoint_type'
+                                valuePlaceholder='{"path": "/v1/...", "method": "POST"}'
+                                keyLabel='Endpoint Type'
+                                valueLabel='Configuration'
+                                valueType='any'
+                                emptyMessage={t(
+                                  'No endpoints configured. Switch to JSON mode or add rows to define endpoints.'
+                                )}
+                              />
+                            </FormControl>
+                            <FormDescription>
+                              {t(
+                                'Define API endpoints for this model (JSON format)'
+                              )}
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </SideDrawerSection>
+
+                    {/* Status & Sync */}
+                    <SideDrawerSection>
+                      <h3 className='text-sm font-semibold'>
+                        {t('Status & Sync')}
+                      </h3>
+
+                      <FormField
+                        control={form.control}
+                        name='status'
+                        render={({ field }) => (
+                          <FormItem className={sideDrawerSwitchItemClassName()}>
+                            <div className='flex flex-col gap-0.5'>
+                              <FormLabel className='text-base'>
+                                {t('Model square visibility')}
+                              </FormLabel>
+                              <FormDescription>
+                                {t(
+                                  'Controls visibility in the model square. Channel status and existing API access are unchanged.'
+                                )}
+                              </FormDescription>
+                            </div>
+                            <FormControl>
+                              <Switch
+                                checked={field.value}
+                                onCheckedChange={field.onChange}
+                              />
+                            </FormControl>
+                          </FormItem>
+                        )}
+                      />
+
+                      <FormField
+                        control={form.control}
+                        name='sync_official'
+                        render={({ field }) => (
+                          <FormItem className={sideDrawerSwitchItemClassName()}>
+                            <div className='flex flex-col gap-0.5'>
+                              <FormLabel className='text-base'>
+                                {t('Allow metadata sync')}
+                              </FormLabel>
+                              <FormDescription>
+                                {t(
+                                  'Allows selected fields to be overwritten after a sync preview. No automatic synchronization.'
+                                )}
+                              </FormDescription>
+                            </div>
+                            <FormControl>
+                              <Switch
+                                checked={field.value}
+                                onCheckedChange={field.onChange}
+                              />
+                            </FormControl>
+                          </FormItem>
+                        )}
+                      />
+                    </SideDrawerSection>
+                  </form>
+                </Form>
+              )}
+              <SheetFooter className={sideDrawerFooterClassName('flex-wrap')}>
+                {form.formState.errors.root?.server?.message && (
+                  <Alert
+                    variant='destructive'
+                    className='col-span-2 basis-full'
+                  >
+                    <AlertDescription className='break-words'>
+                      {form.formState.errors.root.server.message}
+                    </AlertDescription>
+                  </Alert>
                 )}
-              />
-            </SideDrawerSection>
-
-            {/* Pricing Configuration */}
-            <SideDrawerSection>
-              <h3 className='text-sm font-semibold'>
-                {t('Pricing Configuration')}
-              </h3>
-
-              <div className='space-y-4'>
-                <Label>{t('Pricing mode')}</Label>
-                <RadioGroup
-                  value={pricingMode}
-                  onValueChange={(value) =>
-                    setPricingMode(value as PricingMode)
+                <Button
+                  variant='outline'
+                  onClick={() => close(false)}
+                  disabled={isSubmitting}
+                >
+                  {t('Close')}
+                </Button>
+                <Button
+                  form='model-form'
+                  type='submit'
+                  disabled={
+                    isSubmitting ||
+                    modelQuery.isError ||
+                    (isEditing && modelQuery.isPending)
                   }
                 >
-                  <div className='flex items-center space-x-2'>
-                    <RadioGroupItem value='per-token' id='per-token' />
-                    <Label htmlFor='per-token' className='font-normal'>
-                      {t('Per-token (ratio based)')}
-                    </Label>
-                  </div>
-                  <div className='flex items-center space-x-2'>
-                    <RadioGroupItem value='per-request' id='per-request' />
-                    <Label htmlFor='per-request' className='font-normal'>
-                      {t('Per-request (fixed price)')}
-                    </Label>
-                  </div>
-                </RadioGroup>
-              </div>
-
-              {pricingMode === 'per-request' ? (
-                <FormField
-                  control={form.control}
-                  name='price'
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{t('Fixed price (USD)')}</FormLabel>
-                      <FormControl>
-                        <Input
-                          type='text'
-                          placeholder='0.01'
-                          {...field}
-                          onChange={(e) => {
-                            const value = e.target.value
-                            if (validateNumber(value)) {
-                              field.onChange(value)
-                            }
-                          }}
-                        />
-                      </FormControl>
-                      <FormDescription>
-                        {t(
-                          'Cost in USD per request, regardless of tokens used.'
-                        )}
-                      </FormDescription>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              ) : (
-                <>
-                  <div className='space-y-4'>
-                    <Label>{t('Input mode')}</Label>
-                    <RadioGroup
-                      value={pricingSubMode}
-                      onValueChange={(value) =>
-                        setPricingSubMode(value as PricingSubMode)
+                  {isSubmitting ? t('Saving...') : t('Save metadata')}
+                </Button>
+              </SheetFooter>
+            </>
+          )}
+          {props.open && pricingVisited && savedModel && (
+            <div
+              className={
+                section === 'pricing'
+                  ? 'flex min-h-0 flex-1 flex-col'
+                  : 'hidden'
+              }
+            >
+              {savedModel.name_rule !== 0 && (
+                <div className='space-y-2 p-4'>
+                  <p className='text-muted-foreground text-sm'>
+                    {t(
+                      'Select a concrete model to configure pricing. Metadata matching does not propagate prices.'
+                    )}
+                  </p>
+                  <Combobox
+                    value={pricingName}
+                    onValueChange={(value) => {
+                      if (pricingDirty) {
+                        setPendingPricingName(value ?? '')
+                        setCloseConfirm(true)
+                      } else {
+                        setPricingName(value ?? '')
                       }
-                    >
-                      <div className='flex items-center space-x-2'>
-                        <RadioGroupItem value='ratio' id='ratio' />
-                        <Label htmlFor='ratio' className='font-normal'>
-                          {t('Ratio mode')}
-                        </Label>
-                      </div>
-                      <div className='flex items-center space-x-2'>
-                        <RadioGroupItem value='price' id='price' />
-                        <Label htmlFor='price' className='font-normal'>
-                          {t('Price mode (USD per 1M tokens)')}
-                        </Label>
-                      </div>
-                    </RadioGroup>
-                  </div>
-
-                  {pricingSubMode === 'ratio' ? (
-                    <>
-                      <FormField
-                        control={form.control}
-                        name='ratio'
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>{t('Model ratio')}</FormLabel>
-                            <FormControl>
-                              <Input
-                                type='text'
-                                placeholder='1.0'
-                                {...field}
-                                onChange={(e) => {
-                                  const value = e.target.value
-                                  if (validateNumber(value)) {
-                                    field.onChange(value)
-                                    if (value) {
-                                      setPromptPrice(
-                                        (
-                                          Number.parseFloat(value) * 2
-                                        ).toString()
-                                      )
-                                    } else {
-                                      setPromptPrice('')
-                                    }
-                                  }
-                                }}
-                              />
-                            </FormControl>
-                            <FormDescription>
-                              {field.value &&
-                              !Number.isNaN(Number.parseFloat(field.value))
-                                ? `Calculated price: $${(Number.parseFloat(field.value) * 2).toFixed(4)} per 1M tokens`
-                                : t('Multiplier for prompt tokens.')}
-                            </FormDescription>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-
-                      <FormField
-                        control={form.control}
-                        name='completionRatio'
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>{t('Completion ratio')}</FormLabel>
-                            <FormControl>
-                              <Input
-                                type='text'
-                                placeholder='1.0'
-                                {...field}
-                                onChange={(e) => {
-                                  const value = e.target.value
-                                  if (validateNumber(value)) {
-                                    field.onChange(value)
-                                    const ratio = form.getValues('ratio')
-                                    if (value && ratio) {
-                                      const compPrice =
-                                        Number.parseFloat(ratio) *
-                                        2 *
-                                        Number.parseFloat(value)
-                                      setCompletionPrice(compPrice.toString())
-                                    } else {
-                                      setCompletionPrice('')
-                                    }
-                                  }
-                                }}
-                              />
-                            </FormControl>
-                            <FormDescription>
-                              {field.value &&
-                              !Number.isNaN(Number.parseFloat(field.value)) &&
-                              promptPrice &&
-                              !Number.isNaN(Number.parseFloat(promptPrice))
-                                ? `Calculated price: $${(Number.parseFloat(promptPrice) * Number.parseFloat(field.value)).toFixed(4)} per 1M tokens`
-                                : t('Multiplier for completion tokens.')}
-                            </FormDescription>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-                    </>
-                  ) : (
-                    <div className='space-y-4'>
-                      <div className='space-y-2'>
-                        <Label>{t('Prompt price ($/1M tokens)')}</Label>
-                        <Input
-                          type='text'
-                          placeholder='2.0'
-                          value={promptPrice}
-                          onChange={(e) =>
-                            handlePromptPriceChange(e.target.value)
-                          }
-                        />
-                        <p className='text-muted-foreground text-sm'>
-                          {promptPrice &&
-                          !Number.isNaN(Number.parseFloat(promptPrice))
-                            ? `Calculated ratio: ${(Number.parseFloat(promptPrice) / 2).toFixed(4)}`
-                            : t('Enter Input price to calculate ratio')}
-                        </p>
-                      </div>
-
-                      <div className='space-y-2'>
-                        <Label>{t('Completion price ($/1M tokens)')}</Label>
-                        <Input
-                          type='text'
-                          placeholder='4.0'
-                          value={completionPrice}
-                          onChange={(e) =>
-                            handleCompletionPriceChange(e.target.value)
-                          }
-                        />
-                        <p className='text-muted-foreground text-sm'>
-                          {completionPrice &&
-                          !Number.isNaN(Number.parseFloat(completionPrice)) &&
-                          promptPrice &&
-                          !Number.isNaN(Number.parseFloat(promptPrice)) &&
-                          Number.parseFloat(promptPrice) > 0
-                            ? `Calculated ratio: ${(Number.parseFloat(completionPrice) / Number.parseFloat(promptPrice)).toFixed(4)}`
-                            : t('Enter Completion price to calculate ratio')}
-                        </p>
-                      </div>
-                    </div>
-                  )}
-
-                  <Collapsible
-                    open={advancedOpen}
-                    onOpenChange={setAdvancedOpen}
-                  >
-                    <CollapsibleTrigger
-                      render={
-                        <Button
-                          type='button'
-                          variant='outline'
-                          className='flex w-full items-center justify-between'
-                        />
-                      }
-                    >
-                      {t('Advanced options')}
-                      <ChevronDown
-                        className={`h-4 w-4 transition-transform duration-200 ${
-                          advancedOpen ? 'rotate-180' : ''
-                        }`}
-                      />
-                    </CollapsibleTrigger>
-                    <CollapsibleContent className='flex flex-col gap-4 pt-4'>
-                      <FormField
-                        control={form.control}
-                        name='cacheRatio'
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>{t('Cache ratio')}</FormLabel>
-                            <FormControl>
-                              <Input
-                                type='text'
-                                placeholder='0.1'
-                                {...field}
-                                onChange={(e) => {
-                                  const value = e.target.value
-                                  if (validateNumber(value)) {
-                                    field.onChange(value)
-                                  }
-                                }}
-                              />
-                            </FormControl>
-                            <FormDescription>
-                              {t('Discount ratio for cache hits.')}
-                            </FormDescription>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-
-                      <FormField
-                        control={form.control}
-                        name='imageRatio'
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>{t('Image ratio')}</FormLabel>
-                            <FormControl>
-                              <Input
-                                type='text'
-                                placeholder='1.0'
-                                {...field}
-                                onChange={(e) => {
-                                  const value = e.target.value
-                                  if (validateNumber(value)) {
-                                    field.onChange(value)
-                                  }
-                                }}
-                              />
-                            </FormControl>
-                            <FormDescription>
-                              {t('Multiplier for image processing.')}
-                            </FormDescription>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-
-                      <FormField
-                        control={form.control}
-                        name='audioRatio'
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>{t('Audio ratio')}</FormLabel>
-                            <FormControl>
-                              <Input
-                                type='text'
-                                placeholder='1.0'
-                                {...field}
-                                onChange={(e) => {
-                                  const value = e.target.value
-                                  if (validateNumber(value)) {
-                                    field.onChange(value)
-                                  }
-                                }}
-                              />
-                            </FormControl>
-                            <FormDescription>
-                              {t('Multiplier for audio inputs.')}
-                            </FormDescription>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-
-                      <FormField
-                        control={form.control}
-                        name='audioCompletionRatio'
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>{t('Audio completion ratio')}</FormLabel>
-                            <FormControl>
-                              <Input
-                                type='text'
-                                placeholder='1.0'
-                                {...field}
-                                onChange={(e) => {
-                                  const value = e.target.value
-                                  if (validateNumber(value)) {
-                                    field.onChange(value)
-                                  }
-                                }}
-                              />
-                            </FormControl>
-                            <FormDescription>
-                              {t('Multiplier for audio outputs.')}
-                            </FormDescription>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-                    </CollapsibleContent>
-                  </Collapsible>
-                </>
+                    }}
+                    options={(savedModel.matched_models ?? []).map((name) => ({
+                      value: name,
+                      label: name,
+                    }))}
+                    aria-label={t('Select model')}
+                    className='w-full'
+                    placeholder={t('Select model')}
+                  />
+                </div>
               )}
-            </SideDrawerSection>
-
-            {/* Status & Sync */}
-            <SideDrawerSection>
-              <h3 className='text-sm font-semibold'>{t('Status & Sync')}</h3>
-
-              <FormField
-                control={form.control}
-                name='status'
-                render={({ field }) => (
-                  <FormItem className={sideDrawerSwitchItemClassName()}>
-                    <div className='flex flex-col gap-0.5'>
-                      <FormLabel className='text-base'>
-                        {t('Enabled')}
-                      </FormLabel>
-                      <FormDescription>
-                        {t('Enable or disable this model')}
-                      </FormDescription>
-                    </div>
-                    <FormControl>
-                      <Switch
-                        checked={field.value}
-                        onCheckedChange={field.onChange}
-                      />
-                    </FormControl>
-                  </FormItem>
-                )}
-              />
-
-              <FormField
-                control={form.control}
-                name='sync_official'
-                render={({ field }) => (
-                  <FormItem className={sideDrawerSwitchItemClassName()}>
-                    <div className='flex flex-col gap-0.5'>
-                      <FormLabel className='text-base'>
-                        {t('Official Sync')}
-                      </FormLabel>
-                      <FormDescription>
-                        {t('Sync this model with official upstream')}
-                      </FormDescription>
-                    </div>
-                    <FormControl>
-                      <Switch
-                        checked={field.value}
-                        onCheckedChange={field.onChange}
-                      />
-                    </FormControl>
-                  </FormItem>
-                )}
-              />
-            </SideDrawerSection>
-          </form>
-        </Form>
-
-        <SheetFooter className={sideDrawerFooterClassName()}>
-          <SheetClose
-            render={<Button variant='outline' disabled={isSubmitting} />}
-          >
-            {t('Cancel')}
-          </SheetClose>
-          <Button form='model-form' type='submit' disabled={isSubmitting}>
-            {isSubmitting && <Loader2 className='mr-2 h-4 w-4 animate-spin' />}
-            {isEditing ? t('Update Model') : t('Save changes')}
-          </Button>
-        </SheetFooter>
-      </SheetContent>
-    </Sheet>
+              {(savedModel.name_rule === 0 || pricingName) && (
+                <ModelPricingPanel
+                  onDirtyChange={setPricingDirty}
+                  key={
+                    savedModel.name_rule === 0
+                      ? savedModel.model_name
+                      : pricingName
+                  }
+                  modelName={
+                    savedModel.name_rule === 0
+                      ? savedModel.model_name
+                      : pricingName
+                  }
+                />
+              )}
+            </div>
+          )}
+          {props.open && section === 'connections' && savedModel && (
+            <ModelConnections model={savedModel} />
+          )}
+        </SheetContent>
+      </Sheet>
+      <ConfirmDialog
+        open={closeConfirm}
+        onOpenChange={setCloseConfirm}
+        title={t('Discard unsaved changes?')}
+        desc={t('Your changes have not been saved.')}
+        confirmText={t('Discard changes')}
+        handleConfirm={() => {
+          setCloseConfirm(false)
+          if (pendingPricingName !== null) {
+            setPricingName(pendingPricingName)
+            setPendingPricingName(null)
+            setPricingDirty(false)
+          } else {
+            props.onOpenChange(false)
+          }
+        }}
+      />
+    </>
   )
 }

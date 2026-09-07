@@ -40,6 +40,7 @@ const (
 	responsesOutputTypeReasoning           = "reasoning"
 	responsesIncompleteReasonContentFilter = "content_filter"
 	responsesIncompleteReasonMaxTokens     = "max_output_tokens"
+	responsesEventOutputTextAnnotationAdded = "response.output_text.annotation.added"
 )
 
 func ResponsesFinishReasonFromStatus(resp *dto.OpenAIResponsesResponse) (string, bool) {
@@ -113,6 +114,11 @@ func ResponsesResponseToChatCompletionsResponse(resp *dto.OpenAIResponsesRespons
 		Role:    "assistant",
 		Content: text,
 	}
+	if annotations, err := responsesAnnotationsToChat(resp); err != nil {
+		return nil, nil, err
+	} else if len(annotations) > 0 {
+		msg.Annotations = annotations
+	}
 	if reasoning != "" {
 		msg.ReasoningContent = &reasoning
 	}
@@ -138,7 +144,65 @@ func ResponsesResponseToChatCompletionsResponse(resp *dto.OpenAIResponsesRespons
 	return out, usage, nil
 }
 
+func responsesAnnotationsToChat(resp *dto.OpenAIResponsesResponse) ([]byte, error) {
+	annotations := make([]any, 0)
+	for _, output := range resp.Output {
+		if output.Type != responsesOutputTypeMessage {
+			continue
+		}
+		for _, content := range output.Content {
+			for _, annotation := range content.Annotations {
+				converted, err := responseAnnotationToChat(annotation)
+				if err != nil {
+					return nil, err
+				}
+				annotations = append(annotations, converted)
+			}
+		}
+	}
+	if len(annotations) == 0 {
+		return nil, nil
+	}
+	return kitutil.Marshal(annotations)
+}
+
+func responseAnnotationToChat(annotation any) (map[string]any, error) {
+	value, ok := annotation.(map[string]any)
+	if !ok {
+		converted, err := kitutil.Any2Type[map[string]any](annotation)
+		if err != nil {
+			return nil, fmt.Errorf("invalid Responses annotation: %w", err)
+		}
+		value = converted
+	}
+	if strings.TrimSpace(kitutil.Interface2String(value["type"])) != "url_citation" {
+		return value, nil
+	}
+	citation := make(map[string]any, len(value)-1)
+	for key, item := range value {
+		if key != "type" {
+			citation[key] = item
+		}
+	}
+	return map[string]any{
+		"type":         "url_citation",
+		"url_citation": citation,
+	}, nil
+}
+
 func UsageFromResponsesUsage(src *dto.Usage) *dto.Usage {
+	return usageFromResponsesUsage(src, true)
+}
+
+// NormalizeResponsesUsage maps Responses usage into the shared accounting
+// shape without creating a BillingUsage snapshot. Native Responses handlers
+// use it so passthrough traffic preserves an existing snapshot but does not
+// introduce a conversion sidecar solely for local settlement.
+func NormalizeResponsesUsage(src *dto.Usage) *dto.Usage {
+	return usageFromResponsesUsage(src, false)
+}
+
+func usageFromResponsesUsage(src *dto.Usage, createBillingSnapshot bool) *dto.Usage {
 	usage := &dto.Usage{}
 	if src == nil {
 		return usage
@@ -146,7 +210,7 @@ func UsageFromResponsesUsage(src *dto.Usage) *dto.Usage {
 	usage.UsageSemantic = src.UsageSemantic
 	usage.UsageSource = src.UsageSource
 	usage.BillingUsage = dto.CloneBillingUsage(src.BillingUsage)
-	if usage.BillingUsage == nil {
+	if usage.BillingUsage == nil && createBillingSnapshot {
 		usage.BillingUsage = dto.NewOpenAIResponsesBillingUsage(src)
 	}
 	usage.Cost = src.Cost
@@ -200,13 +264,15 @@ func ExtractOutputTextFromResponses(resp *dto.OpenAIResponsesResponse) string {
 		if out.Role != "" && out.Role != "assistant" {
 			continue
 		}
+		var outputText strings.Builder
 		for _, c := range out.Content {
 			if c.Type == "output_text" && c.Text != "" {
-				sb.WriteString(c.Text)
+				outputText.WriteString(c.Text)
 			} else if c.Type == "refusal" && c.Refusal != "" {
-				sb.WriteString(c.Refusal)
+				outputText.WriteString(c.Refusal)
 			}
 		}
+		appendSeparatedText(&sb, outputText.String())
 	}
 	if sb.Len() > 0 {
 		return sb.String()
@@ -216,13 +282,15 @@ func ExtractOutputTextFromResponses(resp *dto.OpenAIResponsesResponse) string {
 			// Reasoning text must never leak into visible message content.
 			continue
 		}
+		var outputText strings.Builder
 		for _, c := range out.Content {
 			if c.Text != "" {
-				sb.WriteString(c.Text)
+				outputText.WriteString(c.Text)
 			} else if c.Refusal != "" {
-				sb.WriteString(c.Refusal)
+				outputText.WriteString(c.Refusal)
 			}
 		}
+		appendSeparatedText(&sb, outputText.String())
 	}
 	return sb.String()
 }
@@ -237,7 +305,7 @@ func ExtractReasoningTextFromResponses(resp *dto.OpenAIResponsesResponse) string
 		if out.Type != responsesOutputTypeReasoning {
 			continue
 		}
-		sb.WriteString(extractReasoningTextFromOutput(&out))
+		appendSeparatedText(&sb, extractReasoningTextFromOutput(&out))
 	}
 	return sb.String()
 }
@@ -250,14 +318,14 @@ func extractReasoningTextFromOutput(out *dto.ResponsesOutput) string {
 	var summary strings.Builder
 	for _, part := range out.Summary {
 		if part.Type == "summary_text" && part.Text != "" {
-			summary.WriteString(part.Text)
+			appendSeparatedText(&summary, part.Text)
 		}
 	}
 
 	var visible strings.Builder
 	for _, part := range out.Content {
 		if (part.Type == "reasoning_text" || part.Type == "summary_text") && part.Text != "" {
-			visible.WriteString(part.Text)
+			appendSeparatedText(&visible, part.Text)
 		}
 	}
 	if visible.Len() == 0 || visible.String() == summary.String() {
@@ -267,6 +335,27 @@ func extractReasoningTextFromOutput(out *dto.ResponsesOutput) string {
 		return visible.String()
 	}
 	return summary.String() + "\n\n" + visible.String()
+}
+
+func appendSeparatedText(builder *strings.Builder, text string) {
+	if builder == nil || text == "" {
+		return
+	}
+	if builder.Len() > 0 {
+		current := builder.String()
+		trailingNewlines := 0
+		for index := len(current) - 1; index >= 0 && trailingNewlines < 2 && current[index] == '\n'; index-- {
+			trailingNewlines++
+		}
+		leadingNewlines := 0
+		for leadingNewlines < len(text) && leadingNewlines < 2 && text[leadingNewlines] == '\n' {
+			leadingNewlines++
+		}
+		for missing := 2 - trailingNewlines - leadingNewlines; missing > 0; missing-- {
+			builder.WriteByte('\n')
+		}
+	}
+	builder.WriteString(text)
 }
 
 func responseStatusString(resp *dto.OpenAIResponsesResponse) string {

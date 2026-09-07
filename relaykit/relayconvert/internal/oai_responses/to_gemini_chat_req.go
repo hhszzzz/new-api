@@ -11,6 +11,7 @@ import (
 	sharedgemini "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/gemini"
 	sharedtoolmedia "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/toolmedia"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
 )
 
 func convertOpenAIResponsesRequestToGeminiChat(c context.Context, info convmeta.Meta, request any) (any, error) {
@@ -55,11 +56,19 @@ func OpenAIResponsesRequestToGeminiChat(c context.Context, req *dto.OpenAIRespon
 	if err := applyResponsesTextToGemini(req.Text, geminiRequest); err != nil {
 		return nil, err
 	}
-	sharedgemini.ApplyThinkingConfig(geminiRequest, info, dto.GeneralOpenAIRequest{
-		Model:               req.Model,
-		MaxCompletionTokens: req.MaxOutputTokens,
-		ReasoningEffort:     ReasoningEffort(req),
-	})
+	reasoningIntent, err := reasoning.FromOpenAIResponses(req)
+	if err != nil {
+		return nil, reasoning.AsClientError(err)
+	}
+	var reasoningPivot dto.GeneralOpenAIRequest
+	if err := reasoning.ApplyToOpenAIChat(&reasoningPivot, reasoningIntent); err != nil {
+		return nil, reasoning.AsClientError(err)
+	}
+	reasoningPivot.Model = req.Model
+	reasoningPivot.MaxCompletionTokens = req.MaxOutputTokens
+	if err := sharedgemini.ApplyThinkingConfig(geminiRequest, info, reasoningPivot); err != nil {
+		return nil, reasoning.AsClientError(err)
+	}
 
 	var safetySettings []dto.GeminiChatSafetySettings
 	for _, category := range sharedgemini.SafetySettingCategories {

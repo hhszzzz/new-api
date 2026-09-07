@@ -39,7 +39,7 @@ func TestSyncUpstreamModelsInvalidatesPricingAfterCreatingMetadata(t *testing.T)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var payload any
 		switch r.URL.Path {
-		case "/api/newapi/models.json":
+		case "/api/newapi/models.json", "/api/i18n/zh/newapi/models.json":
 			payload = upstreamEnvelope[upstreamModel]{
 				Success: true,
 				Data: []upstreamModel{{
@@ -49,7 +49,7 @@ func TestSyncUpstreamModelsInvalidatesPricingAfterCreatingMetadata(t *testing.T)
 					VendorName:  "Synced Vendor",
 				}},
 			}
-		case "/api/newapi/vendors.json":
+		case "/api/newapi/vendors.json", "/api/i18n/zh/newapi/vendors.json":
 			payload = upstreamEnvelope[upstreamVendor]{
 				Success: true,
 				Data: []upstreamVendor{{
@@ -76,7 +76,29 @@ func TestSyncUpstreamModelsInvalidatesPricingAfterCreatingMetadata(t *testing.T)
 
 	recorder := httptest.NewRecorder()
 	context, _ := gin.CreateTestContext(recorder)
-	context.Request = httptest.NewRequest(http.MethodPost, "/api/models/sync_upstream", bytes.NewBufferString(`{}`))
+	context.Request = httptest.NewRequest(http.MethodGet, "/api/models/sync_upstream/preview", nil)
+	SyncUpstreamPreview(context)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	var preview struct {
+		Success bool
+		Data    struct {
+			Source     metadataSyncSource
+			Candidates []metadataSyncCandidate
+		}
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &preview))
+	require.True(t, preview.Success, recorder.Body.String())
+	require.Len(t, preview.Data.Candidates, 1)
+	body, err := common.Marshal(map[string]any{
+		"source_version": preview.Data.Source.Version,
+		"selections":     []model.MetadataSyncSelection{{ModelName: "sync-cache-model", RecordVersion: preview.Data.Candidates[0].RecordVersion, Create: true, Fields: model.MetadataSyncFields}},
+	})
+	require.NoError(t, err)
+	recorder = httptest.NewRecorder()
+	context, _ = gin.CreateTestContext(recorder)
+	context.Set("id", 1)
+	context.Set("role", common.RoleRootUser)
+	context.Request = httptest.NewRequest(http.MethodPost, "/api/models/sync_upstream", bytes.NewReader(body))
 	context.Request.Header.Set("Content-Type", "application/json")
 	SyncUpstreamModels(context)
 
@@ -84,14 +106,14 @@ func TestSyncUpstreamModelsInvalidatesPricingAfterCreatingMetadata(t *testing.T)
 	var response struct {
 		Success bool `json:"success"`
 		Data    struct {
-			CreatedModels  int `json:"created_models"`
-			CreatedVendors int `json:"created_vendors"`
+			CreatedModels  []string `json:"created_models"`
+			CreatedVendors []string `json:"created_vendors"`
 		} `json:"data"`
 	}
 	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
 	require.True(t, response.Success)
-	assert.Equal(t, 1, response.Data.CreatedModels)
-	assert.Equal(t, 1, response.Data.CreatedVendors)
+	assert.Equal(t, []string{"sync-cache-model"}, response.Data.CreatedModels)
+	assert.Equal(t, []string{"Synced Vendor"}, response.Data.CreatedVendors)
 
 	refreshed := model.GetPricing()
 	require.Len(t, refreshed, 1)

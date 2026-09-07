@@ -172,7 +172,7 @@ export function Pricing() {
             className='mx-auto mb-4 max-w-2xl'
           />
 
-          <div className='grid gap-4 xl:grid-cols-[330px_minmax(0,1fr)]'>
+          <div className='grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)]'>
             <PricingSidebar
               quotaTypeFilter={quotaTypeFilter}
               endpointTypeFilter={endpointTypeFilter}
@@ -191,7 +191,7 @@ export function Pricing() {
               models={models || []}
               hasActiveFilters={hasActiveFilters}
               onClearFilters={clearFilters}
-              className='hover-scrollbar sticky top-4 hidden max-h-[calc(100dvh-2rem)] self-start overflow-y-auto xl:block'
+              className='hover-scrollbar sticky top-20 hidden max-h-[calc(100dvh-6rem)] self-start overflow-y-auto xl:block'
             />
 
             <div className='min-w-0 space-y-4'>

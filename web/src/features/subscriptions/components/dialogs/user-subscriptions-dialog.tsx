@@ -34,20 +34,13 @@ import {
 import { StatusBadge } from '@/components/status-badge'
 import { TableId } from '@/components/table-id'
 import { Button } from '@/components/ui/button'
+import { Combobox } from '@/components/ui/combobox'
 import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuShortcut,
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import {
   Sheet,
   SheetContent,
@@ -297,33 +290,17 @@ export function UserSubscriptionsDialog(props: Props) {
 
           <div className={sideDrawerFormClassName()}>
             <div className='flex flex-col gap-2 sm:flex-row'>
-              <Select
-                items={assignablePlans.map((p) => ({
+              <Combobox
+                options={assignablePlans.map((p) => ({
                   value: String(p.plan.id),
-                  label: (
-                    <>
-                      {p.plan.title}($
-                      {Number(p.plan.price_amount || 0).toFixed(2)})
-                    </>
-                  ),
+                  label: `${p.plan.title} ($${Number(p.plan.price_amount || 0).toFixed(2)})`,
                 }))}
                 value={selectedPlanId}
                 onValueChange={(v) => v !== null && setSelectedPlanId(v)}
-              >
-                <SelectTrigger className='min-w-0 flex-1'>
-                  <SelectValue placeholder={t('Select subscription plan')} />
-                </SelectTrigger>
-                <SelectContent alignItemWithTrigger={false}>
-                  <SelectGroup>
-                    {assignablePlans.map((p) => (
-                      <SelectItem key={p.plan.id} value={String(p.plan.id)}>
-                        {p.plan.title} ($
-                        {Number(p.plan.price_amount || 0).toFixed(2)})
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
+                className='flex-1'
+                placeholder={t('Select subscription plan')}
+                aria-label={t('Subscription plan')}
+              />
               <Input
                 value={sourceNote}
                 onChange={(event) => setSourceNote(event.target.value)}

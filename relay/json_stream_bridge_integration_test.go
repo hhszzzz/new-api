@@ -127,7 +127,7 @@ func TestPromotedClaudeJSONRunsThroughResponsesStreamHandler(t *testing.T) {
 
 	require.Nil(t, apiErr)
 	require.NotNil(t, usage)
-	assert.Equal(t, 11, usage.TotalTokens)
+	assert.Equal(t, 13, usage.TotalTokens)
 	got := recorder.Body.String()
 	assert.Contains(t, got, `event: response.created`)
 	assert.Contains(t, got, `"model":"gpt-public"`)

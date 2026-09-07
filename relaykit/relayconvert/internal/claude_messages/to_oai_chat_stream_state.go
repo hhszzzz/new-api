@@ -13,6 +13,7 @@ type ClaudeToOpenAIStreamState struct {
 	ID       string
 	Model    string
 	thinking map[int]*dto.ClaudeMediaMessage
+	chatState *ClaudeToChatStreamState
 }
 
 func NewClaudeToOpenAIStreamState() *ClaudeToOpenAIStreamState {
@@ -75,7 +76,9 @@ func (s *ClaudeToOpenAIStreamState) ConvertChunk(response *dto.ClaudeResponse, i
 		}
 	}
 
-	converted := StreamResponseClaude2OpenAI(response)
+	if s.chatState == nil { s.chatState = NewClaudeToChatStreamState() }
+	converted, err := s.chatState.ConvertChunk(response)
+	if err != nil { return nil, err }
 	if converted == nil {
 		return nil, nil
 	}

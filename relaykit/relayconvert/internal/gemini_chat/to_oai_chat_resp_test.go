@@ -106,8 +106,10 @@ func TestGeminiToChatStreamStateKeepsToolCallIDStable(t *testing.T) {
 		}
 	}
 
-	first := state.ConvertChunk(chunk(""), "gemini-test", nil)
-	second := state.ConvertChunk(chunk(""), "gemini-test", nil)
+	first, err := state.ConvertChunk(chunk(""), "gemini-test", nil)
+	require.NoError(t, err)
+	second, err := state.ConvertChunk(chunk(""), "gemini-test", nil)
+	require.NoError(t, err)
 	require.Len(t, first, 1)
 	require.Len(t, second, 1)
 	require.Len(t, first[0].Choices[0].Delta.ToolCalls, 1)
@@ -124,7 +126,8 @@ func TestGeminiToChatStreamStateKeepsToolCallIDStable(t *testing.T) {
 	assert.Equal(t, *firstCall.Index, *secondCall.Index)
 	assert.True(t, sharedgemini.IsSynthesizedToolCallID(firstCall.ID))
 
-	explicit := NewGeminiToChatStreamState("chatcmpl_explicit", 1).ConvertChunk(chunk("provider_call_1"), "gemini-test", nil)
+	explicit, err := NewGeminiToChatStreamState("chatcmpl_explicit", 1).ConvertChunk(chunk("provider_call_1"), "gemini-test", nil)
+	require.NoError(t, err)
 	require.Len(t, explicit, 1)
 	assert.Equal(t, "provider_call_1", explicit[0].Choices[0].Delta.ToolCalls[0].ID)
 }
@@ -145,9 +148,12 @@ func TestGeminiToChatStreamStateConvertsCumulativeSnapshotsToDeltas(t *testing.T
 		}}}
 	}
 
-	first := state.ConvertChunk(chunk("Hel", "think"), "gemini-test", nil)
-	second := state.ConvertChunk(chunk("Hello", "thinking"), "gemini-test", nil)
-	third := state.ConvertChunk(chunk("Hello", "thinking"), "gemini-test", nil)
+	first, err := state.ConvertChunk(chunk("Hel", "think"), "gemini-test", nil)
+	require.NoError(t, err)
+	second, err := state.ConvertChunk(chunk("Hello", "thinking"), "gemini-test", nil)
+	require.NoError(t, err)
+	third, err := state.ConvertChunk(chunk("Hello", "thinking"), "gemini-test", nil)
+	require.NoError(t, err)
 
 	require.Len(t, first, 1)
 	require.Len(t, second, 1)

@@ -119,7 +119,9 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
       priceSummary = (
         <>
           {dynamicSummary.primaryEntries.map((entry) => {
-            const unitLabelKey = getDynamicPriceUnitLabelKey(entry)
+            const unitLabelKey =
+              getDynamicPriceUnitLabelKey(entry) ??
+              (entry.unit === 'token' ? tokenUnitLabel : null)
             let fieldPrefix: ReactNode = null
             if (entry.labelKind !== 'schema') {
               fieldPrefix = <>{t(entry.shortLabel)} </>
@@ -140,7 +142,7 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
                 {fieldPrefix}
                 <span className='text-foreground font-mono font-semibold'>
                   {entry.formattedRange ?? entry.formatted}
-                  {unitLabelKey && <>/{t(unitLabelKey)}</>}
+                  {unitLabelKey && <> / {t(unitLabelKey)}</>}
                 </span>
               </span>
             )
@@ -258,7 +260,10 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
             )}
           </div>
           <div className='min-w-0'>
-            <h3 className='text-foreground truncate font-mono text-[15px] leading-tight font-bold'>
+            <h3
+              className='text-foreground truncate font-mono text-[15px] leading-tight font-bold'
+              title={props.model.model_name}
+            >
               {props.model.model_name}
             </h3>
             <div className='mt-0.5 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-sm sm:mt-1 sm:gap-x-3'>
@@ -281,6 +286,7 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
             onClick={handleCopy}
             className='text-muted-foreground hover:text-foreground hover:bg-muted rounded-md border p-1.5 transition-colors'
             title={t('Copy')}
+            aria-label={t('Copy model name')}
           >
             <Copy className='size-3.5' />
           </button>
@@ -308,11 +314,13 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
               {item}
             </span>
           ))}
-          {!dynamicSummary?.isTaskUsage && !isUnconfiguredTaskUsage && (
-            <span className='text-muted-foreground/50 text-xs'>
-              {tokenUnitLabel}
-            </span>
-          )}
+          {isTokenBased &&
+            !dynamicSummary?.isTaskUsage &&
+            !isUnconfiguredTaskUsage && (
+              <span className='text-muted-foreground/50 text-xs'>
+                {tokenUnitLabel}
+              </span>
+            )}
           {hiddenCount > 0 && (
             <span className='text-muted-foreground/40 text-xs'>
               +{hiddenCount}

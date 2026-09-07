@@ -13,6 +13,7 @@ import (
 	sharedchat "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/chat"
 	sharedtoolmedia "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/toolmedia"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
 )
 
 const (
@@ -108,8 +109,10 @@ func ResponsesRequestToChatCompletionsRequestWithContext(c context.Context, req 
 		return nil, fmt.Errorf("invalid presence_penalty: %w", err)
 	}
 
-	if req.Reasoning != nil {
-		sharedchat.ApplyReasoningEffort(out, req.Reasoning.Effort)
+	if reasoningIntent, err := reasoning.FromOpenAIResponses(req); err != nil {
+		return nil, reasoning.AsClientError(err)
+	} else if err := reasoning.ApplyToOpenAIChat(out, reasoningIntent); err != nil {
+		return nil, reasoning.AsClientError(err)
 	}
 	if req.ServiceTier != "" {
 		out.ServiceTier, _ = kitutil.Marshal(req.ServiceTier)

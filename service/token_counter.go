@@ -191,9 +191,22 @@ func estimateRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *rela
 	if !explicitCount && !constant.CountToken {
 		return 0, nil
 	}
+	return countRequestToken(c, meta, info, explicitCount)
+}
 
+// CountRequestToken counts request tokens regardless of the billing estimation
+// switch. Utility endpoints such as Claude's messages/count_tokens must remain
+// available even when operators disable request-token estimation for relays.
+func CountRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *relaycommon.RelayInfo) (int, error) {
+	return countRequestToken(c, meta, info, true)
+}
+
+func countRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *relaycommon.RelayInfo, explicitCount bool) (int, error) {
 	if meta == nil {
 		return 0, errors.New("token count meta is nil")
+	}
+	if info == nil {
+		return 0, errors.New("relay info is nil")
 	}
 
 	if info.RelayFormat == types.RelayFormatOpenAIRealtime {
@@ -230,7 +243,7 @@ func estimateRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *rela
 	}
 
 	model := common.GetContextKeyString(c, constant.ContextKeyOriginalModel)
-	if explicitCount && strings.TrimSpace(info.UpstreamModelName) != "" {
+	if explicitCount && info.ChannelMeta != nil && strings.TrimSpace(info.UpstreamModelName) != "" {
 		model = info.UpstreamModelName
 	}
 	tkm := 0

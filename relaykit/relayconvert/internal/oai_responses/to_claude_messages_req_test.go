@@ -28,7 +28,8 @@ func TestOpenAIResponsesRequestToClaudeMessagesDisablesThinkingAfterUnsignedTool
 
 	got, err := OpenAIResponsesRequestToClaudeMessages(context.Background(), nil, request)
 	require.NoError(t, err)
-	assert.Nil(t, got.Thinking)
+	require.NotNil(t, got.Thinking)
+	assert.Equal(t, "disabled", got.Thinking.Type)
 }
 
 func TestOpenAIResponsesRequestToClaudeMessagesKeepsThinkingDisabledWhenUnsignedToolResultHasAdditionalUserText(t *testing.T) {
@@ -50,7 +51,8 @@ func TestOpenAIResponsesRequestToClaudeMessagesKeepsThinkingDisabledWhenUnsigned
 
 	got, err := OpenAIResponsesRequestToClaudeMessages(context.Background(), nil, request)
 	require.NoError(t, err)
-	assert.Nil(t, got.Thinking)
+	require.NotNil(t, got.Thinking)
+	assert.Equal(t, "disabled", got.Thinking.Type)
 }
 
 func TestOpenAIResponsesRequestToClaudeMessagesReenablesThinkingAfterCompletedToolRound(t *testing.T) {
@@ -78,18 +80,18 @@ func TestOpenAIResponsesRequestToClaudeMessagesReenablesThinkingAfterCompletedTo
 	assert.Equal(t, 2048, got.Thinking.GetBudgetTokens())
 }
 
-func TestOpenAIResponsesRequestToClaudeMessagesUsesCCSwitchThinkingBudgets(t *testing.T) {
+func TestOpenAIResponsesRequestToClaudeMessagesScalesThinkingBudgetsWithinOutputLimit(t *testing.T) {
 	maxOutputTokens := uint(60000)
 	tests := []struct {
 		effort string
 		want   int
 	}{
-		{effort: "minimal", want: 2048},
-		{effort: "low", want: 2048},
-		{effort: "medium", want: 8192},
-		{effort: "high", want: 16384},
-		{effort: "xhigh", want: 24576},
-		{effort: "max", want: 24576},
+		{effort: "minimal", want: 3000},
+		{effort: "low", want: 12000},
+		{effort: "medium", want: 30000},
+		{effort: "high", want: 48000},
+		{effort: "xhigh", want: 57000},
+		{effort: "max", want: 57000},
 	}
 
 	for _, test := range tests {
@@ -133,13 +135,15 @@ func TestOpenAIResponsesRequestToClaudeMessagesUsesAdaptiveThinking(t *testing.T
 		require.NotNil(t, got.Thinking, "model=%s", model)
 		assert.Equal(t, "adaptive", got.Thinking.Type, "model=%s", model)
 		assert.Zero(t, got.Thinking.GetBudgetTokens(), "model=%s", model)
-		assert.JSONEq(t, `{"effort":"max"}`, string(got.OutputConfig), "model=%s", model)
+		expectedEffort := "xhigh"
+		if model == "claude-sonnet-4-6" { expectedEffort = "max" }
+		assert.Equal(t, expectedEffort, got.GetEfforts(), "model=%s", model)
 		assert.Nil(t, got.Temperature, "model=%s", model)
 		assert.Nil(t, got.TopP, "model=%s", model)
 	}
 }
 
-func TestOpenAIResponsesRequestToClaudeMessagesUsesDefaultAdaptiveThinking(t *testing.T) {
+func TestOpenAIResponsesRequestToClaudeMessagesPreservesNativeDefaultThinking(t *testing.T) {
 	maxOutputTokens := uint(4096)
 	request := &dto.OpenAIResponsesRequest{
 		Model:           "claude-sonnet-5",
@@ -149,8 +153,7 @@ func TestOpenAIResponsesRequestToClaudeMessagesUsesDefaultAdaptiveThinking(t *te
 
 	got, err := OpenAIResponsesRequestToClaudeMessages(context.Background(), nil, request)
 	require.NoError(t, err)
-	require.NotNil(t, got.Thinking)
-	assert.Equal(t, "adaptive", got.Thinking.Type)
+	assert.Nil(t, got.Thinking)
 	assert.Empty(t, got.OutputConfig)
 }
 
@@ -167,7 +170,7 @@ func TestOpenAIResponsesRequestToClaudeMessagesUsesLowestEffortWhenThinkingCanno
 	require.NoError(t, err)
 	require.NotNil(t, got.Thinking)
 	assert.Equal(t, "adaptive", got.Thinking.Type)
-	assert.JSONEq(t, `{"effort":"low"}`, string(got.OutputConfig))
+	assert.Empty(t, got.OutputConfig)
 }
 
 func TestOpenAIResponsesRequestToClaudeMessagesDisablesAdaptiveThinkingAfterUnsignedToolResult(t *testing.T) {

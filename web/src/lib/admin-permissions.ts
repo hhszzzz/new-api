@@ -24,6 +24,7 @@ export type AdminPermissionMatrix = Record<string, Record<string, boolean>>
 export type AdminCapabilities = AdminPermissionMatrix
 
 export const ADMIN_PERMISSION_RESOURCES = {
+  AUDIT: 'audit',
   CHANNEL: 'channel',
   PROMPT_AUDIT: 'prompt_audit',
   TASK_PLUGIN: 'task_plugin',

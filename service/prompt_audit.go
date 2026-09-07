@@ -1016,7 +1016,7 @@ func (result PromptAuditResult) auditMap() map[string]interface{} {
 	return audit
 }
 
-func AppendPromptAuditAdminInfo(c *gin.Context, other map[string]interface{}) {
+func AppendPromptAuditAdminInfo(c *gin.Context, other *model.LogOther) {
 	if other == nil {
 		return
 	}
@@ -1024,25 +1024,21 @@ func AppendPromptAuditAdminInfo(c *gin.Context, other map[string]interface{}) {
 	if !ok || !result.Enabled || result.Outcome == "" {
 		return
 	}
-	adminInfo, ok := other["admin_info"].(map[string]interface{})
-	if !ok || adminInfo == nil {
-		adminInfo = map[string]interface{}{}
-		other["admin_info"] = adminInfo
-	}
-	adminInfo["prompt_audit"] = result.auditMap()
+	other.SetAdmin("prompt_audit", result.auditMap())
 }
 
 func RecordPromptAuditError(c *gin.Context, result PromptAuditResult, apiErr *types.NewAPIError, modelName string, isStream bool) {
 	if c == nil || apiErr == nil || !constant.ErrorLogEnabled || !types.IsRecordErrorLog(apiErr) {
 		return
 	}
-	other := map[string]interface{}{
-		"error_type": apiErr.GetErrorType(), "error_code": apiErr.GetErrorCode(), "status_code": apiErr.StatusCode,
-	}
+	other := model.NewLogOther()
+	other.SetPublic("error_type", apiErr.GetErrorType())
+	other.SetPublic("error_code", apiErr.GetErrorCode())
+	other.SetPublic("status_code", apiErr.StatusCode)
 	AttachPromptAuditResult(c, result)
 	AppendPromptAuditAdminInfo(c, other)
 	if c.Request != nil && c.Request.URL != nil {
-		other["request_path"] = c.Request.URL.Path
+		other.SetPublic("request_path", c.Request.URL.Path)
 	}
 	startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
 	if startTime.IsZero() {

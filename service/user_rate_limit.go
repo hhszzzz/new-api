@@ -206,7 +206,7 @@ func (o *UserRateLimitObservation) noteRedisFailOpen(component string) {
 	o.mu.Unlock()
 }
 
-func AppendUserRateLimitAdminInfo(c *gin.Context, other map[string]interface{}) {
+func AppendUserRateLimitAdminInfo(c *gin.Context, other *model.LogOther) {
 	if c == nil || other == nil {
 		return
 	}
@@ -283,12 +283,7 @@ func AppendUserRateLimitAdminInfo(c *gin.Context, other map[string]interface{}) 
 		}
 		limits["redis_fail_open"] = failOpen
 	}
-	adminInfo, ok := other["admin_info"].(map[string]interface{})
-	if !ok || adminInfo == nil {
-		adminInfo = make(map[string]interface{})
-		other["admin_info"] = adminInfo
-	}
-	adminInfo["user_rate_limits"] = limits
+	other.SetAdmin("user_rate_limits", limits)
 }
 
 func rateLimitValuesMap(rpm, concurrency, streamTPS, firstTokenDelayMs int) map[string]interface{} {

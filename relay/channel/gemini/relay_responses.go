@@ -33,6 +33,7 @@ func GeminiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	markGeminiGoogleSearchCall(c, &geminiResponse)
+	countGeminiBillableFunctionCalls(info, &geminiResponse)
 	blockReason := geminiPromptBlockReason(&geminiResponse)
 	if blockReason != "" {
 		common.SetContextKey(c, constant.ContextKeyAdminRejectReason, fmt.Sprintf("gemini_block_reason=%s", blockReason))
@@ -47,15 +48,9 @@ func GeminiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 		)
 	}
 
-	chatResp := responseGeminiChat2OpenAI(c, &geminiResponse)
-	chatResp.Model = info.PublicResponseModelName()
-	if responseID := helper.GetResponseID(c); responseID != "" {
-		chatResp.Id = responseID
-	}
 	usage := buildUsageFromGeminiResponse(c, info, &geminiResponse)
-	chatResp.Usage = usage
 
-	convertResult, err := relayconvert.ConvertResponse(c, info, types.RelayFormatOpenAIResponses, chatResp)
+	convertResult, err := service.ConvertResponse(c, info, types.RelayFormatOpenAIResponses, &geminiResponse)
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
@@ -63,10 +58,11 @@ func GeminiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 	if !ok {
 		return nil, types.NewOpenAIError(fmt.Errorf("expected OpenAI responses response, got %T", convertResult.Value), types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
-	responsesUsage := convertResult.Usage
-	if responsesUsage == nil || responsesUsage.TotalTokens == 0 {
-		responsesResp.Usage = relayconvert.UsageFromChatUsage(&usage)
+	if responseID := helper.GetResponseID(c); responseID != "" {
+		responsesResp.ID = responseID
 	}
+	responsesResp.Model = info.PublicResponseModelName()
+	responsesResp.Usage = relayconvert.UsageFromChatUsage(&usage)
 	protocolstate.CaptureResponsesResponse(c, responsesResp.ID, responsesResp)
 
 	responseBody, err = common.Marshal(responsesResp)
@@ -83,13 +79,15 @@ func GeminiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, r
 	responseID := protocolstate.PublicResponseID(c, helper.GetResponseID(c))
 	created := common.GetTimestamp()
 	state, err := relayconvert.NewResponseStreamState(types.RelayFormatGemini, types.RelayFormatOpenAIResponses, relayconvert.ResponseStreamOptions{
-		ID:      responseID,
-		Model:   info.PublicResponseModelName(),
-		Created: created,
+		ID:                 responseID,
+		Model:              info.PublicResponseModelName(),
+		Created:            created,
+		EmitSequenceNumber: true,
 	})
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
+	hostedBridge := relayconvert.NewGeminiHostedStreamBridge()
 	var streamErr *types.NewAPIError
 	upstreamCompleted := false
 
@@ -108,9 +106,29 @@ func GeminiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, r
 		}
 		return true
 	}
-	convertChunk := func(chunk *dto.GeminiChatResponse) bool {
-		results, err := relayconvert.ConvertStreamResponseChunk(c, info, state, chunk)
+	failResponsesStream := func(err error) bool {
+		failureResults, handled := state.FailResponsesStream("server_error", err.Error(), "")
+		if !handled {
+			return false
+		}
+		for _, result := range failureResults {
+			event, ok := result.Value.(relayconvert.ChatToResponsesStreamEvent)
+			if !ok {
+				streamErr = types.NewOpenAIError(fmt.Errorf("expected OAI responses stream event, got %T", result.Value), types.ErrorCodeBadResponse, http.StatusInternalServerError)
+				return true
+			}
+			if !sendEvent(event) {
+				return true
+			}
+		}
+		return true
+	}
+	sendChunk := func(chunk *dto.GeminiChatResponse) bool {
+		results, err := service.ConvertStreamResponseChunk(c, info, state, chunk)
 		if err != nil {
+			if failResponsesStream(err) {
+				return false
+			}
 			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 			info.StreamStatus.MarkTerminalFailure(streamErr)
 			return false
@@ -141,10 +159,21 @@ func GeminiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, r
 				break
 			}
 		}
-		return convertChunk(geminiResponse)
+		hostedBridge.Observe(geminiResponse)
+		return sendChunk(geminiResponse)
 	})
 	if streamAPIError != nil {
 		return usage, streamAPIError
+	}
+	if info.StreamStatus != nil && !info.StreamStatus.IsNormalEnd() {
+		if info.StreamStatus.Snapshot().EndReason == relaycommon.StreamEndReasonClientGone {
+			return usage, nil
+		}
+		return usage, types.NewOpenAIError(
+			fmt.Errorf("gemini stream ended unexpectedly: %s", info.StreamStatus.Summary()),
+			types.ErrorCodeBadResponse,
+			http.StatusBadGateway,
+		)
 	}
 	if streamErr != nil {
 		return nil, streamErr
@@ -158,13 +187,28 @@ func GeminiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, r
 			http.StatusBadGateway,
 		)
 	}
+	hostedEvents, err := hostedBridge.Finalize(state)
+	if err != nil {
+		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+	}
+	for _, event := range hostedEvents {
+		if !sendEvent(event) {
+			if streamErr != nil {
+				return usage, streamErr
+			}
+			return usage, nil
+		}
+	}
 
 	if usage != nil {
 		state.SetUsage(usage)
 	}
-	finalResults, err := relayconvert.FinalizeStreamResponse(c, info, state)
+	finalResults, err := service.FinalizeStreamResponse(c, info, state)
 	if err != nil {
 		info.StreamStatus.MarkTerminalFailure(err)
+		if failResponsesStream(err) {
+			return usage, streamErr
+		}
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
 	for _, result := range finalResults {
@@ -175,7 +219,10 @@ func GeminiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, r
 			return nil, types.NewOpenAIError(terminalErr, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 		}
 		if !sendEvent(event) {
-			return nil, streamErr
+			if streamErr != nil {
+				return usage, streamErr
+			}
+			return usage, nil
 		}
 	}
 	info.StreamStatus.MarkTerminalDelivered()

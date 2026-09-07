@@ -44,6 +44,27 @@ func TestChatCompletionsResponseToResponsesPreservesTextToolCallsAndUsage(t *tes
 	assert.Equal(t, `"{\"q\":\"x\"}"`, string(resp.Output[1].Arguments))
 }
 
+func TestChatCompletionsResponseToResponsesEmitsReasoningSummaryBeforeText(t *testing.T) {
+	message := dto.Message{Role: "assistant", Content: "final answer"}
+	message.ReasoningContent = lo.ToPtr("thinking summary")
+	resp, _, err := ChatCompletionsResponseToResponsesResponse(&dto.OpenAITextResponse{
+		Id:    "chatcmpl_1",
+		Model: "gpt-test",
+		Choices: []dto.OpenAITextResponseChoice{
+			{Message: message, FinishReason: "stop"},
+		},
+	}, "resp_1")
+	require.NoError(t, err)
+
+	require.Len(t, resp.Output, 2)
+	assert.Equal(t, responsesOutputTypeReasoning, resp.Output[0].Type)
+	require.Len(t, resp.Output[0].Summary, 1)
+	assert.Equal(t, "thinking summary", resp.Output[0].Summary[0].Text)
+	assert.Empty(t, resp.Output[0].Content)
+	assert.Equal(t, responsesOutputTypeMessage, resp.Output[1].Type)
+	assert.Equal(t, "final answer", resp.Output[1].Content[0].Text)
+}
+
 func TestChatCompletionsResponseToResponsesMapsIncompleteFinishReasons(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -248,7 +269,8 @@ func TestChatCompletionsStreamToResponsesEventsAggregatesUsageAndToolArgs(t *tes
 	assert.Equal(t, responsesEventFunctionArgsDelta, events[6].Type)
 	assert.Equal(t, `{"q":"x"}`, events[6].Payload.Delta)
 	assert.Equal(t, responsesEventOutputTextDone, events[7].Type)
-	assert.Equal(t, "hello", events[7].Payload.Text)
+	require.NotNil(t, events[7].Payload.Text)
+	assert.Equal(t, "hello", *events[7].Payload.Text)
 	assert.Equal(t, responsesEventContentPartDone, events[8].Type)
 	assert.Equal(t, responsesEventOutputItemDone, events[9].Type)
 	assert.Equal(t, "commentary", events[9].Payload.Item.Phase)
@@ -321,7 +343,8 @@ func TestChatCompletionsStreamToResponsesEventsEmitsReasoningLifecycle(t *testin
 	assert.Equal(t, 0, *events[3].Payload.SummaryIndex)
 
 	assert.Equal(t, "reasoning summary", events[4].Payload.Delta)
-	assert.Equal(t, "reasoning summary", events[5].Payload.Text)
+	require.NotNil(t, events[5].Payload.Text)
+	assert.Equal(t, "reasoning summary", *events[5].Payload.Text)
 	donePart, ok := events[6].Payload.Part.(*dto.ResponsesReasoningSummaryPart)
 	require.True(t, ok)
 	assert.Equal(t, "reasoning summary", donePart.Text)

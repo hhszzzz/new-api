@@ -12,6 +12,7 @@ import (
 	sharedclaude "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/claude"
 	sharedtoolmedia "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/toolmedia"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
 )
 
 func convertOpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Meta, request any) (any, error) {
@@ -42,13 +43,6 @@ func OpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Met
 	if req.MaxOutputTokens != nil && *req.MaxOutputTokens > 0 {
 		claudeRequest.MaxTokens = kitutil.GetPointer(*req.MaxOutputTokens)
 	}
-	if claudeRequest.MaxTokens == nil || *claudeRequest.MaxTokens == 0 {
-		if defaultMaxTokens, configured := convmeta.OptionsOf(info).Claude.DefaultMaxTokensFor(req.Model); configured {
-			value := uint(defaultMaxTokens)
-			claudeRequest.MaxTokens = &value
-		}
-	}
-
 	tools, toolState, err := prepareResponsesToolsForChat(c, req)
 	if err != nil {
 		return nil, err
@@ -71,6 +65,17 @@ func OpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Met
 	if len(tools) > 0 && (toolChoice != nil || RawJSONPresent(req.ParallelToolCalls)) {
 		claudeRequest.ToolChoice = sharedclaude.MapOpenAIToolChoice(toolChoice, ParallelToolCalls(req.ParallelToolCalls))
 	}
+	sourceReasoning, err := reasoning.FromOpenAIResponses(req)
+	if err != nil {
+		return nil, reasoning.AsClientError(err)
+	}
+	if claudeRequest.MaxTokens == nil {
+		if defaultMaxTokens, configured := convmeta.OptionsOf(info).Claude.DefaultMaxTokensFor(claudeRequest.Model); configured {
+			value := uint(defaultMaxTokens)
+			claudeRequest.MaxTokens = &value
+		}
+	}
+
 	systemMessages := make([]dto.ClaudeMediaMessage, 0)
 	if RawJSONPresent(req.Instructions) {
 		instructions, err := JSONString(req.Instructions)
@@ -162,7 +167,7 @@ func OpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Met
 			if isResponsesHostedHistoryItem(itemType) {
 				return nil, fmt.Errorf("Responses server tool history item %q cannot be converted to Anthropic Messages without losing context", itemType)
 			}
-			role := responsesClaudeRole(item)
+			role := responsesClaudeRole(strings.TrimSpace(kitutil.Interface2String(item["role"])))
 			if role == "system" {
 				parts, err := responsesSystemContentToClaudeText(item["content"])
 				if err != nil {
@@ -189,6 +194,16 @@ func OpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Met
 	if len(claudeRequest.Messages) == 0 {
 		return nil, fmt.Errorf("cannot convert Responses request: empty Messages input")
 	}
+	if (sourceReasoning.HasStrength() || sharedclaude.AdaptiveThinkingIsDefault(claudeRequest.Model)) && (!claudeMessagesSupportThinking(claudeRequest.Messages) || claudeToolChoiceForcesCall(claudeRequest.ToolChoice)) {
+		if sharedclaude.ThinkingCannotBeDisabled(claudeRequest.Model) {
+			if claudeToolChoiceForcesCall(claudeRequest.ToolChoice) { return nil, fmt.Errorf("model %q cannot honor a forced tool_choice because thinking cannot be disabled", claudeRequest.Model) }
+			return nil, fmt.Errorf("cannot convert Responses request: model %q requires thinking with signed tool history", claudeRequest.Model)
+		}
+		sourceReasoning = reasoning.Intent{Mode: reasoning.ModeDisabled, Effort: reasoning.EffortNone}
+	}
+	if err := sharedclaude.ApplyReasoning(c, claudeRequest, info, sourceReasoning, true); err != nil {
+		return nil, reasoning.AsClientError(err)
+	}
 	if err := applyResponsesReasoningToClaude(req, claudeRequest); err != nil {
 		return nil, err
 	}
@@ -213,88 +228,17 @@ func responsesFunctionDeclarationsToClaudeTools(functions []dto.FunctionRequest)
 	return tools
 }
 
-func applyResponsesReasoningToClaude(req *dto.OpenAIResponsesRequest, claudeRequest *dto.ClaudeRequest) error {
-	if claudeRequest == nil || claudeRequest.MaxTokens == nil || *claudeRequest.MaxTokens == 0 {
-		return nil
-	}
-	effort := ReasoningEffort(req)
-	adaptive := sharedclaude.UsesAdaptiveThinking(claudeRequest.Model)
-	adaptiveByDefault := sharedclaude.AdaptiveThinkingIsDefault(claudeRequest.Model)
-	cannotDisable := sharedclaude.ThinkingCannotBeDisabled(claudeRequest.Model)
-	adaptiveEffort, hasAdaptiveEffort := sharedclaude.AdaptiveEffort(effort)
-	explicitlyDisabled := sharedclaude.ReasoningExplicitlyDisabled(effort)
-	adaptiveShouldThink := adaptive && (adaptiveByDefault || hasAdaptiveEffort)
-
-	if !claudeMessagesSupportThinking(claudeRequest.Messages) {
-		if cannotDisable {
-			return fmt.Errorf("cannot convert Responses request: Anthropic model %q requires thinking, but the tool history has no signed thinking block to replay", claudeRequest.Model)
-		}
-		if adaptiveShouldThink {
-			claudeRequest.Thinking = &dto.Thinking{Type: "disabled"}
-		}
-		return nil
-	}
-
-	if claudeToolChoiceForcesCall(claudeRequest.ToolChoice) {
-		if adaptiveShouldThink {
-			if cannotDisable {
-				return fmt.Errorf("cannot convert Responses request: Anthropic model %q requires adaptive thinking and cannot honor a forced tool_choice", claudeRequest.Model)
-			}
-			claudeRequest.Thinking = &dto.Thinking{Type: "disabled"}
-		}
-		return nil
-	}
-
-	if adaptiveShouldThink && (!explicitlyDisabled || cannotDisable) {
-		claudeRequest.Thinking = &dto.Thinking{Type: "adaptive"}
-		if hasAdaptiveEffort {
-			outputConfig, err := kitutil.Marshal(map[string]string{"effort": adaptiveEffort})
-			if err != nil {
-				return fmt.Errorf("marshal Claude output_config: %w", err)
-			}
-			claudeRequest.OutputConfig = outputConfig
-		} else if explicitlyDisabled && cannotDisable {
-			claudeRequest.OutputConfig = []byte(`{"effort":"low"}`)
-		}
-		claudeRequest.Temperature = nil
-		claudeRequest.TopP = nil
-		return nil
-	}
-	if adaptive && explicitlyDisabled {
-		claudeRequest.Thinking = &dto.Thinking{Type: "disabled"}
-		return nil
-	}
-
-	var desiredBudget uint
-	switch effort {
-	case "minimal":
-		desiredBudget = 2048
-	case "low":
-		desiredBudget = 2048
-	case "medium":
-		desiredBudget = 8192
-	case "high":
-		desiredBudget = 16384
-	case "xhigh", "max":
-		desiredBudget = 24576
-	default:
-		return nil
-	}
-	ceiling := *claudeRequest.MaxTokens / 2
-	if ceiling < 1024 {
-		return nil
-	}
-	if desiredBudget > ceiling {
-		desiredBudget = ceiling
-	}
-	budget := int(desiredBudget)
-	claudeRequest.Thinking = &dto.Thinking{
-		Type:         "enabled",
-		BudgetTokens: &budget,
-	}
-	claudeRequest.Temperature = nil
-	claudeRequest.TopP = nil
-	return nil
+// applyResponsesReasoningToClaude keeps replayed tool turns compatible with
+// Claude's signed-thinking requirements after the shared renderer sets intent.
+func applyResponsesReasoningToClaude(_ *dto.OpenAIResponsesRequest, request *dto.ClaudeRequest) error {
+    if request == nil || request.Thinking == nil || request.Thinking.Type == "disabled" { return nil }
+    if !claudeMessagesSupportThinking(request.Messages) || claudeToolChoiceForcesCall(request.ToolChoice) {
+        if sharedclaude.ThinkingCannotBeDisabled(request.Model) {
+            return fmt.Errorf("cannot convert Responses request: Anthropic model %q requires thinking but the tool history or forced tool_choice cannot preserve it", request.Model)
+        }
+        request.Thinking = &dto.Thinking{Type: "disabled"}
+    }
+    return nil
 }
 
 func claudeMessagesSupportThinking(messages []dto.ClaudeMessage) bool {
@@ -730,8 +674,8 @@ func claudeMessageContentParts(content any) []dto.ClaudeMediaMessage {
 	}
 }
 
-func responsesClaudeRole(item map[string]any) string {
-	switch strings.TrimSpace(kitutil.Interface2String(item["role"])) {
+func responsesClaudeRole(role string) string {
+	switch role {
 	case "assistant":
 		return "assistant"
 	case "system", "developer":
@@ -742,7 +686,8 @@ func responsesClaudeRole(item map[string]any) string {
 }
 
 func ensureClaudeMessagesStartWithUser(messages []dto.ClaudeMessage) []dto.ClaudeMessage {
-	if len(messages) == 0 || messages[0].Role == "user" {
+	if len(messages) == 0 { return messages }
+	if len(messages) > 0 && messages[0].Role == "user" {
 		return messages
 	}
 	return append([]dto.ClaudeMessage{

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -33,17 +34,17 @@ func TestGenerateTextOtherInfoStoresModelRoutingInAdminInfo(t *testing.T) {
 
 	other := GenerateTextOtherInfo(ctx, relayInfo, 1, 1, 1, 0, 0, 0, 1)
 
-	assert.NotContains(t, other, "is_model_mapped")
-	assert.NotContains(t, other, "upstream_model_name")
-	assert.NotContains(t, other, "po")
-	adminInfo, ok := other["admin_info"].(map[string]interface{})
+	assert.NotContains(t, other.Snapshot(), "is_model_mapped")
+	assert.NotContains(t, other.Snapshot(), "upstream_model_name")
+	assert.NotContains(t, other.Snapshot(), "po")
+	adminInfo, ok := other.Snapshot()["admin_info"].(map[string]interface{})
 	require.True(t, ok)
 	assert.Equal(t, true, adminInfo["is_model_mapped"])
 	assert.Equal(t, "upstream-model", adminInfo["upstream_model_name"])
 	assert.Equal(t, true, adminInfo["model_routing_checked"])
 	assert.Equal(t, []string{"set model = upstream-model"}, adminInfo["po"])
 
-	serialized := common.MapToJsonStr(other)
+	serialized := common.MapToJsonStr(other.Snapshot())
 	require.NotEmpty(t, serialized)
 	parsed, err := common.StrToMap(serialized)
 	require.NoError(t, err)
@@ -67,9 +68,9 @@ func TestGenerateTextOtherInfoStoresDifyWorkflowOnlyInAdminInfo(t *testing.T) {
 
 	other := GenerateTextOtherInfo(ctx, relayInfo, 1, 1, 1, 0, 0, 0, 1)
 
-	assert.NotContains(t, other, "dify_workflow_run_id")
-	assert.NotContains(t, other, "dify_workflow_status")
-	adminInfo, ok := other["admin_info"].(map[string]interface{})
+	assert.NotContains(t, other.Snapshot(), "dify_workflow_run_id")
+	assert.NotContains(t, other.Snapshot(), "dify_workflow_status")
+	adminInfo, ok := other.Snapshot()["admin_info"].(map[string]interface{})
 	require.True(t, ok)
 	assert.Equal(t, "run-123", adminInfo["dify_workflow_run_id"])
 	assert.Equal(t, "succeeded", adminInfo["dify_workflow_status"])
@@ -90,7 +91,7 @@ func TestGenerateTextOtherInfoOmitsClaudeReportedVersionAlias(t *testing.T) {
 
 	other := GenerateTextOtherInfo(ctx, relayInfo, 1, 1, 1, 0, 0, 0, 1)
 
-	adminInfo, ok := other["admin_info"].(map[string]interface{})
+	adminInfo, ok := other.Snapshot()["admin_info"].(map[string]interface{})
 	require.True(t, ok)
 	assert.Equal(t, true, adminInfo["model_routing_checked"])
 	assert.NotContains(t, adminInfo, "is_model_mapped")
@@ -109,7 +110,7 @@ func TestGenerateTextOtherInfoRecordsMillisecondDuration(t *testing.T) {
 
 	other := GenerateTextOtherInfo(ctx, relayInfo, 1, 1, 1, 0, 0, 0, 1)
 
-	durationMs, ok := other["duration_ms"].(int64)
+	durationMs, ok := other.Snapshot()["duration_ms"].(int64)
 	require.True(t, ok)
 	assert.GreaterOrEqual(t, durationMs, int64(1250))
 }
@@ -134,7 +135,7 @@ func TestGenerateTextOtherInfoRecordsStreamTerminalDiagnostics(t *testing.T) {
 
 	other := GenerateTextOtherInfo(ctx, relayInfo, 1, 1, 1, 0, 0, 0, 1)
 
-	streamInfo, ok := other["stream_status"].(map[string]interface{})
+	streamInfo, ok := other.Snapshot()["stream_status"].(map[string]interface{})
 	require.True(t, ok)
 	assert.Equal(t, "error", streamInfo["status"])
 	assert.Equal(t, "client_gone", streamInfo["end_reason"])
@@ -147,15 +148,12 @@ func TestGenerateTextOtherInfoRecordsStreamTerminalDiagnostics(t *testing.T) {
 }
 
 func TestAppendModelRoutingAdminInfoPreservesExistingAdminFields(t *testing.T) {
-	other := map[string]interface{}{
-		"admin_info": map[string]interface{}{
-			"quota_saturation": map[string]interface{}{"kind": "overflow"},
-		},
-	}
+	other := model.NewLogOther()
+	other.SetAdmin("quota_saturation", map[string]interface{}{"kind": "overflow"})
 
 	AppendModelRoutingAdminInfo(other, true, "upstream-model")
 
-	adminInfo, ok := other["admin_info"].(map[string]interface{})
+	adminInfo, ok := other.Snapshot()["admin_info"].(map[string]interface{})
 	require.True(t, ok)
 	assert.Contains(t, adminInfo, "quota_saturation")
 	assert.Equal(t, true, adminInfo["model_routing_checked"])
@@ -164,11 +162,11 @@ func TestAppendModelRoutingAdminInfoPreservesExistingAdminFields(t *testing.T) {
 }
 
 func TestAppendModelRoutingAdminInfoRecordsCompletedUnroutedCheck(t *testing.T) {
-	other := map[string]interface{}{}
+	other := model.NewLogOther()
 
 	AppendModelRoutingAdminInfo(other, false, "requested-model")
 
-	adminInfo, ok := other["admin_info"].(map[string]interface{})
+	adminInfo, ok := other.Snapshot()["admin_info"].(map[string]interface{})
 	require.True(t, ok)
 	assert.Equal(t, true, adminInfo["model_routing_checked"])
 	assert.NotContains(t, adminInfo, "is_model_mapped")

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	hostreasoning "github.com/QuantumNous/new-api/setting/reasoning"
 )
 
 type Result struct {
@@ -30,6 +31,9 @@ func Resolve(mappingJSON string, modelName string) (Result, error) {
 	visitedModels := map[string]bool{currentModel: true}
 	for {
 		mappedModel, exists := modelMap[currentModel]
+		if baseModel := hostreasoning.BaseModelName(currentModel); (!exists || mappedModel == "") && baseModel != currentModel {
+			mappedModel, exists = modelMap[baseModel]
+		}
 		mappedModel = strings.TrimSpace(mappedModel)
 		if !exists || mappedModel == "" {
 			break

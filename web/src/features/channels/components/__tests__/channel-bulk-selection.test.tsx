@@ -27,7 +27,10 @@ import { DataTableBulkActions } from '@/components/data-table'
 import { DataTableBulkActions as ChannelBulkActions } from '../data-table-bulk-actions'
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({
+    t: (key: string, options?: { count?: number }) =>
+      key.replace('{{count}}', String(options?.count ?? '')),
+  }),
 }))
 
 vi.mock('../dialogs/channel-batch-edit-dialog', () => ({
@@ -104,7 +107,7 @@ describe('channel nested row selection', () => {
 
     expect(
       screen.getByRole('toolbar', {
-        name: 'Bulk actions for 1 selected channel',
+        name: 'Bulk actions for 1 selected records',
       })
     ).toBeVisible()
     expect(

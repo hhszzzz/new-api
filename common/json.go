@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+
+	"github.com/gin-gonic/gin/binding"
 )
 
 func Unmarshal(data []byte, v any) error {
@@ -17,6 +19,25 @@ func UnmarshalJsonStr(data string, v any) error {
 
 func DecodeJson(reader io.Reader, v any) error {
 	return json.NewDecoder(reader).Decode(v)
+}
+
+// DecodeJsonUseNumber preserves integer precision in dynamically shaped data.
+func DecodeJsonUseNumber(reader io.Reader, v any) error {
+	decoder := json.NewDecoder(reader)
+	decoder.UseNumber()
+	return decoder.Decode(v)
+}
+
+// DecodeJsonWithValidation decodes JSON and applies Gin's configured binding-tag
+// validator, including binding:"required" and any registered custom validators.
+func DecodeJsonWithValidation(reader io.Reader, v any) error {
+	if err := DecodeJson(reader, v); err != nil {
+		return err
+	}
+	if binding.Validator == nil {
+		return nil
+	}
+	return binding.Validator.ValidateStruct(v)
 }
 
 func Marshal(v any) ([]byte, error) {

@@ -69,6 +69,7 @@ import { formatBillingCurrencyFromUSD } from '@/lib/currency'
 import { formatLogQuota, formatTokens, formatUseTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
+import { AuditDetailFields } from '../../audit/components/audit-detail-fields'
 import type { UsageLog } from '../../data/schema'
 import {
   parseLogOther,
@@ -85,6 +86,7 @@ import {
   renderAuditContent,
 } from '../../lib/format'
 import { getModelRouteInfo } from '../../lib/model-route'
+import { buildQuotaAuditOperation } from '../../lib/quota-audit-operation'
 import {
   getLogTypeConfig,
   isPerCallBilling,
@@ -553,7 +555,6 @@ interface DetailsDialogProps {
 export function DetailsDialog(props: DetailsDialogProps) {
   const { t } = useTranslation()
   const { copiedText, copyToClipboard } = useCopyToClipboard({ notify: false })
-  const details = props.log.content ?? ''
   const other = parseLogOther(props.log.other)
   const diagnostics = other?.diagnostics
   const timing = resolveLogTimingMetrics({
@@ -658,9 +659,17 @@ export function DetailsDialog(props: DetailsDialogProps) {
     return String(adminInfo.auth_method)
   })()
 
-  // Localized operation text rendered from the language-independent op
-  // descriptor (shared by audit type=3 and login type=7).
+  // Top-up, audit, and login logs share the language-independent descriptor.
+  const quotaOperation = isTopup
+    ? buildQuotaAuditOperation(
+        other?.op?.action ?? '',
+        other?.op?.params ?? {},
+        true,
+        t
+      )
+    : null
   const operationText = renderAuditContent(other, t)
+  const details = (isTopup ? operationText : null) ?? props.log.content ?? ''
   const auditRoute =
     isManage && props.isAdminView ? other?.audit_info : undefined
   // Channel update records which fields changed (stable field tokens); render
@@ -1143,13 +1152,13 @@ export function DetailsDialog(props: DetailsDialogProps) {
         )}
 
         {/* Reject reason (admin only) */}
-        {props.isAdminView && other?.reject_reason && (
+        {props.isAdminView && adminInfo?.reject_reason && (
           <DetailSection
             icon={<AlertTriangle className='size-3.5' aria-hidden='true' />}
             label={t('Reject Reason')}
             variant='danger'
           >
-            <p className='text-xs wrap-break-word'>{other.reject_reason}</p>
+            <p className='text-xs wrap-break-word'>{adminInfo.reject_reason}</p>
           </DetailSection>
         )}
 
@@ -1280,6 +1289,12 @@ export function DetailsDialog(props: DetailsDialogProps) {
                 </span>
               </div>
             )}
+          </DetailSection>
+        )}
+
+        {quotaOperation && (
+          <DetailSection label={t('Quota adjustment details')}>
+            <AuditDetailFields fields={quotaOperation.fields} />
           </DetailSection>
         )}
 

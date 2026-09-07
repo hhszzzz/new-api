@@ -54,7 +54,7 @@ func TestResponsesRequestToChatCompletionsRequestInstructionsAndScalarInput(t *t
 	assert.Equal(t, 0.9, lo.FromPtr(got.TopP))
 	assert.Nil(t, got.ParallelTooCalls)
 	assert.Empty(t, got.PromptCacheKey)
-	assert.Empty(t, got.ReasoningEffort)
+	assert.Equal(t, "medium", got.ReasoningEffort)
 	assert.Equal(t, `"user-1"`, string(got.User))
 	assert.Equal(t, "false", string(got.Store))
 	assert.Equal(t, `"24h"`, string(got.PromptCacheRetention))
@@ -102,7 +102,7 @@ func TestResponsesRequestToChatCompletionsRequestUsesModelCompatibleTokenAndReas
 		wantMaxCompletionTokens bool
 		wantReasoningEffort     string
 	}{
-		{name: "ordinary chat model", model: "openpangu-2.0-flash", wantMaxTokens: true},
+		{name: "ordinary chat model", model: "openpangu-2.0-flash", wantMaxTokens: true, wantReasoningEffort: "high"},
 		{name: "gpt five", model: "gpt-5.4", wantMaxTokens: true, wantReasoningEffort: "high"},
 		{name: "o series", model: "o3-mini", wantMaxCompletionTokens: true, wantReasoningEffort: "high"},
 		{name: "grok build", model: "grok-4.5-fast", wantMaxTokens: true, wantReasoningEffort: "high"},
@@ -788,7 +788,7 @@ func mustRawMessage(t *testing.T, value any) []byte {
 	return raw
 }
 
-func TestResponsesRequestToChatCompletionsRequestMapsReasoningEffortToVendorThinking(t *testing.T) {
+func TestResponsesRequestToChatCompletionsRequestPreservesEffortWithoutVendorGuessing(t *testing.T) {
 	tests := []struct {
 		name         string
 		model        string
@@ -796,10 +796,10 @@ func TestResponsesRequestToChatCompletionsRequestMapsReasoningEffortToVendorThin
 		wantEffort   string
 		wantThinking string
 	}{
-		{name: "glm gets thinking toggle", model: "glm-5.2", effort: "high", wantThinking: `{"type":"enabled"}`},
-		{name: "kimi explicit disable", model: "kimi-k2.5", effort: "none", wantThinking: `{"type":"disabled"}`},
-		{name: "deepseek gets thinking plus clamped effort", model: "deepseek-v4", effort: "xhigh", wantEffort: "max", wantThinking: `{"type":"enabled"}`},
-		{name: "unknown model drops effort", model: "openpangu-2.0-flash", effort: "high"},
+		{name: "glm gets thinking toggle", model: "glm-5.2", effort: "high", wantEffort: "high"},
+		{name: "kimi explicit disable", model: "kimi-k2.5", effort: "none", wantEffort: "none"},
+		{name: "deepseek gets thinking plus clamped effort", model: "deepseek-v4", effort: "xhigh", wantEffort: "xhigh"},
+		{name: "unknown model preserves effort", model: "openpangu-2.0-flash", effort: "high", wantEffort: "high"},
 	}
 
 	for _, test := range tests {

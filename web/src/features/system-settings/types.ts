@@ -229,6 +229,8 @@ export type AuthSettings = {
   'oidc.token_endpoint': string
   'oidc.user_info_endpoint': string
   TelegramOAuthEnabled: boolean
+  'telegram.client_id': string
+  'telegram.client_secret': string
   TelegramBotToken: string
   TelegramBotName: string
   LinuxDOOAuthEnabled: boolean
@@ -515,6 +517,12 @@ export type DifferencesMap = Record<
   Partial<Record<RatioType, RatioDifference>>
 >
 
+export type PricingSyncValues = Partial<Record<RatioType, number | string>>
+export type PricingSyncModels = Record<
+  string,
+  { current: PricingSyncValues; upstreams: Record<string, PricingSyncValues> }
+>
+
 export type UpstreamChannelsResponse = {
   success: boolean
   message: string
@@ -544,6 +552,7 @@ export type UpstreamRatiosResponse = {
   message: string
   data: {
     differences: DifferencesMap
+    prices: PricingSyncModels
     test_results: TestResult[]
   }
 }

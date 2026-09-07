@@ -66,11 +66,8 @@ func GeminiHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
 	}
-
-	if model_setting.GetGeminiSettings().ThinkingAdapterEnabled {
-		if request.GenerationConfig.ThinkingConfig == nil {
-			relayconvert.ApplyGeminiThinkingConfig(request, info)
-		}
+	if err := helper.ApplyReasoningModelSuffix(c, info, request); err != nil {
+		return newConvertRequestFailedError(c, info, err)
 	}
 
 	// A caller that sends generationConfig.thinkingConfig itself skips the
@@ -143,7 +140,7 @@ func GeminiHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		// 使用 ConvertGeminiRequest 转换请求格式
 		convertedRequest, err := adaptor.ConvertGeminiRequest(c, info, request)
 		if err != nil {
-			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+			return newConvertRequestFailedError(c, info, err)
 		}
 		relaycommon.AppendRequestConversionFromRequest(info, convertedRequest)
 		jsonData, err := common.Marshal(convertedRequest)
@@ -242,6 +239,9 @@ func GeminiEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo) (newAPI
 	err = helper.ModelMappedHelper(c, info, req)
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
+	}
+	if err := helper.ApplyReasoningModelSuffix(c, info, req); err != nil {
+		return newConvertRequestFailedError(c, info, err)
 	}
 
 	req.SetModelName("models/" + info.UpstreamModelName)

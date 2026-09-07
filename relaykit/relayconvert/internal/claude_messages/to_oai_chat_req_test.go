@@ -289,7 +289,7 @@ func TestClaudeMessagesRequestToOpenAIChatRejectsMalformedTools(t *testing.T) {
 }
 
 func TestClaudeMessagesRequestToOpenAIChatUsesModelCompatibleFields(t *testing.T) {
-	maxTokens := uint(4096)
+	maxTokens := uint(16384)
 	budget := 8000
 	stream := true
 	tests := []struct {
@@ -299,7 +299,7 @@ func TestClaudeMessagesRequestToOpenAIChatUsesModelCompatibleFields(t *testing.T
 		wantMaxCompletionTokens bool
 		wantReasoningEffort     string
 	}{
-		{name: "ordinary chat model", model: "openpangu-2.0-flash", wantMaxTokens: true},
+		{name: "ordinary chat model", model: "openpangu-2.0-flash", wantMaxTokens: true, wantReasoningEffort: "medium"},
 		{name: "gpt five", model: "gpt-5.4", wantMaxTokens: true, wantReasoningEffort: "medium"},
 		{name: "o series", model: "o3-mini", wantMaxCompletionTokens: true, wantReasoningEffort: "medium"},
 	}
@@ -334,7 +334,7 @@ func TestClaudeMessagesRequestToOpenAIChatUsesModelCompatibleFields(t *testing.T
 	}
 }
 
-func TestClaudeMessagesRequestToOpenAIChatUsesCCSwitchReasoningEffortMapping(t *testing.T) {
+func TestClaudeMessagesRequestToOpenAIChatPreservesExplicitReasoningEffort(t *testing.T) {
 	tests := []struct {
 		name         string
 		outputConfig string
@@ -342,9 +342,9 @@ func TestClaudeMessagesRequestToOpenAIChatUsesCCSwitchReasoningEffortMapping(t *
 		want         string
 	}{
 		{
-			name:     "adaptive uses xhigh",
+			name:     "adaptive defaults high",
 			thinking: &dto.Thinking{Type: "adaptive"},
-			want:     "xhigh",
+			want:     "high",
 		},
 		{
 			name:         "explicit output config wins",
@@ -492,7 +492,7 @@ func TestClaudeMessagesRequestToOpenAIChatBatchesToolResultMediaBeforeUserConten
 	assert.Equal(t, "continue", userContent[0].Text)
 }
 
-func TestClaudeMessagesRequestToOpenAIChatMapsThinkingToVendorParams(t *testing.T) {
+func TestClaudeMessagesRequestToOpenAIChatPreservesReasoningWithoutModelGuessing(t *testing.T) {
 	tests := []struct {
 		name         string
 		model        string
@@ -500,11 +500,11 @@ func TestClaudeMessagesRequestToOpenAIChatMapsThinkingToVendorParams(t *testing.
 		wantEffort   string
 		wantThinking string
 	}{
-		{name: "kimi thinking enabled", model: "kimi-k2.5", thinking: `{"type":"enabled","budget_tokens":20000}`, wantThinking: `{"type":"enabled"}`},
-		{name: "glm explicit disable", model: "glm-5.2", thinking: `{"type":"disabled"}`, wantThinking: `{"type":"disabled"}`},
-		{name: "deepseek budget maps to clamped effort", model: "deepseek-v4", thinking: `{"type":"enabled","budget_tokens":32000}`, wantEffort: "high", wantThinking: `{"type":"enabled"}`},
+		{name: "kimi thinking enabled", model: "kimi-k2.5", thinking: `{"type":"enabled","budget_tokens":20000}`, wantEffort: "high"},
+		{name: "glm explicit disable", model: "glm-5.2", thinking: `{"type":"disabled"}`, wantEffort: "none"},
+		{name: "deepseek budget maps to clamped effort", model: "deepseek-v4", thinking: `{"type":"enabled","budget_tokens":32000}`, wantEffort: "high"},
 		{name: "openai style keeps reasoning_effort", model: "gpt-5.4", thinking: `{"type":"enabled","budget_tokens":32000}`, wantEffort: "high"},
-		{name: "unknown model drops thinking", model: "openpangu-2.0-flash", thinking: `{"type":"enabled","budget_tokens":32000}`},
+		{name: "unknown model preserves intent", model: "openpangu-2.0-flash", thinking: `{"type":"enabled","budget_tokens":32000}`, wantEffort: "high"},
 	}
 
 	for _, test := range tests {
@@ -512,7 +512,7 @@ func TestClaudeMessagesRequestToOpenAIChatMapsThinkingToVendorParams(t *testing.
 			var request dto.ClaudeRequest
 			require.NoError(t, kitutil.Unmarshal([]byte(`{
 				"model":"`+test.model+`",
-				"max_tokens":512,
+				"max_tokens":64000,
 				"thinking":`+test.thinking+`,
 				"messages":[{"role":"user","content":"hi"}]
 			}`), &request))

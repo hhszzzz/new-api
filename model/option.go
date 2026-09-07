@@ -309,6 +309,9 @@ func validateOptionValue(key string, value string) error {
 }
 
 func UpdateOption(key string, value string) error {
+	if IsModelPricingOption(key) {
+		return UpdateModelPricingOptions(map[string]string{key: value})
+	}
 	return UpdateOptionsBulk(map[string]string{key: value})
 }
 

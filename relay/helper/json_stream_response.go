@@ -358,7 +358,7 @@ func appendResponsesJSONAsSSE(stream *bytes.Buffer, body []byte) error {
 					}
 					event.Type = "response.output_text.done"
 					event.Delta = ""
-					event.Text = content.Text
+					event.Text = common.GetPointer(content.Text)
 				case "refusal":
 					event.Type = "response.refusal.delta"
 					event.Delta = content.Refusal
@@ -367,7 +367,7 @@ func appendResponsesJSONAsSSE(stream *bytes.Buffer, body []byte) error {
 					}
 					event.Type = "response.refusal.done"
 					event.Delta = ""
-					event.Text = content.Refusal
+					event.Text = common.GetPointer(content.Refusal)
 					event.Refusal = content.Refusal
 				default:
 					continue
@@ -390,7 +390,7 @@ func appendResponsesJSONAsSSE(stream *bytes.Buffer, body []byte) error {
 				}
 				event.Type = "response.reasoning_summary_text.done"
 				event.Delta = ""
-				event.Text = summary.Text
+				event.Text = common.GetPointer(summary.Text)
 				if err := appendEvent(event); err != nil {
 					return err
 				}
@@ -411,7 +411,7 @@ func appendResponsesJSONAsSSE(stream *bytes.Buffer, body []byte) error {
 				}
 				event.Type = "response.reasoning_text.done"
 				event.Delta = ""
-				event.Text = content.Text
+				event.Text = common.GetPointer(content.Text)
 				if err := appendEvent(event); err != nil {
 					return err
 				}
@@ -430,7 +430,7 @@ func appendResponsesJSONAsSSE(stream *bytes.Buffer, body []byte) error {
 				Type:        "response.function_call_arguments.done",
 				OutputIndex: common.GetPointer(index),
 				ItemID:      item.ID,
-				Arguments:   arguments,
+				Arguments:   common.GetPointer(arguments),
 			}); err != nil {
 				return err
 			}

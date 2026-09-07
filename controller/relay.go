@@ -437,6 +437,38 @@ func writeRelayErrorResponse(c *gin.Context, relayFormat types.RelayFormat, apiE
 	}
 }
 
+// CountClaudeTokens implements Anthropic's token-counting utility endpoint.
+// It deliberately skips upstream generation and billing; callers use this
+// endpoint to size prompts before creating a Message.
+func CountClaudeTokens(c *gin.Context) {
+	request, err := helper.GetAndValidateClaudeRequest(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"type": "error",
+			"error": gin.H{
+				"type":    "invalid_request_error",
+				"message": common.MessageWithRequestId(err.Error(), c.GetString(common.RequestIdKey)),
+			},
+		})
+		return
+	}
+
+	info := relaycommon.GenRelayInfoClaude(c, request)
+	inputTokens, err := service.CountRequestToken(c, request.GetTokenCountMeta(), info)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"type": "error",
+			"error": gin.H{
+				"type":    "api_error",
+				"message": common.MessageWithRequestId(err.Error(), c.GetString(common.RequestIdKey)),
+			},
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"input_tokens": inputTokens})
+}
+
 var upgrader = websocket.Upgrader{
 	Subprotocols: []string{"realtime", "responses"},
 	CheckOrigin: func(r *http.Request) bool {
@@ -659,6 +691,11 @@ func RelayNotImplemented(c *gin.Context) {
 }
 
 func RelayNotFound(c *gin.Context) {
+	// The web fallback may already have applied static-asset cache headers.
+	// A missing API or asset can appear after an upgrade; never cache its 404.
+	c.Header("Cache-Control", "no-store, no-cache, must-revalidate, private, max-age=0")
+	c.Header("Pragma", "no-cache")
+	c.Header("Expires", "0")
 	err := types.OpenAIError{
 		Message: fmt.Sprintf("Invalid URL (%s %s)", c.Request.Method, c.Request.URL.Path),
 		Type:    "invalid_request_error",
@@ -964,6 +1001,9 @@ func executeTaskSubmissionWith(
 	}
 	task.Quota = result.Quota
 	task.Data = result.TaskData
+	if len(result.PluginState) > 0 {
+		task.PrivateData.PluginState = result.PluginState
+	}
 	task.Action = relayInfo.Action
 	if immediate := result.Immediate; immediate != nil {
 		task.Status = model.TaskStatus(immediate.Status)

@@ -160,6 +160,29 @@ vi.mock('@/components/ui/input', () => ({
   ),
 }))
 
+vi.mock('@/components/ui/combobox', () => ({
+  Combobox: (props: {
+    options?: Array<{ value: string; label: ReactNode }>
+    value: string
+    onValueChange: (value: string | null) => void
+    'aria-label'?: string
+    placeholder?: string
+  }) => (
+    <select
+      aria-label={props['aria-label'] || props.placeholder}
+      value={props.value}
+      onChange={(event) => props.onValueChange(event.currentTarget.value)}
+    >
+      <option value=''>{props.placeholder}</option>
+      {(props.options ?? []).map((item) => (
+        <option key={item.value} value={item.value}>
+          {item.label}
+        </option>
+      ))}
+    </select>
+  ),
+}))
+
 vi.mock('@/components/ui/select', () => ({
   Select: (props: {
     items?: Array<{ value: string; label: ReactNode }>
@@ -283,7 +306,7 @@ describe('user subscriptions dialog', () => {
 
     const planSelect = await screen.findByLabelText('Subscription plan')
     expect(
-      screen.getByRole('option', { name: 'Internal plan($0.00)' })
+      screen.getByRole('option', { name: 'Internal plan ($0.00)' })
     ).toBeInTheDocument()
 
     await user.selectOptions(planSelect, '1')

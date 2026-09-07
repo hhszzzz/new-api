@@ -76,6 +76,7 @@ import {
 } from '@/lib/admin-permissions'
 import { getCurrencyDisplay, getCurrencyLabel } from '@/lib/currency'
 import { formatQuota, parseQuotaFromDollars } from '@/lib/format'
+import { accountPasswordSchema } from '@/lib/password-policy'
 import { ROLE } from '@/lib/roles'
 import { useAuthStore } from '@/stores/auth-store'
 
@@ -236,12 +237,11 @@ export function UsersMutateDrawer({
       return
     }
 
-    if (!isUpdate) {
-      const passwordLength = data.password?.length || 0
-      if (passwordLength < 8 || passwordLength > 20) {
+    if (!isUpdate || data.password) {
+      if (!accountPasswordSchema.safeParse(data.password ?? '').success) {
         form.setError('password', {
           type: 'manual',
-          message: t('Password must be between 8 and 20 characters'),
+          message: t('Password must contain between 8 and 128 characters.'),
         })
         return
       }
@@ -420,7 +420,7 @@ export function UsersMutateDrawer({
                           placeholder={
                             isUpdate
                               ? t('Leave empty to keep unchanged')
-                              : t('Enter password (8-20 characters)')
+                              : t('Enter password (8–128 characters)')
                           }
                         />
                       </FormControl>
@@ -1041,7 +1041,7 @@ export function UsersMutateDrawer({
                   </h3>
                   <p className='text-muted-foreground text-xs'>
                     {t(
-                      'Third-party account bindings (read-only, managed by user in profile settings)'
+                      'Third-party account bindings (read-only, managed by user in Security & Access)'
                     )}
                   </p>
 

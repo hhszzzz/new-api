@@ -313,8 +313,13 @@ func StreamScannerHandlerWithOptions(c *gin.Context, resp *http.Response, info *
 		for {
 			// Prefer shutdown over a buffered chunk when both are ready. The second
 			// check below closes the small select race after receiving from dataChan.
+			// Observe the request context directly as well: the main loop may not
+			// have propagated cancellation to handlerCtx before an in-flight callback
+			// returns and another buffered chunk becomes ready.
 			select {
 			case <-handlerCtx.Done():
+				return
+			case <-c.Request.Context().Done():
 				return
 			default:
 			}
@@ -326,6 +331,8 @@ func StreamScannerHandlerWithOptions(c *gin.Context, resp *http.Response, info *
 				select {
 				case <-handlerCtx.Done():
 					return
+				case <-c.Request.Context().Done():
+					return
 				default:
 				}
 				sr.reset()
@@ -335,6 +342,8 @@ func StreamScannerHandlerWithOptions(c *gin.Context, resp *http.Response, info *
 					return
 				}
 			case <-handlerCtx.Done():
+				return
+			case <-c.Request.Context().Done():
 				return
 			}
 		}

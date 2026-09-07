@@ -7,7 +7,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
 	sharedbridge "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/bridge"
-	sharedchat "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/chat"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
 	sharedclaude "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/claude"
 	sharedtoolmedia "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/toolmedia"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
@@ -42,6 +42,7 @@ func ClaudeMessagesRequestToOpenAIResponses(claudeRequest dto.ClaudeRequest, inf
 		Temperature:     claudeRequest.Temperature,
 		TopP:            claudeRequest.TopP,
 		Metadata:        append([]byte(nil), claudeRequest.Metadata...),
+		ServiceTier: claudeRequest.ServiceTier,
 	}
 	if convmeta.OptionsOf(info).IncludeReasoningEncryptedContent {
 		request.Include, err = kitutil.Marshal([]string{"reasoning.encrypted_content"})
@@ -55,11 +56,11 @@ func ClaudeMessagesRequestToOpenAIResponses(claudeRequest dto.ClaudeRequest, inf
 			return nil, err
 		}
 	}
-	if sharedchat.SupportsReasoningEffort(claudeRequest.Model) {
-		if effort := claudeRequestReasoningEffort(&claudeRequest); effort != "" {
-			request.Reasoning = &dto.Reasoning{Effort: effort}
-		}
-	}
+	if request.MaxOutputTokens == nil { request.MaxOutputTokens = claudeRequest.MaxTokensToSample }
+    reasoningIntent, effectiveEffort, err := claudeRequestReasoningIntent(&claudeRequest, info)
+    if err != nil { return nil, reasoning.AsClientError(err) }
+    if err := reasoning.ApplyToOpenAIResponses(request, reasoningIntent); err != nil { return nil, reasoning.AsClientError(err) }
+    if info != nil && effectiveEffort != "" { info.SetReasoningEffort(string(effectiveEffort)) }
 
 	tools, declaredTools, err := claudeToolsToResponses(claudeRequest.Tools)
 	if err != nil {
@@ -582,7 +583,7 @@ func claudeToolChoiceToResponses(value any, declared map[string]struct{}) (any, 
 
 	parallel := !choice.DisableParallelToolUse
 	switch choice.Type {
-	case "auto":
+	case "", "auto":
 		return "auto", &parallel, nil
 	case "any":
 		if len(declared) == 0 {
@@ -644,4 +645,23 @@ func cloneStringAnyMap(value map[string]any) map[string]any {
 		clone[key] = item
 	}
 	return clone
+}
+
+func claudeRequestReasoningIntent(claudeRequest *dto.ClaudeRequest, info convmeta.Meta) (reasoning.Intent, reasoning.Effort, error) {
+	reasoningIntent, err := reasoning.FromClaude(claudeRequest)
+	if err != nil {
+		return reasoning.Intent{}, "", err
+	}
+	sourceModel := claudeRequest.Model
+	if info != nil && info.GetOriginModelName() != "" {
+		sourceModel = info.GetOriginModelName()
+	}
+	if suffix := reasoning.IntentFromState(convmeta.ReasoningStateOf(info)); !suffix.IsEmpty() {
+		reasoningIntent, err = reasoning.MergeExplicitAndSuffix(reasoningIntent, suffix, sourceModel)
+		if err != nil {
+			return reasoning.Intent{}, "", err
+		}
+	}
+	reasoningIntent = reasoning.ResolveClaudeDefault(sourceModel, reasoningIntent)
+	return reasoningIntent, reasoning.EffectiveEffort(reasoningIntent), nil
 }

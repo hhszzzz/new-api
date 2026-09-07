@@ -388,3 +388,12 @@ func geminiClaudeUsage(usage *dto.Usage) *dto.ClaudeUsage {
 	}
 	return &dto.ClaudeUsage{}
 }
+
+func (s *geminiToClaudeStreamState) StreamUsage() *dto.Usage {
+    if s == nil { return nil }
+    return s.latestUsage
+}
+
+func (s *geminiToClaudeStreamState) SetStreamUsage(usage *dto.Usage) {
+    if s != nil && usage != nil { s.latestUsage = UsageFromChatUsage(usage) }
+}

@@ -13,6 +13,7 @@ import (
 	sharedclaude "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/claude"
 	sharedtoolmedia "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/toolmedia"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
 )
 
 const (
@@ -22,7 +23,7 @@ const (
 )
 
 type openRouterRequestReasoning struct {
-	Enabled   bool   `json:"enabled"`
+	Enabled   *bool  `json:"enabled,omitempty"`
 	Effort    string `json:"effort,omitempty"`
 	MaxTokens int    `json:"max_tokens,omitempty"`
 	Exclude   bool   `json:"exclude,omitempty"`
@@ -65,6 +66,10 @@ func claudeMessagesRequestToOpenAIChat(c context.Context, claudeRequest dto.Clau
 			openAIRequest.StreamOptions = &dto.StreamOptions{IncludeUsage: true}
 		}
 	}
+	reasoningIntent, effectiveEffort, err := claudeRequestReasoningIntent(&claudeRequest, info)
+	if err != nil {
+		return nil, reasoning.AsClientError(err)
+	}
 
 	options := convmeta.OptionsOf(info)
 	isOpenRouter := options.OpenRouterDialect
@@ -78,17 +83,21 @@ func claudeMessagesRequestToOpenAIChat(c context.Context, claudeRequest dto.Clau
 			effortBytes, _ := kitutil.Marshal(effort)
 			openAIRequest.Verbosity = effortBytes
 		}
-		if claudeRequest.Thinking != nil {
+		if !reasoningIntent.IsEmpty() {
 			var reasoningConfig openRouterRequestReasoning
-			if claudeRequest.Thinking.Type == "enabled" {
+			disabled := reasoningIntent.Mode == reasoning.ModeDisabled || reasoningIntent.Effort == reasoning.EffortNone
+			enabled := !disabled
+			reasoningConfig.Enabled = &enabled
+			if enabled && reasoningIntent.BudgetTokens != nil && reasoningIntent.Mode != reasoning.ModeAdaptive {
 				reasoningConfig = openRouterRequestReasoning{
-					Enabled:   true,
-					MaxTokens: claudeRequest.Thinking.GetBudgetTokens(),
+					Enabled:   &enabled,
+					MaxTokens: *reasoningIntent.BudgetTokens,
 				}
-			} else if claudeRequest.Thinking.Type == "adaptive" {
-				reasoningConfig = openRouterRequestReasoning{
-					Enabled: true,
-				}
+			} else if enabled {
+				reasoningConfig.Effort = string(reasoning.EffectiveEffort(reasoningIntent))
+			}
+			if reasoningIntent.IncludeThoughts != nil {
+				reasoningConfig.Exclude = !*reasoningIntent.IncludeThoughts
 			}
 			reasoningJSON, err := kitutil.Marshal(reasoningConfig)
 			if err != nil {
@@ -97,20 +106,22 @@ func claudeMessagesRequestToOpenAIChat(c context.Context, claudeRequest dto.Clau
 			openAIRequest.Reasoning = reasoningJSON
 		}
 	} else {
-		effort := claudeRequestReasoningEffort(&claudeRequest)
-		if effort == "" && claudeRequest.Thinking != nil && claudeRequest.Thinking.Type == "disabled" {
-			// Thinking-by-default models (Kimi/GLM/DeepSeek) need the explicit
-			// disable; an absent thinking block stays a no-op.
-			effort = "none"
+		if err := reasoning.ApplyToOpenAIChat(&openAIRequest, reasoningIntent); err != nil {
+			return nil, reasoning.AsClientError(err)
 		}
-		sharedchat.ApplyReasoningEffort(&openAIRequest, effort)
 		if info != nil {
+			// Keep the outgoing -thinking suffix so a cascaded downstream
+			// new-api can recover reasoning intent from the model name. This
+			// is an emission-side policy, not converter-side suffix parsing.
 			thinkingSuffix := "-thinking"
-			if strings.HasSuffix(convmeta.UpstreamModelName(info), thinkingSuffix) &&
+			if strings.HasSuffix(info.GetOriginModelName(), thinkingSuffix) &&
 				!strings.HasSuffix(openAIRequest.Model, thinkingSuffix) {
 				openAIRequest.Model = openAIRequest.Model + thinkingSuffix
 			}
 		}
+	}
+	if info != nil && effectiveEffort != "" {
+		info.SetReasoningEffort(string(effectiveEffort))
 	}
 
 	if len(claudeRequest.StopSequences) == 1 {

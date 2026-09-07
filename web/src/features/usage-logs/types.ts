@@ -190,6 +190,8 @@ export interface LogOtherData {
     protocol_lossy_conversion?: string
     route_pool_name?: string
     route_rule_id?: number
+    // Reject / intercept reason (admin only)
+    reject_reason?: string
     task_plugin?: TaskPluginInfo
   }
   diagnostics?: {
@@ -305,8 +307,6 @@ export interface LogOtherData {
   violation_fee_code?: string
   violation_fee_marker?: string
   fee_quota?: number
-  // Reject / intercept reason (admin)
-  reject_reason?: string
   // Task-related fields (for refund logs, type=6)
   is_task?: boolean
   task_id?: string

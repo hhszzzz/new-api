@@ -90,6 +90,9 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
 	}
+	if err := helper.ApplyReasoningModelSuffix(c, info, request); err != nil {
+		return newConvertRequestFailedError(c, info, err)
+	}
 
 	adaptor := GetAdaptorForProtocol(info.ApiType, plan.UpstreamProtocol)
 	if adaptor == nil {
@@ -120,7 +123,7 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 
 		convertedRequest, err := convertRequestForProtocolPlan(c, info, adaptor, plan, request)
 		if err != nil {
-			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+			return newConvertRequestFailedError(c, info, err)
 		}
 		relaycommon.AppendRequestConversionFromRequest(info, convertedRequest)
 		jsonData, err := common.Marshal(convertedRequest)

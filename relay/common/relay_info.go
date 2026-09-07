@@ -14,6 +14,7 @@ import (
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
+	kitreasoning "github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -117,26 +118,29 @@ type RelayInfo struct {
 	// BillingModelName is an internal pricing identity. It is only set when
 	// billing intentionally uses a virtual or routed model variant while
 	// OriginModelName must remain the immutable client-requested identity.
-	BillingModelName      string
-	RequestURLPath        string
-	RequestHeaders        map[string]string
-	ShouldIncludeUsage    bool
-	DisablePing           bool // 是否禁止向下游发送自定义 Ping
-	ClientWs              *websocket.Conn
-	TargetWs              *websocket.Conn
-	InputAudioFormat      string
-	OutputAudioFormat     string
-	RealtimeTools         []dto.RealTimeTool
-	IsFirstRequest        bool
-	AudioUsage            bool
-	ReasoningEffort       string
-	UserSetting           dto.UserSetting
-	UserEmail             string
-	UserQuota             int
-	RelayFormat           types.RelayFormat
-	SendResponseCount     int
-	ReceivedResponseCount int
-	FinalPreConsumedQuota int // 最终预消耗的配额
+	BillingModelName        string
+	RequestURLPath          string
+	RequestHeaders          map[string]string
+	ShouldIncludeUsage      bool
+	DisablePing             bool // 是否禁止向下游发送自定义 Ping
+	ClientWs                *websocket.Conn
+	TargetWs                *websocket.Conn
+	InputAudioFormat        string
+	OutputAudioFormat       string
+	RealtimeTools           []dto.RealTimeTool
+	IsFirstRequest          bool
+	AudioUsage              bool
+	ReasoningEffort         string
+	UserSetting             dto.UserSetting
+	UserEmail               string
+	UserQuota               int
+	RelayFormat             types.RelayFormat
+	SendResponseCount       int
+	ReceivedResponseCount   int
+	FinalPreConsumedQuota   int // 最终预消耗的配额
+	ReasoningConversion     *dto.ReasoningConversionState
+	ClaudeToChatStreamState any
+	ChatToGeminiStreamState any
 	// ForcePreConsume 为 true 时禁用 BillingSession 的信任额度旁路，
 	// 强制预扣全额。用于异步任务（视频/音乐生成等），因为请求返回后任务仍在运行，
 	// 必须在提交前锁定全额。
@@ -202,6 +206,10 @@ type RelayInfo struct {
 	// convOptions caches the converter settings snapshot (see ConvOptions).
 	convOptions *convmeta.Options
 
+	conversionDiagnostics          []types.ConversionDiagnostic
+	conversionDiagnosticKeys       map[conversionDiagnosticKey]struct{}
+	conversionDiagnosticsTruncated bool
+
 	ThinkingContentInfo
 	TokenCountMeta
 	*ClaudeConvertInfo
@@ -209,16 +217,6 @@ type RelayInfo struct {
 	*ResponsesUsageInfo
 	*ChannelMeta
 	*TaskRelayInfo
-}
-
-func (info *RelayInfo) GetBillingModelName() string {
-	if info == nil {
-		return ""
-	}
-	if info.BillingModelName != "" {
-		return info.BillingModelName
-	}
-	return info.OriginModelName
 }
 
 func (info *RelayInfo) HasModelRouting() bool {
@@ -392,7 +390,16 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 	info.RequestConversionChain = nil
 	info.InitRequestConversionChain()
 	info.FinalRequestRelayFormat = ""
-	info.StreamStatus = nil
+	// Terminal and delivery state belongs to one upstream attempt. Keep only
+	// accumulated soft-error evidence for request-level diagnostics.
+	if info.StreamStatus != nil && info.StreamStatus.HasErrors() {
+		previous := info.StreamStatus.Snapshot()
+		info.StreamStatus = NewStreamStatus()
+		info.StreamStatus.errors = previous.Errors
+		info.StreamStatus.errorCount = previous.ErrorCount
+	} else {
+		info.StreamStatus = nil
+	}
 	info.ThinkingContentInfo = ThinkingContentInfo{IsFirstThinkingContent: true}
 	info.SendResponseCount = 0
 	info.ReceivedResponseCount = 0
@@ -426,6 +433,8 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 		info.ResponsesUsageInfo = nil
 	}
 
+	info.ClaudeToChatStreamState = nil
+	info.ChatToGeminiStreamState = nil
 	channelType := common.GetContextKeyInt(c, constant.ContextKeyChannelType)
 	paramOverride := common.GetContextKeyStringMap(c, constant.ContextKeyChannelParamOverride)
 	headerOverride := common.GetContextKeyStringMap(c, constant.ContextKeyChannelHeaderOverride)
@@ -479,8 +488,10 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 	info.convOptions = nil
 	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || channelMeta.ChannelSetting.PassThroughBodyEnabled {
 		info.ReasoningEffort = ""
+		info.ReasoningConversion = nil
 	} else {
 		info.ReasoningEffort = reasoningEffortFromRequest(info.Request)
+		info.ReasoningConversion = nil
 	}
 
 	// reset some fields based on channel meta
@@ -504,6 +515,9 @@ func (info *RelayInfo) ToString() string {
 	fmt.Fprintf(b, "IsPlayground: %t, ", info.IsPlayground)
 	fmt.Fprintf(b, "RequestURLPath: %q, ", info.RequestURLPath)
 	fmt.Fprintf(b, "OriginModelName: %q, ", info.OriginModelName)
+	if info.BillingModelName != "" && info.BillingModelName != info.OriginModelName {
+		fmt.Fprintf(b, "BillingModelName: %q, ", info.BillingModelName)
+	}
 	fmt.Fprintf(b, "EstimatePromptTokens: %d, ", info.estimatePromptTokens)
 	fmt.Fprintf(b, "ShouldIncludeUsage: %t, ", info.ShouldIncludeUsage)
 	fmt.Fprintf(b, "DisablePing: %t, ", info.DisablePing)
@@ -714,7 +728,11 @@ func reasoningEffortFromRequest(request dto.Request) string {
 		}
 	case *dto.GeminiChatRequest:
 		if req != nil && req.GenerationConfig.ThinkingConfig != nil {
-			effort = req.GenerationConfig.ThinkingConfig.ThinkingLevel
+			config := req.GenerationConfig.ThinkingConfig
+			effort = config.ThinkingLevel
+			if effort == "" && config.ThinkingBudget != nil {
+				effort = string(kitreasoning.EffortFromBudget(*config.ThinkingBudget))
+			}
 		}
 	}
 	return strings.TrimSpace(effort)
@@ -751,6 +769,7 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 		reqId = common.NewRequestId()
 	}
 	reasoningEffort := reasoningEffortFromRequest(request)
+	originModelName := common.GetContextKeyString(c, constant.ContextKeyOriginalModel)
 	info := &RelayInfo{
 		Request:         request,
 		ReasoningEffort: reasoningEffort,
@@ -762,7 +781,7 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 		UserQuota:  common.GetContextKeyInt(c, constant.ContextKeyUserQuota),
 		UserEmail:  common.GetContextKeyString(c, constant.ContextKeyUserEmail),
 
-		OriginModelName:      common.GetContextKeyString(c, constant.ContextKeyOriginalModel),
+		OriginModelName:      originModelName,
 		UserModelRouteId:     common.GetContextKeyInt(c, constant.ContextKeyUserModelRouteId),
 		RouteTargetModelName: common.GetContextKeyString(c, constant.ContextKeyUserModelRouteTarget),
 		RouteExecutionGroup:  common.GetContextKeyString(c, constant.ContextKeyUserModelRouteGroup),
@@ -1001,6 +1020,18 @@ func (info *RelayInfo) GetOriginModelName() string {
 	return info.OriginModelName
 }
 
+// GetBillingModelName returns the effective pricing identity without changing
+// either the client-visible model or the model sent to the selected channel.
+func (info *RelayInfo) GetBillingModelName() string {
+	if info == nil {
+		return ""
+	}
+	if info.BillingModelName != "" {
+		return info.BillingModelName
+	}
+	return info.OriginModelName
+}
+
 func (info *RelayInfo) GetUpstreamModelName() string {
 	if info == nil || info.ChannelMeta == nil {
 		return ""
@@ -1040,6 +1071,13 @@ func (info *RelayInfo) SetReasoningEffort(effort string) {
 		return
 	}
 	info.ReasoningEffort = strings.TrimSpace(effort)
+}
+
+func (info *RelayInfo) ReasoningState() *dto.ReasoningConversionState {
+	if info == nil {
+		return nil
+	}
+	return info.ReasoningConversion
 }
 
 func (info *RelayInfo) EnsureClaudeConvertInfo() *convmeta.ClaudeConvertInfo {
@@ -1097,8 +1135,12 @@ func (info *RelayInfo) ConvOptions() *convmeta.Options {
 		},
 		OpenRouterDialect:      info != nil && info.GetChannelType() == constant.ChannelTypeOpenRouter,
 		PreserveThinkingSuffix: model_setting.ShouldPreserveThinkingSuffix,
+		PreserveEffortTail:     model_setting.ShouldPreserveEffortTail,
 	}
 	if info != nil {
+		if info.ChannelMeta != nil {
+			options.ToolLossPolicy = types.ConversionLossPolicy(info.ChannelOtherSettings.ToolLossPolicy)
+		}
 		info.convOptions = options
 	}
 	return options
@@ -1255,16 +1297,17 @@ func (t *TaskSubmitReq) UnmarshalMetadata(v any) error {
 }
 
 type TaskInfo struct {
-	Code             int            `json:"code"`
-	TaskID           string         `json:"task_id"`
-	Status           string         `json:"status"`
-	Reason           string         `json:"reason,omitempty"`
-	Url              string         `json:"url,omitempty"`
-	RemoteUrl        string         `json:"remote_url,omitempty"`
-	Progress         string         `json:"progress,omitempty"`
-	CompletionTokens int            `json:"completion_tokens,omitempty"` // 用于按倍率计费
-	TotalTokens      int            `json:"total_tokens,omitempty"`      // 用于按倍率计费
-	UsageFacts       map[string]any `json:"usage_facts,omitempty"`
+	Code             int             `json:"code"`
+	TaskID           string          `json:"task_id"`
+	Status           string          `json:"status"`
+	Reason           string          `json:"reason,omitempty"`
+	Url              string          `json:"url,omitempty"`
+	RemoteUrl        string          `json:"remote_url,omitempty"`
+	Progress         string          `json:"progress,omitempty"`
+	CompletionTokens int             `json:"completion_tokens,omitempty"` // 用于按倍率计费
+	TotalTokens      int             `json:"total_tokens,omitempty"`      // 用于按倍率计费
+	UsageFacts       map[string]any  `json:"usage_facts,omitempty"`
+	PluginState      json.RawMessage `json:"plugin_state,omitempty"`
 }
 
 func FailTaskInfo(reason string) *TaskInfo {

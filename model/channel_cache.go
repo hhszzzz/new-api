@@ -150,7 +150,7 @@ func GetRandomSatisfiedChannelInPoolWithClassifier(group string, model string, r
 
 	// If no channels found, try to find channels with the normalized model name.
 	if len(channels) == 0 {
-		normalizedModel := ratio_setting.FormatMatchingModelName(model)
+		normalizedModel := ratio_setting.RoutingMatchModelName(model)
 		channels = filterChannelIdsByPool(group2model2channels[group][normalizedModel], allowedChannelIds)
 		channels = filterChannelsByRequestPathAndModel(channels, requestPath, model)
 		channels = filterChannelIdsByCandidate(channels, candidateFilter)

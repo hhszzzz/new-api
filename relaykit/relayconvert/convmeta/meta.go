@@ -29,6 +29,10 @@ type Meta interface {
 	// SetReasoningEffort records the effort level a converter derived from a
 	// model-name suffix so downstream billing/logging can see it.
 	SetReasoningEffort(effort string)
+	// ReasoningState returns the suffix-derived reasoning intent attached at
+	// the host entry layer. Standalone callers that do not set it receive nil;
+	// converters then use only explicit request fields.
+	ReasoningState() *dto.ReasoningConversionState
 	GetEstimatePromptTokens() int
 
 	// EnsureClaudeConvertInfo lazily creates and returns the mutable
@@ -61,20 +65,26 @@ type ClaudeConvertInfo struct {
 
 	ToolCallBaseIndex      int
 	ToolCallMaxIndexOffset int
-	ToolCallNextIndex      int
-	ToolCallStartedCount   int
-	ToolCalls              map[int]*ClaudeToolCallStreamState
-	UsedToolCallIDs        map[string]struct{}
-
+	ToolCallNextIndex int
+	ToolCallStartedCount int
+	UsedToolCallIDs map[string]struct{}
 	ThinkTagSplitter sharedchat.ThinkTagSplitter
+	ToolCalls              []*ClaudeStreamToolCall
+	ToolCallByIndex        map[int]*ClaudeStreamToolCall
+	ToolCallByID           map[string]*ClaudeStreamToolCall
 }
 
-type ClaudeToolCallStreamState struct {
+// ClaudeStreamToolCall tracks one OpenAI tool_calls entry while it is encoded
+// as a Claude tool_use content block. Chat tool indexes and Claude content
+// block indexes are separate domains, so the mapping must remain explicit.
+type ClaudeStreamToolCall struct {
+	ChatIndex int
+	SourceID string
+	BlockIndex       int
 	ID               string
 	Name             string
 	PendingArguments string
 	Started          bool
-	BlockIndex       int
 }
 
 const (
@@ -94,6 +104,7 @@ type Values struct {
 	ChannelType          int
 	IsStream             bool
 	ReasoningEffort      string
+	ReasoningConversion  *dto.ReasoningConversionState
 	EstimatePromptTokens int
 
 	ClaudeConvertInfo *ClaudeConvertInfo
@@ -152,6 +163,13 @@ func (v *Values) SetReasoningEffort(effort string) {
 	if v != nil {
 		v.ReasoningEffort = effort
 	}
+}
+
+func (v *Values) ReasoningState() *dto.ReasoningConversionState {
+	if v == nil {
+		return nil
+	}
+	return v.ReasoningConversion
 }
 
 func (v *Values) GetEstimatePromptTokens() int {
@@ -227,4 +245,12 @@ func OptionsOf(m Meta) *Options {
 		return &Options{}
 	}
 	return m.ConvOptions()
+}
+
+// ReasoningStateOf is a nil-safe reader for Meta.ReasoningState.
+func ReasoningStateOf(m Meta) *dto.ReasoningConversionState {
+	if m == nil {
+		return nil
+	}
+	return m.ReasoningState()
 }

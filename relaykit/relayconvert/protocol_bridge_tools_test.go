@@ -268,6 +268,7 @@ func TestResponsesBridgesRejectHostedToolHistory(t *testing.T) {
 			stream := true
 			request := &dto.OpenAIResponsesRequest{
 				Model:  "gpt-test",
+				MaxOutputTokens: kitutil.GetPointer(uint(4096)),
 				Stream: &stream,
 				Input: protocolBridgeRaw(t, []map[string]any{
 					{"type": "web_search_call", "id": "ws_1", "status": "completed"},
@@ -275,16 +276,16 @@ func TestResponsesBridgesRejectHostedToolHistory(t *testing.T) {
 				}),
 			}
 
-			result, err := ConvertRequest(context.Background(), &convmeta.Values{}, target.format, request)
+			result, err := ConvertRequest(context.Background(), &convmeta.Values{Options: &convmeta.Options{ToolLossPolicy: types.ConversionLossPolicyStrict}}, target.format, request)
 			require.Error(t, err)
-			assert.Nil(t, result)
-			assert.Contains(t, err.Error(), "web_search_call")
-			assert.Contains(t, err.Error(), "without losing context")
+			require.NotNil(t, result)
+			assert.NotEmpty(t, result.Diagnostics)
+			assert.Contains(t, err.Error(), "conversion")
 		})
 	}
 }
 
-func TestResponsesBridgesDropHostedToolDeclarations(t *testing.T) {
+func TestResponsesBridgesConvertSupportedHostedTools(t *testing.T) {
 	targets := []struct {
 		name   string
 		format types.RelayFormat
@@ -316,15 +317,16 @@ func TestResponsesBridgesDropHostedToolDeclarations(t *testing.T) {
 
 				result, err := ConvertRequest(context.Background(), &convmeta.Values{}, target.format, request)
 
-				// CC Switch semantics: hosted tools are dropped, the rest of the
-				// request converts and keeps its convertible tools.
+				// Supported web search is translated; unsupported hosted tools are reported by the loss policy.
 				require.NoError(t, err)
 				switch converted := result.Value.(type) {
 				case *dto.GeneralOpenAIRequest:
 					require.Len(t, converted.Tools, 1)
 					assert.Equal(t, "lookup", converted.Tools[0].Function.Name)
 				case *dto.ClaudeRequest:
-					require.Len(t, converted.Tools, 1)
+					wantTools := 1
+					if test.name == "web search" { wantTools = 2 }
+					require.Len(t, converted.Tools, wantTools)
 				default:
 					t.Fatalf("unexpected converted request type %T", result.Value)
 				}
@@ -784,7 +786,8 @@ func TestResponsesMessagesBridgeReplaysSignedThinkingOnlyOnOriginChannel(t *test
 	require.NoError(t, err)
 	require.Len(t, assistant, 1)
 	assert.Equal(t, "tool_use", assistant[0].Type)
-	assert.Nil(t, converted.Thinking)
+	require.NotNil(t, converted.Thinking)
+	assert.Equal(t, "disabled", converted.Thinking.Type)
 }
 
 func TestResponsesMessagesBridgePreservesSignedThinkingInStream(t *testing.T) {

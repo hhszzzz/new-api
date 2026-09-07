@@ -1,12 +1,13 @@
 package gemini
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
-	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
 )
 
@@ -111,103 +112,126 @@ func AttachFirstTextThoughtSignature(opts *convmeta.Options, parts []dto.GeminiP
 	return false
 }
 
-func ApplyThinkingConfig(geminiRequest *dto.GeminiChatRequest, info convmeta.Meta, oaiRequest ...dto.GeneralOpenAIRequest) {
+func ApplyThinkingConfig(geminiRequest *dto.GeminiChatRequest, info convmeta.Meta, oaiRequest ...dto.GeneralOpenAIRequest) error {
 	opts := convmeta.OptionsOf(info)
-	if geminiRequest == nil || info == nil || !opts.Gemini.ThinkingAdapterEnabled {
-		return
+	if geminiRequest == nil {
+		return nil
 	}
 
 	modelName := convmeta.UpstreamModelName(info)
-	isNew25Pro := strings.HasPrefix(modelName, "gemini-2.5-pro") &&
-		!strings.HasPrefix(modelName, "gemini-2.5-pro-preview-05-06") &&
-		!strings.HasPrefix(modelName, "gemini-2.5-pro-preview-03-25")
+	var source reasoning.Intent
+	crossProtocol := len(oaiRequest) > 0
+	if len(oaiRequest) > 0 {
+		if modelName == "" {
+			modelName = oaiRequest[0].Model
+		}
+		var err error
+		source, err = reasoning.FromOpenAIChat(&oaiRequest[0])
+		if err != nil {
+			return err
+		}
+	}
 
-	if strings.Contains(modelName, "-thinking-") {
-		parts := strings.SplitN(modelName, "-thinking-", 2)
-		if len(parts) == 2 && parts[1] != "" {
-			if budgetTokens, err := strconv.Atoi(parts[1]); err == nil {
-				clampedBudget := clampThinkingBudget(modelName, budgetTokens)
-				geminiRequest.GenerationConfig.ThinkingConfig = &dto.GeminiThinkingConfig{
-					ThinkingBudget:  kitutil.GetPointer(clampedBudget),
-					IncludeThoughts: true,
+	baseModel := modelName
+	suffix := reasoning.IntentFromState(convmeta.ReasoningStateOf(info))
+	preserveSuffix := opts.ShouldPreserveThinkingSuffix(modelName)
+	if info != nil && opts.ShouldPreserveThinkingSuffix(info.GetOriginModelName()) {
+		preserveSuffix = true
+	}
+	if preserveSuffix {
+		suffix = reasoning.Intent{}
+	}
+	// Native Gemini requests already use the target protocol. Without a host
+	// modifier, read portable effort metadata without running the capability
+	// renderer or rewriting provider-native controls.
+	if !crossProtocol && suffix.IsEmpty() {
+		if info != nil {
+			effort := ""
+			if config := geminiRequest.GenerationConfig.ThinkingConfig; config != nil {
+				effort = config.ThinkingLevel
+				if effort == "" && config.ThinkingBudget != nil {
+					effort = string(reasoning.EffortFromBudget(*config.ThinkingBudget))
 				}
 			}
+			info.SetReasoningEffort(effort)
 		}
-	} else if strings.HasSuffix(modelName, "-thinking") {
-		unsupportedModels := []string{
-			"gemini-2.5-pro-preview-05-06",
-			"gemini-2.5-pro-preview-03-25",
+		return nil
+	}
+	native, err := reasoning.FromGemini(geminiRequest)
+	if err != nil {
+		return err
+	}
+	source = reasoning.ResolveGeminiEnabledDefault(baseModel, source, geminiRequest.GenerationConfig.MaxOutputTokens)
+	if native.HasStrength() && source.HasStrength() {
+		equivalent, compareErr := reasoning.EquivalentGeminiStrength(baseModel, native, source)
+		if compareErr != nil {
+			return compareErr
 		}
-		isUnsupported := false
-		for _, unsupportedModel := range unsupportedModels {
-			if strings.HasPrefix(modelName, unsupportedModel) {
-				isUnsupported = true
-				break
+		if !equivalent {
+			nativeEffort := reasoning.EffectiveEffort(native)
+			sourceEffort := reasoning.EffectiveEffort(source)
+			return fmt.Errorf("%w for model %q: Gemini thinking_config effort %q differs from standard effort %q", reasoning.ErrEffortConflict, modelName, nativeEffort, sourceEffort)
+		}
+		// Native Gemini configuration is the lossless representation. Once the
+		// two controls are equivalent, retain only portable visibility metadata
+		// from the standard representation.
+		if native.IncludeThoughts == nil {
+			native.IncludeThoughts = source.IncludeThoughts
+		}
+		source = reasoning.Intent{}
+	}
+	explicit, err := reasoning.MergeExplicit(native, source, modelName)
+	if err != nil {
+		return err
+	}
+	if explicit.HasStrength() && suffix.HasStrength() {
+		equivalent, compareErr := reasoning.EquivalentGeminiStrength(baseModel, explicit, suffix)
+		if compareErr != nil {
+			return compareErr
+		}
+		if equivalent {
+			if explicit.IncludeThoughts == nil {
+				explicit.IncludeThoughts = suffix.IncludeThoughts
 			}
+			suffix = reasoning.Intent{}
 		}
+	}
+	requested, err := reasoning.MergeExplicitAndSuffix(explicit, suffix, modelName)
+	if err != nil {
+		return err
+	}
+	requested = reasoning.ResolveGeminiEnabledDefault(baseModel, requested, geminiRequest.GenerationConfig.MaxOutputTokens)
 
-		if isUnsupported {
-			geminiRequest.GenerationConfig.ThinkingConfig = &dto.GeminiThinkingConfig{
-				IncludeThoughts: true,
-			}
-		} else {
-			geminiRequest.GenerationConfig.ThinkingConfig = &dto.GeminiThinkingConfig{
-				IncludeThoughts: true,
-			}
-			if geminiRequest.GenerationConfig.MaxOutputTokens != nil && *geminiRequest.GenerationConfig.MaxOutputTokens > 0 {
-				budgetTokens := opts.Gemini.ThinkingAdapterBudgetTokensPercentage * float64(*geminiRequest.GenerationConfig.MaxOutputTokens)
-				clampedBudget := clampThinkingBudget(modelName, int(budgetTokens))
-				geminiRequest.GenerationConfig.ThinkingConfig.ThinkingBudget = kitutil.GetPointer(clampedBudget)
-			} else if len(oaiRequest) > 0 {
-				geminiRequest.GenerationConfig.ThinkingConfig.ThinkingBudget = kitutil.GetPointer(clampThinkingBudgetByEffort(modelName, oaiRequest[0].ReasoningEffort))
-			}
+	if native.HasStrength() && !suffix.HasStrength() {
+		if explicit.IncludeThoughts != nil {
+			geminiRequest.GenerationConfig.ThinkingConfig.IncludeThoughts = explicit.IncludeThoughts
 		}
-	} else if strings.HasSuffix(modelName, "-nothinking") {
-		if !isNew25Pro {
-			geminiRequest.GenerationConfig.ThinkingConfig = &dto.GeminiThinkingConfig{
-				ThinkingBudget: kitutil.GetPointer(0),
-			}
+		effort, err := reasoning.ValidateGeminiThinkingConfig(baseModel, geminiRequest.GenerationConfig.ThinkingConfig)
+		if err != nil {
+			return err
 		}
-	} else if _, level, ok := reasoning.TrimEffortSuffix(modelName); ok && level != "" {
-		geminiRequest.GenerationConfig.ThinkingConfig = &dto.GeminiThinkingConfig{
-			IncludeThoughts: true,
-			ThinkingLevel:   level,
+		if info != nil && effort != "" {
+			info.SetReasoningEffort(string(effort))
 		}
+		return nil
 	}
-
-	RecordReasoningEffort(geminiRequest, info)
-}
-
-// RecordReasoningEffort publishes the effort level of an outbound Gemini request
-// onto the relay info so the consume log can show it.
-//
-// It must be called once the thinking config is final, so the log reports what
-// actually goes upstream. Callers that send generationConfig.thinkingConfig
-// themselves skip the thinking adapter entirely, so the native path has to
-// record too rather than relying on ApplyThinkingConfig.
-//
-// Gemini expresses effort either as a native level (thinkingLevel) or as a token
-// budget (thinkingBudget), so both are folded onto the shared vocabulary. A
-// missing config means the model was left at its default, which is not an
-// explicit effort choice and is therefore not reported.
-func RecordReasoningEffort(geminiRequest *dto.GeminiChatRequest, info convmeta.Meta) {
-	if geminiRequest == nil || info == nil {
-		return
+	if requested.IsEmpty() {
+		return nil
 	}
-	config := geminiRequest.GenerationConfig.ThinkingConfig
-	if config == nil {
-		return
+	rendered, err := reasoning.RenderGemini(
+		baseModel,
+		requested,
+		geminiRequest.GenerationConfig.MaxOutputTokens,
+		opts.Gemini.ThinkingAdapterBudgetTokensPercentage,
+	)
+	if err != nil {
+		return err
 	}
-	if level := reasoning.NormalizeEffort(config.ThinkingLevel); level != "" {
-		info.SetReasoningEffort(level)
-		return
+	geminiRequest.GenerationConfig.ThinkingConfig = rendered.Config
+	if info != nil && rendered.EffectiveEffort != "" {
+		info.SetReasoningEffort(string(rendered.EffectiveEffort))
 	}
-	if config.ThinkingBudget == nil {
-		return
-	}
-	if effort := reasoning.EffortFromBudgetTokens(*config.ThinkingBudget); effort != "" && effort != reasoning.EffortNone {
-		info.SetReasoningEffort(effort)
-	}
+	return nil
 }
 
 func ParseStopSequences(stop any) []string {
@@ -264,67 +288,14 @@ func SupportedMimeTypesList() []string {
 	return keys
 }
 
-func isNew25ProModel(modelName string) bool {
-	return strings.HasPrefix(modelName, "gemini-2.5-pro") &&
-		!strings.HasPrefix(modelName, "gemini-2.5-pro-preview-05-06") &&
-		!strings.HasPrefix(modelName, "gemini-2.5-pro-preview-03-25")
-}
-
-func is25FlashLiteModel(modelName string) bool {
-	return strings.HasPrefix(modelName, "gemini-2.5-flash-lite")
-}
-
-func clampThinkingBudget(modelName string, budget int) int {
-	isNew25Pro := isNew25ProModel(modelName)
-	is25FlashLite := is25FlashLiteModel(modelName)
-
-	if is25FlashLite {
-		if budget < flash25LiteMinBudget {
-			return flash25LiteMinBudget
-		}
-		if budget > flash25LiteMaxBudget {
-			return flash25LiteMaxBudget
-		}
-	} else if isNew25Pro {
-		if budget < pro25MinBudget {
-			return pro25MinBudget
-		}
-		if budget > pro25MaxBudget {
-			return pro25MaxBudget
-		}
-	} else {
-		if budget < 0 {
-			return 0
-		}
-		if budget > flash25MaxBudget {
-			return flash25MaxBudget
-		}
-	}
-	return budget
-}
-
-func clampThinkingBudgetByEffort(modelName string, effort string) int {
-	isNew25Pro := isNew25ProModel(modelName)
-	is25FlashLite := is25FlashLiteModel(modelName)
-
-	maxBudget := 0
-	if is25FlashLite {
-		maxBudget = flash25LiteMaxBudget
-	}
-	if isNew25Pro {
-		maxBudget = pro25MaxBudget
-	} else {
-		maxBudget = flash25MaxBudget
-	}
-	switch effort {
-	case "high":
-		maxBudget = maxBudget * 80 / 100
-	case "medium":
-		maxBudget = maxBudget * 50 / 100
-	case "low":
-		maxBudget = maxBudget * 20 / 100
-	case "minimal":
-		maxBudget = maxBudget * 5 / 100
-	}
-	return clampThinkingBudget(modelName, maxBudget)
+// RecordReasoningEffort records explicit native Gemini controls without rewriting them.
+func RecordReasoningEffort(request *dto.GeminiChatRequest, info convmeta.Meta) {
+    if request == nil || info == nil { return }
+    config := request.GenerationConfig.ThinkingConfig
+    if config == nil { return }
+    if config.ThinkingLevel != "" {
+        info.SetReasoningEffort(strings.ToLower(strings.TrimSpace(config.ThinkingLevel)))
+    } else if config.ThinkingBudget != nil && *config.ThinkingBudget > 0 {
+        info.SetReasoningEffort(string(reasoning.EffortFromBudget(*config.ThinkingBudget)))
+    }
 }

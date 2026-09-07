@@ -137,7 +137,7 @@ func (o *ChannelRateLimitObservation) noteRedisFailOpen(component string) {
 	o.mu.Unlock()
 }
 
-func AppendChannelRateLimitAdminInfo(c *gin.Context, other map[string]interface{}) {
+func AppendChannelRateLimitAdminInfo(c *gin.Context, other *model.LogOther) {
 	if c == nil || other == nil {
 		return
 	}
@@ -203,12 +203,7 @@ func AppendChannelRateLimitAdminInfo(c *gin.Context, other map[string]interface{
 		info["redis_fail_open"] = failOpen
 	}
 
-	adminInfo, ok := other["admin_info"].(map[string]interface{})
-	if !ok || adminInfo == nil {
-		adminInfo = make(map[string]interface{})
-		other["admin_info"] = adminInfo
-	}
-	adminInfo["channel_rate_limits"] = info
+	other.SetAdmin("channel_rate_limits", info)
 }
 
 type ChannelRateLimitGuard struct {

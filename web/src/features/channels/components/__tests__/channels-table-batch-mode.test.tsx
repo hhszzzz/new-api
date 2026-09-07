@@ -59,7 +59,8 @@ vi.mock('@/lib/lobe-icon', () => ({
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string) => key,
+    t: (key: string, options?: { count?: number }) =>
+      key.replace('{{count}}', String(options?.count ?? '')),
     i18n: { language: 'en', resolvedLanguage: 'en' },
   }),
 }))
@@ -206,7 +207,7 @@ describe('channels table batch mode', () => {
 
     expect(
       screen.getByRole('toolbar', {
-        name: 'Bulk actions for 2 selected channels',
+        name: 'Bulk actions for 2 selected records',
       })
     ).toBeVisible()
 

@@ -209,7 +209,7 @@ func TestConvertOpenAIResponsesRequestToGeminiRejectsLossyToolsAndHistory(t *tes
 			input: []map[string]any{{
 				"type": "web_search_call",
 			}},
-			want: `input item type "web_search_call" cannot be converted losslessly`,
+			want: `cannot preserve hosted-tool continuation item "web_search_call"`,
 		},
 		{
 			name: "unsupported content block",
@@ -238,6 +238,9 @@ func TestConvertOpenAIResponsesRequestToGeminiRejectsLossyToolsAndHistory(t *tes
 				OriginModelName: request.Model,
 				ChannelMeta: &relaycommon.ChannelMeta{
 					UpstreamModelName: request.Model,
+					ChannelOtherSettings: dto.ChannelOtherSettings{
+						ToolLossPolicy: "strict",
+					},
 				},
 			}
 

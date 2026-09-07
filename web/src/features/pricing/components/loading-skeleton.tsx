@@ -16,179 +16,117 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { Card, CardContent, CardFooter, CardHeader } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 
 import { VIEW_MODES, type ViewMode } from '../constants'
-
-const SIDEBAR_SKELETON_IDS = [
-  'sidebar-1',
-  'sidebar-2',
-  'sidebar-3',
-  'sidebar-4',
-  'sidebar-5',
-  'sidebar-6',
-]
-const CARD_SKELETON_IDS = [
-  'card-1',
-  'card-2',
-  'card-3',
-  'card-4',
-  'card-5',
-  'card-6',
-  'card-7',
-  'card-8',
-  'card-9',
-]
-const FILTER_SKELETONS = [
-  { id: 'filter-1', width: 80 },
-  { id: 'filter-2', width: 90 },
-  { id: 'filter-3', width: 75 },
-  { id: 'filter-4', width: 85 },
-  { id: 'filter-5', width: 70 },
-]
-const TABLE_COLUMNS = [
-  { id: 'model', width: 200 },
-  { id: 'type', width: 110 },
-  { id: 'price', width: 180 },
-  { id: 'cached', width: 110 },
-  { id: 'vendor', width: 130 },
-  { id: 'actions', width: 90 },
-]
-const TABLE_ROW_SKELETON_IDS = [
-  'row-1',
-  'row-2',
-  'row-3',
-  'row-4',
-  'row-5',
-  'row-6',
-  'row-7',
-  'row-8',
-  'row-9',
-  'row-10',
-]
-const PAGINATION_SKELETON_IDS = ['previous', 'page-1', 'page-2', 'next']
 
 export interface LoadingSkeletonProps {
   viewMode?: ViewMode
 }
 
 export function LoadingSkeleton(props: LoadingSkeletonProps) {
-  const viewMode = props.viewMode ?? VIEW_MODES.CARD
-
   return (
-    <div>
-      <Skeleton className='mb-4 h-10 w-full max-w-2xl rounded-lg' />
-      <div className='grid gap-4 xl:grid-cols-[330px_minmax(0,1fr)]'>
-        <div className='hidden rounded-xl border p-4 xl:flex xl:flex-col xl:gap-4'>
-          <Skeleton className='h-5 w-24' />
-          {SIDEBAR_SKELETON_IDS.map((id) => (
-            <Skeleton key={id} className='h-8 w-full rounded-lg' />
+    <div aria-busy='true'>
+      <div className='mx-auto mb-5 flex max-w-3xl flex-col items-center pt-5 sm:mb-10 sm:pt-10'>
+        <Skeleton className='h-[clamp(2.3rem,6.325vw,4.025rem)] w-48 max-w-full sm:w-64' />
+        <Skeleton className='mt-3 h-5 w-56 max-w-full sm:mt-4 sm:h-6' />
+        <Skeleton className='mt-2 h-5 w-full max-w-xl' />
+        <Skeleton className='mt-4 h-10 w-full max-w-2xl sm:mt-6' />
+      </div>
+      <div className='grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)]'>
+        <div className='hidden self-start rounded-xl border p-3 xl:block'>
+          <Skeleton className='mb-4 h-5 w-24' />
+          {Array.from({ length: 5 }, (_, index) => (
+            <div
+              key={index}
+              className='flex flex-col gap-3 border-b py-4 last:border-0'
+            >
+              <Skeleton className='h-4 w-28' />
+              <div className='flex flex-wrap gap-2'>
+                <Skeleton className='h-7 w-24' />
+                <Skeleton className='h-7 w-20' />
+                <Skeleton className='h-7 w-28' />
+              </div>
+            </div>
           ))}
         </div>
         <div className='flex min-w-0 flex-col gap-4'>
-          <FilterBarSkeleton />
-          {viewMode === VIEW_MODES.TABLE ? (
-            <TableContentSkeleton />
+          <div className='flex flex-wrap items-center justify-between gap-3 rounded-xl border p-3'>
+            <Skeleton className='h-7 w-20' />
+            <div className='flex flex-wrap gap-2'>
+              <Skeleton className='h-7 w-32' />
+              <Skeleton className='h-7 w-20' />
+              <Skeleton className='h-7 w-24' />
+            </div>
+          </div>
+          {props.viewMode === VIEW_MODES.TABLE ? (
+            <div className='overflow-hidden rounded-xl border'>
+              {Array.from({ length: 10 }, (_, index) => (
+                <div
+                  key={index}
+                  className='flex gap-4 border-b p-4 last:border-0'
+                >
+                  <Skeleton className='h-5 w-40 max-w-full' />
+                  <Skeleton className='h-5 flex-1' />
+                  <Skeleton className='h-5 w-20' />
+                </div>
+              ))}
+            </div>
           ) : (
-            <CardContentSkeleton />
+            <div className='grid grid-cols-1 gap-3 sm:gap-4 md:grid-cols-2 2xl:grid-cols-3'>
+              {Array.from({ length: 6 }, (_, index) => (
+                <Card key={index} className='gap-3'>
+                  <CardHeader className='flex flex-row gap-3'>
+                    <Skeleton className='size-10 shrink-0' />
+                    <div className='flex min-w-0 flex-1 flex-col gap-2'>
+                      <Skeleton className='h-5 w-40 max-w-full' />
+                      <Skeleton className='h-3 w-20' />
+                    </div>
+                    <Skeleton className='size-7 shrink-0' />
+                  </CardHeader>
+                  <CardContent className='flex flex-1 flex-col gap-3'>
+                    <div className='flex flex-col gap-2'>
+                      <Skeleton className='h-3.5 w-full' />
+                      <Skeleton className='h-3.5 w-4/5' />
+                    </div>
+                    <div className='mt-auto flex flex-col gap-1.5'>
+                      <Skeleton className='h-4 w-16' />
+                      <div className='grid grid-cols-3 gap-3'>
+                        <Skeleton className='h-10' />
+                        <Skeleton className='h-10' />
+                        <Skeleton className='h-10' />
+                      </div>
+                    </div>
+                    <div className='grid grid-cols-2 gap-3'>
+                      <Skeleton className='h-4 w-28 max-w-full' />
+                      <Skeleton className='h-4 w-28 max-w-full' />
+                    </div>
+                  </CardContent>
+                  <CardFooter className='border-0 bg-transparent pt-0'>
+                    <div className='border-border/60 flex w-full items-center justify-between gap-3 border-t pt-2'>
+                      <div className='flex items-start gap-5'>
+                        <div className='flex w-24 shrink-0 flex-col gap-1'>
+                          <Skeleton className='h-4 w-10' />
+                          <div className='flex h-3 items-center justify-between'>
+                            {Array.from({ length: 24 }, (_, bar) => (
+                              <Skeleton
+                                key={bar}
+                                className='h-full w-[3px] rounded-xs'
+                              />
+                            ))}
+                          </div>
+                        </div>
+                        <Skeleton className='h-8 w-6' />
+                        <Skeleton className='h-8 w-8' />
+                      </div>
+                      <Skeleton className='h-7 w-12' />
+                    </div>
+                  </CardFooter>
+                </Card>
+              ))}
+            </div>
           )}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function CardContentSkeleton() {
-  return (
-    <div className='grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3'>
-      {CARD_SKELETON_IDS.map((id) => (
-        <div key={id} className='rounded-xl border p-5'>
-          <div className='flex items-start justify-between gap-3'>
-            <div className='flex min-w-0 items-start gap-3'>
-              <Skeleton className='size-10 shrink-0 rounded-xl' />
-              <div className='min-w-0 flex-1 space-y-2'>
-                <Skeleton className='h-5 w-36' />
-                <Skeleton className='h-3.5 w-48' />
-              </div>
-            </div>
-            <Skeleton className='h-8 w-16 rounded-md' />
-          </div>
-          <Skeleton className='mt-4 h-3.5 w-4/5' />
-          <div className='mt-4 flex items-center justify-between gap-3'>
-            <div className='flex items-center gap-2'>
-              <Skeleton className='h-3.5 w-14' />
-              <Skeleton className='h-3.5 w-8' />
-              <Skeleton className='h-4 w-16' />
-            </div>
-            <Skeleton className='h-3.5 w-14' />
-          </div>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-function FilterBarSkeleton() {
-  return (
-    <div className='space-y-3'>
-      <div className='flex items-center gap-3'>
-        <div className='flex flex-1 flex-wrap items-center gap-2'>
-          {FILTER_SKELETONS.map((filter) => (
-            <Skeleton
-              key={filter.id}
-              className='h-8 rounded-lg'
-              style={{ width: `${filter.width}px` }}
-            />
-          ))}
-        </div>
-        <div className='flex items-center gap-2'>
-          <Skeleton className='h-8 w-24 rounded-lg' />
-          <Skeleton className='h-8 w-20 rounded-lg' />
-          <Skeleton className='h-8 w-24' />
-          <Skeleton className='h-8 w-20 rounded-lg' />
-        </div>
-      </div>
-      <Skeleton className='h-5 w-24' />
-    </div>
-  )
-}
-
-function TableContentSkeleton() {
-  return (
-    <div className='space-y-4'>
-      <div className='overflow-hidden rounded-lg border'>
-        <div className='bg-muted/30 border-b px-4 py-3'>
-          <div className='flex items-center gap-4'>
-            {TABLE_COLUMNS.map((column) => (
-              <Skeleton
-                key={column.id}
-                className='h-4'
-                style={{ width: `${column.width}px` }}
-              />
-            ))}
-          </div>
-        </div>
-        {TABLE_ROW_SKELETON_IDS.map((rowId) => (
-          <div
-            key={rowId}
-            className='flex items-center gap-4 border-b px-4 py-3 last:border-b-0'
-          >
-            {TABLE_COLUMNS.map((column) => (
-              <Skeleton
-                key={column.id}
-                className='h-5'
-                style={{ width: `${column.width}px` }}
-              />
-            ))}
-          </div>
-        ))}
-      </div>
-      <div className='flex items-center justify-between'>
-        <Skeleton className='h-5 w-32' />
-        <div className='flex items-center gap-2'>
-          {PAGINATION_SKELETON_IDS.map((id) => (
-            <Skeleton key={id} className='size-8' />
-          ))}
         </div>
       </div>
     </div>

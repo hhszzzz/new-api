@@ -80,11 +80,11 @@ func TestClaudeMessagesRequestToOpenAIResponsesAllowsEffortOnlyOutputConfigAndMe
 
 	require.NoError(t, err)
 	require.NotNil(t, converted.Reasoning)
-	assert.Equal(t, "xhigh", converted.Reasoning.Effort)
+	assert.Equal(t, "max", converted.Reasoning.Effort)
 	assert.JSONEq(t, `{"user_id":"tenant-1"}`, string(converted.Metadata))
 }
 
-func TestClaudeMessagesRequestToOpenAIResponsesOnlySendsReasoningForSupportedModels(t *testing.T) {
+func TestClaudeMessagesRequestToOpenAIResponsesPreservesExplicitReasoningForUnrecognizedModels(t *testing.T) {
 	request := dto.ClaudeRequest{
 		Model:        "openpangu-2.0-flash",
 		OutputConfig: []byte(`{"effort":"max"}`),
@@ -94,7 +94,8 @@ func TestClaudeMessagesRequestToOpenAIResponsesOnlySendsReasoningForSupportedMod
 	converted, err := ClaudeMessagesRequestToOpenAIResponses(request, nil)
 
 	require.NoError(t, err)
-	assert.Nil(t, converted.Reasoning)
+	require.NotNil(t, converted.Reasoning)
+	assert.Equal(t, "max", converted.Reasoning.Effort)
 }
 
 func TestClaudeMessagesRequestToOpenAIChatRejectsMessagesNativeFields(t *testing.T) {

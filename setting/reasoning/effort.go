@@ -6,13 +6,13 @@ import kitreasoning "github.com/QuantumNous/new-api/relaykit/relayconvert/reason
 // reasoning_effort vocabulary so the log UI renders one shared badge for every
 // provider instead of a per-provider dialect.
 const (
-	EffortMinimal = kitreasoning.EffortMinimal
-	EffortLow     = kitreasoning.EffortLow
-	EffortMedium  = kitreasoning.EffortMedium
-	EffortHigh    = kitreasoning.EffortHigh
-	EffortXHigh   = kitreasoning.EffortXHigh
-	EffortMax     = kitreasoning.EffortMax
-	EffortNone    = kitreasoning.EffortNone
+	EffortMinimal = string(kitreasoning.EffortMinimal)
+	EffortLow     = string(kitreasoning.EffortLow)
+	EffortMedium  = string(kitreasoning.EffortMedium)
+	EffortHigh    = string(kitreasoning.EffortHigh)
+	EffortXHigh   = string(kitreasoning.EffortXHigh)
+	EffortMax     = string(kitreasoning.EffortMax)
+	EffortNone    = string(kitreasoning.EffortNone)
 )
 
 // NormalizeEffort maps a provider-specific effort string onto the shared

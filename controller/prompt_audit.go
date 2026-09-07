@@ -203,14 +203,14 @@ func GetPromptAudit(c *gin.Context) {
 	if includeFull {
 		model.RecordOperationAuditLog(
 			c.GetInt("id"),
+			c.GetInt("role"),
 			"Viewed full prompt audit content",
 			c.ClientIP(),
 			"prompt_audit.view_full_prompt",
 			map[string]interface{}{"prompt_audit_id": audit.ID},
-			map[string]interface{}{
-				"admin_id": c.GetInt("id"), "admin_username": c.GetString("username"), "admin_role": c.GetInt("role"),
-			},
-			map[string]interface{}{"method": http.MethodGet, "route": c.FullPath(), "success": true},
+			auditOperatorInfo(c),
+			&model.AuditRequestInfo{Method: http.MethodGet, Route: c.FullPath(), Path: c.Request.URL.Path, Status: http.StatusOK, Success: true},
+			c,
 		)
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": audit.ToResponse(includeFull)})

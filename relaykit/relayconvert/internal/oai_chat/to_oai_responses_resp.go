@@ -1,6 +1,7 @@
 package oaichat
 
 import (
+	"unicode/utf8"
 	"errors"
 	"fmt"
 	"strings"
@@ -39,6 +40,7 @@ const (
 	responsesOutputTypeReasoning           = "reasoning"
 	responsesIncompleteReasonContentFilter = "content_filter"
 	responsesIncompleteReasonMaxTokens     = "max_output_tokens"
+	responsesEventOutputTextAnnotationAdded = "response.output_text.annotation.added"
 )
 
 func ChatCompletionsResponseToResponsesResponse(resp *dto.OpenAITextResponse, id string) (*dto.OpenAIResponsesResponse, *dto.Usage, error) {
@@ -67,7 +69,7 @@ func ChatCompletionsResponseToResponsesResponseWithBridgeState(resp *dto.OpenAIT
 	}
 
 	if len(resp.Choices) == 0 {
-		return out, usage, nil
+		return out, usage, attachChatResponseAnnotations(out, resp)
 	}
 
 	choice := resp.Choices[0]
@@ -103,7 +105,7 @@ func ChatCompletionsResponseToResponsesResponseWithBridgeState(resp *dto.OpenAIT
 			out.Output = append(out.Output, chatResponseMessageOutput(responseID, 0, text, refusal, len(toolCalls) > 0, responseOutputStatus(out)))
 		}
 		out.Output = append(out.Output, toolOutputs...)
-		return out, usage, nil
+		return out, usage, attachChatResponseAnnotations(out, resp)
 	}
 
 	usedTools := make([]bool, len(toolOutputs))
@@ -161,7 +163,7 @@ func ChatCompletionsResponseToResponsesResponseWithBridgeState(resp *dto.OpenAIT
 		}
 	}
 
-	return out, usage, nil
+	return out, usage, attachChatResponseAnnotations(out, resp)
 }
 
 func chatResponseMessageOutput(responseID string, index int, text string, refusal string, hasToolCalls bool, status string) dto.ResponsesOutput {
@@ -209,6 +211,35 @@ func chatResponseReasoningOutput(responseID string, index int, reasoning string,
 		}
 	}
 	return output
+}
+
+func chatAnnotationsToResponses(raw []byte) ([]interface{}, error) {
+	if len(raw) == 0 {
+		return []interface{}{}, nil
+	}
+	var annotations []map[string]any
+	if err := kitutil.Unmarshal(raw, &annotations); err != nil {
+		return nil, fmt.Errorf("invalid Chat annotations: %w", err)
+	}
+	converted := make([]interface{}, 0, len(annotations))
+	for _, annotation := range annotations {
+		if strings.TrimSpace(kitutil.Interface2String(annotation["type"])) != "url_citation" {
+			converted = append(converted, annotation)
+			continue
+		}
+		citation, ok := annotation["url_citation"].(map[string]any)
+		if !ok {
+			converted = append(converted, annotation)
+			continue
+		}
+		flattened := make(map[string]any, len(citation)+1)
+		flattened["type"] = "url_citation"
+		for key, value := range citation {
+			flattened[key] = value
+		}
+		converted = append(converted, flattened)
+	}
+	return converted, nil
 }
 
 func ResponsesStatusFromChatFinishReason(finishReason string) (string, *dto.IncompleteDetails) {
@@ -442,4 +473,42 @@ func responsesStreamEvent(eventType string, payload dto.ResponsesStreamResponse)
 
 func intPtr(v int) *int {
 	return &v
+}
+
+func stringPtr(v string) *string {
+	return &v
+}
+
+// attachChatResponseAnnotations maps citation offsets onto the preserved output
+// message sequence; reasoning and tool items do not consume visible text offsets.
+func attachChatResponseAnnotations(out *dto.OpenAIResponsesResponse, source *dto.OpenAITextResponse) error {
+    if len(source.Choices) == 0 { return nil }
+    annotations, err := chatAnnotationsToResponses(source.Choices[0].Message.Annotations)
+    if err != nil { return err }
+    offset := 0
+    for i := range out.Output {
+        for j := range out.Output[i].Content {
+            part := &out.Output[i].Content[j]
+            if part.Type != "output_text" { continue }
+            length := utf8.RuneCountInString(part.Text)
+            for _, value := range annotations {
+                annotation, ok := value.(map[string]any)
+                if !ok { continue }
+                start, hasStart := annotation["start_index"].(float64)
+                end, hasEnd := annotation["end_index"].(float64)
+                if !hasStart || !hasEnd {
+                    if offset == 0 { part.Annotations = append(part.Annotations, value) }
+                    continue
+                }
+                if start < float64(offset) || start >= float64(offset+length) { continue }
+                adjusted := make(map[string]any, len(annotation))
+                for key, item := range annotation { adjusted[key] = item }
+                adjusted["start_index"] = start-float64(offset)
+                adjusted["end_index"] = min(end-float64(offset), float64(length))
+                part.Annotations = append(part.Annotations, adjusted)
+            }
+            offset += length
+        }
+    }
+    return nil
 }

@@ -3,16 +3,6 @@ package reasoning
 import "strings"
 
 const (
-	EffortMinimal = "minimal"
-	EffortLow     = "low"
-	EffortMedium  = "medium"
-	EffortHigh    = "high"
-	EffortXHigh   = "xhigh"
-	EffortMax     = "max"
-	EffortNone    = "none"
-)
-
-const (
 	budgetLowMax    = 2048
 	budgetMediumMax = 8192
 	budgetHighMax   = 24576
@@ -35,14 +25,14 @@ func ClaudeEffort(nativeEffort string, thinkingEnabled bool, budgetTokens int) s
 func EffortFromBudgetTokens(budgetTokens int) string {
 	switch {
 	case budgetTokens <= 0:
-		return EffortNone
+		return string(EffortNone)
 	case budgetTokens <= budgetLowMax:
-		return EffortLow
+		return string(EffortLow)
 	case budgetTokens <= budgetMediumMax:
-		return EffortMedium
+		return string(EffortMedium)
 	case budgetTokens <= budgetHighMax:
-		return EffortHigh
+		return string(EffortHigh)
 	default:
-		return EffortXHigh
+		return string(EffortXHigh)
 	}
 }
