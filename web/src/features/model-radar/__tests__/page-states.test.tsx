@@ -22,6 +22,7 @@ import type { ReactNode } from 'react'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 
 import { ModelRadar } from '../index'
+import { resolveRadarSettings } from '../lib/model-radar'
 import type { ModelRadarResponse } from '../types'
 
 const queryMocks = vi.hoisted(() => ({ useQuery: vi.fn() }))
@@ -92,7 +93,7 @@ function response(stale: boolean): ModelRadarResponse {
       configuration_count: 1,
       configurations: [
         {
-          model: 'model-a',
+          model: 'gpt-a',
           effort: 'low',
           harness: 'codex',
           runs_24h: null,
@@ -130,12 +131,96 @@ function renderPage() {
 beforeEach(() => queryMocks.useQuery.mockReset())
 
 describe('model radar page states', () => {
-  test('switching stations filters both model cards and degradation alerts', async () => {
+  test.each([
+    { default_vendor: 'anthropic', selected: 'Anthropic 1' },
+    { default_vendor: 'missing', selected: 'All 2' },
+  ])(
+    'honours configured default $default_vendor with an All fallback',
+    ({ default_vendor, selected }) => {
+      const data = response(false)
+      data.data.configurations.push({
+        ...data.data.configurations[0],
+        model: 'claude-a',
+      })
+      data.data.settings = resolveRadarSettings({ default_vendor })
+      queryMocks.useQuery.mockReturnValue({ data, isFetched: true })
+      renderPage()
+      expect(screen.getByRole('tab', { name: selected })).toHaveAttribute(
+        'aria-selected',
+        'true'
+      )
+    }
+  )
+
+  test('hides configured models from counts, cards and alerts, counting each model once across tiers', () => {
+    const data = response(false)
+    data.data.configurations.push(
+      { ...data.data.configurations[0], effort: 'high' },
+      { ...data.data.configurations[0], model: 'claude-a' },
+      { ...data.data.configurations[0], model: 'k3' }
+    )
+    data.data.settings = resolveRadarSettings({
+      default_vendor: 'all',
+      models: { k3: { hidden: true } },
+    })
+    data.data.degradation_alerts = [
+      {
+        model: 'k3',
+        effort: 'low',
+        iq: 70,
+        degradation_12h_iq: 1,
+        degradation_24h_iq: 2,
+        degradation_48h_iq: 3,
+      },
+    ]
+    queryMocks.useQuery.mockReturnValue({ data, isFetched: true })
+    renderPage()
+    expect(screen.getByRole('tab', { name: 'All 2' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+    expect(screen.getByRole('tab', { name: 'OpenAI 1' })).toBeVisible()
+    expect(screen.queryByRole('tab', { name: /Moonshot/ })).toBeNull()
+    expect(screen.getByText(/2 models, 3 configurations/)).toBeVisible()
+    expect(screen.queryByRole('heading', { name: 'kimi-k3' })).toBeNull()
+    expect(
+      screen.queryByRole('heading', { name: 'Degradation alerts' })
+    ).toBeNull()
+  })
+
+  test('the alert switch hides nonempty alerts and hiding every model shows an empty state', () => {
+    const data = response(false)
+    data.data.settings = resolveRadarSettings({
+      show_degradation_alerts: false,
+    })
+    data.data.degradation_alerts = [
+      {
+        model: 'gpt-a',
+        effort: 'low',
+        iq: 70,
+        degradation_12h_iq: 1,
+        degradation_24h_iq: 2,
+        degradation_48h_iq: 3,
+      },
+    ]
+    queryMocks.useQuery.mockReturnValue({ data, isFetched: true })
+    const view = renderPage()
+    expect(
+      screen.queryByRole('heading', { name: 'Degradation alerts' })
+    ).toBeNull()
+    data.data.settings = resolveRadarSettings({
+      models: { 'gpt-a': { hidden: true } },
+    })
+    view.rerender(<ModelRadar />)
+    expect(screen.getByText(/0 models, 0 configurations/)).toBeVisible()
+    expect(screen.getByText('No models for this vendor yet.')).toBeVisible()
+  })
+  test('defaults to OpenAI and switching vendors filters both model cards and degradation alerts', async () => {
     const user = userEvent.setup()
     const data = response(false)
     data.data.configurations.push({
       ...data.data.configurations[0],
-      model: 'model-dsh',
+      model: 'claude-a',
       harness: 'dsh',
     })
     data.data.degradation_alerts = data.data.configurations.map((item) => ({
@@ -148,61 +233,66 @@ describe('model radar page states', () => {
     }))
     queryMocks.useQuery.mockReturnValue({ data, isFetched: true })
     renderPage()
-    await user.click(screen.getByRole('tab', { name: 'DSH 1' }))
-    expect(screen.getByRole('tab', { name: 'DSH 1' })).toHaveAttribute(
+    expect(screen.getByRole('tab', { name: 'OpenAI 1' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+    expect(screen.queryByRole('heading', { name: 'claude-a' })).toBeNull()
+    await user.click(screen.getByRole('tab', { name: 'Anthropic 1' }))
+    expect(screen.getByRole('tab', { name: 'Anthropic 1' })).toHaveAttribute(
       'aria-selected',
       'true'
     )
     const panel = screen.getByRole('tabpanel')
     expect(
-      within(panel).getByRole('heading', { name: 'model-dsh' })
+      within(panel).getByRole('heading', { name: 'claude-a' })
     ).toBeVisible()
-    expect(within(panel).queryByRole('heading', { name: 'model-a' })).toBeNull()
+    expect(within(panel).queryByRole('heading', { name: 'gpt-a' })).toBeNull()
     expect(
-      within(panel).getByRole('article', { name: 'model-dsh low' })
+      within(panel).getByRole('article', { name: 'claude-a low' })
     ).toBeVisible()
     expect(
-      within(panel).queryByRole('article', { name: 'model-a low' })
+      within(panel).queryByRole('article', { name: 'gpt-a low' })
     ).toBeNull()
   })
 
-  test('refreshing away the selected station falls back to All and does not reselect it when it returns', async () => {
+  test('refreshing away the selected vendor falls back to the default and does not reselect it when it returns', async () => {
     const user = userEvent.setup()
     const data = response(false)
     data.data.configurations.push({
       ...data.data.configurations[0],
-      model: 'model-dsh',
+      model: 'claude-a',
       harness: 'dsh',
     })
     queryMocks.useQuery.mockReturnValue({ data, isFetched: true })
     const view = renderPage()
-    await user.click(screen.getByRole('tab', { name: 'DSH 1' }))
+    await user.click(screen.getByRole('tab', { name: 'Anthropic 1' }))
     queryMocks.useQuery.mockReturnValue({
       data: response(false),
       isFetched: true,
     })
     view.rerender(<ModelRadar />)
     expect(screen.queryByRole('tablist')).toBeNull()
-    expect(screen.getByRole('heading', { name: 'model-a' })).toBeVisible()
+    expect(screen.getByRole('heading', { name: 'gpt-a' })).toBeVisible()
     queryMocks.useQuery.mockReturnValue({ data, isFetched: true })
     view.rerender(<ModelRadar />)
-    expect(screen.getByRole('tab', { name: 'All 2' })).toHaveAttribute(
+    expect(screen.getByRole('tab', { name: 'OpenAI 1' })).toHaveAttribute(
       'aria-selected',
       'true'
     )
   })
 
-  test('shows an empty snapshot state when every station loses its configurations', async () => {
+  test('shows an empty snapshot state when every vendor loses its configurations', async () => {
     const user = userEvent.setup()
     const data = response(false)
     data.data.configurations.push({
       ...data.data.configurations[0],
-      model: 'model-dsh',
+      model: 'claude-a',
       harness: 'dsh',
     })
     queryMocks.useQuery.mockReturnValue({ data, isFetched: true })
     const view = renderPage()
-    await user.click(screen.getByRole('tab', { name: 'DSH 1' }))
+    await user.click(screen.getByRole('tab', { name: 'Anthropic 1' }))
     queryMocks.useQuery.mockReturnValue({
       data: { ...data, data: { ...data.data, configurations: [] } },
       isFetched: true,
@@ -257,7 +347,7 @@ describe('model radar page states', () => {
     ).toBeVisible()
   })
 
-  test('shows stale metadata, an empty-alert state, and no recommendation content', () => {
+  test('shows stale metadata without an empty alert section or recommendation content', () => {
     queryMocks.useQuery.mockReturnValue({
       data: response(true),
       error: null,
@@ -275,7 +365,9 @@ describe('model radar page states', () => {
         'The last source update was time:1800000100. Showing the latest valid data.'
       )
     ).toBeVisible()
-    expect(screen.getByText('No degradation alerts')).toBeVisible()
+    expect(
+      screen.queryByRole('heading', { name: 'Degradation alerts' })
+    ).toBeNull()
     expect(screen.getByText('Stale data')).toBeVisible()
     expect(screen.getByText(/Updated time:1799999000/)).toBeVisible()
     expect(screen.queryByText(/Updated time:1800001000/)).toBeNull()

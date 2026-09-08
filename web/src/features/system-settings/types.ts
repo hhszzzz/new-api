@@ -92,6 +92,30 @@ export type ConfirmPaymentComplianceResponse = {
   }
 }
 
+export type ModelRadarManagement = {
+  settings: import('@/features/model-radar/types').ModelRadarSettings
+  sync: {
+    enabled: boolean
+    interval_minutes: number
+    stale_after_minutes: number
+  }
+  snapshot: {
+    fetched_at: number
+    source_updated_at: number
+    alerts_updated_at: number
+    stale: boolean
+    model_count: number
+    configuration_count: number
+    alert_count: number
+    models: Array<{
+      model: string
+      configuration_count: number
+      efforts: string[]
+    }>
+  } | null
+  current_task: SystemTask | null
+}
+
 export type SystemTaskStatus = 'pending' | 'running' | 'succeeded' | 'failed'
 
 export type SystemTask<
@@ -202,6 +226,7 @@ export type SiteSettings = {
   'legal.user_agreement': string
   'legal.privacy_policy': string
   HeaderNavModules: string
+  ModelRadarSettings: string
   SidebarModulesAdmin: string
 }
 

@@ -19,17 +19,23 @@ For commercial licensing, please contact support@quantumnous.com
 import { getLobeIcon } from '@/lib/lobe-icon'
 
 import {
-  getModelIconKey,
+  resolveRadarModel,
   type ModelRadarIconRegistry,
 } from '../lib/model-radar'
+import type { ModelRadarSettings } from '../types'
 
 // Provider icon for a radar model, falling back to its group color dot.
 export function ModelBadge(props: {
   color: string
   model: string
+  settings?: ModelRadarSettings
   iconRegistry?: ModelRadarIconRegistry
 }) {
-  const iconKey = getModelIconKey(props.model, props.iconRegistry)
+  const { iconKey } = resolveRadarModel(
+    props.model,
+    props.settings,
+    props.iconRegistry
+  )
   if (iconKey) {
     return (
       <span

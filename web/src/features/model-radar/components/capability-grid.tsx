@@ -21,6 +21,7 @@ import { HugeiconsIcon } from '@hugeicons/react'
 import { useState, type CSSProperties } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { getLobeIcon } from '@/lib/lobe-icon'
 import { cn } from '@/lib/utils'
 
 import { useRadarFormatters } from '../hooks/use-radar-formatters'
@@ -29,9 +30,16 @@ import {
   groupConfigurations,
   IQ_TEXT_CLASSES,
   matrixEfforts,
+  listVendors,
+  OTHER_VENDOR,
+  type ModelRadarGroup,
   type ModelRadarIconRegistry,
 } from '../lib/model-radar'
-import type { ModelRadarConfiguration, ModelRadarHistoryFrame } from '../types'
+import type {
+  ModelRadarConfiguration,
+  ModelRadarHistoryFrame,
+  ModelRadarSettings,
+} from '../types'
 import { ConfigurationDetails } from './configuration-details'
 import { ModelBadge } from './model-badge'
 
@@ -39,13 +47,20 @@ export function CapabilityGrid(props: {
   configurations: ModelRadarConfiguration[]
   history: ModelRadarHistoryFrame[]
   iconRegistry?: ModelRadarIconRegistry
+  settings?: ModelRadarSettings
+  groupByVendor?: boolean
 }) {
   const { t } = useTranslation()
   const [selected, setSelected] = useState<{
     model: string
     effort: string
   } | null>(null)
-  const groups = groupConfigurations(props.configurations)
+  const groups = groupConfigurations(props.configurations, props.settings)
+  const vendors = listVendors(
+    props.configurations,
+    props.settings,
+    props.iconRegistry
+  )
   const efforts = matrixEfforts(props.configurations)
   const selectedConfiguration = selected
     ? (props.configurations.find(
@@ -84,73 +99,122 @@ export function CapabilityGrid(props: {
         ))}
       </div>
       <div className='space-y-2 lg:space-y-1'>
-        {groups.map((group) => {
-          const bestIq = Math.max(
-            ...group.configurations.map((item) => item.iq)
-          )
-          return (
-            <section
-              key={group.model}
-              aria-label={group.model}
-              className='min-w-0 lg:grid lg:grid-cols-[11rem_minmax(0,1fr)] lg:items-center lg:gap-4'
-            >
-              <header className='mb-1.5 flex items-center gap-2 lg:mb-0'>
-                <ModelBadge
-                  color={group.color}
-                  model={group.model}
-                  iconRegistry={props.iconRegistry}
-                />
-                <h3
-                  className='min-w-0 text-sm font-semibold break-words'
-                  title={group.model}
-                >
-                  {group.model}
-                </h3>
-              </header>
-              <div
-                className='grid grid-cols-2 gap-1.5 md:grid-cols-[repeat(var(--effort-count),minmax(0,1fr))]'
-                style={{ '--effort-count': efforts.length } as CSSProperties}
+        {props.groupByVendor
+          ? vendors.map((vendor) => (
+              <section
+                key={vendor.key}
+                aria-label={
+                  vendor.key === OTHER_VENDOR ? t('Other') : vendor.label
+                }
+                className='space-y-2 pb-4'
               >
-                {efforts.map((effort) => {
-                  const configuration = group.configurations.find(
-                    (item) => item.effort.trim().toLowerCase() === effort
-                  )
-                  if (!configuration) {
-                    return (
-                      <div
-                        key={effort}
-                        aria-hidden='true'
-                        className='hidden md:block'
-                      />
-                    )
-                  }
-                  return (
-                    <TierCard
-                      key={effort}
-                      configuration={configuration}
-                      isBest={configuration.iq === bestIq}
-                      onSelect={() =>
-                        setSelected({
-                          model: configuration.model,
-                          effort: configuration.effort,
-                        })
-                      }
+                <h3 className='text-muted-foreground flex items-center gap-2 pt-3 pb-1 text-sm font-medium'>
+                  {vendor.icon ? (
+                    <span aria-hidden='true'>
+                      {getLobeIcon(vendor.icon, 16)}
+                    </span>
+                  ) : null}
+                  {vendor.key === OTHER_VENDOR ? t('Other') : vendor.label}
+                  <span className='text-xs'>
+                    {t('{{count}} models', { count: vendor.modelCount })}
+                  </span>
+                </h3>
+                {groups
+                  .filter((group) => group.vendor === vendor.key)
+                  .map((group) => (
+                    <ModelRow
+                      key={group.model}
+                      group={group}
+                      efforts={efforts}
+                      settings={props.settings}
+                      iconRegistry={props.iconRegistry}
+                      onSelect={setSelected}
+                      nested
                     />
-                  )
-                })}
-              </div>
-            </section>
-          )
-        })}
+                  ))}
+              </section>
+            ))
+          : groups.map((group) => (
+              <ModelRow
+                key={group.model}
+                group={group}
+                efforts={efforts}
+                settings={props.settings}
+                iconRegistry={props.iconRegistry}
+                onSelect={setSelected}
+              />
+            ))}
       </div>
       <ConfigurationDetails
         configuration={selectedConfiguration}
         history={props.history}
+        settings={props.settings}
         open={selectedConfiguration !== null}
         onOpenChange={(open) => {
           if (!open) setSelected(null)
         }}
       />
+    </section>
+  )
+}
+
+function ModelRow(props: {
+  group: ModelRadarGroup
+  efforts: string[]
+  settings?: ModelRadarSettings
+  iconRegistry?: ModelRadarIconRegistry
+  onSelect: (configuration: ModelRadarConfiguration) => void
+  nested?: boolean
+}) {
+  const group = props.group
+  const bestIq = Math.max(...group.configurations.map((item) => item.iq))
+  const Heading = props.nested ? 'h4' : 'h3'
+  return (
+    <section
+      aria-label={group.displayName}
+      className='min-w-0 lg:grid lg:grid-cols-[11rem_minmax(0,1fr)] lg:items-center lg:gap-4'
+    >
+      <header className='mb-1.5 flex items-center gap-2 lg:mb-0'>
+        <ModelBadge
+          color={group.color}
+          model={group.model}
+          settings={props.settings}
+          iconRegistry={props.iconRegistry}
+        />
+        <Heading
+          className='min-w-0 text-sm font-semibold break-words'
+          title={group.model}
+        >
+          {group.displayName}
+        </Heading>
+      </header>
+      <div
+        className='grid grid-cols-2 gap-1.5 md:grid-cols-[repeat(var(--effort-count),minmax(0,1fr))]'
+        style={{ '--effort-count': props.efforts.length } as CSSProperties}
+      >
+        {props.efforts.map((effort) => {
+          const configuration = group.configurations.find(
+            (item) => item.effort.trim().toLowerCase() === effort
+          )
+          if (!configuration) {
+            return (
+              <div
+                key={effort}
+                aria-hidden='true'
+                className='hidden md:block'
+              />
+            )
+          }
+          return (
+            <TierCard
+              key={effort}
+              configuration={configuration}
+              isBest={configuration.iq === bestIq}
+              onSelect={() => props.onSelect(configuration)}
+            />
+          )
+        })}
+      </div>
     </section>
   )
 }

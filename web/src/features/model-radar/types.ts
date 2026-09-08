@@ -80,6 +80,7 @@ export type ModelRadarDegradationAlert = {
 }
 
 export type ModelRadarData = {
+  settings?: ModelRadarSettings
   schema_version: number
   fetched_at: number
   source_updated_at: number
@@ -91,6 +92,18 @@ export type ModelRadarData = {
   configurations: ModelRadarConfiguration[]
   history: ModelRadarHistoryFrame[]
   degradation_alerts: ModelRadarDegradationAlert[]
+}
+
+export type ModelRadarModelOverride = {
+  display_name?: string
+  vendor?: string
+  hidden?: boolean
+}
+
+export type ModelRadarSettings = {
+  default_vendor: string
+  show_degradation_alerts: boolean
+  models: Record<string, ModelRadarModelOverride>
 }
 
 export type ModelRadarResponse = {

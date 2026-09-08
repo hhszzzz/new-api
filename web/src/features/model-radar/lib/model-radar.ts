@@ -26,16 +26,192 @@ import type {
   ModelRadarConfiguration,
   ModelRadarDegradationAlert,
   ModelRadarHistoryFrame,
+  ModelRadarModelOverride,
+  ModelRadarSettings,
 } from '../types'
 
-export const ALL_STATIONS = 'all'
-const STATION_LABELS: Record<string, string> = {
-  codex: 'Codex',
-  dsh: 'DSH',
-  zcode: 'ZCode',
-  grok: 'Grok',
-  'grok-build': 'Grok',
-  kimi: 'Kimi Code',
+export const ALL_VENDORS = 'all'
+export const OTHER_VENDOR = 'other'
+
+export const RADAR_VENDORS = [
+  {
+    key: 'openai',
+    label: 'OpenAI',
+    icon: 'OpenAI',
+    prefixes: ['chatgpt', 'gpt', 'o1', 'o3', 'o4'],
+  },
+  {
+    key: 'anthropic',
+    label: 'Anthropic',
+    icon: 'Claude',
+    prefixes: ['claude'],
+  },
+  {
+    key: 'deepseek',
+    label: 'DeepSeek',
+    icon: 'DeepSeek',
+    prefixes: ['deepseek'],
+  },
+  {
+    key: 'google',
+    label: 'Google',
+    icon: 'Gemini',
+    prefixes: ['gemini', 'gemma'],
+  },
+  { key: 'zhipu', label: 'Zhipu', icon: 'Zhipu', prefixes: ['chatglm', 'glm'] },
+  { key: 'xai', label: 'xAI', icon: 'XAI', prefixes: ['grok'] },
+  {
+    key: 'moonshot',
+    label: 'Moonshot',
+    icon: 'Moonshot',
+    prefixes: ['moonshot', 'kimi'],
+  },
+  { key: 'tencent', label: 'Tencent', icon: 'Hunyuan', prefixes: ['hunyuan'] },
+  { key: 'alibaba', label: 'Alibaba', icon: 'Qwen', prefixes: ['qwen', 'qwq'] },
+  {
+    key: 'bytedance',
+    label: 'ByteDance',
+    icon: 'Doubao',
+    prefixes: ['doubao'],
+  },
+  { key: 'minimax', label: 'MiniMax', icon: 'Minimax', prefixes: ['minimax'] },
+  {
+    key: 'mistral',
+    label: 'Mistral',
+    icon: 'Mistral',
+    prefixes: ['mistral', 'mixtral'],
+  },
+  {
+    key: 'meta',
+    label: 'Meta',
+    icon: 'Meta',
+    prefixes: ['meta-llama', 'llama'],
+  },
+  {
+    key: 'cohere',
+    label: 'Cohere',
+    icon: 'Cohere',
+    prefixes: ['command', 'cohere'],
+  },
+  {
+    key: 'perplexity',
+    label: 'Perplexity',
+    icon: 'Perplexity',
+    prefixes: ['sonar', 'perplexity'],
+  },
+  {
+    key: 'baidu',
+    label: 'Baidu',
+    icon: 'Baidu',
+    prefixes: ['ernie', 'wenxin'],
+  },
+  { key: 'spark', label: 'Spark', icon: 'Spark', prefixes: ['spark'] },
+  {
+    key: 'baichuan',
+    label: 'Baichuan',
+    icon: 'Baichuan',
+    prefixes: ['baichuan'],
+  },
+  {
+    key: 'internlm',
+    label: 'InternLM',
+    icon: 'InternLM',
+    prefixes: ['internlm'],
+  },
+  { key: 'stepfun', label: 'Stepfun', icon: 'Stepfun', prefixes: ['step'] },
+  {
+    key: 'xiaomi',
+    label: 'XiaomiMiMo',
+    icon: 'XiaomiMiMo',
+    prefixes: ['mimo'],
+  },
+  { key: 'yi', label: 'Yi', icon: 'Yi', prefixes: ['yi'] },
+]
+
+export const BUILT_IN_MODEL_OVERRIDES: Readonly<
+  Record<string, ModelRadarModelOverride>
+> = {
+  k3: { display_name: 'kimi-k3', vendor: 'moonshot' },
+  'hy4-preview': { vendor: 'tencent' },
+}
+
+export const DEFAULT_RADAR_SETTINGS: ModelRadarSettings = {
+  default_vendor: 'openai',
+  show_degradation_alerts: true,
+  models: {},
+}
+
+const VENDOR_KEY_PATTERN = /^[a-z0-9-]{1,32}$/
+
+export function resolveRadarSettings(raw: unknown): ModelRadarSettings {
+  const settings = {
+    ...DEFAULT_RADAR_SETTINGS,
+    models: {} as ModelRadarSettings['models'],
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return settings
+  const value = raw as Record<string, unknown>
+  if (
+    typeof value.default_vendor === 'string' &&
+    VENDOR_KEY_PATTERN.test(value.default_vendor)
+  ) {
+    settings.default_vendor = value.default_vendor
+  }
+  if (typeof value.show_degradation_alerts === 'boolean') {
+    settings.show_degradation_alerts = value.show_degradation_alerts
+  }
+  if (
+    !value.models ||
+    typeof value.models !== 'object' ||
+    Array.isArray(value.models)
+  ) {
+    return settings
+  }
+  const entries: Array<[string, ModelRadarModelOverride]> = []
+  for (const [key, candidate] of Object.entries(value.models).slice(0, 256)) {
+    const model = key.trim()
+    if (
+      !model ||
+      [...model].length > 128 ||
+      !candidate ||
+      typeof candidate !== 'object' ||
+      Array.isArray(candidate)
+    ) {
+      continue
+    }
+    const override = candidate as Record<string, unknown>
+    const normalized: ModelRadarModelOverride = {}
+    if (typeof override.display_name === 'string') {
+      const name = override.display_name.trim()
+      if (name && [...name].length <= 128) normalized.display_name = name
+    }
+    if (
+      typeof override.vendor === 'string' &&
+      VENDOR_KEY_PATTERN.test(override.vendor) &&
+      override.vendor !== ALL_VENDORS
+    ) {
+      normalized.vendor = override.vendor
+    }
+    if (typeof override.hidden === 'boolean') {
+      normalized.hidden = override.hidden
+    }
+    entries.push([model, normalized])
+  }
+  settings.models = Object.fromEntries(entries)
+  return settings
+}
+
+export function getVendorMeta(key: string): {
+  key: string
+  label: string
+  icon: string | null
+} {
+  return (
+    RADAR_VENDORS.find((vendor) => vendor.key === key) ?? {
+      key,
+      label: key === OTHER_VENDOR ? 'Other' : key,
+      icon: null,
+    }
+  )
 }
 
 export const IQ_TEXT_CLASSES = {
@@ -44,63 +220,77 @@ export const IQ_TEXT_CLASSES = {
   low: 'text-destructive',
 } as const
 
-export function getStationLabel(key: string): string {
-  return Object.hasOwn(STATION_LABELS, key)
-    ? STATION_LABELS[key]
-    : key.charAt(0).toUpperCase() + key.slice(1)
-}
-
-export function listStations(
-  configurations: ModelRadarConfiguration[]
-): Array<{ key: string; label: string; count: number }> {
-  const counts = new Map<string, number>()
-  for (const configuration of configurations) {
-    const station = getConfigurationStation(configuration)
-    if (!station) continue
-    counts.set(station, (counts.get(station) ?? 0) + 1)
-  }
-  return Array.from(counts, ([key, count]) => ({
-    key,
-    label: getStationLabel(key),
-    count,
-  })).sort(
-    (left, right) =>
-      right.count - left.count || left.key.localeCompare(right.key)
+export function filterVisibleConfigurations(
+  configurations: ModelRadarConfiguration[],
+  settings: ModelRadarSettings = DEFAULT_RADAR_SETTINGS
+): ModelRadarConfiguration[] {
+  return configurations.filter(
+    (item) => !resolveRadarModel(item.model, settings).hidden
   )
 }
 
-export function filterByStation(
+export function listVendors(
   configurations: ModelRadarConfiguration[],
-  station: string
-): ModelRadarConfiguration[] {
-  return station === ALL_STATIONS
-    ? configurations
-    : configurations.filter((item) => getConfigurationStation(item) === station)
-}
-
-// The source website groups these models into named stations even when its
-// published runner metadata still says "codex". Preserve harness separately.
-export function getConfigurationStation(
-  configuration: ModelRadarConfiguration
-): string {
-  if (configuration.model === 'glm-5.3') return 'zcode'
-  if (
-    configuration.model === 'grok-4.6' ||
-    configuration.harness === 'grok-build'
-  ) {
-    return 'grok'
+  settings: ModelRadarSettings = DEFAULT_RADAR_SETTINGS,
+  registry?: ModelRadarIconRegistry
+): Array<{
+  key: string
+  label: string
+  icon: string | null
+  modelCount: number
+}> {
+  const models = new Map<string, Set<string>>()
+  for (const configuration of configurations) {
+    const resolved = resolveRadarModel(configuration.model, settings)
+    if (resolved.hidden) continue
+    const names = models.get(resolved.vendor) ?? new Set<string>()
+    names.add(configuration.model)
+    models.set(resolved.vendor, names)
   }
-  return configuration.harness ?? ''
+  return Array.from(models, ([key, names]) => {
+    const meta = getVendorMeta(key)
+    const icon = meta.icon
+      ? (registry?.providerIcons.get(meta.icon.toLowerCase()) ??
+        resolveDefaultProviderIconKey(meta.icon))
+      : null
+    return { ...meta, icon, modelCount: names.size }
+  }).sort(
+    (left, right) =>
+      right.modelCount - left.modelCount ||
+      left.label.localeCompare(right.label)
+  )
 }
 
-export function filterAlertsByStation(
+export function filterByVendor(
+  configurations: ModelRadarConfiguration[],
+  settings: ModelRadarSettings,
+  vendor: string
+): ModelRadarConfiguration[] {
+  return configurations.filter((item) => {
+    const resolved = resolveRadarModel(item.model, settings)
+    return (
+      !resolved.hidden && (vendor === ALL_VENDORS || resolved.vendor === vendor)
+    )
+  })
+}
+
+export function resolveDefaultVendor(
+  settings: ModelRadarSettings,
+  vendors: Array<{ key: string }>
+): string {
+  return vendors.some((item) => item.key === settings.default_vendor)
+    ? settings.default_vendor
+    : ALL_VENDORS
+}
+
+export function filterAlertsByVendor(
   alerts: ModelRadarDegradationAlert[],
   configurations: ModelRadarConfiguration[],
-  station: string
+  settings: ModelRadarSettings,
+  vendor: string
 ): ModelRadarDegradationAlert[] {
-  if (station === ALL_STATIONS) return alerts
   const keys = new Set(
-    filterByStation(configurations, station).map((item) =>
+    filterByVendor(configurations, settings, vendor).map((item) =>
       JSON.stringify([item.model, item.effort])
     )
   )
@@ -131,46 +321,13 @@ export const MODEL_COLORS = [
   '#dc2626',
 ] as const
 
-// Lowercase model-name prefixes mapped to direct @lobehub/icons provider keys,
-// matching the icon rendering used by Rankings.
-// Ordered longest-first so specific prefixes win over generic ones.
-const MODEL_ICON_PREFIXES: Array<[prefix: string, icon: string]> = [
-  ['chatgpt', 'OpenAI'],
-  ['gpt', 'OpenAI'],
-  ['o1', 'OpenAI'],
-  ['o3', 'OpenAI'],
-  ['o4', 'OpenAI'],
-  ['claude', 'Claude'],
-  ['gemini', 'Gemini'],
-  ['gemma', 'Google'],
-  ['deepseek', 'DeepSeek'],
-  ['qwq', 'Qwen'],
-  ['qwen', 'Qwen'],
-  ['doubao', 'Doubao'],
-  ['kimi', 'Moonshot'],
-  ['moonshot', 'Moonshot'],
-  ['grok', 'XAI'],
-  ['mistral', 'Mistral'],
-  ['mixtral', 'Mistral'],
-  ['minimax', 'Minimax'],
-  ['hunyuan', 'Hunyuan'],
-  ['meta-llama', 'Meta'],
-  ['llama', 'Meta'],
-  ['chatglm', 'Zhipu'],
-  ['glm', 'Zhipu'],
-  ['ernie', 'Baidu'],
-  ['wenxin', 'Wenxin'],
-  ['spark', 'Spark'],
-  ['command', 'Cohere'],
-  ['cohere', 'Cohere'],
-  ['sonar', 'Perplexity'],
-  ['perplexity', 'Perplexity'],
-  ['baichuan', 'Baichuan'],
-  ['internlm', 'InternLM'],
-  ['step', 'Stepfun'],
-  ['mimo', 'XiaomiMiMo'],
-  ['yi', 'Yi'],
-]
+const MODEL_PREFIXES = RADAR_VENDORS.flatMap((vendor) =>
+  vendor.prefixes.map((prefix) => ({
+    prefix,
+    vendor: vendor.key,
+    icon: vendor.icon,
+  }))
+).sort((left, right) => right.prefix.length - left.prefix.length)
 
 export type ModelRadarIconRegistry = {
   modelIcons: ReadonlyMap<string, string>
@@ -223,31 +380,71 @@ export function getModelIconKey(
   model: string,
   iconRegistry?: ModelRadarIconRegistry
 ): string | null {
+  return resolveRadarModel(model, DEFAULT_RADAR_SETTINGS, iconRegistry).iconKey
+}
+
+export function resolveRadarModel(
+  model: string,
+  settings: ModelRadarSettings = DEFAULT_RADAR_SETTINGS,
+  iconRegistry?: ModelRadarIconRegistry
+) {
   const lookupKeys = getModelIconLookupKeys(model)
   // DSH identifies the DeepSeek Harness, not a different model provider.
   const underlyingModelKeys = lookupKeys
     .filter((key) => key.startsWith('dsh-deepseek-'))
     .map((key) => key.slice(4))
-  for (const lookupKey of [...lookupKeys, ...underlyingModelKeys]) {
-    const configuredIcon = iconRegistry?.modelIcons.get(lookupKey)
-    if (configuredIcon) return configuredIcon
-  }
-
   const normalized = model.trim().toLowerCase()
   const candidates = [
     normalized,
     ...normalized.split(/[/:_]+/),
     ...underlyingModelKeys,
   ]
-  for (const [prefix, icon] of MODEL_ICON_PREFIXES) {
-    if (candidates.some((candidate) => candidate.startsWith(prefix))) {
-      return (
-        iconRegistry?.providerIcons.get(icon.toLowerCase()) ??
-        resolveDefaultProviderIconKey(icon)
-      )
-    }
+  const prefixMatch = MODEL_PREFIXES.find(({ prefix }) =>
+    candidates.some((candidate) => candidate.startsWith(prefix))
+  )
+  const aliasKey = lookupKeys.find((key) =>
+    Object.hasOwn(BUILT_IN_MODEL_OVERRIDES, key)
+  )
+  const alias = aliasKey ? BUILT_IN_MODEL_OVERRIDES[aliasKey] : undefined
+  const override = Object.hasOwn(settings.models, model)
+    ? settings.models[model]
+    : undefined
+  const displayName = override?.display_name || alias?.display_name || model
+  const vendor =
+    override?.vendor || alias?.vendor || prefixMatch?.vendor || OTHER_VENDOR
+  let providerIcon = getVendorMeta(vendor).icon
+  // Preserve the existing model-specific brand icons within these vendors.
+  if (!override?.vendor && !alias?.vendor) {
+    if (prefixMatch?.prefix === 'gemma') providerIcon = 'Google'
+    if (prefixMatch?.prefix === 'wenxin') providerIcon = 'Wenxin'
   }
-  return null
+  const iconLookupKeys = [
+    ...lookupKeys,
+    ...getModelIconLookupKeys(displayName),
+    ...getModelIconLookupKeys(alias?.display_name ?? ''),
+    ...underlyingModelKeys,
+  ]
+  const configuredIcon = iconLookupKeys
+    .map((key) => iconRegistry?.modelIcons.get(key))
+    .find(Boolean)
+  let iconKey = configuredIcon ?? null
+  if (!iconKey && providerIcon) {
+    iconKey =
+      iconRegistry?.providerIcons.get(providerIcon.toLowerCase()) ??
+      resolveDefaultProviderIconKey(providerIcon)
+  }
+  let source: 'override' | 'alias' | 'prefix' | 'other' = 'other'
+  if (override && Object.keys(override).length > 0) source = 'override'
+  else if (alias) source = 'alias'
+  else if (prefixMatch) source = 'prefix'
+  return {
+    model,
+    displayName,
+    vendor,
+    hidden: override?.hidden ?? false,
+    iconKey,
+    source,
+  }
 }
 
 export function compareEfforts(left: string, right: string): number {
@@ -267,12 +464,15 @@ export function compareEfforts(left: string, right: string): number {
 
 export type ModelRadarGroup = {
   model: string
+  displayName: string
+  vendor: string
   color: string
   configurations: ModelRadarConfiguration[]
 }
 
 export function groupConfigurations(
-  configurations: ModelRadarConfiguration[]
+  configurations: ModelRadarConfiguration[],
+  settings: ModelRadarSettings = DEFAULT_RADAR_SETTINGS
 ): ModelRadarGroup[] {
   const groups = new Map<string, ModelRadarConfiguration[]>()
   for (const configuration of configurations) {
@@ -286,6 +486,8 @@ export function groupConfigurations(
 
   return Array.from(groups, ([model, modelConfigurations]) => ({
     model,
+    displayName: resolveRadarModel(model, settings).displayName,
+    vendor: resolveRadarModel(model, settings).vendor,
     color: stableModelColor(model),
     configurations: [...modelConfigurations].sort((left, right) =>
       compareEfforts(left.effort, right.effort)

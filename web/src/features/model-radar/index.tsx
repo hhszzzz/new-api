@@ -41,14 +41,17 @@ import { getPricing } from '@/features/pricing/api'
 import { getModelRadar } from './api'
 import { CapabilityGrid } from './components/capability-grid'
 import { DegradationAlerts } from './components/degradation-alerts'
-import { StationTabs } from './components/station-tabs'
+import { VendorTabs } from './components/vendor-tabs'
 import { useRadarFormatters } from './hooks/use-radar-formatters'
 import {
-  ALL_STATIONS,
+  ALL_VENDORS,
   createModelRadarIconRegistry,
-  filterByStation,
-  filterAlertsByStation,
-  listStations,
+  filterByVendor,
+  filterAlertsByVendor,
+  filterVisibleConfigurations,
+  listVendors,
+  resolveRadarSettings,
+  resolveDefaultVendor,
 } from './lib/model-radar'
 
 const REFRESH_INTERVAL_MS = 10 * 60 * 1000
@@ -73,16 +76,20 @@ export function ModelRadar() {
     [pricingQuery.data]
   )
   const snapshot = radarQuery.data?.data
-  const [station, setStation] = useState(ALL_STATIONS)
-  const stations = listStations(snapshot?.configurations ?? [])
-  const stationExists =
-    station === ALL_STATIONS || stations.some((item) => item.key === station)
-  const activeStation = stationExists ? station : ALL_STATIONS
-  if (snapshot && !stationExists) setStation(ALL_STATIONS)
-  const configurations = filterByStation(
+  const settings = resolveRadarSettings(snapshot?.settings)
+  const visible = filterVisibleConfigurations(
     snapshot?.configurations ?? [],
-    activeStation
+    settings
   )
+  const totalModels = new Set(visible.map((item) => item.model)).size
+  const vendors = listVendors(visible, settings, iconRegistry)
+  const [vendor, setVendor] = useState<string | null>(null)
+  const vendorExists =
+    vendor === ALL_VENDORS || vendors.some((item) => item.key === vendor)
+  const activeVendor =
+    vendor && vendorExists ? vendor : resolveDefaultVendor(settings, vendors)
+  if (snapshot && vendor !== null && !vendorExists) setVendor(null)
+  const configurations = filterByVendor(visible, settings, activeVendor)
   const updatedAt = snapshot
     ? format.dateTime(snapshot.source_updated_at)
     : null
@@ -118,32 +125,38 @@ export function ModelRadar() {
           <StaleNotice sourceUpdatedAt={sourceUpdatedAt} />
         ) : null}
         {radarQuery.isError ? <RefreshFailureNotice /> : null}
-        <StationTabs
-          stations={stations}
-          total={snapshot.configurations.length}
-          value={activeStation}
-          onValueChange={setStation}
+        <VendorTabs
+          vendors={vendors}
+          totalModels={totalModels}
+          value={activeVendor}
+          onValueChange={setVendor}
         >
-          <DegradationAlerts
-            alerts={filterAlertsByStation(
-              snapshot.degradation_alerts,
-              snapshot.configurations,
-              activeStation
-            )}
-            history={snapshot.history}
-            configurations={snapshot.configurations}
-            iconRegistry={iconRegistry}
-          />
+          {settings.show_degradation_alerts ? (
+            <DegradationAlerts
+              alerts={filterAlertsByVendor(
+                snapshot.degradation_alerts,
+                visible,
+                settings,
+                activeVendor
+              )}
+              history={snapshot.history}
+              configurations={visible}
+              settings={settings}
+              iconRegistry={iconRegistry}
+            />
+          ) : null}
           {configurations.length > 0 ? (
             <CapabilityGrid
               configurations={configurations}
               history={snapshot.history}
               iconRegistry={iconRegistry}
+              settings={settings}
+              groupByVendor={activeVendor === ALL_VENDORS}
             />
           ) : (
-            <RadarEmpty station />
+            <RadarEmpty vendor />
           )}
-        </StationTabs>
+        </VendorTabs>
       </>
     )
   }
@@ -173,8 +186,8 @@ export function ModelRadar() {
                   aria-live='polite'
                 >
                   {t('{{models}} models, {{configurations}} configurations', {
-                    models: snapshot.model_count,
-                    configurations: snapshot.configuration_count,
+                    models: totalModels,
+                    configurations: visible.length,
                   })}
                   <span className='mx-1.5' aria-hidden='true'>
                     ·
@@ -313,7 +326,7 @@ function RadarError(props: {
   )
 }
 
-function RadarEmpty(props: { station?: boolean }) {
+function RadarEmpty(props: { vendor?: boolean }) {
   const { t } = useTranslation()
   return (
     <Empty
@@ -331,8 +344,8 @@ function RadarEmpty(props: { station?: boolean }) {
         </EmptyMedia>
         <EmptyTitle>{t('No model radar data')}</EmptyTitle>
         <EmptyDescription>
-          {props.station
-            ? t('No configurations in this station yet.')
+          {props.vendor
+            ? t('No models for this vendor yet.')
             : t(
                 'The current snapshot does not contain any model configurations.'
               )}

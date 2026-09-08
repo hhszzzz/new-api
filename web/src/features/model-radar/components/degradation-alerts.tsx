@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Alert02Icon, TickDouble02Icon } from '@hugeicons/core-free-icons'
+import { Alert02Icon } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useTranslation } from 'react-i18next'
 
@@ -28,12 +28,14 @@ import {
   getHistorySeries,
   getIqTone,
   IQ_TEXT_CLASSES,
+  resolveRadarModel,
   type ModelRadarIconRegistry,
 } from '../lib/model-radar'
 import type {
   ModelRadarConfiguration,
   ModelRadarDegradationAlert,
   ModelRadarHistoryFrame,
+  ModelRadarSettings,
 } from '../types'
 import { ModelBadge } from './model-badge'
 import { Sparkline } from './sparkline'
@@ -42,9 +44,11 @@ export function DegradationAlerts(props: {
   alerts: ModelRadarDegradationAlert[]
   history: ModelRadarHistoryFrame[]
   configurations: ModelRadarConfiguration[]
+  settings?: ModelRadarSettings
   iconRegistry?: ModelRadarIconRegistry
 }) {
   const { t } = useTranslation()
+  if (props.alerts.length === 0) return null
   const modelColors = createModelColorMap(props.configurations)
 
   return (
@@ -66,44 +70,23 @@ export function DegradationAlerts(props: {
         </p>
       </header>
 
-      {props.alerts.length === 0 ? (
-        <div
-          role='status'
-          className='border-border/70 bg-muted/20 flex items-center gap-2 rounded-lg border px-3 py-2.5'
-        >
-          <span className='flex size-5 shrink-0 items-center justify-center text-emerald-700 dark:text-emerald-400'>
-            <HugeiconsIcon
-              icon={TickDouble02Icon}
-              className='size-4'
-              strokeWidth={2}
-              aria-hidden='true'
-            />
-          </span>
-          <div className='flex flex-wrap items-center gap-x-2 gap-y-0.5'>
-            <p className='text-xs font-medium'>{t('No degradation alerts')}</p>
-            <p className='text-muted-foreground text-xs'>
-              {t('No current IQ decline meets the source alert threshold.')}
-            </p>
-          </div>
-        </div>
-      ) : (
-        <div className='grid gap-3 lg:grid-cols-2'>
-          {props.alerts.map((alert) => (
-            <AlertCard
-              key={`${alert.model}:${alert.effort}`}
-              alert={alert}
-              color={modelColors.get(alert.model) ?? '#64748b'}
-              series={getHistorySeries(
-                props.history,
-                alert.model,
-                alert.effort,
-                48
-              )}
-              iconRegistry={props.iconRegistry}
-            />
-          ))}
-        </div>
-      )}
+      <div className='grid gap-3 lg:grid-cols-2'>
+        {props.alerts.map((alert) => (
+          <AlertCard
+            key={`${alert.model}:${alert.effort}`}
+            alert={alert}
+            color={modelColors.get(alert.model) ?? '#64748b'}
+            series={getHistorySeries(
+              props.history,
+              alert.model,
+              alert.effort,
+              48
+            )}
+            iconRegistry={props.iconRegistry}
+            settings={props.settings}
+          />
+        ))}
+      </div>
     </section>
   )
 }
@@ -112,11 +95,13 @@ function AlertCard(props: {
   alert: ModelRadarDegradationAlert
   color: string
   series: number[]
+  settings?: ModelRadarSettings
   iconRegistry?: ModelRadarIconRegistry
 }) {
   const { t } = useTranslation()
   const format = useRadarFormatters()
   const alert = props.alert
+  const resolved = resolveRadarModel(alert.model, props.settings)
   const startIq =
     props.series.length > 0
       ? props.series[0]
@@ -125,17 +110,20 @@ function AlertCard(props: {
   return (
     <article
       className='bg-card min-w-0 rounded-xl border p-4'
-      aria-label={`${alert.model} ${alert.effort}`}
+      aria-label={`${resolved.displayName} ${alert.effort}`}
     >
       <div className='flex min-w-0 items-start justify-between gap-4'>
         <div className='flex min-w-0 items-center gap-2'>
           <ModelBadge
             color={props.color}
             model={alert.model}
+            settings={props.settings}
             iconRegistry={props.iconRegistry}
           />
           <div className='min-w-0'>
-            <p className='truncate text-sm font-semibold'>{alert.model}</p>
+            <p className='truncate text-sm font-semibold' title={alert.model}>
+              {resolved.displayName}
+            </p>
             <p className='text-muted-foreground text-[11px] capitalize'>
               {alert.effort}
             </p>
@@ -162,7 +150,7 @@ function AlertCard(props: {
       <div className='mt-3 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between sm:gap-4'>
         <Sparkline
           values={props.series}
-          label={`${alert.model} ${alert.effort}`}
+          label={`${resolved.displayName} ${alert.effort}`}
         />
         <dl className='grid shrink-0 grid-cols-3 gap-3 border-t pt-2 sm:border-t-0 sm:pt-0'>
           <Decline label={t('12 hours')} value={alert.degradation_12h_iq} />

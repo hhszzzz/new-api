@@ -13,6 +13,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting"
 
 	"golang.org/x/sync/errgroup"
 )
@@ -111,6 +112,7 @@ type ModelRadarDegradationAlert struct {
 }
 
 type ModelRadarData struct {
+	Settings           *setting.ModelRadarSettings  `json:"settings,omitempty"`
 	SchemaVersion      int                          `json:"schema_version"`
 	FetchedAt          int64                        `json:"fetched_at"`
 	SourceUpdatedAt    int64                        `json:"source_updated_at"`
@@ -297,6 +299,8 @@ func GetModelRadar(ctx context.Context) (*ModelRadarData, error) {
 		return nil, fmt.Errorf("decode model radar snapshot: %w", err)
 	}
 	data.SchemaVersion = snapshot.SchemaVersion
+	settings := setting.GetModelRadarSettings()
+	data.Settings = &settings
 	data.FetchedAt = snapshot.FetchedAt
 	data.SourceUpdatedAt = snapshot.SourceUpdatedAt
 	data.AlertsUpdatedAt = snapshot.AlertsUpdatedAt

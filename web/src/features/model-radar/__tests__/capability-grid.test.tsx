@@ -22,6 +22,7 @@ import { describe, expect, test, vi } from 'vitest'
 
 import { CapabilityGrid } from '../components/capability-grid'
 import { ModelBadge } from '../components/model-badge'
+import { resolveRadarSettings } from '../lib/model-radar'
 import { configurationFixture as fixture } from './fixtures'
 
 vi.mock('react-i18next', () => ({
@@ -39,6 +40,51 @@ vi.mock('@/lib/lobe-icon', () => ({
 }))
 
 describe('model radar capability grid', () => {
+  test('All shows vendor sections, resolves Kimi aliases, and preserves source identities in details', async () => {
+    const user = userEvent.setup()
+    const view = render(
+      <CapabilityGrid
+        history={[]}
+        configurations={[{ ...fixture, model: 'k3' }, fixture]}
+        groupByVendor
+      />
+    )
+    expect(screen.getByRole('region', { name: 'Moonshot' })).toBeVisible()
+    expect(screen.getByRole('region', { name: 'OpenAI' })).toBeVisible()
+    expect(screen.getByRole('heading', { name: 'kimi-k3' })).toHaveAttribute(
+      'title',
+      'k3'
+    )
+    expect(
+      view.container.querySelector('[data-icon-key="Moonshot.Color"]')
+    ).not.toBeNull()
+    await user.click(
+      screen.getByRole('button', { name: 'View details for k3 medium' })
+    )
+    expect(await screen.findByRole('dialog')).toHaveAccessibleName(
+      'kimi-k3 medium Moonshot'
+    )
+  })
+
+  test('keeps different source models separate when their display names collide', () => {
+    render(
+      <CapabilityGrid
+        history={[]}
+        configurations={[
+          { ...fixture, model: 'k3' },
+          { ...fixture, model: 'kimi-k3' },
+        ]}
+        settings={resolveRadarSettings({})}
+      />
+    )
+    expect(screen.getAllByRole('heading', { name: 'kimi-k3' })).toHaveLength(2)
+    expect(
+      screen.getByRole('button', { name: 'View details for k3 medium' })
+    ).toBeVisible()
+    expect(
+      screen.getByRole('button', { name: 'View details for kimi-k3 medium' })
+    ).toBeVisible()
+  })
   test('preserves source model order instead of crowning a two-sample configuration as the overall leader', () => {
     render(
       <CapabilityGrid
@@ -181,7 +227,7 @@ describe('model radar capability grid', () => {
     await user.keyboard('{Enter}')
 
     const dialog = await screen.findByRole('dialog')
-    expect(dialog).toHaveAccessibleName('gpt-radar medium Codex')
+    expect(dialog).toHaveAccessibleName('gpt-radar medium OpenAI')
     expect(within(dialog).getByText('Runs 24h / 48h / total')).toBeVisible()
     expect(within(dialog).getByText('3 / 6 / 12')).toBeVisible()
     expect(screen.getByText('Combined cost index')).toBeVisible()

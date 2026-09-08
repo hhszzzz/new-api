@@ -44,16 +44,22 @@ import { cn } from '@/lib/utils'
 import { useRadarFormatters } from '../hooks/use-radar-formatters'
 import {
   getPassRate,
-  getStationLabel,
+  getVendorMeta,
   getHistorySeries,
-  getConfigurationStation,
+  resolveRadarModel,
+  OTHER_VENDOR,
 } from '../lib/model-radar'
-import type { ModelRadarConfiguration, ModelRadarHistoryFrame } from '../types'
+import type {
+  ModelRadarConfiguration,
+  ModelRadarHistoryFrame,
+  ModelRadarSettings,
+} from '../types'
 import { Sparkline } from './sparkline'
 
 export function ConfigurationDetails(props: {
   configuration: ModelRadarConfiguration | null
   history: ModelRadarHistoryFrame[]
+  settings?: ModelRadarSettings
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
@@ -61,6 +67,8 @@ export function ConfigurationDetails(props: {
   const format = useRadarFormatters()
   const configuration = props.configuration
   if (!configuration) return null
+  const resolved = resolveRadarModel(configuration.model, props.settings)
+  const vendor = getVendorMeta(resolved.vendor)
 
   const passRate = getPassRate(configuration)
   const passPercent = Math.min(100, Math.max(0, passRate * 100))
@@ -134,16 +142,14 @@ export function ConfigurationDetails(props: {
         className='max-h-[min(88vh,760px)] overflow-y-auto sm:max-w-2xl'
       >
         <DialogHeader className='pr-10'>
-          <DialogTitle className='break-words'>
-            {configuration.model}{' '}
+          <DialogTitle className='break-words' title={configuration.model}>
+            {resolved.displayName}{' '}
             <span className='text-muted-foreground ml-2 text-sm font-normal capitalize'>
               {configuration.effort}
             </span>{' '}
-            {getConfigurationStation(configuration) ? (
-              <Badge variant='secondary' className='ml-2 align-middle'>
-                {getStationLabel(getConfigurationStation(configuration))}
-              </Badge>
-            ) : null}
+            <Badge variant='secondary' className='ml-2 align-middle'>
+              {vendor.key === OTHER_VENDOR ? t('Other') : vendor.label}
+            </Badge>
           </DialogTitle>
           <DialogDescription>
             {t(

@@ -23,12 +23,15 @@ import {
   getModelIconKey,
   groupConfigurations,
   matrixEfforts,
-  listStations,
-  filterByStation,
-  filterAlertsByStation,
+  listVendors,
+  filterByVendor,
+  filterAlertsByVendor,
+  resolveRadarSettings,
+  resolveRadarModel,
+  resolveDefaultVendor,
+  DEFAULT_RADAR_SETTINGS,
   getHistorySeries,
-  getStationLabel,
-  getConfigurationStation,
+  getVendorMeta,
 } from '../lib/model-radar'
 import type { ModelRadarConfiguration } from '../types'
 
@@ -61,21 +64,19 @@ function configuration(model: string, effort: string): ModelRadarConfiguration {
 }
 
 describe('model radar configuration grouping', () => {
-  test('uses the source station mapping when runner metadata still says codex', () => {
+  test('groups by provider regardless of stale runner metadata', () => {
     const glm = { ...configuration('glm-5.3', 'high'), harness: 'codex' }
     const grok = { ...configuration('grok-4.6', 'high'), harness: 'codex' }
-    expect(getConfigurationStation(glm)).toBe('zcode')
-    expect(getConfigurationStation(grok)).toBe('grok')
-    expect(filterByStation([glm, grok], 'codex')).toEqual([])
-    expect(filterByStation([glm, grok], 'zcode')).toEqual([glm])
-    expect(listStations([glm, grok])).toEqual([
-      { key: 'grok', label: 'Grok', count: 1 },
-      { key: 'zcode', label: 'ZCode', count: 1 },
-    ])
+    expect(resolveRadarModel(glm.model).vendor).toBe('zhipu')
+    expect(resolveRadarModel(grok.model).vendor).toBe('xai')
+    expect(
+      filterByVendor([glm, grok], DEFAULT_RADAR_SETTINGS, 'zhipu')
+    ).toEqual([glm])
   })
-  test('formats unknown station names without treating object properties as labels', () => {
-    expect(getStationLabel('constructor')).toBe('Constructor')
-    expect(getStationLabel('custom')).toBe('Custom')
+  test('does not treat inherited object properties as vendor or model metadata', () => {
+    expect(getVendorMeta('constructor').label).toBe('constructor')
+    expect(resolveRadarModel('constructor').vendor).toBe('other')
+    expect(resolveRadarModel('__proto__').hidden).toBe(false)
   })
   test.each([
     ['gpt-5.4', 'OpenAI.Color'],
@@ -87,6 +88,8 @@ describe('model radar configuration grouping', () => {
     ['dsh-deepseek-v4-flash', 'DeepSeek.Color'],
     ['provider/dsh-deepseek-v4-pro', 'DeepSeek.Color'],
     ['dsh-deepseek-v4-flash-vision-exp', 'DeepSeek.Color'],
+    ['k3', 'Moonshot.Color'],
+    ['hy4-preview', 'Hunyuan.Color'],
     ['unknown-model', null],
   ])(
     'resolves %s to the default provider icon when no configuration exists',
@@ -195,29 +198,40 @@ describe('model radar configuration grouping', () => {
     ).toEqual(['high', 'adaptive', 'turbo'])
   })
 
-  test('counts stations, skips legacy empty harnesses, and sorts by size', () => {
-    expect(
-      listStations([
-        { ...configuration('a', 'low'), harness: 'dsh' },
-        { ...configuration('b', 'low'), harness: 'codex' },
-        { ...configuration('b', 'high'), harness: 'codex' },
-        configuration('legacy', 'low'),
-        { ...configuration('c', 'high'), harness: 'newstation' },
-      ])
-    ).toEqual([
-      { key: 'codex', label: 'Codex', count: 2 },
-      { key: 'dsh', label: 'DSH', count: 1 },
-      { key: 'newstation', label: 'Newstation', count: 1 },
-    ])
+  test('counts distinct visible models instead of tiers and sorts by size then label', () => {
+    const settings = resolveRadarSettings({
+      models: { hidden: { hidden: true } },
+    })
+    const vendors = listVendors(
+      [
+        configuration('gpt-a', 'low'),
+        configuration('gpt-a', 'high'),
+        configuration('claude-a', 'low'),
+        configuration('claude-b', 'low'),
+        configuration('deepseek-a', 'high'),
+        configuration('hidden', 'high'),
+      ],
+      settings
+    )
+    expect(vendors.map(({ key, modelCount }) => ({ key, modelCount }))).toEqual(
+      [
+        { key: 'anthropic', modelCount: 2 },
+        { key: 'deepseek', modelCount: 1 },
+        { key: 'openai', modelCount: 1 },
+      ]
+    )
   })
 
-  test('filters alerts by model and effort together and retains legacy data in All', () => {
-    const codex = { ...configuration('shared', 'low'), harness: 'codex' }
-    const dsh = { ...configuration('shared', 'high'), harness: 'dsh' }
-    const configurations = [codex, dsh, configuration('legacy', 'low')]
+  test('filters configurations and alerts by vendor and drops hidden and absent tiers even in All', () => {
+    const openai = configuration('gpt-a', 'low')
+    const deepseek = configuration('dsh-deepseek-v4-pro', 'high')
+    const configurations = [openai, deepseek, configuration('legacy', 'low')]
+    const settings = resolveRadarSettings({
+      models: { legacy: { hidden: true } },
+    })
     const alerts = [
       {
-        model: 'shared',
+        model: 'gpt-a',
         effort: 'low',
         iq: 80,
         degradation_12h_iq: 1,
@@ -225,7 +239,7 @@ describe('model radar configuration grouping', () => {
         degradation_48h_iq: 3,
       },
       {
-        model: 'shared',
+        model: 'dsh-deepseek-v4-pro',
         effort: 'high',
         iq: 90,
         degradation_12h_iq: 1,
@@ -233,14 +247,96 @@ describe('model radar configuration grouping', () => {
         degradation_48h_iq: 3,
       },
     ]
-    expect(filterByStation(configurations, 'dsh')).toEqual([dsh])
-    expect(filterByStation(configurations, 'all')).toEqual(configurations)
-    expect(filterByStation(configurations, 'missing')).toEqual([])
-    expect(filterAlertsByStation(alerts, configurations, 'dsh')).toEqual([
-      alerts[1],
+    alerts.push(
+      { ...alerts[0], model: 'legacy' },
+      { ...alerts[0], effort: 'missing' }
+    )
+    expect(filterByVendor(configurations, settings, 'deepseek')).toEqual([
+      deepseek,
     ])
-    expect(filterAlertsByStation(alerts, configurations, 'all')).toEqual(alerts)
-    expect(filterAlertsByStation(alerts, configurations, 'missing')).toEqual([])
+    expect(filterByVendor(configurations, settings, 'all')).toEqual([
+      openai,
+      deepseek,
+    ])
+    expect(filterByVendor(configurations, settings, 'missing')).toEqual([])
+    expect(
+      filterAlertsByVendor(alerts, configurations, settings, 'deepseek')
+    ).toEqual([alerts[1]])
+    expect(
+      filterAlertsByVendor(alerts, configurations, settings, 'all')
+    ).toEqual(alerts.slice(0, 2))
+    expect(
+      filterAlertsByVendor(alerts, configurations, settings, 'missing')
+    ).toEqual([])
+  })
+
+  test('resolves admin overrides before aliases and prefixes while preserving pricing icon precedence', () => {
+    expect(resolveRadarModel('k3')).toMatchObject({
+      displayName: 'kimi-k3',
+      vendor: 'moonshot',
+      iconKey: 'Moonshot.Color',
+      source: 'alias',
+    })
+    expect(resolveRadarModel('hy4-preview')).toMatchObject({
+      displayName: 'hy4-preview',
+      vendor: 'tencent',
+      iconKey: 'Hunyuan.Color',
+    })
+    const settings = resolveRadarSettings({
+      models: {
+        k3: { display_name: 'Custom Kimi', vendor: 'tencent', hidden: true },
+      },
+    })
+    expect(resolveRadarModel('k3', settings)).toMatchObject({
+      displayName: 'Custom Kimi',
+      vendor: 'tencent',
+      hidden: true,
+      iconKey: 'Hunyuan.Color',
+      source: 'override',
+    })
+    const registry = {
+      modelIcons: new Map([['kimi-k3', 'Kimi.Color']]),
+      providerIcons: new Map<string, string>(),
+    }
+    expect(
+      resolveRadarModel('k3', DEFAULT_RADAR_SETTINGS, registry).iconKey
+    ).toBe('Kimi.Color')
+    registry.modelIcons.set('k3', 'Moonshot')
+    expect(resolveRadarModel('k3', settings, registry).iconKey).toBe('Moonshot')
+  })
+
+  test('tolerates missing and invalid settings while respecting explicit false', () => {
+    for (const raw of [undefined, null, [], 'invalid', {}]) {
+      expect(resolveRadarSettings(raw)).toEqual(DEFAULT_RADAR_SETTINGS)
+    }
+    expect(
+      resolveRadarSettings({
+        show_degradation_alerts: false,
+        models: { invalid: null, k3: { hidden: true } },
+      })
+    ).toEqual({
+      ...DEFAULT_RADAR_SETTINGS,
+      show_degradation_alerts: false,
+      models: { k3: { hidden: true } },
+    })
+    expect(
+      resolveRadarSettings({ default_vendor: 'invalid vendor' }).default_vendor
+    ).toBe('openai')
+  })
+
+  test('selects the configured vendor only when it has visible models', () => {
+    expect(
+      resolveDefaultVendor(DEFAULT_RADAR_SETTINGS, [{ key: 'openai' }])
+    ).toBe('openai')
+    expect(
+      resolveDefaultVendor(DEFAULT_RADAR_SETTINGS, [{ key: 'anthropic' }])
+    ).toBe('all')
+    expect(
+      resolveDefaultVendor(
+        resolveRadarSettings({ default_vendor: 'anthropic' }),
+        [{ key: 'anthropic' }]
+      )
+    ).toBe('anthropic')
   })
 
   test('limits history to the requested source-relative window and orders it chronologically', () => {

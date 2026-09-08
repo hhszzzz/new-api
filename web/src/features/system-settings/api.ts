@@ -22,6 +22,8 @@ import type {
   ConfirmPaymentComplianceResponse,
   FetchUpstreamRatiosRequest,
   LogCleanupTask,
+  ModelRadarManagement,
+  SystemTask,
   SystemOptionsResponse,
   SystemTaskListResponse,
   SystemTaskResponse,
@@ -108,11 +110,34 @@ export async function getCurrentLogCleanupTask() {
   return res.data
 }
 
-export async function getSystemTask(taskId: string) {
-  const res = await api.get<SystemTaskResponse<LogCleanupTask>>(
+export async function getSystemTask<TTask = LogCleanupTask>(taskId: string) {
+  const res = await api.get<SystemTaskResponse<TTask>>(
     `/api/system-task/${taskId}`
   )
   return res.data
+}
+
+export async function getModelRadarManagement(): Promise<ModelRadarManagement> {
+  const res = await api.get<{
+    success: boolean
+    message: string
+    data: ModelRadarManagement
+  }>('/api/model-radar/manage')
+  if (!res.data.success) throw new Error(res.data.message)
+  return res.data.data
+}
+
+export async function triggerModelRadarSync() {
+  const res = await api.post<
+    SystemTaskResponse<Pick<SystemTask, 'task_id' | 'status' | 'type'>>
+  >('/api/model-radar/sync', null, {
+    validateStatus: (status) =>
+      (status >= 200 && status < 300) || status === 409,
+  })
+  if (!res.data.data || (!res.data.success && res.status !== 409)) {
+    throw new Error(res.data.message)
+  }
+  return { task: res.data.data, created: res.status !== 409 }
 }
 
 export async function listSystemTasks(limit = 20) {

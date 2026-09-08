@@ -21,14 +21,15 @@ import { useTranslation } from 'react-i18next'
 
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { getLobeIcon } from '@/lib/lobe-icon'
 
-import { ALL_STATIONS, type listStations } from '../lib/model-radar'
+import { ALL_VENDORS, OTHER_VENDOR, type listVendors } from '../lib/model-radar'
 
-export function StationTabs(props: {
-  stations: ReturnType<typeof listStations>
-  total: number
+export function VendorTabs(props: {
+  vendors: ReturnType<typeof listVendors>
+  totalModels: number
   value: string
-  onValueChange: (station: string) => void
+  onValueChange: (vendor: string) => void
   children?: ReactNode
 }) {
   const { t } = useTranslation()
@@ -36,7 +37,7 @@ export function StationTabs(props: {
   useEffect(() => {
     const scroller = scrollerRef.current
     if (!scroller) return
-    const revealSelectedStation = () => {
+    const revealSelectedVendor = () => {
       const selected = scroller.querySelector('[aria-selected="true"]')
       if (!selected) return
       const viewport = scroller.getBoundingClientRect()
@@ -47,16 +48,21 @@ export function StationTabs(props: {
         scroller.scrollLeft += tab.right - viewport.right
       }
     }
-    revealSelectedStation()
-    const observer = new ResizeObserver(revealSelectedStation)
+    revealSelectedVendor()
+    const observer = new ResizeObserver(revealSelectedVendor)
     observer.observe(scroller)
     return () => observer.disconnect()
-  }, [props.value, props.stations.length, t])
-  if (props.stations.length <= 1) return props.children ?? null
+  }, [props.value, props.vendors.length, t])
+  if (props.vendors.length <= 1) return props.children ?? null
 
-  const stations = [
-    { key: ALL_STATIONS, label: t('All'), count: props.total },
-    ...props.stations,
+  const vendors = [
+    {
+      key: ALL_VENDORS,
+      label: t('All'),
+      icon: null,
+      modelCount: props.totalModels,
+    },
+    ...props.vendors,
   ]
   return (
     <Tabs
@@ -65,16 +71,19 @@ export function StationTabs(props: {
       className='mt-5'
     >
       <div ref={scrollerRef} className='overflow-x-auto pb-1'>
-        <TabsList variant='line' aria-label={t('Station')}>
-          {stations.map((station) => (
+        <TabsList variant='line' aria-label={t('Vendor')}>
+          {vendors.map((vendor) => (
             <TabsTrigger
-              key={station.key}
-              value={station.key}
+              key={vendor.key}
+              value={vendor.key}
               className='gap-2 px-3'
             >
-              {station.label}{' '}
+              {vendor.icon ? (
+                <span aria-hidden='true'>{getLobeIcon(vendor.icon, 14)}</span>
+              ) : null}
+              {vendor.key === OTHER_VENDOR ? t('Other') : vendor.label}{' '}
               <Badge variant='secondary' className='tabular-nums'>
-                {station.count}
+                {vendor.modelCount}
               </Badge>
             </TabsTrigger>
           ))}

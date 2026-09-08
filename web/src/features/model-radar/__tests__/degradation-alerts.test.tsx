@@ -35,6 +35,12 @@ vi.mock('@/lib/lobe-icon', () => ({
 }))
 
 describe('model radar degradation alerts', () => {
+  test('renders nothing when there are no alerts', () => {
+    const view = render(
+      <DegradationAlerts alerts={[]} history={[]} configurations={[]} />
+    )
+    expect(view.container).toBeEmptyDOMElement()
+  })
   test('renders a negative degradation as an improvement with the correct prior IQ', () => {
     render(
       <DegradationAlerts

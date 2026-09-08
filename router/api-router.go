@@ -36,6 +36,12 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.GET("/pricing", middleware.HeaderNavModuleAuth("pricing"), controller.GetPricing)
 		apiRouter.GET("/perf-metrics/status", middleware.HeaderNavModuleAuth(middleware.HeaderNavModuleModelStatus), controller.GetPerfMetricsStatus)
 		apiRouter.GET("/model-radar", middleware.HeaderNavModuleAuth(middleware.HeaderNavModuleModelRadar), controller.GetModelRadar)
+		modelRadarManage := apiRouter.Group("/model-radar")
+		modelRadarManage.Use(middleware.RootAuth())
+		{
+			modelRadarManage.GET("/manage", controller.GetModelRadarManagement)
+			modelRadarManage.POST("/sync", controller.TriggerModelRadarSync)
+		}
 		perfMetricsRoute := apiRouter.Group("/perf-metrics")
 		perfMetricsRoute.Use(middleware.HeaderNavModulePublicOrUserAuth("pricing"))
 		{

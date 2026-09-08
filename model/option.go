@@ -951,6 +951,8 @@ func validateLegacyOptionUpdate(key, value string) error {
 		return common.UnmarshalJsonStr(value, &candidate)
 	case "HeaderNavModules":
 		return setting.ValidateHeaderNavModules(value)
+	case "ModelRadarSettings":
+		return setting.ValidateModelRadarSettings(value)
 	default:
 		return nil
 	}

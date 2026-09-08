@@ -21,36 +21,36 @@ import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 
-import { StationTabs } from '../components/station-tabs'
+import { VendorTabs } from '../components/vendor-tabs'
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }))
-const stations = [
-  { key: 'codex', label: 'Codex', count: 3 },
-  { key: 'dsh', label: 'DSH', count: 1 },
+const vendors = [
+  { key: 'openai', label: 'OpenAI', icon: 'OpenAI.Color', modelCount: 3 },
+  { key: 'deepseek', label: 'DeepSeek', icon: 'DeepSeek.Color', modelCount: 1 },
 ]
 
 afterEach(() => vi.restoreAllMocks())
 
-describe('model radar station tabs', () => {
-  test('scrolls a selected station into the visible tab strip', async () => {
+describe('model radar vendor tabs', () => {
+  test('scrolls a selected vendor into the visible tab strip', async () => {
     const user = userEvent.setup()
-    function StationPicker() {
+    function VendorPicker() {
       const [value, setValue] = useState('all')
       return (
-        <StationTabs
-          stations={stations}
-          total={4}
+        <VendorTabs
+          vendors={vendors}
+          totalModels={4}
           value={value}
           onValueChange={setValue}
         />
       )
     }
-    render(<StationPicker />)
+    render(<VendorPicker />)
     const scroller = screen.getByRole('tablist').parentElement
-    if (!scroller) throw new Error('Station tabs must have a scroll container')
-    const dsh = screen.getByRole('tab', { name: 'DSH 1' })
+    if (!scroller) throw new Error('Vendor tabs must have a scroll container')
+    const dsh = screen.getByRole('tab', { name: 'DeepSeek 1' })
     vi.spyOn(scroller, 'getBoundingClientRect').mockReturnValue(
       new DOMRect(0, 0, 200, 40)
     )
@@ -61,51 +61,51 @@ describe('model radar station tabs', () => {
     expect(dsh).toHaveAttribute('aria-selected', 'true')
     expect(scroller.scrollLeft).toBe(130)
   })
-  test('renders station counts and supports clicks and arrow-key activation', async () => {
+  test('renders vendor counts and supports clicks and arrow-key activation', async () => {
     const user = userEvent.setup()
     const onChange = vi.fn()
-    function StationPicker() {
+    function VendorPicker() {
       const [value, setValue] = useState('all')
       return (
-        <StationTabs
-          stations={stations}
-          total={5}
+        <VendorTabs
+          vendors={vendors}
+          totalModels={5}
           value={value}
-          onValueChange={(station) => {
-            setValue(station)
-            onChange(station)
+          onValueChange={(vendor) => {
+            setValue(vendor)
+            onChange(vendor)
           }}
         />
       )
     }
-    render(<StationPicker />)
-    expect(screen.getByRole('tablist', { name: 'Station' })).toBeVisible()
+    render(<VendorPicker />)
+    expect(screen.getByRole('tablist', { name: 'Vendor' })).toBeVisible()
     expect(screen.getByRole('tab', { name: 'All 5' })).toHaveAttribute(
       'aria-selected',
       'true'
     )
-    await user.click(screen.getByRole('tab', { name: 'Codex 3' }))
-    expect(onChange).toHaveBeenLastCalledWith('codex')
+    await user.click(screen.getByRole('tab', { name: 'OpenAI 3' }))
+    expect(onChange).toHaveBeenLastCalledWith('openai')
     await user.keyboard('{ArrowRight}{Enter}')
-    expect(onChange).toHaveBeenLastCalledWith('dsh')
-    expect(screen.getByRole('tab', { name: 'DSH 1' })).toHaveAttribute(
+    expect(onChange).toHaveBeenLastCalledWith('deepseek')
+    expect(screen.getByRole('tab', { name: 'DeepSeek 1' })).toHaveAttribute(
       'aria-selected',
       'true'
     )
   })
 
-  test.each([{ items: [] }, { items: stations.slice(0, 1) }])(
-    'omits tabs with at most one station and retains page content',
+  test.each([{ items: [] }, { items: vendors.slice(0, 1) }])(
+    'omits tabs with at most one vendor and retains page content',
     ({ items }) => {
       render(
-        <StationTabs
-          stations={items}
-          total={3}
+        <VendorTabs
+          vendors={items}
+          totalModels={3}
           value='all'
           onValueChange={vi.fn()}
         >
           <p>content</p>
-        </StationTabs>
+        </VendorTabs>
       )
       expect(screen.queryByRole('tablist')).toBeNull()
       expect(screen.getByText('content')).toBeVisible()

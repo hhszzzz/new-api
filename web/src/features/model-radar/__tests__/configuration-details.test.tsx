@@ -50,7 +50,7 @@ describe('configuration details', () => {
       />
     )
     const dialog = screen.getByRole('dialog')
-    expect(dialog).toHaveAccessibleName('gpt-radar medium Codex')
+    expect(dialog).toHaveAccessibleName('gpt-radar medium OpenAI')
     expect(within(dialog).getByText('Runs 24h / 48h / total')).toBeVisible()
     expect(within(dialog).getByText('3 / 6 / 12')).toBeVisible()
     expect(
@@ -84,7 +84,7 @@ describe('configuration details', () => {
       />
     )
     const dialog = screen.getByRole('dialog')
-    expect(dialog).toHaveAccessibleName('gpt-radar medium')
+    expect(dialog).toHaveAccessibleName('gpt-radar medium OpenAI')
     expect(within(dialog).getByText('— / — / 12')).toBeVisible()
     expect(within(dialog).getByText('No history data available')).toBeVisible()
     expect(dialog).not.toHaveTextContent(/NaN|undefined|Off-peak|Peak/)

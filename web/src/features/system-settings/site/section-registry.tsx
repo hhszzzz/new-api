@@ -24,6 +24,7 @@ import {
   serializeSidebarModulesAdmin,
 } from '../maintenance/config'
 import { HeaderNavigationSection } from '../maintenance/header-navigation-section'
+import { ModelRadarSection } from '../maintenance/model-radar-section'
 import { NoticeSection } from '../maintenance/notice-section'
 import { SidebarModulesSection } from '../maintenance/sidebar-modules-section'
 import type { SiteSettings } from '../types'
@@ -71,6 +72,13 @@ const SITE_SECTIONS = [
         />
       )
     },
+  },
+  {
+    id: 'model-radar',
+    titleKey: 'Model Radar',
+    build: (settings: SiteSettings) => (
+      <ModelRadarSection initialSerialized={settings.ModelRadarSettings} />
+    ),
   },
   {
     id: 'sidebar-modules',
