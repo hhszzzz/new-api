@@ -29,6 +29,7 @@ export const SORT_OPTIONS = {
   NAME: 'name',
   PRICE_LOW: 'price-low',
   PRICE_HIGH: 'price-high',
+  STATUS: 'status',
 } as const
 
 export type SortOption = (typeof SORT_OPTIONS)[keyof typeof SORT_OPTIONS]
@@ -38,6 +39,7 @@ export function getSortLabels(t: TFunction): Record<SortOption, string> {
     [SORT_OPTIONS.NAME]: t('Name'),
     [SORT_OPTIONS.PRICE_LOW]: t('Price: Low to High'),
     [SORT_OPTIONS.PRICE_HIGH]: t('Price: High to Low'),
+    [SORT_OPTIONS.STATUS]: t('Issues first'),
   }
 }
 

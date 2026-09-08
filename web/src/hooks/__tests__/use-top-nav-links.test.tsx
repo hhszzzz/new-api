@@ -65,9 +65,7 @@ describe('top navigation model status link', () => {
     expect(linksByHref.has('/')).toBe(false)
     expect(linksByHref.get('/dashboard')?.icon).toBe(TOP_NAV_ICONS.console)
     expect(linksByHref.get('/pricing')?.icon).toBe(TOP_NAV_ICONS.pricing)
-    expect(linksByHref.get('/model-status')?.icon).toBe(
-      TOP_NAV_ICONS.modelStatus
-    )
+    expect(linksByHref.has('/model-status')).toBe(false)
     expect(linksByHref.get('/model-radar')?.icon).toBe(TOP_NAV_ICONS.modelRadar)
     expect(linksByHref.get('/rankings')?.icon).toBe(TOP_NAV_ICONS.rankings)
     expect(linksByHref.get('/docs')?.icon).toBe(TOP_NAV_ICONS.docs)
@@ -103,11 +101,6 @@ describe('top navigation model status link', () => {
         requiresAuth: true,
       },
       {
-        title: 'Model Status',
-        href: '/model-status',
-        requiresAuth: true,
-      },
-      {
         title: 'Model Radar',
         href: '/model-radar',
         requiresAuth: true,
@@ -116,26 +109,31 @@ describe('top navigation model status link', () => {
     expect(result.current.every((link) => link.icon)).toBe(true)
   })
 
-  test('places model status immediately after model square', () => {
+  test('omits the old status entry even when its legacy setting is enabled', () => {
     useStatusMock.mockReturnValue({ status })
 
     const { result } = renderHook(() => useTopNavLinks())
 
     expect(result.current.map((link) => link.href)).toEqual([
       '/pricing',
-      '/model-status',
       '/model-radar',
       '/rankings',
     ])
   })
 
-  test('marks the model status link as requiring login only for visitors', () => {
-    useStatusMock.mockReturnValue({ status })
+  test('marks the model square link as requiring login only for visitors', () => {
+    useStatusMock.mockReturnValue({
+      status: {
+        HeaderNavModules: JSON.stringify({
+          pricing: { enabled: true, requireAuth: true },
+        }),
+      },
+    })
 
     const { result } = renderHook(() => useTopNavLinks())
 
     expect(
-      result.current.find((link) => link.href === '/model-status')
+      result.current.find((link) => link.href === '/pricing')
     ).toMatchObject({ requiresAuth: true })
 
     act(() => {
@@ -147,11 +145,11 @@ describe('top navigation model status link', () => {
     })
 
     expect(
-      result.current.find((link) => link.href === '/model-status')
+      result.current.find((link) => link.href === '/pricing')
     ).toMatchObject({ requiresAuth: false })
   })
 
-  test('places model radar after model status and applies its independent access', () => {
+  test('preserves the independent model radar access', () => {
     useStatusMock.mockReturnValue({ status })
 
     const { result } = renderHook(() => useTopNavLinks())

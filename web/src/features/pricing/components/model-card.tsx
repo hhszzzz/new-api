@@ -16,11 +16,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { ChevronRight, Copy } from 'lucide-react'
+import { ChevronRight } from 'lucide-react'
 import { memo, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
+import { CopyButton } from '@/components/copy-button'
+import { Button } from '@/components/ui/button'
 import { getLobeIcon } from '@/lib/lobe-icon'
 import { resolveProviderIconKey } from '@/lib/provider-icon'
 import { cn } from '@/lib/utils'
@@ -51,11 +52,12 @@ export interface ModelCardProps {
   showRechargePrice?: boolean
   selectedGroup?: string
   perf?: ModelPerfBadgeData
+  generatedAt?: number
+  onOpenPerformance?: () => void
 }
 
 export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
   const { t } = useTranslation()
-  const { copyToClipboard } = useCopyToClipboard()
   const tokenUnit = props.tokenUnit ?? DEFAULT_TOKEN_UNIT
   const priceRate = props.priceRate ?? 1
   const usdExchangeRate = props.usdExchangeRate ?? 1
@@ -96,11 +98,6 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
   const bottomTags = [...endpoints.slice(0, 2), ...tags.slice(0, 2)]
   const hiddenCount =
     Math.max(endpoints.length - 2, 0) + Math.max(tags.length - 2, 0)
-
-  const handleCopy = (e: React.MouseEvent) => {
-    e.stopPropagation()
-    copyToClipboard(props.model.model_name || '')
-  }
 
   let priceSummary: ReactNode
   if (dynamicSummary) {
@@ -273,23 +270,23 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
         </div>
 
         <div className='flex shrink-0 items-center gap-1.5'>
-          <button
+          <Button
             type='button'
+            variant='outline'
+            size='sm'
             onClick={props.onClick}
-            className='text-muted-foreground hover:text-foreground hover:bg-muted inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs transition-colors sm:px-2.5 sm:py-1.5'
+            className='text-muted-foreground gap-1 px-2 text-xs'
           >
             {t('Details')}
             <ChevronRight className='size-3.5' />
-          </button>
-          <button
-            type='button'
-            onClick={handleCopy}
-            className='text-muted-foreground hover:text-foreground hover:bg-muted rounded-md border p-1.5 transition-colors'
-            title={t('Copy')}
+          </Button>
+          <CopyButton
+            value={props.model.model_name}
+            variant='outline'
+            className='text-muted-foreground size-7 rounded-md'
+            iconClassName='size-3.5'
             aria-label={t('Copy model name')}
-          >
-            <Copy className='size-3.5' />
-          </button>
+          />
         </div>
       </div>
 
@@ -302,12 +299,10 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
         {description}
       </p>
 
-      <div className='mt-2 grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-2 gap-y-1 sm:mt-4'>
+      <div className='mt-2 flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1 sm:mt-4'>
         <div className='flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1'>
           <ModelBillingModeBadge model={props.model} />
         </div>
-        <ModelPerfBadge perf={props.perf} className='row-span-2 self-start' />
-
         <div className='flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-0.5 sm:gap-x-3 sm:gap-y-1'>
           {bottomTags.map((item) => (
             <span key={item} className='text-muted-foreground/70 text-xs'>
@@ -328,6 +323,12 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
           )}
         </div>
       </div>
+      <ModelPerfBadge
+        perf={props.perf}
+        generatedAt={props.generatedAt}
+        onOpenPerformance={props.onOpenPerformance}
+        className='border-border/60 mt-3 border-t pt-3'
+      />
     </div>
   )
 })

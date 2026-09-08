@@ -34,7 +34,7 @@ func SetApiRouter(router *gin.Engine) {
 		//apiRouter.GET("/midjourney", controller.GetMidjourney)
 		apiRouter.GET("/home_page_content", controller.GetHomePageContent)
 		apiRouter.GET("/pricing", middleware.HeaderNavModuleAuth("pricing"), controller.GetPricing)
-		apiRouter.GET("/perf-metrics/status", middleware.HeaderNavModuleAuth(middleware.HeaderNavModuleModelStatus), controller.GetPerfMetricsStatus)
+		apiRouter.GET("/perf-metrics/status", middleware.HeaderNavModuleAuth("pricing"), controller.GetPerfMetricsStatus)
 		apiRouter.GET("/model-radar", middleware.HeaderNavModuleAuth(middleware.HeaderNavModuleModelRadar), controller.GetModelRadar)
 		modelRadarManage := apiRouter.Group("/model-radar")
 		modelRadarManage.Use(middleware.RootAuth())

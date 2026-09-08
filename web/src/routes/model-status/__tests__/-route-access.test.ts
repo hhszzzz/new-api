@@ -24,28 +24,44 @@ const { getFreshModuleAccessMock } = vi.hoisted(() => ({
   getFreshModuleAccessMock: vi.fn(),
 }))
 
-vi.mock('@/features/model-status', () => ({
-  ModelStatus: () => null,
+vi.mock('@/features/pricing', () => ({
+  Pricing: () => null,
 }))
 
 vi.mock('@/lib/nav-modules', () => ({
   getFreshModuleAccess: getFreshModuleAccessMock,
 }))
 
-const { guardModelStatusRoute } = await import('../index')
+const { Route: legacyRoute } = await import('../index')
+const { Route: pricingRoute } = await import('../../pricing/index')
 
 afterEach(() => {
   useAuthStore.getState().auth.reset()
 })
 
 describe('model status route access', () => {
+  test('replaces the old page with the existing catalog sorted by status', () => {
+    expect(() => legacyRoute.options.beforeLoad?.({} as never)).toThrow(
+      expect.objectContaining({
+        options: expect.objectContaining({
+          to: '/pricing',
+          search: { sort: 'status' },
+          replace: true,
+        }),
+      })
+    )
+  })
   test('redirects to home when the module is disabled', async () => {
     getFreshModuleAccessMock.mockResolvedValue({
       enabled: false,
       requireAuth: false,
     })
 
-    await expect(guardModelStatusRoute('/model-status')).rejects.toMatchObject({
+    await expect(
+      pricingRoute.options.beforeLoad?.({
+        location: { href: '/pricing?sort=status' },
+      } as never)
+    ).rejects.toMatchObject({
       options: { to: '/' },
     })
   })
@@ -57,11 +73,13 @@ describe('model status route access', () => {
     })
 
     await expect(
-      guardModelStatusRoute('/model-status?from=header')
+      pricingRoute.options.beforeLoad?.({
+        location: { href: '/pricing?sort=status' },
+      } as never)
     ).rejects.toMatchObject({
       options: {
         to: '/sign-in',
-        search: { redirect: '/model-status?from=header' },
+        search: { redirect: '/pricing?sort=status' },
       },
     })
   })
@@ -73,7 +91,9 @@ describe('model status route access', () => {
     })
 
     await expect(
-      guardModelStatusRoute('/model-status')
+      pricingRoute.options.beforeLoad?.({
+        location: { href: '/pricing?sort=status' },
+      } as never)
     ).resolves.toBeUndefined()
   })
 
@@ -89,7 +109,9 @@ describe('model status route access', () => {
     })
 
     await expect(
-      guardModelStatusRoute('/model-status')
+      pricingRoute.options.beforeLoad?.({
+        location: { href: '/pricing?sort=status' },
+      } as never)
     ).resolves.toBeUndefined()
   })
 })

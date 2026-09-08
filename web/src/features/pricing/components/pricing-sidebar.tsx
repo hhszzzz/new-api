@@ -27,6 +27,8 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from '@/components/ui/collapsible'
+import { getModelStatusLabel } from '@/features/performance-metrics/components/status-presentation'
+import type { ModelHealthStatus } from '@/features/performance-metrics/status-types'
 import { getLobeIcon } from '@/lib/lobe-icon'
 import { cn } from '@/lib/utils'
 
@@ -54,6 +56,7 @@ type FilterSectionProps = {
   value: string
   options: FilterOption[]
   onChange: (value: string) => void
+  disabled?: boolean
 }
 
 export interface PricingSidebarProps {
@@ -62,11 +65,14 @@ export interface PricingSidebarProps {
   vendorFilter: string
   groupFilter: string
   tagFilter: string
+  statusFilter: string
+  statusAvailable: boolean
   onQuotaTypeChange: (value: string) => void
   onEndpointTypeChange: (value: string) => void
   onVendorChange: (value: string) => void
   onGroupChange: (value: string) => void
   onTagChange: (value: string) => void
+  onStatusChange: (value: string) => void
   vendors: PricingVendor[]
   groups: string[]
   groupRatios?: Record<string, number>
@@ -96,6 +102,7 @@ function FilterChip(props: {
   option: FilterOption
   active: boolean
   onClick: () => void
+  disabled?: boolean
 }) {
   return (
     <Button
@@ -103,6 +110,7 @@ function FilterChip(props: {
       variant={props.active ? 'secondary' : 'outline'}
       size='sm'
       onClick={props.onClick}
+      disabled={props.disabled}
       aria-pressed={props.active}
       className='h-auto max-w-full gap-1.5 px-2 py-1 text-xs'
       title={props.option.label}
@@ -146,6 +154,7 @@ function FilterSection(props: FilterSectionProps) {
               key={option.value}
               option={option}
               active={props.value === option.value}
+              disabled={props.disabled}
               onClick={() => props.onChange(option.value)}
             />
           ))}
@@ -284,6 +293,26 @@ export function PricingSidebar(props: PricingSidebarProps) {
       )}
 
       <div className='space-y-1'>
+        <FilterSection
+          title={t('Status')}
+          value={props.statusFilter}
+          disabled={!props.statusAvailable}
+          options={[
+            { value: FILTER_ALL, label: t('All statuses') },
+            ...(
+              [
+                'operational',
+                'degraded',
+                'failed',
+                'no_data',
+              ] as ModelHealthStatus[]
+            ).map((status) => ({
+              value: status,
+              label: getModelStatusLabel(t, status),
+            })),
+          ]}
+          onChange={props.onStatusChange}
+        />
         <FilterSection
           title={t('Groups')}
           value={props.groupFilter}

@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useTranslation } from 'react-i18next'
 
+import { Button } from '@/components/ui/button'
 import {
   Tooltip,
   TooltipContent,
@@ -31,7 +32,7 @@ import {
 } from '@/features/performance-metrics/lib/format'
 import { cn } from '@/lib/utils'
 
-import type { ModelStatusTimelinePoint } from '../types'
+import type { ModelStatusTimelinePoint } from '../status-types'
 import {
   getModelStatusBarClass,
   getModelStatusLabel,
@@ -39,9 +40,14 @@ import {
 
 type StatusTimelineProps = {
   timeline: ModelStatusTimelinePoint[]
-  hourFormatter: Intl.DateTimeFormat
-  numberFormatter: Intl.NumberFormat
-}
+} & (
+  | { compact: true }
+  | {
+      compact?: false
+      hourFormatter: Intl.DateTimeFormat
+      numberFormatter: Intl.NumberFormat
+    }
+)
 
 function formatHour(timestamp: number, formatter: Intl.DateTimeFormat): string {
   return formatter.format(new Date(timestamp * 1000))
@@ -62,6 +68,26 @@ function formatHourRange(
 
 export function StatusTimeline(props: StatusTimelineProps) {
   const { t } = useTranslation()
+  if (props.compact) {
+    return (
+      <span
+        role='img'
+        aria-label={t('Status over the last 24 hours')}
+        className='grid h-3 w-[119px] grid-cols-[repeat(24,4px)] gap-px'
+      >
+        {props.timeline.map((point) => (
+          <span
+            key={point.ts}
+            aria-hidden
+            className={cn(
+              'h-full rounded-xs',
+              getModelStatusBarClass(point.status, point.success_rate)
+            )}
+          />
+        ))}
+      </span>
+    )
+  }
   const firstPoint = props.timeline[0]
   const lastPoint = props.timeline.at(-1)
 
@@ -123,7 +149,7 @@ export function StatusTimeline(props: StatusTimelineProps) {
                 <Tooltip>
                   <TooltipTrigger
                     render={
-                      <button
+                      <Button
                         type='button'
                         className={cn(
                           'block h-7 w-full min-w-0 cursor-default overflow-hidden rounded-[3px] border-0 p-0 outline-none transition-[filter,box-shadow] hover:brightness-95 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 sm:h-8 sm:rounded',

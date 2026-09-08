@@ -3,6 +3,7 @@ package controller
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
+	"github.com/samber/lo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -20,6 +22,113 @@ import (
 type perfMetricsStatusResponse struct {
 	Success bool                     `json:"success"`
 	Data    perfmetrics.StatusResult `json:"data"`
+}
+
+func TestPerfMetricsStatusCatalogScopesDatabaseMatrix(t *testing.T) {
+	for _, dialect := range []struct{ kind, env string }{{"sqlite", ""}, {"mysql", "TEST_MYSQL_DSN"}, {"postgres", "TEST_POSTGRES_DSN"}} {
+		t.Run(dialect.kind, func(t *testing.T) {
+			if dialect.env != "" && os.Getenv(dialect.env) == "" {
+				t.Skip("set " + dialect.env + " to run this database")
+			}
+			db := modelManagementDB(t, dialect.kind, os.Getenv(dialect.env))
+			require.NoError(t, db.AutoMigrate(&model.PerfMetric{}, &model.PerfMetricInstance{}, &model.UserGroupMembership{}))
+			previousUsable, previousRatios := setting.UserUsableGroups2JSONString(), ratio_setting.GroupRatio2JSONString()
+			require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"default":"Default","vip":"VIP","private":"Private"}`))
+			require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1,"vip":2,"private":3}`))
+			t.Cleanup(func() {
+				require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(previousUsable))
+				require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(previousRatios))
+				model.InvalidatePricingCache()
+			})
+			user := model.User{Username: "status-matrix-user", Group: "default", Status: common.UserStatusEnabled}
+			require.NoError(t, db.Create(&user).Error)
+			manual := true
+			require.NoError(t, db.Create(&[]model.UserGroupMembership{
+				{UserId: user.Id, GroupName: "default", SortOrder: 0, Manual: &manual},
+				{UserId: user.Id, GroupName: "vip", SortOrder: 1, Manual: &manual},
+			}).Error)
+			channel := model.Channel{Type: constant.ChannelTypeOpenAI, Name: "status-matrix", Status: common.ChannelStatusEnabled}
+			require.NoError(t, db.Create(&channel).Error)
+			name := "status-matrix-" + dialect.kind
+			emptyName := name + "-no-data"
+			require.NoError(t, db.Create(&[]model.Ability{
+				{Group: "default", Model: name, ChannelId: channel.Id, Enabled: true},
+				{Group: "vip", Model: name, ChannelId: channel.Id, Enabled: true},
+				{Group: "default", Model: emptyName, ChannelId: channel.Id, Enabled: true},
+			}).Error)
+			for _, modelName := range []string{name, emptyName} {
+				require.NoError(t, (&model.Model{ModelName: modelName, Status: 1, SyncOfficial: 1}).Insert())
+			}
+			bucketTs := time.Now().Add(-time.Hour).Truncate(time.Hour).Unix()
+			require.NoError(t, db.Create(&[]model.PerfMetric{
+				{ModelName: name, Group: "default", BucketTs: bucketTs, RequestCount: 99, SuccessCount: 99, TotalLatencyMs: 99000, TtftSumMs: 9000, TtftCount: 90, OutputTokens: 990, GenerationMs: 99000},
+				{ModelName: name, Group: "vip", BucketTs: bucketTs, RequestCount: 1, SuccessCount: 0, TotalLatencyMs: 9000, TtftSumMs: 1000, TtftCount: 1, OutputTokens: 100, GenerationMs: 1000},
+				{ModelName: name, Group: "private", BucketTs: bucketTs, RequestCount: 100, SuccessCount: 0},
+			}).Error)
+			model.InvalidatePricingCache()
+			for _, tc := range []struct {
+				name, query  string
+				anonymous    bool
+				code, models int
+				requests     int64
+				rate         *float64
+			}{
+				{name: "weighted visible groups", query: "?model=" + name, code: 200, models: 1, requests: 100, rate: lo.ToPtr[float64](99)},
+				{name: "default group", query: "?model=" + name + "&group=default", code: 200, models: 1, requests: 99, rate: lo.ToPtr[float64](100)},
+				{name: "failed VIP group", query: "?model=" + name + "&group=vip", code: 200, models: 1, requests: 1, rate: lo.ToPtr[float64](0)},
+				{name: "all visible models", code: 200, models: 2, requests: 100, rate: lo.ToPtr[float64](99)},
+				{name: "VIP excludes default-only model", query: "?group=vip", code: 200, models: 1, requests: 1, rate: lo.ToPtr[float64](0)},
+				{name: "visible model without traffic", query: "?model=" + emptyName, code: 200, models: 1},
+				{name: "unknown model", query: "?model=nonexistent-model", code: 404},
+				{name: "unavailable model group pair", query: "?model=" + emptyName + "&group=vip", code: 404},
+				{name: "private group", query: "?group=private", code: 404},
+				{name: "inactive group", query: "?group=retired", code: 404},
+				{name: "anonymous default only", query: "?model=" + name, anonymous: true, code: 200, models: 1, requests: 99, rate: lo.ToPtr[float64](100)},
+				{name: "anonymous cannot choose VIP", query: "?group=vip", anonymous: true, code: 404},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					recorder := httptest.NewRecorder()
+					context, _ := gin.CreateTestContext(recorder)
+					context.Request = httptest.NewRequest(http.MethodGet, "/api/perf-metrics/status"+tc.query, nil)
+					if !tc.anonymous {
+						context.Set("id", user.Id)
+					}
+					GetPerfMetricsStatus(context)
+					require.Equal(t, tc.code, recorder.Code)
+					if tc.code != http.StatusOK {
+						return
+					}
+					var payload struct {
+						Success bool                  `json:"success"`
+						Data    perfMetricsStatusView `json:"data"`
+					}
+					require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &payload))
+					require.True(t, payload.Success)
+					require.Len(t, payload.Data.Models, tc.models)
+					result := payload.Data.Models[0]
+					require.Len(t, result.Timeline, 24)
+					assert.Equal(t, tc.rate, result.SuccessRate)
+					if tc.anonymous {
+						assert.Nil(t, result.RequestCount)
+						assert.Nil(t, result.SuccessCount)
+						for _, point := range result.Timeline {
+							assert.Nil(t, point.RequestCount)
+							assert.Nil(t, point.SuccessCount)
+						}
+					} else {
+						require.NotNil(t, result.RequestCount)
+						assert.Equal(t, tc.requests, *result.RequestCount)
+					}
+					if tc.name == "weighted visible groups" {
+						require.NotNil(t, result.AvgLatencyMs)
+						assert.EqualValues(t, 1080, *result.AvgLatencyMs)
+						require.NotNil(t, result.AvgTps)
+						assert.Equal(t, 10.9, *result.AvgTps)
+					}
+				})
+			}
+		})
+	}
 }
 
 func TestGetPerfMetricsStatusReturnsOnlyVisibleEnabledModels(t *testing.T) {

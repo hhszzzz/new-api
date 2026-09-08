@@ -20,7 +20,7 @@ import type { TFunction } from 'i18next'
 
 import { getSuccessRateDotClass } from '@/features/performance-metrics/lib/format'
 
-import type { ModelHealthStatus } from '../types'
+import type { ModelHealthStatus } from '../status-types'
 
 const NO_DATA_BAR_CLASS = 'bg-muted ring-1 ring-inset ring-border/70'
 

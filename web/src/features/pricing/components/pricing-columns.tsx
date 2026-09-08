@@ -22,6 +22,7 @@ import { useTranslation } from 'react-i18next'
 import { BadgeCell, DataTableColumnHeader } from '@/components/data-table'
 import { StatusBadge } from '@/components/status-badge'
 import { Button } from '@/components/ui/button'
+import type { ModelStatusModel } from '@/features/performance-metrics/status-types'
 import { getLobeIcon } from '@/lib/lobe-icon'
 import { resolveProviderIconKey } from '@/lib/provider-icon'
 
@@ -40,6 +41,7 @@ import {
 } from '../lib/price'
 import type { PricingModel, TokenUnit } from '../types'
 import { ModelBillingModeBadge } from './model-billing-mode-badge'
+import { ModelPerfBadge } from './model-perf-badge'
 
 // ----------------------------------------------------------------------------
 // Pricing Table Columns
@@ -52,6 +54,9 @@ export interface PricingColumnsOptions {
   showRechargePrice?: boolean
   selectedGroup?: string
   onModelClick?: (modelName: string) => void
+  statuses?: ReadonlyMap<string, ModelStatusModel>
+  generatedAt?: number
+  onOpenPerformance?: (modelName: string) => void
 }
 
 export function usePricingColumns(
@@ -85,9 +90,12 @@ export function usePricingColumns(
         const modelIcon = modelIconKey ? getLobeIcon(modelIconKey, 14) : null
 
         return (
-          <div className='flex max-w-full min-w-0 items-center gap-2'>
+          <div className='flex max-w-[240px] min-w-0 items-center gap-2'>
             {modelIcon}
-            <span className='truncate font-mono text-sm font-medium'>
+            <span
+              title={model.model_name}
+              className='truncate font-mono text-sm font-medium'
+            >
               {model.model_name}
             </span>
           </div>
@@ -97,6 +105,26 @@ export function usePricingColumns(
     },
 
     // Type column
+    {
+      id: 'health',
+      meta: { label: t('Status') },
+      header: t('Status'),
+      minSize: 310,
+      size: 340,
+      enableSorting: false,
+      cell: ({ row }) => (
+        <ModelPerfBadge
+          className='min-w-[295px]'
+          perf={options.statuses?.get(row.original.model_name)}
+          generatedAt={options.generatedAt}
+          onOpenPerformance={
+            options.onOpenPerformance
+              ? () => options.onOpenPerformance?.(row.original.model_name)
+              : undefined
+          }
+        />
+      ),
+    },
     {
       accessorKey: 'quota_type',
       header: t('Type'),

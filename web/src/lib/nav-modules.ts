@@ -40,7 +40,6 @@ export const HEADER_NAV_BUILT_IN_KEYS = [
   'home',
   'console',
   'pricing',
-  'modelStatus',
   'modelRadar',
   'rankings',
   'docs',

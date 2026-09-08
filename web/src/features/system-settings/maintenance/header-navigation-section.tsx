@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useEffect, useMemo } from 'react'
-import { useForm } from 'react-hook-form'
+import { useForm, useWatch } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 
 import {
@@ -73,14 +73,6 @@ const toFormValues = (config: HeaderNavModulesConfig): HeaderNavFormValues => ({
     config.pricing?.requireAuth === undefined
       ? HEADER_NAV_DEFAULT.pricing.requireAuth
       : Boolean(config.pricing.requireAuth),
-  modelStatusEnabled:
-    config.modelStatus?.enabled === undefined
-      ? HEADER_NAV_DEFAULT.modelStatus.enabled
-      : Boolean(config.modelStatus.enabled),
-  modelStatusRequireAuth:
-    config.modelStatus?.requireAuth === undefined
-      ? HEADER_NAV_DEFAULT.modelStatus.requireAuth
-      : Boolean(config.modelStatus.requireAuth),
   modelRadarEnabled:
     config.modelRadar?.enabled === undefined
       ? HEADER_NAV_DEFAULT.modelRadar.enabled
@@ -119,6 +111,7 @@ export function HeaderNavigationSection({
     resolver: zodResolver(headerNavSchema),
     defaultValues: formDefaults,
   })
+  const navigationValues = useWatch({ control: form.control })
 
   useEffect(() => {
     form.reset(formDefaults)
@@ -135,11 +128,6 @@ export function HeaderNavigationSection({
         ...(config.pricing ?? HEADER_NAV_DEFAULT.pricing),
         enabled: values.pricingEnabled,
         requireAuth: values.pricingRequireAuth,
-      },
-      modelStatus: {
-        ...(config.modelStatus ?? HEADER_NAV_DEFAULT.modelStatus),
-        enabled: values.modelStatusEnabled,
-        requireAuth: values.modelStatusRequireAuth,
       },
       modelRadar: {
         ...(config.modelRadar ?? HEADER_NAV_DEFAULT.modelRadar),
@@ -207,7 +195,6 @@ export function HeaderNavigationSection({
     requireAuthKey: HeaderNavBooleanField
     requireAuthDependsOn:
       | 'pricingEnabled'
-      | 'modelStatusEnabled'
       | 'modelRadarEnabled'
       | 'rankingsEnabled'
     title: string
@@ -224,17 +211,6 @@ export function HeaderNavigationSection({
       requireAuthTitle: t('Require login to view models'),
       requireAuthDescription: t(
         'Visitors must authenticate before accessing the pricing directory.'
-      ),
-    },
-    {
-      enabledKey: 'modelStatusEnabled',
-      requireAuthKey: 'modelStatusRequireAuth',
-      requireAuthDependsOn: 'modelStatusEnabled',
-      title: t('Model Status'),
-      description: t('Live model health based on recent API requests.'),
-      requireAuthTitle: t('Require login to view model status'),
-      requireAuthDescription: t(
-        'Visitors must authenticate before accessing the model status page.'
       ),
     },
     {
@@ -336,7 +312,9 @@ export function HeaderNavigationSection({
                           <Switch
                             checked={field.value}
                             onCheckedChange={field.onChange}
-                            disabled={!form.watch(module.requireAuthDependsOn)}
+                            disabled={
+                              !navigationValues[module.requireAuthDependsOn]
+                            }
                           />
                         </FormControl>
                         <FormMessage />

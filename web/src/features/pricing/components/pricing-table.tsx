@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { Row, PaginationState } from '@tanstack/react-table'
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import {
@@ -28,6 +28,7 @@ import {
   getInitialTablePageSize,
   useDataTable,
 } from '@/components/data-table'
+import type { ModelStatusSnapshot } from '@/features/performance-metrics/status-types'
 
 import { DEFAULT_PRICING_PAGE_SIZE, DEFAULT_TOKEN_UNIT } from '../constants'
 import type { PricingModel, TokenUnit } from '../types'
@@ -44,6 +45,8 @@ export interface PricingTableProps {
   showRechargePrice?: boolean
   selectedGroup?: string
   onModelClick?: (modelName: string) => void
+  statusSnapshot?: ModelStatusSnapshot
+  onOpenPerformance?: (modelName: string) => void
 }
 
 export function PricingTable(props: PricingTableProps) {
@@ -67,6 +70,14 @@ export function PricingTable(props: PricingTableProps) {
     ),
   }))
 
+  const statuses = useMemo(
+    () =>
+      new Map(
+        props.statusSnapshot?.models.map((item) => [item.model_name, item]) ??
+          []
+      ),
+    [props.statusSnapshot]
+  )
   const columns = usePricingColumns({
     tokenUnit,
     priceRate,
@@ -74,6 +85,9 @@ export function PricingTable(props: PricingTableProps) {
     showRechargePrice,
     selectedGroup,
     onModelClick,
+    statuses,
+    generatedAt: props.statusSnapshot?.generated_at,
+    onOpenPerformance: props.onOpenPerformance,
   })
 
   const { table } = useDataTable({

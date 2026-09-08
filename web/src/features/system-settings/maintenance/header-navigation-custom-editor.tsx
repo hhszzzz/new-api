@@ -112,7 +112,6 @@ export function HeaderNavigationCustomEditor(
     home: t('Home'),
     console: t('Console'),
     pricing: t('Model Square'),
-    modelStatus: t('Model Status'),
     modelRadar: t('Model Radar'),
     rankings: t('Rankings'),
     docs: t('Docs'),

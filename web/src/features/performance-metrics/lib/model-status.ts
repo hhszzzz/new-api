@@ -18,43 +18,17 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import type {
   ModelHealthStatus,
-  ModelStatusModel,
-  ModelStatusSnapshot,
   ModelStatusTimelinePoint,
-} from '../types'
+} from '../status-types'
 
-const STATUS_PRIORITY: Record<ModelHealthStatus, number> = {
+export const STATUS_PRIORITY: Record<ModelHealthStatus, number> = {
   failed: 0,
   degraded: 1,
   operational: 2,
   no_data: 3,
 }
 
-export type ModelStatusContentKind = 'loading' | 'error' | 'empty' | 'ready'
-
 const HOUR_SECONDS = 60 * 60
-
-export function sortModelStatuses(
-  models: ModelStatusModel[]
-): ModelStatusModel[] {
-  return [...models].sort((left, right) => {
-    const statusOrder =
-      STATUS_PRIORITY[left.status] - STATUS_PRIORITY[right.status]
-    if (statusOrder !== 0) return statusOrder
-    return left.model_name.localeCompare(right.model_name)
-  })
-}
-
-export function getModelStatusContentKind(
-  snapshot: ModelStatusSnapshot | undefined,
-  isLoading: boolean,
-  isError: boolean
-): ModelStatusContentKind {
-  if (!snapshot) {
-    return isLoading && !isError ? 'loading' : 'error'
-  }
-  return snapshot.models.length === 0 ? 'empty' : 'ready'
-}
 
 export function normalizeStatusTimeline(
   timeline: ModelStatusTimelinePoint[],

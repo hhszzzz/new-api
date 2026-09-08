@@ -18,29 +18,12 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { createFileRoute, redirect } from '@tanstack/react-router'
 
-import { ModelStatus } from '@/features/model-status'
-import { getFreshModuleAccess } from '@/lib/nav-modules'
-import { useAuthStore } from '@/stores/auth-store'
-
-export async function guardModelStatusRoute(redirectHref: string) {
-  const access = await getFreshModuleAccess('modelStatus')
-  if (!access.enabled) {
-    throw redirect({ to: '/' })
-  }
-  if (!access.requireAuth) {
-    return
-  }
-
-  const { auth } = useAuthStore.getState()
-  if (!auth.user) {
-    throw redirect({
-      to: '/sign-in',
-      search: { redirect: redirectHref },
-    })
-  }
-}
-
 export const Route = createFileRoute('/model-status/')({
-  beforeLoad: ({ location }) => guardModelStatusRoute(location.href),
-  component: ModelStatus,
+  beforeLoad: () => {
+    throw redirect({
+      to: '/pricing',
+      search: { sort: 'status' },
+      replace: true,
+    })
+  },
 })

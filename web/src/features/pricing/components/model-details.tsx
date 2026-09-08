@@ -16,7 +16,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useQuery } from '@tanstack/react-query'
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router'
 import {
   ArrowLeft,
@@ -48,13 +47,17 @@ import {
 } from '@/components/ui/sheet'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { getPerfMetrics } from '@/features/performance-metrics/api'
+import { useModelStatus } from '@/features/performance-metrics/hooks/use-model-status'
 import {
   formatLatency,
   formatThroughput,
   formatUptimePct,
   getSuccessRateTextClass,
 } from '@/features/performance-metrics/lib/format'
+import type {
+  ModelStatusModel,
+  ModelStatusSnapshot,
+} from '@/features/performance-metrics/status-types'
 import { getLobeIcon } from '@/lib/lobe-icon'
 import { resolveProviderIconKey } from '@/lib/provider-icon'
 import { cn } from '@/lib/utils'
@@ -240,39 +243,11 @@ function OverviewMetric(props: {
   )
 }
 
-function OverviewSummaryGrid(props: { model: PricingModel }) {
+function OverviewSummaryGrid(props: { status?: ModelStatusModel }) {
   const { t } = useTranslation()
-  const metricsQuery = useQuery({
-    queryKey: ['perf-metrics', props.model.model_name],
-    queryFn: () => getPerfMetrics(props.model.model_name, 24),
-    staleTime: 60 * 1000,
-  })
-
-  const groups = metricsQuery.data?.data.groups ?? []
-  const successRates = groups
-    .map((group) => group.success_rate)
-    .filter((rate) => Number.isFinite(rate))
-  const successRate =
-    successRates.length > 0
-      ? successRates.reduce((sum, rate) => sum + rate, 0) / successRates.length
-      : Number.NaN
-  const tpsValues = groups
-    .map((group) => group.avg_tps)
-    .filter((value) => value > 0)
-  const avgTps =
-    tpsValues.length > 0
-      ? tpsValues.reduce((sum, value) => sum + value, 0) / tpsValues.length
-      : 0
-  const latencyValues = groups
-    .map((group) => group.avg_latency_ms)
-    .filter((value) => value > 0)
-  const avgLatency =
-    latencyValues.length > 0
-      ? Math.round(
-          latencyValues.reduce((sum, value) => sum + value, 0) /
-            latencyValues.length
-        )
-      : 0
+  const successRate = props.status?.success_rate ?? Number.NaN
+  const avgTps = props.status?.avg_tps ?? 0
+  const avgLatency = props.status?.avg_latency_ms ?? 0
 
   return (
     <div className='bg-muted/20 grid overflow-hidden rounded-lg border sm:grid-cols-3 sm:divide-x'>
@@ -1223,11 +1198,19 @@ export interface ModelDetailsContentProps {
   usdExchangeRate: number
   tokenUnit: TokenUnit
   showRechargePrice?: boolean
+  initialTab?: TabValue
+  selectedGroup?: string
+  statusSnapshot?: ModelStatusSnapshot
+  statusLoading?: boolean
+  statusError?: boolean
 }
 
 export function ModelDetailsContent(props: ModelDetailsContentProps) {
   const { t } = useTranslation()
   const showRechargePrice = props.showRechargePrice ?? false
+  const status = props.statusSnapshot?.models.find(
+    (item) => item.model_name === props.model.model_name
+  )
 
   const isDynamic =
     props.model.billing_mode === 'tiered_expr' &&
@@ -1237,7 +1220,7 @@ export function ModelDetailsContent(props: ModelDetailsContentProps) {
     <div className='@container/details space-y-4'>
       <ModelHeader model={props.model} />
 
-      <Tabs defaultValue='overview' className='gap-4'>
+      <Tabs defaultValue={props.initialTab ?? 'overview'} className='gap-4'>
         <TabsList className='bg-muted/60 grid w-full grid-cols-3 gap-1 rounded-lg p-1 group-data-horizontal/tabs:h-auto'>
           {TAB_VALUES.map((value) => {
             const Icon = TAB_META[value].icon
@@ -1255,7 +1238,7 @@ export function ModelDetailsContent(props: ModelDetailsContentProps) {
         </TabsList>
 
         <TabsContent value='overview' className='space-y-6 outline-none'>
-          <OverviewSummaryGrid model={props.model} />
+          <OverviewSummaryGrid status={status} />
 
           <section className='bg-card/60 space-y-5 rounded-xl border p-4 shadow-sm'>
             <SectionTitle>{t('Pricing')}</SectionTitle>
@@ -1288,7 +1271,14 @@ export function ModelDetailsContent(props: ModelDetailsContentProps) {
         </TabsContent>
 
         <TabsContent value='performance' className='outline-none'>
-          <ModelDetailsPerformance model={props.model} />
+          <ModelDetailsPerformance
+            model={props.model}
+            status={status}
+            generatedAt={props.statusSnapshot?.generated_at}
+            selectedGroup={props.selectedGroup}
+            isLoading={props.statusLoading}
+            isError={props.statusError}
+          />
         </TabsContent>
 
         <TabsContent value='api' className='outline-none'>
@@ -1359,6 +1349,12 @@ export function ModelDetails() {
     if (!models || !modelId) return null
     return models.find((m) => m.model_name === modelId) || null
   }, [models, modelId])
+  const selectedGroup =
+    search.group && search.group !== 'all' ? search.group : undefined
+  const statusQuery = useModelStatus(
+    { model: modelId, group: selectedGroup },
+    Boolean(model)
+  )
 
   const handleBack = () => {
     navigate({ to: '/pricing', search })
@@ -1422,6 +1418,12 @@ export function ModelDetails() {
 
         <ModelDetailsContent
           model={model}
+          key={`${model.model_name}:${selectedGroup}`}
+          initialTab={search.tab}
+          selectedGroup={selectedGroup}
+          statusSnapshot={statusQuery.data?.data}
+          statusLoading={statusQuery.isPending}
+          statusError={statusQuery.isError}
           groupRatio={groupRatio || {}}
           usableGroup={usableGroup || {}}
           autoGroups={autoGroups || []}

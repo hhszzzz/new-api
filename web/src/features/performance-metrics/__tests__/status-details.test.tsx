@@ -20,15 +20,11 @@ import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, test, vi } from 'vitest'
 
-import { ModelStatusCard } from '../components/model-status-card'
-import type { ModelStatusModel } from '../types'
+import { ModelStatusDetails } from '../components/model-status-details'
+import type { ModelStatusModel } from '../status-types'
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
-}))
-
-vi.mock('@/lib/lobe-icon', () => ({
-  getLobeIcon: (icon: string) => <span data-testid='model-icon'>{icon}</span>,
 }))
 
 const GENERATED_AT = 1_800_000_000
@@ -65,28 +61,10 @@ const hourFormatter = new Intl.DateTimeFormat('en-US', {
 })
 const numberFormatter = new Intl.NumberFormat('en-US')
 
-describe('model status card', () => {
-  test('renders the model icon beside its name and keeps status screen-reader only', () => {
-    render(
-      <ModelStatusCard
-        model={{ ...model, status: 'failed' }}
-        generatedAt={GENERATED_AT}
-        hourFormatter={hourFormatter}
-        numberFormatter={numberFormatter}
-      />
-    )
-
-    const article = screen.getByRole('article', { name: model.model_name })
-    expect(screen.getByTestId('model-icon')).toHaveTextContent('Claude.Color')
-    expect(article).toHaveAccessibleDescription('Unavailable')
-    expect(screen.queryByRole('img', { name: 'Unavailable' })).toBeNull()
-    expect(screen.queryByText(model.vendor)).toBeNull()
-    expect(screen.queryByText('Last 24 hours')).toBeNull()
-  })
-
+describe('model status details', () => {
   test('shows six aggregate metrics and exactly 24 detailed hourly entries', () => {
     render(
-      <ModelStatusCard
+      <ModelStatusDetails
         model={model}
         generatedAt={GENERATED_AT}
         hourFormatter={hourFormatter}
@@ -94,7 +72,9 @@ describe('model status card', () => {
       />
     )
 
-    const article = screen.getByRole('article', { name: model.model_name })
+    const article = screen.getByRole('region', {
+      name: 'Performance metrics for the last 24 hours',
+    })
     expect(article).toBeVisible()
     expect(within(article).getAllByRole('term')).toHaveLength(6)
     expect(within(article).getByText('Requests')).toBeVisible()
@@ -139,7 +119,7 @@ describe('model status card', () => {
   test('shows complete localized hourly metrics when an hour is hovered', async () => {
     const user = userEvent.setup()
     render(
-      <ModelStatusCard
+      <ModelStatusDetails
         model={model}
         generatedAt={GENERATED_AT}
         hourFormatter={hourFormatter}
@@ -188,7 +168,7 @@ describe('model status card', () => {
       })),
     }
     render(
-      <ModelStatusCard
+      <ModelStatusDetails
         model={redactedModel}
         generatedAt={GENERATED_AT}
         hourFormatter={hourFormatter}
@@ -196,7 +176,9 @@ describe('model status card', () => {
       />
     )
 
-    const article = screen.getByRole('article', { name: model.model_name })
+    const article = screen.getByRole('region', {
+      name: 'Performance metrics for the last 24 hours',
+    })
     const requestsLabel = within(article).getByText('Requests')
     const successesLabel = within(article).getByText('Successful requests')
     expect(requestsLabel.closest('dt')?.nextElementSibling).toHaveTextContent(
@@ -216,7 +198,7 @@ describe('model status card', () => {
   test('shows zero counts and unavailable metrics on keyboard focus without data', async () => {
     const user = userEvent.setup()
     render(
-      <ModelStatusCard
+      <ModelStatusDetails
         model={{
           ...model,
           icon: '',
@@ -235,7 +217,9 @@ describe('model status card', () => {
       />
     )
 
-    const article = screen.getByRole('article', { name: model.model_name })
+    const article = screen.getByRole('region', {
+      name: 'Performance metrics for the last 24 hours',
+    })
     expect(within(article).getAllByText('0')).toHaveLength(2)
     expect(within(article).getAllByText('—')).toHaveLength(4)
 
@@ -255,7 +239,7 @@ describe('model status card', () => {
 
   test('uses shrinkable columns and breakable labels for narrow layouts', () => {
     render(
-      <ModelStatusCard
+      <ModelStatusDetails
         model={model}
         generatedAt={GENERATED_AT}
         hourFormatter={hourFormatter}
@@ -263,22 +247,25 @@ describe('model status card', () => {
       />
     )
 
-    const article = screen.getByRole('article', { name: model.model_name })
+    const article = screen.getByRole('region', {
+      name: 'Performance metrics for the last 24 hours',
+    })
     const timeline = screen.getByRole('list', {
       name: 'Status over the last 24 hours',
     })
 
     expect(article).toHaveClass('min-w-0')
-    expect(screen.getByRole('heading', { name: model.model_name })).toHaveClass(
-      'break-all'
-    )
     const successfulRequestsLabel = screen.getByText('Successful requests')
     expect(successfulRequestsLabel).toHaveClass('truncate')
     expect(successfulRequestsLabel.closest('dt')).toHaveClass('min-w-0')
     expect(successfulRequestsLabel.closest('dt')?.parentElement).toHaveClass(
       'min-w-0'
     )
-    expect(successfulRequestsLabel.closest('dl')).toHaveClass('grid-cols-6')
+    expect(successfulRequestsLabel.closest('dl')).toHaveClass(
+      'grid-cols-2',
+      'sm:grid-cols-3',
+      'lg:grid-cols-6'
+    )
     expect(timeline).toHaveClass('grid-cols-[repeat(24,minmax(0,1fr))]')
     for (const item of within(timeline).getAllByRole('listitem')) {
       expect(item).toHaveClass('min-w-0')
@@ -287,19 +274,5 @@ describe('model status card', () => {
         'overflow-hidden'
       )
     }
-  })
-
-  test('uses the model initial when no icon is configured', () => {
-    render(
-      <ModelStatusCard
-        model={{ ...model, icon: '' }}
-        generatedAt={GENERATED_AT}
-        hourFormatter={hourFormatter}
-        numberFormatter={numberFormatter}
-      />
-    )
-
-    expect(screen.queryByTestId('model-icon')).toBeNull()
-    expect(screen.getByText('A')).toBeVisible()
   })
 })

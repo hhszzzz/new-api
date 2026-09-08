@@ -36,7 +36,6 @@ import { useAuthStore } from '@/stores/auth-store'
  *   home: true,
  *   console: true,
  *   pricing: { enabled: true, requireAuth: false },
- *   modelStatus: { enabled: true, requireAuth: false },
  *   modelRadar: { enabled: true, requireAuth: false },
  *   rankings: { enabled: true, requireAuth: false },
  *   docs: true,
@@ -80,18 +79,6 @@ export function useTopNavLinks(): TopNavLink[] {
       href: '/pricing',
       requiresAuth,
       icon: TOP_NAV_ICONS.pricing,
-    })
-  }
-
-  // Model status
-  const modelStatus = modules?.modelStatus
-  if (modelStatus && typeof modelStatus === 'object' && modelStatus.enabled) {
-    const requiresAuth = modelStatus.requireAuth && !isAuthed
-    linksByKey.set('modelStatus', {
-      title: t('Model Status'),
-      href: '/model-status',
-      requiresAuth,
-      icon: TOP_NAV_ICONS.modelStatus,
     })
   }
 

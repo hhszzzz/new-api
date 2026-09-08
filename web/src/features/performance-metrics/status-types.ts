@@ -58,3 +58,8 @@ export type ModelStatusResponse = {
   message?: string
   data: ModelStatusSnapshot
 }
+
+export type ModelStatusParams = {
+  group?: string
+  model?: string
+}

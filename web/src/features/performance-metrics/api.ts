@@ -18,7 +18,20 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { api } from '@/lib/api'
 
+import type { ModelStatusParams, ModelStatusResponse } from './status-types'
 import type { PerformanceMetricsData, PerfSummaryAllData } from './types'
+
+export async function getModelStatus(
+  params: ModelStatusParams = {}
+): Promise<ModelStatusResponse> {
+  const res = await api.get<ModelStatusResponse>('/api/perf-metrics/status', {
+    params,
+  })
+  if (!res.data.success) {
+    throw new Error(res.data.message || 'Performance data is unavailable.')
+  }
+  return res.data
+}
 
 export async function getPerfMetricsSummary(
   hours = 24

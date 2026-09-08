@@ -17,12 +17,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createJSONStorage } from 'zustand/middleware'
 
-import { api } from '@/lib/api'
 import {
   DEFAULT_CURRENCY_CONFIG,
   useSystemConfigStore,
@@ -30,6 +29,8 @@ import {
 
 import { ModelCard } from '../components/model-card'
 import { ModelCardGrid } from '../components/model-card-grid'
+import { ModelPerfBadge } from '../components/model-perf-badge'
+import { PricingTable } from '../components/pricing-table'
 import type { PricingModel } from '../types'
 
 function pricingModel(overrides: Partial<PricingModel> = {}): PricingModel {
@@ -79,6 +80,40 @@ afterEach(() => {
 })
 
 describe('model cards', () => {
+  it('reserves readable metric widths in table view', () => {
+    render(<PricingTable models={[pricingModel()]} />)
+    expect(
+      screen.getByLabelText('Performance metrics for the last 24 hours')
+    ).toHaveClass('min-w-[295px]')
+  })
+  it('reserves the same columns for missing and populated performance values', () => {
+    const { rerender } = render(<ModelPerfBadge perf={undefined} />)
+    const metrics = screen.getByLabelText(
+      'Performance metrics for the last 24 hours'
+    )
+    expect(metrics.querySelector('dl')).toHaveClass(
+      'grid',
+      'grid-cols-[119px_minmax(0,1fr)_minmax(0,1fr)]'
+    )
+    const latencyColumn =
+      within(metrics).getByText('Latency short').parentElement
+    const throughputColumn =
+      within(metrics).getByText('Throughput short').parentElement
+    expect(latencyColumn).toHaveClass('min-w-0', 'text-right')
+    expect(throughputColumn).toHaveClass('min-w-0', 'text-right')
+    rerender(
+      <ModelPerfBadge
+        perf={{ avg_latency_ms: 12000, avg_tps: 1420, success_rate: 98 }}
+      />
+    )
+    expect(within(metrics).getByText('Latency short').parentElement).toBe(
+      latencyColumn
+    )
+    expect(within(metrics).getByText('Throughput short').parentElement).toBe(
+      throughputColumn
+    )
+  })
+
   it('copies the complete long model name without opening details', async () => {
     const user = userEvent.setup()
     const onClick = vi.fn()
@@ -105,7 +140,7 @@ describe('model cards', () => {
     expect(within(metrics).queryByText(/100/)).not.toBeInTheDocument()
     expect(
       within(metrics).getByRole('img', {
-        name: 'Recent success-rate samples; gray bars indicate missing data.',
+        name: 'Status over the last 24 hours',
       })
     ).toBeVisible()
     expect(
@@ -326,24 +361,13 @@ describe('model cards', () => {
     expect(screen.getByText(expression)).toBeVisible()
   })
 
-  it('keeps browsing and neutral health placeholders available after the metrics request fails', async () => {
-    const request = vi
-      .spyOn(api, 'get')
-      .mockRejectedValue(new Error('metrics unavailable'))
+  it('keeps browsing and neutral health placeholders available without a status snapshot', async () => {
     const onModelClick = vi.fn()
     render(
       <QueryClientProvider client={queryClient}>
         <ModelCardGrid models={[pricingModel()]} onModelClick={onModelClick} />
       </QueryClientProvider>
     )
-    await waitFor(() =>
-      expect(
-        queryClient.getQueryState(['perf-metrics-summary', 24])?.status
-      ).toBe('error')
-    )
-    expect(request).toHaveBeenCalledWith('/api/perf-metrics/summary', {
-      params: { hours: 24 },
-    })
     expect(
       within(
         screen.getByLabelText('Performance metrics for the last 24 hours')
@@ -355,10 +379,6 @@ describe('model cards', () => {
   })
 
   it('paginates the model cards and disables navigation at both boundaries', async () => {
-    queryClient.setQueryData(['perf-metrics-summary', 24], {
-      success: true,
-      data: { models: [] },
-    })
     const models = Array.from({ length: 21 }, (_, index) =>
       pricingModel({ id: index + 1, model_name: `model-${index + 1}` })
     )
@@ -376,5 +396,51 @@ describe('model cards', () => {
     expect(screen.getByRole('button', { name: 'Next page' })).toBeDisabled()
     await user.click(screen.getByRole('button', { name: 'Previous page' }))
     expect(screen.getByRole('heading', { name: 'model-1' })).toBeVisible()
+  })
+
+  it('positions sparse hourly data accurately and opens performance from the wider strip', async () => {
+    const onClick = vi.fn()
+    const onOpenPerformance = vi.fn()
+    const generatedAt = 1_800_000_000
+    const user = userEvent.setup()
+    render(
+      <ModelCard
+        model={pricingModel()}
+        onClick={onClick}
+        onOpenPerformance={onOpenPerformance}
+        generatedAt={generatedAt}
+        perf={{
+          avg_latency_ms: 1200,
+          avg_tps: 42,
+          success_rate: 0,
+          timeline: [
+            {
+              ts: generatedAt,
+              status: 'failed',
+              request_count: null,
+              success_count: null,
+              success_rate: 0,
+              avg_latency_ms: 1200,
+              avg_ttft_ms: null,
+              avg_tps: 42,
+            },
+          ],
+        }}
+      />
+    )
+    const strip = screen.getByRole('img', {
+      name: 'Status over the last 24 hours',
+    })
+    expect(strip).toHaveClass('grid-cols-[repeat(24,4px)]', 'w-[119px]')
+    expect(strip.children).toHaveLength(24)
+    expect(strip.children[0]).toHaveClass('bg-muted')
+    expect(strip.children[23]).not.toHaveClass('bg-muted')
+    const performanceButton = screen.getByRole('button', {
+      name: 'View performance',
+    })
+    performanceButton.focus()
+    await user.keyboard('{Enter}')
+    expect(onOpenPerformance).toHaveBeenCalledOnce()
+    expect(onClick).not.toHaveBeenCalled()
   })
 })

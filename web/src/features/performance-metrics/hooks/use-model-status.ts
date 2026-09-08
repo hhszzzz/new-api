@@ -16,13 +16,26 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { api } from '@/lib/api'
+import { useQuery } from '@tanstack/react-query'
 
-import type { ModelStatusResponse } from './types'
+import { useAuthStore } from '@/stores/auth-store'
 
-export async function getModelStatus(): Promise<ModelStatusResponse> {
-  const response = await api.get<ModelStatusResponse>(
-    '/api/perf-metrics/status'
-  )
-  return response.data
+import { getModelStatus } from '../api'
+import type { ModelStatusParams } from '../status-types'
+
+export function useModelStatus(params: ModelStatusParams = {}, enabled = true) {
+  const user = useAuthStore((state) => state.auth.user)
+  return useQuery({
+    queryKey: [
+      'model-status',
+      user?.id ?? null,
+      user?.groups ?? user?.group ?? null,
+      params.group ?? null,
+      params.model ?? null,
+    ],
+    queryFn: () => getModelStatus(params),
+    enabled,
+    staleTime: 60 * 1000,
+    retry: false,
+  })
 }

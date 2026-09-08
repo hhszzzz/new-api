@@ -201,6 +201,17 @@ func GetPerfMetrics(c *gin.Context) {
 
 func GetPerfMetricsStatus(c *gin.Context) {
 	pricing, usableGroups, _, _ := getVisiblePricing(c)
+	requestedGroup := c.Query("group")
+	requestedModel := c.Query("model")
+	activeGroupRatios := ratio_setting.GetGroupRatioCopy()
+	if requestedGroup != "" {
+		_, usable := usableGroups[requestedGroup]
+		_, active := activeGroupRatios[requestedGroup]
+		if !usable || !active {
+			c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "model is not available"})
+			return
+		}
+	}
 	vendors := make(map[int]model.PricingVendor)
 	for _, vendor := range model.GetVendors() {
 		vendors[vendor.ID] = vendor
@@ -208,6 +219,12 @@ func GetPerfMetricsStatus(c *gin.Context) {
 
 	models := make([]perfmetrics.StatusModelSource, 0, len(pricing))
 	for _, item := range pricing {
+		if requestedModel != "" && item.ModelName != requestedModel {
+			continue
+		}
+		if requestedGroup != "" && !lo.Contains(item.EnableGroup, requestedGroup) {
+			continue
+		}
 		vendor := vendors[item.VendorID]
 		icon := vendor.Icon
 		if strings.TrimSpace(icon) == "" {
@@ -220,9 +237,15 @@ func GetPerfMetricsStatus(c *gin.Context) {
 		})
 	}
 
-	activeGroupRatios := ratio_setting.GetGroupRatioCopy()
+	if requestedModel != "" && len(models) == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "model is not available"})
+		return
+	}
 	activeGroups := make([]string, 0, len(usableGroups))
 	for group := range usableGroups {
+		if requestedGroup != "" && group != requestedGroup {
+			continue
+		}
 		if _, ok := activeGroupRatios[group]; ok {
 			activeGroups = append(activeGroups, group)
 		}

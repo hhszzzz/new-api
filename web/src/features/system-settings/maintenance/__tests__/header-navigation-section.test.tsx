@@ -21,7 +21,11 @@ import userEvent from '@testing-library/user-event'
 import { describe, expect, test, vi } from 'vitest'
 
 import { SettingsPageProvider } from '../../components/settings-page-context'
-import { HEADER_NAV_DEFAULT, serializeHeaderNavModules } from '../config'
+import {
+  HEADER_NAV_DEFAULT,
+  parseHeaderNavModules,
+  serializeHeaderNavModules,
+} from '../config'
 import { HeaderNavigationSection } from '../header-navigation-section'
 
 const { mutateAsyncMock } = vi.hoisted(() => ({
@@ -40,11 +44,18 @@ vi.mock('react-i18next', () => ({
 }))
 
 describe('header navigation settings form', () => {
-  test('saves model status login access independently from model square', async () => {
+  test('saves model square access while preserving legacy radar inheritance', async () => {
     mutateAsyncMock.mockResolvedValue({ success: true })
     const user = userEvent.setup()
     const actionsContainer = document.createElement('div')
     document.body.appendChild(actionsContainer)
+    const legacyConfig = parseHeaderNavModules(
+      JSON.stringify({
+        pricing: { enabled: true, requireAuth: false },
+        modelStatus: { enabled: true, requireAuth: true },
+        order: ['pricing', 'modelStatus', 'modelRadar'],
+      })
+    )
 
     render(
       <SettingsPageProvider
@@ -52,16 +63,21 @@ describe('header navigation settings form', () => {
         suppressSectionHeader={false}
       >
         <HeaderNavigationSection
-          config={HEADER_NAV_DEFAULT}
-          initialSerialized={serializeHeaderNavModules(HEADER_NAV_DEFAULT)}
+          config={legacyConfig}
+          initialSerialized={serializeHeaderNavModules(legacyConfig)}
         />
       </SettingsPageProvider>
     )
 
     const requireAuthSwitch = screen.getByRole('switch', {
-      name: 'Require login to view model status',
+      name: 'Require login to view models',
     })
     expect(requireAuthSwitch).toBeEnabled()
+    expect(
+      screen.queryByRole('switch', {
+        name: 'Require login to view model status',
+      })
+    ).not.toBeInTheDocument()
 
     await user.click(requireAuthSwitch)
     expect(requireAuthSwitch).toBeChecked()
@@ -79,9 +95,10 @@ describe('header navigation settings form', () => {
       enabled: true,
       requireAuth: true,
     })
-    expect(saved.pricing).toEqual(HEADER_NAV_DEFAULT.pricing)
+    expect(saved.pricing).toEqual({ enabled: true, requireAuth: true })
 
-    expect(saved.modelRadar).toEqual(HEADER_NAV_DEFAULT.modelRadar)
+    expect(saved.modelRadar).toEqual({ enabled: true, requireAuth: true })
+    expect(saved.order).not.toContain('modelStatus')
 
     actionsContainer.remove()
   })

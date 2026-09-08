@@ -21,6 +21,7 @@ import { useTranslation } from 'react-i18next'
 
 import { PublicLayout } from '@/components/layout'
 import { PageTransition } from '@/components/page-transition'
+import { useModelStatus } from '@/features/performance-metrics/hooks/use-model-status'
 
 import {
   LoadingSkeleton,
@@ -32,14 +33,18 @@ import {
   ModelCardGrid,
   ModelDetailsDrawer,
 } from './components'
-import { EXCLUDED_GROUPS, VIEW_MODES } from './constants'
+import { EXCLUDED_GROUPS, FILTER_ALL, VIEW_MODES } from './constants'
 import { useFilters } from './hooks/use-filters'
 import { usePricingData } from './hooks/use-pricing-data'
+import { filterModelsByStatus } from './lib/filters'
 
 export function Pricing() {
   const { t } = useTranslation()
   const [selectedModelName, setSelectedModelName] = useState<string | null>(
     null
+  )
+  const [detailsTab, setDetailsTab] = useState<'overview' | 'performance'>(
+    'overview'
   )
 
   const {
@@ -62,6 +67,7 @@ export function Pricing() {
     quotaTypeFilter,
     endpointTypeFilter,
     tagFilter,
+    statusFilter,
     tokenUnit,
     viewMode,
     showRechargePrice,
@@ -72,10 +78,11 @@ export function Pricing() {
     setQuotaTypeFilter,
     setEndpointTypeFilter,
     setTagFilter,
+    setStatusFilter,
     setTokenUnit,
     setViewMode,
     setShowRechargePrice,
-    filteredModels,
+    filteredModels: catalogModels,
     hasActiveFilters,
     activeFilterCount,
     availableTags,
@@ -83,7 +90,29 @@ export function Pricing() {
     clearSearch,
   } = useFilters(models || [])
 
+  const selectedGroup = groupFilter === FILTER_ALL ? undefined : groupFilter
+  const statusQuery = useModelStatus({ group: selectedGroup })
+  const statusSnapshot = statusQuery.data?.data
+  const statusMap = useMemo(
+    () =>
+      statusSnapshot
+        ? new Map(
+            statusSnapshot.models.map((model) => [model.model_name, model])
+          )
+        : undefined,
+    [statusSnapshot]
+  )
+  const filteredModels = useMemo(
+    () => filterModelsByStatus(catalogModels, statusMap, statusFilter, sortBy),
+    [catalogModels, statusMap, statusFilter, sortBy]
+  )
+
   const handleModelClick = useCallback((modelName: string) => {
+    setDetailsTab('overview')
+    setSelectedModelName(modelName)
+  }, [])
+  const handlePerformanceClick = useCallback((modelName: string) => {
+    setDetailsTab('performance')
     setSelectedModelName(modelName)
   }, [])
 
@@ -124,7 +153,19 @@ export function Pricing() {
     if (viewMode === VIEW_MODES.CARD) {
       return (
         <ModelCardGrid
+          key={[
+            searchInput,
+            sortBy,
+            vendorFilter,
+            groupFilter,
+            quotaTypeFilter,
+            endpointTypeFilter,
+            tagFilter,
+            statusFilter,
+          ].join('\u0000')}
           models={filteredModels}
+          statusSnapshot={statusSnapshot}
+          onOpenPerformance={handlePerformanceClick}
           onModelClick={handleModelClick}
           priceRate={priceRate}
           usdExchangeRate={usdExchangeRate}
@@ -137,7 +178,19 @@ export function Pricing() {
 
     return (
       <PricingTable
+        key={[
+          searchInput,
+          sortBy,
+          vendorFilter,
+          groupFilter,
+          quotaTypeFilter,
+          endpointTypeFilter,
+          tagFilter,
+          statusFilter,
+        ].join('\u0000')}
         models={filteredModels}
+        statusSnapshot={statusSnapshot}
+        onOpenPerformance={handlePerformanceClick}
         priceRate={priceRate}
         usdExchangeRate={usdExchangeRate}
         tokenUnit={tokenUnit}
@@ -179,11 +232,14 @@ export function Pricing() {
               vendorFilter={vendorFilter}
               groupFilter={groupFilter}
               tagFilter={tagFilter}
+              statusFilter={statusFilter}
+              statusAvailable={Boolean(statusSnapshot)}
               onQuotaTypeChange={setQuotaTypeFilter}
               onEndpointTypeChange={setEndpointTypeFilter}
               onVendorChange={setVendorFilter}
               onGroupChange={setGroupFilter}
               onTagChange={setTagFilter}
+              onStatusChange={setStatusFilter}
               vendors={vendors || []}
               groups={availableGroups}
               groupRatios={groupRatio}
@@ -211,11 +267,14 @@ export function Pricing() {
                 vendorFilter={vendorFilter}
                 groupFilter={groupFilter}
                 tagFilter={tagFilter}
+                statusFilter={statusFilter}
+                statusAvailable={Boolean(statusSnapshot)}
                 onQuotaTypeChange={setQuotaTypeFilter}
                 onEndpointTypeChange={setEndpointTypeFilter}
                 onVendorChange={setVendorFilter}
                 onGroupChange={setGroupFilter}
                 onTagChange={setTagFilter}
+                onStatusChange={setStatusFilter}
                 vendors={vendors || []}
                 groups={availableGroups}
                 groupRatios={groupRatio}
@@ -226,6 +285,17 @@ export function Pricing() {
                 onClearFilters={clearFilters}
               />
 
+              {statusQuery.isError && (
+                <p role='status' className='text-muted-foreground text-xs'>
+                  {statusSnapshot
+                    ? t(
+                        'Performance update failed; showing the last available data.'
+                      )
+                    : t(
+                        'Performance data is currently unavailable. Model browsing is still available.'
+                      )}
+                </p>
+              )}
               {renderPricingContent()}
             </div>
           </div>
@@ -233,6 +303,12 @@ export function Pricing() {
 
         {selectedModel && (
           <ModelDetailsDrawer
+            key={`${selectedModel.model_name}:${detailsTab}`}
+            initialTab={detailsTab}
+            selectedGroup={selectedGroup}
+            statusSnapshot={statusSnapshot}
+            statusError={statusQuery.isError}
+            statusLoading={statusQuery.isPending}
             open={Boolean(selectedModel)}
             onOpenChange={(open) => {
               if (!open) setSelectedModelName(null)

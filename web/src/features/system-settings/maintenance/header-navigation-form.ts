@@ -53,8 +53,6 @@ export const headerNavSchema = z.object({
   console: z.boolean(),
   pricingEnabled: z.boolean(),
   pricingRequireAuth: z.boolean(),
-  modelStatusEnabled: z.boolean(),
-  modelStatusRequireAuth: z.boolean(),
   modelRadarEnabled: z.boolean(),
   modelRadarRequireAuth: z.boolean(),
   rankingsEnabled: z.boolean(),

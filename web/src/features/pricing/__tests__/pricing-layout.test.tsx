@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, within } from '@testing-library/react'
 import type { PropsWithChildren } from 'react'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
@@ -23,6 +24,7 @@ import { beforeEach, describe, expect, test, vi } from 'vitest'
 import { Pricing } from '../index'
 
 const testState = vi.hoisted(() => ({ isLoading: false }))
+let queryClient: QueryClient
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -68,6 +70,7 @@ vi.mock('../hooks/use-filters', () => ({
     quotaTypeFilter: 'all',
     endpointTypeFilter: 'all',
     tagFilter: 'all',
+    statusFilter: 'all',
     tokenUnit: 'M',
     viewMode: 'card',
     showRechargePrice: false,
@@ -78,6 +81,7 @@ vi.mock('../hooks/use-filters', () => ({
     setQuotaTypeFilter: vi.fn(),
     setEndpointTypeFilter: vi.fn(),
     setTagFilter: vi.fn(),
+    setStatusFilter: vi.fn(),
     setTokenUnit: vi.fn(),
     setViewMode: vi.fn(),
     setShowRechargePrice: vi.fn(),
@@ -106,10 +110,21 @@ vi.mock('../components', () => ({
 describe('pricing page landmarks', () => {
   beforeEach(() => {
     testState.isLoading = false
+    queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    })
+    queryClient.setQueryData(['model-status', null, null, null, null], {
+      success: true,
+      data: { generated_at: 1800000000, window_hours: 24, models: [] },
+    })
   })
 
   test('keeps the hidden page heading and catalog controls inside the main landmark', () => {
-    render(<Pricing />)
+    render(
+      <QueryClientProvider client={queryClient}>
+        <Pricing />
+      </QueryClientProvider>
+    )
 
     const main = screen.getByRole('main')
     const heading = within(main).getByRole('heading', {
@@ -128,7 +143,11 @@ describe('pricing page landmarks', () => {
   test('keeps a named main landmark while the catalog is loading', () => {
     testState.isLoading = true
 
-    render(<Pricing />)
+    render(
+      <QueryClientProvider client={queryClient}>
+        <Pricing />
+      </QueryClientProvider>
+    )
 
     const main = screen.getByRole('main')
     const heading = within(main).getByRole('heading', {

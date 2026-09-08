@@ -16,6 +16,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { STATUS_PRIORITY } from '@/features/performance-metrics/lib/model-status'
+import type { ModelStatusModel } from '@/features/performance-metrics/status-types'
+
 import {
   SORT_OPTIONS,
   FILTER_ALL,
@@ -105,6 +108,31 @@ export function filterByEndpointType(
   )
 }
 
+export function filterModelsByStatus(
+  models: PricingModel[],
+  statuses: ReadonlyMap<string, ModelStatusModel> | undefined,
+  health: string,
+  sortBy: string
+): PricingModel[] {
+  if (!statuses) return models
+  const filtered =
+    health === FILTER_ALL
+      ? models
+      : models.filter(
+          (model) => statuses.get(model.model_name)?.status === health
+        )
+  if (sortBy !== SORT_OPTIONS.STATUS) return filtered
+  return [...filtered].sort((left, right) => {
+    const leftStatus = statuses.get(left.model_name)?.status
+    const rightStatus = statuses.get(right.model_name)?.status
+    return (
+      (leftStatus ? STATUS_PRIORITY[leftStatus] : 4) -
+        (rightStatus ? STATUS_PRIORITY[rightStatus] : 4) ||
+      left.model_name.localeCompare(right.model_name)
+    )
+  })
+}
+
 /**
  * Get model price for sorting
  */
@@ -123,6 +151,7 @@ export function sortModels(
 
   switch (sortBy) {
     case SORT_OPTIONS.NAME:
+    case SORT_OPTIONS.STATUS:
       sorted.sort((a, b) =>
         (a.model_name || '').localeCompare(b.model_name || '')
       )
