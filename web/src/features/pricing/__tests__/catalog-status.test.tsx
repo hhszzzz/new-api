@@ -34,8 +34,9 @@ import type {
 import { api } from '@/lib/api'
 import { useAuthStore } from '@/stores/auth-store'
 
+import { usePricingData } from '../hooks/use-pricing-data'
 import { filterModelsByStatus } from '../lib/filters'
-import type { PricingModel } from '../types'
+import type { PricingData, PricingModel } from '../types'
 
 function statusModel(
   name: string,
@@ -174,6 +175,65 @@ describe('catalog status data', () => {
     })
     await waitFor(() => expect(result.current.isError).toBe(true))
     expect(result.current.data?.data.models[0].status).toBe('failed')
+  })
+
+  it('reloads pricing data when the visitor identity changes', async () => {
+    const pricing = (groups: string[]): PricingData => ({
+      success: true,
+      data: [],
+      vendors: [],
+      group_ratio: {},
+      usable_group: Object.fromEntries(
+        groups.map((group) => [group, { desc: group, ratio: 1 }])
+      ),
+      supported_endpoint: {},
+      auto_groups: [],
+    })
+    const request = vi
+      .spyOn(api, 'get')
+      .mockImplementation(async (url: string) => {
+        if (url === '/api/pricing') {
+          return { data: pricing(['default']) }
+        }
+        return { data: {} } // /api/status and anything else
+      })
+    const { result } = renderHook(() => usePricingData(), { wrapper: Wrapper })
+    await waitFor(() =>
+      expect(Object.keys(result.current.usableGroup)).toEqual(['default'])
+    )
+    let resolveVip!: (value: { data: PricingData }) => void
+    request.mockImplementation(
+      (url: string) =>
+        new Promise((resolve) => {
+          if (url === '/api/pricing') {
+            resolveVip = resolve
+          }
+        })
+    )
+    act(() =>
+      useAuthStore.getState().auth.setUser({
+        id: 42,
+        username: 'vip-user',
+        role: 1,
+        groups: ['default', 'vip'],
+      })
+    )
+    // While the new identity's payload loads, no previous user's groups show.
+    expect(result.current.usableGroup).toEqual({})
+    await act(async () => {
+      resolveVip({ data: pricing(['default', 'vip']) })
+    })
+    await waitFor(() =>
+      expect(Object.keys(result.current.usableGroup)).toEqual([
+        'default',
+        'vip',
+      ])
+    )
+    await waitFor(() =>
+      expect(
+        queryClient.getQueryState(['pricing', 42])?.status
+      ).toBe('success')
+    )
   })
 
   it('filters actual health states and sorts failures before healthy and missing samples', () => {

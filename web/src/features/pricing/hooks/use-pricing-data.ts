@@ -20,14 +20,19 @@ import { useQuery } from '@tanstack/react-query'
 import { useMemo } from 'react'
 
 import { useStatus } from '@/hooks/use-status'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { getPricing } from '../api'
 
 export function usePricingData(enabled = true) {
   const { status } = useStatus()
+  // The pricing payload is user-scoped (usable_group and group_ratio depend on
+  // the caller's authorized groups), so the cache key must track identity;
+  // otherwise a previous user's groups linger after login/logout.
+  const userId = useAuthStore((state) => state.auth.user?.id)
 
   const { data, isLoading, error, refetch } = useQuery({
-    queryKey: ['pricing'],
+    queryKey: ['pricing', userId ?? 'anonymous'],
     queryFn: getPricing,
     staleTime: 5 * 60 * 1000,
     enabled,
