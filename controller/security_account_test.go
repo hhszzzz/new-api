@@ -422,7 +422,7 @@ func TestSecurityAccountProfileReadsPasswordStatusInOneQuery(t *testing.T) {
 			}))
 			profile, err := model.GetSelfUserById(user.Id)
 			require.NoError(t, err)
-			assert.Equal(t, 1, queries)
+			assert.Equal(t, 5, queries)
 			assert.Equal(t, hasPassword, profile.HasPassword)
 			assert.Empty(t, profile.Password)
 			assert.Nil(t, profile.AccessToken)

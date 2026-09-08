@@ -646,8 +646,16 @@ func GetSelfUserById(id int) (*User, error) {
 		"stripe_customer", "auth_version",
 		"CASE WHEN password <> '' THEN 1 ELSE 0 END AS has_password",
 	}).First(&profile, "id = ?", id).Error
+	if err != nil {
+		return nil, err
+	}
 	profile.User.HasPassword = profile.HasPassword
-	return &profile.User, err
+	// Groups, ModelLimits and ModelBlocklist are not columns; hydrate them so
+	// callers building self data (permissions, groups) see the full policy.
+	if err := HydrateUserPolicy(&profile.User); err != nil {
+		return nil, err
+	}
+	return &profile.User, nil
 }
 
 func GetUserIdByAffCode(affCode string) (int, error) {
