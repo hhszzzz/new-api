@@ -60,6 +60,7 @@ export type ModelRanking = {
   previous_rank?: number
   model_name: string
   vendor: string
+  icon?: string
   vendor_icon?: string
   category: RankingCategoryId
   /** Total tokens routed through this model in the period. */
@@ -95,6 +96,7 @@ export type VendorRanking = {
 export type RankingMover = {
   model_name: string
   vendor: string
+  icon?: string
   vendor_icon?: string
   /** Positive = climbed, negative = dropped. */
   rank_delta: number

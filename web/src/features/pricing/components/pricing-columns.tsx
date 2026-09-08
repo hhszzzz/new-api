@@ -40,7 +40,10 @@ import {
 } from '../lib/price'
 import type { PricingModel, TokenUnit } from '../types'
 import { ModelBillingModeBadge } from './model-billing-mode-badge'
-import { ModelPerfBadge } from './model-perf-badge'
+import {
+  ModelPerfBadge,
+  type ModelPerfBadgeData,
+} from './model-perf-badge'
 
 // ----------------------------------------------------------------------------
 // Pricing Table Columns

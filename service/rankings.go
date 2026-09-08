@@ -79,6 +79,7 @@ type RankedModel struct {
 	PreviousRank *int    `json:"previous_rank,omitempty"`
 	ModelName    string  `json:"model_name"`
 	Vendor       string  `json:"vendor"`
+	Icon         string  `json:"icon,omitempty"`
 	VendorIcon   string  `json:"vendor_icon,omitempty"`
 	Category     string  `json:"category"`
 	TotalTokens  int64   `json:"total_tokens"`
@@ -106,6 +107,7 @@ type RankedVendor struct {
 type RankingMover struct {
 	ModelName   string  `json:"model_name"`
 	Vendor      string  `json:"vendor"`
+	Icon        string  `json:"icon,omitempty"`
 	VendorIcon  string  `json:"vendor_icon,omitempty"`
 	RankDelta   int     `json:"rank_delta"`
 	CurrentRank int     `json:"current_rank"`
@@ -214,6 +216,7 @@ type rankingCacheItem struct {
 
 type rankingModelMeta struct {
 	vendor     string
+	icon       string
 	vendorIcon string
 }
 
@@ -598,7 +601,7 @@ func buildRankingModelMeta() map[string]rankingModelMeta {
 
 	meta := make(map[string]rankingModelMeta)
 	for _, pricing := range model.GetPricing() {
-		item := rankingModelMeta{vendor: rankingUnknownVendor}
+		item := rankingModelMeta{vendor: rankingUnknownVendor, icon: pricing.Icon}
 		if vendor, ok := vendorByID[pricing.VendorID]; ok {
 			item.vendor = vendor.Name
 			item.vendorIcon = vendor.Icon
@@ -699,6 +702,7 @@ func buildRankedModels(totals []model.RankingQuotaTotal, totalTokens int64, tota
 			PreviousRank: previousRank,
 			ModelName:    item.ModelName,
 			Vendor:       modelMeta.vendor,
+			Icon:         modelMeta.icon,
 			VendorIcon:   modelMeta.vendorIcon,
 			Category:     "all",
 			TotalTokens:  item.TotalTokens,
@@ -1067,7 +1071,7 @@ func buildRankingMovers(models []RankedModel) ([]RankingMover, []RankingMover) {
 		if delta == 0 {
 			continue
 		}
-		row := RankingMover{ModelName: item.ModelName, Vendor: item.Vendor, VendorIcon: item.VendorIcon, RankDelta: delta, CurrentRank: item.Rank, GrowthPct: item.GrowthPct}
+		row := RankingMover{ModelName: item.ModelName, Vendor: item.Vendor, Icon: item.Icon, VendorIcon: item.VendorIcon, RankDelta: delta, CurrentRank: item.Rank, GrowthPct: item.GrowthPct}
 		if delta > 0 {
 			movers = append(movers, row)
 		} else {
