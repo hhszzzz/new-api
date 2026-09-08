@@ -82,7 +82,11 @@ afterEach(() => {
 
 describe('model cards', () => {
   it('reserves readable metric widths in table view', () => {
-    render(<PricingTable models={[pricingModel()]} />)
+    render(
+      <QueryClientProvider client={queryClient}>
+        <PricingTable models={[pricingModel()]} />
+      </QueryClientProvider>
+    )
     expect(
       screen.getByLabelText('Performance metrics for the last 24 hours')
     ).toHaveClass('min-w-[295px]')
@@ -101,8 +105,8 @@ describe('model cards', () => {
       within(metrics).getByText('Latency short').parentElement
     const throughputColumn =
       within(metrics).getByText('Throughput short').parentElement
-    expect(latencyColumn).toHaveClass('w-11', 'shrink-0')
-    expect(throughputColumn).toHaveClass('w-[52px]', 'shrink-0')
+    expect(latencyColumn).toHaveClass('shrink-0')
+    expect(throughputColumn).toHaveClass('shrink-0')
     rerender(
       <ModelPerfBadge
         perf={{ avg_latency_ms: 12000, avg_tps: 1420, success_rate: 98 }}
@@ -142,7 +146,7 @@ describe('model cards', () => {
     expect(within(metrics).queryByText(/100/)).not.toBeInTheDocument()
     expect(
       within(metrics).getByRole('img', {
-        name: 'Status over the last 24 hours',
+        name: 'Recent success-rate samples; gray bars indicate missing data.',
       })
     ).toBeVisible()
     expect(
@@ -173,12 +177,15 @@ describe('model cards', () => {
       />
     )
 
-    expect(screen.queryByText('Groups')).not.toBeInTheDocument()
-    expect(screen.queryByText(groups[0])).not.toBeInTheDocument()
-    for (const value of [...endpoints.slice(0, 2), ...tags.slice(0, 2)]) {
-      expect(screen.getByText(value)).toBeVisible()
-    }
-    expect(screen.getByText('+7')).toBeVisible()
+    expect(screen.getByText('Groups')).toBeVisible()
+    expect(screen.getByText(groups[0])).toBeVisible()
+    expect(screen.getByText('+2')).toBeVisible()
+    expect(screen.getByText('Endpoints')).toBeVisible()
+    expect(screen.getByText(endpoints.slice(0, 2).join(', '))).toBeVisible()
+    expect(screen.getByText('+3')).toBeVisible()
+    expect(screen.getByText('Tags')).toBeVisible()
+    expect(screen.getByText(tags.slice(0, 2).join(', '))).toBeVisible()
+    expect(screen.getByText('+4')).toBeVisible()
     expect(screen.getByText('Token-based')).toBeVisible()
   })
 
@@ -233,14 +240,14 @@ describe('model cards', () => {
     expect(screen.getByText('Input').parentElement).toHaveTextContent(/\$3/)
     expect(screen.getByText('Output').parentElement).toHaveTextContent(/\$9/)
     expect(screen.getByText('Cached').parentElement).toHaveTextContent(/\$0/)
-    expect(screen.getByText('1M')).toBeVisible()
+    expect(screen.getAllByText('/ 1M').length).toBeGreaterThan(0)
     rerender(<ModelCard {...props} tokenUnit='K' />)
     expect(screen.getByText('Input').parentElement).toHaveTextContent(/\$0.003/)
     expect(screen.getByText('Output').parentElement).toHaveTextContent(
       /\$0.009/
     )
     expect(screen.getByText('Cached').parentElement).toHaveTextContent(/\$0/)
-    expect(screen.getByText('1K')).toBeVisible()
+    expect(screen.getAllByText('/ 1K').length).toBeGreaterThan(0)
   })
 
   it('shows a per-request price with the selected group and recharge multiplier without a token unit', () => {
@@ -302,9 +309,9 @@ describe('model cards', () => {
         tokenUnit='K'
       />
     )
-    expect(screen.getByText(/0.4.*0.8/)).toHaveTextContent(
-      /0.4 – \$0.8\s*\/\s*s/
-    )
+    expect(
+      screen.getByText(/0.4.*0.8/).parentElement
+    ).toHaveTextContent(/0.4 – \$0.8\s*\/\s*s/)
     expect(screen.queryByText(/1K|1M/)).not.toBeInTheDocument()
   })
 
@@ -342,7 +349,9 @@ describe('model cards', () => {
         tokenUnit='K'
       />
     )
-    expect(screen.getByText(/\$42 – \$70\s*\/\s*1M token/)).toBeVisible()
+    expect(
+      screen.getByText(/\$42 – \$70/).parentElement
+    ).toHaveTextContent(/\$42 – \$70\s*\/\s*1M token/)
     expect(screen.getByText(/480p · 5s ≈/)).toBeVisible()
   })
 
@@ -418,43 +427,43 @@ describe('model cards', () => {
     expect(grid).not.toHaveClass('min-[1440px]:grid-cols-3')
   })
 
-  it('positions sparse hourly data accurately and opens performance from the wider strip', async () => {
+  it('positions sparse hourly data accurately and opens performance from the strip', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    vi.setSystemTime(new Date('2026-09-07T12:37:00.000Z'))
+    const currentHourStart = Math.floor(Date.now() / 1000 / 3600) * 3600
     const onClick = vi.fn()
     const onOpenPerformance = vi.fn()
-    const generatedAt = 1_800_000_000
     const user = userEvent.setup()
     render(
       <ModelCard
         model={pricingModel()}
         onClick={onClick}
         onOpenPerformance={onOpenPerformance}
-        generatedAt={generatedAt}
         perf={{
           avg_latency_ms: 1200,
           avg_tps: 42,
-          success_rate: 0,
-          timeline: [
-            {
-              ts: generatedAt,
-              status: 'failed',
-              request_count: null,
-              success_count: null,
-              success_rate: 0,
-              avg_latency_ms: 1200,
-              avg_ttft_ms: null,
-              avg_tps: 42,
-            },
+          success_rate: 80,
+          recent_success_series: [
+            { ts: currentHourStart - 5 * 3600, success_rate: 80 },
           ],
         }}
       />
     )
+
     const strip = screen.getByRole('img', {
-      name: 'Status over the last 24 hours',
+      name: 'Recent success-rate samples; gray bars indicate missing data.',
     })
     expect(strip).toHaveClass('flex', 'w-24', 'justify-between')
     expect(strip.children).toHaveLength(24)
-    expect(strip.children[0]).toHaveClass('bg-muted-foreground/15', 'w-[3px]')
-    expect(strip.children[23]).not.toHaveClass('bg-muted-foreground/15')
+    const spans = [...strip.children]
+    spans.forEach((slot, index) => {
+      if (index === 18) {
+        expect(slot.classList.contains('bg-muted-foreground/15')).toBe(false)
+        return
+      }
+      expect(slot.classList.contains('bg-muted-foreground/15')).toBe(true)
+    })
+
     const performanceButton = screen.getByRole('button', {
       name: 'View performance',
     })
@@ -462,5 +471,58 @@ describe('model cards', () => {
     await user.keyboard('{Enter}')
     expect(onOpenPerformance).toHaveBeenCalledOnce()
     expect(onClick).not.toHaveBeenCalled()
+    vi.useRealTimers()
+  })
+
+  it('keeps all 24 slots gray when recent_success_series is undefined', () => {
+    render(
+      <ModelCard
+        model={pricingModel()}
+        onClick={vi.fn()}
+        perf={{ avg_latency_ms: 1200, avg_tps: 42, success_rate: 100 }}
+      />
+    )
+
+    const spans = [
+      ...screen.getByRole('img', {
+        name: 'Recent success-rate samples; gray bars indicate missing data.',
+      }).children,
+    ]
+    expect(spans).toHaveLength(24)
+    spans.forEach((slot) => {
+      expect(slot.classList.contains('bg-muted-foreground/15')).toBe(true)
+    })
+  })
+
+  it('keeps all 24 slots gray when a series point is 24 hours before the current hour', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-09-07T12:00:00.000Z'))
+    const currentHourStart = Math.floor(Date.now() / 1000 / 3600) * 3600
+
+    render(
+      <ModelCard
+        model={pricingModel()}
+        onClick={vi.fn()}
+        perf={{
+          avg_latency_ms: 1200,
+          avg_tps: 42,
+          success_rate: 100,
+          recent_success_series: [
+            { ts: currentHourStart - 24 * 3600, success_rate: 100 },
+          ],
+        }}
+      />
+    )
+
+    const spans = [
+      ...screen.getByRole('img', {
+        name: 'Recent success-rate samples; gray bars indicate missing data.',
+      }).children,
+    ]
+    expect(spans).toHaveLength(24)
+    spans.forEach((slot) => {
+      expect(slot.classList.contains('bg-muted-foreground/15')).toBe(true)
+    })
+    vi.useRealTimers()
   })
 })

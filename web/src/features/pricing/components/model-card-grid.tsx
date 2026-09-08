@@ -16,16 +16,18 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { useQuery } from '@tanstack/react-query'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
-import type { ModelStatusSnapshot } from '@/features/performance-metrics/status-types'
+import { getPerfMetricsSummary } from '@/features/performance-metrics/api'
 
 import { DEFAULT_PRICING_PAGE_SIZE, DEFAULT_TOKEN_UNIT } from '../constants'
 import type { PricingModel, TokenUnit } from '../types'
 import { ModelCard } from './model-card'
+import type { ModelPerfBadgeData } from './model-perf-badge'
 
 export interface ModelCardGridProps {
   models: PricingModel[]
@@ -35,7 +37,6 @@ export interface ModelCardGridProps {
   tokenUnit?: TokenUnit
   showRechargePrice?: boolean
   selectedGroup?: string
-  statusSnapshot?: ModelStatusSnapshot
   onOpenPerformance?: (modelName: string) => void
 }
 
@@ -47,17 +48,25 @@ export function ModelCardGrid(props: ModelCardGridProps) {
   const totalPages = Math.max(1, Math.ceil(props.models.length / pageSize))
   const currentPage = Math.min(page, totalPages)
 
+  const perfQuery = useQuery({
+    queryKey: ['perf-metrics-summary', 24],
+    queryFn: () => getPerfMetricsSummary(24),
+    staleTime: 60 * 1000,
+    retry: false,
+  })
+
   const pagedModels = useMemo(() => {
     const start = (currentPage - 1) * pageSize
     return props.models.slice(start, start + pageSize)
   }, [currentPage, pageSize, props.models])
 
   const perfMap = useMemo(() => {
-    return new Map(
-      props.statusSnapshot?.models.map((model) => [model.model_name, model]) ??
-        []
-    )
-  }, [props.statusSnapshot])
+    const map = new Map<string, ModelPerfBadgeData>()
+    for (const model of perfQuery.data?.data?.models ?? []) {
+      map.set(model.model_name, model)
+    }
+    return map
+  }, [perfQuery.data])
 
   if (props.models.length === 0) {
     return null
@@ -76,10 +85,9 @@ export function ModelCardGrid(props: ModelCardGridProps) {
             showRechargePrice={props.showRechargePrice}
             selectedGroup={props.selectedGroup}
             perf={perfMap.get(model.model_name || '')}
-            generatedAt={props.statusSnapshot?.generated_at}
             onOpenPerformance={
               props.onOpenPerformance
-                ? () => props.onOpenPerformance?.(model.model_name)
+                ? () => props.onOpenPerformance?.(model.model_name || '')
                 : undefined
             }
             onClick={() => props.onModelClick(model.model_name || '')}

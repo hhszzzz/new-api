@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { Row, PaginationState } from '@tanstack/react-table'
+import { useQuery } from '@tanstack/react-query'
 import { useState, useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -28,10 +29,11 @@ import {
   getInitialTablePageSize,
   useDataTable,
 } from '@/components/data-table'
-import type { ModelStatusSnapshot } from '@/features/performance-metrics/status-types'
+import { getPerfMetricsSummary } from '@/features/performance-metrics/api'
 
 import { DEFAULT_PRICING_PAGE_SIZE, DEFAULT_TOKEN_UNIT } from '../constants'
 import type { PricingModel, TokenUnit } from '../types'
+import type { ModelPerfBadgeData } from './model-perf-badge'
 import { usePricingColumns } from './pricing-columns'
 
 const PRICING_TABLE_STATE_STORAGE_KEY = 'pricing:user'
@@ -45,7 +47,6 @@ export interface PricingTableProps {
   showRechargePrice?: boolean
   selectedGroup?: string
   onModelClick?: (modelName: string) => void
-  statusSnapshot?: ModelStatusSnapshot
   onOpenPerformance?: (modelName: string) => void
 }
 
@@ -70,14 +71,19 @@ export function PricingTable(props: PricingTableProps) {
     ),
   }))
 
-  const statuses = useMemo(
-    () =>
-      new Map(
-        props.statusSnapshot?.models.map((item) => [item.model_name, item]) ??
-          []
-      ),
-    [props.statusSnapshot]
-  )
+  const perfQuery = useQuery({
+    queryKey: ['perf-metrics-summary', 24],
+    queryFn: () => getPerfMetricsSummary(24),
+    staleTime: 60 * 1000,
+    retry: false,
+  })
+  const perfByModel = useMemo(() => {
+    const map = new Map<string, ModelPerfBadgeData>()
+    for (const model of perfQuery.data?.data?.models ?? []) {
+      map.set(model.model_name, model)
+    }
+    return map
+  }, [perfQuery.data])
   const columns = usePricingColumns({
     tokenUnit,
     priceRate,
@@ -85,8 +91,7 @@ export function PricingTable(props: PricingTableProps) {
     showRechargePrice,
     selectedGroup,
     onModelClick,
-    statuses,
-    generatedAt: props.statusSnapshot?.generated_at,
+    perfByModel,
     onOpenPerformance: props.onOpenPerformance,
   })
 

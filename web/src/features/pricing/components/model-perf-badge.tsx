@@ -16,40 +16,93 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { memo, useState } from 'react'
+import { memo, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
-import { StatusTimeline } from '@/features/performance-metrics/components/status-timeline'
 import {
   formatLatency,
   formatThroughput,
+  getSuccessRateDotClass,
 } from '@/features/performance-metrics/lib/format'
-import { normalizeStatusTimeline } from '@/features/performance-metrics/lib/model-status'
-import type {
-  ModelStatusModel,
-  ModelStatusTimelinePoint,
-} from '@/features/performance-metrics/status-types'
+import type { SuccessRatePoint } from '@/features/performance-metrics/types'
 import { cn } from '@/lib/utils'
 
-export type ModelPerfBadgeData = Pick<
-  ModelStatusModel,
-  'avg_latency_ms' | 'success_rate' | 'avg_tps'
-> & {
-  timeline?: ModelStatusTimelinePoint[]
+export type ModelPerfBadgeData = {
+  avg_latency_ms: number
+  success_rate: number
+  avg_tps: number
+  recent_success_series?: SuccessRatePoint[]
 }
 
 export interface ModelPerfBadgeProps extends React.HTMLAttributes<HTMLDivElement> {
   perf: ModelPerfBadgeData | undefined
-  generatedAt?: number
   onOpenPerformance?: () => void
+}
+
+const STATUS_SLOTS = Array.from({ length: 24 }, (_, slot) => slot)
+
+// 24-hour success-rate strip. When `onOpenPerformance` is provided the strip
+// becomes a ghost button that opens the model's performance details, without
+// triggering the surrounding card's click handler.
+function StatusStrip(props: {
+  rates: (number | undefined)[]
+  label: string
+  onOpenPerformance?: () => void
+}) {
+  const { t } = useTranslation()
+  const bars = STATUS_SLOTS.map((slot) => {
+    const rate = props.rates[slot]
+    return (
+      <span
+        key={slot}
+        aria-hidden
+        className={cn(
+          'h-full w-[3px] shrink-0 rounded-xs',
+          rate != null && Number.isFinite(rate) && rate >= 0 && rate <= 100
+            ? getSuccessRateDotClass(rate)
+            : 'bg-muted-foreground/15'
+        )}
+      />
+    )
+  })
+  if (props.onOpenPerformance) {
+    return (
+      <Button
+        variant='ghost'
+        className='h-3 w-24 rounded-xs p-0'
+        aria-label={t('View performance')}
+        onClick={(event) => {
+          event.stopPropagation()
+          props.onOpenPerformance?.()
+        }}
+      >
+        <span
+          role='img'
+          aria-label={props.label}
+          className='flex h-3 w-24 items-center justify-between'
+        >
+          {bars}
+        </span>
+      </Button>
+    )
+  }
+  return (
+    <span
+      role='img'
+      aria-label={props.label}
+      title={props.label}
+      className='flex h-3 w-24 items-center justify-between'
+    >
+      {bars}
+    </span>
+  )
 }
 
 export const ModelPerfBadge = memo(function ModelPerfBadge(
   props: ModelPerfBadgeProps
 ) {
   const { t } = useTranslation()
-  const [initialTimestamp] = useState(() => Date.now() / 1000)
   const latencyText = formatLatency(props.perf?.avg_latency_ms ?? 0)
   const throughputText = formatThroughput(props.perf?.avg_tps ?? 0).replace(
     ' t/s',
@@ -61,10 +114,19 @@ export const ModelPerfBadge = memo(function ModelPerfBadge(
     Number.isFinite(successRate) &&
     successRate >= 0 &&
     successRate <= 100
-  const timeline = normalizeStatusTimeline(
-    props.perf?.timeline ?? [],
-    props.generatedAt ?? initialTimestamp
-  )
+  // Hourly points with timestamps, anchored to the client's current hour.
+  // Hours without traffic stay gray. Slot 23 is the current, partial hour.
+  const statusRates = useMemo(() => {
+    const currentHourStart = Math.floor(Date.now() / 1000 / 3600) * 3600
+    const ratesByHour = new Map<number, number>()
+    for (const point of props.perf?.recent_success_series ?? []) {
+      ratesByHour.set(point.ts, point.success_rate)
+    }
+    return STATUS_SLOTS.map((slot) => {
+      const hourStart = currentHourStart - (23 - slot) * 3600
+      return ratesByHour.get(hourStart)
+    })
+  }, [props.perf?.recent_success_series])
 
   return (
     <div
@@ -86,24 +148,16 @@ export const ModelPerfBadge = memo(function ModelPerfBadge(
             </span>
           </dt>
           <dd className='mt-1 flex h-3 items-center'>
-            {props.onOpenPerformance ? (
-              <Button
-                variant='ghost'
-                className='h-3 w-24 rounded-xs p-0'
-                aria-label={t('View performance')}
-                onClick={(event) => {
-                  event.stopPropagation()
-                  props.onOpenPerformance?.()
-                }}
-              >
-                <StatusTimeline timeline={timeline} />
-              </Button>
-            ) : (
-              <StatusTimeline timeline={timeline} />
-            )}
+            <StatusStrip
+              rates={statusRates}
+              label={t(
+                'Recent success-rate samples; gray bars indicate missing data.'
+              )}
+              onOpenPerformance={props.onOpenPerformance}
+            />
           </dd>
         </div>
-        <div title={t('Average latency')} className='w-11 shrink-0'>
+        <div title={t('Average latency')} className='shrink-0'>
           <dt className='text-muted-foreground text-[11px] leading-4'>
             {t('Latency short')}
           </dt>
@@ -111,7 +165,7 @@ export const ModelPerfBadge = memo(function ModelPerfBadge(
             {latencyText === '—' ? '—s' : latencyText}
           </dd>
         </div>
-        <div title={t('Throughput')} className='w-[52px] shrink-0'>
+        <div title={t('Throughput')} className='shrink-0'>
           <dt className='text-muted-foreground text-[11px] leading-4'>
             {t('Throughput short')}
           </dt>

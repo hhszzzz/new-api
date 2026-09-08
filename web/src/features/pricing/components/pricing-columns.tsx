@@ -22,7 +22,6 @@ import { useTranslation } from 'react-i18next'
 import { BadgeCell, DataTableColumnHeader } from '@/components/data-table'
 import { StatusBadge } from '@/components/status-badge'
 import { Button } from '@/components/ui/button'
-import type { ModelStatusModel } from '@/features/performance-metrics/status-types'
 import { getLobeIcon } from '@/lib/lobe-icon'
 import { resolveProviderIconKey } from '@/lib/provider-icon'
 
@@ -54,8 +53,7 @@ export interface PricingColumnsOptions {
   showRechargePrice?: boolean
   selectedGroup?: string
   onModelClick?: (modelName: string) => void
-  statuses?: ReadonlyMap<string, ModelStatusModel>
-  generatedAt?: number
+  perfByModel?: ReadonlyMap<string, ModelPerfBadgeData>
   onOpenPerformance?: (modelName: string) => void
 }
 
@@ -115,8 +113,7 @@ export function usePricingColumns(
       cell: ({ row }) => (
         <ModelPerfBadge
           className='min-w-[295px]'
-          perf={options.statuses?.get(row.original.model_name)}
-          generatedAt={options.generatedAt}
+          perf={options.perfByModel?.get(row.original.model_name)}
           onOpenPerformance={
             options.onOpenPerformance
               ? () => options.onOpenPerformance?.(row.original.model_name)

@@ -45,56 +45,43 @@ const model: PricingModel = {
 }
 
 describe('model card presentation', () => {
-  test('keeps the original compact card metadata layout', () => {
+  test('shows vendor name, unit label, and metadata rows', () => {
     const { rerender } = render(
       <ModelCard model={model} tokenUnit='M' onClick={() => undefined} />
     )
 
-    const title = screen.getByRole('heading', { name: 'claude-test' })
-    const tokenUnit = screen.getByText('1M')
-    const billingMode = screen.getByText('Token-based')
-    const inputPrice = screen.getByText('Input')
-
     expect(
-      title.compareDocumentPosition(inputPrice) &
-        Node.DOCUMENT_POSITION_FOLLOWING
-    ).toBeTruthy()
-    expect(
-      billingMode.compareDocumentPosition(tokenUnit) &
-        Node.DOCUMENT_POSITION_FOLLOWING
-    ).toBeTruthy()
+      screen.getByRole('heading', { name: 'claude-test' })
+    ).toBeInTheDocument()
+    expect(screen.getByText('Anthropic')).toBeVisible()
+    expect(screen.getByText('Token-based')).toBeVisible()
+    expect(screen.getAllByText('/ 1M').length).toBeGreaterThan(0)
+    expect(screen.getByText('Groups')).toBeVisible()
+    expect(screen.getByText('premium')).toBeVisible()
+    expect(screen.getByText('+1')).toBeVisible()
+    expect(screen.getByText('/v1/chat/completions')).toBeVisible()
+    expect(screen.getByText('vision, reasoning')).toBeVisible()
 
     rerender(
       <ModelCard model={model} tokenUnit='K' onClick={() => undefined} />
     )
 
-    expect(screen.getByText('1K')).toBeInTheDocument()
-    expect(screen.queryByText('1M')).not.toBeInTheDocument()
+    expect(screen.getAllByText('/ 1K').length).toBeGreaterThan(0)
+    expect(screen.queryByText('/ 1M')).not.toBeInTheDocument()
   })
 
-  test('hides empty description content and removes its large reserved height', () => {
+  test('hides blank descriptions entirely instead of reserving space', () => {
     const { container, rerender } = render(
       <ModelCard model={model} tokenUnit='M' onClick={() => undefined} />
     )
 
-    expect(screen.queryByText('Anthropic')).not.toBeInTheDocument()
     expect(
       screen.queryByText('Vendor fallback must stay hidden.')
     ).not.toBeInTheDocument()
-    expect(screen.queryByText('premium')).not.toBeInTheDocument()
-    expect(screen.queryByText('standard')).not.toBeInTheDocument()
-    expect(screen.queryByText('/v1/chat/completions')).toBeInTheDocument()
-    expect(screen.queryByText('vision')).toBeInTheDocument()
-    expect(screen.queryByText('reasoning')).toBeInTheDocument()
     expect(
       screen.queryByText('No description available.')
     ).not.toBeInTheDocument()
-    const emptyDescription = container.querySelector('p.text-muted-foreground')
-    expect(emptyDescription).toHaveClass('flex-1', 'mt-2', 'sm:mt-3')
-    expect(emptyDescription).not.toHaveClass('sm:min-h-[2.5rem]')
-    expect(
-      screen.getByRole('heading', { name: 'claude-test' }).closest('.group')
-    ).not.toHaveClass('self-start')
+    expect(container.querySelector('p.line-clamp-2')).toBeNull()
 
     rerender(
       <ModelCard
@@ -105,9 +92,7 @@ describe('model card presentation', () => {
     )
 
     expect(screen.getByText('A concise model description.')).toHaveClass(
-      'flex-1',
-      'sm:mt-4',
-      'sm:min-h-[2.5rem]'
+      'line-clamp-2'
     )
   })
 })

@@ -164,7 +164,6 @@ export function Pricing() {
             statusFilter,
           ].join('\u0000')}
           models={filteredModels}
-          statusSnapshot={statusSnapshot}
           onOpenPerformance={handlePerformanceClick}
           onModelClick={handleModelClick}
           priceRate={priceRate}
@@ -189,7 +188,6 @@ export function Pricing() {
           statusFilter,
         ].join('\u0000')}
         models={filteredModels}
-        statusSnapshot={statusSnapshot}
         onOpenPerformance={handlePerformanceClick}
         priceRate={priceRate}
         usdExchangeRate={usdExchangeRate}

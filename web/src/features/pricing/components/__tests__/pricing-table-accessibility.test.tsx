@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
@@ -30,6 +31,17 @@ vi.mock('react-i18next', () => ({
 vi.mock('@/lib/lobe-icon', () => ({
   getLobeIcon: () => null,
 }))
+
+function renderTable(props: React.ComponentProps<typeof PricingTable>) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  })
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <PricingTable {...props} />
+    </QueryClientProvider>
+  )
+}
 
 const model: PricingModel = {
   id: 1,
@@ -66,7 +78,7 @@ describe('pricing table details action', () => {
     const user = userEvent.setup()
     const onModelClick = vi.fn()
 
-    render(<PricingTable models={[model]} onModelClick={onModelClick} />)
+    renderTable({ models: [model], onModelClick })
 
     const detailsButton = screen.getByRole('button', {
       name: 'View details: keyboard-accessible-model',
@@ -85,7 +97,7 @@ describe('pricing table details action', () => {
     const user = userEvent.setup()
     const onModelClick = vi.fn()
 
-    render(<PricingTable models={[model]} onModelClick={onModelClick} />)
+    renderTable({ models: [model], onModelClick })
 
     await user.click(
       screen.getByRole('button', {
