@@ -3,6 +3,7 @@ package model
 import (
 	"fmt"
 	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -471,9 +472,12 @@ func updatePricing() bool {
 	pricingSnapshot := ratio_setting.GetPricingSnapshot()
 	pluginGeneration := jsplugin.DefaultRegistry.Generation()
 	for model, groups := range modelGroupsMap {
+		// Set.Items() 遍历 map，顺序随机；固定按字典序输出，保证 API 与前端展示稳定
+		enableGroups := groups.Items()
+		slices.Sort(enableGroups)
 		pricing := Pricing{
 			ModelName:              model,
-			EnableGroup:            groups.Items(),
+			EnableGroup:            enableGroups,
 			SupportedEndpointTypes: modelSupportEndpointTypes[model],
 		}
 

@@ -133,6 +133,26 @@ func TestPricingAdvancedCustomUsesConfiguredEndpointTypes(t *testing.T) {
 	}, byModel["gpt-4o"])
 }
 
+func TestPricingEnableGroupsAreSortedDeterministically(t *testing.T) {
+	resetPricingEndpointTestTables(t)
+
+	insertPricingEndpointChannel(t, 102, constant.ChannelTypeOpenAI, dto.ChannelOtherSettings{})
+	// Insert abilities deliberately out of lexicographic order; Set.Items()
+	// iterates a Go map, so without sorting the API order would be random.
+	for _, group := range []string{"vip", "default", "any"} {
+		require.NoError(t, DB.Create(&Ability{
+			Group:     group,
+			Model:     "grouped-model",
+			ChannelId: 102,
+			Enabled:   true,
+		}).Error)
+	}
+
+	pricing := GetPricing()
+	require.Len(t, pricing, 1)
+	assert.Equal(t, []string{"any", "default", "vip"}, pricing[0].EnableGroup)
+}
+
 func TestPricingModelMetadataEndpointsMergeWithAdvancedCustomInference(t *testing.T) {
 	resetPricingEndpointTestTables(t)
 
