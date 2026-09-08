@@ -262,7 +262,7 @@ func GetPerfMetricsStatus(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"data":    buildPerfMetricsStatusView(result, c.GetInt("id") > 0),
+		"data":    buildPerfMetricsStatusView(result, true),
 	})
 }
 

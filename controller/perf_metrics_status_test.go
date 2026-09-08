@@ -108,16 +108,11 @@ func TestPerfMetricsStatusCatalogScopesDatabaseMatrix(t *testing.T) {
 					result := payload.Data.Models[0]
 					require.Len(t, result.Timeline, 24)
 					assert.Equal(t, tc.rate, result.SuccessRate)
-					if tc.anonymous {
-						assert.Nil(t, result.RequestCount)
-						assert.Nil(t, result.SuccessCount)
-						for _, point := range result.Timeline {
-							assert.Nil(t, point.RequestCount)
-							assert.Nil(t, point.SuccessCount)
-						}
-					} else {
-						require.NotNil(t, result.RequestCount)
-						assert.Equal(t, tc.requests, *result.RequestCount)
+					require.NotNil(t, result.RequestCount)
+					assert.Equal(t, tc.requests, *result.RequestCount)
+					for _, point := range result.Timeline {
+						assert.NotNil(t, point.RequestCount)
+						assert.NotNil(t, point.SuccessCount)
 					}
 					if tc.name == "weighted visible groups" {
 						require.NotNil(t, result.AvgLatencyMs)
@@ -186,10 +181,10 @@ func TestGetPerfMetricsStatusReturnsOnlyVisibleEnabledModels(t *testing.T) {
 	assert.Equal(t, "visible-status-model", payload.Data.Models[0].ModelName)
 	assert.Equal(t, perfmetrics.StatusFailed, payload.Data.Models[0].Status)
 	assert.Equal(t, "Anthropic.Color", payload.Data.Models[0].Icon)
-	assert.Zero(t, payload.Data.Models[0].RequestCount)
-	assert.Zero(t, payload.Data.Models[0].SuccessCount)
-	assert.Contains(t, recorder.Body.String(), `"request_count":null`)
-	assert.Contains(t, recorder.Body.String(), `"success_count":null`)
+	assert.Equal(t, int64(2), payload.Data.Models[0].RequestCount)
+	assert.Equal(t, int64(1), payload.Data.Models[0].SuccessCount)
+	assert.Contains(t, recorder.Body.String(), `"request_count":2`)
+	assert.Contains(t, recorder.Body.String(), `"success_count":1`)
 	require.NotNil(t, payload.Data.Models[0].SuccessRate)
 	require.NotNil(t, payload.Data.Models[0].AvgTtftMs)
 	require.NotNil(t, payload.Data.Models[0].AvgLatencyMs)
@@ -208,8 +203,8 @@ func TestGetPerfMetricsStatusReturnsOnlyVisibleEnabledModels(t *testing.T) {
 	}
 	require.NotEqual(t, -1, metricPointIndex)
 	metricPoint := payload.Data.Models[0].Timeline[metricPointIndex]
-	assert.Zero(t, metricPoint.RequestCount)
-	assert.Zero(t, metricPoint.SuccessCount)
+	assert.Equal(t, int64(2), metricPoint.RequestCount)
+	assert.Equal(t, int64(1), metricPoint.SuccessCount)
 	require.NotNil(t, metricPoint.AvgTtftMs)
 	require.NotNil(t, metricPoint.AvgLatencyMs)
 	require.NotNil(t, metricPoint.AvgTps)

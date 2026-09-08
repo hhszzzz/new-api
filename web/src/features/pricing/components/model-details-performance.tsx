@@ -17,7 +17,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
-import { HeartPulse, Timer } from 'lucide-react'
+import {
+  BarChart3,
+  CheckCircle2,
+  Gauge,
+  HeartPulse,
+  Timer,
+  Zap,
+} from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -28,11 +35,13 @@ import {
 import { GroupBadge } from '@/components/group-badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { getPerfMetrics } from '@/features/performance-metrics/api'
-import { ModelStatusDetails } from '@/features/performance-metrics/components/model-status-details'
 import {
   formatLatency,
   formatThroughput,
+  formatUptimePct,
+  getSuccessRateTextClass,
 } from '@/features/performance-metrics/lib/format'
+import { normalizeStatusTimeline } from '@/features/performance-metrics/lib/model-status'
 import type { ModelStatusModel } from '@/features/performance-metrics/status-types'
 import type { PerformanceGroup } from '@/features/performance-metrics/types'
 import { toIntlLocale } from '@/i18n/languages'
@@ -43,6 +52,37 @@ import type { UptimeDayPoint } from '../lib/mock-stats'
 import type { PricingModel } from '../types'
 import { LatencyTrendChart } from './model-details-charts'
 import { UptimeSparkline } from './model-details-uptime-sparkline'
+
+function StatCard(props: {
+  icon: React.ComponentType<{ className?: string }>
+  label: string
+  value: React.ReactNode
+  hint?: string
+  valueClassName?: string
+}) {
+  const Icon = props.icon
+  return (
+    <div className='bg-background flex flex-col gap-1 rounded-lg border p-3'>
+      <span className='text-muted-foreground inline-flex items-center gap-1.5 text-[10px] font-medium tracking-wider uppercase'>
+        <Icon className='size-3' />
+        {props.label}
+      </span>
+      <span
+        className={cn(
+          'text-foreground font-mono text-lg font-semibold tabular-nums',
+          props.valueClassName
+        )}
+      >
+        {props.value}
+      </span>
+      {props.hint && (
+        <span className='text-muted-foreground/70 text-[11px]'>
+          {props.hint}
+        </span>
+      )}
+    </div>
+  )
+}
 
 type PerformanceRow = {
   group: string
@@ -82,16 +122,6 @@ export function ModelDetailsPerformance(props: {
   const [initialTimestamp] = useState(() => Date.now() / 1000)
   const user = useAuthStore((state) => state.auth.user)
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
-  const hourFormatter = useMemo(
-    () =>
-      new Intl.DateTimeFormat(locale, {
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-      }),
-    [locale]
-  )
   const numberFormatter = useMemo(() => new Intl.NumberFormat(locale), [locale])
   const metricsQuery = useQuery({
     queryKey: [
@@ -156,6 +186,34 @@ export function ModelDetailsPerformance(props: {
     )
   }
 
+  const status = props.status
+  const hasData =
+    (status.request_count ?? 0) > 0 ||
+    status.success_rate !== null ||
+    status.avg_tps !== null ||
+    status.avg_latency_ms !== null ||
+    status.avg_ttft_ms !== null
+  if (!hasData) {
+    return (
+      <div className='text-muted-foreground rounded-lg border p-6 text-center text-sm'>
+        {props.isError
+          ? t('Performance data is unavailable.')
+          : t('Performance data is not yet available for this model.')}
+      </div>
+    )
+  }
+  const timeline = normalizeStatusTimeline(
+    status.timeline,
+    props.generatedAt ?? initialTimestamp
+  )
+  const incidentCount = timeline.filter(
+    (point) => point.status === 'degraded' || point.status === 'failed'
+  ).length
+  const successRateHint =
+    incidentCount > 0
+      ? t('{{count}} incidents in the last 24 hours', { count: incidentCount })
+      : t('No incidents in the last 24 hours')
+
   return (
     <div className='flex flex-col gap-4'>
       <div className='text-muted-foreground flex flex-wrap items-center gap-2 text-xs'>
@@ -171,12 +229,71 @@ export function ModelDetailsPerformance(props: {
           {t('Performance update failed; showing the last available data.')}
         </p>
       )}
-      <ModelStatusDetails
-        model={props.status}
-        generatedAt={props.generatedAt ?? initialTimestamp}
-        hourFormatter={hourFormatter}
-        numberFormatter={numberFormatter}
-      />
+
+      <div
+        className='grid grid-cols-2 gap-2 sm:grid-cols-3'
+        aria-label={t('Performance metrics for the last 24 hours')}
+      >
+        <StatCard
+          icon={Gauge}
+          label='TPS'
+          value={
+            status.avg_tps === null ? '—' : formatThroughput(status.avg_tps)
+          }
+          hint={t('Sustained tokens per second')}
+        />
+        <StatCard
+          icon={Zap}
+          label={t('Average TTFT')}
+          value={
+            status.avg_ttft_ms === null
+              ? '—'
+              : formatLatency(status.avg_ttft_ms)
+          }
+        />
+        <StatCard
+          icon={Timer}
+          label={t('Average latency')}
+          value={
+            status.avg_latency_ms === null
+              ? '—'
+              : formatLatency(status.avg_latency_ms)
+          }
+        />
+        <StatCard
+          icon={HeartPulse}
+          label={t('Success rate')}
+          value={
+            status.success_rate === null
+              ? '—'
+              : formatUptimePct(status.success_rate)
+          }
+          hint={successRateHint}
+          valueClassName={
+            status.success_rate === null
+              ? undefined
+              : getSuccessRateTextClass(status.success_rate)
+          }
+        />
+        <StatCard
+          icon={BarChart3}
+          label={t('Requests')}
+          value={
+            status.request_count === null
+              ? '—'
+              : numberFormatter.format(status.request_count)
+          }
+        />
+        <StatCard
+          icon={CheckCircle2}
+          label={t('Successful requests')}
+          value={
+            status.success_count === null
+              ? '—'
+              : numberFormatter.format(status.success_count)
+          }
+        />
+      </div>
 
       {!props.selectedGroup && (
         <section>

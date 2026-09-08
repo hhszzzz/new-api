@@ -24,9 +24,8 @@ import { getSuccessRateDotClass } from '@/features/performance-metrics/lib/forma
 
 import { getModelStatusBarClass } from '../components/status-presentation.ts'
 
-// The status page and the model catalog ("模型广场") must never show a different
-// color for the same model, so the timeline bar is graded by success rate with
-// the catalog's own palette rather than a parallel copy of it.
+// The compact strip on model catalog ("模型广场") cards is graded by success
+// rate with the catalog's own palette rather than a parallel copy of it.
 describe('model status bar color', () => {
   test('matches the model catalog palette at every success rate', () => {
     for (const rate of [100, 99.5, 90, 89.9, 70, 69.9, 1, 0]) {
@@ -49,7 +48,7 @@ describe('model status bar color', () => {
   test('uses the neutral bar when an hour has no requests', () => {
     const noData = getModelStatusBarClass('no_data', null)
 
-    assert.equal(noData, 'bg-muted ring-1 ring-inset ring-border/70')
+    assert.equal(noData, 'bg-muted-foreground/15')
     assert.equal(getModelStatusBarClass('operational', null), noData)
   })
 

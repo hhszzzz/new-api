@@ -92,15 +92,16 @@ describe('model cards', () => {
       'Performance metrics for the last 24 hours'
     )
     expect(metrics.querySelector('dl')).toHaveClass(
-      'grid',
-      'grid-cols-[119px_minmax(0,1fr)_minmax(0,1fr)]'
+      'flex',
+      'items-start',
+      'gap-5'
     )
     const latencyColumn =
       within(metrics).getByText('Latency short').parentElement
     const throughputColumn =
       within(metrics).getByText('Throughput short').parentElement
-    expect(latencyColumn).toHaveClass('min-w-0', 'text-right')
-    expect(throughputColumn).toHaveClass('min-w-0', 'text-right')
+    expect(latencyColumn).toHaveClass('w-11', 'shrink-0')
+    expect(throughputColumn).toHaveClass('w-[52px]', 'shrink-0')
     rerender(
       <ModelPerfBadge
         perf={{ avg_latency_ms: 12000, avg_tps: 1420, success_rate: 98 }}
@@ -431,10 +432,10 @@ describe('model cards', () => {
     const strip = screen.getByRole('img', {
       name: 'Status over the last 24 hours',
     })
-    expect(strip).toHaveClass('grid-cols-[repeat(24,4px)]', 'w-[119px]')
+    expect(strip).toHaveClass('flex', 'w-24', 'justify-between')
     expect(strip.children).toHaveLength(24)
-    expect(strip.children[0]).toHaveClass('bg-muted')
-    expect(strip.children[23]).not.toHaveClass('bg-muted')
+    expect(strip.children[0]).toHaveClass('bg-muted-foreground/15', 'w-[3px]')
+    expect(strip.children[23]).not.toHaveClass('bg-muted-foreground/15')
     const performanceButton = screen.getByRole('button', {
       name: 'View performance',
     })

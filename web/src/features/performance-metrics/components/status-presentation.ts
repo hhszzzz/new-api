@@ -22,17 +22,18 @@ import { getSuccessRateDotClass } from '@/features/performance-metrics/lib/forma
 
 import type { ModelHealthStatus } from '../status-types'
 
-const NO_DATA_BAR_CLASS = 'bg-muted ring-1 ring-inset ring-border/70'
+// Compact card strips render no-data bars without a ring so the thin 3px bars
+// read as one flat neutral band, matching the original catalog cards.
+const NO_DATA_BAR_CLASS = 'bg-muted-foreground/15'
 
 /**
- * Bar color for one hour of the status timeline.
+ * Bar color for one hour of the compact status strip on model cards.
  *
- * Delegates to the model catalog ("模型广场") success-rate palette so the same
- * model never renders a different color on the two pages, including the
+ * Uses the model catalog ("模型广场") success-rate palette, including the
  * catalog's two shades of green (full green at 100%, lighter green above 90%).
  * The theme-level `bg-success`/`bg-warning`/`bg-destructive` tokens are
- * deliberately not used here: theme presets redefine them, which would make the
- * status page drift from the catalog.
+ * deliberately not used here: theme presets redefine them, which would make
+ * the strip drift from the catalog.
  */
 export function getModelStatusBarClass(
   status: ModelHealthStatus,

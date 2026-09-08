@@ -299,10 +299,17 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
         {description}
       </p>
 
-      <div className='mt-2 flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1 sm:mt-4'>
+      <div className='mt-2 grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-2 gap-y-1 sm:mt-4'>
         <div className='flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1'>
           <ModelBillingModeBadge model={props.model} />
         </div>
+        <ModelPerfBadge
+          perf={props.perf}
+          generatedAt={props.generatedAt}
+          onOpenPerformance={props.onOpenPerformance}
+          className='row-span-2 self-start'
+        />
+
         <div className='flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-0.5 sm:gap-x-3 sm:gap-y-1'>
           {bottomTags.map((item) => (
             <span key={item} className='text-muted-foreground/70 text-xs'>
@@ -323,12 +330,6 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
           )}
         </div>
       </div>
-      <ModelPerfBadge
-        perf={props.perf}
-        generatedAt={props.generatedAt}
-        onOpenPerformance={props.onOpenPerformance}
-        className='border-border/60 mt-3 border-t pt-3'
-      />
     </div>
   )
 })

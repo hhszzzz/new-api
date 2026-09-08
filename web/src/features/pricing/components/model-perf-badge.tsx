@@ -69,10 +69,13 @@ export const ModelPerfBadge = memo(function ModelPerfBadge(
   return (
     <div
       aria-label={t('Performance metrics for the last 24 hours')}
-      className={cn('w-full min-w-0', props.className)}
+      className={cn(
+        'flex w-full min-w-0 items-center justify-between gap-3',
+        props.className
+      )}
     >
-      <dl className='grid grid-cols-[119px_minmax(0,1fr)_minmax(0,1fr)] items-start gap-x-3 text-xs tabular-nums'>
-        <div className='min-w-0'>
+      <dl className='flex min-w-0 items-start gap-5 text-xs tabular-nums'>
+        <div className='w-24 shrink-0'>
           <dt
             title={t('Request success rate sampled over the last 24 hours')}
             className='text-muted-foreground flex items-center justify-between gap-1 text-[11px] leading-4'
@@ -82,43 +85,37 @@ export const ModelPerfBadge = memo(function ModelPerfBadge(
               {hasSuccessRate ? `${successRate.toFixed(1)}%` : '—%'}
             </span>
           </dt>
-          <dd className='mt-1 flex h-4 items-center'>
+          <dd className='mt-1 flex h-3 items-center'>
             {props.onOpenPerformance ? (
               <Button
                 variant='ghost'
-                className='h-4 w-[119px] rounded-xs p-0'
+                className='h-3 w-24 rounded-xs p-0'
                 aria-label={t('View performance')}
                 onClick={(event) => {
                   event.stopPropagation()
                   props.onOpenPerformance?.()
                 }}
               >
-                <StatusTimeline compact timeline={timeline} />
+                <StatusTimeline timeline={timeline} />
               </Button>
             ) : (
-              <StatusTimeline compact timeline={timeline} />
+              <StatusTimeline timeline={timeline} />
             )}
           </dd>
         </div>
-        <div title={t('Average latency')} className='min-w-0 text-right'>
-          <dt className='text-muted-foreground truncate text-[11px] leading-4'>
+        <div title={t('Average latency')} className='w-11 shrink-0'>
+          <dt className='text-muted-foreground text-[11px] leading-4'>
             {t('Latency short')}
           </dt>
-          <dd
-            className='mt-1 h-4 truncate font-mono leading-4 whitespace-nowrap'
-            title={latencyText}
-          >
+          <dd className='mt-1 font-mono whitespace-nowrap'>
             {latencyText === '—' ? '—s' : latencyText}
           </dd>
         </div>
-        <div title={t('Throughput')} className='min-w-0 text-right'>
-          <dt className='text-muted-foreground truncate text-[11px] leading-4'>
+        <div title={t('Throughput')} className='w-[52px] shrink-0'>
+          <dt className='text-muted-foreground text-[11px] leading-4'>
             {t('Throughput short')}
           </dt>
-          <dd
-            className='mt-1 h-4 truncate font-mono leading-4 whitespace-nowrap'
-            title={throughputText}
-          >
+          <dd className='mt-1 font-mono whitespace-nowrap'>
             {throughputText === '—' ? '—t/s' : throughputText}
           </dd>
         </div>
