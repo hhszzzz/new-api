@@ -189,8 +189,35 @@ describe('model cards', () => {
     expect(screen.getByText('Token-based')).toBeVisible()
   })
 
-  it('omits metadata fields when the model has no groups, endpoints or tags', () => {
+  it('hides groups the site does not offer and adjusts the overflow count', () => {
     render(
+      <ModelCard
+        model={pricingModel({
+          enable_groups: ['default', 'removed-group', 'another-removed'],
+        })}
+        onClick={vi.fn()}
+        availableGroups={['default']}
+      />
+    )
+    expect(screen.getByText('default')).toBeVisible()
+    expect(screen.queryByText('removed-group')).not.toBeInTheDocument()
+    expect(screen.queryByText(/another-removed/)).not.toBeInTheDocument()
+    expect(screen.queryByText('+2')).not.toBeInTheDocument()
+  })
+
+  it('hides the groups row entirely when none of the model groups exist on the site', () => {
+    render(
+      <ModelCard
+        model={pricingModel({ enable_groups: ['ghost-group'] })}
+        onClick={vi.fn()}
+        availableGroups={['default']}
+      />
+    )
+    expect(screen.queryByText('Groups')).not.toBeInTheDocument()
+    expect(screen.queryByText('ghost-group')).not.toBeInTheDocument()
+  })
+
+  it('omits metadata fields when the model has no groups, endpoints or tags', () => {    render(
       <ModelCard
         model={pricingModel({ enable_groups: [] })}
         onClick={vi.fn()}

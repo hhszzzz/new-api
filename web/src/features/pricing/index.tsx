@@ -171,6 +171,9 @@ export function Pricing() {
           tokenUnit={tokenUnit}
           showRechargePrice={showRechargePrice}
           selectedGroup={groupFilter}
+          availableGroups={
+            availableGroups.length > 0 ? availableGroups : undefined
+          }
         />
       )
     }

@@ -38,6 +38,7 @@ export interface ModelCardGridProps {
   showRechargePrice?: boolean
   selectedGroup?: string
   onOpenPerformance?: (modelName: string) => void
+  availableGroups?: readonly string[]
 }
 
 export function ModelCardGrid(props: ModelCardGridProps) {
@@ -84,6 +85,7 @@ export function ModelCardGrid(props: ModelCardGridProps) {
             usdExchangeRate={props.usdExchangeRate}
             showRechargePrice={props.showRechargePrice}
             selectedGroup={props.selectedGroup}
+            availableGroups={props.availableGroups}
             perf={perfMap.get(model.model_name || '')}
             onOpenPerformance={
               props.onOpenPerformance

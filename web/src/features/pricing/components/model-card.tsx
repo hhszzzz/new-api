@@ -52,6 +52,7 @@ export interface ModelCardProps {
   selectedGroup?: string
   perf?: ModelPerfBadgeData
   onOpenPerformance?: () => void
+  availableGroups?: readonly string[]
 }
 
 export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
@@ -64,7 +65,11 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
   const tokenUnitLabel = tokenUnit === 'K' ? '1K' : '1M'
   const tags = parseTags(props.model.tags)
   const description = props.model.description?.trim()
-  const groups = props.model.enable_groups || []
+  // Only surface groups the site actually offers; enable_groups may list
+  // groups that were removed or never configured here.
+  const groups = (props.model.enable_groups || []).filter(
+    (group) => !props.availableGroups || props.availableGroups.includes(group)
+  )
   const endpoints = props.model.supported_endpoint_types || []
   const modelIconKey = props.model.icon || props.model.vendor_icon
   const modelIcon = modelIconKey ? getLobeIcon(modelIconKey, 28) : null
