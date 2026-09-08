@@ -75,6 +75,7 @@ afterEach(() => {
   useSystemConfigStore
     .getState()
     .setConfig({ currency: { ...DEFAULT_CURRENCY_CONFIG } })
+  vi.useRealTimers()
   vi.unstubAllGlobals()
   useSystemConfigStore.persist.setOptions({ storage: originalStorage })
 })
@@ -397,6 +398,24 @@ describe('model cards', () => {
     expect(screen.getByRole('button', { name: 'Next page' })).toBeDisabled()
     await user.click(screen.getByRole('button', { name: 'Previous page' }))
     expect(screen.getByRole('heading', { name: 'model-1' })).toBeVisible()
+  })
+
+  it('switches the card grid to three columns at the xl breakpoint instead of 2xl', () => {
+    queryClient.setQueryData(['perf-metrics-summary', 24], {
+      success: true,
+      data: { models: [] },
+    })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ModelCardGrid models={[pricingModel()]} onModelClick={vi.fn()} />
+      </QueryClientProvider>
+    )
+    const grid = screen
+      .getByRole('heading', { name: 'example-model' })
+      .closest('.grid')
+    expect(grid).toHaveClass('xl:grid-cols-3')
+    expect(grid).not.toHaveClass('2xl:grid-cols-3')
+    expect(grid).not.toHaveClass('min-[1440px]:grid-cols-3')
   })
 
   it('positions sparse hourly data accurately and opens performance from the wider strip', async () => {

@@ -29,9 +29,11 @@ func applySystemPromptIfNeeded(c *gin.Context, info *relaycommon.RelayInfo, requ
 	}
 
 	systemRole := request.GetSystemRoleName()
+	// A Kimi K3 dynamic tool loading message ({"role":"system","tools":[...]})
+	// declares tools rather than a system prompt and must never receive content.
 	clientPromptIndex := -1
 	for i, message := range request.Messages {
-		if message.Role == systemRole {
+		if message.Role == systemRole && len(message.Tools) == 0 {
 			clientPromptIndex = i
 			break
 		}
