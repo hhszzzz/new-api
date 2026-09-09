@@ -1,5 +1,10 @@
-import type { RankingUser, RankingUserGroup, RankingUserUsage } from '../types'
-import { formatShare, formatUSD, formatUsageColumns } from './format'
+import type {
+  RankingUserGroup,
+  RankingUserModel,
+  RankingUserUsage,
+} from '../types'
+
+export type RankingBreakdownMode = 'group' | 'model'
 
 export type RankingPieSlice = {
   key: string
@@ -10,6 +15,7 @@ export type RankingPieSlice = {
   share: number
   isOther: boolean
   groups: RankingUserGroup[]
+  models: RankingUserModel[]
 }
 
 export function buildRankingPieSlices(
@@ -38,6 +44,7 @@ export function buildRankingPieSlices(
     share: 0,
     isOther: false,
     groups: user.groups,
+    models: user.models ?? [],
   }))
   for (let index = 0; index < slices.length; index += 1) {
     const isLastSlice = index === slices.length - 1 && remainder === 0
@@ -67,37 +74,34 @@ export function buildRankingPieSlices(
       share: Math.max(0, 1 - allocatedShare),
       isOther: true,
       groups: [],
+      models: [],
     })
   }
   return slices
 }
 
-export function formatRankingUserTooltip(
-  slice: RankingPieSlice,
-  translate: (key: string) => string
-): string {
-  const summary = `${formatShare(slice.share)} · ${formatUSD(slice.usd)}`
-  if (slice.groups.length === 0) return summary
+export type RankingBreakdownRow = {
+  label: string
+  tokens: number
+  usd: number
+}
 
-  // Group rows are padded as one set, so their charge and token columns line up
-  // under each other instead of drifting with each group's own value widths.
-  const columns = formatUsageColumns(
-    slice.groups.map((group) => ({
-      share: group.quota_share,
+// The hover tooltip card and the ranked-row popover list one usage breakdown
+// per row; the mode picks whether rows are keyed by request group or by model.
+export function rankingBreakdownRows(
+  breakdown: Pick<RankingPieSlice, 'groups' | 'models'>,
+  mode: RankingBreakdownMode
+): RankingBreakdownRow[] {
+  if (mode === 'group') {
+    return breakdown.groups.map((group) => ({
+      label: group.use_group,
       tokens: group.total_tokens,
       usd: group.total_usd,
     }))
-  )
-  const groups = slice.groups
-    .map((group, index) => `${group.use_group}: ${columns[index]}`)
-    .join('\n')
-  return `${summary}\n${translate('Usage by group')}:\n${groups}`
-}
-
-export function findRankingUser(
-  usage: RankingUserUsage | undefined,
-  rank: number | undefined
-): RankingUser | undefined {
-  if (!usage || rank === undefined) return undefined
-  return usage.users.find((user) => user.rank === rank)
+  }
+  return breakdown.models.map((model) => ({
+    label: model.model_name,
+    tokens: model.total_tokens,
+    usd: model.total_usd,
+  }))
 }

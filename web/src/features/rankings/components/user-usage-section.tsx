@@ -2,12 +2,13 @@ import { ArrowLeft01Icon, ArrowRight01Icon } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { Link } from '@tanstack/react-router'
 import { VChart } from '@visactor/react-vchart'
-import type { EventParamsDefinition } from '@visactor/vchart'
 import { BarChart3, LogIn, Users } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { useChartTheme } from '@/lib/use-chart-theme'
 import { cn } from '@/lib/utils'
 import { VCHART_OPTION } from '@/lib/vchart'
@@ -15,11 +16,16 @@ import { VCHART_OPTION } from '@/lib/vchart'
 import { formatShare, formatTokens, formatUSD } from '../lib/format'
 import {
   buildRankingPieSlices,
-  findRankingUser,
-  formatRankingUserTooltip,
+  rankingBreakdownRows,
+  type RankingBreakdownMode,
   type RankingPieSlice,
 } from '../lib/user-usage'
-import type { RankingUser, RankingUserGroup, RankingUserUsage } from '../types'
+import type {
+  RankingUser,
+  RankingUserGroup,
+  RankingUserModel,
+  RankingUserUsage,
+} from '../types'
 
 const USER_PAGE_SIZE = 10
 
@@ -45,7 +51,6 @@ type UserUsageSectionProps = {
 export function UserUsageSection(props: UserUsageSectionProps) {
   const { t } = useTranslation()
   const { resolvedTheme, themeReady } = useChartTheme()
-  const [selectedRank, setSelectedRank] = useState<number>()
   const [page, setPage] = useState(1)
   const users = props.usage?.users ?? EMPTY_USERS
   const totalPages = Math.max(1, Math.ceil(users.length / USER_PAGE_SIZE))
@@ -65,7 +70,6 @@ export function UserUsageSection(props: UserUsageSectionProps) {
     pagedUsers.slice(0, userColumnSize),
     pagedUsers.slice(userColumnSize),
   ]
-  const selectedUser = findRankingUser(props.usage, selectedRank) ?? users[0]
   const slices = useMemo(
     () =>
       props.usage ? buildRankingPieSlices(props.usage, 5, t('Other')) : [],
@@ -80,6 +84,7 @@ export function UserUsageSection(props: UserUsageSectionProps) {
           ...group,
           use_group: localizeUsageLabel(group.use_group, t),
         })),
+        models: slice.models,
       })),
     [slices, t]
   )
@@ -93,25 +98,7 @@ export function UserUsageSection(props: UserUsageSectionProps) {
       ),
     [slices]
   )
-  const activeSliceKey =
-    slices.find((slice) => slice.userRank === selectedUser?.rank)?.key ??
-    (selectedUser ? slices.find((slice) => slice.isOther)?.key : undefined)
-  const chartColourMap = useMemo(
-    () =>
-      Object.fromEntries(
-        slices.map((slice) => {
-          const colour = colourMap[slice.key] ?? '#94a3b8'
-          if (!activeSliceKey || slice.key === activeSliceKey) {
-            return [slice.key, colour]
-          }
-          const red = Number.parseInt(colour.slice(1, 3), 16)
-          const green = Number.parseInt(colour.slice(3, 5), 16)
-          const blue = Number.parseInt(colour.slice(5, 7), 16)
-          return [slice.key, `rgba(${red}, ${green}, ${blue}, 0.28)`]
-        })
-      ),
-    [activeSliceKey, colourMap, slices]
-  )
+  const chartColourMap = colourMap
   const chartSpec = useMemo(() => {
     if (displaySlices.length === 0) return null
     return {
@@ -127,6 +114,7 @@ export function UserUsageSection(props: UserUsageSectionProps) {
             usd: slice.usd,
             share: slice.share,
             groups: slice.groups,
+            models: slice.models,
           })),
         },
       ],
@@ -137,64 +125,36 @@ export function UserUsageSection(props: UserUsageSectionProps) {
       color: { specified: chartColourMap },
       legends: { visible: false },
       label: { visible: false },
+      // The tooltip is fully custom (React portal) so the by-group/by-model
+      // toggle is clickable inside the hover card; `enterable` keeps the card
+      // open while the pointer moves onto it. The default panel still casts a
+      // sharp-cornered shadow halo around the rounded card unless its shadow
+      // and border are neutralized here.
       tooltip: {
-        style: { valueLabel: { multiLine: true } },
-        mark: {
-          title: {
-            value: (datum: Record<string, unknown>) =>
-              String(datum?.username ?? ''),
-          },
-          content: [
-            {
-              key: (datum: Record<string, unknown>) =>
-                String(datum?.username ?? ''),
-              value: (datum: Record<string, unknown>) => {
-                const groups = rankingGroupsFromDatum(datum)
-                return formatRankingUserTooltip(
-                  rankingPieSliceFromDatum(datum, groups),
-                  t
-                ).split('\n')[0]
-              },
-            },
-          ],
-          updateContent: (previous: RankingTooltipLine[], data: unknown) => {
-            const datum = findRankingTooltipDatum(data)
-            if (!datum) return previous
-            const groups = rankingGroupsFromDatum(datum)
-            if (groups.length === 0) return previous
-            const lines = formatRankingUserTooltip(
-              rankingPieSliceFromDatum(datum, groups),
-              t
-            ).split('\n')
-            const firstLine = previous[0] ?? {
-              key: String(datum.username ?? ''),
-              value: lines[0],
-            }
-            return [
-              { ...firstLine, value: lines[0] },
-              { key: lines[1], value: ' ' },
-              ...lines.slice(2).map((line) => {
-                const separator = line.indexOf(': ')
-                return separator >= 0
-                  ? {
-                      key: line.slice(0, separator),
-                      value: line.slice(separator + 2),
-                    }
-                  : { key: line, value: ' ' }
-              }),
-            ]
+        enterable: true,
+        style: {
+          panel: {
+            padding: 0,
+            backgroundColor: 'transparent',
+            border: { width: 0, radius: 0 },
+            shadow: { x: 0, y: 0, blur: 0, spread: 0, color: 'transparent' },
           },
         },
+        tooltipRender: (
+          _element: HTMLElement,
+          actualTooltip: unknown,
+          params: unknown
+        ) => (
+          <UserUsageTooltipCard
+            datum={
+              findRankingTooltipDatum(actualTooltip) ??
+              findRankingTooltipDatum(params)
+            }
+          />
+        ),
       },
     }
-  }, [chartColourMap, displaySlices, t])
-
-  const selectByIndex = (index: number) => {
-    const user = users[index]
-    if (!user) return
-    setSelectedRank(user.rank)
-    setPage(Math.floor(index / USER_PAGE_SIZE) + 1)
-  }
+  }, [chartColourMap, displaySlices])
 
   const changePage = (nextPage: number) => {
     setPage(Math.min(Math.max(nextPage, 1), totalPages))
@@ -249,22 +209,13 @@ export function UserUsageSection(props: UserUsageSectionProps) {
             <div className='relative mx-auto h-64 max-w-xs'>
               {themeReady && chartSpec ? (
                 <VChart
-                  key={`user-usage-${resolvedTheme}-${activeSliceKey ?? 'none'}`}
+                  key={`user-usage-${resolvedTheme}`}
                   spec={{
                     ...chartSpec,
                     theme: resolvedTheme === 'dark' ? 'dark' : 'light',
                     background: 'transparent',
                   }}
                   option={VCHART_OPTION}
-                  onClick={(event: EventParamsDefinition['click']) => {
-                    const rank = Number(event.datum?.rank)
-                    if (Number.isInteger(rank)) {
-                      const index = users.findIndex(
-                        (user) => user.rank === rank
-                      )
-                      if (index >= 0) selectByIndex(index)
-                    }
-                  }}
                 />
               ) : (
                 <div className='text-muted-foreground/80 flex h-full items-center justify-center text-xs'>
@@ -279,45 +230,6 @@ export function UserUsageSection(props: UserUsageSectionProps) {
                   {t('charged')}
                 </span>
               </div>
-            </div>
-            <div
-              aria-label={t('Usage share by user')}
-              className='mt-2 flex flex-wrap justify-center gap-x-3 gap-y-1'
-            >
-              {displaySlices.map((slice) => (
-                <button
-                  key={slice.key}
-                  type='button'
-                  aria-pressed={!slice.isOther && activeSliceKey === slice.key}
-                  aria-label={
-                    slice.isOther
-                      ? t('Other')
-                      : `${t('Usage share by user')}: ${slice.name}`
-                  }
-                  className={cn(
-                    'text-muted-foreground inline-flex max-w-full items-center gap-1 truncate text-xs transition-colors hover:text-foreground',
-                    !slice.isOther &&
-                      activeSliceKey === slice.key &&
-                      'text-foreground font-semibold'
-                  )}
-                  onClick={() => {
-                    if (slice.userRank !== undefined) {
-                      const index = users.findIndex(
-                        (user) => user.rank === slice.userRank
-                      )
-                      if (index >= 0) selectByIndex(index)
-                    }
-                  }}
-                  disabled={slice.isOther}
-                >
-                  <span
-                    aria-hidden
-                    className='size-2 shrink-0 rounded-full'
-                    style={{ backgroundColor: colourMap[slice.key] }}
-                  />
-                  <span className='truncate'>{slice.name}</span>
-                </button>
-              ))}
             </div>
           </div>
 
@@ -335,21 +247,16 @@ export function UserUsageSection(props: UserUsageSectionProps) {
               id='ranking-user-list'
               className='grid grid-cols-1 gap-x-8 md:grid-cols-2'
             >
-              {pagedUserColumns.map((column, columnIndex) => (
+              {pagedUserColumns.map((column) => (
                 <ul
                   key={`column-${column[0]?.rank ?? 'empty'}`}
                   className='divide-border/70 divide-y'
                 >
-                  {column.map((user, rowIndex) => {
-                    const userIndex =
-                      (currentPage - 1) * USER_PAGE_SIZE +
-                      columnIndex * userColumnSize +
-                      rowIndex
+                  {column.map((user) => {
                     return (
                       <li key={`${user.rank}-${user.username}`}>
                         <UserRow
                           user={user}
-                          selected={selectedUser?.rank === user.rank}
                           share={
                             topUserUSD > 0 ? user.total_usd / topUserUSD : 0
                           }
@@ -360,24 +267,6 @@ export function UserUsageSection(props: UserUsageSectionProps) {
                               )?.key ?? 'other'
                             ]
                           }
-                          onSelect={() => selectByIndex(userIndex)}
-                          onMove={(direction) => {
-                            const next =
-                              direction === 'next'
-                                ? Math.min(users.length - 1, userIndex + 1)
-                                : Math.max(0, userIndex - 1)
-                            selectByIndex(next)
-                            const nextUser = users[next]
-                            if (nextUser) {
-                              window.requestAnimationFrame(() => {
-                                document
-                                  .querySelector<HTMLElement>(
-                                    `#ranking-user-${nextUser.rank}`
-                                  )
-                                  ?.focus()
-                              })
-                            }
-                          }}
                         />
                       </li>
                     )
@@ -441,15 +330,8 @@ export function UserUsageSection(props: UserUsageSectionProps) {
 
 const EMPTY_USERS: RankingUser[] = []
 
-type RankingTooltipLine = {
-  key?: string
-  value?: string
-  [key: string]: unknown
-}
-
-function rankingPieSliceFromDatum(
-  datum: Record<string, unknown>,
-  groups: RankingUserGroup[]
+function rankingSliceFromDatum(
+  datum: Record<string, unknown>
 ): RankingPieSlice {
   return {
     key: String(datum.sliceKey ?? ''),
@@ -460,15 +342,88 @@ function rankingPieSliceFromDatum(
     quota: Number(datum.quota) || 0,
     usd: Number(datum.usd) || 0,
     share: Number(datum.share) || 0,
-    isOther: false,
-    groups,
+    isOther: datum.sliceKey === 'other',
+    groups: Array.isArray(datum.groups)
+      ? (datum.groups as RankingUserGroup[])
+      : [],
+    models: Array.isArray(datum.models)
+      ? (datum.models as RankingUserModel[])
+      : [],
   }
 }
 
-function rankingGroupsFromDatum(
-  datum: Record<string, unknown>
-): RankingUserGroup[] {
-  return Array.isArray(datum.groups) ? (datum.groups as RankingUserGroup[]) : []
+// Shared breakdown content for the pie hover card and the ranked-row
+// popover: the header carries the user and their share exactly once, and the
+// clickable toggle switches rows between request groups and models. The
+// selected mode is component state; in the chart tooltip the portal
+// reconciles into the same DOM node across hovers, so the choice persists
+// while browsing slices.
+function UserUsageBreakdown(props: {
+  name: string
+  share: number
+  usd: number
+  groups: RankingUserGroup[]
+  models: RankingUserModel[]
+  // Compact mode (pie hover card) moves the breakdown toggle into the
+  // header row and drops the share/amount summary to save vertical space;
+  // the ranked-row popover keeps the summary with the toggle on its own row.
+  compact?: boolean
+}) {
+  const { t } = useTranslation()
+  const [mode, setMode] = useState<RankingBreakdownMode>('group')
+  const rows = rankingBreakdownRows(props, mode)
+  const hasBreakdown = props.groups.length > 0 || props.models.length > 0
+  const breakdownToggle = hasBreakdown && (
+    <ToggleGroup
+      className={props.compact ? 'shrink-0' : 'mt-2'}
+      value={[mode]}
+      onValueChange={(values) => {
+        if (values[0] === 'group' || values[0] === 'model') {
+          setMode(values[0])
+        }
+      }}
+      variant='outline'
+      size='sm'
+      aria-label={t('Usage breakdown')}
+    >
+      <ToggleGroupItem value='group'>{t('By group')}</ToggleGroupItem>
+      <ToggleGroupItem value='model'>{t('By model')}</ToggleGroupItem>
+    </ToggleGroup>
+  )
+  return (
+    <>
+      <div className='flex items-center justify-between gap-2'>
+        <span className='truncate text-sm font-semibold'>
+          {localizeUsageLabel(props.name, t)}
+        </span>
+        {props.compact ? (
+          breakdownToggle
+        ) : (
+          <span className='shrink-0 font-mono text-xs tabular-nums'>
+            {formatShare(props.share)} · {formatUSD(props.usd)}
+          </span>
+        )}
+      </div>
+      {!props.compact && breakdownToggle}
+      {rows.length > 0 && (
+        <div className='border-border/70 mt-2 flex flex-col gap-1 border-t pt-2'>
+          {rows.map((row) => (
+            <div
+              key={row.label}
+              className='flex items-center justify-between gap-4'
+            >
+              <span className='text-muted-foreground truncate'>
+                {row.label}
+              </span>
+              <span className='shrink-0 font-mono tabular-nums'>
+                {formatTokens(row.tokens)} · {formatUSD(row.usd)}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  )
 }
 
 // VChart provides mark tooltip data through a few nested shapes depending on
@@ -491,91 +446,100 @@ function findRankingTooltipDatum(
   return undefined
 }
 
+// Custom hover card for a pie slice.
+export function UserUsageTooltipCard(props: {
+  datum?: Record<string, unknown>
+}) {
+  const slice = rankingSliceFromDatum(props.datum ?? {})
+  return (
+    <div className='bg-popover text-popover-foreground ring-foreground/10 w-64 rounded-lg p-2.5 text-xs shadow-md ring-1'>
+      <UserUsageBreakdown
+        name={slice.name}
+        share={slice.share}
+        usd={slice.usd}
+        groups={slice.groups}
+        models={slice.models}
+        compact
+      />
+    </div>
+  )
+}
+
 function UserRow(props: {
   user: RankingUser
-  selected: boolean
   colour?: string
   /** 0..1 share of the largest user, used to size the inline usage bar. */
   share: number
-  onSelect: () => void
-  onMove: (direction: 'next' | 'previous') => void
 }) {
   const { t } = useTranslation()
   const displayUsername = localizeUsageLabel(props.user.username, t)
   const isPodium = props.user.rank <= 3
+  const groups = props.user.groups.map((group) => ({
+    ...group,
+    use_group: localizeUsageLabel(group.use_group, t),
+  }))
   return (
-    <button
-      id={`ranking-user-${props.user.rank}`}
-      type='button'
-      aria-pressed={props.selected}
-      aria-label={t('Select {{user}}', { user: displayUsername })}
-      className={cn(
-        'focus-visible:ring-ring/50 group flex w-full items-center gap-3 rounded-md px-2 py-2.5 text-left outline-none transition-colors focus-visible:ring-2',
-        'hover:bg-muted/40',
-        props.selected && 'bg-muted/60'
-      )}
-      onClick={props.onSelect}
-      onKeyDown={(event) => {
-        if (event.key === 'ArrowDown') {
-          event.preventDefault()
-          props.onMove('next')
-        }
-        if (event.key === 'ArrowUp') {
-          event.preventDefault()
-          props.onMove('previous')
-        }
-      }}
-    >
-      <span
-        className={cn(
-          'w-6 shrink-0 text-right font-mono text-xs tabular-nums',
-          isPodium
-            ? 'text-foreground font-semibold'
-            : 'text-muted-foreground/80'
-        )}
+    <Popover>
+      <PopoverTrigger
+        id={`ranking-user-${props.user.rank}`}
+        className='hover:bg-muted/60 flex w-full cursor-pointer items-center gap-3 rounded-md px-2 py-2.5 text-left transition-colors'
       >
-        {props.user.rank}.
-      </span>
-      <span
-        aria-hidden
-        className={cn(
-          'size-2.5 shrink-0 rounded-full',
-          props.selected && 'ring-offset-background ring-2 ring-offset-1'
-        )}
-        style={{
-          backgroundColor: props.colour ?? '#94a3b8',
-          ...(props.selected
-            ? { '--tw-ring-color': props.colour ?? '#94a3b8' }
-            : {}),
-        }}
-      />
-      <span className='min-w-0 flex-1 truncate'>
-        <span className='text-foreground truncate text-sm font-medium'>
-          {displayUsername}
+        <span
+          className={cn(
+            'w-6 shrink-0 text-right font-mono text-xs tabular-nums',
+            isPodium
+              ? 'text-foreground font-semibold'
+              : 'text-muted-foreground/80'
+          )}
+        >
+          {props.user.rank}.
         </span>
         <span
           aria-hidden
-          className='bg-muted/70 mt-1 block h-1 w-full overflow-hidden rounded-full'
-        >
+          className='size-2.5 shrink-0 rounded-full'
+          style={{ backgroundColor: props.colour ?? '#94a3b8' }}
+        />
+        <span className='min-w-0 flex-1 truncate'>
+          <span className='text-foreground truncate text-sm font-medium'>
+            {displayUsername}
+          </span>
           <span
-            className='block h-full rounded-full'
-            style={{
-              width: `${Math.max(2, Math.min(100, props.share * 100))}%`,
-              backgroundColor: props.colour ?? '#94a3b8',
-            }}
-          />
+            aria-hidden
+            className='bg-muted/70 mt-1 block h-1 w-full overflow-hidden rounded-full'
+          >
+            <span
+              className='block h-full rounded-full'
+              style={{
+                width: `${Math.max(2, Math.min(100, props.share * 100))}%`,
+                backgroundColor: props.colour ?? '#94a3b8',
+              }}
+            />
+          </span>
         </span>
-      </span>
-      <span className='shrink-0 text-right'>
-        <span className='text-foreground block font-mono text-sm font-semibold tabular-nums'>
-          {formatUSD(props.user.total_usd)}
+        <span className='shrink-0 text-right'>
+          <span className='text-foreground block font-mono text-sm font-semibold tabular-nums'>
+            {formatUSD(props.user.total_usd)}
+          </span>
+          <span className='text-muted-foreground/80 block font-mono text-[11px] tabular-nums'>
+            {formatTokens(props.user.total_tokens)} {t('tokens')} ·{' '}
+            {formatShare(props.user.quota_share)}
+          </span>
         </span>
-        <span className='text-muted-foreground/80 block font-mono text-[11px] tabular-nums'>
-          {formatTokens(props.user.total_tokens)} {t('tokens')} ·{' '}
-          {formatShare(props.user.quota_share)}
-        </span>
-      </span>
-    </button>
+      </PopoverTrigger>
+      <PopoverContent
+        side='left'
+        align='center'
+        className='w-64 gap-0 p-2.5 text-xs'
+      >
+        <UserUsageBreakdown
+          name={displayUsername}
+          share={props.user.quota_share}
+          usd={props.user.total_usd}
+          groups={groups}
+          models={props.user.models ?? []}
+        />
+      </PopoverContent>
+    </Popover>
   )
 }
 

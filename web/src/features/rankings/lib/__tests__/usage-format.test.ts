@@ -21,8 +21,8 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'vitest'
 
 import type { RankingUserUsage } from '../../types'
-import { formatUSD } from '../format'
-import { buildRankingPieSlices, formatRankingUserTooltip } from '../user-usage'
+import { formatUSD, formatUsageColumns } from '../format'
+import { buildRankingPieSlices, rankingBreakdownRows } from '../user-usage'
 
 describe('rankings charged-amount presentation', () => {
   // Charged amounts sit beside a token count in every ranking row, so they are
@@ -46,6 +46,7 @@ describe('rankings charged-amount presentation', () => {
       quota_share: (12 - index) / 78,
       token_share: 0,
       groups: [],
+      models: [],
     }))
     const usage: RankingUserUsage = {
       total_tokens: 0,
@@ -65,7 +66,7 @@ describe('rankings charged-amount presentation', () => {
     )
   })
 
-  test('adds user group usage to the existing pie tooltip', () => {
+  test('lists per-group usage rows for the tooltip card', () => {
     const usage: RankingUserUsage = {
       total_tokens: 200,
       total_quota: 1_000_000,
@@ -89,63 +90,76 @@ describe('rankings charged-amount presentation', () => {
               token_share: 0.75,
             },
           ],
-        },
-      ],
-    }
-
-    const tooltip = formatRankingUserTooltip(
-      buildRankingPieSlices(usage)[0],
-      (key) => key
-    )
-
-    assert.match(tooltip, /Usage by group/)
-    assert.match(tooltip, /team: 75\.0% · 150 · \$1\.5/)
-  })
-
-  // A tooltip lists several groups at once, and each value is formatted to its
-  // own width (`4.70M` beside `670.5M`). Padding every row against the same set
-  // is what keeps the charge column under the charge column.
-  test('aligns group rows into shared share, token, and charge columns', () => {
-    const usage: RankingUserUsage = {
-      total_tokens: 675_200_000,
-      total_quota: 1_000_000,
-      total_usd: 601.2,
-      users: [
-        {
-          rank: 1,
-          username: 'user-1',
-          total_tokens: 675_200_000,
-          total_quota: 1_000_000,
-          total_usd: 601.2,
-          quota_share: 1,
-          token_share: 1,
-          groups: [
+          models: [
             {
-              use_group: 'team',
-              total_tokens: 670_500_000,
-              total_quota: 990_000,
-              total_usd: 590.4,
-              quota_share: 0.99,
-              token_share: 0.99,
-            },
-            {
-              use_group: 'default',
-              total_tokens: 4_700_000,
-              total_quota: 10_000,
-              total_usd: 10.8,
-              quota_share: 0.01,
-              token_share: 0.01,
+              model_name: 'gpt-5',
+              total_tokens: 120,
+              total_quota: 600_000,
+              total_usd: 1.2,
+              quota_share: 0.6,
+              token_share: 0.6,
             },
           ],
         },
       ],
     }
 
-    const rows = formatRankingUserTooltip(
-      buildRankingPieSlices(usage)[0],
-      (key) => key
-    ).split('\n')
-    const [team, fallback] = rows.slice(2).map((row) => row.split(': ')[1])
+    const rows = rankingBreakdownRows(buildRankingPieSlices(usage)[0], 'group')
+
+    assert.deepEqual(rows, [{ label: 'team', tokens: 150, usd: 1.5 }])
+  })
+
+  test('switches the tooltip card rows to per-model usage', () => {
+    const usage: RankingUserUsage = {
+      total_tokens: 200,
+      total_quota: 1_000_000,
+      total_usd: 2,
+      users: [
+        {
+          rank: 1,
+          username: 'user-1',
+          total_tokens: 200,
+          total_quota: 1_000_000,
+          total_usd: 2,
+          quota_share: 1,
+          token_share: 1,
+          groups: [
+            {
+              use_group: 'team',
+              total_tokens: 150,
+              total_quota: 750_000,
+              total_usd: 1.5,
+              quota_share: 0.75,
+              token_share: 0.75,
+            },
+          ],
+          models: [
+            {
+              model_name: 'gpt-5',
+              total_tokens: 120,
+              total_quota: 600_000,
+              total_usd: 1.2,
+              quota_share: 0.6,
+              token_share: 0.6,
+            },
+          ],
+        },
+      ],
+    }
+
+    const rows = rankingBreakdownRows(buildRankingPieSlices(usage)[0], 'model')
+
+    assert.deepEqual(rows, [{ label: 'gpt-5', tokens: 120, usd: 1.2 }])
+  })
+
+  // Ranking tooltips list several rows at once, and each value is formatted to
+  // its own width (`4.70M` beside `670.5M`). Padding every row against the same
+  // set is what keeps the charge column under the charge column.
+  test('aligns usage rows into shared share, token, and charge columns', () => {
+    const [team, fallback] = formatUsageColumns([
+      { share: 0.99, tokens: 670_500_000, usd: 590.4 },
+      { share: 0.01, tokens: 4_700_000, usd: 10.8 },
+    ])
 
     // The narrower row is padded, not reformatted: same values, same total
     // width, and each column as wide as the one above it.
@@ -173,6 +187,7 @@ describe('rankings charged-amount presentation', () => {
           quota_share: 0.8,
           token_share: 0,
           groups: [],
+          models: [],
         },
         {
           rank: 2,
@@ -183,6 +198,7 @@ describe('rankings charged-amount presentation', () => {
           quota_share: 0.6,
           token_share: 0,
           groups: [],
+          models: [],
         },
       ],
     }
