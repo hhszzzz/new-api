@@ -50,7 +50,10 @@ export function normalizeRankingDateRange(
   }
 }
 
-export function defaultRankingDateRange(now = new Date()): RankingDateRange {
+export function defaultRankingDateRange(now = new Date()): {
+  from: Date
+  to: Date
+} {
   const to = new Date(now.getFullYear(), now.getMonth(), now.getDate())
   const from = new Date(to)
   from.setDate(from.getDate() - 6)

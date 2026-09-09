@@ -17,7 +17,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useNavigate, useSearch } from '@tanstack/react-router'
-import type { DateRange } from 'react-day-picker'
 import { useTranslation } from 'react-i18next'
 
 import { PublicLayout } from '@/components/layout'
@@ -83,12 +82,8 @@ export function Rankings() {
     })
   }
 
-  const handleCustomRangeChange = (range: DateRange | undefined) => {
-    if (!range?.from || !range.to) return
-    const normalized = normalizeRankingDateRange({
-      from: range.from,
-      to: range.to,
-    })
+  const handleCustomRangeChange = (range: { from: Date; to: Date }) => {
+    const normalized = normalizeRankingDateRange(range)
     if (!normalized) return
     navigate({
       to: '/rankings',

@@ -19,16 +19,23 @@ For commercial licensing, please contact support@quantumnous.com
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { ReactNode } from 'react'
-import type { DateRange } from 'react-day-picker'
 import { describe, expect, test, vi } from 'vitest'
 
-import { MAX_RANKING_CUSTOM_DAYS } from '../../lib/range'
 import { RankingsHero } from '../rankings-hero'
 
 const testI18n = vi.hoisted(() => ({
   language: 'en',
   resolvedLanguage: 'en',
 }))
+
+type MockCalendarProps = {
+  selected?: Date
+  onSelect?: (date: Date | undefined) => void
+  disabled?: (date: Date) => boolean
+}
+
+// Captured per render: [0] is the start picker, [1] the end picker.
+const calendarRefs = vi.hoisted(() => [] as MockCalendarProps[])
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -52,10 +59,21 @@ vi.mock('@/components/ui/button', () => ({
 }))
 
 vi.mock('@/components/ui/popover', () => ({
-  Popover: (props: { children?: ReactNode }) => <div>{props.children}</div>,
-  PopoverContent: (props: { children?: ReactNode }) => (
-    <div>{props.children}</div>
+  Popover: (props: {
+    children?: ReactNode
+    open?: boolean
+    onOpenChange?: (open: boolean) => void
+  }) => (
+    <div data-open={String(props.open ?? false)}>
+      <button
+        type='button'
+        aria-label='toggle-popover'
+        onClick={() => props.onOpenChange?.(!props.open)}
+      />
+      {props.children}
+    </div>
   ),
+  PopoverContent: (props: { children?: ReactNode }) => <div>{props.children}</div>,
   PopoverTrigger: (props: { children?: ReactNode; render?: ReactNode }) => (
     <div>
       {props.render}
@@ -65,74 +83,150 @@ vi.mock('@/components/ui/popover', () => ({
 }))
 
 vi.mock('@/components/ui/calendar', () => ({
-  Calendar: (props: {
-    max?: number
-    onSelect?: (range: DateRange) => void
-  }) => (
-    <button
-      type='button'
-      aria-label='Pick dates'
-      data-max-days={props.max}
-      onClick={() =>
-        props.onSelect?.({
-          from: new Date(2026, 0, 2),
-          to: new Date(2026, 0, 4),
-        })
-      }
-    >
-      Pick dates
-    </button>
-  ),
+  Calendar: (props: MockCalendarProps) => {
+    calendarRefs.push(props)
+    return (
+      <button
+        type='button'
+        aria-label='Pick date'
+        data-selected={props.selected?.getTime() ?? ''}
+        onClick={() => props.onSelect?.(new Date(2026, 0, 3))}
+      >
+        Pick date
+      </button>
+    )
+  },
 }))
 
-describe('rankings date picker', () => {
-  test('emits a closed date range and enforces the inclusive day limit', async () => {
+function renderHero(customRange?: { from: Date; to: Date }) {
+  calendarRefs.length = 0
+  const onCustomRangeChange = vi.fn()
+  render(
+    <RankingsHero
+      period='custom'
+      customRange={customRange}
+      onPeriodChange={vi.fn()}
+      onCustomRangeChange={onCustomRangeChange}
+    />
+  )
+  expect(calendarRefs).toHaveLength(2)
+  return { onCustomRangeChange }
+}
+
+describe('rankings custom date pickers', () => {
+  test('renders separate start and end pickers with the current range', () => {
     testI18n.language = 'en'
     testI18n.resolvedLanguage = 'en'
-    const user = userEvent.setup()
-    const onCustomRangeChange = vi.fn()
-
-    render(
-      <RankingsHero
-        period='custom'
-        onPeriodChange={vi.fn()}
-        onCustomRangeChange={onCustomRangeChange}
-      />
-    )
+    const { onCustomRangeChange } = renderHero({
+      from: new Date(2026, 0, 2),
+      to: new Date(2026, 0, 4),
+    })
 
     expect(screen.getByRole('tab', { name: 'Custom' })).toHaveAttribute(
       'aria-selected',
       'true'
     )
-    expect(screen.getByRole('button', { name: 'Pick dates' })).toHaveAttribute(
-      'data-max-days',
-      String(MAX_RANKING_CUSTOM_DAYS - 1)
-    )
+    expect(screen.getByRole('button', { name: 'Start date' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'End date' })).toBeVisible()
+    expect(screen.getByText('Jan 2, 2026')).toBeVisible()
+    expect(screen.getByText('Jan 4, 2026')).toBeVisible()
+    expect(calendarRefs[0].selected).toEqual(new Date(2026, 0, 2))
+    expect(calendarRefs[1].selected).toEqual(new Date(2026, 0, 4))
+    expect(onCustomRangeChange).not.toHaveBeenCalled()
+  })
 
-    await user.click(screen.getByRole('button', { name: 'Pick dates' }))
-
-    expect(onCustomRangeChange).toHaveBeenCalledWith({
+  test('selecting a start date keeps the current end and closes the picker', async () => {
+    testI18n.language = 'en'
+    testI18n.resolvedLanguage = 'en'
+    const user = userEvent.setup()
+    const { onCustomRangeChange } = renderHero({
       from: new Date(2026, 0, 2),
       to: new Date(2026, 0, 4),
     })
+
+    const startPopover = screen
+      .getByRole('button', { name: 'Start date' })
+      .closest('[data-open]') as HTMLElement
+    expect(startPopover.getAttribute('data-open')).toBe('false')
+
+    await user.click(
+      screen.getAllByRole('button', { name: 'toggle-popover' })[0]
+    )
+    expect(startPopover.getAttribute('data-open')).toBe('true')
+
+    await user.click(screen.getAllByRole('button', { name: 'Pick date' })[0])
+
+    expect(onCustomRangeChange).toHaveBeenCalledWith({
+      from: new Date(2026, 0, 3),
+      to: new Date(2026, 0, 4),
+    })
+    expect(startPopover.getAttribute('data-open')).toBe('false')
   })
 
-  test('formats a custom range for the project zhCN locale', () => {
+  test('selecting an end date keeps the current start and closes the picker', async () => {
+    testI18n.language = 'en'
+    testI18n.resolvedLanguage = 'en'
+    const user = userEvent.setup()
+    const { onCustomRangeChange } = renderHero({
+      from: new Date(2026, 0, 2),
+      to: new Date(2026, 0, 4),
+    })
+
+    const endPopover = screen
+      .getByRole('button', { name: 'End date' })
+      .closest('[data-open]') as HTMLElement
+
+    await user.click(
+      screen.getAllByRole('button', { name: 'toggle-popover' })[1]
+    )
+    expect(endPopover.getAttribute('data-open')).toBe('true')
+
+    await user.click(screen.getAllByRole('button', { name: 'Pick date' })[1])
+
+    expect(onCustomRangeChange).toHaveBeenCalledWith({
+      from: new Date(2026, 0, 2),
+      to: new Date(2026, 0, 3),
+    })
+    expect(endPopover.getAttribute('data-open')).toBe('false')
+  })
+
+  test('start picker rejects dates after the end day or beyond the day cap', () => {
+    testI18n.language = 'en'
+    testI18n.resolvedLanguage = 'en'
+    renderHero({ from: new Date(2020, 0, 2), to: new Date(2020, 0, 4) })
+
+    const disabled = (date: Date) => calendarRefs[0].disabled?.(date) ?? false
+    expect(disabled(new Date(2020, 0, 5))).toBe(true)
+    expect(disabled(new Date(2020, 0, 4))).toBe(false)
+    expect(disabled(new Date(2020, 0, 3))).toBe(false)
+    expect(disabled(new Date(2019, 0, 4))).toBe(false)
+    expect(disabled(new Date(2019, 0, 3))).toBe(true)
+    expect(disabled(new Date(2100, 0, 1))).toBe(true)
+  })
+
+  test('end picker rejects dates before the start day or beyond the day cap', () => {
+    testI18n.language = 'en'
+    testI18n.resolvedLanguage = 'en'
+    renderHero({ from: new Date(2020, 0, 2), to: new Date(2020, 0, 4) })
+
+    const disabled = (date: Date) => calendarRefs[1].disabled?.(date) ?? false
+    expect(disabled(new Date(2019, 11, 31))).toBe(true)
+    expect(disabled(new Date(2020, 0, 2))).toBe(false)
+    expect(disabled(new Date(2020, 0, 3))).toBe(false)
+    // 2020 is a leap year: Jan 2 2020 + 365 days lands on Jan 1 2021, which
+    // is exactly the 366-closed-day cap.
+    expect(disabled(new Date(2021, 0, 1))).toBe(false)
+    expect(disabled(new Date(2021, 0, 2))).toBe(true)
+    expect(disabled(new Date(2100, 0, 1))).toBe(true)
+  })
+
+  test('formats both dates for the project zhCN locale', () => {
     testI18n.language = 'zhCN'
     testI18n.resolvedLanguage = 'zhCN'
 
-    render(
-      <RankingsHero
-        period='custom'
-        customRange={{
-          from: new Date(2026, 0, 2),
-          to: new Date(2026, 0, 4),
-        }}
-        onPeriodChange={vi.fn()}
-        onCustomRangeChange={vi.fn()}
-      />
-    )
+    renderHero({ from: new Date(2026, 0, 2), to: new Date(2026, 0, 4) })
 
-    expect(screen.getByText('2026年1月2日 – 2026年1月4日')).toBeVisible()
+    expect(screen.getByText('2026年1月2日')).toBeVisible()
+    expect(screen.getByText('2026年1月4日')).toBeVisible()
   })
 })

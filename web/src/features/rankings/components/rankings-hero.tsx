@@ -1,6 +1,5 @@
 import { CalendarDays } from 'lucide-react'
-import { useEffect, useState } from 'react'
-import type { DateRange } from 'react-day-picker'
+import { useState } from 'react'
 import { enUS, fr, ja, ru, vi, zhCN, zhTW } from 'react-day-picker/locale'
 /*
 Copyright (C) 2023-2026 QuantumNous
@@ -32,7 +31,11 @@ import {
 import { toIntlLocale } from '@/i18n/languages'
 import { cn } from '@/lib/utils'
 
-import { MAX_RANKING_CUSTOM_DAYS, type RankingDateRange } from '../lib/range'
+import {
+  defaultRankingDateRange,
+  MAX_RANKING_CUSTOM_DAYS,
+  type RankingDateRange,
+} from '../lib/range'
 import type { RankingPeriod } from '../types'
 
 const PERIODS: { id: RankingPeriod; labelKey: string }[] = [
@@ -55,16 +58,62 @@ const calendarLocales = {
   'zh-TW': zhTW,
 } as const
 
+type CustomRange = { from: Date; to: Date }
+
 type RankingsHeroProps = {
   period: RankingPeriod
   customRange?: RankingDateRange
   onPeriodChange: (period: RankingPeriod) => void
-  onCustomRangeChange: (range: DateRange | undefined) => void
+  onCustomRangeChange: (range: CustomRange) => void
 }
 
 /**
- * Hero strip for the rankings page. Intentionally minimal — title +
- * subtitle + period tabs only.
+ * The start and end dates are picked independently, one calendar per side.
+ * Falls back to the default window when the URL has no complete custom range
+ * yet, so each picker always shows a usable date.
+ */
+function resolveCustomRange(range?: RankingDateRange): CustomRange {
+  if (range?.from && range.to) {
+    return { from: range.from, to: range.to }
+  }
+  const fallback = defaultRankingDateRange()
+  return { from: fallback.from, to: fallback.to }
+}
+
+function startOfLocalDay(date: Date): Date {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate())
+}
+
+function addLocalDays(date: Date, days: number): Date {
+  const day = startOfLocalDay(date)
+  day.setDate(day.getDate() + days)
+  return day
+}
+
+/**
+ * Disabled dates for one side of the custom range: never in the future, never
+ * past the opposite anchor's day, and never beyond the inclusive day cap
+ * (MAX_RANKING_CUSTOM_DAYS closed days per the backend limit).
+ */
+function isDisabledForPicker(
+  date: Date,
+  anchor: Date,
+  side: 'start' | 'end'
+): boolean {
+  if (date > new Date()) return true
+  const day = startOfLocalDay(date)
+  const anchorDay = startOfLocalDay(anchor)
+  if (side === 'start') {
+    if (day > anchorDay) return true
+    return day < addLocalDays(anchorDay, -(MAX_RANKING_CUSTOM_DAYS - 1))
+  }
+  if (day < anchorDay) return true
+  return day > addLocalDays(anchorDay, MAX_RANKING_CUSTOM_DAYS - 1)
+}
+
+/**
+ * Hero strip for the rankings page: title + subtitle + period tabs, plus the
+ * separate start/end date pickers shown for the custom period.
  */
 export function RankingsHero(props: RankingsHeroProps) {
   const { t, i18n } = useTranslation()
@@ -73,30 +122,26 @@ export function RankingsHero(props: RankingsHeroProps) {
     calendarLocales[language as keyof typeof calendarLocales] ??
     calendarLocales[language.split('-')[0] as keyof typeof calendarLocales] ??
     enUS
-  const [draftRange, setDraftRange] = useState<DateRange | undefined>(() =>
-    props.customRange
-      ? { from: props.customRange.from, to: props.customRange.to }
-      : undefined
-  )
-  const fromTimestamp = props.customRange?.from.getTime()
-  const toTimestamp = props.customRange?.to?.getTime()
-  useEffect(() => {
-    if (fromTimestamp === undefined) {
-      setDraftRange(undefined)
-      return
-    }
-    setDraftRange({
-      from: new Date(fromTimestamp),
-      to: toTimestamp === undefined ? undefined : new Date(toTimestamp),
-    })
-  }, [fromTimestamp, toTimestamp])
-  let rangeLabel = t('Select dates')
-  if (draftRange?.from) {
-    rangeLabel = formatDate(draftRange.from, language)
-    if (draftRange.to) {
-      rangeLabel = `${rangeLabel} – ${formatDate(draftRange.to, language)}`
-    }
+  const [openPicker, setOpenPicker] = useState<'start' | 'end' | null>(null)
+  const effectiveRange = resolveCustomRange(props.customRange)
+
+  const handleSelect = (picker: 'start' | 'end', date: Date | undefined) => {
+    if (!date) return
+    props.onCustomRangeChange(
+      picker === 'start'
+        ? { from: date, to: effectiveRange.to }
+        : { from: effectiveRange.from, to: date }
+    )
+    setOpenPicker(null)
   }
+
+  const daysFooter = (
+    <p className='text-muted-foreground px-2 pb-2 text-xs'>
+      {t('Up to {{count}} days', {
+        count: MAX_RANKING_CUSTOM_DAYS,
+      })}
+    </p>
+  )
 
   return (
     <section className='space-y-5'>
@@ -147,43 +192,79 @@ export function RankingsHero(props: RankingsHeroProps) {
       </div>
 
       {props.period === 'custom' && (
-        <Popover>
-          <PopoverTrigger
-            render={
-              <Button
-                variant='outline'
-                className='w-full justify-start text-start sm:w-auto'
-                aria-label={t('Choose a custom date range')}
-              />
-            }
+        <div className='flex flex-wrap items-center gap-2'>
+          <Popover
+            open={openPicker === 'start'}
+            onOpenChange={(open) => setOpenPicker(open ? 'start' : null)}
           >
-            <CalendarDays data-icon='inline-start' />
-            <span className='min-w-0 truncate'>{rangeLabel}</span>
-          </PopoverTrigger>
-          <PopoverContent className='w-auto p-0' align='start'>
-            <Calendar
-              mode='range'
-              selected={draftRange}
-              onSelect={(range) => {
-                setDraftRange(range)
-                if (range?.from && range.to) {
-                  props.onCustomRangeChange(range)
-                }
-              }}
-              numberOfMonths={1}
-              max={MAX_RANKING_CUSTOM_DAYS - 1}
-              locale={calendarLocale}
-              disabled={(date: Date) => date > new Date()}
-              footer={
-                <p className='text-muted-foreground px-2 pb-2 text-xs'>
-                  {t('Up to {{count}} days', {
-                    count: MAX_RANKING_CUSTOM_DAYS,
-                  })}
-                </p>
+            <PopoverTrigger
+              render={
+                <Button
+                  variant='outline'
+                  className='justify-start text-start'
+                  aria-label={t('Start date')}
+                />
               }
-            />
-          </PopoverContent>
-        </Popover>
+            >
+              <CalendarDays data-icon='inline-start' />
+              <span className='min-w-0 truncate'>
+                {formatDate(effectiveRange.from, language)}
+              </span>
+            </PopoverTrigger>
+            <PopoverContent className='w-auto p-0' align='start'>
+              <Calendar
+                mode='single'
+                selected={effectiveRange.from}
+                defaultMonth={effectiveRange.from}
+                onSelect={(date) => handleSelect('start', date)}
+                numberOfMonths={1}
+                locale={calendarLocale}
+                disabled={(date: Date) =>
+                  isDisabledForPicker(date, effectiveRange.to, 'start')
+                }
+                footer={daysFooter}
+              />
+            </PopoverContent>
+          </Popover>
+
+          <span aria-hidden className='text-muted-foreground text-sm'>
+            –
+          </span>
+
+          <Popover
+            open={openPicker === 'end'}
+            onOpenChange={(open) => setOpenPicker(open ? 'end' : null)}
+          >
+            <PopoverTrigger
+              render={
+                <Button
+                  variant='outline'
+                  className='justify-start text-start'
+                  aria-label={t('End date')}
+                />
+              }
+            >
+              <CalendarDays data-icon='inline-start' />
+              <span className='min-w-0 truncate'>
+                {formatDate(effectiveRange.to, language)}
+              </span>
+            </PopoverTrigger>
+            <PopoverContent className='w-auto p-0' align='start'>
+              <Calendar
+                mode='single'
+                selected={effectiveRange.to}
+                defaultMonth={effectiveRange.to}
+                onSelect={(date) => handleSelect('end', date)}
+                numberOfMonths={1}
+                locale={calendarLocale}
+                disabled={(date: Date) =>
+                  isDisabledForPicker(date, effectiveRange.from, 'end')
+                }
+                footer={daysFooter}
+              />
+            </PopoverContent>
+          </Popover>
+        </div>
       )}
     </section>
   )

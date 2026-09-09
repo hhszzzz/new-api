@@ -53,6 +53,62 @@ func TestResolveRankingRangeTodayStartsAtLocalMidnight(t *testing.T) {
 	assert.Equal(t, resolved.end-resolved.start+1, resolved.previousEnd-resolved.previousStart+1)
 }
 
+func TestResolveRankingRangePresetsUseCalendarPeriods(t *testing.T) {
+	location := time.FixedZone("test-local", 8*60*60)
+	// Wednesday, 2026-08-12 15:30:45 local time.
+	now := time.Date(2026, time.August, 12, 15, 30, 45, 0, location)
+
+	week, err := resolveRankingRange("week", nil, nil, now)
+	require.NoError(t, err)
+	wantWeekStart := time.Date(2026, time.August, 10, 0, 0, 0, 0, location).Unix()
+	assert.Equal(t, wantWeekStart, week.start)
+	assert.Equal(t, now.Unix(), week.end)
+	assert.Equal(t, wantWeekStart, week.bucketAnchor)
+	assert.Equal(t, wantWeekStart-1, week.previousEnd)
+	assert.Equal(t, week.end-week.start+1, week.previousEnd-week.previousStart+1)
+	assert.Equal(t, int64(24*60*60), week.config.bucketSize)
+
+	month, err := resolveRankingRange("month", nil, nil, now)
+	require.NoError(t, err)
+	wantMonthStart := time.Date(2026, time.August, 1, 0, 0, 0, 0, location).Unix()
+	assert.Equal(t, wantMonthStart, month.start)
+	assert.Equal(t, wantMonthStart, month.bucketAnchor)
+	assert.Equal(t, int64(24*60*60), month.config.bucketSize)
+
+	year, err := resolveRankingRange("year", nil, nil, now)
+	require.NoError(t, err)
+	wantYearStart := time.Date(2026, time.January, 1, 0, 0, 0, 0, location).Unix()
+	assert.Equal(t, wantYearStart, year.start)
+	assert.Equal(t, wantYearStart, year.bucketAnchor)
+	assert.Equal(t, int64(7*24*60*60), year.config.bucketSize)
+}
+
+func TestResolveRankingRangeWeekBoundsFollowMonday(t *testing.T) {
+	location := time.FixedZone("test-local", 8*60*60)
+	sunday := time.Date(2026, time.August, 16, 23, 59, 59, 0, location)
+
+	resolved, err := resolveRankingRange("week", nil, nil, sunday)
+	require.NoError(t, err)
+	assert.Equal(t, time.Date(2026, time.August, 10, 0, 0, 0, 0, location).Unix(), resolved.start)
+
+	resolved, err = resolveRankingRange("week", nil, nil, sunday.Add(time.Second))
+	require.NoError(t, err)
+	assert.Equal(t, time.Date(2026, time.August, 17, 0, 0, 0, 0, location).Unix(), resolved.start)
+}
+
+func TestRankingCacheRangeKeepsCalendarPresetsStable(t *testing.T) {
+	location := time.FixedZone("test-local", 8*60*60)
+	first := time.Date(2026, time.August, 12, 15, 30, 45, 0, location)
+	second := first.Add(2 * time.Minute)
+
+	firstRange, err := resolveRankingCacheRange(RankingsRequest{Period: "week"}, rankingResolvedRange{}, first)
+	require.NoError(t, err)
+	secondRange, err := resolveRankingCacheRange(RankingsRequest{Period: "week"}, rankingResolvedRange{}, second)
+	require.NoError(t, err)
+	assert.Equal(t, firstRange.start, secondRange.start)
+	assert.Equal(t, firstRange.end, secondRange.end)
+}
+
 func TestResolveRankingRangeRejectsInvalidAndOversizedCustomRanges(t *testing.T) {
 	now := time.Unix(2_000_000_000, 0)
 	boundaryStart := now.Unix() - int64(366*24*time.Hour/time.Second) + 1

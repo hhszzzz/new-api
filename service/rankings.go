@@ -193,11 +193,15 @@ type RankingUserGroup struct {
 
 type rankingPeriodConfig struct {
 	id          string
-	duration    time.Duration
 	bucketSize  int64
 	labelLayout string
 	hasPrevious bool
 	bucketName  string
+	// calendar returns the start of the current calendar period in the
+	// server's local timezone. Presets resolve against it so the range
+	// matches what the UI labels (本周/本月/今年) promise, instead of a
+	// rolling window ending now.
+	calendar func(now time.Time) time.Time
 }
 
 type rankingResolvedRange struct {
@@ -440,16 +444,34 @@ func rankingVisibilityCacheKey(modelNames []string, canViewPrivate bool) ([]stri
 func rankingConfig(period string) (rankingPeriodConfig, error) {
 	switch period {
 	case "", "week":
-		return rankingPeriodConfig{id: "week", duration: 7 * 24 * time.Hour, bucketSize: 24 * 3600, labelLayout: "Jan 2", hasPrevious: true, bucketName: "day"}, nil
+		return rankingPeriodConfig{id: "week", calendar: rankingCalendarWeekStart, bucketSize: 24 * 3600, labelLayout: "Jan 2", hasPrevious: true, bucketName: "day"}, nil
 	case "today":
-		return rankingPeriodConfig{id: "today", duration: 24 * time.Hour, bucketSize: 3600, labelLayout: "15:04", hasPrevious: true, bucketName: "hour"}, nil
+		return rankingPeriodConfig{id: "today", calendar: rankingCalendarDayStart, bucketSize: 3600, labelLayout: "15:04", hasPrevious: true, bucketName: "hour"}, nil
 	case "month":
-		return rankingPeriodConfig{id: "month", duration: 30 * 24 * time.Hour, bucketSize: 24 * 3600, labelLayout: "Jan 2", hasPrevious: true, bucketName: "day"}, nil
+		return rankingPeriodConfig{id: "month", calendar: rankingCalendarMonthStart, bucketSize: 24 * 3600, labelLayout: "Jan 2", hasPrevious: true, bucketName: "day"}, nil
 	case "year":
-		return rankingPeriodConfig{id: "year", duration: 365 * 24 * time.Hour, bucketSize: 7 * 24 * 3600, labelLayout: "Jan 2", hasPrevious: true, bucketName: "week"}, nil
+		return rankingPeriodConfig{id: "year", calendar: rankingCalendarYearStart, bucketSize: 7 * 24 * 3600, labelLayout: "Jan 2", hasPrevious: true, bucketName: "week"}, nil
 	default:
 		return rankingPeriodConfig{}, fmt.Errorf("invalid ranking period: %s", period)
 	}
+}
+
+func rankingCalendarDayStart(now time.Time) time.Time {
+	return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+}
+
+func rankingCalendarWeekStart(now time.Time) time.Time {
+	// Weeks start on Monday, matching the labels the UI shows for the period.
+	daysSinceMonday := (int(now.Weekday()) + 6) % 7
+	return rankingCalendarDayStart(now).AddDate(0, 0, -daysSinceMonday)
+}
+
+func rankingCalendarMonthStart(now time.Time) time.Time {
+	return time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+}
+
+func rankingCalendarYearStart(now time.Time) time.Time {
+	return time.Date(now.Year(), 1, 1, 0, 0, 0, 0, now.Location())
 }
 
 func resolveRankingRange(period string, startTimestamp *int64, endTimestamp *int64, now time.Time) (rankingResolvedRange, error) {
@@ -459,15 +481,10 @@ func resolveRankingRange(period string, startTimestamp *int64, endTimestamp *int
 	config, err := rankingConfig(period)
 	if err == nil {
 		end := now.Unix()
-		if config.id == "today" {
-			// "today" is the current calendar day in the server's local
-			// timezone, rather than a rolling 24-hour window.
-			start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).Unix()
-			resolved := makeResolvedRankingRange(config, start, end)
-			resolved.bucketAnchor = start
-			return resolved, nil
-		}
-		return makeResolvedRankingRange(config, now.Add(-config.duration).Unix(), end), nil
+		start := config.calendar(now).Unix()
+		resolved := makeResolvedRankingRange(config, start, end)
+		resolved.bucketAnchor = start
+		return resolved, nil
 	}
 	if period != "custom" {
 		return rankingResolvedRange{}, err
@@ -494,7 +511,6 @@ func resolveRankingRange(period string, startTimestamp *int64, endTimestamp *int
 	duration := time.Duration(end-start+1) * time.Second
 	config = rankingPeriodConfig{
 		id:          "custom",
-		duration:    duration,
 		hasPrevious: true,
 	}
 	switch {
