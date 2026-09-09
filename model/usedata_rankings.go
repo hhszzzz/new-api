@@ -23,12 +23,16 @@ type RankingQuotaBucket struct {
 	Quota      int64  `json:"quota"`
 }
 
-// RankingUserQuotaRow is the user/group-level aggregate used by the rankings
-// service. User rankings intentionally do not carry model provenance.
+// RankingUserQuotaRow is the user/group/model-level aggregate used by the
+// rankings service. ModelScope records whether the model name is the
+// client-facing requested model so visibility redaction matches the main
+// leaderboard.
 type RankingUserQuotaRow struct {
 	UserID      int    `json:"-"`
 	Username    string `json:"-"`
 	UseGroup    string `json:"-"`
+	ModelName   string `json:"-"`
+	ModelScope  int    `json:"-"`
 	TotalTokens int64  `json:"total_tokens"`
 	TotalQuota  int64  `json:"total_quota"`
 }
@@ -90,14 +94,15 @@ func GetRankingQuotaBuckets(startTime int64, endTime int64, bucketSize int64, bu
 }
 
 // GetRankingUserQuotaTotals returns attributable user/group aggregates for a
-// range. User rankings are independent of model visibility because the result
-// exposes no model provenance. Both export tables are read so historical usage
-// remains part of the same leaderboard after an upgrade.
-func GetRankingUserQuotaTotals(startTime int64, endTime int64) ([]RankingUserQuotaRow, error) {
+// range. Model provenance is redacted with the same visibility rules as the
+// main leaderboard before the rows leave this layer. Both export tables are
+// read so historical usage remains part of the same leaderboard after an
+// upgrade.
+func GetRankingUserQuotaTotals(startTime int64, endTime int64, visibleModelNames []string, canViewPrivate bool) ([]RankingUserQuotaRow, error) {
 	var legacyRows []RankingUserQuotaRow
 	query := DB.Table("quota_data").
-		Select("user_id, username, use_group, sum(token_used) as total_tokens, sum(quota) as total_quota").
-		Group("user_id, username, use_group").
+		Select("user_id, username, use_group, model_name, sum(token_used) as total_tokens, sum(quota) as total_quota").
+		Group("user_id, username, use_group, model_name").
 		Having("sum(token_used) > 0 OR sum(quota) > 0")
 	query = applyRankingQuotaTimeRange(query, startTime, endTime)
 	if err := query.Find(&legacyRows).Error; err != nil {
@@ -106,8 +111,8 @@ func GetRankingUserQuotaTotals(startTime int64, endTime int64) ([]RankingUserQuo
 
 	var scopedRows []RankingUserQuotaRow
 	query = DB.Model(&ScopedQuotaData{}).
-		Select("user_id, username, use_group, sum(token_used) as total_tokens, sum(quota) as total_quota").
-		Group("user_id, username, use_group").
+		Select("user_id, username, use_group, model_name, model_scope, sum(token_used) as total_tokens, sum(quota) as total_quota").
+		Group("user_id, username, use_group, model_name, model_scope").
 		Having("sum(token_used) > 0 OR sum(quota) > 0")
 	query = applyRankingQuotaTimeRange(query, startTime, endTime)
 	if err := query.Find(&scopedRows).Error; err != nil {
@@ -154,7 +159,7 @@ func GetRankingUserQuotaTotals(startTime int64, endTime int64) ([]RankingUserQuo
 		}
 		attributedRows = append(attributedRows, row)
 	}
-	return attributedRows, nil
+	return sanitizeRankingUserQuotaRows(attributedRows, visibleModelNames, canViewPrivate), nil
 }
 
 func rankingBucketExpr(bucketSize int64, bucketAnchor int64) string {

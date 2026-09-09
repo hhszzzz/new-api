@@ -177,6 +177,15 @@ export type RankingUserGroup = {
   token_share: number
 }
 
+export type RankingUserModel = {
+  model_name: string
+  total_tokens: number
+  total_quota: number
+  total_usd: number
+  quota_share: number
+  token_share: number
+}
+
 export type RankingUser = {
   rank: number
   username: string
@@ -186,6 +195,7 @@ export type RankingUser = {
   quota_share: number
   token_share: number
   groups: RankingUserGroup[]
+  models?: RankingUserModel[]
 }
 
 export type RankingUserUsage = {

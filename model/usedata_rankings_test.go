@@ -44,7 +44,7 @@ func TestRankingAggregatesQuotaOnlyRowsAndScopedUserGroups(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(1500000), sumRankingTestQuota(buckets))
 
-	users, err := GetRankingUserQuotaTotals(0, 7200)
+	users, err := GetRankingUserQuotaTotals(0, 7200, nil, true)
 	require.NoError(t, err)
 	require.Len(t, users, 3)
 	var userQuota int64
@@ -72,7 +72,7 @@ func TestRankingUserQuotaTotalsResolvesMissingUsernameAndDropsUnattributedRows(t
 		{UserID: 0, Username: "legacy-user", CreatedAt: 3600, UseGroup: "default", Quota: 300, Count: 1},
 	}).Error)
 
-	rows, err := GetRankingUserQuotaTotals(0, 7200)
+	rows, err := GetRankingUserQuotaTotals(0, 7200, nil, true)
 	require.NoError(t, err)
 	require.Len(t, rows, 2)
 	quotaByUsername := make(map[string]int64, len(rows))

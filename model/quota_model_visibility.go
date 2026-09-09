@@ -250,6 +250,14 @@ func sanitizeRankingQuotaTotals(rows []RankingQuotaTotal, visibleModelNames []st
 	return result
 }
 
+func sanitizeRankingUserQuotaRows(rows []RankingUserQuotaRow, visibleModelNames []string, canViewPrivate bool) []RankingUserQuotaRow {
+	visibleModels := quotaVisibleModelSet(visibleModelNames)
+	for index := range rows {
+		rows[index].ModelName = rankingQuotaModelName(rows[index].ModelName, rows[index].ModelScope, visibleModels, canViewPrivate)
+	}
+	return rows
+}
+
 func sanitizeRankingQuotaBuckets(rows []RankingQuotaBucket, visibleModelNames []string, canViewPrivate bool) []RankingQuotaBucket {
 	visibleModels := quotaVisibleModelSet(visibleModelNames)
 	type aggregateKey struct {

@@ -180,6 +180,16 @@ type RankingUser struct {
 	QuotaShare  float64            `json:"quota_share"`
 	TokenShare  float64            `json:"token_share"`
 	Groups      []RankingUserGroup `json:"groups"`
+	Models      []RankingUserModel `json:"models"`
+}
+
+type RankingUserModel struct {
+	ModelName   string  `json:"model_name"`
+	TotalTokens int64   `json:"total_tokens"`
+	TotalQuota  int64   `json:"total_quota"`
+	TotalUSD    float64 `json:"total_usd"`
+	QuotaShare  float64 `json:"quota_share"`
+	TokenShare  float64 `json:"token_share"`
 }
 
 type RankingUserGroup struct {
@@ -246,6 +256,7 @@ type rankingUserAggregate struct {
 	totalTokens int64
 	totalQuota  int64
 	groups      map[string]*historyAggregate
+	models      map[string]*historyAggregate
 }
 
 var (
@@ -600,7 +611,7 @@ func buildRankingsSnapshot(resolved rankingResolvedRange, visibleModelNames []st
 		VendorShareHistory: vendorHistory,
 	}
 	if viewer != RankingViewerAnonymous {
-		userRows, queryErr := model.GetRankingUserQuotaTotals(resolved.start, resolved.end)
+		userRows, queryErr := model.GetRankingUserQuotaTotals(resolved.start, resolved.end, visibleModelNames, canViewPrivate)
 		if queryErr != nil {
 			return nil, queryErr
 		}
@@ -965,7 +976,12 @@ func buildRankingUserUsage(rows []model.RankingUserQuotaRow, totalTokens int64, 
 		username := rawUsername
 		aggregate, ok := aggregates[key]
 		if !ok {
-			aggregate = &rankingUserAggregate{key: key, username: username, groups: make(map[string]*historyAggregate)}
+			aggregate = &rankingUserAggregate{
+				key:      key,
+				username: username,
+				groups:   make(map[string]*historyAggregate),
+				models:   make(map[string]*historyAggregate),
+			}
 			aggregates[key] = aggregate
 		} else if username < aggregate.username {
 			// Keep the display name deterministic when historical rows retain a
@@ -985,6 +1001,19 @@ func buildRankingUserUsage(rows []model.RankingUserQuotaRow, totalTokens int64, 
 		}
 		group.tokens += row.TotalTokens
 		group.quota += row.TotalQuota
+		modelName := strings.TrimSpace(row.ModelName)
+		if modelName == "" {
+			// Redacted model names fold into the same "Others" bucket the main
+			// leaderboard uses.
+			modelName = rankingOthersLabel
+		}
+		model, ok := aggregate.models[modelName]
+		if !ok {
+			model = &historyAggregate{}
+			aggregate.models[modelName] = model
+		}
+		model.tokens += row.TotalTokens
+		model.quota += row.TotalQuota
 	}
 
 	usage := &RankingUserUsage{TotalTokens: totalTokens, TotalQuota: totalQuota, TotalUSD: rankingQuotaUSD(totalQuota, quotaPerUnit), Users: make([]RankingUser, 0, minInt(len(aggregates), rankingUserLimit))}
@@ -1030,6 +1059,7 @@ func buildRankingUserUsage(rows []model.RankingUserQuotaRow, totalTokens int64, 
 			QuotaShare:  rankingShare(aggregate.totalQuota, totalQuota),
 			TokenShare:  rankingShare(aggregate.totalTokens, totalTokens),
 			Groups:      make([]RankingUserGroup, 0, len(aggregate.groups)),
+			Models:      make([]RankingUserModel, 0, len(aggregate.models)),
 		}
 		groupNames := make([]string, 0, len(aggregate.groups))
 		for name := range aggregate.groups {
@@ -1055,6 +1085,32 @@ func buildRankingUserUsage(rows []model.RankingUserQuotaRow, totalTokens int64, 
 				TotalUSD:    rankingQuotaUSD(group.quota, quotaPerUnit),
 				QuotaShare:  rankingShare(group.quota, aggregate.totalQuota),
 				TokenShare:  rankingShare(group.tokens, aggregate.totalTokens),
+			})
+		}
+		modelNames := make([]string, 0, len(aggregate.models))
+		for name := range aggregate.models {
+			modelNames = append(modelNames, name)
+		}
+		sort.Slice(modelNames, func(i, j int) bool {
+			left := aggregate.models[modelNames[i]]
+			right := aggregate.models[modelNames[j]]
+			if left.quota != right.quota {
+				return left.quota > right.quota
+			}
+			if left.tokens != right.tokens {
+				return left.tokens > right.tokens
+			}
+			return modelNames[i] < modelNames[j]
+		})
+		for _, modelName := range modelNames {
+			model := aggregate.models[modelName]
+			user.Models = append(user.Models, RankingUserModel{
+				ModelName:   modelName,
+				TotalTokens: model.tokens,
+				TotalQuota:  model.quota,
+				TotalUSD:    rankingQuotaUSD(model.quota, quotaPerUnit),
+				QuotaShare:  rankingShare(model.quota, aggregate.totalQuota),
+				TokenShare:  rankingShare(model.tokens, aggregate.totalTokens),
 			})
 		}
 		usage.Users = append(usage.Users, user)

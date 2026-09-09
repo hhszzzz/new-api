@@ -71,10 +71,34 @@ func TestRankingsUserUsageMatchesAdminTotalsAndMasksPrivateUsernames(t *testing.
 	assert.Equal(t, adminPayload.Data.UserUsage.TotalTokens, regularPayload.Data.UserUsage.TotalTokens)
 	assert.Equal(t, adminPayload.Data.UserUsage.TotalQuota, regularPayload.Data.UserUsage.TotalQuota)
 	assert.Equal(t, adminPayload.Data.UserUsage.TotalUSD, regularPayload.Data.UserUsage.TotalUSD)
+	// Per-model usage follows the same viewer visibility as the main
+	// leaderboard: the session admin sees the admin-only model name while
+	// regular viewers get it folded into "Others".
+	adminModelsByUsername := make(map[string][]service.RankingUserModel, len(adminPayload.Data.UserUsage.Users))
+	for _, user := range adminPayload.Data.UserUsage.Users {
+		adminModelsByUsername[user.Username] = user.Models
+	}
+	require.Len(t, adminModelsByUsername["alice"], 2)
+	assert.Equal(t, "ranking-visible-model", adminModelsByUsername["alice"][0].ModelName)
+	assert.Equal(t, "admin-secret-model", adminModelsByUsername["alice"][1].ModelName)
+	regularModelsByUsername := make(map[string][]service.RankingUserModel, len(regularPayload.Data.UserUsage.Users))
+	for _, user := range regularPayload.Data.UserUsage.Users {
+		regularModelsByUsername[user.Username] = user.Models
+	}
+	require.Len(t, regularModelsByUsername["a***e"], 2)
+	assert.Equal(t, "ranking-visible-model", regularModelsByUsername["a***e"][0].ModelName)
+	assert.Equal(t, "Others", regularModelsByUsername["a***e"][1].ModelName)
+	assert.Equal(t, adminModelsByUsername["alice"][1].TotalQuota, regularModelsByUsername["a***e"][1].TotalQuota)
+	assert.Equal(t, adminModelsByUsername["alice"][1].TotalTokens, regularModelsByUsername["a***e"][1].TotalTokens)
+	assert.Equal(t, adminModelsByUsername["bob"], regularModelsByUsername["b***b"])
+
 	for index := range adminPayload.Data.UserUsage.Users {
 		regularUser := regularPayload.Data.UserUsage.Users[index]
 		adminUser := adminPayload.Data.UserUsage.Users[index]
 		regularUser.Username = adminUser.Username
+		// Model visibility differs per viewer and is asserted separately above.
+		adminUser.Models = nil
+		regularUser.Models = nil
 		assert.Equal(t, adminUser, regularUser)
 	}
 
