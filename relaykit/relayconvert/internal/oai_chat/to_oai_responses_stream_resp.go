@@ -29,7 +29,7 @@ type ChatToResponsesStreamState struct {
 	// EmitSequenceNumber controls Responses SSE sequence numbers. Constructors enable it by default.
 	EmitSequenceNumber bool
 	hostedByID map[string]*chatToResponsesHostedTool
-	annotations []interface{}
+	annotations []any
 	thinkSplitter sharedchat.ThinkTagSplitter
 
 	status               string
@@ -136,7 +136,7 @@ func NewChatToResponsesStreamState(id string, model string) *ChatToResponsesStre
 		usedToolCallIDs:      make(map[string]struct{}),
 		EmitSequenceNumber: true,
 		hostedByID: make(map[string]*chatToResponsesHostedTool),
-		annotations: []interface{}{},
+		annotations: []any{},
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -1170,7 +1171,7 @@ func sortedRankingBuckets(bucketSet map[int64]struct{}) []int64 {
 	for bucket := range bucketSet {
 		buckets = append(buckets, bucket)
 	}
-	sort.Slice(buckets, func(i, j int) bool { return buckets[i] < buckets[j] })
+	slices.Sort(buckets)
 	return buckets
 }
 

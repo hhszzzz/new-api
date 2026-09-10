@@ -30,8 +30,7 @@ func SensitiveWordsToString() string {
 
 func SensitiveWordsFromString(s string) {
 	words := make([]string, 0)
-	sw := strings.Split(s, "\n")
-	for _, w := range sw {
+	for w := range strings.SplitSeq(s, "\n") {
 		w = strings.TrimSpace(w)
 		if w != "" {
 			words = append(words, w)

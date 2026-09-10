@@ -81,7 +81,7 @@ func (c *ClaudeMediaMessage) GetStringContent() string {
 	case string:
 		return c.Content.(string)
 	case []any:
-		var contentStr string
+		var contentStr strings.Builder
 		for _, contentItem := range c.Content.([]any) {
 			contentMap, ok := contentItem.(map[string]any)
 			if !ok {
@@ -89,11 +89,11 @@ func (c *ClaudeMediaMessage) GetStringContent() string {
 			}
 			if contentMap["type"] == ContentTypeText {
 				if subStr, ok := contentMap["text"].(string); ok {
-					contentStr += subStr
+					contentStr.WriteString(subStr)
 				}
 			}
 		}
-		return contentStr
+		return contentStr.String()
 	}
 
 	return ""
@@ -164,7 +164,7 @@ func (c *ClaudeMessage) GetStringContent() string {
 	case string:
 		return c.Content.(string)
 	case []any:
-		var contentStr string
+		var contentStr strings.Builder
 		for _, contentItem := range c.Content.([]any) {
 			contentMap, ok := contentItem.(map[string]any)
 			if !ok {
@@ -172,11 +172,11 @@ func (c *ClaudeMessage) GetStringContent() string {
 			}
 			if contentMap["type"] == ContentTypeText {
 				if subStr, ok := contentMap["text"].(string); ok {
-					contentStr += subStr
+					contentStr.WriteString(subStr)
 				}
 			}
 		}
-		return contentStr
+		return contentStr.String()
 	}
 
 	return ""
@@ -195,10 +195,10 @@ func (c *ClaudeMessage) ParseContent() ([]ClaudeMediaMessage, error) {
 }
 
 type Tool struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description,omitempty"`
-	InputSchema map[string]interface{} `json:"input_schema"`
-	Strict      *bool                  `json:"strict,omitempty"`
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	InputSchema map[string]any `json:"input_schema"`
+	Strict      *bool          `json:"strict,omitempty"`
 }
 
 type InputSchema struct {
@@ -573,7 +573,7 @@ func (c *ClaudeResponse) GetClaudeError() *types.ClaudeError {
 		return &err
 	case *types.ClaudeError:
 		return err
-	case map[string]interface{}:
+	case map[string]any:
 		// 处理从JSON解析来的map结构
 		claudeErr := &types.ClaudeError{}
 		if errType, ok := err["type"].(string); ok {

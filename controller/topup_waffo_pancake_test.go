@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"maps"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -31,7 +32,8 @@ func TestGetWaffoPancakePayMoney(t *testing.T) {
 	originalUnitPrice := setting.WaffoPancakeUnitPrice
 	originalGlobalPrice := operation_setting.GetPrice()
 	originalQuotaDisplayType := operation_setting.GetGeneralSetting().QuotaDisplayType
-	originalDiscounts := operation_setting.GetPaymentSetting().AmountDiscount
+	originalDiscounts := make(map[int]float64, len(operation_setting.GetPaymentSetting().AmountDiscount))
+	maps.Copy(originalDiscounts, operation_setting.GetPaymentSetting().AmountDiscount)
 	originalTopupGroupRatio := common.TopupGroupRatio2JSONString()
 
 	t.Cleanup(func() {

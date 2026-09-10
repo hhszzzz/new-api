@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"context"
+
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
 	relaymedia "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/media"
@@ -420,9 +421,9 @@ func responsesFunctionOutputItemToGeminiParts(item map[string]any, callNames map
 	return parts, nil
 }
 
-func geminiToolResponseMap(value any) map[string]interface{} {
+func geminiToolResponseMap(value any) map[string]any {
 	if text, ok := value.(string); ok {
-		return map[string]interface{}{"content": text}
+		return map[string]any{"content": text}
 	}
 	if items, ok := value.([]any); ok {
 		texts := make([]string, 0, len(items))
@@ -436,10 +437,10 @@ func geminiToolResponseMap(value any) map[string]interface{} {
 			}
 		}
 		if len(texts) > 0 {
-			return map[string]interface{}{"content": strings.Join(texts, "\n")}
+			return map[string]any{"content": strings.Join(texts, "\n")}
 		}
 	}
-	return map[string]interface{}{"content": value}
+	return map[string]any{"content": value}
 }
 
 func geminiInlineImagePart(media dto.MediaContent) (dto.GeminiPart, bool) {

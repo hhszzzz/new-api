@@ -390,7 +390,7 @@ func startClaudeToolCall(state *convmeta.ClaudeConvertInfo, toolState *convmeta.
 			Id:    toolState.ID,
 			Type:  "tool_use",
 			Name:  toolState.Name,
-			Input: map[string]interface{}{},
+			Input: map[string]any{},
 		},
 	}}
 	if toolState.PendingArguments != "" {
@@ -571,12 +571,12 @@ func openAIToolCallToClaudeContent(toolUse dto.ToolCallRequest, usedToolCallIDs 
 		Type:  "tool_use",
 		Id:    uniqueClaudeToolUseID(usedToolCallIDs, toolUse.ID),
 		Name:  toolUse.Function.Name,
-		Input: map[string]interface{}{},
+		Input: map[string]any{},
 	}
 	if strings.TrimSpace(toolUse.Function.Arguments) == "" {
 		return content
 	}
-	var input map[string]interface{}
+	var input map[string]any
 	if err := kitutil.Unmarshal([]byte(toolUse.Function.Arguments), &input); err == nil && input != nil {
 		content.Input = input
 	}

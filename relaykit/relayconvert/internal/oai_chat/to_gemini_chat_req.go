@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"context"
+
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
 	relaymedia "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/media"
@@ -55,17 +56,17 @@ func OpenAIChatRequestToGeminiGenerateContent(c context.Context, textRequest dto
 	}
 
 	if len(textRequest.ExtraBody) > 0 {
-		var extraBody map[string]interface{}
+		var extraBody map[string]any
 		if err := kitutil.Unmarshal(textRequest.ExtraBody, &extraBody); err != nil {
 			return nil, fmt.Errorf("invalid extra body: %w", err)
 		}
 
-		if googleBody, ok := extraBody["google"].(map[string]interface{}); ok {
+		if googleBody, ok := extraBody["google"].(map[string]any); ok {
 			if _, hasErrorParam := googleBody["thinkingConfig"]; hasErrorParam {
 				return nil, errors.New("extra_body.google.thinkingConfig is not supported, use extra_body.google.thinking_config instead")
 			}
 
-			if thinkingConfig, ok := googleBody["thinking_config"].(map[string]interface{}); ok {
+			if thinkingConfig, ok := googleBody["thinking_config"].(map[string]any); ok {
 				if _, hasErrorParam := thinkingConfig["thinkingBudget"]; hasErrorParam {
 					return nil, errors.New("extra_body.google.thinking_config.thinkingBudget is not supported, use extra_body.google.thinking_config.thinking_budget instead")
 				}
@@ -109,7 +110,7 @@ func OpenAIChatRequestToGeminiGenerateContent(c context.Context, textRequest dto
 				return nil, errors.New("extra_body.google.imageConfig is not supported, use extra_body.google.image_config instead")
 			}
 
-			if imageConfig, ok := googleBody["image_config"].(map[string]interface{}); ok {
+			if imageConfig, ok := googleBody["image_config"].(map[string]any); ok {
 				if _, hasErrorParam := imageConfig["aspectRatio"]; hasErrorParam {
 					return nil, errors.New("extra_body.google.image_config.aspectRatio is not supported, use extra_body.google.image_config.aspect_ratio instead")
 				}
@@ -117,7 +118,7 @@ func OpenAIChatRequestToGeminiGenerateContent(c context.Context, textRequest dto
 					return nil, errors.New("extra_body.google.image_config.imageSize is not supported, use extra_body.google.image_config.image_size instead")
 				}
 
-				geminiImageConfig := make(map[string]interface{})
+				geminiImageConfig := make(map[string]any)
 				if aspectRatio, ok := imageConfig["aspect_ratio"]; ok {
 					geminiImageConfig["aspectRatio"] = aspectRatio
 				}
@@ -175,9 +176,9 @@ func OpenAIChatRequestToGeminiGenerateContent(c context.Context, textRequest dto
 			functions = append(functions, tool.Function)
 		}
 		geminiTools := geminiRequest.GetTools()
-		if googleSearch { geminiTools = append(geminiTools, dto.GeminiChatTool{GoogleSearch: map[string]interface{}{}}) }
-		if codeExecution { geminiTools = append(geminiTools, dto.GeminiChatTool{CodeExecution: map[string]interface{}{}}) }
-		if urlContext { geminiTools = append(geminiTools, dto.GeminiChatTool{URLContext: map[string]interface{}{}}) }
+		if googleSearch { geminiTools = append(geminiTools, dto.GeminiChatTool{GoogleSearch: map[string]any{}}) }
+		if codeExecution { geminiTools = append(geminiTools, dto.GeminiChatTool{CodeExecution: map[string]any{}}) }
+		if urlContext { geminiTools = append(geminiTools, dto.GeminiChatTool{URLContext: map[string]any{}}) }
 		if len(functions) > 0 {
 			geminiTools = append(geminiTools, dto.GeminiChatTool{
 				FunctionDeclarations: functions,
@@ -228,11 +229,11 @@ func OpenAIChatRequestToGeminiGenerateContent(c context.Context, textRequest dto
 			if name == "" {
 				return nil, fmt.Errorf("unable to resolve Gemini functionResponse.name for tool_call_id %q", message.ToolCallId)
 			}
-			var contentMap map[string]interface{}
+			var contentMap map[string]any
 			contentStr := message.StringContent()
 
 			if err := kitutil.Unmarshal([]byte(contentStr), &contentMap); err != nil {
-				var contentSlice []interface{}
+				var contentSlice []any
 				if err := kitutil.Unmarshal([]byte(contentStr), &contentSlice); err == nil {
 					textParts := make([]string, 0, len(contentSlice))
 					for _, item := range contentSlice {
@@ -245,12 +246,12 @@ func OpenAIChatRequestToGeminiGenerateContent(c context.Context, textRequest dto
 						}
 					}
 					if len(textParts) > 0 {
-						contentMap = map[string]interface{}{"content": strings.Join(textParts, "\n")}
+						contentMap = map[string]any{"content": strings.Join(textParts, "\n")}
 					} else {
-						contentMap = map[string]interface{}{"content": contentSlice}
+						contentMap = map[string]any{"content": contentSlice}
 					}
 				} else {
-					contentMap = map[string]interface{}{"content": contentStr}
+					contentMap = map[string]any{"content": contentStr}
 				}
 			}
 
@@ -280,7 +281,7 @@ func OpenAIChatRequestToGeminiGenerateContent(c context.Context, textRequest dto
 		signatureAttached := false
 		if message.ToolCalls != nil {
 			for _, call := range message.ParseToolCalls() {
-				args := map[string]interface{}{}
+				args := map[string]any{}
 				if call.Function.Arguments != "" {
 					if kitutil.Unmarshal([]byte(call.Function.Arguments), &args) != nil {
 						return nil, fmt.Errorf("invalid arguments for function %s, args: %s", call.Function.Name, call.Function.Arguments)

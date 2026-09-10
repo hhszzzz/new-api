@@ -2,6 +2,7 @@ package setting
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -28,12 +29,7 @@ func ContainsAutoGroup(group string) bool {
 	autoGroupsMutex.RLock()
 	defer autoGroupsMutex.RUnlock()
 
-	for _, autoGroup := range autoGroups {
-		if autoGroup == group {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(autoGroups, group)
 }
 
 func UpdateAutoGroupsByJsonString(jsonString string) error {

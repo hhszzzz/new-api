@@ -500,7 +500,7 @@ func applyWebSocketSubprotocolAuthorization(header http.Header) bool {
 
 func apiKeyFromWebSocketSubprotocol(protocols string) (string, bool) {
 	const insecureAPIKeyPrefix = "openai-insecure-api-key."
-	for _, protocol := range strings.Split(protocols, ",") {
+	for protocol := range strings.SplitSeq(protocols, ",") {
 		protocol = strings.TrimSpace(protocol)
 		if !strings.HasPrefix(protocol, insecureAPIKeyPrefix) {
 			continue

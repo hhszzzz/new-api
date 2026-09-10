@@ -139,7 +139,7 @@ func TestStreamStatusRecordErrorCapsStoredEntries(t *testing.T) {
 	t.Parallel()
 
 	status := NewStreamStatus()
-	for i := 0; i < 30; i++ {
+	for i := range 30 {
 		status.RecordError(fmt.Sprintf("error_%d", i))
 	}
 
@@ -153,7 +153,7 @@ func TestStreamStatusRecordErrorConcurrent(t *testing.T) {
 
 	status := NewStreamStatus()
 	var wg sync.WaitGroup
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		wg.Add(1)
 		go func(index int) {
 			defer wg.Done()

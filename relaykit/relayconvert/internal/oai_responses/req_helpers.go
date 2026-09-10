@@ -266,30 +266,30 @@ func filterIncompleteResponsesToolHistory(items []map[string]any, dropUnanswered
 	return filtered, nil
 }
 
-func responsesGeminiResponseMap(value any) map[string]interface{} {
+func responsesGeminiResponseMap(value any) map[string]any {
 	switch typed := value.(type) {
 	case nil:
-		return map[string]interface{}{}
+		return map[string]any{}
 	case map[string]any:
 		return typed
 	case string:
-		var object map[string]interface{}
+		var object map[string]any
 		if err := kitutil.Unmarshal([]byte(typed), &object); err == nil {
 			return object
 		}
-		var array []interface{}
+		var array []any
 		if err := kitutil.Unmarshal([]byte(typed), &array); err == nil {
-			return map[string]interface{}{"result": array}
+			return map[string]any{"result": array}
 		}
-		return map[string]interface{}{"content": typed}
+		return map[string]any{"content": typed}
 	case []any:
-		return map[string]interface{}{"result": typed}
+		return map[string]any{"result": typed}
 	default:
-		return map[string]interface{}{"content": typed}
+		return map[string]any{"content": typed}
 	}
 }
 
-func GeminiResponseMap(value any) map[string]interface{} {
+func GeminiResponseMap(value any) map[string]any {
 	return responsesGeminiResponseMap(value)
 }
 

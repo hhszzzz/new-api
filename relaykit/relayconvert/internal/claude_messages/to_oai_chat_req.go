@@ -357,7 +357,7 @@ func claudeMessagesRequestToOpenAIChat(c context.Context, claudeRequest dto.Clau
 	return &openAIRequest, nil
 }
 
-func requestToJSONString(v interface{}) string {
+func requestToJSONString(v any) string {
 	b, err := kitutil.Marshal(v)
 	if err != nil {
 		return "{}"

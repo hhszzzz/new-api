@@ -35,7 +35,7 @@ import { useTableUrlState } from '@/hooks/use-table-url-state'
 import { getModels, searchModels, getVendors } from '../api'
 import { DEFAULT_PAGE_SIZE } from '../constants'
 import { modelsQueryKeys, vendorsQueryKeys } from '../lib'
-import type { ModelSortBy } from '../types'
+import type { ModelSortBy, ModelSquareState } from '../types' 
 import { DataTableBulkActions } from './data-table-bulk-actions'
 import { useModelsColumns } from './models-columns'
 import { useModels } from './models-provider'
@@ -84,6 +84,7 @@ export function ModelsTable() {
     globalFilter: { enabled: true, key: 'filter' },
     columnFilters: [
       { columnId: 'status', searchKey: 'status', type: 'array' },
+      { columnId: 'square_state', searchKey: 'square_state', type: 'array' },
       { columnId: 'vendor_id', searchKey: 'vendor', type: 'array' },
       { columnId: 'sync_official', searchKey: 'sync', type: 'array' },
     ],
@@ -92,6 +93,11 @@ export function ModelsTable() {
   // Extract filters from column filters
   const statusFilter =
     (columnFilters.find((f) => f.id === 'status')?.value as string[]) || []
+  const squareState = (
+    columnFilters.find((f) => f.id === 'square_state')?.value as
+      | ModelSquareState[]
+      | undefined
+  )?.[0]
   const vendorFilter =
     (columnFilters.find((f) => f.id === 'vendor_id')?.value as string[]) || []
   const syncFilter =
@@ -137,6 +143,7 @@ export function ModelsTable() {
     globalFilter?.trim() ||
     activeVendorFilter ||
     statusFilterValue ||
+    squareState ||
     syncFilterValue
   )
 
@@ -165,9 +172,11 @@ export function ModelsTable() {
   // eslint-disable-next-line @tanstack/query/exhaustive-deps
   const { data, isLoading, isFetching, isError, error, refetch } = useQuery({
     queryKey: modelsQueryKeys.list({
+      include_channel_models: true,
       keyword: globalFilter,
       vendor: activeVendorFilter,
       status: statusFilterValue,
+      square_state: squareState,
       sync_official: syncFilterValue,
       ...sortParams,
       p: pagination.pageIndex + 1,
@@ -176,9 +185,11 @@ export function ModelsTable() {
     queryFn: async () => {
       if (shouldSearch) {
         return searchModels({
+          include_channel_models: true,
           keyword: globalFilter,
           vendor: activeVendorFilter,
           status: statusFilterValue,
+          square_state: squareState,
           sync_official: syncFilterValue,
           ...sortParams,
           p: pagination.pageIndex + 1,
@@ -186,6 +197,7 @@ export function ModelsTable() {
         })
       }
       return getModels({
+        include_channel_models: true,
         ...sortParams,
         p: pagination.pageIndex + 1,
         page_size: pagination.pageSize,
@@ -212,7 +224,8 @@ export function ModelsTable() {
   // React Table instance
   const { table } = useDataTable({
     data: models,
-    getRowId: (model) => String(model.id),
+    getRowId: (model) =>
+      model.id > 0 ? `metadata:${model.id}` : `channel:${model.model_name}`,
     columns,
     tableStateStorageKey: MODELS_TABLE_STATE_STORAGE_KEY,
     totalCount,
@@ -226,6 +239,7 @@ export function ModelsTable() {
       endpoints: false,
       created_time: false,
       updated_time: false,
+      status: false,
     },
     columnFilters,
     pagination,
@@ -288,10 +302,21 @@ export function ModelsTable() {
         filters: [
           {
             columnId: 'status',
+            title: t('Display policy'),
+            options: [
+              { label: t('Allowed'), value: 'enabled' },
+              { label: t('Not listed'), value: 'disabled' },
+            ],
+            singleSelect: true,
+          },
+          {
+            columnId: 'square_state',
             title: t('Model square visibility'),
             options: [
-              { label: t('Shown'), value: 'enabled' },
-              { label: t('Not shown'), value: 'disabled' },
+              { label: t('Displayed'), value: 'visible' },
+              { label: t('Unavailable'), value: 'unavailable' },
+              { label: t('Listing hidden'), value: 'hidden' },
+              { label: t('Partly shown'), value: 'partial' },
             ],
             singleSelect: true,
           },

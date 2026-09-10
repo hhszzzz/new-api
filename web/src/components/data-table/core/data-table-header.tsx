@@ -58,6 +58,7 @@ export function DataTableHeader<TData>({
               key={header.id}
               colSpan={header.colSpan}
               data-column-id={header.column.id}
+              aria-label={getColumnHeaderAriaLabel(header)}
               className={cn(
                 'relative',
                 getColumnClassName?.(header.column.id, 'header')
@@ -403,6 +404,21 @@ function getHeaderSizeStyle<TData>(
   }
 
   return { width: header.getSize() }
+}
+
+/**
+ * Explicit accessible name for the columnheader. Without it, the name is
+ * computed from content and would absorb the nested resize separator's label
+ * (e.g. "User Group Resize column"). String headers and `meta.label` give a
+ * clean source; other columns keep content-based naming.
+ */
+function getColumnHeaderAriaLabel<TData>(
+  header: Header<TData, unknown>
+): string | undefined {
+  if (header.isPlaceholder) return undefined
+  const { header: headerDef, meta } = header.column.columnDef
+  if (typeof headerDef === 'string' && headerDef) return headerDef
+  return typeof meta?.label === 'string' && meta.label ? meta.label : undefined
 }
 
 function renderHeaderContent<TData>(header: Header<TData, unknown>) {

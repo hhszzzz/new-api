@@ -14,7 +14,7 @@ import (
 
 // ConfigManager 统一管理所有配置
 type ConfigManager struct {
-	configs map[string]interface{}
+	configs map[string]any
 	mutex   sync.RWMutex
 }
 
@@ -38,19 +38,19 @@ type ConfigPublisher interface {
 
 func NewConfigManager() *ConfigManager {
 	return &ConfigManager{
-		configs: make(map[string]interface{}),
+		configs: make(map[string]any),
 	}
 }
 
 // Register 注册一个配置模块
-func (cm *ConfigManager) Register(name string, config interface{}) {
+func (cm *ConfigManager) Register(name string, config any) {
 	cm.mutex.Lock()
 	defer cm.mutex.Unlock()
 	cm.configs[name] = config
 }
 
 // Get 获取指定配置模块
-func (cm *ConfigManager) Get(name string) interface{} {
+func (cm *ConfigManager) Get(name string) any {
 	cm.mutex.RLock()
 	defer cm.mutex.RUnlock()
 	return cm.configs[name]
@@ -62,7 +62,7 @@ func (cm *ConfigManager) LoadFromDB(options map[string]string) error {
 	defer cm.mutex.Unlock()
 
 	type preparedConfig struct {
-		config    interface{}
+		config    any
 		candidate reflect.Value
 	}
 	prepared := make([]preparedConfig, 0, len(cm.configs))
@@ -79,8 +79,7 @@ func (cm *ConfigManager) LoadFromDB(options map[string]string) error {
 
 		// 收集属于此配置的所有选项
 		for key, value := range options {
-			if strings.HasPrefix(key, prefix) {
-				configKey := strings.TrimPrefix(key, prefix)
+			if configKey, ok := strings.CutPrefix(key, prefix); ok {
 				configMap[configKey] = value
 			}
 		}
@@ -175,11 +174,11 @@ func (cm *ConfigManager) SaveToDB(updateFunc func(key, value string) error) erro
 }
 
 // 辅助函数：将配置对象转换为map
-func configToMap(config interface{}) (map[string]string, error) {
+func configToMap(config any) (map[string]string, error) {
 	result := make(map[string]string)
 
 	val := reflect.ValueOf(config)
-	if val.Kind() == reflect.Ptr {
+	if val.Kind() == reflect.Pointer {
 		val = val.Elem()
 	}
 
@@ -215,7 +214,7 @@ func configToMap(config interface{}) (map[string]string, error) {
 			strValue = strconv.FormatUint(field.Uint(), 10)
 		case reflect.Float32, reflect.Float64:
 			strValue = strconv.FormatFloat(field.Float(), 'f', -1, field.Type().Bits())
-		case reflect.Ptr:
+		case reflect.Pointer:
 			// 处理指针类型：如果非 nil，序列化指向的值
 			if !field.IsNil() {
 				bytes, err := common.Marshal(field.Interface())
@@ -259,9 +258,9 @@ func configFieldKey(field reflect.StructField) (string, bool) {
 	return key, true
 }
 
-func prepareConfigUpdate(config interface{}, configMap map[string]string, fromDB bool) (reflect.Value, error) {
+func prepareConfigUpdate(config any, configMap map[string]string, fromDB bool) (reflect.Value, error) {
 	target := reflect.ValueOf(config)
-	if !target.IsValid() || target.Kind() != reflect.Ptr || target.IsNil() {
+	if !target.IsValid() || target.Kind() != reflect.Pointer || target.IsNil() {
 		return reflect.Value{}, fmt.Errorf("config must be a non-nil pointer")
 	}
 	if target.Elem().Kind() != reflect.Struct {
@@ -374,7 +373,7 @@ func parseConfigField(field reflect.Value, value string) error {
 			return fmt.Errorf("value must be finite")
 		}
 		field.SetFloat(parsed)
-	case reflect.Ptr:
+	case reflect.Pointer:
 		if value == "null" {
 			field.Set(reflect.Zero(field.Type()))
 			return nil
@@ -396,7 +395,7 @@ func parseConfigField(field reflect.Value, value string) error {
 	return nil
 }
 
-func applyConfigUpdate(config interface{}, candidate reflect.Value) {
+func applyConfigUpdate(config any, candidate reflect.Value) {
 	reflect.ValueOf(config).Elem().Set(candidate.Elem())
 	if publisher, ok := config.(ConfigPublisher); ok {
 		publisher.PublishConfig()
@@ -404,7 +403,7 @@ func applyConfigUpdate(config interface{}, candidate reflect.Value) {
 }
 
 // 辅助函数：从map更新配置对象
-func updateConfigFromMap(config interface{}, configMap map[string]string) error {
+func updateConfigFromMap(config any, configMap map[string]string) error {
 	candidate, err := prepareConfigUpdate(config, configMap, false)
 	if err != nil {
 		return err
@@ -414,12 +413,12 @@ func updateConfigFromMap(config interface{}, configMap map[string]string) error 
 }
 
 // ConfigToMap 将配置对象转换为map（导出函数）
-func ConfigToMap(config interface{}) (map[string]string, error) {
+func ConfigToMap(config any) (map[string]string, error) {
 	return configToMap(config)
 }
 
 // UpdateConfigFromMap 从map更新配置对象（导出函数）
-func UpdateConfigFromMap(config interface{}, configMap map[string]string) error {
+func UpdateConfigFromMap(config any, configMap map[string]string) error {
 	return updateConfigFromMap(config, configMap)
 }
 

@@ -4,6 +4,7 @@ import (
 	"unicode/utf8"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -213,15 +214,15 @@ func chatResponseReasoningOutput(responseID string, index int, reasoning string,
 	return output
 }
 
-func chatAnnotationsToResponses(raw []byte) ([]interface{}, error) {
+func chatAnnotationsToResponses(raw []byte) ([]any, error) {
 	if len(raw) == 0 {
-		return []interface{}{}, nil
+		return []any{}, nil
 	}
 	var annotations []map[string]any
 	if err := kitutil.Unmarshal(raw, &annotations); err != nil {
 		return nil, fmt.Errorf("invalid Chat annotations: %w", err)
 	}
-	converted := make([]interface{}, 0, len(annotations))
+	converted := make([]any, 0, len(annotations))
 	for _, annotation := range annotations {
 		if strings.TrimSpace(kitutil.Interface2String(annotation["type"])) != "url_citation" {
 			converted = append(converted, annotation)
@@ -234,9 +235,7 @@ func chatAnnotationsToResponses(raw []byte) ([]interface{}, error) {
 		}
 		flattened := make(map[string]any, len(citation)+1)
 		flattened["type"] = "url_citation"
-		for key, value := range citation {
-			flattened[key] = value
-		}
+		maps.Copy(flattened, citation)
 		converted = append(converted, flattened)
 	}
 	return converted, nil

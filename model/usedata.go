@@ -226,7 +226,7 @@ func persistQuotaData(quotaData *ScopedQuotaData) error {
 
 	result = DB.Model(&ScopedQuotaData{}).
 		Where("id = ?", existing.Id).
-		Updates(map[string]interface{}{
+		Updates(map[string]any{
 			"count":      gorm.Expr("count + ?", quotaData.Count),
 			"quota":      gorm.Expr("quota + ?", quotaData.Quota),
 			"token_used": gorm.Expr("token_used + ?", quotaData.TokenUsed),

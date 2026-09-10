@@ -178,6 +178,7 @@ export function RedemptionsTable() {
     columns,
     tableStateStorageKey: REDEMPTIONS_TABLE_STATE_STORAGE_KEY,
     enableRowSelection: true,
+    getRowId: (row) => String(row.id),
     columnFilters,
     globalFilter,
     pagination,
@@ -198,7 +199,6 @@ export function RedemptionsTable() {
     manualSorting: true,
     manualFiltering: true,
     totalCount: data?.total || 0,
-    getRowId: (row) => String(row.id),
     ensurePageInRange,
   })
 

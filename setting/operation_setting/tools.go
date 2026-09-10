@@ -187,13 +187,11 @@ func buildToolPriceSnapshot(configuredPrices map[string]float64) *ToolPriceSnaps
 	}
 
 	for key, price := range merged {
-		colonIdx := strings.IndexByte(key, ':')
-		if colonIdx < 0 {
+		toolName, modelPart, ok := strings.Cut(key, ":")
+		if !ok {
 			snapshot.defaults[key] = price
 			continue
 		}
-		toolName := key[:colonIdx]
-		modelPart := key[colonIdx+1:]
 		prefix := strings.TrimSuffix(modelPart, "*")
 		snapshot.prefixes[toolName] = append(snapshot.prefixes[toolName], prefixEntry{prefix: prefix, price: price})
 	}

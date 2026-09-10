@@ -403,7 +403,7 @@ const CustomType = "custom"
 type ToolCallRequest struct {
 	ID       string          `json:"id,omitempty"`
 	Type     string          `json:"type"`
-	Function FunctionRequest `json:"function,omitempty"`
+	Function FunctionRequest `json:"function"`
 	Custom   json.RawMessage `json:"custom,omitempty"`
 }
 
@@ -661,7 +661,7 @@ func (m *Message) StringContent() string {
 	case string:
 		return m.Content.(string)
 	case []any:
-		var contentStr string
+		var contentStr strings.Builder
 		for _, contentItem := range m.Content.([]any) {
 			contentMap, ok := contentItem.(map[string]any)
 			if !ok {
@@ -669,11 +669,11 @@ func (m *Message) StringContent() string {
 			}
 			if contentMap["type"] == ContentTypeText {
 				if subStr, ok := contentMap["text"].(string); ok {
-					contentStr += subStr
+					contentStr.WriteString(subStr)
 				}
 			}
 		}
-		return contentStr
+		return contentStr.String()
 	}
 
 	return ""
@@ -768,7 +768,7 @@ func (m *Message) ParseContent() []MediaContent {
 			switch v := imageUrl.(type) {
 			case string:
 				temp.Url = v
-			case map[string]interface{}:
+			case map[string]any:
 				url, ok1 := v["url"].(string)
 				detail, ok2 := v["detail"].(string)
 				if ok2 {
@@ -784,7 +784,7 @@ func (m *Message) ParseContent() []MediaContent {
 			})
 
 		case ContentTypeInputAudio:
-			if audioData, ok := contentItem["input_audio"].(map[string]interface{}); ok {
+			if audioData, ok := contentItem["input_audio"].(map[string]any); ok {
 				data, ok1 := audioData["data"].(string)
 				format, ok2 := audioData["format"].(string)
 				if ok1 && ok2 {
@@ -799,7 +799,7 @@ func (m *Message) ParseContent() []MediaContent {
 				}
 			}
 		case ContentTypeFile:
-			if fileData, ok := contentItem["file"].(map[string]interface{}); ok {
+			if fileData, ok := contentItem["file"].(map[string]any); ok {
 				fileId, ok3 := fileData["file_id"].(string)
 				if ok3 {
 					contentList = append(contentList, MediaContent{

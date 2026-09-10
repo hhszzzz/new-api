@@ -681,7 +681,7 @@ func TestResponsesStreamEventToChatChunksDoesNotResendToolOnTerminalOutput(t *te
 		},
 	})...)
 
-	totalArgs := ""
+	var totalArgs strings.Builder
 	toolIndexes := map[int]bool{}
 	var finishReason string
 	for _, chunk := range chunks {
@@ -689,7 +689,7 @@ func TestResponsesStreamEventToChatChunksDoesNotResendToolOnTerminalOutput(t *te
 			for _, tc := range choice.Delta.ToolCalls {
 				require.NotNil(t, tc.Index)
 				toolIndexes[*tc.Index] = true
-				totalArgs += tc.Function.Arguments
+				totalArgs.WriteString(tc.Function.Arguments)
 			}
 			if choice.FinishReason != nil {
 				finishReason = *choice.FinishReason
@@ -698,7 +698,7 @@ func TestResponsesStreamEventToChatChunksDoesNotResendToolOnTerminalOutput(t *te
 	}
 
 	assert.Equal(t, map[int]bool{0: true}, toolIndexes)
-	assert.Equal(t, `{"q":"x"}`, totalArgs)
+	assert.Equal(t, `{"q":"x"}`, totalArgs.String())
 	assert.Equal(t, "tool_calls", finishReason)
 }
 
