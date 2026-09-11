@@ -42,6 +42,13 @@ func normalizeModelRadarMetrics(payload modelRadarMetricsPayload, published []Mo
 		point := metric.modelRadarUpstreamPoint
 		point.ValidTasks = metric.Total
 		point.TotalRuns = metric.RunsTotal
+		// The live API lists every configuration it knows about, including new
+		// model/effort pairs that have not been graded yet. Those rows carry a
+		// null IQ and no tasks, so there is no capability data to display. Drop
+		// them instead of failing the whole sync.
+		if point.IQ == nil {
+			continue
+		}
 		if point.CombinedCostIndex != nil && maxCost > 0 {
 			normalizedCost := *point.CombinedCostIndex / maxCost * 100
 			point.CombinedCostIndex = &normalizedCost
@@ -66,6 +73,9 @@ func normalizeModelRadarMetrics(payload modelRadarMetricsPayload, published []Mo
 		}
 		configurations = append(configurations, configuration)
 		frame.Points = append(frame.Points, historyPoint)
+	}
+	if len(configurations) == 0 {
+		return nil, ModelRadarHistoryFrame{}, errors.New("live metrics contain no graded configurations")
 	}
 	return configurations, frame, nil
 }

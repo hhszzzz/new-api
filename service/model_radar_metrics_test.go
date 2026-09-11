@@ -71,6 +71,26 @@ func TestNormalizeModelRadarMetricsNormalizesLiveCostScale(t *testing.T) {
 	assert.Equal(t, 200.0, *payload.Points[0].CombinedCostIndex, "normalization must not mutate the source payload")
 }
 
+func TestNormalizeModelRadarMetricsSkipsUngradedPlaceholders(t *testing.T) {
+	// The live API lists new model/effort pairs before their first graded run
+	// as iq=null rows. They must not abort the sync, and a response containing
+	// only placeholders must not blank the stored snapshot.
+	var payload modelRadarMetricsPayload
+	require.NoError(t, common.Unmarshal([]byte(`{"schema":3,"mode":"equal_latest_3","benchmark_id":"deep-swe","scoring_mode":"binary-majority","source_updated_at":"2026-09-11T01:10:00Z","points":[{"model":"deepseek-v4.1-flash","effort":"max","iq":null,"passed":0,"total":0,"runs_total":0},{"model":"gpt-test","effort":"high","iq":100,"passed":2,"total":3,"runs_total":9}]}`), &payload))
+
+	configurations, frame, err := normalizeModelRadarMetrics(payload, nil)
+	require.NoError(t, err)
+	require.Len(t, configurations, 1)
+	assert.Equal(t, "gpt-test", configurations[0].Model)
+	require.Len(t, frame.Points, 1)
+	assert.Equal(t, "gpt-test", frame.Points[0].Model)
+
+	var placeholdersOnly modelRadarMetricsPayload
+	require.NoError(t, common.Unmarshal([]byte(`{"schema":3,"mode":"equal_latest_3","benchmark_id":"deep-swe","scoring_mode":"binary-majority","source_updated_at":"2026-09-11T01:10:00Z","points":[{"model":"deepseek-v4.1-flash","effort":"max","iq":null,"passed":0,"total":0,"runs_total":0}]}`), &placeholdersOnly))
+	_, _, err = normalizeModelRadarMetrics(placeholdersOnly, nil)
+	require.ErrorContains(t, err, "no graded configurations")
+}
+
 func TestNormalizeModelRadarMetricsRejectsInvalidCohortsAndCounts(t *testing.T) {
 	var payload modelRadarMetricsPayload
 	require.NoError(t, common.Unmarshal([]byte(`{"schema":3,"mode":"equal_latest_3","benchmark_id":"deep-swe","scoring_mode":"binary-majority","source_updated_at":"2026-07-27T00:00:00Z","points":[{"model":"a","effort":"high","passed":2,"total":3,"iq":100,"combined_cost_index":200}]}`), &payload))
