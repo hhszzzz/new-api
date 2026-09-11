@@ -84,6 +84,8 @@ export const channelBatchEditSchema = z
     upstreamModelUpdateAutoSyncEnabled: z.boolean(),
     applyUpstreamModelUpdateIgnoredModels: z.boolean(),
     upstreamModelUpdateIgnoredModels: z.string(),
+    applyDisableModelOnError: z.boolean(),
+    disableModelOnError: z.boolean(),
   })
   .superRefine((values, ctx) => {
     if (!hasChannelBatchUpdates(values)) {
@@ -298,6 +300,8 @@ export const CHANNEL_BATCH_EDIT_DEFAULT_VALUES: ChannelBatchEditValues = {
   upstreamModelUpdateAutoSyncEnabled: false,
   applyUpstreamModelUpdateIgnoredModels: false,
   upstreamModelUpdateIgnoredModels: '',
+  applyDisableModelOnError: false,
+  disableModelOnError: false,
 }
 
 const batchApplyFields = [
@@ -318,6 +322,7 @@ const batchApplyFields = [
   'applyUpstreamModelUpdateCheckEnabled',
   'applyUpstreamModelUpdateAutoSyncEnabled',
   'applyUpstreamModelUpdateIgnoredModels',
+  'applyDisableModelOnError',
 ] as const
 
 export function hasChannelBatchUpdates(
@@ -444,6 +449,11 @@ export function buildChannelBatchUpdates(
       value: parseChannelBatchListValues(
         values.upstreamModelUpdateIgnoredModels
       ),
+    }
+  }
+  if (values.applyDisableModelOnError) {
+    updates.disable_model_on_error = {
+      value: values.disableModelOnError,
     }
   }
 

@@ -254,10 +254,20 @@ export interface ChannelOtherSettings {
   upstream_model_update_last_detected_models?: string[]
   advanced_custom?: AdvancedCustomConfig
   protocol_capabilities?: ProtocolCapabilities
+  disable_model_on_error?: boolean
   client_policy?: {
     mode?: 'unrestricted' | 'allow' | 'deny'
     clients?: string[]
   }
+}
+
+/** One (group, model) disabled on a channel. Stored in the channel other_info. */
+export interface DisabledModelEntry {
+  group: string
+  model: string
+  source: 'auto' | 'manual' | string
+  reason?: string
+  time?: number
 }
 
 export type UpstreamProtocol = 'chat' | 'messages' | 'responses' | 'gemini'
@@ -546,6 +556,7 @@ export interface ChannelBatchUpdates {
   upstream_model_update_check_enabled?: { value: boolean }
   upstream_model_update_auto_sync_enabled?: { value: boolean }
   upstream_model_update_ignored_models?: { value: string[] }
+  disable_model_on_error?: { value: boolean }
 }
 
 export interface ChannelBatchPreviewResponse {

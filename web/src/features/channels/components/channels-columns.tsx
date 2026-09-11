@@ -85,6 +85,10 @@ import {
   type ChannelAggregateRow,
   type TagRow,
 } from '../lib'
+import {
+  disabledGroupsForModel,
+  parseDisabledModels,
+} from '../lib/disabled-models'
 import { parseUpstreamUpdateMeta } from '../lib/upstream-update-utils'
 import type { Channel } from '../types'
 import { AggregateUpstreamUpdateTags } from './aggregate-upstream-update-tags'
@@ -1181,17 +1185,57 @@ export function useChannelsColumns(
         cell: ({ row }) => {
           const models = row.getValue('models') as string
           const modelArray = parseModelsList(models)
+          const channel = row.original
+          const channelGroups = parseGroupsList(channel.group || '')
+          const disabledEntries = parseDisabledModels(channel.other_info)
           return (
             <BadgeListCell
-              items={modelArray.map((model) => (
-                <StatusBadge
-                  key={model}
-                  label={model}
-                  autoColor={model}
-                  size='sm'
-                  className='font-mono'
-                />
-              ))}
+              items={modelArray.map((model) => {
+                const disabledGroups = disabledGroupsForModel(
+                  disabledEntries,
+                  model,
+                  channelGroups
+                )
+                if (disabledGroups.length === 0) {
+                  return (
+                    <StatusBadge
+                      key={model}
+                      label={model}
+                      autoColor={model}
+                      size='sm'
+                      className='font-mono'
+                    />
+                  )
+                }
+                const fullyDisabled =
+                  channelGroups.length === 0 ||
+                  disabledGroups.length >= channelGroups.length
+                return (
+                  <Tooltip key={model}>
+                    <TooltipTrigger
+                      render={
+                        <StatusBadge
+                          label={model}
+                          autoColor={model}
+                          size='sm'
+                          className={
+                            fullyDisabled
+                              ? 'font-mono line-through'
+                              : 'font-mono'
+                          }
+                        />
+                      }
+                    />
+                    <TooltipContent>
+                      {fullyDisabled
+                        ? t('Disabled on this channel')
+                        : t('Disabled in groups: {{groups}}', {
+                            groups: disabledGroups.join(', '),
+                          })}
+                    </TooltipContent>
+                  </Tooltip>
+                )
+              })}
             />
           )
         },

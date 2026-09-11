@@ -268,6 +268,8 @@ export function ChannelBatchEditDialog(props: ChannelBatchEditDialogProps) {
   const applyModels = form.watch('applyModels')
   const applyModelMapping = form.watch('applyModelMapping')
   const applyAutoBan = form.watch('applyAutoBan')
+  const applyDisableModelOnError = form.watch('applyDisableModelOnError')
+  const disableModelOnError = form.watch('disableModelOnError')
   const applyTestModel = form.watch('applyTestModel')
   const applyRemark = form.watch('applyRemark')
   const applyStartsAt = form.watch('applyStartsAt')
@@ -764,6 +766,35 @@ export function ChannelBatchEditDialog(props: ChannelBatchEditDialogProps) {
                     form.setValue('autoBan', checked ? '1' : '0')
                   }
                   aria-label={t('Enable automatic disabling')}
+                />
+              </Field>
+            </BatchField>
+            <Separator />
+
+            <BatchField
+              id='batch-apply-disable-model-on-error'
+              label={t('Disable Model On Error')}
+              checked={applyDisableModelOnError}
+              onCheckedChange={(checked) =>
+                form.setValue('applyDisableModelOnError', checked, {
+                  shouldValidate: true,
+                })
+              }
+            >
+              <Field orientation='horizontal'>
+                <FieldContent>
+                  <FieldTitle>
+                    {t(
+                      'Disable only the failing model instead of the whole channel'
+                    )}
+                  </FieldTitle>
+                </FieldContent>
+                <Switch
+                  checked={disableModelOnError}
+                  onCheckedChange={(checked) =>
+                    form.setValue('disableModelOnError', checked)
+                  }
+                  aria-label={t('Disable Model On Error')}
                 />
               </Field>
             </BatchField>

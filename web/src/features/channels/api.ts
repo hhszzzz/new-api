@@ -42,6 +42,7 @@ import type {
   ChannelTestResponse,
   CopyChannelParams,
   CopyChannelResponse,
+  DisabledModelEntry,
   FetchModelsResponse,
   GetChannelResponse,
   GetChannelsParams,
@@ -256,6 +257,31 @@ export async function batchUpdateChannelStatus(
   const res = await api.post(
     '/api/channel/status/batch',
     { ids, status },
+    channelActionConfig()
+  )
+  return res.data
+}
+
+/**
+ * Enable or disable one (group, model) on a channel without changing the
+ * channel-level status.
+ */
+export async function updateChannelModelStatus(
+  id: number,
+  params: {
+    group: string
+    model: string
+    disabled: boolean
+    reason?: string
+  }
+): Promise<{
+  success: boolean
+  message?: string
+  data?: { disabled_models?: DisabledModelEntry[] }
+}> {
+  const res = await api.post(
+    `/api/channel/${id}/model_status`,
+    params,
     channelActionConfig()
   )
   return res.data

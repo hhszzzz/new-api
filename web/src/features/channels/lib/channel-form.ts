@@ -323,6 +323,7 @@ export const channelFormSchema = z
     upstream_model_update_check_enabled: z.boolean().optional(),
     upstream_model_update_auto_sync_enabled: z.boolean().optional(),
     upstream_model_update_ignored_models: z.string().optional(),
+    disable_model_on_error: z.boolean().optional(),
   })
   .superRefine((data, ctx) => {
     if (
@@ -544,6 +545,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   upstream_model_update_check_enabled: false,
   upstream_model_update_auto_sync_enabled: false,
   upstream_model_update_ignored_models: '',
+  disable_model_on_error: false,
   advanced_custom: '',
 }
 
@@ -612,6 +614,7 @@ export function transformChannelToFormDefaults(
   let upstreamModelUpdateCheckEnabled = false
   let upstreamModelUpdateAutoSyncEnabled = false
   let upstreamModelUpdateIgnoredModels = ''
+  let disableModelOnError = false
   let advancedCustom = ''
   let clientPolicyMode: 'unrestricted' | 'allow' | 'deny' = 'unrestricted'
   let clientPolicyClients = ''
@@ -649,6 +652,7 @@ export function transformChannelToFormDefaults(
       )
         ? parsed.upstream_model_update_ignored_models.join(',')
         : ''
+      disableModelOnError = parsed.disable_model_on_error === true
       if (parsed.advanced_custom) {
         advancedCustom = stringifyAdvancedCustomConfig(parsed.advanced_custom)
       }
@@ -745,6 +749,7 @@ export function transformChannelToFormDefaults(
     upstream_model_update_check_enabled: upstreamModelUpdateCheckEnabled,
     upstream_model_update_auto_sync_enabled: upstreamModelUpdateAutoSyncEnabled,
     upstream_model_update_ignored_models: upstreamModelUpdateIgnoredModels,
+    disable_model_on_error: disableModelOnError,
     advanced_custom: advancedCustom,
     client_policy_mode: clientPolicyMode,
     client_policy_clients: clientPolicyClients,
@@ -899,6 +904,13 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
 
   settingsObj.disable_task_polling_sleep =
     formData.disable_task_polling_sleep === true
+
+  // Narrow automatic channel disabling to the failing (group, model).
+  if (formData.disable_model_on_error === true) {
+    settingsObj.disable_model_on_error = true
+  } else if ('disable_model_on_error' in settingsObj) {
+    delete settingsObj.disable_model_on_error
+  }
 
   // Upstream model update settings (for model-fetchable channel types)
   if (MODEL_FETCHABLE_TYPES.has(formData.type)) {

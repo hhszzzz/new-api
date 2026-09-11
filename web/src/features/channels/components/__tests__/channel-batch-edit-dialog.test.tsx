@@ -390,4 +390,45 @@ describe('channel batch edit dialog', () => {
       )
     })
   })
+
+  test('submits the per-model disable toggle', async () => {
+    const user = userEvent.setup()
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    })
+    batchUpdateChannelsMock.mockResolvedValue({
+      success: true,
+      data: { updated: 1 },
+    })
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ChannelBatchEditDialog
+          open
+          onOpenChange={vi.fn()}
+          selectedIds={[9]}
+          filter={{}}
+          onSuccess={vi.fn()}
+        />
+      </QueryClientProvider>
+    )
+
+    await user.click(
+      screen.getByRole('checkbox', { name: 'Disable Model On Error' })
+    )
+    await user.click(
+      screen.getByRole('switch', { name: 'Disable Model On Error' })
+    )
+    await user.click(screen.getByRole('button', { name: 'Apply Changes' }))
+
+    await waitFor(() => {
+      expect(batchUpdateChannelsMock).toHaveBeenCalledWith(
+        { mode: 'selected', ids: [9] },
+        { disable_model_on_error: { value: true } }
+      )
+    })
+  })
 })

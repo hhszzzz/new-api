@@ -21,6 +21,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowRight,
   AlertCircle,
+  Ban,
   Boxes,
   CalendarClock,
   CheckCircle2,
@@ -200,6 +201,7 @@ import { ChannelScheduleEditor } from '../channel-schedule-editor'
 import { ChannelTypeLogo } from '../channel-type-badge'
 import { useChannels } from '../channels-provider'
 import { AdvancedCustomEditorDialog } from '../dialogs/advanced-custom-editor-dialog'
+import { ChannelDisabledModelsDialog } from '../dialogs/channel-disabled-models-dialog'
 import { FetchModelsDialog } from '../dialogs/fetch-models-dialog'
 import {
   MissingModelsConfirmationDialog,
@@ -673,6 +675,8 @@ export function ChannelMutateDrawer({
   )
   const canRevealChannelKey = currentUser?.role === ROLE.SUPER_ADMIN
   const [fetchModelsDialogOpen, setFetchModelsDialogOpen] = useState(false)
+  const [disabledModelsDialogOpen, setDisabledModelsDialogOpen] =
+    useState(false)
   const [isCodexCredentialRefreshing, setIsCodexCredentialRefreshing] =
     useState(false)
   const initialModelsRef = useRef<string[]>([])
@@ -4341,6 +4345,54 @@ export function ChannelMutateDrawer({
                                 </FormItem>
                               )}
                             />
+
+                            <FormField
+                              control={form.control}
+                              name='disable_model_on_error'
+                              render={({ field }) => (
+                                <FormItem className='flex items-center justify-between'>
+                                  <div className='space-y-0.5'>
+                                    <FormLabel>
+                                      {t('Disable Model On Error')}
+                                    </FormLabel>
+                                    <FormDescription>
+                                      {t(
+                                        'On failure, automatically disable only the failing model on this channel instead of the whole channel. Automatic disabling applies to single-key channels; multi-key channels keep their existing key-level handling. Disabled models must be re-enabled manually.'
+                                      )}
+                                    </FormDescription>
+                                    {isMultiKeyChannel && (
+                                      <FormDescription>
+                                        {t(
+                                          'Automatic model-level disabling is unavailable for multi-key channels. Use Manage disabled models to disable a model manually.'
+                                        )}
+                                      </FormDescription>
+                                    )}
+                                  </div>
+                                  <FormControl>
+                                    <Switch
+                                      checked={field.value === true}
+                                      disabled={isMultiKeyChannel}
+                                      onCheckedChange={field.onChange}
+                                    />
+                                  </FormControl>
+                                </FormItem>
+                              )}
+                            />
+
+                            {isEditing && channelId && (
+                              <Button
+                                type='button'
+                                variant='outline'
+                                size='sm'
+                                className='w-fit'
+                                onClick={() =>
+                                  setDisabledModelsDialogOpen(true)
+                                }
+                              >
+                                <Ban className='mr-1.5 h-3.5 w-3.5' />
+                                {t('Manage disabled models')}
+                              </Button>
+                            )}
                           </div>
 
                           <div
@@ -5901,6 +5953,21 @@ export function ChannelMutateDrawer({
       />
 
       <SecureVerificationDialog {...verification.dialogProps} />
+
+      {/* Disabled Models Dialog */}
+      <ChannelDisabledModelsDialog
+        open={disabledModelsDialogOpen}
+        onOpenChange={setDisabledModelsDialogOpen}
+        channel={channelData?.data ?? null}
+        onChanged={async () => {
+          await queryClient.invalidateQueries({
+            queryKey: channelsQueryKeys.detail(channelId || 0),
+          })
+          await queryClient.invalidateQueries({
+            queryKey: channelsQueryKeys.lists(),
+          })
+        }}
+      />
 
       {/* Missing Models Confirmation Dialog */}
       <MissingModelsConfirmationDialog

@@ -150,6 +150,24 @@ describe('channel batch update request builder', () => {
     })
   })
 
+  test('sends the per-model disable toggle only when selected', () => {
+    const off = {
+      ...CHANNEL_BATCH_EDIT_DEFAULT_VALUES,
+      applyDisableModelOnError: true,
+      disableModelOnError: false,
+    }
+    expect(buildChannelBatchUpdates(off)).toEqual({
+      disable_model_on_error: { value: false },
+    })
+    expect(hasChannelBatchUpdates(off)).toBe(true)
+
+    const notSelected = {
+      ...CHANNEL_BATCH_EDIT_DEFAULT_VALUES,
+      disableModelOnError: true,
+    }
+    expect(buildChannelBatchUpdates(notSelected)).toEqual({})
+  })
+
   test('ignores invalid values from fields that are not selected', () => {
     const result = channelBatchEditSchema.safeParse({
       ...CHANNEL_BATCH_EDIT_DEFAULT_VALUES,
