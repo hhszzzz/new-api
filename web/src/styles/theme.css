@@ -100,9 +100,10 @@ For commercial licensing, please contact support@quantumnous.com
   --app-rev: '2k6e8r7p';
   /* Currently active body font. The font axis swaps this between
    * `--font-sans` and `--font-serif` via `[data-theme-font='...']` blocks
-   * in theme-presets.css. Default mirrors `--font-sans` so behavior is
-   * identical when no font preference is set. */
-  --font-body: var(--font-sans);
+   * in theme-presets.css. Defaults to `--font-serif` so the first paint
+   * (before the provider writes `data-theme-font`) already carries the
+   * editorial default and does not flash sans. */
+  --font-body: var(--font-serif);
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);

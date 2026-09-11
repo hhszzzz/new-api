@@ -88,10 +88,10 @@ export type ContentLayout = 'full' | 'centered'
  * Font axis for the theme.
  *
  * - `default` — resolve at runtime from the active preset
- *   (see `PRESET_DEFAULT_FONT`). The shipped `default` and `anthropic`
- *   presets resolve to serif; other named color presets fall back to
- *   sans unless they list a different choice. Mirrors how
- *   `radius: 'default'` defers to a per-preset hint.
+ *   (see `PRESET_DEFAULT_FONT`). Every preset resolves to serif unless
+ *   it lists a different choice, so the editorial Lora voice is the
+ *   out-of-the-box typography. Mirrors how `radius: 'default'` defers
+ *   to a per-preset hint.
  * - `sans` — humanist sans (Public Sans), the project's UI fallback.
  * - `serif` — editorial serif (Lora + CJK fallbacks), the project's
  *   "soul" typography. Inherits across the whole UI; monospace contexts
@@ -168,15 +168,15 @@ export const THEME_COOKIE_KEYS = {
  *
  * Co-located with the preset registry so a preset's signature typography
  * is declared in one place. Presets not listed here fall back to the
- * `resolveThemeFont` default of `sans`. The shipped `default` preset
+ * `resolveThemeFont` default of `serif`. The shipped `default` preset
  * opts into serif so the editorial Lora voice is the out-of-the-box
- * experience; vivid color presets stay on the humanist sans so their
- * accents read clearly without competing with the body type.
+ * experience; `anthropic` does too. A preset that prefers the humanist
+ * sans can list it explicitly here.
  */
 export const PRESET_DEFAULT_FONT: Partial<
   Record<ThemePreset, ResolvedThemeFont>
 > = {
-  default: 'sans',
+  default: 'serif',
   anthropic: 'serif',
 }
 
@@ -191,7 +191,7 @@ export function resolveThemeFont(
   preset: ThemePreset
 ): ResolvedThemeFont {
   if (font === 'default') {
-    return PRESET_DEFAULT_FONT[preset] ?? 'sans'
+    return PRESET_DEFAULT_FONT[preset] ?? 'serif'
   }
   return font
 }
