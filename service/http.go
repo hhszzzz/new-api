@@ -38,6 +38,19 @@ func ResponseIsEventStream(resp *http.Response) bool {
 	if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
 		return true
 	}
+	return ResponseBodyIsEventStream(resp)
+}
+
+// ResponseBodyIsEventStream identifies an SSE response by its first meaningful
+// body token and ignores Content-Type. Compatible gateways also mislabel a
+// buffered JSON completion as text/event-stream; callers deciding whether an
+// upstream body may be aggregated as a stream must use this instead of
+// trusting the header. The body is restored before returning, and a detected
+// stream receives the canonical Content-Type.
+func ResponseBodyIsEventStream(resp *http.Response) bool {
+	if resp == nil || resp.Body == nil {
+		return false
+	}
 
 	originalBody := resp.Body
 	reader := bufio.NewReader(originalBody)

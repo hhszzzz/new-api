@@ -149,6 +149,40 @@ func TestResponseIsEventStreamAcceptsBOMAndCommentPrefix(t *testing.T) {
 	assert.Equal(t, "text/event-stream", resp.Header.Get("Content-Type"))
 }
 
+func TestResponseBodyIsEventStreamDetectsMislabeledJSONCompletion(t *testing.T) {
+	body := `{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"text","text":"hi"}]}`
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+
+	// ResponseIsEventStream trusts the header, but a buffered completion must be
+	// decided by the body token so a JSON body is never parsed as SSE frames.
+	assert.True(t, ResponseIsEventStream(resp))
+	assert.False(t, ResponseBodyIsEventStream(resp))
+	assert.Equal(t, "text/event-stream", resp.Header.Get("Content-Type"))
+
+	replayed, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, body, string(replayed))
+}
+
+func TestResponseBodyIsEventStreamAcceptsFramesRegardlessOfContentType(t *testing.T) {
+	body := "event: message_start\ndata: {\"type\":\"message_start\"}\n\n"
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+
+	assert.True(t, ResponseBodyIsEventStream(resp))
+
+	replayed, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, body, string(replayed))
+}
+
 func TestResponseIsJSONUsesContentTypeOrBodySniffingAndPreservesBody(t *testing.T) {
 	tests := []struct {
 		name        string

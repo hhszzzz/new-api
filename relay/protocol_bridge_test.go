@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -441,6 +442,26 @@ func TestProtocolBridgeRequestConversionConflictIsClientError(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, apiError.StatusCode)
 	assert.Equal(t, types.ErrorCodeConvertRequestFailed, apiError.GetErrorCode())
 	assert.Contains(t, apiError.Error(), "conflicts after Chat name encoding")
+}
+
+func TestHandleBufferedStreamResponsePassesThroughMislabeledJSON(t *testing.T) {
+	body := `{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":1,"output_tokens":1}}`
+	httpResp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+
+	usage, handled, apiErr := handleBufferedStreamResponse(c, &relaycommon.RelayInfo{}, httpResp, types.RelayFormatClaude, "")
+
+	require.Nil(t, apiErr)
+	assert.False(t, handled)
+	assert.Nil(t, usage)
+	assert.Equal(t, "application/json", httpResp.Header.Get("Content-Type"))
+	replayed, err := io.ReadAll(httpResp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, body, string(replayed))
 }
 
 func protocolBridgeResponsesRequest(stream bool) dto.Request {

@@ -171,6 +171,16 @@ func protocolFormatForPlan(plan channelcompat.ProtocolPlan) types.RelayFormat {
 // adaptor.DoResponse; a handled response without usage is a hard error because
 // billing would otherwise be skipped silently.
 func handleBufferedStreamResponse(c *gin.Context, info *relaycommon.RelayInfo, httpResp *http.Response, upstreamFormat types.RelayFormat, statusCodeMappingStr string) (*dto.Usage, bool, *types.NewAPIError) {
+	if !service.ResponseBodyIsEventStream(httpResp) {
+		// Some compatible gateways label a buffered JSON completion as
+		// text/event-stream but send no SSE frames. Restore the JSON media type
+		// and let the caller fall through to the normal non-stream handler.
+		if httpResp.Header != nil {
+			httpResp.Header.Set("Content-Type", "application/json")
+		}
+		return nil, false, nil
+	}
+
 	var usage *dto.Usage
 	var apiError *types.NewAPIError
 	switch upstreamFormat {
