@@ -21,13 +21,20 @@ import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { useThemeCustomization } from '@/context/theme-customization-provider'
-import { getSuccessRateColor } from '@/features/performance-metrics/lib/format'
+import {
+  formatCacheHitRate,
+  getSuccessRateColor,
+} from '@/features/performance-metrics/lib/format'
 import { useThemeRadiusPx } from '@/lib/theme-radius'
 import { useChartTheme } from '@/lib/use-chart-theme'
 import { cn } from '@/lib/utils'
 import { VCHART_OPTION } from '@/lib/vchart'
 
-import type { LatencyTimePoint, UptimeDayPoint } from '../lib/mock-stats'
+import type {
+  CacheHitRateTimePoint,
+  LatencyTimePoint,
+  UptimeDayPoint,
+} from '../lib/mock-stats'
 
 function formatHourLabel(iso: string): string {
   const date = new Date(iso)
@@ -175,6 +182,104 @@ export function LatencyTrendChart(props: {
       {themeReady && spec && (
         <VChart
           key={`latency-${resolvedTheme}`}
+          spec={{
+            ...spec,
+            theme: resolvedTheme === 'dark' ? 'dark' : 'light',
+            background: 'transparent',
+          }}
+          option={VCHART_OPTION}
+        />
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Cache hit rate trend chart (24h, multi-group point-line chart)
+// ---------------------------------------------------------------------------
+
+export function CacheHitRateTrendChart(props: {
+  series: CacheHitRateTimePoint[]
+  className?: string
+}) {
+  const { t } = useTranslation()
+  const { resolvedTheme, themeReady } = useChartTheme()
+  const { textColor, gridColor } = getChartThemeTokens(resolvedTheme)
+
+  const spec = useMemo(() => {
+    if (props.series.length === 0) return null
+    const data = props.series.map((point) => ({
+      time: formatHourLabel(point.timestamp),
+      group: point.group,
+      cache: point.cache_hit_rate,
+    }))
+    return {
+      type: 'line' as const,
+      data: [{ id: 'cache', values: data }],
+      xField: 'time',
+      yField: 'cache',
+      seriesField: 'group',
+      smooth: true,
+      point: {
+        visible: true,
+        style: { size: 5, stroke: '#ffffff', lineWidth: 1.5 },
+      },
+      line: {
+        style: { lineWidth: 2 },
+      },
+      legends: { visible: false },
+      tooltip: {
+        mark: {
+          title: { value: (d: { time: string }) => d.time },
+          content: [
+            {
+              key: t('Cache hit rate'),
+              value: (d: { cache: number }) => formatCacheHitRate(d.cache),
+            },
+          ],
+        },
+      },
+      axes: [
+        {
+          orient: 'bottom',
+          label: {
+            style: { fill: textColor, fontSize: 10 },
+          },
+          tick: { visible: false },
+        },
+        {
+          orient: 'left',
+          label: {
+            formatMethod: (val: number | string) => `${val}%`,
+            style: { fill: textColor, fontSize: 10 },
+          },
+          grid: {
+            visible: true,
+            style: { lineDash: [3, 3], stroke: gridColor },
+          },
+        },
+      ],
+    }
+  }, [gridColor, props.series, t, textColor])
+
+  if (props.series.length === 0) {
+    return (
+      <div
+        className={cn(
+          'text-muted-foreground flex h-48 items-center justify-center rounded-lg border text-xs',
+          props.className
+        )}
+      >
+        {t('No cache hit rate data available')}
+      </div>
+    )
+  }
+
+  return (
+    <div className={cn('h-64 sm:h-72', props.className)}>
+      {themeReady && spec && (
+        <VChart
+          key={`cache-hit-rate-${resolvedTheme}`}
           spec={{
             ...spec,
             theme: resolvedTheme === 'dark' ? 'dark' : 'light',

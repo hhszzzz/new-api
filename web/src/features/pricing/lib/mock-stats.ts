@@ -55,6 +55,12 @@ export type LatencyTimePoint = {
   ttft_ms: number
 }
 
+export type CacheHitRateTimePoint = {
+  timestamp: string
+  group: string
+  cache_hit_rate: number
+}
+
 export type UptimeDayPoint = {
   date: string
   uptime_pct: number

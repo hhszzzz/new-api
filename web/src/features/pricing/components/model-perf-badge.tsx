@@ -21,6 +21,7 @@ import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
 import {
+  formatCacheHitRate,
   formatLatency,
   formatThroughput,
   getSuccessRateDotClass,
@@ -32,6 +33,7 @@ export type ModelPerfBadgeData = {
   avg_latency_ms: number
   success_rate: number
   avg_tps: number
+  cache_hit_rate?: number | null
   recent_success_series?: SuccessRatePoint[]
 }
 
@@ -108,6 +110,8 @@ export const ModelPerfBadge = memo(function ModelPerfBadge(
     ' t/s',
     't/s'
   )
+  const cacheHitRate = props.perf?.cache_hit_rate
+  const cacheText = formatCacheHitRate(cacheHitRate)
   const successRate = props.perf?.success_rate
   const hasSuccessRate =
     successRate != null &&
@@ -172,6 +176,12 @@ export const ModelPerfBadge = memo(function ModelPerfBadge(
           <dd className='mt-1 font-mono whitespace-nowrap'>
             {throughputText === '—' ? '—t/s' : throughputText}
           </dd>
+        </div>
+        <div title={t('Cache hit rate')} className='shrink-0'>
+          <dt className='text-muted-foreground text-[11px] leading-4'>
+            {t('Cache short')}
+          </dt>
+          <dd className='mt-1 font-mono whitespace-nowrap'>{cacheText}</dd>
         </div>
       </dl>
       {props.children}

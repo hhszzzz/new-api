@@ -58,6 +58,7 @@ export function normalizeStatusTimeline(
         avg_ttft_ms: null,
         avg_latency_ms: null,
         avg_tps: null,
+        cache_hit_rate: null,
       }
     )
   })

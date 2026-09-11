@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { useQuery } from '@tanstack/react-query'
 import {
   BarChart3,
-  CheckCircle2,
+  Database,
   Gauge,
   HeartPulse,
   Timer,
@@ -36,6 +36,7 @@ import { GroupBadge } from '@/components/group-badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { getPerfMetrics } from '@/features/performance-metrics/api'
 import {
+  formatCacheHitRate,
   formatLatency,
   formatThroughput,
   formatUptimePct,
@@ -51,7 +52,10 @@ import { useAuthStore } from '@/stores/auth-store'
 
 import type { UptimeDayPoint } from '../lib/mock-stats'
 import type { PricingModel } from '../types'
-import { LatencyTrendChart } from './model-details-charts'
+import {
+  CacheHitRateTrendChart,
+  LatencyTrendChart,
+} from './model-details-charts'
 import { UptimeSparkline } from './model-details-uptime-sparkline'
 
 function StatCard(props: {
@@ -162,6 +166,21 @@ export function ModelDetailsPerformance(props: {
                 timestamp: new Date(point.ts * 1000).toISOString(),
                 group: 'latency',
                 ttft_ms: point.avg_ttft_ms,
+              },
+            ]
+      ),
+    [props.status]
+  )
+  const cacheHitRateSeries = useMemo(
+    () =>
+      (props.status?.timeline ?? []).flatMap((point) =>
+        point.cache_hit_rate === null
+          ? []
+          : [
+              {
+                timestamp: new Date(point.ts * 1000).toISOString(),
+                group: 'cache',
+                cache_hit_rate: point.cache_hit_rate,
               },
             ]
       ),
@@ -287,13 +306,9 @@ export function ModelDetailsPerformance(props: {
           }
         />
         <StatCard
-          icon={CheckCircle2}
-          label={t('Successful requests')}
-          value={
-            status.success_count === null
-              ? '—'
-              : numberFormatter.format(status.success_count)
-          }
+          icon={Database}
+          label={t('Cache hit rate')}
+          value={formatCacheHitRate(status.cache_hit_rate)}
         />
       </div>
 
@@ -379,6 +394,17 @@ export function ModelDetailsPerformance(props: {
             description={t('Average TTFT')}
           />
           <LatencyTrendChart series={latencySeries} />
+        </section>
+      )}
+
+      {cacheHitRateSeries.length > 0 && (
+        <section>
+          <SectionHeader
+            icon={Database}
+            title={t('Cache hit rate trend (last 24h)')}
+            description={t('Share of cached input tokens')}
+          />
+          <CacheHitRateTrendChart series={cacheHitRateSeries} />
         </section>
       )}
     </div>

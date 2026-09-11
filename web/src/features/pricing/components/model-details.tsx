@@ -21,6 +21,7 @@ import {
   ArrowLeft,
   CalendarClock,
   Code2,
+  Database,
   FileText,
   HeartPulse,
   Info,
@@ -49,6 +50,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useModelStatus } from '@/features/performance-metrics/hooks/use-model-status'
 import {
+  formatCacheHitRate,
   formatLatency,
   formatThroughput,
   formatUptimePct,
@@ -264,9 +266,10 @@ function OverviewSummaryGrid(props: { status?: ModelStatusModel }) {
   const successRate = props.status?.success_rate ?? Number.NaN
   const avgTps = props.status?.avg_tps ?? 0
   const avgLatency = props.status?.avg_latency_ms ?? 0
+  const cacheHitRate = props.status?.cache_hit_rate ?? null
 
   return (
-    <div className='bg-muted/20 grid overflow-hidden rounded-lg border sm:grid-cols-3 sm:divide-x'>
+    <div className='bg-muted/20 grid overflow-hidden rounded-lg border sm:grid-cols-4 sm:divide-x'>
       <OverviewMetric
         icon={Timer}
         label='TPS'
@@ -282,6 +285,11 @@ function OverviewSummaryGrid(props: { status?: ModelStatusModel }) {
         label={t('Success rate')}
         value={formatUptimePct(successRate)}
         valueClassName={getSuccessRateTextClass(successRate)}
+      />
+      <OverviewMetric
+        icon={Database}
+        label={t('Cache hit rate')}
+        value={formatCacheHitRate(cacheHitRate)}
       />
     </div>
   )

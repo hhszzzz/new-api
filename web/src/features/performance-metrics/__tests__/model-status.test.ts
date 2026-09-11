@@ -38,6 +38,7 @@ describe('model status presentation data', () => {
           avg_ttft_ms: 120,
           avg_latency_ms: 240,
           avg_tps: 30,
+          cache_hit_rate: 75,
         },
       ],
       currentHour + 300
@@ -55,6 +56,7 @@ describe('model status presentation data', () => {
       avg_ttft_ms: 120,
       avg_latency_ms: 240,
       avg_tps: 30,
+      cache_hit_rate: 75,
     })
     assert.equal(
       timeline.filter((point) => point.status === 'no_data').length,
@@ -69,6 +71,7 @@ describe('model status presentation data', () => {
       avg_ttft_ms: null,
       avg_latency_ms: null,
       avg_tps: null,
+      cache_hit_rate: null,
     })
   })
 })

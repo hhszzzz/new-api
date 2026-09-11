@@ -17,13 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import {
-  act,
-  fireEvent,
-  render,
-  screen,
-  within,
-} from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createJSONStorage } from 'zustand/middleware'
@@ -111,11 +105,20 @@ describe('model cards', () => {
       within(metrics).getByText('Latency short').parentElement
     const throughputColumn =
       within(metrics).getByText('Throughput short').parentElement
+    const cacheColumn = within(metrics).getByText('Cache short').parentElement
     expect(latencyColumn).toHaveClass('shrink-0')
     expect(throughputColumn).toHaveClass('shrink-0')
+    expect(cacheColumn).toHaveClass('shrink-0')
+    // The cache hit rate sits to the right of throughput.
+    expect(metrics.querySelector('dl')?.lastElementChild).toBe(cacheColumn)
     rerender(
       <ModelPerfBadge
-        perf={{ avg_latency_ms: 12000, avg_tps: 1420, success_rate: 98 }}
+        perf={{
+          avg_latency_ms: 12000,
+          avg_tps: 1420,
+          success_rate: 98,
+          cache_hit_rate: 62.5,
+        }}
       />
     )
     expect(within(metrics).getByText('Latency short').parentElement).toBe(
@@ -124,6 +127,7 @@ describe('model cards', () => {
     expect(within(metrics).getByText('Throughput short').parentElement).toBe(
       throughputColumn
     )
+    expect(within(cacheColumn as HTMLElement).getByText('62.5%')).toBeDefined()
   })
 
   it('shows fixed prices per request in both token display units', () => {
@@ -257,7 +261,8 @@ describe('model cards', () => {
     expect(screen.queryByText('ghost-group')).not.toBeInTheDocument()
   })
 
-  it('omits metadata fields when the model has no groups, endpoints or tags', () => {    render(
+  it('omits metadata fields when the model has no groups, endpoints or tags', () => {
+    render(
       <ModelCard
         model={pricingModel({ enable_groups: [] })}
         onClick={vi.fn()}
@@ -376,9 +381,9 @@ describe('model cards', () => {
         tokenUnit='K'
       />
     )
-    expect(
-      screen.getByText(/0.4.*0.8/).parentElement
-    ).toHaveTextContent(/0.4 – \$0.8\s*\/\s*s/)
+    expect(screen.getByText(/0.4.*0.8/).parentElement).toHaveTextContent(
+      /0.4 – \$0.8\s*\/\s*s/
+    )
     expect(screen.queryByText(/1K|1M/)).not.toBeInTheDocument()
   })
 
@@ -416,9 +421,9 @@ describe('model cards', () => {
         tokenUnit='K'
       />
     )
-    expect(
-      screen.getByText(/\$42 – \$70/).parentElement
-    ).toHaveTextContent(/\$42 – \$70\s*\/\s*1M token/)
+    expect(screen.getByText(/\$42 – \$70/).parentElement).toHaveTextContent(
+      /\$42 – \$70\s*\/\s*1M token/
+    )
     expect(screen.getByText(/480p · 5s ≈/)).toBeVisible()
   })
 
@@ -450,7 +455,7 @@ describe('model cards', () => {
       within(
         screen.getByLabelText('Performance metrics for the last 24 hours')
       ).getAllByText(/^—/)
-    ).toHaveLength(3)
+    ).toHaveLength(4)
     const user = userEvent.setup()
     await user.click(screen.getByRole('button', { name: 'Details' }))
     expect(onModelClick).toHaveBeenCalledWith('example-model')

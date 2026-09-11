@@ -53,6 +53,7 @@ function statusModel(
     avg_latency_ms: null,
     avg_ttft_ms: null,
     avg_tps: null,
+    cache_hit_rate: null,
     timeline: [],
   }
 }
@@ -230,9 +231,7 @@ describe('catalog status data', () => {
       ])
     )
     await waitFor(() =>
-      expect(
-        queryClient.getQueryState(['pricing', 42])?.status
-      ).toBe('success')
+      expect(queryClient.getQueryState(['pricing', 42])?.status).toBe('success')
     )
   })
 

@@ -31,6 +31,7 @@ export type ModelStatusTimelinePoint = {
   avg_ttft_ms: number | null
   avg_latency_ms: number | null
   avg_tps: number | null
+  cache_hit_rate: number | null
 }
 
 export type ModelStatusModel = {
@@ -43,6 +44,7 @@ export type ModelStatusModel = {
   avg_ttft_ms: number | null
   avg_latency_ms: number | null
   avg_tps: number | null
+  cache_hit_rate: number | null
   status: ModelHealthStatus
   timeline: ModelStatusTimelinePoint[]
 }
