@@ -25,7 +25,7 @@ import {
   RefreshCcw,
   Trash2,
 } from 'lucide-react'
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -86,6 +86,15 @@ export function PrefillGroupManagementDialog({
     group: PrefillGroup | null
   }>({ open: false, group: null })
   const [isDeleting, setIsDeleting] = useState(false)
+  const [prevOpen, setPrevOpen] = useState(open)
+
+  if (prevOpen !== open) {
+    setPrevOpen(open)
+    if (!open) {
+      setDeleteState({ open: false, group: null })
+      setIsDeleting(false)
+    }
+  }
 
   const {
     data,
@@ -127,13 +136,6 @@ export function PrefillGroupManagementDialog({
       }),
     [sortedGroups]
   )
-
-  useEffect(() => {
-    if (!open) {
-      setDeleteState({ open: false, group: null })
-      setIsDeleting(false)
-    }
-  }, [open])
 
   const handleDeleteClick = (group: PrefillGroup) => {
     setDeleteState({ open: true, group })

@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import * as z from 'zod'
@@ -127,17 +127,7 @@ export function JsonToggleSection({
     },
   })
 
-  const initialNormalizedRef = useRef(
-    normalizeJsonString(defaultValue, fallbackValue)
-  )
-  const initialEnabledRef = useRef(defaultEnabled)
-
   useEffect(() => {
-    initialNormalizedRef.current = normalizeJsonString(
-      defaultValue,
-      fallbackValue
-    )
-    initialEnabledRef.current = defaultEnabled
     form.reset({
       enabled: defaultEnabled,
       json: formatJsonForEditor(defaultValue, fallbackValue),
@@ -147,12 +137,12 @@ export function JsonToggleSection({
   const onSubmit = async (values: JsonToggleFormValues) => {
     const updates: Array<{ key: string; value: string | boolean }> = []
 
-    if (values.enabled !== initialEnabledRef.current) {
+    if (values.enabled !== defaultEnabled) {
       updates.push({ key: enabledKey, value: values.enabled })
     }
 
     const normalized = normalizeJsonString(values.json, fallbackValue)
-    if (normalized !== initialNormalizedRef.current) {
+    if (normalized !== normalizeJsonString(defaultValue, fallbackValue)) {
       updates.push({ key: optionKey, value: normalized })
     }
 
@@ -164,7 +154,6 @@ export function JsonToggleSection({
   return (
     <SettingsAccordion value={value} title={title}>
       <Form {...form}>
-        {/* eslint-disable-next-line react-hooks/refs */}
         <SettingsForm onSubmit={form.handleSubmit(onSubmit)}>
           <SettingsPageFormActions
             onSave={form.handleSubmit(onSubmit)}

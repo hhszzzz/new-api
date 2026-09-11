@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { zodResolver } from '@hookform/resolvers/zod'
 import { CalendarClock, CreditCard, RefreshCw, Settings2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { useForm, type Resolver } from 'react-hook-form'
+import { useForm, useWatch, type Resolver } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -149,11 +149,17 @@ export function SubscriptionsMutateDrawer({
     }
   }, [open, currentRow, form])
 
-  const durationUnit = form.watch('duration_unit')
-  const resetPeriod = form.watch('quota_reset_period')
+  const durationUnit = useWatch({
+    control: form.control,
+    name: 'duration_unit',
+  })
+  const resetPeriod = useWatch({
+    control: form.control,
+    name: 'quota_reset_period',
+  })
   // Gate "+ Create on Pancake" on the same checks the mint handler runs.
-  const watchedTitle = form.watch('title')
-  const watchedPrice = form.watch('price_amount')
+  const watchedTitle = useWatch({ control: form.control, name: 'title' })
+  const watchedPrice = useWatch({ control: form.control, name: 'price_amount' })
   const pancakeCreateReady =
     typeof watchedTitle === 'string' &&
     watchedTitle.trim().length > 0 &&

@@ -23,7 +23,7 @@ import {
   type OnChangeFn,
   type SortingState,
   type Table as TanstackTable,
-} from '@tanstack/react-table' 
+} from '@tanstack/react-table'
 import { Database } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -64,7 +64,7 @@ import {
   ApiKeyCell,
   ModelLimitsCell,
   IpRestrictionsCell,
-} from './api-keys-cells' 
+} from './api-keys-cells'
 import { useApiKeysColumns } from './api-keys-columns'
 import { useApiKeys } from './api-keys-provider'
 import { DataTableBulkActions } from './data-table-bulk-actions'

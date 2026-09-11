@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -150,24 +150,28 @@ export function PasskeySection(props: PasskeySectionProps) {
     defaultValues: formDefaults,
   })
 
-  const baselineRef = useRef<FlatPasskeyDefaults>(props.defaultValues)
-  const baselineSerializedRef = useRef<string>(
+  const [baseline, setBaseline] = useState<FlatPasskeyDefaults>(
+    props.defaultValues
+  )
+  const [baselineSerialized, setBaselineSerialized] = useState<string>(() =>
     JSON.stringify(props.defaultValues)
   )
 
+  const serializedDefaults = JSON.stringify(props.defaultValues)
+  if (serializedDefaults !== baselineSerialized) {
+    setBaseline(props.defaultValues)
+    setBaselineSerialized(serializedDefaults)
+  }
+
   useEffect(() => {
-    const serialized = JSON.stringify(props.defaultValues)
-    if (serialized === baselineSerializedRef.current) return
-    baselineRef.current = props.defaultValues
-    baselineSerializedRef.current = serialized
-    form.reset(buildFormDefaults(props.defaultValues))
-  }, [props.defaultValues, form])
+    form.reset(buildFormDefaults(baseline))
+  }, [baseline, form])
 
   const onSubmit = async (values: PasskeyFormValues) => {
     const normalized = normalizeFormValues(values)
     const changedKeys = (
       Object.keys(normalized) as Array<keyof FlatPasskeyDefaults>
-    ).filter((key) => normalized[key] !== baselineRef.current[key])
+    ).filter((key) => normalized[key] !== baseline[key])
 
     if (changedKeys.length === 0) {
       toast.info(t('No changes to save'))
@@ -181,8 +185,8 @@ export function PasskeySection(props: PasskeySectionProps) {
       })
     }
 
-    baselineRef.current = normalized
-    baselineSerializedRef.current = JSON.stringify(normalized)
+    setBaseline(normalized)
+    setBaselineSerialized(JSON.stringify(normalized))
     form.reset(buildFormDefaults(normalized))
   }
 

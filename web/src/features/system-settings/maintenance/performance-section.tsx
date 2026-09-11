@@ -17,8 +17,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useForm } from 'react-hook-form'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useForm, useWatch } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import * as z from 'zod'
@@ -190,9 +190,25 @@ export function PerformanceSection(props: Props) {
   const updateOption = useUpdateOption()
   const [stats, setStats] = useState<PerformanceStats | null>(null)
 
+  const defaultsSignature = JSON.stringify(props.defaultValues)
+  const [baseline, setBaseline] = useState<FlatPerfDefaults>(
+    props.defaultValues
+  )
+  const [baselineSignature, setBaselineSignature] = useState(defaultsSignature)
+  const [prevDefaultsSignature, setPrevDefaultsSignature] =
+    useState(defaultsSignature)
+
+  if (defaultsSignature !== prevDefaultsSignature) {
+    setPrevDefaultsSignature(defaultsSignature)
+    if (defaultsSignature !== baselineSignature) {
+      setBaseline(props.defaultValues)
+      setBaselineSignature(defaultsSignature)
+    }
+  }
+
   const formDefaults = useMemo(
-    () => buildFormDefaults(props.defaultValues),
-    [props.defaultValues]
+    () => buildFormDefaults(JSON.parse(baselineSignature) as FlatPerfDefaults),
+    [baselineSignature]
   )
 
   const form = useForm<PerfFormInput, unknown, PerfFormValues>({
@@ -200,18 +216,9 @@ export function PerformanceSection(props: Props) {
     defaultValues: formDefaults,
   })
 
-  const baselineRef = useRef<FlatPerfDefaults>(props.defaultValues)
-  const baselineSerializedRef = useRef<string>(
-    JSON.stringify(props.defaultValues)
-  )
-
   useEffect(() => {
-    const serialized = JSON.stringify(props.defaultValues)
-    if (serialized === baselineSerializedRef.current) return
-    baselineRef.current = props.defaultValues
-    baselineSerializedRef.current = serialized
-    form.reset(buildFormDefaults(props.defaultValues))
-  }, [props.defaultValues, form])
+    form.reset(formDefaults)
+  }, [form, formDefaults])
 
   const fetchStats = useCallback(async () => {
     try {
@@ -227,14 +234,17 @@ export function PerformanceSection(props: Props) {
   }, [])
 
   useEffect(() => {
-    fetchStats()
+    const load = async () => {
+      await fetchStats()
+    }
+    void load()
   }, [fetchStats])
 
   const onSubmit = async (values: PerfFormValues) => {
     const normalized = normalizeFormValues(values)
     const changedKeys = (
       Object.keys(normalized) as Array<keyof FlatPerfDefaults>
-    ).filter((key) => normalized[key] !== baselineRef.current[key])
+    ).filter((key) => normalized[key] !== baseline[key])
 
     if (changedKeys.length === 0) {
       toast.info(t('No changes to save'))
@@ -248,8 +258,8 @@ export function PerformanceSection(props: Props) {
       })
     }
 
-    baselineRef.current = normalized
-    baselineSerializedRef.current = JSON.stringify(normalized)
+    setBaseline(normalized)
+    setBaselineSignature(JSON.stringify(normalized))
     form.reset(buildFormDefaults(normalized))
     fetchStats()
   }
@@ -296,11 +306,18 @@ export function PerformanceSection(props: Props) {
     }
   }
 
-  const diskEnabled = form.watch('performance_setting.disk_cache_enabled')
-  const monitorEnabled = form.watch('performance_setting.monitor_enabled')
-  const maxCacheSizeRaw = form.watch(
-    'performance_setting.disk_cache_max_size_mb'
-  )
+  const diskEnabled = useWatch({
+    control: form.control,
+    name: 'performance_setting.disk_cache_enabled',
+  })
+  const monitorEnabled = useWatch({
+    control: form.control,
+    name: 'performance_setting.monitor_enabled',
+  })
+  const maxCacheSizeRaw = useWatch({
+    control: form.control,
+    name: 'performance_setting.disk_cache_max_size_mb',
+  })
   const maxCacheSizeMb =
     typeof maxCacheSizeRaw === 'number'
       ? maxCacheSizeRaw

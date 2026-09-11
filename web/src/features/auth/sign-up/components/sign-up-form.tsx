@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Loader2 } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { useForm } from 'react-hook-form'
+import { useForm, useWatch } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import type { z } from 'zod'
@@ -62,7 +62,6 @@ export function SignUpForm({
   const { t } = useTranslation()
   const [isLoading, setIsLoading] = useState(false)
   const [verificationCode, setVerificationCode] = useState('')
-  const [agreedToLegal, setAgreedToLegal] = useState(false)
   const [wechatCode, setWeChatCode] = useState('')
   const [isWeChatDialogOpen, setIsWeChatDialogOpen] = useState(false)
   const [isWeChatSubmitting, setIsWeChatSubmitting] = useState(false)
@@ -98,11 +97,19 @@ export function SignUpForm({
     },
   })
 
-  const emailValue = form.watch('email')
+  const emailValue = useWatch({ control: form.control, name: 'email' })
   const emailVerificationRequired = !!status?.email_verification
   const hasUserAgreement = Boolean(status?.user_agreement_enabled)
   const hasPrivacyPolicy = Boolean(status?.privacy_policy_enabled)
   const requiresLegalConsent = hasUserAgreement || hasPrivacyPolicy
+  const [agreedToLegal, setAgreedToLegal] = useState(!requiresLegalConsent)
+  const [prevRequiresLegalConsent, setPrevRequiresLegalConsent] =
+    useState(requiresLegalConsent)
+
+  if (prevRequiresLegalConsent !== requiresLegalConsent) {
+    setPrevRequiresLegalConsent(requiresLegalConsent)
+    setAgreedToLegal(!requiresLegalConsent)
+  }
   const oauthRegisterEnabled =
     status?.oauth_register_enabled ??
     status?.data?.oauth_register_enabled ??
@@ -123,14 +130,6 @@ export function SignUpForm({
       ''
     )
   }, [status])
-
-  useEffect(() => {
-    if (requiresLegalConsent) {
-      setAgreedToLegal(false)
-    } else {
-      setAgreedToLegal(true)
-    }
-  }, [requiresLegalConsent])
 
   useEffect(() => {
     const aff = new URLSearchParams(window.location.search).get('aff')?.trim()

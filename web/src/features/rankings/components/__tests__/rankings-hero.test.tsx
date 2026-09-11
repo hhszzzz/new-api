@@ -73,7 +73,9 @@ vi.mock('@/components/ui/popover', () => ({
       {props.children}
     </div>
   ),
-  PopoverContent: (props: { children?: ReactNode }) => <div>{props.children}</div>,
+  PopoverContent: (props: { children?: ReactNode }) => (
+    <div>{props.children}</div>
+  ),
   PopoverTrigger: (props: { children?: ReactNode; render?: ReactNode }) => (
     <div>
       {props.render}

@@ -75,14 +75,42 @@ type PreparedOAuthBinding = AccountSecurityResult & {
 }
 
 export function AccountBindings({ profile, onUpdate }: AccountBindingsProps) {
+  const { status, loading } = useStatus()
+  const security = useAccountSecurity()
+
+  if (!profile || !status || loading) return null
+
+  return (
+    <AccountBindingsContent
+      key={security.sessionKey}
+      profile={profile}
+      status={status}
+      security={security}
+      onUpdate={onUpdate}
+    />
+  )
+}
+
+type AccountSecurity = ReturnType<typeof useAccountSecurity>
+type StatusData = NonNullable<ReturnType<typeof useStatus>['status']>
+
+function AccountBindingsContent({
+  profile,
+  status,
+  security,
+  onUpdate,
+}: {
+  profile: UserProfile
+  status: StatusData
+  security: AccountSecurity
+  onUpdate: () => void
+}) {
   const { t } = useTranslation()
   const dialogs = useDialogs<DialogKey>()
-  const { status, loading } = useStatus()
   const [customBindings, setCustomBindings] = useState<CustomOAuthBinding[]>([])
   const [unbindTarget, setUnbindTarget] = useState<CustomOAuthBinding | null>(
     null
   )
-  const security = useAccountSecurity()
   const unbinding = security.pending
   const [preparedBinding, setPreparedBinding] =
     useState<PreparedOAuthBinding | null>(null)
@@ -98,19 +126,23 @@ export function AccountBindings({ profile, onUpdate }: AccountBindingsProps) {
   )
 
   const fetchCustomBindings = useCallback(async () => {
-    if (!customProviders || customProviders.length === 0) return
+    if (!customProviders || customProviders.length === 0) return undefined
     try {
       const res = await getSelfOAuthBindings()
       if (res.success && res.data) {
-        setCustomBindings(res.data)
+        return res.data
       }
     } catch {
       // ignore
     }
+    return undefined
   }, [customProviders])
 
   useEffect(() => {
-    fetchCustomBindings()
+    void (async () => {
+      const data = await fetchCustomBindings()
+      if (data) setCustomBindings(data)
+    })()
   }, [fetchCustomBindings])
 
   const handleUnbindCustom = async () => {
@@ -131,7 +163,8 @@ export function AccountBindings({ profile, onUpdate }: AccountBindingsProps) {
       toast.success(
         t('Unbound {{provider}}', { provider: target.provider_name })
       )
-      await fetchCustomBindings()
+      const data = await fetchCustomBindings()
+      if (data) setCustomBindings(data)
       onUpdate()
     }
   }
@@ -209,21 +242,13 @@ export function AccountBindings({ profile, onUpdate }: AccountBindingsProps) {
     if (result) {
       toast.success(t('Binding successful!'))
       onUpdate()
-      await fetchCustomBindings()
+      const data = await fetchCustomBindings()
+      if (data) setCustomBindings(data)
     }
   }
 
   const handleBindCustomOAuth = (provider: CustomOAuthProviderInfo) =>
     startOAuthBinding(provider.slug)
-
-  const closeDialogs = dialogs.closeAll
-  useEffect(() => {
-    setPreparedBinding(null)
-    setUnbindTarget(null)
-    closeDialogs()
-  }, [security.sessionKey, closeDialogs])
-
-  if (!profile || !status || loading) return null
 
   const bindings: BindingItem[] = [
     {

@@ -22,7 +22,6 @@ import {
   useCallback,
   useEffect,
   useMemo,
-  useRef,
   useState,
   type ReactNode,
 } from 'react'
@@ -108,17 +107,17 @@ export function FetchModelsDialog({
   const parsedExistingModels =
     existingModelsOverride ?? parseModelsString(activeChannel?.models || '')
   const existingModelsKey = JSON.stringify(parsedExistingModels)
-  const existingModelsSnapshotRef = useRef({
+  const [existingModelsSnapshot, setExistingModelsSnapshot] = useState({
     key: existingModelsKey,
     models: parsedExistingModels,
   })
-  if (existingModelsSnapshotRef.current.key !== existingModelsKey) {
-    existingModelsSnapshotRef.current = {
+  if (existingModelsSnapshot.key !== existingModelsKey) {
+    setExistingModelsSnapshot({
       key: existingModelsKey,
       models: parsedExistingModels,
-    }
+    })
   }
-  const existingModels = existingModelsSnapshotRef.current.models
+  const existingModels = existingModelsSnapshot.models
   const fetchScope = useMemo(
     () =>
       open
@@ -129,6 +128,12 @@ export function FetchModelsDialog({
         : null,
     [activeChannelId, customFetcher, existingModelsKey, open]
   )
+  const [syncedFetchScope, setSyncedFetchScope] = useState(fetchScope)
+  if (syncedFetchScope !== fetchScope) {
+    setSyncedFetchScope(fetchScope)
+    setIsSaving(false)
+    setIsFetching(false)
+  }
   const { begin: beginFetchTask, invalidate: invalidateFetchTask } =
     useLatestAsyncTask(fetchScope)
   const { begin: beginSaveTask, invalidate: invalidateSaveTask } =
@@ -202,12 +207,10 @@ export function FetchModelsDialog({
 
   useEffect(() => {
     invalidateSaveTask()
-    setIsSaving(false)
     if (open && (activeChannelId || customFetcher)) {
-      void handleFetchModels()
+      void Promise.resolve().then(() => handleFetchModels())
     } else {
       invalidateFetchTask()
-      setIsFetching(false)
     }
     return invalidateFetchTask
   }, [

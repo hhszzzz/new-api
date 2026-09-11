@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useEffect } from 'react'
-import { type Control, useForm } from 'react-hook-form'
+import { type Control, useForm, useWatch } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import * as z from 'zod'
 
@@ -221,7 +221,10 @@ export function RateLimitDialog({
     )
   }, [editData, form, open])
 
-  const requestCountEnabled = form.watch('requestCountEnabled')
+  const requestCountEnabled = useWatch({
+    control: form.control,
+    name: 'requestCountEnabled',
+  })
 
   const handleSubmit = (values: RateLimitDialogFormValues) => {
     onSave({ ...values, groupName: values.groupName.trim() })

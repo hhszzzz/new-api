@@ -60,22 +60,22 @@ export function ModelCharts(props: ModelChartsProps) {
   const { t } = useTranslation()
   const { resolvedTheme } = useTheme()
   const { customization } = useThemeCustomization()
-  const chartRadius = useThemeRadiusPx(
-    '--radius-md',
-    `${customization.preset}:${customization.radius}`
-  )
+  const chartRadius = useThemeRadiusPx('--radius-md')
   const [activeTab, setActiveTab] = useState<ModelAnalyticsChartTab>(
     props.defaultChartTab ?? 'trend'
   )
+  const [prevDefaultChartTab, setPrevDefaultChartTab] = useState(
+    props.defaultChartTab
+  )
+  if (props.defaultChartTab && props.defaultChartTab !== prevDefaultChartTab) {
+    setPrevDefaultChartTab(props.defaultChartTab)
+    setActiveTab(props.defaultChartTab)
+  }
   const [themeReady, setThemeReady] = useState(false)
   const themeManagerRef = useRef<
     (typeof import('@visactor/vchart'))['ThemeManager'] | null
   >(null)
   const timeGranularity = props.timeGranularity ?? DEFAULT_TIME_GRANULARITY
-
-  useEffect(() => {
-    if (props.defaultChartTab) setActiveTab(props.defaultChartTab)
-  }, [props.defaultChartTab])
 
   useEffect(() => {
     const updateTheme = async () => {

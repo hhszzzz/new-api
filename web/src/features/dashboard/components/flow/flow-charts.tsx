@@ -31,14 +31,7 @@ import {
   Route,
   WalletCards,
 } from 'lucide-react'
-import {
-  Fragment,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react'
+import { Fragment, useCallback, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { MultiSelect } from '@/components/multi-select'
@@ -285,7 +278,9 @@ export function FlowCharts(props: FlowChartsProps) {
     () => stages.filter((stage) => !hiddenStages.includes(stage)),
     [stages, hiddenStages]
   )
-  useEffect(() => {
+  const [prunedVisibleStages, setPrunedVisibleStages] = useState(visibleStages)
+  if (prunedVisibleStages !== visibleStages) {
+    setPrunedVisibleStages(visibleStages)
     const visible = new Set(visibleStages)
     setSelectedNodes((prev) => {
       const next = prev.filter((filter) => visible.has(filter.kind))
@@ -297,7 +292,7 @@ export function FlowCharts(props: FlowChartsProps) {
     // The graph reshapes when columns are toggled, so any highlighted edge may
     // no longer exist. Drop the link selection rather than leave it dangling.
     setActiveFlowLink(undefined)
-  }, [visibleStages])
+  }
   const toggleStage = (stage: FlowNodeKind) => {
     setHiddenStages((prev) => {
       const hidden = new Set(prev)

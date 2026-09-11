@@ -278,8 +278,13 @@ export function UserBatchPolicyDialog(props: UserBatchPolicyDialogProps) {
 
   useEffect(() => {
     invalidateSubmitTask()
+  }, [dialogScope, invalidateSubmitTask])
+
+  const [prevDialogScope, setPrevDialogScope] = useState(dialogScope)
+  if (prevDialogScope !== dialogScope) {
+    setPrevDialogScope(dialogScope)
     resetState()
-  }, [dialogScope, invalidateSubmitTask, resetState])
+  }
 
   const handleOpenChange = (open: boolean) => {
     if (!open) {

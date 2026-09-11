@@ -20,7 +20,7 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery } from '@tanstack/react-query'
 import { Pencil } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useForm } from 'react-hook-form'
+import { useForm, useWatch } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -193,10 +193,15 @@ export function UsersMutateDrawer({
       target: currentRowId ?? null,
     })
 
-  useEffect(() => {
-    invalidateSubmitTask()
+  const [resetScope, setResetScope] = useState({ currentRowId, open })
+  if (resetScope.currentRowId !== currentRowId || resetScope.open !== open) {
+    setResetScope({ currentRowId, open })
     setIsSubmitting(false)
     setQuotaDialogOpen(false)
+  }
+
+  useEffect(() => {
+    invalidateSubmitTask()
     if (open) form.reset(USER_FORM_DEFAULT_VALUES)
   }, [currentRowId, form, invalidateSubmitTask, open])
 
@@ -204,16 +209,28 @@ export function UsersMutateDrawer({
   const currencyLabel = getCurrencyLabel()
   const tokensOnly = currencyMeta.kind === 'tokens'
 
-  const currentQuotaRaw = form.watch('quota_dollars') || 0
-  const selectedRole = form.watch('role')
-  const selectedGroups = form.watch('groups') ?? EMPTY_STRING_LIST
-  const primaryGroup = form.watch('primary_group')
-  const modelLimitsEnabled = form.watch('model_limits_enabled') ?? false
-  const selectedModelLimits = form.watch('model_limits') ?? EMPTY_STRING_LIST
-  const modelBlocklistEnabled = form.watch('model_blocklist_enabled') ?? false
+  const currentQuotaRaw =
+    useWatch({ control: form.control, name: 'quota_dollars' }) || 0
+  const selectedRole = useWatch({ control: form.control, name: 'role' })
+  const selectedGroups =
+    useWatch({ control: form.control, name: 'groups' }) ?? EMPTY_STRING_LIST
+  const primaryGroup = useWatch({
+    control: form.control,
+    name: 'primary_group',
+  })
+  const modelLimitsEnabled =
+    useWatch({ control: form.control, name: 'model_limits_enabled' }) ?? false
+  const selectedModelLimits =
+    useWatch({ control: form.control, name: 'model_limits' }) ??
+    EMPTY_STRING_LIST
+  const modelBlocklistEnabled =
+    useWatch({ control: form.control, name: 'model_blocklist_enabled' }) ??
+    false
   const selectedModelBlocklist =
-    form.watch('model_blocklist') ?? EMPTY_STRING_LIST
-  const checkinMode = form.watch('checkin_mode') ?? 'global'
+    useWatch({ control: form.control, name: 'model_blocklist' }) ??
+    EMPTY_STRING_LIST
+  const checkinMode =
+    useWatch({ control: form.control, name: 'checkin_mode' }) ?? 'global'
   const groupOptions = useMemo(() => {
     const values = new Set([...(groupsData?.data || []), ...selectedGroups])
     return [...values].map((group) => ({ value: group, label: group }))

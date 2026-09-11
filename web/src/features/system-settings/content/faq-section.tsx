@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Plus, Trash2, Save } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -93,16 +93,9 @@ export function FAQSection({ enabled, data }: FAQSectionProps) {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [editingFaq, setEditingFaq] = useState<FAQ | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<'single' | 'batch'>('single')
-
-  const form = useForm<FAQFormValues>({
-    resolver: zodResolver(faqSchema),
-    defaultValues: {
-      question: '',
-      answer: '',
-    },
-  })
-
-  useEffect(() => {
+  const [syncedData, setSyncedData] = useState(data)
+  if (syncedData !== data) {
+    setSyncedData(data)
     try {
       const parsed = JSON.parse(data || '[]')
       if (Array.isArray(parsed)) {
@@ -116,11 +109,20 @@ export function FAQSection({ enabled, data }: FAQSectionProps) {
     } catch {
       setFaqList([])
     }
-  }, [data])
-
-  useEffect(() => {
+  }
+  const [syncedEnabled, setSyncedEnabled] = useState(enabled)
+  if (syncedEnabled !== enabled) {
+    setSyncedEnabled(enabled)
     setIsEnabled(enabled)
-  }, [enabled])
+  }
+
+  const form = useForm<FAQFormValues>({
+    resolver: zodResolver(faqSchema),
+    defaultValues: {
+      question: '',
+      answer: '',
+    },
+  })
 
   const handleToggleEnabled = async (checked: boolean) => {
     try {

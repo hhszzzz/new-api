@@ -35,6 +35,19 @@ type PricingAmountInputProps = Omit<
   grouped?: boolean
 }
 
+function assignForwardedRef(
+  ref: PricingAmountInputProps['ref'],
+  element: HTMLInputElement | null
+) {
+  if (typeof ref === 'function') {
+    ref(element)
+    return
+  }
+  if (ref) {
+    ref.current = element
+  }
+}
+
 /** The parent owns USD; only this input owns the uncommitted display string. */
 export function PricingAmountInput({
   value,
@@ -87,8 +100,7 @@ export function PricingAmountInput({
         {...props}
         ref={(element) => {
           element?.setCustomValidity(error)
-          if (typeof props.ref === 'function') return props.ref(element)
-          if (props.ref) props.ref.current = element
+          assignForwardedRef(props.ref, element)
         }}
         data-pricing-amount=''
         type='text'

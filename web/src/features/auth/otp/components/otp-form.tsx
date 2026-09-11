@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -34,12 +34,12 @@ export function OtpForm() {
   const { t } = useTranslation()
   // Transfer the pending challenge from the navigation handoff into this page's
   // lifetime. Reloading or leaving the page cannot resume it from browser storage.
-  const pending = useRef(
-    useAuthStore.getState().auth.pendingLoginVerification
-  ).current
-  const initialSessionID = useRef(
-    useAuthStore.getState().auth.session?.sid
-  ).current
+  const [pending] = useState(
+    () => useAuthStore.getState().auth.pendingLoginVerification
+  )
+  const [initialSessionID] = useState(
+    () => useAuthStore.getState().auth.session?.sid
+  )
   const sessionID = useAuthStore((state) => state.auth.session?.sid)
   const verification = useSecureVerification()
   const { requestLoginVerification, cancel } = verification

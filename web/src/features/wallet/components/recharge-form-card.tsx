@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Gift, ExternalLink, Loader2, Receipt, WalletCards } from 'lucide-react'
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -114,13 +114,15 @@ export function RechargeFormCard({
 }: RechargeFormCardProps) {
   const { t } = useTranslation()
   const [localAmount, setLocalAmount] = useState(topupAmount.toString())
+  const [prevTopupAmount, setPrevTopupAmount] = useState(topupAmount)
 
-  useEffect(() => {
+  if (prevTopupAmount !== topupAmount) {
+    setPrevTopupAmount(topupAmount)
     // Empty string must survive, otherwise the field can never be cleared
     setLocalAmount((prev) =>
       prev === '' && topupAmount === 0 ? prev : topupAmount.toString()
     )
-  }, [topupAmount])
+  }
 
   const handleAmountChange = (value: string) => {
     setLocalAmount(value)

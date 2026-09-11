@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus, Trash2 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -70,13 +70,23 @@ export function MarketplaceSourcesDialog(props: MarketplaceSourcesDialogProps) {
 
   // The dialog edits a local copy so a half-typed row is never pushed to the
   // server; it is re-seeded whenever the dialog opens with fresh server data.
-  useEffect(() => {
-    if (props.open && sourcesQuery.data) {
-      setDraft(
-        sourcesQuery.data.map((source) => ({ ...source, rowId: makeRowId() }))
-      )
+  const [seedData, setSeedData] = useState<MarketplaceSource[] | null>(null)
+  const [seedOpen, setSeedOpen] = useState(props.open)
+  if (seedOpen !== props.open) {
+    setSeedOpen(props.open)
+    if (!props.open) {
+      setSeedData(null)
     }
-  }, [props.open, sourcesQuery.data])
+  }
+  if (props.open && sourcesQuery.data && sourcesQuery.data !== seedData) {
+    setSeedData(sourcesQuery.data)
+    setDraft(
+      sourcesQuery.data.map((source, index) => ({
+        ...source,
+        rowId: `seed-${index}`,
+      }))
+    )
+  }
 
   const saveMutation = useMutation({
     mutationFn: updateMarketplaceSources,

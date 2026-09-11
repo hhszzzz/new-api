@@ -42,15 +42,29 @@ export function useChannelKeyDisclosure(
   const [isChannelKeyLoading, setIsChannelKeyLoading] = useState(false)
   const operation = useRef<AbortController | null>(null)
 
-  useEffect(() => {
+  const [lastScope, setLastScope] = useState({
+    open,
+    channelId,
+    cancelVerification,
+  })
+  if (
+    lastScope.open !== open ||
+    lastScope.channelId !== channelId ||
+    lastScope.cancelVerification !== cancelVerification
+  ) {
+    setLastScope({ open, channelId, cancelVerification })
     setDisclosedKey(null)
     setIsChannelKeyLoading(false)
-    return () => {
+  }
+
+  useEffect(
+    () => () => {
       operation.current?.abort()
       operation.current = null
       cancelVerification()
-    }
-  }, [open, channelId, cancelVerification])
+    },
+    [open, channelId, cancelVerification]
+  )
 
   const handleRevealKey = useCallback(async () => {
     if (!channelId || !open || operation.current) return

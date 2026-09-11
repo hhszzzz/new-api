@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -92,7 +92,17 @@ export function EditTagDialog({ open, onOpenChange }: EditTagDialogProps) {
   const availableGroups = groupsData?.data || []
 
   // Initialize form when tag changes
-  useEffect(() => {
+  const [initSource, setInitSource] = useState({
+    open,
+    currentTag,
+    tagModelsData,
+  })
+  if (
+    initSource.open !== open ||
+    initSource.currentTag !== currentTag ||
+    initSource.tagModelsData !== tagModelsData
+  ) {
+    setInitSource({ open, currentTag, tagModelsData })
     if (open && currentTag) {
       setNewTag(currentTag)
       setModelMapping('')
@@ -107,7 +117,7 @@ export function EditTagDialog({ open, onOpenChange }: EditTagDialogProps) {
         setSelectedModels([])
       }
     }
-  }, [open, currentTag, tagModelsData])
+  }
 
   const handleAddCustomModel = () => {
     if (!customModel.trim()) return

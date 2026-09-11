@@ -17,8 +17,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useMemo, useRef } from 'react'
-import { useForm } from 'react-hook-form'
+import { useMemo, useState } from 'react'
+import { useForm, useWatch } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import * as z from 'zod'
@@ -258,8 +258,8 @@ export function RoutingReliabilitySection({
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
   const routingReliabilitySchema = createRoutingReliabilitySchema(t)
-  const baselineRef = useRef<NormalizedRoutingReliabilityValues>(
-    normalizeDefaults(defaultValues)
+  const [baseline, setBaseline] = useState<NormalizedRoutingReliabilityValues>(
+    () => normalizeDefaults(defaultValues)
   )
 
   const formDefaults = useMemo(
@@ -278,9 +278,18 @@ export function RoutingReliabilitySection({
 
   useResetForm(form, formDefaults)
 
-  const autoDisableStatusCodes = form.watch('AutomaticDisableStatusCodes')
-  const autoRetryStatusCodes = form.watch('AutomaticRetryStatusCodes')
-  const channelTestMode = form.watch('monitor_setting.channel_test_mode')
+  const autoDisableStatusCodes = useWatch({
+    control: form.control,
+    name: 'AutomaticDisableStatusCodes',
+  })
+  const autoRetryStatusCodes = useWatch({
+    control: form.control,
+    name: 'AutomaticRetryStatusCodes',
+  })
+  const channelTestMode = useWatch({
+    control: form.control,
+    name: 'monitor_setting.channel_test_mode',
+  })
   let channelTestModeDescription: string
   switch (channelTestMode) {
     case 'auto_ban_only':
@@ -311,7 +320,7 @@ export function RoutingReliabilitySection({
     const normalized = normalizeFormValues(values)
     const updates = (
       Object.keys(normalized) as Array<keyof NormalizedRoutingReliabilityValues>
-    ).filter((key) => normalized[key] !== baselineRef.current[key])
+    ).filter((key) => normalized[key] !== baseline[key])
 
     if (updates.length === 0) {
       toast.info(t('No changes to save'))
@@ -326,7 +335,7 @@ export function RoutingReliabilitySection({
       })
     }
 
-    baselineRef.current = normalized
+    setBaseline(normalized)
   }
 
   return (

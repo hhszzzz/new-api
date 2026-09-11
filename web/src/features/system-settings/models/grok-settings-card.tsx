@@ -17,8 +17,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useEffect, useMemo, useRef } from 'react'
-import { useForm } from 'react-hook-form'
+import { useEffect, useMemo, useRef, type FormEventHandler } from 'react'
+import { useForm, useWatch } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import * as z from 'zod'
@@ -135,14 +135,21 @@ export function GrokSettingsCard(props: Props) {
     form.reset(buildFormDefaults(normalized))
   }
 
-  const enabled = form.watch('grok.violation_deduction_enabled')
+  const enabled = useWatch({
+    control: form.control,
+    name: 'grok.violation_deduction_enabled',
+  })
+
+  const handleFormSubmit: FormEventHandler = (event) => {
+    void form.handleSubmit(onSubmit)(event)
+  }
 
   return (
     <SettingsSection title={t('Grok Settings')}>
       <Form {...form}>
-        <SettingsForm onSubmit={form.handleSubmit(onSubmit)}>
+        <SettingsForm onSubmit={handleFormSubmit}>
           <SettingsPageFormActions
-            onSave={form.handleSubmit(onSubmit)}
+            onSave={() => void form.handleSubmit(onSubmit)()}
             isSaving={updateOption.isPending}
           />
           <FormField

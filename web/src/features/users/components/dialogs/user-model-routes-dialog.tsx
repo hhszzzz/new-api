@@ -27,7 +27,7 @@ import {
   TriangleAlert,
   Trash2,
 } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -345,25 +345,24 @@ export function UserModelRoutesDialog(props: UserModelRoutesDialogProps) {
   )
   const canSaveRoute = canSave && invalidSelectedChannelIds.length === 0
 
-  useEffect(() => {
+  const [prevOpenUserId, setPrevOpenUserId] = useState<string | null>(null)
+  const openUserId = `${props.open}:${props.userId}`
+  if (prevOpenUserId !== openUserId) {
+    setPrevOpenUserId(openUserId)
     if (props.open) {
       setDraft(EMPTY_DRAFT)
       setEditingId(null)
     }
-  }, [props.open, props.userId])
+  }
 
-  useEffect(() => {
-    if (draft.execution_groups.length === 0 && executionGroups.length > 0) {
-      setDraft((current) => ({
-        ...current,
-        execution_groups: [executionGroups[0]],
-      }))
-    }
-  }, [draft.execution_groups.length, executionGroups])
+  if (draft.execution_groups.length === 0 && executionGroups.length > 0) {
+    setDraft((current) => ({
+      ...current,
+      execution_groups: [executionGroups[0]],
+    }))
+  }
 
-  useEffect(() => {
-    if (!channelData || channelsQuery.isFetching) return
-
+  if (channelData && !channelsQuery.isFetching) {
     const queryTarget = debouncedTargetModel
     const queryGroups = draft.execution_groups.join(',')
     const recommendedGroup = channelData.recommended_execution_group || ''
@@ -372,50 +371,32 @@ export function UserModelRoutesDialog(props: UserModelRoutesDialogProps) {
         count + (channelData.execution_group_channel_counts?.[group] ?? 0),
       0
     )
+    const queryScopeMatches =
+      draft.target_model.trim() === queryTarget &&
+      draft.execution_groups.join(',') === queryGroups
     if (
       editingId === null &&
       recommendedGroup &&
       selectedChannelCount === 0 &&
       !draft.execution_groups.includes(recommendedGroup)
     ) {
-      setDraft((current) => {
-        if (
-          current.target_model.trim() !== queryTarget ||
-          current.execution_groups.join(',') !== queryGroups
-        ) {
-          return current
-        }
-        return {
-          ...current,
+      if (queryScopeMatches) {
+        setDraft({
+          ...draft,
           execution_groups: [recommendedGroup],
           channel_ids: [],
-        }
-      })
-      return
-    }
-
-    const eligibleIds = new Set(
-      (channelData.channels || []).map((channel) => String(channel.id))
-    )
-    setDraft((current) => {
-      if (
-        current.target_model.trim() !== queryTarget ||
-        current.execution_groups.join(',') !== queryGroups
-      ) {
-        return current
+        })
       }
-      if (editingId !== null) return current
-      const channelIds = current.channel_ids.filter((id) => eligibleIds.has(id))
-      if (channelIds.length === current.channel_ids.length) return current
-      return { ...current, channel_ids: channelIds }
-    })
-  }, [
-    channelData,
-    channelsQuery.isFetching,
-    debouncedTargetModel,
-    draft.execution_groups,
-    editingId,
-  ])
+    } else if (editingId === null && queryScopeMatches) {
+      const eligibleIds = new Set(
+        (channelData.channels || []).map((channel) => String(channel.id))
+      )
+      const channelIds = draft.channel_ids.filter((id) => eligibleIds.has(id))
+      if (channelIds.length !== draft.channel_ids.length) {
+        setDraft({ ...draft, channel_ids: channelIds })
+      }
+    }
+  }
 
   const updateChannelSelection = (values: string[]) => {
     const selected = new Set(

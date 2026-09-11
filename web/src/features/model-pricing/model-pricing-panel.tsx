@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -66,14 +66,12 @@ export function ModelPricingPanel(props: {
     return pricingRow(entry.model_name, values)
   }, [entry])
 
-  useEffect(() => {
-    const loaded = query.data?.entries.find(
-      (item) => item.model_name === props.modelName
-    )
-    if (loaded && (!entry || entry.model_name !== props.modelName)) {
-      setEntry(loaded)
-    }
-  }, [query.data, entry, props.modelName])
+  const loadedEntry =
+    query.data?.entries.find((item) => item.model_name === props.modelName) ??
+    null
+  if (loadedEntry && (!entry || entry.model_name !== props.modelName)) {
+    setEntry(loadedEntry)
+  }
 
   const persist = async (reset = false) => {
     if (!entry) return

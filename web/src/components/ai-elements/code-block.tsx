@@ -42,6 +42,7 @@ import {
   type CSSProperties,
   type HTMLAttributes,
   type ReactNode,
+  type RefObject,
   useContext,
   useEffect,
   useMemo,
@@ -281,7 +282,9 @@ function getCodeBlockMaxHeight(
 
 function getCodeMirrorExtensions(options: {
   language: BundledLanguage | string
-  onKeyDown: (event: globalThis.KeyboardEvent) => void
+  onKeyDownRef: RefObject<
+    ((event: globalThis.KeyboardEvent) => void) | undefined
+  >
   placeholder?: string
   readOnly: boolean
   showLineNumbers: boolean
@@ -295,7 +298,7 @@ function getCodeMirrorExtensions(options: {
     EditorView.editable.of(!options.readOnly),
     EditorView.domEventHandlers({
       keydown(event) {
-        options.onKeyDown(event)
+        options.onKeyDownRef.current?.(event)
         return event.defaultPrevented
       },
     }),
@@ -334,17 +337,6 @@ function CodeMirrorCodeView({
   // parent (recreated on every keystroke-driven render) does not invalidate
   // the extensions and tear down the EditorView, which would reset the cursor
   // to the document start and make typing appear right-to-left.
-  const editorExtensions = useMemo(
-    () =>
-      getCodeMirrorExtensions({
-        language,
-        onKeyDown: (event) => onKeyDownRef.current?.(event),
-        placeholder,
-        readOnly,
-        showLineNumbers,
-      }),
-    [language, placeholder, readOnly, showLineNumbers]
-  )
 
   useEffect(() => {
     onChangeRef.current = onChange
@@ -357,6 +349,13 @@ function CodeMirrorCodeView({
       return
     }
 
+    const editorExtensions = getCodeMirrorExtensions({
+      language,
+      onKeyDownRef,
+      placeholder,
+      readOnly,
+      showLineNumbers,
+    })
     const editorView = new EditorView({
       doc: initialValueRef.current,
       extensions: [
@@ -378,7 +377,7 @@ function CodeMirrorCodeView({
       editorView.destroy()
       editorViewRef.current = null
     }
-  }, [autoFocus, editorExtensions])
+  }, [autoFocus, language, placeholder, readOnly, showLineNumbers])
 
   useEffect(() => {
     // Track the latest value so a future editor rebuild (e.g. language change)

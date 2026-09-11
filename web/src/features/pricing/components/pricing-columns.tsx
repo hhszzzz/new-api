@@ -28,10 +28,7 @@ import { resolveProviderIconKey } from '@/lib/provider-icon'
 import type { PricingModel } from '../types'
 import { CachedPriceCell } from './cached-price-cell'
 import { ModelBillingModeBadge } from './model-billing-mode-badge'
-import {
-  ModelPerfBadge,
-  type ModelPerfBadgeData,
-} from './model-perf-badge'
+import { ModelPerfBadge, type ModelPerfBadgeData } from './model-perf-badge'
 import { ModelPriceCell, type ModelPriceCellOptions } from './model-price-cell'
 
 // ----------------------------------------------------------------------------

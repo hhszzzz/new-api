@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useMutation } from '@tanstack/react-query'
 import { Loader2 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -42,11 +42,13 @@ export function PrivacyCard(props: PrivacyCardProps) {
   const [recordIpLog, setRecordIpLog] = useState(() =>
     Boolean(parseUserSettings(props.profile.setting).record_ip_log)
   )
-  useEffect(() => {
+  const [syncedSetting, setSyncedSetting] = useState(props.profile.setting)
+  if (syncedSetting !== props.profile.setting) {
+    setSyncedSetting(props.profile.setting)
     setRecordIpLog(
       Boolean(parseUserSettings(props.profile.setting).record_ip_log)
     )
-  }, [props.profile.setting])
+  }
 
   const save = useMutation({
     mutationFn: async () => {

@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Loader2 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type FormEventHandler } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -83,9 +83,16 @@ export function EmailBindDialog(props: EmailBindDialogProps) {
   const resetResend = resend.reset
   const resetDeadline = deadline.reset
 
+  const flowResetKey = `${props.open}:${security.sessionKey}`
+  const [prevFlowResetKey, setPrevFlowResetKey] = useState(flowResetKey)
+
+  if (prevFlowResetKey !== flowResetKey) {
+    setPrevFlowResetKey(flowResetKey)
+    setFlow(null)
+  }
+
   useEffect(() => {
     reset(emptyEmailForm)
-    setFlow(null)
     resetResend()
     resetDeadline()
   }, [security.sessionKey, reset, resetResend, resetDeadline])
@@ -93,7 +100,6 @@ export function EmailBindDialog(props: EmailBindDialogProps) {
     if (!props.open) {
       cancel()
       reset(emptyEmailForm)
-      setFlow(null)
       resetResend()
       resetDeadline()
     }
@@ -186,6 +192,9 @@ export function EmailBindDialog(props: EmailBindDialogProps) {
     resend.reset()
     deadline.reset()
   }
+  const handleFormSubmit: FormEventHandler = (event) => {
+    void form.handleSubmit(submit)(event)
+  }
 
   return (
     <>
@@ -232,7 +241,7 @@ export function EmailBindDialog(props: EmailBindDialogProps) {
         <Form {...form}>
           <form
             id='email-bind-form'
-            onSubmit={form.handleSubmit(submit)}
+            onSubmit={handleFormSubmit}
             className='space-y-4'
           >
             <FormField

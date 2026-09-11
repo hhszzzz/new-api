@@ -112,32 +112,43 @@ type SettingsPageFormActionsProps = {
   saveButtonRef?: RefObject<HTMLButtonElement | null>
 }
 
-export function SettingsPageFormActions(props: SettingsPageFormActionsProps) {
+export function SettingsPageFormActions({
+  onSave,
+  onReset,
+  isSaving,
+  isSaveDisabled,
+  isResetDisabled,
+  saveLabel: saveLabelProp,
+  savingLabel,
+  resetLabel,
+  resetVariant,
+  saveButtonRef,
+}: SettingsPageFormActionsProps) {
   const { t } = useTranslation()
-  const saveLabel = props.isSaving
-    ? (props.savingLabel ?? 'Saving...')
-    : (props.saveLabel ?? 'Save Changes')
+  const saveLabel = isSaving
+    ? (savingLabel ?? 'Saving...')
+    : (saveLabelProp ?? 'Save Changes')
 
   return (
     <SettingsPageActionsPortal>
-      {props.onReset && (
+      {onReset && (
         <Button
           type='button'
           size='sm'
-          variant={props.resetVariant ?? 'outline'}
-          onClick={props.onReset}
-          disabled={props.isResetDisabled || props.isSaving}
+          variant={resetVariant ?? 'outline'}
+          onClick={onReset}
+          disabled={isResetDisabled || isSaving}
         >
           <RotateCcw data-icon='inline-start' />
-          <span>{t(props.resetLabel ?? 'Reset')}</span>
+          <span>{t(resetLabel ?? 'Reset')}</span>
         </Button>
       )}
       <Button
-        ref={props.saveButtonRef}
+        ref={saveButtonRef}
         type='button'
         size='sm'
-        onClick={props.onSave}
-        disabled={props.isSaving || props.isSaveDisabled}
+        onClick={onSave}
+        disabled={isSaving || isSaveDisabled}
       >
         <Save data-icon='inline-start' />
         <span>{t(saveLabel)}</span>

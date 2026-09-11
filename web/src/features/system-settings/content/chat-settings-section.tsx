@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import * as z from 'zod'
@@ -159,18 +159,15 @@ export function ChatSettingsSection(props: ChatSettingsSectionProps) {
     },
   })
 
-  const initialNormalizedRef = useRef(
-    normalizeJsonString(props.defaultValue, '[]')
-  )
+  const initialNormalized = normalizeJsonString(props.defaultValue, '[]')
 
   useEffect(() => {
     form.reset({ Chats: formatJsonForEditor(props.defaultValue, '[]') })
-    initialNormalizedRef.current = normalizeJsonString(props.defaultValue, '[]')
   }, [props.defaultValue, form])
 
   const onSubmit = async (values: ChatSettingsFormValues) => {
     const normalized = normalizeJsonString(values.Chats, '[]')
-    if (normalized === initialNormalizedRef.current) {
+    if (normalized === initialNormalized) {
       return
     }
 
@@ -183,7 +180,6 @@ export function ChatSettingsSection(props: ChatSettingsSectionProps) {
   return (
     <SettingsSection title={t('Chat Presets')}>
       <Form {...form}>
-        {/* eslint-disable-next-line react-hooks/refs */}
         <SettingsForm onSubmit={form.handleSubmit(onSubmit)}>
           <SettingsPageFormActions
             onSave={form.handleSubmit(onSubmit)}

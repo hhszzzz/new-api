@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Send } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -55,39 +55,47 @@ export function TelegramBindDialog({
   const [flowToken, setFlowToken] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [retryToken, setRetryToken] = useState(0)
+  const [prevOpen, setPrevOpen] = useState(open)
 
-  const createBindFlow = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const response = await startTelegramBind()
-      if (!response.success || !response.data?.callback_url) {
-        throw createServerError(response, t('Failed to start Telegram binding'))
-      }
-      setFlowToken(response.data.flow_token)
-      setCallbackUrl(
-        new URL(response.data.callback_url, window.location.origin).toString()
-      )
-    } catch (bindError: unknown) {
-      setError(
-        bindError instanceof Error
-          ? bindError.message
-          : t('Failed to start Telegram binding')
-      )
-    } finally {
-      setLoading(false)
-    }
-  }, [t])
-
-  useEffect(() => {
+  if (open !== prevOpen) {
+    setPrevOpen(open)
     if (!open) {
       setCallbackUrl(null)
       setFlowToken(null)
       setError(null)
-      return
     }
-    void createBindFlow()
-  }, [createBindFlow, open])
+  }
+
+  useEffect(() => {
+    if (!open) return
+
+    void (async () => {
+      setLoading(true)
+      setError(null)
+      try {
+        const response = await startTelegramBind()
+        if (!response.success || !response.data?.callback_url) {
+          throw createServerError(
+            response,
+            t('Failed to start Telegram binding')
+          )
+        }
+        setFlowToken(response.data.flow_token)
+        setCallbackUrl(
+          new URL(response.data.callback_url, window.location.origin).toString()
+        )
+      } catch (bindError: unknown) {
+        setError(
+          bindError instanceof Error
+            ? bindError.message
+            : t('Failed to start Telegram binding')
+        )
+      } finally {
+        setLoading(false)
+      }
+    })()
+  }, [open, retryToken, t])
 
   useEffect(() => {
     if (!open || !flowToken) return
@@ -179,7 +187,11 @@ export function TelegramBindDialog({
           {error && (
             <div className='flex flex-col items-center gap-3 text-center'>
               <p className='text-destructive text-sm'>{error}</p>
-              <Button type='button' variant='outline' onClick={createBindFlow}>
+              <Button
+                type='button'
+                variant='outline'
+                onClick={() => setRetryToken((token) => token + 1)}
+              >
                 {t('Retry')}
               </Button>
             </div>

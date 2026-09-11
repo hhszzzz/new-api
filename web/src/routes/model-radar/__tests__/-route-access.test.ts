@@ -42,7 +42,9 @@ describe('model radar route access', () => {
       requireAuth: false,
     })
 
-    await expect(guardModelRadarRoute({} as never, '/model-radar')).rejects.toMatchObject({
+    await expect(
+      guardModelRadarRoute({} as never, '/model-radar')
+    ).rejects.toMatchObject({
       options: { to: '/' },
     })
   })
@@ -68,13 +70,17 @@ describe('model radar route access', () => {
       enabled: true,
       requireAuth: false,
     })
-    await expect(guardModelRadarRoute({} as never, '/model-radar')).resolves.toBeUndefined()
+    await expect(
+      guardModelRadarRoute({} as never, '/model-radar')
+    ).resolves.toBeUndefined()
 
     getModuleAccessForGuardMock.mockResolvedValue({
       enabled: true,
       requireAuth: true,
     })
     useAuthStore.getState().auth.setUser({ id: 1, username: 'user', role: 1 })
-    await expect(guardModelRadarRoute({} as never, '/model-radar')).resolves.toBeUndefined()
+    await expect(
+      guardModelRadarRoute({} as never, '/model-radar')
+    ).resolves.toBeUndefined()
   })
 })

@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { ChevronDown } from 'lucide-react'
-import { useEffect, useId, useState } from 'react'
+import { useId, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
@@ -126,9 +126,12 @@ export function TierPriceFields(props: TierPriceFieldsProps) {
       : Number(props.prices[variable.key] ?? 0) > 0
   )
   const [mediaOpen, setMediaOpen] = useState(hasMediaPricing)
-  useEffect(() => {
+  const [prevHasMediaPricing, setPrevHasMediaPricing] =
+    useState(hasMediaPricing)
+  if (hasMediaPricing !== prevHasMediaPricing) {
+    setPrevHasMediaPricing(hasMediaPricing)
     if (hasMediaPricing) setMediaOpen(true)
-  }, [hasMediaPricing])
+  }
   const renderPriceVariable = (variable: {
     key: VisualPrice['variable']
     label: string

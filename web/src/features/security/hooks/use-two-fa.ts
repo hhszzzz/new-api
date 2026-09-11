@@ -38,28 +38,37 @@ export function useTwoFA(enabled = true) {
   const [status, setStatus] = useState<TwoFAStatus>(DEFAULT_STATUS)
   const [error, setError] = useState<string>()
 
-  const fetchStatus = useCallback(async () => {
-    if (!enabled) return
+  const fetchStatus = useCallback(() => {
+    if (!enabled) return Promise.resolve()
 
-    try {
-      setLoading(true)
-      setError(undefined)
-      setStatus(await get2FAStatus())
-    } catch (error) {
-      setError(AuthOperationError.from(error).message)
-    } finally {
-      setLoading(false)
-    }
+    return get2FAStatus()
+      .then((result) => {
+        setStatus(result)
+        setError(undefined)
+      })
+      .catch((error: unknown) => {
+        setError(AuthOperationError.from(error).message)
+      })
+      .finally(() => {
+        setLoading(false)
+      })
   }, [enabled])
 
+  const refetch = useCallback(async () => {
+    if (!enabled) return
+    setLoading(true)
+    setError(undefined)
+    await fetchStatus()
+  }, [enabled, fetchStatus])
+
   useEffect(() => {
-    fetchStatus()
+    void fetchStatus()
   }, [fetchStatus])
 
   return {
     status,
     loading,
     error,
-    refetch: fetchStatus,
+    refetch,
   }
 }

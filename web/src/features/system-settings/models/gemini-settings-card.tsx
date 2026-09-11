@@ -17,8 +17,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useEffect, useMemo, useRef } from 'react'
-import { useForm } from 'react-hook-form'
+import { useEffect, useMemo, useState } from 'react'
+import { useForm, useWatch } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import * as z from 'zod'
@@ -112,10 +112,10 @@ type GeminiSettingsCardProps = {
   defaultValues: GeminiSettingsFormInput
 }
 
-export function GeminiSettingsCard({ defaultValues }: GeminiSettingsCardProps) {
-  const { t } = useTranslation()
-  const updateOption = useUpdateOption()
-  const normalizedDefaultsRef = useRef<FlatGeminiSettings>({
+function normalizeGeminiDefaults(
+  defaultValues: GeminiSettingsFormInput
+): FlatGeminiSettings {
+  return {
     'gemini.safety_settings': normalizeJsonString(
       defaultValues.gemini.safety_settings
     ),
@@ -134,7 +134,22 @@ export function GeminiSettingsCard({ defaultValues }: GeminiSettingsCardProps) {
       defaultValues.gemini.function_call_thought_signature_enabled ?? true,
     'gemini.remove_function_response_id_enabled':
       defaultValues.gemini.remove_function_response_id_enabled ?? true,
-  })
+  }
+}
+
+export function GeminiSettingsCard({ defaultValues }: GeminiSettingsCardProps) {
+  const { t } = useTranslation()
+  const updateOption = useUpdateOption()
+  const [normalizedDefaults, setNormalizedDefaults] = useState(() =>
+    normalizeGeminiDefaults(defaultValues)
+  )
+  const [normalizedDefaultsSource, setNormalizedDefaultsSource] =
+    useState(defaultValues)
+
+  if (normalizedDefaultsSource !== defaultValues) {
+    setNormalizedDefaultsSource(defaultValues)
+    setNormalizedDefaults(normalizeGeminiDefaults(defaultValues))
+  }
 
   const buildFormDefaults = (
     values: GeminiSettingsFormInput
@@ -165,31 +180,13 @@ export function GeminiSettingsCard({ defaultValues }: GeminiSettingsCardProps) {
   })
 
   useEffect(() => {
-    normalizedDefaultsRef.current = {
-      'gemini.safety_settings': normalizeJsonString(
-        defaultValues.gemini.safety_settings
-      ),
-      'gemini.version_settings': normalizeJsonString(
-        defaultValues.gemini.version_settings
-      ),
-      'gemini.supported_imagine_models': normalizeJsonString(
-        defaultValues.gemini.supported_imagine_models
-      ),
-      'gemini.thinking_adapter_enabled':
-        defaultValues.gemini.thinking_adapter_enabled,
-      'gemini.thinking_adapter_budget_tokens_percentage': Number(
-        defaultValues.gemini.thinking_adapter_budget_tokens_percentage
-      ),
-      'gemini.function_call_thought_signature_enabled':
-        defaultValues.gemini.function_call_thought_signature_enabled ?? true,
-      'gemini.remove_function_response_id_enabled':
-        defaultValues.gemini.remove_function_response_id_enabled ?? true,
-    }
-
     form.reset(buildFormDefaults(defaultValues))
   }, [defaultValues, form])
 
-  const isAdapterEnabled = form.watch('gemini.thinking_adapter_enabled')
+  const isAdapterEnabled = useWatch({
+    control: form.control,
+    name: 'gemini.thinking_adapter_enabled',
+  })
 
   const onSubmit = async (values: GeminiSettingsFormValues) => {
     const normalized: FlatGeminiSettings = {
@@ -213,7 +210,7 @@ export function GeminiSettingsCard({ defaultValues }: GeminiSettingsCardProps) {
 
     const updates = (
       Object.keys(normalized) as Array<keyof FlatGeminiSettings>
-    ).filter((key) => normalized[key] !== normalizedDefaultsRef.current[key])
+    ).filter((key) => normalized[key] !== normalizedDefaults[key])
 
     if (updates.length === 0) {
       toast.info(t('No changes to save'))

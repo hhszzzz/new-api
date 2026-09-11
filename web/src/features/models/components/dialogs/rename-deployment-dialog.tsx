@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2 } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -46,10 +46,12 @@ export function RenameDeploymentDialog({
   const queryClient = useQueryClient()
   const [name, setName] = useState(currentName || '')
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [renameSource, setRenameSource] = useState({ open, currentName })
 
-  useEffect(() => {
+  if (renameSource.open !== open || renameSource.currentName !== currentName) {
+    setRenameSource({ open, currentName })
     if (open) setName(currentName || '')
-  }, [open, currentName])
+  }
 
   const trimmed = name.trim()
 

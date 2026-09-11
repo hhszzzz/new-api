@@ -119,7 +119,10 @@ export function useProfile() {
 
   // Initial fetch
   useEffect(() => {
-    fetchProfile()
+    const init = async () => {
+      await fetchProfile()
+    }
+    void init()
   }, [fetchProfile])
 
   return {

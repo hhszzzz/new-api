@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 import { api } from '@/lib/api'
 import { getLobeIcon } from '@/lib/lobe-icon'
@@ -56,20 +56,21 @@ function GatewayPluginIcon(props: PluginIconProps) {
     retry: false,
     meta: { errorToast: false },
   })
-  const [image, setImage] = useState<{ blob: Blob; src: string } | null>(null)
+  const imageSrc = useMemo(
+    () => (query.data ? URL.createObjectURL(query.data) : undefined),
+    [query.data]
+  )
   useEffect(() => {
-    if (!query.data) return
-    const src = URL.createObjectURL(query.data)
-    setImage({ blob: query.data, src })
-    return () => URL.revokeObjectURL(src)
-  }, [query.data])
+    if (!imageSrc) return
+    return () => URL.revokeObjectURL(imageSrc)
+  }, [imageSrc])
 
   return (
     <PluginIcon
       plugin={{
         ...props.plugin,
         hasIcon: false,
-        iconSrc: image?.blob === query.data ? image?.src : undefined,
+        iconSrc: imageSrc,
       }}
       size={props.size}
     />

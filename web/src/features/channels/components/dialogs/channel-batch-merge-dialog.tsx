@@ -21,7 +21,7 @@ import { CombineIcon } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useMemo } from 'react'
-import { Controller, useForm } from 'react-hook-form'
+import { Controller, useForm, useWatch } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -142,8 +142,11 @@ export function ChannelBatchMergeDialog(props: Props) {
       ).format(selectedChannels.map((channel) => channel.name)),
     [i18n.language, i18n.resolvedLanguage, selectedChannels]
   )
-  const targetMode = form.watch('target_mode')
-  const selectedAggregateId = form.watch('aggregate_id')
+  const targetMode = useWatch({ control: form.control, name: 'target_mode' })
+  const selectedAggregateId = useWatch({
+    control: form.control,
+    name: 'aggregate_id',
+  })
 
   const mutation = useMutation({
     mutationFn: async (values: ChannelBatchMergeFormValues) => {

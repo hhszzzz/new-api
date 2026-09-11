@@ -73,7 +73,9 @@ export function Wallet(props: WalletProps) {
   const [paymentLoading, setPaymentLoading] = useState<string | null>(null)
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false)
   const [transferDialogOpen, setTransferDialogOpen] = useState(false)
-  const [billingDialogOpen, setBillingDialogOpen] = useState(false)
+  const [billingDialogOpen, setBillingDialogOpen] = useState(
+    props.initialShowHistory ?? false
+  )
   const [redemptionCode, setRedemptionCode] = useState('')
   const [creemDialogOpen, setCreemDialogOpen] = useState(false)
   const [selectedCreemProduct, setSelectedCreemProduct] =
@@ -110,28 +112,43 @@ export function Wallet(props: WalletProps) {
     useWaffoPancakePayment()
 
   // Fetch and refresh user data
-  const fetchUser = useCallback(async () => {
-    try {
-      setUserLoading(true)
-      const response = await getSelf()
-      if (response.success && response.data) {
-        setUser(response.data as UserWalletData)
-      }
-    } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error('Failed to fetch user data:', error)
-    } finally {
-      setUserLoading(false)
-    }
+  const fetchUser = useCallback(() => {
+    return getSelf()
+      .then((response) => {
+        if (response.success && response.data) {
+          setUser(response.data as UserWalletData)
+        }
+      })
+      .catch((error: unknown) => {
+        // eslint-disable-next-line no-console
+        console.error('Failed to fetch user data:', error)
+      })
+      .finally(() => {
+        setUserLoading(false)
+      })
   }, [])
 
-  useEffect(() => {
-    fetchUser()
+  const refreshUser = useCallback(async () => {
+    setUserLoading(true)
+    await fetchUser()
   }, [fetchUser])
 
   useEffect(() => {
+    void fetchUser()
+  }, [fetchUser])
+
+  const [prevInitialShowHistory, setPrevInitialShowHistory] = useState(
+    props.initialShowHistory
+  )
+  if (prevInitialShowHistory !== props.initialShowHistory) {
+    setPrevInitialShowHistory(props.initialShowHistory)
     if (props.initialShowHistory) {
       setBillingDialogOpen(true)
+    }
+  }
+
+  useEffect(() => {
+    if (props.initialShowHistory) {
       window.history.replaceState({}, '', window.location.pathname)
     }
   }, [props.initialShowHistory])
@@ -207,7 +224,7 @@ export function Wallet(props: WalletProps) {
 
     if (success) {
       setConfirmDialogOpen(false)
-      await fetchUser()
+      await refreshUser()
     }
   }
 
@@ -218,7 +235,7 @@ export function Wallet(props: WalletProps) {
     const success = await redeemCode(redemptionCode)
     if (success) {
       setRedemptionCode('')
-      await fetchUser()
+      await refreshUser()
     }
   }
 
@@ -226,7 +243,7 @@ export function Wallet(props: WalletProps) {
   const handleTransfer = async (amount: number) => {
     const success = await transferQuota(amount)
     if (success) {
-      await fetchUser()
+      await refreshUser()
     }
     return success
   }
@@ -245,7 +262,7 @@ export function Wallet(props: WalletProps) {
     if (success) {
       setCreemDialogOpen(false)
       setSelectedCreemProduct(null)
-      await fetchUser()
+      await refreshUser()
     }
   }
 
@@ -335,7 +352,7 @@ export function Wallet(props: WalletProps) {
                 topupInfo={topupInfo}
                 onAvailabilityChange={handleSubscriptionAvailabilityChange}
                 userQuota={user?.quota}
-                onPurchaseSuccess={fetchUser}
+                onPurchaseSuccess={refreshUser}
               />
             </div>
 

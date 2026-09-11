@@ -157,7 +157,8 @@ export function ChannelAffinitySection(props: Props) {
     )
   )
   const [cacheStats, setCacheStats] = useState<CacheStats | null>(null)
-  const [cacheLoading, setCacheLoading] = useState(false)
+  const [cacheLoading, setCacheLoading] = useState(true)
+  const [cacheReloadKey, setCacheReloadKey] = useState(0)
   const [saving, setSaving] = useState(false)
 
   const [ruleEditorOpen, setRuleEditorOpen] = useState(false)
@@ -167,7 +168,11 @@ export function ChannelAffinitySection(props: Props) {
   const [clearRuleName, setClearRuleName] = useState<string | null>(null)
   const [fillTemplateDialogOpen, setFillTemplateDialogOpen] = useState(false)
 
-  useEffect(() => {
+  const [prevDefaultValues, setPrevDefaultValues] = useState(
+    props.defaultValues
+  )
+  if (prevDefaultValues !== props.defaultValues) {
+    setPrevDefaultValues(props.defaultValues)
     setEnabled(props.defaultValues['channel_affinity_setting.enabled'])
     setSwitchOnSuccess(
       props.defaultValues['channel_affinity_setting.switch_on_success']
@@ -190,27 +195,36 @@ export function ChannelAffinitySection(props: Props) {
         2
       )
     )
-  }, [props.defaultValues])
+  }
 
-  const refreshCache = useCallback(async () => {
+  const triggerRefresh = useCallback(() => {
     setCacheLoading(true)
-    try {
-      const res = await getCacheStats()
-      if (res.success) {
-        setCacheStats(res.data || null)
-      } else {
-        handleServerError(res)
-      }
-    } catch (error) {
-      handleServerError(error, t('Failed to refresh cache stats'))
-    } finally {
-      setCacheLoading(false)
-    }
-  }, [t])
+    setCacheReloadKey((key) => key + 1)
+  }, [])
 
   useEffect(() => {
-    refreshCache()
-  }, [refreshCache])
+    let cancelled = false
+    void (async () => {
+      try {
+        const res = await getCacheStats()
+        if (cancelled) return
+        if (res.success) {
+          setCacheStats(res.data || null)
+        } else {
+          handleServerError(res)
+        }
+      } catch (error) {
+        if (!cancelled) {
+          handleServerError(error, t('Failed to refresh cache stats'))
+        }
+      } finally {
+        if (!cancelled) setCacheLoading(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [cacheReloadKey, t])
 
   const appendCliTemplates = () => {
     const existingNames = new Set(
@@ -362,7 +376,7 @@ export function ChannelAffinitySection(props: Props) {
       const res = await clearAllCache()
       if (res.success) {
         toast.success(t('Cleared'))
-        refreshCache()
+        triggerRefresh()
       } else {
         handleServerError(res)
       }
@@ -378,7 +392,7 @@ export function ChannelAffinitySection(props: Props) {
       const res = await clearRuleCache(clearRuleName)
       if (res.success) {
         toast.success(t('Cleared'))
-        refreshCache()
+        triggerRefresh()
       } else {
         handleServerError(res)
       }
@@ -538,7 +552,7 @@ export function ChannelAffinitySection(props: Props) {
           <Button
             variant='outline'
             size='sm'
-            onClick={refreshCache}
+            onClick={triggerRefresh}
             disabled={cacheLoading}
           >
             <RefreshCw

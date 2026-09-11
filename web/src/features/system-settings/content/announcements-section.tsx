@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Plus, Trash2, Save } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -95,6 +95,24 @@ const announcementSchema = z.object({
 
 type AnnouncementFormValues = z.infer<typeof announcementSchema>
 
+function parseAnnouncements(
+  raw: string,
+  fallback: Announcement[]
+): Announcement[] {
+  try {
+    const parsed = JSON.parse(raw || '[]')
+    if (Array.isArray(parsed)) {
+      return parsed.map((item, idx) => ({
+        ...item,
+        id: item.id || idx + 1,
+      }))
+    }
+  } catch {
+    return []
+  }
+  return fallback
+}
+
 const ANNOUNCEMENT_FORM_ID = 'announcement-form'
 
 const typeOptions = [
@@ -136,8 +154,20 @@ export function AnnouncementsSection({
 }: AnnouncementsSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
-  const [announcements, setAnnouncements] = useState<Announcement[]>([])
+  const [announcements, setAnnouncements] = useState<Announcement[]>(() =>
+    parseAnnouncements(data, [])
+  )
   const [isEnabled, setIsEnabled] = useState(enabled)
+  const [prevData, setPrevData] = useState(data)
+  if (data !== prevData) {
+    setPrevData(data)
+    setAnnouncements((current) => parseAnnouncements(data, current))
+  }
+  const [prevEnabled, setPrevEnabled] = useState(enabled)
+  if (prevEnabled !== enabled) {
+    setPrevEnabled(enabled)
+    setIsEnabled(enabled)
+  }
   const [hasChanges, setHasChanges] = useState(false)
   const [selectedIds, setSelectedIds] = useState<number[]>([])
   const [showDialog, setShowDialog] = useState(false)
@@ -155,26 +185,6 @@ export function AnnouncementsSection({
       extra: '',
     },
   })
-
-  useEffect(() => {
-    try {
-      const parsed = JSON.parse(data || '[]')
-      if (Array.isArray(parsed)) {
-        setAnnouncements(
-          parsed.map((item, idx) => ({
-            ...item,
-            id: item.id || idx + 1,
-          }))
-        )
-      }
-    } catch {
-      setAnnouncements([])
-    }
-  }, [data])
-
-  useEffect(() => {
-    setIsEnabled(enabled)
-  }, [enabled])
 
   const handleToggleEnabled = async (checked: boolean) => {
     try {

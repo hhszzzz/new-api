@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Bell, Loader2, Mail, Server, Webhook } from 'lucide-react'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -55,7 +55,16 @@ export function NotificationTab({ profile, onUpdate }: NotificationTabProps) {
   const { t } = useTranslation()
   const isAdmin = (profile?.role ?? 0) >= ROLE.ADMIN
   const [loading, setLoading] = useState(false)
-  const [settings, setSettings] = useState(() => normalizeUserSettings())
+  const [settings, setSettings] = useState(() =>
+    normalizeUserSettings(profile?.setting)
+  )
+  const [syncedProfile, setSyncedProfile] = useState(profile)
+  if (profile !== syncedProfile) {
+    setSyncedProfile(profile)
+    if (profile?.setting) {
+      setSettings(normalizeUserSettings(profile.setting))
+    }
+  }
 
   // Update form field helper
   const updateField = useCallback(
@@ -67,12 +76,6 @@ export function NotificationTab({ profile, onUpdate }: NotificationTabProps) {
     },
     []
   )
-
-  useEffect(() => {
-    if (profile?.setting) {
-      setSettings(normalizeUserSettings(profile.setting))
-    }
-  }, [profile])
 
   const handleSave = async () => {
     try {

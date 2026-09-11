@@ -62,22 +62,25 @@ export function ConsumptionDistributionChart(
   const { t } = useTranslation()
   const { resolvedTheme } = useTheme()
   const { customization } = useThemeCustomization()
-  const chartRadius = useThemeRadiusPx(
-    '--radius-md',
-    `${customization.preset}:${customization.radius}`
-  )
+  const chartRadius = useThemeRadiusPx('--radius-md')
   const [chartType, setChartType] = useState<ConsumptionDistributionChartType>(
     props.defaultChartType ?? 'bar'
   )
+  const [prevDefaultChartType, setPrevDefaultChartType] = useState(
+    props.defaultChartType
+  )
+  if (
+    props.defaultChartType &&
+    props.defaultChartType !== prevDefaultChartType
+  ) {
+    setPrevDefaultChartType(props.defaultChartType)
+    setChartType(props.defaultChartType)
+  }
   const [themeReady, setThemeReady] = useState(false)
   const themeManagerRef = useRef<
     (typeof import('@visactor/vchart'))['ThemeManager'] | null
   >(null)
   const timeGranularity = props.timeGranularity ?? DEFAULT_TIME_GRANULARITY
-
-  useEffect(() => {
-    if (props.defaultChartType) setChartType(props.defaultChartType)
-  }, [props.defaultChartType])
 
   useEffect(() => {
     const updateTheme = async () => {

@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -35,10 +35,12 @@ export function ResetSubscriptionsDialog() {
   const isOpen = open === 'reset-subscriptions'
   const plan = currentRow?.plan
   const planLabel = plan?.title || (plan?.id ? `#${plan.id}` : '-')
+  const [prevIsOpen, setPrevIsOpen] = useState(isOpen)
 
-  useEffect(() => {
+  if (isOpen !== prevIsOpen) {
+    setPrevIsOpen(isOpen)
     if (isOpen) setAdvanceResetTime(true)
-  }, [isOpen])
+  }
 
   const handleConfirm = async () => {
     if (!plan?.id) return

@@ -146,38 +146,52 @@ export function UserSubscriptionsDialog(props: Props) {
     [plans]
   )
 
-  const loadData = useCallback(async () => {
-    if (!props.user?.id) return
-    setLoading(true)
-    try {
-      const [plansRes, subsRes] = await Promise.all([
-        getAdminPlans(),
-        getUserSubscriptions(props.user.id),
-      ])
-      if (plansRes.success) {
-        setPlans(plansRes.data || [])
-      } else {
-        handleServerError(plansRes)
-      }
-      if (subsRes.success) {
-        setSubs(subsRes.data || [])
-      } else {
-        handleServerError(subsRes)
-      }
-    } catch (error) {
-      handleServerError(error, t('Loading failed'))
-    } finally {
-      setLoading(false)
-    }
-  }, [props.user?.id, t])
+  const userId = props.user?.id
 
-  useEffect(() => {
-    if (props.open && props.user?.id) {
+  const loadData = useCallback(() => {
+    if (!userId) return Promise.resolve()
+    return Promise.all([getAdminPlans(), getUserSubscriptions(userId)])
+      .then(([plansRes, subsRes]) => {
+        if (plansRes.success) {
+          setPlans(plansRes.data || [])
+        } else {
+          handleServerError(plansRes)
+        }
+        if (subsRes.success) {
+          setSubs(subsRes.data || [])
+        } else {
+          handleServerError(subsRes)
+        }
+      })
+      .catch((error: unknown) => {
+        handleServerError(error, t('Loading failed'))
+      })
+      .finally(() => {
+        setLoading(false)
+      })
+  }, [userId, t])
+
+  const refreshData = useCallback(async () => {
+    setLoading(true)
+    await loadData()
+  }, [loadData])
+
+  const openUserKey = `${props.open ? 'open' : 'closed'}:${userId ?? ''}`
+  const [prevOpenUserKey, setPrevOpenUserKey] = useState<string | null>(null)
+  if (prevOpenUserKey !== openUserKey) {
+    setPrevOpenUserKey(openUserKey)
+    if (props.open && userId) {
       setSelectedPlanId('')
       setSourceNote('')
-      loadData()
+      setLoading(true)
     }
-  }, [props.open, props.user?.id, loadData])
+  }
+
+  useEffect(() => {
+    if (props.open && userId) {
+      void loadData()
+    }
+  }, [props.open, userId, loadData])
 
   const createAssignment = async (assignment: {
     planId: number
@@ -194,7 +208,7 @@ export function UserSubscriptionsDialog(props: Props) {
         toast.success(res.data?.message || t('Added successfully'))
         setSelectedPlanId('')
         setSourceNote('')
-        await loadData()
+        await refreshData()
         props.onSuccess?.()
       } else {
         handleServerError(res)
@@ -237,7 +251,7 @@ export function UserSubscriptionsDialog(props: Props) {
         const res = await invalidateUserSubscription(confirmAction.subId)
         if (res.success) {
           toast.success(res.data?.message || t('Has been invalidated'))
-          await loadData()
+          await refreshData()
           props.onSuccess?.()
         } else {
           handleServerError(res)
@@ -246,7 +260,7 @@ export function UserSubscriptionsDialog(props: Props) {
         const res = await deleteUserSubscription(confirmAction.subId)
         if (res.success) {
           toast.success(t('Deleted'))
-          await loadData()
+          await refreshData()
           props.onSuccess?.()
         } else {
           handleServerError(res)
@@ -273,7 +287,7 @@ export function UserSubscriptionsDialog(props: Props) {
             count: res.data?.reset_count || 0,
           })
         )
-        await loadData()
+        await refreshData()
         props.onSuccess?.()
       } else {
         handleServerError(res)

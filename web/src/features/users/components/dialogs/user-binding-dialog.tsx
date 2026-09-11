@@ -200,14 +200,26 @@ export function UserBindingDialog(props: Props) {
     }
   }, [props.userId, t])
 
-  useEffect(() => {
+  const [bindingScope, setBindingScope] = useState({
+    open: props.open,
+    userId: props.userId,
+  })
+  if (
+    bindingScope.open !== props.open ||
+    bindingScope.userId !== props.userId
+  ) {
+    setBindingScope({ open: props.open, userId: props.userId })
     if (props.open && props.userId) {
       setShowBoundOnly(true)
-      fetchData()
     } else {
       setUser(null)
       setOauthBindings([])
     }
+  }
+
+  useEffect(() => {
+    if (!props.open || !props.userId) return
+    void Promise.resolve().then(() => fetchData())
   }, [props.open, props.userId, fetchData])
 
   const allBindings = useMemo<BindingItem[]>(() => {

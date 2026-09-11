@@ -21,7 +21,10 @@ import { useCallback, useEffect, useRef } from 'react'
 export function useLatestAsyncTask(scope: unknown) {
   const requestIdRef = useRef(0)
   const scopeRef = useRef(scope)
-  scopeRef.current = scope
+
+  useEffect(() => {
+    scopeRef.current = scope
+  }, [scope])
 
   const invalidate = useCallback(() => {
     requestIdRef.current += 1

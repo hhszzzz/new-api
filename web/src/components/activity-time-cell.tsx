@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import {
@@ -37,6 +38,10 @@ interface TimestampCellProps {
 }
 
 export function TimestampCell(props: TimestampCellProps) {
+  // Rendering must stay pure, so the fallback clock is fixed when the cell
+  // mounts; callers that need it to stay current pass `now` explicitly.
+  const [mountedNow] = useState(() => Date.now())
+
   if (!props.timestamp || props.timestamp === -1) {
     return <span className='text-muted-foreground'>-</span>
   }
@@ -54,7 +59,7 @@ export function TimestampCell(props: TimestampCellProps) {
     )
   }
 
-  const now = props.now ?? Date.now()
+  const now = props.now ?? mountedNow
   const isJustNow = timestampMs <= now && now - timestampMs < 60_000
   const relativeTime = isJustNow
     ? props.justNowLabel

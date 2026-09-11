@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Code2, Copy, Eye, Plus, Trash2 } from 'lucide-react'
-import { memo, useCallback, useEffect, useMemo, useState } from 'react'
+import { memo, useCallback, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -123,15 +123,17 @@ export const ToolPriceSettings = memo(function ToolPriceSettings({
   const [jsonText, setJsonText] = useState('')
   const [jsonError, setJsonError] = useState('')
   const [nextRowId, setNextRowId] = useState(1)
+  const [prevDefaultValue, setPrevDefaultValue] = useState<string | null>(null)
 
-  useEffect(() => {
+  if (prevDefaultValue !== defaultValue) {
+    setPrevDefaultValue(defaultValue)
     const prices = parseInitialPrices(defaultValue)
     const initialRows = objectToRows(prices)
     setRows(initialRows)
     setJsonText(JSON.stringify(prices, null, 2))
     setJsonError('')
     setNextRowId(initialRows.length + 1)
-  }, [defaultValue])
+  }
 
   const currentPrices = useMemo(() => rowsToObject(rows), [rows])
   const rowsAreValid = useMemo(

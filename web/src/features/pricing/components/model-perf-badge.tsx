@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { memo, useMemo } from 'react'
+import { memo, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
@@ -118,10 +118,12 @@ export const ModelPerfBadge = memo(function ModelPerfBadge(
     Number.isFinite(successRate) &&
     successRate >= 0 &&
     successRate <= 100
+  const [currentHourStart] = useState(
+    () => Math.floor(Date.now() / 1000 / 3600) * 3600
+  )
   // Hourly points with timestamps, anchored to the client's current hour.
   // Hours without traffic stay gray. Slot 23 is the current, partial hour.
   const statusRates = useMemo(() => {
-    const currentHourStart = Math.floor(Date.now() / 1000 / 3600) * 3600
     const ratesByHour = new Map<number, number>()
     for (const point of props.perf?.recent_success_series ?? []) {
       ratesByHour.set(point.ts, point.success_rate)
@@ -130,7 +132,7 @@ export const ModelPerfBadge = memo(function ModelPerfBadge(
       const hourStart = currentHourStart - (23 - slot) * 3600
       return ratesByHour.get(hourStart)
     })
-  }, [props.perf?.recent_success_series])
+  }, [props.perf?.recent_success_series, currentHourStart])
 
   return (
     <div

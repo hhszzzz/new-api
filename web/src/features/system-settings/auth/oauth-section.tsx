@@ -283,16 +283,22 @@ export function OAuthSection(props: OAuthSectionProps) {
     defaultValues: formDefaults,
   })
 
-  const baselineRef = useRef<FlatOAuthDefaults>(props.defaultValues)
-  const baselineSerializedRef = useRef<string>(
-    JSON.stringify(props.defaultValues)
+  const [baseline, setBaseline] = useState<FlatOAuthDefaults>(
+    props.defaultValues
   )
+  const baselineSerialized = JSON.stringify(props.defaultValues)
+  const [syncedBaselineSerialized, setSyncedBaselineSerialized] =
+    useState(baselineSerialized)
+  if (syncedBaselineSerialized !== baselineSerialized) {
+    setSyncedBaselineSerialized(baselineSerialized)
+    setBaseline(props.defaultValues)
+  }
 
+  const appliedBaselineSerializedRef = useRef(baselineSerialized)
   useEffect(() => {
     const serialized = JSON.stringify(props.defaultValues)
-    if (serialized === baselineSerializedRef.current) return
-    baselineRef.current = props.defaultValues
-    baselineSerializedRef.current = serialized
+    if (serialized === appliedBaselineSerializedRef.current) return
+    appliedBaselineSerializedRef.current = serialized
     form.reset(buildFormDefaults(props.defaultValues))
   }, [props.defaultValues, form])
 
@@ -344,7 +350,7 @@ export function OAuthSection(props: OAuthSectionProps) {
     const normalized = normalizeFormValues(finalValues)
     const changedKeys = (
       Object.keys(normalized) as Array<keyof FlatOAuthDefaults>
-    ).filter((key) => normalized[key] !== baselineRef.current[key])
+    ).filter((key) => normalized[key] !== baseline[key])
 
     if (changedKeys.length === 0) {
       toast.info(t('No changes to save'))
@@ -358,13 +364,12 @@ export function OAuthSection(props: OAuthSectionProps) {
       })
     }
 
-    baselineRef.current = normalized
-    baselineSerializedRef.current = JSON.stringify(normalized)
+    setBaseline(normalized)
     form.reset(buildFormDefaults(normalized))
   }
 
   const handleReset = () => {
-    form.reset(buildFormDefaults(baselineRef.current))
+    form.reset(buildFormDefaults(baseline))
     toast.success(t('Form reset to saved values'))
   }
 

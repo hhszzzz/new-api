@@ -20,7 +20,7 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Code2, Eye, ShieldAlert } from 'lucide-react'
 import * as React from 'react'
-import { useForm, type Resolver } from 'react-hook-form'
+import { useForm, useWatch, type Resolver } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import * as z from 'zod'
@@ -233,11 +233,6 @@ export function PaymentSettingsSection({
     }),
     [defaultValues, waffoDefaultValues, waffoPancakeDefaultValues]
   )
-  const initialRef = React.useRef(initialFormValues)
-  const defaultsSignature = React.useMemo(
-    () => JSON.stringify(initialFormValues),
-    [initialFormValues]
-  )
 
   const [payMethodsVisualMode, setPayMethodsVisualMode] = React.useState(true)
   const [amountOptionsVisualMode, setAmountOptionsVisualMode] =
@@ -261,18 +256,34 @@ export function PaymentSettingsSection({
       productID: waffoPancakeProvisionedProductID ?? '',
     })
 
-  React.useEffect(() => {
+  const [prevWaffoPayMethods, setPrevWaffoPayMethods] = React.useState(
+    waffoDefaultValues.WaffoPayMethods
+  )
+  if (waffoDefaultValues.WaffoPayMethods !== prevWaffoPayMethods) {
+    setPrevWaffoPayMethods(waffoDefaultValues.WaffoPayMethods)
     setWaffoPayMethods(parseWaffoPayMethods(waffoDefaultValues.WaffoPayMethods))
-  }, [waffoDefaultValues.WaffoPayMethods])
+  }
 
-  React.useEffect(() => {
+  const [prevWaffoPancakeProvisioned, setPrevWaffoPancakeProvisioned] =
+    React.useState({
+      storeID: waffoPancakeProvisionedStoreID,
+      productID: waffoPancakeProvisionedProductID,
+    })
+  if (
+    prevWaffoPancakeProvisioned.storeID !== waffoPancakeProvisionedStoreID ||
+    prevWaffoPancakeProvisioned.productID !== waffoPancakeProvisionedProductID
+  ) {
+    setPrevWaffoPancakeProvisioned({
+      storeID: waffoPancakeProvisionedStoreID,
+      productID: waffoPancakeProvisionedProductID,
+    })
     const nextBinding = {
       storeID: waffoPancakeProvisionedStoreID ?? '',
       productID: waffoPancakeProvisionedProductID ?? '',
     }
     setWaffoPancakeSelection(nextBinding)
     setWaffoPancakeSavedBinding(nextBinding)
-  }, [waffoPancakeProvisionedProductID, waffoPancakeProvisionedStoreID])
+  }
 
   const complianceStatements = React.useMemo(
     () => [
@@ -414,16 +425,14 @@ export function PaymentSettingsSection({
   )
 
   React.useEffect(() => {
-    const parsedDefaults = JSON.parse(defaultsSignature) as PaymentFormValues
-    initialRef.current = parsedDefaults
     form.reset({
-      ...parsedDefaults,
-      PayMethods: formatJsonForEditor(parsedDefaults.PayMethods),
-      AmountOptions: formatJsonForEditor(parsedDefaults.AmountOptions),
-      AmountDiscount: formatJsonForEditor(parsedDefaults.AmountDiscount),
-      CreemProducts: formatJsonForEditor(parsedDefaults.CreemProducts),
+      ...initialFormValues,
+      PayMethods: formatJsonForEditor(initialFormValues.PayMethods),
+      AmountOptions: formatJsonForEditor(initialFormValues.AmountOptions),
+      AmountDiscount: formatJsonForEditor(initialFormValues.AmountDiscount),
+      CreemProducts: formatJsonForEditor(initialFormValues.CreemProducts),
     })
-  }, [defaultsSignature, form])
+  }, [initialFormValues, form])
 
   const onSubmit = async (values: PaymentFormValues) => {
     const sanitized = {
@@ -469,49 +478,49 @@ export function PaymentSettingsSection({
     }
 
     const initial = {
-      PayAddress: removeTrailingSlash(initialRef.current.PayAddress),
-      EpayId: initialRef.current.EpayId.trim(),
-      EpayKey: initialRef.current.EpayKey.trim(),
-      Price: initialRef.current.Price,
-      MinTopUp: initialRef.current.MinTopUp,
+      PayAddress: removeTrailingSlash(initialFormValues.PayAddress),
+      EpayId: initialFormValues.EpayId.trim(),
+      EpayKey: initialFormValues.EpayKey.trim(),
+      Price: initialFormValues.Price,
+      MinTopUp: initialFormValues.MinTopUp,
       CustomCallbackAddress: removeTrailingSlash(
-        initialRef.current.CustomCallbackAddress
+        initialFormValues.CustomCallbackAddress
       ),
-      PayMethods: initialRef.current.PayMethods.trim(),
-      AmountOptions: initialRef.current.AmountOptions.trim(),
-      AmountDiscount: initialRef.current.AmountDiscount.trim(),
-      StripeApiSecret: initialRef.current.StripeApiSecret.trim(),
-      StripeWebhookSecret: initialRef.current.StripeWebhookSecret.trim(),
-      StripePriceId: initialRef.current.StripePriceId.trim(),
-      StripeUnitPrice: initialRef.current.StripeUnitPrice,
-      StripeMinTopUp: initialRef.current.StripeMinTopUp,
+      PayMethods: initialFormValues.PayMethods.trim(),
+      AmountOptions: initialFormValues.AmountOptions.trim(),
+      AmountDiscount: initialFormValues.AmountDiscount.trim(),
+      StripeApiSecret: initialFormValues.StripeApiSecret.trim(),
+      StripeWebhookSecret: initialFormValues.StripeWebhookSecret.trim(),
+      StripePriceId: initialFormValues.StripePriceId.trim(),
+      StripeUnitPrice: initialFormValues.StripeUnitPrice,
+      StripeMinTopUp: initialFormValues.StripeMinTopUp,
       StripePromotionCodesEnabled:
-        initialRef.current.StripePromotionCodesEnabled,
-      CreemApiKey: initialRef.current.CreemApiKey.trim(),
-      CreemWebhookSecret: initialRef.current.CreemWebhookSecret.trim(),
-      CreemTestMode: initialRef.current.CreemTestMode,
-      CreemProducts: initialRef.current.CreemProducts.trim(),
-      WaffoEnabled: initialRef.current.WaffoEnabled,
-      WaffoSandbox: initialRef.current.WaffoSandbox,
-      WaffoMerchantId: initialRef.current.WaffoMerchantId.trim(),
-      WaffoCurrency: initialRef.current.WaffoCurrency.trim() || 'USD',
-      WaffoUnitPrice: initialRef.current.WaffoUnitPrice,
-      WaffoMinTopUp: initialRef.current.WaffoMinTopUp,
-      WaffoNotifyUrl: initialRef.current.WaffoNotifyUrl.trim(),
-      WaffoReturnUrl: initialRef.current.WaffoReturnUrl.trim(),
-      WaffoPublicCert: initialRef.current.WaffoPublicCert.trim(),
-      WaffoSandboxPublicCert: initialRef.current.WaffoSandboxPublicCert.trim(),
-      WaffoApiKey: initialRef.current.WaffoApiKey.trim(),
-      WaffoPrivateKey: initialRef.current.WaffoPrivateKey.trim(),
-      WaffoSandboxApiKey: initialRef.current.WaffoSandboxApiKey.trim(),
-      WaffoSandboxPrivateKey: initialRef.current.WaffoSandboxPrivateKey.trim(),
+        initialFormValues.StripePromotionCodesEnabled,
+      CreemApiKey: initialFormValues.CreemApiKey.trim(),
+      CreemWebhookSecret: initialFormValues.CreemWebhookSecret.trim(),
+      CreemTestMode: initialFormValues.CreemTestMode,
+      CreemProducts: initialFormValues.CreemProducts.trim(),
+      WaffoEnabled: initialFormValues.WaffoEnabled,
+      WaffoSandbox: initialFormValues.WaffoSandbox,
+      WaffoMerchantId: initialFormValues.WaffoMerchantId.trim(),
+      WaffoCurrency: initialFormValues.WaffoCurrency.trim() || 'USD',
+      WaffoUnitPrice: initialFormValues.WaffoUnitPrice,
+      WaffoMinTopUp: initialFormValues.WaffoMinTopUp,
+      WaffoNotifyUrl: initialFormValues.WaffoNotifyUrl.trim(),
+      WaffoReturnUrl: initialFormValues.WaffoReturnUrl.trim(),
+      WaffoPublicCert: initialFormValues.WaffoPublicCert.trim(),
+      WaffoSandboxPublicCert: initialFormValues.WaffoSandboxPublicCert.trim(),
+      WaffoApiKey: initialFormValues.WaffoApiKey.trim(),
+      WaffoPrivateKey: initialFormValues.WaffoPrivateKey.trim(),
+      WaffoSandboxApiKey: initialFormValues.WaffoSandboxApiKey.trim(),
+      WaffoSandboxPrivateKey: initialFormValues.WaffoSandboxPrivateKey.trim(),
       WaffoPayMethods: JSON.stringify(
         parseWaffoPayMethods(waffoDefaultValues.WaffoPayMethods)
       ),
-      WaffoPancakeMerchantID: initialRef.current.WaffoPancakeMerchantID.trim(),
-      WaffoPancakePrivateKey: initialRef.current.WaffoPancakePrivateKey.trim(),
+      WaffoPancakeMerchantID: initialFormValues.WaffoPancakeMerchantID.trim(),
+      WaffoPancakePrivateKey: initialFormValues.WaffoPancakePrivateKey.trim(),
       WaffoPancakeReturnURL: removeTrailingSlash(
-        initialRef.current.WaffoPancakeReturnURL.trim()
+        initialFormValues.WaffoPancakeReturnURL.trim()
       ),
     }
 
@@ -782,7 +791,11 @@ export function PaymentSettingsSection({
     }
   }
 
-  const currentFormValues = form.watch()
+  // useWatch types whole-form values as partial; every field has a default in
+  // initialFormValues, so the watched values are complete at runtime.
+  const currentFormValues = useWatch({
+    control: form.control,
+  }) as PaymentFormValues
   const waffoValues: WaffoSettingsValues = {
     WaffoEnabled: currentFormValues.WaffoEnabled,
     WaffoApiKey: currentFormValues.WaffoApiKey,

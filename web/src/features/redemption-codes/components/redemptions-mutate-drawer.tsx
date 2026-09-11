@@ -114,31 +114,40 @@ export function RedemptionsMutateDrawer({
     defaultValues: REDEMPTION_FORM_DEFAULT_VALUES,
   })
 
+  const submitKey = `${open ? 'open' : 'closed'}:${redemptionId ?? ''}`
+  const [prevSubmitKey, setPrevSubmitKey] = useState(submitKey)
+  if (prevSubmitKey !== submitKey) {
+    setPrevSubmitKey(submitKey)
+    setIsSubmitting(false)
+  }
+
   useEffect(() => {
     invalidateSubmitTask()
-    setIsSubmitting(false)
   }, [redemptionId, invalidateSubmitTask, open])
 
-  // Load existing data when updating
-  useEffect(() => {
+  const loadKey = `${open ? 'open' : 'closed'}:${isUpdate ? 'update' : 'create'}:${redemptionId ?? ''}`
+  const [prevLoadKey, setPrevLoadKey] = useState<string | null>(null)
+  if (prevLoadKey !== loadKey) {
+    setPrevLoadKey(loadKey)
     if (!open) {
       setRedemptionLoadState('idle')
       setLoadedRedemption(null)
-      return
-    }
-
-    if (!isUpdate || redemptionId === undefined) {
+    } else if (!isUpdate || redemptionId === undefined) {
       form.reset(REDEMPTION_FORM_DEFAULT_VALUES)
       setRedemptionLoadState('ready')
       setLoadedRedemption(null)
-      return
+    } else {
+      form.reset(REDEMPTION_FORM_DEFAULT_VALUES)
+      setRedemptionLoadState('loading')
+      setLoadedRedemption(null)
     }
+  }
+
+  // Load existing data when updating
+  useEffect(() => {
+    if (!open || !isUpdate || redemptionId === undefined) return
 
     let ignoreResult = false
-
-    form.reset(REDEMPTION_FORM_DEFAULT_VALUES)
-    setRedemptionLoadState('loading')
-    setLoadedRedemption(null)
 
     void getRedemption(redemptionId)
       .then((result) => {

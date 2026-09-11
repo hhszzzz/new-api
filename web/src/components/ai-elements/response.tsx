@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 'use client'
 
-import { memo, useLayoutEffect, useMemo, useRef } from 'react'
+import { memo, useLayoutEffect, useMemo, useState } from 'react'
 import { getMarkdown, parseMarkdownToStructure } from 'stream-markdown-parser'
 
 import { cn } from '@/lib/utils'
@@ -31,7 +31,6 @@ import {
   FADE_HYDRATION_THRESHOLD,
   stageRun,
   type FadeRun,
-  type FadeState,
 } from './response-fade'
 import { renderChildren, renderFootnotes } from './response-renderer'
 import type { ResponseProps } from './response-types'
@@ -65,10 +64,8 @@ export const Response = memo((props: ResponseProps) => {
   // re-parsing a growing multi-megabyte payload on every chunk.
   const shouldParseMarkdown =
     !isOversized || (isFinal && /data:image\//i.test(content))
-  const fadeStateRef = useRef<FadeState | null>(null)
-  if (fadeStateRef.current == null) {
-    fadeStateRef.current = createFadeState()
-  }
+  // Holds mutable render-phase fade bookkeeping for the lifetime of the mount.
+  const [fadeState] = useState(createFadeState)
 
   const nodes = useMemo(() => {
     if (!shouldParseMarkdown) {
@@ -88,7 +85,6 @@ export const Response = memo((props: ResponseProps) => {
 
   if (parsedContent.bodyNodes.length > 0) {
     if (shouldAnimate) {
-      const fadeState = fadeStateRef.current
       const suppress =
         fadeState.firstRun && content.length > FADE_HYDRATION_THRESHOLD
       fadeRun = beginRun(fadeState, suppress)
@@ -106,10 +102,6 @@ export const Response = memo((props: ResponseProps) => {
 
   useLayoutEffect(() => {
     if (!shouldAnimate) {
-      return
-    }
-    const fadeState = fadeStateRef.current
-    if (fadeState == null) {
       return
     }
     commitRun(fadeState)

@@ -163,6 +163,22 @@ type RatioSettingsCardProps = {
   visibleTabs?: RatioTabId[]
 }
 
+function normalizeModelDefaults(defaults: ModelFormValues) {
+  return {
+    ModelPrice: normalizeJsonString(defaults.ModelPrice),
+    ModelRatio: normalizeJsonString(defaults.ModelRatio),
+    CacheRatio: normalizeJsonString(defaults.CacheRatio),
+    CreateCacheRatio: normalizeJsonString(defaults.CreateCacheRatio),
+    CompletionRatio: normalizeJsonString(defaults.CompletionRatio),
+    ImageRatio: normalizeJsonString(defaults.ImageRatio),
+    AudioRatio: normalizeJsonString(defaults.AudioRatio),
+    AudioCompletionRatio: normalizeJsonString(defaults.AudioCompletionRatio),
+    ExposeRatioEnabled: defaults.ExposeRatioEnabled,
+    BillingMode: normalizeJsonString(defaults.BillingMode),
+    BillingExpr: normalizeJsonString(defaults.BillingExpr),
+  }
+}
+
 export function RatioSettingsCard({
   modelDefaults: initialModelDefaults,
   groupDefaults,
@@ -178,11 +194,9 @@ export function RatioSettingsCard({
   const savePricing = useSaveModelPricing()
   const [pricingBaseline, setPricingBaseline] =
     useState<ModelPricingConfig | null>(null)
-  useEffect(() => {
-    if (!pricingBaseline && pricingQuery.data) {
-      setPricingBaseline(pricingQuery.data)
-    }
-  }, [pricingBaseline, pricingQuery.data])
+  if (!pricingBaseline && pricingQuery.data) {
+    setPricingBaseline(pricingQuery.data)
+  }
   const modelDefaults = useMemo(
     () =>
       pricingBaseline
@@ -218,23 +232,9 @@ export function RatioSettingsCard({
     onError: (error) => handleServerError(error),
   })
 
-  const modelNormalizedDefaults = useRef({
-    ModelPrice: normalizeJsonString(modelDefaults.ModelPrice),
-    ModelRatio: normalizeJsonString(modelDefaults.ModelRatio),
-    CacheRatio: normalizeJsonString(modelDefaults.CacheRatio),
-    CreateCacheRatio: normalizeJsonString(modelDefaults.CreateCacheRatio),
-    CompletionRatio: normalizeJsonString(modelDefaults.CompletionRatio),
-    ImageRatio: normalizeJsonString(modelDefaults.ImageRatio),
-    AudioRatio: normalizeJsonString(modelDefaults.AudioRatio),
-    AudioCompletionRatio: normalizeJsonString(
-      modelDefaults.AudioCompletionRatio
-    ),
-    ExposeRatioEnabled: modelDefaults.ExposeRatioEnabled,
-    BillingMode: normalizeJsonString(modelDefaults.BillingMode),
-    BillingExpr: normalizeJsonString(modelDefaults.BillingExpr),
-  })
-  const [savedModelValues, setSavedModelValues] = useState(
-    modelNormalizedDefaults.current
+  const modelNormalizedDefaults = useRef(normalizeModelDefaults(modelDefaults))
+  const [savedModelValues, setSavedModelValues] = useState(() =>
+    normalizeModelDefaults(modelDefaults)
   )
 
   const groupNormalizedDefaults = useRef({

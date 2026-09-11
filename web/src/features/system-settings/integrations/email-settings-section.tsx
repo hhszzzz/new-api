@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useForm } from 'react-hook-form'
+import { useForm, useWatch } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import * as z from 'zod'
 
@@ -96,6 +96,15 @@ export function EmailSettingsSection({
   })
 
   useResetForm(form, defaultValues)
+
+  const smtpSslEnabled = useWatch({
+    control: form.control,
+    name: 'SMTPSSLEnabled',
+  })
+  const smtpStartTlsEnabled = useWatch({
+    control: form.control,
+    name: 'SMTPStartTLSEnabled',
+  })
 
   const onSubmit = async (values: EmailFormValues) => {
     const securityMode = getSmtpSecurityMode(values)
@@ -238,8 +247,8 @@ export function EmailSettingsSection({
               <FormControl>
                 <RadioGroup
                   value={getSmtpSecurityMode({
-                    SMTPSSLEnabled: form.watch('SMTPSSLEnabled'),
-                    SMTPStartTLSEnabled: form.watch('SMTPStartTLSEnabled'),
+                    SMTPSSLEnabled: smtpSslEnabled,
+                    SMTPStartTLSEnabled: smtpStartTlsEnabled,
                   })}
                   onValueChange={(value) => {
                     const mode = value as SmtpSecurityMode

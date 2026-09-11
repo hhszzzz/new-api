@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -70,45 +70,41 @@ export function UserBatchRouteDialog(props: UserBatchRouteDialogProps) {
     staleTime: 60 * 1000,
   })
   const debouncedTargetModel = useDebounce(targetModel.trim(), 350)
+  const candidateData =
+    candidatesQuery.data?.success === true
+      ? candidatesQuery.data.data
+      : undefined
+  const availableExecutionGroups = useMemo(
+    () => candidateData?.execution_groups ?? [],
+    [candidateData?.execution_groups]
+  )
+  const effectiveExecutionGroups =
+    selectedExecutionGroups.length === 0 && availableExecutionGroups.length > 0
+      ? [availableExecutionGroups[0]]
+      : selectedExecutionGroups
+
   const channelsQuery = useQuery({
     queryKey: [
       'user-model-route-candidate-channels',
       anchorUserId,
       debouncedTargetModel,
-      selectedExecutionGroups,
+      effectiveExecutionGroups,
     ],
     queryFn: () =>
       getUserModelRouteCandidates(anchorUserId as number, {
         target_model: debouncedTargetModel,
-        execution_groups: selectedExecutionGroups.join(','),
+        execution_groups: effectiveExecutionGroups.join(','),
       }),
     enabled:
       props.open &&
       anchorUserId !== null &&
       debouncedTargetModel.length > 0 &&
-      selectedExecutionGroups.length > 0,
+      effectiveExecutionGroups.length > 0,
     staleTime: 30 * 1000,
   })
 
-  const candidateData =
-    candidatesQuery.data?.success === true
-      ? candidatesQuery.data.data
-      : undefined
   const channelData =
     channelsQuery.data?.success === true ? channelsQuery.data.data : undefined
-
-  const availableExecutionGroups = useMemo(
-    () => candidateData?.execution_groups ?? [],
-    [candidateData?.execution_groups]
-  )
-  useEffect(() => {
-    if (
-      selectedExecutionGroups.length === 0 &&
-      availableExecutionGroups.length > 0
-    ) {
-      setSelectedExecutionGroups([availableExecutionGroups[0]])
-    }
-  }, [availableExecutionGroups, selectedExecutionGroups.length])
 
   const sourceModelOptions = useMemo(
     () =>
@@ -172,7 +168,7 @@ export function UserBatchRouteDialog(props: UserBatchRouteDialogProps) {
       toast.error(t('Source and target models are required'))
       return
     }
-    if (selectedExecutionGroups.length === 0) {
+    if (effectiveExecutionGroups.length === 0) {
       toast.error(t('Select at least one execution group'))
       return
     }
@@ -195,8 +191,8 @@ export function UserBatchRouteDialog(props: UserBatchRouteDialogProps) {
         target_model: targetModel.trim(),
         pool_name: '',
         inject_prompt: injectPrompt.trim(),
-        execution_group: selectedExecutionGroups[0],
-        execution_groups: selectedExecutionGroups,
+        execution_group: effectiveExecutionGroups[0],
+        execution_groups: effectiveExecutionGroups,
         all_groups: allGroups,
         groups: allGroups ? [] : groups,
         channel_ids: channelIds.map(Number).filter((id) => id > 0),
@@ -280,7 +276,7 @@ export function UserBatchRouteDialog(props: UserBatchRouteDialogProps) {
           <MultiSelect
             id='batch-route-execution-groups'
             options={executionGroupOptions}
-            selected={selectedExecutionGroups}
+            selected={effectiveExecutionGroups}
             onChange={setSelectedExecutionGroups}
             placeholder={t('Select execution groups')}
             maxVisibleChips={5}
@@ -316,7 +312,7 @@ export function UserBatchRouteDialog(props: UserBatchRouteDialogProps) {
             selected={channelIds}
             onChange={setChannelIds}
             placeholder={
-              debouncedTargetModel && selectedExecutionGroups.length > 0
+              debouncedTargetModel && effectiveExecutionGroups.length > 0
                 ? t('Select at least one channel')
                 : t('Pick a target model and execution groups first')
             }

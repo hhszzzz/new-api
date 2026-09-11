@@ -27,7 +27,7 @@ import {
   useRef,
   useState,
 } from 'react'
-import { type FieldErrors, useForm } from 'react-hook-form'
+import { type FieldErrors, useForm, useWatch } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -243,6 +243,14 @@ function getFirstFormError(
   return undefined
 }
 
+function useLatestValue<T>(value: T): () => T {
+  const ref = useRef(value)
+  useEffect(() => {
+    ref.current = value
+  }, [value])
+  return useCallback(() => ref.current, [])
+}
+
 export function ChannelBatchEditDialog(props: ChannelBatchEditDialogProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
@@ -256,49 +264,109 @@ export function ChannelBatchEditDialog(props: ChannelBatchEditDialogProps) {
     defaultValues: CHANNEL_BATCH_EDIT_DEFAULT_VALUES,
   })
 
-  const targetMode = form.watch('targetMode')
-  const applyGroup = form.watch('applyGroup')
-  const applyPriority = form.watch('applyPriority')
-  const applyWeight = form.watch('applyWeight')
-  const rpmLimitMode = form.watch('rpmLimitMode')
-  const rpmLimitValue = form.watch('rpmLimitValue')
-  const concurrencyLimitMode = form.watch('concurrencyLimitMode')
-  const concurrencyLimitValue = form.watch('concurrencyLimitValue')
-  const applyTag = form.watch('applyTag')
-  const applyModels = form.watch('applyModels')
-  const applyModelMapping = form.watch('applyModelMapping')
-  const applyAutoBan = form.watch('applyAutoBan')
-  const applyDisableModelOnError = form.watch('applyDisableModelOnError')
-  const disableModelOnError = form.watch('disableModelOnError')
-  const applyTestModel = form.watch('applyTestModel')
-  const applyRemark = form.watch('applyRemark')
-  const applyStartsAt = form.watch('applyStartsAt')
-  const applyExpiresAt = form.watch('applyExpiresAt')
-  const applyPausedUntil = form.watch('applyPausedUntil')
-  const applyWeeklySchedule = form.watch('applyWeeklySchedule')
-  const applyClientPolicy = form.watch('applyClientPolicy')
-  const clientPolicyMode = form.watch('clientPolicyMode')
-  const clientPolicyClients = form.watch('clientPolicyClients')
-  const applyUpstreamModelUpdateCheckEnabled = form.watch(
-    'applyUpstreamModelUpdateCheckEnabled'
-  )
-  const upstreamModelUpdateCheckEnabled = form.watch(
-    'upstreamModelUpdateCheckEnabled'
-  )
-  const applyUpstreamModelUpdateAutoSyncEnabled = form.watch(
-    'applyUpstreamModelUpdateAutoSyncEnabled'
-  )
-  const upstreamModelUpdateAutoSyncEnabled = form.watch(
-    'upstreamModelUpdateAutoSyncEnabled'
-  )
-  const applyUpstreamModelUpdateIgnoredModels = form.watch(
-    'applyUpstreamModelUpdateIgnoredModels'
-  )
-  const weeklyEnabled = form.watch('weeklyEnabled')
-  const weeklyWindows = form.watch('weeklyWindows')
-  const autoBan = form.watch('autoBan')
-  const groupValues = form.watch('groupValues')
-  const modelValues = form.watch('modelValues')
+  const formControl = form.control
+
+  const targetMode = useWatch({ control: formControl, name: 'targetMode' })
+  const applyGroup = useWatch({ control: formControl, name: 'applyGroup' })
+  const applyPriority = useWatch({
+    control: formControl,
+    name: 'applyPriority',
+  })
+  const applyWeight = useWatch({ control: formControl, name: 'applyWeight' })
+  const rpmLimitMode = useWatch({ control: formControl, name: 'rpmLimitMode' })
+  const rpmLimitValue = useWatch({
+    control: formControl,
+    name: 'rpmLimitValue',
+  })
+  const concurrencyLimitMode = useWatch({
+    control: formControl,
+    name: 'concurrencyLimitMode',
+  })
+  const concurrencyLimitValue = useWatch({
+    control: formControl,
+    name: 'concurrencyLimitValue',
+  })
+  const applyTag = useWatch({ control: formControl, name: 'applyTag' })
+  const applyModels = useWatch({ control: formControl, name: 'applyModels' })
+  const applyModelMapping = useWatch({
+    control: formControl,
+    name: 'applyModelMapping',
+  })
+  const applyAutoBan = useWatch({ control: formControl, name: 'applyAutoBan' })
+  const applyDisableModelOnError = useWatch({
+    control: formControl,
+    name: 'applyDisableModelOnError',
+  })
+  const disableModelOnError = useWatch({
+    control: formControl,
+    name: 'disableModelOnError',
+  })
+  const applyTestModel = useWatch({
+    control: formControl,
+    name: 'applyTestModel',
+  })
+  const applyRemark = useWatch({ control: formControl, name: 'applyRemark' })
+  const applyStartsAt = useWatch({
+    control: formControl,
+    name: 'applyStartsAt',
+  })
+  const applyExpiresAt = useWatch({
+    control: formControl,
+    name: 'applyExpiresAt',
+  })
+  const applyPausedUntil = useWatch({
+    control: formControl,
+    name: 'applyPausedUntil',
+  })
+  const applyWeeklySchedule = useWatch({
+    control: formControl,
+    name: 'applyWeeklySchedule',
+  })
+  const applyClientPolicy = useWatch({
+    control: formControl,
+    name: 'applyClientPolicy',
+  })
+  const clientPolicyMode = useWatch({
+    control: formControl,
+    name: 'clientPolicyMode',
+  })
+  const clientPolicyClients = useWatch({
+    control: formControl,
+    name: 'clientPolicyClients',
+  })
+  const applyUpstreamModelUpdateCheckEnabled = useWatch({
+    control: formControl,
+    name: 'applyUpstreamModelUpdateCheckEnabled',
+  })
+  const upstreamModelUpdateCheckEnabled = useWatch({
+    control: formControl,
+    name: 'upstreamModelUpdateCheckEnabled',
+  })
+  const applyUpstreamModelUpdateAutoSyncEnabled = useWatch({
+    control: formControl,
+    name: 'applyUpstreamModelUpdateAutoSyncEnabled',
+  })
+  const upstreamModelUpdateAutoSyncEnabled = useWatch({
+    control: formControl,
+    name: 'upstreamModelUpdateAutoSyncEnabled',
+  })
+  const applyUpstreamModelUpdateIgnoredModels = useWatch({
+    control: formControl,
+    name: 'applyUpstreamModelUpdateIgnoredModels',
+  })
+  const weeklyEnabled = useWatch({
+    control: formControl,
+    name: 'weeklyEnabled',
+  })
+  const weeklyWindows = useWatch({
+    control: formControl,
+    name: 'weeklyWindows',
+  })
+  const autoBan = useWatch({ control: formControl, name: 'autoBan' })
+  const groupValues = useWatch({ control: formControl, name: 'groupValues' })
+  const modelValues = useWatch({ control: formControl, name: 'modelValues' })
+  const groupMode = useWatch({ control: formControl, name: 'groupMode' })
+  const modelsMode = useWatch({ control: formControl, name: 'modelsMode' })
 
   const groupQuery = useQuery({
     queryKey: ['groups'],
@@ -360,19 +428,17 @@ export function ChannelBatchEditDialog(props: ChannelBatchEditDialogProps) {
     }) => batchUpdateChannels(request.target, request.updates),
   })
 
-  const previewMutationRef = useRef(previewMutation)
-  const translateRef = useRef(t)
-  previewMutationRef.current = previewMutation
-  translateRef.current = t
+  const getPreviewMutation = useLatestValue(previewMutation)
+  const getTranslate = useLatestValue(t)
 
   const loadPreview = useCallback(async (): Promise<void> => {
     const isCurrent = beginPreviewTask()
     try {
-      const response = await previewMutationRef.current.mutateAsync()
+      const response = await getPreviewMutation().mutateAsync()
       if (!isCurrent()) return
       if (!response.success || !response.data) {
         throw new Error(
-          response.message || translateRef.current('Failed to preview channels')
+          response.message || getTranslate()('Failed to preview channels')
         )
       }
       setPreview(response.data)
@@ -381,13 +447,25 @@ export function ChannelBatchEditDialog(props: ChannelBatchEditDialogProps) {
       setPreview(null)
       toast.error(
         getApiErrorMessage(error) ||
-          translateRef.current('Failed to preview channels')
+          getTranslate()('Failed to preview channels')
       )
     }
-  }, [beginPreviewTask])
+  }, [beginPreviewTask, getPreviewMutation, getTranslate])
 
   const initialTargetMode =
     props.selectedIds.length > 0 ? 'selected' : 'filtered'
+  const previewResetScope = JSON.stringify([
+    props.open,
+    selectedIdsKey,
+    filterKey,
+    initialTargetMode,
+  ])
+  const [syncedPreviewResetScope, setSyncedPreviewResetScope] =
+    useState(previewResetScope)
+  if (syncedPreviewResetScope !== previewResetScope) {
+    setSyncedPreviewResetScope(previewResetScope)
+    setPreview(null)
+  }
 
   useEffect(() => {
     invalidatePreviewTask()
@@ -397,8 +475,9 @@ export function ChannelBatchEditDialog(props: ChannelBatchEditDialogProps) {
       ...CHANNEL_BATCH_EDIT_DEFAULT_VALUES,
       targetMode: initialTargetMode,
     })
-    setPreview(null)
-    if (initialTargetMode === 'filtered') void loadPreview()
+    if (initialTargetMode === 'filtered') {
+      void Promise.resolve().then(() => loadPreview())
+    }
   }, [
     filterKey,
     form,
@@ -608,7 +687,7 @@ export function ChannelBatchEditDialog(props: ChannelBatchEditDialogProps) {
             >
               <div className='grid gap-2 sm:grid-cols-[auto_minmax(0,1fr)]'>
                 <ListModeControl
-                  value={form.watch('groupMode')}
+                  value={groupMode}
                   onChange={(value) => form.setValue('groupMode', value)}
                 />
                 <div className='min-w-0'>
@@ -682,7 +761,7 @@ export function ChannelBatchEditDialog(props: ChannelBatchEditDialogProps) {
             >
               <div className='grid gap-2 sm:grid-cols-[auto_minmax(0,1fr)]'>
                 <ListModeControl
-                  value={form.watch('modelsMode')}
+                  value={modelsMode}
                   onChange={(value) => form.setValue('modelsMode', value)}
                 />
                 <div className='min-w-0'>

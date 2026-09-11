@@ -43,14 +43,22 @@ export function useOAuthLogin(
   redirectTo?: string
 ) {
   const { t } = useTranslation()
+  const continueLabel = t('Continue with GitHub')
   const [isLoading, setIsLoading] = useState(false)
-  const [githubButtonText, setGithubButtonText] = useState('')
+  const [githubButtonText, setGithubButtonText] = useState(continueLabel)
   const [githubButtonDisabled, setGithubButtonDisabled] = useState(false)
+  const [prevContinueLabel, setPrevContinueLabel] = useState(continueLabel)
   const githubTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
-  useEffect(() => {
-    setGithubButtonText(t('Continue with GitHub'))
+  // Keep the idle button label in the active language. Comparing the rendered
+  // label (not the t function) avoids treating the function as a lazy state
+  // initializer, which React would invoke.
+  if (continueLabel !== prevContinueLabel) {
+    setPrevContinueLabel(continueLabel)
+    setGithubButtonText(continueLabel)
+  }
 
+  useEffect(() => {
     return () => {
       if (githubTimeoutRef.current) {
         clearTimeout(githubTimeoutRef.current)

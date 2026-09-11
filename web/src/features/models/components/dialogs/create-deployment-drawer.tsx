@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo } from 'react'
-import { useForm } from 'react-hook-form'
+import { useForm, useWatch } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { z } from 'zod'
@@ -134,14 +134,32 @@ export function CreateDeploymentDrawer({
     },
   })
 
-  const hardwareId = form.watch('hardware_id')
-  const gpuCount = toNumber(form.watch('gpus_per_container'), 1)
-  const locationIds = form.watch('location_ids')
-  const durationHours = toNumber(form.watch('duration_hours'), 1)
-  const replicaCount = toNumber(form.watch('replica_count'), 1)
-  const trafficPort = toNumber(form.watch('traffic_port'), DEFAULT_TRAFFIC_PORT)
-  const currency = form.watch('currency')
-  const resourceName = form.watch('resource_private_name')
+  const hardwareId = useWatch({ control: form.control, name: 'hardware_id' })
+  const gpuCount = toNumber(
+    useWatch({ control: form.control, name: 'gpus_per_container' }),
+    1
+  )
+  const locationIds = useWatch({
+    control: form.control,
+    name: 'location_ids',
+  })
+  const durationHours = toNumber(
+    useWatch({ control: form.control, name: 'duration_hours' }),
+    1
+  )
+  const replicaCount = toNumber(
+    useWatch({ control: form.control, name: 'replica_count' }),
+    1
+  )
+  const trafficPort = toNumber(
+    useWatch({ control: form.control, name: 'traffic_port' }),
+    DEFAULT_TRAFFIC_PORT
+  )
+  const currency = useWatch({ control: form.control, name: 'currency' })
+  const resourceName = useWatch({
+    control: form.control,
+    name: 'resource_private_name',
+  })
 
   const { data: hardwareTypesData, isLoading: isLoadingHardware } = useQuery({
     queryKey: ['deployment-hardware-types'],

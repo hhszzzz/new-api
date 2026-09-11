@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Crown, CalendarClock, Package } from 'lucide-react'
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -67,14 +67,22 @@ export function SubscriptionPurchaseDialog(props: Props) {
   const { currency } = useSystemConfig()
   const [paying, setPaying] = useState(false)
   const [selectedEpayMethod, setSelectedEpayMethod] = useState('')
+  const [epaySource, setEpaySource] = useState({
+    open: props.open,
+    epayMethods: props.epayMethods,
+  })
 
-  useEffect(() => {
+  if (
+    epaySource.open !== props.open ||
+    epaySource.epayMethods !== props.epayMethods
+  ) {
+    setEpaySource({ open: props.open, epayMethods: props.epayMethods })
     if (props.open && props.epayMethods && props.epayMethods.length > 0) {
       setSelectedEpayMethod(props.epayMethods[0].type)
     } else if (!props.open) {
       setSelectedEpayMethod('')
     }
-  }, [props.open, props.epayMethods])
+  }
 
   const plan = props.plan?.plan
   if (!plan) return null

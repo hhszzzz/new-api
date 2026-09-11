@@ -17,8 +17,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useEffect, useMemo, useRef } from 'react'
-import { useForm } from 'react-hook-form'
+import { useEffect, useMemo, useState } from 'react'
+import { useForm, useWatch } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import * as z from 'zod'
@@ -160,9 +160,15 @@ const isEqual = (a: unknown, b: unknown) => {
 export function SSRFSection({ defaultValues }: SSRFSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
-  const baselineRef = useRef<NormalizedSSRFValues>(
+  const [baseline, setBaseline] = useState(() =>
     normalizeDefaults(defaultValues)
   )
+  const [baselineSource, setBaselineSource] = useState(defaultValues)
+
+  if (baselineSource !== defaultValues) {
+    setBaselineSource(defaultValues)
+    setBaseline(normalizeDefaults(defaultValues))
+  }
 
   const formDefaults = useMemo(
     () => buildFormDefaults(defaultValues),
@@ -175,7 +181,6 @@ export function SSRFSection({ defaultValues }: SSRFSectionProps) {
   })
 
   useEffect(() => {
-    baselineRef.current = normalizeDefaults(defaultValues)
     form.reset(buildFormDefaults(defaultValues))
   }, [defaultValues, form])
 
@@ -183,7 +188,7 @@ export function SSRFSection({ defaultValues }: SSRFSectionProps) {
     const normalized = normalizeFormValues(data)
     const updates = (
       Object.keys(normalized) as Array<keyof NormalizedSSRFValues>
-    ).filter((key) => !isEqual(normalized[key], baselineRef.current[key]))
+    ).filter((key) => !isEqual(normalized[key], baseline[key]))
 
     if (updates.length === 0) {
       toast.info(t('No changes to save'))
@@ -198,11 +203,17 @@ export function SSRFSection({ defaultValues }: SSRFSectionProps) {
       })
     }
 
-    baselineRef.current = normalized
+    setBaseline(normalized)
   }
 
-  const domainFilterMode = form.watch('fetch_setting.domain_filter_mode')
-  const ipFilterMode = form.watch('fetch_setting.ip_filter_mode')
+  const domainFilterMode = useWatch({
+    control: form.control,
+    name: 'fetch_setting.domain_filter_mode',
+  })
+  const ipFilterMode = useWatch({
+    control: form.control,
+    name: 'fetch_setting.ip_filter_mode',
+  })
 
   return (
     <SettingsSection title={t('SSRF Protection')}>

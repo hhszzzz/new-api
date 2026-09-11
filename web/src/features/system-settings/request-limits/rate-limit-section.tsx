@@ -20,7 +20,7 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Code2, Palette } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { useForm } from 'react-hook-form'
+import { useForm, useWatch } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import * as z from 'zod'
@@ -232,8 +232,16 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
     await saveRateLimits.mutateAsync(values)
   }
 
-  const requestCounts = form.watch('ModelRequestRateLimitGroup') ?? '{}'
-  const policies = form.watch('group_rate_limit_setting.policies') ?? '{}'
+  const requestCounts =
+    useWatch({
+      control: form.control,
+      name: 'ModelRequestRateLimitGroup',
+    }) ?? '{}'
+  const policies =
+    useWatch({
+      control: form.control,
+      name: 'group_rate_limit_setting.policies',
+    }) ?? '{}'
 
   return (
     <SettingsSection title={t('Rate Limiting')}>

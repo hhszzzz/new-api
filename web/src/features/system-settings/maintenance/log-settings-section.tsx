@@ -184,7 +184,10 @@ export function LogSettingsSection({
   }, [defaultEnabled, form])
 
   useEffect(() => {
-    fetchServerLogInfo()
+    const init = async () => {
+      await fetchServerLogInfo()
+    }
+    void init()
   }, [fetchServerLogInfo])
 
   useEffect(() => {

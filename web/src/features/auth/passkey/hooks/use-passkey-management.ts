@@ -67,7 +67,7 @@ export function usePasskeyManagement() {
 
   useEffect(() => {
     mounted.current = true
-    void fetchStatus()
+    void Promise.resolve().then(() => fetchStatus())
     void isPasskeySupported().then((value) => {
       if (mounted.current) setSupported(value)
     })

@@ -42,7 +42,6 @@ export function useAffiliate() {
   // Fetch affiliate code
   const fetchAffiliateCode = useCallback(async () => {
     try {
-      setLoading(true)
       const response = requireServerSuccess(await getAffiliateCode())
 
       if (response.success && response.data) {
@@ -84,8 +83,16 @@ export function useAffiliate() {
     }
   }, [])
 
+  const refetch = useCallback(async () => {
+    setLoading(true)
+    await fetchAffiliateCode()
+  }, [fetchAffiliateCode])
+
   useEffect(() => {
-    fetchAffiliateCode()
+    const load = async () => {
+      await fetchAffiliateCode()
+    }
+    void load()
   }, [fetchAffiliateCode])
 
   return {
@@ -95,6 +102,6 @@ export function useAffiliate() {
     transferring,
     copyAffiliateLink,
     transferQuota,
-    refetch: fetchAffiliateCode,
+    refetch,
   }
 }

@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Plus, Trash2, Save } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -89,11 +89,28 @@ type UptimeKumaFormValues = z.infer<ReturnType<typeof createUptimeKumaSchema>>
 
 const UPTIME_KUMA_FORM_ID = 'uptime-kuma-form'
 
+function parseGroups(data: string): UptimeKumaGroup[] {
+  try {
+    const parsed = JSON.parse(data || '[]')
+    if (!Array.isArray(parsed)) {
+      return []
+    }
+    return parsed.map((item, idx) => ({
+      ...item,
+      id: item.id || idx + 1,
+    }))
+  } catch {
+    return []
+  }
+}
+
 export function UptimeKumaSection({ enabled, data }: UptimeKumaSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
   const uptimeKumaSchema = createUptimeKumaSchema(t)
-  const [groups, setGroups] = useState<UptimeKumaGroup[]>([])
+  const [groups, setGroups] = useState<UptimeKumaGroup[]>(() =>
+    parseGroups(data)
+  )
   const [isEnabled, setIsEnabled] = useState(enabled)
   const [hasChanges, setHasChanges] = useState(false)
   const [selectedIds, setSelectedIds] = useState<number[]>([])
@@ -101,6 +118,18 @@ export function UptimeKumaSection({ enabled, data }: UptimeKumaSectionProps) {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [editingGroup, setEditingGroup] = useState<UptimeKumaGroup | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<'single' | 'batch'>('single')
+  const [prevData, setPrevData] = useState(data)
+  const [prevEnabled, setPrevEnabled] = useState(enabled)
+
+  if (data !== prevData) {
+    setPrevData(data)
+    setGroups(parseGroups(data))
+  }
+
+  if (enabled !== prevEnabled) {
+    setPrevEnabled(enabled)
+    setIsEnabled(enabled)
+  }
 
   const form = useForm<UptimeKumaFormValues>({
     resolver: zodResolver(uptimeKumaSchema),
@@ -110,26 +139,6 @@ export function UptimeKumaSection({ enabled, data }: UptimeKumaSectionProps) {
       slug: '',
     },
   })
-
-  useEffect(() => {
-    try {
-      const parsed = JSON.parse(data || '[]')
-      if (Array.isArray(parsed)) {
-        setGroups(
-          parsed.map((item, idx) => ({
-            ...item,
-            id: item.id || idx + 1,
-          }))
-        )
-      }
-    } catch {
-      setGroups([])
-    }
-  }, [data])
-
-  useEffect(() => {
-    setIsEnabled(enabled)
-  }, [enabled])
 
   const handleToggleEnabled = async (checked: boolean) => {
     try {

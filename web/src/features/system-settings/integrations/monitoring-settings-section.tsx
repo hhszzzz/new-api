@@ -17,8 +17,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useEffect, useMemo, useRef } from 'react'
-import { useForm } from 'react-hook-form'
+import { useEffect, useMemo, useRef, type FormEventHandler } from 'react'
+import { useForm, useWatch } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import * as z from 'zod'
@@ -154,7 +154,14 @@ export function MonitoringSettingsSection({
     baselineSerializedRef.current = serialized
   }, [defaultValues])
 
-  const perfMetricsEnabled = form.watch('perf_metrics_setting.enabled')
+  const perfMetricsEnabled = useWatch({
+    control: form.control,
+    name: 'perf_metrics_setting.enabled',
+  })
+
+  const handleFormSubmit: FormEventHandler = (event) => {
+    void form.handleSubmit(onSubmit)(event)
+  }
 
   const onSubmit = async (values: MonitoringFormValues) => {
     const normalized = normalizeFormValues(values)
@@ -181,9 +188,9 @@ export function MonitoringSettingsSection({
   return (
     <SettingsSection title={t('Monitoring & Alerts')}>
       <Form {...form}>
-        <SettingsForm onSubmit={form.handleSubmit(onSubmit)}>
+        <SettingsForm onSubmit={handleFormSubmit}>
           <SettingsPageFormActions
-            onSave={form.handleSubmit(onSubmit)}
+            onSave={() => void form.handleSubmit(onSubmit)()}
             isSaving={updateOption.isPending}
           />
           <FormField

@@ -75,6 +75,7 @@ export function OllamaModelsDialog({
   const isOllamaChannel = currentRow?.type === CHANNEL_TYPE_OLLAMA
   const channelId = currentRow?.id
   const dialogScope = open ? (channelId ?? null) : null
+  const scopeKey = open ? `open:${channelId ?? ''}` : 'closed'
   const { begin: beginModelFetch, invalidate: invalidateModelFetch } =
     useLatestAsyncTask(dialogScope)
   const { begin: beginModelMutation, invalidate: invalidateModelMutation } =
@@ -95,8 +96,26 @@ export function OllamaModelsDialog({
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
+  const [prevScopeKey, setPrevScopeKey] = useState(scopeKey)
   const currentRowRef = useRef(currentRow)
-  currentRowRef.current = currentRow
+
+  useEffect(() => {
+    currentRowRef.current = currentRow
+  })
+
+  if (scopeKey !== prevScopeKey) {
+    setPrevScopeKey(scopeKey)
+    setIsFetching(false)
+    setModels([])
+    setSelected([])
+    setSearch('')
+    setPullName('')
+    setIsPulling(false)
+    setPullProgress(null)
+    setDeleteOpen(false)
+    setDeleteTarget(null)
+    setIsDeleting(false)
+  }
 
   const filteredModels = useMemo(() => {
     if (!search.trim()) return models
@@ -179,35 +198,18 @@ export function OllamaModelsDialog({
       invalidateModelFetch()
       invalidateModelMutation()
       invalidateModelPull()
-      setModels([])
-      setSelected([])
-      setSearch('')
-      setPullName('')
-      setIsPulling(false)
-      setPullProgress(null)
       pullAbortRef.current?.abort()
       pullAbortRef.current = null
-      setDeleteOpen(false)
-      setDeleteTarget(null)
-      setIsDeleting(false)
       return
     }
 
     pullAbortRef.current?.abort()
     pullAbortRef.current = null
-    setIsFetching(false)
-    setModels([])
-    setSelected([])
-    setSearch('')
-    setPullName('')
-    setIsPulling(false)
-    setPullProgress(null)
-    setDeleteOpen(false)
-    setDeleteTarget(null)
-    setIsDeleting(false)
 
     if (isOllamaChannel && channelId) {
-      void fetchOllamaModels()
+      queueMicrotask(() => {
+        void fetchOllamaModels()
+      })
     }
     return () => {
       invalidateModelFetch()

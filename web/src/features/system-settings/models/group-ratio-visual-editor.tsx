@@ -24,14 +24,7 @@ import {
   Plus,
   Trash2,
 } from 'lucide-react'
-import {
-  useState,
-  useMemo,
-  useEffect,
-  useCallback,
-  memo,
-  type ReactNode,
-} from 'react'
+import { useState, useMemo, useCallback, memo, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { StaticDataTable } from '@/components/data-table/static/static-data-table'
@@ -396,19 +389,22 @@ function GroupPricingTable({
   const [rows, setRows] = useState<GroupPricingRow[]>(() =>
     buildGroupPricingRows(groupRatio, userUsableGroups)
   )
-
-  useEffect(() => {
-    const incomingSignature = sourceGroupPricingSignature(
-      groupRatio,
-      userUsableGroups
-    )
+  const incomingSignature = sourceGroupPricingSignature(
+    groupRatio,
+    userUsableGroups
+  )
+  const [syncedSignature, setSyncedSignature] = useState<string | undefined>(
+    undefined
+  )
+  if (syncedSignature !== incomingSignature) {
+    setSyncedSignature(incomingSignature)
     setRows((currentRows) => {
       if (groupPricingSignature(currentRows) === incomingSignature) {
         return currentRows
       }
       return buildGroupPricingRows(groupRatio, userUsableGroups)
     })
-  }, [groupRatio, userUsableGroups])
+  }
 
   const emitRows = useCallback(
     (nextRows: GroupPricingRow[]) => {
@@ -935,17 +931,23 @@ function GroupOverrideDialog({
   const { t } = useTranslation()
   const [targetGroup, setTargetGroup] = useState<string | null>(null)
   const [ratio, setRatio] = useState('')
-
-  useEffect(() => {
+  const [dialogScope, setDialogScope] = useState<
+    { open: boolean; editData: GroupOverride | null } | undefined
+  >(undefined)
+  if (
+    !dialogScope ||
+    dialogScope.open !== open ||
+    dialogScope.editData !== editData
+  ) {
+    setDialogScope({ open, editData })
     if (!open) {
       setTargetGroup(null)
       setRatio('')
-      return
+    } else {
+      setTargetGroup(editData?.targetGroup ?? null)
+      setRatio(editData ? String(editData.ratio) : '')
     }
-
-    setTargetGroup(editData?.targetGroup ?? null)
-    setRatio(editData ? String(editData.ratio) : '')
-  }, [editData, open])
+  }
 
   const baseRatio = targetGroup ? baseRatioByName.get(targetGroup) : undefined
 

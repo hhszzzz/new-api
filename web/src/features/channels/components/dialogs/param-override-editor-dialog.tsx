@@ -29,7 +29,6 @@ import {
   type DragEvent,
   type KeyboardEvent,
   useCallback,
-  useEffect,
   useMemo,
   useState,
 } from 'react'
@@ -1161,40 +1160,42 @@ export function ParamOverrideEditorDialog(
   )
   const [templatePresetKey, setTemplatePresetKey] =
     useState('operations_default')
+  const [initSource, setInitSource] = useState({
+    open: props.open,
+    value: props.value,
+  })
 
   // Initialize state when dialog opens
-  useEffect(() => {
-    if (!props.open) return
-    const state = parseInitialState(props.value)
-    setEditMode(state.editMode)
-    setVisualMode(state.visualMode)
-    setLegacyValue(state.legacyValue)
-    setOperations(state.operations)
-    setJsonText(state.jsonText)
-    setJsonError(state.jsonError)
-    setOperationSearch('')
-    setSelectedOperationId(state.operations[0]?.id || '')
-    setExpandedConditions({})
-    setDraggedOperationId('')
-    setDragOverOperationId('')
-    setDragOverPosition('before')
-    if (state.visualMode === 'legacy') {
-      setTemplatePresetKey('legacy_default')
-    } else {
-      setTemplatePresetKey('operations_default')
+  if (initSource.open !== props.open || initSource.value !== props.value) {
+    setInitSource({ open: props.open, value: props.value })
+    if (props.open) {
+      const state = parseInitialState(props.value)
+      setEditMode(state.editMode)
+      setVisualMode(state.visualMode)
+      setLegacyValue(state.legacyValue)
+      setOperations(state.operations)
+      setJsonText(state.jsonText)
+      setJsonError(state.jsonError)
+      setOperationSearch('')
+      setSelectedOperationId(state.operations[0]?.id || '')
+      setExpandedConditions({})
+      setDraggedOperationId('')
+      setDragOverOperationId('')
+      setDragOverPosition('before')
+      if (state.visualMode === 'legacy') {
+        setTemplatePresetKey('legacy_default')
+      } else {
+        setTemplatePresetKey('operations_default')
+      }
     }
-  }, [props.open, props.value])
+  }
 
   // Keep selectedOperationId valid
-  useEffect(() => {
-    if (operations.length === 0) {
-      setSelectedOperationId('')
-      return
-    }
-    if (!operations.some((o) => o.id === selectedOperationId)) {
-      setSelectedOperationId(operations[0].id)
-    }
-  }, [operations, selectedOperationId])
+  if (operations.length === 0) {
+    if (selectedOperationId !== '') setSelectedOperationId('')
+  } else if (!operations.some((o) => o.id === selectedOperationId)) {
+    setSelectedOperationId(operations[0].id)
+  }
 
   // Template preset options filtered by group
   const templatePresetOptions = useMemo(
@@ -1795,12 +1796,10 @@ export function ParamOverrideEditorDialog(
             {t('Template')}
           </span>
           <Combobox
-            options={[
-              ...templatePresetOptions.map((o) => ({
-                value: o.value,
-                label: t(o.label),
-              })),
-            ]}
+            options={templatePresetOptions.map((o) => ({
+              value: o.value,
+              label: t(o.label),
+            }))}
             value={templatePresetKey}
             onValueChange={(v) =>
               setTemplatePresetKey(v || 'operations_default')
@@ -2187,12 +2186,10 @@ function RuleEditor(ruleEditorProps: RuleEditorProps) {
           <div className='space-y-1.5'>
             <label className='text-xs font-medium'>{t('Operation Type')}</label>
             <Combobox
-              options={[
-                ...OPERATION_MODE_OPTIONS.map((o) => ({
-                  value: o.value,
-                  label: t(o.label),
-                })),
-              ]}
+              options={OPERATION_MODE_OPTIONS.map((o) => ({
+                value: o.value,
+                label: t(o.label),
+              }))}
               value={mode}
               onValueChange={(nextMode) =>
                 nextMode !== null &&
@@ -2566,12 +2563,10 @@ function ConditionEditor(conditionEditorProps: ConditionEditorProps) {
                   {t('Match Mode')}
                 </label>
                 <Combobox
-                  options={[
-                    ...CONDITION_MODE_OPTIONS.map((o) => ({
-                      value: o.value,
-                      label: t(o.label),
-                    })),
-                  ]}
+                  options={CONDITION_MODE_OPTIONS.map((o) => ({
+                    value: o.value,
+                    label: t(o.label),
+                  }))}
                   value={condition.mode}
                   onValueChange={(v) =>
                     v !== null &&
@@ -3074,12 +3069,10 @@ function PruneObjectsEditor(pruneObjectsEditorProps: PruneObjectsEditorProps) {
                           {t('Match Mode')}
                         </label>
                         <Combobox
-                          options={[
-                            ...CONDITION_MODE_OPTIONS.map((o) => ({
-                              value: o.value,
-                              label: t(o.label),
-                            })),
-                          ]}
+                          options={CONDITION_MODE_OPTIONS.map((o) => ({
+                            value: o.value,
+                            label: t(o.label),
+                          }))}
                           value={rule.mode}
                           onValueChange={(v) =>
                             v !== null &&

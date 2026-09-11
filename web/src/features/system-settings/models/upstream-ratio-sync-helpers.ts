@@ -139,13 +139,14 @@ export function getSyncExpressionPricing(
   const config = tryParseVisualConfig(billingExpr)
   if (!config) return null
   // Do not turn malformed or overflowing upstream numbers into free prices.
-  const body = billingExpr.replace(/"(?:\\.|[^"\\])*"/g, '')
+  const body = billingExpr.replaceAll(/"(?:\\.|[^"\\])*"/g, '')
   for (const match of body.matchAll(/\*\s*([+\-\d.eE]+)/g)) {
     if (!Number.isFinite(Number(match[1])) || Number(match[1]) < 0) return null
   }
-  const fields = BILLING_PRICING_VARS.filter(
-    (field) =>
-      field.tierField && new RegExp(`\\b${field.key}\\s*\\*`).test(body)
+  const fields = BILLING_PRICING_VARS.flatMap((field) =>
+    field.tierField && new RegExp(`\\b${field.key}\\s*\\*`).test(body)
+      ? [{ shortLabel: field.shortLabel, tierField: field.tierField }]
+      : []
   )
   const conditionLabels = {
     p: t('Input tokens'),
@@ -164,7 +165,7 @@ export function getSyncExpressionPricing(
         .join(' ∧ '),
       lines: fields.map((field) => ({
         label: t(field.shortLabel),
-        value: `$${formatPricingNumber(Number(tier[field.tierField!]))}`,
+        value: `$${formatPricingNumber(Number(tier[field.tierField]))}`,
       })),
     })),
   }

@@ -69,6 +69,103 @@ type RequestSimulationProps = {
   mode: 'token' | 'task'
 }
 
+type SimulationParams = {
+  open: boolean
+  body: string
+  headers: string
+  timeMode: string
+  fixedTime: string
+  liveTime: ReturnType<typeof useBillingTime>
+  expression: string
+  tokens: RequestSimulationProps['tokens']
+  usage: BillingSimulationContext['usage'] | undefined
+  usageSchema: RequestSimulationProps['usageSchema']
+}
+
+function simulateRequest(params: SimulationParams) {
+  const {
+    open,
+    body,
+    headers,
+    timeMode,
+    fixedTime,
+    liveTime,
+    expression,
+    tokens,
+    usage,
+    usageSchema,
+  } = params
+  if (!open) return null
+  let requestBody: unknown
+  let requestHeaders: unknown
+  try {
+    requestBody = JSON.parse(body)
+  } catch {
+    return { inputError: 'Request body must be a JSON object.' }
+  }
+  if (
+    requestBody === null ||
+    typeof requestBody !== 'object' ||
+    Array.isArray(requestBody)
+  ) {
+    return { inputError: 'Request body must be a JSON object.' }
+  }
+  try {
+    requestHeaders = JSON.parse(headers.trim() || '{}')
+  } catch {
+    return {
+      inputError: 'Request headers must be a JSON object with string values.',
+    }
+  }
+  if (
+    requestHeaders === null ||
+    typeof requestHeaders !== 'object' ||
+    Array.isArray(requestHeaders) ||
+    Object.values(requestHeaders).some((value) => typeof value !== 'string')
+  ) {
+    return {
+      inputError: 'Request headers must be a JSON object with string values.',
+    }
+  }
+  let now = liveTime === undefined ? new Date() : new Date(liveTime)
+  if (timeMode === 'fixed') {
+    if (
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/.test(
+        fixedTime
+      )
+    ) {
+      return {
+        inputError: 'Enter an ISO date and time with a timezone offset.',
+      }
+    }
+    now = new Date(fixedTime)
+    const calendarDate = new Date(`${fixedTime.slice(0, 10)}T00:00:00Z`)
+    if (
+      !Number.isFinite(calendarDate.getTime()) ||
+      calendarDate.toISOString().slice(0, 10) !== fixedTime.slice(0, 10) ||
+      !Number.isFinite(now.getTime())
+    ) {
+      return {
+        inputError: 'Enter an ISO date and time with a timezone offset.',
+      }
+    }
+  }
+  for (const [field, schema] of Object.entries(usageSchema ?? {})) {
+    if (schema.type === 'boolean' && typeof usage?.[field] !== 'boolean') {
+      return { inputError: 'Simulation context is missing.' }
+    }
+  }
+  return evaluateBillingExpression(expression, {
+    tokens,
+    usage,
+    now,
+    request: {
+      body: requestBody,
+      headers: requestHeaders as Record<string, string>,
+    },
+  })
+}
+
 /** Explicitly opting in supplies an empty request; ordinary price displays never do. */
 export function RequestSimulation(props: RequestSimulationProps) {
   const { t, i18n } = useTranslation()
@@ -99,88 +196,33 @@ export function RequestSimulation(props: RequestSimulationProps) {
     open && timeMode === 'current'
   )
 
-  const result = useMemo(() => {
-    if (!open) return null
-    let requestBody: unknown
-    let requestHeaders: unknown
-    try {
-      requestBody = JSON.parse(body)
-    } catch {
-      return { inputError: 'Request body must be a JSON object.' }
-    }
-    if (
-      requestBody === null ||
-      typeof requestBody !== 'object' ||
-      Array.isArray(requestBody)
-    ) {
-      return { inputError: 'Request body must be a JSON object.' }
-    }
-    try {
-      requestHeaders = JSON.parse(headers.trim() || '{}')
-    } catch {
-      return {
-        inputError: 'Request headers must be a JSON object with string values.',
-      }
-    }
-    if (
-      requestHeaders === null ||
-      typeof requestHeaders !== 'object' ||
-      Array.isArray(requestHeaders) ||
-      Object.values(requestHeaders).some((value) => typeof value !== 'string')
-    ) {
-      return {
-        inputError: 'Request headers must be a JSON object with string values.',
-      }
-    }
-    let now = liveTime === undefined ? new Date() : new Date(liveTime)
-    if (timeMode === 'fixed') {
-      if (
-        !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/.test(
-          fixedTime
-        )
-      ) {
-        return {
-          inputError: 'Enter an ISO date and time with a timezone offset.',
-        }
-      }
-      now = new Date(fixedTime)
-      const calendarDate = new Date(`${fixedTime.slice(0, 10)}T00:00:00Z`)
-      if (
-        !Number.isFinite(calendarDate.getTime()) ||
-        calendarDate.toISOString().slice(0, 10) !== fixedTime.slice(0, 10) ||
-        !Number.isFinite(now.getTime())
-      ) {
-        return {
-          inputError: 'Enter an ISO date and time with a timezone offset.',
-        }
-      }
-    }
-    for (const [field, schema] of Object.entries(props.usageSchema ?? {})) {
-      if (schema.type === 'boolean' && typeof usage?.[field] !== 'boolean') {
-        return { inputError: 'Simulation context is missing.' }
-      }
-    }
-    return evaluateBillingExpression(props.expression, {
-      tokens: props.tokens,
+  const result = useMemo(
+    () =>
+      simulateRequest({
+        open,
+        body,
+        headers,
+        timeMode,
+        fixedTime,
+        liveTime,
+        expression: props.expression,
+        tokens: props.tokens,
+        usage,
+        usageSchema: props.usageSchema,
+      }),
+    [
+      open,
+      body,
+      headers,
+      timeMode,
+      fixedTime,
+      liveTime,
+      props.expression,
+      props.tokens,
       usage,
-      now,
-      request: {
-        body: requestBody,
-        headers: requestHeaders as Record<string, string>,
-      },
-    })
-  }, [
-    open,
-    body,
-    headers,
-    timeMode,
-    fixedTime,
-    liveTime,
-    props.expression,
-    props.tokens,
-    usage,
-    props.usageSchema,
-  ])
+      props.usageSchema,
+    ]
+  )
 
   let error = ''
   if (result && 'inputError' in result) error = t(result.inputError)

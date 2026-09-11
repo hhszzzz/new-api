@@ -50,32 +50,42 @@ export function UserInfoDialog({
 }: UserInfoDialogProps) {
   const { t } = useTranslation()
   const [userInfo, setUserInfo] = useState<UserInfo | null>(null)
-  const [isLoading, setIsLoading] = useState(false)
+  const [loadedUserId, setLoadedUserId] = useState<number | null>(null)
+  const [prevOpen, setPrevOpen] = useState(open)
+  if (prevOpen !== open) {
+    setPrevOpen(open)
+    if (open) {
+      setLoadedUserId(null)
+    }
+  }
 
-  const fetchUserInfo = useCallback(
-    async (id: number) => {
-      setIsLoading(true)
-      try {
-        const result = await getUserInfo(id)
-        if (result.success) {
-          setUserInfo(result.data || null)
-        } else {
-          handleServerError(result, t('Failed to fetch user information'))
-        }
-      } catch (error) {
-        handleServerError(error, t('Failed to fetch user information'))
-      } finally {
-        setIsLoading(false)
-      }
+  const isLoading = open && userId !== null && loadedUserId !== userId
+
+  const loadUserInfo = useCallback(
+    (id: number) => {
+      return getUserInfo(id)
+        .then((result) => {
+          if (result.success) {
+            setUserInfo(result.data || null)
+          } else {
+            handleServerError(result, t('Failed to fetch user information'))
+          }
+        })
+        .catch((error: unknown) => {
+          handleServerError(error, t('Failed to fetch user information'))
+        })
+        .finally(() => {
+          setLoadedUserId(id)
+        })
     },
     [t]
   )
 
   useEffect(() => {
     if (open && userId) {
-      fetchUserInfo(userId)
+      void loadUserInfo(userId)
     }
-  }, [open, userId, fetchUserInfo])
+  }, [open, userId, loadUserInfo])
 
   return (
     <Dialog

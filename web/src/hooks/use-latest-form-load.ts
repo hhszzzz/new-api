@@ -37,10 +37,19 @@ export function useLatestFormLoad<TTarget, TValue>(
   const [loadedTarget, setLoadedTarget] = useState<TTarget | null>(null)
   const [isRefreshing, setIsRefreshing] = useState(false)
 
-  scopeRef.current = { enabled: options.enabled, target: options.target }
-  loadRef.current = options.load
-  onLoadRef.current = options.onLoad
-  onErrorRef.current = options.onError
+  useEffect(() => {
+    scopeRef.current = { enabled: options.enabled, target: options.target }
+    loadRef.current = options.load
+    onLoadRef.current = options.onLoad
+    onErrorRef.current = options.onError
+  })
+
+  if ((!options.enabled || options.target === null) && loadedTarget !== null) {
+    setLoadedTarget(null)
+  }
+  if ((!options.enabled || options.target === null) && isRefreshing) {
+    setIsRefreshing(false)
+  }
 
   const reload = useCallback(async () => {
     const scope = scopeRef.current
@@ -87,8 +96,6 @@ export function useLatestFormLoad<TTarget, TValue>(
   useEffect(() => {
     if (!options.enabled || options.target === null) {
       requestIdRef.current += 1
-      setLoadedTarget(null)
-      setIsRefreshing(false)
       return
     }
 

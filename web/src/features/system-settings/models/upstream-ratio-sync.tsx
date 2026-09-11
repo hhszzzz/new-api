@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CheckSquare, RefreshCcw } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -98,16 +98,19 @@ export function UpstreamRatioSync() {
     enabled: channelDialogOpen,
   })
   const channels = useMemo(() => channelsData?.data ?? [], [channelsData?.data])
-  useEffect(() => {
-    if (!channels.length) return
-    setChannelEndpoints((previous) => {
-      const next = { ...previous }
-      for (const channel of channels) {
-        next[channel.id] ??= getDefaultEndpointForChannel(channel)
-      }
-      return next
-    })
-  }, [channels])
+  const [syncedChannels, setSyncedChannels] = useState(channels)
+  if (syncedChannels !== channels) {
+    setSyncedChannels(channels)
+    if (channels.length) {
+      setChannelEndpoints((previous) => {
+        const next = { ...previous }
+        for (const channel of channels) {
+          next[channel.id] ??= getDefaultEndpointForChannel(channel)
+        }
+        return next
+      })
+    }
+  }
   const resolutions = useMemo(
     () =>
       Object.fromEntries(

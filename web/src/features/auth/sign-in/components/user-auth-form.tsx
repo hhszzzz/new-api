@@ -115,13 +115,13 @@ export function UserAuthForm({
   const hasAlternativeLogin =
     passkeyLoginEnabled || hasWeChatLogin || hasOAuthLogin
 
-  useEffect(() => {
-    if (requiresLegalConsent) {
-      setAgreedToLegal(false)
-    } else {
-      setAgreedToLegal(true)
-    }
-  }, [requiresLegalConsent])
+  const [syncedRequiresLegalConsent, setSyncedRequiresLegalConsent] = useState<
+    boolean | undefined
+  >(undefined)
+  if (syncedRequiresLegalConsent !== requiresLegalConsent) {
+    setSyncedRequiresLegalConsent(requiresLegalConsent)
+    setAgreedToLegal(!requiresLegalConsent)
+  }
 
   useEffect(() => {
     detectPasskeySupport()

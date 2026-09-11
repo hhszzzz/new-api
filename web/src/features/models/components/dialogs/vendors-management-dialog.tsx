@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { StaticDataTable } from '@/components/data-table'
@@ -55,12 +55,15 @@ export function VendorsManagementDialog(props: {
     },
     enabled: props.open,
   })
-  useEffect(() => {
+  const [prevOpen, setPrevOpen] = useState(props.open)
+
+  if (props.open !== prevOpen) {
+    setPrevOpen(props.open)
     if (props.open) {
       setSearch('')
       setPage(1)
     }
-  }, [props.open])
+  }
   return (
     <>
       <Dialog

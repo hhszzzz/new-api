@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2 } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -50,10 +50,11 @@ export function ExtendDeploymentDialog({
   const queryClient = useQueryClient()
   const [hours, setHours] = useState(1)
   const [isSubmitting, setIsSubmitting] = useState(false)
-
-  useEffect(() => {
+  const [prevOpen, setPrevOpen] = useState(open)
+  if (prevOpen !== open) {
+    setPrevOpen(open)
     if (open) setHours(1)
-  }, [open])
+  }
 
   const { data: detailsRes, isLoading: isLoadingDetails } = useQuery({
     queryKey: ['deployment-details-for-extend', deploymentId],

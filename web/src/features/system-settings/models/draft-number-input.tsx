@@ -17,7 +17,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import {
-  useEffect,
   useState,
   type ChangeEvent,
   type FocusEvent,
@@ -65,12 +64,15 @@ export function DraftNumberInput({
 }: DraftNumberInputProps) {
   const [draft, setDraft] = useState(() => formatNumberDraft(value))
   const [focused, setFocused] = useState(false)
-
-  useEffect(() => {
+  const [prevValue, setPrevValue] = useState(value)
+  const [prevFocused, setPrevFocused] = useState(focused)
+  if (prevValue !== value || prevFocused !== focused) {
+    setPrevValue(value)
+    setPrevFocused(focused)
     if (!focused) {
       setDraft(formatNumberDraft(value))
     }
-  }, [focused, value])
+  }
 
   const handleChange = (event: ChangeEvent<HTMLInputElement>) => {
     const nextDraft = event.target.value

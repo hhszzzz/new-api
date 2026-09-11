@@ -324,7 +324,7 @@ export function ChannelsTable() {
   const totalCount = data?.data?.total || 0
   const typeCounts = data?.data?.type_counts
 
-  const nextScheduleTransition = useMemo(() => {
+  useEffect(() => {
     const now = Date.now() / 1000
     let next: number | undefined
     for (const channel of data?.data?.items || []) {
@@ -332,18 +332,14 @@ export function ChannelsTable() {
       if (!transition || transition <= now) continue
       if (!next || transition < next) next = transition
     }
-    return next
-  }, [data])
-
-  useEffect(() => {
-    if (!nextScheduleTransition) return
+    if (!next) return
     const delay = Math.min(
-      Math.max((nextScheduleTransition - Date.now() / 1000) * 1000 + 250, 250),
+      Math.max((next - Date.now() / 1000) * 1000 + 250, 250),
       2_147_000_000
     )
     const timer = window.setTimeout(() => void refetch(), delay)
     return () => window.clearTimeout(timer)
-  }, [nextScheduleTransition, refetch])
+  }, [data, refetch])
 
   // Columns configuration
   const columns = useChannelsColumns({ enableSelection: batchMode })

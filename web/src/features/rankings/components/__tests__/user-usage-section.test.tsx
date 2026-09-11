@@ -216,9 +216,7 @@ describe('rankings user usage section', () => {
     render(<UserUsageSection isAuthenticated usage={usage} />)
 
     // Rows open a breakdown popover now; there is no user selection control.
-    expect(
-      screen.queryByRole('button', { name: /Select / })
-    ).toBeNull()
+    expect(screen.queryByRole('button', { name: /Select / })).toBeNull()
     expect(screen.getAllByText('a***e').length).toBeGreaterThan(0)
     expect(screen.getAllByText('b***b').length).toBeGreaterThan(0)
     expect(screen.getByText('Users ranked by charged amount')).toBeVisible()

@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useEffect, useRef } from 'react'
+import { useEffect, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -96,19 +96,37 @@ type ClaudeSettingsCardProps = {
 export function ClaudeSettingsCard({ defaultValues }: ClaudeSettingsCardProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
-  const normalizedDefaultsRef = useRef<FlatClaudeSettings>({
-    'claude.model_headers_settings': normalizeJsonString(
-      defaultValues.claude.model_headers_settings
-    ),
-    'claude.default_max_tokens': normalizeJsonString(
-      defaultValues.claude.default_max_tokens
-    ),
-    'claude.thinking_adapter_enabled':
-      defaultValues.claude.thinking_adapter_enabled,
-    'claude.thinking_adapter_budget_tokens_percentage': Number(
-      defaultValues.claude.thinking_adapter_budget_tokens_percentage
-    ),
-  })
+  const [normalizedDefaults, setNormalizedDefaults] =
+    useState<FlatClaudeSettings>(() => ({
+      'claude.model_headers_settings': normalizeJsonString(
+        defaultValues.claude.model_headers_settings
+      ),
+      'claude.default_max_tokens': normalizeJsonString(
+        defaultValues.claude.default_max_tokens
+      ),
+      'claude.thinking_adapter_enabled':
+        defaultValues.claude.thinking_adapter_enabled,
+      'claude.thinking_adapter_budget_tokens_percentage': Number(
+        defaultValues.claude.thinking_adapter_budget_tokens_percentage
+      ),
+    }))
+  const [syncedDefaults, setSyncedDefaults] = useState(defaultValues)
+  if (syncedDefaults !== defaultValues) {
+    setSyncedDefaults(defaultValues)
+    setNormalizedDefaults({
+      'claude.model_headers_settings': normalizeJsonString(
+        defaultValues.claude.model_headers_settings
+      ),
+      'claude.default_max_tokens': normalizeJsonString(
+        defaultValues.claude.default_max_tokens
+      ),
+      'claude.thinking_adapter_enabled':
+        defaultValues.claude.thinking_adapter_enabled,
+      'claude.thinking_adapter_budget_tokens_percentage': Number(
+        defaultValues.claude.thinking_adapter_budget_tokens_percentage
+      ),
+    })
+  }
 
   const buildFormDefaults = (
     values: ClaudeSettingsFormInput
@@ -136,20 +154,6 @@ export function ClaudeSettingsCard({ defaultValues }: ClaudeSettingsCardProps) {
   })
 
   useEffect(() => {
-    normalizedDefaultsRef.current = {
-      'claude.model_headers_settings': normalizeJsonString(
-        defaultValues.claude.model_headers_settings
-      ),
-      'claude.default_max_tokens': normalizeJsonString(
-        defaultValues.claude.default_max_tokens
-      ),
-      'claude.thinking_adapter_enabled':
-        defaultValues.claude.thinking_adapter_enabled,
-      'claude.thinking_adapter_budget_tokens_percentage': Number(
-        defaultValues.claude.thinking_adapter_budget_tokens_percentage
-      ),
-    }
-
     form.reset(buildFormDefaults(defaultValues))
   }, [defaultValues, form])
 
@@ -168,7 +172,7 @@ export function ClaudeSettingsCard({ defaultValues }: ClaudeSettingsCardProps) {
 
     const updates = (
       Object.keys(normalized) as Array<keyof FlatClaudeSettings>
-    ).filter((key) => normalized[key] !== normalizedDefaultsRef.current[key])
+    ).filter((key) => normalized[key] !== normalizedDefaults[key])
 
     if (updates.length === 0) {
       toast.info(t('No changes to save'))
@@ -183,7 +187,6 @@ export function ClaudeSettingsCard({ defaultValues }: ClaudeSettingsCardProps) {
   return (
     <SettingsSection title={t('Claude')}>
       <Form {...form}>
-        {/* eslint-disable-next-line react-hooks/refs */}
         <SettingsForm onSubmit={form.handleSubmit(onSubmit)}>
           <SettingsPageFormActions
             onSave={form.handleSubmit(onSubmit)}

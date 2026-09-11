@@ -41,11 +41,17 @@ export function TwoFABackupDialog(props: TwoFABackupDialogProps) {
   const [backupCodes, setBackupCodes] = useState<string[]>([])
   const security = useAccountSecurity()
   const cancel = security.cancel
+  const resetKey = `${props.open}:${security.sessionKey}`
+  const [prevResetKey, setPrevResetKey] = useState(resetKey)
+
+  if (prevResetKey !== resetKey) {
+    setPrevResetKey(resetKey)
+    setBackupCodes([])
+  }
 
   useEffect(() => {
-    setBackupCodes([])
     if (!props.open) cancel()
-  }, [props.open, security.sessionKey, cancel])
+  }, [props.open, cancel])
 
   const handleOpenChange = (open: boolean) => {
     const changed = !open && backupCodes.length > 0

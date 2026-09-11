@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useForm, type Resolver } from 'react-hook-form'
+import { useForm, useWatch, type Resolver } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { z } from 'zod'
@@ -73,7 +73,7 @@ export function CheckinSettingsSection({
   })
 
   const { isDirty, isSubmitting } = form.formState
-  const enabled = form.watch('enabled')
+  const enabled = useWatch({ control: form.control, name: 'enabled' })
 
   async function onSubmit(values: Values) {
     const updates: Array<{ key: string; value: string }> = []

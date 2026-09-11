@@ -2,9 +2,9 @@
 Copyright (C) 2023-2026 QuantumNous
 
 This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU Affero General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
 
 This program is distributed in the hope that it will be useful,
 but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -134,13 +134,15 @@ export function ChannelAggregatesDialog(props: Props) {
       toast.error(error.message || t('Operation failed')),
   })
 
-  useEffect(() => {
+  const [prevOpen, setPrevOpen] = useState(props.open)
+  if (prevOpen !== props.open) {
+    setPrevOpen(props.open)
     if (!props.open) {
       setForm(emptyForm)
       setEditingId(null)
       setDeleteTarget(null)
     }
-  }, [props.open])
+  }
 
   const beginEdit = (aggregate: ChannelAggregate) => {
     if (!canEditSensitive) return

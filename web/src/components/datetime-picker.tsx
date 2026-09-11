@@ -63,8 +63,12 @@ export function DateTimePicker({
   const [date, setDate] = React.useState<Date | undefined>(value)
   const [month, setMonth] = React.useState<Date | undefined>(value)
   const [time, setTime] = React.useState<string>('00:00')
+  const [prevValue, setPrevValue] = React.useState<Date | undefined | null>(
+    null
+  )
 
-  React.useEffect(() => {
+  if (prevValue !== value) {
+    setPrevValue(value)
     setDate(value)
     setMonth(value)
     if (value) {
@@ -72,7 +76,7 @@ export function DateTimePicker({
       const minutes = value.getMinutes().toString().padStart(2, '0')
       setTime(`${hours}:${minutes}`)
     }
-  }, [value])
+  }
 
   const handleDateSelect = (selectedDate: Date | undefined) => {
     if (selectedDate) {

@@ -29,7 +29,7 @@ import {
   useState,
   type ReactNode,
 } from 'react'
-import { useForm } from 'react-hook-form'
+import { useForm, useWatch } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 
 import { sideDrawerContentClassName } from '@/components/drawer-layout'
@@ -225,7 +225,11 @@ export const ModelPricingEditorPanel = forwardRef<
       audioCompletionRatio: '',
     },
   })
-  const watchedValues = form.watch()
+  // useWatch types whole-form values as partial; every field has a default in
+  // the form, so the watched values are complete at runtime.
+  const watchedValues = useWatch({
+    control: form.control,
+  }) as ModelPricingFormValues
   const usageSchemaByModel = useMemo(
     () =>
       new Map(
@@ -265,7 +269,13 @@ export const ModelPricingEditorPanel = forwardRef<
       ? defaultTaskBillingExpr
       : billingExpr
 
-  useEffect(() => {
+  const [resetEditData, setResetEditData] = useState<
+    ModelRatioData | null | undefined
+  >(undefined)
+  const [didResetEditData, setDidResetEditData] = useState(false)
+  if (!didResetEditData || editData !== resetEditData) {
+    setDidResetEditData(true)
+    setResetEditData(editData)
     const nextLaneState = createInitialLaneState(editData)
 
     if (editData) {
@@ -310,8 +320,11 @@ export const ModelPricingEditorPanel = forwardRef<
     setLanePrices(nextLaneState.prices)
     setLaneEnabled(nextLaneState.enabled)
     setEditorReloadToken((token) => token + 1)
+  }
+
+  useEffect(() => {
     autoSwitchedForRef.current = null
-  }, [editData, form])
+  }, [editData])
 
   useEffect(() => {
     if (!editData) return

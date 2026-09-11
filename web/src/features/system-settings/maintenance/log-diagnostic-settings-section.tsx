@@ -2,9 +2,9 @@
 Copyright (C) 2023-2026 QuantumNous
 
 This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU Affero General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
 
 This program is distributed in the hope that it will be useful,
 but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -74,11 +74,13 @@ export function LogDiagnosticSettingsSection(props: Props) {
     [props.defaultValues]
   )
 
-  useEffect(() => {
+  const [prevBaseline, setPrevBaseline] = useState(baseline)
+  if (prevBaseline !== baseline) {
+    setPrevBaseline(baseline)
     setRecordIp(baseline.recordIp)
     setRecordHeaders(baseline.recordHeaders)
     setHeaders(baseline.headers)
-  }, [baseline])
+  }
 
   const addHeader = () => {
     const normalized = newHeader.trim().toLowerCase()

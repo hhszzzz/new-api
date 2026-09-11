@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useEffect, useState } from 'react'
+import { useCallback, useSyncExternalStore } from 'react'
 
 export function resolveThemeRadiusPx(
   cssVariable = '--radius-md'
@@ -37,15 +37,39 @@ export function resolveThemeRadiusPx(
   return Number.isFinite(parsedRadius) ? parsedRadius : undefined
 }
 
+// Theme customization writes its radius/preset attributes onto <body> (see
+// theme-customization-provider), so observing those attributes is the real
+// subscription for this external store.
+const THEME_ATTRIBUTE_FILTER = [
+  'class',
+  'data-theme-radius',
+  'data-theme-font',
+  'data-theme-preset',
+]
+
+function subscribeToThemeRadius(onStoreChange: () => void) {
+  if (typeof document === 'undefined' || !document.body) {
+    return () => {}
+  }
+  const observer = new MutationObserver(onStoreChange)
+  observer.observe(document.body, {
+    attributes: true,
+    attributeFilter: THEME_ATTRIBUTE_FILTER,
+  })
+  return () => observer.disconnect()
+}
+
 export function useThemeRadiusPx(
-  cssVariable = '--radius-md',
-  refreshKey?: string
+  cssVariable = '--radius-md'
 ): number | undefined {
-  const [radius, setRadius] = useState<number | undefined>()
+  const getSnapshot = useCallback(
+    () => resolveThemeRadiusPx(cssVariable),
+    [cssVariable]
+  )
 
-  useEffect(() => {
-    setRadius(resolveThemeRadiusPx(cssVariable))
-  }, [cssVariable, refreshKey])
-
-  return radius
+  return useSyncExternalStore(
+    subscribeToThemeRadius,
+    getSnapshot,
+    () => undefined
+  )
 }

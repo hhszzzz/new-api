@@ -2,9 +2,9 @@
 Copyright (C) 2023-2026 QuantumNous
 
 This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU Affero General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
 
 This program is distributed in the hope that it will be useful,
 but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import type { ColumnDef } from '@tanstack/react-table'
 import { fireEvent, render, screen } from '@testing-library/react'
-import { useRef } from 'react'
+import { useEffect } from 'react'
 import { describe, expect, test, vi } from 'vitest'
 
 import { useDataTable } from '../../hooks/use-data-table'
@@ -82,9 +82,13 @@ const responsiveMultiColumnColumns: ColumnDef<MultiColumnRowData>[] = [
   },
 ]
 
+let multiColumnRenderCount = 0
+
 function MultiColumnResizableTable() {
-  const renderCount = useRef(0)
-  renderCount.current += 1
+  useEffect(() => {
+    multiColumnRenderCount += 1
+  })
+
   const { table } = useDataTable({
     data: [{ name: 'Primary channel', status: 'Enabled' }],
     columns: multiColumnColumns,
@@ -100,7 +104,6 @@ function MultiColumnResizableTable() {
       <output data-testid='status-column-size'>
         {table.getColumn('status')?.getSize()}
       </output>
-      <output data-testid='render-count'>{renderCount.current}</output>
       <DataTableView table={table} applyHeaderSize />
     </>
   )
@@ -189,6 +192,7 @@ describe('data table column resizing', () => {
   })
 
   test('ignores repeated pointer positions after a drag changes the layout', () => {
+    multiColumnRenderCount = 0
     render(<MultiColumnResizableTable />)
     const [nameResizer] = screen.getAllByRole('separator', {
       name: 'Resize column',
@@ -207,7 +211,7 @@ describe('data table column resizing', () => {
       pointerType: 'mouse',
     })
 
-    expect(screen.getByTestId('render-count')).toHaveTextContent('2')
+    expect(multiColumnRenderCount).toBe(2)
 
     fireEvent.pointerMove(document, {
       clientX: 150,
@@ -220,7 +224,7 @@ describe('data table column resizing', () => {
       pointerType: 'mouse',
     })
 
-    expect(screen.getByTestId('render-count')).toHaveTextContent('2')
+    expect(multiColumnRenderCount).toBe(2)
   })
 
   test('uses rendered column widths as the drag baseline after the table fills its container', () => {
