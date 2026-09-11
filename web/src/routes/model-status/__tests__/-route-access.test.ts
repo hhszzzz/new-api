@@ -20,8 +20,8 @@ import { afterEach, describe, expect, test, vi } from 'vitest'
 
 import { useAuthStore } from '@/stores/auth-store'
 
-const { getFreshModuleAccessMock } = vi.hoisted(() => ({
-  getFreshModuleAccessMock: vi.fn(),
+const { getModuleAccessForGuardMock } = vi.hoisted(() => ({
+  getModuleAccessForGuardMock: vi.fn(),
 }))
 
 vi.mock('@/features/pricing', () => ({
@@ -29,7 +29,7 @@ vi.mock('@/features/pricing', () => ({
 }))
 
 vi.mock('@/lib/nav-modules', () => ({
-  getFreshModuleAccess: getFreshModuleAccessMock,
+  getModuleAccessForGuard: getModuleAccessForGuardMock,
 }))
 
 const { Route: legacyRoute } = await import('../index')
@@ -52,13 +52,14 @@ describe('model status route access', () => {
     )
   })
   test('redirects to home when the module is disabled', async () => {
-    getFreshModuleAccessMock.mockResolvedValue({
+    getModuleAccessForGuardMock.mockResolvedValue({
       enabled: false,
       requireAuth: false,
     })
 
     await expect(
       pricingRoute.options.beforeLoad?.({
+        context: { queryClient: {} },
         location: { href: '/pricing?sort=status' },
       } as never)
     ).rejects.toMatchObject({
@@ -67,13 +68,14 @@ describe('model status route access', () => {
   })
 
   test('redirects a visitor to sign in with the original URL when login is required', async () => {
-    getFreshModuleAccessMock.mockResolvedValue({
+    getModuleAccessForGuardMock.mockResolvedValue({
       enabled: true,
       requireAuth: true,
     })
 
     await expect(
       pricingRoute.options.beforeLoad?.({
+        context: { queryClient: {} },
         location: { href: '/pricing?sort=status' },
       } as never)
     ).rejects.toMatchObject({
@@ -85,20 +87,21 @@ describe('model status route access', () => {
   })
 
   test('allows public access without a user', async () => {
-    getFreshModuleAccessMock.mockResolvedValue({
+    getModuleAccessForGuardMock.mockResolvedValue({
       enabled: true,
       requireAuth: false,
     })
 
     await expect(
       pricingRoute.options.beforeLoad?.({
+        context: { queryClient: {} },
         location: { href: '/pricing?sort=status' },
       } as never)
     ).resolves.toBeUndefined()
   })
 
   test('allows an authenticated user when login is required', async () => {
-    getFreshModuleAccessMock.mockResolvedValue({
+    getModuleAccessForGuardMock.mockResolvedValue({
       enabled: true,
       requireAuth: true,
     })
@@ -110,6 +113,7 @@ describe('model status route access', () => {
 
     await expect(
       pricingRoute.options.beforeLoad?.({
+        context: { queryClient: {} },
         location: { href: '/pricing?sort=status' },
       } as never)
     ).resolves.toBeUndefined()

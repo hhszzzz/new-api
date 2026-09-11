@@ -247,6 +247,9 @@ func CalcOpenRouterCacheCreateTokens(usage dto.Usage, priceData types.PriceData)
 }
 
 func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent string) {
+	if usage == nil {
+		usage = &dto.Usage{PromptTokens: relayInfo.GetEstimatePromptTokens(), TotalTokens: relayInfo.GetEstimatePromptTokens()}
+	}
 	billingModelName := relayInfo.GetBillingModelName()
 
 	var tieredUsedVars map[string]bool
@@ -258,6 +261,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 	if tieredOk {
 		tieredResult = tieredRes
 	}
+	fixedPriceBilling := tieredOk && isFixedPriceSettlement(relayInfo, tieredRes)
 
 	useTimeSeconds := time.Now().Unix() - relayInfo.StartTime.Unix()
 	textInputTokens := usage.PromptTokensDetails.TextTokens
@@ -310,7 +314,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 	}
 
 	// record all the consume log even if quota is 0
-	if totalTokens == 0 {
+	if totalTokens == 0 && !fixedPriceBilling {
 		// in this case, must be some error happened
 		// we cannot just return, because we may have to return the pre-consumed quota
 		quota = 0

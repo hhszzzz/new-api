@@ -22,8 +22,11 @@ import { CustomNavigationPage } from '@/features/custom-navigation'
 import { getFreshCustomHeaderNavItem } from '@/lib/nav-modules'
 
 export const Route = createFileRoute('/custom/$navId')({
-  loader: async ({ params }) => {
-    const item = await getFreshCustomHeaderNavItem(params.navId)
+  loader: async ({ context, params }) => {
+    const item = await getFreshCustomHeaderNavItem(
+      context.queryClient,
+      params.navId
+    )
     if (!item) {
       throw redirect({ to: '/' })
     }

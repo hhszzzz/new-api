@@ -23,7 +23,8 @@ import { describe, expect, test, vi } from 'vitest'
 import type { PricingModel } from '../../types'
 import { ModelDetailsContent } from '../model-details'
 
-vi.mock('@tanstack/react-query', () => ({
+vi.mock('@tanstack/react-query', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@tanstack/react-query')>()),
   useQuery: () => ({ data: undefined }),
 }))
 

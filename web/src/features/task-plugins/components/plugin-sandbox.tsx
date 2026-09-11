@@ -38,10 +38,12 @@ export function PluginSandbox(props: { pluginKey: string }) {
   const [args, setArgs] = useState('[{}]')
   const [output, setOutput] = useState('')
   const mutation = useMutation({
+    meta: { errorToast: false },
     mutationFn: async () => {
       const parsed = JSON.parse(args) as unknown
-      if (!Array.isArray(parsed))
+      if (!Array.isArray(parsed)) {
         throw new Error(t('Arguments must be a JSON array'))
+      }
       const memberSeparator = hook.indexOf('.')
       return dryRunTaskPlugin(props.pluginKey, {
         hook: memberSeparator < 0 ? hook : hook.slice(0, memberSeparator),

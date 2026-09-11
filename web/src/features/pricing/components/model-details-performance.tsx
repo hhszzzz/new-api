@@ -45,6 +45,7 @@ import { normalizeStatusTimeline } from '@/features/performance-metrics/lib/mode
 import type { ModelStatusModel } from '@/features/performance-metrics/status-types'
 import type { PerformanceGroup } from '@/features/performance-metrics/types'
 import { toIntlLocale } from '@/i18n/languages'
+import { requireServerSuccess } from '@/lib/server-error-message'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
 
@@ -130,7 +131,8 @@ export function ModelDetailsPerformance(props: {
       user?.groups ?? user?.group ?? null,
       props.model.model_name,
     ],
-    queryFn: () => getPerfMetrics(props.model.model_name, 24),
+    queryFn: async () =>
+      requireServerSuccess(await getPerfMetrics(props.model.model_name, 24)),
     enabled: !props.selectedGroup,
     staleTime: 60 * 1000,
     retry: false,

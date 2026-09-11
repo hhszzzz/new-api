@@ -76,8 +76,13 @@ import {
 } from '@/lib/admin-permissions'
 import { getCurrencyDisplay, getCurrencyLabel } from '@/lib/currency'
 import { formatQuota, parseQuotaFromDollars } from '@/lib/format'
+import { handleServerError } from '@/lib/handle-server-error'
 import { accountPasswordSchema } from '@/lib/password-policy'
 import { ROLE } from '@/lib/roles'
+import {
+  createServerError,
+  requireServerSuccess,
+} from '@/lib/server-error-message'
 import { useAuthStore } from '@/stores/auth-store'
 
 import {
@@ -127,7 +132,7 @@ export function UsersMutateDrawer({
   // Fetch groups
   const { data: groupsData } = useQuery({
     queryKey: ['groups'],
-    queryFn: getGroups,
+    queryFn: async () => requireServerSuccess(await getGroups()),
     staleTime: 5 * 60 * 1000,
   })
 
@@ -141,7 +146,7 @@ export function UsersMutateDrawer({
   // Permission catalog is owned by the backend; fetched once and reused.
   const { data: permissionCatalog = EMPTY_PERMISSION_CATALOG } = useQuery({
     queryKey: ['admin-permission-catalog'],
-    queryFn: getPermissionCatalog,
+    queryFn: async () => requireServerSuccess(await getPermissionCatalog()),
     staleTime: 5 * 60 * 1000,
   })
 
@@ -150,27 +155,33 @@ export function UsersMutateDrawer({
     defaultValues: USER_FORM_DEFAULT_VALUES,
   })
 
-  const loadUserForm = useCallback(async (userId: number) => {
-    const [userResult, policyResult] = await Promise.all([
-      getUser(userId),
-      getUserPolicy(userId),
-    ])
-    if (
-      !userResult.success ||
-      !userResult.data ||
-      !policyResult.success ||
-      !policyResult.data
-    ) {
-      throw new Error('failed to load complete user policy')
-    }
-    return transformUserToFormDefaults(userResult.data, policyResult.data)
-  }, [])
+  const loadUserForm = useCallback(
+    async (userId: number) => {
+      const [userResult, policyResult] = await Promise.all([
+        getUser(userId),
+        getUserPolicy(userId),
+      ])
+      if (
+        !userResult.success ||
+        !userResult.data ||
+        !policyResult.success ||
+        !policyResult.data
+      ) {
+        throw createServerError(
+          userResult.success ? policyResult : userResult,
+          t('Failed to load')
+        )
+      }
+      return transformUserToFormDefaults(userResult.data, policyResult.data)
+    },
+    [t]
+  )
   const handleUserFormLoaded = useCallback(
     (values: UserFormValues) => form.reset(values),
     [form]
   )
   const handleUserFormLoadError = useCallback(
-    () => toast.error(t('Failed to load')),
+    (error: unknown) => handleServerError(error, t('Failed to load')),
     [t]
   )
   const { isLoading: isUserLoading, reload: reloadUserForm } =
@@ -262,7 +273,7 @@ export function UsersMutateDrawer({
         )
         if (!isCurrent()) return
         if (!result.success) {
-          toast.error(result.message || t(ERROR_MESSAGES.UPDATE_FAILED))
+          handleServerError(result, t(ERROR_MESSAGES.UPDATE_FAILED))
           return
         }
         toast.success(t(SUCCESS_MESSAGES.USER_UPDATED))
@@ -270,16 +281,16 @@ export function UsersMutateDrawer({
         const result = await createUser(payload)
         if (!isCurrent()) return
         if (!result.success) {
-          toast.error(result.message || t(ERROR_MESSAGES.CREATE_FAILED))
+          handleServerError(result, t(ERROR_MESSAGES.CREATE_FAILED))
           return
         }
         toast.success(t(SUCCESS_MESSAGES.USER_CREATED))
       }
       onOpenChange(false)
       triggerRefresh()
-    } catch {
+    } catch (error) {
       if (!isCurrent()) return
-      toast.error(t(ERROR_MESSAGES.UNEXPECTED))
+      handleServerError(error, t(ERROR_MESSAGES.UNEXPECTED))
     } finally {
       if (isCurrent()) setIsSubmitting(false)
     }

@@ -46,6 +46,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { useLatestAsyncTask } from '@/hooks/use-latest-async-task'
+import { handleServerError } from '@/lib/handle-server-error'
 
 import { fetchUpstreamModels, updateChannel } from '../../api'
 import {
@@ -186,15 +187,13 @@ export function FetchModelsDialog({
           setSelectedModels(existingModels)
           toast.success(t('Fetched {{count}} models', { count: list.length }))
         } else {
-          toast.error(response.message || t('Failed to fetch models'))
+          handleServerError(response, t('Failed to fetch models'))
           setFetchedModels([])
         }
       }
     } catch (error: unknown) {
       if (!isCurrent()) return
-      toast.error(
-        error instanceof Error ? error.message : t('Failed to fetch models')
-      )
+      handleServerError(error, t('Failed to fetch models'))
       setFetchedModels([])
     } finally {
       if (isCurrent()) setIsFetching(false)
@@ -246,13 +245,11 @@ export function FetchModelsDialog({
         invalidateFetchTask()
         onOpenChange(false)
       } else {
-        toast.error(response.message || t('Failed to update models'))
+        handleServerError(response, t('Failed to update models'))
       }
     } catch (error: unknown) {
       if (!isCurrent()) return
-      toast.error(
-        error instanceof Error ? error.message : t('Failed to update models')
-      )
+      handleServerError(error, t('Failed to update models'))
     } finally {
       if (isCurrent()) setIsSaving(false)
     }

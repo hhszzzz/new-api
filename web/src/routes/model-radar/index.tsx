@@ -16,14 +16,18 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import type { QueryClient } from '@tanstack/react-query'
 import { createFileRoute, redirect } from '@tanstack/react-router'
 
 import { ModelRadar } from '@/features/model-radar'
-import { getFreshModuleAccess } from '@/lib/nav-modules'
+import { getModuleAccessForGuard } from '@/lib/nav-modules'
 import { useAuthStore } from '@/stores/auth-store'
 
-export async function guardModelRadarRoute(redirectHref: string) {
-  const access = await getFreshModuleAccess('modelRadar')
+export async function guardModelRadarRoute(
+  queryClient: QueryClient,
+  redirectHref: string
+) {
+  const access = await getModuleAccessForGuard(queryClient, 'modelRadar')
   if (!access.enabled) {
     throw redirect({ to: '/' })
   }
@@ -39,6 +43,7 @@ export async function guardModelRadarRoute(redirectHref: string) {
 }
 
 export const Route = createFileRoute('/model-radar/')({
-  beforeLoad: ({ location }) => guardModelRadarRoute(location.href),
+  beforeLoad: ({ context, location }) =>
+    guardModelRadarRoute(context.queryClient, location.href),
   component: ModelRadar,
 })

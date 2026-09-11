@@ -150,7 +150,7 @@ export function RedemptionsMutateDrawer({
           result.data.id !== redemptionId
         ) {
           setRedemptionLoadState('error')
-          toast.error(t('Failed to load'))
+          handleServerError(result, t('Failed to load'))
           return
         }
 
@@ -194,44 +194,44 @@ export function RedemptionsMutateDrawer({
           id: currentRow.id,
         })
         if (!isCurrent()) return
-        if (!result.success) {
-          toast.error(result.message || t(ERROR_MESSAGES.UPDATE_FAILED))
-          return
+        if (result.success) {
+          toast.success(t(SUCCESS_MESSAGES.REDEMPTION_UPDATED))
+          onOpenChange(false)
+          triggerRefresh()
+        } else {
+          handleServerError(result, t(ERROR_MESSAGES.UPDATE_FAILED))
         }
-        toast.success(t(SUCCESS_MESSAGES.REDEMPTION_UPDATED))
-        onOpenChange(false)
-        triggerRefresh()
       } else {
         // Create mode
         const result = await createRedemption(basePayload)
         if (!isCurrent()) return
-        if (!result.success) {
-          toast.error(result.message || t(ERROR_MESSAGES.CREATE_FAILED))
-          return
+        if (result.success) {
+          const count = result.data?.length || 0
+          toast.success(
+            count > 1
+              ? t('Successfully created {{count}} redemption codes', {
+                  count,
+                })
+              : t(SUCCESS_MESSAGES.REDEMPTION_CREATED)
+          )
+          if (result.data?.length) {
+            setCreatedCodes({
+              keys: result.data,
+              name: basePayload.name,
+              quota: formatQuotaWithCurrency(basePayload.quota, {
+                abbreviate: false,
+              }),
+            })
+          }
+          onOpenChange(false)
+          triggerRefresh()
+        } else {
+          handleServerError(result, t(ERROR_MESSAGES.CREATE_FAILED))
         }
-        const count = result.data?.length || 0
-        toast.success(
-          count > 1
-            ? t('Successfully created {{count}} redemption codes', {
-                count,
-              })
-            : t(SUCCESS_MESSAGES.REDEMPTION_CREATED)
-        )
-        if (result.data?.length) {
-          setCreatedCodes({
-            keys: result.data,
-            name: basePayload.name,
-            quota: formatQuotaWithCurrency(basePayload.quota, {
-              abbreviate: false,
-            }),
-          })
-        }
-        onOpenChange(false)
-        triggerRefresh()
       }
-    } catch {
+    } catch (error) {
       if (!isCurrent()) return
-      toast.error(t(ERROR_MESSAGES.UNEXPECTED))
+      handleServerError(error, t(ERROR_MESSAGES.UNEXPECTED))
     } finally {
       if (isCurrent()) setIsSubmitting(false)
     }

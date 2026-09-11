@@ -18,6 +18,8 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
 
+import { requireServerSuccess } from '@/lib/server-error-message'
+
 import { getRankings } from '../api'
 import type { RankingsQuery } from '../types'
 
@@ -30,7 +32,7 @@ export function useRankings(query: RankingsQuery, viewerKey: string) {
       query.endTimestamp ?? null,
       viewerKey,
     ],
-    queryFn: () => getRankings(query),
+    queryFn: async () => requireServerSuccess(await getRankings(query)),
     staleTime: 5 * 60 * 1000,
   })
 }

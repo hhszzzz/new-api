@@ -20,6 +20,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useMemo } from 'react'
 
 import { useStatus } from '@/hooks/use-status'
+import { requireServerSuccess } from '@/lib/server-error-message'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { getPricing } from '../api'
@@ -33,7 +34,7 @@ export function usePricingData(enabled = true) {
 
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['pricing', userId ?? 'anonymous'],
-    queryFn: getPricing,
+    queryFn: async () => requireServerSuccess(await getPricing()),
     staleTime: 5 * 60 * 1000,
     enabled,
   })

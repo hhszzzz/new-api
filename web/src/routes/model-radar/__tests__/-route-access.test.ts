@@ -20,13 +20,13 @@ import { afterEach, describe, expect, test, vi } from 'vitest'
 
 import { useAuthStore } from '@/stores/auth-store'
 
-const { getFreshModuleAccessMock } = vi.hoisted(() => ({
-  getFreshModuleAccessMock: vi.fn(),
+const { getModuleAccessForGuardMock } = vi.hoisted(() => ({
+  getModuleAccessForGuardMock: vi.fn(),
 }))
 
 vi.mock('@/features/model-radar', () => ({ ModelRadar: () => null }))
 vi.mock('@/lib/nav-modules', () => ({
-  getFreshModuleAccess: getFreshModuleAccessMock,
+  getModuleAccessForGuard: getModuleAccessForGuardMock,
 }))
 
 const { guardModelRadarRoute } = await import('../index')
@@ -37,24 +37,24 @@ afterEach(() => {
 
 describe('model radar route access', () => {
   test('redirects to home when disabled', async () => {
-    getFreshModuleAccessMock.mockResolvedValue({
+    getModuleAccessForGuardMock.mockResolvedValue({
       enabled: false,
       requireAuth: false,
     })
 
-    await expect(guardModelRadarRoute('/model-radar')).rejects.toMatchObject({
+    await expect(guardModelRadarRoute({} as never, '/model-radar')).rejects.toMatchObject({
       options: { to: '/' },
     })
   })
 
   test('redirects visitors to sign in when login is required', async () => {
-    getFreshModuleAccessMock.mockResolvedValue({
+    getModuleAccessForGuardMock.mockResolvedValue({
       enabled: true,
       requireAuth: true,
     })
 
     await expect(
-      guardModelRadarRoute('/model-radar?from=header')
+      guardModelRadarRoute({} as never, '/model-radar?from=header')
     ).rejects.toMatchObject({
       options: {
         to: '/sign-in',
@@ -64,17 +64,17 @@ describe('model radar route access', () => {
   })
 
   test('allows public and authenticated access when permitted', async () => {
-    getFreshModuleAccessMock.mockResolvedValue({
+    getModuleAccessForGuardMock.mockResolvedValue({
       enabled: true,
       requireAuth: false,
     })
-    await expect(guardModelRadarRoute('/model-radar')).resolves.toBeUndefined()
+    await expect(guardModelRadarRoute({} as never, '/model-radar')).resolves.toBeUndefined()
 
-    getFreshModuleAccessMock.mockResolvedValue({
+    getModuleAccessForGuardMock.mockResolvedValue({
       enabled: true,
       requireAuth: true,
     })
     useAuthStore.getState().auth.setUser({ id: 1, username: 'user', role: 1 })
-    await expect(guardModelRadarRoute('/model-radar')).resolves.toBeUndefined()
+    await expect(guardModelRadarRoute({} as never, '/model-radar')).resolves.toBeUndefined()
   })
 })

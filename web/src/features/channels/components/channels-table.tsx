@@ -42,6 +42,7 @@ import {
 import { useMediaQuery } from '@/hooks'
 import { useTableUrlState } from '@/hooks/use-table-url-state'
 import { getLobeIcon } from '@/lib/lobe-icon'
+import { requireServerSuccess } from '@/lib/server-error-message'
 
 import { getChannels, searchChannels, getGroups } from '../api'
 import { DEFAULT_PAGE_SIZE, CHANNEL_STATUS_OPTIONS } from '../constants'
@@ -214,7 +215,7 @@ export function ChannelsTable() {
   // Fetch groups for filter
   const { data: groupsData } = useQuery({
     queryKey: ['groups'],
-    queryFn: getGroups,
+    queryFn: async () => requireServerSuccess(await getGroups()),
   })
 
   const groupOptions = useMemo(
@@ -253,57 +254,53 @@ export function ChannelsTable() {
     }),
     queryFn: async () => {
       if (shouldSearch) {
-        const response = await searchChannels({
-          keyword: globalFilter,
-          model: modelFilter,
-          group:
-            groupFilter.length > 0 && !groupFilter.includes('all')
-              ? groupFilter[0]
-              : undefined,
-          status:
-            statusFilter.length > 0 && !statusFilter.includes('all')
-              ? statusFilter[0]
-              : undefined,
-          type:
-            typeFilter.length > 0 && !typeFilter.includes('all')
-              ? Number(typeFilter[0])
-              : undefined,
-          tag_mode: enableTagMode,
-          aggregate_mode: !enableTagMode,
-          id_sort: idSort,
-          ...sortParams,
-          p: pagination.pageIndex + 1,
-          page_size: pagination.pageSize,
-        })
-        if (!response.success) {
-          throw new Error(response.message || t('Failed to load channels'))
-        }
-        return response
+        return requireServerSuccess(
+          await searchChannels({
+            keyword: globalFilter,
+            model: modelFilter,
+            group:
+              groupFilter.length > 0 && !groupFilter.includes('all')
+                ? groupFilter[0]
+                : undefined,
+            status:
+              statusFilter.length > 0 && !statusFilter.includes('all')
+                ? statusFilter[0]
+                : undefined,
+            type:
+              typeFilter.length > 0 && !typeFilter.includes('all')
+                ? Number(typeFilter[0])
+                : undefined,
+            tag_mode: enableTagMode,
+            aggregate_mode: !enableTagMode,
+            id_sort: idSort,
+            ...sortParams,
+            p: pagination.pageIndex + 1,
+            page_size: pagination.pageSize,
+          })
+        )
       } else {
-        const response = await getChannels({
-          group:
-            groupFilter.length > 0 && !groupFilter.includes('all')
-              ? groupFilter[0]
-              : undefined,
-          status:
-            statusFilter.length > 0 && !statusFilter.includes('all')
-              ? statusFilter[0]
-              : undefined,
-          type:
-            typeFilter.length > 0 && !typeFilter.includes('all')
-              ? Number(typeFilter[0])
-              : undefined,
-          tag_mode: enableTagMode,
-          aggregate_mode: !enableTagMode,
-          id_sort: idSort,
-          ...sortParams,
-          p: pagination.pageIndex + 1,
-          page_size: pagination.pageSize,
-        })
-        if (!response.success) {
-          throw new Error(response.message || t('Failed to load channels'))
-        }
-        return response
+        return requireServerSuccess(
+          await getChannels({
+            group:
+              groupFilter.length > 0 && !groupFilter.includes('all')
+                ? groupFilter[0]
+                : undefined,
+            status:
+              statusFilter.length > 0 && !statusFilter.includes('all')
+                ? statusFilter[0]
+                : undefined,
+            type:
+              typeFilter.length > 0 && !typeFilter.includes('all')
+                ? Number(typeFilter[0])
+                : undefined,
+            tag_mode: enableTagMode,
+            aggregate_mode: !enableTagMode,
+            id_sort: idSort,
+            ...sortParams,
+            p: pagination.pageIndex + 1,
+            page_size: pagination.pageSize,
+          })
+        )
       }
     },
     placeholderData: (previousData) => previousData,

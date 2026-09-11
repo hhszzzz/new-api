@@ -25,6 +25,8 @@ import {
   ADMIN_PERMISSION_RESOURCES,
   hasPermission,
 } from '@/lib/admin-permissions'
+import { handleServerError } from '@/lib/handle-server-error'
+import { createServerError } from '@/lib/server-error-message'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { createChannel, updateChannel } from '../api'
@@ -61,31 +63,6 @@ const SENSITIVE_UPDATE_FIELDS = [
   'aggregate_id',
   'inherit_aggregate_base_url',
 ] satisfies (keyof Channel)[]
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null
-}
-
-function getErrorMessage(error: unknown): string | undefined {
-  if (error instanceof Error && typeof error.message === 'string') {
-    return error.message
-  }
-
-  if (!isRecord(error)) return undefined
-
-  const response = error.response
-  if (isRecord(response)) {
-    const data = response.data
-    if (isRecord(data)) {
-      const message = data.message
-      if (typeof message === 'string') return message
-    }
-  }
-
-  const message = error.message
-  if (typeof message === 'string') return message
-  return undefined
-}
 
 export function useChannelMutateForm(props: UseChannelMutateFormParams) {
   const { t } = useTranslation()
@@ -127,7 +104,7 @@ export function useChannelMutateForm(props: UseChannelMutateFormParams) {
           payloadWithKeyMode
         )
         if (!response.success) {
-          throw new Error(response.message || t(ERROR_MESSAGES.UPDATE_FAILED))
+          throw createServerError(response, t(ERROR_MESSAGES.UPDATE_FAILED))
         }
         return SUCCESS_MESSAGES.UPDATED
       }
@@ -135,7 +112,7 @@ export function useChannelMutateForm(props: UseChannelMutateFormParams) {
       const payload = transformFormDataToCreatePayload(data)
       const response = await createChannel(payload)
       if (!response.success) {
-        throw new Error(response.message || t(ERROR_MESSAGES.CREATE_FAILED))
+        throw createServerError(response, t(ERROR_MESSAGES.CREATE_FAILED))
       }
       return SUCCESS_MESSAGES.CREATED
     },
@@ -146,7 +123,7 @@ export function useChannelMutateForm(props: UseChannelMutateFormParams) {
     },
     onError: (error: unknown, request) => {
       if (!request.isCurrent()) return
-      toast.error(getErrorMessage(error) || t(ERROR_MESSAGES.CREATE_FAILED))
+      handleServerError(error, t(ERROR_MESSAGES.CREATE_FAILED))
     },
   })
 }
