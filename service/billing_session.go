@@ -360,6 +360,18 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 	}
 
 	pref := common.NormalizeBillingPreference(relayInfo.UserSetting.BillingPreference)
+	usingGroup := strings.TrimSpace(relayInfo.UsingGroup)
+
+	// 订阅授予的分组由该订阅独占计费：即使用户有余额也必须从订阅额度扣除，
+	// 额度用尽后直接拒绝，不允许回退钱包。该规则覆盖用户计费偏好，
+	// 避免切换到 wallet_first / wallet_only 绕过。
+	grantingSubscription, err := model.HasActiveSubscriptionGrantingGroup(relayInfo.UserId, usingGroup)
+	if err != nil {
+		return nil, types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
+	}
+	if grantingSubscription {
+		pref = "subscription_only"
+	}
 
 	// 钱包路径需要先检查用户额度
 	tryWallet := func() (*BillingSession, *types.NewAPIError) {
@@ -403,6 +415,9 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 				userId:    relayInfo.UserId,
 				modelName: relayInfo.GetBillingModelName(),
 				amount:    subConsume,
+				// 订阅资金按当前分组过滤：绑定分组的订阅只能为该分组付费，
+				// 避免其他分组的请求消耗这份订阅额度。
+				group: usingGroup,
 			},
 		}
 		// 必须传 subConsume 而非 preConsumedQuota，保证 SubscriptionFunding.amount、
@@ -430,7 +445,9 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 	case "subscription_first":
 		fallthrough
 	default:
-		hasSub, subCheckErr := model.HasActiveUserSubscription(relayInfo.UserId)
+		// 只有当前分组存在可付费的订阅（授予该分组的订阅，或无分组的通用订阅）
+		// 才优先走订阅；否则订阅额度不得被该分组消耗，直接使用钱包。
+		hasSub, subCheckErr := model.HasActiveSubscriptionForGroup(relayInfo.UserId, usingGroup)
 		if subCheckErr != nil {
 			return nil, types.NewError(subCheckErr, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
 		}

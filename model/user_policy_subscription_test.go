@@ -263,7 +263,7 @@ func TestSubscriptionDowngradeWithoutUpgradePreservesLegacyMembership(t *testing
 	assert.Equal(t, "default", mustLoadPolicySubscriptionUser(t, user.Id).Group)
 }
 
-func TestSubscriptionDoesNotRemoveGroupMadeManualOrReportFalseUpgrade(t *testing.T) {
+func TestAdminBindSubscriptionRejectsManuallyAssignedGroup(t *testing.T) {
 	setupUserPolicySubscriptionTestDB(t)
 	user := createPolicySubscriptionTestUser(t, "legacy")
 	plan := createPolicySubscriptionTestPlan(t, "premium")
@@ -275,16 +275,47 @@ func TestSubscriptionDoesNotRemoveGroupMadeManualOrReportFalseUpgrade(t *testing
 	}).Error)
 	require.NoError(t, DB.Model(&User{}).Where("id = ?", user.Id).Update("policy_version", 2).Error)
 
-	message, err := AdminBindSubscription(user.Id, plan.Id, "assigned by admin")
-	require.NoError(t, err)
-	assert.Empty(t, message)
-	assert.Equal(t, []string{"legacy", "premium"}, groupNames(policySubscriptionTestGroups(t, user.Id)))
+	_, err := AdminBindSubscription(user.Id, plan.Id, "assigned by admin")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "手动分配")
 
-	var subscription UserSubscription
-	require.NoError(t, DB.Where("user_id = ?", user.Id).First(&subscription).Error)
-	_, err = AdminInvalidateUserSubscription(subscription.Id)
+	// 拒绝后不得创建订阅，分组与归属保持不变。
+	var subscriptionCount int64
+	require.NoError(t, DB.Model(&UserSubscription{}).Where("user_id = ?", user.Id).Count(&subscriptionCount).Error)
+	assert.Zero(t, subscriptionCount)
+	memberships := policySubscriptionTestGroups(t, user.Id)
+	assert.Equal(t, []string{"legacy", "premium"}, groupNames(memberships))
+	for _, membership := range memberships {
+		require.NotNil(t, membership.Manual)
+		assert.True(t, *membership.Manual)
+	}
+}
+
+func TestPolicyEditPreservesSubscriptionGrantedGroupAsNonManual(t *testing.T) {
+	setupUserPolicySubscriptionTestDB(t)
+	user := createPolicySubscriptionTestUser(t, "legacy")
+	plan := createPolicySubscriptionTestPlan(t, "premium")
+	_, err := CreateUserSubscriptionFromPlanTx(DB, user.Id, plan, "admin")
 	require.NoError(t, err)
-	assert.Equal(t, []string{"legacy", "premium"}, groupNames(policySubscriptionTestGroups(t, user.Id)))
+
+	// 管理员保存分组时包含订阅授予的 premium：应保持订阅归属，不得转为手动成员，
+	// 也不应报错阻断正常的策略保存。
+	require.NoError(t, ReplaceUserPolicy(user.Id, UserPolicyUpdate{
+		Groups:       []string{"legacy", "premium"},
+		PrimaryGroup: "legacy",
+		TopupGroup:   "legacy",
+	}))
+
+	memberships := policySubscriptionTestGroups(t, user.Id)
+	require.Len(t, memberships, 2)
+	for _, membership := range memberships {
+		require.NotNil(t, membership.Manual)
+		if membership.GroupName == "premium" {
+			assert.False(t, *membership.Manual, "订阅授予的分组不应被转为手动成员")
+		} else {
+			assert.True(t, *membership.Manual)
+		}
+	}
 }
 
 func TestPrimaryGroupIsExplicitAndKeepsLegacyColumnInSync(t *testing.T) {

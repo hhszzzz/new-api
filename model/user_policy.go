@@ -415,9 +415,19 @@ func replaceUserGroupsWithTx(tx *gorm.DB, userId int, groups []string) error {
 				}
 			}
 			if membership.Manual == nil || !*membership.Manual {
-				if err := tx.Model(&UserGroupMembership{}).Where("id = ?", membership.Id).
-					Update("manual", true).Error; err != nil {
+				// 该分组由活跃订阅授予时保持订阅归属，不转为手动成员，避免制造
+				// “手动分配 + 订阅授予”并存的冲突状态。
+				var activeGrantCount int64
+				if err := tx.Model(&UserSubscription{}).
+					Where("user_id = ? AND status = ? AND end_time > ? AND upgrade_group = ?", userId, "active", now, membership.GroupName).
+					Count(&activeGrantCount).Error; err != nil {
 					return err
+				}
+				if activeGrantCount == 0 {
+					if err := tx.Model(&UserGroupMembership{}).Where("id = ?", membership.Id).
+						Update("manual", true).Error; err != nil {
+						return err
+					}
 				}
 			}
 			continue

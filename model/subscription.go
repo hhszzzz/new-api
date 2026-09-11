@@ -540,6 +540,11 @@ func addSubscriptionGroupMembershipTx(tx *gorm.DB, userId int, group string) (bo
 
 	for _, existing := range memberships {
 		if existing.GroupName == group {
+			// 手动分配与订阅授予互斥：该分组已由管理员手动分配时，不允许再绑定订阅，
+			// 否则“订阅独占计费”与“手动分组可用余额”两条规则会同时命中同一用户。
+			if existing.Manual != nil && *existing.Manual {
+				return false, true, fmt.Errorf("分组 %s 已由管理员手动分配，无法绑定订阅；请先移除该分组后再绑定", group)
+			}
 			return membershipChanged, true, nil
 		}
 	}
@@ -1246,17 +1251,43 @@ func GetAllActiveUserSubscriptions(userId int) ([]SubscriptionSummary, error) {
 	return buildSubscriptionSummaries(subs), nil
 }
 
-// HasActiveUserSubscription returns whether the user has any active subscription.
-// This is a lightweight existence check to avoid heavy pre-consume transactions.
-func HasActiveUserSubscription(userId int) (bool, error) {
-	if userId <= 0 {
-		return false, errors.New("invalid userId")
+// HasActiveSubscriptionGrantingGroup reports whether the user holds an active
+// subscription that granted the given group. A request routed through such a
+// group must be funded by that subscription alone: wallet balance can never pay
+// for it, even after the subscription quota is exhausted.
+func HasActiveSubscriptionGrantingGroup(userId int, group string) (bool, error) {
+	group = strings.TrimSpace(group)
+	if userId <= 0 || group == "" {
+		return false, nil
 	}
 	now := common.GetTimestamp()
 	var count int64
 	if err := DB.Model(&UserSubscription{}).
-		Where("user_id = ? AND status = ? AND end_time > ?", userId, "active", now).
+		Where("user_id = ? AND status = ? AND end_time > ? AND upgrade_group = ?",
+			userId, "active", now, group).
 		Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+// HasActiveSubscriptionForGroup reports whether the user holds an active subscription
+// that may fund a request in the given group: either it grants that group, or it is a
+// generic subscription without a target group (legacy quota packs that never changed a
+// user's group). Group-tied subscriptions may only fund the group they granted, which
+// keeps subscription quota from being drained by traffic in other groups.
+func HasActiveSubscriptionForGroup(userId int, group string) (bool, error) {
+	if userId <= 0 {
+		return false, errors.New("invalid userId")
+	}
+	now := common.GetTimestamp()
+	query := DB.Model(&UserSubscription{}).
+		Where("user_id = ? AND status = ? AND end_time > ?", userId, "active", now)
+	if group = strings.TrimSpace(group); group != "" {
+		query = query.Where("upgrade_group = ? OR upgrade_group = ''", group)
+	}
+	var count int64
+	if err := query.Count(&count).Error; err != nil {
 		return false, err
 	}
 	return count > 0, nil
@@ -1656,7 +1687,10 @@ func maybeResetUserSubscriptionWithPlanTx(tx *gorm.DB, sub *UserSubscription, pl
 }
 
 // PreConsumeUserSubscription pre-consumes from any active subscription total quota.
-func PreConsumeUserSubscription(requestId string, userId int, modelName string, quotaType int, amount int64) (*SubscriptionPreConsumeResult, error) {
+// When group is non-empty, only subscriptions that granted that group may fund the
+// request, so a request in a subscription-owned group never draws on an unrelated
+// subscription.
+func PreConsumeUserSubscription(requestId string, userId int, modelName string, quotaType int, amount int64, group string) (*SubscriptionPreConsumeResult, error) {
 	if userId <= 0 {
 		return nil, errors.New("invalid userId")
 	}
@@ -1704,6 +1738,12 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 		}
 		for _, candidate := range subs {
 			sub := candidate
+			subGroup := strings.TrimSpace(sub.UpgradeGroup)
+			// 非通用订阅（upgrade_group 非空）只能为其授予的分组付费；无分组的通用
+			// 订阅仍可为任意分组付费，保持历史行为。
+			if group != "" && subGroup != group && subGroup != "" {
+				continue
+			}
 			plan, err := getSubscriptionPlanByIdTx(tx, sub.PlanId)
 			if err != nil {
 				return err
