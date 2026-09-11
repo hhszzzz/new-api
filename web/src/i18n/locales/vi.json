@@ -388,6 +388,7 @@
     "Administrator assignment": "Quản trị viên phân bổ",
     "Administrator assignment note": "Ghi chú phân bổ của quản trị viên",
     "Administrator assignment note (optional)": "Ghi chú phân bổ (không bắt buộc)",
+    "{{group}} group subscription": "Đăng ký nhóm {{group}}",
     "Administrator username": "Tên người dùng quản trị viên",
     "Administrators can always see full account emails.": "Quản trị viên luôn có thể xem đầy đủ email của tài khoản.",
     "Advance next reset time": "Dời thời gian đặt lại tiếp theo",
@@ -2752,7 +2753,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "Các Dự Án Liên Quan",
     "footer.defaultCopyright": "Bản quyền được bảo lưu.",
-    "footer.newapi.projectAttributionSuffix": "Bản quyền được bảo lưu. Được thiết kế và phát triển bởi các cộng tác viên dự án.",
+    "footer.new\u0061pi.projectAttributionSuffix": "Bản quyền được bảo lưu. Được thiết kế và phát triển bởi các cộng tác viên dự án.",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "Đối với các kênh được thêm sau ngày 10 tháng 5 năm 2025, không cần loại bỏ \".\" khỏi tên mô hình trong quá trình triển khai",
     "For private deployments, format: https://fastgpt.run/api/openapi": "Đối với các triển khai riêng tư, định dạng: https://fastgpt.run/api/openapi",
     "For security, existing access tokens cannot be displayed. Regenerate only when you need a new token.": "Vì lý do bảo mật, không thể hiển thị lại token truy cập hiện có. Chỉ tạo lại khi bạn cần token mới.",
@@ -7109,6 +7110,16 @@
     "Zero retention": "Không lưu dữ liệu",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Apply one subscription operation to {{count}} selected user(s). Users without a matching active subscription are skipped and reported.": "Áp dụng một thao tác đăng ký cho {{count}} người dùng đã chọn. Người dùng không có đăng ký đang hoạt động phù hợp sẽ bị bỏ qua và được báo cáo.",
+    "Assign subscription": "Gán đăng ký",
+    "Batch manage subscriptions": "Quản lý đăng ký hàng loạt",
+    "Cancels the subscriptions but keeps their records.": "Hủy đăng ký nhưng giữ lại bản ghi.",
+    "Confirm batch subscription deletion": "Xác nhận xóa đăng ký hàng loạt",
+    "Delete subscription": "Xóa đăng ký",
+    "Invalidate subscription": "Vô hiệu hóa đăng ký",
+    "Permanently removes the subscription records.": "Xóa vĩnh viễn bản ghi đăng ký.",
+    "Subscription plan": "Gói đăng ký",
+    "This permanently deletes every active subscription of the selected plan for {{count}} selected user(s). Continue?": "Thao tác này sẽ xóa vĩnh viễn mọi đăng ký đang hoạt động của gói đã chọn cho {{count}} người dùng đã chọn. Tiếp tục?"
   }
 }

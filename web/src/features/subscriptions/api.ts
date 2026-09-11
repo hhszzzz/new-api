@@ -30,6 +30,10 @@ import type {
   SubscriptionPayResponse,
   SubscriptionPayRequest,
   SelfSubscriptionData,
+  UserBatchSubscriptionAssignRequest,
+  UserBatchSubscriptionRevokeRequest,
+  UserBatchSubscriptionResetRequest,
+  UserBatchSubscriptionResult,
 } from './types'
 
 // ============================================================================
@@ -127,6 +131,31 @@ export async function resetPlanSubscriptions(
     `/api/subscription/admin/plans/${planId}/subscriptions/reset`,
     data
   )
+  return res.data
+}
+
+// ============================================================================
+// Admin Batch User Subscription Management
+// ============================================================================
+
+export async function batchAssignUserSubscriptions(
+  data: UserBatchSubscriptionAssignRequest
+): Promise<ApiResponse<UserBatchSubscriptionResult>> {
+  const res = await api.post('/api/subscription/admin/batch/assign', data)
+  return res.data
+}
+
+export async function batchRevokeUserSubscriptions(
+  data: UserBatchSubscriptionRevokeRequest
+): Promise<ApiResponse<UserBatchSubscriptionResult>> {
+  const res = await api.post('/api/subscription/admin/batch/revoke', data)
+  return res.data
+}
+
+export async function batchResetUserSubscriptions(
+  data: UserBatchSubscriptionResetRequest
+): Promise<ApiResponse<UserBatchSubscriptionResult>> {
+  const res = await api.post('/api/subscription/admin/batch/reset', data)
   return res.data
 }
 

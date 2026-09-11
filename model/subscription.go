@@ -1061,9 +1061,6 @@ func AdminBindSubscription(userId int, planId int, sourceNote string) (string, e
 		return "", errors.New("套餐未启用，不能手动分配")
 	}
 	sourceNote = strings.TrimSpace(sourceNote)
-	if sourceNote == "" {
-		return "", errors.New("管理员分配备注不能为空")
-	}
 	if utf8.RuneCountInString(sourceNote) > 255 {
 		return "", errors.New("source_note is too long")
 	}
@@ -1271,6 +1268,38 @@ func HasActiveSubscriptionGrantingGroup(userId int, group string) (bool, error) 
 	return count > 0, nil
 }
 
+// EnsureNoActiveSubscriptionsForGroups rejects removing the given groups while an
+// active subscription still grants them. Group configuration lives in settings
+// rather than a table, so without this guard an administrator could delete a group
+// that a live subscription is funding, leaving the user with a granted group that no
+// longer routes. Cancelling the subscription first releases the group.
+func EnsureNoActiveSubscriptionsForGroups(groups []string) error {
+	if len(groups) == 0 {
+		return nil
+	}
+	normalized := normalizePolicyValues(groups)
+	if len(normalized) == 0 {
+		return nil
+	}
+	now := GetDBTimestamp()
+	var used []string
+	err := DB.Model(&UserSubscription{}).
+		Distinct("upgrade_group").
+		Where("status = ? AND end_time > ? AND upgrade_group IN ?", "active", now, normalized).
+		Pluck("upgrade_group", &used).Error
+	if err != nil {
+		if policyTableMissing(err) {
+			return nil
+		}
+		return err
+	}
+	if len(used) == 0 {
+		return nil
+	}
+	slices.Sort(used)
+	return fmt.Errorf("分组 %s 仍被活跃订阅使用，无法删除；请先取消相关订阅", strings.Join(used, ", "))
+}
+
 // HasActiveSubscriptionForGroup reports whether the user holds an active subscription
 // that may fund a request in the given group: either it grants that group, or it is a
 // generic subscription without a target group (legacy quota packs that never changed a
@@ -1435,6 +1464,54 @@ func AdminDeleteUserSubscription(userSubscriptionId int) (string, error) {
 		return fmt.Sprintf("用户主分组将调整为 %s", cacheGroup), nil
 	}
 	return "", nil
+}
+
+// AdminRevokeUserPlanSubscriptions invalidates every active subscription a user
+// holds for the plan, so an administrator can revoke one plan across users
+// without targeting individual subscription ids. Cancelling (rather than
+// deleting) keeps the billing history intact.
+func AdminRevokeUserPlanSubscriptions(userId int, planId int) (int, error) {
+	if userId <= 0 || planId <= 0 {
+		return 0, errors.New("invalid userId or planId")
+	}
+	now := GetDBTimestamp()
+	var subs []UserSubscription
+	if err := DB.Where("user_id = ? AND plan_id = ? AND status = ? AND end_time > ?",
+		userId, planId, "active", now).Order("id asc").Find(&subs).Error; err != nil {
+		return 0, err
+	}
+	cancelled := 0
+	for i := range subs {
+		if _, err := AdminInvalidateUserSubscription(subs[i].Id); err != nil {
+			return cancelled, err
+		}
+		cancelled++
+	}
+	return cancelled, nil
+}
+
+// AdminDeleteUserPlanSubscriptions hard-deletes every active subscription a user
+// holds for the plan. Unlike cancelling, this removes the records entirely, so it
+// is reserved for mistaken or test assignments. Historical expired rows are left
+// untouched.
+func AdminDeleteUserPlanSubscriptions(userId int, planId int) (int, error) {
+	if userId <= 0 || planId <= 0 {
+		return 0, errors.New("invalid userId or planId")
+	}
+	now := GetDBTimestamp()
+	var subs []UserSubscription
+	if err := DB.Where("user_id = ? AND plan_id = ? AND status = ? AND end_time > ?",
+		userId, planId, "active", now).Order("id asc").Find(&subs).Error; err != nil {
+		return 0, err
+	}
+	deleted := 0
+	for i := range subs {
+		if _, err := AdminDeleteUserSubscription(subs[i].Id); err != nil {
+			return deleted, err
+		}
+		deleted++
+	}
+	return deleted, nil
 }
 
 func resetUserSubscriptionTx(tx *gorm.DB, sub *UserSubscription, plan *SubscriptionPlan, now int64, advanceResetTime bool) error {

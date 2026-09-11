@@ -51,7 +51,11 @@ import {
   updateBillingPreference,
 } from '@/features/subscriptions/api'
 import { SubscriptionPurchaseDialog } from '@/features/subscriptions/components/dialogs/subscription-purchase-dialog'
-import { formatDuration, formatResetPeriod } from '@/features/subscriptions/lib'
+import {
+  formatDuration,
+  formatResetPeriod,
+  formatSubscriptionName,
+} from '@/features/subscriptions/lib'
 import type {
   PlanRecord,
   UserSubscriptionRecord,
@@ -454,9 +458,11 @@ export function SubscriptionPlansCard({
                       <div className='flex items-center justify-between'>
                         <div className='flex items-center gap-2'>
                           <span className='font-medium'>
-                            {planTitle
-                              ? `${planTitle} · ${t('Subscription')} #${subscription?.id}`
-                              : `${t('Subscription')} #${subscription?.id}`}
+                            {formatSubscriptionName(
+                              subscription,
+                              planTitle || undefined,
+                              t
+                            )}
                           </span>
                           {statusBadge}
                         </div>

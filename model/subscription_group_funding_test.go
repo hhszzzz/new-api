@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -253,4 +254,41 @@ func TestPreConsumeUserSubscriptionGroupFilterIgnoresOtherGroups(t *testing.T) {
 	_, err := PreConsumeUserSubscription("req-pro", user.Id, "gpt-4o", 0, 10, "pro")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "insufficient")
+}
+
+func TestEnsureNoActiveSubscriptionsForGroups(t *testing.T) {
+	setupSubscriptionGroupFundingTestDB(t)
+	user := createGroupFundingUser(t, "group-removal-guard")
+	plan := createGroupFundingPlan(t, "pro")
+	now := time.Now().Unix()
+	createGroupFundingSubscription(t, user.Id, plan.Id, "pro", 1000, "active", now+3600)
+
+	err := EnsureNoActiveSubscriptionsForGroups([]string{"pro"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pro")
+
+	// 移除无关分组或空集合不阻止。
+	require.NoError(t, EnsureNoActiveSubscriptionsForGroups([]string{"basic"}))
+	require.NoError(t, EnsureNoActiveSubscriptionsForGroups(nil))
+
+	// 订阅过期后不再保护该分组。
+	require.NoError(t, DB.Model(&UserSubscription{}).Where("user_id = ?", user.Id).
+		Update("end_time", now-10).Error)
+	require.NoError(t, EnsureNoActiveSubscriptionsForGroups([]string{"pro"}))
+}
+
+func TestUpdateOptionsBulkBlocksRemovingGroupUsedByActiveSubscription(t *testing.T) {
+	db := setupSubscriptionGroupFundingTestDB(t)
+	require.NoError(t, db.AutoMigrate(&Option{}))
+	user := createGroupFundingUser(t, "group-removal-option")
+	plan := createGroupFundingPlan(t, "pro")
+	createGroupFundingSubscription(t, user.Id, plan.Id, "pro", 1000, "active", time.Now().Unix()+3600)
+
+	original := ratio_setting.GroupRatio2JSONString()
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1,"pro":1.5}`))
+	t.Cleanup(func() { require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(original)) })
+
+	err := UpdateOptionsBulk(map[string]string{"GroupRatio": `{"default":1}`})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pro")
 }

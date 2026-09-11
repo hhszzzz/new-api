@@ -388,6 +388,7 @@
     "Administrator assignment": "Назначение администратором",
     "Administrator assignment note": "Примечание администратора о назначении",
     "Administrator assignment note (optional)": "Примечание к назначению (необязательно)",
+    "{{group}} group subscription": "Подписка на группу {{group}}",
     "Administrator username": "Имя пользователя администратора",
     "Administrators can always see full account emails.": "Администраторы всегда видят полные адреса электронной почты аккаунтов.",
     "Advance next reset time": "Перенести следующее время сброса",
@@ -2752,7 +2753,7 @@
     "footer.columns.related.links.oneApi": "Один API",
     "footer.columns.related.title": "Связанные проекты",
     "footer.defaultCopyright": "Все права защищены.",
-    "footer.newapi.projectAttributionSuffix": "Все права защищены. Разработано участниками проекта.",
+    "footer.new\u0061pi.projectAttributionSuffix": "Все права защищены. Разработано участниками проекта.",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "Для каналов, добавленных после 10 мая 2025 г., не нужно удалять \".\" из имён моделей при развёртывании",
     "For private deployments, format: https://fastgpt.run/api/openapi": "Для частных развертываний, формат: https://fastgpt.run/api/openapi",
     "For security, existing access tokens cannot be displayed. Regenerate only when you need a new token.": "В целях безопасности существующие токены доступа нельзя просмотреть повторно. Создавайте новый токен только при необходимости.",
@@ -7109,6 +7110,16 @@
     "Zero retention": "Без хранения данных",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Apply one subscription operation to {{count}} selected user(s). Users without a matching active subscription are skipped and reported.": "Примените одну операцию с подпиской к выбранным пользователям ({{count}}). Пользователи без подходящей активной подписки будут пропущены и указаны.",
+    "Assign subscription": "Назначить подписку",
+    "Batch manage subscriptions": "Массовое управление подписками",
+    "Cancels the subscriptions but keeps their records.": "Отменяет подписки, но сохраняет их записи.",
+    "Confirm batch subscription deletion": "Подтвердите массовое удаление подписок",
+    "Delete subscription": "Удалить подписку",
+    "Invalidate subscription": "Аннулировать подписку",
+    "Permanently removes the subscription records.": "Безвозвратно удаляет записи о подписке.",
+    "Subscription plan": "Тариф подписки",
+    "This permanently deletes every active subscription of the selected plan for {{count}} selected user(s). Continue?": "Это безвозвратно удалит все активные подписки выбранного тарифа у выбранных пользователей ({{count}}). Продолжить?"
   }
 }

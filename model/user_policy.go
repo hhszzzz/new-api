@@ -2,6 +2,7 @@ package model
 
 import (
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 
@@ -403,7 +404,6 @@ func replaceUserGroupsWithTx(tx *gorm.DB, userId int, groups []string) error {
 	}
 	existing := make(map[string]UserGroupMembership, len(memberships))
 	now := GetDBTimestamp()
-	nextSubscriptionOrder := len(groups)
 	for _, membership := range memberships {
 		existing[membership.GroupName] = membership
 		if _, keepManual := selected[membership.GroupName]; keepManual {
@@ -439,20 +439,9 @@ func replaceUserGroupsWithTx(tx *gorm.DB, userId int, groups []string) error {
 			return err
 		}
 		if activeGrantCount > 0 {
-			if membership.SortOrder != nextSubscriptionOrder {
-				if err := tx.Model(&UserGroupMembership{}).Where("id = ?", membership.Id).
-					Update("sort_order", nextSubscriptionOrder).Error; err != nil {
-					return err
-				}
-			}
-			nextSubscriptionOrder++
-			if membership.Manual == nil || *membership.Manual {
-				if err := tx.Model(&UserGroupMembership{}).Where("id = ?", membership.Id).
-					Update("manual", false).Error; err != nil {
-					return err
-				}
-			}
-			continue
+			// 该分组由活跃订阅授予，管理员不能直接移除；必须先取消订阅，
+			// 由订阅到期/取消流程回收成员，避免订阅仍在却丢失分组。
+			return fmt.Errorf("分组 %s 由活跃订阅授予，无法从该用户移除；请先取消对应订阅", membership.GroupName)
 		}
 		if err := tx.Delete(&membership).Error; err != nil {
 			return err

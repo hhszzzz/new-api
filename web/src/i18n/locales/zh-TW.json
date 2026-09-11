@@ -388,6 +388,7 @@
     "Administrator assignment": "管理員分配",
     "Administrator assignment note": "管理員分配備註",
     "Administrator assignment note (optional)": "管理員分配備註（可選）",
+    "{{group}} group subscription": "{{group}} 分組訂閱",
     "Administrator username": "管理員用戶名",
     "Administrators can always see full account emails.": "管理員始終可以查看完整帳號信箱。",
     "Advance next reset time": "推進下次重置時間",
@@ -2752,7 +2753,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "相關項目",
     "footer.defaultCopyright": "版權所有。",
-    "footer.newapi.projectAttributionSuffix": "版權所有，由項目貢獻者設計與開發。",
+    "footer.new\u0061pi.projectAttributionSuffix": "版權所有，由項目貢獻者設計與開發。",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "對於 2025 年 5 月 10 日之後新增的渠道，在部署時無需從模型名稱中移除 \".\"",
     "For private deployments, format: https://fastgpt.run/api/openapi": "對於私有部署，格式為：https://fastgpt.run/api/openapi",
     "For security, existing access tokens cannot be displayed. Regenerate only when you need a new token.": "基於安全考量，現有存取令牌無法再次顯示。僅在需要新令牌時重新生成。",
@@ -7109,6 +7110,16 @@
     "Zero retention": "零數據保留",
     "Zhipu": "智譜",
     "Zhipu V4": "智譜 V4",
-    "Zoom": "縮放"
+    "Zoom": "縮放",
+    "Apply one subscription operation to {{count}} selected user(s). Users without a matching active subscription are skipped and reported.": "對選中的 {{count}} 位使用者執行同一種訂閱操作。沒有符合的活躍訂閱的使用者會被跳過並列出。",
+    "Assign subscription": "分配訂閱",
+    "Batch manage subscriptions": "批量管理訂閱",
+    "Cancels the subscriptions but keeps their records.": "作廢訂閱但保留紀錄。",
+    "Confirm batch subscription deletion": "確認批量刪除訂閱",
+    "Delete subscription": "刪除訂閱",
+    "Invalidate subscription": "作廢訂閱",
+    "Permanently removes the subscription records.": "永久刪除訂閱紀錄。",
+    "Subscription plan": "訂閱套餐",
+    "This permanently deletes every active subscription of the selected plan for {{count}} selected user(s). Continue?": "將永久刪除選中 {{count}} 位使用者在該套餐下的所有活躍訂閱。是否繼續？"
   }
 }

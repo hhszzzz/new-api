@@ -226,10 +226,6 @@ export function UserSubscriptionsDialog(props: Props) {
       return
     }
     const note = sourceNote.trim()
-    if (!note) {
-      toast.error(t('Assignment note is required'))
-      return
-    }
     const planId = Number(selectedPlanId)
     const planTitle = planTitleMap.get(planId) || `#${planId}`
     const hasActiveDuplicate = subs.some(
@@ -328,14 +324,13 @@ export function UserSubscriptionsDialog(props: Props) {
                 value={sourceNote}
                 onChange={(event) => setSourceNote(event.target.value)}
                 maxLength={255}
-                placeholder={t('Administrator assignment note')}
-                aria-label={t('Administrator assignment note')}
-                aria-required='true'
+                placeholder={t('Administrator assignment note (optional)')}
+                aria-label={t('Administrator assignment note (optional)')}
                 className='sm:max-w-64'
               />
               <Button
                 onClick={handleCreate}
-                disabled={creating || !selectedPlanId || !sourceNote.trim()}
+                disabled={creating || !selectedPlanId}
               >
                 <Plus className='mr-1 h-4 w-4' />
                 {t('Add subscription')}

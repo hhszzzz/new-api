@@ -20,7 +20,7 @@ import type { TFunction } from 'i18next'
 
 import dayjs from '@/lib/dayjs'
 
-import type { SubscriptionPlan } from '../types'
+import type { SubscriptionPlan, UserSubscription } from '../types'
 
 export function formatDuration(
   plan: Partial<SubscriptionPlan>,
@@ -65,4 +65,19 @@ export function formatResetPeriod(
 export function formatTimestamp(ts: number): string {
   if (!ts) return '-'
   return dayjs(ts * 1000).format('YYYY-MM-DD HH:mm:ss')
+}
+
+// A subscription is named after the group it grants, so the label stays
+// meaningful without leaking the database id. Generic subscriptions that grant
+// no group fall back to the plan title.
+export function formatSubscriptionName(
+  subscription: Pick<UserSubscription, 'upgrade_group'> | undefined,
+  planTitle: string | undefined,
+  t: TFunction
+): string {
+  const group = subscription?.upgrade_group?.trim()
+  if (group) {
+    return t('{{group}} group subscription', { group })
+  }
+  return planTitle || t('Subscription')
 }

@@ -388,6 +388,7 @@
     "Administrator assignment": "Attribution par administrateur",
     "Administrator assignment note": "Note d’attribution par l’administrateur",
     "Administrator assignment note (optional)": "Note d'attribution (facultative)",
+    "{{group}} group subscription": "Abonnement au groupe {{group}}",
     "Administrator username": "Nom d'utilisateur administrateur",
     "Administrators can always see full account emails.": "Les administrateurs voient toujours les adresses e-mail complètes des comptes.",
     "Advance next reset time": "Avancer la prochaine réinitialisation",
@@ -2752,7 +2753,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "Projets liés",
     "footer.defaultCopyright": "Tous droits réservés.",
-    "footer.newapi.projectAttributionSuffix": "Tous droits réservés. Conçu et développé par les contributeurs du projet.",
+    "footer.new\u0061pi.projectAttributionSuffix": "Tous droits réservés. Conçu et développé par les contributeurs du projet.",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "Pour les canaux ajoutés après le 10 mai 2025, pas besoin de supprimer \".\" des noms de modèles lors du déploiement",
     "For private deployments, format: https://fastgpt.run/api/openapi": "Pour les déploiements privés, format : https://fastgpt.run/api/openapi",
     "For security, existing access tokens cannot be displayed. Regenerate only when you need a new token.": "Pour des raisons de sécurité, les jetons d'accès existants ne peuvent pas être réaffichés. Ne les régénérez que si vous en avez besoin d'un nouveau.",
@@ -7109,6 +7110,16 @@
     "Zero retention": "Aucune rétention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Apply one subscription operation to {{count}} selected user(s). Users without a matching active subscription are skipped and reported.": "Appliquez une même opération d'abonnement à {{count}} utilisateur(s) sélectionné(s). Les utilisateurs sans abonnement actif correspondant sont ignorés et signalés.",
+    "Assign subscription": "Attribuer un abonnement",
+    "Batch manage subscriptions": "Gérer les abonnements en lot",
+    "Cancels the subscriptions but keeps their records.": "Annule les abonnements mais conserve leurs enregistrements.",
+    "Confirm batch subscription deletion": "Confirmer la suppression des abonnements en lot",
+    "Delete subscription": "Supprimer l'abonnement",
+    "Invalidate subscription": "Invalider l'abonnement",
+    "Permanently removes the subscription records.": "Supprime définitivement les enregistrements d'abonnement.",
+    "Subscription plan": "Forfait d'abonnement",
+    "This permanently deletes every active subscription of the selected plan for {{count}} selected user(s). Continue?": "Cela supprimera définitivement tous les abonnements actifs du forfait sélectionné pour {{count}} utilisateur(s) sélectionné(s). Continuer ?"
   }
 }

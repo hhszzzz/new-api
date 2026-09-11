@@ -165,9 +165,18 @@ func TestUserSubscriptionPlanListHidesInternalOnlyPlans(t *testing.T) {
 	assert.True(t, response.Data[0].Plan.IsPurchasable())
 }
 
-func TestAdminAssignmentRequiresSourceNote(t *testing.T) {
+func TestAdminAssignmentAllowsEmptySourceNote(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := setupSubscriptionAuthorizationTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.SubscriptionPlan{}))
+	plan := &model.SubscriptionPlan{
+		Title:         "note-optional",
+		Enabled:       true,
+		DurationUnit:  model.SubscriptionDurationMonth,
+		DurationValue: 1,
+	}
+	require.NoError(t, db.Create(plan).Error)
+
 	target := &model.User{
 		Username: "subscription-note-user",
 		Role:     common.RoleCommonUser,
@@ -180,10 +189,67 @@ func TestAdminAssignmentRequiresSourceNote(t *testing.T) {
 		t,
 		AdminCreateUserSubscription,
 		http.MethodPost,
-		`{"plan_id":1,"source_note":"  "}`,
+		fmt.Sprintf(`{"plan_id":%d,"source_note":"  "}`, plan.Id),
 		gin.Params{{Key: "id", Value: fmt.Sprint(target.Id)}},
 	)
 
-	assert.False(t, response.Success)
-	assert.Contains(t, response.Message, "备注不能为空")
+	assert.True(t, response.Success)
+}
+
+func TestAdminBatchSubscriptionAssignInvalidateAndDelete(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupSubscriptionAuthorizationTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.SubscriptionPlan{}))
+	plan := &model.SubscriptionPlan{
+		Title:         "batch-plan",
+		Enabled:       true,
+		DurationUnit:  model.SubscriptionDurationMonth,
+		DurationValue: 1,
+	}
+	require.NoError(t, db.Create(plan).Error)
+
+	ids := make([]int, 2)
+	for i := range ids {
+		username := fmt.Sprintf("batch-subscription-user-%d", i)
+		user := &model.User{
+			Username: username,
+			Role:     common.RoleCommonUser,
+			Status:   common.UserStatusEnabled,
+			Group:    "default",
+			AffCode:  username,
+		}
+		require.NoError(t, db.Create(user).Error)
+		ids[i] = user.Id
+	}
+
+	countSubscriptions := func(where string, args ...any) int64 {
+		t.Helper()
+		var count int64
+		require.NoError(t, db.Model(&model.UserSubscription{}).Where(where, args...).Count(&count).Error)
+		return count
+	}
+
+	assignBody := fmt.Sprintf(`{"user_ids":[%d,%d],"plan_id":%d}`, ids[0], ids[1], plan.Id)
+	response := callSubscriptionAdminHandler(t, AdminBatchAssignUserSubscriptions, http.MethodPost, assignBody, nil)
+	require.True(t, response.Success)
+	require.EqualValues(t, 2, countSubscriptions("plan_id = ? AND status = ?", plan.Id, "active"))
+
+	// Invalidating cancels the subscriptions but keeps their records.
+	response = callSubscriptionAdminHandler(t, AdminBatchRevokeUserSubscriptions, http.MethodPost,
+		fmt.Sprintf(`{"user_ids":[%d,%d],"plan_id":%d,"action":"invalidate"}`, ids[0], ids[1], plan.Id), nil)
+	require.True(t, response.Success)
+	require.EqualValues(t, 2, countSubscriptions("plan_id = ?", plan.Id))
+	require.EqualValues(t, 2, countSubscriptions("plan_id = ? AND status = ?", plan.Id, "cancelled"))
+
+	// Assign again, then delete: only the active records are removed, the
+	// cancelled history stays behind.
+	response = callSubscriptionAdminHandler(t, AdminBatchAssignUserSubscriptions, http.MethodPost, assignBody, nil)
+	require.True(t, response.Success)
+	require.EqualValues(t, 2, countSubscriptions("plan_id = ? AND status = ?", plan.Id, "active"))
+
+	response = callSubscriptionAdminHandler(t, AdminBatchRevokeUserSubscriptions, http.MethodPost,
+		fmt.Sprintf(`{"user_ids":[%d,%d],"plan_id":%d,"action":"delete"}`, ids[0], ids[1], plan.Id), nil)
+	require.True(t, response.Success)
+	require.EqualValues(t, 0, countSubscriptions("plan_id = ? AND status = ?", plan.Id, "active"))
+	require.EqualValues(t, 2, countSubscriptions("plan_id = ? AND status = ?", plan.Id, "cancelled"))
 }

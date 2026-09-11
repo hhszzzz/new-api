@@ -361,6 +361,36 @@ func UpdateOptionsBulk(values map[string]string) error {
 		}
 	}
 
+	// Groups are settings keys, not table rows: removing a key deletes the group
+	// with no referential check. Block it while an active subscription still grants
+	// the group so a funded subscription cannot lose its group silently.
+	removedGroups := make([]string, 0)
+	if value, ok := values["GroupRatio"]; ok {
+		var next map[string]float64
+		if err := common.UnmarshalJsonStr(value, &next); err != nil {
+			return err
+		}
+		for group := range ratio_setting.GetGroupRatioSetting().GroupRatio.ReadAll() {
+			if _, kept := next[group]; !kept {
+				removedGroups = append(removedGroups, group)
+			}
+		}
+	}
+	if value, ok := values["UserUsableGroups"]; ok {
+		var next map[string]string
+		if err := common.UnmarshalJsonStr(value, &next); err != nil {
+			return err
+		}
+		for group := range setting.GetUserUsableGroupsCopy() {
+			if _, kept := next[group]; !kept {
+				removedGroups = append(removedGroups, group)
+			}
+		}
+	}
+	if err := EnsureNoActiveSubscriptionsForGroups(removedGroups); err != nil {
+		return err
+	}
+
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		return persistOptionsWithTx(tx, values)
 	})

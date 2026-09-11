@@ -291,15 +291,14 @@ func TestAdminBindSubscriptionRejectsManuallyAssignedGroup(t *testing.T) {
 	}
 }
 
-func TestPolicyEditPreservesSubscriptionGrantedGroupAsNonManual(t *testing.T) {
+func TestPolicyEditCannotDropSubscriptionGrantedGroup(t *testing.T) {
 	setupUserPolicySubscriptionTestDB(t)
 	user := createPolicySubscriptionTestUser(t, "legacy")
 	plan := createPolicySubscriptionTestPlan(t, "premium")
 	_, err := CreateUserSubscriptionFromPlanTx(DB, user.Id, plan, "admin")
 	require.NoError(t, err)
 
-	// 管理员保存分组时包含订阅授予的 premium：应保持订阅归属，不得转为手动成员，
-	// 也不应报错阻断正常的策略保存。
+	// 管理员保存分组时包含订阅授予的 premium：应保持订阅归属，不得转为手动成员。
 	require.NoError(t, ReplaceUserPolicy(user.Id, UserPolicyUpdate{
 		Groups:       []string{"legacy", "premium"},
 		PrimaryGroup: "legacy",
@@ -316,6 +315,19 @@ func TestPolicyEditPreservesSubscriptionGrantedGroupAsNonManual(t *testing.T) {
 			assert.True(t, *membership.Manual)
 		}
 	}
+
+	// 订阅仍在活跃时，管理员不能通过保存分组把 premium 移除；必须先取消订阅。
+	err = ReplaceUserPolicy(user.Id, UserPolicyUpdate{
+		Groups:       []string{"legacy"},
+		PrimaryGroup: "legacy",
+		TopupGroup:   "legacy",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "premium")
+
+	groups, err := GetUserGroups(user.Id)
+	require.NoError(t, err)
+	assert.Contains(t, groups, "premium")
 }
 
 func TestPrimaryGroupIsExplicitAndKeepsLegacyColumnInSync(t *testing.T) {
@@ -424,7 +436,7 @@ func TestPolicyAndSubscriptionMutationsLockUserBeforeMemberships(t *testing.T) {
 	})
 }
 
-func TestAdminSubscriptionAssignmentRequiresEnabledPlanAndAuditNote(t *testing.T) {
+func TestAdminSubscriptionAssignmentRequiresEnabledPlanAndAcceptsOptionalNote(t *testing.T) {
 	setupUserPolicySubscriptionTestDB(t)
 	user := createPolicySubscriptionTestUser(t, "legacy")
 	plan := createPolicySubscriptionTestPlan(t, "premium")
@@ -439,18 +451,17 @@ func TestAdminSubscriptionAssignmentRequiresEnabledPlanAndAuditNote(t *testing.T
 		"purchasable": false,
 	}).Error)
 	InvalidateSubscriptionPlanCache(plan.Id)
-	_, err = AdminBindSubscription(user.Id, plan.Id, "")
-	assert.EqualError(t, err, "管理员分配备注不能为空")
 	internalPlan, err := GetSubscriptionPlanById(plan.Id)
 	require.NoError(t, err)
 	assert.EqualError(t, ValidateSubscriptionPlanPurchase(internalPlan), "该套餐仅支持管理员分配")
 
-	_, err = AdminBindSubscription(user.Id, plan.Id, "manual grant")
+	// The administrator note is optional; an empty note must still assign.
+	_, err = AdminBindSubscription(user.Id, plan.Id, "")
 	require.NoError(t, err)
 	var subscription UserSubscription
 	require.NoError(t, DB.Where("user_id = ?", user.Id).First(&subscription).Error)
 	assert.Equal(t, "admin", subscription.Source)
-	assert.Equal(t, "manual grant", subscription.SourceNote)
+	assert.Empty(t, subscription.SourceNote)
 }
 
 func TestInternalOnlySubscriptionPlanCannotBePurchasedWithBalance(t *testing.T) {

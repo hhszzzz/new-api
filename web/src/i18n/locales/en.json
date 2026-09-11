@@ -388,6 +388,7 @@
     "Administrator assignment": "Administrator assignment",
     "Administrator assignment note": "Administrator assignment note",
     "Administrator assignment note (optional)": "Administrator assignment note (optional)",
+    "{{group}} group subscription": "{{group}} group subscription",
     "Administrator username": "Administrator username",
     "Administrators can always see full account emails.": "Administrators can always see full account emails.",
     "Advance next reset time": "Advance next reset time",
@@ -2752,7 +2753,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "Related Projects",
     "footer.defaultCopyright": "All rights reserved.",
-    "footer.newapi.projectAttributionSuffix": "All rights reserved. Designed and developed by the project contributors.",
+    "footer.new\u0061pi.projectAttributionSuffix": "All rights reserved. Designed and developed by the project contributors.",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment",
     "For private deployments, format: https://fastgpt.run/api/openapi": "For private deployments, format: https://fastgpt.run/api/openapi",
     "For security, existing access tokens cannot be displayed. Regenerate only when you need a new token.": "For security, existing access tokens cannot be displayed. Regenerate only when you need a new token.",
@@ -7109,6 +7110,16 @@
     "Zero retention": "Zero retention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Apply one subscription operation to {{count}} selected user(s). Users without a matching active subscription are skipped and reported.": "Apply one subscription operation to {{count}} selected user(s). Users without a matching active subscription are skipped and reported.",
+    "Assign subscription": "Assign subscription",
+    "Batch manage subscriptions": "Batch manage subscriptions",
+    "Cancels the subscriptions but keeps their records.": "Cancels the subscriptions but keeps their records.",
+    "Confirm batch subscription deletion": "Confirm batch subscription deletion",
+    "Delete subscription": "Delete subscription",
+    "Invalidate subscription": "Invalidate subscription",
+    "Permanently removes the subscription records.": "Permanently removes the subscription records.",
+    "Subscription plan": "Subscription plan",
+    "This permanently deletes every active subscription of the selected plan for {{count}} selected user(s). Continue?": "This permanently deletes every active subscription of the selected plan for {{count}} selected user(s). Continue?"
   }
 }

@@ -387,10 +387,6 @@ func AdminBindSubscription(c *gin.Context) {
 	if _, ok := getManageableSubscriptionUser(c, req.UserId); !ok {
 		return
 	}
-	if strings.TrimSpace(req.SourceNote) == "" {
-		common.ApiErrorMsg(c, "管理员分配备注不能为空")
-		return
-	}
 	msg, err := model.AdminBindSubscription(req.UserId, req.PlanId, req.SourceNote)
 	if err != nil {
 		common.ApiError(c, err)
@@ -466,10 +462,6 @@ func AdminCreateUserSubscription(c *gin.Context) {
 	var req AdminCreateUserSubscriptionRequest
 	if err := c.ShouldBindJSON(&req); err != nil || req.PlanId <= 0 {
 		common.ApiErrorMsg(c, "参数错误")
-		return
-	}
-	if strings.TrimSpace(req.SourceNote) == "" {
-		common.ApiErrorMsg(c, "管理员分配备注不能为空")
 		return
 	}
 	msg, err := model.AdminBindSubscription(userId, req.PlanId, req.SourceNote)
@@ -596,4 +588,180 @@ func AdminDeleteUserSubscription(c *gin.Context) {
 		return
 	}
 	common.ApiSuccess(c, nil)
+}
+
+// ---- Admin: batch user subscriptions ----
+
+type AdminBatchSubscriptionAssignRequest struct {
+	UserIds    []int  `json:"user_ids"`
+	PlanId     int    `json:"plan_id"`
+	SourceNote string `json:"source_note"`
+}
+
+type AdminBatchSubscriptionPlanRequest struct {
+	UserIds          []int  `json:"user_ids"`
+	PlanId           int    `json:"plan_id"`
+	Action           string `json:"action"` // invalidate (default) | delete
+	AdvanceResetTime *bool  `json:"advance_reset_time"`
+}
+
+// applyUserBatchSubscriptionAction runs one subscription action per selected
+// user, skipping users that cannot be managed or have no matching active
+// subscription. It returns how many users were affected and the total number of
+// subscriptions touched, mirroring the user batch policy/route reports.
+func applyUserBatchSubscriptionAction(c *gin.Context, ids []int, apply func(user *model.User) (int, error)) (updated int, affected int, skipped []userBatchSkip) {
+	myRole := c.GetInt("role")
+	skipped = make([]userBatchSkip, 0)
+	for _, id := range ids {
+		user, err := model.GetUserById(id, false)
+		if err != nil {
+			skipped = append(skipped, userBatchSkip{Id: id, Reason: "用户不存在"})
+			continue
+		}
+		if !canManageTargetRole(myRole, user.Role) {
+			skipped = append(skipped, userBatchSkip{Id: id, Username: user.Username, Reason: "无权管理该用户"})
+			continue
+		}
+		count, err := apply(user)
+		if err != nil {
+			skipped = append(skipped, userBatchSkip{Id: id, Username: user.Username, Reason: err.Error()})
+			continue
+		}
+		if count <= 0 {
+			skipped = append(skipped, userBatchSkip{Id: id, Username: user.Username, Reason: "无匹配的活跃订阅"})
+			continue
+		}
+		updated++
+		affected += count
+	}
+	return updated, affected, skipped
+}
+
+// AdminBatchAssignUserSubscriptions grants one plan to every selected user.
+func AdminBatchAssignUserSubscriptions(c *gin.Context) {
+	var req AdminBatchSubscriptionAssignRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	ids, err := normalizeUserBatchIds(req.UserIds)
+	if err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
+	}
+	if req.PlanId <= 0 {
+		common.ApiErrorMsg(c, "参数错误")
+		return
+	}
+	plan, err := model.GetSubscriptionPlanById(req.PlanId)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if !plan.Enabled {
+		common.ApiErrorMsg(c, "套餐未启用，不能手动分配")
+		return
+	}
+	sourceNote := strings.TrimSpace(req.SourceNote)
+
+	updated, _, skipped := applyUserBatchSubscriptionAction(c, ids, func(user *model.User) (int, error) {
+		if _, err := model.AdminBindSubscription(user.Id, req.PlanId, sourceNote); err != nil {
+			return 0, err
+		}
+		return 1, nil
+	})
+	recordManageAudit(c, "subscription.batch_assign", map[string]interface{}{
+		"targets":         len(ids),
+		"target_user_ids": ids,
+		"plan_id":         req.PlanId,
+		"updated":         updated,
+		"skipped":         len(skipped),
+	})
+	common.ApiSuccess(c, gin.H{"updated": updated, "skipped": skipped})
+}
+
+// AdminBatchRevokeUserSubscriptions cancels or hard-deletes each selected user's
+// active subscriptions for the plan. Cancelling (the default) keeps the billing
+// history; deleting removes the records entirely.
+func AdminBatchRevokeUserSubscriptions(c *gin.Context) {
+	var req AdminBatchSubscriptionPlanRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	ids, err := normalizeUserBatchIds(req.UserIds)
+	if err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
+	}
+	if req.PlanId <= 0 {
+		common.ApiErrorMsg(c, "参数错误")
+		return
+	}
+	action := strings.TrimSpace(req.Action)
+	if action == "" {
+		action = "invalidate"
+	}
+	if action != "invalidate" && action != "delete" {
+		common.ApiErrorMsg(c, "无效的批量操作类型")
+		return
+	}
+
+	updated, revoked, skipped := applyUserBatchSubscriptionAction(c, ids, func(user *model.User) (int, error) {
+		if action == "delete" {
+			return model.AdminDeleteUserPlanSubscriptions(user.Id, req.PlanId)
+		}
+		return model.AdminRevokeUserPlanSubscriptions(user.Id, req.PlanId)
+	})
+	recordManageAudit(c, "subscription.batch_revoke", map[string]interface{}{
+		"targets":         len(ids),
+		"target_user_ids": ids,
+		"plan_id":         req.PlanId,
+		"action":          action,
+		"updated":         updated,
+		"revoked":         revoked,
+		"skipped":         len(skipped),
+	})
+	common.ApiSuccess(c, gin.H{"updated": updated, "revoked": revoked, "skipped": skipped})
+}
+
+// AdminBatchResetUserSubscriptions resets the selected users' usage for the plan.
+func AdminBatchResetUserSubscriptions(c *gin.Context) {
+	var req AdminBatchSubscriptionPlanRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	ids, err := normalizeUserBatchIds(req.UserIds)
+	if err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
+	}
+	if req.PlanId <= 0 {
+		common.ApiErrorMsg(c, "参数错误")
+		return
+	}
+	if _, err := model.GetSubscriptionPlanById(req.PlanId); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	advanceResetTime := resolveAdvanceResetTime(req.AdvanceResetTime)
+
+	updated, resetCount, skipped := applyUserBatchSubscriptionAction(c, ids, func(user *model.User) (int, error) {
+		result, err := model.AdminResetUserSubscriptionsByPlan(user.Id, req.PlanId, advanceResetTime)
+		if err != nil {
+			return 0, err
+		}
+		return result.ResetCount, nil
+	})
+	recordManageAudit(c, "subscription.batch_reset", map[string]interface{}{
+		"targets":            len(ids),
+		"target_user_ids":    ids,
+		"plan_id":            req.PlanId,
+		"advance_reset_time": advanceResetTime,
+		"updated":            updated,
+		"reset_count":        resetCount,
+		"skipped":            len(skipped),
+	})
+	common.ApiSuccess(c, gin.H{"updated": updated, "reset_count": resetCount, "skipped": skipped})
 }

@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useQueryClient } from '@tanstack/react-query'
 import type { Table } from '@tanstack/react-table'
-import { GitBranch, ShieldCheck } from 'lucide-react'
+import { CreditCard, GitBranch, ShieldCheck } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -33,6 +33,7 @@ import {
 import type { User } from '../types'
 import { UserBatchPolicyDialog } from './dialogs/user-batch-policy-dialog'
 import { UserBatchRouteDialog } from './dialogs/user-batch-route-dialog'
+import { UserBatchSubscriptionDialog } from './dialogs/user-batch-subscription-dialog'
 
 interface DataTableBulkActionsProps {
   table: Table<User>
@@ -43,6 +44,7 @@ export function DataTableBulkActions({ table }: DataTableBulkActionsProps) {
   const queryClient = useQueryClient()
   const [showPolicyDialog, setShowPolicyDialog] = useState(false)
   const [showRouteDialog, setShowRouteDialog] = useState(false)
+  const [showSubscriptionDialog, setShowSubscriptionDialog] = useState(false)
 
   const selectedIds = [
     ...new Set(
@@ -103,6 +105,27 @@ export function DataTableBulkActions({ table }: DataTableBulkActionsProps) {
             <p>{t('Batch add model route')}</p>
           </TooltipContent>
         </Tooltip>
+
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                variant='outline'
+                size='icon'
+                onClick={() => setShowSubscriptionDialog(true)}
+                className='size-8'
+                aria-label={t('Batch manage subscriptions')}
+                title={t('Batch manage subscriptions')}
+              />
+            }
+          >
+            <CreditCard />
+            <span className='sr-only'>{t('Batch manage subscriptions')}</span>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>{t('Batch manage subscriptions')}</p>
+          </TooltipContent>
+        </Tooltip>
       </BulkActionsToolbar>
 
       <UserBatchPolicyDialog
@@ -114,6 +137,12 @@ export function DataTableBulkActions({ table }: DataTableBulkActionsProps) {
       <UserBatchRouteDialog
         open={showRouteDialog}
         onOpenChange={setShowRouteDialog}
+        userIds={selectedIds}
+        onSuccess={handleSuccess}
+      />
+      <UserBatchSubscriptionDialog
+        open={showSubscriptionDialog}
+        onOpenChange={setShowSubscriptionDialog}
         userIds={selectedIds}
         onSuccess={handleSuccess}
       />

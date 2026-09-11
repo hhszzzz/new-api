@@ -293,7 +293,11 @@ beforeEach(() => {
 })
 
 describe('user subscriptions dialog', () => {
-  test('keeps enabled internal plans assignable and requires an administrator note', async () => {
+  test('keeps enabled internal plans assignable without an administrator note', async () => {
+    mockedCreateSubscription.mockResolvedValue({
+      success: true,
+      data: { message: 'Assigned' },
+    })
     const user = userEvent.setup()
 
     render(
@@ -312,15 +316,17 @@ describe('user subscriptions dialog', () => {
     await user.selectOptions(planSelect, '1')
     expect(
       screen.getByRole('button', { name: 'Add subscription' })
-    ).toBeDisabled()
-
-    await user.type(
-      screen.getByLabelText('Administrator assignment note'),
-      'manual grant'
-    )
-    expect(
-      screen.getByRole('button', { name: 'Add subscription' })
     ).toBeEnabled()
+
+    await user.click(
+      screen.getByRole('button', { name: 'Add subscription' })
+    )
+    await waitFor(() => {
+      expect(mockedCreateSubscription).toHaveBeenCalledWith(7, {
+        plan_id: 1,
+        source_note: '',
+      })
+    })
   })
 
   test('requires confirmation before adding a duplicate active subscription', async () => {
@@ -347,7 +353,7 @@ describe('user subscriptions dialog', () => {
       '1'
     )
     await user.type(
-      screen.getByLabelText('Administrator assignment note'),
+      screen.getByLabelText('Administrator assignment note (optional)'),
       'second grant'
     )
     await user.click(screen.getByRole('button', { name: 'Add subscription' }))
@@ -388,7 +394,7 @@ describe('user subscriptions dialog', () => {
       '1'
     )
     await user.type(
-      screen.getByLabelText('Administrator assignment note'),
+      screen.getByLabelText('Administrator assignment note (optional)'),
       'manual grant'
     )
     await user.click(screen.getByRole('button', { name: 'Add subscription' }))

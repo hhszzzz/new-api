@@ -69,6 +69,7 @@ export const userSubscriptionSchema = z.object({
   amount_total: z.number(),
   amount_used: z.number(),
   next_reset_time: z.number().optional(),
+  upgrade_group: z.string().optional(),
 })
 
 export type UserSubscription = z.infer<typeof userSubscriptionSchema>
@@ -135,6 +136,43 @@ export interface SubscriptionResetResult {
   reset_count: number
   user_count: number
   advance_reset_time: boolean
+}
+
+// ============================================================================
+// Admin Batch User Subscriptions
+// ============================================================================
+
+export type UserBatchSubscriptionAction = 'invalidate' | 'delete'
+
+export interface UserBatchSubscriptionSkip {
+  id: number
+  username?: string
+  reason: string
+}
+
+export interface UserBatchSubscriptionAssignRequest {
+  user_ids: number[]
+  plan_id: number
+  source_note?: string
+}
+
+export interface UserBatchSubscriptionRevokeRequest {
+  user_ids: number[]
+  plan_id: number
+  action: UserBatchSubscriptionAction
+}
+
+export interface UserBatchSubscriptionResetRequest {
+  user_ids: number[]
+  plan_id: number
+  advance_reset_time: boolean
+}
+
+export interface UserBatchSubscriptionResult {
+  updated: number
+  skipped: UserBatchSubscriptionSkip[]
+  revoked?: number
+  reset_count?: number
 }
 
 // ============================================================================
