@@ -55,8 +55,14 @@ func ProcessChannelError(c *gin.Context, channelError types.ChannelError, apiErr
 	}
 	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, apiErr.StatusCode, common.LocalLogPreview(apiErr.Error())))
 	if apiErr.GetErrorCode() != types.ErrorCodeClientDisconnected && ShouldDisableChannel(apiErr) && channelError.AutoBan {
+		group := ""
+		modelName := ""
+		if c != nil {
+			group = c.GetString("group")
+			modelName = c.GetString("original_model")
+		}
 		gopool.Go(func() {
-			DisableChannel(channelError, apiErr.ErrorWithStatusCode())
+			DisableChannelOrModel(channelError, group, modelName, apiErr.ErrorWithStatusCode())
 		})
 	}
 

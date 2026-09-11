@@ -45,6 +45,61 @@ func EnableChannel(channelId int, usingKey string, channelName string) {
 	}
 }
 
+// DisableChannelModel disables one (group, model) on a channel, leaving the rest
+// of the channel usable. An empty group disables the model across every group of
+// the channel. Source distinguishes auto-disabled from manually disabled entries.
+func DisableChannelModel(channelId int, group string, modelName string, reason string, source string) bool {
+	if strings.TrimSpace(modelName) == "" {
+		return false
+	}
+	if source == "" {
+		source = dto.DisabledModelSourceAuto
+	}
+	entry := dto.DisabledModelEntry{
+		Group:  group,
+		Model:  modelName,
+		Source: source,
+		Reason: reason,
+		Time:   common.GetTimestamp(),
+	}
+	if err := model.SetChannelModelDisabled(channelId, entry, true); err != nil {
+		common.SysLog(fmt.Sprintf("failed to disable model on channel: channel_id=%d, model=%s, error=%v", channelId, modelName, err))
+		return false
+	}
+	subject := fmt.Sprintf("渠道 #%d 模型「%s」已被禁用", channelId, modelName)
+	content := fmt.Sprintf("渠道 #%d 模型「%s」已被禁用，分组：%s，原因：%s", channelId, modelName, group, reason)
+	NotifyRootUser(formatNotifyType(channelId, common.ChannelStatusAutoDisabled), subject, content)
+	return true
+}
+
+// EnableChannelModel clears a disabled (group, model) entry and restores
+// routing when the channel itself is enabled.
+func EnableChannelModel(channelId int, group string, modelName string) bool {
+	if strings.TrimSpace(modelName) == "" {
+		return false
+	}
+	entry := dto.DisabledModelEntry{Group: group, Model: modelName}
+	if err := model.SetChannelModelDisabled(channelId, entry, false); err != nil {
+		common.SysLog(fmt.Sprintf("failed to enable model on channel: channel_id=%d, model=%s, error=%v", channelId, modelName, err))
+		return false
+	}
+	return true
+}
+
+// DisableChannelOrModel applies the channel's auto-disable policy. When
+// DisableModelOnError is on, only the failing (group, model) is disabled;
+// otherwise the legacy whole-channel disable runs. Multi-key channels keep the
+// existing key/channel handling.
+func DisableChannelOrModel(channelError types.ChannelError, group string, modelName string, reason string) {
+	channel, err := model.GetChannelById(channelError.ChannelId, false)
+	if err == nil && strings.TrimSpace(modelName) != "" && !channel.ChannelInfo.IsMultiKey &&
+		channel.GetOtherSettings().DisableModelOnError {
+		DisableChannelModel(channelError.ChannelId, group, modelName, reason, dto.DisabledModelSourceAuto)
+		return
+	}
+	DisableChannel(channelError, reason)
+}
+
 func ShouldDisableChannel(err *types.NewAPIError) bool {
 	if !common.AutomaticDisableChannelEnabled {
 		return false

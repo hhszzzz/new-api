@@ -392,6 +392,7 @@ func filterAbilitiesByRequestPathAndModel(abilities []Ability, requestPath strin
 func (channel *Channel) AddAbilities(tx *gorm.DB) error {
 	models_ := strings.Split(channel.Models, ",")
 	groups_ := strings.Split(channel.Group, ",")
+	disabledSet := channel.disabledModelKeySet()
 	abilitySet := make(map[string]struct{})
 	abilities := make([]Ability, 0, len(models_))
 	for _, model := range models_ {
@@ -405,7 +406,7 @@ func (channel *Channel) AddAbilities(tx *gorm.DB) error {
 				Group:     group,
 				Model:     model,
 				ChannelId: channel.Id,
-				Enabled:   channel.Status == common.ChannelStatusEnabled,
+				Enabled:   channel.Status == common.ChannelStatusEnabled && !isDisabledModelInSet(disabledSet, group, model),
 				Priority:  channel.Priority,
 				Weight:    channel.GetWeight(),
 				Tag:       channel.Tag,
@@ -464,6 +465,7 @@ func (channel *Channel) UpdateAbilities(tx *gorm.DB) error {
 	// Then add new abilities
 	models_ := channel.GetModels()
 	groups_ := strings.Split(channel.Group, ",")
+	disabledSet := channel.disabledModelKeySet()
 	abilitySet := make(map[string]struct{})
 	abilities := make([]Ability, 0, len(models_))
 	for _, model := range models_ {
@@ -477,7 +479,7 @@ func (channel *Channel) UpdateAbilities(tx *gorm.DB) error {
 				Group:     group,
 				Model:     model,
 				ChannelId: channel.Id,
-				Enabled:   channel.Status == common.ChannelStatusEnabled,
+				Enabled:   channel.Status == common.ChannelStatusEnabled && !isDisabledModelInSet(disabledSet, group, model),
 				Priority:  channel.Priority,
 				Weight:    channel.GetWeight(),
 				Tag:       channel.Tag,
@@ -509,10 +511,46 @@ func (channel *Channel) UpdateAbilities(tx *gorm.DB) error {
 	return nil
 }
 
+// UpdateAbilityEnabledForModel toggles the ability rows for one model on a
+// channel, optionally restricted to a single group. An empty group targets
+// every group serving that model.
+func UpdateAbilityEnabledForModel(channelId int, modelName string, group string, enabled bool) error {
+	query := DB.Model(&Ability{}).Where("channel_id = ? AND model = ?", channelId, modelName)
+	if strings.TrimSpace(group) != "" {
+		query = query.Where(commonGroupCol+" = ?", group)
+	}
+	if err := query.Update("enabled", enabled).Error; err != nil {
+		return err
+	}
+	InvalidatePricingCache()
+	return nil
+}
+
+// reapplyDisabledModels re-disables ability rows recorded in the channel's
+// disabled list. Channel-wide enable flows must not resurrect a (group, model)
+// that an admin or the auto-disable policy turned off.
+func reapplyDisabledModels(channelId int) error {
+	channel, err := GetChannelById(channelId, false)
+	if err != nil {
+		return err
+	}
+	for _, entry := range channel.GetDisabledModels() {
+		if err := UpdateAbilityEnabledForModel(channelId, entry.Model, entry.Group, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func UpdateAbilityStatus(channelId int, status bool) error {
 	err := DB.Model(&Ability{}).Where("channel_id = ?", channelId).Select("enabled").Update("enabled", status).Error
 	if err != nil {
 		return err
+	}
+	if status {
+		if err := reapplyDisabledModels(channelId); err != nil {
+			return err
+		}
 	}
 	InvalidatePricingCache()
 	return nil
@@ -522,6 +560,17 @@ func UpdateAbilityStatusByTag(tag string, status bool) error {
 	err := DB.Model(&Ability{}).Where("tag = ?", tag).Select("enabled").Update("enabled", status).Error
 	if err != nil {
 		return err
+	}
+	if status {
+		var channelIds []int
+		if err := DB.Model(&Channel{}).Where("tag = ?", tag).Pluck("id", &channelIds).Error; err != nil {
+			return err
+		}
+		for _, channelId := range channelIds {
+			if err := reapplyDisabledModels(channelId); err != nil {
+				return err
+			}
+		}
 	}
 	InvalidatePricingCache()
 	return nil

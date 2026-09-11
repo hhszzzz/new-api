@@ -59,6 +59,7 @@ var channelPermissionRoutes = []permissionRoute{
 	{method: http.MethodPost, path: "/batch/preview", permission: authz.ChannelRead, handler: controller.PreviewChannelBatch},
 	{method: http.MethodPatch, path: "/batch", permission: authz.ChannelWrite, handler: controller.BatchUpdateChannels},
 	{method: http.MethodPost, path: "/:id/status", permission: authz.ChannelOperate, handler: controller.UpdateChannelStatus},
+	{method: http.MethodPost, path: "/:id/model_status", permission: authz.ChannelOperate, handler: controller.UpdateChannelModelStatus},
 	{method: http.MethodDelete, path: "/disabled", permission: authz.ChannelSensitiveWrite, handler: controller.DeleteDisabledChannel},
 	{method: http.MethodPost, path: "/tag/disabled", permission: authz.ChannelOperate, handler: controller.DisableTagChannels},
 	{method: http.MethodPost, path: "/tag/enabled", permission: authz.ChannelOperate, handler: controller.EnableTagChannels},

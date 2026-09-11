@@ -96,9 +96,31 @@ type ChannelOtherSettings struct {
 	// ToolLossPolicy is a channel-level opt-in for request-phase conversion
 	// rejection. Empty follows the default allow policy. Accepted values:
 	// "", "allow", "safe", "strict".
-	ToolLossPolicy string `json:"tool_loss_policy,omitempty"`
-	ProtocolCapabilities                  *ProtocolCapabilities `json:"protocol_capabilities,omitempty"`
-	ClientPolicy                          ClientAccessPolicy    `json:"client_policy,omitempty"`
+	ToolLossPolicy       string                `json:"tool_loss_policy,omitempty"`
+	ProtocolCapabilities *ProtocolCapabilities `json:"protocol_capabilities,omitempty"`
+	ClientPolicy         ClientAccessPolicy    `json:"client_policy,omitempty"`
+	// DisableModelOnError narrows automatic disabling from the whole channel to
+	// the (group, model) that actually failed. Default false keeps the legacy
+	// channel-level behavior.
+	DisableModelOnError bool `json:"disable_model_on_error,omitempty"`
+}
+
+// Disabled model provenance. Manual entries are only cleared by an explicit
+// admin action; auto entries carry the upstream failure that disabled them.
+const (
+	DisabledModelSourceAuto   = "auto"
+	DisabledModelSourceManual = "manual"
+)
+
+// DisabledModelEntry records one disabled (group, model) pair on a channel.
+// It is stored in the channel's other_info (operational state) rather than in
+// settings, so ordinary channel edits cannot clobber it.
+type DisabledModelEntry struct {
+	Group  string `json:"group"`
+	Model  string `json:"model"`
+	Source string `json:"source"`
+	Reason string `json:"reason,omitempty"`
+	Time   int64  `json:"time,omitempty"`
 }
 
 const (

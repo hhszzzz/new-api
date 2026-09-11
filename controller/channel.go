@@ -1427,6 +1427,95 @@ func isManageableChannelStatus(status int) bool {
 	return status == common.ChannelStatusEnabled || status == common.ChannelStatusManuallyDisabled
 }
 
+type ChannelModelStatusRequest struct {
+	Group    string `json:"group"`
+	Model    string `json:"model"`
+	Disabled bool   `json:"disabled"`
+	Reason   string `json:"reason"`
+}
+
+// channelServesModel guards model-level enable/disable against typos and stale
+// clients: the (group, model) must exist on the channel today.
+func channelServesModel(channel *model.Channel, group string, modelName string) bool {
+	modelOK := false
+	for _, served := range channel.GetModels() {
+		if strings.TrimSpace(served) == modelName {
+			modelOK = true
+			break
+		}
+	}
+	if !modelOK {
+		return false
+	}
+	if group == "" {
+		return true
+	}
+	for _, served := range channel.GetGroups() {
+		if strings.TrimSpace(served) == group {
+			return true
+		}
+	}
+	return false
+}
+
+// UpdateChannelModelStatus enables or disables a single (group, model) on a
+// channel without touching the channel-level status.
+func UpdateChannelModelStatus(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	req := ChannelModelStatusRequest{}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	group := strings.TrimSpace(req.Group)
+	modelName := strings.TrimSpace(req.Model)
+	if modelName == "" {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	channel, err := model.GetChannelById(id, false)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if !channelServesModel(channel, group, modelName) {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	if req.Disabled {
+		reason := strings.TrimSpace(req.Reason)
+		if reason == "" {
+			reason = "manual operation"
+		}
+		service.DisableChannelModel(id, group, modelName, reason, dto.DisabledModelSourceManual)
+	} else {
+		service.EnableChannelModel(id, group, modelName)
+	}
+	model.InitChannelCache()
+	recordManageAudit(c, "channel.model_status_update", map[string]any{
+		"id":       id,
+		"group":    group,
+		"model":    modelName,
+		"disabled": req.Disabled,
+	})
+	updated, err := model.GetChannelById(id, false)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "",
+		"data": gin.H{
+			"disabled_models": updated.GetDisabledModels(),
+		},
+	})
+}
+
 // equalStringPtr 比较两个 *string 是否相等（均为 nil 视为相等）。
 func equalStringPtr(a, b *string) bool {
 	if a == nil && b == nil {

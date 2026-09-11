@@ -989,6 +989,22 @@ func testChannelForHealthCheck(ctx context.Context, channel *model.Channel, test
 	}
 
 	if allowDisable && isChannelEnabled && shouldBanChannel && channel.GetAutoBan() {
+		// With model-level auto-disable on, the health check can only blame the
+		// model it tested; record it so ProcessChannelError narrows the disable.
+		if channel.GetOtherSettings().DisableModelOnError && !channel.ChannelInfo.IsMultiKey {
+			testModel := ""
+			if channel.TestModel != nil {
+				testModel = strings.TrimSpace(*channel.TestModel)
+			}
+			if testModel == "" {
+				if models := channel.GetModels(); len(models) > 0 {
+					testModel = strings.TrimSpace(models[0])
+				}
+			}
+			if testModel != "" {
+				common.SetContextKey(result.context, constant.ContextKeyOriginalModel, testModel)
+			}
+		}
 		processChannelError(result.context, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError, nil)
 		summary.Disabled++
 	}

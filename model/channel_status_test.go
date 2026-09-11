@@ -5,6 +5,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -99,4 +100,131 @@ func TestSaveStatusStateFromSingleKeySnapshotPreservesUnownedColumns(t *testing.
 	otherInfo := stored.GetOtherInfo()
 	assert.Equal(t, "manual operation", otherInfo["status_reason"])
 	assert.Equal(t, float64(1234), otherInfo["status_time"])
+}
+
+func TestSetChannelModelDisabledScopesToOneGroup(t *testing.T) {
+	setupChannelStatusTest(t)
+
+	channel := Channel{
+		Name:   "model-scope",
+		Key:    "test-key",
+		Status: common.ChannelStatusEnabled,
+		Models: "m1,m2",
+		Group:  "g1,g2",
+	}
+	require.NoError(t, DB.Create(&channel).Error)
+	require.NoError(t, channel.UpdateAbilities(nil))
+
+	abilityEnabled := func(group string, model string) bool {
+		var row Ability
+		require.NoError(t, DB.Where(
+			"channel_id = ? AND model = ? AND "+commonGroupCol+" = ?",
+			channel.Id, model, group,
+		).First(&row).Error)
+		return row.Enabled
+	}
+
+	require.NoError(t, SetChannelModelDisabled(channel.Id, dto.DisabledModelEntry{
+		Group:  "g1",
+		Model:  "m1",
+		Source: dto.DisabledModelSourceManual,
+		Reason: "manual operation",
+	}, true))
+
+	assert.False(t, abilityEnabled("g1", "m1"))
+	assert.True(t, abilityEnabled("g1", "m2"))
+	assert.True(t, abilityEnabled("g2", "m1"))
+	assert.True(t, abilityEnabled("g2", "m2"))
+
+	reloaded, err := GetChannelById(channel.Id, true)
+	require.NoError(t, err)
+	require.Len(t, reloaded.GetDisabledModels(), 1)
+	assert.Equal(t, "g1", reloaded.GetDisabledModels()[0].Group)
+
+	require.NoError(t, SetChannelModelDisabled(channel.Id, dto.DisabledModelEntry{
+		Group: "g1",
+		Model: "m1",
+	}, false))
+
+	assert.True(t, abilityEnabled("g1", "m1"))
+	assert.True(t, abilityEnabled("g1", "m2"))
+	assert.True(t, abilityEnabled("g2", "m1"))
+	assert.True(t, abilityEnabled("g2", "m2"))
+
+	reloaded, err = GetChannelById(channel.Id, true)
+	require.NoError(t, err)
+	assert.Empty(t, reloaded.GetDisabledModels())
+}
+
+func TestUpdateAbilityStatusKeepsManuallyDisabledModel(t *testing.T) {
+	setupChannelStatusTest(t)
+
+	channel := Channel{
+		Name:   "model-reapply",
+		Key:    "test-key",
+		Status: common.ChannelStatusEnabled,
+		Models: "m1,m2",
+		Group:  "g1",
+	}
+	require.NoError(t, DB.Create(&channel).Error)
+	require.NoError(t, channel.UpdateAbilities(nil))
+	require.NoError(t, SetChannelModelDisabled(channel.Id, dto.DisabledModelEntry{
+		Group:  "g1",
+		Model:  "m1",
+		Source: dto.DisabledModelSourceManual,
+	}, true))
+
+	abilityEnabled := func(model string) bool {
+		var row Ability
+		require.NoError(t, DB.Where(
+			"channel_id = ? AND model = ? AND "+commonGroupCol+" = ?",
+			channel.Id, model, "g1",
+		).First(&row).Error)
+		return row.Enabled
+	}
+
+	require.NoError(t, UpdateAbilityStatus(channel.Id, false))
+	assert.False(t, abilityEnabled("m1"))
+	assert.False(t, abilityEnabled("m2"))
+
+	require.NoError(t, UpdateAbilityStatus(channel.Id, true))
+	assert.False(t, abilityEnabled("m1"))
+	assert.True(t, abilityEnabled("m2"))
+}
+
+func TestDisabledModelWithoutGroupSurvivesAbilityRebuild(t *testing.T) {
+	setupChannelStatusTest(t)
+
+	channel := Channel{
+		Name:   "model-wildcard",
+		Key:    "test-key",
+		Status: common.ChannelStatusEnabled,
+		Models: "m1",
+		Group:  "g1,g2",
+	}
+	require.NoError(t, DB.Create(&channel).Error)
+	require.NoError(t, channel.UpdateAbilities(nil))
+	require.NoError(t, SetChannelModelDisabled(channel.Id, dto.DisabledModelEntry{
+		Model:  "m1",
+		Source: dto.DisabledModelSourceAuto,
+	}, true))
+
+	abilityEnabled := func(group string) bool {
+		var row Ability
+		require.NoError(t, DB.Where(
+			"channel_id = ? AND model = ? AND "+commonGroupCol+" = ?",
+			channel.Id, "m1", group,
+		).First(&row).Error)
+		return row.Enabled
+	}
+
+	assert.False(t, abilityEnabled("g1"))
+	assert.False(t, abilityEnabled("g2"))
+
+	reloaded, err := GetChannelById(channel.Id, true)
+	require.NoError(t, err)
+	require.NoError(t, reloaded.UpdateAbilities(nil))
+
+	assert.False(t, abilityEnabled("g1"))
+	assert.False(t, abilityEnabled("g2"))
 }

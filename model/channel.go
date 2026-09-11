@@ -353,6 +353,96 @@ func (channel *Channel) GetTag() string {
 	return *channel.Tag
 }
 
+const disabledModelsOtherInfoKey = "disabled_models"
+
+// GetDisabledModels returns the (group, model) pairs currently disabled on this
+// channel. The list lives in other_info so ordinary channel edits (which only
+// rewrite settings) cannot silently clear it.
+func (channel *Channel) GetDisabledModels() []dto.DisabledModelEntry {
+	raw, ok := channel.GetOtherInfo()[disabledModelsOtherInfoKey]
+	if !ok || raw == nil {
+		return nil
+	}
+	encoded, err := common.Marshal(raw)
+	if err != nil {
+		return nil
+	}
+	var entries []dto.DisabledModelEntry
+	if err := common.Unmarshal(encoded, &entries); err != nil {
+		common.SysLog(fmt.Sprintf("failed to parse disabled models: channel_id=%d, error=%v", channel.Id, err))
+		return nil
+	}
+	return entries
+}
+
+func disabledModelKey(group, model string) string {
+	return strings.TrimSpace(group) + "\n" + strings.TrimSpace(model)
+}
+
+// disabledModelKeySet parses the disabled list once so ability rebuilds do not
+// re-parse other_info per model/group pair.
+func (channel *Channel) disabledModelKeySet() map[string]struct{} {
+	entries := channel.GetDisabledModels()
+	if len(entries) == 0 {
+		return nil
+	}
+	set := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		set[disabledModelKey(entry.Group, entry.Model)] = struct{}{}
+	}
+	return set
+}
+
+func isDisabledModelInSet(set map[string]struct{}, group, model string) bool {
+	if len(set) == 0 {
+		return false
+	}
+	if _, disabled := set[disabledModelKey(group, model)]; disabled {
+		return true
+	}
+	// An entry with an empty group disables the model for every group.
+	_, disabledEverywhere := set[disabledModelKey("", model)]
+	return disabledEverywhere
+}
+
+// SetChannelModelDisabled records or clears one disabled (group, model) on a
+// channel and keeps the matching ability rows in sync. A nil group applies to
+// every group serving that model.
+func SetChannelModelDisabled(channelId int, entry dto.DisabledModelEntry, disabled bool) error {
+	lock := GetChannelPollingLock(channelId)
+	lock.Lock()
+	defer lock.Unlock()
+
+	channel, err := GetChannelById(channelId, true)
+	if err != nil {
+		return err
+	}
+	key := disabledModelKey(entry.Group, entry.Model)
+	next := make([]dto.DisabledModelEntry, 0, len(channel.GetDisabledModels())+1)
+	for _, existing := range channel.GetDisabledModels() {
+		if disabledModelKey(existing.Group, existing.Model) != key {
+			next = append(next, existing)
+		}
+	}
+	if disabled {
+		next = append(next, entry)
+	}
+
+	info := channel.GetOtherInfo()
+	if len(next) == 0 {
+		delete(info, disabledModelsOtherInfoKey)
+	} else {
+		info[disabledModelsOtherInfoKey] = next
+	}
+	channel.SetOtherInfo(info)
+	if err := DB.Model(&Channel{}).Where("id = ?", channelId).Update("other_info", channel.OtherInfo).Error; err != nil {
+		return err
+	}
+
+	enabled := !disabled && channel.Status == common.ChannelStatusEnabled
+	return UpdateAbilityEnabledForModel(channelId, entry.Model, entry.Group, enabled)
+}
+
 func (channel *Channel) SetTag(tag string) {
 	channel.Tag = &tag
 }

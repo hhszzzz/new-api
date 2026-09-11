@@ -97,6 +97,7 @@ type ChannelBatchUpdate struct {
 	UpstreamModelUpdateCheckEnabled    *ChannelBatchBoolUpdate            `json:"upstream_model_update_check_enabled,omitempty"`
 	UpstreamModelUpdateAutoSyncEnabled *ChannelBatchBoolUpdate            `json:"upstream_model_update_auto_sync_enabled,omitempty"`
 	UpstreamModelUpdateIgnoredModels   *ChannelBatchStringListValueUpdate `json:"upstream_model_update_ignored_models,omitempty"`
+	DisableModelOnError                *ChannelBatchBoolUpdate            `json:"disable_model_on_error,omitempty"`
 	RpmLimit                           *ChannelBatchNullableIntUpdate     `json:"rpm_limit,omitempty"`
 	ConcurrencyLimit                   *ChannelBatchNullableIntUpdate     `json:"concurrency_limit,omitempty"`
 }
@@ -119,6 +120,7 @@ func (update ChannelBatchUpdate) Empty() bool {
 		update.UpstreamModelUpdateCheckEnabled == nil &&
 		update.UpstreamModelUpdateAutoSyncEnabled == nil &&
 		update.UpstreamModelUpdateIgnoredModels == nil &&
+		update.DisableModelOnError == nil &&
 		!update.RpmLimit.changed() &&
 		!update.ConcurrencyLimit.changed()
 }
@@ -146,6 +148,7 @@ func (update ChannelBatchUpdate) ChangedFields() []string {
 		{name: "upstream_model_update_check_enabled", changed: update.UpstreamModelUpdateCheckEnabled != nil},
 		{name: "upstream_model_update_auto_sync_enabled", changed: update.UpstreamModelUpdateAutoSyncEnabled != nil},
 		{name: "upstream_model_update_ignored_models", changed: update.UpstreamModelUpdateIgnoredModels != nil},
+		{name: "disable_model_on_error", changed: update.DisableModelOnError != nil},
 		{name: "rpm_limit", changed: update.RpmLimit.changed()},
 		{name: "concurrency_limit", changed: update.ConcurrencyLimit.changed()},
 	} {
@@ -383,7 +386,8 @@ func prepareChannelBatchUpdate(channel *Channel, update ChannelBatchUpdate) (pre
 	settingsChanged := update.ClientPolicy != nil ||
 		update.UpstreamModelUpdateCheckEnabled != nil ||
 		update.UpstreamModelUpdateAutoSyncEnabled != nil ||
-		update.UpstreamModelUpdateIgnoredModels != nil
+		update.UpstreamModelUpdateIgnoredModels != nil ||
+		update.DisableModelOnError != nil
 	if settingsChanged {
 		settingsRecord := make(map[string]any)
 		rawSettings := strings.TrimSpace(channel.OtherSettings)
@@ -439,6 +443,9 @@ func prepareChannelBatchUpdate(channel *Channel, update ChannelBatchUpdate) (pre
 			settingsRecord["upstream_model_update_ignored_models"] = normalizeChannelBatchListValues(
 				update.UpstreamModelUpdateIgnoredModels.Value,
 			)
+		}
+		if update.DisableModelOnError != nil {
+			settingsRecord["disable_model_on_error"] = update.DisableModelOnError.Value
 		}
 
 		settingsBytes, err := common.Marshal(settingsRecord)
