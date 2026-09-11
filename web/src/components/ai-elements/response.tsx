@@ -58,7 +58,13 @@ export const Response = memo((props: ResponseProps) => {
   const shouldAnimate = !isFinal
   const parserId = props.parserId ?? DEFAULT_PARSER_ID
   const markdown = getCachedMarkdown(parserId)
-  const shouldParseMarkdown = content.length <= MAX_PARSED_MARKDOWN_CHARS
+  const isOversized = content.length > MAX_PARSED_MARKDOWN_CHARS
+  // Embedded image data URIs push an otherwise small response past the parse
+  // cap. Parse those once the stream settles so the image renders instead of
+  // the raw data URI; while streaming, keep rendering raw text to avoid
+  // re-parsing a growing multi-megabyte payload on every chunk.
+  const shouldParseMarkdown =
+    !isOversized || (isFinal && /data:image\//i.test(content))
   const fadeStateRef = useRef<FadeState | null>(null)
   if (fadeStateRef.current == null) {
     fadeStateRef.current = createFadeState()
