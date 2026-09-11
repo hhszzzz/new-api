@@ -95,6 +95,22 @@ describe('local billing expression evaluation', () => {
       formatBillingCondition(`!(${peakCondition})`, translations.t, 'zh')
     ).toBe('周一至周五 09:00至12:00或14:00至18:00以外的时段（Asia/Shanghai）')
   })
+  test('formats weekday and number conditions for the zhCN and zhTW interface codes', async () => {
+    // The interface language codes `zhCN` / `zhTW` are not valid BCP-47 tags,
+    // so passing them straight to Intl throws and the condition falls back to
+    // its raw source. Formatting must map them through toIntlLocale first.
+    const translations = createInstance()
+    await translations.init({ lng: 'zh', resources: { zh } })
+    expect(formatBillingCondition(peakCondition, translations.t, 'zhCN')).toBe(
+      '周一至周五 09:00至12:00或14:00至18:00（Asia/Shanghai）'
+    )
+    expect(formatBillingCondition(peakCondition, translations.t, 'zhTW')).toBe(
+      '週一至週五 09:00至12:00或14:00至18:00（Asia/Shanghai）'
+    )
+    expect(formatBillingCondition('p < 1000', translations.t, 'zhTW')).toBe(
+      '输入 < 1,000'
+    )
+  })
   test('keeps log prices tied to the recorded tier regardless of the current time', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-09-07T10:00:00+08:00'))

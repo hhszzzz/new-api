@@ -25,16 +25,20 @@ import { USD_PRICING_CURRENCY } from '@/features/model-pricing/currency'
 
 import { TimeBasedPricingEditor } from '../time-based-pricing-editor'
 
-const { translateMock } = vi.hoisted(() => ({
+const { translateMock, i18nState } = vi.hoisted(() => ({
   translateMock: (key: string, values?: Record<string, string | number>) =>
     Object.entries(values || {}).reduce(
       (result, [name, value]) => result.replace(`{{${name}}}`, String(value)),
       key
     ),
+  i18nState: {
+    language: 'en' as string,
+    resolvedLanguage: undefined as string | undefined,
+  },
 }))
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: translateMock, i18n: { language: 'en' } }),
+  useTranslation: () => ({ t: translateMock, i18n: i18nState }),
 }))
 
 const ENABLED =
@@ -73,6 +77,26 @@ function ControlledHarness({ initial }: { initial: string }) {
 describe('time based pricing editor', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    i18nState.language = 'en'
+    i18nState.resolvedLanguage = undefined
+  })
+
+  test('renders weekday labels for the project zhCN/zhTW language codes', () => {
+    // The project's i18next codes (`zhCN` / `zhTW`) are not valid BCP-47 tags;
+    // passing them raw into Intl.DateTimeFormat throws RangeError. Both must
+    // survive by being mapped through toIntlLocale.
+    for (const language of ['zhCN', 'zhTW']) {
+      i18nState.language = language
+      const { container, unmount } = render(
+        <TimeBasedPricingEditor
+          currency={USD_PRICING_CURRENCY}
+          billingExpr={ENABLED}
+          onBillingExprChange={vi.fn()}
+        />
+      )
+      expect(container.querySelectorAll('button[aria-pressed]')).toHaveLength(7)
+      unmount()
+    }
   })
 
   test('keeps off-peak as the flat baseline while the toggle is off', () => {

@@ -27,6 +27,7 @@ import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import type { PricingCurrency } from '@/features/model-pricing/currency'
 import { COMMON_TIMEZONES } from '@/features/pricing/lib/billing-expr'
+import { toIntlLocale } from '@/i18n/languages'
 
 import { BillingTimeRangeFields } from './billing-time-fields'
 import { TierPriceFields } from './tier-price-fields'
@@ -69,10 +70,10 @@ export function TimeBasedPricingEditor({
   }
 
   const weekdayLabels = Array.from({ length: 7 }, (_, day) =>
-    new Intl.DateTimeFormat(i18n.language, {
-      weekday: 'short',
-      timeZone: 'UTC',
-    }).format(new Date(Date.UTC(2026, 0, 4 + day)))
+    new Intl.DateTimeFormat(
+      toIntlLocale(i18n.resolvedLanguage ?? i18n.language),
+      { weekday: 'short', timeZone: 'UTC' }
+    ).format(new Date(Date.UTC(2026, 0, 4 + day)))
   )
 
   const updatePrices =
