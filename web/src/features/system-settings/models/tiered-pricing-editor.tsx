@@ -113,6 +113,7 @@ import {
 import { DraftNumberInput } from './draft-number-input'
 import { RequestSimulation } from './request-simulation'
 import { TierPriceFields } from './tier-price-fields'
+import { TimeBasedPricingEditor } from './time-based-pricing-editor'
 import { VisualBillingDocumentEditor } from './visual-billing-document-editor'
 
 type EditorTierCondition = TierConditionInput & { __uiKey: string }
@@ -1511,7 +1512,18 @@ export type TieredPricingEditorProps = {
   onRequestRuleExprChange: (next: string) => void
 }
 
-type EditorMode = 'visual' | 'raw'
+type EditorMode = 'visual' | 'time' | 'raw'
+
+function resolveInitialMode(expr: string): EditorMode {
+  if (
+    expr &&
+    !parseTierEditorConfig(expr) &&
+    !parseVisualBillingDocument(expr)
+  ) {
+    return 'raw'
+  }
+  return 'visual'
+}
 
 // The legacy form omits zero-valued extra variables when generating prices.
 // Keep that API unchanged for synchronization callers; route explicit zero to the document form.
@@ -1544,11 +1556,7 @@ export const TieredPricingEditor = memo(function TieredPricingEditor({
 }: TieredPricingEditorProps) {
   const { t } = useTranslation()
   const [editorMode, setEditorMode] = useState<EditorMode>(() =>
-    currentExpr &&
-    !parseTierEditorConfig(currentExpr) &&
-    !parseVisualBillingDocument(currentExpr)
-      ? 'raw'
-      : 'visual'
+    resolveInitialMode(currentExpr)
   )
   const [visualConfig, setVisualConfig] = useState<VisualConfig | null>(
     () =>
@@ -1583,7 +1591,7 @@ export const TieredPricingEditor = memo(function TieredPricingEditor({
       config ?? (!currentExpr ? createDefaultVisualConfig() : null)
     )
     setVisualDocument(document)
-    setEditorMode(config || document || !currentExpr ? 'visual' : 'raw')
+    setEditorMode(resolveInitialMode(currentExpr))
     setBaseExpr(currentExpr)
     setRuleExpr(currentRequestRuleExpr)
     setRawExpr(combineBillingExpr(currentExpr, currentRequestRuleExpr))
@@ -1673,12 +1681,24 @@ export const TieredPricingEditor = memo(function TieredPricingEditor({
         setRequestRuleGroups(
           normalizeEditorRequestRuleGroups(tryParseRequestRuleExpr(ruleExpr))
         )
+      } else if (next === 'time') {
+        setVisualConfig(null)
+        setVisualDocument(null)
       } else {
         setRawExpr(combineBillingExpr(baseExpr, ruleExpr))
       }
       setEditorMode(next)
     },
     [editorMode, invalidDraft, baseExpr, ruleExpr, t]
+  )
+
+  const handleTimeChange = useCallback(
+    (next: string) => {
+      setBaseExpr(next)
+      setRawExpr(combineBillingExpr(next, ruleExpr))
+      onBillingExprChange(next)
+    },
+    [ruleExpr, onBillingExprChange]
   )
 
   const applyPreset = useCallback(
@@ -1718,6 +1738,7 @@ export const TieredPricingEditor = memo(function TieredPricingEditor({
           <Select
             items={[
               { value: 'visual', label: t('Visual editor') },
+              { value: 'time', label: t('Time-based pricing') },
               { value: 'raw', label: t('Expression editor') },
             ]}
             value={editorMode}
@@ -1733,6 +1754,7 @@ export const TieredPricingEditor = memo(function TieredPricingEditor({
             <SelectContent alignItemWithTrigger={false}>
               <SelectGroup>
                 <SelectItem value='visual'>{t('Visual editor')}</SelectItem>
+                <SelectItem value='time'>{t('Time-based pricing')}</SelectItem>
                 <SelectItem value='raw' disabled={invalidDraft}>
                   {t('Expression editor')}
                 </SelectItem>
@@ -1768,6 +1790,13 @@ export const TieredPricingEditor = memo(function TieredPricingEditor({
             currency={currency}
             visualConfig={visualConfig}
             onChange={handleVisualChange}
+          />
+        )}
+        {editorMode === 'time' && (
+          <TimeBasedPricingEditor
+            currency={currency}
+            billingExpr={baseExpr}
+            onBillingExprChange={handleTimeChange}
           />
         )}
         {editorMode === 'raw' && (
