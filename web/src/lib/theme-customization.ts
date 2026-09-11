@@ -84,10 +84,10 @@ export type ThemeRadius = 'default' | 'none' | 'sm' | 'md' | 'lg' | 'xl'
 /**
  * Density axis for the theme.
  *
- * - `default` — Tailwind's stock type/spacing scale. Reserved for users who
- *   explicitly want more breathing room than the shipped default.
- * - `sm` — compact UI. This is the project default: it keeps dense surfaces
- *   (model cards, metric rows) from crowding their neighbours.
+ * - `default` — Tailwind's stock type/spacing scale. This is the shipped
+ *   default, so a fresh install renders at the stock density.
+ * - `sm` — compact UI. Opt-in for users who want dense surfaces (model
+ *   cards, metric rows) tighter than the stock scale.
  * - `lg` / `xl` — progressively roomier.
  */
 export type ThemeScale = 'default' | 'sm' | 'lg' | 'xl'
@@ -128,7 +128,7 @@ export const DEFAULT_THEME_CUSTOMIZATION: ThemeCustomization = {
   preset: 'default',
   font: 'default',
   radius: 'default',
-  scale: 'sm',
+  scale: 'default',
   contentLayout: 'full',
 }
 

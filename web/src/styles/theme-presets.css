@@ -696,14 +696,9 @@ For commercial licensing, please contact support@quantumnous.com
 }
 
 /* ── Density scale ────────────────────────────────────────────────────── */
-/* Base density is compact — that is the shipped default
- * (DEFAULT_THEME_CUSTOMIZATION.scale = 'sm'), so declaring it on `:root`
- * keeps the first paint (before the provider writes `data-theme-scale`)
- * already dense instead of flashing the stock scale. The `sm` selector
- * re-asserts it on <body> so an explicit compact choice still wins over a
- * preset's own scale (e.g. `simple-large`).
- * `default` restores the stock Tailwind scale; `lg`/`xl` widen further. */
-:root,
+/* `sm` = compact UI; `lg` = comfortable; `xl` = extra readable. The shipped
+ * default is `default`, which matches no rule and keeps Tailwind's stock
+ * scale, so no selector is needed for it. */
 [data-theme-scale='sm'] {
   --text-xs: 0.7rem;
   --text-sm: 0.78rem;
@@ -713,16 +708,6 @@ For commercial licensing, please contact support@quantumnous.com
   --text-2xl: 1.38rem;
   --text-3xl: 1.7rem;
   --spacing: 0.225rem;
-}
-[data-theme-scale='default'] {
-  --text-xs: 0.75rem;
-  --text-sm: 0.875rem;
-  --text-base: 1rem;
-  --text-lg: 1.125rem;
-  --text-xl: 1.25rem;
-  --text-2xl: 1.5rem;
-  --text-3xl: 1.875rem;
-  --spacing: 0.25rem;
 }
 [data-theme-scale='lg'] {
   --text-xs: 0.84rem;
