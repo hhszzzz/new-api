@@ -81,6 +81,15 @@ export const THEME_PRESETS = [
 
 export type ThemePreset = (typeof THEME_PRESETS)[number]['value']
 export type ThemeRadius = 'default' | 'none' | 'sm' | 'md' | 'lg' | 'xl'
+/**
+ * Density axis for the theme.
+ *
+ * - `default` — Tailwind's stock type/spacing scale. Reserved for users who
+ *   explicitly want more breathing room than the shipped default.
+ * - `sm` — compact UI. This is the project default: it keeps dense surfaces
+ *   (model cards, metric rows) from crowding their neighbours.
+ * - `lg` / `xl` — progressively roomier.
+ */
 export type ThemeScale = 'default' | 'sm' | 'lg' | 'xl'
 export type ContentLayout = 'full' | 'centered'
 
@@ -119,7 +128,7 @@ export const DEFAULT_THEME_CUSTOMIZATION: ThemeCustomization = {
   preset: 'default',
   font: 'default',
   radius: 'default',
-  scale: 'default',
+  scale: 'sm',
   contentLayout: 'full',
 }
 

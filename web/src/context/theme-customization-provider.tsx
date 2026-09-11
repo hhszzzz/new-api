@@ -159,11 +159,13 @@ export function ThemeCustomizationProvider(props: {
     )
   }, [radius])
 
+  // Scale is written verbatim (including `default`) rather than dropped when
+  // it equals the default: the shipped default IS `sm`, so removing the
+  // attribute would strip the compact rule and silently fall back to the
+  // stock Tailwind scale. `default` matches no rule and is a no-op, which is
+  // exactly what opting out of compact should mean.
   useEffect(() => {
-    applyAttribute(
-      'data-theme-scale',
-      scale === DEFAULT_THEME_CUSTOMIZATION.scale ? null : scale
-    )
+    applyAttribute('data-theme-scale', scale)
   }, [scale])
 
   useEffect(() => {
