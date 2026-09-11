@@ -38,7 +38,6 @@ function normalizedText(value: string | null): string {
 describe('log cost display', () => {
   beforeAll(() => {
     i18next.addResourceBundle('en', 'translation', {
-      Subscription: 'Subscription',
       'Deducted by subscription': 'Deducted by subscription',
       'Includes tool-call surcharge': 'Includes tool-call surcharge',
     })
@@ -64,8 +63,8 @@ describe('log cost display', () => {
     expect(marker).toHaveAttribute('tabindex', '0')
   })
 
-  test('preserves the subscription badge and adds the same legacy surcharge marker', () => {
-    renderCost({
+  test('shows the subscription cost and adds the same legacy surcharge marker', () => {
+    const rendered = renderCost({
       quota: 5000,
       other: {
         billing_source: 'subscription',
@@ -75,7 +74,14 @@ describe('log cost display', () => {
       },
     })
 
-    expect(screen.getByText('Subscription')).toBeInTheDocument()
+    expect(
+      normalizedText(rendered.container.textContent).includes(
+        normalizedText(formatLogQuota(5000))
+      )
+    ).toBe(true)
+    expect(
+      screen.getByRole('img', { name: 'Deducted by subscription' })
+    ).toHaveAttribute('data-subscription-indicator', 'true')
     expect(
       screen.getByRole('img', { name: 'Includes tool-call surcharge' })
     ).toHaveAttribute('data-tool-surcharge-indicator', 'true')

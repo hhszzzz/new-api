@@ -16,11 +16,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Wrench01Icon } from '@hugeicons/core-free-icons'
+import { CreditCardIcon, Wrench01Icon } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useTranslation } from 'react-i18next'
 
-import { StatusBadge } from '@/components/status-badge'
 import { Badge } from '@/components/ui/badge'
 import {
   Tooltip,
@@ -92,25 +91,33 @@ function QuotaBadge(props: { quota: number }) {
   )
 }
 
-function SubscriptionBadge(props: { quota: number }) {
+function SubscriptionMarker(props: { quota: number }) {
   const { t } = useTranslation()
+  const label = t('Deducted by subscription')
 
   return (
     <Tooltip>
       <TooltipTrigger
         render={
-          <StatusBadge
-            label={t('Subscription')}
-            variant='success'
-            size='sm'
-            copyable={false}
-            className='cursor-help'
-          />
+          <Badge
+            variant='outline'
+            className='border-success/40 bg-success/10 text-success h-5 min-w-5 cursor-help gap-0 rounded-full px-1'
+            role='img'
+            aria-label={label}
+            tabIndex={0}
+            data-subscription-indicator='true'
+          >
+            <HugeiconsIcon
+              icon={CreditCardIcon}
+              strokeWidth={2}
+              aria-hidden='true'
+            />
+          </Badge>
         }
       />
       <TooltipContent>
         <span>
-          {t('Deducted by subscription')}: {formatLogQuota(props.quota)}
+          {label}: {formatLogQuota(props.quota)}
         </span>
       </TooltipContent>
     </Tooltip>
@@ -132,11 +139,8 @@ export function LogCostDisplay(props: LogCostDisplayProps) {
   return (
     <TooltipProvider>
       <div className='inline-flex items-center gap-1'>
-        {isSubscription ? (
-          <SubscriptionBadge quota={props.quota} />
-        ) : (
-          <QuotaBadge quota={props.quota} />
-        )}
+        <QuotaBadge quota={props.quota} />
+        {isSubscription ? <SubscriptionMarker quota={props.quota} /> : null}
         {showToolSurcharge ? <ToolSurchargeMarker /> : null}
       </div>
     </TooltipProvider>
