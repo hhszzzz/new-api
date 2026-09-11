@@ -99,7 +99,7 @@ export function useSidebarData(): SidebarData {
             icon: Key,
           },
           {
-            title: t('Usage Logs'),
+            title: t('Logs'),
             url: '/usage-logs/common',
             icon: FileText,
           },
