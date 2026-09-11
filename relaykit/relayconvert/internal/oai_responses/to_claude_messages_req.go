@@ -196,7 +196,9 @@ func OpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Met
 	}
 	if (sourceReasoning.HasStrength() || sharedclaude.AdaptiveThinkingIsDefault(claudeRequest.Model)) && (!claudeMessagesSupportThinking(claudeRequest.Messages) || claudeToolChoiceForcesCall(claudeRequest.ToolChoice)) {
 		if sharedclaude.ThinkingCannotBeDisabled(claudeRequest.Model) {
-			if claudeToolChoiceForcesCall(claudeRequest.ToolChoice) { return nil, fmt.Errorf("model %q cannot honor a forced tool_choice because thinking cannot be disabled", claudeRequest.Model) }
+			if claudeToolChoiceForcesCall(claudeRequest.ToolChoice) {
+				return nil, fmt.Errorf("model %q cannot honor a forced tool_choice because thinking cannot be disabled", claudeRequest.Model)
+			}
 			return nil, fmt.Errorf("cannot convert Responses request: model %q requires thinking with signed tool history", claudeRequest.Model)
 		}
 		sourceReasoning = reasoning.Intent{Mode: reasoning.ModeDisabled, Effort: reasoning.EffortNone}
@@ -231,14 +233,16 @@ func responsesFunctionDeclarationsToClaudeTools(functions []dto.FunctionRequest)
 // applyResponsesReasoningToClaude keeps replayed tool turns compatible with
 // Claude's signed-thinking requirements after the shared renderer sets intent.
 func applyResponsesReasoningToClaude(_ *dto.OpenAIResponsesRequest, request *dto.ClaudeRequest) error {
-    if request == nil || request.Thinking == nil || request.Thinking.Type == "disabled" { return nil }
-    if !claudeMessagesSupportThinking(request.Messages) || claudeToolChoiceForcesCall(request.ToolChoice) {
-        if sharedclaude.ThinkingCannotBeDisabled(request.Model) {
-            return fmt.Errorf("cannot convert Responses request: Anthropic model %q requires thinking but the tool history or forced tool_choice cannot preserve it", request.Model)
-        }
-        request.Thinking = &dto.Thinking{Type: "disabled"}
-    }
-    return nil
+	if request == nil || request.Thinking == nil || request.Thinking.Type == "disabled" {
+		return nil
+	}
+	if !claudeMessagesSupportThinking(request.Messages) || claudeToolChoiceForcesCall(request.ToolChoice) {
+		if sharedclaude.ThinkingCannotBeDisabled(request.Model) {
+			return fmt.Errorf("cannot convert Responses request: Anthropic model %q requires thinking but the tool history or forced tool_choice cannot preserve it", request.Model)
+		}
+		request.Thinking = &dto.Thinking{Type: "disabled"}
+	}
+	return nil
 }
 
 func claudeMessagesSupportThinking(messages []dto.ClaudeMessage) bool {
@@ -686,7 +690,9 @@ func responsesClaudeRole(role string) string {
 }
 
 func ensureClaudeMessagesStartWithUser(messages []dto.ClaudeMessage) []dto.ClaudeMessage {
-	if len(messages) == 0 { return messages }
+	if len(messages) == 0 {
+		return messages
+	}
 	if len(messages) > 0 && messages[0].Role == "user" {
 		return messages
 	}

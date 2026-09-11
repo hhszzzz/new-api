@@ -144,7 +144,9 @@ func ResponsesStreamEventToChatChunks(event *dto.ResponsesStreamResponse, state 
 	case responsesEventOutputTextDone, responsesEventRefusalDone:
 		key := state.bindTextEvent(event)
 		finalText := ""
-		if event.Text != nil { finalText = *event.Text }
+		if event.Text != nil {
+			finalText = *event.Text
+		}
 		if event.Type == responsesEventRefusalDone && event.Refusal != "" {
 			finalText = event.Refusal
 		}
@@ -1057,28 +1059,28 @@ func (s *ResponsesToChatStreamState) keyForEvent(event *dto.ResponsesStreamRespo
 }
 
 type ResponsesBufferedAccumulator struct {
-    items []*responsesBufferedItem
-    outputIndexToItemIdx map[int]int
-    itemIDToItemIdx map[string]int
-    lastUnindexedItemIdx int
-    tools []*responsesBufferedTool
-    outputIndexToToolIdx map[int]int
-    itemIDToToolIdx map[string]int
-    pendingByOutputIndex map[int]string
-    pendingByItemID map[string]string
+	items                []*responsesBufferedItem
+	outputIndexToItemIdx map[int]int
+	itemIDToItemIdx      map[string]int
+	lastUnindexedItemIdx int
+	tools                []*responsesBufferedTool
+	outputIndexToToolIdx map[int]int
+	itemIDToToolIdx      map[string]int
+	pendingByOutputIndex map[int]string
+	pendingByItemID      map[string]string
 }
 
 type responsesBufferedItem struct {
-    Type string
-    ID string
-    Output dto.ResponsesOutput
-    OutputIndex *int
-    Text strings.Builder
-    Refusal strings.Builder
-    Reasoning strings.Builder
-    Annotations []any
-    ToolIndex int
-    NeedsReasoningBreak bool
+	Type                string
+	ID                  string
+	Output              dto.ResponsesOutput
+	OutputIndex         *int
+	Text                strings.Builder
+	Refusal             strings.Builder
+	Reasoning           strings.Builder
+	Annotations         []any
+	ToolIndex           int
+	NeedsReasoningBreak bool
 }
 
 type responsesBufferedTool struct {
@@ -1102,63 +1104,102 @@ func NewResponsesBufferedAccumulator() *ResponsesBufferedAccumulator {
 }
 
 func (a *ResponsesBufferedAccumulator) ProcessEvent(event *dto.ResponsesStreamResponse) {
-    if a == nil || event == nil { return }
-    switch event.Type {
-    case responsesEventOutputTextDelta:
-        a.ensureItem(event, responsesOutputTypeMessage).Text.WriteString(event.Delta)
-    case responsesEventRefusalDelta:
-        a.ensureItem(event, responsesOutputTypeMessage).Refusal.WriteString(event.Delta)
-    case responsesEventOutputTextAnnotationAdded:
-        item := a.ensureItem(event, responsesOutputTypeMessage)
-        var annotation any
-        if err := kitutil.Unmarshal(event.Annotation, &annotation); err == nil && annotation != nil {
-            item.Annotations = append(item.Annotations, annotation)
-        }
-    case responsesEventReasoningSummaryDelta, responsesEventReasoningTextDelta:
-        item := a.ensureItem(event, responsesOutputTypeReasoning)
-        builder := &item.Text
-        if event.Type == responsesEventReasoningTextDelta { builder = &item.Reasoning }
-        if item.NeedsReasoningBreak {
-            appendSeparatedText(builder, event.Delta)
-            item.NeedsReasoningBreak = false
-        } else { builder.WriteString(event.Delta) }
-    case responsesEventReasoningSummaryDone, responsesEventReasoningTextDone:
-        item := a.ensureItem(event, responsesOutputTypeReasoning)
-        builder := &item.Text
-        if event.Type == responsesEventReasoningTextDone { builder = &item.Reasoning }
-        if builder.Len() == 0 && event.Text != nil { builder.WriteString(*event.Text) }
-        if builder.Len() > 0 { item.NeedsReasoningBreak = true }
-    case responsesEventOutputTextDone, responsesEventRefusalDone:
-        item := a.ensureItem(event, responsesOutputTypeMessage)
-        builder := &item.Text
-        text := event.Text
-        if event.Type == responsesEventRefusalDone {
-            builder = &item.Refusal
-            if event.Refusal != "" { text = &event.Refusal }
-        }
-        if text != nil { builder.Reset(); builder.WriteString(*text) }
-    case responsesEventOutputItemAdded, responsesEventOutputItemDone:
-        if event.Item == nil { return }
-        itemType := responsesOutputTypeFunctionCall
-		if event.Item != nil { itemType = event.Item.Type } else if event.Type == responsesEventCustomToolInputDone { itemType = responsesOutputTypeCustomToolCall }
+	if a == nil || event == nil {
+		return
+	}
+	switch event.Type {
+	case responsesEventOutputTextDelta:
+		a.ensureItem(event, responsesOutputTypeMessage).Text.WriteString(event.Delta)
+	case responsesEventRefusalDelta:
+		a.ensureItem(event, responsesOutputTypeMessage).Refusal.WriteString(event.Delta)
+	case responsesEventOutputTextAnnotationAdded:
+		item := a.ensureItem(event, responsesOutputTypeMessage)
+		var annotation any
+		if err := kitutil.Unmarshal(event.Annotation, &annotation); err == nil && annotation != nil {
+			item.Annotations = append(item.Annotations, annotation)
+		}
+	case responsesEventReasoningSummaryDelta, responsesEventReasoningTextDelta:
+		item := a.ensureItem(event, responsesOutputTypeReasoning)
+		builder := &item.Text
+		if event.Type == responsesEventReasoningTextDelta {
+			builder = &item.Reasoning
+		}
+		if item.NeedsReasoningBreak {
+			appendSeparatedText(builder, event.Delta)
+			item.NeedsReasoningBreak = false
+		} else {
+			builder.WriteString(event.Delta)
+		}
+	case responsesEventReasoningSummaryDone, responsesEventReasoningTextDone:
+		item := a.ensureItem(event, responsesOutputTypeReasoning)
+		builder := &item.Text
+		if event.Type == responsesEventReasoningTextDone {
+			builder = &item.Reasoning
+		}
+		if builder.Len() == 0 && event.Text != nil {
+			builder.WriteString(*event.Text)
+		}
+		if builder.Len() > 0 {
+			item.NeedsReasoningBreak = true
+		}
+	case responsesEventOutputTextDone, responsesEventRefusalDone:
+		item := a.ensureItem(event, responsesOutputTypeMessage)
+		builder := &item.Text
+		text := event.Text
+		if event.Type == responsesEventRefusalDone {
+			builder = &item.Refusal
+			if event.Refusal != "" {
+				text = &event.Refusal
+			}
+		}
+		if text != nil {
+			builder.Reset()
+			builder.WriteString(*text)
+		}
+	case responsesEventOutputItemAdded, responsesEventOutputItemDone:
+		if event.Item == nil {
+			return
+		}
+		itemType := responsesOutputTypeFunctionCall
+		if event.Item != nil {
+			itemType = event.Item.Type
+		} else if event.Type == responsesEventCustomToolInputDone {
+			itemType = responsesOutputTypeCustomToolCall
+		}
 		item := a.ensureItem(event, itemType)
-        item.Output = cloneResponsesOutput(*event.Item)
-        if isResponsesToolOutputType(event.Item.Type) {
-            tool := a.ensureTool(event)
-            if args := event.Item.ArgumentsString(); args != "" { tool.Arguments.Reset(); tool.Arguments.WriteString(args) }
-            if event.Item.Type == responsesOutputTypeCustomToolCall && event.Item.Input != "" {
-                tool.Arguments.Reset(); tool.Arguments.WriteString(event.Item.Input)
-            }
-        }
-    case responsesEventFunctionArgsDelta, responsesEventCustomToolInputDelta:
-        if idx, ok := a.findToolIndex(event); ok { a.tools[idx].Arguments.WriteString(event.Delta); return }
-        if event.OutputIndex != nil { a.pendingByOutputIndex[*event.OutputIndex] += event.Delta
-        } else if itemID := strings.TrimSpace(event.ItemID); itemID != "" { a.pendingByItemID[itemID] += event.Delta }
-    case responsesEventFunctionArgsDone:
-        if event.Arguments != nil { tool := a.ensureTool(event); tool.Arguments.Reset(); tool.Arguments.WriteString(*event.Arguments) }
-    case responsesEventCustomToolInputDone:
-        tool := a.ensureTool(event); tool.Arguments.Reset(); tool.Arguments.WriteString(event.Input)
-    }
+		item.Output = cloneResponsesOutput(*event.Item)
+		if isResponsesToolOutputType(event.Item.Type) {
+			tool := a.ensureTool(event)
+			if args := event.Item.ArgumentsString(); args != "" {
+				tool.Arguments.Reset()
+				tool.Arguments.WriteString(args)
+			}
+			if event.Item.Type == responsesOutputTypeCustomToolCall && event.Item.Input != "" {
+				tool.Arguments.Reset()
+				tool.Arguments.WriteString(event.Item.Input)
+			}
+		}
+	case responsesEventFunctionArgsDelta, responsesEventCustomToolInputDelta:
+		if idx, ok := a.findToolIndex(event); ok {
+			a.tools[idx].Arguments.WriteString(event.Delta)
+			return
+		}
+		if event.OutputIndex != nil {
+			a.pendingByOutputIndex[*event.OutputIndex] += event.Delta
+		} else if itemID := strings.TrimSpace(event.ItemID); itemID != "" {
+			a.pendingByItemID[itemID] += event.Delta
+		}
+	case responsesEventFunctionArgsDone:
+		if event.Arguments != nil {
+			tool := a.ensureTool(event)
+			tool.Arguments.Reset()
+			tool.Arguments.WriteString(*event.Arguments)
+		}
+	case responsesEventCustomToolInputDone:
+		tool := a.ensureTool(event)
+		tool.Arguments.Reset()
+		tool.Arguments.WriteString(event.Input)
+	}
 }
 
 func (a *ResponsesBufferedAccumulator) SupplementResponseOutput(resp *dto.OpenAIResponsesResponse) {
@@ -1195,42 +1236,62 @@ func (a *ResponsesBufferedAccumulator) SupplementResponseOutput(resp *dto.OpenAI
 }
 
 func (a *ResponsesBufferedAccumulator) BuildOutput() []dto.ResponsesOutput {
-    if a == nil { return nil }
-    items := append([]*responsesBufferedItem(nil), a.items...)
-    sort.SliceStable(items, func(i, j int) bool {
-        if items[i].OutputIndex == nil || items[j].OutputIndex == nil { return false }
-        return *items[i].OutputIndex < *items[j].OutputIndex
-    })
-    out := make([]dto.ResponsesOutput, 0, len(items))
-    for _, buffered := range items {
-        item := cloneResponsesOutput(buffered.Output)
-        if item.Type == "" { item.Type = buffered.Type }
-        if item.ID == "" { item.ID = buffered.ID }
-        switch item.Type {
-        case responsesOutputTypeMessage:
-            if item.Role == "" { item.Role = "assistant" }
-            if len(item.Content) == 0 {
-                if buffered.Text.Len() > 0 || len(buffered.Annotations) > 0 {
-                    item.Content = append(item.Content, dto.ResponsesOutputContent{Type: "output_text", Text: buffered.Text.String(), Annotations: buffered.Annotations})
-                }
-                if buffered.Refusal.Len() > 0 { item.Content = append(item.Content, dto.ResponsesOutputContent{Type: "refusal", Refusal: buffered.Refusal.String()}) }
-            } else if len(buffered.Annotations) > 0 {
-                for i := range item.Content {
-                    if item.Content[i].Type == "output_text" && len(item.Content[i].Annotations) == 0 {
-                        item.Content[i].Annotations = buffered.Annotations
-                        break
-                    }
-                }
-            }
-        case responsesOutputTypeReasoning:
-            if len(item.Summary) == 0 && buffered.Text.Len() > 0 { item.Summary = []dto.ResponsesReasoningSummaryPart{{Type: "summary_text", Text: buffered.Text.String()}} }
-            if len(item.Content) == 0 && buffered.Reasoning.Len() > 0 { item.Content = []dto.ResponsesOutputContent{{Type: "reasoning_text", Text: buffered.Reasoning.String()}} }
-        default:
-            if buffered.ToolIndex >= 0 && buffered.ToolIndex < len(a.tools) { item = mergeResponsesOutput(a.bufferedToolOutput(a.tools[buffered.ToolIndex]), item) }
-        }
-        if item.Type != "" { out = append(out, item) }
-    }
-    return out
+	if a == nil {
+		return nil
+	}
+	items := append([]*responsesBufferedItem(nil), a.items...)
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].OutputIndex == nil || items[j].OutputIndex == nil {
+			return false
+		}
+		return *items[i].OutputIndex < *items[j].OutputIndex
+	})
+	out := make([]dto.ResponsesOutput, 0, len(items))
+	for _, buffered := range items {
+		item := cloneResponsesOutput(buffered.Output)
+		if item.Type == "" {
+			item.Type = buffered.Type
+		}
+		if item.ID == "" {
+			item.ID = buffered.ID
+		}
+		switch item.Type {
+		case responsesOutputTypeMessage:
+			if item.Role == "" {
+				item.Role = "assistant"
+			}
+			if len(item.Content) == 0 {
+				if buffered.Text.Len() > 0 || len(buffered.Annotations) > 0 {
+					item.Content = append(item.Content, dto.ResponsesOutputContent{Type: "output_text", Text: buffered.Text.String(), Annotations: buffered.Annotations})
+				}
+				if buffered.Refusal.Len() > 0 {
+					item.Content = append(item.Content, dto.ResponsesOutputContent{Type: "refusal", Refusal: buffered.Refusal.String()})
+				}
+			} else if len(buffered.Annotations) > 0 {
+				for i := range item.Content {
+					if item.Content[i].Type == "output_text" && len(item.Content[i].Annotations) == 0 {
+						item.Content[i].Annotations = buffered.Annotations
+						break
+					}
+				}
+			}
+		case responsesOutputTypeReasoning:
+			if len(item.Summary) == 0 && buffered.Text.Len() > 0 {
+				item.Summary = []dto.ResponsesReasoningSummaryPart{{Type: "summary_text", Text: buffered.Text.String()}}
+			}
+			if len(item.Content) == 0 && buffered.Reasoning.Len() > 0 {
+				item.Content = []dto.ResponsesOutputContent{{Type: "reasoning_text", Text: buffered.Reasoning.String()}}
+			}
+		default:
+			if buffered.ToolIndex >= 0 && buffered.ToolIndex < len(a.tools) {
+				item = mergeResponsesOutput(a.bufferedToolOutput(a.tools[buffered.ToolIndex]), item)
+			}
+		}
+		if item.Type != "" {
+			out = append(out, item)
+		}
+	}
+	return out
 }
 
 func (a *ResponsesBufferedAccumulator) ensureItem(event *dto.ResponsesStreamResponse, itemType string) *responsesBufferedItem {
@@ -1292,7 +1353,11 @@ func (a *ResponsesBufferedAccumulator) ensureTool(event *dto.ResponsesStreamResp
 		tool := a.tools[idx]
 		a.applyToolMetadata(tool, event)
 		itemType := responsesOutputTypeFunctionCall
-		if event.Item != nil { itemType = event.Item.Type } else if event.Type == responsesEventCustomToolInputDone { itemType = responsesOutputTypeCustomToolCall }
+		if event.Item != nil {
+			itemType = event.Item.Type
+		} else if event.Type == responsesEventCustomToolInputDone {
+			itemType = responsesOutputTypeCustomToolCall
+		}
 		item := a.ensureItem(event, itemType)
 		item.ToolIndex = idx
 		return tool
@@ -1306,8 +1371,12 @@ func (a *ResponsesBufferedAccumulator) ensureTool(event *dto.ResponsesStreamResp
 	idx := len(a.tools)
 	a.tools = append(a.tools, tool)
 	itemType := responsesOutputTypeFunctionCall
-		if event.Item != nil { itemType = event.Item.Type } else if event.Type == responsesEventCustomToolInputDone { itemType = responsesOutputTypeCustomToolCall }
-		item := a.ensureItem(event, itemType)
+	if event.Item != nil {
+		itemType = event.Item.Type
+	} else if event.Type == responsesEventCustomToolInputDone {
+		itemType = responsesOutputTypeCustomToolCall
+	}
+	item := a.ensureItem(event, itemType)
 	item.ToolIndex = idx
 	if event.OutputIndex != nil {
 		a.outputIndexToToolIdx[*event.OutputIndex] = idx
@@ -1351,15 +1420,19 @@ func (a *ResponsesBufferedAccumulator) bufferedToolOutput(tool *responsesBuffere
 }
 
 func (a *ResponsesBufferedAccumulator) itemForTool(tool *responsesBufferedTool) (dto.ResponsesOutput, bool) {
-    if a == nil || tool == nil { return dto.ResponsesOutput{}, false }
-    for _, item := range a.items {
-        if item.ToolIndex >= 0 && item.ToolIndex < len(a.tools) && a.tools[item.ToolIndex] == tool {
-            output := item.Output
-            if output.Type == "" { output.Type = item.Type }
-            return output, true
-        }
-    }
-    return dto.ResponsesOutput{}, false
+	if a == nil || tool == nil {
+		return dto.ResponsesOutput{}, false
+	}
+	for _, item := range a.items {
+		if item.ToolIndex >= 0 && item.ToolIndex < len(a.tools) && a.tools[item.ToolIndex] == tool {
+			output := item.Output
+			if output.Type == "" {
+				output.Type = item.Type
+			}
+			return output, true
+		}
+	}
+	return dto.ResponsesOutput{}, false
 }
 
 func cloneResponsesOutput(item dto.ResponsesOutput) dto.ResponsesOutput {

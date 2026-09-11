@@ -102,7 +102,7 @@ type ChatCompletionsStreamResponseChoiceDelta struct {
 	Role             string              `json:"role,omitempty"`
 	ToolCalls        []ToolCallResponse  `json:"tool_calls,omitempty"`
 	FunctionCall     *LegacyFunctionCall `json:"function_call,omitempty"`
-	Annotations json.RawMessage `json:"annotations,omitempty"`
+	Annotations      json.RawMessage     `json:"annotations,omitempty"`
 }
 
 func (c *ChatCompletionsStreamResponseChoiceDelta) SetContentString(s string) {
@@ -363,25 +363,25 @@ type IncompleteDetails struct {
 }
 
 type ResponsesOutput struct {
-	Type             string                          `json:"type"`
-	ID               string                          `json:"id,omitempty"`
-	Status           string                          `json:"status,omitempty"`
-	Role             string                          `json:"role,omitempty"`
-	Phase            string                          `json:"phase,omitempty"`
-	Content          []ResponsesOutputContent        `json:"content,omitempty"`
-	Summary          []ResponsesReasoningSummaryPart `json:"summary,omitempty"`
-	Quality          string                          `json:"quality,omitempty"`
-	Size             string                          `json:"size,omitempty"`
-	Result           string                          `json:"result,omitempty"`
-	CallId           string                          `json:"call_id,omitempty"`
-	Name             string                          `json:"name,omitempty"`
-	Namespace        string                          `json:"namespace,omitempty"`
-	Input            string                          `json:"input,omitempty"`
-	Execution        string                          `json:"execution,omitempty"`
-	Arguments        json.RawMessage                 `json:"arguments,omitempty"`
-	Action           json.RawMessage                 `json:"action,omitempty"`
-	CreatedBy        string                          `json:"created_by,omitempty"`
-	EncryptedContent string                          `json:"encrypted_content,omitempty"`
+	Type                string                          `json:"type"`
+	ID                  string                          `json:"id,omitempty"`
+	Status              string                          `json:"status,omitempty"`
+	Role                string                          `json:"role,omitempty"`
+	Phase               string                          `json:"phase,omitempty"`
+	Content             []ResponsesOutputContent        `json:"content,omitempty"`
+	Summary             []ResponsesReasoningSummaryPart `json:"summary,omitempty"`
+	Quality             string                          `json:"quality,omitempty"`
+	Size                string                          `json:"size,omitempty"`
+	Result              string                          `json:"result,omitempty"`
+	CallId              string                          `json:"call_id,omitempty"`
+	Name                string                          `json:"name,omitempty"`
+	Namespace           string                          `json:"namespace,omitempty"`
+	Input               string                          `json:"input,omitempty"`
+	Execution           string                          `json:"execution,omitempty"`
+	Arguments           json.RawMessage                 `json:"arguments,omitempty"`
+	Action              json.RawMessage                 `json:"action,omitempty"`
+	CreatedBy           string                          `json:"created_by,omitempty"`
+	EncryptedContent    string                          `json:"encrypted_content,omitempty"`
 	Queries             json.RawMessage                 `json:"queries,omitempty"`
 	Results             json.RawMessage                 `json:"results,omitempty"`
 	Sources             json.RawMessage                 `json:"sources,omitempty"`
@@ -580,8 +580,8 @@ type ResponsesStreamResponse struct {
 	Annotation      json.RawMessage          `json:"annotation,omitempty"`
 	AnnotationIndex *int                     `json:"annotation_index,omitempty"`
 	Obfuscation     string                   `json:"obfuscation,omitempty"`
-	Refusal string `json:"refusal,omitempty"`
-	Input string `json:"input,omitempty"`
+	Refusal         string                   `json:"refusal,omitempty"`
+	Input           string                   `json:"input,omitempty"`
 	// - response.function_call_arguments.delta
 	// - response.function_call_arguments.done
 	OutputIndex  *int   `json:"output_index,omitempty"`

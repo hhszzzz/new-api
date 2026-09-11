@@ -99,8 +99,12 @@ func attachOpenAIChatRequest(request any, set Set) (any, []types.ConversionDiagn
 
 	normalizedChoice, allowedChoiceDiagnostics := narrowAllowedFunctionChoice(set.Choice, types.RelayFormatOpenAI)
 	choice, choiceDiagnostics := encodeOpenAIChatChoice(normalizedChoice)
-	if set.Choice != nil || set.ParallelAllowed != nil { target.ToolChoice = choice }
-	if set.ParallelAllowed != nil { target.ParallelTooCalls = set.ParallelAllowed }
+	if set.Choice != nil || set.ParallelAllowed != nil {
+		target.ToolChoice = choice
+	}
+	if set.ParallelAllowed != nil {
+		target.ParallelTooCalls = set.ParallelAllowed
+	}
 	diagnostics = append(diagnostics, allowedChoiceDiagnostics...)
 	diagnostics = append(diagnostics, choiceDiagnostics...)
 	diagnostics = append(diagnostics, unsupportedHostedHistoryDiagnostics(types.RelayFormatOpenAI, set.History)...)
@@ -115,8 +119,12 @@ func attachOpenAIResponsesRequest(request any, set Set) (any, []types.Conversion
 	tools := make([]any, 0, len(set.Definitions))
 	if target.Tools != nil {
 		raw, err := rawJSON(target.Tools)
-		if err != nil { return nil, nil, err }
-		if err := kitutil.Unmarshal(raw, &tools); err != nil { return nil, nil, err }
+		if err != nil {
+			return nil, nil, err
+		}
+		if err := kitutil.Unmarshal(raw, &tools); err != nil {
+			return nil, nil, err
+		}
 	}
 	var diagnostics []types.ConversionDiagnostic
 	for index, definition := range set.Definitions {
@@ -210,7 +218,9 @@ func attachOpenAIResponsesRequest(request any, set Set) (any, []types.Conversion
 	if err != nil {
 		return nil, diagnostics, err
 	}
-	if set.Choice != nil || set.ParallelAllowed != nil { target.ToolChoice = choice }
+	if set.Choice != nil || set.ParallelAllowed != nil {
+		target.ToolChoice = choice
+	}
 	if set.ParallelAllowed != nil {
 		target.ParallelToolCalls, _ = kitutil.Marshal(*set.ParallelAllowed)
 	}
@@ -232,8 +242,12 @@ func attachClaudeRequest(request any, set Set, options *convmeta.Options) (any, 
 	tools := make([]any, 0, len(set.Definitions))
 	if target.Tools != nil {
 		raw, err := rawJSON(target.Tools)
-		if err != nil { return nil, nil, err }
-		if err := kitutil.Unmarshal(raw, &tools); err != nil { return nil, nil, err }
+		if err != nil {
+			return nil, nil, err
+		}
+		if err := kitutil.Unmarshal(raw, &tools); err != nil {
+			return nil, nil, err
+		}
 	}
 	var diagnostics []types.ConversionDiagnostic
 	for index, definition := range set.Definitions {
@@ -318,7 +332,9 @@ func attachClaudeRequest(request any, set Set, options *convmeta.Options) (any, 
 	}
 	normalizedChoice, allowedChoiceDiagnostics := narrowAllowedFunctionChoice(set.Choice, types.RelayFormatClaude)
 	choice, choiceDiagnostics := encodeClaudeChoice(normalizedChoice, set.ParallelAllowed, set.Source)
-	if set.Choice != nil || set.ParallelAllowed != nil { target.ToolChoice = choice }
+	if set.Choice != nil || set.ParallelAllowed != nil {
+		target.ToolChoice = choice
+	}
 	diagnostics = append(diagnostics, allowedChoiceDiagnostics...)
 	diagnostics = append(diagnostics, choiceDiagnostics...)
 	historyDiagnostics, err := appendHostedHistoryToClaude(target, set)
@@ -360,7 +376,9 @@ func attachGeminiRequest(request any, set Set) (any, []types.ConversionDiagnosti
 		diagnostics []types.ConversionDiagnostic
 	)
 	if len(target.Tools) > 0 {
-		if err := kitutil.Unmarshal(target.Tools, &tools); err != nil { return nil, nil, err }
+		if err := kitutil.Unmarshal(target.Tools, &tools); err != nil {
+			return nil, nil, err
+		}
 	}
 	for index, definition := range set.Definitions {
 		switch definition.Kind {
@@ -464,7 +482,9 @@ func attachGeminiRequest(request any, set Set) (any, []types.ConversionDiagnosti
 		target.Tools = encoded
 	}
 	config, choiceDiagnostics := encodeGeminiChoice(set.Choice)
-	if set.Choice != nil { target.ToolConfig = config }
+	if set.Choice != nil {
+		target.ToolConfig = config
+	}
 	diagnostics = append(diagnostics, choiceDiagnostics...)
 	if set.ParallelAllowed != nil && !*set.ParallelAllowed {
 		diagnostics = append(diagnostics, semanticLoss(

@@ -269,7 +269,9 @@ func sendGeminiStreamResults(c *gin.Context, results []relayconvert.ResponseResu
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeBadResponseBody)
 		}
-		if err := helper.StringData(c, string(data)); err != nil { return types.NewError(err, types.ErrorCodeBadResponse) }
+		if err := helper.StringData(c, string(data)); err != nil {
+			return types.NewError(err, types.ErrorCodeBadResponse)
+		}
 	}
 	return nil
 }

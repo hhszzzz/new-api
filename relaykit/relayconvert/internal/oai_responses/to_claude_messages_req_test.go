@@ -136,7 +136,9 @@ func TestOpenAIResponsesRequestToClaudeMessagesUsesAdaptiveThinking(t *testing.T
 		assert.Equal(t, "adaptive", got.Thinking.Type, "model=%s", model)
 		assert.Zero(t, got.Thinking.GetBudgetTokens(), "model=%s", model)
 		expectedEffort := "xhigh"
-		if model == "claude-sonnet-4-6" { expectedEffort = "max" }
+		if model == "claude-sonnet-4-6" {
+			expectedEffort = "max"
+		}
 		assert.Equal(t, expectedEffort, got.GetEfforts(), "model=%s", model)
 		assert.Nil(t, got.Temperature, "model=%s", model)
 		assert.Nil(t, got.TopP, "model=%s", model)

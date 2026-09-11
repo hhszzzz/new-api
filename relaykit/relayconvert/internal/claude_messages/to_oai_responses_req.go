@@ -7,10 +7,10 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
 	sharedbridge "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/bridge"
-	"github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
 	sharedclaude "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/claude"
 	sharedtoolmedia "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/toolmedia"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
 )
 
 func ClaudeMessagesRequestToOpenAIResponses(claudeRequest dto.ClaudeRequest, info convmeta.Meta) (*dto.OpenAIResponsesRequest, error) {
@@ -42,7 +42,7 @@ func ClaudeMessagesRequestToOpenAIResponses(claudeRequest dto.ClaudeRequest, inf
 		Temperature:     claudeRequest.Temperature,
 		TopP:            claudeRequest.TopP,
 		Metadata:        append([]byte(nil), claudeRequest.Metadata...),
-		ServiceTier: claudeRequest.ServiceTier,
+		ServiceTier:     claudeRequest.ServiceTier,
 	}
 	if convmeta.OptionsOf(info).IncludeReasoningEncryptedContent {
 		request.Include, err = kitutil.Marshal([]string{"reasoning.encrypted_content"})
@@ -56,11 +56,19 @@ func ClaudeMessagesRequestToOpenAIResponses(claudeRequest dto.ClaudeRequest, inf
 			return nil, err
 		}
 	}
-	if request.MaxOutputTokens == nil { request.MaxOutputTokens = claudeRequest.MaxTokensToSample }
-    reasoningIntent, effectiveEffort, err := claudeRequestReasoningIntent(&claudeRequest, info)
-    if err != nil { return nil, reasoning.AsClientError(err) }
-    if err := reasoning.ApplyToOpenAIResponses(request, reasoningIntent); err != nil { return nil, reasoning.AsClientError(err) }
-    if info != nil && effectiveEffort != "" { info.SetReasoningEffort(string(effectiveEffort)) }
+	if request.MaxOutputTokens == nil {
+		request.MaxOutputTokens = claudeRequest.MaxTokensToSample
+	}
+	reasoningIntent, effectiveEffort, err := claudeRequestReasoningIntent(&claudeRequest, info)
+	if err != nil {
+		return nil, reasoning.AsClientError(err)
+	}
+	if err := reasoning.ApplyToOpenAIResponses(request, reasoningIntent); err != nil {
+		return nil, reasoning.AsClientError(err)
+	}
+	if info != nil && effectiveEffort != "" {
+		info.SetReasoningEffort(string(effectiveEffort))
+	}
 
 	tools, declaredTools, err := claudeToolsToResponses(claudeRequest.Tools)
 	if err != nil {

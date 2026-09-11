@@ -16,7 +16,9 @@ func ResponsesResponseToClaudeMessagesResponse(resp *dto.OpenAIResponsesResponse
 	if resp == nil {
 		return nil, nil, errors.New("response is nil")
 	}
-	if err := validateResponsesTerminalResponse(resp); err != nil { return nil, nil, err }
+	if err := validateResponsesTerminalResponse(resp); err != nil {
+		return nil, nil, err
+	}
 
 	usage := UsageFromResponsesUsage(resp.Usage)
 	claudeResponse := &dto.ClaudeResponse{
@@ -58,13 +60,17 @@ func ResponsesResponseToClaudeMessagesResponse(resp *dto.OpenAIResponsesResponse
 			}
 		case responsesOutputTypeFunctionCall, responsesOutputTypeCustomToolCall, responsesOutputTypeToolSearchCall:
 			name := responsesToolCallName(&output)
-			if name == "" { continue }
+			if name == "" {
+				continue
+			}
 			sawToolCall = true
 			callID := strings.TrimSpace(output.CallId)
 			if callID == "" {
 				callID = strings.TrimSpace(output.ID)
 			}
-			for callID == "" || usedIDs[callID] { callID = "toolu_" + kitutil.GetUUID() }
+			for callID == "" || usedIDs[callID] {
+				callID = "toolu_" + kitutil.GetUUID()
+			}
 			usedIDs[callID] = true
 			claudeResponse.Content = append(claudeResponse.Content, dto.ClaudeMediaMessage{
 				Type:  "tool_use",

@@ -34,19 +34,27 @@ func attachQuotaSaturationToOther(other *model.LogOther, clamp *common.QuotaClam
 // AppendModelRoutingAdminInfo records model mapping details under the
 // admin-only section of a log payload.
 func AppendModelRoutingAdminInfo(other *model.LogOther, isModelMapped bool, upstreamModelName string) {
-    if other == nil { return }
-    other.SetAdmin("model_routing_checked", true)
-    if isModelMapped {
-        other.SetAdmin("is_model_mapped", true)
-        other.SetAdmin("upstream_model_name", upstreamModelName)
-    }
+	if other == nil {
+		return
+	}
+	other.SetAdmin("model_routing_checked", true)
+	if isModelMapped {
+		other.SetAdmin("is_model_mapped", true)
+		other.SetAdmin("upstream_model_name", upstreamModelName)
+	}
 }
 
 // AppendDifyWorkflowAdminInfo records Dify workflow identity and terminal status.
 func AppendDifyWorkflowAdminInfo(relayInfo *relaycommon.RelayInfo, other *model.LogOther) {
-    if relayInfo == nil || other == nil { return }
-    if relayInfo.DifyWorkflowRunID != "" { other.SetAdmin("dify_workflow_run_id", relayInfo.DifyWorkflowRunID) }
-    if relayInfo.DifyWorkflowStatus != "" { other.SetAdmin("dify_workflow_status", relayInfo.DifyWorkflowStatus) }
+	if relayInfo == nil || other == nil {
+		return
+	}
+	if relayInfo.DifyWorkflowRunID != "" {
+		other.SetAdmin("dify_workflow_run_id", relayInfo.DifyWorkflowRunID)
+	}
+	if relayInfo.DifyWorkflowStatus != "" {
+		other.SetAdmin("dify_workflow_status", relayInfo.DifyWorkflowStatus)
+	}
 }
 
 // attachQuotaSaturation records the request's quota clamp (if any) onto the
@@ -117,13 +125,15 @@ func AppendRelayLogAdminInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo,
 	}
 
 	AppendChannelAffinityAdminInfo(ctx, other)
-    AppendPromptAuditAdminInfo(ctx, other)
-    if relayInfo != nil {
-        AppendModelRoutingAdminInfo(other, relayInfo.HasModelRouting(), relayInfo.UpstreamModelName)
-        AppendDifyWorkflowAdminInfo(relayInfo, other)
-        AppendParamOverrideAdminInfo(relayInfo, other)
-        if relayInfo.RouteSystemPrompt() != "" { other.SetAdmin("route_prompt_injected", true) }
-    }
+	AppendPromptAuditAdminInfo(ctx, other)
+	if relayInfo != nil {
+		AppendModelRoutingAdminInfo(other, relayInfo.HasModelRouting(), relayInfo.UpstreamModelName)
+		AppendDifyWorkflowAdminInfo(relayInfo, other)
+		AppendParamOverrideAdminInfo(relayInfo, other)
+		if relayInfo.RouteSystemPrompt() != "" {
+			other.SetAdmin("route_prompt_injected", true)
+		}
+	}
 }
 
 func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, modelRatio, groupRatio, completionRatio float64,
@@ -165,7 +175,9 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 }
 
 func AppendParamOverrideAdminInfo(relayInfo *relaycommon.RelayInfo, other *model.LogOther) {
-	if relayInfo == nil || other == nil || len(relayInfo.ParamOverrideAudit) == 0 { return }
+	if relayInfo == nil || other == nil || len(relayInfo.ParamOverrideAudit) == 0 {
+		return
+	}
 	other.SetAdmin("po", relayInfo.ParamOverrideAudit)
 }
 

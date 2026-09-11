@@ -1,12 +1,12 @@
 package oaichat
 
 import (
-	"unicode/utf8"
 	"errors"
 	"fmt"
 	"maps"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	sharedbridge "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/bridge"
@@ -18,29 +18,29 @@ const (
 	chatFinishReasonLength        = "length"
 	chatFinishReasonContentFilter = "content_filter"
 
-	responsesEventCreated                  = "response.created"
-	responsesEventInProgress               = "response.in_progress"
-	responsesEventCompleted                = "response.completed"
-	responsesEventIncomplete               = "response.incomplete"
-	responsesEventContentPartAdded         = "response.content_part.added"
-	responsesEventContentPartDone          = "response.content_part.done"
-	responsesEventOutputTextDelta          = "response.output_text.delta"
-	responsesEventOutputTextDone           = "response.output_text.done"
-	responsesEventRefusalDelta             = "response.refusal.delta"
-	responsesEventRefusalDone              = "response.refusal.done"
-	responsesEventOutputItemAdded          = "response.output_item.added"
-	responsesEventOutputItemDone           = "response.output_item.done"
-	responsesEventFunctionArgsDelta        = "response.function_call_arguments.delta"
-	responsesEventFunctionArgsDone         = "response.function_call_arguments.done"
-	responsesEventReasoningSummaryDelta    = "response.reasoning_summary_text.delta"
-	responsesEventReasoningSummaryDone     = "response.reasoning_summary_text.done"
-	responsesEventReasoningPartAdded       = "response.reasoning_summary_part.added"
-	responsesEventReasoningPartDone        = "response.reasoning_summary_part.done"
-	responsesOutputTypeFunctionCall        = "function_call"
-	responsesOutputTypeMessage             = "message"
-	responsesOutputTypeReasoning           = "reasoning"
-	responsesIncompleteReasonContentFilter = "content_filter"
-	responsesIncompleteReasonMaxTokens     = "max_output_tokens"
+	responsesEventCreated                   = "response.created"
+	responsesEventInProgress                = "response.in_progress"
+	responsesEventCompleted                 = "response.completed"
+	responsesEventIncomplete                = "response.incomplete"
+	responsesEventContentPartAdded          = "response.content_part.added"
+	responsesEventContentPartDone           = "response.content_part.done"
+	responsesEventOutputTextDelta           = "response.output_text.delta"
+	responsesEventOutputTextDone            = "response.output_text.done"
+	responsesEventRefusalDelta              = "response.refusal.delta"
+	responsesEventRefusalDone               = "response.refusal.done"
+	responsesEventOutputItemAdded           = "response.output_item.added"
+	responsesEventOutputItemDone            = "response.output_item.done"
+	responsesEventFunctionArgsDelta         = "response.function_call_arguments.delta"
+	responsesEventFunctionArgsDone          = "response.function_call_arguments.done"
+	responsesEventReasoningSummaryDelta     = "response.reasoning_summary_text.delta"
+	responsesEventReasoningSummaryDone      = "response.reasoning_summary_text.done"
+	responsesEventReasoningPartAdded        = "response.reasoning_summary_part.added"
+	responsesEventReasoningPartDone         = "response.reasoning_summary_part.done"
+	responsesOutputTypeFunctionCall         = "function_call"
+	responsesOutputTypeMessage              = "message"
+	responsesOutputTypeReasoning            = "reasoning"
+	responsesIncompleteReasonContentFilter  = "content_filter"
+	responsesIncompleteReasonMaxTokens      = "max_output_tokens"
 	responsesEventOutputTextAnnotationAdded = "response.output_text.annotation.added"
 )
 
@@ -481,33 +481,47 @@ func stringPtr(v string) *string {
 // attachChatResponseAnnotations maps citation offsets onto the preserved output
 // message sequence; reasoning and tool items do not consume visible text offsets.
 func attachChatResponseAnnotations(out *dto.OpenAIResponsesResponse, source *dto.OpenAITextResponse) error {
-    if len(source.Choices) == 0 { return nil }
-    annotations, err := chatAnnotationsToResponses(source.Choices[0].Message.Annotations)
-    if err != nil { return err }
-    offset := 0
-    for i := range out.Output {
-        for j := range out.Output[i].Content {
-            part := &out.Output[i].Content[j]
-            if part.Type != "output_text" { continue }
-            length := utf8.RuneCountInString(part.Text)
-            for _, value := range annotations {
-                annotation, ok := value.(map[string]any)
-                if !ok { continue }
-                start, hasStart := annotation["start_index"].(float64)
-                end, hasEnd := annotation["end_index"].(float64)
-                if !hasStart || !hasEnd {
-                    if offset == 0 { part.Annotations = append(part.Annotations, value) }
-                    continue
-                }
-                if start < float64(offset) || start >= float64(offset+length) { continue }
-                adjusted := make(map[string]any, len(annotation))
-                for key, item := range annotation { adjusted[key] = item }
-                adjusted["start_index"] = start-float64(offset)
-                adjusted["end_index"] = min(end-float64(offset), float64(length))
-                part.Annotations = append(part.Annotations, adjusted)
-            }
-            offset += length
-        }
-    }
-    return nil
+	if len(source.Choices) == 0 {
+		return nil
+	}
+	annotations, err := chatAnnotationsToResponses(source.Choices[0].Message.Annotations)
+	if err != nil {
+		return err
+	}
+	offset := 0
+	for i := range out.Output {
+		for j := range out.Output[i].Content {
+			part := &out.Output[i].Content[j]
+			if part.Type != "output_text" {
+				continue
+			}
+			length := utf8.RuneCountInString(part.Text)
+			for _, value := range annotations {
+				annotation, ok := value.(map[string]any)
+				if !ok {
+					continue
+				}
+				start, hasStart := annotation["start_index"].(float64)
+				end, hasEnd := annotation["end_index"].(float64)
+				if !hasStart || !hasEnd {
+					if offset == 0 {
+						part.Annotations = append(part.Annotations, value)
+					}
+					continue
+				}
+				if start < float64(offset) || start >= float64(offset+length) {
+					continue
+				}
+				adjusted := make(map[string]any, len(annotation))
+				for key, item := range annotation {
+					adjusted[key] = item
+				}
+				adjusted["start_index"] = start - float64(offset)
+				adjusted["end_index"] = min(end-float64(offset), float64(length))
+				part.Annotations = append(part.Annotations, adjusted)
+			}
+			offset += length
+		}
+	}
+	return nil
 }

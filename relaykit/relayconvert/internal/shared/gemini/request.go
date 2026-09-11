@@ -290,12 +290,16 @@ func SupportedMimeTypesList() []string {
 
 // RecordReasoningEffort records explicit native Gemini controls without rewriting them.
 func RecordReasoningEffort(request *dto.GeminiChatRequest, info convmeta.Meta) {
-    if request == nil || info == nil { return }
-    config := request.GenerationConfig.ThinkingConfig
-    if config == nil { return }
-    if config.ThinkingLevel != "" {
-        info.SetReasoningEffort(strings.ToLower(strings.TrimSpace(config.ThinkingLevel)))
-    } else if config.ThinkingBudget != nil && *config.ThinkingBudget > 0 {
-        info.SetReasoningEffort(string(reasoning.EffortFromBudget(*config.ThinkingBudget)))
-    }
+	if request == nil || info == nil {
+		return
+	}
+	config := request.GenerationConfig.ThinkingConfig
+	if config == nil {
+		return
+	}
+	if config.ThinkingLevel != "" {
+		info.SetReasoningEffort(strings.ToLower(strings.TrimSpace(config.ThinkingLevel)))
+	} else if config.ThinkingBudget != nil && *config.ThinkingBudget > 0 {
+		info.SetReasoningEffort(string(reasoning.EffortFromBudget(*config.ThinkingBudget)))
+	}
 }

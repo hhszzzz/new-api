@@ -31,7 +31,9 @@ type claudeCapabilities struct {
 
 func claudeCapabilitiesFor(model string) claudeCapabilities {
 	model = strings.NewReplacer(".", "-", "_", "-").Replace(strings.ToLower(strings.TrimSpace(model)))
-	if index := strings.Index(model, "claude-"); index >= 0 { model = model[index:] }
+	if index := strings.Index(model, "claude-"); index >= 0 {
+		model = model[index:]
+	}
 	capabilities := claudeCapabilities{supportsManual: true, supportsDisable: true}
 
 	switch {

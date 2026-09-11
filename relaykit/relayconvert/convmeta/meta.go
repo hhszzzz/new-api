@@ -65,10 +65,10 @@ type ClaudeConvertInfo struct {
 
 	ToolCallBaseIndex      int
 	ToolCallMaxIndexOffset int
-	ToolCallNextIndex int
-	ToolCallStartedCount int
-	UsedToolCallIDs map[string]struct{}
-	ThinkTagSplitter sharedchat.ThinkTagSplitter
+	ToolCallNextIndex      int
+	ToolCallStartedCount   int
+	UsedToolCallIDs        map[string]struct{}
+	ThinkTagSplitter       sharedchat.ThinkTagSplitter
 	ToolCalls              []*ClaudeStreamToolCall
 	ToolCallByIndex        map[int]*ClaudeStreamToolCall
 	ToolCallByID           map[string]*ClaudeStreamToolCall
@@ -78,8 +78,8 @@ type ClaudeConvertInfo struct {
 // as a Claude tool_use content block. Chat tool indexes and Claude content
 // block indexes are separate domains, so the mapping must remain explicit.
 type ClaudeStreamToolCall struct {
-	ChatIndex int
-	SourceID string
+	ChatIndex        int
+	SourceID         string
 	BlockIndex       int
 	ID               string
 	Name             string

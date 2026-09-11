@@ -360,10 +360,10 @@ type GeminiToChatStreamState struct {
 	partialToolByCandidate   map[int64]*geminiPartialToolCall
 	groundingByCandidate     map[int64]*geminiGroundingStreamCandidate
 	sentGroundingAnnotations map[string]struct{}
-	toolCalls     map[int]map[int]*geminiStreamToolState
-	content       map[int]string
-	reasoning     map[int]string
-	refusals      map[int]string
+	toolCalls                map[int]map[int]*geminiStreamToolState
+	content                  map[int]string
+	reasoning                map[int]string
+	refusals                 map[int]string
 }
 
 type geminiStreamToolState struct {
@@ -395,12 +395,12 @@ func NewGeminiToChatStreamState(id string, created int64) *GeminiToChatStreamSta
 		created = kitutil.GetTimestamp()
 	}
 	return &GeminiToChatStreamState{
-		id:        id,
-		created:   created,
-		toolCalls: make(map[int]map[int]*geminiStreamToolState),
-		content:   make(map[int]string),
-		reasoning: make(map[int]string),
-		refusals:  make(map[int]string),
+		id:                       id,
+		created:                  created,
+		toolCalls:                make(map[int]map[int]*geminiStreamToolState),
+		content:                  make(map[int]string),
+		reasoning:                make(map[int]string),
+		refusals:                 make(map[int]string),
 		nextToolIndexByCandidate: make(map[int64]int),
 		toolIndexByCandidateID:   make(map[int64]map[string]int),
 		partialToolByCandidate:   make(map[int64]*geminiPartialToolCall),

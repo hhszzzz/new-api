@@ -1,8 +1,8 @@
 package oaichat
 
 import (
-	"errors"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -28,9 +28,9 @@ type ChatToResponsesStreamState struct {
 
 	// EmitSequenceNumber controls Responses SSE sequence numbers. Constructors enable it by default.
 	EmitSequenceNumber bool
-	hostedByID map[string]*chatToResponsesHostedTool
-	annotations []any
-	thinkSplitter sharedchat.ThinkTagSplitter
+	hostedByID         map[string]*chatToResponsesHostedTool
+	annotations        []any
+	thinkSplitter      sharedchat.ThinkTagSplitter
 
 	status               string
 	incompleteDetails    *dto.IncompleteDetails
@@ -91,7 +91,7 @@ type chatToResponsesOutputRef struct {
 	Kind           string
 	ToolIndex      int
 	ReasoningIndex int
-	HostedID string
+	HostedID       string
 }
 
 // HostedToolStreamStart describes a provider-hosted tool call that is already
@@ -134,9 +134,9 @@ func NewChatToResponsesStreamState(id string, model string) *ChatToResponsesStre
 		activeReasoningIndex: -1,
 		toolsByIndex:         make(map[int]*chatToResponsesStreamTool),
 		usedToolCallIDs:      make(map[string]struct{}),
-		EmitSequenceNumber: true,
-		hostedByID: make(map[string]*chatToResponsesHostedTool),
-		annotations: []any{},
+		EmitSequenceNumber:   true,
+		hostedByID:           make(map[string]*chatToResponsesHostedTool),
+		annotations:          []any{},
 	}
 }
 
@@ -1166,7 +1166,9 @@ func toolNamespace(tool *chatToResponsesStreamTool) string {
 }
 
 func (s *ChatToResponsesStreamState) numberEvents(events []ChatToResponsesStreamEvent) []ChatToResponsesStreamEvent {
-	if !s.EmitSequenceNumber { return events }
+	if !s.EmitSequenceNumber {
+		return events
+	}
 	for i := range events {
 		sequence := s.nextSequenceNumber
 		s.nextSequenceNumber++
@@ -1256,5 +1258,5 @@ func cloneHostedOutput(output *dto.ResponsesOutput) *dto.ResponsesOutput {
 }
 
 func (s *ChatToResponsesStreamState) event(eventType string, payload dto.ResponsesStreamResponse) ChatToResponsesStreamEvent {
-    return responsesStreamEvent(eventType, payload)
+	return responsesStreamEvent(eventType, payload)
 }

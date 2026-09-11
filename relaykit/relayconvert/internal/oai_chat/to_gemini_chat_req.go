@@ -176,9 +176,15 @@ func OpenAIChatRequestToGeminiGenerateContent(c context.Context, textRequest dto
 			functions = append(functions, tool.Function)
 		}
 		geminiTools := geminiRequest.GetTools()
-		if googleSearch { geminiTools = append(geminiTools, dto.GeminiChatTool{GoogleSearch: map[string]any{}}) }
-		if codeExecution { geminiTools = append(geminiTools, dto.GeminiChatTool{CodeExecution: map[string]any{}}) }
-		if urlContext { geminiTools = append(geminiTools, dto.GeminiChatTool{URLContext: map[string]any{}}) }
+		if googleSearch {
+			geminiTools = append(geminiTools, dto.GeminiChatTool{GoogleSearch: map[string]any{}})
+		}
+		if codeExecution {
+			geminiTools = append(geminiTools, dto.GeminiChatTool{CodeExecution: map[string]any{}})
+		}
+		if urlContext {
+			geminiTools = append(geminiTools, dto.GeminiChatTool{URLContext: map[string]any{}})
+		}
 		if len(functions) > 0 {
 			geminiTools = append(geminiTools, dto.GeminiChatTool{
 				FunctionDeclarations: functions,

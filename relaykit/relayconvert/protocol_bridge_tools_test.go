@@ -267,9 +267,9 @@ func TestResponsesBridgesRejectHostedToolHistory(t *testing.T) {
 		t.Run(target.name, func(t *testing.T) {
 			stream := true
 			request := &dto.OpenAIResponsesRequest{
-				Model:  "gpt-test",
+				Model:           "gpt-test",
 				MaxOutputTokens: kitutil.GetPointer(uint(4096)),
-				Stream: &stream,
+				Stream:          &stream,
 				Input: protocolBridgeRaw(t, []map[string]any{
 					{"type": "web_search_call", "id": "ws_1", "status": "completed"},
 					{"role": "user", "content": "hello"},
@@ -325,7 +325,9 @@ func TestResponsesBridgesConvertSupportedHostedTools(t *testing.T) {
 					assert.Equal(t, "lookup", converted.Tools[0].Function.Name)
 				case *dto.ClaudeRequest:
 					wantTools := 1
-					if test.name == "web search" { wantTools = 2 }
+					if test.name == "web search" {
+						wantTools = 2
+					}
 					require.Len(t, converted.Tools, wantTools)
 				default:
 					t.Fatalf("unexpected converted request type %T", result.Value)

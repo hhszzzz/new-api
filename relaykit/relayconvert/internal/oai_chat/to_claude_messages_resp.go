@@ -322,56 +322,86 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 }
 
 func appendClaudeToolCallDeltas(state *convmeta.ClaudeConvertInfo, toolCalls []dto.ToolCallResponse) []*dto.ClaudeResponse {
-    if state == nil || len(toolCalls) == 0 { return nil }
-    if state.ToolCallByIndex == nil { state.ToolCallByIndex = make(map[int]*convmeta.ClaudeStreamToolCall) }
-    if state.ToolCallByID == nil { state.ToolCallByID = make(map[string]*convmeta.ClaudeStreamToolCall) }
-    responses := make([]*dto.ClaudeResponse, 0, len(toolCalls)*2)
-    for index, toolCall := range toolCalls {
-        offset := index
-        if toolCall.Index != nil && *toolCall.Index >= 0 { offset = *toolCall.Index }
-        incomingID := strings.TrimSpace(toolCall.ID)
-        tool := state.ToolCallByIndex[offset]
-        if toolCall.Index == nil && incomingID != "" && state.ToolCallByID[incomingID] != nil { tool = state.ToolCallByID[incomingID] }
-        if tool != nil && incomingID != "" && tool.SourceID != "" && tool.SourceID != incomingID { tool = nil }
-        if tool == nil {
-            tool = &convmeta.ClaudeStreamToolCall{ChatIndex: offset}
-            state.ToolCalls = append(state.ToolCalls, tool)
-            state.ToolCallByIndex[offset] = tool
-        }
-        if !tool.Started {
-            if incomingID != "" { tool.ID = incomingID; tool.SourceID = incomingID; state.ToolCallByID[incomingID] = tool }
-            if name := strings.TrimSpace(toolCall.Function.Name); name != "" { tool.Name = name }
-        }
-        if toolCall.Function.Arguments != "" {
-            if tool.Started {
-                arguments := toolCall.Function.Arguments
-                blockIndex := tool.BlockIndex
-                responses = append(responses, &dto.ClaudeResponse{Index: &blockIndex, Type: "content_block_delta", Delta: &dto.ClaudeMediaMessage{Type: "input_json_delta", PartialJson: &arguments}})
-            } else { tool.PendingArguments += toolCall.Function.Arguments }
-        }
-        if offset < state.ToolCallNextIndex && !tool.Started && tool.Name != "" { responses = append(responses, startClaudeToolCall(state, tool)...) }
-    }
-    responses = append(responses, flushClaudeToolCalls(state, false)...)
-    if state.ToolCallStartedCount > 0 { state.Index = state.ToolCallBaseIndex + state.ToolCallStartedCount - 1 }
-    return responses
+	if state == nil || len(toolCalls) == 0 {
+		return nil
+	}
+	if state.ToolCallByIndex == nil {
+		state.ToolCallByIndex = make(map[int]*convmeta.ClaudeStreamToolCall)
+	}
+	if state.ToolCallByID == nil {
+		state.ToolCallByID = make(map[string]*convmeta.ClaudeStreamToolCall)
+	}
+	responses := make([]*dto.ClaudeResponse, 0, len(toolCalls)*2)
+	for index, toolCall := range toolCalls {
+		offset := index
+		if toolCall.Index != nil && *toolCall.Index >= 0 {
+			offset = *toolCall.Index
+		}
+		incomingID := strings.TrimSpace(toolCall.ID)
+		tool := state.ToolCallByIndex[offset]
+		if toolCall.Index == nil && incomingID != "" && state.ToolCallByID[incomingID] != nil {
+			tool = state.ToolCallByID[incomingID]
+		}
+		if tool != nil && incomingID != "" && tool.SourceID != "" && tool.SourceID != incomingID {
+			tool = nil
+		}
+		if tool == nil {
+			tool = &convmeta.ClaudeStreamToolCall{ChatIndex: offset}
+			state.ToolCalls = append(state.ToolCalls, tool)
+			state.ToolCallByIndex[offset] = tool
+		}
+		if !tool.Started {
+			if incomingID != "" {
+				tool.ID = incomingID
+				tool.SourceID = incomingID
+				state.ToolCallByID[incomingID] = tool
+			}
+			if name := strings.TrimSpace(toolCall.Function.Name); name != "" {
+				tool.Name = name
+			}
+		}
+		if toolCall.Function.Arguments != "" {
+			if tool.Started {
+				arguments := toolCall.Function.Arguments
+				blockIndex := tool.BlockIndex
+				responses = append(responses, &dto.ClaudeResponse{Index: &blockIndex, Type: "content_block_delta", Delta: &dto.ClaudeMediaMessage{Type: "input_json_delta", PartialJson: &arguments}})
+			} else {
+				tool.PendingArguments += toolCall.Function.Arguments
+			}
+		}
+		if offset < state.ToolCallNextIndex && !tool.Started && tool.Name != "" {
+			responses = append(responses, startClaudeToolCall(state, tool)...)
+		}
+	}
+	responses = append(responses, flushClaudeToolCalls(state, false)...)
+	if state.ToolCallStartedCount > 0 {
+		state.Index = state.ToolCallBaseIndex + state.ToolCallStartedCount - 1
+	}
+	return responses
 }
 
 func flushClaudeToolCalls(state *convmeta.ClaudeConvertInfo, final bool) []*dto.ClaudeResponse {
-    if state == nil { return nil }
-    responses := make([]*dto.ClaudeResponse, 0)
-    if !final {
-        for {
-            tool := state.ToolCallByIndex[state.ToolCallNextIndex]
-            if tool == nil || strings.TrimSpace(tool.Name) == "" { break }
-            responses = append(responses, startClaudeToolCall(state, tool)...)
-            state.ToolCallNextIndex++
-        }
-        return responses
-    }
-    tools := append([]*convmeta.ClaudeStreamToolCall(nil), state.ToolCalls...)
-    sort.SliceStable(tools, func(i, j int) bool { return tools[i].ChatIndex < tools[j].ChatIndex })
-    for _, tool := range tools { responses = append(responses, startClaudeToolCall(state, tool)...) }
-    return responses
+	if state == nil {
+		return nil
+	}
+	responses := make([]*dto.ClaudeResponse, 0)
+	if !final {
+		for {
+			tool := state.ToolCallByIndex[state.ToolCallNextIndex]
+			if tool == nil || strings.TrimSpace(tool.Name) == "" {
+				break
+			}
+			responses = append(responses, startClaudeToolCall(state, tool)...)
+			state.ToolCallNextIndex++
+		}
+		return responses
+	}
+	tools := append([]*convmeta.ClaudeStreamToolCall(nil), state.ToolCalls...)
+	sort.SliceStable(tools, func(i, j int) bool { return tools[i].ChatIndex < tools[j].ChatIndex })
+	for _, tool := range tools {
+		responses = append(responses, startClaudeToolCall(state, tool)...)
+	}
+	return responses
 }
 
 func startClaudeToolCall(state *convmeta.ClaudeConvertInfo, toolState *convmeta.ClaudeStreamToolCall) []*dto.ClaudeResponse {

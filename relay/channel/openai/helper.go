@@ -117,7 +117,9 @@ func sendGeminiStreamResults(c *gin.Context, results []relayconvert.ResponseResu
 			logger.LogError(c, "failed to marshal gemini response: "+err.Error())
 			return err
 		}
-		if err := helper.StringData(c, string(data)); err != nil { return err }
+		if err := helper.StringData(c, string(data)); err != nil {
+			return err
+		}
 	}
 	return nil
 }
