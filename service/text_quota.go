@@ -46,6 +46,8 @@ type textQuotaSummary struct {
 	CacheCreationTokens    int
 	CacheCreationTokens5m  int
 	CacheCreationTokens1h  int
+	CacheHitTokens         int64
+	CacheMissTokens        int64
 	ImageTokens            int
 	AudioTokens            int
 	ModelName              string
@@ -101,6 +103,36 @@ func isLegacyClaudeDerivedOpenAIUsage(relayInfo *relaycommon.RelayInfo, usage *d
 		return false
 	}
 	return usage.ClaudeCacheCreation5mTokens > 0 || usage.ClaudeCacheCreation1hTokens > 0
+}
+
+// cacheTokenCounts derives the cache-hit and cache-miss input token counts that
+// feed the model-square cache hit rate. Anthropic-style usage reports input
+// tokens excluding the cache read and write, while OpenAI-style usage folds them
+// into the prompt tokens; both normalize to hit = cache read and miss = the
+// remaining input, so cache writes count as misses.
+func cacheTokenCounts(usage *dto.Usage, usageSemantic string) (int64, int64) {
+	if usage == nil {
+		return 0, 0
+	}
+	hit := int64(usage.PromptTokensDetails.CachedTokens)
+	if hit <= 0 && usage.InputTokensDetails != nil {
+		hit = int64(usage.InputTokensDetails.CachedTokens)
+	}
+	if hit < 0 {
+		hit = 0
+	}
+	totalInput := int64(usagePromptTokens(usage))
+	if usageSemantic == "anthropic" {
+		totalInput += hit + int64(usage.PromptTokensDetails.CacheCreationTokensTotal())
+	}
+	miss := totalInput - hit
+	if miss < 0 {
+		miss = 0
+	}
+	if hit == 0 && miss == 0 {
+		return 0, 0
+	}
+	return hit, miss
 }
 
 func collectToolSurchargeItem(items []ToolSurchargeItem, toolPrices *operation_setting.ToolPriceSnapshot, name string, count int, modelName string) []ToolSurchargeItem {
@@ -279,6 +311,7 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 	summary.CacheCreationTokens = usage.PromptTokensDetails.CacheCreationTokensTotal()
 	summary.CacheCreationTokens5m = usage.ClaudeCacheCreation5mTokens
 	summary.CacheCreationTokens1h = usage.ClaudeCacheCreation1hTokens
+	summary.CacheHitTokens, summary.CacheMissTokens = cacheTokenCounts(usage, summary.UsageSemantic)
 	summary.ImageTokens = usage.PromptTokensDetails.ImageTokens
 	summary.AudioTokens = usage.PromptTokensDetails.AudioTokens
 	legacyClaudeDerived := isLegacyClaudeDerivedOpenAIUsage(relayInfo, usage)
@@ -565,6 +598,6 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		Other:            other,
 	})
 	gopool.Go(func() {
-		perfmetrics.RecordRelaySample(relayInfo, true, int64(summary.CompletionTokens))
+		perfmetrics.RecordRelaySample(relayInfo, true, int64(summary.CompletionTokens), summary.CacheHitTokens, summary.CacheMissTokens)
 	})
 }

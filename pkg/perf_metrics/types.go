@@ -16,6 +16,11 @@ type Sample struct {
 	Success      bool
 	OutputTokens int64
 	GenerationMs int64
+	// CacheHitTokens and CacheMissTokens are the input tokens that did and did
+	// not read from the upstream prompt cache. Their sum is the cacheable input
+	// for the request; the ratio is the cache hit rate.
+	CacheHitTokens  int64
+	CacheMissTokens int64
 }
 
 type QueryParams struct {
@@ -25,11 +30,12 @@ type QueryParams struct {
 }
 
 type BucketPoint struct {
-	Ts           int64   `json:"ts"`
-	AvgTtftMs    int64   `json:"avg_ttft_ms"`
-	AvgLatencyMs int64   `json:"avg_latency_ms"`
-	SuccessRate  float64 `json:"success_rate"`
-	AvgTps       float64 `json:"avg_tps"`
+	Ts           int64    `json:"ts"`
+	AvgTtftMs    int64    `json:"avg_ttft_ms"`
+	AvgLatencyMs int64    `json:"avg_latency_ms"`
+	SuccessRate  float64  `json:"success_rate"`
+	AvgTps       float64  `json:"avg_tps"`
+	CacheHitRate *float64 `json:"cache_hit_rate"`
 }
 
 type GroupResult struct {
@@ -38,6 +44,7 @@ type GroupResult struct {
 	AvgLatencyMs int64         `json:"avg_latency_ms"`
 	SuccessRate  float64       `json:"success_rate"`
 	AvgTps       float64       `json:"avg_tps"`
+	CacheHitRate *float64      `json:"cache_hit_rate"`
 	Series       []BucketPoint `json:"series"`
 }
 
@@ -57,6 +64,7 @@ type ModelSummary struct {
 	AvgLatencyMs        int64              `json:"avg_latency_ms"`
 	SuccessRate         float64            `json:"success_rate"`
 	AvgTps              float64            `json:"avg_tps"`
+	CacheHitRate        *float64           `json:"cache_hit_rate"`
 	RecentSuccessSeries []SuccessRatePoint `json:"recent_success_series,omitempty"`
 	RequestCount        int64              `json:"-"`
 }
@@ -89,6 +97,7 @@ type StatusPoint struct {
 	AvgTtftMs    *int64   `json:"avg_ttft_ms"`
 	AvgLatencyMs *int64   `json:"avg_latency_ms"`
 	AvgTps       *float64 `json:"avg_tps"`
+	CacheHitRate *float64 `json:"cache_hit_rate"`
 }
 
 type ModelStatus struct {
@@ -101,6 +110,7 @@ type ModelStatus struct {
 	AvgTtftMs    *int64        `json:"avg_ttft_ms"`
 	AvgLatencyMs *int64        `json:"avg_latency_ms"`
 	AvgTps       *float64      `json:"avg_tps"`
+	CacheHitRate *float64      `json:"cache_hit_rate"`
 	Status       Status        `json:"status"`
 	Timeline     []StatusPoint `json:"timeline"`
 }
@@ -118,13 +128,15 @@ type bucketKey struct {
 }
 
 type counters struct {
-	requestCount   int64
-	successCount   int64
-	totalLatencyMs int64
-	ttftSumMs      int64
-	ttftCount      int64
-	outputTokens   int64
-	generationMs   int64
+	requestCount    int64
+	successCount    int64
+	totalLatencyMs  int64
+	ttftSumMs       int64
+	ttftCount       int64
+	outputTokens    int64
+	generationMs    int64
+	cacheHitTokens  int64
+	cacheMissTokens int64
 }
 
 type atomicBucket struct {
@@ -151,6 +163,12 @@ func (b *atomicBucket) add(sample Sample) {
 	if sample.OutputTokens > 0 && sample.GenerationMs > 0 {
 		delta.outputTokens = sample.OutputTokens
 		delta.generationMs = sample.GenerationMs
+	}
+	if sample.CacheHitTokens > 0 {
+		delta.cacheHitTokens = sample.CacheHitTokens
+	}
+	if sample.CacheMissTokens > 0 {
+		delta.cacheMissTokens = sample.CacheMissTokens
 	}
 	b.pending.add(delta)
 	b.total.add(delta)
@@ -183,6 +201,17 @@ func (b *atomicBucket) addCounters(c counters) {
 	b.pending.add(c)
 }
 
+// CacheHitRate returns the cache hit ratio over the cacheable input tokens
+// (hits + misses), or nil when the window recorded no cacheable input at all.
+func (c counters) CacheHitRate() *float64 {
+	total := c.cacheHitTokens + c.cacheMissTokens
+	if total <= 0 {
+		return nil
+	}
+	rate := float64(c.cacheHitTokens) / float64(total) * 100
+	return &rate
+}
+
 func (c *counters) add(value counters) {
 	c.requestCount += value.requestCount
 	c.successCount += value.successCount
@@ -191,4 +220,6 @@ func (c *counters) add(value counters) {
 	c.ttftCount += value.ttftCount
 	c.outputTokens += value.outputTokens
 	c.generationMs += value.generationMs
+	c.cacheHitTokens += value.cacheHitTokens
+	c.cacheMissTokens += value.cacheMissTokens
 }

@@ -56,40 +56,46 @@ func TestUpsertPerfMetricInstanceAddsCountersPerWriterBucket(t *testing.T) {
 	setupPerfMetricSQLiteTestDB(t)
 
 	require.NoError(t, UpsertPerfMetricInstance("writer-a", &PerfMetric{
-		ModelName:      "model-a",
-		Group:          "default",
-		BucketTs:       600,
-		RequestCount:   2,
-		SuccessCount:   1,
-		TotalLatencyMs: 120,
-		TtftSumMs:      40,
-		TtftCount:      1,
-		OutputTokens:   20,
-		GenerationMs:   200,
+		ModelName:       "model-a",
+		Group:           "default",
+		BucketTs:        600,
+		RequestCount:    2,
+		SuccessCount:    1,
+		TotalLatencyMs:  120,
+		TtftSumMs:       40,
+		TtftCount:       1,
+		OutputTokens:    20,
+		GenerationMs:    200,
+		CacheHitTokens:  10,
+		CacheMissTokens: 20,
 	}))
 	require.NoError(t, UpsertPerfMetricInstance("writer-a", &PerfMetric{
-		ModelName:      "model-a",
-		Group:          "default",
-		BucketTs:       600,
-		RequestCount:   3,
-		SuccessCount:   2,
-		TotalLatencyMs: 330,
-		TtftSumMs:      90,
-		TtftCount:      2,
-		OutputTokens:   60,
-		GenerationMs:   600,
+		ModelName:       "model-a",
+		Group:           "default",
+		BucketTs:        600,
+		RequestCount:    3,
+		SuccessCount:    2,
+		TotalLatencyMs:  330,
+		TtftSumMs:       90,
+		TtftCount:       2,
+		OutputTokens:    60,
+		GenerationMs:    600,
+		CacheHitTokens:  20,
+		CacheMissTokens: 30,
 	}))
 	require.NoError(t, UpsertPerfMetricInstance("writer-b", &PerfMetric{
-		ModelName:      "model-a",
-		Group:          "default",
-		BucketTs:       600,
-		RequestCount:   7,
-		SuccessCount:   6,
-		TotalLatencyMs: 700,
-		TtftSumMs:      210,
-		TtftCount:      7,
-		OutputTokens:   140,
-		GenerationMs:   1400,
+		ModelName:       "model-a",
+		Group:           "default",
+		BucketTs:        600,
+		RequestCount:    7,
+		SuccessCount:    6,
+		TotalLatencyMs:  700,
+		TtftSumMs:       210,
+		TtftCount:       7,
+		OutputTokens:    140,
+		GenerationMs:    1400,
+		CacheHitTokens:  5,
+		CacheMissTokens: 15,
 	}))
 
 	rows, err := GetPerfMetricInstancesForModels(500, 700, []string{"", "default", "default"}, []string{"model-a", "  "})
@@ -104,8 +110,12 @@ func TestUpsertPerfMetricInstanceAddsCountersPerWriterBucket(t *testing.T) {
 	assert.Equal(t, int64(3), rows[0].TtftCount)
 	assert.Equal(t, int64(80), rows[0].OutputTokens)
 	assert.Equal(t, int64(800), rows[0].GenerationMs)
+	assert.Equal(t, int64(30), rows[0].CacheHitTokens)
+	assert.Equal(t, int64(50), rows[0].CacheMissTokens)
 	assert.Equal(t, "writer-b", rows[1].WriterID)
 	assert.Equal(t, int64(7), rows[1].RequestCount)
+	assert.Equal(t, int64(5), rows[1].CacheHitTokens)
+	assert.Equal(t, int64(15), rows[1].CacheMissTokens)
 
 	require.Error(t, UpsertPerfMetricInstance("  ", &PerfMetric{RequestCount: 1}))
 	require.NoError(t, UpsertPerfMetricInstance("", nil))
@@ -115,13 +125,13 @@ func TestUpsertPerfMetricInstanceAddsCountersPerWriterBucket(t *testing.T) {
 func TestPerfMetricQueriesMergeLegacyAndPerWriterRows(t *testing.T) {
 	db := setupPerfMetricSQLiteTestDB(t)
 	require.NoError(t, db.Create(&[]PerfMetric{
-		{ModelName: "model-a", Group: "default", BucketTs: 600, RequestCount: 2, SuccessCount: 1, TotalLatencyMs: 200, TtftSumMs: 30, TtftCount: 1, OutputTokens: 20, GenerationMs: 200},
+		{ModelName: "model-a", Group: "default", BucketTs: 600, RequestCount: 2, SuccessCount: 1, TotalLatencyMs: 200, TtftSumMs: 30, TtftCount: 1, OutputTokens: 20, GenerationMs: 200, CacheHitTokens: 100, CacheMissTokens: 200},
 		{ModelName: "model-a", Group: "default", BucketTs: 900, RequestCount: 1, SuccessCount: 1, TotalLatencyMs: 50},
 		{ModelName: "model-a", Group: "premium", BucketTs: 600, RequestCount: 50, SuccessCount: 50},
 	}).Error)
 	require.NoError(t, db.Create(&[]PerfMetricInstance{
-		{WriterID: "writer-a", ModelName: "model-a", Group: "default", BucketTs: 600, RequestCount: 3, SuccessCount: 2, TotalLatencyMs: 300, TtftSumMs: 60, TtftCount: 2, OutputTokens: 30, GenerationMs: 300},
-		{WriterID: "writer-b", ModelName: "model-a", Group: "default", BucketTs: 600, RequestCount: 4, SuccessCount: 4, TotalLatencyMs: 400, TtftSumMs: 80, TtftCount: 4, OutputTokens: 40, GenerationMs: 400},
+		{WriterID: "writer-a", ModelName: "model-a", Group: "default", BucketTs: 600, RequestCount: 3, SuccessCount: 2, TotalLatencyMs: 300, TtftSumMs: 60, TtftCount: 2, OutputTokens: 30, GenerationMs: 300, CacheHitTokens: 30, CacheMissTokens: 70},
+		{WriterID: "writer-b", ModelName: "model-a", Group: "default", BucketTs: 600, RequestCount: 4, SuccessCount: 4, TotalLatencyMs: 400, TtftSumMs: 80, TtftCount: 4, OutputTokens: 40, GenerationMs: 400, CacheHitTokens: 40, CacheMissTokens: 60},
 		{WriterID: "writer-a", ModelName: "model-b", Group: "default", BucketTs: 600, RequestCount: 5, SuccessCount: 3, TotalLatencyMs: 500, OutputTokens: 50, GenerationMs: 500},
 		{WriterID: "writer-a", ModelName: "model-b", Group: "premium", BucketTs: 600, RequestCount: 70, SuccessCount: 70},
 	}).Error)
@@ -137,6 +147,8 @@ func TestPerfMetricQueriesMergeLegacyAndPerWriterRows(t *testing.T) {
 	assert.Equal(t, int64(7), metrics[0].TtftCount)
 	assert.Equal(t, int64(90), metrics[0].OutputTokens)
 	assert.Equal(t, int64(900), metrics[0].GenerationMs)
+	assert.Equal(t, int64(170), metrics[0].CacheHitTokens)
+	assert.Equal(t, int64(330), metrics[0].CacheMissTokens)
 	assert.Equal(t, int64(900), metrics[1].BucketTs)
 	assert.Equal(t, int64(1), metrics[1].RequestCount)
 
@@ -145,13 +157,15 @@ func TestPerfMetricQueriesMergeLegacyAndPerWriterRows(t *testing.T) {
 	require.Len(t, summaries, 2)
 	assert.Equal(t, "model-a", summaries[0].ModelName)
 	assert.Equal(t, int64(10), summaries[0].RequestCount)
+	assert.Equal(t, int64(170), summaries[0].CacheHitTokens)
+	assert.Equal(t, int64(330), summaries[0].CacheMissTokens)
 	assert.Equal(t, "model-b", summaries[1].ModelName)
 	assert.Equal(t, int64(5), summaries[1].RequestCount)
 
 	buckets, err := GetPerfMetricsSummaryBucketsAll(500, 1000, []string{"default"})
 	require.NoError(t, err)
 	require.Len(t, buckets, 3)
-	assert.Equal(t, PerfMetricSummaryBucket{ModelName: "model-a", BucketTs: 600, RequestCount: 9, SuccessCount: 7, TotalLatencyMs: 900, OutputTokens: 90, GenerationMs: 900}, buckets[0])
+	assert.Equal(t, PerfMetricSummaryBucket{ModelName: "model-a", BucketTs: 600, RequestCount: 9, SuccessCount: 7, TotalLatencyMs: 900, OutputTokens: 90, GenerationMs: 900, CacheHitTokens: 170, CacheMissTokens: 330}, buckets[0])
 	assert.Equal(t, PerfMetricSummaryBucket{ModelName: "model-b", BucketTs: 600, RequestCount: 5, SuccessCount: 3, TotalLatencyMs: 500, OutputTokens: 50, GenerationMs: 500}, buckets[1])
 	assert.Equal(t, PerfMetricSummaryBucket{ModelName: "model-a", BucketTs: 900, RequestCount: 1, SuccessCount: 1, TotalLatencyMs: 50}, buckets[2])
 
@@ -159,6 +173,16 @@ func TestPerfMetricQueriesMergeLegacyAndPerWriterRows(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, legacyStatusRows, 1)
 	assert.Equal(t, int64(3), legacyStatusRows[0].RequestCount)
+	// This query aggregates the legacy table only; per-writer instances are
+	// merged separately by the status reader.
+	assert.Equal(t, int64(100), legacyStatusRows[0].CacheHitTokens)
+	assert.Equal(t, int64(200), legacyStatusRows[0].CacheMissTokens)
+
+	instanceRows, err := GetPerfMetricInstancesForModels(0, 1000, []string{"default"}, []string{"model-a"})
+	require.NoError(t, err)
+	require.Len(t, instanceRows, 2)
+	assert.Equal(t, int64(30), instanceRows[0].CacheHitTokens)
+	assert.Equal(t, int64(40), instanceRows[1].CacheHitTokens)
 }
 
 func TestGetPerfMetricInstancesForModelsRequiresExactAllowlists(t *testing.T) {

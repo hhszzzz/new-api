@@ -24,6 +24,11 @@ type PerfMetric struct {
 	TtftCount      int64  `json:"-" gorm:"default:0"`
 	OutputTokens   int64  `json:"-" gorm:"default:0"`
 	GenerationMs   int64  `json:"-" gorm:"default:0"`
+	// CacheHitTokens / CacheMissTokens count the input tokens that did / did not
+	// read from the upstream prompt cache. Their ratio is the cache hit rate.
+	// Both are additive across buckets, formats, and writers.
+	CacheHitTokens  int64 `json:"-" gorm:"default:0"`
+	CacheMissTokens int64 `json:"-" gorm:"default:0"`
 }
 
 func (PerfMetric) TableName() string {
@@ -34,18 +39,20 @@ func (PerfMetric) TableName() string {
 // writer. Keeping writer attribution lets status reads de-duplicate a writer's
 // persisted counters from its in-flight Redis snapshot.
 type PerfMetricInstance struct {
-	Id             int    `json:"id" gorm:"primaryKey"`
-	WriterID       string `json:"writer_id" gorm:"size:64;uniqueIndex:idx_perf_instance_model_group_bucket_writer,priority:4"`
-	ModelName      string `json:"model_name" gorm:"size:128;uniqueIndex:idx_perf_instance_model_group_bucket_writer,priority:1"`
-	Group          string `json:"group" gorm:"column:group;size:64;uniqueIndex:idx_perf_instance_model_group_bucket_writer,priority:2"`
-	BucketTs       int64  `json:"bucket_ts" gorm:"uniqueIndex:idx_perf_instance_model_group_bucket_writer,priority:3;index:idx_perf_instance_bucket_ts"`
-	RequestCount   int64  `json:"-" gorm:"default:0"`
-	SuccessCount   int64  `json:"-" gorm:"default:0"`
-	TotalLatencyMs int64  `json:"-" gorm:"default:0"`
-	TtftSumMs      int64  `json:"-" gorm:"default:0"`
-	TtftCount      int64  `json:"-" gorm:"default:0"`
-	OutputTokens   int64  `json:"-" gorm:"default:0"`
-	GenerationMs   int64  `json:"-" gorm:"default:0"`
+	Id              int    `json:"id" gorm:"primaryKey"`
+	WriterID        string `json:"writer_id" gorm:"size:64;uniqueIndex:idx_perf_instance_model_group_bucket_writer,priority:4"`
+	ModelName       string `json:"model_name" gorm:"size:128;uniqueIndex:idx_perf_instance_model_group_bucket_writer,priority:1"`
+	Group           string `json:"group" gorm:"column:group;size:64;uniqueIndex:idx_perf_instance_model_group_bucket_writer,priority:2"`
+	BucketTs        int64  `json:"bucket_ts" gorm:"uniqueIndex:idx_perf_instance_model_group_bucket_writer,priority:3;index:idx_perf_instance_bucket_ts"`
+	RequestCount    int64  `json:"-" gorm:"default:0"`
+	SuccessCount    int64  `json:"-" gorm:"default:0"`
+	TotalLatencyMs  int64  `json:"-" gorm:"default:0"`
+	TtftSumMs       int64  `json:"-" gorm:"default:0"`
+	TtftCount       int64  `json:"-" gorm:"default:0"`
+	OutputTokens    int64  `json:"-" gorm:"default:0"`
+	GenerationMs    int64  `json:"-" gorm:"default:0"`
+	CacheHitTokens  int64  `json:"-" gorm:"default:0"`
+	CacheMissTokens int64  `json:"-" gorm:"default:0"`
 }
 
 func (PerfMetricInstance) TableName() string {
@@ -63,13 +70,15 @@ func UpsertPerfMetric(metric *PerfMetric) error {
 			{Name: "bucket_ts"},
 		},
 		DoUpdates: clause.Assignments(map[string]any{
-			"request_count":    gorm.Expr("perf_metrics.request_count + ?", metric.RequestCount),
-			"success_count":    gorm.Expr("perf_metrics.success_count + ?", metric.SuccessCount),
-			"total_latency_ms": gorm.Expr("perf_metrics.total_latency_ms + ?", metric.TotalLatencyMs),
-			"ttft_sum_ms":      gorm.Expr("perf_metrics.ttft_sum_ms + ?", metric.TtftSumMs),
-			"ttft_count":       gorm.Expr("perf_metrics.ttft_count + ?", metric.TtftCount),
-			"output_tokens":    gorm.Expr("perf_metrics.output_tokens + ?", metric.OutputTokens),
-			"generation_ms":    gorm.Expr("perf_metrics.generation_ms + ?", metric.GenerationMs),
+			"request_count":     gorm.Expr("perf_metrics.request_count + ?", metric.RequestCount),
+			"success_count":     gorm.Expr("perf_metrics.success_count + ?", metric.SuccessCount),
+			"total_latency_ms":  gorm.Expr("perf_metrics.total_latency_ms + ?", metric.TotalLatencyMs),
+			"ttft_sum_ms":       gorm.Expr("perf_metrics.ttft_sum_ms + ?", metric.TtftSumMs),
+			"ttft_count":        gorm.Expr("perf_metrics.ttft_count + ?", metric.TtftCount),
+			"output_tokens":     gorm.Expr("perf_metrics.output_tokens + ?", metric.OutputTokens),
+			"generation_ms":     gorm.Expr("perf_metrics.generation_ms + ?", metric.GenerationMs),
+			"cache_hit_tokens":  gorm.Expr("perf_metrics.cache_hit_tokens + ?", metric.CacheHitTokens),
+			"cache_miss_tokens": gorm.Expr("perf_metrics.cache_miss_tokens + ?", metric.CacheMissTokens),
 		}),
 	}).Create(metric).Error
 }
@@ -83,17 +92,19 @@ func UpsertPerfMetricInstance(writerID string, metric *PerfMetric) error {
 	}
 
 	instance := &PerfMetricInstance{
-		WriterID:       writerID,
-		ModelName:      metric.ModelName,
-		Group:          metric.Group,
-		BucketTs:       metric.BucketTs,
-		RequestCount:   metric.RequestCount,
-		SuccessCount:   metric.SuccessCount,
-		TotalLatencyMs: metric.TotalLatencyMs,
-		TtftSumMs:      metric.TtftSumMs,
-		TtftCount:      metric.TtftCount,
-		OutputTokens:   metric.OutputTokens,
-		GenerationMs:   metric.GenerationMs,
+		WriterID:        writerID,
+		ModelName:       metric.ModelName,
+		Group:           metric.Group,
+		BucketTs:        metric.BucketTs,
+		RequestCount:    metric.RequestCount,
+		SuccessCount:    metric.SuccessCount,
+		TotalLatencyMs:  metric.TotalLatencyMs,
+		TtftSumMs:       metric.TtftSumMs,
+		TtftCount:       metric.TtftCount,
+		OutputTokens:    metric.OutputTokens,
+		GenerationMs:    metric.GenerationMs,
+		CacheHitTokens:  metric.CacheHitTokens,
+		CacheMissTokens: metric.CacheMissTokens,
 	}
 	return DB.Clauses(clause.OnConflict{
 		Columns: []clause.Column{
@@ -103,13 +114,15 @@ func UpsertPerfMetricInstance(writerID string, metric *PerfMetric) error {
 			{Name: "writer_id"},
 		},
 		DoUpdates: clause.Assignments(map[string]interface{}{
-			"request_count":    gorm.Expr("perf_metric_instances.request_count + ?", metric.RequestCount),
-			"success_count":    gorm.Expr("perf_metric_instances.success_count + ?", metric.SuccessCount),
-			"total_latency_ms": gorm.Expr("perf_metric_instances.total_latency_ms + ?", metric.TotalLatencyMs),
-			"ttft_sum_ms":      gorm.Expr("perf_metric_instances.ttft_sum_ms + ?", metric.TtftSumMs),
-			"ttft_count":       gorm.Expr("perf_metric_instances.ttft_count + ?", metric.TtftCount),
-			"output_tokens":    gorm.Expr("perf_metric_instances.output_tokens + ?", metric.OutputTokens),
-			"generation_ms":    gorm.Expr("perf_metric_instances.generation_ms + ?", metric.GenerationMs),
+			"request_count":     gorm.Expr("perf_metric_instances.request_count + ?", metric.RequestCount),
+			"success_count":     gorm.Expr("perf_metric_instances.success_count + ?", metric.SuccessCount),
+			"total_latency_ms":  gorm.Expr("perf_metric_instances.total_latency_ms + ?", metric.TotalLatencyMs),
+			"ttft_sum_ms":       gorm.Expr("perf_metric_instances.ttft_sum_ms + ?", metric.TtftSumMs),
+			"ttft_count":        gorm.Expr("perf_metric_instances.ttft_count + ?", metric.TtftCount),
+			"output_tokens":     gorm.Expr("perf_metric_instances.output_tokens + ?", metric.OutputTokens),
+			"generation_ms":     gorm.Expr("perf_metric_instances.generation_ms + ?", metric.GenerationMs),
+			"cache_hit_tokens":  gorm.Expr("perf_metric_instances.cache_hit_tokens + ?", metric.CacheHitTokens),
+			"cache_miss_tokens": gorm.Expr("perf_metric_instances.cache_miss_tokens + ?", metric.CacheMissTokens),
 		}),
 	}).Create(instance).Error
 }
@@ -157,6 +170,8 @@ func GetPerfMetrics(modelName string, group string, startTs int64, endTs int64) 
 		value.TtftCount += metric.TtftCount
 		value.OutputTokens += metric.OutputTokens
 		value.GenerationMs += metric.GenerationMs
+		value.CacheHitTokens += metric.CacheHitTokens
+		value.CacheMissTokens += metric.CacheMissTokens
 		merged[key] = value
 	}
 	for _, instance := range instances {
@@ -172,6 +187,8 @@ func GetPerfMetrics(modelName string, group string, startTs int64, endTs int64) 
 		value.TtftCount += instance.TtftCount
 		value.OutputTokens += instance.OutputTokens
 		value.GenerationMs += instance.GenerationMs
+		value.CacheHitTokens += instance.CacheHitTokens
+		value.CacheMissTokens += instance.CacheMissTokens
 		merged[key] = value
 	}
 
@@ -192,24 +209,28 @@ func GetPerfMetrics(modelName string, group string, startTs int64, endTs int64) 
 }
 
 type PerfMetricSummary struct {
-	ModelName      string `json:"model_name"`
-	RequestCount   int64  `json:"request_count"`
-	SuccessCount   int64  `json:"success_count"`
-	TotalLatencyMs int64  `json:"total_latency_ms"`
-	OutputTokens   int64  `json:"output_tokens"`
-	GenerationMs   int64  `json:"generation_ms"`
+	ModelName       string `json:"model_name"`
+	RequestCount    int64  `json:"request_count"`
+	SuccessCount    int64  `json:"success_count"`
+	TotalLatencyMs  int64  `json:"total_latency_ms"`
+	OutputTokens    int64  `json:"output_tokens"`
+	GenerationMs    int64  `json:"generation_ms"`
+	CacheHitTokens  int64  `json:"cache_hit_tokens"`
+	CacheMissTokens int64  `json:"cache_miss_tokens"`
 }
 
 type PerfMetricSummaryBucket struct {
-	ModelName      string `json:"model_name"`
-	BucketTs       int64  `json:"bucket_ts"`
-	RequestCount   int64  `json:"request_count"`
-	SuccessCount   int64  `json:"success_count"`
-	TotalLatencyMs int64  `json:"total_latency_ms"`
-	TtftSumMs      int64  `json:"ttft_sum_ms"`
-	TtftCount      int64  `json:"ttft_count"`
-	OutputTokens   int64  `json:"output_tokens"`
-	GenerationMs   int64  `json:"generation_ms"`
+	ModelName       string `json:"model_name"`
+	BucketTs        int64  `json:"bucket_ts"`
+	RequestCount    int64  `json:"request_count"`
+	SuccessCount    int64  `json:"success_count"`
+	TotalLatencyMs  int64  `json:"total_latency_ms"`
+	TtftSumMs       int64  `json:"ttft_sum_ms"`
+	TtftCount       int64  `json:"ttft_count"`
+	OutputTokens    int64  `json:"output_tokens"`
+	GenerationMs    int64  `json:"generation_ms"`
+	CacheHitTokens  int64  `json:"cache_hit_tokens"`
+	CacheMissTokens int64  `json:"cache_miss_tokens"`
 }
 
 func GetPerfMetricsSummaryAll(startTs int64, endTs int64, groups []string) ([]PerfMetricSummary, error) {
@@ -218,7 +239,7 @@ func GetPerfMetricsSummaryAll(startTs int64, endTs int64, groups []string) ([]Pe
 		return summaries, nil
 	}
 	query := DB.Model(&PerfMetric{}).
-		Select("model_name, SUM(request_count) as request_count, SUM(success_count) as success_count, SUM(total_latency_ms) as total_latency_ms, SUM(output_tokens) as output_tokens, SUM(generation_ms) as generation_ms").
+		Select("model_name, SUM(request_count) as request_count, SUM(success_count) as success_count, SUM(total_latency_ms) as total_latency_ms, SUM(output_tokens) as output_tokens, SUM(generation_ms) as generation_ms, SUM(cache_hit_tokens) as cache_hit_tokens, SUM(cache_miss_tokens) as cache_miss_tokens").
 		Where("bucket_ts >= ? AND bucket_ts <= ?", startTs, endTs)
 	if groups != nil {
 		query = query.Where(clause.Eq{Column: clause.Column{Name: "group"}, Value: groups})
@@ -232,7 +253,7 @@ func GetPerfMetricsSummaryAll(startTs int64, endTs int64, groups []string) ([]Pe
 
 	var instanceSummaries []PerfMetricSummary
 	instanceQuery := DB.Model(&PerfMetricInstance{}).
-		Select("model_name, SUM(request_count) as request_count, SUM(success_count) as success_count, SUM(total_latency_ms) as total_latency_ms, SUM(output_tokens) as output_tokens, SUM(generation_ms) as generation_ms").
+		Select("model_name, SUM(request_count) as request_count, SUM(success_count) as success_count, SUM(total_latency_ms) as total_latency_ms, SUM(output_tokens) as output_tokens, SUM(generation_ms) as generation_ms, SUM(cache_hit_tokens) as cache_hit_tokens, SUM(cache_miss_tokens) as cache_miss_tokens").
 		Where("bucket_ts >= ? AND bucket_ts <= ?", startTs, endTs)
 	if groups != nil {
 		instanceQuery = instanceQuery.Where(clause.Eq{Column: clause.Column{Name: "group"}, Value: groups})
@@ -256,6 +277,8 @@ func GetPerfMetricsSummaryAll(startTs int64, endTs int64, groups []string) ([]Pe
 		value.TotalLatencyMs += summary.TotalLatencyMs
 		value.OutputTokens += summary.OutputTokens
 		value.GenerationMs += summary.GenerationMs
+		value.CacheHitTokens += summary.CacheHitTokens
+		value.CacheMissTokens += summary.CacheMissTokens
 		merged[summary.ModelName] = value
 	}
 	summaries = make([]PerfMetricSummary, 0, len(merged))
@@ -276,7 +299,7 @@ func GetPerfMetricsSummaryBucketsAll(startTs int64, endTs int64, groups []string
 		return summaries, nil
 	}
 	query := DB.Model(&PerfMetric{}).
-		Select("model_name, bucket_ts, SUM(request_count) as request_count, SUM(success_count) as success_count, SUM(total_latency_ms) as total_latency_ms, SUM(output_tokens) as output_tokens, SUM(generation_ms) as generation_ms").
+		Select("model_name, bucket_ts, SUM(request_count) as request_count, SUM(success_count) as success_count, SUM(total_latency_ms) as total_latency_ms, SUM(output_tokens) as output_tokens, SUM(generation_ms) as generation_ms, SUM(cache_hit_tokens) as cache_hit_tokens, SUM(cache_miss_tokens) as cache_miss_tokens").
 		Where("bucket_ts >= ? AND bucket_ts <= ?", startTs, endTs)
 	if groups != nil {
 		query = query.Where(clause.Eq{Column: clause.Column{Name: "group"}, Value: groups})
@@ -291,7 +314,7 @@ func GetPerfMetricsSummaryBucketsAll(startTs int64, endTs int64, groups []string
 
 	var instanceSummaries []PerfMetricSummaryBucket
 	instanceQuery := DB.Model(&PerfMetricInstance{}).
-		Select("model_name, bucket_ts, SUM(request_count) as request_count, SUM(success_count) as success_count, SUM(total_latency_ms) as total_latency_ms, SUM(output_tokens) as output_tokens, SUM(generation_ms) as generation_ms").
+		Select("model_name, bucket_ts, SUM(request_count) as request_count, SUM(success_count) as success_count, SUM(total_latency_ms) as total_latency_ms, SUM(output_tokens) as output_tokens, SUM(generation_ms) as generation_ms, SUM(cache_hit_tokens) as cache_hit_tokens, SUM(cache_miss_tokens) as cache_miss_tokens").
 		Where("bucket_ts >= ? AND bucket_ts <= ?", startTs, endTs)
 	if groups != nil {
 		instanceQuery = instanceQuery.Where(clause.Eq{Column: clause.Column{Name: "group"}, Value: groups})
@@ -321,6 +344,8 @@ func GetPerfMetricsSummaryBucketsAll(startTs int64, endTs int64, groups []string
 		value.TotalLatencyMs += summary.TotalLatencyMs
 		value.OutputTokens += summary.OutputTokens
 		value.GenerationMs += summary.GenerationMs
+		value.CacheHitTokens += summary.CacheHitTokens
+		value.CacheMissTokens += summary.CacheMissTokens
 		merged[key] = value
 	}
 	summaries = make([]PerfMetricSummaryBucket, 0, len(merged))
@@ -355,7 +380,7 @@ func GetPerfMetricsHourlySummaryBucketsForModels(startTs int64, endTs int64, exc
 		hourBucketExpression = "FLOOR(bucket_ts / 3600) * 3600"
 	}
 	query := DB.Model(&PerfMetric{}).
-		Select("model_name, "+hourBucketExpression+" as bucket_ts, SUM(request_count) as request_count, SUM(success_count) as success_count, SUM(total_latency_ms) as total_latency_ms, SUM(ttft_sum_ms) as ttft_sum_ms, SUM(ttft_count) as ttft_count, SUM(output_tokens) as output_tokens, SUM(generation_ms) as generation_ms").
+		Select("model_name, "+hourBucketExpression+" as bucket_ts, SUM(request_count) as request_count, SUM(success_count) as success_count, SUM(total_latency_ms) as total_latency_ms, SUM(ttft_sum_ms) as ttft_sum_ms, SUM(ttft_count) as ttft_count, SUM(output_tokens) as output_tokens, SUM(generation_ms) as generation_ms, SUM(cache_hit_tokens) as cache_hit_tokens, SUM(cache_miss_tokens) as cache_miss_tokens").
 		Where("model_name IN ? AND bucket_ts >= ? AND bucket_ts <= ? AND bucket_ts <> ?", modelNames, startTs, endTs, excludedBucketTs)
 	query = query.Where(clause.Eq{Column: clause.Column{Name: "group"}, Value: groups})
 	err := query.

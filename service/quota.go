@@ -217,7 +217,7 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo,
 	metricSuccess := totalTokens > 0
 	metricOutputTokens := int64(usage.OutputTokens)
 	gopool.Go(func() {
-		perfmetrics.RecordRelaySample(relayInfo, metricSuccess, metricOutputTokens)
+		perfmetrics.RecordRelaySample(relayInfo, metricSuccess, metricOutputTokens, 0, 0)
 	})
 }
 
@@ -355,7 +355,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		Other:            other,
 	})
 	gopool.Go(func() {
-		perfmetrics.RecordRelaySample(relayInfo, true, int64(usage.CompletionTokens))
+		perfmetrics.RecordRelaySample(relayInfo, true, int64(usage.CompletionTokens), 0, 0)
 	})
 }
 

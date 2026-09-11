@@ -41,16 +41,18 @@ func flushCompletedBuckets() {
 		}
 
 		err := model.UpsertPerfMetricInstance(redisWriterID, &model.PerfMetric{
-			ModelName:      k.model,
-			Group:          k.group,
-			BucketTs:       k.bucketTs,
-			RequestCount:   drained.requestCount,
-			SuccessCount:   drained.successCount,
-			TotalLatencyMs: drained.totalLatencyMs,
-			TtftSumMs:      drained.ttftSumMs,
-			TtftCount:      drained.ttftCount,
-			OutputTokens:   drained.outputTokens,
-			GenerationMs:   drained.generationMs,
+			ModelName:       k.model,
+			Group:           k.group,
+			BucketTs:        k.bucketTs,
+			RequestCount:    drained.requestCount,
+			SuccessCount:    drained.successCount,
+			TotalLatencyMs:  drained.totalLatencyMs,
+			TtftSumMs:       drained.ttftSumMs,
+			TtftCount:       drained.ttftCount,
+			OutputTokens:    drained.outputTokens,
+			GenerationMs:    drained.generationMs,
+			CacheHitTokens:  drained.cacheHitTokens,
+			CacheMissTokens: drained.cacheMissTokens,
 		})
 		if err != nil {
 			bucket.addCounters(drained)

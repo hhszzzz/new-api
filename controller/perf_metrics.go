@@ -25,6 +25,7 @@ type perfMetricsStatusPointView struct {
 	AvgTtftMs    *int64             `json:"avg_ttft_ms"`
 	AvgLatencyMs *int64             `json:"avg_latency_ms"`
 	AvgTps       *float64           `json:"avg_tps"`
+	CacheHitRate *float64           `json:"cache_hit_rate"`
 }
 
 type perfMetricsStatusModelView struct {
@@ -37,6 +38,7 @@ type perfMetricsStatusModelView struct {
 	AvgTtftMs    *int64                       `json:"avg_ttft_ms"`
 	AvgLatencyMs *int64                       `json:"avg_latency_ms"`
 	AvgTps       *float64                     `json:"avg_tps"`
+	CacheHitRate *float64                     `json:"cache_hit_rate"`
 	Status       perfmetrics.Status           `json:"status"`
 	Timeline     []perfMetricsStatusPointView `json:"timeline"`
 }
@@ -62,6 +64,7 @@ func buildPerfMetricsStatusView(result perfmetrics.StatusResult, includeCounts b
 			AvgTtftMs:    item.AvgTtftMs,
 			AvgLatencyMs: item.AvgLatencyMs,
 			AvgTps:       item.AvgTps,
+			CacheHitRate: item.CacheHitRate,
 			Status:       item.Status,
 			Timeline:     make([]perfMetricsStatusPointView, 0, len(item.Timeline)),
 		}
@@ -77,6 +80,7 @@ func buildPerfMetricsStatusView(result perfmetrics.StatusResult, includeCounts b
 				AvgTtftMs:    point.AvgTtftMs,
 				AvgLatencyMs: point.AvgLatencyMs,
 				AvgTps:       point.AvgTps,
+				CacheHitRate: point.CacheHitRate,
 			}
 			if includeCounts {
 				pointView.RequestCount = lo.ToPtr(point.RequestCount)

@@ -896,3 +896,49 @@ func TestQueryStatusCacheDeduplicatesConcurrentLoads(t *testing.T) {
 		assert.Equal(t, "model-a", result.Models[0].ModelName)
 	}
 }
+
+// The summary and per-model queries aggregate database rows, not just live hot
+// buckets. Cache counters must survive the row-to-counters conversion or the
+// model square silently reports a null hit rate for historical traffic.
+func TestQuerySummaryAndQueryCarryCacheCountersFromDatabaseRows(t *testing.T) {
+	db := setupStatusTestDB(t)
+	now := time.Now().Unix()
+	bucketTs := bucketStart(now)
+
+	require.NoError(t, db.Create(&[]model.PerfMetric{
+		{
+			ModelName: "db-model", Group: "default", BucketTs: bucketTs,
+			RequestCount: 10, SuccessCount: 10, TotalLatencyMs: 1000,
+			OutputTokens: 100, GenerationMs: 1000,
+			CacheHitTokens: 600, CacheMissTokens: 400,
+		},
+	}).Error)
+
+	summary, err := QuerySummaryAll(24, []string{"default"})
+	require.NoError(t, err)
+	require.Len(t, summary.Models, 1)
+	require.NotNil(t, summary.Models[0].CacheHitRate)
+	assert.InDelta(t, 60.0, *summary.Models[0].CacheHitRate, 0.001)
+
+	result, err := Query(QueryParams{Model: "db-model", Group: "default", Hours: 24})
+	require.NoError(t, err)
+	require.Len(t, result.Groups, 1)
+	require.NotNil(t, result.Groups[0].CacheHitRate)
+	assert.InDelta(t, 60.0, *result.Groups[0].CacheHitRate, 0.001)
+	require.Len(t, result.Groups[0].Series, 1)
+	require.NotNil(t, result.Groups[0].Series[0].CacheHitRate)
+	assert.InDelta(t, 60.0, *result.Groups[0].Series[0].CacheHitRate, 0.001)
+
+	// A bucket with no cacheable input reports no rate rather than zero.
+	require.NoError(t, db.Create(&model.PerfMetric{
+		ModelName: "no-cache-model", Group: "default", BucketTs: bucketTs,
+		RequestCount: 1, SuccessCount: 1,
+	}).Error)
+	summary, err = QuerySummaryAll(24, []string{"default"})
+	require.NoError(t, err)
+	for _, item := range summary.Models {
+		if item.ModelName == "no-cache-model" {
+			assert.Nil(t, item.CacheHitRate)
+		}
+	}
+}

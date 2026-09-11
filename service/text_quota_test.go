@@ -1634,3 +1634,63 @@ func TestAppendToolSurchargeLogInfoWritesOnlyStructuredFields(t *testing.T) {
 	assert.NotContains(t, fields, "image_generation_call")
 	assert.NotContains(t, fields, "image_generation_call_price")
 }
+
+func TestCacheTokenCountsNormalizesAcrossUsageSemantics(t *testing.T) {
+	tests := []struct {
+		name          string
+		usage         *dto.Usage
+		usageSemantic string
+		wantHit       int64
+		wantMiss      int64
+	}{
+		{
+			name:          "nil usage records nothing",
+			usage:         nil,
+			usageSemantic: "openai",
+		},
+		{
+			name:          "openai cached tokens are a subset of prompt tokens",
+			usage:         &dto.Usage{PromptTokens: 1000, PromptTokensDetails: dto.InputTokenDetails{CachedTokens: 600}},
+			usageSemantic: "openai",
+			wantHit:       600,
+			wantMiss:      400,
+		},
+		{
+			name:          "openai without a cache hit counts the prompt as miss",
+			usage:         &dto.Usage{PromptTokens: 1000},
+			usageSemantic: "openai",
+			wantHit:       0,
+			wantMiss:      1000,
+		},
+		{
+			name:          "openai reads the input token detail fallback",
+			usage:         &dto.Usage{PromptTokens: 500, InputTokensDetails: &dto.InputTokenDetails{CachedTokens: 200}},
+			usageSemantic: "openai",
+			wantHit:       200,
+			wantMiss:      300,
+		},
+		{
+			name: "anthropic input excludes cache read and write",
+			usage: &dto.Usage{
+				PromptTokens:        400,
+				PromptTokensDetails: dto.InputTokenDetails{CachedTokens: 500, CacheWriteTokens: 100},
+			},
+			usageSemantic: "anthropic",
+			wantHit:       500,
+			wantMiss:      500,
+		},
+		{
+			name:          "no prompt tokens records nothing",
+			usage:         &dto.Usage{},
+			usageSemantic: "openai",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			hit, miss := cacheTokenCounts(test.usage, test.usageSemantic)
+			assert.Equal(t, test.wantHit, hit)
+			assert.Equal(t, test.wantMiss, miss)
+		})
+	}
+}

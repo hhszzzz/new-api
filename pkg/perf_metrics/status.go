@@ -166,6 +166,10 @@ func cloneStatusResult(result StatusResult) StatusResult {
 			value := *item.AvgTps
 			cloned.Models[i].AvgTps = &value
 		}
+		if item.CacheHitRate != nil {
+			value := *item.CacheHitRate
+			cloned.Models[i].CacheHitRate = &value
+		}
 		if item.Timeline == nil {
 			continue
 		}
@@ -189,6 +193,10 @@ func cloneStatusResult(result StatusResult) StatusResult {
 			if point.AvgTps != nil {
 				value := *point.AvgTps
 				cloned.Models[i].Timeline[j].AvgTps = &value
+			}
+			if point.CacheHitRate != nil {
+				value := *point.CacheHitRate
+				cloned.Models[i].Timeline[j].CacheHitRate = &value
 			}
 		}
 	}
@@ -260,13 +268,15 @@ func queryStatusAt(models []StatusModelSource, groups []string, now time.Time) (
 			continue
 		}
 		mergeModelBucket(modelBuckets, row.ModelName, hourStart(row.BucketTs), counters{
-			requestCount:   row.RequestCount,
-			successCount:   row.SuccessCount,
-			totalLatencyMs: row.TotalLatencyMs,
-			ttftSumMs:      row.TtftSumMs,
-			ttftCount:      row.TtftCount,
-			outputTokens:   row.OutputTokens,
-			generationMs:   row.GenerationMs,
+			requestCount:    row.RequestCount,
+			successCount:    row.SuccessCount,
+			totalLatencyMs:  row.TotalLatencyMs,
+			ttftSumMs:       row.TtftSumMs,
+			ttftCount:       row.TtftCount,
+			outputTokens:    row.OutputTokens,
+			generationMs:    row.GenerationMs,
+			cacheHitTokens:  row.CacheHitTokens,
+			cacheMissTokens: row.CacheMissTokens,
 		})
 	}
 	dbInstanceBuckets := make(statusInstanceBuckets)
@@ -276,13 +286,15 @@ func queryStatusAt(models []StatusModelSource, groups []string, now time.Time) (
 			dbInstanceBuckets[key] = make(map[string]counters)
 		}
 		dbInstanceBuckets[key][row.WriterID] = counters{
-			requestCount:   row.RequestCount,
-			successCount:   row.SuccessCount,
-			totalLatencyMs: row.TotalLatencyMs,
-			ttftSumMs:      row.TtftSumMs,
-			ttftCount:      row.TtftCount,
-			outputTokens:   row.OutputTokens,
-			generationMs:   row.GenerationMs,
+			requestCount:    row.RequestCount,
+			successCount:    row.SuccessCount,
+			totalLatencyMs:  row.TotalLatencyMs,
+			ttftSumMs:       row.TtftSumMs,
+			ttftCount:       row.TtftCount,
+			outputTokens:    row.OutputTokens,
+			generationMs:    row.GenerationMs,
+			cacheHitTokens:  row.CacheHitTokens,
+			cacheMissTokens: row.CacheMissTokens,
 		}
 	}
 
@@ -334,12 +346,15 @@ func queryStatusAt(models []StatusModelSource, groups []string, now time.Time) (
 			total.ttftCount += value.ttftCount
 			total.outputTokens += value.outputTokens
 			total.generationMs += value.generationMs
+			total.cacheHitTokens += value.cacheHitTokens
+			total.cacheMissTokens += value.cacheMissTokens
 			point := StatusPoint{
 				Ts:           hour,
 				Status:       classifyStatus(value),
 				RequestCount: value.requestCount,
 				SuccessCount: value.successCount,
 				SuccessRate:  statusSuccessRate(value),
+				CacheHitRate: roundedCacheHitRate(value),
 			}
 			if value.requestCount > 0 {
 				avgLatencyMs := avg(value.totalLatencyMs, value.requestCount)
@@ -375,6 +390,7 @@ func queryStatusAt(models []StatusModelSource, groups []string, now time.Time) (
 			avgTtftMs := avg(total.ttftSumMs, total.ttftCount)
 			modelStatus.AvgTtftMs = &avgTtftMs
 		}
+		modelStatus.CacheHitRate = roundedCacheHitRate(total)
 		result.Models = append(result.Models, modelStatus)
 	}
 

@@ -129,6 +129,8 @@ func redisInstanceFields(instanceID string, value counters) map[string]interface
 		redisInstanceField(instanceID, "ttft_n"): value.ttftCount,
 		redisInstanceField(instanceID, "out"):    value.outputTokens,
 		redisInstanceField(instanceID, "gen_ms"): value.generationMs,
+		redisInstanceField(instanceID, "chit"):   value.cacheHitTokens,
+		redisInstanceField(instanceID, "cmiss"):  value.cacheMissTokens,
 	}
 }
 
@@ -269,13 +271,15 @@ func selectMostCompleteInstance(selected statusInstanceBuckets, key bucketKey, w
 
 func redisCounters(values map[string]string) counters {
 	return counters{
-		requestCount:   parseRedisInt(values["req"]),
-		successCount:   parseRedisInt(values["ok"]),
-		totalLatencyMs: parseRedisInt(values["lat"]),
-		ttftSumMs:      parseRedisInt(values["ttft"]),
-		ttftCount:      parseRedisInt(values["ttft_n"]),
-		outputTokens:   parseRedisInt(values["out"]),
-		generationMs:   parseRedisInt(values["gen_ms"]),
+		requestCount:    parseRedisInt(values["req"]),
+		successCount:    parseRedisInt(values["ok"]),
+		totalLatencyMs:  parseRedisInt(values["lat"]),
+		ttftSumMs:       parseRedisInt(values["ttft"]),
+		ttftCount:       parseRedisInt(values["ttft_n"]),
+		outputTokens:    parseRedisInt(values["out"]),
+		generationMs:    parseRedisInt(values["gen_ms"]),
+		cacheHitTokens:  parseRedisInt(values["chit"]),
+		cacheMissTokens: parseRedisInt(values["cmiss"]),
 	}
 }
 
