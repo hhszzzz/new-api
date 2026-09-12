@@ -60,6 +60,10 @@ func modelRadarTestPayloads(t *testing.T) ([]byte, []byte) {
 	insights, err := common.Marshal(map[string]any{
 		"schema": 1, "source_updated_at": "2026-07-26T00:01:00Z",
 		"recommendations": []map[string]any{{"title": "must not persist"}},
+		"comprehensive_points": []map[string]any{{
+			"model": "gpt-test", "effort": "high", "iq": 95.0,
+			"software_iq": 90.0, "visual_iq": 120.0, "samples": 10,
+		}},
 		"degradation_alerts": map[string]any{
 			"items": []map[string]any{{
 				"model": "gpt-test", "effort": "high", "iq": 90.0,
@@ -123,6 +127,10 @@ func TestFetchModelRadarNormalizesCapabilityDataAndDropsRecommendations(t *testi
 	require.Len(t, data.Configurations, 1)
 	assert.Equal(t, "gpt-test", data.Configurations[0].Model)
 	assert.Equal(t, 90.0, data.Configurations[0].IQ)
+	require.NotNil(t, data.Configurations[0].ComprehensiveIQ)
+	assert.Equal(t, 95.0, *data.Configurations[0].ComprehensiveIQ)
+	require.NotNil(t, data.Configurations[0].VisualIQ)
+	assert.Equal(t, 120.0, *data.Configurations[0].VisualIQ)
 	configuration := data.Configurations[0]
 	assert.Equal(t, "codex", configuration.Harness)
 	require.NotNil(t, configuration.Runs24h)
@@ -334,6 +342,38 @@ func TestNormalizeModelRadarInsightsPreservesSignedDegradation(t *testing.T) {
 	assert.Equal(t, -0.2, alerts[0].Degradation48hIQ)
 }
 
+func TestNormalizeModelRadarComprehensiveValidatesAndIndexes(t *testing.T) {
+	iq, visual := 95.0, 120.0
+	samples := 10
+	metrics, err := normalizeModelRadarComprehensive(modelRadarInsightsPayload{
+		Schema: modelRadarInsightsSchema,
+		ComprehensivePoints: []modelRadarComprehensivePoint{
+			{Model: "gpt-test", Effort: "high", IQ: &iq, VisualIQ: &visual, Samples: &samples},
+		},
+	})
+	require.NoError(t, err)
+	require.Contains(t, metrics, "gpt-test|high")
+	assert.Equal(t, 95.0, metrics["gpt-test|high"].IQ)
+	assert.Equal(t, 120.0, metrics["gpt-test|high"].VisualIQ)
+
+	outOfRange := 200.0
+	_, err = normalizeModelRadarComprehensive(modelRadarInsightsPayload{
+		Schema: modelRadarInsightsSchema,
+		ComprehensivePoints: []modelRadarComprehensivePoint{
+			{Model: "gpt-test", Effort: "high", IQ: &iq, VisualIQ: &outOfRange},
+		},
+	})
+	require.Error(t, err)
+
+	_, err = normalizeModelRadarComprehensive(modelRadarInsightsPayload{
+		Schema: modelRadarInsightsSchema,
+		ComprehensivePoints: []modelRadarComprehensivePoint{
+			{Model: "gpt-test", Effort: "high", IQ: &iq},
+		},
+	})
+	require.Error(t, err)
+}
+
 func TestSyncModelRadarDoesNotReplaceSnapshotWhenOneSourceFails(t *testing.T) {
 	setupModelRadarServiceTestDB(t)
 	ctx := context.Background()
@@ -493,6 +533,29 @@ func TestBuildModelRadarAutoEffortIndexFiltersAndOrders(t *testing.T) {
 	assert.Equal(t, candidates.Candidates, upper.Candidates)
 	_, hidden := index.byModel["hidden-model"]
 	assert.False(t, hidden)
+}
+
+func TestBuildModelRadarAutoEffortIndexPrefersComprehensiveIQ(t *testing.T) {
+	comprehensiveHigh, comprehensiveLow := 105.0, 60.0
+	configurations := []ModelRadarConfiguration{
+		{Model: "dual", Effort: "high", IQ: 90, ComprehensiveIQ: &comprehensiveHigh, ValidTasks: 10},
+		{Model: "dual", Effort: "low", IQ: 95, ComprehensiveIQ: &comprehensiveLow, ValidTasks: 10},
+		{Model: "software-only", Effort: "high", IQ: 88, ValidTasks: 10},
+	}
+	index := buildModelRadarAutoEffortIndex(configurations, 1, setting.ModelRadarSettings{AutoEffortEnabled: true}, `{}`)
+
+	dual := index.byModel["dual"].Candidates
+	require.Len(t, dual, 2)
+	// Comprehensive IQ decides the order: high (105) beats low (60) even though
+	// the software IQ ranks low higher.
+	assert.Equal(t, kitreasoning.EffortHigh, dual[0].Effort)
+	assert.Equal(t, 105.0, dual[0].IQ)
+	assert.Equal(t, kitreasoning.EffortLow, dual[1].Effort)
+	assert.Equal(t, 60.0, dual[1].IQ)
+
+	fallback := index.byModel["software-only"].Candidates
+	require.Len(t, fallback, 1)
+	assert.Equal(t, 88.0, fallback[0].IQ)
 }
 
 func TestLookupModelRadarCandidatesResolvesNames(t *testing.T) {

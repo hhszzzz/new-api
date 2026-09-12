@@ -40,6 +40,7 @@ import { useRadarFormatters } from '../hooks/use-radar-formatters'
 import {
   gatewayEffortCandidates,
   getIqTone,
+  getPrimaryIq,
   groupConfigurations,
   IQ_TEXT_CLASSES,
   isAutoEffortExcludedRadarTier,
@@ -250,7 +251,9 @@ function ModelRow(props: {
 }) {
   const { t } = useTranslation()
   const group = props.group
-  const bestIq = Math.max(...group.configurations.map((item) => item.iq))
+  const bestIq = Math.max(
+    ...group.configurations.map((item) => getPrimaryIq(item).value)
+  )
   const auto = props.autoEffort
   const showSwitch = Boolean(auto?.available)
   const activeEffort =
@@ -325,7 +328,9 @@ function ModelRow(props: {
             activeEffort !== null &&
             configuration.effort.trim().toLowerCase() === activeEffort
           const isBest =
-            activeEffort !== null ? matchesActive : configuration.iq === bestIq
+            activeEffort !== null
+              ? matchesActive
+              : getPrimaryIq(configuration).value === bestIq
           return (
             <TierCard
               key={effort}
@@ -350,6 +355,7 @@ function TierCard(props: {
   const { t } = useTranslation()
   const format = useRadarFormatters()
   const configuration = props.configuration
+  const primary = getPrimaryIq(configuration)
   const card = (
     <button
       type='button'
@@ -385,10 +391,15 @@ function TierCard(props: {
       <span
         className={cn(
           'text-base leading-5 font-semibold tabular-nums',
-          IQ_TEXT_CLASSES[getIqTone(configuration.iq)]
+          IQ_TEXT_CLASSES[getIqTone(primary.value)]
         )}
+        title={
+          primary.dimension === 'comprehensive'
+            ? t('Comprehensive IQ')
+            : t('Software engineering IQ')
+        }
       >
-        {configuration.iq.toFixed(1)}
+        {primary.value.toFixed(1)}
       </span>
       <span className='text-muted-foreground mx-auto flex w-full max-w-32 flex-wrap items-center justify-between gap-x-1 text-[10px] leading-[14px] tabular-nums'>
         <span title={t('Passed / valid samples')}>

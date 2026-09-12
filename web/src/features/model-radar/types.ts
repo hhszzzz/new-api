@@ -32,7 +32,12 @@ export type ModelRadarConfiguration = {
     off_peak: number | null
     peak: number | null
   } | null
+  /** Software-engineering (DeepSWE) IQ. */
   iq: number
+  /** Comprehensive IQ (software + visual, weighted by valid task count). Null when upstream has no visual-spatial score. */
+  comprehensive_iq?: number | null
+  /** Visual-spatial reasoning IQ. Null when upstream has no visual-spatial score. */
+  visual_iq?: number | null
   passed: number
   valid_tasks: number
   average_price_usd: number | null

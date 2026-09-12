@@ -66,6 +66,41 @@ describe('model radar capability grid', () => {
     )
   })
 
+  test('shows comprehensive IQ as the primary value with a software fallback', async () => {
+    const user = userEvent.setup()
+    render(
+      <CapabilityGrid
+        history={[]}
+        configurations={[
+          {
+            ...fixture,
+            model: 'dual',
+            comprehensive_iq: 118.5,
+            visual_iq: 130,
+          },
+          { ...fixture, model: 'swe-only', iq: 88.5 },
+        ]}
+      />
+    )
+
+    const dualCard = screen.getByRole('button', {
+      name: 'View details for dual medium',
+    })
+    expect(within(dualCard).getByText('118.5')).toBeVisible()
+    const fallbackCard = screen.getByRole('button', {
+      name: 'View details for swe-only medium',
+    })
+    expect(within(fallbackCard).getByText('88.5')).toBeVisible()
+
+    await user.click(dualCard)
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText('Comprehensive IQ')).toBeVisible()
+    expect(within(dialog).getByText('Software engineering IQ')).toBeVisible()
+    expect(
+      within(dialog).getByText('Visual spatial reasoning IQ')
+    ).toBeVisible()
+  })
+
   test('keeps different source models separate when their display names collide', () => {
     render(
       <CapabilityGrid
@@ -264,7 +299,7 @@ describe('model radar capability grid', () => {
     ).toBeVisible()
     expect(
       screen.getByText(
-        'Software engineering IQ uses up to the three latest valid samples per task, weighted equally, on a 150-point scale. The pass ratio counts samples, not distinct tasks.'
+        'Comprehensive IQ combines software-engineering and visual-spatial IQ, weighted by valid task count. Configurations without a visual-spatial score show the software-engineering IQ.'
       )
     ).toBeVisible()
 

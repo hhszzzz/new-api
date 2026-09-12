@@ -576,6 +576,22 @@ export function getPassRate(configuration: ModelRadarConfiguration): number {
   return configuration.passed / configuration.valid_tasks
 }
 
+export type RadarIqDimension = 'comprehensive' | 'software'
+
+// The radar page headlines the comprehensive IQ (software + visual, weighted by
+// valid task count). Configurations upstream has no visual-spatial score for
+// fall back to the software-engineering IQ, which is the only value they have.
+export function getPrimaryIq(configuration: ModelRadarConfiguration): {
+  value: number
+  dimension: RadarIqDimension
+} {
+  const comprehensive = configuration.comprehensive_iq
+  if (comprehensive !== null && comprehensive !== undefined) {
+    return { value: comprehensive, dimension: 'comprehensive' }
+  }
+  return { value: configuration.iq, dimension: 'software' }
+}
+
 // Builds a source-relative IQ trend, oldest first, even for stale snapshots.
 export function getHistorySeries(
   history: ModelRadarHistoryFrame[],
@@ -706,12 +722,13 @@ export function gatewayEffortCandidates(
     if (configuration.valid_tasks < minValidTasks) continue
     const effort = asGatewayEffort(configuration.effort)
     if (!effort) continue
+    const iq = getPrimaryIq(configuration).value
     const existing = byEffort.get(effort)
-    if (existing && existing.iq >= configuration.iq) continue
+    if (existing && existing.iq >= iq) continue
     byEffort.set(effort, {
       effort,
       radarEffort: configuration.effort.trim().toLowerCase(),
-      iq: configuration.iq,
+      iq,
       priceUsd: radarCandidatePrice(configuration),
     })
   }

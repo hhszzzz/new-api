@@ -137,13 +137,21 @@ func buildModelRadarAutoEffortIndex(configurations []ModelRadarConfiguration, fe
 		if key == "" {
 			continue
 		}
+		// Prefer the comprehensive IQ the radar page headlines, but fall back to
+		// the software-engineering IQ for models upstream has no visual score
+		// for (all Claude/DeepSeek/GLM tiers today). Coverage is all-or-nothing
+		// per model, so a bucket never mixes the two scales.
+		iq := configuration.IQ
+		if configuration.ComprehensiveIQ != nil {
+			iq = *configuration.ComprehensiveIQ
+		}
 		bucket := byModel[key]
 		bucket.Model = configuration.Model
 		bucket.FetchedAt = fetchedAt
 		bucket.Candidates = append(bucket.Candidates, ModelRadarEffortCandidate{
 			Effort:      effort,
 			RadarEffort: configuration.Effort,
-			IQ:          configuration.IQ,
+			IQ:          iq,
 			ValidTasks:  configuration.ValidTasks,
 			PriceUSD:    modelRadarCandidatePrice(configuration),
 		})

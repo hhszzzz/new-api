@@ -171,11 +171,29 @@ export function ConfigurationDetails(props: {
           <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
         </DialogClose>
 
-        <div className='grid grid-cols-2 gap-2 sm:grid-cols-4'>
+        <div className='grid grid-cols-2 gap-2 sm:grid-cols-3'>
           <div className='bg-muted/30 rounded-lg border px-3 py-2.5'>
-            <p className='text-muted-foreground text-[11px]'>{t('IQ')}</p>
+            <p className='text-muted-foreground text-[11px]'>
+              {t('Comprehensive IQ')}
+            </p>
+            <p className='mt-0.5 text-lg leading-tight font-semibold tabular-nums'>
+              {format.decimal(configuration.comprehensive_iq ?? null) ?? '—'}
+            </p>
+          </div>
+          <div className='bg-muted/30 rounded-lg border px-3 py-2.5'>
+            <p className='text-muted-foreground text-[11px]'>
+              {t('Software engineering IQ')}
+            </p>
             <p className='mt-0.5 text-lg leading-tight font-semibold tabular-nums'>
               {format.decimal(configuration.iq)}
+            </p>
+          </div>
+          <div className='bg-muted/30 rounded-lg border px-3 py-2.5'>
+            <p className='text-muted-foreground text-[11px]'>
+              {t('Visual spatial reasoning IQ')}
+            </p>
+            <p className='mt-0.5 text-lg leading-tight font-semibold tabular-nums'>
+              {format.decimal(configuration.visual_iq ?? null) ?? '—'}
             </p>
           </div>
           <div className='bg-muted/30 rounded-lg border px-3 py-2.5'>
@@ -269,8 +287,10 @@ export function ConfigurationDetails(props: {
           </div>
         </section>
 
-        <section aria-label={t('IQ trend (72h)')}>
-          <h3 className='mb-2 text-xs font-semibold'>{t('IQ trend (72h)')}</h3>
+        <section aria-label={t('Software engineering IQ trend (72h)')}>
+          <h3 className='mb-2 text-xs font-semibold'>
+            {t('Software engineering IQ trend (72h)')}
+          </h3>
           <div className='bg-muted/20 flex rounded-lg border p-3'>
             <Sparkline
               values={getHistorySeries(
@@ -307,7 +327,7 @@ export function ConfigurationDetails(props: {
           />
           <p className='text-muted-foreground text-xs leading-relaxed'>
             {t(
-              'Software engineering IQ uses up to the three latest valid samples per task, weighted equally, on a 150-point scale. The pass ratio counts samples, not distinct tasks.'
+              'Comprehensive IQ combines software-engineering and visual-spatial IQ, weighted by valid task count. Configurations without a visual-spatial score show the software-engineering IQ.'
             )}
           </p>
         </div>

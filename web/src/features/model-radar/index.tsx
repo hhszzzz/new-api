@@ -202,7 +202,7 @@ export function ModelRadar() {
               </div>
               <p className='text-muted-foreground mt-1.5 max-w-2xl text-sm'>
                 {t(
-                  'Software engineering (DeepSWE): IQ and duration across reasoning efforts.'
+                  'Comprehensive IQ (software + visual) and duration across reasoning efforts.'
                 )}
               </p>
               {snapshot ? (

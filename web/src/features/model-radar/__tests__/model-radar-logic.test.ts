@@ -36,6 +36,7 @@ import {
   splitRadarAliases,
   DEFAULT_RADAR_SETTINGS,
   getHistorySeries,
+  getPrimaryIq,
   getVendorMeta,
 } from '../lib/model-radar'
 import type { ModelRadarConfiguration } from '../types'
@@ -430,6 +431,33 @@ describe('model radar automatic reasoning tiers', () => {
       )
     ).toEqual({ effort: 'high', iq: 100, changed: true })
     expect(pickAutoEffort([], 'highest_iq', 5)).toBeNull()
+  })
+
+  test('ranks tiers by comprehensive IQ and falls back to software IQ', () => {
+    expect(getPrimaryIq(configuration('gpt-a', 'high'))).toEqual({
+      value: 100,
+      dimension: 'software',
+    })
+    expect(
+      getPrimaryIq({
+        ...configuration('gpt-a', 'high'),
+        comprehensive_iq: 120,
+        visual_iq: 140,
+      })
+    ).toEqual({ value: 120, dimension: 'comprehensive' })
+
+    const candidates = gatewayEffortCandidates([
+      { ...configuration('m', 'high'), iq: 95, comprehensive_iq: 88 },
+      { ...configuration('m', 'low'), iq: 70, comprehensive_iq: 110 },
+      { ...configuration('m', 'medium'), iq: 80, comprehensive_iq: null },
+    ])
+    // Comprehensive IQ decides the order; a null comprehensive value falls back
+    // to the software IQ.
+    expect(candidates.map((item) => [item.effort, item.iq])).toEqual([
+      ['low', 110],
+      ['high', 88],
+      ['medium', 80],
+    ])
   })
 
   test('matches a radar model to the user names it can be called by', () => {

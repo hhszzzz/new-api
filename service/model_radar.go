@@ -59,10 +59,15 @@ type ModelRadarPriceBand struct {
 }
 
 type ModelRadarConfiguration struct {
-	Model                 string               `json:"model"`
-	Effort                string               `json:"effort"`
-	Harness               string               `json:"harness"`
+	Model   string `json:"model"`
+	Effort  string `json:"effort"`
+	Harness string `json:"harness"`
+	// IQ is the software-engineering (DeepSWE) quotient. ComprehensiveIQ and
+	// VisualIQ come from the radar insights payload and are nil when upstream
+	// has no visual-spatial score for this configuration.
 	IQ                    float64              `json:"iq"`
+	ComprehensiveIQ       *float64             `json:"comprehensive_iq"`
+	VisualIQ              *float64             `json:"visual_iq"`
 	Passed                int                  `json:"passed"`
 	ValidTasks            int                  `json:"valid_tasks"`
 	AveragePriceUSD       *float64             `json:"average_price_usd"`
@@ -199,10 +204,19 @@ type modelRadarUpstreamAlert struct {
 	Degradation48hIQ *float64 `json:"degradation_48h_iq"`
 }
 
+type modelRadarComprehensivePoint struct {
+	Model    string   `json:"model"`
+	Effort   string   `json:"effort"`
+	IQ       *float64 `json:"iq"`
+	VisualIQ *float64 `json:"visual_iq"`
+	Samples  *int     `json:"samples"`
+}
+
 type modelRadarInsightsPayload struct {
-	Schema            int    `json:"schema"`
-	SourceUpdatedAt   string `json:"source_updated_at"`
-	DegradationAlerts struct {
+	Schema              int                            `json:"schema"`
+	SourceUpdatedAt     string                         `json:"source_updated_at"`
+	ComprehensivePoints []modelRadarComprehensivePoint `json:"comprehensive_points"`
+	DegradationAlerts   struct {
 		Items []modelRadarUpstreamAlert `json:"items"`
 	} `json:"degradation_alerts"`
 }
@@ -361,6 +375,25 @@ func fetchModelRadar(ctx context.Context, client *http.Client, efficiencyURL str
 	alerts, alertsUpdatedAt, err := normalizeModelRadarInsights(insights)
 	if err != nil {
 		return nil, fmt.Errorf("validate model radar insights data: %w", err)
+	}
+	comprehensive, err := normalizeModelRadarComprehensive(insights)
+	if err != nil {
+		return nil, fmt.Errorf("validate model radar comprehensive data: %w", err)
+	}
+	configurationIndex := make(map[string]int, len(configurations))
+	for index := range configurations {
+		configurationIndex[configurations[index].Model+"|"+configurations[index].Effort] = index
+	}
+	for key, point := range comprehensive {
+		index, ok := configurationIndex[key]
+		if !ok {
+			// Upstream also grades configurations the live software metrics have
+			// not published yet; skip those instead of failing the sync.
+			continue
+		}
+		iq, visualIQ := point.IQ, point.VisualIQ
+		configurations[index].ComprehensiveIQ = &iq
+		configurations[index].VisualIQ = &visualIQ
 	}
 
 	models := make(map[string]struct{}, len(configurations))
@@ -634,6 +667,46 @@ func normalizeModelRadarInsights(payload modelRadarInsightsPayload) ([]ModelRada
 		})
 	}
 	return alerts, updatedAt, nil
+}
+
+// modelRadarComprehensiveMetrics is the insight-sourced capability data that
+// upstream only publishes for configurations graded in both benchmarks.
+type modelRadarComprehensiveMetrics struct {
+	IQ       float64
+	VisualIQ float64
+}
+
+// normalizeModelRadarComprehensive indexes the radar insights comprehensive
+// points by model|effort. These are optional: upstream omits any configuration
+// without a visual-spatial score, and those tiers fall back to the software IQ.
+func normalizeModelRadarComprehensive(payload modelRadarInsightsPayload) (map[string]modelRadarComprehensiveMetrics, error) {
+	if payload.Schema != modelRadarInsightsSchema {
+		return nil, errors.New("unsupported insights schema")
+	}
+	if len(payload.ComprehensivePoints) > modelRadarMaxConfigurations {
+		return nil, errors.New("comprehensive point count is out of range")
+	}
+	metrics := make(map[string]modelRadarComprehensiveMetrics, len(payload.ComprehensivePoints))
+	for _, point := range payload.ComprehensivePoints {
+		_, _, key, err := validateModelRadarIdentity(point.Model, point.Effort)
+		if err != nil {
+			return nil, err
+		}
+		if _, exists := metrics[key]; exists {
+			return nil, fmt.Errorf("duplicate comprehensive point %s", key)
+		}
+		if point.IQ == nil || point.VisualIQ == nil {
+			return nil, fmt.Errorf("comprehensive point %s is missing iq or visual_iq", key)
+		}
+		if !isFiniteInRange(*point.IQ, 0, 150) || !isFiniteInRange(*point.VisualIQ, 0, 150) {
+			return nil, fmt.Errorf("comprehensive point %s has invalid iq", key)
+		}
+		if point.Samples != nil && *point.Samples < 0 {
+			return nil, fmt.Errorf("comprehensive point %s has negative samples", key)
+		}
+		metrics[key] = modelRadarComprehensiveMetrics{IQ: *point.IQ, VisualIQ: *point.VisualIQ}
+	}
+	return metrics, nil
 }
 
 func validateModelRadarIdentity(modelName string, effort string) (string, string, string, error) {
