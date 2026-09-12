@@ -37,9 +37,26 @@ const (
 	SubscriptionResetCustom  = "custom"
 )
 
+// User subscription status
+const (
+	SubscriptionStatusActive    = "active"
+	SubscriptionStatusPaused    = "paused"
+	SubscriptionStatusExpired   = "expired"
+	SubscriptionStatusCancelled = "cancelled"
+)
+
+// Rolling usage window spans. A window opens on the first request after the
+// previous window closed and lasts for the full span.
+const (
+	SubscriptionWindow5hSeconds     int64 = 5 * 60 * 60
+	SubscriptionWindowWeeklySeconds int64 = 7 * 24 * 60 * 60
+)
+
 var (
 	ErrSubscriptionOrderNotFound      = errors.New("subscription order not found")
 	ErrSubscriptionOrderStatusInvalid = errors.New("subscription order status invalid")
+	ErrSubscriptionNotActive          = errors.New("订阅当前不是生效状态")
+	ErrSubscriptionNotPaused          = errors.New("订阅当前不是暂停状态")
 )
 
 const (
@@ -193,6 +210,11 @@ type SubscriptionPlan struct {
 	QuotaResetPeriod        string `json:"quota_reset_period" gorm:"type:varchar(16);default:'never'"`
 	QuotaResetCustomSeconds int64  `json:"quota_reset_custom_seconds" gorm:"type:bigint;default:0"`
 
+	// Rolling usage windows on top of the total quota (0 = no limit). Each
+	// window opens on the first request after the previous one closed.
+	Quota5hAmount     int64 `json:"quota_5h_amount" gorm:"column:quota_5h_amount;type:bigint;not null;default:0"`
+	QuotaWeeklyAmount int64 `json:"quota_weekly_amount" gorm:"type:bigint;not null;default:0"`
+
 	CreatedAt int64 `json:"created_at" gorm:"bigint"`
 	UpdatedAt int64 `json:"updated_at" gorm:"bigint"`
 }
@@ -305,6 +327,18 @@ type UserSubscription struct {
 
 	// Whether wallet fallback is allowed after this subscription's quota is exhausted (snapshot from plan)
 	AllowWalletOverflow bool `json:"allow_wallet_overflow"`
+
+	// Rolling usage windows (snapshot from plan, 0 amount = no limit). Used
+	// counts and window end times are tracked per subscription.
+	Window5hAmount  int64 `json:"window_5h_amount" gorm:"column:window_5h_amount;type:bigint;not null;default:0"`
+	Window5hUsed    int64 `json:"window_5h_used" gorm:"column:window_5h_used;type:bigint;not null;default:0"`
+	Window5hEndTime int64 `json:"window_5h_end_time" gorm:"column:window_5h_end_time;type:bigint;not null;default:0"`
+	WeeklyAmount    int64 `json:"weekly_amount" gorm:"type:bigint;not null;default:0"`
+	WeeklyUsed      int64 `json:"weekly_used" gorm:"type:bigint;not null;default:0"`
+	WeeklyEndTime   int64 `json:"weekly_end_time" gorm:"type:bigint;not null;default:0"`
+
+	// PausedAt is set while the subscription is paused by an administrator.
+	PausedAt int64 `json:"paused_at" gorm:"type:bigint;not null;default:0"`
 
 	CreatedAt int64 `json:"created_at" gorm:"bigint"`
 	UpdatedAt int64 `json:"updated_at" gorm:"bigint"`
@@ -878,6 +912,8 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 		PrevUserGroup:       prevGroup,
 		DowngradeGroup:      strings.TrimSpace(plan.DowngradeGroup),
 		AllowWalletOverflow: allowWalletOverflow,
+		Window5hAmount:      max(plan.Quota5hAmount, 0),
+		WeeklyAmount:        max(plan.QuotaWeeklyAmount, 0),
 		CreatedAt:           common.GetTimestamp(),
 		UpdatedAt:           common.GetTimestamp(),
 	}
@@ -1253,19 +1289,31 @@ func GetAllActiveUserSubscriptions(userId int) ([]SubscriptionSummary, error) {
 // group must be funded by that subscription alone: wallet balance can never pay
 // for it, even after the subscription quota is exhausted.
 func HasActiveSubscriptionGrantingGroup(userId int, group string) (bool, error) {
+	granted, _, err := GetActiveSubscriptionGroupGrant(userId, group)
+	return granted, err
+}
+
+// GetActiveSubscriptionGroupGrant reports whether an active subscription grants
+// the group and, if so, whether wallet balance may take over once every granting
+// subscription's quota is exhausted. A single granting subscription that forbids
+// wallet overflow blocks the fallback for the whole group.
+func GetActiveSubscriptionGroupGrant(userId int, group string) (granted bool, allowWalletOverflow bool, err error) {
 	group = strings.TrimSpace(group)
 	if userId <= 0 || group == "" {
-		return false, nil
+		return false, false, nil
 	}
 	now := common.GetTimestamp()
-	var count int64
+	var overflowFlags []bool
 	if err := DB.Model(&UserSubscription{}).
 		Where("user_id = ? AND status = ? AND end_time > ? AND upgrade_group = ?",
 			userId, "active", now, group).
-		Count(&count).Error; err != nil {
-		return false, err
+		Pluck("allow_wallet_overflow", &overflowFlags).Error; err != nil {
+		return false, false, err
 	}
-	return count > 0, nil
+	if len(overflowFlags) == 0 {
+		return false, false, nil
+	}
+	return true, !slices.Contains(overflowFlags, false), nil
 }
 
 // EnsureNoActiveSubscriptionsForGroups rejects removing the given groups while an
@@ -1425,6 +1473,136 @@ func AdminInvalidateUserSubscription(userSubscriptionId int) (string, error) {
 	return "", nil
 }
 
+// AdminPauseUserSubscription suspends an active subscription: it stops funding
+// requests and releases the group it granted, but keeps its quota and can be
+// resumed later. The remaining validity is preserved across the pause.
+func AdminPauseUserSubscription(userSubscriptionId int) (string, error) {
+	if userSubscriptionId <= 0 {
+		return "", errors.New("invalid userSubscriptionId")
+	}
+	now := GetDBTimestamp()
+	cacheGroup := ""
+	policyChanged := false
+	var userId int
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var sub UserSubscription
+		if err := lockForUpdate(tx).
+			Where("id = ?", userSubscriptionId).First(&sub).Error; err != nil {
+			return err
+		}
+		userId = sub.UserId
+		if sub.Status != SubscriptionStatusActive || sub.EndTime <= now {
+			return ErrSubscriptionNotActive
+		}
+		if err := tx.Model(&sub).Updates(map[string]any{
+			"status":     SubscriptionStatusPaused,
+			"paused_at":  now,
+			"updated_at": common.GetTimestamp(),
+		}).Error; err != nil {
+			return err
+		}
+		target, changed, err := reconcileSubscriptionGroupMembershipTx(tx, &sub, now)
+		if err != nil {
+			return err
+		}
+		policyChanged = changed
+		if target != "" {
+			cacheGroup = target
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	if (cacheGroup != "" || policyChanged) && userId > 0 {
+		refreshSubscriptionUserGroupCache(userId, "admin subscription pause")
+	}
+	if cacheGroup != "" {
+		return fmt.Sprintf("用户主分组将调整为 %s", cacheGroup), nil
+	}
+	return "", nil
+}
+
+// AdminResumeUserSubscription reactivates a paused subscription, extends its
+// end time by the paused duration and re-grants its group.
+func AdminResumeUserSubscription(userSubscriptionId int) (string, error) {
+	if userSubscriptionId <= 0 {
+		return "", errors.New("invalid userSubscriptionId")
+	}
+	now := GetDBTimestamp()
+	policyChanged := false
+	groupMessage := ""
+	var userId int
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var sub UserSubscription
+		if err := lockForUpdate(tx).
+			Where("id = ?", userSubscriptionId).First(&sub).Error; err != nil {
+			return err
+		}
+		userId = sub.UserId
+		if sub.Status != SubscriptionStatusPaused {
+			return ErrSubscriptionNotPaused
+		}
+		pausedFor := int64(0)
+		if sub.PausedAt > 0 && now > sub.PausedAt {
+			pausedFor = now - sub.PausedAt
+		}
+		endTime := sub.EndTime
+		if endTime > 0 && endTime <= math.MaxInt64-pausedFor {
+			endTime += pausedFor
+		}
+		if endTime <= now {
+			return errors.New("订阅已过期，无法恢复")
+		}
+		if err := tx.Model(&sub).Updates(map[string]any{
+			"status":     SubscriptionStatusActive,
+			"paused_at":  0,
+			"end_time":   endTime,
+			"updated_at": common.GetTimestamp(),
+		}).Error; err != nil {
+			return err
+		}
+		upgradeGroup := strings.TrimSpace(sub.UpgradeGroup)
+		if upgradeGroup == "" {
+			return nil
+		}
+		// Lock the user row first to keep the account-policy lock order.
+		if _, err := getUserGroupByIdTx(tx, sub.UserId); err != nil {
+			return err
+		}
+		membershipChanged, policyTablesAvailable, err := addSubscriptionGroupMembershipTx(tx, sub.UserId, upgradeGroup)
+		if err != nil {
+			return err
+		}
+		if !policyTablesAvailable {
+			return tx.Model(&User{}).Where("id = ?", sub.UserId).Update("group", upgradeGroup).Error
+		}
+		target, primaryChanged, err := syncUserPrimaryGroupWithTx(tx, sub.UserId)
+		if err != nil {
+			return err
+		}
+		policyChanged = membershipChanged || primaryChanged
+		if policyChanged {
+			if _, err := IncrementUserPolicyVersionWithTx(tx, sub.UserId); err != nil {
+				return err
+			}
+		}
+		if primaryChanged && target != "" {
+			groupMessage = fmt.Sprintf("用户主分组已调整为 %s", target)
+		} else if membershipChanged {
+			groupMessage = fmt.Sprintf("已为用户恢复分组 %s", upgradeGroup)
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	if policyChanged && userId > 0 {
+		refreshSubscriptionUserGroupCache(userId, "admin subscription resume")
+	}
+	return groupMessage, nil
+}
+
 // AdminDeleteUserSubscription hard-deletes a user subscription.
 func AdminDeleteUserSubscription(userSubscriptionId int) (string, error) {
 	if userSubscriptionId <= 0 {
@@ -1519,6 +1697,8 @@ func resetUserSubscriptionTx(tx *gorm.DB, sub *UserSubscription, plan *Subscript
 		return errors.New("invalid reset args")
 	}
 	sub.AmountUsed = 0
+	sub.Window5hUsed, sub.Window5hEndTime = 0, 0
+	sub.WeeklyUsed, sub.WeeklyEndTime = 0, 0
 	if advanceResetTime {
 		nextReset := calcNextResetTime(time.Unix(now, 0), plan, sub.EndTime)
 		sub.NextResetTime = nextReset
@@ -1763,6 +1943,51 @@ func maybeResetUserSubscriptionWithPlanTx(tx *gorm.DB, sub *UserSubscription, pl
 	return tx.Save(sub).Error
 }
 
+// rollUsageWindows opens a fresh window for every limited rolling window whose
+// previous window has closed (or never opened). Unlimited windows are ignored.
+func (s *UserSubscription) rollUsageWindows(now int64) {
+	if s.Window5hAmount > 0 && s.Window5hEndTime <= now {
+		s.Window5hUsed, s.Window5hEndTime = 0, now+SubscriptionWindow5hSeconds
+	}
+	if s.WeeklyAmount > 0 && s.WeeklyEndTime <= now {
+		s.WeeklyUsed, s.WeeklyEndTime = 0, now+SubscriptionWindowWeeklySeconds
+	}
+}
+
+// exhaustedUsageWindow returns a user-facing reason when a rolling window
+// cannot absorb amount, or "" when every window still has room. Callers must
+// roll the windows first so a closed window is not reported as exhausted.
+func (s *UserSubscription) exhaustedUsageWindow(amount int64) string {
+	format := func(label string, end int64) string {
+		return fmt.Sprintf("%s额度已用完，将于 %s 重置", label, time.Unix(end, 0).Format("2006-01-02 15:04:05"))
+	}
+	if s.Window5hAmount > 0 && s.Window5hAmount-s.Window5hUsed < amount {
+		return format("5 小时", s.Window5hEndTime)
+	}
+	if s.WeeklyAmount > 0 && s.WeeklyAmount-s.WeeklyUsed < amount {
+		return format("每周", s.WeeklyEndTime)
+	}
+	return ""
+}
+
+// addUsageWindowDelta applies a consume (positive) or refund (negative) delta
+// to every limited window. Window counters saturate instead of failing so a
+// settlement can never be rejected by a secondary limit.
+func (s *UserSubscription) addUsageWindowDelta(delta int64) {
+	apply := func(used int64) int64 {
+		if delta > 0 && used > math.MaxInt64-delta {
+			return math.MaxInt64
+		}
+		return max(used+delta, 0)
+	}
+	if s.Window5hAmount > 0 {
+		s.Window5hUsed = apply(s.Window5hUsed)
+	}
+	if s.WeeklyAmount > 0 {
+		s.WeeklyUsed = apply(s.WeeklyUsed)
+	}
+}
+
 // PreConsumeUserSubscription pre-consumes from any active subscription total quota.
 // When group is non-empty, only subscriptions that granted that group may fund the
 // request, so a request in a subscription-owned group never draws on an unrelated
@@ -1813,6 +2038,7 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 		if len(subs) == 0 {
 			return errors.New("no active subscription")
 		}
+		blockedReason := ""
 		for _, candidate := range subs {
 			sub := candidate
 			subGroup := strings.TrimSpace(sub.UpgradeGroup)
@@ -1829,11 +2055,14 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 				return err
 			}
 			usedBefore := sub.AmountUsed
-			if sub.AmountTotal > 0 {
-				remain := sub.AmountTotal - usedBefore
-				if remain < amount {
-					continue
-				}
+			if sub.AmountTotal > 0 && sub.AmountTotal-usedBefore < amount {
+				blockedReason = "总额度不足"
+				continue
+			}
+			sub.rollUsageWindows(now)
+			if reason := sub.exhaustedUsageWindow(amount); reason != "" {
+				blockedReason = reason
+				continue
 			}
 			record := &SubscriptionPreConsumeRecord{
 				RequestId:          requestId,
@@ -1861,6 +2090,7 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 				return errors.New("subscription used amount overflow")
 			}
 			sub.AmountUsed += amount
+			sub.addUsageWindowDelta(amount)
 			if err := tx.Save(&sub).Error; err != nil {
 				return err
 			}
@@ -1870,6 +2100,9 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 			returnValue.AmountUsedBefore = usedBefore
 			returnValue.AmountUsedAfter = sub.AmountUsed
 			return nil
+		}
+		if blockedReason != "" {
+			return fmt.Errorf("subscription quota insufficient, need=%d: %s", amount, blockedReason)
 		}
 		return fmt.Errorf("subscription quota insufficient, need=%d", amount)
 	})
@@ -2029,5 +2262,6 @@ func postConsumeUserSubscriptionDeltaTx(tx *gorm.DB, userSubscriptionId int, del
 	if sub.AmountTotal > 0 && sub.AmountUsed > sub.AmountTotal {
 		return fmt.Errorf("subscription used exceeds total, used=%d total=%d", sub.AmountUsed, sub.AmountTotal)
 	}
+	sub.addUsageWindowDelta(delta)
 	return tx.Save(&sub).Error
 }

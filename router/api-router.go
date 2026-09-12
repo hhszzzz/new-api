@@ -206,6 +206,8 @@ func SetApiRouter(router *gin.Engine) {
 			subscriptionAdminRoute.POST("/users/:id/subscriptions", controller.AdminCreateUserSubscription)
 			subscriptionAdminRoute.POST("/users/:id/subscriptions/reset", controller.AdminResetUserSubscriptionsByPlan)
 			subscriptionAdminRoute.POST("/user_subscriptions/:id/invalidate", controller.AdminInvalidateUserSubscription)
+			subscriptionAdminRoute.POST("/user_subscriptions/:id/pause", controller.AdminPauseUserSubscription)
+			subscriptionAdminRoute.POST("/user_subscriptions/:id/resume", controller.AdminResumeUserSubscription)
 			subscriptionAdminRoute.DELETE("/user_subscriptions/:id", controller.AdminDeleteUserSubscription)
 
 			// Batch user subscription management (admin)

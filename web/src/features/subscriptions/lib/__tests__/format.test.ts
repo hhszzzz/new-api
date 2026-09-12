@@ -28,9 +28,9 @@ const t = ((key: string, options?: { group?: string }) =>
 
 describe('formatSubscriptionName', () => {
   test('names a subscription after the group it grants', () => {
-    expect(formatSubscriptionName({ upgrade_group: 'pro' }, 'Pro Plan', t)).toBe(
-      '{{group}} group subscription:pro'
-    )
+    expect(
+      formatSubscriptionName({ upgrade_group: 'pro' }, 'Pro Plan', t)
+    ).toBe('{{group}} group subscription:pro')
   })
 
   test('falls back to the plan title when no group is granted', () => {

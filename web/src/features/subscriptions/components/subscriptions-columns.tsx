@@ -26,7 +26,8 @@ import { StatusBadge } from '@/components/status-badge'
 import { TableId } from '@/components/table-id'
 import { formatQuota } from '@/lib/format'
 
-import { formatDuration, formatResetPeriod } from '../lib'
+import { USAGE_WINDOW_LABELS } from '../constants'
+import { formatDuration, formatResetPeriod, getPlanUsageLimits } from '../lib'
 import type { PlanRecord } from '../types'
 import { DataTableRowActions } from './data-table-row-actions'
 
@@ -186,14 +187,28 @@ export function useSubscriptionsColumns(): ColumnDef<PlanRecord>[] {
         header: t('Plan Quota'),
         meta: { mobileHidden: true },
         cell: ({ row }) => {
-          const total = Number(row.original.plan.total_amount || 0)
+          const limits = getPlanUsageLimits(row.original.plan)
+          if (limits.length === 0) {
+            return (
+              <span className='text-muted-foreground'>{t('Unlimited')}</span>
+            )
+          }
           return (
-            <span className='text-muted-foreground'>
-              {total > 0 ? formatQuota(total) : t('Unlimited')}
-            </span>
+            <div className='text-muted-foreground space-y-0.5 text-xs'>
+              {limits.map((limit) => (
+                <div key={limit.key} className='whitespace-nowrap'>
+                  <span className='text-muted-foreground/70'>
+                    {t(USAGE_WINDOW_LABELS[limit.key])}
+                  </span>{' '}
+                  <span className='text-foreground tabular-nums'>
+                    {formatQuota(limit.amount)}
+                  </span>
+                </div>
+              ))}
+            </div>
           )
         },
-        size: 150,
+        size: 170,
       },
       {
         id: 'upgrade_group',

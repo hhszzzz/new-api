@@ -27,7 +27,9 @@ import {
   getAdminPlans,
   getUserSubscriptions,
   invalidateUserSubscription,
+  pauseUserSubscription,
   resetUserSubscriptionsByPlan,
+  resumeUserSubscription,
 } from '../../../api'
 import { UserSubscriptionsDialog } from '../user-subscriptions-dialog'
 
@@ -40,7 +42,9 @@ vi.mock('../../../api', () => ({
   getAdminPlans: vi.fn(),
   getUserSubscriptions: vi.fn(),
   invalidateUserSubscription: vi.fn(),
+  pauseUserSubscription: vi.fn(),
   resetUserSubscriptionsByPlan: vi.fn(),
+  resumeUserSubscription: vi.fn(),
 }))
 
 vi.mock('react-i18next', () => {
@@ -239,6 +243,8 @@ const mockedDeleteSubscription = vi.mocked(deleteUserSubscription)
 const mockedGetAdminPlans = vi.mocked(getAdminPlans)
 const mockedGetUserSubscriptions = vi.mocked(getUserSubscriptions)
 const mockedInvalidateSubscription = vi.mocked(invalidateUserSubscription)
+const mockedPauseSubscription = vi.mocked(pauseUserSubscription)
+const mockedResumeSubscription = vi.mocked(resumeUserSubscription)
 const mockedResetSubscriptions = vi.mocked(resetUserSubscriptionsByPlan)
 
 const activeSubscription = {
@@ -264,6 +270,8 @@ beforeEach(() => {
   mockedGetAdminPlans.mockReset()
   mockedGetUserSubscriptions.mockReset()
   mockedInvalidateSubscription.mockReset()
+  mockedPauseSubscription.mockReset()
+  mockedResumeSubscription.mockReset()
   mockedResetSubscriptions.mockReset()
 
   mockedGetAdminPlans.mockResolvedValue({
@@ -285,6 +293,8 @@ beforeEach(() => {
           allow_wallet_overflow: true,
           max_purchase_per_user: 0,
           total_amount: 0,
+          quota_5h_amount: 0,
+          quota_weekly_amount: 0,
         },
       },
     ],
@@ -318,9 +328,7 @@ describe('user subscriptions dialog', () => {
       screen.getByRole('button', { name: 'Add subscription' })
     ).toBeEnabled()
 
-    await user.click(
-      screen.getByRole('button', { name: 'Add subscription' })
-    )
+    await user.click(screen.getByRole('button', { name: 'Add subscription' }))
     await waitFor(() => {
       expect(mockedCreateSubscription).toHaveBeenCalledWith(7, {
         plan_id: 1,
@@ -434,13 +442,81 @@ describe('user subscriptions dialog', () => {
       name: 'Confirm invalidate',
     })
     await user.click(
-      within(confirmDialog).getByRole('button', { name: 'Confirm' })
+      within(confirmDialog).getByRole('button', { name: 'Invalidate' })
     )
 
     await waitFor(() => {
       expect(toastError).toHaveBeenCalledWith('Invalidation rejected by policy')
     })
     expect(toastSuccess).not.toHaveBeenCalled()
+  })
+
+  test('pauses an active subscription after confirmation', async () => {
+    mockedGetUserSubscriptions.mockResolvedValue({
+      success: true,
+      data: [activeSubscription],
+    })
+    mockedPauseSubscription.mockResolvedValue({ success: true, data: {} })
+    const user = userEvent.setup()
+
+    render(
+      <UserSubscriptionsDialog
+        open
+        onOpenChange={() => undefined}
+        user={{ id: 7, username: 'subscription-user' }}
+      />
+    )
+
+    expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull()
+    await user.click(await screen.findByRole('button', { name: 'Pause' }))
+    const confirmDialog = await screen.findByRole('dialog', {
+      name: 'Pause subscription',
+    })
+    await user.click(
+      within(confirmDialog).getByRole('button', { name: 'Pause' })
+    )
+
+    await waitFor(() => {
+      expect(mockedPauseSubscription).toHaveBeenCalledWith(11)
+    })
+    expect(toastSuccess).toHaveBeenCalledWith('Subscription paused')
+  })
+
+  test('offers resume instead of pause for a paused subscription', async () => {
+    mockedGetUserSubscriptions.mockResolvedValue({
+      success: true,
+      data: [
+        {
+          subscription: {
+            ...activeSubscription.subscription,
+            status: 'paused',
+            paused_at: 2,
+          },
+        },
+      ],
+    })
+    mockedResumeSubscription.mockResolvedValue({
+      success: false,
+      message: 'Group is now manually assigned',
+    })
+    const user = userEvent.setup()
+
+    render(
+      <UserSubscriptionsDialog
+        open
+        onOpenChange={() => undefined}
+        user={{ id: 7, username: 'subscription-user' }}
+      />
+    )
+
+    expect(await screen.findByText('Paused')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Pause' })).toBeNull()
+    await user.click(screen.getByRole('button', { name: 'Resume' }))
+
+    await waitFor(() => {
+      expect(mockedResumeSubscription).toHaveBeenCalledWith(11)
+    })
+    expect(toastError).toHaveBeenCalledWith('Group is now manually assigned')
   })
 
   test('shows the server message when deletion is rejected', async () => {
@@ -467,7 +543,7 @@ describe('user subscriptions dialog', () => {
       name: 'Confirm delete',
     })
     await user.click(
-      within(confirmDialog).getByRole('button', { name: 'Confirm' })
+      within(confirmDialog).getByRole('button', { name: 'Delete' })
     )
 
     await waitFor(() => {

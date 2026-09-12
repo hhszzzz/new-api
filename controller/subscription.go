@@ -185,6 +185,10 @@ func AdminCreateSubscriptionPlan(c *gin.Context) {
 		common.ApiErrorMsg(c, "总额度不能为负数")
 		return
 	}
+	if req.Plan.Quota5hAmount < 0 || req.Plan.QuotaWeeklyAmount < 0 {
+		common.ApiErrorMsg(c, "周期额度不能为负数")
+		return
+	}
 	req.Plan.UpgradeGroup = strings.TrimSpace(req.Plan.UpgradeGroup)
 	if req.Plan.UpgradeGroup != "" {
 		if _, ok := ratio_setting.GetGroupRatioCopy()[req.Plan.UpgradeGroup]; !ok {
@@ -258,6 +262,10 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 		common.ApiErrorMsg(c, "总额度不能为负数")
 		return
 	}
+	if req.Plan.Quota5hAmount < 0 || req.Plan.QuotaWeeklyAmount < 0 {
+		common.ApiErrorMsg(c, "周期额度不能为负数")
+		return
+	}
 	req.Plan.UpgradeGroup = strings.TrimSpace(req.Plan.UpgradeGroup)
 	if req.Plan.UpgradeGroup != "" {
 		if _, ok := ratio_setting.GetGroupRatioCopy()[req.Plan.UpgradeGroup]; !ok {
@@ -295,6 +303,8 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 			"waffo_pancake_product_id":   req.Plan.WaffoPancakeProductId,
 			"max_purchase_per_user":      req.Plan.MaxPurchasePerUser,
 			"total_amount":               req.Plan.TotalAmount,
+			"quota_5h_amount":            req.Plan.Quota5hAmount,
+			"quota_weekly_amount":        req.Plan.QuotaWeeklyAmount,
 			"upgrade_group":              req.Plan.UpgradeGroup,
 			"downgrade_group":            req.Plan.DowngradeGroup,
 			"quota_reset_period":         req.Plan.QuotaResetPeriod,
@@ -561,6 +571,58 @@ func AdminInvalidateUserSubscription(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	if msg != "" {
+		common.ApiSuccess(c, gin.H{"message": msg})
+		return
+	}
+	common.ApiSuccess(c, nil)
+}
+
+// AdminPauseUserSubscription suspends an active user subscription.
+func AdminPauseUserSubscription(c *gin.Context) {
+	subId, _ := strconv.Atoi(c.Param("id"))
+	if subId <= 0 {
+		common.ApiErrorMsg(c, "无效的订阅ID")
+		return
+	}
+	userId, ok := getManageableSubscriptionById(c, subId)
+	if !ok {
+		return
+	}
+	msg, err := model.AdminPauseUserSubscription(subId)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAuditFor(c, userId, "subscription.user_pause", map[string]any{
+		"user_subscription_id": subId,
+	})
+	if msg != "" {
+		common.ApiSuccess(c, gin.H{"message": msg})
+		return
+	}
+	common.ApiSuccess(c, nil)
+}
+
+// AdminResumeUserSubscription reactivates a paused user subscription.
+func AdminResumeUserSubscription(c *gin.Context) {
+	subId, _ := strconv.Atoi(c.Param("id"))
+	if subId <= 0 {
+		common.ApiErrorMsg(c, "无效的订阅ID")
+		return
+	}
+	userId, ok := getManageableSubscriptionById(c, subId)
+	if !ok {
+		return
+	}
+	msg, err := model.AdminResumeUserSubscription(subId)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAuditFor(c, userId, "subscription.user_resume", map[string]any{
+		"user_subscription_id": subId,
+	})
 	if msg != "" {
 		common.ApiSuccess(c, gin.H{"message": msg})
 		return

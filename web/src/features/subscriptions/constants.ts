@@ -45,3 +45,13 @@ export function getDurationUnitOptions(t: TFunction) {
 export function getResetPeriodOptions(t: TFunction) {
   return RESET_PERIODS.map((p) => ({ value: p.value, label: t(p.labelKey) }))
 }
+
+// ============================================================================
+// Usage window labels
+// ============================================================================
+
+export const USAGE_WINDOW_LABELS = {
+  '5h': '5-hour limit',
+  weekly: 'Weekly limit',
+  monthly: 'Monthly limit',
+} as const

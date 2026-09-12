@@ -39,6 +39,8 @@ export function getPlanFormSchema(t: TFunction) {
       'custom',
     ]),
     quota_reset_custom_seconds: z.coerce.number().min(0).optional(),
+    quota_5h_amount: z.coerce.number().min(0),
+    quota_weekly_amount: z.coerce.number().min(0),
     enabled: z.boolean(),
     purchasable: z.boolean(),
     sort_order: z.coerce.number(),
@@ -65,6 +67,8 @@ export const PLAN_FORM_DEFAULTS: PlanFormValues = {
   custom_seconds: 0,
   quota_reset_period: 'never',
   quota_reset_custom_seconds: 0,
+  quota_5h_amount: 0,
+  quota_weekly_amount: 0,
   enabled: true,
   purchasable: true,
   sort_order: 0,
@@ -89,6 +93,10 @@ export function planToFormValues(plan: SubscriptionPlan): PlanFormValues {
     custom_seconds: Number(plan.custom_seconds || 0),
     quota_reset_period: plan.quota_reset_period || 'never',
     quota_reset_custom_seconds: Number(plan.quota_reset_custom_seconds || 0),
+    quota_5h_amount: quotaUnitsToDollars(Number(plan.quota_5h_amount || 0)),
+    quota_weekly_amount: quotaUnitsToDollars(
+      Number(plan.quota_weekly_amount || 0)
+    ),
     enabled: plan.enabled !== false,
     purchasable: plan.purchasable !== false,
     sort_order: Number(plan.sort_order || 0),
@@ -120,6 +128,12 @@ export function formValuesToPlanPayload(values: PlanFormValues): PlanPayload {
       sort_order: Number(values.sort_order || 0),
       max_purchase_per_user: Number(values.max_purchase_per_user || 0),
       total_amount: parseQuotaFromDollars(Number(values.total_amount || 0)),
+      quota_5h_amount: parseQuotaFromDollars(
+        Number(values.quota_5h_amount || 0)
+      ),
+      quota_weekly_amount: parseQuotaFromDollars(
+        Number(values.quota_weekly_amount || 0)
+      ),
       upgrade_group: values.upgrade_group || '',
       downgrade_group: values.downgrade_group || '',
     },

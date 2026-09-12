@@ -201,9 +201,18 @@ beforeEach(() => {
   toastSuccess.mockReset()
   toastWarning.mockReset()
   toastError.mockReset()
-  mockedAssign.mockResolvedValue({ success: true, data: { updated: 2, skipped: [] } })
-  mockedRevoke.mockResolvedValue({ success: true, data: { updated: 2, revoked: 2, skipped: [] } })
-  mockedReset.mockResolvedValue({ success: true, data: { updated: 2, reset_count: 2, skipped: [] } })
+  mockedAssign.mockResolvedValue({
+    success: true,
+    data: { updated: 2, skipped: [] },
+  })
+  mockedRevoke.mockResolvedValue({
+    success: true,
+    data: { updated: 2, revoked: 2, skipped: [] },
+  })
+  mockedReset.mockResolvedValue({
+    success: true,
+    data: { updated: 2, reset_count: 2, skipped: [] },
+  })
 })
 
 describe('user batch subscription dialog', () => {
@@ -253,7 +262,9 @@ describe('user batch subscription dialog', () => {
     const confirmDialog = await screen.findByRole('dialog', {
       name: 'Confirm batch subscription deletion',
     })
-    await user.click(within(confirmDialog).getByRole('button', { name: 'Confirm' }))
+    await user.click(
+      within(confirmDialog).getByRole('button', { name: 'Confirm' })
+    )
 
     await waitFor(() => {
       expect(mockedRevoke).toHaveBeenCalledWith({

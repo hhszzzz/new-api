@@ -482,7 +482,6 @@ export const STATIC_I18N_KEYS = [
   'Plan Price',
   'Amount the user pays to purchase this plan; the actual currency depends on the payment gateway.',
   'Plan Quota',
-  'Total quota included in the plan, usable per billing period. 0 means unlimited.',
   'Total Quota',
   '0 means unlimited',
   'Sort Order',

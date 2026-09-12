@@ -185,3 +185,33 @@ func TestManuallyAssignedGroupStillUsesWallet(t *testing.T) {
 	assert.Equal(t, BillingSourceWallet, info.BillingSource, "a manually assigned group must keep wallet billing available")
 	assert.Equal(t, 1_000_000-5000, f.userQuota(t))
 }
+
+func TestExhaustedGrantedSubscriptionFallsBackToWalletWhenPlanAllows(t *testing.T) {
+	f := newGroupBillingFixture(t, "pro", 1_000_000)
+	sub := f.grantSubscription(t, 100_000, 100_000, "pro")
+	require.NoError(t, f.db.Model(&sub).Update("allow_wallet_overflow", true).Error)
+
+	// The user prefers the wallet, but the granted group still drains the
+	// subscription first; only the plan's overflow switch opens the wallet.
+	info := f.relayInfo("req-group-overflow", "pro", "wallet_only")
+	require.Nil(t, PreConsumeBilling(newBillingContext(), 5000, info))
+
+	assert.Equal(t, BillingSourceWallet, info.BillingSource)
+	assert.Equal(t, 1_000_000-5000, f.userQuota(t))
+	assert.Equal(t, int64(100_000), f.subscriptionUsed(t, sub.Id))
+}
+
+func TestBillingPreferenceIgnoredWhenNoSubscriptionCanFundGroup(t *testing.T) {
+	f := newGroupBillingFixture(t, "pro", 1_000_000)
+	sub := f.grantSubscription(t, 100_000, 0, "pro")
+
+	// A group-tied subscription cannot fund the default group, so the wallet is
+	// the only source and a stale subscription_only preference must not lock the
+	// user out.
+	info := f.relayInfo("req-pref-ignored", "default", "subscription_only")
+	require.Nil(t, PreConsumeBilling(newBillingContext(), 5000, info))
+
+	assert.Equal(t, BillingSourceWallet, info.BillingSource)
+	assert.Equal(t, 1_000_000-5000, f.userQuota(t))
+	assert.Equal(t, int64(0), f.subscriptionUsed(t, sub.Id))
+}

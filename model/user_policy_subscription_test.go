@@ -558,3 +558,50 @@ func mustLoadPolicySubscriptionUser(t *testing.T, userId int) User {
 	require.NoError(t, DB.First(&user, userId).Error)
 	return user
 }
+
+func TestSubscriptionPauseReleasesGroupAndResumeRestoresIt(t *testing.T) {
+	setupUserPolicySubscriptionTestDB(t)
+	require.NoError(t, DB.AutoMigrate(&SubscriptionPreConsumeRecord{}))
+	user := createPolicySubscriptionTestUser(t, "legacy")
+	plan := createPolicySubscriptionTestPlan(t, "premium")
+
+	sub, err := CreateUserSubscriptionFromPlanTx(DB, user.Id, plan, "admin")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"legacy", "premium"}, groupNames(policySubscriptionTestGroups(t, user.Id)))
+	originalEnd := sub.EndTime
+
+	// 暂停：释放授予的分组，停止付费，但保留额度记录。
+	_, err = AdminPauseUserSubscription(sub.Id)
+	require.NoError(t, err)
+	var paused UserSubscription
+	require.NoError(t, DB.First(&paused, sub.Id).Error)
+	assert.Equal(t, SubscriptionStatusPaused, paused.Status)
+	assert.Greater(t, paused.PausedAt, int64(0))
+	assert.Equal(t, []string{"legacy"}, groupNames(policySubscriptionTestGroups(t, user.Id)))
+	_, err = PreConsumeUserSubscription("req-paused", user.Id, "gpt-4o", 0, 10, "premium")
+	require.Error(t, err, "暂停中的订阅不得为请求付费")
+	granted, _, err := GetActiveSubscriptionGroupGrant(user.Id, "premium")
+	require.NoError(t, err)
+	assert.False(t, granted)
+
+	// 重复暂停与恢复非暂停订阅都被拒绝。
+	_, err = AdminPauseUserSubscription(sub.Id)
+	require.ErrorIs(t, err, ErrSubscriptionNotActive)
+
+	// 恢复：回到生效状态，重新授予分组，并把暂停时长补回到期时间。
+	require.NoError(t, DB.Model(&UserSubscription{}).Where("id = ?", sub.Id).Update("paused_at", paused.PausedAt-600).Error)
+	_, err = AdminResumeUserSubscription(sub.Id)
+	require.NoError(t, err)
+	var resumed UserSubscription
+	require.NoError(t, DB.First(&resumed, sub.Id).Error)
+	assert.Equal(t, SubscriptionStatusActive, resumed.Status)
+	assert.EqualValues(t, 0, resumed.PausedAt)
+	assert.GreaterOrEqual(t, resumed.EndTime, originalEnd+600)
+	assert.Equal(t, []string{"legacy", "premium"}, groupNames(policySubscriptionTestGroups(t, user.Id)))
+	_, err = AdminResumeUserSubscription(sub.Id)
+	require.ErrorIs(t, err, ErrSubscriptionNotPaused)
+
+	res, err := PreConsumeUserSubscription("req-resumed", user.Id, "gpt-4o", 0, 10, "premium")
+	require.NoError(t, err)
+	assert.Equal(t, sub.Id, res.UserSubscriptionId)
+}

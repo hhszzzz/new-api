@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Ban, Plus, RotateCcw, Trash2 } from 'lucide-react'
+import { Ban, Pause, Play, Plus, RotateCcw, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -57,10 +57,17 @@ import {
   getUserSubscriptions,
   createUserSubscription,
   invalidateUserSubscription,
+  pauseUserSubscription,
+  resumeUserSubscription,
   deleteUserSubscription,
   resetUserSubscriptionsByPlan,
 } from '../../api'
-import { formatTimestamp } from '../../lib'
+import { USAGE_WINDOW_LABELS } from '../../constants'
+import {
+  formatTimestamp,
+  getSubscriptionState,
+  getUsageMeters,
+} from '../../lib'
 import type { PlanRecord, UserSubscriptionRecord } from '../../types'
 
 interface Props {
@@ -71,19 +78,19 @@ interface Props {
 }
 
 function isSubscriptionActive(
-  subscription: UserSubscriptionRecord['subscription']
+  subscription: UserSubscriptionRecord['subscription'],
+  nowSeconds: number
 ) {
-  const now = Date.now() / 1000
-  const isExpired =
-    (subscription.end_time || 0) > 0 && subscription.end_time < now
-  return subscription.status === 'active' && !isExpired
+  return getSubscriptionState(subscription, nowSeconds) === 'active'
 }
 
 function SubscriptionStatusBadge(props: {
   sub: UserSubscriptionRecord['subscription']
+  nowSeconds: number
   t: (key: string) => string
 }) {
-  if (isSubscriptionActive(props.sub)) {
+  const state = getSubscriptionState(props.sub, props.nowSeconds)
+  if (state === 'active') {
     return (
       <StatusBadge
         label={props.t('Active')}
@@ -92,7 +99,16 @@ function SubscriptionStatusBadge(props: {
       />
     )
   }
-  if (props.sub.status === 'cancelled') {
+  if (state === 'paused') {
+    return (
+      <StatusBadge
+        label={props.t('Paused')}
+        variant='warning'
+        copyable={false}
+      />
+    )
+  }
+  if (state === 'cancelled') {
     return (
       <StatusBadge
         label={props.t('Invalidated')}
@@ -110,12 +126,40 @@ function SubscriptionStatusBadge(props: {
   )
 }
 
+function SubscriptionUsageCell(props: {
+  sub: UserSubscriptionRecord['subscription']
+  nowSeconds: number
+}) {
+  const { t } = useTranslation()
+  const meters = getUsageMeters(props.sub, props.nowSeconds)
+  if (meters.length === 0) {
+    return <span className='text-muted-foreground'>{t('Unlimited')}</span>
+  }
+  return (
+    <div className='space-y-0.5 text-xs'>
+      {meters.map((meter) => (
+        <div key={meter.key} className='whitespace-nowrap'>
+          <span className='text-muted-foreground'>
+            {t(USAGE_WINDOW_LABELS[meter.key])}
+          </span>{' '}
+          <span className='tabular-nums'>
+            {formatQuota(meter.used)}/{formatQuota(meter.amount)}
+          </span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 export function UserSubscriptionsDialog(props: Props) {
   const { t } = useTranslation()
   const [loading, setLoading] = useState(false)
   const [creating, setCreating] = useState(false)
   const [plans, setPlans] = useState<PlanRecord[]>([])
   const [subs, setSubs] = useState<UserSubscriptionRecord[]>([])
+  // Snapshot taken whenever the list loads, so status checks stay stable
+  // across re-renders instead of drifting with the wall clock.
+  const [nowSeconds, setNowSeconds] = useState(() => Date.now() / 1000)
   const [selectedPlanId, setSelectedPlanId] = useState<string>('')
   const [sourceNote, setSourceNote] = useState('')
   const [pendingAssignment, setPendingAssignment] = useState<{
@@ -130,9 +174,10 @@ export function UserSubscriptionsDialog(props: Props) {
     planTitle: string
   } | null>(null)
   const [confirmAction, setConfirmAction] = useState<{
-    type: 'invalidate' | 'delete'
+    type: 'invalidate' | 'delete' | 'pause'
     subId: number
   } | null>(null)
+  const [resumingId, setResumingId] = useState<number | null>(null)
 
   const planTitleMap = useMemo(() => {
     const map = new Map<number, string>()
@@ -159,6 +204,7 @@ export function UserSubscriptionsDialog(props: Props) {
         }
         if (subsRes.success) {
           setSubs(subsRes.data || [])
+          setNowSeconds(Date.now() / 1000)
         } else {
           handleServerError(subsRes)
         }
@@ -231,7 +277,7 @@ export function UserSubscriptionsDialog(props: Props) {
     const hasActiveDuplicate = subs.some(
       (record) =>
         record.subscription.plan_id === planId &&
-        isSubscriptionActive(record.subscription)
+        isSubscriptionActive(record.subscription, nowSeconds)
     )
     if (hasActiveDuplicate) {
       setPendingAssignment({ planId, planTitle, sourceNote: note })
@@ -252,6 +298,15 @@ export function UserSubscriptionsDialog(props: Props) {
         } else {
           handleServerError(res)
         }
+      } else if (confirmAction.type === 'pause') {
+        const res = await pauseUserSubscription(confirmAction.subId)
+        if (res.success) {
+          toast.success(res.data?.message || t('Subscription paused'))
+          await refreshData()
+          props.onSuccess?.()
+        } else {
+          handleServerError(res)
+        }
       } else {
         const res = await deleteUserSubscription(confirmAction.subId)
         if (res.success) {
@@ -266,6 +321,24 @@ export function UserSubscriptionsDialog(props: Props) {
       handleServerError(error, t('Operation failed'))
     } finally {
       setConfirmAction(null)
+    }
+  }
+
+  const handleResume = async (subId: number) => {
+    setResumingId(subId)
+    try {
+      const res = await resumeUserSubscription(subId)
+      if (res.success) {
+        toast.success(res.data?.message || t('Subscription resumed'))
+        await refreshData()
+        props.onSuccess?.()
+      } else {
+        handleServerError(res)
+      }
+    } catch (error) {
+      handleServerError(error, t('Operation failed'))
+    } finally {
+      setResumingId(null)
     }
   }
 
@@ -294,6 +367,30 @@ export function UserSubscriptionsDialog(props: Props) {
       setResetting(false)
       setResetAction(null)
     }
+  }
+
+  const confirmActionCopy = {
+    invalidate: {
+      title: t('Confirm invalidate'),
+      desc: t(
+        'Invalidating ends this subscription now and cannot be undone. Use Pause if the user should get it back later. Continue?'
+      ),
+      confirm: t('Invalidate'),
+    },
+    pause: {
+      title: t('Pause subscription'),
+      desc: t(
+        'While paused, the subscription stops funding requests and its group is released. Resuming restores the group and extends the end time by the paused duration.'
+      ),
+      confirm: t('Pause'),
+    },
+    delete: {
+      title: t('Confirm delete'),
+      desc: t(
+        'Deleting will permanently remove this subscription record (including benefit details). Continue?'
+      ),
+      confirm: t('Delete'),
+    },
   }
 
   return (
@@ -383,7 +480,11 @@ export function UserSubscriptionsDialog(props: Props) {
                   id: 'status',
                   header: t('Status'),
                   cell: (record) => (
-                    <SubscriptionStatusBadge sub={record.subscription} t={t} />
+                    <SubscriptionStatusBadge
+                      sub={record.subscription}
+                      nowSeconds={nowSeconds}
+                      t={t}
+                    />
                   ),
                 },
                 {
@@ -406,15 +507,13 @@ export function UserSubscriptionsDialog(props: Props) {
                 },
                 {
                   id: 'quota',
-                  header: t('Total Quota'),
-                  cell: (record) => {
-                    const sub = record.subscription
-                    const total = Number(sub.amount_total || 0)
-                    const used = Number(sub.amount_used || 0)
-                    return total > 0
-                      ? `${formatQuota(used)}/${formatQuota(total)}`
-                      : t('Unlimited')
-                  },
+                  header: t('Quota'),
+                  cell: (record) => (
+                    <SubscriptionUsageCell
+                      sub={record.subscription}
+                      nowSeconds={nowSeconds}
+                    />
+                  ),
                 },
                 {
                   id: 'actions',
@@ -423,10 +522,34 @@ export function UserSubscriptionsDialog(props: Props) {
                   cellClassName: 'text-right',
                   cell: (record) => {
                     const sub = record.subscription
-                    const isActive = isSubscriptionActive(sub)
+                    const isActive = isSubscriptionActive(sub, nowSeconds)
+                    const isPaused = sub.status === 'paused'
 
                     return (
                       <DataTableRowActionMenu ariaLabel={t('Actions')}>
+                        {isPaused ? (
+                          <DropdownMenuItem
+                            disabled={resumingId === sub.id}
+                            onClick={() => void handleResume(sub.id)}
+                          >
+                            {t('Resume')}
+                            <DropdownMenuShortcut>
+                              <Play size={16} />
+                            </DropdownMenuShortcut>
+                          </DropdownMenuItem>
+                        ) : (
+                          <DropdownMenuItem
+                            disabled={!isActive}
+                            onClick={() =>
+                              setConfirmAction({ type: 'pause', subId: sub.id })
+                            }
+                          >
+                            {t('Pause')}
+                            <DropdownMenuShortcut>
+                              <Pause size={16} />
+                            </DropdownMenuShortcut>
+                          </DropdownMenuItem>
+                        )}
                         <DropdownMenuItem
                           disabled={!isActive}
                           onClick={() => {
@@ -445,7 +568,7 @@ export function UserSubscriptionsDialog(props: Props) {
                           </DropdownMenuShortcut>
                         </DropdownMenuItem>
                         <DropdownMenuItem
-                          disabled={!isActive}
+                          disabled={!isActive && !isPaused}
                           onClick={() =>
                             setConfirmAction({
                               type: 'invalidate',
@@ -487,20 +610,9 @@ export function UserSubscriptionsDialog(props: Props) {
         <ConfirmDialog
           open
           onOpenChange={(v) => !v && setConfirmAction(null)}
-          title={
-            confirmAction.type === 'invalidate'
-              ? t('Confirm invalidate')
-              : t('Confirm delete')
-          }
-          desc={
-            confirmAction.type === 'invalidate'
-              ? t(
-                  'After invalidating, this subscription will be immediately deactivated. Historical records are not affected. Continue?'
-                )
-              : t(
-                  'Deleting will permanently remove this subscription record (including benefit details). Continue?'
-                )
-          }
+          title={confirmActionCopy[confirmAction.type].title}
+          desc={confirmActionCopy[confirmAction.type].desc}
+          confirmText={confirmActionCopy[confirmAction.type].confirm}
           handleConfirm={handleConfirmAction}
           destructive={confirmAction.type === 'delete'}
         />

@@ -30,8 +30,9 @@ import { CreemConfirmDialog } from './components/dialogs/creem-confirm-dialog'
 import { PaymentConfirmDialog } from './components/dialogs/payment-confirm-dialog'
 import { TransferDialog } from './components/dialogs/transfer-dialog'
 import { RechargeFormCard } from './components/recharge-form-card'
-import { SubscriptionPlansCard } from './components/subscription-plans-card'
-import { WalletStatsCard } from './components/wallet-stats-card'
+import { MySubscriptionsCard } from './components/subscriptions/my-subscriptions-card'
+import { SubscriptionPlansCard } from './components/subscriptions/subscription-plans-card'
+import { WalletOverview } from './components/wallet-overview'
 import { DEFAULT_DISCOUNT_RATE, PAYMENT_TYPES } from './constants'
 import {
   useTopupInfo,
@@ -42,6 +43,7 @@ import {
   useWaffoPayment,
   useWaffoPancakePayment,
 } from './hooks'
+import { useWalletSubscriptions } from './hooks/use-wallet-subscriptions'
 import {
   getDefaultPaymentType,
   getMinTopupAmount,
@@ -80,11 +82,11 @@ export function Wallet(props: WalletProps) {
   const [creemDialogOpen, setCreemDialogOpen] = useState(false)
   const [selectedCreemProduct, setSelectedCreemProduct] =
     useState<CreemProduct | null>(null)
-  const [showSubscriptionPanel, setShowSubscriptionPanel] = useState(true)
 
   const { status } = useStatus()
   const { currency } = useSystemConfig()
   const { topupInfo, presetAmounts, loading: topupLoading } = useTopupInfo()
+  const walletSubscriptions = useWalletSubscriptions()
 
   // Calculate effective exchange rate - when display type is USD, use rate of 1
   const effectiveUsdExchangeRate = useMemo(() => {
@@ -292,67 +294,100 @@ export function Wallet(props: WalletProps) {
     return topupInfo?.discount?.[topupAmount] || DEFAULT_DISCOUNT_RATE
   }, [topupInfo, topupAmount])
 
-  const handleSubscriptionAvailabilityChange = useCallback(
-    (available: boolean) => {
-      setShowSubscriptionPanel(available)
-    },
-    []
-  )
+  // The subscription sections stay hidden until the deployment sells plans or
+  // the user already owns one, so a wallet-only site keeps a wallet-only page.
+  const showSubscriptions =
+    walletSubscriptions.loading ||
+    walletSubscriptions.plans.length > 0 ||
+    walletSubscriptions.subscriptions.length > 0
+
+  const scrollToSection = (id: string) => {
+    document.querySelector(`#${id}`)?.scrollIntoView({ behavior: 'smooth' })
+  }
 
   return (
     <>
       <SectionPageLayout>
         <SectionPageLayout.Title>{t('Wallet')}</SectionPageLayout.Title>
         <SectionPageLayout.Content>
-          <div className='mx-auto flex w-full max-w-7xl flex-col gap-4 sm:gap-5'>
-            <WalletStatsCard user={user} loading={userLoading} />
-
-            <div
-              className={
-                showSubscriptionPanel
-                  ? 'grid gap-4 xl:grid-cols-[minmax(0,1.05fr)_minmax(360px,0.95fr)] xl:items-start'
-                  : 'grid gap-4'
+          <div className='mx-auto flex w-full max-w-7xl flex-col gap-3 sm:gap-4'>
+            <WalletOverview
+              user={user}
+              loading={userLoading}
+              activeSubscriptionCount={
+                walletSubscriptions.activeSubscriptions.length
               }
-            >
-              <div id='wallet-add-funds' className='scroll-mt-4'>
-                <RechargeFormCard
+              showSubscriptions={showSubscriptions}
+              onAddFunds={() => scrollToSection('wallet-add-funds')}
+              onOpenBilling={() => setBillingDialogOpen(true)}
+            />
+
+            {showSubscriptions ? (
+              <MySubscriptionsCard
+                loading={walletSubscriptions.loading}
+                refreshing={walletSubscriptions.refreshing}
+                nowSeconds={walletSubscriptions.nowSeconds}
+                subscriptions={walletSubscriptions.subscriptions}
+                planTitleMap={walletSubscriptions.planTitleMap}
+                billingPreference={walletSubscriptions.billingPreference}
+                onBillingPreferenceChange={
+                  walletSubscriptions.changeBillingPreference
+                }
+                onRefresh={() => void walletSubscriptions.refresh()}
+                onBrowsePlans={
+                  walletSubscriptions.plans.length > 0
+                    ? () => scrollToSection('wallet-plans')
+                    : undefined
+                }
+              />
+            ) : null}
+
+            {showSubscriptions ? (
+              <div id='wallet-plans' className='scroll-mt-4'>
+                <SubscriptionPlansCard
+                  loading={walletSubscriptions.loading}
+                  plans={walletSubscriptions.plans}
+                  planPurchaseCountMap={
+                    walletSubscriptions.planPurchaseCountMap
+                  }
                   topupInfo={topupInfo}
-                  presetAmounts={presetAmounts}
-                  selectedPreset={selectedPreset}
-                  onSelectPreset={handleSelectPreset}
-                  topupAmount={topupAmount}
-                  onTopupAmountChange={handleTopupAmountChange}
-                  paymentAmount={paymentAmount}
-                  calculating={calculating}
-                  onPaymentMethodSelect={handlePaymentMethodSelect}
-                  paymentLoading={paymentLoading}
-                  redemptionCode={redemptionCode}
-                  onRedemptionCodeChange={setRedemptionCode}
-                  onRedeem={handleRedeem}
-                  redeeming={redeeming}
-                  topupLink={topupInfo?.topup_link}
-                  loading={topupLoading}
-                  priceRatio={(status?.price as number) || 1}
-                  usdExchangeRate={effectiveUsdExchangeRate}
-                  onOpenBilling={() => setBillingDialogOpen(true)}
-                  creemProducts={topupInfo?.creem_products}
-                  enableCreemTopup={topupInfo?.enable_creem_topup}
-                  onCreemProductSelect={handleCreemProductSelect}
-                  enableWaffoTopup={topupInfo?.enable_waffo_topup}
-                  waffoPayMethods={topupInfo?.waffo_pay_methods}
-                  waffoMinTopup={topupInfo?.waffo_min_topup}
-                  onWaffoMethodSelect={handleWaffoMethodSelect}
-                  enableWaffoPancakeTopup={
-                    topupInfo?.enable_waffo_pancake_topup
+                  userQuota={user?.quota}
+                  onPurchaseSuccess={refreshUser}
+                  onPurchaseDialogClose={() =>
+                    void walletSubscriptions.refresh()
                   }
                 />
               </div>
+            ) : null}
 
-              <SubscriptionPlansCard
+            <div id='wallet-add-funds' className='scroll-mt-4'>
+              <RechargeFormCard
                 topupInfo={topupInfo}
-                onAvailabilityChange={handleSubscriptionAvailabilityChange}
-                userQuota={user?.quota}
-                onPurchaseSuccess={refreshUser}
+                presetAmounts={presetAmounts}
+                selectedPreset={selectedPreset}
+                onSelectPreset={handleSelectPreset}
+                topupAmount={topupAmount}
+                onTopupAmountChange={handleTopupAmountChange}
+                paymentAmount={paymentAmount}
+                calculating={calculating}
+                onPaymentMethodSelect={handlePaymentMethodSelect}
+                paymentLoading={paymentLoading}
+                redemptionCode={redemptionCode}
+                onRedemptionCodeChange={setRedemptionCode}
+                onRedeem={handleRedeem}
+                redeeming={redeeming}
+                topupLink={topupInfo?.topup_link}
+                loading={topupLoading}
+                priceRatio={(status?.price as number) || 1}
+                usdExchangeRate={effectiveUsdExchangeRate}
+                creemProducts={topupInfo?.creem_products}
+                enableCreemTopup={topupInfo?.enable_creem_topup}
+                onCreemProductSelect={handleCreemProductSelect}
+                enableWaffoTopup={topupInfo?.enable_waffo_topup}
+                waffoPayMethods={topupInfo?.waffo_pay_methods}
+                waffoMinTopup={topupInfo?.waffo_min_topup}
+                onWaffoMethodSelect={handleWaffoMethodSelect}
+                enableWaffoPancakeTopup={topupInfo?.enable_waffo_pancake_topup}
               />
             </div>
 

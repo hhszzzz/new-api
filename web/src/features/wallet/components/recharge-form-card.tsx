@@ -203,6 +203,7 @@ export function RechargeFormCard({
       icon={<WalletCards className='h-4 w-4' />}
       iconTone='success'
       disableHoverEffect
+      compact
       action={
         onOpenBilling ? (
           <Button

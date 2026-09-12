@@ -36,6 +36,8 @@ type TitledCardProps = {
   action?: ReactNode
   children?: ReactNode
   disableHoverEffect?: boolean
+  /** Tighter header, title and padding for dense pages such as the wallet. */
+  compact?: boolean
   className?: string
   headerClassName?: string
   contentClassName?: string
@@ -52,6 +54,7 @@ export function TitledCard({
   action,
   children,
   disableHoverEffect,
+  compact,
   className,
   headerClassName,
   contentClassName,
@@ -66,19 +69,28 @@ export function TitledCard({
       className={cn('gap-0 overflow-hidden py-0', className)}
     >
       <CardHeader
-        className={cn('border-b p-3 !pb-3 sm:p-5 sm:!pb-5', headerClassName)}
+        className={cn(
+          'border-b',
+          compact ? 'p-3' : 'p-3 !pb-3 sm:p-5 sm:!pb-5',
+          headerClassName
+        )}
       >
         <div className='flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between'>
           <div className='flex min-w-0 items-center gap-3'>
             {icon != null && (
-              <IconBadge size='title' tone={iconTone} className={iconClassName}>
+              <IconBadge
+                size={compact ? 'sm' : 'title'}
+                tone={iconTone}
+                className={iconClassName}
+              >
                 {icon}
               </IconBadge>
             )}
             <div className='min-w-0'>
               <CardTitle
                 className={cn(
-                  'text-lg tracking-tight sm:text-xl',
+                  compact ? 'text-base sm:text-lg' : 'text-lg sm:text-xl',
+                  'tracking-tight',
                   titleClassName
                 )}
               >
@@ -86,7 +98,10 @@ export function TitledCard({
               </CardTitle>
               {description != null && (
                 <CardDescription
-                  className={cn('text-xs sm:text-sm', descriptionClassName)}
+                  className={cn(
+                    compact ? 'text-xs' : 'text-xs sm:text-sm',
+                    descriptionClassName
+                  )}
                 >
                   {description}
                 </CardDescription>
@@ -98,7 +113,7 @@ export function TitledCard({
           )}
         </div>
       </CardHeader>
-      <CardContent className={cn('p-3 sm:p-5', contentClassName)}>
+      <CardContent className={cn(compact ? 'p-3 sm:p-4' : 'p-3 sm:p-5', contentClassName)}>
         {children}
       </CardContent>
     </Card>

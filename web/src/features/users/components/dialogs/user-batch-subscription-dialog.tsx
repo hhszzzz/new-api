@@ -43,11 +43,7 @@ import {
 } from '@/features/subscriptions/api'
 import type { UserBatchSubscriptionSkip } from '@/features/subscriptions/types'
 
-type BatchSubscriptionOperation =
-  | 'assign'
-  | 'invalidate'
-  | 'delete'
-  | 'reset'
+type BatchSubscriptionOperation = 'assign' | 'invalidate' | 'delete' | 'reset'
 
 type UserBatchSubscriptionDialogProps = {
   open: boolean
@@ -222,11 +218,16 @@ export function UserBatchSubscriptionDialog(
                 setOperation(value as BatchSubscriptionOperation)
               }
             >
-              <SelectTrigger id='batch-subscription-operation' className='w-full'>
+              <SelectTrigger
+                id='batch-subscription-operation'
+                className='w-full'
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value='assign'>{t('Assign subscription')}</SelectItem>
+                <SelectItem value='assign'>
+                  {t('Assign subscription')}
+                </SelectItem>
                 <SelectItem value='invalidate'>
                   {t('Invalidate subscription')}
                 </SelectItem>

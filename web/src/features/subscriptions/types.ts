@@ -33,6 +33,8 @@ export const subscriptionPlanSchema = z.object({
   custom_seconds: z.number().optional(),
   quota_reset_period: z.enum(['never', 'daily', 'weekly', 'monthly', 'custom']),
   quota_reset_custom_seconds: z.number().optional(),
+  quota_5h_amount: z.number().optional().default(0),
+  quota_weekly_amount: z.number().optional().default(0),
   enabled: z.boolean(),
   purchasable: z.boolean().optional().default(true),
   sort_order: z.number(),
@@ -70,6 +72,14 @@ export const userSubscriptionSchema = z.object({
   amount_used: z.number(),
   next_reset_time: z.number().optional(),
   upgrade_group: z.string().optional(),
+  allow_wallet_overflow: z.boolean().optional(),
+  window_5h_amount: z.number().optional(),
+  window_5h_used: z.number().optional(),
+  window_5h_end_time: z.number().optional(),
+  weekly_amount: z.number().optional(),
+  weekly_used: z.number().optional(),
+  weekly_end_time: z.number().optional(),
+  paused_at: z.number().optional(),
 })
 
 export type UserSubscription = z.infer<typeof userSubscriptionSchema>

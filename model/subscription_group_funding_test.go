@@ -292,3 +292,85 @@ func TestUpdateOptionsBulkBlocksRemovingGroupUsedByActiveSubscription(t *testing
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "pro")
 }
+
+func TestPreConsumeUserSubscriptionRollingWindowsLimitAndReopen(t *testing.T) {
+	setupSubscriptionGroupFundingTestDB(t)
+	user := createGroupFundingUser(t, "window-user")
+	now := time.Now().Unix()
+	plan := createGroupFundingPlan(t, "pro")
+	sub := createGroupFundingSubscription(t, user.Id, plan.Id, "pro", 0, "active", now+3600)
+	require.NoError(t, DB.Model(sub).Updates(map[string]any{
+		"window_5h_amount": 100,
+		"weekly_amount":    1000,
+	}).Error)
+
+	// 首次请求打开 5 小时窗口和周窗口，两者同时计数。
+	res, err := PreConsumeUserSubscription("req-window-1", user.Id, "gpt-4o", 0, 60, "pro")
+	require.NoError(t, err)
+	assert.Equal(t, sub.Id, res.UserSubscriptionId)
+	var reloaded UserSubscription
+	require.NoError(t, DB.First(&reloaded, sub.Id).Error)
+	assert.EqualValues(t, 60, reloaded.Window5hUsed)
+	assert.EqualValues(t, 60, reloaded.WeeklyUsed)
+	assert.Greater(t, reloaded.Window5hEndTime, now+SubscriptionWindow5hSeconds-5)
+	assert.Greater(t, reloaded.WeeklyEndTime, now+SubscriptionWindowWeeklySeconds-5)
+
+	// 超出 5 小时窗口时拒绝，并提示是哪个窗口、何时重置。
+	_, err = PreConsumeUserSubscription("req-window-2", user.Id, "gpt-4o", 0, 50, "pro")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "subscription quota insufficient")
+	assert.Contains(t, err.Error(), "5 小时")
+	require.NoError(t, DB.First(&reloaded, sub.Id).Error)
+	assert.EqualValues(t, 60, reloaded.Window5hUsed, "被拒绝的请求不得计入窗口")
+
+	// 退款同步回退窗口计数。
+	require.NoError(t, RefundSubscriptionPreConsume("req-window-1"))
+	require.NoError(t, DB.First(&reloaded, sub.Id).Error)
+	assert.EqualValues(t, 0, reloaded.Window5hUsed)
+	assert.EqualValues(t, 0, reloaded.WeeklyUsed)
+	assert.EqualValues(t, 0, reloaded.AmountUsed)
+
+	// 窗口关闭后，下一次请求重新打开窗口并从零计数。
+	require.NoError(t, DB.Model(&UserSubscription{}).Where("id = ?", sub.Id).Updates(map[string]any{
+		"window_5h_used":     100,
+		"window_5h_end_time": now - 1,
+	}).Error)
+	res, err = PreConsumeUserSubscription("req-window-3", user.Id, "gpt-4o", 0, 90, "pro")
+	require.NoError(t, err)
+	assert.Equal(t, sub.Id, res.UserSubscriptionId)
+	require.NoError(t, DB.First(&reloaded, sub.Id).Error)
+	assert.EqualValues(t, 90, reloaded.Window5hUsed)
+	assert.Greater(t, reloaded.Window5hEndTime, now)
+}
+
+func TestGetActiveSubscriptionGroupGrantReportsWalletOverflow(t *testing.T) {
+	setupSubscriptionGroupFundingTestDB(t)
+	user := createGroupFundingUser(t, "grant-overflow")
+	now := time.Now().Unix()
+	plan := createGroupFundingPlan(t, "pro")
+
+	granted, allow, err := GetActiveSubscriptionGroupGrant(user.Id, "pro")
+	require.NoError(t, err)
+	assert.False(t, granted)
+	assert.False(t, allow)
+
+	permissive := createGroupFundingSubscription(t, user.Id, plan.Id, "pro", 100, "active", now+3600)
+	require.NoError(t, DB.Model(permissive).Update("allow_wallet_overflow", true).Error)
+	granted, allow, err = GetActiveSubscriptionGroupGrant(user.Id, "pro")
+	require.NoError(t, err)
+	assert.True(t, granted)
+	assert.True(t, allow, "唯一的授予订阅允许回退钱包")
+
+	strict := createGroupFundingSubscription(t, user.Id, plan.Id, "pro", 100, "active", now+3600)
+	require.NoError(t, DB.Model(strict).Update("allow_wallet_overflow", false).Error)
+	granted, allow, err = GetActiveSubscriptionGroupGrant(user.Id, "pro")
+	require.NoError(t, err)
+	assert.True(t, granted)
+	assert.False(t, allow, "任一授予订阅禁止回退钱包即整体禁止")
+
+	require.NoError(t, DB.Model(strict).Update("status", SubscriptionStatusPaused).Error)
+	granted, allow, err = GetActiveSubscriptionGroupGrant(user.Id, "pro")
+	require.NoError(t, err)
+	assert.True(t, granted)
+	assert.True(t, allow, "暂停的订阅不参与判断")
+}

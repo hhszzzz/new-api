@@ -17,7 +17,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
-import { CalendarClock, CreditCard, RefreshCw, Settings2 } from 'lucide-react'
+import {
+  CalendarClock,
+  CreditCard,
+  Gauge,
+  RefreshCw,
+  Settings2,
+} from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useForm, useWatch, type Resolver } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
@@ -366,46 +372,6 @@ export function SubscriptionsMutateDrawer({
 
                 <FormField
                   control={form.control}
-                  name='total_amount'
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>
-                        {t('Quota ({{currency}})', { currency: currencyLabel })}
-                      </FormLabel>
-                      <FormControl>
-                        <Input
-                          {...field}
-                          type='number'
-                          min={0}
-                          step={tokensOnly ? 1 : 0.01}
-                          placeholder={
-                            tokensOnly
-                              ? t('Enter quota in tokens')
-                              : t('Enter quota in {{currency}}', {
-                                  currency: currencyLabel,
-                                })
-                          }
-                          onChange={(e) =>
-                            field.onChange(
-                              Number.parseFloat(e.target.value) || 0
-                            )
-                          }
-                        />
-                      </FormControl>
-                      <FormDescription>
-                        {t(
-                          'Total quota included in the plan, usable per billing period. 0 means unlimited.'
-                        )}
-                      </FormDescription>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              </div>
-
-              <div className='grid grid-cols-1 gap-3 sm:grid-cols-2'>
-                <FormField
-                  control={form.control}
                   name='upgrade_group'
                   render={({ field }) => (
                     <FormItem>
@@ -747,6 +713,58 @@ export function SubscriptionsMutateDrawer({
                     </FormItem>
                   )}
                 />
+              </div>
+            </SideDrawerSection>
+
+            {/* Quota limits */}
+            <SideDrawerSection>
+              <h3 className='flex items-center gap-2 text-sm font-medium'>
+                <IconBadge tone='chart-1' size='xs'>
+                  <Gauge />
+                </IconBadge>
+                {t('Quota Limits')}
+              </h3>
+              <p className='text-muted-foreground text-xs'>
+                {t(
+                  'Caps for this plan. The 5-hour and weekly windows open on the first request and reset when they close; the monthly cap is the plan total and follows the reset period. 0 disables a cap.'
+                )}
+              </p>
+
+              <div className='grid grid-cols-1 gap-3 sm:grid-cols-3'>
+                {(
+                  [
+                    ['quota_5h_amount', t('5-hour limit')],
+                    ['quota_weekly_amount', t('Weekly limit')],
+                    ['total_amount', t('Monthly limit')],
+                  ] as const
+                ).map(([name, label]) => (
+                  <FormField
+                    key={name}
+                    control={form.control}
+                    name={name}
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>
+                          {label} ({currencyLabel})
+                        </FormLabel>
+                        <FormControl>
+                          <Input
+                            {...field}
+                            type='number'
+                            min={0}
+                            step={tokensOnly ? 1 : 0.01}
+                            onChange={(e) =>
+                              field.onChange(
+                                Number.parseFloat(e.target.value) || 0
+                              )
+                            }
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                ))}
               </div>
             </SideDrawerSection>
 
