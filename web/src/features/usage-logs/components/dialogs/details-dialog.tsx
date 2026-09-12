@@ -83,6 +83,7 @@ import {
   getResponseTimeColor,
   resolveLogTimingMetrics,
   getReasoningEffortVariant,
+  getReasoningEffortAutoPolicyLabel,
   renderAuditContent,
 } from '../../lib/format'
 import { getModelRouteInfo } from '../../lib/model-route'
@@ -755,6 +756,16 @@ export function DetailsDialog(props: DetailsDialogProps) {
   const reasoningEffortVariant = getReasoningEffortVariant(
     other?.reasoning_effort
   )
+  const autoEffort = other?.reasoning_effort_auto
+  const showAutoEffort = Boolean(autoEffort?.applied)
+  const autoEffortFrom = autoEffort?.from?.trim()
+  const autoEffortPolicyLabel = getReasoningEffortAutoPolicyLabel(
+    autoEffort?.policy
+  )
+  const showAutoEffortFrom =
+    showAutoEffort &&
+    Boolean(autoEffortFrom) &&
+    autoEffortFrom?.toLowerCase() !== other?.reasoning_effort?.toLowerCase()
 
   return (
     <Dialog
@@ -918,6 +929,45 @@ export function DetailsDialog(props: DetailsDialogProps) {
                   copyable={false}
                   className='font-mono !text-xs leading-normal'
                 />
+              }
+            />
+          )}
+
+          {showAutoEffort && (
+            <DetailRow
+              label={t('Automatic reasoning effort')}
+              value={
+                <span className='flex flex-wrap items-center gap-1.5'>
+                  {showAutoEffortFrom && autoEffortFrom ? (
+                    <span className='flex items-center'>
+                      <StatusBadge
+                        label={autoEffortFrom}
+                        variant={getReasoningEffortVariant(autoEffortFrom)}
+                        size='sm'
+                        type='text'
+                        copyable={false}
+                        className='font-mono !text-xs leading-normal'
+                      />
+                      <span className='text-muted-foreground mx-1'>→</span>
+                    </span>
+                  ) : null}
+                  <StatusBadge
+                    label={t('Auto')}
+                    variant='info'
+                    size='sm'
+                    type='text'
+                    copyable={false}
+                    className='!text-xs leading-normal'
+                  />
+                  {autoEffortPolicyLabel ? (
+                    <span className='text-muted-foreground'>
+                      {t(autoEffortPolicyLabel)}
+                      {typeof autoEffort?.iq === 'number'
+                        ? ` · IQ ${autoEffort.iq}`
+                        : ''}
+                    </span>
+                  ) : null}
+                </span>
               }
             />
           )}

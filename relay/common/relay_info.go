@@ -83,6 +83,31 @@ type TokenCountMeta struct {
 	estimatePromptTokens int
 }
 
+// Radar auto-effort outcomes that prevented a replacement. They are surfaced in
+// the request log so a user can tell why a request kept its own tier.
+const (
+	RadarAutoEffortSkipClientDefault  = "client_default"
+	RadarAutoEffortSkipAlreadyBest    = "already_best"
+	RadarAutoEffortSkipNoCandidate    = "no_candidate"
+	RadarAutoEffortSkipStale          = "stale"
+	RadarAutoEffortSkipInvalidRequest = "invalid_request"
+)
+
+// RadarAutoEffortDecision is the per-request outcome of the user's radar-driven
+// reasoning tier override.
+type RadarAutoEffortDecision struct {
+	Applied    bool
+	SkipReason string
+	// Model is the radar model the gateway model resolved to.
+	Model     string
+	Base      string
+	From      kitreasoning.Effort
+	To        kitreasoning.Effort
+	Policy    string
+	IQ        float64
+	FetchedAt int64
+}
+
 type RelayInfo struct {
 	TokenId           int
 	TokenKey          string
@@ -118,19 +143,25 @@ type RelayInfo struct {
 	// BillingModelName is an internal pricing identity. It is only set when
 	// billing intentionally uses a virtual or routed model variant while
 	// OriginModelName must remain the immutable client-requested identity.
-	BillingModelName        string
-	RequestURLPath          string
-	RequestHeaders          map[string]string
-	ShouldIncludeUsage      bool
-	DisablePing             bool // 是否禁止向下游发送自定义 Ping
-	ClientWs                *websocket.Conn
-	TargetWs                *websocket.Conn
-	InputAudioFormat        string
-	OutputAudioFormat       string
-	RealtimeTools           []dto.RealTimeTool
-	IsFirstRequest          bool
-	AudioUsage              bool
-	ReasoningEffort         string
+	BillingModelName   string
+	RequestURLPath     string
+	RequestHeaders     map[string]string
+	ShouldIncludeUsage bool
+	DisablePing        bool // 是否禁止向下游发送自定义 Ping
+	ClientWs           *websocket.Conn
+	TargetWs           *websocket.Conn
+	InputAudioFormat   string
+	OutputAudioFormat  string
+	RealtimeTools      []dto.RealTimeTool
+	IsFirstRequest     bool
+	AudioUsage         bool
+	ReasoningEffort    string
+	// RadarAutoEffort records the user's radar-driven reasoning tier override
+	// for this request. It is decided before pricing (the billing identity
+	// depends on it) and applied to the outbound request by
+	// ApplyReasoningModelSuffix. It is nil when the user has auto-effort
+	// switched off for the requested model.
+	RadarAutoEffort         *RadarAutoEffortDecision
 	UserSetting             dto.UserSetting
 	UserEmail               string
 	UserQuota               int
@@ -543,6 +574,10 @@ func (info *RelayInfo) ToString() string {
 	// Reasoning
 	if info.ReasoningEffort != "" {
 		fmt.Fprintf(b, "ReasoningEffort: %q, ", info.ReasoningEffort)
+	}
+	if info.RadarAutoEffort != nil && info.RadarAutoEffort.Applied {
+		fmt.Fprintf(b, "RadarAutoEffort: %q->%q (policy %s), ",
+			info.RadarAutoEffort.From, info.RadarAutoEffort.To, info.RadarAutoEffort.Policy)
 	}
 
 	// Price data (non-sensitive)

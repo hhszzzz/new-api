@@ -2018,8 +2018,46 @@ func UpdateUserSetting(c *gin.Context) {
 		}
 	}
 
+	// This endpoint owns only the notification and privacy fields. Carry over the
+	// settings other endpoints manage, otherwise saving notifications drops them.
+	settings.SidebarModules = existingSettings.SidebarModules
+	settings.Language = existingSettings.Language
+	settings.BillingPreference = existingSettings.BillingPreference
+	settings.RadarAutoEffort = existingSettings.RadarAutoEffort
+
 	// 更新用户设置
 	if err := model.UpdateUserSetting(user.Id, settings); err != nil {
+		common.ApiErrorI18n(c, i18n.MsgUpdateFailed)
+		return
+	}
+
+	common.ApiSuccessI18n(c, i18n.MsgSettingSaved, nil)
+}
+
+// UpdateUserRadarAutoEffort replaces the caller's radar auto-effort preference.
+// It is separate from UpdateUserSetting because the payload is a nested object
+// rather than one of that endpoint's flat fields.
+func UpdateUserRadarAutoEffort(c *gin.Context) {
+	var request dto.RadarAutoEffortSetting
+	if err := c.ShouldBindJSON(&request); err != nil {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	normalized, err := dto.NormalizeRadarAutoEffortSetting(request)
+	if err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
+	}
+
+	userId := c.GetInt("id")
+	user, err := model.GetUserById(userId, true)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	setting := user.GetSetting()
+	setting.RadarAutoEffort = normalized
+	if err := model.UpdateUserSetting(user.Id, setting); err != nil {
 		common.ApiErrorI18n(c, i18n.MsgUpdateFailed)
 		return
 	}

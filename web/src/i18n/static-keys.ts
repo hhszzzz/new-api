@@ -766,4 +766,8 @@ export const STATIC_I18N_KEYS = [
   'Vendor name and icon must not exceed 128 characters.',
   'Shown',
   'Not shown',
+  // Model radar automatic reasoning tier strategies (labelKey values).
+  'Highest IQ',
+  'Best value for the price',
+  'Only when clearly better',
 ] as const

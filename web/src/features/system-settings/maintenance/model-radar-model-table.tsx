@@ -70,6 +70,8 @@ export function ModelRadarModelTable(props: {
           displayName: '',
           vendor: '',
           hidden: false,
+          autoEffort: false,
+          aliases: '',
         })) ?? []
     if (additions.length) append(additions, { shouldFocus: false })
   }, [props.snapshot, props.form, append])
@@ -92,7 +94,7 @@ export function ModelRadarModelTable(props: {
       ) : null}
       <StaticDataTable
         tableProps={{ 'aria-label': t('Model mapping') }}
-        tableClassName='min-w-[760px]'
+        tableClassName='min-w-[1080px]'
         data={fields}
         getRowKey={(row) => row.id}
         emptyContent={t('No snapshot yet')}
@@ -198,6 +200,30 @@ export function ModelRadarModelTable(props: {
             ),
           },
           {
+            id: 'aliases',
+            header: t('Aliases'),
+            className: 'w-[24%]',
+            cell: (row, index) => (
+              <FormField
+                control={props.form.control}
+                name={`models.${index}.aliases`}
+                render={({ field }) => (
+                  <FormItem>
+                    <FormControl>
+                      <Input
+                        {...field}
+                        disabled={props.disabled}
+                        aria-label={`${t('Aliases')}: ${row.model}`}
+                        placeholder={t('Comma-separated gateway names')}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            ),
+          },
+          {
             id: 'hidden',
             header: t('Hidden'),
             cell: (row, index) => (
@@ -212,6 +238,29 @@ export function ModelRadarModelTable(props: {
                         onCheckedChange={field.onChange}
                         disabled={props.disabled}
                         aria-label={`${t('Hidden')}: ${row.model}`}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            ),
+          },
+          {
+            id: 'autoEffort',
+            header: t('Allow tier adjustment'),
+            cell: (row, index) => (
+              <FormField
+                control={props.form.control}
+                name={`models.${index}.autoEffort`}
+                render={({ field }) => (
+                  <FormItem>
+                    <FormControl>
+                      <Switch
+                        checked={field.value}
+                        onCheckedChange={field.onChange}
+                        disabled={props.disabled}
+                        aria-label={`${t('Allow tier adjustment')}: ${row.model}`}
                       />
                     </FormControl>
                     <FormMessage />
@@ -245,6 +294,13 @@ export function ModelRadarModelTable(props: {
                   })
                   props.form.setValue(`models.${index}.hidden`, false, {
                     shouldDirty: true,
+                  })
+                  props.form.setValue(`models.${index}.autoEffort`, false, {
+                    shouldDirty: true,
+                  })
+                  props.form.setValue(`models.${index}.aliases`, '', {
+                    shouldDirty: true,
+                    shouldValidate: true,
                   })
                 }}
               >

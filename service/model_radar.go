@@ -275,6 +275,10 @@ func syncModelRadar(ctx context.Context, client *http.Client, efficiencyURL stri
 		return nil, fmt.Errorf("save model radar snapshot: %w", err)
 	}
 
+	// The syncing instance can serve radar auto-effort from the snapshot it just
+	// produced instead of re-reading the row on the next relayed request.
+	RebuildModelRadarAutoEffortIndex(data)
+
 	return &ModelRadarSyncResult{
 		FetchedAt:          fetchedAt,
 		SourceUpdatedAt:    data.SourceUpdatedAt,

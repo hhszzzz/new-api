@@ -165,6 +165,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	if relayFormat == types.RelayFormatGemini {
 		relay.ConfigureGeminiBillingModel(relayInfo)
 	}
+	// The radar-driven tier override must be decided before ModelPriceHelper
+	// fixes the pricing identity and pre-consumes quota below.
+	helper.ResolveRadarAutoEffort(c, relayInfo)
 
 	if shouldApplyUserRateLimits(c, relayInfo) && !common.GetContextKeyBool(c, constant.ContextKeyUserRateLimitApplied) {
 		policy := service.UserRateLimitPolicyFromContext(c)

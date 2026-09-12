@@ -271,6 +271,23 @@ export function getReasoningEffortVariant(
   }
 }
 
+// Strategy labels keyed by the value the backend stores in the log's
+// `reasoning_effort_auto` field. Mirrors AUTO_EFFORT_POLICIES in
+// `features/model-radar/lib/model-radar.ts`; kept local so opening a log
+// detail dialog does not pull the radar page bundle in.
+const REASONING_EFFORT_AUTO_POLICIES: Record<string, string> = {
+  highest_iq: 'Highest IQ',
+  iq_per_cost: 'Best value for the price',
+  min_iq_delta: 'Only when clearly better',
+}
+
+/** Translatable label for the radar strategy that picked an automatic tier. */
+export function getReasoningEffortAutoPolicyLabel(
+  policy: string | undefined
+): string | undefined {
+  return policy ? REASONING_EFFORT_AUTO_POLICIES[policy] : undefined
+}
+
 /**
  * Get time color based on duration (in seconds)
  */

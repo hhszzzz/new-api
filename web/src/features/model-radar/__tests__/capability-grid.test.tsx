@@ -311,4 +311,171 @@ describe('model radar capability grid', () => {
       screen.getByRole('button', { name: 'View details for gpt-radar turbo' })
     ).toBeVisible()
   })
+
+  test('offers an automatic tier switch per model and reports toggles', async () => {
+    const user = userEvent.setup()
+    const onToggle = vi.fn()
+    render(
+      <CapabilityGrid
+        history={[]}
+        configurations={[fixture, { ...fixture, effort: 'high', iq: 120 }]}
+        settings={resolveRadarSettings({
+          models: { 'gpt-radar': { auto_effort: true } },
+        })}
+        autoEffort={{
+          setting: { policy: 'highest_iq', min_iq_delta: 5, models: {} },
+          isSaving: false,
+          userModels: ['gpt-radar'],
+          onToggle,
+        }}
+      />
+    )
+
+    const toggle = screen.getByRole('switch', {
+      name: 'Automatically choose the reasoning tier for gpt-radar',
+    })
+    expect(toggle).toBeEnabled()
+    expect(toggle).not.toBeChecked()
+    expect(screen.queryByText('Current')).toBeNull()
+
+    await user.hover(toggle)
+    expect(
+      await screen.findByText('Enable automatic reasoning tier')
+    ).toBeVisible()
+
+    await user.click(toggle)
+    expect(onToggle).toHaveBeenCalledWith('gpt-radar', true)
+  })
+
+  test('hides the switch when the administrator did not allow tier adjustment', () => {
+    render(
+      <CapabilityGrid
+        history={[]}
+        configurations={[fixture]}
+        settings={resolveRadarSettings({})}
+        autoEffort={{
+          setting: { policy: 'highest_iq', min_iq_delta: 5, models: {} },
+          isSaving: false,
+          userModels: ['gpt-radar'],
+          onToggle: vi.fn(),
+        }}
+      />
+    )
+    expect(screen.queryByRole('switch')).toBeNull()
+  })
+
+  test('hides the switch when the user cannot call the model', () => {
+    render(
+      <CapabilityGrid
+        history={[]}
+        configurations={[fixture]}
+        settings={resolveRadarSettings({
+          models: { 'gpt-radar': { auto_effort: true } },
+        })}
+        autoEffort={{
+          setting: { policy: 'highest_iq', min_iq_delta: 5, models: {} },
+          isSaving: false,
+          userModels: ['other-model'],
+          onToggle: vi.fn(),
+        }}
+      />
+    )
+    expect(screen.queryByRole('switch')).toBeNull()
+  })
+
+  test('crowns the tier the radar would pick and marks it as automatic', () => {
+    render(
+      <CapabilityGrid
+        history={[]}
+        configurations={[fixture, { ...fixture, effort: 'high', iq: 120 }]}
+        settings={resolveRadarSettings({
+          models: { 'gpt-radar': { auto_effort: true } },
+        })}
+        autoEffort={{
+          setting: {
+            policy: 'highest_iq',
+            min_iq_delta: 5,
+            models: { 'gpt-radar': { enabled: true } },
+          },
+          isSaving: false,
+          userModels: ['gpt-radar'],
+          onToggle: vi.fn(),
+        }}
+      />
+    )
+
+    const high = screen.getByRole('button', {
+      name: 'View details for gpt-radar high',
+    })
+    expect(high).toHaveClass('ring-primary/40')
+    expect(within(high).getByText('Current')).toBeVisible()
+    const medium = screen.getByRole('button', {
+      name: 'View details for gpt-radar medium',
+    })
+    expect(medium).not.toHaveClass('ring-primary/40')
+    expect(within(medium).queryByText('Current')).toBeNull()
+    expect(
+      screen.getByRole('switch', {
+        name: 'Automatically choose the reasoning tier for gpt-radar',
+      })
+    ).toBeChecked()
+  })
+
+  test('treats an administrator alias as a reachable model for the automatic tier switch', async () => {
+    const user = userEvent.setup()
+    render(
+      <CapabilityGrid
+        history={[]}
+        configurations={[fixture]}
+        settings={resolveRadarSettings({
+          models: { 'gpt-radar': { auto_effort: true, aliases: ['my-gpt'] } },
+        })}
+        autoEffort={{
+          setting: {
+            policy: 'highest_iq',
+            min_iq_delta: 5,
+            models: { 'gpt-radar': { enabled: true } },
+          },
+          isSaving: false,
+          userModels: ['my-gpt'],
+          onToggle: vi.fn(),
+        }}
+      />
+    )
+
+    const toggle = screen.getByRole('switch', {
+      name: 'Automatically choose the reasoning tier for gpt-radar',
+    })
+    expect(toggle).toBeEnabled()
+    expect(toggle).toBeChecked()
+    expect(screen.queryByText('Disable automatic reasoning tier')).toBeNull()
+
+    await user.hover(toggle)
+    expect(
+      await screen.findByText('Disable automatic reasoning tier')
+    ).toBeVisible()
+  })
+
+  test('keeps the model name and switch on one line with a truncating label', () => {
+    const { container } = render(
+      <CapabilityGrid
+        history={[]}
+        configurations={[fixture]}
+        settings={resolveRadarSettings({
+          models: { 'gpt-radar': { auto_effort: true } },
+        })}
+        autoEffort={{
+          setting: { policy: 'highest_iq', min_iq_delta: 5, models: {} },
+          isSaving: false,
+          userModels: ['gpt-radar'],
+          onToggle: vi.fn(),
+        }}
+      />
+    )
+    const heading = screen.getByRole('heading', { name: 'gpt-radar' })
+    expect(heading).toHaveClass('truncate', 'flex-1')
+    expect(
+      container.querySelector('section[aria-label="gpt-radar"]')
+    ).toHaveClass('lg:grid-cols-[16rem_minmax(0,1fr)]')
+  })
 })

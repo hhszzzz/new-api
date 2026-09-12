@@ -25,10 +25,16 @@ import { ModelRadar } from '../index'
 import { resolveRadarSettings } from '../lib/model-radar'
 import type { ModelRadarResponse } from '../types'
 
-const queryMocks = vi.hoisted(() => ({ useQuery: vi.fn() }))
+const queryMocks = vi.hoisted(() => ({
+  useQuery: vi.fn(),
+  useMutation: vi.fn(() => ({ isPending: false, mutateAsync: vi.fn() })),
+  useQueryClient: vi.fn(() => ({ invalidateQueries: vi.fn() })),
+}))
 
 vi.mock('@tanstack/react-query', () => ({
   useQuery: queryMocks.useQuery,
+  useMutation: queryMocks.useMutation,
+  useQueryClient: queryMocks.useQueryClient,
 }))
 vi.mock('axios', async (importOriginal) => {
   const actual = await importOriginal<typeof import('axios')>()
@@ -128,7 +134,16 @@ function renderPage() {
   return render(<ModelRadar />)
 }
 
-beforeEach(() => queryMocks.useQuery.mockReset())
+beforeEach(() => {
+  queryMocks.useQuery.mockReset()
+  queryMocks.useMutation.mockReset()
+  queryMocks.useMutation.mockReturnValue({
+    isPending: false,
+    mutateAsync: vi.fn(),
+  })
+  queryMocks.useQueryClient.mockReset()
+  queryMocks.useQueryClient.mockReturnValue({ invalidateQueries: vi.fn() })
+})
 
 describe('model radar page states', () => {
   test.each([

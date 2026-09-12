@@ -186,6 +186,17 @@ func billingIntentFromModifiers(spec kitreasoning.ModelModifierSpec) (kitreasoni
 	return intent, hasThinking
 }
 
+// CanonicalBillingModelNamesForIntent returns specificity-descending canonical
+// billing names for an already-resolved base model name and intent. It backs
+// billing identities produced by the host rather than by the request name, such
+// as a radar-chosen reasoning tier.
+func CanonicalBillingModelNamesForIntent(base string, intent kitreasoning.Intent) []string {
+	if base == "" || model_setting.ShouldPreserveThinkingSuffix(base) {
+		return nil
+	}
+	return canonicalNamesFromIntent(base, intent)
+}
+
 func canonicalNamesFromIntent(base string, intent kitreasoning.Intent) []string {
 	thinking, effort, ok := normalizeBillingThinking(intent)
 	if !ok || base == "" {

@@ -20,15 +20,20 @@ import { describe, expect, test } from 'vitest'
 
 import {
   createModelRadarIconRegistry,
+  gatewayEffortCandidates,
   getModelIconKey,
   groupConfigurations,
   matrixEfforts,
   listVendors,
   filterByVendor,
   filterAlertsByVendor,
+  matchRadarModelToUserModels,
+  pickAutoEffort,
+  isRadarAutoEffortAllowed,
   resolveRadarSettings,
   resolveRadarModel,
   resolveDefaultVendor,
+  splitRadarAliases,
   DEFAULT_RADAR_SETTINGS,
   getHistorySeries,
   getVendorMeta,
@@ -350,5 +355,129 @@ describe('model radar configuration grouping', () => {
     expect(getHistorySeries(history, 'a', 'low')).toEqual([70, 80, 90])
     expect(getHistorySeries(history, 'a', 'low', 48)).toEqual([80, 90])
     expect(getHistorySeries(history, 'missing', 'low')).toEqual([])
+  })
+})
+
+describe('model radar automatic reasoning tiers', () => {
+  test('keeps only expressible, well-sampled tiers, deduped and IQ ordered', () => {
+    const candidates = gatewayEffortCandidates([
+      configuration('gpt-a', 'ultra'),
+      { ...configuration('gpt-a', 'low'), iq: 95, valid_tasks: 2 },
+      { ...configuration('gpt-a', 'Low'), iq: 70, average_price_usd: 5 },
+      {
+        ...configuration('gpt-a', 'medium'),
+        iq: 90,
+        average_price_usd: 2,
+      },
+      {
+        ...configuration('gpt-a', 'high'),
+        iq: 90,
+        average_price_usd_by_band: { off_peak: 1, peak: 3 },
+      },
+      { ...configuration('gpt-a', 'xhigh'), iq: 80, average_price_usd: 8 },
+    ])
+    expect(candidates.map((item) => [item.effort, item.iq])).toEqual([
+      ['medium', 90],
+      ['high', 90],
+      ['xhigh', 80],
+      ['low', 70],
+    ])
+    expect(candidates.map((item) => item.priceUsd)).toEqual([2, 2, 8, 5])
+    expect(candidates[1].radarEffort).toBe('high')
+  })
+
+  test('applies each selection strategy and reports whether the tier changes', () => {
+    const candidates = gatewayEffortCandidates([
+      { ...configuration('m', 'high'), iq: 100, average_price_usd: 10 },
+      { ...configuration('m', 'medium'), iq: 90, average_price_usd: 1 },
+      { ...configuration('m', 'low'), iq: 60, average_price_usd: 5 },
+    ])
+    expect(pickAutoEffort(candidates, 'highest_iq', 5)).toEqual({
+      effort: 'high',
+      iq: 100,
+      changed: true,
+    })
+    expect(pickAutoEffort(candidates, 'highest_iq', 5, 'high')).toEqual({
+      effort: 'high',
+      iq: 100,
+      changed: false,
+    })
+    expect(pickAutoEffort(candidates, 'iq_per_cost', 5)).toEqual({
+      effort: 'medium',
+      iq: 90,
+      changed: true,
+    })
+    // The client's own tier survives while the best tier stays inside the gap.
+    expect(pickAutoEffort(candidates, 'min_iq_delta', 45, 'low')).toEqual({
+      effort: 'low',
+      iq: 60,
+      changed: false,
+    })
+    expect(pickAutoEffort(candidates, 'min_iq_delta', 40, 'low')).toEqual({
+      effort: 'high',
+      iq: 100,
+      changed: true,
+    })
+    // An unpriced model cannot be compared by value, so the IQ leader wins.
+    expect(
+      pickAutoEffort(
+        gatewayEffortCandidates([
+          configuration('m', 'high'),
+          { ...configuration('m', 'low'), iq: 70 },
+        ]),
+        'iq_per_cost',
+        5
+      )
+    ).toEqual({ effort: 'high', iq: 100, changed: true })
+    expect(pickAutoEffort([], 'highest_iq', 5)).toBeNull()
+  })
+
+  test('matches a radar model to the user names it can be called by', () => {
+    expect(matchRadarModelToUserModels('gpt-5.4', undefined, ['gpt-5.4'])).toBe(
+      true
+    )
+    expect(
+      matchRadarModelToUserModels('gpt-5.4', undefined, ['openai/gpt-5.4'])
+    ).toBe(true)
+    expect(matchRadarModelToUserModels('openai/kimi-k3', ['k3'], ['K3'])).toBe(
+      true
+    )
+    expect(matchRadarModelToUserModels('kimi-k3', ['k3'], ['other'])).toBe(
+      false
+    )
+    expect(matchRadarModelToUserModels('kimi-k3', undefined, [])).toBe(false)
+  })
+
+  test('normalizes alias lists and drops unusable entries from stored settings', () => {
+    expect(splitRadarAliases(' K3 , k3-turbo\n k3 ')).toEqual([
+      'k3',
+      'k3-turbo',
+    ])
+    const aliases = (list: string[]) =>
+      resolveRadarSettings({ models: { 'kimi-k3': { aliases: list } } }).models[
+        'kimi-k3'
+      ].aliases
+    expect(aliases([' KIMI-K3 ', 'k3', '', 'k3', 'x'.repeat(129)])).toEqual([
+      'k3',
+    ])
+    expect(
+      aliases(Array.from({ length: 20 }, (_, index) => `a${index}`))
+    ).toEqual(Array.from({ length: 16 }, (_, index) => `a${index}`))
+  })
+
+  test('opts a model in for tier adjustment only when the administrator allowed it', () => {
+    const settings = resolveRadarSettings({
+      models: {
+        'kimi-k3': { auto_effort: true },
+        'gpt-5.4': { hidden: true },
+        'claude-sonnet': { auto_effort: 'yes' },
+      },
+    })
+    expect(settings.models['kimi-k3'].auto_effort).toBe(true)
+    expect(settings.models['gpt-5.4'].auto_effort).toBeUndefined()
+    expect(settings.models['claude-sonnet'].auto_effort).toBeUndefined()
+    expect(isRadarAutoEffortAllowed(settings, 'kimi-k3')).toBe(true)
+    expect(isRadarAutoEffortAllowed(settings, 'gpt-5.4')).toBe(false)
+    expect(isRadarAutoEffortAllowed(undefined, 'kimi-k3')).toBe(false)
   })
 })

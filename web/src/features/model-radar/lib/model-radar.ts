@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { PricingData } from '@/features/pricing/types'
+import type { RadarAutoEffortPolicy } from '@/features/profile/types'
 import {
   resolveDefaultProviderIconKey,
   resolveProviderIconKey,
@@ -138,10 +139,15 @@ export const BUILT_IN_MODEL_OVERRIDES: Readonly<
 export const DEFAULT_RADAR_SETTINGS: ModelRadarSettings = {
   default_vendor: 'openai',
   show_degradation_alerts: true,
+  auto_effort_enabled: true,
   models: {},
 }
 
 const VENDOR_KEY_PATTERN = /^[a-z0-9-]{1,32}$/
+
+/** Limits the backend enforces on administrator-declared model aliases. */
+export const MAX_RADAR_ALIASES_PER_MODEL = 16
+export const MAX_RADAR_ALIAS_RUNES = 128
 
 export function resolveRadarSettings(raw: unknown): ModelRadarSettings {
   const settings = {
@@ -158,6 +164,9 @@ export function resolveRadarSettings(raw: unknown): ModelRadarSettings {
   }
   if (typeof value.show_degradation_alerts === 'boolean') {
     settings.show_degradation_alerts = value.show_degradation_alerts
+  }
+  if (typeof value.auto_effort_enabled === 'boolean') {
+    settings.auto_effort_enabled = value.auto_effort_enabled
   }
   if (
     !value.models ||
@@ -194,10 +203,46 @@ export function resolveRadarSettings(raw: unknown): ModelRadarSettings {
     if (typeof override.hidden === 'boolean') {
       normalized.hidden = override.hidden
     }
+    if (override.auto_effort === true) {
+      normalized.auto_effort = true
+    }
+    if (Array.isArray(override.aliases)) {
+      const aliases: string[] = []
+      for (const alias of override.aliases.slice(
+        0,
+        MAX_RADAR_ALIASES_PER_MODEL
+      )) {
+        if (typeof alias !== 'string') continue
+        const name = alias.trim().toLowerCase()
+        if (
+          !name ||
+          [...name].length > MAX_RADAR_ALIAS_RUNES ||
+          name === model.toLowerCase()
+        ) {
+          continue
+        }
+        if (!aliases.includes(name)) aliases.push(name)
+      }
+      if (aliases.length) normalized.aliases = aliases
+    }
     entries.push([model, normalized])
   }
   settings.models = Object.fromEntries(entries)
   return settings
+}
+
+/**
+ * Splits a comma- or whitespace-separated alias list into normalized gateway
+ * model names: lowercased, trimmed, de-duplicated, order preserved.
+ */
+export function splitRadarAliases(raw: string): string[] {
+  const names: string[] = []
+  for (const part of raw.split(/[,\s]+/)) {
+    const name = part.trim().toLowerCase()
+    if (!name || names.includes(name)) continue
+    names.push(name)
+  }
+  return names
 }
 
 export function getVendorMeta(key: string): {
@@ -555,4 +600,179 @@ export function getIqTone(iq: number): 'low' | 'mid' | 'high' {
   if (iq >= 85) return 'high'
   if (iq >= 50) return 'mid'
   return 'low'
+}
+
+// ============================================================================
+// Radar auto-effort
+// ============================================================================
+
+// Gateway-owned reasoning tiers, weakest first (the tie-break order). The radar
+// publishes tiers the gateway cannot express (ultra), so those never take part
+// in automatic selection.
+export const GATEWAY_EFFORT_ORDER = [
+  'none',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+] as const
+
+export type GatewayEffort = (typeof GATEWAY_EFFORT_ORDER)[number]
+
+// A tier graded on fewer tasks than this is too noisy to drive an automatic
+// change. The backend applies the same floor.
+export const AUTO_EFFORT_MIN_VALID_TASKS = 3
+
+export const AUTO_EFFORT_POLICIES = [
+  {
+    value: 'highest_iq',
+    labelKey: 'Highest IQ',
+    descriptionKey: 'Always use the tier with the highest radar IQ',
+  },
+  {
+    value: 'iq_per_cost',
+    labelKey: 'Best value for the price',
+    descriptionKey: 'Balance IQ against price and pick the best value tier',
+  },
+  {
+    value: 'min_iq_delta',
+    labelKey: 'Only when clearly better',
+    descriptionKey:
+      'Switch when the best tier beats your current one by a certain IQ',
+  },
+] as const
+
+/**
+ * IQ-gap bounds the backend accepts for the min_iq_delta strategy. Zero is
+ * excluded here because the API reads a zero gap as "use the default", so the
+ * stored value would not be what the field shows.
+ */
+export const MIN_IQ_DELTA_RANGE = { min: 1, max: 150 } as const
+
+export type RadarAutoEffortCandidate = {
+  effort: GatewayEffort
+  radarEffort: string
+  iq: number
+  priceUsd: number | null
+}
+
+export type RadarAutoEffortPick = {
+  effort: GatewayEffort
+  iq: number
+  /** False when the client's own tier is already the chosen one. */
+  changed: boolean
+}
+
+function asGatewayEffort(effort: string): GatewayEffort | null {
+  const normalized = effort.trim().toLowerCase()
+  return (
+    GATEWAY_EFFORT_ORDER.find((candidate) => candidate === normalized) ?? null
+  )
+}
+
+function radarCandidatePrice(
+  configuration: ModelRadarConfiguration
+): number | null {
+  if (configuration.average_price_usd !== null) {
+    return configuration.average_price_usd
+  }
+  const offPeak = configuration.average_price_usd_by_band?.off_peak ?? null
+  const peak = configuration.average_price_usd_by_band?.peak ?? null
+  if (offPeak === null || peak === null) return null
+  return (offPeak + peak) / 2
+}
+
+// Orders the tiers a radar model may be switched to: descending IQ, and on
+// equal IQ the weaker tier first so a tie resolves to the cheaper tier.
+export function gatewayEffortCandidates(
+  configurations: ModelRadarConfiguration[],
+  minValidTasks = AUTO_EFFORT_MIN_VALID_TASKS
+): RadarAutoEffortCandidate[] {
+  const byEffort = new Map<GatewayEffort, RadarAutoEffortCandidate>()
+  for (const configuration of configurations) {
+    if (configuration.valid_tasks < minValidTasks) continue
+    const effort = asGatewayEffort(configuration.effort)
+    if (!effort) continue
+    const existing = byEffort.get(effort)
+    if (existing && existing.iq >= configuration.iq) continue
+    byEffort.set(effort, {
+      effort,
+      radarEffort: configuration.effort.trim().toLowerCase(),
+      iq: configuration.iq,
+      priceUsd: radarCandidatePrice(configuration),
+    })
+  }
+  return [...byEffort.values()].sort(
+    (left, right) =>
+      right.iq - left.iq ||
+      GATEWAY_EFFORT_ORDER.indexOf(left.effort) -
+        GATEWAY_EFFORT_ORDER.indexOf(right.effort)
+  )
+}
+
+// Mirrors the gateway's selection so the page can preview the replacement.
+export function pickAutoEffort(
+  candidates: RadarAutoEffortCandidate[],
+  policy: RadarAutoEffortPolicy,
+  minIQDelta: number,
+  clientEffort?: string
+): RadarAutoEffortPick | null {
+  if (!candidates.length) return null
+  const client = clientEffort ? asGatewayEffort(clientEffort) : null
+  let best = candidates[0]
+  if (policy === 'iq_per_cost') {
+    const priced = candidates.filter(
+      (candidate) => candidate.priceUsd !== null && candidate.priceUsd > 0
+    )
+    if (priced.length) {
+      best = priced.reduce((left, right) =>
+        right.iq / (right.priceUsd ?? 1) > left.iq / (left.priceUsd ?? 1)
+          ? right
+          : left
+      )
+    }
+  }
+  if (policy === 'min_iq_delta' && client) {
+    const current = candidates.find((candidate) => candidate.effort === client)
+    if (current && best.iq - current.iq < minIQDelta) {
+      return { effort: current.effort, iq: current.iq, changed: false }
+    }
+  }
+  if (client && best.effort === client) {
+    return { effort: best.effort, iq: best.iq, changed: false }
+  }
+  return { effort: best.effort, iq: best.iq, changed: true }
+}
+
+function modelLookupKeys(model: string): string[] {
+  const key = model.trim().toLowerCase()
+  if (!key) return []
+  const tail = key.slice(key.lastIndexOf('/') + 1)
+  return tail && tail !== key ? [key, tail] : [key]
+}
+
+// A radar model covers a user's model when either name matches directly or the
+// gateway name resolves through an administrator-declared alias.
+export function matchRadarModelToUserModels(
+  model: string,
+  aliases: string[] | undefined,
+  userModels: string[]
+): boolean {
+  const available = new Set(userModels.flatMap(modelLookupKeys))
+  return [model, ...(aliases ?? [])].some((name) =>
+    modelLookupKeys(name).some((key) => available.has(key))
+  )
+}
+
+/**
+ * Reports whether the administrator opted this radar model into automatic
+ * reasoning-tier replacement. Radar auto-effort is opt-in per model.
+ */
+export function isRadarAutoEffortAllowed(
+  settings: ModelRadarSettings | undefined,
+  model: string
+): boolean {
+  return settings?.models[model]?.auto_effort === true
 }

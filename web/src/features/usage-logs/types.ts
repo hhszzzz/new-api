@@ -275,6 +275,18 @@ export interface LogOtherData {
   request_rules?: RequestRuleTrace[]
   usage_facts?: Record<string, string | number>
   reasoning_effort?: string
+  /**
+   * Radar auto-effort outcome for this request: whether the reasoning tier was
+   * replaced before it was sent upstream, and why when it was not.
+   */
+  reasoning_effort_auto?: {
+    applied: boolean
+    reason?: string
+    policy?: string
+    iq?: number
+    from?: string
+    to?: string
+  }
   image?: boolean
   image_ratio?: number
   image_output?: number

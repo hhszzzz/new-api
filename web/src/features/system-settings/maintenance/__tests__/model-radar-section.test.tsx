@@ -145,6 +145,10 @@ describe('model radar management', () => {
       )
     ).toBeVisible()
     await user.click(screen.getByRole('switch', { name: 'Hidden: k3' }))
+    await user.type(
+      screen.getByRole('textbox', { name: 'Aliases: k3' }),
+      'kimi-k3-latest'
+    )
     await user.click(
       screen.getByRole('button', { name: 'Save radar settings' })
     )
@@ -152,7 +156,7 @@ describe('model radar management', () => {
       expect(updateSystemOption).toHaveBeenCalledWith({
         key: 'ModelRadarSettings',
         value:
-          '{"default_vendor":"openai","show_degradation_alerts":true,"models":{"k3":{"hidden":true}}}',
+          '{"auto_effort_enabled":true,"default_vendor":"openai","show_degradation_alerts":true,"models":{"k3":{"hidden":true,"aliases":["kimi-k3-latest"]}}}',
       })
     )
   })
@@ -176,7 +180,7 @@ describe('model radar management', () => {
   test('reset restores a snapshot row and removes an override for a missing model', async () => {
     const user = userEvent.setup()
     renderSection(
-      '{"models":{"k3":{"hidden":true},"retired":{"vendor":"moonshot"}}}'
+      '{"models":{"k3":{"hidden":true,"auto_effort":true},"retired":{"vendor":"moonshot"}}}'
     )
     await user.click(
       await screen.findByRole('button', { name: 'Reset row: retired' })
@@ -186,6 +190,9 @@ describe('model radar management', () => {
     ).toBeNull()
     await user.click(screen.getByRole('button', { name: 'Reset row: k3' }))
     expect(screen.getByRole('switch', { name: 'Hidden: k3' })).not.toBeChecked()
+    expect(
+      screen.getByRole('switch', { name: 'Allow tier adjustment: k3' })
+    ).not.toBeChecked()
     await user.click(
       screen.getByRole('button', { name: 'Save radar settings' })
     )
@@ -193,7 +200,47 @@ describe('model radar management', () => {
       expect(updateSystemOption).toHaveBeenCalledWith({
         key: 'ModelRadarSettings',
         value:
-          '{"default_vendor":"openai","show_degradation_alerts":true,"models":{}}',
+          '{"auto_effort_enabled":true,"default_vendor":"openai","show_degradation_alerts":true,"models":{}}',
+      })
+    )
+  })
+
+  test('carries the automatic reasoning tier switch into the saved settings', async () => {
+    const user = userEvent.setup()
+    renderSection()
+    const toggle = await screen.findByRole('switch', {
+      name: 'Allow automatic reasoning tiers',
+    })
+    expect(toggle).toBeChecked()
+    await user.click(toggle)
+    await user.click(
+      screen.getByRole('button', { name: 'Save radar settings' })
+    )
+    await waitFor(() =>
+      expect(updateSystemOption).toHaveBeenCalledWith({
+        key: 'ModelRadarSettings',
+        value:
+          '{"auto_effort_enabled":false,"default_vendor":"openai","show_degradation_alerts":true,"models":{}}',
+      })
+    )
+  })
+
+  test('lets the administrator allow tier adjustment per model', async () => {
+    const user = userEvent.setup()
+    renderSection()
+    const toggle = await screen.findByRole('switch', {
+      name: 'Allow tier adjustment: k3',
+    })
+    expect(toggle).not.toBeChecked()
+    await user.click(toggle)
+    await user.click(
+      screen.getByRole('button', { name: 'Save radar settings' })
+    )
+    await waitFor(() =>
+      expect(updateSystemOption).toHaveBeenCalledWith({
+        key: 'ModelRadarSettings',
+        value:
+          '{"auto_effort_enabled":true,"default_vendor":"openai","show_degradation_alerts":true,"models":{"k3":{"auto_effort":true}}}',
       })
     )
   })

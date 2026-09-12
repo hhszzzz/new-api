@@ -330,6 +330,41 @@ func resolveBillingModelName(origin string) string {
 	return matched
 }
 
+// resolveBillingModelNameForEffort maps a reasoning tier chosen by the host onto
+// the billing identity ladder for a base model name: the model family's literal
+// suffix first, then the canonical @-modifier form, then the bare base. It
+// mirrors resolveBillingModelName, which derives the same ladder from a request
+// model name.
+func resolveBillingModelNameForEffort(base string, effort reasoning.Effort) string {
+	if base == "" {
+		return ""
+	}
+	var candidates []string
+	if effort != "" && effort != reasoning.EffortNone {
+		literal := base + "-" + string(effort)
+		if hostreasoning.BaseModelName(literal) == base {
+			candidates = append(candidates, literal)
+		}
+	}
+	candidates = append(candidates, hostreasoning.CanonicalBillingModelNamesForIntent(base, radarEffortIntent(effort))...)
+	candidates = append(candidates, base)
+
+	seen := make(map[string]struct{}, len(candidates))
+	for _, name := range candidates {
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		if HasPriceOrRatioEntry(name) {
+			return name
+		}
+	}
+	return base
+}
+
 func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta, groupRatioInfo hosttypes.GroupRatioInfo, quotaPerUnit float64, enableFreeModelPreConsume bool) (hosttypes.PriceData, error) {
 	billingModelName := info.GetBillingModelName()
 	exprStr, ok := billing_setting.GetBillingExpr(billingModelName)

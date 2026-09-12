@@ -157,6 +157,23 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	if relayInfo.ReasoningEffort != "" {
 		other.SetPublic("reasoning_effort", relayInfo.ReasoningEffort)
 	}
+	// The user's own auto-effort decision is public so the usage log can explain
+	// why a request ran on a different tier than the client asked for.
+	if decision := relayInfo.RadarAutoEffort; decision != nil {
+		autoEffort := map[string]any{
+			"applied": decision.Applied,
+			"reason":  decision.SkipReason,
+			"policy":  decision.Policy,
+			"iq":      decision.IQ,
+		}
+		if decision.From != "" {
+			autoEffort["from"] = string(decision.From)
+		}
+		if decision.To != "" {
+			autoEffort["to"] = string(decision.To)
+		}
+		other.SetPublic("reasoning_effort_auto", autoEffort)
+	}
 	isSystemPromptOverwritten := common.GetContextKeyBool(ctx, constant.ContextKeySystemPromptOverride)
 	if isSystemPromptOverwritten {
 		other.SetPublic("is_system_prompt_overwritten", true)

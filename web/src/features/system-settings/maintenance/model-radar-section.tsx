@@ -206,6 +206,29 @@ function ModelRadarDisplayForm(props: {
             </SettingsSwitchItem>
           )}
         />
+        <FormField
+          control={form.control}
+          name='autoEffortEnabled'
+          render={({ field }) => (
+            <SettingsSwitchItem>
+              <SettingsSwitchContent>
+                <FormLabel>{t('Allow automatic reasoning tiers')}</FormLabel>
+                <FormDescription>
+                  {t(
+                    'Let users switch each model on so requests that pick a reasoning tier run on the tier the radar scores best.'
+                  )}
+                </FormDescription>
+              </SettingsSwitchContent>
+              <FormControl>
+                <Switch
+                  checked={field.value}
+                  onCheckedChange={field.onChange}
+                  disabled={updateOption.isPending}
+                />
+              </FormControl>
+            </SettingsSwitchItem>
+          )}
+        />
         <ModelRadarModelTable
           form={form}
           snapshot={props.management.snapshot}

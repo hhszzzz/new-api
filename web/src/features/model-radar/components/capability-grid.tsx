@@ -16,22 +16,38 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { GridViewIcon } from '@hugeicons/core-free-icons'
+import { GridViewIcon, Tick02Icon } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
-import { useState, type CSSProperties } from 'react'
+import { useMemo, useState, type CSSProperties } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { Switch } from '@/components/ui/switch'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
+import type {
+  RadarAutoEffortPolicy,
+  RadarAutoEffortSetting,
+} from '@/features/profile/types'
 import { getLobeIcon } from '@/lib/lobe-icon'
 import { cn } from '@/lib/utils'
 
+import { isModelAutoEffortEnabled } from '../hooks/use-radar-auto-effort'
 import { useRadarFormatters } from '../hooks/use-radar-formatters'
 import {
+  gatewayEffortCandidates,
   getIqTone,
   groupConfigurations,
   IQ_TEXT_CLASSES,
+  isRadarAutoEffortAllowed,
+  matchRadarModelToUserModels,
   matrixEfforts,
   listVendors,
   OTHER_VENDOR,
+  pickAutoEffort,
   type ModelRadarGroup,
   type ModelRadarIconRegistry,
 } from '../lib/model-radar'
@@ -43,12 +59,64 @@ import type {
 import { ConfigurationDetails } from './configuration-details'
 import { ModelBadge } from './model-badge'
 
+/** Per-model auto-effort state the grid renders next to each model name. */
+export type ModelAutoEffortState = {
+  enabled: boolean
+  /** False when the user cannot call the model or the radar does not cover it. */
+  available: boolean
+  /** Tier the next request would be switched to, or null when unknown. */
+  targetEffort: string | null
+  targetIQ: number | null
+  isSaving: boolean
+  onToggle: (enabled: boolean) => void
+}
+
+export type AutoEffortGridState = {
+  setting: RadarAutoEffortSetting
+  isSaving: boolean
+  /** Models the signed-in user may call. */
+  userModels: string[]
+  onToggle: (model: string, enabled: boolean) => void
+}
+
+function resolveModelAutoEffort(
+  group: ModelRadarGroup,
+  settings: ModelRadarSettings | undefined,
+  autoEffort: AutoEffortGridState
+): ModelAutoEffortState {
+  const policy = (autoEffort.setting.policy ??
+    'highest_iq') as RadarAutoEffortPolicy
+  const minIQDelta = autoEffort.setting.min_iq_delta ?? 5
+  const pick = pickAutoEffort(
+    gatewayEffortCandidates(group.configurations),
+    policy,
+    minIQDelta
+  )
+  return {
+    enabled: isModelAutoEffortEnabled(autoEffort.setting, group.model),
+    // The switch is only offered when the administrator allowed the model and
+    // the signed-in user can actually call it; anything else is hidden.
+    available:
+      isRadarAutoEffortAllowed(settings, group.model) &&
+      matchRadarModelToUserModels(
+        group.model,
+        settings?.models[group.model]?.aliases,
+        autoEffort.userModels
+      ),
+    targetEffort: pick?.effort ?? null,
+    targetIQ: pick?.iq ?? null,
+    isSaving: autoEffort.isSaving,
+    onToggle: (enabled) => autoEffort.onToggle(group.model, enabled),
+  }
+}
+
 export function CapabilityGrid(props: {
   configurations: ModelRadarConfiguration[]
   history: ModelRadarHistoryFrame[]
   iconRegistry?: ModelRadarIconRegistry
   settings?: ModelRadarSettings
   groupByVendor?: boolean
+  autoEffort?: AutoEffortGridState
 }) {
   const { t } = useTranslation()
   const [selected, setSelected] = useState<{
@@ -62,6 +130,16 @@ export function CapabilityGrid(props: {
     props.iconRegistry
   )
   const efforts = matrixEfforts(props.configurations)
+  const autoEffortByModel = useMemo(() => {
+    if (!props.autoEffort) return null
+    const autoEffort = props.autoEffort
+    return new Map(
+      groups.map((group) => [
+        group.model,
+        resolveModelAutoEffort(group, props.settings, autoEffort),
+      ])
+    )
+  }, [groups, props.autoEffort, props.settings])
   const selectedConfiguration = selected
     ? (props.configurations.find(
         (item) =>
@@ -88,7 +166,7 @@ export function CapabilityGrid(props: {
         </h2>
       </header>
       <div
-        className='bg-background text-muted-foreground sticky top-16 z-10 mb-1 hidden grid-cols-[repeat(var(--effort-count),minmax(0,1fr))] gap-1.5 py-1 text-center text-xs font-medium md:grid lg:pl-48'
+        className='bg-background text-muted-foreground sticky top-16 z-10 mb-1 hidden grid-cols-[repeat(var(--effort-count),minmax(0,1fr))] gap-1.5 py-1 text-center text-xs font-medium md:grid lg:pl-[17rem]'
         style={{ '--effort-count': efforts.length } as CSSProperties}
         aria-hidden='true'
       >
@@ -98,7 +176,7 @@ export function CapabilityGrid(props: {
           </span>
         ))}
       </div>
-      <div className='space-y-2 lg:space-y-1'>
+      <div className='space-y-2 pt-1.5 lg:space-y-2'>
         {props.groupByVendor
           ? vendors.map((vendor) => (
               <section
@@ -128,6 +206,7 @@ export function CapabilityGrid(props: {
                       efforts={efforts}
                       settings={props.settings}
                       iconRegistry={props.iconRegistry}
+                      autoEffort={autoEffortByModel?.get(group.model)}
                       onSelect={setSelected}
                       nested
                     />
@@ -141,6 +220,7 @@ export function CapabilityGrid(props: {
                 efforts={efforts}
                 settings={props.settings}
                 iconRegistry={props.iconRegistry}
+                autoEffort={autoEffortByModel?.get(group.model)}
                 onSelect={setSelected}
               />
             ))}
@@ -163,30 +243,65 @@ function ModelRow(props: {
   efforts: string[]
   settings?: ModelRadarSettings
   iconRegistry?: ModelRadarIconRegistry
+  autoEffort?: ModelAutoEffortState
   onSelect: (configuration: ModelRadarConfiguration) => void
   nested?: boolean
 }) {
+  const { t } = useTranslation()
   const group = props.group
   const bestIq = Math.max(...group.configurations.map((item) => item.iq))
+  const auto = props.autoEffort
+  const showSwitch = Boolean(auto?.available)
+  const activeEffort =
+    auto?.enabled && auto.available ? auto.targetEffort : null
   const Heading = props.nested ? 'h4' : 'h3'
   return (
     <section
       aria-label={group.displayName}
-      className='min-w-0 lg:grid lg:grid-cols-[11rem_minmax(0,1fr)] lg:items-center lg:gap-4'
+      className='min-w-0 lg:grid lg:grid-cols-[16rem_minmax(0,1fr)] lg:items-center lg:gap-4'
     >
       <header className='mb-1.5 flex items-center gap-2 lg:mb-0'>
-        <ModelBadge
-          color={group.color}
-          model={group.model}
-          settings={props.settings}
-          iconRegistry={props.iconRegistry}
-        />
+        <span className='shrink-0'>
+          <ModelBadge
+            color={group.color}
+            model={group.model}
+            settings={props.settings}
+            iconRegistry={props.iconRegistry}
+          />
+        </span>
         <Heading
-          className='min-w-0 text-sm font-semibold break-words'
+          className='min-w-0 flex-1 truncate text-sm font-semibold'
           title={group.model}
         >
           {group.displayName}
         </Heading>
+        {showSwitch ? (
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Switch
+                    className='ml-auto'
+                    checked={Boolean(auto?.enabled)}
+                    disabled={Boolean(auto?.isSaving)}
+                    onCheckedChange={auto?.onToggle}
+                    aria-label={t(
+                      'Automatically choose the reasoning tier for {{model}}',
+                      { model: group.displayName }
+                    )}
+                  />
+                }
+              />
+              <TooltipContent side='top'>
+                {t(
+                  auto?.enabled
+                    ? 'Disable automatic reasoning tier'
+                    : 'Enable automatic reasoning tier'
+                )}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        ) : null}
       </header>
       <div
         className='grid grid-cols-2 gap-1.5 md:grid-cols-[repeat(var(--effort-count),minmax(0,1fr))]'
@@ -205,11 +320,17 @@ function ModelRow(props: {
               />
             )
           }
+          const matchesActive =
+            activeEffort !== null &&
+            configuration.effort.trim().toLowerCase() === activeEffort
+          const isBest =
+            activeEffort !== null ? matchesActive : configuration.iq === bestIq
           return (
             <TierCard
               key={effort}
               configuration={configuration}
-              isBest={configuration.iq === bestIq}
+              isBest={isBest}
+              autoSelected={matchesActive}
               onSelect={() => props.onSelect(configuration)}
             />
           )
@@ -222,6 +343,7 @@ function ModelRow(props: {
 function TierCard(props: {
   configuration: ModelRadarConfiguration
   isBest: boolean
+  autoSelected: boolean
   onSelect: () => void
 }) {
   const { t } = useTranslation()
@@ -231,8 +353,9 @@ function TierCard(props: {
     <button
       type='button'
       className={cn(
-        'bg-card hover:bg-muted/40 focus-visible:ring-ring flex min-h-11 min-w-0 flex-col justify-center gap-0.5 rounded-md border px-1.5 py-1 text-center transition-colors outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
-        props.isBest && 'ring-primary/40 ring-1'
+        'bg-card hover:bg-muted/40 focus-visible:ring-ring relative flex min-h-11 min-w-0 flex-col justify-center gap-0.5 rounded-md border px-1.5 py-1 text-center transition-colors outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
+        props.isBest && 'ring-primary/40 ring-1',
+        props.autoSelected && 'border-primary/60 bg-primary/5'
       )}
       aria-label={t('View details for {{model}} {{effort}}', {
         model: configuration.model,
@@ -240,6 +363,21 @@ function TierCard(props: {
       })}
       onClick={props.onSelect}
     >
+      {props.autoSelected ? (
+        <>
+          <span className='sr-only'>{t('Current')}</span>
+          <span
+            aria-hidden='true'
+            className='bg-primary text-primary-foreground absolute top-1 right-1 flex size-3.5 items-center justify-center rounded-full'
+          >
+            <HugeiconsIcon
+              icon={Tick02Icon}
+              strokeWidth={3}
+              className='size-2.5'
+            />
+          </span>
+        </>
+      ) : null}
       <span className='text-muted-foreground text-[10px] leading-none font-medium break-all capitalize md:hidden'>
         {configuration.effort}
       </span>

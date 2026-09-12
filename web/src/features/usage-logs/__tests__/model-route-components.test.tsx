@@ -391,6 +391,49 @@ describe('usage-log model route component visibility', () => {
     expect(systemPromptBadge).not.toHaveClass('rounded-4xl')
   })
 
+  test('explains a radar-replaced reasoning tier beside the applied tier', () => {
+    const autoAppliedLog: UsageLog = {
+      ...routedLog,
+      other: JSON.stringify({
+        reasoning_effort: 'xhigh',
+        reasoning_effort_auto: {
+          applied: true,
+          policy: 'highest_iq',
+          iq: 128.5,
+          from: 'low',
+          to: 'xhigh',
+        },
+      }),
+    }
+
+    renderDetailsDialog(ROLE.USER, 'all', autoAppliedLog)
+
+    const dialog = screen.getByRole('dialog')
+    const autoRow = within(dialog)
+      .getByText('Automatic reasoning effort')
+      .closest('.grid')
+    expect(autoRow).toHaveTextContent('low')
+    expect(autoRow).toHaveTextContent('Auto')
+    expect(autoRow).toHaveTextContent('Highest IQ')
+    expect(autoRow).toHaveTextContent('IQ 128.5')
+  })
+
+  test('omits the automatic tier row when the radar kept the requested tier', () => {
+    const autoSkippedLog: UsageLog = {
+      ...routedLog,
+      other: JSON.stringify({
+        reasoning_effort: 'high',
+        reasoning_effort_auto: { applied: false, reason: 'client_default' },
+      }),
+    }
+
+    renderDetailsDialog(ROLE.USER, 'all', autoSkippedLog)
+
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByText('Reasoning Effort')).toBeVisible()
+    expect(within(dialog).queryByText('Automatic reasoning effort')).toBeNull()
+  })
+
   test('shows WebSocket stream status to the log owner', async () => {
     const streamStatusLog: UsageLog = {
       ...routedLog,

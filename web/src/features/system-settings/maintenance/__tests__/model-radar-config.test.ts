@@ -29,6 +29,7 @@ describe('model radar settings serialization', () => {
     'uses safe defaults for %s',
     (raw) => {
       expect(parseModelRadarSettings(raw)).toEqual({
+        autoEffortEnabled: true,
         defaultVendor: 'openai',
         showDegradationAlerts: true,
         models: [],
@@ -42,29 +43,56 @@ describe('model radar settings serialization', () => {
         '{"show_degradation_alerts":false,"models":{"k3":{"hidden":true}}}'
       )
     ).toEqual({
+      autoEffortEnabled: true,
       defaultVendor: 'openai',
       showDegradationAlerts: false,
-      models: [{ model: 'k3', displayName: '', vendor: '', hidden: true }],
+      models: [
+        {
+          model: 'k3',
+          displayName: '',
+          vendor: '',
+          hidden: true,
+          autoEffort: false,
+          aliases: '',
+        },
+      ],
     })
   })
 
   test('drops empty overrides and false hidden values while serializing deterministically', () => {
     const serialized = serializeModelRadarSettings({
+      autoEffortEnabled: false,
       defaultVendor: 'anthropic',
       showDegradationAlerts: false,
       models: [
-        { model: 'unused', displayName: '', vendor: '', hidden: false },
+        {
+          model: 'unused',
+          displayName: '',
+          vendor: '',
+          hidden: false,
+          autoEffort: false,
+          aliases: '',
+        },
         {
           model: 'k3',
           displayName: ' Kimi K3 ',
           vendor: 'moonshot',
           hidden: false,
+          autoEffort: true,
+          aliases: ' K3-Turbo ,k3 ',
         },
-        { model: 'a', displayName: '', vendor: '', hidden: true },
+        {
+          model: 'a',
+          displayName: '',
+          vendor: '',
+          hidden: true,
+          autoEffort: false,
+          aliases: '',
+        },
       ],
     })
     expect(serialized).toBe(
-      '{"default_vendor":"anthropic","show_degradation_alerts":false,"models":{"a":{"hidden":true},"k3":{"display_name":"Kimi K3","vendor":"moonshot"}}}'
+      '{"auto_effort_enabled":false,"default_vendor":"anthropic","show_degradation_alerts":false,"models":{"a":{"hidden":true},"k3":{"display_name":"Kimi K3","vendor":"moonshot","auto_effort":true,"aliases":["k3-turbo"]}}}'
     )
     expect(
       serializeModelRadarSettings(parseModelRadarSettings(serialized))
@@ -78,7 +106,14 @@ describe('model radar settings serialization', () => {
       modelRadarSchema.safeParse({ ...defaults, defaultVendor: 'Bad Vendor' })
         .success
     ).toBe(false)
-    const row = { model: 'k3', displayName: '', vendor: '', hidden: false }
+    const row = {
+      model: 'k3',
+      displayName: '',
+      vendor: '',
+      hidden: false,
+      autoEffort: false,
+      aliases: '',
+    }
     for (const rows of [
       [{ ...row, vendor: 'bad_vendor' }],
       [{ ...row, vendor: 'all' }],
@@ -105,5 +140,45 @@ describe('model radar settings serialization', () => {
         })),
       }).success
     ).toBe(true)
+  })
+
+  test('validates alias lists against per-model limits and cross-model collisions', () => {
+    const row = {
+      model: 'k3',
+      displayName: '',
+      vendor: '',
+      hidden: false,
+      autoEffort: false,
+      aliases: '',
+    }
+    const accepts = (models: (typeof row)[]) =>
+      modelRadarSchema.safeParse({ ...parseModelRadarSettings(''), models })
+        .success
+    for (const models of [
+      [
+        { ...row, aliases: 'beta' },
+        { ...row, model: 'beta' },
+      ],
+      [
+        { ...row, aliases: 'shared' },
+        { ...row, model: 'other', aliases: 'shared' },
+      ],
+      [
+        {
+          ...row,
+          aliases: Array.from({ length: 17 }, (_, index) => `a${index}`).join(
+            ','
+          ),
+        },
+      ],
+      [{ ...row, aliases: 'a'.repeat(129) }],
+    ]) {
+      expect(accepts(models)).toBe(false)
+    }
+    // A model may repeat its own name, and duplicate spellings within one list
+    // collapse instead of failing validation.
+    expect(accepts([{ ...row, aliases: ' K3 , k3-turbo, K3-TURBO ' }])).toBe(
+      true
+    )
   })
 })

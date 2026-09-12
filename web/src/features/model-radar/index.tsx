@@ -37,11 +37,16 @@ import {
 } from '@/components/ui/empty'
 import { Skeleton } from '@/components/ui/skeleton'
 import { getPricing } from '@/features/pricing/api'
+import { getUserModels } from '@/lib/api'
+import { requireServerSuccess } from '@/lib/server-error-message'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { getModelRadar } from './api'
+import { AutoEffortControls } from './components/auto-effort-controls'
 import { CapabilityGrid } from './components/capability-grid'
 import { DegradationAlerts } from './components/degradation-alerts'
 import { VendorTabs } from './components/vendor-tabs'
+import { useRadarAutoEffort } from './hooks/use-radar-auto-effort'
 import { useRadarFormatters } from './hooks/use-radar-formatters'
 import {
   ALL_VENDORS,
@@ -60,6 +65,7 @@ const PRICING_STALE_TIME_MS = 5 * 60 * 1000
 export function ModelRadar() {
   const { t } = useTranslation()
   const format = useRadarFormatters()
+  const currentUser = useAuthStore((s) => s.auth.user)
   const radarQuery = useQuery({
     queryKey: ['model-radar'],
     queryFn: getModelRadar,
@@ -71,6 +77,13 @@ export function ModelRadar() {
     queryFn: getPricing,
     staleTime: PRICING_STALE_TIME_MS,
   })
+  const userModelsQuery = useQuery({
+    queryKey: ['radar-auto-effort-user-models'],
+    queryFn: async () => requireServerSuccess(await getUserModels()).data ?? [],
+    enabled: Boolean(currentUser),
+    staleTime: PRICING_STALE_TIME_MS,
+  })
+  const autoEffort = useRadarAutoEffort(Boolean(currentUser))
   const iconRegistry = useMemo(
     () => createModelRadarIconRegistry(pricingQuery.data),
     [pricingQuery.data]
@@ -104,6 +117,7 @@ export function ModelRadar() {
     isAxiosError(radarQuery.error) &&
     radarQuery.error.response?.status === 503
   const hasConfigurations = (snapshot?.configurations.length ?? 0) > 0
+  const autoEffortEnabled = Boolean(currentUser) && settings.auto_effort_enabled
 
   let content: React.ReactNode
   if (initialLoading) {
@@ -152,6 +166,17 @@ export function ModelRadar() {
               iconRegistry={iconRegistry}
               settings={settings}
               groupByVendor={activeVendor === ALL_VENDORS}
+              autoEffort={
+                autoEffortEnabled
+                  ? {
+                      setting: autoEffort.setting,
+                      isSaving: autoEffort.isSaving,
+                      userModels: userModelsQuery.data ?? [],
+                      onToggle: (model, enabled) =>
+                        void autoEffort.setModelEnabled(model, enabled),
+                    }
+                  : undefined
+              }
             />
           ) : (
             <RadarEmpty vendor />
@@ -207,6 +232,14 @@ export function ModelRadar() {
                 </p>
               ) : null}
             </div>
+            {autoEffortEnabled ? (
+              <AutoEffortControls
+                setting={autoEffort.setting}
+                isSaving={autoEffort.isSaving}
+                onPolicyChange={autoEffort.setPolicy}
+                onMinIQDeltaChange={autoEffort.setMinIQDelta}
+              />
+            ) : null}
           </header>
 
           {content}

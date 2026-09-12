@@ -93,6 +93,35 @@ export interface UserProfile {
 export type NotifyType = 'email' | 'webhook' | 'bark' | 'gotify'
 
 /**
+ * Strategy used to pick the reasoning tier that replaces the client's own tier.
+ */
+export type RadarAutoEffortPolicy =
+  | 'highest_iq'
+  | 'iq_per_cost'
+  | 'min_iq_delta'
+
+/**
+ * Per-model switch of the radar auto-effort preference.
+ */
+export interface RadarAutoEffortModel {
+  enabled: boolean
+  /** Optional per-model strategy override. */
+  policy?: RadarAutoEffortPolicy
+}
+
+/**
+ * User preference that replaces an explicitly selected reasoning tier with the
+ * tier the model radar scores best. Keyed by radar model name.
+ */
+export interface RadarAutoEffortSetting {
+  /** User-level strategy; defaults to highest_iq when unset. */
+  policy?: RadarAutoEffortPolicy
+  /** Minimum IQ gap for the min_iq_delta strategy; defaults to 5. */
+  min_iq_delta?: number
+  models?: Record<string, RadarAutoEffortModel>
+}
+
+/**
  * Parsed user settings
  */
 export interface UserSettings {
@@ -121,6 +150,8 @@ export interface UserSettings {
   upstream_model_update_notify_enabled?: boolean
   /** Preferred interface/API response language */
   language?: string
+  /** Model-radar driven reasoning tier override */
+  radar_auto_effort?: RadarAutoEffortSetting
 }
 
 /**

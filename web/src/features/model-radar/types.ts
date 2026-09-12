@@ -97,11 +97,17 @@ export type ModelRadarModelOverride = {
   display_name?: string
   vendor?: string
   hidden?: boolean
+  /** Administrator opt-in for radar auto-effort on this model. */
+  auto_effort?: boolean
+  /** Extra gateway model names that resolve to this radar model. */
+  aliases?: string[]
 }
 
 export type ModelRadarSettings = {
   default_vendor: string
   show_degradation_alerts: boolean
+  /** Administrator kill switch for radar auto-effort. */
+  auto_effort_enabled: boolean
   models: Record<string, ModelRadarModelOverride>
 }
 

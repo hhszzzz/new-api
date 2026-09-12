@@ -36,6 +36,14 @@ func TestValidateModelRadarSettings(t *testing.T) {
 		{"blank display", `{"models":{"k3":{"display_name":" "}}}`, false},
 		{"duplicate normalized model", `{"models":{"k3":{}," k3 ":{}}}`, false},
 		{"null override", `{"models":{"k3":null}}`, false},
+		{"valid aliases", `{"models":{"k3":{"aliases":[" kimi-k3 ","kimi-k3-thinking"]}}}`, true},
+		{"empty alias", `{"models":{"k3":{"aliases":[" "]}}}`, false},
+		{"long alias", `{"models":{"k3":{"aliases":["` + strings.Repeat("a", 129) + `"]}}}`, false},
+		{"too many aliases", `{"models":{"k3":{"aliases":["` + strings.Join(aliasNames(17), `","`) + `"]}}}`, false},
+		{"alias conflicts with model", `{"models":{"k3":{},"kimi-k3":{"aliases":["k3"]}}}`, false},
+		{"alias conflicts with alias", `{"models":{"k3":{"aliases":["kimi"]},"k4":{"aliases":["kimi"]}}}`, false},
+		{"non boolean auto effort", `{"auto_effort_enabled":"false"}`, false},
+		{"non boolean model auto effort", `{"models":{"k3":{"auto_effort":"yes"}}}`, false},
 		{"non boolean", `{"show_degradation_alerts":"false"}`, false},
 		{"null", `null`, false},
 		{"array", `[]`, false},
@@ -51,6 +59,14 @@ func TestValidateModelRadarSettings(t *testing.T) {
 			}
 		})
 	}
+}
+
+func aliasNames(count int) []string {
+	names := make([]string, 0, count)
+	for i := range count {
+		names = append(names, fmt.Sprintf("alias-%d", i))
+	}
+	return names
 }
 
 func TestGetModelRadarSettings(t *testing.T) {
@@ -70,14 +86,18 @@ func TestGetModelRadarSettings(t *testing.T) {
 		settings := GetModelRadarSettings()
 		assert.Equal(t, "openai", settings.DefaultVendor)
 		assert.True(t, settings.ShowDegradationAlerts)
+		assert.True(t, settings.AutoEffortEnabled)
 		assert.NotNil(t, settings.Models)
 		assert.Empty(t, settings.Models)
 	}
 	common.OptionMapRWMutex.Lock()
-	common.OptionMap["ModelRadarSettings"] = `{"default_vendor":"anthropic","show_degradation_alerts":false,"models":{" k3 ":{"display_name":" kimi-k3 ","hidden":true}}}`
+	common.OptionMap["ModelRadarSettings"] = `{"default_vendor":"anthropic","show_degradation_alerts":false,"auto_effort_enabled":false,"models":{" k3 ":{"display_name":" kimi-k3 ","hidden":true,"auto_effort":true,"aliases":[" KIMI-K3 ","k3"]}}}`
 	common.OptionMapRWMutex.Unlock()
 	settings := GetModelRadarSettings()
 	assert.Equal(t, "anthropic", settings.DefaultVendor)
 	assert.False(t, settings.ShowDegradationAlerts)
-	assert.Equal(t, ModelRadarModelOverride{DisplayName: "kimi-k3", Hidden: true}, settings.Models["k3"])
+	assert.False(t, settings.AutoEffortEnabled)
+	assert.Equal(t, ModelRadarModelOverride{
+		DisplayName: "kimi-k3", Hidden: true, AutoEffort: true, Aliases: []string{"kimi-k3"},
+	}, settings.Models["k3"])
 }

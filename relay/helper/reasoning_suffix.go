@@ -54,6 +54,12 @@ func ApplyReasoningModelSuffix(c *gin.Context, info *relaycommon.RelayInfo, outb
 	}
 
 	selected := originParsed
+	// The radar-chosen tier replaces whatever the client selected, including an
+	// explicit @effort:/@thinking: modifier. A channel-mapped model name carries
+	// the channel author's own tier and still wins below.
+	if decision := info.RadarAutoEffort; decision != nil && decision.Applied {
+		selected, diagnostics = overlayRadarAutoEffort(selected, decision, diagnostics)
+	}
 	if upstream != origin {
 		selected, diagnostics = overlayMappedModelModifiers(selected, upstreamParsed, diagnostics)
 	}
@@ -141,6 +147,19 @@ func parseRequestModelName(name string, opts *convmeta.Options) (parsedModelModi
 		parsed.hasThinking = true
 	}
 	return parsed, nil
+}
+
+func overlayRadarAutoEffort(origin parsedModelModifiers, decision *relaycommon.RadarAutoEffortDecision, diagnostics []types.ConversionDiagnostic) (parsedModelModifiers, []types.ConversionDiagnostic) {
+	origin.hasThinking = true
+	origin.intent = radarEffortIntent(decision.To)
+	diagnostics = append(diagnostics, types.ConversionDiagnostic{
+		Code: "radar_auto_effort_applied",
+		Path: "model.radar_auto_effort",
+		Message: fmt.Sprintf("radar auto-effort replaced reasoning effort %q with %q (policy %s)",
+			decision.From, decision.To, decision.Policy),
+		Severity: types.ConversionDiagnosticWarning,
+	})
+	return origin, diagnostics
 }
 
 func overlayMappedModelModifiers(origin parsedModelModifiers, mapped parsedModelModifiers, diagnostics []types.ConversionDiagnostic) (parsedModelModifiers, []types.ConversionDiagnostic) {

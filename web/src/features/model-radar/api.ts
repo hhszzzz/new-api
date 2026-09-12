@@ -16,11 +16,22 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import type { RadarAutoEffortSetting } from '@/features/profile/types'
 import { api } from '@/lib/api'
 
 import type { ModelRadarResponse } from './types'
 
 export async function getModelRadar(): Promise<ModelRadarResponse> {
   const response = await api.get<ModelRadarResponse>('/api/model-radar')
+  return response.data
+}
+
+export async function updateUserRadarAutoEffort(
+  setting: RadarAutoEffortSetting
+): Promise<{ success: boolean; message?: string }> {
+  const response = await api.put<{ success: boolean; message?: string }>(
+    '/api/user/radar-auto-effort',
+    setting
+  )
   return response.data
 }

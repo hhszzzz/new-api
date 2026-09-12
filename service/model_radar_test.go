@@ -13,6 +13,8 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	kitreasoning "github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
+	"github.com/QuantumNous/new-api/setting"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -430,4 +432,87 @@ func TestSyncModelRadarLiveSource(t *testing.T) {
 	require.NotNil(t, snapshot)
 	assert.NotEmpty(t, snapshot.History)
 	assert.Equal(t, modelRadarSourceURL, snapshot.Source.URL)
+}
+
+func float64Pointer(value float64) *float64 { return &value }
+
+func TestBuildModelRadarAutoEffortIndexFiltersAndOrders(t *testing.T) {
+	configurations := []ModelRadarConfiguration{
+		{Model: "gpt-test", Effort: "high", IQ: 90, ValidTasks: 10, AveragePriceUSD: float64Pointer(2)},
+		{Model: "gpt-test", Effort: "medium", IQ: 90, ValidTasks: 10},
+		{Model: "gpt-test", Effort: "low", IQ: 70, ValidTasks: 10},
+		{Model: "gpt-test", Effort: "xhigh", IQ: 80, ValidTasks: 10, AveragePriceUSDByBand: &ModelRadarPriceBand{OffPeak: float64Pointer(1), Peak: float64Pointer(3)}},
+		// Radar publishes tiers the gateway cannot express.
+		{Model: "gpt-test", Effort: "ultra", IQ: 120, ValidTasks: 10},
+		// Too few graded tasks to drive an automatic change.
+		{Model: "gpt-test", Effort: "max", IQ: 99, ValidTasks: modelRadarAutoEffortMinValidTasks - 1},
+		{Model: "hidden-model", Effort: "high", IQ: 95, ValidTasks: 10},
+	}
+	settings := setting.ModelRadarSettings{
+		AutoEffortEnabled: true,
+		Models: map[string]setting.ModelRadarModelOverride{
+			"hidden-model": {Hidden: true},
+			"gpt-test":     {Aliases: []string{"gpt-local", "GPT-Local-Upper"}},
+		},
+	}
+
+	index := buildModelRadarAutoEffortIndex(configurations, 1700000000, settings, `{}`)
+
+	candidates, ok := index.byModel["gpt-test"]
+	require.True(t, ok)
+	assert.Equal(t, "gpt-test", candidates.Model)
+	assert.Equal(t, int64(1700000000), candidates.FetchedAt)
+	require.Len(t, candidates.Candidates, 4)
+	// Descending IQ; equal IQ resolves to the lower tier first.
+	assert.Equal(t, []kitreasoning.Effort{
+		kitreasoning.EffortMedium,
+		kitreasoning.EffortHigh,
+		kitreasoning.EffortXHigh,
+		kitreasoning.EffortLow,
+	}, []kitreasoning.Effort{
+		candidates.Candidates[0].Effort,
+		candidates.Candidates[1].Effort,
+		candidates.Candidates[2].Effort,
+		candidates.Candidates[3].Effort,
+	})
+	assert.Equal(t, 90.0, candidates.Candidates[0].IQ)
+	require.NotNil(t, candidates.Candidates[1].PriceUSD)
+	assert.Equal(t, 2.0, *candidates.Candidates[1].PriceUSD)
+	// A missing average price falls back to the mean of the off-peak/peak bands.
+	require.NotNil(t, candidates.Candidates[2].PriceUSD)
+	assert.Equal(t, 2.0, *candidates.Candidates[2].PriceUSD)
+
+	alias, ok := index.byModel["gpt-local"]
+	require.True(t, ok)
+	assert.Equal(t, candidates.Candidates, alias.Candidates)
+	// Aliases are matched against a normalized lookup, so they are stored
+	// normalized regardless of how the administrator spelled them.
+	upper, ok := index.byModel["gpt-local-upper"]
+	require.True(t, ok)
+	assert.Equal(t, candidates.Candidates, upper.Candidates)
+	_, hidden := index.byModel["hidden-model"]
+	assert.False(t, hidden)
+}
+
+func TestLookupModelRadarCandidatesResolvesNames(t *testing.T) {
+	setupModelRadarServiceTestDB(t)
+	RebuildModelRadarAutoEffortIndex(&ModelRadarData{
+		FetchedAt: common.GetTimestamp(),
+		Configurations: []ModelRadarConfiguration{
+			{Model: "GPT-Test", Effort: "high", IQ: 90, ValidTasks: 10},
+		},
+	})
+
+	candidates, ok := LookupModelRadarCandidates("gpt-test")
+	require.True(t, ok)
+	assert.Equal(t, "GPT-Test", candidates.Model)
+
+	candidates, ok = LookupModelRadarCandidates("openai/gpt-test")
+	require.True(t, ok)
+	assert.Equal(t, "GPT-Test", candidates.Model)
+
+	_, ok = LookupModelRadarCandidates("unlisted-model")
+	assert.False(t, ok)
+	_, ok = LookupModelRadarCandidates("")
+	assert.False(t, ok)
 }
