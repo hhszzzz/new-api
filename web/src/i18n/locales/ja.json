@@ -7158,6 +7158,7 @@
     "The tier only changes when the best tier beats the one you sent by at least this IQ gap.": "最も高いレベルが送信したレベルをこの IQ 差以上に上回る場合のみ切り替えます。",
     "Tiers come from the model radar and are only applied while its data is fresh. Use the switches next to each model to choose which models are affected.": "レベルはモデルレーダーから取得し、データが新しい間だけ適用されます。各モデル横のスイッチで対象のモデルを選べます。",
     "Automatic reasoning tiers adjust to a suitable reasoning effort based on the strategy.": "自動推論ティアは戦略に応じて適切な推論強度を自動的に調整します。",
+    "Ultra is excluded from the automatic reasoning tier: it is never switched to automatically.": "ultra は自動推論強度の対象外です。自動で切り替わることはありません。",
     "Always use the tier with the highest radar IQ": "常にレーダー評価が最も高いティアを使用します",
     "Balance IQ against price and pick the best value tier": "IQ と価格のバランスを取り、最も割安なティアを選びます",
     "Switch when the best tier beats your current one by a certain IQ": "最良のティアが現在のティアより一定の IQ を上回る場合に切り替えます",

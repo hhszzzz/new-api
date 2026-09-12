@@ -442,7 +442,8 @@ func TestBuildModelRadarAutoEffortIndexFiltersAndOrders(t *testing.T) {
 		{Model: "gpt-test", Effort: "medium", IQ: 90, ValidTasks: 10},
 		{Model: "gpt-test", Effort: "low", IQ: 70, ValidTasks: 10},
 		{Model: "gpt-test", Effort: "xhigh", IQ: 80, ValidTasks: 10, AveragePriceUSDByBand: &ModelRadarPriceBand{OffPeak: float64Pointer(1), Peak: float64Pointer(3)}},
-		// Radar publishes tiers the gateway cannot express.
+		// Excluded from automatic selection by name: far more expensive than the
+		// next tier.
 		{Model: "gpt-test", Effort: "ultra", IQ: 120, ValidTasks: 10},
 		// Too few graded tasks to drive an automatic change.
 		{Model: "gpt-test", Effort: "max", IQ: 99, ValidTasks: modelRadarAutoEffortMinValidTasks - 1},

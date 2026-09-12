@@ -7158,6 +7158,7 @@
     "The tier only changes when the best tier beats the one you sent by at least this IQ gap.": "只有當最佳檔位比你送出的檔位高出至少這麼多 IQ 時才會更換。",
     "Tiers come from the model radar and are only applied while its data is fresh. Use the switches next to each model to choose which models are affected.": "檔位資料來自模型雷達，僅在其資料新鮮時生效。用每個模型旁的開關選擇受影響的模型。",
     "Automatic reasoning tiers adjust to a suitable reasoning effort based on the strategy.": "自動推理檔位會根據策略自動調整合適的思考強度",
+    "Ultra is excluded from the automatic reasoning tier: it is never switched to automatically.": "ultra 不參與自動推理強度：不會被自動切換",
     "Always use the tier with the highest radar IQ": "總是選擇雷達評分最高的檔位",
     "Balance IQ against price and pick the best value tier": "在 IQ 與價格之間取平衡，選擇最划算的檔位",
     "Switch when the best tier beats your current one by a certain IQ": "當最佳檔位比你目前的檔位高出一定 IQ 時切換",

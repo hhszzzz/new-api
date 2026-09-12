@@ -133,6 +133,31 @@ describe('model radar capability grid', () => {
       within(cards[0]).getByTitle('Passed / valid samples').parentElement
     ).toHaveClass('justify-between')
   })
+  test('explains on hover that ultra is never chosen by the automatic reasoning tier', async () => {
+    const user = userEvent.setup()
+    render(
+      <CapabilityGrid
+        history={[]}
+        configurations={[
+          { ...fixture, effort: 'ultra' },
+          { ...fixture, effort: 'low' },
+        ]}
+      />
+    )
+    const note =
+      'Ultra is excluded from the automatic reasoning tier: it is never switched to automatically.'
+    expect(screen.queryByText(note)).toBeNull()
+
+    await user.hover(
+      screen.getByRole('button', { name: 'View details for gpt-radar ultra' })
+    )
+    expect(await screen.findByText(note)).toBeVisible()
+
+    await user.hover(
+      screen.getByRole('button', { name: 'View details for gpt-radar low' })
+    )
+    await waitFor(() => expect(screen.queryByText(note)).toBeNull())
+  })
   test('renders a complete vendor badge without clipping it', () => {
     const { container } = render(<ModelBadge color='#2563eb' model='gpt-5.4' />)
     const wrapper = container.firstElementChild

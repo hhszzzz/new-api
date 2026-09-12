@@ -7158,6 +7158,7 @@
     "The tier only changes when the best tier beats the one you sent by at least this IQ gap.": "Le niveau ne change que si le meilleur niveau dépasse celui que vous avez envoyé d'au moins cet écart d'IQ.",
     "Tiers come from the model radar and are only applied while its data is fresh. Use the switches next to each model to choose which models are affected.": "Les niveaux proviennent du radar des modèles et ne s'appliquent que tant que ses données sont à jour. Utilisez les interrupteurs à côté de chaque modèle pour choisir les modèles concernés.",
     "Automatic reasoning tiers adjust to a suitable reasoning effort based on the strategy.": "Les niveaux de raisonnement automatiques s'ajustent à une intensité de raisonnement appropriée selon la stratégie.",
+    "Ultra is excluded from the automatic reasoning tier: it is never switched to automatically.": "ultra est exclu du niveau de raisonnement automatique : il n'est jamais sélectionné automatiquement.",
     "Always use the tier with the highest radar IQ": "Utiliser toujours le niveau le mieux noté par le radar",
     "Balance IQ against price and pick the best value tier": "Équilibrer l'IQ et le prix et choisir le niveau au meilleur rapport qualité-prix",
     "Switch when the best tier beats your current one by a certain IQ": "Changer lorsque le meilleur niveau dépasse votre niveau actuel d'un certain écart d'IQ",

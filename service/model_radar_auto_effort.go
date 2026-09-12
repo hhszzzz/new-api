@@ -23,6 +23,11 @@ const (
 	// stored snapshot. The snapshot itself only changes when a sync runs, so
 	// this bounds how quickly another instance observes a fresh snapshot.
 	modelRadarAutoEffortIndexTTL = 60 * time.Second
+	// Radar's ultra tier is a Codex sub-agent workflow (xhigh plus spawned
+	// agents), not a reasoning effort the gateway can send, so it is never
+	// eligible for automatic selection. Excluded by name so that even an effort
+	// that ever shares the name cannot quietly start being picked.
+	modelRadarAutoEffortExcludedTier = "ultra"
 )
 
 // ModelRadarEffortCandidate is one graded radar tier mapped onto a gateway
@@ -120,9 +125,12 @@ func buildModelRadarAutoEffortIndex(configurations []ModelRadarConfiguration, fe
 		if configuration.ValidTasks < modelRadarAutoEffortMinValidTasks {
 			continue
 		}
+		if strings.EqualFold(strings.TrimSpace(configuration.Effort), modelRadarAutoEffortExcludedTier) {
+			continue
+		}
 		effort, err := kitreasoning.ParseEffort(configuration.Effort)
 		if err != nil || effort == "" {
-			// Radar publishes tiers the gateway cannot express, such as ultra.
+			// Radar publishes other tiers the gateway cannot express.
 			continue
 		}
 		key := normalizeModelRadarLookupName(configuration.Model)

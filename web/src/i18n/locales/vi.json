@@ -7158,6 +7158,7 @@
     "The tier only changes when the best tier beats the one you sent by at least this IQ gap.": "Mức chỉ thay đổi khi mức tốt nhất vượt mức bạn gửi ít nhất bằng khoảng cách IQ này.",
     "Tiers come from the model radar and are only applied while its data is fresh. Use the switches next to each model to choose which models are affected.": "Các mức lấy từ radar mô hình và chỉ áp dụng khi dữ liệu còn mới. Dùng công tắc cạnh mỗi mô hình để chọn mô hình bị ảnh hưởng.",
     "Automatic reasoning tiers adjust to a suitable reasoning effort based on the strategy.": "Bậc suy luận tự động điều chỉnh cường độ suy luận phù hợp theo chiến lược.",
+    "Ultra is excluded from the automatic reasoning tier: it is never switched to automatically.": "ultra không thuộc bậc suy luận tự động: nó sẽ không bao giờ được tự động chuyển đổi.",
     "Always use the tier with the highest radar IQ": "Luôn dùng bậc có điểm radar cao nhất",
     "Balance IQ against price and pick the best value tier": "Cân bằng giữa IQ và giá, chọn bậc đáng giá nhất",
     "Switch when the best tier beats your current one by a certain IQ": "Chuyển khi bậc tốt nhất vượt bậc hiện tại của bạn một khoảng IQ nhất định",

@@ -42,6 +42,7 @@ import {
   getIqTone,
   groupConfigurations,
   IQ_TEXT_CLASSES,
+  isAutoEffortExcludedRadarTier,
   isRadarAutoEffortAllowed,
   matchRadarModelToUserModels,
   matrixEfforts,
@@ -349,7 +350,7 @@ function TierCard(props: {
   const { t } = useTranslation()
   const format = useRadarFormatters()
   const configuration = props.configuration
-  return (
+  const card = (
     <button
       type='button'
       className={cn(
@@ -405,5 +406,20 @@ function TierCard(props: {
         </span>
       </span>
     </button>
+  )
+  // Ultra is the one tier the automatic reasoning tier must never move a request
+  // onto, so hovering its card explains why it stays where the client put it.
+  if (!isAutoEffortExcludedRadarTier(configuration.effort)) return card
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger render={card} />
+        <TooltipContent side='top'>
+          {t(
+            'Ultra is excluded from the automatic reasoning tier: it is never switched to automatically.'
+          )}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   )
 }

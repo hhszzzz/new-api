@@ -619,6 +619,16 @@ export const GATEWAY_EFFORT_ORDER = [
   'max',
 ] as const
 
+// Radar workflow tiers (ultra: xhigh plus spawned sub-agents) are not reasoning
+// efforts the gateway can send, so they are never eligible for automatic
+// selection. Excluded by name so a same-named gateway tier could not quietly
+// start being selected.
+const AUTO_EFFORT_EXCLUDED_RADAR_TIERS = new Set(['ultra'])
+
+export function isAutoEffortExcludedRadarTier(effort: string): boolean {
+  return AUTO_EFFORT_EXCLUDED_RADAR_TIERS.has(effort.trim().toLowerCase())
+}
+
 export type GatewayEffort = (typeof GATEWAY_EFFORT_ORDER)[number]
 
 // A tier graded on fewer tasks than this is too noisy to drive an automatic
@@ -667,6 +677,7 @@ export type RadarAutoEffortPick = {
 
 function asGatewayEffort(effort: string): GatewayEffort | null {
   const normalized = effort.trim().toLowerCase()
+  if (isAutoEffortExcludedRadarTier(normalized)) return null
   return (
     GATEWAY_EFFORT_ORDER.find((candidate) => candidate === normalized) ?? null
   )

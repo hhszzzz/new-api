@@ -7158,6 +7158,7 @@
     "The tier only changes when the best tier beats the one you sent by at least this IQ gap.": "The tier only changes when the best tier beats the one you sent by at least this IQ gap.",
     "Tiers come from the model radar and are only applied while its data is fresh. Use the switches next to each model to choose which models are affected.": "Tiers come from the model radar and are only applied while its data is fresh. Use the switches next to each model to choose which models are affected.",
     "Automatic reasoning tiers adjust to a suitable reasoning effort based on the strategy.": "Automatic reasoning tiers adjust to a suitable reasoning effort based on the strategy.",
+    "Ultra is excluded from the automatic reasoning tier: it is never switched to automatically.": "Ultra is excluded from the automatic reasoning tier: it is never switched to automatically.",
     "Always use the tier with the highest radar IQ": "Always use the tier with the highest radar IQ",
     "Balance IQ against price and pick the best value tier": "Balance IQ against price and pick the best value tier",
     "Switch when the best tier beats your current one by a certain IQ": "Switch when the best tier beats your current one by a certain IQ",
