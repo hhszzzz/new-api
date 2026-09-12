@@ -89,8 +89,9 @@ type SubscriptionFunding struct {
 	// 以下字段在 PreConsume 成功后填充，供 RelayInfo 同步使用
 	AmountTotal     int64
 	AmountUsedAfter int64
-	PlanId          int
 	PlanTitle       string
+	// GrantedGroup 是该订阅授予的分组（upgrade_group），用于日志展示订阅名。
+	GrantedGroup string
 }
 
 func (s *SubscriptionFunding) Source() string { return BillingSourceSubscription }
@@ -107,8 +108,8 @@ func (s *SubscriptionFunding) PreConsume(_ int) error {
 	s.AmountUsedAfter = res.AmountUsedAfter
 	// 获取订阅计划信息
 	if planInfo, err := model.GetSubscriptionPlanInfoByUserSubscriptionId(res.UserSubscriptionId); err == nil && planInfo != nil {
-		s.PlanId = planInfo.PlanId
 		s.PlanTitle = planInfo.PlanTitle
+		s.GrantedGroup = planInfo.UpgradeGroup
 	}
 	return nil
 }

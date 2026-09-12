@@ -184,13 +184,14 @@ type RelayInfo struct {
 	BillingSource string
 	// SubscriptionId is the user_subscriptions.id used when BillingSource == "subscription"
 	SubscriptionId int
-	// SubscriptionPreConsumed is the amount pre-consumed on subscription item (quota units or 1)
-	SubscriptionPreConsumed int64
 	// SubscriptionPostDelta is the post-consume delta applied to amount_used (quota units; can be negative).
 	SubscriptionPostDelta int64
-	// SubscriptionPlanId / SubscriptionPlanTitle are used for logging/UI display.
-	SubscriptionPlanId    int
+	// SubscriptionPlanTitle is the funding subscription's plan title, used as the
+	// log/UI name fallback when the subscription grants no group.
 	SubscriptionPlanTitle string
+	// SubscriptionGroup is the group granted by the funding subscription
+	// (user_subscriptions.upgrade_group); empty for generic subscriptions.
+	SubscriptionGroup string
 	// RequestId is used for idempotent pre-consume/refund
 	RequestId string
 	// SubscriptionAmountTotal / SubscriptionAmountUsedAfterPreConsume are used to compute remaining in logs.

@@ -326,14 +326,8 @@ export interface LogOtherData {
   task_id?: string
   reason?: string
   // Subscription billing fields
-  subscription_plan_id?: string
   subscription_plan_title?: string
-  subscription_id?: string
-  subscription_pre_consumed?: number
-  subscription_post_delta?: number
-  subscription_consumed?: number
-  subscription_remain?: number
-  subscription_total?: number
+  subscription_group?: string
 }
 
 /**

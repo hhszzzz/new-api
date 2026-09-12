@@ -250,41 +250,15 @@ func appendBillingInfo(relayInfo *relaycommon.RelayInfo, other *model.LogOther) 
 		other.SetPublic("billing_preference", relayInfo.UserSetting.BillingPreference)
 	}
 	if relayInfo.BillingSource == "subscription" {
-		if relayInfo.SubscriptionId != 0 {
-			other.SetPublic("subscription_id", relayInfo.SubscriptionId)
-		}
-		if relayInfo.SubscriptionPreConsumed > 0 {
-			other.SetPublic("subscription_pre_consumed", relayInfo.SubscriptionPreConsumed)
-		}
-		// post_delta: settlement delta applied after actual usage is known (can be negative for refund)
-		if relayInfo.SubscriptionPostDelta != 0 {
-			other.SetPublic("subscription_post_delta", relayInfo.SubscriptionPostDelta)
-		}
-		if relayInfo.SubscriptionPlanId != 0 {
-			other.SetPublic("subscription_plan_id", relayInfo.SubscriptionPlanId)
-		}
+		// Plan title is the name fallback for subscriptions that grant no group.
 		if relayInfo.SubscriptionPlanTitle != "" {
 			other.SetPublic("subscription_plan_title", relayInfo.SubscriptionPlanTitle)
 		}
-		// Compute "this request" subscription consumed + remaining
-		consumed := relayInfo.SubscriptionPreConsumed + relayInfo.SubscriptionPostDelta
-		usedFinal := relayInfo.SubscriptionAmountUsedAfterPreConsume + relayInfo.SubscriptionPostDelta
-		if consumed < 0 {
-			consumed = 0
+		if relayInfo.SubscriptionGroup != "" {
+			other.SetPublic("subscription_group", relayInfo.SubscriptionGroup)
 		}
-		if usedFinal < 0 {
-			usedFinal = 0
-		}
-		if relayInfo.SubscriptionAmountTotal > 0 {
-			remain := max(relayInfo.SubscriptionAmountTotal-usedFinal, 0)
-			other.SetPublic("subscription_total", relayInfo.SubscriptionAmountTotal)
-			other.SetPublic("subscription_used", usedFinal)
-			other.SetPublic("subscription_remain", remain)
-		}
-		if consumed > 0 {
-			other.SetPublic("subscription_consumed", consumed)
-		}
-		// Wallet quota is not deducted when billed from subscription.
+		// Wallet quota is not deducted when billed from subscription; the log's
+		// own quota is the amount deducted from the subscription.
 		other.SetPublic("wallet_quota_deducted", 0)
 	}
 }
