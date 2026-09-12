@@ -135,6 +135,26 @@ func cacheTokenCounts(usage *dto.Usage, usageSemantic string) (int64, int64) {
 	return hit, miss
 }
 
+// usageStatsTokenTotal normalizes the token count recorded in usage statistics
+// (quota_data, model rankings, user dashboards). Compliant Anthropic-style
+// usage reports input tokens excluding cache reads and writes, while OpenAI-style
+// usage folds them into the prompt; add the cache components back for the former
+// so every request contributes its full input + output.
+//
+// The exclusion is only applied when it is provable: a cache-inclusive prompt
+// can never be smaller than its cached subset, so cached > prompt means the
+// prompt excludes the cache. Some Anthropic-compatible proxies (for example
+// cc-proxy before its fix) misreport a cache-inclusive prompt; those requests
+// must not be adjusted, otherwise the cache would be counted twice.
+// This only affects usage statistics, never the billed quota.
+func usageStatsTokenTotal(summary *textQuotaSummary) int {
+	totalInput := summary.PromptTokens
+	if summary.IsClaudeUsageSemantic && summary.CacheTokens > summary.PromptTokens {
+		totalInput += summary.CacheTokens + cacheWriteTokensTotal(*summary)
+	}
+	return totalInput + summary.CompletionTokens
+}
+
 func collectToolSurchargeItem(items []ToolSurchargeItem, toolPrices *operation_setting.ToolPriceSnapshot, name string, count int, modelName string) []ToolSurchargeItem {
 	if count <= 0 {
 		return items
@@ -587,6 +607,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		ChannelId:        relayInfo.ChannelId,
 		PromptTokens:     summary.PromptTokens,
 		CompletionTokens: summary.CompletionTokens,
+		TokenUsed:        usageStatsTokenTotal(&summary),
 		ModelName:        logModel,
 		TokenName:        summary.TokenName,
 		Quota:            summary.Quota,

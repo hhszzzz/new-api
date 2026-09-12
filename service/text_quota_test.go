@@ -792,6 +792,46 @@ func TestCacheWriteTokensTotal(t *testing.T) {
 	})
 }
 
+func TestUsageStatsTokenTotalNormalizesCacheSemantics(t *testing.T) {
+	t.Run("anthropic prompt excludes cache", func(t *testing.T) {
+		summary := textQuotaSummary{
+			IsClaudeUsageSemantic: true,
+			PromptTokens:          227,
+			CompletionTokens:      1409,
+			CacheTokens:           103552,
+			CacheCreationTokens:   50,
+			CacheCreationTokens5m: 10,
+			CacheCreationTokens1h: 20,
+		}
+		// Anthropic input_tokens (227) excludes cache read/write, so both are
+		// added back for statistics.
+		require.Equal(t, 227+1409+103552+50, usageStatsTokenTotal(&summary))
+	})
+
+	t.Run("openai prompt already includes cache", func(t *testing.T) {
+		summary := textQuotaSummary{
+			PromptTokens:     119182,
+			CompletionTokens: 756,
+			CacheTokens:      116352,
+		}
+		// OpenAI prompt_tokens already contains the cached subset; adding cache
+		// again would double count.
+		require.Equal(t, 119182+756, usageStatsTokenTotal(&summary))
+	})
+
+	t.Run("anthropic-compatible proxy reports cache-inclusive prompt", func(t *testing.T) {
+		summary := textQuotaSummary{
+			IsClaudeUsageSemantic: true,
+			PromptTokens:          14608,
+			CompletionTokens:      308,
+			CacheTokens:           14208,
+		}
+		// A cache-inclusive prompt cannot be smaller than its cached subset, so
+		// cached <= prompt proves the prompt already contains the cache.
+		require.Equal(t, 14608+308, usageStatsTokenTotal(&summary))
+	})
+}
+
 func TestCalculateTextQuotaSummaryHandlesLegacyClaudeDerivedOpenAIUsage(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()

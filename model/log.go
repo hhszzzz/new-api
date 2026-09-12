@@ -1182,18 +1182,23 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 }
 
 type RecordConsumeLogParams struct {
-	ChannelId        int       `json:"channel_id"`
-	PromptTokens     int       `json:"prompt_tokens"`
-	CompletionTokens int       `json:"completion_tokens"`
-	ModelName        string    `json:"model_name"`
-	TokenName        string    `json:"token_name"`
-	Quota            int       `json:"quota"`
-	Content          string    `json:"content"`
-	TokenId          int       `json:"token_id"`
-	UseTimeSeconds   int       `json:"use_time_seconds"`
-	IsStream         bool      `json:"is_stream"`
-	Group            string    `json:"group"`
-	Other            *LogOther `json:"other"`
+	ChannelId        int `json:"channel_id"`
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	// TokenUsed optionally overrides the token count aggregated into usage
+	// statistics (quota_data). Callers that can normalize cache semantics (for
+	// example Anthropic-style usage, whose prompt excludes cache reads) set it to
+	// the full input + output total. When zero, prompt + completion is used.
+	TokenUsed      int       `json:"token_used"`
+	ModelName      string    `json:"model_name"`
+	TokenName      string    `json:"token_name"`
+	Quota          int       `json:"quota"`
+	Content        string    `json:"content"`
+	TokenId        int       `json:"token_id"`
+	UseTimeSeconds int       `json:"use_time_seconds"`
+	IsStream       bool      `json:"is_stream"`
+	Group          string    `json:"group"`
+	Other          *LogOther `json:"other"`
 }
 
 func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams) {
@@ -1233,6 +1238,10 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		logger.LogError(c, "failed to record log: "+err.Error())
 	}
 	if common.DataExportEnabled {
+		tokenUsed := params.PromptTokens + params.CompletionTokens
+		if params.TokenUsed > 0 {
+			tokenUsed = params.TokenUsed
+		}
 		LogQuotaData(QuotaDataLogParams{
 			UserID:     userId,
 			Username:   username,
@@ -1240,7 +1249,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 			ModelScope: QuotaModelScopeRequested,
 			Quota:      params.Quota,
 			CreatedAt:  createdAt,
-			TokenUsed:  params.PromptTokens + params.CompletionTokens,
+			TokenUsed:  tokenUsed,
 			UseGroup:   params.Group,
 			TokenID:    params.TokenId,
 			ChannelID:  params.ChannelId,
