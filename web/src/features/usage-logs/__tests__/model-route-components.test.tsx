@@ -413,7 +413,7 @@ describe('usage-log model route component visibility', () => {
       .getByText('Automatic reasoning effort')
       .closest('.grid')
     expect(autoRow).toHaveTextContent('low')
-    expect(autoRow).toHaveTextContent('Auto')
+    expect(autoRow).toHaveTextContent('xhigh')
     expect(autoRow).toHaveTextContent('Highest IQ')
     expect(autoRow).toHaveTextContent('IQ 128.5')
   })

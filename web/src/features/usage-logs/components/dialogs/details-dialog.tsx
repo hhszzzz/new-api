@@ -759,13 +759,18 @@ export function DetailsDialog(props: DetailsDialogProps) {
   const autoEffort = other?.reasoning_effort_auto
   const showAutoEffort = Boolean(autoEffort?.applied)
   const autoEffortFrom = autoEffort?.from?.trim()
+  const autoEffortTo = autoEffort?.to?.trim()
   const autoEffortPolicyLabel = getReasoningEffortAutoPolicyLabel(
     autoEffort?.policy
   )
+  // Show the original tier only when it differs from the chosen one, so the row
+  // reads as a direction. The final tier always renders, otherwise the row would
+  // name the client's discarded tier and leave the replacement opaque.
   const showAutoEffortFrom =
     showAutoEffort &&
     Boolean(autoEffortFrom) &&
-    autoEffortFrom?.toLowerCase() !== other?.reasoning_effort?.toLowerCase()
+    autoEffortFrom?.toLowerCase() !==
+      (autoEffortTo || other?.reasoning_effort)?.toLowerCase()
 
   return (
     <Dialog
@@ -952,12 +957,19 @@ export function DetailsDialog(props: DetailsDialogProps) {
                     </span>
                   ) : null}
                   <StatusBadge
-                    label={t('Auto')}
-                    variant='info'
+                    label={autoEffortTo || t('Auto')}
+                    variant={
+                      autoEffortTo
+                        ? getReasoningEffortVariant(autoEffortTo)
+                        : 'info'
+                    }
                     size='sm'
                     type='text'
                     copyable={false}
-                    className='!text-xs leading-normal'
+                    className={cn(
+                      '!text-xs leading-normal',
+                      autoEffortTo && 'font-mono'
+                    )}
                   />
                   {autoEffortPolicyLabel ? (
                     <span className='text-muted-foreground'>
