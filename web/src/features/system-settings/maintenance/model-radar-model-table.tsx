@@ -79,6 +79,14 @@ export function ModelRadarModelTable(props: {
   const counts = new Map(
     props.snapshot?.models.map((row) => [row.model, row.configuration_count])
   )
+  // Only the array-level refine failures belong here. When a row's alias
+  // conflicts, `errors.models` also carries the per-row entries, and showing
+  // the override-limit message for those would be misleading.
+  const modelsError = props.form.formState.errors.models as
+    | { message?: unknown }
+    | undefined
+  const modelsErrorMessage =
+    typeof modelsError?.message === 'string' ? modelsError.message : ''
   return (
     <div className='min-w-0 space-y-3'>
       <h3 className='text-sm font-semibold'>{t('Model mapping')}</h3>
@@ -87,9 +95,9 @@ export function ModelRadarModelTable(props: {
           'Models missing from the latest snapshot stay listed until you reset them.'
         )}
       </p>
-      {props.form.formState.errors.models ? (
+      {modelsErrorMessage ? (
         <p role='alert' className='text-destructive text-sm'>
-          {t('You can configure up to 256 model overrides.')}
+          {t(modelsErrorMessage)}
         </p>
       ) : null}
       <StaticDataTable

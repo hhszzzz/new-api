@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMemo } from 'react'
 import { useForm, useWatch } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 
@@ -58,7 +59,7 @@ import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 import type { ModelRadarManagement } from '../types'
 import {
-  modelRadarSchema,
+  createModelRadarSchema,
   parseModelRadarSettings,
   serializeModelRadarSettings,
   type ModelRadarFormValues,
@@ -97,8 +98,18 @@ function ModelRadarDisplayForm(props: {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const updateOption = useUpdateOption()
+  const schema = useMemo(
+    () =>
+      createModelRadarSchema((alias, model) =>
+        t('Alias "{{alias}}" conflicts with model "{{model}}".', {
+          alias,
+          model,
+        })
+      ),
+    [t]
+  )
   const form = useForm<ModelRadarFormValues>({
-    resolver: zodResolver(modelRadarSchema),
+    resolver: zodResolver(schema),
     defaultValues: parseModelRadarSettings(props.initialSerialized),
   })
   const currentVendors = new Set(

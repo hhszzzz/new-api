@@ -7172,7 +7172,7 @@
     "Comma-separated gateway names": "以逗號分隔的閘道模型名稱",
     "You can configure up to 16 aliases per model.": "每個模型最多可設定 16 個別名。",
     "Each alias must be at most 128 characters long.": "每個別名最長 128 個字元。",
-    "Each alias may map to only one model.": "每個別名只能對應一個模型。",
+    "Alias \"{{alias}}\" conflicts with model \"{{model}}\".": "別名 \"{{alias}}\" 與模型 \"{{model}}\" 衝突。",
     "Automatic reasoning effort": "自動推理強度",
     "Failed to load settings": "載入設定失敗"
   }

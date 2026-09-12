@@ -2,8 +2,11 @@ package setting
 
 import (
 	"fmt"
+	"maps"
 	"regexp"
+	"slices"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
@@ -104,9 +107,6 @@ func parseModelRadarSettings(raw string) (ModelRadarSettings, error) {
 		}
 		settings.Models[model] = *override
 	}
-	if err := validateModelRadarAliasConflicts(settings.Models); err != nil {
-		return settings, err
-	}
 	return settings, nil
 }
 
@@ -133,16 +133,19 @@ func normalizeModelRadarAliases(model string, aliases []string) []string {
 }
 
 // validateModelRadarAliasConflicts rejects an alias that another radar model
-// already claims, either as its own name or as its alias.
+// already claims, either as its own name or as its alias. Hidden models are
+// skipped: no alias lookup ever resolves them, so their names and aliases are
+// free for another model to use.
 func validateModelRadarAliasConflicts(models map[string]ModelRadarModelOverride) error {
-	owner := make(map[string]string, len(models))
-	for model := range models {
-		owner[strings.ToLower(model)] = model
-	}
-	for model, override := range models {
+	owner := modelRadarAliasOwners(models)
+	for _, model := range slices.Sorted(maps.Keys(models)) {
+		override := models[model]
+		if override.Hidden {
+			continue
+		}
 		for _, alias := range override.Aliases {
 			if other, exists := owner[alias]; exists && other != model {
-				return fmt.Errorf("model radar alias %q conflicts with model %q", alias, other)
+				return fmt.Errorf("model radar alias %q on model %q conflicts with model %q", alias, model, other)
 			}
 			owner[alias] = model
 		}
@@ -150,9 +153,59 @@ func validateModelRadarAliasConflicts(models map[string]ModelRadarModelOverride)
 	return nil
 }
 
+// dropModelRadarAliasConflicts removes the aliases validateModelRadarAliasConflicts
+// would reject, so a stored configuration stays usable. An alias can start
+// colliding after the radar publishes a model whose name it already used;
+// dropping only that alias keeps every other override, where rejecting the
+// configuration would silently reset the display settings and the auto-effort
+// opt-ins. Models are visited in name order so the survivor is deterministic.
+func dropModelRadarAliasConflicts(models map[string]ModelRadarModelOverride) int {
+	owner := modelRadarAliasOwners(models)
+	dropped := 0
+	for _, model := range slices.Sorted(maps.Keys(models)) {
+		override := models[model]
+		if override.Hidden || len(override.Aliases) == 0 {
+			continue
+		}
+		kept := make([]string, 0, len(override.Aliases))
+		for _, alias := range override.Aliases {
+			if other, exists := owner[alias]; exists && other != model {
+				dropped++
+				continue
+			}
+			owner[alias] = model
+			kept = append(kept, alias)
+		}
+		if len(kept) == 0 {
+			kept = nil
+		}
+		override.Aliases = kept
+		models[model] = override
+	}
+	return dropped
+}
+
+// modelRadarAliasOwners maps every gateway name a visible radar model already
+// claims, by its own name, to that model.
+func modelRadarAliasOwners(models map[string]ModelRadarModelOverride) map[string]string {
+	owner := make(map[string]string, len(models))
+	for model, override := range models {
+		if override.Hidden {
+			continue
+		}
+		owner[strings.ToLower(model)] = model
+	}
+	return owner
+}
+
+// ValidateModelRadarSettings rejects a configuration the admin API must not
+// store, including alias conflicts.
 func ValidateModelRadarSettings(raw string) error {
-	_, err := parseModelRadarSettings(raw)
-	return err
+	settings, err := parseModelRadarSettings(raw)
+	if err != nil {
+		return err
+	}
+	return validateModelRadarAliasConflicts(settings.Models)
 }
 
 func GetModelRadarSettings() ModelRadarSettings {
@@ -162,8 +215,31 @@ func GetModelRadarSettings() ModelRadarSettings {
 	settings, err := parseModelRadarSettings(raw)
 	if err != nil {
 		settings, _ = parseModelRadarSettings("")
+		return settings
+	}
+	dropped := dropModelRadarAliasConflicts(settings.Models)
+	if dropped > 0 {
+		logModelRadarAliasConflicts(raw, dropped)
 	}
 	return settings
+}
+
+// modelRadarConflictLog suppresses the conflict warning once it has been
+// reported for a given stored configuration, because GetModelRadarSettings runs
+// on the relay request path.
+var modelRadarConflictLog struct {
+	sync.Mutex
+	raw string
+}
+
+func logModelRadarAliasConflicts(raw string, dropped int) {
+	modelRadarConflictLog.Lock()
+	defer modelRadarConflictLog.Unlock()
+	if modelRadarConflictLog.raw == raw {
+		return
+	}
+	modelRadarConflictLog.raw = raw
+	common.SysError(fmt.Sprintf("model radar settings: ignored %d alias(es) that conflict with another model", dropped))
 }
 
 // ModelRadarSettingsRaw returns the stored option value. Callers use it to

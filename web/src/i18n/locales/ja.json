@@ -7172,7 +7172,7 @@
     "Comma-separated gateway names": "カンマ区切りのゲートウェイ名",
     "You can configure up to 16 aliases per model.": "モデルごとに最大 16 個の別名を設定できます。",
     "Each alias must be at most 128 characters long.": "各別名は最大 128 文字です。",
-    "Each alias may map to only one model.": "1 つの別名を対応付けられるモデルは 1 つだけです。",
+    "Alias \"{{alias}}\" conflicts with model \"{{model}}\".": "別名 \"{{alias}}\" はモデル \"{{model}}\" と競合します。",
     "Automatic reasoning effort": "自動推論の強度",
     "Failed to load settings": "設定の読み込みに失敗しました"
   }

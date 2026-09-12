@@ -7172,7 +7172,7 @@
     "Comma-separated gateway names": "Comma-separated gateway names",
     "You can configure up to 16 aliases per model.": "You can configure up to 16 aliases per model.",
     "Each alias must be at most 128 characters long.": "Each alias must be at most 128 characters long.",
-    "Each alias may map to only one model.": "Each alias may map to only one model.",
+    "Alias \"{{alias}}\" conflicts with model \"{{model}}\".": "Alias \"{{alias}}\" conflicts with model \"{{model}}\".",
     "Automatic reasoning effort": "Automatic reasoning effort",
     "Failed to load settings": "Failed to load settings"
   }

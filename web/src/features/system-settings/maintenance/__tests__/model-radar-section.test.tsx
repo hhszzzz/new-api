@@ -328,4 +328,57 @@ describe('model radar management', () => {
       )
     ).toHaveLength(4)
   })
+
+  test('names the conflicting model and lets hiding it release the alias', async () => {
+    const user = userEvent.setup()
+    const snapshot = management.snapshot
+    if (!snapshot) throw new Error('snapshot is required for this test')
+    management.snapshot = {
+      ...snapshot,
+      models: [
+        {
+          model: 'deepseek-v4-flash-0731',
+          configuration_count: 1,
+          efforts: ['low'],
+        },
+        {
+          model: 'deepseek-v4.1-flash',
+          configuration_count: 1,
+          efforts: ['low'],
+        },
+      ],
+    }
+    renderSection()
+    await user.type(
+      await screen.findByRole('textbox', {
+        name: 'Aliases: deepseek-v4-flash-0731',
+      }),
+      'deepseek-v4.1-flash'
+    )
+    await user.click(
+      screen.getByRole('button', { name: 'Save radar settings' })
+    )
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          'Alias "deepseek-v4.1-flash" conflicts with model "deepseek-v4.1-flash".'
+        )
+      ).toBeVisible()
+    )
+    expect(updateSystemOption).not.toHaveBeenCalled()
+
+    await user.click(
+      screen.getByRole('switch', { name: 'Hidden: deepseek-v4.1-flash' })
+    )
+    await user.click(
+      screen.getByRole('button', { name: 'Save radar settings' })
+    )
+    await waitFor(() =>
+      expect(updateSystemOption).toHaveBeenCalledWith({
+        key: 'ModelRadarSettings',
+        value:
+          '{"auto_effort_enabled":true,"default_vendor":"openai","show_degradation_alerts":true,"models":{"deepseek-v4-flash-0731":{"aliases":["deepseek-v4.1-flash"]},"deepseek-v4.1-flash":{"hidden":true}}}',
+      })
+    )
+  })
 })

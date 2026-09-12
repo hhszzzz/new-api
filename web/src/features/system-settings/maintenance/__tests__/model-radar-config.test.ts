@@ -19,10 +19,14 @@ For commercial licensing, please contact support@quantumnous.com
 import { describe, expect, test } from 'vitest'
 
 import {
-  modelRadarSchema,
+  createModelRadarSchema,
   parseModelRadarSettings,
   serializeModelRadarSettings,
 } from '../model-radar-form'
+
+const modelRadarSchema = createModelRadarSchema(
+  (alias, model) => `Alias "${alias}" conflicts with model "${model}".`
+)
 
 describe('model radar settings serialization', () => {
   test.each(['', 'invalid', 'null', '[]', '{}'])(
@@ -180,5 +184,58 @@ describe('model radar settings serialization', () => {
     expect(accepts([{ ...row, aliases: ' K3 , k3-turbo, K3-TURBO ' }])).toBe(
       true
     )
+    // Hiding a model releases its name and its aliases for other models.
+    expect(
+      accepts([
+        { ...row, model: 'deepseek-v4.1-flash', hidden: true },
+        { ...row, model: 'k3', aliases: 'deepseek-v4.1-flash' },
+      ])
+    ).toBe(true)
+    expect(
+      accepts([
+        {
+          ...row,
+          model: 'deepseek-v4-flash-0731',
+          aliases: 'deepseek-v4.1-flash',
+        },
+        { ...row, model: 'deepseek-v4.1-flash', aliases: '' },
+      ])
+    ).toBe(false)
+    expect(
+      accepts([
+        { ...row, aliases: 'shared' },
+        { ...row, model: 'other', aliases: 'shared' },
+      ])
+    ).toBe(false)
+    expect(
+      accepts([
+        { ...row, hidden: true, aliases: 'shared' },
+        { ...row, model: 'other', aliases: 'shared' },
+      ])
+    ).toBe(true)
+  })
+
+  test('names the conflicting model in the alias collision message', () => {
+    const row = {
+      model: 'k3',
+      displayName: '',
+      vendor: '',
+      hidden: false,
+      autoEffort: false,
+      aliases: '',
+    }
+    const result = modelRadarSchema.safeParse({
+      ...parseModelRadarSettings(''),
+      models: [
+        { ...row, model: 'k3', aliases: 'shared' },
+        { ...row, model: 'deepseek-v4.1-flash', aliases: 'shared' },
+      ],
+    })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(result.error.issues.at(-1)?.message).toBe(
+        'Alias "shared" conflicts with model "k3".'
+      )
+    }
   })
 })

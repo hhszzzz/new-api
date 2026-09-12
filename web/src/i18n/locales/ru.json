@@ -7172,7 +7172,7 @@
     "Comma-separated gateway names": "Имена шлюза через запятую",
     "You can configure up to 16 aliases per model.": "Для каждой модели можно задать до 16 псевдонимов.",
     "Each alias must be at most 128 characters long.": "Каждый псевдоним не длиннее 128 символов.",
-    "Each alias may map to only one model.": "Каждый псевдоним может соответствовать только одной модели.",
+    "Alias \"{{alias}}\" conflicts with model \"{{model}}\".": "Псевдоним \"{{alias}}\" конфликтует с моделью \"{{model}}\".",
     "Automatic reasoning effort": "Автоматическая интенсивность рассуждений",
     "Failed to load settings": "Не удалось загрузить настройки"
   }

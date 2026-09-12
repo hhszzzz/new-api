@@ -7172,7 +7172,7 @@
     "Comma-separated gateway names": "Tên gateway phân tách bằng dấu phẩy",
     "You can configure up to 16 aliases per model.": "Bạn có thể cấu hình tối đa 16 bí danh cho mỗi mô hình.",
     "Each alias must be at most 128 characters long.": "Mỗi bí danh dài tối đa 128 ký tự.",
-    "Each alias may map to only one model.": "Mỗi bí danh chỉ có thể ánh xạ tới một mô hình.",
+    "Alias \"{{alias}}\" conflicts with model \"{{model}}\".": "Bí danh \"{{alias}}\" xung đột với mô hình \"{{model}}\".",
     "Automatic reasoning effort": "Cường độ suy luận tự động",
     "Failed to load settings": "Không tải được cài đặt"
   }

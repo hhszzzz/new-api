@@ -43,65 +43,78 @@ const aliasSchema = z
     `Each alias must be at most ${MAX_RADAR_ALIAS_RUNES} characters long.`
   )
 
-export const modelRadarSchema = z.object({
-  autoEffortEnabled: z.boolean(),
-  defaultVendor: vendorSchema,
-  showDegradationAlerts: z.boolean(),
-  models: z
-    .array(
-      z.object({
-        model: z.string().trim().min(1).max(128),
-        displayName: z.string().trim().max(128),
-        vendor: vendorSchema.refine((value) => value !== 'all'),
-        hidden: z.boolean(),
-        autoEffort: z.boolean(),
-        aliases: aliasSchema,
-      })
-    )
-    // The table can contain 256 source models plus 256 saved, retired models.
-    // Only nonempty overrides are written to the option's 256-model map.
-    .max(512)
-    .refine(
-      (rows) =>
-        rows.filter(
-          (row) =>
-            row.displayName ||
-            row.vendor ||
-            row.hidden ||
-            row.autoEffort ||
-            splitRadarAliases(row.aliases).length > 0
-        ).length <= 256,
-      'You can configure up to 256 model overrides.'
-    )
-    .refine(
-      (rows) => new Set(rows.map((row) => row.model)).size === rows.length
-    )
-    .superRefine((rows, ctx) => {
-      // A gateway model name resolves to exactly one radar model, so an alias
-      // may not collide with another model name or with another model's alias.
-      const owners = new Map<string, number>()
-      rows.forEach((row, index) => {
-        owners.set(row.model.trim().toLowerCase(), index)
-      })
-      rows.forEach((row, index) => {
-        for (const name of splitRadarAliases(row.aliases)) {
-          const owner = owners.get(name)
-          if (owner !== undefined) {
-            if (owner === index) continue
-            ctx.addIssue({
-              code: 'custom',
-              path: [index, 'aliases'],
-              message: 'Each alias may map to only one model.',
-            })
-            continue
+export const createModelRadarSchema = (
+  describeAliasConflict: (alias: string, model: string) => string
+) =>
+  z.object({
+    autoEffortEnabled: z.boolean(),
+    defaultVendor: vendorSchema,
+    showDegradationAlerts: z.boolean(),
+    models: z
+      .array(
+        z.object({
+          model: z.string().trim().min(1).max(128),
+          displayName: z.string().trim().max(128),
+          vendor: vendorSchema.refine((value) => value !== 'all'),
+          hidden: z.boolean(),
+          autoEffort: z.boolean(),
+          aliases: aliasSchema,
+        })
+      )
+      // The table can contain 256 source models plus 256 saved, retired models.
+      // Only nonempty overrides are written to the option's 256-model map.
+      .max(512)
+      .refine(
+        (rows) =>
+          rows.filter(
+            (row) =>
+              row.displayName ||
+              row.vendor ||
+              row.hidden ||
+              row.autoEffort ||
+              splitRadarAliases(row.aliases).length > 0
+          ).length <= 256,
+        'You can configure up to 256 model overrides.'
+      )
+      .refine(
+        (rows) => new Set(rows.map((row) => row.model)).size === rows.length,
+        'Duplicate source model mappings are not allowed'
+      )
+      .superRefine((rows, ctx) => {
+        // A gateway model name resolves to exactly one radar model, so an alias
+        // may not collide with a visible model's name or with another visible
+        // model's alias. Hidden models are never resolved, so they neither
+        // claim names for themselves nor collide with anyone.
+        const owners = new Map<string, { index: number; model: string }>()
+        rows.forEach((row, index) => {
+          if (row.hidden) return
+          owners.set(row.model.trim().toLowerCase(), {
+            index,
+            model: row.model,
+          })
+        })
+        rows.forEach((row, index) => {
+          if (row.hidden) return
+          for (const name of splitRadarAliases(row.aliases)) {
+            const owner = owners.get(name)
+            if (owner) {
+              if (owner.index === index) continue
+              ctx.addIssue({
+                code: 'custom',
+                path: [index, 'aliases'],
+                message: describeAliasConflict(name, owner.model),
+              })
+              continue
+            }
+            owners.set(name, { index, model: row.model })
           }
-          owners.set(name, index)
-        }
-      })
-    }),
-})
+        })
+      }),
+  })
 
-export type ModelRadarFormValues = z.infer<typeof modelRadarSchema>
+export type ModelRadarFormValues = z.infer<
+  ReturnType<typeof createModelRadarSchema>
+>
 
 export function parseModelRadarSettings(raw: string): ModelRadarFormValues {
   let parsed: unknown

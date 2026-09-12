@@ -7172,7 +7172,7 @@
     "Comma-separated gateway names": "用逗号分隔的网关模型名",
     "You can configure up to 16 aliases per model.": "每个模型最多可配置 16 个别名。",
     "Each alias must be at most 128 characters long.": "每个别名最长 128 个字符。",
-    "Each alias may map to only one model.": "每个别名只能映射到一个模型。",
+    "Alias \"{{alias}}\" conflicts with model \"{{model}}\".": "别名 \"{{alias}}\" 与模型 \"{{model}}\" 冲突。",
     "Automatic reasoning effort": "自动推理强度",
     "Failed to load settings": "加载设置失败"
   }

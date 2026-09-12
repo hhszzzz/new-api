@@ -7172,7 +7172,7 @@
     "Comma-separated gateway names": "Noms de passerelle séparés par des virgules",
     "You can configure up to 16 aliases per model.": "Vous pouvez configurer jusqu'à 16 alias par modèle.",
     "Each alias must be at most 128 characters long.": "Chaque alias doit comporter au plus 128 caractères.",
-    "Each alias may map to only one model.": "Chaque alias ne peut correspondre qu'à un seul modèle.",
+    "Alias \"{{alias}}\" conflicts with model \"{{model}}\".": "L'alias \"{{alias}}\" entre en conflit avec le modèle \"{{model}}\".",
     "Automatic reasoning effort": "Intensité de raisonnement automatique",
     "Failed to load settings": "Échec du chargement des paramètres"
   }

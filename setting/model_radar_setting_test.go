@@ -42,6 +42,8 @@ func TestValidateModelRadarSettings(t *testing.T) {
 		{"too many aliases", `{"models":{"k3":{"aliases":["` + strings.Join(aliasNames(17), `","`) + `"]}}}`, false},
 		{"alias conflicts with model", `{"models":{"k3":{},"kimi-k3":{"aliases":["k3"]}}}`, false},
 		{"alias conflicts with alias", `{"models":{"k3":{"aliases":["kimi"]},"k4":{"aliases":["kimi"]}}}`, false},
+		{"hidden model releases its name", `{"models":{"k3":{"hidden":true},"kimi-k3":{"aliases":["k3"]}}}`, true},
+		{"hidden model releases its alias", `{"models":{"k3":{"hidden":true,"aliases":["kimi"]},"k4":{"aliases":["kimi"]}}}`, true},
 		{"non boolean auto effort", `{"auto_effort_enabled":"false"}`, false},
 		{"non boolean model auto effort", `{"models":{"k3":{"auto_effort":"yes"}}}`, false},
 		{"non boolean", `{"show_degradation_alerts":"false"}`, false},
@@ -100,4 +102,30 @@ func TestGetModelRadarSettings(t *testing.T) {
 	assert.Equal(t, ModelRadarModelOverride{
 		DisplayName: "kimi-k3", Hidden: true, AutoEffort: true, Aliases: []string{"kimi-k3"},
 	}, settings.Models["k3"])
+}
+
+// A stored configuration can start colliding after the radar publishes a model
+// whose name an existing alias already used. Reading it must drop only the
+// clashing alias while keeping every other override intact, instead of falling
+// back to the defaults and losing the display settings.
+func TestGetModelRadarSettingsDropsConflictingAliases(t *testing.T) {
+	common.OptionMapRWMutex.Lock()
+	previous := common.OptionMap
+	common.OptionMap = map[string]string{
+		"ModelRadarSettings": `{"default_vendor":"anthropic","auto_effort_enabled":false,"models":{"deepseek-v4-flash-0731":{"aliases":["deepseek-v4.1-flash"]},"deepseek-v4.1-flash":{"display_name":"V4.1 Flash","auto_effort":true}}}`,
+	}
+	common.OptionMapRWMutex.Unlock()
+	t.Cleanup(func() {
+		common.OptionMapRWMutex.Lock()
+		common.OptionMap = previous
+		common.OptionMapRWMutex.Unlock()
+	})
+
+	settings := GetModelRadarSettings()
+	assert.Equal(t, "anthropic", settings.DefaultVendor)
+	assert.False(t, settings.AutoEffortEnabled)
+	assert.Empty(t, settings.Models["deepseek-v4-flash-0731"].Aliases)
+	assert.Equal(t, ModelRadarModelOverride{
+		DisplayName: "V4.1 Flash", AutoEffort: true,
+	}, settings.Models["deepseek-v4.1-flash"])
 }
