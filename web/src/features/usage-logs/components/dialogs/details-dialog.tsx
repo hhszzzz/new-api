@@ -84,6 +84,7 @@ import {
   resolveLogTimingMetrics,
   getReasoningEffortVariant,
   getReasoningEffortAutoPolicyLabel,
+  getReasoningEffortAutoSkipLabel,
   renderAuditContent,
 } from '../../lib/format'
 import { getModelRouteInfo } from '../../lib/model-route'
@@ -757,17 +758,23 @@ export function DetailsDialog(props: DetailsDialogProps) {
     other?.reasoning_effort
   )
   const autoEffort = other?.reasoning_effort_auto
-  const showAutoEffort = Boolean(autoEffort?.applied)
+  const autoEffortApplied = Boolean(autoEffort?.applied)
   const autoEffortFrom = autoEffort?.from?.trim()
   const autoEffortTo = autoEffort?.to?.trim()
   const autoEffortPolicyLabel = getReasoningEffortAutoPolicyLabel(
     autoEffort?.policy
   )
+  // A skipped decision keeps the client's tier, so it has no direction to show;
+  // surface only the reasons the reader cannot infer, such as stale radar data.
+  const autoEffortSkipLabel = autoEffortApplied
+    ? undefined
+    : getReasoningEffortAutoSkipLabel(autoEffort?.reason)
+  const showAutoEffort = autoEffortApplied || Boolean(autoEffortSkipLabel)
   // Show the original tier only when it differs from the chosen one, so the row
   // reads as a direction. The final tier always renders, otherwise the row would
   // name the client's discarded tier and leave the replacement opaque.
   const showAutoEffortFrom =
-    showAutoEffort &&
+    autoEffortApplied &&
     Boolean(autoEffortFrom) &&
     autoEffortFrom?.toLowerCase() !==
       (autoEffortTo || other?.reasoning_effort)?.toLowerCase()
@@ -942,44 +949,62 @@ export function DetailsDialog(props: DetailsDialogProps) {
             <DetailRow
               label={t('Automatic reasoning effort')}
               value={
-                <span className='flex flex-wrap items-center gap-1.5'>
-                  {showAutoEffortFrom && autoEffortFrom ? (
-                    <span className='flex items-center'>
-                      <StatusBadge
-                        label={autoEffortFrom}
-                        variant={getReasoningEffortVariant(autoEffortFrom)}
-                        size='sm'
-                        type='text'
-                        copyable={false}
-                        className='font-mono !text-xs leading-normal'
-                      />
-                      <span className='text-muted-foreground mx-1'>→</span>
-                    </span>
-                  ) : null}
-                  <StatusBadge
-                    label={autoEffortTo || t('Auto')}
-                    variant={
-                      autoEffortTo
-                        ? getReasoningEffortVariant(autoEffortTo)
-                        : 'info'
-                    }
-                    size='sm'
-                    type='text'
-                    copyable={false}
-                    className={cn(
-                      '!text-xs leading-normal',
-                      autoEffortTo && 'font-mono'
-                    )}
-                  />
-                  {autoEffortPolicyLabel ? (
-                    <span className='text-muted-foreground'>
-                      {t(autoEffortPolicyLabel)}
-                      {typeof autoEffort?.iq === 'number'
-                        ? ` · IQ ${autoEffort.iq}`
-                        : ''}
-                    </span>
-                  ) : null}
-                </span>
+                autoEffortApplied ? (
+                  <span className='flex flex-wrap items-center gap-1.5'>
+                    {showAutoEffortFrom && autoEffortFrom ? (
+                      <span className='flex items-center'>
+                        <StatusBadge
+                          label={autoEffortFrom}
+                          variant={getReasoningEffortVariant(autoEffortFrom)}
+                          size='sm'
+                          type='text'
+                          copyable={false}
+                          className='font-mono !text-xs leading-normal'
+                        />
+                        <span className='text-muted-foreground mx-1'>→</span>
+                      </span>
+                    ) : null}
+                    <StatusBadge
+                      label={autoEffortTo || t('Auto')}
+                      variant={
+                        autoEffortTo
+                          ? getReasoningEffortVariant(autoEffortTo)
+                          : 'info'
+                      }
+                      size='sm'
+                      type='text'
+                      copyable={false}
+                      className={cn(
+                        '!text-xs leading-normal',
+                        autoEffortTo && 'font-mono'
+                      )}
+                    />
+                    {autoEffortPolicyLabel ? (
+                      <span className='text-muted-foreground'>
+                        {t(autoEffortPolicyLabel)}
+                        {typeof autoEffort?.iq === 'number'
+                          ? ` · IQ ${autoEffort.iq}`
+                          : ''}
+                      </span>
+                    ) : null}
+                  </span>
+                ) : (
+                  <span className='flex flex-wrap items-center gap-1.5'>
+                    <StatusBadge
+                      label={t('Not applied')}
+                      variant='warning'
+                      size='sm'
+                      type='text'
+                      copyable={false}
+                      className='!text-xs leading-normal'
+                    />
+                    {autoEffortSkipLabel ? (
+                      <span className='text-muted-foreground'>
+                        {t(autoEffortSkipLabel)}
+                      </span>
+                    ) : null}
+                  </span>
+                )
               }
             />
           )}

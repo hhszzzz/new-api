@@ -7174,6 +7174,8 @@
     "Each alias must be at most 128 characters long.": "每個別名最長 128 個字元。",
     "Alias \"{{alias}}\" conflicts with model \"{{model}}\".": "別名 \"{{alias}}\" 與模型 \"{{model}}\" 衝突。",
     "Automatic reasoning effort": "自動推理強度",
+    "Not applied": "未套用",
+    "The radar data is stale.": "雷達資料已過期。",
     "Failed to load settings": "載入設定失敗"
   }
 }

@@ -434,6 +434,31 @@ describe('usage-log model route component visibility', () => {
     expect(within(dialog).queryByText('Automatic reasoning effort')).toBeNull()
   })
 
+  test('explains a skip the reader cannot infer, such as stale radar data', () => {
+    const staleLog: UsageLog = {
+      ...routedLog,
+      other: JSON.stringify({
+        reasoning_effort: 'high',
+        reasoning_effort_auto: {
+          applied: false,
+          reason: 'stale',
+          policy: 'highest_iq',
+          iq: 121.88,
+        },
+      }),
+    }
+
+    renderDetailsDialog(ROLE.USER, 'all', staleLog)
+
+    const dialog = screen.getByRole('dialog')
+    const autoRow = within(dialog)
+      .getByText('Automatic reasoning effort')
+      .closest('.grid')
+    expect(autoRow).toHaveTextContent('Not applied')
+    expect(autoRow).toHaveTextContent('The radar data is stale.')
+    expect(autoRow).not.toHaveTextContent('IQ 121.88')
+  })
+
   test('shows WebSocket stream status to the log owner', async () => {
     const streamStatusLog: UsageLog = {
       ...routedLog,

@@ -7174,6 +7174,8 @@
     "Each alias must be at most 128 characters long.": "Chaque alias doit comporter au plus 128 caractères.",
     "Alias \"{{alias}}\" conflicts with model \"{{model}}\".": "L'alias \"{{alias}}\" entre en conflit avec le modèle \"{{model}}\".",
     "Automatic reasoning effort": "Intensité de raisonnement automatique",
+    "Not applied": "Non appliqué",
+    "The radar data is stale.": "Les données du radar sont obsolètes.",
     "Failed to load settings": "Échec du chargement des paramètres"
   }
 }

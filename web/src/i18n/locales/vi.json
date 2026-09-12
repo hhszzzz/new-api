@@ -7174,6 +7174,8 @@
     "Each alias must be at most 128 characters long.": "Mỗi bí danh dài tối đa 128 ký tự.",
     "Alias \"{{alias}}\" conflicts with model \"{{model}}\".": "Bí danh \"{{alias}}\" xung đột với mô hình \"{{model}}\".",
     "Automatic reasoning effort": "Cường độ suy luận tự động",
+    "Not applied": "Không áp dụng",
+    "The radar data is stale.": "Dữ liệu radar đã cũ.",
     "Failed to load settings": "Không tải được cài đặt"
   }
 }

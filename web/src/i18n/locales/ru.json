@@ -7174,6 +7174,8 @@
     "Each alias must be at most 128 characters long.": "Каждый псевдоним не длиннее 128 символов.",
     "Alias \"{{alias}}\" conflicts with model \"{{model}}\".": "Псевдоним \"{{alias}}\" конфликтует с моделью \"{{model}}\".",
     "Automatic reasoning effort": "Автоматическая интенсивность рассуждений",
+    "Not applied": "Не применено",
+    "The radar data is stale.": "Данные радара устарели.",
     "Failed to load settings": "Не удалось загрузить настройки"
   }
 }

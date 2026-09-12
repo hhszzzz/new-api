@@ -288,6 +288,20 @@ export function getReasoningEffortAutoPolicyLabel(
   return policy ? REASONING_EFFORT_AUTO_POLICIES[policy] : undefined
 }
 
+// Skip reasons worth explaining to the log reader. A skip keeps the client's own
+// tier, so only the reasons the user cannot infer are listed here; a client
+// default or an already-optimal tier stays silent.
+const REASONING_EFFORT_AUTO_SKIPS: Record<string, string> = {
+  stale: 'The radar data is stale.',
+}
+
+/** Translatable label for why the radar left the requested tier in place. */
+export function getReasoningEffortAutoSkipLabel(
+  reason: string | undefined
+): string | undefined {
+  return reason ? REASONING_EFFORT_AUTO_SKIPS[reason] : undefined
+}
+
 /**
  * Get time color based on duration (in seconds)
  */
