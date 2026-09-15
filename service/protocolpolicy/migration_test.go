@@ -80,7 +80,7 @@ func TestProtocolPolicyMigrationDatabaseMatrix(t *testing.T) {
 			require.NoError(t, db.Create(&model.Option{Key: "untouched", Value: "keep"}).Error)
 			channels := []model.Channel{
 				{Id: 1, Type: constant.ChannelTypeOpenAI, Key: "channel-key", Models: "public", ModelMapping: common.GetPointer(`{"public":"provider-model"}`), OtherSettings: `{"allow_service_tier":true,"protocol_capabilities":{"upstream_protocols":["chat"],"allow_conversion":true,"model_overrides":[{"model_pattern":"^provider-model$","upstream_protocols":["messages"]}]}}`},
-				{Id: 2, Type: constant.ChannelTypeAdvancedCustom, Key: "custom-key", Models: "public", OtherSettings: `{"advanced_custom":{"advanced_routes":[{"incoming_path":"/v1/chat/completions","upstream_path":"/private/messages","converter":"openai_chat_completions_to_anthropic_messages","models":["public"],"auth":{"type":"header","name":"x-upstream-secret","value":"private-route-key"}}]},"custom_extension":{"keep":true}}`},
+				{Id: 2, Type: constant.ChannelTypeAdvancedCustom, Key: "custom-key", Models: "public", OtherSettings: `{"advanced_custom":{"advanced_routes":[{"incoming_path":"/v1/chat/completions","upstream_path":"/private/messages","converter":"openai_chat_completions_to_anthropic_messages","models":["public"],"auth":{"type":"header","name":"x-upstream-secret","value":"private-route-key"}},{"incoming_path":"/v1/messages","upstream_path":"/private/native-messages","converter":"none"},{"incoming_path":"/v1/responses","upstream_path":"/private/native-responses","target_protocol":"native"},{"incoming_path":"/v1/responses/compact","upstream_path":"/private/compact","converter":"none"},{"incoming_path":"/v1/images/generations","upstream_path":"/private/images","converter":"none"}]},"custom_extension":{"keep":true}}`},
 				{Id: 3, Type: constant.ChannelTypeOpenAI, Key: "strict-key", Models: "public", OtherSettings: `{"protocol_capabilities":{"upstream_protocols":["chat"],"allow_conversion":false},"tool_loss_policy":"strict"}`},
 				{Id: 4, Type: constant.ChannelTypeGemini, Key: "gemini-key", Models: "gemini-model"},
 			}
@@ -120,6 +120,16 @@ func TestProtocolPolicyMigrationDatabaseMatrix(t *testing.T) {
 			for _, channel := range migrated {
 				assert.NotContains(t, channel.OtherSettings, "protocol_capabilities")
 				assert.NotContains(t, channel.OtherSettings, `"converter"`)
+				if channel.Id == 2 {
+					var settings hostdto.ChannelOtherSettings
+					require.NoError(t, common.UnmarshalJsonStr(channel.OtherSettings, &settings))
+					require.NotNil(t, settings.AdvancedCustom)
+					require.Len(t, settings.AdvancedCustom.Routes, 5)
+					assert.Equal(t, "messages", settings.AdvancedCustom.Routes[0].TargetProtocol)
+					for _, route := range settings.AdvancedCustom.Routes[1:] {
+						assert.Equal(t, "native", route.TargetProtocol, route.IncomingPath)
+					}
+				}
 				for _, protocol := range relayconvert.Protocols() {
 					key := fmt.Sprintf("%d/%s", channel.Id, protocol)
 					old := beforePlans[key]

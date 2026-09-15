@@ -328,10 +328,9 @@ func NormalizeChannel(channel *model.Channel, global model_setting.GlobalSetting
 				return "", nil, err
 			}
 			name := string(target)
-			if route.Converter == "" || route.Converter == relayconvert.ConverterNone {
-				if route.TargetProtocol == "" {
-					name = "native"
-				}
+			// Keep the native marker stable after legacy converters are removed.
+			if route.TargetProtocol == "native" || route.TargetProtocol == "" && (route.Converter == "" || route.Converter == relayconvert.ConverterNone) {
+				name = "native"
 			}
 			if name == "" {
 				name = "native"
