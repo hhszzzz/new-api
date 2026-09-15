@@ -2,6 +2,7 @@ package relayconvert
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -759,6 +760,55 @@ func TestConvertStreamResponseStatefulDirectConverters(t *testing.T) {
 	assert.Equal(t, ConverterOpenAIResponsesToOpenAIChat, responsesResults[0].Converter)
 	assert.Equal(t, []ResponseStep{{Converter: ConverterOpenAIResponsesToOpenAIChat, From: types.RelayFormatOpenAIResponses, To: types.RelayFormatOpenAI}}, responsesResults[0].Steps)
 	require.IsType(t, dto.ChatCompletionsStreamResponse{}, responsesResults[len(responsesResults)-1].Value)
+}
+
+func TestClaudeStreamToGeminiKeepsUsageAcrossPartialSnapshots(t *testing.T) {
+	state, err := NewResponseStreamState(types.RelayFormatClaude, types.RelayFormatGemini, ResponseStreamOptions{Model: "public-model"})
+	require.NoError(t, err)
+	var responses []*dto.GeminiChatResponse
+	for _, raw := range []string{
+		`{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"upstream-model","usage":{"input_tokens":3,"output_tokens":0}}}`,
+		`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}`,
+		`{"type":"content_block_stop","index":0}`,
+		`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}`,
+		`{"type":"message_stop"}`,
+	} {
+		var event dto.ClaudeResponse
+		require.NoError(t, kitutil.Unmarshal([]byte(raw), &event))
+		results, err := ConvertStreamResponseChunk(nil, nil, state, &event)
+		require.NoError(t, err)
+		for _, result := range results {
+			response, ok := result.Value.(*dto.GeminiChatResponse)
+			require.True(t, ok)
+			responses = append(responses, response)
+		}
+	}
+	final, err := FinalizeStreamResponse(nil, nil, state)
+	require.NoError(t, err)
+	for _, result := range final {
+		response, ok := result.Value.(*dto.GeminiChatResponse)
+		require.True(t, ok)
+		responses = append(responses, response)
+	}
+	require.NotEmpty(t, responses)
+	var text strings.Builder
+	for _, response := range responses {
+		assert.Equal(t, 3, response.UsageMetadata.PromptTokenCount)
+		for _, candidate := range response.Candidates {
+			for _, part := range candidate.Content.Parts {
+				text.WriteString(part.Text)
+			}
+		}
+	}
+	assert.Equal(t, "hello", text.String())
+	usage := responses[len(responses)-1].UsageMetadata
+	assert.Equal(t, 2, usage.CandidatesTokenCount)
+	assert.Equal(t, 5, usage.TotalTokenCount)
+	require.NotNil(t, usage.BillingUsage)
+	require.NotNil(t, usage.BillingUsage.ClaudeUsage)
+	assert.Equal(t, 3, usage.BillingUsage.ClaudeUsage.InputTokens)
+	assert.Equal(t, 2, usage.BillingUsage.ClaudeUsage.OutputTokens)
 }
 
 func TestConvertStreamResponseStatefulDirectResponsesToClaude(t *testing.T) {

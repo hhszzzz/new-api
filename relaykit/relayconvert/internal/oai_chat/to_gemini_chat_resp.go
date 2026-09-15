@@ -255,7 +255,7 @@ func (s *ChatToGeminiStreamState) ConvertChunk(openAIResponse *dto.ChatCompletio
 		s.seenChoices = make(map[int]bool)
 	}
 	if openAIResponse.Usage != nil {
-		s.usage = UsageFromChatUsage(openAIResponse.Usage)
+		s.usage = dto.MergeUsageNonZero(s.usage, UsageFromChatUsage(openAIResponse.Usage))
 	}
 
 	candidates := make([]dto.GeminiChatCandidate, 0, len(openAIResponse.Choices))
@@ -313,10 +313,10 @@ func (s *ChatToGeminiStreamState) ConvertChunk(openAIResponse *dto.ChatCompletio
 		}
 		return nil, nil
 	}
-	if openAIResponse.Usage != nil {
+	if s.usage != nil {
 		s.usageEmitted = true
 	}
-	return []*dto.GeminiChatResponse{newGeminiStreamResponse(candidates, openAIResponse.Usage, info)}, nil
+	return []*dto.GeminiChatResponse{newGeminiStreamResponse(candidates, s.usage, info)}, nil
 }
 
 // Finalize emits any calls left pending when an upstream closes without a
