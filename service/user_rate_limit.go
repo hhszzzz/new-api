@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"net/http"
 	"strings"
 	"sync"
@@ -15,7 +16,6 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/group_rate_limit_setting"
 
 	"github.com/gin-gonic/gin"
@@ -572,7 +572,7 @@ func (g *UserRequestRateGuard) Pace(ctx context.Context, payload []byte) error {
 	return g.Pacer.PacePayload(ctx, payload)
 }
 
-func BeginUserRequestRateLimit(c *gin.Context, policy UserRateLimitPolicy, modelName string, options UserConcurrencyWaitOptions) (*UserRequestRateGuard, *types.NewAPIError) {
+func BeginUserRequestRateLimit(c *gin.Context, policy UserRateLimitPolicy, modelName string, options UserConcurrencyWaitOptions) (*UserRequestRateGuard, *hosttypes.NewAPIError) {
 	observation := &UserRateLimitObservation{}
 	c.Set(userRateLimitObservationKey, observation)
 	observation.notePolicy(policy)
@@ -583,7 +583,7 @@ func BeginUserRequestRateLimit(c *gin.Context, policy UserRateLimitPolicy, model
 		allowed, failOpen := checkUserRPM(c.Request.Context(), policy.UserID, policy.RPMLimit)
 		if failOpen != nil {
 			if c.Request.Context().Err() != nil {
-				return nil, types.NewError(c.Request.Context().Err(), types.ErrorCodeClientDisconnected, types.ErrOptionWithSkipRetry())
+				return nil, hosttypes.NewError(c.Request.Context().Err(), hosttypes.ErrorCodeClientDisconnected, hosttypes.ErrOptionWithSkipRetry())
 			}
 			observation.noteRedisFailOpen("rpm")
 			logger.LogWarn(c, fmt.Sprintf("user RPM limiter failed open: user=%d request=%s error=%s", policy.UserID, c.GetString(common.RequestIdKey), failOpen.Error()))
@@ -596,7 +596,7 @@ func BeginUserRequestRateLimit(c *gin.Context, policy UserRateLimitPolicy, model
 		allowed, failOpen := checkGroupRPM(c.Request.Context(), policy.Group, policy.SharedRPMLimit)
 		if failOpen != nil {
 			if c.Request.Context().Err() != nil {
-				return nil, types.NewError(c.Request.Context().Err(), types.ErrorCodeClientDisconnected, types.ErrOptionWithSkipRetry())
+				return nil, hosttypes.NewError(c.Request.Context().Err(), hosttypes.ErrorCodeClientDisconnected, hosttypes.ErrOptionWithSkipRetry())
 			}
 			observation.noteRedisFailOpen("shared_rpm")
 			logger.LogWarn(c, fmt.Sprintf("group shared RPM limiter failed open: user=%d group=%s request=%s error=%s", policy.UserID, policy.Group, c.GetString(common.RequestIdKey), failOpen.Error()))
@@ -676,12 +676,12 @@ func IsUserStreamPacing(c *gin.Context) bool {
 	return ok && pacer != nil && pacer.pacingCounter().Load() > 0
 }
 
-func newUserRateLimitError() *types.NewAPIError {
-	return types.NewErrorWithStatusCode(
+func newUserRateLimitError() *hosttypes.NewAPIError {
+	return hosttypes.NewErrorWithStatusCode(
 		errors.New("rate_limit_exceeded"),
-		types.ErrorCode("rate_limit_exceeded"),
+		hosttypes.ErrorCode("rate_limit_exceeded"),
 		http.StatusTooManyRequests,
-		types.ErrOptionWithSkipRetry(),
+		hosttypes.ErrOptionWithSkipRetry(),
 	)
 }
 
@@ -769,11 +769,11 @@ func concurrencyKeys(policy UserRateLimitPolicy) []string {
 	}
 }
 
-func acquireUserConcurrency(c *gin.Context, userID, limit int, options UserConcurrencyWaitOptions, observation *UserRateLimitObservation, config userConcurrencyConfig) (*UserConcurrencyLease, *types.NewAPIError) {
+func acquireUserConcurrency(c *gin.Context, userID, limit int, options UserConcurrencyWaitOptions, observation *UserRateLimitObservation, config userConcurrencyConfig) (*UserConcurrencyLease, *hosttypes.NewAPIError) {
 	return acquireRequestConcurrency(c, UserRateLimitPolicy{UserID: userID, ConcurrencyLimit: limit}, options, observation, config)
 }
 
-func acquireRequestConcurrency(c *gin.Context, policy UserRateLimitPolicy, options UserConcurrencyWaitOptions, observation *UserRateLimitObservation, config userConcurrencyConfig) (*UserConcurrencyLease, *types.NewAPIError) {
+func acquireRequestConcurrency(c *gin.Context, policy UserRateLimitPolicy, options UserConcurrencyWaitOptions, observation *UserRateLimitObservation, config userConcurrencyConfig) (*UserConcurrencyLease, *hosttypes.NewAPIError) {
 	if !policy.HasConcurrencyLimit() {
 		return nil, nil
 	}
@@ -864,7 +864,7 @@ func acquireRequestConcurrency(c *gin.Context, policy UserRateLimitPolicy, optio
 		if err != nil {
 			if c.Request.Context().Err() != nil {
 				removeConcurrencyWaiter(policy, leaseID)
-				return nil, types.NewError(c.Request.Context().Err(), types.ErrorCodeClientDisconnected, types.ErrOptionWithSkipRetry())
+				return nil, hosttypes.NewError(c.Request.Context().Err(), hosttypes.ErrorCodeClientDisconnected, hosttypes.ErrOptionWithSkipRetry())
 			}
 			observation.noteRedisFailOpen("concurrency")
 			removeConcurrencyWaiter(policy, leaseID)
@@ -924,14 +924,14 @@ func acquireRequestConcurrency(c *gin.Context, policy UserRateLimitPolicy, optio
 			}
 			if err := options.Heartbeat(); err != nil {
 				removeConcurrencyWaiter(policy, leaseID)
-				return nil, types.NewError(err, types.ErrorCodeClientDisconnected, types.ErrOptionWithSkipRetry())
+				return nil, hosttypes.NewError(err, hosttypes.ErrorCodeClientDisconnected, hosttypes.ErrOptionWithSkipRetry())
 			}
 		case <-c.Request.Context().Done():
 			if !timer.Stop() {
 				<-timer.C
 			}
 			removeConcurrencyWaiter(policy, leaseID)
-			return nil, types.NewError(c.Request.Context().Err(), types.ErrorCodeClientDisconnected, types.ErrOptionWithSkipRetry())
+			return nil, hosttypes.NewError(c.Request.Context().Err(), hosttypes.ErrorCodeClientDisconnected, hosttypes.ErrOptionWithSkipRetry())
 		}
 	}
 }

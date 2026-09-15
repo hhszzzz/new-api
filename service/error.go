@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"math"
 	"net/http"
@@ -85,8 +86,8 @@ func ClaudeErrorWrapperLocal(err error, code string, statusCode int) *dto.Claude
 	return claudeErr
 }
 
-func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFail bool) (newApiErr *types.NewAPIError) {
-	newApiErr = types.InitOpenAIError(types.ErrorCodeBadResponseStatusCode, resp.StatusCode)
+func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFail bool) (newApiErr *hosttypes.NewAPIError) {
+	newApiErr = hosttypes.InitOpenAIError(hosttypes.ErrorCodeBadResponseStatusCode, resp.StatusCode)
 
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -95,7 +96,7 @@ func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFai
 	CloseResponseBodyGracefully(resp)
 	var errResponse dto.GeneralErrorResponse
 	responseBodyText := string(responseBody)
-	protocolUnsupported := types.IsProtocolUnsupportedMessage(responseBodyText)
+	protocolUnsupported := hosttypes.IsProtocolUnsupportedMessage(responseBodyText)
 	protocolUnsupportedChecked := strings.TrimSpace(responseBodyText) != ""
 	defer func() {
 		if newApiErr == nil || !protocolUnsupportedChecked {
@@ -137,7 +138,7 @@ func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFai
 		// General format error (OpenAI, Anthropic, Gemini, etc.)
 		oaiError := errResponse.TryToOpenAIError()
 		if oaiError != nil {
-			newApiErr = types.WithOpenAIError(*oaiError, resp.StatusCode)
+			newApiErr = hosttypes.WithOpenAIError(*oaiError, resp.StatusCode)
 			if resp.StatusCode == http.StatusNotFound && isBareProtocolNotFoundBody(newApiErr.Error()) {
 				protocolUnsupported = true
 			}
@@ -154,12 +155,12 @@ func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFai
 		// returned error and persistent logs.
 		logger.LogError(ctx, fmt.Sprintf("bad response status code %d with empty error message", resp.StatusCode))
 		message = fmt.Sprintf("bad response status code %d", resp.StatusCode)
-		return types.NewOpenAIError(errors.New(message), types.ErrorCodeBadResponseStatusCode, resp.StatusCode)
+		return hosttypes.NewOpenAIError(errors.New(message), hosttypes.ErrorCodeBadResponseStatusCode, resp.StatusCode)
 	}
 	if resp.StatusCode == http.StatusNotFound && isBareProtocolNotFoundBody(message) {
 		protocolUnsupported = true
 	}
-	newApiErr = types.NewOpenAIError(errors.New(message), types.ErrorCodeBadResponseStatusCode, resp.StatusCode)
+	newApiErr = hosttypes.NewOpenAIError(errors.New(message), hosttypes.ErrorCodeBadResponseStatusCode, resp.StatusCode)
 	if showBodyWhenFail {
 		newApiErr.Err = buildErrWithBody(newApiErr.Error())
 	}
@@ -218,7 +219,7 @@ func firstEventStreamJSONPayload(body []byte) ([]byte, bool) {
 	return payload, true
 }
 
-func ResetStatusCode(newApiErr *types.NewAPIError, statusCodeMappingStr string) {
+func ResetStatusCode(newApiErr *hosttypes.NewAPIError, statusCodeMappingStr string) {
 	if newApiErr == nil {
 		return
 	}
@@ -298,7 +299,7 @@ func TaskErrorWrapper(err error, code string, statusCode int) *taskdto.TaskError
 }
 
 // TaskErrorFromAPIError 将 PreConsumeBilling 返回的 NewAPIError 转换为 TaskError。
-func TaskErrorFromAPIError(apiErr *types.NewAPIError) *taskdto.TaskError {
+func TaskErrorFromAPIError(apiErr *hosttypes.NewAPIError) *taskdto.TaskError {
 	if apiErr == nil {
 		return nil
 	}

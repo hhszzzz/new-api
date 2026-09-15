@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -8,7 +9,6 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -32,7 +32,7 @@ func TestDistributorRejectsDirectRequestWhenUserModelPermissionIsEmpty(t *testin
 
 	assert.Equal(t, http.StatusNotFound, recorder.Code)
 	require.True(t, ctx.IsAborted())
-	assert.Contains(t, recorder.Body.String(), string(types.ErrorCodeModelNotFound))
+	assert.Contains(t, recorder.Body.String(), string(hosttypes.ErrorCodeModelNotFound))
 	assert.NotContains(t, recorder.Body.String(), "restricted-model")
 }
 
@@ -56,6 +56,6 @@ func TestDistributorRejectsBlockedModelEvenWhenUserAllowlistIncludesIt(t *testin
 
 	assert.Equal(t, http.StatusNotFound, recorder.Code)
 	require.True(t, ctx.IsAborted())
-	assert.Contains(t, recorder.Body.String(), string(types.ErrorCodeModelNotFound))
+	assert.Contains(t, recorder.Body.String(), string(hosttypes.ErrorCodeModelNotFound))
 	assert.NotContains(t, recorder.Body.String(), "blocked-model")
 }

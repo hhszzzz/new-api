@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"net/http"
 	"sort"
 	"sync"
@@ -13,8 +14,6 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/relaykit/types"
-
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v8"
 )
@@ -375,12 +374,12 @@ return 1`, []string{channelConcurrencyKey(g.channelID)}, g.leaseID, g.leaseTTL.M
 	}()
 }
 
-func NewChannelRateLimitError() *types.NewAPIError {
-	return types.NewErrorWithStatusCode(
+func NewChannelRateLimitError() *hosttypes.NewAPIError {
+	return hosttypes.NewErrorWithStatusCode(
 		errors.New("rate_limit_exceeded"),
-		types.ErrorCode("rate_limit_exceeded"),
+		hosttypes.ErrorCode("rate_limit_exceeded"),
 		http.StatusTooManyRequests,
-		types.ErrOptionWithSkipRetry(),
+		hosttypes.ErrOptionWithSkipRetry(),
 	)
 }
 

@@ -3,6 +3,8 @@ package oairesponses
 import (
 	"errors"
 	"fmt"
+	sharedbridge "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/bridge"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/internal/toolconv"
 	"sort"
 	"strings"
 	"time"
@@ -635,10 +637,10 @@ func (s *ResponsesToChatStreamState) toolItem(event *dto.ResponsesStreamResponse
 			tool.CustomInput = event.Item.Input
 		}
 		if event.Type == responsesEventOutputItemDone || event.Item.Input != "" {
-			tool.Arguments = customInputArguments(tool.CustomInput)
+			tool.Arguments = toolconv.CustomInputArguments(tool.CustomInput)
 		}
 	case responsesOutputTypeToolSearchCall:
-		if args := toolSearchArguments(event.Item.Arguments); args != "" {
+		if args := toolconv.ToolSearchArguments(event.Item.Arguments); args != "" {
 			tool.Arguments = args
 		}
 	default:
@@ -732,7 +734,7 @@ func (s *ResponsesToChatStreamState) flushCustomToolInput(event *dto.ResponsesSt
 	if event != nil && event.Input != "" {
 		tool.CustomInput = event.Input
 	}
-	tool.Arguments = customInputArguments(tool.CustomInput)
+	tool.Arguments = toolconv.CustomInputArguments(tool.CustomInput)
 	return s.toolDelta(tool, "")
 }
 
@@ -1414,7 +1416,7 @@ func (a *ResponsesBufferedAccumulator) bufferedToolOutput(tool *responsesBuffere
 	} else if ok && item.Type == responsesOutputTypeToolSearchCall {
 		output.Type = responsesOutputTypeToolSearchCall
 		output.Name = "tool_search"
-		output.Arguments = toolSearchArgumentsRaw(tool.Arguments.String())
+		output.Arguments = sharedbridge.ToolSearchArgumentsRaw(tool.Arguments.String())
 	}
 	return output
 }

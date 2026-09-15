@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/QuantumNous/new-api/common"
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/setting/config"
 )
 
@@ -78,6 +79,7 @@ type GlobalSettings struct {
 	EffortTailModelIDs               []string                         `json:"effort_tail_model_ids"`
 	ChatCompletionsToResponsesPolicy ChatCompletionsToResponsesPolicy `json:"chat_completions_to_responses_policy"`
 	ProtocolBridgePolicy             ProtocolBridgePolicy             `json:"protocol_bridge_policy"`
+	ProtocolPolicy                   *hostdto.ProtocolPolicy          `json:"protocol_policy,omitempty"`
 }
 
 // 默认配置
@@ -120,7 +122,27 @@ func GetGlobalSettings() *GlobalSettings {
 }
 
 func (s *GlobalSettings) ValidateConfig() error {
+	if s.ProtocolPolicy != nil {
+		return s.ProtocolPolicy.Validate()
+	}
 	return s.ProtocolBridgePolicy.Validate()
+}
+
+func (s *GlobalSettings) EffectiveProtocolPolicy() hostdto.ProtocolPolicy {
+	if s.ProtocolPolicy != nil {
+		return *s.ProtocolPolicy
+	}
+	policy := hostdto.DefaultProtocolPolicy()
+	policy.StateTTLSeconds = s.ProtocolBridgePolicy.StateTTLSeconds
+	policy.MaxStateTurns = s.ProtocolBridgePolicy.MaxStateTurns
+	policy.MaxStateBytes = s.ProtocolBridgePolicy.MaxStateBytes
+	if s.PassThroughRequestEnabled {
+		policy.RequestMode = hostdto.ProtocolRequestPassthrough
+	}
+	if !s.ProtocolBridgePolicy.Enabled {
+		policy.StateScope = hostdto.ProtocolStateDisabled
+	}
+	return policy
 }
 
 // ShouldPreserveThinkingSuffix 判断模型是否配置为保留 thinking/-nothinking/-low/-high/-medium 后缀

@@ -12,6 +12,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestConversionSessionOwnsStreamsAndCannotResumeAfterClose(t *testing.T) {
+	first, second := NewConversionSession(nil), NewConversionSession(nil)
+	t.Cleanup(first.Close)
+	t.Cleanup(second.Close)
+	state, err := first.StreamState(types.RelayFormatOpenAI, types.RelayFormatOpenAIResponses, ResponseStreamOptions{})
+	require.NoError(t, err)
+	_, err = second.Stream(context.Background(), state, &dto.ChatCompletionsStreamResponse{})
+	require.ErrorContains(t, err, "different conversion session")
+	_, err = second.Finish(context.Background(), state)
+	require.ErrorContains(t, err, "does not belong")
+	first.Close()
+	_, err = first.Request(context.Background(), types.RelayFormatOpenAI, &dto.GeneralOpenAIRequest{})
+	require.ErrorContains(t, err, "closed")
+	_, err = first.Stream(context.Background(), state, &dto.ChatCompletionsStreamResponse{})
+	require.ErrorContains(t, err, "closed")
+	_, err = first.Finish(context.Background(), state)
+	require.ErrorContains(t, err, "closed")
+}
+
 func TestConvertClaudeResponseToResponsesPreservesContentBlockOrder(t *testing.T) {
 	c := WithProtocolBridgeContext(context.Background())
 	response := &dto.ClaudeResponse{

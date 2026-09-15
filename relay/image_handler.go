@@ -3,6 +3,7 @@ package relay
 import (
 	"bytes"
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 	"strings"
@@ -13,33 +14,32 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-gonic/gin"
 )
 
-func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
+func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *hosttypes.NewAPIError) {
 	info.InitChannelMeta(c)
 
 	imageReq, ok := info.Request.(*dto.ImageRequest)
 	if !ok {
-		return types.NewErrorWithStatusCode(fmt.Errorf("invalid request type, expected dto.ImageRequest, got %T", info.Request), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		return hosttypes.NewErrorWithStatusCode(fmt.Errorf("invalid request type, expected dto.ImageRequest, got %T", info.Request), hosttypes.ErrorCodeInvalidRequest, http.StatusBadRequest, hosttypes.ErrOptionWithSkipRetry())
 	}
 
 	request, err := common.DeepCopy(imageReq)
 	if err != nil {
-		return types.NewError(fmt.Errorf("failed to copy request to ImageRequest: %w", err), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		return hosttypes.NewError(fmt.Errorf("failed to copy request to ImageRequest: %w", err), hosttypes.ErrorCodeInvalidRequest, hosttypes.ErrOptionWithSkipRetry())
 	}
 
 	err = helper.ModelMappedHelper(c, info, request)
 	if err != nil {
-		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
+		return hosttypes.NewError(err, hosttypes.ErrorCodeChannelModelMappedError, hosttypes.ErrOptionWithSkipRetry())
 	}
 
 	adaptor := GetAdaptor(info.ApiType)
 	if adaptor == nil {
-		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
+		return hosttypes.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), hosttypes.ErrorCodeInvalidApiType, hosttypes.ErrOptionWithSkipRetry())
 	}
 	adaptor.Init(info)
 
@@ -48,13 +48,13 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 	if info.ShouldPassThroughBody() {
 		storage, err := common.GetBodyStorage(c)
 		if err != nil {
-			return types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+			return hosttypes.NewErrorWithStatusCode(err, hosttypes.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, hosttypes.ErrOptionWithSkipRetry())
 		}
 		requestBody = common.NewReplayableBodyReader(storage)
 	} else {
 		convertedRequest, err := adaptor.ConvertImageRequest(c, info, *request)
 		if err != nil {
-			return types.NewError(err, types.ErrorCodeConvertRequestFailed)
+			return hosttypes.NewError(err, hosttypes.ErrorCodeConvertRequestFailed)
 		}
 		relaycommon.AppendRequestConversionFromRequest(info, convertedRequest)
 
@@ -64,7 +64,7 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		default:
 			jsonData, err := common.Marshal(convertedRequest)
 			if err != nil {
-				return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+				return hosttypes.NewError(err, hosttypes.ErrorCodeConvertRequestFailed, hosttypes.ErrOptionWithSkipRetry())
 			}
 
 			// apply param override
@@ -78,7 +78,7 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 			logger.LogDebug(c, "image request body: %s", jsonData)
 			body, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
 			if err != nil {
-				return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+				return hosttypes.NewError(err, hosttypes.ErrorCodeConvertRequestFailed, hosttypes.ErrOptionWithSkipRetry())
 			}
 			defer closer.Close()
 			jsonData = nil
@@ -90,11 +90,11 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 
 	resp, err := adaptor.DoRequest(c, info, requestBody)
 	if err != nil {
-		return types.NewOpenAIError(err, types.ErrorCodeDoRequestFailed, http.StatusInternalServerError)
+		return hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeDoRequestFailed, http.StatusInternalServerError)
 	}
 	var httpResp *http.Response
 	if resp != nil {
-		httpResp = resp.(*http.Response)
+		httpResp = resp.Response
 		info.IsStream = info.IsStream || strings.HasPrefix(httpResp.Header.Get("Content-Type"), "text/event-stream")
 		if httpResp.StatusCode != http.StatusOK {
 			if httpResp.StatusCode == http.StatusCreated && info.ApiType == constant.APITypeReplicate {

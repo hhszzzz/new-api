@@ -3,6 +3,7 @@ package oairesponses
 import (
 	"bytes"
 	"fmt"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/internal/toolconv"
 	"strconv"
 	"strings"
 
@@ -47,7 +48,7 @@ func LowerResponsesClientTools(request *dto.OpenAIResponsesRequest) (*ResponsesC
 		return bridge, false, nil
 	}
 
-	tools, err := collectResponsesToolDeclarations(request)
+	tools, err := toolconv.CollectResponsesToolDeclarations(request)
 	if err != nil {
 		return nil, false, err
 	}
@@ -62,7 +63,7 @@ func LowerResponsesClientTools(request *dto.OpenAIResponsesRequest) (*ResponsesC
 		}
 		switch toolType {
 		case "function", "custom", "freeform", "tool_search", "namespace":
-			converted, convertErr := responsesToolToChatFunctions(tool, "", bridge.toolState)
+			converted, convertErr := toolconv.ResponsesToolToChatFunctions(tool, "", bridge.toolState)
 			if convertErr != nil {
 				return nil, false, convertErr
 			}
@@ -183,7 +184,7 @@ func lowerResponsesClientToolInput(
 				return nil, false, err
 			}
 			item["type"] = "function_call"
-			item["arguments"] = customInputArguments(item["input"])
+			item["arguments"] = toolconv.CustomInputArguments(item["input"])
 			delete(item, "input")
 			ensureNativeResponsesFunctionDeclaration(name, loweredTools, declaredFunctions)
 			bridge.restoreNeeded = true
@@ -199,7 +200,7 @@ func lowerResponsesClientToolInput(
 				return nil, false, err
 			}
 			item["type"] = "function_call"
-			if args := toolSearchArguments(item["arguments"]); args != "" {
+			if args := toolconv.ToolSearchArguments(item["arguments"]); args != "" {
 				item["arguments"] = args
 			} else {
 				item["arguments"] = "{}"
@@ -237,7 +238,7 @@ func lowerResponsesFunctionCall(item map[string]any, bridge *ResponsesClientTool
 		return "", fmt.Errorf("Responses %s call is missing name", kind)
 	}
 	namespace := strings.TrimSpace(kitutil.Interface2String(item["namespace"]))
-	upstreamName, err := upstreamToolName(bridge.toolState, kind, namespace, name)
+	upstreamName, err := toolconv.UpstreamToolName(bridge.toolState, kind, namespace, name)
 	if err != nil {
 		return "", err
 	}
@@ -302,7 +303,7 @@ func lowerResponsesClientToolChoice(raw []byte, bridge *ResponsesClientToolBridg
 	if name == "" {
 		return raw, false, nil
 	}
-	upstreamName, err := declaredUpstreamToolName(bridge.toolState, kind, namespace, name)
+	upstreamName, err := toolconv.DeclaredUpstreamToolName(bridge.toolState, kind, namespace, name)
 	if err != nil {
 		return nil, false, err
 	}

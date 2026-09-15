@@ -12,14 +12,10 @@ import (
 	sharedchat "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/chat"
 	sharedclaude "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/claude"
 	sharedtoolmedia "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/toolmedia"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/internal/toolconv"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
-)
-
-const (
-	webSearchMaxUsesLow    = 1
-	webSearchMaxUsesMedium = 5
-	webSearchMaxUsesHigh   = 10
+	"github.com/QuantumNous/new-api/relaykit/types"
 )
 
 type openRouterRequestReasoning struct {
@@ -129,73 +125,8 @@ func claudeMessagesRequestToOpenAIChat(c context.Context, claudeRequest dto.Clau
 	} else if len(claudeRequest.StopSequences) > 1 {
 		openAIRequest.Stop = claudeRequest.StopSequences
 	}
-	responseTools, declaredTools, err := claudeToolsToResponses(claudeRequest.Tools)
-	if err != nil {
+	if err := toolconv.RenderRequestTools(c, types.RelayFormatClaude, types.RelayFormatOpenAI, &claudeRequest, &openAIRequest, options); err != nil {
 		return nil, err
-	}
-	openAITools := make([]dto.ToolCallRequest, 0, len(responseTools))
-	for _, tool := range responseTools {
-		var strict *bool
-		if value, ok := tool["strict"].(bool); ok {
-			strict = kitutil.GetPointer(value)
-		}
-		openAITools = append(openAITools, dto.ToolCallRequest{
-			Type: "function",
-			Function: dto.FunctionRequest{
-				Name:        kitutil.Interface2String(tool["name"]),
-				Description: kitutil.Interface2String(tool["description"]),
-				Parameters:  tool["parameters"],
-				Strict:      strict,
-			},
-		})
-	}
-	openAIRequest.Tools = openAITools
-
-	if claudeRequest.ToolChoice != nil {
-		var toolChoice dto.ClaudeToolChoice
-		if value, ok := claudeRequest.ToolChoice.(string); ok {
-			toolChoice.Type = value
-		} else {
-			converted, err := kitutil.Any2Type[dto.ClaudeToolChoice](claudeRequest.ToolChoice)
-			if err != nil {
-				return nil, fmt.Errorf("invalid Claude tool_choice: %w", err)
-			}
-			toolChoice = converted
-		}
-
-		switch toolChoice.Type {
-		case "auto":
-			openAIRequest.ToolChoice = "auto"
-		case "any":
-			openAIRequest.ToolChoice = "required"
-		case "none":
-			openAIRequest.ToolChoice = "none"
-		case "tool":
-			toolName := strings.TrimSpace(toolChoice.Name)
-			if toolName == "" {
-				return nil, fmt.Errorf("Claude tool_choice type tool requires a name")
-			}
-			if len(declaredTools) > 0 {
-				if _, exists := declaredTools[toolName]; !exists {
-					return nil, fmt.Errorf("Claude tool_choice references undeclared tool %q", toolName)
-				}
-			}
-			openAIRequest.ToolChoice = map[string]any{
-				"type": "function",
-				"function": map[string]any{
-					"name": toolName,
-				},
-			}
-		default:
-			return nil, fmt.Errorf("unsupported Claude tool_choice type %q", toolChoice.Type)
-		}
-		if toolChoice.Type != "none" {
-			openAIRequest.ParallelTooCalls = kitutil.GetPointer(!toolChoice.DisableParallelToolUse)
-		}
-	}
-	if len(openAITools) == 0 {
-		openAIRequest.ToolChoice = nil
-		openAIRequest.ParallelTooCalls = nil
 	}
 
 	openAIMessages := make([]dto.Message, 0)

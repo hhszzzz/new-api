@@ -1,10 +1,90 @@
 package gemini
 
 import (
+	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 )
+
+// ApplyOutputFormat preserves the JSON Schema itself. The OpenAPI responseSchema
+// channel cannot express all constraints accepted by OpenAI structured output.
+func ApplyOutputFormat(config *dto.GeminiChatGenerationConfig, format *dto.ResponseFormat) error {
+	if format == nil || format.Type == "" || format.Type == "text" {
+		return nil
+	}
+	switch format.Type {
+	case "json_object":
+		config.ResponseMimeType = "application/json"
+	case "json_schema":
+		var schema dto.FormatJsonSchema
+		if err := kitutil.Unmarshal(format.JsonSchema, &schema); err != nil {
+			return fmt.Errorf("invalid output JSON Schema: %w", err)
+		}
+		if schema.Schema == nil {
+			return fmt.Errorf("output JSON Schema is required")
+		}
+		if field := UnsupportedOutputSchemaField(schema.Schema, 0); field != "" {
+			return fmt.Errorf("Gemini output schema does not preserve constraint %q", field)
+		}
+		encoded, err := kitutil.Marshal(schema.Schema)
+		if err != nil {
+			return err
+		}
+		config.ResponseMimeType = "application/json"
+		config.ResponseJsonSchema = encoded
+		config.ResponseSchema = nil
+	default:
+		return fmt.Errorf("output format %q has no verified Gemini mapping", format.Type)
+	}
+	return nil
+}
+
+// Gemini accepts only a subset of JSON Schema for generated output. In
+// particular, oneOf is interpreted as anyOf, so it cannot enforce exclusivity.
+func UnsupportedOutputSchemaField(schema any, depth int) string {
+	if depth > 64 {
+		return "schema depth"
+	}
+	object, ok := schema.(map[string]any)
+	if !ok {
+		return ""
+	}
+	keys := make([]string, 0, len(object))
+	for key := range object {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	for _, key := range keys {
+		value := object[key]
+		switch key {
+		case "$id", "$schema", "$anchor", "type", "format", "title", "description", "enum", "minItems", "maxItems", "minimum", "maximum", "required", "propertyOrdering":
+		case "properties", "$defs":
+			properties, _ := value.(map[string]any)
+			for _, child := range properties {
+				if field := UnsupportedOutputSchemaField(child, depth+1); field != "" {
+					return field
+				}
+			}
+		case "items", "additionalProperties":
+			if field := UnsupportedOutputSchemaField(value, depth+1); field != "" {
+				return field
+			}
+		case "anyOf", "prefixItems":
+			children, _ := value.([]any)
+			for _, child := range children {
+				if field := UnsupportedOutputSchemaField(child, depth+1); field != "" {
+					return field
+				}
+			}
+		default:
+			return key
+		}
+	}
+	return ""
+}
 
 var geminiOpenAPISchemaAllowedFields = map[string]struct{}{
 	"anyOf":            {},
@@ -33,7 +113,7 @@ var geminiOpenAPISchemaAllowedFields = map[string]struct{}{
 
 const geminiFunctionSchemaMaxDepth = 64
 
-func CleanFunctionParameters(params interface{}) interface{} {
+func CleanFunctionParameters(params any) any {
 	return cleanGeminiFunctionParametersWithDepth(params, 0)
 }
 
@@ -47,7 +127,7 @@ func PrepareFunctionDeclaration(function *dto.FunctionRequest) {
 		return
 	}
 	schema := normalizeFunctionJSONSchema(function.Parameters)
-	if schemaMap, ok := schema.(map[string]interface{}); ok {
+	if schemaMap, ok := schema.(map[string]any); ok {
 		typeName, _ := schemaMap["type"].(string)
 		if strings.TrimSpace(typeName) == "" {
 			schemaMap["type"] = "object"
@@ -55,14 +135,14 @@ func PrepareFunctionDeclaration(function *dto.FunctionRequest) {
 		}
 		if strings.EqualFold(strings.TrimSpace(typeName), "object") {
 			if _, exists := schemaMap["properties"]; !exists {
-				schemaMap["properties"] = map[string]interface{}{}
+				schemaMap["properties"] = map[string]any{}
 			}
 		}
 		schema = schemaMap
 	} else if schema == nil {
-		schema = map[string]interface{}{
+		schema = map[string]any{
 			"type":       "object",
-			"properties": map[string]interface{}{},
+			"properties": map[string]any{},
 		}
 	}
 
@@ -75,10 +155,10 @@ func PrepareFunctionDeclaration(function *dto.FunctionRequest) {
 	function.ParametersJsonSchema = nil
 }
 
-func normalizeFunctionJSONSchema(value interface{}) interface{} {
+func normalizeFunctionJSONSchema(value any) any {
 	switch typed := value.(type) {
-	case map[string]interface{}:
-		result := make(map[string]interface{}, len(typed))
+	case map[string]any:
+		result := make(map[string]any, len(typed))
 		for key, item := range typed {
 			if key == "$schema" || key == "$id" {
 				continue
@@ -86,8 +166,8 @@ func normalizeFunctionJSONSchema(value interface{}) interface{} {
 			result[key] = normalizeFunctionJSONSchema(item)
 		}
 		return result
-	case []interface{}:
-		result := make([]interface{}, len(typed))
+	case []any:
+		result := make([]any, len(typed))
 		for index, item := range typed {
 			result[index] = normalizeFunctionJSONSchema(item)
 		}
@@ -97,20 +177,20 @@ func normalizeFunctionJSONSchema(value interface{}) interface{} {
 	}
 }
 
-func requiresParametersJSONSchema(value interface{}) bool {
+func requiresParametersJSONSchema(value any) bool {
 	switch typed := value.(type) {
-	case map[string]interface{}:
+	case map[string]any:
 		for key, item := range typed {
 			switch key {
 			case "type":
-				if _, ok := item.([]interface{}); ok {
+				if _, ok := item.([]any); ok {
 					return true
 				}
 			case "format", "title", "description", "nullable", "enum", "maxItems", "minItems",
 				"required", "minProperties", "maxProperties", "minLength", "maxLength", "pattern",
 				"example", "propertyOrdering", "default", "minimum", "maximum":
 			case "properties":
-				properties, ok := item.(map[string]interface{})
+				properties, ok := item.(map[string]any)
 				if !ok {
 					return true
 				}
@@ -120,11 +200,11 @@ func requiresParametersJSONSchema(value interface{}) bool {
 					}
 				}
 			case "items":
-				if _, ok := item.(map[string]interface{}); !ok || requiresParametersJSONSchema(item) {
+				if _, ok := item.(map[string]any); !ok || requiresParametersJSONSchema(item) {
 					return true
 				}
 			case "anyOf":
-				items, ok := item.([]interface{})
+				items, ok := item.([]any)
 				if !ok {
 					return true
 				}
@@ -137,7 +217,7 @@ func requiresParametersJSONSchema(value interface{}) bool {
 				return true
 			}
 		}
-	case []interface{}:
+	case []any:
 		for _, item := range typed {
 			if requiresParametersJSONSchema(item) {
 				return true
@@ -147,7 +227,7 @@ func requiresParametersJSONSchema(value interface{}) bool {
 	return false
 }
 
-func cleanGeminiFunctionParametersWithDepth(params interface{}, depth int) interface{} {
+func cleanGeminiFunctionParametersWithDepth(params any, depth int) any {
 	if params == nil {
 		return nil
 	}
@@ -157,8 +237,8 @@ func cleanGeminiFunctionParametersWithDepth(params interface{}, depth int) inter
 	}
 
 	switch v := params.(type) {
-	case map[string]interface{}:
-		cleanedMap := make(map[string]interface{}, len(v))
+	case map[string]any:
+		cleanedMap := make(map[string]any, len(v))
 		for key, val := range v {
 			if _, ok := geminiOpenAPISchemaAllowedFields[key]; ok {
 				cleanedMap[key] = val
@@ -167,23 +247,23 @@ func cleanGeminiFunctionParametersWithDepth(params interface{}, depth int) inter
 
 		normalizeGeminiSchemaTypeAndNullable(cleanedMap)
 
-		if props, ok := cleanedMap["properties"].(map[string]interface{}); ok && props != nil {
-			cleanedProps := make(map[string]interface{})
+		if props, ok := cleanedMap["properties"].(map[string]any); ok && props != nil {
+			cleanedProps := make(map[string]any)
 			for propName, propValue := range props {
 				cleanedProps[propName] = cleanGeminiFunctionParametersWithDepth(propValue, depth+1)
 			}
 			cleanedMap["properties"] = cleanedProps
 		}
 
-		if items, ok := cleanedMap["items"].(map[string]interface{}); ok && items != nil {
+		if items, ok := cleanedMap["items"].(map[string]any); ok && items != nil {
 			cleanedMap["items"] = cleanGeminiFunctionParametersWithDepth(items, depth+1)
 		}
-		if itemsArray, ok := cleanedMap["items"].([]interface{}); ok && len(itemsArray) > 0 {
+		if itemsArray, ok := cleanedMap["items"].([]any); ok && len(itemsArray) > 0 {
 			cleanedMap["items"] = cleanGeminiFunctionParametersWithDepth(itemsArray[0], depth+1)
 		}
 
-		if nested, ok := cleanedMap["anyOf"].([]interface{}); ok && nested != nil {
-			cleanedNested := make([]interface{}, len(nested))
+		if nested, ok := cleanedMap["anyOf"].([]any); ok && nested != nil {
+			cleanedNested := make([]any, len(nested))
 			for i, item := range nested {
 				cleanedNested[i] = cleanGeminiFunctionParametersWithDepth(item, depth+1)
 			}
@@ -191,8 +271,8 @@ func cleanGeminiFunctionParametersWithDepth(params interface{}, depth int) inter
 		}
 
 		return cleanedMap
-	case []interface{}:
-		cleanedArray := make([]interface{}, len(v))
+	case []any:
+		cleanedArray := make([]any, len(v))
 		for i, item := range v {
 			cleanedArray[i] = cleanGeminiFunctionParametersWithDepth(item, depth+1)
 		}
@@ -202,10 +282,10 @@ func cleanGeminiFunctionParametersWithDepth(params interface{}, depth int) inter
 	}
 }
 
-func cleanGeminiFunctionParametersShallow(params interface{}) interface{} {
+func cleanGeminiFunctionParametersShallow(params any) any {
 	switch v := params.(type) {
-	case map[string]interface{}:
-		cleanedMap := make(map[string]interface{}, len(v))
+	case map[string]any:
+		cleanedMap := make(map[string]any, len(v))
 		for key, val := range v {
 			if _, ok := geminiOpenAPISchemaAllowedFields[key]; ok {
 				cleanedMap[key] = val
@@ -216,14 +296,14 @@ func cleanGeminiFunctionParametersShallow(params interface{}) interface{} {
 		delete(cleanedMap, "items")
 		delete(cleanedMap, "anyOf")
 		return cleanedMap
-	case []interface{}:
-		return []interface{}{}
+	case []any:
+		return []any{}
 	default:
 		return params
 	}
 }
 
-func normalizeGeminiSchemaTypeAndNullable(schema map[string]interface{}) {
+func normalizeGeminiSchemaTypeAndNullable(schema map[string]any) {
 	rawType, ok := schema["type"]
 	if !ok || rawType == nil {
 		return
@@ -259,7 +339,7 @@ func normalizeGeminiSchemaTypeAndNullable(schema map[string]interface{}) {
 			return
 		}
 		schema["type"] = normalized
-	case []interface{}:
+	case []any:
 		nullable := false
 		var chosen string
 		for _, item := range typed {
@@ -285,12 +365,12 @@ func normalizeGeminiSchemaTypeAndNullable(schema map[string]interface{}) {
 	}
 }
 
-func RemoveAdditionalProperties(schema interface{}, depth int) interface{} {
+func RemoveAdditionalProperties(schema any, depth int) any {
 	if depth >= 5 {
 		return schema
 	}
 
-	value, ok := schema.(map[string]interface{})
+	value, ok := schema.(map[string]any)
 	if !ok || len(value) == 0 {
 		return schema
 	}
@@ -302,65 +382,23 @@ func RemoveAdditionalProperties(schema interface{}, depth int) interface{} {
 	switch value["type"] {
 	case "object":
 		delete(value, "additionalProperties")
-		if properties, ok := value["properties"].(map[string]interface{}); ok {
+		if properties, ok := value["properties"].(map[string]any); ok {
 			for key, nested := range properties {
 				properties[key] = RemoveAdditionalProperties(nested, depth+1)
 			}
 		}
 		for _, field := range []string{"allOf", "anyOf", "oneOf"} {
-			if nested, ok := value[field].([]interface{}); ok {
+			if nested, ok := value[field].([]any); ok {
 				for i, item := range nested {
 					nested[i] = RemoveAdditionalProperties(item, depth+1)
 				}
 			}
 		}
 	case "array":
-		if items, ok := value["items"].(map[string]interface{}); ok {
+		if items, ok := value["items"].(map[string]any); ok {
 			value["items"] = RemoveAdditionalProperties(items, depth+1)
 		}
 	}
 
 	return value
-}
-
-func OpenAIToolChoiceToConfig(toolChoice any) *dto.ToolConfig {
-	if toolChoice == nil {
-		return nil
-	}
-
-	if toolChoiceStr, ok := toolChoice.(string); ok {
-		config := &dto.ToolConfig{
-			FunctionCallingConfig: &dto.FunctionCallingConfig{},
-		}
-		switch toolChoiceStr {
-		case "auto":
-			config.FunctionCallingConfig.Mode = "AUTO"
-		case "none":
-			config.FunctionCallingConfig.Mode = "NONE"
-		case "required":
-			config.FunctionCallingConfig.Mode = "ANY"
-		default:
-			config.FunctionCallingConfig.Mode = "AUTO"
-		}
-		return config
-	}
-
-	if toolChoiceMap, ok := toolChoice.(map[string]interface{}); ok {
-		if toolChoiceMap["type"] == "function" {
-			config := &dto.ToolConfig{
-				FunctionCallingConfig: &dto.FunctionCallingConfig{
-					Mode: "ANY",
-				},
-			}
-			if function, ok := toolChoiceMap["function"].(map[string]interface{}); ok {
-				if name, ok := function["name"].(string); ok && name != "" {
-					config.FunctionCallingConfig.AllowedFunctionNames = []string{name}
-				}
-			}
-			return config
-		}
-		return nil
-	}
-
-	return nil
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -92,15 +93,6 @@ func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayIn
 
 func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
 	a.ChannelType = info.ChannelType
-
-	// initialize ThinkingContentInfo when thinking_to_content is enabled
-	if info.ChannelSetting.ThinkingToContent {
-		info.ThinkingContentInfo = relaycommon.ThinkingContentInfo{
-			IsFirstThinkingContent:  true,
-			SendLastThinkingContent: false,
-			HasSentThinkingContent:  false,
-		}
-	}
 }
 
 func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
@@ -741,19 +733,19 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	return request, nil
 }
 
-func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {
+func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (*channel.TransportResult, error) {
 	if info.RelayMode == relayconstant.RelayModeAudioTranscription ||
 		info.RelayMode == relayconstant.RelayModeAudioTranslation ||
 		(info.RelayMode == relayconstant.RelayModeImagesEdits && !isJSONRequest(c)) {
-		return channel.DoFormRequest(a, c, info, requestBody)
+		return channel.HTTPResult(channel.DoFormRequest(a, c, info, requestBody))
 	} else if info.RelayMode == relayconstant.RelayModeRealtime {
-		return channel.DoWssRequest(a, c, info, requestBody)
+		return channel.WebSocketResult(channel.DoWssRequest(a, c, info, requestBody))
 	} else {
-		return channel.DoApiRequest(a, c, info, requestBody)
+		return channel.HTTPResult(channel.DoApiRequest(a, c, info, requestBody))
 	}
 }
 
-func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage any, err *types.NewAPIError) {
+func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage dto.UsageResult, err *hosttypes.NewAPIError) {
 	switch info.RelayMode {
 	case relayconstant.RelayModeRealtime:
 		err, usage = OpenaiRealtimeHandler(c, info)

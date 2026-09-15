@@ -3,6 +3,7 @@ package controller
 import (
 	"errors"
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
@@ -13,7 +14,7 @@ import (
 )
 
 func Playground(c *gin.Context) {
-	var newAPIError *types.NewAPIError
+	var newAPIError *hosttypes.NewAPIError
 
 	defer func() {
 		if newAPIError != nil {
@@ -25,13 +26,13 @@ func Playground(c *gin.Context) {
 
 	useAccessToken := c.GetBool("use_access_token")
 	if useAccessToken {
-		newAPIError = types.NewError(errors.New("暂不支持使用 access token"), types.ErrorCodeAccessDenied, types.ErrOptionWithSkipRetry())
+		newAPIError = hosttypes.NewError(errors.New("暂不支持使用 access token"), hosttypes.ErrorCodeAccessDenied, hosttypes.ErrOptionWithSkipRetry())
 		return
 	}
 
 	relayInfo, err := relaycommon.GenRelayInfo(c, types.RelayFormatOpenAI, nil, nil)
 	if err != nil {
-		newAPIError = types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		newAPIError = hosttypes.NewError(err, hosttypes.ErrorCodeInvalidRequest, hosttypes.ErrOptionWithSkipRetry())
 		return
 	}
 
@@ -40,7 +41,7 @@ func Playground(c *gin.Context) {
 	// Write user context to ensure acceptUnsetRatio is available
 	userCache, err := model.GetUserCache(userId)
 	if err != nil {
-		newAPIError = types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
+		newAPIError = hosttypes.NewError(err, hosttypes.ErrorCodeQueryDataError, hosttypes.ErrOptionWithSkipRetry())
 		return
 	}
 	userCache.WriteContext(c)

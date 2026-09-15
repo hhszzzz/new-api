@@ -3,6 +3,7 @@ package ollama
 import (
 	"encoding/json"
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 	"strings"
@@ -14,7 +15,6 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-gonic/gin"
@@ -95,9 +95,9 @@ func toUnix(ts string) int64 {
 	return t.Unix()
 }
 
-func ollamaStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+func ollamaStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *hosttypes.NewAPIError) {
 	if resp == nil || resp.Body == nil {
-		return nil, types.NewOpenAIError(fmt.Errorf("empty response"), types.ErrorCodeBadResponse, http.StatusBadRequest)
+		return nil, hosttypes.NewOpenAIError(fmt.Errorf("empty response"), hosttypes.ErrorCodeBadResponse, http.StatusBadRequest)
 	}
 	defer service.CloseResponseBodyGracefully(resp)
 
@@ -122,7 +122,7 @@ func ollamaStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		var chunk ollamaChatStreamChunk
 		if err := common.Unmarshal([]byte(line), &chunk); err != nil {
 			logger.LogError(c, "ollama stream json decode error: "+err.Error()+" line="+line)
-			return usage, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+			return usage, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 		}
 		if !info.HasUserModelRoute() && chunk.Model != "" {
 			model = chunk.Model
@@ -207,10 +207,10 @@ func ollamaStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 }
 
 // non-stream handler for chat/generate
-func ollamaChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+func ollamaChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *hosttypes.NewAPIError) {
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
 	}
 	service.CloseResponseBodyGracefully(resp)
 	raw := string(body)
@@ -235,7 +235,7 @@ func ollamaChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 		var ck ollamaChatStreamChunk
 		if err := common.Unmarshal([]byte(ln), &ck); err != nil {
 			if len(lines) == 1 {
-				return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+				return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 			}
 			continue
 		}
@@ -269,7 +269,7 @@ func ollamaChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 	if !parsedAny {
 		var single ollamaChatStreamChunk
 		if err := common.Unmarshal(body, &single); err != nil {
-			return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+			return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 		}
 		lastChunk = single
 		if single.Message != nil {

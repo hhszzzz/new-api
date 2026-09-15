@@ -3,6 +3,8 @@ package vertex
 import (
 	"errors"
 	"fmt"
+	hostdto "github.com/QuantumNous/new-api/dto"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 	"strings"
@@ -130,7 +132,7 @@ func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
 
 func (a *Adaptor) getRequestUrl(info *relaycommon.RelayInfo, modelName, suffix string) (string, error) {
 	region := GetModelRegion(info.ApiVersion, info.UpstreamModelName)
-	if info.ChannelOtherSettings.VertexKeyType != dto.VertexKeyTypeAPIKey {
+	if info.ChannelOtherSettings.VertexKeyType != hostdto.VertexKeyTypeAPIKey {
 		adc := &Credentials{}
 		if err := common.Unmarshal([]byte(info.ApiKey), adc); err != nil {
 			return "", fmt.Errorf("failed to decode credentials file: %w", err)
@@ -202,7 +204,7 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) error {
 	channel.SetupApiRequestHeader(info, c, req)
-	if info.ChannelOtherSettings.VertexKeyType != dto.VertexKeyTypeAPIKey {
+	if info.ChannelOtherSettings.VertexKeyType != hostdto.VertexKeyTypeAPIKey {
 		accessToken, err := getAccessToken(a, info)
 		if err != nil {
 			return err
@@ -323,11 +325,11 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	return nil, errors.New("not implemented")
 }
 
-func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {
-	return channel.DoApiRequest(a, c, info, requestBody)
+func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (*channel.TransportResult, error) {
+	return channel.HTTPResult(channel.DoApiRequest(a, c, info, requestBody))
 }
 
-func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage any, err *types.NewAPIError) {
+func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage dto.UsageResult, err *hosttypes.NewAPIError) {
 	switch a.RequestMode {
 	case RequestModeClaude:
 		return (&claude.Adaptor{}).DoResponse(c, resp, info)
@@ -336,7 +338,7 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 	case RequestModeOpenSource:
 		return (&openai.Adaptor{}).DoResponse(c, resp, info)
 	}
-	return nil, types.NewOpenAIError(errors.New("unsupported request mode"), types.ErrorCodeBadResponse, http.StatusInternalServerError)
+	return nil, hosttypes.NewOpenAIError(errors.New("unsupported request mode"), hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 }
 
 func (a *Adaptor) GetModelList() []string {

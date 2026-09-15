@@ -2,6 +2,7 @@ package openai
 
 import (
 	"errors"
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,7 +11,6 @@ import (
 
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
-	relaytypes "github.com/QuantumNous/new-api/relaykit/types"
 	hosttypes "github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
@@ -140,7 +140,7 @@ func TestOpenaiRealtimeHandlerReleasesUsageLockAfterBillingPanic(t *testing.T) {
 		},
 	}
 	type handlerResult struct {
-		err   *relaytypes.NewAPIError
+		err   *hosttypes.NewAPIError
 		usage *dto.RealtimeUsage
 	}
 	resultChan := make(chan handlerResult, 1)
@@ -154,7 +154,7 @@ func TestOpenaiRealtimeHandlerReleasesUsageLockAfterBillingPanic(t *testing.T) {
 	select {
 	case result := <-resultChan:
 		require.NotNil(t, result.err)
-		assert.Equal(t, relaytypes.ErrorCodeBadResponse, result.err.GetErrorCode())
+		assert.Equal(t, hosttypes.ErrorCodeBadResponse, result.err.GetErrorCode())
 		assert.Contains(t, result.err.Error(), "panic in target reader: reserve panic")
 		assert.Nil(t, result.usage)
 		assert.Empty(t, recorder.settles)
@@ -169,7 +169,7 @@ func TestApplyRealtimeSessionPromptPreservesSessionUpdates(t *testing.T) {
 		RouteTargetModelName: "upstream-model",
 		RouteInjectPrompt:    "Route identity.",
 	}
-	info.ChannelMeta = &relaycommon.ChannelMeta{ChannelSetting: dto.ChannelSettings{
+	info.ChannelMeta = &relaycommon.ChannelMeta{ChannelSetting: hostdto.ChannelSettings{
 		SystemPrompt:         "Channel policy.",
 		SystemPromptOverride: true,
 	}}
@@ -206,7 +206,7 @@ func TestApplyRealtimeSessionPromptHonorsChannelOverride(t *testing.T) {
 		RouteTargetModelName: "upstream-model",
 		RouteInjectPrompt:    "Route identity.",
 	}
-	info.ChannelMeta = &relaycommon.ChannelMeta{ChannelSetting: dto.ChannelSettings{
+	info.ChannelMeta = &relaycommon.ChannelMeta{ChannelSetting: hostdto.ChannelSettings{
 		SystemPrompt:         "Channel policy.",
 		SystemPromptOverride: false,
 	}}
@@ -296,7 +296,7 @@ func TestOpenaiRealtimeHandlerForwardsNonStringInstructions(t *testing.T) {
 		ChannelMeta:          &relaycommon.ChannelMeta{UpstreamModelName: "upstream-model"},
 	}
 	type handlerResult struct {
-		err   *relaytypes.NewAPIError
+		err   *hosttypes.NewAPIError
 		usage *dto.RealtimeUsage
 	}
 	resultChan := make(chan handlerResult, 1)

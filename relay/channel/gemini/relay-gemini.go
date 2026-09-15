@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 	"strings"
@@ -152,7 +153,7 @@ func handleStream(c *gin.Context, info *relaycommon.RelayInfo, resp *dto.ChatCom
 	if err != nil {
 		return fmt.Errorf("failed to marshal stream response: %w", err)
 	}
-	err = openai.HandleStreamFormat(c, info, string(streamData), info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent)
+	err = openai.HandleStreamFormat(c, info, string(streamData))
 	if err != nil {
 		return fmt.Errorf("failed to handle stream format: %w", err)
 	}
@@ -167,11 +168,11 @@ func handleFinalStream(c *gin.Context, info *relaycommon.RelayInfo, resp *dto.Ch
 	return openai.HandleFinalResponse(c, info, string(streamData), resp.Id, resp.Created, resp.Model, resp.GetSystemFingerprint(), resp.Usage, false)
 }
 
-func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response, callback func(data string, geminiResponse *dto.GeminiChatResponse) bool) (*dto.Usage, *types.NewAPIError) {
+func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response, callback func(data string, geminiResponse *dto.GeminiChatResponse) bool) (*dto.Usage, *hosttypes.NewAPIError) {
 	var usage = &dto.Usage{}
 	var imageCount int
 	var hasBillableUsageMetadata bool
-	var streamErr *types.NewAPIError
+	var streamErr *hosttypes.NewAPIError
 	var accumulatedUsageMetadata *dto.GeminiUsageMetadata
 	responseText := strings.Builder{}
 
@@ -184,11 +185,11 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 					statusCode = http.StatusBadGateway
 				}
 				if upstreamError := errorEnvelope.TryToOpenAIError(); upstreamError != nil {
-					streamErr = types.WithOpenAIError(*upstreamError, statusCode)
+					streamErr = hosttypes.WithOpenAIError(*upstreamError, statusCode)
 				} else {
-					streamErr = types.NewOpenAIError(
+					streamErr = hosttypes.NewOpenAIError(
 						fmt.Errorf("Gemini stream error: %s", message),
-						types.ErrorCodeBadResponse,
+						hosttypes.ErrorCodeBadResponse,
 						statusCode,
 					)
 				}
@@ -201,9 +202,9 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 
 		var geminiResponse dto.GeminiChatResponse
 		if err := common.UnmarshalJsonStr(data, &geminiResponse); err != nil {
-			streamErr = types.NewOpenAIError(
+			streamErr = hosttypes.NewOpenAIError(
 				fmt.Errorf("failed to unmarshal Gemini stream response: %w", err),
-				types.ErrorCodeBadResponseBody,
+				hosttypes.ErrorCodeBadResponseBody,
 				http.StatusBadGateway,
 			)
 			sr.Stop(streamErr)
@@ -245,7 +246,7 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 				sr.Stop(nil)
 				return
 			}
-			streamErr = types.NewOpenAIError(errors.New("Gemini stream callback stopped"), types.ErrorCodeBadResponse, http.StatusBadGateway)
+			streamErr = hosttypes.NewOpenAIError(errors.New("Gemini stream callback stopped"), hosttypes.ErrorCodeBadResponse, http.StatusBadGateway)
 			sr.Stop(streamErr)
 		}
 	})
@@ -257,7 +258,7 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		if err == nil {
 			err = fmt.Errorf("Gemini stream ended abnormally: %s", info.StreamStatus.Summary())
 		}
-		return usage, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusBadGateway)
+		return usage, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusBadGateway)
 	}
 
 	if !hasBillableUsageMetadata {
@@ -294,22 +295,22 @@ func isGeminiDownstreamStop(c *gin.Context, info *relaycommon.RelayInfo) bool {
 		info.StreamStatus.Snapshot().EndReason == relaycommon.StreamEndReasonClientGone
 }
 
-func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *hosttypes.NewAPIError) {
 	id := helper.GetResponseID(c)
 	createAt := common.GetTimestamp()
 	streamTarget := types.RelayFormatOpenAI
 	if info.RelayFormat == types.RelayFormatClaude {
 		streamTarget = types.RelayFormatClaude
 	}
-	streamState, stateErr := relayconvert.NewResponseStreamState(types.RelayFormatGemini, streamTarget, relayconvert.ResponseStreamOptions{
+	streamState, stateErr := info.ConversionSession().StreamState(types.RelayFormatGemini, streamTarget, relayconvert.ResponseStreamOptions{
 		ID:      id,
 		Model:   info.PublicResponseModelName(),
 		Created: createAt,
 	})
 	if stateErr != nil {
-		return nil, types.NewOpenAIError(stateErr, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(stateErr, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
-	var conversionError *types.NewAPIError
+	var conversionError *hosttypes.NewAPIError
 	upstreamCompleted := false
 
 	usage, err := geminiStreamHandler(c, info, resp, func(data string, geminiResponse *dto.GeminiChatResponse) bool {
@@ -324,20 +325,20 @@ func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *
 				break
 			}
 		}
-		results, convertErr := relayconvert.ConvertStreamResponseChunk(c, info, streamState, geminiResponse)
+		results, convertErr := service.ConvertStreamResponseChunk(c, info, streamState, geminiResponse)
 		if convertErr != nil {
-			conversionError = types.NewOpenAIError(convertErr, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+			conversionError = hosttypes.NewOpenAIError(convertErr, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 			return false
 		}
 		for _, result := range results {
 			if streamTarget == types.RelayFormatClaude {
 				response, ok := result.Value.(*dto.ClaudeResponse)
 				if !ok {
-					conversionError = types.NewOpenAIError(fmt.Errorf("expected Claude Messages stream event, got %T", result.Value), types.ErrorCodeBadResponse, http.StatusInternalServerError)
+					conversionError = hosttypes.NewOpenAIError(fmt.Errorf("expected Claude Messages stream event, got %T", result.Value), hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 					return false
 				}
 				if streamErr := helper.ClaudeData(c, *response); streamErr != nil {
-					conversionError = types.NewOpenAIError(streamErr, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+					conversionError = hosttypes.NewOpenAIError(streamErr, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 					return false
 				}
 				info.SendResponseCount++
@@ -346,7 +347,7 @@ func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *
 
 			response, ok := result.Value.(*dto.ChatCompletionsStreamResponse)
 			if !ok {
-				conversionError = types.NewOpenAIError(fmt.Errorf("expected Chat Completions stream chunk, got %T", result.Value), types.ErrorCodeBadResponse, http.StatusInternalServerError)
+				conversionError = hosttypes.NewOpenAIError(fmt.Errorf("expected Chat Completions stream chunk, got %T", result.Value), hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 				return false
 			}
 			response.Model = info.PublicResponseModelName()
@@ -367,20 +368,20 @@ func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *
 					}
 					if streamErr := handleStream(c, info, emptyResponse); streamErr != nil {
 						info.StreamStatus.MarkWriteError(streamErr)
-						conversionError = types.NewOpenAIError(streamErr, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+						conversionError = hosttypes.NewOpenAIError(streamErr, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 						return false
 					}
 					response.ClearToolCalls()
 				} else if streamErr := handleStream(c, info, emptyResponse); streamErr != nil {
 					info.StreamStatus.MarkWriteError(streamErr)
-					conversionError = types.NewOpenAIError(streamErr, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+					conversionError = hosttypes.NewOpenAIError(streamErr, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 					return false
 				}
 			}
 
 			if streamErr := handleStream(c, info, response); streamErr != nil {
 				info.StreamStatus.MarkWriteError(streamErr)
-				conversionError = types.NewOpenAIError(streamErr, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+				conversionError = hosttypes.NewOpenAIError(streamErr, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 				return false
 			}
 		}
@@ -396,28 +397,28 @@ func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *
 	if !upstreamCompleted {
 		terminalErr := fmt.Errorf("Gemini stream ended without a terminal finish reason")
 		info.StreamStatus.MarkTerminalFailure(terminalErr)
-		return usage, types.NewOpenAIError(
+		return usage, hosttypes.NewOpenAIError(
 			terminalErr,
-			types.ErrorCodeBadResponse,
+			hosttypes.ErrorCodeBadResponse,
 			http.StatusBadGateway,
 		)
 	}
 	if usage != nil {
 		streamState.SetUsage(usage)
 	}
-	finalResults, finalizeErr := relayconvert.FinalizeStreamResponse(c, info, streamState)
+	finalResults, finalizeErr := service.FinalizeStreamResponse(c, info, streamState)
 	if finalizeErr != nil {
-		return usage, types.NewOpenAIError(finalizeErr, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		return usage, hosttypes.NewOpenAIError(finalizeErr, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
 	for _, result := range finalResults {
 		if streamTarget == types.RelayFormatClaude {
 			response, ok := result.Value.(*dto.ClaudeResponse)
 			if !ok {
-				return usage, types.NewOpenAIError(fmt.Errorf("expected Claude Messages stream event, got %T", result.Value), types.ErrorCodeBadResponse, http.StatusInternalServerError)
+				return usage, hosttypes.NewOpenAIError(fmt.Errorf("expected Claude Messages stream event, got %T", result.Value), hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 			}
 			if streamErr := helper.ClaudeData(c, *response); streamErr != nil {
 				info.StreamStatus.MarkWriteError(streamErr)
-				return usage, types.NewOpenAIError(streamErr, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+				return usage, hosttypes.NewOpenAIError(streamErr, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 			}
 			info.SendResponseCount++
 			continue
@@ -425,12 +426,12 @@ func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *
 
 		response, ok := result.Value.(*dto.ChatCompletionsStreamResponse)
 		if !ok {
-			return usage, types.NewOpenAIError(fmt.Errorf("expected Chat Completions stream chunk, got %T", result.Value), types.ErrorCodeBadResponse, http.StatusInternalServerError)
+			return usage, hosttypes.NewOpenAIError(fmt.Errorf("expected Chat Completions stream chunk, got %T", result.Value), hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 		}
 		response.Model = info.PublicResponseModelName()
 		if streamErr := handleStream(c, info, response); streamErr != nil {
 			info.StreamStatus.MarkWriteError(streamErr)
-			return usage, types.NewOpenAIError(streamErr, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+			return usage, hosttypes.NewOpenAIError(streamErr, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 		}
 	}
 	if streamTarget == types.RelayFormatClaude {
@@ -444,24 +445,24 @@ func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *
 	if handleErr != nil {
 		info.StreamStatus.MarkWriteError(handleErr)
 		common.SysLog("send final response failed: " + handleErr.Error())
-		return usage, types.NewOpenAIError(handleErr, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		return usage, hosttypes.NewOpenAIError(handleErr, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
 	info.StreamStatus.MarkTerminalDelivered()
 	protocolstate.MarkStreamCompleted(c)
 	return usage, nil
 }
 
-func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *hosttypes.NewAPIError) {
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	service.CloseResponseBodyGracefully(resp)
 	logger.LogDebug(c, "Gemini response body: %s", responseBody)
 	var geminiResponse dto.GeminiChatResponse
 	err = common.Unmarshal(responseBody, &geminiResponse)
 	if err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	markGeminiGoogleSearchCall(c, &geminiResponse)
 	countGeminiBillableFunctionCalls(info, &geminiResponse)
@@ -473,9 +474,9 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 		usage := buildUsageFromGeminiResponse(c, info, &geminiResponse)
 
 		common.SetContextKey(c, constant.ContextKeyAdminRejectReason, "gemini_empty_candidates")
-		newAPIError := types.NewOpenAIError(
+		newAPIError := hosttypes.NewOpenAIError(
 			errors.New("empty response from Gemini API"),
-			types.ErrorCodeEmptyResponse,
+			hosttypes.ErrorCodeEmptyResponse,
 			http.StatusInternalServerError,
 		)
 
@@ -503,21 +504,21 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 		fullTextResponse.Usage = usage
 		responseBody, err = common.Marshal(fullTextResponse)
 		if err != nil {
-			return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+			return nil, hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody)
 		}
 	case types.RelayFormatClaude:
 		convertResult, err := service.ConvertResponse(c, info, types.RelayFormatClaude, &geminiResponse)
 		if err != nil {
-			return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+			return nil, hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody)
 		}
 		claudeResponse, ok := convertResult.Value.(*dto.ClaudeResponse)
 		if !ok {
-			return nil, types.NewError(fmt.Errorf("expected Claude Messages response, got %T", convertResult.Value), types.ErrorCodeBadResponseBody)
+			return nil, hosttypes.NewError(fmt.Errorf("expected Claude Messages response, got %T", convertResult.Value), hosttypes.ErrorCodeBadResponseBody)
 		}
 		claudeResponse.Usage = relayconvert.ClaudeUsageFromOpenAIUsage(&usage)
 		claudeRespStr, err := common.Marshal(convertResult.Value)
 		if err != nil {
-			return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+			return nil, hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody)
 		}
 		responseBody = claudeRespStr
 	case types.RelayFormatGemini:
@@ -529,17 +530,17 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 	return &usage, nil
 }
 
-func GeminiEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+func GeminiEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *hosttypes.NewAPIError) {
 	defer service.CloseResponseBodyGracefully(resp)
 
 	responseBody, readErr := io.ReadAll(resp.Body)
 	if readErr != nil {
-		return nil, types.NewOpenAIError(readErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(readErr, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 
 	var geminiResponse dto.GeminiBatchEmbeddingResponse
 	if jsonErr := common.Unmarshal(responseBody, &geminiResponse); jsonErr != nil {
-		return nil, types.NewOpenAIError(jsonErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(jsonErr, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 
 	// convert to openai format response
@@ -567,27 +568,27 @@ func GeminiEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 
 	jsonResponse, jsonErr := common.Marshal(openAIResponse)
 	if jsonErr != nil {
-		return nil, types.NewOpenAIError(jsonErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(jsonErr, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 
 	service.IOCopyBytesGracefully(c, resp, jsonResponse)
 	return usage, nil
 }
 
-func GeminiImageHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+func GeminiImageHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *hosttypes.NewAPIError) {
 	responseBody, readErr := io.ReadAll(resp.Body)
 	if readErr != nil {
-		return nil, types.NewOpenAIError(readErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(readErr, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	_ = resp.Body.Close()
 
 	var geminiResponse dto.GeminiImageResponse
 	if jsonErr := common.Unmarshal(responseBody, &geminiResponse); jsonErr != nil {
-		return nil, types.NewOpenAIError(jsonErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(jsonErr, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 
 	if len(geminiResponse.Predictions) == 0 {
-		return nil, types.NewOpenAIError(errors.New("no images generated"), types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(errors.New("no images generated"), hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 
 	// convert to openai format response
@@ -607,7 +608,7 @@ func GeminiImageHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.
 
 	jsonResponse, jsonErr := common.Marshal(openAIResponse)
 	if jsonErr != nil {
-		return nil, types.NewError(jsonErr, types.ErrorCodeBadResponseBody)
+		return nil, hosttypes.NewError(jsonErr, hosttypes.ErrorCodeBadResponseBody)
 	}
 
 	c.Writer.Header().Set("Content-Type", "application/json")

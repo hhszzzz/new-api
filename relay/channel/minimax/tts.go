@@ -5,13 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 	"strings"
 
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 )
@@ -105,12 +105,12 @@ func getContentTypeByFormat(format string) string {
 	return "audio/mpeg" // default to mp3
 }
 
-func handleTTSResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage any, err *types.NewAPIError) {
+func handleTTSResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage dto.UsageResult, err *hosttypes.NewAPIError) {
 	body, readErr := io.ReadAll(resp.Body)
 	if readErr != nil {
-		return nil, types.NewErrorWithStatusCode(
+		return nil, hosttypes.NewErrorWithStatusCode(
 			fmt.Errorf("failed to read minimax response: %w", readErr),
-			types.ErrorCodeReadResponseBodyFailed,
+			hosttypes.ErrorCodeReadResponseBodyFailed,
 			http.StatusInternalServerError,
 		)
 	}
@@ -119,27 +119,27 @@ func handleTTSResponse(c *gin.Context, resp *http.Response, info *relaycommon.Re
 	// Parse response
 	var minimaxResp MiniMaxTTSResponse
 	if unmarshalErr := json.Unmarshal(body, &minimaxResp); unmarshalErr != nil {
-		return nil, types.NewErrorWithStatusCode(
+		return nil, hosttypes.NewErrorWithStatusCode(
 			fmt.Errorf("failed to unmarshal minimax TTS response: %w", unmarshalErr),
-			types.ErrorCodeBadResponseBody,
+			hosttypes.ErrorCodeBadResponseBody,
 			http.StatusInternalServerError,
 		)
 	}
 
 	// Check base_resp status code
 	if minimaxResp.BaseResp.StatusCode != 0 {
-		return nil, types.NewErrorWithStatusCode(
+		return nil, hosttypes.NewErrorWithStatusCode(
 			fmt.Errorf("minimax TTS error: %d - %s", minimaxResp.BaseResp.StatusCode, minimaxResp.BaseResp.StatusMsg),
-			types.ErrorCodeBadResponse,
+			hosttypes.ErrorCodeBadResponse,
 			http.StatusBadRequest,
 		)
 	}
 
 	// Check if we have audio data
 	if minimaxResp.Data.Audio == "" {
-		return nil, types.NewErrorWithStatusCode(
+		return nil, hosttypes.NewErrorWithStatusCode(
 			fmt.Errorf("no audio data in minimax TTS response"),
-			types.ErrorCodeBadResponse,
+			hosttypes.ErrorCodeBadResponse,
 			http.StatusBadRequest,
 		)
 	}
@@ -150,9 +150,9 @@ func handleTTSResponse(c *gin.Context, resp *http.Response, info *relaycommon.Re
 		// Handle hex-encoded audio data
 		audioData, decodeErr := hex.DecodeString(minimaxResp.Data.Audio)
 		if decodeErr != nil {
-			return nil, types.NewErrorWithStatusCode(
+			return nil, hosttypes.NewErrorWithStatusCode(
 				fmt.Errorf("failed to decode hex audio data: %w", decodeErr),
-				types.ErrorCodeBadResponse,
+				hosttypes.ErrorCodeBadResponse,
 				http.StatusInternalServerError,
 			)
 		}
@@ -172,12 +172,12 @@ func handleTTSResponse(c *gin.Context, resp *http.Response, info *relaycommon.Re
 	return usage, nil
 }
 
-func handleChatCompletionResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage any, err *types.NewAPIError) {
+func handleChatCompletionResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage dto.UsageResult, err *hosttypes.NewAPIError) {
 	body, readErr := io.ReadAll(resp.Body)
 	if readErr != nil {
-		return nil, types.NewErrorWithStatusCode(
+		return nil, hosttypes.NewErrorWithStatusCode(
 			errors.New("failed to read minimax response"),
-			types.ErrorCodeReadResponseBodyFailed,
+			hosttypes.ErrorCodeReadResponseBodyFailed,
 			http.StatusInternalServerError,
 		)
 	}

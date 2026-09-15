@@ -19,6 +19,8 @@ For commercial licensing, please contact support@quantumnous.com
 // Static translation keys that don't get picked up by the t('...') regex.
 // These cover dynamic labels (e.g. constants, configs) that are passed into t at runtime.
 export const STATIC_I18N_KEYS = [
+  'Target protocol conflicts with legacy converter',
+  'Target protocol does not support this operation',
   // Billing expression simulation diagnostics and conditional labels.
   '{{start}}–{{end}}',
 
@@ -638,7 +640,7 @@ export const STATIC_I18N_KEYS = [
   'Anthropic Messages to OpenAI Responses',
   'OpenAI Responses to Anthropic Messages',
   'Only one OpenAI Models route is allowed',
-  'OpenAI Models route does not support client model rules',
+  'OpenAI Models route does not support model rules',
   'OpenAI Models route must use native forwarding',
   'OpenAI Models upstream path must not contain {model}',
   'OpenAI Models route is required to enable upstream model checks',

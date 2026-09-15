@@ -26,10 +26,8 @@ type Options struct {
 	// OpenAI-compatible servers may reject the field.
 	PreserveChatReasoningContent bool
 	// ToolLossPolicy controls whether a cross-protocol conversion may omit or
-	// approximate built-in-tool semantics. The zero value uses the allow
-	// policy: conversion succeeds and every loss is returned as a diagnostic.
-	// safe/strict rejection is request-phase opt-in only; response and stream
-	// conversion never reject regardless of this field.
+	// approximate built-in-tool semantics. The zero value is safe: unclassified
+	// and semantic losses reject the request before upstream dispatch.
 	ToolLossPolicy types.ConversionLossPolicy
 
 	// OpenRouterDialect marks the upstream as OpenRouter's OpenAI-compatible
@@ -118,7 +116,7 @@ func (o *Options) ShouldPreserveEffortTail(modelName string) bool {
 
 func (o *Options) EffectiveToolLossPolicy() types.ConversionLossPolicy {
 	if o == nil || o.ToolLossPolicy == "" {
-		return types.ConversionLossPolicyAllow
+		return types.ConversionLossPolicySafe
 	}
 	return o.ToolLossPolicy
 }

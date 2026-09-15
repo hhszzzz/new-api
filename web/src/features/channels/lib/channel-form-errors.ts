@@ -32,6 +32,7 @@ const ADVANCED_SETTINGS_FIELDS = new Set<FieldPath<ChannelFormValues>>([
   'schedule',
   'test_model',
   'auto_ban',
+  'protocol_policy_json',
   'protocol_capabilities_enabled',
   'protocol_selection_mode',
   'protocol_upstream_protocols',

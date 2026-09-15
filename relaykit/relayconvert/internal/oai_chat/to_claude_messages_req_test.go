@@ -123,7 +123,11 @@ func TestOpenAIChatRequestToClaudeMessagesNormalizesToolInputSchema(t *testing.T
 			tool, ok := tools[0].(*dto.Tool)
 			require.True(t, ok)
 			assert.Equal(t, "get_current_time", tool.Name)
-			assert.Equal(t, tt.wantSchema, tool.InputSchema)
+			want, err := kitutil.Marshal(tt.wantSchema)
+			require.NoError(t, err)
+			gotSchema, err := kitutil.Marshal(tool.InputSchema)
+			require.NoError(t, err)
+			assert.JSONEq(t, string(want), string(gotSchema))
 		})
 	}
 }

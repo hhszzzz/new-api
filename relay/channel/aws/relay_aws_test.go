@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +18,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/claude"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -28,6 +30,44 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func invokeAWSTestResponse(c *gin.Context, info *relaycommon.RelayInfo, adaptor *Adaptor) (*hosttypes.NewAPIError, *dto.Usage) {
+	info.IsStream = adaptor.StreamInput != nil
+	result, err := adaptor.invoke(c, info)
+	if err != nil {
+		var apiErr *hosttypes.NewAPIError
+		if errors.As(err, &apiErr) {
+			return apiErr, nil
+		}
+		return hosttypes.NewError(err, hosttypes.ErrorCodeDoRequestFailed), nil
+	}
+	defer result.Body.Close()
+	usage, apiErr := adaptor.DoResponse(c, result.Response, info)
+	if apiErr != nil {
+		return apiErr, nil
+	}
+	textUsage, _ := usage.(*dto.Usage)
+	return nil, textUsage
+}
+
+func relayNovaResponse(c *gin.Context, info *relaycommon.RelayInfo, body []byte) (*hosttypes.NewAPIError, *dto.Usage) {
+	response, apiErr := decodeNovaResponse(c, info, body)
+	if apiErr != nil {
+		return apiErr, nil
+	}
+	defer response.Body.Close()
+	if info.IsStream {
+		if err := helper.PromoteJSONResponseToSSE(response, types.RelayFormatOpenAI); err != nil {
+			return hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody), nil
+		}
+	}
+	usage, apiErr := (&Adaptor{IsNova: true}).DoResponse(c, response, info)
+	if apiErr != nil {
+		return apiErr, nil
+	}
+	textUsage, _ := usage.(*dto.Usage)
+	return nil, textUsage
+}
 
 func TestBedrockClaudeEventsProduceResponsesSSE(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -297,11 +337,11 @@ func TestDoAwsClientRequest_AppliesRuntimeHeaderOverrideToAnthropicBeta(t *testi
 	requestBody := bytes.NewBufferString(`{"messages":[{"role":"user","content":"hello"}],"max_tokens":128}`)
 	adaptor := &Adaptor{}
 
-	_, err := doAwsClientRequest(ctx, info, adaptor, requestBody)
+	err := prepareAwsRequest(ctx, info, adaptor, requestBody)
 	require.NoError(t, err)
 
-	awsReq, ok := adaptor.AwsReq.(*bedrockruntime.InvokeModelInput)
-	require.True(t, ok)
+	awsReq := adaptor.InvokeInput
+	require.NotNil(t, awsReq)
 
 	var payload map[string]any
 	require.NoError(t, common.Unmarshal(awsReq.Body, &payload))
@@ -378,7 +418,7 @@ func TestNewAwsInvokeErrorSkipsRetryOnlyForClientCancellation(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			err := newAwsInvokeError(test.requestContext, test.err, "InvokeModel")
-			assert.Equal(t, test.wantSkipRetry, types.IsSkipRetryError(err))
+			assert.Equal(t, test.wantSkipRetry, hosttypes.IsSkipRetryError(err))
 		})
 	}
 }
@@ -391,13 +431,13 @@ func TestAwsHandlersCancelSdkRequestAndSkipRetry(t *testing.T) {
 	})
 
 	tests := []struct {
-		name    string
-		request any
-		handle  func(*gin.Context, *relaycommon.RelayInfo, *Adaptor) (*types.NewAPIError, *dto.Usage)
+		name   string
+		invoke *bedrockruntime.InvokeModelInput
+		stream *bedrockruntime.InvokeModelWithResponseStreamInput
 	}{
-		{name: "non-stream", request: newAwsInvokeModelInput(), handle: awsHandler},
-		{name: "stream", request: newAwsStreamInput(), handle: awsStreamHandler},
-		{name: "nova", request: newAwsInvokeModelInput(), handle: handleNovaRequest},
+		{name: "non-stream", invoke: newAwsInvokeModelInput()},
+		{name: "stream", stream: newAwsStreamInput()},
+		{name: "nova", invoke: newAwsInvokeModelInput()},
 	}
 
 	for _, test := range tests {
@@ -411,17 +451,17 @@ func TestAwsHandlersCancelSdkRequestAndSkipRetry(t *testing.T) {
 				<-request.Context().Done()
 				return nil, request.Context().Err()
 			}))
-			adaptor := &Adaptor{AwsClient: client, AwsReq: test.request}
+			adaptor := &Adaptor{AwsClient: client, InvokeInput: test.invoke, StreamInput: test.stream, IsNova: test.name == "nova"}
 			c := newAwsTestContext(httptest.NewRecorder(), requestContext)
 			info := newAwsTestRelayInfo()
 
 			type handlerResult struct {
-				err   *types.NewAPIError
+				err   *hosttypes.NewAPIError
 				usage *dto.Usage
 			}
 			results := make(chan handlerResult, 1)
 			go func() {
-				err, usage := test.handle(c, info, adaptor)
+				err, usage := invokeAWSTestResponse(c, info, adaptor)
 				results <- handlerResult{err: err, usage: usage}
 			}()
 
@@ -445,13 +485,16 @@ func TestAwsHandlersCancelSdkRequestAndSkipRetry(t *testing.T) {
 
 			require.ErrorIs(t, upstreamContext.Err(), context.Canceled)
 			require.NotNil(t, result.err)
-			assert.True(t, types.IsSkipRetryError(result.err))
+			assert.True(t, hosttypes.IsSkipRetryError(result.err))
 			assert.Nil(t, result.usage)
 		})
 	}
 }
 
 func TestAwsStreamHandlerUsesFinalUpstreamUsage(t *testing.T) {
+	previousStreamingTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 300
+	t.Cleanup(func() { constant.StreamingTimeout = previousStreamingTimeout })
 	originalRelayTimeout := common.RelayTimeout
 	common.RelayTimeout = 0
 	t.Cleanup(func() {
@@ -474,11 +517,11 @@ func TestAwsStreamHandlerUsesFinalUpstreamUsage(t *testing.T) {
 		}
 		return newAwsStreamResponse(request, io.NopCloser(bytes.NewReader(body.Bytes()))), nil
 	}))
-	adaptor := &Adaptor{AwsClient: client, AwsReq: newAwsStreamInput()}
+	adaptor := &Adaptor{AwsClient: client, StreamInput: newAwsStreamInput()}
 	recorder := httptest.NewRecorder()
 	c := newAwsTestContext(recorder, context.Background())
 
-	handlerErr, usage := awsStreamHandler(c, newAwsTestRelayInfo(), adaptor)
+	handlerErr, usage := invokeAWSTestResponse(c, newAwsTestRelayInfo(), adaptor)
 
 	require.Nil(t, handlerErr)
 	require.NotNil(t, usage)
@@ -490,6 +533,9 @@ func TestAwsStreamHandlerUsesFinalUpstreamUsage(t *testing.T) {
 }
 
 func TestAwsStreamHandlerStopsAtClientCancellation(t *testing.T) {
+	previousStreamingTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 300
+	t.Cleanup(func() { constant.StreamingTimeout = previousStreamingTimeout })
 	originalRelayTimeout := common.RelayTimeout
 	common.RelayTimeout = 0
 	t.Cleanup(func() {
@@ -534,15 +580,15 @@ func TestAwsStreamHandlerStopsAtClientCancellation(t *testing.T) {
 
 	responseWriter := newAwsNotifyingResponseWriter("partial")
 	c := newAwsTestContext(responseWriter, requestContext)
-	adaptor := &Adaptor{AwsClient: client, AwsReq: newAwsStreamInput()}
+	adaptor := &Adaptor{AwsClient: client, StreamInput: newAwsStreamInput()}
 
 	type handlerResult struct {
-		err   *types.NewAPIError
+		err   *hosttypes.NewAPIError
 		usage *dto.Usage
 	}
 	results := make(chan handlerResult, 1)
 	go func() {
-		err, usage := awsStreamHandler(c, newAwsTestRelayInfo(), adaptor)
+		err, usage := invokeAWSTestResponse(c, newAwsTestRelayInfo(), adaptor)
 		results <- handlerResult{err: err, usage: usage}
 	}()
 
@@ -569,8 +615,8 @@ func TestAwsStreamHandlerStopsAtClientCancellation(t *testing.T) {
 	}
 
 	require.ErrorIs(t, upstreamContext.Err(), context.Canceled)
-	require.Nil(t, result.err)
-	require.NotNil(t, result.usage)
+	require.NotNil(t, result.err)
+	assert.Contains(t, result.err.Error(), "context canceled")
 	assert.Equal(t, bodyLengthBeforeCancel, responseWriter.Body.Len())
 	assert.NotContains(t, responseWriter.Body.String(), "[DONE]")
 

@@ -2,6 +2,7 @@ package controller
 
 import (
 	"errors"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"net/http"
 
 	"github.com/QuantumNous/new-api/common"
@@ -17,7 +18,7 @@ import (
 // settlement, or consumption-log side effects.
 func CountTokens(c *gin.Context) {
 	var (
-		newAPIError *types.NewAPIError
+		newAPIError *hosttypes.NewAPIError
 		relayInfo   *relaycommon.RelayInfo
 	)
 	defer func() {
@@ -44,14 +45,14 @@ func CountTokens(c *gin.Context) {
 		if common.IsRequestBodyTooLargeError(err) || errors.Is(err, common.ErrRequestBodyTooLarge) {
 			statusCode = http.StatusRequestEntityTooLarge
 		}
-		newAPIError = types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, statusCode, types.ErrOptionWithSkipRetry())
+		newAPIError = hosttypes.NewErrorWithStatusCode(err, hosttypes.ErrorCodeInvalidRequest, statusCode, hosttypes.ErrOptionWithSkipRetry())
 		return
 	}
 	request.Stream = nil
 
 	relayInfo, err = relaycommon.GenRelayInfo(c, types.RelayFormatClaude, request, nil)
 	if err != nil {
-		newAPIError = types.NewError(err, types.ErrorCodeGenRelayInfoFailed, types.ErrOptionWithSkipRetry())
+		newAPIError = hosttypes.NewError(err, hosttypes.ErrorCodeGenRelayInfoFailed, hosttypes.ErrOptionWithSkipRetry())
 		return
 	}
 	newAPIError = relay.CountTokensHelper(c, relayInfo)

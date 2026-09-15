@@ -1,13 +1,13 @@
 package clientpolicy
 
 import (
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -132,7 +132,7 @@ func TestIsGroupAllowedUsesConfiguredAllowAndDenyPolicies(t *testing.T) {
 }
 
 func TestChannelPolicyIsReadFromTypedChannelSettings(t *testing.T) {
-	settings := dto.ChannelOtherSettings{
+	settings := hostdto.ChannelOtherSettings{
 		ClientPolicy: operation_setting.ClientAccessPolicy{
 			Mode:    operation_setting.ClientPolicyModeAllow,
 			Clients: []string{ClientCodex},

@@ -1,6 +1,7 @@
 package relay
 
 import (
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -93,7 +94,7 @@ func TestTextHelperAppliesSystemPromptsBeforeProviderConversion(t *testing.T) {
 			common.SetContextKey(ctx, constant.ContextKeyChannelKey, "test-key")
 			common.SetContextKey(ctx, constant.ContextKeyOriginalModel, "requested-model")
 			common.SetContextKey(ctx, constant.ContextKeyUserModelRouteTarget, tt.targetModel)
-			common.SetContextKey(ctx, constant.ContextKeyChannelSetting, dto.ChannelSettings{
+			common.SetContextKey(ctx, constant.ContextKeyChannelSetting, hostdto.ChannelSettings{
 				SystemPrompt:         channelPrompt,
 				SystemPromptOverride: true,
 			})

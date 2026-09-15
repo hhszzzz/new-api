@@ -183,6 +183,17 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, common.DatabaseType, error)
 	return db, common.DatabaseTypeSQLite, err
 }
 
+// OpenConfigurationDatabase opens the primary database without migrations,
+// option loading, setup writes, or background workers. Migration preflight and
+// rollback must remain usable even when application startup is blocked.
+func OpenConfigurationDatabase() (*gorm.DB, error) {
+	if path := os.Getenv("SQLITE_PATH"); path != "" {
+		common.SQLitePath = path
+	}
+	db, _, err := chooseDB("SQL_DSN", false)
+	return db, err
+}
+
 func InitDB() (err error) {
 	db, dbType, err := chooseDB("SQL_DSN", false)
 	if err == nil {

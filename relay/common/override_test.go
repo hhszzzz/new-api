@@ -3,11 +3,12 @@ package common
 import (
 	"encoding/json"
 	"fmt"
+	hostdto "github.com/QuantumNous/new-api/dto"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"reflect"
 	"testing"
 
 	common2 "github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
@@ -1223,7 +1224,7 @@ func TestApplyParamOverrideNormalizeThinkingSignatureUnsupported(t *testing.T) {
 func TestApplyParamOverrideConditionFromRetryAndLastErrorContext(t *testing.T) {
 	info := &RelayInfo{
 		RetryIndex: 1,
-		LastError: types.WithOpenAIError(types.OpenAIError{
+		LastError: hosttypes.WithOpenAIError(types.OpenAIError{
 			Message: "invalid thinking signature",
 			Type:    "invalid_request_error",
 			Code:    "bad_thought_signature",
@@ -2118,7 +2119,7 @@ func TestRemoveDisabledFieldsSkipWhenChannelPassThroughEnabled(t *testing.T) {
 		"store":true,
 		"stream_options":{"include_obfuscation":false}
 	}`
-	settings := dto.ChannelOtherSettings{}
+	settings := hostdto.ChannelOtherSettings{}
 
 	out, err := RemoveDisabledFields([]byte(input), settings, true)
 	if err != nil {
@@ -2139,7 +2140,7 @@ func TestRemoveDisabledFieldsSkipWhenGlobalPassThroughEnabled(t *testing.T) {
 		"safety_identifier":"user-123",
 		"stream_options":{"include_obfuscation":false}
 	}`
-	settings := dto.ChannelOtherSettings{}
+	settings := hostdto.ChannelOtherSettings{}
 
 	out, err := RemoveDisabledFields([]byte(input), settings, false)
 	if err != nil {
@@ -2158,7 +2159,7 @@ func TestRemoveDisabledFieldsDefaultFiltering(t *testing.T) {
 		"store":true,
 		"stream_options":{"include_obfuscation":false}
 	}`
-	settings := dto.ChannelOtherSettings{}
+	settings := hostdto.ChannelOtherSettings{}
 
 	out, err := RemoveDisabledFields([]byte(input), settings, false)
 	if err != nil {
@@ -2169,7 +2170,7 @@ func TestRemoveDisabledFieldsDefaultFiltering(t *testing.T) {
 
 func TestRemoveDisabledFieldsNoControlledFieldsKeepsBody(t *testing.T) {
 	input := `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`
-	settings := dto.ChannelOtherSettings{}
+	settings := hostdto.ChannelOtherSettings{}
 
 	out, err := RemoveDisabledFields([]byte(input), settings, false)
 	if err != nil {
@@ -2183,7 +2184,7 @@ func TestRemoveDisabledFieldsAllowInferenceGeo(t *testing.T) {
 		"inference_geo":"eu",
 		"store":true
 	}`
-	settings := dto.ChannelOtherSettings{
+	settings := hostdto.ChannelOtherSettings{
 		AllowInferenceGeo: true,
 	}
 
@@ -2199,7 +2200,7 @@ func TestRemoveDisabledFieldsAllowSpeed(t *testing.T) {
 		"speed":"fast",
 		"store":true
 	}`
-	settings := dto.ChannelOtherSettings{
+	settings := hostdto.ChannelOtherSettings{
 		AllowSpeed: true,
 	}
 

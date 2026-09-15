@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	hostdto "github.com/QuantumNous/new-api/dto"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"math/rand"
 	"sort"
 	"strings"
@@ -13,8 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/service/modelmapping"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/samber/lo"
@@ -218,7 +219,7 @@ func (channel *Channel) GetKeys() []string {
 	return keys
 }
 
-func (channel *Channel) GetNextEnabledKey() (string, int, *types.NewAPIError) {
+func (channel *Channel) GetNextEnabledKey() (string, int, *hosttypes.NewAPIError) {
 	// If not in multi-key mode, return the original key string directly.
 	if !channel.ChannelInfo.IsMultiKey {
 		return channel.Key, 0, nil
@@ -228,7 +229,7 @@ func (channel *Channel) GetNextEnabledKey() (string, int, *types.NewAPIError) {
 	keys := channel.GetKeys()
 	if len(keys) == 0 {
 		// No keys available, return error, should disable the channel
-		return "", 0, types.NewError(errors.New("no keys available"), types.ErrorCodeChannelNoAvailableKey)
+		return "", 0, hosttypes.NewError(errors.New("no keys available"), hosttypes.ErrorCodeChannelNoAvailableKey)
 	}
 
 	lock := GetChannelPollingLock(channel.Id)
@@ -258,7 +259,7 @@ func (channel *Channel) GetNextEnabledKey() (string, int, *types.NewAPIError) {
 	// properly handle a channel with no available keys (e.g. mark channel disabled).
 	// Returning the first key here caused requests to keep using an already-disabled key.
 	if len(enabledIdx) == 0 {
-		return "", 0, types.NewError(errors.New("no enabled keys"), types.ErrorCodeChannelNoAvailableKey)
+		return "", 0, hosttypes.NewError(errors.New("no enabled keys"), hosttypes.ErrorCodeChannelNoAvailableKey)
 	}
 
 	switch channel.ChannelInfo.MultiKeyMode {
@@ -271,7 +272,7 @@ func (channel *Channel) GetNextEnabledKey() (string, int, *types.NewAPIError) {
 
 		channelInfo, err := CacheGetChannelInfo(channel.Id)
 		if err != nil {
-			return "", 0, types.NewError(err, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+			return "", 0, hosttypes.NewError(err, hosttypes.ErrorCodeGetChannelFailed, hosttypes.ErrOptionWithSkipRetry())
 		}
 		defer func() {
 			if common.DebugEnabled {
@@ -358,7 +359,7 @@ const disabledModelsOtherInfoKey = "disabled_models"
 // GetDisabledModels returns the (group, model) pairs currently disabled on this
 // channel. The list lives in other_info so ordinary channel edits (which only
 // rewrite settings) cannot silently clear it.
-func (channel *Channel) GetDisabledModels() []dto.DisabledModelEntry {
+func (channel *Channel) GetDisabledModels() []hostdto.DisabledModelEntry {
 	raw, ok := channel.GetOtherInfo()[disabledModelsOtherInfoKey]
 	if !ok || raw == nil {
 		return nil
@@ -367,7 +368,7 @@ func (channel *Channel) GetDisabledModels() []dto.DisabledModelEntry {
 	if err != nil {
 		return nil
 	}
-	var entries []dto.DisabledModelEntry
+	var entries []hostdto.DisabledModelEntry
 	if err := common.Unmarshal(encoded, &entries); err != nil {
 		common.SysLog(fmt.Sprintf("failed to parse disabled models: channel_id=%d, error=%v", channel.Id, err))
 		return nil
@@ -408,7 +409,7 @@ func isDisabledModelInSet(set map[string]struct{}, group, model string) bool {
 // SetChannelModelDisabled records or clears one disabled (group, model) on a
 // channel and keeps the matching ability rows in sync. A nil group applies to
 // every group serving that model.
-func SetChannelModelDisabled(channelId int, entry dto.DisabledModelEntry, disabled bool) error {
+func SetChannelModelDisabled(channelId int, entry hostdto.DisabledModelEntry, disabled bool) error {
 	lock := GetChannelPollingLock(channelId)
 	lock.Lock()
 	defer lock.Unlock()
@@ -418,7 +419,7 @@ func SetChannelModelDisabled(channelId int, entry dto.DisabledModelEntry, disabl
 		return err
 	}
 	key := disabledModelKey(entry.Group, entry.Model)
-	next := make([]dto.DisabledModelEntry, 0, len(channel.GetDisabledModels())+1)
+	next := make([]hostdto.DisabledModelEntry, 0, len(channel.GetDisabledModels())+1)
 	for _, existing := range channel.GetDisabledModels() {
 		if disabledModelKey(existing.Group, existing.Model) != key {
 			next = append(next, existing)
@@ -906,6 +907,25 @@ func (channel *Channel) GetModelMapping() string {
 		return ""
 	}
 	return *channel.ModelMapping
+}
+
+// MatchAdvancedCustomRoute uses the mapped upstream model at every selection
+// boundary. CountTokens may use the generation route for local counting only.
+func (channel *Channel) MatchAdvancedCustomRoute(requestPath, modelName string, config *hostdto.AdvancedCustomConfig) (hostdto.AdvancedCustomRoute, bool) {
+	if channel == nil || config == nil {
+		return hostdto.AdvancedCustomRoute{}, false
+	}
+	resolved, err := modelmapping.Resolve(channel.GetModelMapping(), modelName)
+	if err != nil {
+		return hostdto.AdvancedCustomRoute{}, false
+	}
+	if route, ok := config.MatchPathForModel(requestPath, resolved.Model); ok {
+		return route, true
+	}
+	if requestPath == "/v1/messages/count_tokens" {
+		return config.MatchPathForModel("/v1/messages", resolved.Model)
+	}
+	return hostdto.AdvancedCustomRoute{}, false
 }
 
 func (channel *Channel) GetStatusCodeMapping() string {
@@ -1433,7 +1453,7 @@ func SearchTags(keyword string, group string, model string, idSort bool) ([]*str
 }
 
 func (channel *Channel) ValidateSettings() error {
-	channelParams := &dto.ChannelSettings{}
+	channelParams := &hostdto.ChannelSettings{}
 	if channel.Setting != nil && *channel.Setting != "" {
 		err := common.Unmarshal([]byte(*channel.Setting), channelParams)
 		if err != nil {
@@ -1446,7 +1466,7 @@ func (channel *Channel) ValidateSettings() error {
 	if err := channelParams.ValidateHTTPTransport(); err != nil {
 		return err
 	}
-	channelOtherSettings := &dto.ChannelOtherSettings{}
+	channelOtherSettings := &hostdto.ChannelOtherSettings{}
 	if channel.OtherSettings != "" {
 		err := common.UnmarshalJsonStr(channel.OtherSettings, channelOtherSettings)
 		if err != nil {
@@ -1469,9 +1489,12 @@ func (channel *Channel) ValidateSettings() error {
 	if err := channelOtherSettings.ProtocolCapabilities.Validate(); err != nil {
 		return err
 	}
+	if err := channelOtherSettings.ProtocolPolicy.Validate(); err != nil {
+		return err
+	}
 	if channel.Type == constant.ChannelTypeAdvancedCustom && channelOtherSettings.UpstreamModelUpdateCheckEnabled {
 		if _, ok := channelOtherSettings.AdvancedCustom.ModelListRoute(); !ok {
-			return fmt.Errorf("advanced custom channels require a %s route when upstream model update checks are enabled", dto.AdvancedCustomModelListPath)
+			return fmt.Errorf("advanced custom channels require a %s route when upstream model update checks are enabled", hostdto.AdvancedCustomModelListPath)
 		}
 	}
 	if err := operation_setting.ValidateClientAccessPolicy(channelOtherSettings.ClientPolicy); err != nil {
@@ -1480,8 +1503,8 @@ func (channel *Channel) ValidateSettings() error {
 	return nil
 }
 
-func (channel *Channel) GetSetting() dto.ChannelSettings {
-	setting := dto.ChannelSettings{}
+func (channel *Channel) GetSetting() hostdto.ChannelSettings {
+	setting := hostdto.ChannelSettings{}
 	if channel.Setting != nil && *channel.Setting != "" {
 		err := common.Unmarshal([]byte(*channel.Setting), &setting)
 		if err != nil {
@@ -1493,7 +1516,7 @@ func (channel *Channel) GetSetting() dto.ChannelSettings {
 	return setting
 }
 
-func (channel *Channel) SetSetting(setting dto.ChannelSettings) {
+func (channel *Channel) SetSetting(setting hostdto.ChannelSettings) {
 	settingBytes, err := common.Marshal(setting)
 	if err != nil {
 		common.SysLog(fmt.Sprintf("failed to marshal setting: channel_id=%d, error=%v", channel.Id, err))
@@ -1502,8 +1525,8 @@ func (channel *Channel) SetSetting(setting dto.ChannelSettings) {
 	channel.Setting = common.GetPointer[string](string(settingBytes))
 }
 
-func (channel *Channel) GetOtherSettings() dto.ChannelOtherSettings {
-	setting := dto.ChannelOtherSettings{}
+func (channel *Channel) GetOtherSettings() hostdto.ChannelOtherSettings {
+	setting := hostdto.ChannelOtherSettings{}
 	if channel.OtherSettings != "" {
 		err := common.UnmarshalJsonStr(channel.OtherSettings, &setting)
 		if err != nil {
@@ -1515,7 +1538,7 @@ func (channel *Channel) GetOtherSettings() dto.ChannelOtherSettings {
 	return setting
 }
 
-func (channel *Channel) SetOtherSettings(setting dto.ChannelOtherSettings) {
+func (channel *Channel) SetOtherSettings(setting hostdto.ChannelOtherSettings) {
 	settingBytes, err := common.Marshal(setting)
 	if err != nil {
 		common.SysLog(fmt.Sprintf("failed to marshal setting: channel_id=%d, error=%v", channel.Id, err))

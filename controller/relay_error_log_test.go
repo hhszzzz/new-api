@@ -2,6 +2,7 @@ package controller
 
 import (
 	"errors"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -10,8 +11,6 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/relaykit/types"
-
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -61,13 +60,13 @@ func TestProcessChannelErrorUsesSnapshotWithoutLeakingChannelMetadata(t *testing
 	ctx.Set("use_channel", []string{"101"})
 	common.SetContextKey(ctx, constant.ContextKeyRequestStartTime, time.Now().Add(-time.Second))
 
-	channelSnapshot := types.ChannelError{
+	channelSnapshot := hosttypes.ChannelError{
 		ChannelId:   101,
 		ChannelType: 1,
 		ChannelName: "snapshot-channel",
 		AutoBan:     false,
 	}
-	apiErr := types.NewOpenAIError(errors.New("upstream failed"), types.ErrorCodeBadResponseStatusCode, http.StatusBadGateway)
+	apiErr := hosttypes.NewOpenAIError(errors.New("upstream failed"), hosttypes.ErrorCodeBadResponseStatusCode, http.StatusBadGateway)
 
 	processChannelError(ctx, channelSnapshot, apiErr, nil)
 

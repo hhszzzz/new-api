@@ -3,6 +3,7 @@ package toolconv
 import (
 	"encoding/json"
 
+	sharedbridge "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/bridge"
 	"github.com/QuantumNous/new-api/relaykit/types"
 )
 
@@ -55,6 +56,7 @@ type WebSearch struct {
 }
 
 type Definition struct {
+	Identity   *sharedbridge.ToolIdentity
 	Kind       Kind
 	Execution  Execution
 	NativeType string

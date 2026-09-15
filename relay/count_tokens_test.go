@@ -2,6 +2,8 @@ package relay
 
 import (
 	"errors"
+	hostdto "github.com/QuantumNous/new-api/dto"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -36,7 +38,7 @@ func TestCountTokensHelperForwardsNativeAnthropicRequest(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c, info, recorder := newCountTokensTestContext(t, server.URL, constant.ChannelTypeAnthropic, dto.ChannelSettings{
+	c, info, recorder := newCountTokensTestContext(t, server.URL, constant.ChannelTypeAnthropic, hostdto.ChannelSettings{
 		SystemPrompt:         "channel system",
 		SystemPromptOverride: true,
 	})
@@ -61,7 +63,7 @@ func TestCountTokensHelperForwardsNativeMessagesCompatibleGateways(t *testing.T)
 	tests := []struct {
 		name                 string
 		channelType          int
-		otherSettings        dto.ChannelOtherSettings
+		otherSettings        hostdto.ChannelOtherSettings
 		explicitCapabilities bool
 		wantPath             string
 		wantAuth             string
@@ -137,13 +139,13 @@ func TestCountTokensHelperForwardsNativeMessagesCompatibleGateways(t *testing.T)
 		{
 			name:        "Advanced Custom",
 			channelType: constant.ChannelTypeAdvancedCustom,
-			otherSettings: dto.ChannelOtherSettings{AdvancedCustom: &dto.AdvancedCustomConfig{Routes: []dto.AdvancedCustomRoute{
+			otherSettings: hostdto.ChannelOtherSettings{AdvancedCustom: &hostdto.AdvancedCustomConfig{Routes: []hostdto.AdvancedCustomRoute{
 				{
 					IncomingPath: "/v1/messages/count_tokens",
 					UpstreamPath: "/provider/messages/count_tokens",
 					Converter:    relayconvert.ConverterNone,
-					Auth: &dto.AdvancedCustomRouteAuth{
-						Type:  dto.AdvancedCustomAuthTypeHeader,
+					Auth: &hostdto.AdvancedCustomRouteAuth{
+						Type:  hostdto.AdvancedCustomAuthTypeHeader,
 						Name:  "x-api-key",
 						Value: "{api_key}",
 					},
@@ -176,7 +178,7 @@ func TestCountTokensHelperForwardsNativeMessagesCompatibleGateways(t *testing.T)
 			}))
 			defer server.Close()
 
-			c, info, recorder := newCountTokensTestContext(t, server.URL, test.channelType, dto.ChannelSettings{}, test.otherSettings)
+			c, info, recorder := newCountTokensTestContext(t, server.URL, test.channelType, hostdto.ChannelSettings{}, test.otherSettings)
 			common.SetContextKey(c, constant.ContextKeyProtocolPlan, channelcompat.ProtocolPlan{
 				RequestProtocol:      channelcompat.ProtocolMessages,
 				UpstreamProtocol:     channelcompat.ProtocolMessages,
@@ -210,7 +212,7 @@ func TestCountTokensHelperFallsBackLocallyOnlyForUnsupportedStatuses(t *testing.
 			}))
 			defer server.Close()
 
-			c, info, recorder := newCountTokensTestContext(t, server.URL, constant.ChannelTypeAnthropic, dto.ChannelSettings{})
+			c, info, recorder := newCountTokensTestContext(t, server.URL, constant.ChannelTypeAnthropic, hostdto.ChannelSettings{})
 			common.SetContextKey(c, constant.ContextKeyProtocolPlan, channelcompat.ProtocolPlan{
 				RequestProtocol:  channelcompat.ProtocolMessages,
 				UpstreamProtocol: channelcompat.ProtocolMessages,
@@ -230,7 +232,7 @@ func TestCountTokensHelperUsesLocalEstimateForConvertedProtocol(t *testing.T) {
 	constant.CountToken = false
 	t.Cleanup(func() { constant.CountToken = originalCountToken })
 
-	c, info, recorder := newCountTokensTestContext(t, "http://127.0.0.1:1", constant.ChannelTypeOpenAI, dto.ChannelSettings{})
+	c, info, recorder := newCountTokensTestContext(t, "http://127.0.0.1:1", constant.ChannelTypeOpenAI, hostdto.ChannelSettings{})
 	common.SetContextKey(c, constant.ContextKeyProtocolPlan, channelcompat.ProtocolPlan{
 		RequestProtocol:  channelcompat.ProtocolMessages,
 		UpstreamProtocol: channelcompat.ProtocolResponses,
@@ -286,8 +288,8 @@ func TestCountTokensHelperUsesLocalEstimateForAdvancedCustomRoutesWithoutAuxilia
 				t,
 				server.URL,
 				constant.ChannelTypeAdvancedCustom,
-				dto.ChannelSettings{},
-				dto.ChannelOtherSettings{AdvancedCustom: &dto.AdvancedCustomConfig{Routes: []dto.AdvancedCustomRoute{
+				hostdto.ChannelSettings{},
+				hostdto.ChannelOtherSettings{AdvancedCustom: &hostdto.AdvancedCustomConfig{Routes: []hostdto.AdvancedCustomRoute{
 					{
 						IncomingPath: "/v1/messages",
 						UpstreamPath: "/provider/text",
@@ -319,7 +321,7 @@ func TestCountTokensHelperDoesNotFallbackForUpstreamFailure(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c, info, recorder := newCountTokensTestContext(t, server.URL, constant.ChannelTypeAnthropic, dto.ChannelSettings{})
+	c, info, recorder := newCountTokensTestContext(t, server.URL, constant.ChannelTypeAnthropic, hostdto.ChannelSettings{})
 	common.SetContextKey(c, constant.ContextKeyProtocolPlan, channelcompat.ProtocolPlan{
 		RequestProtocol:  channelcompat.ProtocolMessages,
 		UpstreamProtocol: channelcompat.ProtocolMessages,
@@ -342,10 +344,10 @@ func TestCountTokensHelperUsesAWSCountTokensAndOnlyFallsBackWhenUnsupported(t *t
 	})
 
 	t.Run("success", func(t *testing.T) {
-		countAWSInputTokens = func(_ *gin.Context, _ *relaycommon.RelayInfo, _ *dto.ClaudeRequest) (int, *types.NewAPIError) {
+		countAWSInputTokens = func(_ *gin.Context, _ *relaycommon.RelayInfo, _ *dto.ClaudeRequest) (int, *hosttypes.NewAPIError) {
 			return 43, nil
 		}
-		c, info, recorder := newCountTokensTestContext(t, "", constant.ChannelTypeAws, dto.ChannelSettings{})
+		c, info, recorder := newCountTokensTestContext(t, "", constant.ChannelTypeAws, hostdto.ChannelSettings{})
 		common.SetContextKey(c, constant.ContextKeyProtocolPlan, channelcompat.ProtocolPlan{
 			RequestProtocol:  channelcompat.ProtocolMessages,
 			UpstreamProtocol: channelcompat.ProtocolMessages,
@@ -358,14 +360,14 @@ func TestCountTokensHelperUsesAWSCountTokensAndOnlyFallsBackWhenUnsupported(t *t
 	})
 
 	t.Run("unsupported fallback", func(t *testing.T) {
-		countAWSInputTokens = func(_ *gin.Context, _ *relaycommon.RelayInfo, _ *dto.ClaudeRequest) (int, *types.NewAPIError) {
-			return 0, types.NewErrorWithStatusCode(
+		countAWSInputTokens = func(_ *gin.Context, _ *relaycommon.RelayInfo, _ *dto.ClaudeRequest) (int, *hosttypes.NewAPIError) {
+			return 0, hosttypes.NewErrorWithStatusCode(
 				channelaws.ErrCountTokensUnsupported,
-				types.ErrorCodeAwsInvokeError,
+				hosttypes.ErrorCodeAwsInvokeError,
 				http.StatusNotImplemented,
 			)
 		}
-		c, info, recorder := newCountTokensTestContext(t, "", constant.ChannelTypeAws, dto.ChannelSettings{})
+		c, info, recorder := newCountTokensTestContext(t, "", constant.ChannelTypeAws, hostdto.ChannelSettings{})
 		common.SetContextKey(c, constant.ContextKeyProtocolPlan, channelcompat.ProtocolPlan{
 			RequestProtocol:  channelcompat.ProtocolMessages,
 			UpstreamProtocol: channelcompat.ProtocolMessages,
@@ -379,14 +381,14 @@ func TestCountTokensHelperUsesAWSCountTokensAndOnlyFallsBackWhenUnsupported(t *t
 	})
 
 	t.Run("upstream failure", func(t *testing.T) {
-		countAWSInputTokens = func(_ *gin.Context, _ *relaycommon.RelayInfo, _ *dto.ClaudeRequest) (int, *types.NewAPIError) {
-			return 0, types.NewErrorWithStatusCode(
+		countAWSInputTokens = func(_ *gin.Context, _ *relaycommon.RelayInfo, _ *dto.ClaudeRequest) (int, *hosttypes.NewAPIError) {
+			return 0, hosttypes.NewErrorWithStatusCode(
 				errors.New("AWS unavailable"),
-				types.ErrorCodeAwsInvokeError,
+				hosttypes.ErrorCodeAwsInvokeError,
 				http.StatusInternalServerError,
 			)
 		}
-		c, info, recorder := newCountTokensTestContext(t, "", constant.ChannelTypeAws, dto.ChannelSettings{})
+		c, info, recorder := newCountTokensTestContext(t, "", constant.ChannelTypeAws, hostdto.ChannelSettings{})
 		common.SetContextKey(c, constant.ContextKeyProtocolPlan, channelcompat.ProtocolPlan{
 			RequestProtocol:  channelcompat.ProtocolMessages,
 			UpstreamProtocol: channelcompat.ProtocolMessages,
@@ -400,7 +402,7 @@ func TestCountTokensHelperUsesAWSCountTokensAndOnlyFallsBackWhenUnsupported(t *t
 	})
 }
 
-func newCountTokensTestContext(t *testing.T, baseURL string, channelType int, channelSetting dto.ChannelSettings, otherSettings ...dto.ChannelOtherSettings) (*gin.Context, *relaycommon.RelayInfo, *httptest.ResponseRecorder) {
+func newCountTokensTestContext(t *testing.T, baseURL string, channelType int, channelSetting hostdto.ChannelSettings, otherSettings ...hostdto.ChannelOtherSettings) (*gin.Context, *relaycommon.RelayInfo, *httptest.ResponseRecorder) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
@@ -415,7 +417,7 @@ func newCountTokensTestContext(t *testing.T, baseURL string, channelType int, ch
 	common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, baseURL)
 	common.SetContextKey(c, constant.ContextKeyChannelKey, "test-key")
 	common.SetContextKey(c, constant.ContextKeyChannelSetting, channelSetting)
-	channelOtherSettings := dto.ChannelOtherSettings{}
+	channelOtherSettings := hostdto.ChannelOtherSettings{}
 	if len(otherSettings) > 0 {
 		channelOtherSettings = otherSettings[0]
 	}

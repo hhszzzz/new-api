@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -263,7 +264,7 @@ func TestApplyProtocolPlanUsesGeminiWirePathWithoutChangingEntryResponseMode(t *
 	}
 }
 
-func TestResponsesHelperAllowsCompactBridgeForChatOnlyAPIType(t *testing.T) {
+func TestResponsesHelperRejectsCompactBridgeBeforeUpstream(t *testing.T) {
 	settings := model_setting.GetGlobalSettings()
 	originalPolicy := settings.ProtocolBridgePolicy
 	settings.ProtocolBridgePolicy.Enabled = false
@@ -297,9 +298,8 @@ func TestResponsesHelperAllowsCompactBridgeForChatOnlyAPIType(t *testing.T) {
 	apiErr := ResponsesHelper(c, info)
 
 	require.NotNil(t, apiErr)
-	assert.Equal(t, types.ErrorCodeConvertRequestFailed, apiErr.GetErrorCode())
-	assert.Contains(t, apiErr.Error(), "conflicts after Chat name encoding")
-	assert.NotContains(t, apiErr.Error(), "unsupported endpoint")
+	assert.Equal(t, hosttypes.ErrorCodeConvertRequestFailed, apiErr.GetErrorCode())
+	assert.Contains(t, apiErr.Error(), "compact requires a native Responses compact upstream")
 }
 
 func TestProtocolBridgeMessagesToChatStripsAnthropicCacheControl(t *testing.T) {
@@ -437,10 +437,10 @@ func TestProtocolBridgeRequestConversionConflictIsClientError(t *testing.T) {
 	_, err := convertRequestForProtocolPlan(c, info, &protocolBridgeRecordingAdaptor{}, plan, request)
 
 	require.Error(t, err)
-	var apiError *types.NewAPIError
+	var apiError *hosttypes.NewAPIError
 	require.True(t, errors.As(err, &apiError))
 	assert.Equal(t, http.StatusBadRequest, apiError.StatusCode)
-	assert.Equal(t, types.ErrorCodeConvertRequestFailed, apiError.GetErrorCode())
+	assert.Equal(t, hosttypes.ErrorCodeConvertRequestFailed, apiError.GetErrorCode())
 	assert.Contains(t, apiError.Error(), "conflicts after Chat name encoding")
 }
 
@@ -548,11 +548,11 @@ func (a *protocolBridgeRecordingAdaptor) ConvertOpenAIResponsesRequest(_ *gin.Co
 	return &request, nil
 }
 
-func (a *protocolBridgeRecordingAdaptor) DoRequest(*gin.Context, *relaycommon.RelayInfo, io.Reader) (any, error) {
+func (a *protocolBridgeRecordingAdaptor) DoRequest(*gin.Context, *relaycommon.RelayInfo, io.Reader) (*channel.TransportResult, error) {
 	return nil, nil
 }
 
-func (a *protocolBridgeRecordingAdaptor) DoResponse(*gin.Context, *http.Response, *relaycommon.RelayInfo) (any, *types.NewAPIError) {
+func (a *protocolBridgeRecordingAdaptor) DoResponse(*gin.Context, *http.Response, *relaycommon.RelayInfo) (dto.UsageResult, *hosttypes.NewAPIError) {
 	return nil, nil
 }
 

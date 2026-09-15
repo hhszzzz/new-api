@@ -95,6 +95,7 @@ type conversionDiagnosticKey struct {
 }
 
 type ResponseStreamState struct {
+	owner     *ConversionSession
 	From      types.RelayFormat
 	To        types.RelayFormat
 	Converter string
@@ -108,6 +109,7 @@ type ResponseStreamState struct {
 	pendingDiagnostics []types.ConversionDiagnostic
 	seenDiagnostics    map[conversionDiagnosticKey]struct{}
 	fallbackInfo       *convmeta.Values
+	finalized          bool
 }
 
 type responseStreamUsageCarrier interface {
@@ -329,6 +331,9 @@ func ConvertStreamResponseChunk(c context.Context, info convmeta.Meta, state *Re
 	if state == nil {
 		return nil, errors.New("response stream state is required")
 	}
+	if state.finalized {
+		return nil, errors.New("response stream is already finalized")
+	}
 	if info == nil {
 		if state.fallbackInfo == nil {
 			state.fallbackInfo = &convmeta.Values{}
@@ -363,6 +368,10 @@ func FinalizeStreamResponse(c context.Context, info convmeta.Meta, state *Respon
 	if state == nil {
 		return nil, errors.New("response stream state is required")
 	}
+	if state.finalized {
+		return nil, nil
+	}
+	state.finalized = true
 	if info == nil && state.fallbackInfo != nil {
 		info = state.fallbackInfo
 	}

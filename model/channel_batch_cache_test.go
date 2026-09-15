@@ -2,11 +2,11 @@ package model
 
 import (
 	"fmt"
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -38,7 +38,7 @@ func TestBatchInsertChannelsRefreshesAdvancedCustomPricingEndpoints(t *testing.T
 				Models: modelName,
 				Group:  "default",
 			}
-			channel.SetOtherSettings(pricingEndpointAdvancedCustomConfig(dto.AdvancedCustomRoute{
+			channel.SetOtherSettings(pricingEndpointAdvancedCustomConfig(hostdto.AdvancedCustomRoute{
 				IncomingPath: "/v1/responses",
 				UpstreamPath: "/v1beta/models/{model}:generateContent",
 				Converter:    "openai_responses_to_gemini_generate_content",

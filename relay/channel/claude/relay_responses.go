@@ -2,6 +2,7 @@ package claude
 
 import (
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"net/http"
 	"strings"
 
@@ -16,17 +17,17 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func ClaudeResponsesStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*dto.Usage, *types.NewAPIError) {
+func ClaudeResponsesStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*dto.Usage, *hosttypes.NewAPIError) {
 	responseID := helper.GetResponseID(c)
 	created := common.GetTimestamp()
-	state, err := relayconvert.NewResponseStreamState(types.RelayFormatClaude, types.RelayFormatOpenAIResponses, relayconvert.ResponseStreamOptions{
+	state, err := info.ConversionSession().StreamState(types.RelayFormatClaude, types.RelayFormatOpenAIResponses, relayconvert.ResponseStreamOptions{
 		ID:                 responseID,
 		Model:              info.UpstreamModelName,
 		Created:            created,
 		EmitSequenceNumber: true,
 	})
 	if err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
 	hostedBridge := relayconvert.NewClaudeHostedStreamBridge()
 
@@ -37,7 +38,7 @@ func ClaudeResponsesStreamHandler(c *gin.Context, resp *http.Response, info *rel
 		ResponseText: strings.Builder{},
 		Usage:        &dto.Usage{},
 	}
-	var streamErr *types.NewAPIError
+	var streamErr *hosttypes.NewAPIError
 	// streamFailed means a Responses-native terminal error was sent successfully.
 	// In that case the scanner stops without a transport error and the partial
 	// upstream usage remains billable.
@@ -47,11 +48,11 @@ func ClaudeResponsesStreamHandler(c *gin.Context, resp *http.Response, info *rel
 		payload.Type = eventType
 		data, err := common.Marshal(payload)
 		if err != nil {
-			streamErr = types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
+			streamErr = hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
 			return false
 		}
 		if err := helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: eventType}, string(data)); err != nil {
-			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+			streamErr = hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 			return false
 		}
 		return true
@@ -59,9 +60,9 @@ func ClaudeResponsesStreamHandler(c *gin.Context, resp *http.Response, info *rel
 	sendResult := func(result relayconvert.ResponseResult) bool {
 		event, ok := result.Value.(relayconvert.ChatToResponsesStreamEvent)
 		if !ok {
-			streamErr = types.NewOpenAIError(
+			streamErr = hosttypes.NewOpenAIError(
 				fmt.Errorf("expected OpenAI Responses stream event, got %T", result.Value),
-				types.ErrorCodeBadResponse,
+				hosttypes.ErrorCodeBadResponse,
 				http.StatusInternalServerError,
 			)
 			return false
@@ -92,7 +93,7 @@ func ClaudeResponsesStreamHandler(c *gin.Context, resp *http.Response, info *rel
 				sr.Stop(streamErr)
 				return
 			}
-			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+			streamErr = hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 			sr.Stop(streamErr)
 			return
 		}
@@ -101,7 +102,7 @@ func ClaudeResponsesStreamHandler(c *gin.Context, resp *http.Response, info *rel
 				sr.Stop(streamErr)
 				return
 			}
-			streamErr = types.WithClaudeError(*claudeError, http.StatusInternalServerError)
+			streamErr = hosttypes.WithClaudeError(*claudeError, http.StatusInternalServerError)
 			sr.Stop(streamErr)
 			return
 		}
@@ -123,7 +124,7 @@ func ClaudeResponsesStreamHandler(c *gin.Context, resp *http.Response, info *rel
 				sr.Stop(streamErr)
 				return
 			}
-			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+			streamErr = hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 			sr.Stop(streamErr)
 			return
 		}
@@ -143,7 +144,7 @@ func ClaudeResponsesStreamHandler(c *gin.Context, resp *http.Response, info *rel
 				sr.Stop(streamErr)
 				return
 			}
-			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+			streamErr = hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 			sr.Stop(streamErr)
 			return
 		}
@@ -169,7 +170,7 @@ func ClaudeResponsesStreamHandler(c *gin.Context, resp *http.Response, info *rel
 		if failResponsesStream(err) {
 			return claudeInfo.Usage, streamErr
 		}
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
 	for _, result := range finalResults {
 		if !sendResult(result) {

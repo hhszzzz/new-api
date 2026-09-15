@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"fmt"
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -10,7 +11,6 @@ import (
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -19,7 +19,7 @@ import (
 
 func TestChannelMatchesExpectedTaskPluginUsesGenericChannelSetting(t *testing.T) {
 	channel := &model.Channel{Type: constant.ChannelTypeTaskPlugin}
-	channel.SetSetting(dto.ChannelSettings{TaskPluginKey: "generic-alpha"})
+	channel.SetSetting(hostdto.ChannelSettings{TaskPluginKey: "generic-alpha"})
 
 	assert.True(t, channelMatchesExpectedTaskPlugin(nil, channel, "generic-alpha"))
 	assert.False(t, channelMatchesExpectedTaskPlugin(nil, channel, "generic-beta"))

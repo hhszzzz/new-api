@@ -10,72 +10,23 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
 	relaymedia "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/media"
 	sharedclaude "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/claude"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/internal/toolconv"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
+	"github.com/QuantumNous/new-api/relaykit/types"
 )
 
 func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, textRequest dto.GeneralOpenAIRequest) (*dto.ClaudeRequest, error) {
 	opts := convmeta.OptionsOf(info)
-	claudeTools := make([]any, 0, len(textRequest.Tools))
-
-	for _, tool := range textRequest.Tools {
-		if _, ok := tool.Function.Parameters.(map[string]any); !ok && tool.Type != "function" {
-			continue
-		}
-		claudeTools = append(claudeTools, &dto.Tool{
-			Name:        tool.Function.Name,
-			Description: tool.Function.Description,
-			InputSchema: sharedclaude.FunctionParametersToInputSchema(tool.Function.Parameters),
-			Strict:      tool.Function.Strict,
-		})
-	}
-
-	if textRequest.WebSearchOptions != nil {
-		webSearchTool := dto.ClaudeWebSearchTool{
-			Type: "web_search_20250305",
-			Name: "web_search",
-		}
-
-		if textRequest.WebSearchOptions.UserLocation != nil {
-			anthropicUserLocation := &dto.ClaudeWebSearchUserLocation{
-				Type: "approximate",
-			}
-
-			var userLocationMap map[string]any
-			if err := kitutil.Unmarshal(textRequest.WebSearchOptions.UserLocation, &userLocationMap); err == nil {
-				if approximateData, ok := userLocationMap["approximate"].(map[string]any); ok {
-					if timezone, ok := approximateData["timezone"].(string); ok && timezone != "" {
-						anthropicUserLocation.Timezone = timezone
-					}
-					if country, ok := approximateData["country"].(string); ok && country != "" {
-						anthropicUserLocation.Country = country
-					}
-					if region, ok := approximateData["region"].(string); ok && region != "" {
-						anthropicUserLocation.Region = region
-					}
-					if city, ok := approximateData["city"].(string); ok && city != "" {
-						anthropicUserLocation.City = city
-					}
-				}
-			}
-
-			webSearchTool.UserLocation = anthropicUserLocation
-		}
-
-		claudeTools = append(claudeTools, &webSearchTool)
-	}
 
 	claudeRequest := dto.ClaudeRequest{
 		Model:         textRequest.Model,
 		StopSequences: nil,
 		Temperature:   textRequest.Temperature,
 	}
-	if len(claudeTools) > 0 {
-		claudeRequest.Tools = claudeTools
-	}
-	if textRequest.MaxCompletionTokens != nil && *textRequest.MaxCompletionTokens > 0 {
+	if textRequest.MaxCompletionTokens != nil {
 		claudeRequest.MaxTokens = kitutil.GetPointer(*textRequest.MaxCompletionTokens)
-	} else if textRequest.MaxTokens != nil && *textRequest.MaxTokens > 0 {
+	} else if textRequest.MaxTokens != nil {
 		claudeRequest.MaxTokens = kitutil.GetPointer(*textRequest.MaxTokens)
 	}
 	if textRequest.TopP != nil {
@@ -86,13 +37,6 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 	}
 	if textRequest.IsStream(nil) {
 		claudeRequest.Stream = kitutil.GetPointer(true)
-	}
-
-	if textRequest.ToolChoice != nil || textRequest.ParallelTooCalls != nil {
-		claudeToolChoice := sharedclaude.MapOpenAIToolChoice(textRequest.ToolChoice, textRequest.ParallelTooCalls)
-		if claudeToolChoice != nil {
-			claudeRequest.ToolChoice = claudeToolChoice
-		}
 	}
 
 	sourceReasoning, err := reasoning.FromOpenAIChat(&textRequest)
@@ -113,10 +57,16 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 		switch stop := textRequest.Stop.(type) {
 		case string:
 			claudeRequest.StopSequences = []string{stop}
+		case []string:
+			claudeRequest.StopSequences = append([]string(nil), stop...)
 		case []any:
 			stopSequences := make([]string, 0)
 			for _, item := range stop {
-				stopSequences = append(stopSequences, item.(string))
+				value, ok := item.(string)
+				if !ok {
+					return nil, fmt.Errorf("stop sequences must be strings")
+				}
+				stopSequences = append(stopSequences, value)
 			}
 			claudeRequest.StopSequences = stopSequences
 		}
@@ -302,7 +252,7 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 				default:
 					source := mediaMessage.ToFileSource()
 					if source == nil {
-						continue
+						return nil, fmt.Errorf("content type %q is missing supported media data", mediaMessage.Type)
 					}
 					base64Data, mimeType, err := relaymedia.ResolveBase64Data(c, source, "formatting image for Claude")
 					if err != nil {
@@ -315,8 +265,10 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 					}
 					if strings.HasPrefix(mimeType, "application/pdf") {
 						claudeMediaMessage.Type = "document"
-					} else {
+					} else if strings.HasPrefix(mimeType, "image/") {
 						claudeMediaMessage.Type = "image"
+					} else {
+						return nil, fmt.Errorf("media type %q cannot be represented as a Messages image or document", mimeType)
 					}
 
 					claudeMediaMessage.Source.MediaType = mimeType
@@ -331,7 +283,7 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 					inputObj := make(map[string]any)
 					if args := toolCall.Function.Arguments; args != "" {
 						if err := kitutil.Unmarshal([]byte(args), &inputObj); err != nil {
-							kitutil.LogInfo("tool call function arguments is not a map[string]any: " + fmt.Sprintf("%v", toolCall.Function.Arguments))
+							return nil, fmt.Errorf("tool call %q arguments must be a JSON object", toolCall.ID)
 						}
 					}
 					claudeMediaMessages = append(claudeMediaMessages, dto.ClaudeMediaMessage{
@@ -360,6 +312,9 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 	// floor) has had its chance to satisfy the required field.
 	if claudeRequest.MaxTokens == nil {
 		return nil, sharedclaude.ErrMissingMaxTokens
+	}
+	if err := toolconv.RenderRequestTools(c, types.RelayFormatOpenAI, types.RelayFormatClaude, &textRequest, &claudeRequest, opts); err != nil {
+		return nil, err
 	}
 	return &claudeRequest, nil
 }

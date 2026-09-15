@@ -3,6 +3,7 @@ package controller
 import (
 	"errors"
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"log"
 	"net/http"
@@ -36,8 +37,8 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-func relayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.NewAPIError {
-	var err *types.NewAPIError
+func relayHandler(c *gin.Context, info *relaycommon.RelayInfo) *hosttypes.NewAPIError {
+	var err *hosttypes.NewAPIError
 	switch info.RelayMode {
 	case relayconstant.RelayModeImagesGenerations, relayconstant.RelayModeImagesEdits:
 		err = relay.ImageHelper(c, info)
@@ -61,8 +62,8 @@ func relayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.NewAPIErro
 	return err
 }
 
-func geminiRelayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.NewAPIError {
-	var err *types.NewAPIError
+func geminiRelayHandler(c *gin.Context, info *relaycommon.RelayInfo) *hosttypes.NewAPIError {
+	var err *hosttypes.NewAPIError
 	if strings.Contains(c.Request.URL.Path, "embed") {
 		err = relay.GeminiEmbeddingHandler(c, info)
 	} else {
@@ -103,7 +104,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	//originalModel := common.GetContextKeyString(c, constant.ContextKeyOriginalModel)
 
 	var (
-		newAPIError *types.NewAPIError
+		newAPIError *hosttypes.NewAPIError
 		relayInfo   *relaycommon.RelayInfo
 		ws          *websocket.Conn
 		err         error
@@ -112,7 +113,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	if relayFormat == types.RelayFormatOpenAIRealtime {
 		ws, err = upgrader.Upgrade(c.Writer, c.Request, nil)
 		if err != nil {
-			helper.WssError(c, ws, types.NewError(err, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry()).ToOpenAIError())
+			helper.WssError(c, ws, hosttypes.NewError(err, hosttypes.ErrorCodeGetChannelFailed, hosttypes.ErrOptionWithSkipRetry()).ToOpenAIError())
 			return
 		}
 		defer ws.Close()
@@ -120,7 +121,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	defer func() {
 		if newAPIError != nil {
-			if newAPIError.GetErrorCode() == types.ErrorCodeClientDisconnected {
+			if newAPIError.GetErrorCode() == hosttypes.ErrorCodeClientDisconnected {
 				logger.LogInfo(c, "relay client disconnected before stream completion")
 				return
 			}
@@ -150,16 +151,16 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	if err != nil {
 		// Map "request body too large" to 413 so clients can handle it correctly
 		if common.IsRequestBodyTooLargeError(err) || errors.Is(err, common.ErrRequestBodyTooLarge) {
-			newAPIError = types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusRequestEntityTooLarge, types.ErrOptionWithSkipRetry())
+			newAPIError = hosttypes.NewErrorWithStatusCode(err, hosttypes.ErrorCodeReadRequestBodyFailed, http.StatusRequestEntityTooLarge, hosttypes.ErrOptionWithSkipRetry())
 		} else {
-			newAPIError = types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithStatusCode(http.StatusBadRequest), types.ErrOptionWithSkipRetry())
+			newAPIError = hosttypes.NewError(err, hosttypes.ErrorCodeInvalidRequest, hosttypes.ErrOptionWithStatusCode(http.StatusBadRequest), hosttypes.ErrOptionWithSkipRetry())
 		}
 		return
 	}
 
 	relayInfo, err = relaycommon.GenRelayInfo(c, relayFormat, request, ws)
 	if err != nil {
-		newAPIError = types.NewError(err, types.ErrorCodeGenRelayInfoFailed)
+		newAPIError = hosttypes.NewError(err, hosttypes.ErrorCodeGenRelayInfoFailed)
 		return
 	}
 	if relayFormat == types.RelayFormatGemini {
@@ -215,8 +216,8 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		contains, _ := service.CheckSensitiveText(request.GetSensitiveText())
 		if contains {
 			logger.LogWarn(c, "user sensitive words detected")
-			newAPIError = types.NewError(errors.New("sensitive words detected"), types.ErrorCodeSensitiveWordsDetected,
-				types.ErrOptionWithStatusCode(http.StatusBadRequest), types.ErrOptionWithSkipRetry())
+			newAPIError = hosttypes.NewError(errors.New("sensitive words detected"), hosttypes.ErrorCodeSensitiveWordsDetected,
+				hosttypes.ErrOptionWithStatusCode(http.StatusBadRequest), hosttypes.ErrOptionWithSkipRetry())
 			return
 		}
 	}
@@ -238,7 +239,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	tokens, err := service.EstimateRequestToken(c, meta, relayInfo)
 	if err != nil {
-		newAPIError = types.NewError(err, types.ErrorCodeCountTokenFailed)
+		newAPIError = hosttypes.NewError(err, hosttypes.ErrorCodeCountTokenFailed)
 		return
 	}
 
@@ -246,7 +247,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	priceData, err := helper.ModelPriceHelper(c, relayInfo, tokens, meta)
 	if err != nil {
-		newAPIError = types.NewError(err, types.ErrorCodeModelPriceError, types.ErrOptionWithStatusCode(http.StatusBadRequest))
+		newAPIError = hosttypes.NewError(err, hosttypes.ErrorCodeModelPriceError, hosttypes.ErrOptionWithStatusCode(http.StatusBadRequest))
 		return
 	}
 
@@ -282,7 +283,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		var (
 			channel          *model.Channel
 			channelRateGuard *service.ChannelRateLimitGuard
-			channelErr       *types.NewAPIError
+			channelErr       *hosttypes.NewAPIError
 		)
 		if relayInfo.IsChannelTest {
 			channel, channelErr = getChannel(c, relayInfo, retryParam)
@@ -309,9 +310,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			if bodyErr != nil {
 				// Ensure consistent 413 for oversized bodies even when error occurs later (e.g., retry path)
 				if common.IsRequestBodyTooLargeError(bodyErr) || errors.Is(bodyErr, common.ErrRequestBodyTooLarge) {
-					newAPIError = types.NewErrorWithStatusCode(bodyErr, types.ErrorCodeReadRequestBodyFailed, http.StatusRequestEntityTooLarge, types.ErrOptionWithSkipRetry())
+					newAPIError = hosttypes.NewErrorWithStatusCode(bodyErr, hosttypes.ErrorCodeReadRequestBodyFailed, http.StatusRequestEntityTooLarge, hosttypes.ErrOptionWithSkipRetry())
 				} else {
-					newAPIError = types.NewErrorWithStatusCode(bodyErr, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+					newAPIError = hosttypes.NewErrorWithStatusCode(bodyErr, hosttypes.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, hosttypes.ErrOptionWithSkipRetry())
 				}
 				return
 			}
@@ -356,8 +357,8 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			continue
 		}
 
-		if newAPIError.GetErrorCode() != types.ErrorCodeClientDisconnected {
-			processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError, relayInfo)
+		if newAPIError.GetErrorCode() != hosttypes.ErrorCodeClientDisconnected {
+			processChannelError(c, *hosttypes.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError, relayInfo)
 		}
 
 		if !shouldRetry(c, newAPIError, common.RetryTimes-retryParam.GetRetry()) {
@@ -396,7 +397,7 @@ func shouldApplyUserRateLimits(c *gin.Context, relayInfo *relaycommon.RelayInfo)
 	}
 }
 
-func writeRelayErrorResponse(c *gin.Context, relayFormat types.RelayFormat, apiError *types.NewAPIError, privacyInfo *relaycommon.RelayInfo, ws *websocket.Conn) {
+func writeRelayErrorResponse(c *gin.Context, relayFormat types.RelayFormat, apiError *hosttypes.NewAPIError, privacyInfo *relaycommon.RelayInfo, ws *websocket.Conn) {
 	if apiError == nil {
 		return
 	}
@@ -514,9 +515,9 @@ func fastTokenCountMetaForPricing(request dto.Request) *types.TokenCountMeta {
 	return meta
 }
 
-func getChannelAttempt(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service.RetryParam) (*model.Channel, *service.ChannelRateLimitGuard, *types.NewAPIError) {
+func getChannelAttempt(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service.RetryParam) (*model.Channel, *service.ChannelRateLimitGuard, *hosttypes.NewAPIError) {
 	if retryParam == nil {
-		return nil, nil, types.NewError(errors.New("invalid channel selection parameters"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		return nil, nil, hosttypes.NewError(errors.New("invalid channel selection parameters"), hosttypes.ErrorCodeGetChannelFailed, hosttypes.ErrOptionWithSkipRetry())
 	}
 	rejected := false
 	defer retryParam.ClearChannelExclusions()
@@ -533,20 +534,20 @@ func getChannelAttempt(c *gin.Context, info *relaycommon.RelayInfo, retryParam *
 			return channel, guard, nil
 		}
 		if c.Request.Context().Err() != nil {
-			return nil, nil, types.NewError(c.Request.Context().Err(), types.ErrorCodeClientDisconnected, types.ErrOptionWithSkipRetry())
+			return nil, nil, hosttypes.NewError(c.Request.Context().Err(), hosttypes.ErrorCodeClientDisconnected, hosttypes.ErrOptionWithSkipRetry())
 		}
 		rejected = true
 		retryParam.ExcludeChannel(channel.Id)
 	}
 }
 
-func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service.RetryParam) (*model.Channel, *types.NewAPIError) {
+func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service.RetryParam) (*model.Channel, *hosttypes.NewAPIError) {
 	if info.ChannelMeta == nil {
 		channelID := c.GetInt("channel_id")
 		if !retryParam.IsChannelExcluded(channelID) {
 			channel, err := model.CacheGetChannel(channelID)
 			if err != nil {
-				return nil, types.NewError(fmt.Errorf("failed to reload channel %d: %w", channelID, err), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+				return nil, hosttypes.NewError(fmt.Errorf("failed to reload channel %d: %w", channelID, err), hosttypes.ErrorCodeGetChannelFailed, hosttypes.ErrOptionWithSkipRetry())
 			}
 			return channel, nil
 		}
@@ -554,10 +555,10 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 	if channelID, retrySameChannel := middleware.PendingAutoProtocolRetryChannelID(c); retrySameChannel && !retryParam.IsChannelExcluded(channelID) {
 		channel, err := model.CacheGetChannel(channelID)
 		if err != nil {
-			return nil, types.NewError(fmt.Errorf("failed to reload channel %d for automatic protocol retry: %w", channelID, err), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+			return nil, hosttypes.NewError(fmt.Errorf("failed to reload channel %d for automatic protocol retry: %w", channelID, err), hosttypes.ErrorCodeGetChannelFailed, hosttypes.ErrOptionWithSkipRetry())
 		}
 		if channel == nil || channel.Status != common.ChannelStatusEnabled || !channel.IsSchedulableAt(time.Now()) {
-			return nil, types.NewError(fmt.Errorf("channel %d is unavailable for automatic protocol retry", channelID), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+			return nil, hosttypes.NewError(fmt.Errorf("channel %d is unavailable for automatic protocol retry", channelID), hosttypes.ErrorCodeGetChannelFailed, hosttypes.ErrOptionWithSkipRetry())
 		}
 		if setupErr := middleware.SetupContextForSelectedChannel(c, channel, info.OriginModelName, true); setupErr != nil {
 			return nil, setupErr
@@ -570,18 +571,18 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 			if reason, ok := common.GetContextKeyType[string](c, constant.ContextKeyProtocolIncompatibleReason); ok && reason != "" {
 				err = fmt.Errorf("%w: %s", err, reason)
 			}
-			return nil, types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+			return nil, hosttypes.NewErrorWithStatusCode(err, hosttypes.ErrorCodeInvalidRequest, http.StatusBadRequest, hosttypes.ErrOptionWithSkipRetry())
 		}
 		if common.GetContextKeyInt(c, constant.ContextKeyUserModelRouteId) > 0 {
-			return nil, types.NewError(fmt.Errorf("用户模型路由没有可用渠道"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+			return nil, hosttypes.NewError(fmt.Errorf("用户模型路由没有可用渠道"), hosttypes.ErrorCodeGetChannelFailed, hosttypes.ErrOptionWithSkipRetry())
 		}
-		return nil, types.NewError(fmt.Errorf("获取分组 %s 下模型 %s 的可用渠道失败（retry）: %s", selectGroup, info.OriginModelName, err.Error()), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		return nil, hosttypes.NewError(fmt.Errorf("获取分组 %s 下模型 %s 的可用渠道失败（retry）: %s", selectGroup, info.OriginModelName, err.Error()), hosttypes.ErrorCodeGetChannelFailed, hosttypes.ErrOptionWithSkipRetry())
 	}
 	if channel == nil {
 		if common.GetContextKeyInt(c, constant.ContextKeyUserModelRouteId) > 0 {
-			return nil, types.NewError(fmt.Errorf("用户模型路由没有可用渠道"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+			return nil, hosttypes.NewError(fmt.Errorf("用户模型路由没有可用渠道"), hosttypes.ErrorCodeGetChannelFailed, hosttypes.ErrOptionWithSkipRetry())
 		}
-		return nil, types.NewError(fmt.Errorf("分组 %s 下模型 %s 的可用渠道不存在（retry）", selectGroup, info.OriginModelName), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		return nil, hosttypes.NewError(fmt.Errorf("分组 %s 下模型 %s 的可用渠道不存在（retry）", selectGroup, info.OriginModelName), hosttypes.ErrorCodeGetChannelFailed, hosttypes.ErrOptionWithSkipRetry())
 	}
 
 	if routeGroup := common.GetContextKeyString(c, constant.ContextKeyUserModelRouteGroup); routeGroup != "" {
@@ -597,14 +598,14 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 	return channel, nil
 }
 
-func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) bool {
+func shouldRetry(c *gin.Context, openaiErr *hosttypes.NewAPIError, retryTimes int) bool {
 	if c != nil && c.Writer != nil && c.Writer.Written() {
 		return false
 	}
 	return service.ShouldRetryRelayError(c, openaiErr, retryTimes)
 }
 
-func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError, relayInfo *relaycommon.RelayInfo) {
+func processChannelError(c *gin.Context, channelError hosttypes.ChannelError, err *hosttypes.NewAPIError, relayInfo *relaycommon.RelayInfo) {
 	service.ProcessChannelError(c, channelError, err, relayInfo)
 }
 
@@ -881,7 +882,7 @@ func executeTaskSubmissionWith(
 				break
 			}
 		} else {
-			var channelErr *types.NewAPIError
+			var channelErr *hosttypes.NewAPIError
 			channel, channelRateGuard, channelErr = getChannelAttempt(c, relayInfo, retryParam)
 			if channelErr != nil {
 				logger.LogError(c, channelErr.Error())
@@ -934,9 +935,9 @@ func executeTaskSubmissionWith(
 
 		if !taskErr.LocalError {
 			processChannelError(c,
-				*types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey,
+				*hosttypes.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey,
 					common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()),
-				types.NewOpenAIError(taskErr.Error, types.ErrorCodeBadResponseStatusCode, taskErr.StatusCode), relayInfo)
+				hosttypes.NewOpenAIError(taskErr.Error, hosttypes.ErrorCodeBadResponseStatusCode, taskErr.StatusCode), relayInfo)
 		}
 
 		willRetry := shouldRetryTaskRelay(c, channel.Id, taskErr, common.RetryTimes-retryParam.GetRetry())
@@ -974,7 +975,7 @@ func executeTaskSubmissionWith(
 		diagnostics.reserve("reserve_start", result.Quota)
 		if reserveErr := relayInfo.Billing.Reserve(result.Quota); reserveErr != nil {
 			common.SysError("reserve adjusted task billing error: " + reserveErr.Error())
-			taskErr = service.TaskErrorWrapperLocal(errors.New("insufficient quota for adjusted task cost"), string(types.ErrorCodeInsufficientUserQuota), http.StatusForbidden)
+			taskErr = service.TaskErrorWrapperLocal(errors.New("insufficient quota for adjusted task cost"), string(hosttypes.ErrorCodeInsufficientUserQuota), http.StatusForbidden)
 			diagnostics.failed("reserve", "insufficient_quota", taskErr, false)
 			return nil, taskErr
 		}

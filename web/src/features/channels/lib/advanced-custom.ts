@@ -16,10 +16,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import type { ProtocolCatalog } from '@/features/protocols/types'
+
 import type {
   AdvancedCustomAuthType,
   AdvancedCustomConfig,
-  AdvancedCustomConverter,
   AdvancedCustomRoute,
   AdvancedCustomRouteAuth,
 } from '../types'
@@ -30,63 +31,6 @@ export const ADVANCED_CUSTOM_MODEL_LIST_LABEL = 'OpenAI Models'
 export const ADVANCED_CUSTOM_BALANCE_PATH =
   '/v1/dashboard/billing/credit_grants'
 export const ADVANCED_CUSTOM_BALANCE_LABEL = 'Balance Query'
-
-export const ADVANCED_CUSTOM_CONVERTER_OPTIONS: Array<{
-  value: AdvancedCustomConverter
-  label: string
-  triggerLabel: string
-}> = [
-  {
-    value: 'none',
-    label: 'Native forwarding',
-    triggerLabel: 'Native forwarding',
-  },
-  {
-    value: 'anthropic_messages_to_openai_chat_completions',
-    label: 'Anthropic Messages to OpenAI Chat',
-    triggerLabel: 'To OpenAI Chat',
-  },
-  {
-    value: 'claude_messages_to_openai_responses',
-    label: 'Anthropic Messages to OpenAI Responses',
-    triggerLabel: 'To OpenAI Responses',
-  },
-  {
-    value: 'openai_chat_completions_to_anthropic_messages',
-    label: 'OpenAI Chat to Anthropic Messages',
-    triggerLabel: 'To Anthropic Messages',
-  },
-  {
-    value: 'openai_chat_completions_to_openai_responses',
-    label: 'OpenAI Chat to OpenAI Responses',
-    triggerLabel: 'To OpenAI Responses',
-  },
-  {
-    value: 'openai_responses_to_openai_chat_completions',
-    label: 'OpenAI Responses to OpenAI Chat',
-    triggerLabel: 'To OpenAI Chat',
-  },
-  {
-    value: 'openai_responses_to_claude_messages',
-    label: 'OpenAI Responses to Anthropic Messages',
-    triggerLabel: 'To Anthropic Messages',
-  },
-  {
-    value: 'openai_responses_to_gemini_generate_content',
-    label: 'OpenAI Responses to Gemini Generate Content',
-    triggerLabel: 'To Gemini Generate Content',
-  },
-  {
-    value: 'gemini_generate_content_to_openai_chat_completions',
-    label: 'Gemini Generate Content to OpenAI Chat',
-    triggerLabel: 'To OpenAI Chat',
-  },
-  {
-    value: 'openai_chat_completions_to_gemini_generate_content',
-    label: 'OpenAI Chat to Gemini Generate Content',
-    triggerLabel: 'To Gemini Generate Content',
-  },
-]
 
 export type AdvancedCustomAuthMode = 'default' | AdvancedCustomAuthType
 
@@ -195,7 +139,7 @@ export type AdvancedCustomTemplateOption = {
   config: AdvancedCustomConfig
 }
 
-export type AdvancedCustomConverterDefaults = {
+export type AdvancedCustomTargetDefaults = {
   upstream_path: string
   auth?: AdvancedCustomRouteAuth
 }
@@ -205,9 +149,7 @@ export const ADVANCED_CUSTOM_MODEL_REGEX_PREFIX = 're:'
 export type AdvancedCustomModelRuleKind = 'exact' | 'regex'
 
 const openAIChatPath = '/v1/chat/completions'
-const openAIResponsesPath = '/v1/responses'
 const claudeMessagesPath = '/v1/messages'
-const geminiGenerateContentPath = '/v1beta/models/{model}:generateContent'
 
 const bearerHeaderAuth = (): AdvancedCustomRouteAuth => ({
   type: 'header',
@@ -243,7 +185,7 @@ function createOpenAINativeRoutes(): AdvancedCustomRoute[] {
   ].map((path) => ({
     incoming_path: path,
     upstream_path: path,
-    converter: 'none',
+    target_protocol: 'native',
     auth: bearerHeaderAuth(),
   }))
 }
@@ -253,7 +195,7 @@ function createClaudeNativeRoutes(): AdvancedCustomRoute[] {
     {
       incoming_path: '/v1/messages',
       upstream_path: '/v1/messages',
-      converter: 'none',
+      target_protocol: 'native',
       auth: apiKeyHeaderAuth(),
     },
   ]
@@ -267,7 +209,7 @@ function createGeminiNativeRoutes(): AdvancedCustomRoute[] {
   ].map((path) => ({
     incoming_path: path,
     upstream_path: path,
-    converter: 'none',
+    target_protocol: 'native',
     auth: geminiQueryAuth(),
   }))
 }
@@ -276,7 +218,7 @@ function createGatewayNativeRoutes(): AdvancedCustomRoute[] {
   return ['/v1/alpha/search', '/v1/rerank'].map((path) => ({
     incoming_path: path,
     upstream_path: path,
-    converter: 'none',
+    target_protocol: 'native',
     auth: bearerHeaderAuth(),
   }))
 }
@@ -366,7 +308,7 @@ export function replaceAdvancedCustomManagementRoute(
     const managementRoute: AdvancedCustomRoute = {
       incoming_path: path,
       upstream_path: route.upstream_path || '',
-      converter: 'none',
+      target_protocol: 'native',
       models: [],
       auth: route.auth,
     }
@@ -410,7 +352,7 @@ export function createAdvancedCustomRoute(): AdvancedCustomRoute {
   return {
     incoming_path: openAIChatPath,
     upstream_path: openAIChatPath,
-    converter: 'none',
+    target_protocol: 'native',
   }
 }
 
@@ -426,62 +368,75 @@ export function createAdvancedCustomManagementRoute(
   return {
     incoming_path: path,
     upstream_path: path,
-    converter: 'none',
+    target_protocol: 'native',
     models: [],
   }
 }
 
-export function getAdvancedCustomUpstreamPathPlaceholder(
-  converter: AdvancedCustomConverter,
-  incomingPath = getDefaultAdvancedCustomIncomingPath(converter)
+export function getAdvancedCustomTarget(
+  route: AdvancedCustomRoute,
+  catalog?: ProtocolCatalog
 ): string {
-  return getAdvancedCustomConverterDefaults(converter, incomingPath)
-    .upstream_path
+  if (route.target_protocol) return route.target_protocol
+  if (!route.converter || route.converter === 'none') return 'native'
+  return (
+    catalog?.conversions.find(
+      (conversion) =>
+        conversion.id === route.converter ||
+        conversion.aliases?.includes(route.converter || '')
+    )?.to || route.converter
+  )
 }
 
-export function getAdvancedCustomConverterDefaults(
-  converter: AdvancedCustomConverter,
-  incomingPath: string
-): AdvancedCustomConverterDefaults {
-  const normalizedIncomingPath =
-    incomingPath.trim() || getDefaultAdvancedCustomIncomingPath(converter)
+export function getAdvancedCustomTargetDefaults(
+  target: string,
+  incomingPath: string,
+  catalog?: ProtocolCatalog
+): AdvancedCustomTargetDefaults {
+  const operation = catalog?.operations.find(
+    (entry) => entry.id === 'generate' && entry.protocol === target
+  )
+  const upstreamPath =
+    target === 'native' ? incomingPath : operation?.path || incomingPath
+  return {
+    upstream_path: upstreamPath,
+    auth: getAdvancedCustomNativeAuth(upstreamPath),
+  }
+}
 
-  if (converter === 'none') {
-    return {
-      upstream_path: normalizedIncomingPath,
-      auth: getAdvancedCustomNativeAuth(normalizedIncomingPath),
+function getIncomingOperation(incomingPath: string, catalog?: ProtocolCatalog) {
+  const path = incomingPath
+    .trim()
+    .replace(':streamGenerateContent', ':generateContent')
+  return catalog?.operations.find((operation) => {
+    if (operation.path === path) return true
+    const parts = operation.path.split('{model}')
+    return (
+      parts.length === 2 && path.startsWith(parts[0]) && path.endsWith(parts[1])
+    )
+  })
+}
+
+export function getAdvancedCustomTargetOptions(
+  incomingPath: string,
+  catalog?: ProtocolCatalog
+): Array<{ value: string; label: string }> {
+  const options = [{ value: 'native', label: 'Native forwarding' }]
+  const operation = getIncomingOperation(incomingPath, catalog)
+  if (!catalog || !operation?.convertible) return options
+  for (const protocol of catalog.protocols) {
+    if (
+      protocol.id === operation.protocol ||
+      catalog.conversions.some(
+        (conversion) =>
+          conversion.from === operation.protocol &&
+          conversion.to === protocol.id
+      )
+    ) {
+      options.push({ value: protocol.id, label: protocol.name })
     }
   }
-  if (
-    converter === 'anthropic_messages_to_openai_chat_completions' ||
-    converter === 'gemini_generate_content_to_openai_chat_completions' ||
-    converter === 'openai_responses_to_openai_chat_completions'
-  ) {
-    return { upstream_path: openAIChatPath, auth: bearerHeaderAuth() }
-  }
-  if (
-    converter === 'openai_chat_completions_to_openai_responses' ||
-    converter === 'claude_messages_to_openai_responses'
-  ) {
-    return { upstream_path: openAIResponsesPath, auth: bearerHeaderAuth() }
-  }
-  if (
-    converter === 'openai_chat_completions_to_anthropic_messages' ||
-    converter === 'openai_responses_to_claude_messages'
-  ) {
-    return { upstream_path: claudeMessagesPath, auth: apiKeyHeaderAuth() }
-  }
-  if (
-    converter === 'openai_chat_completions_to_gemini_generate_content' ||
-    converter === 'openai_responses_to_gemini_generate_content'
-  ) {
-    return { upstream_path: geminiGenerateContentPath, auth: geminiQueryAuth() }
-  }
-
-  return {
-    upstream_path: normalizedIncomingPath || openAIChatPath,
-    auth: getAdvancedCustomNativeAuth(normalizedIncomingPath),
-  }
+  return options
 }
 
 function getAdvancedCustomNativeAuth(
@@ -501,41 +456,6 @@ function getAdvancedCustomNativeAuth(
   return bearerHeaderAuth()
 }
 
-export function getAdvancedCustomIncomingPathOptions(
-  converter: AdvancedCustomConverter
-): AdvancedCustomIncomingPathOption[] {
-  return ADVANCED_CUSTOM_INCOMING_PATH_OPTIONS.filter((option) =>
-    isConverterPathAllowed(option.value, converter)
-  )
-}
-
-export function getDefaultAdvancedCustomIncomingPath(
-  converter: AdvancedCustomConverter
-): string {
-  return (
-    getAdvancedCustomIncomingPathOptions(converter)[0]?.value ||
-    '/v1/chat/completions'
-  )
-}
-
-export function isAdvancedCustomIncomingPathAllowed(
-  incomingPath: string,
-  converter: AdvancedCustomConverter
-): boolean {
-  return isConverterPathAllowed(incomingPath, converter)
-}
-
-export function getAdvancedCustomConverterOptions(
-  incomingPath: string
-): typeof ADVANCED_CUSTOM_CONVERTER_OPTIONS {
-  const normalizedIncomingPath = incomingPath.trim()
-  return ADVANCED_CUSTOM_CONVERTER_OPTIONS.filter(
-    (option) =>
-      option.value === 'none' ||
-      isConverterPathAllowed(normalizedIncomingPath, option.value)
-  )
-}
-
 export function getAdvancedCustomIncomingPathLabel(value: string): string {
   return (
     ADVANCED_CUSTOM_INCOMING_PATH_OPTIONS.find(
@@ -545,7 +465,8 @@ export function getAdvancedCustomIncomingPathLabel(value: string): string {
 }
 
 export function parseAdvancedCustomConfig(
-  value: string | undefined
+  value: string | undefined,
+  catalog?: ProtocolCatalog
 ): AdvancedCustomConfig | null {
   if (!value?.trim()) return null
   try {
@@ -553,23 +474,30 @@ export function parseAdvancedCustomConfig(
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       return null
     }
-    return normalizeAdvancedCustomConfig(parsed as AdvancedCustomConfig)
+    return normalizeAdvancedCustomConfig(
+      parsed as AdvancedCustomConfig,
+      catalog
+    )
   } catch {
     return null
   }
 }
 
 export function stringifyAdvancedCustomConfig(
-  config: AdvancedCustomConfig
+  config: AdvancedCustomConfig,
+  catalog?: ProtocolCatalog
 ): string {
-  return JSON.stringify(normalizeAdvancedCustomConfig(config), null, 2)
+  return JSON.stringify(normalizeAdvancedCustomConfig(config, catalog), null, 2)
 }
 
 export function normalizeAdvancedCustomConfig(
-  config: AdvancedCustomConfig
+  config: AdvancedCustomConfig,
+  catalog?: ProtocolCatalog
 ): AdvancedCustomConfig {
   const routes = Array.isArray(config.advanced_routes)
-    ? config.advanced_routes.map(normalizeAdvancedCustomRoute)
+    ? config.advanced_routes.map((route) =>
+        normalizeAdvancedCustomRoute(route, catalog)
+      )
     : []
 
   return {
@@ -601,7 +529,8 @@ export function getAdvancedCustomRegexModelPattern(modelRule: string): string {
 }
 
 export function validateAdvancedCustomConfig(
-  config: AdvancedCustomConfig | null
+  config: AdvancedCustomConfig | null,
+  catalog?: ProtocolCatalog
 ): AdvancedCustomValidationError | null {
   if (!config) {
     return { message: 'Advanced custom configuration is required' }
@@ -626,6 +555,7 @@ export function validateAdvancedCustomConfig(
     const incomingPath = route.incoming_path?.trim() || ''
     const upstreamPath = getAdvancedCustomRouteUpstreamPath(route)
     const converter = route.converter || 'none'
+    const target = getAdvancedCustomTarget(route, catalog)
     const routeModels = normalizeAdvancedCustomRouteModels(route.models)
 
     if (!incomingPath) {
@@ -657,10 +587,10 @@ export function validateAdvancedCustomConfig(
       if (routeModels.length > 0) {
         return {
           routeIndex: index,
-          message: `${routeLabel} route does not support client model rules`,
+          message: `${routeLabel} route does not support model rules`,
         }
       }
-      if (converter !== 'none') {
+      if (target !== 'native') {
         return {
           routeIndex: index,
           message: `${routeLabel} route must use native forwarding`,
@@ -692,13 +622,34 @@ export function validateAdvancedCustomConfig(
         message: 'Upstream path must be a full URL or a path starting with /',
       }
     }
-    if (!isAdvancedCustomConverter(converter)) {
-      return { routeIndex: index, message: 'Converter is not registered' }
-    }
-    if (!isConverterPathAllowed(incomingPath, converter)) {
-      return {
-        routeIndex: index,
-        message: 'Converter does not match incoming path',
+    if (catalog) {
+      const legacy = catalog.conversions.find(
+        (conversion) =>
+          conversion.id === converter || conversion.aliases?.includes(converter)
+      )
+      if (converter !== 'none' && !legacy) {
+        return { routeIndex: index, message: 'Converter is not registered' }
+      }
+      if (
+        legacy &&
+        (legacy.from !==
+          getIncomingOperation(incomingPath, catalog)?.protocol ||
+          (route.target_protocol && route.target_protocol !== legacy.to))
+      ) {
+        return {
+          routeIndex: index,
+          message: 'Target protocol conflicts with legacy converter',
+        }
+      }
+      if (
+        !getAdvancedCustomTargetOptions(incomingPath, catalog).some(
+          (option) => option.value === target
+        )
+      ) {
+        return {
+          routeIndex: index,
+          message: 'Target protocol does not support this operation',
+        }
       }
     }
 
@@ -786,12 +737,32 @@ export function buildAdvancedCustomAuth(
 }
 
 function normalizeAdvancedCustomRoute(
-  route: AdvancedCustomRoute
+  route: AdvancedCustomRoute,
+  catalog?: ProtocolCatalog
 ): AdvancedCustomRoute {
   const nextRoute: AdvancedCustomRoute = {
     incoming_path: route.incoming_path || '',
     upstream_path: getAdvancedCustomRouteUpstreamPath(route),
-    converter: route.converter || 'none',
+  }
+  if (route.target_protocol) nextRoute.target_protocol = route.target_protocol
+  if (route.converter && route.converter !== 'none') {
+    const conversion = catalog?.conversions.find(
+      (entry) =>
+        entry.id === route.converter ||
+        entry.aliases?.includes(route.converter || '')
+    )
+    if (
+      conversion &&
+      (!route.target_protocol || route.target_protocol === conversion.to) &&
+      conversion.from ===
+        getIncomingOperation(route.incoming_path || '', catalog)?.protocol
+    ) {
+      nextRoute.target_protocol = conversion.to
+    } else {
+      nextRoute.converter = route.converter
+    }
+  } else if (!nextRoute.target_protocol) {
+    nextRoute.target_protocol = 'native'
   }
   const models = normalizeAdvancedCustomRouteModels(route.models)
   if (models.length > 0) {
@@ -900,48 +871,6 @@ function isFullHttpURLOrAbsolutePath(value: string): boolean {
   } catch {
     return false
   }
-}
-
-function isAdvancedCustomConverter(
-  value: string
-): value is AdvancedCustomConverter {
-  return ADVANCED_CUSTOM_CONVERTER_OPTIONS.some(
-    (option) => option.value === value
-  )
-}
-
-function isConverterPathAllowed(
-  incomingPath: string,
-  converter: AdvancedCustomConverter
-): boolean {
-  if (converter === 'none') return true
-  if (incomingPath === '/v1/alpha/search') return false
-  if (
-    converter === 'anthropic_messages_to_openai_chat_completions' ||
-    converter === 'claude_messages_to_openai_responses'
-  ) {
-    return incomingPath === '/v1/messages'
-  }
-  if (
-    converter === 'openai_chat_completions_to_anthropic_messages' ||
-    converter === 'openai_chat_completions_to_openai_responses' ||
-    converter === 'openai_chat_completions_to_gemini_generate_content'
-  ) {
-    return incomingPath === '/v1/chat/completions'
-  }
-  if (
-    converter === 'openai_responses_to_openai_chat_completions' ||
-    converter === 'openai_responses_to_claude_messages'
-  ) {
-    return incomingPath === '/v1/responses'
-  }
-  if (converter === 'openai_responses_to_gemini_generate_content') {
-    return incomingPath === '/v1/responses'
-  }
-  return (
-    incomingPath.includes(':generateContent') ||
-    incomingPath.includes(':streamGenerateContent')
-  )
 }
 
 function validateRouteAuth(

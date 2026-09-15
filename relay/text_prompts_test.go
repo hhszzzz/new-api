@@ -2,19 +2,16 @@ package relay
 
 import (
 	"encoding/json"
-	"io"
+	"github.com/QuantumNous/new-api/common"
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"math"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
-	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	openaichannel "github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
-	relaytypes "github.com/QuantumNous/new-api/relaykit/types"
 	hosttypes "github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -49,25 +46,6 @@ func TestApplyResponsesInstructionsPreservesNonStringValues(t *testing.T) {
 
 			assert.JSONEq(t, string(tt.instructions), string(request.Instructions))
 			assert.Equal(t, "route prompt", info.LeadingSystemPrompt(false), "preserving an invalid value must not consume the prompt for a later validation stage")
-		})
-	}
-}
-
-func TestIsResponsesEventStreamContentType(t *testing.T) {
-	tests := []struct {
-		name        string
-		contentType string
-		want        bool
-	}{
-		{name: "plain", contentType: "text/event-stream", want: true},
-		{name: "mixed case with charset", contentType: "Text/Event-Stream; charset=utf-8", want: true},
-		{name: "json", contentType: "application/json", want: false},
-		{name: "empty", contentType: "", want: false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, isResponsesEventStreamContentType(tt.contentType))
 		})
 	}
 }
@@ -113,80 +91,6 @@ func TestRecalcQuotaFromRatiosRejectsAllInvalidAdjustedRatios(t *testing.T) {
 	assert.True(t, info.PriceData.HasOtherRatio("duration"))
 }
 
-func TestTextRequestViaResponsesConvertsClaudeDirectly(t *testing.T) {
-	type capturedRequest struct {
-		path string
-		body []byte
-	}
-	captured := make(chan capturedRequest, 1)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		captured <- capturedRequest{path: r.URL.Path, body: body}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"id":"resp_1",
-			"object":"response",
-			"status":"completed",
-			"model":"gpt-5.6-sol",
-			"output":[{"type":"message","id":"msg_1","role":"assistant","content":[{"type":"output_text","text":"ok"}]}],
-			"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}
-		}`))
-	}))
-	defer server.Close()
-
-	gin.SetMode(gin.TestMode)
-	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
-	c.Request.Header.Set("Content-Type", "application/json")
-
-	info := &relaycommon.RelayInfo{
-		RelayMode:              relayconstant.RelayModeChatCompletions,
-		RelayFormat:            relaytypes.RelayFormatClaude,
-		OriginModelName:        "gpt-5.6-sol",
-		RequestConversionChain: []relaytypes.RelayFormat{relaytypes.RelayFormatClaude},
-		ChannelMeta: &relaycommon.ChannelMeta{
-			ChannelType:       constant.ChannelTypeOpenAI,
-			ChannelBaseUrl:    server.URL,
-			ApiKey:            "test-key",
-			UpstreamModelName: "gpt-5.6-sol",
-		},
-	}
-	adaptor := &openaichannel.Adaptor{}
-	adaptor.Init(info)
-	request := &dto.ClaudeRequest{
-		Model:    "gpt-5.6-sol",
-		Thinking: &dto.Thinking{Type: "adaptive", Display: "summarized"},
-		Messages: []dto.ClaudeMessage{{Role: "user", Content: "hello"}},
-	}
-
-	usage, apiErr := textRequestViaResponses(c, info, adaptor, request)
-
-	require.Nil(t, apiErr)
-	require.NotNil(t, usage)
-	assert.Equal(t, 5, usage.TotalTokens)
-	assert.Equal(t, []relaytypes.RelayFormat{relaytypes.RelayFormatClaude, relaytypes.RelayFormatOpenAIResponses}, info.RequestConversionChain)
-
-	upstream := <-captured
-	assert.Equal(t, "/v1/responses", upstream.path)
-	var upstreamBody map[string]any
-	require.NoError(t, common.Unmarshal(upstream.body, &upstreamBody))
-	assert.NotContains(t, upstreamBody, "messages")
-	reasoning, ok := upstreamBody["reasoning"].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, "high", reasoning["effort"])
-	assert.Equal(t, "detailed", reasoning["summary"])
-
-	var response dto.ClaudeResponse
-	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
-	require.Len(t, response.Content, 1)
-	assert.Equal(t, "ok", response.Content[0].GetText())
-}
-
 func TestApplySystemPromptIfNeededSkipsToolLoadingMessages(t *testing.T) {
 	tools := json.RawMessage(`[{"type":"function","function":{"name":"get_current_time","parameters":{"type":"object","properties":{"city":{"type":"string"}}}}}]`)
 	toolLoading := dto.Message{Role: "system", Tools: tools}
@@ -226,7 +130,7 @@ func TestApplySystemPromptIfNeededSkipsToolLoadingMessages(t *testing.T) {
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 			info := &relaycommon.RelayInfo{
 				ChannelMeta: &relaycommon.ChannelMeta{
-					ChannelSetting: dto.ChannelSettings{
+					ChannelSetting: hostdto.ChannelSettings{
 						SystemPrompt:         "Answer in English.",
 						SystemPromptOverride: true,
 					},

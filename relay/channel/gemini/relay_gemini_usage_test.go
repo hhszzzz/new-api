@@ -2,6 +2,8 @@ package gemini
 
 import (
 	"bytes"
+	hostdto "github.com/QuantumNous/new-api/dto"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -309,7 +311,7 @@ func TestGeminiProtocolBridgeStreamReturnsInitialUnsupportedErrorWithoutWriting(
 		name        string
 		path        string
 		relayFormat types.RelayFormat
-		handler     func(*gin.Context, *relaycommon.RelayInfo, *http.Response) (*dto.Usage, *types.NewAPIError)
+		handler     func(*gin.Context, *relaycommon.RelayInfo, *http.Response) (*dto.Usage, *hosttypes.NewAPIError)
 	}{
 		{
 			name:        "responses entry",
@@ -788,7 +790,7 @@ func TestGeminiMessagesStreamMarksProtocolAttemptComplete(t *testing.T) {
 		RequestProtocol:  channelcompat.ProtocolMessages,
 		UpstreamProtocol: channelcompat.ProtocolGemini,
 		Status:           channelcompat.StatusConvertible,
-		SelectionMode:    dto.ProtocolSelectionModeAuto,
+		SelectionMode:    hostdto.ProtocolSelectionModeAuto,
 		Features:         channelcompat.RequestFeatureSet{Stream: true},
 	})
 

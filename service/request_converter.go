@@ -16,7 +16,7 @@ func init() {
 		// relayconvert is gin-free; recover the gin context when the caller
 		// passed one so file caching/cleanup keeps working.
 		GetBase64Data: func(ctx context.Context, source types.FileSource, reason ...string) (string, string, error) {
-			ginCtx, _ := ctx.(*gin.Context)
+			ginCtx, _ := relayconvert.OriginalContext(ctx).(*gin.Context)
 			return GetBase64Data(ginCtx, source, reason...)
 		},
 		DecodeBase64FileData: DecodeBase64FileData,
@@ -24,7 +24,7 @@ func init() {
 }
 
 func ConvertRequest(c *gin.Context, info *relaycommon.RelayInfo, target types.RelayFormat, request any) (*relayconvert.RequestResult, error) {
-	result, err := relayconvert.ConvertRequest(c, info, target, request)
+	result, err := info.ConversionSession().Request(c, target, request)
 	if result != nil {
 		info.RecordConversionDiagnostics(c, result.Diagnostics)
 	}
@@ -32,7 +32,7 @@ func ConvertRequest(c *gin.Context, info *relaycommon.RelayInfo, target types.Re
 }
 
 func ConvertRequestByID(c *gin.Context, info *relaycommon.RelayInfo, converter string, request any) (*relayconvert.RequestResult, error) {
-	result, err := relayconvert.ConvertRequestByID(c, info, converter, request)
+	result, err := info.ConversionSession().RequestByID(c, converter, request)
 	if result != nil {
 		info.RecordConversionDiagnostics(c, result.Diagnostics)
 	}
@@ -40,7 +40,7 @@ func ConvertRequestByID(c *gin.Context, info *relaycommon.RelayInfo, converter s
 }
 
 func ConvertRequestVia(c *gin.Context, info *relaycommon.RelayInfo, request any, path ...types.RelayFormat) (*relayconvert.RequestResult, error) {
-	result, err := relayconvert.ConvertRequestVia(c, info, request, path...)
+	result, err := info.ConversionSession().RequestVia(c, request, path...)
 	if result != nil {
 		info.RecordConversionDiagnostics(c, result.Diagnostics)
 	}

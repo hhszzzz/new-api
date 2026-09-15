@@ -5,6 +5,7 @@ import (
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	oaichat "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/oai_chat"
+	sharedgemini "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/gemini"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 )
 
@@ -28,7 +29,7 @@ func (b *GeminiHostedStreamBridge) Observe(response *dto.GeminiChatResponse) {
 	if b.seen == nil {
 		b.seen = make(map[string]struct{})
 	}
-	for _, query := range GroundingWebSearchQueries(response) {
+	for _, query := range sharedgemini.GroundingWebSearchQueries(response) {
 		if _, exists := b.seen[query]; exists {
 			continue
 		}

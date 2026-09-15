@@ -3,6 +3,7 @@ package codex
 import (
 	"encoding/json"
 	"errors"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 	"strings"
@@ -77,15 +78,15 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	return request, nil
 }
 
-func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {
-	return channel.DoApiRequest(a, c, info, requestBody)
+func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (*channel.TransportResult, error) {
+	return channel.HTTPResult(channel.DoApiRequest(a, c, info, requestBody))
 }
 
-func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage any, err *types.NewAPIError) {
+func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage dto.UsageResult, err *hosttypes.NewAPIError) {
 	switch info.RelayMode {
 	case relayconstant.RelayModeAlphaSearch:
 		// Alpha search responses are handled by relay.AlphaSearchHelper.
-		return nil, types.NewError(errors.New("codex channel: alpha search response should be handled by AlphaSearchHelper"), types.ErrorCodeInvalidRequest)
+		return nil, hosttypes.NewError(errors.New("codex channel: alpha search response should be handled by AlphaSearchHelper"), hosttypes.ErrorCodeInvalidRequest)
 	case relayconstant.RelayModeResponsesCompact:
 		return openai.OaiResponsesCompactionHandlerWithInfo(c, resp, info)
 	case relayconstant.RelayModeResponses:
@@ -100,7 +101,7 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 		}
 		return openai.OaiResponsesHandler(c, info, resp)
 	default:
-		return nil, types.NewError(errors.New("codex channel: endpoint not supported"), types.ErrorCodeInvalidRequest)
+		return nil, hosttypes.NewError(errors.New("codex channel: endpoint not supported"), hosttypes.ErrorCodeInvalidRequest)
 	}
 }
 

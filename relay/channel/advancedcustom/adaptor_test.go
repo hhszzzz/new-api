@@ -2,6 +2,7 @@ package advancedcustom
 
 import (
 	"bytes"
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -25,14 +26,14 @@ import (
 
 func TestAdaptorUsesExactRouteAndQueryAuth(t *testing.T) {
 	adaptor := &Adaptor{}
-	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
-		Routes: []dto.AdvancedCustomRoute{
+	info := advancedCustomRelayInfo(&hostdto.AdvancedCustomConfig{
+		Routes: []hostdto.AdvancedCustomRoute{
 			{
 				IncomingPath: "/v1/messages",
 				UpstreamPath: "https://upstream.example/v1/chat/completions?existing=1",
 				Converter:    relayconvert.ConverterClaudeMessagesToOpenAIChat,
-				Auth: &dto.AdvancedCustomRouteAuth{
-					Type:  dto.AdvancedCustomAuthTypeQuery,
+				Auth: &hostdto.AdvancedCustomRouteAuth{
+					Type:  hostdto.AdvancedCustomAuthTypeQuery,
 					Name:  "api_key",
 					Value: "{api_key}",
 				},
@@ -55,14 +56,14 @@ func TestAdaptorUsesExactRouteAndQueryAuth(t *testing.T) {
 
 func TestAdaptorJoinsUpstreamPathWithChannelBaseURL(t *testing.T) {
 	adaptor := &Adaptor{}
-	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
-		Routes: []dto.AdvancedCustomRoute{
+	info := advancedCustomRelayInfo(&hostdto.AdvancedCustomConfig{
+		Routes: []hostdto.AdvancedCustomRoute{
 			{
 				IncomingPath: "/v1/chat/completions",
 				UpstreamPath: "/proxy/v1/chat/completions?existing=1",
 				Converter:    relayconvert.ConverterNone,
-				Auth: &dto.AdvancedCustomRouteAuth{
-					Type:  dto.AdvancedCustomAuthTypeQuery,
+				Auth: &hostdto.AdvancedCustomRouteAuth{
+					Type:  hostdto.AdvancedCustomAuthTypeQuery,
 					Name:  "api_key",
 					Value: "{api_key}",
 				},
@@ -85,8 +86,8 @@ func TestAdaptorJoinsUpstreamPathWithChannelBaseURL(t *testing.T) {
 
 func TestAdaptorReturnsErrorWhenUpstreamPathNeedsMissingBaseURL(t *testing.T) {
 	adaptor := &Adaptor{}
-	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
-		Routes: []dto.AdvancedCustomRoute{
+	info := advancedCustomRelayInfo(&hostdto.AdvancedCustomConfig{
+		Routes: []hostdto.AdvancedCustomRoute{
 			{
 				IncomingPath: "/v1/chat/completions",
 				UpstreamPath: "/v1/chat/completions",
@@ -103,8 +104,8 @@ func TestAdaptorReturnsErrorWhenUpstreamPathNeedsMissingBaseURL(t *testing.T) {
 
 func TestAdaptorSetupRequestHeaderUsesDefaultBearerAuth(t *testing.T) {
 	adaptor := &Adaptor{}
-	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
-		Routes: []dto.AdvancedCustomRoute{
+	info := advancedCustomRelayInfo(&hostdto.AdvancedCustomConfig{
+		Routes: []hostdto.AdvancedCustomRoute{
 			{
 				IncomingPath: "/v1/chat/completions",
 				UpstreamPath: "https://upstream.example/v1/chat/completions",
@@ -121,14 +122,14 @@ func TestAdaptorSetupRequestHeaderUsesDefaultBearerAuth(t *testing.T) {
 
 func TestAdaptorSetupRequestHeaderUsesConfiguredHeaderAuth(t *testing.T) {
 	adaptor := &Adaptor{}
-	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
-		Routes: []dto.AdvancedCustomRoute{
+	info := advancedCustomRelayInfo(&hostdto.AdvancedCustomConfig{
+		Routes: []hostdto.AdvancedCustomRoute{
 			{
 				IncomingPath: "/v1/chat/completions",
 				UpstreamPath: "https://upstream.example/v1/chat/completions",
 				Converter:    relayconvert.ConverterNone,
-				Auth: &dto.AdvancedCustomRouteAuth{
-					Type:  dto.AdvancedCustomAuthTypeHeader,
+				Auth: &hostdto.AdvancedCustomRouteAuth{
+					Type:  hostdto.AdvancedCustomAuthTypeHeader,
 					Name:  "x-api-key",
 					Value: "{api_key}",
 				},
@@ -145,14 +146,14 @@ func TestAdaptorSetupRequestHeaderUsesConfiguredHeaderAuth(t *testing.T) {
 
 func TestAdaptorSetupRequestHeaderAddsClaudeDefaultHeaders(t *testing.T) {
 	adaptor := &Adaptor{}
-	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
-		Routes: []dto.AdvancedCustomRoute{
+	info := advancedCustomRelayInfo(&hostdto.AdvancedCustomConfig{
+		Routes: []hostdto.AdvancedCustomRoute{
 			{
 				IncomingPath: "/v1/messages",
 				UpstreamPath: "https://api.anthropic.com/v1/messages",
 				Converter:    relayconvert.ConverterNone,
-				Auth: &dto.AdvancedCustomRouteAuth{
-					Type:  dto.AdvancedCustomAuthTypeHeader,
+				Auth: &hostdto.AdvancedCustomRouteAuth{
+					Type:  hostdto.AdvancedCustomAuthTypeHeader,
 					Name:  "x-api-key",
 					Value: "{api_key}",
 				},
@@ -170,8 +171,8 @@ func TestAdaptorSetupRequestHeaderAddsClaudeDefaultHeaders(t *testing.T) {
 
 func TestAdaptorReturnsErrorWhenNoRouteMatchesPath(t *testing.T) {
 	adaptor := &Adaptor{}
-	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
-		Routes: []dto.AdvancedCustomRoute{
+	info := advancedCustomRelayInfo(&hostdto.AdvancedCustomConfig{
+		Routes: []hostdto.AdvancedCustomRoute{
 			{
 				IncomingPath: "/v1/messages",
 				UpstreamPath: "https://upstream.example/v1/chat/completions",
@@ -188,14 +189,14 @@ func TestAdaptorReturnsErrorWhenNoRouteMatchesPath(t *testing.T) {
 
 func TestAdaptorReplacesModelPlaceholderInRouteURL(t *testing.T) {
 	adaptor := &Adaptor{}
-	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
-		Routes: []dto.AdvancedCustomRoute{
+	info := advancedCustomRelayInfo(&hostdto.AdvancedCustomConfig{
+		Routes: []hostdto.AdvancedCustomRoute{
 			{
 				IncomingPath: "/v1/chat/completions",
 				UpstreamPath: "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
 				Converter:    relayconvert.ConverterOpenAIChatToGeminiContent,
-				Auth: &dto.AdvancedCustomRouteAuth{
-					Type:  dto.AdvancedCustomAuthTypeQuery,
+				Auth: &hostdto.AdvancedCustomRouteAuth{
+					Type:  hostdto.AdvancedCustomAuthTypeQuery,
 					Name:  "key",
 					Value: "{api_key}",
 				},
@@ -216,14 +217,14 @@ func TestAdaptorReplacesModelPlaceholderInRouteURL(t *testing.T) {
 
 func TestAdaptorSwitchesGeminiGenerateContentURLForStream(t *testing.T) {
 	adaptor := &Adaptor{}
-	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
-		Routes: []dto.AdvancedCustomRoute{
+	info := advancedCustomRelayInfo(&hostdto.AdvancedCustomConfig{
+		Routes: []hostdto.AdvancedCustomRoute{
 			{
 				IncomingPath: "/v1/chat/completions",
 				UpstreamPath: "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?existing=1",
 				Converter:    relayconvert.ConverterOpenAIChatToGeminiContent,
-				Auth: &dto.AdvancedCustomRouteAuth{
-					Type:  dto.AdvancedCustomAuthTypeQuery,
+				Auth: &hostdto.AdvancedCustomRouteAuth{
+					Type:  hostdto.AdvancedCustomAuthTypeQuery,
 					Name:  "key",
 					Value: "{api_key}",
 				},
@@ -265,8 +266,8 @@ func TestAdaptorMatchesGeminiIncomingPathTemplate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			adaptor := &Adaptor{}
-			info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
-				Routes: []dto.AdvancedCustomRoute{
+			info := advancedCustomRelayInfo(&hostdto.AdvancedCustomConfig{
+				Routes: []hostdto.AdvancedCustomRoute{
 					{
 						IncomingPath: "/v1beta/models/{model}:generateContent",
 						UpstreamPath: "https://upstream.example/v1/chat/completions",
@@ -288,14 +289,14 @@ func TestAdaptorMatchesGeminiIncomingPathTemplate(t *testing.T) {
 
 func TestAdaptorBuildModelListRequestUsesConfiguredRouteAuth(t *testing.T) {
 	adaptor := &Adaptor{}
-	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
-		Routes: []dto.AdvancedCustomRoute{
+	info := advancedCustomRelayInfo(&hostdto.AdvancedCustomConfig{
+		Routes: []hostdto.AdvancedCustomRoute{
 			{
 				IncomingPath: "/v1/models",
 				UpstreamPath: "/provider/models",
 				Converter:    relayconvert.ConverterNone,
-				Auth: &dto.AdvancedCustomRouteAuth{
-					Type:  dto.AdvancedCustomAuthTypeHeader,
+				Auth: &hostdto.AdvancedCustomRouteAuth{
+					Type:  hostdto.AdvancedCustomAuthTypeHeader,
 					Name:  "x-api-key",
 					Value: "token {api_key}",
 				},
@@ -317,14 +318,14 @@ func TestAdaptorBuildModelListRequestUsesConfiguredRouteAuth(t *testing.T) {
 
 func TestAdaptorBuildModelListRequestUsesConfiguredQueryAuth(t *testing.T) {
 	adaptor := &Adaptor{}
-	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
-		Routes: []dto.AdvancedCustomRoute{
+	info := advancedCustomRelayInfo(&hostdto.AdvancedCustomConfig{
+		Routes: []hostdto.AdvancedCustomRoute{
 			{
 				IncomingPath: "/v1/models",
 				UpstreamPath: "https://upstream.example/v1/models?existing=1",
 				Converter:    relayconvert.ConverterNone,
-				Auth: &dto.AdvancedCustomRouteAuth{
-					Type:  dto.AdvancedCustomAuthTypeQuery,
+				Auth: &hostdto.AdvancedCustomRouteAuth{
+					Type:  hostdto.AdvancedCustomAuthTypeQuery,
 					Name:  "key",
 					Value: "{api_key}",
 				},
@@ -348,7 +349,7 @@ func TestAdaptorBuildModelListRequestUsesConfiguredQueryAuth(t *testing.T) {
 func TestAdaptorBuildModelListRequestDefaultAndNoAuth(t *testing.T) {
 	tests := []struct {
 		name              string
-		auth              *dto.AdvancedCustomRouteAuth
+		auth              *hostdto.AdvancedCustomRouteAuth
 		wantAuthorization string
 	}{
 		{
@@ -357,18 +358,18 @@ func TestAdaptorBuildModelListRequestDefaultAndNoAuth(t *testing.T) {
 		},
 		{
 			name: "no authentication",
-			auth: &dto.AdvancedCustomRouteAuth{
-				Type: dto.AdvancedCustomAuthTypeNone,
+			auth: &hostdto.AdvancedCustomRouteAuth{
+				Type: hostdto.AdvancedCustomAuthTypeNone,
 			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
-				Routes: []dto.AdvancedCustomRoute{
+			info := advancedCustomRelayInfo(&hostdto.AdvancedCustomConfig{
+				Routes: []hostdto.AdvancedCustomRoute{
 					{
-						IncomingPath: dto.AdvancedCustomModelListPath,
+						IncomingPath: hostdto.AdvancedCustomModelListPath,
 						UpstreamPath: "/provider/models",
 						Auth:         tt.auth,
 					},
@@ -386,14 +387,14 @@ func TestAdaptorBuildModelListRequestDefaultAndNoAuth(t *testing.T) {
 
 func TestAdaptorBuildModelListRequestDoesNotReuseRelayRoute(t *testing.T) {
 	adaptor := &Adaptor{}
-	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
-		Routes: []dto.AdvancedCustomRoute{
+	info := advancedCustomRelayInfo(&hostdto.AdvancedCustomConfig{
+		Routes: []hostdto.AdvancedCustomRoute{
 			{
 				IncomingPath: "/v1/chat/completions",
 				UpstreamPath: "/chat",
 			},
 			{
-				IncomingPath: dto.AdvancedCustomModelListPath,
+				IncomingPath: hostdto.AdvancedCustomModelListPath,
 				UpstreamPath: "/provider/models",
 			},
 		},
@@ -410,8 +411,8 @@ func TestAdaptorBuildModelListRequestDoesNotReuseRelayRoute(t *testing.T) {
 }
 
 func TestAdaptorBuildModelListRequestRequiresConfiguredRoute(t *testing.T) {
-	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
-		Routes: []dto.AdvancedCustomRoute{
+	info := advancedCustomRelayInfo(&hostdto.AdvancedCustomConfig{
+		Routes: []hostdto.AdvancedCustomRoute{
 			{
 				IncomingPath: "/v1/chat/completions",
 				UpstreamPath: "/v1/chat/completions",
@@ -425,17 +426,17 @@ func TestAdaptorBuildModelListRequestRequiresConfiguredRoute(t *testing.T) {
 }
 
 func TestAdaptorBuildBalanceRequestUsesConfiguredRoute(t *testing.T) {
-	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
-		Routes: []dto.AdvancedCustomRoute{
+	info := advancedCustomRelayInfo(&hostdto.AdvancedCustomConfig{
+		Routes: []hostdto.AdvancedCustomRoute{
 			{
-				IncomingPath: dto.AdvancedCustomModelListPath,
+				IncomingPath: hostdto.AdvancedCustomModelListPath,
 				UpstreamPath: "/provider/models",
 			},
 			{
-				IncomingPath: dto.AdvancedCustomBalancePath,
+				IncomingPath: hostdto.AdvancedCustomBalancePath,
 				UpstreamPath: "/provider/balance?existing=1",
-				Auth: &dto.AdvancedCustomRouteAuth{
-					Type:  dto.AdvancedCustomAuthTypeQuery,
+				Auth: &hostdto.AdvancedCustomRouteAuth{
+					Type:  hostdto.AdvancedCustomAuthTypeQuery,
 					Name:  "token",
 					Value: "prefix-{api_key}",
 				},
@@ -455,9 +456,9 @@ func TestAdaptorBuildBalanceRequestUsesConfiguredRoute(t *testing.T) {
 }
 
 func TestAdaptorBuildBalanceRequestRequiresConfiguredRoute(t *testing.T) {
-	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
-		Routes: []dto.AdvancedCustomRoute{{
-			IncomingPath: dto.AdvancedCustomModelListPath,
+	info := advancedCustomRelayInfo(&hostdto.AdvancedCustomConfig{
+		Routes: []hostdto.AdvancedCustomRoute{{
+			IncomingPath: hostdto.AdvancedCustomModelListPath,
 			UpstreamPath: "/provider/models",
 		}},
 	})
@@ -469,8 +470,8 @@ func TestAdaptorBuildBalanceRequestRequiresConfiguredRoute(t *testing.T) {
 
 func TestAdaptorConvertsResponsesRequestToOpenAIChatUpstream(t *testing.T) {
 	adaptor := &Adaptor{}
-	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
-		Routes: []dto.AdvancedCustomRoute{
+	info := advancedCustomRelayInfo(&hostdto.AdvancedCustomConfig{
+		Routes: []hostdto.AdvancedCustomRoute{
 			{
 				IncomingPath: "/v1/responses",
 				UpstreamPath: "/v1/chat/completions",
@@ -511,8 +512,8 @@ func TestAdaptorConvertsResponsesRequestToOpenAIChatUpstream(t *testing.T) {
 
 func TestAdaptorAcceptsRequestPreconvertedByProtocolPlan(t *testing.T) {
 	adaptor := &Adaptor{}
-	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
-		Routes: []dto.AdvancedCustomRoute{
+	info := advancedCustomRelayInfo(&hostdto.AdvancedCustomConfig{
+		Routes: []hostdto.AdvancedCustomRoute{
 			{
 				IncomingPath: "/v1/responses",
 				UpstreamPath: "/v1/chat/completions",
@@ -610,7 +611,7 @@ func TestAdaptorAcceptsEveryPreconvertedBridgeDirection(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			adaptor := &Adaptor{}
-			info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{Routes: []dto.AdvancedCustomRoute{{
+			info := advancedCustomRelayInfo(&hostdto.AdvancedCustomConfig{Routes: []hostdto.AdvancedCustomRoute{{
 				IncomingPath: test.incomingPath,
 				UpstreamPath: test.upstreamPath,
 				Converter:    test.converter,
@@ -636,8 +637,8 @@ func TestAdaptorAcceptsEveryPreconvertedBridgeDirection(t *testing.T) {
 }
 
 func TestAdaptorSelectsDuplicateResponsesRoutesByModel(t *testing.T) {
-	config := &dto.AdvancedCustomConfig{
-		Routes: []dto.AdvancedCustomRoute{
+	config := &hostdto.AdvancedCustomConfig{
+		Routes: []hostdto.AdvancedCustomRoute{
 			{
 				IncomingPath: "/v1/responses",
 				UpstreamPath: "/v1/chat/completions",
@@ -694,8 +695,8 @@ func TestAdaptorSelectsDuplicateResponsesRoutesByModel(t *testing.T) {
 
 func TestAdaptorResponsesToGeminiUsesResponsesBridge(t *testing.T) {
 	adaptor := &Adaptor{}
-	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
-		Routes: []dto.AdvancedCustomRoute{
+	info := advancedCustomRelayInfo(&hostdto.AdvancedCustomConfig{
+		Routes: []hostdto.AdvancedCustomRoute{
 			{
 				IncomingPath: "/v1/responses",
 				UpstreamPath: "/v1beta/models/{model}:generateContent",
@@ -757,8 +758,8 @@ func TestAdaptorResponsesToGeminiAddsThoughtSignatureForFunctionCallHistory(t *t
 	})
 
 	adaptor := &Adaptor{}
-	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
-		Routes: []dto.AdvancedCustomRoute{
+	info := advancedCustomRelayInfo(&hostdto.AdvancedCustomConfig{
+		Routes: []hostdto.AdvancedCustomRoute{
 			{
 				IncomingPath: "/v1/responses",
 				UpstreamPath: "/v1beta/models/{model}:generateContent",
@@ -811,8 +812,8 @@ func TestAdaptorResponsesToGeminiAddsThoughtSignatureForFunctionCallHistory(t *t
 
 func TestAdaptorConvertsOpenAIChatRequestToResponsesUpstream(t *testing.T) {
 	adaptor := &Adaptor{}
-	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
-		Routes: []dto.AdvancedCustomRoute{
+	info := advancedCustomRelayInfo(&hostdto.AdvancedCustomConfig{
+		Routes: []hostdto.AdvancedCustomRoute{
 			{
 				IncomingPath: "/v1/chat/completions",
 				UpstreamPath: "/v1/responses",
@@ -838,8 +839,8 @@ func TestAdaptorConvertsOpenAIChatRequestToResponsesUpstream(t *testing.T) {
 
 func TestAdaptorConvertsOpenAIChatRequestToClaudeUpstream(t *testing.T) {
 	adaptor := &Adaptor{}
-	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
-		Routes: []dto.AdvancedCustomRoute{
+	info := advancedCustomRelayInfo(&hostdto.AdvancedCustomConfig{
+		Routes: []hostdto.AdvancedCustomRoute{
 			{
 				IncomingPath: "/v1/chat/completions",
 				UpstreamPath: "/v1/messages",
@@ -866,8 +867,8 @@ func TestAdaptorConvertsOpenAIChatRequestToClaudeUpstream(t *testing.T) {
 
 func TestAdaptorConvertsOpenAIChatRequestToGeminiUpstream(t *testing.T) {
 	adaptor := &Adaptor{}
-	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
-		Routes: []dto.AdvancedCustomRoute{
+	info := advancedCustomRelayInfo(&hostdto.AdvancedCustomConfig{
+		Routes: []hostdto.AdvancedCustomRoute{
 			{
 				IncomingPath: "/v1/chat/completions",
 				UpstreamPath: "/v1beta/models/{model}:generateContent",
@@ -894,8 +895,8 @@ func TestAdaptorConvertsOpenAIChatRequestToGeminiUpstream(t *testing.T) {
 
 func TestAdaptorConvertsClaudeRequestToOpenAIChatUpstream(t *testing.T) {
 	adaptor := &Adaptor{}
-	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
-		Routes: []dto.AdvancedCustomRoute{
+	info := advancedCustomRelayInfo(&hostdto.AdvancedCustomConfig{
+		Routes: []hostdto.AdvancedCustomRoute{
 			{
 				IncomingPath: "/v1/messages",
 				UpstreamPath: "/v1/chat/completions",
@@ -924,8 +925,8 @@ func TestAdaptorConvertsClaudeRequestToOpenAIChatUpstream(t *testing.T) {
 
 func TestAdaptorConvertsClaudeRequestToResponsesUpstream(t *testing.T) {
 	adaptor := &Adaptor{}
-	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
-		Routes: []dto.AdvancedCustomRoute{
+	info := advancedCustomRelayInfo(&hostdto.AdvancedCustomConfig{
+		Routes: []hostdto.AdvancedCustomRoute{
 			{
 				IncomingPath: "/v1/messages",
 				UpstreamPath: "/v1/responses",
@@ -955,14 +956,14 @@ func TestAdaptorConvertsClaudeRequestToResponsesUpstream(t *testing.T) {
 
 func TestAdaptorConvertsResponsesRequestToClaudeUpstreamAndAddsHeaders(t *testing.T) {
 	adaptor := &Adaptor{}
-	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
-		Routes: []dto.AdvancedCustomRoute{
+	info := advancedCustomRelayInfo(&hostdto.AdvancedCustomConfig{
+		Routes: []hostdto.AdvancedCustomRoute{
 			{
 				IncomingPath: "/v1/responses",
 				UpstreamPath: "/v1/messages",
 				Converter:    relayconvert.ConverterOpenAIResponsesToClaudeMessages,
-				Auth: &dto.AdvancedCustomRouteAuth{
-					Type:  dto.AdvancedCustomAuthTypeHeader,
+				Auth: &hostdto.AdvancedCustomRouteAuth{
+					Type:  hostdto.AdvancedCustomAuthTypeHeader,
 					Name:  "x-api-key",
 					Value: "{api_key}",
 				},
@@ -1007,8 +1008,8 @@ func TestAdaptorRoutesResponsesUpstreamBackToMessages(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			adaptor := &Adaptor{}
-			info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
-				Routes: []dto.AdvancedCustomRoute{
+			info := advancedCustomRelayInfo(&hostdto.AdvancedCustomConfig{
+				Routes: []hostdto.AdvancedCustomRoute{
 					{
 						IncomingPath: "/v1/messages",
 						UpstreamPath: "/v1/responses",
@@ -1069,8 +1070,8 @@ func TestAdaptorRoutesMessagesUpstreamBackToResponses(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			adaptor := &Adaptor{}
-			info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
-				Routes: []dto.AdvancedCustomRoute{
+			info := advancedCustomRelayInfo(&hostdto.AdvancedCustomConfig{
+				Routes: []hostdto.AdvancedCustomRoute{
 					{
 						IncomingPath: "/v1/responses",
 						UpstreamPath: "/v1/messages",
@@ -1124,8 +1125,8 @@ func TestAdaptorRoutesMessagesUpstreamBackToResponses(t *testing.T) {
 
 func TestAdaptorConvertsGeminiRequestToOpenAIChatUpstream(t *testing.T) {
 	adaptor := &Adaptor{}
-	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
-		Routes: []dto.AdvancedCustomRoute{
+	info := advancedCustomRelayInfo(&hostdto.AdvancedCustomConfig{
+		Routes: []hostdto.AdvancedCustomRoute{
 			{
 				IncomingPath: "/v1beta/models/{model}:generateContent",
 				UpstreamPath: "/v1/chat/completions",
@@ -1157,7 +1158,7 @@ func TestAdaptorConvertsGeminiRequestToOpenAIChatUpstream(t *testing.T) {
 	assert.Equal(t, "user", chatReq.Messages[0].Role)
 }
 
-func advancedCustomRelayInfo(config *dto.AdvancedCustomConfig) *relaycommon.RelayInfo {
+func advancedCustomRelayInfo(config *hostdto.AdvancedCustomConfig) *relaycommon.RelayInfo {
 	return &relaycommon.RelayInfo{
 		RelayFormat:     types.RelayFormatOpenAI,
 		RelayMode:       relayconstant.RelayModeChatCompletions,
@@ -1168,7 +1169,7 @@ func advancedCustomRelayInfo(config *dto.AdvancedCustomConfig) *relaycommon.Rela
 			ChannelBaseUrl:    "https://fallback.example",
 			ChannelType:       constant.ChannelTypeAdvancedCustom,
 			UpstreamModelName: "gpt-test",
-			ChannelOtherSettings: dto.ChannelOtherSettings{
+			ChannelOtherSettings: hostdto.ChannelOtherSettings{
 				AdvancedCustom: config,
 			},
 		},

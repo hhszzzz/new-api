@@ -1,6 +1,8 @@
 package service
 
 import (
+	hostdto "github.com/QuantumNous/new-api/dto"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -8,7 +10,6 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 
 	"github.com/gin-gonic/gin"
@@ -98,7 +99,7 @@ func (f *groupBillingFixture) relayInfo(requestId, group, pref string) *relaycom
 		OriginModelName: "group-billing-model",
 		UsingGroup:      group,
 		UserGroup:       group,
-		UserSetting:     dto.UserSetting{BillingPreference: pref},
+		UserSetting:     hostdto.UserSetting{BillingPreference: pref},
 		ForcePreConsume: true,
 		StartTime:       time.Now(),
 		RelayFormat:     types.RelayFormatOpenAI,
@@ -158,7 +159,7 @@ func TestExhaustedGrantedSubscriptionNeverFallsBackToWallet(t *testing.T) {
 	info := f.relayInfo("req-group-exhausted", "pro", "subscription_first")
 	err := PreConsumeBilling(newBillingContext(), 5000, info)
 	require.NotNil(t, err)
-	assert.Equal(t, types.ErrorCodeInsufficientUserQuota, err.GetErrorCode())
+	assert.Equal(t, hosttypes.ErrorCodeInsufficientUserQuota, err.GetErrorCode())
 	assert.Equal(t, 1_000_000, f.userQuota(t), "wallet must never back an exhausted subscription-granted group")
 }
 

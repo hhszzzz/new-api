@@ -24,9 +24,6 @@ import { toast } from 'sonner'
 import * as z from 'zod'
 
 import { JsonCodeEditor } from '@/components/json-code-editor'
-import { StatusBadge } from '@/components/status-badge'
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { Button } from '@/components/ui/button'
 import {
   Form,
   FormControl,
@@ -37,8 +34,9 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
-import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
+import { parseProtocolPolicy } from '@/features/protocols/policy'
+import { ProtocolPolicyEditor } from '@/features/protocols/protocol-policy-editor'
 
 import {
   SettingsForm,
@@ -48,152 +46,71 @@ import {
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
-import {
-  protocolBridgePolicyFormSchema,
-  serializeProtocolBridgePolicy,
-} from './protocol-bridge-policy'
-
-const thinkingBlacklistExample = JSON.stringify(
-  ['moonshotai/kimi-k2-thinking', 'kimi-k2-thinking', 're:.*@sha256:.*'],
-  null,
-  2
-)
-
-const chatToResponsesPolicyExample = JSON.stringify(
-  {
-    enabled: true,
-    all_channels: false,
-    channel_ids: [1, 2],
-    model_patterns: ['^gpt-4o.*$', '^gpt-5.*$'],
-  },
-  null,
-  2
-)
-
-const chatToResponsesPolicyAllChannelsExample = JSON.stringify(
-  {
-    enabled: true,
-    all_channels: true,
-    model_patterns: ['^gpt-4o.*$', '^gpt-5.*$'],
-  },
-  null,
-  2
-)
-
-const jsonString = z.string().refine((value) => {
-  const trimmed = value.trim()
-  if (!trimmed) return true
-  try {
-    JSON.parse(trimmed)
-    return true
-  } catch {
-    return false
-  }
-}, 'Invalid JSON format')
 
 const schema = z.object({
   global: z.object({
-    pass_through_request_enabled: z.boolean(),
-    thinking_model_blacklist: jsonString,
-    chat_completions_to_responses_policy: jsonString,
-    protocol_bridge_policy: protocolBridgePolicyFormSchema,
+    thinking_model_blacklist: z.string().refine((value) => {
+      try {
+        return Array.isArray(JSON.parse(value || '[]'))
+      } catch {
+        return false
+      }
+    }, 'Invalid JSON format'),
+    protocol_policy: z
+      .string()
+      .refine(
+        (value) => parseProtocolPolicy(value) !== null,
+        'Invalid protocol policy JSON'
+      ),
   }),
   general_setting: z.object({
     ping_interval_enabled: z.boolean(),
     ping_interval_seconds: z.coerce.number().min(1),
   }),
 })
-
-type GlobalModelSettingsFormValues = z.output<typeof schema>
-type GlobalModelSettingsFormInput = z.input<typeof schema>
-
-type FlatGlobalModelSettings = {
-  'global.pass_through_request_enabled': boolean
-  'global.thinking_model_blacklist': string
-  'global.chat_completions_to_responses_policy': string
-  'global.protocol_bridge_policy': string
-  'general_setting.ping_interval_enabled': boolean
-  'general_setting.ping_interval_seconds': number
+type FormValues = z.output<typeof schema>
+type FormInput = z.input<typeof schema>
+function flattenValues(values: FormValues) {
+  return {
+    'global.thinking_model_blacklist': JSON.stringify(
+      JSON.parse(values.global.thinking_model_blacklist || '[]')
+    ),
+    'global.protocol_policy': JSON.stringify(
+      parseProtocolPolicy(values.global.protocol_policy)
+    ),
+    'general_setting.ping_interval_enabled':
+      values.general_setting.ping_interval_enabled,
+    'general_setting.ping_interval_seconds':
+      values.general_setting.ping_interval_seconds,
+  }
 }
-
-const flattenGlobalValues = (
-  values: GlobalModelSettingsFormValues
-): FlatGlobalModelSettings => ({
-  'global.pass_through_request_enabled':
-    values.global.pass_through_request_enabled,
-  'global.thinking_model_blacklist': normalizeJsonText(
-    values.global.thinking_model_blacklist,
-    '[]'
-  ),
-  'global.chat_completions_to_responses_policy': normalizeJsonText(
-    values.global.chat_completions_to_responses_policy,
-    '{}'
-  ),
-  'global.protocol_bridge_policy': serializeProtocolBridgePolicy(
-    values.global.protocol_bridge_policy
-  ),
-  'general_setting.ping_interval_enabled':
-    values.general_setting.ping_interval_enabled,
-  'general_setting.ping_interval_seconds':
-    values.general_setting.ping_interval_seconds,
-})
-
-function normalizeJsonText(value: string, fallback: string) {
-  const trimmed = (value ?? '').toString().trim()
-  return trimmed ? trimmed : fallback
-}
-
-type GlobalSettingsCardProps = {
-  defaultValues: GlobalModelSettingsFormValues
-}
-
-export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
+export function GlobalSettingsCard(props: { defaultValues: FormValues }) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
-
-  const form = useForm<
-    GlobalModelSettingsFormInput,
-    unknown,
-    GlobalModelSettingsFormValues
-  >({
+  const form = useForm<FormInput, unknown, FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: defaultValues as GlobalModelSettingsFormInput,
+    defaultValues: props.defaultValues,
   })
-
   useEffect(() => {
-    form.reset(defaultValues as GlobalModelSettingsFormInput)
-  }, [defaultValues, form])
-
+    form.reset(props.defaultValues)
+  }, [props.defaultValues, form])
   const pingEnabled = useWatch({
     control: form.control,
     name: 'general_setting.ping_interval_enabled',
   })
-  const protocolBridgeEnabled = useWatch({
-    control: form.control,
-    name: 'global.protocol_bridge_policy.enabled',
-  })
-
-  const onSubmit = async (values: GlobalModelSettingsFormValues) => {
-    const flattenedDefaults = flattenGlobalValues(defaultValues)
-    const flattenedValues = flattenGlobalValues(values)
-    const updates = Object.entries(flattenedValues).filter(
-      ([key, value]) =>
-        value !== flattenedDefaults[key as keyof FlatGlobalModelSettings]
+  async function onSubmit(values: FormValues) {
+    const previous = flattenValues(props.defaultValues)
+    const updates = Object.entries(flattenValues(values)).filter(
+      ([key, value]) => value !== previous[key as keyof typeof previous]
     )
-
     if (updates.length === 0) {
       toast.info(t('No changes to save'))
       return
     }
-
     for (const [key, value] of updates) {
-      await updateOption.mutateAsync({
-        key,
-        value,
-      })
+      await updateOption.mutateAsync({ key, value })
     }
   }
-
   return (
     <SettingsSection title={t('Global Model Configuration')}>
       <Form {...form}>
@@ -204,27 +121,18 @@ export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
           />
           <FormField
             control={form.control}
-            name='global.pass_through_request_enabled'
+            name='global.protocol_policy'
             render={({ field }) => (
-              <SettingsSwitchItem>
-                <SettingsSwitchContent>
-                  <FormLabel>{t('Enable Request Passthrough')}</FormLabel>
-                  <FormDescription>
-                    {t(
-                      'Forward requests directly to upstream providers without any post-processing.'
-                    )}
-                  </FormDescription>
-                </SettingsSwitchContent>
-                <FormControl>
-                  <Switch
-                    checked={field.value}
-                    onCheckedChange={field.onChange}
-                  />
-                </FormControl>
-              </SettingsSwitchItem>
+              <FormItem>
+                <FormLabel>{t('Protocol policy')}</FormLabel>
+                <ProtocolPolicyEditor
+                  value={field.value}
+                  onChange={field.onChange}
+                />
+                <FormMessage />
+              </FormItem>
             )}
           />
-
           <FormField
             control={form.control}
             name='global.thinking_model_blacklist'
@@ -236,263 +144,27 @@ export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
                 <FormControl>
                   <JsonCodeEditor
                     value={field.value}
-                    onChange={(value) => field.onChange(value)}
+                    onChange={field.onChange}
                     name={field.name}
                     onBlur={field.onBlur}
                     textareaRef={field.ref}
-                    placeholder={`${t('Example:')}\n${thinkingBlacklistExample}`}
+                    ariaLabel={t('Models that skip thinking suffix processing')}
                     heightClassName='h-32 min-h-32 max-h-32'
                   />
                 </FormControl>
-                <FormDescription>
-                  {t(
-                    'Models listed here skip automatic -thinking / -nothinking suffix handling. Matched names are also exempt from @-modifier parsing and 400 validation. Prefix an entry with re: to match the full model name as a Go regular expression, for example re:.*@sha256:.*'
-                  )}
-                </FormDescription>
                 <FormMessage />
               </FormItem>
             )}
           />
-
-          <Separator />
-
-          <div className='space-y-4'>
-            <div className='flex items-center gap-2'>
-              <h3 className='text-base font-semibold'>
-                {t('ChatCompletions -> Responses Compatibility')}
-              </h3>
-              <StatusBadge
-                label={t('Preview')}
-                variant='neutral'
-                copyable={false}
-              />
-            </div>
-
-            <Alert>
-              <AlertTitle>{t('Warning')}</AlertTitle>
-              <AlertDescription>
-                {t(
-                  'This feature is experimental. Configuration format and behavior may change.'
-                )}
-              </AlertDescription>
-            </Alert>
-
-            <FormField
-              control={form.control}
-              name='global.chat_completions_to_responses_policy'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('Policy JSON')}</FormLabel>
-                  <FormControl>
-                    <JsonCodeEditor
-                      value={field.value}
-                      onChange={(value) => field.onChange(value)}
-                      name={field.name}
-                      onBlur={field.onBlur}
-                      textareaRef={field.ref}
-                      placeholder={`${t('Example (specific channels):')}\n${chatToResponsesPolicyExample}\n\n${t('Example (all channels):')}\n${chatToResponsesPolicyAllChannelsExample}`}
-                    />
-                  </FormControl>
-                  <FormDescription>
-                    {t('Empty value will be saved as {}.')}
-                  </FormDescription>
-                  <div className='flex flex-wrap gap-2'>
-                    <Button
-                      type='button'
-                      variant='outline'
-                      size='sm'
-                      onClick={() =>
-                        form.setValue(
-                          'global.chat_completions_to_responses_policy',
-                          chatToResponsesPolicyExample,
-                          { shouldDirty: true }
-                        )
-                      }
-                    >
-                      {t('Fill example (specific channels)')}
-                    </Button>
-                    <Button
-                      type='button'
-                      variant='outline'
-                      size='sm'
-                      onClick={() =>
-                        form.setValue(
-                          'global.chat_completions_to_responses_policy',
-                          chatToResponsesPolicyAllChannelsExample,
-                          { shouldDirty: true }
-                        )
-                      }
-                    >
-                      {t('Fill example (all channels)')}
-                    </Button>
-                  </div>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-          </div>
-
-          <Separator />
-
-          <div className='space-y-4'>
-            <div className='flex items-center gap-2'>
-              <h3 className='text-base font-semibold'>
-                {t('Bidirectional Protocol Bridge')}
-              </h3>
-              <StatusBadge
-                label={t('Preview')}
-                variant='neutral'
-                copyable={false}
-              />
-            </div>
-
-            <FormField
-              control={form.control}
-              name='global.protocol_bridge_policy.enabled'
-              render={({ field }) => (
-                <SettingsSwitchItem>
-                  <SettingsSwitchContent>
-                    <FormLabel>{t('Enable protocol bridge')}</FormLabel>
-                    <FormDescription>
-                      {t(
-                        'Master switch for protocol bridging. When off, every channel forwards requests in their original protocol and channel protocol capability settings are ignored.'
-                      )}
-                    </FormDescription>
-                  </SettingsSwitchContent>
-                  <FormControl>
-                    <Switch
-                      checked={field.value}
-                      onCheckedChange={field.onChange}
-                    />
-                  </FormControl>
-                </SettingsSwitchItem>
-              )}
-            />
-
-            <FormField
-              control={form.control}
-              name='global.protocol_bridge_policy.default_allow_conversion'
-              render={({ field }) => (
-                <SettingsSwitchItem>
-                  <SettingsSwitchContent>
-                    <FormLabel>{t('Allow conversion by default')}</FormLabel>
-                    <FormDescription>
-                      {t(
-                        'When protocol bridging is enabled, channels without explicit protocol capabilities convert automatically using the protocols detected from their channel type and upstream URL.'
-                      )}
-                    </FormDescription>
-                  </SettingsSwitchContent>
-                  <FormControl>
-                    <Switch
-                      checked={field.value}
-                      disabled={!protocolBridgeEnabled}
-                      onCheckedChange={field.onChange}
-                    />
-                  </FormControl>
-                </SettingsSwitchItem>
-              )}
-            />
-
-            <div className='grid gap-4 sm:grid-cols-3'>
-              <FormField
-                control={form.control}
-                name='global.protocol_bridge_policy.state_ttl_seconds'
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t('State idle TTL (seconds)')}</FormLabel>
-                    <FormControl>
-                      <Input
-                        type='number'
-                        min={60}
-                        max={86400}
-                        step={60}
-                        disabled={!protocolBridgeEnabled}
-                        value={String(field.value)}
-                        onChange={(event) => field.onChange(event.target.value)}
-                        onBlur={field.onBlur}
-                        name={field.name}
-                        ref={field.ref}
-                      />
-                    </FormControl>
-                    <FormDescription>
-                      {t('Valid range: 60 to 86400 seconds.')}
-                    </FormDescription>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              <FormField
-                control={form.control}
-                name='global.protocol_bridge_policy.max_state_turns'
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t('Maximum state turns')}</FormLabel>
-                    <FormControl>
-                      <Input
-                        type='number'
-                        min={1}
-                        max={512}
-                        step={1}
-                        disabled={!protocolBridgeEnabled}
-                        value={String(field.value)}
-                        onChange={(event) => field.onChange(event.target.value)}
-                        onBlur={field.onBlur}
-                        name={field.name}
-                        ref={field.ref}
-                      />
-                    </FormControl>
-                    <FormDescription>
-                      {t('Valid range: 1 to 512 turns.')}
-                    </FormDescription>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              <FormField
-                control={form.control}
-                name='global.protocol_bridge_policy.max_state_mebibytes'
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t('Maximum state size (MiB)')}</FormLabel>
-                    <FormControl>
-                      <Input
-                        type='number'
-                        min={0.0625}
-                        max={128}
-                        step={0.0625}
-                        disabled={!protocolBridgeEnabled}
-                        value={String(field.value)}
-                        onChange={(event) => field.onChange(event.target.value)}
-                        onBlur={field.onBlur}
-                        name={field.name}
-                        ref={field.ref}
-                      />
-                    </FormControl>
-                    <FormDescription>
-                      {t('Valid range: 0.0625 to 128 MiB.')}
-                    </FormDescription>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            </div>
-          </div>
-
-          <Separator />
-
           <FormField
             control={form.control}
             name='general_setting.ping_interval_enabled'
             render={({ field }) => (
               <SettingsSwitchItem>
                 <SettingsSwitchContent>
-                  <FormLabel>{t('Keep-alive Ping')}</FormLabel>
+                  <FormLabel>{t('Enable Ping')}</FormLabel>
                   <FormDescription>
-                    {t(
-                      'Periodically send ping frames to keep streaming connections active.'
-                    )}
+                    {t('Send keep-alive messages during streaming requests.')}
                   </FormDescription>
                 </SettingsSwitchContent>
                 <FormControl>
@@ -504,39 +176,26 @@ export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
               </SettingsSwitchItem>
             )}
           />
-
-          <FormField
-            control={form.control}
-            name='general_setting.ping_interval_seconds'
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>{t('Ping Interval (seconds)')}</FormLabel>
-                <FormControl>
-                  <Input
-                    type='number'
-                    min={1}
-                    disabled={!pingEnabled}
-                    className='w-24'
-                    value={
-                      field.value === undefined || field.value === null
-                        ? ''
-                        : String(field.value)
-                    }
-                    onChange={(event) => field.onChange(event.target.value)}
-                    onBlur={field.onBlur}
-                    name={field.name}
-                    ref={field.ref}
-                  />
-                </FormControl>
-                <FormDescription>
-                  {t(
-                    'Recommended to keep this high to avoid upstream throttling.'
-                  )}
-                </FormDescription>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
+          {pingEnabled && (
+            <FormField
+              control={form.control}
+              name='general_setting.ping_interval_seconds'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Ping Interval (seconds)')}</FormLabel>
+                  <FormControl>
+                    <Input
+                      type='number'
+                      min={1}
+                      {...field}
+                      value={String(field.value ?? '')}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          )}
         </SettingsForm>
       </Form>
     </SettingsSection>

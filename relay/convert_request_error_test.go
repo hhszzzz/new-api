@@ -1,6 +1,8 @@
 package relay
 
 import (
+	hostdto "github.com/QuantumNous/new-api/dto"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -26,7 +28,7 @@ func TestOptInSafeToolLossRejectedAsBadRequestWithAdminDiagnostics(t *testing.T)
 		OriginModelName: "gpt-4o",
 		ChannelMeta: &relaycommon.ChannelMeta{
 			UpstreamModelName: "gpt-4o",
-			ChannelOtherSettings: dto.ChannelOtherSettings{
+			ChannelOtherSettings: hostdto.ChannelOtherSettings{
 				ToolLossPolicy: string(types.ConversionLossPolicySafe),
 			},
 		},
@@ -51,8 +53,8 @@ func TestOptInSafeToolLossRejectedAsBadRequestWithAdminDiagnostics(t *testing.T)
 	apiErr := newConvertRequestFailedError(c, info, convErr)
 	require.NotNil(t, apiErr)
 	assert.Equal(t, http.StatusBadRequest, apiErr.StatusCode)
-	assert.Equal(t, types.ErrorCodeConvertRequestFailed, apiErr.GetErrorCode())
-	assert.True(t, types.IsSkipRetryError(apiErr))
+	assert.Equal(t, hosttypes.ErrorCodeConvertRequestFailed, apiErr.GetErrorCode())
+	assert.True(t, hosttypes.IsSkipRetryError(apiErr))
 
 	diagnostics := info.ConversionDiagnostics()
 	require.NotEmpty(t, diagnostics)
@@ -84,8 +86,8 @@ func TestUnknownModelModifierIsBadRequestWithoutRetry(t *testing.T) {
 	apiErr := newConvertRequestFailedError(c, info, err)
 	require.NotNil(t, apiErr)
 	assert.Equal(t, http.StatusBadRequest, apiErr.StatusCode)
-	assert.Equal(t, types.ErrorCodeConvertRequestFailed, apiErr.GetErrorCode())
-	assert.True(t, types.IsSkipRetryError(apiErr))
+	assert.Equal(t, hosttypes.ErrorCodeConvertRequestFailed, apiErr.GetErrorCode())
+	assert.True(t, hosttypes.IsSkipRetryError(apiErr))
 }
 
 func hasHostDiagnosticCode(diagnostics []types.ConversionDiagnostic, code string) bool {

@@ -24,7 +24,6 @@ import { ClaudeSettingsCard } from './claude-settings-card'
 import { GeminiSettingsCard } from './gemini-settings-card'
 import { GlobalSettingsCard } from './global-settings-card'
 import { GrokSettingsCard } from './grok-settings-card'
-import { parseProtocolBridgePolicy } from './protocol-bridge-policy'
 import { RoutingReliabilitySection } from './routing-reliability-section'
 
 function formatJsonForEditor(value: string, fallback: string) {
@@ -45,18 +44,13 @@ const MODELS_SECTIONS = [
       <GlobalSettingsCard
         defaultValues={{
           global: {
-            pass_through_request_enabled:
-              settings['global.pass_through_request_enabled'],
             thinking_model_blacklist: formatJsonForEditor(
               settings['global.thinking_model_blacklist'],
               '[]'
             ),
-            chat_completions_to_responses_policy: formatJsonForEditor(
-              settings['global.chat_completions_to_responses_policy'],
-              '{}'
-            ),
-            protocol_bridge_policy: parseProtocolBridgePolicy(
-              settings['global.protocol_bridge_policy']
+            protocol_policy: formatJsonForEditor(
+              settings['global.protocol_policy'],
+              '{"version":1}'
             ),
           },
           general_setting: {

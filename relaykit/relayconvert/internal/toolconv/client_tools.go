@@ -1,4 +1,4 @@
-package oairesponses
+package toolconv
 
 import (
 	"context"
@@ -15,20 +15,23 @@ import (
 
 const chatToolNameLimit = 64
 
-func prepareResponsesToolsForChat(c context.Context, req *dto.OpenAIResponsesRequest) ([]dto.ToolCallRequest, *sharedbridge.ToolState, error) {
-	tools, err := collectResponsesToolDeclarations(req)
+func PrepareResponsesToolsForChat(c context.Context, req *dto.OpenAIResponsesRequest) ([]dto.ToolCallRequest, *sharedbridge.ToolState, error) {
+	tools, err := CollectResponsesToolDeclarations(req)
 	if err != nil {
 		return nil, nil, err
 	}
-	state := sharedbridge.NewToolState()
-	sharedbridge.SetToolState(c, state)
+	state := sharedbridge.ToolStateFromContext(c)
+	if state == nil {
+		state = sharedbridge.NewToolState()
+		sharedbridge.SetToolState(c, state)
+	}
 	if len(tools) == 0 {
 		return nil, state, nil
 	}
 
 	chatTools := make([]dto.ToolCallRequest, 0, len(tools))
 	for _, tool := range tools {
-		converted, err := responsesToolToChatFunctions(tool, "", state)
+		converted, err := ResponsesToolToChatFunctions(tool, "", state)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -40,7 +43,7 @@ func prepareResponsesToolsForChat(c context.Context, req *dto.OpenAIResponsesReq
 	return chatTools, state, nil
 }
 
-func collectResponsesToolDeclarations(req *dto.OpenAIResponsesRequest) ([]map[string]any, error) {
+func CollectResponsesToolDeclarations(req *dto.OpenAIResponsesRequest) ([]map[string]any, error) {
 	if req == nil {
 		return nil, nil
 	}
@@ -50,7 +53,7 @@ func collectResponsesToolDeclarations(req *dto.OpenAIResponsesRequest) ([]map[st
 		if err := kitutil.Unmarshal(req.Tools, &declared); err != nil {
 			return nil, fmt.Errorf("invalid tools: %w", err)
 		}
-		parsed, err := toolMapsFromAny(declared)
+		parsed, err := ToolMapsFromAny(declared)
 		if err != nil {
 			return nil, fmt.Errorf("invalid tools: %w", err)
 		}
@@ -68,7 +71,7 @@ func collectResponsesToolDeclarations(req *dto.OpenAIResponsesRequest) ([]map[st
 		if itemType != "additional_tools" && itemType != "tool_search_output" {
 			continue
 		}
-		additional, err := toolMapsFromAny(item["tools"])
+		additional, err := ToolMapsFromAny(item["tools"])
 		if err != nil {
 			return nil, fmt.Errorf("invalid %s tools: %w", itemType, err)
 		}
@@ -77,7 +80,7 @@ func collectResponsesToolDeclarations(req *dto.OpenAIResponsesRequest) ([]map[st
 	return tools, nil
 }
 
-func toolMapsFromAny(value any) ([]map[string]any, error) {
+func ToolMapsFromAny(value any) ([]map[string]any, error) {
 	if value == nil {
 		return nil, nil
 	}
@@ -107,7 +110,7 @@ func toolMapsFromAny(value any) ([]map[string]any, error) {
 	return tools, nil
 }
 
-func responsesToolToChatFunctions(tool map[string]any, namespace string, state *sharedbridge.ToolState) ([]dto.ToolCallRequest, error) {
+func ResponsesToolToChatFunctions(tool map[string]any, namespace string, state *sharedbridge.ToolState) ([]dto.ToolCallRequest, error) {
 	toolType := strings.TrimSpace(kitutil.Interface2String(tool["type"]))
 	if toolType == "" {
 		toolType = "function"
@@ -135,7 +138,7 @@ func responsesToolToChatFunctions(tool map[string]any, namespace string, state *
 		if !exists {
 			childrenValue = tool["children"]
 		}
-		children, err := toolMapsFromAny(childrenValue)
+		children, err := ToolMapsFromAny(childrenValue)
 		if err != nil {
 			return nil, fmt.Errorf("invalid namespace tool %q: %w", name, err)
 		}
@@ -144,7 +147,7 @@ func responsesToolToChatFunctions(tool map[string]any, namespace string, state *
 		}
 		out := make([]dto.ToolCallRequest, 0, len(children))
 		for _, child := range children {
-			converted, err := responsesToolToChatFunctions(child, name, state)
+			converted, err := ResponsesToolToChatFunctions(child, name, state)
 			if err != nil {
 				return nil, err
 			}
@@ -160,9 +163,8 @@ func responsesToolToChatFunctions(tool map[string]any, namespace string, state *
 		}
 		name = sharedbridge.LocalShellToolName
 	default:
-		// Hosted tools (web_search, ...) cannot execute on a non-Responses
-		// upstream. Drop them and keep the request usable, the same way CC
-		// Switch does; the model simply works without them.
+		// Hosted declarations are rendered separately by the shared semantic
+		// tool encoder, which rejects unsupported execution under the loss policy.
 		return nil, nil
 	}
 
@@ -187,7 +189,7 @@ func responsesToolToChatFunctions(tool map[string]any, namespace string, state *
 	} else if toolType == "local_shell" {
 		kind = sharedbridge.ToolKindLocalShell
 	}
-	upstreamName := encodedChatToolName(kind, namespace, name)
+	upstreamName := EncodedChatToolName(kind, namespace, name)
 	identity := sharedbridge.ToolIdentity{
 		Kind:         kind,
 		Name:         name,
@@ -200,7 +202,7 @@ func responsesToolToChatFunctions(tool map[string]any, namespace string, state *
 		}
 		return nil, fmt.Errorf(
 			"Responses tool %q has inconsistent Chat names %q and %q",
-			qualifiedToolName(namespace, name),
+			QualifiedToolName(namespace, name),
 			registeredName,
 			upstreamName,
 		)
@@ -208,20 +210,20 @@ func responsesToolToChatFunctions(tool map[string]any, namespace string, state *
 	if existing, exists := state.ResolveUpstream(upstreamName); exists {
 		return nil, fmt.Errorf(
 			"Responses tool %q conflicts after Chat name encoding as %q with %q",
-			qualifiedToolName(namespace, name),
+			QualifiedToolName(namespace, name),
 			upstreamName,
-			qualifiedToolName(existing.Namespace, existing.Name),
+			QualifiedToolName(existing.Namespace, existing.Name),
 		)
 	}
 	if !state.Register(identity) {
-		return nil, fmt.Errorf("Responses tool %q conflicts after Chat name encoding as %q", qualifiedToolName(namespace, name), upstreamName)
+		return nil, fmt.Errorf("Responses tool %q conflicts after Chat name encoding as %q", QualifiedToolName(namespace, name), upstreamName)
 	}
 
 	description := kitutil.Interface2String(definition["description"])
 	if strings.TrimSpace(description) == "" && definition != nil {
 		description = kitutil.Interface2String(tool["description"])
 	}
-	parameters := normalizeChatFunctionParameters(definition["parameters"])
+	parameters := NormalizeChatFunctionParameters(definition["parameters"])
 	var strict *bool
 	if value, ok := definition["strict"].(bool); ok {
 		strict = kitutil.GetPointer(value)
@@ -231,7 +233,7 @@ func responsesToolToChatFunctions(tool map[string]any, namespace string, state *
 	if kind == sharedbridge.ToolKindCustom {
 		rawDefinition, err := kitutil.Marshal(tool)
 		if err != nil {
-			return nil, fmt.Errorf("encode Responses custom tool %q: %w", qualifiedToolName(namespace, name), err)
+			return nil, fmt.Errorf("encode Responses custom tool %q: %w", QualifiedToolName(namespace, name), err)
 		}
 		description = "Original tool definition:\n```json\n" + string(rawDefinition) + "\n```"
 		parameters = map[string]any{
@@ -285,7 +287,7 @@ func responsesToolToChatFunctions(tool map[string]any, namespace string, state *
 	}, nil
 }
 
-func normalizeChatFunctionParameters(parameters any) map[string]any {
+func NormalizeChatFunctionParameters(parameters any) map[string]any {
 	if source, ok := parameters.(map[string]any); ok {
 		normalized := make(map[string]any, len(source)+1)
 		for key, value := range source {
@@ -300,7 +302,7 @@ func normalizeChatFunctionParameters(parameters any) map[string]any {
 	}
 }
 
-func isResponsesHostedToolType(toolType string) bool {
+func IsResponsesHostedToolType(toolType string) bool {
 	toolType = strings.ToLower(strings.TrimSpace(toolType))
 	for _, prefix := range []string{
 		"web_search",
@@ -323,22 +325,22 @@ func isResponsesHostedToolType(toolType string) bool {
 	return false
 }
 
-func isResponsesHostedHistoryItem(itemType string) bool {
+func IsResponsesHostedHistoryItem(itemType string) bool {
 	itemType = strings.ToLower(strings.TrimSpace(itemType))
 	for _, suffix := range []string{"_call", "_call_output", "_approval_request", "_approval_response", "_list_tools"} {
-		if strings.HasSuffix(itemType, suffix) && isResponsesHostedToolType(strings.TrimSuffix(itemType, suffix)) {
+		if strings.HasSuffix(itemType, suffix) && IsResponsesHostedToolType(strings.TrimSuffix(itemType, suffix)) {
 			return true
 		}
 	}
 	return itemType == "program" || itemType == "program_output"
 }
 
-func encodedChatToolName(kind sharedbridge.ToolKind, namespace, name string) string {
+func EncodedChatToolName(kind sharedbridge.ToolKind, namespace, name string) string {
 	candidate := name
 	if namespace != "" {
 		candidate = namespace + "__" + name
 	}
-	if validChatToolName(candidate) && len(candidate) <= chatToolNameLimit {
+	if ValidChatToolName(candidate) && len(candidate) <= chatToolNameLimit {
 		return candidate
 	}
 	sum := sha256.Sum256([]byte(string(kind) + "\x00" + namespace + "\x00" + name))
@@ -349,7 +351,7 @@ func encodedChatToolName(kind sharedbridge.ToolKind, namespace, name string) str
 	return prefix + hex.EncodeToString(sum[:12])
 }
 
-func validChatToolName(name string) bool {
+func ValidChatToolName(name string) bool {
 	if name == "" {
 		return false
 	}
@@ -362,16 +364,16 @@ func validChatToolName(name string) bool {
 	return true
 }
 
-func qualifiedToolName(namespace, name string) string {
+func QualifiedToolName(namespace, name string) string {
 	if namespace == "" {
 		return name
 	}
 	return namespace + "/" + name
 }
 
-func upstreamToolName(state *sharedbridge.ToolState, kind sharedbridge.ToolKind, namespace, name string) (string, error) {
+func UpstreamToolName(state *sharedbridge.ToolState, kind sharedbridge.ToolKind, namespace, name string) (string, error) {
 	if state == nil {
-		return encodedChatToolName(kind, namespace, name), nil
+		return EncodedChatToolName(kind, namespace, name), nil
 	}
 	upstream, ok := state.UpstreamName(kind, namespace, name)
 	if ok {
@@ -383,7 +385,7 @@ func upstreamToolName(state *sharedbridge.ToolState, kind sharedbridge.ToolKind,
 	// model so that the adjacent tool result remains meaningful, but it must not
 	// become callable again in the current turn. Register only the reversible name
 	// mapping used by the history/response bridge; do not add a tool declaration.
-	upstream = encodedChatToolName(kind, namespace, name)
+	upstream = EncodedChatToolName(kind, namespace, name)
 	identity := sharedbridge.ToolIdentity{
 		Kind:         kind,
 		Name:         name,
@@ -396,29 +398,29 @@ func upstreamToolName(state *sharedbridge.ToolState, kind sharedbridge.ToolKind,
 		}
 		return "", fmt.Errorf(
 			"Responses historical tool %q conflicts with %q after name encoding as %q",
-			qualifiedToolName(namespace, name),
-			qualifiedToolName(existing.Namespace, existing.Name),
+			QualifiedToolName(namespace, name),
+			QualifiedToolName(existing.Namespace, existing.Name),
 			upstream,
 		)
 	}
 	if !state.Register(identity) {
-		return "", fmt.Errorf("Responses historical tool %q conflicts after name encoding as %q", qualifiedToolName(namespace, name), upstream)
+		return "", fmt.Errorf("Responses historical tool %q conflicts after name encoding as %q", QualifiedToolName(namespace, name), upstream)
 	}
 	return upstream, nil
 }
 
-func declaredUpstreamToolName(state *sharedbridge.ToolState, kind sharedbridge.ToolKind, namespace, name string) (string, error) {
+func DeclaredUpstreamToolName(state *sharedbridge.ToolState, kind sharedbridge.ToolKind, namespace, name string) (string, error) {
 	if state == nil {
-		return "", fmt.Errorf("Responses tool_choice references undeclared tool %q", qualifiedToolName(namespace, name))
+		return "", fmt.Errorf("Responses tool_choice references undeclared tool %q", QualifiedToolName(namespace, name))
 	}
 	upstream, ok := state.UpstreamName(kind, namespace, name)
 	if !ok {
-		return "", fmt.Errorf("Responses tool_choice references undeclared tool %q", qualifiedToolName(namespace, name))
+		return "", fmt.Errorf("Responses tool_choice references undeclared tool %q", QualifiedToolName(namespace, name))
 	}
 	return upstream, nil
 }
 
-func customInputArguments(input any) string {
+func CustomInputArguments(input any) string {
 	value := input
 	if value == nil {
 		value = ""
@@ -436,18 +438,18 @@ func customInputArguments(input any) string {
 	return string(raw)
 }
 
-// toolSearchArguments normalizes a tool_search_call arguments payload to a JSON
+// ToolSearchArguments normalizes a tool_search_call arguments payload to a JSON
 // object string, returning "" when the payload is absent so callers can keep
 // previously accumulated argument deltas instead of clobbering them.
-func toolSearchArguments(arguments any) string {
+func ToolSearchArguments(arguments any) string {
 	if arguments == nil {
 		return ""
 	}
 	switch typed := arguments.(type) {
 	case json.RawMessage:
-		return rawJSONArguments([]byte(typed))
+		return RawJSONArguments([]byte(typed))
 	case []byte:
-		return rawJSONArguments(typed)
+		return RawJSONArguments(typed)
 	case string:
 		if strings.TrimSpace(typed) == "" {
 			return ""
@@ -461,10 +463,10 @@ func toolSearchArguments(arguments any) string {
 	if err != nil {
 		return ""
 	}
-	return rawJSONArguments(raw)
+	return RawJSONArguments(raw)
 }
 
-func rawJSONArguments(raw []byte) string {
+func RawJSONArguments(raw []byte) string {
 	text := strings.TrimSpace(string(raw))
 	if text == "" || text == "null" {
 		return ""
@@ -472,31 +474,53 @@ func rawJSONArguments(raw []byte) string {
 	return text
 }
 
-func decodeCustomToolInput(arguments string) string {
-	var wrapper map[string]any
-	if kitutil.Unmarshal([]byte(arguments), &wrapper) == nil {
-		if input, ok := wrapper["input"].(string); ok {
-			return input
-		}
-		if input, exists := wrapper["input"]; exists {
-			raw, err := kitutil.Marshal(input)
-			if err == nil {
-				return string(raw)
-			}
-		}
+func ResponsesRequestToolChoiceToChat(raw json.RawMessage, toolState *sharedbridge.ToolState) (any, error) {
+	if !rawJSONPresent(raw) {
+		return nil, nil
 	}
-	return arguments
-}
+	if kitutil.GetJsonType(raw) == "string" {
+		var choice string
+		if err := kitutil.Unmarshal(raw, &choice); err != nil {
+			return nil, fmt.Errorf("invalid tool_choice: %w", err)
+		}
+		return choice, nil
+	}
 
-func toolSearchArgumentsRaw(arguments string) json.RawMessage {
-	trimmed := strings.TrimSpace(arguments)
-	if trimmed == "" {
-		return json.RawMessage(`{}`)
+	var choice map[string]any
+	if err := kitutil.Unmarshal(raw, &choice); err != nil {
+		return nil, fmt.Errorf("invalid tool_choice: %w", err)
 	}
-	var value any
-	if kitutil.Unmarshal([]byte(trimmed), &value) == nil {
-		return json.RawMessage(trimmed)
+	choiceType := strings.TrimSpace(kitutil.Interface2String(choice["type"]))
+	if choiceType == "function" || choiceType == "custom" || choiceType == "freeform" || choiceType == "tool_search" {
+		name := strings.TrimSpace(kitutil.Interface2String(choice["name"]))
+		namespace := strings.TrimSpace(kitutil.Interface2String(choice["namespace"]))
+		kind := sharedbridge.ToolKindFunction
+		if choiceType == "custom" || choiceType == "freeform" {
+			kind = sharedbridge.ToolKindCustom
+		} else if choiceType == "tool_search" {
+			kind = sharedbridge.ToolKindToolSearch
+			name = "tool_search"
+		}
+		if name != "" {
+			upstreamName := name
+			if toolState == nil {
+				if kind != sharedbridge.ToolKindFunction || namespace != "" {
+					return nil, fmt.Errorf("Responses tool_choice references undeclared tool %q", QualifiedToolName(namespace, name))
+				}
+			} else {
+				var err error
+				upstreamName, err = DeclaredUpstreamToolName(toolState, kind, namespace, name)
+				if err != nil {
+					return nil, err
+				}
+			}
+			return map[string]any{
+				"type": "function",
+				"function": map[string]any{
+					"name": upstreamName,
+				},
+			}, nil
+		}
 	}
-	raw, _ := kitutil.Marshal(map[string]any{"input": arguments})
-	return raw
+	return choice, nil
 }

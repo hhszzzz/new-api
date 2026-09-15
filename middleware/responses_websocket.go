@@ -3,6 +3,7 @@ package middleware
 import (
 	"errors"
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"net/http"
 	"strconv"
 	"time"
@@ -10,7 +11,6 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/channelcompat"
 	"github.com/QuantumNous/new-api/service/protocolstate"
@@ -21,12 +21,12 @@ import (
 
 // PrepareResponsesWebSocketRequest applies the model authorization and routing
 // work that Distribute normally performs after reading an HTTP request body.
-func PrepareResponsesWebSocketRequest(c *gin.Context, modelName string, requestBody []byte) *types.NewAPIError {
+func PrepareResponsesWebSocketRequest(c *gin.Context, modelName string, requestBody []byte) *hosttypes.NewAPIError {
 	if c == nil || c.Request == nil || c.Request.URL == nil {
-		return types.NewErrorWithStatusCode(errors.New("invalid responses websocket request context"), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		return hosttypes.NewErrorWithStatusCode(errors.New("invalid responses websocket request context"), hosttypes.ErrorCodeInvalidRequest, http.StatusBadRequest, hosttypes.ErrOptionWithSkipRetry())
 	}
 	if modelName == "" {
-		return types.NewErrorWithStatusCode(errors.New("model is required"), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		return hosttypes.NewErrorWithStatusCode(errors.New("model is required"), hosttypes.ErrorCodeInvalidRequest, http.StatusBadRequest, hosttypes.ErrOptionWithSkipRetry())
 	}
 	common.SetContextKey(c, constant.ContextKeyOriginalModel, modelName)
 
@@ -34,19 +34,19 @@ func PrepareResponsesWebSocketRequest(c *gin.Context, modelName string, requestB
 	if common.GetContextKeyBool(c, constant.ContextKeyUserModelLimitEnabled) {
 		allowed, _ := common.GetContextKeyType[map[string]bool](c, constant.ContextKeyUserModelLimit)
 		if !allowed[matchName] {
-			return types.NewErrorWithStatusCode(errors.New("The requested model does not exist or you do not have access to it"), types.ErrorCodeModelNotFound, http.StatusNotFound, types.ErrOptionWithSkipRetry())
+			return hosttypes.NewErrorWithStatusCode(errors.New("The requested model does not exist or you do not have access to it"), hosttypes.ErrorCodeModelNotFound, http.StatusNotFound, hosttypes.ErrOptionWithSkipRetry())
 		}
 	}
 	if common.GetContextKeyBool(c, constant.ContextKeyUserModelBlocklistEnabled) {
 		blocked, _ := common.GetContextKeyType[map[string]bool](c, constant.ContextKeyUserModelBlocklist)
 		if blocked[matchName] {
-			return types.NewErrorWithStatusCode(errors.New("The requested model does not exist or you do not have access to it"), types.ErrorCodeModelNotFound, http.StatusNotFound, types.ErrOptionWithSkipRetry())
+			return hosttypes.NewErrorWithStatusCode(errors.New("The requested model does not exist or you do not have access to it"), hosttypes.ErrorCodeModelNotFound, http.StatusNotFound, hosttypes.ErrOptionWithSkipRetry())
 		}
 	}
 	if common.GetContextKeyBool(c, constant.ContextKeyTokenModelLimitEnabled) {
 		allowed, _ := common.GetContextKeyType[map[string]bool](c, constant.ContextKeyTokenModelLimit)
 		if !allowed[matchName] {
-			return types.NewErrorWithStatusCode(fmt.Errorf("token is not allowed to use model %s", modelName), types.ErrorCodeAccessDenied, http.StatusForbidden, types.ErrOptionWithSkipRetry())
+			return hosttypes.NewErrorWithStatusCode(fmt.Errorf("token is not allowed to use model %s", modelName), hosttypes.ErrorCodeAccessDenied, http.StatusForbidden, hosttypes.ErrOptionWithSkipRetry())
 		}
 	}
 
@@ -57,17 +57,17 @@ func PrepareResponsesWebSocketRequest(c *gin.Context, modelName string, requestB
 		common.SetContextKey(c, constant.ContextKeyUsingGroup, usingGroup)
 	}
 	if usingGroup != "auto" && !groupAllowsRequestClient(c, usingGroup) {
-		return types.NewErrorWithStatusCode(errors.New("group does not allow this client"), types.ErrorCodeAccessDenied, http.StatusForbidden, types.ErrOptionWithSkipRetry())
+		return hosttypes.NewErrorWithStatusCode(errors.New("group does not allow this client"), hosttypes.ErrorCodeAccessDenied, http.StatusForbidden, hosttypes.ErrOptionWithSkipRetry())
 	}
 	if _, err := applyUserModelRoute(c, modelName, usingGroup); err != nil {
-		return types.NewErrorWithStatusCode(errors.New("user model route is temporarily unavailable"), types.ErrorCodeGetChannelFailed, http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry())
+		return hosttypes.NewErrorWithStatusCode(errors.New("user model route is temporarily unavailable"), hosttypes.ErrorCodeGetChannelFailed, http.StatusServiceUnavailable, hosttypes.ErrOptionWithSkipRetry())
 	}
 
 	common.SetContextKey(c, constant.ContextKeyProtocolIncompatibleReason, nil)
 	common.SetContextKey(c, constant.ContextKeyRequestFeatureSet, nil)
 	binding, err := protocolstate.ResolveSelectionBinding(c, c.Request.URL.Path, modelName, requestBody)
 	if err != nil {
-		return types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		return hosttypes.NewErrorWithStatusCode(err, hosttypes.ErrorCodeInvalidRequest, http.StatusBadRequest, hosttypes.ErrOptionWithSkipRetry())
 	}
 	common.SetContextKey(c, constant.ContextKeyProtocolStateBinding, binding)
 	common.SetContextKey(c, constant.ContextKeyRequestStartTime, time.Now())
@@ -98,9 +98,9 @@ func NewResponsesWebSocketRetryParam(c *gin.Context, modelName string) *service.
 	}
 }
 
-func SelectResponsesWebSocketChannel(c *gin.Context, modelName string, retryParam *service.RetryParam) (*model.Channel, *types.NewAPIError) {
+func SelectResponsesWebSocketChannel(c *gin.Context, modelName string, retryParam *service.RetryParam) (*model.Channel, *hosttypes.NewAPIError) {
 	if retryParam == nil {
-		return nil, types.NewError(errors.New("invalid responses websocket retry parameters"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		return nil, hosttypes.NewError(errors.New("invalid responses websocket retry parameters"), hosttypes.ErrorCodeGetChannelFailed, hosttypes.ErrOptionWithSkipRetry())
 	}
 	selectionModel := retryParam.ModelName
 	selectionGroup := retryParam.TokenGroup
@@ -108,21 +108,21 @@ func SelectResponsesWebSocketChannel(c *gin.Context, modelName string, retryPara
 	if channelIDRaw, ok := common.GetContextKey(c, constant.ContextKeyTokenSpecificChannelId); ok {
 		channelID, ok := channelIDRaw.(string)
 		if !ok {
-			return nil, types.NewErrorWithStatusCode(errors.New("invalid specified channel id"), types.ErrorCodeGetChannelFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+			return nil, hosttypes.NewErrorWithStatusCode(errors.New("invalid specified channel id"), hosttypes.ErrorCodeGetChannelFailed, http.StatusBadRequest, hosttypes.ErrOptionWithSkipRetry())
 		}
 		id, err := strconv.Atoi(channelID)
 		if err != nil {
-			return nil, types.NewErrorWithStatusCode(err, types.ErrorCodeGetChannelFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+			return nil, hosttypes.NewErrorWithStatusCode(err, hosttypes.ErrorCodeGetChannelFailed, http.StatusBadRequest, hosttypes.ErrOptionWithSkipRetry())
 		}
 		channel, err := model.GetChannelById(id, true)
 		if err != nil {
-			return nil, types.NewErrorWithStatusCode(err, types.ErrorCodeGetChannelFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+			return nil, hosttypes.NewErrorWithStatusCode(err, hosttypes.ErrorCodeGetChannelFailed, http.StatusBadRequest, hosttypes.ErrOptionWithSkipRetry())
 		}
 		if !channel.IsSchedulableAt(time.Now()) {
-			return nil, types.NewErrorWithStatusCode(errors.New("specified channel is disabled or outside its schedule"), types.ErrorCodeGetChannelFailed, http.StatusForbidden, types.ErrOptionWithSkipRetry())
+			return nil, hosttypes.NewErrorWithStatusCode(errors.New("specified channel is disabled or outside its schedule"), hosttypes.ErrorCodeGetChannelFailed, http.StatusForbidden, hosttypes.ErrOptionWithSkipRetry())
 		}
 		if err := validateSelectedRouteChannel(c, channel, c.Request.URL.Path); err != nil || !responsesWebSocketChannelAllowed(retryParam, channel) {
-			return nil, types.NewErrorWithStatusCode(errors.New("specified channel cannot serve native Responses WebSocket requests"), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+			return nil, hosttypes.NewErrorWithStatusCode(errors.New("specified channel cannot serve native Responses WebSocket requests"), hosttypes.ErrorCodeInvalidRequest, http.StatusBadRequest, hosttypes.ErrOptionWithSkipRetry())
 		}
 		if apiErr := setupResponsesWebSocketChannel(c, channel, modelName, selectionModel); apiErr != nil {
 			return nil, apiErr
@@ -132,15 +132,15 @@ func SelectResponsesWebSocketChannel(c *gin.Context, modelName string, retryPara
 
 	if binding, ok := common.GetContextKeyType[*protocolstate.SelectionBinding](c, constant.ContextKeyProtocolStateBinding); ok && binding != nil && binding.ChannelID > 0 {
 		if binding.UpstreamProtocol != "" && binding.UpstreamProtocol != channelcompat.ProtocolResponses {
-			return nil, types.NewErrorWithStatusCode(errors.New("the referenced response is not bound to a native Responses channel"), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+			return nil, hosttypes.NewErrorWithStatusCode(errors.New("the referenced response is not bound to a native Responses channel"), hosttypes.ErrorCodeInvalidRequest, http.StatusBadRequest, hosttypes.ErrOptionWithSkipRetry())
 		}
 		bound, err := model.CacheGetChannel(binding.ChannelID)
 		if err != nil || bound == nil || !bound.IsSchedulableAt(time.Now()) || !responsesWebSocketChannelAllowed(retryParam, bound) {
-			return nil, types.NewErrorWithStatusCode(errors.New("the channel bound to the referenced response cannot serve Responses WebSocket requests"), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+			return nil, hosttypes.NewErrorWithStatusCode(errors.New("the channel bound to the referenced response cannot serve Responses WebSocket requests"), hosttypes.ErrorCodeInvalidRequest, http.StatusBadRequest, hosttypes.ErrOptionWithSkipRetry())
 		}
 		resolvedGroup, groupUsable := resolveAffinitySelectionGroup(c, selectionGroup, selectionModel, bound.Id)
 		if !routeChannelAllowed(c, bound.Id) || !groupUsable {
-			return nil, types.NewErrorWithStatusCode(errors.New("the channel bound to the referenced response is unavailable"), types.ErrorCodeGetChannelFailed, http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry())
+			return nil, hosttypes.NewErrorWithStatusCode(errors.New("the channel bound to the referenced response is unavailable"), hosttypes.ErrorCodeGetChannelFailed, http.StatusServiceUnavailable, hosttypes.ErrOptionWithSkipRetry())
 		}
 		commitRouteSelectionGroup(c, selectionGroup, resolvedGroup)
 		if apiErr := setupResponsesWebSocketChannel(c, bound, modelName, selectionModel); apiErr != nil {
@@ -170,15 +170,15 @@ func SelectResponsesWebSocketChannel(c *gin.Context, modelName string, retryPara
 	channel, selectedGroup, err := service.CacheGetRandomSatisfiedChannel(retryParam)
 	if err != nil {
 		statusCode := http.StatusServiceUnavailable
-		errorCode := types.ErrorCodeGetChannelFailed
+		errorCode := hosttypes.ErrorCodeGetChannelFailed
 		if errors.Is(err, model.ErrNoCompatibleChannel) {
 			statusCode = http.StatusBadRequest
-			errorCode = types.ErrorCodeInvalidRequest
+			errorCode = hosttypes.ErrorCodeInvalidRequest
 		}
-		return nil, types.NewErrorWithStatusCode(fmt.Errorf("failed to select a native Responses WebSocket channel from group %s: %w", selectedGroup, err), errorCode, statusCode, types.ErrOptionWithSkipRetry())
+		return nil, hosttypes.NewErrorWithStatusCode(fmt.Errorf("failed to select a native Responses WebSocket channel from group %s: %w", selectedGroup, err), errorCode, statusCode, hosttypes.ErrOptionWithSkipRetry())
 	}
 	if channel == nil {
-		return nil, types.NewErrorWithStatusCode(fmt.Errorf("no native Responses WebSocket channel is available in group %s", selectedGroup), types.ErrorCodeGetChannelFailed, http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry())
+		return nil, hosttypes.NewErrorWithStatusCode(fmt.Errorf("no native Responses WebSocket channel is available in group %s", selectedGroup), hosttypes.ErrorCodeGetChannelFailed, http.StatusServiceUnavailable, hosttypes.ErrOptionWithSkipRetry())
 	}
 	if apiErr := setupResponsesWebSocketChannel(c, channel, modelName, selectionModel); apiErr != nil {
 		return nil, apiErr
@@ -220,9 +220,9 @@ func NewResponsesBridgeRetryParam(c *gin.Context, modelName string) *service.Ret
 // selection it accepts convertible channels and non-Responses state bindings;
 // SetupContextForSelectedChannel applies the protocol plan exactly as the HTTP
 // distributor does.
-func SelectResponsesBridgeChannel(c *gin.Context, modelName string, retryParam *service.RetryParam) (*model.Channel, *types.NewAPIError) {
+func SelectResponsesBridgeChannel(c *gin.Context, modelName string, retryParam *service.RetryParam) (*model.Channel, *hosttypes.NewAPIError) {
 	if retryParam == nil {
-		return nil, types.NewError(errors.New("invalid responses websocket retry parameters"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		return nil, hosttypes.NewError(errors.New("invalid responses websocket retry parameters"), hosttypes.ErrorCodeGetChannelFailed, hosttypes.ErrOptionWithSkipRetry())
 	}
 	selectionModel := retryParam.ModelName
 	selectionGroup := retryParam.TokenGroup
@@ -230,21 +230,21 @@ func SelectResponsesBridgeChannel(c *gin.Context, modelName string, retryParam *
 	if channelIDRaw, ok := common.GetContextKey(c, constant.ContextKeyTokenSpecificChannelId); ok {
 		channelID, ok := channelIDRaw.(string)
 		if !ok {
-			return nil, types.NewErrorWithStatusCode(errors.New("invalid specified channel id"), types.ErrorCodeGetChannelFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+			return nil, hosttypes.NewErrorWithStatusCode(errors.New("invalid specified channel id"), hosttypes.ErrorCodeGetChannelFailed, http.StatusBadRequest, hosttypes.ErrOptionWithSkipRetry())
 		}
 		id, err := strconv.Atoi(channelID)
 		if err != nil {
-			return nil, types.NewErrorWithStatusCode(err, types.ErrorCodeGetChannelFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+			return nil, hosttypes.NewErrorWithStatusCode(err, hosttypes.ErrorCodeGetChannelFailed, http.StatusBadRequest, hosttypes.ErrOptionWithSkipRetry())
 		}
 		channel, err := model.GetChannelById(id, true)
 		if err != nil {
-			return nil, types.NewErrorWithStatusCode(err, types.ErrorCodeGetChannelFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+			return nil, hosttypes.NewErrorWithStatusCode(err, hosttypes.ErrorCodeGetChannelFailed, http.StatusBadRequest, hosttypes.ErrOptionWithSkipRetry())
 		}
 		if !channel.IsSchedulableAt(time.Now()) {
-			return nil, types.NewErrorWithStatusCode(errors.New("specified channel is disabled or outside its schedule"), types.ErrorCodeGetChannelFailed, http.StatusForbidden, types.ErrOptionWithSkipRetry())
+			return nil, hosttypes.NewErrorWithStatusCode(errors.New("specified channel is disabled or outside its schedule"), hosttypes.ErrorCodeGetChannelFailed, http.StatusForbidden, hosttypes.ErrOptionWithSkipRetry())
 		}
 		if err := validateSelectedRouteChannel(c, channel, c.Request.URL.Path); err != nil || !responsesBridgeChannelAllowed(retryParam, channel) {
-			return nil, types.NewErrorWithStatusCode(errors.New("specified channel cannot serve Responses requests"), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+			return nil, hosttypes.NewErrorWithStatusCode(errors.New("specified channel cannot serve Responses requests"), hosttypes.ErrorCodeInvalidRequest, http.StatusBadRequest, hosttypes.ErrOptionWithSkipRetry())
 		}
 		if apiErr := SetupContextForSelectedChannel(c, channel, modelName, true); apiErr != nil {
 			return nil, apiErr
@@ -257,11 +257,11 @@ func SelectResponsesBridgeChannel(c *gin.Context, modelName string, retryParam *
 		if err != nil || bound == nil || !bound.IsSchedulableAt(time.Now()) ||
 			!responsesBridgeChannelAllowed(retryParam, bound) ||
 			!channelSupportsRequestPath(bound, c.Request.URL.Path, selectionModel) {
-			return nil, types.NewErrorWithStatusCode(errors.New("the channel bound to the referenced response cannot serve Responses requests"), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+			return nil, hosttypes.NewErrorWithStatusCode(errors.New("the channel bound to the referenced response cannot serve Responses requests"), hosttypes.ErrorCodeInvalidRequest, http.StatusBadRequest, hosttypes.ErrOptionWithSkipRetry())
 		}
 		resolvedGroup, groupUsable := resolveAffinitySelectionGroup(c, selectionGroup, selectionModel, bound.Id)
 		if !routeChannelAllowed(c, bound.Id) || !groupUsable {
-			return nil, types.NewErrorWithStatusCode(errors.New("the channel bound to the referenced response is unavailable"), types.ErrorCodeGetChannelFailed, http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry())
+			return nil, hosttypes.NewErrorWithStatusCode(errors.New("the channel bound to the referenced response is unavailable"), hosttypes.ErrorCodeGetChannelFailed, http.StatusServiceUnavailable, hosttypes.ErrOptionWithSkipRetry())
 		}
 		commitRouteSelectionGroup(c, selectionGroup, resolvedGroup)
 		if apiErr := SetupContextForSelectedChannel(c, bound, modelName, true); apiErr != nil {
@@ -297,12 +297,12 @@ func SelectResponsesBridgeChannel(c *gin.Context, modelName string, retryParam *
 			if reason, ok := common.GetContextKeyType[string](c, constant.ContextKeyProtocolIncompatibleReason); ok && reason != "" {
 				message = fmt.Sprintf("%s: %s", message, reason)
 			}
-			return nil, types.NewErrorWithStatusCode(errors.New(message), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+			return nil, hosttypes.NewErrorWithStatusCode(errors.New(message), hosttypes.ErrorCodeInvalidRequest, http.StatusBadRequest, hosttypes.ErrOptionWithSkipRetry())
 		}
-		return nil, types.NewErrorWithStatusCode(fmt.Errorf("failed to select a channel for model %s from group %s: %w", selectionModel, selectedGroup, err), types.ErrorCodeGetChannelFailed, http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry())
+		return nil, hosttypes.NewErrorWithStatusCode(fmt.Errorf("failed to select a channel for model %s from group %s: %w", selectionModel, selectedGroup, err), hosttypes.ErrorCodeGetChannelFailed, http.StatusServiceUnavailable, hosttypes.ErrOptionWithSkipRetry())
 	}
 	if channel == nil {
-		return nil, types.NewErrorWithStatusCode(fmt.Errorf("no channel is available for model %s in group %s", selectionModel, selectedGroup), types.ErrorCodeGetChannelFailed, http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry())
+		return nil, hosttypes.NewErrorWithStatusCode(fmt.Errorf("no channel is available for model %s in group %s", selectionModel, selectedGroup), hosttypes.ErrorCodeGetChannelFailed, http.StatusServiceUnavailable, hosttypes.ErrOptionWithSkipRetry())
 	}
 	if apiErr := SetupContextForSelectedChannel(c, channel, modelName, true); apiErr != nil {
 		return nil, apiErr
@@ -334,10 +334,10 @@ func responsesWebSocketNativePlan(c *gin.Context, channel *model.Channel, modelN
 	return nil
 }
 
-func setupResponsesWebSocketChannel(c *gin.Context, channel *model.Channel, publicModel, selectionModel string) *types.NewAPIError {
+func setupResponsesWebSocketChannel(c *gin.Context, channel *model.Channel, publicModel, selectionModel string) *hosttypes.NewAPIError {
 	plan := responsesWebSocketNativePlan(c, channel, selectionModel)
 	if plan == nil {
-		return types.NewErrorWithStatusCode(errors.New("channel does not support native Responses WebSocket transport"), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		return hosttypes.NewErrorWithStatusCode(errors.New("channel does not support native Responses WebSocket transport"), hosttypes.ErrorCodeInvalidRequest, http.StatusBadRequest, hosttypes.ErrOptionWithSkipRetry())
 	}
 	if apiErr := SetupContextForSelectedChannel(c, channel, publicModel, true); apiErr != nil {
 		return apiErr

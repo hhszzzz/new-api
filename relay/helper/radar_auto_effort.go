@@ -2,11 +2,11 @@ package helper
 
 import (
 	"fmt"
+	hostdto "github.com/QuantumNous/new-api/dto"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
@@ -132,11 +132,11 @@ func pickRadarAutoEffort(candidates []service.ModelRadarEffortCandidate, policy 
 	// ties, so the head is the highest-IQ tier.
 	best := candidates[0]
 	switch policy {
-	case dto.RadarAutoEffortPolicyIQPerCost:
+	case hostdto.RadarAutoEffortPolicyIQPerCost:
 		if affordable, ok := bestRadarIQPerCost(candidates); ok {
 			best = affordable
 		}
-	case dto.RadarAutoEffortPolicyMinIQDelta:
+	case hostdto.RadarAutoEffortPolicyMinIQDelta:
 		client, ok := findRadarCandidate(candidates, from)
 		if ok && best.IQ-client.IQ < minIQDelta {
 			return from, client.IQ, false

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"math"
 	"net/http"
 	"strconv"
@@ -19,9 +20,9 @@ import (
 	relaychannel "github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/ollama"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/authz"
+	"github.com/QuantumNous/new-api/service/protocolpolicy"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 
 	"github.com/gin-gonic/gin"
@@ -589,6 +590,13 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 	if err := channel.ValidateSettings(); err != nil {
 		return fmt.Errorf("渠道额外设置[channel setting] 格式错误：%s", err.Error())
 	}
+	if model_setting.GetGlobalSettings().ProtocolPolicy != nil {
+		settings, _, err := protocolpolicy.NormalizeChannel(channel, *model_setting.GetGlobalSettings())
+		if err != nil {
+			return err
+		}
+		channel.OtherSettings = settings
+	}
 	if err := channel.Schedule.Normalize(); err != nil {
 		return fmt.Errorf("渠道定时设置格式错误：%s", err.Error())
 	}
@@ -791,7 +799,7 @@ func AddChannel(c *gin.Context) {
 	case "multi_to_single":
 		addChannelRequest.Channel.ChannelInfo.IsMultiKey = true
 		addChannelRequest.Channel.ChannelInfo.MultiKeyMode = addChannelRequest.MultiKeyMode
-		if addChannelRequest.Channel.Type == constant.ChannelTypeVertexAi && addChannelRequest.Channel.GetOtherSettings().VertexKeyType != dto.VertexKeyTypeAPIKey {
+		if addChannelRequest.Channel.Type == constant.ChannelTypeVertexAi && addChannelRequest.Channel.GetOtherSettings().VertexKeyType != hostdto.VertexKeyTypeAPIKey {
 			array, err := getVertexArrayKeys(addChannelRequest.Channel.Key)
 			if err != nil {
 				c.JSON(http.StatusOK, gin.H{
@@ -816,7 +824,7 @@ func AddChannel(c *gin.Context) {
 		}
 		keys = []string{addChannelRequest.Channel.Key}
 	case "batch":
-		if addChannelRequest.Channel.Type == constant.ChannelTypeVertexAi && addChannelRequest.Channel.GetOtherSettings().VertexKeyType != dto.VertexKeyTypeAPIKey {
+		if addChannelRequest.Channel.Type == constant.ChannelTypeVertexAi && addChannelRequest.Channel.GetOtherSettings().VertexKeyType != hostdto.VertexKeyTypeAPIKey {
 			// multi json
 			keys, err = getVertexArrayKeys(addChannelRequest.Channel.Key)
 			if err != nil {
@@ -1247,7 +1255,7 @@ func UpdateChannel(c *gin.Context) {
 				}
 
 				// 处理 Vertex AI 的特殊情况
-				if channel.Type == constant.ChannelTypeVertexAi && channel.GetOtherSettings().VertexKeyType != dto.VertexKeyTypeAPIKey {
+				if channel.Type == constant.ChannelTypeVertexAi && channel.GetOtherSettings().VertexKeyType != hostdto.VertexKeyTypeAPIKey {
 					// 尝试解析新密钥为JSON数组
 					if strings.HasPrefix(strings.TrimSpace(channel.Key), "[") {
 						array, err := getVertexArrayKeys(channel.Key)
@@ -1491,7 +1499,7 @@ func UpdateChannelModelStatus(c *gin.Context) {
 		if reason == "" {
 			reason = "manual operation"
 		}
-		service.DisableChannelModel(id, group, modelName, reason, dto.DisabledModelSourceManual)
+		service.DisableChannelModel(id, group, modelName, reason, hostdto.DisabledModelSourceManual)
 	} else {
 		service.EnableChannelModel(id, group, modelName)
 	}
@@ -1573,7 +1581,7 @@ func buildAdvancedCustomModelPreviewChannel(req fetchModelsRequest) (*model.Chan
 		if rawConfig == "" {
 			return nil, fmt.Errorf("advanced_custom is required")
 		}
-		var config dto.AdvancedCustomConfig
+		var config hostdto.AdvancedCustomConfig
 		if err := common.UnmarshalJsonStr(rawConfig, &config); err != nil {
 			return nil, err
 		}

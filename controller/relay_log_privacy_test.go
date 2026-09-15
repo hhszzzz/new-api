@@ -2,6 +2,7 @@ package controller
 
 import (
 	"errors"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -78,13 +79,13 @@ func TestProcessChannelErrorKeepsMappedModelOutOfPublicLog(t *testing.T) {
 			UpstreamModelName: "private-upstream-model",
 		},
 	}
-	apiErr := types.NewErrorWithStatusCode(
+	apiErr := hosttypes.NewErrorWithStatusCode(
 		errors.New("model private-upstream-model is unavailable"),
-		types.ErrorCodeModelNotFound,
+		hosttypes.ErrorCodeModelNotFound,
 		http.StatusNotFound,
 	)
 
-	processChannelError(ctx, *types.NewChannelError(3, 1, "private-channel", false, "", false), apiErr, relayInfo)
+	processChannelError(ctx, *hosttypes.NewChannelError(3, 1, "private-channel", false, "", false), apiErr, relayInfo)
 
 	var stored model.Log
 	require.NoError(t, db.First(&stored).Error)
@@ -108,7 +109,7 @@ func TestProcessChannelErrorKeepsMappedModelOutOfPublicLog(t *testing.T) {
 	assert.NotContains(t, publicLogs[0].Other, "model_name_scope")
 	publicOther, err := common.StrToMap(publicLogs[0].Other)
 	require.NoError(t, err)
-	assert.Equal(t, string(types.ErrorCodeModelNotFound), publicOther["error_code"])
+	assert.Equal(t, string(hosttypes.ErrorCodeModelNotFound), publicOther["error_code"])
 
 	adminLogs, total, err := model.GetUserLogs(7, model.LogTypeError, 0, 0, "", "", 0, 10, "", "", "", true)
 	require.NoError(t, err)
@@ -135,12 +136,12 @@ func TestProcessChannelErrorKeepsMappedModelOutOfPublicLog(t *testing.T) {
 	require.True(t, overrideInfo.IsModelMapped)
 	require.Equal(t, "private-override-model", overrideInfo.UpstreamModelName)
 
-	overrideErr := types.WithOpenAIError(types.OpenAIError{
+	overrideErr := hosttypes.WithOpenAIError(types.OpenAIError{
 		Message: "model private-override-model: unavailable",
 		Type:    "private-override-model-error",
 		Code:    "private-override-model",
 	}, http.StatusNotFound)
-	processChannelError(ctx, *types.NewChannelError(3, 1, "private-channel", false, "", false), overrideErr, overrideInfo)
+	processChannelError(ctx, *hosttypes.NewChannelError(3, 1, "private-channel", false, "", false), overrideErr, overrideInfo)
 
 	var overrideStored model.Log
 	require.NoError(t, db.Where("model_name = ?", "requested-override-model").First(&overrideStored).Error)

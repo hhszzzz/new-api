@@ -3,6 +3,7 @@ package relay
 import (
 	"errors"
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 
@@ -12,13 +13,12 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-gonic/gin"
 )
 
-func AlphaSearchHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
+func AlphaSearchHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *hosttypes.NewAPIError) {
 	info.InitChannelMeta(c)
 
 	channelSupportsAlphaSearch := info.ChannelType == constant.ChannelTypeSub2API ||
@@ -28,30 +28,30 @@ func AlphaSearchHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError
 		(info.ChannelType == constant.ChannelTypeOpenAI && info.ChannelOtherSettings.AllowAlphaSearch)
 	if !channelSupportsAlphaSearch {
 		// Allow retry onto another channel that may support this endpoint.
-		return types.NewError(
+		return hosttypes.NewError(
 			errors.New("channel does not support /v1/alpha/search"),
-			types.ErrorCodeInvalidRequest,
+			hosttypes.ErrorCodeInvalidRequest,
 		)
 	}
 
 	request, ok := info.Request.(*dto.AlphaSearchRequest)
 	if !ok {
-		return types.NewErrorWithStatusCode(
+		return hosttypes.NewErrorWithStatusCode(
 			fmt.Errorf("invalid request type, expected *dto.AlphaSearchRequest, got %T", info.Request),
-			types.ErrorCodeInvalidRequest,
+			hosttypes.ErrorCodeInvalidRequest,
 			http.StatusBadRequest,
-			types.ErrOptionWithSkipRetry(),
+			hosttypes.ErrOptionWithSkipRetry(),
 		)
 	}
 
 	err := helper.ModelMappedHelper(c, info, request)
 	if err != nil {
-		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
+		return hosttypes.NewError(err, hosttypes.ErrorCodeChannelModelMappedError, hosttypes.ErrOptionWithSkipRetry())
 	}
 
 	jsonData, err := buildAlphaSearchRequestBody(request.RawBody, info.OriginModelName, info.UpstreamModelName)
 	if err != nil {
-		return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		return hosttypes.NewError(err, hosttypes.ErrorCodeConvertRequestFailed, hosttypes.ErrOptionWithSkipRetry())
 	}
 
 	if len(info.ParamOverride) > 0 {
@@ -64,26 +64,26 @@ func AlphaSearchHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError
 	logger.LogDebug(c, "requestBody: %s", jsonData)
 	body, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
 	if err != nil {
-		return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		return hosttypes.NewError(err, hosttypes.ErrorCodeConvertRequestFailed, hosttypes.ErrOptionWithSkipRetry())
 	}
 	defer closer.Close()
 
 	adaptor := GetAdaptor(info.ApiType)
 	if adaptor == nil {
-		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
+		return hosttypes.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), hosttypes.ErrorCodeInvalidApiType, hosttypes.ErrOptionWithSkipRetry())
 	}
 	adaptor.Init(info)
 
 	resp, err := adaptor.DoRequest(c, info, body)
 	if err != nil {
-		return types.NewOpenAIError(err, types.ErrorCodeDoRequestFailed, http.StatusInternalServerError)
+		return hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeDoRequestFailed, http.StatusInternalServerError)
 	}
 
 	statusCodeMappingStr := c.GetString("status_code_mapping")
-	httpResp, ok := resp.(*http.Response)
-	if !ok || httpResp == nil {
-		return types.NewOpenAIError(errors.New("invalid http response"), types.ErrorCodeDoRequestFailed, http.StatusInternalServerError)
+	if resp == nil || resp.Response == nil {
+		return hosttypes.NewOpenAIError(errors.New("invalid http response"), hosttypes.ErrorCodeDoRequestFailed, http.StatusInternalServerError)
 	}
+	httpResp := resp.Response
 	defer httpResp.Body.Close()
 
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
@@ -97,7 +97,7 @@ func AlphaSearchHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError
 	}
 	c.Writer.WriteHeader(httpResp.StatusCode)
 	if _, err := io.Copy(c.Writer, httpResp.Body); err != nil {
-		return types.NewError(err, types.ErrorCodeDoRequestFailed, types.ErrOptionWithSkipRetry())
+		return hosttypes.NewError(err, hosttypes.ErrorCodeDoRequestFailed, hosttypes.ErrOptionWithSkipRetry())
 	}
 
 	// Upstream alpha search returns no usage; bill one web_search_preview call.

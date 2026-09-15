@@ -2,6 +2,7 @@ package gemini
 
 import (
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 
@@ -11,19 +12,18 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-gonic/gin"
 )
 
-func GeminiTextGenerationHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+func GeminiTextGenerationHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *hosttypes.NewAPIError) {
 	defer service.CloseResponseBodyGracefully(resp)
 
 	// 读取响应体
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 
 	logger.LogDebug(c, "Gemini native response body: %s", responseBody)
@@ -32,7 +32,7 @@ func GeminiTextGenerationHandler(c *gin.Context, info *relaycommon.RelayInfo, re
 	var geminiResponse dto.GeminiChatResponse
 	err = common.Unmarshal(responseBody, &geminiResponse)
 	if err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	countGeminiBillableFunctionCalls(info, &geminiResponse)
 
@@ -45,7 +45,7 @@ func GeminiTextGenerationHandler(c *gin.Context, info *relaycommon.RelayInfo, re
 	if info.HasUserModelRoute() {
 		responseBody, err = relaycommon.RedactUserModelRouteJSON(responseBody, info)
 		if err != nil {
-			return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+			return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 		}
 	}
 
@@ -54,12 +54,12 @@ func GeminiTextGenerationHandler(c *gin.Context, info *relaycommon.RelayInfo, re
 	return &usage, nil
 }
 
-func NativeGeminiEmbeddingHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*dto.Usage, *types.NewAPIError) {
+func NativeGeminiEmbeddingHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*dto.Usage, *hosttypes.NewAPIError) {
 	defer service.CloseResponseBodyGracefully(resp)
 
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 
 	logger.LogDebug(c, "Gemini native embedding response body: %s", responseBody)
@@ -70,20 +70,20 @@ func NativeGeminiEmbeddingHandler(c *gin.Context, resp *http.Response, info *rel
 		var geminiResponse dto.GeminiBatchEmbeddingResponse
 		err = common.Unmarshal(responseBody, &geminiResponse)
 		if err != nil {
-			return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+			return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 		}
 	} else {
 		var geminiResponse dto.GeminiEmbeddingResponse
 		err = common.Unmarshal(responseBody, &geminiResponse)
 		if err != nil {
-			return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+			return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 		}
 	}
 
 	if info.HasUserModelRoute() {
 		responseBody, err = relaycommon.RedactUserModelRouteJSON(responseBody, info)
 		if err != nil {
-			return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+			return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 		}
 	}
 
@@ -92,15 +92,15 @@ func NativeGeminiEmbeddingHandler(c *gin.Context, resp *http.Response, info *rel
 	return usage, nil
 }
 
-func GeminiTextGenerationStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+func GeminiTextGenerationStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *hosttypes.NewAPIError) {
 	helper.SetEventStreamHeaders(c)
 
-	var privacyErr *types.NewAPIError
+	var privacyErr *hosttypes.NewAPIError
 	usage, relayErr := geminiStreamHandler(c, info, resp, func(data string, geminiResponse *dto.GeminiChatResponse) bool {
 		if info.HasUserModelRoute() {
 			redacted, err := relaycommon.RedactUserModelRouteJSON([]byte(data), info)
 			if err != nil {
-				privacyErr = types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+				privacyErr = hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 				return false
 			}
 			data = string(redacted)

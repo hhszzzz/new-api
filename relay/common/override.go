@@ -3,6 +3,7 @@ package common
 import (
 	"errors"
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"maps"
 	"net/http"
 	"regexp"
@@ -104,12 +105,12 @@ func AsParamOverrideReturnError(err error) (*ParamOverrideReturnError, bool) {
 	return nil, false
 }
 
-func NewAPIErrorFromParamOverride(err *ParamOverrideReturnError) *types.NewAPIError {
+func NewAPIErrorFromParamOverride(err *ParamOverrideReturnError) *hosttypes.NewAPIError {
 	if err == nil {
-		return types.NewError(
+		return hosttypes.NewError(
 			errors.New("param override return error is nil"),
-			types.ErrorCodeChannelParamOverrideInvalid,
-			types.ErrOptionWithSkipRetry(),
+			hosttypes.ErrorCodeChannelParamOverrideInvalid,
+			hosttypes.ErrOptionWithSkipRetry(),
 		)
 	}
 
@@ -120,7 +121,7 @@ func NewAPIErrorFromParamOverride(err *ParamOverrideReturnError) *types.NewAPIEr
 
 	errorCode := err.Code
 	if strings.TrimSpace(errorCode) == "" {
-		errorCode = string(types.ErrorCodeInvalidRequest)
+		errorCode = string(hosttypes.ErrorCodeInvalidRequest)
 	}
 
 	errorType := err.Type
@@ -133,12 +134,12 @@ func NewAPIErrorFromParamOverride(err *ParamOverrideReturnError) *types.NewAPIEr
 		message = "request blocked by param override"
 	}
 
-	opts := make([]types.NewAPIErrorOptions, 0, 1)
+	opts := make([]hosttypes.NewAPIErrorOptions, 0, 1)
 	if err.SkipRetry {
-		opts = append(opts, types.ErrOptionWithSkipRetry())
+		opts = append(opts, hosttypes.ErrOptionWithSkipRetry())
 	}
 
-	return types.WithOpenAIError(types.OpenAIError{
+	return hosttypes.WithOpenAIError(types.OpenAIError{
 		Message: message,
 		Type:    errorType,
 		Code:    errorCode,
@@ -1109,7 +1110,7 @@ func applyOperations(jsonData []byte, operations []ParamOperation, conditionCont
 func parseParamOverrideReturnError(value any) (*ParamOverrideReturnError, error) {
 	result := &ParamOverrideReturnError{
 		StatusCode: http.StatusBadRequest,
-		Code:       string(types.ErrorCodeInvalidRequest),
+		Code:       string(hosttypes.ErrorCodeInvalidRequest),
 		Type:       "invalid_request_error",
 		SkipRetry:  true,
 	}
@@ -2231,7 +2232,7 @@ func BuildParamOverrideContext(info *RelayInfo) map[string]any {
 			"error_code":  code,
 			"type":        errorType,
 			"error_type":  errorType,
-			"skip_retry":  types.IsSkipRetryError(info.LastError),
+			"skip_retry":  hosttypes.IsSkipRetryError(info.LastError),
 		}
 		ctx["last_error"] = lastError
 		ctx["last_error_status_code"] = info.LastError.StatusCode

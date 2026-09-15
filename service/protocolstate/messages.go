@@ -15,6 +15,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service/channelcompat"
+	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/samber/hot"
 )
@@ -77,7 +78,7 @@ func resolveMessageSelectionBinding(c *gin.Context, publicModel string, body []b
 }
 
 func PrepareMessagesRequest(c *gin.Context, info *relaycommon.RelayInfo, plan channelcompat.ProtocolPlan, request *dto.ClaudeRequest) error {
-	manageState := Enabled() || plan.StateEnabled
+	manageState := plan.StateEnabled || model_setting.GetGlobalSettings().ProtocolPolicy == nil && Enabled()
 	if !manageState || c == nil || info == nil || request == nil || plan.RequestProtocol != channelcompat.ProtocolMessages {
 		return nil
 	}
@@ -98,7 +99,7 @@ func PrepareMessagesRequest(c *gin.Context, info *relaycommon.RelayInfo, plan ch
 		}
 		common.SetContextKey(c, constant.ContextKeyProtocolStateSession, selection)
 	}
-	policy := currentPolicy()
+	policy := policyForContext(c)
 	if selection.serializedHistoryBytes > policy.MaxStateBytes {
 		return fmt.Errorf("Claude Code message history exceeds the maximum serialized state size of %d bytes", policy.MaxStateBytes)
 	}
@@ -310,7 +311,7 @@ func commitMessageSession(c *gin.Context, pending *pendingState) error {
 	if err != nil {
 		return err
 	}
-	policy := currentPolicy()
+	policy := policyForContext(c)
 	turn := 1
 	if selection.strictAppend && selection.session != nil {
 		turn = selection.session.Turn + 1
@@ -370,7 +371,7 @@ func buildMessageSelection(c *gin.Context, publicModel string, request *dto.Clau
 	if !found {
 		return selection, nil
 	}
-	policy := currentPolicy()
+	policy := policyForContext(c)
 	if session.Version != stateVersion || session.UserID != identity.userID || session.TokenID != identity.tokenID ||
 		strings.TrimSpace(session.PublicModel) != strings.TrimSpace(publicModel) ||
 		strings.TrimSpace(session.SessionKey) != stableKey || session.ChannelID <= 0 ||

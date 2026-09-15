@@ -4,15 +4,15 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/relay/output"
 	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
-
 	"github.com/gin-gonic/gin"
 )
 
@@ -160,7 +160,7 @@ func CloseResponseBodyGracefully(httpResponse *http.Response) {
 // DetectProtocolUnsupportedSuccessEnvelope handles compatible gateways that
 // return an endpoint/protocol error as a JSON body with HTTP 200. It preserves
 // the response body for the normal handler when no such envelope is present.
-func DetectProtocolUnsupportedSuccessEnvelope(resp *http.Response) *types.NewAPIError {
+func DetectProtocolUnsupportedSuccessEnvelope(resp *http.Response) *hosttypes.NewAPIError {
 	if resp == nil || resp.Body == nil || resp.StatusCode != http.StatusOK || ResponseIsEventStream(resp) {
 		return nil
 	}
@@ -194,13 +194,13 @@ func DetectProtocolUnsupportedSuccessEnvelope(resp *http.Response) *types.NewAPI
 			strings.TrimSpace(fmt.Sprintf("%v", openaiError.Code)),
 		}, "\n")
 	}
-	if !types.IsProtocolUnsupportedMessage(classification) {
+	if !hosttypes.IsProtocolUnsupportedMessage(classification) {
 		return nil
 	}
 
-	apiError := types.NewErrorWithStatusCode(
+	apiError := hosttypes.NewErrorWithStatusCode(
 		fmt.Errorf("upstream returned an error envelope with HTTP 200: %s", message),
-		types.ErrorCodeBadResponseStatusCode,
+		hosttypes.ErrorCodeBadResponseStatusCode,
 		http.StatusBadGateway,
 	)
 	apiError.MarkProtocolUnsupported()
@@ -210,8 +210,8 @@ func DetectProtocolUnsupportedSuccessEnvelope(resp *http.Response) *types.NewAPI
 // MarkProtocolUnsupportedStreamError records endpoint/protocol evidence carried
 // by a successful HTTP SSE response. The caller must only pass errors decoded
 // from an upstream stream event, not local conversion or validation failures.
-func MarkProtocolUnsupportedStreamError(apiError *types.NewAPIError) {
-	if apiError != nil && types.IsProtocolUnsupportedMessage(apiError.Error()) {
+func MarkProtocolUnsupportedStreamError(apiError *hosttypes.NewAPIError) {
+	if apiError != nil && hosttypes.IsProtocolUnsupportedMessage(apiError.Error()) {
 		apiError.MarkProtocolUnsupported()
 	}
 }
@@ -239,8 +239,6 @@ func IOCopyBytesGracefully(c *gin.Context, src *http.Response, data []byte) erro
 		return fmt.Errorf("response writer is unavailable")
 	}
 
-	body := io.NopCloser(bytes.NewBuffer(data))
-
 	// We shouldn't set the header before we parse the response body, because the parse part may fail.
 	// And then we will have to send an error response, but in this case, the header has already been set.
 	// So the httpClient will be confused by the response.
@@ -257,14 +255,15 @@ func IOCopyBytesGracefully(c *gin.Context, src *http.Response, data []byte) erro
 	// set Content-Length header manually BEFORE calling WriteHeader
 	c.Writer.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
 
-	// Write header with status code (this sends the headers)
+	status := http.StatusOK
 	if src != nil {
-		c.Writer.WriteHeader(src.StatusCode)
-	} else {
-		c.Writer.WriteHeader(http.StatusOK)
+		status = src.StatusCode
 	}
-
-	_, err := io.Copy(c.Writer, body)
+	var sink output.Sink = output.JSON{Writer: c.Writer}
+	if target, ok := c.Writer.(output.Sink); ok {
+		sink = target
+	}
+	err := sink.WriteMessage(output.Message{Data: data, Status: status})
 	if err != nil {
 		logger.LogError(c, fmt.Sprintf("failed to copy response body: %s", err.Error()))
 		return err

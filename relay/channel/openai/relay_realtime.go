@@ -2,6 +2,7 @@ package openai
 
 import (
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"strings"
 	"sync"
 	"time"
@@ -11,7 +12,6 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 
 	"github.com/bytedance/gopkg/util/gopool"
@@ -73,9 +73,9 @@ func applyRealtimeSessionPrompt(message []byte, info *relaycommon.RelayInfo, pro
 	return updated, nil
 }
 
-func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.NewAPIError, *dto.RealtimeUsage) {
+func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*hosttypes.NewAPIError, *dto.RealtimeUsage) {
 	if info == nil || info.ClientWs == nil || info.TargetWs == nil {
-		return types.NewError(fmt.Errorf("invalid websocket connection"), types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry()), nil
+		return hosttypes.NewError(fmt.Errorf("invalid websocket connection"), hosttypes.ErrorCodeBadResponse, hosttypes.ErrOptionWithSkipRetry()), nil
 	}
 
 	info.IsStream = true
@@ -225,7 +225,7 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 							usage.OutputTokenDetails.AudioTokens += realtimeUsage.OutputTokenDetails.AudioTokens
 							usage.OutputTokenDetails.TextTokens += realtimeUsage.OutputTokenDetails.TextTokens
 							if consumeErr := preConsumeUsage(c, info, usage, sumUsage); consumeErr != nil {
-								return types.NewError(fmt.Errorf("error consume usage: %w", consumeErr), types.ErrorCodePreConsumeTokenQuotaFailed, types.ErrOptionWithSkipRetry())
+								return hosttypes.NewError(fmt.Errorf("error consume usage: %w", consumeErr), hosttypes.ErrorCodePreConsumeTokenQuotaFailed, hosttypes.ErrOptionWithSkipRetry())
 							}
 							usage = &dto.RealtimeUsage{}
 							localUsage = &dto.RealtimeUsage{}
@@ -241,7 +241,7 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 							localUsage.InputTokenDetails.TextTokens += textToken
 							localUsage.InputTokenDetails.AudioTokens += audioToken
 							if consumeErr := preConsumeUsage(c, info, localUsage, sumUsage); consumeErr != nil {
-								return types.NewError(fmt.Errorf("error consume usage: %w", consumeErr), types.ErrorCodePreConsumeTokenQuotaFailed, types.ErrOptionWithSkipRetry())
+								return hosttypes.NewError(fmt.Errorf("error consume usage: %w", consumeErr), hosttypes.ErrorCodePreConsumeTokenQuotaFailed, hosttypes.ErrOptionWithSkipRetry())
 							}
 							localUsage = &dto.RealtimeUsage{}
 						}
@@ -307,18 +307,18 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 	readers.Wait()
 
 	if handlerErr != nil {
-		return types.NewError(handlerErr, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry()), nil
+		return hosttypes.NewError(handlerErr, hosttypes.ErrorCodeBadResponse, hosttypes.ErrOptionWithSkipRetry()), nil
 	}
 
 	if usage.TotalTokens != 0 {
 		if err := preConsumeUsage(c, info, usage, sumUsage); err != nil {
-			return types.NewError(fmt.Errorf("error consume final upstream usage: %w", err), types.ErrorCodePreConsumeTokenQuotaFailed, types.ErrOptionWithSkipRetry()), nil
+			return hosttypes.NewError(fmt.Errorf("error consume final upstream usage: %w", err), hosttypes.ErrorCodePreConsumeTokenQuotaFailed, hosttypes.ErrOptionWithSkipRetry()), nil
 		}
 	}
 
 	if localUsage.TotalTokens != 0 {
 		if err := preConsumeUsage(c, info, localUsage, sumUsage); err != nil {
-			return types.NewError(fmt.Errorf("error consume final local usage: %w", err), types.ErrorCodePreConsumeTokenQuotaFailed, types.ErrOptionWithSkipRetry()), nil
+			return hosttypes.NewError(fmt.Errorf("error consume final local usage: %w", err), hosttypes.ErrorCodePreConsumeTokenQuotaFailed, hosttypes.ErrOptionWithSkipRetry()), nil
 		}
 	}
 	finalUsage := *sumUsage

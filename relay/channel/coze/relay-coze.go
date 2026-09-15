@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 	"strings"
@@ -13,7 +14,6 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/samber/lo"
 
@@ -46,10 +46,10 @@ func convertCozeChatRequest(c *gin.Context, request dto.GeneralOpenAIRequest) *C
 	return cozeRequest
 }
 
-func cozeChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+func cozeChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *hosttypes.NewAPIError) {
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+		return nil, hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody)
 	}
 	service.CloseResponseBodyGracefully(resp)
 	// convert coze response to openai response
@@ -58,10 +58,10 @@ func cozeChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Res
 	response.Model = info.PublicResponseModelName()
 	err = json.Unmarshal(responseBody, &cozeResponse)
 	if err != nil {
-		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+		return nil, hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody)
 	}
 	if cozeResponse.Code != 0 {
-		return nil, types.NewError(errors.New(cozeResponse.Msg), types.ErrorCodeBadResponseBody)
+		return nil, hosttypes.NewError(errors.New(cozeResponse.Msg), hosttypes.ErrorCodeBadResponseBody)
 	}
 	// 从上下文获取 usage
 	var usage dto.Usage
@@ -88,7 +88,7 @@ func cozeChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Res
 	}
 	jsonResponse, err := json.Marshal(response)
 	if err != nil {
-		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+		return nil, hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody)
 	}
 	c.Writer.Header().Set("Content-Type", "application/json")
 	c.Writer.WriteHeader(resp.StatusCode)
@@ -97,7 +97,7 @@ func cozeChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Res
 	return &usage, nil
 }
 
-func cozeChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+func cozeChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *hosttypes.NewAPIError) {
 	scanner := helper.NewStreamScanner(resp.Body)
 	scanner.Split(bufio.ScanLines)
 	helper.SetEventStreamHeaders(c)
@@ -138,7 +138,7 @@ func cozeChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *ht
 	}
 
 	if err := scanner.Err(); err != nil {
-		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+		return nil, hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody)
 	}
 	helper.Done(c)
 

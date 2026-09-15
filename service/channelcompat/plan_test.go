@@ -1,12 +1,12 @@
 package channelcompat
 
 import (
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -191,9 +191,7 @@ func TestExtractRequestFeatureSetDetectsMessagesServerTools(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.True(t, features.HasToolSearch)
-	// Typed Messages tool declarations are dropped or lowered by the request
-	// converters, so they no longer register as hosted-tool features.
-	assert.Empty(t, features.DeclaredHostedTools)
+	assert.Equal(t, []string{"web_search_20250305", "tool_search_tool_regex_20251119"}, features.DeclaredHostedTools)
 	assert.Empty(t, features.HistoricalHostedTools)
 }
 
@@ -251,18 +249,18 @@ func TestPlanForRequestHonorsBridgePolicyCapabilitiesAndMappedModelOverrides(t *
 	disallow := false
 	mapping := `{"public-model":"provider-chat-model"}`
 	channel := &model.Channel{Type: constant.ChannelTypeOpenAI, ModelMapping: &mapping}
-	channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
-		UpstreamProtocols: []string{dto.ProtocolCapabilityResponses},
+	channel.SetOtherSettings(hostdto.ChannelOtherSettings{ProtocolCapabilities: &hostdto.ProtocolCapabilities{
+		UpstreamProtocols: []string{hostdto.ProtocolCapabilityResponses},
 		AllowConversion:   &disallow,
-		ModelOverrides: []dto.ProtocolCapabilityModelOverride{
+		ModelOverrides: []hostdto.ProtocolCapabilityModelOverride{
 			{
 				ModelPattern:      `^provider-chat-model$`,
-				UpstreamProtocols: []string{dto.ProtocolCapabilityChat},
+				UpstreamProtocols: []string{hostdto.ProtocolCapabilityChat},
 				AllowConversion:   &allow,
 			},
 			{
 				ModelPattern:      `provider-.*`,
-				UpstreamProtocols: []string{dto.ProtocolCapabilityMessages},
+				UpstreamProtocols: []string{hostdto.ProtocolCapabilityMessages},
 			},
 		},
 	}})
@@ -283,12 +281,12 @@ func TestPlanForCompactUsesActualMappedUpstreamModelForOverrides(t *testing.T) {
 	disallow := false
 	mapping := `{"public-model":"provider-chat-model"}`
 	channel := &model.Channel{Type: constant.ChannelTypeOpenAI, ModelMapping: &mapping}
-	channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
-		UpstreamProtocols: []string{dto.ProtocolCapabilityResponses},
+	channel.SetOtherSettings(hostdto.ChannelOtherSettings{ProtocolCapabilities: &hostdto.ProtocolCapabilities{
+		UpstreamProtocols: []string{hostdto.ProtocolCapabilityResponses},
 		AllowConversion:   &disallow,
-		ModelOverrides: []dto.ProtocolCapabilityModelOverride{{
+		ModelOverrides: []hostdto.ProtocolCapabilityModelOverride{{
 			ModelPattern:      `^provider-chat-model$`,
-			UpstreamProtocols: []string{dto.ProtocolCapabilityChat},
+			UpstreamProtocols: []string{hostdto.ProtocolCapabilityChat},
 			AllowConversion:   &allow,
 		}},
 	}})
@@ -301,10 +299,9 @@ func TestPlanForCompactUsesActualMappedUpstreamModelForOverrides(t *testing.T) {
 		RequestFeatureSet{},
 	)
 
-	assert.Equal(t, StatusConvertible, plan.Status)
-	assert.Equal(t, ProtocolChat, plan.UpstreamProtocol)
+	assert.Equal(t, StatusIncompatible, plan.Status)
 	assert.Equal(t, "provider-chat-model", plan.EffectiveUpstreamModel)
-	assert.Equal(t, relayconvert.ConverterOpenAIResponsesToOpenAIChat, plan.RequestConverter)
+	assert.Contains(t, plan.Reason, "compact requires its native protocol")
 }
 
 func TestPlanForRequestAdvancedCustomRouteOverridesDeclaredProtocols(t *testing.T) {
@@ -312,8 +309,8 @@ func TestPlanForRequestAdvancedCustomRouteOverridesDeclaredProtocols(t *testing.
 	allow := true
 	mapping := `{"public-model":"provider-chat-model"}`
 	channel := &model.Channel{Type: constant.ChannelTypeAdvancedCustom, ModelMapping: &mapping}
-	channel.SetOtherSettings(dto.ChannelOtherSettings{
-		AdvancedCustom: &dto.AdvancedCustomConfig{Routes: []dto.AdvancedCustomRoute{
+	channel.SetOtherSettings(hostdto.ChannelOtherSettings{
+		AdvancedCustom: &hostdto.AdvancedCustomConfig{Routes: []hostdto.AdvancedCustomRoute{
 			{
 				IncomingPath: "/v1/responses",
 				UpstreamPath: "/v1/chat/completions",
@@ -321,8 +318,8 @@ func TestPlanForRequestAdvancedCustomRouteOverridesDeclaredProtocols(t *testing.
 				Models:       []string{"provider-chat-model"},
 			},
 		}},
-		ProtocolCapabilities: &dto.ProtocolCapabilities{
-			UpstreamProtocols: []string{dto.ProtocolCapabilityResponses},
+		ProtocolCapabilities: &hostdto.ProtocolCapabilities{
+			UpstreamProtocols: []string{hostdto.ProtocolCapabilityResponses},
 			AllowConversion:   &allow,
 		},
 	})
@@ -339,8 +336,8 @@ func TestPlanForRequestAdvancedCustomRouteOverridesDeclaredProtocols(t *testing.
 func TestPlanForRequestAdvancedCustomNativeRouteDoesNotEnableBridgeState(t *testing.T) {
 	withProtocolBridgePolicy(t, true, false)
 	channel := &model.Channel{Type: constant.ChannelTypeAdvancedCustom}
-	channel.SetOtherSettings(dto.ChannelOtherSettings{
-		AdvancedCustom: &dto.AdvancedCustomConfig{Routes: []dto.AdvancedCustomRoute{{
+	channel.SetOtherSettings(hostdto.ChannelOtherSettings{
+		AdvancedCustom: &hostdto.AdvancedCustomConfig{Routes: []hostdto.AdvancedCustomRoute{{
 			IncomingPath: "/v1/messages",
 			UpstreamPath: "/v1/messages",
 			Converter:    relayconvert.ConverterNone,
@@ -358,16 +355,16 @@ func TestPlanForRequestAdvancedCustomConversionUsesCapabilitySwitch(t *testing.T
 	withProtocolBridgePolicy(t, true, true)
 	disallow := false
 	channel := &model.Channel{Type: constant.ChannelTypeAdvancedCustom}
-	channel.SetOtherSettings(dto.ChannelOtherSettings{
-		AdvancedCustom: &dto.AdvancedCustomConfig{Routes: []dto.AdvancedCustomRoute{
+	channel.SetOtherSettings(hostdto.ChannelOtherSettings{
+		AdvancedCustom: &hostdto.AdvancedCustomConfig{Routes: []hostdto.AdvancedCustomRoute{
 			{
 				IncomingPath: "/v1/messages",
 				UpstreamPath: "/v1/chat/completions",
 				Converter:    relayconvert.ConverterClaudeMessagesToOpenAIChat,
 			},
 		}},
-		ProtocolCapabilities: &dto.ProtocolCapabilities{
-			UpstreamProtocols: []string{dto.ProtocolCapabilityMessages},
+		ProtocolCapabilities: &hostdto.ProtocolCapabilities{
+			UpstreamProtocols: []string{hostdto.ProtocolCapabilityMessages},
 			AllowConversion:   &disallow,
 		},
 	})
@@ -403,8 +400,8 @@ func TestPlanForRequestAdvancedCustomCountTokensUsesMessagesRouteWhenAuxiliaryRo
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			channel := &model.Channel{Type: constant.ChannelTypeAdvancedCustom}
-			channel.SetOtherSettings(dto.ChannelOtherSettings{
-				AdvancedCustom: &dto.AdvancedCustomConfig{Routes: []dto.AdvancedCustomRoute{
+			channel.SetOtherSettings(hostdto.ChannelOtherSettings{
+				AdvancedCustom: &hostdto.AdvancedCustomConfig{Routes: []hostdto.AdvancedCustomRoute{
 					{
 						IncomingPath: "/v1/messages",
 						UpstreamPath: "/provider/text",
@@ -425,8 +422,8 @@ func TestPlanForRequestAdvancedCustomCountTokensUsesMessagesRouteWhenAuxiliaryRo
 func TestPlanForRequestAdvancedCustomCountTokensPrefersExplicitAuxiliaryRoute(t *testing.T) {
 	withProtocolBridgePolicy(t, true, true)
 	channel := &model.Channel{Type: constant.ChannelTypeAdvancedCustom}
-	channel.SetOtherSettings(dto.ChannelOtherSettings{
-		AdvancedCustom: &dto.AdvancedCustomConfig{Routes: []dto.AdvancedCustomRoute{
+	channel.SetOtherSettings(hostdto.ChannelOtherSettings{
+		AdvancedCustom: &hostdto.AdvancedCustomConfig{Routes: []hostdto.AdvancedCustomRoute{
 			{
 				IncomingPath: "/v1/messages/count_tokens",
 				UpstreamPath: "/provider/messages/count_tokens",
@@ -450,8 +447,8 @@ func TestPlanForRequestAdvancedCustomCountTokensPrefersExplicitAuxiliaryRoute(t 
 func TestPlanForRequestGlobalDisableHardGatesExplicitCapabilities(t *testing.T) {
 	withProtocolBridgePolicy(t, false, false)
 	channel := &model.Channel{Type: constant.ChannelTypeOpenAI}
-	channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
-		UpstreamProtocols: []string{dto.ProtocolCapabilityChat},
+	channel.SetOtherSettings(hostdto.ChannelOtherSettings{ProtocolCapabilities: &hostdto.ProtocolCapabilities{
+		UpstreamProtocols: []string{hostdto.ProtocolCapabilityChat},
 	}})
 
 	// With the global bridge switch off, configured capabilities are ignored:
@@ -472,8 +469,8 @@ func TestPlanForRequestExplicitConversionDisableStillWins(t *testing.T) {
 	withProtocolBridgePolicy(t, true, true)
 	disallow := false
 	channel := &model.Channel{Type: constant.ChannelTypeOpenAI}
-	channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
-		UpstreamProtocols: []string{dto.ProtocolCapabilityChat},
+	channel.SetOtherSettings(hostdto.ChannelOtherSettings{ProtocolCapabilities: &hostdto.ProtocolCapabilities{
+		UpstreamProtocols: []string{hostdto.ProtocolCapabilityChat},
 		AllowConversion:   &disallow,
 	}})
 
@@ -483,17 +480,16 @@ func TestPlanForRequestExplicitConversionDisableStillWins(t *testing.T) {
 	assert.Contains(t, plan.Reason, "disabled")
 }
 
-func TestPlanForRequestCompactCanUseChatBridge(t *testing.T) {
+func TestPlanForRequestCompactRequiresNativeOperation(t *testing.T) {
 	withProtocolBridgePolicy(t, true, false)
 	chatChannel := &model.Channel{Type: constant.ChannelTypeOpenAI}
-	chatChannel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
-		UpstreamProtocols: []string{dto.ProtocolCapabilityChat},
+	chatChannel.SetOtherSettings(hostdto.ChannelOtherSettings{ProtocolCapabilities: &hostdto.ProtocolCapabilities{
+		UpstreamProtocols: []string{hostdto.ProtocolCapabilityChat},
 	}})
 
 	converted := PlanForRequest(chatChannel, ProtocolResponses, "gpt-test", "/v1/responses/compact", RequestFeatureSet{})
-	assert.Equal(t, StatusConvertible, converted.Status)
-	assert.Equal(t, ProtocolChat, converted.UpstreamProtocol)
-	assert.Equal(t, relayconvert.ConverterOpenAIResponsesToOpenAIChat, converted.RequestConverter)
+	assert.Equal(t, StatusIncompatible, converted.Status)
+	assert.Contains(t, converted.Reason, "compact requires its native protocol")
 
 	responsesChannel := &model.Channel{Type: constant.ChannelTypeCodex}
 	native := PlanForRequest(responsesChannel, ProtocolResponses, "gpt-test", "/v1/responses/compact", RequestFeatureSet{})
@@ -504,8 +500,8 @@ func TestPlanForRequestCompactCanUseChatBridge(t *testing.T) {
 func TestPlanForRequestRejectsStatefulFieldsAndHostedToolHistory(t *testing.T) {
 	withProtocolBridgePolicy(t, true, true)
 	channel := &model.Channel{Type: constant.ChannelTypeOpenAI}
-	channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
-		UpstreamProtocols: []string{dto.ProtocolCapabilityChat},
+	channel.SetOtherSettings(hostdto.ChannelOtherSettings{ProtocolCapabilities: &hostdto.ProtocolCapabilities{
+		UpstreamProtocols: []string{hostdto.ProtocolCapabilityChat},
 	}})
 
 	tests := []struct {
@@ -525,12 +521,12 @@ func TestPlanForRequestRejectsStatefulFieldsAndHostedToolHistory(t *testing.T) {
 		})
 	}
 
-	// Declared hosted tools no longer block selection: the request converters
-	// drop them (CC Switch semantics), so the plan stays convertible.
+	// Required hosted execution must be preserved before upstream dispatch.
 	declaredHostedPlan := PlanForRequest(channel, ProtocolResponses, "gpt-test", "/v1/responses", RequestFeatureSet{
 		DeclaredHostedTools: []string{"web_search_preview", "file_search"},
 	})
-	assert.Equal(t, StatusConvertible, declaredHostedPlan.Status)
+	assert.Equal(t, StatusIncompatible, declaredHostedPlan.Status)
+	assert.Contains(t, declaredHostedPlan.Reason, "file_search")
 
 	historicalHostedPlan := PlanForRequest(channel, ProtocolResponses, "gpt-test", "/v1/responses", RequestFeatureSet{
 		HistoricalHostedTools: []string{"web_search_call", "file_search_call"},
@@ -548,8 +544,8 @@ func TestPlanForRequestRejectsStatefulFieldsAndHostedToolHistory(t *testing.T) {
 func TestPlanForRequestRejectsMessagesServerToolsBeforeConversion(t *testing.T) {
 	withProtocolBridgePolicy(t, true, true)
 	channel := &model.Channel{Type: constant.ChannelTypeOpenAI}
-	channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
-		UpstreamProtocols: []string{dto.ProtocolCapabilityChat},
+	channel.SetOtherSettings(hostdto.ChannelOtherSettings{ProtocolCapabilities: &hostdto.ProtocolCapabilities{
+		UpstreamProtocols: []string{hostdto.ProtocolCapabilityChat},
 	}})
 
 	// Declared server tools are dropped by the converter, so selection stays
@@ -569,16 +565,16 @@ func TestPlanForRequestRejectsMessagesServerToolsBeforeConversion(t *testing.T) 
 func TestPlanForRequestRejectsMessagesFieldsOnlyOnLossyRoutes(t *testing.T) {
 	withProtocolBridgePolicy(t, true, true)
 	responsesChannel := &model.Channel{Type: constant.ChannelTypeCodex}
-	responsesChannel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
-		UpstreamProtocols: []string{dto.ProtocolCapabilityResponses},
+	responsesChannel.SetOtherSettings(hostdto.ChannelOtherSettings{ProtocolCapabilities: &hostdto.ProtocolCapabilities{
+		UpstreamProtocols: []string{hostdto.ProtocolCapabilityResponses},
 	}})
 	chatChannel := &model.Channel{Type: constant.ChannelTypeOpenAI}
-	chatChannel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
-		UpstreamProtocols: []string{dto.ProtocolCapabilityChat},
+	chatChannel.SetOtherSettings(hostdto.ChannelOtherSettings{ProtocolCapabilities: &hostdto.ProtocolCapabilities{
+		UpstreamProtocols: []string{hostdto.ProtocolCapabilityChat},
 	}})
 	messagesChannel := &model.Channel{Type: constant.ChannelTypeAnthropic}
-	messagesChannel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
-		UpstreamProtocols: []string{dto.ProtocolCapabilityMessages},
+	messagesChannel.SetOtherSettings(hostdto.ChannelOtherSettings{ProtocolCapabilities: &hostdto.ProtocolCapabilities{
+		UpstreamProtocols: []string{hostdto.ProtocolCapabilityMessages},
 	}})
 
 	stopPlan := PlanForRequest(responsesChannel, ProtocolMessages, "claude-public", "/v1/messages", RequestFeatureSet{HasStopSequences: true})
@@ -593,8 +589,11 @@ func TestPlanForRequestRejectsMessagesFieldsOnlyOnLossyRoutes(t *testing.T) {
 		HasStopSequences: true,
 		HasTopK:          true,
 	})
-	assert.Equal(t, StatusConvertible, chatPlan.Status)
-	assert.Equal(t, ProtocolChat, chatPlan.UpstreamProtocol)
+	assert.Equal(t, StatusIncompatible, chatPlan.Status)
+	assert.Contains(t, chatPlan.Reason, "top_k")
+	stopOnlyPlan := PlanForRequest(chatChannel, ProtocolMessages, "claude-public", "/v1/messages", RequestFeatureSet{HasStopSequences: true})
+	assert.Equal(t, StatusConvertible, stopOnlyPlan.Status)
+	assert.Equal(t, ProtocolChat, stopOnlyPlan.UpstreamProtocol)
 
 	nativeOnlyPlan := PlanForRequest(chatChannel, ProtocolMessages, "claude-public", "/v1/messages", RequestFeatureSet{
 		MessagesNativeFields: []string{"output_format", "container"},
@@ -613,8 +612,8 @@ func TestPlanForRequestRejectsMessagesFieldsOnlyOnLossyRoutes(t *testing.T) {
 func TestPlanForRequestRejectsLossyContentTypesOnlyForConversion(t *testing.T) {
 	withProtocolBridgePolicy(t, true, true)
 	chatChannel := &model.Channel{Type: constant.ChannelTypeOpenAI}
-	chatChannel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
-		UpstreamProtocols: []string{dto.ProtocolCapabilityChat},
+	chatChannel.SetOtherSettings(hostdto.ChannelOtherSettings{ProtocolCapabilities: &hostdto.ProtocolCapabilities{
+		UpstreamProtocols: []string{hostdto.ProtocolCapabilityChat},
 	}})
 
 	messagesPlan := PlanForRequest(chatChannel, ProtocolMessages, "claude-public", "/v1/messages", RequestFeatureSet{
@@ -625,8 +624,8 @@ func TestPlanForRequestRejectsLossyContentTypesOnlyForConversion(t *testing.T) {
 	assert.NotContains(t, messagesPlan.Reason, "document")
 
 	messagesChannel := &model.Channel{Type: constant.ChannelTypeAnthropic}
-	messagesChannel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
-		UpstreamProtocols: []string{dto.ProtocolCapabilityMessages},
+	messagesChannel.SetOtherSettings(hostdto.ChannelOtherSettings{ProtocolCapabilities: &hostdto.ProtocolCapabilities{
+		UpstreamProtocols: []string{hostdto.ProtocolCapabilityMessages},
 	}})
 	responsesPlan := PlanForRequest(messagesChannel, ProtocolResponses, "gpt-public", "/v1/responses", RequestFeatureSet{
 		ContentTypes: []string{"input_text", "input_audio"},
@@ -643,8 +642,8 @@ func TestPlanForRequestRejectsLossyContentTypesOnlyForConversion(t *testing.T) {
 func TestPlanForRequestTriesNextProtocolWhenContentIsLossyForFirst(t *testing.T) {
 	withProtocolBridgePolicy(t, true, true)
 	channel := &model.Channel{Type: constant.ChannelTypeOpenAI}
-	channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
-		UpstreamProtocols: []string{dto.ProtocolCapabilityMessages, dto.ProtocolCapabilityChat},
+	channel.SetOtherSettings(hostdto.ChannelOtherSettings{ProtocolCapabilities: &hostdto.ProtocolCapabilities{
+		UpstreamProtocols: []string{hostdto.ProtocolCapabilityMessages, hostdto.ProtocolCapabilityChat},
 	}})
 
 	plan := PlanForRequest(channel, ProtocolResponses, "gpt-public", "/v1/responses", RequestFeatureSet{
@@ -718,8 +717,8 @@ func TestPlanForRequestExplicitMessagesOverridesProviderHeuristics(t *testing.T)
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			test.channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
-				UpstreamProtocols: []string{dto.ProtocolCapabilityMessages},
+			test.channel.SetOtherSettings(hostdto.ChannelOtherSettings{ProtocolCapabilities: &hostdto.ProtocolCapabilities{
+				UpstreamProtocols: []string{hostdto.ProtocolCapabilityMessages},
 			}})
 
 			plan := PlanForRequest(test.channel, ProtocolMessages, test.model, "/v1/messages", RequestFeatureSet{})
@@ -795,12 +794,13 @@ func TestPlanForRequestPreservesLegacyCapabilitiesWhenConversionRequiresExplicit
 			wantUpstream: ProtocolGemini,
 		},
 		{
-			name:          "Gemini Responses keeps existing converter",
-			channel:       &model.Channel{Type: constant.ChannelTypeGemini},
-			protocol:      ProtocolResponses,
-			wantStatus:    StatusConvertible,
-			wantUpstream:  ProtocolGemini,
-			wantConverter: relayconvert.ConverterOpenAIResponsesToGemini,
+			name:             "Gemini Responses keeps existing converter",
+			channel:          &model.Channel{Type: constant.ChannelTypeGemini},
+			protocol:         ProtocolResponses,
+			wantStatus:       StatusConvertible,
+			wantUpstream:     ProtocolGemini,
+			wantConverter:    relayconvert.ConverterOpenAIResponsesToGemini,
+			wantStateEnabled: true,
 		},
 		{
 			name:         "Ali Responses remains native",
@@ -855,8 +855,8 @@ func TestPlansForRequestAutomaticOrderFollowsEntryProtocol(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			channel := &model.Channel{Id: 901, Type: constant.ChannelTypeOpenAI}
-			channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
-				SelectionMode: dto.ProtocolSelectionModeAuto,
+			channel.SetOtherSettings(hostdto.ChannelOtherSettings{ProtocolCapabilities: &hostdto.ProtocolCapabilities{
+				SelectionMode: hostdto.ProtocolSelectionModeAuto,
 			}})
 
 			plans := PlansForRequest(channel, test.protocol, "public-model", test.requestPath, RequestFeatureSet{})
@@ -865,7 +865,7 @@ func TestPlansForRequestAutomaticOrderFollowsEntryProtocol(t *testing.T) {
 			actual := make([]Protocol, 0, len(plans))
 			for _, plan := range plans {
 				actual = append(actual, plan.UpstreamProtocol)
-				assert.Equal(t, dto.ProtocolSelectionModeAuto, plan.SelectionMode)
+				assert.Equal(t, hostdto.ProtocolSelectionModeAuto, plan.SelectionMode)
 				assert.Equal(t, plan.UpstreamProtocol != test.protocol, plan.StateEnabled)
 			}
 			assert.Equal(t, test.want, actual)
@@ -898,8 +898,8 @@ func TestPlansForRequestAutomaticModeOnlyProbesExecutableProviderProtocols(t *te
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			test.channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
-				SelectionMode: dto.ProtocolSelectionModeAuto,
+			test.channel.SetOtherSettings(hostdto.ChannelOtherSettings{ProtocolCapabilities: &hostdto.ProtocolCapabilities{
+				SelectionMode: hostdto.ProtocolSelectionModeAuto,
 			}})
 
 			plans := PlansForRequest(test.channel, ProtocolResponses, test.model, "/v1/responses", RequestFeatureSet{})
@@ -929,8 +929,8 @@ func TestPlansForRequestAutomaticModeUsesCCSwitchFullEndpointSignal(t *testing.T
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			channel := &model.Channel{Id: 904, Type: constant.ChannelTypeOpenAI, BaseURL: &test.baseURL}
-			channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
-				SelectionMode: dto.ProtocolSelectionModeAuto,
+			channel.SetOtherSettings(hostdto.ChannelOtherSettings{ProtocolCapabilities: &hostdto.ProtocolCapabilities{
+				SelectionMode: hostdto.ProtocolSelectionModeAuto,
 			}})
 
 			plans := PlansForRequest(channel, ProtocolResponses, "public-model", "/v1/responses", RequestFeatureSet{})
@@ -950,9 +950,9 @@ func TestPlansForRequestAutomaticModeRespectsAllowedProtocolsAndConversionSwitch
 	withProtocolBridgePolicy(t, true, true)
 	disallow := false
 	channel := &model.Channel{Id: 902, Type: constant.ChannelTypeOpenAI}
-	channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
-		SelectionMode:     dto.ProtocolSelectionModeAuto,
-		UpstreamProtocols: []string{dto.ProtocolCapabilityResponses, dto.ProtocolCapabilityChat},
+	channel.SetOtherSettings(hostdto.ChannelOtherSettings{ProtocolCapabilities: &hostdto.ProtocolCapabilities{
+		SelectionMode:     hostdto.ProtocolSelectionModeAuto,
+		UpstreamProtocols: []string{hostdto.ProtocolCapabilityResponses, hostdto.ProtocolCapabilityChat},
 		AllowConversion:   &disallow,
 	}})
 
@@ -1001,7 +1001,7 @@ func TestConversionFeatureGateDropsDeclaredHostedToolsButKeepsHistoryGuard(t *te
 	assert.Empty(t, reason)
 }
 
-func TestPlanForRequestLossyConversionAdmitsEncryptedContent(t *testing.T) {
+func TestPlanForRequestSafeConversionRejectsUnboundEncryptedContent(t *testing.T) {
 	withProtocolBridgePolicy(t, true, false)
 	encryptedSeedBody := `{"model":"public-model","stream":true,"input":[{"type":"reasoning","id":"rs1","content":[{"type":"encrypted_content","data":"opaque"}]},{"role":"user","content":[{"type":"input_text","text":"hi"}]}]}`
 	features, err := ExtractRequestFeatureSet(ProtocolResponses, []byte(encryptedSeedBody))
@@ -1010,8 +1010,8 @@ func TestPlanForRequestLossyConversionAdmitsEncryptedContent(t *testing.T) {
 
 	strictChat := func(lossy bool) *model.Channel {
 		channel := &model.Channel{Type: constant.ChannelTypeOpenAI}
-		channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
-			UpstreamProtocols:    []string{dto.ProtocolCapabilityChat},
+		channel.SetOtherSettings(hostdto.ChannelOtherSettings{ProtocolCapabilities: &hostdto.ProtocolCapabilities{
+			UpstreamProtocols:    []string{hostdto.ProtocolCapabilityChat},
 			AllowLossyConversion: lossy,
 		}})
 		return channel
@@ -1022,9 +1022,9 @@ func TestPlanForRequestLossyConversionAdmitsEncryptedContent(t *testing.T) {
 	assert.Contains(t, plan.Reason, "encrypted_content")
 
 	plan = PlanForRequest(strictChat(true), ProtocolResponses, "public-model", "/v1/responses", features)
-	assert.Equal(t, StatusConvertible, plan.Status)
-	assert.Equal(t, ProtocolChat, plan.UpstreamProtocol)
-	assert.Equal(t, []string{"encrypted_content"}, plan.LossyContentTypes)
+	assert.Equal(t, StatusIncompatible, plan.Status)
+	assert.Contains(t, plan.Reason, "encrypted_content")
+	assert.Empty(t, plan.LossyContentTypes)
 
 	// Hosted tool history still gates even with lossy conversion enabled:
 	// dropping executed server tool context would corrupt the conversation.
@@ -1035,11 +1035,10 @@ func TestPlanForRequestLossyConversionAdmitsEncryptedContent(t *testing.T) {
 	assert.Equal(t, StatusIncompatible, plan.Status)
 	assert.Contains(t, plan.Reason, "server tool history cannot be replayed")
 
-	// Gemini upstream conversion errors on unknown content parts, so lossy
-	// drops stay limited to Chat and Messages upstreams.
+	// The same protection applies when selecting Gemini.
 	geminiChannel := &model.Channel{Type: constant.ChannelTypeOpenAI}
-	geminiChannel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
-		UpstreamProtocols:    []string{dto.ProtocolCapabilityGemini},
+	geminiChannel.SetOtherSettings(hostdto.ChannelOtherSettings{ProtocolCapabilities: &hostdto.ProtocolCapabilities{
+		UpstreamProtocols:    []string{hostdto.ProtocolCapabilityGemini},
 		AllowLossyConversion: true,
 	}})
 	plan = PlanForRequest(geminiChannel, ProtocolResponses, "public-model", "/v1/responses", features)
@@ -1047,7 +1046,7 @@ func TestPlanForRequestLossyConversionAdmitsEncryptedContent(t *testing.T) {
 	assert.Contains(t, plan.Reason, "encrypted_content")
 }
 
-func TestPlanForRequestLossyConversionAdmitsMessagesContextManagement(t *testing.T) {
+func TestPlanForRequestSafeConversionPreservesMessagesContextManagement(t *testing.T) {
 	withProtocolBridgePolicy(t, true, false)
 	body := `{"model":"claude-public","stream":true,"context_management":{"edits":[{"type":"clear_tool_uses_20250919"}]},"messages":[{"role":"user","content":"hi"}]}`
 	features, err := ExtractRequestFeatureSet(ProtocolMessages, []byte(body))
@@ -1056,8 +1055,8 @@ func TestPlanForRequestLossyConversionAdmitsMessagesContextManagement(t *testing
 
 	strictChat := func(lossy bool) *model.Channel {
 		channel := &model.Channel{Type: constant.ChannelTypeOpenAI}
-		channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
-			UpstreamProtocols:    []string{dto.ProtocolCapabilityChat},
+		channel.SetOtherSettings(hostdto.ChannelOtherSettings{ProtocolCapabilities: &hostdto.ProtocolCapabilities{
+			UpstreamProtocols:    []string{hostdto.ProtocolCapabilityChat},
 			AllowLossyConversion: lossy,
 		}})
 		return channel
@@ -1068,7 +1067,7 @@ func TestPlanForRequestLossyConversionAdmitsMessagesContextManagement(t *testing
 	assert.Contains(t, plan.Reason, "context_management")
 
 	plan = PlanForRequest(strictChat(true), ProtocolMessages, "claude-public", "/v1/messages", features)
-	assert.Equal(t, StatusConvertible, plan.Status)
-	assert.Equal(t, ProtocolChat, plan.UpstreamProtocol)
-	assert.Equal(t, []string{"context_management"}, plan.LossyContentTypes)
+	assert.Equal(t, StatusIncompatible, plan.Status)
+	assert.Contains(t, plan.Reason, "context_management")
+	assert.Empty(t, plan.LossyContentTypes)
 }

@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestConvertRequestDefaultPolicyAllowsGeminiCodeExecution(t *testing.T) {
+func TestConvertRequestDefaultPolicyPreservesRequiredHostedExecution(t *testing.T) {
 	t.Parallel()
 
 	tools, err := kitutil.Marshal([]map[string]any{{"codeExecution": map[string]any{}}})
@@ -24,9 +24,9 @@ func TestConvertRequestDefaultPolicyAllowsGeminiCodeExecution(t *testing.T) {
 	}
 
 	result, err := ConvertRequest(nil, nil, types.RelayFormatOpenAI, req)
-	require.NoError(t, err)
+	var loss *types.ConversionLossError
+	require.ErrorAs(t, err, &loss)
 	require.NotNil(t, result)
-	require.IsType(t, &dto.GeneralOpenAIRequest{}, result.Value)
 	assert.True(t, hasConversionDiagnosticCode(result.Diagnostics, "unsupported_hosted_tool"))
 }
 

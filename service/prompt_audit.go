@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net"
 	"net/http"
@@ -24,7 +25,6 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/prompt_audit_setting"
 
 	"github.com/bytedance/gopkg/util/gopool"
@@ -175,7 +175,7 @@ func PromptAuditCategories() []PromptAuditCategoryDefinition {
 	return result
 }
 
-func CheckPromptAudit(c *gin.Context, request PromptAuditRequest) (PromptAuditResult, *types.NewAPIError) {
+func CheckPromptAudit(c *gin.Context, request PromptAuditRequest) (PromptAuditResult, *hosttypes.NewAPIError) {
 	setting := prompt_audit_setting.GetSetting()
 	result := PromptAuditResult{Mode: setting.Mode, ConfigVersion: setting.ConfigVersion}
 	group := effectivePromptAuditGroup(c)
@@ -246,11 +246,11 @@ func CheckPromptAudit(c *gin.Context, request PromptAuditRequest) (PromptAuditRe
 		result.AuditID = persistPromptAuditDecision(c, request, setting, result, fullText, model.PromptAuditStatusFailed)
 		AttachPromptAuditResult(c, result)
 		logPromptAuditDecision(c, result)
-		return result, types.NewErrorWithStatusCode(
+		return result, hosttypes.NewErrorWithStatusCode(
 			errors.New("prompt audit service is unavailable"),
-			types.ErrorCodePromptAuditUnavailable,
+			hosttypes.ErrorCodePromptAuditUnavailable,
 			http.StatusServiceUnavailable,
-			types.ErrOptionWithSkipRetry(),
+			hosttypes.ErrOptionWithSkipRetry(),
 		)
 	}
 
@@ -272,11 +272,11 @@ func CheckPromptAudit(c *gin.Context, request PromptAuditRequest) (PromptAuditRe
 	if !result.Blocked {
 		return result, nil
 	}
-	return result, types.NewErrorWithStatusCode(
+	return result, hosttypes.NewErrorWithStatusCode(
 		errors.New("request blocked by prompt audit"),
-		types.ErrorCodePromptAuditBlocked,
+		hosttypes.ErrorCodePromptAuditBlocked,
 		http.StatusForbidden,
-		types.ErrOptionWithSkipRetry(),
+		hosttypes.ErrOptionWithSkipRetry(),
 	)
 }
 
@@ -1027,8 +1027,8 @@ func AppendPromptAuditAdminInfo(c *gin.Context, other *model.LogOther) {
 	other.SetAdmin("prompt_audit", result.auditMap())
 }
 
-func RecordPromptAuditError(c *gin.Context, result PromptAuditResult, apiErr *types.NewAPIError, modelName string, isStream bool) {
-	if c == nil || apiErr == nil || !constant.ErrorLogEnabled || !types.IsRecordErrorLog(apiErr) {
+func RecordPromptAuditError(c *gin.Context, result PromptAuditResult, apiErr *hosttypes.NewAPIError, modelName string, isStream bool) {
+	if c == nil || apiErr == nil || !constant.ErrorLogEnabled || !hosttypes.IsRecordErrorLog(apiErr) {
 		return
 	}
 	other := model.NewLogOther()

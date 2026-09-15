@@ -33,23 +33,29 @@ type ToolState struct {
 
 type contextKey struct{}
 
-type contextState struct {
+// State is owned by one ConversionSession. Contexts only carry a reference so
+// existing directional codecs can use the session without host dependencies.
+type State struct {
 	toolState           *ToolState
 	responseOutputState *ResponseOutputState
 }
 
 func WithContext(parent context.Context) context.Context {
+	return WithState(parent, &State{})
+}
+
+func WithState(parent context.Context, state *State) context.Context {
 	if parent == nil {
 		parent = context.Background()
 	}
-	return context.WithValue(parent, contextKey{}, &contextState{})
+	return context.WithValue(parent, contextKey{}, state)
 }
 
-func contextStateFrom(ctx context.Context) *contextState {
+func contextStateFrom(ctx context.Context) *State {
 	if ctx == nil {
 		return nil
 	}
-	state, _ := ctx.Value(contextKey{}).(*contextState)
+	state, _ := ctx.Value(contextKey{}).(*State)
 	return state
 }
 

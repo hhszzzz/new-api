@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"io"
 	"net/http"
 	"net/url"
@@ -22,7 +23,6 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/ollama"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 
@@ -239,7 +239,7 @@ func collectPendingUpstreamModelChangesFromModels(
 	return normalizeModelNames(pendingAdd), normalizeModelNames(pendingRemove)
 }
 
-func collectPendingUpstreamModelChanges(channel *model.Channel, settings dto.ChannelOtherSettings) (pendingAddModels []string, pendingRemoveModels []string, err error) {
+func collectPendingUpstreamModelChanges(channel *model.Channel, settings hostdto.ChannelOtherSettings) (pendingAddModels []string, pendingRemoveModels []string, err error) {
 	upstreamModels, err := fetchChannelUpstreamModelIDs(channel)
 	if err != nil {
 		return nil, nil, err
@@ -475,7 +475,7 @@ func fetchAdvancedCustomUpstreamModelIDs(channel *model.Channel, baseURL string)
 	info := &relaycommon.RelayInfo{
 		RelayFormat:    types.RelayFormatOpenAI,
 		RelayMode:      relayconstant.RelayModeUnknown,
-		RequestURLPath: dto.AdvancedCustomModelListPath,
+		RequestURLPath: hostdto.AdvancedCustomModelListPath,
 		ChannelMeta: &relaycommon.ChannelMeta{
 			ChannelType:          constant.ChannelTypeAdvancedCustom,
 			ChannelBaseUrl:       baseURL,
@@ -500,7 +500,7 @@ func fetchAdvancedCustomUpstreamModelIDs(channel *model.Channel, baseURL string)
 	return parseOpenAIModelIDs(body)
 }
 
-func updateChannelUpstreamModelSettings(channel *model.Channel, settings dto.ChannelOtherSettings, updateModels bool) error {
+func updateChannelUpstreamModelSettings(channel *model.Channel, settings hostdto.ChannelOtherSettings, updateModels bool) error {
 	channel.SetOtherSettings(settings)
 	updates := map[string]any{
 		"settings": channel.OtherSettings,
@@ -513,7 +513,7 @@ func updateChannelUpstreamModelSettings(channel *model.Channel, settings dto.Cha
 
 func checkAndPersistChannelUpstreamModelUpdates(
 	channel *model.Channel,
-	settings *dto.ChannelOtherSettings,
+	settings *hostdto.ChannelOtherSettings,
 	force bool,
 	allowAutoApply bool,
 ) (modelsChanged bool, autoAdded int, err error) {
@@ -1009,7 +1009,7 @@ func applyChannelUpstreamModelUpdates(
 	return addModels, removeModels, remainingModels, remainingRemoveModels, modelsChanged, nil
 }
 
-func collectPendingApplyUpstreamModelChanges(settings dto.ChannelOtherSettings) (pendingAddModels []string, pendingRemoveModels []string) {
+func collectPendingApplyUpstreamModelChanges(settings hostdto.ChannelOtherSettings) (pendingAddModels []string, pendingRemoveModels []string) {
 	return normalizeModelNames(settings.UpstreamModelUpdateLastDetectedModels), normalizeModelNames(settings.UpstreamModelUpdateLastRemovedModels)
 }
 

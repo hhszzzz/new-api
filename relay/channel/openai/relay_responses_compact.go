@@ -1,42 +1,42 @@
 package openai
 
 import (
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 
 	"github.com/QuantumNous/new-api/common"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-gonic/gin"
 )
 
-func OaiResponsesCompactionHandler(c *gin.Context, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+func OaiResponsesCompactionHandler(c *gin.Context, resp *http.Response) (*dto.Usage, *hosttypes.NewAPIError) {
 	return OaiResponsesCompactionHandlerWithInfo(c, resp, nil)
 }
 
-func OaiResponsesCompactionHandlerWithInfo(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*dto.Usage, *types.NewAPIError) {
+func OaiResponsesCompactionHandlerWithInfo(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*dto.Usage, *hosttypes.NewAPIError) {
 	defer service.CloseResponseBodyGracefully(resp)
 
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
 	}
 	if info != nil && info.HasModelRouting() {
 		responseBody, err = relaycommon.RedactUserModelRouteJSON(responseBody, info)
 		if err != nil {
-			return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+			return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 		}
 	}
 
 	var compactResp dto.OpenAIResponsesCompactionResponse
 	if err := common.Unmarshal(responseBody, &compactResp); err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	if oaiError := compactResp.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
-		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
+		return nil, hosttypes.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
 	service.IOCopyBytesGracefully(c, resp, responseBody)
 

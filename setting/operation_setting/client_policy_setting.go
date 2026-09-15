@@ -2,12 +2,12 @@ package operation_setting
 
 import (
 	"fmt"
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"sort"
 	"strings"
 	"sync/atomic"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/config"
 )
 
@@ -32,7 +32,7 @@ type ClientIdentificationRule struct {
 	Matches []ClientIdentificationMatch `json:"matches"`
 }
 
-type ClientAccessPolicy = dto.ClientAccessPolicy
+type ClientAccessPolicy = hostdto.ClientAccessPolicy
 
 type ClientPolicySetting struct {
 	Rules         []ClientIdentificationRule    `json:"rules"`

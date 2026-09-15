@@ -2,6 +2,7 @@ package openai
 
 import (
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 	"strings"
@@ -12,50 +13,49 @@ import (
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/protocolstate"
 
 	"github.com/gin-gonic/gin"
 )
 
-func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *hosttypes.NewAPIError) {
 	defer service.CloseResponseBodyGracefully(resp)
 
 	// read response body
 	var responsesResponse dto.OpenAIResponsesResponse
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
 	}
 	err = common.Unmarshal(responseBody, &responsesResponse)
 	if err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	if oaiError := responsesResponse.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
-		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
+		return nil, hosttypes.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
 	if err := protocolstate.ValidateResponsesContinuation(c, responsesResponse.PreviousResponseID); err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusBadGateway)
 	}
 	if protocolstate.PublicResponseID(c, "") != "" {
 		upstreamResponseID := responsesResponse.ID
 		responseBody, err = protocolstate.CaptureResponsesResponseData(c, upstreamResponseID, &responsesResponse, responseBody)
 		if err != nil {
-			return nil, types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
+			return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
 		}
 	}
 	if info.HasModelRouting() {
 		responsesResponse.Model = info.PublicResponseModelName()
 		responseBody, err = relaycommon.RedactUserModelRouteJSON(responseBody, info)
 		if err != nil {
-			return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+			return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 		}
 	}
 
 	// 写入新的 response body
 	if err := service.IOCopyBytesGracefully(c, resp, responseBody); err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
 
 	// compute usage
@@ -84,10 +84,10 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	return usage, nil
 }
 
-func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *hosttypes.NewAPIError) {
 	if resp == nil || resp.Body == nil {
 		logger.LogError(c, "invalid response or response body")
-		return nil, types.NewError(fmt.Errorf("invalid response"), types.ErrorCodeBadResponse)
+		return nil, hosttypes.NewError(fmt.Errorf("invalid response"), hosttypes.ErrorCodeBadResponse)
 	}
 
 	defer service.CloseResponseBodyGracefully(resp)
@@ -96,7 +96,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	var responseTextBuilder strings.Builder
 	imageCounter := &relaycommon.ImageGenerationCallCounter{}
 	imageCommitted := false
-	var streamErr *types.NewAPIError
+	var streamErr *hosttypes.NewAPIError
 	terminalSeen := false
 	terminalSucceeded := false
 	semanticOutputSeen := false
@@ -107,16 +107,16 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		var streamResponse dto.ResponsesStreamResponse
 		if err := common.UnmarshalJsonStr(data, &streamResponse); err != nil {
 			logger.LogError(c, "failed to unmarshal stream response: "+err.Error())
-			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
+			streamErr = hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusBadGateway)
 			info.StreamStatus.MarkTerminalFailure(streamErr)
 			sr.Stop(streamErr)
 			return
 		}
 		if streamResponse.Type == "error" || streamResponse.Type == "response.error" || streamResponse.Type == "response.failed" {
 			if openAIError := streamResponse.GetOpenAIError(); openAIError != nil {
-				streamErr = types.WithOpenAIError(*openAIError, http.StatusInternalServerError)
+				streamErr = hosttypes.WithOpenAIError(*openAIError, http.StatusInternalServerError)
 			} else {
-				streamErr = types.NewOpenAIError(fmt.Errorf("responses stream error: %s", streamResponse.Type), types.ErrorCodeBadResponse, http.StatusInternalServerError)
+				streamErr = hosttypes.NewOpenAIError(fmt.Errorf("responses stream error: %s", streamResponse.Type), hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 			}
 			info.StreamStatus.MarkTerminalFailure(streamErr)
 			service.MarkProtocolUnsupportedStreamError(streamErr)
@@ -128,9 +128,9 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			terminalSeen = true
 		case "response.incomplete", "response.cancelled", "response.canceled":
 			terminalSeen = true
-			streamErr = types.NewOpenAIError(
+			streamErr = hosttypes.NewOpenAIError(
 				fmt.Errorf("Responses stream ended with terminal event %s", streamResponse.Type),
-				types.ErrorCodeBadResponse,
+				hosttypes.ErrorCodeBadResponse,
 				http.StatusBadGateway,
 			)
 			info.StreamStatus.MarkTerminalFailure(streamErr)
@@ -151,9 +151,9 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			info.StreamStatus.MarkSemanticOutput()
 		}
 		if (streamResponse.Type == "response.completed" || streamResponse.Type == "response.done") && !usageComplete && !semanticOutputSeen {
-			streamErr = types.NewOpenAIError(
+			streamErr = hosttypes.NewOpenAIError(
 				fmt.Errorf("Responses stream completed without usage or semantic output"),
-				types.ErrorCodeEmptyResponse,
+				hosttypes.ErrorCodeEmptyResponse,
 				http.StatusBadGateway,
 			)
 			info.StreamStatus.MarkTerminalFailure(streamErr)
@@ -162,7 +162,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		}
 		if streamResponse.Response != nil {
 			if err := protocolstate.ValidateResponsesContinuation(c, streamResponse.Response.PreviousResponseID); err != nil {
-				streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
+				streamErr = hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusBadGateway)
 				info.StreamStatus.MarkTerminalFailure(streamErr)
 				sr.Stop(streamErr)
 				return
@@ -171,7 +171,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		if protocolstate.PublicResponseID(c, "") != "" {
 			encoded, encodeErr := protocolstate.ObserveResponsesStreamData(c, &streamResponse, []byte(data))
 			if encodeErr != nil {
-				streamErr = types.NewOpenAIError(encodeErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+				streamErr = hosttypes.NewOpenAIError(encodeErr, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 				info.StreamStatus.MarkTerminalFailure(streamErr)
 				sr.Stop(streamErr)
 				return
@@ -186,7 +186,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			}
 			redacted, redactErr := relaycommon.RedactUserModelRouteJSON([]byte(data), info)
 			if redactErr != nil {
-				streamErr = types.NewOpenAIError(redactErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+				streamErr = hosttypes.NewOpenAIError(redactErr, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 				info.StreamStatus.MarkTerminalFailure(streamErr)
 				sr.Stop(streamErr)
 				return
@@ -194,7 +194,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			data = string(redacted)
 		}
 		if err := sendResponsesStreamData(c, streamResponse, data); err != nil {
-			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+			streamErr = hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 			info.StreamStatus.MarkWriteError(err)
 			sr.Stop(streamErr)
 			return
@@ -261,14 +261,14 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		return nil, streamErr
 	}
 	if err := streamStatusError(info); err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusBadGateway)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusBadGateway)
 	}
 	if !terminalSeen || !terminalSucceeded {
 		terminalErr := fmt.Errorf("Responses stream ended without a terminal response event")
 		info.StreamStatus.MarkTerminalFailure(terminalErr)
-		return nil, types.NewOpenAIError(
+		return nil, hosttypes.NewOpenAIError(
 			terminalErr,
-			types.ErrorCodeBadResponse,
+			hosttypes.ErrorCodeBadResponse,
 			http.StatusBadGateway,
 		)
 	}

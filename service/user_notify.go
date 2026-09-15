@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"fmt"
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"net/http"
 	"net/url"
 	"strings"
@@ -47,10 +48,10 @@ func NotifyUpstreamModelUpdateWatchers(subject string, content string) {
 	common.SysLog(fmt.Sprintf("upstream model update notifications sent: %d", sentCount))
 }
 
-func NotifyUser(userId int, userEmail string, userSetting dto.UserSetting, data dto.Notify) error {
+func NotifyUser(userId int, userEmail string, userSetting hostdto.UserSetting, data dto.Notify) error {
 	notifyType := userSetting.NotifyType
 	if notifyType == "" {
-		notifyType = dto.NotifyTypeEmail
+		notifyType = hostdto.NotifyTypeEmail
 	}
 
 	// Check notification limit
@@ -64,7 +65,7 @@ func NotifyUser(userId int, userEmail string, userSetting dto.UserSetting, data 
 	}
 
 	switch notifyType {
-	case dto.NotifyTypeEmail:
+	case hostdto.NotifyTypeEmail:
 		// 优先使用设置中的通知邮箱，如果为空则使用用户的默认邮箱
 		emailToUse := userSetting.NotificationEmail
 		if emailToUse == "" {
@@ -75,7 +76,7 @@ func NotifyUser(userId int, userEmail string, userSetting dto.UserSetting, data 
 			return nil
 		}
 		return sendEmailNotify(emailToUse, data)
-	case dto.NotifyTypeWebhook:
+	case hostdto.NotifyTypeWebhook:
 		webhookURLStr := userSetting.WebhookUrl
 		if webhookURLStr == "" {
 			common.SysLog(fmt.Sprintf("user %d has no webhook url, skip sending webhook", userId))
@@ -85,14 +86,14 @@ func NotifyUser(userId int, userEmail string, userSetting dto.UserSetting, data 
 		// 获取 webhook secret
 		webhookSecret := userSetting.WebhookSecret
 		return SendWebhookNotify(webhookURLStr, webhookSecret, data)
-	case dto.NotifyTypeBark:
+	case hostdto.NotifyTypeBark:
 		barkURL := userSetting.BarkUrl
 		if barkURL == "" {
 			common.SysLog(fmt.Sprintf("user %d has no bark url, skip sending bark", userId))
 			return nil
 		}
 		return sendBarkNotify(barkURL, data)
-	case dto.NotifyTypeGotify:
+	case hostdto.NotifyTypeGotify:
 		gotifyUrl := userSetting.GotifyUrl
 		gotifyToken := userSetting.GotifyToken
 		if gotifyUrl == "" || gotifyToken == "" {

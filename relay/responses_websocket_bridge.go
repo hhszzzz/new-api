@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net"
 	"net/http"
@@ -16,8 +17,8 @@ import (
 	"github.com/QuantumNous/new-api/middleware"
 	appmodel "github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relay/output"
 	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/protocolstate"
 
@@ -28,8 +29,8 @@ import (
 // when no channel can carry a native Responses WebSocket. The full protocol
 // bridge (chat/messages/gemini upstreams) stays available because the call goes
 // through the same plan selection and converters as POST /v1/responses; the
-// resulting SSE events are forwarded to the client as WebSocket messages.
-func (s *responsesWSSession) startHTTPBridgeCall(create responsesWSCreateRequest, eventID string, commitRate middleware.ModelRequestRateLimitCommit) *types.NewAPIError {
+// protocol events are delivered directly to the WebSocket output sink.
+func (s *responsesWSSession) startHTTPBridgeCall(create responsesWSCreateRequest, eventID string, commitRate middleware.ModelRequestRateLimitCommit) *hosttypes.NewAPIError {
 	req := create.Request
 	req.Stream = common.GetPointer(true)
 	req.StreamOptions = nil
@@ -42,7 +43,7 @@ func (s *responsesWSSession) startHTTPBridgeCall(create responsesWSCreateRequest
 	storage, err := common.CreateBodyStorage(requestBody)
 	if err != nil {
 		commitRate(false)
-		return types.NewError(err, types.ErrorCodeReadRequestBodyFailed, types.ErrOptionWithSkipRetry())
+		return hosttypes.NewError(err, hosttypes.ErrorCodeReadRequestBodyFailed, hosttypes.ErrOptionWithSkipRetry())
 	}
 	s.c.Set(common.KeyBodyStorage, storage)
 	s.c.Request.Body = io.NopCloser(bytes.NewReader(requestBody))
@@ -59,7 +60,7 @@ func (s *responsesWSSession) startHTTPBridgeCall(create responsesWSCreateRequest
 	if !s.tryReserveCurrent(state) {
 		cancel()
 		commitRate(false)
-		return types.NewErrorWithStatusCode(errors.New("another response.create is already in progress on this websocket connection"), types.ErrorCodeInvalidRequest, http.StatusConflict, types.ErrOptionWithSkipRetry())
+		return hosttypes.NewErrorWithStatusCode(errors.New("another response.create is already in progress on this websocket connection"), hosttypes.ErrorCodeInvalidRequest, http.StatusConflict, hosttypes.ErrOptionWithSkipRetry())
 	}
 	s.bridgeWG.Add(1)
 	go s.runHTTPBridgeCall(state, create, eventID, callCtx)
@@ -76,7 +77,7 @@ func (s *responsesWSSession) runHTTPBridgeCall(state *responsesWSCallState, crea
 	// arrived as a GET, while every relay endpoint expects a POST.
 	bridgedRequest.Method = http.MethodPost
 	c.Request = bridgedRequest
-	forwarder := newResponsesWSSSEForwarder(func(payload []byte) error {
+	forwarder := newResponsesWSEventWriter(func(payload []byte) error {
 		if state.rateGuard != nil {
 			if err := state.rateGuard.Pace(callCtx, payload); err != nil {
 				return err
@@ -86,7 +87,7 @@ func (s *responsesWSSession) runHTTPBridgeCall(state *responsesWSCallState, crea
 	}, state.cancelHTTP)
 	c.Writer = forwarder
 
-	var finalErr *types.NewAPIError
+	var finalErr *hosttypes.NewAPIError
 	var relayInfo *relaycommon.RelayInfo
 	defer func() {
 		if r := recover(); r != nil {
@@ -95,7 +96,7 @@ func (s *responsesWSSession) runHTTPBridgeCall(state *responsesWSCallState, crea
 				relayInfo.Billing.Refund(c)
 			}
 			if finalErr == nil {
-				finalErr = types.NewError(fmt.Errorf("responses websocket http bridge panic: %v", r), types.ErrorCodeDoRequestFailed, types.ErrOptionWithSkipRetry())
+				finalErr = hosttypes.NewError(fmt.Errorf("responses websocket http bridge panic: %v", r), hosttypes.ErrorCodeDoRequestFailed, hosttypes.ErrOptionWithSkipRetry())
 			}
 		}
 		// Snapshot before cancelHTTP below cancels callCtx: a non-nil error here
@@ -127,7 +128,7 @@ func (s *responsesWSSession) runHTTPBridgeCall(state *responsesWSCallState, crea
 		var (
 			channel          *appmodel.Channel
 			channelRateGuard *service.ChannelRateLimitGuard
-			apiErr           *types.NewAPIError
+			apiErr           *hosttypes.NewAPIError
 			rejected         bool
 		)
 		for {
@@ -207,14 +208,14 @@ func (s *responsesWSSession) runHTTPBridgeCall(state *responsesWSCallState, crea
 	}
 }
 
-func (s *responsesWSSession) selectHTTPBridgeChannel(publicModel string, retryParam *service.RetryParam) (*appmodel.Channel, *types.NewAPIError) {
+func (s *responsesWSSession) selectHTTPBridgeChannel(publicModel string, retryParam *service.RetryParam) (*appmodel.Channel, *hosttypes.NewAPIError) {
 	if channelID, retrySameChannel := middleware.PendingAutoProtocolRetryChannelID(s.c); retrySameChannel && !retryParam.IsChannelExcluded(channelID) {
 		channel, err := appmodel.CacheGetChannel(channelID)
 		if err != nil {
-			return nil, types.NewError(fmt.Errorf("failed to reload channel %d for automatic protocol retry: %w", channelID, err), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+			return nil, hosttypes.NewError(fmt.Errorf("failed to reload channel %d for automatic protocol retry: %w", channelID, err), hosttypes.ErrorCodeGetChannelFailed, hosttypes.ErrOptionWithSkipRetry())
 		}
 		if channel == nil || channel.Status != common.ChannelStatusEnabled || !channel.IsSchedulableAt(time.Now()) {
-			return nil, types.NewError(fmt.Errorf("channel %d is unavailable for automatic protocol retry", channelID), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+			return nil, hosttypes.NewError(fmt.Errorf("channel %d is unavailable for automatic protocol retry", channelID), hosttypes.ErrorCodeGetChannelFailed, hosttypes.ErrOptionWithSkipRetry())
 		}
 		if setupErr := middleware.SetupContextForSelectedChannel(s.c, channel, publicModel, true); setupErr != nil {
 			return nil, setupErr
@@ -238,83 +239,74 @@ func (s *responsesWSSession) cancelHTTPBridgeCall(eventType string) bool {
 	return true
 }
 
-// responsesWSSSEForwarder adapts the HTTP relay pipeline's SSE output to a
-// Responses WebSocket client. Every SSE data payload written by the relay is a
-// complete Responses event, which is exactly what the WebSocket protocol
-// carries, so frames are forwarded verbatim. Terminal events are held back
-// until the bridge has settled billing and released the session slot, matching
-// the native transport where finishCall runs before the terminal event reaches
-// the client; otherwise a client that pipelines its next response.create right
-// after response.completed would race the cleanup and get a conflict error.
-type responsesWSSSEForwarder struct {
-	send      func([]byte) error
-	cancel    context.CancelFunc
-	header    http.Header
-	buffer    bytes.Buffer
-	held      [][]byte
-	status    int
-	size      int
-	forwarded bool
-	sendErr   error
+// responsesWSEventWriter receives typed protocol events directly. It holds the
+// terminal event until settlement and slot release, so the next response.create
+// cannot race cleanup. No SSE serialization or parsing occurs in this bridge.
+type responsesWSEventWriter struct {
+	send              func([]byte) error
+	cancel            context.CancelFunc
+	header            http.Header
+	held              [][]byte
+	status            int
+	size              int
+	forwarded         bool
+	terminalDelivered bool
+	sendErr           error
 }
 
-func newResponsesWSSSEForwarder(send func([]byte) error, cancel context.CancelFunc) *responsesWSSSEForwarder {
-	return &responsesWSSSEForwarder{send: send, cancel: cancel, header: make(http.Header)}
+func newResponsesWSEventWriter(send func([]byte) error, cancel context.CancelFunc) *responsesWSEventWriter {
+	return &responsesWSEventWriter{send: send, cancel: cancel, header: make(http.Header)}
 }
-
-func (w *responsesWSSSEForwarder) Header() http.Header { return w.header }
-
-func (w *responsesWSSSEForwarder) Write(data []byte) (int, error) {
+func (w *responsesWSEventWriter) Header() http.Header { return w.header }
+func (w *responsesWSEventWriter) WriteMessage(message output.Message) error {
 	if w.sendErr != nil {
-		return 0, w.sendErr
+		return w.sendErr
 	}
-	w.buffer.Write(data)
-	w.size += len(data)
-	w.forwardCompleteFrames()
-	return len(data), w.sendErr
+	if len(message.Data) == 0 || bytes.Equal(message.Data, []byte("[DONE]")) {
+		return nil
+	}
+	var event struct {
+		Type string `json:"type"`
+	}
+	if err := common.Unmarshal(message.Data, &event); err != nil || event.Type == "" {
+		return errors.New("WebSocket output requires a complete protocol event")
+	}
+	if len(w.held) > 0 || w.terminalDelivered {
+		return errors.New("protocol event received after terminal event")
+	}
+	w.size += len(message.Data)
+	if responsesWSTerminalEvent(message.Data) {
+		w.held = append(w.held, bytes.Clone(message.Data))
+		w.forwarded = true
+		return nil
+	}
+	if err := (output.WebSocket{Send: w.send}).WriteMessage(message); err != nil {
+		w.sendErr = err
+		if w.cancel != nil {
+			w.cancel()
+		}
+		return err
+	}
+	w.forwarded = true
+	return nil
 }
-
-func (w *responsesWSSSEForwarder) WriteString(data string) (int, error) {
-	return w.Write([]byte(data))
+func (w *responsesWSEventWriter) Write(data []byte) (int, error) {
+	if err := w.WriteMessage(output.Message{Data: data}); err != nil {
+		return 0, err
+	}
+	return len(data), nil
 }
-
-func (w *responsesWSSSEForwarder) forwardCompleteFrames() {
-	for {
-		frame := w.buffer.Bytes()
-		end := bytes.Index(frame, []byte("\n\n"))
-		if end < 0 {
-			return
-		}
-		payload := responsesWSSSEFrameData(frame[:end])
-		w.buffer.Next(end + 2)
-		if len(payload) == 0 || bytes.Equal(payload, []byte("[DONE]")) {
-			continue
-		}
-		if responsesWSTerminalEvent(payload) {
-			w.held = append(w.held, payload)
-			w.forwarded = true
-			continue
-		}
+func (w *responsesWSEventWriter) WriteString(data string) (int, error) { return w.Write([]byte(data)) }
+func (w *responsesWSEventWriter) flushHeldEvents() {
+	for _, payload := range w.held {
 		if err := w.send(payload); err != nil {
 			w.sendErr = err
 			if w.cancel != nil {
 				w.cancel()
 			}
-			return
-		}
-		w.forwarded = true
-	}
-}
-
-// flushHeldEvents delivers the terminal events retained by
-// forwardCompleteFrames. The bridge calls it after billing settlement and
-// session-slot release.
-func (w *responsesWSSSEForwarder) flushHeldEvents() {
-	for _, payload := range w.held {
-		if err := w.send(payload); err != nil {
-			w.sendErr = err
 			break
 		}
+		w.terminalDelivered = true
 	}
 	w.held = nil
 }
@@ -335,53 +327,31 @@ func responsesWSTerminalEvent(payload []byte) bool {
 	}
 }
 
-// responsesWSSSEFrameData extracts the data payload of one SSE frame; multiple
-// data lines are joined with newlines per the SSE specification. Event, id,
-// retry, and comment lines carry no payload for the WebSocket protocol.
-func responsesWSSSEFrameData(frame []byte) []byte {
-	var payload []byte
-	for _, line := range bytes.Split(frame, []byte("\n")) {
-		line = bytes.TrimSuffix(line, []byte("\r"))
-		if !bytes.HasPrefix(line, []byte("data:")) {
-			continue
-		}
-		value := bytes.TrimPrefix(line, []byte("data:"))
-		if len(value) > 0 && value[0] == ' ' {
-			value = value[1:]
-		}
-		if payload != nil {
-			payload = append(payload, '\n')
-		}
-		payload = append(payload, value...)
-	}
-	return payload
-}
-
-func (w *responsesWSSSEForwarder) WriteHeader(code int) {
+func (w *responsesWSEventWriter) WriteHeader(code int) {
 	if code > 0 && w.status == 0 {
 		w.status = code
 	}
 }
 
-func (w *responsesWSSSEForwarder) WriteHeaderNow() {}
+func (w *responsesWSEventWriter) WriteHeaderNow() {}
 
-func (w *responsesWSSSEForwarder) Status() int {
+func (w *responsesWSEventWriter) Status() int {
 	if w.status == 0 {
 		return http.StatusOK
 	}
 	return w.status
 }
 
-func (w *responsesWSSSEForwarder) Size() int { return w.size }
+func (w *responsesWSEventWriter) Size() int { return w.size }
 
-func (w *responsesWSSSEForwarder) Written() bool { return w.forwarded || w.status != 0 }
+func (w *responsesWSEventWriter) Written() bool { return w.forwarded || w.status != 0 }
 
-func (w *responsesWSSSEForwarder) Flush() { w.forwardCompleteFrames() }
+func (w *responsesWSEventWriter) Flush() {}
 
-func (w *responsesWSSSEForwarder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+func (w *responsesWSEventWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return nil, nil, errors.New("hijack is not supported by the responses websocket bridge")
 }
 
-func (w *responsesWSSSEForwarder) CloseNotify() <-chan bool { return make(chan bool) }
+func (w *responsesWSEventWriter) CloseNotify() <-chan bool { return make(chan bool) }
 
-func (w *responsesWSSSEForwarder) Pusher() http.Pusher { return nil }
+func (w *responsesWSEventWriter) Pusher() http.Pusher { return nil }

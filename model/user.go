@@ -4,12 +4,12 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/bytedance/gopkg/util/gopool"
@@ -239,8 +239,8 @@ func RevokeUserAccessToken(id int) (string, error) {
 	return tokenRef, err
 }
 
-func (user *User) GetSetting() dto.UserSetting {
-	setting := dto.UserSetting{}
+func (user *User) GetSetting() hostdto.UserSetting {
+	setting := hostdto.UserSetting{}
 	if user.Setting != "" {
 		err := common.Unmarshal([]byte(user.Setting), &setting)
 		if err != nil {
@@ -250,7 +250,7 @@ func (user *User) GetSetting() dto.UserSetting {
 	return setting
 }
 
-func (user *User) SetSetting(setting dto.UserSetting) {
+func (user *User) SetSetting(setting hostdto.UserSetting) {
 	settingBytes, err := common.Marshal(setting)
 	if err != nil {
 		common.SysLog("failed to marshal setting: " + err.Error())
@@ -259,7 +259,7 @@ func (user *User) SetSetting(setting dto.UserSetting) {
 	user.Setting = string(settingBytes)
 }
 
-func UpdateUserSetting(userId int, setting dto.UserSetting) error {
+func UpdateUserSetting(userId int, setting hostdto.UserSetting) error {
 	if userId == 0 {
 		return errors.New("id 为空！")
 	}
@@ -801,7 +801,7 @@ func (user *User) Insert(inviterId int) error {
 
 			// 初始化用户设置，包括默认的边栏配置
 			if user.Setting == "" {
-				defaultSetting := dto.UserSetting{}
+				defaultSetting := hostdto.UserSetting{}
 				// 这里暂时不设置SidebarModules，因为需要在用户创建后根据角色设置
 				user.SetSetting(defaultSetting)
 			}
@@ -868,7 +868,7 @@ func (user *User) InsertWithTx(tx *gorm.DB, inviterId int) error {
 
 		// 初始化用户设置
 		if user.Setting == "" {
-			defaultSetting := dto.UserSetting{}
+			defaultSetting := hostdto.UserSetting{}
 			user.SetSetting(defaultSetting)
 		}
 
@@ -1460,7 +1460,7 @@ func GetUserTopupGroup(id int, fromDB bool) (string, error) {
 }
 
 // GetUserSetting gets setting from Redis first, falls back to DB if needed
-func GetUserSetting(id int, fromDB bool) (settingMap dto.UserSetting, err error) {
+func GetUserSetting(id int, fromDB bool) (settingMap hostdto.UserSetting, err error) {
 	var setting string
 	defer func() {
 		// Update Redis cache asynchronously on successful DB read

@@ -55,36 +55,6 @@ type geminiGroundingStreamCandidate struct {
 	chunks   []geminiGroundingChunk
 }
 
-// GroundingWebSearchQueries returns the distinct hosted-search queries that
-// Gemini reports for a response. The provider may repeat metadata across
-// candidates or stream chunks, so callers can safely accumulate this result
-// without manufacturing duplicate Responses tool calls.
-func GroundingWebSearchQueries(response *dto.GeminiChatResponse) []string {
-	if response == nil {
-		return nil
-	}
-	queries := make([]string, 0)
-	seen := make(map[string]struct{})
-	for candidateIndex := range response.Candidates {
-		metadata := response.Candidates[candidateIndex].GroundingMetadata
-		if metadata == nil {
-			continue
-		}
-		for _, query := range metadata.WebSearchQueries {
-			query = strings.TrimSpace(query)
-			if query == "" {
-				continue
-			}
-			if _, exists := seen[query]; exists {
-				continue
-			}
-			seen[query] = struct{}{}
-			queries = append(queries, query)
-		}
-	}
-	return queries
-}
-
 func groundingAnnotationsToChat(metadata *dto.GeminiGroundingMetadata, content dto.GeminiChatContent, rendered string) []byte {
 	if metadata == nil || len(metadata.GroundingChunks) == 0 || len(metadata.GroundingSupports) == 0 {
 		return nil

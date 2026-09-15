@@ -1,10 +1,10 @@
 package common
 
 import (
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"net/http/httptest"
 	"testing"
 
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 )
@@ -24,7 +24,7 @@ func TestLeadingSystemPromptResolvesLayersByPriority(t *testing.T) {
 			RouteTargetModelName: "model-two",
 			RouteInjectPrompt:    routePrompt,
 		}
-		info.ChannelMeta = &ChannelMeta{ChannelSetting: dto.ChannelSettings{
+		info.ChannelMeta = &ChannelMeta{ChannelSetting: hostdto.ChannelSettings{
 			SystemPrompt:         channelPrompt,
 			SystemPromptOverride: override,
 		}}
@@ -111,7 +111,7 @@ func TestLeadingSystemPromptAppliesOnlyOncePerRequest(t *testing.T) {
 		RouteTargetModelName: "model-two",
 		RouteInjectPrompt:    routePrompt,
 	}
-	info.ChannelMeta = &ChannelMeta{ChannelSetting: dto.ChannelSettings{
+	info.ChannelMeta = &ChannelMeta{ChannelSetting: hostdto.ChannelSettings{
 		SystemPrompt:         "Channel policy.",
 		SystemPromptOverride: true,
 	}}
@@ -127,7 +127,7 @@ func TestSystemPromptPrefixDoesNotConsumePromptState(t *testing.T) {
 		RouteTargetModelName: "model-two",
 		RouteInjectPrompt:    "You are model-one.",
 	}
-	info.ChannelMeta = &ChannelMeta{ChannelSetting: dto.ChannelSettings{
+	info.ChannelMeta = &ChannelMeta{ChannelSetting: hostdto.ChannelSettings{
 		SystemPrompt:         "Channel policy.",
 		SystemPromptOverride: true,
 	}}

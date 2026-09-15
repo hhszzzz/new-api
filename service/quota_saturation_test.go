@@ -9,7 +9,6 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	hosttypes "github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
@@ -120,7 +119,7 @@ func TestPreConsumeBillingRejectsSaturatedQuotaBeforeDeduction(t *testing.T) {
 	apiErr := PreConsumeBilling(c, common.MaxQuota, info)
 
 	require.NotNil(t, apiErr)
-	require.Equal(t, types.ErrorCodeModelPriceError, apiErr.GetErrorCode())
+	require.Equal(t, hosttypes.ErrorCodeModelPriceError, apiErr.GetErrorCode())
 	require.Equal(t, http.StatusBadRequest, apiErr.StatusCode)
 	require.Same(t, info.QuotaClamp, apiErr.Err)
 	var clamp *common.QuotaClamp
@@ -137,7 +136,7 @@ func TestPreConsumeBillingRejectsNegativeQuotaBeforeDeduction(t *testing.T) {
 	apiErr := PreConsumeBilling(c, -1, info)
 
 	require.NotNil(t, apiErr)
-	require.Equal(t, types.ErrorCodeModelPriceError, apiErr.GetErrorCode())
+	require.Equal(t, hosttypes.ErrorCodeModelPriceError, apiErr.GetErrorCode())
 	require.Equal(t, http.StatusBadRequest, apiErr.StatusCode)
 	require.Nil(t, info.Billing)
 }

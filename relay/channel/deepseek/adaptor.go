@@ -3,6 +3,7 @@ package deepseek
 import (
 	"errors"
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 	"strings"
@@ -206,11 +207,11 @@ func applyDeepSeekV4ResponsesThinkingSuffix(info *relaycommon.RelayInfo, request
 	}
 }
 
-func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {
-	return channel.DoApiRequest(a, c, info, requestBody)
+func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (*channel.TransportResult, error) {
+	return channel.HTTPResult(channel.DoApiRequest(a, c, info, requestBody))
 }
 
-func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage any, err *types.NewAPIError) {
+func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage dto.UsageResult, err *hosttypes.NewAPIError) {
 	switch info.GetFinalRequestRelayFormat() {
 	case types.RelayFormatClaude:
 		adaptor := claude.Adaptor{}

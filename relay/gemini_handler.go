@@ -2,6 +2,7 @@ package relay
 
 import (
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 	"strings"
@@ -12,8 +13,6 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/relayconvert"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 
@@ -48,40 +47,11 @@ func ConfigureGeminiBillingModel(info *relaycommon.RelayInfo) {
 	}
 }
 
-func GeminiHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
-	info.InitChannelMeta(c)
+func GeminiHelper(c *gin.Context, info *relaycommon.RelayInfo) *hosttypes.NewAPIError {
+	return executeText(c, info)
+}
 
-	geminiReq, ok := info.Request.(*dto.GeminiChatRequest)
-	if !ok {
-		return types.NewErrorWithStatusCode(fmt.Errorf("invalid request type, expected *dto.GeminiChatRequest, got %T", info.Request), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
-	}
-
-	request, err := common.DeepCopy(geminiReq)
-	if err != nil {
-		return types.NewError(fmt.Errorf("failed to copy request to GeminiChatRequest: %w", err), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
-	}
-
-	// model mapped 模型映射
-	err = helper.ModelMappedHelper(c, info, request)
-	if err != nil {
-		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
-	}
-	if err := helper.ApplyReasoningModelSuffix(c, info, request); err != nil {
-		return newConvertRequestFailedError(c, info, err)
-	}
-
-	// A caller that sends generationConfig.thinkingConfig itself skips the
-	// thinking adapter above, so the effort is recorded here rather than only
-	// inside the adapter.
-	relayconvert.RecordGeminiReasoningEffort(request, info)
-
-	adaptor := GetAdaptor(info.ApiType)
-	if adaptor == nil {
-		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
-	}
-
-	adaptor.Init(info)
-
+func applyGeminiLeadingSystemPrompt(c *gin.Context, info *relaycommon.RelayInfo, request *dto.GeminiChatRequest) {
 	hasClientSystemInstruction := false
 	if request.SystemInstructions != nil {
 		for _, part := range request.SystemInstructions.Parts {
@@ -129,76 +99,9 @@ func GeminiHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		}
 	}
 
-	var requestBody io.Reader
-	if info.ShouldPassThroughBody() {
-		storage, err := common.GetBodyStorage(c)
-		if err != nil {
-			return types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
-		}
-		requestBody = common.NewReplayableBodyReader(storage)
-	} else {
-		// 使用 ConvertGeminiRequest 转换请求格式
-		convertedRequest, err := adaptor.ConvertGeminiRequest(c, info, request)
-		if err != nil {
-			return newConvertRequestFailedError(c, info, err)
-		}
-		relaycommon.AppendRequestConversionFromRequest(info, convertedRequest)
-		jsonData, err := common.Marshal(convertedRequest)
-		if err != nil {
-			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
-		}
-
-		// apply param override
-		if len(info.ParamOverride) > 0 {
-			jsonData, err = relaycommon.ApplyParamOverrideWithRelayInfo(jsonData, info)
-			if err != nil {
-				return newAPIErrorFromParamOverride(err)
-			}
-		}
-
-		logger.LogDebug(c, "Gemini request body: %s", jsonData)
-
-		body, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
-		if err != nil {
-			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
-		}
-		defer closer.Close()
-		jsonData = nil
-		requestBody = body
-	}
-
-	resp, err := adaptor.DoRequest(c, info, requestBody)
-	if err != nil {
-		logger.LogError(c, "Do gemini request failed: "+err.Error())
-		return types.NewOpenAIError(err, types.ErrorCodeDoRequestFailed, http.StatusInternalServerError)
-	}
-
-	statusCodeMappingStr := c.GetString("status_code_mapping")
-
-	var httpResp *http.Response
-	if resp != nil {
-		httpResp = resp.(*http.Response)
-		info.IsStream = info.IsStream || strings.HasPrefix(httpResp.Header.Get("Content-Type"), "text/event-stream")
-		if httpResp.StatusCode != http.StatusOK {
-			newAPIError = service.RelayErrorHandler(c.Request.Context(), httpResp, false)
-			// reset status code 重置状态码
-			service.ResetStatusCode(newAPIError, statusCodeMappingStr)
-			return newAPIError
-		}
-	}
-
-	usage, openaiErr := adaptor.DoResponse(c, resp.(*http.Response), info)
-	openaiErr = normalizeStreamResult(c, info, openaiErr)
-	if openaiErr != nil {
-		service.ResetStatusCode(openaiErr, statusCodeMappingStr)
-		return openaiErr
-	}
-
-	service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), nil)
-	return nil
 }
 
-func GeminiEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
+func GeminiEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *hosttypes.NewAPIError) {
 	info.InitChannelMeta(c)
 
 	isBatch := strings.HasSuffix(c.Request.URL.Path, "batchEmbedContents")
@@ -212,7 +115,7 @@ func GeminiEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo) (newAPI
 		batchRequest := &dto.GeminiBatchEmbeddingRequest{}
 		err = common.UnmarshalBodyReusable(c, batchRequest)
 		if err != nil {
-			return types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+			return hosttypes.NewError(err, hosttypes.ErrorCodeInvalidRequest, hosttypes.ErrOptionWithSkipRetry())
 		}
 		req = batchRequest
 		for _, r := range batchRequest.Requests {
@@ -226,7 +129,7 @@ func GeminiEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo) (newAPI
 		singleRequest := &dto.GeminiEmbeddingRequest{}
 		err = common.UnmarshalBodyReusable(c, singleRequest)
 		if err != nil {
-			return types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+			return hosttypes.NewError(err, hosttypes.ErrorCodeInvalidRequest, hosttypes.ErrOptionWithSkipRetry())
 		}
 		req = singleRequest
 		for _, part := range singleRequest.Content.Parts {
@@ -238,7 +141,7 @@ func GeminiEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo) (newAPI
 
 	err = helper.ModelMappedHelper(c, info, req)
 	if err != nil {
-		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
+		return hosttypes.NewError(err, hosttypes.ErrorCodeChannelModelMappedError, hosttypes.ErrOptionWithSkipRetry())
 	}
 	if err := helper.ApplyReasoningModelSuffix(c, info, req); err != nil {
 		return newConvertRequestFailedError(c, info, err)
@@ -248,14 +151,14 @@ func GeminiEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo) (newAPI
 
 	adaptor := GetAdaptor(info.ApiType)
 	if adaptor == nil {
-		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
+		return hosttypes.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), hosttypes.ErrorCodeInvalidApiType, hosttypes.ErrOptionWithSkipRetry())
 	}
 	adaptor.Init(info)
 
 	var requestBody io.Reader
 	jsonData, err := common.Marshal(req)
 	if err != nil {
-		return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		return hosttypes.NewError(err, hosttypes.ErrorCodeConvertRequestFailed, hosttypes.ErrOptionWithSkipRetry())
 	}
 
 	// apply param override
@@ -268,7 +171,7 @@ func GeminiEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo) (newAPI
 	logger.LogDebug(c, "Gemini embedding request body: %s", jsonData)
 	body, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
 	if err != nil {
-		return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		return hosttypes.NewError(err, hosttypes.ErrorCodeConvertRequestFailed, hosttypes.ErrOptionWithSkipRetry())
 	}
 	defer closer.Close()
 	jsonData = nil
@@ -277,13 +180,13 @@ func GeminiEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo) (newAPI
 	resp, err := adaptor.DoRequest(c, info, requestBody)
 	if err != nil {
 		logger.LogError(c, "Do gemini request failed: "+err.Error())
-		return types.NewOpenAIError(err, types.ErrorCodeDoRequestFailed, http.StatusInternalServerError)
+		return hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeDoRequestFailed, http.StatusInternalServerError)
 	}
 
 	statusCodeMappingStr := c.GetString("status_code_mapping")
 	var httpResp *http.Response
 	if resp != nil {
-		httpResp = resp.(*http.Response)
+		httpResp = resp.Response
 		if httpResp.StatusCode != http.StatusOK {
 			newAPIError = service.RelayErrorHandler(c.Request.Context(), httpResp, false)
 			service.ResetStatusCode(newAPIError, statusCodeMappingStr)
@@ -291,7 +194,7 @@ func GeminiEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo) (newAPI
 		}
 	}
 
-	usage, openaiErr := adaptor.DoResponse(c, resp.(*http.Response), info)
+	usage, openaiErr := adaptor.DoResponse(c, resp.Response, info)
 	if openaiErr != nil {
 		service.ResetStatusCode(openaiErr, statusCodeMappingStr)
 		return openaiErr

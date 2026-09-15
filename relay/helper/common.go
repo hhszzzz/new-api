@@ -8,6 +8,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/relay/output"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
@@ -71,6 +72,17 @@ func renderStreamEvent(c *gin.Context, data string) error {
 	return (common.CustomEvent{Data: data}).Render(c.Writer)
 }
 
+func writeProtocolEvent(c *gin.Context, event string, data []byte) error {
+	message := output.Message{Event: event, Data: data}
+	if sink, ok := c.Writer.(output.Sink); ok {
+		return sink.WriteMessage(message)
+	}
+	if err := (output.SSE{Writer: c.Writer}).WriteMessage(message); err != nil {
+		return err
+	}
+	return FlushWriter(c)
+}
+
 func requestContextDone(c *gin.Context) bool {
 	return c != nil && c.Request != nil && c.Request.Context().Err() != nil
 }
@@ -104,13 +116,7 @@ func ClaudeData(c *gin.Context, resp dto.ClaudeResponse) error {
 		return err
 	}
 	return withStreamWriteLock(c, func() error {
-		if err := renderStreamEvent(c, fmt.Sprintf("event: %s\n", resp.Type)); err != nil {
-			return err
-		}
-		if err := renderStreamEvent(c, "data: "+string(jsonData)); err != nil {
-			return err
-		}
-		return FlushWriter(c)
+		return writeProtocolEvent(c, resp.Type, jsonData)
 	})
 }
 
@@ -123,13 +129,7 @@ func ClaudeChunkData(c *gin.Context, resp dto.ClaudeResponse, data string) error
 		return err
 	}
 	return withStreamWriteLock(c, func() error {
-		if err := renderStreamEvent(c, fmt.Sprintf("event: %s\n", resp.Type)); err != nil {
-			return err
-		}
-		if err := renderStreamEvent(c, fmt.Sprintf("data: %s\n", data)); err != nil {
-			return err
-		}
-		return FlushWriter(c)
+		return writeProtocolEvent(c, resp.Type, []byte(data))
 	})
 }
 
@@ -155,13 +155,7 @@ func ResponseChunkData(c *gin.Context, resp dto.ResponsesStreamResponse, data st
 		return err
 	}
 	return withStreamWriteLock(c, func() error {
-		if err := renderStreamEvent(c, fmt.Sprintf("event: %s\n", resp.Type)); err != nil {
-			return err
-		}
-		if err := renderStreamEvent(c, fmt.Sprintf("data: %s", data)); err != nil {
-			return err
-		}
-		return FlushWriter(c)
+		return writeProtocolEvent(c, resp.Type, []byte(data))
 	})
 }
 
@@ -207,10 +201,7 @@ func StringData(c *gin.Context, str string) error {
 		return err
 	}
 	return withStreamWriteLock(c, func() error {
-		if err := renderStreamEvent(c, "data: "+str); err != nil {
-			return err
-		}
-		return FlushWriter(c)
+		return writeProtocolEvent(c, "", []byte(str))
 	})
 }
 
@@ -221,6 +212,9 @@ func PingData(c *gin.Context) error {
 
 	if requestContextDone(c) {
 		return fmt.Errorf("request context done: %w", c.Request.Context().Err())
+	}
+	if _, ok := c.Writer.(output.Sink); ok {
+		return nil
 	}
 
 	return withStreamWriteLock(c, func() error {

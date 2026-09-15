@@ -1,6 +1,7 @@
 package claudemessages
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -9,11 +10,17 @@ import (
 	sharedbridge "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/bridge"
 	sharedclaude "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/claude"
 	sharedtoolmedia "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/toolmedia"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/internal/toolconv"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
+	"github.com/QuantumNous/new-api/relaykit/types"
 )
 
 func ClaudeMessagesRequestToOpenAIResponses(claudeRequest dto.ClaudeRequest, info convmeta.Meta) (*dto.OpenAIResponsesRequest, error) {
+	return ClaudeMessagesRequestToOpenAIResponsesWithContext(context.Background(), claudeRequest, info)
+}
+
+func ClaudeMessagesRequestToOpenAIResponsesWithContext(c context.Context, claudeRequest dto.ClaudeRequest, info convmeta.Meta) (*dto.OpenAIResponsesRequest, error) {
 	if strings.TrimSpace(claudeRequest.Model) == "" {
 		return nil, fmt.Errorf("model is required")
 	}
@@ -70,12 +77,7 @@ func ClaudeMessagesRequestToOpenAIResponses(claudeRequest dto.ClaudeRequest, inf
 		info.SetReasoningEffort(string(effectiveEffort))
 	}
 
-	tools, declaredTools, err := claudeToolsToResponses(claudeRequest.Tools)
-	if err != nil {
-		return nil, err
-	}
-	hasCurrentTools := len(tools) > 0
-	tools, err = sharedbridge.EnsureResponsesFunctionTools(tools, input)
+	tools, err := sharedbridge.EnsureResponsesFunctionTools(nil, input)
 	if err != nil {
 		return nil, err
 	}
@@ -85,21 +87,8 @@ func ClaudeMessagesRequestToOpenAIResponses(claudeRequest dto.ClaudeRequest, inf
 			return nil, err
 		}
 	}
-	toolChoice, parallelToolCalls, err := claudeToolChoiceToResponses(claudeRequest.ToolChoice, declaredTools)
-	if err != nil {
+	if err := toolconv.RenderRequestTools(c, types.RelayFormatClaude, types.RelayFormatOpenAIResponses, &claudeRequest, request, convmeta.OptionsOf(info)); err != nil {
 		return nil, err
-	}
-	if toolChoice != nil && hasCurrentTools {
-		request.ToolChoice, err = kitutil.Marshal(toolChoice)
-		if err != nil {
-			return nil, err
-		}
-	}
-	if parallelToolCalls != nil && hasCurrentTools {
-		request.ParallelToolCalls, err = kitutil.Marshal(*parallelToolCalls)
-		if err != nil {
-			return nil, err
-		}
 	}
 	return request, nil
 }
@@ -501,158 +490,6 @@ func appendResponsesToolOutputValue(output *[]map[string]any, value any) error {
 	}
 	*output = append(*output, map[string]any{"type": "input_text", "text": string(raw)})
 	return nil
-}
-
-func claudeToolsToResponses(value any) ([]map[string]any, map[string]struct{}, error) {
-	declared := make(map[string]struct{})
-	if value == nil {
-		return nil, declared, nil
-	}
-	tools, err := kitutil.Any2Type[[]map[string]any](value)
-	if err != nil {
-		return nil, nil, fmt.Errorf("invalid Claude tools: %w", err)
-	}
-	converted := make([]map[string]any, 0, len(tools))
-	for index, tool := range tools {
-		toolType := strings.TrimSpace(kitutil.Interface2String(tool["type"]))
-		if toolType == "BatchTool" {
-			continue
-		}
-		if toolType != "" && toolType != "custom" {
-			if isClaudeServerToolType(toolType) {
-				// Server-executed Anthropic tools (web_search, code_execution,
-				// ...) cannot run on a converted upstream. Drop them, CC Switch
-				// style, and let the model work without them.
-				continue
-			}
-			// Client-executed typed tools (bash_*, text_editor_*, memory_*)
-			// lower to plain functions: the client still executes the calls,
-			// and Claude-family models know these tool shapes by name.
-		}
-		name := strings.TrimSpace(kitutil.Interface2String(tool["name"]))
-		if name == "" {
-			return nil, nil, fmt.Errorf("Claude tool %d is missing name", index)
-		}
-		if _, exists := declared[name]; exists {
-			return nil, nil, fmt.Errorf("Claude tool name %q is declared more than once", name)
-		}
-		declared[name] = struct{}{}
-		schema, ok := tool["input_schema"].(map[string]any)
-		if !ok || len(schema) == 0 {
-			schema = map[string]any{"type": "object", "properties": map[string]any{}}
-		} else {
-			schema = cloneStringAnyMap(schema)
-			if strings.TrimSpace(kitutil.Interface2String(schema["type"])) == "" {
-				schema["type"] = "object"
-			}
-			if _, exists := schema["properties"]; !exists {
-				schema["properties"] = map[string]any{}
-			}
-		}
-		responseTool := map[string]any{
-			"type":        "function",
-			"name":        name,
-			"description": kitutil.Interface2String(tool["description"]),
-			"parameters":  schema,
-		}
-		if strict, ok := tool["strict"].(bool); ok {
-			responseTool["strict"] = strict
-		}
-		converted = append(converted, responseTool)
-	}
-	return converted, declared, nil
-}
-
-// isClaudeServerToolType reports whether an Anthropic typed tool executes on
-// Anthropic's servers, which a converted upstream can never reproduce.
-func isClaudeServerToolType(toolType string) bool {
-	for _, marker := range []string{"web_search", "web_fetch", "computer", "code_execution", "tool_search"} {
-		if strings.Contains(toolType, marker) {
-			return true
-		}
-	}
-	return false
-}
-
-func claudeToolChoiceToResponses(value any, declared map[string]struct{}) (any, *bool, error) {
-	if value == nil {
-		return nil, nil, nil
-	}
-	choice := dto.ClaudeToolChoice{}
-	if typed, ok := value.(string); ok {
-		choice.Type = typed
-	} else {
-		converted, err := kitutil.Any2Type[dto.ClaudeToolChoice](value)
-		if err != nil {
-			return nil, nil, fmt.Errorf("invalid Claude tool_choice: %w", err)
-		}
-		choice = converted
-	}
-
-	parallel := !choice.DisableParallelToolUse
-	switch choice.Type {
-	case "", "auto":
-		return "auto", &parallel, nil
-	case "any":
-		if len(declared) == 0 {
-			return nil, nil, fmt.Errorf("Claude tool_choice type any requires at least one declared tool")
-		}
-		return "required", &parallel, nil
-	case "none":
-		return "none", nil, nil
-	case "tool":
-		name := strings.TrimSpace(choice.Name)
-		if name == "" {
-			return nil, nil, fmt.Errorf("Claude tool_choice type tool requires a name")
-		}
-		if _, exists := declared[name]; !exists {
-			return nil, nil, fmt.Errorf("Claude tool_choice references undeclared tool %q", name)
-		}
-		return map[string]any{"type": "function", "name": name}, &parallel, nil
-	default:
-		return nil, nil, fmt.Errorf("unsupported Claude tool_choice type %q", choice.Type)
-	}
-}
-
-func claudeRequestReasoningEffort(request *dto.ClaudeRequest) string {
-	if request == nil {
-		return ""
-	}
-	switch strings.ToLower(strings.TrimSpace(request.GetEfforts())) {
-	case "low", "medium", "high":
-		return strings.ToLower(strings.TrimSpace(request.GetEfforts()))
-	case "max", "xhigh":
-		return "xhigh"
-	}
-	if request.Thinking == nil {
-		return ""
-	}
-	switch request.Thinking.Type {
-	case "adaptive":
-		return "xhigh"
-	case "enabled":
-		budget := request.Thinking.GetBudgetTokens()
-		switch {
-		case budget == 0:
-			return "high"
-		case budget < 4000:
-			return "low"
-		case budget < 16000:
-			return "medium"
-		default:
-			return "high"
-		}
-	default:
-		return ""
-	}
-}
-
-func cloneStringAnyMap(value map[string]any) map[string]any {
-	clone := make(map[string]any, len(value))
-	for key, item := range value {
-		clone[key] = item
-	}
-	return clone
 }
 
 func claudeRequestReasoningIntent(claudeRequest *dto.ClaudeRequest, info convmeta.Meta) (reasoning.Intent, reasoning.Effort, error) {

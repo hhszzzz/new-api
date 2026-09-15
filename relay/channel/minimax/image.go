@@ -2,6 +2,7 @@ package minimax
 
 import (
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 	"strconv"
@@ -175,19 +176,19 @@ func responseMiniMax2OpenAIImage(response *MiniMaxImageResponse, info *relaycomm
 	return imageResponse, nil
 }
 
-func miniMaxImageHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*dto.Usage, *types.NewAPIError) {
+func miniMaxImageHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*dto.Usage, *hosttypes.NewAPIError) {
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
 	}
 	service.CloseResponseBodyGracefully(resp)
 
 	var minimaxResponse MiniMaxImageResponse
 	if err := common.Unmarshal(responseBody, &minimaxResponse); err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	if minimaxResponse.BaseResp.StatusCode != 0 {
-		return nil, types.WithOpenAIError(types.OpenAIError{
+		return nil, hosttypes.WithOpenAIError(types.OpenAIError{
 			Message: minimaxResponse.BaseResp.StatusMsg,
 			Type:    "minimax_image_error",
 			Code:    fmt.Sprintf("%d", minimaxResponse.BaseResp.StatusCode),
@@ -196,17 +197,17 @@ func miniMaxImageHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 
 	openAIResponse, err := responseMiniMax2OpenAIImage(&minimaxResponse, info)
 	if err != nil {
-		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+		return nil, hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody)
 	}
 	jsonResponse, err := common.Marshal(openAIResponse)
 	if err != nil {
-		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+		return nil, hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody)
 	}
 
 	c.Writer.Header().Set("Content-Type", "application/json")
 	c.Writer.WriteHeader(resp.StatusCode)
 	if _, err := c.Writer.Write(jsonResponse); err != nil {
-		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+		return nil, hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody)
 	}
 
 	return &dto.Usage{}, nil

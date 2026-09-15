@@ -3,6 +3,7 @@ package relay
 import (
 	"encoding/json"
 	"errors"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,7 +13,6 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -89,11 +89,11 @@ func TestBuildResponsesWSCreateEventIsFlatAndPreservesExplicitFalse(t *testing.T
 }
 
 func TestBuildResponsesWSErrorPayloadIncludesStatusAndEventID(t *testing.T) {
-	payload, err := buildResponsesWSErrorPayload("evt_err", types.NewErrorWithStatusCode(
+	payload, err := buildResponsesWSErrorPayload("evt_err", hosttypes.NewErrorWithStatusCode(
 		errors.New("model is required"),
-		types.ErrorCodeInvalidRequest,
+		hosttypes.ErrorCodeInvalidRequest,
 		http.StatusBadRequest,
-		types.ErrOptionWithSkipRetry(),
+		hosttypes.ErrOptionWithSkipRetry(),
 	))
 	require.NoError(t, err)
 	var event responsesWSErrorEvent
@@ -102,7 +102,7 @@ func TestBuildResponsesWSErrorPayloadIncludesStatusAndEventID(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, event.Status)
 	assert.Equal(t, "evt_err", event.EventID)
 	require.NotNil(t, event.Error)
-	assert.Equal(t, string(types.ErrorCodeInvalidRequest), event.Error.Code)
+	assert.Equal(t, string(hosttypes.ErrorCodeInvalidRequest), event.Error.Code)
 }
 
 func TestResponsesWebSocketURLAndBetaHeader(t *testing.T) {

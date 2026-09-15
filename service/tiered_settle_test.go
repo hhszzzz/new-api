@@ -1,6 +1,7 @@
 package service
 
 import (
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"math"
 	"math/rand"
 	"testing"
@@ -377,7 +378,7 @@ func TestPrepareTieredBillingForSelectedGroupStartsBillingAfterFreeGroup(t *test
 		IsPlayground:    true,
 		ForcePreConsume: true,
 		OriginModelName: "gpt-test",
-		UserSetting: dto.UserSetting{
+		UserSetting: hostdto.UserSetting{
 			BillingPreference: "wallet_only",
 		},
 		TieredBillingSnapshot: &billingexpr.BillingSnapshot{

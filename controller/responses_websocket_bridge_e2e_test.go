@@ -2,6 +2,7 @@ package controller
 
 import (
 	"fmt"
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,7 +14,6 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/model_setting"
@@ -133,16 +133,16 @@ func TestResponsesWebSocketBridgesChatOnlyChannelOverHTTP(t *testing.T) {
 		ModelMapping: &modelMapping,
 		AutoBan:      common.GetPointer(0),
 	}
-	channel.SetOtherSettings(dto.ChannelOtherSettings{
-		ProtocolCapabilities: &dto.ProtocolCapabilities{
-			UpstreamProtocols: []string{dto.ProtocolCapabilityChat},
+	channel.SetOtherSettings(hostdto.ChannelOtherSettings{
+		ProtocolCapabilities: &hostdto.ProtocolCapabilities{
+			UpstreamProtocols: []string{hostdto.ProtocolCapabilityChat},
 			AllowConversion:   common.GetPointer(true),
-			SelectionMode:     dto.ProtocolSelectionModeStrict,
+			SelectionMode:     hostdto.ProtocolSelectionModeStrict,
 		},
 	})
 	require.NoError(t, channel.Insert())
 
-	userSetting, err := common.Marshal(dto.UserSetting{BillingPreference: "wallet_only"})
+	userSetting, err := common.Marshal(hostdto.UserSetting{BillingPreference: "wallet_only"})
 	require.NoError(t, err)
 	user := &model.User{
 		Username: "responses-bridge-user",
@@ -174,7 +174,7 @@ func TestResponsesWebSocketBridgesChatOnlyChannelOverHTTP(t *testing.T) {
 		common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
 		common.SetContextKey(c, constant.ContextKeyUserGroups, []string{"default"})
 		common.SetContextKey(c, constant.ContextKeyUserName, user.Username)
-		common.SetContextKey(c, constant.ContextKeyUserSetting, dto.UserSetting{BillingPreference: "wallet_only"})
+		common.SetContextKey(c, constant.ContextKeyUserSetting, hostdto.UserSetting{BillingPreference: "wallet_only"})
 		common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
 		common.SetContextKey(c, constant.ContextKeyTokenId, token.Id)
 		common.SetContextKey(c, constant.ContextKeyTokenKey, token.Key)
@@ -375,7 +375,7 @@ func TestResponsesWebSocketFallsBackToHTTPBridgeWhenNativeDialFails(t *testing.T
 	}
 	require.NoError(t, channel.Insert())
 
-	userSetting, err := common.Marshal(dto.UserSetting{BillingPreference: "wallet_only"})
+	userSetting, err := common.Marshal(hostdto.UserSetting{BillingPreference: "wallet_only"})
 	require.NoError(t, err)
 	user := &model.User{
 		Username: "responses-fallback-user",
@@ -407,7 +407,7 @@ func TestResponsesWebSocketFallsBackToHTTPBridgeWhenNativeDialFails(t *testing.T
 		common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
 		common.SetContextKey(c, constant.ContextKeyUserGroups, []string{"default"})
 		common.SetContextKey(c, constant.ContextKeyUserName, user.Username)
-		common.SetContextKey(c, constant.ContextKeyUserSetting, dto.UserSetting{BillingPreference: "wallet_only"})
+		common.SetContextKey(c, constant.ContextKeyUserSetting, hostdto.UserSetting{BillingPreference: "wallet_only"})
 		common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
 		common.SetContextKey(c, constant.ContextKeyTokenId, token.Id)
 		common.SetContextKey(c, constant.ContextKeyTokenKey, token.Key)

@@ -18,6 +18,12 @@ const anthropicThinkingStatePrefix = "newapi-anthropic-thinking-v1:"
 
 const maxAnthropicThinkingStateSize = 4 << 20
 
+// IsThinkingBlockState identifies the envelope format only. Callers must still
+// authenticate it and verify its channel binding with DecodeThinkingBlock.
+func IsThinkingBlockState(encoded string) bool {
+	return strings.HasPrefix(strings.TrimSpace(encoded), anthropicThinkingStatePrefix)
+}
+
 type anthropicThinkingState struct {
 	Version   int    `json:"version"`
 	ChannelID int    `json:"channel_id"`

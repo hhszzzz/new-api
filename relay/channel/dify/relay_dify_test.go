@@ -3,6 +3,8 @@ package dify
 import (
 	"bytes"
 	"context"
+	hostdto "github.com/QuantumNous/new-api/dto"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,7 +16,6 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relaydto "github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -84,7 +85,7 @@ func newDifyHandlerTestContext(strict bool) (*gin.Context, *httptest.ResponseRec
 		StartTime: time.Now(),
 		ChannelMeta: &relaycommon.ChannelMeta{
 			UpstreamModelName: "dify-test",
-			ChannelOtherSettings: relaydto.ChannelOtherSettings{
+			ChannelOtherSettings: hostdto.ChannelOtherSettings{
 				DifyRequireSuccessfulWorkflow: strict,
 			},
 		},
@@ -191,10 +192,10 @@ func TestDifyStreamHandlerStopsUpstreamTaskAfterClientDisconnect(t *testing.T) {
 
 	assert.Nil(t, usage)
 	require.NotNil(t, apiErr)
-	assert.Equal(t, types.ErrorCodeClientDisconnected, apiErr.GetErrorCode())
+	assert.Equal(t, hosttypes.ErrorCodeClientDisconnected, apiErr.GetErrorCode())
 	assert.Equal(t, 499, apiErr.StatusCode)
-	assert.True(t, types.IsSkipRetryError(apiErr), "client disconnect must not trigger channel retry/auto-ban")
-	assert.False(t, types.IsRecordErrorLog(apiErr), "client disconnect must not be recorded as a user-visible error")
+	assert.True(t, hosttypes.IsSkipRetryError(apiErr), "client disconnect must not trigger channel retry/auto-ban")
+	assert.False(t, hosttypes.IsRecordErrorLog(apiErr), "client disconnect must not be recorded as a user-visible error")
 	assert.Equal(t, "task-123", info.DifyTaskID)
 	assert.NotContains(t, recorder.Body.String(), "data: [DONE]")
 	request := <-requests
@@ -289,7 +290,7 @@ func TestDifyStreamHandlerRejectsUnsuccessfulWorkflowStatuses(t *testing.T) {
 			assert.Nil(t, usage)
 			require.NotNil(t, apiErr)
 			assert.Equal(t, http.StatusBadGateway, apiErr.StatusCode)
-			assert.Equal(t, types.ErrorCodeBadResponse, apiErr.GetErrorCode())
+			assert.Equal(t, hosttypes.ErrorCodeBadResponse, apiErr.GetErrorCode())
 			assert.Equal(t, status, info.DifyWorkflowStatus)
 			assert.NotContains(t, recorder.Body.String(), "data: [DONE]")
 		})
@@ -301,7 +302,7 @@ func TestDifyStreamHandlerStrictTerminalValidation(t *testing.T) {
 	tests := []struct {
 		name     string
 		body     string
-		wantCode types.ErrorCode
+		wantCode hosttypes.ErrorCode
 	}{
 		{
 			name: "missing workflow terminal",
@@ -309,7 +310,7 @@ func TestDifyStreamHandlerStrictTerminalValidation(t *testing.T) {
 				`{"event":"agent_message","answer":"answer"}`,
 				`{"event":"message_end","metadata":{"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}}`,
 			),
-			wantCode: types.ErrorCodeBadResponse,
+			wantCode: hosttypes.ErrorCodeBadResponse,
 		},
 		{
 			name: "empty answer",
@@ -317,7 +318,7 @@ func TestDifyStreamHandlerStrictTerminalValidation(t *testing.T) {
 				`{"event":"workflow_finished","data":{"status":"succeeded","total_tokens":2}}`,
 				`{"event":"message_end","metadata":{"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}}`,
 			),
-			wantCode: types.ErrorCodeEmptyResponse,
+			wantCode: hosttypes.ErrorCodeEmptyResponse,
 		},
 		{
 			name: "zero message usage",
@@ -326,7 +327,7 @@ func TestDifyStreamHandlerStrictTerminalValidation(t *testing.T) {
 				`{"event":"workflow_finished","data":{"status":"succeeded","total_tokens":2}}`,
 				`{"event":"message_end","metadata":{"usage":{"total_tokens":0}}}`,
 			),
-			wantCode: types.ErrorCodeBadResponse,
+			wantCode: hosttypes.ErrorCodeBadResponse,
 		},
 		{
 			name: "zero workflow usage",
@@ -335,7 +336,7 @@ func TestDifyStreamHandlerStrictTerminalValidation(t *testing.T) {
 				`{"event":"workflow_finished","data":{"status":"succeeded","total_tokens":0}}`,
 				`{"event":"message_end","metadata":{"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}}`,
 			),
-			wantCode: types.ErrorCodeBadResponse,
+			wantCode: hosttypes.ErrorCodeBadResponse,
 		},
 	}
 
@@ -381,7 +382,7 @@ func TestDifyStreamHandlerRejectsUniversalStreamFailures(t *testing.T) {
 			assert.Nil(t, usage)
 			require.NotNil(t, apiErr)
 			assert.Equal(t, http.StatusBadGateway, apiErr.StatusCode)
-			assert.Equal(t, types.ErrorCodeBadResponse, apiErr.GetErrorCode())
+			assert.Equal(t, hosttypes.ErrorCodeBadResponse, apiErr.GetErrorCode())
 			assert.NotContains(t, recorder.Body.String(), "data: [DONE]")
 		})
 	}
@@ -401,7 +402,7 @@ func TestDifyStreamHandlerDefaultModeRejectsUnsuccessfulWorkflow(t *testing.T) {
 	assert.Nil(t, usage)
 	require.NotNil(t, apiErr)
 	assert.Equal(t, http.StatusBadGateway, apiErr.StatusCode)
-	assert.Equal(t, types.ErrorCodeBadResponse, apiErr.GetErrorCode())
+	assert.Equal(t, hosttypes.ErrorCodeBadResponse, apiErr.GetErrorCode())
 	assert.Equal(t, "partial-succeeded", info.DifyWorkflowStatus)
 	assert.Contains(t, recorder.Body.String(), "legacy answer")
 	assert.NotContains(t, recorder.Body.String(), "data: [DONE]")
@@ -413,7 +414,7 @@ func TestDifyNonStreamHandlerContract(t *testing.T) {
 		name        string
 		strict      bool
 		body        string
-		wantErrCode types.ErrorCode
+		wantErrCode hosttypes.ErrorCode
 		wantAnswer  string
 	}{
 		{
@@ -426,23 +427,23 @@ func TestDifyNonStreamHandlerContract(t *testing.T) {
 			name:        "strict empty answer",
 			strict:      true,
 			body:        `{"conversation_id":"conversation-1","answer":"  ","metadata":{"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}}`,
-			wantErrCode: types.ErrorCodeEmptyResponse,
+			wantErrCode: hosttypes.ErrorCodeEmptyResponse,
 		},
 		{
 			name:        "strict zero usage",
 			strict:      true,
 			body:        `{"conversation_id":"conversation-1","answer":"answer","metadata":{"usage":{"total_tokens":0}}}`,
-			wantErrCode: types.ErrorCodeBadResponse,
+			wantErrCode: hosttypes.ErrorCodeBadResponse,
 		},
 		{
 			name:        "HTTP 200 error envelope",
 			body:        `{"event":"error","code":"workflow_error","message":"workflow failed","status":500}`,
-			wantErrCode: types.ErrorCodeBadResponse,
+			wantErrCode: hosttypes.ErrorCodeBadResponse,
 		},
 		{
 			name:        "HTTP 200 status-only error envelope",
 			body:        `{"status":"failed"}`,
-			wantErrCode: types.ErrorCodeBadResponse,
+			wantErrCode: hosttypes.ErrorCodeBadResponse,
 		},
 		{
 			name:       "default mode empty response compatibility",

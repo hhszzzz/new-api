@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"math"
 	"net/http/httptest"
 	"os"
@@ -149,14 +150,14 @@ func runFixedPriceAccountingCases(t *testing.T, db *gorm.DB) {
 			reservation, err := billingexpr.QuotaRoundStrict(cost / 1_000_000 * common.GetQuotaPerUnit() * group)
 			require.NoError(t, err)
 			snapshot := &billingexpr.BillingSnapshot{BillingMode: "tiered_expr", ExprString: tc.expression, ExprHash: billingexpr.ExprHashString(tc.expression), QuotaPerUnit: common.GetQuotaPerUnit(), GroupRatio: group, EstimatedTier: trace.MatchedTier, EstimatedBillingUnit: trace.BillingUnit, EstimatedFixedPrice: trace.FixedPrice, EstimatedQuotaAfterGroup: reservation}
-			info := &relaycommon.RelayInfo{UserId: user.Id, TokenId: token.Id, TokenKey: token.Key, ChannelMeta: &relaycommon.ChannelMeta{ChannelId: channel.Id}, OriginModelName: "fixed-test", UsingGroup: "default", UserGroup: "default", UserSetting: dto.UserSetting{BillingPreference: "wallet_only"}, ForcePreConsume: true, StartTime: time.Now(), IsStream: tc.stream, RelayFormat: types.RelayFormatOpenAI, PriceData: hosttypes.PriceData{GroupRatioInfo: hosttypes.GroupRatioInfo{GroupRatio: group}}, TieredBillingSnapshot: snapshot, BillingRequestInput: request}
+			info := &relaycommon.RelayInfo{UserId: user.Id, TokenId: token.Id, TokenKey: token.Key, ChannelMeta: &relaycommon.ChannelMeta{ChannelId: channel.Id}, OriginModelName: "fixed-test", UsingGroup: "default", UserGroup: "default", UserSetting: hostdto.UserSetting{BillingPreference: "wallet_only"}, ForcePreConsume: true, StartTime: time.Now(), IsStream: tc.stream, RelayFormat: types.RelayFormatOpenAI, PriceData: hosttypes.PriceData{GroupRatioInfo: hosttypes.GroupRatioInfo{GroupRatio: group}}, TieredBillingSnapshot: snapshot, BillingRequestInput: request}
 			info.SetEstimatePromptTokens(tc.estimate)
 			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 			ctx.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
 			apiErr := PreConsumeBilling(ctx, reservation, info)
 			if tc.insufficient {
 				require.NotNil(t, apiErr)
-				assert.Equal(t, types.ErrorCodeInsufficientUserQuota, apiErr.GetErrorCode())
+				assert.Equal(t, hosttypes.ErrorCodeInsufficientUserQuota, apiErr.GetErrorCode())
 			} else {
 				require.Nil(t, apiErr)
 				held, err := model.GetUserQuota(user.Id, true)

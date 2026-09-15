@@ -2,12 +2,11 @@ package operation_setting
 
 import (
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
-
-	"github.com/QuantumNous/new-api/relaykit/types"
 )
 
 type StatusCodeRange struct {
@@ -35,8 +34,8 @@ var alwaysSkipRetryStatusCodes = map[int]struct{}{
 	524: {},
 }
 
-var alwaysSkipRetryCodes = map[types.ErrorCode]struct{}{
-	types.ErrorCodeBadResponseBody: {},
+var alwaysSkipRetryCodes = map[hosttypes.ErrorCode]struct{}{
+	hosttypes.ErrorCodeBadResponseBody: {},
 }
 
 func AutomaticDisableStatusCodesToString() string {
@@ -84,7 +83,7 @@ func IsAlwaysSkipRetryStatusCode(code int) bool {
 	return exists
 }
 
-func IsAlwaysSkipRetryCode(errorCode types.ErrorCode) bool {
+func IsAlwaysSkipRetryCode(errorCode hosttypes.ErrorCode) bool {
 	_, exists := alwaysSkipRetryCodes[errorCode]
 	return exists
 }

@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"strings"
 	"time"
 
@@ -9,7 +10,6 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 
 	"github.com/gin-gonic/gin"
@@ -21,11 +21,11 @@ const (
 	ContentViolatesUsageMarker = "Content violates usage guidelines"
 )
 
-func IsViolationFeeCode(code types.ErrorCode) bool {
+func IsViolationFeeCode(code hosttypes.ErrorCode) bool {
 	return strings.HasPrefix(string(code), ViolationFeeCodePrefix)
 }
 
-func HasCSAMViolationMarker(err *types.NewAPIError) bool {
+func HasCSAMViolationMarker(err *hosttypes.NewAPIError) bool {
 	if err == nil {
 		return false
 	}
@@ -36,14 +36,14 @@ func HasCSAMViolationMarker(err *types.NewAPIError) bool {
 	return strings.Contains(msg, CSAMViolationMarker) || strings.Contains(err.Error(), ContentViolatesUsageMarker)
 }
 
-func WrapAsViolationFeeGrokCSAM(err *types.NewAPIError) *types.NewAPIError {
+func WrapAsViolationFeeGrokCSAM(err *hosttypes.NewAPIError) *hosttypes.NewAPIError {
 	if err == nil {
 		return nil
 	}
 	oai := err.ToOpenAIError()
-	oai.Type = string(types.ErrorCodeViolationFeeGrokCSAM)
-	oai.Code = string(types.ErrorCodeViolationFeeGrokCSAM)
-	return types.WithOpenAIError(oai, err.StatusCode, types.ErrOptionWithSkipRetry())
+	oai.Type = string(hosttypes.ErrorCodeViolationFeeGrokCSAM)
+	oai.Code = string(hosttypes.ErrorCodeViolationFeeGrokCSAM)
+	return hosttypes.WithOpenAIError(oai, err.StatusCode, hosttypes.ErrOptionWithSkipRetry())
 }
 
 // NormalizeViolationFeeError ensures:
@@ -51,7 +51,7 @@ func WrapAsViolationFeeGrokCSAM(err *types.NewAPIError) *types.NewAPIError {
 // - if error.code already has the violation-fee prefix, skip-retry is enabled.
 //
 // It must be called before retry decision logic.
-func NormalizeViolationFeeError(err *types.NewAPIError) *types.NewAPIError {
+func NormalizeViolationFeeError(err *hosttypes.NewAPIError) *hosttypes.NewAPIError {
 	if err == nil {
 		return nil
 	}
@@ -62,17 +62,17 @@ func NormalizeViolationFeeError(err *types.NewAPIError) *types.NewAPIError {
 
 	if IsViolationFeeCode(err.GetErrorCode()) {
 		oai := err.ToOpenAIError()
-		return types.WithOpenAIError(oai, err.StatusCode, types.ErrOptionWithSkipRetry())
+		return hosttypes.WithOpenAIError(oai, err.StatusCode, hosttypes.ErrOptionWithSkipRetry())
 	}
 
 	return err
 }
 
-func shouldChargeViolationFee(err *types.NewAPIError) bool {
+func shouldChargeViolationFee(err *hosttypes.NewAPIError) bool {
 	if err == nil {
 		return false
 	}
-	if err.GetErrorCode() == types.ErrorCodeViolationFeeGrokCSAM {
+	if err.GetErrorCode() == hosttypes.ErrorCodeViolationFeeGrokCSAM {
 		return true
 	}
 	// In case some callers didn't normalize, keep a safety net.
@@ -95,7 +95,7 @@ func calcViolationFeeQuota(amount, groupRatio float64) (int, *common.QuotaClamp)
 
 // ChargeViolationFeeIfNeeded charges an additional fee after the normal flow finishes (including refund).
 // It uses Grok fee settings as the fee policy.
-func ChargeViolationFeeIfNeeded(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, apiErr *types.NewAPIError) bool {
+func ChargeViolationFeeIfNeeded(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, apiErr *hosttypes.NewAPIError) bool {
 	if ctx == nil || relayInfo == nil || apiErr == nil {
 		return false
 	}
@@ -133,7 +133,7 @@ func ChargeViolationFeeIfNeeded(ctx *gin.Context, relayInfo *relaycommon.RelayIn
 	other := model.NewLogOther()
 	other.MergePublic(map[string]any{
 		"violation_fee":        true,
-		"violation_fee_code":   string(types.ErrorCodeViolationFeeGrokCSAM),
+		"violation_fee_code":   string(hosttypes.ErrorCodeViolationFeeGrokCSAM),
 		"fee_quota":            feeQuota,
 		"base_amount":          settings.ViolationDeductionAmount,
 		"group_ratio":          groupRatio,

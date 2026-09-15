@@ -3,6 +3,7 @@ package oairesponses
 import (
 	"context"
 	"fmt"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/internal/toolconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -13,6 +14,7 @@ import (
 	sharedtoolmedia "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/toolmedia"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
+	"github.com/QuantumNous/new-api/relaykit/types"
 )
 
 func convertOpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Meta, request any) (any, error) {
@@ -40,30 +42,12 @@ func OpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Met
 		TopP:        req.TopP,
 		Stream:      req.Stream,
 	}
-	if req.MaxOutputTokens != nil && *req.MaxOutputTokens > 0 {
+	if req.MaxOutputTokens != nil {
 		claudeRequest.MaxTokens = kitutil.GetPointer(*req.MaxOutputTokens)
 	}
-	tools, toolState, err := prepareResponsesToolsForChat(c, req)
+	_, toolState, err := toolconv.PrepareResponsesToolsForChat(c, req)
 	if err != nil {
 		return nil, err
-	}
-	if len(tools) > 0 {
-		functions := make([]dto.FunctionRequest, 0, len(tools))
-		for _, tool := range tools {
-			if tool.Type != "function" {
-				return nil, fmt.Errorf("Responses tool type %q cannot be converted to Claude Messages", tool.Type)
-			}
-			functions = append(functions, tool.Function)
-		}
-		claudeRequest.Tools = responsesFunctionDeclarationsToClaudeTools(functions)
-	}
-
-	toolChoice, err := responsesRequestToolChoiceToChat(req.ToolChoice, toolState)
-	if err != nil {
-		return nil, err
-	}
-	if len(tools) > 0 && (toolChoice != nil || RawJSONPresent(req.ParallelToolCalls)) {
-		claudeRequest.ToolChoice = sharedclaude.MapOpenAIToolChoice(toolChoice, ParallelToolCalls(req.ParallelToolCalls))
 	}
 	sourceReasoning, err := reasoning.FromOpenAIResponses(req)
 	if err != nil {
@@ -144,16 +128,23 @@ func OpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Met
 		case "additional_tools":
 			continue
 		case "reasoning":
+			encodedState := kitutil.Interface2String(item["encrypted_content"])
 			if info == nil || !info.HasChannelMeta() {
+				if encodedState != "" {
+					return nil, fmt.Errorf("provider reasoning state requires its originating channel")
+				}
 				continue
 			}
 			block, ok, err := sharedclaude.DecodeThinkingBlock(
-				kitutil.Interface2String(item["encrypted_content"]),
+				encodedState,
 				info.GetChannelID(),
 				convmeta.OptionsOf(info).ProviderStateSecret,
 			)
 			if err != nil {
 				return nil, fmt.Errorf("invalid Anthropic reasoning state: %w", err)
+			}
+			if encodedState != "" && !ok {
+				return nil, fmt.Errorf("provider reasoning state cannot be restored on this channel")
 			}
 			if ok {
 				claudeRequest.Messages = appendClaudeConversationContent(
@@ -164,7 +155,7 @@ func OpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Met
 			}
 			continue
 		default:
-			if isResponsesHostedHistoryItem(itemType) {
+			if toolconv.IsResponsesHostedHistoryItem(itemType) {
 				return nil, fmt.Errorf("Responses server tool history item %q cannot be converted to Anthropic Messages without losing context", itemType)
 			}
 			role := responsesClaudeRole(strings.TrimSpace(kitutil.Interface2String(item["role"])))
@@ -194,11 +185,8 @@ func OpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Met
 	if len(claudeRequest.Messages) == 0 {
 		return nil, fmt.Errorf("cannot convert Responses request: empty Messages input")
 	}
-	if (sourceReasoning.HasStrength() || sharedclaude.AdaptiveThinkingIsDefault(claudeRequest.Model)) && (!claudeMessagesSupportThinking(claudeRequest.Messages) || claudeToolChoiceForcesCall(claudeRequest.ToolChoice)) {
+	if (sourceReasoning.HasStrength() || sharedclaude.AdaptiveThinkingIsDefault(claudeRequest.Model)) && !claudeMessagesSupportThinking(claudeRequest.Messages) {
 		if sharedclaude.ThinkingCannotBeDisabled(claudeRequest.Model) {
-			if claudeToolChoiceForcesCall(claudeRequest.ToolChoice) {
-				return nil, fmt.Errorf("model %q cannot honor a forced tool_choice because thinking cannot be disabled", claudeRequest.Model)
-			}
 			return nil, fmt.Errorf("cannot convert Responses request: model %q requires thinking with signed tool history", claudeRequest.Model)
 		}
 		sourceReasoning = reasoning.Intent{Mode: reasoning.ModeDisabled, Effort: reasoning.EffortNone}
@@ -214,20 +202,10 @@ func OpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Met
 	if claudeRequest.MaxTokens == nil {
 		return nil, sharedclaude.ErrMissingMaxTokens
 	}
-	return claudeRequest, nil
-}
-
-func responsesFunctionDeclarationsToClaudeTools(functions []dto.FunctionRequest) []any {
-	tools := make([]any, 0, len(functions))
-	for _, function := range functions {
-		tools = append(tools, &dto.Tool{
-			Name:        function.Name,
-			Description: function.Description,
-			InputSchema: sharedclaude.FunctionParametersToInputSchema(function.Parameters),
-			Strict:      function.Strict,
-		})
+	if err := toolconv.RenderRequestTools(c, types.RelayFormatOpenAIResponses, types.RelayFormatClaude, req, claudeRequest, convmeta.OptionsOf(info)); err != nil {
+		return nil, err
 	}
-	return tools
+	return claudeRequest, nil
 }
 
 // applyResponsesReasoningToClaude keeps replayed tool turns compatible with
@@ -236,9 +214,9 @@ func applyResponsesReasoningToClaude(_ *dto.OpenAIResponsesRequest, request *dto
 	if request == nil || request.Thinking == nil || request.Thinking.Type == "disabled" {
 		return nil
 	}
-	if !claudeMessagesSupportThinking(request.Messages) || claudeToolChoiceForcesCall(request.ToolChoice) {
+	if !claudeMessagesSupportThinking(request.Messages) {
 		if sharedclaude.ThinkingCannotBeDisabled(request.Model) {
-			return fmt.Errorf("cannot convert Responses request: Anthropic model %q requires thinking but the tool history or forced tool_choice cannot preserve it", request.Model)
+			return fmt.Errorf("cannot convert Responses request: Anthropic model %q requires thinking but the tool history cannot preserve it", request.Model)
 		}
 		request.Thinking = &dto.Thinking{Type: "disabled"}
 	}
@@ -300,14 +278,6 @@ func claudeMessagesSupportThinking(messages []dto.ClaudeMessage) bool {
 		}
 	}
 	return true
-}
-
-func claudeToolChoiceForcesCall(value any) bool {
-	choice, ok := value.(*dto.ClaudeToolChoice)
-	if !ok || choice == nil {
-		return false
-	}
-	return choice.Type == "any" || choice.Type == "tool"
 }
 
 func responsesInputContentToClaudeMediaMessages(c context.Context, content any) ([]dto.ClaudeMediaMessage, error) {
@@ -404,15 +374,15 @@ func responsesCallItemToClaudeToolUse(item map[string]any, inputKey string, kind
 	if name == "" {
 		return dto.ClaudeMediaMessage{}, fmt.Errorf("Responses tool call is missing name")
 	}
-	upstreamName, err := upstreamToolName(toolState, kind, namespace, name)
+	upstreamName, err := toolconv.UpstreamToolName(toolState, kind, namespace, name)
 	if err != nil {
 		return dto.ClaudeMediaMessage{}, err
 	}
 	input, err := responsesFunctionArgumentsObject(item[inputKey])
 	if kind == sharedbridge.ToolKindCustom {
-		input = ObjectValue(customInputArguments(item[inputKey]), inputKey)
+		input = ObjectValue(toolconv.CustomInputArguments(item[inputKey]), inputKey)
 	} else if kind == sharedbridge.ToolKindToolSearch {
-		input = ObjectValue(toolSearchArguments(item[inputKey]), inputKey)
+		input = ObjectValue(toolconv.ToolSearchArguments(item[inputKey]), inputKey)
 	} else if kind == sharedbridge.ToolKindLocalShell {
 		input = ObjectValue(sharedbridge.LocalShellCallArguments(item[inputKey]), inputKey)
 	} else if err != nil {

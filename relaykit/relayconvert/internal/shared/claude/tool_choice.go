@@ -1,46 +1,35 @@
 package claude
 
-import "github.com/QuantumNous/new-api/relaykit/dto"
+import (
+	"fmt"
 
-func MapOpenAIToolChoice(toolChoice any, parallelToolCalls *bool) *dto.ClaudeToolChoice {
-	var claudeToolChoice *dto.ClaudeToolChoice
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
+)
 
-	if toolChoiceStr, ok := toolChoice.(string); ok {
-		switch toolChoiceStr {
-		case "auto":
-			claudeToolChoice = &dto.ClaudeToolChoice{
-				Type: "auto",
-			}
-		case "required":
-			claudeToolChoice = &dto.ClaudeToolChoice{
-				Type: "any",
-			}
-		case "none":
-			claudeToolChoice = &dto.ClaudeToolChoice{
-				Type: "none",
-			}
-		}
-	} else if toolChoiceMap, ok := toolChoice.(map[string]interface{}); ok {
-		if function, ok := toolChoiceMap["function"].(map[string]interface{}); ok {
-			if toolName, ok := function["name"].(string); ok {
-				claudeToolChoice = &dto.ClaudeToolChoice{
-					Type: "tool",
-					Name: toolName,
-				}
-			}
-		}
+// ResolveThinkingToolChoice runs after both reasoning and tools are rendered.
+// Forced calls cannot be combined with Anthropic thinking; models which require
+// thinking must reject the route rather than silently changing tool execution.
+func ResolveThinkingToolChoice(request *dto.ClaudeRequest) error {
+	if request == nil || request.ToolChoice == nil {
+		return nil
 	}
-
-	if parallelToolCalls != nil {
-		if claudeToolChoice == nil {
-			claudeToolChoice = &dto.ClaudeToolChoice{
-				Type: "auto",
-			}
-		}
-		if claudeToolChoice.Type != "none" {
-			claudeToolChoice.DisableParallelToolUse = !*parallelToolCalls
-		}
+	choice, err := kitutil.Any2Type[dto.ClaudeToolChoice](request.ToolChoice)
+	if err != nil {
+		return fmt.Errorf("invalid Claude tool_choice: %w", err)
 	}
-
-	return claudeToolChoice
+	if choice.Type != "any" && choice.Type != "tool" {
+		return nil
+	}
+	if request.Thinking != nil && request.Thinking.Type == "disabled" {
+		return nil
+	}
+	if request.Thinking == nil && !AdaptiveThinkingIsDefault(request.Model) {
+		return nil
+	}
+	if ThinkingCannotBeDisabled(request.Model) {
+		return fmt.Errorf("model %q cannot honor a forced tool_choice because thinking cannot be disabled", request.Model)
+	}
+	request.Thinking = &dto.Thinking{Type: "disabled"}
+	return nil
 }

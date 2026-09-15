@@ -3,12 +3,12 @@ package relay
 import (
 	"context"
 	"errors"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -22,7 +22,7 @@ func TestNormalizeStreamResultDeliveredTerminalWinsLateCancellation(t *testing.T
 	status.MarkTerminalDelivered()
 	status.MarkClientGone(context.Canceled)
 	info := &relaycommon.RelayInfo{IsStream: true, StreamStatus: status}
-	upstreamErr := types.NewOpenAIError(errors.New("late context cancellation"), types.ErrorCodeBadResponse, http.StatusBadGateway)
+	upstreamErr := hosttypes.NewOpenAIError(errors.New("late context cancellation"), hosttypes.ErrorCodeBadResponse, http.StatusBadGateway)
 
 	assert.Nil(t, normalizeStreamResult(nil, info, upstreamErr))
 }
@@ -46,10 +46,10 @@ func TestNormalizeStreamResultClientGoneBeforeDeliveryAlwaysRefunds(t *testing.T
 
 	apiErr := normalizeStreamResult(c, info, nil)
 	require.NotNil(t, apiErr)
-	assert.Equal(t, types.ErrorCodeClientDisconnected, apiErr.GetErrorCode())
+	assert.Equal(t, hosttypes.ErrorCodeClientDisconnected, apiErr.GetErrorCode())
 	assert.Equal(t, 499, apiErr.StatusCode)
-	assert.True(t, types.IsSkipRetryError(apiErr))
-	assert.False(t, types.IsRecordErrorLog(apiErr))
+	assert.True(t, hosttypes.IsSkipRetryError(apiErr))
+	assert.False(t, hosttypes.IsRecordErrorLog(apiErr))
 
 	snapshot := status.Snapshot()
 	assert.True(t, snapshot.ResponseCommitted)
@@ -64,7 +64,7 @@ func TestNormalizeStreamResultPreservesUpstreamFailureWithoutDisconnect(t *testi
 	status := relaycommon.NewStreamStatus()
 	status.MarkTerminalFailure(errors.New("response.failed"))
 	info := &relaycommon.RelayInfo{IsStream: true, StreamStatus: status}
-	upstreamErr := types.NewOpenAIError(errors.New("provider failed"), types.ErrorCodeBadResponse, http.StatusBadGateway)
+	upstreamErr := hosttypes.NewOpenAIError(errors.New("provider failed"), hosttypes.ErrorCodeBadResponse, http.StatusBadGateway)
 
 	assert.Same(t, upstreamErr, normalizeStreamResult(nil, info, upstreamErr))
 }

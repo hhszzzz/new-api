@@ -2,12 +2,12 @@ package relay
 
 import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relaykit/types"
+	hosttypes "github.com/QuantumNous/new-api/types"
 )
 
-func newAPIErrorFromParamOverride(err error) *types.NewAPIError {
+func newAPIErrorFromParamOverride(err error) *hosttypes.NewAPIError {
 	if fixedErr, ok := relaycommon.AsParamOverrideReturnError(err); ok {
 		return relaycommon.NewAPIErrorFromParamOverride(fixedErr)
 	}
-	return types.NewError(err, types.ErrorCodeChannelParamOverrideInvalid, types.ErrOptionWithSkipRetry())
+	return hosttypes.NewError(err, hosttypes.ErrorCodeChannelParamOverrideInvalid, hosttypes.ErrOptionWithSkipRetry())
 }

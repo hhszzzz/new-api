@@ -1,11 +1,11 @@
 package model
 
 import (
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -124,10 +124,10 @@ func TestSetChannelModelDisabledScopesToOneGroup(t *testing.T) {
 		return row.Enabled
 	}
 
-	require.NoError(t, SetChannelModelDisabled(channel.Id, dto.DisabledModelEntry{
+	require.NoError(t, SetChannelModelDisabled(channel.Id, hostdto.DisabledModelEntry{
 		Group:  "g1",
 		Model:  "m1",
-		Source: dto.DisabledModelSourceManual,
+		Source: hostdto.DisabledModelSourceManual,
 		Reason: "manual operation",
 	}, true))
 
@@ -141,7 +141,7 @@ func TestSetChannelModelDisabledScopesToOneGroup(t *testing.T) {
 	require.Len(t, reloaded.GetDisabledModels(), 1)
 	assert.Equal(t, "g1", reloaded.GetDisabledModels()[0].Group)
 
-	require.NoError(t, SetChannelModelDisabled(channel.Id, dto.DisabledModelEntry{
+	require.NoError(t, SetChannelModelDisabled(channel.Id, hostdto.DisabledModelEntry{
 		Group: "g1",
 		Model: "m1",
 	}, false))
@@ -168,10 +168,10 @@ func TestUpdateAbilityStatusKeepsManuallyDisabledModel(t *testing.T) {
 	}
 	require.NoError(t, DB.Create(&channel).Error)
 	require.NoError(t, channel.UpdateAbilities(nil))
-	require.NoError(t, SetChannelModelDisabled(channel.Id, dto.DisabledModelEntry{
+	require.NoError(t, SetChannelModelDisabled(channel.Id, hostdto.DisabledModelEntry{
 		Group:  "g1",
 		Model:  "m1",
-		Source: dto.DisabledModelSourceManual,
+		Source: hostdto.DisabledModelSourceManual,
 	}, true))
 
 	abilityEnabled := func(model string) bool {
@@ -204,9 +204,9 @@ func TestDisabledModelWithoutGroupSurvivesAbilityRebuild(t *testing.T) {
 	}
 	require.NoError(t, DB.Create(&channel).Error)
 	require.NoError(t, channel.UpdateAbilities(nil))
-	require.NoError(t, SetChannelModelDisabled(channel.Id, dto.DisabledModelEntry{
+	require.NoError(t, SetChannelModelDisabled(channel.Id, hostdto.DisabledModelEntry{
 		Model:  "m1",
-		Source: dto.DisabledModelSourceAuto,
+		Source: hostdto.DisabledModelSourceAuto,
 	}, true))
 
 	abilityEnabled := func(group string) bool {

@@ -3,6 +3,7 @@ package gemini
 import (
 	"errors"
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 
@@ -19,18 +20,18 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func GeminiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+func GeminiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *hosttypes.NewAPIError) {
 	defer service.CloseResponseBodyGracefully(resp)
 
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	logger.LogDebug(c, "Gemini responses response body: %s", responseBody)
 
 	var geminiResponse dto.GeminiChatResponse
 	if err := common.Unmarshal(responseBody, &geminiResponse); err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	markGeminiGoogleSearchCall(c, &geminiResponse)
 	countGeminiBillableFunctionCalls(info, &geminiResponse)
@@ -41,9 +42,9 @@ func GeminiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 	if len(geminiResponse.Candidates) == 0 && blockReason == "" {
 		usage := buildUsageFromGeminiResponse(c, info, &geminiResponse)
 		common.SetContextKey(c, constant.ContextKeyAdminRejectReason, "gemini_empty_candidates")
-		return &usage, types.NewOpenAIError(
+		return &usage, hosttypes.NewOpenAIError(
 			errors.New("empty response from Gemini API"),
-			types.ErrorCodeEmptyResponse,
+			hosttypes.ErrorCodeEmptyResponse,
 			http.StatusInternalServerError,
 		)
 	}
@@ -52,11 +53,11 @@ func GeminiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 
 	convertResult, err := service.ConvertResponse(c, info, types.RelayFormatOpenAIResponses, &geminiResponse)
 	if err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	responsesResp, ok := convertResult.Value.(*dto.OpenAIResponsesResponse)
 	if !ok {
-		return nil, types.NewOpenAIError(fmt.Errorf("expected OpenAI responses response, got %T", convertResult.Value), types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(fmt.Errorf("expected OpenAI responses response, got %T", convertResult.Value), hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	if responseID := helper.GetResponseID(c); responseID != "" {
 		responsesResp.ID = responseID
@@ -67,40 +68,40 @@ func GeminiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 
 	responseBody, err = common.Marshal(responsesResp)
 	if err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
 	}
 	if err := service.IOCopyBytesGracefully(c, resp, responseBody); err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
 	return &usage, nil
 }
 
-func GeminiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+func GeminiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *hosttypes.NewAPIError) {
 	responseID := protocolstate.PublicResponseID(c, helper.GetResponseID(c))
 	created := common.GetTimestamp()
-	state, err := relayconvert.NewResponseStreamState(types.RelayFormatGemini, types.RelayFormatOpenAIResponses, relayconvert.ResponseStreamOptions{
+	state, err := info.ConversionSession().StreamState(types.RelayFormatGemini, types.RelayFormatOpenAIResponses, relayconvert.ResponseStreamOptions{
 		ID:                 responseID,
 		Model:              info.PublicResponseModelName(),
 		Created:            created,
 		EmitSequenceNumber: true,
 	})
 	if err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
 	hostedBridge := relayconvert.NewGeminiHostedStreamBridge()
-	var streamErr *types.NewAPIError
+	var streamErr *hosttypes.NewAPIError
 	upstreamCompleted := false
 
 	sendEvent := func(event relayconvert.ChatToResponsesStreamEvent) bool {
 		protocolstate.ObserveResponsesStream(c, &event.Payload)
 		data, err := common.Marshal(event.Payload)
 		if err != nil {
-			streamErr = types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
+			streamErr = hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
 			info.StreamStatus.MarkTerminalFailure(streamErr)
 			return false
 		}
 		if err := helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: event.Type}, string(data)); err != nil {
-			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+			streamErr = hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 			info.StreamStatus.MarkWriteError(err)
 			return false
 		}
@@ -114,7 +115,7 @@ func GeminiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, r
 		for _, result := range failureResults {
 			event, ok := result.Value.(relayconvert.ChatToResponsesStreamEvent)
 			if !ok {
-				streamErr = types.NewOpenAIError(fmt.Errorf("expected OAI responses stream event, got %T", result.Value), types.ErrorCodeBadResponse, http.StatusInternalServerError)
+				streamErr = hosttypes.NewOpenAIError(fmt.Errorf("expected OAI responses stream event, got %T", result.Value), hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 				return true
 			}
 			if !sendEvent(event) {
@@ -129,14 +130,14 @@ func GeminiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, r
 			if failResponsesStream(err) {
 				return false
 			}
-			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+			streamErr = hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 			info.StreamStatus.MarkTerminalFailure(streamErr)
 			return false
 		}
 		for _, result := range results {
 			event, ok := result.Value.(relayconvert.ChatToResponsesStreamEvent)
 			if !ok {
-				streamErr = types.NewOpenAIError(fmt.Errorf("expected OAI responses stream event, got %T", result.Value), types.ErrorCodeBadResponse, http.StatusInternalServerError)
+				streamErr = hosttypes.NewOpenAIError(fmt.Errorf("expected OAI responses stream event, got %T", result.Value), hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 				info.StreamStatus.MarkTerminalFailure(streamErr)
 				return false
 			}
@@ -169,9 +170,9 @@ func GeminiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, r
 		if info.StreamStatus.Snapshot().EndReason == relaycommon.StreamEndReasonClientGone {
 			return usage, nil
 		}
-		return usage, types.NewOpenAIError(
+		return usage, hosttypes.NewOpenAIError(
 			fmt.Errorf("gemini stream ended unexpectedly: %s", info.StreamStatus.Summary()),
-			types.ErrorCodeBadResponse,
+			hosttypes.ErrorCodeBadResponse,
 			http.StatusBadGateway,
 		)
 	}
@@ -181,15 +182,15 @@ func GeminiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, r
 	if !upstreamCompleted {
 		terminalErr := fmt.Errorf("Gemini stream ended without a terminal finish reason")
 		info.StreamStatus.MarkTerminalFailure(terminalErr)
-		return nil, types.NewOpenAIError(
+		return nil, hosttypes.NewOpenAIError(
 			terminalErr,
-			types.ErrorCodeBadResponse,
+			hosttypes.ErrorCodeBadResponse,
 			http.StatusBadGateway,
 		)
 	}
 	hostedEvents, err := hostedBridge.Finalize(state)
 	if err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
 	for _, event := range hostedEvents {
 		if !sendEvent(event) {
@@ -209,14 +210,14 @@ func GeminiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, r
 		if failResponsesStream(err) {
 			return usage, streamErr
 		}
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
 	for _, result := range finalResults {
 		event, ok := result.Value.(relayconvert.ChatToResponsesStreamEvent)
 		if !ok {
 			terminalErr := fmt.Errorf("expected OAI responses stream event, got %T", result.Value)
 			info.StreamStatus.MarkTerminalFailure(terminalErr)
-			return nil, types.NewOpenAIError(terminalErr, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+			return nil, hosttypes.NewOpenAIError(terminalErr, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 		}
 		if !sendEvent(event) {
 			if streamErr != nil {

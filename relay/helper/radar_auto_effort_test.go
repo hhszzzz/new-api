@@ -1,6 +1,7 @@
 package helper
 
 import (
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -65,20 +66,20 @@ func allowRadarModels(t *testing.T, models ...string) {
 	})
 }
 
-func radarAutoEffortSetting(policy string, minIQDelta float64, models ...string) *dto.RadarAutoEffortSetting {
-	enabled := make(map[string]dto.RadarAutoEffortModel, len(models))
+func radarAutoEffortSetting(policy string, minIQDelta float64, models ...string) *hostdto.RadarAutoEffortSetting {
+	enabled := make(map[string]hostdto.RadarAutoEffortModel, len(models))
 	for _, model := range models {
-		enabled[model] = dto.RadarAutoEffortModel{Enabled: true}
+		enabled[model] = hostdto.RadarAutoEffortModel{Enabled: true}
 	}
-	return &dto.RadarAutoEffortSetting{Policy: policy, MinIQDelta: minIQDelta, Models: enabled}
+	return &hostdto.RadarAutoEffortSetting{Policy: policy, MinIQDelta: minIQDelta, Models: enabled}
 }
 
-func newRadarAutoEffortRelayInfo(model string, request dto.Request, setting *dto.RadarAutoEffortSetting) *relaycommon.RelayInfo {
+func newRadarAutoEffortRelayInfo(model string, request dto.Request, setting *hostdto.RadarAutoEffortSetting) *relaycommon.RelayInfo {
 	return &relaycommon.RelayInfo{
 		OriginModelName: model,
 		RelayFormat:     types.RelayFormatOpenAI,
 		Request:         request,
-		UserSetting:     dto.UserSetting{RadarAutoEffort: setting},
+		UserSetting:     hostdto.UserSetting{RadarAutoEffort: setting},
 		ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: model},
 	}
 }
@@ -98,7 +99,7 @@ func TestResolveRadarAutoEffortReplacesExplicitTier(t *testing.T) {
 		service.ModelRadarConfiguration{Model: "gpt-test", Effort: "low", IQ: 60, ValidTasks: 10},
 	)
 	info := newRadarAutoEffortRelayInfo("gpt-test", radarAutoEffortRequest("gpt-test", "low"),
-		radarAutoEffortSetting(dto.RadarAutoEffortPolicyHighestIQ, 0, "gpt-test"))
+		radarAutoEffortSetting(hostdto.RadarAutoEffortPolicyHighestIQ, 0, "gpt-test"))
 
 	ResolveRadarAutoEffort(nil, info)
 
@@ -116,7 +117,7 @@ func TestResolveRadarAutoEffortSkipsWhenClientKeptTheDefaultTier(t *testing.T) {
 		service.ModelRadarConfiguration{Model: "gpt-test", Effort: "high", IQ: 90, ValidTasks: 10},
 	)
 	info := newRadarAutoEffortRelayInfo("gpt-test", radarAutoEffortRequest("gpt-test", ""),
-		radarAutoEffortSetting(dto.RadarAutoEffortPolicyHighestIQ, 0, "gpt-test"))
+		radarAutoEffortSetting(hostdto.RadarAutoEffortPolicyHighestIQ, 0, "gpt-test"))
 
 	ResolveRadarAutoEffort(nil, info)
 
@@ -131,7 +132,7 @@ func TestResolveRadarAutoEffortIgnoresDisabledModels(t *testing.T) {
 		service.ModelRadarConfiguration{Model: "gpt-test", Effort: "high", IQ: 90, ValidTasks: 10},
 	)
 	info := newRadarAutoEffortRelayInfo("gpt-test", radarAutoEffortRequest("gpt-test", "low"),
-		radarAutoEffortSetting(dto.RadarAutoEffortPolicyHighestIQ, 0, "other-model"))
+		radarAutoEffortSetting(hostdto.RadarAutoEffortPolicyHighestIQ, 0, "other-model"))
 
 	ResolveRadarAutoEffort(nil, info)
 
@@ -149,7 +150,7 @@ func TestResolveRadarAutoEffortIgnoresModelsTheAdministratorDidNotAllow(t *testi
 		},
 	})
 	info := newRadarAutoEffortRelayInfo("gpt-test", radarAutoEffortRequest("gpt-test", "low"),
-		radarAutoEffortSetting(dto.RadarAutoEffortPolicyHighestIQ, 0, "gpt-test"))
+		radarAutoEffortSetting(hostdto.RadarAutoEffortPolicyHighestIQ, 0, "gpt-test"))
 
 	ResolveRadarAutoEffort(nil, info)
 
@@ -164,7 +165,7 @@ func TestResolveRadarAutoEffortIgnoresAStoredStrategyWithoutEnabledModels(t *tes
 	// Disabling the last model keeps a non-default strategy stored, so the
 	// resolver must still treat the request as opted out.
 	info := newRadarAutoEffortRelayInfo("gpt-test", radarAutoEffortRequest("gpt-test", "low"),
-		radarAutoEffortSetting(dto.RadarAutoEffortPolicyIQPerCost, 30))
+		radarAutoEffortSetting(hostdto.RadarAutoEffortPolicyIQPerCost, 30))
 
 	ResolveRadarAutoEffort(nil, info)
 
@@ -181,7 +182,7 @@ func TestResolveRadarAutoEffortSkipsStaleSnapshot(t *testing.T) {
 		},
 	})
 	info := newRadarAutoEffortRelayInfo("gpt-test", radarAutoEffortRequest("gpt-test", "low"),
-		radarAutoEffortSetting(dto.RadarAutoEffortPolicyHighestIQ, 0, "gpt-test"))
+		radarAutoEffortSetting(hostdto.RadarAutoEffortPolicyHighestIQ, 0, "gpt-test"))
 
 	ResolveRadarAutoEffort(nil, info)
 
@@ -197,7 +198,7 @@ func TestResolveRadarAutoEffortKeepsTierWithinMinimumIQDelta(t *testing.T) {
 		service.ModelRadarConfiguration{Model: "gpt-test", Effort: "medium", IQ: 88, ValidTasks: 10},
 	)
 	info := newRadarAutoEffortRelayInfo("gpt-test", radarAutoEffortRequest("gpt-test", "medium"),
-		radarAutoEffortSetting(dto.RadarAutoEffortPolicyMinIQDelta, 5, "gpt-test"))
+		radarAutoEffortSetting(hostdto.RadarAutoEffortPolicyMinIQDelta, 5, "gpt-test"))
 
 	ResolveRadarAutoEffort(nil, info)
 
@@ -214,7 +215,7 @@ func TestResolveRadarAutoEffortReplacesTierBeyondMinimumIQDelta(t *testing.T) {
 		service.ModelRadarConfiguration{Model: "gpt-test", Effort: "medium", IQ: 80, ValidTasks: 10},
 	)
 	info := newRadarAutoEffortRelayInfo("gpt-test", radarAutoEffortRequest("gpt-test", "medium"),
-		radarAutoEffortSetting(dto.RadarAutoEffortPolicyMinIQDelta, 5, "gpt-test"))
+		radarAutoEffortSetting(hostdto.RadarAutoEffortPolicyMinIQDelta, 5, "gpt-test"))
 
 	ResolveRadarAutoEffort(nil, info)
 
@@ -229,7 +230,7 @@ func TestResolveRadarAutoEffortIQPerCostPrefersCheaperTier(t *testing.T) {
 		service.ModelRadarConfiguration{Model: "gpt-test", Effort: "medium", IQ: 85, ValidTasks: 10, AveragePriceUSD: common.GetPointer(1.0)},
 	)
 	info := newRadarAutoEffortRelayInfo("gpt-test", radarAutoEffortRequest("gpt-test", "low"),
-		radarAutoEffortSetting(dto.RadarAutoEffortPolicyIQPerCost, 0, "gpt-test"))
+		radarAutoEffortSetting(hostdto.RadarAutoEffortPolicyIQPerCost, 0, "gpt-test"))
 
 	ResolveRadarAutoEffort(nil, info)
 
@@ -243,7 +244,7 @@ func TestResolveRadarAutoEffortReplacesModifierSelectedTier(t *testing.T) {
 		service.ModelRadarConfiguration{Model: "gpt-test", Effort: "high", IQ: 90, ValidTasks: 10},
 	)
 	info := newRadarAutoEffortRelayInfo("gpt-test@effort:low", radarAutoEffortRequest("gpt-test@effort:low", ""),
-		radarAutoEffortSetting(dto.RadarAutoEffortPolicyHighestIQ, 0, "gpt-test"))
+		radarAutoEffortSetting(hostdto.RadarAutoEffortPolicyHighestIQ, 0, "gpt-test"))
 
 	ResolveRadarAutoEffort(nil, info)
 
@@ -258,7 +259,7 @@ func TestResolveRadarAutoEffortKeepsGeminiBillingIdentity(t *testing.T) {
 		service.ModelRadarConfiguration{Model: "gemini-test", Effort: "high", IQ: 90, ValidTasks: 10},
 	)
 	info := newRadarAutoEffortRelayInfo("gemini-test", radarAutoEffortRequest("gemini-test", "low"),
-		radarAutoEffortSetting(dto.RadarAutoEffortPolicyHighestIQ, 0, "gemini-test"))
+		radarAutoEffortSetting(hostdto.RadarAutoEffortPolicyHighestIQ, 0, "gemini-test"))
 	info.RelayFormat = types.RelayFormatGemini
 	info.BillingModelName = "gemini-test-nothinking"
 
@@ -276,7 +277,7 @@ func TestResolveRadarAutoEffortPassThroughIsUntouched(t *testing.T) {
 	settings.PassThroughRequestEnabled = true
 
 	info := newRadarAutoEffortRelayInfo("gpt-test", radarAutoEffortRequest("gpt-test", "low"),
-		radarAutoEffortSetting(dto.RadarAutoEffortPolicyHighestIQ, 0, "gpt-test"))
+		radarAutoEffortSetting(hostdto.RadarAutoEffortPolicyHighestIQ, 0, "gpt-test"))
 
 	ResolveRadarAutoEffort(nil, info)
 
@@ -303,7 +304,7 @@ func TestApplyReasoningModelSuffixAppliesRadarDecision(t *testing.T) {
 		service.ModelRadarConfiguration{Model: "gpt-test", Effort: "high", IQ: 90, ValidTasks: 10},
 	)
 	request := radarAutoEffortRequest("gpt-test", "low")
-	info := newRadarAutoEffortRelayInfo("gpt-test", request, radarAutoEffortSetting(dto.RadarAutoEffortPolicyHighestIQ, 0, "gpt-test"))
+	info := newRadarAutoEffortRelayInfo("gpt-test", request, radarAutoEffortSetting(hostdto.RadarAutoEffortPolicyHighestIQ, 0, "gpt-test"))
 
 	ResolveRadarAutoEffort(nil, info)
 	require.NoError(t, ApplyReasoningModelSuffix(nil, info, request))
@@ -322,7 +323,7 @@ func TestApplyReasoningModelSuffixKeepsMappedModelModifierOverRadarDecision(t *t
 		service.ModelRadarConfiguration{Model: "gpt-test", Effort: "high", IQ: 90, ValidTasks: 10},
 	)
 	request := radarAutoEffortRequest("gpt-test", "low")
-	info := newRadarAutoEffortRelayInfo("gpt-test", request, radarAutoEffortSetting(dto.RadarAutoEffortPolicyHighestIQ, 0, "gpt-test"))
+	info := newRadarAutoEffortRelayInfo("gpt-test", request, radarAutoEffortSetting(hostdto.RadarAutoEffortPolicyHighestIQ, 0, "gpt-test"))
 	// The channel maps the request onto a tier of its own.
 	info.ChannelMeta.UpstreamModelName = "gpt-test-xhigh"
 	info.ChannelMeta.IsModelMapped = true

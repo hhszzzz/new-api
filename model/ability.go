@@ -10,7 +10,6 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/samber/lo"
@@ -330,7 +329,7 @@ func findEligibleChannelAbilities(group, abilityModel, requestModel, requestPath
 		}
 		if requestPath != "" && channel.Type == constant.ChannelTypeAdvancedCustom {
 			config := channel.GetOtherSettings().AdvancedCustom
-			if config == nil || !config.SupportsPathForModel(requestPath, requestModel) {
+			if _, matched := channel.MatchAdvancedCustomRoute(requestPath, requestModel, config); !matched {
 				continue
 			}
 		}
@@ -368,21 +367,21 @@ func filterAbilitiesByRequestPathAndModel(abilities []Ability, requestPath strin
 		return abilities
 	}
 
-	advancedConfigs := make(map[int]*dto.AdvancedCustomConfig)
+	advancedChannels := make(map[int]*Channel)
 	for _, channel := range channels {
 		if channel.Type == constant.ChannelTypeAdvancedCustom {
-			advancedConfigs[channel.Id] = channel.GetOtherSettings().AdvancedCustom
+			advancedChannels[channel.Id] = channel
 		}
 	}
 
 	filtered := make([]Ability, 0, len(abilities))
 	for _, ability := range abilities {
-		config, isAdvancedCustom := advancedConfigs[ability.ChannelId]
+		channel, isAdvancedCustom := advancedChannels[ability.ChannelId]
 		if !isAdvancedCustom {
 			filtered = append(filtered, ability)
 			continue
 		}
-		if config != nil && config.SupportsPathForModel(requestPath, model) {
+		if _, matched := channel.MatchAdvancedCustomRoute(requestPath, model, channel.GetOtherSettings().AdvancedCustom); matched {
 			filtered = append(filtered, ability)
 		}
 	}

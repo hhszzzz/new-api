@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/internal/toolconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -14,6 +15,7 @@ import (
 	sharedtoolmedia "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/toolmedia"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
+	"github.com/QuantumNous/new-api/relaykit/types"
 )
 
 const (
@@ -45,17 +47,12 @@ func ResponsesRequestToChatCompletionsRequestWithContext(c context.Context, req 
 		return nil, err
 	}
 
-	tools, toolState, err := prepareResponsesToolsForChat(c, req)
+	_, toolState, err := toolconv.PrepareResponsesToolsForChat(c, req)
 	if err != nil {
 		return nil, err
 	}
 
 	messages, err := responsesRequestMessagesToChat(c, req, toolState)
-	if err != nil {
-		return nil, err
-	}
-
-	toolChoice, err := responsesRequestToolChoiceToChat(req.ToolChoice, toolState)
 	if err != nil {
 		return nil, err
 	}
@@ -74,8 +71,6 @@ func ResponsesRequestToChatCompletionsRequestWithContext(c context.Context, req 
 		TopP:                 req.TopP,
 		TopLogProbs:          req.TopLogProbs,
 		ResponseFormat:       responseFormat,
-		Tools:                tools,
-		ToolChoice:           toolChoice,
 		User:                 req.User,
 		Store:                req.Store,
 		Metadata:             req.Metadata,
@@ -117,15 +112,8 @@ func ResponsesRequestToChatCompletionsRequestWithContext(c context.Context, req 
 	if req.ServiceTier != "" {
 		out.ServiceTier, _ = kitutil.Marshal(req.ServiceTier)
 	}
-	if len(req.ParallelToolCalls) > 0 && kitutil.GetJsonType(req.ParallelToolCalls) == "boolean" {
-		var parallelToolCalls bool
-		if err := kitutil.Unmarshal(req.ParallelToolCalls, &parallelToolCalls); err == nil {
-			out.ParallelTooCalls = &parallelToolCalls
-		}
-	}
-	if len(out.Tools) == 0 {
-		out.ToolChoice = nil
-		out.ParallelTooCalls = nil
+	if err := toolconv.RenderRequestTools(c, types.RelayFormatOpenAIResponses, types.RelayFormatOpenAI, req, out, nil); err != nil {
+		return nil, err
 	}
 
 	return out, nil
@@ -278,7 +266,7 @@ func responsesInputItemToChatMessages(c context.Context, item map[string]any, me
 	case "additional_tools":
 		return messages, nil
 	}
-	if isResponsesHostedHistoryItem(itemType) {
+	if toolconv.IsResponsesHostedHistoryItem(itemType) {
 		return nil, fmt.Errorf("Responses server tool history item %q cannot be converted to Chat Completions without losing context", itemType)
 	}
 	role := responsesRoleToChatRole(kitutil.Interface2String(item["role"]))
@@ -626,7 +614,7 @@ func responsesFunctionCallItemToChatToolCall(item map[string]any, toolState *sha
 		return dto.ToolCallRequest{}, errors.New("function_call item is missing name")
 	}
 	namespace := strings.TrimSpace(kitutil.Interface2String(item["namespace"]))
-	upstreamName, err := upstreamToolName(toolState, sharedbridge.ToolKindFunction, namespace, name)
+	upstreamName, err := toolconv.UpstreamToolName(toolState, sharedbridge.ToolKindFunction, namespace, name)
 	if err != nil {
 		return dto.ToolCallRequest{}, err
 	}
@@ -739,7 +727,7 @@ func responsesCustomToolCallItemToChatToolCall(item map[string]any, toolState *s
 		return dto.ToolCallRequest{}, errors.New("custom_tool_call item is missing name")
 	}
 	namespace := strings.TrimSpace(kitutil.Interface2String(item["namespace"]))
-	upstreamName, err := upstreamToolName(toolState, sharedbridge.ToolKindCustom, namespace, name)
+	upstreamName, err := toolconv.UpstreamToolName(toolState, sharedbridge.ToolKindCustom, namespace, name)
 	if err != nil {
 		return dto.ToolCallRequest{}, err
 	}
@@ -748,17 +736,17 @@ func responsesCustomToolCallItemToChatToolCall(item map[string]any, toolState *s
 		Type: "function",
 		Function: dto.FunctionRequest{
 			Name:      upstreamName,
-			Arguments: customInputArguments(item["input"]),
+			Arguments: toolconv.CustomInputArguments(item["input"]),
 		},
 	}, nil
 }
 
 func responsesToolSearchCallItemToChatToolCall(item map[string]any, toolState *sharedbridge.ToolState) (dto.ToolCallRequest, error) {
-	upstreamName, err := upstreamToolName(toolState, sharedbridge.ToolKindToolSearch, "", "tool_search")
+	upstreamName, err := toolconv.UpstreamToolName(toolState, sharedbridge.ToolKindToolSearch, "", "tool_search")
 	if err != nil {
 		return dto.ToolCallRequest{}, err
 	}
-	arguments := toolSearchArguments(item["arguments"])
+	arguments := toolconv.ToolSearchArguments(item["arguments"])
 	if arguments == "" {
 		arguments = "{}"
 	}
@@ -773,7 +761,7 @@ func responsesToolSearchCallItemToChatToolCall(item map[string]any, toolState *s
 }
 
 func responsesLocalShellCallItemToChatToolCall(item map[string]any, toolState *sharedbridge.ToolState) (dto.ToolCallRequest, error) {
-	upstreamName, err := upstreamToolName(toolState, sharedbridge.ToolKindLocalShell, "", sharedbridge.LocalShellToolName)
+	upstreamName, err := toolconv.UpstreamToolName(toolState, sharedbridge.ToolKindLocalShell, "", sharedbridge.LocalShellToolName)
 	if err != nil {
 		return dto.ToolCallRequest{}, err
 	}
@@ -798,57 +786,6 @@ func appendToolCallToLastAssistant(messages []dto.Message, toolCall dto.ToolCall
 	toolCallsRaw, _ := kitutil.Marshal(toolCalls)
 	messages[idx].ToolCalls = toolCallsRaw
 	return messages
-}
-
-func responsesRequestToolChoiceToChat(raw json.RawMessage, toolState *sharedbridge.ToolState) (any, error) {
-	if !rawJSONPresent(raw) {
-		return nil, nil
-	}
-	if kitutil.GetJsonType(raw) == "string" {
-		var choice string
-		if err := kitutil.Unmarshal(raw, &choice); err != nil {
-			return nil, fmt.Errorf("invalid tool_choice: %w", err)
-		}
-		return choice, nil
-	}
-
-	var choice map[string]any
-	if err := kitutil.Unmarshal(raw, &choice); err != nil {
-		return nil, fmt.Errorf("invalid tool_choice: %w", err)
-	}
-	choiceType := strings.TrimSpace(kitutil.Interface2String(choice["type"]))
-	if choiceType == "function" || choiceType == "custom" || choiceType == "freeform" || choiceType == "tool_search" {
-		name := strings.TrimSpace(kitutil.Interface2String(choice["name"]))
-		namespace := strings.TrimSpace(kitutil.Interface2String(choice["namespace"]))
-		kind := sharedbridge.ToolKindFunction
-		if choiceType == "custom" || choiceType == "freeform" {
-			kind = sharedbridge.ToolKindCustom
-		} else if choiceType == "tool_search" {
-			kind = sharedbridge.ToolKindToolSearch
-			name = "tool_search"
-		}
-		if name != "" {
-			upstreamName := name
-			if toolState == nil {
-				if kind != sharedbridge.ToolKindFunction || namespace != "" {
-					return nil, fmt.Errorf("Responses tool_choice references undeclared tool %q", qualifiedToolName(namespace, name))
-				}
-			} else {
-				var err error
-				upstreamName, err = declaredUpstreamToolName(toolState, kind, namespace, name)
-				if err != nil {
-					return nil, err
-				}
-			}
-			return map[string]any{
-				"type": "function",
-				"function": map[string]any{
-					"name": upstreamName,
-				},
-			}, nil
-		}
-	}
-	return choice, nil
 }
 
 func responsesRequestTextToChatResponseFormat(raw json.RawMessage) (*dto.ResponseFormat, error) {

@@ -2,14 +2,14 @@ package channelcompat
 
 import (
 	"errors"
+	hostdto "github.com/QuantumNous/new-api/dto"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"net/http"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -21,8 +21,8 @@ func TestProtocolAffinityUsesChannelModelEntryProtocolAndConfigurationFingerprin
 
 	baseURL := "https://gateway.example/v1"
 	channel := &model.Channel{Id: 9801, Type: constant.ChannelTypeOpenAI, BaseURL: &baseURL}
-	channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
-		SelectionMode: dto.ProtocolSelectionModeAuto,
+	channel.SetOtherSettings(hostdto.ChannelOtherSettings{ProtocolCapabilities: &hostdto.ProtocolCapabilities{
+		SelectionMode: hostdto.ProtocolSelectionModeAuto,
 	}})
 
 	RememberProtocolAffinity(channel, "provider-model", ProtocolResponses, ProtocolChat)
@@ -50,8 +50,8 @@ func TestProtocolAffinityRemembersGeminiWireProtocol(t *testing.T) {
 	t.Cleanup(func() { common.RedisEnabled = originalRedisEnabled })
 
 	channel := &model.Channel{Id: 9802, Type: constant.ChannelTypeGemini}
-	channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
-		SelectionMode: dto.ProtocolSelectionModeAuto,
+	channel.SetOtherSettings(hostdto.ChannelOtherSettings{ProtocolCapabilities: &hostdto.ProtocolCapabilities{
+		SelectionMode: hostdto.ProtocolSelectionModeAuto,
 	}})
 
 	RememberProtocolAffinity(channel, "provider-model", ProtocolResponses, ProtocolGemini)
@@ -86,7 +86,7 @@ func TestIsProtocolUnsupportedErrorOnlyAcceptsEndpointEvidence(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			apiError := types.NewErrorWithStatusCode(errors.New(test.message), types.ErrorCodeBadResponseStatusCode, test.statusCode)
+			apiError := hosttypes.NewErrorWithStatusCode(errors.New(test.message), hosttypes.ErrorCodeBadResponseStatusCode, test.statusCode)
 			if test.evidence {
 				apiError.MarkProtocolUnsupported()
 			} else if test.checked {
@@ -98,7 +98,7 @@ func TestIsProtocolUnsupportedErrorOnlyAcceptsEndpointEvidence(t *testing.T) {
 }
 
 func TestIsProtocolUnsupportedErrorAcceptsPrivateRawBodyEvidence(t *testing.T) {
-	apiError := types.NewErrorWithStatusCode(errors.New("bad response status code 400"), types.ErrorCodeBadResponseStatusCode, http.StatusBadRequest)
+	apiError := hosttypes.NewErrorWithStatusCode(errors.New("bad response status code 400"), hosttypes.ErrorCodeBadResponseStatusCode, http.StatusBadRequest)
 	apiError.MarkProtocolUnsupported()
 
 	assert.True(t, IsProtocolUnsupportedError(apiError))

@@ -1,12 +1,12 @@
 package model
 
 import (
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -182,7 +182,7 @@ func TestBatchUpdateChannelsMergesClientPolicyAndUpstreamSettings(t *testing.T) 
 
 	var stored Channel
 	require.NoError(t, DB.First(&stored, "id = ?", channel.Id).Error)
-	settings := dto.ChannelOtherSettings{}
+	settings := hostdto.ChannelOtherSettings{}
 	require.NoError(t, common.UnmarshalJsonStr(stored.OtherSettings, &settings))
 	assert.Equal(t, "deny", settings.ClientPolicy.Mode)
 	assert.Equal(t, []string{"codex", "openai"}, settings.ClientPolicy.Clients)

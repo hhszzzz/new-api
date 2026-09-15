@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 	"strings"
@@ -13,7 +14,6 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-gonic/gin"
@@ -59,7 +59,7 @@ func normalizeXAIUsage(usage *dto.Usage) {
 	}
 }
 
-func xAIStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+func xAIStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *hosttypes.NewAPIError) {
 	usage := &dto.Usage{}
 	var responseTextBuilder strings.Builder
 	var toolCount int
@@ -102,17 +102,17 @@ func xAIStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	return usage, nil
 }
 
-func xAIHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+func xAIHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *hosttypes.NewAPIError) {
 	defer service.CloseResponseBodyGracefully(resp)
 
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+		return nil, hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody)
 	}
 	var xaiResponse ChatCompletionResponse
 	err = common.Unmarshal(responseBody, &xaiResponse)
 	if err != nil {
-		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+		return nil, hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody)
 	}
 	if xaiResponse.Usage != nil {
 		normalizeXAIUsage(xaiResponse.Usage)
@@ -121,7 +121,7 @@ func xAIHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response
 	// new body
 	encodeJson, err := common.Marshal(xaiResponse)
 	if err != nil {
-		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+		return nil, hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody)
 	}
 
 	service.IOCopyBytesGracefully(c, resp, encodeJson)

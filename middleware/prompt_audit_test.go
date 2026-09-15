@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"bytes"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -156,7 +157,7 @@ func TestPromptAuditBlockOccursBeforeChannelSelection(t *testing.T) {
 	}
 	assert.False(t, allowed)
 	assert.Equal(t, http.StatusForbidden, recorder.Code)
-	assert.Contains(t, recorder.Body.String(), string(types.ErrorCodePromptAuditBlocked))
+	assert.Contains(t, recorder.Body.String(), string(hosttypes.ErrorCodePromptAuditBlocked))
 	_, channelSelected := common.GetContextKey(c, constant.ContextKeyChannelId)
 	assert.False(t, channelSelected)
 	var count int64
@@ -201,7 +202,7 @@ func TestPromptAuditUnavailableOccursBeforeChannelSelection(t *testing.T) {
 	}
 	assert.False(t, allowed)
 	assert.Equal(t, http.StatusServiceUnavailable, recorder.Code)
-	assert.Contains(t, recorder.Body.String(), string(types.ErrorCodePromptAuditUnavailable))
+	assert.Contains(t, recorder.Body.String(), string(hosttypes.ErrorCodePromptAuditUnavailable))
 	_, channelSelected := common.GetContextKey(c, constant.ContextKeyChannelId)
 	assert.False(t, channelSelected)
 	var audit model.PromptAudit

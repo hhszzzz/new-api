@@ -1,6 +1,7 @@
 package zhipu_4v
 
 import (
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 
@@ -54,20 +55,20 @@ type openAIImageData struct {
 	B64Json string `json:"b64_json"`
 }
 
-func zhipu4vImageHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*dto.Usage, *types.NewAPIError) {
+func zhipu4vImageHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*dto.Usage, *hosttypes.NewAPIError) {
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
 	}
 	service.CloseResponseBodyGracefully(resp)
 
 	var zhipuResp zhipuImageResponse
 	if err := common.Unmarshal(responseBody, &zhipuResp); err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 
 	if zhipuResp.Error != nil && zhipuResp.Error.Message != "" {
-		return nil, types.WithOpenAIError(types.OpenAIError{
+		return nil, hosttypes.WithOpenAIError(types.OpenAIError{
 			Message: zhipuResp.Error.Message,
 			Type:    "zhipu_image_error",
 			Code:    zhipuResp.Error.Code,
@@ -118,7 +119,7 @@ func zhipu4vImageHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 
 	jsonResp, err := common.Marshal(payload)
 	if err != nil {
-		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+		return nil, hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody)
 	}
 
 	service.IOCopyBytesGracefully(c, resp, jsonResp)

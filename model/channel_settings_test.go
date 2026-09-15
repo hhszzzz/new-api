@@ -1,10 +1,10 @@
 package model
 
 import (
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"testing"
 
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -12,16 +12,16 @@ import (
 func TestChannelValidateSettingsRejectsInvalidHTTPTransport(t *testing.T) {
 	tests := []struct {
 		name    string
-		setting dto.ChannelSettings
+		setting hostdto.ChannelSettings
 		wantErr string
 	}{
 		{
 			name:    "auto with shards is valid",
-			setting: dto.ChannelSettings{HTTPProtocol: "auto", HTTP2ConnectionShards: 4},
+			setting: hostdto.ChannelSettings{HTTPProtocol: "auto", HTTP2ConnectionShards: 4},
 		},
 		{
 			name:    "http1 with shards greater than one rejected",
-			setting: dto.ChannelSettings{HTTPProtocol: "http1", HTTP2ConnectionShards: 2},
+			setting: hostdto.ChannelSettings{HTTPProtocol: "http1", HTTP2ConnectionShards: 2},
 			wantErr: "http2_connection_shards",
 		},
 	}
@@ -42,7 +42,7 @@ func TestChannelValidateSettingsRejectsInvalidHTTPTransport(t *testing.T) {
 }
 
 func TestAdvancedCustomChannelRequiresModelListRouteOnlyWhenUpdateChecksEnabled(t *testing.T) {
-	inferenceRoute := dto.AdvancedCustomRoute{
+	inferenceRoute := hostdto.AdvancedCustomRoute{
 		IncomingPath: "/v1/chat/completions",
 		UpstreamPath: "/v1/chat/completions",
 		Converter:    "none",
@@ -51,27 +51,27 @@ func TestAdvancedCustomChannelRequiresModelListRouteOnlyWhenUpdateChecksEnabled(
 	tests := []struct {
 		name          string
 		checksEnabled bool
-		routes        []dto.AdvancedCustomRoute
+		routes        []hostdto.AdvancedCustomRoute
 		wantErr       string
 	}{
 		{
 			name:   "legacy channel without discovery route remains valid",
-			routes: []dto.AdvancedCustomRoute{inferenceRoute},
+			routes: []hostdto.AdvancedCustomRoute{inferenceRoute},
 		},
 		{
 			name:          "enabled checks require discovery route",
 			checksEnabled: true,
-			routes:        []dto.AdvancedCustomRoute{inferenceRoute},
-			wantErr:       dto.AdvancedCustomModelListPath,
+			routes:        []hostdto.AdvancedCustomRoute{inferenceRoute},
+			wantErr:       hostdto.AdvancedCustomModelListPath,
 		},
 		{
 			name:          "enabled checks accept discovery route",
 			checksEnabled: true,
-			routes: []dto.AdvancedCustomRoute{
+			routes: []hostdto.AdvancedCustomRoute{
 				inferenceRoute,
 				{
-					IncomingPath: dto.AdvancedCustomModelListPath,
-					UpstreamPath: dto.AdvancedCustomModelListPath,
+					IncomingPath: hostdto.AdvancedCustomModelListPath,
+					UpstreamPath: hostdto.AdvancedCustomModelListPath,
 					Converter:    "none",
 				},
 			},
@@ -81,9 +81,9 @@ func TestAdvancedCustomChannelRequiresModelListRouteOnlyWhenUpdateChecksEnabled(
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			channel := &Channel{Type: constant.ChannelTypeAdvancedCustom}
-			channel.SetOtherSettings(dto.ChannelOtherSettings{
+			channel.SetOtherSettings(hostdto.ChannelOtherSettings{
 				UpstreamModelUpdateCheckEnabled: tt.checksEnabled,
-				AdvancedCustom: &dto.AdvancedCustomConfig{
+				AdvancedCustom: &hostdto.AdvancedCustomConfig{
 					Routes: tt.routes,
 				},
 			})

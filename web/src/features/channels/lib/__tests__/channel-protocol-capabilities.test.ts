@@ -66,6 +66,49 @@ function channel(settings: ChannelOtherSettings = {}): Channel {
 }
 
 describe('channel protocol capabilities form contract', () => {
+  test('round-trips unified policy and removes retired keys while retaining other settings', () => {
+    const policy = {
+      version: 1,
+      conversion: 'native_only' as const,
+      rules: [
+        { model_pattern: '^tools-', target_protocol: 'messages' },
+        { model_pattern: '^private-', deny: true },
+      ],
+    }
+    const defaults = transformChannelToFormDefaults(
+      channel({
+        protocol_policy: policy,
+        protocol_capabilities: { upstream_protocols: ['chat'] },
+        disable_task_polling_sleep: true,
+      })
+    )
+    const payload = transformFormDataToUpdatePayload(defaults, 7)
+    const settings = JSON.parse(payload.settings || '{}')
+    expect(settings.protocol_policy).toEqual(policy)
+    expect(settings.protocol_capabilities).toBeUndefined()
+    expect(settings.disable_task_polling_sleep).toBe(true)
+    expect(
+      JSON.parse(payload.setting || '{}').pass_through_body_enabled
+    ).toBeUndefined()
+  })
+
+  test('does not save malformed unified policies or leak form-only fields into the payload', () => {
+    const defaults = transformChannelToFormDefaults(channel())
+    defaults.protocol_policy_json = '{"version":1,"conversion":"unknown"}'
+    const result = channelFormSchema.safeParse(defaults)
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(
+        result.error.issues.some(
+          (issue) => issue.path[0] === 'protocol_policy_json'
+        )
+      ).toBe(true)
+    }
+    defaults.protocol_policy_json = '{"version":1}'
+    expect(transformFormDataToUpdatePayload(defaults, 7)).not.toHaveProperty(
+      'protocol_policy_json'
+    )
+  })
   test('mirrors the backend defaults without creating an explicit override', () => {
     expect(defaultUpstreamProtocols(57, '')).toEqual(['responses'])
     expect(defaultUpstreamProtocols(14, '')).toEqual(['messages'])

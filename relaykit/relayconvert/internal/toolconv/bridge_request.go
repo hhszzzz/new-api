@@ -1,19 +1,46 @@
 package toolconv
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
 	"strings"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/internal/convdiag"
+	sharedbridge "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/bridge"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/QuantumNous/new-api/relaykit/types"
 )
 
-// ExtractRequestForConversion leaves Responses client tools with the protocol
-// converter, which owns reversible namespace, custom-tool and tool-search
-// lowering. Hosted tools still use the shared provider capability conversion.
-func ExtractRequestForConversion(format types.RelayFormat, request any) (any, Set, error) {
+type deferredRequestToolsKey struct{}
+
+// WithDeferredRequestTools reserves tool rendering for the final route hop.
+// The marker is immutable; mutable tool identities belong to ConversionSession.
+func WithDeferredRequestTools(ctx context.Context) context.Context {
+	return context.WithValue(ctx, deferredRequestToolsKey{}, true)
+}
+
+// RenderRequestTools gives standalone directional codecs the same semantic
+// encoder as the registry. A planned route extracts once and renders after all
+// content hops, so an intermediate protocol cannot discard a supported tool.
+func RenderRequestTools(ctx context.Context, from, to types.RelayFormat, source, target any, options *convmeta.Options) error {
+	ctx, _ = convdiag.WithCollector(ctx)
+	if deferred, _ := ctx.Value(deferredRequestToolsKey{}).(bool); deferred {
+		return nil
+	}
+	_, set, err := ExtractRequestForConversion(context.Background(), from, source)
+	if err != nil {
+		return err
+	}
+	_, diagnostics, err := AttachRequest(to, target, set, options)
+	convdiag.Add(ctx, diagnostics...)
+	return err
+}
+
+// ExtractRequestForConversion creates one semantic tool set. Reversible client
+// tools and hosted tools are encoded together only after the final request hop.
+func ExtractRequestForConversion(ctx context.Context, format types.RelayFormat, request any) (any, Set, error) {
 	if format != types.RelayFormatOpenAIResponses {
 		return ExtractRequest(format, request)
 	}
@@ -25,64 +52,53 @@ func ExtractRequestForConversion(format types.RelayFormat, request any) (any, Se
 		}
 		source = &value
 	}
-	var tools []json.RawMessage
-	if len(source.Tools) > 0 && kitutil.GetJsonType(source.Tools) != "null" {
-		if err := kitutil.Unmarshal(source.Tools, &tools); err != nil {
-			return nil, Set{}, fmt.Errorf("invalid Responses tools: %w", err)
-		}
+	declarations, err := CollectResponsesToolDeclarations(source)
+	if err != nil {
+		return nil, Set{}, err
 	}
-	var clientTools, hostedTools []json.RawMessage
-	for _, raw := range tools {
-		if kitutil.GetJsonType(raw) == "string" {
-			clientTools = append(clientTools, raw)
-			continue
-		}
-		var tool struct {
-			Type string `json:"type"`
-		}
-		if err := kitutil.Unmarshal(raw, &tool); err != nil {
-			return nil, Set{}, err
-		}
-		switch strings.TrimSpace(tool.Type) {
+	state := sharedbridge.NewToolState()
+	sharedbridge.SetToolState(ctx, state)
+	set := Set{Source: format, ParallelAllowed: rawBoolPointer(source.ParallelToolCalls)}
+	for _, tool := range declarations {
+		kind := strings.TrimSpace(kitutil.Interface2String(tool["type"]))
+		switch kind {
 		case "", "function", "custom", "freeform", "namespace", "tool_search", "local_shell":
-			clientTools = append(clientTools, raw)
+			functions, err := ResponsesToolToChatFunctions(tool, "", state)
+			if err != nil {
+				return nil, set, err
+			}
+			for _, function := range functions {
+				identity, _ := state.ResolveUpstream(function.Function.Name)
+				set.Definitions = append(set.Definitions, Definition{Kind: KindFunction, Execution: ExecutionClient, Name: function.Function.Name, Identity: &identity, Function: &Function{Name: function.Function.Name, Description: function.Function.Description, Parameters: function.Function.Parameters, Strict: function.Function.Strict}})
+			}
 		default:
-			hostedTools = append(hostedTools, raw)
+			raw, err := kitutil.Marshal(tool)
+			if err != nil {
+				return nil, set, err
+			}
+			definition, err := decodeOpenAIResponsesDefinition(raw)
+			if err != nil {
+				return nil, set, err
+			}
+			set.Definitions = append(set.Definitions, definition)
 		}
 	}
-	hosted := *source
-	hosted.Tools = nil
-	hosted.ToolChoice = nil
-	hosted.ParallelToolCalls = nil
-	if len(hostedTools) > 0 {
-		hosted.Tools, _ = kitutil.Marshal(hostedTools)
-	}
-	clientChoice := source.ToolChoice
-	if len(source.ToolChoice) > 0 && kitutil.GetJsonType(source.ToolChoice) == "object" {
-		var choice struct {
-			Type string `json:"type"`
-		}
-		if err := kitutil.Unmarshal(source.ToolChoice, &choice); err != nil {
-			return nil, Set{}, err
-		}
-		switch choice.Type {
-		case "function", "custom", "tool_search", "local_shell", "allowed_tools", "":
-		default:
-			hosted.ToolChoice = source.ToolChoice
-			clientChoice = nil
-		}
-	} else if len(clientTools) == 0 {
-		hosted.ToolChoice = source.ToolChoice
-	}
-	value, set, err := extractOpenAIResponsesRequest(&hosted)
+	choice, err := ResponsesRequestToolChoiceToChat(source.ToolChoice, state)
 	if err != nil {
 		return nil, set, err
 	}
-	prepared := value.(*dto.OpenAIResponsesRequest)
-	if len(clientTools) > 0 {
-		prepared.Tools, _ = kitutil.Marshal(clientTools)
+	if object, ok := choice.(map[string]any); ok && object["type"] != "function" && object["type"] != "allowed_tools" {
+		set.Choice, err = decodeOpenAIResponsesChoice(source.ToolChoice)
+	} else {
+		set.Choice, err = decodeOpenAIChatChoice(choice)
 	}
-	prepared.ToolChoice = clientChoice
-	prepared.ParallelToolCalls = source.ParallelToolCalls
-	return prepared, set, nil
+	if err != nil {
+		return nil, set, err
+	}
+	clone := *source
+	clone.Tools = nil
+	clone.ToolChoice = nil
+	clone.ParallelToolCalls = nil
+	clone.Input, set.History, err = extractOpenAIResponsesHostedHistory(source.Input)
+	return &clone, set, err
 }

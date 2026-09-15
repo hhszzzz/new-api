@@ -3,10 +3,9 @@ package relay
 import (
 	"context"
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relaykit/types"
-
 	"github.com/gin-gonic/gin"
 )
 
@@ -14,7 +13,7 @@ import (
 // settlement. A successful terminal delivery wins over a concurrent late
 // cancellation; cancellation before terminal delivery is always a non-retryable
 // client outcome and therefore refunds any pre-consume.
-func normalizeStreamResult(c *gin.Context, info *relaycommon.RelayInfo, apiErr *types.NewAPIError) *types.NewAPIError {
+func normalizeStreamResult(c *gin.Context, info *relaycommon.RelayInfo, apiErr *hosttypes.NewAPIError) *hosttypes.NewAPIError {
 	if info == nil || !info.IsStream || info.StreamStatus == nil {
 		return apiErr
 	}
@@ -32,11 +31,11 @@ func normalizeStreamResult(c *gin.Context, info *relaycommon.RelayInfo, apiErr *
 	if endErr == nil {
 		endErr = context.Canceled
 	}
-	return types.NewOpenAIError(
+	return hosttypes.NewOpenAIError(
 		fmt.Errorf("client disconnected before stream terminal delivery: %w", endErr),
-		types.ErrorCodeClientDisconnected,
+		hosttypes.ErrorCodeClientDisconnected,
 		499,
-		types.ErrOptionWithSkipRetry(),
-		types.ErrOptionWithNoRecordErrorLog(),
+		hosttypes.ErrOptionWithSkipRetry(),
+		hosttypes.ErrOptionWithNoRecordErrorLog(),
 	)
 }

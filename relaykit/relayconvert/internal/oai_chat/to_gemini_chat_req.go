@@ -12,8 +12,10 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
 	relaymedia "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/media"
 	sharedgemini "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/gemini"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/internal/toolconv"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
+	"github.com/QuantumNous/new-api/relaykit/types"
 )
 
 func OpenAIChatRequestToGeminiGenerateContent(c context.Context, textRequest dto.GeneralOpenAIRequest, info convmeta.Meta) (*dto.GeminiChatRequest, error) {
@@ -27,6 +29,9 @@ func OpenAIChatRequestToGeminiGenerateContent(c context.Context, textRequest dto
 
 	if textRequest.TopP != nil {
 		geminiRequest.GenerationConfig.TopP = kitutil.GetPointer(*textRequest.TopP)
+	}
+	if textRequest.TopK != nil {
+		geminiRequest.GenerationConfig.TopK = kitutil.GetPointer(float64(*textRequest.TopK))
 	}
 	if textRequest.MaxCompletionTokens != nil {
 		geminiRequest.GenerationConfig.MaxOutputTokens = kitutil.GetPointer(*textRequest.MaxCompletionTokens)
@@ -50,7 +55,7 @@ func OpenAIChatRequestToGeminiGenerateContent(c context.Context, textRequest dto
 	}
 	if stopSequences := sharedgemini.ParseStopSequences(textRequest.Stop); len(stopSequences) > 0 {
 		if len(stopSequences) > 5 {
-			stopSequences = stopSequences[:5]
+			return nil, errors.New("Gemini supports at most five stop sequences")
 		}
 		geminiRequest.GenerationConfig.StopSequences = stopSequences
 	}
@@ -156,57 +161,12 @@ func OpenAIChatRequestToGeminiGenerateContent(c context.Context, textRequest dto
 		geminiRequest.SafetySettings = safetySettings
 	}
 
-	if textRequest.Tools != nil {
-		googleSearch, codeExecution, urlContext := false, false, false
-		functions := make([]dto.FunctionRequest, 0, len(textRequest.Tools))
-		for _, tool := range textRequest.Tools {
-			if tool.Function.Name == "googleSearch" {
-				googleSearch = true
-				continue
-			}
-			if tool.Function.Name == "codeExecution" {
-				codeExecution = true
-				continue
-			}
-			if tool.Function.Name == "urlContext" {
-				urlContext = true
-				continue
-			}
-			sharedgemini.PrepareFunctionDeclaration(&tool.Function)
-			functions = append(functions, tool.Function)
-		}
-		geminiTools := geminiRequest.GetTools()
-		if googleSearch {
-			geminiTools = append(geminiTools, dto.GeminiChatTool{GoogleSearch: map[string]any{}})
-		}
-		if codeExecution {
-			geminiTools = append(geminiTools, dto.GeminiChatTool{CodeExecution: map[string]any{}})
-		}
-		if urlContext {
-			geminiTools = append(geminiTools, dto.GeminiChatTool{URLContext: map[string]any{}})
-		}
-		if len(functions) > 0 {
-			geminiTools = append(geminiTools, dto.GeminiChatTool{
-				FunctionDeclarations: functions,
-			})
-		}
-		geminiRequest.SetTools(geminiTools)
-
-		if textRequest.ToolChoice != nil {
-			geminiRequest.ToolConfig = sharedgemini.OpenAIToolChoiceToConfig(textRequest.ToolChoice)
-		}
+	if err := toolconv.RenderRequestTools(c, types.RelayFormatOpenAI, types.RelayFormatGemini, &textRequest, &geminiRequest, opts); err != nil {
+		return nil, err
 	}
 
-	if textRequest.ResponseFormat != nil && (textRequest.ResponseFormat.Type == "json_schema" || textRequest.ResponseFormat.Type == "json_object") {
-		geminiRequest.GenerationConfig.ResponseMimeType = "application/json"
-
-		if len(textRequest.ResponseFormat.JsonSchema) > 0 {
-			var jsonSchema dto.FormatJsonSchema
-			if err := kitutil.Unmarshal(textRequest.ResponseFormat.JsonSchema, &jsonSchema); err == nil {
-				cleanedSchema := sharedgemini.RemoveAdditionalProperties(jsonSchema.Schema, 0)
-				geminiRequest.GenerationConfig.ResponseSchema = cleanedSchema
-			}
-		}
+	if err := sharedgemini.ApplyOutputFormat(&geminiRequest.GenerationConfig, textRequest.ResponseFormat); err != nil {
+		return nil, err
 	}
 
 	toolCallIDs := make(map[string]string)

@@ -12,6 +12,195 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestProtocolCatalogPreservesOperationAndTransportBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		from      Protocol
+		operation Operation
+		transport Transport
+		target    Protocol
+	}{
+		{ProtocolResponses, OperationCompact, TransportHTTP, ProtocolMessages},
+		{ProtocolResponses, OperationCompact, TransportSSE, ProtocolResponses},
+		{ProtocolChat, OperationGenerate, TransportWebSocket, ProtocolChat},
+		{ProtocolResponses, OperationGenerate, TransportWebSocket, ProtocolMessages},
+		{ProtocolMessages, OperationCompletions, TransportHTTP, ProtocolMessages},
+	} {
+		_, err := PlanConversions(tc.from, tc.operation, tc.transport, []Protocol{tc.target}, RequestFeatureSet{}, "safe")
+		require.Error(t, err)
+	}
+	plans, err := PlanConversions(ProtocolResponses, OperationCompact, TransportHTTP, []Protocol{ProtocolMessages, ProtocolResponses}, RequestFeatureSet{}, "safe")
+	require.NoError(t, err)
+	require.Len(t, plans, 1)
+	assert.Equal(t, ProtocolResponses, plans[0].UpstreamProtocol)
+	_, err = PlanConversions(ProtocolChat, OperationGenerate, TransportHTTP, []Protocol{ProtocolChat}, RequestFeatureSet{}, "unrecognized")
+	require.Error(t, err)
+}
+
+func TestProtocolPlansRejectRequiredSemanticLoss(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		from, to Protocol
+		body     string
+		contains string
+	}{
+		{"chat stop", ProtocolChat, ProtocolResponses, `{"stop":["END"]}`, "stop sequences"},
+		{"chat candidates", ProtocolChat, ProtocolMessages, `{"n":2}`, "multiple output candidates"},
+		{"chat output format", ProtocolChat, ProtocolMessages, `{"response_format":{"type":"json_object"}}`, "output format"},
+		{"chat audio", ProtocolChat, ProtocolMessages, `{"messages":[{"role":"user","content":[{"type":"input_audio","input_audio":{"data":"AA==","format":"wav"}}]}]}`, "input_audio"},
+		{"chat unknown content", ProtocolChat, ProtocolGemini, `{"messages":[{"role":"user","content":[{"type":"future_content","value":"required"}]}]}`, "future_content"},
+		{"chat unknown field", ProtocolChat, ProtocolResponses, `{"future_execution_constraint":true}`, "future_execution_constraint"},
+		{"gemini audio", ProtocolGemini, ProtocolChat, `{"contents":[{"parts":[{"inlineData":{"mimeType":"audio/wav","data":"AA=="}}]}]}`, "media:audio/wav"},
+		{"gemini video", ProtocolGemini, ProtocolMessages, `{"contents":[{"parts":[{"fileData":{"mimeType":"video/mp4","fileUri":"https://example.test/a.mp4"}}]}]}`, "media:video/mp4"},
+		{"gemini signature", ProtocolGemini, ProtocolResponses, `{"contents":[{"parts":[{"text":"thought","thoughtSignature":"opaque"}]}]}`, "provider-bound state"},
+		{"gemini schema", ProtocolGemini, ProtocolChat, `{"generationConfig":{"responseMimeType":"application/json","responseSchema":{"type":"OBJECT","required":["answer"]}}}`, "generationConfig.response"},
+		{"gemini top k", ProtocolGemini, ProtocolMessages, `{"generationConfig":{"topK":0}}`, "top_k"},
+		{"gemini stop truncation", ProtocolGemini, ProtocolChat, `{"generationConfig":{"stopSequences":["a","b","c","d","e"]}}`, "stop sequence count"},
+		{"gemini unknown content", ProtocolGemini, ProtocolChat, `{"contents":[{"parts":[{"executableCode":{"code":"print(1)"}}]}]}`, "executableCode"},
+		{"gemini cached history", ProtocolGemini, ProtocolChat, `{"cachedContent":"cachedContents/123"}`, "cachedContent"},
+		{"gemini text after call", ProtocolGemini, ProtocolChat, `{"contents":[{"role":"model","parts":[{"functionCall":{"name":"lookup","args":{}}},{"text":"after"}]}]}`, "content_after_function_call"},
+		{"gemini conflicting part payloads", ProtocolGemini, ProtocolChat, `{"contents":[{"role":"model","parts":[{"text":"before","functionCall":{"name":"lookup","args":{}}}]}]}`, "multiple_part_payloads"},
+		{"gemini text before result", ProtocolGemini, ProtocolResponses, `{"contents":[{"role":"user","parts":[{"text":"before"},{"functionResponse":{"name":"lookup","response":{}}}]}]}`, "content_before_function_response"},
+		{"gemini system media", ProtocolGemini, ProtocolMessages, `{"systemInstruction":{"parts":[{"inlineData":{"mimeType":"image/png","data":"AA=="}}]}}`, "system:inlineData"},
+		{"responses output constraint", ProtocolResponses, ProtocolMessages, `{"text":{"format":{"type":"json_schema","schema":{"type":"object"}}}}`, "output format"},
+		{"responses opaque state", ProtocolResponses, ProtocolChat, `{"input":[{"type":"reasoning","encrypted_content":"opaque"}]}`, "provider-bound state"},
+		{"responses search include", ProtocolResponses, ProtocolMessages, `{"include":["web_search_call.action.sources"]}`, "include"},
+		{"responses reasoning include chat", ProtocolResponses, ProtocolChat, `{"include":["reasoning.encrypted_content"]}`, "include"},
+		{"gemini schema pattern", ProtocolChat, ProtocolGemini, `{"response_format":{"type":"json_schema","json_schema":{"schema":{"type":"string","pattern":"^OK$"}}}}`, "pattern"},
+		{"gemini exclusive schema", ProtocolResponses, ProtocolGemini, `{"text":{"format":{"type":"json_schema","schema":{"oneOf":[{"type":"integer"},{"type":"number"}]}}}}`, "oneOf"},
+		{"messages native format", ProtocolMessages, ProtocolChat, `{"output_config":{"format":{"type":"json_schema","schema":{"type":"object"}}}}`, "output_config"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			features, err := ExtractRequestFeatureSet(tc.from, []byte(tc.body))
+			require.NoError(t, err)
+			for _, policy := range []string{"lossless", "safe"} {
+				_, err := PlanConversions(tc.from, OperationGenerate, TransportHTTP, []Protocol{tc.to}, features, policy)
+				require.ErrorContains(t, err, tc.contains)
+			}
+			plans, err := PlanConversions(tc.from, OperationGenerate, TransportHTTP, []Protocol{tc.to, tc.from}, features, "safe")
+			require.NoError(t, err)
+			require.Len(t, plans, 1)
+			assert.Equal(t, tc.from, plans[0].UpstreamProtocol)
+		})
+	}
+}
+
+func TestConversionPresentationMetadataPolicy(t *testing.T) {
+	const body = `{"model":"test","input":"hello","max_output_tokens":64,"metadata":{"label":"example"},"client_metadata":{"label":"example"},"user":"example"}`
+	features, err := ExtractRequestFeatureSet(ProtocolResponses, []byte(body))
+	require.NoError(t, err)
+	_, err = PlanConversions(ProtocolResponses, OperationGenerate, TransportHTTP, []Protocol{ProtocolMessages}, features, "lossless")
+	require.Error(t, err)
+	plans, err := PlanConversions(ProtocolResponses, OperationGenerate, TransportHTTP, []Protocol{ProtocolMessages}, features, "safe")
+	require.NoError(t, err)
+	require.Len(t, plans, 1)
+	assert.ElementsMatch(t, []string{"metadata", "client_metadata", "user"}, plans[0].Losses)
+	var request dto.OpenAIResponsesRequest
+	require.NoError(t, kitutil.Unmarshal([]byte(body), &request))
+	for _, policy := range []types.ConversionLossPolicy{types.ConversionLossPolicySafe, types.ConversionLossPolicyStrict} {
+		session := NewConversionSession(&convmeta.Values{Options: &convmeta.Options{ToolLossPolicy: policy}})
+		defer session.Close()
+		result, err := session.Request(nil, types.RelayFormatClaude, &request)
+		if policy == types.ConversionLossPolicyStrict {
+			var loss *types.ConversionLossError
+			require.ErrorAs(t, err, &loss)
+			continue
+		}
+		require.NoError(t, err)
+		require.Len(t, result.Diagnostics, 3)
+		for _, diagnostic := range result.Diagnostics {
+			assert.Equal(t, "omitted_presentation_metadata", diagnostic.Code)
+			assert.Equal(t, types.ConversionLossPresentation, diagnostic.LossClass)
+		}
+	}
+}
+
+func TestConversionPreservesGeminiContentBeforeToolCall(t *testing.T) {
+	var request dto.GeminiChatRequest
+	require.NoError(t, kitutil.Unmarshal([]byte(`{"contents":[{"role":"model","parts":[{"text":"Inspect this image"},{"inlineData":{"mimeType":"image/png","data":"AA=="}},{"functionCall":{"id":"call_1","name":"lookup","args":{"q":"image"}}}]}]}`), &request))
+	session := NewConversionSession(nil)
+	defer session.Close()
+	result, err := session.Request(nil, types.RelayFormatOpenAI, &request)
+	require.NoError(t, err)
+	converted := result.Value.(*dto.GeneralOpenAIRequest)
+	require.Len(t, converted.Messages, 1)
+	content := converted.Messages[0].ParseContent()
+	require.Len(t, content, 2)
+	assert.Equal(t, "Inspect this image", content[0].Text)
+	assert.Equal(t, "image_url", content[1].Type)
+	calls := converted.Messages[0].ParseToolCalls()
+	require.Len(t, calls, 1)
+	assert.Equal(t, "call_1", calls[0].ID)
+	assert.Equal(t, "lookup", calls[0].Function.Name)
+}
+
+func TestResponsesReasoningIncludeUsesMessagesState(t *testing.T) {
+	request := &dto.OpenAIResponsesRequest{Model: "test", Input: []byte(`"hello"`), MaxOutputTokens: kitutil.GetPointer(uint(64)), Include: []byte(`["reasoning.encrypted_content"]`)}
+	session := NewConversionSession(nil)
+	defer session.Close()
+	result, err := session.Request(nil, types.RelayFormatClaude, request)
+	require.NoError(t, err)
+	require.IsType(t, &dto.ClaudeRequest{}, result.Value)
+	assert.Empty(t, result.Diagnostics)
+}
+
+func TestConversionSessionResolvesForcedToolsAfterReasoning(t *testing.T) {
+	for _, model := range []string{"claude-sonnet-5", "claude-fable-5"} {
+		for _, protocol := range []Protocol{ProtocolChat, ProtocolResponses} {
+			t.Run(model+"/"+string(protocol), func(t *testing.T) {
+				var request any
+				if protocol == ProtocolChat {
+					request = &dto.GeneralOpenAIRequest{Model: model, MaxTokens: kitutil.GetPointer(uint(4096)), Messages: []dto.Message{{Role: "user", Content: "hello"}}, Tools: []dto.ToolCallRequest{{Type: "function", Function: dto.FunctionRequest{Name: "lookup", Parameters: map[string]any{"type": "object"}}}}, ToolChoice: "required"}
+				} else {
+					request = &dto.OpenAIResponsesRequest{Model: model, MaxOutputTokens: kitutil.GetPointer(uint(4096)), Input: []byte(`"hello"`), Tools: []byte(`[{"type":"function","name":"lookup","parameters":{"type":"object"}}]`), ToolChoice: []byte(`"required"`)}
+				}
+				session := NewConversionSession(nil)
+				defer session.Close()
+				result, err := session.Request(nil, types.RelayFormatClaude, request)
+				if model == "claude-fable-5" {
+					require.ErrorContains(t, err, "cannot honor a forced tool_choice")
+					return
+				}
+				require.NoError(t, err)
+				converted := result.Value.(*dto.ClaudeRequest)
+				require.NotNil(t, converted.Thinking)
+				assert.Equal(t, "disabled", converted.Thinking.Type)
+			})
+		}
+	}
+}
+
+func TestConversionSessionRejectsLossBeforeMediaResolution(t *testing.T) {
+	request := &dto.GeneralOpenAIRequest{Model: "test", MaxTokens: kitutil.GetPointer(uint(64)), ResponseFormat: &dto.ResponseFormat{Type: "json_object"}, Messages: []dto.Message{{Role: "user", Content: "hello"}}}
+	session := NewConversionSession(nil)
+	defer session.Close()
+	result, err := session.Request(nil, types.RelayFormatClaude, request)
+	var loss *types.ConversionLossError
+	require.ErrorAs(t, err, &loss)
+	require.NotNil(t, result)
+	assert.Nil(t, result.Value)
+	assert.Contains(t, loss.Error(), "output format")
+}
+
+func TestProtocolConversionsPreserveOutputSchemaConstraints(t *testing.T) {
+	const schema = `{"type":"object","additionalProperties":false,"required":["answer"],"properties":{"answer":{"type":"integer","minimum":0}}}`
+	for _, source := range []Protocol{ProtocolChat, ProtocolResponses} {
+		t.Run(string(source), func(t *testing.T) {
+			var request any
+			if source == ProtocolChat {
+				request = &dto.GeneralOpenAIRequest{Model: "test", Messages: []dto.Message{{Role: "user", Content: "hello"}}, ResponseFormat: &dto.ResponseFormat{Type: "json_schema", JsonSchema: []byte(`{"name":"answer","strict":true,"schema":` + schema + `}`)}}
+			} else {
+				request = &dto.OpenAIResponsesRequest{Model: "test", Input: []byte(`"hello"`), Text: []byte(`{"format":{"type":"json_schema","name":"answer","strict":true,"schema":` + schema + `}}`)}
+			}
+			result, err := NewConversionSession(nil).Request(nil, types.RelayFormatGemini, request)
+			require.NoError(t, err)
+			converted := result.Value.(*dto.GeminiChatRequest)
+			assert.Equal(t, "application/json", converted.GenerationConfig.ResponseMimeType)
+			assert.JSONEq(t, schema, string(converted.GenerationConfig.ResponseJsonSchema))
+			assert.Nil(t, converted.GenerationConfig.ResponseSchema)
+		})
+	}
+}
+
 func TestRequestConverterRegistryListsSupportedTextConverters(t *testing.T) {
 	tests := []struct {
 		converter      string
@@ -93,7 +282,9 @@ func TestRequestConverterRegistryListsSupportedTextConverters(t *testing.T) {
 			} else {
 				assert.Nil(t, spec.Convert)
 			}
-			assert.Equal(t, tt.advancedCustom, dto.IsAdvancedCustomConverterAllowed(tt.converter))
+			target, err := ResolveTarget(CanonicalPath(ProtocolForFormat(tt.from), "test"), string(ProtocolForFormat(tt.to)), "")
+			require.NoError(t, err)
+			assert.Equal(t, ProtocolForFormat(tt.to), target)
 		})
 	}
 }
@@ -217,7 +408,7 @@ func TestConvertRequestClaudeToResponsesPreservesMixedBlockOrder(t *testing.T) {
 	assert.Equal(t, "continue", inputContentText(t, input[5]))
 }
 
-func TestConvertRequestClaudeToResponsesDropsIncompatibleContextManagement(t *testing.T) {
+func TestConvertRequestClaudeToResponsesRejectsIncompatibleContextManagement(t *testing.T) {
 	req := &dto.ClaudeRequest{
 		Model: "gpt-test",
 		Messages: []dto.ClaudeMessage{
@@ -228,12 +419,8 @@ func TestConvertRequestClaudeToResponsesDropsIncompatibleContextManagement(t *te
 		}),
 	}
 
-	result, err := ConvertRequest(nil, nil, types.RelayFormatOpenAIResponses, req)
-
-	require.NoError(t, err)
-	responsesReq, ok := result.Value.(*dto.OpenAIResponsesRequest)
-	require.True(t, ok)
-	assert.Empty(t, responsesReq.ContextManagement)
+	_, err := ConvertRequest(nil, nil, types.RelayFormatOpenAIResponses, req)
+	require.ErrorContains(t, err, "context_management")
 }
 
 func TestConvertRequestClaudeAdaptiveThinkingPreservesEffort(t *testing.T) {
@@ -610,9 +797,8 @@ func TestConvertRequestResponsesToClaudeUsesDirectConverter(t *testing.T) {
 				"content": "question",
 			},
 			{
-				"type":              "reasoning",
-				"summary":           []map[string]any{{"type": "summary_text", "text": "inspect inputs"}},
-				"encrypted_content": "opaque-openai-state",
+				"type":    "reasoning",
+				"summary": []map[string]any{{"type": "summary_text", "text": "inspect inputs"}},
 			},
 			{
 				"role": "assistant",

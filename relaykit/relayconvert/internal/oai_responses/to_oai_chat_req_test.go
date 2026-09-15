@@ -52,7 +52,7 @@ func TestResponsesRequestToChatCompletionsRequestInstructionsAndScalarInput(t *t
 	assert.Nil(t, got.MaxCompletionTokens)
 	assert.Equal(t, 0.0, lo.FromPtr(got.Temperature))
 	assert.Equal(t, 0.9, lo.FromPtr(got.TopP))
-	assert.Nil(t, got.ParallelTooCalls)
+	assert.Equal(t, &parallelToolCalls, got.ParallelTooCalls)
 	assert.Empty(t, got.PromptCacheKey)
 	assert.Equal(t, "medium", got.ReasoningEffort)
 	assert.Equal(t, `"user-1"`, string(got.User))

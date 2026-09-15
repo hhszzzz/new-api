@@ -3,6 +3,7 @@ package openai
 import (
 	"bytes"
 	"errors"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,7 +14,6 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -214,7 +214,7 @@ func TestOaiResponsesHandlerIncompleteStatusCommitsZeroImageGeneration(t *testin
 	assert.Equal(t, 0, info.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolImageGeneration].CallCount)
 }
 
-func runResponsesImageBillingStream(t *testing.T, events ...string) (*relaycommon.RelayInfo, *types.NewAPIError) {
+func runResponsesImageBillingStream(t *testing.T, events ...string) (*relaycommon.RelayInfo, *hosttypes.NewAPIError) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	oldTimeout := constant.StreamingTimeout
@@ -274,7 +274,7 @@ func TestOaiResponsesStreamHandlerDiscardsImageOutputOnIncomplete(t *testing.T) 
 	)
 
 	require.NotNil(t, apiErr)
-	assert.Equal(t, types.ErrorCodeBadResponse, apiErr.GetErrorCode())
+	assert.Equal(t, hosttypes.ErrorCodeBadResponse, apiErr.GetErrorCode())
 	assert.Equal(t, http.StatusBadGateway, apiErr.StatusCode)
 	require.NotNil(t, info.ResponsesUsageInfo)
 	require.Contains(t, info.ResponsesUsageInfo.BuiltInTools, dto.BuildInToolImageGeneration)
@@ -289,7 +289,7 @@ func TestOaiResponsesStreamHandlerDoesNotCountPartialImageEvent(t *testing.T) {
 	)
 
 	require.NotNil(t, apiErr)
-	assert.Equal(t, types.ErrorCodeEmptyResponse, apiErr.GetErrorCode())
+	assert.Equal(t, hosttypes.ErrorCodeEmptyResponse, apiErr.GetErrorCode())
 	assert.Equal(t, http.StatusBadGateway, apiErr.StatusCode)
 	assert.Nil(t, info.ResponsesUsageInfo)
 }

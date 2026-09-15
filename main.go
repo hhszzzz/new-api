@@ -31,6 +31,7 @@ import (
 	"github.com/QuantumNous/new-api/router"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/authz"
+	"github.com/QuantumNous/new-api/service/protocolpolicy"
 	_ "github.com/QuantumNous/new-api/setting/performance_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
@@ -48,6 +49,9 @@ var buildFS embed.FS
 var indexPage []byte
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "protocol-policy" {
+		os.Exit(protocolpolicy.RunCLI(os.Args[2:], os.Stdout, os.Stderr))
+	}
 	if len(os.Args) > 1 && os.Args[1] == "plugin" {
 		os.Exit(jsplugin.RunCLI(os.Args[2:], os.Stdout, os.Stderr))
 	}
@@ -340,6 +344,9 @@ func InitResources() error {
 
 	// Initialize options, should after model.InitDB()
 	if common.IsMasterNode {
+		if err := protocolpolicy.MigrateOnStartup(model.DB, protocolpolicy.BackupDirectory()); err != nil {
+			return err
+		}
 		if err := model.MigrateRetiredFrontendOptions(); err != nil {
 			common.SysError("failed to migrate retired frontend options: " + err.Error())
 		}

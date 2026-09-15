@@ -3,6 +3,7 @@ package e2e
 import (
 	"bytes"
 	"context"
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -16,7 +17,6 @@ import (
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/relay"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/gin-gonic/gin"
@@ -72,7 +72,7 @@ func TestDocumentPluginRunsGenericBatchArtifactChain(t *testing.T) {
 		}
 	}))
 	defer upstream.Close()
-	setting := dto.ChannelSettings{TaskPluginKey: "doc-parse"}
+	setting := hostdto.ChannelSettings{TaskPluginKey: "doc-parse"}
 	channel := model.Channel{Type: constant.ChannelTypeTaskPlugin, Name: "documents", Key: "unused", BaseURL: &upstream.URL, Status: common.ChannelStatusEnabled, Models: "doc-parse-v1", Group: "default"}
 	channel.SetSetting(setting)
 	require.NoError(t, database.Create(&channel).Error)

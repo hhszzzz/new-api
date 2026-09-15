@@ -1,6 +1,7 @@
 package openai
 
 import (
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -129,7 +130,7 @@ func TestResponsesIncompleteStreamFailsProtocolAttempt(t *testing.T) {
 	assert.Nil(t, usage)
 	require.NotNil(t, apiErr)
 	assert.Equal(t, http.StatusBadGateway, apiErr.StatusCode)
-	assert.Equal(t, types.ErrorCodeBadResponse, apiErr.GetErrorCode())
+	assert.Equal(t, hosttypes.ErrorCodeBadResponse, apiErr.GetErrorCode())
 	assert.False(t, protocolstate.AttemptCompleted(c))
 	assert.NotContains(t, recorder.Body.String(), `event: message_stop`)
 }

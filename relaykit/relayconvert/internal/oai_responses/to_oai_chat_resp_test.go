@@ -1,6 +1,7 @@
 package oairesponses
 
 import (
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/internal/toolconv"
 	"strings"
 	"testing"
 
@@ -958,8 +959,8 @@ func TestResponsesToolCallArgumentsToolSearchWithoutPayloadIsEmptyObject(t *test
 	}
 
 	assert.Equal(t, "{}", responsesToolCallArguments(output))
-	assert.Equal(t, "", toolSearchArguments(output.Arguments))
-	assert.Equal(t, `{"query":"x"}`, toolSearchArguments([]byte(`{"query":"x"}`)))
+	assert.Equal(t, "", toolconv.ToolSearchArguments(output.Arguments))
+	assert.Equal(t, `{"query":"x"}`, toolconv.ToolSearchArguments([]byte(`{"query":"x"}`)))
 }
 
 func TestResponsesStreamRefusalDoneWithoutDeltasUsesRefusalField(t *testing.T) {

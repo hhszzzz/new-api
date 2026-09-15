@@ -3,6 +3,7 @@ package relay
 import (
 	"errors"
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"net/http"
 	"strings"
 
@@ -31,6 +32,9 @@ func selectedProtocolPlan(c *gin.Context) (channelcompat.ProtocolPlan, bool) {
 
 func applyProtocolPlan(info *relaycommon.RelayInfo, plan channelcompat.ProtocolPlan) func() {
 	if info == nil || plan.Status == channelcompat.StatusIncompatible {
+		return func() {}
+	}
+	if plan.Operation != "" && plan.Operation != "generate" {
 		return func() {}
 	}
 	savedRelayMode := info.RelayMode
@@ -73,11 +77,11 @@ func convertRequestForProtocolPlan(c *gin.Context, info *relaycommon.RelayInfo, 
 	if plan.Status == channelcompat.StatusConvertible {
 		result, err := service.ConvertRequestByID(c, info, plan.RequestConverter, request)
 		if err != nil {
-			return nil, types.NewErrorWithStatusCode(
+			return nil, hosttypes.NewErrorWithStatusCode(
 				err,
-				types.ErrorCodeConvertRequestFailed,
+				hosttypes.ErrorCodeConvertRequestFailed,
 				http.StatusBadRequest,
-				types.ErrOptionWithSkipRetry(),
+				hosttypes.ErrOptionWithSkipRetry(),
 			)
 		}
 		converted = result.Value
@@ -170,7 +174,7 @@ func protocolFormatForPlan(plan channelcompat.ProtocolPlan) types.RelayFormat {
 // upstream body has been consumed, so the caller must not fall through to
 // adaptor.DoResponse; a handled response without usage is a hard error because
 // billing would otherwise be skipped silently.
-func handleBufferedStreamResponse(c *gin.Context, info *relaycommon.RelayInfo, httpResp *http.Response, upstreamFormat types.RelayFormat, statusCodeMappingStr string) (*dto.Usage, bool, *types.NewAPIError) {
+func handleBufferedStreamResponse(c *gin.Context, info *relaycommon.RelayInfo, httpResp *http.Response, upstreamFormat types.RelayFormat, statusCodeMappingStr string) (*dto.Usage, bool, *hosttypes.NewAPIError) {
 	if !service.ResponseBodyIsEventStream(httpResp) {
 		// Some compatible gateways label a buffered JSON completion as
 		// text/event-stream but send no SSE frames. Restore the JSON media type
@@ -182,7 +186,7 @@ func handleBufferedStreamResponse(c *gin.Context, info *relaycommon.RelayInfo, h
 	}
 
 	var usage *dto.Usage
-	var apiError *types.NewAPIError
+	var apiError *hosttypes.NewAPIError
 	switch upstreamFormat {
 	case types.RelayFormatOpenAI:
 		usage, apiError = openai.OaiChatBufferedStreamHandler(c, info, httpResp)
@@ -200,7 +204,7 @@ func handleBufferedStreamResponse(c *gin.Context, info *relaycommon.RelayInfo, h
 		return nil, true, apiError
 	}
 	if usage == nil {
-		return nil, true, types.NewOpenAIError(errors.New("buffered stream handler returned no usage"), types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		return nil, true, hosttypes.NewOpenAIError(errors.New("buffered stream handler returned no usage"), hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	return usage, true, nil
 }

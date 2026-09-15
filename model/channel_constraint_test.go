@@ -6,7 +6,6 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
-	kitdto "github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -20,18 +19,18 @@ func TestFilterCandidateIDs(t *testing.T) {
 	kling := &Channel{Id: 900004, Type: constant.ChannelTypeKling, Status: common.ChannelStatusEnabled}
 	jimeng := &Channel{Id: 900005, Type: constant.ChannelTypeJimeng, Status: common.ChannelStatusEnabled}
 	matchingCustom := &Channel{Id: 900010, Type: constant.ChannelTypeAdvancedCustom, Status: common.ChannelStatusEnabled}
-	matchingCustom.SetOtherSettings(kitdto.ChannelOtherSettings{
-		AdvancedCustom: &kitdto.AdvancedCustomConfig{
-			Routes: []kitdto.AdvancedCustomRoute{{
+	matchingCustom.SetOtherSettings(dto.ChannelOtherSettings{
+		AdvancedCustom: &dto.AdvancedCustomConfig{
+			Routes: []dto.AdvancedCustomRoute{{
 				IncomingPath: "/v1/chat/completions",
 				Models:       []string{"gpt-4"},
 			}},
 		},
 	})
 	otherCustom := &Channel{Id: 900011, Type: constant.ChannelTypeAdvancedCustom, Status: common.ChannelStatusEnabled}
-	otherCustom.SetOtherSettings(kitdto.ChannelOtherSettings{
-		AdvancedCustom: &kitdto.AdvancedCustomConfig{
-			Routes: []kitdto.AdvancedCustomRoute{{
+	otherCustom.SetOtherSettings(dto.ChannelOtherSettings{
+		AdvancedCustom: &dto.AdvancedCustomConfig{
+			Routes: []dto.AdvancedCustomRoute{{
 				IncomingPath: "/v1/responses",
 				Models:       []string{"gpt-4"},
 			}},
@@ -181,9 +180,9 @@ func TestChannelSatisfiesFilters(t *testing.T) {
 	alpha := &Channel{Id: 1, Type: constant.ChannelTypeTaskPlugin, Setting: &alphaSetting}
 	ordinary := &Channel{Id: 2, Type: constant.ChannelTypeOpenAI}
 	custom := &Channel{Id: 3, Type: constant.ChannelTypeAdvancedCustom}
-	custom.SetOtherSettings(kitdto.ChannelOtherSettings{
-		AdvancedCustom: &kitdto.AdvancedCustomConfig{
-			Routes: []kitdto.AdvancedCustomRoute{{
+	custom.SetOtherSettings(dto.ChannelOtherSettings{
+		AdvancedCustom: &dto.AdvancedCustomConfig{
+			Routes: []dto.AdvancedCustomRoute{{
 				IncomingPath: "/v1/chat/completions",
 				Models:       []string{"gpt-4"},
 			}},

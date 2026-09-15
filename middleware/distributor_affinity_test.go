@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"fmt"
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,7 +12,6 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/channelcompat"
 	"github.com/QuantumNous/new-api/setting"
@@ -114,9 +114,9 @@ func TestDistributorAffinityPrecedesNativeProtocolTier(t *testing.T) {
 		BaseURL:  &compatibleBaseURL,
 		Priority: &convertiblePriority,
 	}
-	convertible.SetOtherSettings(dto.ChannelOtherSettings{
-		ProtocolCapabilities: &dto.ProtocolCapabilities{
-			UpstreamProtocols: []string{dto.ProtocolCapabilityChat},
+	convertible.SetOtherSettings(hostdto.ChannelOtherSettings{
+		ProtocolCapabilities: &hostdto.ProtocolCapabilities{
+			UpstreamProtocols: []string{hostdto.ProtocolCapabilityChat},
 			AllowConversion:   &allowConversion,
 		},
 	})

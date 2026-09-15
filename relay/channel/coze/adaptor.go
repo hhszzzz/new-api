@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 	"time"
@@ -11,8 +12,6 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
-
 	"github.com/gin-gonic/gin"
 )
 
@@ -63,9 +62,9 @@ func (a *Adaptor) ConvertRerankRequest(c *gin.Context, relayMode int, request dt
 }
 
 // DoRequest implements channel.Adaptor.
-func (a *Adaptor) DoRequest(c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (any, error) {
+func (a *Adaptor) DoRequest(c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*channel.TransportResult, error) {
 	if info.IsStream {
-		return channel.DoApiRequest(a, c, info, requestBody)
+		return channel.HTTPResult(channel.DoApiRequest(a, c, info, requestBody))
 	}
 	// 首先发送创建消息请求，成功后再发送获取消息请求
 	// 发送创建消息请求
@@ -98,11 +97,11 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *common.RelayInfo, requestBody 
 		time.Sleep(time.Second * 1)
 	}
 	// 发送获取消息请求
-	return getChatDetail(a, c, info)
+	return channel.HTTPResult(getChatDetail(a, c, info))
 }
 
 // DoResponse implements channel.Adaptor.
-func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *common.RelayInfo) (usage any, err *types.NewAPIError) {
+func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *common.RelayInfo) (usage dto.UsageResult, err *hosttypes.NewAPIError) {
 	if info.IsStream {
 		usage, err = cozeChatStreamHandler(c, info, resp)
 	} else {

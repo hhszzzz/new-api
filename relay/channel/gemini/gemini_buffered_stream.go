@@ -2,6 +2,7 @@ package gemini
 
 import (
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 	"strings"
@@ -23,9 +24,9 @@ import (
 // GeminiBufferedStreamHandler converts an unexpectedly streamed Gemini
 // generateContent response to Chat Completions chunks in memory, then reuses
 // the existing non-stream response handlers for the client's protocol.
-func GeminiBufferedStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+func GeminiBufferedStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *hosttypes.NewAPIError) {
 	if resp == nil || resp.Body == nil {
-		return nil, types.NewOpenAIError(fmt.Errorf("invalid response"), types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(fmt.Errorf("invalid response"), hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
 	defer service.CloseResponseBodyGracefully(resp)
 
@@ -33,13 +34,13 @@ func GeminiBufferedStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, re
 	if responseID == "" {
 		responseID = "chatcmpl-gemini-buffered"
 	}
-	state, err := relayconvert.NewResponseStreamState(types.RelayFormatGemini, types.RelayFormatOpenAI, relayconvert.ResponseStreamOptions{
+	state, err := info.ConversionSession().StreamState(types.RelayFormatGemini, types.RelayFormatOpenAI, relayconvert.ResponseStreamOptions{
 		ID:      responseID,
 		Model:   info.PublicResponseModelName(),
 		Created: common.GetTimestamp(),
 	})
 	if err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
 
 	var chatStream strings.Builder
@@ -74,7 +75,7 @@ func GeminiBufferedStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, re
 		var envelope dto.GeneralErrorResponse
 		if err := common.UnmarshalJsonStr(data, &envelope); err == nil {
 			if message := strings.TrimSpace(envelope.ToMessage()); message != "" {
-				apiError := types.NewOpenAIError(fmt.Errorf("Gemini stream error: %s", message), types.ErrorCodeBadResponse, http.StatusBadGateway)
+				apiError := hosttypes.NewOpenAIError(fmt.Errorf("Gemini stream error: %s", message), hosttypes.ErrorCodeBadResponse, http.StatusBadGateway)
 				service.MarkProtocolUnsupportedStreamError(apiError)
 				return false, apiError
 			}
@@ -95,34 +96,34 @@ func GeminiBufferedStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, re
 			}
 		}
 
-		results, err := relayconvert.ConvertStreamResponseChunk(c, info, state, &geminiResponse)
+		results, err := service.ConvertStreamResponseChunk(c, info, state, &geminiResponse)
 		if err != nil {
 			return false, err
 		}
 		return false, appendResults(results)
 	})
 	if err != nil {
-		if apiError, ok := err.(*types.NewAPIError); ok {
+		if apiError, ok := err.(*hosttypes.NewAPIError); ok {
 			return nil, apiError
 		}
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	if !sawTerminal {
-		return nil, types.NewOpenAIError(
+		return nil, hosttypes.NewOpenAIError(
 			fmt.Errorf("Gemini stream ended without a terminal finish reason"),
-			types.ErrorCodeBadResponse,
+			hosttypes.ErrorCodeBadResponse,
 			http.StatusInternalServerError,
 		)
 	}
 	if usage != nil {
 		state.SetUsage(usage)
 	}
-	finalResults, err := relayconvert.FinalizeStreamResponse(c, info, state)
+	finalResults, err := service.FinalizeStreamResponse(c, info, state)
 	if err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
 	if err := appendResults(finalResults); err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
 	chatStream.WriteString("data: [DONE]\n\n")
 

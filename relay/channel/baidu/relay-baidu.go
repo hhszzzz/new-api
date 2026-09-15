@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 	"strings"
@@ -15,7 +16,6 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/samber/lo"
 
@@ -114,7 +114,7 @@ func embeddingResponseBaidu2OpenAI(response *BaiduEmbeddingResponse) *dto.OpenAI
 	return &openAIEmbeddingResponse
 }
 
-func baiduStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*types.NewAPIError, *dto.Usage) {
+func baiduStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*hosttypes.NewAPIError, *dto.Usage) {
 	usage := &dto.Usage{}
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		var baiduResponse BaiduChatStreamResponse
@@ -138,24 +138,24 @@ func baiduStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.
 	return nil, usage
 }
 
-func baiduHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*types.NewAPIError, *dto.Usage) {
+func baiduHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*hosttypes.NewAPIError, *dto.Usage) {
 	var baiduResponse BaiduChatResponse
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return types.NewError(err, types.ErrorCodeBadResponseBody), nil
+		return hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody), nil
 	}
 	service.CloseResponseBodyGracefully(resp)
 	err = json.Unmarshal(responseBody, &baiduResponse)
 	if err != nil {
-		return types.NewError(err, types.ErrorCodeBadResponseBody), nil
+		return hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody), nil
 	}
 	if baiduResponse.ErrorMsg != "" {
-		return types.NewError(fmt.Errorf("%s", baiduResponse.ErrorMsg), types.ErrorCodeBadResponseBody), nil
+		return hosttypes.NewError(fmt.Errorf("%s", baiduResponse.ErrorMsg), hosttypes.ErrorCodeBadResponseBody), nil
 	}
 	fullTextResponse := responseBaidu2OpenAI(&baiduResponse)
 	jsonResponse, err := json.Marshal(fullTextResponse)
 	if err != nil {
-		return types.NewError(err, types.ErrorCodeBadResponseBody), nil
+		return hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody), nil
 	}
 	c.Writer.Header().Set("Content-Type", "application/json")
 	c.Writer.WriteHeader(resp.StatusCode)
@@ -163,24 +163,24 @@ func baiduHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respon
 	return nil, &fullTextResponse.Usage
 }
 
-func baiduEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*types.NewAPIError, *dto.Usage) {
+func baiduEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*hosttypes.NewAPIError, *dto.Usage) {
 	var baiduResponse BaiduEmbeddingResponse
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return types.NewError(err, types.ErrorCodeBadResponseBody), nil
+		return hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody), nil
 	}
 	service.CloseResponseBodyGracefully(resp)
 	err = json.Unmarshal(responseBody, &baiduResponse)
 	if err != nil {
-		return types.NewError(err, types.ErrorCodeBadResponseBody), nil
+		return hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody), nil
 	}
 	if baiduResponse.ErrorMsg != "" {
-		return types.NewError(fmt.Errorf("%s", baiduResponse.ErrorMsg), types.ErrorCodeBadResponseBody), nil
+		return hosttypes.NewError(fmt.Errorf("%s", baiduResponse.ErrorMsg), hosttypes.ErrorCodeBadResponseBody), nil
 	}
 	fullTextResponse := embeddingResponseBaidu2OpenAI(&baiduResponse)
 	jsonResponse, err := json.Marshal(fullTextResponse)
 	if err != nil {
-		return types.NewError(err, types.ErrorCodeBadResponseBody), nil
+		return hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody), nil
 	}
 	c.Writer.Header().Set("Content-Type", "application/json")
 	c.Writer.WriteHeader(resp.StatusCode)

@@ -7,7 +7,7 @@ import (
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
-	geminichat "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/gemini_chat"
+	sharedgemini "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/gemini"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/QuantumNous/new-api/relaykit/types"
 )
@@ -244,7 +244,7 @@ func extractGeminiHostedResponse(response any) (any, HostedResponseSet, error) {
 	default:
 		return nil, HostedResponseSet{}, fmt.Errorf("expected Gemini response, got %T", response)
 	}
-	queries := geminichat.GroundingWebSearchQueries(source)
+	queries := sharedgemini.GroundingWebSearchQueries(source)
 	if len(queries) == 0 {
 		return source, HostedResponseSet{Source: types.RelayFormatGemini}, nil
 	}

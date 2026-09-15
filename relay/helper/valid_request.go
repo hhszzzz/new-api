@@ -3,6 +3,7 @@ package helper
 import (
 	"errors"
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"math"
 	"net/url"
 	"strconv"
@@ -92,14 +93,14 @@ func GetAndValidateRerankRequest(c *gin.Context) (*dto.RerankRequest, error) {
 	err := common.UnmarshalBodyReusable(c, &rerankRequest)
 	if err != nil {
 		logger.LogError(c, fmt.Sprintf("getAndValidateTextRequest failed: %s", err.Error()))
-		return nil, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		return nil, hosttypes.NewError(err, hosttypes.ErrorCodeInvalidRequest, hosttypes.ErrOptionWithSkipRetry())
 	}
 
 	if rerankRequest.Query == "" {
-		return nil, types.NewError(fmt.Errorf("query is empty"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		return nil, hosttypes.NewError(fmt.Errorf("query is empty"), hosttypes.ErrorCodeInvalidRequest, hosttypes.ErrOptionWithSkipRetry())
 	}
 	if len(rerankRequest.Documents) == 0 {
-		return nil, types.NewError(fmt.Errorf("documents is empty"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		return nil, hosttypes.NewError(fmt.Errorf("documents is empty"), hosttypes.ErrorCodeInvalidRequest, hosttypes.ErrOptionWithSkipRetry())
 	}
 	return rerankRequest, nil
 }
@@ -109,7 +110,7 @@ func GetAndValidateEmbeddingRequest(c *gin.Context, relayMode int) (*dto.Embeddi
 	err := common.UnmarshalBodyReusable(c, &embeddingRequest)
 	if err != nil {
 		logger.LogError(c, fmt.Sprintf("getAndValidateTextRequest failed: %s", err.Error()))
-		return nil, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		return nil, hosttypes.NewError(err, hosttypes.ErrorCodeInvalidRequest, hosttypes.ErrOptionWithSkipRetry())
 	}
 
 	if embeddingRequest.Input == nil {

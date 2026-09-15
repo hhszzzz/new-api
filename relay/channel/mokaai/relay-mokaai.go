@@ -2,13 +2,13 @@ package mokaai
 
 import (
 	"encoding/json"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 
 	"github.com/QuantumNous/new-api/common"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-gonic/gin"
@@ -52,16 +52,16 @@ func embeddingResponseMoka2OpenAI(response *dto.EmbeddingResponse) *dto.OpenAIEm
 	return &openAIEmbeddingResponse
 }
 
-func mokaEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+func mokaEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *hosttypes.NewAPIError) {
 	var baiduResponse dto.EmbeddingResponse
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+		return nil, hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody)
 	}
 	service.CloseResponseBodyGracefully(resp)
 	err = json.Unmarshal(responseBody, &baiduResponse)
 	if err != nil {
-		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+		return nil, hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody)
 	}
 	// if baiduResponse.ErrorMsg != "" {
 	// 	return &dto.OpenAIErrorWithStatusCode{
@@ -75,7 +75,7 @@ func mokaEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 	fullTextResponse := embeddingResponseMoka2OpenAI(&baiduResponse)
 	jsonResponse, err := common.Marshal(fullTextResponse)
 	if err != nil {
-		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+		return nil, hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody)
 	}
 	c.Writer.Header().Set("Content-Type", "application/json")
 	c.Writer.WriteHeader(resp.StatusCode)

@@ -2,6 +2,7 @@ package openai
 
 import (
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 	"sort"
@@ -49,9 +50,9 @@ type bufferedChatChoiceState struct {
 // Completions response and then reuses the normal non-stream response path. It
 // keeps a stream:false Responses or Messages client on its requested JSON
 // contract even when a compatible upstream forces SSE.
-func OaiChatBufferedStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+func OaiChatBufferedStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *hosttypes.NewAPIError) {
 	if resp == nil || resp.Body == nil {
-		return nil, types.NewOpenAIError(fmt.Errorf("invalid response"), types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(fmt.Errorf("invalid response"), hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
 	defer service.CloseResponseBodyGracefully(resp)
 
@@ -73,7 +74,7 @@ func OaiChatBufferedStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, r
 		if chunk.Error != nil {
 			errorResponse := dto.OpenAITextResponse{Error: chunk.Error}
 			if openAIError := errorResponse.GetOpenAIError(); openAIError != nil && openAIError.Type != "" {
-				streamError := types.WithOpenAIError(*openAIError, http.StatusInternalServerError)
+				streamError := hosttypes.WithOpenAIError(*openAIError, http.StatusInternalServerError)
 				service.MarkProtocolUnsupportedStreamError(streamError)
 				return false, streamError
 			}
@@ -172,13 +173,13 @@ func OaiChatBufferedStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, r
 		return false, nil
 	})
 	if err != nil {
-		if apiError, ok := err.(*types.NewAPIError); ok {
+		if apiError, ok := err.(*hosttypes.NewAPIError); ok {
 			return nil, apiError
 		}
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	if len(choices) == 0 {
-		return nil, types.NewOpenAIError(fmt.Errorf("Chat Completions stream ended without a response choice"), types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(fmt.Errorf("Chat Completions stream ended without a response choice"), hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
 
 	choiceIndexes := make([]int, 0, len(choices))
@@ -190,9 +191,9 @@ func OaiChatBufferedStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, r
 	for _, choiceIndex := range choiceIndexes {
 		state := choices[choiceIndex]
 		if state.finishReason == "" {
-			return nil, types.NewOpenAIError(
+			return nil, hosttypes.NewOpenAIError(
 				fmt.Errorf("Chat Completions stream ended without a terminal finish_reason"),
-				types.ErrorCodeBadResponse,
+				hosttypes.ErrorCodeBadResponse,
 				http.StatusInternalServerError,
 			)
 		}
@@ -228,9 +229,9 @@ func OaiChatBufferedStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, r
 					toolCall.Type = "function"
 				}
 				if toolCall.Function.Name == "" {
-					return nil, types.NewOpenAIError(
+					return nil, hosttypes.NewOpenAIError(
 						fmt.Errorf("Chat Completions tool call %d is missing a function name", toolIndex),
-						types.ErrorCodeBadResponseBody,
+						hosttypes.ErrorCodeBadResponseBody,
 						http.StatusInternalServerError,
 					)
 				}
@@ -238,7 +239,7 @@ func OaiChatBufferedStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, r
 			}
 			encodedToolCalls, err := common.Marshal(toolCalls)
 			if err != nil {
-				return nil, types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
+				return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
 			}
 			message.ToolCalls = encodedToolCalls
 		}
@@ -267,7 +268,7 @@ func OaiChatBufferedStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, r
 	}
 	encodedResponse, err := common.Marshal(chatResponse)
 	if err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
 	}
 
 	header := resp.Header.Clone()

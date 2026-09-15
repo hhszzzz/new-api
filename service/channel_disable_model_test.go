@@ -1,12 +1,12 @@
 package service
 
 import (
+	hostdto "github.com/QuantumNous/new-api/dto"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -63,7 +63,7 @@ func TestDisableChannelOrModelDisablesOnlyTheFailingModel(t *testing.T) {
 		t, 9001, `{"disable_model_on_error":true}`, model.ChannelInfo{},
 	)
 
-	DisableChannelOrModel(types.ChannelError{
+	DisableChannelOrModel(hosttypes.ChannelError{
 		ChannelId:   channel.Id,
 		ChannelName: channel.Name,
 		UsingKey:    "sk-test",
@@ -78,7 +78,7 @@ func TestDisableChannelOrModelDisablesOnlyTheFailingModel(t *testing.T) {
 	entries := reloaded.GetDisabledModels()
 	require.Len(t, entries, 1)
 	assert.Equal(t, "m1", entries[0].Model)
-	assert.Equal(t, dto.DisabledModelSourceAuto, entries[0].Source)
+	assert.Equal(t, hostdto.DisabledModelSourceAuto, entries[0].Source)
 
 	assert.False(t, abilityEnabled(t, channel.Id, "m1"))
 	assert.True(t, abilityEnabled(t, channel.Id, "m2"))
@@ -90,7 +90,7 @@ func TestDisableChannelOrModelFallsBackToChannelDisableWhenFlagOff(t *testing.T)
 
 	channel := seedDisableModelChannel(t, 9002, `{}`, model.ChannelInfo{})
 
-	DisableChannelOrModel(types.ChannelError{
+	DisableChannelOrModel(hosttypes.ChannelError{
 		ChannelId:   channel.Id,
 		ChannelName: channel.Name,
 		UsingKey:    "sk-test",
@@ -112,7 +112,7 @@ func TestDisableChannelOrModelIgnoresMultiKeyChannels(t *testing.T) {
 		model.ChannelInfo{IsMultiKey: true, MultiKeySize: 1, MultiKeyMode: "random"},
 	)
 
-	DisableChannelOrModel(types.ChannelError{
+	DisableChannelOrModel(hosttypes.ChannelError{
 		ChannelId:   channel.Id,
 		ChannelName: channel.Name,
 		UsingKey:    "sk-test",

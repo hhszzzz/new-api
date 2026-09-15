@@ -2,6 +2,7 @@ package controller
 
 import (
 	"errors"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -28,7 +29,7 @@ func TestWriteRelayErrorResponseUsesResponsesStreamEnvelope(t *testing.T) {
 		SequenceNumber: &sequenceNumber,
 	}, data))
 
-	apiError := types.WithOpenAIError(types.OpenAIError{
+	apiError := hosttypes.WithOpenAIError(types.OpenAIError{
 		Type:    "server_error",
 		Code:    "server_error",
 		Message: "upstream failed",
@@ -49,7 +50,7 @@ func TestWriteRelayErrorResponseUsesMessagesStreamEnvelopeBeforeFirstChunk(t *te
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
 
-	apiError := types.WithOpenAIError(types.OpenAIError{
+	apiError := hosttypes.WithOpenAIError(types.OpenAIError{
 		Type:    "server_error",
 		Code:    "server_error",
 		Message: "upstream failed",
@@ -68,7 +69,7 @@ func TestWriteRelayErrorResponseUsesChatCompletionsStreamEnvelope(t *testing.T) 
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 
-	apiError := types.WithOpenAIError(types.OpenAIError{
+	apiError := hosttypes.WithOpenAIError(types.OpenAIError{
 		Type:    "server_error",
 		Code:    "bad_response",
 		Message: "Dify workflow failed",
@@ -108,9 +109,9 @@ func TestWriteRelayErrorResponseUsesEntryProtocolForJSONErrors(t *testing.T) {
 			recorder := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(recorder)
 			c.Request = httptest.NewRequest(http.MethodPost, test.path, nil)
-			apiError := types.NewErrorWithStatusCode(
+			apiError := hosttypes.NewErrorWithStatusCode(
 				errors.New("request cannot be converted"),
-				types.ErrorCodeConvertRequestFailed,
+				hosttypes.ErrorCodeConvertRequestFailed,
 				http.StatusBadRequest,
 			)
 
@@ -127,9 +128,9 @@ func TestShouldRetryStopsAfterResponseIsWritten(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
-	apiError := types.NewErrorWithStatusCode(
+	apiError := hosttypes.NewErrorWithStatusCode(
 		errors.New("upstream unavailable"),
-		types.ErrorCodeBadResponse,
+		hosttypes.ErrorCodeBadResponse,
 		http.StatusInternalServerError,
 	)
 	require.True(t, shouldRetry(c, apiError, 1))

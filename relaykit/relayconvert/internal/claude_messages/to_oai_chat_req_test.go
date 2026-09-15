@@ -150,7 +150,7 @@ func TestClaudeMessagesRequestToOpenAIChatOmitsAnthropicTopK(t *testing.T) {
 	assert.NotContains(t, string(encoded), `"top_k"`)
 }
 
-func TestClaudeMessagesRequestToOpenAIChatDropsToolControlsWithoutTools(t *testing.T) {
+func TestClaudeMessagesRequestToOpenAIChatRejectsForcedToolWithoutDeclaration(t *testing.T) {
 	var request dto.ClaudeRequest
 	require.NoError(t, kitutil.Unmarshal([]byte(`{
 		"model":"claude-test",
@@ -158,12 +158,8 @@ func TestClaudeMessagesRequestToOpenAIChatDropsToolControlsWithoutTools(t *testi
 		"messages":[{"role":"user","content":"hello"}]
 	}`), &request))
 
-	got, err := ClaudeMessagesRequestToOpenAIChat(request, nil)
-	require.NoError(t, err)
-
-	assert.Empty(t, got.Tools)
-	assert.Nil(t, got.ToolChoice)
-	assert.Nil(t, got.ParallelTooCalls)
+	_, err := ClaudeMessagesRequestToOpenAIChat(request, nil)
+	require.ErrorContains(t, err, `references undeclared tool "lookup"`)
 }
 
 func TestClaudeMessagesRequestToOpenAIChatPreservesSystemWhitespace(t *testing.T) {
@@ -391,7 +387,7 @@ func TestClaudeMessagesRequestToOpenAIChatNormalizesToolSchemas(t *testing.T) {
 	assert.Equal(t, map[string]any{"type": "object", "properties": map[string]any{}}, got.Tools[1].Function.Parameters)
 }
 
-func TestClaudeMessagesRequestToOpenAIChatDropsServerToolsAndLowersClientTypedTools(t *testing.T) {
+func TestClaudeMessagesRequestToOpenAIChatRejectsUnmappedTypedTools(t *testing.T) {
 	var request dto.ClaudeRequest
 	require.NoError(t, kitutil.Unmarshal([]byte(`{
 		"model":"gpt-5.4",
@@ -403,11 +399,10 @@ func TestClaudeMessagesRequestToOpenAIChatDropsServerToolsAndLowersClientTypedTo
 		"messages":[{"role":"user","content":"hello"}]
 	}`), &request))
 
-	got, err := ClaudeMessagesRequestToOpenAIChat(request, nil)
-	require.NoError(t, err)
-	require.Len(t, got.Tools, 2)
-	assert.Equal(t, "bash", got.Tools[0].Function.Name)
-	assert.Equal(t, "lookup", got.Tools[1].Function.Name)
+	_, err := ClaudeMessagesRequestToOpenAIChat(request, nil)
+	var loss *types.ConversionLossError
+	require.ErrorAs(t, err, &loss)
+	assert.Contains(t, loss.Error(), "bash_20250124")
 }
 
 func TestClaudeMessagesRequestToOpenAIChatRejectsUndeclaredToolChoice(t *testing.T) {

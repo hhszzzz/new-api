@@ -1,6 +1,7 @@
 package gemini
 
 import (
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"net/http/httptest"
 	"testing"
 
@@ -168,11 +169,12 @@ func TestConvertOpenAIResponsesRequestToGeminiLowersClientToolHistory(t *testing
 	})
 
 	// additional_tools declarations are lifted into the Gemini tools list; the
-	// dropped web_search leaves nothing behind while client-executed
+	// hosted web_search is preserved alongside client-executed
 	// local_shell lowers to a callable function declaration.
-	assert.Equal(t, "local_shell", gjson.GetBytes(got.Tools, "0.functionDeclarations.0.name").String())
-	assert.Equal(t, "lookup", gjson.GetBytes(got.Tools, "0.functionDeclarations.1.name").String())
-	assert.Len(t, gjson.GetBytes(got.Tools, "0.functionDeclarations").Array(), 2)
+	assert.Equal(t, "local_shell", gjson.GetBytes(got.Tools, "1.functionDeclarations.0.name").String())
+	assert.Equal(t, "lookup", gjson.GetBytes(got.Tools, "1.functionDeclarations.1.name").String())
+	assert.Len(t, gjson.GetBytes(got.Tools, "1.functionDeclarations").Array(), 2)
+	assert.True(t, gjson.GetBytes(got.Tools, "0.googleSearch").Exists())
 
 	require.Len(t, got.Contents, 3)
 	assert.Equal(t, "model", got.Contents[0].Role)
@@ -209,7 +211,7 @@ func TestConvertOpenAIResponsesRequestToGeminiRejectsLossyToolsAndHistory(t *tes
 			input: []map[string]any{{
 				"type": "web_search_call",
 			}},
-			want: `cannot preserve hosted-tool continuation item "web_search_call"`,
+			want: `web_search_call`,
 		},
 		{
 			name: "unsupported content block",
@@ -221,7 +223,7 @@ func TestConvertOpenAIResponsesRequestToGeminiRejectsLossyToolsAndHistory(t *tes
 					"refusal": "cannot comply",
 				}},
 			}},
-			want: `content type "refusal" cannot be converted losslessly`,
+			want: `refusal`,
 		},
 	}
 
@@ -238,7 +240,7 @@ func TestConvertOpenAIResponsesRequestToGeminiRejectsLossyToolsAndHistory(t *tes
 				OriginModelName: request.Model,
 				ChannelMeta: &relaycommon.ChannelMeta{
 					UpstreamModelName: request.Model,
-					ChannelOtherSettings: dto.ChannelOtherSettings{
+					ChannelOtherSettings: hostdto.ChannelOtherSettings{
 						ToolLossPolicy: "strict",
 					},
 				},

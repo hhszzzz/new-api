@@ -18,6 +18,8 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { z } from 'zod'
 
+import type { ProtocolPolicy } from '@/features/protocols/types'
+
 // ============================================================================
 // Channel Schema & Types
 // ============================================================================
@@ -254,6 +256,7 @@ export interface ChannelOtherSettings {
   upstream_model_update_last_detected_models?: string[]
   advanced_custom?: AdvancedCustomConfig
   protocol_capabilities?: ProtocolCapabilities
+  protocol_policy?: ProtocolPolicy
   disable_model_on_error?: boolean
   client_policy?: {
     mode?: 'unrestricted' | 'allow' | 'deny'
@@ -295,6 +298,7 @@ export interface AdvancedCustomRoute {
   incoming_path?: string
   upstream_path?: string
   converter?: AdvancedCustomConverter
+  target_protocol?: string
   models?: string[]
   auth?: AdvancedCustomRouteAuth
 }
@@ -305,17 +309,8 @@ export interface AdvancedCustomRouteAuth {
   value?: string
 }
 
-export type AdvancedCustomConverter =
-  | 'none'
-  | 'anthropic_messages_to_openai_chat_completions'
-  | 'claude_messages_to_openai_responses'
-  | 'openai_chat_completions_to_anthropic_messages'
-  | 'openai_chat_completions_to_openai_responses'
-  | 'openai_responses_to_openai_chat_completions'
-  | 'openai_responses_to_claude_messages'
-  | 'openai_responses_to_gemini_generate_content'
-  | 'gemini_generate_content_to_openai_chat_completions'
-  | 'openai_chat_completions_to_gemini_generate_content'
+// Accepted only when importing legacy configuration; the backend catalog resolves it.
+export type AdvancedCustomConverter = string
 
 export type AdvancedCustomAuthType = 'none' | 'header' | 'query'
 

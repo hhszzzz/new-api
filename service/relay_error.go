@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -9,7 +10,6 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/bytedance/gopkg/util/gopool"
@@ -18,7 +18,7 @@ import (
 
 // ShouldRetryRelayError applies retry policy when the caller owns its response
 // transport and therefore cannot use Gin's Writer.Written state.
-func ShouldRetryRelayError(c *gin.Context, apiErr *types.NewAPIError, retryTimes int) bool {
+func ShouldRetryRelayError(c *gin.Context, apiErr *hosttypes.NewAPIError, retryTimes int) bool {
 	if apiErr == nil || ShouldSkipRetryAfterChannelAffinityFailure(c) {
 		return false
 	}
@@ -30,10 +30,10 @@ func ShouldRetryRelayError(c *gin.Context, apiErr *types.NewAPIError, retryTimes
 			return false
 		}
 	}
-	if types.IsChannelError(apiErr) {
+	if hosttypes.IsChannelError(apiErr) {
 		return true
 	}
-	if types.IsSkipRetryError(apiErr) || retryTimes <= 0 {
+	if hosttypes.IsSkipRetryError(apiErr) || retryTimes <= 0 {
 		return false
 	}
 	code := apiErr.StatusCode
@@ -49,12 +49,12 @@ func ShouldRetryRelayError(c *gin.Context, apiErr *types.NewAPIError, retryTimes
 	return operation_setting.ShouldRetryByStatusCode(code)
 }
 
-func ProcessChannelError(c *gin.Context, channelError types.ChannelError, apiErr *types.NewAPIError, relayInfo *relaycommon.RelayInfo) {
+func ProcessChannelError(c *gin.Context, channelError hosttypes.ChannelError, apiErr *hosttypes.NewAPIError, relayInfo *relaycommon.RelayInfo) {
 	if apiErr == nil {
 		return
 	}
 	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, apiErr.StatusCode, common.LocalLogPreview(apiErr.Error())))
-	if apiErr.GetErrorCode() != types.ErrorCodeClientDisconnected && ShouldDisableChannel(apiErr) && channelError.AutoBan {
+	if apiErr.GetErrorCode() != hosttypes.ErrorCodeClientDisconnected && ShouldDisableChannel(apiErr) && channelError.AutoBan {
 		group := ""
 		modelName := ""
 		if c != nil {
@@ -66,7 +66,7 @@ func ProcessChannelError(c *gin.Context, channelError types.ChannelError, apiErr
 		})
 	}
 
-	if !constant.ErrorLogEnabled || !types.IsRecordErrorLog(apiErr) || c == nil {
+	if !constant.ErrorLogEnabled || !hosttypes.IsRecordErrorLog(apiErr) || c == nil {
 		return
 	}
 	userID := c.GetInt("id")

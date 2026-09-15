@@ -2,6 +2,7 @@ package palm
 
 import (
 	"encoding/json"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 
@@ -50,7 +51,7 @@ func streamResponsePaLM2OpenAI(palmResponse *PaLMChatResponse) *dto.ChatCompleti
 	return &response
 }
 
-func palmStreamHandler(c *gin.Context, resp *http.Response) (*types.NewAPIError, string) {
+func palmStreamHandler(c *gin.Context, resp *http.Response) (*hosttypes.NewAPIError, string) {
 	responseText := ""
 	responseId := helper.GetResponseID(c)
 	createdTime := common.GetTimestamp()
@@ -103,19 +104,19 @@ func palmStreamHandler(c *gin.Context, resp *http.Response) (*types.NewAPIError,
 	return nil, responseText
 }
 
-func palmHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+func palmHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *hosttypes.NewAPIError) {
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
 	}
 	service.CloseResponseBodyGracefully(resp)
 	var palmResponse PaLMChatResponse
 	err = json.Unmarshal(responseBody, &palmResponse)
 	if err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	if palmResponse.Error.Code != 0 || len(palmResponse.Candidates) == 0 {
-		return nil, types.WithOpenAIError(types.OpenAIError{
+		return nil, hosttypes.WithOpenAIError(types.OpenAIError{
 			Message: palmResponse.Error.Message,
 			Type:    palmResponse.Error.Status,
 			Param:   "",
@@ -127,7 +128,7 @@ func palmHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respons
 	fullTextResponse.Usage = *usage
 	jsonResponse, err := common.Marshal(fullTextResponse)
 	if err != nil {
-		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+		return nil, hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody)
 	}
 	c.Writer.Header().Set("Content-Type", "application/json")
 	c.Writer.WriteHeader(resp.StatusCode)

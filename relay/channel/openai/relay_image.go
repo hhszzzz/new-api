@@ -3,6 +3,7 @@ package openai
 import (
 	"encoding/json"
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 	"strconv"
@@ -14,7 +15,6 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-gonic/gin"
@@ -31,30 +31,30 @@ func updateOpenAIImageCount(info *relaycommon.RelayInfo, count int64) {
 
 // OpenaiImageHandler handles non-streaming OpenAI image responses
 // (generations/edits), returning the parsed usage for billing.
-func OpenaiImageHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+func OpenaiImageHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *hosttypes.NewAPIError) {
 	defer service.CloseResponseBodyGracefully(resp)
 
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
 	}
 
 	var usageResp dto.SimpleResponse
 	err = common.Unmarshal(responseBody, &usageResp)
 	if err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 
 	if oaiError := usageResp.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
 		publicError := relaycommon.SanitizeUserModelRouteOpenAIError(*oaiError, info)
-		return nil, types.WithOpenAIError(publicError, resp.StatusCode)
+		return nil, hosttypes.WithOpenAIError(publicError, resp.StatusCode)
 	}
 
 	updateOpenAIImageCount(info, gjson.GetBytes(responseBody, "data.#").Int())
 
 	clientResponseBody, err := relaycommon.RedactUserModelRouteJSON(responseBody, info)
 	if err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	service.IOCopyBytesGracefully(c, resp, clientResponseBody)
 
@@ -94,10 +94,10 @@ func normalizeOpenAIUsage(usage *dto.Usage) {
 	}
 }
 
-func OpenaiImageStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+func OpenaiImageStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *hosttypes.NewAPIError) {
 	if resp == nil || resp.Body == nil {
 		logger.LogError(c, "invalid image stream response")
-		return nil, types.NewOpenAIError(fmt.Errorf("invalid response"), types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(fmt.Errorf("invalid response"), hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
 
 	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
@@ -243,12 +243,12 @@ func extractOpenAIImageStreamErrorMessage(data []byte) string {
 	return "upstream image stream returned error event"
 }
 
-func openaiImageJSONAsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+func openaiImageJSONAsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *hosttypes.NewAPIError) {
 	defer service.CloseResponseBodyGracefully(resp)
 
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
 	}
 
 	// Only decode usage/error. Do not Unmarshal data[] into dto.ImageResponse —
@@ -256,11 +256,11 @@ func openaiImageJSONAsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo,
 	// re-marshaled for each SSE event.
 	var usageResp dto.SimpleResponse
 	if err := common.Unmarshal(responseBody, &usageResp); err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	if oaiError := usageResp.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
 		publicError := relaycommon.SanitizeUserModelRouteOpenAIError(*oaiError, info)
-		return nil, types.WithOpenAIError(publicError, resp.StatusCode)
+		return nil, hosttypes.WithOpenAIError(publicError, resp.StatusCode)
 	}
 	normalizeOpenAIUsage(&usageResp.Usage)
 	applyUsagePostProcessing(info, &usageResp.Usage, responseBody)
@@ -284,7 +284,7 @@ func openaiImageJSONAsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo,
 	if validUsage {
 		usageJSON, err = common.Marshal(usageResp.Usage)
 		if err != nil {
-			return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+			return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 		}
 	}
 
@@ -293,12 +293,12 @@ func openaiImageJSONAsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo,
 		payload := []byte(`{"type":"image_generation.completed"}`)
 		payload, err = sjson.SetBytes(payload, "created_at", created)
 		if err != nil {
-			return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+			return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 		}
 		if validUsage {
 			payload, err = sjson.SetRawBytes(payload, "usage", usageJSON)
 			if err != nil {
-				return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+				return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 			}
 		}
 		// b64_json goes last: every sjson.Set* reallocates the whole payload,
@@ -315,7 +315,7 @@ func openaiImageJSONAsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo,
 			}
 			payload, err = sjson.SetRawBytes(payload, field, raw)
 			if err != nil {
-				return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+				return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 			}
 		}
 		if writeErr := helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: "image_generation.completed"}, string(payload)); writeErr != nil {

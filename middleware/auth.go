@@ -3,6 +3,7 @@ package middleware
 import (
 	"errors"
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"net"
 	"net/http"
 	"strconv"
@@ -14,7 +15,6 @@ import (
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -446,7 +446,7 @@ func TokenAuth() func(c *gin.Context) {
 				return
 			}
 			if common.IsIpInCIDRList(ip, allowIps) == false {
-				abortWithProtocolMessage(c, http.StatusForbidden, "您的 IP 不在令牌允许访问的列表中", types.ErrorCodeAccessDenied)
+				abortWithProtocolMessage(c, http.StatusForbidden, "您的 IP 不在令牌允许访问的列表中", hosttypes.ErrorCodeAccessDenied)
 				return
 			}
 			logger.LogDebug(c, "Client IP %s passed the token IP restrictions check", clientIp)

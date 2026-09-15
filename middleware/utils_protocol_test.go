@@ -2,6 +2,8 @@ package middleware
 
 import (
 	"errors"
+	hostdto "github.com/QuantumNous/new-api/dto"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -39,7 +41,7 @@ func TestAbortWithProtocolMessageUsesAnthropicErrorEnvelope(t *testing.T) {
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
 	ctx.Set(common.RequestIdKey, "req_test")
 
-	abortWithProtocolMessage(ctx, http.StatusTooManyRequests, "rate limited", types.ErrorCodeGetChannelFailed)
+	abortWithProtocolMessage(ctx, http.StatusTooManyRequests, "rate limited", hosttypes.ErrorCodeGetChannelFailed)
 
 	assert.Equal(t, http.StatusTooManyRequests, recorder.Code)
 	var body struct {
@@ -58,7 +60,7 @@ func TestAbortWithProtocolMessageKeepsOpenAIEnvelopeForResponses(t *testing.T) {
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 
-	abortWithProtocolMessage(ctx, http.StatusBadRequest, "invalid bridge", types.ErrorCodeInvalidRequest)
+	abortWithProtocolMessage(ctx, http.StatusBadRequest, "invalid bridge", hosttypes.ErrorCodeInvalidRequest)
 
 	assert.Equal(t, http.StatusBadRequest, recorder.Code)
 	var body struct {
@@ -67,7 +69,7 @@ func TestAbortWithProtocolMessageKeepsOpenAIEnvelopeForResponses(t *testing.T) {
 	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &body))
 	assert.Contains(t, body.Error.Message, "invalid bridge")
 	assert.Equal(t, "new_api_error", body.Error.Type)
-	assert.Equal(t, string(types.ErrorCodeInvalidRequest), body.Error.Code)
+	assert.Equal(t, string(hosttypes.ErrorCodeInvalidRequest), body.Error.Code)
 }
 
 func TestApplySelectedChannelCompatibilityRecomputesProtocolPlanForEachChannel(t *testing.T) {
@@ -89,14 +91,14 @@ func TestApplySelectedChannelCompatibilityRecomputesProtocolPlanForEachChannel(t
 	allowConversion := true
 	chatMapping := `{"public-model":"provider-chat-model"}`
 	chatChannel := &model.Channel{Id: 1, Type: constant.ChannelTypeOpenAI, ModelMapping: &chatMapping}
-	chatChannel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
-		UpstreamProtocols: []string{dto.ProtocolCapabilityChat},
+	chatChannel.SetOtherSettings(hostdto.ChannelOtherSettings{ProtocolCapabilities: &hostdto.ProtocolCapabilities{
+		UpstreamProtocols: []string{hostdto.ProtocolCapabilityChat},
 		AllowConversion:   &allowConversion,
 	}})
 	messagesMapping := `{"public-model":"provider-messages-model"}`
 	messagesChannel := &model.Channel{Id: 2, Type: constant.ChannelTypeAnthropic, ModelMapping: &messagesMapping}
-	messagesChannel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
-		UpstreamProtocols: []string{dto.ProtocolCapabilityMessages},
+	messagesChannel.SetOtherSettings(hostdto.ChannelOtherSettings{ProtocolCapabilities: &hostdto.ProtocolCapabilities{
+		UpstreamProtocols: []string{hostdto.ProtocolCapabilityMessages},
 		AllowConversion:   &allowConversion,
 	}})
 
@@ -186,8 +188,8 @@ func TestBuildChannelCandidateClassifierGlobalDisableIgnoresExplicitCapabilities
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"public-model"}`))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 	channel := &model.Channel{Type: constant.ChannelTypeOpenAI}
-	channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
-		UpstreamProtocols: []string{dto.ProtocolCapabilityChat},
+	channel.SetOtherSettings(hostdto.ChannelOtherSettings{ProtocolCapabilities: &hostdto.ProtocolCapabilities{
+		UpstreamProtocols: []string{hostdto.ProtocolCapabilityChat},
 	}})
 
 	// The global switch is a hard gate: with it off the configured chat-only
@@ -209,8 +211,8 @@ func TestBridgeCandidateFilterTreatsExplicitChatCapabilityAsConvertible(t *testi
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"public-model"}`))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 	chatOnly := &model.Channel{Id: 11, Type: constant.ChannelTypeOpenAI}
-	chatOnly.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
-		UpstreamProtocols: []string{dto.ProtocolCapabilityChat},
+	chatOnly.SetOtherSettings(hostdto.ChannelOtherSettings{ProtocolCapabilities: &hostdto.ProtocolCapabilities{
+		UpstreamProtocols: []string{hostdto.ProtocolCapabilityChat},
 	}})
 
 	filter := BuildChannelCandidateFilter(ctx, "public-model")
@@ -224,8 +226,8 @@ func TestBridgeCandidateFilterTreatsExplicitChatCapabilityAsConvertible(t *testi
 func TestAdvancedCustomCountTokensPathUsesMessagesRouteAsSelectionFallback(t *testing.T) {
 	mapping := `{"public-model":"provider-model"}`
 	channel := &model.Channel{Type: constant.ChannelTypeAdvancedCustom, ModelMapping: &mapping}
-	channel.SetOtherSettings(dto.ChannelOtherSettings{
-		AdvancedCustom: &dto.AdvancedCustomConfig{Routes: []dto.AdvancedCustomRoute{
+	channel.SetOtherSettings(hostdto.ChannelOtherSettings{
+		AdvancedCustom: &hostdto.AdvancedCustomConfig{Routes: []hostdto.AdvancedCustomRoute{
 			{
 				IncomingPath: "/v1/messages",
 				UpstreamPath: "/provider/chat",
@@ -250,8 +252,8 @@ func TestAutomaticProtocolSelectionUsesAffinityThenRetriesSameChannel(t *testing
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"public-model"}`))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 	channel := &model.Channel{Id: 9901, Type: constant.ChannelTypeOpenAI}
-	channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
-		SelectionMode: dto.ProtocolSelectionModeAuto,
+	channel.SetOtherSettings(hostdto.ChannelOtherSettings{ProtocolCapabilities: &hostdto.ProtocolCapabilities{
+		SelectionMode: hostdto.ProtocolSelectionModeAuto,
 	}})
 	channelcompat.RememberProtocolAffinity(channel, "public-model", channelcompat.ProtocolResponses, channelcompat.ProtocolChat)
 
@@ -260,7 +262,7 @@ func TestAutomaticProtocolSelectionUsesAffinityThenRetriesSameChannel(t *testing
 	require.True(t, ok)
 	assert.Equal(t, channelcompat.ProtocolChat, plan.UpstreamProtocol)
 
-	unsupported := types.NewErrorWithStatusCode(errors.New("unknown endpoint"), types.ErrorCodeBadResponseStatusCode, http.StatusNotFound)
+	unsupported := hosttypes.NewErrorWithStatusCode(errors.New("unknown endpoint"), hosttypes.ErrorCodeBadResponseStatusCode, http.StatusNotFound)
 	unsupported.MarkProtocolUnsupported()
 	assert.True(t, AdvanceAutoProtocolAttempt(ctx, unsupported))
 	retryChannelID, retrySameChannel := PendingAutoProtocolRetryChannelID(ctx)
@@ -288,13 +290,13 @@ func TestAutomaticProtocolClassifierRequiresEvidenceBeforeNativeTier(t *testing.
 	require.NotNil(t, classifier)
 
 	unknown := &model.Channel{Id: 9910, Type: constant.ChannelTypeOpenAI}
-	unknown.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
-		SelectionMode: dto.ProtocolSelectionModeAuto,
+	unknown.SetOtherSettings(hostdto.ChannelOtherSettings{ProtocolCapabilities: &hostdto.ProtocolCapabilities{
+		SelectionMode: hostdto.ProtocolSelectionModeAuto,
 	}})
 	declaredNative := &model.Channel{Id: 9911, Type: constant.ChannelTypeOpenAI}
-	declaredNative.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
-		SelectionMode:     dto.ProtocolSelectionModeAuto,
-		UpstreamProtocols: []string{dto.ProtocolCapabilityResponses},
+	declaredNative.SetOtherSettings(hostdto.ChannelOtherSettings{ProtocolCapabilities: &hostdto.ProtocolCapabilities{
+		SelectionMode:     hostdto.ProtocolSelectionModeAuto,
+		UpstreamProtocols: []string{hostdto.ProtocolCapabilityResponses},
 	}})
 
 	assert.Equal(t, model.ChannelCandidateConvertible, classifier(unknown))
@@ -314,8 +316,8 @@ func TestAutomaticProtocolAffinityDoesNotCrossResponsesAndMessagesEntries(t *tes
 	enableProtocolBridgePolicyForTest(t)
 
 	channel := &model.Channel{Id: 9904, Type: constant.ChannelTypeOpenAI}
-	channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
-		SelectionMode: dto.ProtocolSelectionModeAuto,
+	channel.SetOtherSettings(hostdto.ChannelOtherSettings{ProtocolCapabilities: &hostdto.ProtocolCapabilities{
+		SelectionMode: hostdto.ProtocolSelectionModeAuto,
 	}})
 	channelcompat.RememberProtocolAffinity(channel, "public-model", channelcompat.ProtocolResponses, channelcompat.ProtocolChat)
 
@@ -336,8 +338,8 @@ func TestAutomaticProtocolSelectionKeepsBoundSessionProtocolAheadOfAffinityAndNa
 	enableProtocolBridgePolicyForTest(t)
 
 	channel := &model.Channel{Id: 9905, Type: constant.ChannelTypeOpenAI}
-	channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
-		SelectionMode: dto.ProtocolSelectionModeAuto,
+	channel.SetOtherSettings(hostdto.ChannelOtherSettings{ProtocolCapabilities: &hostdto.ProtocolCapabilities{
+		SelectionMode: hostdto.ProtocolSelectionModeAuto,
 	}})
 	channelcompat.RememberProtocolAffinity(channel, "public-model", channelcompat.ProtocolResponses, channelcompat.ProtocolMessages)
 
@@ -354,7 +356,7 @@ func TestAutomaticProtocolSelectionKeepsBoundSessionProtocolAheadOfAffinityAndNa
 	require.True(t, ok)
 	assert.Equal(t, channelcompat.ProtocolChat, plan.UpstreamProtocol)
 
-	unsupported := types.NewErrorWithStatusCode(errors.New("unknown endpoint"), types.ErrorCodeBadResponseStatusCode, http.StatusNotFound)
+	unsupported := hosttypes.NewErrorWithStatusCode(errors.New("unknown endpoint"), hosttypes.ErrorCodeBadResponseStatusCode, http.StatusNotFound)
 	unsupported.MarkProtocolUnsupported()
 	assert.True(t, AdvanceAutoProtocolAttempt(ctx, unsupported))
 	require.NoError(t, applySelectedChannelCompatibility(ctx, channel, "public-model"))
@@ -372,24 +374,24 @@ func TestAutomaticProtocolSelectionDoesNotAdvanceForOrdinaryErrorsOrWrittenStrea
 		return ctx
 	}
 	channel := &model.Channel{Id: 9902, Type: constant.ChannelTypeOpenAI}
-	channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
-		SelectionMode: dto.ProtocolSelectionModeAuto,
+	channel.SetOtherSettings(hostdto.ChannelOtherSettings{ProtocolCapabilities: &hostdto.ProtocolCapabilities{
+		SelectionMode: hostdto.ProtocolSelectionModeAuto,
 	}})
 
 	ordinaryContext := newContext()
 	require.NoError(t, applySelectedChannelCompatibility(ordinaryContext, channel, "public-model"))
-	ordinaryError := types.NewErrorWithStatusCode(errors.New("unsupported parameter"), types.ErrorCodeBadResponseStatusCode, http.StatusBadRequest)
+	ordinaryError := hosttypes.NewErrorWithStatusCode(errors.New("unsupported parameter"), hosttypes.ErrorCodeBadResponseStatusCode, http.StatusBadRequest)
 	assert.False(t, AdvanceAutoProtocolAttempt(ordinaryContext, ordinaryError))
 
 	modelNotFoundContext := newContext()
 	require.NoError(t, applySelectedChannelCompatibility(modelNotFoundContext, channel, "public-model"))
-	modelNotFound := types.NewErrorWithStatusCode(errors.New("model not found"), types.ErrorCodeModelNotFound, http.StatusNotFound)
+	modelNotFound := hosttypes.NewErrorWithStatusCode(errors.New("model not found"), hosttypes.ErrorCodeModelNotFound, http.StatusNotFound)
 	assert.False(t, AdvanceAutoProtocolAttempt(modelNotFoundContext, modelNotFound))
 
 	writtenContext := newContext()
 	require.NoError(t, applySelectedChannelCompatibility(writtenContext, channel, "public-model"))
 	writtenContext.String(http.StatusOK, "partial stream")
-	unsupported := types.NewErrorWithStatusCode(errors.New("unknown endpoint"), types.ErrorCodeBadResponseStatusCode, http.StatusNotFound)
+	unsupported := hosttypes.NewErrorWithStatusCode(errors.New("unknown endpoint"), hosttypes.ErrorCodeBadResponseStatusCode, http.StatusNotFound)
 	unsupported.MarkProtocolUnsupported()
 	assert.False(t, AdvanceAutoProtocolAttempt(writtenContext, unsupported))
 }
@@ -404,8 +406,8 @@ func TestCommitAutomaticProtocolAffinityRemembersSuccessfulWireFormat(t *testing
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"public-model","messages":[]}`))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 	channel := &model.Channel{Id: 9903, Type: constant.ChannelTypeOpenAI}
-	channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
-		SelectionMode: dto.ProtocolSelectionModeAuto,
+	channel.SetOtherSettings(hostdto.ChannelOtherSettings{ProtocolCapabilities: &hostdto.ProtocolCapabilities{
+		SelectionMode: hostdto.ProtocolSelectionModeAuto,
 	}})
 
 	require.NoError(t, applySelectedChannelCompatibility(ctx, channel, "public-model"))
@@ -430,8 +432,8 @@ func TestCommitAutomaticProtocolAffinityRequiresVerifiedStreamCompletion(t *test
 	)
 	ctx.Request.Header.Set("Content-Type", "application/json")
 	channel := &model.Channel{Id: 9912, Type: constant.ChannelTypeOpenAI}
-	channel.SetOtherSettings(dto.ChannelOtherSettings{ProtocolCapabilities: &dto.ProtocolCapabilities{
-		SelectionMode: dto.ProtocolSelectionModeAuto,
+	channel.SetOtherSettings(hostdto.ChannelOtherSettings{ProtocolCapabilities: &hostdto.ProtocolCapabilities{
+		SelectionMode: hostdto.ProtocolSelectionModeAuto,
 	}})
 
 	require.NoError(t, applySelectedChannelCompatibility(ctx, channel, "public-model"))

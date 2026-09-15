@@ -2,12 +2,12 @@ package controller
 
 import (
 	"errors"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -15,7 +15,7 @@ import (
 )
 
 func TestShouldRetryHonorsPinRetryMode(t *testing.T) {
-	openaiErr := types.NewOpenAIError(errors.New("upstream"), types.ErrorCodeBadResponseStatusCode, http.StatusInternalServerError)
+	openaiErr := hosttypes.NewOpenAIError(errors.New("upstream"), hosttypes.ErrorCodeBadResponseStatusCode, http.StatusInternalServerError)
 
 	c := newPinRetryContext()
 	assert.True(t, shouldRetry(c, openaiErr, 1))
@@ -84,7 +84,7 @@ func TestSameChannelPinsMergeToStricterRetryMode(t *testing.T) {
 	assert.Equal(t, 7, pin.ChannelId)
 	assert.Equal(t, dto.PinRetrySingleAttempt, pin.RetryMode)
 	assert.Empty(t, overridden)
-	assert.False(t, shouldRetry(c, types.NewOpenAIError(errors.New("upstream"), types.ErrorCodeBadResponseStatusCode, http.StatusInternalServerError), 1))
+	assert.False(t, shouldRetry(c, hosttypes.NewOpenAIError(errors.New("upstream"), hosttypes.ErrorCodeBadResponseStatusCode, http.StatusInternalServerError), 1))
 }
 
 func newPinRetryContext() *gin.Context {

@@ -2,14 +2,14 @@ package middleware
 
 import (
 	"fmt"
+	hostdto "github.com/QuantumNous/new-api/dto"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service/channelcompat"
 	"github.com/QuantumNous/new-api/service/clientpolicy"
 	"github.com/QuantumNous/new-api/service/protocolstate"
@@ -64,7 +64,7 @@ func BuildChannelCandidateClassifier(c *gin.Context, modelName string) model.Cha
 			return model.ChannelCandidateIncompatible
 		}
 		plan := plans[0]
-		if plan.SelectionMode == dto.ProtocolSelectionModeAuto && plan.Status != channelcompat.StatusIncompatible {
+		if plan.SelectionMode == hostdto.ProtocolSelectionModeAuto && plan.Status != channelcompat.StatusIncompatible {
 			if preferred, found := channelcompat.LookupProtocolAffinity(channel, plan.EffectiveUpstreamModel, protocol); found {
 				if preferredPlan, ok := findAutomaticProtocolPlan(plans, preferred); ok {
 					plan = preferredPlan
@@ -148,7 +148,7 @@ func applySelectedChannelCompatibility(c *gin.Context, channel *model.Channel, m
 	}
 	plans := channelcompat.PlansForRequest(channel, protocol, modelName, c.Request.URL.Path, requestProtocolFeatures(c, protocol))
 	plan := plans[0]
-	if plan.SelectionMode == dto.ProtocolSelectionModeAuto && plan.Status != channelcompat.StatusIncompatible {
+	if plan.SelectionMode == hostdto.ProtocolSelectionModeAuto && plan.Status != channelcompat.StatusIncompatible {
 		plan = selectAutomaticProtocolPlan(c, channel, plans)
 	} else {
 		common.SetContextKey(c, constant.ContextKeyProtocolAutoAttempt, nil)
@@ -244,7 +244,7 @@ func findAutomaticProtocolPlan(plans []channelcompat.ProtocolPlan, protocol chan
 	return channelcompat.ProtocolPlan{}, false
 }
 
-func AdvanceAutoProtocolAttempt(c *gin.Context, apiError *types.NewAPIError) bool {
+func AdvanceAutoProtocolAttempt(c *gin.Context, apiError *hosttypes.NewAPIError) bool {
 	if c == nil || c.Writer == nil || c.Writer.Written() || !channelcompat.IsProtocolUnsupportedError(apiError) {
 		return false
 	}
@@ -253,7 +253,7 @@ func AdvanceAutoProtocolAttempt(c *gin.Context, apiError *types.NewAPIError) boo
 		return false
 	}
 	plan, ok := common.GetContextKeyType[channelcompat.ProtocolPlan](c, constant.ContextKeyProtocolPlan)
-	if !ok || plan.SelectionMode != dto.ProtocolSelectionModeAuto || plan.UpstreamProtocol != attempt.ProtocolOrder[attempt.CurrentIndex] {
+	if !ok || plan.SelectionMode != hostdto.ProtocolSelectionModeAuto || plan.UpstreamProtocol != attempt.ProtocolOrder[attempt.CurrentIndex] {
 		return false
 	}
 
@@ -287,7 +287,7 @@ func CommitAutoProtocolAffinity(c *gin.Context) {
 		return
 	}
 	plan, ok := common.GetContextKeyType[channelcompat.ProtocolPlan](c, constant.ContextKeyProtocolPlan)
-	if !ok || plan.SelectionMode != dto.ProtocolSelectionModeAuto || plan.UpstreamProtocol != attempt.ProtocolOrder[attempt.CurrentIndex] {
+	if !ok || plan.SelectionMode != hostdto.ProtocolSelectionModeAuto || plan.UpstreamProtocol != attempt.ProtocolOrder[attempt.CurrentIndex] {
 		return
 	}
 	channelcompat.RememberProtocolAffinity(attempt.Channel, attempt.EffectiveUpstreamModel, attempt.RequestProtocol, plan.UpstreamProtocol)

@@ -2,6 +2,7 @@ package cohere
 
 import (
 	"encoding/json"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 	"strings"
@@ -11,7 +12,6 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-gonic/gin"
@@ -80,7 +80,7 @@ func stopReasonCohere2OpenAI(reason string) string {
 	}
 }
 
-func cohereStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+func cohereStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *hosttypes.NewAPIError) {
 	responseId := helper.GetResponseID(c)
 	createdTime := common.GetTimestamp()
 	usage := &dto.Usage{}
@@ -176,17 +176,17 @@ func cohereStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	return usage, nil
 }
 
-func cohereHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+func cohereHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *hosttypes.NewAPIError) {
 	createdTime := common.GetTimestamp()
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+		return nil, hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody)
 	}
 	service.CloseResponseBodyGracefully(resp)
 	var cohereResp CohereResponseResult
 	err = json.Unmarshal(responseBody, &cohereResp)
 	if err != nil {
-		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+		return nil, hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody)
 	}
 	usage := dto.Usage{}
 	usage.PromptTokens = cohereResp.Meta.BilledUnits.InputTokens
@@ -210,7 +210,7 @@ func cohereHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 
 	jsonResponse, err := json.Marshal(openaiResp)
 	if err != nil {
-		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+		return nil, hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody)
 	}
 	c.Writer.Header().Set("Content-Type", "application/json")
 	c.Writer.WriteHeader(resp.StatusCode)
@@ -218,16 +218,16 @@ func cohereHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 	return &usage, nil
 }
 
-func cohereRerankHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*dto.Usage, *types.NewAPIError) {
+func cohereRerankHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*dto.Usage, *hosttypes.NewAPIError) {
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+		return nil, hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody)
 	}
 	service.CloseResponseBodyGracefully(resp)
 	var cohereResp CohereRerankResponseResult
 	err = json.Unmarshal(responseBody, &cohereResp)
 	if err != nil {
-		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+		return nil, hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody)
 	}
 	usage := dto.Usage{}
 	if cohereResp.Meta.BilledUnits.InputTokens == 0 {
@@ -246,7 +246,7 @@ func cohereRerankHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 
 	jsonResponse, err := json.Marshal(rerankResp)
 	if err != nil {
-		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+		return nil, hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody)
 	}
 	c.Writer.Header().Set("Content-Type", "application/json")
 	c.Writer.WriteHeader(resp.StatusCode)

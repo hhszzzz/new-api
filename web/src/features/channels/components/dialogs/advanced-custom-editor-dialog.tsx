@@ -39,7 +39,9 @@ import { toast } from 'sonner'
 
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Dialog } from '@/components/dialog'
+import { ErrorState } from '@/components/error-state'
 import { JsonCodeEditor } from '@/components/json-code-editor'
+import { LoadingState } from '@/components/loading-state'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -74,13 +76,14 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { useProtocolCatalog } from '@/features/protocols/api'
+import type { ProtocolCatalog } from '@/features/protocols/types'
 import { cn } from '@/lib/utils'
 
 import {
   ADVANCED_CUSTOM_BALANCE_LABEL,
   ADVANCED_CUSTOM_BALANCE_PATH,
   ADVANCED_CUSTOM_AUTH_MODE_OPTIONS,
-  ADVANCED_CUSTOM_CONVERTER_OPTIONS,
   ADVANCED_CUSTOM_INCOMING_PATH_OPTIONS,
   ADVANCED_CUSTOM_MODEL_LIST_LABEL,
   ADVANCED_CUSTOM_MODEL_LIST_PATH,
@@ -91,16 +94,14 @@ import {
   createAdvancedCustomManagementRoute,
   createAdvancedCustomRoute,
   getAdvancedCustomAuthMode,
-  getAdvancedCustomConverterDefaults,
-  getAdvancedCustomConverterOptions,
+  getAdvancedCustomTarget,
+  getAdvancedCustomTargetDefaults,
+  getAdvancedCustomTargetOptions,
   getAdvancedCustomIncomingPathLabel,
   getAdvancedCustomModelRuleKind,
   getAdvancedCustomManagementRoute,
   getAdvancedCustomRegexModelPattern,
   getAdvancedCustomTemplateConfig,
-  getAdvancedCustomUpstreamPathPlaceholder,
-  getDefaultAdvancedCustomIncomingPath,
-  isAdvancedCustomIncomingPathAllowed,
   isAdvancedCustomManagementPath,
   normalizeAdvancedCustomConfig,
   parseAdvancedCustomRouteModels,
@@ -113,7 +114,6 @@ import {
 import type {
   AdvancedCustomAuthType,
   AdvancedCustomConfig,
-  AdvancedCustomConverter,
   AdvancedCustomRoute,
 } from '../../types'
 
@@ -169,48 +169,33 @@ function isCatchAllRoute(route: AdvancedCustomRoute): boolean {
   return !route.models || route.models.length === 0
 }
 
-function getRouteConverterLabel(route: AdvancedCustomRoute): string {
-  const converter = route.converter || 'none'
-  return (
-    ADVANCED_CUSTOM_CONVERTER_OPTIONS.find(
-      (option) => option.value === converter
-    )?.triggerLabel || converter
-  )
-}
-
-function getRouteConverters(
+export function RouteModeBadges(props: {
   routes: AdvancedCustomRoute[]
-): Array<{ converter: AdvancedCustomConverter; label: string }> {
-  const converters = new Map<
-    AdvancedCustomConverter,
-    { converter: AdvancedCustomConverter; label: string }
-  >()
-  for (const route of routes) {
-    const converter = route.converter || 'none'
-    if (!converters.has(converter)) {
-      converters.set(converter, {
-        converter,
-        label: getRouteConverterLabel(route),
-      })
-    }
-  }
-  return [...converters.values()]
-}
-
-export function RouteModeBadges(props: { routes: AdvancedCustomRoute[] }) {
+  catalog?: ProtocolCatalog
+}) {
   const { t } = useTranslation()
-  return getRouteConverters(props.routes).map((item) => (
+  const targets = [
+    ...new Set(
+      props.routes.map((route) => getAdvancedCustomTarget(route, props.catalog))
+    ),
+  ]
+  return targets.map((target) => (
     <Badge
-      key={item.converter}
-      variant={item.converter === 'none' ? 'secondary' : 'outline'}
+      key={target}
+      variant={target === 'native' ? 'secondary' : 'outline'}
       className='max-w-full'
     >
-      {item.converter === 'none' ? (
+      {target === 'native' ? (
         <ArrowRight aria-hidden='true' />
       ) : (
         <Shuffle aria-hidden='true' />
       )}
-      <span className='truncate'>{t(item.label)}</span>
+      <span className='truncate'>
+        {target === 'native'
+          ? t('Native forwarding')
+          : props.catalog?.protocols.find((protocol) => protocol.id === target)
+              ?.name || t('Protocol conversion')}
+      </span>
     </Badge>
   ))
 }
@@ -242,6 +227,8 @@ export function AdvancedCustomEditorDialog({
   onSave,
 }: AdvancedCustomEditorDialogProps) {
   const { t } = useTranslation()
+  const catalogQuery = useProtocolCatalog(open)
+  const catalog = catalogQuery.data?.catalog
   const routeKeyCounterRef = useRef(0)
   const [config, setConfig] = useState<AdvancedCustomConfig>(
     () => parseAdvancedCustomConfig(value) || createAdvancedCustomConfig()
@@ -271,8 +258,8 @@ export function AdvancedCustomEditorDialog({
   )
 
   const normalizedConfig = useMemo(
-    () => normalizeAdvancedCustomConfig(config),
-    [config]
+    () => normalizeAdvancedCustomConfig(config, catalog),
+    [config, catalog]
   )
   const routes = normalizedConfig.advanced_routes || emptyAdvancedRoutes
   const allRouteRows = useMemo(
@@ -312,8 +299,8 @@ export function AdvancedCustomEditorDialog({
     [usedIncomingPaths]
   )
   const validationError = useMemo(
-    () => validateAdvancedCustomConfig(normalizedConfig),
-    [normalizedConfig]
+    () => validateAdvancedCustomConfig(normalizedConfig, catalog),
+    [normalizedConfig, catalog]
   )
   const canFixCatchAllOrder =
     validationError?.message === catchAllOrderErrorMessage
@@ -455,20 +442,14 @@ export function AdvancedCustomEditorDialog({
           ...route,
           incoming_path: resolvedIncomingPath,
           upstream_path: ADVANCED_CUSTOM_MODEL_LIST_PATH,
-          converter: 'none' as const,
+          converter: undefined,
+          target_protocol: 'native',
           models: [],
         }
       }
-      const converter = route.converter || 'none'
       return {
         ...route,
         incoming_path: resolvedIncomingPath,
-        converter: isAdvancedCustomIncomingPathAllowed(
-          resolvedIncomingPath,
-          converter
-        )
-          ? converter
-          : 'none',
       }
     })
     replaceRoutes(nextRoutes)
@@ -565,13 +546,13 @@ export function AdvancedCustomEditorDialog({
   }
 
   const parseJsonEditorConfig = (): AdvancedCustomConfig | null => {
-    const parsed = parseAdvancedCustomConfig(jsonText)
+    const parsed = parseAdvancedCustomConfig(jsonText, catalog)
     if (!parsed) {
       setJsonError(t('Invalid JSON'))
       return null
     }
 
-    const error = validateAdvancedCustomConfig(parsed)
+    const error = validateAdvancedCustomConfig(parsed, catalog)
     if (error) {
       setJsonError(t(error.message))
       return null
@@ -643,7 +624,7 @@ export function AdvancedCustomEditorDialog({
         toast.error(t('Please fix JSON errors before saving'))
         return
       }
-      onSave(stringifyAdvancedCustomConfig(parsed))
+      onSave(stringifyAdvancedCustomConfig(parsed, catalog))
       onOpenChange(false)
       return
     }
@@ -652,7 +633,7 @@ export function AdvancedCustomEditorDialog({
       toast.error(t(validationError.message))
       return
     }
-    onSave(stringifyAdvancedCustomConfig(normalizedConfig))
+    onSave(stringifyAdvancedCustomConfig(normalizedConfig, catalog))
     onOpenChange(false)
   }
 
@@ -675,7 +656,11 @@ export function AdvancedCustomEditorDialog({
           >
             {t('Cancel')}
           </Button>
-          <Button type='button' onClick={saveConfig}>
+          <Button
+            type='button'
+            onClick={saveConfig}
+            disabled={!catalog || catalogQuery.isError}
+          >
             <Check data-icon='inline-start' />
             {t('Save changes')}
           </Button>
@@ -687,6 +672,13 @@ export function AdvancedCustomEditorDialog({
         onValueChange={(value) => switchTab(value as AdvancedCustomEditorTab)}
         className='min-w-0 gap-0'
       >
+        {catalogQuery.isPending && <LoadingState className='min-h-0 py-4' />}
+        {catalogQuery.isError && (
+          <ErrorState
+            className='min-h-0 py-4'
+            onRetry={() => void catalogQuery.refetch()}
+          />
+        )}
         <div className='border-b px-4 py-3'>
           <TabsList className='grid h-auto w-full grid-cols-2 gap-1 sm:grid-cols-4'>
             <TabsTrigger value='forwarding'>
@@ -841,6 +833,7 @@ export function AdvancedCustomEditorDialog({
                         )}
                       </span>
                       <RouteModeBadges
+                        catalog={catalog}
                         routes={routeGroup.routeRows.map(
                           (routeRow) => routeRow.route
                         )}
@@ -856,6 +849,7 @@ export function AdvancedCustomEditorDialog({
                 </CollapsibleTrigger>
                 <CollapsibleContent className='border-t'>
                   <RouteGroupEditor
+                    catalog={catalog}
                     group={routeGroup}
                     usedIncomingPaths={usedIncomingPaths}
                     validationError={validationError}
@@ -1103,6 +1097,7 @@ function ManagementRouteEditor({
 }
 
 function RouteGroupEditor({
+  catalog,
   group,
   usedIncomingPaths,
   validationError,
@@ -1114,6 +1109,7 @@ function RouteGroupEditor({
   onRemoveRoute,
   onRouteChange,
 }: {
+  catalog?: ProtocolCatalog
   group: AdvancedCustomRouteGroup
   usedIncomingPaths: ReadonlySet<string>
   validationError: ReturnType<typeof validateAdvancedCustomConfig>
@@ -1198,10 +1194,10 @@ function RouteGroupEditor({
           <p className='text-muted-foreground text-xs leading-relaxed'>
             {isModelListGroup
               ? t(
-                  'This route discovers upstream OpenAI models and cannot be split or matched by client model rules.'
+                  'This route discovers upstream OpenAI models and does not support model matching or splitting.'
                 )
               : t(
-                  'Routes with the same incoming path are split by client model rules. Unmatched requests use the final fallback.'
+                  'Routes with the same incoming path match the upstream model after channel model mapping. Unmatched requests use the final fallback.'
                 )}
           </p>
           {!isModelListGroup ? (
@@ -1234,11 +1230,11 @@ function RouteGroupEditor({
       >
         <span>{t('Route')}</span>
         <span className='inline-flex items-center gap-1'>
-          {t('Client model')}
+          {t('Upstream model')}
           <ModelRuleHelpPopover />
         </span>
         <span>{t('Upstream path')}</span>
-        <span>{t('Converter')}</span>
+        <span>{t('Target protocol')}</span>
         <span>{t('Auth')}</span>
         <span className='text-right'>{t('Actions')}</span>
       </div>
@@ -1256,6 +1252,7 @@ function RouteGroupEditor({
 
           return (
             <RouteEditor
+              catalog={catalog}
               key={routeRow.routeKey}
               route={routeRow.route}
               index={routeRow.index}
@@ -1277,6 +1274,7 @@ function RouteGroupEditor({
 }
 
 function RouteEditor({
+  catalog,
   route,
   index,
   errorMessage,
@@ -1289,6 +1287,7 @@ function RouteEditor({
   onMoveCatchAllToEnd,
   onRemove,
 }: {
+  catalog?: ProtocolCatalog
   route: AdvancedCustomRoute
   index: number
   errorMessage?: string
@@ -1302,38 +1301,42 @@ function RouteEditor({
   onRemove: () => void
 }) {
   const { t } = useTranslation()
-  const converter = route.converter || 'none'
+  const target = getAdvancedCustomTarget(route, catalog)
   const authMode = getAdvancedCustomAuthMode(route)
-  const incomingPath =
-    route.incoming_path || getDefaultAdvancedCustomIncomingPath(converter)
+  const incomingPath = route.incoming_path || '/v1/chat/completions'
   const isModelListRoute = incomingPath === ADVANCED_CUSTOM_MODEL_LIST_PATH
-  const converterOptions = useMemo(
-    () => getAdvancedCustomConverterOptions(incomingPath),
-    [incomingPath]
-  )
-  const converterTriggerLabel =
-    ADVANCED_CUSTOM_CONVERTER_OPTIONS.find(
-      (option) => option.value === converter
-    )?.triggerLabel || converter
+  const targetOptions = getAdvancedCustomTargetOptions(incomingPath, catalog)
+  const targetLabel =
+    targetOptions.find((option) => option.value === target)?.label || target
   const authLabel = getOptionLabel(ADVANCED_CUSTOM_AUTH_MODE_OPTIONS, authMode)
   const modelsInputValue = route.models?.join(', ') || ''
   const parsedRouteModels = parseAdvancedCustomRouteModels(modelsInputValue)
   const isFallback = !isModelListRoute && parsedRouteModels.length === 0
 
-  const setConverter = (nextConverter: AdvancedCustomConverter) => {
-    let nextIncomingPath = incomingPath
-    if (!isAdvancedCustomIncomingPathAllowed(nextIncomingPath, nextConverter)) {
-      nextIncomingPath = getDefaultAdvancedCustomIncomingPath(nextConverter)
-    }
-    const defaults = getAdvancedCustomConverterDefaults(
-      nextConverter,
-      nextIncomingPath
+  const setTarget = (nextTarget: string) => {
+    const previous = getAdvancedCustomTargetDefaults(
+      target,
+      incomingPath,
+      catalog
     )
+    const defaults = getAdvancedCustomTargetDefaults(
+      nextTarget,
+      incomingPath,
+      catalog
+    )
+    const usesDefaultAuth =
+      !route.auth ||
+      (route.auth.type === previous.auth?.type &&
+        route.auth.name === previous.auth?.name &&
+        route.auth.value === previous.auth?.value)
     onChange({
-      converter: nextConverter,
-      incoming_path: nextIncomingPath,
-      upstream_path: defaults.upstream_path,
-      auth: defaults.auth,
+      converter: undefined,
+      target_protocol: nextTarget,
+      upstream_path:
+        !route.upstream_path || route.upstream_path === previous.upstream_path
+          ? defaults.upstream_path
+          : route.upstream_path,
+      auth: usesDefaultAuth ? defaults.auth : route.auth,
     })
   }
 
@@ -1394,7 +1397,7 @@ function RouteEditor({
               {!isModelListRoute && isFallback ? (
                 <Badge variant='outline'>{t('Fallback')}</Badge>
               ) : null}
-              <RouteModeBadges routes={[route]} />
+              <RouteModeBadges routes={[route]} catalog={catalog} />
             </div>
           </div>
           <div className='flex shrink-0 items-center gap-1 lg:hidden'>
@@ -1428,7 +1431,7 @@ function RouteEditor({
         <FieldBlock
           label={
             <span className='inline-flex items-center gap-1'>
-              {t('Client model')}
+              {t('Upstream model')}
               <ModelRuleHelpPopover />
             </span>
           }
@@ -1495,10 +1498,10 @@ function RouteEditor({
                 upstream_path: event.target.value,
               })
             }
-            placeholder={getAdvancedCustomUpstreamPathPlaceholder(
-              converter,
-              incomingPath
-            )}
+            placeholder={
+              getAdvancedCustomTargetDefaults(target, incomingPath, catalog)
+                .upstream_path
+            }
           />
           <p className='text-muted-foreground text-xs leading-relaxed lg:hidden'>
             {t(upstreamPathDescriptionKey)}
@@ -1506,20 +1509,23 @@ function RouteEditor({
         </FieldBlock>
 
         <FieldBlock
-          label={t('Converter')}
+          label={t('Target protocol')}
           className='lg:gap-1'
           labelClassName='lg:sr-only'
         >
           <Select
-            value={converter}
-            disabled={isModelListRoute && converter === 'none'}
-            onValueChange={(value) =>
-              setConverter(value as AdvancedCustomConverter)
-            }
+            value={target}
+            disabled={!catalog || targetOptions.length === 1}
+            onValueChange={(value) => {
+              if (value) setTarget(value)
+            }}
           >
-            <SelectTrigger className='w-full max-w-full lg:h-8'>
+            <SelectTrigger
+              aria-label={t('Target protocol')}
+              className='w-full max-w-full lg:h-8'
+            >
               <SelectValue className='min-w-0 truncate'>
-                {t(converterTriggerLabel)}
+                {target === 'native' ? t('Native forwarding') : targetLabel}
               </SelectValue>
             </SelectTrigger>
             <SelectContent
@@ -1527,7 +1533,7 @@ function RouteEditor({
               className={longSelectContentClass}
             >
               <SelectGroup>
-                {converterOptions.map((option) => (
+                {targetOptions.map((option) => (
                   <SelectItem
                     key={option.value}
                     value={option.value}
@@ -1661,7 +1667,7 @@ function ModelRuleHelpPopover() {
             variant='ghost'
             size='icon'
             className='text-muted-foreground hover:text-foreground size-6'
-            aria-label={t('Client model matching help')}
+            aria-label={t('Upstream model matching help')}
           />
         }
       >
@@ -1674,11 +1680,9 @@ function ModelRuleHelpPopover() {
         className='w-[min(22rem,calc(100vw-2rem))] gap-3 p-3'
       >
         <PopoverHeader className='gap-1'>
-          <PopoverTitle>{t('Client model matching')}</PopoverTitle>
+          <PopoverTitle>{t('Upstream model matching')}</PopoverTitle>
           <PopoverDescription className='text-xs leading-relaxed'>
-            {t(
-              'Rules match the original model value from the client request body.'
-            )}
+            {t('Rules match the upstream model after channel model mapping.')}
           </PopoverDescription>
         </PopoverHeader>
         <div className='text-muted-foreground space-y-2 text-xs leading-relaxed'>

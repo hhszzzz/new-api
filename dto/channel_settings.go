@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/QuantumNous/new-api/relaykit/relayconvert"
 	"github.com/QuantumNous/new-api/relaykit/types"
 )
 
@@ -98,6 +99,7 @@ type ChannelOtherSettings struct {
 	// "", "allow", "safe", "strict".
 	ToolLossPolicy       string                `json:"tool_loss_policy,omitempty"`
 	ProtocolCapabilities *ProtocolCapabilities `json:"protocol_capabilities,omitempty"`
+	ProtocolPolicy       *ProtocolPolicy       `json:"protocol_policy,omitempty"`
 	ClientPolicy         ClientAccessPolicy    `json:"client_policy,omitempty"`
 	// DisableModelOnError narrows automatic disabling from the whole channel to
 	// the (group, model) that actually failed. Default false keeps the legacy
@@ -287,11 +289,17 @@ type AdvancedCustomConfig struct {
 }
 
 type AdvancedCustomRoute struct {
-	IncomingPath string                   `json:"incoming_path,omitempty"`
-	UpstreamPath string                   `json:"upstream_path,omitempty"`
-	Converter    string                   `json:"converter,omitempty"`
-	Models       []string                 `json:"models,omitempty"`
-	Auth         *AdvancedCustomRouteAuth `json:"auth,omitempty"`
+	IncomingPath   string `json:"incoming_path,omitempty"`
+	UpstreamPath   string `json:"upstream_path,omitempty"`
+	TargetProtocol string `json:"target_protocol,omitempty"`
+	// Converter is read only for importing configurations written before policy v1.
+	Converter string                   `json:"converter,omitempty"`
+	Models    []string                 `json:"models,omitempty"`
+	Auth      *AdvancedCustomRouteAuth `json:"auth,omitempty"`
+}
+
+func (r AdvancedCustomRoute) ResolveTarget() (relayconvert.Protocol, error) {
+	return relayconvert.ResolveTarget(r.IncomingPath, r.TargetProtocol, r.Converter)
 }
 
 type AdvancedCustomRouteAuth struct {
@@ -523,21 +531,11 @@ func matchAdvancedCustomIncomingPathTemplate(configuredPath string, requestPath 
 }
 
 func IsAdvancedCustomConverterAllowed(converter string) bool {
-	switch converter {
-	case advancedCustomConverterNone,
-		advancedCustomConverterClaudeMessagesToOpenAIChat,
-		advancedCustomConverterClaudeMessagesToResponses,
-		advancedCustomConverterOpenAIChatToClaudeMessages,
-		advancedCustomConverterOpenAIChatToOpenAIResponses,
-		advancedCustomConverterOpenAIResponsesToOpenAIChat,
-		advancedCustomConverterOpenAIResponsesToClaude,
-		advancedCustomConverterOpenAIResponsesToGemini,
-		advancedCustomConverterGeminiContentToOpenAIChat,
-		advancedCustomConverterOpenAIChatToGeminiContent:
+	if converter == "" || converter == relayconvert.ConverterNone {
 		return true
-	default:
-		return false
 	}
+	_, ok := relayconvert.LookupTextConverter(converter)
+	return ok
 }
 
 func (c *AdvancedCustomConfig) Validate() error {
@@ -607,8 +605,8 @@ func (c *AdvancedCustomConfig) Validate() error {
 		if !IsAdvancedCustomConverterAllowed(route.Converter) {
 			return fmt.Errorf("advanced_custom.advanced_routes[%d].converter is not registered: %s", i, route.Converter)
 		}
-		if err := validateAdvancedCustomConverterPath(i, route.IncomingPath, route.Converter); err != nil {
-			return err
+		if _, err := route.ResolveTarget(); err != nil {
+			return fmt.Errorf("advanced_custom.advanced_routes[%d]: %w", i, err)
 		}
 		if err := validateAdvancedCustomRouteAuth(i, route.Auth); err != nil {
 			return err

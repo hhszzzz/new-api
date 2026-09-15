@@ -2,6 +2,7 @@ package claude
 
 import (
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"net/http"
 	"strings"
 
@@ -9,7 +10,6 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-gonic/gin"
@@ -24,9 +24,9 @@ type bufferedClaudeBlockState struct {
 // ClaudeBufferedStreamHandler aggregates an unexpectedly streamed Anthropic
 // Messages response before reusing the normal non-stream response path. No
 // client bytes are written until the upstream stream has completed cleanly.
-func ClaudeBufferedStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+func ClaudeBufferedStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *hosttypes.NewAPIError) {
 	if resp == nil || resp.Body == nil {
-		return nil, types.NewError(fmt.Errorf("invalid response"), types.ErrorCodeBadResponse)
+		return nil, hosttypes.NewError(fmt.Errorf("invalid response"), hosttypes.ErrorCodeBadResponse)
 	}
 	defer service.CloseResponseBodyGracefully(resp)
 
@@ -48,7 +48,7 @@ func ClaudeBufferedStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, re
 			return false, err
 		}
 		if claudeError := event.GetClaudeError(); claudeError != nil && claudeError.Type != "" {
-			apiError := types.WithClaudeError(*claudeError, http.StatusInternalServerError)
+			apiError := hosttypes.WithClaudeError(*claudeError, http.StatusInternalServerError)
 			service.MarkProtocolUnsupportedStreamError(apiError)
 			return false, apiError
 		}
@@ -146,29 +146,29 @@ func ClaudeBufferedStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, re
 		return false, nil
 	})
 	if err != nil {
-		if apiError, ok := err.(*types.NewAPIError); ok {
+		if apiError, ok := err.(*hosttypes.NewAPIError); ok {
 			return nil, apiError
 		}
-		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+		return nil, hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody)
 	}
 	if !sawMessageStart {
-		return nil, types.NewError(fmt.Errorf("Claude Messages stream ended without message_start"), types.ErrorCodeBadResponse)
+		return nil, hosttypes.NewError(fmt.Errorf("Claude Messages stream ended without message_start"), hosttypes.ErrorCodeBadResponse)
 	}
 	if !sawMessageStop {
-		return nil, types.NewError(fmt.Errorf("Claude Messages stream ended without message_stop"), types.ErrorCodeBadResponse)
+		return nil, hosttypes.NewError(fmt.Errorf("Claude Messages stream ended without message_stop"), hosttypes.ErrorCodeBadResponse)
 	}
 	if strings.TrimSpace(message.StopReason) == "" {
-		return nil, types.NewError(fmt.Errorf("Claude Messages stream ended without a terminal stop_reason"), types.ErrorCodeBadResponse)
+		return nil, hosttypes.NewError(fmt.Errorf("Claude Messages stream ended without a terminal stop_reason"), hosttypes.ErrorCodeBadResponse)
 	}
 	for index, state := range blocks {
 		if state.open {
-			return nil, types.NewError(fmt.Errorf("Claude Messages stream ended before content block %d stopped", index), types.ErrorCodeBadResponse)
+			return nil, hosttypes.NewError(fmt.Errorf("Claude Messages stream ended before content block %d stopped", index), hosttypes.ErrorCodeBadResponse)
 		}
 	}
 
 	responseData, err := common.Marshal(message)
 	if err != nil {
-		return nil, types.NewError(err, types.ErrorCodeJsonMarshalFailed)
+		return nil, hosttypes.NewError(err, hosttypes.ErrorCodeJsonMarshalFailed)
 	}
 	header := resp.Header.Clone()
 	header.Set("Content-Type", "application/json")

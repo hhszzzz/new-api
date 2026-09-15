@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	hostdto "github.com/QuantumNous/new-api/dto"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"math"
 	"net/http"
@@ -17,7 +19,6 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/advancedcustom"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -374,7 +375,7 @@ func fetchAdvancedCustomBalance(channel *model.Channel) (channelBalanceResult, e
 	info := &relaycommon.RelayInfo{
 		RelayFormat:    types.RelayFormatOpenAI,
 		RelayMode:      relayconstant.RelayModeUnknown,
-		RequestURLPath: dto.AdvancedCustomBalancePath,
+		RequestURLPath: hostdto.AdvancedCustomBalancePath,
 		ChannelMeta: &relaycommon.ChannelMeta{
 			ChannelType:          constant.ChannelTypeAdvancedCustom,
 			ChannelBaseUrl:       channel.GetBaseURL(),
@@ -588,7 +589,7 @@ func updateAllChannelsBalance() error {
 		} else if result.RawResponse == "" {
 			// err is nil & balance <= 0 means quota is used up
 			if result.Balance <= 0 {
-				service.DisableChannel(*types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, "", channel.GetAutoBan()), "余额不足")
+				service.DisableChannel(*hosttypes.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, "", channel.GetAutoBan()), "余额不足")
 			}
 		}
 		time.Sleep(common.RequestInterval)

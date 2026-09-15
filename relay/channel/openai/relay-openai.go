@@ -3,6 +3,7 @@ package openai
 import (
 	"encoding/json"
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 	"strings"
@@ -22,7 +23,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func sendStreamData(c *gin.Context, info *relaycommon.RelayInfo, data string, forceFormat bool, thinkToContent bool) error {
+func sendStreamData(c *gin.Context, info *relaycommon.RelayInfo, data string) error {
 	if data == "" {
 		return nil
 	}
@@ -34,91 +35,13 @@ func sendStreamData(c *gin.Context, info *relaycommon.RelayInfo, data string, fo
 		}
 		data = string(redacted)
 	}
-	if !forceFormat && !thinkToContent {
-		return helper.StringData(c, data)
-	}
-
-	var lastStreamResponse dto.ChatCompletionsStreamResponse
-	if err := common.UnmarshalJsonStr(data, &lastStreamResponse); err != nil {
-		return err
-	}
-	if info != nil && info.HasUserModelRoute() {
-		lastStreamResponse.Model = info.PublicResponseModelName()
-	}
-
-	if !thinkToContent {
-		return helper.ObjectData(c, lastStreamResponse)
-	}
-
-	hasThinkingContent := false
-	hasContent := false
-	var thinkingContent strings.Builder
-	for _, choice := range lastStreamResponse.Choices {
-		if len(choice.Delta.GetReasoningContent()) > 0 {
-			hasThinkingContent = true
-			thinkingContent.WriteString(choice.Delta.GetReasoningContent())
-		}
-		if len(choice.Delta.GetContentString()) > 0 {
-			hasContent = true
-		}
-	}
-
-	// Handle think to content conversion
-	if info.ThinkingContentInfo.IsFirstThinkingContent {
-		if hasThinkingContent {
-			response := lastStreamResponse.Copy()
-			for i := range response.Choices {
-				// send `think` tag with thinking content
-				response.Choices[i].Delta.SetContentString("<think>\n" + thinkingContent.String())
-				response.Choices[i].Delta.ReasoningContent = nil
-				response.Choices[i].Delta.Reasoning = nil
-			}
-			info.ThinkingContentInfo.IsFirstThinkingContent = false
-			info.ThinkingContentInfo.HasSentThinkingContent = true
-			return helper.ObjectData(c, response)
-		}
-	}
-
-	if lastStreamResponse.Choices == nil || len(lastStreamResponse.Choices) == 0 {
-		return helper.ObjectData(c, lastStreamResponse)
-	}
-
-	// Process each choice
-	for i, choice := range lastStreamResponse.Choices {
-		// Handle transition from thinking to content
-		// only send `</think>` tag when previous thinking content has been sent
-		if hasContent && !info.ThinkingContentInfo.SendLastThinkingContent && info.ThinkingContentInfo.HasSentThinkingContent {
-			response := lastStreamResponse.Copy()
-			for j := range response.Choices {
-				response.Choices[j].Delta.SetContentString("\n</think>\n")
-				response.Choices[j].Delta.ReasoningContent = nil
-				response.Choices[j].Delta.Reasoning = nil
-			}
-			info.ThinkingContentInfo.SendLastThinkingContent = true
-			if err := helper.ObjectData(c, response); err != nil {
-				return err
-			}
-		}
-
-		// Convert reasoning content to regular content if any
-		if len(choice.Delta.GetReasoningContent()) > 0 {
-			lastStreamResponse.Choices[i].Delta.SetContentString(choice.Delta.GetReasoningContent())
-			lastStreamResponse.Choices[i].Delta.ReasoningContent = nil
-			lastStreamResponse.Choices[i].Delta.Reasoning = nil
-		} else if !hasThinkingContent && !hasContent {
-			// flush thinking content
-			lastStreamResponse.Choices[i].Delta.ReasoningContent = nil
-			lastStreamResponse.Choices[i].Delta.Reasoning = nil
-		}
-	}
-
-	return helper.ObjectData(c, lastStreamResponse)
+	return helper.StringData(c, data)
 }
 
-func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *hosttypes.NewAPIError) {
 	if resp == nil || resp.Body == nil {
 		logger.LogError(c, "invalid response or response body")
-		return nil, types.NewOpenAIError(fmt.Errorf("invalid response"), types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(fmt.Errorf("invalid response"), hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
 
 	defer service.CloseResponseBodyGracefully(resp)
@@ -135,13 +58,13 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	var secondLastStreamData string // 保留倒数第二个stream data；部分兼容网关把完整usage放在倒数第二个事件
 	seenStreamToolCalls := make(map[string]struct{})
 	var streamFunctionCallNames []string
-	var streamErr *types.NewAPIError
+	var streamErr *hosttypes.NewAPIError
 	upstreamCompleted := false
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		if lastStreamData != "" {
-			if err := HandleStreamFormat(c, info, lastStreamData, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent); err != nil {
-				streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+			if err := HandleStreamFormat(c, info, lastStreamData); err != nil {
+				streamErr = hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 				info.StreamStatus.MarkWriteError(err)
 				sr.Stop(streamErr)
 				return
@@ -151,7 +74,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			var errorResponse dto.OpenAITextResponse
 			if err := common.UnmarshalJsonStr(data, &errorResponse); err == nil {
 				if openAIError := errorResponse.GetOpenAIError(); openAIError != nil && openAIError.Type != "" {
-					streamErr = types.WithOpenAIError(*openAIError, http.StatusInternalServerError)
+					streamErr = hosttypes.WithOpenAIError(*openAIError, http.StatusInternalServerError)
 					info.StreamStatus.MarkTerminalFailure(streamErr)
 					service.MarkProtocolUnsupportedStreamError(streamErr)
 					sr.Stop(streamErr)
@@ -184,7 +107,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			collectStreamFunctionCallNames(data, seenStreamToolCalls, &streamFunctionCallNames)
 			if err := processTokenData(info.RelayMode, data, &responseTextBuilder, &toolCount); err != nil {
 				logger.LogError(c, "error processing stream token data: "+err.Error())
-				streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+				streamErr = hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 				sr.Stop(streamErr)
 				return
 			}
@@ -194,14 +117,14 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 		return nil, streamErr
 	}
 	if err := streamStatusError(info); err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusBadGateway)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusBadGateway)
 	}
 	if info.RelayMode == relayconstant.RelayModeChatCompletions && !upstreamCompleted {
 		missingTerminalErr := fmt.Errorf("Chat Completions stream ended without a terminal finish_reason")
 		info.StreamStatus.MarkTerminalFailure(missingTerminalErr)
-		return nil, types.NewOpenAIError(
+		return nil, hosttypes.NewOpenAIError(
 			missingTerminalErr,
-			types.ErrorCodeBadResponse,
+			hosttypes.ErrorCodeBadResponse,
 			http.StatusBadGateway,
 		)
 	}
@@ -211,7 +134,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	if err := handleLastResponse(lastStreamData, &responseId, &createAt, &systemFingerprint, &model, &usage,
 		&containStreamUsage, info, &shouldSendLastResp); err != nil {
 		logger.LogError(c, fmt.Sprintf("error handling last response: %s, lastStreamData: [%s]", err.Error(), lastStreamData))
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 
 	// 部分兼容网关把完整的累计usage附在倒数第二个事件上，随后发送一个空的最后事件。
@@ -239,9 +162,9 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 
 	if info.RelayFormat == types.RelayFormatOpenAI {
 		if shouldSendLastResp {
-			if err := sendStreamData(c, info, lastStreamData, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent); err != nil {
+			if err := sendStreamData(c, info, lastStreamData); err != nil {
 				info.StreamStatus.MarkWriteError(err)
-				return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+				return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 			}
 		}
 	}
@@ -259,7 +182,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 
 	if err := HandleFinalResponse(c, info, lastStreamData, responseId, createAt, model, systemFingerprint, usage, containStreamUsage); err != nil {
 		info.StreamStatus.MarkWriteError(err)
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
 	info.StreamStatus.MarkTerminalDelivered()
 	if info.RelayFormat == types.RelayFormatClaude {
@@ -313,13 +236,13 @@ func collectStreamFunctionCallNames(data string, seen map[string]struct{}, names
 	}
 }
 
-func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *hosttypes.NewAPIError) {
 	defer service.CloseResponseBodyGracefully(resp)
 
 	var simpleResponse dto.OpenAITextResponse
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
 	}
 	logger.LogDebug(c, "upstream response body: %s", responseBody)
 	// Unmarshal to simpleResponse
@@ -328,26 +251,26 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 		var enterpriseResponse openrouter.OpenRouterEnterpriseResponse
 		err = common.Unmarshal(responseBody, &enterpriseResponse)
 		if err != nil {
-			return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+			return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 		}
 		if enterpriseResponse.Success {
 			responseBody = enterpriseResponse.Data
 		} else {
 			logger.LogError(c, fmt.Sprintf("openrouter enterprise response success=false, data: %s", enterpriseResponse.Data))
-			return nil, types.NewOpenAIError(fmt.Errorf("openrouter response success=false"), types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+			return nil, hosttypes.NewOpenAIError(fmt.Errorf("openrouter response success=false"), hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 		}
 	}
 
 	err = common.Unmarshal(responseBody, &simpleResponse)
 	if err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	if info.HasUserModelRoute() || info.RelayFormat == types.RelayFormatClaude {
 		simpleResponse.Model = info.PublicResponseModelName()
 	}
 
 	if oaiError := simpleResponse.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
-		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
+		return nil, hosttypes.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
 
 	for _, choice := range simpleResponse.Choices {
@@ -361,11 +284,6 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 		for _, tc := range choice.Message.ParseToolCalls() {
 			info.CountBillableToolCall(dto.BuildInCallFunctionCall, tc.Function.Name)
 		}
-	}
-
-	forceFormat := false
-	if info.ChannelSetting.ForceFormat {
-		forceFormat = true
 	}
 
 	usageModified := false
@@ -394,51 +312,43 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 			var bodyMap map[string]json.RawMessage
 			err = common.Unmarshal(responseBody, &bodyMap)
 			if err != nil {
-				return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+				return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 			}
 			usageJSON, marshalErr := common.Marshal(simpleResponse.Usage)
 			if marshalErr != nil {
-				return nil, types.NewOpenAIError(marshalErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+				return nil, hosttypes.NewOpenAIError(marshalErr, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 			}
 			bodyMap["usage"] = usageJSON
 			if info.HasUserModelRoute() {
 				modelJSON, marshalErr := common.Marshal(info.PublicResponseModelName())
 				if marshalErr != nil {
-					return nil, types.NewOpenAIError(marshalErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+					return nil, hosttypes.NewOpenAIError(marshalErr, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 				}
 				bodyMap["model"] = modelJSON
 			}
 			responseBody, err = common.Marshal(bodyMap)
 			if err != nil {
-				return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+				return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 			}
-		}
-		if forceFormat {
-			responseBody, err = common.Marshal(simpleResponse)
-			if err != nil {
-				return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
-			}
-		} else {
-			break
 		}
 	case types.RelayFormatClaude:
 		convertResult, err := service.ConvertResponse(c, info, types.RelayFormatClaude, &simpleResponse)
 		if err != nil {
-			return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+			return nil, hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody)
 		}
 		claudeRespStr, err := common.Marshal(convertResult.Value)
 		if err != nil {
-			return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+			return nil, hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody)
 		}
 		responseBody = claudeRespStr
 	case types.RelayFormatGemini:
 		convertResult, err := service.ConvertResponse(c, info, types.RelayFormatGemini, &simpleResponse)
 		if err != nil {
-			return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+			return nil, hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody)
 		}
 		geminiRespStr, err := common.Marshal(convertResult.Value)
 		if err != nil {
-			return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+			return nil, hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody)
 		}
 		responseBody = geminiRespStr
 	}

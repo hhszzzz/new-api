@@ -3,6 +3,7 @@ package controller
 import (
 	"bytes"
 	"errors"
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -12,17 +13,16 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func newAdvancedCustomModelListChannel(baseURL string, key string, upstreamPath string, auth *dto.AdvancedCustomRouteAuth) *model.Channel {
-	config := &dto.AdvancedCustomConfig{
-		Routes: []dto.AdvancedCustomRoute{
+func newAdvancedCustomModelListChannel(baseURL string, key string, upstreamPath string, auth *hostdto.AdvancedCustomRouteAuth) *model.Channel {
+	config := &hostdto.AdvancedCustomConfig{
+		Routes: []hostdto.AdvancedCustomRoute{
 			{
-				IncomingPath: dto.AdvancedCustomModelListPath,
+				IncomingPath: hostdto.AdvancedCustomModelListPath,
 				UpstreamPath: upstreamPath,
 				Converter:    "none",
 				Auth:         auth,
@@ -34,7 +34,7 @@ func newAdvancedCustomModelListChannel(baseURL string, key string, upstreamPath 
 		Key:     key,
 		BaseURL: &baseURL,
 	}
-	channel.SetOtherSettings(dto.ChannelOtherSettings{AdvancedCustom: config})
+	channel.SetOtherSettings(hostdto.ChannelOtherSettings{AdvancedCustom: config})
 	return channel
 }
 
@@ -84,8 +84,8 @@ func TestFetchAdvancedCustomModelsAppliesHeaderOverrideAfterRouteAuth(t *testing
 	}))
 	defer server.Close()
 
-	channel := newAdvancedCustomModelListChannel(server.URL, "secret-key", "/provider/models", &dto.AdvancedCustomRouteAuth{
-		Type:  dto.AdvancedCustomAuthTypeHeader,
+	channel := newAdvancedCustomModelListChannel(server.URL, "secret-key", "/provider/models", &hostdto.AdvancedCustomRouteAuth{
+		Type:  hostdto.AdvancedCustomAuthTypeHeader,
 		Name:  "X-Route-Key",
 		Value: "route-{api_key}",
 	})
@@ -151,8 +151,8 @@ func TestFetchAdvancedCustomModelsRedactsQueryKeyFromTransportErrors(t *testing.
 	baseURL := server.URL
 	server.Close()
 
-	channel := newAdvancedCustomModelListChannel(baseURL, secret, "/v1/models", &dto.AdvancedCustomRouteAuth{
-		Type:  dto.AdvancedCustomAuthTypeQuery,
+	channel := newAdvancedCustomModelListChannel(baseURL, secret, "/v1/models", &hostdto.AdvancedCustomRouteAuth{
+		Type:  hostdto.AdvancedCustomAuthTypeQuery,
 		Name:  "custom-token",
 		Value: "prefix-{api_key}",
 	})
@@ -205,8 +205,8 @@ func TestFetchModelsAdvancedCustomCreatePreview(t *testing.T) {
 	}))
 	defer server.Close()
 
-	config := dto.AdvancedCustomConfig{Routes: []dto.AdvancedCustomRoute{{
-		IncomingPath: dto.AdvancedCustomModelListPath,
+	config := hostdto.AdvancedCustomConfig{Routes: []hostdto.AdvancedCustomRoute{{
+		IncomingPath: hostdto.AdvancedCustomModelListPath,
 		UpstreamPath: "/preview/models",
 		Converter:    "none",
 	}}}
@@ -263,7 +263,7 @@ func TestFetchModelsAdvancedCustomEditPreviewUsesSavedKeyAndExplicitClears(t *te
 	}
 	savedHeaderOverride := `{"X-Saved":"must-not-be-sent"}`
 	savedChannel.HeaderOverride = &savedHeaderOverride
-	savedChannel.SetSetting(dto.ChannelSettings{Proxy: "http://127.0.0.1:1"})
+	savedChannel.SetSetting(hostdto.ChannelSettings{Proxy: "http://127.0.0.1:1"})
 	require.NoError(t, db.Create(savedChannel).Error)
 
 	preserved, err := buildAdvancedCustomModelPreviewChannel(fetchModelsRequest{ChannelID: savedChannel.Id})
@@ -272,8 +272,8 @@ func TestFetchModelsAdvancedCustomEditPreviewUsesSavedKeyAndExplicitClears(t *te
 	require.Equal(t, savedHeaderOverride, *preserved.HeaderOverride)
 	require.Equal(t, "http://127.0.0.1:1", preserved.GetSetting().Proxy)
 
-	previewConfig := dto.AdvancedCustomConfig{Routes: []dto.AdvancedCustomRoute{{
-		IncomingPath: dto.AdvancedCustomModelListPath,
+	previewConfig := hostdto.AdvancedCustomConfig{Routes: []hostdto.AdvancedCustomRoute{{
+		IncomingPath: hostdto.AdvancedCustomModelListPath,
 		UpstreamPath: "/edited/models",
 		Converter:    "none",
 	}}}
@@ -544,7 +544,7 @@ func TestApplySelectedModelChanges(t *testing.T) {
 }
 
 func TestCollectPendingApplyUpstreamModelChanges(t *testing.T) {
-	settings := dto.ChannelOtherSettings{
+	settings := hostdto.ChannelOtherSettings{
 		UpstreamModelUpdateLastDetectedModels: []string{" gpt-4o ", "gpt-4o", "gpt-4.1"},
 		UpstreamModelUpdateLastRemovedModels:  []string{" old-model ", "", "old-model"},
 	}

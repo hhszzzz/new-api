@@ -3,6 +3,7 @@ package common
 import (
 	"context"
 	"encoding/json"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -66,7 +67,6 @@ func TestInitChannelMetaResetsAttemptScopedProtocolState(t *testing.T) {
 	info.AppendRequestConversion(types.RelayFormatClaude)
 	info.FinalRequestRelayFormat = types.RelayFormatClaude
 	info.StreamStatus = NewStreamStatus()
-	info.ThinkingContentInfo = ThinkingContentInfo{HasSentThinkingContent: true}
 	info.SendResponseCount = 4
 	info.ReceivedResponseCount = 5
 	info.ShouldIncludeUsage = true
@@ -84,8 +84,6 @@ func TestInitChannelMetaResetsAttemptScopedProtocolState(t *testing.T) {
 	assert.Equal(t, []types.RelayFormat{types.RelayFormatOpenAIResponses}, info.RequestConversionChain)
 	assert.Empty(t, info.FinalRequestRelayFormat)
 	assert.Nil(t, info.StreamStatus)
-	assert.True(t, info.ThinkingContentInfo.IsFirstThinkingContent)
-	assert.False(t, info.ThinkingContentInfo.HasSentThinkingContent)
 	assert.Zero(t, info.SendResponseCount)
 	assert.Zero(t, info.ReceivedResponseCount)
 	assert.False(t, info.ShouldIncludeUsage)
@@ -333,7 +331,7 @@ func TestInitChannelMetaResetsPerAttemptStreamStateAndPreservesRequestState(t *t
 	info.SendResponseCount = 3
 	info.ClaudeToChatStreamState = claudeState
 	info.ChatToGeminiStreamState = geminiState
-	info.LastError = types.NewError(assert.AnError, types.ErrorCodeBadResponseBody)
+	info.LastError = hosttypes.NewError(assert.AnError, hosttypes.ErrorCodeBadResponseBody)
 	info.StreamStatus = NewStreamStatus()
 	info.StreamStatus.RecordError("attempt 1 soft error")
 	info.RecordConversionDiagnostics(context.Background(), []types.ConversionDiagnostic{{

@@ -1,6 +1,7 @@
 package claude
 
 import (
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"testing"
 
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -56,10 +57,10 @@ func TestShouldSkipClaudeMessageDeltaUsagePatch(t *testing.T) {
 
 	model_setting.GetGlobalSettings().PassThroughRequestEnabled = false
 	assert.True(t, shouldSkipClaudeMessageDeltaUsagePatch(&relaycommon.RelayInfo{
-		ChannelMeta: &relaycommon.ChannelMeta{ChannelSetting: dto.ChannelSettings{PassThroughBodyEnabled: true}},
+		ChannelMeta: &relaycommon.ChannelMeta{ChannelSetting: hostdto.ChannelSettings{PassThroughBodyEnabled: true}},
 	}))
 	assert.False(t, shouldSkipClaudeMessageDeltaUsagePatch(&relaycommon.RelayInfo{
-		ChannelMeta: &relaycommon.ChannelMeta{ChannelSetting: dto.ChannelSettings{PassThroughBodyEnabled: false}},
+		ChannelMeta: &relaycommon.ChannelMeta{ChannelSetting: hostdto.ChannelSettings{PassThroughBodyEnabled: false}},
 	}))
 }
 

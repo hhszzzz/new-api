@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -12,7 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func abortWithOpenAiMessage(c *gin.Context, statusCode int, message string, code ...types.ErrorCode) {
+func abortWithOpenAiMessage(c *gin.Context, statusCode int, message string, code ...hosttypes.ErrorCode) {
 	codeStr := ""
 	if len(code) > 0 {
 		codeStr = string(code[0])
@@ -36,7 +37,7 @@ func abortWithOpenAiMessage(c *gin.Context, statusCode int, message string, code
 	logger.LogError(c.Request.Context(), fmt.Sprintf("user %d | %s", userId, message))
 }
 
-func abortWithProtocolMessage(c *gin.Context, statusCode int, message string, code ...types.ErrorCode) {
+func abortWithProtocolMessage(c *gin.Context, statusCode int, message string, code ...hosttypes.ErrorCode) {
 	if c == nil || c.Request == nil || !strings.HasPrefix(c.Request.URL.Path, "/v1/messages") {
 		abortWithOpenAiMessage(c, statusCode, message, code...)
 		return

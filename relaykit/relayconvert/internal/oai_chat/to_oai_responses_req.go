@@ -1,6 +1,7 @@
 package oaichat
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,8 +9,10 @@ import (
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	sharedbridge "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/bridge"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/internal/toolconv"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/samber/lo"
 )
 
@@ -76,6 +79,10 @@ func convertChatResponseFormatToResponsesText(reqFormat *dto.ResponseFormat) jso
 }
 
 func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*dto.OpenAIResponsesRequest, error) {
+	return ChatCompletionsRequestToResponsesRequestWithContext(context.Background(), req)
+}
+
+func ChatCompletionsRequestToResponsesRequestWithContext(c context.Context, req *dto.GeneralOpenAIRequest) (*dto.OpenAIResponsesRequest, error) {
 	if req == nil {
 		return nil, errors.New("request is nil")
 	}
@@ -310,90 +317,12 @@ func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*d
 	}
 
 	var toolsRaw json.RawMessage
-	hasCurrentTools := len(req.Tools) > 0
-	responsesTools := make([]map[string]any, 0, len(req.Tools))
-	if req.Tools != nil {
-		for _, tool := range req.Tools {
-			switch tool.Type {
-			case "function":
-				converted := map[string]any{
-					"type":        "function",
-					"name":        tool.Function.Name,
-					"description": tool.Function.Description,
-					"parameters":  tool.Function.Parameters,
-				}
-				if tool.Function.Strict != nil {
-					converted["strict"] = *tool.Function.Strict
-				}
-				responsesTools = append(responsesTools, converted)
-			default:
-				// Best-effort: keep original tool shape for unknown types.
-				var m map[string]any
-				if b, err := kitutil.Marshal(tool); err == nil {
-					_ = kitutil.Unmarshal(b, &m)
-				}
-				if len(m) == 0 {
-					m = map[string]any{"type": tool.Type}
-				}
-				responsesTools = append(responsesTools, m)
-			}
-		}
-	}
-	responsesTools, err = sharedbridge.EnsureResponsesFunctionTools(responsesTools, inputItems)
+	responsesTools, err := sharedbridge.EnsureResponsesFunctionTools(nil, inputItems)
 	if err != nil {
 		return nil, err
 	}
 	if len(responsesTools) > 0 {
 		toolsRaw, _ = kitutil.Marshal(responsesTools)
-	}
-
-	var toolChoiceRaw json.RawMessage
-	if req.ToolChoice != nil {
-		switch v := req.ToolChoice.(type) {
-		case string:
-			toolChoiceRaw, _ = kitutil.Marshal(v)
-		default:
-			var m map[string]any
-			if b, err := kitutil.Marshal(v); err == nil {
-				_ = kitutil.Unmarshal(b, &m)
-			}
-			if m == nil {
-				toolChoiceRaw, _ = kitutil.Marshal(v)
-			} else if t, _ := m["type"].(string); t == "function" {
-				// Chat: {"type":"function","function":{"name":"..."}}
-				// Responses: {"type":"function","name":"..."}
-				if name, ok := m["name"].(string); ok && name != "" {
-					toolChoiceRaw, _ = kitutil.Marshal(map[string]any{
-						"type": "function",
-						"name": name,
-					})
-				} else if fn, ok := m["function"].(map[string]any); ok {
-					if name, ok := fn["name"].(string); ok && name != "" {
-						toolChoiceRaw, _ = kitutil.Marshal(map[string]any{
-							"type": "function",
-							"name": name,
-						})
-					} else {
-						toolChoiceRaw, _ = kitutil.Marshal(v)
-					}
-				} else {
-					toolChoiceRaw, _ = kitutil.Marshal(v)
-				}
-			} else {
-				toolChoiceRaw, _ = kitutil.Marshal(v)
-			}
-		}
-	}
-	if !hasCurrentTools {
-		toolChoiceRaw = nil
-	}
-
-	var parallelToolCallsRaw json.RawMessage
-	if req.ParallelTooCalls != nil {
-		parallelToolCallsRaw, _ = kitutil.Marshal(*req.ParallelTooCalls)
-	}
-	if !hasCurrentTools {
-		parallelToolCallsRaw = nil
 	}
 
 	textRaw := convertChatResponseFormatToResponsesText(req.ResponseFormat)
@@ -429,24 +358,22 @@ func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*d
 	}
 
 	out := &dto.OpenAIResponsesRequest{
-		Model:             req.Model,
-		Input:             inputRaw,
-		Instructions:      instructionsRaw,
-		Stream:            req.Stream,
-		Temperature:       req.Temperature,
-		Text:              textRaw,
-		ToolChoice:        toolChoiceRaw,
-		Tools:             toolsRaw,
-		TopP:              topP,
-		FrequencyPenalty:  frequencyPenaltyRaw,
-		PresencePenalty:   presencePenaltyRaw,
-		User:              req.User,
-		ParallelToolCalls: parallelToolCallsRaw,
-		Store:             req.Store,
-		Metadata:          req.Metadata,
-		PromptCacheKey:    promptCacheKeyRaw,
-		EnableThinking:    req.EnableThinking,
-		ThinkingBudget:    req.ThinkingBudget,
+		Model:            req.Model,
+		Input:            inputRaw,
+		Instructions:     instructionsRaw,
+		Stream:           req.Stream,
+		Temperature:      req.Temperature,
+		Text:             textRaw,
+		Tools:            toolsRaw,
+		TopP:             topP,
+		FrequencyPenalty: frequencyPenaltyRaw,
+		PresencePenalty:  presencePenaltyRaw,
+		User:             req.User,
+		Store:            req.Store,
+		Metadata:         req.Metadata,
+		PromptCacheKey:   promptCacheKeyRaw,
+		EnableThinking:   req.EnableThinking,
+		ThinkingBudget:   req.ThinkingBudget,
 	}
 	if req.MaxTokens != nil || req.MaxCompletionTokens != nil {
 		out.MaxOutputTokens = lo.ToPtr(maxOutputTokens)
@@ -458,6 +385,9 @@ func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*d
 	}
 	if err := reasoning.ApplyToOpenAIResponses(out, reasoningIntent); err != nil {
 		return nil, reasoning.AsClientError(err)
+	}
+	if err := toolconv.RenderRequestTools(c, types.RelayFormatOpenAI, types.RelayFormatOpenAIResponses, req, out, nil); err != nil {
+		return nil, err
 	}
 
 	return out, nil

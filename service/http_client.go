@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"math"
 	"net"
 	"net/http"
@@ -14,7 +15,6 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 
 	"golang.org/x/net/proxy"
@@ -344,7 +344,7 @@ func newHTTPClientFromTransportFactory(policy HTTPTransportPolicy, factory func(
 	if policy.Shards < 1 {
 		policy.Shards = 1
 	}
-	if policy.Protocol == dto.HTTPProtocolHTTP1 || policy.Shards == 1 {
+	if policy.Protocol == hostdto.HTTPProtocolHTTP1 || policy.Shards == 1 {
 		transport := factory()
 		applyHTTPTransportPolicy(transport, policy)
 		return newRelayHTTPClient(transport)
@@ -380,13 +380,13 @@ func newProxyHTTPClient(proxyURL *url.URL) (*http.Client, error) {
 
 // GetHttpClientWithProxy returns the default client or a cached proxy-enabled client.
 func GetHttpClientWithProxy(rawProxyURL string) (*http.Client, error) {
-	return GetHttpClientWithProxySettings(rawProxyURL, dto.ChannelSettings{})
+	return GetHttpClientWithProxySettings(rawProxyURL, hostdto.ChannelSettings{})
 }
 
 // GetHttpClientWithProxySettings returns a cached HTTP client for the proxy URL and
 // channel transport settings. Default auto + 1 shard shares the same client pool as
 // GetHttpClientWithProxy / GetHttpClient for the empty-proxy case.
-func GetHttpClientWithProxySettings(rawProxyURL string, settings dto.ChannelSettings) (*http.Client, error) {
+func GetHttpClientWithProxySettings(rawProxyURL string, settings hostdto.ChannelSettings) (*http.Client, error) {
 	policy := NormalizeHTTPTransportPolicy(settings)
 	trimmedProxyURL := strings.TrimSpace(rawProxyURL)
 

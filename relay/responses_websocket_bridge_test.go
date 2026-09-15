@@ -1,90 +1,54 @@
 package relay
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"testing"
 
+	"github.com/QuantumNous/new-api/relay/output"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestResponsesWSSSEForwarderForwardsDataFrames(t *testing.T) {
+func TestResponsesWebSocketOutputDeliversProtocolEventsAndHoldsTerminal(t *testing.T) {
 	var sent []string
-	forwarder := newResponsesWSSSEForwarder(func(payload []byte) error {
-		sent = append(sent, string(payload))
-		return nil
-	}, nil)
-
-	// A frame split across writes must be reassembled before forwarding.
-	_, err := forwarder.Write([]byte("event: response.output_text.delta\ndata: {\"type\":\"response.outp"))
-	require.NoError(t, err)
-	assert.Empty(t, sent)
-	_, err = forwarder.Write([]byte("ut_text.delta\",\"delta\":\"hi\"}\n\n"))
-	require.NoError(t, err)
-	require.Len(t, sent, 1)
-	assert.JSONEq(t, `{"type":"response.output_text.delta","delta":"hi"}`, sent[0])
-	assert.True(t, forwarder.Written())
-
-	// Comments and chat-style [DONE] markers carry no websocket payload.
-	_, err = forwarder.Write([]byte(": PING\n\ndata: [DONE]\n\n"))
-	require.NoError(t, err)
-	assert.Len(t, sent, 1)
+	writer := newResponsesWSEventWriter(func(payload []byte) error { sent = append(sent, string(payload)); return nil }, nil)
+	assert.False(t, writer.Written())
+	delta := `{"type":"response.output_text.delta","delta":"hi"}`
+	terminal := `{"type":"response.completed","response":{"id":"resp_1"}}`
+	require.NoError(t, writer.WriteMessage(output.Message{Event: "response.output_text.delta", Data: []byte(delta)}))
+	require.NoError(t, writer.WriteMessage(output.Message{Event: "response.completed", Data: []byte(terminal)}))
+	assert.Equal(t, []string{delta}, sent)
+	assert.True(t, writer.Written())
+	assert.False(t, writer.terminalDelivered)
+	writer.flushHeldEvents()
+	assert.Equal(t, []string{delta, terminal}, sent)
+	assert.True(t, writer.terminalDelivered)
+	require.Error(t, writer.WriteMessage(output.Message{Data: []byte(terminal)}))
+	writer.flushHeldEvents()
+	assert.Len(t, sent, 2)
 }
 
-func TestResponsesWSSSEForwarderHoldsTerminalEventsUntilFlush(t *testing.T) {
-	var sent []string
-	forwarder := newResponsesWSSSEForwarder(func(payload []byte) error {
-		sent = append(sent, string(payload))
-		return nil
-	}, nil)
-
-	_, err := forwarder.Write([]byte("event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"a\"}\n\n"))
-	require.NoError(t, err)
-	_, err = forwarder.Write([]byte("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\"}}\n\n"))
-	require.NoError(t, err)
-
-	require.Len(t, sent, 1)
-	assert.JSONEq(t, `{"type":"response.output_text.delta","delta":"a"}`, sent[0])
-	assert.True(t, forwarder.Written())
-
-	forwarder.flushHeldEvents()
-	require.Len(t, sent, 2)
-	assert.JSONEq(t, `{"type":"response.completed","response":{"id":"resp_1"}}`, sent[1])
-}
-
-func TestResponsesWSSSEForwarderCancelsOnSendFailure(t *testing.T) {
-	sendErr := errors.New("client gone")
-	cancelled := false
-	forwarder := newResponsesWSSSEForwarder(func([]byte) error {
-		return sendErr
-	}, func() { cancelled = true })
-
-	_, err := forwarder.Write([]byte("data: {\"type\":\"response.created\"}\n\n"))
+func TestResponsesWebSocketOutputCancelsOnSendFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sendErr := errors.New("connection closed")
+	writer := newResponsesWSEventWriter(func([]byte) error { return sendErr }, cancel)
+	err := writer.WriteMessage(output.Message{Data: []byte(`{"type":"response.created"}`)})
 	require.ErrorIs(t, err, sendErr)
-	assert.True(t, cancelled)
-
-	_, err = forwarder.Write([]byte("data: {\"type\":\"response.in_progress\"}\n\n"))
-	require.ErrorIs(t, err, sendErr)
+	require.ErrorIs(t, ctx.Err(), context.Canceled)
+	assert.ErrorIs(t, writer.WriteMessage(output.Message{Data: []byte(`{"type":"response.in_progress"}`)}), sendErr)
 }
 
-func TestResponsesWSSSEForwarderStatusSemantics(t *testing.T) {
-	forwarder := newResponsesWSSSEForwarder(func([]byte) error { return nil }, nil)
-
-	// gin renders stream chunks with code -1, which must not mark the response
-	// as written; otherwise the bridge would refuse to retry a clean failure.
-	forwarder.WriteHeader(-1)
-	assert.False(t, forwarder.Written())
-	assert.Equal(t, http.StatusOK, forwarder.Status())
-
-	forwarder.WriteHeader(http.StatusBadGateway)
-	assert.True(t, forwarder.Written())
-	assert.Equal(t, http.StatusBadGateway, forwarder.Status())
-}
-
-func TestResponsesWSSSEFrameDataJoinsMultipleDataLines(t *testing.T) {
-	payload := responsesWSSSEFrameData([]byte("event: x\ndata: {\"a\":\ndata: 1}\nretry: 100"))
-	assert.Equal(t, "{\"a\":\n1}", string(payload))
-
-	assert.Nil(t, responsesWSSSEFrameData([]byte("event: keep-alive\n: comment")))
+func TestResponsesWebSocketOutputRejectsSSEAndDoesNotDeliverDoneMarker(t *testing.T) {
+	var calls int
+	writer := newResponsesWSEventWriter(func([]byte) error { calls++; return nil }, nil)
+	_, err := writer.Write([]byte("data: {\"type\":\"response.completed\"}\n\n"))
+	require.Error(t, err)
+	require.NoError(t, writer.WriteMessage(output.Message{Data: []byte("[DONE]")}))
+	assert.Zero(t, calls)
+	assert.Equal(t, http.StatusOK, writer.Status())
+	writer.WriteHeader(http.StatusBadGateway)
+	assert.Equal(t, http.StatusBadGateway, writer.Status())
 }

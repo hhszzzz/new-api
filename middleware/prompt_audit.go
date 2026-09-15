@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"errors"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"net/http"
 	"strings"
 
@@ -76,11 +77,11 @@ func inspectPromptBeforeDistribution(c *gin.Context, modelRequest *ModelRequest)
 	if setting.ShouldCheckPromptSensitive() {
 		if contains, _ := service.CheckSensitiveText(sensitiveText); contains {
 			logger.LogWarn(c, "user sensitive words detected")
-			apiErr := types.NewError(
+			apiErr := hosttypes.NewError(
 				errors.New("sensitive words detected"),
-				types.ErrorCodeSensitiveWordsDetected,
-				types.ErrOptionWithStatusCode(http.StatusBadRequest),
-				types.ErrOptionWithSkipRetry(),
+				hosttypes.ErrorCodeSensitiveWordsDetected,
+				hosttypes.ErrOptionWithStatusCode(http.StatusBadRequest),
+				hosttypes.ErrOptionWithSkipRetry(),
 			)
 			abortPromptAuditRequest(c, apiErr, taskRequest)
 			return cleanup, false
@@ -196,16 +197,16 @@ func abortPromptAuditInputError(c *gin.Context, err error, taskRequest bool) {
 	if common.IsRequestBodyTooLargeError(err) || errors.Is(err, common.ErrRequestBodyTooLarge) {
 		statusCode = http.StatusRequestEntityTooLarge
 	}
-	apiErr := types.NewErrorWithStatusCode(
+	apiErr := hosttypes.NewErrorWithStatusCode(
 		errors.New("invalid request"),
-		types.ErrorCodeInvalidRequest,
+		hosttypes.ErrorCodeInvalidRequest,
 		statusCode,
-		types.ErrOptionWithSkipRetry(),
+		hosttypes.ErrOptionWithSkipRetry(),
 	)
 	abortPromptAuditRequest(c, apiErr, taskRequest)
 }
 
-func abortPromptAuditRequest(c *gin.Context, apiErr *types.NewAPIError, taskRequest bool) {
+func abortPromptAuditRequest(c *gin.Context, apiErr *hosttypes.NewAPIError, taskRequest bool) {
 	if apiErr == nil {
 		return
 	}

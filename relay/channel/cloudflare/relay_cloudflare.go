@@ -3,6 +3,7 @@ package cloudflare
 import (
 	"bufio"
 	"encoding/json"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 	"strings"
@@ -12,7 +13,6 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/samber/lo"
 
@@ -29,7 +29,7 @@ func convertCf2CompletionsRequest(textRequest dto.GeneralOpenAIRequest) *CfReque
 	}
 }
 
-func cfStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*types.NewAPIError, *dto.Usage) {
+func cfStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*hosttypes.NewAPIError, *dto.Usage) {
 	scanner := helper.NewStreamScanner(resp.Body)
 	scanner.Split(bufio.ScanLines)
 
@@ -90,16 +90,16 @@ func cfStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Res
 	return nil, usage
 }
 
-func cfHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*types.NewAPIError, *dto.Usage) {
+func cfHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*hosttypes.NewAPIError, *dto.Usage) {
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return types.NewError(err, types.ErrorCodeBadResponseBody), nil
+		return hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody), nil
 	}
 	service.CloseResponseBodyGracefully(resp)
 	var response dto.TextResponse
 	err = json.Unmarshal(responseBody, &response)
 	if err != nil {
-		return types.NewError(err, types.ErrorCodeBadResponseBody), nil
+		return hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody), nil
 	}
 	response.Model = info.PublicResponseModelName()
 	var responseText string
@@ -111,7 +111,7 @@ func cfHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response)
 	response.Id = helper.GetResponseID(c)
 	jsonResponse, err := json.Marshal(response)
 	if err != nil {
-		return types.NewError(err, types.ErrorCodeBadResponseBody), nil
+		return hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody), nil
 	}
 	c.Writer.Header().Set("Content-Type", "application/json")
 	c.Writer.WriteHeader(resp.StatusCode)
@@ -119,16 +119,16 @@ func cfHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response)
 	return nil, usage
 }
 
-func cfSTTHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*types.NewAPIError, *dto.Usage) {
+func cfSTTHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*hosttypes.NewAPIError, *dto.Usage) {
 	var cfResp CfAudioResponse
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return types.NewError(err, types.ErrorCodeBadResponseBody), nil
+		return hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody), nil
 	}
 	service.CloseResponseBodyGracefully(resp)
 	err = json.Unmarshal(responseBody, &cfResp)
 	if err != nil {
-		return types.NewError(err, types.ErrorCodeBadResponseBody), nil
+		return hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody), nil
 	}
 
 	audioResp := &dto.AudioResponse{
@@ -137,7 +137,7 @@ func cfSTTHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respon
 
 	jsonResponse, err := json.Marshal(audioResp)
 	if err != nil {
-		return types.NewError(err, types.ErrorCodeBadResponseBody), nil
+		return hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody), nil
 	}
 	c.Writer.Header().Set("Content-Type", "application/json")
 	c.Writer.WriteHeader(resp.StatusCode)

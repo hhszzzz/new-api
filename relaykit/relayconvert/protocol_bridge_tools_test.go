@@ -317,7 +317,13 @@ func TestResponsesBridgesConvertSupportedHostedTools(t *testing.T) {
 
 				result, err := ConvertRequest(context.Background(), &convmeta.Values{}, target.format, request)
 
-				// Supported web search is translated; unsupported hosted tools are reported by the loss policy.
+				if test.name == "file search" {
+					var loss *types.ConversionLossError
+					require.ErrorAs(t, err, &loss)
+					require.NotNil(t, result)
+					assert.Contains(t, err.Error(), "file_search")
+					return
+				}
 				require.NoError(t, err)
 				switch converted := result.Value.(type) {
 				case *dto.GeneralOpenAIRequest:
@@ -350,7 +356,7 @@ func TestResponsesBridgesConvertSupportedHostedTools(t *testing.T) {
 
 			// Server-executed tool_search cannot be dropped without changing
 			// semantics the client explicitly asked for.
-			require.ErrorContains(t, err, "native Responses upstream")
+			require.ErrorContains(t, err, "tool_search")
 		})
 	}
 }
@@ -780,16 +786,8 @@ func TestResponsesMessagesBridgeReplaysSignedThinkingOnlyOnOriginChannel(t *test
 		ChannelID:           18,
 		Options:             &convmeta.Options{ProviderStateSecret: stateSecret},
 	}
-	requestResult, err = ConvertRequest(WithProtocolBridgeContext(context.Background()), otherChannel, types.RelayFormatClaude, nextRequest)
-	require.NoError(t, err)
-	converted, ok = requestResult.Value.(*dto.ClaudeRequest)
-	require.True(t, ok)
-	assistant, err = converted.Messages[1].ParseContent()
-	require.NoError(t, err)
-	require.Len(t, assistant, 1)
-	assert.Equal(t, "tool_use", assistant[0].Type)
-	require.NotNil(t, converted.Thinking)
-	assert.Equal(t, "disabled", converted.Thinking.Type)
+	_, err = ConvertRequest(WithProtocolBridgeContext(context.Background()), otherChannel, types.RelayFormatClaude, nextRequest)
+	require.ErrorContains(t, err, "cannot be restored on this channel")
 }
 
 func TestResponsesMessagesBridgePreservesSignedThinkingInStream(t *testing.T) {

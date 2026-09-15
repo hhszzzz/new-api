@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -42,7 +43,7 @@ func TestValidateChannelProxy(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			setting, err := common.Marshal(dto.ChannelSettings{Proxy: test.proxy})
+			setting, err := common.Marshal(hostdto.ChannelSettings{Proxy: test.proxy})
 			require.NoError(t, err)
 			channel := &model.Channel{
 				Type:    constant.ChannelTypeOpenAI,
@@ -154,7 +155,7 @@ func TestMultiprotocolGatewayEndpointTypes(t *testing.T) {
 
 func TestCopyChannelRejectsInvalidLegacyProxySettings(t *testing.T) {
 	db := setupModelListControllerTestDB(t)
-	settingBytes, err := common.Marshal(dto.ChannelSettings{
+	settingBytes, err := common.Marshal(hostdto.ChannelSettings{
 		Proxy: "socks5://proxy.example/legacy-path",
 	})
 	require.NoError(t, err)

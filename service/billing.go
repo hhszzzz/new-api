@@ -2,11 +2,11 @@ package service
 
 import (
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"net/http"
 
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
 )
 
@@ -17,21 +17,21 @@ const (
 
 // PreConsumeBilling 根据用户计费偏好创建 BillingSession 并执行预扣费。
 // 会话存储在 relayInfo.Billing 上，供后续 Settle / Refund 使用。
-func PreConsumeBilling(c *gin.Context, preConsumedQuota int, relayInfo *relaycommon.RelayInfo) *types.NewAPIError {
+func PreConsumeBilling(c *gin.Context, preConsumedQuota int, relayInfo *relaycommon.RelayInfo) *hosttypes.NewAPIError {
 	if relayInfo != nil && relayInfo.QuotaClamp != nil {
-		return types.NewErrorWithStatusCode(
+		return hosttypes.NewErrorWithStatusCode(
 			relayInfo.QuotaClamp,
-			types.ErrorCodeModelPriceError,
+			hosttypes.ErrorCodeModelPriceError,
 			http.StatusBadRequest,
-			types.ErrOptionWithSkipRetry(),
+			hosttypes.ErrOptionWithSkipRetry(),
 		)
 	}
 	if preConsumedQuota < 0 {
-		return types.NewErrorWithStatusCode(
+		return hosttypes.NewErrorWithStatusCode(
 			fmt.Errorf("pre-consume quota cannot be negative: %d", preConsumedQuota),
-			types.ErrorCodeModelPriceError,
+			hosttypes.ErrorCodeModelPriceError,
 			http.StatusBadRequest,
-			types.ErrOptionWithSkipRetry(),
+			hosttypes.ErrOptionWithSkipRetry(),
 		)
 	}
 	session, apiErr := NewBillingSession(c, relayInfo, preConsumedQuota)

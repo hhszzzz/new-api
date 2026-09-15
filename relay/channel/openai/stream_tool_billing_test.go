@@ -1,6 +1,7 @@
 package openai
 
 import (
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -68,7 +69,7 @@ func TestOaiStreamHandlerRejectsDoneWithoutFinishReason(t *testing.T) {
 	assert.Nil(t, usage)
 	require.NotNil(t, apiErr)
 	assert.Equal(t, http.StatusBadGateway, apiErr.StatusCode)
-	assert.Equal(t, types.ErrorCodeBadResponse, apiErr.GetErrorCode())
+	assert.Equal(t, hosttypes.ErrorCodeBadResponse, apiErr.GetErrorCode())
 	assert.Equal(t, relaycommon.StreamTerminalFailure, info.StreamStatus.Snapshot().TerminalState)
 	assert.NotContains(t, recorder.Body.String(), "data: [DONE]")
 }

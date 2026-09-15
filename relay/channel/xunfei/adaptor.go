@@ -2,6 +2,7 @@ package xunfei
 
 import (
 	"errors"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 	"strings"
@@ -9,8 +10,6 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
-
 	"github.com/gin-gonic/gin"
 )
 
@@ -71,20 +70,20 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	return nil, errors.New("not implemented")
 }
 
-func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {
+func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (*channel.TransportResult, error) {
 	// xunfei's request is not http request, so we don't need to do anything here
 	dummyResp := &http.Response{}
 	dummyResp.StatusCode = http.StatusOK
-	return dummyResp, nil
+	return channel.HTTPResult(dummyResp, nil)
 }
 
-func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage any, err *types.NewAPIError) {
+func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage dto.UsageResult, err *hosttypes.NewAPIError) {
 	splits := strings.Split(info.ApiKey, "|")
 	if len(splits) != 3 {
-		return nil, types.NewError(errors.New("invalid auth"), types.ErrorCodeChannelInvalidKey)
+		return nil, hosttypes.NewError(errors.New("invalid auth"), hosttypes.ErrorCodeChannelInvalidKey)
 	}
 	if a.request == nil {
-		return nil, types.NewError(errors.New("request is nil"), types.ErrorCodeInvalidRequest)
+		return nil, hosttypes.NewError(errors.New("request is nil"), hosttypes.ErrorCodeInvalidRequest)
 	}
 	if info.IsStream {
 		usage, err = xunfeiStreamHandler(c, *a.request, splits[0], splits[1], splits[2])

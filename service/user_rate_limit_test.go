@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"net/http/httptest"
 	"strconv"
 	"strings"
@@ -13,7 +14,6 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/group_rate_limit_setting"
 	"github.com/alicebob/miniredis/v2"
@@ -387,7 +387,7 @@ func TestGroupConcurrencyLeaseIsAtomicAcrossUsersAndReleasesBothLayers(t *testin
 	secondPolicy := UserRateLimitPolicy{UserID: 202, Group: "vip", ConcurrencyLimit: 1, SharedConcurrencyLimit: 1}
 	type groupAcquireResult struct {
 		lease  *UserConcurrencyLease
-		apiErr *types.NewAPIError
+		apiErr *hosttypes.NewAPIError
 	}
 	result := make(chan groupAcquireResult, 1)
 	go func() {

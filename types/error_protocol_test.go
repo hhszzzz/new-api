@@ -2,6 +2,7 @@ package types
 
 import (
 	"errors"
+	kittypes "github.com/QuantumNous/new-api/relaykit/types"
 	"net/http"
 	"testing"
 
@@ -23,7 +24,7 @@ func TestClaudeErrorTypeForStatus(t *testing.T) {
 		{status: http.StatusInternalServerError, want: "api_error"},
 	}
 	for _, test := range tests {
-		assert.Equal(t, test.want, ClaudeErrorTypeForStatus(test.status))
+		assert.Equal(t, test.want, kittypes.ClaudeErrorTypeForStatus(test.status))
 	}
 }
 

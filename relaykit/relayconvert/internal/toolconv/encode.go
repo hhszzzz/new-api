@@ -8,6 +8,7 @@ import (
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
+	sharedclaude "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/claude"
 	sharedgemini "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/gemini"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -337,6 +338,9 @@ func attachClaudeRequest(request any, set Set, options *convmeta.Options) (any, 
 	}
 	diagnostics = append(diagnostics, allowedChoiceDiagnostics...)
 	diagnostics = append(diagnostics, choiceDiagnostics...)
+	if err := sharedclaude.ResolveThinkingToolChoice(target); err != nil {
+		return nil, diagnostics, err
+	}
 	historyDiagnostics, err := appendHostedHistoryToClaude(target, set)
 	if err != nil {
 		return nil, diagnostics, err
@@ -386,28 +390,21 @@ func attachGeminiRequest(request any, set Set) (any, []types.ConversionDiagnosti
 			if definition.Function == nil {
 				continue
 			}
-			parameters := definition.Function.Parameters
-			if parameters != nil {
-				cloned, err := kitutil.Any2Type[any](parameters)
-				if err != nil {
-					return nil, diagnostics, fmt.Errorf("tools[%d].parameters: %w", index, err)
-				}
-				if params, ok := cloned.(map[string]any); ok {
-					if properties, exists := params["properties"].(map[string]any); exists && len(properties) == 0 {
-						cloned = nil
-					}
-				}
-				parameters = sharedgemini.CleanFunctionParameters(cloned)
-			}
+			declaration := dto.FunctionRequest{Parameters: definition.Function.Parameters}
+			sharedgemini.PrepareFunctionDeclaration(&declaration)
 			function := map[string]any{
 				"name":        definition.Function.Name,
 				"description": definition.Function.Description,
-				"parameters":  parameters,
+			}
+			if declaration.ParametersJsonSchema != nil {
+				function["parametersJsonSchema"] = declaration.ParametersJsonSchema
+			} else {
+				function["parameters"] = declaration.Parameters
 			}
 			deleteEmptyStrings(function)
 			functions = append(functions, function)
-			if definition.Function.Strict != nil {
-				diagnostics = append(diagnostics, presentationLoss(fmt.Sprintf("tools[%d].strict", index), "unsupported_function_strict", "Gemini does not expose OpenAI function strictness"))
+			if definition.Function.Strict != nil && *definition.Function.Strict {
+				diagnostics = append(diagnostics, semanticLoss(fmt.Sprintf("tools[%d].strict", index), "unsupported_function_strict", "Gemini does not expose OpenAI function strictness"))
 			}
 		case KindWebSearch:
 			if set.Source == types.RelayFormatGemini && len(definition.Raw) > 0 {
@@ -1340,11 +1337,11 @@ func encodeGeminiChoice(choice *Choice) (*dto.ToolConfig, []types.ConversionDiag
 }
 
 func semanticLoss(path string, code string, message string) types.ConversionDiagnostic {
-	return types.ConversionDiagnostic{Code: code, Path: path, Message: message, Severity: types.ConversionDiagnosticError}
+	return types.ConversionDiagnostic{Code: code, Path: path, Message: message, Severity: types.ConversionDiagnosticError, LossClass: types.ConversionLossSemantic}
 }
 
 func presentationLoss(path string, code string, message string) types.ConversionDiagnostic {
-	return types.ConversionDiagnostic{Code: code, Path: path, Message: message, Severity: types.ConversionDiagnosticWarning}
+	return types.ConversionDiagnostic{Code: code, Path: path, Message: message, Severity: types.ConversionDiagnosticWarning, LossClass: types.ConversionLossPresentation}
 }
 
 func locationMap(location *ApproximateLocation) map[string]any {

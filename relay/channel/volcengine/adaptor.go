@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 	"path/filepath"
@@ -330,7 +331,7 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	return request, nil
 }
 
-func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {
+func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (*channel.TransportResult, error) {
 	if info.RelayMode == constant.RelayModeAudioSpeech {
 		baseUrl := info.ChannelBaseUrl
 		if baseUrl == "" {
@@ -343,10 +344,10 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 			}
 		}
 	}
-	return channel.DoApiRequest(a, c, info, requestBody)
+	return channel.HTTPResult(channel.DoApiRequest(a, c, info, requestBody))
 }
 
-func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage any, err *types.NewAPIError) {
+func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage dto.UsageResult, err *hosttypes.NewAPIError) {
 	if info.GetFinalRequestRelayFormat() == types.RelayFormatClaude {
 		adaptor := claude.Adaptor{}
 		return adaptor.DoResponse(c, resp, info)
@@ -357,18 +358,18 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 		if info.IsStream {
 			volcRequestInterface, exists := c.Get(contextKeyTTSRequest)
 			if !exists {
-				return nil, types.NewErrorWithStatusCode(
+				return nil, hosttypes.NewErrorWithStatusCode(
 					errors.New("volcengine TTS request not found in context"),
-					types.ErrorCodeBadRequestBody,
+					hosttypes.ErrorCodeBadRequestBody,
 					http.StatusInternalServerError,
 				)
 			}
 
 			volcRequest, ok := volcRequestInterface.(VolcengineTTSRequest)
 			if !ok {
-				return nil, types.NewErrorWithStatusCode(
+				return nil, hosttypes.NewErrorWithStatusCode(
 					errors.New("invalid volcengine TTS request type"),
-					types.ErrorCodeBadRequestBody,
+					hosttypes.ErrorCodeBadRequestBody,
 					http.StatusInternalServerError,
 				)
 			}
@@ -376,9 +377,9 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 			// Get the WebSocket URL
 			requestURL, urlErr := a.GetRequestURL(info)
 			if urlErr != nil {
-				return nil, types.NewErrorWithStatusCode(
+				return nil, hosttypes.NewErrorWithStatusCode(
 					urlErr,
-					types.ErrorCodeBadRequestBody,
+					hosttypes.ErrorCodeBadRequestBody,
 					http.StatusInternalServerError,
 				)
 			}

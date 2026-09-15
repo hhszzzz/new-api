@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 	"regexp"
@@ -17,7 +18,6 @@ import (
 	"github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
@@ -226,11 +226,11 @@ func processHeaderOverride(info *common.RelayInfo, c *gin.Context) (map[string]s
 			}
 
 			if pattern == "" {
-				return nil, types.NewError(fmt.Errorf("header passthrough regex pattern is empty: %q", k), types.ErrorCodeChannelHeaderOverrideInvalid)
+				return nil, hosttypes.NewError(fmt.Errorf("header passthrough regex pattern is empty: %q", k), hosttypes.ErrorCodeChannelHeaderOverrideInvalid)
 			}
 			compiled, err := getHeaderPassthroughRegex(pattern)
 			if err != nil {
-				return nil, types.NewError(err, types.ErrorCodeChannelHeaderOverrideInvalid)
+				return nil, hosttypes.NewError(err, hosttypes.ErrorCodeChannelHeaderOverrideInvalid)
 			}
 			passthroughRegex = append(passthroughRegex, compiled)
 		}
@@ -238,7 +238,7 @@ func processHeaderOverride(info *common.RelayInfo, c *gin.Context) (map[string]s
 
 	if passAll || len(passthroughRegex) > 0 {
 		if c == nil || c.Request == nil {
-			return nil, types.NewError(fmt.Errorf("missing request context for header passthrough"), types.ErrorCodeChannelHeaderOverrideInvalid)
+			return nil, hosttypes.NewError(fmt.Errorf("missing request context for header passthrough"), hosttypes.ErrorCodeChannelHeaderOverrideInvalid)
 		}
 		for name := range c.Request.Header {
 			if shouldSkipPassthroughHeader(name) {
@@ -275,7 +275,7 @@ func processHeaderOverride(info *common.RelayInfo, c *gin.Context) (map[string]s
 
 		str, ok := v.(string)
 		if !ok {
-			return nil, types.NewError(nil, types.ErrorCodeChannelHeaderOverrideInvalid)
+			return nil, hosttypes.NewError(nil, hosttypes.ErrorCodeChannelHeaderOverrideInvalid)
 		}
 		if info.IsChannelTest && strings.HasPrefix(strings.TrimSpace(str), clientHeaderPlaceholderPrefix) {
 			continue
@@ -283,7 +283,7 @@ func processHeaderOverride(info *common.RelayInfo, c *gin.Context) (map[string]s
 
 		value, include, err := applyHeaderOverridePlaceholders(str, c, info.ApiKey)
 		if err != nil {
-			return nil, types.NewError(err, types.ErrorCodeChannelHeaderOverrideInvalid)
+			return nil, hosttypes.NewError(err, hosttypes.ErrorCodeChannelHeaderOverrideInvalid)
 		}
 		if !include {
 			continue
@@ -598,7 +598,7 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	resp, err := relayClient.Do(req)
 	if err != nil {
 		logger.LogError(c, "do request failed: "+err.Error())
-		return nil, types.NewError(err, types.ErrorCodeDoRequestFailed, types.ErrOptionWithHideErrMsg("upstream error: do request failed"))
+		return nil, hosttypes.NewError(err, hosttypes.ErrorCodeDoRequestFailed, hosttypes.ErrOptionWithHideErrMsg("upstream error: do request failed"))
 	}
 	if resp == nil {
 		return nil, errors.New("resp is nil")

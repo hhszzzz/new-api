@@ -2,6 +2,7 @@ package xai
 
 import (
 	"errors"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 	"strings"
@@ -112,17 +113,17 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	return request, nil
 }
 
-func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {
-	return channel.DoApiRequest(a, c, info, requestBody)
+func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (*channel.TransportResult, error) {
+	return channel.HTTPResult(channel.DoApiRequest(a, c, info, requestBody))
 }
 
-func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage any, err *types.NewAPIError) {
+func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage dto.UsageResult, err *hosttypes.NewAPIError) {
 	switch info.RelayMode {
 	case constant.RelayModeImagesGenerations, constant.RelayModeImagesEdits:
 		usage, err = openai.OpenaiImageHandler(c, info, resp)
 	case constant.RelayModeResponses:
 		if restoreErr := restoreXAIResponsesBody(c, resp, info.IsStream); restoreErr != nil {
-			return nil, types.NewOpenAIError(restoreErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+			return nil, hosttypes.NewOpenAIError(restoreErr, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 		}
 		usage, err = (&openai.Adaptor{}).DoResponse(c, resp, info)
 	default:
@@ -135,7 +136,7 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 			break
 		}
 		if normalizeErr := normalizeXAIChatResponse(resp, info.IsStream); normalizeErr != nil {
-			return nil, types.NewOpenAIError(normalizeErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+			return nil, hosttypes.NewOpenAIError(normalizeErr, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 		}
 		usage, err = (&openai.Adaptor{}).DoResponse(c, resp, info)
 	}

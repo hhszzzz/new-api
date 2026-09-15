@@ -1,6 +1,7 @@
 package relay
 
 import (
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -60,7 +61,7 @@ func TestAlphaSearchHelperOpenAIRequiresExplicitCapability(t *testing.T) {
 			}))
 			defer upstream.Close()
 
-			var otherSettings dto.ChannelOtherSettings
+			var otherSettings hostdto.ChannelOtherSettings
 			require.NoError(t, common.Unmarshal([]byte(test.settingsJSON), &otherSettings))
 
 			rawBody := `{"model":"gpt-5-codex","query":"test"}`

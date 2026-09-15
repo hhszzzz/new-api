@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"strconv"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
 	kitreasoning "github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -25,12 +27,6 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/tidwall/gjson"
 )
-
-type ThinkingContentInfo struct {
-	IsFirstThinkingContent  bool
-	SendLastThinkingContent bool
-	HasSentThinkingContent  bool
-}
 
 const (
 	LastMessageTypeNone     = convmeta.LastMessageTypeNone
@@ -71,8 +67,8 @@ type ChannelMeta struct {
 	ChannelCreateTime    int64
 	ParamOverride        map[string]any
 	HeadersOverride      map[string]any
-	ChannelSetting       dto.ChannelSettings
-	ChannelOtherSettings dto.ChannelOtherSettings
+	ChannelSetting       hostdto.ChannelSettings
+	ChannelOtherSettings hostdto.ChannelOtherSettings
 	UpstreamModelName    string
 	IsModelMapped        bool
 	SupportStreamOptions bool // 是否支持流式选项
@@ -109,16 +105,18 @@ type RadarAutoEffortDecision struct {
 }
 
 type RelayInfo struct {
-	TokenId           int
-	TokenKey          string
-	TokenGroup        string
-	UserId            int
-	UsingGroup        string // 使用的分组，当auto跨分组重试时，会变动
-	UserGroup         string // 用户所在分组
-	TokenUnlimited    bool
-	StartTime         time.Time
-	FirstResponseTime time.Time
-	isFirstResponse   bool
+	Conversion           *relayconvert.ConversionSession
+	ConversionLossPolicy types.ConversionLossPolicy
+	TokenId              int
+	TokenKey             string
+	TokenGroup           string
+	UserId               int
+	UsingGroup           string // 使用的分组，当auto跨分组重试时，会变动
+	UserGroup            string // 用户所在分组
+	TokenUnlimited       bool
+	StartTime            time.Time
+	FirstResponseTime    time.Time
+	isFirstResponse      bool
 	// systemPromptsApplied records that the configured system prompt layers have
 	// already been folded into the outbound request, so a later conversion stage
 	// cannot prepend them a second time.
@@ -162,7 +160,7 @@ type RelayInfo struct {
 	// ApplyReasoningModelSuffix. It is nil when the user has auto-effort
 	// switched off for the requested model.
 	RadarAutoEffort         *RadarAutoEffortDecision
-	UserSetting             dto.UserSetting
+	UserSetting             hostdto.UserSetting
 	UserEmail               string
 	UserQuota               int
 	RelayFormat             types.RelayFormat
@@ -200,7 +198,7 @@ type RelayInfo struct {
 	IsClaudeBetaQuery                     bool // /v1/messages?beta=true
 	IsChannelTest                         bool // channel test request
 	RetryIndex                            int
-	LastError                             *types.NewAPIError
+	LastError                             *hosttypes.NewAPIError
 	RuntimeHeadersOverride                map[string]any
 	UseRuntimeHeadersOverride             bool
 	ParamOverrideAudit                    []string
@@ -242,7 +240,6 @@ type RelayInfo struct {
 	conversionDiagnosticKeys       map[conversionDiagnosticKey]struct{}
 	conversionDiagnosticsTruncated bool
 
-	ThinkingContentInfo
 	TokenCountMeta
 	*ClaudeConvertInfo
 	*RerankerInfo
@@ -407,10 +404,19 @@ func (info *RelayInfo) ShouldPassThroughBody() bool {
 	if info == nil || info.HasUserModelRoute() {
 		return false
 	}
-	return model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled
+	global := model_setting.GetGlobalSettings()
+	policy := global.EffectiveProtocolPolicy()
+	if info.ChannelMeta != nil && info.ChannelOtherSettings.ProtocolPolicy != nil && info.ChannelOtherSettings.ProtocolPolicy.RequestMode != "" {
+		return info.ChannelOtherSettings.ProtocolPolicy.RequestMode == hostdto.ProtocolRequestPassthrough
+	}
+	if global.ProtocolPolicy != nil || info.ChannelMeta != nil && info.ChannelOtherSettings.ProtocolPolicy != nil {
+		return policy.RequestMode == hostdto.ProtocolRequestPassthrough
+	}
+	return policy.RequestMode == hostdto.ProtocolRequestPassthrough || info.ChannelMeta != nil && info.ChannelSetting.PassThroughBodyEnabled
 }
 
 func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
+	info.CloseConversionSession()
 	// Each retry rebuilds the outbound request from the original parsed request.
 	// Keep the duplicate-injection guard scoped to one channel attempt so route
 	// and channel prompts are applied again when the distributor retries.
@@ -432,7 +438,6 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 	} else {
 		info.StreamStatus = nil
 	}
-	info.ThinkingContentInfo = ThinkingContentInfo{IsFirstThinkingContent: true}
 	info.SendResponseCount = 0
 	info.ReceivedResponseCount = 0
 	info.isFirstResponse = true
@@ -496,12 +501,12 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 		channelMeta.ApiVersion = c.GetString("region")
 	}
 
-	channelSetting, ok := common.GetContextKeyType[dto.ChannelSettings](c, constant.ContextKeyChannelSetting)
+	channelSetting, ok := common.GetContextKeyType[hostdto.ChannelSettings](c, constant.ContextKeyChannelSetting)
 	if ok {
 		channelMeta.ChannelSetting = channelSetting
 	}
 
-	channelOtherSettings, ok := common.GetContextKeyType[dto.ChannelOtherSettings](c, constant.ContextKeyChannelOtherSetting)
+	channelOtherSettings, ok := common.GetContextKeyType[hostdto.ChannelOtherSettings](c, constant.ContextKeyChannelOtherSetting)
 	if ok {
 		channelMeta.ChannelOtherSettings = channelOtherSettings
 	}
@@ -518,7 +523,7 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 	// Channel identity feeds the converter options snapshot (e.g.
 	// OpenRouterDialect); drop the cache so a cross-channel retry rebuilds it.
 	info.convOptions = nil
-	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || channelMeta.ChannelSetting.PassThroughBodyEnabled {
+	if info.ShouldPassThroughBody() {
 		info.ReasoningEffort = ""
 		info.ReasoningConversion = nil
 	} else {
@@ -836,10 +841,6 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 
 		StartTime:         startTime,
 		FirstResponseTime: startTime.Add(-time.Second),
-		ThinkingContentInfo: ThinkingContentInfo{
-			IsFirstThinkingContent:  true,
-			SendLastThinkingContent: false,
-		},
 		TokenCountMeta: TokenCountMeta{
 			//promptTokens: common.GetContextKeyInt(c, constant.ContextKeyPromptTokens),
 			estimatePromptTokens: common.GetContextKeyInt(c, constant.ContextKeyEstimatedTokens),
@@ -856,7 +857,7 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 		info.RequestURLPath = "/v1" + info.RequestURLPath
 	}
 
-	userSetting, ok := common.GetContextKeyType[dto.UserSetting](c, constant.ContextKeyUserSetting)
+	userSetting, ok := common.GetContextKeyType[hostdto.UserSetting](c, constant.ContextKeyUserSetting)
 	if ok {
 		info.UserSetting = userSetting
 	}
@@ -1174,8 +1175,11 @@ func (info *RelayInfo) ConvOptions() *convmeta.Options {
 		PreserveEffortTail:     model_setting.ShouldPreserveEffortTail,
 	}
 	if info != nil {
-		if info.ChannelMeta != nil {
-			options.ToolLossPolicy = types.ConversionLossPolicy(info.ChannelOtherSettings.ToolLossPolicy)
+		options.ToolLossPolicy = types.ConversionLossPolicySafe
+		if info.ConversionLossPolicy != "" {
+			options.ToolLossPolicy = info.ConversionLossPolicy
+		} else if info.ChannelMeta != nil && info.ChannelOtherSettings.ToolLossPolicy == "strict" {
+			options.ToolLossPolicy = types.ConversionLossPolicyStrict
 		}
 		info.convOptions = options
 	}
@@ -1360,7 +1364,7 @@ func FailTaskInfo(reason string) *TaskInfo {
 // store: 数据存储授权字段，涉及用户隐私（仅 OpenAI、Responses API 支持，默认允许透传，禁用后可能导致 Codex 无法使用）
 // safety_identifier: 安全标识符，用于向 OpenAI 报告违规用户（仅 OpenAI 支持，涉及用户隐私）
 // stream_options.include_obfuscation: 响应流混淆控制字段（仅 OpenAI Responses API 支持）
-func RemoveDisabledFields(jsonData []byte, channelOtherSettings dto.ChannelOtherSettings, channelPassThroughEnabled bool) ([]byte, error) {
+func RemoveDisabledFields(jsonData []byte, channelOtherSettings hostdto.ChannelOtherSettings, channelPassThroughEnabled bool) ([]byte, error) {
 	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || channelPassThroughEnabled {
 		return jsonData, nil
 	}
@@ -1433,7 +1437,7 @@ func RemoveDisabledFields(jsonData []byte, channelOtherSettings dto.ChannelOther
 	return jsonDataAfter, nil
 }
 
-func hasRemovableDisabledField(jsonData []byte, channelOtherSettings dto.ChannelOtherSettings) bool {
+func hasRemovableDisabledField(jsonData []byte, channelOtherSettings hostdto.ChannelOtherSettings) bool {
 	values := gjson.GetManyBytes(
 		jsonData,
 		"service_tier",

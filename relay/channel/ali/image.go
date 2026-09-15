@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -283,7 +284,7 @@ func responseAli2OpenAIImage(c *gin.Context, response *AliResponse, originBody [
 	return &imageResponse
 }
 
-func aliImageHandler(a *Adaptor, c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*types.NewAPIError, *dto.Usage) {
+func aliImageHandler(a *Adaptor, c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*hosttypes.NewAPIError, *dto.Usage) {
 	responseFormat := ""
 	if imageReq, ok := info.Request.(*dto.ImageRequest); ok {
 		responseFormat = imageReq.ResponseFormat
@@ -292,17 +293,17 @@ func aliImageHandler(a *Adaptor, c *gin.Context, resp *http.Response, info *rela
 	var aliTaskResponse AliResponse
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError), nil
+		return hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError), nil
 	}
 	service.CloseResponseBodyGracefully(resp)
 	err = common.Unmarshal(responseBody, &aliTaskResponse)
 	if err != nil {
-		return types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError), nil
+		return hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError), nil
 	}
 
 	if aliTaskResponse.Message != "" {
 		logger.LogError(c, "ali_async_task_failed: "+aliTaskResponse.Message)
-		return types.NewError(errors.New(aliTaskResponse.Message), types.ErrorCodeBadResponse), nil
+		return hosttypes.NewError(errors.New(aliTaskResponse.Message), hosttypes.ErrorCodeBadResponse), nil
 	}
 
 	var (
@@ -317,10 +318,10 @@ func aliImageHandler(a *Adaptor, c *gin.Context, resp *http.Response, info *rela
 		// 异步图片模型需要轮询任务结果
 		aliResponse, originRespBody, err = asyncTaskWait(c, info, aliTaskResponse.Output.TaskId)
 		if err != nil {
-			return types.NewError(err, types.ErrorCodeBadResponse), nil
+			return hosttypes.NewError(err, hosttypes.ErrorCodeBadResponse), nil
 		}
 		if aliResponse.Output.TaskStatus != "SUCCEEDED" {
-			return types.WithOpenAIError(types.OpenAIError{
+			return hosttypes.WithOpenAIError(types.OpenAIError{
 				Message: aliResponse.Output.Message,
 				Type:    "ali_error",
 				Param:   "",
@@ -343,7 +344,7 @@ func aliImageHandler(a *Adaptor, c *gin.Context, resp *http.Response, info *rela
 	}
 	jsonResponse, err := common.Marshal(imageResponses)
 	if err != nil {
-		return types.NewError(err, types.ErrorCodeBadResponseBody), nil
+		return hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody), nil
 	}
 	service.IOCopyBytesGracefully(c, resp, jsonResponse)
 

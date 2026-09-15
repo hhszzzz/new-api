@@ -3,6 +3,8 @@ package channelcompat
 import (
 	"crypto/sha256"
 	"fmt"
+	hostdto "github.com/QuantumNous/new-api/dto"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"net/http"
 	"strings"
 	"sync"
@@ -11,8 +13,6 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/cachex"
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/samber/hot"
 )
@@ -71,7 +71,7 @@ func ForgetProtocolAffinity(channel *model.Channel, effectiveModel string, reque
 	}
 }
 
-func IsProtocolUnsupportedError(apiError *types.NewAPIError) bool {
+func IsProtocolUnsupportedError(apiError *hosttypes.NewAPIError) bool {
 	if apiError == nil {
 		return false
 	}
@@ -103,7 +103,7 @@ func protocolAffinityKey(channel *model.Channel, effectiveModel string, requestP
 		return "", false
 	}
 	capabilities := channel.GetOtherSettings().ProtocolCapabilities
-	if capabilities == nil || capabilities.GetSelectionMode() != dto.ProtocolSelectionModeAuto {
+	if capabilities == nil || capabilities.GetSelectionMode() != hostdto.ProtocolSelectionModeAuto {
 		return "", false
 	}
 	protocols, allowConversion := capabilities.Resolve(strings.TrimSpace(effectiveModel))

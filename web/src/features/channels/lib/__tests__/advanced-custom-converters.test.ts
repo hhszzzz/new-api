@@ -18,67 +18,104 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { describe, expect, test } from 'vitest'
 
+import { protocolCatalogFixture } from '@/features/protocols/__tests__/fixtures'
+
 import {
-  getAdvancedCustomConverterDefaults,
-  getAdvancedCustomConverterOptions,
-  getDefaultAdvancedCustomIncomingPath,
-  isAdvancedCustomIncomingPathAllowed,
+  getAdvancedCustomTargetDefaults,
+  getAdvancedCustomTargetOptions,
+  parseAdvancedCustomConfig,
+  stringifyAdvancedCustomConfig,
+  validateAdvancedCustomConfig,
 } from '../advanced-custom'
 
-describe('Advanced Custom protocol bridge converters', () => {
-  test('offers Messages to Responses only for the Messages entrypoint', () => {
-    const converter = 'claude_messages_to_openai_responses' as const
+const catalog = protocolCatalogFixture.catalog
 
-    expect(getDefaultAdvancedCustomIncomingPath(converter)).toBe('/v1/messages')
-    expect(isAdvancedCustomIncomingPathAllowed('/v1/messages', converter)).toBe(
-      true
-    )
+describe('Advanced Custom catalog routes', () => {
+  test('offers only registered destinations for the incoming operation', () => {
     expect(
-      isAdvancedCustomIncomingPathAllowed('/v1/responses', converter)
-    ).toBe(false)
-    expect(
-      getAdvancedCustomConverterOptions('/v1/messages').map(
+      getAdvancedCustomTargetOptions('/v1/messages', catalog).map(
         (option) => option.value
       )
-    ).toContain(converter)
+    ).toEqual(['native', 'messages', 'responses'])
     expect(
-      getAdvancedCustomConverterDefaults(converter, '/v1/messages')
+      getAdvancedCustomTargetOptions('/v1/responses/compact', catalog)
+    ).toEqual([{ value: 'native', label: 'Native forwarding' }])
+    expect(
+      getAdvancedCustomTargetDefaults('messages', '/v1/responses', catalog)
     ).toEqual({
-      upstream_path: '/v1/responses',
-      auth: {
-        type: 'header',
-        name: 'Authorization',
-        value: 'Bearer {api_key}',
-      },
+      upstream_path: '/v1/messages',
+      auth: { type: 'header', name: 'x-api-key', value: '{api_key}' },
     })
   })
 
-  test('offers Responses to Messages only for the Responses entrypoint', () => {
-    const converter = 'openai_responses_to_claude_messages' as const
-
-    expect(getDefaultAdvancedCustomIncomingPath(converter)).toBe(
-      '/v1/responses'
+  test('imports legacy aliases without changing paths, model ordering, or authentication', () => {
+    const route = {
+      incoming_path: '/v1/messages',
+      upstream_path: '/proxy/responses',
+      converter: 'claude_messages_to_openai_responses',
+      models: ['re:^private-', 'public-model'],
+      auth: { type: 'header', name: 'X-Provider-Key', value: '{api_key}' },
+    }
+    const config = parseAdvancedCustomConfig(
+      JSON.stringify({ advanced_routes: [route] }),
+      catalog
     )
-    expect(
-      isAdvancedCustomIncomingPathAllowed('/v1/responses', converter)
-    ).toBe(true)
-    expect(isAdvancedCustomIncomingPathAllowed('/v1/messages', converter)).toBe(
-      false
-    )
-    expect(
-      getAdvancedCustomConverterOptions('/v1/responses').map(
-        (option) => option.value
-      )
-    ).toContain(converter)
-    expect(
-      getAdvancedCustomConverterDefaults(converter, '/v1/responses')
-    ).toEqual({
-      upstream_path: '/v1/messages',
-      auth: {
-        type: 'header',
-        name: 'x-api-key',
-        value: '{api_key}',
+    expect(config?.advanced_routes).toEqual([
+      {
+        incoming_path: route.incoming_path,
+        upstream_path: route.upstream_path,
+        target_protocol: 'responses',
+        models: route.models,
+        auth: route.auth,
       },
-    })
+    ])
+    expect(validateAdvancedCustomConfig(config, catalog)).toBeNull()
+    if (!config) throw new Error('Imported route configuration is missing')
+    expect(JSON.parse(stringifyAdvancedCustomConfig(config, catalog))).toEqual(
+      config
+    )
+  })
+
+  test('preserves an unknown legacy converter for backend validation instead of changing it to native', () => {
+    const config = parseAdvancedCustomConfig(
+      '{"advanced_routes":[{"incoming_path":"/v1/messages","upstream_path":"/proxy","converter":"unrecognized"}]}',
+      catalog
+    )
+    expect(config?.advanced_routes?.[0].converter).toBe('unrecognized')
+    expect(validateAdvancedCustomConfig(config, catalog)?.message).toBe(
+      'Converter is not registered'
+    )
+  })
+
+  test('rejects a target that conflicts with the imported converter or changes compact semantics', () => {
+    expect(
+      validateAdvancedCustomConfig(
+        {
+          advanced_routes: [
+            {
+              incoming_path: '/v1/messages',
+              upstream_path: '/proxy',
+              converter: 'claude_messages_to_openai_responses',
+              target_protocol: 'native',
+            },
+          ],
+        },
+        catalog
+      )?.message
+    ).toBe('Target protocol conflicts with legacy converter')
+    expect(
+      validateAdvancedCustomConfig(
+        {
+          advanced_routes: [
+            {
+              incoming_path: '/v1/responses/compact',
+              upstream_path: '/v1/messages',
+              target_protocol: 'messages',
+            },
+          ],
+        },
+        catalog
+      )?.message
+    ).toBe('Target protocol does not support this operation')
   })
 })

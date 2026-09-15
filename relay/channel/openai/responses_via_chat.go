@@ -2,6 +2,7 @@ package openai
 
 import (
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 
@@ -17,23 +18,23 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func OaiChatToResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+func OaiChatToResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *hosttypes.NewAPIError) {
 	if resp == nil || resp.Body == nil {
-		return nil, types.NewOpenAIError(fmt.Errorf("invalid response"), types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(fmt.Errorf("invalid response"), hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
 	defer service.CloseResponseBodyGracefully(resp)
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
 	}
 
 	var chatResp dto.OpenAITextResponse
 	if err := common.Unmarshal(body, &chatResp); err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	if oaiError := chatResp.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
-		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
+		return nil, hosttypes.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
 
 	upstreamResponseID := chatResp.Id
@@ -42,11 +43,11 @@ func OaiChatToResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	}
 	convertResult, err := service.ConvertResponse(c, info, types.RelayFormatOpenAIResponses, &chatResp)
 	if err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	responsesResp, ok := convertResult.Value.(*dto.OpenAIResponsesResponse)
 	if !ok {
-		return nil, types.NewOpenAIError(fmt.Errorf("expected OpenAI responses response, got %T", convertResult.Value), types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(fmt.Errorf("expected OpenAI responses response, got %T", convertResult.Value), hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	responsesResp.Model = info.PublicResponseModelName()
 	usage := convertResult.Usage
@@ -59,42 +60,42 @@ func OaiChatToResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 
 	responseBody, err := common.Marshal(responsesResp)
 	if err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
 	}
 
 	if err := service.IOCopyBytesGracefully(c, resp, responseBody); err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
 	return usage, nil
 }
 
-func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *hosttypes.NewAPIError) {
 	if resp == nil || resp.Body == nil {
-		return nil, types.NewOpenAIError(fmt.Errorf("invalid response"), types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(fmt.Errorf("invalid response"), hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
 	defer service.CloseResponseBodyGracefully(resp)
 
 	responseID := protocolstate.PublicResponseID(c, helper.GetResponseID(c))
-	state, err := relayconvert.NewResponseStreamState(types.RelayFormatOpenAI, types.RelayFormatOpenAIResponses, relayconvert.ResponseStreamOptions{
+	state, err := info.ConversionSession().StreamState(types.RelayFormatOpenAI, types.RelayFormatOpenAIResponses, relayconvert.ResponseStreamOptions{
 		ID:                 responseID,
 		Model:              info.PublicResponseModelName(),
 		EmitSequenceNumber: true,
 	})
 	if err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
-	streamErr := (*types.NewAPIError)(nil)
+	streamErr := (*hosttypes.NewAPIError)(nil)
 	upstreamCompleted := false
 
 	sendEvent := func(event relayconvert.ChatToResponsesStreamEvent) bool {
 		protocolstate.ObserveResponsesStream(c, &event.Payload)
 		data, err := common.Marshal(event.Payload)
 		if err != nil {
-			streamErr = types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
+			streamErr = hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
 			return false
 		}
 		if err := helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: event.Type}, string(data)); err != nil {
-			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+			streamErr = hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 			info.StreamStatus.MarkWriteError(err)
 			return false
 		}
@@ -108,7 +109,7 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		for _, result := range failureResults {
 			event, ok := result.Value.(relayconvert.ChatToResponsesStreamEvent)
 			if !ok {
-				streamErr = types.NewOpenAIError(fmt.Errorf("expected OAI responses stream event, got %T", result.Value), types.ErrorCodeBadResponse, http.StatusInternalServerError)
+				streamErr = hosttypes.NewOpenAIError(fmt.Errorf("expected OAI responses stream event, got %T", result.Value), hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 				return true
 			}
 			if !sendEvent(event) {
@@ -116,7 +117,7 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			}
 		}
 		if streamErr == nil {
-			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusBadGateway)
+			streamErr = hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusBadGateway)
 		}
 		info.StreamStatus.MarkTerminalFailure(streamErr)
 		return true
@@ -131,7 +132,7 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		var errorResp dto.OpenAITextResponse
 		if err := common.UnmarshalJsonStr(data, &errorResp); err == nil {
 			if oaiError := errorResp.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
-				upstreamErr := types.WithOpenAIError(*oaiError, resp.StatusCode)
+				upstreamErr := hosttypes.WithOpenAIError(*oaiError, resp.StatusCode)
 				service.MarkProtocolUnsupportedStreamError(upstreamErr)
 				if info.StreamStatus == nil || !info.StreamStatus.Snapshot().ResponseCommitted {
 					streamErr = upstreamErr
@@ -159,7 +160,7 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 				sr.Stop(streamErr)
 				return
 			}
-			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+			streamErr = hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 			sr.Stop(streamErr)
 			return
 		}
@@ -183,14 +184,14 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 				sr.Stop(streamErr)
 				return
 			}
-			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+			streamErr = hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 			sr.Stop(streamErr)
 			return
 		}
 		for _, result := range results {
 			event, ok := result.Value.(relayconvert.ChatToResponsesStreamEvent)
 			if !ok {
-				streamErr = types.NewOpenAIError(fmt.Errorf("expected OAI responses stream event, got %T", result.Value), types.ErrorCodeBadResponse, http.StatusInternalServerError)
+				streamErr = hosttypes.NewOpenAIError(fmt.Errorf("expected OAI responses stream event, got %T", result.Value), hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 				sr.Stop(streamErr)
 				return
 			}
@@ -205,13 +206,13 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		return nil, streamErr
 	}
 	if err := streamStatusError(info); err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusBadGateway)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusBadGateway)
 	}
 	if !upstreamCompleted {
 		info.StreamStatus.MarkTerminalFailure(fmt.Errorf("Chat Completions stream ended without a terminal finish_reason"))
-		return nil, types.NewOpenAIError(
+		return nil, hosttypes.NewOpenAIError(
 			fmt.Errorf("Chat Completions stream ended without a terminal finish_reason"),
-			types.ErrorCodeBadResponse,
+			hosttypes.ErrorCodeBadResponse,
 			http.StatusBadGateway,
 		)
 	}
@@ -227,12 +228,12 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		if failResponsesStream(err) {
 			return usage, streamErr
 		}
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
 	for _, result := range finalResults {
 		event, ok := result.Value.(relayconvert.ChatToResponsesStreamEvent)
 		if !ok {
-			return nil, types.NewOpenAIError(fmt.Errorf("expected OAI responses stream event, got %T", result.Value), types.ErrorCodeBadResponse, http.StatusInternalServerError)
+			return nil, hosttypes.NewOpenAIError(fmt.Errorf("expected OAI responses stream event, got %T", result.Value), hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 		}
 		if !sendEvent(event) {
 			return nil, streamErr

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -23,7 +24,6 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	pluginruntime "github.com/QuantumNous/new-api/pkg/jsplugin"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -716,7 +716,7 @@ func PrepareTaskPluginEndpoint() gin.HandlerFunc {
 				pinned.Plugin.Meta.Key,
 				intentErr.Code,
 			)
-			abortWithOpenAiMessage(c, intentErr.StatusCode, intentErr.Message, types.ErrorCode(intentErr.Code))
+			abortWithOpenAiMessage(c, intentErr.StatusCode, intentErr.Message, hosttypes.ErrorCode(intentErr.Code))
 			return
 		}
 		logger.LogDebug(

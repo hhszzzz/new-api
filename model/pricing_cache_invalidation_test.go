@@ -1,6 +1,7 @@
 package model
 
 import (
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"runtime"
 	"sync"
 	"testing"
@@ -8,7 +9,6 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -24,7 +24,7 @@ func pricingCacheModelNames() map[string]struct{} {
 
 func insertPricingCacheChannel(t *testing.T, channelID int, modelName string) {
 	t.Helper()
-	insertPricingEndpointChannel(t, channelID, constant.ChannelTypeOpenAI, dto.ChannelOtherSettings{})
+	insertPricingEndpointChannel(t, channelID, constant.ChannelTypeOpenAI, hostdto.ChannelOtherSettings{})
 	insertPricingEndpointAbility(t, channelID, modelName)
 }
 

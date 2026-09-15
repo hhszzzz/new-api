@@ -2,6 +2,7 @@ package controller
 
 import (
 	"fmt"
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -402,9 +403,9 @@ func TestListModelsUsesAdvancedCustomEndpointTypesFromPricingCache(t *testing.T)
 		Group:  "default",
 		Models: "gemini-3.5-flash",
 	}
-	channel.SetOtherSettings(dto.ChannelOtherSettings{
-		AdvancedCustom: &dto.AdvancedCustomConfig{
-			Routes: []dto.AdvancedCustomRoute{
+	channel.SetOtherSettings(hostdto.ChannelOtherSettings{
+		AdvancedCustom: &hostdto.AdvancedCustomConfig{
+			Routes: []hostdto.AdvancedCustomRoute{
 				{
 					IncomingPath: "/v1/chat/completions",
 					UpstreamPath: "/v1/chat/completions",

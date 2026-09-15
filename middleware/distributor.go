@@ -3,6 +3,7 @@ package middleware
 import (
 	"errors"
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 	"slices"
@@ -19,10 +20,7 @@ import (
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/service/channelcompat"
-	"github.com/QuantumNous/new-api/service/modelmapping"
 	"github.com/QuantumNous/new-api/service/protocolstate"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
@@ -61,7 +59,7 @@ func Distribute() func(c *gin.Context) {
 						c,
 						http.StatusNotFound,
 						"The requested model does not exist or you do not have access to it",
-						types.ErrorCodeModelNotFound,
+						hosttypes.ErrorCodeModelNotFound,
 					)
 					return
 				}
@@ -73,7 +71,7 @@ func Distribute() func(c *gin.Context) {
 						c,
 						http.StatusNotFound,
 						"The requested model does not exist or you do not have access to it",
-						types.ErrorCodeModelNotFound,
+						hosttypes.ErrorCodeModelNotFound,
 					)
 					return
 				}
@@ -133,17 +131,17 @@ func Distribute() func(c *gin.Context) {
 		if shouldSelectChannel && modelRequest.Model != "" {
 			storage, storageErr := common.GetBodyStorage(c)
 			if storageErr != nil {
-				abortWithProtocolMessage(c, http.StatusBadRequest, storageErr.Error(), types.ErrorCodeInvalidRequest)
+				abortWithProtocolMessage(c, http.StatusBadRequest, storageErr.Error(), hosttypes.ErrorCodeInvalidRequest)
 				return
 			}
 			body, bytesErr := storage.Bytes()
 			if bytesErr != nil {
-				abortWithProtocolMessage(c, http.StatusBadRequest, bytesErr.Error(), types.ErrorCodeInvalidRequest)
+				abortWithProtocolMessage(c, http.StatusBadRequest, bytesErr.Error(), hosttypes.ErrorCodeInvalidRequest)
 				return
 			}
 			protocolBinding, err = protocolstate.ResolveSelectionBinding(c, c.Request.URL.Path, modelRequest.Model, body)
 			if err != nil {
-				abortWithProtocolMessage(c, http.StatusBadRequest, err.Error(), types.ErrorCodeInvalidRequest)
+				abortWithProtocolMessage(c, http.StatusBadRequest, err.Error(), hosttypes.ErrorCodeInvalidRequest)
 				return
 			}
 			if protocolBinding != nil {
@@ -160,7 +158,7 @@ func Distribute() func(c *gin.Context) {
 			channel, err = model.CacheGetChannel(pin.ChannelId)
 			if err != nil {
 				if pin.Source == taskdto.PinSourceOriginTask {
-					abortWithProtocolMessage(c, http.StatusBadRequest, "origin_task_channel_disabled", types.ErrorCode("origin_task_channel_disabled"))
+					abortWithProtocolMessage(c, http.StatusBadRequest, "origin_task_channel_disabled", hosttypes.ErrorCode("origin_task_channel_disabled"))
 				} else {
 					abortWithProtocolMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidChannelId))
 				}
@@ -168,7 +166,7 @@ func Distribute() func(c *gin.Context) {
 			}
 			if channel.Status != common.ChannelStatusEnabled || !channel.IsSchedulableAt(time.Now()) {
 				if pin.Source == taskdto.PinSourceOriginTask {
-					abortWithProtocolMessage(c, http.StatusBadRequest, "origin_task_channel_disabled", types.ErrorCode("origin_task_channel_disabled"))
+					abortWithProtocolMessage(c, http.StatusBadRequest, "origin_task_channel_disabled", hosttypes.ErrorCode("origin_task_channel_disabled"))
 				} else {
 					abortWithProtocolMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorChannelDisabled))
 				}
@@ -181,7 +179,7 @@ func Distribute() func(c *gin.Context) {
 				abortWithProtocolMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorNoAvailableChannel, map[string]any{
 					"Group": common.GetContextKeyString(c, constant.ContextKeyUsingGroup),
 					"Model": modelRequest.Model,
-				}), types.ErrorCode(kind))
+				}), hosttypes.ErrorCode(kind))
 				return
 			}
 			if err := validateSelectedRouteChannel(c, channel, c.Request.URL.Path); err != nil {
@@ -276,7 +274,7 @@ func Distribute() func(c *gin.Context) {
 							if reason, ok := common.GetContextKeyType[string](c, constant.ContextKeyProtocolIncompatibleReason); ok && reason != "" {
 								message = fmt.Sprintf("%s: %s", message, reason)
 							}
-							abortWithProtocolMessage(c, http.StatusBadRequest, message, types.ErrorCodeInvalidRequest)
+							abortWithProtocolMessage(c, http.StatusBadRequest, message, hosttypes.ErrorCodeInvalidRequest)
 							return
 						}
 						message := i18n.T(c, i18n.MsgDistributorGetChannelFailed, map[string]any{"Group": usingGroup, "Model": modelRequest.Model, "Error": err.Error()})
@@ -285,11 +283,11 @@ func Distribute() func(c *gin.Context) {
 						//	common.SysError(fmt.Sprintf("渠道不存在：%d", channel.Id))
 						//	message = "数据库一致性已被破坏，请联系管理员"
 						//}
-						abortWithProtocolMessage(c, http.StatusServiceUnavailable, message, types.ErrorCodeModelNotFound)
+						abortWithProtocolMessage(c, http.StatusServiceUnavailable, message, hosttypes.ErrorCodeModelNotFound)
 						return
 					}
 					if channel == nil {
-						abortWithProtocolMessage(c, http.StatusServiceUnavailable, noAvailableChannelMessage(c, usingGroup, modelRequest.Model), types.ErrorCodeModelNotFound)
+						abortWithProtocolMessage(c, http.StatusServiceUnavailable, noAvailableChannelMessage(c, usingGroup, modelRequest.Model), hosttypes.ErrorCodeModelNotFound)
 						return
 					}
 				}
@@ -301,7 +299,7 @@ func Distribute() func(c *gin.Context) {
 				if kind == taskdto.FilterTaskPluginIdentity {
 					logTaskPluginChannelDecision(c, channel, modelRequest.Model, "channel_rejected", "identity_mismatch")
 				}
-				abortWithProtocolMessage(c, http.StatusServiceUnavailable, noAvailableChannelMessage(c, common.GetContextKeyString(c, constant.ContextKeyUsingGroup), modelRequest.Model), types.ErrorCodeModelNotFound)
+				abortWithProtocolMessage(c, http.StatusServiceUnavailable, noAvailableChannelMessage(c, common.GetContextKeyString(c, constant.ContextKeyUsingGroup), modelRequest.Model), hosttypes.ErrorCodeModelNotFound)
 				return
 			}
 			if setupErr := SetupContextForSelectedChannel(c, channel, modelRequest.Model, true); setupErr != nil {
@@ -378,15 +376,8 @@ func channelSupportsRequestPath(channel *model.Channel, requestPath string, requ
 	if config == nil {
 		return false
 	}
-	resolved, err := modelmapping.Resolve(channel.GetModelMapping(), requestModel)
-	if err != nil {
-		return false
-	}
-	if config.SupportsPathForModel(requestPath, resolved.Model) {
-		return true
-	}
-	mainPath, ok := channelcompat.MainProtocolPathForAuxiliaryRequest(requestPath)
-	return ok && config.SupportsPathForModel(mainPath, resolved.Model)
+	_, matched := channel.MatchAdvancedCustomRoute(requestPath, requestModel, config)
+	return matched
 }
 
 // noAvailableChannelMessage explains a 503 for a task-plugin-claimed model.
@@ -828,26 +819,26 @@ func getTaskOriginModelName(c *gin.Context) (string, error) {
 	return "", nil
 }
 
-func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, modelName string, enforceSchedule bool) *types.NewAPIError {
+func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, modelName string, enforceSchedule bool) *hosttypes.NewAPIError {
 	c.Set("original_model", modelName) // for retry
 	expectedPlugin := c.GetString("expected_task_plugin_key")
 	if channel == nil {
 		logTaskPluginChannelDecision(c, nil, modelName, "channel_rejected", "nil_channel")
-		return types.NewError(errors.New("channel is nil"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		return hosttypes.NewError(errors.New("channel is nil"), hosttypes.ErrorCodeGetChannelFailed, hosttypes.ErrOptionWithSkipRetry())
 	}
 	if enforceSchedule && !channel.Schedule.IsAvailableAt(time.Now()) {
-		return types.NewErrorWithStatusCode(
+		return hosttypes.NewErrorWithStatusCode(
 			ErrChannelOutsideSchedule,
-			types.ErrorCodeGetChannelFailed,
+			hosttypes.ErrorCodeGetChannelFailed,
 			http.StatusServiceUnavailable,
 		)
 	}
 	if expectedPlugin != "" && !channelMatchesExpectedTaskPlugin(c, channel, expectedPlugin) {
 		logTaskPluginChannelDecision(c, channel, modelName, "channel_rejected", "identity_mismatch")
-		return types.NewError(
+		return hosttypes.NewError(
 			errors.New("selected channel does not match the pinned task plugin"),
-			types.ErrorCodeGetChannelFailed,
-			types.ErrOptionWithSkipRetry(),
+			hosttypes.ErrorCodeGetChannelFailed,
+			hosttypes.ErrOptionWithSkipRetry(),
 		)
 	}
 	if candidate, matched := pinnedEndpointCandidateForChannel(c, channel, expectedPlugin); matched {
@@ -881,15 +872,15 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 		selectionGroup = common.GetContextKeyString(c, constant.ContextKeyAutoGroup)
 	}
 	if selectionGroup != "" && !groupAllowsRequestClient(c, selectionGroup) {
-		return types.NewErrorWithStatusCode(
+		return hosttypes.NewErrorWithStatusCode(
 			fmt.Errorf("group %s does not allow client %s", selectionGroup, requestClient(c)),
-			types.ErrorCodeInvalidRequest,
+			hosttypes.ErrorCodeInvalidRequest,
 			http.StatusForbidden,
-			types.ErrOptionWithSkipRetry(),
+			hosttypes.ErrOptionWithSkipRetry(),
 		)
 	}
 	if err := applySelectedChannelCompatibility(c, channel, selectionModel); err != nil {
-		return types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		return hosttypes.NewErrorWithStatusCode(err, hosttypes.ErrorCodeInvalidRequest, http.StatusBadRequest, hosttypes.ErrOptionWithSkipRetry())
 	}
 	// A retry reuses the Gin context. Clear provider-specific values before
 	// installing the newly selected channel so URL, header, and adaptor state

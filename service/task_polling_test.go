@@ -16,7 +16,6 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -170,7 +169,7 @@ func seedTaskPollingChannel(t *testing.T, id int, disableSleep bool) {
 		Status: common.ChannelStatusEnabled,
 	}
 	if disableSleep {
-		ch.SetOtherSettings(dto.ChannelOtherSettings{DisableTaskPollingSleep: true})
+		ch.SetOtherSettings(taskdto.ChannelOtherSettings{DisableTaskPollingSleep: true})
 	}
 	require.NoError(t, model.DB.Create(ch).Error)
 }

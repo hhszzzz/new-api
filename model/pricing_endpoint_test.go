@@ -2,11 +2,11 @@ package model
 
 import (
 	"fmt"
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -36,7 +36,7 @@ func resetPricingEndpointTestTables(t *testing.T) {
 func TestPricingEndpointGettersRefreshAfterInvalidation(t *testing.T) {
 	resetPricingEndpointTestTables(t)
 
-	insertPricingEndpointChannel(t, 100, constant.ChannelTypeOpenAI, dto.ChannelOtherSettings{})
+	insertPricingEndpointChannel(t, 100, constant.ChannelTypeOpenAI, hostdto.ChannelOtherSettings{})
 	insertPricingEndpointAbility(t, 100, "cache-endpoint-model")
 	require.NotEmpty(t, GetPricing())
 	require.Equal(t, []constant.EndpointType{constant.EndpointTypeOpenAI}, GetModelSupportEndpointTypes("cache-endpoint-model"))
@@ -57,7 +57,7 @@ func TestPricingEndpointGettersRefreshAfterInvalidation(t *testing.T) {
 	}, endpointMap[string(constant.EndpointTypeGemini)])
 }
 
-func insertPricingEndpointChannel(t *testing.T, channelID int, channelType int, settings dto.ChannelOtherSettings) {
+func insertPricingEndpointChannel(t *testing.T, channelID int, channelType int, settings hostdto.ChannelOtherSettings) {
 	t.Helper()
 	channel := &Channel{
 		Id:     channelID,
@@ -82,9 +82,9 @@ func insertPricingEndpointAbility(t *testing.T, channelID int, modelName string)
 	}).Error)
 }
 
-func pricingEndpointAdvancedCustomConfig(routes ...dto.AdvancedCustomRoute) dto.ChannelOtherSettings {
-	return dto.ChannelOtherSettings{
-		AdvancedCustom: &dto.AdvancedCustomConfig{
+func pricingEndpointAdvancedCustomConfig(routes ...hostdto.AdvancedCustomRoute) hostdto.ChannelOtherSettings {
+	return hostdto.ChannelOtherSettings{
+		AdvancedCustom: &hostdto.AdvancedCustomConfig{
 			Routes: routes,
 		},
 	}
@@ -108,11 +108,11 @@ func TestPricingAdvancedCustomUsesConfiguredEndpointTypes(t *testing.T) {
 	resetPricingEndpointTestTables(t)
 
 	insertPricingEndpointChannel(t, 101, constant.ChannelTypeAdvancedCustom, pricingEndpointAdvancedCustomConfig(
-		dto.AdvancedCustomRoute{
+		hostdto.AdvancedCustomRoute{
 			IncomingPath: "/v1/chat/completions",
 			UpstreamPath: "/v1/chat/completions",
 		},
-		dto.AdvancedCustomRoute{
+		hostdto.AdvancedCustomRoute{
 			IncomingPath: "/v1/responses",
 			UpstreamPath: "/v1beta/models/{model}:generateContent",
 			Converter:    "openai_responses_to_gemini_generate_content",
@@ -136,7 +136,7 @@ func TestPricingAdvancedCustomUsesConfiguredEndpointTypes(t *testing.T) {
 func TestPricingEnableGroupsAreSortedDeterministically(t *testing.T) {
 	resetPricingEndpointTestTables(t)
 
-	insertPricingEndpointChannel(t, 102, constant.ChannelTypeOpenAI, dto.ChannelOtherSettings{})
+	insertPricingEndpointChannel(t, 102, constant.ChannelTypeOpenAI, hostdto.ChannelOtherSettings{})
 	// Insert abilities deliberately out of lexicographic order; Set.Items()
 	// iterates a Go map, so without sorting the API order would be random.
 	for _, group := range []string{"vip", "default", "any"} {
@@ -157,7 +157,7 @@ func TestPricingModelMetadataEndpointsMergeWithAdvancedCustomInference(t *testin
 	resetPricingEndpointTestTables(t)
 
 	insertPricingEndpointChannel(t, 103, constant.ChannelTypeAdvancedCustom, pricingEndpointAdvancedCustomConfig(
-		dto.AdvancedCustomRoute{
+		hostdto.AdvancedCustomRoute{
 			IncomingPath: "/v1/responses",
 			UpstreamPath: "/v1beta/models/{model}:generateContent",
 			Converter:    "openai_responses_to_gemini_generate_content",
@@ -186,7 +186,7 @@ func TestPricingModelMetadataEndpointsCanProvideEndpointWithoutChannelInference(
 	resetPricingEndpointTestTables(t)
 
 	insertPricingEndpointChannel(t, 104, constant.ChannelTypeAdvancedCustom, pricingEndpointAdvancedCustomConfig(
-		dto.AdvancedCustomRoute{
+		hostdto.AdvancedCustomRoute{
 			IncomingPath: "/v1/responses",
 			UpstreamPath: "/v1beta/models/{model}:generateContent",
 			Converter:    "openai_responses_to_gemini_generate_content",
@@ -211,7 +211,7 @@ func TestPricingModelMetadataEndpointsCanProvideEndpointWithoutChannelInference(
 func TestPricingAdvancedCustomMissingConfigFallsBackToChannelType(t *testing.T) {
 	resetPricingEndpointTestTables(t)
 
-	insertPricingEndpointChannel(t, 102, constant.ChannelTypeAdvancedCustom, dto.ChannelOtherSettings{})
+	insertPricingEndpointChannel(t, 102, constant.ChannelTypeAdvancedCustom, hostdto.ChannelOtherSettings{})
 	insertPricingEndpointAbility(t, 102, "gpt-4o")
 
 	byModel := pricingEndpointTypesByModel(t)
@@ -222,9 +222,9 @@ func TestPricingAdvancedCustomMissingConfigFallsBackToChannelType(t *testing.T) 
 func TestPricingNativeChannelEndpointTypesUnchanged(t *testing.T) {
 	resetPricingEndpointTestTables(t)
 
-	insertPricingEndpointChannel(t, 201, constant.ChannelTypeOpenAI, dto.ChannelOtherSettings{})
-	insertPricingEndpointChannel(t, 202, constant.ChannelTypeGemini, dto.ChannelOtherSettings{})
-	insertPricingEndpointChannel(t, 203, constant.ChannelTypeAnthropic, dto.ChannelOtherSettings{})
+	insertPricingEndpointChannel(t, 201, constant.ChannelTypeOpenAI, hostdto.ChannelOtherSettings{})
+	insertPricingEndpointChannel(t, 202, constant.ChannelTypeGemini, hostdto.ChannelOtherSettings{})
+	insertPricingEndpointChannel(t, 203, constant.ChannelTypeAnthropic, hostdto.ChannelOtherSettings{})
 	insertPricingEndpointAbility(t, 201, "gpt-4o")
 	insertPricingEndpointAbility(t, 202, "gemini-2.5-flash")
 	insertPricingEndpointAbility(t, 203, "claude-3-5-sonnet")
@@ -240,7 +240,7 @@ func TestInitChannelCacheInvalidatesPricingCache(t *testing.T) {
 	resetPricingEndpointTestTables(t)
 
 	insertPricingEndpointChannel(t, 301, constant.ChannelTypeAdvancedCustom, pricingEndpointAdvancedCustomConfig(
-		dto.AdvancedCustomRoute{
+		hostdto.AdvancedCustomRoute{
 			IncomingPath: "/v1/chat/completions",
 			UpstreamPath: "/v1/chat/completions",
 		},
@@ -254,11 +254,11 @@ func TestInitChannelCacheInvalidatesPricingCache(t *testing.T) {
 	var channel Channel
 	require.NoError(t, DB.First(&channel, "id = ?", 301).Error)
 	channel.SetOtherSettings(pricingEndpointAdvancedCustomConfig(
-		dto.AdvancedCustomRoute{
+		hostdto.AdvancedCustomRoute{
 			IncomingPath: "/v1/chat/completions",
 			UpstreamPath: "/v1/chat/completions",
 		},
-		dto.AdvancedCustomRoute{
+		hostdto.AdvancedCustomRoute{
 			IncomingPath: "/v1/responses",
 			UpstreamPath: "/v1beta/models/{model}:generateContent",
 			Converter:    "openai_responses_to_gemini_generate_content",
@@ -279,11 +279,11 @@ func TestInitChannelCacheInvalidatesStartupPricingBuiltBeforeChannelCache(t *tes
 	resetPricingEndpointTestTables(t)
 
 	insertPricingEndpointChannel(t, 302, constant.ChannelTypeAdvancedCustom, pricingEndpointAdvancedCustomConfig(
-		dto.AdvancedCustomRoute{
+		hostdto.AdvancedCustomRoute{
 			IncomingPath: "/v1/chat/completions",
 			UpstreamPath: "/v1/chat/completions",
 		},
-		dto.AdvancedCustomRoute{
+		hostdto.AdvancedCustomRoute{
 			IncomingPath: "/v1/responses",
 			UpstreamPath: "/v1beta/models/{model}:generateContent",
 			Converter:    "openai_responses_to_gemini_generate_content",
@@ -314,7 +314,7 @@ func TestCacheUpdateChannelSyncsAdvancedCustomConfig(t *testing.T) {
 		Status: common.ChannelStatusEnabled,
 		Name:   "channel-401",
 	}
-	channel.SetOtherSettings(pricingEndpointAdvancedCustomConfig(dto.AdvancedCustomRoute{
+	channel.SetOtherSettings(pricingEndpointAdvancedCustomConfig(hostdto.AdvancedCustomRoute{
 		IncomingPath: "/v1/responses",
 		UpstreamPath: "/v1beta/models/{model}:generateContent",
 		Converter:    "openai_responses_to_gemini_generate_content",
@@ -324,7 +324,7 @@ func TestCacheUpdateChannelSyncsAdvancedCustomConfig(t *testing.T) {
 	require.NotNil(t, channel2advancedCustomConfig[401])
 	assert.Equal(t, []constant.EndpointType{constant.EndpointTypeOpenAIResponse}, channel2advancedCustomConfig[401].SupportedEndpointTypesForModel("gemini-3.5-flash"))
 
-	channel.SetOtherSettings(pricingEndpointAdvancedCustomConfig(dto.AdvancedCustomRoute{
+	channel.SetOtherSettings(pricingEndpointAdvancedCustomConfig(hostdto.AdvancedCustomRoute{
 		IncomingPath: "/v1/chat/completions",
 		UpstreamPath: "/v1/chat/completions",
 	}))

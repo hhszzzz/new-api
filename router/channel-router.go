@@ -37,6 +37,10 @@ func registerChannelRoutes(apiRouter *gin.RouterGroup) {
 }
 
 var channelPermissionRoutes = []permissionRoute{
+	{method: http.MethodGet, path: "/protocol/catalog", permission: authz.ChannelRead, handler: controller.GetProtocolCatalog},
+	{method: http.MethodPost, path: "/protocol/normalize", permission: authz.ChannelSensitiveWrite, handler: controller.NormalizeProtocolConfiguration},
+	{method: http.MethodPost, path: "/protocol/plan", permission: authz.ChannelRead, handler: controller.PreviewProtocolPlan},
+	{method: http.MethodGet, path: "/protocol/migration", permission: authz.ChannelRead, handler: controller.PreviewProtocolMigration},
 	{method: http.MethodGet, path: "/aggregates", permission: authz.ChannelRead, handler: controller.GetChannelAggregates},
 	{method: http.MethodPost, path: "/aggregates", permission: authz.ChannelSensitiveWrite, handler: controller.CreateChannelAggregate},
 	{method: http.MethodPost, path: "/aggregates/merge", permission: authz.ChannelSensitiveWrite, handler: controller.MergeChannelsIntoAggregate},

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"net/http"
 	"net/url"
 	"sort"
@@ -16,7 +17,6 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/QuantumNous/new-api/setting"
@@ -1894,7 +1894,7 @@ func UpdateUserSetting(c *gin.Context) {
 	}
 
 	// 验证预警类型
-	if req.QuotaWarningType != dto.NotifyTypeEmail && req.QuotaWarningType != dto.NotifyTypeWebhook && req.QuotaWarningType != dto.NotifyTypeBark && req.QuotaWarningType != dto.NotifyTypeGotify {
+	if req.QuotaWarningType != hostdto.NotifyTypeEmail && req.QuotaWarningType != hostdto.NotifyTypeWebhook && req.QuotaWarningType != hostdto.NotifyTypeBark && req.QuotaWarningType != hostdto.NotifyTypeGotify {
 		common.ApiErrorI18n(c, i18n.MsgSettingInvalidType)
 		return
 	}
@@ -1906,7 +1906,7 @@ func UpdateUserSetting(c *gin.Context) {
 	}
 
 	// 如果是webhook类型,验证webhook地址
-	if req.QuotaWarningType == dto.NotifyTypeWebhook {
+	if req.QuotaWarningType == hostdto.NotifyTypeWebhook {
 		if req.WebhookUrl == "" {
 			common.ApiErrorI18n(c, i18n.MsgSettingWebhookEmpty)
 			return
@@ -1919,7 +1919,7 @@ func UpdateUserSetting(c *gin.Context) {
 	}
 
 	// 如果是邮件类型，验证邮箱地址
-	if req.QuotaWarningType == dto.NotifyTypeEmail && req.NotificationEmail != "" {
+	if req.QuotaWarningType == hostdto.NotifyTypeEmail && req.NotificationEmail != "" {
 		// 验证邮箱格式
 		if !strings.Contains(req.NotificationEmail, "@") {
 			common.ApiErrorI18n(c, i18n.MsgSettingEmailInvalid)
@@ -1928,7 +1928,7 @@ func UpdateUserSetting(c *gin.Context) {
 	}
 
 	// 如果是Bark类型，验证Bark URL
-	if req.QuotaWarningType == dto.NotifyTypeBark {
+	if req.QuotaWarningType == hostdto.NotifyTypeBark {
 		if req.BarkUrl == "" {
 			common.ApiErrorI18n(c, i18n.MsgSettingBarkUrlEmpty)
 			return
@@ -1946,7 +1946,7 @@ func UpdateUserSetting(c *gin.Context) {
 	}
 
 	// 如果是Gotify类型，验证Gotify URL和Token
-	if req.QuotaWarningType == dto.NotifyTypeGotify {
+	if req.QuotaWarningType == hostdto.NotifyTypeGotify {
 		if req.GotifyUrl == "" {
 			common.ApiErrorI18n(c, i18n.MsgSettingGotifyUrlEmpty)
 			return
@@ -1980,7 +1980,7 @@ func UpdateUserSetting(c *gin.Context) {
 	}
 
 	// 构建设置
-	settings := dto.UserSetting{
+	settings := hostdto.UserSetting{
 		NotifyType:                       req.QuotaWarningType,
 		QuotaWarningThreshold:            req.QuotaWarningThreshold,
 		UpstreamModelUpdateNotifyEnabled: upstreamModelUpdateNotifyEnabled,
@@ -1989,7 +1989,7 @@ func UpdateUserSetting(c *gin.Context) {
 	}
 
 	// 如果是webhook类型,添加webhook相关设置
-	if req.QuotaWarningType == dto.NotifyTypeWebhook {
+	if req.QuotaWarningType == hostdto.NotifyTypeWebhook {
 		settings.WebhookUrl = req.WebhookUrl
 		if req.WebhookSecret != "" {
 			settings.WebhookSecret = req.WebhookSecret
@@ -1997,17 +1997,17 @@ func UpdateUserSetting(c *gin.Context) {
 	}
 
 	// 如果提供了通知邮箱，添加到设置中
-	if req.QuotaWarningType == dto.NotifyTypeEmail && req.NotificationEmail != "" {
+	if req.QuotaWarningType == hostdto.NotifyTypeEmail && req.NotificationEmail != "" {
 		settings.NotificationEmail = req.NotificationEmail
 	}
 
 	// 如果是Bark类型，添加Bark URL到设置中
-	if req.QuotaWarningType == dto.NotifyTypeBark {
+	if req.QuotaWarningType == hostdto.NotifyTypeBark {
 		settings.BarkUrl = req.BarkUrl
 	}
 
 	// 如果是Gotify类型，添加Gotify配置到设置中
-	if req.QuotaWarningType == dto.NotifyTypeGotify {
+	if req.QuotaWarningType == hostdto.NotifyTypeGotify {
 		settings.GotifyUrl = req.GotifyUrl
 		settings.GotifyToken = req.GotifyToken
 		// Gotify优先级范围0-10，超出范围则使用默认值5
@@ -2038,12 +2038,12 @@ func UpdateUserSetting(c *gin.Context) {
 // It is separate from UpdateUserSetting because the payload is a nested object
 // rather than one of that endpoint's flat fields.
 func UpdateUserRadarAutoEffort(c *gin.Context) {
-	var request dto.RadarAutoEffortSetting
+	var request hostdto.RadarAutoEffortSetting
 	if err := c.ShouldBindJSON(&request); err != nil {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
-	normalized, err := dto.NormalizeRadarAutoEffortSetting(request)
+	normalized, err := hostdto.NormalizeRadarAutoEffortSetting(request)
 	if err != nil {
 		common.ApiErrorMsg(c, err.Error())
 		return

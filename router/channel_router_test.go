@@ -2,6 +2,7 @@ package router
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"testing"
 
@@ -39,6 +40,21 @@ func TestChannelStatusRoutesRegisterWithoutConflict(t *testing.T) {
 	require.NotPanics(t, func() {
 		registerChannelRoutes(api)
 	})
+}
+
+func TestProtocolManagementRoutesRequireAuthentication(t *testing.T) {
+	engine := gin.New()
+	registerChannelRoutes(engine.Group("/api"))
+	for _, endpoint := range []struct{ method, path string }{
+		{http.MethodGet, "/protocol/catalog"},
+		{http.MethodPost, "/protocol/plan"},
+		{http.MethodPost, "/protocol/normalize"},
+		{http.MethodGet, "/protocol/migration"},
+	} {
+		response := httptest.NewRecorder()
+		engine.ServeHTTP(response, httptest.NewRequest(endpoint.method, "/api/channel"+endpoint.path, nil))
+		assert.Equal(t, http.StatusUnauthorized, response.Code, endpoint.path)
+	}
 }
 
 func assertChannelRoutePermission(t *testing.T, method string, path string, permission authz.Permission, handler any) {

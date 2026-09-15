@@ -146,7 +146,7 @@ func TestOaiChatBufferedStreamHandlerRestoresResponsesExtendedTools(t *testing.T
 	c.Request = c.Request.WithContext(relayconvert.WithProtocolBridgeContext(c.Request.Context()))
 	info.RelayFormat = types.RelayFormatOpenAIResponses
 	info.OriginModelName = "gpt-public"
-	requestResult, err := relayconvert.ConvertRequest(c, info, types.RelayFormatOpenAI, &dto.OpenAIResponsesRequest{
+	requestResult, err := info.ConversionSession().Request(c, types.RelayFormatOpenAI, &dto.OpenAIResponsesRequest{
 		Model: "gpt-public",
 		Input: input,
 		Tools: tools,

@@ -2,11 +2,15 @@ package aws
 
 import (
 	"fmt"
+	hostdto "github.com/QuantumNous/new-api/dto"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 	"strings"
 
+	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/claude"
+	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -18,10 +22,11 @@ import (
 )
 
 type Adaptor struct {
-	AwsClient  *bedrockruntime.Client
-	AwsModelId string
-	AwsReq     any
-	IsNova     bool
+	AwsClient   *bedrockruntime.Client
+	AwsModelId  string
+	InvokeInput *bedrockruntime.InvokeModelInput
+	StreamInput *bedrockruntime.InvokeModelWithResponseStreamInput
+	IsNova      bool
 }
 
 func parseBedrockAPIKey(value string) (apiKey string, region string, err error) {
@@ -97,7 +102,7 @@ func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
 }
 
 func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
-	if info.ChannelOtherSettings.AwsKeyType == dto.AwsKeyTypeApiKey {
+	if info.ChannelOtherSettings.AwsKeyType == hostdto.AwsKeyTypeApiKey {
 		_, _, err := parseBedrockAPIKey(info.ApiKey)
 		if err != nil {
 			return "", err
@@ -108,7 +113,7 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) error {
 	claude.CommonClaudeHeadersOperation(c, req, info)
-	if info.ChannelOtherSettings.AwsKeyType == dto.AwsKeyTypeApiKey {
+	if info.ChannelOtherSettings.AwsKeyType == hostdto.AwsKeyTypeApiKey {
 		_, _, err := parseBedrockAPIKey(info.ApiKey)
 		if err != nil {
 			return err
@@ -165,21 +170,18 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	return a.ConvertClaudeRequest(c, info, claudeRequest)
 }
 
-func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {
-	return doAwsClientRequest(c, info, a, requestBody)
+func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (*channel.TransportResult, error) {
+	if err := prepareAwsRequest(c, info, a, requestBody); err != nil {
+		return nil, err
+	}
+	return a.invoke(c, info)
 }
 
-func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage any, err *types.NewAPIError) {
+func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage dto.UsageResult, err *hosttypes.NewAPIError) {
 	if a.IsNova {
-		err, usage = handleNovaRequest(c, info, a)
-	} else {
-		if info.IsStream {
-			err, usage = awsStreamHandler(c, info, a)
-		} else {
-			err, usage = awsHandler(c, info, a)
-		}
+		return (&openai.Adaptor{}).DoResponse(c, resp, info)
 	}
-	return
+	return (&claude.Adaptor{}).DoResponse(c, resp, info)
 }
 
 func (a *Adaptor) GetModelList() (models []string) {

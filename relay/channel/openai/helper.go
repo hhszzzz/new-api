@@ -20,11 +20,11 @@ import (
 )
 
 // 辅助函数
-func HandleStreamFormat(c *gin.Context, info *relaycommon.RelayInfo, data string, forceFormat bool, thinkToContent bool) error {
+func HandleStreamFormat(c *gin.Context, info *relaycommon.RelayInfo, data string) error {
 	switch info.RelayFormat {
 	case types.RelayFormatOpenAI:
 		info.SendResponseCount++
-		return sendStreamData(c, info, data, forceFormat, thinkToContent)
+		return sendStreamData(c, info, data)
 	case types.RelayFormatClaude:
 		info.SendResponseCount++
 		return handleClaudeFormat(c, data, info)
@@ -89,7 +89,7 @@ func chatToGeminiStreamState(info *relaycommon.RelayInfo, streamResponse *dto.Ch
 		return state, nil
 	}
 
-	state, err := relayconvert.NewResponseStreamState(types.RelayFormatOpenAI, types.RelayFormatGemini, relayconvert.ResponseStreamOptions{
+	state, err := info.ConversionSession().StreamState(types.RelayFormatOpenAI, types.RelayFormatGemini, relayconvert.ResponseStreamOptions{
 		ID:      streamResponse.Id,
 		Model:   streamResponse.Model,
 		Created: streamResponse.Created,

@@ -3,6 +3,7 @@ package aws
 import (
 	"bytes"
 	"context"
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -13,7 +14,6 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert"
 	"github.com/QuantumNous/new-api/relaykit/types"
-	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -25,8 +25,8 @@ func TestAPIKeyModeUsesSDKBearerAuthentication(t *testing.T) {
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{
 		ApiKey:            "bedrock-secret|us-west-2",
 		UpstreamModelName: "claude-sonnet-4-6",
-		ChannelOtherSettings: dto.ChannelOtherSettings{
-			AwsKeyType: dto.AwsKeyTypeApiKey,
+		ChannelOtherSettings: hostdto.ChannelOtherSettings{
+			AwsKeyType: hostdto.AwsKeyTypeApiKey,
 		},
 	}}
 	adaptor := &Adaptor{}
@@ -56,17 +56,17 @@ func TestAPIKeyModeBuildsAnthropicInvokeModelRequest(t *testing.T) {
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{
 		ApiKey:            "bedrock-secret|us-west-2",
 		UpstreamModelName: "claude-sonnet-4-6",
-		ChannelOtherSettings: dto.ChannelOtherSettings{
-			AwsKeyType: dto.AwsKeyTypeApiKey,
+		ChannelOtherSettings: hostdto.ChannelOtherSettings{
+			AwsKeyType: hostdto.AwsKeyTypeApiKey,
 		},
 	}}
 	adaptor := &Adaptor{}
 
-	_, err := doAwsClientRequest(ctx, info, adaptor, bytes.NewBufferString(`{"messages":[{"role":"user","content":"hello"}],"max_tokens":128}`))
+	err := prepareAwsRequest(ctx, info, adaptor, bytes.NewBufferString(`{"messages":[{"role":"user","content":"hello"}],"max_tokens":128}`))
 	require.NoError(t, err)
 
-	invokeRequest, ok := adaptor.AwsReq.(*bedrockruntime.InvokeModelInput)
-	require.True(t, ok)
+	invokeRequest := adaptor.InvokeInput
+	require.NotNil(t, invokeRequest)
 	assert.Equal(t, "us.anthropic.claude-sonnet-4-6", *invokeRequest.ModelId)
 
 	var payload map[string]any
@@ -82,8 +82,8 @@ func TestAPIKeyModeRejectsMissingCredentialOrRegion(t *testing.T) {
 		t.Run(apiKey, func(t *testing.T) {
 			info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{
 				ApiKey: apiKey,
-				ChannelOtherSettings: dto.ChannelOtherSettings{
-					AwsKeyType: dto.AwsKeyTypeApiKey,
+				ChannelOtherSettings: hostdto.ChannelOtherSettings{
+					AwsKeyType: hostdto.AwsKeyTypeApiKey,
 				},
 			}}
 
@@ -204,7 +204,7 @@ func TestNovaToolUseResponseRestoresResponsesCustomTool(t *testing.T) {
 			"name": "exec",
 		}}),
 	}
-	converted, err := relayconvert.ConvertRequest(ctx, info, types.RelayFormatOpenAI, request)
+	converted, err := info.ConversionSession().Request(ctx, types.RelayFormatOpenAI, request)
 	require.NoError(t, err)
 	chatRequest, ok := converted.Value.(*dto.GeneralOpenAIRequest)
 	require.True(t, ok)

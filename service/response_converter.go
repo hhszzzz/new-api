@@ -8,7 +8,7 @@ import (
 )
 
 func ConvertResponse(c *gin.Context, info *relaycommon.RelayInfo, target types.RelayFormat, response any) (*relayconvert.ResponseResult, error) {
-	result, err := relayconvert.ConvertResponse(c, info, target, response)
+	result, err := info.ConversionSession().Response(c, target, response)
 	if result != nil {
 		info.RecordConversionDiagnostics(c, result.Diagnostics)
 	}
@@ -16,7 +16,7 @@ func ConvertResponse(c *gin.Context, info *relaycommon.RelayInfo, target types.R
 }
 
 func ConvertStreamResponse(c *gin.Context, info *relaycommon.RelayInfo, target types.RelayFormat, response any) (*relayconvert.ResponseResult, error) {
-	result, err := relayconvert.ConvertStreamResponse(c, info, target, response)
+	result, err := info.ConversionSession().StreamResponse(c, target, response)
 	if result != nil {
 		info.RecordConversionDiagnostics(c, result.Diagnostics)
 	}
@@ -24,7 +24,7 @@ func ConvertStreamResponse(c *gin.Context, info *relaycommon.RelayInfo, target t
 }
 
 func ConvertStreamResponseChunk(c *gin.Context, info *relaycommon.RelayInfo, state *relayconvert.ResponseStreamState, response any) ([]relayconvert.ResponseResult, error) {
-	results, err := relayconvert.ConvertStreamResponseChunk(c, info, state, response)
+	results, err := info.ConversionSession().Stream(c, state, response)
 	if state != nil {
 		info.RecordConversionDiagnostics(c, state.Diagnostics())
 	}
@@ -32,7 +32,7 @@ func ConvertStreamResponseChunk(c *gin.Context, info *relaycommon.RelayInfo, sta
 }
 
 func FinalizeStreamResponse(c *gin.Context, info *relaycommon.RelayInfo, state *relayconvert.ResponseStreamState) ([]relayconvert.ResponseResult, error) {
-	results, err := relayconvert.FinalizeStreamResponse(c, info, state)
+	results, err := info.ConversionSession().Finish(c, state)
 	if state != nil {
 		info.RecordConversionDiagnostics(c, state.Diagnostics())
 	}

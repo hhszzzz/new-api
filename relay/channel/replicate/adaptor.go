@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -18,7 +19,6 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-gonic/gin"
@@ -171,24 +171,24 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 	}, nil
 }
 
-func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {
-	return channel.DoApiRequest(a, c, info, requestBody)
+func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (*channel.TransportResult, error) {
+	return channel.HTTPResult(channel.DoApiRequest(a, c, info, requestBody))
 }
 
-func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (any, *types.NewAPIError) {
+func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (dto.UsageResult, *hosttypes.NewAPIError) {
 	if resp == nil {
-		return nil, types.NewError(errors.New("replicate adaptor: empty response"), types.ErrorCodeBadResponse)
+		return nil, hosttypes.NewError(errors.New("replicate adaptor: empty response"), hosttypes.ErrorCodeBadResponse)
 	}
 
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, types.NewError(err, types.ErrorCodeReadResponseBodyFailed)
+		return nil, hosttypes.NewError(err, hosttypes.ErrorCodeReadResponseBodyFailed)
 	}
 	_ = resp.Body.Close()
 
 	var prediction PredictionResponse
 	if err := common.Unmarshal(responseBody, &prediction); err != nil {
-		return nil, types.NewError(fmt.Errorf("replicate adaptor: failed to decode response: %w", err), types.ErrorCodeBadResponseBody)
+		return nil, hosttypes.NewError(fmt.Errorf("replicate adaptor: failed to decode response: %w", err), hosttypes.ErrorCodeBadResponseBody)
 	}
 
 	if prediction.Error != nil {
@@ -202,11 +202,11 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 		if errMsg == "" {
 			errMsg = "replicate adaptor: prediction error"
 		}
-		return nil, types.NewError(errors.New(errMsg), types.ErrorCodeBadResponse)
+		return nil, hosttypes.NewError(errors.New(errMsg), hosttypes.ErrorCodeBadResponse)
 	}
 
 	if prediction.Status != "" && !strings.EqualFold(prediction.Status, "succeeded") {
-		return nil, types.NewError(fmt.Errorf("replicate adaptor: prediction status %q", prediction.Status), types.ErrorCodeBadResponse)
+		return nil, hosttypes.NewError(fmt.Errorf("replicate adaptor: prediction status %q", prediction.Status), hosttypes.ErrorCodeBadResponse)
 	}
 
 	var urls []string
@@ -237,7 +237,7 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 	}
 
 	if len(urls) == 0 {
-		return nil, types.NewError(errors.New("replicate adaptor: empty prediction output"), types.ErrorCodeBadResponseBody)
+		return nil, hosttypes.NewError(errors.New("replicate adaptor: empty prediction output"), hosttypes.ErrorCodeBadResponseBody)
 	}
 
 	var imageReq *dto.ImageRequest
@@ -257,7 +257,7 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 	if wantsBase64 {
 		converted, convErr := downloadImagesToBase64(urls)
 		if convErr != nil {
-			return nil, types.NewError(convErr, types.ErrorCodeBadResponse)
+			return nil, hosttypes.NewError(convErr, hosttypes.ErrorCodeBadResponse)
 		}
 		for _, content := range converted {
 			if content == "" {
@@ -275,12 +275,12 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 	}
 
 	if len(imageResponse.Data) == 0 {
-		return nil, types.NewError(errors.New("replicate adaptor: no usable image data"), types.ErrorCodeBadResponse)
+		return nil, hosttypes.NewError(errors.New("replicate adaptor: no usable image data"), hosttypes.ErrorCodeBadResponse)
 	}
 
 	responseBytes, err := common.Marshal(imageResponse)
 	if err != nil {
-		return nil, types.NewError(fmt.Errorf("replicate adaptor: encode response failed: %w", err), types.ErrorCodeBadResponseBody)
+		return nil, hosttypes.NewError(fmt.Errorf("replicate adaptor: encode response failed: %w", err), hosttypes.ErrorCodeBadResponseBody)
 	}
 
 	c.Writer.Header().Set("Content-Type", "application/json")

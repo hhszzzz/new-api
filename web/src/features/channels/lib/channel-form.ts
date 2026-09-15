@@ -19,6 +19,11 @@ For commercial licensing, please contact support@quantumnous.com
 import { z } from 'zod'
 
 import {
+  inheritedProtocolPolicy,
+  parseProtocolPolicy,
+} from '@/features/protocols/policy'
+
+import {
   CLAUDE_FIELD_PASSTHROUGH_TYPES,
   CHANNEL_TYPE_NEW_API,
   CHANNEL_TYPE_TASK_PLUGIN,
@@ -274,6 +279,13 @@ export const channelFormSchema = z
     inherit_aggregate_base_url: z.boolean().optional(),
     client_policy_mode: z.enum(['unrestricted', 'allow', 'deny']).optional(),
     client_policy_clients: z.string().optional(),
+    protocol_policy_json: z
+      .string()
+      .refine(
+        (value) => parseProtocolPolicy(value) !== null,
+        'Invalid protocol policy JSON'
+      )
+      .optional(),
     protocol_capabilities_enabled: z.boolean().optional(),
     protocol_selection_mode: z.enum(['strict', 'auto']).optional(),
     protocol_upstream_protocols: z
@@ -327,6 +339,7 @@ export const channelFormSchema = z
   })
   .superRefine((data, ctx) => {
     if (
+      data.protocol_policy_json === undefined &&
       data.protocol_capabilities_enabled === true &&
       (data.protocol_selection_mode ?? 'strict') === 'strict' &&
       (!data.protocol_upstream_protocols ||
@@ -507,6 +520,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   inherit_aggregate_base_url: false,
   client_policy_mode: 'unrestricted',
   client_policy_clients: '',
+  protocol_policy_json: inheritedProtocolPolicy,
   protocol_capabilities_enabled: false,
   protocol_selection_mode: 'strict',
   protocol_upstream_protocols: [],
@@ -624,10 +638,14 @@ export function transformChannelToFormDefaults(
   let protocolAllowConversion: 'inherit' | 'allow' | 'deny' = 'inherit'
   let protocolAllowLossyConversion = false
   let protocolModelOverrides = '[]'
+  let protocolPolicyJSON: string | undefined
 
   if (channel.settings) {
     try {
       const parsed = JSON.parse(channel.settings)
+      if (parsed.protocol_policy) {
+        protocolPolicyJSON = JSON.stringify(parsed.protocol_policy, null, 2)
+      }
       vertexKeyType = parsed.vertex_key_type || 'json'
       azureResponsesVersion = parsed.azure_responses_version || ''
       isEnterpriseAccount = parsed.openrouter_enterprise === true
@@ -753,6 +771,7 @@ export function transformChannelToFormDefaults(
     advanced_custom: advancedCustom,
     client_policy_mode: clientPolicyMode,
     client_policy_clients: clientPolicyClients,
+    protocol_policy_json: protocolPolicyJSON,
     protocol_capabilities_enabled: protocolCapabilitiesEnabled,
     protocol_selection_mode: protocolSelectionModeValue,
     protocol_upstream_protocols: protocolUpstreamProtocols,
@@ -774,7 +793,10 @@ export function buildSettingJSON(formData: ChannelFormValues): string {
     force_format: formData.force_format || false,
     thinking_to_content: formData.thinking_to_content || false,
     proxy: formData.proxy?.trim() || '',
-    pass_through_body_enabled: formData.pass_through_body_enabled || false,
+    pass_through_body_enabled:
+      formData.protocol_policy_json === undefined
+        ? formData.pass_through_body_enabled || false
+        : undefined,
     system_prompt: formData.system_prompt || '',
     system_prompt_override: formData.system_prompt_override || false,
   }
@@ -968,7 +990,13 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
     delete settingsObj.client_policy
   }
 
-  if (formData.protocol_capabilities_enabled === true) {
+  if (formData.protocol_policy_json !== undefined) {
+    const policy = parseProtocolPolicy(formData.protocol_policy_json)
+    if (!policy) throw new Error('Invalid protocol policy JSON')
+    settingsObj.protocol_policy = policy
+    delete settingsObj.protocol_capabilities
+    delete settingsObj.tool_loss_policy
+  } else if (formData.protocol_capabilities_enabled === true) {
     const protocolCapabilities: ProtocolCapabilities = {
       selection_mode: formData.protocol_selection_mode || 'strict',
       upstream_protocols: [...(formData.protocol_upstream_protocols || [])],

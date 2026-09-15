@@ -2,6 +2,7 @@ package i18n
 
 import (
 	"embed"
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"strings"
 	"sync"
 
@@ -12,7 +13,6 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 )
 
 const (
@@ -133,7 +133,7 @@ func GetLangFromContext(c *gin.Context) string {
 	}
 
 	// 1. Try to get language from user settings (if already loaded by TokenAuth or other middleware)
-	if userSetting, ok := common.GetContextKeyType[dto.UserSetting](c, constant.ContextKeyUserSetting); ok {
+	if userSetting, ok := common.GetContextKeyType[hostdto.UserSetting](c, constant.ContextKeyUserSetting); ok {
 		if userSetting.Language != "" {
 			normalized := normalizeLang(userSetting.Language)
 			if IsSupported(normalized) {

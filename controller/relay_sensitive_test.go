@@ -1,6 +1,7 @@
 package controller
 
 import (
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -40,7 +41,7 @@ func TestRelayReturnsBadRequestWhenSensitiveWordsAreDetected(t *testing.T) {
 		Error types.OpenAIError `json:"error"`
 	}
 	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
-	assert.Equal(t, string(types.ErrorCodeSensitiveWordsDetected), response.Error.Code)
+	assert.Equal(t, string(hosttypes.ErrorCodeSensitiveWordsDetected), response.Error.Code)
 	assert.Contains(t, response.Error.Message, "sensitive words detected")
 }
 
@@ -74,5 +75,5 @@ func TestRelayChecksOnlyOpenAIUserTextForSensitiveWords(t *testing.T) {
 
 	Relay(ctx, types.RelayFormatOpenAI)
 
-	assert.NotContains(t, recorder.Body.String(), string(types.ErrorCodeSensitiveWordsDetected))
+	assert.NotContains(t, recorder.Body.String(), string(hosttypes.ErrorCodeSensitiveWordsDetected))
 }

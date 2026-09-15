@@ -2,12 +2,12 @@ package model
 
 import (
 	"fmt"
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -37,7 +37,7 @@ func TestPricingCarriesTaskUsageSchemaAndRefreshesWithPluginGeneration(t *testin
 	require.NoError(t, err)
 	t.Cleanup(func() { jsplugin.DefaultRegistry.Unregister(pluginKey) })
 
-	insertPricingEndpointChannel(t, 901, constant.ChannelTypeTaskPlugin, dto.ChannelOtherSettings{})
+	insertPricingEndpointChannel(t, 901, constant.ChannelTypeTaskPlugin, hostdto.ChannelOtherSettings{})
 	insertPricingEndpointAbility(t, 901, "pricing-usage-model")
 	insertPricingEndpointAbility(t, 901, "ordinary-model")
 

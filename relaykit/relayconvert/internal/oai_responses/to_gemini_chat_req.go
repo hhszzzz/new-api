@@ -2,6 +2,7 @@ package oairesponses
 
 import (
 	"fmt"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/internal/toolconv"
 	"strings"
 
 	"context"
@@ -13,6 +14,7 @@ import (
 	sharedtoolmedia "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/toolmedia"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
+	"github.com/QuantumNous/new-api/relaykit/types"
 )
 
 func convertOpenAIResponsesRequestToGeminiChat(c context.Context, info convmeta.Meta, request any) (any, error) {
@@ -90,46 +92,12 @@ func OpenAIResponsesRequestToGeminiChat(c context.Context, req *dto.OpenAIRespon
 	// into function declarations with reversible names and records the mapping
 	// in the context tool state, so Gemini responses restore the original
 	// Responses shapes exactly like the Chat and Claude upstream paths.
-	chatTools, toolState, err := prepareResponsesToolsForChat(c, req)
+	_, toolState, err := toolconv.PrepareResponsesToolsForChat(c, req)
 	if err != nil {
 		return nil, err
 	}
-	functions := make([]dto.FunctionRequest, 0, len(chatTools))
-	for _, tool := range chatTools {
-		if tool.Type != "function" {
-			return nil, fmt.Errorf("Responses tool type %q cannot be converted to Gemini", tool.Type)
-		}
-		functions = append(functions, tool.Function)
-	}
-	for i := range functions {
-		sharedgemini.PrepareFunctionDeclaration(&functions[i])
-	}
-	if len(functions) > 0 {
-		geminiRequest.SetTools([]dto.GeminiChatTool{
-			{FunctionDeclarations: functions},
-		})
-	}
-
-	toolChoice, err := responsesRequestToolChoiceToChat(req.ToolChoice, toolState)
-	if err != nil {
+	if err := toolconv.RenderRequestTools(c, types.RelayFormatOpenAIResponses, types.RelayFormatGemini, req, geminiRequest, opts); err != nil {
 		return nil, err
-	}
-	if toolChoice != nil {
-		if choice, ok := toolChoice.(map[string]any); ok && choice["type"] == "function" {
-			function, _ := choice["function"].(map[string]any)
-			selectedName := strings.TrimSpace(kitutil.Interface2String(function["name"]))
-			declared := false
-			for _, function := range functions {
-				if function.Name == selectedName {
-					declared = true
-					break
-				}
-			}
-			if selectedName != "" && !declared {
-				return nil, fmt.Errorf("Responses tool_choice references undeclared tool %q", selectedName)
-			}
-		}
-		geminiRequest.ToolConfig = sharedgemini.OpenAIToolChoiceToConfig(toolChoice)
 	}
 
 	systemTexts := make([]string, 0)
@@ -223,7 +191,7 @@ func OpenAIResponsesRequestToGeminiChat(c context.Context, req *dto.OpenAIRespon
 		case "reasoning", "additional_tools":
 			// Cross-provider reasoning state cannot replay into Gemini, and
 			// additional_tools declarations were already lifted into the tools
-			// list by prepareResponsesToolsForChat.
+			// list by toolconv.PrepareResponsesToolsForChat.
 		case "", "message":
 			role := responsesGeminiRole(item)
 			parts, err := responsesInputContentToGeminiParts(c, item["content"])
@@ -263,21 +231,7 @@ func applyResponsesTextToGemini(raw []byte, geminiRequest *dto.GeminiChatRequest
 	if err != nil {
 		return err
 	}
-	if responseFormat == nil || (responseFormat.Type != "json_schema" && responseFormat.Type != "json_object") {
-		return nil
-	}
-
-	geminiRequest.GenerationConfig.ResponseMimeType = "application/json"
-	if len(responseFormat.JsonSchema) == 0 {
-		return nil
-	}
-
-	var jsonSchema dto.FormatJsonSchema
-	if err := kitutil.Unmarshal(responseFormat.JsonSchema, &jsonSchema); err != nil {
-		return nil
-	}
-	geminiRequest.GenerationConfig.ResponseSchema = sharedgemini.RemoveAdditionalProperties(jsonSchema.Schema, 0)
-	return nil
+	return sharedgemini.ApplyOutputFormat(&geminiRequest.GenerationConfig, responseFormat)
 }
 
 func responsesInputContentToGeminiParts(c context.Context, content any) ([]dto.GeminiPart, error) {

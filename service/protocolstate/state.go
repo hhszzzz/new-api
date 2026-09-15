@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"os"
 	"sort"
 	"strings"
@@ -12,11 +13,11 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/pkg/cachex"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service/channelcompat"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/gin-gonic/gin"
@@ -152,7 +153,11 @@ var (
 )
 
 func Enabled() bool {
-	return model_setting.GetGlobalSettings().ProtocolBridgePolicy.Enabled
+	settings := model_setting.GetGlobalSettings()
+	if settings.ProtocolPolicy == nil {
+		return settings.ProtocolBridgePolicy.Enabled
+	}
+	return settings.EffectiveProtocolPolicy().StateScope == hostdto.ProtocolStateAll
 }
 
 func Active(c *gin.Context) bool {
@@ -232,7 +237,8 @@ func PrepareResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, plan c
 	// The client's original store intent must be read here, before channel
 	// adaptors (e.g. Codex) overwrite the upstream store value.
 	clientAllowsPersistence := parseResponsesClientStore(request.Store) != clientStoreFalse
-	needsStateProcessing := plan.StateEnabled || hasManagedParent || (Enabled() && clientAllowsPersistence)
+	legacyPersistence := model_setting.GetGlobalSettings().ProtocolPolicy == nil && Enabled()
+	needsStateProcessing := plan.StateEnabled || hasManagedParent || (legacyPersistence && clientAllowsPersistence)
 	if !needsStateProcessing {
 		normalized, err := normalizeResponsesRequest(request, plan.UpstreamProtocol, nil)
 		if err != nil {
@@ -246,7 +252,7 @@ func PrepareResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, plan c
 
 	publicID := ensurePublicResponseID(c)
 	originalInput := append(json.RawMessage(nil), request.Input...)
-	policy := currentPolicy()
+	policy := policyForContext(c)
 	previousID := strings.TrimSpace(request.PreviousResponseID)
 	var parent *ResponseNode
 	if previousID != "" {
@@ -261,8 +267,7 @@ func PrepareResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, plan c
 			common.SetContextKey(c, constant.ContextKeyProtocolStateParent, parent)
 		}
 	}
-	bridgeManaged := plan.StateEnabled ||
-		(plan.UpstreamProtocol != "" && plan.RequestProtocol != plan.UpstreamProtocol) ||
+	bridgeManaged := (plan.UpstreamProtocol != "" && plan.RequestProtocol != plan.UpstreamProtocol) ||
 		responseNodeUsesBridgeState(parent)
 	if bridgeManaged && len(originalInput) > policy.MaxStateBytes {
 		return fmt.Errorf("Responses input exceeds the maximum serialized state size of %d bytes", policy.MaxStateBytes)
@@ -285,7 +290,7 @@ func PrepareResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, plan c
 		requestProtocol:  string(plan.RequestProtocol),
 		upstreamProtocol: string(plan.UpstreamProtocol),
 		bridgeManaged:    bridgeManaged,
-		persistState:     clientAllowsPersistence,
+		persistState:     clientAllowsPersistence && plan.StateScope != hostdto.ProtocolStateDisabled,
 		stateReason:      stateReason,
 		parent:           parent,
 		parentResponseID: previousID,
@@ -702,7 +707,7 @@ func isResponsesTerminalStatus(status string) bool {
 	}
 }
 
-func EnableReplayFallback(c *gin.Context, apiError *types.NewAPIError) bool {
+func EnableReplayFallback(c *gin.Context, apiError *hosttypes.NewAPIError) bool {
 	pending := getPending(c, "")
 	if pending == nil || !pending.usedContinuation || common.GetContextKeyBool(c, constant.ContextKeyProtocolStateForceReplay) {
 		return false
@@ -811,7 +816,7 @@ func Commit(c *gin.Context) error {
 		turn = pending.parent.Turn + 1
 		cumulativeBytes += pending.parent.CumulativeStateBytes
 	}
-	policy := currentPolicy()
+	policy := policyForContext(c)
 	if pending.bridgeManaged && turn > policy.MaxStateTurns {
 		return fmt.Errorf("protocol bridge state exceeds %d turns", policy.MaxStateTurns)
 	}
@@ -882,7 +887,7 @@ func replayResponsesHistory(c *gin.Context, parent *ResponseNode, currentInput j
 	if err != nil {
 		return nil, nil, err
 	}
-	policy := currentPolicy()
+	policy := policyForContext(c)
 	if bridgeManaged && len(replayed) > policy.MaxStateBytes {
 		return nil, nil, fmt.Errorf("replayed Responses history exceeds %d serialized bytes", policy.MaxStateBytes)
 	}
@@ -890,7 +895,7 @@ func replayResponsesHistory(c *gin.Context, parent *ResponseNode, currentInput j
 }
 
 func loadResponseHistoryChain(c *gin.Context, parent *ResponseNode, bridgeManaged bool) ([]*ResponseNode, error) {
-	policy := currentPolicy()
+	policy := policyForContext(c)
 	capacityHint := min(parent.Turn, policy.MaxStateTurns)
 	chain := make([]*ResponseNode, 0, capacityHint)
 	seen := make(map[string]struct{}, capacityHint)
@@ -1242,7 +1247,7 @@ func findResponseNode(c *gin.Context, publicID, publicModel string) (*ResponseNo
 	if node.CumulativeStateBytes < 0 {
 		return nil, true, fmt.Errorf("previous_response_id exceeds the maximum serialized state size")
 	}
-	policy := currentPolicy()
+	policy := policyForContext(c)
 	if responseNodeUsesBridgeState(&node) {
 		if node.Turn > policy.MaxStateTurns {
 			return nil, true, fmt.Errorf("previous_response_id exceeds the maximum conversation length")
@@ -1304,7 +1309,13 @@ func cloneResponseNode(node *ResponseNode) *ResponseNode {
 }
 
 func currentPolicy() model_setting.ProtocolBridgePolicy {
-	policy := model_setting.GetGlobalSettings().ProtocolBridgePolicy
+	resolved := model_setting.GetGlobalSettings().EffectiveProtocolPolicy()
+	policy := model_setting.ProtocolBridgePolicy{
+		Enabled:         resolved.StateScope != hostdto.ProtocolStateDisabled,
+		StateTTLSeconds: resolved.StateTTLSeconds,
+		MaxStateTurns:   resolved.MaxStateTurns,
+		MaxStateBytes:   resolved.MaxStateBytes,
+	}
 	if policy.StateTTLSeconds <= 0 {
 		policy.StateTTLSeconds = model_setting.DefaultProtocolBridgeStateTTLSeconds
 	}
@@ -1313,6 +1324,27 @@ func currentPolicy() model_setting.ProtocolBridgePolicy {
 	}
 	if policy.MaxStateBytes <= 0 {
 		policy.MaxStateBytes = model_setting.DefaultProtocolBridgeMaxStateBytes
+	}
+	return policy
+}
+
+func policyForContext(c *gin.Context) model_setting.ProtocolBridgePolicy {
+	policy := currentPolicy()
+	if c == nil {
+		return policy
+	}
+	plan, ok := common.GetContextKeyType[channelcompat.ProtocolPlan](c, constant.ContextKeyProtocolPlan)
+	if !ok {
+		return policy
+	}
+	if plan.StateTTLSeconds > 0 {
+		policy.StateTTLSeconds = plan.StateTTLSeconds
+	}
+	if plan.MaxStateTurns > 0 {
+		policy.MaxStateTurns = plan.MaxStateTurns
+	}
+	if plan.MaxStateBytes > 0 {
+		policy.MaxStateBytes = plan.MaxStateBytes
 	}
 	return policy
 }
@@ -1353,7 +1385,7 @@ func protocolCaches() (*cachex.HybridCache[ResponseNode], *cachex.HybridCache[st
 	return responseStateCache, responseOwnerCache, messageStateCache
 }
 
-func isMissingContinuationError(apiError *types.NewAPIError) bool {
+func isMissingContinuationError(apiError *hosttypes.NewAPIError) bool {
 	if apiError == nil {
 		return false
 	}

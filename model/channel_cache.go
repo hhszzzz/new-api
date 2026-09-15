@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"math/rand"
 	"sort"
 	"strings"
@@ -11,7 +12,6 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
-	kitdto "github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 )
 
@@ -19,7 +19,7 @@ var group2model2channels map[string]map[string][]int // enabled channel
 var channelsIDM map[int]*Channel                     // all channels include disabled
 // channel2advancedCustomConfig caches parsed Advanced Custom (type 58) configs so
 // path-aware selection avoids re-parsing JSON per request. Refreshed on full sync.
-var channel2advancedCustomConfig map[int]*kitdto.AdvancedCustomConfig
+var channel2advancedCustomConfig map[int]*hostdto.AdvancedCustomConfig
 var channelSyncLock sync.RWMutex
 var channelRefreshLock sync.Mutex
 
@@ -33,7 +33,7 @@ func InitChannelCache() {
 		return
 	}
 	newChannelId2channel := make(map[int]*Channel)
-	newChannel2advancedCustomConfig := make(map[int]*kitdto.AdvancedCustomConfig)
+	newChannel2advancedCustomConfig := make(map[int]*hostdto.AdvancedCustomConfig)
 	var channels []*Channel
 	if err := DB.Find(&channels).Error; err != nil {
 		common.SysError(fmt.Sprintf("failed to load channels for cache: %v", err))
@@ -317,7 +317,7 @@ func filterChannelsByRequestPathAndModel(channels []int, requestPath string, mod
 			filtered = append(filtered, channelId)
 			continue
 		}
-		if config := channel2advancedCustomConfig[channelId]; config != nil && config.SupportsPathForModel(requestPath, model) {
+		if _, matched := channel.MatchAdvancedCustomRoute(requestPath, model, channel2advancedCustomConfig[channelId]); matched {
 			filtered = append(filtered, channelId)
 		}
 	}
@@ -399,7 +399,7 @@ func CacheUpdateChannel(channel *Channel) {
 	}
 	channelsIDM[channel.Id] = channel
 	if channel2advancedCustomConfig == nil {
-		channel2advancedCustomConfig = make(map[int]*kitdto.AdvancedCustomConfig)
+		channel2advancedCustomConfig = make(map[int]*hostdto.AdvancedCustomConfig)
 	}
 	delete(channel2advancedCustomConfig, channel.Id)
 	if channel.Type == constant.ChannelTypeAdvancedCustom {

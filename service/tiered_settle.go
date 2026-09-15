@@ -1,12 +1,12 @@
 package service
 
 import (
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"net/http"
 
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
 )
 
@@ -155,14 +155,14 @@ func refreshTieredBillingGroup(relayInfo *relaycommon.RelayInfo) (*billingexpr.B
 // state before an upstream attempt. An existing session reserves any higher
 // estimate before sending. If the initial group was free and skipped
 // pre-consume, switching to a paid group creates the session at that point.
-func PrepareTieredBillingForSelectedGroup(c *gin.Context, relayInfo *relaycommon.RelayInfo) *types.NewAPIError {
+func PrepareTieredBillingForSelectedGroup(c *gin.Context, relayInfo *relaycommon.RelayInfo) *hosttypes.NewAPIError {
 	snap, err := refreshTieredBillingGroup(relayInfo)
 	if err != nil {
-		return types.NewErrorWithStatusCode(
+		return hosttypes.NewErrorWithStatusCode(
 			err,
-			types.ErrorCodeModelPriceError,
+			hosttypes.ErrorCodeModelPriceError,
 			http.StatusBadRequest,
-			types.ErrOptionWithSkipRetry(),
+			hosttypes.ErrOptionWithSkipRetry(),
 		)
 	}
 	if snap == nil {
@@ -183,7 +183,7 @@ func PrepareTieredBillingForSelectedGroup(c *gin.Context, relayInfo *relaycommon
 		return PreConsumeBilling(c, snap.EstimatedQuotaAfterGroup, relayInfo)
 	}
 	if err := relayInfo.Billing.Reserve(snap.EstimatedQuotaAfterGroup); err != nil {
-		return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
+		return hosttypes.NewError(err, hosttypes.ErrorCodeUpdateDataError, hosttypes.ErrOptionWithSkipRetry())
 	}
 	relayInfo.FinalPreConsumedQuota = relayInfo.Billing.GetPreConsumedQuota()
 	return nil

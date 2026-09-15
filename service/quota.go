@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"fmt"
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"math"
 	"time"
 
@@ -463,14 +464,14 @@ func checkAndSendQuotaNotify(relayInfo *relaycommon.RelayInfo, quota int, preCon
 
 			notifyType := userSetting.NotifyType
 			if notifyType == "" {
-				notifyType = dto.NotifyTypeEmail
+				notifyType = hostdto.NotifyTypeEmail
 			}
 
-			if notifyType == dto.NotifyTypeBark {
+			if notifyType == hostdto.NotifyTypeBark {
 				// Bark推送使用简短文本，不支持HTML
 				content = "{{value}}，剩余额度：{{value}}，请及时充值"
 				values = []any{prompt, logger.FormatQuota(relayInfo.UserQuota)}
-			} else if notifyType == dto.NotifyTypeGotify {
+			} else if notifyType == hostdto.NotifyTypeGotify {
 				content = "{{value}}，当前剩余额度为 {{value}}，请及时充值。"
 				values = []any{prompt, logger.FormatQuota(relayInfo.UserQuota)}
 			} else {
@@ -515,13 +516,13 @@ func checkAndSendSubscriptionQuotaNotify(relayInfo *relaycommon.RelayInfo) {
 		var values []any
 		notifyType := userSetting.NotifyType
 		if notifyType == "" {
-			notifyType = dto.NotifyTypeEmail
+			notifyType = hostdto.NotifyTypeEmail
 		}
 
-		if notifyType == dto.NotifyTypeBark {
+		if notifyType == hostdto.NotifyTypeBark {
 			content = "{{value}}，剩余额度：{{value}}，请及时充值"
 			values = []any{prompt, logger.FormatQuota(int(remaining))}
-		} else if notifyType == dto.NotifyTypeGotify {
+		} else if notifyType == hostdto.NotifyTypeGotify {
 			content = "{{value}}，当前剩余额度为 {{value}}，请及时充值。"
 			values = []any{prompt, logger.FormatQuota(int(remaining))}
 		} else {

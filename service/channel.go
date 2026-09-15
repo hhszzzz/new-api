@@ -2,12 +2,13 @@ package service
 
 import (
 	"fmt"
+	hostdto "github.com/QuantumNous/new-api/dto"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 )
 
@@ -16,7 +17,7 @@ func formatNotifyType(channelId int, status int) string {
 }
 
 // disable & notify
-func DisableChannel(channelError types.ChannelError, reason string) {
+func DisableChannel(channelError hosttypes.ChannelError, reason string) {
 	common.SysLog(fmt.Sprintf("通道「%s」（#%d）发生错误，准备禁用，原因：%s", channelError.ChannelName, channelError.ChannelId, common.LocalLogPreview(reason)))
 
 	// 检查是否启用自动禁用功能
@@ -53,9 +54,9 @@ func DisableChannelModel(channelId int, group string, modelName string, reason s
 		return false
 	}
 	if source == "" {
-		source = dto.DisabledModelSourceAuto
+		source = hostdto.DisabledModelSourceAuto
 	}
-	entry := dto.DisabledModelEntry{
+	entry := hostdto.DisabledModelEntry{
 		Group:  group,
 		Model:  modelName,
 		Source: source,
@@ -78,7 +79,7 @@ func EnableChannelModel(channelId int, group string, modelName string) bool {
 	if strings.TrimSpace(modelName) == "" {
 		return false
 	}
-	entry := dto.DisabledModelEntry{Group: group, Model: modelName}
+	entry := hostdto.DisabledModelEntry{Group: group, Model: modelName}
 	if err := model.SetChannelModelDisabled(channelId, entry, false); err != nil {
 		common.SysLog(fmt.Sprintf("failed to enable model on channel: channel_id=%d, model=%s, error=%v", channelId, modelName, err))
 		return false
@@ -90,27 +91,27 @@ func EnableChannelModel(channelId int, group string, modelName string) bool {
 // DisableModelOnError is on, only the failing (group, model) is disabled;
 // otherwise the legacy whole-channel disable runs. Multi-key channels keep the
 // existing key/channel handling.
-func DisableChannelOrModel(channelError types.ChannelError, group string, modelName string, reason string) {
+func DisableChannelOrModel(channelError hosttypes.ChannelError, group string, modelName string, reason string) {
 	channel, err := model.GetChannelById(channelError.ChannelId, false)
 	if err == nil && strings.TrimSpace(modelName) != "" && !channel.ChannelInfo.IsMultiKey &&
 		channel.GetOtherSettings().DisableModelOnError {
-		DisableChannelModel(channelError.ChannelId, group, modelName, reason, dto.DisabledModelSourceAuto)
+		DisableChannelModel(channelError.ChannelId, group, modelName, reason, hostdto.DisabledModelSourceAuto)
 		return
 	}
 	DisableChannel(channelError, reason)
 }
 
-func ShouldDisableChannel(err *types.NewAPIError) bool {
+func ShouldDisableChannel(err *hosttypes.NewAPIError) bool {
 	if !common.AutomaticDisableChannelEnabled {
 		return false
 	}
 	if err == nil {
 		return false
 	}
-	if types.IsChannelError(err) {
+	if hosttypes.IsChannelError(err) {
 		return true
 	}
-	if types.IsSkipRetryError(err) {
+	if hosttypes.IsSkipRetryError(err) {
 		return false
 	}
 	if operation_setting.ShouldDisableByStatusCode(err.StatusCode) {
@@ -122,7 +123,7 @@ func ShouldDisableChannel(err *types.NewAPIError) bool {
 	return search
 }
 
-func ShouldEnableChannel(newAPIError *types.NewAPIError, status int) bool {
+func ShouldEnableChannel(newAPIError *hosttypes.NewAPIError, status int) bool {
 	if !common.AutomaticEnableChannelEnabled {
 		return false
 	}

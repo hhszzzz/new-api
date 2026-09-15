@@ -1,13 +1,13 @@
 package middleware
 
 import (
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service/clientpolicy"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
@@ -16,7 +16,7 @@ import (
 )
 
 func TestBuildChannelCandidateFilterCombinesProtocolAndClientPolicy(t *testing.T) {
-	settings := dto.ChannelOtherSettings{
+	settings := hostdto.ChannelOtherSettings{
 		ClientPolicy: operation_setting.ClientAccessPolicy{
 			Mode:    operation_setting.ClientPolicyModeAllow,
 			Clients: []string{clientpolicy.ClientCodex},

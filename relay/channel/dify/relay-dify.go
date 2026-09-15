@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -22,7 +23,6 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/samber/lo"
 
@@ -241,8 +241,8 @@ func difyRequiresSuccessfulWorkflow(info *relaycommon.RelayInfo) bool {
 	return info != nil && info.ChannelMeta != nil && info.ChannelOtherSettings.DifyRequireSuccessfulWorkflow
 }
 
-func newDifyResponseError(code types.ErrorCode, message string) *types.NewAPIError {
-	return types.NewOpenAIError(errors.New(message), code, http.StatusBadGateway)
+func newDifyResponseError(code hosttypes.ErrorCode, message string) *hosttypes.NewAPIError {
+	return hosttypes.NewOpenAIError(errors.New(message), code, http.StatusBadGateway)
 }
 
 func stopDifyTask(info *relaycommon.RelayInfo) error {
@@ -308,11 +308,11 @@ func difyErrorStatus(status any) bool {
 	}
 }
 
-func difyStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+func difyStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *hosttypes.NewAPIError) {
 	var responseText strings.Builder
 	usage := &dto.Usage{}
 	var nodeToken int
-	var streamErr *types.NewAPIError
+	var streamErr *hosttypes.NewAPIError
 	var messageEndSeen bool
 	var workflowFinishedSeen bool
 	var workflowTotalTokens int
@@ -336,7 +336,7 @@ func difyStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 		var difyResponse DifyChunkChatCompletionResponse
 		if err := common.Unmarshal([]byte(data), &difyResponse); err != nil {
 			common.SysLog("error unmarshalling stream response: " + err.Error())
-			streamErr = newDifyResponseError(types.ErrorCodeBadResponse, "invalid Dify stream event")
+			streamErr = newDifyResponseError(hosttypes.ErrorCodeBadResponse, "invalid Dify stream event")
 			info.StreamStatus.MarkTerminalFailure(streamErr)
 			sr.Stop(err)
 			return
@@ -356,7 +356,7 @@ func difyStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 			info.DifyWorkflowStatus = strings.ToLower(strings.TrimSpace(difyResponse.Data.Status))
 			if info.DifyWorkflowStatus != "succeeded" {
 				streamErr = newDifyResponseError(
-					types.ErrorCodeBadResponse,
+					hosttypes.ErrorCodeBadResponse,
 					fmt.Sprintf("Dify workflow finished with status %q", info.DifyWorkflowStatus),
 				)
 				info.StreamStatus.MarkTerminalFailure(streamErr)
@@ -387,7 +387,7 @@ func difyStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 			if message == "" {
 				message = "Dify returned an error event"
 			}
-			streamErr = newDifyResponseError(types.ErrorCodeBadResponse, message)
+			streamErr = newDifyResponseError(hosttypes.ErrorCodeBadResponse, message)
 			info.StreamStatus.MarkTerminalFailure(streamErr)
 			sr.Stop(streamErr)
 			return
@@ -405,7 +405,7 @@ func difyStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 		}
 		if err := helper.ObjectData(c, openaiResponse); err != nil {
 			common.SysLog(err.Error())
-			streamErr = newDifyResponseError(types.ErrorCodeBadResponse, "failed to write Dify stream response")
+			streamErr = newDifyResponseError(hosttypes.ErrorCodeBadResponse, "failed to write Dify stream response")
 			info.StreamStatus.MarkWriteError(err)
 			sr.Stop(err)
 		}
@@ -417,48 +417,48 @@ func difyStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 		}
 		// 客户端主动断开不是渠道故障：跳过重试、不记用户错误日志，
 		// 避免污染渠道健康度或触发自动禁用。499 即 nginx 的 client closed request。
-		return nil, types.NewOpenAIError(
+		return nil, hosttypes.NewOpenAIError(
 			fmt.Errorf("client disconnected before Dify stream completed: %w", endErr),
-			types.ErrorCodeClientDisconnected,
+			hosttypes.ErrorCodeClientDisconnected,
 			499,
-			types.ErrOptionWithSkipRetry(),
-			types.ErrOptionWithNoRecordErrorLog(),
+			hosttypes.ErrOptionWithSkipRetry(),
+			hosttypes.ErrOptionWithNoRecordErrorLog(),
 		)
 	}
 	if streamErr != nil {
 		return nil, streamErr
 	}
 	if !messageEndSeen {
-		streamErr = newDifyResponseError(types.ErrorCodeBadResponse, "Dify stream ended without message_end")
+		streamErr = newDifyResponseError(hosttypes.ErrorCodeBadResponse, "Dify stream ended without message_end")
 		info.StreamStatus.MarkTerminalFailure(streamErr)
 		return nil, streamErr
 	}
 	if info.StreamStatus == nil || !info.StreamStatus.IsNormalEnd() || info.StreamStatus.HasErrors() {
-		streamErr = newDifyResponseError(types.ErrorCodeBadResponse, "Dify stream terminated abnormally")
+		streamErr = newDifyResponseError(hosttypes.ErrorCodeBadResponse, "Dify stream terminated abnormally")
 		if info.StreamStatus != nil {
 			info.StreamStatus.MarkTerminalFailure(streamErr)
 		}
 		return nil, streamErr
 	}
 	if strictWorkflow && !workflowFinishedSeen {
-		streamErr = newDifyResponseError(types.ErrorCodeBadResponse, "Dify stream ended without workflow_finished")
+		streamErr = newDifyResponseError(hosttypes.ErrorCodeBadResponse, "Dify stream ended without workflow_finished")
 		info.StreamStatus.MarkTerminalFailure(streamErr)
 		return nil, streamErr
 	}
 	if strings.TrimSpace(responseText.String()) == "" {
-		streamErr = newDifyResponseError(types.ErrorCodeEmptyResponse, "Dify workflow returned an empty response")
+		streamErr = newDifyResponseError(hosttypes.ErrorCodeEmptyResponse, "Dify workflow returned an empty response")
 		info.StreamStatus.MarkTerminalFailure(streamErr)
 		return nil, streamErr
 	}
 	if usage.TotalTokens <= 0 || strictWorkflow && workflowTotalTokens <= 0 {
-		streamErr = newDifyResponseError(types.ErrorCodeBadResponse, "Dify stream returned zero token usage")
+		streamErr = newDifyResponseError(hosttypes.ErrorCodeBadResponse, "Dify stream returned zero token usage")
 		info.StreamStatus.MarkTerminalFailure(streamErr)
 		return nil, streamErr
 	}
 	info.StreamStatus.MarkTerminalSuccess()
 	if err := helper.Done(c); err != nil {
 		info.StreamStatus.MarkWriteError(err)
-		streamErr = newDifyResponseError(types.ErrorCodeBadResponse, "failed to finish Dify stream response")
+		streamErr = newDifyResponseError(hosttypes.ErrorCodeBadResponse, "failed to finish Dify stream response")
 		return nil, streamErr
 	}
 	info.StreamStatus.MarkTerminalDelivered()
@@ -469,17 +469,17 @@ func difyStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 	return usage, nil
 }
 
-func difyHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+func difyHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *hosttypes.NewAPIError) {
 	var difyResponse DifyChatCompletionResponse
 	responseBody, err := io.ReadAll(resp.Body)
 
 	if err != nil {
-		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+		return nil, hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody)
 	}
 	service.CloseResponseBodyGracefully(resp)
 	err = common.Unmarshal(responseBody, &difyResponse)
 	if err != nil {
-		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+		return nil, hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody)
 	}
 	if strings.EqualFold(difyResponse.Event, "error") || difyResponse.Code != "" || difyErrorStatus(difyResponse.Status) ||
 		(difyResponse.Message != "" && difyResponse.ConversationId == "" && difyResponse.Answer == "") {
@@ -487,14 +487,14 @@ func difyHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respons
 		if message == "" {
 			message = "Dify returned an error response"
 		}
-		return nil, newDifyResponseError(types.ErrorCodeBadResponse, message)
+		return nil, newDifyResponseError(hosttypes.ErrorCodeBadResponse, message)
 	}
 	if difyRequiresSuccessfulWorkflow(info) {
 		if strings.TrimSpace(difyResponse.Answer) == "" {
-			return nil, newDifyResponseError(types.ErrorCodeEmptyResponse, "Dify workflow returned an empty response")
+			return nil, newDifyResponseError(hosttypes.ErrorCodeEmptyResponse, "Dify workflow returned an empty response")
 		}
 		if difyResponse.MetaData.Usage.TotalTokens <= 0 {
-			return nil, newDifyResponseError(types.ErrorCodeBadResponse, "Dify workflow returned zero token usage")
+			return nil, newDifyResponseError(hosttypes.ErrorCodeBadResponse, "Dify workflow returned zero token usage")
 		}
 	}
 	fullTextResponse := dto.OpenAITextResponse{
@@ -514,10 +514,10 @@ func difyHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respons
 	fullTextResponse.Choices = append(fullTextResponse.Choices, choice)
 	jsonResponse, err := common.Marshal(fullTextResponse)
 	if err != nil {
-		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+		return nil, hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody)
 	}
 	if err := service.IOCopyBytesGracefully(c, resp, jsonResponse); err != nil {
-		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+		return nil, hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody)
 	}
 	return &difyResponse.MetaData.Usage, nil
 }

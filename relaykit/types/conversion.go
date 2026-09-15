@@ -13,26 +13,32 @@ const (
 )
 
 type ConversionDiagnostic struct {
-	Code     string                       `json:"code"`
-	Path     string                       `json:"path,omitempty"`
-	Message  string                       `json:"message"`
-	Severity ConversionDiagnosticSeverity `json:"severity"`
-	From     RelayFormat                  `json:"from"`
-	To       RelayFormat                  `json:"to"`
+	LossClass string                       `json:"loss_class,omitempty"`
+	Code      string                       `json:"code"`
+	Path      string                       `json:"path,omitempty"`
+	Message   string                       `json:"message"`
+	Severity  ConversionDiagnosticSeverity `json:"severity"`
+	From      RelayFormat                  `json:"from"`
+	To        RelayFormat                  `json:"to"`
 }
+
+const (
+	ConversionLossPresentation = "presentation"
+	ConversionLossSemantic     = "semantic"
+)
 
 type ConversionLossPolicy string
 
 const (
 	// ConversionLossPolicySafe rejects request-phase conversions that would
 	// change tool execution semantics, while returning non-fatal loss as
-	// diagnostics. It is opt-in; the default is ConversionLossPolicyAllow.
+	// diagnostics. This is the default policy for conversion sessions.
 	ConversionLossPolicySafe ConversionLossPolicy = "safe"
 	// ConversionLossPolicyStrict rejects every lossy conversion, including
 	// presentation-only metadata loss.
 	ConversionLossPolicyStrict ConversionLossPolicy = "strict"
-	// ConversionLossPolicyAllow is the default. It permits lossy conversion
-	// and reports every loss through the conversion result.
+	// ConversionLossPolicyAllow is retained for explicit legacy callers only.
+	// Host protocol policies never select this unrestricted mode.
 	ConversionLossPolicyAllow ConversionLossPolicy = "allow"
 )
 
@@ -64,7 +70,7 @@ func RejectConversionLoss(policy ConversionLossPolicy, diagnostics []ConversionD
 	}
 	rejected := make([]ConversionDiagnostic, 0, len(diagnostics))
 	for _, diagnostic := range diagnostics {
-		if policy == ConversionLossPolicyStrict || diagnostic.Severity == ConversionDiagnosticError {
+		if policy == ConversionLossPolicyStrict || diagnostic.Severity == ConversionDiagnosticError || diagnostic.LossClass != ConversionLossPresentation {
 			rejected = append(rejected, diagnostic)
 		}
 	}

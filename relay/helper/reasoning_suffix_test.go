@@ -1,6 +1,7 @@
 package helper
 
 import (
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -500,7 +501,7 @@ func TestApplyReasoningModelSuffixChannelPassThroughKeepsModifierBodyVerbatim(t 
 		Request:         request,
 		ChannelMeta: &relaycommon.ChannelMeta{
 			UpstreamModelName: model,
-			ChannelSetting:    dto.ChannelSettings{PassThroughBodyEnabled: true},
+			ChannelSetting:    hostdto.ChannelSettings{PassThroughBodyEnabled: true},
 		},
 	}
 

@@ -2,6 +2,7 @@ package relay
 
 import (
 	"errors"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"net/http"
 
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -10,14 +11,14 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func newConvertRequestFailedError(c *gin.Context, info *relaycommon.RelayInfo, err error) *types.NewAPIError {
+func newConvertRequestFailedError(c *gin.Context, info *relaycommon.RelayInfo, err error) *hosttypes.NewAPIError {
 	var loss *types.ConversionLossError
 	if errors.As(err, &loss) {
 		info.RecordConversionDiagnostics(c, loss.Diagnostics)
-		return types.NewErrorWithStatusCode(err, types.ErrorCodeConvertRequestFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		return hosttypes.NewErrorWithStatusCode(err, hosttypes.ErrorCodeConvertRequestFailed, http.StatusBadRequest, hosttypes.ErrOptionWithSkipRetry())
 	}
 	if kitreasoning.IsClientError(err) {
-		return types.NewErrorWithStatusCode(err, types.ErrorCodeConvertRequestFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		return hosttypes.NewErrorWithStatusCode(err, hosttypes.ErrorCodeConvertRequestFailed, http.StatusBadRequest, hosttypes.ErrOptionWithSkipRetry())
 	}
-	return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+	return hosttypes.NewError(err, hosttypes.ErrorCodeConvertRequestFailed, hosttypes.ErrOptionWithSkipRetry())
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -388,7 +389,7 @@ func TestResponsesContinuationFallsBackWhenUpstreamDoesNotAcknowledgeIt(t *testi
 	acknowledgementErr := ValidateResponsesContinuation(rejectedContext, mustProtocolStateJSON(t, nil))
 	require.Error(t, acknowledgementErr)
 	assert.Contains(t, acknowledgementErr.Error(), "did not acknowledge")
-	apiErr := types.NewErrorWithStatusCode(acknowledgementErr, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
+	apiErr := hosttypes.NewErrorWithStatusCode(acknowledgementErr, hosttypes.ErrorCodeBadResponseBody, http.StatusBadGateway)
 	assert.True(t, EnableReplayFallback(rejectedContext, apiErr))
 
 	replayed := &dto.OpenAIResponsesRequest{
@@ -2014,7 +2015,7 @@ func TestClaudeCodeResponsesContinuationRequiresStrictAppend(t *testing.T) {
 	ApplyMessagesContinuation(nextContext, responsesRequest)
 	assert.Equal(t, "resp_upstream_claude", responsesRequest.PreviousResponseID)
 
-	retryError := types.NewErrorWithStatusCode(fmt.Errorf("previous_response_id not found"), types.ErrorCodeInvalidRequest, 404)
+	retryError := hosttypes.NewErrorWithStatusCode(fmt.Errorf("previous_response_id not found"), hosttypes.ErrorCodeInvalidRequest, 404)
 	assert.True(t, EnableReplayFallback(nextContext, retryError))
 	replayedOutbound := claudeSessionRequest("hello")
 	replayedOutbound.Messages = append(replayedOutbound.Messages,
@@ -2465,7 +2466,7 @@ func TestReplayFallbackRequiresExplicitContinuationErrorBeforeOutput(t *testing.
 
 	unrelatedContext := protocolStateTestContext("unrelated-404", 8, 9)
 	common.SetContextKey(unrelatedContext, constant.ContextKeyProtocolStatePending, &pendingState{usedContinuation: true})
-	unrelatedError := types.NewErrorWithStatusCode(fmt.Errorf("model not found"), types.ErrorCodeInvalidRequest, 404)
+	unrelatedError := hosttypes.NewErrorWithStatusCode(fmt.Errorf("model not found"), hosttypes.ErrorCodeInvalidRequest, 404)
 	assert.False(t, EnableReplayFallback(unrelatedContext, unrelatedError))
 
 	writtenRecorder := httptest.NewRecorder()
@@ -2474,7 +2475,7 @@ func TestReplayFallbackRequiresExplicitContinuationErrorBeforeOutput(t *testing.
 	common.SetContextKey(writtenContext, constant.ContextKeyProtocolStatePending, &pendingState{usedContinuation: true})
 	_, err := writtenContext.Writer.Write([]byte("partial"))
 	require.NoError(t, err)
-	continuationError := types.NewErrorWithStatusCode(fmt.Errorf("previous_response_id not found"), types.ErrorCodeInvalidRequest, 404)
+	continuationError := hosttypes.NewErrorWithStatusCode(fmt.Errorf("previous_response_id not found"), hosttypes.ErrorCodeInvalidRequest, 404)
 	assert.False(t, EnableReplayFallback(writtenContext, continuationError))
 }
 

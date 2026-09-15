@@ -1,17 +1,24 @@
 package geminichat
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/internal/jsonutil"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/internal/toolconv"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
+	"github.com/QuantumNous/new-api/relaykit/types"
 )
 
 func GeminiGenerateContentRequestToOpenAIChat(geminiRequest *dto.GeminiChatRequest, info convmeta.Meta) (*dto.GeneralOpenAIRequest, error) {
+	return GeminiGenerateContentRequestToOpenAIChatWithContext(context.Background(), geminiRequest, info)
+}
+
+func GeminiGenerateContentRequestToOpenAIChatWithContext(c context.Context, geminiRequest *dto.GeminiChatRequest, info convmeta.Meta) (*dto.GeneralOpenAIRequest, error) {
 	modelName := ""
 	isStream := false
 	if info != nil {
@@ -184,7 +191,8 @@ func GeminiGenerateContentRequestToOpenAIChat(geminiRequest *dto.GeminiChatReque
 
 		if len(toolCalls) > 0 {
 			message.SetToolCalls(toolCalls)
-		} else if len(mediaContents) == 1 && mediaContents[0].Type == "text" {
+		}
+		if len(mediaContents) == 1 && mediaContents[0].Type == "text" {
 			message.Content = mediaContents[0].Text
 		} else if len(mediaContents) > 0 {
 			message.SetMediaContent(mediaContents)
@@ -220,36 +228,8 @@ func GeminiGenerateContentRequestToOpenAIChat(geminiRequest *dto.GeminiChatReque
 		openaiRequest.N = kitutil.GetPointer(*geminiRequest.GenerationConfig.CandidateCount)
 	}
 
-	if len(geminiRequest.GetTools()) > 0 {
-		var tools []dto.ToolCallRequest
-		for _, tool := range geminiRequest.GetTools() {
-			if tool.FunctionDeclarations == nil {
-				continue
-			}
-			functionDeclarations, err := kitutil.Any2Type[[]dto.FunctionRequest](tool.FunctionDeclarations)
-			if err != nil {
-				kitutil.LogSystemError(fmt.Sprintf("failed to parse gemini function declarations: %v (type=%T)", err, tool.FunctionDeclarations))
-				continue
-			}
-			for _, function := range functionDeclarations {
-				parameters := function.Parameters
-				if function.ParametersJsonSchema != nil {
-					parameters = function.ParametersJsonSchema
-				}
-				openAITool := dto.ToolCallRequest{
-					Type: "function",
-					Function: dto.FunctionRequest{
-						Name:        function.Name,
-						Description: function.Description,
-						Parameters:  parameters,
-					},
-				}
-				tools = append(tools, openAITool)
-			}
-		}
-		if len(tools) > 0 {
-			openaiRequest.Tools = tools
-		}
+	if err := toolconv.RenderRequestTools(c, types.RelayFormatGemini, types.RelayFormatOpenAI, geminiRequest, openaiRequest, opts); err != nil {
+		return nil, err
 	}
 
 	if geminiRequest.SystemInstructions != nil {
@@ -261,88 +241,6 @@ func GeminiGenerateContentRequestToOpenAIChat(geminiRequest *dto.GeminiChatReque
 	}
 
 	return openaiRequest, nil
-}
-
-type geminiPendingFunctionCall struct {
-	id   string
-	name string
-}
-
-// geminiFunctionCallHistory keeps legacy Gemini histories without call IDs
-// correlated across content boundaries. Named matching permits results for
-// different parallel functions to arrive out of order; same-name calls use
-// their original call order because old payloads contain no stronger identity.
-type geminiFunctionCallHistory struct {
-	reservedIDs map[string]struct{}
-	pending     []geminiPendingFunctionCall
-	nextID      int
-}
-
-func newGeminiFunctionCallHistory(contents []dto.GeminiChatContent) *geminiFunctionCallHistory {
-	history := &geminiFunctionCallHistory{
-		reservedIDs: make(map[string]struct{}),
-		nextID:      1,
-	}
-	for _, content := range contents {
-		for _, part := range content.Parts {
-			if part.FunctionCall != nil && part.FunctionCall.ID != "" {
-				history.reservedIDs[part.FunctionCall.ID] = struct{}{}
-			}
-			if part.FunctionResponse != nil {
-				if id := kitutil.JsonRawMessageToString(part.FunctionResponse.ID); id != "" {
-					history.reservedIDs[id] = struct{}{}
-				}
-			}
-		}
-	}
-	return history
-}
-
-func (h *geminiFunctionCallHistory) add(call *dto.FunctionCall) string {
-	id := call.ID
-	if id == "" {
-		id = h.newFallbackID()
-	}
-	h.pending = append(h.pending, geminiPendingFunctionCall{id: id, name: call.FunctionName})
-	return id
-}
-
-func (h *geminiFunctionCallHistory) match(response *dto.GeminiFunctionResponse) string {
-	if id := kitutil.JsonRawMessageToString(response.ID); id != "" {
-		h.removePendingByID(id)
-		return id
-	}
-
-	for i, call := range h.pending {
-		if response.Name != "" && call.name != response.Name {
-			continue
-		}
-		h.pending = append(h.pending[:i], h.pending[i+1:]...)
-		return call.id
-	}
-	return h.newFallbackID()
-}
-
-func (h *geminiFunctionCallHistory) removePendingByID(id string) {
-	for i, call := range h.pending {
-		if call.id != id {
-			continue
-		}
-		h.pending = append(h.pending[:i], h.pending[i+1:]...)
-		return
-	}
-}
-
-func (h *geminiFunctionCallHistory) newFallbackID() string {
-	for {
-		id := fmt.Sprintf("call_%d", h.nextID)
-		h.nextID++
-		if _, exists := h.reservedIDs[id]; exists {
-			continue
-		}
-		h.reservedIDs[id] = struct{}{}
-		return id
-	}
 }
 
 func convertGeminiRoleToOpenAI(geminiRole string) string {

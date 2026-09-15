@@ -1,12 +1,12 @@
 package channelcompat
 
 import (
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -45,7 +45,7 @@ func TestCompatibilityMatrixProtectsImplementedProtocolBoundaries(t *testing.T) 
 			modelName: "gemini-2.5-pro",
 			status:    StatusConvertible,
 			upstream:  ProtocolGemini,
-			converter: "anthropic_messages_to_gemini_generate_content",
+			converter: "claude_messages_to_gemini_generate_content",
 		},
 		{
 			name:      "Codex only accepts Responses",
@@ -82,8 +82,8 @@ func TestCompatibilityMatrixProtectsImplementedProtocolBoundaries(t *testing.T) 
 }
 
 func TestAdvancedCustomCompatibilityUsesMatchedRouteAndModel(t *testing.T) {
-	settings := dto.ChannelOtherSettings{
-		AdvancedCustom: &dto.AdvancedCustomConfig{Routes: []dto.AdvancedCustomRoute{
+	settings := hostdto.ChannelOtherSettings{
+		AdvancedCustom: &hostdto.AdvancedCustomConfig{Routes: []hostdto.AdvancedCustomRoute{
 			{
 				IncomingPath: "/v1/messages",
 				UpstreamPath: "/v1/chat/completions",

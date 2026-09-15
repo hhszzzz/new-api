@@ -3,6 +3,7 @@ package oairesponses
 import (
 	"errors"
 	"fmt"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/internal/toolconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -419,9 +420,9 @@ func responsesToolCallArguments(output *dto.ResponsesOutput) string {
 	}
 	switch output.Type {
 	case responsesOutputTypeCustomToolCall:
-		return customInputArguments(output.Input)
+		return toolconv.CustomInputArguments(output.Input)
 	case responsesOutputTypeToolSearchCall:
-		if args := toolSearchArguments(output.Arguments); args != "" {
+		if args := toolconv.ToolSearchArguments(output.Arguments); args != "" {
 			return args
 		}
 		return "{}"

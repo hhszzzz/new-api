@@ -375,7 +375,11 @@ func decodeClaudeDefinition(raw json.RawMessage) (Definition, error) {
 			Raw:        cloneRaw(raw),
 		}, nil
 	}
-	if toolType == "" {
+	if toolType == "" || toolType == "custom" {
+		parameters, err := functionParametersMap(tool["input_schema"])
+		if err != nil {
+			return Definition{}, fmt.Errorf("invalid Claude input_schema: %w", err)
+		}
 		return Definition{
 			Kind:      KindFunction,
 			Execution: ExecutionClient,
@@ -384,7 +388,7 @@ func decodeClaudeDefinition(raw json.RawMessage) (Definition, error) {
 			Function: &Function{
 				Name:        strings.TrimSpace(kitutil.Interface2String(tool["name"])),
 				Description: kitutil.Interface2String(tool["description"]),
-				Parameters:  tool["input_schema"],
+				Parameters:  parameters,
 				Strict:      boolPointer(tool, "strict"),
 			},
 		}, nil
@@ -641,6 +645,9 @@ func decodeClaudeChoice(value any, definitions []Definition) (*Choice, error) {
 		decoded = &Choice{Mode: ChoiceRequired}
 	case "tool":
 		name := strings.TrimSpace(kitutil.Interface2String(choice["name"]))
+		if name == "" {
+			return nil, fmt.Errorf("Claude tool_choice type tool requires a name")
+		}
 		kind := KindNative
 		matches := 0
 		for _, definition := range definitions {
@@ -656,6 +663,9 @@ func decodeClaudeChoice(value any, definitions []Definition) (*Choice, error) {
 		}
 		if matches > 1 {
 			return nil, fmt.Errorf("Claude tool_choice name %q is ambiguous across %d definitions", name, matches)
+		}
+		if matches == 0 {
+			return nil, fmt.Errorf("Claude tool_choice references undeclared tool %q", name)
 		}
 		decoded = &Choice{Mode: ChoiceNamed, Kind: kind, Name: name}
 	default:

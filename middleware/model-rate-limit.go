@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"math"
 	"net/http"
 	"strconv"
@@ -11,7 +12,6 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/common/limiter"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting"
 
 	"github.com/gin-gonic/gin"
@@ -96,19 +96,19 @@ func modelRequestRateLimitConfig(c *gin.Context) (duration int64, totalMaxCount 
 	return duration, totalMaxCount, successMaxCount
 }
 
-func newModelRateLimitError(message string, statusCode int) *types.NewAPIError {
-	return types.NewErrorWithStatusCode(
+func newModelRateLimitError(message string, statusCode int) *hosttypes.NewAPIError {
+	return hosttypes.NewErrorWithStatusCode(
 		fmt.Errorf("%s", message),
-		types.ErrorCodeInvalidRequest,
+		hosttypes.ErrorCodeInvalidRequest,
 		statusCode,
-		types.ErrOptionWithSkipRetry(),
-		types.ErrOptionWithNoRecordErrorLog(),
+		hosttypes.ErrOptionWithSkipRetry(),
+		hosttypes.ErrOptionWithNoRecordErrorLog(),
 	)
 }
 
 // CheckModelRequestRateLimit reserves one total request slot and returns a
 // callback that records the successful-request slot only after completion.
-func CheckModelRequestRateLimit(c *gin.Context) (ModelRequestRateLimitCommit, *types.NewAPIError) {
+func CheckModelRequestRateLimit(c *gin.Context) (ModelRequestRateLimitCommit, *hosttypes.NewAPIError) {
 	if !setting.ModelRequestRateLimitEnabled {
 		return func(bool) {}, nil
 	}

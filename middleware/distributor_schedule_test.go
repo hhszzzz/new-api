@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -9,8 +10,6 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/relaykit/types"
-
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -32,7 +31,7 @@ func TestSetupContextForSelectedChannelEnforcesScheduleUnlessBypassed(t *testing
 	enforcedError := SetupContextForSelectedChannel(enforcedContext, channel, "gpt-test", true)
 	require.NotNil(t, enforcedError)
 	require.ErrorIs(t, enforcedError, ErrChannelOutsideSchedule)
-	assert.Equal(t, types.ErrorCodeGetChannelFailed, enforcedError.GetErrorCode())
+	assert.Equal(t, hosttypes.ErrorCodeGetChannelFailed, enforcedError.GetErrorCode())
 	assert.Equal(t, http.StatusServiceUnavailable, enforcedError.StatusCode)
 
 	bypassedContext, _ := gin.CreateTestContext(httptest.NewRecorder())

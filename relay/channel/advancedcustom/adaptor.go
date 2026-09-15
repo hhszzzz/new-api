@@ -3,6 +3,8 @@ package advancedcustom
 import (
 	"errors"
 	"fmt"
+	hostdto "github.com/QuantumNous/new-api/dto"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 	"net/url"
@@ -36,7 +38,7 @@ type Adaptor struct {
 
 	resolved  bool
 	converted bool
-	route     dto.AdvancedCustomRoute
+	route     hostdto.AdvancedCustomRoute
 	converter string
 }
 
@@ -243,11 +245,11 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 }
 
 func (a *Adaptor) BuildModelListRequest(info *relaycommon.RelayInfo) (string, http.Header, error) {
-	return a.buildManagementRequest(info, dto.AdvancedCustomModelListPath)
+	return a.buildManagementRequest(info, hostdto.AdvancedCustomModelListPath)
 }
 
 func (a *Adaptor) BuildBalanceRequest(info *relaycommon.RelayInfo) (string, http.Header, error) {
-	return a.buildManagementRequest(info, dto.AdvancedCustomBalancePath)
+	return a.buildManagementRequest(info, hostdto.AdvancedCustomBalancePath)
 }
 
 func (a *Adaptor) buildManagementRequest(info *relaycommon.RelayInfo, managementPath string) (string, http.Header, error) {
@@ -261,12 +263,12 @@ func (a *Adaptor) buildManagementRequest(info *relaycommon.RelayInfo, management
 	if err := config.Validate(); err != nil {
 		return "", nil, err
 	}
-	var route dto.AdvancedCustomRoute
+	var route hostdto.AdvancedCustomRoute
 	var ok bool
 	switch managementPath {
-	case dto.AdvancedCustomModelListPath:
+	case hostdto.AdvancedCustomModelListPath:
 		route, ok = config.ModelListRoute()
-	case dto.AdvancedCustomBalancePath:
+	case hostdto.AdvancedCustomBalancePath:
 		route, ok = config.BalanceRoute()
 	default:
 		return "", nil, fmt.Errorf("unsupported advanced custom management path: %s", managementPath)
@@ -295,8 +297,8 @@ func (a *Adaptor) buildManagementRequest(info *relaycommon.RelayInfo, management
 	}
 
 	switch strings.TrimSpace(auth.Type) {
-	case dto.AdvancedCustomAuthTypeNone, dto.AdvancedCustomAuthTypeQuery:
-	case dto.AdvancedCustomAuthTypeHeader:
+	case hostdto.AdvancedCustomAuthTypeNone, hostdto.AdvancedCustomAuthTypeQuery:
+	case hostdto.AdvancedCustomAuthTypeHeader:
 		header.Set(strings.TrimSpace(auth.Name), applyAuthTemplate(auth.Value, info.ApiKey))
 	default:
 		return "", nil, fmt.Errorf("invalid advanced custom auth type: %s", auth.Type)
@@ -315,10 +317,10 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, header *http.Header, info *
 		header.Set("Authorization", "Bearer "+info.ApiKey)
 	} else {
 		switch strings.TrimSpace(auth.Type) {
-		case dto.AdvancedCustomAuthTypeNone:
-		case dto.AdvancedCustomAuthTypeHeader:
+		case hostdto.AdvancedCustomAuthTypeNone:
+		case hostdto.AdvancedCustomAuthTypeHeader:
 			header.Set(strings.TrimSpace(auth.Name), applyAuthTemplate(auth.Value, info.ApiKey))
-		case dto.AdvancedCustomAuthTypeQuery:
+		case hostdto.AdvancedCustomAuthTypeQuery:
 		default:
 			return fmt.Errorf("invalid advanced custom auth type: %s", auth.Type)
 		}
@@ -331,7 +333,7 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, header *http.Header, info *
 	return nil
 }
 
-func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {
+func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (*channel.TransportResult, error) {
 	if err := a.resolve(c, info); err != nil {
 		return nil, err
 	}
@@ -342,17 +344,17 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 	if info.RelayMode == relayconstant.RelayModeAudioTranscription ||
 		info.RelayMode == relayconstant.RelayModeAudioTranslation ||
 		(info.RelayMode == relayconstant.RelayModeImagesEdits && !isJSONRequest(c)) {
-		return channel.DoFormRequest(a, c, info, requestBody)
+		return channel.HTTPResult(channel.DoFormRequest(a, c, info, requestBody))
 	}
 	if info.RelayMode == relayconstant.RelayModeRealtime {
-		return channel.DoWssRequest(a, c, info, requestBody)
+		return channel.WebSocketResult(channel.DoWssRequest(a, c, info, requestBody))
 	}
-	return channel.DoApiRequest(a, c, info, requestBody)
+	return channel.HTTPResult(channel.DoApiRequest(a, c, info, requestBody))
 }
 
-func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage any, err *types.NewAPIError) {
+func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage dto.UsageResult, err *hosttypes.NewAPIError) {
 	if err := a.resolve(c, info); err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeInvalidRequest, http.StatusBadRequest, hosttypes.ErrOptionWithSkipRetry())
 	}
 
 	switch a.converter {
@@ -381,7 +383,7 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 		}
 		return openai.OaiChatToResponsesHandler(c, info, resp)
 	default:
-		return nil, types.NewOpenAIError(fmt.Errorf("unsupported advanced custom converter: %s", a.converter), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		return nil, hosttypes.NewOpenAIError(fmt.Errorf("unsupported advanced custom converter: %s", a.converter), hosttypes.ErrorCodeInvalidRequest, http.StatusBadRequest, hosttypes.ErrOptionWithSkipRetry())
 	}
 }
 
@@ -397,7 +399,7 @@ func (a *Adaptor) GetChannelName() string {
 	return ChannelName
 }
 
-func (a *Adaptor) doNativeResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (any, *types.NewAPIError) {
+func (a *Adaptor) doNativeResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (dto.UsageResult, *hosttypes.NewAPIError) {
 	switch info.RelayFormat {
 	case types.RelayFormatClaude:
 		return a.claudeAdaptor.DoResponse(c, resp, info)
@@ -433,10 +435,13 @@ func (a *Adaptor) resolve(c *gin.Context, info *relaycommon.RelayInfo) error {
 
 	incomingPath := incomingRequestPath(c, info)
 	selectionModel := info.SelectionModelName()
-	if plan, ok := advancedCustomProtocolPlan(c); ok && strings.TrimSpace(plan.EffectiveUpstreamModel) != "" {
+	if plan, planned := advancedCustomProtocolPlan(c); planned && strings.TrimSpace(plan.EffectiveUpstreamModel) != "" {
 		selectionModel = plan.EffectiveUpstreamModel
 	}
 	route, ok := config.MatchPathForModel(incomingPath, selectionModel)
+	if plan, planned := advancedCustomProtocolPlan(c); planned && plan.AdvancedCustomRoute != nil {
+		route, ok = *plan.AdvancedCustomRoute, true
+	}
 	if ok {
 		route.Converter = strings.TrimSpace(route.Converter)
 		if route.Converter == "" {
@@ -464,7 +469,7 @@ func (a *Adaptor) routeURL(info *relaycommon.RelayInfo) (string, error) {
 	return buildRouteURL(a.route, a.converter, info)
 }
 
-func buildRouteURL(route dto.AdvancedCustomRoute, converter string, info *relaycommon.RelayInfo) (string, error) {
+func buildRouteURL(route hostdto.AdvancedCustomRoute, converter string, info *relaycommon.RelayInfo) (string, error) {
 	parsedURL, err := resolveUpstreamTargetURL(applyUpstreamPathTemplate(strings.TrimSpace(route.UpstreamPath), info), info)
 	if err != nil {
 		return "", err
@@ -480,7 +485,7 @@ func buildRouteURL(route dto.AdvancedCustomRoute, converter string, info *relayc
 			parsedURL.Scheme = "ws"
 		}
 	}
-	if route.Auth != nil && strings.TrimSpace(route.Auth.Type) == dto.AdvancedCustomAuthTypeQuery {
+	if route.Auth != nil && strings.TrimSpace(route.Auth.Type) == hostdto.AdvancedCustomAuthTypeQuery {
 		query := parsedURL.Query()
 		query.Set(strings.TrimSpace(route.Auth.Name), applyAuthTemplate(route.Auth.Value, info.ApiKey))
 		parsedURL.RawQuery = query.Encode()

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 	"strings"
@@ -93,7 +94,7 @@ type responsesWSSession struct {
 	current       *responsesWSCallState
 }
 
-func ResponsesWebSocketHelper(c *gin.Context, client *websocket.Conn) *types.NewAPIError {
+func ResponsesWebSocketHelper(c *gin.Context, client *websocket.Conn) *hosttypes.NewAPIError {
 	session := &responsesWSSession{
 		c:      c,
 		client: client,
@@ -111,7 +112,7 @@ func ResponsesWebSocketHelper(c *gin.Context, client *websocket.Conn) *types.New
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 				return nil
 			}
-			return types.NewError(err, types.ErrorCodeBadRequestBody, types.ErrOptionWithSkipRetry())
+			return hosttypes.NewError(err, hosttypes.ErrorCodeBadRequestBody, hosttypes.ErrOptionWithSkipRetry())
 		}
 
 		eventType, eventErr := responsesWSEventType(message)
@@ -162,8 +163,8 @@ func responsesWSEventType(message []byte) (string, error) {
 	return event.Type, nil
 }
 
-func newResponsesWSInvalidRequestError(err error) *types.NewAPIError {
-	return types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+func newResponsesWSInvalidRequestError(err error) *hosttypes.NewAPIError {
+	return hosttypes.NewErrorWithStatusCode(err, hosttypes.ErrorCodeInvalidRequest, http.StatusBadRequest, hosttypes.ErrOptionWithSkipRetry())
 }
 
 func normalizeResponsesWSCreateEvent(message []byte) (responsesWSCreateRequest, string, error) {
@@ -228,23 +229,23 @@ func normalizeResponsesWSCreateEvent(message []byte) (responsesWSCreateRequest, 
 	}, event.EventID, nil
 }
 
-func (s *responsesWSSession) handleResponseCreate(create responsesWSCreateRequest, eventID string) *types.NewAPIError {
+func (s *responsesWSSession) handleResponseCreate(create responsesWSCreateRequest, eventID string) *hosttypes.NewAPIError {
 	req := create.Request
 	if s.lockedModel != "" && req.Model != s.lockedModel {
-		return types.NewErrorWithStatusCode(
+		return hosttypes.NewErrorWithStatusCode(
 			fmt.Errorf("responses websocket connection is locked to model %q; got %q", s.lockedModel, req.Model),
-			types.ErrorCodeInvalidRequest,
+			hosttypes.ErrorCodeInvalidRequest,
 			http.StatusBadRequest,
-			types.ErrOptionWithSkipRetry(),
+			hosttypes.ErrOptionWithSkipRetry(),
 		)
 	}
 
 	if s.hasCurrent() {
-		return types.NewErrorWithStatusCode(
+		return hosttypes.NewErrorWithStatusCode(
 			errors.New("another response.create is already in progress on this websocket connection"),
-			types.ErrorCodeInvalidRequest,
+			hosttypes.ErrorCodeInvalidRequest,
 			http.StatusConflict,
-			types.ErrOptionWithSkipRetry(),
+			hosttypes.ErrOptionWithSkipRetry(),
 		)
 	}
 	protocolstate.ResetLogicalRequest(s.c)
@@ -266,11 +267,11 @@ func (s *responsesWSSession) handleResponseCreate(create responsesWSCreateReques
 	if s.lockedChannel != nil {
 		if binding, ok := common.GetContextKeyType[*protocolstate.SelectionBinding](s.c, appconstant.ContextKeyProtocolStateBinding); ok &&
 			binding != nil && binding.ChannelID > 0 && binding.ChannelID != s.lockedChannel.Id {
-			return types.NewErrorWithStatusCode(
+			return hosttypes.NewErrorWithStatusCode(
 				errors.New("the referenced response is bound to a different channel than this websocket connection"),
-				types.ErrorCodeInvalidRequest,
+				hosttypes.ErrorCodeInvalidRequest,
 				http.StatusBadRequest,
-				types.ErrOptionWithSkipRetry(),
+				hosttypes.ErrOptionWithSkipRetry(),
 			)
 		}
 	}
@@ -287,7 +288,7 @@ func (s *responsesWSSession) handleResponseCreate(create responsesWSCreateReques
 	policy, err := service.LoadUserRateLimitPolicy(common.GetContextKeyInt(s.c, appconstant.ContextKeyUserId), group)
 	if err != nil {
 		commitRate(false)
-		return types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
+		return hosttypes.NewError(err, hosttypes.ErrorCodeQueryDataError, hosttypes.ErrOptionWithSkipRetry())
 	}
 	rateGuard, apiErr := service.BeginUserRequestRateLimit(s.c, policy, validated.Model, service.UserConcurrencyWaitOptions{
 		Heartbeat: func() error {
@@ -307,11 +308,11 @@ func (s *responsesWSSession) handleResponseCreate(create responsesWSCreateReques
 	if setting.ShouldCheckPromptSensitive() {
 		if contains, _ := service.CheckSensitiveText(validated.GetSensitiveText()); contains {
 			commitRate(false)
-			return types.NewError(
+			return hosttypes.NewError(
 				errors.New("sensitive words detected"),
-				types.ErrorCodeSensitiveWordsDetected,
-				types.ErrOptionWithStatusCode(http.StatusBadRequest),
-				types.ErrOptionWithSkipRetry(),
+				hosttypes.ErrorCodeSensitiveWordsDetected,
+				hosttypes.ErrOptionWithStatusCode(http.StatusBadRequest),
+				hosttypes.ErrOptionWithSkipRetry(),
 			)
 		}
 	}
@@ -351,11 +352,11 @@ func (s *responsesWSSession) handleResponseCreate(create responsesWSCreateReques
 		channelRateGuard.Release()
 		state.refund(s.c)
 		commitRate(false)
-		return types.NewErrorWithStatusCode(
+		return hosttypes.NewErrorWithStatusCode(
 			errors.New("another response.create is already in progress on this websocket connection"),
-			types.ErrorCodeInvalidRequest,
+			hosttypes.ErrorCodeInvalidRequest,
 			http.StatusConflict,
-			types.ErrOptionWithSkipRetry(),
+			hosttypes.ErrOptionWithSkipRetry(),
 		)
 	}
 	if err := s.writeTarget(websocket.TextMessage, payload); err != nil {
@@ -364,7 +365,7 @@ func (s *responsesWSSession) handleResponseCreate(create responsesWSCreateReques
 	return nil
 }
 
-func installResponsesWSRequestBody(c *gin.Context, request *dto.OpenAIResponsesRequest) (*dto.OpenAIResponsesRequest, []byte, *types.NewAPIError) {
+func installResponsesWSRequestBody(c *gin.Context, request *dto.OpenAIResponsesRequest) (*dto.OpenAIResponsesRequest, []byte, *hosttypes.NewAPIError) {
 	requestBody, err := common.Marshal(request)
 	if err != nil {
 		return nil, nil, newResponsesWSInvalidRequestError(err)
@@ -372,7 +373,7 @@ func installResponsesWSRequestBody(c *gin.Context, request *dto.OpenAIResponsesR
 	common.CleanupBodyStorage(c)
 	storage, err := common.CreateBodyStorage(requestBody)
 	if err != nil {
-		return nil, nil, types.NewError(err, types.ErrorCodeReadRequestBodyFailed, types.ErrOptionWithSkipRetry())
+		return nil, nil, hosttypes.NewError(err, hosttypes.ErrorCodeReadRequestBodyFailed, hosttypes.ErrOptionWithSkipRetry())
 	}
 	c.Set(common.KeyBodyStorage, storage)
 	c.Request.Body = io.NopCloser(bytes.NewReader(requestBody))
@@ -392,44 +393,44 @@ func installResponsesWSRequestBody(c *gin.Context, request *dto.OpenAIResponsesR
 	return validated, validatedBody, nil
 }
 
-func (s *responsesWSSession) handleControlEventWriteFailure(err error) *types.NewAPIError {
+func (s *responsesWSSession) handleControlEventWriteFailure(err error) *hosttypes.NewAPIError {
 	apiErr := s.handleTargetWriteFailure(err)
 	s.sendError("", apiErr)
 	return nil
 }
 
-func (s *responsesWSSession) handleTargetWriteFailure(err error) *types.NewAPIError {
+func (s *responsesWSSession) handleTargetWriteFailure(err error) *hosttypes.NewAPIError {
 	state := s.getCurrent()
 	var relayInfo *relaycommon.RelayInfo
 	if state != nil {
 		relayInfo = state.info
 	}
 	s.closeTarget()
-	apiErr := types.NewError(err, types.ErrorCodeBadResponse)
+	apiErr := hosttypes.NewError(err, hosttypes.ErrorCodeBadResponse)
 	apiErr, _ = s.processChannelError(s.lockedChannel, apiErr, nil, relayInfo)
 	return apiErr
 }
 
-func (s *responsesWSSession) handleTargetWriteFailureWithState(state *responsesWSCallState, err error) *types.NewAPIError {
+func (s *responsesWSSession) handleTargetWriteFailureWithState(state *responsesWSCallState, err error) *hosttypes.NewAPIError {
 	s.finishCall(state, false)
 	return s.handleTargetWriteFailure(err)
 }
 
-func (s *responsesWSSession) connectAndSendFirst(create responsesWSCreateRequest, eventID string, commitRate middleware.ModelRequestRateLimitCommit) *types.NewAPIError {
+func (s *responsesWSSession) connectAndSendFirst(create responsesWSCreateRequest, eventID string, commitRate middleware.ModelRequestRateLimitCommit) *hosttypes.NewAPIError {
 	req := create.Request
 	if s.nativeTransportFailed {
 		return s.startHTTPBridgeCall(create, eventID, commitRate)
 	}
 	retryParam := middleware.NewResponsesWebSocketRetryParam(s.c, req.Model)
 
-	var lastErr *types.NewAPIError
+	var lastErr *hosttypes.NewAPIError
 	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
 		protocolstate.ResetAttempt(s.c)
 		retryParam.ClearChannelExclusions()
 		var (
 			channel          *appmodel.Channel
 			channelRateGuard *service.ChannelRateLimitGuard
-			apiErr           *types.NewAPIError
+			apiErr           *hosttypes.NewAPIError
 		)
 		for {
 			channel, apiErr = middleware.SelectResponsesWebSocketChannel(s.c, req.Model, retryParam)
@@ -469,7 +470,7 @@ func (s *responsesWSSession) connectAndSendFirst(create responsesWSCreateRequest
 		if adaptor == nil {
 			channelRateGuard.Release()
 			state.refund(s.c)
-			apiErr = types.NewError(fmt.Errorf("invalid api type: %d", state.info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
+			apiErr = hosttypes.NewError(fmt.Errorf("invalid api type: %d", state.info.ApiType), hosttypes.ErrorCodeInvalidApiType, hosttypes.ErrOptionWithSkipRetry())
 			var shouldRetry bool
 			lastErr, shouldRetry = s.processChannelError(channel, apiErr, retryParam, state.info)
 			if !shouldRetry {
@@ -496,19 +497,19 @@ func (s *responsesWSSession) connectAndSendFirst(create responsesWSCreateRequest
 			channelRateGuard.Release()
 			state.refund(s.c)
 			commitRate(false)
-			return types.NewErrorWithStatusCode(errors.New("another response.create is already in progress on this websocket connection"), types.ErrorCodeInvalidRequest, http.StatusConflict, types.ErrOptionWithSkipRetry())
+			return hosttypes.NewErrorWithStatusCode(errors.New("another response.create is already in progress on this websocket connection"), hosttypes.ErrorCodeInvalidRequest, http.StatusConflict, hosttypes.ErrOptionWithSkipRetry())
 		}
 		s.lockedModel = req.Model
 		s.lockedChannel = channel
 		s.registerChannelClose(channel.Id)
 		if !service.IsChannelAvailableForActiveWebSocket(channel.Id) {
 			s.closeForPolicy(service.ChannelDisabledCloseReason)
-			return types.NewError(fmt.Errorf("channel %d is disabled or deleted", channel.Id), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+			return hosttypes.NewError(fmt.Errorf("channel %d is disabled or deleted", channel.Id), hosttypes.ErrorCodeGetChannelFailed, hosttypes.ErrOptionWithSkipRetry())
 		}
 		if err := s.writeTarget(websocket.TextMessage, payload); err != nil {
 			s.abortRetryableCall(state)
 			s.closeTarget()
-			apiErr = types.NewError(err, types.ErrorCodeBadResponse)
+			apiErr = hosttypes.NewError(err, hosttypes.ErrorCodeBadResponse)
 			var shouldRetry bool
 			lastErr, shouldRetry = s.processChannelError(channel, apiErr, retryParam, state.info)
 			if !shouldRetry {
@@ -549,7 +550,7 @@ func (s *responsesWSSession) abortRetryableCall(state *responsesWSCallState) {
 	state.rateGuard.Unclaim()
 }
 
-func (s *responsesWSSession) processChannelError(channel *appmodel.Channel, apiErr *types.NewAPIError, retryParam *service.RetryParam, relayInfo *relaycommon.RelayInfo) (*types.NewAPIError, bool) {
+func (s *responsesWSSession) processChannelError(channel *appmodel.Channel, apiErr *hosttypes.NewAPIError, retryParam *service.RetryParam, relayInfo *relaycommon.RelayInfo) (*hosttypes.NewAPIError, bool) {
 	if apiErr == nil {
 		return nil, false
 	}
@@ -560,7 +561,7 @@ func (s *responsesWSSession) processChannelError(channel *appmodel.Channel, apiE
 	}
 	service.ResetStatusCode(apiErr, statusCodeMapping)
 	if channel != nil && s.c != nil {
-		service.ProcessChannelError(s.c, *types.NewChannelError(
+		service.ProcessChannelError(s.c, *hosttypes.NewChannelError(
 			channel.Id,
 			channel.Type,
 			channel.Name,
@@ -575,7 +576,7 @@ func (s *responsesWSSession) processChannelError(channel *appmodel.Channel, apiE
 	return apiErr, service.ShouldRetryRelayError(s.c, apiErr, common.RetryTimes-retryParam.GetRetry())
 }
 
-func (s *responsesWSSession) prepareCall(create responsesWSCreateRequest, commitRate middleware.ModelRequestRateLimitCommit) (*responsesWSCallState, []byte, *types.NewAPIError) {
+func (s *responsesWSSession) prepareCall(create responsesWSCreateRequest, commitRate middleware.ModelRequestRateLimitCommit) (*responsesWSCallState, []byte, *hosttypes.NewAPIError) {
 	state, apiErr := s.prepareCallState(create)
 	if apiErr != nil {
 		return nil, nil, apiErr
@@ -594,7 +595,7 @@ func (s *responsesWSSession) prepareCall(create responsesWSCreateRequest, commit
 // prepareCallState performs the per-attempt request accounting shared by the
 // native WebSocket transport and the HTTP bridge: relay info, sensitive check,
 // token estimate, pricing, and pre-consume.
-func (s *responsesWSSession) prepareCallState(create responsesWSCreateRequest) (*responsesWSCallState, *types.NewAPIError) {
+func (s *responsesWSSession) prepareCallState(create responsesWSCreateRequest) (*responsesWSCallState, *hosttypes.NewAPIError) {
 	req := create.Request
 	eventRequestID := s.c.GetString(common.RequestIdKey)
 	if eventRequestID == "" {
@@ -611,19 +612,19 @@ func (s *responsesWSSession) prepareCallState(create responsesWSCreateRequest) (
 		contains, _ := service.CheckSensitiveText(req.GetSensitiveText())
 		if contains {
 			logger.LogWarn(s.c, "user sensitive words detected")
-			return nil, types.NewErrorWithStatusCode(errors.New("sensitive words detected"), types.ErrorCodeSensitiveWordsDetected, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+			return nil, hosttypes.NewErrorWithStatusCode(errors.New("sensitive words detected"), hosttypes.ErrorCodeSensitiveWordsDetected, http.StatusBadRequest, hosttypes.ErrOptionWithSkipRetry())
 		}
 	}
 
 	tokens, err := service.EstimateRequestToken(s.c, meta, relayInfo)
 	if err != nil {
-		return nil, types.NewError(err, types.ErrorCodeCountTokenFailed)
+		return nil, hosttypes.NewError(err, hosttypes.ErrorCodeCountTokenFailed)
 	}
 	relayInfo.SetEstimatePromptTokens(tokens)
 
 	priceData, err := helper.ModelPriceHelper(s.c, relayInfo, tokens, meta)
 	if err != nil {
-		return nil, types.NewError(err, types.ErrorCodeModelPriceError, types.ErrOptionWithStatusCode(http.StatusBadRequest))
+		return nil, hosttypes.NewError(err, hosttypes.ErrorCodeModelPriceError, hosttypes.ErrOptionWithStatusCode(http.StatusBadRequest))
 	}
 	if !priceData.FreeModel {
 		if apiErr := service.PreConsumeBilling(s.c, priceData.QuotaToPreConsume, relayInfo); apiErr != nil {
@@ -650,45 +651,45 @@ func (s *responsesWSSession) beginLogicalRequest() string {
 	return eventRequestID
 }
 
-func buildResponsesWSCreatePayload(c *gin.Context, relayInfo *relaycommon.RelayInfo, req dto.OpenAIResponsesRequest, generate json.RawMessage) ([]byte, *types.NewAPIError) {
+func buildResponsesWSCreatePayload(c *gin.Context, relayInfo *relaycommon.RelayInfo, req dto.OpenAIResponsesRequest, generate json.RawMessage) ([]byte, *hosttypes.NewAPIError) {
 	relayInfo.InitChannelMeta(c)
 	request, err := common.DeepCopy(&req)
 	if err != nil {
-		return nil, types.NewError(fmt.Errorf("failed to copy responses request: %w", err), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		return nil, hosttypes.NewError(fmt.Errorf("failed to copy responses request: %w", err), hosttypes.ErrorCodeInvalidRequest, hosttypes.ErrOptionWithSkipRetry())
 	}
 	if err := helper.ModelMappedHelper(c, relayInfo, request); err != nil {
-		return nil, types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
+		return nil, hosttypes.NewError(err, hosttypes.ErrorCodeChannelModelMappedError, hosttypes.ErrOptionWithSkipRetry())
 	}
 
 	plan, ok := selectedProtocolPlan(c)
 	if !ok || plan.Status != channelcompat.StatusNative || plan.UpstreamProtocol != channelcompat.ProtocolResponses {
-		return nil, types.NewErrorWithStatusCode(errors.New("Responses WebSocket requires a native Responses protocol plan"), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		return nil, hosttypes.NewErrorWithStatusCode(errors.New("Responses WebSocket requires a native Responses protocol plan"), hosttypes.ErrorCodeInvalidRequest, http.StatusBadRequest, hosttypes.ErrOptionWithSkipRetry())
 	}
 	adaptor := GetAdaptorForProtocol(relayInfo.ApiType, channelcompat.ProtocolResponses)
 	if adaptor == nil {
-		return nil, types.NewError(fmt.Errorf("invalid api type: %d", relayInfo.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
+		return nil, hosttypes.NewError(fmt.Errorf("invalid api type: %d", relayInfo.ApiType), hosttypes.ErrorCodeInvalidApiType, hosttypes.ErrOptionWithSkipRetry())
 	}
 	adaptor.Init(relayInfo)
 	if err := protocolstate.PrepareResponsesRequest(c, relayInfo, plan, request); err != nil {
-		return nil, types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		return nil, hosttypes.NewErrorWithStatusCode(err, hosttypes.ErrorCodeInvalidRequest, http.StatusBadRequest, hosttypes.ErrOptionWithSkipRetry())
 	}
 	applyResponsesInstructionsIfNeeded(c, relayInfo, request)
 	convertedRequest, err := convertRequestForProtocolPlan(c, relayInfo, adaptor, plan, request)
 	if err != nil {
-		return nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		return nil, hosttypes.NewError(err, hosttypes.ErrorCodeConvertRequestFailed, hosttypes.ErrOptionWithSkipRetry())
 	}
 	relaycommon.AppendRequestConversionFromRequest(relayInfo, convertedRequest)
 	jsonData, err := common.Marshal(convertedRequest)
 	if err != nil {
-		return nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		return nil, hosttypes.NewError(err, hosttypes.ErrorCodeConvertRequestFailed, hosttypes.ErrOptionWithSkipRetry())
 	}
-	jsonData, err = relaycommon.RemoveDisabledFields(jsonData, relayInfo.ChannelOtherSettings, relayInfo.ChannelSetting.PassThroughBodyEnabled)
+	jsonData, err = relaycommon.RemoveDisabledFields(jsonData, relayInfo.ChannelOtherSettings, relayInfo.ShouldPassThroughBody())
 	if err != nil {
-		return nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		return nil, hosttypes.NewError(err, hosttypes.ErrorCodeConvertRequestFailed, hosttypes.ErrOptionWithSkipRetry())
 	}
 	jsonData, err = removeResponsesWSTransportFields(jsonData)
 	if err != nil {
-		return nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		return nil, hosttypes.NewError(err, hosttypes.ErrorCodeConvertRequestFailed, hosttypes.ErrOptionWithSkipRetry())
 	}
 	if len(relayInfo.ParamOverride) > 0 {
 		jsonData, err = relaycommon.ApplyParamOverrideWithRelayInfo(jsonData, relayInfo)
@@ -699,7 +700,7 @@ func buildResponsesWSCreatePayload(c *gin.Context, relayInfo *relaycommon.RelayI
 
 	event, err := buildResponsesWSCreateEvent(jsonData, generate)
 	if err != nil {
-		return nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		return nil, hosttypes.NewError(err, hosttypes.ErrorCodeConvertRequestFailed, hosttypes.ErrOptionWithSkipRetry())
 	}
 	return event, nil
 }
@@ -735,20 +736,20 @@ func removeResponsesWSTransportFields(jsonData []byte) ([]byte, error) {
 	return common.Marshal(data)
 }
 
-func dialResponsesWebSocketUpstream(c *gin.Context, adaptor relaychannel.Adaptor, info *relaycommon.RelayInfo) (*websocket.Conn, *types.NewAPIError) {
+func dialResponsesWebSocketUpstream(c *gin.Context, adaptor relaychannel.Adaptor, info *relaycommon.RelayInfo) (*websocket.Conn, *hosttypes.NewAPIError) {
 	fullRequestURL, err := adaptor.GetRequestURL(info)
 	if err != nil {
-		return nil, types.NewError(fmt.Errorf("get request url failed: %w", err), types.ErrorCodeDoRequestFailed)
+		return nil, hosttypes.NewError(fmt.Errorf("get request url failed: %w", err), hosttypes.ErrorCodeDoRequestFailed)
 	}
 	fullRequestURL = toWebSocketURL(fullRequestURL)
 
 	targetHeader := http.Header{}
 	if err := adaptor.SetupRequestHeader(c, &targetHeader, info); err != nil {
-		return nil, types.NewError(fmt.Errorf("setup request header failed: %w", err), types.ErrorCodeDoRequestFailed)
+		return nil, hosttypes.NewError(fmt.Errorf("setup request header failed: %w", err), hosttypes.ErrorCodeDoRequestFailed)
 	}
 	headerOverride, err := relaychannel.ResolveHeaderOverride(info, c)
 	if err != nil {
-		return nil, types.NewError(err, types.ErrorCodeChannelHeaderOverrideInvalid)
+		return nil, hosttypes.NewError(err, hosttypes.ErrorCodeChannelHeaderOverrideInvalid)
 	}
 	for key, value := range headerOverride {
 		targetHeader.Set(key, value)
@@ -763,7 +764,7 @@ func dialResponsesWebSocketUpstream(c *gin.Context, adaptor relaychannel.Adaptor
 		if resp != nil {
 			return nil, service.RelayErrorHandler(c.Request.Context(), resp, false)
 		}
-		return nil, types.NewErrorWithStatusCode(fmt.Errorf("dial failed to %s: %w", fullRequestURL, err), types.ErrorCodeDoRequestFailed, http.StatusBadGateway)
+		return nil, hosttypes.NewErrorWithStatusCode(fmt.Errorf("dial failed to %s: %w", fullRequestURL, err), hosttypes.ErrorCodeDoRequestFailed, http.StatusBadGateway)
 	}
 	return targetConn, nil
 }
@@ -836,7 +837,7 @@ func (s *responsesWSSession) startTargetReader() {
 	}()
 }
 
-func (s *responsesWSSession) observeUpstreamMessage(message []byte) ([]byte, *types.NewAPIError) {
+func (s *responsesWSSession) observeUpstreamMessage(message []byte) ([]byte, *hosttypes.NewAPIError) {
 	state := s.getCurrent()
 	if state == nil {
 		return message, nil
@@ -849,7 +850,7 @@ func (s *responsesWSSession) observeUpstreamMessage(message []byte) ([]byte, *ty
 	}
 	if streamResponse.Response != nil {
 		if err := protocolstate.ValidateResponsesContinuation(s.c, streamResponse.Response.PreviousResponseID); err != nil {
-			return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
+			return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusBadGateway)
 		}
 	}
 
@@ -857,7 +858,7 @@ func (s *responsesWSSession) observeUpstreamMessage(message []byte) ([]byte, *ty
 	if protocolstate.PublicResponseID(s.c, "") != "" {
 		encoded, err := protocolstate.ObserveResponsesStreamData(s.c, &streamResponse, message)
 		if err != nil {
-			return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
+			return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusBadGateway)
 		}
 		publicMessage = encoded
 	} else {
@@ -866,7 +867,7 @@ func (s *responsesWSSession) observeUpstreamMessage(message []byte) ([]byte, *ty
 	if state.info.HasModelRouting() {
 		redacted, err := relaycommon.RedactUserModelRouteJSON(publicMessage, state.info)
 		if err != nil {
-			return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
+			return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusBadGateway)
 		}
 		publicMessage = redacted
 	}
@@ -1069,7 +1070,7 @@ func (s *responsesWSSession) writeTargetControl(messageType int, message []byte)
 	return s.target.WriteControl(messageType, message, time.Now().Add(time.Second))
 }
 
-func (s *responsesWSSession) sendError(eventID string, apiErr *types.NewAPIError) {
+func (s *responsesWSSession) sendError(eventID string, apiErr *hosttypes.NewAPIError) {
 	if apiErr == nil {
 		return
 	}
@@ -1080,11 +1081,11 @@ func (s *responsesWSSession) sendError(eventID string, apiErr *types.NewAPIError
 	_ = s.writeClient(websocket.TextMessage, payload)
 }
 
-func buildResponsesWSErrorPayload(eventID string, apiErr *types.NewAPIError) ([]byte, error) {
+func buildResponsesWSErrorPayload(eventID string, apiErr *hosttypes.NewAPIError) ([]byte, error) {
 	return buildResponsesWSErrorPayloadWithInfo(eventID, apiErr, nil)
 }
 
-func buildResponsesWSErrorPayloadWithInfo(eventID string, apiErr *types.NewAPIError, info *relaycommon.RelayInfo) ([]byte, error) {
+func buildResponsesWSErrorPayloadWithInfo(eventID string, apiErr *hosttypes.NewAPIError, info *relaycommon.RelayInfo) ([]byte, error) {
 	if apiErr == nil {
 		return nil, errors.New("api error is nil")
 	}

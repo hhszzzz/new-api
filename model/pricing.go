@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"maps"
 	"slices"
 	"strings"
@@ -11,7 +12,6 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
@@ -212,7 +212,7 @@ func GetModelSupportEndpointTypes(model string) []constant.EndpointType {
 	}
 }
 
-func getPricingEndpointTypesForAbility(ability AbilityWithChannel, advancedCustomConfigs map[int]*dto.AdvancedCustomConfig) []constant.EndpointType {
+func getPricingEndpointTypesForAbility(ability AbilityWithChannel, advancedCustomConfigs map[int]*hostdto.AdvancedCustomConfig) []constant.EndpointType {
 	if ability.ChannelType != constant.ChannelTypeAdvancedCustom {
 		return common.GetEndpointTypesByChannelType(ability.ChannelType, ability.Model)
 	}
@@ -230,7 +230,7 @@ func getPricingEndpointTypesForAbility(ability AbilityWithChannel, advancedCusto
 // The returned configs are pointers shared with the channel cache; they are
 // replaced wholesale on update and never mutated in place, so reading them after
 // RUnlock is safe.
-func loadPricingAdvancedCustomConfigs(enableAbilities []AbilityWithChannel) map[int]*dto.AdvancedCustomConfig {
+func loadPricingAdvancedCustomConfigs(enableAbilities []AbilityWithChannel) map[int]*hostdto.AdvancedCustomConfig {
 	channelIDs := make([]int, 0)
 	seen := make(map[int]struct{})
 	for _, ability := range enableAbilities {
@@ -247,7 +247,7 @@ func loadPricingAdvancedCustomConfigs(enableAbilities []AbilityWithChannel) map[
 		return nil
 	}
 
-	configs := make(map[int]*dto.AdvancedCustomConfig, len(channelIDs))
+	configs := make(map[int]*hostdto.AdvancedCustomConfig, len(channelIDs))
 	if common.MemoryCacheEnabled {
 		channelSyncLock.RLock()
 		defer channelSyncLock.RUnlock()
