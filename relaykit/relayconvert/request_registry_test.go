@@ -19,7 +19,6 @@ func TestProtocolCatalogPreservesOperationAndTransportBoundaries(t *testing.T) {
 		transport Transport
 		target    Protocol
 	}{
-		{ProtocolResponses, OperationCompact, TransportHTTP, ProtocolMessages},
 		{ProtocolResponses, OperationCompact, TransportSSE, ProtocolResponses},
 		{ProtocolChat, OperationGenerate, TransportWebSocket, ProtocolChat},
 		{ProtocolResponses, OperationGenerate, TransportWebSocket, ProtocolMessages},
@@ -30,8 +29,11 @@ func TestProtocolCatalogPreservesOperationAndTransportBoundaries(t *testing.T) {
 	}
 	plans, err := PlanConversions(ProtocolResponses, OperationCompact, TransportHTTP, []Protocol{ProtocolMessages, ProtocolResponses}, RequestFeatureSet{}, "safe")
 	require.NoError(t, err)
-	require.Len(t, plans, 1)
+	require.Len(t, plans, 2)
 	assert.Equal(t, ProtocolResponses, plans[0].UpstreamProtocol)
+	assert.Equal(t, CompactionNative, plans[0].CompactionMode)
+	assert.Equal(t, ProtocolMessages, plans[1].UpstreamProtocol)
+	assert.Equal(t, CompactionSummary, plans[1].CompactionMode)
 	_, err = PlanConversions(ProtocolChat, OperationGenerate, TransportHTTP, []Protocol{ProtocolChat}, RequestFeatureSet{}, "unrecognized")
 	require.Error(t, err)
 }

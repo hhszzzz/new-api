@@ -20,6 +20,7 @@ import (
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay/helper"
+	relaydto "github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
@@ -333,6 +334,275 @@ func TestUnifiedProtocolHTTPCompactPreservesNativeFields(t *testing.T) {
 	assertProtocolHTTPAccounting(t, db, user.Id, 5, 1)
 }
 
+func protocolHTTPPost(t *testing.T, gateway *httptest.Server, finished <-chan struct{}, path, payload string) (int, http.Header, []byte) {
+	t.Helper()
+	request, err := http.NewRequest(http.MethodPost, gateway.URL+path, strings.NewReader(payload))
+	require.NoError(t, err)
+	request.Header.Set("Authorization", "Bearer "+protocolTestToken)
+	request.Header.Set("Content-Type", "application/json")
+	response, err := gateway.Client().Do(request)
+	require.NoError(t, err)
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	require.NoError(t, err)
+	select {
+	case <-finished:
+	case <-time.After(10 * time.Second):
+		t.Fatal("protocol request did not finish")
+	}
+	return response.StatusCode, response.Header, body
+}
+
+func protocolHTTPCompactChannel(t *testing.T, target relayconvert.Protocol, baseURL string) {
+	t.Helper()
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"protocol-public":1,"protocol-public-openai-compact":1,"protocol-upstream-openai-compact":1}`))
+	require.NoError(t, ratio_setting.UpdateCompletionRatioByJSONString(`{"protocol-public":1,"protocol-public-openai-compact":1,"protocol-upstream-openai-compact":1}`))
+	channel := &model.Channel{Type: constant.ChannelTypeAdvancedCustom, Key: "provider-test-key", Status: common.ChannelStatusEnabled,
+		Name: "compact-summary", BaseURL: &baseURL, Models: protocolTestModel + "," + ratio_setting.WithCompactModelSuffix(protocolTestModel),
+		Group: "default", AutoBan: common.GetPointer(0), ModelMapping: common.GetPointer(`{"protocol-public":"protocol-upstream"}`)}
+	channel.SetOtherSettings(hostdto.ChannelOtherSettings{
+		ProtocolPolicy: &hostdto.ProtocolPolicy{Version: 1, UpstreamProtocols: []string{string(target)}},
+		AdvancedCustom: &hostdto.AdvancedCustomConfig{Routes: []hostdto.AdvancedCustomRoute{{
+			IncomingPath: "/v1/responses", UpstreamPath: "/provider/" + string(target), TargetProtocol: string(target), Models: []string{protocolTestModel},
+		}}},
+	})
+	require.NoError(t, channel.Insert())
+}
+
+func TestUnifiedProtocolHTTPCompactSummaryCanContinueAcrossProtocols(t *testing.T) {
+	for _, target := range relayconvert.Protocols() {
+		for _, upstreamStream := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s_stream_%t", target, upstreamStream), func(t *testing.T) {
+				db, user, gateway, finished := protocolHTTPFixture(t)
+				captured := make(chan map[string]any, 2)
+				upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					assert.Equal(t, "/provider/"+string(target), r.URL.Path)
+					var request map[string]any
+					require.NoError(t, common.DecodeJson(r.Body, &request))
+					captured <- request
+					w.Header().Set("Content-Type", "application/json")
+					if upstreamStream {
+						w.Header().Set("Content-Type", "text/event-stream")
+					}
+					_, _ = io.WriteString(w, protocolUpstreamReply(target, upstreamStream))
+				}))
+				t.Cleanup(upstream.Close)
+				protocolHTTPCompactChannel(t, target, upstream.URL)
+				status, headers, body := protocolHTTPPost(t, gateway, finished, "/v1/responses/compact", `{"model":"protocol-public","input":[{"role":"user","content":"deadline: Friday"},{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{}"},{"type":"function_call_output","call_id":"call_1","output":"lookup_result: saved"}],"tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}],"text":{"format":{"type":"json_object"}}}`)
+				require.Equal(t, http.StatusOK, status, string(body))
+				assert.Equal(t, "summary", headers.Get("X-New-Api-Compaction"))
+				var compact relaydto.OpenAIResponsesCompactionResponse
+				require.NoError(t, common.Unmarshal(body, &compact))
+				assert.Equal(t, "response.compaction", compact.Object)
+				assert.NotContains(t, string(compact.Output), "encrypted_content")
+				assert.Contains(t, string(compact.Output), "hello")
+				require.NotNil(t, compact.Usage)
+				assert.Equal(t, 3, compact.Usage.InputTokens)
+				assert.Equal(t, 2, compact.Usage.OutputTokens)
+				requestBody := <-captured
+				assert.NotContains(t, requestBody, "tools")
+				assert.NotContains(t, requestBody, "toolConfig")
+				assert.NotEqual(t, true, requestBody["stream"])
+				encoded, err := common.Marshal(requestBody)
+				require.NoError(t, err)
+				assert.Contains(t, string(encoded), "deadline: Friday")
+				assert.Contains(t, string(encoded), "lookup_result: saved")
+				assertProtocolHTTPAccounting(t, db, user.Id, 5, 1)
+				var log model.Log
+				require.NoError(t, db.Where("type = ?", model.LogTypeConsume).First(&log).Error)
+				assert.Equal(t, "summary", gjson.Get(log.Other, "admin_info.compaction_mode").String())
+				var input []any
+				require.NoError(t, common.Unmarshal(compact.Output, &input))
+				input = append(input, map[string]any{"role": "user", "content": "Continue"})
+				next, err := common.Marshal(map[string]any{"model": protocolTestModel, "input": input})
+				require.NoError(t, err)
+				status, _, body = protocolHTTPPost(t, gateway, finished, "/v1/responses", string(next))
+				require.Equal(t, http.StatusOK, status, string(body))
+				assert.NotContains(t, string(body), "response.compaction")
+				continued, err := common.Marshal(<-captured)
+				require.NoError(t, err)
+				assert.Contains(t, string(continued), "Summary of the earlier conversation")
+				assert.Contains(t, string(continued), "Continue")
+				assertProtocolHTTPAccounting(t, db, user.Id, 10, 2)
+			})
+		}
+	}
+}
+
+func TestUnifiedProtocolHTTPCompactNativeFallbackHonorsConversionSwitch(t *testing.T) {
+	for _, test := range []struct {
+		conversion string
+		status     int
+		summary    bool
+	}{
+		{hostdto.ProtocolConversionSafe, http.StatusNotFound, true},
+		{hostdto.ProtocolConversionNative, http.StatusNotFound, false},
+		{hostdto.ProtocolConversionSafe, http.StatusUnauthorized, false},
+		{hostdto.ProtocolConversionSafe, http.StatusTooManyRequests, false},
+		{hostdto.ProtocolConversionSafe, http.StatusInternalServerError, false},
+	} {
+		t.Run(fmt.Sprintf("%s_%d", test.conversion, test.status), func(t *testing.T) {
+			db, user, gateway, finished := protocolHTTPFixture(t)
+			var nativeCalls, summaryCalls atomic.Int32
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if r.URL.Path == "/v1/responses/compact" {
+					nativeCalls.Add(1)
+					w.WriteHeader(test.status)
+					_, _ = io.WriteString(w, `{"error":{"message":"unsupported endpoint /v1/responses/compact","type":"invalid_request_error","code":"unsupported_endpoint"}}`)
+					return
+				}
+				assert.Equal(t, "/v1/responses", r.URL.Path)
+				summaryCalls.Add(1)
+				_, _ = io.WriteString(w, protocolUpstreamReply(relayconvert.ProtocolResponses, false))
+			}))
+			t.Cleanup(upstream.Close)
+			protocolHTTPCompactChannel(t, relayconvert.ProtocolResponses, upstream.URL)
+			var channel model.Channel
+			require.NoError(t, db.First(&channel).Error)
+			channel.Type = constant.ChannelTypeOpenAI
+			channel.SetOtherSettings(hostdto.ChannelOtherSettings{ProtocolPolicy: &hostdto.ProtocolPolicy{Version: 1, UpstreamProtocols: []string{"responses"}, Conversion: test.conversion}})
+			require.NoError(t, db.Save(&channel).Error)
+			status, _, body := protocolHTTPPost(t, gateway, finished, "/v1/responses/compact", `{"model":"protocol-public","input":"Remember the deadline."}`)
+			assert.EqualValues(t, 1, nativeCalls.Load())
+			if !test.summary {
+				assert.NotEqual(t, http.StatusOK, status)
+				assert.Zero(t, summaryCalls.Load())
+				assertProtocolHTTPAccounting(t, db, user.Id, 0, 0)
+				return
+			}
+			require.Equal(t, http.StatusOK, status, string(body))
+			assert.EqualValues(t, 1, summaryCalls.Load())
+			assert.Contains(t, string(body), "response.compaction")
+			assertProtocolHTTPAccounting(t, db, user.Id, 5, 1)
+		})
+	}
+}
+
+func TestUnifiedProtocolHTTPCompactSummaryDisablesToolsAfterOverrides(t *testing.T) {
+	db, user, gateway, finished := protocolHTTPFixture(t)
+	captured := make(chan map[string]any, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request map[string]any
+		require.NoError(t, common.DecodeJson(r.Body, &request))
+		captured <- request
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, protocolUpstreamReply(relayconvert.ProtocolChat, false))
+	}))
+	t.Cleanup(upstream.Close)
+	protocolHTTPCompactChannel(t, relayconvert.ProtocolChat, upstream.URL)
+	require.NoError(t, db.Model(&model.Channel{}).Where("name = ?", "compact-summary").Update("param_override", `{"tools":[{"type":"function","function":{"name":"execute"}}],"tool_choice":"required","functions":[{"name":"execute"}],"stream":true,"store":true,"max_tokens":999999999}`).Error)
+	status, _, body := protocolHTTPPost(t, gateway, finished, "/v1/responses/compact", `{"model":"protocol-public","input":"Summarize completed work."}`)
+	require.Equal(t, http.StatusOK, status, string(body))
+	request := <-captured
+	assert.NotContains(t, request, "tools")
+	assert.NotContains(t, request, "tool_choice")
+	assert.NotContains(t, request, "functions")
+	assert.Equal(t, false, request["stream"])
+	assert.Equal(t, false, request["store"])
+	assert.EqualValues(t, relayconvert.CompactionSummaryMaxTokens, request["max_tokens"])
+	assertProtocolHTTPAccounting(t, db, user.Id, 5, 1)
+}
+
+func TestUnifiedProtocolHTTPCompactReplaysManagedPreviousResponse(t *testing.T) {
+	db, user, gateway, finished := protocolHTTPFixture(t)
+	model_setting.GetGlobalSettings().ProtocolPolicy.StateScope = hostdto.ProtocolStateBridge
+	captured := make(chan map[string]any, 2)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request map[string]any
+		require.NoError(t, common.DecodeJson(r.Body, &request))
+		captured <- request
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, protocolUpstreamReply(relayconvert.ProtocolChat, false))
+	}))
+	t.Cleanup(upstream.Close)
+	protocolHTTPCompactChannel(t, relayconvert.ProtocolChat, upstream.URL)
+	status, _, body := protocolHTTPPost(t, gateway, finished, "/v1/responses", `{"model":"protocol-public","input":"Remember the deadline is Friday.","store":true}`)
+	require.Equal(t, http.StatusOK, status, string(body))
+	previousID := gjson.GetBytes(body, "id").String()
+	require.NotEmpty(t, previousID)
+	<-captured
+	request, err := common.Marshal(map[string]any{"model": protocolTestModel, "previous_response_id": previousID, "input": "Summarize for continuation."})
+	require.NoError(t, err)
+	status, _, body = protocolHTTPPost(t, gateway, finished, "/v1/responses/compact", string(request))
+	require.Equal(t, http.StatusOK, status, string(body))
+	upstreamBody := <-captured
+	assert.NotContains(t, upstreamBody, "previous_response_id")
+	encoded, err := common.Marshal(upstreamBody)
+	require.NoError(t, err)
+	assert.Contains(t, string(encoded), "Remember the deadline is Friday.")
+	assert.Contains(t, string(encoded), "Summarize for continuation.")
+	assertProtocolHTTPAccounting(t, db, user.Id, 10, 2)
+}
+
+func TestUnifiedProtocolCompactChannelTestUsesSummaryWithoutChargingWallet(t *testing.T) {
+	db, user, _, _ := protocolHTTPFixture(t)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/provider/chat", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, protocolUpstreamReply(relayconvert.ProtocolChat, false))
+	}))
+	t.Cleanup(upstream.Close)
+	protocolHTTPCompactChannel(t, relayconvert.ProtocolChat, upstream.URL)
+	var channel model.Channel
+	require.NoError(t, db.First(&channel).Error)
+	result := testChannel(context.Background(), &channel, user.Id, protocolTestModel, string(constant.EndpointTypeOpenAIResponseCompact), false, false)
+	require.Nil(t, result.newAPIError, result.localErr)
+	require.NoError(t, result.localErr)
+	var updated model.User
+	require.NoError(t, db.First(&updated, user.Id).Error)
+	assert.Equal(t, 10000, updated.Quota)
+	var logs []model.Log
+	require.NoError(t, db.Where("type = ?", model.LogTypeConsume).Find(&logs).Error)
+	require.Len(t, logs, 1)
+	assert.Equal(t, "模型测试", logs[0].TokenName)
+	assert.Equal(t, "summary", gjson.Get(logs[0].Other, "admin_info.compaction_mode").String())
+}
+
+func TestUnifiedProtocolHTTPCompactRejectsUnreadableHistoryWithoutDispatch(t *testing.T) {
+	for _, input := range []string{
+		`[{"type":"compaction","encrypted_content":"private-opaque-value"}]`,
+		`[{"role":"user","content":[{"type":"input_image","image_url":"https://example.invalid/private-image"}]}]`,
+		`[{"type":"item_reference","id":"missing-history"}]`,
+		`[]`,
+	} {
+		t.Run(input, func(t *testing.T) {
+			db, user, gateway, finished := protocolHTTPFixture(t)
+			var calls atomic.Int32
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1) }))
+			t.Cleanup(upstream.Close)
+			protocolHTTPCompactChannel(t, relayconvert.ProtocolChat, upstream.URL)
+			status, _, body := protocolHTTPPost(t, gateway, finished, "/v1/responses/compact", `{"model":"protocol-public","input":`+input+`}`)
+			assert.NotEqual(t, http.StatusOK, status, string(body))
+			assert.NotContains(t, string(body), "private-opaque-value")
+			assert.NotContains(t, string(body), "response.compaction")
+			assert.Zero(t, calls.Load())
+			assertProtocolHTTPAccounting(t, db, user.Id, 0, 0)
+		})
+	}
+}
+
+func TestUnifiedProtocolHTTPCompactRejectsEmptyOrTruncatedSummary(t *testing.T) {
+	for _, reply := range []string{
+		strings.ReplaceAll(protocolUpstreamReply(relayconvert.ProtocolChat, false), `"content":"hello"`, `"content":""`),
+		strings.ReplaceAll(protocolUpstreamReply(relayconvert.ProtocolChat, false), `"finish_reason":"stop"`, `"finish_reason":"length"`),
+	} {
+		t.Run(gjson.Get(reply, "choices.0.finish_reason").String(), func(t *testing.T) {
+			db, user, gateway, finished := protocolHTTPFixture(t)
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, reply)
+			}))
+			t.Cleanup(upstream.Close)
+			protocolHTTPCompactChannel(t, relayconvert.ProtocolChat, upstream.URL)
+			status, _, body := protocolHTTPPost(t, gateway, finished, "/v1/responses/compact", `{"model":"protocol-public","input":"Remember the deadline."}`)
+			assert.Equal(t, http.StatusBadGateway, status, string(body))
+			assert.NotContains(t, string(body), "response.compaction")
+			assertProtocolHTTPAccounting(t, db, user.Id, 0, 0)
+		})
+	}
+}
+
 func TestUnifiedProtocolHTTPAdaptiveThinkingUsesMappedModel(t *testing.T) {
 	db, user, gateway, finished := protocolHTTPFixture(t)
 	captured := make(chan map[string]any, 1)
@@ -627,7 +897,7 @@ func runProtocolHTTPRoundTrip(t *testing.T, source, target relayconvert.Protocol
 	if channelType == constant.ChannelTypeAdvancedCustom {
 		settings.AdvancedCustom = &hostdto.AdvancedCustomConfig{Routes: []hostdto.AdvancedCustomRoute{{
 			IncomingPath: relayconvert.CanonicalPath(source, "{model}"), UpstreamPath: "/provider/" + string(target), TargetProtocol: string(target),
-			Models: []string{"re:^protocol-upstream$"}, Auth: &hostdto.AdvancedCustomRouteAuth{Type: "header", Name: "X-Provider-Key", Value: "{api_key}"},
+			Models: []string{"re:^protocol-public$"}, Auth: &hostdto.AdvancedCustomRouteAuth{Type: "header", Name: "X-Provider-Key", Value: "{api_key}"},
 		}}}
 	}
 	channel := &model.Channel{Type: channelType, Key: "provider-test-key", Status: common.ChannelStatusEnabled, Name: "protocol-route", BaseURL: &upstream.URL, Models: protocolTestModel, Group: "default", AutoBan: common.GetPointer(0), ModelMapping: common.GetPointer(`{"protocol-public":"protocol-upstream"}`), HeaderOverride: common.GetPointer(`{"X-Protocol-Test":"configured"}`), ParamOverride: common.GetPointer(`{"route_override":"configured"}`)}

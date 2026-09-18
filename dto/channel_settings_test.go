@@ -137,8 +137,9 @@ func TestAdvancedCustomValidateResponsesToChatConverterPath(t *testing.T) {
 	tests := []struct {
 		name         string
 		incomingPath string
+		wantError    bool
 	}{
-		{name: "chat completions", incomingPath: "/v1/chat/completions"},
+		{name: "chat completions", incomingPath: "/v1/chat/completions", wantError: true},
 		{name: "responses compact", incomingPath: "/v1/responses/compact"},
 	}
 
@@ -154,8 +155,11 @@ func TestAdvancedCustomValidateResponsesToChatConverterPath(t *testing.T) {
 				},
 			}
 			err := config.Validate()
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "converter does not match incoming_path")
+			if tt.wantError {
+				require.ErrorContains(t, err, "converter does not match incoming_path")
+			} else {
+				require.NoError(t, err)
+			}
 		})
 	}
 }

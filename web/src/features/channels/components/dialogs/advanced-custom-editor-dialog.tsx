@@ -1197,7 +1197,7 @@ function RouteGroupEditor({
                   'This route discovers upstream OpenAI models and does not support model matching or splitting.'
                 )
               : t(
-                  'Routes with the same incoming path match the upstream model after channel model mapping. Unmatched requests use the final fallback.'
+                  'Routes with the same incoming path match the model name before channel model mapping. Unmatched requests use the final fallback.'
                 )}
           </p>
           {!isModelListGroup ? (
@@ -1667,7 +1667,7 @@ function ModelRuleHelpPopover() {
             variant='ghost'
             size='icon'
             className='text-muted-foreground hover:text-foreground size-6'
-            aria-label={t('Upstream model matching help')}
+            aria-label={t('Model matching help')}
           />
         }
       >
@@ -1680,9 +1680,11 @@ function ModelRuleHelpPopover() {
         className='w-[min(22rem,calc(100vw-2rem))] gap-3 p-3'
       >
         <PopoverHeader className='gap-1'>
-          <PopoverTitle>{t('Upstream model matching')}</PopoverTitle>
+          <PopoverTitle>{t('Model matching')}</PopoverTitle>
           <PopoverDescription className='text-xs leading-relaxed'>
-            {t('Rules match the upstream model after channel model mapping.')}
+            {t(
+              'Rules match the model name before channel model mapping (the left-hand name).'
+            )}
           </PopoverDescription>
         </PopoverHeader>
         <div className='text-muted-foreground space-y-2 text-xs leading-relaxed'>

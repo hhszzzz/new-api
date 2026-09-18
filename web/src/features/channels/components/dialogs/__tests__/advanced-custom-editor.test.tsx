@@ -74,18 +74,24 @@ describe('Advanced Custom target editor', () => {
     })
   })
 
-  test('keeps compact on its native operation and disables conversion selection', () => {
-    renderEditor({
+  test('allows compact summaries through a generation protocol while preserving native compact by default', async () => {
+    const user = userEvent.setup()
+    const onSave = renderEditor({
       incoming_path: '/v1/responses/compact',
       upstream_path: '/v1/responses/compact',
       target_protocol: 'native',
     })
     expect(
       screen.getByRole('combobox', { name: 'Target protocol' })
-    ).toBeDisabled()
-    expect(
-      screen.getByRole('combobox', { name: 'Target protocol' })
     ).toHaveTextContent('Native forwarding')
+    await user.click(screen.getByRole('combobox', { name: 'Target protocol' }))
+    await user.click(screen.getByRole('option', { name: 'Anthropic Messages' }))
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+    expect(JSON.parse(onSave.mock.lastCall?.[0]).advanced_routes[0]).toMatchObject({
+      incoming_path: '/v1/responses/compact',
+      upstream_path: '/v1/messages',
+      target_protocol: 'messages',
+    })
   })
 })
 /*

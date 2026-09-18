@@ -7,6 +7,7 @@ import (
 	hostdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert"
+	"github.com/QuantumNous/new-api/service/modelmapping"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"regexp"
 	"strings"
@@ -23,6 +24,11 @@ func legacyCompatibility(channel *model.Channel, protocol Protocol, modelName, r
 	if channel.Type == constant.ChannelTypeAdvancedCustom {
 		return advancedCustomCompatibility(channel, protocol, modelName, requestPath)
 	}
+	resolved, err := modelmapping.Resolve(channel.GetModelMapping(), modelName)
+	if err != nil {
+		return incompatible()
+	}
+	modelName = resolved.Model
 
 	switch channel.Type {
 	case constant.ChannelTypeCodex:
@@ -149,6 +155,10 @@ func vertexCompatibility(protocol Protocol, modelName string) Compatibility {
 
 func LegacyPolicyForRequest(channel *model.Channel, protocol Protocol, modelName, requestPath string, settings hostdto.ChannelOtherSettings, global model_setting.GlobalSettings) (hostdto.ProtocolPolicy, []Protocol, error) {
 	policy := global.EffectiveProtocolPolicy()
+	resolved, err := modelmapping.Resolve(channel.GetModelMapping(), modelName)
+	if err != nil {
+		return policy, nil, err
+	}
 	policy.Conversion = hostdto.ProtocolConversionSafe
 	if settings.ToolLossPolicy == "strict" {
 		policy.Conversion = hostdto.ProtocolConversionLossless
@@ -177,11 +187,11 @@ func LegacyPolicyForRequest(channel *model.Channel, protocol Protocol, modelName
 		if caps != nil && caps.GetSelectionMode() == hostdto.ProtocolSelectionModeAuto {
 			policy.Selection = hostdto.ProtocolSelectionAutomatic
 			if len(configured) == 0 {
-				return policy, automaticProbeProtocols(channel, modelName), nil
+				return policy, automaticProbeProtocols(channel, resolved.Model), nil
 			}
 		}
 		if len(configured) == 0 {
-			configured = defaultUpstreamProtocols(channel, modelName)
+			configured = defaultUpstreamProtocols(channel, resolved.Model)
 		}
 		candidates := make([]Protocol, len(configured))
 		for i, p := range configured {

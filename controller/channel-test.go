@@ -270,6 +270,23 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 		}
 	}
 
+	if info.RelayMode == relayconstant.RelayModeResponsesCompact {
+		body, err := common.Marshal(request)
+		if err != nil {
+			return testResult{context: c, localErr: err, newAPIError: hosttypes.NewError(err, hosttypes.ErrorCodeJsonMarshalFailed)}
+		}
+		c.Request.Body = io.NopCloser(bytes.NewReader(body))
+		c.Request.ContentLength = int64(len(body))
+		defer common.CleanupBodyStorage(c)
+		if apiErr := relay.ResponsesHelper(c, info); apiErr != nil {
+			return testResult{context: c, localErr: apiErr, newAPIError: apiErr}
+		}
+		if info.TestUsage == nil {
+			err := errors.New("compact channel test returned no accounting usage")
+			return testResult{context: c, localErr: err, newAPIError: hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody)}
+		}
+		return finishChannelTest(c, w, info, info.PriceData, info.TestUsage, tik, testUserID, channel.Id, false)
+	}
 	err = helper.ModelMappedHelper(c, info, request)
 	if err != nil {
 		return testResult{
@@ -291,14 +308,6 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	request.SetModelName(testModel)
 
 	apiType, _ := common.ChannelType2APIType(channel.Type)
-	if info.RelayMode == relayconstant.RelayModeResponsesCompact &&
-		!common.SupportsResponsesCompact(channel.Type, apiType) {
-		return testResult{
-			context:     c,
-			localErr:    fmt.Errorf("responses compaction test is not supported for api type %d", apiType),
-			newAPIError: hosttypes.NewError(fmt.Errorf("unsupported api type: %d", apiType), hosttypes.ErrorCodeInvalidApiType),
-		}
-	}
 	adaptor := relay.GetAdaptor(apiType)
 	if adaptor == nil {
 		return testResult{
@@ -369,25 +378,6 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 				context:     c,
 				localErr:    errors.New("invalid response request type"),
 				newAPIError: hosttypes.NewError(errors.New("invalid response request type"), hosttypes.ErrorCodeConvertRequestFailed),
-			}
-		}
-	case relayconstant.RelayModeResponsesCompact:
-		// Response compaction request - convert to OpenAIResponsesRequest before adapting
-		switch req := request.(type) {
-		case *dto.OpenAIResponsesCompactionRequest:
-			convertedRequest, err = adaptor.ConvertOpenAIResponsesRequest(c, info, dto.OpenAIResponsesRequest{
-				Model:              req.Model,
-				Input:              req.Input,
-				Instructions:       req.Instructions,
-				PreviousResponseID: req.PreviousResponseID,
-			})
-		case *dto.OpenAIResponsesRequest:
-			convertedRequest, err = adaptor.ConvertOpenAIResponsesRequest(c, info, *req)
-		default:
-			return testResult{
-				context:     c,
-				localErr:    errors.New("invalid response compaction request type"),
-				newAPIError: hosttypes.NewError(errors.New("invalid response compaction request type"), hosttypes.ErrorCodeConvertRequestFailed),
 			}
 		}
 	default:
@@ -498,6 +488,10 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 			newAPIError: hosttypes.NewOpenAIError(usageErr, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError),
 		}
 	}
+	return finishChannelTest(c, w, info, priceData, usage, tik, testUserID, channel.Id, isStream)
+}
+
+func finishChannelTest(c *gin.Context, w *httptest.ResponseRecorder, info *relaycommon.RelayInfo, priceData hosttypes.PriceData, usage *dto.Usage, tik time.Time, testUserID, channelID int, isStream bool) testResult {
 	result := w.Result()
 	respBody, err := readTestResponseBody(result.Body, isStream)
 	if err != nil {
@@ -522,7 +516,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	consumedTime := float64(milliseconds) / 1000.0
 	other := buildTestLogOther(c, info, priceData, usage, tieredResult)
 	model.RecordConsumeLog(c, testUserID, model.RecordConsumeLogParams{
-		ChannelId:        channel.Id,
+		ChannelId:        channelID,
 		PromptTokens:     usage.PromptTokens,
 		CompletionTokens: usage.CompletionTokens,
 		ModelName:        info.OriginModelName,
@@ -534,7 +528,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 		Group:            info.UsingGroup,
 		Other:            other,
 	})
-	common.SysLog(fmt.Sprintf("testing channel #%d, response: \n%s", channel.Id, string(respBody)))
+	common.SysLog(fmt.Sprintf("testing channel #%d, response: \n%s", channelID, string(respBody)))
 	return testResult{
 		context:     c,
 		localErr:    nil,

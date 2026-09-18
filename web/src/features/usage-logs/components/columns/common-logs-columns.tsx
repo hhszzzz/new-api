@@ -24,6 +24,7 @@ import { useTranslation } from 'react-i18next'
 import { GroupBadge } from '@/components/group-badge'
 import { StatusBadge, type StatusBadgeProps } from '@/components/status-badge'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+import { Button } from '@/components/ui/button'
 import {
   Popover,
   PopoverContent,
@@ -62,6 +63,10 @@ import {
   renderAuditContent,
 } from '../../lib/format'
 import { formatModelName } from '../../lib/model-route'
+import {
+  getProtocolTranslationTarget,
+  hasProtocolFieldAdjustments,
+} from '../../lib/protocol-conversion'
 import {
   isDisplayableLogType,
   isTimingLogType,
@@ -765,21 +770,41 @@ export function useCommonLogsColumns(
       accessorKey: 'model_name',
       header: t('Model'),
       cell: function ModelCell({ row }) {
+        const { t } = useTranslation()
         const log = row.original
         if (!isDisplayableLogType(log.type)) return null
-
+        const other = parseLogOther(log.other)
         const modelInfo = formatModelName(
           log.model_name,
-          parseLogOther(log.other),
+          other,
           canViewModelRoute
         )
+        const translationTarget = isAdminView
+          ? getProtocolTranslationTarget(log.type, other)
+          : null
 
         return (
-          <div className='flex w-fit flex-col gap-0.5'>
+          <div className='flex w-fit flex-col items-center'>
             <ModelBadge
               modelName={modelInfo.name}
               actualModel={modelInfo.actualModel}
             />
+            {translationTarget && (
+              <StatusBadge
+                label={t('{{protocol}} translation', {
+                  protocol: translationTarget,
+                })}
+                variant={
+                  hasProtocolFieldAdjustments(log.type, other)
+                    ? 'warning'
+                    : 'info'
+                }
+                type='text'
+                size='sm'
+                copyable={false}
+                className='h-3 text-[10px] leading-3'
+              />
+            )}
           </div>
         )
       },
@@ -961,14 +986,15 @@ export function useCommonLogsColumns(
 
         return (
           <>
-            <button
+            <Button
               type='button'
-              className='group flex max-w-[200px] items-center gap-1 text-left text-xs'
+              variant='ghost'
+              className='group h-auto max-w-[200px] min-w-0 justify-start gap-1.5 p-0 text-left text-xs font-normal'
               onClick={() => setDialogOpen(true)}
               title={t('Click to view full details')}
             >
               {detailPreview}
-            </button>
+            </Button>
             <DetailsDialog
               log={log}
               isAdminView={isAdminView}

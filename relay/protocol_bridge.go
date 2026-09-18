@@ -16,6 +16,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/channelcompat"
@@ -34,7 +35,7 @@ func applyProtocolPlan(info *relaycommon.RelayInfo, plan channelcompat.ProtocolP
 	if info == nil || plan.Status == channelcompat.StatusIncompatible {
 		return func() {}
 	}
-	if plan.Operation != "" && plan.Operation != "generate" {
+	if plan.Operation != "" && plan.Operation != relayconvert.OperationGenerate && plan.CompactionMode != relayconvert.CompactionSummary {
 		return func() {}
 	}
 	savedRelayMode := info.RelayMode
@@ -50,6 +51,9 @@ func applyProtocolPlan(info *relaycommon.RelayInfo, plan channelcompat.ProtocolP
 		info.RelayMode = relayconstant.RelayModeResponses
 		info.RequestURLPath = "/v1/responses"
 	case channelcompat.ProtocolGemini:
+		if plan.CompactionMode == relayconvert.CompactionSummary {
+			info.RelayMode = relayconstant.RelayModeGemini
+		}
 		modelName := strings.TrimSpace(plan.EffectiveUpstreamModel)
 		if modelName == "" {
 			modelName = strings.TrimSpace(info.UpstreamModelName)

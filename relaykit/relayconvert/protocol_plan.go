@@ -12,6 +12,7 @@ type ConversionPlan struct {
 	UpstreamProtocol  Protocol            `json:"upstream_protocol"`
 	Operation         Operation           `json:"operation"`
 	Transport         Transport           `json:"transport"`
+	CompactionMode    string              `json:"compaction_mode,omitempty"`
 	RequestConverter  string              `json:"request_converter,omitempty"`
 	ResponseConverter string              `json:"response_converter,omitempty"`
 	RequestPath       []types.RelayFormat `json:"request_path,omitempty"`
@@ -62,10 +63,13 @@ func PlanConversions(from Protocol, operation Operation, transport Transport, ca
 			continue
 		}
 		if from == to {
+			if operation == OperationCompact {
+				plan.CompactionMode = CompactionNative
+			}
 			plans = append(plans, plan)
 			continue
 		}
-		if operation != OperationGenerate {
+		if operation != OperationGenerate && operation != OperationCompact {
 			rejection = fmt.Sprintf("%s requires its native protocol", operation)
 			continue
 		}
@@ -77,7 +81,16 @@ func PlanConversions(from Protocol, operation Operation, transport Transport, ca
 			rejection = "protocol conversion is disabled for this channel and model"
 			continue
 		}
-		reason, losses := AnalyzeConversionFeatures(from, to, features, policy == "safe")
+		conversionFeatures := features
+		if operation == OperationCompact {
+			if err := ValidateCompactionSummaryFeatures(features); err != nil {
+				rejection = err.Error()
+				continue
+			}
+			plan.CompactionMode = CompactionSummary
+			conversionFeatures = RequestFeatureSet{}
+		}
+		reason, losses := AnalyzeConversionFeatures(from, to, conversionFeatures, policy == "safe")
 		if reason != "" {
 			if rejection == "" {
 				rejection = reason

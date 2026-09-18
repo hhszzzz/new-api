@@ -435,9 +435,6 @@ func (a *Adaptor) resolve(c *gin.Context, info *relaycommon.RelayInfo) error {
 
 	incomingPath := incomingRequestPath(c, info)
 	selectionModel := info.SelectionModelName()
-	if plan, planned := advancedCustomProtocolPlan(c); planned && strings.TrimSpace(plan.EffectiveUpstreamModel) != "" {
-		selectionModel = plan.EffectiveUpstreamModel
-	}
 	route, ok := config.MatchPathForModel(incomingPath, selectionModel)
 	if plan, planned := advancedCustomProtocolPlan(c); planned && plan.AdvancedCustomRoute != nil {
 		route, ok = *plan.AdvancedCustomRoute, true

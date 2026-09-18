@@ -24,6 +24,7 @@ import { ClaudeSettingsCard } from './claude-settings-card'
 import { GeminiSettingsCard } from './gemini-settings-card'
 import { GlobalSettingsCard } from './global-settings-card'
 import { GrokSettingsCard } from './grok-settings-card'
+import { ProtocolSettingsCard } from './protocol-settings-card'
 import { RoutingReliabilitySection } from './routing-reliability-section'
 
 function formatJsonForEditor(value: string, fallback: string) {
@@ -48,10 +49,6 @@ const MODELS_SECTIONS = [
               settings['global.thinking_model_blacklist'],
               '[]'
             ),
-            protocol_policy: formatJsonForEditor(
-              settings['global.protocol_policy'],
-              '{"version":1}'
-            ),
           },
           general_setting: {
             ping_interval_enabled:
@@ -60,6 +57,15 @@ const MODELS_SECTIONS = [
               settings['general_setting.ping_interval_seconds'],
           },
         }}
+      />
+    ),
+  },
+  {
+    id: 'protocols',
+    titleKey: 'Protocol settings',
+    build: (settings: ModelSettings) => (
+      <ProtocolSettingsCard
+        value={settings['global.protocol_policy'] || '{"version":1}'}
       />
     ),
   },

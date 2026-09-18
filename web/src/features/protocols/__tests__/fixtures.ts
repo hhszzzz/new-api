@@ -49,7 +49,7 @@ export const protocolCatalogFixture: ProtocolCatalogResponse = {
         protocol: 'responses',
         path: '/v1/responses/compact',
         transports: ['http'],
-        convertible: false,
+        convertible: true,
       },
       {
         id: 'models',

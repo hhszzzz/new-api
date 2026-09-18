@@ -232,12 +232,13 @@ func TestAdvancedCustomCountTokensPathUsesMessagesRouteAsSelectionFallback(t *te
 				IncomingPath: "/v1/messages",
 				UpstreamPath: "/provider/chat",
 				Converter:    relayconvert.ConverterClaudeMessagesToOpenAIChat,
-				Models:       []string{"provider-model"},
+				Models:       []string{"public-model"},
 			},
 		}},
 	})
 
 	assert.True(t, channelSupportsRequestPath(channel, "/v1/messages/count_tokens", "public-model"))
+	assert.False(t, channelSupportsRequestPath(channel, "/v1/messages/count_tokens", "provider-model"))
 	assert.False(t, channelSupportsRequestPath(channel, "/v1/messages/count_tokens", "other-model"))
 }
 

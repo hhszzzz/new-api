@@ -33,6 +33,7 @@ type ProtocolPlan struct {
 	AdvancedCustomRoute    *hostdto.AdvancedCustomRoute      `json:"-"`
 	Operation              relayconvert.Operation            `json:"operation"`
 	Transport              relayconvert.Transport            `json:"transport"`
+	CompactionMode         string                            `json:"compaction_mode,omitempty"`
 	Conversion             string                            `json:"conversion"`
 	RequestMode            string                            `json:"request_mode"`
 	StateScope             string                            `json:"state_scope"`
@@ -99,7 +100,7 @@ func PlansForRequest(channel *model.Channel, protocol Protocol, modelName, reque
 	var candidates []Protocol
 	var forced Protocol
 	if global.ProtocolPolicy == nil && settings.ProtocolPolicy == nil {
-		policy, candidates, err = LegacyPolicyForRequest(channel, protocol, resolved.Model, requestPath, settings, *global)
+		policy, candidates, err = LegacyPolicyForRequest(channel, protocol, modelName, requestPath, settings, *global)
 		if err != nil {
 			return reject(err)
 		}
@@ -109,7 +110,7 @@ func PlansForRequest(channel *model.Channel, protocol Protocol, modelName, reque
 			return reject(err)
 		}
 		var denied bool
-		policy, forced, denied = hostdto.ResolveProtocolPolicy(global.EffectiveProtocolPolicy(), settings.ProtocolPolicy, resolved.Model, protocol, channel.Id, channel.Type)
+		policy, forced, denied = hostdto.ResolveProtocolPolicy(global.EffectiveProtocolPolicy(), settings.ProtocolPolicy, modelName, protocol, channel.Id, channel.Type)
 		if denied {
 			return reject(fmt.Errorf("protocol policy denies %s for this channel and model", protocol))
 		}
@@ -183,6 +184,20 @@ func PlansForRequest(channel *model.Channel, protocol Protocol, modelName, reque
 		plan := base
 		plan.Operation = operation.ID
 		plan.Transport = transport
+		plan.CompactionMode = route.CompactionMode
+		if operation.ID == relayconvert.OperationCompact && route.CompactionMode == relayconvert.CompactionNative {
+			apiType, _ := common.ChannelType2APIType(channel.Type)
+			generationRoute := base.AdvancedCustomRoute != nil && base.AdvancedCustomRoute.IncomingPath != "/v1/responses/compact"
+			if !common.SupportsResponsesCompact(channel.Type, apiType) || generationRoute {
+				if policy.Conversion == hostdto.ProtocolConversionNative {
+					continue
+				}
+				if err := relayconvert.ValidateCompactionSummaryFeatures(features); err != nil {
+					continue
+				}
+				plan.CompactionMode = relayconvert.CompactionSummary
+			}
+		}
 		plan.UpstreamProtocol = route.UpstreamProtocol
 		plan.RequestConverter = route.RequestConverter
 		plan.ResponseConverter = route.ResponseConverter
@@ -198,7 +213,14 @@ func PlansForRequest(channel *model.Channel, protocol Protocol, modelName, reque
 		}
 		plan.StateMode = stateModeFor(protocol, route.UpstreamProtocol)
 		plan.StateEnabled = policy.StateScope == hostdto.ProtocolStateAll || policy.StateScope == hostdto.ProtocolStateBridge && plan.Status == StatusConvertible
+		if operation.ID == relayconvert.OperationCompact {
+			plan.StateEnabled = false
+			plan.StateScope = hostdto.ProtocolStateDisabled
+		}
 		plans = append(plans, plan)
+	}
+	if len(plans) == 0 {
+		return reject(fmt.Errorf("no supported compact operation is available for this channel and policy"))
 	}
 	return plans
 }

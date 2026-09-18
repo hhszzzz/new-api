@@ -243,7 +243,7 @@ func TestExtractRequestFeatureSetDetectsHostedToolsLoadedFromToolSearchOutput(t 
 	assert.Empty(t, features.HistoricalHostedTools)
 }
 
-func TestPlanForRequestHonorsBridgePolicyCapabilitiesAndMappedModelOverrides(t *testing.T) {
+func TestPlanForRequestHonorsBridgePolicyCapabilitiesBeforeModelMapping(t *testing.T) {
 	withProtocolBridgePolicy(t, true, false)
 	allow := true
 	disallow := false
@@ -254,7 +254,7 @@ func TestPlanForRequestHonorsBridgePolicyCapabilitiesAndMappedModelOverrides(t *
 		AllowConversion:   &disallow,
 		ModelOverrides: []hostdto.ProtocolCapabilityModelOverride{
 			{
-				ModelPattern:      `^provider-chat-model$`,
+				ModelPattern:      `^public-model$`,
 				UpstreamProtocols: []string{hostdto.ProtocolCapabilityChat},
 				AllowConversion:   &allow,
 			},
@@ -275,7 +275,7 @@ func TestPlanForRequestHonorsBridgePolicyCapabilitiesAndMappedModelOverrides(t *
 	assert.Equal(t, StateModeReplay, plan.StateMode)
 }
 
-func TestPlanForCompactUsesActualMappedUpstreamModelForOverrides(t *testing.T) {
+func TestPlanForCompactMatchesPublicModelWithoutBillingSuffix(t *testing.T) {
 	withProtocolBridgePolicy(t, true, false)
 	allow := true
 	disallow := false
@@ -285,7 +285,7 @@ func TestPlanForCompactUsesActualMappedUpstreamModelForOverrides(t *testing.T) {
 		UpstreamProtocols: []string{hostdto.ProtocolCapabilityResponses},
 		AllowConversion:   &disallow,
 		ModelOverrides: []hostdto.ProtocolCapabilityModelOverride{{
-			ModelPattern:      `^provider-chat-model$`,
+			ModelPattern:      `^public-model$`,
 			UpstreamProtocols: []string{hostdto.ProtocolCapabilityChat},
 			AllowConversion:   &allow,
 		}},
@@ -299,9 +299,10 @@ func TestPlanForCompactUsesActualMappedUpstreamModelForOverrides(t *testing.T) {
 		RequestFeatureSet{},
 	)
 
-	assert.Equal(t, StatusIncompatible, plan.Status)
+	assert.Equal(t, StatusConvertible, plan.Status)
 	assert.Equal(t, "provider-chat-model", plan.EffectiveUpstreamModel)
-	assert.Contains(t, plan.Reason, "compact requires its native protocol")
+	assert.Equal(t, ProtocolChat, plan.UpstreamProtocol)
+	assert.Equal(t, relayconvert.CompactionSummary, plan.CompactionMode)
 }
 
 func TestPlanForRequestAdvancedCustomRouteOverridesDeclaredProtocols(t *testing.T) {
@@ -315,7 +316,7 @@ func TestPlanForRequestAdvancedCustomRouteOverridesDeclaredProtocols(t *testing.
 				IncomingPath: "/v1/responses",
 				UpstreamPath: "/v1/chat/completions",
 				Converter:    relayconvert.ConverterOpenAIResponsesToOpenAIChat,
-				Models:       []string{"provider-chat-model"},
+				Models:       []string{"public-model"},
 			},
 		}},
 		ProtocolCapabilities: &hostdto.ProtocolCapabilities{
@@ -331,6 +332,35 @@ func TestPlanForRequestAdvancedCustomRouteOverridesDeclaredProtocols(t *testing.
 	assert.Equal(t, relayconvert.ConverterOpenAIResponsesToOpenAIChat, plan.RequestConverter)
 	assert.Equal(t, "provider-chat-model", plan.EffectiveUpstreamModel)
 	assert.True(t, plan.StateEnabled)
+}
+
+func TestProtocolPolicyRulesMatchBeforeChannelModelMapping(t *testing.T) {
+	global := model_setting.GetGlobalSettings()
+	previous := *global
+	t.Cleanup(func() { *global = previous })
+	for _, layer := range []string{"global", "channel"} {
+		t.Run(layer, func(t *testing.T) {
+			policy := hostdto.DefaultProtocolPolicy()
+			policy.UpstreamProtocols = []string{"responses"}
+			global.ProtocolPolicy = &policy
+			override := &hostdto.ProtocolPolicy{Version: 1}
+			rules := []hostdto.ProtocolModelRule{
+				{ModelPattern: `^provider-chat-model$`, Deny: true},
+				{ModelPattern: `^public-model$`, TargetProtocol: ProtocolChat},
+			}
+			if layer == "global" {
+				policy.Rules = rules
+			} else {
+				override.Rules = rules
+			}
+			channel := &model.Channel{Type: constant.ChannelTypeOpenAI, ModelMapping: common.GetPointer(`{"public-model":"provider-chat-model"}`)}
+			channel.SetOtherSettings(hostdto.ChannelOtherSettings{ProtocolPolicy: override})
+			plan := PlanForRequest(channel, ProtocolResponses, "public-model", "/v1/responses", RequestFeatureSet{})
+			require.Equal(t, StatusConvertible, plan.Status, plan.Reason)
+			assert.Equal(t, ProtocolChat, plan.UpstreamProtocol)
+			assert.Equal(t, "provider-chat-model", plan.EffectiveUpstreamModel)
+		})
+	}
 }
 
 func TestPlanForRequestAdvancedCustomNativeRouteDoesNotEnableBridgeState(t *testing.T) {
@@ -480,7 +510,7 @@ func TestPlanForRequestExplicitConversionDisableStillWins(t *testing.T) {
 	assert.Contains(t, plan.Reason, "disabled")
 }
 
-func TestPlanForRequestCompactRequiresNativeOperation(t *testing.T) {
+func TestPlanForRequestCompactSupportsSummaryAndKeepsNativePriority(t *testing.T) {
 	withProtocolBridgePolicy(t, true, false)
 	chatChannel := &model.Channel{Type: constant.ChannelTypeOpenAI}
 	chatChannel.SetOtherSettings(hostdto.ChannelOtherSettings{ProtocolCapabilities: &hostdto.ProtocolCapabilities{
@@ -488,13 +518,15 @@ func TestPlanForRequestCompactRequiresNativeOperation(t *testing.T) {
 	}})
 
 	converted := PlanForRequest(chatChannel, ProtocolResponses, "gpt-test", "/v1/responses/compact", RequestFeatureSet{})
-	assert.Equal(t, StatusIncompatible, converted.Status)
-	assert.Contains(t, converted.Reason, "compact requires its native protocol")
+	assert.Equal(t, StatusConvertible, converted.Status)
+	assert.Equal(t, relayconvert.CompactionSummary, converted.CompactionMode)
+	assert.False(t, converted.StateEnabled)
 
 	responsesChannel := &model.Channel{Type: constant.ChannelTypeCodex}
 	native := PlanForRequest(responsesChannel, ProtocolResponses, "gpt-test", "/v1/responses/compact", RequestFeatureSet{})
 	assert.Equal(t, StatusNative, native.Status)
 	assert.Equal(t, ProtocolResponses, native.UpstreamProtocol)
+	assert.Equal(t, relayconvert.CompactionNative, native.CompactionMode)
 }
 
 func TestPlanForRequestRejectsStatefulFieldsAndHostedToolHistory(t *testing.T) {

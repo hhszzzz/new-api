@@ -20,6 +20,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service/channelcompat"
 	"github.com/QuantumNous/new-api/setting/model_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/samber/hot"
 )
@@ -170,7 +171,10 @@ func ResolveSelectionBinding(c *gin.Context, requestPath, publicModel string, bo
 	}
 	path := strings.Split(strings.TrimSpace(requestPath), "?")[0]
 	switch path {
-	case "/v1/responses":
+	case "/v1/responses", "/v1/responses/compact":
+		if path == "/v1/responses/compact" {
+			publicModel = strings.TrimSuffix(publicModel, ratio_setting.CompactModelSuffix)
+		}
 		var request struct {
 			PreviousResponseID string `json:"previous_response_id"`
 		}

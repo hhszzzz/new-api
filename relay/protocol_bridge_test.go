@@ -264,7 +264,7 @@ func TestApplyProtocolPlanUsesGeminiWirePathWithoutChangingEntryResponseMode(t *
 	}
 }
 
-func TestResponsesHelperRejectsCompactBridgeBeforeUpstream(t *testing.T) {
+func TestResponsesHelperRejectsEmptySummaryCompactionBeforeUpstream(t *testing.T) {
 	settings := model_setting.GetGlobalSettings()
 	originalPolicy := settings.ProtocolBridgePolicy
 	settings.ProtocolBridgePolicy.Enabled = false
@@ -279,6 +279,7 @@ func TestResponsesHelperRejectsCompactBridgeBeforeUpstream(t *testing.T) {
 		UpstreamProtocol: channelcompat.ProtocolChat,
 		RequestConverter: relayconvert.ConverterOpenAIResponsesToOpenAIChat,
 		Status:           channelcompat.StatusConvertible,
+		CompactionMode:   relayconvert.CompactionSummary,
 	})
 
 	info := &relaycommon.RelayInfo{
@@ -299,7 +300,7 @@ func TestResponsesHelperRejectsCompactBridgeBeforeUpstream(t *testing.T) {
 
 	require.NotNil(t, apiErr)
 	assert.Equal(t, hosttypes.ErrorCodeConvertRequestFailed, apiErr.GetErrorCode())
-	assert.Contains(t, apiErr.Error(), "compact requires a native Responses compact upstream")
+	assert.Contains(t, apiErr.Error(), "compaction input must")
 }
 
 func TestProtocolBridgeMessagesToChatStripsAnthropicCacheControl(t *testing.T) {

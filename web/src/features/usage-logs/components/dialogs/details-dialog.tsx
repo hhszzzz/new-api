@@ -36,9 +36,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import {
-  Copy,
-  Check,
-  Route,
   Settings2,
   AlertTriangle,
   Headphones,
@@ -48,24 +45,16 @@ import {
   UserCog,
   Info,
   LogIn,
-  ChevronDown,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
+import { CopyButton } from '@/components/copy-button'
 import { Dialog } from '@/components/dialog'
 import { StatusBadge, type StatusBadgeProps } from '@/components/status-badge'
-import { Button } from '@/components/ui/button'
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from '@/components/ui/collapsible'
-import { IconBadge, type IconBadgeTone } from '@/components/ui/icon-badge'
 import { Label } from '@/components/ui/label'
 import { DynamicPricingBreakdown } from '@/features/pricing/components/dynamic-pricing-breakdown'
 import { usePricingData } from '@/features/pricing/hooks/use-pricing-data'
 import { formatSubscriptionName } from '@/features/subscriptions/lib'
-import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
 import { formatLogQuota, formatTokens, formatUseTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -97,6 +86,12 @@ import {
 } from '../../lib/utils'
 import { USAGE_BILLING_PATH, type LogOtherData } from '../../types'
 import { PluginAuthorLink } from '../plugin-author-link'
+import {
+  CollapsibleDetailSection,
+  DetailRow,
+  DetailSection,
+} from './log-detail-layout'
+import { ProtocolConversionDetails } from './protocol-conversion-details'
 
 // Maps a channel-update changed-field token (as recorded by the backend audit)
 // to its i18n label key for display in the audit details.
@@ -109,109 +104,12 @@ const CHANNEL_FIELD_LABELS: Record<string, string> = {
   key: 'Key',
 }
 
-// Human-readable labels for the internal protocol state-mode enum.
-const PROTOCOL_STATE_MODE_LABELS: Record<string, string> = {
-  native_responses: 'Native Responses session state',
-  replay: 'Replayed conversation state',
-  strict_append: 'Strict append session state',
-}
-
 function timingTextColorClass(
   variant: 'success' | 'warning' | 'danger'
 ): string {
   if (variant === 'success') return 'text-emerald-600'
   if (variant === 'warning') return 'text-amber-600'
   return 'text-rose-600'
-}
-
-function DetailRow(props: {
-  label: React.ReactNode
-  value: React.ReactNode
-  mono?: boolean
-  muted?: boolean
-  highlight?: boolean
-}) {
-  return (
-    <div className='grid min-w-0 grid-cols-[5.25rem_minmax(0,1fr)] gap-2 text-sm sm:grid-cols-[7rem_minmax(0,1fr)] sm:gap-3'>
-      <span className='text-muted-foreground min-w-0 text-xs'>
-        {props.label}
-      </span>
-      <span
-        className={cn(
-          'max-w-full min-w-0 text-xs break-all sm:wrap-break-word',
-          props.mono && 'font-mono',
-          props.muted && 'text-muted-foreground',
-          props.highlight && 'font-medium text-sky-600 dark:text-sky-400'
-        )}
-      >
-        {props.value}
-      </span>
-    </div>
-  )
-}
-
-function DetailSection(props: {
-  icon?: React.ReactNode
-  iconTone?: IconBadgeTone
-  label: string
-  variant?: 'default' | 'danger'
-  children: React.ReactNode
-}) {
-  const isDanger = props.variant === 'danger'
-  const iconTone = isDanger ? 'destructive' : props.iconTone
-  return (
-    <div className='min-w-0 space-y-1.5'>
-      <Label
-        className={cn(
-          'flex items-center gap-1.5 text-xs font-semibold',
-          isDanger && 'text-red-500'
-        )}
-      >
-        {props.icon && (
-          <IconBadge tone={iconTone} size='xs'>
-            {props.icon}
-          </IconBadge>
-        )}
-        {props.label}
-      </Label>
-      <div
-        className={cn(
-          'min-w-0 space-y-1 overflow-hidden rounded-md border p-2.5 max-sm:p-2',
-          isDanger
-            ? 'border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/20'
-            : 'bg-muted/30'
-        )}
-      >
-        {props.children}
-      </div>
-    </div>
-  )
-}
-
-function CollapsibleDetailSection(props: {
-  label: string
-  count: number
-  children: React.ReactNode
-}) {
-  return (
-    <Collapsible className='min-w-0'>
-      <CollapsibleTrigger className='group focus-visible:ring-ring/50 bg-muted/30 hover:bg-muted/50 flex w-full items-center gap-2 rounded-md border px-2.5 py-2 text-left text-xs font-semibold outline-none focus-visible:ring-3'>
-        <span className='min-w-0 flex-1'>{props.label}</span>
-        <span className='text-muted-foreground bg-background/70 rounded px-1.5 py-0.5 font-mono text-[11px] leading-none tabular-nums'>
-          {props.count}
-        </span>
-        <ChevronDown
-          className='text-muted-foreground size-3.5 shrink-0 transition-transform group-aria-expanded:rotate-180'
-          aria-hidden='true'
-        />
-      </CollapsibleTrigger>
-      <CollapsibleContent className='data-open:animate-accordion-down data-closed:animate-accordion-up overflow-hidden'>
-        <div className='bg-muted/20 mt-1 min-w-0 space-y-1 overflow-hidden rounded-md border p-2.5 max-sm:p-2'>
-          {props.children}
-        </div>
-      </CollapsibleContent>
-    </Collapsible>
-  )
 }
 
 function formatRatio(ratio: number | undefined): string {
@@ -557,7 +455,6 @@ interface DetailsDialogProps {
 
 export function DetailsDialog(props: DetailsDialogProps) {
   const { t } = useTranslation()
-  const { copiedText, copyToClipboard } = useCopyToClipboard({ notify: false })
   const other = parseLogOther(props.log.other)
   const diagnostics = other?.diagnostics
   const timing = resolveLogTimingMetrics({
@@ -715,43 +612,6 @@ export function DetailsDialog(props: DetailsDialogProps) {
       }>)
     : []
 
-  const conversionChain =
-    other && Array.isArray(other.request_conversion)
-      ? other.request_conversion.filter(Boolean)
-      : []
-  const conversionLabel =
-    conversionChain.length <= 1
-      ? t('Native format')
-      : conversionChain.join(' -> ')
-  const upstreamProtocol =
-    adminInfo?.upstream_protocol ?? diagnostics?.upstream_protocol
-  const protocolConverter =
-    adminInfo?.protocol_converter ?? diagnostics?.protocol_converter
-  const requestProtocol = diagnostics?.request_protocol
-  const isNativeProtocolPassthrough =
-    Boolean(requestProtocol) &&
-    !protocolConverter &&
-    (!upstreamProtocol || upstreamProtocol === requestProtocol)
-  const protocolConversion = [
-    requestProtocol,
-    protocolConverter,
-    upstreamProtocol,
-  ].filter(Boolean) as string[]
-  let displayedConversionLabel = conversionLabel
-  if (isNativeProtocolPassthrough) {
-    displayedConversionLabel = t('Native ({{protocol}})', {
-      protocol: requestProtocol,
-    })
-  } else if (protocolConversion.length > 0) {
-    displayedConversionLabel = protocolConversion.join(' → ')
-  }
-  const showConversion =
-    props.isAdminView &&
-    props.log.type !== 6 &&
-    (other?.request_path ||
-      conversionChain.length > 0 ||
-      protocolConversion.length > 0)
-
   const useChannel = adminInfo?.retry_chain ?? other?.admin_info?.use_channel
   const channelChain =
     useChannel && useChannel.length > 0 ? useChannel.join(' → ') : undefined
@@ -799,7 +659,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
       contentClassName={cn(
         'min-w-0 overflow-hidden',
         'max-sm:max-h-[calc(100dvh-1.5rem)] max-sm:w-[calc(100vw-1.5rem)] max-sm:max-w-[calc(100vw-1.5rem)] max-sm:p-4',
-        isTieredBilling ? 'sm:max-w-4xl lg:max-w-5xl' : 'sm:max-w-lg'
+        isTieredBilling ? 'sm:max-w-4xl lg:max-w-5xl' : 'sm:max-w-xl'
       )}
       headerClassName='max-sm:gap-1'
       titleClassName='flex items-center gap-2 text-base'
@@ -1027,11 +887,17 @@ export function DetailsDialog(props: DetailsDialogProps) {
           )}
         </div>
 
+        <ProtocolConversionDetails
+          key={`conversion-${props.log.id}`}
+          other={other}
+          logType={props.log.type}
+          isAdminView={props.isAdminView}
+        />
+
         {props.isAdminView && diagnostics && (
           <CollapsibleDetailSection
             key={`diagnostics-${props.log.id}-${props.open}`}
             label={t('Request Diagnostics')}
-            count={Object.keys(diagnostics).length}
           >
             {(diagnostics.method || diagnostics.path) && (
               <DetailRow
@@ -1099,49 +965,6 @@ export function DetailsDialog(props: DetailsDialogProps) {
                 mono
               />
             )}
-            {diagnostics.request_protocol && (
-              <DetailRow
-                label={t('Entry Protocol')}
-                value={diagnostics.request_protocol}
-                mono
-              />
-            )}
-            {upstreamProtocol && (
-              <DetailRow
-                label={t('Upstream Protocol')}
-                value={upstreamProtocol}
-                mono
-              />
-            )}
-            {protocolConverter && (
-              <DetailRow
-                label={t('Protocol Converter')}
-                value={protocolConverter}
-                mono
-              />
-            )}
-            {adminInfo?.protocol_state_mode &&
-              adminInfo.protocol_state_mode !== 'none' && (
-                <DetailRow
-                  label={t('Protocol State Mode')}
-                  value={
-                    PROTOCOL_STATE_MODE_LABELS[adminInfo.protocol_state_mode]
-                      ? t(
-                          PROTOCOL_STATE_MODE_LABELS[
-                            adminInfo.protocol_state_mode
-                          ]
-                        )
-                      : adminInfo.protocol_state_mode
-                  }
-                />
-              )}
-            {adminInfo?.protocol_lossy_conversion && (
-              <DetailRow
-                label={t('Lossy Conversion')}
-                value={adminInfo.protocol_lossy_conversion}
-                mono
-              />
-            )}
             {diagnostics.route_pool_name && (
               <DetailRow
                 label={t('Route Pool')}
@@ -1162,46 +985,6 @@ export function DetailsDialog(props: DetailsDialogProps) {
               <DetailRow key={name} label={name} value={value} mono />
             ))}
           </CollapsibleDetailSection>
-        )}
-
-        {/* Request conversion (admin only, not for refund) */}
-        {showConversion && (
-          <DetailSection label={t('Request Conversion')}>
-            <div className='relative min-w-0'>
-              <Button
-                variant='ghost'
-                size='sm'
-                className='absolute top-0 right-0 h-5 w-5 p-0'
-                onClick={() => copyToClipboard(displayedConversionLabel)}
-                title={t('Copy to clipboard')}
-                aria-label={t('Copy to clipboard')}
-              >
-                {copiedText === displayedConversionLabel ? (
-                  <Check className='size-3 text-green-600' />
-                ) : (
-                  <Copy className='size-3' />
-                )}
-              </Button>
-              <div className='min-w-0 space-y-1 pr-6'>
-                {other?.request_path && (
-                  <DetailRow
-                    label={t('Path')}
-                    value={other.request_path}
-                    mono
-                  />
-                )}
-                <div className='flex min-w-0 items-center gap-1.5 text-xs'>
-                  <Route
-                    className='text-muted-foreground size-3'
-                    aria-hidden='true'
-                  />
-                  <span className='min-w-0 break-all sm:wrap-break-word'>
-                    {displayedConversionLabel}
-                  </span>
-                </div>
-              </div>
-            </div>
-          </DetailSection>
         )}
 
         {/* Quota saturation marker (admin only) */}
@@ -1670,20 +1453,11 @@ export function DetailsDialog(props: DetailsDialogProps) {
           <div className='space-y-1.5'>
             <Label className='text-xs font-semibold'>{t('Content')}</Label>
             <div className='bg-muted/30 relative min-w-0 overflow-hidden rounded-md border p-2.5'>
-              <Button
-                variant='ghost'
-                size='sm'
-                className='absolute top-1.5 right-1.5 h-5 w-5 p-0'
-                onClick={() => copyToClipboard(details)}
-                title={t('Copy to clipboard')}
-                aria-label={t('Copy to clipboard')}
-              >
-                {copiedText === details ? (
-                  <Check className='size-3 text-green-600' />
-                ) : (
-                  <Copy className='size-3' />
-                )}
-              </Button>
+              <CopyButton
+                value={details}
+                className='absolute top-1.5 right-1.5 size-5'
+                iconClassName='size-3'
+              />
               <p className='min-w-0 pr-6 text-xs leading-relaxed break-all whitespace-pre-wrap sm:wrap-break-word'>
                 {details}
               </p>

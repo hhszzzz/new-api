@@ -518,7 +518,7 @@ func TestAdaptorAcceptsRequestPreconvertedByProtocolPlan(t *testing.T) {
 				IncomingPath: "/v1/responses",
 				UpstreamPath: "/v1/chat/completions",
 				Converter:    relayconvert.ConverterOpenAIResponsesToOpenAIChat,
-				Models:       []string{"provider-chat-model"},
+				Models:       []string{"public-model"},
 			},
 		},
 	})
@@ -615,7 +615,7 @@ func TestAdaptorAcceptsEveryPreconvertedBridgeDirection(t *testing.T) {
 				IncomingPath: test.incomingPath,
 				UpstreamPath: test.upstreamPath,
 				Converter:    test.converter,
-				Models:       []string{"provider-model"},
+				Models:       []string{"gpt-test"},
 			}}})
 			info.UpstreamModelName = "provider-model"
 			c := advancedCustomGinContext(test.incomingPath)

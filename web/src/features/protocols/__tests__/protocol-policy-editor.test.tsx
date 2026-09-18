@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { useState } from 'react'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 
 import { api } from '@/lib/api'
@@ -43,11 +44,87 @@ beforeEach(() =>
 )
 
 describe('protocol policy editor', () => {
+  test('shows effective values without writing inherited fields or offering a default option', async () => {
+    const user = userEvent.setup()
+    const onChange = renderEditor()
+    const conversion = screen.getByRole('combobox', {
+      name: 'Conversion policy',
+    })
+    expect(conversion).toHaveTextContent('Lossless conversion')
+    expect(
+      screen.getByRole('combobox', { name: 'Conversation storage' })
+    ).toHaveTextContent('Bridged requests only')
+    expect(onChange).not.toHaveBeenCalled()
+    await user.click(conversion)
+    expect(
+      within(screen.getByRole('listbox')).queryByRole('option', {
+        name: 'Use default',
+      })
+    ).not.toBeInTheDocument()
+    await user.click(
+      screen.getByRole('option', { name: 'Allow safe degradation' })
+    )
+    expect(JSON.parse(onChange.mock.lastCall?.[0])).toEqual({
+      version: 1,
+      conversion: 'safe',
+    })
+  })
+
+  test('turns conversion off and back on without losing rules or storage settings', async () => {
+    const user = userEvent.setup()
+    const initial = {
+      version: 1,
+      conversion: 'lossless',
+      state_scope: 'disabled',
+      rules: [{ model_pattern: '^tools-', conversion: 'safe' }],
+    }
+    const onChange = vi.fn()
+    const client = new QueryClient()
+    client.setQueryData(['protocol-catalog'], protocolCatalogFixture)
+    function Editor() {
+      const [value, setValue] = useState(JSON.stringify(initial))
+      return (
+        <ProtocolPolicyEditor
+          value={value}
+          onChange={(next) => {
+            onChange(JSON.parse(next))
+            setValue(next)
+          }}
+        />
+      )
+    }
+    render(
+      <QueryClientProvider client={client}>
+        <Editor />
+      </QueryClientProvider>
+    )
+    const toggle = screen.getByRole('switch', {
+      name: 'Cross-protocol conversion',
+    })
+    await user.click(toggle)
+    expect(toggle).not.toBeChecked()
+    expect(onChange).toHaveBeenLastCalledWith({
+      ...initial,
+      conversion: 'native_only',
+    })
+    expect(
+      screen.getByRole('combobox', { name: 'Conversion policy' })
+    ).toBeDisabled()
+    await user.click(toggle)
+    expect(toggle).toBeChecked()
+    expect(onChange).toHaveBeenLastCalledWith(initial)
+  })
+
   test('changes conversion while retaining ordered model rules and storage limits', async () => {
     const user = userEvent.setup()
     const rules = [{ model_pattern: '^private-', conversion: 'native_only' }]
     const onChange = renderEditor({
-      value: JSON.stringify({ version: 1, rules, max_state_turns: 9 }),
+      value: JSON.stringify({
+        version: 1,
+        conversion: 'safe',
+        rules,
+        max_state_turns: 9,
+      }),
     })
     await user.click(
       screen.getByRole('combobox', { name: 'Conversion policy' })
@@ -63,14 +140,21 @@ describe('protocol policy editor', () => {
     })
   })
 
-  test('locks selection and JSON editing when the user cannot change sensitive configuration', () => {
+  test('locks selection and JSON editing when the user cannot change sensitive configuration', async () => {
+    const user = userEvent.setup()
     renderEditor({ disabled: true })
+    expect(
+      screen.getByRole('switch', { name: 'Cross-protocol conversion' })
+    ).toHaveAttribute('aria-disabled', 'true')
     for (const control of screen.getAllByRole('combobox')) {
       expect(control).toBeDisabled()
     }
     for (const control of screen.getAllByRole('checkbox')) {
       expect(control).toHaveAttribute('aria-disabled', 'true')
     }
+    await user.click(
+      screen.getByRole('button', { name: 'Model rules and storage limits' })
+    )
     expect(
       screen.getByRole('textbox', { name: 'Protocol rules and limits (JSON)' })
     ).toBeDisabled()

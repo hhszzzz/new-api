@@ -92,7 +92,7 @@ var operationSpecs = []OperationSpec{
 	{OperationGenerate, ProtocolMessages, "/v1/messages", []Transport{TransportHTTP, TransportSSE, TransportSDK}, true},
 	{OperationGenerate, ProtocolResponses, "/v1/responses", []Transport{TransportHTTP, TransportSSE, TransportWebSocket}, true},
 	{OperationGenerate, ProtocolGemini, "/v1beta/models/{model}:generateContent", []Transport{TransportHTTP, TransportSSE, TransportSDK}, true},
-	{OperationCompact, ProtocolResponses, "/v1/responses/compact", []Transport{TransportHTTP}, false},
+	{OperationCompact, ProtocolResponses, "/v1/responses/compact", []Transport{TransportHTTP}, true},
 	{OperationCountTokens, ProtocolMessages, "/v1/messages/count_tokens", []Transport{TransportHTTP, TransportSDK}, false},
 	{OperationImage, ProtocolChat, "/v1/images/generations", []Transport{TransportHTTP, TransportSSE}, false},
 	{OperationImageEdit, ProtocolChat, "/v1/images/edits", []Transport{TransportHTTP, TransportSSE}, false},

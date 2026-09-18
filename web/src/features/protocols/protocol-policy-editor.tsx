@@ -1,21 +1,37 @@
-import { useId } from 'react'
+import { ChevronDown } from 'lucide-react'
+import { useId, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { ErrorState } from '@/components/error-state'
 import { JsonCodeEditor } from '@/components/json-code-editor'
 import { LoadingState } from '@/components/loading-state'
+import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible'
 import { Label } from '@/components/ui/label'
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import {
+  SettingsControlGroup,
+  SettingsSwitchField,
+} from '@/features/system-settings/components/settings-form-layout'
 
 import { useProtocolCatalog } from './api'
-import { inheritedProtocolPolicy, parseProtocolPolicy } from './policy'
+import {
+  hasProtocolOverrides,
+  inheritedProtocolPolicy,
+  parseProtocolPolicy,
+} from './policy'
 import type { ProtocolPolicy } from './types'
 
 type ProtocolPolicyEditorProps = {
@@ -30,18 +46,28 @@ export function ProtocolPolicyEditor(props: ProtocolPolicyEditorProps) {
   const id = useId()
   const catalog = useProtocolCatalog()
   const policy = parseProtocolPolicy(props.value)
-  const inherited = props.inherit
-    ? catalog.data?.global_policy
-    : catalog.data?.defaults
+  const inherited = {
+    ...catalog.data?.defaults,
+    ...(props.inherit ? catalog.data?.global_policy : {}),
+  }
+  const effective = { ...inherited, ...policy }
+  const disabled = props.disabled || !policy || !catalog.data
+  const conversionEnabled = Boolean(
+    effective.conversion && effective.conversion !== 'native_only'
+  )
+  const previousConversion = useRef<'lossless' | 'safe'>('safe')
   const fields = [
     {
       key: 'conversion' as const,
       label: t('Conversion policy'),
       options: [
-        { value: 'native_only', label: t('Native only') },
+        { value: 'native_only', label: t('Conversion off') },
         { value: 'lossless', label: t('Lossless conversion') },
         { value: 'safe', label: t('Allow safe degradation') },
       ],
+      description: t(
+        'Safe degradation only omits display metadata. Required tools, history, and output constraints are preserved.'
+      ),
     },
     {
       key: 'selection' as const,
@@ -50,6 +76,9 @@ export function ProtocolPolicyEditor(props: ProtocolPolicyEditorProps) {
         { value: 'declared', label: t('Declared capabilities') },
         { value: 'auto', label: t('Automatic discovery') },
       ],
+      description: t(
+        'Automatic discovery uses request failures and never sends background probes.'
+      ),
     },
     {
       key: 'request_mode' as const,
@@ -58,6 +87,9 @@ export function ProtocolPolicyEditor(props: ProtocolPolicyEditorProps) {
         { value: 'structured', label: t('Structured processing') },
         { value: 'passthrough', label: t('Pass through when eligible') },
       ],
+      description: t(
+        'Structured processing validates and converts requests. Eligible native requests can pass through unchanged.'
+      ),
     },
     {
       key: 'state_scope' as const,
@@ -67,6 +99,9 @@ export function ProtocolPolicyEditor(props: ProtocolPolicyEditorProps) {
         { value: 'bridge', label: t('Bridged requests only') },
         { value: 'all', label: t('Include native requests') },
       ],
+      description: t(
+        'Stores conversation context for continuation. Bridged requests only is sufficient for most setups; store=false prevents storage.'
+      ),
     },
   ]
 
@@ -76,55 +111,80 @@ export function ProtocolPolicyEditor(props: ProtocolPolicyEditorProps) {
   }
 
   return (
-    <div className='space-y-4'>
-      <div className='grid gap-4 sm:grid-cols-2'>
+    <div className='flex min-w-0 flex-col gap-5'>
+      <SettingsControlGroup>
+        <SettingsSwitchField
+          controlId={`${id}-conversion-enabled`}
+          label={t('Cross-protocol conversion')}
+          description={t(
+            'When off, this policy uses native protocols only. Model rules and channel overrides still apply.'
+          )}
+          checked={conversionEnabled}
+          disabled={disabled}
+          onCheckedChange={(checked) => {
+            if (!checked) {
+              previousConversion.current =
+                effective.conversion === 'lossless' ? 'lossless' : 'safe'
+            }
+            updatePolicy({
+              conversion: checked ? previousConversion.current : 'native_only',
+            })
+          }}
+        />
+      </SettingsControlGroup>
+      <div className='grid min-w-0 gap-x-5 gap-y-5 sm:grid-cols-2'>
         {fields.map((field) => {
-          const options = [
-            { value: 'inherit', label: t('Use default') },
-            ...field.options,
-          ]
-          const effective = field.options.find(
-            (option) => option.value === inherited?.[field.key]
+          const options = field.options.filter(
+            (option) => option.value !== 'native_only' || !conversionEnabled
           )
           return (
-            <div key={field.key} className='space-y-2'>
+            <div key={field.key} className='flex min-w-0 flex-col gap-2'>
               <Label htmlFor={`${id}-${field.key}`}>{field.label}</Label>
               <Select
                 items={options}
-                value={policy?.[field.key] || 'inherit'}
-                disabled={props.disabled || !policy}
+                value={effective[field.key] ?? null}
+                disabled={
+                  disabled || (field.key === 'conversion' && !conversionEnabled)
+                }
                 onValueChange={(value) => {
                   if (!value) return
                   updatePolicy({
-                    [field.key]: value === 'inherit' ? undefined : value,
+                    [field.key]: value,
                   })
                 }}
               >
-                <SelectTrigger id={`${id}-${field.key}`} className='w-full'>
+                <SelectTrigger
+                  id={`${id}-${field.key}`}
+                  aria-describedby={`${id}-${field.key}-description`}
+                  className='w-full'
+                >
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent alignItemWithTrigger={false}>
-                  {options.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
+                  <SelectGroup>
+                    {options.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
                 </SelectContent>
               </Select>
-              {effective && (
-                <p className='text-muted-foreground text-xs'>
-                  {t('Default: {{value}}', { value: effective.label })}
-                </p>
-              )}
+              <p
+                id={`${id}-${field.key}-description`}
+                className='text-muted-foreground text-xs leading-relaxed'
+              >
+                {field.description}
+              </p>
             </div>
           )
         })}
       </div>
-      <fieldset disabled={props.disabled || !policy} className='space-y-2'>
+      <fieldset disabled={props.disabled || !policy} className='min-w-0'>
         <legend className='mb-2 text-sm font-medium'>
           {t('Upstream protocols')}
         </legend>
-        <div className='flex flex-wrap gap-4'>
+        <div className='flex flex-wrap gap-x-5 gap-y-3'>
           {catalog.isPending && (
             <LoadingState inline message={t('Loading...')} />
           )}
@@ -137,7 +197,7 @@ export function ProtocolPolicyEditor(props: ProtocolPolicyEditorProps) {
           {catalog.data?.catalog.protocols.map((protocol) => (
             <Label key={protocol.id} className='flex items-center gap-2'>
               <Checkbox
-                disabled={props.disabled || !policy}
+                disabled={disabled}
                 checked={
                   policy?.upstream_protocols?.includes(protocol.id) || false
                 }
@@ -154,32 +214,55 @@ export function ProtocolPolicyEditor(props: ProtocolPolicyEditorProps) {
             </Label>
           ))}
         </div>
-        <p className='text-muted-foreground text-xs'>
+        <p className='text-muted-foreground mt-3 text-xs leading-relaxed'>
           {t(
-            'Leave empty to use channel defaults. Automatic discovery uses request failures and never sends background probes.'
+            'Leave empty to select protocols from the channel type and its configuration.'
           )}
         </p>
       </fieldset>
-      <p className='text-muted-foreground text-sm'>
-        {t(
-          'Safe degradation preserves required tools, history, and output constraints. Conversation storage respects store=false.'
-        )}
-      </p>
-      <div className='space-y-2'>
-        <Label htmlFor={`${id}-json`}>
-          {t('Protocol rules and limits (JSON)')}
-        </Label>
-        <JsonCodeEditor
-          id={`${id}-json`}
-          ariaLabel={t('Protocol rules and limits (JSON)')}
-          value={props.value || inheritedProtocolPolicy}
-          onChange={props.onChange}
-          disabled={props.disabled}
-          aria-invalid={!policy}
-          heightClassName='h-44 min-h-44 max-h-44'
-        />
-        {!policy && <p role='alert'>{t('Invalid protocol policy JSON')}</p>}
-      </div>
+      <Collapsible defaultOpen={!policy} className='min-w-0 rounded-xl border'>
+        <CollapsibleTrigger className='group focus-visible:ring-ring/50 flex w-full items-center justify-between gap-3 rounded-xl px-4 py-3 text-left text-sm font-medium outline-none focus-visible:ring-3'>
+          {t('Model rules and storage limits')}
+          <ChevronDown
+            className='size-4 shrink-0 transition-transform group-aria-expanded:rotate-180'
+            aria-hidden='true'
+          />
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <div className='flex min-w-0 flex-col gap-3 px-4 pb-4'>
+            <p className='text-muted-foreground text-xs leading-relaxed'>
+              {t(
+                'Model rules match the model name before channel model mapping (the left-hand name). The first matching rule applies.'
+              )}
+            </p>
+            <Label htmlFor={`${id}-json`}>
+              {t('Protocol rules and limits (JSON)')}
+            </Label>
+            <JsonCodeEditor
+              id={`${id}-json`}
+              ariaLabel={t('Protocol rules and limits (JSON)')}
+              value={props.value || inheritedProtocolPolicy}
+              onChange={props.onChange}
+              disabled={props.disabled}
+              aria-invalid={!policy}
+              heightClassName='h-52 min-h-52 max-h-52'
+            />
+            {!policy && <p role='alert'>{t('Invalid protocol policy JSON')}</p>}
+            {props.inherit && hasProtocolOverrides(props.value) && (
+              <Button
+                type='button'
+                variant='outline'
+                size='sm'
+                className='self-start'
+                disabled={props.disabled}
+                onClick={() => props.onChange(inheritedProtocolPolicy)}
+              >
+                {t('Reset to global policy')}
+              </Button>
+            )}
+          </div>
+        </CollapsibleContent>
+      </Collapsible>
     </div>
   )
 }

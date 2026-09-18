@@ -38,8 +38,10 @@ describe('Advanced Custom catalog routes', () => {
       )
     ).toEqual(['native', 'messages', 'responses'])
     expect(
-      getAdvancedCustomTargetOptions('/v1/responses/compact', catalog)
-    ).toEqual([{ value: 'native', label: 'Native forwarding' }])
+      getAdvancedCustomTargetOptions('/v1/responses/compact', catalog).map(
+        (option) => option.value
+      )
+    ).toEqual(['native', 'messages', 'responses'])
     expect(
       getAdvancedCustomTargetDefaults('messages', '/v1/responses', catalog)
     ).toEqual({
@@ -87,7 +89,7 @@ describe('Advanced Custom catalog routes', () => {
     )
   })
 
-  test('rejects a target that conflicts with the imported converter or changes compact semantics', () => {
+  test('rejects conflicting converter targets and permits model summary compaction', () => {
     expect(
       validateAdvancedCustomConfig(
         {
@@ -115,7 +117,7 @@ describe('Advanced Custom catalog routes', () => {
           ],
         },
         catalog
-      )?.message
-    ).toBe('Target protocol does not support this operation')
+      )
+    ).toBeNull()
   })
 })

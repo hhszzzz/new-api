@@ -52,6 +52,9 @@ func MainProtocolPathForAuxiliaryRequest(requestPath string) (string, bool) {
 	if requestPath == "/v1/messages/count_tokens" {
 		return "/v1/messages", true
 	}
+	if requestPath == "/v1/responses/compact" {
+		return "/v1/responses", true
+	}
 	return "", false
 }
 

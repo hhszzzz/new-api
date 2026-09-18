@@ -35,8 +35,6 @@ import {
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
-import { parseProtocolPolicy } from '@/features/protocols/policy'
-import { ProtocolPolicyEditor } from '@/features/protocols/protocol-policy-editor'
 
 import {
   SettingsForm,
@@ -56,12 +54,6 @@ const schema = z.object({
         return false
       }
     }, 'Invalid JSON format'),
-    protocol_policy: z
-      .string()
-      .refine(
-        (value) => parseProtocolPolicy(value) !== null,
-        'Invalid protocol policy JSON'
-      ),
   }),
   general_setting: z.object({
     ping_interval_enabled: z.boolean(),
@@ -74,9 +66,6 @@ function flattenValues(values: FormValues) {
   return {
     'global.thinking_model_blacklist': JSON.stringify(
       JSON.parse(values.global.thinking_model_blacklist || '[]')
-    ),
-    'global.protocol_policy': JSON.stringify(
-      parseProtocolPolicy(values.global.protocol_policy)
     ),
     'general_setting.ping_interval_enabled':
       values.general_setting.ping_interval_enabled,
@@ -118,20 +107,6 @@ export function GlobalSettingsCard(props: { defaultValues: FormValues }) {
           <SettingsPageFormActions
             onSave={form.handleSubmit(onSubmit)}
             isSaving={updateOption.isPending}
-          />
-          <FormField
-            control={form.control}
-            name='global.protocol_policy'
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>{t('Protocol policy')}</FormLabel>
-                <ProtocolPolicyEditor
-                  value={field.value}
-                  onChange={field.onChange}
-                />
-                <FormMessage />
-              </FormItem>
-            )}
           />
           <FormField
             control={form.control}

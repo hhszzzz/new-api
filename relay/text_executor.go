@@ -36,6 +36,9 @@ import (
 func executeText(c *gin.Context, info *relaycommon.RelayInfo) *hosttypes.NewAPIError {
 	info.InitChannelMeta(c)
 	defer info.CloseConversionSession()
+	isCompact := info.RelayMode == relayconstant.RelayModeResponsesCompact
+	originalFormat := info.RelayFormat
+	defer func() { info.RelayFormat = originalFormat }()
 	clientStream := info.IsStream
 	request, err := cloneTextRequest(info.Request)
 	if err != nil {
@@ -55,19 +58,21 @@ func executeText(c *gin.Context, info *relaycommon.RelayInfo) *hosttypes.NewAPIE
 	if !ok {
 		settings, _ := common.Marshal(info.ChannelOtherSettings)
 		channelSettings, _ := common.Marshal(info.ChannelSetting)
-		candidate := &model.Channel{Id: info.ChannelId, Type: info.ChannelType, BaseURL: common.GetPointer(info.ChannelBaseUrl), OtherSettings: string(settings), Setting: common.GetPointer(string(channelSettings))}
+		candidate := &model.Channel{Id: info.ChannelId, Type: info.ChannelType, BaseURL: common.GetPointer(info.ChannelBaseUrl), OtherSettings: string(settings), Setting: common.GetPointer(string(channelSettings)), ModelMapping: common.GetPointer(c.GetString("model_mapping"))}
 		features, featureErr := channelcompat.ExtractRequestFeatureSet(relayconvert.ProtocolForFormat(info.RelayFormat), before)
 		if featureErr != nil {
 			return newConvertRequestFailedError(c, info, featureErr)
 		}
-		plan = channelcompat.PlanForRequest(candidate, relayconvert.ProtocolForFormat(info.RelayFormat), info.UpstreamModelName, c.Request.URL.Path, features)
+		plan = channelcompat.PlanForRequest(candidate, relayconvert.ProtocolForFormat(info.RelayFormat), info.SelectionModelName(), c.Request.URL.Path, features)
 		common.SetContextKey(c, constant.ContextKeyProtocolPlan, plan)
 	}
 	if plan.Status == channelcompat.StatusIncompatible {
 		return newConvertRequestFailedError(c, info, fmt.Errorf("%s", plan.Reason))
 	}
-	if info.RelayMode == relayconstant.RelayModeResponsesCompact && !common.SupportsResponsesCompact(info.ChannelType, info.ApiType) {
-		return newConvertRequestFailedError(c, info, fmt.Errorf("compact requires a native Responses compact upstream"))
+	info.CompactionMode = plan.CompactionMode
+	summaryCompact := isCompact && plan.CompactionMode == relayconvert.CompactionSummary
+	if summaryCompact {
+		info.RelayFormat = types.RelayFormatOpenAIResponses
 	}
 	if info.RelayMode == relayconstant.RelayModeCompletions && protocolPlanRequiresConversion(plan) {
 		return newConvertRequestFailedError(c, info, fmt.Errorf("legacy completions require their native operation"))
@@ -108,20 +113,37 @@ func executeText(c *gin.Context, info *relaycommon.RelayInfo) *hosttypes.NewAPIE
 			return newConvertRequestFailedError(c, info, err)
 		}
 	case *dto.OpenAIResponsesRequest:
-		if err := protocolstate.PrepareResponsesRequest(c, info, plan, req); err != nil {
-			return newConvertRequestFailedError(c, info, err)
+		publicModel := info.OriginModelName
+		if isCompact {
+			info.OriginModelName = strings.TrimSuffix(publicModel, ratio_setting.CompactModelSuffix)
+		}
+		if summaryCompact {
+			req.Store = []byte("false")
+			common.SetContextKey(c, constant.ContextKeyProtocolStateForceReplay, true)
+		}
+		stateErr := protocolstate.PrepareResponsesRequest(c, info, plan, req)
+		info.OriginModelName = publicModel
+		if stateErr != nil {
+			return newConvertRequestFailedError(c, info, stateErr)
 		}
 		applyResponsesInstructionsIfNeeded(c, info, req)
+		if summaryCompact {
+			request, err = relayconvert.BuildCompactionSummaryRequest(req)
+			if err != nil {
+				return newConvertRequestFailedError(c, info, err)
+			}
+		}
 	case *dto.GeminiChatRequest:
 		relayconvert.RecordGeminiReasoningEffort(req, info)
 		applyGeminiLeadingSystemPrompt(c, info, req)
 	}
+	restorePlan := func() {}
 	if info.RelayMode != relayconstant.RelayModeCompletions {
-		restore := applyProtocolPlan(info, plan)
-		defer restore()
+		restorePlan = applyProtocolPlan(info, plan)
+		defer restorePlan()
 	}
 	var body io.Reader
-	passthrough := info.ShouldPassThroughBody() && !protocolPlanRequiresConversion(plan) && !protocolPlanRequiresStructuredRequest(info, plan) && !protocolstate.Active(c) && !protocolstate.ResponsesRequestNormalized(c)
+	passthrough := !summaryCompact && info.ShouldPassThroughBody() && !protocolPlanRequiresConversion(plan) && !protocolPlanRequiresStructuredRequest(info, plan) && !protocolstate.Active(c) && !protocolstate.ResponsesRequestNormalized(c)
 	if passthrough {
 		storage, err := common.GetBodyStorage(c)
 		if err != nil {
@@ -138,7 +160,7 @@ func executeText(c *gin.Context, info *relaycommon.RelayInfo) *hosttypes.NewAPIE
 		if err != nil {
 			return newConvertRequestFailedError(c, info, err)
 		}
-		if !protocolPlanRequiresConversion(plan) {
+		if !summaryCompact && !protocolPlanRequiresConversion(plan) {
 			if storage, storageErr := common.GetBodyStorage(c); storageErr == nil {
 				if original, readErr := storage.Bytes(); readErr == nil && len(original) > 0 {
 					jsonBody, err = relaycommon.MergeNativeRequestBody(original, before, jsonBody)
@@ -158,12 +180,25 @@ func executeText(c *gin.Context, info *relaycommon.RelayInfo) *hosttypes.NewAPIE
 				return newAPIErrorFromParamOverride(err)
 			}
 		}
+		if summaryCompact {
+			jsonBody, err = enforceCompactionSummaryRequest(jsonBody, plan.UpstreamProtocol)
+			if err != nil {
+				return newConvertRequestFailedError(c, info, err)
+			}
+		}
 		outbound, closer, err := relaycommon.NewOutboundJSONBody(jsonBody)
 		if err != nil {
 			return newConvertRequestFailedError(c, info, err)
 		}
 		defer closer.Close()
 		body = outbound
+	}
+	// Mapping and channel overrides have now fixed the compact billing model.
+	// Resolve its price before an upstream call or a successful response is sent.
+	if isCompact {
+		if _, err := helper.ModelPriceHelper(c, info, info.GetEstimatePromptTokens(), &types.TokenCountMeta{}); err != nil {
+			return hosttypes.NewError(err, hosttypes.ErrorCodeModelPriceError, hosttypes.ErrOptionWithSkipRetry())
+		}
 	}
 	response, err := adaptor.DoRequest(c, info, body)
 	if err != nil {
@@ -188,6 +223,13 @@ func executeText(c *gin.Context, info *relaycommon.RelayInfo) *hosttypes.NewAPIE
 		defer service.CloseResponseBodyGracefully(httpResponse)
 	}
 	statusMapping := c.GetString("status_code_mapping")
+	writer := c.Writer
+	var summaryWriter *compactSummaryWriter
+	if summaryCompact {
+		summaryWriter = &compactSummaryWriter{ResponseWriter: writer, header: writer.Header().Clone(), status: http.StatusOK}
+		c.Writer = summaryWriter
+		defer func() { c.Writer = writer }()
+	}
 	var usage *dto.Usage
 	var apiError *hosttypes.NewAPIError
 	if httpResponse != nil {
@@ -232,10 +274,22 @@ func executeText(c *gin.Context, info *relaycommon.RelayInfo) *hosttypes.NewAPIE
 	if usage == nil {
 		return hosttypes.NewError(fmt.Errorf("text response returned no accounting usage"), hosttypes.ErrorCodeBadResponseBody)
 	}
-	if info.RelayMode == relayconstant.RelayModeResponsesCompact {
-		if _, err := helper.ModelPriceHelper(c, info, info.GetEstimatePromptTokens(), &types.TokenCountMeta{}); err != nil {
-			return hosttypes.NewError(err, hosttypes.ErrorCodeModelPriceError, hosttypes.ErrOptionWithSkipRetry())
+	if summaryWriter != nil {
+		body, err := summaryWriter.compactResponse(usage)
+		if err != nil {
+			return hosttypes.NewErrorWithStatusCode(err, hosttypes.ErrorCodeBadResponseBody, http.StatusBadGateway, hosttypes.ErrOptionWithSkipRetry())
 		}
+		c.Writer = writer
+		c.Header("X-New-Api-Compaction", relayconvert.CompactionSummary)
+		c.Data(http.StatusOK, "application/json", body)
+	}
+	if isCompact {
+		restorePlan()
+		info.RelayFormat = originalFormat
+	}
+	if info.IsChannelTest {
+		info.TestUsage = usage
+		return nil
 	}
 	containsAudio := usage.CompletionTokenDetails.AudioTokens > 0 || usage.PromptTokensDetails.AudioTokens > 0
 	audioPricing := ratio_setting.ContainsAudioRatio(info.OriginModelName) || ratio_setting.ContainsAudioCompletionRatio(info.OriginModelName)

@@ -17,6 +17,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/service/modelmapping"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/samber/lo"
 	"gorm.io/gorm"
@@ -909,21 +910,26 @@ func (channel *Channel) GetModelMapping() string {
 	return *channel.ModelMapping
 }
 
-// MatchAdvancedCustomRoute uses the mapped upstream model at every selection
+// MatchAdvancedCustomRoute uses the model before channel mapping at every selection
 // boundary. CountTokens may use the generation route for local counting only.
 func (channel *Channel) MatchAdvancedCustomRoute(requestPath, modelName string, config *hostdto.AdvancedCustomConfig) (hostdto.AdvancedCustomRoute, bool) {
 	if channel == nil || config == nil {
 		return hostdto.AdvancedCustomRoute{}, false
 	}
-	resolved, err := modelmapping.Resolve(channel.GetModelMapping(), modelName)
-	if err != nil {
+	if requestPath == "/v1/responses/compact" {
+		modelName = strings.TrimSuffix(modelName, ratio_setting.CompactModelSuffix)
+	}
+	if _, err := modelmapping.Resolve(channel.GetModelMapping(), modelName); err != nil {
 		return hostdto.AdvancedCustomRoute{}, false
 	}
-	if route, ok := config.MatchPathForModel(requestPath, resolved.Model); ok {
+	if route, ok := config.MatchPathForModel(requestPath, modelName); ok {
 		return route, true
 	}
 	if requestPath == "/v1/messages/count_tokens" {
-		return config.MatchPathForModel("/v1/messages", resolved.Model)
+		return config.MatchPathForModel("/v1/messages", modelName)
+	}
+	if requestPath == "/v1/responses/compact" {
+		return config.MatchPathForModel("/v1/responses", modelName)
 	}
 	return hostdto.AdvancedCustomRoute{}, false
 }

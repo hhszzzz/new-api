@@ -52,6 +52,13 @@ func migrationDatabase(t *testing.T, engine string) *gorm.DB {
 		Logger:         logger.Default.LogMode(logger.Silent),
 	})
 	require.NoError(t, err)
+	versionQuery := "SELECT version()"
+	if engine == "sqlite" {
+		versionQuery = "SELECT sqlite_version()"
+	}
+	var version string
+	require.NoError(t, db.Raw(versionQuery).Scan(&version).Error)
+	t.Logf("database engine: %s %s", engine, version)
 	require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Option{}))
 	require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Option{}))
 	t.Cleanup(func() {
@@ -79,7 +86,7 @@ func TestProtocolPolicyMigrationDatabaseMatrix(t *testing.T) {
 			require.NoError(t, db.Create(&model.Option{Key: "global.protocol_bridge_policy", Value: string(bridge)}).Error)
 			require.NoError(t, db.Create(&model.Option{Key: "untouched", Value: "keep"}).Error)
 			channels := []model.Channel{
-				{Id: 1, Type: constant.ChannelTypeOpenAI, Key: "channel-key", Models: "public", ModelMapping: common.GetPointer(`{"public":"provider-model"}`), OtherSettings: `{"allow_service_tier":true,"protocol_capabilities":{"upstream_protocols":["chat"],"allow_conversion":true,"model_overrides":[{"model_pattern":"^provider-model$","upstream_protocols":["messages"]}]}}`},
+				{Id: 1, Type: constant.ChannelTypeOpenAI, Key: "channel-key", Models: "public,alternate", ModelMapping: common.GetPointer(`{"public":"provider-model","alternate":"provider-model"}`), OtherSettings: `{"allow_service_tier":true,"protocol_capabilities":{"upstream_protocols":["chat"],"allow_conversion":true,"model_overrides":[{"model_pattern":"^public$","upstream_protocols":["messages"]}]}}`},
 				{Id: 2, Type: constant.ChannelTypeAdvancedCustom, Key: "custom-key", Models: "public", OtherSettings: `{"advanced_custom":{"advanced_routes":[{"incoming_path":"/v1/chat/completions","upstream_path":"/private/messages","converter":"openai_chat_completions_to_anthropic_messages","models":["public"],"auth":{"type":"header","name":"x-upstream-secret","value":"private-route-key"}},{"incoming_path":"/v1/messages","upstream_path":"/private/native-messages","converter":"none"},{"incoming_path":"/v1/responses","upstream_path":"/private/native-responses","target_protocol":"native"},{"incoming_path":"/v1/responses/compact","upstream_path":"/private/compact","converter":"none"},{"incoming_path":"/v1/images/generations","upstream_path":"/private/images","converter":"none"}]},"custom_extension":{"keep":true}}`},
 				{Id: 3, Type: constant.ChannelTypeOpenAI, Key: "strict-key", Models: "public", OtherSettings: `{"protocol_capabilities":{"upstream_protocols":["chat"],"allow_conversion":false},"tool_loss_policy":"strict"}`},
 				{Id: 4, Type: constant.ChannelTypeGemini, Key: "gemini-key", Models: "gemini-model"},
@@ -120,6 +127,13 @@ func TestProtocolPolicyMigrationDatabaseMatrix(t *testing.T) {
 			for _, channel := range migrated {
 				assert.NotContains(t, channel.OtherSettings, "protocol_capabilities")
 				assert.NotContains(t, channel.OtherSettings, `"converter"`)
+				if channel.Id == 1 {
+					public := channelcompat.PlanForRequest(&channel, relayconvert.ProtocolResponses, "public", "/v1/responses", channelcompat.RequestFeatureSet{})
+					alternate := channelcompat.PlanForRequest(&channel, relayconvert.ProtocolResponses, "alternate", "/v1/responses", channelcompat.RequestFeatureSet{})
+					assert.Equal(t, relayconvert.ProtocolMessages, public.UpstreamProtocol)
+					assert.Equal(t, relayconvert.ProtocolChat, alternate.UpstreamProtocol)
+					assert.Equal(t, public.EffectiveUpstreamModel, alternate.EffectiveUpstreamModel)
+				}
 				if channel.Id == 2 {
 					var settings hostdto.ChannelOtherSettings
 					require.NoError(t, common.UnmarshalJsonStr(channel.OtherSettings, &settings))
@@ -190,19 +204,23 @@ func TestProtocolMigrationBlocksInvalidAndConcurrentConfiguration(t *testing.T) 
 }
 
 func TestProtocolMigrationFreshDatabaseDefaults(t *testing.T) {
-	db := migrationDatabase(t, "sqlite")
-	backupDirectory := t.TempDir()
-	require.NoError(t, MigrateOnStartup(db, backupDirectory))
-	require.NoError(t, MigrateOnStartup(db, backupDirectory))
-	var option model.Option
-	require.NoError(t, db.Where(map[string]any{"key": optionKey}).First(&option).Error)
-	var policy hostdto.ProtocolPolicy
-	require.NoError(t, common.UnmarshalJsonStr(option.Value, &policy))
-	assert.Equal(t, hostdto.ProtocolConversionSafe, policy.Conversion)
-	assert.Equal(t, hostdto.ProtocolStateBridge, policy.StateScope)
-	files, err := os.ReadDir(backupDirectory)
-	require.NoError(t, err)
-	assert.Len(t, files, 1)
+	for _, engine := range []string{"sqlite", "mysql", "postgres"} {
+		t.Run(engine, func(t *testing.T) {
+			db := migrationDatabase(t, engine)
+			backupDirectory := t.TempDir()
+			require.NoError(t, MigrateOnStartup(db, backupDirectory))
+			require.NoError(t, MigrateOnStartup(db, backupDirectory))
+			var option model.Option
+			require.NoError(t, db.Where(map[string]any{"key": optionKey}).First(&option).Error)
+			var policy hostdto.ProtocolPolicy
+			require.NoError(t, common.UnmarshalJsonStr(option.Value, &policy))
+			assert.Equal(t, hostdto.ProtocolConversionSafe, policy.Conversion)
+			assert.Equal(t, hostdto.ProtocolStateBridge, policy.StateScope)
+			files, err := os.ReadDir(backupDirectory)
+			require.NoError(t, err)
+			assert.Len(t, files, 1)
+		})
+	}
 }
 
 func TestProtocolMigrationImportsPreservePassthroughAndRejectUnknownFields(t *testing.T) {

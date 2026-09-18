@@ -256,16 +256,15 @@ func NormalizeChannel(channel *model.Channel, global model_setting.GlobalSetting
 				if modelName == "" {
 					continue
 				}
-				mapped, err := modelmapping.Resolve(channel.GetModelMapping(), modelName)
-				if err != nil {
+				if _, err := modelmapping.Resolve(channel.GetModelMapping(), modelName); err != nil {
 					return "", nil, err
 				}
-				if seen[mapped.Model] {
+				if seen[modelName] {
 					continue
 				}
-				seen[mapped.Model] = true
+				seen[modelName] = true
 				for _, protocol := range relayconvert.Protocols() {
-					policy.Rules = append(policy.Rules, legacyRule(channel, global, settings, protocol, mapped.Model, "^"+regexp.QuoteMeta(mapped.Model)+"$"))
+					policy.Rules = append(policy.Rules, legacyRule(channel, global, settings, protocol, modelName, "^"+regexp.QuoteMeta(modelName)+"$"))
 				}
 			}
 			if caps != nil && global.ProtocolBridgePolicy.Enabled {

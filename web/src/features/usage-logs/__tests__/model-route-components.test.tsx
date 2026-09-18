@@ -39,7 +39,10 @@ import {
 import type { UsageLog } from '../data/schema'
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({
+    t: (key: string, values?: { protocol?: string }) =>
+      key.replace('{{protocol}}', values?.protocol ?? '{{protocol}}'),
+  }),
 }))
 
 vi.mock('@/lib/lobe-icon', () => ({
@@ -134,8 +137,9 @@ function ModelColumnHarness(props: RoutePresentationProps) {
     permissions.isRootView,
     permissions.canViewModelRoute
   )
+  // eslint-disable-next-line react/incompatible-library -- This test exercises TanStack Table without compiler memoization.
   const table = useReactTable({
-    data: [routedLog],
+    data: [props.log ?? routedLog],
     columns,
     getCoreRowModel: getCoreRowModel(),
   })
@@ -190,11 +194,11 @@ function setAuthenticatedRole(role: number) {
   })
 }
 
-function renderModelColumn(role: number, scope: LogsViewScope) {
+function renderModelColumn(role: number, scope: LogsViewScope, log?: UsageLog) {
   setAuthenticatedRole(role)
   return render(
     <UsageLogsProvider>
-      <ModelColumnHarness scope={scope} />
+      <ModelColumnHarness scope={scope} log={log} />
     </UsageLogsProvider>
   )
 }
@@ -217,6 +221,44 @@ afterEach(() => {
 })
 
 describe('usage-log model route component visibility', () => {
+  test('puts a short translation label below the model without enlarging its content height', async () => {
+    renderModelColumn(ROLE.ADMIN, 'all')
+    const cell = screen.getByTestId('model-column')
+    const label = await within(cell).findByText('Chat translation')
+    const badge = label.closest('[data-slot="status-badge"]')
+    expect(badge).toHaveClass('h-3', 'leading-3')
+    expect(badge?.parentElement).toHaveClass('flex-col', 'items-center')
+    expect(badge?.previousElementSibling).toHaveTextContent(REQUESTED_MODEL)
+    expect(cell).not.toHaveTextContent('→')
+  })
+
+  test.each([
+    [ROLE.USER, 'all'],
+    [ROLE.ADMIN, 'self'],
+  ] as const)(
+    'hides the translation label for role %s in scope %s',
+    async (role, scope) => {
+      renderModelColumn(role, scope)
+      const cell = screen.getByTestId('model-column')
+      await waitFor(() =>
+        expect(cell).toHaveAttribute('data-admin-view', 'false')
+      )
+      expect(
+        within(cell).queryByText('Chat translation')
+      ).not.toBeInTheDocument()
+    }
+  )
+
+  test.each([
+    { type: 2, other: JSON.stringify({ request_conversion: ['responses'] }) },
+    { type: 5, other: routedLog.other },
+  ])('does not label native or failed requests as translated', (partialLog) => {
+    renderModelColumn(ROLE.ADMIN, 'all', { ...routedLog, ...partialLog })
+    expect(screen.getByTestId('model-column')).not.toHaveTextContent(
+      'translation'
+    )
+  })
+
   test('hides an unexpected model route payload from a regular-user list cell', async () => {
     renderModelColumn(ROLE.USER, 'all')
 
@@ -521,7 +563,11 @@ describe('usage-log model route component visibility', () => {
     await user.click(
       within(dialog).getByRole('button', { name: /Request Diagnostics/ })
     )
-    expect(within(dialog).getByText('Upstream Protocol')).toBeVisible()
+    expect(within(dialog).getByText('Upstream request')).toBeVisible()
+    expect(within(dialog).getByText('OpenAI Chat Completions')).toBeVisible()
+    await user.click(
+      within(dialog).getByRole('button', { name: 'Technical details' })
+    )
     expect(within(dialog).getByText('Protocol Converter')).toBeVisible()
     expect(within(dialog).getByText('Protocol State Mode')).toBeVisible()
     expect(
@@ -531,8 +577,9 @@ describe('usage-log model route component visibility', () => {
     expect(within(dialog).getByText('测试路由转换')).toBeVisible()
     expect(within(dialog).queryByText('Route Rule')).not.toBeInTheDocument()
     expect(within(dialog).queryByText('#3')).not.toBeInTheDocument()
+    expect(within(dialog).getByText('responses_to_chat')).toBeVisible()
     expect(
-      within(dialog).getByText('responses → responses_to_chat → chat')
+      within(dialog).getByRole('list', { name: 'Protocol flow' })
     ).toBeVisible()
   })
 

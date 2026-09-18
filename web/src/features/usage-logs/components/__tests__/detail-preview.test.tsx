@@ -23,6 +23,7 @@ import {
   useReactTable,
 } from '@tanstack/react-table'
 import { fireEvent, render, screen, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { createInstance } from 'i18next'
 import { I18nextProvider } from 'react-i18next'
 import { afterAll, afterEach, beforeEach, expect, test, vi } from 'vitest'
@@ -47,12 +48,12 @@ vi.hoisted(() => {
 })
 afterAll(() => vi.unstubAllGlobals())
 
-function makeLog(other: LogOtherData): UsageLog {
+function makeLog(other: LogOtherData, type = 2): UsageLog {
   return {
     id: 1,
     user_id: 1,
     created_at: 1,
-    type: 2,
+    type,
     content: '',
     username: 'user',
     token_name: 'token',
@@ -73,9 +74,14 @@ function makeLog(other: LogOtherData): UsageLog {
   }
 }
 
-function DetailPreview(props: { other: LogOtherData; isAdmin: boolean }) {
+function DetailPreview(props: {
+  other: LogOtherData
+  isAdmin: boolean
+  logType?: number
+}) {
+  // eslint-disable-next-line react/incompatible-library -- This test exercises TanStack Table without compiler memoization.
   const table = useReactTable({
-    data: [makeLog(props.other)],
+    data: [makeLog(props.other, props.logType)],
     columns: useCommonLogsColumns(props.isAdmin, false, props.isAdmin),
     getCoreRowModel: getCoreRowModel(),
   })
@@ -116,16 +122,116 @@ afterEach(() => {
   client.clear()
   useSystemConfigStore.getState().setConfig(previousConfig)
 })
-function renderPreview(other: LogOtherData, isAdmin = true) {
+function renderPreview(other: LogOtherData, isAdmin = true, logType = 2) {
   render(
     <I18nextProvider i18n={i18n}>
       <QueryClientProvider client={client}>
-        <DetailPreview other={other} isAdmin={isAdmin} />
+        <DetailPreview other={other} isAdmin={isAdmin} logType={logType} />
       </QueryClientProvider>
     </I18nextProvider>
   )
   return screen.getByRole('button', { name: /./ })
 }
+
+const conversionLog: LogOtherData = {
+  model_price: 0.25,
+  request_path: '/v1/responses',
+  diagnostics: { request_protocol: 'responses' },
+  admin_info: {
+    upstream_protocol: 'messages',
+    protocol_converter: 'openai_responses_to_claude_messages',
+    conversion_diagnostics: [
+      {
+        code: 'omitted_presentation_metadata',
+        path: 'metadata',
+        message: 'target protocol does not carry this display metadata',
+        severity: 'warning',
+        loss_class: 'presentation',
+        from: 'openai-responses',
+        to: 'claude',
+      },
+    ],
+  },
+}
+
+test('keeps the details cell focused on billing and explains translation in the dialog', async () => {
+  const user = userEvent.setup()
+  const preview = renderPreview(conversionLog)
+  expect(preview).not.toHaveTextContent('Messages translation')
+  expect(preview).not.toHaveTextContent('→')
+  expect(preview).toHaveTextContent('Per-call · $0.25')
+  await user.click(preview)
+  const dialog = within(await screen.findByRole('dialog'))
+  const steps = within(
+    dialog.getByRole('list', { name: 'Protocol flow' })
+  ).getAllByRole('listitem')
+  expect(steps).toHaveLength(3)
+  expect(steps[0]).toHaveTextContent('OpenAI Responses')
+  expect(steps[1]).toHaveTextContent('Messages translation')
+  expect(steps[2]).toHaveTextContent('Anthropic Messages')
+  expect(dialog.getByText('metadata')).toBeVisible()
+  expect(
+    dialog.getByText(
+      'The target protocol does not support this display metadata; it was omitted.'
+    )
+  ).toBeVisible()
+  expect(
+    dialog.queryByText('openai_responses_to_claude_messages')
+  ).not.toBeInTheDocument()
+  const technical = dialog.getByRole('button', { name: 'Technical details' })
+  await user.click(technical)
+  expect(technical).toHaveAttribute('aria-expanded', 'true')
+  expect(dialog.getByText('openai_responses_to_claude_messages')).toBeVisible()
+})
+
+test('hides protocol field diagnostics and their badge outside the administrator view', async () => {
+  const preview = renderPreview(conversionLog, false)
+  expect(preview).not.toHaveTextContent('Messages translation')
+  fireEvent.click(preview)
+  const dialog = within(await screen.findByRole('dialog'))
+  expect(dialog.queryByText('metadata')).not.toBeInTheDocument()
+  expect(dialog.queryByText('Field adjustments')).not.toBeInTheDocument()
+})
+
+test('does not present conversion warnings on a failed request as completed field changes', async () => {
+  const preview = renderPreview(conversionLog, true, 5)
+  fireEvent.click(preview)
+  const dialog = within(await screen.findByRole('dialog'))
+  expect(dialog.queryByText('Protocol converted')).not.toBeInTheDocument()
+  expect(dialog.queryByText('Adjusted')).not.toBeInTheDocument()
+  expect(dialog.getByText('Warning')).toBeVisible()
+})
+
+test.each([
+  {
+    name: 'a planned loss without an actual diagnostic',
+    other: { admin_info: { protocol_lossy_conversion: 'metadata' } },
+    type: 2,
+  },
+  {
+    name: 'an unrelated warning',
+    other: {
+      admin_info: {
+        conversion_diagnostics: [
+          {
+            code: 'model_modifier_override',
+            message: 'model modifier overrides a parameter',
+            severity: 'warning' as const,
+          },
+        ],
+      },
+    },
+    type: 2,
+  },
+  { name: 'a rejected request', other: conversionLog, type: 5 },
+])('does not label $name as a completed translation', ({ other, type }) => {
+  expect(renderPreview(other, true, type)).not.toHaveTextContent('translation')
+})
+
+test('does not label native requests as a translation', () => {
+  const preview = renderPreview({ request_conversion: ['responses'] })
+  expect(preview).not.toHaveTextContent('translation')
+})
 
 test.each([
   {

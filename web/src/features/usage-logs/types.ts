@@ -187,7 +187,10 @@ export interface LogOtherData {
     upstream_protocol?: string
     protocol_converter?: string
     protocol_state_mode?: string
+    compaction_mode?: 'native' | 'summary'
     protocol_lossy_conversion?: string
+    conversion_diagnostics?: ConversionDiagnostic[]
+    conversion_diagnostics_truncated?: boolean
     route_pool_name?: string
     route_rule_id?: number
     // Reject / intercept reason (admin only)
@@ -328,6 +331,16 @@ export interface LogOtherData {
   // Subscription billing fields
   subscription_plan_title?: string
   subscription_group?: string
+}
+
+export type ConversionDiagnostic = {
+  code: string
+  path?: string
+  message: string
+  severity: 'warning' | 'error'
+  loss_class?: 'presentation' | 'semantic'
+  from?: string
+  to?: string
 }
 
 /**
