@@ -39,6 +39,7 @@ func TestPromptAuditRequestKindCoversSupportedTextProtocols(t *testing.T) {
 		{path: "/v1/images/generations", format: types.RelayFormatOpenAIImage},
 		{path: "/v1/audio/speech", format: types.RelayFormatOpenAIAudio},
 		{path: "/v1/video/generations", format: types.RelayFormatTask, task: true},
+		{path: "/v1/tasks/example-plugin", format: types.RelayFormatTask, task: true},
 		{path: "/suno/submit/music", format: types.RelayFormatTask, task: true},
 		{path: "/fast/mj/submit/imagine", format: types.RelayFormatTask, task: true},
 	}
@@ -54,6 +55,12 @@ func TestPromptAuditRequestKindCoversSupportedTextProtocols(t *testing.T) {
 
 func TestPromptAuditSensitiveWordsRunBeforeGuardAndChannelSelection(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	previousDB := model.DB
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.PromptAudit{}))
+	model.DB = db
+	t.Cleanup(func() { model.DB = previousDB })
 	previousConfig := prompt_audit_setting.GetSetting()
 	previousWords := setting.SensitiveWordsSnapshot()
 	previousSensitiveEnabled := setting.CheckSensitiveEnabled
@@ -104,6 +111,11 @@ func TestPromptAuditSensitiveWordsRunBeforeGuardAndChannelSelection(t *testing.T
 	assert.Contains(t, logOutput.String(), "user sensitive words detected")
 	assert.NotContains(t, logOutput.String(), "blocked_word")
 	assert.Zero(t, guardCalls.Load())
+	var audit model.PromptAudit
+	require.NoError(t, db.First(&audit).Error)
+	assert.Equal(t, "wordlist", audit.InspectionType)
+	assert.Equal(t, "manual", audit.WordlistID)
+	assert.Empty(t, audit.FullPrompt)
 	_, channelSelected := common.GetContextKey(c, constant.ContextKeyChannelId)
 	assert.False(t, channelSelected)
 }

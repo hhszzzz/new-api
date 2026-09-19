@@ -97,25 +97,28 @@ type PromptAuditRequest struct {
 // PromptAuditResult contains only non-secret decision metadata safe for logs,
 // cache, and request context. Raw prompt and node tokens never enter this type.
 type PromptAuditResult struct {
-	Enabled           bool     `json:"enabled"`
-	Reviewed          bool     `json:"reviewed"`
-	Blocked           bool     `json:"blocked"`
-	Outcome           string   `json:"outcome"`
-	Mode              string   `json:"mode"`
-	Safety            string   `json:"safety"`
-	Decision          string   `json:"decision"`
-	Categories        []string `json:"categories"`
-	UnknownCategories []string `json:"unknown_categories"`
-	EndpointID        string   `json:"endpoint_id"`
-	LatencyMillis     int64    `json:"latency_ms"`
-	InputChars        int      `json:"input_chars"`
-	InputSHA256       string   `json:"input_sha256"`
-	SegmentCount      int      `json:"segment_count"`
-	ChunkCount        int      `json:"chunk_count"`
-	ConfigVersion     string   `json:"config_version"`
-	FailureKind       string   `json:"failure,omitempty"`
-	CacheHit          bool     `json:"cache_hit"`
-	AuditID           int64    `json:"audit_id,omitempty"`
+	InspectionType    string               `json:"inspection_type,omitempty"`
+	Wordlist          *PromptWordlistMatch `json:"wordlist,omitempty"`
+	InspectedScopes   []string             `json:"inspected_scopes,omitempty"`
+	Enabled           bool                 `json:"enabled"`
+	Reviewed          bool                 `json:"reviewed"`
+	Blocked           bool                 `json:"blocked"`
+	Outcome           string               `json:"outcome"`
+	Mode              string               `json:"mode"`
+	Safety            string               `json:"safety"`
+	Decision          string               `json:"decision"`
+	Categories        []string             `json:"categories"`
+	UnknownCategories []string             `json:"unknown_categories"`
+	EndpointID        string               `json:"endpoint_id"`
+	LatencyMillis     int64                `json:"latency_ms"`
+	InputChars        int                  `json:"input_chars"`
+	InputSHA256       string               `json:"input_sha256"`
+	SegmentCount      int                  `json:"segment_count"`
+	ChunkCount        int                  `json:"chunk_count"`
+	ConfigVersion     string               `json:"config_version"`
+	FailureKind       string               `json:"failure,omitempty"`
+	CacheHit          bool                 `json:"cache_hit"`
+	AuditID           int64                `json:"audit_id,omitempty"`
 }
 
 type promptAuditGuardError struct {
@@ -176,8 +179,11 @@ func PromptAuditCategories() []PromptAuditCategoryDefinition {
 }
 
 func CheckPromptAudit(c *gin.Context, request PromptAuditRequest) (PromptAuditResult, *hosttypes.NewAPIError) {
-	setting := prompt_audit_setting.GetSetting()
-	result := PromptAuditResult{Mode: setting.Mode, ConfigVersion: setting.ConfigVersion}
+	return checkPromptAuditWithSetting(c, request, prompt_audit_setting.GetSetting())
+}
+
+func checkPromptAuditWithSetting(c *gin.Context, request PromptAuditRequest, setting prompt_audit_setting.PromptAuditSetting) (PromptAuditResult, *hosttypes.NewAPIError) {
+	result := PromptAuditResult{Mode: setting.Mode, ConfigVersion: setting.ConfigVersion, InspectionType: "model"}
 	group := effectivePromptAuditGroup(c)
 	if !setting.AppliesToGroup(group) {
 		AttachPromptAuditResult(c, result)
@@ -185,6 +191,20 @@ func CheckPromptAudit(c *gin.Context, request PromptAuditRequest) (PromptAuditRe
 	}
 	result.Enabled = true
 
+	filtered := dto.PromptAuditSnapshot{}
+	scopes := map[dto.PromptAuditScope]bool{}
+	for _, segment := range request.Snapshot.Segments {
+		if setting.PolicyFor(segment.SourceScope()).ModelAudit {
+			filtered.Segments = append(filtered.Segments, segment)
+			scopes[segment.SourceScope()] = true
+		}
+	}
+	request.Snapshot = filtered
+	for _, scope := range dto.PromptAuditScopes() {
+		if scopes[scope] {
+			result.InspectedScopes = append(result.InspectedScopes, string(scope))
+		}
+	}
 	segments := request.Snapshot.PrioritizedSegments()
 	if len(segments) == 0 {
 		result.Outcome = "skipped_no_text"
@@ -817,7 +837,8 @@ func newPromptAuditRecord(c *gin.Context, request PromptAuditRequest, setting pr
 		return nil, err
 	}
 	audit := &model.PromptAudit{
-		RequestID: resultRequestID(c), UserID: contextInt(c, "id"), TokenID: contextInt(c, "token_id"),
+		InspectionType: "model",
+		RequestID:      resultRequestID(c), UserID: contextInt(c, "id"), TokenID: contextInt(c, "token_id"),
 		TokenName: contextString(c, "token_name"), GroupName: effectivePromptAuditGroup(c),
 		Protocol: strings.TrimSpace(request.Protocol), ModelName: strings.TrimSpace(request.Model),
 		Stage: normalizedPromptAuditStage(request.Stage), ConfigVersion: setting.ConfigVersion,
@@ -826,6 +847,9 @@ func newPromptAuditRecord(c *gin.Context, request PromptAuditRequest, setting pr
 		FullPrompt: fullPrompt, FullPromptTruncated: truncated,
 		RedactedPreview: promptAuditPreview(fullText), PolicyCategories: string(policyCategories),
 		MaxAttempts: setting.MaxAttempts,
+	}
+	if data, err := common.Marshal(result.InspectedScopes); err == nil {
+		audit.InspectedScopes = string(data)
 	}
 	if status == model.PromptAuditStatusQueued {
 		audit.ScanPayload = []byte(fullText)
@@ -991,12 +1015,19 @@ func promptAuditResultFromContext(c *gin.Context) (PromptAuditResult, bool) {
 
 func (result PromptAuditResult) auditMap() map[string]interface{} {
 	audit := map[string]interface{}{
-		"outcome": result.Outcome, "mode": result.Mode, "safety": result.Safety,
+		"inspection_type": result.InspectionType,
+		"outcome":         result.Outcome, "mode": result.Mode, "safety": result.Safety,
 		"decision": result.Decision, "reviewed": result.Reviewed, "blocked": result.Blocked,
 		"latency_ms": result.LatencyMillis, "input_chars": result.InputChars,
 		"input_sha256": result.InputSHA256, "segment_count": result.SegmentCount,
 		"chunk_count": result.ChunkCount, "config_version": result.ConfigVersion,
 		"cache_hit": result.CacheHit,
+	}
+	if result.Wordlist != nil {
+		audit["wordlist"] = result.Wordlist
+	}
+	if len(result.InspectedScopes) > 0 {
+		audit["inspected_scopes"] = result.InspectedScopes
 	}
 	if result.EndpointID != "" {
 		audit["endpoint_id"] = result.EndpointID

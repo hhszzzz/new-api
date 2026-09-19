@@ -17,6 +17,41 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 export type PromptAuditMode = 'off' | 'async_audit' | 'blocking'
+export type PromptAuditScope =
+  | 'system'
+  | 'developer'
+  | 'user'
+  | 'assistant'
+  | 'tool_call'
+  | 'tool_result'
+  | 'task'
+export interface PromptScopePolicy {
+  library_ids: string[]
+  model_audit: boolean
+}
+export type PromptScopePolicies = Record<PromptAuditScope, PromptScopePolicy>
+export interface PromptWordlist {
+  id: string
+  name: string
+  source_url: string
+  enabled: boolean
+  auto_update: boolean
+  status: 'pending' | 'updating' | 'ready' | 'failed'
+  word_count: number
+  file_count: number
+  content_hash: string
+  source_revision: string
+  last_success_at: number
+  next_sync_at: number
+  last_error: string
+  scopes: PromptAuditScope[]
+}
+export interface PromptWordlistMatch {
+  id: string
+  name: string
+  version: string
+  scope: PromptAuditScope
+}
 export type PromptAuditStatus =
   | 'queued'
   | 'processing'
@@ -59,6 +94,8 @@ export interface PromptAuditEndpointUpdate extends Omit<
 }
 
 export interface PromptAuditConfig {
+  scope_policies?: PromptScopePolicies
+  word_filter_enabled?: boolean
   mode: PromptAuditMode
   enabled_categories: string[]
   all_groups: boolean
@@ -83,6 +120,12 @@ export type PromptAuditConfigUpdate = Omit<
 }
 
 export interface PromptAuditEvent {
+  inspection_type?: 'wordlist' | 'model'
+  wordlist_id?: string
+  wordlist_name?: string
+  wordlist_version?: string
+  matched_scope?: PromptAuditScope
+  inspected_scopes?: PromptAuditScope[]
   id: number
   request_id: string
   user_id: number

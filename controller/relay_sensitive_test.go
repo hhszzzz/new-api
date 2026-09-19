@@ -8,14 +8,18 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func TestRelayReturnsBadRequestWhenSensitiveWordsAreDetected(t *testing.T) {
+	setupSensitiveRelayAuditStore(t)
 	originalWords := setting.SensitiveWordsToString()
 	originalEnabled := setting.CheckSensitiveEnabled
 	originalPromptEnabled := setting.CheckSensitiveOnPromptEnabled
@@ -46,6 +50,7 @@ func TestRelayReturnsBadRequestWhenSensitiveWordsAreDetected(t *testing.T) {
 }
 
 func TestRelayChecksOnlyOpenAIUserTextForSensitiveWords(t *testing.T) {
+	setupSensitiveRelayAuditStore(t)
 	originalWords := setting.SensitiveWordsToString()
 	originalEnabled := setting.CheckSensitiveEnabled
 	originalPromptEnabled := setting.CheckSensitiveOnPromptEnabled
@@ -76,4 +81,20 @@ func TestRelayChecksOnlyOpenAIUserTextForSensitiveWords(t *testing.T) {
 	Relay(ctx, types.RelayFormatOpenAI)
 
 	assert.NotContains(t, recorder.Body.String(), string(hosttypes.ErrorCodeSensitiveWordsDetected))
+}
+
+func setupSensitiveRelayAuditStore(t *testing.T) {
+	t.Helper()
+	previousDB, previousLogDB := model.DB, model.LOG_DB
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	require.NoError(t, db.AutoMigrate(&model.PromptAudit{}, &model.Log{}))
+	model.DB, model.LOG_DB = db, db
+	t.Cleanup(func() {
+		model.DB, model.LOG_DB = previousDB, previousLogDB
+		require.NoError(t, sqlDB.Close())
+	})
 }

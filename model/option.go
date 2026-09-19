@@ -532,6 +532,11 @@ func pricingOptionsFrom(values map[string]string) map[string]string {
 }
 
 func persistOptionsWithTx(tx *gorm.DB, values map[string]string) error {
+	if value, ok := values[promptScopePoliciesKey]; ok {
+		if err := validatePromptWordlistBindings(tx, value); err != nil {
+			return err
+		}
+	}
 	for _, key := range sortedOptionKeys(values) {
 		option := Option{Key: key}
 		if err := tx.FirstOrCreate(&option, Option{Key: key}).Error; err != nil {

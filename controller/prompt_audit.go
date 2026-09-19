@@ -9,8 +9,10 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/authz"
+	globalsetting "github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/prompt_audit_setting"
 
 	"github.com/gin-gonic/gin"
@@ -30,19 +32,21 @@ type promptAuditEndpointUpdate struct {
 }
 
 type promptAuditConfigUpdate struct {
-	Mode                *string                      `json:"mode"`
-	EnabledCategories   *[]string                    `json:"enabled_categories"`
-	AllGroups           *bool                        `json:"all_groups"`
-	Groups              *[]string                    `json:"groups"`
-	Endpoints           *[]promptAuditEndpointUpdate `json:"endpoints"`
-	TotalTimeoutMS      *int                         `json:"total_timeout_ms"`
-	ChunkOverlap        *int                         `json:"chunk_overlap"`
-	CacheTTLSeconds     *int                         `json:"cache_ttl_seconds"`
-	WorkerCount         *int                         `json:"worker_count"`
-	MaxAttempts         *int                         `json:"max_attempts"`
-	RetentionDays       *int                         `json:"retention_days"`
-	GlobalConcurrency   *int                         `json:"global_concurrency"`
-	EndpointConcurrency *int                         `json:"endpoint_concurrency"`
+	ScopePolicies       *map[dto.PromptAuditScope]prompt_audit_setting.ScopePolicy `json:"scope_policies"`
+	WordFilterEnabled   *bool                                                      `json:"word_filter_enabled"`
+	Mode                *string                                                    `json:"mode"`
+	EnabledCategories   *[]string                                                  `json:"enabled_categories"`
+	AllGroups           *bool                                                      `json:"all_groups"`
+	Groups              *[]string                                                  `json:"groups"`
+	Endpoints           *[]promptAuditEndpointUpdate                               `json:"endpoints"`
+	TotalTimeoutMS      *int                                                       `json:"total_timeout_ms"`
+	ChunkOverlap        *int                                                       `json:"chunk_overlap"`
+	CacheTTLSeconds     *int                                                       `json:"cache_ttl_seconds"`
+	WorkerCount         *int                                                       `json:"worker_count"`
+	MaxAttempts         *int                                                       `json:"max_attempts"`
+	RetentionDays       *int                                                       `json:"retention_days"`
+	GlobalConcurrency   *int                                                       `json:"global_concurrency"`
+	EndpointConcurrency *int                                                       `json:"endpoint_concurrency"`
 }
 
 type promptAuditFilterRequest struct {
@@ -81,6 +85,35 @@ func UpdatePromptAuditConfig(c *gin.Context) {
 	}
 	current := prompt_audit_setting.GetSetting()
 	values := map[string]string{}
+	if update.ScopePolicies != nil {
+		rows, err := model.ListPromptWordlists()
+		if err != nil {
+			common.ApiError(c, errors.New("wordlists are unavailable"))
+			return
+		}
+		known := map[string]bool{prompt_audit_setting.ManualWordlistID: true}
+		for _, row := range rows {
+			known[strconv.FormatInt(row.ID, 10)] = true
+		}
+		for _, policy := range *update.ScopePolicies {
+			for _, id := range policy.LibraryIDs {
+				if !known[id] {
+					c.JSON(400, gin.H{"success": false, "message": "unknown wordlist"})
+					return
+				}
+			}
+		}
+		data, err := common.Marshal(*update.ScopePolicies)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		values["prompt_audit.scope_policies"] = string(data)
+	}
+	if update.WordFilterEnabled != nil {
+		values["CheckSensitiveEnabled"] = strconv.FormatBool(*update.WordFilterEnabled)
+		values["CheckSensitiveOnPromptEnabled"] = strconv.FormatBool(*update.WordFilterEnabled)
+	}
 	if update.Mode != nil {
 		values["prompt_audit.mode"] = *update.Mode
 	}
@@ -292,6 +325,7 @@ func DeletePromptAudits(c *gin.Context) {
 
 func promptAuditConfigResponse(setting prompt_audit_setting.PromptAuditSetting) gin.H {
 	return gin.H{
+		"scope_policies": setting.EffectiveScopePolicies(), "word_filter_enabled": globalsetting.ShouldCheckPromptSensitive(),
 		"mode": setting.Mode, "enabled_categories": append([]string{}, setting.EnabledCategories...),
 		"all_groups": setting.AllGroups, "groups": append([]string{}, setting.Groups...),
 		"endpoints": setting.SanitizedEndpoints(), "total_timeout_ms": setting.TotalTimeoutMS,

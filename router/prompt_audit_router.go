@@ -23,6 +23,14 @@ func registerPromptAuditRoutes(apiRouter *gin.RouterGroup) {
 
 	route.GET("/config", middleware.RequirePermission(authz.PromptAuditManage), controller.GetPromptAuditConfig)
 	route.PUT("/config", middleware.RequirePermission(authz.PromptAuditManage), controller.UpdatePromptAuditConfig)
+	route.GET("/wordlists", middleware.RequirePermission(authz.PromptAuditManage), controller.ListPromptWordlists)
+	route.POST("/wordlists", middleware.RequirePermission(authz.PromptAuditManage), controller.CreatePromptWordlist)
+	route.PUT("/wordlists/:id", middleware.RequirePermission(authz.PromptAuditManage), controller.UpdatePromptWordlist)
+	route.DELETE("/wordlists/:id", middleware.RequirePermission(authz.PromptAuditManage), controller.DeletePromptWordlist)
+	route.POST("/wordlists/:id/sync", middleware.RequirePermission(authz.PromptAuditManage), controller.SyncPromptWordlist)
+	route.GET("/wordlists/manual/content", middleware.RequirePermission(authz.PromptAuditManage), controller.GetManualPromptWordlist)
+	route.PUT("/wordlists/manual/content", middleware.RequirePermission(authz.PromptAuditManage), controller.UpdateManualPromptWordlist)
+	route.POST("/wordlists/test", middleware.RequirePermission(authz.PromptAuditManage), controller.TestPromptWordlists)
 	route.POST("/nodes/:id/test", middleware.RequirePermission(authz.PromptAuditManage), controller.TestPromptAuditNode)
 	route.POST("/events/:id/retry", middleware.RequirePermission(authz.PromptAuditManage), controller.RetryPromptAudit)
 

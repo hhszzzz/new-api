@@ -27,7 +27,6 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/protocolstate"
-	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/bytedance/gopkg/util/gopool"
@@ -182,7 +181,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 					}
 					return ws.WriteControl(websocket.PingMessage, nil, time.Now().Add(time.Second))
 				}
-			} else {
+			} else if common.GetContextKeyBool(c, constant.ContextKeyPromptAuditChecked) {
 				waitOptions.Heartbeat = func() error {
 					helper.SetEventStreamHeaders(c)
 					return helper.PingData(c)
@@ -201,7 +200,6 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 	}
 
-	needSensitiveCheck := setting.ShouldCheckPromptSensitive() && !common.GetContextKeyBool(c, constant.ContextKeyPromptAuditChecked)
 	needCountToken := constant.CountToken
 	// Sensitive filtering has its own user-text extractor, so only exact token
 	// counting needs the potentially large combined request text.
@@ -212,18 +210,8 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		meta = fastTokenCountMetaForPricing(request)
 	}
 
-	if needSensitiveCheck {
-		contains, _ := service.CheckSensitiveText(request.GetSensitiveText())
-		if contains {
-			logger.LogWarn(c, "user sensitive words detected")
-			newAPIError = hosttypes.NewError(errors.New("sensitive words detected"), hosttypes.ErrorCodeSensitiveWordsDetected,
-				hosttypes.ErrOptionWithStatusCode(http.StatusBadRequest), hosttypes.ErrOptionWithSkipRetry())
-			return
-		}
-	}
-
 	if !common.GetContextKeyBool(c, constant.ContextKeyPromptAuditChecked) {
-		promptAuditResult, promptAuditErr := service.CheckPromptAudit(c, service.PromptAuditRequest{
+		promptAuditResult, promptAuditErr := service.InspectPrompt(c, service.PromptAuditRequest{
 			Snapshot: dto.PromptAuditSnapshotOf(request),
 			Protocol: string(relayInfo.RelayFormat),
 			Model:    relayInfo.OriginModelName,

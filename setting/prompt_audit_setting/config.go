@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"net/url"
 	"sort"
 	"strconv"
@@ -82,20 +83,22 @@ type SanitizedEndpoint struct {
 // endpoints field deliberately ends in "secret" so the legacy root-only option
 // listing omits the complete JSON value (which contains endpoint tokens).
 type PromptAuditSetting struct {
-	Mode                string     `json:"mode"`
-	EnabledCategories   []string   `json:"enabled_categories"`
-	AllGroups           bool       `json:"all_groups"`
-	Groups              []string   `json:"groups"`
-	Endpoints           []Endpoint `json:"endpoints_secret"`
-	TotalTimeoutMS      int        `json:"total_timeout_ms"`
-	ChunkOverlap        int        `json:"chunk_overlap"`
-	CacheTTLSeconds     int        `json:"cache_ttl_seconds"`
-	WorkerCount         int        `json:"worker_count"`
-	MaxAttempts         int        `json:"max_attempts"`
-	RetentionDays       int        `json:"retention_days"`
-	GlobalConcurrency   int        `json:"global_concurrency"`
-	EndpointConcurrency int        `json:"endpoint_concurrency"`
-	ConfigVersion       string     `json:"-"`
+	ManualWordlistEnabled *bool                                `json:"manual_wordlist_enabled"`
+	ScopePolicies         map[dto.PromptAuditScope]ScopePolicy `json:"scope_policies"`
+	Mode                  string                               `json:"mode"`
+	EnabledCategories     []string                             `json:"enabled_categories"`
+	AllGroups             bool                                 `json:"all_groups"`
+	Groups                []string                             `json:"groups"`
+	Endpoints             []Endpoint                           `json:"endpoints_secret"`
+	TotalTimeoutMS        int                                  `json:"total_timeout_ms"`
+	ChunkOverlap          int                                  `json:"chunk_overlap"`
+	CacheTTLSeconds       int                                  `json:"cache_ttl_seconds"`
+	WorkerCount           int                                  `json:"worker_count"`
+	MaxAttempts           int                                  `json:"max_attempts"`
+	RetentionDays         int                                  `json:"retention_days"`
+	GlobalConcurrency     int                                  `json:"global_concurrency"`
+	EndpointConcurrency   int                                  `json:"endpoint_concurrency"`
+	ConfigVersion         string                               `json:"-"`
 }
 
 var promptAuditSetting = PromptAuditSetting{
@@ -166,6 +169,9 @@ func (setting PromptAuditSetting) SanitizedEndpoints() []SanitizedEndpoint {
 func (setting *PromptAuditSetting) ValidateConfig() error {
 	if setting == nil {
 		return fmt.Errorf("prompt audit setting is required")
+	}
+	if err := validateScopePolicies(setting.ScopePolicies); err != nil {
+		return err
 	}
 	mode := strings.ToLower(strings.TrimSpace(setting.Mode))
 	if mode != ModeOff && mode != ModeAsyncAudit && mode != ModeBlocking {
@@ -325,6 +331,13 @@ func validateBaseURL(value string) error {
 }
 
 func cloneSetting(setting PromptAuditSetting) PromptAuditSetting {
+	if setting.ManualWordlistEnabled != nil {
+		value := *setting.ManualWordlistEnabled
+		setting.ManualWordlistEnabled = &value
+	}
+	if setting.ScopePolicies != nil {
+		setting.ScopePolicies = setting.EffectiveScopePolicies()
+	}
 	setting.EnabledCategories = append([]string(nil), setting.EnabledCategories...)
 	setting.Groups = append([]string(nil), setting.Groups...)
 	setting.Endpoints = append([]Endpoint(nil), setting.Endpoints...)
@@ -333,6 +346,13 @@ func cloneSetting(setting PromptAuditSetting) PromptAuditSetting {
 
 func settingFingerprint(setting PromptAuditSetting) string {
 	var builder strings.Builder
+	builder.WriteString(strconv.FormatBool(setting.ManualWordlistActive()) + "|")
+	for _, scope := range dto.PromptAuditScopes() {
+		policy := setting.PolicyFor(scope)
+		ids := append([]string(nil), policy.LibraryIDs...)
+		sort.Strings(ids)
+		builder.WriteString(string(scope) + ":" + strconv.FormatBool(policy.ModelAudit) + ":" + strings.Join(ids, ",") + "|")
+	}
 	builder.WriteString(setting.Mode)
 	builder.WriteByte('|')
 	categories := append([]string(nil), setting.EnabledCategories...)

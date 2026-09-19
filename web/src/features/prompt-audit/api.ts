@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { api } from '@/lib/api'
+import { requireServerSuccess } from '@/lib/server-error-message'
 
 import type {
   ApiResponse,
@@ -28,7 +29,99 @@ import type {
   PromptAuditEvent,
   PromptAuditListData,
   PromptAuditStats,
+  PromptAuditScope,
+  PromptWordlist,
+  PromptWordlistMatch,
 } from './types'
+
+export async function listPromptWordlists(): Promise<PromptWordlist[]> {
+  const response = await api.get<ApiResponse<PromptWordlist[]>>(
+    '/api/prompt-audit/wordlists'
+  )
+  const result = requireServerSuccess(response.data)
+  if (!Array.isArray(result.data)) throw new Error('Invalid wordlist response')
+  return result.data
+}
+
+export async function createPromptWordlist(payload: {
+  name: string
+  source_url: string
+  scopes: PromptAuditScope[]
+  auto_update: boolean
+}) {
+  return requireServerSuccess(
+    (
+      await api.post<ApiResponse<{ id: string }>>(
+        '/api/prompt-audit/wordlists',
+        payload
+      )
+    ).data
+  )
+}
+
+export async function updatePromptWordlist(
+  id: string,
+  payload: Partial<Pick<PromptWordlist, 'name' | 'enabled' | 'auto_update'>>
+) {
+  return requireServerSuccess(
+    (
+      await api.put<ApiResponse<never>>(
+        `/api/prompt-audit/wordlists/${  encodeURIComponent(id)}`,
+        payload
+      )
+    ).data
+  )
+}
+
+export async function syncPromptWordlist(id: string) {
+  return requireServerSuccess(
+    (
+      await api.post<ApiResponse<never>>(
+        `/api/prompt-audit/wordlists/${  encodeURIComponent(id)  }/sync`
+      )
+    ).data
+  )
+}
+
+export async function deletePromptWordlist(id: string) {
+  return requireServerSuccess(
+    (
+      await api.delete<ApiResponse<never>>(
+        `/api/prompt-audit/wordlists/${  encodeURIComponent(id)}`
+      )
+    ).data
+  )
+}
+
+export async function getManualPromptWordlist(): Promise<string> {
+  const response = await api.get<ApiResponse<{ words: string }>>(
+    '/api/prompt-audit/wordlists/manual/content'
+  )
+  return requireServerSuccess(response.data).data?.words ?? ''
+}
+
+export async function updateManualPromptWordlist(words: string) {
+  return requireServerSuccess(
+    (
+      await api.put<ApiResponse<never>>(
+        '/api/prompt-audit/wordlists/manual/content',
+        { words }
+      )
+    ).data
+  )
+}
+
+export async function testPromptWordlists(
+  scope: PromptAuditScope,
+  text: string
+) {
+  const response = await api.post<
+    ApiResponse<{ match: PromptWordlistMatch | null; model_audit: boolean }>
+  >('/api/prompt-audit/wordlists/test', { scope, text })
+  const result = requireServerSuccess(response.data)
+  if (!result.data) throw new Error('Invalid wordlist test response')
+  return result.data
+}
 
 export async function getPromptAuditConfig() {
   const response = await api.get<ApiResponse<PromptAuditConfig>>(

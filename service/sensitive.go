@@ -2,11 +2,11 @@ package service
 
 import (
 	"errors"
+	goahocorasick "github.com/anknown/ahocorasick"
 	"strings"
 	"unicode"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/setting"
 )
 
 func CheckSensitiveMessages(messages []dto.Message) ([]string, error) {
@@ -42,8 +42,7 @@ func CheckSensitiveText(text string) (bool, []string) {
 
 // SensitiveWordContains 是否包含敏感词，返回是否包含敏感词和敏感词列表
 func SensitiveWordContains(text string) (bool, []string) {
-	words := setting.SensitiveWordsSnapshot()
-	hits := sensitiveWordMatches(text, words, true)
+	hits := sensitiveMachineMatches(text, currentManualWordMatcher(), true)
 	if len(hits) == 0 {
 		return false, nil
 	}
@@ -55,12 +54,8 @@ type sensitiveWordMatch struct {
 	word []rune
 }
 
-func sensitiveWordMatches(text string, words []string, returnImmediately bool) []sensitiveWordMatch {
-	if len(text) == 0 || len(words) == 0 {
-		return nil
-	}
-	m := getOrBuildAC(words)
-	if m == nil {
+func sensitiveMachineMatches(text string, m *goahocorasick.Machine, returnImmediately bool) []sensitiveWordMatch {
+	if m == nil || text == "" {
 		return nil
 	}
 	textRunes := []rune(strings.ToLower(text))
@@ -101,8 +96,7 @@ func isLatinIdentifierRune(r rune) bool {
 
 // SensitiveWordReplace 敏感词替换，返回是否包含敏感词和替换后的文本
 func SensitiveWordReplace(text string, returnImmediately bool) (bool, []string, string) {
-	words := setting.SensitiveWordsSnapshot()
-	hits := sensitiveWordMatches(text, words, returnImmediately)
+	hits := sensitiveMachineMatches(text, currentManualWordMatcher(), returnImmediately)
 	if len(hits) == 0 {
 		return false, nil, text
 	}

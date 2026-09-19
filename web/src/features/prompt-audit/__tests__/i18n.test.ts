@@ -24,8 +24,16 @@ import { describe, expect, test } from 'vitest'
 const SOURCE_FILES = [
   '../settings.tsx',
   '../records.tsx',
+  '../wordlists.tsx',
+  '../scopes.ts',
+  '../components/scope-policies-section.tsx',
+  '../components/wordlist-import-dialog.tsx',
+  '../components/wordlist-test-card.tsx',
+  '../components/manual-wordlist-dialog.tsx',
+  '../components/prompt-audit-navigation.tsx',
   '../components/prompt-audit-detail-sheet.tsx',
   '../components/prompt-audit-delete-dialog.tsx',
+  '../../system-settings/request-limits/sensitive-words-section.tsx',
 ]
 const LOCALES = ['en', 'zh', 'zh-TW', 'fr', 'ru', 'ja', 'vi']
 const DYNAMIC_KEYS = [

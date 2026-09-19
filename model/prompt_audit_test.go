@@ -3,12 +3,17 @@ package model
 import (
 	"fmt"
 	"os"
+	"reflect"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/setting/prompt_audit_setting"
 
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -329,11 +334,15 @@ func TestPromptAuditStorageConfiguredDatabases(t *testing.T) {
 			common.SetDatabaseTypes(test.dbType, common.LogDatabaseType())
 			t.Cleanup(func() {
 				_ = db.Migrator().DropTable(&PromptAudit{})
+				_ = db.Migrator().DropTable(&PromptWordlist{})
+				_ = db.Migrator().DropTable(&Option{})
 				DB = previousDB
 				common.SetDatabaseTypes(previousMainType, common.LogDatabaseType())
 				_ = sqlDB.Close()
 			})
 
+			runPromptAuditWordlistUpgrade(t, db)
+			runPromptWordlistStorage(t, db)
 			require.NoError(t, db.AutoMigrate(&PromptAudit{}))
 			assert.True(t, db.Migrator().HasTable(&PromptAudit{}))
 
@@ -420,4 +429,180 @@ func TestPromptAuditStorageConfiguredDatabases(t *testing.T) {
 			assert.EqualValues(t, 2, deleted)
 		})
 	}
+}
+
+func TestPromptWordlistStorageAndLegacyAuditUpgradeSQLite(t *testing.T) {
+	db := withPromptAuditTestDB(t)
+	require.NoError(t, db.Migrator().DropTable(&PromptAudit{}))
+	runPromptAuditWordlistUpgrade(t, db)
+	runPromptWordlistStorage(t, db)
+}
+
+func runPromptAuditWordlistUpgrade(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	// Preserve every pre-wordlist field/tag when constructing the released
+	// schema, then verify a populated database through two startup migrations.
+	current := reflect.TypeFor[PromptAudit]()
+	added := []string{"InspectionType", "WordlistID", "WordlistName", "WordlistVersion", "MatchedScope", "InspectedScopes"}
+	var fields []reflect.StructField
+	for index := range current.NumField() {
+		field := current.Field(index)
+		if !slices.Contains(added, field.Name) {
+			fields = append(fields, field)
+		}
+	}
+	legacy := reflect.New(reflect.StructOf(fields)).Interface()
+	table := db.NamingStrategy.TableName("PromptAudit")
+	require.NoError(t, db.Table(table).AutoMigrate(legacy))
+	require.NoError(t, db.Table(table).Create(map[string]any{
+		"request_id": "legacy-before-wordlists", "group_name": "旧分组",
+		"prompt_hash": strings.Repeat("b", 64), "full_prompt": []byte("preserved 原文"),
+		"status": "done", "categories": "null", "unknown_categories": "null",
+	}).Error)
+	before, err := db.Migrator().GetIndexes(&PromptAudit{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&PromptAudit{}, &PromptWordlist{}))
+	require.NoError(t, db.AutoMigrate(&PromptAudit{}, &PromptWordlist{}))
+	after, err := db.Migrator().GetIndexes(&PromptAudit{})
+	require.NoError(t, err)
+	names := make([]string, 0, len(after))
+	for _, index := range after {
+		names = append(names, index.Name())
+	}
+	for _, index := range before {
+		assert.Contains(t, names, index.Name())
+	}
+	var row PromptAudit
+	require.NoError(t, db.Where("request_id = ?", "legacy-before-wordlists").First(&row).Error)
+	assert.Equal(t, "旧分组", row.GroupName)
+	assert.Equal(t, []byte("preserved 原文"), row.FullPrompt)
+	response := row.ToResponse(false)
+	assert.Equal(t, "model", response.InspectionType)
+	assert.Equal(t, []string{}, response.InspectedScopes)
+	assert.Equal(t, []string{}, response.Categories)
+	assert.Nil(t, response.FullPrompt)
+	require.NoError(t, db.Delete(&row).Error)
+}
+
+func runPromptWordlistStorage(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	previousSettings, previousOptions := prompt_audit_setting.GetSetting(), common.OptionMap
+	common.OptionMap = make(map[string]string)
+	t.Cleanup(func() { previousSettings.PublishConfig(); common.OptionMap = previousOptions })
+	require.NoError(t, db.AutoMigrate(&PromptWordlist{}, &Option{}))
+	row := &PromptWordlist{Name: "跨库测试", SourceURL: "https://example.com/words.txt", SourceHash: strings.Repeat("c", 64), Enabled: true, AutoUpdate: true}
+	require.NoError(t, CreatePromptWordlist(row, dto.PromptScopeSystem))
+	assert.Contains(t, prompt_audit_setting.GetSetting().PolicyFor(dto.PromptScopeSystem).LibraryIDs, strconv.FormatInt(row.ID, 10))
+	claimed, err := ClaimPromptWordlist("first-import", common.GetTimestamp())
+	require.NoError(t, err)
+	require.NotNil(t, claimed)
+	content := []byte(strings.Repeat("保留词条\n", 10000))
+	published, err := FinishPromptWordlist(claimed, map[string]any{
+		"content": content, "content_hash": strings.Repeat("a", 64), "word_count": 10000,
+		"source_revision": "first-revision", "status": "ready", "next_sync_at": common.GetTimestamp() + 86400,
+		"etag": "\"first-version\"",
+	})
+	require.NoError(t, err)
+	require.True(t, published)
+	require.NoError(t, RequestPromptWordlistSync(row.ID))
+	stale, err := ClaimPromptWordlist("stale-import", common.GetTimestamp())
+	require.NoError(t, err)
+	require.NotNil(t, stale)
+	disabledName, disabled := "已禁用", false
+	require.NoError(t, UpdatePromptWordlist(row.ID, PromptWordlistUpdate{Name: &disabledName, Enabled: &disabled}))
+	published, err = FinishPromptWordlist(stale, map[string]any{"content": []byte("stale"), "content_hash": "stale"})
+	require.NoError(t, err)
+	assert.False(t, published)
+	stored, err := GetPromptWordlist(row.ID)
+	require.NoError(t, err)
+	assert.False(t, stored.Enabled)
+	assert.Equal(t, content, stored.Content)
+	assert.Equal(t, "\"first-version\"", stored.ETag)
+	assert.Equal(t, strings.Repeat("a", 64), stored.ContentHash)
+	require.NoError(t, RequestPromptWordlistSync(row.ID))
+	failed, err := ClaimPromptWordlist("failed-import", common.GetTimestamp())
+	require.NoError(t, err)
+	require.NotNil(t, failed)
+	published, err = FinishPromptWordlist(failed, map[string]any{"status": "failed", "last_error": "download_failed"})
+	require.NoError(t, err)
+	assert.True(t, published)
+	require.NoError(t, db.AutoMigrate(&PromptWordlist{}))
+	require.NoError(t, db.AutoMigrate(&PromptWordlist{}))
+	stored, err = GetPromptWordlist(row.ID)
+	require.NoError(t, err)
+	assert.Equal(t, content, stored.Content)
+	assert.Equal(t, "failed", stored.Status)
+	listed, err := ListPromptWordlists()
+	require.NoError(t, err)
+	require.Len(t, listed, 1)
+	assert.Empty(t, listed[0].Content)
+	assert.Empty(t, listed[0].SourceFiles)
+	duplicate := &PromptWordlist{Name: "duplicate", SourceURL: row.SourceURL, SourceHash: row.SourceHash}
+	assert.ErrorIs(t, CreatePromptWordlist(duplicate), ErrPromptWordlistExists)
+
+	// Independent partial changes must preserve one another, including updates
+	// submitted using the same old view of a library.
+	enabled := true
+	var mutations sync.WaitGroup
+	mutationErrors := make(chan error, 2)
+	mutations.Go(func() { mutationErrors <- UpdatePromptWordlist(row.ID, PromptWordlistUpdate{Enabled: &enabled}) })
+	mutations.Go(func() { mutationErrors <- UpdatePromptWordlist(row.ID, PromptWordlistUpdate{AutoUpdate: &disabled}) })
+	mutations.Wait()
+	close(mutationErrors)
+	for err := range mutationErrors {
+		require.NoError(t, err)
+	}
+	stored, err = GetPromptWordlist(row.ID)
+	require.NoError(t, err)
+	assert.True(t, stored.Enabled)
+	assert.False(t, stored.AutoUpdate)
+
+	require.NoError(t, RequestPromptWordlistSync(row.ID))
+	start := make(chan struct{})
+	claims := make(chan *PromptWordlist, 2)
+	claimErrors := make(chan error, 2)
+	var claimers sync.WaitGroup
+	for _, owner := range []string{"node-one", "node-two"} {
+		claimers.Go(func() {
+			<-start
+			claimed, err := ClaimPromptWordlist(owner, common.GetTimestamp())
+			claims <- claimed
+			claimErrors <- err
+		})
+	}
+	close(start)
+	claimers.Wait()
+	close(claims)
+	close(claimErrors)
+	for err := range claimErrors {
+		require.NoError(t, err)
+	}
+	var winner *PromptWordlist
+	for claim := range claims {
+		if claim != nil {
+			require.Nil(t, winner)
+			winner = claim
+		}
+	}
+	require.NotNil(t, winner)
+	require.NoError(t, db.Model(&PromptWordlist{}).Where("id = ?", row.ID).Update("lease_until", common.GetTimestamp()-1).Error)
+	recovered, err := ClaimPromptWordlist("recovered-node", common.GetTimestamp())
+	require.NoError(t, err)
+	require.NotNil(t, recovered)
+	published, err = FinishPromptWordlist(winner, map[string]any{"content": []byte("stale worker")})
+	require.NoError(t, err)
+	assert.False(t, published)
+	published, err = FinishPromptWordlist(recovered, map[string]any{"status": "ready"})
+	require.NoError(t, err)
+	assert.True(t, published)
+
+	// Revert only this process's cache to simulate a second node that has not
+	// observed the previous binding yet. Creating another library merges DB state.
+	previousSettings.PublishConfig()
+	second := &PromptWordlist{Name: "second", SourceURL: "https://example.com/second.txt", SourceHash: "second"}
+	require.NoError(t, CreatePromptWordlist(second, dto.PromptScopeSystem))
+	assert.Equal(t, []string{strconv.FormatInt(row.ID, 10), strconv.FormatInt(second.ID, 10)}, prompt_audit_setting.GetSetting().PolicyFor(dto.PromptScopeSystem).LibraryIDs)
+	require.NoError(t, DeletePromptWordlist(second.ID))
+	require.NoError(t, DeletePromptWordlist(row.ID))
+	assert.Empty(t, prompt_audit_setting.GetSetting().PolicyFor(dto.PromptScopeSystem).LibraryIDs)
 }

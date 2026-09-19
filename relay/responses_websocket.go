@@ -27,7 +27,6 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/channelcompat"
 	"github.com/QuantumNous/new-api/service/protocolstate"
-	"github.com/QuantumNous/new-api/setting"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -305,19 +304,7 @@ func (s *responsesWSSession) handleResponseCreate(create responsesWSCreateReques
 			rateGuard.Release()
 		}
 	}()
-	if setting.ShouldCheckPromptSensitive() {
-		if contains, _ := service.CheckSensitiveText(validated.GetSensitiveText()); contains {
-			commitRate(false)
-			return hosttypes.NewError(
-				errors.New("sensitive words detected"),
-				hosttypes.ErrorCodeSensitiveWordsDetected,
-				hosttypes.ErrOptionWithStatusCode(http.StatusBadRequest),
-				hosttypes.ErrOptionWithSkipRetry(),
-			)
-		}
-	}
-
-	promptAuditResult, promptAuditErr := service.CheckPromptAudit(s.c, service.PromptAuditRequest{
+	promptAuditResult, promptAuditErr := service.InspectPrompt(s.c, service.PromptAuditRequest{
 		Snapshot: dto.PromptAuditSnapshotOf(validated),
 		Protocol: string(types.RelayFormatOpenAIResponses),
 		Model:    validated.Model,
@@ -608,13 +595,6 @@ func (s *responsesWSSession) prepareCallState(create responsesWSCreateRequest) (
 	relayInfo.RequestId = eventRequestID
 
 	meta := req.GetTokenCountMeta()
-	if setting.ShouldCheckPromptSensitive() {
-		contains, _ := service.CheckSensitiveText(req.GetSensitiveText())
-		if contains {
-			logger.LogWarn(s.c, "user sensitive words detected")
-			return nil, hosttypes.NewErrorWithStatusCode(errors.New("sensitive words detected"), hosttypes.ErrorCodeSensitiveWordsDetected, http.StatusBadRequest, hosttypes.ErrOptionWithSkipRetry())
-		}
-	}
 
 	tokens, err := service.EstimateRequestToken(s.c, meta, relayInfo)
 	if err != nil {

@@ -390,6 +390,7 @@ func migrateDB() error {
 		&SystemTask{},
 		&SystemTaskLock{},
 		&PromptAudit{},
+		&PromptWordlist{},
 		&ModelRadarSnapshot{},
 		&CasbinRule{},
 		&AuthzRole{},

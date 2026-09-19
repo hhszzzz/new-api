@@ -57,6 +57,7 @@ import {
 } from './api'
 import { PromptAuditDeleteDialog } from './components/prompt-audit-delete-dialog'
 import { PromptAuditDetailSheet } from './components/prompt-audit-detail-sheet'
+import { PromptAuditNavigation } from './components/prompt-audit-navigation'
 import {
   EMPTY_PROMPT_AUDIT_FILTERS,
   promptAuditDeleteFilter,
@@ -218,6 +219,7 @@ export function PromptAuditRecords() {
         </SectionPageLayout.Actions>
         <SectionPageLayout.Content>
           <div className='space-y-4'>
+            <PromptAuditNavigation />
             <div className='grid grid-cols-2 gap-3 lg:grid-cols-4'>
               {[
                 [t('Total'), stats?.total ?? 0],
@@ -504,6 +506,11 @@ export function PromptAuditRecords() {
                           </Badge>
                           <Badge variant={statusBadgeVariant(event.status)}>
                             {t(event.status)}
+                          </Badge>
+                          <Badge variant='outline'>
+                            {event.inspection_type === 'wordlist'
+                              ? t('Wordlist')
+                              : t('Model audit')}
                           </Badge>
                         </div>
                         {event.categories.length > 0 && (

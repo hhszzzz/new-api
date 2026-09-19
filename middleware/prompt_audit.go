@@ -8,7 +8,6 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relay/helper"
 	relaydto "github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -23,7 +22,11 @@ import (
 // limiting, but before user routing and channel selection. It returns false
 // after writing and aborting a rejected request.
 func inspectPromptBeforeDistribution(c *gin.Context, modelRequest *ModelRequest) (func(), bool) {
-	if c == nil || c.Request == nil || c.Request.Method != http.MethodPost {
+	if c == nil || c.Request == nil {
+		return nil, true
+	}
+	pluginSubmission := c.GetString("expected_task_plugin_key") != ""
+	if c.Request.Method != http.MethodPost && !pluginSubmission {
 		return nil, true
 	}
 	configured := prompt_audit_setting.GetSetting()
@@ -32,6 +35,9 @@ func inspectPromptBeforeDistribution(c *gin.Context, modelRequest *ModelRequest)
 	}
 
 	format, taskRequest, supported := promptAuditRequestKind(c.Request.URL.Path)
+	if !supported && pluginSubmission {
+		format, taskRequest, supported = types.RelayFormatTask, true, true
+	}
 	if !supported {
 		return nil, true
 	}
@@ -41,9 +47,8 @@ func inspectPromptBeforeDistribution(c *gin.Context, modelRequest *ModelRequest)
 		modelName = modelRequest.Model
 	}
 	var (
-		snapshot      relaydto.PromptAuditSnapshot
-		sensitiveText string
-		isStream      bool
+		snapshot relaydto.PromptAuditSnapshot
+		isStream bool
 	)
 	if taskRequest {
 		extracted, requestModel, err := service.ExtractTaskPromptAuditSnapshot(c)
@@ -52,7 +57,6 @@ func inspectPromptBeforeDistribution(c *gin.Context, modelRequest *ModelRequest)
 			return nil, false
 		}
 		snapshot = extracted
-		sensitiveText = snapshot.Text()
 		if requestModel != "" {
 			modelName = requestModel
 		}
@@ -65,7 +69,6 @@ func inspectPromptBeforeDistribution(c *gin.Context, modelRequest *ModelRequest)
 		}
 		common.SetContextKey(c, constant.ContextKeyValidatedRelayRequest, request)
 		snapshot = relaydto.PromptAuditSnapshotOf(request)
-		sensitiveText = request.GetSensitiveText()
 		isStream = request.IsStream(c.Request)
 	}
 
@@ -74,21 +77,7 @@ func inspectPromptBeforeDistribution(c *gin.Context, modelRequest *ModelRequest)
 		return cleanup, false
 	}
 
-	if setting.ShouldCheckPromptSensitive() {
-		if contains, _ := service.CheckSensitiveText(sensitiveText); contains {
-			logger.LogWarn(c, "user sensitive words detected")
-			apiErr := hosttypes.NewError(
-				errors.New("sensitive words detected"),
-				hosttypes.ErrorCodeSensitiveWordsDetected,
-				hosttypes.ErrOptionWithStatusCode(http.StatusBadRequest),
-				hosttypes.ErrOptionWithSkipRetry(),
-			)
-			abortPromptAuditRequest(c, apiErr, taskRequest)
-			return cleanup, false
-		}
-	}
-
-	result, apiErr := service.CheckPromptAudit(c, service.PromptAuditRequest{
+	result, apiErr := service.InspectPrompt(c, service.PromptAuditRequest{
 		Snapshot: snapshot,
 		Protocol: string(format),
 		Model:    modelName,
@@ -110,13 +99,8 @@ func beginPromptAuditUserRateLimit(c *gin.Context, format types.RelayFormat, tas
 	}
 	policy := service.UserRateLimitPolicyFromContext(c)
 	waitOptions := service.UserConcurrencyWaitOptions{}
-	if policy.HasConcurrencyLimit() && isStream {
-		helper.EnsureStreamWriteMutex(c)
-		waitOptions.Heartbeat = func() error {
-			helper.SetEventStreamHeaders(c)
-			return helper.PingData(c)
-		}
-	}
+	// Do not start SSE while waiting here: inspection may still reject with an
+	// HTTP error. Heartbeats become safe only after the admission decision.
 	guard, apiErr := service.BeginUserRequestRateLimit(c, policy, modelName, waitOptions)
 	if apiErr != nil {
 		abortPromptAuditRequest(c, apiErr, false)
@@ -153,7 +137,8 @@ func promptAuditUsesUserRateLimit(path string, format types.RelayFormat) bool {
 func promptAuditRequestKind(path string) (types.RelayFormat, bool, bool) {
 	path = strings.TrimSpace(path)
 	switch {
-	case strings.HasPrefix(path, "/suno/submit/"),
+	case strings.HasPrefix(path, "/v1/tasks/"),
+		strings.HasPrefix(path, "/suno/submit/"),
 		strings.HasPrefix(path, "/v1/video/generations"),
 		strings.HasPrefix(path, "/v1/videos"),
 		strings.HasPrefix(path, "/kling/v1/videos/"),

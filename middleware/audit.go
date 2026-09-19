@@ -98,10 +98,16 @@ var auditRouteActions = map[string]string{
 	"POST /api/system-task/log-cleanup": "log.cleanup_start",
 
 	// 提示词审查
-	"PUT /api/prompt-audit/config":            "prompt_audit.config_update",
-	"POST /api/prompt-audit/nodes/:id/test":   "prompt_audit.node_test",
-	"POST /api/prompt-audit/events/:id/retry": "prompt_audit.retry",
-	"DELETE /api/prompt-audit/events":         "prompt_audit.delete",
+	"PUT /api/prompt-audit/config":                   "prompt_audit.config_update",
+	"POST /api/prompt-audit/wordlists":               "prompt_audit.wordlist_create",
+	"PUT /api/prompt-audit/wordlists/:id":            "prompt_audit.wordlist_update",
+	"DELETE /api/prompt-audit/wordlists/:id":         "prompt_audit.wordlist_delete",
+	"POST /api/prompt-audit/wordlists/:id/sync":      "prompt_audit.wordlist_sync",
+	"PUT /api/prompt-audit/wordlists/manual/content": "prompt_audit.wordlist_manual_update",
+	"POST /api/prompt-audit/wordlists/test":          "prompt_audit.wordlist_test",
+	"POST /api/prompt-audit/nodes/:id/test":          "prompt_audit.node_test",
+	"POST /api/prompt-audit/events/:id/retry":        "prompt_audit.retry",
+	"DELETE /api/prompt-audit/events":                "prompt_audit.delete",
 }
 
 // beginAdminAudit 在管理/root 写操作进入 handler 前包装 ResponseWriter，

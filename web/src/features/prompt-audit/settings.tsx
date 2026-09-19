@@ -29,7 +29,9 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
+import { ErrorState } from '@/components/error-state'
 import { SectionPageLayout } from '@/components/layout'
+import { LoadingState } from '@/components/loading-state'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -49,9 +51,12 @@ import { getGroups } from '@/features/users/api'
 import {
   getPromptAuditCategories,
   getPromptAuditConfig,
+  listPromptWordlists,
   testPromptAuditNode,
   updatePromptAuditConfig,
 } from './api'
+import { PromptAuditNavigation } from './components/prompt-audit-navigation'
+import { ScopePoliciesSection } from './components/scope-policies-section'
 import {
   promptAuditEndpointBaseURLUpdate,
   promptAuditEndpointDrafts,
@@ -59,6 +64,7 @@ import {
   type PromptAuditEndpointDraft,
   validatePromptAuditConfig,
 } from './lib'
+import { defaultPromptScopePolicies } from './scopes'
 import type {
   PromptAuditCategory,
   PromptAuditConfig,
@@ -110,6 +116,8 @@ function promptAuditConfigDraft(
   config: PromptAuditConfig
 ): PromptAuditConfigUpdate {
   return {
+    scope_policies: config.scope_policies ?? defaultPromptScopePolicies(),
+    word_filter_enabled: config.word_filter_enabled ?? true,
     mode: config.mode,
     enabled_categories: [...config.enabled_categories],
     all_groups: config.all_groups,
@@ -133,6 +141,10 @@ function PromptAuditSettingsForm({
 }: PromptAuditSettingsFormProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
+  const librariesQuery = useQuery({
+    queryKey: ['prompt-audit', 'wordlists'],
+    queryFn: listPromptWordlists,
+  })
   const [config, setConfig] = useState<PromptAuditConfigUpdate>(() =>
     promptAuditConfigDraft(initialConfig)
   )
@@ -224,7 +236,11 @@ function PromptAuditSettingsForm({
       </SectionPageLayout.Title>
       <SectionPageLayout.Actions>
         <Button
-          disabled={saveMutation.isPending}
+          disabled={
+            saveMutation.isPending ||
+            librariesQuery.isPending ||
+            librariesQuery.isError
+          }
           onClick={() => saveMutation.mutate()}
         >
           <Save />
@@ -233,6 +249,27 @@ function PromptAuditSettingsForm({
       </SectionPageLayout.Actions>
       <SectionPageLayout.Content>
         <div className='mx-auto max-w-6xl space-y-4'>
+          <PromptAuditNavigation />
+          {librariesQuery.isPending && <LoadingState />}
+          {librariesQuery.isError && (
+            <ErrorState
+              description={librariesQuery.error.message}
+              onRetry={() => void librariesQuery.refetch()}
+            />
+          )}
+          {librariesQuery.isSuccess && (
+            <ScopePoliciesSection
+              policies={config.scope_policies ?? defaultPromptScopePolicies()}
+              libraries={librariesQuery.data}
+              wordFilterEnabled={config.word_filter_enabled ?? true}
+              onChange={(scope_policies) =>
+                setConfig((current) => ({ ...current, scope_policies }))
+              }
+              onWordFilterChange={(word_filter_enabled) =>
+                setConfig((current) => ({ ...current, word_filter_enabled }))
+              }
+            />
+          )}
           <Card>
             <CardHeader>
               <CardTitle>{t('Enforcement policy')}</CardTitle>
@@ -244,7 +281,9 @@ function PromptAuditSettingsForm({
             </CardHeader>
             <CardContent className='space-y-5'>
               <div className='space-y-1.5'>
-                <Label htmlFor='prompt-audit-mode'>{t('Mode')}</Label>
+                <Label htmlFor='prompt-audit-mode'>
+                  {t('Model audit mode')}
+                </Label>
                 <NativeSelect
                   id='prompt-audit-mode'
                   className='w-full sm:w-72'
@@ -501,7 +540,9 @@ function PromptAuditSettingsForm({
 
           <Card>
             <CardHeader>
-              <CardTitle>{t('Qwen3Guard nodes')}</CardTitle>
+              <CardTitle id='audit-nodes' className='scroll-mt-24'>
+                {t('Qwen3Guard nodes')}
+              </CardTitle>
               <CardDescription>
                 {t(
                   'Nodes are tried in order. Tokens are write-only; leave the field untouched to preserve the saved token.'

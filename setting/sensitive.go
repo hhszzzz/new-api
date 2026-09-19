@@ -23,6 +23,13 @@ var SensitiveWords = []string{
 }
 
 var sensitiveWordsMu sync.RWMutex
+var sensitiveWordsVersion uint64
+
+func SensitiveWordsVersion() uint64 {
+	sensitiveWordsMu.RLock()
+	defer sensitiveWordsMu.RUnlock()
+	return sensitiveWordsVersion
+}
 
 func SensitiveWordsToString() string {
 	return strings.Join(SensitiveWordsSnapshot(), "\n")
@@ -38,7 +45,12 @@ func SensitiveWordsFromString(s string) {
 	}
 
 	sensitiveWordsMu.Lock()
+	if strings.Join(SensitiveWords, "\n") == strings.Join(words, "\n") {
+		sensitiveWordsMu.Unlock()
+		return
+	}
 	SensitiveWords = words
+	sensitiveWordsVersion++
 	sensitiveWordsMu.Unlock()
 }
 

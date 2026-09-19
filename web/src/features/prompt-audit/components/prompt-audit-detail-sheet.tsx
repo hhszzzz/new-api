@@ -35,6 +35,7 @@ import {
 import { cn } from '@/lib/utils'
 
 import { getPromptAudit, retryPromptAudit } from '../api'
+import { promptAuditScopeLabel } from '../scopes'
 import type { PromptAuditEvent } from '../types'
 
 type PromptAuditDetailSheetProps = {
@@ -119,6 +120,30 @@ export function PromptAuditDetailSheet({
             <div className='space-y-5'>
               <div className='grid grid-cols-2 gap-x-4 gap-y-3 text-sm sm:grid-cols-3'>
                 {[
+                  [
+                    t('Inspection method'),
+                    event.inspection_type === 'wordlist'
+                      ? t('Wordlist')
+                      : t('Model audit'),
+                  ],
+                  [
+                    t('Wordlist'),
+                    event.wordlist_id === 'manual'
+                      ? t('Custom wordlist')
+                      : event.wordlist_name || '—',
+                  ],
+                  [
+                    t('Wordlist version'),
+                    event.wordlist_version?.slice(0, 12) || '—',
+                  ],
+                  [
+                    t('Text source'),
+                    event.matched_scope
+                      ? promptAuditScopeLabel(event.matched_scope, t)
+                      : (event.inspected_scopes ?? [])
+                          .map((scope) => promptAuditScopeLabel(scope, t))
+                          .join(' · ') || '—',
+                  ],
                   [t('Status'), event.status],
                   [t('Decision'), event.decision || '—'],
                   [t('Safety'), event.safety || '—'],

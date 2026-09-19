@@ -238,7 +238,7 @@ func taskPromptAuditSnapshot(texts []string) dto.PromptAuditSnapshot {
 		return dto.PromptAuditSnapshot{}
 	}
 	return dto.PromptAuditSnapshot{Segments: []dto.PromptAuditSegment{{
-		Role: "user", Text: strings.Join(texts, "\n"), User: true,
+		Role: "user", Scope: dto.PromptScopeTask, Text: strings.Join(texts, "\n"), User: true,
 	}}}
 }
 

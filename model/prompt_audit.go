@@ -32,6 +32,12 @@ var (
 // ScanPayload is cleared on terminal completion; FullPrompt is separately capped
 // for authorized administrator review.
 type PromptAudit struct {
+	InspectionType      string            `json:"inspection_type" gorm:"type:varchar(16);index"`
+	WordlistID          string            `json:"wordlist_id" gorm:"type:varchar(32);index"`
+	WordlistName        string            `json:"wordlist_name" gorm:"type:varchar(128)"`
+	WordlistVersion     string            `json:"wordlist_version" gorm:"type:varchar(64)"`
+	MatchedScope        string            `json:"matched_scope" gorm:"type:varchar(32)"`
+	InspectedScopes     string            `json:"-" gorm:"type:text"`
 	ID                  int64             `json:"id" gorm:"primaryKey"`
 	RequestID           string            `json:"request_id" gorm:"type:varchar(64);index"`
 	UserID              int               `json:"user_id" gorm:"index"`
@@ -72,6 +78,12 @@ type PromptAudit struct {
 }
 
 type PromptAuditResponse struct {
+	InspectionType      string            `json:"inspection_type"`
+	WordlistID          string            `json:"wordlist_id"`
+	WordlistName        string            `json:"wordlist_name"`
+	WordlistVersion     string            `json:"wordlist_version"`
+	MatchedScope        string            `json:"matched_scope"`
+	InspectedScopes     []string          `json:"inspected_scopes"`
 	ID                  int64             `json:"id"`
 	RequestID           string            `json:"request_id"`
 	UserID              int               `json:"user_id"`
@@ -158,6 +170,8 @@ func (audit *PromptAudit) BeforeCreate(_ *gorm.DB) error {
 
 func (audit *PromptAudit) ToResponse(includeFullPrompt bool) PromptAuditResponse {
 	response := PromptAuditResponse{
+		InspectionType: audit.InspectionType, WordlistID: audit.WordlistID, WordlistName: audit.WordlistName,
+		WordlistVersion: audit.WordlistVersion, MatchedScope: audit.MatchedScope, InspectedScopes: decodePromptAuditStrings(audit.InspectedScopes),
 		ID: audit.ID, RequestID: audit.RequestID, UserID: audit.UserID,
 		TokenID: audit.TokenID, TokenName: audit.TokenName, GroupName: audit.GroupName,
 		Protocol: audit.Protocol, ModelName: audit.ModelName, Stage: audit.Stage,
@@ -173,6 +187,9 @@ func (audit *PromptAudit) ToResponse(includeFullPrompt bool) PromptAuditResponse
 		MaxAttempts: audit.MaxAttempts, NextAttemptAt: audit.NextAttemptAt,
 		ErrorCode: audit.ErrorCode, CreatedAt: audit.CreatedAt, UpdatedAt: audit.UpdatedAt,
 		CompletedAt: audit.CompletedAt,
+	}
+	if response.InspectionType == "" {
+		response.InspectionType = "model"
 	}
 	if includeFullPrompt && len(audit.FullPrompt) > 0 {
 		value := string(audit.FullPrompt)

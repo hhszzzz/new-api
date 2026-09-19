@@ -20,29 +20,39 @@ import { Link } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
+import {
+  ADMIN_PERMISSION_ACTIONS,
+  ADMIN_PERMISSION_RESOURCES,
+  hasPermission,
+} from '@/lib/admin-permissions'
+import { useAuthStore } from '@/stores/auth-store'
 
-import { SettingsSection } from '../components/settings-section'
-
-type SensitiveWordsSectionProps = {
-  defaultValues: {
-    CheckSensitiveEnabled: boolean
-    CheckSensitiveOnPromptEnabled: boolean
-    SensitiveWords?: string
-  }
-}
-
-export function SensitiveWordsSection(_props: SensitiveWordsSectionProps) {
+export function PromptAuditNavigation() {
   const { t } = useTranslation()
+  const user = useAuthStore((state) => state.auth.user)
+  const canManage = hasPermission(
+    user,
+    ADMIN_PERMISSION_RESOURCES.PROMPT_AUDIT,
+    ADMIN_PERMISSION_ACTIONS.MANAGE
+  )
+  const canRead = hasPermission(
+    user,
+    ADMIN_PERMISSION_RESOURCES.PROMPT_AUDIT,
+    ADMIN_PERMISSION_ACTIONS.READ
+  )
   return (
-    <SettingsSection title={t('Sensitive Words')}>
-      <div className='space-y-4'>
-        <p className='text-muted-foreground text-sm'>
-          {t(
-            'Sensitive words are now managed with prompt inspection rules and wordlists.'
-          )}
-        </p>
-        <div className='flex flex-wrap gap-2'>
-          <Button render={<Link to='/prompt-audit/settings' />}>
+    <nav className='flex flex-wrap gap-2' aria-label={t('Prompt audit')}>
+      {canRead && (
+        <Button variant='outline' render={<Link to='/prompt-audit' />}>
+          {t('Audit records')}
+        </Button>
+      )}
+      {canManage && (
+        <>
+          <Button
+            variant='outline'
+            render={<Link to='/prompt-audit/settings' />}
+          >
             {t('Inspection rules')}
           </Button>
           <Button
@@ -51,8 +61,14 @@ export function SensitiveWordsSection(_props: SensitiveWordsSectionProps) {
           >
             {t('Wordlists')}
           </Button>
-        </div>
-      </div>
-    </SettingsSection>
+          <Button
+            variant='outline'
+            render={<Link to='/prompt-audit/settings' hash='audit-nodes' />}
+          >
+            {t('Audit nodes')}
+          </Button>
+        </>
+      )}
+    </nav>
   )
 }

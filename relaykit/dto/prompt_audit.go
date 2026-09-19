@@ -9,12 +9,49 @@ import (
 )
 
 // PromptAuditSegment is one client-supplied textual message/instruction. It
-// intentionally carries no tools, metadata, binary payload, or gateway-owned
+// intentionally carries no tool definitions, metadata, binary payload, or gateway-owned
 // state. User marks segments eligible for latest-user-first prioritization.
 type PromptAuditSegment struct {
-	Role string `json:"role"`
-	Text string `json:"text"`
-	User bool   `json:"user"`
+	Role  string           `json:"role"`
+	Text  string           `json:"text"`
+	User  bool             `json:"user"`
+	Scope PromptAuditScope `json:"scope,omitempty"`
+}
+
+type PromptAuditScope string
+
+const (
+	PromptScopeSystem     PromptAuditScope = "system"
+	PromptScopeDeveloper  PromptAuditScope = "developer"
+	PromptScopeUser       PromptAuditScope = "user"
+	PromptScopeAssistant  PromptAuditScope = "assistant"
+	PromptScopeToolCall   PromptAuditScope = "tool_call"
+	PromptScopeToolResult PromptAuditScope = "tool_result"
+	PromptScopeTask       PromptAuditScope = "task"
+)
+
+func PromptAuditScopes() []PromptAuditScope {
+	return []PromptAuditScope{PromptScopeSystem, PromptScopeDeveloper, PromptScopeUser, PromptScopeAssistant, PromptScopeToolCall, PromptScopeToolResult, PromptScopeTask}
+}
+
+func (segment PromptAuditSegment) SourceScope() PromptAuditScope {
+	if segment.Scope != "" {
+		return segment.Scope
+	}
+	switch strings.ToLower(strings.TrimSpace(segment.Role)) {
+	case "system":
+		return PromptScopeSystem
+	case "developer":
+		return PromptScopeDeveloper
+	case "assistant", "model":
+		return PromptScopeAssistant
+	case "tool", "function":
+		return PromptScopeToolResult
+	case "task":
+		return PromptScopeTask
+	default:
+		return PromptScopeUser
+	}
 }
 
 type PromptAuditSnapshot struct {
@@ -106,16 +143,18 @@ func (r *GeneralOpenAIRequest) GetPromptAuditSnapshot() PromptAuditSnapshot {
 				}
 			}
 		}
-		texts = append(texts, message.GetReasoningContent(), message.GetRefusalContent())
+		messageSegments := appendRoleMessage(nil, role, role == "user", texts)
+		messageSegments = appendScopeMessage(messageSegments, PromptScopeAssistant, "assistant", []string{message.GetReasoningContent(), message.GetRefusalContent()})
 		for _, toolCall := range message.ParseToolCalls() {
-			texts = append(texts, structuredPromptAuditTexts(toolCall.Function.Arguments)...)
-			texts = append(texts, rawStructuredPromptAuditTexts(toolCall.Custom)...)
+			toolTexts := structuredPromptAuditTexts(toolCall.Function.Arguments)
+			toolTexts = append(toolTexts, rawStructuredPromptAuditTexts(toolCall.Custom)...)
+			messageSegments = appendScopeMessage(messageSegments, PromptScopeToolCall, "assistant", toolTexts)
 		}
-		segments = appendRoleMessage(segments, role, role == "user", texts)
+		segments = append(segments, mergePromptAuditParts(messageSegments)...)
 	}
 	if len(r.Messages) == 0 {
 		for _, value := range []any{r.Prompt, r.Prefix, r.Suffix, r.Input} {
-			segments = appendRoleTexts(segments, "user", true, anyTextValues(value, false))
+			segments = appendRoleTexts(segments, "task", true, anyTextValues(value, false))
 		}
 	}
 	return PromptAuditSnapshot{Segments: segments}
@@ -125,9 +164,9 @@ func (c *ClaudeRequest) GetPromptAuditSnapshot() PromptAuditSnapshot {
 	if c == nil {
 		return PromptAuditSnapshot{}
 	}
-	segments := appendRoleMessage(nil, "system", false, claudeContentTexts(c.System))
+	segments := scopedContentSegments("system", c.System)
 	if c.Prompt != "" {
-		segments = appendRoleTexts(segments, "user", true, []string{c.Prompt})
+		segments = appendRoleTexts(segments, "task", true, []string{c.Prompt})
 	}
 	for index := range c.Messages {
 		message := &c.Messages[index]
@@ -135,7 +174,7 @@ func (c *ClaudeRequest) GetPromptAuditSnapshot() PromptAuditSnapshot {
 		if !isPromptAuditRole(role) {
 			continue
 		}
-		segments = appendRoleMessage(segments, role, role == "user", claudeContentTexts(message.Content))
+		segments = append(segments, scopedContentSegments(role, message.Content)...)
 	}
 	return PromptAuditSnapshot{Segments: segments}
 }
@@ -146,7 +185,7 @@ func (r *GeminiChatRequest) GetPromptAuditSnapshot() PromptAuditSnapshot {
 	}
 	segments := make([]PromptAuditSegment, 0)
 	if r.SystemInstructions != nil {
-		segments = appendRoleMessage(segments, "system", false, geminiPartTexts(r.SystemInstructions.Parts))
+		segments = append(segments, scopedGeminiSegments("system", r.SystemInstructions.Parts)...)
 	}
 	for index := range r.Contents {
 		content := &r.Contents[index]
@@ -157,7 +196,7 @@ func (r *GeminiChatRequest) GetPromptAuditSnapshot() PromptAuditSnapshot {
 		if !isPromptAuditRole(role) {
 			continue
 		}
-		segments = appendRoleMessage(segments, role, role == "user", geminiPartTexts(content.Parts))
+		segments = append(segments, scopedGeminiSegments(role, content.Parts)...)
 	}
 	for index := range r.Requests {
 		child := r.Requests[index].GetPromptAuditSnapshot()
@@ -170,7 +209,7 @@ func (r *GeminiEmbeddingRequest) GetPromptAuditSnapshot() PromptAuditSnapshot {
 	if r == nil {
 		return PromptAuditSnapshot{}
 	}
-	return PromptAuditSnapshot{Segments: appendRoleMessage(nil, "user", true, geminiPartTexts(r.Content.Parts))}
+	return PromptAuditSnapshot{Segments: scopedGeminiSegments("task", r.Content.Parts)}
 }
 
 func (r *GeminiBatchEmbeddingRequest) GetPromptAuditSnapshot() PromptAuditSnapshot {
@@ -208,16 +247,16 @@ func (r *EmbeddingRequest) GetPromptAuditSnapshot() PromptAuditSnapshot {
 	if r == nil {
 		return PromptAuditSnapshot{}
 	}
-	return PromptAuditSnapshot{Segments: appendRoleTexts(nil, "user", true, r.ParseInput())}
+	return PromptAuditSnapshot{Segments: appendRoleTexts(nil, "task", true, r.ParseInput())}
 }
 
 func (r *RerankRequest) GetPromptAuditSnapshot() PromptAuditSnapshot {
 	if r == nil {
 		return PromptAuditSnapshot{}
 	}
-	segments := appendRoleTexts(nil, "user", true, []string{r.Query})
+	segments := appendRoleTexts(nil, "task", true, []string{r.Query})
 	for _, document := range r.Documents {
-		segments = appendRoleTexts(segments, "user", true, rerankDocumentTexts(document))
+		segments = appendRoleTexts(segments, "task", true, rerankDocumentTexts(document))
 	}
 	return PromptAuditSnapshot{Segments: segments}
 }
@@ -226,7 +265,7 @@ func (r *ImageRequest) GetPromptAuditSnapshot() PromptAuditSnapshot {
 	if r == nil {
 		return PromptAuditSnapshot{}
 	}
-	return PromptAuditSnapshot{Segments: userSegments(r.Prompt)}
+	return PromptAuditSnapshot{Segments: appendRoleTexts(nil, "task", true, []string{r.Prompt})}
 }
 
 func (r *AudioRequest) GetPromptAuditSnapshot() PromptAuditSnapshot {
@@ -234,8 +273,8 @@ func (r *AudioRequest) GetPromptAuditSnapshot() PromptAuditSnapshot {
 		return PromptAuditSnapshot{}
 	}
 	segments := appendRoleMessage(nil, "system", false, []string{r.Instructions})
-	segments = appendRoleTexts(segments, "user", true, []string{r.Input, r.AuditPrompt})
-	segments = appendRoleTexts(segments, "user", true, rawTextValues(r.RefText))
+	segments = appendRoleTexts(segments, "task", true, []string{r.Input, r.AuditPrompt})
+	segments = appendRoleTexts(segments, "task", true, rawTextValues(r.RefText))
 	return PromptAuditSnapshot{Segments: segments}
 }
 
@@ -254,7 +293,7 @@ func (r *AlphaSearchRequest) GetPromptAuditSnapshot() PromptAuditSnapshot {
 			for _, value := range queries {
 				query, _ := value.(map[string]any)
 				text, _ := query["q"].(string)
-				segments = appendRoleTexts(segments, "user", true, []string{text})
+				segments = appendRoleTexts(segments, "task", true, []string{text})
 			}
 		}
 	}
@@ -536,18 +575,11 @@ func responsesValueSegments(value any) []PromptAuditSegment {
 			return userSegments(text)
 		}
 		if role != "" && isPromptAuditRole(role) {
-			texts := anyTextValues(typed["content"], true)
-			if len(texts) == 0 {
-				texts = anyTextValues(typed["text"], true)
+			segments := scopedContentSegments(role, typed["content"])
+			if len(segments) == 0 {
+				segments = scopedContentSegments(role, typed["text"])
 			}
-			if role == "tool" || role == "function" {
-				structured := make([]string, 0, len(texts))
-				for _, text := range texts {
-					structured = append(structured, structuredPromptAuditTexts(text)...)
-				}
-				texts = structured
-			}
-			return appendRoleMessage(nil, role, role == "user", texts)
+			return segments
 		}
 		if typeName == "reasoning" {
 			return appendRoleMessage(nil, "assistant", false, promptAuditReasoningTexts(typed))
@@ -560,7 +592,7 @@ func responsesValueSegments(value any) []PromptAuditSegment {
 			if payload == nil {
 				payload = typed["input"]
 			}
-			return appendRoleMessage(nil, "assistant", false, structuredPromptAuditTexts(payload))
+			return appendScopeMessage(nil, PromptScopeToolCall, "assistant", structuredPromptAuditTexts(payload))
 		}
 	}
 	return nil

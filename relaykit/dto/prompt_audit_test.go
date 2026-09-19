@@ -24,7 +24,7 @@ func TestPromptAuditSnapshotOpenAIIncludesClientContextLatestUserFirst(t *testin
 	}}
 
 	assert.Equal(t,
-		"latest part one\nlatest part two\n\nsystem instruction\n\nold user turn\n\nassistant reply\nvisible assistant reasoning\nassistant refusal\ntool argument\n\ntool output",
+		"latest part one\nlatest part two\n\nsystem instruction\n\nold user turn\n\nassistant reply\nvisible assistant reasoning\nassistant refusal\n\ntool argument\n\ntool output",
 		PromptAuditText(request),
 	)
 	for _, excluded := range []string{"base64", "SECRET_METADATA", "SECRET_TOOL_METADATA", "BINARY"} {
@@ -51,11 +51,17 @@ func TestPromptAuditSnapshotClaudeIncludesSystemAssistantAndToolResult(t *testin
 	}
 
 	assert.Equal(t,
-		"latest user turn\ntool result text\n\nsystem instruction\n\nold user turn\n\nassistant reply\nvisible assistant reasoning\ntool call text",
+		"latest user turn\n\nsystem instruction\n\nold user turn\n\nassistant reply\nvisible assistant reasoning\n\ntool call text\n\ntool result text",
 		PromptAuditText(request),
 	)
 	assert.NotContains(t, PromptAuditText(request), "BINARY")
 	assert.NotContains(t, PromptAuditText(request), "SECRET_SIGNATURE")
+	segments := request.GetPromptAuditSnapshot().PrioritizedSegments()
+	require.Len(t, segments, 6)
+	assert.Equal(t, PromptScopeUser, segments[0].SourceScope())
+	assert.Equal(t, PromptScopeToolCall, segments[4].SourceScope())
+	assert.Equal(t, PromptScopeToolResult, segments[5].SourceScope())
+	assert.False(t, segments[5].User)
 }
 
 func TestPromptAuditSnapshotGeminiIncludesPlaintextThoughtsAndExcludesSignatures(t *testing.T) {
@@ -74,7 +80,7 @@ func TestPromptAuditSnapshotGeminiIncludesPlaintextThoughtsAndExcludesSignatures
 	}
 
 	assert.Equal(t,
-		"latest user turn\nvisible thought\n\nsystem instruction\n\nold user turn\n\nassistant reply\ngemini tool argument",
+		"latest user turn\n\nsystem instruction\n\nold user turn\n\nassistant reply\n\ngemini tool argument\n\nvisible thought",
 		PromptAuditText(request),
 	)
 	assert.NotContains(t, PromptAuditText(request), "SECRET_SIGNATURE")
