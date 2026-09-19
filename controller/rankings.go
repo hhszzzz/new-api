@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
@@ -36,10 +37,14 @@ func GetRankings(c *gin.Context) {
 	}
 
 	viewer := service.RankingViewerAnonymous
+	var viewerGroups []string
 	if canViewPrivate {
 		viewer = service.RankingViewerAdmin
 	} else if c.GetInt("id") > 0 {
 		viewer = service.RankingViewerUser
+		// The per-user group breakdown is scoped to the viewer's memberships:
+		// users must not read other users' usage in groups they cannot join.
+		viewerGroups = common.GetContextKeyStringSlice(c, constant.ContextKeyUserGroups)
 	}
 	result, err := service.GetRankingsSnapshotWithOptions(service.RankingsRequest{
 		Period:         period,
@@ -47,6 +52,7 @@ func GetRankings(c *gin.Context) {
 		EndTimestamp:   endTimestamp,
 		VisibleModels:  visibleModelNames,
 		Viewer:         viewer,
+		ViewerGroups:   viewerGroups,
 	})
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{

@@ -259,37 +259,33 @@ func TestBuildRankingUserUsageMasksNamesWithoutChangingAdminRanking(t *testing.T
 		{UserID: 1, Username: "alice", UseGroup: "", TotalTokens: 50, TotalQuota: 250000},
 		{UserID: 2, Username: "bob", UseGroup: "secret", TotalTokens: 0, TotalQuota: 750000},
 	}
-	regularUsage := buildRankingUserUsage(rows, 150, 1500000, false, 500000)
-	adminUsage := buildRankingUserUsage(rows, 150, 1500000, true, 500000)
-	require.Len(t, regularUsage.Users, 2)
+	// Regular viewers see only the groups they belong to; every other row is
+	// dropped before aggregation.
+	regularUsage := buildRankingUserUsage(rows, 150, 1500000, false, []string{"team", ""}, 500000)
+	adminUsage := buildRankingUserUsage(rows, 150, 1500000, true, nil, 500000)
+	require.Len(t, regularUsage.Users, 1)
 	require.Len(t, adminUsage.Users, 2)
-	assert.Equal(t, adminUsage.TotalTokens, regularUsage.TotalTokens)
-	assert.Equal(t, adminUsage.TotalQuota, regularUsage.TotalQuota)
-	assert.Equal(t, adminUsage.TotalUSD, regularUsage.TotalUSD)
 	assert.Equal(t, "a***e", regularUsage.Users[0].Username)
-	assert.Equal(t, "b***b", regularUsage.Users[1].Username)
+	assert.Equal(t, int64(500000), regularUsage.Users[0].TotalQuota)
+	assert.Len(t, regularUsage.Users[0].Groups, 1)
+	assert.Equal(t, "team", regularUsage.Users[0].Groups[0].UseGroup)
 	assert.Equal(t, "alice", adminUsage.Users[0].Username)
 	assert.Equal(t, "bob", adminUsage.Users[1].Username)
-	for index := range adminUsage.Users {
-		regularUser := regularUsage.Users[index]
-		adminUser := adminUsage.Users[index]
-		regularUser.Username = adminUser.Username
-		assert.Equal(t, adminUser, regularUser)
-	}
-	assert.InDelta(t, 2.0/3.0, regularUsage.Users[0].Groups[0].QuotaShare, 0.0001)
-	assert.Equal(t, "secret", regularUsage.Users[1].Groups[0].UseGroup)
+	// Unscoped regular usage (legacy helper callers with no group list) is not
+	// produced by the controller; nil memberships mean an empty allowlist.
+	assert.Len(t, buildRankingUserUsage(rows, 150, 1500000, false, nil, 500000).Users, 0)
 }
 
 func TestBuildRankingUserUsageOmitsUnattributedRows(t *testing.T) {
 	usage := buildRankingUserUsage([]model.RankingUserQuotaRow{
 		{Username: "", TotalTokens: 100, TotalQuota: 500000},
 		{UserID: 2, Username: "bob", UseGroup: "default", TotalTokens: 50, TotalQuota: 250000},
-	}, 150, 750000, false, 500000)
+	}, 150, 750000, false, []string{"default"}, 500000)
 
 	require.Len(t, usage.Users, 1)
 	assert.Equal(t, "b***b", usage.Users[0].Username)
 	assert.Equal(t, int64(250000), usage.Users[0].TotalQuota)
-	assert.InDelta(t, 1.0/3.0, usage.Users[0].QuotaShare, 0.0001)
+	assert.InDelta(t, 1.0, usage.Users[0].QuotaShare, 0.0001)
 	assert.Equal(t, int64(750000), usage.TotalQuota)
 }
 
@@ -297,7 +293,7 @@ func TestBuildRankingUserUsageDisambiguatesMaskedUsernameCollisions(t *testing.T
 	usage := buildRankingUserUsage([]model.RankingUserQuotaRow{
 		{UserID: 1, Username: "alice", UseGroup: "default", TotalQuota: 2},
 		{UserID: 2, Username: "annie", UseGroup: "default", TotalQuota: 1},
-	}, 0, 3, false, 500000)
+	}, 0, 3, false, []string{"default"}, 500000)
 
 	require.Len(t, usage.Users, 2)
 	assert.Equal(t, "a***e", usage.Users[0].Username)
@@ -308,7 +304,7 @@ func TestBuildRankingUserUsageAggregatesUsernamesByStableUserID(t *testing.T) {
 	usage := buildRankingUserUsage([]model.RankingUserQuotaRow{
 		{UserID: 7, Username: "alice", UseGroup: "team-a", TotalTokens: 10, TotalQuota: 100},
 		{UserID: 7, Username: "alice-renamed", UseGroup: "team-b", TotalTokens: 20, TotalQuota: 200},
-	}, 30, 300, true, 500000)
+	}, 30, 300, true, nil, 500000)
 
 	require.Len(t, usage.Users, 1)
 	assert.Equal(t, int64(300), usage.Users[0].TotalQuota)

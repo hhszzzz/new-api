@@ -45,6 +45,11 @@ type RankingsRequest struct {
 	EndTimestamp   *int64
 	VisibleModels  []string
 	Viewer         RankingViewer
+	// ViewerGroups carries the authenticated viewer's group memberships. For
+	// RankingViewerUser the per-user group breakdown is redacted to these
+	// groups so users cannot read other users' usage in groups they do not
+	// belong to. Admins bypass the scoping.
+	ViewerGroups []string
 }
 
 // RankingsOptions is kept as a descriptive alias for callers that build
@@ -252,12 +257,15 @@ type historyAggregate struct {
 }
 
 type rankingUserAggregate struct {
-	key         string
-	username    string
-	totalTokens int64
-	totalQuota  int64
-	groups      map[string]*historyAggregate
-	models      map[string]*historyAggregate
+	key      string
+	username string
+	// visibleTokens/visibleQuota track only the rows that survived group
+	// scoping, so a user is neither ranked nor sized by usage the viewer
+	// cannot see.
+	visibleTokens int64
+	visibleQuota  int64
+	groups        map[string]*historyAggregate
+	models        map[string]*historyAggregate
 }
 
 var (
@@ -280,7 +288,6 @@ func GetRankingsSnapshot(period string, visibleModelNames []string, canViewPriva
 		Viewer:        viewer,
 	})
 }
-
 func GetRankingsSnapshotWithOptions(options RankingsRequest) (*RankingsResponse, error) {
 	viewer := normalizeRankingViewer(options.Viewer)
 	canViewPrivate := viewer == RankingViewerAdmin
@@ -296,6 +303,7 @@ func GetRankingsSnapshotWithOptions(options RankingsRequest) (*RankingsResponse,
 	}
 	quotaPerUnit := common.GetQuotaPerUnit()
 	visibleModelNames, visibilityCacheKey := rankingVisibilityCacheKey(options.VisibleModels, canViewPrivate)
+	viewerGroups, groupsCacheKey := rankingViewerGroupsCacheKey(viewer, options.ViewerGroups)
 	// Keep the response range current while sharing the cache entry for
 	// requests within the same five-minute snapshot window.
 	cacheRange, err := resolveRankingCacheRange(options, resolved, requestNow)
@@ -303,18 +311,44 @@ func GetRankingsSnapshotWithOptions(options RankingsRequest) (*RankingsResponse,
 		return nil, err
 	}
 	cacheKey := fmt.Sprintf(
-		"%s:%d:%d:%s:%s:%x",
+		"%s:%d:%d:%s:%s:%s:%x",
 		cacheRange.config.id,
 		cacheRange.start,
 		cacheRange.end,
 		viewer,
 		visibilityCacheKey,
+		groupsCacheKey,
 		math.Float64bits(quotaPerUnit),
 	)
 
 	return loadRankingsSnapshot(cacheKey, func() (*RankingsResponse, error) {
-		return buildRankingsSnapshot(resolved, visibleModelNames, canViewPrivate, viewer, quotaPerUnit)
+		return buildRankingsSnapshot(resolved, visibleModelNames, canViewPrivate, viewer, viewerGroups, quotaPerUnit)
 	})
+}
+
+// rankingViewerGroupsCacheKey canonicalizes the viewer's group memberships for
+// the cache key. Anonymous and admin viewers never use the group scoping, so
+// they share one entry regardless of the list passed in.
+func rankingViewerGroupsCacheKey(viewer RankingViewer, viewerGroups []string) ([]string, string) {
+	if viewer != RankingViewerUser {
+		return nil, "unscoped"
+	}
+	seen := make(map[string]struct{}, len(viewerGroups))
+	canonical := make([]string, 0, len(viewerGroups))
+	for _, groupName := range viewerGroups {
+		groupName = strings.TrimSpace(groupName)
+		if groupName == "" {
+			continue
+		}
+		if _, ok := seen[groupName]; ok {
+			continue
+		}
+		seen[groupName] = struct{}{}
+		canonical = append(canonical, groupName)
+	}
+	sort.Strings(canonical)
+	digest := sha256.Sum256([]byte(strings.Join(canonical, "\x00")))
+	return canonical, fmt.Sprintf("groups:%x", digest)
 }
 
 func normalizeRankingViewer(viewer RankingViewer) RankingViewer {
@@ -557,7 +591,7 @@ func makeResolvedRankingRange(config rankingPeriodConfig, start int64, end int64
 	}
 }
 
-func buildRankingsSnapshot(resolved rankingResolvedRange, visibleModelNames []string, canViewPrivate bool, viewer RankingViewer, quotaPerUnit float64) (*RankingsResponse, error) {
+func buildRankingsSnapshot(resolved rankingResolvedRange, visibleModelNames []string, canViewPrivate bool, viewer RankingViewer, viewerGroups []string, quotaPerUnit float64) (*RankingsResponse, error) {
 	currentTotals, err := model.GetRankingQuotaTotals(resolved.start, resolved.end, visibleModelNames, canViewPrivate)
 	if err != nil {
 		return nil, err
@@ -616,7 +650,7 @@ func buildRankingsSnapshot(resolved rankingResolvedRange, visibleModelNames []st
 		if queryErr != nil {
 			return nil, queryErr
 		}
-		response.UserUsage = buildRankingUserUsage(userRows, totalTokens, totalQuota, viewer == RankingViewerAdmin, quotaPerUnit)
+		response.UserUsage = buildRankingUserUsage(userRows, totalTokens, totalQuota, canViewPrivate, viewerGroups, quotaPerUnit)
 	}
 	return response, nil
 }
@@ -960,7 +994,26 @@ func buildVendorShareHistory(buckets []model.RankingQuotaBucket, vendors []Ranke
 	return VendorShareSeries{Points: points, Vendors: vendorRows, Buckets: len(sortedBuckets)}
 }
 
-func buildRankingUserUsage(rows []model.RankingUserQuotaRow, totalTokens int64, totalQuota int64, canViewPrivate bool, quotaPerUnit float64) *RankingUserUsage {
+// rankingViewerGroupSet normalizes the viewer's group memberships for the
+// per-user group breakdown. Admins (canViewPrivate) keep every group; nil
+// memberships mean "no scoping" only for admins, and a non-admin with no
+// memberships is scoped to the empty set (nothing is visible).
+func rankingViewerGroupSet(canViewPrivate bool, viewerGroups []string) map[string]struct{} {
+	if canViewPrivate {
+		return nil
+	}
+	allowed := make(map[string]struct{}, len(viewerGroups))
+	for _, groupName := range viewerGroups {
+		groupName = strings.TrimSpace(groupName)
+		if groupName != "" {
+			allowed[groupName] = struct{}{}
+		}
+	}
+	return allowed
+}
+
+func buildRankingUserUsage(rows []model.RankingUserQuotaRow, totalTokens int64, totalQuota int64, canViewPrivate bool, viewerGroups []string, quotaPerUnit float64) *RankingUserUsage {
+	allowedGroups := rankingViewerGroupSet(canViewPrivate, viewerGroups)
 	aggregates := make(map[string]*rankingUserAggregate)
 	for _, row := range rows {
 		rawUsername := strings.TrimSpace(row.Username)
@@ -989,11 +1042,14 @@ func buildRankingUserUsage(rows []model.RankingUserQuotaRow, totalTokens int64, 
 			// stale username.
 			aggregate.username = username
 		}
-		aggregate.totalTokens += row.TotalTokens
-		aggregate.totalQuota += row.TotalQuota
 		groupName := strings.TrimSpace(row.UseGroup)
 		if groupName == "" {
 			groupName = rankingUnknownGroup
+		}
+		if _, allowed := allowedGroups[groupName]; allowedGroups != nil && !allowed {
+			// Viewers without membership in this group cannot read other users'
+			// usage inside it; drop the row instead of leaking a bucket.
+			continue
 		}
 		group, ok := aggregate.groups[groupName]
 		if !ok {
@@ -1002,6 +1058,8 @@ func buildRankingUserUsage(rows []model.RankingUserQuotaRow, totalTokens int64, 
 		}
 		group.tokens += row.TotalTokens
 		group.quota += row.TotalQuota
+		aggregate.visibleTokens += row.TotalTokens
+		aggregate.visibleQuota += row.TotalQuota
 		modelName := strings.TrimSpace(row.ModelName)
 		if modelName == "" {
 			// Redacted model names fold into the same "Others" bucket the main
@@ -1020,14 +1078,27 @@ func buildRankingUserUsage(rows []model.RankingUserQuotaRow, totalTokens int64, 
 	usage := &RankingUserUsage{TotalTokens: totalTokens, TotalQuota: totalQuota, TotalUSD: rankingQuotaUSD(totalQuota, quotaPerUnit), Users: make([]RankingUser, 0, minInt(len(aggregates), rankingUserLimit))}
 	aggregateRows := make([]*rankingUserAggregate, 0, len(aggregates))
 	for _, aggregate := range aggregates {
+		if allowedGroups != nil && aggregate.visibleQuota <= 0 && aggregate.visibleTokens <= 0 {
+			// Every row of this user fell outside the viewer's groups; the user
+			// is invisible to this viewer entirely.
+			continue
+		}
 		aggregateRows = append(aggregateRows, aggregate)
 	}
+	rankingTotalTokens, rankingTotalQuota := totalTokens, totalQuota
+	if allowedGroups != nil {
+		// Shares are computed against the scoping-adjusted totals so the
+		// per-user percentages stay meaningful after redaction. The section
+		// header totals stay global.
+		rankingTotalTokens = sumVisibleRankingTokens(aggregateRows)
+		rankingTotalQuota = sumVisibleRankingQuota(aggregateRows)
+	}
 	sort.Slice(aggregateRows, func(i, j int) bool {
-		if aggregateRows[i].totalQuota != aggregateRows[j].totalQuota {
-			return aggregateRows[i].totalQuota > aggregateRows[j].totalQuota
+		if aggregateRows[i].visibleQuota != aggregateRows[j].visibleQuota {
+			return aggregateRows[i].visibleQuota > aggregateRows[j].visibleQuota
 		}
-		if aggregateRows[i].totalTokens != aggregateRows[j].totalTokens {
-			return aggregateRows[i].totalTokens > aggregateRows[j].totalTokens
+		if aggregateRows[i].visibleTokens != aggregateRows[j].visibleTokens {
+			return aggregateRows[i].visibleTokens > aggregateRows[j].visibleTokens
 		}
 		if aggregateRows[i].username != aggregateRows[j].username {
 			return aggregateRows[i].username < aggregateRows[j].username
@@ -1054,11 +1125,11 @@ func buildRankingUserUsage(rows []model.RankingUserQuotaRow, totalTokens int64, 
 		user := RankingUser{
 			Rank:        idx + 1,
 			Username:    displayUsername,
-			TotalTokens: aggregate.totalTokens,
-			TotalQuota:  aggregate.totalQuota,
-			TotalUSD:    rankingQuotaUSD(aggregate.totalQuota, quotaPerUnit),
-			QuotaShare:  rankingShare(aggregate.totalQuota, totalQuota),
-			TokenShare:  rankingShare(aggregate.totalTokens, totalTokens),
+			TotalTokens: aggregate.visibleTokens,
+			TotalQuota:  aggregate.visibleQuota,
+			TotalUSD:    rankingQuotaUSD(aggregate.visibleQuota, quotaPerUnit),
+			QuotaShare:  rankingShare(aggregate.visibleQuota, rankingTotalQuota),
+			TokenShare:  rankingShare(aggregate.visibleTokens, rankingTotalTokens),
 			Groups:      make([]RankingUserGroup, 0, len(aggregate.groups)),
 			Models:      make([]RankingUserModel, 0, len(aggregate.models)),
 		}
@@ -1084,8 +1155,8 @@ func buildRankingUserUsage(rows []model.RankingUserQuotaRow, totalTokens int64, 
 				TotalTokens: group.tokens,
 				TotalQuota:  group.quota,
 				TotalUSD:    rankingQuotaUSD(group.quota, quotaPerUnit),
-				QuotaShare:  rankingShare(group.quota, aggregate.totalQuota),
-				TokenShare:  rankingShare(group.tokens, aggregate.totalTokens),
+				QuotaShare:  rankingShare(group.quota, aggregate.visibleQuota),
+				TokenShare:  rankingShare(group.tokens, aggregate.visibleTokens),
 			})
 		}
 		modelNames := make([]string, 0, len(aggregate.models))
@@ -1110,8 +1181,8 @@ func buildRankingUserUsage(rows []model.RankingUserQuotaRow, totalTokens int64, 
 				TotalTokens: model.tokens,
 				TotalQuota:  model.quota,
 				TotalUSD:    rankingQuotaUSD(model.quota, quotaPerUnit),
-				QuotaShare:  rankingShare(model.quota, aggregate.totalQuota),
-				TokenShare:  rankingShare(model.tokens, aggregate.totalTokens),
+				QuotaShare:  rankingShare(model.quota, aggregate.visibleQuota),
+				TokenShare:  rankingShare(model.tokens, aggregate.visibleTokens),
 			})
 		}
 		usage.Users = append(usage.Users, user)
@@ -1211,6 +1282,22 @@ func sumRankingQuota(totals []model.RankingQuotaTotal) int64 {
 	total := int64(0)
 	for _, item := range totals {
 		total += item.TotalQuota
+	}
+	return total
+}
+
+func sumVisibleRankingTokens(rows []*rankingUserAggregate) int64 {
+	total := int64(0)
+	for _, row := range rows {
+		total += row.visibleTokens
+	}
+	return total
+}
+
+func sumVisibleRankingQuota(rows []*rankingUserAggregate) int64 {
+	total := int64(0)
+	for _, row := range rows {
+		total += row.visibleQuota
 	}
 	return total
 }
