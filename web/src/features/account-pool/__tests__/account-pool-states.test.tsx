@@ -86,6 +86,7 @@ function snapshot(overrides: Partial<AccountPoolSnapshot> = {}) {
     stale: false,
     partial: false,
     summary: { total: 0, available: 0, limited: 0, error: 0 },
+    provider_summaries: {},
     accounts: [],
     ...overrides,
   } satisfies AccountPoolSnapshot

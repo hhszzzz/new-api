@@ -13,7 +13,7 @@ func validSetting() Setting {
 	return Setting{
 		Enabled:                   true,
 		HideEmailFromNonAdmins:    true,
-		AllowedGroups:             []string{"vip", "default"},
+		ProviderGroups:            map[string][]string{},
 		RegularRefreshSeconds:     300,
 		NearResetThresholdSeconds: 600,
 		NearResetRefreshSeconds:   60,
@@ -22,14 +22,63 @@ func validSetting() Setting {
 	}
 }
 
-func TestPrepareSettingNormalizesAllowedGroups(t *testing.T) {
+func TestPrepareSettingNormalizesProviderGroups(t *testing.T) {
 	setting := validSetting()
-	setting.AllowedGroups = []string{" vip ", "default", "vip"}
+	setting.ProviderGroups = map[string][]string{
+		"codex":       {" vip ", "codex-vip", "codex-vip"},
+		"antigravity": {},
+	}
 
 	prepared, err := PrepareSetting(setting)
 
 	require.NoError(t, err)
-	assert.Equal(t, []string{"default", "vip"}, prepared.AllowedGroups)
+	assert.Equal(t, []string{"codex-vip", "vip"}, prepared.ProviderGroups["codex"])
+	assert.NotContains(t, prepared.ProviderGroups, "antigravity")
+}
+
+func TestPrepareSettingNormalizesUnknownProviderGroupKeys(t *testing.T) {
+	setting := validSetting()
+	setting.ProviderGroups = map[string][]string{"gemini": {"vip"}}
+	_, err := PrepareSetting(setting)
+	require.Error(t, err)
+
+	setting = validSetting()
+	setting.ProviderGroups = map[string][]string{"claude": {"  "}}
+	_, err = PrepareSetting(setting)
+	require.Error(t, err)
+}
+
+func TestCanAccessProviderUsesOnlyItsOwnGroups(t *testing.T) {
+	previous := GetSettingSnapshot()
+	require.NotNil(t, previous)
+	t.Cleanup(func() { previous.PublishConfig() })
+
+	setting := validSetting()
+	setting.ProviderGroups = map[string][]string{"claude": {"claude-team"}}
+	setting.PublishConfig()
+
+	// claude uses its own provider groups; other providers stay admin-only
+	// until they get their own group configuration.
+	assert.True(t, CanAccessProvider(common.RoleCommonUser, []string{"claude-team"}, ProviderClaude))
+	assert.False(t, CanAccessProvider(common.RoleCommonUser, []string{"claude-team"}, ProviderCodex))
+	assert.False(t, CanAccessProvider(common.RoleCommonUser, []string{"claude-team"}, ProviderAntigravity))
+	assert.True(t, CanAccessProvider(common.RoleAdminUser, nil, ProviderClaude))
+
+	// page-level access stays true when any provider matches.
+	assert.True(t, CanAccess(common.RoleCommonUser, []string{"claude-team"}))
+	assert.False(t, CanAccess(common.RoleCommonUser, []string{"vip"}))
+}
+
+func TestCanAccessProviderFailsClosedWhenDisabled(t *testing.T) {
+	previous := GetSettingSnapshot()
+	require.NotNil(t, previous)
+	t.Cleanup(func() { previous.PublishConfig() })
+
+	setting := validSetting()
+	setting.Enabled = false
+	setting.ProviderGroups = map[string][]string{"claude": {"claude-team"}}
+	setting.PublishConfig()
+	assert.False(t, CanAccessProvider(common.RoleAdminUser, []string{"claude-team"}, ProviderClaude))
 }
 
 func TestPrepareSettingRejectsInvalidRefreshRanges(t *testing.T) {
@@ -61,16 +110,17 @@ func TestCanAccessUsesAnyAssignedGroupAndAdminBypass(t *testing.T) {
 	t.Cleanup(func() { previous.PublishConfig() })
 
 	setting := validSetting()
-	setting.AllowedGroups = []string{"vip", "team"}
+	setting.ProviderGroups = map[string][]string{"codex": {"vip"}, "antigravity": {"team"}}
 	setting.PublishConfig()
 
 	assert.True(t, CanAccess(common.RoleCommonUser, []string{"default", "vip"}))
+	assert.True(t, CanAccess(common.RoleCommonUser, []string{"default", "team"}))
 	assert.False(t, CanAccess(common.RoleCommonUser, []string{"default"}))
 	assert.True(t, CanAccess(common.RoleAdminUser, nil))
 	assert.True(t, CanAccess(common.RoleRootUser, nil))
 }
 
-func TestCanAccessFailsClosedWhenDisabledOrAllowedGroupsEmpty(t *testing.T) {
+func TestCanAccessFailsClosedWhenDisabledOrProviderGroupsEmpty(t *testing.T) {
 	previous := GetSettingSnapshot()
 	require.NotNil(t, previous)
 	t.Cleanup(func() { previous.PublishConfig() })
@@ -81,7 +131,7 @@ func TestCanAccessFailsClosedWhenDisabledOrAllowedGroupsEmpty(t *testing.T) {
 	assert.False(t, CanAccess(common.RoleRootUser, []string{"vip"}))
 
 	setting.Enabled = true
-	setting.AllowedGroups = []string{}
+	setting.ProviderGroups = map[string][]string{}
 	setting.PublishConfig()
 	assert.False(t, CanAccess(common.RoleCommonUser, []string{"vip"}))
 	assert.True(t, CanAccess(common.RoleAdminUser, nil))
@@ -111,7 +161,7 @@ func TestAccountPoolConfigManagerRejectsPartialInvalidPublication(t *testing.T) 
 
 	handled, err := manager.Update(ConfigName, map[string]string{
 		"enabled":                    "true",
-		"allowed_groups":             `["vip","team"]`,
+		"provider_groups":            `{"codex":["vip","team"]}`,
 		"regular_refresh_seconds":    "300",
 		"near_reset_refresh_seconds": "60",
 	})
@@ -119,7 +169,7 @@ func TestAccountPoolConfigManagerRejectsPartialInvalidPublication(t *testing.T) 
 	require.NoError(t, err)
 	assert.True(t, setting.Enabled)
 	assert.True(t, setting.HideEmailFromNonAdmins)
-	assert.Equal(t, []string{"team", "vip"}, setting.AllowedGroups)
+	assert.Equal(t, map[string][]string{"codex": {"team", "vip"}}, setting.ProviderGroups)
 
 	handled, err = manager.Update(ConfigName, map[string]string{
 		"enabled":                    "false",

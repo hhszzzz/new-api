@@ -13,9 +13,13 @@ import (
 const (
 	ConfigName = "account_pool"
 
+	ProviderCodex       = "codex"
+	ProviderClaude      = "claude"
+	ProviderAntigravity = "antigravity"
+
 	EnabledOptionKey                   = ConfigName + ".enabled"
 	HideEmailFromNonAdminsOptionKey    = ConfigName + ".hide_email_from_non_admins"
-	AllowedGroupsOptionKey             = ConfigName + ".allowed_groups"
+	ProviderGroupsOptionKey            = ConfigName + ".provider_groups"
 	RegularRefreshSecondsOptionKey     = ConfigName + ".regular_refresh_seconds"
 	NearResetThresholdSecondsOptionKey = ConfigName + ".near_reset_threshold_seconds"
 	NearResetRefreshSecondsOptionKey   = ConfigName + ".near_reset_refresh_seconds"
@@ -23,21 +27,31 @@ const (
 	ManualRefreshCooldownOptionKey     = ConfigName + ".manual_refresh_cooldown_seconds"
 )
 
+var KnownProviders = []string{ProviderCodex, ProviderClaude, ProviderAntigravity}
+
+func IsKnownProvider(provider string) bool {
+	for _, known := range KnownProviders {
+		if known == provider {
+			return true
+		}
+	}
+	return false
+}
+
 type Setting struct {
-	Enabled                   bool     `json:"enabled"`
-	HideEmailFromNonAdmins    bool     `json:"hide_email_from_non_admins"`
-	AllowedGroups             []string `json:"allowed_groups"`
-	RegularRefreshSeconds     int      `json:"regular_refresh_seconds"`
-	NearResetThresholdSeconds int      `json:"near_reset_threshold_seconds"`
-	NearResetRefreshSeconds   int      `json:"near_reset_refresh_seconds"`
-	PostResetDelaySeconds     int      `json:"post_reset_delay_seconds"`
-	ManualRefreshCooldown     int      `json:"manual_refresh_cooldown_seconds"`
+	Enabled                   bool                `json:"enabled"`
+	HideEmailFromNonAdmins    bool                `json:"hide_email_from_non_admins"`
+	ProviderGroups            map[string][]string `json:"provider_groups"`
+	RegularRefreshSeconds     int                 `json:"regular_refresh_seconds"`
+	NearResetThresholdSeconds int                 `json:"near_reset_threshold_seconds"`
+	NearResetRefreshSeconds   int                 `json:"near_reset_refresh_seconds"`
+	PostResetDelaySeconds     int                 `json:"post_reset_delay_seconds"`
+	ManualRefreshCooldown     int                 `json:"manual_refresh_cooldown_seconds"`
 }
 
 var accountPoolSetting = Setting{
 	Enabled:                   false,
 	HideEmailFromNonAdmins:    true,
-	AllowedGroups:             []string{},
 	RegularRefreshSeconds:     300,
 	NearResetThresholdSeconds: 600,
 	NearResetRefreshSeconds:   60,
@@ -87,16 +101,21 @@ func (setting *Setting) ValidateConfig() error {
 		return fmt.Errorf("manual_refresh_cooldown_seconds must be between 30 and 600")
 	}
 
-	seen := make(map[string]struct{}, len(setting.AllowedGroups))
-	for _, rawGroup := range setting.AllowedGroups {
-		group := strings.TrimSpace(rawGroup)
-		if group == "" || len(group) > 64 {
-			return fmt.Errorf("allowed_groups contains an invalid group")
+	for provider, providerGroups := range setting.ProviderGroups {
+		if !IsKnownProvider(provider) {
+			return fmt.Errorf("provider_groups contains an unknown provider %q", provider)
 		}
-		if _, exists := seen[group]; exists {
-			continue
+		seenProviderGroups := make(map[string]struct{}, len(providerGroups))
+		for _, rawGroup := range providerGroups {
+			group := strings.TrimSpace(rawGroup)
+			if group == "" || len(group) > 64 {
+				return fmt.Errorf("provider_groups contains an invalid group")
+			}
+			if _, exists := seenProviderGroups[group]; exists {
+				continue
+			}
+			seenProviderGroups[group] = struct{}{}
 		}
-		seen[group] = struct{}{}
 	}
 	return nil
 }
@@ -109,18 +128,53 @@ func (setting *Setting) PublishConfig() {
 
 func CanAccess(role int, userGroups []string) bool {
 	snapshot := accountPoolSnapshot.Load()
-	if snapshot == nil || !snapshot.Enabled {
+	if snapshot == nil {
+		return false
+	}
+	return snapshot.CanAccess(role, userGroups)
+}
+
+func CanAccessProvider(role int, userGroups []string, provider string) bool {
+	snapshot := accountPoolSnapshot.Load()
+	if snapshot == nil {
+		return false
+	}
+	return snapshot.CanAccessProvider(role, userGroups, provider)
+}
+
+func (setting *Setting) CanAccess(role int, userGroups []string) bool {
+	if !setting.Enabled {
 		return false
 	}
 	if role >= common.RoleAdminUser {
 		return true
 	}
-	if len(snapshot.AllowedGroups) == 0 || len(userGroups) == 0 {
+	for _, provider := range KnownProviders {
+		if setting.CanAccessProvider(role, userGroups, provider) {
+			return true
+		}
+	}
+	return false
+}
+
+func (setting *Setting) CanAccessProvider(role int, userGroups []string, provider string) bool {
+	if !setting.Enabled {
+		return false
+	}
+	if role >= common.RoleAdminUser {
+		return true
+	}
+
+	var providerGroups []string
+	if setting.ProviderGroups != nil {
+		providerGroups = setting.ProviderGroups[provider]
+	}
+	if len(providerGroups) == 0 || len(userGroups) == 0 {
 		return false
 	}
 
-	allowed := make(map[string]struct{}, len(snapshot.AllowedGroups))
-	for _, group := range snapshot.AllowedGroups {
+	allowed := make(map[string]struct{}, len(providerGroups))
+	for _, group := range providerGroups {
 		allowed[group] = struct{}{}
 	}
 	for _, rawGroup := range userGroups {
@@ -140,9 +194,26 @@ func ShouldIncludeEmail(role int) bool {
 }
 
 func normalizeSetting(setting Setting) Setting {
-	seen := make(map[string]struct{}, len(setting.AllowedGroups))
-	groups := make([]string, 0, len(setting.AllowedGroups))
-	for _, rawGroup := range setting.AllowedGroups {
+	if setting.ProviderGroups == nil {
+		setting.ProviderGroups = map[string][]string{}
+	} else {
+		normalizedProviderGroups := make(map[string][]string, len(setting.ProviderGroups))
+		for provider, groups := range setting.ProviderGroups {
+			normalizedGroups := normalizeGroups(groups)
+			if len(normalizedGroups) == 0 {
+				continue
+			}
+			normalizedProviderGroups[provider] = normalizedGroups
+		}
+		setting.ProviderGroups = normalizedProviderGroups
+	}
+	return setting
+}
+
+func normalizeGroups(groups []string) []string {
+	seen := make(map[string]struct{}, len(groups))
+	normalized := make([]string, 0, len(groups))
+	for _, rawGroup := range groups {
 		group := strings.TrimSpace(rawGroup)
 		if group == "" {
 			continue
@@ -151,15 +222,22 @@ func normalizeSetting(setting Setting) Setting {
 			continue
 		}
 		seen[group] = struct{}{}
-		groups = append(groups, group)
+		normalized = append(normalized, group)
 	}
-	sort.Strings(groups)
-	setting.AllowedGroups = groups
-	return setting
+	sort.Strings(normalized)
+	return normalized
 }
 
 func copySetting(setting Setting) *Setting {
 	copy := setting
-	copy.AllowedGroups = append([]string{}, setting.AllowedGroups...)
+	if setting.ProviderGroups == nil {
+		copy.ProviderGroups = map[string][]string{}
+	} else {
+		providerGroups := make(map[string][]string, len(setting.ProviderGroups))
+		for provider, groups := range setting.ProviderGroups {
+			providerGroups[provider] = append([]string{}, groups...)
+		}
+		copy.ProviderGroups = providerGroups
+	}
 	return &copy
 }

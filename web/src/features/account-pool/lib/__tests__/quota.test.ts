@@ -18,9 +18,12 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { describe, expect, test } from 'vitest'
 
+import type { AccountPoolAccount } from '../../types'
 import {
   formatAccountPoolCountdown,
   getAccountPoolSecondaryWindowLabel,
+  getAccountPoolWindowGroupLabelKey,
+  getAccountPoolWindowGroups,
 } from '../quota'
 
 describe('account pool quota formatting', () => {
@@ -52,5 +55,61 @@ describe('account pool quota formatting', () => {
         limit_window_seconds: 7 * 86400,
       })
     ).toBe('Weekly quota')
+  })
+
+  test('maps known upstream group labels to i18n keys and keeps unknown labels raw', () => {
+    expect(getAccountPoolWindowGroupLabelKey('Gemini Models')).toBe(
+      'Gemini models'
+    )
+    expect(getAccountPoolWindowGroupLabelKey('claude and gpt models')).toBe(
+      'Claude and GPT models'
+    )
+    expect(getAccountPoolWindowGroupLabelKey('Future Models')).toBe(
+      'Future Models'
+    )
+  })
+
+  test('falls back to the flat windows as one unlabeled group when window_groups is empty', () => {
+    const account = {
+      primary_window: {
+        used_percent: 10,
+        remaining_percent: 90,
+        reset_at: null,
+        limit_window_seconds: 18000,
+      },
+      secondary_window: null,
+      window_groups: [],
+    } as Pick<
+      AccountPoolAccount,
+      'primary_window' | 'secondary_window' | 'window_groups'
+    >
+
+    expect(getAccountPoolWindowGroups(account)).toEqual([
+      {
+        label: null,
+        primary_window: account.primary_window,
+        secondary_window: null,
+      },
+    ])
+  })
+
+  test('keeps the server-provided window groups untouched', () => {
+    const groups = [
+      {
+        label: 'Gemini Models',
+        primary_window: null,
+        secondary_window: null,
+      },
+    ]
+    const account = {
+      primary_window: null,
+      secondary_window: null,
+      window_groups: groups,
+    } as Pick<
+      AccountPoolAccount,
+      'primary_window' | 'secondary_window' | 'window_groups'
+    >
+
+    expect(getAccountPoolWindowGroups(account)).toBe(groups)
   })
 })

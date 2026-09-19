@@ -31,10 +31,24 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { cn } from '@/lib/utils'
 
-import { formatAccountPoolCountdown } from '../lib/quota'
-import type { AccountPoolAccount, AccountPoolSnapshot } from '../types'
+import {
+  ACCOUNT_POOL_PROVIDER_LABELS,
+} from '../constants'
+import {
+  formatAccountPoolCountdown,
+  getAccountPoolWindowGroupLabelKey,
+  getAccountPoolWindowGroups,
+} from '../lib/quota'
+import type {
+  AccountPoolAccount,
+  AccountPoolSnapshot,
+  AccountPoolSummaryCounts,
+  AccountPoolWindow,
+  AccountPoolWindowGroup,
+} from '../types'
 import { AccountPoolMobileList } from './account-pool-mobile-list'
 import { AccountStatusBadge } from './account-status-badge'
 import { QuotaWindow } from './quota-window'
@@ -52,15 +66,94 @@ type AccountPoolTableProps = {
 
 type StatusFilter = 'all' | AccountPoolAccount['status']
 const EMPTY_ACCOUNTS: AccountPoolAccount[] = []
+const EMPTY_WINDOW_GROUP: AccountPoolWindowGroup = {
+  label: null,
+  primary_window: null,
+  secondary_window: null,
+}
+
+type ProviderTab = {
+  provider: string
+  summary: AccountPoolSummaryCounts
+}
+
+function useProviderTabs(snapshot?: AccountPoolSnapshot): ProviderTab[] {
+  return useMemo(() => {
+    const summaries = snapshot?.provider_summaries ?? {}
+    const tabs: ProviderTab[] = []
+    for (const [provider, summary] of Object.entries(summaries)) {
+      if (!summary) continue
+      tabs.push({ provider, summary })
+    }
+    const knownOrder = Object.keys(ACCOUNT_POOL_PROVIDER_LABELS)
+    tabs.sort((a, b) => {
+      const aIndex = knownOrder.indexOf(a.provider)
+      const bIndex = knownOrder.indexOf(b.provider)
+      if (aIndex !== bIndex) {
+        return (aIndex < 0 ? knownOrder.length : aIndex) -
+          (bIndex < 0 ? knownOrder.length : bIndex)
+      }
+      return a.provider.localeCompare(b.provider)
+    })
+    return tabs
+  }, [snapshot?.provider_summaries])
+}
+
+function QuotaWindowCell(props: {
+  groups: AccountPoolWindowGroup[]
+  pick: (group: AccountPoolWindowGroup) => AccountPoolWindow | null
+  now: number
+}) {
+  const { t } = useTranslation()
+  if (props.groups.length <= 1) {
+    return (
+      <QuotaWindow
+        window={props.pick(props.groups[0] ?? EMPTY_WINDOW_GROUP)}
+        now={props.now}
+      />
+    )
+  }
+  return (
+    <div className='space-y-2'>
+      {props.groups.map((group, index) => (
+        <div key={group.label ?? index} className='space-y-1'>
+          {group.label ? (
+            <div className='text-muted-foreground text-[11px] leading-none font-medium'>
+              {t(getAccountPoolWindowGroupLabelKey(group.label))}
+            </div>
+          ) : null}
+          <QuotaWindow window={props.pick(group)} now={props.now} compact />
+        </div>
+      ))}
+    </div>
+  )
+}
 
 export function AccountPoolTable(props: AccountPoolTableProps) {
   const { t } = useTranslation()
+  const [providerFilter, setProviderFilter] = useState('all')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+  const providerTabs = useProviderTabs(props.snapshot)
+  const activeProvider = providerTabs.some(
+    (tab) => tab.provider === providerFilter
+  )
+    ? providerFilter
+    : (providerTabs[0]?.provider ?? 'all')
   const accounts = props.snapshot?.accounts ?? EMPTY_ACCOUNTS
   const filteredAccounts = useMemo(() => {
-    if (statusFilter === 'all') return accounts
-    return accounts.filter((account) => account.status === statusFilter)
-  }, [accounts, statusFilter])
+    return accounts.filter((account) => {
+      if (activeProvider !== 'all' && account.provider !== activeProvider) {
+        return false
+      }
+      if (statusFilter !== 'all' && account.status !== statusFilter) {
+        return false
+      }
+      return true
+    })
+  }, [accounts, activeProvider, statusFilter])
+  const activeSummary =
+    providerTabs.find((tab) => tab.provider === activeProvider)?.summary ??
+    props.snapshot?.summary
   const statusFilterLabel = {
     all: t('All statuses'),
     available: t('Available'),
@@ -114,7 +207,11 @@ export function AccountPoolTable(props: AccountPoolTableProps) {
         header: t('5-hour quota'),
         size: 220,
         cell: ({ row }) => (
-          <QuotaWindow window={row.original.primary_window} now={props.now} />
+          <QuotaWindowCell
+            groups={getAccountPoolWindowGroups(row.original)}
+            pick={(group) => group.primary_window}
+            now={props.now}
+          />
         ),
       },
       {
@@ -122,7 +219,11 @@ export function AccountPoolTable(props: AccountPoolTableProps) {
         header: t('Weekly / monthly quota'),
         size: 220,
         cell: ({ row }) => (
-          <QuotaWindow window={row.original.secondary_window} now={props.now} />
+          <QuotaWindowCell
+            groups={getAccountPoolWindowGroups(row.original)}
+            pick={(group) => group.secondary_window}
+            now={props.now}
+          />
         ),
       },
       {
@@ -163,7 +264,7 @@ export function AccountPoolTable(props: AccountPoolTableProps) {
       isFetching={props.isFetching}
       emptyTitle={t('No accounts in the pool')}
       emptyDescription={t(
-        'Codex accounts will appear after the first successful sync.'
+        'Accounts will appear after the first successful sync.'
       )}
       fixedHeight={false}
       applyHeaderSize
@@ -172,14 +273,34 @@ export function AccountPoolTable(props: AccountPoolTableProps) {
       toolbar={
         <div className='bg-card flex flex-wrap items-center justify-between gap-2 rounded-xl border px-3 py-2.5 shadow-xs'>
           <div className='flex flex-wrap items-center gap-2'>
+            {providerTabs.length > 0 ? (
+              <Tabs
+                value={activeProvider}
+                onValueChange={(value) => setProviderFilter(value)}
+              >
+                <TabsList className='flex-wrap' aria-label={t('Account kind')}>
+                  {providerTabs.map((tab) => (
+                    <TabsTrigger key={tab.provider} value={tab.provider}>
+                      {ACCOUNT_POOL_PROVIDER_LABELS[
+                        tab.provider as keyof typeof ACCOUNT_POOL_PROVIDER_LABELS
+                      ] ?? tab.provider}
+                      <Badge
+                        variant='secondary'
+                        className='ml-1.5 tabular-nums'
+                      >
+                        {tab.summary.total}
+                      </Badge>
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
+              </Tabs>
+            ) : null}
             <Badge variant='outline'>
-              {t('{{count}} accounts', {
-                count: props.snapshot?.summary.total ?? 0,
-              })}
+              {t('{{count}} accounts', { count: activeSummary?.total ?? 0 })}
             </Badge>
             <Badge className='border-success/30 bg-success/10 text-success'>
               {t('{{count}} available', {
-                count: props.snapshot?.summary.available ?? 0,
+                count: activeSummary?.available ?? 0,
               })}
             </Badge>
             <Select

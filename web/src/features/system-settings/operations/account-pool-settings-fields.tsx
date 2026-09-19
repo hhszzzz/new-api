@@ -19,6 +19,10 @@ For commercial licensing, please contact support@quantumnous.com
 import type { UseFormReturn } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 
+import {
+  ACCOUNT_POOL_PROVIDERS,
+  ACCOUNT_POOL_PROVIDER_LABELS,
+} from '@/features/account-pool/constants'
 import { MultiSelect } from '@/components/multi-select'
 import {
   FormControl,
@@ -39,7 +43,9 @@ import type { AccountPoolSettingsValues } from './account-pool-settings-schema'
 
 type NumericFieldName = Exclude<
   keyof AccountPoolSettingsValues,
-  'enabled' | 'hide_email_from_non_admins' | 'allowed_groups'
+  | 'enabled'
+  | 'hide_email_from_non_admins'
+  | 'provider_groups'
 >
 
 const numericFields: Array<{
@@ -107,7 +113,7 @@ export function AccountPoolSettingsFields(
               <FormLabel>{t('Enable account pool')}</FormLabel>
               <FormDescription>
                 {t(
-                  'Show the read-only Codex account pool to administrators and allowed groups.'
+                  'Show the read-only account pool to administrators and allowed groups.'
                 )}
               </FormDescription>
             </SettingsSwitchContent>
@@ -148,26 +154,38 @@ export function AccountPoolSettingsFields(
 
       <FormField
         control={props.form.control}
-        name='allowed_groups'
+        name='provider_groups'
         render={({ field }) => (
           <FormItem className='lg:col-span-2'>
             <FormLabel>{t('Allowed user groups')}</FormLabel>
-            <FormControl>
-              <MultiSelect
-                options={props.groups.map((group) => ({
-                  label: group,
-                  value: group,
-                }))}
-                selected={field.value ?? []}
-                onChange={field.onChange}
-                placeholder={t('Select groups')}
-                disabled={props.disabled}
-                maxVisibleChips={8}
-              />
-            </FormControl>
+            <div className='grid gap-3 md:grid-cols-3'>
+              {ACCOUNT_POOL_PROVIDERS.map((provider) => (
+                <div key={provider} className='space-y-1.5'>
+                  <div className='text-sm font-medium'>
+                    {ACCOUNT_POOL_PROVIDER_LABELS[provider]}
+                  </div>
+                  <FormControl>
+                    <MultiSelect
+                      options={props.groups.map((group) => ({
+                        label: group,
+                        value: group,
+                      }))}
+                      selected={field.value?.[provider] ?? []}
+                      onChange={(values) =>
+                        field.onChange({ ...field.value, [provider]: values })
+                      }
+                      placeholder={t('Select groups')}
+                      aria-label={ACCOUNT_POOL_PROVIDER_LABELS[provider]}
+                      disabled={props.disabled}
+                      maxVisibleChips={8}
+                    />
+                  </FormControl>
+                </div>
+              ))}
+            </div>
             <FormDescription>
               {t(
-                'An empty list keeps the pool administrator-only. Any matching effective group grants access.'
+                'Users can only see a provider after being assigned one of its groups. An empty list keeps that provider administrator-only.'
               )}
             </FormDescription>
             <FormMessage />

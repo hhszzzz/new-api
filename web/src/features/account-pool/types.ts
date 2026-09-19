@@ -23,6 +23,15 @@ export type AccountPoolStatus =
   | 'unavailable'
   | 'error'
 
+export type AccountPoolProvider = 'codex' | 'claude' | 'antigravity'
+
+export type AccountPoolSummaryCounts = {
+  total: number
+  available: number
+  limited: number
+  error: number
+}
+
 export type AccountPoolWindow = {
   used_percent: number | null
   remaining_percent: number | null
@@ -30,15 +39,23 @@ export type AccountPoolWindow = {
   limit_window_seconds: number | null
 }
 
+export type AccountPoolWindowGroup = {
+  label: string | null
+  primary_window: AccountPoolWindow | null
+  secondary_window: AccountPoolWindow | null
+}
+
 export type AccountPoolAccount = {
   public_id: string
   display_name: string
+  provider: AccountPoolProvider
   email?: string
   status: AccountPoolStatus
   plan: string
   subscription_active_until: string | null
   primary_window: AccountPoolWindow | null
   secondary_window: AccountPoolWindow | null
+  window_groups: AccountPoolWindowGroup[]
   updated_at: string
   stale: boolean
 }
@@ -50,19 +67,15 @@ export type AccountPoolSnapshot = {
   manual_refresh_available_at: string
   stale: boolean
   partial: boolean
-  summary: {
-    total: number
-    available: number
-    limited: number
-    error: number
-  }
+  summary: AccountPoolSummaryCounts
+  provider_summaries: Partial<Record<AccountPoolProvider, AccountPoolSummaryCounts>>
   accounts: AccountPoolAccount[]
 }
 
 export type AccountPoolSettings = {
   enabled: boolean
   hide_email_from_non_admins: boolean
-  allowed_groups: string[]
+  provider_groups: Partial<Record<AccountPoolProvider, string[]>>
   regular_refresh_seconds: number
   near_reset_threshold_seconds: number
   near_reset_refresh_seconds: number

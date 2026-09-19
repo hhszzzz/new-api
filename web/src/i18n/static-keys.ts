@@ -22,7 +22,7 @@ export const STATIC_I18N_KEYS = [
   'Target protocol conflicts with legacy converter',
   'Target protocol does not support this operation',
   // Billing expression simulation diagnostics and conditional labels.
-  '{{start}}–{{end}}',
+  '{{start}} - {{end}}',
 
   // Billing expression simulation diagnostics and conditional labels.
   'Outside these times: {{condition}}',
@@ -771,4 +771,7 @@ export const STATIC_I18N_KEYS = [
   'Highest IQ',
   'Best value for the price',
   'Only when clearly better',
+  // Account pool provider quotas (upstream window-group labelKey values).
+  'Gemini models',
+  'Claude and GPT models',
 ] as const

@@ -34,6 +34,15 @@ const (
 	accountPoolCodexUsageURL = "https://chatgpt.com/backend-api/wham/usage"
 	accountPoolUsageLimited  = "usage_limit_reached"
 
+	accountPoolClaudeUsageURL   = "https://api.anthropic.com/api/oauth/usage"
+	accountPoolClaudeProfileURL = "https://api.anthropic.com/api/oauth/profile"
+	accountPoolClaudeBetaHeader = "oauth-2025-04-20"
+
+	accountPoolAntigravityQuotaDailyURL = "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
+	accountPoolAntigravityQuotaProdURL  = "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
+	accountPoolAntigravityAssistURL     = "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"
+	accountPoolAntigravityUserAgent     = "antigravity/cli/1.0.13 (aidev_client; os_type=darwin; arch=arm64)"
+
 	accountPoolPerRequestTimeout = 12 * time.Second
 	accountPoolRoundTimeout      = 20 * time.Second
 	accountPoolMaxConcurrency    = 4
@@ -45,6 +54,13 @@ var (
 	ErrAccountPoolNotConfigured = errors.New("account pool management connection is not configured")
 	ErrAccountPoolUnavailable   = errors.New("account pool quota data is unavailable")
 	errAccountPoolUsageLimited  = errors.New("account pool usage limit reached")
+
+	accountPoolAntigravityQuotaURLs = []string{accountPoolAntigravityQuotaDailyURL, accountPoolAntigravityQuotaProdURL}
+	accountPoolProviderLabels       = map[string]string{
+		account_pool_setting.ProviderCodex:       "Codex",
+		account_pool_setting.ProviderClaude:      "Claude",
+		account_pool_setting.ProviderAntigravity: "Antigravity",
+	}
 )
 
 type AccountPoolWindow struct {
@@ -54,17 +70,25 @@ type AccountPoolWindow struct {
 	LimitWindowSeconds *int64     `json:"limit_window_seconds"`
 }
 
+type AccountPoolWindowGroup struct {
+	Label           string             `json:"label"`
+	PrimaryWindow   *AccountPoolWindow `json:"primary_window"`
+	SecondaryWindow *AccountPoolWindow `json:"secondary_window"`
+}
+
 type AccountPoolViewAccount struct {
-	PublicID                string             `json:"public_id"`
-	DisplayName             string             `json:"display_name"`
-	Email                   *string            `json:"email,omitempty"`
-	Status                  string             `json:"status"`
-	Plan                    string             `json:"plan"`
-	SubscriptionActiveUntil *time.Time         `json:"subscription_active_until"`
-	PrimaryWindow           *AccountPoolWindow `json:"primary_window"`
-	SecondaryWindow         *AccountPoolWindow `json:"secondary_window"`
-	UpdatedAt               time.Time          `json:"updated_at"`
-	Stale                   bool               `json:"stale"`
+	PublicID                string                   `json:"public_id"`
+	Provider                string                   `json:"provider"`
+	DisplayName             string                   `json:"display_name"`
+	Email                   *string                  `json:"email,omitempty"`
+	Status                  string                   `json:"status"`
+	Plan                    string                   `json:"plan"`
+	SubscriptionActiveUntil *time.Time               `json:"subscription_active_until"`
+	PrimaryWindow           *AccountPoolWindow       `json:"primary_window"`
+	SecondaryWindow         *AccountPoolWindow       `json:"secondary_window"`
+	WindowGroups            []AccountPoolWindowGroup `json:"window_groups"`
+	UpdatedAt               time.Time                `json:"updated_at"`
+	Stale                   bool                     `json:"stale"`
 }
 
 type AccountPoolSummary struct {
@@ -75,14 +99,15 @@ type AccountPoolSummary struct {
 }
 
 type AccountPoolView struct {
-	ServerTime               time.Time                `json:"server_time"`
-	UpdatedAt                time.Time                `json:"updated_at"`
-	NextRefreshAt            time.Time                `json:"next_refresh_at"`
-	ManualRefreshAvailableAt time.Time                `json:"manual_refresh_available_at"`
-	Stale                    bool                     `json:"stale"`
-	Partial                  bool                     `json:"partial"`
-	Summary                  AccountPoolSummary       `json:"summary"`
-	Accounts                 []AccountPoolViewAccount `json:"accounts"`
+	ServerTime               time.Time                     `json:"server_time"`
+	UpdatedAt                time.Time                     `json:"updated_at"`
+	NextRefreshAt            time.Time                     `json:"next_refresh_at"`
+	ManualRefreshAvailableAt time.Time                     `json:"manual_refresh_available_at"`
+	Stale                    bool                          `json:"stale"`
+	Partial                  bool                          `json:"partial"`
+	Summary                  AccountPoolSummary            `json:"summary"`
+	ProviderSummaries        map[string]AccountPoolSummary `json:"provider_summaries"`
+	Accounts                 []AccountPoolViewAccount      `json:"accounts"`
 }
 
 type AccountPoolSyncStatus struct {
@@ -107,6 +132,7 @@ type accountPoolRuntimeConfig struct {
 
 type accountPoolAccount struct {
 	PublicID                string
+	Provider                string
 	DisplayName             string
 	Email                   string
 	Status                  string
@@ -114,6 +140,7 @@ type accountPoolAccount struct {
 	SubscriptionActiveUntil *time.Time
 	PrimaryWindow           *AccountPoolWindow
 	SecondaryWindow         *AccountPoolWindow
+	WindowGroups            []AccountPoolWindowGroup
 	UpdatedAt               time.Time
 	Stale                   bool
 }
@@ -167,20 +194,20 @@ func newAccountPoolHTTPClient() *http.Client {
 	}
 }
 
-func GetAccountPool(ctx context.Context, includeEmail bool) (AccountPoolView, error) {
+func GetAccountPool(ctx context.Context, role int, userGroups []string, includeEmail bool) (AccountPoolView, error) {
 	snapshot, err := defaultAccountPoolManager.get(ctx)
 	if err != nil {
 		return AccountPoolView{}, err
 	}
-	return defaultAccountPoolManager.buildView(snapshot, includeEmail), nil
+	return defaultAccountPoolManager.buildView(snapshot, role, userGroups, includeEmail), nil
 }
 
-func RefreshAccountPool(ctx context.Context, includeEmail bool) (AccountPoolView, error) {
+func RefreshAccountPool(ctx context.Context, role int, userGroups []string, includeEmail bool) (AccountPoolView, error) {
 	snapshot, err := defaultAccountPoolManager.refreshManually(ctx)
 	if err != nil {
 		return AccountPoolView{}, err
 	}
-	return defaultAccountPoolManager.buildView(snapshot, includeEmail), nil
+	return defaultAccountPoolManager.buildView(snapshot, role, userGroups, includeEmail), nil
 }
 
 func GetAccountPoolSyncStatus() AccountPoolSyncStatus {
@@ -267,9 +294,7 @@ func (manager *accountPoolManager) performRefresh() (*accountPoolSnapshot, error
 		mergeStaleAccountPoolRows(result.accounts, previous.Accounts)
 	}
 	sortAccountPoolAccounts(result.accounts)
-	for index := range result.accounts {
-		result.accounts[index].DisplayName = fmt.Sprintf("Codex #%d", index+1)
-	}
+	renumberAccountPoolDisplayNames(result.accounts)
 
 	nextRefreshAt, overdue := calculateAccountPoolNextRefresh(result.accounts, *setting, now)
 	partial := result.failed > 0
@@ -328,8 +353,9 @@ func (manager *accountPoolManager) recordFailedSync() {
 	manager.mu.Unlock()
 }
 
-func (manager *accountPoolManager) buildView(snapshot *accountPoolSnapshot, includeEmail bool) AccountPoolView {
+func (manager *accountPoolManager) buildView(snapshot *accountPoolSnapshot, role int, userGroups []string, includeEmail bool) AccountPoolView {
 	now := manager.now()
+	setting := manager.loadSetting()
 	manager.mu.RLock()
 	manualAvailableAt := manager.manualRefreshAvailableAt
 	manager.mu.RUnlock()
@@ -344,18 +370,23 @@ func (manager *accountPoolManager) buildView(snapshot *accountPoolSnapshot, incl
 		ManualRefreshAvailableAt: manualAvailableAt,
 		Stale:                    snapshot.Stale,
 		Partial:                  snapshot.Partial,
-		Summary:                  snapshot.Summary,
+		ProviderSummaries:        map[string]AccountPoolSummary{},
 		Accounts:                 make([]AccountPoolViewAccount, 0, len(snapshot.Accounts)),
 	}
 	for _, account := range snapshot.Accounts {
+		if setting == nil || !setting.CanAccessProvider(role, userGroups, account.Provider) {
+			continue
+		}
 		item := AccountPoolViewAccount{
 			PublicID:                account.PublicID,
+			Provider:                account.Provider,
 			DisplayName:             account.DisplayName,
 			Status:                  account.Status,
 			Plan:                    account.Plan,
 			SubscriptionActiveUntil: copyTimePointer(account.SubscriptionActiveUntil),
 			PrimaryWindow:           copyAccountPoolWindow(account.PrimaryWindow),
 			SecondaryWindow:         copyAccountPoolWindow(account.SecondaryWindow),
+			WindowGroups:            copyAccountPoolWindowGroups(account.WindowGroups),
 			UpdatedAt:               account.UpdatedAt,
 			Stale:                   account.Stale,
 		}
@@ -363,6 +394,8 @@ func (manager *accountPoolManager) buildView(snapshot *accountPoolSnapshot, incl
 			email := account.Email
 			item.Email = &email
 		}
+		view.ProviderSummaries[account.Provider] = incrementAccountPoolSummary(view.ProviderSummaries[account.Provider], account.Status)
+		view.Summary = incrementAccountPoolSummary(view.Summary, account.Status)
 		view.Accounts = append(view.Accounts, item)
 	}
 	return view
@@ -407,16 +440,18 @@ func (manager *accountPoolManager) fetchRound(ctx context.Context, config accoun
 		account   accountPoolAccount
 		authIndex string
 		accountID string
+		projectID string
 		ready     bool
 	}
 	prepared := make([]preparedAccount, 0, len(files))
 	preparedByID := make(map[string]int, len(files))
 	for _, file := range files {
-		account, authIndex, accountID, ready := buildAccountPoolAccount(file, config.key, now)
+		provider := accountPoolFileProvider(file)
+		account, authIndex, accountID, projectID, ready := buildAccountPoolAccount(file, provider, config.key, now)
 		if existingIndex, exists := preparedByID[account.PublicID]; exists {
 			existing := &prepared[existingIndex]
 			if !existing.ready && ready {
-				*existing = preparedAccount{account: account, authIndex: authIndex, accountID: accountID, ready: true}
+				*existing = preparedAccount{account: account, authIndex: authIndex, accountID: accountID, projectID: projectID, ready: true}
 				continue
 			}
 			if existing.account.Email == "" {
@@ -432,13 +467,15 @@ func (manager *accountPoolManager) fetchRound(ctx context.Context, config accoun
 		}
 		preparedByID[account.PublicID] = len(prepared)
 		prepared = append(prepared, preparedAccount{
-			account: account, authIndex: authIndex, accountID: accountID, ready: ready,
+			account: account, authIndex: authIndex, accountID: accountID, projectID: projectID, ready: ready,
 		})
 	}
 	type pendingAccount struct {
 		index     int
+		provider  string
 		authIndex string
 		accountID string
+		projectID string
 	}
 	pending := make([]pendingAccount, 0, len(prepared))
 	for _, candidate := range prepared {
@@ -446,8 +483,10 @@ func (manager *accountPoolManager) fetchRound(ctx context.Context, config accoun
 		if candidate.ready {
 			pending = append(pending, pendingAccount{
 				index:     len(result.accounts) - 1,
+				provider:  candidate.account.Provider,
 				authIndex: candidate.authIndex,
 				accountID: candidate.accountID,
+				projectID: candidate.projectID,
 			})
 		} else if candidate.account.Status == "error" {
 			result.failed++
@@ -482,29 +521,29 @@ func (manager *accountPoolManager) fetchRound(ctx context.Context, config accoun
 				return
 			}
 			requestContext, requestCancel := context.WithTimeout(ctx, accountPoolPerRequestTimeout)
-			payload, requestErr := manager.fetchCodexUsage(requestContext, config, account.authIndex, account.accountID)
+			payload, requestErr := manager.fetchAccountPoolQuota(requestContext, config, account.provider, account.authIndex, account.accountID, account.projectID)
 			requestCancel()
-			resultChannel <- quotaResult{index: account.index, payload: payload, err: requestErr}
+			resultChannel <- quotaResult{index: account.index, err: requestErr, payload: payload}
 		}()
 	}
 	waitGroup.Wait()
 	close(resultChannel)
 
 	for quota := range resultChannel {
+		if errors.Is(quota.err, errAccountPoolUsageLimited) {
+			result.accounts[quota.index].Status = "limited"
+			result.accounts[quota.index].UpdatedAt = now
+			result.accounts[quota.index].Stale = false
+			result.succeeded++
+			continue
+		}
 		if quota.err != nil {
-			if errors.Is(quota.err, errAccountPoolUsageLimited) {
-				result.accounts[quota.index].Status = "limited"
-				result.accounts[quota.index].UpdatedAt = now
-				result.accounts[quota.index].Stale = false
-				result.succeeded++
-				continue
-			}
 			result.failed++
 			result.accounts[quota.index].Status = "error"
 			result.accounts[quota.index].Stale = true
 			continue
 		}
-		if applyCodexUsagePayload(&result.accounts[quota.index], quota.payload, now) {
+		if limited := applyAccountPoolUsagePayload(&result.accounts[quota.index], quota.payload, now); limited {
 			result.accounts[quota.index].Status = "limited"
 		} else {
 			result.accounts[quota.index].Status = "available"
@@ -542,39 +581,59 @@ func (manager *accountPoolManager) fetchAuthFiles(ctx context.Context, config ac
 	}
 	files := make([]map[string]interface{}, 0, len(payload.Files))
 	for _, file := range payload.Files {
-		if isCodexAuthFile(file) {
+		if accountPoolFileProvider(file) != "" {
 			files = append(files, file)
 		}
 	}
 	return files, nil
 }
 
-func (manager *accountPoolManager) fetchCodexUsage(
+// fetchAccountPoolQuota probes per-account usage via the management api-call
+// endpoint, dispatching on the credential provider kind.
+func (manager *accountPoolManager) fetchAccountPoolQuota(
+	ctx context.Context,
+	config accountPoolRuntimeConfig,
+	provider string,
+	authIndex string,
+	accountID string,
+	projectID string,
+) (map[string]interface{}, error) {
+	switch provider {
+	case account_pool_setting.ProviderClaude:
+		return manager.fetchClaudeUsage(ctx, config, authIndex)
+	case account_pool_setting.ProviderAntigravity:
+		return manager.fetchAntigravityQuota(ctx, config, authIndex, projectID)
+	default:
+		return manager.fetchCodexUsage(ctx, config, authIndex, accountID)
+	}
+}
+
+func (manager *accountPoolManager) callAccountPoolAPI(
 	ctx context.Context,
 	config accountPoolRuntimeConfig,
 	authIndex string,
-	accountID string,
+	method string,
+	url string,
+	headers map[string]string,
+	data map[string]interface{},
 ) (map[string]interface{}, error) {
-	headers := map[string]string{
-		"Authorization": "Bearer $TOKEN$",
-		"Accept":        "application/json",
-		"Content-Type":  "application/json",
-		"OpenAI-Beta":   "codex-1",
-		"Originator":    "Codex Desktop",
-		"User-Agent":    "codex_cli_rs/0.76.0 (Debian 13.0.0; x86_64) WindowsTerminal",
-	}
-	if accountID != "" {
-		headers["Chatgpt-Account-Id"] = accountID
-	}
-	body, err := common.Marshal(map[string]interface{}{
+	requestPayload := map[string]interface{}{
 		"auth_index": authIndex,
-		"method":     http.MethodGet,
-		"url":        accountPoolCodexUsageURL,
+		"method":     method,
+		"url":        url,
 		"header":     headers,
-	})
+	}
+	if data != nil {
+		requestPayload["data"] = data
+	}
+	body, err := common.Marshal(requestPayload)
 	if err != nil {
 		return nil, err
 	}
+	return manager.postAccountPoolAPICall(ctx, config, body)
+}
+
+func (manager *accountPoolManager) postAccountPoolAPICall(ctx context.Context, config accountPoolRuntimeConfig, body []byte) (map[string]interface{}, error) {
 	request, err := http.NewRequestWithContext(
 		ctx,
 		http.MethodPost,
@@ -611,6 +670,101 @@ func (manager *accountPoolManager) fetchCodexUsage(
 	}
 	if apiResponse.StatusCode < http.StatusOK || apiResponse.StatusCode >= http.StatusMultipleChoices {
 		return nil, ErrAccountPoolUnavailable
+	}
+	return payload, nil
+}
+
+func (manager *accountPoolManager) fetchClaudeUsage(
+	ctx context.Context,
+	config accountPoolRuntimeConfig,
+	authIndex string,
+) (map[string]interface{}, error) {
+	usagePayload, err := manager.callAccountPoolAPI(ctx, config, authIndex, http.MethodGet, accountPoolClaudeUsageURL, map[string]string{
+		"Authorization":  "Bearer $TOKEN$",
+		"Accept":         "application/json",
+		"Content-Type":   "application/json",
+		"anthropic-beta": accountPoolClaudeBetaHeader,
+	}, nil)
+	if err != nil {
+		return nil, err
+	}
+	profilePayload, err := manager.callAccountPoolAPI(ctx, config, authIndex, http.MethodGet, accountPoolClaudeProfileURL, map[string]string{
+		"Authorization": "Bearer $TOKEN$",
+		"Accept":        "application/json",
+	}, nil)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{
+		"kind":    "claude",
+		"usage":   usagePayload,
+		"profile": profilePayload,
+	}, nil
+}
+
+func (manager *accountPoolManager) fetchAntigravityQuota(
+	ctx context.Context,
+	config accountPoolRuntimeConfig,
+	authIndex string,
+	projectID string,
+) (map[string]interface{}, error) {
+	if projectID == "" {
+		return nil, ErrAccountPoolUnavailable
+	}
+	quotaHeaders := map[string]string{
+		"Authorization": "Bearer $TOKEN$",
+		"Content-Type":  "application/json",
+		"User-Agent":    accountPoolAntigravityUserAgent,
+	}
+	var quotaPayload map[string]interface{}
+	var quotaErr error
+	for _, quotaURL := range accountPoolAntigravityQuotaURLs {
+		quotaPayload, quotaErr = manager.callAccountPoolAPI(ctx, config, authIndex, http.MethodPost, quotaURL, quotaHeaders, map[string]interface{}{
+			"project": projectID,
+		})
+		if quotaErr == nil {
+			break
+		}
+		if errors.Is(quotaErr, errAccountPoolUsageLimited) {
+			return nil, quotaErr
+		}
+	}
+	if quotaErr != nil {
+		return nil, quotaErr
+	}
+	assistPayload, err := manager.callAccountPoolAPI(ctx, config, authIndex, http.MethodPost, accountPoolAntigravityAssistURL, quotaHeaders, map[string]interface{}{
+		"metadata": map[string]interface{}{"ideType": "ANTIGRAVITY"},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{
+		"kind":        "antigravity",
+		"quota":       quotaPayload,
+		"code_assist": assistPayload,
+	}, nil
+}
+
+func (manager *accountPoolManager) fetchCodexUsage(
+	ctx context.Context,
+	config accountPoolRuntimeConfig,
+	authIndex string,
+	accountID string,
+) (map[string]interface{}, error) {
+	headers := map[string]string{
+		"Authorization": "Bearer $TOKEN$",
+		"Accept":        "application/json",
+		"Content-Type":  "application/json",
+		"OpenAI-Beta":   "codex-1",
+		"Originator":    "Codex Desktop",
+		"User-Agent":    "codex_cli_rs/0.76.0 (Debian 13.0.0; x86_64) WindowsTerminal",
+	}
+	if accountID != "" {
+		headers["Chatgpt-Account-Id"] = accountID
+	}
+	payload, err := manager.callAccountPoolAPI(ctx, config, authIndex, http.MethodGet, accountPoolCodexUsageURL, headers, nil)
+	if err != nil {
+		return nil, err
 	}
 	if hasAccountPoolUsageErrorPayload(payload) {
 		return nil, ErrAccountPoolUnavailable
@@ -727,14 +881,24 @@ func hasAccountPoolUsageErrorPayload(payload map[string]interface{}) bool {
 }
 
 func isCodexAuthFile(file map[string]interface{}) bool {
-	provider := strings.ToLower(firstAccountPoolString(file, "type", "provider"))
-	if provider == "codex" {
-		return true
-	}
-	return strings.ToLower(firstAccountPoolString(file, "provider", "type")) == "codex"
+	return accountPoolFileProvider(file) == account_pool_setting.ProviderCodex
 }
 
-func buildAccountPoolAccount(file map[string]interface{}, idSecret string, now time.Time) (accountPoolAccount, string, string, bool) {
+func accountPoolFileProvider(file map[string]interface{}) string {
+	provider := strings.ToLower(firstAccountPoolString(file, "type", "provider"))
+	switch provider {
+	case account_pool_setting.ProviderCodex, account_pool_setting.ProviderClaude, account_pool_setting.ProviderAntigravity:
+		return provider
+	}
+	provider = strings.ToLower(firstAccountPoolString(file, "provider", "type"))
+	switch provider {
+	case account_pool_setting.ProviderCodex, account_pool_setting.ProviderClaude, account_pool_setting.ProviderAntigravity:
+		return provider
+	}
+	return ""
+}
+
+func buildAccountPoolAccount(file map[string]interface{}, provider string, idSecret string, now time.Time) (accountPoolAccount, string, string, string, bool) {
 	authIndex := normalizeAccountPoolAuthIndex(file["auth_index"])
 	name := firstAccountPoolString(file, "name")
 	plan := findAccountPoolString(file, "plan_type", "planType", "chatgpt_plan_type")
@@ -758,6 +922,7 @@ func buildAccountPoolAccount(file map[string]interface{}, idSecret string, now t
 	}
 	account := accountPoolAccount{
 		PublicID:                accountPoolPublicID(idSecret, name, authIndex),
+		Provider:                provider,
 		Email:                   findAccountPoolString(file, "email"),
 		Status:                  "available",
 		Plan:                    normalizeAccountPoolPlan(plan),
@@ -768,7 +933,7 @@ func buildAccountPoolAccount(file map[string]interface{}, idSecret string, now t
 	unavailable := firstAccountPoolBool(file, "unavailable")
 	if firstAccountPoolBool(file, "disabled") {
 		account.Status = "disabled"
-		return account, "", "", false
+		return account, "", "", "", false
 	}
 	statusMessage := firstAccountPoolValue(file, "status_message", "statusMessage")
 	usageLimited := (status == "error" || status == "unavailable" || unavailable) && isAccountPoolUsageLimitValue(statusMessage)
@@ -777,21 +942,31 @@ func buildAccountPoolAccount(file map[string]interface{}, idSecret string, now t
 	}
 	if !usageLimited && unavailable {
 		account.Status = "unavailable"
-		return account, "", "", false
+		return account, "", "", "", false
 	}
 	if !usageLimited && (status == "disabled" || status == "error" || status == "unavailable") {
 		account.Status = status
-		return account, "", "", false
+		return account, "", "", "", false
 	}
 	if authIndex == "" {
 		account.Status = "error"
-		return account, "", "", false
+		return account, "", "", "", false
 	}
-	accountID := findAccountPoolString(file, "chatgpt_account_id", "chatgptAccountId")
-	if accountID == "" {
-		accountID = firstAccountPoolString(authInfo, "chatgpt_account_id", "chatgptAccountId")
+	projectID := ""
+	accountID := ""
+	if provider == account_pool_setting.ProviderCodex {
+		accountID = findAccountPoolString(file, "chatgpt_account_id", "chatgptAccountId")
+		if accountID == "" {
+			accountID = firstAccountPoolString(authInfo, "chatgpt_account_id", "chatgptAccountId")
+		}
 	}
-	return account, authIndex, accountID, true
+	if provider == account_pool_setting.ProviderAntigravity {
+		projectID = firstAccountPoolString(file, "project_id", "projectId")
+		if projectID == "" {
+			projectID = firstAccountPoolString(authInfo, "project_id", "projectId")
+		}
+	}
+	return account, authIndex, accountID, projectID, true
 }
 
 func applyCodexUsagePayload(account *accountPoolAccount, payload map[string]interface{}, now time.Time) bool {
@@ -810,10 +985,194 @@ func applyCodexUsagePayload(account *accountPoolAccount, payload map[string]inte
 	primaryWindow, secondaryWindow = normalizeAccountPoolQuotaWindows(primaryWindow, secondaryWindow)
 	account.PrimaryWindow = primaryWindow
 	account.SecondaryWindow = secondaryWindow
+	account.WindowGroups = nil
+	if primaryWindow != nil || secondaryWindow != nil {
+		account.WindowGroups = []AccountPoolWindowGroup{{
+			PrimaryWindow:   primaryWindow,
+			SecondaryWindow: secondaryWindow,
+		}}
+	}
 	return firstAccountPoolBool(rateLimit, "limit_reached", "limitReached") ||
 		hasExplicitAccountPoolFalse(rateLimit, "allowed") ||
 		isAccountPoolQuotaWindowLimited(primary, primaryWindow) ||
 		isAccountPoolQuotaWindowLimited(secondary, secondaryWindow)
+}
+
+// applyAccountPoolUsagePayload dispatches a successful api-call payload to the
+// per-provider parser and reports whether any window is exhausted.
+func applyAccountPoolUsagePayload(account *accountPoolAccount, payload map[string]interface{}, now time.Time) bool {
+	switch account.Provider {
+	case account_pool_setting.ProviderClaude:
+		return applyClaudeUsagePayload(account, payload, now)
+	case account_pool_setting.ProviderAntigravity:
+		return applyAntigravityQuotaPayload(account, payload, now)
+	default:
+		return applyCodexUsagePayload(account, payload, now)
+	}
+}
+
+func applyClaudeUsagePayload(account *accountPoolAccount, payload map[string]interface{}, now time.Time) bool {
+	usage := firstAccountPoolMap(payload, "usage")
+	if usage == nil {
+		return false
+	}
+	fiveHour := firstAccountPoolMap(usage, "five_hour")
+	sevenDay := firstAccountPoolMap(usage, "seven_day")
+	account.PrimaryWindow = parseAccountPoolUtilizationWindow(fiveHour, now)
+	account.SecondaryWindow = parseAccountPoolUtilizationWindow(sevenDay, now)
+	account.WindowGroups = nil
+	if account.PrimaryWindow != nil || account.SecondaryWindow != nil {
+		account.WindowGroups = []AccountPoolWindowGroup{{
+			PrimaryWindow:   account.PrimaryWindow,
+			SecondaryWindow: account.SecondaryWindow,
+		}}
+	}
+	if profile := firstAccountPoolMap(payload, "profile"); profile != nil {
+		account.Plan = accountPoolClaudePlan(profile)
+	}
+	return isAccountPoolQuotaWindowLimited(nil, account.PrimaryWindow) ||
+		isAccountPoolQuotaWindowLimited(nil, account.SecondaryWindow)
+}
+
+func parseAccountPoolUtilizationWindow(source map[string]interface{}, now time.Time) *AccountPoolWindow {
+	if source == nil {
+		return nil
+	}
+	utilization, ok := firstAccountPoolNumber(source, "utilization")
+	if !ok {
+		return nil
+	}
+	used := math.Max(0, math.Min(100, utilization*100))
+	remaining := math.Max(0, math.Min(100, 100-used))
+	window := AccountPoolWindow{UsedPercent: &used, RemainingPercent: &remaining}
+	if resetAt := parseAccountPoolTime(firstAccountPoolValue(source, "resets_at", "resetsAt"), now, false); resetAt != nil {
+		window.ResetAt = resetAt
+	}
+	return &window
+}
+
+func accountPoolClaudePlan(profile map[string]interface{}) string {
+	accountInfo := firstAccountPoolMap(profile, "account")
+	organization := firstAccountPoolMap(profile, "organization")
+	organizationType := ""
+	if organization != nil {
+		organizationType = strings.ToLower(firstAccountPoolString(organization, "organization_type", "organizationType"))
+	}
+	hasMax := accountInfo != nil && firstAccountPoolBool(accountInfo, "has_claude_max", "hasClaudeMax")
+	hasPro := accountInfo != nil && firstAccountPoolBool(accountInfo, "has_claude_pro", "hasClaudePro")
+	switch {
+	case hasMax:
+		return "max"
+	case hasPro:
+		return "pro"
+	case organizationType == "claude_team":
+		return "team"
+	case organizationType != "" && organizationType != "claude_pro" && organizationType != "unknown":
+		return organizationType
+	default:
+		return "free"
+	}
+}
+
+func applyAntigravityQuotaPayload(account *accountPoolAccount, payload map[string]interface{}, now time.Time) bool {
+	quota := firstAccountPoolMap(payload, "quota")
+	if quota == nil {
+		return false
+	}
+	if assist := firstAccountPoolMap(payload, "code_assist"); assist != nil {
+		account.Plan = accountPoolAntigravityPlan(assist)
+	}
+	groups, _ := quota["groups"].([]interface{})
+	if len(groups) == 0 {
+		return false
+	}
+	var windowGroups []AccountPoolWindowGroup
+	limited := false
+	for _, rawGroup := range groups {
+		group, ok := rawGroup.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		label := firstAccountPoolString(group, "displayName", "display_name")
+		buckets, _ := group["buckets"].([]interface{})
+		var primary *AccountPoolWindow
+		var secondary *AccountPoolWindow
+		for _, rawBucket := range buckets {
+			bucket, ok := rawBucket.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			window := parseAccountPoolRemainingWindow(bucket, now)
+			if window == nil {
+				continue
+			}
+			if isAccountPoolQuotaWindowLimited(nil, window) {
+				limited = true
+			}
+			switch strings.ToLower(firstAccountPoolString(bucket, "window")) {
+			case "weekly":
+				if secondary == nil {
+					secondary = window
+				}
+			default:
+				if primary == nil {
+					primary = window
+				}
+			}
+		}
+		if primary == nil && secondary == nil {
+			continue
+		}
+		windowGroups = append(windowGroups, AccountPoolWindowGroup{
+			Label:           label,
+			PrimaryWindow:   primary,
+			SecondaryWindow: secondary,
+		})
+	}
+	if len(windowGroups) == 0 {
+		return false
+	}
+	account.WindowGroups = windowGroups
+	account.PrimaryWindow = windowGroups[0].PrimaryWindow
+	account.SecondaryWindow = windowGroups[0].SecondaryWindow
+	return limited
+}
+
+func parseAccountPoolRemainingWindow(bucket map[string]interface{}, now time.Time) *AccountPoolWindow {
+	fraction, ok := firstAccountPoolNumber(bucket, "remainingFraction", "remaining_fraction")
+	if !ok {
+		return nil
+	}
+	fraction = math.Max(0, math.Min(1, fraction))
+	remaining := math.Round(fraction * 100)
+	used := math.Max(0, math.Min(100, 100-remaining))
+	window := AccountPoolWindow{UsedPercent: &used, RemainingPercent: &remaining}
+	if resetAt := parseAccountPoolTime(firstAccountPoolValue(bucket, "resetTime", "reset_time"), now, false); resetAt != nil {
+		window.ResetAt = resetAt
+	}
+	return &window
+}
+
+func accountPoolAntigravityPlan(assist map[string]interface{}) string {
+	tier := firstAccountPoolMap(assist, "paidTier")
+	if tier == nil {
+		tier = firstAccountPoolMap(assist, "currentTier")
+	}
+	if tier == nil {
+		return "unknown"
+	}
+	switch strings.ToLower(firstAccountPoolString(tier, "id")) {
+	case "free-tier":
+		return "free"
+	case "g1-pro-tier":
+		return "pro"
+	case "g1-ultra-tier":
+		return "ultra"
+	case "g1-ultra-lite-tier":
+		return "ultra-lite"
+	default:
+		return normalizeAccountPoolPlan(firstAccountPoolString(tier, "id"))
+	}
 }
 
 func isAccountPoolQuotaWindowLimited(source map[string]interface{}, window *AccountPoolWindow) bool {
@@ -871,7 +1230,7 @@ func calculateAccountPoolNextRefresh(accounts []accountPoolAccount, setting acco
 	overdue := false
 
 	for _, account := range accounts {
-		for _, window := range []*AccountPoolWindow{account.PrimaryWindow, account.SecondaryWindow} {
+		for _, window := range accountPoolAccountWindows(account) {
 			if window == nil || window.ResetAt == nil {
 				continue
 			}
@@ -897,6 +1256,17 @@ func calculateAccountPoolNextRefresh(accounts []accountPoolAccount, setting acco
 		next = nextAccountPoolRefreshBoundary(now, nearInterval)
 	}
 	return next, overdue
+}
+
+func accountPoolAccountWindows(account accountPoolAccount) []*AccountPoolWindow {
+	if len(account.WindowGroups) == 0 {
+		return []*AccountPoolWindow{account.PrimaryWindow, account.SecondaryWindow}
+	}
+	windows := make([]*AccountPoolWindow, 0, len(account.WindowGroups)*2)
+	for _, group := range account.WindowGroups {
+		windows = append(windows, group.PrimaryWindow, group.SecondaryWindow)
+	}
+	return windows
 }
 
 func nextAccountPoolRefreshBoundary(now time.Time, interval time.Duration) time.Time {
@@ -930,13 +1300,35 @@ func mergeStaleAccountPoolRows(accounts []accountPoolAccount, previous []account
 		}
 		accounts[index].PrimaryWindow = copyAccountPoolWindow(old.PrimaryWindow)
 		accounts[index].SecondaryWindow = copyAccountPoolWindow(old.SecondaryWindow)
+		accounts[index].WindowGroups = copyAccountPoolWindowGroups(old.WindowGroups)
 		accounts[index].UpdatedAt = old.UpdatedAt
 		accounts[index].Stale = true
 	}
 }
 
+func renumberAccountPoolDisplayNames(accounts []accountPoolAccount) {
+	counters := make(map[string]int, 3)
+	for index := range accounts {
+		label := accountPoolProviderLabel(accounts[index].Provider)
+		counters[accounts[index].Provider]++
+		accounts[index].DisplayName = fmt.Sprintf("%s #%d", label, counters[accounts[index].Provider])
+	}
+}
+
+func accountPoolProviderLabel(provider string) string {
+	if label, ok := accountPoolProviderLabels[provider]; ok {
+		return label
+	}
+	return strings.Title(provider)
+}
+
 func sortAccountPoolAccounts(accounts []accountPoolAccount) {
 	sort.SliceStable(accounts, func(left int, right int) bool {
+		leftProvider := accounts[left].Provider
+		rightProvider := accounts[right].Provider
+		if leftProvider != rightProvider {
+			return providerSortOrder(leftProvider) < providerSortOrder(rightProvider)
+		}
 		leftEmail := strings.ToLower(accounts[left].Email)
 		rightEmail := strings.ToLower(accounts[right].Email)
 		if leftEmail != rightEmail {
@@ -950,6 +1342,30 @@ func sortAccountPoolAccounts(accounts []accountPoolAccount) {
 		}
 		return accounts[left].PublicID < accounts[right].PublicID
 	})
+}
+
+func providerSortOrder(provider string) int {
+	switch provider {
+	case account_pool_setting.ProviderClaude:
+		return 1
+	case account_pool_setting.ProviderAntigravity:
+		return 2
+	default:
+		return 0
+	}
+}
+
+func incrementAccountPoolSummary(summary AccountPoolSummary, status string) AccountPoolSummary {
+	switch status {
+	case "available":
+		summary.Available++
+	case "limited":
+		summary.Limited++
+	default:
+		summary.Error++
+	}
+	summary.Total++
+	return summary
 }
 
 func summarizeAccountPoolAccounts(accounts []accountPoolAccount) AccountPoolSummary {
@@ -1281,8 +1697,24 @@ func cloneAccountPoolSnapshot(snapshot *accountPoolSnapshot) *accountPoolSnapsho
 		copy.Accounts[index].SubscriptionActiveUntil = copyTimePointer(account.SubscriptionActiveUntil)
 		copy.Accounts[index].PrimaryWindow = copyAccountPoolWindow(account.PrimaryWindow)
 		copy.Accounts[index].SecondaryWindow = copyAccountPoolWindow(account.SecondaryWindow)
+		copy.Accounts[index].WindowGroups = copyAccountPoolWindowGroups(account.WindowGroups)
 	}
 	return &copy
+}
+
+func copyAccountPoolWindowGroups(groups []AccountPoolWindowGroup) []AccountPoolWindowGroup {
+	if groups == nil {
+		return nil
+	}
+	copied := make([]AccountPoolWindowGroup, len(groups))
+	for index, group := range groups {
+		copied[index] = AccountPoolWindowGroup{
+			Label:           group.Label,
+			PrimaryWindow:   copyAccountPoolWindow(group.PrimaryWindow),
+			SecondaryWindow: copyAccountPoolWindow(group.SecondaryWindow),
+		}
+	}
+	return copied
 }
 
 func copyAccountPoolWindow(window *AccountPoolWindow) *AccountPoolWindow {

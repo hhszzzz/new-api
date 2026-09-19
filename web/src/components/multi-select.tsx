@@ -48,6 +48,7 @@ interface MultiSelectProps {
   selected: string[]
   onChange: (values: string[]) => void
   placeholder?: string
+  'aria-label'?: string
   className?: string
   allowCreate?: boolean
   /**
@@ -346,7 +347,7 @@ export function MultiSelect(props: MultiSelectProps) {
               : undefined
           }
           onKeyDown={handleKeyDown}
-          aria-label={placeholder}
+          aria-label={props['aria-label'] ?? placeholder}
         />
       </ComboboxChips>
 

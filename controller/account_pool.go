@@ -40,7 +40,7 @@ func (request accountPoolSettingsRequest) withPrivacyDefault(current *account_po
 }
 
 func GetAccountPool(c *gin.Context) {
-	role, allowed := authorizeAccountPool(c)
+	role, groups, allowed := authorizeAccountPool(c)
 	if !allowed {
 		respondAccountPoolError(c, http.StatusForbidden, "account_pool_forbidden", "Account pool access is not allowed")
 		return
@@ -48,6 +48,8 @@ func GetAccountPool(c *gin.Context) {
 
 	view, err := service.GetAccountPool(
 		c.Request.Context(),
+		role,
+		groups,
 		account_pool_setting.ShouldIncludeEmail(role),
 	)
 	if err != nil {
@@ -58,7 +60,7 @@ func GetAccountPool(c *gin.Context) {
 }
 
 func RefreshAccountPool(c *gin.Context) {
-	role, allowed := authorizeAccountPool(c)
+	role, groups, allowed := authorizeAccountPool(c)
 	if !allowed {
 		respondAccountPoolError(c, http.StatusForbidden, "account_pool_forbidden", "Account pool access is not allowed")
 		return
@@ -66,6 +68,8 @@ func RefreshAccountPool(c *gin.Context) {
 
 	view, err := service.RefreshAccountPool(
 		c.Request.Context(),
+		role,
+		groups,
 		account_pool_setting.ShouldIncludeEmail(role),
 	)
 	if err != nil {
@@ -112,10 +116,19 @@ func UpdateAccountPoolSettings(c *gin.Context) {
 		return
 	}
 	availableGroups := ratio_setting.GetGroupRatioCopy()
-	for _, group := range prepared.AllowedGroups {
-		if _, exists := availableGroups[group]; !exists {
-			respondAccountPoolError(c, http.StatusBadRequest, "account_pool_settings_invalid", "Allowed groups must reference existing user groups")
+	for provider, providerGroups := range prepared.ProviderGroups {
+		if len(providerGroups) == 0 {
+			continue
+		}
+		if !account_pool_setting.IsKnownProvider(provider) {
+			respondAccountPoolError(c, http.StatusBadRequest, "account_pool_settings_invalid", "Provider groups reference an unknown provider")
 			return
+		}
+		for _, group := range providerGroups {
+			if _, exists := availableGroups[group]; !exists {
+				respondAccountPoolError(c, http.StatusBadRequest, "account_pool_settings_invalid", "Provider groups must reference existing user groups")
+				return
+			}
 		}
 	}
 	if err := model.UpdateAccountPoolSetting(prepared); err != nil {
@@ -126,7 +139,7 @@ func UpdateAccountPoolSettings(c *gin.Context) {
 	recordManageAudit(c, "option.account_pool.update", map[string]interface{}{
 		"enabled":                    prepared.Enabled,
 		"hide_email_from_non_admins": prepared.HideEmailFromNonAdmins,
-		"allowed_groups":             prepared.AllowedGroups,
+		"provider_groups":            prepared.ProviderGroups,
 	})
 
 	response := accountPoolSettingsResponse{
@@ -136,7 +149,7 @@ func UpdateAccountPoolSettings(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": response})
 }
 
-func authorizeAccountPool(c *gin.Context) (int, bool) {
+func authorizeAccountPool(c *gin.Context) (int, []string, bool) {
 	role := c.GetInt("role")
 	groups := common.GetContextKeyStringSlice(c, constant.ContextKeyUserGroups)
 	if len(groups) == 0 {
@@ -144,7 +157,7 @@ func authorizeAccountPool(c *gin.Context) (int, bool) {
 			groups = []string{legacyGroup}
 		}
 	}
-	return role, account_pool_setting.CanAccess(role, groups)
+	return role, groups, account_pool_setting.CanAccess(role, groups)
 }
 
 func respondAccountPoolServiceError(c *gin.Context, err error) {

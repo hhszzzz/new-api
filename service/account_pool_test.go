@@ -85,11 +85,6 @@ func (fake *accountPoolFakeManagement) handle(writer http.ResponseWriter, reques
 		writeAccountPoolTestJSON(fake.t, writer, http.StatusOK, map[string]interface{}{
 			"files": []map[string]interface{}{
 				codexFile,
-				{
-					"name":       "claude.json",
-					"type":       "claude",
-					"auth_index": "must-not-be-called",
-				},
 			},
 		})
 	case "/v0/management/api-call":
@@ -145,7 +140,10 @@ func (fake *accountPoolFakeManagement) manager(now time.Time) *accountPoolManage
 	}
 	manager.loadSetting = func() *account_pool_setting.Setting {
 		copy := setting
-		copy.AllowedGroups = append([]string(nil), setting.AllowedGroups...)
+		copy.ProviderGroups = map[string][]string{}
+		for provider, groups := range setting.ProviderGroups {
+			copy.ProviderGroups[provider] = append([]string(nil), groups...)
+		}
 		return &copy
 	}
 	return manager
@@ -155,7 +153,7 @@ func accountPoolTestSetting() account_pool_setting.Setting {
 	return account_pool_setting.Setting{
 		Enabled:                   true,
 		HideEmailFromNonAdmins:    true,
-		AllowedGroups:             []string{"vip"},
+		ProviderGroups:            map[string][]string{"codex": {"vip"}, "claude": {"vip"}, "antigravity": {"vip"}},
 		RegularRefreshSeconds:     300,
 		NearResetThresholdSeconds: 600,
 		NearResetRefreshSeconds:   60,
@@ -209,7 +207,7 @@ func TestAccountPoolManagerUsesOnlyFixedReadOnlyManagementContract(t *testing.T)
 	assert.Equal(t, "Bearer $TOKEN$", headers["Authorization"])
 	assert.Equal(t, "account-id-secret", headers["Chatgpt-Account-Id"])
 
-	normalJSON, err := common.Marshal(manager.buildView(snapshot, false))
+	normalJSON, err := common.Marshal(manager.buildView(snapshot, common.RoleRootUser, nil, false))
 	require.NoError(t, err)
 	normalResponse := string(normalJSON)
 	assert.NotContains(t, normalResponse, "admin@example.com")
@@ -218,7 +216,7 @@ func TestAccountPoolManagerUsesOnlyFixedReadOnlyManagementContract(t *testing.T)
 	assert.NotContains(t, normalResponse, "account-id-secret")
 	assert.NotContains(t, normalResponse, "secret-header")
 
-	adminJSON, err := common.Marshal(manager.buildView(snapshot, true))
+	adminJSON, err := common.Marshal(manager.buildView(snapshot, common.RoleRootUser, nil, true))
 	require.NoError(t, err)
 	assert.Contains(t, string(adminJSON), `"email":"admin@example.com"`)
 }
@@ -417,7 +415,7 @@ func TestAccountPoolManagerKeepsOldSnapshotWhenRefreshFails(t *testing.T) {
 	assert.Equal(t, "limited", fallback.Accounts[0].Status)
 	assert.Equal(t, "failed", manager.syncStatus().LastSyncStatus)
 
-	encoded, err := common.Marshal(manager.buildView(fallback, false))
+	encoded, err := common.Marshal(manager.buildView(fallback, common.RoleRootUser, nil, false))
 	require.NoError(t, err)
 	assert.NotContains(t, string(encoded), "upstream-secret")
 	assert.NotContains(t, string(encoded), "secret-cookie")
@@ -476,7 +474,7 @@ func TestAccountPoolManagerReturnsPartialSnapshotWhenOneAccountFails(t *testing.
 	assert.Equal(t, AccountPoolSummary{Total: 2, Available: 1, Error: 1}, snapshot.Summary)
 	assert.Equal(t, "partial", manager.syncStatus().LastSyncStatus)
 
-	viewJSON, err := common.Marshal(manager.buildView(snapshot, false))
+	viewJSON, err := common.Marshal(manager.buildView(snapshot, common.RoleRootUser, nil, false))
 	require.NoError(t, err)
 	assert.NotContains(t, string(viewJSON), "private upstream failure")
 }
@@ -544,7 +542,7 @@ func TestAccountPoolViewIncludesServerTime(t *testing.T) {
 	manager := newAccountPoolManager()
 	manager.now = func() time.Time { return now }
 
-	view := manager.buildView(&accountPoolSnapshot{}, false)
+	view := manager.buildView(&accountPoolSnapshot{}, common.RoleRootUser, nil, false)
 
 	assert.Equal(t, now, view.ServerTime)
 }
@@ -656,4 +654,175 @@ func accountPoolHTTPResponse(body []byte) *http.Response {
 		Header:     make(http.Header),
 		Body:       io.NopCloser(bytes.NewReader(body)),
 	}
+}
+
+func TestAccountPoolManagerFetchesClaudeAndAntigravityAccounts(t *testing.T) {
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	filesBody, err := common.Marshal(map[string]interface{}{
+		"files": []map[string]interface{}{
+			{
+				"name":       "codex-admin@example.com.json",
+				"type":       "codex",
+				"auth_index": "codex-auth",
+				"email":      "admin@example.com",
+			},
+			{
+				"name":       "claude-one@example.com.json",
+				"type":       "claude",
+				"auth_index": "claude-auth",
+				"email":      "claude@example.com",
+			},
+			{
+				"name":       "antigravity-a@example.com.json",
+				"type":       "antigravity",
+				"auth_index": "ag-auth",
+				"email":      "a-antigravity@example.com",
+				"project_id": "ag-project-secret",
+			},
+			{
+				"name":       "antigravity-b@example.com.json",
+				"type":       "antigravity",
+				"auth_index": "ag-auth-no-project",
+				"email":      "b-antigravity@example.com",
+			},
+			{
+				"name":       "gemini-ignored@example.com.json",
+				"type":       "gemini",
+				"auth_index": "gemini-auth",
+				"email":      "gemini@example.com",
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	var apiRequests []map[string]interface{}
+	var apiMu sync.Mutex
+	transport := accountPoolRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path == "/v0/management/auth-files" {
+			return accountPoolHTTPResponse(filesBody), nil
+		}
+		require.Equal(t, "/v0/management/api-call", request.URL.Path)
+		var payload map[string]interface{}
+		require.NoError(t, common.DecodeJson(request.Body, &payload))
+		apiMu.Lock()
+		apiRequests = append(apiRequests, payload)
+		apiMu.Unlock()
+		switch payload["url"] {
+		case accountPoolCodexUsageURL:
+			return accountPoolHTTPResponse([]byte(`{"status_code":200,"body":"{\"plan_type\":\"plus\",\"rate_limit\":{\"primary_window\":{\"used_percent\":10,\"limit_window_seconds\":18000}}}"}`)), nil
+		case accountPoolClaudeUsageURL:
+			return accountPoolHTTPResponse([]byte(`{"status_code":200,"body":"{\"five_hour\":{\"utilization\":0.25,\"resets_at\":\"2026-08-29T15:00:00Z\"},\"seven_day\":{\"utilization\":0.5,\"resets_at\":\"2026-09-01T00:00:00Z\"}}"}`)), nil
+		case accountPoolClaudeProfileURL:
+			return accountPoolHTTPResponse([]byte(`{"status_code":200,"body":"{\"account\":{\"has_claude_max\":true},\"organization\":{\"organization_type\":\"claude_max\"}}"}`)), nil
+		case accountPoolAntigravityQuotaDailyURL:
+			return accountPoolHTTPResponse([]byte(`{"status_code":200,"body":"{\"groups\":[{\"displayName\":\"Gemini Models\",\"buckets\":[{\"bucketId\":\"g-5h\",\"displayName\":\"Gemini 5h\",\"window\":\"5h\",\"resetTime\":\"2026-08-29T17:00:00Z\",\"remainingFraction\":0.8},{\"bucketId\":\"g-week\",\"displayName\":\"Gemini Weekly\",\"window\":\"weekly\",\"resetTime\":\"2026-09-01T00:00:00Z\",\"remainingFraction\":0.4}]},{\"displayName\":\"Claude and GPT models\",\"buckets\":[{\"bucketId\":\"c-5h\",\"displayName\":\"Claude 5h\",\"window\":\"5h\",\"resetTime\":\"2026-08-29T17:00:00Z\",\"remainingFraction\":1},{\"bucketId\":\"c-week\",\"displayName\":\"Claude Weekly\",\"window\":\"weekly\",\"resetTime\":\"2026-09-01T00:00:00Z\",\"remainingFraction\":0}]}]}"}`)), nil
+		case accountPoolAntigravityAssistURL:
+			return accountPoolHTTPResponse([]byte(`{"status_code":200,"body":"{\"paidTier\":{\"id\":\"g1-ultra-tier\"}}"}`)), nil
+		default:
+			return accountPoolHTTPResponse([]byte(`{"status_code":404,"body":"{}"}`)), nil
+		}
+	})
+
+	parsed, err := url.Parse("http://cliproxy.test/v0/management")
+	require.NoError(t, err)
+	setting := accountPoolTestSetting()
+	setting.ProviderGroups = map[string][]string{"claude": {"team"}}
+	manager := newAccountPoolManager()
+	manager.client = &http.Client{Transport: transport}
+	manager.now = func() time.Time { return now }
+	manager.loadRuntimeConfig = func() (accountPoolRuntimeConfig, error) {
+		return accountPoolRuntimeConfig{baseURL: parsed, key: "management-secret"}, nil
+	}
+	manager.loadSetting = func() *account_pool_setting.Setting {
+		copy := setting
+		copy.ProviderGroups = map[string][]string{"claude": {"team"}}
+		return &copy
+	}
+
+	snapshot, err := manager.get(context.Background())
+	require.NoError(t, err)
+	require.Len(t, snapshot.Accounts, 4)
+	assert.Equal(t, AccountPoolSummary{Total: 4, Available: 2, Limited: 1, Error: 1}, snapshot.Summary)
+
+	byDisplay := make(map[string]accountPoolAccount, 4)
+	for _, account := range snapshot.Accounts {
+		byDisplay[account.DisplayName] = account
+	}
+
+	codexAccount, ok := byDisplay["Codex #1"]
+	require.True(t, ok)
+	assert.Equal(t, "codex", codexAccount.Provider)
+	assert.Equal(t, "available", codexAccount.Status)
+
+	claudeAccount, ok := byDisplay["Claude #1"]
+	require.True(t, ok)
+	assert.Equal(t, "claude", claudeAccount.Provider)
+	assert.Equal(t, "max", claudeAccount.Plan)
+	assert.Equal(t, "available", claudeAccount.Status)
+	require.NotNil(t, claudeAccount.PrimaryWindow)
+	require.NotNil(t, claudeAccount.PrimaryWindow.UsedPercent)
+	require.NotNil(t, claudeAccount.PrimaryWindow.RemainingPercent)
+	assert.Equal(t, float64(25), *claudeAccount.PrimaryWindow.UsedPercent)
+	assert.Equal(t, float64(75), *claudeAccount.PrimaryWindow.RemainingPercent)
+	require.NotNil(t, claudeAccount.SecondaryWindow)
+	require.NotNil(t, claudeAccount.SecondaryWindow.UsedPercent)
+	assert.Equal(t, float64(50), *claudeAccount.SecondaryWindow.UsedPercent)
+	require.Len(t, claudeAccount.WindowGroups, 1)
+
+	antigravityAccount, ok := byDisplay["Antigravity #1"]
+	require.True(t, ok)
+	assert.Equal(t, "antigravity", antigravityAccount.Provider)
+	assert.Equal(t, "ultra", antigravityAccount.Plan)
+	assert.Equal(t, "limited", antigravityAccount.Status)
+	require.Len(t, antigravityAccount.WindowGroups, 2)
+	assert.Equal(t, "Gemini Models", antigravityAccount.WindowGroups[0].Label)
+	require.NotNil(t, antigravityAccount.WindowGroups[0].PrimaryWindow)
+	require.NotNil(t, antigravityAccount.WindowGroups[0].PrimaryWindow.UsedPercent)
+	assert.Equal(t, float64(20), *antigravityAccount.WindowGroups[0].PrimaryWindow.UsedPercent)
+	require.NotNil(t, antigravityAccount.WindowGroups[0].SecondaryWindow)
+	require.NotNil(t, antigravityAccount.WindowGroups[0].SecondaryWindow.UsedPercent)
+	assert.Equal(t, float64(60), *antigravityAccount.WindowGroups[0].SecondaryWindow.UsedPercent)
+	assert.Equal(t, "Claude and GPT models", antigravityAccount.WindowGroups[1].Label)
+	require.NotNil(t, antigravityAccount.WindowGroups[1].SecondaryWindow)
+	require.NotNil(t, antigravityAccount.WindowGroups[1].SecondaryWindow.RemainingPercent)
+	assert.Equal(t, float64(0), *antigravityAccount.WindowGroups[1].SecondaryWindow.RemainingPercent)
+	require.NotNil(t, antigravityAccount.PrimaryWindow)
+	assert.Equal(t, float64(20), *antigravityAccount.PrimaryWindow.UsedPercent)
+
+	brokenAccount, ok := byDisplay["Antigravity #2"]
+	require.True(t, ok)
+	assert.Equal(t, "error", brokenAccount.Status)
+	assert.True(t, brokenAccount.Stale)
+
+	apiMu.Lock()
+	requestCount := len(apiRequests)
+	apiMu.Unlock()
+	assert.Equal(t, 5, requestCount)
+	for _, payload := range apiRequests {
+		assert.NotEqual(t, "ag-auth-no-project", payload["auth_index"])
+	}
+
+	view := manager.buildView(snapshot, common.RoleRootUser, nil, false)
+	require.Len(t, view.Accounts, 4)
+	assert.Equal(t, AccountPoolSummary{Total: 4, Available: 2, Limited: 1, Error: 1}, view.Summary)
+	assert.Equal(t, AccountPoolSummary{Total: 1, Available: 1}, view.ProviderSummaries["codex"])
+	assert.Equal(t, AccountPoolSummary{Total: 1, Available: 1}, view.ProviderSummaries["claude"])
+	assert.Equal(t, AccountPoolSummary{Total: 2, Limited: 1, Error: 1}, view.ProviderSummaries["antigravity"])
+
+	viewJSON, err := common.Marshal(view)
+	require.NoError(t, err)
+	assert.Contains(t, string(viewJSON), `"provider_summaries"`)
+	assert.NotContains(t, string(viewJSON), "ag-project-secret")
+
+	claudeOnly := manager.buildView(snapshot, common.RoleCommonUser, []string{"team"}, false)
+	require.Len(t, claudeOnly.Accounts, 1)
+	assert.Equal(t, "claude", claudeOnly.Accounts[0].Provider)
+	assert.Equal(t, AccountPoolSummary{Total: 1, Available: 1}, claudeOnly.Summary)
+	require.Len(t, claudeOnly.ProviderSummaries, 1)
+
+	// Only claude has a group configured, so any other group sees nothing.
+	noAccess := manager.buildView(snapshot, common.RoleCommonUser, []string{"vip"}, false)
+	require.Empty(t, noAccess.Accounts)
+	require.Empty(t, noAccess.ProviderSummaries)
+	assert.Equal(t, AccountPoolSummary{}, noAccess.Summary)
 }

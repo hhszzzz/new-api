@@ -1292,7 +1292,7 @@
     "Codex": "Codex",
     "Codex Account & Usage": "Codex 账户和用量",
     "Codex Account Status": "Codex 账号状态",
-    "Codex accounts will appear after the first successful sync.": "首次同步成功后将在这里显示 Codex 账号。",
+    "Accounts will appear after the first successful sync.": "首次同步成功后，账号将出现在这里。",
     "Codex and Claude Code are recognized automatically from their standard request fingerprints.": "Codex 和 Claude Code 会根据标准请求特征自动识别。",
     "Codex channels do not support batch creation": "Codex 渠道不支持批量创建",
     "Codex channels use an OAuth JSON credential as the key.": "Codex 渠道使用 OAuth JSON 凭据作为密钥。",
@@ -5783,7 +5783,7 @@
     "Show sensitive data": "显示敏感数据",
     "Show setup guide": "显示设置引导",
     "Show source": "显示源码",
-    "Show the read-only Codex account pool to administrators and allowed groups.": "向管理员和允许的用户组显示只读 Codex 号池。",
+    "Show the read-only account pool to administrators and allowed groups.": "向管理员和允许的用户组显示只读号池。",
     "Show token usage statistics in the UI": "在用户界面中显示令牌使用统计信息",
     "Showcase core capabilities with demo credentials and limited access.": "使用演示凭据和有限访问权限展示核心功能。",
     "Showing": "显示第",
@@ -7255,6 +7255,9 @@
     "Zero retention": "零数据保留",
     "Zhipu": "智谱",
     "Zhipu V4": "智谱 V4",
-    "Zoom": "缩放"
+    "Zoom": "缩放",
+    "Gemini models": "Gemini 模型",
+    "Claude and GPT models": "Claude 和 GPT 模型",
+    "Users can only see a provider after being assigned one of its groups. An empty list keeps that provider administrator-only.": "用户被分配了某个种类的用户组后才能查看该种类；列表为空时该种类仅管理员可见。"
   }
 }

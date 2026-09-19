@@ -16,7 +16,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import type { AccountPoolWindow } from '../types'
+import type {
+  AccountPoolAccount,
+  AccountPoolWindow,
+  AccountPoolWindowGroup,
+} from '../types'
 
 export function formatAccountPoolCountdown(target: string | null, now: number) {
   if (!target) return null
@@ -42,4 +46,32 @@ export function getAccountPoolSecondaryWindowLabel(
     return 'Monthly quota'
   }
   return 'Weekly quota'
+}
+
+// Upstream group display names (e.g. antigravity) mapped to i18n keys;
+// unknown labels fall back to the raw upstream text.
+const ACCOUNT_POOL_WINDOW_GROUP_LABEL_KEYS: Record<string, string> = {
+  'gemini models': 'Gemini models',
+  'claude and gpt models': 'Claude and GPT models',
+}
+
+export function getAccountPoolWindowGroupLabelKey(label: string): string {
+  return (
+    ACCOUNT_POOL_WINDOW_GROUP_LABEL_KEYS[label.trim().toLowerCase()] ?? label
+  )
+}
+
+// Older snapshots and error rows carry no window_groups; fall back to the
+// top-level primary/secondary windows as a single unlabeled group.
+export function getAccountPoolWindowGroups(
+  account: Pick<AccountPoolAccount, 'primary_window' | 'secondary_window' | 'window_groups'>
+): AccountPoolWindowGroup[] {
+  if (account.window_groups?.length) return account.window_groups
+  return [
+    {
+      label: null,
+      primary_window: account.primary_window ?? null,
+      secondary_window: account.secondary_window ?? null,
+    },
+  ]
 }

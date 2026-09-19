@@ -1292,7 +1292,7 @@
     "Codex": "Codex",
     "Codex Account & Usage": "Codex アカウントと使用量",
     "Codex Account Status": "Codex アカウント状態",
-    "Codex accounts will appear after the first successful sync.": "初回同期に成功すると Codex アカウントが表示されます。",
+    "Accounts will appear after the first successful sync.": "最初の同期が成功すると、アカウントがここに表示されます。",
     "Codex and Claude Code are recognized automatically from their standard request fingerprints.": "Codex と Claude Code は標準リクエストの特徴から自動認識されます。",
     "Codex channels do not support batch creation": "Codex チャネルは一括作成をサポートしていません",
     "Codex channels use an OAuth JSON credential as the key.": "CodexチャネルはOAuth JSON認証情報をキーとして使用します。",
@@ -5783,7 +5783,7 @@
     "Show sensitive data": "機密データを表示",
     "Show setup guide": "セットアップガイドを表示",
     "Show source": "ソースを表示",
-    "Show the read-only Codex account pool to administrators and allowed groups.": "管理者と許可グループに読み取り専用の Codex プールを表示します。",
+    "Show the read-only account pool to administrators and allowed groups.": "管理者と許可グループに読み取り専用のアカウントプールを表示します。",
     "Show token usage statistics in the UI": "UIでトークン使用統計を表示",
     "Showcase core capabilities with demo credentials and limited access.": "デモ用の認証情報と制限付きアクセスでコア機能を紹介します。",
     "Showing": "表示",
@@ -7255,6 +7255,9 @@
     "Zero retention": "データ保持なし",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム"
+    "Zoom": "ズーム",
+    "Gemini models": "Gemini モデル",
+    "Claude and GPT models": "Claude と GPT のモデル",
+    "Users can only see a provider after being assigned one of its groups. An empty list keeps that provider administrator-only.": "ユーザーはいずれかのユーザーグループに割り当てられた場合にのみ、そのプロバイダーを表示できます。リストが空の場合、そのプロバイダーは管理者のみに表示されます。"
   }
 }

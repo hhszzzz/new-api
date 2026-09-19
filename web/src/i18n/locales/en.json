@@ -1292,7 +1292,7 @@
     "Codex": "Codex",
     "Codex Account & Usage": "Codex Account & Usage",
     "Codex Account Status": "Codex Account Status",
-    "Codex accounts will appear after the first successful sync.": "Codex accounts will appear after the first successful sync.",
+    "Accounts will appear after the first successful sync.": "Accounts will appear after the first successful sync.",
     "Codex and Claude Code are recognized automatically from their standard request fingerprints.": "Codex and Claude Code are recognized automatically from their standard request fingerprints.",
     "Codex channels do not support batch creation": "Codex channels do not support batch creation",
     "Codex channels use an OAuth JSON credential as the key.": "Codex channels use an OAuth JSON credential as the key.",
@@ -5783,7 +5783,7 @@
     "Show sensitive data": "Show sensitive data",
     "Show setup guide": "Show setup guide",
     "Show source": "Show source",
-    "Show the read-only Codex account pool to administrators and allowed groups.": "Show the read-only Codex account pool to administrators and allowed groups.",
+    "Show the read-only account pool to administrators and allowed groups.": "Show the read-only account pool to administrators and allowed groups.",
     "Show token usage statistics in the UI": "Show token usage statistics in the UI",
     "Showcase core capabilities with demo credentials and limited access.": "Showcase core capabilities with demo credentials and limited access.",
     "Showing": "Showing",
@@ -7255,6 +7255,9 @@
     "Zero retention": "Zero retention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Gemini models": "Gemini models",
+    "Claude and GPT models": "Claude and GPT models",
+    "Users can only see a provider after being assigned one of its groups. An empty list keeps that provider administrator-only.": "Users can only see a provider after being assigned one of its groups. An empty list keeps that provider administrator-only."
   }
 }

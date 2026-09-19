@@ -1292,7 +1292,7 @@
     "Codex": "Codex",
     "Codex Account & Usage": "Tài khoản và sử dụng Codex",
     "Codex Account Status": "Trạng thái tài khoản Codex",
-    "Codex accounts will appear after the first successful sync.": "Tài khoản Codex sẽ xuất hiện sau lần đồng bộ thành công đầu tiên.",
+    "Accounts will appear after the first successful sync.": "Tài khoản sẽ xuất hiện sau lần đồng bộ thành công đầu tiên.",
     "Codex and Claude Code are recognized automatically from their standard request fingerprints.": "Codex và Claude Code được nhận diện tự động từ dấu hiệu yêu cầu chuẩn.",
     "Codex channels do not support batch creation": "Kênh Codex không hỗ trợ tạo hàng loạt",
     "Codex channels use an OAuth JSON credential as the key.": "Kênh Codex dùng thông tin xác thực OAuth JSON làm khóa.",
@@ -5783,7 +5783,7 @@
     "Show sensitive data": "Hiển thị dữ liệu nhạy cảm",
     "Show setup guide": "Hiển thị hướng dẫn thiết lập",
     "Show source": "Hiển thị nguồn",
-    "Show the read-only Codex account pool to administrators and allowed groups.": "Hiển thị nhóm Codex chỉ đọc cho quản trị viên và các nhóm được phép.",
+    "Show the read-only account pool to administrators and allowed groups.": "Hiển thị nhóm tài khoản chỉ đọc cho quản trị viên và các nhóm được phép.",
     "Show token usage statistics in the UI": "Hiển thị thống kê sử dụng token trong giao diện người dùng",
     "Showcase core capabilities with demo credentials and limited access.": "Trình diễn các tính năng cốt lõi với thông tin đăng nhập demo và quyền truy cập hạn chế.",
     "Showing": "Đang hiển thị",
@@ -7255,6 +7255,9 @@
     "Zero retention": "Không lưu dữ liệu",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Gemini models": "Mô hình Gemini",
+    "Claude and GPT models": "Mô hình Claude và GPT",
+    "Users can only see a provider after being assigned one of its groups. An empty list keeps that provider administrator-only.": "Người dùng chỉ nhìn thấy một nhà cung cấp sau khi được gán vào một trong các nhóm của nó. Danh sách trống giữ nhà cung cấp đó chỉ dành cho quản trị viên."
   }
 }

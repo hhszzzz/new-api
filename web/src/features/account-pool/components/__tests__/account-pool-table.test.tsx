@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import type { Table } from '@tanstack/react-table'
 import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import type { ReactNode } from 'react'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 
@@ -64,6 +65,7 @@ function account(email?: string): AccountPoolAccount {
   return {
     public_id: 'public-1',
     display_name: 'Codex #1',
+    provider: 'codex',
     email,
     status: 'available',
     plan: 'plus',
@@ -80,6 +82,7 @@ function account(email?: string): AccountPoolAccount {
       reset_at: '2026-09-05T12:00:00Z',
       limit_window_seconds: 604800,
     },
+    window_groups: [],
     updated_at: '2026-08-29T11:55:00Z',
     stale: true,
   }
@@ -94,6 +97,9 @@ function snapshot(item: AccountPoolAccount): AccountPoolSnapshot {
     stale: false,
     partial: false,
     summary: { total: 1, available: 1, limited: 0, error: 0 },
+    provider_summaries: {
+      codex: { total: 1, available: 1, limited: 0, error: 0 },
+    },
     accounts: [item],
   }
 }
@@ -134,6 +140,112 @@ describe('account pool table', () => {
     expect(screen.queryByText('Reset')).not.toBeInTheDocument()
     expect(screen.queryByText('Edit')).not.toBeInTheDocument()
     expect(screen.queryByText('Test')).not.toBeInTheDocument()
+  })
+
+  test('filters accounts and summary badges by the selected provider tab', async () => {
+    const user = userEvent.setup()
+    const codexAccount = account('codex@example.com')
+    const claudeAccount: AccountPoolAccount = {
+      ...account('claude@example.com'),
+      public_id: 'claude-1',
+      display_name: 'Claude #1',
+      provider: 'claude',
+    }
+    const multiProviderSnapshot = snapshot(codexAccount)
+    multiProviderSnapshot.accounts = [codexAccount, claudeAccount]
+    multiProviderSnapshot.summary = {
+      total: 2,
+      available: 2,
+      limited: 0,
+      error: 0,
+    }
+    multiProviderSnapshot.provider_summaries = {
+      codex: { total: 1, available: 1, limited: 0, error: 0 },
+      claude: { total: 1, available: 1, limited: 0, error: 0 },
+    }
+
+    render(
+      <AccountPoolTable
+        snapshot={multiProviderSnapshot}
+        isLoading={false}
+        isFetching={false}
+        isRefreshing={false}
+        refreshDisabled={false}
+        refreshLabel='Refresh all'
+        now={Date.parse('2026-08-29T12:00:00Z')}
+        onRefresh={vi.fn()}
+      />
+    )
+
+    expect(screen.getByRole('tablist')).toHaveTextContent('Codex')
+    expect(screen.getByText('Codex #1')).toBeInTheDocument()
+    expect(screen.queryByText('Claude #1')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('tab', { name: /^Claude/ }))
+
+    expect(screen.getByText('Claude #1')).toBeInTheDocument()
+    expect(screen.queryByText('Codex #1')).not.toBeInTheDocument()
+  })
+
+  test('stacks antigravity window groups with their group labels', () => {
+    const antigravityAccount: AccountPoolAccount = {
+      ...account(),
+      public_id: 'ag-1',
+      display_name: 'Antigravity #1',
+      provider: 'antigravity',
+      plan: 'ultra',
+      primary_window: null,
+      secondary_window: null,
+      window_groups: [
+        {
+          label: 'Gemini Models',
+          primary_window: {
+            used_percent: 20,
+            remaining_percent: 80,
+            reset_at: '2026-08-29T13:00:00Z',
+            limit_window_seconds: 18000,
+          },
+          secondary_window: {
+            used_percent: 40,
+            remaining_percent: 60,
+            reset_at: '2026-09-05T12:00:00Z',
+            limit_window_seconds: 604800,
+          },
+        },
+        {
+          label: 'Claude and GPT models',
+          primary_window: {
+            used_percent: 10,
+            remaining_percent: 90,
+            reset_at: '2026-08-29T13:00:00Z',
+            limit_window_seconds: 18000,
+          },
+          secondary_window: null,
+        },
+      ],
+    }
+
+    const antigravitySnapshot = snapshot(antigravityAccount)
+    antigravitySnapshot.provider_summaries = {
+      antigravity: { total: 1, available: 1, limited: 0, error: 0 },
+    }
+
+    render(
+      <AccountPoolTable
+        snapshot={antigravitySnapshot}
+        isLoading={false}
+        isFetching={false}
+        isRefreshing={false}
+        refreshDisabled={false}
+        refreshLabel='Refresh all'
+        now={Date.parse('2026-08-29T12:00:00Z')}
+        onRefresh={vi.fn()}
+      />
+    )
+
+    expect(screen.getByText('Gemini models')).toBeInTheDocument()
+    expect(screen.getByText('Claude and GPT models')).toBeInTheDocument()
+    expect(screen.getAllByRole('progressbar')).toHaveLength(3)
   })
 
   test('renders an administrator email only when the server includes it', () => {
@@ -239,6 +351,7 @@ describe('account pool table', () => {
 
     const emptySnapshot = snapshot(account())
     emptySnapshot.summary = { total: 0, available: 0, limited: 0, error: 0 }
+    emptySnapshot.provider_summaries = {}
     emptySnapshot.accounts = []
     rerender(
       <AccountPoolTable
@@ -254,9 +367,7 @@ describe('account pool table', () => {
     )
     expect(screen.getByText('No accounts in the pool')).toBeInTheDocument()
     expect(
-      screen.getByText(
-        'Codex accounts will appear after the first successful sync.'
-      )
+      screen.getByText('Accounts will appear after the first successful sync.')
     ).toBeInTheDocument()
   })
 })

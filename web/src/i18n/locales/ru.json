@@ -1292,7 +1292,7 @@
     "Codex": "Codex",
     "Codex Account & Usage": "Аккаунт и использование Codex",
     "Codex Account Status": "Статус аккаунта Codex",
-    "Codex accounts will appear after the first successful sync.": "Аккаунты Codex появятся после первой успешной синхронизации.",
+    "Accounts will appear after the first successful sync.": "Аккаунты появятся после первой успешной синхронизации.",
     "Codex and Claude Code are recognized automatically from their standard request fingerprints.": "Codex и Claude Code автоматически распознаются по стандартным признакам запросов.",
     "Codex channels do not support batch creation": "Каналы Codex не поддерживают пакетное создание",
     "Codex channels use an OAuth JSON credential as the key.": "Каналы Codex используют учётные данные OAuth в формате JSON в качестве ключа.",
@@ -5783,7 +5783,7 @@
     "Show sensitive data": "Показать конфиденциальные данные",
     "Show setup guide": "Показать руководство по настройке",
     "Show source": "Показать исходный текст",
-    "Show the read-only Codex account pool to administrators and allowed groups.": "Показывать пул Codex только для чтения администраторам и разрешённым группам.",
+    "Show the read-only account pool to administrators and allowed groups.": "Показывать пул аккаунтов только для чтения администраторам и разрешённым группам.",
     "Show token usage statistics in the UI": "Показывать статистику использования токенов в пользовательском интерфейсе",
     "Showcase core capabilities with demo credentials and limited access.": "Демонстрация основных возможностей с демо-учётными данными и ограниченным доступом.",
     "Showing": "Отображать",
@@ -7255,6 +7255,9 @@
     "Zero retention": "Без хранения данных",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Gemini models": "Модели Gemini",
+    "Claude and GPT models": "Модели Claude и GPT",
+    "Users can only see a provider after being assigned one of its groups. An empty list keeps that provider administrator-only.": "Пользователи видят провайдера только после назначения в одну из его групп. Пустой список оставляет провайдера доступным только администраторам."
   }
 }

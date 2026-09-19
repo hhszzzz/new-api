@@ -23,7 +23,7 @@ import { accountPoolSettingsSchema } from '../account-pool-settings-schema'
 const valid = {
   enabled: true,
   hide_email_from_non_admins: true,
-  allowed_groups: ['vip'],
+  provider_groups: {},
   regular_refresh_seconds: 300,
   near_reset_threshold_seconds: 600,
   near_reset_refresh_seconds: 60,
@@ -34,6 +34,30 @@ const valid = {
 describe('account pool settings validation', () => {
   test('accepts the production defaults', () => {
     expect(accountPoolSettingsSchema.safeParse(valid).success).toBe(true)
+  })
+
+  test('accepts configured per-provider groups', () => {
+    expect(
+      accountPoolSettingsSchema.safeParse({
+        ...valid,
+        provider_groups: { claude: ['team'], antigravity: [] },
+      }).success
+    ).toBe(true)
+  })
+
+  test('rejects per-provider groups with invalid group names', () => {
+    expect(
+      accountPoolSettingsSchema.safeParse({
+        ...valid,
+        provider_groups: { codex: [''] },
+      }).success
+    ).toBe(false)
+    expect(
+      accountPoolSettingsSchema.safeParse({
+        ...valid,
+        provider_groups: { codex: ['x'.repeat(65)] },
+      }).success
+    ).toBe(false)
   })
 
   test('rejects a near-reset interval larger than the regular interval', () => {

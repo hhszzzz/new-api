@@ -23,7 +23,7 @@ func publishAccountPoolControllerSetting(t *testing.T) {
 	setting := account_pool_setting.Setting{
 		Enabled:                   true,
 		HideEmailFromNonAdmins:    true,
-		AllowedGroups:             []string{"vip", "team"},
+		ProviderGroups:            map[string][]string{"codex": {"vip", "team"}},
 		RegularRefreshSeconds:     300,
 		NearResetThresholdSeconds: 600,
 		NearResetRefreshSeconds:   60,
@@ -43,17 +43,17 @@ func accountPoolAuthorizationContext(role int, groups []string) *gin.Context {
 func TestAuthorizeAccountPoolUsesAnyEffectiveGroupAndAdminBypass(t *testing.T) {
 	publishAccountPoolControllerSetting(t)
 
-	_, allowed := authorizeAccountPool(
+	_, _, allowed := authorizeAccountPool(
 		accountPoolAuthorizationContext(common.RoleCommonUser, []string{"default", "vip"}),
 	)
 	assert.True(t, allowed)
 
-	_, allowed = authorizeAccountPool(
+	_, _, allowed = authorizeAccountPool(
 		accountPoolAuthorizationContext(common.RoleCommonUser, []string{"default"}),
 	)
 	assert.False(t, allowed)
 
-	_, allowed = authorizeAccountPool(
+	_, _, allowed = authorizeAccountPool(
 		accountPoolAuthorizationContext(common.RoleAdminUser, nil),
 	)
 	assert.True(t, allowed)
@@ -75,14 +75,14 @@ func TestGetAccountPoolSettingsNeverReturnsManagementConnectionValues(t *testing
 	assert.NotContains(t, recorder.Body.String(), "internal-sensitive-host")
 }
 
-func TestGetAccountPoolSettingsSerializesEmptyAllowedGroupsAsArray(t *testing.T) {
+func TestGetAccountPoolSettingsSerializesEmptyProviderGroupsAsObject(t *testing.T) {
 	previous := account_pool_setting.GetSettingSnapshot()
 	require.NotNil(t, previous)
 	t.Cleanup(func() { previous.PublishConfig() })
 	setting := account_pool_setting.Setting{
 		Enabled:                   true,
 		HideEmailFromNonAdmins:    true,
-		AllowedGroups:             []string{},
+		ProviderGroups:            map[string][]string{},
 		RegularRefreshSeconds:     300,
 		NearResetThresholdSeconds: 600,
 		NearResetRefreshSeconds:   60,
@@ -96,8 +96,8 @@ func TestGetAccountPoolSettingsSerializesEmptyAllowedGroupsAsArray(t *testing.T)
 	GetAccountPoolSettings(context)
 
 	assert.Equal(t, 200, recorder.Code)
-	assert.Contains(t, recorder.Body.String(), `"allowed_groups":[]`)
-	assert.NotContains(t, recorder.Body.String(), `"allowed_groups":null`)
+	assert.Contains(t, recorder.Body.String(), `"provider_groups":{}`)
+	assert.NotContains(t, recorder.Body.String(), `"provider_groups":null`)
 }
 
 func TestAccountPoolSettingsRequestKeepsEmailHiddenWhenFieldIsMissing(t *testing.T) {
@@ -120,7 +120,7 @@ func TestAccountPoolSettingsRequestBindsExplicitEmailVisibility(t *testing.T) {
 	context.Request = httptest.NewRequest(http.MethodPut, "/", strings.NewReader(`{
 		"enabled": true,
 		"hide_email_from_non_admins": false,
-		"allowed_groups": ["vip"],
+		"provider_groups": {"claude": ["team"]},
 		"regular_refresh_seconds": 300,
 		"near_reset_threshold_seconds": 600,
 		"near_reset_refresh_seconds": 60,
@@ -136,8 +136,27 @@ func TestAccountPoolSettingsRequestBindsExplicitEmailVisibility(t *testing.T) {
 	setting := request.withPrivacyDefault(nil)
 	assert.True(t, setting.Enabled)
 	assert.False(t, setting.HideEmailFromNonAdmins)
-	assert.Equal(t, []string{"vip"}, setting.AllowedGroups)
+	assert.Equal(t, map[string][]string{"claude": {"team"}}, setting.ProviderGroups)
 	assert.Equal(t, 300, setting.RegularRefreshSeconds)
+}
+
+func TestUpdateAccountPoolSettingsRejectsUnknownProviderGroups(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(http.MethodPut, "/", strings.NewReader(`{
+		"enabled": true,
+		"provider_groups": {"claude": ["vip"], "gemini": ["vip"]},
+		"regular_refresh_seconds": 300,
+		"near_reset_threshold_seconds": 600,
+		"near_reset_refresh_seconds": 60,
+		"post_reset_delay_seconds": 10,
+		"manual_refresh_cooldown_seconds": 60
+	}`))
+	context.Request.Header.Set("Content-Type", "application/json")
+	UpdateAccountPoolSettings(context)
+
+	assert.Equal(t, http.StatusBadRequest, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), "unknown provider")
 }
 
 func TestSelfUserDataIncludesServerCalculatedAccountPoolCapability(t *testing.T) {

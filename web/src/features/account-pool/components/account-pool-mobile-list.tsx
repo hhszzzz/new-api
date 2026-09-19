@@ -30,7 +30,11 @@ import {
 } from '@/components/ui/empty'
 import { Skeleton } from '@/components/ui/skeleton'
 
-import { getAccountPoolSecondaryWindowLabel } from '../lib/quota'
+import {
+  getAccountPoolSecondaryWindowLabel,
+  getAccountPoolWindowGroupLabelKey,
+  getAccountPoolWindowGroups,
+} from '../lib/quota'
 import type { AccountPoolAccount } from '../types'
 import { AccountStatusBadge } from './account-status-badge'
 import { QuotaWindow } from './quota-window'
@@ -71,7 +75,7 @@ export function AccountPoolMobileList(props: AccountPoolMobileListProps) {
             </EmptyMedia>
             <EmptyTitle>{t('No accounts in the pool')}</EmptyTitle>
             <EmptyDescription>
-              {t('Codex accounts will appear after the first successful sync.')}
+              {t('Accounts will appear after the first successful sync.')}
             </EmptyDescription>
           </EmptyHeader>
         </Empty>
@@ -83,6 +87,8 @@ export function AccountPoolMobileList(props: AccountPoolMobileListProps) {
     <div className='space-y-2'>
       {rows.map((row) => {
         const account = row.original
+        const windowGroups = getAccountPoolWindowGroups(account)
+        const singleGroup = windowGroups.length === 1 ? windowGroups[0] : null
         return (
           <article
             key={account.public_id}
@@ -112,24 +118,60 @@ export function AccountPoolMobileList(props: AccountPoolMobileListProps) {
             </div>
 
             <div className='space-y-4 border-t pt-4'>
-              {account.primary_window || !account.secondary_window ? (
-                <QuotaWindow
-                  window={account.primary_window}
-                  now={props.now}
-                  label={t('5-hour quota')}
-                  compact
-                />
-              ) : null}
-              {account.secondary_window ? (
-                <QuotaWindow
-                  window={account.secondary_window}
-                  now={props.now}
-                  label={t(
-                    getAccountPoolSecondaryWindowLabel(account.secondary_window)
-                  )}
-                  compact
-                />
-              ) : null}
+              {singleGroup ? (
+                <>
+                  {singleGroup.primary_window || !singleGroup.secondary_window ? (
+                    <QuotaWindow
+                      window={singleGroup.primary_window}
+                      now={props.now}
+                      label={t('5-hour quota')}
+                      compact
+                    />
+                  ) : null}
+                  {singleGroup.secondary_window ? (
+                    <QuotaWindow
+                      window={singleGroup.secondary_window}
+                      now={props.now}
+                      label={t(
+                        getAccountPoolSecondaryWindowLabel(
+                          singleGroup.secondary_window
+                        )
+                      )}
+                      compact
+                    />
+                  ) : null}
+                </>
+              ) : (
+                windowGroups.map((group, index) => (
+                  <div key={group.label ?? index} className='space-y-1.5'>
+                    {group.label ? (
+                      <div className='text-muted-foreground text-[11px] leading-none font-medium'>
+                        {t(getAccountPoolWindowGroupLabelKey(group.label))}
+                      </div>
+                    ) : null}
+                    {group.primary_window ? (
+                      <QuotaWindow
+                        window={group.primary_window}
+                        now={props.now}
+                        label={t('5-hour quota')}
+                        compact
+                      />
+                    ) : null}
+                    {group.secondary_window ? (
+                      <QuotaWindow
+                        window={group.secondary_window}
+                        now={props.now}
+                        label={t(
+                          getAccountPoolSecondaryWindowLabel(
+                            group.secondary_window
+                          )
+                        )}
+                        compact
+                      />
+                    ) : null}
+                  </div>
+                ))
+              )}
             </div>
           </article>
         )

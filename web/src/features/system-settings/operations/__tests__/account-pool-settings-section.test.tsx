@@ -38,8 +38,10 @@ vi.mock('@/features/users/api', () => ({
 }))
 
 vi.mock('@/components/multi-select', () => ({
-  MultiSelect: (props: { selected: string[] }) => (
-    <output data-testid='allowed-groups'>{props.selected.join(',')}</output>
+  MultiSelect: (props: { selected: string[]; 'aria-label'?: string }) => (
+    <output data-testid={props['aria-label'] ?? 'allowed-groups'}>
+      {props.selected.join(',')}
+    </output>
   ),
 }))
 
@@ -52,13 +54,13 @@ vi.mock('react-i18next', () => ({
 }))
 
 describe('account pool settings section', () => {
-  test('treats a legacy null allowed_groups response as an empty selection', async () => {
+  test('treats a legacy null provider_groups response as an empty selection', async () => {
     apiMocks.getAccountPoolSettings.mockResolvedValue({
       success: true,
       message: '',
       data: {
         enabled: true,
-        allowed_groups: null as unknown as string[],
+        provider_groups: null as unknown as Record<string, string[]>,
         regular_refresh_seconds: 300,
         near_reset_threshold_seconds: 600,
         near_reset_refresh_seconds: 60,
@@ -81,11 +83,50 @@ describe('account pool settings section', () => {
       </QueryClientProvider>
     )
 
-    expect(await screen.findByTestId('allowed-groups')).toHaveTextContent('')
+    expect(await screen.findByTestId('Codex')).toHaveTextContent('')
+    expect(screen.getByTestId('Claude')).toHaveTextContent('')
+    expect(screen.getByTestId('Antigravity')).toHaveTextContent('')
     expect(
       screen.getByRole('switch', {
         name: 'Hide account emails from regular users',
       })
     ).toBeChecked()
+  })
+
+  test('renders per-provider group selections', async () => {
+    apiMocks.getAccountPoolSettings.mockResolvedValue({
+      success: true,
+      message: '',
+      data: {
+        enabled: true,
+        provider_groups: { claude: ['team'] },
+        regular_refresh_seconds: 300,
+        near_reset_threshold_seconds: 600,
+        near_reset_refresh_seconds: 60,
+        post_reset_delay_seconds: 10,
+        manual_refresh_cooldown_seconds: 60,
+        management_key_configured: true,
+        management_ready: true,
+        last_sync_at: null,
+        last_sync_status: 'never',
+      },
+    })
+    apiMocks.getGroups.mockResolvedValue({
+      success: true,
+      data: ['vip', 'team'],
+    })
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <AccountPoolSettingsSection />
+      </QueryClientProvider>
+    )
+
+    expect(await screen.findByTestId('Codex')).toHaveTextContent('')
+    expect(screen.getByTestId('Claude')).toHaveTextContent('team')
+    expect(screen.getByTestId('Antigravity')).toHaveTextContent('')
   })
 })

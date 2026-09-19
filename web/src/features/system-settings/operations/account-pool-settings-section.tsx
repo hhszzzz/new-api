@@ -49,7 +49,7 @@ const SETTINGS_QUERY_KEY = ['account-pool-settings'] as const
 const defaultValues: AccountPoolSettingsValues = {
   enabled: false,
   hide_email_from_non_admins: true,
-  allowed_groups: [],
+  provider_groups: {},
   regular_refresh_seconds: 300,
   near_reset_threshold_seconds: 600,
   near_reset_refresh_seconds: 60,
@@ -63,7 +63,7 @@ function toFormValues(
   return {
     enabled: data.enabled,
     hide_email_from_non_admins: data.hide_email_from_non_admins ?? true,
-    allowed_groups: data.allowed_groups ?? [],
+    provider_groups: data.provider_groups ?? {},
     regular_refresh_seconds: data.regular_refresh_seconds,
     near_reset_threshold_seconds: data.near_reset_threshold_seconds,
     near_reset_refresh_seconds: data.near_reset_refresh_seconds,
@@ -113,10 +113,10 @@ export function AccountPoolSettingsSection() {
   })
   const settings = settingsQuery.data?.data
   const availableGroups = useMemo(() => {
-    const configured = settings?.allowed_groups ?? []
+    const configured = Object.values(settings?.provider_groups ?? {}).flat()
     const current = groupsQuery.data?.data ?? []
     return [...new Set([...current, ...configured])].filter(Boolean).sort()
-  }, [groupsQuery.data?.data, settings?.allowed_groups])
+  }, [groupsQuery.data?.data, settings?.provider_groups])
 
   useEffect(() => {
     if (settings) form.reset(toFormValues(settings))
