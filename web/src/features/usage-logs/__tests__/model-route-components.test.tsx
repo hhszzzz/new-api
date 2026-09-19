@@ -224,7 +224,7 @@ describe('usage-log model route component visibility', () => {
   test('puts a short translation label below the model without enlarging its content height', async () => {
     renderModelColumn(ROLE.ADMIN, 'all')
     const cell = screen.getByTestId('model-column')
-    const label = await within(cell).findByText('Chat translation')
+    const label = await within(cell).findByText('chat translation')
     const badge = label.closest('[data-slot="status-badge"]')
     expect(badge).toHaveClass('h-3', 'leading-3')
     expect(badge?.parentElement).toHaveClass('flex-col', 'items-center')
@@ -244,7 +244,7 @@ describe('usage-log model route component visibility', () => {
         expect(cell).toHaveAttribute('data-admin-view', 'false')
       )
       expect(
-        within(cell).queryByText('Chat translation')
+        within(cell).queryByText('chat translation')
       ).not.toBeInTheDocument()
     }
   )
@@ -346,7 +346,7 @@ describe('usage-log model route component visibility', () => {
     }
   )
 
-  test('keeps diagnostics and non-user-agent headers collapsed by default', async () => {
+  test('keeps safe request headers collapsed and diagnostics always open', async () => {
     renderDetailsDialog(ROLE.ADMIN, 'all')
 
     await waitFor(() => {
@@ -357,15 +357,13 @@ describe('usage-log model route component visibility', () => {
     })
 
     const dialog = screen.getByRole('dialog')
-    const diagnosticTrigger = within(dialog).getByRole('button', {
-      name: /Request Diagnostics/,
-    })
+    // Request diagnostics render inline without a disclosure control.
+    expect(
+      within(dialog).queryByRole('button', { name: /Request Diagnostics/ })
+    ).not.toBeInTheDocument()
     const headerTrigger = within(dialog).getByRole('button', {
       name: /Safe Request Headers/,
     })
-    const ipLabel = within(dialog).getByText('IP Address')
-
-    expect(diagnosticTrigger).toHaveAttribute('aria-expanded', 'false')
     expect(headerTrigger).toHaveAttribute('aria-expanded', 'false')
     expect(within(dialog).getByText('user-agent')).toBeVisible()
     expect(within(dialog).getByText('codex-cli/1.0')).toBeVisible()
@@ -375,7 +373,6 @@ describe('usage-log model route component visibility', () => {
     expect(
       within(dialog).queryByText('sha256:test-thread')
     ).not.toBeInTheDocument()
-    expect(ipLabel.closest('div')?.querySelector('svg')).toBeNull()
   })
 
   test('expands remaining safe request headers without duplicating user-agent', async () => {
@@ -406,7 +403,7 @@ describe('usage-log model route component visibility', () => {
       .getByText('Response Time')
       .closest('.grid')
     expect(responseTimeRow).toHaveTextContent('0.9s')
-    expect(responseTimeRow).toHaveTextContent('FRT: 0.3s')
+    expect(responseTimeRow).toHaveTextContent('(First token: 0.3s)')
 
     const reasoningValue = within(dialog).getByText('high')
     const reasoningBadge = reasoningValue.closest('[data-slot="status-badge"]')
@@ -549,7 +546,6 @@ describe('usage-log model route component visibility', () => {
   })
 
   test('reads upstream protocol metadata from administrator-only log data', async () => {
-    const user = userEvent.setup()
     renderDetailsDialog(ROLE.ADMIN, 'all')
 
     await waitFor(() => {
@@ -560,27 +556,23 @@ describe('usage-log model route component visibility', () => {
     })
 
     const dialog = screen.getByRole('dialog')
-    await user.click(
-      within(dialog).getByRole('button', { name: /Request Diagnostics/ })
-    )
     expect(within(dialog).getByText('Upstream request')).toBeVisible()
     expect(within(dialog).getByText('OpenAI Chat Completions')).toBeVisible()
-    await user.click(
-      within(dialog).getByRole('button', { name: 'Technical details' })
-    )
+    // Technical details are always visible in the conversion section.
     expect(within(dialog).getByText('Protocol Converter')).toBeVisible()
     expect(within(dialog).getByText('Protocol State Mode')).toBeVisible()
     expect(
-      within(dialog).getByText('Replayed conversation state')
+      within(dialog).getByText('Resend full conversation history')
     ).toBeVisible()
     expect(within(dialog).getByText('Route Pool')).toBeVisible()
     expect(within(dialog).getByText('测试路由转换')).toBeVisible()
     expect(within(dialog).queryByText('Route Rule')).not.toBeInTheDocument()
     expect(within(dialog).queryByText('#3')).not.toBeInTheDocument()
     expect(within(dialog).getByText('responses_to_chat')).toBeVisible()
-    expect(
-      within(dialog).getByRole('list', { name: 'Protocol flow' })
-    ).toBeVisible()
+    const flowRows = within(dialog).getAllByText(
+      /Client request|Upstream request|Request path/
+    )
+    expect(flowRows.length).toBeGreaterThanOrEqual(3)
   })
 
   test.each([

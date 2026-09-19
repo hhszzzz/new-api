@@ -157,36 +157,37 @@ const conversionLog: LogOtherData = {
 test('keeps the details cell focused on billing and explains translation in the dialog', async () => {
   const user = userEvent.setup()
   const preview = renderPreview(conversionLog)
-  expect(preview).not.toHaveTextContent('Messages translation')
+  expect(preview).not.toHaveTextContent(/translation/i)
   expect(preview).not.toHaveTextContent('→')
   expect(preview).toHaveTextContent('Per-call · $0.25')
   await user.click(preview)
   const dialog = within(await screen.findByRole('dialog'))
-  const steps = within(
-    dialog.getByRole('list', { name: 'Protocol flow' })
-  ).getAllByRole('listitem')
-  expect(steps).toHaveLength(3)
-  expect(steps[0]).toHaveTextContent('OpenAI Responses')
-  expect(steps[1]).toHaveTextContent('Messages translation')
-  expect(steps[2]).toHaveTextContent('Anthropic Messages')
+  // Flow rows render as label/value DetailRows instead of a step list.
+  expect(dialog.getByText('Client request')).toBeVisible()
+  expect(dialog.getByText('Request processing')).toBeVisible()
+  expect(dialog.getByText('Upstream request')).toBeVisible()
+  expect(dialog.getByText('OpenAI Responses')).toBeVisible()
+  expect(dialog.getByText('messages translation')).toBeVisible()
+  expect(dialog.getByText('Anthropic Messages')).toBeVisible()
+  // Field adjustments start collapsed; open them to read the diagnostics.
+  const adjustments = dialog.getByRole('button', { name: /Field adjustments/ })
+  await user.click(adjustments)
   expect(dialog.getByText('metadata')).toBeVisible()
   expect(
     dialog.getByText(
       'The target protocol does not support this display metadata; it was omitted.'
     )
   ).toBeVisible()
-  expect(
-    dialog.queryByText('openai_responses_to_claude_messages')
-  ).not.toBeInTheDocument()
-  const technical = dialog.getByRole('button', { name: 'Technical details' })
-  await user.click(technical)
-  expect(technical).toHaveAttribute('aria-expanded', 'true')
+  // Technical details render inline without a disclosure control.
   expect(dialog.getByText('openai_responses_to_claude_messages')).toBeVisible()
+  expect(
+    dialog.queryByRole('button', { name: 'Technical details' })
+  ).not.toBeInTheDocument()
 })
 
 test('hides protocol field diagnostics and their badge outside the administrator view', async () => {
   const preview = renderPreview(conversionLog, false)
-  expect(preview).not.toHaveTextContent('Messages translation')
+  expect(preview).not.toHaveTextContent(/translation/i)
   fireEvent.click(preview)
   const dialog = within(await screen.findByRole('dialog'))
   expect(dialog.queryByText('metadata')).not.toBeInTheDocument()
@@ -194,13 +195,37 @@ test('hides protocol field diagnostics and their badge outside the administrator
 })
 
 test('does not present conversion warnings on a failed request as completed field changes', async () => {
+  const user = userEvent.setup()
   const preview = renderPreview(conversionLog, true, 5)
   fireEvent.click(preview)
   const dialog = within(await screen.findByRole('dialog'))
   expect(dialog.queryByText('Protocol converted')).not.toBeInTheDocument()
   expect(dialog.queryByText('Adjusted')).not.toBeInTheDocument()
+  // The warning badge lives inside the collapsed field-adjustments section.
+  await user.click(dialog.getByRole('button', { name: /Field adjustments/ }))
   expect(dialog.getByText('Warning')).toBeVisible()
 })
+
+test.each([
+  { protocol: 'messages', label: 'messages' },
+  { protocol: 'chat', label: 'chat' },
+  { protocol: 'gemini', label: 'gemini' },
+])(
+  'names the $protocol target in lowercase inside the processing row',
+  async ({ protocol, label }) => {
+    fireEvent.click(
+      renderPreview({
+        request_conversion: ['openai-responses', protocol],
+        admin_info: { upstream_protocol: protocol },
+      })
+    )
+    const dialog = within(await screen.findByRole('dialog'))
+    const outcome = dialog.getByText(`${label} translation`)
+    // Sentence-case would still match a case-insensitive lookup, so compare the
+    // rendered text exactly.
+    expect(outcome.textContent).toBe(`${label} translation`)
+  }
+)
 
 test.each([
   {

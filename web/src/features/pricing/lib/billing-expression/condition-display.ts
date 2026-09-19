@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import type { TOptions } from 'i18next'
 
+import { languageTimezone } from '@/features/pricing/lib/billing-expr'
 import { toIntlLocale } from '@/i18n/languages'
 
 import { flattenBinary } from './display'
@@ -99,7 +100,7 @@ function describeTimeRange(
   let kind: Description['kind'] = 'calendar'
   if (first.name === 'hour') {
     kind = 'clock'
-    text = t('{{start}}–{{end}}', {
+    text = t('{{start}} - {{end}}', {
       start: `${String(start).padStart(2, '0')}:00`,
       end: `${String(end).padStart(2, '0')}:00`,
     })
@@ -114,7 +115,7 @@ function describeTimeRange(
     text =
       start === end - 1
         ? from
-        : t('{{start}}–{{end}}', { start: from, end: to })
+        : t('{{start}} - {{end}}', { start: from, end: to })
   } else {
     const labels: Record<string, string> = {
       minute: 'Minute',
@@ -124,7 +125,7 @@ function describeTimeRange(
     const values =
       start === end - 1
         ? String(start)
-        : t('{{start}}–{{end}}', { start, end: end - 1 })
+        : t('{{start}} - {{end}}', { start, end: end - 1 })
     text = `${t(labels[first.name])}: ${values}`
   }
   return { text, kind, timezone: first.timezone }
@@ -258,6 +259,11 @@ export function formatBillingCondition(
     )
     if (!description) return null
     if (!description.timezone) return description.text
+    // The timezone is implied by the interface language, so hide the suffix
+    // unless the expression targets a zone other than the language default.
+    if (description.timezone === languageTimezone(locale)) {
+      return description.text
+    }
     return translate('{{condition}} ({{timezone}})', {
       condition: description.text,
       timezone: description.timezone,
@@ -265,4 +271,173 @@ export function formatBillingCondition(
   } catch {
     return null
   }
+}
+
+/**
+ * Format a condition as one line per disjunct so UIs can stack time windows
+ * vertically ("22:00 - 24:00" / "00:00 - 06:00"). Falls back to the single
+ * joined text when the condition is not a plain disjunction of time windows.
+ */
+export function formatBillingConditionLines(
+  source: string,
+  t: Translate,
+  locale = 'en'
+): string[] | null {
+  const compiled = compileBillingExpression(source)
+  if (compiled.status !== 'ready') return null
+  try {
+    const translate: Translate = (key, options) =>
+      t(key, { ...options, interpolation: { escapeValue: false } })
+    const node = compiled.ast
+    // A negated pure clock window (the standard tier of a peak/off-peak
+    // expression) reads better as the concrete complement: "06:00 - 22:00"
+    // instead of "Outside these times: 22:00 - 24:00 or 00:00 - 06:00".
+    if (node.kind === 'unary' && node.operator === '!') {
+      const complement = formatIdleClockRanges(
+        [compiled.source.slice(node.operand.start, node.operand.end)],
+        t,
+        locale
+      )
+      if (complement) return complement
+    }
+    const disjuncts =
+      node.kind === 'binary' && node.operator === '||'
+        ? flattenBinary(node, '||')
+        : [node]
+    if (disjuncts.length > 1) {
+      const parts: Array<Description | null> = disjuncts.map((disjunct) =>
+        describeBillingCondition(disjunct, translate, locale)
+      )
+      if (parts.every(Boolean)) {
+        const zones = [
+          ...new Set(
+            parts.flatMap((part) =>
+              part && part.timezone ? [part.timezone] : []
+            )
+          ),
+        ]
+        if (zones.length <= 1) {
+          const zone = zones[0]
+          if (!zone || zone === languageTimezone(locale)) {
+            return parts.map((part) => part?.text ?? '')
+          }
+        }
+      }
+    }
+    const joined = formatBillingCondition(source, t, locale)
+    return joined ? [joined] : null
+  } catch {
+    return null
+  }
+}
+
+type ClockWindow = { start: number; end: number }
+
+/**
+ * Fold one disjunct of hour() comparisons into a single [start, end) window.
+ * Returns null when the disjunct contains anything other than hour bounds in
+ * one timezone (weekday/month limits, len checks, mixed zones...).
+ */
+function clockWindowFromDisjunct(
+  node: ExpressionNode
+): { window: ClockWindow; timezone: string } | null {
+  const conjuncts =
+    node.kind === 'binary' && node.operator === '&&'
+      ? flattenBinary(node, '&&')
+      : [node]
+  let start = 0
+  let end = 24
+  let timezone: string | null = null
+  for (const conjunct of conjuncts) {
+    const comparison = timeComparison(conjunct)
+    if (!comparison || comparison.name !== 'hour') return null
+    if (timezone && comparison.timezone !== timezone) return null
+    timezone = comparison.timezone
+    switch (comparison.operator) {
+      case '>=':
+        start = Math.max(start, comparison.value)
+        break
+      case '>':
+        start = Math.max(start, comparison.value + 1)
+        break
+      case '<':
+        end = Math.min(end, comparison.value)
+        break
+      case '<=':
+        end = Math.min(end, comparison.value + 1)
+        break
+      case '==':
+        start = Math.max(start, comparison.value)
+        end = Math.min(end, comparison.value + 1)
+        break
+      default:
+        return null
+    }
+  }
+  if (start >= end || !timezone) return null
+  return { window: { start, end }, timezone }
+}
+
+/**
+ * Complement of pure hour-window conditions over the 24h day, e.g. peak
+ * "22:00 - 24:00 or 00:00 - 06:00" leaves the idle range "06:00 - 22:00".
+ * Returns null when any condition is not a pure clock window, so callers can
+ * keep their generic fallback text.
+ */
+export function formatIdleClockRanges(
+  sources: Array<string | null | undefined>,
+  t: Translate,
+  locale = 'en'
+): string[] | null {
+  const usable = sources.filter(Boolean) as string[]
+  if (usable.length === 0) return null
+  const windows: ClockWindow[] = []
+  let timezone: string | null = null
+  for (const source of usable) {
+    const compiled = compileBillingExpression(source)
+    if (compiled.status !== 'ready') return null
+    const node = compiled.ast
+    const disjuncts =
+      node.kind === 'binary' && node.operator === '||'
+        ? flattenBinary(node, '||')
+        : [node]
+    for (const disjunct of disjuncts) {
+      const parsed = clockWindowFromDisjunct(disjunct)
+      if (!parsed) return null
+      if (timezone && parsed.timezone !== timezone) return null
+      timezone = parsed.timezone
+      windows.push(parsed.window)
+    }
+  }
+  const merged: ClockWindow[] = []
+  for (const window of [...windows].sort((a, b) => a.start - b.start)) {
+    const last = merged.at(-1)
+    if (last && window.start <= last.end) {
+      last.end = Math.max(last.end, window.end)
+    } else {
+      merged.push({ ...window })
+    }
+  }
+  const complement: ClockWindow[] = []
+  let cursor = 0
+  for (const window of merged) {
+    if (window.start > cursor) {
+      complement.push({ start: cursor, end: window.start })
+    }
+    cursor = Math.max(cursor, window.end)
+  }
+  if (cursor < 24) complement.push({ start: cursor, end: 24 })
+  const translate: Translate = (key, options) =>
+    t(key, { ...options, interpolation: { escapeValue: false } })
+  return complement.map((range) => {
+    const text = t('{{start}} - {{end}}', {
+      start: `${String(range.start).padStart(2, '0')}:00`,
+      end: `${String(range.end).padStart(2, '0')}:00`,
+    })
+    if (!timezone || timezone === languageTimezone(locale)) return text
+    return translate('{{condition}} ({{timezone}})', {
+      condition: text,
+      timezone,
+    })
+  })
 }

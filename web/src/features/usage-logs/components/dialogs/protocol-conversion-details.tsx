@@ -21,14 +21,12 @@ import { useTranslation } from 'react-i18next'
 
 import { CopyButton } from '@/components/copy-button'
 import { StatusBadge } from '@/components/status-badge'
-import { IconBadge } from '@/components/ui/icon-badge'
 
 import {
   getConversionDiagnostics,
   getProtocolFlow,
   getProtocolName,
   getProtocolTranslationTarget,
-  hasProtocolFieldAdjustments,
 } from '../../lib/protocol-conversion'
 import type { LogOtherData } from '../../types'
 import {
@@ -38,9 +36,9 @@ import {
 } from './log-detail-layout'
 
 const stateModeLabels: Record<string, string> = {
-  native_responses: 'Native Responses session state',
-  replay: 'Replayed conversation state',
-  strict_append: 'Strict append session state',
+  native_responses: 'Upstream native session',
+  strict_append: 'Send new messages only',
+  replay: 'Resend full conversation history',
 }
 
 export function ProtocolConversionDetails(props: {
@@ -62,7 +60,6 @@ export function ProtocolConversionDetails(props: {
     return null
   }
 
-  const adjusted = hasProtocolFieldAdjustments(props.logType, props.other)
   const translationTarget = getProtocolTranslationTarget(
     props.logType,
     props.other
@@ -78,162 +75,68 @@ export function ProtocolConversionDetails(props: {
   }
   if (flow.native) outcome = t('Native format')
   if (blocked) outcome = t('Conversion blocked')
-  const outcomeVariant = blocked ? 'danger' : 'neutral'
   const warningLabel = props.logType === 2 ? t('Adjusted') : t('Warning')
   const stateMode = props.other?.admin_info?.protocol_state_mode
   const compactionMode = props.other?.admin_info?.compaction_mode
-  const steps = [
-    {
-      label: t('Client request'),
-      value: getProtocolName(flow.request) || t('Not recorded'),
-      icon: Monitor,
-    },
-    { label: t('Request processing'), value: outcome, icon: ArrowDownUp },
-    {
-      label: t('Upstream request'),
-      value: getProtocolName(flow.upstream) || t('Not recorded'),
-      icon: Cloud,
-    },
-  ]
-  const copyValue = steps
-    .map((step) => `${step.label}: ${step.value}`)
-    .join('\n')
+  const clientValue = getProtocolName(flow.request) || t('Not recorded')
+  const upstreamValue = getProtocolName(flow.upstream) || t('Not recorded')
+  const pathValue = flow.path || t('Not recorded')
+  const copyValue = [
+    `${t('Request path')}: ${pathValue}`,
+    `${t('Client request')}: ${clientValue}`,
+    `${t('Upstream request')}: ${upstreamValue}`,
+    `${t('Request processing')}: ${outcome}`,
+  ].join('\n')
 
   return (
     <DetailSection
       label={t('Request Conversion')}
       icon={<Route className='size-3.5' aria-hidden='true' />}
-      iconTone='info'
+      iconTone='plain'
     >
-      <div className='flex min-w-0 flex-col gap-4 p-1.5'>
+      <div className='flex min-w-0 flex-col gap-2.5'>
         <div className='flex min-w-0 items-start justify-between gap-3'>
-          <div className='flex min-w-0 flex-col gap-1'>
-            <span className='text-muted-foreground text-xs'>
-              {t('Request path')}
-            </span>
-            <code className='text-xs break-all'>
-              {flow.path || t('Not recorded')}
-            </code>
+          <div className='min-w-0 flex-1 space-y-1'>
+            <DetailRow
+              label={t('Request path')}
+              icon={<Route className='size-3' aria-hidden='true' />}
+              value={pathValue}
+              mono
+            />
+            <DetailRow
+              label={t('Client request')}
+              icon={<Monitor className='size-3' aria-hidden='true' />}
+              value={clientValue}
+            />
+            <DetailRow
+              label={t('Upstream request')}
+              icon={<Cloud className='size-3' aria-hidden='true' />}
+              value={upstreamValue}
+            />
+            <DetailRow
+              label={t('Request processing')}
+              icon={<ArrowDownUp className='size-3' aria-hidden='true' />}
+              value={outcome}
+            />
           </div>
           <CopyButton
             value={copyValue}
             tooltip={t('Copy protocol flow')}
-            className='size-7'
+            className='size-7 shrink-0'
             iconClassName='size-3.5'
           />
         </div>
-        <ol aria-label={t('Protocol flow')} className='flex min-w-0 flex-col'>
-          {steps.map((step, index) => (
-            <li
-              key={step.label}
-              className='relative min-w-0 pb-5 pl-10 last:pb-0'
-            >
-              {index < steps.length - 1 && (
-                <span
-                  className='border-border absolute top-7 bottom-0 left-3 border-l'
-                  aria-hidden='true'
-                />
-              )}
-              <span className='absolute top-0 left-0'>
-                <IconBadge tone={index === 1 ? 'info' : 'neutral'} size='sm'>
-                  <step.icon className='size-3.5' aria-hidden='true' />
-                </IconBadge>
-              </span>
-              <div className='flex min-w-0 flex-col gap-1'>
-                <span className='text-muted-foreground text-xs'>
-                  {step.label}
-                </span>
-                {index === 1 ? (
-                  <StatusBadge
-                    label={step.value}
-                    variant={adjusted ? 'warning' : outcomeVariant}
-                    size='sm'
-                    copyable={false}
-                    className='self-start'
-                  />
-                ) : (
-                  <span className='text-sm font-medium break-all'>
-                    {step.value}
-                  </span>
-                )}
-              </div>
-            </li>
-          ))}
-        </ol>
-        {diagnostics.length > 0 && (
-          <section
-            aria-label={t('Field adjustments')}
-            className='bg-background min-w-0 rounded-lg border'
-          >
-            <div className='flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2'>
-              <h4 className='text-xs font-semibold'>
-                {t('Field adjustments')}
-              </h4>
-              <StatusBadge
-                label={t('Admin only')}
-                variant='neutral'
-                type='text'
-                size='sm'
-                copyable={false}
-              />
-            </div>
-            <ul className='divide-y'>
-              {diagnostics.map((item) => (
-                <li
-                  key={[
-                    item.code,
-                    item.path,
-                    item.severity,
-                    item.from,
-                    item.to,
-                  ].join(':')}
-                  className='flex min-w-0 flex-col gap-1.5 px-3 py-3'
-                >
-                  <div className='flex min-w-0 flex-wrap items-start justify-between gap-2'>
-                    <code className='min-w-0 text-xs break-all'>
-                      {item.path || item.code}
-                    </code>
-                    <StatusBadge
-                      label={
-                        item.severity === 'error' ? t('Blocked') : warningLabel
-                      }
-                      variant={item.severity === 'error' ? 'danger' : 'warning'}
-                      type='text'
-                      size='sm'
-                      copyable={false}
-                    />
-                  </div>
-                  <p className='text-muted-foreground text-xs leading-relaxed [overflow-wrap:anywhere]'>
-                    {props.logType === 2 &&
-                    item.code === 'omitted_presentation_metadata'
-                      ? t(
-                          'The target protocol does not support this display metadata; it was omitted.'
-                        )
-                      : item.message}
-                  </p>
-                </li>
-              ))}
-            </ul>
-            {props.other?.admin_info?.conversion_diagnostics_truncated && (
-              <p className='text-muted-foreground border-t px-3 py-2 text-xs'>
-                {t(
-                  'Additional diagnostics were truncated when this log was recorded.'
-                )}
-              </p>
-            )}
-          </section>
-        )}
         {(flow.converter ||
           compactionMode ||
           (stateMode && stateMode !== 'none')) && (
-          <CollapsibleDetailSection label={t('Technical details')}>
+          <div className='space-y-1'>
             {compactionMode && (
               <DetailRow
                 label={t('Compaction method')}
                 value={
                   compactionMode === 'summary'
-                    ? t('Model summary')
-                    : t('Native compact')
+                    ? t('Model compaction')
+                    : t('Native compaction')
                 }
               />
             )}
@@ -249,6 +152,55 @@ export function ProtocolConversionDetails(props: {
                 label={t('Protocol State Mode')}
                 value={t(stateModeLabels[stateMode] || stateMode)}
               />
+            )}
+          </div>
+        )}
+        {diagnostics.length > 0 && (
+          <CollapsibleDetailSection
+            label={t('Field adjustments')}
+            count={diagnostics.length}
+          >
+            {diagnostics.map((item) => (
+              <div
+                key={[
+                  item.code,
+                  item.path,
+                  item.severity,
+                  item.from,
+                  item.to,
+                ].join(':')}
+                className='flex min-w-0 flex-col gap-1'
+              >
+                <div className='flex min-w-0 flex-wrap items-start justify-between gap-2'>
+                  <code className='min-w-0 text-xs break-all'>
+                    {item.path || item.code}
+                  </code>
+                  <StatusBadge
+                    label={
+                      item.severity === 'error' ? t('Blocked') : warningLabel
+                    }
+                    variant={item.severity === 'error' ? 'danger' : 'warning'}
+                    type='text'
+                    size='sm'
+                    copyable={false}
+                  />
+                </div>
+                <p className='text-muted-foreground text-xs leading-relaxed [overflow-wrap:anywhere]'>
+                  {props.logType === 2 &&
+                  item.code === 'omitted_presentation_metadata'
+                    ? t(
+                        'The target protocol does not support this display metadata; it was omitted.'
+                      )
+                    : item.message}
+                </p>
+              </div>
+            ))}
+            {props.other?.admin_info?.conversion_diagnostics_truncated && (
+              <p className='text-muted-foreground border-t pt-1.5 text-xs'>
+                {t(
+                  'Additional diagnostics were truncated when this log was recorded.'
+                )}
+              </p>
             )}
           </CollapsibleDetailSection>
         )}

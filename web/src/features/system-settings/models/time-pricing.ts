@@ -16,7 +16,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { BILLING_PRICING_VARS } from '@/features/pricing/lib/billing-expr'
+import {
+  BILLING_PRICING_VARS,
+  languageTimezone,
+} from '@/features/pricing/lib/billing-expr'
 import {
   parseVisualBillingDocument,
   visualConditionExpression,
@@ -40,6 +43,56 @@ export type TimePricingConfig = {
 const PRICE_KEYS = BILLING_PRICING_VARS.map((variable) => variable.key)
 const PRICE_KEY_SET = new Set(PRICE_KEYS)
 const TIME_PROBES = new Set(['hour', 'minute', 'weekday', 'month', 'day'])
+
+/**
+ * Price variables that can be expressed as a multiplier of the standard
+ * (off-peak) price. Media prices stay in the advanced absolute-price section.
+ */
+const MULTIPLIER_PRICE_KEYS = ['p', 'c', 'cr', 'cc'] as const
+
+/** Derive each peak price as a multiplier of the off-peak baseline. */
+export function peakMultipliersFromPrices(
+  peak: Record<string, string>,
+  offPeak: Record<string, string>
+): Record<string, string> {
+  const multipliers: Record<string, string> = {}
+  for (const key of MULTIPLIER_PRICE_KEYS) {
+    const base = Number(offPeak[key])
+    const value = Number(peak[key])
+    if (
+      !Number.isFinite(base) ||
+      base <= 0 ||
+      !Number.isFinite(value) ||
+      value <= 0
+    ) {
+      continue
+    }
+    const ratio = value / base
+    const rounded = Math.round(ratio * 100) / 100
+    multipliers[key] = String(rounded)
+  }
+  return multipliers
+}
+
+/** Apply multipliers to the off-peak prices to rebuild absolute peak prices. */
+export function peakPricesFromMultipliers(
+  multipliers: Record<string, string>,
+  offPeak: Record<string, string>
+): Record<string, string> {
+  const prices: Record<string, string> = {
+    ...peakMultipliersFromPrices({}, offPeak),
+  }
+  for (const key of MULTIPLIER_PRICE_KEYS) {
+    const base = Number(offPeak[key])
+    const ratio = Number(multipliers[key])
+    if (!Number.isFinite(base) || base <= 0 || !Number.isFinite(ratio)) {
+      continue
+    }
+    const value = Math.round(base * ratio * 10000) / 10000
+    prices[key] = String(value)
+  }
+  return prices
+}
 
 let nextWindowId = 0
 export function createHourWindow(start: string, end: string): HourWindow {
@@ -212,6 +265,18 @@ function extractSchedule(
   return { timezone, weekdays, windows }
 }
 
+/**
+ * Snap an existing expression timezone onto the timezone implied by the
+ * current interface language. The editor has no timezone selector; new
+ * windows are written in the language's timezone while an existing condition
+ * keeps whichever timezone it was saved with.
+ */
+export function timezoneForLanguage(
+  language: string | undefined | null
+): string {
+  return languageTimezone(language)
+}
+
 export function parseTimePricing(expression: string): TimePricingConfig {
   const config = defaultTimePricingConfig()
   if (!expression) return config
@@ -252,6 +317,24 @@ function priceExpression(prices: Record<string, string>): string {
     return Number.isFinite(value) && value > 0
   }).map((key) => `${key} * ${trimNumber(prices[key])}`)
   return terms.length > 0 ? terms.join(' + ') : 'p * 0'
+}
+
+/** Whether any peak price cannot be derived from the off-peak multipliers. */
+export function hasAbsolutePeakPrices(
+  multipliers: Record<string, string>,
+  peak: Record<string, string>,
+  offPeak: Record<string, string>
+): boolean {
+  const derived = peakPricesFromMultipliers(multipliers, offPeak)
+  return MULTIPLIER_PRICE_KEYS.some((key) => {
+    const raw = peak[key]
+    if (raw === undefined || trimNumber(raw) === '') return false
+    const value = Number(raw)
+    if (!Number.isFinite(value) || value <= 0) return false
+    const expected = Number(derived[key])
+    if (!Number.isFinite(expected)) return true
+    return Math.abs(value - expected) > expected * 0.005 + 1e-9
+  })
 }
 
 export function buildTimePricingCondition(

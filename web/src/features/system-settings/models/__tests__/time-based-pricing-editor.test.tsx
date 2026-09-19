@@ -99,13 +99,13 @@ describe('time based pricing editor', () => {
     }
   })
 
-  test('keeps off-peak as the flat baseline while the toggle is off', () => {
+  test('keeps the standard price as the flat baseline while the toggle is off', () => {
     renderEditor(FLAT)
 
     expect(
-      screen.getByRole('switch', { name: 'Peak / off-peak pricing' })
+      screen.getByRole('switch', { name: 'Peak hours pricing' })
     ).not.toBeChecked()
-    expect(screen.getByText('Price')).toBeVisible()
+    expect(screen.getByText('Standard price')).toBeVisible()
     expect(screen.queryByText('Peak price')).toBeNull()
     expect(
       screen.getAllByRole('textbox', { name: 'Input price' })[0]
@@ -116,39 +116,106 @@ describe('time based pricing editor', () => {
     const user = userEvent.setup()
     const onChange = renderEditor(FLAT)
 
-    await user.click(
-      screen.getByRole('switch', { name: 'Peak / off-peak pricing' })
-    )
+    await user.click(screen.getByRole('switch', { name: 'Peak hours pricing' }))
 
     const expression = lastExpression(onChange)
     expect(expression).toContain('? tier("peak"')
     expect(expression).toContain('tier("off_peak", p * 1.5 + c * 4.5)')
+    // New schedules adopt the interface language's timezone (en -> UTC).
+    expect(expression).toContain('weekday("UTC") >= 1')
+    expect(expression).toContain('hour("UTC") >= 9')
+  })
+
+  test('new schedules use the timezone implied by the interface language', async () => {
+    const user = userEvent.setup()
+    i18nState.language = 'zhCN'
+    const onChange = renderEditor(FLAT)
+
+    await user.click(screen.getByRole('switch', { name: 'Peak hours pricing' }))
+
+    const expression = lastExpression(onChange)
     expect(expression).toContain('weekday("Asia/Shanghai") >= 1')
     expect(expression).toContain('hour("Asia/Shanghai") >= 9')
+  })
+
+  test('existing schedules keep the timezone saved in the expression', async () => {
+    const user = userEvent.setup()
+    i18nState.language = 'zhCN'
+    const onChange = renderEditor(ENABLED)
+
+    const monday = screen.getByRole('button', { name: '周一' })
+    await user.click(monday)
+
+    expect(lastExpression(onChange)).toContain(
+      'weekday("Asia/Shanghai") >= 2 && weekday("Asia/Shanghai") <= 5'
+    )
   })
 
   test('turning the toggle off drops the schedule and bills off-peak flat', async () => {
     const user = userEvent.setup()
     const onChange = renderEditor(ENABLED)
 
-    await user.click(
-      screen.getByRole('switch', { name: 'Peak / off-peak pricing' })
-    )
+    await user.click(screen.getByRole('switch', { name: 'Peak hours pricing' }))
 
     expect(lastExpression(onChange)).toBe('tier("base", p * 1.5 + c * 4.5)')
   })
 
-  test('editing a peak price keeps the off-peak branch', () => {
+  test('peak section exposes multipliers with the absolute prices advanced section collapsed', () => {
+    renderEditor(ENABLED)
+
+    // DOM order: the off-peak (standard) absolute prices render first, then
+    // the peak multiplier fields derived from them (3 / 1.5 = 2x).
+    const inputs = screen.getAllByRole('textbox', { name: 'Input price' })
+    expect(inputs.length).toBeGreaterThanOrEqual(2)
+    expect(inputs[0]).toHaveValue('1.5')
+    expect(inputs[1]).toHaveValue('2')
+  })
+
+  test('editing a peak multiplier rebuilds the peak prices', () => {
     const onChange = renderEditor(ENABLED)
 
-    fireEvent.change(
-      screen.getAllByRole('textbox', { name: 'Input price' })[0],
-      { target: { value: '5' } }
-    )
+    const inputs = screen.getAllByRole('textbox', { name: 'Input price' })
+    fireEvent.change(inputs[1], { target: { value: '3' } })
 
     const expression = lastExpression(onChange)
-    expect(expression).toContain('tier("peak", p * 5 + c * 9)')
+    expect(expression).toContain('tier("peak", p * 4.5 + c * 9)')
     expect(expression).toContain('tier("off_peak", p * 1.5 + c * 4.5)')
+  })
+
+  test('editing an off-peak price keeps peak in sync via the multipliers', () => {
+    const onChange = renderEditor(ENABLED)
+
+    const inputs = screen.getAllByRole('textbox', { name: 'Input price' })
+    // Raise the peak multiplier first: 1.5 * 4 = 6.
+    fireEvent.change(inputs[1], { target: { value: '4' } })
+    expect(lastExpression(onChange)).toContain('tier("peak", p * 6 + c * 9)')
+
+    // Changing the standard price rebuilds peak from the recorded multipliers.
+    fireEvent.change(inputs[0], { target: { value: '2' } })
+    const expression = lastExpression(onChange)
+    expect(expression).toContain('tier("off_peak", p * 2 + c * 4.5)')
+    expect(expression).toContain('tier("peak", p * 8 + c * 9)')
+  })
+
+  test('advanced absolute prices open to expose the absolute peak fields', async () => {
+    const user = userEvent.setup()
+    renderEditor(ENABLED)
+
+    // Collapsed: the off-peak section and the peak multipliers each own one
+    // cache-read field; the advanced absolute section adds a third.
+    expect(
+      screen.queryAllByRole('textbox', { name: 'Cache read price' })
+    ).toHaveLength(2)
+    await user.click(
+      screen.getByRole('button', { name: 'Advanced absolute prices' })
+    )
+    expect(
+      screen.queryAllByRole('textbox', { name: 'Cache read price' })
+    ).toHaveLength(3)
+
+    const absolute = screen.getAllByRole('textbox', { name: 'Input price' })
+    expect(absolute.length).toBeGreaterThanOrEqual(3)
+    expect(absolute[2]).toHaveValue('3')
   })
 
   test('toggling a weekday rewrites the weekday bounds', async () => {
@@ -201,12 +268,14 @@ describe('time based pricing editor', () => {
     expect(screen.getByText('month("UTC") == 12')).toBeVisible()
     expect(screen.queryByRole('button', { name: 'Add time window' })).toBeNull()
 
+    // Index 0 is the off-peak absolute input; raising it rebuilds the peak
+    // branch from the recorded 2x multiplier (1 * 2 = 2 → 3 * 2 = 6).
     fireEvent.change(
       screen.getAllByRole('textbox', { name: 'Input price' })[0],
       { target: { value: '3' } }
     )
     expect(lastExpression(onChange)).toBe(
-      'month("UTC") == 12 ? tier("peak", p * 3) : tier("off_peak", p * 1)'
+      'month("UTC") == 12 ? tier("peak", p * 6) : tier("off_peak", p * 3)'
     )
   })
 
@@ -214,15 +283,13 @@ describe('time based pricing editor', () => {
     const user = userEvent.setup()
     render(<ControlledHarness initial={FLAT} />)
 
-    await user.click(
-      screen.getByRole('switch', { name: 'Peak / off-peak pricing' })
-    )
+    await user.click(screen.getByRole('switch', { name: 'Peak hours pricing' }))
 
     // The echo must not reset the editor: the peak branch stays visible.
     expect(screen.getByText('Peak price')).toBeVisible()
-    expect(screen.getByText('Off-peak price')).toBeVisible()
+    expect(screen.getByText('Standard price')).toBeVisible()
     expect(
-      screen.getByRole('switch', { name: 'Peak / off-peak pricing' })
+      screen.getByRole('switch', { name: 'Peak hours pricing' })
     ).toBeChecked()
   })
 })

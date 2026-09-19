@@ -38,6 +38,7 @@ import {
   requestRuleGroupsFromTrace,
   splitBillingExprAndRequestRules,
   tryParseRequestRuleExpr,
+  localizedTierLabel,
   type ParsedTaskTier,
   type ParsedTier,
   type RequestCondition,
@@ -45,7 +46,7 @@ import {
   type RequestRuleTrace,
   type TierCondition,
 } from '../lib/billing-expr'
-import { formatBillingCondition } from '../lib/billing-expression/condition-display'
+import { formatBillingConditionLines } from '../lib/billing-expression/condition-display'
 import { isBreakdownTierMatched } from '../lib/breakdown-tier-match'
 import {
   formatTaskUsageUnitPrice,
@@ -174,20 +175,18 @@ function formatBreakdownConditionSummary(
   schema: BillingUsageSchema | undefined,
   language: string,
   tierCount: number
-): string {
+): string[] | null {
   if (!isTaskBreakdownTier(tier)) {
     if (tier.conditionText) {
-      return (
-        formatBillingCondition(tier.conditionText, t, language) ??
-        tier.conditionText
-      )
+      return formatBillingConditionLines(tier.conditionText, t, language)
     }
-    return formatConditionSummary(tier.conditions, t)
+    const summary = formatConditionSummary(tier.conditions, t)
+    return summary ? [summary] : null
   }
-  return (
+  const summary =
     taskPricingConditions(tier.conditions, schema, language, t) ||
     t(tierCount > 1 ? 'Other cases' : 'All requests')
-  )
+  return [summary]
 }
 
 function formatBreakdownPrice(
@@ -251,8 +250,8 @@ function describeGroup(
   locale: string
 ): string {
   if (group.conditionText) {
-    const formatted = formatBillingCondition(group.conditionText, t, locale)
-    if (formatted) return formatted
+    const lines = formatBillingConditionLines(group.conditionText, t, locale)
+    if (lines) return lines.join(' / ')
   }
   const description = (group.conditions || [])
     .map((condition) => describeCondition(condition, t))
@@ -494,7 +493,7 @@ export function DynamicPricingBreakdown({
                         variant='secondary'
                         className='bg-blue-100 text-blue-700 dark:bg-blue-500/20 dark:text-blue-300'
                       >
-                        {tier.label || t('Default')}
+                        {localizedTierLabel(tier.label, t)}
                       </Badge>
                     )}
                     {isMatched && (
@@ -506,11 +505,14 @@ export function DynamicPricingBreakdown({
                       </Badge>
                     )}
                   </div>
-                  {condSummary && (
-                    <div className='text-muted-foreground mb-1.5 text-xs'>
-                      {condSummary}
+                  {condSummary?.map((line) => (
+                    <div
+                      key={line}
+                      className='text-muted-foreground mb-1.5 text-xs'
+                    >
+                      {line}
                     </div>
-                  )}
+                  ))}
                   <div
                     className={cn(
                       'grid gap-x-3 gap-y-1.5',
@@ -610,7 +612,7 @@ export function DynamicPricingBreakdown({
                             variant='secondary'
                             className='bg-blue-100 text-blue-700 dark:bg-blue-500/20 dark:text-blue-300'
                           >
-                            {tier.label || t('Default')}
+                            {localizedTierLabel(tier.label, t)}
                           </Badge>
                         )}
                         {isMatched && (
@@ -622,11 +624,14 @@ export function DynamicPricingBreakdown({
                           </Badge>
                         )}
                       </div>
-                      {condSummary && (
-                        <div className='text-muted-foreground mt-1 text-xs'>
-                          {condSummary}
+                      {condSummary?.map((line) => (
+                        <div
+                          key={line}
+                          className='text-muted-foreground mt-1 text-xs'
+                        >
+                          {line}
                         </div>
-                      )}
+                      ))}
                     </>
                   )
                 },

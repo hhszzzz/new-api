@@ -42,6 +42,7 @@ import {
   type PricingCurrency,
 } from '@/features/model-pricing/currency'
 import { useBillingTime } from '@/features/pricing/hooks/use-billing-time'
+import { localizedTierLabel } from '@/features/pricing/lib/billing-expr'
 import { formatBillingCondition } from '@/features/pricing/lib/billing-expression/condition-display'
 import { evaluateBillingExpression } from '@/features/pricing/lib/billing-expression/runtime'
 import type {
@@ -373,7 +374,7 @@ export function RequestSimulation(props: RequestSimulationProps) {
             </p>
             {success.matchedTier && (
               <Badge variant='outline'>
-                {t('Hit tier')}: {success.matchedTier}
+                {t('Hit tier')}: {localizedTierLabel(success.matchedTier, t)}
               </Badge>
             )}
             {success.requestRules.length > 0 && (

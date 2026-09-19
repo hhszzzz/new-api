@@ -31,15 +31,24 @@ import { cn } from '@/lib/utils'
 export function DetailRow(props: {
   label: ReactNode
   value: ReactNode
+  /** Optional small, uncolored icon rendered before the label. */
+  icon?: ReactNode
   mono?: boolean
   muted?: boolean
   highlight?: boolean
 }) {
   return (
     <div className='grid min-w-0 grid-cols-[5.25rem_minmax(0,1fr)] gap-2 text-sm sm:grid-cols-[7rem_minmax(0,1fr)] sm:gap-3'>
-      <span className='text-muted-foreground min-w-0 text-xs'>
-        {props.label}
-      </span>
+      {props.icon ? (
+        <span className='text-muted-foreground flex min-w-0 items-center gap-1 text-xs'>
+          <span className='flex shrink-0 items-center'>{props.icon}</span>
+          <span className='min-w-0'>{props.label}</span>
+        </span>
+      ) : (
+        <span className='text-muted-foreground min-w-0 text-xs'>
+          {props.label}
+        </span>
+      )}
       <span
         className={cn(
           'max-w-full min-w-0 text-xs break-all sm:wrap-break-word',
@@ -84,7 +93,8 @@ export function CollapsibleDetailSection(props: {
 
 export function DetailSection(props: {
   icon?: ReactNode
-  iconTone?: IconBadgeTone
+  /** 'plain' renders the icon without the colored badge background. */
+  iconTone?: IconBadgeTone | 'plain'
   label: string
   variant?: 'default' | 'danger'
   children: ReactNode
@@ -99,11 +109,16 @@ export function DetailSection(props: {
           isDanger && 'text-red-500'
         )}
       >
-        {props.icon && (
-          <IconBadge tone={iconTone} size='xs'>
-            {props.icon}
-          </IconBadge>
-        )}
+        {props.icon &&
+          (iconTone === 'plain' ? (
+            <span className='text-muted-foreground flex shrink-0 items-center'>
+              {props.icon}
+            </span>
+          ) : (
+            <IconBadge tone={iconTone} size='xs'>
+              {props.icon}
+            </IconBadge>
+          ))}
         {props.label}
       </Label>
       <div

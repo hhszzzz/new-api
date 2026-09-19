@@ -33,19 +33,22 @@ const protocolNames: Record<string, string> = {
   'Google Gemini': 'Gemini GenerateContent',
 }
 
+// Lowercase protocol names: this map only feeds `getProtocolTranslationTarget`,
+// which is interpolated as `{{protocol}} translation`, and the name reads as a
+// common noun in that phrase (`messages translation`), not as a proper label.
 const protocolShortNames: Record<string, string> = {
-  chat: 'Chat',
-  openai: 'Chat',
-  messages: 'Messages',
-  claude: 'Messages',
-  responses: 'Responses',
-  'openai-responses': 'Responses',
-  openai_responses_compaction: 'Responses',
-  gemini: 'Gemini',
-  'OpenAI Compatible': 'Chat',
-  'Claude Messages': 'Messages',
-  'OpenAI Responses': 'Responses',
-  'Google Gemini': 'Gemini',
+  chat: 'chat',
+  openai: 'chat',
+  messages: 'messages',
+  claude: 'messages',
+  responses: 'responses',
+  'openai-responses': 'responses',
+  openai_responses_compaction: 'responses',
+  gemini: 'gemini',
+  'OpenAI Compatible': 'chat',
+  'Claude Messages': 'messages',
+  'OpenAI Responses': 'responses',
+  'Google Gemini': 'gemini',
 }
 
 export function getProtocolName(protocol: string): string {

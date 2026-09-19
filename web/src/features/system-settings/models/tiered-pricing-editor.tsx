@@ -76,6 +76,7 @@ import {
   getRequestRuleMatchOptions,
   splitBillingExprAndRequestRules,
   tryParseRequestRuleExpr,
+  localizedTierLabel,
   type ParamHeaderCondition,
   type RequestCondition,
   type RequestRuleGroup,
@@ -1334,7 +1335,7 @@ function CostEstimator({ effectiveExpr, fullExpr, currency }: EstimatorProps) {
             </span>
             {result.matchedTier && (
               <Badge variant='outline' className='text-xs'>
-                {t('Hit tier')}: {result.matchedTier}
+                {t('Hit tier')}: {localizedTierLabel(result.matchedTier, t)}
               </Badge>
             )}
           </div>

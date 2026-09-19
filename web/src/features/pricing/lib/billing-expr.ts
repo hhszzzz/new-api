@@ -32,6 +32,7 @@ import {
   readTokenTierChain,
   readTaskTierChain,
   readTimeTokenPricing,
+  type TimeTokenTier,
   type TokenTier,
 } from './billing-expression/display'
 import { compileBillingExpression } from './billing-expression/parser'
@@ -39,6 +40,7 @@ import {
   splitExpressionAtTopLevel,
   unwrapExpressionParens,
 } from './billing-expression/structure'
+import type { TokenVariable } from './billing-expression/types'
 
 // ---------------------------------------------------------------------------
 // Variable registry
@@ -209,6 +211,61 @@ export const COMMON_TIMEZONES: { value: string; label: string }[] = [
   { value: 'Australia/Sydney', label: 'UTC+10 Sydney (Australia/Sydney)' },
 ]
 
+/**
+ * Timezone matched to each interface language. The time-based pricing editor
+ * has no timezone selector: peak-hour windows are written in the timezone the
+ * administrator's language implies.
+ */
+export function languageTimezone(language: string | undefined | null): string {
+  const normalized = (language || '').trim().toLowerCase()
+  if (normalized === 'zh' || normalized.startsWith('zh-cn')) {
+    return 'Asia/Shanghai'
+  }
+  if (normalized.startsWith('zh-tw') || normalized.startsWith('zh-hk')) {
+    return 'Asia/Taipei'
+  }
+  if (normalized === 'zhcn') return 'Asia/Shanghai'
+  if (normalized === 'zhtw') return 'Asia/Taipei'
+  if (normalized.startsWith('ja')) return 'Asia/Tokyo'
+  if (normalized.startsWith('vi')) return 'Asia/Ho_Chi_Minh'
+  if (normalized.startsWith('ru')) return 'Europe/Moscow'
+  if (normalized.startsWith('fr')) return 'Europe/Paris'
+  return 'UTC'
+}
+
+/**
+ * i18n key for the well-known tier labels recorded in billing expressions
+ * (peak / off-peak / standard). Returns null for custom labels, which are
+ * shown verbatim.
+ */
+export function tierLabelTranslationKey(
+  label: string | undefined | null
+): string | null {
+  if (!label) return null
+  const normalized = label
+    .trim()
+    .toLowerCase()
+    .replaceAll(/[\s-]+/g, '_')
+  if (normalized === 'peak') return 'Peak hours'
+  if (normalized === 'off_peak' || normalized === 'offpeak') {
+    return 'Idle hours'
+  }
+  if (normalized === 'standard' || normalized === 'base') return 'Standard'
+  return null
+}
+
+/**
+ * Display text for a tier label: well-known labels (peak / off-peak /
+ * standard) are localized, custom labels fall back to their recorded name.
+ */
+export function localizedTierLabel(
+  label: string | undefined | null,
+  t: (key: string) => string
+): string {
+  const key = tierLabelTranslationKey(label)
+  return key ? t(key) : label || t('Default')
+}
+
 const NUMERIC_LITERAL_REGEX = /^-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/
 
 export type ParamHeaderCondition = {
@@ -309,6 +366,97 @@ export function getCurrentTimePricingTiers(
 ): ParsedTier[] | null {
   return (
     readTimeTokenPricing(exprStr, now)?.currentTiers.map(mapTokenTier) ?? null
+  )
+}
+
+export type MatchedTierMultiplier = {
+  label: string
+  /** Price of the matched tier over the standard price it was billed against. */
+  multipliers: { field: string; shortLabel: string; value: number }[]
+}
+
+/**
+ * Time-of-day expressions price the same request differently depending on the
+ * clock. Settlement records only the tier that applied, so the multiplier the
+ * clock added is not recoverable from the recorded prices alone; derive it from
+ * the expression by pricing the request against the standard branch the
+ * schedule falls back to outside its windows.
+ *
+ * The standard branch is the reference (1x) because that is what the pricing
+ * editor calls the standard price; a peak window then reports the markup on
+ * top of it.
+ *
+ * Returns null unless the matched tier is clock-conditional and both branches
+ * price the same variable.
+ */
+export function getMatchedTierMultiplier(
+  exprStr: string,
+  matchedTierLabel: string | undefined
+): MatchedTierMultiplier | null {
+  if (!exprStr || !matchedTierLabel) return null
+  const tiers = readTimeTokenPricing(exprStr)?.tiers
+  if (!tiers) return null
+  const matchedKey = normalizeTierLabel(matchedTierLabel)
+  const matched = tiers.find(
+    (tier) =>
+      tier.timeConditions.length > 0 &&
+      normalizeTierLabel(tier.label) === matchedKey
+  )
+  if (!matched) return null
+  const standard = selectStandardBranch(tiers, matched)
+  if (!standard) return null
+
+  const multipliers: MatchedTierMultiplier['multipliers'] = []
+  for (const variable of BILLING_PRICING_VARS) {
+    if (!variable.field) continue
+    const key = variable.key as TokenVariable
+    const base = standard.prices[key]
+    const value = matched.prices[key]
+    if (
+      !Number.isFinite(base) ||
+      !Number.isFinite(value) ||
+      Number(base) <= 0
+    ) {
+      continue
+    }
+    multipliers.push({
+      field: variable.field,
+      shortLabel: variable.shortLabel,
+      value: Math.round((Number(value) / Number(base)) * 100) / 100,
+    })
+  }
+  if (multipliers.length === 0) return null
+  return { label: matched.label, multipliers }
+}
+
+/**
+ * The branch a clock-conditioned expression falls back to outside its windows:
+ * every condition it is guarded by is negated. Among those, prefer the one
+ * sharing the matched tier's non-clock conditions so size tiers inside the
+ * same window do not shift the reference price.
+ */
+function selectStandardBranch(
+  tiers: TimeTokenTier[],
+  matched: TimeTokenTier
+): TimeTokenTier | null {
+  const standard = tiers.filter(
+    (tier) =>
+      tier.timeConditions.length > 0 &&
+      tier.timeConditions.every(({ matches }) => !matches)
+  )
+  return (
+    standard.find(
+      (tier) =>
+        tier.conditions.length === matched.conditions.length &&
+        tier.conditions.every(
+          (condition, index) =>
+            condition.var === matched.conditions[index].var &&
+            condition.op === matched.conditions[index].op &&
+            condition.value === matched.conditions[index].value
+        )
+    ) ??
+    standard[0] ??
+    null
   )
 }
 

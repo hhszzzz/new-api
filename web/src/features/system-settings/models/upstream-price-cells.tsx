@@ -21,6 +21,7 @@ import { useTranslation } from 'react-i18next'
 import { CopyButton } from '@/components/copy-button'
 import { StatusBadge } from '@/components/status-badge'
 import { Checkbox } from '@/components/ui/checkbox'
+import { localizedTierLabel } from '@/features/pricing/lib/billing-expr'
 import { cn } from '@/lib/utils'
 
 import type { PricingSyncValues } from '../types'
@@ -67,7 +68,7 @@ export function SyncPriceCell(props: { values: PricingSyncValues }) {
               >
                 {parsed.tiers.length > 1 && (
                   <div className='text-muted-foreground text-xs!'>
-                    {tier.condition || tier.label || t('Default')}
+                    {tier.condition || localizedTierLabel(tier.label, t)}
                   </div>
                 )}
                 <SyncPriceMetrics lines={tier.lines} />

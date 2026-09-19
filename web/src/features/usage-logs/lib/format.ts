@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import type { StatusBadgeProps } from '@/components/status-badge'
 import {
   BILLING_PRICING_VARS,
+  getMatchedTierMultiplier,
   normalizeTierLabel,
   parseTiersFromExpr,
   splitBillingExprAndRequestRules,
@@ -504,6 +505,50 @@ export function getTieredBillingSummary(
     }
   }
   return { tiers, tier, priceEntries }
+}
+
+/**
+ * The clock multiplier the log was billed at, derived from the expression it
+ * was billed on and narrowed to the price variables shown alongside it, so the
+ * row never states a markup for a price the breakdown hides.
+ *
+ * Returns null when the expression does not price by time of day.
+ */
+export function getTieredClockMultiplier(
+  other: LogOtherData | null,
+  fields?: string[]
+): { label: string; entries: { shortLabel: string; value: number }[] } | null {
+  if (!other || other.billing_mode !== 'tiered_expr') return null
+  const exprStr = decodeBillingExprB64(other.expr_b64)
+  if (!exprStr) return null
+  const multiplier = getMatchedTierMultiplier(
+    splitBillingExprAndRequestRules(exprStr).billingExpr,
+    other.matched_tier
+  )
+  if (!multiplier) return null
+  const entries = (
+    fields
+      ? multiplier.multipliers.filter((entry) => fields.includes(entry.field))
+      : multiplier.multipliers
+  ).map(({ shortLabel, value }) => ({ shortLabel, value }))
+  if (entries.length === 0) return null
+  return { label: multiplier.label, entries }
+}
+
+/**
+ * Render the clock multiplier for display: one number when every priced
+ * variable scales alike, otherwise each ratio named by its variable so an
+ * expression that marks up the variables differently is not misreported.
+ */
+export function formatClockMultiplier(
+  entries: { shortLabel: string; value: number }[],
+  t: (key: string) => string
+): string {
+  const values = [...new Set(entries.map((entry) => entry.value))]
+  if (values.length === 1) return `${values[0]}x`
+  return entries
+    .map((entry) => `${t(entry.shortLabel)} ${entry.value}x`)
+    .join(' · ')
 }
 
 /**

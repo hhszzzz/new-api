@@ -28,6 +28,7 @@ import { cn } from '@/lib/utils'
 
 import { DEFAULT_TOKEN_UNIT } from '../constants'
 import { useBillingTime } from '../hooks/use-billing-time'
+import { localizedTierLabel } from '../lib/billing-expr'
 import {
   getCardExamplePrice,
   getDynamicDisplayGroupRatio,
@@ -167,7 +168,7 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
               (entry) => entry.formattedRange
             ) && (
               <span className='text-muted-foreground col-span-full text-xs break-words'>
-                ({dynamicSummary.tier.label})
+                ({localizedTierLabel(dynamicSummary.tier.label, t)})
               </span>
             )}
         </>

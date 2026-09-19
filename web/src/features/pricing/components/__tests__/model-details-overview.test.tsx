@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import type { PropsWithChildren } from 'react'
 import { describe, expect, test, vi } from 'vitest'
 
@@ -29,7 +29,7 @@ vi.mock('@tanstack/react-query', async (importOriginal) => ({
 }))
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }),
 }))
 
 vi.mock('@/components/copy-button', () => ({
@@ -37,13 +37,40 @@ vi.mock('@/components/copy-button', () => ({
 }))
 
 vi.mock('@/components/data-table', () => ({
-  StaticDataTable: (props: { data: unknown[] }) => (
-    <div>
-      {props.data.map((item) => (
-        <span key={String(item)}>{String(item)}</span>
-      ))}
-    </div>
+  StaticDataTable: (props: {
+    data: unknown[]
+    columns?: {
+      id: string
+      header?: unknown
+      cell?: (item: never, index: number) => unknown
+    }[]
+    getRowKey?: (item: never, index: number) => string
+  }) => (
+    <table>
+      <thead>
+        <tr>
+          {(props.columns ?? []).map((column) => (
+            <th key={column.id}>{column.header as never}</th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {props.data.map((item, index) => (
+          <tr key={props.getRowKey?.(item as never, index) ?? index}>
+            {(props.columns ?? []).map((column) => (
+              <td key={column.id}>
+                {column.cell?.(item as never, index) as never}
+              </td>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
   ),
+}))
+
+vi.mock('@/components/group-badge', () => ({
+  GroupBadge: (props: { group?: string | null }) => <span>{props.group}</span>,
 }))
 
 vi.mock('@/lib/lobe-icon', () => ({
@@ -106,5 +133,72 @@ describe('model details overview', () => {
       screen.getByRole('heading', { level: 2, name: 'Pricing by Group' })
     ).toBeInTheDocument()
     expect(screen.getByText('premium')).toBeInTheDocument()
+  })
+
+  test('shows only the group and its ratio for time-priced models', () => {
+    const timePricedModel: PricingModel = {
+      ...model,
+      model_name: 'time-priced-model',
+      enable_groups: ['vip'],
+      billing_mode: 'tiered_expr',
+      billing_expr:
+        'hour("Asia/Shanghai") >= 9 && hour("Asia/Shanghai") < 18 ? tier("peak", p * 8 + c * 24) : tier("off_peak", p * 3 + c * 12)',
+    }
+
+    render(
+      <ModelDetailsContent
+        model={timePricedModel}
+        groupRatio={{ vip: 1 }}
+        usableGroup={{ vip: { desc: 'VIP', ratio: 1 } }}
+        endpointMap={{}}
+        autoGroups={[]}
+        priceRate={1}
+        usdExchangeRate={1}
+        tokenUnit='M'
+      />
+    )
+
+    const section = screen
+      .getByRole('heading', { level: 2, name: 'Pricing by Group' })
+      .closest('section') as HTMLElement
+
+    // The peak markup lives in the tiered price table above, so the group
+    // table must not restate the peak/off-peak tiers per group.
+    expect(within(section).getByText('vip')).toBeInTheDocument()
+    expect(within(section).getByText('1x')).toBeInTheDocument()
+    expect(within(section).queryByText(/\$/)).not.toBeInTheDocument()
+  })
+
+  test('keeps the per-tier prices for models priced by size, not by clock', () => {
+    const sizeTieredModel: PricingModel = {
+      ...model,
+      model_name: 'size-tiered-model',
+      enable_groups: ['vip'],
+      billing_mode: 'tiered_expr',
+      billing_expr:
+        'len <= 272000 ? tier("standard", p * 8 + c * 24) : tier("long_context", p * 3 + c * 12)',
+    }
+
+    render(
+      <ModelDetailsContent
+        model={sizeTieredModel}
+        groupRatio={{ vip: 1 }}
+        usableGroup={{ vip: { desc: 'VIP', ratio: 1 } }}
+        endpointMap={{}}
+        autoGroups={[]}
+        priceRate={1}
+        usdExchangeRate={1}
+        tokenUnit='M'
+      />
+    )
+
+    const section = screen
+      .getByRole('heading', { level: 2, name: 'Pricing by Group' })
+      .closest('section') as HTMLElement
+
+    expect(within(section).getByText('vip')).toBeInTheDocument()
+    expect(within(section).getByText('1x')).toBeInTheDocument()
+    expect(within(section).getByText('$8')).toBeInTheDocument()
+    expect(within(section).getByText('$12')).toBeInTheDocument()
   })
 })

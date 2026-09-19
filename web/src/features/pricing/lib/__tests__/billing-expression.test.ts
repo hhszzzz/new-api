@@ -25,9 +25,13 @@ import zh from '@/i18n/locales/zh.json'
 import contract from '../../../../../../pkg/billingexpr/testdata/frontend_simulation.json'
 import {
   combineBillingExpr,
+  getMatchedTierMultiplier,
   splitBillingExprAndRequestRules,
 } from '../billing-expr'
-import { formatBillingCondition } from '../billing-expression/condition-display'
+import {
+  formatBillingCondition,
+  formatBillingConditionLines,
+} from '../billing-expression/condition-display'
 import { compileBillingExpression } from '../billing-expression/parser'
 import {
   evaluateBillingExpression,
@@ -88,12 +92,42 @@ describe('local billing expression evaluation', () => {
   test('localizes peak and complement conditions without exposing source code', async () => {
     const translations = createInstance()
     await translations.init({ lng: 'zh', resources: { zh } })
+    // zh maps to Asia/Shanghai, so the timezone suffix is omitted as implied
+    // by the interface language.
     expect(formatBillingCondition(peakCondition, translations.t, 'zh')).toBe(
-      '周一至周五 09:00至12:00或14:00至18:00（Asia/Shanghai）'
+      '周一 - 周五 09:00 - 12:00或14:00 - 18:00'
     )
     expect(
       formatBillingCondition(`!(${peakCondition})`, translations.t, 'zh')
-    ).toBe('周一至周五 09:00至12:00或14:00至18:00以外的时段（Asia/Shanghai）')
+    ).toBe('周一 - 周五 09:00 - 12:00或14:00 - 18:00以外的时段')
+    // A negated pure clock window renders as the concrete complement instead
+    // of an "outside these times" sentence.
+    expect(
+      formatBillingConditionLines(
+        '!(hour("Asia/Shanghai") >= 22 || hour("Asia/Shanghai") < 6)',
+        translations.t,
+        'zh'
+      )
+    ).toEqual(['06:00 - 22:00'])
+    expect(
+      formatBillingConditionLines(
+        '!(hour("Asia/Shanghai") >= 9 && hour("Asia/Shanghai") < 18)',
+        translations.t,
+        'zh'
+      )
+    ).toEqual(['00:00 - 09:00', '18:00 - 24:00'])
+    // A weekday bound prevents a pure clock complement, keeping the fallback.
+    expect(
+      formatBillingConditionLines(`!(${peakCondition})`, translations.t, 'zh')
+    ).toEqual(['周一 - 周五 09:00 - 12:00或14:00 - 18:00以外的时段'])
+    // A zone other than the language default keeps the suffix.
+    expect(
+      formatBillingCondition(
+        peakCondition.replaceAll('Asia/Shanghai', 'America/New_York'),
+        translations.t,
+        'zh'
+      )
+    ).toBe('周一 - 周五 09:00 - 12:00或14:00 - 18:00（America/New_York）')
   })
   test('formats weekday and number conditions for the zhCN and zhTW interface codes', async () => {
     // The interface language codes `zhCN` / `zhTW` are not valid BCP-47 tags,
@@ -102,10 +136,12 @@ describe('local billing expression evaluation', () => {
     const translations = createInstance()
     await translations.init({ lng: 'zh', resources: { zh } })
     expect(formatBillingCondition(peakCondition, translations.t, 'zhCN')).toBe(
-      '周一至周五 09:00至12:00或14:00至18:00（Asia/Shanghai）'
+      '周一 - 周五 09:00 - 12:00或14:00 - 18:00'
     )
+    // zhTW maps to Asia/Taipei while the expression targets Asia/Shanghai,
+    // so the non-default zone keeps its suffix.
     expect(formatBillingCondition(peakCondition, translations.t, 'zhTW')).toBe(
-      '週一至週五 09:00至12:00或14:00至18:00（Asia/Shanghai）'
+      '週一 - 週五 09:00 - 12:00或14:00 - 18:00（Asia/Shanghai）'
     )
     expect(formatBillingCondition('p < 1000', translations.t, 'zhTW')).toBe(
       '输入 < 1,000'
@@ -123,6 +159,47 @@ describe('local billing expression evaluation', () => {
     expect(
       getTieredBillingSummary({ ...log, matched_tier: 'missing' })
     ).toBeNull()
+  })
+
+  test('derives the clock multiplier from the branch the schedule falls back to', () => {
+    // Settlement records only the matched tier's own prices, so the peak markup
+    // has to be rebuilt from the expression instead of the recorded log.
+    expect(getMatchedTierMultiplier(deepSeekExpression, 'peak')).toEqual({
+      label: 'peak',
+      multipliers: [
+        { field: 'inputPrice', shortLabel: 'Input', value: 2 },
+        { field: 'outputPrice', shortLabel: 'Output', value: 2 },
+        { field: 'cacheReadPrice', shortLabel: 'Cache Read', value: 2 },
+      ],
+    })
+    // Off-peak is that fallback branch, so it bills at the reference 1x.
+    expect(
+      getMatchedTierMultiplier(deepSeekExpression, 'off_peak')?.multipliers
+    ).toEqual([
+      { field: 'inputPrice', shortLabel: 'Input', value: 1 },
+      { field: 'outputPrice', shortLabel: 'Output', value: 1 },
+      { field: 'cacheReadPrice', shortLabel: 'Cache Read', value: 1 },
+    ])
+  })
+
+  test('reports no clock multiplier for an expression that never reads the clock', () => {
+    const sizeExpression =
+      'len <= 272000 ? tier("standard", p * 10) : tier("long_context", p * 20)'
+    expect(getMatchedTierMultiplier(sizeExpression, 'standard')).toBeNull()
+    expect(getMatchedTierMultiplier(deepSeekExpression, undefined)).toBeNull()
+    expect(getMatchedTierMultiplier(deepSeekExpression, 'missing')).toBeNull()
+  })
+
+  test('keeps every distinct ratio so unequal branches are not overstated', () => {
+    // The peak window doubles the input price but only marks up the output by
+    // 1.5x, so a single number would misstate one of the two.
+    const uneven =
+      'hour("Asia/Shanghai") >= 9 ? tier("peak", p * 8 + c * 3) : tier("off_peak", p * 4 + c * 2)'
+    expect(
+      getMatchedTierMultiplier(uneven, 'peak')?.multipliers.map(
+        (entry) => entry.value
+      )
+    ).toEqual([2, 1.5])
   })
 
   test('preserves quoted operators while splitting and recombining request rules', () => {

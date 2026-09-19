@@ -20,6 +20,7 @@ import { createContext, useContext } from 'react'
 
 import {
   BILLING_PRICING_VARS,
+  localizedTierLabel,
   splitBillingExprAndRequestRules,
 } from '@/features/pricing/lib/billing-expr'
 import { tryParseVisualConfig } from '@/features/pricing/lib/tier-expr'
@@ -184,7 +185,7 @@ export function describeSyncPrice(
         `USD / ${t('1M token')}`,
         ...parsed.tiers.flatMap((tier) => [
           ...(parsed.tiers.length > 1
-            ? [tier.condition || tier.label || t('Default')]
+            ? [tier.condition || localizedTierLabel(tier.label, t)]
             : []),
           ...tier.lines.map((line) => `${line.label}: ${line.value}`),
         ]),

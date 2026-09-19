@@ -31,11 +31,17 @@ const i18nKeys = {
   'Billing Details': 'Billing Details',
   'Billing Mode': 'Billing Mode',
   'Per-token': 'Per-token',
+  'Per-token dynamic billing': 'Per-token dynamic billing',
   'Dynamic Pricing': 'Dynamic Pricing',
   'Matched Tier': 'Matched Tier',
   'Group Ratio': 'Group Ratio',
   'Total Cost': 'Total Cost',
   'Usage parameters': 'Usage parameters',
+  Input: 'Input',
+  Output: 'Output',
+  'Peak hours': 'Peak hours',
+  'Idle hours': 'Idle hours',
+  '{{tier}} multiplier': '{{tier}} multiplier',
 }
 
 function makeLog(other: LogOtherData): UsageLog {
@@ -127,8 +133,7 @@ describe('usage facts billing details', () => {
     expect(screen.getByText('Usage parameters')).toBeInTheDocument()
     expect(rowValue('resolution')).toBe('720P')
     expect(rowValue('seconds')).toBe('5')
-    expect(rowValue('Billing Mode')).toBe('Dynamic Pricing')
-    expect(rowValue('Matched Tier')).toBe('720P')
+    expect(rowValue('Billing Mode')).toBe('Per-token dynamic billing')
 
     const usageHeader = screen.getByText('Usage parameters')
     const totalCost = screen.getByText('Total Cost')
@@ -163,5 +168,74 @@ describe('usage facts billing details', () => {
     expect(screen.queryByText('resolution')).toBeNull()
     expect(screen.queryByText('seconds')).toBeNull()
     expect(screen.getByText('Total Cost')).toBeInTheDocument()
+  })
+
+  test('states the clock multiplier a time-priced log was billed at', () => {
+    const expression =
+      'hour("Asia/Shanghai") >= 9 && hour("Asia/Shanghai") < 18 ? tier("peak", p * 6 + c * 24) : tier("off_peak", p * 3 + c * 12)'
+    queryClients.push(
+      renderDetails({
+        group_ratio: 1,
+        billing_mode: 'tiered_expr',
+        expr_b64: Buffer.from(expression, 'utf8').toString('base64'),
+        matched_tier: 'peak',
+      })
+    )
+
+    // Settlement stores only the matched tier's prices, so the peak markup the
+    // clock added must be restated from the expression the log was billed on.
+    expect(rowValue('Input')).toBe('$6/M')
+    expect(rowValue('Output')).toBe('$24/M')
+    expect(rowValue('Peak hours multiplier')).toBe('2x')
+    expect(rowValue('Group Ratio')).toBe('1.0000x')
+  })
+
+  test('states the idle multiplier when the log was billed off peak', () => {
+    const expression =
+      'hour("Asia/Shanghai") >= 9 && hour("Asia/Shanghai") < 18 ? tier("peak", p * 6 + c * 24) : tier("off_peak", p * 3 + c * 12)'
+    queryClients.push(
+      renderDetails({
+        group_ratio: 1,
+        billing_mode: 'tiered_expr',
+        expr_b64: Buffer.from(expression, 'utf8').toString('base64'),
+        matched_tier: 'off_peak',
+      })
+    )
+
+    // Off-peak is the standard price the schedule falls back to, so it bills
+    // at the reference 1x rather than a discount against the peak window.
+    expect(rowValue('Idle hours multiplier')).toBe('1x')
+  })
+
+  test('names each ratio when the branches mark up the variables differently', () => {
+    const expression =
+      'hour("Asia/Shanghai") >= 9 && hour("Asia/Shanghai") < 18 ? tier("peak", p * 8 + c * 3) : tier("off_peak", p * 4 + c * 2)'
+    queryClients.push(
+      renderDetails({
+        group_ratio: 1,
+        billing_mode: 'tiered_expr',
+        expr_b64: Buffer.from(expression, 'utf8').toString('base64'),
+        matched_tier: 'peak',
+      })
+    )
+
+    // A single number would misstate whichever price it did not describe.
+    expect(rowValue('Peak hours multiplier')).toBe('Input 2x · Output 1.5x')
+  })
+
+  test('omits the clock multiplier for a tier chain that never changes with the clock', () => {
+    const expression =
+      'len <= 272000 ? tier("standard", p * 10) : tier("long_context", p * 20)'
+    queryClients.push(
+      renderDetails({
+        group_ratio: 1,
+        billing_mode: 'tiered_expr',
+        expr_b64: Buffer.from(expression, 'utf8').toString('base64'),
+        matched_tier: 'standard',
+      })
+    )
+
+    expect(rowValue('Input')).toBe('$10/M')
+    expect(screen.queryByText(/multiplier/)).toBeNull()
   })
 })

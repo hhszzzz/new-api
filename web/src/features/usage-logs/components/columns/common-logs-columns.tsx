@@ -38,6 +38,7 @@ import {
 } from '@/components/ui/tooltip'
 import { usePricingData } from '@/features/pricing/hooks/use-pricing-data'
 import {
+  localizedTierLabel,
   normalizeTierLabel,
   parseTaskTiersFromExpr,
 } from '@/features/pricing/lib/billing-expr'
@@ -104,7 +105,7 @@ function getGroupRatio(other: LogOtherData | null): number | null {
   }
 
   const groupRatio = other?.group_ratio
-  if (groupRatio != null && groupRatio !== 1 && Number.isFinite(groupRatio)) {
+  if (groupRatio != null && Number.isFinite(groupRatio)) {
     return groupRatio
   }
 
@@ -167,6 +168,11 @@ function buildTypeDetailSegments(
 
   if (!other) return []
 
+  // Billing tier labels (peak/off_peak/standard) ship in English; surface
+  // them through the tier translation keys so list previews localize too.
+  const tierLabel = (label: string | undefined | null) =>
+    localizedTierLabel(label, t)
+
   const segments: DetailSegment[] = []
 
   const priceOpts = { digitsLarge: 4, digitsSmall: 6, abbreviate: false }
@@ -204,7 +210,7 @@ function buildTypeDetailSegments(
         )
       }
       segments.push({
-        text: `${tier.label || t('Default')} · ${prices.join(' · ')}`,
+        text: `${tierLabel(tier.label)} · ${prices.join(' · ')}`,
       })
     } else {
       segments.push({
@@ -218,9 +224,9 @@ function buildTypeDetailSegments(
         .filter((entry) => ['inputPrice', 'outputPrice'].includes(entry.field))
         .map((entry) => formatPriceCompact(entry.price))
       if (baseEntries.length > 0) {
-        const tierLabel = tieredSummary.tier.label || t('Default')
+        const label = tierLabel(tieredSummary.tier.label)
         segments.push({
-          text: `${tierLabel} · ${formatPriceList(baseEntries, true)}`,
+          text: `${label} · ${formatPriceList(baseEntries, true)}`,
         })
       }
 
@@ -253,7 +259,7 @@ function buildTypeDetailSegments(
         )
         .map((entry) =>
           entry.unit === 'request'
-            ? `${tieredSummary.tier.label || t('Default')} · ${t(entry.shortLabel)} ${formatPriceCompact(entry.price)}/${t('request')}`
+            ? `${tierLabel(tieredSummary.tier.label)} · ${t(entry.shortLabel)} ${formatPriceCompact(entry.price)}/${t('request')}`
             : `${t(entry.shortLabel)} ${formatPrice(entry.price)}`
         )
       if (otherEntries.length > 0) {
@@ -784,7 +790,7 @@ export function useCommonLogsColumns(
           : null
 
         return (
-          <div className='flex w-fit flex-col items-center'>
+          <div className='flex w-fit flex-col items-center gap-0.5'>
             <ModelBadge
               modelName={modelInfo.name}
               actualModel={modelInfo.actualModel}

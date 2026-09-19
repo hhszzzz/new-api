@@ -58,12 +58,13 @@ it('renders weekday and hour conditions as time windows instead of expression so
     />
   )
   expect(
-    screen.getAllByText('Mon–Fri 09:00–12:00 or 14:00–18:00 (Asia/Shanghai)')
-      .length
+    screen.getAllByText(
+      'Mon - Fri 09:00 - 12:00 or 14:00 - 18:00 (Asia/Shanghai)'
+    ).length
   ).toBeGreaterThan(0)
   expect(
     screen.getAllByText(
-      'Outside these times: Mon–Fri 09:00–12:00 or 14:00–18:00 (Asia/Shanghai)'
+      'Outside these times: Mon - Fri 09:00 - 12:00 or 14:00 - 18:00 (Asia/Shanghai)'
     ).length
   ).toBeGreaterThan(0)
   expect(screen.queryByText(/weekday\(/)).not.toBeInTheDocument()
