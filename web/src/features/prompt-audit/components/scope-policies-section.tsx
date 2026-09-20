@@ -77,9 +77,9 @@ export function ScopePoliciesSection(props: ScopePoliciesSectionProps) {
               key={scope}
               className='grid gap-3 border-t pt-4 md:grid-cols-[12rem_1fr_auto] md:items-center'
             >
-              <Label htmlFor={`scope-libraries-${  scope}`}>{label}</Label>
+              <Label htmlFor={`scope-libraries-${scope}`}>{label}</Label>
               <MultiSelect
-                id={`scope-libraries-${  scope}`}
+                id={`scope-libraries-${scope}`}
                 aria-label={label}
                 options={options}
                 selected={policy.library_ids}
@@ -93,12 +93,12 @@ export function ScopePoliciesSection(props: ScopePoliciesSectionProps) {
                 }
               />
               <div className='flex items-center gap-2'>
-                <Label htmlFor={`scope-model-${  scope}`}>
+                <Label htmlFor={`scope-model-${scope}`}>
                   {t('Model audit')}
                   <span className='sr-only'>: {label}</span>
                 </Label>
                 <Switch
-                  id={`scope-model-${  scope}`}
+                  id={`scope-model-${scope}`}
                   checked={policy.model_audit}
                   onCheckedChange={(model_audit) =>
                     props.onChange({

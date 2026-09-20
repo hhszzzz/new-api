@@ -59,6 +59,7 @@ beforeEach(() => {
 })
 
 function Fixture() {
+  // eslint-disable-next-line react/incompatible-library -- TanStack Table manages its own state; this instance is not compiler-memoized.
   const table = useReactTable({
     data: [],
     columns: [],
@@ -187,6 +188,7 @@ it('keeps all quick actions visible without opening a menu', async () => {
 })
 
 function LoadingFixture(props: { loading: boolean; onSearch: () => void }) {
+  // eslint-disable-next-line react/incompatible-library -- TanStack Table manages its own state; this instance is not compiler-memoized.
   const table = useReactTable({
     data: [],
     columns: [],

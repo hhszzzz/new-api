@@ -48,6 +48,10 @@ vi.mock('@/components/dialog', () => ({
   Dialog: () => null,
 }))
 
+vi.mock('@/features/system-update/system-update-action', () => ({
+  SystemUpdateAction: () => null,
+}))
+
 vi.mock('@/hooks/use-notifications', () => ({
   useNotifications: () => ({
     popoverOpen: false,

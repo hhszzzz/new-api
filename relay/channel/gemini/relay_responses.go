@@ -18,6 +18,7 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/protocolstate"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 )
 
 func GeminiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *hosttypes.NewAPIError) {
@@ -33,6 +34,7 @@ func GeminiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 	if err := common.Unmarshal(responseBody, &geminiResponse); err != nil {
 		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
+	info.ObserveResponseModel(gjson.GetBytes(responseBody, "modelVersion").Str)
 	markGeminiGoogleSearchCall(c, &geminiResponse)
 	countGeminiBillableFunctionCalls(info, &geminiResponse)
 	blockReason := geminiPromptBlockReason(&geminiResponse)
@@ -177,12 +179,12 @@ func GeminiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, r
 		)
 	}
 	if streamErr != nil {
-		return nil, streamErr
+		return usage, streamErr
 	}
 	if !upstreamCompleted {
 		terminalErr := fmt.Errorf("Gemini stream ended without a terminal finish reason")
 		info.StreamStatus.MarkTerminalFailure(terminalErr)
-		return nil, hosttypes.NewOpenAIError(
+		return usage, hosttypes.NewOpenAIError(
 			terminalErr,
 			hosttypes.ErrorCodeBadResponse,
 			http.StatusBadGateway,
@@ -190,7 +192,7 @@ func GeminiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, r
 	}
 	hostedEvents, err := hostedBridge.Finalize(state)
 	if err != nil {
-		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
+		return usage, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
 	for _, event := range hostedEvents {
 		if !sendEvent(event) {
@@ -210,14 +212,14 @@ func GeminiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, r
 		if failResponsesStream(err) {
 			return usage, streamErr
 		}
-		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
+		return usage, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
 	for _, result := range finalResults {
 		event, ok := result.Value.(relayconvert.ChatToResponsesStreamEvent)
 		if !ok {
 			terminalErr := fmt.Errorf("expected OAI responses stream event, got %T", result.Value)
 			info.StreamStatus.MarkTerminalFailure(terminalErr)
-			return nil, hosttypes.NewOpenAIError(terminalErr, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
+			return usage, hosttypes.NewOpenAIError(terminalErr, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 		}
 		if !sendEvent(event) {
 			if streamErr != nil {

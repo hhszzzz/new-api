@@ -2,7 +2,6 @@ package service
 
 import (
 	"fmt"
-	hosttypes "github.com/QuantumNous/new-api/types"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -11,99 +10,101 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/types"
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
 )
 
-// ShouldRetryRelayError applies retry policy when the caller owns its response
-// transport and therefore cannot use Gin's Writer.Written state.
-func ShouldRetryRelayError(c *gin.Context, apiErr *hosttypes.NewAPIError, retryTimes int) bool {
-	if apiErr == nil || ShouldSkipRetryAfterChannelAffinityFailure(c) {
-		return false
+// DecideRelayRetry is the single retry decision for relay attempts. The reason
+// is recorded in the request policy decision events of the log details.
+func DecideRelayRetry(c *gin.Context, err *types.NewAPIError, retryTimes int) PolicyDecision {
+	if err == nil {
+		return PolicyDecision{Action: "stop", Reason: "request_completed", Source: "system"}
+	}
+	if ShouldSkipRetryAfterChannelAffinityFailure(c) {
+		source := RequestPolicy(c).SessionModeSource
+		if source == "" {
+			source = "session_rule"
+		}
+		return PolicyDecision{Action: "stop", Reason: "strict_session", Source: source}
 	}
 	if c != nil {
-		if _, ok := c.Get("specific_channel_id"); ok {
-			return false
-		}
-		if GetChannelConstraints(c).SuppressesRetry() {
-			return false
+		if _, pinned := c.Get("specific_channel_id"); pinned {
+			return PolicyDecision{Action: "stop", Reason: "pinned_channel", Source: "channel_constraint"}
 		}
 	}
-	if hosttypes.IsChannelError(apiErr) {
-		return true
+	if GetChannelConstraints(c).SuppressesRetry() {
+		return PolicyDecision{Action: "stop", Reason: "pinned_channel", Source: "channel_constraint"}
 	}
-	if hosttypes.IsSkipRetryError(apiErr) || retryTimes <= 0 {
-		return false
+	if types.IsChannelError(err) {
+		return PolicyDecision{Action: "retry", Reason: "channel_error", Source: "system"}
 	}
-	code := apiErr.StatusCode
+	if types.IsSkipRetryError(err) {
+		return PolicyDecision{Action: "stop", Reason: "non_retryable_error", Source: "system"}
+	}
+	if retryTimes <= 0 {
+		return PolicyDecision{Action: "stop", Reason: "attempt_budget_exhausted", Source: "global"}
+	}
+	code := err.StatusCode
 	if code >= 200 && code < 300 {
-		return false
+		return PolicyDecision{Action: "stop", Reason: "system_retry_exclusion", Source: "system"}
 	}
 	if code < 100 || code > 599 {
-		return true
+		return PolicyDecision{Action: "retry", Reason: "unrecognized_status", Source: "system"}
 	}
-	if operation_setting.IsAlwaysSkipRetryCode(apiErr.GetErrorCode()) {
-		return false
+	if operation_setting.IsAlwaysSkipRetryCode(err.GetErrorCode()) || operation_setting.IsAlwaysSkipRetryStatusCode(code) {
+		return PolicyDecision{Action: "stop", Reason: "system_retry_exclusion", Source: "system"}
 	}
-	return operation_setting.ShouldRetryByStatusCode(code)
+	if operation_setting.ShouldRetryByStatusCode(code) {
+		return PolicyDecision{Action: "retry", Reason: "retry_status_matched", Source: "global"}
+	}
+	return PolicyDecision{Action: "stop", Reason: "status_not_retryable", Source: "global"}
 }
 
-func ProcessChannelError(c *gin.Context, channelError hosttypes.ChannelError, apiErr *hosttypes.NewAPIError, relayInfo *relaycommon.RelayInfo) {
-	if apiErr == nil {
+func ShouldRetryRelayError(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) bool {
+	return DecideRelayRetry(c, openaiErr, retryTimes).Action == "retry"
+}
+
+func ProcessChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError, relayInfo *relaycommon.RelayInfo) {
+	if err == nil {
 		return
 	}
-	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, apiErr.StatusCode, common.LocalLogPreview(apiErr.Error())))
-	if apiErr.GetErrorCode() != hosttypes.ErrorCodeClientDisconnected && ShouldDisableChannel(apiErr) && channelError.AutoBan {
-		group := ""
-		modelName := ""
+	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, common.LocalLogPreview(err.MaskSensitiveErrorWithStatusCode())))
+	if err.GetErrorCode() != types.ErrorCodeClientDisconnected && ShouldDisableChannel(err) && channelError.AutoBan {
+		reason := err.MaskSensitiveErrorWithStatusCode()
+		group, modelName := "", ""
 		if c != nil {
 			group = c.GetString("group")
 			modelName = c.GetString("original_model")
 		}
 		gopool.Go(func() {
-			DisableChannelOrModel(channelError, group, modelName, apiErr.ErrorWithStatusCode())
+			DisableChannelOrModel(channelError, group, modelName, reason)
 		})
 	}
 
-	if !constant.ErrorLogEnabled || !hosttypes.IsRecordErrorLog(apiErr) || c == nil {
-		return
+	if constant.ErrorLogEnabled && types.IsRecordErrorLog(err) && c != nil {
+		userId := c.GetInt("id")
+		tokenName := c.GetString("token_name")
+		modelName := c.GetString("original_model")
+		tokenId := c.GetInt("token_id")
+		userGroup := c.GetString("group")
+		other := model.NewLogOther()
+		if c.Request != nil && c.Request.URL != nil {
+			other.SetPublic("request_path", c.Request.URL.Path)
+		}
+		other.SetPublic("error_type", err.GetErrorType())
+		other.SetPublic("error_code", err.GetErrorCode())
+		other.SetPublic("status_code", err.StatusCode)
+		AppendRelayLogAdminInfo(c, relayInfo, other)
+		AppendResponseModelLogInfo(relayInfo, other)
+		AppendPromptAuditAdminInfo(c, other)
+		AppendTaskPluginContextAuditInfo(c, other)
+		startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
+		if startTime.IsZero() {
+			startTime = time.Now()
+		}
+		useTimeSeconds := int(time.Since(startTime).Seconds())
+		model.RecordErrorLog(c, userId, channelError.ChannelId, modelName, tokenName, err.MaskSensitiveErrorWithStatusCode(), tokenId, useTimeSeconds, common.GetContextKeyBool(c, constant.ContextKeyIsStream), userGroup, other)
 	}
-	userID := c.GetInt("id")
-	tokenName := c.GetString("token_name")
-	modelName := c.GetString("original_model")
-	tokenID := c.GetInt("token_id")
-	userGroup := c.GetString("group")
-	channelID := channelError.ChannelId
-	other := model.NewLogOther()
-	if c.Request != nil && c.Request.URL != nil {
-		other.SetPublic("request_path", c.Request.URL.Path)
-	}
-	other.SetPublic("error_type", apiErr.GetErrorType())
-	other.SetPublic("error_code", apiErr.GetErrorCode())
-	other.SetPublic("status_code", apiErr.StatusCode)
-	other.SetAdmin("channel_id", channelID)
-	other.SetAdmin("channel_name", c.GetString("channel_name"))
-	other.SetAdmin("channel_type", c.GetInt("channel_type"))
-	adminInfo := map[string]interface{}{
-		"use_channel": c.GetStringSlice("use_channel"),
-	}
-	if common.GetContextKeyBool(c, constant.ContextKeyChannelIsMultiKey) {
-		adminInfo["is_multi_key"] = true
-		adminInfo["multi_key_index"] = common.GetContextKeyInt(c, constant.ContextKeyChannelMultiKeyIndex)
-	}
-	AppendChannelAffinityAdminInfo(c, other)
-	other.MergeAdmin(adminInfo)
-	if relayInfo != nil {
-		AppendModelRoutingAdminInfo(other, relayInfo.HasModelRouting(), relayInfo.UpstreamModelName)
-	}
-	AppendDifyWorkflowAdminInfo(relayInfo, other)
-	AppendParamOverrideAdminInfo(relayInfo, other)
-	AppendPromptAuditAdminInfo(c, other)
-	AppendTaskPluginContextAuditInfo(c, other)
-	startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
-	if startTime.IsZero() {
-		startTime = time.Now()
-	}
-	model.RecordErrorLog(c, userID, channelID, modelName, tokenName, apiErr.MaskSensitiveErrorWithStatusCode(), tokenID, int(time.Since(startTime).Seconds()), common.GetContextKeyBool(c, constant.ContextKeyIsStream), userGroup, other)
 }

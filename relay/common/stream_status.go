@@ -38,6 +38,18 @@ const (
 	StreamDrainTimedOut  StreamDrainResult = "timed_out"
 )
 
+// ResponseOutcome is the protocol-level result of one response, independent of
+// how the transport ended. Adaptors mark it from the events they already parse.
+type ResponseOutcome string
+
+const (
+	ResponseOutcomeUnknown    ResponseOutcome = ""
+	ResponseOutcomeCompleted  ResponseOutcome = "completed"
+	ResponseOutcomeFailed     ResponseOutcome = "failed"
+	ResponseOutcomeIncomplete ResponseOutcome = "incomplete"
+	ResponseOutcomeCancelled  ResponseOutcome = "cancelled"
+)
+
 const maxStreamErrorEntries = 20
 
 type StreamErrorEntry struct {
@@ -49,6 +61,13 @@ type StreamErrorEntry struct {
 // Transport, protocol, and downstream-delivery facts are deliberately kept
 // separate so the final result never depends on which goroutine won a race.
 type StreamSnapshot struct {
+	Response          ResponseOutcome
+	ResponseAccepted  bool
+	ExpectsTerminal   bool
+	ErrorCode         string
+	ErrorType         string
+	ErrorStatus       int
+	IncompleteReason  string
 	EndReason         StreamEndReason
 	EndError          error
 	TerminalState     StreamTerminalState
@@ -81,6 +100,27 @@ type StreamStatus struct {
 	writeError        error
 	errors            []StreamErrorEntry
 	errorCount        int
+
+	response         ResponseOutcome
+	responseAccepted bool
+	errorCode        string
+	errorType        string
+	errorStatus      int
+	incompleteReason string
+	expectsTerminal  bool
+}
+
+// StreamOutcome holds classification facts only; upstream messages never
+// enter it because they may contain credentials or request content.
+type StreamOutcome struct {
+	EndReason        StreamEndReason
+	HasErrors        bool
+	ExpectsTerminal  bool
+	Response         ResponseOutcome
+	ErrorCode        string
+	ErrorType        string
+	ErrorStatus      int
+	IncompleteReason string
 }
 
 func NewStreamStatus() *StreamStatus {
@@ -225,6 +265,102 @@ func (s *StreamStatus) RecordError(msg string) {
 	}
 }
 
+// RequireTerminal declares that the protocol always ends with an explicit
+// terminal event, so a stream that ends without one was cut short.
+func (s *StreamStatus) RequireTerminal() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.expectsTerminal = true
+}
+
+// MarkCompleted, MarkIncomplete and MarkCancelled keep the first terminal seen;
+// MarkFailed always wins because an error after completion is still a failure.
+func (s *StreamStatus) MarkCompleted() {
+	s.markTerminal(ResponseOutcomeCompleted, "")
+}
+
+func (s *StreamStatus) MarkIncomplete(reason string) {
+	s.markTerminal(ResponseOutcomeIncomplete, reason)
+}
+
+func (s *StreamStatus) MarkCancelled() {
+	s.markTerminal(ResponseOutcomeCancelled, "")
+}
+
+func (s *StreamStatus) markTerminal(outcome ResponseOutcome, incompleteReason string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.response != ResponseOutcomeUnknown {
+		return
+	}
+	s.response = outcome
+	s.incompleteReason = incompleteReason
+}
+
+// MarkFailed records a protocol failure. Empty details never erase details
+// recorded earlier, so a bare error envelope keeps the structured error.
+func (s *StreamStatus) MarkFailed(code, errorType string, status int) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.response = ResponseOutcomeFailed
+	if code != "" {
+		s.errorCode = code
+	}
+	if errorType != "" {
+		s.errorType = errorType
+	}
+	if status != 0 {
+		s.errorStatus = status
+	}
+}
+
+// MarkResponseAccepted records an upstream response lifecycle event. A bare
+// error before that point is a rejected request, not a billable fixed request.
+func (s *StreamStatus) MarkResponseAccepted() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.responseAccepted = true
+	s.mu.Unlock()
+}
+
+func (s *StreamStatus) ResponseOutcome() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return string(s.response)
+}
+
+func (s *StreamStatus) ResponseFailed() bool {
+	return s.ResponseOutcome() == string(ResponseOutcomeFailed)
+}
+
+func (s *StreamStatus) OutcomeSnapshot() StreamOutcome {
+	snapshot := s.Snapshot()
+	return StreamOutcome{
+		EndReason:        snapshot.EndReason,
+		HasErrors:        snapshot.ErrorCount > 0,
+		ExpectsTerminal:  snapshot.ExpectsTerminal,
+		Response:         snapshot.Response,
+		ErrorCode:        snapshot.ErrorCode,
+		ErrorType:        snapshot.ErrorType,
+		ErrorStatus:      snapshot.ErrorStatus,
+		IncompleteReason: snapshot.IncompleteReason,
+	}
+}
+
 func (s *StreamStatus) Snapshot() StreamSnapshot {
 	if s == nil {
 		return StreamSnapshot{}
@@ -233,6 +369,13 @@ func (s *StreamStatus) Snapshot() StreamSnapshot {
 	defer s.mu.RUnlock()
 
 	snapshot := StreamSnapshot{
+		ResponseAccepted:  s.responseAccepted,
+		Response:          s.response,
+		ExpectsTerminal:   s.expectsTerminal,
+		ErrorCode:         s.errorCode,
+		ErrorType:         s.errorType,
+		ErrorStatus:       s.errorStatus,
+		IncompleteReason:  s.incompleteReason,
 		TerminalState:     s.terminalState,
 		TerminalSeen:      s.terminalSeen,
 		TerminalDelivered: s.terminalDelivered,

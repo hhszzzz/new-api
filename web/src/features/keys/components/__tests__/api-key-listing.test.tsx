@@ -83,6 +83,7 @@ function QuotaTable(props: { apiKey: ApiKey }) {
   const columns = useApiKeysColumns(now).filter(
     (column) => column.id === 'quota'
   )
+  // eslint-disable-next-line react/incompatible-library -- TanStack Table manages its own state; this instance is not compiler-memoized.
   const table = useReactTable({
     columns,
     data: [props.apiKey],

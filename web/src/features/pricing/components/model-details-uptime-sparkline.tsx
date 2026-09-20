@@ -22,6 +22,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import {
+  formatUptimePct,
   getSuccessRateDotClass,
   getSuccessRateTextClass,
 } from '@/features/performance-metrics/lib/format'
@@ -44,6 +45,7 @@ type SparklineSize = 'sm' | 'md'
 
 type UptimeSparklineProps = {
   series: UptimeDayPoint[]
+  overallSuccessRate?: number
   size?: SparklineSize
   showOverall?: boolean
   emptyLabel?: string
@@ -71,6 +73,7 @@ export function UptimeSparkline(props: UptimeSparklineProps) {
   }
 
   const overall =
+    props.overallSuccessRate ??
     props.series.reduce((s, p) => s + p.uptime_pct, 0) / props.series.length
 
   const containerHeight = size === 'sm' ? 'h-3.5' : 'h-5'
@@ -109,7 +112,7 @@ export function UptimeSparkline(props: UptimeSparklineProps) {
             </TooltipTrigger>
             <TooltipContent side='top' className='font-mono text-xs'>
               <div className='font-medium'>{day.date}</div>
-              <div>{day.uptime_pct.toFixed(2)}%</div>
+              <div>{formatUptimePct(day.uptime_pct)}</div>
               {day.outage_minutes > 0 && (
                 <div className='text-muted-foreground'>
                   {day.outage_minutes} min outage
@@ -126,7 +129,7 @@ export function UptimeSparkline(props: UptimeSparklineProps) {
             getSuccessRateTextClass(overall)
           )}
         >
-          {overall.toFixed(1)}%
+          {formatUptimePct(overall)}
         </span>
       )}
     </div>

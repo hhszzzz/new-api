@@ -10,6 +10,8 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/channelcompat"
@@ -45,7 +47,7 @@ func PrepareResponsesWebSocketRequest(c *gin.Context, modelName string, requestB
 	}
 	if common.GetContextKeyBool(c, constant.ContextKeyTokenModelLimitEnabled) {
 		allowed, _ := common.GetContextKeyType[map[string]bool](c, constant.ContextKeyTokenModelLimit)
-		if !allowed[matchName] {
+		if !TokenModelLimitAllows(allowed, modelName) {
 			return hosttypes.NewErrorWithStatusCode(fmt.Errorf("token is not allowed to use model %s", modelName), hosttypes.ErrorCodeAccessDenied, http.StatusForbidden, hosttypes.ErrOptionWithSkipRetry())
 		}
 	}
@@ -149,36 +151,16 @@ func SelectResponsesWebSocketChannel(c *gin.Context, modelName string, retryPara
 		return bound, nil
 	}
 
-	if retryParam.GetRetry() == 0 {
-		if preferredChannelID, found := service.GetPreferredChannelByAffinity(c, selectionModel, selectionGroup); found {
-			preferred, err := model.CacheGetChannel(preferredChannelID)
-			if err == nil && preferred != nil && preferred.IsSchedulableAt(time.Now()) && responsesWebSocketChannelAllowed(retryParam, preferred) {
-				resolvedGroup, groupUsable := resolveAffinitySelectionGroup(c, selectionGroup, selectionModel, preferred.Id)
-				if routeChannelAllowed(c, preferred.Id) && groupUsable {
-					commitRouteSelectionGroup(c, selectionGroup, resolvedGroup)
-					service.MarkChannelAffinityUsed(c, resolvedGroup, preferred.Id)
-					if apiErr := setupResponsesWebSocketChannel(c, preferred, modelName, selectionModel); apiErr != nil {
-						return nil, apiErr
-					}
-					return preferred, nil
-				}
-			}
-			service.ClearCurrentChannelAffinityCache(c)
+	channel, selectedGroup, selectErr := service.SelectChannelForRequest(c, selectionModel, retryParam)
+	if selectErr != nil {
+		message := selectErr.Message
+		if selectErr.MessageID != "" {
+			message = i18n.T(c, selectErr.MessageID, selectErr.Params)
 		}
+		return nil, hosttypes.NewErrorWithStatusCode(errors.New(message), selectErr.Code, selectErr.StatusCode, hosttypes.ErrOptionWithSkipRetry())
 	}
-
-	channel, selectedGroup, err := service.CacheGetRandomSatisfiedChannel(retryParam)
-	if err != nil {
-		statusCode := http.StatusServiceUnavailable
-		errorCode := hosttypes.ErrorCodeGetChannelFailed
-		if errors.Is(err, model.ErrNoCompatibleChannel) {
-			statusCode = http.StatusBadRequest
-			errorCode = hosttypes.ErrorCodeInvalidRequest
-		}
-		return nil, hosttypes.NewErrorWithStatusCode(fmt.Errorf("failed to select a native Responses WebSocket channel from group %s: %w", selectedGroup, err), errorCode, statusCode, hosttypes.ErrOptionWithSkipRetry())
-	}
-	if channel == nil {
-		return nil, hosttypes.NewErrorWithStatusCode(fmt.Errorf("no native Responses WebSocket channel is available in group %s", selectedGroup), hosttypes.ErrorCodeGetChannelFailed, http.StatusServiceUnavailable, hosttypes.ErrOptionWithSkipRetry())
+	if selectedGroup != "" {
+		commitRouteSelectionGroup(c, selectionGroup, selectedGroup)
 	}
 	if apiErr := setupResponsesWebSocketChannel(c, channel, modelName, selectionModel); apiErr != nil {
 		return nil, apiErr
@@ -270,39 +252,16 @@ func SelectResponsesBridgeChannel(c *gin.Context, modelName string, retryParam *
 		return bound, nil
 	}
 
-	if retryParam.GetRetry() == 0 {
-		if preferredChannelID, found := service.GetPreferredChannelByAffinity(c, selectionModel, selectionGroup); found {
-			preferred, err := model.CacheGetChannel(preferredChannelID)
-			if err == nil && preferred != nil && preferred.IsSchedulableAt(time.Now()) &&
-				responsesBridgeChannelAllowed(retryParam, preferred) &&
-				channelSupportsRequestPath(preferred, c.Request.URL.Path, selectionModel) {
-				resolvedGroup, groupUsable := resolveAffinitySelectionGroup(c, selectionGroup, selectionModel, preferred.Id)
-				if routeChannelAllowed(c, preferred.Id) && groupUsable {
-					commitRouteSelectionGroup(c, selectionGroup, resolvedGroup)
-					service.MarkChannelAffinityUsed(c, resolvedGroup, preferred.Id)
-					if apiErr := SetupContextForSelectedChannel(c, preferred, modelName, true); apiErr != nil {
-						return nil, apiErr
-					}
-					return preferred, nil
-				}
-			}
-			service.ClearCurrentChannelAffinityCache(c)
+	channel, selectedGroup, selectErr := service.SelectChannelForRequest(c, selectionModel, retryParam)
+	if selectErr != nil {
+		message := selectErr.Message
+		if selectErr.MessageID != "" {
+			message = i18n.T(c, selectErr.MessageID, selectErr.Params)
 		}
+		return nil, hosttypes.NewErrorWithStatusCode(errors.New(message), selectErr.Code, selectErr.StatusCode, hosttypes.ErrOptionWithSkipRetry())
 	}
-
-	channel, selectedGroup, err := service.CacheGetRandomSatisfiedChannel(retryParam)
-	if err != nil {
-		if errors.Is(err, model.ErrNoCompatibleChannel) {
-			message := err.Error()
-			if reason, ok := common.GetContextKeyType[string](c, constant.ContextKeyProtocolIncompatibleReason); ok && reason != "" {
-				message = fmt.Sprintf("%s: %s", message, reason)
-			}
-			return nil, hosttypes.NewErrorWithStatusCode(errors.New(message), hosttypes.ErrorCodeInvalidRequest, http.StatusBadRequest, hosttypes.ErrOptionWithSkipRetry())
-		}
-		return nil, hosttypes.NewErrorWithStatusCode(fmt.Errorf("failed to select a channel for model %s from group %s: %w", selectionModel, selectedGroup, err), hosttypes.ErrorCodeGetChannelFailed, http.StatusServiceUnavailable, hosttypes.ErrOptionWithSkipRetry())
-	}
-	if channel == nil {
-		return nil, hosttypes.NewErrorWithStatusCode(fmt.Errorf("no channel is available for model %s in group %s", selectionModel, selectedGroup), hosttypes.ErrorCodeGetChannelFailed, http.StatusServiceUnavailable, hosttypes.ErrOptionWithSkipRetry())
+	if selectedGroup != "" {
+		commitRouteSelectionGroup(c, selectionGroup, selectedGroup)
 	}
 	if apiErr := SetupContextForSelectedChannel(c, channel, modelName, true); apiErr != nil {
 		return nil, apiErr
@@ -321,7 +280,10 @@ func responsesBridgeChannelAllowed(retryParam *service.RetryParam, channel *mode
 }
 
 func responsesWebSocketNativePlan(c *gin.Context, channel *model.Channel, modelName string) *channelcompat.ProtocolPlan {
-	if channel == nil || (channel.Type != constant.ChannelTypeOpenAI && channel.Type != constant.ChannelTypeCodex) {
+	if channel == nil {
+		return nil
+	}
+	if allowed, _ := model.ChannelSatisfiesFilters(channel, modelName, []dto.ChannelFilter{{Kind: dto.FilterResponsesWebSocket}}); !allowed {
 		return nil
 	}
 	plans := channelcompat.PlansForRequest(channel, channelcompat.ProtocolResponses, modelName, c.Request.URL.Path, requestProtocolFeatures(c, channelcompat.ProtocolResponses))
@@ -330,6 +292,29 @@ func responsesWebSocketNativePlan(c *gin.Context, channel *model.Channel, modelN
 			plan := plans[i]
 			return &plan
 		}
+	}
+	return nil
+}
+
+// RestoreResponsesWebSocketChannel rechecks the current route and group while
+// retaining the credential of an established upstream connection.
+func RestoreResponsesWebSocketChannel(c *gin.Context, channel *model.Channel, publicModel, lockedGroup string) *hosttypes.NewAPIError {
+	retry := NewResponsesWebSocketRetryParam(c, publicModel)
+	if err := validateSelectedRouteChannel(c, channel, c.Request.URL.Path); err != nil || !responsesWebSocketChannelAllowed(retry, channel) {
+		return hosttypes.NewErrorWithStatusCode(errors.New("the connection channel is no longer allowed for this request"), hosttypes.ErrorCodeAccessDenied, http.StatusForbidden, hosttypes.ErrOptionWithSkipRetry())
+	}
+	if binding, ok := common.GetContextKeyType[*protocolstate.SelectionBinding](c, constant.ContextKeyProtocolStateBinding); ok && binding != nil && binding.ChannelID > 0 && binding.ChannelID != channel.Id {
+		return hosttypes.NewErrorWithStatusCode(errors.New("the referenced response is bound to a different channel"), hosttypes.ErrorCodeInvalidRequest, http.StatusBadRequest, hosttypes.ErrOptionWithSkipRetry())
+	}
+	if _, pinned, _ := service.GetChannelConstraints(c).ResolvedPin(); !pinned {
+		group, allowed := resolveAffinitySelectionGroup(c, retry.TokenGroup, retry.ModelName, channel.Id)
+		if !allowed || group != lockedGroup {
+			return hosttypes.NewErrorWithStatusCode(errors.New("the connection group is no longer allowed"), hosttypes.ErrorCodeAccessDenied, http.StatusForbidden, hosttypes.ErrOptionWithSkipRetry())
+		}
+		commitRouteSelectionGroup(c, retry.TokenGroup, group)
+	}
+	if err := applySelectedChannelCompatibility(c, channel, retry.ModelName); err != nil {
+		return hosttypes.NewErrorWithStatusCode(err, hosttypes.ErrorCodeInvalidRequest, http.StatusBadRequest, hosttypes.ErrOptionWithSkipRetry())
 	}
 	return nil
 }

@@ -108,12 +108,16 @@ func ClaudeResponsesStreamHandler(c *gin.Context, resp *http.Response, info *rel
 		}
 
 		if claudeResponse.StopReason != "" {
-			maybeMarkClaudeRefusal(c, claudeResponse.StopReason)
+			maybeMarkClaudeRefusal(c, info, claudeResponse.StopReason)
 		}
 		if claudeResponse.Delta != nil && claudeResponse.Delta.StopReason != nil {
-			maybeMarkClaudeRefusal(c, *claudeResponse.Delta.StopReason)
+			maybeMarkClaudeRefusal(c, info, *claudeResponse.Delta.StopReason)
+		}
+		if claudeResponse.Type == "message_stop" {
+			info.StreamStatus.MarkCompleted()
 		}
 		if claudeResponse.Type == "message_start" && claudeResponse.Message != nil {
+			info.ObserveResponseModel(claudeResponse.Message.Model)
 			info.UpstreamModelName = claudeResponse.Message.Model
 		}
 		FormatClaudeResponseInfo(&claudeResponse, nil, claudeInfo)
@@ -155,8 +159,19 @@ func ClaudeResponsesStreamHandler(c *gin.Context, resp *http.Response, info *rel
 			}
 		}
 	})
+	// Preserve reported input/cache usage and estimate only missing generated
+	// output before any error return; interrupted Responses calls still settle.
+	if !claudeInfo.Done && claudeInfo.Usage.CompletionTokens == 0 && claudeInfo.ResponseText.Len() > 0 {
+		fallback := service.ResponseText2Usage(c, claudeInfo.ResponseText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
+		claudeInfo.Usage.CompletionTokens = fallback.CompletionTokens
+		if claudeInfo.Usage.PromptTokens == 0 {
+			claudeInfo.Usage.PromptTokens = fallback.PromptTokens
+		}
+		relayconvert.FinalizeClaudeStreamBillingUsage(claudeInfo)
+	}
+	claudeInfo.Usage.TotalTokens = claudeInfo.Usage.PromptTokens + claudeInfo.Usage.CompletionTokens
 	if streamErr != nil {
-		return nil, streamErr
+		return claudeInfo.Usage, streamErr
 	}
 	if streamFailed {
 		return claudeInfo.Usage, nil
@@ -170,11 +185,11 @@ func ClaudeResponsesStreamHandler(c *gin.Context, resp *http.Response, info *rel
 		if failResponsesStream(err) {
 			return claudeInfo.Usage, streamErr
 		}
-		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
+		return claudeInfo.Usage, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
 	for _, result := range finalResults {
 		if !sendResult(result) {
-			return nil, streamErr
+			return claudeInfo.Usage, streamErr
 		}
 	}
 	return claudeInfo.Usage, nil

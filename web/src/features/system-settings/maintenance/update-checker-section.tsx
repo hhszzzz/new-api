@@ -48,6 +48,7 @@ import {
   getSystemUpdateTriggerState,
   startSystemUpdate,
 } from '@/features/system-settings/api'
+import { SystemUpdateAction } from '@/features/system-update/system-update-action'
 import { formatTimestamp, formatTimestampToDate } from '@/lib/format'
 
 import { SettingsSection } from '../components/settings-section'
@@ -189,6 +190,7 @@ export function UpdateCheckerSection(props: UpdateCheckerSectionProps) {
   return (
     <SettingsSection title={t('System maintenance')}>
       <div className='flex flex-col gap-6'>
+        <SystemUpdateAction compact={false} />
         <div className='grid gap-4 md:grid-cols-2'>
           <div className='rounded-lg border p-4'>
             <div className='text-muted-foreground text-sm'>

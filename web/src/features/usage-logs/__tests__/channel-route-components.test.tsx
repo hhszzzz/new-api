@@ -70,6 +70,7 @@ const routedChannelLog: UsageLog = {
 
 function ChannelCellHarness() {
   const columns = useCommonLogsColumns(true, false, true)
+  // eslint-disable-next-line react/incompatible-library -- TanStack Table manages its own state; this instance is not compiler-memoized.
   const table = useReactTable({
     data: [routedChannelLog],
     columns,

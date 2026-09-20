@@ -155,13 +155,26 @@ import {
   useReducer,
 } from 'react'
 
+import sglangLogo from '@/assets/brand-icons/sglang.svg'
 import { IconSub2api } from '@/assets/custom/icon-sub2api'
+import { IconWan } from '@/assets/custom/icon-wan'
 
 type IconComponent = ComponentType<Record<string, unknown>>
 type CustomIconComponent = ComponentType<{ size?: number }>
 
 const CUSTOM_ICONS: Record<string, CustomIconComponent> = {
+  SGLang: (props) => (
+    <img
+      src={sglangLogo}
+      alt=''
+      aria-hidden='true'
+      width={props.size ?? 20}
+      height={props.size ?? 20}
+      className='object-contain'
+    />
+  ),
   Sub2API: IconSub2api,
+  Wan: IconWan,
 }
 
 type LobeIconStyle = {

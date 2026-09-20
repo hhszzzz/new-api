@@ -6,237 +6,194 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	appdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
 	appmodel "github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relay/output"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/protocolstate"
-
+	hosttypes "github.com/QuantumNous/new-api/types"
+	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
 
-// startHTTPBridgeCall serves one response.create over the HTTP relay pipeline
-// when no channel can carry a native Responses WebSocket. The full protocol
-// bridge (chat/messages/gemini upstreams) stays available because the call goes
-// through the same plan selection and converters as POST /v1/responses; the
-// protocol events are delivered directly to the WebSocket output sink.
-func (s *responsesWSSession) startHTTPBridgeCall(create responsesWSCreateRequest, eventID string, commitRate middleware.ModelRequestRateLimitCommit) *hosttypes.NewAPIError {
-	req := create.Request
-	req.Stream = common.GetPointer(true)
-	req.StreamOptions = nil
-	requestBody, err := common.Marshal(&req)
+// runHTTPBridgeCall runs in the same authenticated request worker as native WS.
+// The typed output sink holds its terminal until billing and middleware finish.
+func (s *responsesWSSession) runHTTPBridgeCall(c *gin.Context, state *responsesWSCallState, create responsesWSCreateRequest, rateGuard *service.UserRequestRateGuard) (apiErr *hosttypes.NewAPIError) {
+	state.info = nil
+	if len(create.Generate) > 0 {
+		var generate bool
+		if err := common.Unmarshal(create.Generate, &generate); err != nil || !generate {
+			return newResponsesWSInvalidRequestError(errors.New("generate:false requires a native Responses WebSocket channel"))
+		}
+	}
+	s.stateMu.Lock()
+	s.privacy = nil
+	s.stateMu.Unlock()
+	constraints := service.GetChannelConstraints(c)
+	constraints.Filters = slices.DeleteFunc(constraints.Filters, func(filter appdto.ChannelFilter) bool { return filter.Kind == appdto.FilterResponsesWebSocket })
+	create.Request.Stream = common.GetPointer(true)
+	create.Request.StreamOptions = nil
+	body, err := common.Marshal(&create.Request)
 	if err != nil {
-		commitRate(false)
 		return newResponsesWSInvalidRequestError(err)
 	}
-	common.CleanupBodyStorage(s.c)
-	storage, err := common.CreateBodyStorage(requestBody)
+	common.CleanupBodyStorage(c)
+	storage, err := common.CreateBodyStorage(body)
 	if err != nil {
-		commitRate(false)
 		return hosttypes.NewError(err, hosttypes.ErrorCodeReadRequestBodyFailed, hosttypes.ErrOptionWithSkipRetry())
 	}
-	s.c.Set(common.KeyBodyStorage, storage)
-	s.c.Request.Body = io.NopCloser(bytes.NewReader(requestBody))
-	s.c.Request.ContentLength = int64(len(requestBody))
-	create.Request = req
-
-	callCtx, cancel := context.WithCancel(s.c.Request.Context())
-	state := &responsesWSCallState{
-		usage:      &dto.Usage{},
-		commitRate: commitRate,
-		cancelHTTP: cancel,
-		rateGuard:  create.rateGuard,
-	}
-	if !s.tryReserveCurrent(state) {
-		cancel()
-		commitRate(false)
-		return hosttypes.NewErrorWithStatusCode(errors.New("another response.create is already in progress on this websocket connection"), hosttypes.ErrorCodeInvalidRequest, http.StatusConflict, hosttypes.ErrOptionWithSkipRetry())
-	}
-	s.bridgeWG.Add(1)
-	go s.runHTTPBridgeCall(state, create, eventID, callCtx)
-	return nil
-}
-
-func (s *responsesWSSession) runHTTPBridgeCall(state *responsesWSCallState, create responsesWSCreateRequest, eventID string, callCtx context.Context) {
-	defer s.bridgeWG.Done()
-	c := s.c
-	originalRequest := c.Request
-	originalWriter := c.Writer
-	bridgedRequest := originalRequest.WithContext(callCtx)
-	// Upstream adaptors reuse the client request method; the WebSocket upgrade
-	// arrived as a GET, while every relay endpoint expects a POST.
-	bridgedRequest.Method = http.MethodPost
-	c.Request = bridgedRequest
+	c.Set(common.KeyBodyStorage, storage)
+	callCtx, cancel := context.WithCancel(c.Request.Context())
+	defer cancel()
+	originalRequest, originalWriter := c.Request, c.Writer
+	c.Request = c.Request.Clone(callCtx)
+	c.Request.Body = io.NopCloser(bytes.NewReader(body))
+	c.Request.ContentLength = int64(len(body))
+	c.Request.Method = http.MethodPost
 	forwarder := newResponsesWSEventWriter(func(payload []byte) error {
-		if state.rateGuard != nil {
-			if err := state.rateGuard.Pace(callCtx, payload); err != nil {
-				return err
-			}
+		if err := rateGuard.Pace(callCtx, payload); err != nil {
+			return err
+		}
+		payload, err := responsesWSBridgeEvent(payload, create.StreamID)
+		if err != nil {
+			return err
 		}
 		return s.writeClient(websocket.TextMessage, payload)
-	}, state.cancelHTTP)
+	}, cancel)
 	c.Writer = forwarder
-
-	var finalErr *hosttypes.NewAPIError
-	var relayInfo *relaycommon.RelayInfo
 	defer func() {
-		if r := recover(); r != nil {
-			logger.LogError(c, fmt.Sprintf("responses websocket http bridge panic: %v", r))
-			if relayInfo != nil && relayInfo.Billing != nil {
-				relayInfo.Billing.Refund(c)
+		if recovered := recover(); recovered != nil {
+			apiErr = hosttypes.NewError(fmt.Errorf("responses websocket HTTP bridge panic: %v", recovered), hosttypes.ErrorCodeBadResponse, hosttypes.ErrOptionWithSkipRetry())
+			state.closeAfter = true
+		}
+		c.Request, c.Writer = originalRequest, originalWriter
+		if state.info != nil {
+			apiErr = RefundFailedRequestBilling(c, state.info, apiErr)
+		}
+		if apiErr == nil && len(forwarder.held) > 0 && callCtx.Err() == nil {
+			payload, err := responsesWSBridgeEvent(forwarder.held[0], create.StreamID)
+			if err != nil {
+				apiErr = newResponsesWSInvalidRequestError(err)
+			} else {
+				state.terminal = &responsesWSMessage{kind: websocket.TextMessage, body: payload}
 			}
-			if finalErr == nil {
-				finalErr = hosttypes.NewError(fmt.Errorf("responses websocket http bridge panic: %v", r), hosttypes.ErrorCodeDoRequestFailed, hosttypes.ErrOptionWithSkipRetry())
-			}
-		}
-		// Snapshot before cancelHTTP below cancels callCtx: a non-nil error here
-		// means the client cancelled or disconnected mid-call.
-		clientGone := callCtx.Err() != nil
-		c.Writer = originalWriter
-		c.Request = originalRequest
-		state.cancelHTTP()
-		if finalErr != nil && !clientGone {
-			service.ChargeViolationFeeIfNeeded(c, relayInfo, finalErr)
-			s.sendError(eventID, finalErr)
-		}
-		if state.commitRate != nil {
-			state.commitRate(finalErr == nil)
-		}
-		if s.clearCurrent(state) {
-			state.channelRateGuard.Release()
-			state.rateGuard.Release()
-		}
-		if finalErr == nil && !clientGone {
-			forwarder.flushHeldEvents()
 		}
 	}()
-
-	retryParam := middleware.NewResponsesBridgeRetryParam(c, create.Request.Model)
-	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
-		protocolstate.ResetAttempt(c)
-		retryParam.ClearChannelExclusions()
-		var (
-			channel          *appmodel.Channel
-			channelRateGuard *service.ChannelRateLimitGuard
-			apiErr           *hosttypes.NewAPIError
-			rejected         bool
-		)
+	controlDone := make(chan struct{})
+	controlCtx, stopControl := context.WithCancel(callCtx)
+	defer func() { stopControl(); <-controlDone }()
+	go func() {
+		defer close(controlDone)
 		for {
-			channel, apiErr = s.selectHTTPBridgeChannel(create.Request.Model, retryParam)
-			if apiErr != nil {
-				break
+			select {
+			case control := <-state.controls:
+				if control.streamID != "" && control.streamID != create.StreamID {
+					s.sendError(control.eventID, control.streamID, newResponsesWSInvalidRequestError(errors.New("response is not active on this stream")))
+					continue
+				}
+				cancel()
+				return
+			case <-controlCtx.Done():
+				return
 			}
-			var allowed bool
-			channelRateGuard, allowed = service.TryAcquireChannelRateLimit(c, channel)
-			if allowed {
-				break
-			}
-			rejected = true
-			retryParam.ExcludeChannel(channel.Id)
 		}
-		retryParam.ClearChannelExclusions()
+	}()
+	retry := middleware.NewResponsesBridgeRetryParam(c, create.Request.Model)
+	for ; retry.GetRetry() <= common.RetryTimes; retry.IncreaseRetry() {
+		protocolstate.ResetAttempt(c)
+		channel, selectErr := s.selectHTTPBridgeChannel(c, create.Request.Model, retry)
+		if selectErr != nil {
+			return selectErr
+		}
+		guard, allowed := service.TryAcquireChannelRateLimit(c, channel)
+		if !allowed {
+			retry.ExcludeChannel(channel.Id)
+			retry.ResetRetryNextTry()
+			continue
+		}
+		service.AppendUsedChannel(c, channel.Id)
+		defer guard.Release()
+		if state.info == nil {
+			state.info = relaycommon.GenRelayInfoResponses(c, &create.Request)
+			state.info.IsStream = true
+			apiErr = PrepareRequestBilling(c, state.info)
+		} else {
+			state.info.PriceData.GroupRatioInfo = helper.HandleGroupRatio(c, state.info)
+			apiErr = service.PrepareTieredBillingForSelectedGroup(c, state.info)
+		}
 		if apiErr != nil {
-			if rejected {
-				finalErr = service.NewChannelRateLimitError()
-			} else {
-				finalErr = apiErr
-			}
-			break
+			guard.Release()
+			return apiErr
 		}
-		addResponsesWSUsedChannel(c, channel.Id)
-
-		attempt, apiErr := s.prepareCallState(create)
-		if apiErr != nil {
-			channelRateGuard.Release()
-			finalErr = apiErr
-			break
-		}
-		relayInfo = attempt.info
-		s.stateMu.Lock()
-		state.info = relayInfo
-		state.channelRateGuard = channelRateGuard
-		s.stateMu.Unlock()
-
-		apiErr = ResponsesHelper(c, relayInfo)
-		channelRateGuard.Release()
-		s.stateMu.Lock()
-		state.channelRateGuard = nil
-		s.stateMu.Unlock()
+		service.RequestPolicy(c).BeginAttempt(channel, state.info.UsingGroup)
+		apiErr = ResponsesHelper(c, state.info)
+		guard.Release()
 		if apiErr == nil {
 			middleware.CommitAutoProtocolAffinity(c)
-			if commitErr := protocolstate.Commit(c); commitErr != nil {
-				logger.LogError(c, "failed to persist Responses WebSocket protocol state: "+commitErr.Error())
+			if err := protocolstate.Commit(c); err != nil {
+				logger.LogError(c, "failed to persist Responses WebSocket protocol state: "+err.Error())
 			}
-			service.RecordChannelAffinity(c, relayInfo.ChannelId)
-			finalErr = nil
-			break
+			service.RecordChannelAffinity(c, channel.Id)
+			return nil
 		}
-
-		apiErr = service.NormalizeViolationFeeError(apiErr)
-		if relayInfo.Billing != nil {
-			relayInfo.Billing.Refund(c)
-		}
-		if callCtx.Err() != nil {
-			// The client cancelled or disconnected; this is not a channel failure.
-			finalErr = apiErr
-			break
+		if callCtx.Err() != nil || forwarder.Written() {
+			return apiErr
 		}
 		if protocolstate.EnableReplayFallback(c, apiErr) {
-			retryParam.SetRetry(0)
-			retryParam.ResetRetryNextTry()
+			retry.SetRetry(0)
+			retry.ResetRetryNextTry()
 			continue
 		}
 		if middleware.AdvanceAutoProtocolAttempt(c, apiErr) {
-			retryParam.ResetRetryNextTry()
+			retry.ResetRetryNextTry()
 			continue
 		}
-		var shouldRetry bool
-		finalErr, shouldRetry = s.processChannelError(channel, apiErr, retryParam, relayInfo)
-		if !shouldRetry || forwarder.Written() {
-			break
+		apiErr = service.NormalizeViolationFeeError(apiErr)
+		decision := service.DecideRelayRetry(c, apiErr, common.RetryTimes-retry.GetRetry())
+		service.RecordPolicyFailure(c, channel.Id, apiErr, decision)
+		service.ProcessChannelError(c, *hosttypes.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, state.info.ApiKey, channel.GetAutoBan()), apiErr, state.info)
+		if decision.Action != "retry" {
+			return apiErr
 		}
 	}
+	return apiErr
 }
 
-func (s *responsesWSSession) selectHTTPBridgeChannel(publicModel string, retryParam *service.RetryParam) (*appmodel.Channel, *hosttypes.NewAPIError) {
-	if channelID, retrySameChannel := middleware.PendingAutoProtocolRetryChannelID(s.c); retrySameChannel && !retryParam.IsChannelExcluded(channelID) {
+func responsesWSBridgeEvent(payload []byte, streamID string) ([]byte, error) {
+	if streamID == "" {
+		return payload, nil
+	}
+	var event map[string]common.RawMessage
+	if err := common.Unmarshal(payload, &event); err != nil {
+		return nil, err
+	}
+	event["stream_id"], _ = common.Marshal(streamID)
+	return common.Marshal(event)
+}
+
+func (s *responsesWSSession) selectHTTPBridgeChannel(c *gin.Context, publicModel string, retry *service.RetryParam) (*appmodel.Channel, *hosttypes.NewAPIError) {
+	if channelID, sameChannel := middleware.PendingAutoProtocolRetryChannelID(c); sameChannel && !retry.IsChannelExcluded(channelID) {
 		channel, err := appmodel.CacheGetChannel(channelID)
-		if err != nil {
-			return nil, hosttypes.NewError(fmt.Errorf("failed to reload channel %d for automatic protocol retry: %w", channelID, err), hosttypes.ErrorCodeGetChannelFailed, hosttypes.ErrOptionWithSkipRetry())
-		}
-		if channel == nil || channel.Status != common.ChannelStatusEnabled || !channel.IsSchedulableAt(time.Now()) {
+		if err != nil || channel == nil || !channel.IsSchedulableAt(time.Now()) {
 			return nil, hosttypes.NewError(fmt.Errorf("channel %d is unavailable for automatic protocol retry", channelID), hosttypes.ErrorCodeGetChannelFailed, hosttypes.ErrOptionWithSkipRetry())
 		}
-		if setupErr := middleware.SetupContextForSelectedChannel(s.c, channel, publicModel, true); setupErr != nil {
-			return nil, setupErr
+		if apiErr := middleware.SetupContextForSelectedChannel(c, channel, publicModel, true); apiErr != nil {
+			return nil, apiErr
 		}
 		return channel, nil
 	}
-	return middleware.SelectResponsesBridgeChannel(s.c, publicModel, retryParam)
-}
-
-// cancelHTTPBridgeCall applies a client response.cancel to an in-flight HTTP
-// bridge call. Native transport forwards the event upstream instead.
-func (s *responsesWSSession) cancelHTTPBridgeCall(eventType string) bool {
-	if eventType != "response.cancel" {
-		return false
-	}
-	state := s.getCurrent()
-	if state == nil || state.cancelHTTP == nil {
-		return false
-	}
-	state.cancelHTTP()
-	return true
+	return middleware.SelectResponsesBridgeChannel(c, publicModel, retry)
 }
 
 // responsesWSEventWriter receives typed protocol events directly. It holds the

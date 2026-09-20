@@ -94,9 +94,7 @@ describe('SubscriptionCard', () => {
     ).toBeInTheDocument()
     unmount()
 
-    render(
-      <SubscriptionCard nowSeconds={NOW} subscription={subscription()} />
-    )
+    render(<SubscriptionCard nowSeconds={NOW} subscription={subscription()} />)
     expect(screen.getByText('Group: Any')).toBeInTheDocument()
   })
 

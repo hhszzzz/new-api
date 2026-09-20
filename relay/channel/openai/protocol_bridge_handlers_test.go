@@ -1,7 +1,7 @@
 package openai
 
 import (
-	hosttypes "github.com/QuantumNous/new-api/types"
+	"github.com/QuantumNous/new-api/service"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -88,7 +88,7 @@ func TestResponsesUpstreamReturnsMessagesSSEWithPublicModel(t *testing.T) {
 	)
 }
 
-func TestResponsesIncompleteStreamFailsProtocolAttempt(t *testing.T) {
+func TestResponsesOutputLimitConvertsTerminalWithoutSavingCompletedAttempt(t *testing.T) {
 	withOpenAIProtocolStreamTestMode(t)
 	body := strings.Join([]string{
 		`data: {"type":"response.created","response":{"id":"resp_incomplete","model":"provider-responses-model","created_at":1710000000}}`,
@@ -127,12 +127,12 @@ func TestResponsesIncompleteStreamFailsProtocolAttempt(t *testing.T) {
 
 	usage, apiErr := OaiResponsesToChatStreamHandler(c, info, resp)
 
-	assert.Nil(t, usage)
-	require.NotNil(t, apiErr)
-	assert.Equal(t, http.StatusBadGateway, apiErr.StatusCode)
-	assert.Equal(t, hosttypes.ErrorCodeBadResponse, apiErr.GetErrorCode())
+	require.NotNil(t, usage)
+	assert.Equal(t, 11, usage.TotalTokens)
+	require.Nil(t, apiErr)
 	assert.False(t, protocolstate.AttemptCompleted(c))
-	assert.NotContains(t, recorder.Body.String(), `event: message_stop`)
+	assert.Contains(t, recorder.Body.String(), `event: message_stop`)
+	assert.Contains(t, recorder.Body.String(), `"stop_reason":"max_tokens"`)
 }
 
 func TestBufferedResponsesPreservesRawProviderOutputForMessagesReplay(t *testing.T) {
@@ -369,7 +369,8 @@ func TestResponsesFlatErrorStopsMessagesStream(t *testing.T) {
 
 	usage, apiErr := OaiResponsesToChatStreamHandler(c, info, resp)
 
-	require.Nil(t, usage)
+	require.NotNil(t, usage)
+	assert.Zero(t, usage.TotalTokens)
 	require.NotNil(t, apiErr)
 	assert.Equal(t, http.StatusInternalServerError, apiErr.StatusCode)
 	openAIError := apiErr.ToOpenAIError()
@@ -393,7 +394,8 @@ func TestResponsesFirstSSEUnsupportedErrorCarriesAutoRetryEvidence(t *testing.T)
 
 	usage, apiErr := OaiResponsesToChatStreamHandler(c, info, resp)
 
-	require.Nil(t, usage)
+	require.NotNil(t, usage)
+	assert.Zero(t, usage.TotalTokens)
 	require.NotNil(t, apiErr)
 	assert.True(t, apiErr.HasProtocolUnsupportedEvidence())
 	assert.Empty(t, recorder.Body.String())
@@ -414,7 +416,8 @@ func TestChatFirstSSEUnsupportedErrorCarriesAutoRetryEvidence(t *testing.T) {
 
 	usage, apiErr := OaiChatToResponsesStreamHandler(c, info, resp)
 
-	require.Nil(t, usage)
+	require.NotNil(t, usage)
+	assert.Zero(t, usage.TotalTokens)
 	require.NotNil(t, apiErr)
 	assert.True(t, apiErr.HasProtocolUnsupportedEvidence())
 	assert.Empty(t, recorder.Body.String())
@@ -436,7 +439,8 @@ func TestResponsesToMessagesTruncatedStreamDoesNotSynthesizeMessageStop(t *testi
 
 	usage, apiErr := OaiResponsesToChatStreamHandler(c, info, resp)
 
-	require.Nil(t, usage)
+	require.NotNil(t, usage)
+	assert.Equal(t, 2, usage.CompletionTokens)
 	require.NotNil(t, apiErr)
 	assert.Contains(t, apiErr.Error(), "terminal response event")
 	assert.Contains(t, recorder.Body.String(), `event: message_start`)
@@ -459,7 +463,8 @@ func TestChatToResponsesMalformedChunkAfterStreamStartIsFatal(t *testing.T) {
 
 	usage, apiErr := OaiChatToResponsesStreamHandler(c, info, resp)
 
-	require.Nil(t, usage)
+	require.NotNil(t, usage)
+	assert.Equal(t, 2, usage.CompletionTokens)
 	require.NotNil(t, apiErr)
 	assert.Contains(t, recorder.Body.String(), `event: response.created`)
 	assert.Contains(t, recorder.Body.String(), `"delta":"partial"`)
@@ -481,7 +486,8 @@ func TestChatToResponsesTruncatedStreamDoesNotSynthesizeCompletion(t *testing.T)
 
 	usage, apiErr := OaiChatToResponsesStreamHandler(c, info, resp)
 
-	require.Nil(t, usage)
+	require.NotNil(t, usage)
+	assert.Equal(t, 2, usage.CompletionTokens)
 	require.NotNil(t, apiErr)
 	assert.Contains(t, apiErr.Error(), "terminal finish_reason")
 	assert.Contains(t, recorder.Body.String(), `"delta":"partial"`)
@@ -553,7 +559,8 @@ func TestResponsesCancelledStreamDoesNotSynthesizeMessageStop(t *testing.T) {
 
 	usage, apiErr := OaiResponsesToChatStreamHandler(c, info, resp)
 
-	require.Nil(t, usage)
+	require.NotNil(t, usage)
+	assert.Equal(t, 2, usage.CompletionTokens)
 	require.NotNil(t, apiErr)
 	assert.Contains(t, apiErr.Error(), "cancelled")
 	assert.Contains(t, recorder.Body.String(), `event: message_start`)
@@ -574,7 +581,8 @@ func TestNativeResponsesFlatErrorIsFatal(t *testing.T) {
 
 	usage, apiErr := OaiResponsesStreamHandler(c, info, resp)
 
-	require.Nil(t, usage)
+	require.NotNil(t, usage)
+	assert.Equal(t, 1, usage.CompletionTokens, "retain generated usage on upstream failure")
 	require.NotNil(t, apiErr)
 	assert.Equal(t, "provider failed", apiErr.ToOpenAIError().Message)
 	assert.Contains(t, recorder.Body.String(), `event: response.output_text.delta`)
@@ -627,7 +635,8 @@ func TestNativeResponsesTruncatedStreamIsFatal(t *testing.T) {
 
 	usage, apiErr := OaiResponsesStreamHandler(c, info, resp)
 
-	require.Nil(t, usage)
+	require.NotNil(t, usage)
+	assert.Equal(t, 1, usage.CompletionTokens, "retain generated usage on truncation")
 	require.NotNil(t, apiErr)
 	assert.Contains(t, apiErr.Error(), "terminal response event")
 	assert.Contains(t, recorder.Body.String(), `event: response.output_text.delta`)
@@ -636,6 +645,7 @@ func TestNativeResponsesTruncatedStreamIsFatal(t *testing.T) {
 
 func withOpenAIProtocolStreamTestMode(t *testing.T) {
 	t.Helper()
+	service.InitTokenEncoders()
 	oldMode := gin.Mode()
 	gin.SetMode(gin.TestMode)
 	t.Cleanup(func() { gin.SetMode(oldMode) })

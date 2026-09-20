@@ -32,6 +32,9 @@ export {
 
 export { formatModelName, getModelRouteInfo } from './model-route'
 
+// Response model diagnostics
+export { isResponseModelMismatch } from './response-model'
+
 // Filter utilities
 export { buildSearchParams, getLogCategoryLabel } from './filter'
 

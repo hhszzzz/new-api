@@ -128,7 +128,7 @@ export function BillingConditionValueInput(props: {
     (props.value === '' || /^[0-6]$/.test(props.value))
   ) {
     const formatter = new Intl.DateTimeFormat(
-      toIntlLocale(i18n.resolvedLanguage ?? i18n.language),
+      toIntlLocale(i18n.resolvedLanguage || i18n.language),
       { weekday: 'long', timeZone: 'UTC' }
     )
     const days = Array.from({ length: 7 }, (_, day) => ({

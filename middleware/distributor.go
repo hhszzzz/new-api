@@ -38,6 +38,11 @@ type ModelRequest struct {
 func Distribute() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		var channel *model.Channel
+		defer func() {
+			if c.Writer.Status() >= 400 {
+				service.RecordRequestPolicyTermination(c, hosttypes.NewErrorWithStatusCode(errors.New("request rejected"), hosttypes.ErrorCodeInvalidRequest, c.Writer.Status(), hosttypes.ErrOptionWithSkipRetry()))
+			}
+		}()
 		constraints := service.GetChannelConstraints(c)
 		constraints.AddFilter(taskdto.ChannelFilter{
 			Kind:        taskdto.FilterRequestPath,
@@ -78,7 +83,7 @@ func Distribute() func(c *gin.Context) {
 			}
 			if common.GetContextKeyBool(c, constant.ContextKeyTokenModelLimitEnabled) {
 				allowed, _ := common.GetContextKeyType[map[string]bool](c, constant.ContextKeyTokenModelLimit)
-				if !allowed[matchName] {
+				if !TokenModelLimitAllows(allowed, modelRequest.Model) {
 					abortWithProtocolMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorTokenModelForbidden, map[string]any{"Model": modelRequest.Model}))
 					return
 				}
@@ -231,66 +236,29 @@ func Distribute() func(c *gin.Context) {
 					}
 				}
 				if channel == nil {
-					if preferredChannelID, found := service.GetPreferredChannelByAffinity(c, selectionModel, selectionGroup); found {
-						affinityUsable := false
-						preferred, err := model.CacheGetChannel(preferredChannelID)
-						if err == nil && preferred != nil && preferred.IsSchedulableAt(time.Now()) &&
-							(candidateFilter == nil || candidateFilter(preferred)) &&
-							channelMatchesCandidateClassifier(preferred, candidateClassifier) &&
-							channelSupportsRequestPath(preferred, c.Request.URL.Path, selectionModel) &&
-							channelPassesFilters(preferred, selectionModel, constraints.Filters) {
-							resolvedGroup, groupUsable := resolveAffinitySelectionGroup(c, selectionGroup, selectionModel, preferred.Id)
-							if routeChannelAllowed(c, preferred.Id) && groupUsable {
-								channel = preferred
-								affinityUsable = true
-								commitRouteSelectionGroup(c, selectionGroup, resolvedGroup)
-								service.MarkChannelAffinityUsed(c, resolvedGroup, preferred.Id)
-							}
+					var selectErr *service.ChannelSelectError
+					channel, _, selectErr = service.SelectChannelForRequest(c, selectionModel, &service.RetryParam{
+						Ctx: c, ModelName: selectionModel, TokenGroup: selectionGroup,
+						RequestPath: c.Request.URL.Path, AllowedChannelIds: routeSelectionChannelIds(c),
+						AllowedGroups: routeSelectionExecutionGroups(c), CandidateFilter: candidateFilter,
+						CandidateClassifier: candidateClassifier, Retry: common.GetPointer(0),
+					})
+					if selectErr != nil {
+						message := selectErr.Message
+						if selectErr.MessageID != "" {
+							message = i18n.T(c, selectErr.MessageID, selectErr.Params)
 						}
-						if !affinityUsable {
-							// Protocol and client policies are request-scoped authorization
-							// boundaries. A stale affinity entry must never keep pointing at
-							// a channel that is illegal for the current request.
-							service.ClearCurrentChannelAffinityCache(c)
+						if selectErr.NoAvailableChannel {
+							message = noAvailableChannelMessage(c, usingGroup, modelRequest.Model)
 						}
+						if selectErr.FilterKind == taskdto.FilterTaskPluginIdentity {
+							logTaskPluginChannelDecision(c, selectErr.Channel, modelRequest.Model, "channel_rejected", "identity_mismatch")
+						}
+						abortWithProtocolMessage(c, selectErr.StatusCode, message, selectErr.Code)
+						return
 					}
 				}
 
-				if channel == nil {
-					channel, _, err = service.CacheGetRandomSatisfiedChannel(&service.RetryParam{
-						Ctx:                 c,
-						ModelName:           selectionModel,
-						TokenGroup:          selectionGroup,
-						RequestPath:         c.Request.URL.Path,
-						AllowedChannelIds:   routeSelectionChannelIds(c),
-						AllowedGroups:       routeSelectionExecutionGroups(c),
-						CandidateFilter:     candidateFilter,
-						CandidateClassifier: candidateClassifier,
-						Retry:               common.GetPointer(0),
-					})
-					if err != nil {
-						if errors.Is(err, model.ErrNoCompatibleChannel) {
-							message := err.Error()
-							if reason, ok := common.GetContextKeyType[string](c, constant.ContextKeyProtocolIncompatibleReason); ok && reason != "" {
-								message = fmt.Sprintf("%s: %s", message, reason)
-							}
-							abortWithProtocolMessage(c, http.StatusBadRequest, message, hosttypes.ErrorCodeInvalidRequest)
-							return
-						}
-						message := i18n.T(c, i18n.MsgDistributorGetChannelFailed, map[string]any{"Group": usingGroup, "Model": modelRequest.Model, "Error": err.Error()})
-						// 如果错误，但是渠道不为空，说明是数据库一致性问题
-						//if channel != nil {
-						//	common.SysError(fmt.Sprintf("渠道不存在：%d", channel.Id))
-						//	message = "数据库一致性已被破坏，请联系管理员"
-						//}
-						abortWithProtocolMessage(c, http.StatusServiceUnavailable, message, hosttypes.ErrorCodeModelNotFound)
-						return
-					}
-					if channel == nil {
-						abortWithProtocolMessage(c, http.StatusServiceUnavailable, noAvailableChannelMessage(c, usingGroup, modelRequest.Model), hosttypes.ErrorCodeModelNotFound)
-						return
-					}
-				}
 			}
 		}
 		common.SetContextKey(c, constant.ContextKeyRequestStartTime, time.Now())
@@ -381,16 +349,25 @@ func channelSupportsRequestPath(channel *model.Channel, requestPath string, requ
 }
 
 // noAvailableChannelMessage explains a 503 for a task-plugin-claimed model.
-// A model claimed by a plugin is served only by that plugin's channels, so the
-// generic "no channel" text hides the real cause: the claiming plugin has no
-// enabled channel, and the operator must disable or override that plugin for
-// any other plugin or channel to take the model. Non-plugin requests keep the
-// generic message.
+// The response tells the caller the model is plugin-claimed without naming the
+// plugin; the candidate plugin keys go to the server log under the request id.
 func noAvailableChannelMessage(c *gin.Context, group, modelName string) string {
 	value, exists := c.Get(jsplugin.ContextKeyPinnedPlugin)
 	pinned, ok := value.(jsplugin.PinnedPlugin)
 	if exists && ok && pinned.Plugin != nil {
-		return i18n.T(c, i18n.MsgDistributorNoAvailableChannelTaskPlugin, map[string]any{"Group": group, "Model": modelName, "Plugin": pinned.Plugin.Meta.Key})
+		keys := []string{pinned.Plugin.Meta.Key}
+		if value, exists := c.Get(jsplugin.ContextKeyPinnedEndpoint); exists {
+			if endpoint, ok := value.(jsplugin.PinnedEndpoint); ok && len(endpoint.Candidates) > 0 {
+				keys = nil
+				for _, candidate := range endpoint.Candidates {
+					if candidate.Plugin != nil {
+						keys = append(keys, candidate.Plugin.Meta.Key)
+					}
+				}
+			}
+		}
+		logger.LogWarn(c, "task_plugin subsystem=distribution event=no_available_channel group=%q model=%q plugins=%q reason=no_eligible_channel", group, modelName, strings.Join(keys, ","))
+		return i18n.T(c, i18n.MsgDistributorNoAvailableChannelTaskPlugin, map[string]any{"Group": group, "Model": modelName})
 	}
 	return i18n.T(c, i18n.MsgDistributorNoAvailableChannel, map[string]any{"Group": group, "Model": modelName})
 }
@@ -773,10 +750,11 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 	return &modelRequest, shouldSelectChannel, nil
 }
 
-// tokenModelLimitAllows reports whether a token model-limit map authorizes
+// TokenModelLimitAllows reports whether a token model-limit map authorizes
 // model. Exact name, wildcard-normalized name, and routing-normalized name
-// (modifiers and legacy aliases stripped) are all accepted.
-func tokenModelLimitAllows(limit map[string]bool, model string) bool {
+// (modifiers and legacy aliases stripped) are all accepted. The Responses
+// WebSocket relay shares this rule so both transports admit the same names.
+func TokenModelLimitAllows(limit map[string]bool, model string) bool {
 	if limit[model] {
 		return true
 	}

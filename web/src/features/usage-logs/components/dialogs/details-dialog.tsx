@@ -37,6 +37,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import {
   Settings2,
+  Route,
   AlertTriangle,
   Headphones,
   Monitor,
@@ -52,8 +53,12 @@ import { CopyButton } from '@/components/copy-button'
 import { Dialog } from '@/components/dialog'
 import { StatusBadge, type StatusBadgeProps } from '@/components/status-badge'
 import { Label } from '@/components/ui/label'
-import { localizedTierLabel } from '@/features/pricing/lib/billing-expr'
+import {
+  localizedTierLabel,
+  BILLING_PRICING_VARS,
+} from '@/features/pricing/lib/billing-expr'
 import { formatSubscriptionName } from '@/features/subscriptions/lib'
+import { PolicyDecisionRecord } from '@/features/system-settings/request-policies/decision-record'
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
 import { formatLogQuota, formatTokens, formatUseTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -85,6 +90,7 @@ import {
   isTimingLogType,
 } from '../../lib/utils'
 import { USAGE_BILLING_PATH, type LogOtherData } from '../../types'
+import { ResponseModelDetails } from '../model-badge'
 import { PluginAuthorLink } from '../plugin-author-link'
 import {
   CollapsibleDetailSection,
@@ -200,7 +206,7 @@ function BillingBreakdown(props: {
       for (const entry of tieredSummary.priceEntries) {
         rows.push({
           label: t(entry.shortLabel),
-          value: `${fmtPrice(entry.price)}/${entry.unit === 'request' ? t('request') : 'M'}`,
+          value: `${fmtPrice(entry.price)}/${entry.unit ? t(entry.unit) : 'M'}`,
         })
       }
     }
@@ -410,6 +416,13 @@ function TokenBreakdown(props: { log: UsageLog; other: LogOtherData }) {
     })
   }
 
+  if (other.image_cache_tokens !== undefined) {
+    rows.push({
+      label: t('Image Cache'),
+      value: other.image_cache_tokens.toLocaleString(),
+    })
+  }
+
   if (cacheWrite > 0 && cacheWrite5m === 0 && cacheWrite1h === 0) {
     rows.push({
       label: t('Cache Write'),
@@ -443,6 +456,29 @@ function TokenBreakdown(props: { log: UsageLog; other: LogOtherData }) {
       {rows.map((row) => (
         <DetailRow key={row.label} label={row.label} value={row.value} mono />
       ))}
+      {other.billing_tokens && (
+        <div
+          role='group'
+          aria-label={t('Billable token breakdown')}
+          className='space-y-2'
+        >
+          <Label className='text-xs font-semibold'>
+            {t('Billable token breakdown')}
+          </Label>
+          {BILLING_PRICING_VARS.map((variable) => {
+            const count = other.billing_tokens?.[variable.key]
+            if (count === undefined || !Number.isFinite(count)) return null
+            return (
+              <DetailRow
+                key={variable.key}
+                label={t(variable.shortLabel)}
+                value={count.toLocaleString()}
+                mono
+              />
+            )
+          })}
+        </div>
+      )}
     </DetailSection>
   )
 }
@@ -475,6 +511,9 @@ export function DetailsDialog(props: DetailsDialogProps) {
     transportLabel = 'SSE'
   }
   const modelRoute = getModelRouteInfo(other, props.canViewModelRoute)
+  const responseModel = props.canViewModelRoute
+    ? (other?.admin_info?.response_model ?? other?.response_model)
+    : undefined
   const typeConfig = getLogTypeConfig(props.log.type)
 
   const isViolation = isViolationFeeLog(other)
@@ -953,6 +992,14 @@ export function DetailsDialog(props: DetailsDialogProps) {
         )}
 
         {/* Quota saturation marker (admin only) */}
+        {props.isAdminView && adminInfo?.request_policy?.length ? (
+          <DetailSection
+            label={t('Request policy decisions')}
+            icon={<Route className='size-4' />}
+          >
+            <PolicyDecisionRecord events={adminInfo.request_policy} />
+          </DetailSection>
+        ) : null}
         {props.isAdminView && other?.admin_info?.quota_saturation && (
           <DetailSection
             icon={<AlertTriangle className='size-3.5' aria-hidden='true' />}
@@ -1269,6 +1316,11 @@ export function DetailsDialog(props: DetailsDialogProps) {
             />
           </DetailSection>
         ) : null}
+        {responseModel && (
+          <DetailSection label={t('Response Model')}>
+            <ResponseModelDetails observation={responseModel} />
+          </DetailSection>
+        )}
 
         {/* Token breakdown (for consume/error types with token data) */}
         {isDisplayableType(props.log.type) && other && (
@@ -1284,6 +1336,12 @@ export function DetailsDialog(props: DetailsDialogProps) {
           />
         )}
 
+        {isConsume && other?.image_count !== undefined && (
+          <DetailRow
+            label={t('Billable image count')}
+            value={other.image_count}
+          />
+        )}
         {/* Admin billing mode indicator for non-consume */}
         {props.isAdminView &&
           !isConsume &&

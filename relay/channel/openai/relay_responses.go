@@ -5,18 +5,19 @@ import (
 	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
-	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/relayconvert"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/protocolstate"
 
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *hosttypes.NewAPIError) {
@@ -35,6 +36,8 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	if oaiError := responsesResponse.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
 		return nil, hosttypes.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
+	info.ObserveResponseModel(responsesResponse.Model)
+	responseBody = rewriteSGLangResponsesCreatedAt(info, responseBody, "created_at", responsesResponse.CreatedAt)
 	if err := protocolstate.ValidateResponsesContinuation(c, responsesResponse.PreviousResponseID); err != nil {
 		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusBadGateway)
 	}
@@ -59,7 +62,8 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	}
 
 	// compute usage
-	usage := relayconvert.NormalizeResponsesUsage(responsesResponse.Usage)
+	usage := &dto.Usage{}
+	service.ApplyResponsesUsage(usage, responsesResponse.Usage)
 	// Count actual tool invocations from Output (not tool declarations).
 	for _, output := range responsesResponse.Output {
 		switch output.Type {
@@ -92,10 +96,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 
 	defer service.CloseResponseBodyGracefully(resp)
 
-	var usage = &dto.Usage{}
-	var responseTextBuilder strings.Builder
-	imageCounter := &relaycommon.ImageGenerationCallCounter{}
-	imageCommitted := false
+	accumulator := service.NewResponsesUsageAccumulator(info)
 	var streamErr *hosttypes.NewAPIError
 	terminalSeen := false
 	terminalSucceeded := false
@@ -112,15 +113,23 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			sr.Stop(streamErr)
 			return
 		}
+		accumulator.Observe(&streamResponse)
+		if streamResponse.Response != nil {
+			data = string(rewriteSGLangResponsesCreatedAt(info, []byte(data), "response.created_at", streamResponse.Response.CreatedAt))
+		}
 		if streamResponse.Type == "error" || streamResponse.Type == "response.error" || streamResponse.Type == "response.failed" {
 			if openAIError := streamResponse.GetOpenAIError(); openAIError != nil {
 				streamErr = hosttypes.WithOpenAIError(*openAIError, http.StatusInternalServerError)
 			} else {
 				streamErr = hosttypes.NewOpenAIError(fmt.Errorf("responses stream error: %s", streamResponse.Type), hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 			}
-			info.StreamStatus.MarkTerminalFailure(streamErr)
+			// Keep upstream messages in the client error only; stream diagnostics
+			// are persisted with consume logs and must contain classification only.
+			outcome := info.StreamStatus.OutcomeSnapshot()
+			statusErr := fmt.Errorf("Responses stream failed: code=%s type=%s", outcome.ErrorCode, outcome.ErrorType)
+			info.StreamStatus.MarkTerminalFailure(statusErr)
 			service.MarkProtocolUnsupportedStreamError(streamErr)
-			sr.Stop(streamErr)
+			sr.Stop(statusErr)
 			return
 		}
 		switch streamResponse.Type {
@@ -128,12 +137,19 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			terminalSeen = true
 		case "response.incomplete", "response.cancelled", "response.canceled":
 			terminalSeen = true
-			streamErr = hosttypes.NewOpenAIError(
-				fmt.Errorf("Responses stream ended with terminal event %s", streamResponse.Type),
-				hosttypes.ErrorCodeBadResponse,
-				http.StatusBadGateway,
-			)
-			info.StreamStatus.MarkTerminalFailure(streamErr)
+			if streamResponse.Type == "response.incomplete" && streamResponse.Response != nil && streamResponse.Response.IncompleteDetails != nil &&
+				(streamResponse.Response.IncompleteDetails.Reason == "max_output_tokens" || streamResponse.Response.IncompleteDetails.Reason == "max_tokens") {
+				// Reaching the requested output limit is a valid terminal result.
+				// Preserve its incomplete status instead of emitting a second error.
+				terminalSucceeded = true
+			} else {
+				streamErr = hosttypes.NewOpenAIError(
+					fmt.Errorf("Responses stream ended with terminal event %s", streamResponse.Type),
+					hosttypes.ErrorCodeBadResponse,
+					http.StatusBadGateway,
+				)
+				info.StreamStatus.MarkTerminalFailure(streamErr)
+			}
 		}
 		if streamResponse.Response != nil {
 			if streamResponse.Response.Usage != nil {
@@ -145,7 +161,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 				info.StreamStatus.MarkSemanticOutput()
 			}
 		}
-		if (streamResponse.Type == "response.output_text.delta" && streamResponse.Delta != "") ||
+		if (streamResponse.Delta != "") ||
 			(streamResponse.Type == dto.ResponsesOutputTypeItemDone && streamResponse.Item != nil) {
 			semanticOutputSeen = true
 			info.StreamStatus.MarkSemanticOutput()
@@ -199,99 +215,49 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			sr.Stop(streamErr)
 			return
 		}
-		switch streamResponse.Type {
-		case "response.completed", "response.done":
-			if streamResponse.Response != nil {
-				if streamResponse.Response.Usage != nil {
-					incomingUsage := relayconvert.NormalizeResponsesUsage(streamResponse.Response.Usage)
-					usage = dto.MergeUsageNonZero(usage, incomingUsage)
-				}
-				if !imageCommitted {
-					if relaycommon.IsNonBillableResponsesStatus(streamResponse.Response.Status) {
-						imageCounter.Reset()
-						imageCounter.Commit(info)
-						imageCommitted = true
-					} else {
-						for i := range streamResponse.Response.Output {
-							idx := i
-							imageCounter.Observe(&streamResponse.Response.Output[i], &idx)
-						}
-						imageCounter.Commit(info)
-						imageCommitted = true
-					}
-				}
-			} else if !imageCommitted {
-				imageCounter.Commit(info)
-				imageCommitted = true
-			}
-		case "response.incomplete", "response.cancelled", "response.canceled":
-			if !imageCommitted {
-				imageCounter.Reset()
-				imageCounter.Commit(info)
-				imageCommitted = true
-			}
+		if streamErr != nil {
 			sr.Stop(streamErr)
 			return
-		case "response.output_text.delta":
-			// 处理输出文本
-			responseTextBuilder.WriteString(streamResponse.Delta)
-		case dto.ResponsesOutputTypeItemDone:
-			if streamResponse.Item != nil {
-				switch streamResponse.Item.Type {
-				case dto.BuildInCallWebSearchCall:
-					info.CountBillableToolCall(dto.BuildInCallWebSearchCall, "")
-				case dto.BuildInCallFileSearchCall:
-					info.CountBillableToolCall(dto.BuildInCallFileSearchCall, "")
-				case dto.BuildInCallFunctionCall:
-					info.CountBillableToolCall(dto.BuildInCallFunctionCall, streamResponse.Item.Name)
-				case dto.ResponsesOutputTypeImageGenerationCall:
-					if !imageCommitted {
-						imageCounter.Observe(streamResponse.Item, streamResponse.OutputIndex)
-					}
-				}
-			}
 		}
-		if streamResponse.Type == "response.completed" || streamResponse.Type == "response.done" {
+		if streamResponse.Type == "response.completed" || streamResponse.Type == "response.done" || terminalSucceeded {
 			terminalSucceeded = true
 			info.StreamStatus.MarkTerminalSuccess()
 			info.StreamStatus.MarkTerminalDelivered()
 		}
 	})
+	common.SetContextKey(c, constant.ContextKeyResponseStreamStatus, info.StreamStatus)
+	info.StreamStatus.RequireTerminal()
+	usage := accumulator.Finish()
 	if streamErr != nil {
-		return nil, streamErr
+		return usage, streamErr
 	}
 	if err := streamStatusError(info); err != nil {
-		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusBadGateway)
+		return usage, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusBadGateway)
 	}
 	if !terminalSeen || !terminalSucceeded {
 		terminalErr := fmt.Errorf("Responses stream ended without a terminal response event")
 		info.StreamStatus.MarkTerminalFailure(terminalErr)
-		return nil, hosttypes.NewOpenAIError(
+		return usage, hosttypes.NewOpenAIError(
 			terminalErr,
 			hosttypes.ErrorCodeBadResponse,
 			http.StatusBadGateway,
 		)
 	}
 
-	if usage.CompletionTokens == 0 {
-		// 计算输出文本的 token 数量
-		tempStr := responseTextBuilder.String()
-		if len(tempStr) > 0 {
-			// 非正常结束，使用输出文本的 token 数量
-			completionTokens := service.CountTextToken(tempStr, info.UpstreamModelName)
-			usage.CompletionTokens = completionTokens
-		}
+	if info.StreamStatus.ResponseOutcome() == string(relaycommon.ResponseOutcomeCompleted) {
+		protocolstate.MarkStreamCompleted(c)
 	}
-
-	if usage.PromptTokens == 0 && usage.CompletionTokens != 0 {
-		usage.PromptTokens = info.GetEstimatePromptTokens()
-	}
-
-	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
-	if usage.BillingUsage != nil {
-		usage.BillingUsage = dto.CloneBillingUsageWithEstimatedCompletion(usage.BillingUsage, usage.CompletionTokens)
-	}
-	protocolstate.MarkStreamCompleted(c)
 
 	return usage, nil
+}
+
+func rewriteSGLangResponsesCreatedAt(info *relaycommon.RelayInfo, payload []byte, path string, createdAt dto.IntValue) []byte {
+	if info.GetChannelType() != constant.ChannelTypeSGLang || !gjson.GetBytes(payload, path).Exists() {
+		return payload
+	}
+	patched, err := sjson.SetBytes(payload, path, int(createdAt))
+	if err != nil {
+		return payload
+	}
+	return patched
 }

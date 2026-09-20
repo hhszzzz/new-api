@@ -31,7 +31,7 @@ import (
 const (
 	responsesWSE2EPublicModel   = "responses-ws-public"
 	responsesWSE2EUpstreamModel = "responses-ws-upstream"
-	responsesWSE2EClientKey     = "responses-ws-client-key"
+	responsesWSE2EClientKey     = "responseswsclientkey"
 	responsesWSE2EChannelKey    = "responses-ws-channel-key"
 	responsesWSE2EInitialQuota  = 1000
 )
@@ -152,6 +152,7 @@ func TestResponsesWebSocketEndToEndReuseBillingAndChannelDisable(t *testing.T) {
 		HeaderOverride: &headerOverride,
 		AutoBan:        common.GetPointer(0),
 	}
+	channel.SetSetting(hostdto.ChannelSettings{ResponsesWebSocketEnabled: true})
 	channel.SetOtherSettings(hostdto.ChannelOtherSettings{
 		ProtocolCapabilities: &hostdto.ProtocolCapabilities{
 			UpstreamProtocols: []string{hostdto.ProtocolCapabilityResponses},
@@ -264,7 +265,7 @@ func TestResponsesWebSocketEndToEndReuseBillingAndChannelDisable(t *testing.T) {
 			snapshot.userQuota == responsesWSE2EInitialQuota &&
 			snapshot.tokenRemain == responsesWSE2EInitialQuota &&
 			snapshot.tokenUsed == 0 &&
-			snapshot.consumeLogCount == 0
+			snapshot.consumeLogCount == 1
 	}, 2*time.Second, 10*time.Millisecond)
 
 	secondCreate := fmt.Sprintf(`{
@@ -299,13 +300,13 @@ func TestResponsesWebSocketEndToEndReuseBillingAndChannelDisable(t *testing.T) {
 	settled := readResponsesWSE2EBilling(t, db, user.Id, token.Id, channel.Id)
 	assert.Equal(t, responsesWSE2EInitialQuota-5, settled.userQuota)
 	assert.Equal(t, 5, settled.userUsedQuota)
-	assert.Equal(t, 1, settled.requestCount)
+	assert.Equal(t, 1, settled.requestCount, "zero-charge failed requests do not increment billable request count")
 	assert.Equal(t, responsesWSE2EInitialQuota-5, settled.tokenRemain)
 	assert.Equal(t, 5, settled.tokenUsed)
 	assert.Equal(t, int64(5), settled.channelUsed)
-	assert.Equal(t, int64(1), settled.consumeLogCount)
+	assert.Equal(t, int64(2), settled.consumeLogCount)
 	var consumeLog model.Log
-	require.NoError(t, db.Where("type = ?", model.LogTypeConsume).First(&consumeLog).Error)
+	require.NoError(t, db.Where("type = ? AND quota > 0", model.LogTypeConsume).First(&consumeLog).Error)
 	assert.Equal(t, channel.Id, consumeLog.ChannelId)
 	assert.Equal(t, token.Id, consumeLog.TokenId)
 	assert.Equal(t, responsesWSE2EPublicModel, consumeLog.ModelName)

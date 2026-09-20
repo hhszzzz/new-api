@@ -105,6 +105,8 @@ func legacyCompatibility(channel *model.Channel, protocol Protocol, modelName, r
 
 	apiType, _ := common.ChannelType2APIType(channel.Type)
 	switch apiType {
+	case constant.APITypeNewAPI, constant.APITypeSub2API:
+		return native(protocol)
 	case constant.APITypeOpenAI, constant.APITypeOpenRouter, constant.APITypeXinference:
 		switch protocol {
 		case ProtocolChat, ProtocolResponses:

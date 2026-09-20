@@ -37,7 +37,7 @@ describe('usage-log model badge provider icons', () => {
     ['claude-opus-4.1', 'Claude.Color'],
     ['gemini-2.5-pro', 'Gemini.Color'],
     ['deepseek-v3.2', 'DeepSeek.Color'],
-    ['grok-4', 'XAI.Color'],
+    ['grok-4', 'Grok.Color'],
     ['kimi-k2', 'Moonshot.Color'],
   ])('uses the default provider icon for %s', (modelName, expectedIcon) => {
     render(<ModelBadge modelName={modelName} />)

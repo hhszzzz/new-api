@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"sort"
@@ -216,7 +217,21 @@ func loadOptionsFromDatabase() {
 func publishPersistedOptions(options []*Option) {
 	values := make(map[string]string, len(options))
 	pricingValues := make(map[string]string)
+	requestPolicyOptionMutex.Lock()
+	defer requestPolicyOptionMutex.Unlock()
+	defer func() {
+		if err := refreshRequestPolicySnapshot(); err != nil {
+			common.SysError("invalid request policy: " + err.Error())
+		}
+	}()
+	passkeyOptionMutex.Lock()
+	defer passkeyOptionMutex.Unlock()
+	passkeyOptions := make(map[string]string)
 	for _, option := range options {
+		if IsPasskeyDomainOption(option.Key) {
+			passkeyOptions[option.Key] = option.Value
+			continue
+		}
 		values[option.Key] = option.Value
 		if ratio_setting.IsPricingOptionKey(option.Key) {
 			pricingValues[option.Key] = option.Value
@@ -282,6 +297,7 @@ func publishPersistedOptions(options []*Option) {
 	if err := publishPricingOptions(pricingValues); err != nil {
 		common.SysLog("failed to update pricing option maps: " + err.Error())
 	}
+	applyPasskeyDomainOptions(passkeyOptions)
 }
 
 func SyncOptions(frequency int) {
@@ -306,6 +322,13 @@ func validateOptionValue(key string, value string) error {
 }
 
 func UpdateOption(key string, value string) error {
+	if IsRequestPolicyOption(key) {
+		return UpdateRequestPolicyOptions(map[string]string{key: value})
+	}
+	if IsPasskeyDomainOption(key) {
+		_, err := UpdatePasskeyDomainOptions(map[string]string{key: value}, false, "")
+		return err
+	}
 	if IsModelPricingOption(key) {
 		return UpdateModelPricingOptions(map[string]string{key: value})
 	}
@@ -315,15 +338,21 @@ func UpdateOption(key string, value string) error {
 // UpdateOptionsBulk persists all database values in one transaction. Pricing
 // options are additionally published as one immutable runtime snapshot.
 func UpdateOptionsBulk(values map[string]string) error {
+	_, err := updateOptionsBulk(values, false, "")
+	return err
+}
+
+func updateOptionsBulk(values map[string]string, preview bool, confirmation string) (*PasskeyDomainChange, error) {
 	if len(values) == 0 {
-		return nil
+		return nil, nil
 	}
 	optionUpdateMu.Lock()
 	defer optionUpdateMu.Unlock()
+	values = maps.Clone(values)
 
 	pricingValues := pricingOptionsFrom(values)
 	if err := ratio_setting.ValidatePricingOptionsByJSONString(pricingValues); err != nil {
-		return err
+		return nil, err
 	}
 	configValues := make(map[string]map[string]string)
 	for key, value := range values {
@@ -340,7 +369,7 @@ func UpdateOptionsBulk(values map[string]string) error {
 	for configName, fields := range configValues {
 		handled, err := config.GlobalConfig.ValidateUpdate(configName, fields)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if handled {
 			handledConfigNames[configName] = struct{}{}
@@ -357,7 +386,26 @@ func UpdateOptionsBulk(values map[string]string) error {
 			}
 		}
 		if err := validateLegacyOptionUpdate(key, values[key]); err != nil {
-			return err
+			return nil, err
+		}
+	}
+	var policySnapshot *RequestPolicySnapshot
+	for key := range values {
+		if IsRequestPolicyOption(key) {
+			requestPolicyOptionMutex.Lock()
+			defer requestPolicyOptionMutex.Unlock()
+			options := maps.Clone(CurrentRequestPolicy().Options)
+			for key, value := range values {
+				if IsRequestPolicyOption(key) {
+					options[key] = value
+				}
+			}
+			var err error
+			policySnapshot, err = BuildRequestPolicy(options)
+			if err != nil {
+				return nil, err
+			}
+			break
 		}
 	}
 
@@ -368,7 +416,7 @@ func UpdateOptionsBulk(values map[string]string) error {
 	if value, ok := values["GroupRatio"]; ok {
 		var next map[string]float64
 		if err := common.UnmarshalJsonStr(value, &next); err != nil {
-			return err
+			return nil, err
 		}
 		for group := range ratio_setting.GetGroupRatioSetting().GroupRatio.ReadAll() {
 			if _, kept := next[group]; !kept {
@@ -379,7 +427,7 @@ func UpdateOptionsBulk(values map[string]string) error {
 	if value, ok := values["UserUsableGroups"]; ok {
 		var next map[string]string
 		if err := common.UnmarshalJsonStr(value, &next); err != nil {
-			return err
+			return nil, err
 		}
 		for group := range setting.GetUserUsableGroupsCopy() {
 			if _, kept := next[group]; !kept {
@@ -388,14 +436,47 @@ func UpdateOptionsBulk(values map[string]string) error {
 		}
 	}
 	if err := EnsureNoActiveSubscriptionsForGroups(removedGroups); err != nil {
-		return err
+		return nil, err
 	}
 
+	var passkeyChange *PasskeyDomainChange
+	hasPasskeyChange := false
+	for key := range values {
+		if IsPasskeyDomainOption(key) {
+			hasPasskeyChange = true
+			passkeyOptionMutex.Lock()
+			defer passkeyOptionMutex.Unlock()
+			break
+		}
+	}
 	err := DB.Transaction(func(tx *gorm.DB) error {
+		if hasPasskeyChange {
+			var err error
+			passkeyChange, err = preparePasskeyDomainOptions(tx, values, preview, confirmation)
+			if err != nil {
+				return err
+			}
+		}
 		return persistOptionsWithTx(tx, values)
 	})
+	if errors.Is(err, errPasskeyDomainPreview) {
+		return passkeyChange, nil
+	}
 	if err != nil {
-		return err
+		return passkeyChange, err
+	}
+	// Trust settings were normalized while holding the database locks. Publish
+	// that complete domain set, rather than the unnormalized config input.
+	if hasPasskeyChange {
+		applyPasskeyDomainOptions(values)
+		for key, value := range values {
+			if strings.HasPrefix(key, "passkey.") {
+				if configValues["passkey"] == nil {
+					configValues["passkey"] = make(map[string]string)
+				}
+				configValues["passkey"][strings.TrimPrefix(key, "passkey.")] = value
+			}
+		}
 	}
 	configNames := make([]string, 0, len(handledConfigNames))
 	for configName := range handledConfigNames {
@@ -405,10 +486,10 @@ func UpdateOptionsBulk(values map[string]string) error {
 	for _, configName := range configNames {
 		handled, err := config.GlobalConfig.Update(configName, configValues[configName])
 		if err != nil {
-			return err
+			return passkeyChange, err
 		}
 		if !handled {
-			return fmt.Errorf("config %s was unregistered during update", configName)
+			return passkeyChange, fmt.Errorf("config %s was unregistered during update", configName)
 		}
 		afterConfigUpdate(configName)
 	}
@@ -426,10 +507,16 @@ func UpdateOptionsBulk(values map[string]string) error {
 			}
 		}
 		if err := updateOptionMap(key, values[key]); err != nil {
-			return err
+			return passkeyChange, err
 		}
 	}
-	return publishPricingOptions(pricingValues)
+	if err := publishPricingOptions(pricingValues); err != nil {
+		return passkeyChange, err
+	}
+	if policySnapshot != nil {
+		requestPolicySnapshot.Store(policySnapshot)
+	}
+	return passkeyChange, nil
 }
 
 func UpdateClientPolicySetting(setting operation_setting.ClientPolicySetting) error {

@@ -176,9 +176,10 @@ func GetPerfMetrics(c *gin.Context) {
 	}
 
 	result, err := perfmetrics.Query(perfmetrics.QueryParams{
-		Model: modelName,
-		Group: requestedGroup,
-		Hours: hours,
+		Model:         modelName,
+		Group:         requestedGroup,
+		Hours:         hours,
+		AllowedGroups: lo.Keys(usableGroups),
 	})
 	if err != nil {
 		logger.LogError(c, "failed to query performance metrics: "+err.Error())

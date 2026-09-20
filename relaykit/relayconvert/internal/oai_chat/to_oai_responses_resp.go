@@ -62,7 +62,7 @@ func ChatCompletionsResponseToResponsesResponseWithBridgeState(resp *dto.OpenAIT
 	out := &dto.OpenAIResponsesResponse{
 		ID:        responseID,
 		Object:    "response",
-		CreatedAt: chatCreatedAt(resp.Created),
+		CreatedAt: dto.IntValue(chatCreatedAt(resp.Created)),
 		Status:    []byte(`"completed"`),
 		Model:     resp.Model,
 		Output:    make([]dto.ResponsesOutput, 0),

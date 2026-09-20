@@ -34,9 +34,7 @@ import {
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { cn } from '@/lib/utils'
 
-import {
-  ACCOUNT_POOL_PROVIDER_LABELS,
-} from '../constants'
+import { ACCOUNT_POOL_PROVIDER_LABELS } from '../constants'
 import {
   formatAccountPoolCountdown,
   getAccountPoolWindowGroupLabelKey,
@@ -90,8 +88,10 @@ function useProviderTabs(snapshot?: AccountPoolSnapshot): ProviderTab[] {
       const aIndex = knownOrder.indexOf(a.provider)
       const bIndex = knownOrder.indexOf(b.provider)
       if (aIndex !== bIndex) {
-        return (aIndex < 0 ? knownOrder.length : aIndex) -
+        return (
+          (aIndex < 0 ? knownOrder.length : aIndex) -
           (bIndex < 0 ? knownOrder.length : bIndex)
+        )
       }
       return a.provider.localeCompare(b.provider)
     })

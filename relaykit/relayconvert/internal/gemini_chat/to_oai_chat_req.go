@@ -7,6 +7,7 @@ import (
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/internal/convdiag"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/internal/jsonutil"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/internal/toolconv"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
@@ -29,29 +30,41 @@ func GeminiGenerateContentRequestToOpenAIChatWithContext(c context.Context, gemi
 		Model:  modelName,
 		Stream: kitutil.GetPointer(isStream),
 	}
-	reasoningIntent, err := reasoning.FromGemini(geminiRequest)
-	if err != nil {
-		return nil, reasoning.AsClientError(err)
-	}
 	sourceModelName := modelName
 	if info != nil && info.GetOriginModelName() != "" {
 		sourceModelName = info.GetOriginModelName()
 	}
-	baseSourceModel := sourceModelName
 	opts := convmeta.OptionsOf(info)
 	preserveSuffix := opts.ShouldPreserveThinkingSuffix(sourceModelName)
+	// Capability lookups need the unsuffixed Gemini model the client addressed.
+	// The host already folded any alias into ReasoningState; mirror its parser
+	// so gemini-pro-latest-thinking still resolves to gemini-pro-latest.
+	baseSourceModel := sourceModelName
 	if !preserveSuffix {
-		if suffix := reasoning.IntentFromState(convmeta.ReasoningStateOf(info)); !suffix.IsEmpty() {
-			reasoningIntent, err = reasoning.MergeExplicitAndSuffix(reasoningIntent, suffix, sourceModelName)
-			if err != nil {
-				return nil, reasoning.AsClientError(err)
-			}
+		baseSourceModel = reasoning.ParseModelModifiers(sourceModelName).Base
+		if base, _, found, err := reasoning.ParseGeminiModelSuffix(baseSourceModel, opts.Gemini.ThinkingAdapterEnabled); err == nil && found {
+			baseSourceModel = base
 		}
 	}
 	if baseSourceModel != "" && geminiRequest.GenerationConfig.ThinkingConfig != nil {
-		_, err = reasoning.ValidateGeminiThinkingConfig(baseSourceModel, geminiRequest.GenerationConfig.ThinkingConfig)
+		_, diagnostics, err := reasoning.NormalizeGeminiThinkingConfig(baseSourceModel, &geminiRequest.GenerationConfig)
 		if err != nil {
 			return nil, reasoning.AsClientError(err)
+		}
+		convdiag.Add(c, diagnostics...)
+	}
+	reasoningIntent, diagnostics, err := reasoning.FromGemini(geminiRequest)
+	if err != nil {
+		return nil, reasoning.AsClientError(err)
+	}
+	convdiag.Add(c, diagnostics...)
+	if !preserveSuffix {
+		if suffix := reasoning.IntentFromState(convmeta.ReasoningStateOf(info)); !suffix.IsEmpty() {
+			reasoningIntent, diagnostics, err = reasoning.MergeExplicitAndSuffix(reasoningIntent, suffix, sourceModelName)
+			if err != nil {
+				return nil, reasoning.AsClientError(err)
+			}
+			convdiag.Add(c, diagnostics...)
 		}
 	}
 	reasoningIntent = reasoning.ResolveGeminiDefault(baseSourceModel, reasoningIntent)

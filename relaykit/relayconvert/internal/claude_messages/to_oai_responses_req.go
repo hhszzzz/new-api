@@ -7,6 +7,7 @@ import (
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/internal/convdiag"
 	sharedbridge "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/bridge"
 	sharedclaude "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/claude"
 	sharedtoolmedia "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/toolmedia"
@@ -66,7 +67,8 @@ func ClaudeMessagesRequestToOpenAIResponsesWithContext(c context.Context, claude
 	if request.MaxOutputTokens == nil {
 		request.MaxOutputTokens = claudeRequest.MaxTokensToSample
 	}
-	reasoningIntent, effectiveEffort, err := claudeRequestReasoningIntent(&claudeRequest, info)
+
+	reasoningIntent, effectiveEffort, err := claudeRequestReasoningIntent(c, &claudeRequest, info)
 	if err != nil {
 		return nil, reasoning.AsClientError(err)
 	}
@@ -492,20 +494,22 @@ func appendResponsesToolOutputValue(output *[]map[string]any, value any) error {
 	return nil
 }
 
-func claudeRequestReasoningIntent(claudeRequest *dto.ClaudeRequest, info convmeta.Meta) (reasoning.Intent, reasoning.Effort, error) {
-	reasoningIntent, err := reasoning.FromClaude(claudeRequest)
+func claudeRequestReasoningIntent(ctx context.Context, claudeRequest *dto.ClaudeRequest, info convmeta.Meta) (reasoning.Intent, reasoning.Effort, error) {
+	reasoningIntent, diagnostics, err := reasoning.FromClaude(claudeRequest)
 	if err != nil {
 		return reasoning.Intent{}, "", err
 	}
+	convdiag.Add(ctx, diagnostics...)
 	sourceModel := claudeRequest.Model
 	if info != nil && info.GetOriginModelName() != "" {
 		sourceModel = info.GetOriginModelName()
 	}
 	if suffix := reasoning.IntentFromState(convmeta.ReasoningStateOf(info)); !suffix.IsEmpty() {
-		reasoningIntent, err = reasoning.MergeExplicitAndSuffix(reasoningIntent, suffix, sourceModel)
+		reasoningIntent, diagnostics, err = reasoning.MergeExplicitAndSuffix(reasoningIntent, suffix, sourceModel)
 		if err != nil {
 			return reasoning.Intent{}, "", err
 		}
+		convdiag.Add(ctx, diagnostics...)
 	}
 	reasoningIntent = reasoning.ResolveClaudeDefault(sourceModel, reasoningIntent)
 	return reasoningIntent, reasoning.EffectiveEffort(reasoningIntent), nil

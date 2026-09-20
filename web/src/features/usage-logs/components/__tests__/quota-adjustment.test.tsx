@@ -63,6 +63,7 @@ vi.hoisted(() => {
 afterAll(() => vi.unstubAllGlobals())
 
 function QuotaLogPreview(props: { log: UsageLog }) {
+  // eslint-disable-next-line react/incompatible-library -- TanStack Table manages its own state; this instance is not compiler-memoized.
   const table = useReactTable({
     data: [props.log],
     columns: useCommonLogsColumns(false, false, false),

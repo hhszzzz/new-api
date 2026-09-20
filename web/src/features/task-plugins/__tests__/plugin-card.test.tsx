@@ -71,6 +71,7 @@ const stubColumns: ColumnDef<TaskPluginListItem, unknown>[] = [
 ]
 
 function PluginCardHarness({ item }: { item: TaskPluginListItem }) {
+  // eslint-disable-next-line react/incompatible-library -- TanStack Table manages its own state; this instance is not compiler-memoized.
   const table = useReactTable({
     data: [item],
     columns: stubColumns,

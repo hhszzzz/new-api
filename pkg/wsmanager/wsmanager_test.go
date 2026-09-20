@@ -122,7 +122,7 @@ func TestSubscriberClosesRemoteEventsAndStopsOnCancellation(t *testing.T) {
 	Register(30, KindResponses, func(reason string) { closed <- reason })
 	StartSubscriber(ctx)
 	require.Eventually(t, func() bool {
-		return server.PubSubNumSub(redisChannel)[redisChannel] == 1
+		return server.PubSubNumSub(channelCloseTopic(client.Options().DB))[channelCloseTopic(client.Options().DB)] == 1
 	}, time.Second, 10*time.Millisecond)
 
 	sameOriginPayload, err := common.Marshal(closeEvent{
@@ -131,7 +131,7 @@ func TestSubscriberClosesRemoteEventsAndStopsOnCancellation(t *testing.T) {
 		Origin:     getOriginID(),
 	})
 	require.NoError(t, err)
-	require.NoError(t, client.Publish(context.Background(), redisChannel, sameOriginPayload).Err())
+	require.NoError(t, client.Publish(context.Background(), channelCloseTopic(client.Options().DB), sameOriginPayload).Err())
 	select {
 	case reason := <-closed:
 		t.Fatalf("same-origin event unexpectedly closed connection: %s", reason)
@@ -144,7 +144,7 @@ func TestSubscriberClosesRemoteEventsAndStopsOnCancellation(t *testing.T) {
 		Origin:     "remote-node",
 	})
 	require.NoError(t, err)
-	require.NoError(t, client.Publish(context.Background(), redisChannel, remotePayload).Err())
+	require.NoError(t, client.Publish(context.Background(), channelCloseTopic(client.Options().DB), remotePayload).Err())
 	select {
 	case reason := <-closed:
 		assert.Equal(t, "remote disable", reason)
@@ -154,6 +154,6 @@ func TestSubscriberClosesRemoteEventsAndStopsOnCancellation(t *testing.T) {
 
 	cancel()
 	require.Eventually(t, func() bool {
-		return server.PubSubNumSub(redisChannel)[redisChannel] == 0
+		return server.PubSubNumSub(channelCloseTopic(client.Options().DB))[channelCloseTopic(client.Options().DB)] == 0
 	}, time.Second, 10*time.Millisecond)
 }

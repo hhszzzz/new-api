@@ -66,7 +66,7 @@ export async function updatePromptWordlist(
   return requireServerSuccess(
     (
       await api.put<ApiResponse<never>>(
-        `/api/prompt-audit/wordlists/${  encodeURIComponent(id)}`,
+        `/api/prompt-audit/wordlists/${encodeURIComponent(id)}`,
         payload
       )
     ).data
@@ -77,7 +77,7 @@ export async function syncPromptWordlist(id: string) {
   return requireServerSuccess(
     (
       await api.post<ApiResponse<never>>(
-        `/api/prompt-audit/wordlists/${  encodeURIComponent(id)  }/sync`
+        `/api/prompt-audit/wordlists/${encodeURIComponent(id)}/sync`
       )
     ).data
   )
@@ -87,7 +87,7 @@ export async function deletePromptWordlist(id: string) {
   return requireServerSuccess(
     (
       await api.delete<ApiResponse<never>>(
-        `/api/prompt-audit/wordlists/${  encodeURIComponent(id)}`
+        `/api/prompt-audit/wordlists/${encodeURIComponent(id)}`
       )
     ).data
   )

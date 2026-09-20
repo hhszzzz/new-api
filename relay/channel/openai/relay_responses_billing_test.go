@@ -291,7 +291,11 @@ func TestOaiResponsesStreamHandlerDoesNotCountPartialImageEvent(t *testing.T) {
 	require.NotNil(t, apiErr)
 	assert.Equal(t, hosttypes.ErrorCodeEmptyResponse, apiErr.GetErrorCode())
 	assert.Equal(t, http.StatusBadGateway, apiErr.StatusCode)
-	assert.Nil(t, info.ResponsesUsageInfo)
+	if info.ResponsesUsageInfo != nil {
+		for _, tool := range info.ResponsesUsageInfo.BuiltInTools {
+			assert.Zero(t, tool.CallCount, "partial image previews must not be billed as completed images")
+		}
+	}
 }
 
 func TestOaiResponsesStreamHandlerAcceptsZeroTextToolCall(t *testing.T) {
@@ -341,10 +345,100 @@ func TestOaiResponsesStreamHandlerDoesNotDeliverFailedTerminalWrite(t *testing.T
 
 	usage, apiErr := OaiResponsesStreamHandler(c, info, resp)
 
-	assert.Nil(t, usage)
+	require.NotNil(t, usage)
+	assert.Equal(t, 2, usage.TotalTokens, "retain upstream usage even if terminal delivery fails")
 	require.NotNil(t, apiErr)
 	snapshot := info.StreamStatus.Snapshot()
 	assert.False(t, snapshot.TerminalDelivered)
 	assert.Error(t, snapshot.WriteError)
 	assert.NotEqual(t, relaycommon.StreamEndReasonDone, snapshot.EndReason)
+}
+
+func TestOaiResponsesHandlerRewritesSGLangCreatedAtToInt(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeSGLang},
+	}
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(`{"id":"resp_1","object":"response","created_at":1786588600.0,"status":"completed","output":[]}`)),
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+	}
+
+	_, apiErr := OaiResponsesHandler(c, info, resp)
+	require.Nil(t, apiErr)
+	assert.Contains(t, w.Body.String(), `"created_at":1786588600`)
+	assert.NotContains(t, w.Body.String(), `1786588600.0`)
+}
+
+func TestOaiResponsesStreamHandlerRewritesSGLangCreatedAtToInt(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	oldTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() {
+		constant.StreamingTimeout = oldTimeout
+	})
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c.Set(common.RequestIdKey, "sglang-created-at-test")
+
+	info := &relaycommon.RelayInfo{
+		DisablePing: true,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelType:       constant.ChannelTypeSGLang,
+			UpstreamModelName: "served-model",
+		},
+	}
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body: io.NopCloser(strings.NewReader(
+			"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"created_at\":1.7865886E9,\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":0,\"output_tokens\":0}}}\n\n" +
+				"data: [DONE]\n\n",
+		)),
+		Header: http.Header{"Content-Type": []string{"text/event-stream"}},
+	}
+
+	_, apiErr := OaiResponsesStreamHandler(c, info, resp)
+	require.Nil(t, apiErr)
+	assert.Contains(t, w.Body.String(), `"created_at":1786588600`)
+	assert.NotContains(t, w.Body.String(), `1.7865886E9`)
+	assert.NotContains(t, w.Body.String(), `1786588600.0`)
+}
+
+func TestOaiResponsesStreamHandlerKeepsNonSGLangCreatedAt(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	oldTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() {
+		constant.StreamingTimeout = oldTimeout
+	})
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c.Set(common.RequestIdKey, "openai-created-at-test")
+
+	info := &relaycommon.RelayInfo{
+		DisablePing: true,
+		ChannelMeta: &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeOpenAI, UpstreamModelName: "gpt-test"},
+	}
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body: io.NopCloser(strings.NewReader(
+			"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"created_at\":1786588600.0,\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":0,\"output_tokens\":0}}}\n\n" +
+				"data: [DONE]\n\n",
+		)),
+		Header: http.Header{"Content-Type": []string{"text/event-stream"}},
+	}
+
+	_, apiErr := OaiResponsesStreamHandler(c, info, resp)
+	require.Nil(t, apiErr)
+	assert.Contains(t, w.Body.String(), `1786588600.0`)
 }

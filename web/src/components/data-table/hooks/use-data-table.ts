@@ -592,6 +592,7 @@ export function useDataTable<TData>(options: UseDataTableOptions<TData>) {
       !window.matchMedia('(max-width: 640px)').matches
     )
 
+  // eslint-disable-next-line react/incompatible-library -- TanStack Table manages its own state; this instance is not compiler-memoized.
   const table = useReactTable({
     data,
     columns,

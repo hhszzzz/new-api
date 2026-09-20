@@ -64,7 +64,10 @@ export function getAccountPoolWindowGroupLabelKey(label: string): string {
 // Older snapshots and error rows carry no window_groups; fall back to the
 // top-level primary/secondary windows as a single unlabeled group.
 export function getAccountPoolWindowGroups(
-  account: Pick<AccountPoolAccount, 'primary_window' | 'secondary_window' | 'window_groups'>
+  account: Pick<
+    AccountPoolAccount,
+    'primary_window' | 'secondary_window' | 'window_groups'
+  >
 ): AccountPoolWindowGroup[] {
   if (account.window_groups?.length) return account.window_groups
   return [

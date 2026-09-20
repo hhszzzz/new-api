@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/internal/convdiag"
 	relaymedia "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/media"
 	sharedbridge "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/bridge"
 	sharedchat "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/chat"
@@ -104,9 +105,12 @@ func ResponsesRequestToChatCompletionsRequestWithContext(c context.Context, req 
 		return nil, fmt.Errorf("invalid presence_penalty: %w", err)
 	}
 
-	if reasoningIntent, err := reasoning.FromOpenAIResponses(req); err != nil {
+	reasoningIntent, diagnostics, err := reasoning.FromOpenAIResponses(req)
+	if err != nil {
 		return nil, reasoning.AsClientError(err)
-	} else if err := reasoning.ApplyToOpenAIChat(out, reasoningIntent); err != nil {
+	}
+	convdiag.Add(c, diagnostics...)
+	if err := reasoning.ApplyToOpenAIChat(out, reasoningIntent); err != nil {
 		return nil, reasoning.AsClientError(err)
 	}
 	if req.ServiceTier != "" {

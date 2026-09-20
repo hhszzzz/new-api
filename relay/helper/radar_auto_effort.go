@@ -75,7 +75,7 @@ func ResolveRadarAutoEffort(c *gin.Context, info *relaycommon.RelayInfo) {
 		return
 	}
 
-	explicit, err := explicitIntentFromRequest(info.Request)
+	explicit, _, err := explicitIntentFromRequest(info.Request)
 	if err != nil {
 		decision.SkipReason = relaycommon.RadarAutoEffortSkipInvalidRequest
 		return

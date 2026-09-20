@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/internal/convdiag"
 	sharedbridge "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/bridge"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/internal/toolconv"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
@@ -379,10 +380,11 @@ func ChatCompletionsRequestToResponsesRequestWithContext(c context.Context, req 
 		out.MaxOutputTokens = lo.ToPtr(maxOutputTokens)
 	}
 
-	reasoningIntent, err := reasoning.FromOpenAIChat(req)
+	reasoningIntent, diagnostics, err := reasoning.FromOpenAIChat(req)
 	if err != nil {
 		return nil, reasoning.AsClientError(err)
 	}
+	convdiag.Add(c, diagnostics...)
 	if err := reasoning.ApplyToOpenAIResponses(out, reasoningIntent); err != nil {
 		return nil, reasoning.AsClientError(err)
 	}

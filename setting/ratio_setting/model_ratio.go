@@ -430,6 +430,35 @@ func GetCompletionRatioInfo(name string) CompletionRatioInfo {
 	return GetPricingSnapshot().GetCompletionRatioInfo(name)
 }
 
+// ResolveCompletionRatio applies relay's enforced and fallback ratios to a
+// configuration snapshot or draft without consulting mutable saved settings.
+func ResolveCompletionRatio(name string, configured *float64) CompletionRatioInfo {
+	name = FormatMatchingModelName(name)
+	if strings.Contains(name, "/") && configured != nil {
+		return CompletionRatioInfo{Ratio: *configured}
+	}
+
+	hardCodedRatio, locked := getHardcodedCompletionModelRatio(name)
+	if locked {
+		return CompletionRatioInfo{
+			Ratio:  hardCodedRatio,
+			Locked: true,
+		}
+	}
+
+	if configured != nil {
+		return CompletionRatioInfo{
+			Ratio:  *configured,
+			Locked: false,
+		}
+	}
+
+	return CompletionRatioInfo{
+		Ratio:  hardCodedRatio,
+		Locked: false,
+	}
+}
+
 func getHardcodedCompletionModelRatio(name string) (float64, bool) {
 
 	isReservedModel := strings.HasSuffix(name, "-all") || strings.HasSuffix(name, "-gizmo-*")
@@ -589,6 +618,8 @@ func ImageRatio2JSONString() string {
 func UpdateImageRatioByJSONString(jsonStr string) error {
 	return UpdatePricingOptionsByJSONString(map[string]string{ImageRatioOptionKey: jsonStr})
 }
+
+const DefaultImageRatio = 1.0
 
 func GetImageRatio(name string) (float64, bool) {
 	return GetPricingSnapshot().GetImageRatio(name)

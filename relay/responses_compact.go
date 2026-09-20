@@ -146,7 +146,7 @@ func (w *compactSummaryWriter) compactResponse(usage *dto.Usage) ([]byte, error)
 	compactUsage.InputTokensDetails = &compactUsage.PromptTokensDetails
 	compactUsage.OutputTokensDetails = &compactUsage.CompletionTokenDetails
 	return common.Marshal(dto.OpenAIResponsesCompactionResponse{
-		ID: "cmp_" + common.GetUUID(), Object: "response.compaction", CreatedAt: int(time.Now().Unix()),
+		ID: "cmp_" + common.GetUUID(), Object: "response.compaction", CreatedAt: dto.IntValue(time.Now().Unix()),
 		Output: output, Usage: &compactUsage,
 	})
 }

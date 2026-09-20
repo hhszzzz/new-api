@@ -37,6 +37,7 @@ func OaiChatToResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		return nil, hosttypes.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
 
+	info.ObserveResponseModel(chatResp.Model)
 	upstreamResponseID := chatResp.Id
 	if responseID := protocolstate.PublicResponseID(c, helper.GetResponseID(c)); responseID != "" {
 		chatResp.Id = responseID
@@ -178,6 +179,7 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		}
 		protocolstate.SetUpstreamResponseID(c, chunk.Id)
 
+		info.ObserveResponseModel(chunk.Model)
 		results, err := service.ConvertStreamResponseChunk(c, info, state, &chunk)
 		if err != nil {
 			if failResponsesStream(err) {
@@ -202,25 +204,24 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		}
 	})
 
+	usage := state.Usage()
+	if (usage == nil || usage.TotalTokens == 0) && (upstreamCompleted || state.UsageText() != "") {
+		usage = service.ResponseText2Usage(c, state.UsageText(), info.UpstreamModelName, info.GetEstimatePromptTokens())
+		state.SetUsage(usage)
+	}
 	if streamErr != nil {
-		return nil, streamErr
+		return usage, streamErr
 	}
 	if err := streamStatusError(info); err != nil {
-		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusBadGateway)
+		return usage, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusBadGateway)
 	}
 	if !upstreamCompleted {
 		info.StreamStatus.MarkTerminalFailure(fmt.Errorf("Chat Completions stream ended without a terminal finish_reason"))
-		return nil, hosttypes.NewOpenAIError(
+		return usage, hosttypes.NewOpenAIError(
 			fmt.Errorf("Chat Completions stream ended without a terminal finish_reason"),
 			hosttypes.ErrorCodeBadResponse,
 			http.StatusBadGateway,
 		)
-	}
-
-	usage := state.Usage()
-	if usage == nil || usage.TotalTokens == 0 {
-		usage = service.ResponseText2Usage(c, state.UsageText(), info.UpstreamModelName, info.GetEstimatePromptTokens())
-		state.SetUsage(usage)
 	}
 
 	finalResults, err := service.FinalizeStreamResponse(c, info, state)
@@ -228,15 +229,15 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		if failResponsesStream(err) {
 			return usage, streamErr
 		}
-		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
+		return usage, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
 	for _, result := range finalResults {
 		event, ok := result.Value.(relayconvert.ChatToResponsesStreamEvent)
 		if !ok {
-			return nil, hosttypes.NewOpenAIError(fmt.Errorf("expected OAI responses stream event, got %T", result.Value), hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
+			return usage, hosttypes.NewOpenAIError(fmt.Errorf("expected OAI responses stream event, got %T", result.Value), hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
 		}
 		if !sendEvent(event) {
-			return nil, streamErr
+			return usage, streamErr
 		}
 	}
 	info.StreamStatus.MarkTerminalDelivered()

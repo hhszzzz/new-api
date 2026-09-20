@@ -23,7 +23,7 @@ import { Button } from '@/components/ui/button'
 
 import { SettingsSection } from '../components/settings-section'
 
-type SensitiveWordsSectionProps = {
+type RequestChecksSectionProps = {
   defaultValues: {
     CheckSensitiveEnabled: boolean
     CheckSensitiveOnPromptEnabled: boolean
@@ -31,7 +31,7 @@ type SensitiveWordsSectionProps = {
   }
 }
 
-export function SensitiveWordsSection(_props: SensitiveWordsSectionProps) {
+export function RequestChecksSection(_props: RequestChecksSectionProps) {
   const { t } = useTranslation()
   return (
     <SettingsSection title={t('Sensitive Words')}>

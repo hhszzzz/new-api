@@ -113,7 +113,9 @@ export function TitledCard({
           )}
         </div>
       </CardHeader>
-      <CardContent className={cn(compact ? 'p-3 sm:p-4' : 'p-3 sm:p-5', contentClassName)}>
+      <CardContent
+        className={cn(compact ? 'p-3 sm:p-4' : 'p-3 sm:p-5', contentClassName)}
+      >
         {children}
       </CardContent>
     </Card>

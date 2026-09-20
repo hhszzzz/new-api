@@ -20,6 +20,7 @@ For commercial licensing, please contact support@quantumnous.com
  * Type definitions for usage logs
  */
 import type { RequestRuleTrace } from '@/features/pricing/lib/billing-expr'
+import type { PolicyEvent } from '@/features/system-settings/request-policies/api'
 
 import type { UsageLog } from './data/schema'
 // ============================================================================
@@ -143,14 +144,17 @@ export interface ToolSurchargeItem {
 }
 
 export interface LogOtherData {
+  subscription_consumed?: number
   transport?: LogTransport | string
   duration_ms?: number
   admin_info?: {
+    response_model?: LogOtherData['response_model']
     // Model routing is nested here so the backend can strip it from
     // non-admin responses together with other administrator-only metadata.
     is_model_mapped?: boolean
     upstream_model_name?: string
     po?: string[]
+    request_policy?: PolicyEvent[]
     is_multi_key?: boolean
     multi_key_index?: number
     use_channel?: number[]
@@ -247,6 +251,8 @@ export interface LogOtherData {
   text_input?: number
   text_output?: number
   cache_tokens?: number
+  image_cache_tokens?: number
+  billing_tokens?: Record<string, number>
   cache_creation_tokens?: number
   cache_creation_tokens_5m?: number
   cache_creation_tokens_1h?: number
@@ -263,6 +269,13 @@ export interface LogOtherData {
   // Legacy administrator-only model routing fields. New logs use admin_info.
   is_model_mapped?: boolean
   upstream_model_name?: string
+  // Diagnostic only. Whether the names disagree is derived in the UI via
+  // isResponseModelMismatch so old rows follow the current comparison rule.
+  response_model?: {
+    requested_model: string
+    upstream_model: string
+    returned_model: string
+  }
   audio_ratio?: number
   audio_completion_ratio?: number
   frt?: number
@@ -273,6 +286,7 @@ export interface LogOtherData {
   billing_mode?: string
   billing_unit?: 'token' | 'request'
   fixed_price?: number
+  image_count?: number
   expr_b64?: string
   matched_tier?: string
   request_rules?: RequestRuleTrace[]

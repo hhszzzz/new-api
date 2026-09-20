@@ -273,7 +273,7 @@ describe('usage-log model route component visibility', () => {
     expect(screen.queryByText(NESTED_ACTUAL_MODEL)).not.toBeInTheDocument()
     expect(screen.queryByText(LEGACY_ACTUAL_MODEL)).not.toBeInTheDocument()
     expect(
-      screen.queryByRole('button', { name: REQUESTED_MODEL })
+      screen.queryByRole('button', { name: `Model: ${REQUESTED_MODEL}` })
     ).not.toBeInTheDocument()
   })
 
@@ -596,7 +596,9 @@ describe('usage-log model route component visibility', () => {
         expect(presentation).toHaveAttribute('data-can-view-route', 'true')
       })
 
-      const trigger = screen.getByRole('button', { name: REQUESTED_MODEL })
+      const trigger = screen.getByRole('button', {
+        name: `Model: ${REQUESTED_MODEL}`,
+      })
 
       await user.click(trigger)
 

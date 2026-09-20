@@ -68,7 +68,9 @@ export type AccountPoolSnapshot = {
   stale: boolean
   partial: boolean
   summary: AccountPoolSummaryCounts
-  provider_summaries: Partial<Record<AccountPoolProvider, AccountPoolSummaryCounts>>
+  provider_summaries: Partial<
+    Record<AccountPoolProvider, AccountPoolSummaryCounts>
+  >
   accounts: AccountPoolAccount[]
 }
 

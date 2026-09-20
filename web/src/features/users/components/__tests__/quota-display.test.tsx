@@ -71,6 +71,7 @@ function QuotaTable(props: { remaining: number; used: number }) {
       column.id ?? ('accessorKey' in column ? String(column.accessorKey) : '')
     )
   )
+  // eslint-disable-next-line react/incompatible-library -- TanStack Table manages its own state; this instance is not compiler-memoized.
   const table = useReactTable({
     columns,
     data: [

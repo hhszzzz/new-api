@@ -19,10 +19,6 @@ For commercial licensing, please contact support@quantumnous.com
 import type { UseFormReturn } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 
-import {
-  ACCOUNT_POOL_PROVIDERS,
-  ACCOUNT_POOL_PROVIDER_LABELS,
-} from '@/features/account-pool/constants'
 import { MultiSelect } from '@/components/multi-select'
 import {
   FormControl,
@@ -34,6 +30,10 @@ import {
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
+import {
+  ACCOUNT_POOL_PROVIDERS,
+  ACCOUNT_POOL_PROVIDER_LABELS,
+} from '@/features/account-pool/constants'
 
 import {
   SettingsSwitchContent,
@@ -43,9 +43,7 @@ import type { AccountPoolSettingsValues } from './account-pool-settings-schema'
 
 type NumericFieldName = Exclude<
   keyof AccountPoolSettingsValues,
-  | 'enabled'
-  | 'hide_email_from_non_admins'
-  | 'provider_groups'
+  'enabled' | 'hide_email_from_non_admins' | 'provider_groups'
 >
 
 const numericFields: Array<{

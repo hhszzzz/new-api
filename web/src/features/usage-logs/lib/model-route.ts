@@ -61,12 +61,17 @@ export function formatModelName(
   name: string
   isMapped: boolean
   actualModel?: string
+  responseModel?: LogOtherData['response_model']
 } {
+  const responseModel = canViewModelRoute
+    ? (other?.admin_info?.response_model ?? other?.response_model)
+    : undefined
   const modelRoute = getModelRouteInfo(other, canViewModelRoute)
 
   return {
     name: modelName,
     isMapped: modelRoute.isMapped,
     actualModel: modelRoute.actualModel,
+    ...(responseModel ? { responseModel } : {}),
   }
 }

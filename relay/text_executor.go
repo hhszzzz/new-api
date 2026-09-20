@@ -268,6 +268,28 @@ func executeText(c *gin.Context, info *relaycommon.RelayInfo) *hosttypes.NewAPIE
 	}
 	apiError = normalizeStreamResult(c, info, apiError)
 	if apiError != nil {
+		// Responses upstreams charge generation that was produced before an
+		// interruption. Keep the failure visible, settle once, and never retry
+		// an attempt whose usage has already been charged.
+		if info.IsStream && usage != nil &&
+			(info.RelayFormat == types.RelayFormatOpenAIResponses || info.GetFinalRequestRelayFormat() == types.RelayFormatOpenAIResponses) {
+			billable := usage.TotalTokens > 0 || usage.PromptTokensDetails.CachedTokens > 0 ||
+				usage.PromptTokensDetails.CachedCreationTokens > 0 ||
+				(info.StreamStatus.ResponseOutcome() != "" && info.StreamStatus.Snapshot().ResponseAccepted)
+			if info.ResponsesUsageInfo != nil {
+				for _, tool := range info.ResponsesUsageInfo.BuiltInTools {
+					billable = billable || tool != nil && tool.CallCount > 0
+				}
+			}
+			if billable {
+				if info.IsChannelTest {
+					info.TestUsage = usage
+				} else {
+					ConsumeResponsesQuota(c, info, usage)
+				}
+				hosttypes.ErrOptionWithSkipRetry()(apiError)
+			}
+		}
 		service.ResetStatusCode(apiError, statusMapping)
 		return apiError
 	}
@@ -377,10 +399,10 @@ func handleTextResponse(c *gin.Context, info *relaycommon.RelayInfo, adaptor cha
 		}
 	}
 	value, err := adaptor.DoResponse(c, resp, info)
-	if err != nil {
-		return nil, err
-	}
 	usage, ok := value.(*dto.Usage)
+	if err != nil {
+		return usage, err
+	}
 	if !ok {
 		return nil, hosttypes.NewError(fmt.Errorf("unexpected accounting usage %T", value), hosttypes.ErrorCodeBadResponseBody)
 	}

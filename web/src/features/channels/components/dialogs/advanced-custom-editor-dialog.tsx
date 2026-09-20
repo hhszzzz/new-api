@@ -29,6 +29,7 @@ import {
   Info,
   ListTree,
   Plus,
+  Send,
   Shuffle,
   Trash2,
   type LucideIcon,
@@ -69,6 +70,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
+import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   Tooltip,
@@ -103,6 +105,7 @@ import {
   getAdvancedCustomRegexModelPattern,
   getAdvancedCustomTemplateConfig,
   isAdvancedCustomManagementPath,
+  isAdvancedCustomPassThroughAllowed,
   normalizeAdvancedCustomConfig,
   parseAdvancedCustomRouteModels,
   parseAdvancedCustomConfig,
@@ -130,9 +133,11 @@ const longSelectContentClass = 'w-[360px] max-w-[calc(100vw-2rem)]'
 const longSelectItemClass =
   'items-start py-2 [&_[data-slot=select-item-text]]:min-w-0 [&_[data-slot=select-item-text]]:shrink [&_[data-slot=select-item-text]]:whitespace-normal'
 const routeEditorGridClassName =
-  'lg:grid-cols-[minmax(9rem,0.9fr)_minmax(0,1fr)_minmax(0,1.25fr)_minmax(0,1.1fr)_minmax(0,0.85fr)_7rem]'
+  'lg:grid-cols-[minmax(9rem,0.9fr)_minmax(0,1fr)_minmax(0,1.25fr)_minmax(0,1.1fr)_minmax(0,0.85fr)_5.5rem_7rem]'
 const upstreamPathDescriptionKey =
   'Use a path to append it to the channel Base URL, or enter a full URL to override the Base URL for this route.'
+const passThroughDescriptionKey =
+  'Send the original request body to upstream without conversion. Only available for native forwarding routes.'
 const catchAllOrderErrorMessage =
   'Catch-all route must be last for the same incoming path'
 const emptyAdvancedRoutes: AdvancedCustomRoute[] = []
@@ -179,7 +184,7 @@ export function RouteModeBadges(props: {
       props.routes.map((route) => getAdvancedCustomTarget(route, props.catalog))
     ),
   ]
-  return targets.map((target) => (
+  const badges = targets.map((target) => (
     <Badge
       key={target}
       variant={target === 'native' ? 'secondary' : 'outline'}
@@ -198,6 +203,17 @@ export function RouteModeBadges(props: {
       </span>
     </Badge>
   ))
+  return (
+    <>
+      {badges}
+      {props.routes.some((route) => route.pass_through_body_enabled) && (
+        <Badge variant='outline' className='max-w-full'>
+          <Send aria-hidden='true' />
+          <span className='truncate'>{t('Pass-through')}</span>
+        </Badge>
+      )}
+    </>
+  )
 }
 
 function buildRouteGroups(
@@ -1236,6 +1252,10 @@ function RouteGroupEditor({
         <span>{t('Upstream path')}</span>
         <span>{t('Target protocol')}</span>
         <span>{t('Auth')}</span>
+        <span className='inline-flex items-center gap-1'>
+          {t('Pass-through')}
+          <PassThroughHelpPopover />
+        </span>
         <span className='text-right'>{t('Actions')}</span>
       </div>
 
@@ -1312,6 +1332,10 @@ function RouteEditor({
   const modelsInputValue = route.models?.join(', ') || ''
   const parsedRouteModels = parseAdvancedCustomRouteModels(modelsInputValue)
   const isFallback = !isModelListRoute && parsedRouteModels.length === 0
+  const passThroughAllowed =
+    !isModelListRoute && isAdvancedCustomPassThroughAllowed(route, catalog)
+  const passThroughEnabled =
+    passThroughAllowed && route.pass_through_body_enabled === true
 
   const setTarget = (nextTarget: string) => {
     const previous = getAdvancedCustomTargetDefaults(
@@ -1329,14 +1353,27 @@ function RouteEditor({
       (route.auth.type === previous.auth?.type &&
         route.auth.name === previous.auth?.name &&
         route.auth.value === previous.auth?.value)
+    const targetRoute = {
+      ...route,
+      converter:
+        nextTarget === 'jina_rerank_to_sglang' ? nextTarget : undefined,
+      target_protocol:
+        nextTarget === 'jina_rerank_to_sglang' ? undefined : nextTarget,
+    }
     onChange({
-      converter: undefined,
-      target_protocol: nextTarget,
+      converter: targetRoute.converter,
+      target_protocol: targetRoute.target_protocol,
       upstream_path:
         !route.upstream_path || route.upstream_path === previous.upstream_path
           ? defaults.upstream_path
           : route.upstream_path,
       auth: usesDefaultAuth ? defaults.auth : route.auth,
+      pass_through_body_enabled: isAdvancedCustomPassThroughAllowed(
+        targetRoute,
+        catalog
+      )
+        ? route.pass_through_body_enabled
+        : false,
     })
   }
 
@@ -1577,6 +1614,31 @@ function RouteEditor({
           </Select>
         </FieldBlock>
 
+        <FieldBlock
+          label={
+            <span className='inline-flex items-center gap-1'>
+              {t('Pass-through')}
+              <PassThroughHelpPopover />
+            </span>
+          }
+          className='lg:gap-1'
+          labelClassName='lg:sr-only'
+        >
+          <div className='flex h-9 items-center lg:h-8'>
+            <Switch
+              checked={passThroughEnabled}
+              disabled={!passThroughAllowed}
+              aria-label={t('Pass-through')}
+              onCheckedChange={(checked) =>
+                onChange({ pass_through_body_enabled: checked })
+              }
+            />
+          </div>
+          <p className='text-muted-foreground text-xs leading-relaxed lg:hidden'>
+            {t(passThroughDescriptionKey)}
+          </p>
+        </FieldBlock>
+
         <div className='hidden items-center justify-end gap-1 lg:flex'>
           <TooltipIconButton
             label={t('Move route up')}
@@ -1648,10 +1710,46 @@ function RouteEditor({
             <span className='hidden lg:block' aria-hidden='true' />
             <span className='hidden lg:block' aria-hidden='true' />
             <span className='hidden lg:block' aria-hidden='true' />
+            <span className='hidden lg:block' aria-hidden='true' />
           </div>
         </>
       ) : null}
     </div>
+  )
+}
+
+function PassThroughHelpPopover() {
+  const { t } = useTranslation()
+
+  return (
+    <Popover>
+      <PopoverTrigger
+        render={
+          <Button
+            type='button'
+            variant='ghost'
+            size='icon'
+            className='text-muted-foreground hover:text-foreground size-6'
+            aria-label={t('Pass-through help')}
+          />
+        }
+      >
+        <Info className='size-3.5' aria-hidden='true' />
+      </PopoverTrigger>
+      <PopoverContent
+        align='start'
+        side='bottom'
+        sideOffset={8}
+        className='w-[min(22rem,calc(100vw-2rem))] p-3'
+      >
+        <PopoverHeader className='gap-1'>
+          <PopoverTitle>{t('Pass-through')}</PopoverTitle>
+          <PopoverDescription className='text-xs leading-relaxed'>
+            {t(passThroughDescriptionKey)}
+          </PopoverDescription>
+        </PopoverHeader>
+      </PopoverContent>
+    </Popover>
   )
 }
 

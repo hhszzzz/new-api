@@ -367,7 +367,9 @@ func routePoolAggregateName(c *gin.Context) string {
 func appendLogDiagnostics(c *gin.Context, channelId int, isStream bool, other map[string]interface{}) map[string]interface{} {
 	other = ensureOtherMap(other)
 	transport := "http"
-	if c != nil && c.Request != nil &&
+	if c != nil && common.GetContextKeyString(c, constant.ContextKeyRequestTransport) == "websocket" {
+		transport = "websocket"
+	} else if c != nil && c.Request != nil &&
 		strings.EqualFold(strings.TrimSpace(c.Request.Header.Get("Upgrade")), "websocket") &&
 		strings.Contains(strings.ToLower(c.Request.Header.Get("Connection")), "upgrade") {
 		transport = "websocket"

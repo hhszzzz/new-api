@@ -237,7 +237,11 @@ func TestUnifiedProtocolHTTPStreamFailureAndLateUsage(t *testing.T) {
 				} else {
 					assert.NotContains(t, string(body), `"finish_reason":"stop"`)
 					assert.NotContains(t, string(body), "response.completed")
-					assertProtocolHTTPAccounting(t, db, user.Id, 0, 0)
+					if source == relayconvert.ProtocolResponses {
+						assertProtocolHTTPAccounting(t, db, user.Id, 2, 1)
+					} else {
+						assertProtocolHTTPAccounting(t, db, user.Id, 0, 0)
+					}
 				}
 			})
 		}

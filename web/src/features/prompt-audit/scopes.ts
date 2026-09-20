@@ -65,10 +65,11 @@ export function defaultPromptScopePolicies(): PromptScopePolicies {
 }
 
 export function promptWordlistError(code: string, t: TFunction): string {
-  if (code.startsWith('download_http_'))
-    {return t('Source returned HTTP {{status}}', {
+  if (code.startsWith('download_http_')) {
+    return t('Source returned HTTP {{status}}', {
       status: code.slice('download_http_'.length),
-    })}
+    })
+  }
   switch (code) {
     case 'source_rate_limited':
       return t('Source rate limit reached. Try again later.')

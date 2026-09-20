@@ -12,7 +12,8 @@ import (
 // normalizeStreamResult applies the downstream-delivery contract before quota
 // settlement. A successful terminal delivery wins over a concurrent late
 // cancellation; cancellation before terminal delivery is always a non-retryable
-// client outcome and therefore refunds any pre-consume.
+// client outcome. Settlement decides whether the protocol reported billable
+// partial usage before refunding any remaining pre-consume.
 func normalizeStreamResult(c *gin.Context, info *relaycommon.RelayInfo, apiErr *hosttypes.NewAPIError) *hosttypes.NewAPIError {
 	if info == nil || !info.IsStream || info.StreamStatus == nil {
 		return apiErr

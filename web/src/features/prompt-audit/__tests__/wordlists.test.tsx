@@ -135,7 +135,7 @@ beforeEach(() => {
         words: 'private-custom-marker',
       },
     }
-    if (!(url in data)) throw new Error(`Unexpected API request: ${  url}`)
+    if (!(url in data)) throw new Error(`Unexpected API request: ${url}`)
     return { data: { success: true, data: data[url] } }
   })
   apiMock.put.mockResolvedValue({ data: { success: true } })

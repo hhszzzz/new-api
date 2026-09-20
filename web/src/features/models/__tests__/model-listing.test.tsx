@@ -96,6 +96,7 @@ function Page() {
 
 function CatalogPrice(props: { model: PricingModel }) {
   const columns = usePricingColumns({ tokenUnit: 'M' })
+  // eslint-disable-next-line react/incompatible-library -- TanStack Table manages its own state; this instance is not compiler-memoized.
   const table = useReactTable({
     data: [props.model],
     columns,
@@ -689,7 +690,7 @@ it('opens the effective expression breakdown from the price without creating met
     screen.getByRole('button', { name: 'View pricing for channel-only' })
   )
   const preview = await screen.findByRole('region', { name: 'Current Billing' })
-  expect(preview).toHaveTextContent('standard')
+  expect(preview).toHaveTextContent('Standard')
   expect(preview).toHaveTextContent('long')
   expect(preview).toHaveTextContent('0.3')
   expect(preview).toHaveTextContent('0.6')

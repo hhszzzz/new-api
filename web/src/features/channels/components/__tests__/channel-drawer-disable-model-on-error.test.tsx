@@ -17,7 +17,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor } from '@testing-library/react'
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRouter,
+  RouterContextProvider,
+} from '@tanstack/react-router'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 
 import type { Channel } from '../../types'
@@ -40,7 +46,7 @@ vi.mock('../../api', () => ({
   getChannelOps: vi.fn().mockResolvedValue({ success: true, data: {} }),
   getGroups: vi.fn().mockResolvedValue({ success: true, data: ['default'] }),
   getPrefillGroups: vi.fn().mockResolvedValue({ success: true, data: [] }),
-  getTaskPluginOptions: vi.fn().mockResolvedValue({ success: true, data: [] }),
+  getTaskPluginOptions: vi.fn().mockResolvedValue([]),
   refreshCodexCredential: vi.fn(),
 }))
 
@@ -100,13 +106,21 @@ async function renderDrawer(isMultiKey: boolean) {
   })
   render(
     <QueryClientProvider client={queryClient}>
-      <ChannelMutateDrawer
-        open
-        onOpenChange={vi.fn()}
-        currentRow={{ id: 7 } as Channel}
-      />
+      <RouterContextProvider
+        router={createRouter({
+          routeTree: createRootRoute(),
+          history: createMemoryHistory({ initialEntries: ['/'] }),
+        })}
+      >
+        <ChannelMutateDrawer
+          open
+          onOpenChange={vi.fn()}
+          currentRow={{ id: 7 } as Channel}
+        />
+      </RouterContextProvider>
     </QueryClientProvider>
   )
+  fireEvent.click(await screen.findByRole('tab', { name: /Routing & Mapping/ }))
   return screen.findByRole('switch', { name: 'Disable Model On Error' })
 }
 

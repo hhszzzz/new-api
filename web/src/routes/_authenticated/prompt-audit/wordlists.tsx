@@ -38,8 +38,9 @@ export const Route = createFileRoute('/_authenticated/prompt-audit/wordlists')({
         ADMIN_PERMISSION_RESOURCES.PROMPT_AUDIT,
         ADMIN_PERMISSION_ACTIONS.MANAGE
       )
-    )
-      {throw redirect({ to: '/403' })}
+    ) {
+      throw redirect({ to: '/403' })
+    }
   },
   component: PromptWordlists,
 })

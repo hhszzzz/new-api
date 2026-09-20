@@ -62,7 +62,7 @@ func claudeMessagesRequestToOpenAIChat(c context.Context, claudeRequest dto.Clau
 			openAIRequest.StreamOptions = &dto.StreamOptions{IncludeUsage: true}
 		}
 	}
-	reasoningIntent, effectiveEffort, err := claudeRequestReasoningIntent(&claudeRequest, info)
+	reasoningIntent, effectiveEffort, err := claudeRequestReasoningIntent(c, &claudeRequest, info)
 	if err != nil {
 		return nil, reasoning.AsClientError(err)
 	}
@@ -183,6 +183,12 @@ func claudeMessagesRequestToOpenAIChat(c context.Context, claudeRequest dto.Clau
 		}
 	}
 
+	type unnamedToolResult struct {
+		index int
+		id    string
+	}
+	toolNames := make(map[string]string)
+	var unnamedToolResults []unnamedToolResult
 	for messageIndex, claudeMessage := range claudeRequest.Messages {
 		openAIMessage := dto.Message{
 			Role: claudeMessage.Role,
@@ -200,6 +206,9 @@ func claudeMessagesRequestToOpenAIChat(c context.Context, claudeRequest dto.Clau
 			reasoningParts := make([]string, 0)
 
 			for contentIndex, mediaMsg := range content {
+				if _, exists := toolNames[mediaMsg.Id]; !exists {
+					toolNames[mediaMsg.Id] = mediaMsg.Name
+				}
 				switch mediaMsg.Type {
 				case "text", "input_text":
 					message := dto.MediaContent{
@@ -237,7 +246,7 @@ func claudeMessagesRequestToOpenAIChat(c context.Context, claudeRequest dto.Clau
 				case "tool_result":
 					toolName := mediaMsg.Name
 					if toolName == "" {
-						toolName = claudeRequest.SearchToolNameByToolCallId(mediaMsg.ToolUseId)
+						unnamedToolResults = append(unnamedToolResults, unnamedToolResult{index: len(openAIMessages), id: mediaMsg.ToolUseId})
 					}
 					oaiToolMessage := dto.Message{
 						Role:       "tool",
@@ -282,6 +291,9 @@ func claudeMessagesRequestToOpenAIChat(c context.Context, claudeRequest dto.Clau
 		if len(openAIMessage.ParseContent()) > 0 || len(openAIMessage.ToolCalls) > 0 {
 			openAIMessages = append(openAIMessages, openAIMessage)
 		}
+	}
+	for _, result := range unnamedToolResults {
+		*openAIMessages[result.index].Name = toolNames[result.id]
 	}
 
 	openAIRequest.Messages = openAIMessages

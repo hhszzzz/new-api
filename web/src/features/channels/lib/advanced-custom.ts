@@ -422,6 +422,9 @@ export function getAdvancedCustomTargetOptions(
   catalog?: ProtocolCatalog
 ): Array<{ value: string; label: string }> {
   const options = [{ value: 'native', label: 'Native forwarding' }]
+  if (incomingPath === '/v1/rerank' || incomingPath === '/rerank') {
+    options.push({ value: 'jina_rerank_to_sglang', label: 'SGLang' })
+  }
   const operation = getIncomingOperation(incomingPath, catalog)
   if (!catalog || !operation?.convertible) return options
   for (const protocol of catalog.protocols) {
@@ -454,6 +457,19 @@ function getAdvancedCustomNativeAuth(
     return geminiQueryAuth()
   }
   return bearerHeaderAuth()
+}
+
+export function isAdvancedCustomPassThroughAllowed(
+  route: AdvancedCustomRoute,
+  catalog?: ProtocolCatalog
+): boolean {
+  if (route.converter === 'jina_rerank_to_sglang') return true
+  const target = getAdvancedCustomTarget(route, catalog)
+  return (
+    target === 'native' ||
+    target ===
+      getIncomingOperation(route.incoming_path || '', catalog)?.protocol
+  )
 }
 
 export function getAdvancedCustomIncomingPathLabel(value: string): string {
@@ -602,6 +618,12 @@ export function validateAdvancedCustomConfig(
           message: `${routeLabel} upstream path must not contain {model}`,
         }
       }
+      if (route.pass_through_body_enabled) {
+        return {
+          routeIndex: index,
+          message: `${routeLabel} route does not support pass-through`,
+        }
+      }
     }
     const routeModelsError = validateAdvancedCustomRouteModels(
       index,
@@ -627,7 +649,11 @@ export function validateAdvancedCustomConfig(
         (conversion) =>
           conversion.id === converter || conversion.aliases?.includes(converter)
       )
-      if (converter !== 'none' && !legacy) {
+      if (
+        converter !== 'none' &&
+        converter !== 'jina_rerank_to_sglang' &&
+        !legacy
+      ) {
         return { routeIndex: index, message: 'Converter is not registered' }
       }
       if (
@@ -650,6 +676,15 @@ export function validateAdvancedCustomConfig(
           routeIndex: index,
           message: 'Target protocol does not support this operation',
         }
+      }
+    }
+    if (
+      route.pass_through_body_enabled &&
+      !isAdvancedCustomPassThroughAllowed(route, catalog)
+    ) {
+      return {
+        routeIndex: index,
+        message: 'Pass-through requires native forwarding',
       }
     }
 
@@ -767,6 +802,9 @@ function normalizeAdvancedCustomRoute(
   const models = normalizeAdvancedCustomRouteModels(route.models)
   if (models.length > 0) {
     nextRoute.models = models
+  }
+  if (route.pass_through_body_enabled === true) {
+    nextRoute.pass_through_body_enabled = true
   }
   if (route.auth) {
     nextRoute.auth = {

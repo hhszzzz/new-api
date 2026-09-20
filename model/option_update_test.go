@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -20,6 +21,54 @@ type persistedAtomicConfig struct {
 	Expr string `json:"expr"`
 
 	publishCount int
+}
+
+func TestUpdateOptionsBulkValidatesMixedPasskeyPricingAtomically(t *testing.T) {
+	db := useFrontendOptionMigrationDB(t)
+	previousAddress := system_setting.ServerAddress
+	previousPasskey := *system_setting.GetPasskeySettings()
+	previousPricing := ratio_setting.ModelPrice2JSONString()
+	common.OptionMapRWMutex.Lock()
+	previousOptions := common.OptionMap
+	common.OptionMap = make(map[string]string)
+	common.OptionMapRWMutex.Unlock()
+	t.Cleanup(func() {
+		system_setting.ServerAddress = previousAddress
+		*system_setting.GetPasskeySettings() = previousPasskey
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(previousPricing))
+		common.OptionMapRWMutex.Lock()
+		common.OptionMap = previousOptions
+		common.OptionMapRWMutex.Unlock()
+	})
+	system_setting.ServerAddress = ""
+	*system_setting.GetPasskeySettings() = system_setting.PasskeySettings{}
+	for _, invalid := range []string{`{"invalid":-1}`, `not-json`} {
+		require.Error(t, UpdateOptionsBulk(map[string]string{
+			"ServerAddress": "https://new.example.com",
+			"ModelPrice":    invalid,
+		}))
+		var count int64
+		require.NoError(t, db.Model(&Option{}).Count(&count).Error)
+		assert.Zero(t, count)
+		assert.Empty(t, system_setting.ServerAddress)
+		assert.JSONEq(t, previousPricing, ratio_setting.ModelPrice2JSONString())
+	}
+	values := map[string]string{
+		"ServerAddress": "https://new.example.com",
+		"ModelPrice":    `{"mixed-passkey-model":0.25}`,
+	}
+	preview, err := UpdatePasskeyDomainOptions(values, true, "")
+	require.NoError(t, err)
+	require.NotNil(t, preview)
+	assert.Equal(t, "new.example.com", preview.EffectiveRPID)
+	assert.Empty(t, system_setting.ServerAddress)
+	require.NoError(t, UpdateOptionsBulk(values))
+	assert.Equal(t, "https://new.example.com", system_setting.ServerAddress)
+	assert.Equal(t, "new.example.com", system_setting.GetPasskeySettings().WithDefaults(system_setting.ServerAddress).EffectiveRPID())
+	price, found := ratio_setting.GetModelPrice("mixed-passkey-model", false)
+	assert.True(t, found)
+	assert.Equal(t, 0.25, price)
+	assert.JSONEq(t, values["ModelPrice"], requireOptionValue(t, db, "ModelPrice"))
 }
 
 func (setting *persistedAtomicConfig) ValidateConfig() error {

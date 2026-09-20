@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -20,7 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPostWssConsumeQuotaRecordsPerformanceOutcome(t *testing.T) {
+func TestRealtimeSettlementAndRelayPerformanceOutcome(t *testing.T) {
 	truncate(t)
 	seedUser(t, 1, 1_000)
 	seedChannel(t, 1)
@@ -138,6 +139,11 @@ func TestPostWssConsumeQuotaRecordsPerformanceOutcome(t *testing.T) {
 			}
 
 			PostWssConsumeQuota(ctx, relayInfo, &test.usage, "")
+			var apiErr *types.NewAPIError
+			if test.usage.TotalTokens == 0 {
+				apiErr = types.NewOpenAIError(errors.New("upstream returned no usage"), types.ErrorCodeEmptyResponse, http.StatusBadGateway)
+			}
+			perfmetrics.RecordRelayResult(ctx, relayInfo, apiErr)
 
 			var requestCount int64
 			require.Eventually(t, func() bool {

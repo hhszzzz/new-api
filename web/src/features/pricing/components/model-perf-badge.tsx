@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { memo, useMemo, useState } from 'react'
+import { memo, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
@@ -30,6 +30,8 @@ import type { SuccessRatePoint } from '@/features/performance-metrics/types'
 import { cn } from '@/lib/utils'
 
 export type ModelPerfBadgeData = {
+  window_start?: number
+  window_end?: number
   avg_latency_ms: number
   success_rate: number
   avg_tps: number
@@ -82,7 +84,7 @@ function StatusStrip(props: {
         <span
           role='img'
           aria-label={props.label}
-          className='flex h-3 w-24 items-center justify-between'
+          className='flex h-3 w-24 items-center gap-px'
         >
           {bars}
         </span>
@@ -94,7 +96,7 @@ function StatusStrip(props: {
       role='img'
       aria-label={props.label}
       title={props.label}
-      className='flex h-3 w-24 items-center justify-between'
+      className='flex h-3 w-24 items-center gap-px'
     >
       {bars}
     </span>
@@ -118,21 +120,20 @@ export const ModelPerfBadge = memo(function ModelPerfBadge(
     Number.isFinite(successRate) &&
     successRate >= 0 &&
     successRate <= 100
-  const [currentHourStart] = useState(
-    () => Math.floor(Date.now() / 1000 / 3600) * 3600
-  )
-  // Hourly points with timestamps, anchored to the client's current hour.
+  // Hourly points use the server window, including the current partial hour.
   // Hours without traffic stay gray. Slot 23 is the current, partial hour.
   const statusRates = useMemo(() => {
+    const windowStart = props.perf?.window_start
+    if (windowStart == null) return STATUS_SLOTS.map(() => undefined)
     const ratesByHour = new Map<number, number>()
     for (const point of props.perf?.recent_success_series ?? []) {
       ratesByHour.set(point.ts, point.success_rate)
     }
     return STATUS_SLOTS.map((slot) => {
-      const hourStart = currentHourStart - (23 - slot) * 3600
+      const hourStart = windowStart + slot * 3600
       return ratesByHour.get(hourStart)
     })
-  }, [props.perf?.recent_success_series, currentHourStart])
+  }, [props.perf?.recent_success_series, props.perf?.window_start])
 
   return (
     <div
@@ -145,12 +146,14 @@ export const ModelPerfBadge = memo(function ModelPerfBadge(
       <dl className='flex min-w-0 items-start gap-5 text-xs tabular-nums'>
         <div className='w-24 shrink-0'>
           <dt
-            title={t('Request success rate sampled over the last 24 hours')}
+            title={t(
+              'Success rate excludes business rejections and includes the current partial hour.'
+            )}
             className='text-muted-foreground flex items-center justify-between gap-1 text-[11px] leading-4'
           >
             <span>{t('Status')}</span>
             <span className='font-mono'>
-              {hasSuccessRate ? `${successRate.toFixed(1)}%` : '—%'}
+              {hasSuccessRate ? `${successRate.toFixed(2)}%` : '—'}
             </span>
           </dt>
           <dd className='mt-1 flex h-3 items-center'>

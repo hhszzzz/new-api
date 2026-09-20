@@ -81,7 +81,11 @@ describe('getUsageMeters', () => {
       }),
       NOW
     )
-    expect(meters.map((meter) => meter.key)).toEqual(['5h', 'weekly', 'monthly'])
+    expect(meters.map((meter) => meter.key)).toEqual([
+      '5h',
+      'weekly',
+      'monthly',
+    ])
     expect(meters[0]).toMatchObject({ remaining: 20, percent: 80 })
     expect(meters[2]).toMatchObject({
       amount: 1000,

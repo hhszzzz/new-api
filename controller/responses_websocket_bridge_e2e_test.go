@@ -13,6 +13,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
@@ -28,7 +29,7 @@ import (
 const (
 	responsesWSBridgePublicModel   = "responses-bridge-public"
 	responsesWSBridgeUpstreamModel = "responses-bridge-upstream"
-	responsesWSBridgeClientKey     = "responses-bridge-client-key"
+	responsesWSBridgeClientKey     = "responsesbridgeclientkey"
 	responsesWSBridgeChannelKey    = "responses-bridge-channel-key"
 	responsesWSBridgeInitialQuota  = 1000
 )
@@ -39,6 +40,7 @@ const (
 // the HTTP relay pipeline (with protocol conversion) and its SSE events
 // forwarded to the WebSocket client, with billing settled per logical request.
 func TestResponsesWebSocketBridgesChatOnlyChannelOverHTTP(t *testing.T) {
+	require.NoError(t, i18n.Init())
 	db := setupModelListControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.Token{}, &model.Log{}))
 
@@ -101,21 +103,27 @@ func TestResponsesWebSocketBridgesChatOnlyChannelOverHTTP(t *testing.T) {
 			return
 		}
 		lastChatBody.Store(body)
-		chatRequests.Add(1)
+		attempt := chatRequests.Add(1)
 		w.Header().Set("Content-Type", "text/event-stream")
 		flusher, ok := w.(http.Flusher)
 		if !ok {
 			http.Error(w, "flusher unavailable", http.StatusInternalServerError)
 			return
 		}
-		for _, chunk := range []string{
+		for index, chunk := range []string{
 			fmt.Sprintf(`{"id":"chatcmpl-bridge","object":"chat.completion.chunk","created":1720000000,"model":"%s","choices":[{"index":0,"delta":{"role":"assistant","content":"he"}}]}`, responsesWSBridgeUpstreamModel),
 			fmt.Sprintf(`{"id":"chatcmpl-bridge","object":"chat.completion.chunk","created":1720000000,"model":"%s","choices":[{"index":0,"delta":{"content":"llo"}}]}`, responsesWSBridgeUpstreamModel),
 			fmt.Sprintf(`{"id":"chatcmpl-bridge","object":"chat.completion.chunk","created":1720000000,"model":"%s","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}`, responsesWSBridgeUpstreamModel),
 			`[DONE]`,
 		} {
+			if attempt == 3 && index == 2 {
+				chunk = `{"id":"chatcmpl-interrupted","choices":[],"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}`
+			}
 			_, _ = fmt.Fprintf(w, "data: %s\n\n", chunk)
 			flusher.Flush()
+			if attempt == 3 && index == 2 {
+				return // Usage arrived, but the upstream stream has no terminal.
+			}
 		}
 	}))
 	t.Cleanup(upstream.Close)
@@ -200,6 +208,17 @@ func TestResponsesWebSocketBridgesChatOnlyChannelOverHTTP(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = client.Close() })
 
+	// HTTP has no equivalent for a WebSocket prefill-only create. It must not
+	// silently turn into billable generation when native transport is absent.
+	prefill := fmt.Sprintf(`{"type":"response.create","event_id":"prefill","model":%q,"input":"hi","generate":false}`, responsesWSBridgePublicModel)
+	require.NoError(t, client.WriteMessage(websocket.TextMessage, []byte(prefill)))
+	prefillReply := readResponsesWSE2EMessage(t, client)
+	assert.Contains(t, string(prefillReply), "generate:false requires a native Responses WebSocket channel")
+	assert.Zero(t, chatRequests.Load())
+	unbilled := readResponsesWSE2EBilling(t, db, user.Id, token.Id, channel.Id)
+	assert.Equal(t, responsesWSBridgeInitialQuota, unbilled.userQuota)
+	assert.Zero(t, unbilled.consumeLogCount)
+
 	firstCreate := fmt.Sprintf(`{
 		"type":"response.create",
 		"event_id":"evt-bridge-1",
@@ -264,6 +283,22 @@ func TestResponsesWebSocketBridgesChatOnlyChannelOverHTTP(t *testing.T) {
 	assert.Equal(t, 2, settled.requestCount)
 	assert.Equal(t, int64(10), settled.channelUsed)
 	assert.Equal(t, int64(2), settled.consumeLogCount)
+
+	// The same partial-usage policy applies when Responses uses our HTTP
+	// protocol bridge instead of a native upstream WebSocket connection.
+	require.NoError(t, client.WriteMessage(websocket.TextMessage, []byte(firstCreate)))
+	for {
+		event := readResponsesWSTestEvent(t, client)
+		require.NotEqual(t, "response.completed", event["type"])
+		if event["type"] == "error" {
+			break
+		}
+	}
+	settled = readResponsesWSE2EBilling(t, db, user.Id, token.Id, channel.Id)
+	assert.Equal(t, responsesWSBridgeInitialQuota-15, settled.userQuota)
+	assert.Equal(t, 3, settled.requestCount)
+	assert.Equal(t, int64(15), settled.channelUsed)
+	assert.Equal(t, int64(3), settled.consumeLogCount)
 }
 
 // TestResponsesWebSocketFallsBackToHTTPBridgeWhenNativeDialFails covers the
@@ -273,6 +308,7 @@ func TestResponsesWebSocketBridgesChatOnlyChannelOverHTTP(t *testing.T) {
 // fall back to the HTTP relay pipeline, and later creates must skip the broken
 // native dial entirely.
 func TestResponsesWebSocketFallsBackToHTTPBridgeWhenNativeDialFails(t *testing.T) {
+	require.NoError(t, i18n.Init())
 	db := setupModelListControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.Token{}, &model.Log{}))
 
@@ -373,6 +409,7 @@ func TestResponsesWebSocketFallsBackToHTTPBridgeWhenNativeDialFails(t *testing.T
 		Group:   "default",
 		AutoBan: common.GetPointer(0),
 	}
+	channel.SetSetting(hostdto.ChannelSettings{ResponsesWebSocketEnabled: true})
 	require.NoError(t, channel.Insert())
 
 	userSetting, err := common.Marshal(hostdto.UserSetting{BillingPreference: "wallet_only"})
@@ -388,7 +425,7 @@ func TestResponsesWebSocketFallsBackToHTTPBridgeWhenNativeDialFails(t *testing.T
 	require.NoError(t, db.Create(user).Error)
 	token := &model.Token{
 		UserId:       user.Id,
-		Key:          "responses-fallback-client-key",
+		Key:          "responsesfallbackclientkey",
 		Status:       common.TokenStatusEnabled,
 		Name:         "responses-fallback-token",
 		CreatedTime:  common.GetTimestamp(),
@@ -425,7 +462,7 @@ func TestResponsesWebSocketFallsBackToHTTPBridgeWhenNativeDialFails(t *testing.T
 
 	dialer := websocket.Dialer{Subprotocols: []string{"responses"}}
 	clientHeader := http.Header{}
-	clientHeader.Set("Authorization", "Bearer responses-fallback-client-key")
+	clientHeader.Set("Authorization", "Bearer responsesfallbackclientkey")
 	client, response, err := dialer.Dial("ws"+strings.TrimPrefix(gateway.URL, "http")+"/v1/responses", clientHeader)
 	if response != nil && response.Body != nil {
 		t.Cleanup(func() { _ = response.Body.Close() })

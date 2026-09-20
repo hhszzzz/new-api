@@ -120,7 +120,8 @@ export function AccountPoolMobileList(props: AccountPoolMobileListProps) {
             <div className='space-y-4 border-t pt-4'>
               {singleGroup ? (
                 <>
-                  {singleGroup.primary_window || !singleGroup.secondary_window ? (
+                  {singleGroup.primary_window ||
+                  !singleGroup.secondary_window ? (
                     <QuotaWindow
                       window={singleGroup.primary_window}
                       now={props.now}
