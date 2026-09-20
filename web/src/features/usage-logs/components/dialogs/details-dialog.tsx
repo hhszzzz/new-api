@@ -357,6 +357,16 @@ function BillingBreakdown(props: {
     !Array.isArray(other.usage_facts)
       ? Object.entries(other.usage_facts)
       : []
+  const requestRules = Array.isArray(other.request_rules)
+    ? other.request_rules
+    : []
+  const requestRuleOccurrences = new Map<string, number>()
+  const requestRuleRows = requestRules.map((rule) => {
+    const baseKey = `${rule.cond}-${rule.multiplier}-${rule.matched}`
+    const occurrence = requestRuleOccurrences.get(baseKey) ?? 0
+    requestRuleOccurrences.set(baseKey, occurrence + 1)
+    return { key: `${baseKey}-${occurrence}`, rule }
+  })
 
   return (
     <DetailSection label={t('Billing Details')}>
@@ -377,6 +387,25 @@ function BillingBreakdown(props: {
             />
           ))}
         </>
+      )}
+      {requestRules.length > 0 && (
+        <div
+          role='group'
+          aria-label={t('Conditional multipliers')}
+          className='space-y-1.5'
+        >
+          <Label className='text-xs font-semibold'>
+            {t('Conditional multipliers')}
+          </Label>
+          {requestRuleRows.map(({ key, rule }) => (
+            <DetailRow
+              key={key}
+              label={rule.cond}
+              value={`${rule.multiplier}x${rule.matched ? ` · ${t('Matched')}` : ''}`}
+              mono
+            />
+          ))}
+        </div>
       )}
       <DetailRow
         label={t('Total Cost')}

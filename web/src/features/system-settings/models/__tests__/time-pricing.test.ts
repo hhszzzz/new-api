@@ -86,6 +86,30 @@ describe('buildTimePricingCondition', () => {
     expect(condition).toBe('hour("UTC") >= 22 || hour("UTC") < 6')
   })
 
+  test('carries selected weekdays into the next morning for overnight windows', () => {
+    const condition = buildTimePricingCondition(
+      'UTC',
+      [1, 2, 3, 4, 5],
+      [createHourWindow('22', '6')]
+    )
+
+    expect(condition).toBe(
+      '((weekday("UTC") >= 1 && weekday("UTC") <= 5 && hour("UTC") >= 22) || (weekday("UTC") >= 2 && weekday("UTC") <= 6 && hour("UTC") < 6))'
+    )
+  })
+
+  test('wraps a Saturday overnight window into Sunday', () => {
+    const condition = buildTimePricingCondition(
+      'UTC',
+      [6],
+      [createHourWindow('22', '6')]
+    )
+
+    expect(condition).toBe(
+      '((weekday("UTC") == 6 && hour("UTC") >= 22) || (weekday("UTC") == 0 && hour("UTC") < 6))'
+    )
+  })
+
   test('treats equal start and end as a full day instead of never matching', () => {
     const condition = buildTimePricingCondition(
       'UTC',
@@ -158,12 +182,12 @@ describe('buildTimePricingExpression', () => {
     expect(expression).toBe('tier("base", p * 1.5)')
   })
 
-  test('drops zero and unparsable prices from the generated terms', () => {
+  test('preserves explicit zero prices while dropping unparsable terms', () => {
     const expression = buildTimePricingExpression(
-      config({ enabled: false, offPeak: { p: '1.5', c: '0' } })
+      config({ enabled: false, offPeak: { p: '1.5', c: 'bad', cr: '0' } })
     )
 
-    expect(expression).toBe('tier("base", p * 1.5)')
+    expect(expression).toBe('tier("base", p * 1.5 + cr * 0)')
   })
 
   test('reuses a preserved condition instead of the schedule controls', () => {
@@ -206,6 +230,27 @@ describe('parseTimePricing', () => {
     ])
     expect(parsed.peak).toEqual({ p: '3' })
     expect(parsed.offPeak).toEqual({ p: '1.5' })
+    expect(parsed.preservedCondition).toBeNull()
+  })
+
+  test('round-trips a weekday overnight schedule without changing its start days', () => {
+    const source = buildTimePricingExpression(
+      config({
+        enabled: true,
+        timezone: 'UTC',
+        weekdays: [1, 2, 3, 4, 5],
+        windows: [createHourWindow('22', '6')],
+        peak: { p: '2' },
+        offPeak: { p: '1' },
+      })
+    )
+
+    const parsed = parseTimePricing(source)
+
+    expect(parsed.weekdays).toEqual([1, 2, 3, 4, 5])
+    expect(parsed.windows.map(({ start, end }) => ({ start, end }))).toEqual([
+      { start: '22', end: '6' },
+    ])
     expect(parsed.preservedCondition).toBeNull()
   })
 

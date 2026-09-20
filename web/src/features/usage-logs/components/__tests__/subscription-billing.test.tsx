@@ -33,6 +33,8 @@ const i18nKeys = {
   'Subscription Billing': 'Subscription Billing',
   Subscription: 'Subscription',
   'Deducted by subscription': 'Deducted by subscription',
+  'Conditional multipliers': 'Conditional multipliers',
+  Matched: 'Matched',
   '{{group}} group subscription': '{{group}} group subscription',
 }
 
@@ -93,7 +95,7 @@ function rowValue(label: string): string | null {
   return screen.getByText(label).nextElementSibling?.textContent ?? null
 }
 
-describe('subscription billing details', () => {
+describe('billing details', () => {
   const queryClients: QueryClient[] = []
 
   beforeAll(() => {
@@ -148,6 +150,25 @@ describe('subscription billing details', () => {
     expect(screen.queryByText('Post Delta')).toBeNull()
     expect(screen.queryByText('Final Consumed')).toBeNull()
     expect(screen.queryByText('Instance')).toBeNull()
+  })
+
+  test('shows the conditional multiplier trace used for settlement', () => {
+    queryClients.push(
+      renderDetails({
+        billing_mode: 'tiered_expr',
+        request_rules: [
+          {
+            cond: 'param("service_tier") == "priority"',
+            multiplier: 2,
+            matched: true,
+          },
+        ],
+      })
+    )
+
+    const condition = 'param("service_tier") == "priority"'
+    expect(screen.getByText('Conditional multipliers')).toBeInTheDocument()
+    expect(rowValue(condition)).toBe('2x · Matched')
   })
 
   test('omits the subscription section for wallet-billed logs', () => {

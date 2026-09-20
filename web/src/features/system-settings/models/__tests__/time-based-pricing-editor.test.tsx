@@ -121,21 +121,20 @@ describe('time based pricing editor', () => {
     const expression = lastExpression(onChange)
     expect(expression).toContain('? tier("peak"')
     expect(expression).toContain('tier("off_peak", p * 1.5 + c * 4.5)')
-    // New schedules adopt the interface language's timezone (en -> UTC).
-    expect(expression).toContain('weekday("UTC") >= 1')
-    expect(expression).toContain('hour("UTC") >= 9')
-  })
-
-  test('new schedules use the timezone implied by the interface language', async () => {
-    const user = userEvent.setup()
-    i18nState.language = 'zhCN'
-    const onChange = renderEditor(FLAT)
-
-    await user.click(screen.getByRole('switch', { name: 'Peak hours pricing' }))
-
-    const expression = lastExpression(onChange)
     expect(expression).toContain('weekday("Asia/Shanghai") >= 1')
     expect(expression).toContain('hour("Asia/Shanghai") >= 9')
+  })
+
+  test('uses the explicitly selected timezone independently of interface language', () => {
+    i18nState.language = 'zhCN'
+    const onChange = renderEditor(ENABLED)
+
+    const timezone = screen.getByRole('combobox', { name: 'Timezone' })
+    fireEvent.change(timezone, { target: { value: 'UTC' } })
+
+    const expression = lastExpression(onChange)
+    expect(expression).toContain('weekday("UTC") >= 1')
+    expect(expression).toContain('hour("UTC") >= 9')
   })
 
   test('existing schedules keep the timezone saved in the expression', async () => {
@@ -180,6 +179,9 @@ describe('time based pricing editor', () => {
     const expression = lastExpression(onChange)
     expect(expression).toContain('tier("peak", p * 4.5 + c * 9)')
     expect(expression).toContain('tier("off_peak", p * 1.5 + c * 4.5)')
+
+    fireEvent.change(inputs[1], { target: { value: '0' } })
+    expect(lastExpression(onChange)).toContain('tier("peak", p * 0 + c * 9)')
   })
 
   test('editing an off-peak price keeps peak in sync via the multipliers', () => {

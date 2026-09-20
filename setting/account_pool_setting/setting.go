@@ -19,6 +19,7 @@ const (
 
 	EnabledOptionKey                   = ConfigName + ".enabled"
 	HideEmailFromNonAdminsOptionKey    = ConfigName + ".hide_email_from_non_admins"
+	LegacyAllowedGroupsOptionKey       = ConfigName + ".allowed_groups"
 	ProviderGroupsOptionKey            = ConfigName + ".provider_groups"
 	RegularRefreshSecondsOptionKey     = ConfigName + ".regular_refresh_seconds"
 	NearResetThresholdSecondsOptionKey = ConfigName + ".near_reset_threshold_seconds"

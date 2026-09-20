@@ -152,15 +152,20 @@ func matchPromptWordlists(snapshot dto.PromptAuditSnapshot, configured prompt_au
 					continue
 				}
 				entry = promptWordlistRuntime{ID: id, Name: "Custom wordlist", Version: strconv.FormatUint(setting.SensitiveWordsVersion(), 10), Enabled: true, Matcher: currentManualWordMatcher()}
-			} else if libraries != nil {
-				entry = libraries.Libraries[id]
-			} else {
+			} else if libraries == nil {
 				return nil, errors.New("wordlists are not initialized")
+			} else {
+				var exists bool
+				entry, exists = libraries.Libraries[id]
+				if !exists {
+					return nil, errors.New("wordlist is unavailable")
+				}
 			}
 			if !entry.Enabled {
 				continue
 			}
-			if entry.Matcher == nil && id != prompt_audit_setting.ManualWordlistID {
+			if id != prompt_audit_setting.ManualWordlistID &&
+				(entry.Matcher == nil || entry.Version != entry.TargetVersion) {
 				return nil, errors.New("wordlist is unavailable")
 			}
 			if len(sensitiveMachineMatches(segment.Text, entry.Matcher, true)) > 0 {

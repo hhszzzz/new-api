@@ -269,8 +269,14 @@ func memoryRateLimitHandler(duration int64, totalMaxCount, successMaxCount int) 
 }
 
 func modelRequestSucceeded(c *gin.Context) bool {
+	if c.Writer.Status() >= http.StatusBadRequest {
+		return false
+	}
 	status, _ := common.GetContextKeyType[*relaycommon.StreamStatus](c, constant.ContextKeyResponseStreamStatus)
-	return c.Writer.Status() < 400 && !status.ResponseFailed() && status.Snapshot().TerminalState != relaycommon.StreamTerminalFailure
+	if status == nil {
+		return true
+	}
+	return !status.ResponseFailed() && status.Snapshot().TerminalState != relaycommon.StreamTerminalFailure
 }
 
 // ModelRequestRateLimit 模型请求限流中间件

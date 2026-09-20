@@ -22,9 +22,11 @@ import { useTranslation } from 'react-i18next'
 
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { Combobox } from '@/components/ui/combobox'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import type { PricingCurrency } from '@/features/model-pricing/currency'
+import { COMMON_TIMEZONES } from '@/features/pricing/lib/billing-expr'
 import { toIntlLocale } from '@/i18n/languages'
 import { cn } from '@/lib/utils'
 
@@ -37,7 +39,6 @@ import {
   parseTimePricing,
   peakMultipliersFromPrices,
   peakPricesFromMultipliers,
-  timezoneForLanguage,
   type HourWindow,
   type TimePricingConfig,
 } from './time-pricing'
@@ -48,20 +49,10 @@ type TimeBasedPricingEditorProps = {
   onBillingExprChange: (next: string) => void
 }
 
-/**
- * Parse an expression into editor state. Flat (condition-less) expressions
- * adopt the interface language's timezone for new schedules; existing time
- * conditions keep the timezone they were saved with.
- */
-function parseConfig(
-  expression: string,
-  language: string | undefined
-): TimePricingConfig {
-  const parsed = parseTimePricing(expression)
-  return parsed.enabled
-    ? parsed
-    : { ...parsed, timezone: timezoneForLanguage(language) }
-}
+const TIMEZONE_OPTIONS = COMMON_TIMEZONES.map((zone) => ({
+  value: zone.value,
+  label: zone.value,
+}))
 
 export function TimeBasedPricingEditor({
   currency,
@@ -71,7 +62,7 @@ export function TimeBasedPricingEditor({
   const { t, i18n } = useTranslation()
   const language = i18n.resolvedLanguage ?? i18n.language
   const [config, setConfig] = useState<TimePricingConfig>(() =>
-    parseConfig(billingExpr, language)
+    parseTimePricing(billingExpr)
   )
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const lastEmitted = useRef(billingExpr)
@@ -79,8 +70,8 @@ export function TimeBasedPricingEditor({
   useEffect(() => {
     if (billingExpr === lastEmitted.current) return
     lastEmitted.current = billingExpr
-    setConfig(parseConfig(billingExpr, language))
-  }, [billingExpr, language])
+    setConfig(parseTimePricing(billingExpr))
+  }, [billingExpr])
 
   const emit = (next: TimePricingConfig) => {
     setConfig(next)
@@ -114,7 +105,12 @@ export function TimeBasedPricingEditor({
     const ratio = Number(value)
     const base = Number(config.offPeak[variable])
     const peak = { ...config.peak }
-    if (Number.isFinite(ratio) && Number.isFinite(base) && base > 0) {
+    if (
+      Number.isFinite(ratio) &&
+      ratio >= 0 &&
+      Number.isFinite(base) &&
+      base > 0
+    ) {
       peak[variable] = String(Math.round(base * ratio * 10000) / 10000)
     } else {
       delete peak[variable]
@@ -205,6 +201,18 @@ export function TimeBasedPricingEditor({
           ) : (
             <>
               <div className='flex flex-wrap items-center gap-3'>
+                <div className='w-56 max-w-full min-w-0'>
+                  <Combobox
+                    aria-label={t('Timezone')}
+                    options={TIMEZONE_OPTIONS}
+                    value={config.timezone}
+                    allowCustomValue
+                    onValueChange={(timezone) =>
+                      timezone !== null && emit({ ...config, timezone })
+                    }
+                    className='w-full'
+                  />
+                </div>
                 <div className='flex flex-wrap gap-1'>
                   {weekdayLabels.map((label, day) => {
                     const active = config.weekdays.includes(day)

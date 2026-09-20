@@ -1328,7 +1328,7 @@ func TestResponsesStateRejectsCrossTokenAndModel(t *testing.T) {
 	assert.Contains(t, err.Error(), "does not match")
 }
 
-func TestResponsesStateLimitsOnlyBridgeManagedRequests(t *testing.T) {
+func TestResponsesStateLimitsReplayButNotNativeContinuation(t *testing.T) {
 	resetProtocolStateCaches(t)
 	policy := model_setting.GetGlobalSettings().ProtocolBridgePolicy
 	policy.MaxStateBytes = 64
@@ -1372,6 +1372,29 @@ func TestResponsesStateLimitsOnlyBridgeManagedRequests(t *testing.T) {
 	}
 	require.NoError(t, PrepareResponsesRequest(nativeContinuationContext, protocolStateRelayInfo("gpt-a", 33), nativePlan, nativeContinuation))
 	assert.Equal(t, "upstream-native-oversized", nativeContinuation.PreviousResponseID)
+
+	forcedReplayContext := protocolStateTestContext("native-oversized-replay", 31, 32)
+	_, err = ResolveSelectionBinding(forcedReplayContext, "/v1/responses", "gpt-a", continuationBody)
+	require.NoError(t, err)
+	common.SetContextKey(forcedReplayContext, constant.ContextKeyProtocolStateForceReplay, true)
+	forcedReplay := &dto.OpenAIResponsesRequest{
+		Model:              "gpt-a",
+		PreviousResponseID: publicID,
+		Input:              mustProtocolStateJSON(t, "replay the native history"),
+	}
+	err = PrepareResponsesRequest(forcedReplayContext, protocolStateRelayInfo("gpt-a", 33), nativePlan, forcedReplay)
+	require.ErrorContains(t, err, "maximum conversation length")
+
+	channelReplayContext := protocolStateTestContext("native-channel-replay", 31, 32)
+	_, err = ResolveSelectionBinding(channelReplayContext, "/v1/responses", "gpt-a", continuationBody)
+	require.NoError(t, err)
+	channelReplay := &dto.OpenAIResponsesRequest{
+		Model:              "gpt-a",
+		PreviousResponseID: publicID,
+		Input:              mustProtocolStateJSON(t, "replay on another channel"),
+	}
+	err = PrepareResponsesRequest(channelReplayContext, protocolStateRelayInfo("gpt-a", 34), nativePlan, channelReplay)
+	require.ErrorContains(t, err, "maximum conversation length")
 
 	bridgePlan := channelcompat.ProtocolPlan{
 		RequestProtocol:  channelcompat.ProtocolResponses,

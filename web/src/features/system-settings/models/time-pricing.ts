@@ -16,10 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import {
-  BILLING_PRICING_VARS,
-  languageTimezone,
-} from '@/features/pricing/lib/billing-expr'
+import { BILLING_PRICING_VARS } from '@/features/pricing/lib/billing-expr'
 import {
   parseVisualBillingDocument,
   visualConditionExpression,
@@ -63,7 +60,7 @@ export function peakMultipliersFromPrices(
       !Number.isFinite(base) ||
       base <= 0 ||
       !Number.isFinite(value) ||
-      value <= 0
+      value < 0
     ) {
       continue
     }
@@ -85,7 +82,12 @@ export function peakPricesFromMultipliers(
   for (const key of MULTIPLIER_PRICE_KEYS) {
     const base = Number(offPeak[key])
     const ratio = Number(multipliers[key])
-    if (!Number.isFinite(base) || base <= 0 || !Number.isFinite(ratio)) {
+    if (
+      !Number.isFinite(base) ||
+      base <= 0 ||
+      !Number.isFinite(ratio) ||
+      ratio < 0
+    ) {
       continue
     }
     const value = Math.round(base * ratio * 10000) / 10000
@@ -205,11 +207,149 @@ function parseWeekdays(nodes: VisualCondition[]): number[] | null {
   return Array.from({ length: end - start + 1 }, (_, index) => start + index)
 }
 
+function sameWeekdays(left: number[], right: number[]): boolean {
+  return (
+    left.length === right.length &&
+    left.every((day, index) => day === right[index])
+  )
+}
+
+function shiftedWeekdays(days: number[], offset: number): number[] {
+  return days.map((day) => (day + offset + 7) % 7).sort((a, b) => a - b)
+}
+
+function parseWeekdayCondition(condition: VisualCondition): number[] | null {
+  if (condition.kind === 'comparison') return parseWeekdays([condition])
+  if (condition.kind !== 'all' && condition.kind !== 'any') return null
+  if (
+    condition.children.some(
+      (child) => child.kind !== 'comparison' || child.probe !== 'weekday'
+    )
+  ) {
+    return null
+  }
+  if (
+    condition.kind === 'any' &&
+    condition.children.some(
+      (child) => child.kind !== 'comparison' || child.operator !== '=='
+    )
+  ) {
+    return null
+  }
+  return parseWeekdays(condition.children)
+}
+
+type WeekdayWindowBranch = {
+  days: number[]
+  lower?: string
+  upper?: string
+}
+
+function parseWeekdayWindowBranch(
+  condition: VisualCondition,
+  timezone: string
+): WeekdayWindowBranch | null {
+  const nodes = condition.kind === 'all' ? condition.children : [condition]
+  const weekdayNodes: VisualCondition[] = []
+  const hourNodes: VisualCondition[] = []
+  let groupedWeekdays: number[] | null = null
+
+  for (const node of nodes) {
+    if (node.kind === 'comparison') {
+      if (node.timezone !== timezone) return null
+      if (node.probe === 'weekday') {
+        if (groupedWeekdays) return null
+        weekdayNodes.push(node)
+        continue
+      }
+      if (node.probe === 'hour') {
+        hourNodes.push(node)
+        continue
+      }
+      return null
+    }
+    const parsed = parseWeekdayCondition(node)
+    if (!parsed || groupedWeekdays || weekdayNodes.length > 0) return null
+    if (
+      (node.kind !== 'all' && node.kind !== 'any') ||
+      node.children.some(
+        (child) => child.kind !== 'comparison' || child.timezone !== timezone
+      )
+    ) {
+      return null
+    }
+    groupedWeekdays = parsed
+  }
+
+  const days = groupedWeekdays ?? parseWeekdays(weekdayNodes)
+  if (!days || hourNodes.length === 0 || hourNodes.length > 2) return null
+  const lower = hourNodes.find((node) => isHourComparison(node, '>='))
+  const upper = hourNodes.find((node) => isHourComparison(node, '<'))
+  if (hourNodes.some((node) => node !== lower && node !== upper)) return null
+  return {
+    days,
+    lower: lower?.kind === 'comparison' ? lower.value : undefined,
+    upper: upper?.kind === 'comparison' ? upper.value : undefined,
+  }
+}
+
+/** Parse the expanded weekday branches used for windows that cross midnight. */
+function extractExpandedOvernightSchedule(
+  condition: VisualCondition,
+  timezone: string
+): Pick<TimePricingConfig, 'timezone' | 'weekdays' | 'windows'> | null {
+  if (condition.kind !== 'any') return null
+  const branches = condition.children.map((child) =>
+    parseWeekdayWindowBranch(child, timezone)
+  )
+  if (branches.some((branch) => branch === null)) return null
+
+  const parsed = branches as WeekdayWindowBranch[]
+  const windows: HourWindow[] = []
+  let weekdays: number[] | null = null
+  for (let index = 0; index < parsed.length; index += 1) {
+    const branch = parsed[index]
+    let window: HourWindow
+    const startDays = branch.days
+    if (branch.lower !== undefined && branch.upper !== undefined) {
+      if (Number(branch.lower) >= Number(branch.upper)) return null
+      window = createHourWindow(branch.lower, branch.upper)
+    } else if (branch.lower !== undefined) {
+      const next = parsed[index + 1]
+      if (
+        !next ||
+        next.lower !== undefined ||
+        next.upper === undefined ||
+        Number(branch.lower) <= Number(next.upper) ||
+        !sameWeekdays(shiftedWeekdays(branch.days, 1), next.days)
+      ) {
+        return null
+      }
+      window = createHourWindow(branch.lower, next.upper)
+      index += 1
+    } else {
+      return null
+    }
+    if (weekdays && !sameWeekdays(weekdays, startDays)) return null
+    weekdays = startDays
+    windows.push(window)
+  }
+  if (!weekdays || windows.length === 0) return null
+  return {
+    timezone,
+    weekdays,
+    windows,
+  }
+}
+
 function extractSchedule(
   condition: VisualCondition
 ): Pick<TimePricingConfig, 'timezone' | 'weekdays' | 'windows'> | null {
   const timezone = findTimezone(condition)
   if (!timezone) return null
+
+  const expanded = extractExpandedOvernightSchedule(condition, timezone)
+  if (expanded) return expanded
 
   let weekdayNodes: VisualCondition[] = []
   let windowNodes: VisualCondition[]
@@ -265,18 +405,6 @@ function extractSchedule(
   return { timezone, weekdays, windows }
 }
 
-/**
- * Snap an existing expression timezone onto the timezone implied by the
- * current interface language. The editor has no timezone selector; new
- * windows are written in the language's timezone while an existing condition
- * keeps whichever timezone it was saved with.
- */
-export function timezoneForLanguage(
-  language: string | undefined | null
-): string {
-  return languageTimezone(language)
-}
-
 export function parseTimePricing(expression: string): TimePricingConfig {
   const config = defaultTimePricingConfig()
   if (!expression) return config
@@ -314,7 +442,7 @@ function priceExpression(prices: Record<string, string>): string {
     const raw = prices[key]
     if (raw === undefined || trimNumber(raw) === '') return false
     const value = Number(raw)
-    return Number.isFinite(value) && value > 0
+    return Number.isFinite(value) && value >= 0
   }).map((key) => `${key} * ${trimNumber(prices[key])}`)
   return terms.length > 0 ? terms.join(' + ') : 'p * 0'
 }
@@ -330,7 +458,7 @@ export function hasAbsolutePeakPrices(
     const raw = peak[key]
     if (raw === undefined || trimNumber(raw) === '') return false
     const value = Number(raw)
-    if (!Number.isFinite(value) || value <= 0) return false
+    if (!Number.isFinite(value) || value < 0) return false
     const expected = Number(derived[key])
     if (!Number.isFinite(expected)) return true
     return Math.abs(value - expected) > expected * 0.005 + 1e-9
@@ -363,22 +491,48 @@ export function buildTimePricingCondition(
       ? windowParts[0]
       : `(${windowParts.map((part) => `(${part})`).join(' || ')})`
 
-  const days = [...new Set(weekdays)].sort((a, b) => a - b)
+  const days = [...new Set(weekdays)]
+    .filter((day) => Number.isInteger(day) && day >= 0 && day <= 6)
+    .sort((a, b) => a - b)
   if (days.length === 0 || days.length === 7) return windowExpression
-  const contiguous = days.every(
-    (day, index) => index === 0 || day === days[index - 1] + 1
-  )
-  let dayExpression: string
-  if (contiguous) {
-    const lastDay = days.at(-1)
-    dayExpression =
-      days.length === 1
-        ? `weekday(${tz}) == ${days[0]}`
-        : `weekday(${tz}) >= ${days[0]} && weekday(${tz}) <= ${lastDay}`
-  } else {
-    dayExpression = `(${days.map((day) => `weekday(${tz}) == ${day}`).join(' || ')})`
+
+  const weekdayExpression = (selectedDays: number[]): string => {
+    const contiguous = selectedDays.every(
+      (day, index) => index === 0 || day === selectedDays[index - 1] + 1
+    )
+    if (contiguous) {
+      const lastDay = selectedDays.at(-1)
+      return selectedDays.length === 1
+        ? `weekday(${tz}) == ${selectedDays[0]}`
+        : `weekday(${tz}) >= ${selectedDays[0]} && weekday(${tz}) <= ${lastDay}`
+    }
+    return `(${selectedDays.map((day) => `weekday(${tz}) == ${day}`).join(' || ')})`
   }
-  return `${dayExpression} && ${windowExpression}`
+
+  const dayExpression = weekdayExpression(days)
+  if (!valid.some((window) => Number(window.start) > Number(window.end))) {
+    return `${dayExpression} && ${windowExpression}`
+  }
+
+  const nextDayExpression = weekdayExpression(shiftedWeekdays(days, 1))
+  const expandedParts: string[] = []
+  for (const window of valid) {
+    const start = Number(window.start)
+    const end = Number(window.end)
+    if (start < end) {
+      expandedParts.push(
+        `${dayExpression} && hour(${tz}) >= ${start} && hour(${tz}) < ${end}`
+      )
+    } else if (start === end) {
+      expandedParts.push(
+        `${dayExpression} && hour(${tz}) >= 0 && hour(${tz}) < 24`
+      )
+    } else {
+      expandedParts.push(`${dayExpression} && hour(${tz}) >= ${start}`)
+      expandedParts.push(`${nextDayExpression} && hour(${tz}) < ${end}`)
+    }
+  }
+  return `(${expandedParts.map((part) => `(${part})`).join(' || ')})`
 }
 
 export function buildTimePricingExpression(config: TimePricingConfig): string {

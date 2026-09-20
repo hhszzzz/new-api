@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRankingsUserUsageMatchesAdminTotalsAndMasksPrivateUsernames(t *testing.T) {
+func TestRankingsUserUsageScopesTotalsAndMasksPrivateUsernames(t *testing.T) {
 	service.InvalidateRankingsCache()
 	db := setupModelListControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.QuotaData{}, &model.ScopedQuotaData{}))
@@ -76,10 +76,12 @@ func TestRankingsUserUsageMatchesAdminTotalsAndMasksPrivateUsernames(t *testing.
 	assert.Len(t, regularPayload.Data.UserUsage.Users[0].Groups, 1)
 	assert.Equal(t, "team", regularPayload.Data.UserUsage.Users[0].Groups[0].UseGroup)
 	require.Len(t, adminPayload.Data.UserUsage.Users[0].Groups, 2)
-	// The section header totals stay global for both viewers.
-	assert.Equal(t, adminPayload.Data.UserUsage.TotalTokens, regularPayload.Data.UserUsage.TotalTokens)
-	assert.Equal(t, adminPayload.Data.UserUsage.TotalQuota, regularPayload.Data.UserUsage.TotalQuota)
-	assert.Equal(t, adminPayload.Data.UserUsage.TotalUSD, regularPayload.Data.UserUsage.TotalUSD)
+	// The section header uses the same scoped rows as the list, so it cannot
+	// disclose aggregate usage from groups the regular viewer cannot inspect.
+	assert.Equal(t, regularPayload.Data.UserUsage.Users[0].TotalTokens, regularPayload.Data.UserUsage.TotalTokens)
+	assert.Equal(t, regularPayload.Data.UserUsage.Users[0].TotalQuota, regularPayload.Data.UserUsage.TotalQuota)
+	assert.Equal(t, regularPayload.Data.UserUsage.Users[0].TotalUSD, regularPayload.Data.UserUsage.TotalUSD)
+	assert.Greater(t, adminPayload.Data.UserUsage.TotalQuota, regularPayload.Data.UserUsage.TotalQuota)
 	// Per-model usage follows the same viewer visibility as the main
 	// leaderboard: the session admin sees the admin-only model name while
 	// regular viewers get it folded into "Others".

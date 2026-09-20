@@ -7,6 +7,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/account_pool_setting"
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -128,6 +129,37 @@ func TestPublishPersistedOptionsBatchesConfigFieldsRegardlessOfRowOrder(t *testi
 	assert.Equal(t, "expression", setting.Mode)
 	assert.Equal(t, "prompt_tokens * 2", setting.Expr)
 	assert.Equal(t, 1, setting.publishCount)
+}
+
+func TestPublishPersistedOptionsMigratesLegacyAccountPoolGroupsAtRuntime(t *testing.T) {
+	previousSetting := account_pool_setting.GetSettingSnapshot()
+	require.NotNil(t, previousSetting)
+	common.OptionMapRWMutex.Lock()
+	previousOptionMap := common.OptionMap
+	common.OptionMap = make(map[string]string)
+	common.OptionMapRWMutex.Unlock()
+	t.Cleanup(func() {
+		previousSetting.PublishConfig()
+		common.OptionMapRWMutex.Lock()
+		common.OptionMap = previousOptionMap
+		common.OptionMapRWMutex.Unlock()
+	})
+
+	publishPersistedOptions([]*Option{{
+		Key:   account_pool_setting.LegacyAllowedGroupsOptionKey,
+		Value: `[" team ","vip","vip"]`,
+	}})
+	assert.Equal(t, map[string][]string{
+		account_pool_setting.ProviderCodex: {"team", "vip"},
+	}, account_pool_setting.GetSettingSnapshot().ProviderGroups)
+
+	publishPersistedOptions([]*Option{
+		{Key: account_pool_setting.LegacyAllowedGroupsOptionKey, Value: `["legacy"]`},
+		{Key: account_pool_setting.ProviderGroupsOptionKey, Value: `{"claude":["current"]}`},
+	})
+	assert.Equal(t, map[string][]string{
+		account_pool_setting.ProviderClaude: {"current"},
+	}, account_pool_setting.GetSettingSnapshot().ProviderGroups)
 }
 
 func TestInsertWithPricingOptionsRollsBackModelWhenOptionPersistenceFails(t *testing.T) {

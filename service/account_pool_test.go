@@ -298,15 +298,16 @@ func TestApplyCodexUsagePayloadNormalizesProliteWeeklyOnlyQuota(t *testing.T) {
 	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
 	account := accountPoolAccount{}
 
-	applyCodexUsagePayload(&account, map[string]interface{}{
+	_, err := applyCodexUsagePayload(&account, map[string]any{
 		"plan_type": "Prolite",
-		"rate_limit": map[string]interface{}{
-			"primary_window": map[string]interface{}{
+		"rate_limit": map[string]any{
+			"primary_window": map[string]any{
 				"used_percent":         float64(25),
 				"limit_window_seconds": float64(604800),
 			},
 		},
 	}, now)
+	require.NoError(t, err)
 
 	assert.Equal(t, "Pro 5x", account.Plan)
 	assert.Nil(t, account.PrimaryWindow)
@@ -319,18 +320,19 @@ func TestApplyCodexUsagePayloadKeepsShortQuotaInPrimarySlot(t *testing.T) {
 	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
 	account := accountPoolAccount{}
 
-	applyCodexUsagePayload(&account, map[string]interface{}{
-		"rate_limit": map[string]interface{}{
-			"primary_window": map[string]interface{}{
+	_, err := applyCodexUsagePayload(&account, map[string]any{
+		"rate_limit": map[string]any{
+			"primary_window": map[string]any{
 				"used_percent":         float64(25),
 				"limit_window_seconds": float64(604800),
 			},
-			"secondary_window": map[string]interface{}{
+			"secondary_window": map[string]any{
 				"used_percent":         float64(50),
 				"limit_window_seconds": float64(18000),
 			},
 		},
 	}, now)
+	require.NoError(t, err)
 
 	require.NotNil(t, account.PrimaryWindow)
 	require.NotNil(t, account.PrimaryWindow.LimitWindowSeconds)
@@ -370,10 +372,11 @@ func TestApplyCodexUsagePayloadMarksAnyExhaustedWindowAsLimited(t *testing.T) {
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			account := accountPoolAccount{}
-			limited := applyCodexUsagePayload(&account, map[string]interface{}{
+			limited, err := applyCodexUsagePayload(&account, map[string]any{
 				"rate_limit": testCase.rateLimit,
 			}, now)
 
+			require.NoError(t, err)
 			assert.True(t, limited)
 		})
 	}
@@ -383,12 +386,13 @@ func TestAccountPoolPublicIDDoesNotExposeCredentialIdentity(t *testing.T) {
 	credentialName := "codex-admin@example.com.json"
 	authIndex := "auth-index-secret"
 
-	publicID := accountPoolPublicID("management-secret", credentialName, authIndex)
+	publicID := accountPoolPublicID("management-secret", account_pool_setting.ProviderCodex, credentialName, authIndex)
 
 	assert.Len(t, publicID, 24)
 	assert.NotContains(t, publicID, "admin@example.com")
 	assert.NotContains(t, publicID, authIndex)
-	assert.NotEqual(t, publicID, accountPoolPublicID("another-secret", credentialName, authIndex))
+	assert.NotEqual(t, publicID, accountPoolPublicID("another-secret", account_pool_setting.ProviderCodex, credentialName, authIndex))
+	assert.NotEqual(t, publicID, accountPoolPublicID("management-secret", account_pool_setting.ProviderClaude, credentialName, authIndex))
 }
 
 func TestAccountPoolManagerKeepsOldSnapshotWhenRefreshFails(t *testing.T) {
@@ -483,6 +487,37 @@ func TestAccountPoolManagerReturnsUnavailableWithoutAnOldSnapshot(t *testing.T) 
 	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
 	fake := newAccountPoolFakeManagement(t)
 	fake.failUsage = true
+	manager := fake.manager(now)
+
+	_, err := manager.get(context.Background())
+	require.ErrorIs(t, err, ErrAccountPoolUnavailable)
+}
+
+func TestApplyAccountPoolUsagePayloadRejectsIncompleteProviderData(t *testing.T) {
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		provider string
+		payload  map[string]any
+	}{
+		{provider: account_pool_setting.ProviderCodex, payload: map[string]any{"rate_limit": map[string]any{}}},
+		{provider: account_pool_setting.ProviderClaude, payload: map[string]any{"usage": map[string]any{}}},
+		{provider: account_pool_setting.ProviderAntigravity, payload: map[string]any{"quota": map[string]any{"groups": []any{}}}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.provider, func(t *testing.T) {
+			account := accountPoolAccount{Provider: test.provider}
+			_, err := applyAccountPoolUsagePayload(&account, test.payload, now)
+			require.ErrorIs(t, err, ErrAccountPoolUnavailable)
+		})
+	}
+}
+
+func TestAccountPoolManagerRejectsMalformedSuccessfulQuotaPayload(t *testing.T) {
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	fake := newAccountPoolFakeManagement(t)
+	fake.usageStatus = http.StatusOK
+	fake.usageBody = `{}`
 	manager := fake.manager(now)
 
 	_, err := manager.get(context.Background())

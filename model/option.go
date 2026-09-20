@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/account_pool_setting"
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/group_rate_limit_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -235,6 +236,20 @@ func publishPersistedOptions(options []*Option) {
 		values[option.Key] = option.Value
 		if ratio_setting.IsPricingOptionKey(option.Key) {
 			pricingValues[option.Key] = option.Value
+		}
+	}
+	if _, hasProviderGroups := values[account_pool_setting.ProviderGroupsOptionKey]; !hasProviderGroups {
+		if legacyValue, hasLegacyGroups := values[account_pool_setting.LegacyAllowedGroupsOptionKey]; hasLegacyGroups {
+			var legacyGroups []string
+			if err := common.UnmarshalJsonStr(legacyValue, &legacyGroups); err != nil {
+				common.SysLog("failed to migrate legacy account pool groups: " + err.Error())
+			} else if encoded, err := common.Marshal(map[string][]string{
+				account_pool_setting.ProviderCodex: legacyGroups,
+			}); err != nil {
+				common.SysLog("failed to encode legacy account pool groups: " + err.Error())
+			} else {
+				values[account_pool_setting.ProviderGroupsOptionKey] = string(encoded)
+			}
 		}
 	}
 

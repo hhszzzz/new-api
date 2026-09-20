@@ -267,10 +267,13 @@ func TestBuildRankingUserUsageMasksNamesWithoutChangingAdminRanking(t *testing.T
 	require.Len(t, adminUsage.Users, 2)
 	assert.Equal(t, "a***e", regularUsage.Users[0].Username)
 	assert.Equal(t, int64(500000), regularUsage.Users[0].TotalQuota)
+	assert.Equal(t, int64(100), regularUsage.TotalTokens)
+	assert.Equal(t, int64(500000), regularUsage.TotalQuota)
 	assert.Len(t, regularUsage.Users[0].Groups, 1)
 	assert.Equal(t, "team", regularUsage.Users[0].Groups[0].UseGroup)
 	assert.Equal(t, "alice", adminUsage.Users[0].Username)
 	assert.Equal(t, "bob", adminUsage.Users[1].Username)
+	assert.Equal(t, int64(1500000), adminUsage.TotalQuota)
 	// Unscoped regular usage (legacy helper callers with no group list) is not
 	// produced by the controller; nil memberships mean an empty allowlist.
 	assert.Len(t, buildRankingUserUsage(rows, 150, 1500000, false, nil, 500000).Users, 0)
@@ -286,7 +289,7 @@ func TestBuildRankingUserUsageOmitsUnattributedRows(t *testing.T) {
 	assert.Equal(t, "b***b", usage.Users[0].Username)
 	assert.Equal(t, int64(250000), usage.Users[0].TotalQuota)
 	assert.InDelta(t, 1.0, usage.Users[0].QuotaShare, 0.0001)
-	assert.Equal(t, int64(750000), usage.TotalQuota)
+	assert.Equal(t, int64(250000), usage.TotalQuota)
 }
 
 func TestBuildRankingUserUsageDisambiguatesMaskedUsernameCollisions(t *testing.T) {

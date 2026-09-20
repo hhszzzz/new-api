@@ -1075,7 +1075,6 @@ func buildRankingUserUsage(rows []model.RankingUserQuotaRow, totalTokens int64, 
 		model.quota += row.TotalQuota
 	}
 
-	usage := &RankingUserUsage{TotalTokens: totalTokens, TotalQuota: totalQuota, TotalUSD: rankingQuotaUSD(totalQuota, quotaPerUnit), Users: make([]RankingUser, 0, minInt(len(aggregates), rankingUserLimit))}
 	aggregateRows := make([]*rankingUserAggregate, 0, len(aggregates))
 	for _, aggregate := range aggregates {
 		if allowedGroups != nil && aggregate.visibleQuota <= 0 && aggregate.visibleTokens <= 0 {
@@ -1087,11 +1086,16 @@ func buildRankingUserUsage(rows []model.RankingUserQuotaRow, totalTokens int64, 
 	}
 	rankingTotalTokens, rankingTotalQuota := totalTokens, totalQuota
 	if allowedGroups != nil {
-		// Shares are computed against the scoping-adjusted totals so the
-		// per-user percentages stay meaningful after redaction. The section
-		// header totals stay global.
+		// Shares and section totals use the same scoped rows. Returning global
+		// totals here would leak usage from groups the viewer cannot inspect.
 		rankingTotalTokens = sumVisibleRankingTokens(aggregateRows)
 		rankingTotalQuota = sumVisibleRankingQuota(aggregateRows)
+	}
+	usage := &RankingUserUsage{
+		TotalTokens: rankingTotalTokens,
+		TotalQuota:  rankingTotalQuota,
+		TotalUSD:    rankingQuotaUSD(rankingTotalQuota, quotaPerUnit),
+		Users:       make([]RankingUser, 0, minInt(len(aggregateRows), rankingUserLimit)),
 	}
 	sort.Slice(aggregateRows, func(i, j int) bool {
 		if aggregateRows[i].visibleQuota != aggregateRows[j].visibleQuota {

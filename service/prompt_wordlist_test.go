@@ -211,6 +211,34 @@ func TestPromptWordlistPoliciesApplyPerSourceAndDisabledLibrariesNeverMatch(t *t
 	assert.Nil(t, match)
 }
 
+func TestPromptWordlistPoliciesFailClosedForMissingOrStaleRuntime(t *testing.T) {
+	withPromptWordlistTestDB(t)
+	id := createPromptWordlistFixture(t, "required", "blocked-marker")
+	require.NoError(t, RefreshPromptWordlists())
+	require.NoError(t, compilePromptWordlists())
+
+	configured := prompt_audit_setting.GetSetting()
+	configured.ScopePolicies = map[dto.PromptAuditScope]prompt_audit_setting.ScopePolicy{
+		dto.PromptScopeUser: {LibraryIDs: []string{id}},
+	}
+	configured.PublishConfig()
+
+	promptWordlists.Store(&promptWordlistSnapshot{Libraries: map[string]promptWordlistRuntime{}})
+	match, _, err := TestPromptWordlists(dto.PromptScopeUser, "safe text")
+	assert.Nil(t, match)
+	require.ErrorContains(t, err, "wordlist is unavailable")
+
+	require.NoError(t, RefreshPromptWordlists())
+	require.NoError(t, compilePromptWordlists())
+	snapshot := promptWordlists.Load()
+	entry := snapshot.Libraries[id]
+	entry.TargetVersion = "new-content-version"
+	promptWordlists.Store(&promptWordlistSnapshot{Libraries: map[string]promptWordlistRuntime{id: entry}})
+	match, _, err = TestPromptWordlists(dto.PromptScopeUser, "blocked-marker")
+	assert.Nil(t, match)
+	require.ErrorContains(t, err, "wordlist is unavailable")
+}
+
 func TestPromptWordlistManualDisablePreservesWordsAndBindings(t *testing.T) {
 	withPromptWordlistTestDB(t)
 	setting.SensitiveWordsFromString("manual-marker")

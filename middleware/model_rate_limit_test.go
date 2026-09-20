@@ -172,6 +172,25 @@ func TestModelRequestRateLimitDoesNotChargeResponsesWebSocketHandshake(t *testin
 	assert.Equal(t, http.StatusTooManyRequests, secondResponse.Code)
 }
 
+func TestModelRequestSucceededHandlesRequestsWithoutStreamStatus(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		want   bool
+	}{
+		{name: "successful non-stream response", status: http.StatusNoContent, want: true},
+		{name: "failed response", status: http.StatusBadRequest, want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx.Status(test.status)
+
+			assert.Equal(t, test.want, modelRequestSucceeded(ctx))
+		})
+	}
+}
+
 var modelRateLimitTestUsers atomic.Int64
 
 func TestModelRateLimitStreamFailuresDoNotConsumeSuccessLimit(t *testing.T) {

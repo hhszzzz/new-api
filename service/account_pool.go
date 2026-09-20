@@ -543,7 +543,14 @@ func (manager *accountPoolManager) fetchRound(ctx context.Context, config accoun
 			result.accounts[quota.index].Stale = true
 			continue
 		}
-		if limited := applyAccountPoolUsagePayload(&result.accounts[quota.index], quota.payload, now); limited {
+		limited, applyErr := applyAccountPoolUsagePayload(&result.accounts[quota.index], quota.payload, now)
+		if applyErr != nil {
+			result.failed++
+			result.accounts[quota.index].Status = "error"
+			result.accounts[quota.index].Stale = true
+			continue
+		}
+		if limited {
 			result.accounts[quota.index].Status = "limited"
 		} else {
 			result.accounts[quota.index].Status = "available"
@@ -921,7 +928,7 @@ func buildAccountPoolAccount(file map[string]interface{}, provider string, idSec
 		subscriptionActiveUntil = findAccountPoolSubscriptionTime(authInfo, now)
 	}
 	account := accountPoolAccount{
-		PublicID:                accountPoolPublicID(idSecret, name, authIndex),
+		PublicID:                accountPoolPublicID(idSecret, provider, name, authIndex),
 		Provider:                provider,
 		Email:                   findAccountPoolString(file, "email"),
 		Status:                  "available",
@@ -969,14 +976,14 @@ func buildAccountPoolAccount(file map[string]interface{}, provider string, idSec
 	return account, authIndex, accountID, projectID, true
 }
 
-func applyCodexUsagePayload(account *accountPoolAccount, payload map[string]interface{}, now time.Time) bool {
+func applyCodexUsagePayload(account *accountPoolAccount, payload map[string]any, now time.Time) (bool, error) {
 	plan := firstAccountPoolString(payload, "plan_type", "planType")
 	if plan != "" {
 		account.Plan = normalizeAccountPoolPlan(plan)
 	}
 	rateLimit := firstAccountPoolMap(payload, "rate_limit", "rateLimit")
 	if rateLimit == nil {
-		return false
+		return false, ErrAccountPoolUnavailable
 	}
 	primary := firstAccountPoolMap(rateLimit, "primary_window", "primaryWindow")
 	secondary := firstAccountPoolMap(rateLimit, "secondary_window", "secondaryWindow")
@@ -992,15 +999,20 @@ func applyCodexUsagePayload(account *accountPoolAccount, payload map[string]inte
 			SecondaryWindow: secondaryWindow,
 		}}
 	}
-	return firstAccountPoolBool(rateLimit, "limit_reached", "limitReached") ||
+	limited := firstAccountPoolBool(rateLimit, "limit_reached", "limitReached") ||
 		hasExplicitAccountPoolFalse(rateLimit, "allowed") ||
 		isAccountPoolQuotaWindowLimited(primary, primaryWindow) ||
 		isAccountPoolQuotaWindowLimited(secondary, secondaryWindow)
+	if primaryWindow == nil && secondaryWindow == nil && !limited {
+		return false, ErrAccountPoolUnavailable
+	}
+	return limited, nil
 }
 
 // applyAccountPoolUsagePayload dispatches a successful api-call payload to the
-// per-provider parser and reports whether any window is exhausted.
-func applyAccountPoolUsagePayload(account *accountPoolAccount, payload map[string]interface{}, now time.Time) bool {
+// per-provider parser. A structurally incomplete quota response is unavailable,
+// rather than evidence that the account has quota remaining.
+func applyAccountPoolUsagePayload(account *accountPoolAccount, payload map[string]any, now time.Time) (bool, error) {
 	switch account.Provider {
 	case account_pool_setting.ProviderClaude:
 		return applyClaudeUsagePayload(account, payload, now)
@@ -1011,10 +1023,10 @@ func applyAccountPoolUsagePayload(account *accountPoolAccount, payload map[strin
 	}
 }
 
-func applyClaudeUsagePayload(account *accountPoolAccount, payload map[string]interface{}, now time.Time) bool {
+func applyClaudeUsagePayload(account *accountPoolAccount, payload map[string]any, now time.Time) (bool, error) {
 	usage := firstAccountPoolMap(payload, "usage")
 	if usage == nil {
-		return false
+		return false, ErrAccountPoolUnavailable
 	}
 	fiveHour := firstAccountPoolMap(usage, "five_hour")
 	sevenDay := firstAccountPoolMap(usage, "seven_day")
@@ -1030,8 +1042,11 @@ func applyClaudeUsagePayload(account *accountPoolAccount, payload map[string]int
 	if profile := firstAccountPoolMap(payload, "profile"); profile != nil {
 		account.Plan = accountPoolClaudePlan(profile)
 	}
+	if account.PrimaryWindow == nil && account.SecondaryWindow == nil {
+		return false, ErrAccountPoolUnavailable
+	}
 	return isAccountPoolQuotaWindowLimited(nil, account.PrimaryWindow) ||
-		isAccountPoolQuotaWindowLimited(nil, account.SecondaryWindow)
+		isAccountPoolQuotaWindowLimited(nil, account.SecondaryWindow), nil
 }
 
 func parseAccountPoolUtilizationWindow(source map[string]interface{}, now time.Time) *AccountPoolWindow {
@@ -1074,17 +1089,17 @@ func accountPoolClaudePlan(profile map[string]interface{}) string {
 	}
 }
 
-func applyAntigravityQuotaPayload(account *accountPoolAccount, payload map[string]interface{}, now time.Time) bool {
+func applyAntigravityQuotaPayload(account *accountPoolAccount, payload map[string]any, now time.Time) (bool, error) {
 	quota := firstAccountPoolMap(payload, "quota")
 	if quota == nil {
-		return false
+		return false, ErrAccountPoolUnavailable
 	}
 	if assist := firstAccountPoolMap(payload, "code_assist"); assist != nil {
 		account.Plan = accountPoolAntigravityPlan(assist)
 	}
 	groups, _ := quota["groups"].([]interface{})
 	if len(groups) == 0 {
-		return false
+		return false, ErrAccountPoolUnavailable
 	}
 	var windowGroups []AccountPoolWindowGroup
 	limited := false
@@ -1130,12 +1145,12 @@ func applyAntigravityQuotaPayload(account *accountPoolAccount, payload map[strin
 		})
 	}
 	if len(windowGroups) == 0 {
-		return false
+		return false, ErrAccountPoolUnavailable
 	}
 	account.WindowGroups = windowGroups
 	account.PrimaryWindow = windowGroups[0].PrimaryWindow
 	account.SecondaryWindow = windowGroups[0].SecondaryWindow
-	return limited
+	return limited, nil
 }
 
 func parseAccountPoolRemainingWindow(bucket map[string]interface{}, now time.Time) *AccountPoolWindow {
@@ -1212,6 +1227,9 @@ func parseAccountPoolWindow(window map[string]interface{}, limit map[string]inte
 			parsed := now.Add(time.Duration(resetAfter * float64(time.Second)))
 			resetAt = &parsed
 		}
+	}
+	if usedPointer == nil && limitPointer == nil && resetAt == nil {
+		return nil
 	}
 	return &AccountPoolWindow{
 		UsedPercent:        usedPointer,
@@ -1383,9 +1401,9 @@ func summarizeAccountPoolAccounts(accounts []accountPoolAccount) AccountPoolSumm
 	return summary
 }
 
-func accountPoolPublicID(secret string, name string, authIndex string) string {
+func accountPoolPublicID(secret string, provider string, name string, authIndex string) string {
 	digest := hmac.New(sha256.New, []byte(secret))
-	_, _ = digest.Write([]byte(strings.TrimSpace(name) + "\x00" + authIndex))
+	_, _ = digest.Write([]byte(provider + "\x00" + strings.TrimSpace(name) + "\x00" + authIndex))
 	return hex.EncodeToString(digest.Sum(nil)[:12])
 }
 
