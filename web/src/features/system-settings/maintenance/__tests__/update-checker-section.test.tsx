@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 
@@ -50,7 +50,7 @@ function renderUpdateChecker() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   })
-  return render(
+  const result = render(
     <QueryClientProvider client={queryClient}>
       <UpdateCheckerSection
         currentVersion='main-deadbeef'
@@ -58,6 +58,7 @@ function renderUpdateChecker() {
       />
     </QueryClientProvider>
   )
+  return { ...result, queryClient }
 }
 
 describe('system update checker', () => {
@@ -89,6 +90,35 @@ describe('system update checker', () => {
       'href',
       'https://github.com/hhszzzz/new-api/actions/runs/123'
     )
+  })
+
+  test('keeps GHCR results when the release-notification cache changes', async () => {
+    getSystemUpdateInfoMock.mockResolvedValue({
+      current_version: 'main-deadbeef',
+      latest_version: 'main-9de2eea0',
+      latest_revision: '9de2eea0ab7d1708e3708bb8eadc89bafa2744b7',
+      update_available: true,
+      update_enabled: true,
+      image: 'ghcr.io/hhszzzz/new-api:main',
+      trigger: { status: 'idle' },
+    })
+    const user = userEvent.setup()
+    const { queryClient } = renderUpdateChecker()
+
+    await user.click(screen.getByRole('button', { name: 'Check for updates' }))
+    expect(await screen.findByText('main-9de2eea0')).toBeInTheDocument()
+
+    act(() => {
+      queryClient.setQueryData(['system-update'], {
+        checkedAt: Date.now(),
+        currentVersion: 'v1.0.0',
+        latestRelease: null,
+        state: 'up-to-date',
+      })
+    })
+
+    expect(screen.getByText('main-9de2eea0')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Update now' })).toBeEnabled()
   })
 
   test('confirms and starts the application-only update', async () => {

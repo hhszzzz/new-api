@@ -622,7 +622,7 @@ func (manager *accountPoolManager) callAccountPoolAPI(
 	method string,
 	url string,
 	headers map[string]string,
-	data map[string]interface{},
+	data map[string]any,
 ) (map[string]interface{}, error) {
 	requestPayload := map[string]interface{}{
 		"auth_index": authIndex,
@@ -631,7 +631,11 @@ func (manager *accountPoolManager) callAccountPoolAPI(
 		"header":     headers,
 	}
 	if data != nil {
-		requestPayload["data"] = data
+		encodedData, err := common.Marshal(data)
+		if err != nil {
+			return nil, err
+		}
+		requestPayload["data"] = string(encodedData)
 	}
 	body, err := common.Marshal(requestPayload)
 	if err != nil {
@@ -1057,7 +1061,7 @@ func parseAccountPoolUtilizationWindow(source map[string]interface{}, now time.T
 	if !ok {
 		return nil
 	}
-	used := math.Max(0, math.Min(100, utilization*100))
+	used := math.Max(0, math.Min(100, utilization))
 	remaining := math.Max(0, math.Min(100, 100-used))
 	window := AccountPoolWindow{UsedPercent: &used, RemainingPercent: &remaining}
 	if resetAt := parseAccountPoolTime(firstAccountPoolValue(source, "resets_at", "resetsAt"), now, false); resetAt != nil {

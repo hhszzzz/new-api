@@ -746,7 +746,7 @@ func TestAccountPoolManagerFetchesClaudeAndAntigravityAccounts(t *testing.T) {
 		case accountPoolCodexUsageURL:
 			return accountPoolHTTPResponse([]byte(`{"status_code":200,"body":"{\"plan_type\":\"plus\",\"rate_limit\":{\"primary_window\":{\"used_percent\":10,\"limit_window_seconds\":18000}}}"}`)), nil
 		case accountPoolClaudeUsageURL:
-			return accountPoolHTTPResponse([]byte(`{"status_code":200,"body":"{\"five_hour\":{\"utilization\":0.25,\"resets_at\":\"2026-08-29T15:00:00Z\"},\"seven_day\":{\"utilization\":0.5,\"resets_at\":\"2026-09-01T00:00:00Z\"}}"}`)), nil
+			return accountPoolHTTPResponse([]byte(`{"status_code":200,"body":"{\"five_hour\":{\"utilization\":25,\"resets_at\":\"2026-08-29T15:00:00Z\"},\"seven_day\":{\"utilization\":50,\"resets_at\":\"2026-09-01T00:00:00Z\"}}"}`)), nil
 		case accountPoolClaudeProfileURL:
 			return accountPoolHTTPResponse([]byte(`{"status_code":200,"body":"{\"account\":{\"has_claude_max\":true},\"organization\":{\"organization_type\":\"claude_max\"}}"}`)), nil
 		case accountPoolAntigravityQuotaDailyURL:
@@ -835,6 +835,22 @@ func TestAccountPoolManagerFetchesClaudeAndAntigravityAccounts(t *testing.T) {
 	assert.Equal(t, 5, requestCount)
 	for _, payload := range apiRequests {
 		assert.NotEqual(t, "ag-auth-no-project", payload["auth_index"])
+		switch payload["url"] {
+		case accountPoolAntigravityQuotaDailyURL:
+			rawData, ok := payload["data"].(string)
+			require.True(t, ok)
+			var data map[string]interface{}
+			require.NoError(t, common.UnmarshalJsonStr(rawData, &data))
+			assert.Equal(t, "ag-project-secret", data["project"])
+		case accountPoolAntigravityAssistURL:
+			rawData, ok := payload["data"].(string)
+			require.True(t, ok)
+			var data map[string]interface{}
+			require.NoError(t, common.UnmarshalJsonStr(rawData, &data))
+			metadata, ok := data["metadata"].(map[string]interface{})
+			require.True(t, ok)
+			assert.Equal(t, "ANTIGRAVITY", metadata["ideType"])
+		}
 	}
 
 	view := manager.buildView(snapshot, common.RoleRootUser, nil, false)

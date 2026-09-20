@@ -231,9 +231,7 @@ function PromptAuditSettingsForm({
 
   return (
     <SectionPageLayout>
-      <SectionPageLayout.Title>
-        {t('Prompt audit settings')}
-      </SectionPageLayout.Title>
+      <SectionPageLayout.Title>{t('Prompt audit')}</SectionPageLayout.Title>
       <SectionPageLayout.Actions>
         <Button
           disabled={
@@ -248,7 +246,7 @@ function PromptAuditSettingsForm({
         </Button>
       </SectionPageLayout.Actions>
       <SectionPageLayout.Content>
-        <div className='mx-auto max-w-6xl space-y-4'>
+        <div className='w-full space-y-4'>
           <PromptAuditNavigation />
           {librariesQuery.isPending && <LoadingState />}
           {librariesQuery.isError && (
@@ -880,9 +878,7 @@ export function PromptAuditSettings() {
   ) {
     return (
       <SectionPageLayout>
-        <SectionPageLayout.Title>
-          {t('Prompt audit settings')}
-        </SectionPageLayout.Title>
+        <SectionPageLayout.Title>{t('Prompt audit')}</SectionPageLayout.Title>
         <SectionPageLayout.Content>
           <p className='text-muted-foreground py-12 text-center'>
             {t('Loading prompt audit settings...')}
@@ -896,9 +892,7 @@ export function PromptAuditSettings() {
   if (error || !configQuery.data?.data) {
     return (
       <SectionPageLayout>
-        <SectionPageLayout.Title>
-          {t('Prompt audit settings')}
-        </SectionPageLayout.Title>
+        <SectionPageLayout.Title>{t('Prompt audit')}</SectionPageLayout.Title>
         <SectionPageLayout.Content>
           <p className='text-destructive py-12 text-center'>
             {error?.message || t('Prompt audit settings are unavailable')}

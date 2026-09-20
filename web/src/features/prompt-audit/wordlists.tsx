@@ -218,14 +218,14 @@ export function PromptWordlists() {
   ]
   return (
     <SectionPageLayout>
-      <SectionPageLayout.Title>{t('Wordlists')}</SectionPageLayout.Title>
+      <SectionPageLayout.Title>{t('Prompt audit')}</SectionPageLayout.Title>
       <SectionPageLayout.Actions>
         <Button onClick={() => setImportOpen(true)}>
           {t('Import wordlist')}
         </Button>
       </SectionPageLayout.Actions>
       <SectionPageLayout.Content>
-        <div className='mx-auto max-w-6xl space-y-4'>
+        <div className='w-full space-y-4'>
           <PromptAuditNavigation />
           <p className='text-muted-foreground text-sm'>
             {t(

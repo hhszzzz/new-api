@@ -46,7 +46,7 @@ export function PromptAuditNavigation() {
   if (location.pathname === '/prompt-audit/wordlists') {
     active = 'wordlists'
   } else if (location.pathname === '/prompt-audit/settings') {
-    active = location.hash.includes('audit-nodes') ? 'nodes' : 'rules'
+    active = 'settings'
   }
 
   return (
@@ -58,11 +58,6 @@ export function PromptAuditNavigation() {
             void navigate({ to: '/prompt-audit' })
           } else if (value === 'wordlists') {
             void navigate({ to: '/prompt-audit/wordlists' })
-          } else if (value === 'nodes') {
-            void navigate({
-              to: '/prompt-audit/settings',
-              hash: 'audit-nodes',
-            })
           } else {
             void navigate({ to: '/prompt-audit/settings' })
           }
@@ -74,9 +69,8 @@ export function PromptAuditNavigation() {
           )}
           {canManage && (
             <>
-              <TabsTrigger value='rules'>{t('Inspection rules')}</TabsTrigger>
+              <TabsTrigger value='settings'>{t('Settings')}</TabsTrigger>
               <TabsTrigger value='wordlists'>{t('Wordlists')}</TabsTrigger>
-              <TabsTrigger value='nodes'>{t('Audit nodes')}</TabsTrigger>
             </>
           )}
         </TabsList>

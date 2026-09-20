@@ -16,12 +16,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import {
-  CrownIcon,
-  Wallet01Icon,
-  Wrench01Icon,
-} from '@hugeicons/core-free-icons'
+import { Wallet01Icon, Wrench01Icon } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
+import { CreditCard } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { StatusBadge } from '@/components/status-badge'
@@ -116,12 +113,16 @@ export function LogCostDisplay(props: LogCostDisplayProps) {
                     aria-label={source}
                     tabIndex={0}
                   >
-                    <HugeiconsIcon
-                      icon={isSubscription ? CrownIcon : Wallet01Icon}
-                      className='size-3.5'
-                      strokeWidth={2}
-                      aria-hidden='true'
-                    />
+                    {isSubscription ? (
+                      <CreditCard className='size-3.5' aria-hidden='true' />
+                    ) : (
+                      <HugeiconsIcon
+                        icon={Wallet01Icon}
+                        className='size-3.5'
+                        strokeWidth={2}
+                        aria-hidden='true'
+                      />
+                    )}
                   </span>
                 }
               />

@@ -31,6 +31,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
 import { useAuthStore } from '@/stores/auth-store'
 
+import { PromptAuditNavigation } from '../components/prompt-audit-navigation'
 import { ScopePoliciesSection } from '../components/scope-policies-section'
 import { WordlistImportDialog } from '../components/wordlist-import-dialog'
 import { WordlistTestCard } from '../components/wordlist-test-card'
@@ -146,6 +147,22 @@ afterEach(() => {
 })
 
 describe('wordlist management', () => {
+  test('uses one settings destination for prompt audit configuration', async () => {
+    renderManagement(<PromptAuditNavigation />)
+
+    expect(
+      await screen.findByRole('tab', { name: 'Audit records' })
+    ).toBeVisible()
+    expect(screen.getByRole('tab', { name: 'Settings' })).toBeVisible()
+    expect(screen.getByRole('tab', { name: 'Wordlists' })).toBeVisible()
+    expect(
+      screen.queryByRole('tab', { name: 'Inspection rules' })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('tab', { name: 'Audit nodes' })
+    ).not.toBeInTheDocument()
+  })
+
   test('changing one source preserves the other sources and their model switches', async () => {
     const user = userEvent.setup()
     const onChange = vi.fn()

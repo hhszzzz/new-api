@@ -59,6 +59,7 @@ type UpdateCheckerSectionProps = {
 }
 
 const updateReconnectTimeout = 5 * 60 * 1000
+const ghcrSystemUpdateQueryKey = ['system-update', 'ghcr'] as const
 
 export function UpdateCheckerSection(props: UpdateCheckerSectionProps) {
   const { t } = useTranslation()
@@ -67,7 +68,7 @@ export function UpdateCheckerSection(props: UpdateCheckerSectionProps) {
   const updateStartedAtRef = useRef(0)
 
   const updateQuery = useQuery({
-    queryKey: ['system-update'],
+    queryKey: ghcrSystemUpdateQueryKey,
     queryFn: getSystemUpdateInfo,
     enabled: false,
     retry: false,

@@ -227,9 +227,7 @@ export function PromptAuditRecords() {
   return (
     <>
       <SectionPageLayout fixedContent>
-        <SectionPageLayout.Title>
-          {t('Prompt audit records')}
-        </SectionPageLayout.Title>
+        <SectionPageLayout.Title>{t('Prompt audit')}</SectionPageLayout.Title>
         <SectionPageLayout.Actions>
           <Button
             variant='outline'
@@ -256,7 +254,7 @@ export function PromptAuditRecords() {
           )}
         </SectionPageLayout.Actions>
         <SectionPageLayout.Content>
-          <div className='flex h-full min-h-0 flex-col gap-4'>
+          <div className='flex h-full min-h-0 w-full flex-col gap-4'>
             <PromptAuditNavigation />
             <div className='min-h-0 flex-1'>
               <DataTablePage
