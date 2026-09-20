@@ -167,6 +167,34 @@ func TestPluginTrailingSlashMissDoesNotRedirect(t *testing.T) {
 	}
 }
 
+func TestPluginTrailingSlashRouteBypassesOuterWildcardRedirect(t *testing.T) {
+	outer := newOuterPluginTestEngine()
+	outer.POST("/:mode/mj", func(c *gin.Context) { c.String(http.StatusOK, "midjourney") })
+	registry := jsplugin.NewRegistry()
+	plugin := compileRouterPlugin(t, "slash-owner", "1.0.0", `[
+		{method: "POST", path: "/vendor/", type: "dynamic"}
+	]`)
+	require.NoError(t, registry.ReplaceOverrides([]*jsplugin.LoadedPlugin{plugin}))
+	builder := newPluginGenerationBuilder(outer.Routes(), nil, testPluginRouteHandlers(
+		func(c *gin.Context, _ *jsplugin.RoutingGeneration, _ jsplugin.RouteBinding) {
+			c.String(http.StatusOK, "plugin")
+		},
+	))
+	require.NoError(t, registry.SetGenerationPreparer(builder.prepare))
+	dispatcher := &pluginRouteDispatcher{registry: registry}
+	registerTrailingSlashPluginRoutes(outer, dispatcher, registry.Generation())
+	outer.NoRoute(
+		dispatcher.dispatch,
+		func(c *gin.Context) { c.String(http.StatusOK, "fallback") },
+	)
+
+	recorder := performPluginRequest(outer, http.MethodPost, "/vendor/?Action=submit")
+
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Equal(t, "plugin", recorder.Body.String())
+	assert.Empty(t, recorder.Header().Get("Location"))
+}
+
 func TestPluginSSEFlushesWithoutFallbackBuffering(t *testing.T) {
 	plugin := compileRouterPlugin(t, "stream-owner", "1.0.0", `[
 		{method: "GET", path: "/vendor/stream", type: "dynamic"}

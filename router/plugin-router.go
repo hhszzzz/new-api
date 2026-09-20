@@ -62,7 +62,30 @@ func SetPluginRouter(outer *gin.Engine) gin.HandlerFunc {
 	if err = jsplugin.DefaultRegistry.SetGenerationPreparer(builder.prepare); err != nil {
 		common.SysError("build initial plugin router: " + err.Error())
 	}
+	registerTrailingSlashPluginRoutes(outer, dispatcher, jsplugin.DefaultRegistry.Generation())
 	return dispatcher.dispatch
+}
+
+// registerTrailingSlashPluginRoutes prevents an outer Gin wildcard from
+// issuing its own slash redirect before NoRoute can dispatch an exact plugin
+// route. The lightweight outer route still resolves through the current
+// generation, so plugin replacements continue to take effect immediately.
+func registerTrailingSlashPluginRoutes(outer *gin.Engine, dispatcher *pluginRouteDispatcher, generation *jsplugin.RoutingGeneration) {
+	if generation == nil {
+		return
+	}
+	registered := make(map[string]struct{})
+	for _, binding := range generation.Routes() {
+		if binding.Route.Path == "/" || !strings.HasSuffix(binding.Route.Path, "/") {
+			continue
+		}
+		key := binding.Route.Method + " " + binding.Route.Path
+		if _, exists := registered[key]; exists {
+			continue
+		}
+		registered[key] = struct{}{}
+		outer.Handle(binding.Route.Method, binding.Route.Path, dispatcher.dispatch, controller.RelayNotFound)
+	}
 }
 
 func newPluginGenerationBuilder(staticRoutes []gin.RouteInfo, trustedProxies []string, handlers pluginRouteHandlers) *pluginGenerationBuilder {
