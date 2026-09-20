@@ -113,6 +113,22 @@ export function useSidebarData(): SidebarData {
             url: '/usage-logs/common',
             icon: FileText,
           },
+          ...(canReadPromptAudit || canManagePromptAudit
+            ? [
+                {
+                  title: t('Prompt audit'),
+                  url: canReadPromptAudit
+                    ? '/prompt-audit'
+                    : '/prompt-audit/settings',
+                  activeUrls: [
+                    '/prompt-audit',
+                    '/prompt-audit/settings',
+                    '/prompt-audit/wordlists',
+                  ],
+                  icon: ScanSearch,
+                },
+              ]
+            : []),
           {
             title: t('Audit Logs'),
             url: '/usage-logs/audit',
@@ -197,22 +213,6 @@ export function useSidebarData(): SidebarData {
             url: '/subscriptions',
             icon: CreditCard,
           },
-          ...(canReadPromptAudit || canManagePromptAudit
-            ? [
-                {
-                  title: t('Prompt audit'),
-                  url: canReadPromptAudit
-                    ? '/prompt-audit'
-                    : '/prompt-audit/settings',
-                  activeUrls: [
-                    '/prompt-audit',
-                    '/prompt-audit/settings',
-                    '/prompt-audit/wordlists',
-                  ],
-                  icon: ScanSearch,
-                },
-              ]
-            : []),
           {
             title: t('System Info'),
             url: '/system-info',

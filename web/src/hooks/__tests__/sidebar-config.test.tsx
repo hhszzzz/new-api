@@ -213,6 +213,22 @@ describe('audit log sidebar entry', () => {
 })
 
 describe('prompt audit sidebar entry', () => {
+  it('places the entry between logs and audit logs', () => {
+    const { result } = sidebarFor(undefined, undefined, true, {
+      role: ROLE.SUPER_ADMIN,
+    })
+    const general = result.current.find((group) => group.id === 'general')
+    const titles = general?.items.map((item) => item.title) ?? []
+    const logsIndex = titles.indexOf('Logs')
+
+    expect(logsIndex).toBeGreaterThanOrEqual(0)
+    expect(titles.slice(logsIndex, logsIndex + 3)).toEqual([
+      'Logs',
+      'Prompt audit',
+      'Audit Logs',
+    ])
+  })
+
   it.each([
     [ADMIN_PERMISSION_ACTIONS.READ, '/prompt-audit'],
     [ADMIN_PERMISSION_ACTIONS.MANAGE, '/prompt-audit/settings'],
