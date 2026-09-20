@@ -16,10 +16,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Link } from '@tanstack/react-router'
+import { useLocation, useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 
-import { Button } from '@/components/ui/button'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   ADMIN_PERMISSION_ACTIONS,
   ADMIN_PERMISSION_RESOURCES,
@@ -29,6 +29,8 @@ import { useAuthStore } from '@/stores/auth-store'
 
 export function PromptAuditNavigation() {
   const { t } = useTranslation()
+  const navigate = useNavigate()
+  const location = useLocation()
   const user = useAuthStore((state) => state.auth.user)
   const canManage = hasPermission(
     user,
@@ -40,35 +42,45 @@ export function PromptAuditNavigation() {
     ADMIN_PERMISSION_RESOURCES.PROMPT_AUDIT,
     ADMIN_PERMISSION_ACTIONS.READ
   )
+  let active = 'records'
+  if (location.pathname === '/prompt-audit/wordlists') {
+    active = 'wordlists'
+  } else if (location.pathname === '/prompt-audit/settings') {
+    active = location.hash.includes('audit-nodes') ? 'nodes' : 'rules'
+  }
+
   return (
-    <nav className='flex flex-wrap gap-2' aria-label={t('Prompt audit')}>
-      {canRead && (
-        <Button variant='outline' render={<Link to='/prompt-audit' />}>
-          {t('Audit records')}
-        </Button>
-      )}
-      {canManage && (
-        <>
-          <Button
-            variant='outline'
-            render={<Link to='/prompt-audit/settings' />}
-          >
-            {t('Inspection rules')}
-          </Button>
-          <Button
-            variant='outline'
-            render={<Link to='/prompt-audit/wordlists' />}
-          >
-            {t('Wordlists')}
-          </Button>
-          <Button
-            variant='outline'
-            render={<Link to='/prompt-audit/settings' hash='audit-nodes' />}
-          >
-            {t('Audit nodes')}
-          </Button>
-        </>
-      )}
+    <nav aria-label={t('Prompt audit')}>
+      <Tabs
+        value={active}
+        onValueChange={(value) => {
+          if (value === 'records') {
+            void navigate({ to: '/prompt-audit' })
+          } else if (value === 'wordlists') {
+            void navigate({ to: '/prompt-audit/wordlists' })
+          } else if (value === 'nodes') {
+            void navigate({
+              to: '/prompt-audit/settings',
+              hash: 'audit-nodes',
+            })
+          } else {
+            void navigate({ to: '/prompt-audit/settings' })
+          }
+        }}
+      >
+        <TabsList className='max-w-full flex-wrap justify-start group-data-horizontal/tabs:h-auto'>
+          {canRead && (
+            <TabsTrigger value='records'>{t('Audit records')}</TabsTrigger>
+          )}
+          {canManage && (
+            <>
+              <TabsTrigger value='rules'>{t('Inspection rules')}</TabsTrigger>
+              <TabsTrigger value='wordlists'>{t('Wordlists')}</TabsTrigger>
+              <TabsTrigger value='nodes'>{t('Audit nodes')}</TabsTrigger>
+            </>
+          )}
+        </TabsList>
+      </Tabs>
     </nav>
   )
 }

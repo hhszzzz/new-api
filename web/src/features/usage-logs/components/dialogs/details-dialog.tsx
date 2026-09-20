@@ -81,7 +81,6 @@ import {
   getReasoningEffortAutoSkipLabel,
   renderAuditContent,
 } from '../../lib/format'
-import { getModelRouteInfo } from '../../lib/model-route'
 import { buildQuotaAuditOperation } from '../../lib/quota-audit-operation'
 import {
   getLogTypeConfig,
@@ -538,7 +537,6 @@ export function DetailsDialog(props: DetailsDialogProps) {
   } else if (transport === 'sse') {
     transportLabel = 'SSE'
   }
-  const modelRoute = getModelRouteInfo(other, props.canViewModelRoute)
   const responseModel = props.canViewModelRoute
     ? (other?.admin_info?.response_model ?? other?.response_model)
     : undefined
@@ -1302,21 +1300,6 @@ export function DetailsDialog(props: DetailsDialogProps) {
           </DetailSection>
         )}
 
-        {/* Model mapping */}
-        {modelRoute.actualModel ? (
-          <DetailSection label={t('Model Mapping')}>
-            <DetailRow
-              label={t('Request Model')}
-              value={props.log.model_name}
-              mono
-            />
-            <DetailRow
-              label={t('Actual Model')}
-              value={modelRoute.actualModel}
-              mono
-            />
-          </DetailSection>
-        ) : null}
         {responseModel && (
           <DetailSection label={t('Response Model')}>
             <ResponseModelDetails observation={responseModel} />

@@ -22,6 +22,7 @@ import { ExternalLink, RefreshCw, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
+import { CopyButton } from '@/components/copy-button'
 import { Badge } from '@/components/ui/badge'
 import { Button, buttonVariants } from '@/components/ui/button'
 import {
@@ -32,6 +33,11 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
+import {
+  CollapsibleDetailSection,
+  DetailRow,
+  DetailSection,
+} from '@/features/usage-logs/components/dialogs/log-detail-layout'
 import { cn } from '@/lib/utils'
 
 import { getPromptAudit, retryPromptAudit } from '../api'
@@ -45,6 +51,16 @@ type PromptAuditDetailSheetProps = {
   canDelete: boolean
   onOpenChange: (open: boolean) => void
   onDelete: (event: PromptAuditEvent) => void
+}
+
+function getDecisionBadgeVariant(decision: string) {
+  if (decision === 'block' || decision === 'unavailable') {
+    return 'destructive'
+  }
+  if (decision === 'flag') {
+    return 'warning'
+  }
+  return 'secondary'
 }
 
 export function PromptAuditDetailSheet({
@@ -117,78 +133,111 @@ export function PromptAuditDetailSheet({
             </p>
           )}
           {event && (
-            <div className='space-y-5'>
-              <div className='grid grid-cols-2 gap-x-4 gap-y-3 text-sm sm:grid-cols-3'>
-                {[
-                  [
-                    t('Inspection method'),
-                    event.inspection_type === 'wordlist'
-                      ? t('Wordlist')
-                      : t('Model audit'),
-                  ],
-                  [
-                    t('Wordlist'),
-                    event.wordlist_id === 'manual'
-                      ? t('Custom wordlist')
-                      : event.wordlist_name || '—',
-                  ],
-                  [
-                    t('Wordlist version'),
-                    event.wordlist_version?.slice(0, 12) || '—',
-                  ],
-                  [
-                    t('Text source'),
+            <div className='space-y-4 pt-1'>
+              <div className='flex flex-wrap gap-1.5'>
+                <Badge variant={getDecisionBadgeVariant(event.decision)}>
+                  {t(event.decision || 'pending')}
+                </Badge>
+                <Badge
+                  variant={
+                    event.status === 'failed' ? 'destructive' : 'outline'
+                  }
+                >
+                  {t(event.status)}
+                </Badge>
+                <Badge variant='outline'>
+                  {event.inspection_type === 'wordlist'
+                    ? t('Wordlist')
+                    : t('Model audit')}
+                </Badge>
+              </div>
+
+              <DetailSection label={t('Prompt')}>
+                <div className='mb-2 flex items-center justify-between gap-3'>
+                  <span className='text-muted-foreground text-xs font-medium'>
+                    {showsFullPrompt ? t('Full prompt') : t('Redacted preview')}
+                  </span>
+                  <div className='flex items-center gap-1.5'>
+                    {event.full_prompt_truncated && (
+                      <Badge variant='warning'>
+                        {t('Retained copy truncated')}
+                      </Badge>
+                    )}
+                    {prompt && (
+                      <CopyButton
+                        value={prompt}
+                        variant='ghost'
+                        size='sm'
+                        tooltip={t('Copy')}
+                      />
+                    )}
+                  </div>
+                </div>
+                <pre className='bg-background/70 max-h-[26rem] overflow-auto rounded-md p-3 text-xs leading-relaxed break-words whitespace-pre-wrap [content-visibility:auto]'>
+                  {prompt || t('No prompt text retained')}
+                </pre>
+                {!canViewFullPrompt && (
+                  <p className='text-muted-foreground mt-2 text-xs'>
+                    {t('Your permission only allows the redacted preview.')}
+                  </p>
+                )}
+              </DetailSection>
+
+              <DetailSection label={t('Context')}>
+                <DetailRow
+                  label={t('User ID')}
+                  value={String(event.user_id)}
+                  mono
+                />
+                <DetailRow
+                  label={t('Token')}
+                  value={event.token_name || String(event.token_id || '—')}
+                />
+                <DetailRow label={t('Group')} value={event.group || '—'} />
+                <DetailRow label={t('Protocol')} value={event.protocol} mono />
+                <DetailRow label={t('Model')} value={event.model || '—'} mono />
+                <DetailRow
+                  label={t('Request ID')}
+                  value={event.request_id || '—'}
+                  mono
+                />
+                <DetailRow
+                  label={t('Created at')}
+                  value={dayjs
+                    .unix(event.created_at)
+                    .format('YYYY-MM-DD HH:mm:ss')}
+                  mono
+                />
+              </DetailSection>
+
+              <DetailSection label={t('Result')}>
+                <DetailRow
+                  label={t('Text source')}
+                  value={
                     event.matched_scope
                       ? promptAuditScopeLabel(event.matched_scope, t)
                       : (event.inspected_scopes ?? [])
                           .map((scope) => promptAuditScopeLabel(scope, t))
-                          .join(' · ') || '—',
-                  ],
-                  [t('Status'), event.status],
-                  [t('Decision'), event.decision || '—'],
-                  [t('Safety'), event.safety || '—'],
-                  [t('Mode'), event.execution_mode],
-                  [t('Protocol'), event.protocol],
-                  [t('Model'), event.model || '—'],
-                  [t('User ID'), String(event.user_id)],
-                  [
-                    t('Token'),
-                    event.token_name || String(event.token_id || '—'),
-                  ],
-                  [t('Group'), event.group || '—'],
-                  [t('Audit node'), event.endpoint_id || '—'],
-                  [t('Latency'), `${event.latency_ms} ms`],
-                  [t('Attempts'), `${event.attempts}/${event.max_attempts}`],
-                  [t('Prompt length'), String(event.prompt_length)],
-                  [t('Segments'), String(event.segment_count)],
-                  [t('Chunks'), String(event.chunk_count)],
-                  [
-                    t('Created at'),
-                    dayjs.unix(event.created_at).format('YYYY-MM-DD HH:mm:ss'),
-                  ],
-                  [
-                    t('Completed at'),
-                    event.completed_at
-                      ? dayjs
-                          .unix(event.completed_at)
-                          .format('YYYY-MM-DD HH:mm:ss')
-                      : '—',
-                  ],
-                  [t('Error code'), event.error_code || '—'],
-                ].map(([label, value]) => (
-                  <div key={label} className='min-w-0'>
-                    <p className='text-muted-foreground text-xs'>{label}</p>
-                    <p className='mt-1 break-all'>{value}</p>
-                  </div>
-                ))}
-              </div>
-
-              <div>
-                <p className='mb-2 text-sm font-medium'>{t('Categories')}</p>
-                <div className='flex flex-wrap gap-1.5'>
+                          .join(' · ') || '—'
+                  }
+                />
+                <DetailRow label={t('Safety')} value={event.safety || '—'} />
+                <DetailRow
+                  label={t('Audit node')}
+                  value={event.endpoint_id || '—'}
+                  mono
+                />
+                <DetailRow
+                  label={t('Latency')}
+                  value={`${event.latency_ms} ms`}
+                  mono
+                />
+                <div className='flex flex-wrap gap-1.5 pt-1'>
                   {event.categories.length === 0 &&
                     event.unknown_categories.length === 0 && (
-                      <span className='text-muted-foreground text-sm'>—</span>
+                      <span className='text-muted-foreground text-xs'>
+                        {t('No categories')}
+                      </span>
                     )}
                   {event.categories.map((category) => (
                     <Badge key={category} variant='outline'>
@@ -201,37 +250,78 @@ export function PromptAuditDetailSheet({
                     </Badge>
                   ))}
                 </div>
-              </div>
+              </DetailSection>
 
-              <div>
-                <div className='mb-2 flex items-center justify-between gap-3'>
-                  <p className='text-sm font-medium'>
-                    {showsFullPrompt ? t('Full prompt') : t('Redacted preview')}
-                  </p>
-                  {event.full_prompt_truncated && (
-                    <Badge variant='warning'>
-                      {t('Retained copy truncated')}
-                    </Badge>
-                  )}
-                </div>
-                <pre className='bg-muted/50 max-h-96 overflow-auto rounded-lg border p-3 text-xs break-words whitespace-pre-wrap [content-visibility:auto]'>
-                  {prompt || t('No prompt text retained')}
-                </pre>
-                {!canViewFullPrompt && (
-                  <p className='text-muted-foreground mt-2 text-xs'>
-                    {t('Your permission only allows the redacted preview.')}
-                  </p>
+              <CollapsibleDetailSection label={t('Technical details')}>
+                <DetailRow
+                  label={t('Prompt hash')}
+                  value={event.prompt_hash}
+                  mono
+                />
+                <DetailRow
+                  label={t('Mode')}
+                  value={event.execution_mode}
+                  mono
+                />
+                <DetailRow
+                  label={t('Config version')}
+                  value={event.config_version || '—'}
+                  mono
+                />
+                {event.inspection_type === 'wordlist' && (
+                  <>
+                    <DetailRow
+                      label={t('Wordlist')}
+                      value={
+                        event.wordlist_id === 'manual'
+                          ? t('Custom wordlist')
+                          : event.wordlist_name || '—'
+                      }
+                    />
+                    <DetailRow
+                      label={t('Wordlist version')}
+                      value={event.wordlist_version?.slice(0, 12) || '—'}
+                      mono
+                    />
+                  </>
                 )}
-              </div>
-
-              <div>
-                <p className='text-muted-foreground mb-1 text-xs'>
-                  {t('Prompt hash')}
-                </p>
-                <code className='block text-xs break-all'>
-                  {event.prompt_hash}
-                </code>
-              </div>
+                <DetailRow
+                  label={t('Attempts')}
+                  value={`${event.attempts}/${event.max_attempts}`}
+                  mono
+                />
+                <DetailRow
+                  label={t('Prompt length')}
+                  value={String(event.prompt_length)}
+                  mono
+                />
+                <DetailRow
+                  label={t('Segments')}
+                  value={String(event.segment_count)}
+                  mono
+                />
+                <DetailRow
+                  label={t('Chunks')}
+                  value={String(event.chunk_count)}
+                  mono
+                />
+                <DetailRow
+                  label={t('Completed at')}
+                  value={
+                    event.completed_at
+                      ? dayjs
+                          .unix(event.completed_at)
+                          .format('YYYY-MM-DD HH:mm:ss')
+                      : '—'
+                  }
+                  mono
+                />
+                <DetailRow
+                  label={t('Error code')}
+                  value={event.error_code || '—'}
+                  mono
+                />
+              </CollapsibleDetailSection>
 
               {event.request_id && (
                 <div className='flex flex-wrap gap-2'>

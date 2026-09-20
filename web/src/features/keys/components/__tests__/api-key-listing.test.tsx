@@ -407,9 +407,10 @@ it('shows configured API addresses below the key search toolbar', async () => {
     addresses.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING
   ).not.toBe(0)
   expect(addresses).toHaveClass('flex', 'flex-wrap')
+  expect(screen.getByText('https://api.example.com/v1')).toBeVisible()
   expect(
-    screen.getByRole('link', { name: 'https://api.example.com/v1' })
-  ).toHaveAttribute('href', 'https://api.example.com/v1')
+    screen.queryByRole('link', { name: 'https://api.example.com/v1' })
+  ).not.toBeInTheDocument()
   expect(
     screen.getByRole('button', { name: 'Test Latency: OpenAI' })
   ).toBeVisible()

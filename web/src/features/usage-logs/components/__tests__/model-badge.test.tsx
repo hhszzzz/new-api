@@ -350,12 +350,12 @@ it('opens the mismatch evidence with the keyboard and shows all three models', a
   expect(screen.getByText('Upstream Model')).toBeVisible()
   expect(screen.getByText('Response Model')).toBeVisible()
   expect(
-    screen.getByText(/this warning alone does not prove model substitution/)
-  ).toBeVisible()
+    screen.queryByText(/this warning alone does not prove model substitution/)
+  ).not.toBeInTheDocument()
   const popover = screen
     .getByText('Request Model')
     .closest('[data-slot="popover-content"]')
-  expect(popover).toHaveClass('w-fit', 'min-w-64')
+  expect(popover).toHaveClass('w-72')
   expect(popover).not.toHaveClass('w-96')
 })
 

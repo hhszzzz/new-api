@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { ExternalLink, Route, Zap } from 'lucide-react'
+import { Zap } from 'lucide-react'
 import { useCallback, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -57,8 +57,7 @@ export function ApiAddressesBar() {
       aria-label={t('API Addresses')}
       className='border-border/60 bg-muted/20 flex min-w-0 flex-wrap items-center gap-2 rounded-lg border px-2.5 py-2 sm:px-3'
     >
-      <div className='text-muted-foreground flex shrink-0 items-center gap-1.5 text-xs font-medium'>
-        <Route className='size-3.5' aria-hidden='true' />
+      <div className='text-muted-foreground shrink-0 text-xs font-medium'>
         <span>{t('API Addresses')}</span>
       </div>
       <div className='flex min-w-0 flex-1 flex-wrap items-center gap-2'>
@@ -82,16 +81,12 @@ export function ApiAddressesBar() {
               >
                 {item.route}
               </span>
-              <a
-                href={item.url}
-                target='_blank'
-                rel='noreferrer'
-                className='text-muted-foreground hover:text-foreground flex max-w-80 min-w-0 items-center gap-1 font-mono text-xs transition-colors'
+              <span
+                className='text-muted-foreground max-w-80 min-w-0 truncate font-mono text-xs'
                 title={item.url}
               >
-                <span className='truncate'>{item.url}</span>
-                <ExternalLink className='size-3 shrink-0' aria-hidden='true' />
-              </a>
+                {item.url}
+              </span>
               {status.testing && (
                 <StatusBadge
                   label={t('Testing...')}

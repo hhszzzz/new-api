@@ -138,6 +138,23 @@ describe('prompt audit management components', () => {
     ).toBeVisible()
   })
 
+  test('shows the retained full prompt to an administrator with permission', async () => {
+    renderWithQueryClient(
+      <PromptAuditDetailSheet
+        eventID={EVENT.id}
+        canViewFullPrompt
+        canManage={false}
+        canDelete={false}
+        onOpenChange={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    )
+
+    expect(await screen.findByText('raw-secret-prompt')).toBeVisible()
+    expect(screen.getByText('Full prompt')).toBeVisible()
+    expect(screen.queryByText('redacted-preview')).not.toBeInTheDocument()
+  })
+
   test('blocks deletion when the preview contains active tasks', async () => {
     previewPromptAuditDeleteMock.mockResolvedValue({
       success: true,

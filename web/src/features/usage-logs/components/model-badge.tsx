@@ -179,7 +179,7 @@ export function ModelBadge(props: ModelBadgeProps) {
       >
         {content}
       </PopoverTrigger>
-      <PopoverContent className='w-fit max-w-[min(24rem,calc(100vw-2rem))] min-w-64'>
+      <PopoverContent className='w-72 max-w-[calc(100vw-2rem)]'>
         {props.responseModel ? (
           <ResponseModelDetails observation={props.responseModel} />
         ) : (
@@ -243,13 +243,6 @@ export function ResponseModelDetails(props: {
         value={props.observation.returned_model}
         mono
       />
-      {mismatch && (
-        <p className='text-muted-foreground text-xs'>
-          {t(
-            'The upstream returned a model name different from both the requested and upstream models. Aliases or dated versions may also cause this; this warning alone does not prove model substitution.'
-          )}
-        </p>
-      )}
     </div>
   )
 }

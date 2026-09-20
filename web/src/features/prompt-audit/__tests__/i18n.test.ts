@@ -32,6 +32,8 @@ const SOURCE_FILES = [
   '../components/manual-wordlist-dialog.tsx',
   '../components/prompt-audit-navigation.tsx',
   '../components/prompt-audit-detail-sheet.tsx',
+  '../components/prompt-audit-filter-bar.tsx',
+  '../components/prompt-audit-columns.tsx',
   '../components/prompt-audit-delete-dialog.tsx',
 ]
 const LOCALES = ['en', 'zh', 'zh-TW', 'fr', 'ru', 'ja', 'vi']

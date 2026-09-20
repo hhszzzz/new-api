@@ -666,7 +666,7 @@ describe('usage-log model route component visibility', () => {
     ['super administrator all scope', ROLE.SUPER_ADMIN, 'all', true],
     ['super administrator self scope', ROLE.SUPER_ADMIN, 'self', false],
   ] as const)(
-    'shows model routing in the %s details dialog',
+    'keeps model mapping out of the %s details dialog',
     async (_label, role, scope, isAdminView) => {
       renderDetailsDialog(role, scope)
       const permissions = screen.getByTestId('details-permissions')
@@ -681,8 +681,12 @@ describe('usage-log model route component visibility', () => {
       })
 
       const dialog = screen.getByRole('dialog')
-      expect(within(dialog).getByText('Model Mapping')).toBeVisible()
-      expect(within(dialog).getByText(NESTED_ACTUAL_MODEL)).toBeVisible()
+      expect(
+        within(dialog).queryByText('Model Mapping')
+      ).not.toBeInTheDocument()
+      expect(
+        within(dialog).queryByText(NESTED_ACTUAL_MODEL)
+      ).not.toBeInTheDocument()
       expect(
         within(dialog).queryByText(LEGACY_ACTUAL_MODEL)
       ).not.toBeInTheDocument()
