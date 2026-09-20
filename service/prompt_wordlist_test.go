@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -294,6 +295,46 @@ func TestPromptWordlistAuditRetainsFullTextForAuthorizedReview(t *testing.T) {
 	assert.Equal(t, storedText, *review.FullPrompt)
 }
 
+func TestPromptWordlistActionsSeparateDirectBlockFromModelConfirmation(t *testing.T) {
+	withPromptWordlistTestDB(t)
+	setting.SensitiveWordsFromString("review-marker")
+	var guardCalls atomic.Int32
+	guard := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		guardCalls.Add(1)
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"Safety: Safe\nCategories: None"}}]}`)
+	}))
+	defer guard.Close()
+
+	configured := promptAuditTestSetting(guard.URL, "")
+	configured.ManualWordlistAction = prompt_audit_setting.WordlistActionReview
+	configured.ScopePolicies = map[dto.PromptAuditScope]prompt_audit_setting.ScopePolicy{
+		dto.PromptScopeUser: {LibraryIDs: []string{prompt_audit_setting.ManualWordlistID}, ModelAudit: true},
+	}
+	configured.PublishConfig()
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	request := PromptAuditRequest{Snapshot: dto.PromptAuditSnapshot{Segments: []dto.PromptAuditSegment{{
+		Scope: dto.PromptScopeUser, Role: "user", User: true, Text: "review-marker",
+	}}}}
+
+	result, apiErr := InspectPrompt(c, request)
+	require.Nil(t, apiErr)
+	assert.False(t, result.Blocked)
+	assert.Equal(t, "wordlist_model", result.InspectionType)
+	require.NotNil(t, result.Wordlist)
+	assert.Equal(t, prompt_audit_setting.WordlistActionReview, result.Wordlist.Action)
+	assert.EqualValues(t, 1, guardCalls.Load())
+
+	configured.ManualWordlistAction = prompt_audit_setting.WordlistActionBlock
+	configured.PublishConfig()
+	result, apiErr = InspectPrompt(c, request)
+	require.NotNil(t, apiErr)
+	assert.True(t, result.Blocked)
+	assert.Equal(t, "wordlist", result.InspectionType)
+	assert.Equal(t, PromptAuditActionBlock, result.ActualAction)
+	assert.EqualValues(t, 1, guardCalls.Load(), "direct blocks must not call or be overridden by the model")
+}
+
 func TestPromptAuditModelAndAsyncPayloadContainOnlySelectedSources(t *testing.T) {
 	withPromptWordlistTestDB(t)
 	var sent []string
@@ -321,7 +362,12 @@ func TestPromptAuditModelAndAsyncPayloadContainOnlySelectedSources(t *testing.T)
 	result, apiErr := CheckPromptAudit(c, request)
 	require.Nil(t, apiErr)
 	assert.True(t, result.Reviewed)
-	assert.Equal(t, []string{"selected system instruction"}, sent)
+	require.Len(t, sent, 1)
+	var sentPayload promptAuditPayload
+	require.NoError(t, common.UnmarshalJsonStr(sent[0], &sentPayload))
+	require.Len(t, sentPayload.Segments, 1)
+	assert.Equal(t, "selected system instruction", sentPayload.Segments[0].Text)
+	assert.Equal(t, dto.PromptScopeSystem, sentPayload.Segments[0].SourceScope())
 	configured.Mode = prompt_audit_setting.ModeAsyncAudit
 	configured.PublishConfig()
 	result, apiErr = CheckPromptAudit(c, request)
@@ -329,7 +375,30 @@ func TestPromptAuditModelAndAsyncPayloadContainOnlySelectedSources(t *testing.T)
 	require.NotZero(t, result.AuditID)
 	audit, err := model.GetPromptAudit(result.AuditID)
 	require.NoError(t, err)
-	assert.Equal(t, "selected system instruction", string(audit.ScanPayload))
+	var queuedPayload promptAuditPayload
+	require.NoError(t, common.Unmarshal(audit.ScanPayload, &queuedPayload))
+	require.Len(t, queuedPayload.Segments, 1)
+	assert.Equal(t, "selected system instruction", queuedPayload.Segments[0].Text)
 	assert.NotContains(t, string(audit.FullPrompt), "unselected")
 	assert.Len(t, sent, 1)
+}
+
+func TestPromptAuditRecordsUnavailablePreviousResponseContext(t *testing.T) {
+	withPromptWordlistTestDB(t)
+	configured := promptAuditTestSetting("http://127.0.0.1:1", "")
+	configured.PublishConfig()
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	result, apiErr := CheckPromptAudit(c, PromptAuditRequest{
+		Snapshot: dto.PromptAuditSnapshot{}, Protocol: "openai_responses", Model: "test-model",
+		Stage: "pre_distribution", CoverageIncomplete: true,
+	})
+	require.Nil(t, apiErr)
+	assert.Equal(t, "coverage_incomplete", result.Outcome)
+	assert.Equal(t, PromptAuditDecisionFlag, result.Decision)
+	assert.False(t, result.CoverageComplete)
+	audit, err := model.GetPromptAudit(result.AuditID)
+	require.NoError(t, err)
+	assert.Equal(t, PromptAuditDirectionInput, audit.Direction)
+	assert.False(t, audit.CoverageComplete)
 }

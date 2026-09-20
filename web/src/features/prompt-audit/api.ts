@@ -30,6 +30,10 @@ import type {
   PromptAuditListData,
   PromptAuditStats,
   PromptAuditScope,
+  PromptAuditDirection,
+  PromptAuditDecision,
+  PromptAuditEndpoint,
+  PromptWordlistAction,
   PromptWordlist,
   PromptWordlistMatch,
 } from './types'
@@ -48,6 +52,7 @@ export async function createPromptWordlist(payload: {
   source_url: string
   scopes: PromptAuditScope[]
   auto_update: boolean
+  action: PromptWordlistAction
 }) {
   return requireServerSuccess(
     (
@@ -61,7 +66,12 @@ export async function createPromptWordlist(payload: {
 
 export async function updatePromptWordlist(
   id: string,
-  payload: Partial<Pick<PromptWordlist, 'name' | 'enabled' | 'auto_update'>>
+  payload: Partial<
+    Pick<
+      PromptWordlist,
+      'name' | 'source_url' | 'scopes' | 'enabled' | 'auto_update' | 'action'
+    >
+  >
 ) {
   return requireServerSuccess(
     (
@@ -149,8 +159,50 @@ export async function getPromptAuditCategories() {
 
 export async function testPromptAuditNode(id: string) {
   const response = await api.post<
-    ApiResponse<{ endpoint_id: string; latency_ms: number; safety: string }>
+    ApiResponse<{
+      endpoint_id: string
+      purpose: PromptAuditEndpoint['purpose']
+      latency_ms: number
+      safety: string
+      decision: PromptAuditDecision
+    }>
   >(`/api/prompt-audit/nodes/${encodeURIComponent(id)}/test`)
+  return response.data
+}
+
+export async function testPromptAuditPolicy(payload: {
+  direction: PromptAuditDirection
+  segments: Array<{
+    role: string
+    text: string
+    user: boolean
+    scope: PromptAuditScope
+  }>
+  output?: string
+}) {
+  const response = await api.post<
+    ApiResponse<{
+      enabled: boolean
+      blocked: boolean
+      decision: PromptAuditDecision
+      safety: string
+      categories: string[]
+      review_decision?: PromptAuditDecision
+      wordlist?: PromptWordlistMatch
+    }>
+  >('/api/prompt-audit/test', payload)
+  return response.data
+}
+
+export async function reviewPromptAudit(
+  id: number,
+  status: 'false_positive' | 'confirmed_violation',
+  reason: string
+) {
+  const response = await api.patch<ApiResponse<never>>(
+    `/api/prompt-audit/events/${id}/review`,
+    { status, reason }
+  )
   return response.data
 }
 

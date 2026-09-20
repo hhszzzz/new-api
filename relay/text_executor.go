@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -25,6 +26,7 @@ import (
 	"github.com/QuantumNous/new-api/service/channelcompat"
 	"github.com/QuantumNous/new-api/service/protocolstate"
 	"github.com/QuantumNous/new-api/setting/model_setting"
+	"github.com/QuantumNous/new-api/setting/prompt_audit_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	hosttypes "github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
@@ -36,6 +38,17 @@ import (
 func executeText(c *gin.Context, info *relaycommon.RelayInfo) *hosttypes.NewAPIError {
 	info.InitChannelMeta(c)
 	defer info.CloseConversionSession()
+	outputAuditSetting := prompt_audit_setting.GetSetting()
+	baseWriter := c.Writer
+	var outputAuditWriter *promptAuditResponseWriter
+	if outputAuditSetting.OutputMode != prompt_audit_setting.ModeOff && !info.IsChannelTest && service.PromptAuditAppliesToGroup(c, outputAuditSetting, outputAuditSetting.OutputMode) {
+		outputAuditWriter = newPromptAuditResponseWriter(baseWriter, outputAuditSetting)
+		c.Writer = outputAuditWriter
+		defer func() {
+			_ = outputAuditWriter.capture.Close()
+			c.Writer = baseWriter
+		}()
+	}
 	isCompact := info.RelayMode == relayconstant.RelayModeResponsesCompact
 	originalFormat := info.RelayFormat
 	defer func() { info.RelayFormat = originalFormat }()
@@ -268,6 +281,24 @@ func executeText(c *gin.Context, info *relaycommon.RelayInfo) *hosttypes.NewAPIE
 	}
 	apiError = normalizeStreamResult(c, info, apiError)
 	if apiError != nil {
+		if outputAuditWriter != nil && outputAuditWriter.blocking && outputAuditWriter.capture.failure != nil {
+			body, _ := outputAuditWriter.capture.Bytes()
+			outputText, _ := extractPromptAuditOutput(body)
+			failure := "output_capture_failed"
+			if outputAuditWriter.capture.overflow {
+				failure = "output_buffer_limit"
+			}
+			service.RecordOutputAuditUnavailable(c, service.PromptAuditRequest{
+				Snapshot: dto.PromptAuditSnapshotOf(info.Request), Protocol: string(info.RelayFormat), Model: info.OriginModelName,
+				Stage: "text_executor", Direction: service.PromptAuditDirectionOutput, Output: outputText,
+				DeliveryStatus: "not_delivered", CoverageComplete: false, Stream: info.IsStream,
+			}, failure)
+			settleTextUsage(c, info, usage)
+			return hosttypes.NewErrorWithStatusCode(errors.New("output audit buffer is unavailable"), hosttypes.ErrorCodeOutputAuditUnavailable, http.StatusServiceUnavailable, hosttypes.ErrOptionWithSkipRetry())
+		}
+		if outputAuditWriter != nil && !outputAuditWriter.blocking && outputAuditWriter.capture.size > 0 {
+			auditIncompleteTextOutput(c, info, outputAuditWriter, "delivered_incomplete")
+		}
 		// Responses upstreams charge generation that was produced before an
 		// interruption. Keep the failure visible, settle once, and never retry
 		// an attempt whose usage has already been charged.
@@ -305,6 +336,56 @@ func executeText(c *gin.Context, info *relaycommon.RelayInfo) *hosttypes.NewAPIE
 		c.Header("X-New-Api-Compaction", relayconvert.CompactionSummary)
 		c.Data(http.StatusOK, "application/json", body)
 	}
+	if outputAuditWriter != nil {
+		body, captureErr := outputAuditWriter.capture.Bytes()
+		outputText, extractErr := extractPromptAuditOutput(body)
+		coverageComplete := !outputAuditWriter.capture.overflow && captureErr == nil && extractErr == nil
+		if outputAuditWriter.blocking && !coverageComplete {
+			service.RecordOutputAuditUnavailable(c, service.PromptAuditRequest{
+				Snapshot: dto.PromptAuditSnapshotOf(info.Request), Protocol: string(info.RelayFormat), Model: info.OriginModelName,
+				Stage: "text_executor", Direction: service.PromptAuditDirectionOutput, Output: outputText,
+				DeliveryStatus: "not_delivered", CoverageComplete: false, Stream: info.IsStream,
+			}, "output_capture_incomplete")
+			settleTextUsage(c, info, usage)
+			return hosttypes.NewErrorWithStatusCode(errors.New("output audit is unavailable"), hosttypes.ErrorCodeOutputAuditUnavailable, http.StatusServiceUnavailable, hosttypes.ErrOptionWithSkipRetry())
+		}
+		if outputText != "" {
+			deliveryStatus := "delivered"
+			if outputAuditWriter.blocking {
+				deliveryStatus = "not_delivered"
+			}
+			result, auditErr := service.InspectOutput(c, service.PromptAuditRequest{
+				Snapshot: dto.PromptAuditSnapshotOf(info.Request), Protocol: string(info.RelayFormat), Model: info.OriginModelName,
+				Stage: "text_executor", Direction: service.PromptAuditDirectionOutput, Output: outputText,
+				DeliveryStatus: deliveryStatus, CoverageComplete: coverageComplete, Stream: info.IsStream,
+			})
+			if outputAuditWriter.blocking && auditErr != nil {
+				_ = model.UpdatePromptAuditDelivery(result.AuditID, "not_delivered")
+				settleTextUsage(c, info, usage)
+				code := hosttypes.ErrorCodeOutputAuditUnavailable
+				status := http.StatusServiceUnavailable
+				message := "output audit is unavailable"
+				if result.Blocked && result.Decision == service.PromptAuditDecisionBlock {
+					code, status, message = hosttypes.ErrorCodeOutputAuditBlocked, http.StatusForbidden, "generated output blocked by content audit"
+				}
+				return hosttypes.NewErrorWithStatusCode(errors.New(message), code, status, hosttypes.ErrOptionWithSkipRetry())
+			}
+			if outputAuditWriter.blocking {
+				if err := outputAuditWriter.commit(); err != nil {
+					_ = model.UpdatePromptAuditDelivery(result.AuditID, "delivery_failed")
+					settleTextUsage(c, info, usage)
+					return hosttypes.NewErrorWithStatusCode(errors.New("output delivery failed after audit"), hosttypes.ErrorCodeOutputAuditUnavailable, http.StatusBadGateway, hosttypes.ErrOptionWithSkipRetry())
+				}
+				_ = model.UpdatePromptAuditDelivery(result.AuditID, "delivered")
+			}
+		} else if !outputAuditWriter.blocking {
+			service.RecordOutputAuditUnavailable(c, service.PromptAuditRequest{
+				Snapshot: dto.PromptAuditSnapshotOf(info.Request), Protocol: string(info.RelayFormat), Model: info.OriginModelName,
+				Stage: "text_executor", Direction: service.PromptAuditDirectionOutput,
+				DeliveryStatus: "delivered", CoverageComplete: false, Stream: info.IsStream,
+			}, "output_extract_failed")
+		}
+	}
 	if isCompact {
 		restorePlan()
 		info.RelayFormat = originalFormat
@@ -313,6 +394,14 @@ func executeText(c *gin.Context, info *relaycommon.RelayInfo) *hosttypes.NewAPIE
 		info.TestUsage = usage
 		return nil
 	}
+	settleTextUsage(c, info, usage)
+	return nil
+}
+
+func settleTextUsage(c *gin.Context, info *relaycommon.RelayInfo, usage *dto.Usage) {
+	if usage == nil || info.IsChannelTest {
+		return
+	}
 	containsAudio := usage.CompletionTokenDetails.AudioTokens > 0 || usage.PromptTokensDetails.AudioTokens > 0
 	audioPricing := ratio_setting.ContainsAudioRatio(info.OriginModelName) || ratio_setting.ContainsAudioCompletionRatio(info.OriginModelName)
 	if containsAudio && audioPricing || info.RelayFormat == types.RelayFormatOpenAIResponses && strings.HasPrefix(info.OriginModelName, "gpt-4o-audio") {
@@ -320,7 +409,32 @@ func executeText(c *gin.Context, info *relaycommon.RelayInfo) *hosttypes.NewAPIE
 	} else {
 		service.PostTextConsumeQuota(c, info, usage, nil)
 	}
-	return nil
+}
+
+func auditIncompleteTextOutput(c *gin.Context, info *relaycommon.RelayInfo, writer *promptAuditResponseWriter, deliveryStatus string) {
+	body, err := writer.capture.Bytes()
+	if err != nil {
+		service.RecordOutputAuditUnavailable(c, service.PromptAuditRequest{
+			Snapshot: dto.PromptAuditSnapshotOf(info.Request), Protocol: string(info.RelayFormat), Model: info.OriginModelName,
+			Stage: "text_executor", Direction: service.PromptAuditDirectionOutput,
+			DeliveryStatus: deliveryStatus, CoverageComplete: false, Stream: info.IsStream,
+		}, "output_capture_failed")
+		return
+	}
+	outputText, err := extractPromptAuditOutput(body)
+	if err != nil || outputText == "" {
+		service.RecordOutputAuditUnavailable(c, service.PromptAuditRequest{
+			Snapshot: dto.PromptAuditSnapshotOf(info.Request), Protocol: string(info.RelayFormat), Model: info.OriginModelName,
+			Stage: "text_executor", Direction: service.PromptAuditDirectionOutput,
+			DeliveryStatus: deliveryStatus, CoverageComplete: false, Stream: info.IsStream,
+		}, "output_extract_failed")
+		return
+	}
+	_, _ = service.InspectOutput(c, service.PromptAuditRequest{
+		Snapshot: dto.PromptAuditSnapshotOf(info.Request), Protocol: string(info.RelayFormat), Model: info.OriginModelName,
+		Stage: "text_executor", Direction: service.PromptAuditDirectionOutput, Output: outputText,
+		DeliveryStatus: deliveryStatus, CoverageComplete: false, Stream: info.IsStream,
+	})
 }
 
 func cloneTextRequest(request dto.Request) (dto.Request, error) {

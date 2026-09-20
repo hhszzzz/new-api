@@ -32,16 +32,35 @@ import { Label } from '@/components/ui/label'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Textarea } from '@/components/ui/textarea'
 
-import { testPromptWordlists } from '../api'
+import { testPromptAuditPolicy } from '../api'
 import { PROMPT_AUDIT_SCOPES, promptAuditScopeLabel } from '../scopes'
-import type { PromptAuditScope } from '../types'
+import type { PromptAuditDirection, PromptAuditScope } from '../types'
 
 export function WordlistTestCard() {
   const { t } = useTranslation()
   const [scope, setScope] = useState<PromptAuditScope>('user')
+  const [direction, setDirection] = useState<PromptAuditDirection>('input')
   const [text, setText] = useState('')
+  const [output, setOutput] = useState('')
   const test = useMutation({
-    mutationFn: () => testPromptWordlists(scope, text),
+    mutationFn: async () => {
+      const result = await testPromptAuditPolicy({
+        direction,
+        segments: [
+          {
+            role: scope,
+            scope,
+            user: scope === 'user' || scope === 'task',
+            text,
+          },
+        ],
+        output: direction === 'output' ? output : undefined,
+      })
+      if (!result.success || !result.data) {
+        throw new Error(result.message || t('Inspection test failed'))
+      }
+      return result.data
+    },
     meta: { errorToast: false },
   })
   return (
@@ -50,11 +69,32 @@ export function WordlistTestCard() {
         <CardTitle>{t('Test inspection rules')}</CardTitle>
         <CardDescription>
           {t(
-            'Test saved wordlist rules without storing the text or calling a model.'
+            'Preview the complete saved policy without forwarding a generation request, charging quota, or storing the test text.'
           )}
         </CardDescription>
       </CardHeader>
       <CardContent className='space-y-3'>
+        <div className='space-y-1.5'>
+          <Label htmlFor='prompt-audit-test-direction'>
+            {t('Audit stage')}
+          </Label>
+          <NativeSelect
+            id='prompt-audit-test-direction'
+            value={direction}
+            disabled={test.isPending}
+            onChange={(event) => {
+              setDirection(event.target.value as PromptAuditDirection)
+              test.reset()
+            }}
+          >
+            <NativeSelectOption value='input'>
+              {t('Request input')}
+            </NativeSelectOption>
+            <NativeSelectOption value='output'>
+              {t('Generated output')}
+            </NativeSelectOption>
+          </NativeSelect>
+        </div>
         <div className='space-y-1.5'>
           <Label htmlFor='wordlist-test-scope'>{t('Text source')}</Label>
           <NativeSelect
@@ -86,8 +126,27 @@ export function WordlistTestCard() {
             }}
           />
         </div>
+        {direction === 'output' && (
+          <div className='space-y-1.5'>
+            <Label htmlFor='wordlist-test-output'>{t('Generated reply')}</Label>
+            <Textarea
+              id='wordlist-test-output'
+              value={output}
+              maxLength={65536}
+              disabled={test.isPending}
+              onChange={(event) => {
+                setOutput(event.target.value)
+                test.reset()
+              }}
+            />
+          </div>
+        )}
         <Button
-          disabled={!text.trim() || test.isPending}
+          disabled={
+            !text.trim() ||
+            (direction === 'output' && !output.trim()) ||
+            test.isPending
+          }
           onClick={() => test.mutate()}
         >
           {test.isPending ? t('Testing...') : t('Test rules')}
@@ -100,19 +159,18 @@ export function WordlistTestCard() {
         {test.data && (
           <div role='status' className='space-y-1 text-sm'>
             <p>
-              {test.data.match
+              {test.data.wordlist
                 ? t('Matched wordlist: {{name}}', {
                     name:
-                      test.data.match.id === 'manual'
+                      test.data.wordlist.id === 'manual'
                         ? t('Custom wordlist')
-                        : test.data.match.name,
+                        : test.data.wordlist.name,
                   })
                 : t('No wordlist matched')}
             </p>
             <p className='text-muted-foreground'>
-              {test.data.model_audit
-                ? t('Model review is selected for this source.')
-                : t('Model review is inactive for this source.')}
+              {t('Decision')}: {t(test.data.decision || 'pass')} ·{' '}
+              {test.data.safety || '—'}
             </p>
           </div>
         )}

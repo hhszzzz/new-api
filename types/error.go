@@ -71,6 +71,8 @@ const (
 	ErrorCodeModelNotFound          ErrorCode = "model_not_found"
 	ErrorCodePromptAuditBlocked     ErrorCode = "prompt_audit_blocked"
 	ErrorCodePromptAuditUnavailable ErrorCode = "prompt_audit_unavailable"
+	ErrorCodeOutputAuditBlocked     ErrorCode = "output_audit_blocked"
+	ErrorCodeOutputAuditUnavailable ErrorCode = "output_audit_unavailable"
 
 	// sql error
 	ErrorCodeQueryDataError  ErrorCode = "query_data_error"

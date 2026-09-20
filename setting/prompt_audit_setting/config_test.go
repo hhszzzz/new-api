@@ -9,18 +9,23 @@ import (
 
 func validSetting() PromptAuditSetting {
 	return PromptAuditSetting{
-		Mode:                ModeBlocking,
-		EnabledCategories:   append([]string(nil), AllCategoryIDs...),
-		AllGroups:           true,
-		Endpoints:           []Endpoint{{ID: "primary", BaseURL: "https://guard.example.com", Token: "secret", Model: DefaultModel, TimeoutMS: DefaultEndpointTimeoutMS, InputLimit: DefaultEndpointInputLimit, Concurrency: DefaultEndpointConcurrency, Enabled: true}},
-		TotalTimeoutMS:      DefaultTotalTimeoutMS,
-		ChunkOverlap:        DefaultChunkOverlap,
-		CacheTTLSeconds:     DefaultCacheTTLSeconds,
-		WorkerCount:         DefaultWorkerCount,
-		MaxAttempts:         DefaultMaxAttempts,
-		RetentionDays:       DefaultRetentionDays,
-		GlobalConcurrency:   DefaultGlobalConcurrency,
-		EndpointConcurrency: DefaultEndpointConcurrency,
+		Mode:                 ModeBlocking,
+		OutputMode:           ModeOff,
+		ManualWordlistAction: WordlistActionBlock,
+		EnabledCategories:    append([]string(nil), AllCategoryIDs...),
+		ControversialBlocks:  []string{"jailbreak", "pii", "suicide_and_self_harm"},
+		AllGroups:            true,
+		Endpoints:            []Endpoint{{ID: "primary", BaseURL: "https://guard.example.com", Token: "secret", Model: DefaultModel, TimeoutMS: DefaultEndpointTimeoutMS, InputLimit: DefaultEndpointInputLimit, Concurrency: DefaultEndpointConcurrency, Enabled: true}},
+		TotalTimeoutMS:       DefaultTotalTimeoutMS,
+		ChunkOverlap:         DefaultChunkOverlap,
+		CacheTTLSeconds:      DefaultCacheTTLSeconds,
+		WorkerCount:          DefaultWorkerCount,
+		MaxAttempts:          DefaultMaxAttempts,
+		RetentionDays:        DefaultRetentionDays,
+		GlobalConcurrency:    DefaultGlobalConcurrency,
+		EndpointConcurrency:  DefaultEndpointConcurrency,
+		OutputMaxBytes:       DefaultOutputMaxBytes,
+		OutputMemoryBytes:    DefaultOutputMemoryBytes,
 	}
 }
 
@@ -44,6 +49,12 @@ func TestPromptAuditSettingValidation(t *testing.T) {
 		{name: "duplicate category", mutate: func(setting *PromptAuditSetting) { setting.EnabledCategories = []string{"pii", "pii"} }, wantErr: "duplicate"},
 		{name: "selected groups required", mutate: func(setting *PromptAuditSetting) { setting.AllGroups = false }, wantErr: "group"},
 		{name: "enabled endpoint required", mutate: func(setting *PromptAuditSetting) { setting.Endpoints[0].Enabled = false }, wantErr: "enabled endpoint"},
+		{name: "output direction required", mutate: func(setting *PromptAuditSetting) {
+			setting.OutputMode = ModeBlocking
+			setting.Endpoints[0].Directions = []string{"input"}
+		}, wantErr: "output classification"},
+		{name: "invalid direction", mutate: func(setting *PromptAuditSetting) { setting.Endpoints[0].Directions = []string{"future"} }, wantErr: "invalid direction"},
+		{name: "review endpoint required", mutate: func(setting *PromptAuditSetting) { setting.ReviewEnabled = true }, wantErr: "review endpoint"},
 	}
 
 	for _, test := range tests {

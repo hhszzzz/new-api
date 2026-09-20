@@ -212,9 +212,24 @@ export function PromptAuditFilterBar<TData>(props: {
       }
     />
   )
+  const directionFilter = (
+    <PromptAuditFilterSelect
+      label={t('Audit stage')}
+      value={props.filters.direction || 'all'}
+      options={[
+        { value: 'all', label: t('All stages') },
+        { value: 'input', label: t('Request input') },
+        { value: 'output', label: t('Generated output') },
+      ]}
+      onChange={(value) =>
+        props.onChange('direction', value === 'all' ? '' : value)
+      }
+    />
+  )
   const advancedFilters = (
     <>
       {statusFilter}
+      {directionFilter}
       {[
         ['model', t('Model')],
         ['group', t('Group')],
@@ -222,6 +237,7 @@ export function PromptAuditFilterBar<TData>(props: {
         ['endpoint_id', t('Audit node')],
         ['request_id', t('Request ID')],
         ['prompt_hash', t('Prompt hash')],
+        ['detector', t('Detector')],
       ].map(([key, label]) => (
         <LogsFilterField key={key}>
           <LogsFilterInput
@@ -248,6 +264,8 @@ export function PromptAuditFilterBar<TData>(props: {
     props.filters.endpoint_id,
     props.filters.request_id,
     props.filters.prompt_hash,
+    props.filters.direction,
+    props.filters.detector,
   ].filter(Boolean).length
   const primaryCount = [
     props.filters.decision,

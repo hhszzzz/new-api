@@ -30,6 +30,7 @@ import { SectionPageLayout } from '@/components/layout'
 import { LoadingState } from '@/components/loading-state'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Switch } from '@/components/ui/switch'
 
 import {
@@ -54,6 +55,7 @@ export function PromptWordlists() {
   const queryClient = useQueryClient()
   const [importOpen, setImportOpen] = useState(false)
   const [manualOpen, setManualOpen] = useState(false)
+  const [editing, setEditing] = useState<PromptWordlist | null>(null)
   const [deleting, setDeleting] = useState<PromptWordlist | null>(null)
   const query = useQuery({
     queryKey: ['prompt-audit', 'wordlists'],
@@ -65,6 +67,7 @@ export function PromptWordlists() {
       id: string
       enabled?: boolean
       auto_update?: boolean
+      action?: PromptWordlist['action']
     }) => updatePromptWordlist(input.id, input),
     onSuccess: () =>
       queryClient.invalidateQueries({
@@ -153,6 +156,30 @@ export function PromptWordlists() {
       ),
     },
     {
+      id: 'action',
+      header: t('Match action'),
+      cell: (row) => (
+        <NativeSelect
+          aria-label={`${t('Match action')}: ${row.name}`}
+          value={row.action}
+          disabled={update.isPending}
+          onChange={(event) =>
+            update.mutate({
+              id: row.id,
+              action: event.target.value as PromptWordlist['action'],
+            })
+          }
+        >
+          <NativeSelectOption value='review'>
+            {t('Model confirmation')}
+          </NativeSelectOption>
+          <NativeSelectOption value='block'>
+            {t('Block immediately')}
+          </NativeSelectOption>
+        </NativeSelect>
+      ),
+    },
+    {
       id: 'auto_update',
       header: t('Daily updates'),
       cell: (row) =>
@@ -197,6 +224,14 @@ export function PromptWordlists() {
           </Button>
         ) : (
           <div className='flex gap-2'>
+            <Button
+              variant='outline'
+              size='sm'
+              aria-label={`${t('Edit')}: ${row.name}`}
+              onClick={() => setEditing(row)}
+            >
+              {t('Edit')}
+            </Button>
             <Button
               variant='outline'
               size='sm'
@@ -253,6 +288,15 @@ export function PromptWordlists() {
         )}
         {manualOpen && (
           <ManualWordlistDialog open onOpenChange={setManualOpen} />
+        )}
+        {editing && (
+          <WordlistImportDialog
+            open
+            onOpenChange={(open) => {
+              if (!open) setEditing(null)
+            }}
+            wordlist={editing}
+          />
         )}
         <ConfirmDialog
           open={deleting !== null}

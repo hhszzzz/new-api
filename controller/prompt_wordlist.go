@@ -25,6 +25,7 @@ type promptWordlistResponse struct {
 	Name           string                 `json:"name"`
 	SourceURL      string                 `json:"source_url"`
 	Enabled        bool                   `json:"enabled"`
+	Action         string                 `json:"action"`
 	AutoUpdate     bool                   `json:"auto_update"`
 	Status         string                 `json:"status"`
 	WordCount      int                    `json:"word_count"`
@@ -44,13 +45,13 @@ func ListPromptWordlists(c *gin.Context) {
 		return
 	}
 	configured := prompt_audit_setting.GetSetting()
-	items := []promptWordlistResponse{{ID: "manual", Name: "Custom wordlist", Enabled: configured.ManualWordlistActive(), Status: "ready", WordCount: len(setting.SensitiveWordsSnapshot())}}
+	items := []promptWordlistResponse{{ID: "manual", Name: "Custom wordlist", Enabled: configured.ManualWordlistActive(), Action: prompt_audit_setting.NormalizeWordlistAction(configured.ManualWordlistAction), Status: "ready", WordCount: len(setting.SensitiveWordsSnapshot())}}
 	for _, row := range rows {
 		if row.RequestedAt > 0 {
 			row.Status = "pending"
 		}
 		items = append(items, promptWordlistResponse{ID: strconv.FormatInt(row.ID, 10), Name: row.Name, SourceURL: row.SourceURL,
-			Enabled: row.Enabled, AutoUpdate: row.AutoUpdate, Status: row.Status, WordCount: row.WordCount, FileCount: row.FileCount,
+			Enabled: row.Enabled, Action: prompt_audit_setting.NormalizeWordlistAction(row.Action), AutoUpdate: row.AutoUpdate, Status: row.Status, WordCount: row.WordCount, FileCount: row.FileCount,
 			ContentHash: row.ContentHash, SourceRevision: row.SourceRevision, LastSuccessAt: row.LastSuccessAt,
 			NextSyncAt: row.NextSyncAt, LastError: row.LastError})
 	}
@@ -70,6 +71,7 @@ func CreatePromptWordlist(c *gin.Context) {
 		Name       string                 `json:"name"`
 		SourceURL  string                 `json:"source_url"`
 		Scopes     []dto.PromptAuditScope `json:"scopes"`
+		Action     string                 `json:"action"`
 		AutoUpdate *bool                  `json:"auto_update"`
 	}
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 64*1024)
@@ -96,8 +98,20 @@ func CreatePromptWordlist(c *gin.Context) {
 			return
 		}
 	}
+	action := strings.ToLower(strings.TrimSpace(request.Action))
+	if action == "" {
+		action = prompt_audit_setting.WordlistActionReview
+	}
+	if !validPromptWordlistAction(action) {
+		c.JSON(400, gin.H{"success": false, "message": "wordlist action must be block or review"})
+		return
+	}
+	if action == prompt_audit_setting.WordlistActionReview && !promptWordlistReviewAvailable(prompt_audit_setting.GetSetting(), request.Scopes) {
+		c.JSON(400, gin.H{"success": false, "message": "review wordlists require model audit for every selected source and an enabled classification node"})
+		return
+	}
 	digest := sha256.Sum256([]byte(canonical))
-	row := &model.PromptWordlist{Name: name, SourceURL: canonical, SourceHash: hex.EncodeToString(digest[:]), Enabled: true, AutoUpdate: true}
+	row := &model.PromptWordlist{Name: name, SourceURL: canonical, SourceHash: hex.EncodeToString(digest[:]), Enabled: true, Action: action, AutoUpdate: true}
 	if request.AutoUpdate != nil {
 		row.AutoUpdate = *request.AutoUpdate
 	}
@@ -118,13 +132,39 @@ func CreatePromptWordlist(c *gin.Context) {
 func UpdatePromptWordlist(c *gin.Context) {
 	if c.Param("id") == prompt_audit_setting.ManualWordlistID {
 		var request struct {
-			Enabled *bool `json:"enabled"`
+			Enabled *bool   `json:"enabled"`
+			Action  *string `json:"action"`
 		}
-		if common.DecodeJson(http.MaxBytesReader(c.Writer, c.Request.Body, 1024), &request) != nil || request.Enabled == nil {
-			c.JSON(400, gin.H{"success": false, "message": "enabled is required"})
+		if common.DecodeJson(http.MaxBytesReader(c.Writer, c.Request.Body, 1024), &request) != nil || (request.Enabled == nil && request.Action == nil) {
+			c.JSON(400, gin.H{"success": false, "message": "enabled or action is required"})
 			return
 		}
-		if err := model.UpdateOption("prompt_audit.manual_wordlist_enabled", strconv.FormatBool(*request.Enabled)); err != nil {
+		values := map[string]string{}
+		if request.Enabled != nil {
+			values["prompt_audit.manual_wordlist_enabled"] = strconv.FormatBool(*request.Enabled)
+		}
+		if request.Action != nil {
+			action := strings.ToLower(strings.TrimSpace(*request.Action))
+			if !validPromptWordlistAction(action) {
+				c.JSON(400, gin.H{"success": false, "message": "wordlist action must be block or review"})
+				return
+			}
+			if action == prompt_audit_setting.WordlistActionReview {
+				configured := prompt_audit_setting.GetSetting()
+				scopes := make([]dto.PromptAuditScope, 0)
+				for _, scope := range dto.PromptAuditScopes() {
+					if slices.Contains(configured.PolicyFor(scope).LibraryIDs, prompt_audit_setting.ManualWordlistID) {
+						scopes = append(scopes, scope)
+					}
+				}
+				if !promptWordlistReviewAvailable(configured, scopes) {
+					c.JSON(400, gin.H{"success": false, "message": "review wordlists require model audit for every selected source and an enabled classification node"})
+					return
+				}
+			}
+			values["prompt_audit.manual_wordlist_action"] = action
+		}
+		if err := model.UpdateOptionsBulk(values); err != nil {
 			common.ApiError(c, err)
 			return
 		}
@@ -136,9 +176,12 @@ func UpdatePromptWordlist(c *gin.Context) {
 		return
 	}
 	var request struct {
-		Name       *string `json:"name"`
-		Enabled    *bool   `json:"enabled"`
-		AutoUpdate *bool   `json:"auto_update"`
+		Name       *string                 `json:"name"`
+		SourceURL  *string                 `json:"source_url"`
+		Scopes     *[]dto.PromptAuditScope `json:"scopes"`
+		Enabled    *bool                   `json:"enabled"`
+		AutoUpdate *bool                   `json:"auto_update"`
+		Action     *string                 `json:"action"`
 	}
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 64*1024)
 	if common.DecodeJson(c.Request.Body, &request) != nil {
@@ -152,11 +195,71 @@ func UpdatePromptWordlist(c *gin.Context) {
 			return
 		}
 	}
-	if request.Name == nil && request.Enabled == nil && request.AutoUpdate == nil {
+	var sourceHash *string
+	if request.SourceURL != nil {
+		canonical, err := service.NormalizePromptWordlistURL(*request.SourceURL)
+		if err != nil {
+			c.JSON(400, gin.H{"success": false, "message": err.Error()})
+			return
+		}
+		request.SourceURL = &canonical
+		digest := sha256.Sum256([]byte(canonical))
+		encoded := hex.EncodeToString(digest[:])
+		sourceHash = &encoded
+	}
+	if request.Scopes != nil {
+		for _, scope := range *request.Scopes {
+			if !slices.Contains(dto.PromptAuditScopes(), scope) {
+				c.JSON(400, gin.H{"success": false, "message": "invalid inspection source"})
+				return
+			}
+		}
+	}
+	if request.Action != nil {
+		*request.Action = strings.ToLower(strings.TrimSpace(*request.Action))
+		if !validPromptWordlistAction(*request.Action) {
+			c.JSON(400, gin.H{"success": false, "message": "wordlist action must be block or review"})
+			return
+		}
+	}
+	effectiveAction := prompt_audit_setting.NormalizeWordlistAction(row.Action)
+	if request.Action != nil {
+		effectiveAction = *request.Action
+	}
+	if effectiveAction == prompt_audit_setting.WordlistActionReview {
+		configured := prompt_audit_setting.GetSetting()
+		effectiveScopes := request.Scopes
+		if effectiveScopes == nil {
+			selected := make([]dto.PromptAuditScope, 0)
+			id := strconv.FormatInt(row.ID, 10)
+			for _, scope := range dto.PromptAuditScopes() {
+				if slices.Contains(configured.PolicyFor(scope).LibraryIDs, id) {
+					selected = append(selected, scope)
+				}
+			}
+			effectiveScopes = &selected
+		}
+		if !promptWordlistReviewAvailable(configured, *effectiveScopes) {
+			c.JSON(400, gin.H{"success": false, "message": "review wordlists require model audit for every selected source and an enabled classification node"})
+			return
+		}
+	}
+	if request.Name == nil && request.SourceURL == nil && request.Scopes == nil && request.Enabled == nil && request.AutoUpdate == nil && request.Action == nil {
 		c.JSON(400, gin.H{"success": false, "message": "no wordlist fields were provided"})
 		return
 	}
-	if err := model.UpdatePromptWordlist(row.ID, model.PromptWordlistUpdate{Name: request.Name, Enabled: request.Enabled, AutoUpdate: request.AutoUpdate}); err != nil {
+	if err := model.UpdatePromptWordlist(row.ID, model.PromptWordlistUpdate{
+		Name: request.Name, SourceURL: request.SourceURL, SourceHash: sourceHash, Scopes: request.Scopes,
+		Enabled: request.Enabled, Action: request.Action, AutoUpdate: request.AutoUpdate,
+	}); err != nil {
+		if errors.Is(err, model.ErrPromptWordlistExists) {
+			c.JSON(http.StatusConflict, gin.H{"success": false, "message": err.Error()})
+			return
+		}
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "wordlist not found"})
+			return
+		}
 		common.ApiError(c, errors.New("failed to update wordlist"))
 		return
 	}
@@ -165,6 +268,27 @@ func UpdatePromptWordlist(c *gin.Context) {
 		return
 	}
 	c.JSON(200, gin.H{"success": true})
+}
+
+func validPromptWordlistAction(action string) bool {
+	return action == prompt_audit_setting.WordlistActionBlock || action == prompt_audit_setting.WordlistActionReview
+}
+
+func promptWordlistReviewAvailable(configured prompt_audit_setting.PromptAuditSetting, scopes []dto.PromptAuditScope) bool {
+	if configured.Mode == prompt_audit_setting.ModeOff {
+		return false
+	}
+	for _, scope := range scopes {
+		if !configured.PolicyFor(scope).ModelAudit {
+			return false
+		}
+	}
+	for _, endpoint := range configured.Endpoints {
+		if endpoint.Enabled && endpoint.Purpose != prompt_audit_setting.EndpointPurposeReview && (len(endpoint.Directions) == 0 || slices.Contains(endpoint.Directions, "input")) {
+			return true
+		}
+	}
+	return false
 }
 
 func SyncPromptWordlist(c *gin.Context) {

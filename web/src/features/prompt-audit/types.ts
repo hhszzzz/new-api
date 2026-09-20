@@ -17,6 +17,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 export type PromptAuditMode = 'off' | 'async_audit' | 'blocking'
+export type PromptWordlistAction = 'block' | 'review'
+export type PromptAuditDirection = 'input' | 'output'
 export type PromptAuditScope =
   | 'system'
   | 'developer'
@@ -35,6 +37,7 @@ export interface PromptWordlist {
   name: string
   source_url: string
   enabled: boolean
+  action: PromptWordlistAction
   auto_update: boolean
   status: 'pending' | 'updating' | 'ready' | 'failed'
   word_count: number
@@ -51,6 +54,7 @@ export interface PromptWordlistMatch {
   name: string
   version: string
   scope: PromptAuditScope
+  action: PromptWordlistAction
 }
 export type PromptAuditStatus =
   | 'queued'
@@ -83,6 +87,8 @@ export interface PromptAuditEndpoint {
   concurrency: number
   enabled: boolean
   has_token: boolean
+  purpose: 'classify' | 'review'
+  directions: PromptAuditDirection[]
 }
 
 export interface PromptAuditEndpointUpdate extends Omit<
@@ -97,7 +103,12 @@ export interface PromptAuditConfig {
   scope_policies?: PromptScopePolicies
   word_filter_enabled?: boolean
   mode: PromptAuditMode
+  output_mode: PromptAuditMode
+  manual_wordlist_action: PromptWordlistAction
   enabled_categories: string[]
+  controversial_block_categories: string[]
+  review_enabled: boolean
+  review_prompt: string
   all_groups: boolean
   groups: string[]
   endpoints: PromptAuditEndpoint[]
@@ -109,6 +120,8 @@ export interface PromptAuditConfig {
   retention_days: number
   global_concurrency: number
   endpoint_concurrency: number
+  output_max_bytes: number
+  output_memory_bytes: number
   config_version: string
 }
 
@@ -120,7 +133,7 @@ export type PromptAuditConfigUpdate = Omit<
 }
 
 export interface PromptAuditEvent {
-  inspection_type?: 'wordlist' | 'model'
+  inspection_type?: 'wordlist' | 'model' | 'wordlist_model'
   wordlist_id?: string
   wordlist_name?: string
   wordlist_version?: string
@@ -135,6 +148,10 @@ export interface PromptAuditEvent {
   protocol: string
   model: string
   stage: string
+  direction: PromptAuditDirection
+  generation_id: string
+  delivery_status: string
+  coverage_complete: boolean
   config_version: string
   execution_mode: PromptAuditMode
   status: PromptAuditStatus
@@ -147,11 +164,23 @@ export interface PromptAuditEvent {
   full_prompt_truncated: boolean
   redacted_preview: string
   safety: string
+  refusal: string
   decision: PromptAuditDecision
+  action: string
   would_action: string
   categories: string[]
   unknown_categories: string[]
   endpoint_id: string
+  review_status: string
+  review_decision: PromptAuditDecision
+  review_codes: string[]
+  review_reason: string
+  reviewer_endpoint_id: string
+  human_review: string
+  human_review_reason: string
+  reviewed_by: number
+  reviewer_name: string
+  reviewed_at: number
   latency_ms: number
   attempts: number
   max_attempts: number
@@ -173,6 +202,8 @@ export interface PromptAuditFilters {
   endpoint_id: string
   prompt_hash: string
   request_id: string
+  direction: string
+  detector: string
   start_time: string
   end_time: string
 }
@@ -204,6 +235,8 @@ export interface PromptAuditDeleteFilter {
   endpoint_id?: string
   prompt_hash?: string
   request_id?: string
+  direction?: string
+  detector?: string
   start_time?: number
   end_time?: number
 }

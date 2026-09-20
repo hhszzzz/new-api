@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting/prompt_audit_setting"
 
 	"gorm.io/gorm"
 )
@@ -24,6 +25,7 @@ var (
 	ErrPromptAuditNotFound       = errors.New("prompt audit not found")
 	ErrPromptAuditActive         = errors.New("active prompt audit cannot be deleted")
 	ErrPromptAuditNotRetryable   = errors.New("prompt audit is not retryable")
+	ErrPromptAuditNotReviewable  = errors.New("active prompt audit cannot be reviewed")
 	ErrPromptAuditPayloadMissing = errors.New("full prompt is unavailable or truncated and cannot be retried safely")
 	ErrPromptAuditDeleteChanged  = errors.New("prompt audit deletion candidates changed; preview again")
 )
@@ -47,6 +49,10 @@ type PromptAudit struct {
 	Protocol            string            `json:"protocol" gorm:"type:varchar(64);index"`
 	ModelName           string            `json:"model" gorm:"type:varchar(255);index"`
 	Stage               string            `json:"stage" gorm:"type:varchar(32)"`
+	Direction           string            `json:"direction" gorm:"type:varchar(16);index"`
+	GenerationID        string            `json:"generation_id" gorm:"type:varchar(128);index"`
+	DeliveryStatus      string            `json:"delivery_status" gorm:"type:varchar(32);index"`
+	CoverageComplete    bool              `json:"coverage_complete"`
 	ConfigVersion       string            `json:"config_version" gorm:"type:varchar(64);index"`
 	ExecutionMode       string            `json:"execution_mode" gorm:"type:varchar(32);index"`
 	Status              PromptAuditStatus `json:"status" gorm:"type:varchar(32);index"`
@@ -58,13 +64,27 @@ type PromptAudit struct {
 	FullPromptTruncated bool              `json:"full_prompt_truncated"`
 	RedactedPreview     string            `json:"redacted_preview" gorm:"type:varchar(512)"`
 	ScanPayload         []byte            `json:"-"`
+	ContentSnapshot     []byte            `json:"-"`
 	PolicyCategories    string            `json:"-" gorm:"type:text"`
+	PolicySnapshot      string            `json:"-" gorm:"type:text"`
 	Safety              string            `json:"safety" gorm:"type:varchar(32);index"`
+	Refusal             string            `json:"refusal" gorm:"type:varchar(16)"`
 	Decision            string            `json:"decision" gorm:"type:varchar(32);index"`
+	Action              string            `json:"action" gorm:"type:varchar(32);index"`
 	WouldAction         string            `json:"would_action" gorm:"type:varchar(32);index"`
 	Categories          string            `json:"-" gorm:"type:text"`
 	UnknownCategories   string            `json:"-" gorm:"type:text"`
 	EndpointID          string            `json:"endpoint_id" gorm:"type:varchar(128);index"`
+	ReviewStatus        string            `json:"review_status" gorm:"type:varchar(32);index"`
+	ReviewDecision      string            `json:"review_decision" gorm:"type:varchar(16)"`
+	ReviewCodes         string            `json:"-" gorm:"type:text"`
+	ReviewReason        string            `json:"review_reason" gorm:"type:varchar(512)"`
+	ReviewerEndpointID  string            `json:"reviewer_endpoint_id" gorm:"type:varchar(128)"`
+	HumanReview         string            `json:"human_review" gorm:"type:varchar(32);index"`
+	HumanReviewReason   string            `json:"human_review_reason" gorm:"type:varchar(512)"`
+	ReviewedBy          int               `json:"reviewed_by" gorm:"index"`
+	ReviewerName        string            `json:"reviewer_name" gorm:"type:varchar(255)"`
+	ReviewedAt          int64             `json:"reviewed_at" gorm:"index"`
 	LatencyMS           int64             `json:"latency_ms"`
 	Attempts            int               `json:"attempts"`
 	MaxAttempts         int               `json:"max_attempts"`
@@ -93,6 +113,10 @@ type PromptAuditResponse struct {
 	Protocol            string            `json:"protocol"`
 	ModelName           string            `json:"model"`
 	Stage               string            `json:"stage"`
+	Direction           string            `json:"direction"`
+	GenerationID        string            `json:"generation_id"`
+	DeliveryStatus      string            `json:"delivery_status"`
+	CoverageComplete    bool              `json:"coverage_complete"`
 	ConfigVersion       string            `json:"config_version"`
 	ExecutionMode       string            `json:"execution_mode"`
 	Status              PromptAuditStatus `json:"status"`
@@ -105,11 +129,23 @@ type PromptAuditResponse struct {
 	FullPromptTruncated bool              `json:"full_prompt_truncated"`
 	RedactedPreview     string            `json:"redacted_preview"`
 	Safety              string            `json:"safety"`
+	Refusal             string            `json:"refusal"`
 	Decision            string            `json:"decision"`
+	Action              string            `json:"action"`
 	WouldAction         string            `json:"would_action"`
 	Categories          []string          `json:"categories"`
 	UnknownCategories   []string          `json:"unknown_categories"`
 	EndpointID          string            `json:"endpoint_id"`
+	ReviewStatus        string            `json:"review_status"`
+	ReviewDecision      string            `json:"review_decision"`
+	ReviewCodes         []string          `json:"review_codes"`
+	ReviewReason        string            `json:"review_reason"`
+	ReviewerEndpointID  string            `json:"reviewer_endpoint_id"`
+	HumanReview         string            `json:"human_review"`
+	HumanReviewReason   string            `json:"human_review_reason"`
+	ReviewedBy          int               `json:"reviewed_by"`
+	ReviewerName        string            `json:"reviewer_name"`
+	ReviewedAt          int64             `json:"reviewed_at"`
 	LatencyMS           int64             `json:"latency_ms"`
 	Attempts            int               `json:"attempts"`
 	MaxAttempts         int               `json:"max_attempts"`
@@ -132,6 +168,8 @@ type PromptAuditFilter struct {
 	EndpointID string
 	PromptHash string
 	RequestID  string
+	Direction  string
+	Detector   string
 	StartTime  int64
 	EndTime    int64
 	MaxID      int64
@@ -146,15 +184,22 @@ type PromptAuditStats struct {
 }
 
 type PromptAuditCompletion struct {
-	Safety            string
-	Decision          string
-	WouldAction       string
-	Categories        []string
-	UnknownCategories []string
-	EndpointID        string
-	ChunkCount        int
-	LatencyMS         int64
-	ErrorCode         string
+	Safety             string
+	Decision           string
+	Action             string
+	WouldAction        string
+	Categories         []string
+	UnknownCategories  []string
+	EndpointID         string
+	ChunkCount         int
+	LatencyMS          int64
+	ErrorCode          string
+	Refusal            string
+	ReviewStatus       string
+	ReviewDecision     string
+	ReviewCodes        []string
+	ReviewReason       string
+	ReviewerEndpointID string
 }
 
 func (audit *PromptAudit) BeforeCreate(_ *gorm.DB) error {
@@ -175,15 +220,22 @@ func (audit *PromptAudit) ToResponse(includeFullPrompt bool) PromptAuditResponse
 		ID: audit.ID, RequestID: audit.RequestID, UserID: audit.UserID,
 		TokenID: audit.TokenID, TokenName: audit.TokenName, GroupName: audit.GroupName,
 		Protocol: audit.Protocol, ModelName: audit.ModelName, Stage: audit.Stage,
-		ConfigVersion: audit.ConfigVersion, ExecutionMode: audit.ExecutionMode,
+		Direction: audit.Direction, GenerationID: audit.GenerationID, DeliveryStatus: audit.DeliveryStatus,
+		CoverageComplete: audit.CoverageComplete,
+		ConfigVersion:    audit.ConfigVersion, ExecutionMode: audit.ExecutionMode,
 		Status: audit.Status, PromptHash: audit.PromptHash, PromptLength: audit.PromptLength,
 		SegmentCount: audit.SegmentCount, ChunkCount: audit.ChunkCount,
 		FullPromptAvailable: len(audit.FullPrompt) > 0,
 		FullPromptTruncated: audit.FullPromptTruncated, RedactedPreview: audit.RedactedPreview,
-		Safety: audit.Safety, Decision: audit.Decision, WouldAction: audit.WouldAction,
+		Safety: audit.Safety, Refusal: audit.Refusal, Decision: audit.Decision, Action: audit.Action, WouldAction: audit.WouldAction,
 		Categories:        decodePromptAuditStrings(audit.Categories),
 		UnknownCategories: decodePromptAuditStrings(audit.UnknownCategories),
-		EndpointID:        audit.EndpointID, LatencyMS: audit.LatencyMS, Attempts: audit.Attempts,
+		EndpointID:        audit.EndpointID, ReviewStatus: audit.ReviewStatus, ReviewDecision: audit.ReviewDecision,
+		ReviewCodes: decodePromptAuditStrings(audit.ReviewCodes), ReviewReason: audit.ReviewReason,
+		ReviewerEndpointID: audit.ReviewerEndpointID, HumanReview: audit.HumanReview,
+		HumanReviewReason: audit.HumanReviewReason, ReviewedBy: audit.ReviewedBy,
+		ReviewerName: audit.ReviewerName, ReviewedAt: audit.ReviewedAt,
+		LatencyMS: audit.LatencyMS, Attempts: audit.Attempts,
 		MaxAttempts: audit.MaxAttempts, NextAttemptAt: audit.NextAttemptAt,
 		ErrorCode: audit.ErrorCode, CreatedAt: audit.CreatedAt, UpdatedAt: audit.UpdatedAt,
 		CompletedAt: audit.CompletedAt,
@@ -354,25 +406,36 @@ func FinishPromptAudit(id int64, owner string, completion PromptAuditCompletion)
 	if err != nil {
 		return err
 	}
+	reviewCodes, err := encodePromptAuditStrings(completion.ReviewCodes)
+	if err != nil {
+		return err
+	}
 	now := common.GetTimestamp()
 	result := DB.Model(&PromptAudit{}).
 		Where("id = ? AND status = ? AND lease_owner = ?", id, PromptAuditStatusProcessing, owner).
 		Updates(map[string]any{
-			"status":             PromptAuditStatusDone,
-			"scan_payload":       []byte(nil),
-			"safety":             completion.Safety,
-			"decision":           completion.Decision,
-			"would_action":       completion.WouldAction,
-			"categories":         categories,
-			"unknown_categories": unknown,
-			"endpoint_id":        completion.EndpointID,
-			"chunk_count":        completion.ChunkCount,
-			"latency_ms":         completion.LatencyMS,
-			"error_code":         completion.ErrorCode,
-			"lease_owner":        "",
-			"lease_until":        int64(0),
-			"completed_at":       now,
-			"updated_at":         now,
+			"status":               PromptAuditStatusDone,
+			"scan_payload":         []byte(nil),
+			"safety":               completion.Safety,
+			"refusal":              completion.Refusal,
+			"decision":             completion.Decision,
+			"action":               completion.Action,
+			"would_action":         completion.WouldAction,
+			"categories":           categories,
+			"unknown_categories":   unknown,
+			"endpoint_id":          completion.EndpointID,
+			"review_status":        completion.ReviewStatus,
+			"review_decision":      completion.ReviewDecision,
+			"review_codes":         reviewCodes,
+			"review_reason":        completion.ReviewReason,
+			"reviewer_endpoint_id": completion.ReviewerEndpointID,
+			"chunk_count":          completion.ChunkCount,
+			"latency_ms":           completion.LatencyMS,
+			"error_code":           completion.ErrorCode,
+			"lease_owner":          "",
+			"lease_until":          int64(0),
+			"completed_at":         now,
+			"updated_at":           now,
 		})
 	if result.Error != nil {
 		return result.Error
@@ -427,13 +490,18 @@ func RetryPromptAudit(id int64, maxAttempts int) error {
 		if audit.Status != PromptAuditStatusFailed {
 			return ErrPromptAuditNotRetryable
 		}
-		if audit.FullPromptTruncated || len(audit.FullPrompt) == 0 {
+		payload := audit.ContentSnapshot
+		if len(payload) == 0 {
+			payload = audit.FullPrompt
+		}
+		if len(payload) == 0 || len(audit.ContentSnapshot) == 0 && audit.FullPromptTruncated {
 			return ErrPromptAuditPayloadMissing
 		}
 		now := common.GetTimestamp()
 		return tx.Model(&PromptAudit{}).Where("id = ? AND status = ?", id, PromptAuditStatusFailed).Updates(map[string]any{
 			"status":             PromptAuditStatusQueued,
-			"scan_payload":       append([]byte(nil), audit.FullPrompt...),
+			"scan_payload":       append([]byte(nil), payload...),
+			"action":             "pending",
 			"safety":             "",
 			"decision":           "",
 			"would_action":       "pending",
@@ -506,7 +574,7 @@ func CleanupPromptAuditPromptsBefore(cutoff int64, batchSize int) (int64, error)
 	}
 	var ids []int64
 	if err := DB.Model(&PromptAudit{}).
-		Where("status IN ? AND completed_at > 0 AND completed_at < ? AND full_prompt IS NOT NULL", promptAuditTerminalStatuses(), cutoff).
+		Where("status IN ? AND completed_at > 0 AND completed_at < ? AND (full_prompt IS NOT NULL OR content_snapshot IS NOT NULL)", promptAuditTerminalStatuses(), cutoff).
 		Order("id asc").Limit(batchSize).Pluck("id", &ids).Error; err != nil {
 		return 0, err
 	}
@@ -515,7 +583,7 @@ func CleanupPromptAuditPromptsBefore(cutoff int64, batchSize int) (int64, error)
 	}
 	result := DB.Model(&PromptAudit{}).
 		Where("id IN ? AND status IN ? AND completed_at > 0 AND completed_at < ?", ids, promptAuditTerminalStatuses(), cutoff).
-		Updates(map[string]any{"full_prompt": []byte(nil), "updated_at": common.GetTimestamp()})
+		Updates(map[string]any{"full_prompt": []byte(nil), "content_snapshot": []byte(nil), "updated_at": common.GetTimestamp()})
 	return result.RowsAffected, result.Error
 }
 
@@ -556,6 +624,12 @@ func applyPromptAuditFilter(query *gorm.DB, filter PromptAuditFilter) *gorm.DB {
 	if filter.RequestID != "" {
 		query = query.Where("request_id = ?", filter.RequestID)
 	}
+	if filter.Direction != "" {
+		query = query.Where("direction = ?", filter.Direction)
+	}
+	if filter.Detector != "" {
+		query = query.Where("inspection_type = ?", filter.Detector)
+	}
 	if filter.StartTime > 0 {
 		query = query.Where("created_at >= ?", filter.StartTime)
 	}
@@ -563,6 +637,62 @@ func applyPromptAuditFilter(query *gorm.DB, filter PromptAuditFilter) *gorm.DB {
 		query = query.Where("created_at <= ?", filter.EndTime)
 	}
 	return query
+}
+
+func ReviewPromptAudit(id int64, reviewerID int, reviewerName, status, reason string) error {
+	status = strings.ToLower(strings.TrimSpace(status))
+	if status != "false_positive" && status != "confirmed_violation" {
+		return errors.New("review must be false_positive or confirmed_violation")
+	}
+	reason = strings.TrimSpace(reason)
+	if len([]rune(reason)) > 512 {
+		return errors.New("review reason must not exceed 512 characters")
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		var audit PromptAudit
+		if err := lockForUpdate(tx).Select("id", "status").Where("id = ?", id).First(&audit).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrPromptAuditNotFound
+			}
+			return err
+		}
+		if audit.Status != PromptAuditStatusDone && audit.Status != PromptAuditStatusFailed {
+			return ErrPromptAuditNotReviewable
+		}
+		now := common.GetTimestamp()
+		return tx.Model(&PromptAudit{}).Where("id = ? AND status IN ?", id, promptAuditTerminalStatuses()).Updates(map[string]any{
+			"human_review": status, "human_review_reason": reason, "reviewed_by": reviewerID,
+			"reviewer_name": strings.TrimSpace(reviewerName), "reviewed_at": now, "updated_at": now,
+		}).Error
+	})
+}
+
+func UpdatePromptAuditDelivery(id int64, status string) error {
+	if id <= 0 {
+		return nil
+	}
+	status = strings.TrimSpace(status)
+	updates := map[string]any{"delivery_status": status, "updated_at": common.GetTimestamp()}
+	if status == "delivery_failed" {
+		updates["action"] = "unavailable"
+	}
+	result := DB.Model(&PromptAudit{}).Where("id = ?", id).Updates(updates)
+	return result.Error
+}
+
+func MigratePromptAuditDefaults() error {
+	if err := DB.Model(&PromptWordlist{}).Where("action IS NULL OR action = ?", "").Update("action", prompt_audit_setting.WordlistActionBlock).Error; err != nil {
+		return err
+	}
+	if err := DB.Model(&PromptAudit{}).Where("direction IS NULL OR direction = ?", "").Updates(map[string]any{
+		"direction": "input", "delivery_status": "not_applicable", "coverage_complete": true,
+	}).Error; err != nil {
+		return err
+	}
+	if err := DB.Model(&PromptAudit{}).Where("(action IS NULL OR action = ?) AND decision = ?", "", "block").Update("action", "block").Error; err != nil {
+		return err
+	}
+	return DB.Model(&PromptAudit{}).Where("action IS NULL OR action = ?", "").Update("action", "allow").Error
 }
 
 func promptAuditActiveStatuses() []PromptAuditStatus {

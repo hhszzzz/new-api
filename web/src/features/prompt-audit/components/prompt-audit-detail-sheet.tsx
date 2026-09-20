@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import dayjs from 'dayjs'
 import { ExternalLink, RefreshCw, Trash2 } from 'lucide-react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -33,6 +34,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
+import { Textarea } from '@/components/ui/textarea'
 import {
   CollapsibleDetailSection,
   DetailRow,
@@ -40,7 +42,7 @@ import {
 } from '@/features/usage-logs/components/dialogs/log-detail-layout'
 import { cn } from '@/lib/utils'
 
-import { getPromptAudit, retryPromptAudit } from '../api'
+import { getPromptAudit, retryPromptAudit, reviewPromptAudit } from '../api'
 import { promptAuditScopeLabel } from '../scopes'
 import type { PromptAuditEvent } from '../types'
 
@@ -73,6 +75,7 @@ export function PromptAuditDetailSheet({
 }: PromptAuditDetailSheetProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
+  const [reviewReason, setReviewReason] = useState('')
   const detailQuery = useQuery({
     queryKey: ['prompt-audit', 'event', eventID],
     enabled: eventID !== null,
@@ -93,6 +96,15 @@ export function PromptAuditDetailSheet({
     },
     onSuccess: async () => {
       toast.success(t('Audit task queued for retry'))
+      await queryClient.invalidateQueries({ queryKey: ['prompt-audit'] })
+    },
+    onError: (error) => toast.error(error.message),
+  })
+  const reviewMutation = useMutation({
+    mutationFn: (status: 'false_positive' | 'confirmed_violation') =>
+      reviewPromptAudit(eventID ?? 0, status, reviewReason),
+    onSuccess: async () => {
+      toast.success(t('Audit review saved'))
       await queryClient.invalidateQueries({ queryKey: ['prompt-audit'] })
     },
     onError: (error) => toast.error(error.message),
@@ -195,6 +207,25 @@ export function PromptAuditDetailSheet({
                 />
                 <DetailRow label={t('Group')} value={event.group || '—'} />
                 <DetailRow label={t('Protocol')} value={event.protocol} mono />
+                <DetailRow
+                  label={t('Audit stage')}
+                  value={
+                    event.direction === 'output'
+                      ? t('Generated output')
+                      : t('Request input')
+                  }
+                />
+                <DetailRow
+                  label={t('Delivery status')}
+                  value={event.delivery_status || '—'}
+                  mono
+                />
+                <DetailRow
+                  label={t('Coverage')}
+                  value={
+                    event.coverage_complete ? t('Complete') : t('Incomplete')
+                  }
+                />
                 <DetailRow label={t('Model')} value={event.model || '—'} mono />
                 <DetailRow
                   label={t('Request ID')}
@@ -223,6 +254,21 @@ export function PromptAuditDetailSheet({
                 />
                 <DetailRow label={t('Safety')} value={event.safety || '—'} />
                 <DetailRow
+                  label={t('Actual action')}
+                  value={event.action || '—'}
+                  mono
+                />
+                <DetailRow
+                  label={t('Suggested action')}
+                  value={event.would_action || '—'}
+                  mono
+                />
+                <DetailRow
+                  label={t('Refusal')}
+                  value={event.refusal || '—'}
+                  mono
+                />
+                <DetailRow
                   label={t('Audit node')}
                   value={event.endpoint_id || '—'}
                   mono
@@ -250,7 +296,61 @@ export function PromptAuditDetailSheet({
                     </Badge>
                   ))}
                 </div>
+                {event.review_status && (
+                  <div className='mt-3 rounded-md border p-3 text-xs'>
+                    <p className='font-medium'>{t('Gray-area review')}</p>
+                    <p className='text-muted-foreground mt-1'>
+                      {event.review_status} · {event.review_decision || '—'} ·{' '}
+                      {event.reviewer_endpoint_id || '—'}
+                    </p>
+                    {event.review_reason && (
+                      <p className='mt-2'>{event.review_reason}</p>
+                    )}
+                  </div>
+                )}
               </DetailSection>
+
+              {canManage &&
+                (event.status === 'done' || event.status === 'failed') && (
+                  <DetailSection label={t('Administrator review')}>
+                    <Textarea
+                      value={reviewReason}
+                      maxLength={512}
+                      placeholder={t('Optional review reason')}
+                      onChange={(change) =>
+                        setReviewReason(change.target.value)
+                      }
+                    />
+                    <div className='mt-2 flex flex-wrap gap-2'>
+                      <Button
+                        size='sm'
+                        variant='outline'
+                        disabled={reviewMutation.isPending}
+                        onClick={() => reviewMutation.mutate('false_positive')}
+                      >
+                        {t('Mark false positive')}
+                      </Button>
+                      <Button
+                        size='sm'
+                        variant='destructive'
+                        disabled={reviewMutation.isPending}
+                        onClick={() =>
+                          reviewMutation.mutate('confirmed_violation')
+                        }
+                      >
+                        {t('Confirm violation')}
+                      </Button>
+                    </div>
+                    {event.human_review && (
+                      <p className='text-muted-foreground mt-2 text-xs'>
+                        {t('Current review')}: {event.human_review}
+                        {event.human_review_reason
+                          ? ` · ${event.human_review_reason}`
+                          : ''}
+                      </p>
+                    )}
+                  </DetailSection>
+                )}
 
               <CollapsibleDetailSection label={t('Technical details')}>
                 <DetailRow

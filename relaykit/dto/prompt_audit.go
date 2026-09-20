@@ -58,7 +58,9 @@ type PromptAuditSnapshot struct {
 	Segments []PromptAuditSegment `json:"segments"`
 }
 
-func (snapshot PromptAuditSnapshot) PrioritizedSegments() []PromptAuditSegment {
+// OrderedSegments normalizes inspectable text while preserving the original
+// message order. It is the canonical representation sent to moderation nodes.
+func (snapshot PromptAuditSnapshot) OrderedSegments() []PromptAuditSegment {
 	normalized := make([]PromptAuditSegment, 0, len(snapshot.Segments))
 	for _, segment := range snapshot.Segments {
 		segment.Role = strings.ToLower(strings.TrimSpace(segment.Role))
@@ -67,6 +69,11 @@ func (snapshot PromptAuditSnapshot) PrioritizedSegments() []PromptAuditSegment {
 			normalized = append(normalized, segment)
 		}
 	}
+	return normalized
+}
+
+func (snapshot PromptAuditSnapshot) PrioritizedSegments() []PromptAuditSegment {
+	normalized := snapshot.OrderedSegments()
 	if len(normalized) == 0 {
 		return nil
 	}

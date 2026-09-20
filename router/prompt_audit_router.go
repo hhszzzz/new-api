@@ -32,7 +32,9 @@ func registerPromptAuditRoutes(apiRouter *gin.RouterGroup) {
 	route.PUT("/wordlists/manual/content", middleware.RequirePermission(authz.PromptAuditManage), controller.UpdateManualPromptWordlist)
 	route.POST("/wordlists/test", middleware.RequirePermission(authz.PromptAuditManage), controller.TestPromptWordlists)
 	route.POST("/nodes/:id/test", middleware.RequirePermission(authz.PromptAuditManage), controller.TestPromptAuditNode)
+	route.POST("/test", middleware.RequirePermission(authz.PromptAuditManage), controller.TestPromptAuditPolicy)
 	route.POST("/events/:id/retry", middleware.RequirePermission(authz.PromptAuditManage), controller.RetryPromptAudit)
+	route.PATCH("/events/:id/review", middleware.RequirePermission(authz.PromptAuditManage), controller.ReviewPromptAudit)
 
 	route.POST("/events/delete-preview", middleware.RequirePermission(authz.PromptAuditDelete), controller.PreviewDeletePromptAudits)
 	route.DELETE("/events", middleware.RequirePermission(authz.PromptAuditDelete), controller.DeletePromptAudits)

@@ -27,6 +27,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/protocolstate"
+	"github.com/QuantumNous/new-api/setting/prompt_audit_setting"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
@@ -297,12 +298,23 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 	if apiErr = middleware.PrepareResponsesWebSocketRequest(c, modelName, create.Body); apiErr != nil {
 		return apiErr
 	}
-	result, auditErr := service.InspectPrompt(c, service.PromptAuditRequest{Snapshot: dto.PromptAuditSnapshotOf(validated), Protocol: "openai_responses", Model: modelName, Stage: "responses_websocket", Stream: true})
+	result, auditErr := service.InspectPrompt(c, service.PromptAuditRequest{Snapshot: dto.PromptAuditSnapshotOf(validated), Protocol: "openai_responses", Model: modelName, Stage: "responses_websocket", CoverageIncomplete: strings.TrimSpace(validated.PreviousResponseID) != "", Stream: true})
 	if auditErr != nil {
 		service.RecordPromptAuditError(c, result, auditErr, modelName, true)
 		return auditErr
 	}
 	common.SetContextKey(c, appconstant.ContextKeyPromptAuditChecked, true)
+	outputAuditSetting := prompt_audit_setting.GetSetting()
+	outputAuditMode := outputAuditSetting.OutputMode
+	if !service.PromptAuditAppliesToGroup(c, outputAuditSetting, outputAuditMode) {
+		outputAuditMode = prompt_audit_setting.ModeOff
+	}
+	var outputAuditFrames *promptOutputCapture
+	if outputAuditMode == prompt_audit_setting.ModeBlocking {
+		outputAuditFrames = &promptOutputCapture{maxBytes: outputAuditSetting.OutputMaxBytes, memoryBytes: outputAuditSetting.OutputMemoryBytes}
+		defer outputAuditFrames.Close()
+	}
+	outputAuditCollector := newPromptAuditTextCollector()
 	group := common.GetContextKeyString(c, appconstant.ContextKeyTokenGroup)
 	if group == "" {
 		group = common.GetContextKeyString(c, appconstant.ContextKeyUserGroup)
@@ -483,9 +495,11 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 				dto.ResponsesStreamResponse
 				StreamID string `json:"stream_id"`
 			}
+			bufferForOutputAudit := outputAuditMode == prompt_audit_setting.ModeBlocking
 			if err := common.Unmarshal(incoming.body, &event); err != nil {
 				info.StreamStatus.RecordError("invalid upstream websocket event")
 			} else {
+				bufferForOutputAudit = outputAuditMode == prompt_audit_setting.ModeBlocking && strings.HasPrefix(event.Type, "response.")
 				if event.Type != "error" && event.StreamID != "" && event.StreamID != create.StreamID {
 					if err := s.writeClient(incoming.kind, incoming.body); err != nil {
 						s.shutdown()
@@ -567,17 +581,89 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 			} else {
 				protocolstate.ObserveResponsesStream(c, &event.ResponsesStreamResponse)
 			}
+			if outputAuditMode != prompt_audit_setting.ModeOff && strings.HasPrefix(event.Type, "response.") {
+				var visible any
+				if common.Unmarshal(incoming.body, &visible) == nil {
+					outputAuditCollector.Collect(visible, true)
+				}
+				if outputAuditFrames != nil {
+					if err := outputAuditFrames.WriteFrame(incoming.kind, incoming.body); err != nil {
+						service.RecordOutputAuditUnavailable(c, service.PromptAuditRequest{
+							Snapshot: dto.PromptAuditSnapshotOf(validated), Protocol: "openai_responses", Model: modelName,
+							Stage: "responses_websocket", Direction: service.PromptAuditDirectionOutput,
+							GenerationID: responseID, DeliveryStatus: "not_delivered", CoverageComplete: false,
+							Output: outputAuditCollector.String(), Stream: true,
+						}, "output_buffer_limit")
+						state.closeAfter = true
+						return types.NewErrorWithStatusCode(errors.New("output audit buffer limit exceeded"), types.ErrorCodeOutputAuditUnavailable, http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry())
+					}
+				}
+			}
 			switch event.Type {
 			case "response.completed", "response.done", "response.incomplete", "response.failed", "response.cancelled", "response.canceled":
+				coverageComplete := event.Type == "response.completed" || event.Type == "response.done"
 				if event.Response != nil {
 					s.lastResponseID = event.Response.ID
 				}
 				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonDone, nil)
 				state.terminal = &incoming
-				if event.Type == "response.completed" || event.Type == "response.done" {
+				if coverageComplete {
 					protocolstate.MarkStreamCompleted(c)
 					if err := protocolstate.Commit(c); err != nil {
 						logger.LogError(c, "failed to persist Responses WebSocket protocol state: "+err.Error())
+					}
+				}
+				if outputAuditMode != prompt_audit_setting.ModeOff {
+					outputText := outputAuditCollector.String()
+					if (!coverageComplete || outputText == "") && outputAuditMode == prompt_audit_setting.ModeBlocking {
+						service.RecordOutputAuditUnavailable(c, service.PromptAuditRequest{
+							Snapshot: dto.PromptAuditSnapshotOf(validated), Protocol: "openai_responses", Model: modelName,
+							Stage: "responses_websocket", Direction: service.PromptAuditDirectionOutput,
+							GenerationID: responseID, DeliveryStatus: "not_delivered", CoverageComplete: false,
+							Output: outputText, Stream: true,
+						}, "output_incomplete")
+						state.closeAfter = true
+						return types.NewErrorWithStatusCode(errors.New("generated output could not be extracted for audit"), types.ErrorCodeOutputAuditUnavailable, http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry())
+					}
+					if outputText == "" {
+						service.RecordOutputAuditUnavailable(c, service.PromptAuditRequest{
+							Snapshot: dto.PromptAuditSnapshotOf(validated), Protocol: "openai_responses", Model: modelName,
+							Stage: "responses_websocket", Direction: service.PromptAuditDirectionOutput,
+							GenerationID: responseID, DeliveryStatus: "delivered_incomplete", CoverageComplete: false, Stream: true,
+						}, "output_extract_failed")
+						return nil
+					}
+					deliveryStatus := "delivered"
+					if outputAuditMode == prompt_audit_setting.ModeBlocking {
+						deliveryStatus = "not_delivered"
+					}
+					result, outputErr := service.InspectOutput(c, service.PromptAuditRequest{
+						Snapshot: dto.PromptAuditSnapshotOf(validated), Protocol: "openai_responses", Model: modelName,
+						Stage: "responses_websocket", Direction: service.PromptAuditDirectionOutput,
+						GenerationID: responseID, DeliveryStatus: deliveryStatus, CoverageComplete: coverageComplete,
+						Output: outputText, Stream: true,
+					})
+					if outputAuditMode == prompt_audit_setting.ModeBlocking && outputErr != nil {
+						_ = appmodel.UpdatePromptAuditDelivery(result.AuditID, "not_delivered")
+						state.closeAfter = true
+						code, status, message := types.ErrorCodeOutputAuditUnavailable, http.StatusServiceUnavailable, "output audit is unavailable"
+						if result.Blocked && result.Decision == service.PromptAuditDecisionBlock {
+							code, status, message = types.ErrorCodeOutputAuditBlocked, http.StatusForbidden, "generated output blocked by content audit"
+						}
+						return types.NewErrorWithStatusCode(errors.New(message), code, status, types.ErrOptionWithSkipRetry())
+					}
+					if outputAuditFrames != nil {
+						reader, err := outputAuditFrames.Reader()
+						if err == nil {
+							err = readPromptOutputFrames(reader, func(kind int, body []byte) error { return s.writeClient(kind, body) })
+						}
+						if err != nil {
+							_ = appmodel.UpdatePromptAuditDelivery(result.AuditID, "delivery_failed")
+							state.closeAfter = true
+							return types.NewErrorWithStatusCode(errors.New("output delivery failed after audit"), types.ErrorCodeOutputAuditUnavailable, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
+						}
+						_ = appmodel.UpdatePromptAuditDelivery(result.AuditID, "delivered")
+						state.terminal = nil
 					}
 				}
 				return nil
@@ -586,15 +672,18 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, err)
 				return types.NewError(err, types.ErrorCodeClientDisconnected, types.ErrOptionWithSkipRetry())
 			}
-			if err := s.writeClient(incoming.kind, incoming.body); err != nil {
-				s.shutdown()
-			}
 			if accepted && pendingControl != nil {
 				if err := s.writeTarget(websocket.TextMessage, pendingControl); err != nil {
 					s.shutdown()
 				}
 				sentControl = pendingControl
 				pendingControl = nil
+			}
+			if bufferForOutputAudit {
+				continue
+			}
+			if err := s.writeClient(incoming.kind, incoming.body); err != nil {
+				s.shutdown()
 			}
 		case control := <-state.controls:
 			if pendingControl != nil || sentControl != nil {

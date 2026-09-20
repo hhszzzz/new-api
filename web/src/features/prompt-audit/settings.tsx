@@ -46,6 +46,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Switch } from '@/components/ui/switch'
+import { Textarea } from '@/components/ui/textarea'
 import { getGroups } from '@/features/users/api'
 
 import {
@@ -119,7 +120,14 @@ function promptAuditConfigDraft(
     scope_policies: config.scope_policies ?? defaultPromptScopePolicies(),
     word_filter_enabled: config.word_filter_enabled ?? true,
     mode: config.mode,
+    output_mode: config.output_mode ?? 'off',
+    manual_wordlist_action: config.manual_wordlist_action ?? 'block',
     enabled_categories: [...config.enabled_categories],
+    controversial_block_categories: [
+      ...(config.controversial_block_categories ?? []),
+    ],
+    review_enabled: config.review_enabled ?? false,
+    review_prompt: config.review_prompt ?? '',
     all_groups: config.all_groups,
     groups: [...config.groups],
     total_timeout_ms: config.total_timeout_ms,
@@ -130,6 +138,8 @@ function promptAuditConfigDraft(
     retention_days: config.retention_days,
     global_concurrency: config.global_concurrency,
     endpoint_concurrency: config.endpoint_concurrency,
+    output_max_bytes: config.output_max_bytes ?? 8 * 1024 * 1024,
+    output_memory_bytes: config.output_memory_bytes ?? 1024 * 1024,
     endpoints: [],
   }
 }
@@ -199,7 +209,7 @@ function PromptAuditSettingsForm({
       toast.success(
         t('Audit node responded in {{latency}} ms with {{safety}}', {
           latency: result.latency_ms,
-          safety: result.safety,
+          safety: result.safety || result.decision,
         })
       ),
     onError: (error) => toast.error(error.message),
@@ -226,6 +236,17 @@ function PromptAuditSettingsForm({
   } else if (config.mode === 'async_audit') {
     modeDescription = t(
       'Requests continue normally while durable workers record would_action.'
+    )
+  }
+
+  let outputModeDescription = t('Generated output is not collected for audit.')
+  if (config.output_mode === 'blocking') {
+    outputModeDescription = t(
+      'Generated text is withheld until review passes. Generation usage is still billed when content is blocked.'
+    )
+  } else if (config.output_mode === 'async_audit') {
+    outputModeDescription = t(
+      'Streaming remains live; risky output is recorded as delivered and recommended for blocking.'
     )
   }
 
@@ -309,6 +330,37 @@ function PromptAuditSettingsForm({
                 </p>
               </div>
 
+              <div className='space-y-1.5'>
+                <Label htmlFor='prompt-audit-output-mode'>
+                  {t('Output audit mode')}
+                </Label>
+                <NativeSelect
+                  id='prompt-audit-output-mode'
+                  className='w-full sm:w-72'
+                  value={config.output_mode}
+                  onChange={(event) =>
+                    setConfig((current) => ({
+                      ...current,
+                      output_mode: event.target
+                        .value as PromptAuditConfigUpdate['output_mode'],
+                    }))
+                  }
+                >
+                  <NativeSelectOption value='off'>
+                    {t('Off')}
+                  </NativeSelectOption>
+                  <NativeSelectOption value='async_audit'>
+                    {t('Async observation')}
+                  </NativeSelectOption>
+                  <NativeSelectOption value='blocking'>
+                    {t('Full-buffer blocking')}
+                  </NativeSelectOption>
+                </NativeSelect>
+                <p className='text-muted-foreground text-xs'>
+                  {outputModeDescription}
+                </p>
+              </div>
+
               <div className='flex items-start justify-between gap-4 rounded-lg border p-3'>
                 <div>
                   <Label htmlFor='prompt-audit-all-groups'>
@@ -365,6 +417,96 @@ function PromptAuditSettingsForm({
                   </div>
                 </div>
               )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>{t('Gray-area review')}</CardTitle>
+              <CardDescription>
+                {t(
+                  'An independent general model may review only Qwen3Guard Controversial results. It cannot override direct wordlist blocks or baseline blocks.'
+                )}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className='space-y-4'>
+              <div className='flex items-start justify-between gap-4 rounded-lg border p-3'>
+                <div>
+                  <Label htmlFor='prompt-audit-review-enabled'>
+                    {t('Enable gray-area review')}
+                  </Label>
+                  <p className='text-muted-foreground mt-1 text-xs'>
+                    {t(
+                      'Requires at least one enabled node with the gray-area reviewer purpose.'
+                    )}
+                  </p>
+                </div>
+                <Switch
+                  id='prompt-audit-review-enabled'
+                  checked={config.review_enabled}
+                  onCheckedChange={(review_enabled) =>
+                    setConfig((current) => ({ ...current, review_enabled }))
+                  }
+                />
+              </div>
+              <div className='space-y-1.5'>
+                <Label htmlFor='prompt-audit-review-prompt'>
+                  {t('Reviewer system prompt')}
+                </Label>
+                <Textarea
+                  id='prompt-audit-review-prompt'
+                  value={config.review_prompt}
+                  maxLength={20000}
+                  rows={8}
+                  placeholder={t(
+                    'Leave empty to use the built-in reviewer policy.'
+                  )}
+                  onChange={(event) =>
+                    setConfig((current) => ({
+                      ...current,
+                      review_prompt: event.target.value,
+                    }))
+                  }
+                />
+                <p className='text-muted-foreground text-xs'>
+                  {t(
+                    'The server fixes the JSON output protocol; this prompt only defines review policy.'
+                  )}
+                </p>
+              </div>
+              <div>
+                <Label>
+                  {t('Controversial categories blocked before review')}
+                </Label>
+                <div className='mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-3'>
+                  {categories.map((category) => (
+                    <label
+                      key={category.id}
+                      className='flex items-center gap-2 rounded-lg border p-3 text-sm'
+                    >
+                      <Checkbox
+                        checked={config.controversial_block_categories.includes(
+                          category.id
+                        )}
+                        onCheckedChange={(checked) =>
+                          setConfig((current) => ({
+                            ...current,
+                            controversial_block_categories: checked
+                              ? [
+                                  ...current.controversial_block_categories,
+                                  category.id,
+                                ]
+                              : current.controversial_block_categories.filter(
+                                  (value) => value !== category.id
+                                ),
+                          }))
+                        }
+                      />
+                      {t(category.label)}
+                    </label>
+                  ))}
+                </div>
+              </div>
             </CardContent>
           </Card>
 
@@ -431,6 +573,38 @@ function PromptAuditSettingsForm({
                   setConfig((current) => ({
                     ...current,
                     total_timeout_ms: value,
+                  }))
+                }
+              />
+              <NumberField
+                id='prompt-audit-output-memory'
+                label={t('Output memory threshold (bytes)')}
+                value={config.output_memory_bytes}
+                min={1024}
+                max={config.output_max_bytes}
+                description={t(
+                  'Larger buffered outputs spill to temporary storage.'
+                )}
+                onChange={(value) =>
+                  setConfig((current) => ({
+                    ...current,
+                    output_memory_bytes: value,
+                  }))
+                }
+              />
+              <NumberField
+                id='prompt-audit-output-limit'
+                label={t('Maximum output capture (bytes)')}
+                value={config.output_max_bytes}
+                min={1024}
+                max={64 * 1024 * 1024}
+                description={t(
+                  'Blocking stops delivery when this limit is exceeded.'
+                )}
+                onChange={(value) =>
+                  setConfig((current) => ({
+                    ...current,
+                    output_max_bytes: value,
                   }))
                 }
               />
@@ -645,6 +819,62 @@ function PromptAuditSettingsForm({
 
                     <div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-3'>
                       <div className='space-y-1.5'>
+                        <Label htmlFor={`prompt-audit-node-purpose-${index}`}>
+                          {t('Node purpose')}
+                        </Label>
+                        <NativeSelect
+                          id={`prompt-audit-node-purpose-${index}`}
+                          value={endpoint.purpose}
+                          onChange={(event) =>
+                            updateEndpoint(index, {
+                              purpose: event.target
+                                .value as PromptAuditEndpointDraft['purpose'],
+                            })
+                          }
+                        >
+                          <NativeSelectOption value='classify'>
+                            {t('Qwen3Guard classification')}
+                          </NativeSelectOption>
+                          <NativeSelectOption value='review'>
+                            {t('Gray-area reviewer')}
+                          </NativeSelectOption>
+                        </NativeSelect>
+                      </div>
+                      {endpoint.purpose === 'classify' && (
+                        <div className='space-y-1.5'>
+                          <Label>{t('Audit directions')}</Label>
+                          <div className='flex flex-wrap gap-3 rounded-lg border p-2.5'>
+                            {(
+                              [
+                                ['input', t('Request input')],
+                                ['output', t('Generated output')],
+                              ] as const
+                            ).map(([direction, label]) => (
+                              <label
+                                key={direction}
+                                className='flex items-center gap-2 text-sm'
+                              >
+                                <Checkbox
+                                  checked={endpoint.directions.includes(
+                                    direction
+                                  )}
+                                  onCheckedChange={(checked) =>
+                                    updateEndpoint(index, {
+                                      directions: checked
+                                        ? [...endpoint.directions, direction]
+                                        : endpoint.directions.filter(
+                                            (value) => value !== direction
+                                          ),
+                                    })
+                                  }
+                                />
+                                {label}
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      <div className='space-y-1.5'>
                         <Label htmlFor={`prompt-audit-node-id-${index}`}>
                           {t('Node ID')}
                         </Label>
@@ -819,6 +1049,8 @@ function PromptAuditSettingsForm({
                       input_limit: 4000,
                       concurrency: config.endpoint_concurrency,
                       enabled: true,
+                      purpose: 'classify',
+                      directions: ['input', 'output'],
                       has_token: false,
                       token: '',
                       token_changed: true,

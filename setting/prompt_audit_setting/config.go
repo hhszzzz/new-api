@@ -4,13 +4,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	"net/url"
 	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"unicode/utf8"
 
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/config"
 )
 
@@ -18,6 +19,11 @@ const (
 	ModeOff        = "off"
 	ModeAsyncAudit = "async_audit"
 	ModeBlocking   = "blocking"
+
+	EndpointPurposeClassify = "classify"
+	EndpointPurposeReview   = "review"
+	WordlistActionBlock     = "block"
+	WordlistActionReview    = "review"
 
 	DefaultModel               = "sileader/qwen3guard:0.6b"
 	DefaultEndpointTimeoutMS   = 3000
@@ -30,6 +36,8 @@ const (
 	DefaultRetentionDays       = 30
 	DefaultGlobalConcurrency   = 64
 	DefaultEndpointConcurrency = 16
+	DefaultOutputMaxBytes      = 8 * 1024 * 1024
+	DefaultOutputMemoryBytes   = 1024 * 1024
 	MaxAttemptsLimit           = 4
 )
 
@@ -56,27 +64,31 @@ var categorySet = func() map[string]struct{} {
 // Endpoint is one ordered OpenAI-compatible Qwen3Guard node. Token is stored
 // only in the modular option payload; management responses must use Sanitized.
 type Endpoint struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	BaseURL     string `json:"base_url"`
-	Token       string `json:"token,omitempty"`
-	Model       string `json:"model"`
-	TimeoutMS   int    `json:"timeout_ms"`
-	InputLimit  int    `json:"input_limit"`
-	Concurrency int    `json:"concurrency"`
-	Enabled     bool   `json:"enabled"`
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	BaseURL     string   `json:"base_url"`
+	Token       string   `json:"token,omitempty"`
+	Model       string   `json:"model"`
+	TimeoutMS   int      `json:"timeout_ms"`
+	InputLimit  int      `json:"input_limit"`
+	Concurrency int      `json:"concurrency"`
+	Enabled     bool     `json:"enabled"`
+	Purpose     string   `json:"purpose,omitempty"`
+	Directions  []string `json:"directions,omitempty"`
 }
 
 type SanitizedEndpoint struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	BaseURL     string `json:"base_url"`
-	Model       string `json:"model"`
-	TimeoutMS   int    `json:"timeout_ms"`
-	InputLimit  int    `json:"input_limit"`
-	Concurrency int    `json:"concurrency"`
-	Enabled     bool   `json:"enabled"`
-	HasToken    bool   `json:"has_token"`
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	BaseURL     string   `json:"base_url"`
+	Model       string   `json:"model"`
+	TimeoutMS   int      `json:"timeout_ms"`
+	InputLimit  int      `json:"input_limit"`
+	Concurrency int      `json:"concurrency"`
+	Enabled     bool     `json:"enabled"`
+	HasToken    bool     `json:"has_token"`
+	Purpose     string   `json:"purpose"`
+	Directions  []string `json:"directions"`
 }
 
 // PromptAuditSetting is persisted through the modular option manager. The
@@ -84,9 +96,14 @@ type SanitizedEndpoint struct {
 // listing omits the complete JSON value (which contains endpoint tokens).
 type PromptAuditSetting struct {
 	ManualWordlistEnabled *bool                                `json:"manual_wordlist_enabled"`
+	ManualWordlistAction  string                               `json:"manual_wordlist_action"`
 	ScopePolicies         map[dto.PromptAuditScope]ScopePolicy `json:"scope_policies"`
 	Mode                  string                               `json:"mode"`
+	OutputMode            string                               `json:"output_mode"`
 	EnabledCategories     []string                             `json:"enabled_categories"`
+	ControversialBlocks   []string                             `json:"controversial_block_categories"`
+	ReviewEnabled         bool                                 `json:"review_enabled"`
+	ReviewPrompt          string                               `json:"review_prompt"`
 	AllGroups             bool                                 `json:"all_groups"`
 	Groups                []string                             `json:"groups"`
 	Endpoints             []Endpoint                           `json:"endpoints_secret"`
@@ -98,21 +115,28 @@ type PromptAuditSetting struct {
 	RetentionDays         int                                  `json:"retention_days"`
 	GlobalConcurrency     int                                  `json:"global_concurrency"`
 	EndpointConcurrency   int                                  `json:"endpoint_concurrency"`
+	OutputMaxBytes        int                                  `json:"output_max_bytes"`
+	OutputMemoryBytes     int                                  `json:"output_memory_bytes"`
 	ConfigVersion         string                               `json:"-"`
 }
 
 var promptAuditSetting = PromptAuditSetting{
-	Mode:                ModeOff,
-	EnabledCategories:   append([]string(nil), AllCategoryIDs...),
-	AllGroups:           true,
-	TotalTimeoutMS:      DefaultTotalTimeoutMS,
-	ChunkOverlap:        DefaultChunkOverlap,
-	CacheTTLSeconds:     DefaultCacheTTLSeconds,
-	WorkerCount:         DefaultWorkerCount,
-	MaxAttempts:         DefaultMaxAttempts,
-	RetentionDays:       DefaultRetentionDays,
-	GlobalConcurrency:   DefaultGlobalConcurrency,
-	EndpointConcurrency: DefaultEndpointConcurrency,
+	Mode:                 ModeOff,
+	OutputMode:           ModeOff,
+	EnabledCategories:    append([]string(nil), AllCategoryIDs...),
+	ControversialBlocks:  []string{"jailbreak", "pii", "suicide_and_self_harm"},
+	ManualWordlistAction: WordlistActionBlock,
+	AllGroups:            true,
+	TotalTimeoutMS:       DefaultTotalTimeoutMS,
+	ChunkOverlap:         DefaultChunkOverlap,
+	CacheTTLSeconds:      DefaultCacheTTLSeconds,
+	WorkerCount:          DefaultWorkerCount,
+	MaxAttempts:          DefaultMaxAttempts,
+	RetentionDays:        DefaultRetentionDays,
+	GlobalConcurrency:    DefaultGlobalConcurrency,
+	EndpointConcurrency:  DefaultEndpointConcurrency,
+	OutputMaxBytes:       DefaultOutputMaxBytes,
+	OutputMemoryBytes:    DefaultOutputMemoryBytes,
 }
 
 var promptAuditSettingSnapshot atomic.Pointer[PromptAuditSetting]
@@ -125,13 +149,17 @@ func init() {
 func GetSetting() PromptAuditSetting {
 	snapshot := promptAuditSettingSnapshot.Load()
 	if snapshot == nil {
-		return PromptAuditSetting{Mode: ModeOff}
+		return PromptAuditSetting{Mode: ModeOff, OutputMode: ModeOff}
 	}
 	return cloneSetting(*snapshot)
 }
 
 func (setting PromptAuditSetting) AppliesToGroup(group string) bool {
-	if setting.Mode == ModeOff {
+	return setting.AppliesToGroupForMode(group, setting.Mode)
+}
+
+func (setting PromptAuditSetting) AppliesToGroupForMode(group, mode string) bool {
+	if mode == ModeOff {
 		return false
 	}
 	if setting.AllGroups {
@@ -160,7 +188,7 @@ func (setting PromptAuditSetting) SanitizedEndpoints() []SanitizedEndpoint {
 			ID: endpoint.ID, Name: endpoint.Name, BaseURL: endpoint.BaseURL,
 			Model: endpoint.Model, TimeoutMS: endpoint.TimeoutMS,
 			InputLimit: endpoint.InputLimit, Concurrency: endpoint.Concurrency,
-			Enabled: endpoint.Enabled, HasToken: endpoint.Token != "",
+			Enabled: endpoint.Enabled, HasToken: endpoint.Token != "", Purpose: endpoint.Purpose, Directions: append([]string(nil), endpoint.Directions...),
 		})
 	}
 	return result
@@ -170,12 +198,33 @@ func (setting *PromptAuditSetting) ValidateConfig() error {
 	if setting == nil {
 		return fmt.Errorf("prompt audit setting is required")
 	}
+	if strings.TrimSpace(setting.Mode) == "" {
+		setting.Mode = ModeOff
+	}
+	if strings.TrimSpace(setting.OutputMode) == "" {
+		setting.OutputMode = ModeOff
+	}
+	if setting.OutputMaxBytes == 0 {
+		setting.OutputMaxBytes = DefaultOutputMaxBytes
+	}
+	if setting.OutputMemoryBytes == 0 {
+		setting.OutputMemoryBytes = DefaultOutputMemoryBytes
+	}
+	if setting.ControversialBlocks == nil {
+		setting.ControversialBlocks = []string{"jailbreak", "pii", "suicide_and_self_harm"}
+	}
 	if err := validateScopePolicies(setting.ScopePolicies); err != nil {
 		return err
 	}
 	mode := strings.ToLower(strings.TrimSpace(setting.Mode))
-	if mode != ModeOff && mode != ModeAsyncAudit && mode != ModeBlocking {
-		return fmt.Errorf("prompt audit mode must be %q, %q, or %q", ModeOff, ModeAsyncAudit, ModeBlocking)
+	outputMode := strings.ToLower(strings.TrimSpace(setting.OutputMode))
+	for label, value := range map[string]string{"input": mode, "output": outputMode} {
+		if value != ModeOff && value != ModeAsyncAudit && value != ModeBlocking {
+			return fmt.Errorf("prompt audit %s mode must be %q, %q, or %q", label, ModeOff, ModeAsyncAudit, ModeBlocking)
+		}
+	}
+	if action := normalizedWordlistAction(setting.ManualWordlistAction); action != WordlistActionBlock && action != WordlistActionReview {
+		return fmt.Errorf("manual wordlist action must be %q or %q", WordlistActionBlock, WordlistActionReview)
 	}
 	if setting.TotalTimeoutMS < 100 || setting.TotalTimeoutMS > 120000 {
 		return fmt.Errorf("prompt audit total timeout must be between 100 and 120000 milliseconds")
@@ -201,6 +250,15 @@ func (setting *PromptAuditSetting) ValidateConfig() error {
 	if setting.EndpointConcurrency < 1 || setting.EndpointConcurrency > 256 {
 		return fmt.Errorf("prompt audit endpoint concurrency must be between 1 and 256")
 	}
+	if setting.OutputMaxBytes < 1024 || setting.OutputMaxBytes > 64*1024*1024 {
+		return fmt.Errorf("prompt audit output limit must be between 1024 and 67108864 bytes")
+	}
+	if setting.OutputMemoryBytes < 1024 || setting.OutputMemoryBytes > setting.OutputMaxBytes {
+		return fmt.Errorf("prompt audit output memory limit must be between 1024 and output_max_bytes")
+	}
+	if utf8.RuneCountInString(setting.ReviewPrompt) > 20000 {
+		return fmt.Errorf("prompt audit review prompt must not exceed 20000 characters")
+	}
 
 	seenCategories := make(map[string]struct{}, len(setting.EnabledCategories))
 	for _, category := range setting.EnabledCategories {
@@ -212,6 +270,17 @@ func (setting *PromptAuditSetting) ValidateConfig() error {
 			return fmt.Errorf("duplicate prompt audit category %q", category)
 		}
 		seenCategories[category] = struct{}{}
+	}
+	seenControversial := make(map[string]struct{}, len(setting.ControversialBlocks))
+	for _, category := range setting.ControversialBlocks {
+		category = strings.ToLower(strings.TrimSpace(category))
+		if _, ok := categorySet[category]; !ok {
+			return fmt.Errorf("unknown controversial block category %q", category)
+		}
+		if _, duplicate := seenControversial[category]; duplicate {
+			return fmt.Errorf("duplicate controversial block category %q", category)
+		}
+		seenControversial[category] = struct{}{}
 	}
 
 	seenGroups := make(map[string]struct{}, len(setting.Groups))
@@ -230,7 +299,7 @@ func (setting *PromptAuditSetting) ValidateConfig() error {
 	}
 
 	seenIDs := make(map[string]struct{}, len(setting.Endpoints))
-	enabledCount := 0
+	inputClassifyCount, outputClassifyCount, reviewCount := 0, 0, 0
 	minimumInputLimit := 0
 	for index, endpoint := range setting.Endpoints {
 		endpoint = normalizeEndpoint(endpoint, index)
@@ -238,6 +307,24 @@ func (setting *PromptAuditSetting) ValidateConfig() error {
 			return fmt.Errorf("duplicate prompt audit endpoint id %q", endpoint.ID)
 		}
 		seenIDs[endpoint.ID] = struct{}{}
+		if endpoint.Purpose != EndpointPurposeClassify && endpoint.Purpose != EndpointPurposeReview {
+			return fmt.Errorf("prompt audit endpoint %q purpose must be %q or %q", endpoint.ID, EndpointPurposeClassify, EndpointPurposeReview)
+		}
+		if endpoint.Purpose == EndpointPurposeClassify {
+			if len(endpoint.Directions) == 0 {
+				return fmt.Errorf("prompt audit endpoint %q requires at least one direction", endpoint.ID)
+			}
+			seenDirections := map[string]bool{}
+			for _, direction := range endpoint.Directions {
+				if direction != "input" && direction != "output" {
+					return fmt.Errorf("prompt audit endpoint %q has invalid direction %q", endpoint.ID, direction)
+				}
+				if seenDirections[direction] {
+					return fmt.Errorf("prompt audit endpoint %q has duplicate direction %q", endpoint.ID, direction)
+				}
+				seenDirections[direction] = true
+			}
+		}
 		if endpoint.TimeoutMS < 100 || endpoint.TimeoutMS > 120000 {
 			return fmt.Errorf("prompt audit endpoint %q timeout must be between 100 and 120000 milliseconds", endpoint.ID)
 		}
@@ -254,14 +341,30 @@ func (setting *PromptAuditSetting) ValidateConfig() error {
 			return fmt.Errorf("prompt audit endpoint %q model is required", endpoint.ID)
 		}
 		if endpoint.Enabled {
-			enabledCount++
-			if minimumInputLimit == 0 || endpoint.InputLimit < minimumInputLimit {
+			if endpoint.Purpose == EndpointPurposeReview {
+				reviewCount++
+			} else {
+				for _, direction := range endpoint.Directions {
+					if direction == "input" {
+						inputClassifyCount++
+					} else if direction == "output" {
+						outputClassifyCount++
+					}
+				}
+			}
+			if endpoint.Purpose == EndpointPurposeClassify && (minimumInputLimit == 0 || endpoint.InputLimit < minimumInputLimit) {
 				minimumInputLimit = endpoint.InputLimit
 			}
 		}
 	}
-	if mode != ModeOff && enabledCount == 0 {
-		return fmt.Errorf("prompt audit requires at least one enabled endpoint")
+	if mode != ModeOff && inputClassifyCount == 0 {
+		return fmt.Errorf("prompt audit requires at least one enabled endpoint for input classification")
+	}
+	if outputMode != ModeOff && outputClassifyCount == 0 {
+		return fmt.Errorf("prompt audit requires at least one enabled endpoint for output classification")
+	}
+	if setting.ReviewEnabled && reviewCount == 0 {
+		return fmt.Errorf("prompt audit review requires at least one enabled review endpoint")
 	}
 	if minimumInputLimit > 0 && setting.ChunkOverlap >= minimumInputLimit {
 		return fmt.Errorf("prompt audit chunk overlap must be smaller than the minimum enabled endpoint input limit")
@@ -279,9 +382,30 @@ func (setting *PromptAuditSetting) ValidateLoadedConfig() error {
 func (setting *PromptAuditSetting) PublishConfig() {
 	snapshot := cloneSetting(*setting)
 	snapshot.Mode = strings.ToLower(strings.TrimSpace(snapshot.Mode))
+	if snapshot.Mode == "" {
+		snapshot.Mode = ModeOff
+	}
+	snapshot.OutputMode = strings.ToLower(strings.TrimSpace(snapshot.OutputMode))
+	if snapshot.OutputMode == "" {
+		snapshot.OutputMode = ModeOff
+	}
+	snapshot.ManualWordlistAction = normalizedWordlistAction(snapshot.ManualWordlistAction)
+	if snapshot.OutputMaxBytes == 0 {
+		snapshot.OutputMaxBytes = DefaultOutputMaxBytes
+	}
+	if snapshot.OutputMemoryBytes == 0 {
+		snapshot.OutputMemoryBytes = DefaultOutputMemoryBytes
+	}
+	if snapshot.ControversialBlocks == nil {
+		snapshot.ControversialBlocks = []string{"jailbreak", "pii", "suicide_and_self_harm"}
+	}
 	for index := range snapshot.EnabledCategories {
 		snapshot.EnabledCategories[index] = strings.ToLower(strings.TrimSpace(snapshot.EnabledCategories[index]))
 	}
+	for index := range snapshot.ControversialBlocks {
+		snapshot.ControversialBlocks[index] = strings.ToLower(strings.TrimSpace(snapshot.ControversialBlocks[index]))
+	}
+	snapshot.ReviewPrompt = strings.TrimSpace(snapshot.ReviewPrompt)
 	for index := range snapshot.Groups {
 		snapshot.Groups[index] = strings.TrimSpace(snapshot.Groups[index])
 	}
@@ -304,6 +428,17 @@ func normalizeEndpoint(endpoint Endpoint, index int) Endpoint {
 	endpoint.BaseURL = strings.TrimRight(strings.TrimSpace(endpoint.BaseURL), "/")
 	endpoint.Token = strings.TrimSpace(endpoint.Token)
 	endpoint.Model = strings.TrimSpace(endpoint.Model)
+	endpoint.Purpose = strings.ToLower(strings.TrimSpace(endpoint.Purpose))
+	if endpoint.Purpose == "" {
+		endpoint.Purpose = EndpointPurposeClassify
+	}
+	if endpoint.Purpose == EndpointPurposeClassify && endpoint.Directions == nil {
+		endpoint.Directions = []string{"input", "output"}
+	}
+	for index := range endpoint.Directions {
+		endpoint.Directions[index] = strings.ToLower(strings.TrimSpace(endpoint.Directions[index]))
+	}
+	sort.Strings(endpoint.Directions)
 	if endpoint.Model == "" {
 		endpoint.Model = DefaultModel
 	}
@@ -317,6 +452,18 @@ func normalizeEndpoint(endpoint Endpoint, index int) Endpoint {
 		endpoint.Concurrency = DefaultEndpointConcurrency
 	}
 	return endpoint
+}
+
+func normalizedWordlistAction(action string) string {
+	action = strings.ToLower(strings.TrimSpace(action))
+	if action == "" {
+		return WordlistActionBlock
+	}
+	return action
+}
+
+func NormalizeWordlistAction(action string) string {
+	return normalizedWordlistAction(action)
 }
 
 func validateBaseURL(value string) error {
@@ -339,8 +486,12 @@ func cloneSetting(setting PromptAuditSetting) PromptAuditSetting {
 		setting.ScopePolicies = setting.EffectiveScopePolicies()
 	}
 	setting.EnabledCategories = append([]string(nil), setting.EnabledCategories...)
+	setting.ControversialBlocks = append([]string(nil), setting.ControversialBlocks...)
 	setting.Groups = append([]string(nil), setting.Groups...)
 	setting.Endpoints = append([]Endpoint(nil), setting.Endpoints...)
+	for index := range setting.Endpoints {
+		setting.Endpoints[index].Directions = append([]string(nil), setting.Endpoints[index].Directions...)
+	}
 	return setting
 }
 
@@ -355,16 +506,28 @@ func settingFingerprint(setting PromptAuditSetting) string {
 	}
 	builder.WriteString(setting.Mode)
 	builder.WriteByte('|')
+	builder.WriteString(setting.OutputMode)
+	builder.WriteByte('|')
+	builder.WriteString(setting.ManualWordlistAction)
+	builder.WriteByte('|')
 	categories := append([]string(nil), setting.EnabledCategories...)
 	sort.Strings(categories)
 	builder.WriteString(strings.Join(categories, ","))
+	builder.WriteByte('|')
+	controversial := append([]string(nil), setting.ControversialBlocks...)
+	sort.Strings(controversial)
+	builder.WriteString(strings.Join(controversial, ","))
+	builder.WriteByte('|')
+	builder.WriteString(strconv.FormatBool(setting.ReviewEnabled))
+	builder.WriteByte('|')
+	builder.WriteString(setting.ReviewPrompt)
 	builder.WriteByte('|')
 	builder.WriteString(strconv.FormatBool(setting.AllGroups))
 	builder.WriteByte('|')
 	groups := append([]string(nil), setting.Groups...)
 	sort.Strings(groups)
 	builder.WriteString(strings.Join(groups, ","))
-	for _, value := range []int{setting.TotalTimeoutMS, setting.ChunkOverlap, setting.CacheTTLSeconds, setting.WorkerCount, setting.MaxAttempts, setting.RetentionDays, setting.GlobalConcurrency, setting.EndpointConcurrency} {
+	for _, value := range []int{setting.TotalTimeoutMS, setting.ChunkOverlap, setting.CacheTTLSeconds, setting.WorkerCount, setting.MaxAttempts, setting.RetentionDays, setting.GlobalConcurrency, setting.EndpointConcurrency, setting.OutputMaxBytes, setting.OutputMemoryBytes} {
 		builder.WriteByte('|')
 		builder.WriteString(strconv.Itoa(value))
 	}
@@ -385,6 +548,10 @@ func settingFingerprint(setting PromptAuditSetting) string {
 		builder.WriteString(strconv.Itoa(endpoint.Concurrency))
 		builder.WriteByte('|')
 		builder.WriteString(strconv.FormatBool(endpoint.Enabled))
+		builder.WriteByte('|')
+		builder.WriteString(endpoint.Purpose)
+		builder.WriteByte('|')
+		builder.WriteString(strings.Join(endpoint.Directions, ","))
 		tokenDigest := sha256.Sum256([]byte(endpoint.Token))
 		builder.WriteByte('|')
 		builder.WriteString(hex.EncodeToString(tokenDigest[:]))

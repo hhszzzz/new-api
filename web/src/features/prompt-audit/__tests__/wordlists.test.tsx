@@ -26,6 +26,7 @@ import {
 } from '@tanstack/react-router'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import type { TFunction } from 'i18next'
 import { useState, type ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
@@ -35,7 +36,7 @@ import { PromptAuditNavigation } from '../components/prompt-audit-navigation'
 import { ScopePoliciesSection } from '../components/scope-policies-section'
 import { WordlistImportDialog } from '../components/wordlist-import-dialog'
 import { WordlistTestCard } from '../components/wordlist-test-card'
-import { defaultPromptScopePolicies } from '../scopes'
+import { defaultPromptScopePolicies, promptWordlistError } from '../scopes'
 import { PromptAuditSettings } from '../settings'
 import type {
   PromptAuditConfig,
@@ -58,6 +59,7 @@ const libraries: PromptWordlist[] = [
     name: 'Custom wordlist',
     source_url: '',
     enabled: true,
+    action: 'block',
     auto_update: false,
     status: 'ready',
     word_count: 1,
@@ -74,6 +76,7 @@ const libraries: PromptWordlist[] = [
     name: 'Library One',
     source_url: 'https://example.com/words.txt',
     enabled: true,
+    action: 'review',
     auto_update: true,
     status: 'ready',
     word_count: 2,
@@ -90,7 +93,12 @@ const config: PromptAuditConfig = {
   scope_policies: defaultPromptScopePolicies(),
   word_filter_enabled: true,
   mode: 'off',
+  output_mode: 'off',
+  manual_wordlist_action: 'block',
   enabled_categories: [],
+  controversial_block_categories: [],
+  review_enabled: false,
+  review_prompt: '',
   all_groups: true,
   groups: [],
   endpoints: [],
@@ -102,6 +110,8 @@ const config: PromptAuditConfig = {
   retention_days: 30,
   global_concurrency: 2,
   endpoint_concurrency: 2,
+  output_max_bytes: 8 * 1024 * 1024,
+  output_memory_bytes: 1024 * 1024,
   config_version: 'before',
 }
 const clients: QueryClient[] = []
@@ -237,7 +247,13 @@ describe('wordlist management', () => {
       source_url: 'https://example.com/words.txt',
       scopes: ['user', 'task'],
       auto_update: true,
+      action: 'review',
     })
+    expect(
+      screen.getByText(
+        'Import limits: each file up to 10 MiB; all downloaded source data up to 30 MiB; up to 100 files and 500,000 unique words.'
+      )
+    ).toBeVisible()
   })
 
   test('a rejected import keeps the draft open and displays the server error', async () => {
@@ -287,14 +303,80 @@ describe('wordlist management', () => {
     ).toHaveValue('private-custom-marker')
   })
 
+  test('editing a remote wordlist saves its name, source, and assignments', async () => {
+    const user = userEvent.setup()
+    renderManagement(<PromptWordlists />)
+
+    await user.click(
+      await screen.findByRole('button', { name: 'Edit: Library One' })
+    )
+    const name = await screen.findByRole('textbox', { name: 'Name' })
+    const source = screen.getByRole('textbox', { name: 'Source URL' })
+    expect(name).toHaveValue('Library One')
+    expect(source).toHaveValue('https://example.com/words.txt')
+
+    await user.clear(name)
+    await user.type(name, 'Updated library')
+    await user.clear(source)
+    await user.type(source, 'https://example.com/replacement.txt')
+    await user.click(screen.getByRole('combobox', { name: 'Apply to' }))
+    await user.click(
+      await screen.findByRole('option', { name: 'System instructions' })
+    )
+    await user.click(
+      await screen.findByRole('option', { name: 'Task and standalone input' })
+    )
+    await user.keyboard('{Escape}')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(apiMock.put).toHaveBeenCalledWith(
+        '/api/prompt-audit/wordlists/1',
+        {
+          name: 'Updated library',
+          source_url: 'https://example.com/replacement.txt',
+          scopes: ['user', 'task'],
+          auto_update: true,
+          action: 'review',
+        }
+      )
+    )
+  })
+
+  test('wordlist limit failures explain the exact exceeded limit', () => {
+    const translate = ((key: string) => key) as TFunction
+    expect(promptWordlistError('file_too_large', translate)).toBe(
+      'Each wordlist file must not exceed 10 MiB.'
+    )
+    expect(promptWordlistError('source_too_large', translate)).toBe(
+      'All data downloaded from one source must not exceed 30 MiB.'
+    )
+    expect(promptWordlistError('too_many_words', translate)).toBe(
+      'A wordlist can contain at most 500,000 unique entries.'
+    )
+    expect(promptWordlistError('too_many_files', translate)).toBe(
+      'A GitHub source can contain at most 100 supported wordlist files.'
+    )
+    expect(promptWordlistError('github_tree_too_large', translate)).toBe(
+      'The GitHub directory is too large to scan. Select a smaller directory or a single file.'
+    )
+  })
+
   test('changing test text or source clears the previous match', async () => {
     const user = userEvent.setup()
     apiMock.post.mockResolvedValue({
       data: {
         success: true,
         data: {
-          match: { id: '1', name: 'Library One', version: 'v1', scope: 'user' },
-          model_audit: false,
+          wordlist: {
+            id: '1',
+            name: 'Library One',
+            version: 'v1',
+            scope: 'user',
+            action: 'review',
+          },
+          decision: 'pass',
+          safety: 'Safe',
         },
       },
     })

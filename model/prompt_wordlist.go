@@ -29,6 +29,7 @@ type PromptWordlist struct {
 	SourceURL      string `json:"source_url" gorm:"type:varchar(2048)"`
 	SourceHash     string `json:"-" gorm:"type:varchar(64);uniqueIndex"`
 	Enabled        bool   `json:"enabled"`
+	Action         string `json:"action" gorm:"type:varchar(16);index"`
 	AutoUpdate     bool   `json:"auto_update"`
 	Status         string `json:"status" gorm:"type:varchar(32);index"`
 	WordCount      int    `json:"word_count"`
@@ -47,6 +48,18 @@ type PromptWordlist struct {
 	LastError      string `json:"last_error" gorm:"type:varchar(256)"`
 	CreatedAt      int64  `json:"created_at"`
 	UpdatedAt      int64  `json:"updated_at"`
+}
+
+func (row *PromptWordlist) BeforeCreate(_ *gorm.DB) error {
+	if strings.TrimSpace(row.Action) == "" {
+		row.Action = prompt_audit_setting.WordlistActionReview
+	} else {
+		row.Action = prompt_audit_setting.NormalizeWordlistAction(row.Action)
+	}
+	if row.Action == prompt_audit_setting.WordlistActionBlock || row.Action == prompt_audit_setting.WordlistActionReview {
+		return nil
+	}
+	return errors.New("invalid wordlist action")
 }
 
 func ListPromptWordlists() ([]PromptWordlist, error) {
@@ -98,13 +111,22 @@ func CreatePromptWordlist(row *PromptWordlist, scopes ...dto.PromptAuditScope) e
 
 type PromptWordlistUpdate struct {
 	Name       *string
+	SourceURL  *string
+	SourceHash *string
+	Scopes     *[]dto.PromptAuditScope
 	Enabled    *bool
+	Action     *string
 	AutoUpdate *bool
 }
 
 // Changing a library fences an in-flight download. It can never undo a disable
 // or overwrite a newer administrator decision when that download completes.
 func UpdatePromptWordlist(id int64, update PromptWordlistUpdate) error {
+	if update.Scopes != nil {
+		return updatePromptWordlistBindings(func(tx *gorm.DB, policies map[dto.PromptAuditScope]prompt_audit_setting.ScopePolicy) error {
+			return updatePromptWordlistRow(tx, id, update, policies)
+		})
+	}
 	optionUpdateMu.Lock()
 	defer optionUpdateMu.Unlock()
 	return DB.Transaction(func(tx *gorm.DB) error {
@@ -112,38 +134,83 @@ func UpdatePromptWordlist(id int64, update PromptWordlistUpdate) error {
 		if _, err := lockPromptScopePolicies(tx); err != nil {
 			return err
 		}
-		var row PromptWordlist
-		if err := lockForUpdate(tx).Omit("content", "source_files").First(&row, id).Error; err != nil {
+		return updatePromptWordlistRow(tx, id, update, nil)
+	})
+}
+
+func updatePromptWordlistRow(tx *gorm.DB, id int64, update PromptWordlistUpdate, policies map[dto.PromptAuditScope]prompt_audit_setting.ScopePolicy) error {
+	var row PromptWordlist
+	if err := lockForUpdate(tx).Omit("content", "source_files").First(&row, id).Error; err != nil {
+		return err
+	}
+	if update.Name != nil {
+		row.Name = *update.Name
+	}
+	sourceChanged := update.SourceURL != nil && *update.SourceURL != row.SourceURL
+	if sourceChanged {
+		if update.SourceHash == nil {
+			return errors.New("wordlist source hash is required")
+		}
+		var count int64
+		if err := tx.Model(&PromptWordlist{}).Where("source_hash = ? AND id <> ?", *update.SourceHash, id).Count(&count).Error; err != nil {
 			return err
 		}
-		if update.Name != nil {
-			row.Name = *update.Name
+		if count > 0 {
+			return ErrPromptWordlistExists
 		}
-		if update.Enabled != nil {
-			row.Enabled = *update.Enabled
+		row.SourceURL, row.SourceHash = *update.SourceURL, *update.SourceHash
+	}
+	if update.Enabled != nil {
+		row.Enabled = *update.Enabled
+	}
+	if update.Action != nil {
+		row.Action = prompt_audit_setting.NormalizeWordlistAction(*update.Action)
+		if row.Action != prompt_audit_setting.WordlistActionBlock && row.Action != prompt_audit_setting.WordlistActionReview {
+			return errors.New("invalid wordlist action")
 		}
-		if update.AutoUpdate != nil {
-			row.AutoUpdate = *update.AutoUpdate
-		}
-		status := row.Status
-		if status == "updating" {
-			status = "pending"
-			if row.ContentHash != "" {
-				status = "ready"
+	}
+	if update.AutoUpdate != nil {
+		row.AutoUpdate = *update.AutoUpdate
+	}
+	if update.Scopes != nil {
+		libraryID := strconv.FormatInt(id, 10)
+		for _, scope := range dto.PromptAuditScopes() {
+			policy := policies[scope]
+			selected := slices.Contains(*update.Scopes, scope)
+			assigned := slices.Contains(policy.LibraryIDs, libraryID)
+			if selected && !assigned {
+				policy.LibraryIDs = append(policy.LibraryIDs, libraryID)
+			} else if !selected && assigned {
+				policy.LibraryIDs = slices.DeleteFunc(policy.LibraryIDs, func(value string) bool { return value == libraryID })
 			}
+			policies[scope] = policy
 		}
-		requested := row.RequestedAt
-		if !row.Enabled {
-			requested = 0
-		} else if row.ContentHash == "" || row.Status == "updating" || row.Status == "pending" {
-			requested = common.GetTimestamp()
+	}
+	status := row.Status
+	if sourceChanged {
+		status = "pending"
+	} else if status == "updating" {
+		status = "pending"
+		if row.ContentHash != "" {
+			status = "ready"
 		}
-		return tx.Model(&row).Updates(map[string]any{
-			"name": row.Name, "enabled": row.Enabled, "auto_update": row.AutoUpdate,
-			"generation": row.Generation + 1, "lease_owner": "", "lease_until": 0,
-			"requested_at": requested, "status": status, "updated_at": common.GetTimestamp(),
-		}).Error
-	})
+	}
+	requested := row.RequestedAt
+	if !row.Enabled {
+		requested = 0
+	} else if sourceChanged || row.ContentHash == "" || row.Status == "updating" || row.Status == "pending" {
+		requested = common.GetTimestamp()
+	}
+	values := map[string]any{
+		"name": row.Name, "enabled": row.Enabled, "action": row.Action, "auto_update": row.AutoUpdate,
+		"generation": row.Generation + 1, "lease_owner": "", "lease_until": 0,
+		"requested_at": requested, "status": status, "updated_at": common.GetTimestamp(),
+	}
+	if sourceChanged {
+		values["source_url"], values["source_hash"] = row.SourceURL, row.SourceHash
+		values["source_revision"], values["etag"], values["next_sync_at"], values["last_error"] = "", "", 0, ""
+	}
+	return tx.Model(&row).Updates(values).Error
 }
 
 func RequestPromptWordlistSync(id int64) error {

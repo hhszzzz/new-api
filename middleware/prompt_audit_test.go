@@ -115,7 +115,8 @@ func TestPromptAuditSensitiveWordsRunBeforeGuardAndChannelSelection(t *testing.T
 	require.NoError(t, db.First(&audit).Error)
 	assert.Equal(t, "wordlist", audit.InspectionType)
 	assert.Equal(t, "manual", audit.WordlistID)
-	assert.Empty(t, audit.FullPrompt)
+	assert.Equal(t, []byte("blocked_word"), audit.FullPrompt)
+	assert.Nil(t, audit.ToResponse(false).FullPrompt)
 	_, channelSelected := common.GetContextKey(c, constant.ContextKeyChannelId)
 	assert.False(t, channelSelected)
 }

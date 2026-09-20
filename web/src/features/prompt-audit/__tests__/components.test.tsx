@@ -31,11 +31,13 @@ const {
   getPromptAuditMock,
   previewPromptAuditDeleteMock,
   retryPromptAuditMock,
+  reviewPromptAuditMock,
 } = vi.hoisted(() => ({
   deletePromptAuditsMock: vi.fn(),
   getPromptAuditMock: vi.fn(),
   previewPromptAuditDeleteMock: vi.fn(),
   retryPromptAuditMock: vi.fn(),
+  reviewPromptAuditMock: vi.fn(),
 }))
 
 vi.mock('../api', () => ({
@@ -43,6 +45,7 @@ vi.mock('../api', () => ({
   getPromptAudit: getPromptAuditMock,
   previewPromptAuditDelete: previewPromptAuditDeleteMock,
   retryPromptAudit: retryPromptAuditMock,
+  reviewPromptAudit: reviewPromptAuditMock,
 }))
 
 vi.mock('react-i18next', () => ({
@@ -69,6 +72,10 @@ const EVENT: PromptAuditEvent = {
   protocol: 'openai_responses',
   model: 'gpt-test',
   stage: 'responses_websocket',
+  direction: 'input',
+  generation_id: '',
+  delivery_status: 'not_applicable',
+  coverage_complete: true,
   config_version: 'config-v1',
   execution_mode: 'blocking',
   status: 'done',
@@ -81,11 +88,23 @@ const EVENT: PromptAuditEvent = {
   full_prompt_truncated: false,
   redacted_preview: 'redacted-preview',
   safety: 'Safe',
+  refusal: '',
   decision: 'pass',
+  action: 'allow',
   would_action: 'pass',
   categories: [],
   unknown_categories: [],
   endpoint_id: 'guard-primary',
+  review_status: '',
+  review_decision: '',
+  review_codes: [],
+  review_reason: '',
+  reviewer_endpoint_id: '',
+  human_review: '',
+  human_review_reason: '',
+  reviewed_by: 0,
+  reviewer_name: '',
+  reviewed_at: 0,
   latency_ms: 8,
   attempts: 1,
   max_attempts: 4,

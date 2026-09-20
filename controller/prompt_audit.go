@@ -2,7 +2,9 @@ package controller
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -19,34 +21,43 @@ import (
 )
 
 type promptAuditEndpointUpdate struct {
-	ID          string  `json:"id"`
-	OriginalID  string  `json:"original_id"`
-	Name        string  `json:"name"`
-	BaseURL     string  `json:"base_url"`
-	Token       *string `json:"token"`
-	Model       string  `json:"model"`
-	TimeoutMS   int     `json:"timeout_ms"`
-	InputLimit  int     `json:"input_limit"`
-	Concurrency int     `json:"concurrency"`
-	Enabled     bool    `json:"enabled"`
+	ID          string   `json:"id"`
+	OriginalID  string   `json:"original_id"`
+	Name        string   `json:"name"`
+	BaseURL     string   `json:"base_url"`
+	Token       *string  `json:"token"`
+	Model       string   `json:"model"`
+	TimeoutMS   int      `json:"timeout_ms"`
+	InputLimit  int      `json:"input_limit"`
+	Concurrency int      `json:"concurrency"`
+	Enabled     bool     `json:"enabled"`
+	Purpose     string   `json:"purpose"`
+	Directions  []string `json:"directions"`
 }
 
 type promptAuditConfigUpdate struct {
-	ScopePolicies       *map[dto.PromptAuditScope]prompt_audit_setting.ScopePolicy `json:"scope_policies"`
-	WordFilterEnabled   *bool                                                      `json:"word_filter_enabled"`
-	Mode                *string                                                    `json:"mode"`
-	EnabledCategories   *[]string                                                  `json:"enabled_categories"`
-	AllGroups           *bool                                                      `json:"all_groups"`
-	Groups              *[]string                                                  `json:"groups"`
-	Endpoints           *[]promptAuditEndpointUpdate                               `json:"endpoints"`
-	TotalTimeoutMS      *int                                                       `json:"total_timeout_ms"`
-	ChunkOverlap        *int                                                       `json:"chunk_overlap"`
-	CacheTTLSeconds     *int                                                       `json:"cache_ttl_seconds"`
-	WorkerCount         *int                                                       `json:"worker_count"`
-	MaxAttempts         *int                                                       `json:"max_attempts"`
-	RetentionDays       *int                                                       `json:"retention_days"`
-	GlobalConcurrency   *int                                                       `json:"global_concurrency"`
-	EndpointConcurrency *int                                                       `json:"endpoint_concurrency"`
+	ScopePolicies        *map[dto.PromptAuditScope]prompt_audit_setting.ScopePolicy `json:"scope_policies"`
+	WordFilterEnabled    *bool                                                      `json:"word_filter_enabled"`
+	Mode                 *string                                                    `json:"mode"`
+	OutputMode           *string                                                    `json:"output_mode"`
+	ManualWordlistAction *string                                                    `json:"manual_wordlist_action"`
+	EnabledCategories    *[]string                                                  `json:"enabled_categories"`
+	ControversialBlocks  *[]string                                                  `json:"controversial_block_categories"`
+	ReviewEnabled        *bool                                                      `json:"review_enabled"`
+	ReviewPrompt         *string                                                    `json:"review_prompt"`
+	AllGroups            *bool                                                      `json:"all_groups"`
+	Groups               *[]string                                                  `json:"groups"`
+	Endpoints            *[]promptAuditEndpointUpdate                               `json:"endpoints"`
+	TotalTimeoutMS       *int                                                       `json:"total_timeout_ms"`
+	ChunkOverlap         *int                                                       `json:"chunk_overlap"`
+	CacheTTLSeconds      *int                                                       `json:"cache_ttl_seconds"`
+	WorkerCount          *int                                                       `json:"worker_count"`
+	MaxAttempts          *int                                                       `json:"max_attempts"`
+	RetentionDays        *int                                                       `json:"retention_days"`
+	GlobalConcurrency    *int                                                       `json:"global_concurrency"`
+	EndpointConcurrency  *int                                                       `json:"endpoint_concurrency"`
+	OutputMaxBytes       *int                                                       `json:"output_max_bytes"`
+	OutputMemoryBytes    *int                                                       `json:"output_memory_bytes"`
 }
 
 type promptAuditFilterRequest struct {
@@ -61,6 +72,8 @@ type promptAuditFilterRequest struct {
 	EndpointID string  `json:"endpoint_id"`
 	PromptHash string  `json:"prompt_hash"`
 	RequestID  string  `json:"request_id"`
+	Direction  string  `json:"direction"`
+	Detector   string  `json:"detector"`
 	StartTime  int64   `json:"start_time"`
 	EndTime    int64   `json:"end_time"`
 	MaxID      int64   `json:"max_id"`
@@ -84,8 +97,10 @@ func UpdatePromptAuditConfig(c *gin.Context) {
 		return
 	}
 	current := prompt_audit_setting.GetSetting()
+	proposed := current
 	values := map[string]string{}
 	if update.ScopePolicies != nil {
+		proposed.ScopePolicies = *update.ScopePolicies
 		rows, err := model.ListPromptWordlists()
 		if err != nil {
 			common.ApiError(c, errors.New("wordlists are unavailable"))
@@ -116,6 +131,14 @@ func UpdatePromptAuditConfig(c *gin.Context) {
 	}
 	if update.Mode != nil {
 		values["prompt_audit.mode"] = *update.Mode
+		proposed.Mode = *update.Mode
+	}
+	if update.OutputMode != nil {
+		values["prompt_audit.output_mode"] = *update.OutputMode
+	}
+	if update.ManualWordlistAction != nil {
+		values["prompt_audit.manual_wordlist_action"] = *update.ManualWordlistAction
+		proposed.ManualWordlistAction = *update.ManualWordlistAction
 	}
 	if update.EnabledCategories != nil {
 		data, err := common.Marshal(*update.EnabledCategories)
@@ -124,6 +147,20 @@ func UpdatePromptAuditConfig(c *gin.Context) {
 			return
 		}
 		values["prompt_audit.enabled_categories"] = string(data)
+	}
+	if update.ControversialBlocks != nil {
+		data, err := common.Marshal(*update.ControversialBlocks)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		values["prompt_audit.controversial_block_categories"] = string(data)
+	}
+	if update.ReviewEnabled != nil {
+		values["prompt_audit.review_enabled"] = strconv.FormatBool(*update.ReviewEnabled)
+	}
+	if update.ReviewPrompt != nil {
+		values["prompt_audit.review_prompt"] = *update.ReviewPrompt
 	}
 	if update.AllGroups != nil {
 		values["prompt_audit.all_groups"] = strconv.FormatBool(*update.AllGroups)
@@ -138,6 +175,7 @@ func UpdatePromptAuditConfig(c *gin.Context) {
 	}
 	if update.Endpoints != nil {
 		endpoints := mergePromptAuditEndpointUpdates(current.Endpoints, *update.Endpoints)
+		proposed.Endpoints = endpoints
 		data, err := common.Marshal(endpoints)
 		if err != nil {
 			common.ApiError(c, err)
@@ -153,6 +191,12 @@ func UpdatePromptAuditConfig(c *gin.Context) {
 	promptAuditSetInt(values, "prompt_audit.retention_days", update.RetentionDays)
 	promptAuditSetInt(values, "prompt_audit.global_concurrency", update.GlobalConcurrency)
 	promptAuditSetInt(values, "prompt_audit.endpoint_concurrency", update.EndpointConcurrency)
+	promptAuditSetInt(values, "prompt_audit.output_max_bytes", update.OutputMaxBytes)
+	promptAuditSetInt(values, "prompt_audit.output_memory_bytes", update.OutputMemoryBytes)
+	if err := validatePromptWordlistReviewBindings(proposed); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
+		return
+	}
 	if len(values) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "no prompt audit fields were provided"})
 		return
@@ -163,6 +207,38 @@ func UpdatePromptAuditConfig(c *gin.Context) {
 	}
 	setting := prompt_audit_setting.GetSetting()
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": promptAuditConfigResponse(setting)})
+}
+
+func validatePromptWordlistReviewBindings(configured prompt_audit_setting.PromptAuditSetting) error {
+	rows, err := model.ListPromptWordlists()
+	if err != nil {
+		return errors.New("wordlists are unavailable")
+	}
+	actions := map[string]string{
+		prompt_audit_setting.ManualWordlistID: prompt_audit_setting.NormalizeWordlistAction(configured.ManualWordlistAction),
+	}
+	for _, row := range rows {
+		actions[strconv.FormatInt(row.ID, 10)] = prompt_audit_setting.NormalizeWordlistAction(row.Action)
+	}
+	hasClassifier := false
+	for _, endpoint := range configured.Endpoints {
+		if endpoint.Enabled && endpoint.Purpose != prompt_audit_setting.EndpointPurposeReview && (len(endpoint.Directions) == 0 || slices.Contains(endpoint.Directions, "input")) {
+			hasClassifier = true
+			break
+		}
+	}
+	for _, scope := range dto.PromptAuditScopes() {
+		policy := configured.PolicyFor(scope)
+		for _, id := range policy.LibraryIDs {
+			if actions[id] != prompt_audit_setting.WordlistActionReview {
+				continue
+			}
+			if configured.Mode == prompt_audit_setting.ModeOff || !policy.ModelAudit || !hasClassifier {
+				return fmt.Errorf("review wordlist %q requires model audit for source %q and an enabled classification node", id, scope)
+			}
+		}
+	}
+	return nil
 }
 
 func GetPromptAuditCategories(c *gin.Context) {
@@ -194,8 +270,54 @@ func TestPromptAuditNode(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true, "message": "",
-		"data": gin.H{"endpoint_id": selected.ID, "latency_ms": time.Since(startedAt).Milliseconds(), "safety": result.Safety},
+		"data": gin.H{"endpoint_id": selected.ID, "purpose": selected.Purpose, "latency_ms": time.Since(startedAt).Milliseconds(), "safety": result.Safety, "decision": result.ReviewDecision},
 	})
+}
+
+func TestPromptAuditPolicy(c *gin.Context) {
+	var request struct {
+		Direction string                   `json:"direction"`
+		Segments  []dto.PromptAuditSegment `json:"segments"`
+		Output    string                   `json:"output"`
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 2*1024*1024)
+	if err := common.DecodeJson(c.Request.Body, &request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid prompt audit test"})
+		return
+	}
+	result, err := service.TestPromptAuditPolicy(c.Request.Context(), request.Direction, dto.PromptAuditSnapshot{Segments: request.Segments}, request.Output)
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "message": err.Error(), "data": result})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": result})
+}
+
+func ReviewPromptAudit(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid prompt audit id"})
+		return
+	}
+	var request struct {
+		Status string `json:"status"`
+		Reason string `json:"reason"`
+	}
+	if err := common.DecodeJson(http.MaxBytesReader(c.Writer, c.Request.Body, 4096), &request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid prompt audit review"})
+		return
+	}
+	if err := model.ReviewPromptAudit(id, c.GetInt("id"), c.GetString("username"), request.Status, request.Reason); err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, model.ErrPromptAuditNotFound) {
+			status = http.StatusNotFound
+		} else if errors.Is(err, model.ErrPromptAuditNotReviewable) {
+			status = http.StatusConflict
+		}
+		c.JSON(status, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
 }
 
 func ListPromptAudits(c *gin.Context) {
@@ -326,13 +448,17 @@ func DeletePromptAudits(c *gin.Context) {
 func promptAuditConfigResponse(setting prompt_audit_setting.PromptAuditSetting) gin.H {
 	return gin.H{
 		"scope_policies": setting.EffectiveScopePolicies(), "word_filter_enabled": globalsetting.ShouldCheckPromptSensitive(),
-		"mode": setting.Mode, "enabled_categories": append([]string{}, setting.EnabledCategories...),
+		"mode": setting.Mode, "output_mode": setting.OutputMode, "manual_wordlist_action": setting.ManualWordlistAction,
+		"enabled_categories":             append([]string{}, setting.EnabledCategories...),
+		"controversial_block_categories": append([]string{}, setting.ControversialBlocks...),
+		"review_enabled":                 setting.ReviewEnabled, "review_prompt": setting.ReviewPrompt,
 		"all_groups": setting.AllGroups, "groups": append([]string{}, setting.Groups...),
 		"endpoints": setting.SanitizedEndpoints(), "total_timeout_ms": setting.TotalTimeoutMS,
 		"chunk_overlap": setting.ChunkOverlap, "cache_ttl_seconds": setting.CacheTTLSeconds,
 		"worker_count": setting.WorkerCount, "max_attempts": setting.MaxAttempts,
 		"retention_days": setting.RetentionDays, "global_concurrency": setting.GlobalConcurrency,
-		"endpoint_concurrency": setting.EndpointConcurrency, "config_version": setting.ConfigVersion,
+		"endpoint_concurrency": setting.EndpointConcurrency, "output_max_bytes": setting.OutputMaxBytes,
+		"output_memory_bytes": setting.OutputMemoryBytes, "config_version": setting.ConfigVersion,
 	}
 }
 
@@ -361,7 +487,7 @@ func mergePromptAuditEndpointUpdates(current []prompt_audit_setting.Endpoint, up
 		endpoints = append(endpoints, prompt_audit_setting.Endpoint{
 			ID: endpoint.ID, Name: endpoint.Name, BaseURL: endpoint.BaseURL, Token: token,
 			Model: endpoint.Model, TimeoutMS: endpoint.TimeoutMS, InputLimit: endpoint.InputLimit,
-			Concurrency: endpoint.Concurrency, Enabled: endpoint.Enabled,
+			Concurrency: endpoint.Concurrency, Enabled: endpoint.Enabled, Purpose: endpoint.Purpose, Directions: append([]string(nil), endpoint.Directions...),
 		})
 	}
 	return endpoints
@@ -383,6 +509,7 @@ func promptAuditFilterFromQuery(c *gin.Context) model.PromptAuditFilter {
 		Group: strings.TrimSpace(c.Query("group")), Protocol: strings.TrimSpace(c.Query("protocol")),
 		Model: strings.TrimSpace(c.Query("model")), EndpointID: strings.TrimSpace(c.Query("endpoint_id")),
 		PromptHash: strings.TrimSpace(c.Query("prompt_hash")), RequestID: strings.TrimSpace(c.Query("request_id")),
+		Direction: strings.TrimSpace(c.Query("direction")), Detector: strings.TrimSpace(c.Query("detector")),
 		StartTime: startTime, EndTime: endTime,
 	}
 }
@@ -394,6 +521,7 @@ func (request promptAuditFilterRequest) toModel() model.PromptAuditFilter {
 		UserID: request.UserID, Group: strings.TrimSpace(request.Group), Protocol: strings.TrimSpace(request.Protocol),
 		Model: strings.TrimSpace(request.Model), EndpointID: strings.TrimSpace(request.EndpointID),
 		PromptHash: strings.TrimSpace(request.PromptHash), RequestID: strings.TrimSpace(request.RequestID),
+		Direction: strings.TrimSpace(request.Direction), Detector: strings.TrimSpace(request.Detector),
 		StartTime: request.StartTime, EndTime: request.EndTime, MaxID: request.MaxID,
 	}
 }

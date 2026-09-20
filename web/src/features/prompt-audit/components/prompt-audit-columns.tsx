@@ -117,6 +117,11 @@ export function usePromptAuditColumns(options: {
                     ? t('Wordlist')
                     : t('Model audit')}
                 </Badge>
+                <Badge variant='outline'>
+                  {event.direction === 'output'
+                    ? t('Generated output')
+                    : t('Request input')}
+                </Badge>
               </div>
               {event.categories.length > 0 && (
                 <p className='text-muted-foreground mt-1 max-w-48 truncate text-xs'>
@@ -160,7 +165,8 @@ export function usePromptAuditColumns(options: {
                 {event.model || '—'}
               </div>
               <div className='text-muted-foreground max-w-56 truncate text-xs'>
-                {event.protocol} · {event.endpoint_id || '—'}
+                {event.protocol} ·{' '}
+                {event.delivery_status || event.endpoint_id || '—'}
               </div>
               <div className='text-muted-foreground max-w-56 truncate font-mono text-[11px]'>
                 {event.request_id || event.prompt_hash}

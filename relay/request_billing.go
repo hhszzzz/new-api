@@ -3,6 +3,7 @@ package relay
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -39,12 +40,17 @@ func PrepareRequestBilling(c *gin.Context, info *relaycommon.RelayInfo) *hosttyp
 	}
 
 	if !common.GetContextKeyBool(c, constant.ContextKeyPromptAuditChecked) {
+		coverageIncomplete := false
+		if responses, ok := info.Request.(*dto.OpenAIResponsesRequest); ok {
+			coverageIncomplete = strings.TrimSpace(responses.PreviousResponseID) != ""
+		}
 		result, apiErr := service.InspectPrompt(c, service.PromptAuditRequest{
-			Snapshot: dto.PromptAuditSnapshotOf(info.Request),
-			Protocol: string(info.RelayFormat),
-			Model:    info.OriginModelName,
-			Stage:    "http",
-			Stream:   info.IsStream,
+			Snapshot:           dto.PromptAuditSnapshotOf(info.Request),
+			Protocol:           string(info.RelayFormat),
+			Model:              info.OriginModelName,
+			Stage:              "http",
+			Stream:             info.IsStream,
+			CoverageIncomplete: coverageIncomplete,
 		})
 		if apiErr != nil {
 			service.RecordPromptAuditError(c, result, apiErr, info.OriginModelName, info.IsStream)

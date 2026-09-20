@@ -34,7 +34,12 @@ import type { PromptAuditConfigUpdate } from '../types'
 
 const VALID_CONFIG: PromptAuditConfigUpdate = {
   mode: 'blocking',
+  output_mode: 'off',
+  manual_wordlist_action: 'block',
   enabled_categories: ['violent'],
+  controversial_block_categories: [],
+  review_enabled: false,
+  review_prompt: '',
   all_groups: true,
   groups: [],
   endpoints: [
@@ -47,6 +52,8 @@ const VALID_CONFIG: PromptAuditConfigUpdate = {
       input_limit: 4000,
       concurrency: 16,
       enabled: true,
+      purpose: 'classify',
+      directions: ['input', 'output'],
     },
   ],
   total_timeout_ms: 10000,
@@ -57,6 +64,8 @@ const VALID_CONFIG: PromptAuditConfigUpdate = {
   retention_days: 30,
   global_concurrency: 64,
   endpoint_concurrency: 16,
+  output_max_bytes: 8 * 1024 * 1024,
+  output_memory_bytes: 1024 * 1024,
 }
 
 describe('prompt audit management helpers', () => {

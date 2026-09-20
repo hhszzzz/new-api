@@ -42,7 +42,7 @@ export function promptAuditScopeLabel(
     case 'user':
       return t('User messages')
     case 'assistant':
-      return t('Assistant replies')
+      return t('Historical assistant messages')
     case 'tool_call':
       return t('Tool call arguments')
     case 'tool_result':
@@ -82,11 +82,19 @@ export function promptWordlistError(code: string, t: TFunction): string {
     case 'invalid_word':
       return t('Unsupported wordlist format or invalid entry.')
     case 'file_too_large':
+      return t('Each wordlist file must not exceed 10 MiB.')
     case 'source_too_large':
+      return t('All data downloaded from one source must not exceed 30 MiB.')
     case 'too_many_words':
+      return t('A wordlist can contain at most 500,000 unique entries.')
     case 'too_many_files':
+      return t(
+        'A GitHub source can contain at most 100 supported wordlist files.'
+      )
     case 'github_tree_too_large':
-      return t('Source exceeds import limits. Use a smaller directory or file.')
+      return t(
+        'The GitHub directory is too large to scan. Select a smaller directory or a single file.'
+      )
     default:
       return t('The source could not be downloaded or processed.')
   }

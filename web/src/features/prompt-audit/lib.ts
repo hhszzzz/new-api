@@ -38,6 +38,8 @@ export const EMPTY_PROMPT_AUDIT_FILTERS: PromptAuditFilters = {
   endpoint_id: '',
   prompt_hash: '',
   request_id: '',
+  direction: '',
+  detector: '',
   start_time: '',
   end_time: '',
 }
@@ -73,6 +75,8 @@ export function promptAuditFilterParams(
     endpoint_id: filters.endpoint_id.trim() || undefined,
     prompt_hash: filters.prompt_hash.trim() || undefined,
     request_id: filters.request_id.trim() || undefined,
+    direction: filters.direction || undefined,
+    detector: filters.detector || undefined,
     start_time:
       startTime !== undefined && Number.isFinite(startTime)
         ? startTime
@@ -152,6 +156,8 @@ export function promptAuditEndpointUpdate(
     input_limit: endpoint.input_limit,
     concurrency: endpoint.concurrency,
     enabled: endpoint.enabled,
+    purpose: endpoint.purpose,
+    directions: [...endpoint.directions],
   }
   if (endpoint.original_id) update.original_id = endpoint.original_id
   if (endpoint.token_changed) update.token = endpoint.token
@@ -161,13 +167,32 @@ export function promptAuditEndpointUpdate(
 export function validatePromptAuditConfig(
   config: PromptAuditConfigUpdate
 ): string | null {
-  if (config.mode !== 'off' && !config.endpoints.some((node) => node.enabled)) {
+  if (
+    config.mode !== 'off' &&
+    !config.endpoints.some(
+      (node) =>
+        node.enabled &&
+        node.purpose === 'classify' &&
+        node.directions.includes('input')
+    )
+  ) {
     return 'At least one enabled audit node is required.'
+  }
+  if (
+    config.output_mode !== 'off' &&
+    !config.endpoints.some(
+      (node) =>
+        node.enabled &&
+        node.purpose === 'classify' &&
+        node.directions.includes('output')
+    )
+  ) {
+    return 'At least one enabled output audit node is required.'
   }
   if (
     !config.all_groups &&
     config.groups.length === 0 &&
-    config.mode !== 'off'
+    (config.mode !== 'off' || config.output_mode !== 'off')
   ) {
     return 'Select at least one group or enable all groups.'
   }
@@ -180,6 +205,8 @@ export function validatePromptAuditConfig(
     [config.retention_days, 0, 3650],
     [config.global_concurrency, 1, 1024],
     [config.endpoint_concurrency, 1, 256],
+    [config.output_max_bytes, 1024, 64 * 1024 * 1024],
+    [config.output_memory_bytes, 1024, config.output_max_bytes],
   ]
   if (
     numericRanges.some(
@@ -197,6 +224,12 @@ export function validatePromptAuditConfig(
     }
     ids.add(endpoint.id)
     if (!endpoint.model) return 'Audit node models are required.'
+    if (endpoint.purpose !== 'classify' && endpoint.purpose !== 'review') {
+      return 'Select a valid audit node purpose.'
+    }
+    if (endpoint.purpose === 'classify' && endpoint.directions.length === 0) {
+      return 'Select at least one audit direction for every classification node.'
+    }
     if (
       !Number.isInteger(endpoint.timeout_ms) ||
       endpoint.timeout_ms < 100 ||
@@ -224,8 +257,16 @@ export function validatePromptAuditConfig(
     } catch {
       return 'Audit node URLs must be valid absolute HTTP(S) URLs.'
     }
-    if (endpoint.enabled) {
+    if (endpoint.enabled && endpoint.purpose === 'classify') {
       minimumInputLimit = Math.min(minimumInputLimit, endpoint.input_limit)
+    }
+    if (
+      config.review_enabled &&
+      !config.endpoints.some(
+        (node) => node.enabled && node.purpose === 'review'
+      )
+    ) {
+      return 'At least one enabled gray-area reviewer node is required.'
     }
   }
   if (config.chunk_overlap >= minimumInputLimit) {

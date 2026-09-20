@@ -32,6 +32,7 @@ type promptWordlistRuntime struct {
 	TargetVersion string
 	Generation    int64
 	Enabled       bool
+	Action        string
 	Matcher       *goahocorasick.Machine
 }
 
@@ -76,7 +77,7 @@ func RefreshPromptWordlists() error {
 	next := &promptWordlistSnapshot{Libraries: make(map[string]promptWordlistRuntime, len(rows))}
 	for _, row := range rows {
 		id := strconv.FormatInt(row.ID, 10)
-		entry := promptWordlistRuntime{ID: id, Name: row.Name, TargetVersion: row.ContentHash, Generation: row.Generation, Enabled: row.Enabled && row.ContentHash != ""}
+		entry := promptWordlistRuntime{ID: id, Name: row.Name, TargetVersion: row.ContentHash, Generation: row.Generation, Enabled: row.Enabled && row.ContentHash != "", Action: prompt_audit_setting.NormalizeWordlistAction(row.Action)}
 		if previous != nil {
 			old := previous.Libraries[id]
 			entry.Matcher, entry.Version = old.Matcher, old.Version
@@ -136,6 +137,7 @@ type PromptWordlistMatch struct {
 	Name    string               `json:"name"`
 	Version string               `json:"version"`
 	Scope   dto.PromptAuditScope `json:"scope"`
+	Action  string               `json:"action"`
 }
 
 func matchPromptWordlists(snapshot dto.PromptAuditSnapshot, configured prompt_audit_setting.PromptAuditSetting) (*PromptWordlistMatch, error) {
@@ -143,6 +145,7 @@ func matchPromptWordlists(snapshot dto.PromptAuditSnapshot, configured prompt_au
 		return nil, nil
 	}
 	libraries := promptWordlists.Load()
+	var reviewMatch *PromptWordlistMatch
 	for _, segment := range snapshot.PrioritizedSegments() {
 		scope := segment.SourceScope()
 		for _, id := range configured.PolicyFor(scope).LibraryIDs {
@@ -151,7 +154,7 @@ func matchPromptWordlists(snapshot dto.PromptAuditSnapshot, configured prompt_au
 				if !configured.ManualWordlistActive() {
 					continue
 				}
-				entry = promptWordlistRuntime{ID: id, Name: "Custom wordlist", Version: strconv.FormatUint(setting.SensitiveWordsVersion(), 10), Enabled: true, Matcher: currentManualWordMatcher()}
+				entry = promptWordlistRuntime{ID: id, Name: "Custom wordlist", Version: strconv.FormatUint(setting.SensitiveWordsVersion(), 10), Enabled: true, Action: prompt_audit_setting.NormalizeWordlistAction(configured.ManualWordlistAction), Matcher: currentManualWordMatcher()}
 			} else if libraries == nil {
 				return nil, errors.New("wordlists are not initialized")
 			} else {
@@ -169,11 +172,17 @@ func matchPromptWordlists(snapshot dto.PromptAuditSnapshot, configured prompt_au
 				return nil, errors.New("wordlist is unavailable")
 			}
 			if len(sensitiveMachineMatches(segment.Text, entry.Matcher, true)) > 0 {
-				return &PromptWordlistMatch{ID: id, Name: entry.Name, Version: entry.Version, Scope: scope}, nil
+				match := &PromptWordlistMatch{ID: id, Name: entry.Name, Version: entry.Version, Scope: scope, Action: prompt_audit_setting.NormalizeWordlistAction(entry.Action)}
+				if match.Action == prompt_audit_setting.WordlistActionBlock {
+					return match, nil
+				}
+				if reviewMatch == nil {
+					reviewMatch = match
+				}
 			}
 		}
 	}
-	return nil, nil
+	return reviewMatch, nil
 }
 
 // TestPromptWordlists uses exactly the active enforcement rules. It does not
@@ -187,28 +196,37 @@ func TestPromptWordlists(scope dto.PromptAuditScope, text string) (*PromptWordli
 func InspectPrompt(c *gin.Context, request PromptAuditRequest) (PromptAuditResult, *hosttypes.NewAPIError) {
 	configured := prompt_audit_setting.GetSetting()
 	match, err := matchPromptWordlists(request.Snapshot, configured)
-	if match == nil && err == nil {
-		return checkPromptAuditWithSetting(c, request, configured)
+	if err == nil && (match == nil || match.Action == prompt_audit_setting.WordlistActionReview) {
+		request.Wordlist = match
+		result, apiErr := checkPromptAuditWithSetting(c, request, configured)
+		return result, apiErr
 	}
 	text := request.Snapshot.Text()
 	digest := sha256.Sum256([]byte(text))
 	result := PromptAuditResult{
 		Enabled: true, Reviewed: err == nil, Blocked: true, Mode: prompt_audit_setting.ModeBlocking,
+		Direction: PromptAuditDirectionInput, CoverageComplete: true,
 		Decision: PromptAuditDecisionBlock, Outcome: PromptAuditDecisionBlock, ConfigVersion: configured.ConfigVersion,
-		InputChars: utf8.RuneCountInString(text), InputSHA256: hex.EncodeToString(digest[:]), SegmentCount: len(request.Snapshot.Segments),
+		ActualAction: "block",
+		InputChars:   utf8.RuneCountInString(text), InputSHA256: hex.EncodeToString(digest[:]), SegmentCount: len(request.Snapshot.Segments),
 		InspectionType: "wordlist", Wordlist: match,
 	}
 	code, status, message := hosttypes.ErrorCodeSensitiveWordsDetected, http.StatusBadRequest, "sensitive words detected"
+	auditStatus := model.PromptAuditStatusDone
 	if err != nil {
 		result.Decision, result.Outcome, result.FailureKind = PromptAuditDecisionUnavailable, PromptAuditDecisionUnavailable, "wordlist_unavailable"
+		result.ActualAction = PromptAuditActionUnavailable
+		auditStatus = model.PromptAuditStatusFailed
 		code, status, message = hosttypes.ErrorCodePromptAuditUnavailable, http.StatusServiceUnavailable, "prompt inspection is unavailable"
 	}
 	audit := &model.PromptAudit{
 		RequestID: resultRequestID(c), UserID: contextInt(c, "id"), TokenID: contextInt(c, "token_id"), TokenName: contextString(c, "token_name"),
 		GroupName: effectivePromptAuditGroup(c), Protocol: request.Protocol, ModelName: request.Model, Stage: normalizedPromptAuditStage(request.Stage),
-		ConfigVersion: configured.ConfigVersion, ExecutionMode: result.Mode, Status: model.PromptAuditStatusDone,
+		Direction: PromptAuditDirectionInput, CoverageComplete: true,
+		ConfigVersion: configured.ConfigVersion, ExecutionMode: result.Mode, Status: auditStatus,
 		PromptHash: result.InputSHA256, PromptLength: result.InputChars, SegmentCount: result.SegmentCount,
-		Decision: result.Decision, WouldAction: result.Decision, InspectionType: "wordlist", ErrorCode: result.FailureKind,
+		Decision: result.Decision, WouldAction: promptAuditActionForDecision(result.Decision), InspectionType: "wordlist", ErrorCode: result.FailureKind,
+		Action:      result.ActualAction,
 		CompletedAt: common.GetTimestamp(),
 	}
 	if match != nil {

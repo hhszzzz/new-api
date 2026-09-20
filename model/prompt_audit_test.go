@@ -50,6 +50,7 @@ func TestPromptAuditQueueLeaseRetryAndTerminalCleanup(t *testing.T) {
 	audit := &PromptAudit{
 		Status: PromptAuditStatusQueued, PromptHash: strings.Repeat("a", 64),
 		FullPrompt: []byte("prompt text"), ScanPayload: []byte("prompt text"),
+		ContentSnapshot:  []byte(`{"version":1,"direction":"input","segments":[{"role":"user","scope":"user","text":"prompt text"}]}`),
 		PolicyCategories: `["jailbreak"]`, MaxAttempts: 3,
 	}
 	require.NoError(t, CreatePromptAudit(audit))
@@ -93,7 +94,7 @@ func TestPromptAuditQueueLeaseRetryAndTerminalCleanup(t *testing.T) {
 	var retried PromptAudit
 	require.NoError(t, db.First(&retried, audit.ID).Error)
 	assert.Equal(t, PromptAuditStatusQueued, retried.Status)
-	assert.Equal(t, []byte("prompt text"), retried.ScanPayload)
+	assert.Equal(t, audit.ContentSnapshot, retried.ScanPayload)
 	assert.Zero(t, retried.Attempts)
 	assert.Equal(t, 4, retried.MaxAttempts)
 	assert.Empty(t, retried.Safety)
@@ -247,12 +248,34 @@ func TestRetryPromptAuditRejectsTruncatedFullPrompt(t *testing.T) {
 	purged := &PromptAudit{Status: PromptAuditStatusFailed}
 	require.NoError(t, CreatePromptAudit(purged))
 	assert.ErrorIs(t, RetryPromptAudit(purged.ID, 3), ErrPromptAuditPayloadMissing)
+
+	exact := &PromptAudit{Status: PromptAuditStatusFailed, FullPrompt: []byte("partial"), FullPromptTruncated: true, ContentSnapshot: []byte(`{"version":1}`)}
+	require.NoError(t, CreatePromptAudit(exact))
+	require.NoError(t, RetryPromptAudit(exact.ID, 3))
+	stored, err := GetPromptAudit(exact.ID)
+	require.NoError(t, err)
+	assert.Equal(t, exact.ContentSnapshot, stored.ScanPayload)
+}
+
+func TestReviewPromptAuditRequiresTerminalState(t *testing.T) {
+	withPromptAuditTestDB(t)
+	active := &PromptAudit{Status: PromptAuditStatusQueued}
+	require.NoError(t, CreatePromptAudit(active))
+	assert.ErrorIs(t, ReviewPromptAudit(active.ID, 7, "reviewer", "false_positive", "pending"), ErrPromptAuditNotReviewable)
+
+	terminal := &PromptAudit{Status: PromptAuditStatusDone}
+	require.NoError(t, CreatePromptAudit(terminal))
+	require.NoError(t, ReviewPromptAudit(terminal.ID, 7, "reviewer", "confirmed_violation", "confirmed"))
+	stored, err := GetPromptAudit(terminal.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "confirmed_violation", stored.HumanReview)
+	assert.Equal(t, "confirmed", stored.HumanReviewReason)
 }
 
 func TestPromptAuditRetentionPurgesOnlyTerminalFullPrompt(t *testing.T) {
 	db := withPromptAuditTestDB(t)
 	terminal := &PromptAudit{
-		Status: PromptAuditStatusDone, FullPrompt: []byte("retained secret"),
+		Status: PromptAuditStatusDone, FullPrompt: []byte("retained secret"), ContentSnapshot: []byte("structured secret"),
 		CompletedAt: 10,
 	}
 	active := &PromptAudit{
@@ -270,6 +293,7 @@ func TestPromptAuditRetentionPurgesOnlyTerminalFullPrompt(t *testing.T) {
 	require.NoError(t, db.Order("id asc").Find(&rows).Error)
 	require.Len(t, rows, 2)
 	assert.Empty(t, rows[0].FullPrompt)
+	assert.Empty(t, rows[0].ContentSnapshot)
 	assert.Equal(t, []byte("active secret"), rows[1].FullPrompt)
 	assert.Equal(t, []byte("active secret"), rows[1].ScanPayload)
 	assert.Nil(t, rows[0].ToResponse(true).FullPrompt)
@@ -340,10 +364,15 @@ func TestPromptAuditStorageConfiguredDatabases(t *testing.T) {
 				common.SetDatabaseTypes(previousMainType, common.LogDatabaseType())
 				_ = sqlDB.Close()
 			})
+			var databaseVersion string
+			require.NoError(t, db.Raw("SELECT VERSION()").Scan(&databaseVersion).Error)
+			t.Logf("%s version: %s", test.name, databaseVersion)
 
 			runPromptAuditWordlistUpgrade(t, db)
 			runPromptWordlistStorage(t, db)
-			require.NoError(t, db.AutoMigrate(&PromptAudit{}))
+			require.NoError(t, db.Migrator().DropTable(&PromptAudit{}, &PromptWordlist{}, &Option{}))
+			require.NoError(t, db.AutoMigrate(&PromptAudit{}, &PromptWordlist{}, &Option{}))
+			require.NoError(t, db.AutoMigrate(&PromptAudit{}, &PromptWordlist{}, &Option{}))
 			assert.True(t, db.Migrator().HasTable(&PromptAudit{}))
 
 			queued := &PromptAudit{
@@ -433,6 +462,9 @@ func TestPromptAuditStorageConfiguredDatabases(t *testing.T) {
 
 func TestPromptWordlistStorageAndLegacyAuditUpgradeSQLite(t *testing.T) {
 	db := withPromptAuditTestDB(t)
+	var version string
+	require.NoError(t, db.Raw("SELECT sqlite_version()").Scan(&version).Error)
+	t.Logf("sqlite version: %s", version)
 	require.NoError(t, db.Migrator().DropTable(&PromptAudit{}))
 	runPromptAuditWordlistUpgrade(t, db)
 	runPromptWordlistStorage(t, db)
@@ -443,7 +475,12 @@ func runPromptAuditWordlistUpgrade(t *testing.T, db *gorm.DB) {
 	// Preserve every pre-wordlist field/tag when constructing the released
 	// schema, then verify a populated database through two startup migrations.
 	current := reflect.TypeFor[PromptAudit]()
-	added := []string{"InspectionType", "WordlistID", "WordlistName", "WordlistVersion", "MatchedScope", "InspectedScopes"}
+	added := []string{
+		"InspectionType", "WordlistID", "WordlistName", "WordlistVersion", "MatchedScope", "InspectedScopes",
+		"Direction", "GenerationID", "DeliveryStatus", "CoverageComplete", "Refusal", "Action", "ContentSnapshot", "PolicySnapshot",
+		"ReviewStatus", "ReviewDecision", "ReviewCodes", "ReviewReason", "ReviewerEndpointID",
+		"HumanReview", "HumanReviewReason", "ReviewedBy", "ReviewerName", "ReviewedAt",
+	}
 	var fields []reflect.StructField
 	for index := range current.NumField() {
 		field := current.Field(index)
@@ -459,10 +496,26 @@ func runPromptAuditWordlistUpgrade(t *testing.T, db *gorm.DB) {
 		"prompt_hash": strings.Repeat("b", 64), "full_prompt": []byte("preserved 原文"),
 		"status": "done", "categories": "null", "unknown_categories": "null",
 	}).Error)
+	wordlistType := reflect.TypeFor[PromptWordlist]()
+	wordlistFields := make([]reflect.StructField, 0, wordlistType.NumField()-1)
+	for index := range wordlistType.NumField() {
+		field := wordlistType.Field(index)
+		if field.Name != "Action" {
+			wordlistFields = append(wordlistFields, field)
+		}
+	}
+	legacyWordlist := reflect.New(reflect.StructOf(wordlistFields)).Interface()
+	wordlistTable := db.NamingStrategy.TableName("PromptWordlist")
+	require.NoError(t, db.Table(wordlistTable).AutoMigrate(legacyWordlist))
+	require.NoError(t, db.Table(wordlistTable).Create(map[string]any{
+		"name": "legacy-list", "source_url": "https://example.com/legacy.txt", "source_hash": strings.Repeat("9", 64), "enabled": true,
+	}).Error)
 	before, err := db.Migrator().GetIndexes(&PromptAudit{})
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(&PromptAudit{}, &PromptWordlist{}))
+	require.NoError(t, MigratePromptAuditDefaults())
 	require.NoError(t, db.AutoMigrate(&PromptAudit{}, &PromptWordlist{}))
+	require.NoError(t, MigratePromptAuditDefaults())
 	after, err := db.Migrator().GetIndexes(&PromptAudit{})
 	require.NoError(t, err)
 	names := make([]string, 0, len(after))
@@ -476,12 +529,20 @@ func runPromptAuditWordlistUpgrade(t *testing.T, db *gorm.DB) {
 	require.NoError(t, db.Where("request_id = ?", "legacy-before-wordlists").First(&row).Error)
 	assert.Equal(t, "旧分组", row.GroupName)
 	assert.Equal(t, []byte("preserved 原文"), row.FullPrompt)
+	assert.Equal(t, "input", row.Direction)
+	assert.Equal(t, "not_applicable", row.DeliveryStatus)
+	assert.True(t, row.CoverageComplete)
+	assert.Equal(t, "allow", row.Action)
 	response := row.ToResponse(false)
 	assert.Equal(t, "model", response.InspectionType)
 	assert.Equal(t, []string{}, response.InspectedScopes)
 	assert.Equal(t, []string{}, response.Categories)
 	assert.Nil(t, response.FullPrompt)
 	require.NoError(t, db.Delete(&row).Error)
+	var migratedWordlist PromptWordlist
+	require.NoError(t, db.Where("source_hash = ?", strings.Repeat("9", 64)).First(&migratedWordlist).Error)
+	assert.Equal(t, prompt_audit_setting.WordlistActionBlock, migratedWordlist.Action)
+	require.NoError(t, db.Delete(&migratedWordlist).Error)
 }
 
 func runPromptWordlistStorage(t *testing.T, db *gorm.DB) {
@@ -492,6 +553,7 @@ func runPromptWordlistStorage(t *testing.T, db *gorm.DB) {
 	require.NoError(t, db.AutoMigrate(&PromptWordlist{}, &Option{}))
 	row := &PromptWordlist{Name: "跨库测试", SourceURL: "https://example.com/words.txt", SourceHash: strings.Repeat("c", 64), Enabled: true, AutoUpdate: true}
 	require.NoError(t, CreatePromptWordlist(row, dto.PromptScopeSystem))
+	assert.Equal(t, prompt_audit_setting.WordlistActionReview, row.Action)
 	assert.Contains(t, prompt_audit_setting.GetSetting().PolicyFor(dto.PromptScopeSystem).LibraryIDs, strconv.FormatInt(row.ID, 10))
 	claimed, err := ClaimPromptWordlist("first-import", common.GetTimestamp())
 	require.NoError(t, err)
@@ -539,6 +601,36 @@ func runPromptWordlistStorage(t *testing.T, db *gorm.DB) {
 	assert.Empty(t, listed[0].SourceFiles)
 	duplicate := &PromptWordlist{Name: "duplicate", SourceURL: row.SourceURL, SourceHash: row.SourceHash}
 	assert.ErrorIs(t, CreatePromptWordlist(duplicate), ErrPromptWordlistExists)
+
+	// Editing a source updates its assignments atomically, keeps the last good
+	// content until the replacement succeeds, and fences the old download.
+	require.NoError(t, RequestPromptWordlistSync(row.ID))
+	oldSourceWorker, err := ClaimPromptWordlist("old-source", common.GetTimestamp())
+	require.NoError(t, err)
+	require.NotNil(t, oldSourceWorker)
+	updatedSource := "https://example.com/replacement.txt"
+	updatedSourceHash := strings.Repeat("d", 64)
+	updatedScopes := []dto.PromptAuditScope{dto.PromptScopeUser, dto.PromptScopeTask}
+	reenabled := true
+	require.NoError(t, UpdatePromptWordlist(row.ID, PromptWordlistUpdate{
+		SourceURL: &updatedSource, SourceHash: &updatedSourceHash, Scopes: &updatedScopes, Enabled: &reenabled,
+	}))
+	published, err = FinishPromptWordlist(oldSourceWorker, map[string]any{"content": []byte("old source worker")})
+	require.NoError(t, err)
+	assert.False(t, published)
+	stored, err = GetPromptWordlist(row.ID)
+	require.NoError(t, err)
+	assert.Equal(t, updatedSource, stored.SourceURL)
+	assert.Equal(t, updatedSourceHash, stored.SourceHash)
+	assert.Equal(t, content, stored.Content)
+	assert.Equal(t, strings.Repeat("a", 64), stored.ContentHash)
+	assert.Empty(t, stored.SourceRevision)
+	assert.Empty(t, stored.ETag)
+	assert.Equal(t, "pending", stored.Status)
+	assert.Positive(t, stored.RequestedAt)
+	assert.NotContains(t, prompt_audit_setting.GetSetting().PolicyFor(dto.PromptScopeSystem).LibraryIDs, strconv.FormatInt(row.ID, 10))
+	assert.Contains(t, prompt_audit_setting.GetSetting().PolicyFor(dto.PromptScopeUser).LibraryIDs, strconv.FormatInt(row.ID, 10))
+	assert.Contains(t, prompt_audit_setting.GetSetting().PolicyFor(dto.PromptScopeTask).LibraryIDs, strconv.FormatInt(row.ID, 10))
 
 	// Independent partial changes must preserve one another, including updates
 	// submitted using the same old view of a library.
@@ -601,7 +693,8 @@ func runPromptWordlistStorage(t *testing.T, db *gorm.DB) {
 	previousSettings.PublishConfig()
 	second := &PromptWordlist{Name: "second", SourceURL: "https://example.com/second.txt", SourceHash: "second"}
 	require.NoError(t, CreatePromptWordlist(second, dto.PromptScopeSystem))
-	assert.Equal(t, []string{strconv.FormatInt(row.ID, 10), strconv.FormatInt(second.ID, 10)}, prompt_audit_setting.GetSetting().PolicyFor(dto.PromptScopeSystem).LibraryIDs)
+	assert.Equal(t, []string{strconv.FormatInt(second.ID, 10)}, prompt_audit_setting.GetSetting().PolicyFor(dto.PromptScopeSystem).LibraryIDs)
+	assert.ErrorIs(t, UpdatePromptWordlist(row.ID, PromptWordlistUpdate{SourceURL: &second.SourceURL, SourceHash: &second.SourceHash}), ErrPromptWordlistExists)
 	require.NoError(t, DeletePromptWordlist(second.ID))
 	require.NoError(t, DeletePromptWordlist(row.ID))
 	assert.Empty(t, prompt_audit_setting.GetSetting().PolicyFor(dto.PromptScopeSystem).LibraryIDs)

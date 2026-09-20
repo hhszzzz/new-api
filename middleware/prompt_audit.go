@@ -47,8 +47,9 @@ func inspectPromptBeforeDistribution(c *gin.Context, modelRequest *ModelRequest)
 		modelName = modelRequest.Model
 	}
 	var (
-		snapshot relaydto.PromptAuditSnapshot
-		isStream bool
+		snapshot           relaydto.PromptAuditSnapshot
+		isStream           bool
+		coverageIncomplete bool
 	)
 	if taskRequest {
 		extracted, requestModel, err := service.ExtractTaskPromptAuditSnapshot(c)
@@ -70,6 +71,9 @@ func inspectPromptBeforeDistribution(c *gin.Context, modelRequest *ModelRequest)
 		common.SetContextKey(c, constant.ContextKeyValidatedRelayRequest, request)
 		snapshot = relaydto.PromptAuditSnapshotOf(request)
 		isStream = request.IsStream(c.Request)
+		if responses, ok := request.(*relaydto.OpenAIResponsesRequest); ok {
+			coverageIncomplete = strings.TrimSpace(responses.PreviousResponseID) != ""
+		}
 	}
 
 	cleanup, allowed := beginPromptAuditUserRateLimit(c, format, taskRequest, modelName, isStream)
@@ -78,11 +82,12 @@ func inspectPromptBeforeDistribution(c *gin.Context, modelRequest *ModelRequest)
 	}
 
 	result, apiErr := service.InspectPrompt(c, service.PromptAuditRequest{
-		Snapshot: snapshot,
-		Protocol: string(format),
-		Model:    modelName,
-		Stage:    "pre_distribution",
-		Stream:   isStream,
+		Snapshot:           snapshot,
+		Protocol:           string(format),
+		Model:              modelName,
+		Stage:              "pre_distribution",
+		CoverageIncomplete: coverageIncomplete,
+		Stream:             isStream,
 	})
 	if apiErr != nil {
 		service.RecordPromptAuditError(c, result, apiErr, modelName, isStream)
