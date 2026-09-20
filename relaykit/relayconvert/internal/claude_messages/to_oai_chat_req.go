@@ -120,9 +120,9 @@ func claudeMessagesRequestToOpenAIChat(c context.Context, claudeRequest dto.Clau
 		info.SetReasoningEffort(string(effectiveEffort))
 	}
 
-	if len(claudeRequest.StopSequences) == 1 {
-		openAIRequest.Stop = claudeRequest.StopSequences[0]
-	} else if len(claudeRequest.StopSequences) > 1 {
+	if len(claudeRequest.StopSequences) > 0 {
+		// Preserve the array shape for OpenAI-compatible upstreams that reject
+		// the spec-valid scalar form when only one stop sequence is provided.
 		openAIRequest.Stop = claudeRequest.StopSequences
 	}
 	if err := toolconv.RenderRequestTools(c, types.RelayFormatClaude, types.RelayFormatOpenAI, &claudeRequest, &openAIRequest, options); err != nil {

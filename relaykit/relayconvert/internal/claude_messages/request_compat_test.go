@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -67,6 +68,22 @@ func TestClaudeMessagesRequestToOpenAIChatPreservesCompatibleFieldsAndMetadata(t
 	assert.Equal(t, []string{"END", "STOP"}, converted.Stop)
 	assert.Nil(t, converted.TopK)
 	assert.JSONEq(t, `{"user_id":"tenant-1"}`, string(converted.Metadata))
+}
+
+func TestClaudeMessagesRequestToOpenAIChatKeepsSingleStopSequenceAsArray(t *testing.T) {
+	request := dto.ClaudeRequest{
+		Model:         "claude-public",
+		StopSequences: []string{"END"},
+	}
+
+	converted, err := ClaudeMessagesRequestToOpenAIChat(request, nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"END"}, converted.Stop)
+	encoded, err := kitutil.Marshal(converted)
+	require.NoError(t, err)
+	assert.Contains(t, string(encoded), `"stop":["END"]`)
+	assert.NotContains(t, string(encoded), `"stop":"END"`)
 }
 
 func TestClaudeMessagesRequestToOpenAIResponsesAllowsEffortOnlyOutputConfigAndMetadata(t *testing.T) {
