@@ -98,7 +98,7 @@ export function ApiAddressesBar() {
               )}
               {status.latency !== null && !status.testing && (
                 <StatusBadge
-                  label={`${status.latency}${t('ms')}`}
+                  label={`${status.latency} ms`}
                   variant='success'
                   type='text'
                   copyable={false}

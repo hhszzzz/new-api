@@ -56,6 +56,14 @@ const DYNAMIC_KEYS = [
   'flag',
   'block',
   'unavailable',
+  'Read prompt audits',
+  'View prompt audit lists, statistics, decisions, and redacted previews.',
+  'View full audited prompts',
+  'View retained cleartext prompts in prompt audit details.',
+  'Manage prompt audit',
+  'Change prompt audit configuration, test nodes, and retry failed jobs.',
+  'Delete prompt audits',
+  'Preview and delete terminal prompt audit records.',
 ]
 
 describe('prompt audit translations', () => {

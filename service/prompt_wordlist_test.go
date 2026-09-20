@@ -258,6 +258,42 @@ func TestPromptWordlistManualDisablePreservesWordsAndBindings(t *testing.T) {
 	assert.Equal(t, []string{"manual"}, prompt_audit_setting.GetSetting().PolicyFor(dto.PromptScopeUser).LibraryIDs)
 }
 
+func TestPromptWordlistAuditRetainsFullTextForAuthorizedReview(t *testing.T) {
+	withPromptWordlistTestDB(t)
+	setting.SensitiveWordsFromString("blocked-marker")
+	configured := prompt_audit_setting.GetSetting()
+	configured.Mode = prompt_audit_setting.ModeOff
+	configured.ScopePolicies = map[dto.PromptAuditScope]prompt_audit_setting.ScopePolicy{
+		dto.PromptScopeUser: {LibraryIDs: []string{prompt_audit_setting.ManualWordlistID}},
+	}
+	configured.PublishConfig()
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	fullText := "  blocked-marker from person@example.com  \n"
+	storedText := strings.TrimSpace(fullText)
+	result, apiErr := InspectPrompt(c, PromptAuditRequest{
+		Snapshot: dto.PromptAuditSnapshot{Segments: []dto.PromptAuditSegment{{
+			Scope: dto.PromptScopeUser, Role: "user", User: true, Text: fullText,
+		}}},
+		Protocol: "openai_chat", Model: "guarded-model",
+	})
+
+	require.NotNil(t, apiErr)
+	assert.True(t, result.Blocked)
+	assert.Positive(t, result.AuditID)
+	audit, err := model.GetPromptAudit(result.AuditID)
+	require.NoError(t, err)
+	assert.Equal(t, "wordlist", audit.InspectionType)
+	assert.Equal(t, []byte(storedText), audit.FullPrompt)
+	assert.False(t, audit.FullPromptTruncated)
+	assert.NotContains(t, audit.RedactedPreview, "person@example.com")
+	assert.Nil(t, audit.ToResponse(false).FullPrompt)
+	review := audit.ToResponse(true)
+	require.NotNil(t, review.FullPrompt)
+	assert.Equal(t, storedText, *review.FullPrompt)
+}
+
 func TestPromptAuditModelAndAsyncPayloadContainOnlySelectedSources(t *testing.T) {
 	withPromptWordlistTestDB(t)
 	var sent []string

@@ -209,7 +209,7 @@ describe('public header navigation', () => {
     expect(translateMock).not.toHaveBeenCalledWith('模型广场')
   })
 
-  test('shows icons on non-home links in desktop and collapsed navigation', () => {
+  test('keeps desktop and collapsed navigation text-only', () => {
     topNavLinksMock.mockReturnValue([
       { title: 'Home', href: '/' },
       {
@@ -222,10 +222,10 @@ describe('public header navigation', () => {
     const view = renderPublicHeader()
 
     expect(view.container.querySelectorAll('[data-top-nav-icon]')).toHaveLength(
-      2
+      0
     )
-    for (const homeLink of screen.getAllByRole('link', { name: 'Home' })) {
-      expect(homeLink.querySelector('[data-top-nav-icon]')).toBeNull()
+    for (const link of screen.getAllByRole('link')) {
+      expect(link.querySelector('[data-top-nav-icon]')).toBeNull()
     }
   })
 

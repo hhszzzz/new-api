@@ -166,40 +166,54 @@ it('opens long channel text on tap and copies the complete value', async () => {
   ).toHaveFocus()
 })
 
-it.each([false, true])(
-  'copies the full mobile model name with the keyboard without opening details when there is no mapping or difference (response observed: %s)',
-  async (observed) => {
-    const user = userEvent.setup()
-    const copy = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue()
-    renderLogs({
-      logs: [
-        {
-          ...log,
-          other: observed
-            ? JSON.stringify({
-                response_model: {
-                  requested_model: longName,
-                  upstream_model: longName,
-                  returned_model: longName,
-                },
-              })
-            : log.other,
-        },
-      ],
-    })
-    const button = screen.getByRole('button', { name: `Model: ${longName}` })
-    expect(within(button).getByText(longName)).toHaveClass(
-      'line-clamp-2',
-      '[overflow-wrap:anywhere]'
-    )
-    button.focus()
-    await user.keyboard('{Enter}')
-    expect(copy).toHaveBeenCalledWith(longName)
-    expect(
-      screen.queryByRole('dialog', { name: 'Model' })
-    ).not.toBeInTheDocument()
-  }
-)
+it('copies the full mobile model name when no response model was observed', async () => {
+  const user = userEvent.setup()
+  const copy = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue()
+  renderLogs()
+  const button = screen.getByRole('button', { name: `Model: ${longName}` })
+  expect(within(button).getByText(longName)).toHaveClass(
+    'line-clamp-2',
+    '[overflow-wrap:anywhere]'
+  )
+  button.focus()
+  await user.keyboard('{Enter}')
+  expect(copy).toHaveBeenCalledWith(longName)
+  expect(
+    screen.queryByRole('dialog', { name: 'Model' })
+  ).not.toBeInTheDocument()
+})
+
+it('opens the mobile response-model details when an unchanged model was observed', async (context) => {
+  const originalAuth = useAuthStore.getState().auth
+  useAuthStore.setState({
+    auth: {
+      ...originalAuth,
+      user: { id: 1, username: 'root', role: ROLE.SUPER_ADMIN },
+    },
+  })
+  context.onTestFinished(() => useAuthStore.setState({ auth: originalAuth }))
+  const user = userEvent.setup()
+  renderLogs({
+    logs: [
+      {
+        ...log,
+        other: JSON.stringify({
+          response_model: {
+            requested_model: longName,
+            upstream_model: longName,
+            returned_model: longName,
+          },
+        }),
+      },
+    ],
+  })
+  await user.click(
+    screen.getByRole('button', { name: `Model: ${longName}` })
+  )
+  const dialog = await screen.findByRole('dialog', { name: 'Model' })
+  expect(within(dialog).getByText('Response Model')).toBeVisible()
+  expect(within(dialog).getAllByText(longName)).toHaveLength(4)
+})
 
 it('hides sensitive names and disables full-text inspection when privacy is enabled', async () => {
   const user = userEvent.setup()

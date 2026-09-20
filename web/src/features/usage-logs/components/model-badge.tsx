@@ -34,7 +34,6 @@ import { cn } from '@/lib/utils'
 
 import { isResponseModelMismatch } from '../lib/response-model'
 import type { LogOtherData } from '../types'
-import { DetailRow } from './dialogs/log-detail-layout'
 
 interface ModelBadgeProps {
   modelName: string
@@ -101,17 +100,7 @@ export function ModelBadge(props: ModelBadgeProps) {
         })
       : ''
   const modelLabel = `${t('Model')}: ${props.modelName}${responseModelLabel ? `, ${responseModelLabel}` : ''}`
-  const hasDetails =
-    !!props.actualModel ||
-    !!(
-      props.responseModel &&
-      (mismatch ||
-        props.responseModel.returned_model !==
-          props.responseModel.requested_model ||
-        (props.responseModel.upstream_model &&
-          props.responseModel.upstream_model !==
-            props.responseModel.requested_model))
-    )
+  const hasDetails = !!props.actualModel || !!props.responseModel
 
   if (!hasDetails) {
     if (props.onInspect) {
@@ -179,7 +168,12 @@ export function ModelBadge(props: ModelBadgeProps) {
       >
         {content}
       </PopoverTrigger>
-      <PopoverContent className='w-72 max-w-[calc(100vw-2rem)]'>
+      <PopoverContent
+        className={cn(
+          'max-w-[calc(100vw-2rem)]',
+          props.responseModel ? 'w-max' : 'w-72'
+        )}
+      >
         {props.responseModel ? (
           <ResponseModelDetails observation={props.responseModel} />
         ) : (
@@ -226,23 +220,30 @@ export function ResponseModelDetails(props: {
           className='h-auto whitespace-normal'
         />
       )}
-      <DetailRow
-        label={t('Request Model')}
-        value={props.observation.requested_model}
-        mono
-      />
-      <DetailRow
-        label={t('Upstream Model')}
-        value={
-          props.observation.upstream_model || props.observation.requested_model
-        }
-        mono
-      />
-      <DetailRow
-        label={t('Response Model')}
-        value={props.observation.returned_model}
-        mono
-      />
+      <div
+        data-slot='response-model-grid'
+        className='grid min-w-0 grid-cols-[max-content_minmax(0,1fr)] items-start gap-x-3 gap-y-2 text-xs sm:grid-cols-[max-content_max-content]'
+      >
+        <span className='text-muted-foreground whitespace-nowrap'>
+          {t('Request Model')}
+        </span>
+        <span className='min-w-0 max-w-80 font-mono [overflow-wrap:anywhere] break-words'>
+          {props.observation.requested_model}
+        </span>
+        <span className='text-muted-foreground whitespace-nowrap'>
+          {t('Upstream Model')}
+        </span>
+        <span className='min-w-0 max-w-80 font-mono [overflow-wrap:anywhere] break-words'>
+          {props.observation.upstream_model ||
+            props.observation.requested_model}
+        </span>
+        <span className='text-muted-foreground whitespace-nowrap'>
+          {t('Response Model')}
+        </span>
+        <span className='min-w-0 max-w-80 font-mono [overflow-wrap:anywhere] break-words'>
+          {props.observation.returned_model}
+        </span>
+      </div>
     </div>
   )
 }

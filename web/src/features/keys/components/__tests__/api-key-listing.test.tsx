@@ -56,6 +56,16 @@ import { useApiKeysColumns } from '../api-keys-columns'
 import { ApiKeysProvider } from '../api-keys-provider'
 import { ApiKeysTable } from '../api-keys-table'
 
+const { testUrlLatencyMock } = vi.hoisted(() => ({
+  testUrlLatencyMock: vi.fn(),
+}))
+
+vi.mock('@/features/dashboard/lib/api-info', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@/features/dashboard/lib/api-info')>()
+  return { ...actual, testUrlLatency: testUrlLatencyMock }
+})
+
 const now = 1_700_000_000_000
 const key = apiKeySchema.parse({
   id: 7,
@@ -135,6 +145,12 @@ function renderQuota(apiKey: ApiKey = key) {
 }
 
 beforeEach(() => {
+  testUrlLatencyMock.mockReset()
+  testUrlLatencyMock.mockResolvedValue({
+    latency: 42,
+    testing: false,
+    error: false,
+  })
   vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
   localStorage.clear()
   useSystemConfigStore
@@ -415,6 +431,11 @@ it('shows configured API addresses below the key search toolbar', async () => {
     screen.getByRole('button', { name: 'Test Latency: OpenAI' })
   ).toBeVisible()
   expect(screen.getByRole('button', { name: 'Copy URL: Claude' })).toBeVisible()
+
+  await userEvent.click(
+    screen.getByRole('button', { name: 'Test Latency: OpenAI' })
+  )
+  expect(await screen.findByText('42 ms')).toBeVisible()
 })
 
 it('restores dates hidden by the old default and preserves unrelated column preferences', async () => {

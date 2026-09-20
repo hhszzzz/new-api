@@ -275,15 +275,14 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 	if err != nil {
 		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
-	if info.HasUserModelRoute() || info.RelayFormat == types.RelayFormatClaude {
-		simpleResponse.Model = info.PublicResponseModelName()
-	}
-
 	if oaiError := simpleResponse.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
 		return nil, hosttypes.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
 
 	info.ObserveResponseModel(simpleResponse.Model)
+	if info.HasUserModelRoute() || info.RelayFormat == types.RelayFormatClaude {
+		simpleResponse.Model = info.PublicResponseModelName()
+	}
 	for _, choice := range simpleResponse.Choices {
 		if choice.FinishReason == constant.FinishReasonContentFilter {
 			info.PerformanceBusinessRejection = true

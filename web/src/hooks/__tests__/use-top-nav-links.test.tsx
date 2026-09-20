@@ -19,7 +19,6 @@ For commercial licensing, please contact support@quantumnous.com
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 
-import { TOP_NAV_ICONS } from '@/lib/top-nav-icons'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { useTopNavLinks } from '../use-top-nav-links'
@@ -54,7 +53,7 @@ afterEach(() => {
 })
 
 describe('top navigation model status link', () => {
-  test('omits home and adds the approved icon to every visible built-in link', () => {
+  test('omits home and keeps every visible built-in link text-only', () => {
     useStatusMock.mockReturnValue({ status: { HeaderNavModules: '{}' } })
 
     const { result } = renderHook(() => useTopNavLinks())
@@ -63,13 +62,13 @@ describe('top navigation model status link', () => {
     )
 
     expect(linksByHref.has('/')).toBe(false)
-    expect(linksByHref.get('/dashboard')?.icon).toBe(TOP_NAV_ICONS.console)
-    expect(linksByHref.get('/pricing')?.icon).toBe(TOP_NAV_ICONS.pricing)
+    expect(linksByHref.get('/dashboard')?.icon).toBeUndefined()
+    expect(linksByHref.get('/pricing')?.icon).toBeUndefined()
     expect(linksByHref.has('/model-status')).toBe(false)
-    expect(linksByHref.get('/model-radar')?.icon).toBe(TOP_NAV_ICONS.modelRadar)
-    expect(linksByHref.get('/rankings')?.icon).toBe(TOP_NAV_ICONS.rankings)
-    expect(linksByHref.get('/docs')?.icon).toBe(TOP_NAV_ICONS.docs)
-    expect(linksByHref.get('/about')?.icon).toBe(TOP_NAV_ICONS.about)
+    expect(linksByHref.get('/model-radar')?.icon).toBeUndefined()
+    expect(linksByHref.get('/rankings')?.icon).toBeUndefined()
+    expect(linksByHref.get('/docs')?.icon).toBeUndefined()
+    expect(linksByHref.get('/about')?.icon).toBeUndefined()
   })
 
   test('inherits model square access when legacy status omits model status', () => {
@@ -96,7 +95,7 @@ describe('top navigation model status link', () => {
       }))
     ).toEqual([
       {
-        title: 'Model Square',
+        title: 'Models',
         href: '/pricing',
         requiresAuth: true,
       },
@@ -106,7 +105,7 @@ describe('top navigation model status link', () => {
         requiresAuth: true,
       },
     ])
-    expect(result.current.every((link) => link.icon)).toBe(true)
+    expect(result.current.every((link) => link.icon === undefined)).toBe(true)
   })
 
   test('omits the old status entry even when its legacy setting is enabled', () => {
@@ -163,7 +162,7 @@ describe('top navigation model status link', () => {
     })
     expect(
       result.current.find((link) => link.href === '/model-radar')?.icon
-    ).toBeDefined()
+    ).toBeUndefined()
   })
 
   test('places custom iframe navigation at its configured position', () => {
@@ -198,7 +197,6 @@ describe('top navigation model status link', () => {
       {
         title: 'Team Portal',
         href: '/custom/portal',
-        icon: 'LuRadar',
       },
     ])
   })

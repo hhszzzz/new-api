@@ -831,7 +831,6 @@ func clonePromptAuditResult(result PromptAuditResult) PromptAuditResult {
 }
 
 func newPromptAuditRecord(c *gin.Context, request PromptAuditRequest, setting prompt_audit_setting.PromptAuditSetting, result PromptAuditResult, fullText string, status model.PromptAuditStatus) (*model.PromptAudit, error) {
-	fullPrompt, truncated := promptAuditStoredFullPrompt(fullText)
 	policyCategories, err := common.Marshal(setting.EnabledCategories)
 	if err != nil {
 		return nil, err
@@ -844,10 +843,10 @@ func newPromptAuditRecord(c *gin.Context, request PromptAuditRequest, setting pr
 		Stage: normalizedPromptAuditStage(request.Stage), ConfigVersion: setting.ConfigVersion,
 		ExecutionMode: setting.Mode, Status: status, PromptHash: result.InputSHA256,
 		PromptLength: result.InputChars, SegmentCount: result.SegmentCount, ChunkCount: result.ChunkCount,
-		FullPrompt: fullPrompt, FullPromptTruncated: truncated,
-		RedactedPreview: promptAuditPreview(fullText), PolicyCategories: string(policyCategories),
-		MaxAttempts: setting.MaxAttempts,
+		PolicyCategories: string(policyCategories),
+		MaxAttempts:      setting.MaxAttempts,
 	}
+	setPromptAuditContent(audit, fullText)
 	if data, err := common.Marshal(result.InspectedScopes); err == nil {
 		audit.InspectedScopes = string(data)
 	}
@@ -856,6 +855,11 @@ func newPromptAuditRecord(c *gin.Context, request PromptAuditRequest, setting pr
 		audit.WouldAction = "pending"
 	}
 	return audit, nil
+}
+
+func setPromptAuditContent(audit *model.PromptAudit, fullText string) {
+	audit.FullPrompt, audit.FullPromptTruncated = promptAuditStoredFullPrompt(fullText)
+	audit.RedactedPreview = promptAuditPreview(fullText)
 }
 
 func persistPromptAuditDecision(c *gin.Context, request PromptAuditRequest, setting prompt_audit_setting.PromptAuditSetting, result PromptAuditResult, fullText string, status model.PromptAuditStatus) int64 {

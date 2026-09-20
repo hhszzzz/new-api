@@ -66,7 +66,7 @@ export function PublicNavigation({
                 link.disabled && 'pointer-events-none opacity-50'
               )}
             >
-              <TopNavLinkContent icon={link.icon} title={link.title} />
+              <TopNavLinkContent title={link.title} />
             </a>
           )
         }
@@ -80,7 +80,7 @@ export function PublicNavigation({
               link.disabled && 'pointer-events-none opacity-50'
             )}
           >
-            <TopNavLinkContent icon={link.icon} title={link.title} />
+            <TopNavLinkContent title={link.title} />
           </Link>
         )
       })}

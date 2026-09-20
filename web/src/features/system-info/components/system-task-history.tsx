@@ -216,7 +216,7 @@ export function SystemTaskHistory(props: { activeRefreshAt: number }) {
               />
             )}
             <div className='mt-3'>
-              <DataTablePagination table={table} compact />
+              <DataTablePagination table={table} />
             </div>
           </>
         )}

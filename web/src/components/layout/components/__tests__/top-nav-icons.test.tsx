@@ -30,7 +30,7 @@ vi.mock('@tanstack/react-router', () => ({
 }))
 
 describe('TopNav icons', () => {
-  test('renders the supplied line icon while keeping home text-only', () => {
+  test('keeps every link text-only even when icon data is supplied', () => {
     const view = render(
       <TopNav
         links={[
@@ -55,7 +55,12 @@ describe('TopNav icons', () => {
     ).toBeNull()
     expect(
       view.container.querySelector('a[href="/dashboard"] [data-top-nav-icon]')
-    ).not.toBeNull()
+    ).toBeNull()
+    expect(
+      view.container.querySelector(
+        'a[href="https://docs.example.com"] [data-top-nav-icon]'
+      )
+    ).toBeNull()
 
     const internalLink = view.container.querySelector(
       'nav a[href="/dashboard"]'

@@ -48,14 +48,14 @@ export function NavLinkItem({ link, className }: NavLinkItemProps) {
         className={linkClassName}
         aria-disabled={link.disabled}
       >
-        <TopNavLinkContent icon={link.icon} title={link.title} />
+        <TopNavLinkContent title={link.title} />
       </a>
     )
   }
 
   return (
     <Link to={link.href} className={linkClassName} disabled={link.disabled}>
-      <TopNavLinkContent icon={link.icon} title={link.title} />
+      <TopNavLinkContent title={link.title} />
     </Link>
   )
 }

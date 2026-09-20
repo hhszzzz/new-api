@@ -65,7 +65,7 @@ export function TopNav({ className, links, ...props }: TopNavProps) {
           </DropdownMenuTrigger>
           <DropdownMenuContent side='bottom' align='start'>
             {normalizedLinks.map(
-              ({ title, href, isActive, disabled, external, icon }) => (
+              ({ title, href, isActive, disabled, external }) => (
                 <DropdownMenuItem
                   key={`${title}-${href}`}
                   render={
@@ -76,7 +76,7 @@ export function TopNav({ className, links, ...props }: TopNavProps) {
                         rel='noopener noreferrer'
                         className={!isActive ? 'text-muted-foreground' : ''}
                       >
-                        <TopNavLinkContent icon={icon} title={title} />
+                        <TopNavLinkContent title={title} />
                       </a>
                     ) : (
                       <Link
@@ -84,7 +84,7 @@ export function TopNav({ className, links, ...props }: TopNavProps) {
                         className={!isActive ? 'text-muted-foreground' : ''}
                         disabled={disabled}
                       >
-                        <TopNavLinkContent icon={icon} title={title} />
+                        <TopNavLinkContent title={title} />
                       </Link>
                     )
                   }
@@ -103,28 +103,27 @@ export function TopNav({ className, links, ...props }: TopNavProps) {
         )}
         {...props}
       >
-        {normalizedLinks.map(
-          ({ title, href, isActive, disabled, external, icon }) =>
-            external ? (
-              <a
-                key={`${title}-${href}`}
-                href={href}
-                target='_blank'
-                rel='noopener noreferrer'
-                className={`hover:text-primary inline-flex items-center text-sm font-medium transition-colors ${isActive ? '' : 'text-muted-foreground'}`}
-              >
-                <TopNavLinkContent icon={icon} title={title} />
-              </a>
-            ) : (
-              <Link
-                key={`${title}-${href}`}
-                to={href}
-                disabled={disabled}
-                className={`hover:text-primary inline-flex items-center text-sm font-medium transition-colors ${isActive ? '' : 'text-muted-foreground'}`}
-              >
-                <TopNavLinkContent icon={icon} title={title} />
-              </Link>
-            )
+        {normalizedLinks.map(({ title, href, isActive, disabled, external }) =>
+          external ? (
+            <a
+              key={`${title}-${href}`}
+              href={href}
+              target='_blank'
+              rel='noopener noreferrer'
+              className={`hover:text-primary inline-flex items-center text-sm font-medium transition-colors ${isActive ? '' : 'text-muted-foreground'}`}
+            >
+              <TopNavLinkContent title={title} />
+            </a>
+          ) : (
+            <Link
+              key={`${title}-${href}`}
+              to={href}
+              disabled={disabled}
+              className={`hover:text-primary inline-flex items-center text-sm font-medium transition-colors ${isActive ? '' : 'text-muted-foreground'}`}
+            >
+              <TopNavLinkContent title={title} />
+            </Link>
+          )
         )}
       </nav>
     </>

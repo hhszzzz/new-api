@@ -16,53 +16,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { HugeiconsIcon } from '@hugeicons/react'
-
-import { ReactIconByName } from '@/components/react-icon-by-name'
-import { TOP_NAV_ICONS } from '@/lib/top-nav-icons'
-
-import type { TopNavLink } from '../types'
-
-type TopNavLinkContentProps = Pick<TopNavLink, 'icon'> & {
+type TopNavLinkContentProps = {
   title: React.ReactNode
 }
 
-export function TopNavLinkContent({ icon, title }: TopNavLinkContentProps) {
-  let iconContent: React.ReactNode = null
-  if (typeof icon === 'string') {
-    iconContent = (
-      <ReactIconByName
-        name={icon}
-        fallback={
-          <HugeiconsIcon
-            icon={TOP_NAV_ICONS.custom}
-            className='size-4 shrink-0'
-            data-top-nav-icon=''
-            strokeWidth={2}
-            aria-hidden='true'
-          />
-        }
-        className='size-4 shrink-0'
-        data-top-nav-icon=''
-        aria-hidden='true'
-      />
-    )
-  } else if (icon) {
-    iconContent = (
-      <HugeiconsIcon
-        icon={icon}
-        className='size-4 shrink-0'
-        data-top-nav-icon=''
-        strokeWidth={2}
-        aria-hidden='true'
-      />
-    )
-  }
-
-  return (
-    <span className='inline-flex items-center gap-1.5'>
-      {iconContent}
-      <span>{title}</span>
-    </span>
-  )
+export function TopNavLinkContent(props: TopNavLinkContentProps) {
+  return <span>{props.title}</span>
 }

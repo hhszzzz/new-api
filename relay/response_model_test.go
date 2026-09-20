@@ -85,21 +85,20 @@ func TestResponseModelComparisonAndLog(t *testing.T) {
 	}
 }
 
-func TestResponseModelLogOmitsUnchangedModel(t *testing.T) {
+func TestResponseModelLogRecordsEveryObservedModel(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		upstream string
 		returned string
 		mapped   bool
-		record   bool
 	}{
 		{name: "same model", upstream: "requested", returned: "requested"},
 		{name: "no upstream name", returned: "requested"},
-		{name: "mapped model", upstream: "mapped", returned: "mapped", mapped: true, record: true},
-		{name: "mapped response echoes request", upstream: "mapped", returned: "requested", mapped: true, record: true},
-		{name: "prefix difference", upstream: "requested", returned: "requested-2026-09-01", record: true},
-		{name: "case difference", upstream: "requested", returned: "REQUESTED", record: true},
-		{name: "mismatch", upstream: "requested", returned: "other", record: true},
+		{name: "mapped model", upstream: "mapped", returned: "mapped", mapped: true},
+		{name: "mapped response echoes request", upstream: "mapped", returned: "requested", mapped: true},
+		{name: "prefix difference", upstream: "requested", returned: "requested-2026-09-01"},
+		{name: "case difference", upstream: "requested", returned: "REQUESTED"},
+		{name: "mismatch", upstream: "requested", returned: "other"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, _ := gin.CreateTestContext(httptest.NewRecorder())
@@ -113,11 +112,7 @@ func TestResponseModelLogOmitsUnchangedModel(t *testing.T) {
 			assert.Equal(t, float64(1), other.Snapshot()["model_ratio"])
 			assert.NotContains(t, other.Snapshot(), "response_model")
 			admin, _ := other.Snapshot()["admin_info"].(map[string]any)
-			if tc.record {
-				assert.Equal(t, *info.ResponseModel, admin["response_model"])
-			} else {
-				assert.NotContains(t, admin, "response_model")
-			}
+			assert.Equal(t, *info.ResponseModel, admin["response_model"])
 		})
 	}
 }
@@ -198,18 +193,28 @@ func TestResponseModelHandlersCaptureBeforeConversion(t *testing.T) {
 		handler func(*gin.Context, *relaycommon.RelayInfo, *http.Response) (*dto.Usage, *hosttypes.NewAPIError)
 	}{
 		{"chat", chat, types.RelayFormatOpenAI, false, openai.OpenaiHandler},
+		{"chat to claude", chat, types.RelayFormatClaude, false, openai.OpenaiHandler},
 		{"chat stream", chatStream, types.RelayFormatOpenAI, true, openai.OaiStreamHandler},
+		{"chat to claude stream", chatStream, types.RelayFormatClaude, true, openai.OaiStreamHandler},
 		{"responses", responses, types.RelayFormatOpenAIResponses, false, openai.OaiResponsesHandler},
 		{"responses stream", responsesStream, types.RelayFormatOpenAIResponses, true, openai.OaiResponsesStreamHandler},
 		{"responses to chat", responses, types.RelayFormatOpenAI, false, openai.OaiResponsesToChatHandler},
+		{"responses to claude", responses, types.RelayFormatClaude, false, openai.OaiResponsesToChatHandler},
 		{"responses to chat stream", responsesStream, types.RelayFormatOpenAI, true, openai.OaiResponsesToChatStreamHandler},
+		{"responses to claude stream", responsesStream, types.RelayFormatClaude, true, openai.OaiResponsesToChatStreamHandler},
 		{"responses buffered to chat", responsesStream, types.RelayFormatOpenAI, false, openai.OaiResponsesToChatBufferedStreamHandler},
 		{"chat to responses", chat, types.RelayFormatOpenAIResponses, false, openai.OaiChatToResponsesHandler},
 		{"chat to responses stream", chatStream, types.RelayFormatOpenAIResponses, true, openai.OaiChatToResponsesStreamHandler},
 		{"claude", claudeBody, types.RelayFormatClaude, false, func(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *hosttypes.NewAPIError) {
 			return claude.ClaudeHandler(c, resp, info)
 		}},
+		{"claude to chat", claudeBody, types.RelayFormatOpenAI, false, func(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *hosttypes.NewAPIError) {
+			return claude.ClaudeHandler(c, resp, info)
+		}},
 		{"claude stream", claudeStream, types.RelayFormatClaude, true, func(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *hosttypes.NewAPIError) {
+			return claude.ClaudeStreamHandler(c, resp, info)
+		}},
+		{"claude to chat stream", claudeStream, types.RelayFormatOpenAI, true, func(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *hosttypes.NewAPIError) {
 			return claude.ClaudeStreamHandler(c, resp, info)
 		}},
 		{"claude to responses stream", claudeStream, types.RelayFormatOpenAIResponses, true, func(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *hosttypes.NewAPIError) {
@@ -218,12 +223,19 @@ func TestResponseModelHandlersCaptureBeforeConversion(t *testing.T) {
 		{"gemini", geminiBody, types.RelayFormatGemini, false, gemini.GeminiTextGenerationHandler},
 		{"gemini stream", geminiStream, types.RelayFormatGemini, true, gemini.GeminiTextGenerationStreamHandler},
 		{"gemini to chat", geminiBody, types.RelayFormatOpenAI, false, gemini.GeminiChatHandler},
+		{"gemini to chat stream", geminiStream, types.RelayFormatOpenAI, true, gemini.GeminiChatStreamHandler},
+		{"gemini to claude", geminiBody, types.RelayFormatClaude, false, gemini.GeminiChatHandler},
+		{"gemini to claude stream", geminiStream, types.RelayFormatClaude, true, gemini.GeminiChatStreamHandler},
 		{"gemini to responses", geminiBody, types.RelayFormatOpenAIResponses, false, gemini.GeminiResponsesHandler},
 		{"gemini to responses stream", geminiStream, types.RelayFormatOpenAIResponses, true, gemini.GeminiResponsesStreamHandler},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, _ := gin.CreateTestContext(httptest.NewRecorder())
-			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+			path := "/v1/responses"
+			if tc.format == types.RelayFormatClaude {
+				path = "/v1/messages"
+			}
+			c.Request = httptest.NewRequest(http.MethodPost, path, nil)
 			info := &relaycommon.RelayInfo{
 				OriginModelName: "requested", RelayFormat: tc.format, RelayMode: relayconstant.RelayModeChatCompletions,
 				IsStream: tc.stream, DisablePing: true, StartTime: time.Now(),

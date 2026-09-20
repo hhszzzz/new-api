@@ -16,10 +16,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { describe, expect, test } from 'vitest'
+import { afterEach, describe, expect, test, vi } from 'vitest'
 
 import {
   EMPTY_PROMPT_AUDIT_FILTERS,
+  getDefaultPromptAuditFilters,
   promptAuditDeleteFilter,
   promptAuditEndpointBaseURLUpdate,
   promptAuditEndpointDrafts,
@@ -59,6 +60,18 @@ const VALID_CONFIG: PromptAuditConfigUpdate = {
 }
 
 describe('prompt audit management helpers', () => {
+  afterEach(() => vi.useRealTimers())
+
+  test('defaults to the common log time range for today', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 7, 6, 10, 30))
+
+    expect(getDefaultPromptAuditFilters()).toMatchObject({
+      start_time: '2026-08-06T00:00',
+      end_time: '2026-08-06T11:30',
+    })
+  })
+
   test('serializes only active filters and converts browser times to epoch seconds', () => {
     const params = promptAuditFilterParams({
       ...EMPTY_PROMPT_AUDIT_FILTERS,

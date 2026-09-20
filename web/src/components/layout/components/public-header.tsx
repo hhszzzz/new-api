@@ -281,7 +281,6 @@ export function PublicHeader(props: PublicHeaderProps) {
                         )}
                       >
                         <TopNavLinkContent
-                          icon={link.icon}
                           title={
                             linkTitlesAreLocalized ? link.title : t(link.title)
                           }
@@ -304,7 +303,6 @@ export function PublicHeader(props: PublicHeaderProps) {
                       )}
                     >
                       <TopNavLinkContent
-                        icon={link.icon}
                         title={
                           linkTitlesAreLocalized ? link.title : t(link.title)
                         }
@@ -425,7 +423,6 @@ export function PublicHeader(props: PublicHeaderProps) {
                     style={transitionStyle}
                   >
                     <TopNavLinkContent
-                      icon={link.icon}
                       title={
                         linkTitlesAreLocalized ? link.title : t(link.title)
                       }
@@ -443,7 +440,6 @@ export function PublicHeader(props: PublicHeaderProps) {
                   style={transitionStyle}
                 >
                   <TopNavLinkContent
-                    icon={link.icon}
                     title={linkTitlesAreLocalized ? link.title : t(link.title)}
                   />
                 </Link>

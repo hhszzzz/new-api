@@ -49,7 +49,7 @@ import { PromptAuditDetailSheet } from './components/prompt-audit-detail-sheet'
 import { PromptAuditFilterBar } from './components/prompt-audit-filter-bar'
 import { PromptAuditNavigation } from './components/prompt-audit-navigation'
 import {
-  EMPTY_PROMPT_AUDIT_FILTERS,
+  getDefaultPromptAuditFilters,
   promptAuditDeleteFilter,
   promptAuditFilterParams,
   validatePromptAuditFilters,
@@ -81,12 +81,12 @@ export function PromptAuditRecords() {
     ADMIN_PERMISSION_ACTIONS.DELETE
   )
 
-  const [draftFilters, setDraftFilters] = useState<PromptAuditFilters>({
-    ...EMPTY_PROMPT_AUDIT_FILTERS,
-  })
-  const [filters, setFilters] = useState<PromptAuditFilters>({
-    ...EMPTY_PROMPT_AUDIT_FILTERS,
-  })
+  const [draftFilters, setDraftFilters] = useState<PromptAuditFilters>(
+    getDefaultPromptAuditFilters
+  )
+  const [filters, setFilters] = useState<PromptAuditFilters>(
+    getDefaultPromptAuditFilters
+  )
   const [pagination, setPagination] = useState<PaginationState>({
     pageIndex: 0,
     pageSize: 20,
@@ -200,8 +200,9 @@ export function PromptAuditRecords() {
     setRowSelection({})
   }, [draftFilters, t])
   const resetFilters = useCallback(() => {
-    setDraftFilters({ ...EMPTY_PROMPT_AUDIT_FILTERS })
-    setFilters({ ...EMPTY_PROMPT_AUDIT_FILTERS })
+    const defaults = getDefaultPromptAuditFilters()
+    setDraftFilters(defaults)
+    setFilters(defaults)
     setPagination((current) => ({ ...current, pageIndex: 0 }))
     setRowSelection({})
   }, [])

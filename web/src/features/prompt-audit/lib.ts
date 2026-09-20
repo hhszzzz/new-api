@@ -16,6 +16,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { getDefaultTimeRange } from '@/features/usage-logs/lib/utils'
+import dayjs from '@/lib/dayjs'
+
 import type {
   PromptAuditConfigUpdate,
   PromptAuditDeleteFilter,
@@ -37,6 +40,15 @@ export const EMPTY_PROMPT_AUDIT_FILTERS: PromptAuditFilters = {
   request_id: '',
   start_time: '',
   end_time: '',
+}
+
+export function getDefaultPromptAuditFilters(): PromptAuditFilters {
+  const { start, end } = getDefaultTimeRange()
+  return {
+    ...EMPTY_PROMPT_AUDIT_FILTERS,
+    start_time: dayjs(start).format('YYYY-MM-DDTHH:mm'),
+    end_time: dayjs(end).format('YYYY-MM-DDTHH:mm'),
+  }
 }
 
 export function promptAuditFilterParams(

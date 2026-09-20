@@ -214,6 +214,7 @@ func InspectPrompt(c *gin.Context, request PromptAuditRequest) (PromptAuditResul
 	if match != nil {
 		audit.WordlistID, audit.WordlistName, audit.WordlistVersion, audit.MatchedScope = match.ID, match.Name, match.Version, string(match.Scope)
 	}
+	setPromptAuditContent(audit, text)
 	if err := model.CreatePromptAudit(audit); err != nil {
 		logger.LogWarn(c, "wordlist audit persistence failed")
 	} else {

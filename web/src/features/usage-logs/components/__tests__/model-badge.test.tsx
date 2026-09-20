@@ -355,36 +355,82 @@ it('opens the mismatch evidence with the keyboard and shows all three models', a
   const popover = screen
     .getByText('Request Model')
     .closest('[data-slot="popover-content"]')
-  expect(popover).toHaveClass('w-72')
+  expect(popover).toHaveClass(
+    'w-max',
+    'max-w-[calc(100vw-2rem)]'
+  )
+  expect(popover).not.toHaveClass('min-w-72')
   expect(popover).not.toHaveClass('w-96')
 })
 
-it.each([false, true])(
-  'copies the model without opening details when there is no mapping or difference (response observed: %s)',
-  async (observed) => {
-    const user = userEvent.setup()
-    const copy = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue()
-    render(
-      <ModelBadge
-        modelName='requested-model'
-        responseModel={
-          observed
-            ? {
-                requested_model: 'requested-model',
-                upstream_model: 'requested-model',
-                returned_model: 'requested-model',
-              }
-            : undefined
-        }
-      />
-    )
-    expect(screen.queryByRole('button')).not.toBeInTheDocument()
-    await user.click(screen.getByText('requested-model'))
-    expect(copy).toHaveBeenCalledWith('requested-model')
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-    expect(screen.queryByText('Response Model')).not.toBeInTheDocument()
+it('keeps long request, upstream and response models aligned without hard character breaks', async () => {
+  const user = userEvent.setup()
+  const requested = 'deepseek-v4.1-flash'
+  const upstream = 'deepseek/deepseek-v4.1-flash'
+  render(
+    <ModelBadge
+      modelName={requested}
+      actualModel={upstream}
+      responseModel={{
+        requested_model: requested,
+        upstream_model: upstream,
+        returned_model: upstream,
+      }}
+    />
+  )
+
+  await user.click(screen.getByRole('button', { name: `Model: ${requested}` }))
+
+  const grid = screen
+    .getByText('Request Model')
+    .closest('[data-slot="response-model-grid"]')
+  expect(grid).toHaveClass(
+    'grid-cols-[max-content_minmax(0,1fr)]',
+    'sm:grid-cols-[max-content_max-content]',
+    'gap-x-3'
+  )
+  for (const label of ['Request Model', 'Upstream Model', 'Response Model']) {
+    expect(screen.getByText(label)).toHaveClass('whitespace-nowrap')
   }
-)
+  for (const value of screen.getAllByText(upstream)) {
+    expect(value).toHaveClass(
+      'max-w-80',
+      'break-words',
+      '[overflow-wrap:anywhere]'
+    )
+    expect(value).not.toHaveClass('break-all')
+  }
+})
+
+it('copies the model without opening details when no response model was observed', async () => {
+  const user = userEvent.setup()
+  const copy = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue()
+  render(<ModelBadge modelName='requested-model' />)
+  expect(screen.queryByRole('button')).not.toBeInTheDocument()
+  await user.click(screen.getByText('requested-model'))
+  expect(copy).toHaveBeenCalledWith('requested-model')
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  expect(screen.queryByText('Response Model')).not.toBeInTheDocument()
+})
+
+it('keeps an unchanged observed response model available in the popover', async () => {
+  const user = userEvent.setup()
+  render(
+    <ModelBadge
+      modelName='requested-model'
+      responseModel={{
+        requested_model: 'requested-model',
+        upstream_model: 'requested-model',
+        returned_model: 'requested-model',
+      }}
+    />
+  )
+  await user.click(
+    screen.getByRole('button', { name: 'Model: requested-model' })
+  )
+  expect(await screen.findByText('Response Model')).toBeVisible()
+  expect(screen.queryByText(/^Response model:/)).not.toBeInTheDocument()
+})
 
 it('keeps mapped model details available when the response matches the upstream model', async () => {
   const user = userEvent.setup()

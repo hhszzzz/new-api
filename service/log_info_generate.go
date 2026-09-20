@@ -203,13 +203,7 @@ func AppendResponseModelLogInfo(relayInfo *relaycommon.RelayInfo, other *model.L
 	if relayInfo == nil || relayInfo.ResponseModel == nil || other == nil {
 		return
 	}
-	observation := relayInfo.ResponseModel
-	if observation.ReturnedModel == observation.RequestedModel &&
-		(observation.UpstreamModel == "" || observation.UpstreamModel == observation.RequestedModel) &&
-		(relayInfo.ChannelMeta == nil || !relayInfo.IsModelMapped) {
-		return
-	}
-	other.SetAdmin("response_model", *observation)
+	other.SetAdmin("response_model", *relayInfo.ResponseModel)
 }
 
 func AppendParamOverrideAdminInfo(relayInfo *relaycommon.RelayInfo, other *model.LogOther) {

@@ -35,7 +35,7 @@ import { SystemTasksPanel } from '../components/system-tasks-panel'
 const task = {
   id: 1,
   task_id: 'history-task',
-  type: 'model_update',
+  type: 'model_radar_sync',
   status: 'succeeded',
   created_at: 100,
   updated_at: 200,
@@ -84,9 +84,12 @@ it('filters history on the server and resets pagination without hiding active ta
   })
   const client = renderPanel()
   await screen.findByRole('combobox', { name: 'Type' })
-  await userEvent.click(
-    await screen.findByRole('button', { name: 'Go to next page' })
-  )
+  expect(screen.getByText('Batch model radar data update')).toBeInTheDocument()
+  const nextPageButton = await screen.findByRole('button', {
+    name: 'Go to next page',
+  })
+  expect(screen.getByText('Rows per page')).toBeInTheDocument()
+  await userEvent.click(nextPageButton)
   await waitFor(() =>
     expect(get).toHaveBeenCalledWith(
       '/api/system-task/list',

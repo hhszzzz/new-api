@@ -26,7 +26,6 @@ import {
   getCustomHeaderNavPath,
   parseHeaderNavModulesFromStatus,
 } from '@/lib/nav-modules'
-import { TOP_NAV_ICONS } from '@/lib/top-nav-icons'
 import { useAuthStore } from '@/stores/auth-store'
 
 /**
@@ -66,7 +65,6 @@ export function useTopNavLinks(): TopNavLink[] {
     linksByKey.set('console', {
       title: t('Console'),
       href: '/dashboard',
-      icon: TOP_NAV_ICONS.console,
     })
   }
 
@@ -75,10 +73,9 @@ export function useTopNavLinks(): TopNavLink[] {
   if (pricing && typeof pricing === 'object' && pricing.enabled) {
     const requiresAuth = pricing.requireAuth && !isAuthed
     linksByKey.set('pricing', {
-      title: t('Model Square'),
+      title: t('Models'),
       href: '/pricing',
       requiresAuth,
-      icon: TOP_NAV_ICONS.pricing,
     })
   }
 
@@ -90,7 +87,6 @@ export function useTopNavLinks(): TopNavLink[] {
       title: t('Model Radar'),
       href: '/model-radar',
       requiresAuth,
-      icon: TOP_NAV_ICONS.modelRadar,
     })
   }
 
@@ -102,7 +98,6 @@ export function useTopNavLinks(): TopNavLink[] {
       title: t('Rankings'),
       href: '/rankings',
       requiresAuth,
-      icon: TOP_NAV_ICONS.rankings,
     })
   }
 
@@ -113,13 +108,11 @@ export function useTopNavLinks(): TopNavLink[] {
         title: t('Docs'),
         href: docsLink,
         external: true,
-        icon: TOP_NAV_ICONS.docs,
       })
     } else {
       linksByKey.set('docs', {
         title: t('Docs'),
         href: '/docs',
-        icon: TOP_NAV_ICONS.docs,
       })
     }
   }
@@ -129,7 +122,6 @@ export function useTopNavLinks(): TopNavLink[] {
     linksByKey.set('about', {
       title: t('About'),
       href: '/about',
-      icon: TOP_NAV_ICONS.about,
     })
   }
 
@@ -138,7 +130,6 @@ export function useTopNavLinks(): TopNavLink[] {
     linksByKey.set(getCustomHeaderNavOrderKey(item.id), {
       title: item.title,
       href: getCustomHeaderNavPath(item.id),
-      icon: item.icon || TOP_NAV_ICONS.custom,
     })
   }
 
