@@ -20,6 +20,7 @@ import (
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/prompt_audit_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	hosttypes "github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -106,8 +107,12 @@ func TestResponsesWebSocketEndToEndReuseBillingAndChannelDisable(t *testing.T) {
 	setting.SetCheckSensitiveOnPromptEnabled(false)
 	var promptAuditCalls atomic.Int32
 	promptAuditGuard := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		promptAuditCalls.Add(1)
+		call := promptAuditCalls.Add(1)
 		w.Header().Set("Content-Type", "application/json")
+		if call == 1 {
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"Safety: Unsafe\nCategories: Jailbreak"}}]}`))
+			return
+		}
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"Safety: Safe\nCategories: None"}}]}`))
 	}))
 	t.Cleanup(promptAuditGuard.Close)
@@ -222,6 +227,22 @@ func TestResponsesWebSocketEndToEndReuseBillingAndChannelDisable(t *testing.T) {
 	t.Cleanup(func() { _ = client.Close() })
 	assert.Equal(t, "responses", client.Subprotocol())
 
+	blockedCreate := fmt.Sprintf(`{
+		"type":"response.create",
+		"event_id":"evt-blocked",
+		"model":"%s",
+		"input":"blocked"
+	}`, responsesWSE2EPublicModel)
+	require.NoError(t, client.WriteMessage(websocket.TextMessage, []byte(blockedCreate)))
+	blockedEvent := readResponsesWSE2EMessage(t, client)
+	var blocked map[string]any
+	require.NoError(t, common.Unmarshal(blockedEvent, &blocked))
+	assert.Equal(t, "error", blocked["type"])
+	assert.Equal(t, float64(http.StatusForbidden), blocked["status"])
+	assert.Equal(t, "evt-blocked", blocked["event_id"])
+	blockedError, _ := blocked["error"].(map[string]any)
+	assert.Equal(t, string(hosttypes.ErrorCodePromptAuditBlocked), blockedError["code"])
+
 	firstCreate := fmt.Sprintf(`{
 		"type":"response.create",
 		"event_id":"evt-failed",
@@ -313,13 +334,18 @@ func TestResponsesWebSocketEndToEndReuseBillingAndChannelDisable(t *testing.T) {
 	assert.Equal(t, 2, consumeLog.PromptTokens)
 	assert.Equal(t, 3, consumeLog.CompletionTokens)
 	assert.Equal(t, 5, consumeLog.Quota)
-	assert.EqualValues(t, 2, promptAuditCalls.Load(), "each response.create must be audited independently")
+	assert.EqualValues(t, 3, promptAuditCalls.Load(), "each response.create must be audited independently")
 	var promptAudits []model.PromptAudit
 	require.NoError(t, db.Order("id asc").Find(&promptAudits).Error)
-	require.Len(t, promptAudits, 2)
+	require.Len(t, promptAudits, 3)
 	assert.Equal(t, model.PromptAuditStatusDone, promptAudits[0].Status)
 	assert.Equal(t, model.PromptAuditStatusDone, promptAudits[1].Status)
+	assert.Equal(t, model.PromptAuditStatusDone, promptAudits[2].Status)
+	assert.Equal(t, service.PromptAuditDecisionBlock, promptAudits[0].Decision)
+	assert.Equal(t, service.PromptAuditDecisionPass, promptAudits[1].Decision)
+	assert.Equal(t, service.PromptAuditDecisionPass, promptAudits[2].Decision)
 	assert.NotEqual(t, promptAudits[0].PromptHash, promptAudits[1].PromptHash)
+	assert.NotEqual(t, promptAudits[1].PromptHash, promptAudits[2].PromptHash)
 
 	statusRequest, err := http.NewRequest(
 		http.MethodPost,

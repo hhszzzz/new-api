@@ -232,7 +232,12 @@ func (s *responsesWSSession) runRequest(state *responsesWSCallState, message []b
 		c.Request.ContentLength = int64(len(create.Body))
 		return s.runCall(c, state, create)
 	})
-	if apiErr != nil && (apiErr.StatusCode == http.StatusUnauthorized || apiErr.StatusCode == http.StatusForbidden) {
+	// Prompt inspection rejects one response.create, not the authenticated
+	// WebSocket session. Keep the connection available so the client can submit
+	// a corrected request; credential and account authorization failures still
+	// invalidate the session.
+	if apiErr != nil && (apiErr.StatusCode == http.StatusUnauthorized ||
+		apiErr.StatusCode == http.StatusForbidden && apiErr.GetErrorCode() != types.ErrorCodePromptAuditBlocked) {
 		state.closeAfter = true
 	}
 }
