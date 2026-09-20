@@ -326,6 +326,7 @@ it('opens the mismatch evidence with the keyboard and shows all three models', a
   render(
     <ModelBadge
       modelName='requested-model'
+      actualModel='mapped-model'
       responseModel={{
         requested_model: 'requested-model',
         upstream_model: 'mapped-model',
@@ -333,13 +334,15 @@ it('opens the mismatch evidence with the keyboard and shows all three models', a
       }}
     />
   )
-  expect(screen.getByText(`Response model: ${returned}`)).toBeVisible()
+  expect(screen.queryByText(`Response model: ${returned}`)).toBeNull()
   await user.tab()
-  expect(
-    screen.getByRole('button', {
-      name: `Model: requested-model, Response model: ${returned}`,
-    })
-  ).toHaveFocus()
+  const trigger = screen.getByRole('button', {
+    name: `Model: requested-model, Response model: ${returned}`,
+  })
+  expect(trigger).toHaveFocus()
+  const warning = trigger.querySelector('[data-response-model-warning]')
+  expect(warning).toHaveAttribute('title', `Response model: ${returned}`)
+  expect(warning?.previousElementSibling?.tagName).toBe('svg')
   await user.keyboard('{Enter}')
   expect(await screen.findByText(returned)).toBeVisible()
   expect(screen.getByText('mapped-model')).toBeVisible()
@@ -349,6 +352,11 @@ it('opens the mismatch evidence with the keyboard and shows all three models', a
   expect(
     screen.getByText(/this warning alone does not prove model substitution/)
   ).toBeVisible()
+  const popover = screen
+    .getByText('Request Model')
+    .closest('[data-slot="popover-content"]')
+  expect(popover).toHaveClass('w-fit', 'min-w-64')
+  expect(popover).not.toHaveClass('w-96')
 })
 
 it.each([false, true])(

@@ -796,7 +796,7 @@ export function useCommonLogsColumns(
           : null
 
         return (
-          <div className='flex w-fit flex-col items-center gap-0.5'>
+          <div className='flex w-fit flex-col items-start gap-0.5'>
             <ModelBadge
               modelName={modelInfo.name}
               actualModel={modelInfo.actualModel}

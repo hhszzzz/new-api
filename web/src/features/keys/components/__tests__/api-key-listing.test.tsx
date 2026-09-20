@@ -304,7 +304,16 @@ function KeysPage() {
   )
 }
 
-async function renderKeysPage(status = 1, overrides: Partial<ApiKey> = {}) {
+async function renderKeysPage(
+  status = 1,
+  overrides: Partial<ApiKey> = {},
+  apiInfo: Array<{
+    url: string
+    route: string
+    description: string
+    color: string
+  }> = []
+) {
   let currentKey = { ...key, status, ...overrides }
   vi.mocked(api.get).mockImplementation(async (url) => {
     if (url.startsWith('/api/token/')) {
@@ -325,7 +334,10 @@ async function renderKeysPage(status = 1, overrides: Partial<ApiKey> = {}) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
-  client.setQueryData(['status'], {})
+  client.setQueryData(['status'], {
+    api_info_enabled: true,
+    api_info: apiInfo,
+  })
   clients.push(client)
   const root = createRootRoute()
   const auth = createRoute({ getParentRoute: () => root, id: '_authenticated' })
@@ -367,6 +379,41 @@ it('combines creation and last use while keeping expiry, models and IP restricti
   })
   expect(quotaHeader).not.toHaveClass('pr-8')
   expect(quotaTrigger.closest('td')).not.toHaveClass('pr-8')
+})
+
+it('shows configured API addresses below the key search toolbar', async () => {
+  await renderKeysPage(1, {}, [
+    {
+      route: 'OpenAI',
+      url: 'https://api.example.com/v1',
+      description: 'OpenAI-compatible API',
+      color: 'blue',
+    },
+    {
+      route: 'Claude',
+      url: 'https://api.example.com/anthropic',
+      description: 'Anthropic-compatible API',
+      color: 'purple',
+    },
+  ])
+
+  const search = screen.getByPlaceholderText('Filter by name...')
+  const addresses = screen.getByRole('region', { name: 'API Addresses' })
+  const table = screen.getByRole('table')
+  expect(
+    search.compareDocumentPosition(addresses) & Node.DOCUMENT_POSITION_FOLLOWING
+  ).not.toBe(0)
+  expect(
+    addresses.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING
+  ).not.toBe(0)
+  expect(addresses).toHaveClass('flex', 'flex-wrap')
+  expect(
+    screen.getByRole('link', { name: 'https://api.example.com/v1' })
+  ).toHaveAttribute('href', 'https://api.example.com/v1')
+  expect(
+    screen.getByRole('button', { name: 'Test Latency: OpenAI' })
+  ).toBeVisible()
+  expect(screen.getByRole('button', { name: 'Copy URL: Claude' })).toBeVisible()
 })
 
 it('restores dates hidden by the old default and preserves unrelated column preferences', async () => {

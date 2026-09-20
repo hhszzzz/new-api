@@ -45,6 +45,7 @@ import type { SidebarData } from '@/components/layout/types'
 import {
   ADMIN_PERMISSION_ACTIONS,
   ADMIN_PERMISSION_RESOURCES,
+  hasPermission,
 } from '@/lib/admin-permissions'
 import { ROLE } from '@/lib/roles'
 import { useAuthStore } from '@/stores/auth-store'
@@ -57,8 +58,17 @@ import { useAuthStore } from '@/stores/auth-store'
  */
 export function useSidebarData(): SidebarData {
   const { t } = useTranslation()
-  const canAccessAccountPool = useAuthStore(
-    (state) => state.auth.user?.permissions?.account_pool === true
+  const user = useAuthStore((state) => state.auth.user)
+  const canAccessAccountPool = user?.permissions?.account_pool === true
+  const canReadPromptAudit = hasPermission(
+    user,
+    ADMIN_PERMISSION_RESOURCES.PROMPT_AUDIT,
+    ADMIN_PERMISSION_ACTIONS.READ
+  )
+  const canManagePromptAudit = hasPermission(
+    user,
+    ADMIN_PERMISSION_RESOURCES.PROMPT_AUDIT,
+    ADMIN_PERMISSION_ACTIONS.MANAGE
   )
 
   return {
@@ -107,6 +117,11 @@ export function useSidebarData(): SidebarData {
             title: t('Audit Logs'),
             url: '/usage-logs/audit',
             icon: ClipboardList,
+            requiredRole: ROLE.ADMIN,
+            requiredPermission: {
+              resource: ADMIN_PERMISSION_RESOURCES.AUDIT,
+              action: ADMIN_PERMISSION_ACTIONS.READ,
+            },
           },
           {
             title: t('Task Logs'),
@@ -182,24 +197,22 @@ export function useSidebarData(): SidebarData {
             url: '/subscriptions',
             icon: CreditCard,
           },
-          {
-            title: t('Prompt audit records'),
-            url: '/prompt-audit',
-            icon: ScanSearch,
-            requiredPermission: {
-              resource: ADMIN_PERMISSION_RESOURCES.PROMPT_AUDIT,
-              action: ADMIN_PERMISSION_ACTIONS.READ,
-            },
-          },
-          {
-            title: t('Prompt audit settings'),
-            url: '/prompt-audit/settings',
-            icon: ShieldCheck,
-            requiredPermission: {
-              resource: ADMIN_PERMISSION_RESOURCES.PROMPT_AUDIT,
-              action: ADMIN_PERMISSION_ACTIONS.MANAGE,
-            },
-          },
+          ...(canReadPromptAudit || canManagePromptAudit
+            ? [
+                {
+                  title: t('Prompt audit'),
+                  url: canReadPromptAudit
+                    ? '/prompt-audit'
+                    : '/prompt-audit/settings',
+                  activeUrls: [
+                    '/prompt-audit',
+                    '/prompt-audit/settings',
+                    '/prompt-audit/wordlists',
+                  ],
+                  icon: ScanSearch,
+                },
+              ]
+            : []),
           {
             title: t('System Info'),
             url: '/system-info',

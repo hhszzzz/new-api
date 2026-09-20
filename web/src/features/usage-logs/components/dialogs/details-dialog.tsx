@@ -37,7 +37,6 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import {
   Settings2,
-  Route,
   AlertTriangle,
   Headphones,
   Monitor,
@@ -748,6 +747,41 @@ export function DetailsDialog(props: DetailsDialogProps) {
             />
           )}
 
+          {props.isAdminView &&
+            diagnostics &&
+            (diagnostics.request_size != null ||
+              diagnostics.response_size != null ||
+              diagnostics.upstream_request_size != null) && (
+              <DetailRow
+                label={t('Payload Size')}
+                value={
+                  <span className='flex flex-wrap gap-x-3 gap-y-0.5'>
+                    {diagnostics.request_size != null && (
+                      <span>
+                        {t('Request')}:{' '}
+                        {formatDiagnosticBytes(diagnostics.request_size)}
+                      </span>
+                    )}
+                    {diagnostics.upstream_request_size != null && (
+                      <span>
+                        {t('Upstream Request')}:{' '}
+                        {formatDiagnosticBytes(
+                          diagnostics.upstream_request_size
+                        )}
+                      </span>
+                    )}
+                    {diagnostics.response_size != null && (
+                      <span>
+                        {t('Response')}:{' '}
+                        {formatDiagnosticBytes(diagnostics.response_size)}
+                      </span>
+                    )}
+                  </span>
+                }
+                mono
+              />
+            )}
+
           {props.isAdminView && props.log.channel > 0 && (
             <DetailRow
               label={t('Surface Channel')}
@@ -949,6 +983,16 @@ export function DetailsDialog(props: DetailsDialogProps) {
           )}
         </div>
 
+        {props.isAdminView && adminInfo?.request_policy?.length ? (
+          <CollapsibleDetailSection
+            key={`request-policy-${props.log.id}-${props.open}`}
+            label={t('Request policy decisions')}
+            count={adminInfo.request_policy.length}
+          >
+            <PolicyDecisionRecord events={adminInfo.request_policy} />
+          </CollapsibleDetailSection>
+        ) : null}
+
         <ProtocolConversionDetails
           key={`conversion-${props.log.id}`}
           other={other}
@@ -956,79 +1000,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
           isAdminView={props.isAdminView}
         />
 
-        {props.isAdminView && diagnostics && (
-          <DetailSection label={t('Request Diagnostics')}>
-            {(diagnostics.method || diagnostics.path) && (
-              <DetailRow
-                label={t('Request')}
-                value={`${diagnostics.method || '-'} ${diagnostics.path || '-'}`}
-                mono
-              />
-            )}
-            {diagnostics.client && (
-              <DetailRow label={t('Client')} value={diagnostics.client} mono />
-            )}
-            {diagnostics.node && (
-              <DetailRow label={t('Node')} value={diagnostics.node} mono />
-            )}
-            {diagnostics.status_code != null && (
-              <DetailRow
-                label={t('Status Code')}
-                value={String(diagnostics.status_code)}
-                mono
-              />
-            )}
-            {(diagnostics.request_size != null ||
-              diagnostics.response_size != null ||
-              diagnostics.upstream_request_size != null) && (
-              <DetailRow
-                label={t('Payload Size')}
-                value={
-                  <span className='flex flex-col gap-0.5'>
-                    {diagnostics.request_size != null && (
-                      <span>
-                        {t('Request')}:{' '}
-                        {formatDiagnosticBytes(diagnostics.request_size)}
-                      </span>
-                    )}
-                    {diagnostics.upstream_request_size != null && (
-                      <span>
-                        {t('Upstream Request')}:{' '}
-                        {formatDiagnosticBytes(
-                          diagnostics.upstream_request_size
-                        )}
-                      </span>
-                    )}
-                    {diagnostics.response_size != null && (
-                      <span>
-                        {t('Response')}:{' '}
-                        {formatDiagnosticBytes(diagnostics.response_size)}
-                      </span>
-                    )}
-                  </span>
-                }
-                mono
-              />
-            )}
-            {diagnostics.route_pool_name && (
-              <DetailRow
-                label={t('Route Pool')}
-                value={diagnostics.route_pool_name}
-                mono
-              />
-            )}
-          </DetailSection>
-        )}
-
         {/* Quota saturation marker (admin only) */}
-        {props.isAdminView && adminInfo?.request_policy?.length ? (
-          <DetailSection
-            label={t('Request policy decisions')}
-            icon={<Route className='size-4' />}
-          >
-            <PolicyDecisionRecord events={adminInfo.request_policy} />
-          </DetailSection>
-        ) : null}
         {props.isAdminView && other?.admin_info?.quota_saturation && (
           <DetailSection
             icon={<AlertTriangle className='size-3.5' aria-hidden='true' />}

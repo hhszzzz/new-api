@@ -93,12 +93,31 @@ const routedLog: UsageLog = {
       upstream_protocol: 'chat',
       protocol_converter: 'responses_to_chat',
       protocol_state_mode: 'replay',
+      request_policy: [
+        {
+          attempt: 1,
+          channel_id: 7,
+          group: 'default',
+          rule: 'Existing session rule',
+          elapsed_ms: 12,
+          decision: {
+            action: 'attempt',
+            reason: 'channel_selected',
+            source: 'routing',
+          },
+        },
+      ],
     },
     diagnostics: {
       method: 'POST',
       path: '/v1/responses',
       ip: '203.0.113.10',
       client: 'codex',
+      node: 'gateway-node-a',
+      status_code: 200,
+      request_size: 1536,
+      upstream_request_size: 2048,
+      response_size: 3072,
       request_protocol: 'responses',
       route_pool_name: '测试路由转换',
       route_rule_id: 3,
@@ -227,7 +246,7 @@ describe('usage-log model route component visibility', () => {
     const label = await within(cell).findByText('chat translation')
     const badge = label.closest('[data-slot="status-badge"]')
     expect(badge).toHaveClass('h-3', 'leading-3')
-    expect(badge?.parentElement).toHaveClass('flex-col', 'items-center')
+    expect(badge?.parentElement).toHaveClass('flex-col', 'items-start')
     expect(badge?.previousElementSibling).toHaveTextContent(REQUESTED_MODEL)
     expect(cell).not.toHaveTextContent('→')
   })
@@ -328,13 +347,22 @@ describe('usage-log model route component visibility', () => {
       })
 
       const dialog = screen.getByRole('dialog')
+      expect(
+        within(dialog).queryByText('Request Diagnostics')
+      ).not.toBeInTheDocument()
       if (shouldShow) {
-        expect(within(dialog).getByText('Request Diagnostics')).toBeVisible()
+        expect(within(dialog).getByText('Payload Size')).toBeVisible()
+        expect(within(dialog).getByText(/1\.5 KiB/)).toBeVisible()
         expect(within(dialog).getByText('Safe Request Headers')).toBeVisible()
         expect(within(dialog).getByText('Request Conversion')).toBeVisible()
+        expect(
+          within(dialog).getByRole('button', {
+            name: /Request policy decisions/,
+          })
+        ).toBeVisible()
       } else {
         expect(
-          within(dialog).queryByText('Request Diagnostics')
+          within(dialog).queryByText('Payload Size')
         ).not.toBeInTheDocument()
         expect(
           within(dialog).queryByText('Safe Request Headers')
@@ -342,11 +370,16 @@ describe('usage-log model route component visibility', () => {
         expect(
           within(dialog).queryByText('Request Conversion')
         ).not.toBeInTheDocument()
+        expect(
+          within(dialog).queryByRole('button', {
+            name: /Request policy decisions/,
+          })
+        ).not.toBeInTheDocument()
       }
     }
   )
 
-  test('keeps safe request headers collapsed and diagnostics always open', async () => {
+  test('keeps policy decisions and safe request headers collapsed while showing payload size inline', async () => {
     renderDetailsDialog(ROLE.ADMIN, 'all')
 
     await waitFor(() => {
@@ -357,10 +390,17 @@ describe('usage-log model route component visibility', () => {
     })
 
     const dialog = screen.getByRole('dialog')
-    // Request diagnostics render inline without a disclosure control.
-    expect(
-      within(dialog).queryByRole('button', { name: /Request Diagnostics/ })
-    ).not.toBeInTheDocument()
+    expect(within(dialog).getByText('Payload Size')).toBeVisible()
+    expect(within(dialog).getByText(/2\.0 KiB/)).toBeVisible()
+    expect(within(dialog).getByText(/3\.0 KiB/)).toBeVisible()
+    expect(within(dialog).queryByText('Request Diagnostics')).toBeNull()
+    expect(within(dialog).queryByText('gateway-node-a')).toBeNull()
+    expect(within(dialog).queryByText('Route Pool')).toBeNull()
+    const policyTrigger = within(dialog).getByRole('button', {
+      name: /Request policy decisions/,
+    })
+    expect(policyTrigger).toHaveAttribute('aria-expanded', 'false')
+    expect(within(dialog).queryByText('Channel selected')).toBeNull()
     const headerTrigger = within(dialog).getByRole('button', {
       name: /Safe Request Headers/,
     })
@@ -525,7 +565,7 @@ describe('usage-log model route component visibility', () => {
     expect(within(dialog).getByText('recoverable frame error')).toBeVisible()
   })
 
-  test('places reasoning effort before request diagnostics', async () => {
+  test('places payload size and policy decisions before request conversion', async () => {
     renderDetailsDialog(ROLE.ADMIN, 'all')
 
     await waitFor(() => {
@@ -536,11 +576,18 @@ describe('usage-log model route component visibility', () => {
     })
 
     const dialog = screen.getByRole('dialog')
-    const reasoningLabel = within(dialog).getByText('Reasoning Effort')
-    const diagnosticsHeading = within(dialog).getByText('Request Diagnostics')
+    const payloadLabel = within(dialog).getByText('Payload Size')
+    const policyHeading = within(dialog).getByRole('button', {
+      name: /Request policy decisions/,
+    })
+    const conversionHeading = within(dialog).getByText('Request Conversion')
 
     expect(
-      reasoningLabel.compareDocumentPosition(diagnosticsHeading) &
+      payloadLabel.compareDocumentPosition(policyHeading) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).not.toBe(0)
+    expect(
+      policyHeading.compareDocumentPosition(conversionHeading) &
         Node.DOCUMENT_POSITION_FOLLOWING
     ).not.toBe(0)
   })
@@ -564,11 +611,17 @@ describe('usage-log model route component visibility', () => {
     expect(
       within(dialog).getByText('Resend full conversation history')
     ).toBeVisible()
-    expect(within(dialog).getByText('Route Pool')).toBeVisible()
-    expect(within(dialog).getByText('测试路由转换')).toBeVisible()
+    expect(within(dialog).queryByText('Route Pool')).not.toBeInTheDocument()
+    expect(within(dialog).queryByText('测试路由转换')).not.toBeInTheDocument()
     expect(within(dialog).queryByText('Route Rule')).not.toBeInTheDocument()
     expect(within(dialog).queryByText('#3')).not.toBeInTheDocument()
     expect(within(dialog).getByText('responses_to_chat')).toBeVisible()
+    expect(
+      within(dialog)
+        .getByText('Request Conversion')
+        .closest('label')
+        ?.querySelector('svg')
+    ).toBeNull()
     const flowRows = within(dialog).getAllByText(
       /Client request|Upstream request|Request path/
     )

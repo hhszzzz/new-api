@@ -33,7 +33,6 @@ const SOURCE_FILES = [
   '../components/prompt-audit-navigation.tsx',
   '../components/prompt-audit-detail-sheet.tsx',
   '../components/prompt-audit-delete-dialog.tsx',
-  '../../system-settings/request-policies/request-checks-section.tsx',
 ]
 const LOCALES = ['en', 'zh', 'zh-TW', 'fr', 'ru', 'ja', 'vi']
 const DYNAMIC_KEYS = [

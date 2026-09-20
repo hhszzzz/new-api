@@ -89,11 +89,7 @@ export function ProtocolConversionDetails(props: {
   ].join('\n')
 
   return (
-    <DetailSection
-      label={t('Request Conversion')}
-      icon={<Route className='size-3.5' aria-hidden='true' />}
-      iconTone='plain'
-    >
+    <DetailSection label={t('Request Conversion')}>
       <div className='flex min-w-0 flex-col gap-2.5'>
         <div className='flex min-w-0 items-start justify-between gap-3'>
           <div className='min-w-0 flex-1 space-y-1'>

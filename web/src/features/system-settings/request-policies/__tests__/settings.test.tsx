@@ -230,22 +230,6 @@ describe('request policy settings', () => {
     }
   )
 
-  it('opens the prompt inspection controls without rewriting legacy filtering options', async () => {
-    await renderPolicies('/system-settings/request-policies/filtering')
-    expect(
-      await screen.findByRole('button', { name: 'Inspection rules' })
-    ).toHaveAttribute('href', '/prompt-audit/settings')
-    expect(screen.getByRole('button', { name: 'Wordlists' })).toHaveAttribute(
-      'href',
-      '/prompt-audit/wordlists'
-    )
-    expect(
-      screen.queryByRole('textbox', { name: 'Blocked keywords' })
-    ).not.toBeInTheDocument()
-    expect(api.patch).not.toHaveBeenCalled()
-    expect(api.put).not.toHaveBeenCalled()
-  })
-
   it('invalid retry status ranges show validation and do not write options', async () => {
     await renderPolicies('/system-settings/request-policies/retry')
     const codes = await screen.findByRole('textbox', {
@@ -332,9 +316,10 @@ describe('request policy settings', () => {
   it.each([
     ['/system-settings/models/channel-affinity', 'routing'],
     ['/system-settings/models/routing-reliability', 'routing'],
-    ['/system-settings/security/sensitive-words', 'filtering'],
+    ['/system-settings/security/sensitive-words', 'routing'],
     ['/system-settings/operations/monitoring', 'health'],
     ['/system-settings/request-policies/', 'routing'],
+    ['/system-settings/request-policies/filtering', 'routing'],
     ['/system-settings/request-policies/unknown', 'routing'],
   ])('%s opens the corresponding policy page', async (path, section) => {
     const router = await renderPolicies(path)

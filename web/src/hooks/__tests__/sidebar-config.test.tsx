@@ -26,7 +26,13 @@ import {
   parseSidebarModulesAdmin,
   serializeSidebarModulesAdmin,
 } from '@/features/system-settings/maintenance/config'
-import { useAuthStore } from '@/stores/auth-store'
+import {
+  ADMIN_PERMISSION_ACTIONS,
+  ADMIN_PERMISSION_RESOURCES,
+} from '@/lib/admin-permissions'
+import { ROLE } from '@/lib/roles'
+import { Route as AuditLogsRoute } from '@/routes/_authenticated/usage-logs/audit'
+import { useAuthStore, type AuthUser } from '@/stores/auth-store'
 
 import { useSidebarConfig } from '../use-sidebar-config'
 import { useSidebarData } from '../use-sidebar-data'
@@ -45,7 +51,12 @@ afterEach(() => {
   useAuthStore.getState().auth.reset()
 })
 
-function sidebarFor(admin?: object, user?: object, canConfigure = true) {
+function sidebarFor(
+  admin?: object,
+  user?: object,
+  canConfigure = true,
+  authOverrides: Partial<AuthUser> = {}
+) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -56,8 +67,14 @@ function sidebarFor(admin?: object, user?: object, canConfigure = true) {
     id: 1,
     username: 'alice',
     role: 1,
-    permissions: { sidebar_settings: canConfigure },
-    sidebar_modules: user ? JSON.stringify(user) : '',
+    ...authOverrides,
+    permissions: {
+      sidebar_settings: canConfigure,
+      ...authOverrides.permissions,
+    },
+    sidebar_modules: user
+      ? JSON.stringify(user)
+      : (authOverrides.sidebar_modules ?? ''),
   })
   function Wrapper(props: { children: ReactNode }) {
     return (
@@ -178,5 +195,98 @@ describe('audit log sidebar entry', () => {
       .map((item) => item.title)
     expect(titles).not.toContain('Logs')
     expect(titles).toContain('Audit Logs')
+  })
+
+  it('marks the audit console as administrator-only', () => {
+    const { result } = sidebarFor()
+    const audit = result.current
+      .flatMap((group) => group.items)
+      .find((item) => item.title === 'Audit Logs')
+    expect(audit).toMatchObject({
+      requiredRole: ROLE.ADMIN,
+      requiredPermission: {
+        resource: ADMIN_PERMISSION_RESOURCES.AUDIT,
+        action: ADMIN_PERMISSION_ACTIONS.READ,
+      },
+    })
+  })
+})
+
+describe('prompt audit sidebar entry', () => {
+  it.each([
+    [ADMIN_PERMISSION_ACTIONS.READ, '/prompt-audit'],
+    [ADMIN_PERMISSION_ACTIONS.MANAGE, '/prompt-audit/settings'],
+  ])(
+    'uses one entry for an administrator with %s permission',
+    (action, url) => {
+      const { result } = sidebarFor(undefined, undefined, true, {
+        role: ROLE.ADMIN,
+        permissions: {
+          admin_permissions: {
+            [ADMIN_PERMISSION_RESOURCES.PROMPT_AUDIT]: { [action]: true },
+          },
+        },
+      })
+      const promptItems = result.current
+        .flatMap((group) => group.items)
+        .filter((item) => item.title === 'Prompt audit')
+      expect(promptItems).toHaveLength(1)
+      expect(promptItems[0]).toMatchObject({ url })
+    }
+  )
+
+  it('hides the entry without prompt-audit read or manage permission', () => {
+    const { result } = sidebarFor(undefined, undefined, true, {
+      role: ROLE.ADMIN,
+    })
+    expect(
+      result.current
+        .flatMap((group) => group.items)
+        .some((item) => item.title === 'Prompt audit')
+    ).toBe(false)
+  })
+})
+
+describe('audit log route access', () => {
+  it('redirects a regular user to the forbidden page', () => {
+    useAuthStore.getState().auth.setUser({
+      id: 1,
+      username: 'regular-user',
+      role: ROLE.USER,
+    })
+    expect(() => AuditLogsRoute.options.beforeLoad?.({} as never)).toThrow(
+      expect.objectContaining({
+        options: expect.objectContaining({ to: '/403' }),
+      })
+    )
+  })
+
+  it('allows an administrator to open the audit console', () => {
+    useAuthStore.getState().auth.setUser({
+      id: 2,
+      username: 'administrator',
+      role: ROLE.ADMIN,
+      permissions: {
+        admin_permissions: {
+          [ADMIN_PERMISSION_RESOURCES.AUDIT]: {
+            [ADMIN_PERMISSION_ACTIONS.READ]: true,
+          },
+        },
+      },
+    })
+    expect(() => AuditLogsRoute.options.beforeLoad?.({} as never)).not.toThrow()
+  })
+
+  it('redirects an administrator without audit-read permission', () => {
+    useAuthStore.getState().auth.setUser({
+      id: 3,
+      username: 'restricted-administrator',
+      role: ROLE.ADMIN,
+    })
+    expect(() => AuditLogsRoute.options.beforeLoad?.({} as never)).toThrow(
+      expect.objectContaining({
+        options: expect.objectContaining({ to: '/403' }),
+      })
+    )
   })
 })

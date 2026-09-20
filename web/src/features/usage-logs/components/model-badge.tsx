@@ -133,19 +133,21 @@ export function ModelBadge(props: ModelBadgeProps) {
   const content = (
     <>
       <ModelBadgeContent {...props} copyable={false} />
-      {mismatch && (
-        <StatusBadge
-          icon={AlertTriangle}
-          label={responseModelLabel}
-          variant='warning'
-          copyable={false}
-        />
-      )}
-      {!mismatch && props.actualModel && (
+      {props.actualModel && (
         <Route
           className='text-muted-foreground size-3 shrink-0'
           aria-hidden='true'
         />
+      )}
+      {mismatch && (
+        <span
+          data-response-model-warning
+          className='inline-flex shrink-0 text-amber-600 dark:text-amber-400'
+          title={responseModelLabel}
+          aria-label={responseModelLabel}
+        >
+          <AlertTriangle className='size-3.5' aria-hidden='true' />
+        </span>
       )}
     </>
   )
@@ -177,7 +179,7 @@ export function ModelBadge(props: ModelBadgeProps) {
       >
         {content}
       </PopoverTrigger>
-      <PopoverContent className='w-96 max-w-[calc(100vw-2rem)]'>
+      <PopoverContent className='w-fit max-w-[min(24rem,calc(100vw-2rem))] min-w-64'>
         {props.responseModel ? (
           <ResponseModelDetails observation={props.responseModel} />
         ) : (

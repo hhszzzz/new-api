@@ -32,6 +32,7 @@ import {
   DISABLED_ROW_DESKTOP,
   DISABLED_ROW_MOBILE,
   DataTablePage,
+  DataTableToolbar,
   useDebouncedColumnFilter,
   useDataTable,
   usePersistedTableSorting,
@@ -58,6 +59,7 @@ import {
   ERROR_MESSAGES,
 } from '../constants'
 import type { ApiKey, ApiKeySortBy } from '../types'
+import { ApiAddressesBar } from './api-addresses-bar'
 import { ApiKeyQuotaCell } from './api-key-quota-cell'
 import { ApiKeyActivityCell } from './api-key-timestamp-cell'
 import {
@@ -440,27 +442,33 @@ export function ApiKeysTable() {
       )}
       skeletonKeyPrefix='api-keys-skeleton'
       applyHeaderSize
-      toolbarProps={{
-        searchPlaceholder: t('Filter by name...'),
-        searchDebounceMs: 500,
-        additionalSearch: (
-          <Input
-            placeholder={t('Filter by API key...')}
-            aria-label={t('Filter by API key...')}
-            value={tokenFilterInput}
-            onChange={(e) => setTokenFilterInput(e.target.value)}
-            className='w-full sm:w-50 lg:w-60'
+      toolbar={
+        <div className='flex flex-col gap-2.5'>
+          <DataTableToolbar
+            table={table}
+            searchPlaceholder={t('Filter by name...')}
+            searchDebounceMs={500}
+            additionalSearch={
+              <Input
+                placeholder={t('Filter by API key...')}
+                aria-label={t('Filter by API key...')}
+                value={tokenFilterInput}
+                onChange={(e) => setTokenFilterInput(e.target.value)}
+                className='w-full sm:w-50 lg:w-60'
+              />
+            }
+            filters={[
+              {
+                columnId: 'status',
+                title: t('Status'),
+                options: API_KEY_STATUS_OPTIONS,
+                singleSelect: true,
+              },
+            ]}
           />
-        ),
-        filters: [
-          {
-            columnId: 'status',
-            title: t('Status'),
-            options: API_KEY_STATUS_OPTIONS,
-            singleSelect: true,
-          },
-        ],
-      }}
+          <ApiAddressesBar />
+        </div>
+      }
       mobile={
         <ApiKeysMobileList table={table} isLoading={isLoading} now={now} />
       }

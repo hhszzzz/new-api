@@ -31,7 +31,7 @@ export const Route = createFileRoute(
     if (params.section === 'sensitive-words') {
       throw redirect({
         to: '/system-settings/request-policies/$section',
-        params: { section: 'filtering' },
+        params: { section: 'routing' },
         replace: true,
       })
     }

@@ -68,7 +68,15 @@ beforeEach(() => {
         return {
           data: {
             data: {
-              api_info_enabled: false,
+              api_info_enabled: true,
+              api_info: [
+                {
+                  route: 'OpenAI',
+                  url: 'https://api.example.com/v1',
+                  description: 'OpenAI-compatible API',
+                  color: 'blue',
+                },
+              ],
               announcements_enabled: false,
               faq_enabled: false,
               uptime_kuma_enabled: false,
@@ -116,6 +124,7 @@ describe('overview setup guide', () => {
       screen.getAllByRole('heading').map((heading) => heading.textContent)
     ).toEqual(['Overview', 'Usage at a glance'])
     expect(screen.queryByText('Setup guide complete')).not.toBeInTheDocument()
+    expect(screen.queryByText('API Info')).not.toBeInTheDocument()
     expect(screen.queryByText('Setup progress: 3/3')).not.toBeInTheDocument()
     for (const name of ['API Keys', 'Channels', 'Usage Logs', 'Pricing']) {
       expect(screen.queryByRole('button', { name })).not.toBeInTheDocument()
