@@ -411,7 +411,7 @@ func (a *Adaptor) resolve(c *gin.Context, info *relaycommon.RelayInfo) error {
 		return err
 	}
 
-	incomingPath := incomingRequestPath(c, info)
+	incomingPath := canonicalIncomingPath(incomingRequestPath(c, info))
 	selectionModel := info.SelectionModelName()
 	route, ok := config.MatchPathForModel(incomingPath, selectionModel)
 	if plan, planned := advancedCustomProtocolPlan(c); planned && plan.AdvancedCustomRoute != nil {
@@ -438,6 +438,15 @@ func incomingRequestPath(c *gin.Context, info *relaycommon.RelayInfo) string {
 		return ""
 	}
 	return strings.Split(info.RequestURLPath, "?")[0]
+}
+
+// canonicalIncomingPath rewrites playground paths onto their /v1 equivalents so
+// route matching sees the same incoming path as the underlying operation.
+func canonicalIncomingPath(requestPath string) string {
+	if requestPath == "/pg/chat/completions" {
+		return "/v1/chat/completions"
+	}
+	return requestPath
 }
 
 func (a *Adaptor) routeURL(info *relaycommon.RelayInfo) (string, error) {

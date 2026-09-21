@@ -214,4 +214,11 @@ func TestChannelSatisfiesFilters(t *testing.T) {
 	}})
 	assert.False(t, ok)
 	assert.Equal(t, dto.FilterRequestPath, kind)
+
+	ok, kind = ChannelSatisfiesFilters(custom, "gpt-4", []dto.ChannelFilter{{
+		Kind:        dto.FilterRequestPath,
+		RequestPath: "/pg/chat/completions",
+	}})
+	require.True(t, ok, "playground chat must reuse the chat-completions route")
+	assert.Equal(t, dto.ChannelFilterKind(""), kind)
 }

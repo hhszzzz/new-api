@@ -913,13 +913,17 @@ func (channel *Channel) GetModelMapping() string {
 }
 
 // MatchAdvancedCustomRoute uses the model before channel mapping at every selection
-// boundary. CountTokens may use the generation route for local counting only.
+// boundary. CountTokens may use the generation route for local counting only, and
+// the playground chat path reuses the chat-completions routes.
 func (channel *Channel) MatchAdvancedCustomRoute(requestPath, modelName string, config *hostdto.AdvancedCustomConfig) (hostdto.AdvancedCustomRoute, bool) {
 	if channel == nil || config == nil {
 		return hostdto.AdvancedCustomRoute{}, false
 	}
 	if requestPath == "/v1/responses/compact" {
 		modelName = strings.TrimSuffix(modelName, ratio_setting.CompactModelSuffix)
+	}
+	if requestPath == "/pg/chat/completions" {
+		requestPath = "/v1/chat/completions"
 	}
 	if _, err := modelmapping.Resolve(channel.GetModelMapping(), modelName); err != nil {
 		return hostdto.AdvancedCustomRoute{}, false
