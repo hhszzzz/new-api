@@ -40,11 +40,11 @@ func TestResponseModelComparisonAndLog(t *testing.T) {
 		{name: "mapped case differs", models: []string{"MAPPED"}, returned: "MAPPED"},
 		{name: "mapped prefix", models: []string{"mapped-2026-09-01"}, returned: "mapped-2026-09-01"},
 		{name: "reverse prefix still warns", models: []string{"request"}, returned: "request", mismatch: true},
-		{name: "suffix", models: []string{"other-requested"}, returned: "other-requested"},
-		{name: "provider path", models: []string{"vendor/requested"}, returned: "vendor/requested"},
-		{name: "provider path case differs", models: []string{"vendor/REQUESTED"}, returned: "vendor/REQUESTED"},
+		{name: "suffix still warns", models: []string{"other-requested"}, returned: "other-requested", mismatch: true},
+		{name: "provider path still warns", models: []string{"vendor/requested"}, returned: "vendor/requested", mismatch: true},
+		{name: "provider path case differs still warns", models: []string{"vendor/REQUESTED"}, returned: "vendor/REQUESTED", mismatch: true},
 		{name: "provider path with dated mapped model", models: []string{"vendor/mapped-2026-09-01"}, returned: "vendor/mapped-2026-09-01", mismatch: true},
-		{name: "nested provider path", models: []string{"accounts/vendor/models/requested"}, returned: "accounts/vendor/models/requested"},
+		{name: "nested provider path still warns", models: []string{"accounts/vendor/models/requested"}, returned: "accounts/vendor/models/requested", mismatch: true},
 		{name: "provider path reverse prefix still warns", models: []string{"vendor/request"}, returned: "vendor/request", mismatch: true},
 		{name: "provider path other model still warns", models: []string{"vendor/other"}, returned: "vendor/other", mismatch: true},
 		{name: "provider path only still warns", models: []string{"vendor/"}, returned: "vendor/", mismatch: true},
@@ -52,6 +52,8 @@ func TestResponseModelComparisonAndLog(t *testing.T) {
 		{name: "warning supersedes compatible difference", models: []string{"Requested", "other"}, returned: "other", mismatch: true},
 		{name: "compatible difference cannot erase warning", models: []string{"other", "Requested"}, returned: "other", mismatch: true},
 		{name: "mismatch survives later frames", models: []string{"mapped", "other", "", "requested"}, returned: "other", mismatch: true},
+		{name: "different provider path warns", models: []string{"other-vendor/mapped"}, returned: "other-vendor/mapped", mismatch: true},
+		{name: "same provider path with different model warns", models: []string{"vendor/other"}, returned: "vendor/other", mismatch: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, _ := gin.CreateTestContext(httptest.NewRecorder())
@@ -145,6 +147,7 @@ func TestResponseModelExpectedProviderPath(t *testing.T) {
 		{name: "same provider path on both sides", requested: "vendor/requested", returned: "vendor/requested-2026-09-01"},
 		{name: "provider path alone does not match", requested: "vendor/requested", returned: "vendor", mismatch: true},
 		{name: "different model behind same provider still warns", requested: "vendor/requested", returned: "vendor/other", mismatch: true},
+		{name: "same base name behind different provider warns", requested: "vendor/mapped", returned: "other/mapped", mismatch: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			info := &relaycommon.RelayInfo{

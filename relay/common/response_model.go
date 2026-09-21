@@ -12,15 +12,31 @@ type ResponseModel struct {
 	ReturnedModel  string `json:"returned_model"`
 }
 
+// splitProviderPath separates a provider path prefix such as "vendor/" from
+// the base model name. A name without a slash has an empty path. The path is
+// significant: "vendor/mapped" and "other/mapped" are treated as different
+// upstream models even though they share a base name.
+func splitProviderPath(model string) (path, base string) {
+	if i := strings.LastIndex(model, "/"); i >= 0 {
+		return model[:i+1], model[i+1:]
+	}
+	return "", model
+}
+
 // matches reports whether an upstream declaration is compatible with the
-// requested or upstream model: equal ignoring case, a dated or variant name
-// that extends it, or the same name behind a provider path such as
-// "deepseek/deepseek-v4.1-flash".
+// requested or upstream model. The provider path must be identical; the base
+// name must be equal ignoring case or extend it as a dated or variant name
+// ("requested-2026-09-01"). A returned name behind a different provider path
+// is a different model even when the base name matches, because gateways may
+// route the same base name to quantized or otherwise distinct deployments.
 func (r *ResponseModel) matches(model string) bool {
-	returned := strings.ToLower(model)
+	returnedPath, returnedBase := splitProviderPath(strings.ToLower(model))
 	for _, expected := range []string{r.RequestedModel, r.UpstreamModel} {
-		expected = strings.ToLower(expected)
-		if expected != "" && (strings.HasPrefix(returned, expected) || strings.HasSuffix(returned, expected)) {
+		expectedPath, expectedBase := splitProviderPath(strings.ToLower(expected))
+		if expectedBase == "" || returnedPath != expectedPath {
+			continue
+		}
+		if returnedBase == expectedBase || strings.HasPrefix(returnedBase, expectedBase) {
 			return true
 		}
 	}

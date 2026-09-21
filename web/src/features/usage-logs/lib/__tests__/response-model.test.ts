@@ -42,9 +42,6 @@ describe('isResponseModelMismatch', () => {
     ['Requested', 'case-only difference'],
     ['requested-2026-09-01', 'dated variant of the requested model'],
     ['mapped-2026-09-01', 'dated variant of the upstream model'],
-    ['deepseek/requested', 'provider path in front of the requested model'],
-    ['vendor/MAPPED', 'provider path with a case-only difference'],
-    ['accounts/vendor/models/requested', 'nested provider path'],
   ])('treats %s as compatible (%s)', (returned) => {
     expect(isResponseModelMismatch(observation(returned))).toBe(false)
   })
@@ -52,12 +49,27 @@ describe('isResponseModelMismatch', () => {
   test.each([
     ['other', 'different model'],
     ['request', 'shorter name that the expected model extends'],
+    ['other-requested', 'suffix that the expected model does not extend'],
+    ['vendor/requested', 'provider path in front of the requested model'],
+    ['vendor/MAPPED', 'provider path with a case-only difference'],
+    ['accounts/vendor/models/requested', 'nested provider path'],
     ['vendor/other', 'different model behind a provider path'],
     ['vendor/request', 'provider path with a shorter name'],
     ['vendor/', 'provider path with no model segment'],
     ['vendor', 'provider segment alone'],
+    ['deepseek/requested', 'same base name behind a different provider'],
   ])('flags %s as a mismatch (%s)', (returned) => {
     expect(isResponseModelMismatch(observation(returned))).toBe(true)
+  })
+
+  test('same provider path with a compatible base name is compatible', () => {
+    expect(
+      isResponseModelMismatch(
+        observation('vendor/mapped-2026-09-01', {
+          upstream_model: 'vendor/mapped',
+        })
+      )
+    ).toBe(false)
   })
 
   test('compares against provider-qualified requested and upstream names as written', () => {
@@ -71,6 +83,11 @@ describe('isResponseModelMismatch', () => {
     expect(
       isResponseModelMismatch(
         observation('vendor/other', { requested_model: 'vendor/requested' })
+      )
+    ).toBe(true)
+    expect(
+      isResponseModelMismatch(
+        observation('requested', { requested_model: 'vendor/requested' })
       )
     ).toBe(true)
   })

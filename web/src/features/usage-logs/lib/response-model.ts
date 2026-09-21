@@ -23,29 +23,47 @@ export type ResponseModelObservation = NonNullable<
 >
 
 /**
+ * Split a provider path prefix such as "vendor/" from the base model name.
+ * The path is significant: "vendor/mapped" and "other/mapped" are treated as
+ * different upstream models even though they share a base name.
+ */
+function splitProviderPath(model: string): { path: string; base: string } {
+  const index = model.lastIndexOf('/')
+  if (index >= 0) {
+    return { path: model.slice(0, index + 1), base: model.slice(index + 1) }
+  }
+  return { path: '', base: model }
+}
+
+/**
  * Decide whether an upstream response model deserves a mismatch warning.
  *
- * Mirrors relay/common/response_model.go: ignoring case, the returned name is
- * compatible when it starts with the requested or upstream model (dated
- * versions, variants) or ends with it (provider paths such as
- * "deepseek/deepseek-v4.1-flash"). Nothing is stored; every row is judged
- * with the current rule.
+ * Mirrors relay/common/response_model.go: the provider path must be identical,
+ * and the base name must be equal ignoring case or extend the expected name as
+ * a dated or variant version. A returned name behind a different provider path
+ * is a different model even when the base name matches. Nothing is stored;
+ * every row is judged with the current rule.
  */
 export function isResponseModelMismatch(
   observation: ResponseModelObservation | undefined
 ): boolean {
   if (!observation) return false
-  const returned = (observation.returned_model ?? '').toLowerCase()
-  if (returned.trim() === '') return false
+  const returnedName = (observation.returned_model ?? '').toLowerCase()
+  if (returnedName.trim() === '') return false
+  const returned = splitProviderPath(returnedName)
   for (const candidate of [
     observation.requested_model,
     observation.upstream_model,
   ]) {
-    const expected = (candidate ?? '').toLowerCase()
-    if (expected === '') continue
-    if (returned.startsWith(expected) || returned.endsWith(expected)) {
-      return false
+    const expected = splitProviderPath((candidate ?? '').toLowerCase())
+    if (
+      expected.base === '' ||
+      returned.path !== expected.path ||
+      !returned.base.startsWith(expected.base)
+    ) {
+      continue
     }
+    return false
   }
   return true
 }
