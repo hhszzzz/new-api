@@ -55,7 +55,7 @@ export function ProtocolPolicyEditor(props: ProtocolPolicyEditorProps) {
   const conversionEnabled = Boolean(
     effective.conversion && effective.conversion !== 'native_only'
   )
-  const previousConversion = useRef<'lossless' | 'safe'>('safe')
+  const previousConversion = useRef<'lossless' | 'safe' | 'lossy'>('safe')
   const fields = [
     {
       key: 'conversion' as const,
@@ -64,9 +64,10 @@ export function ProtocolPolicyEditor(props: ProtocolPolicyEditorProps) {
         { value: 'native_only', label: t('Conversion off') },
         { value: 'lossless', label: t('Lossless conversion') },
         { value: 'safe', label: t('Allow safe degradation') },
+        { value: 'lossy', label: t('Allow lossy conversion') },
       ],
       description: t(
-        'Safe degradation only omits display metadata. Required tools, history, and output constraints are preserved.'
+        'Lossless conversion preserves everything. Safe degradation only omits display metadata. Lossy conversion may also drop best-effort directives that the upstream cannot carry, such as context trimming.'
       ),
     },
     {
@@ -123,8 +124,10 @@ export function ProtocolPolicyEditor(props: ProtocolPolicyEditorProps) {
           disabled={disabled}
           onCheckedChange={(checked) => {
             if (!checked) {
-              previousConversion.current =
-                effective.conversion === 'lossless' ? 'lossless' : 'safe'
+              let previous: 'lossless' | 'safe' | 'lossy' = 'safe'
+              if (effective.conversion === 'lossless') previous = 'lossless'
+              if (effective.conversion === 'lossy') previous = 'lossy'
+              previousConversion.current = previous
             }
             updatePolicy({
               conversion: checked ? previousConversion.current : 'native_only',

@@ -14,6 +14,7 @@ const (
 	ProtocolConversionNative   = "native_only"
 	ProtocolConversionLossless = "lossless"
 	ProtocolConversionSafe     = "safe"
+	ProtocolConversionLossy    = "lossy"
 	ProtocolSelectionDeclared  = "declared"
 	ProtocolSelectionAutomatic = "auto"
 	ProtocolRequestStructured  = "structured"
@@ -67,7 +68,7 @@ func (p *ProtocolPolicy) Validate() error {
 		name, value string
 		allowed     []string
 	}{
-		{"conversion", p.Conversion, []string{ProtocolConversionNative, ProtocolConversionLossless, ProtocolConversionSafe}},
+		{"conversion", p.Conversion, []string{ProtocolConversionNative, ProtocolConversionLossless, ProtocolConversionSafe, ProtocolConversionLossy}},
 		{"selection", p.Selection, []string{ProtocolSelectionDeclared, ProtocolSelectionAutomatic}},
 		{"request_mode", p.RequestMode, []string{ProtocolRequestStructured, ProtocolRequestPassthrough}},
 		{"state_scope", p.StateScope, []string{ProtocolStateDisabled, ProtocolStateBridge, ProtocolStateAll}},
@@ -94,7 +95,7 @@ func (p *ProtocolPolicy) Validate() error {
 				return fmt.Errorf("protocol_policy.rules[%d].model_pattern: %w", i, err)
 			}
 		}
-		if rule.Conversion != "" && !slices.Contains([]string{ProtocolConversionNative, ProtocolConversionLossless, ProtocolConversionSafe}, rule.Conversion) {
+		if rule.Conversion != "" && !slices.Contains([]string{ProtocolConversionNative, ProtocolConversionLossless, ProtocolConversionSafe, ProtocolConversionLossy}, rule.Conversion) {
 			return fmt.Errorf("protocol_policy.rules[%d].conversion is invalid", i)
 		}
 		if err := validateProtocolCapabilityList(fmt.Sprintf("protocol_policy.rules[%d].upstream_protocols", i), rule.UpstreamProtocols); err != nil {

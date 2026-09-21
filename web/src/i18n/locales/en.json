@@ -5839,7 +5839,7 @@
     "Runtime status": "Runtime status",
     "Runway": "Runway",
     "s": "s",
-    "Safe degradation only omits display metadata. Required tools, history, and output constraints are preserved.": "Safe degradation only omits display metadata. Required tools, history, and output constraints are preserved.",
+    "Lossless conversion preserves everything. Safe degradation only omits display metadata. Lossy conversion may also drop best-effort directives that the upstream cannot carry, such as context trimming.": "Lossless conversion preserves everything. Safe degradation only omits display metadata. Lossy conversion may also drop best-effort directives that the upstream cannot carry, such as context trimming.",
     "Safe degradation preserves required tools, history, and output constraints. Conversation storage respects store=false.": "Safe degradation preserves required tools, history, and output constraints. Conversation storage respects store=false.",
     "Safe header": "Safe header",
     "Safe header exact match": "Safe header exact match",

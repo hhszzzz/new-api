@@ -5839,7 +5839,7 @@
     "Runtime status": "运行状态",
     "Runway": "可用時長",
     "s": "秒",
-    "Safe degradation only omits display metadata. Required tools, history, and output constraints are preserved.": "安全降級僅允許省略顯示資訊，保留必要的工具、歷史記錄和輸出限制。",
+    "Lossless conversion preserves everything. Safe degradation only omits display metadata. Lossy conversion may also drop best-effort directives that the upstream cannot carry, such as context trimming.": "無損轉換保留所有內容。安全降級僅省略顯示資訊。有損轉換還可能丟棄上游無法承載的盡力而為型指令（例如上下文裁剪）。",
     "Safe degradation preserves required tools, history, and output constraints. Conversation storage respects store=false.": "安全降級會保留必要工具、歷史記錄和輸出限制。對話儲存遵守 store=false。",
     "Safe header": "安全標頭",
     "Safe header exact match": "安全請求標頭精確比對",

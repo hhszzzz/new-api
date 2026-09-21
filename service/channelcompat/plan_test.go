@@ -1013,7 +1013,7 @@ func TestConversionFeatureGateDropsDeclaredHostedToolsButKeepsHistoryGuard(t *te
 	features, err := ExtractRequestFeatureSet(ProtocolResponses, []byte(codexBody))
 	require.NoError(t, err)
 	require.NotEmpty(t, features.DeclaredHostedTools)
-	reason, _ := conversionFeatureIncompatibility(ProtocolResponses, ProtocolChat, features, false)
+	reason, _ := conversionFeatureIncompatibility(ProtocolResponses, ProtocolChat, features, false, false)
 	assert.Empty(t, reason)
 
 	// Replaying an executed hosted call to a non-native upstream would corrupt
@@ -1023,13 +1023,13 @@ func TestConversionFeatureGateDropsDeclaredHostedToolsButKeepsHistoryGuard(t *te
 	historyBody := `{"model":"gpt-5.1","stream":true,"input":[{"type":"web_search_call","id":"ws1","status":"completed"}]}`
 	features, err = ExtractRequestFeatureSet(ProtocolResponses, []byte(historyBody))
 	require.NoError(t, err)
-	reason, _ = conversionFeatureIncompatibility(ProtocolResponses, ProtocolChat, features, false)
+	reason, _ = conversionFeatureIncompatibility(ProtocolResponses, ProtocolChat, features, false, false)
 	assert.Contains(t, reason, "server tool history cannot be replayed")
 
 	shellHistoryBody := `{"model":"gpt-5.1","stream":true,"input":[{"type":"local_shell_call","call_id":"c1","action":{"command":["ls"]}}]}`
 	features, err = ExtractRequestFeatureSet(ProtocolResponses, []byte(shellHistoryBody))
 	require.NoError(t, err)
-	reason, _ = conversionFeatureIncompatibility(ProtocolResponses, ProtocolChat, features, false)
+	reason, _ = conversionFeatureIncompatibility(ProtocolResponses, ProtocolChat, features, false, false)
 	assert.Empty(t, reason)
 }
 
@@ -1078,7 +1078,7 @@ func TestPlanForRequestSafeConversionRejectsUnboundEncryptedContent(t *testing.T
 	assert.Contains(t, plan.Reason, "encrypted_content")
 }
 
-func TestPlanForRequestSafeConversionPreservesMessagesContextManagement(t *testing.T) {
+func TestPlanForRequestLossyConversionDropsMessagesContextManagement(t *testing.T) {
 	withProtocolBridgePolicy(t, true, false)
 	body := `{"model":"claude-public","stream":true,"context_management":{"edits":[{"type":"clear_tool_uses_20250919"}]},"messages":[{"role":"user","content":"hi"}]}`
 	features, err := ExtractRequestFeatureSet(ProtocolMessages, []byte(body))
@@ -1097,9 +1097,10 @@ func TestPlanForRequestSafeConversionPreservesMessagesContextManagement(t *testi
 	plan := PlanForRequest(strictChat(false), ProtocolMessages, "claude-public", "/v1/messages", features)
 	assert.Equal(t, StatusIncompatible, plan.Status)
 	assert.Contains(t, plan.Reason, "context_management")
+	assert.Empty(t, plan.LossyContentTypes)
 
 	plan = PlanForRequest(strictChat(true), ProtocolMessages, "claude-public", "/v1/messages", features)
-	assert.Equal(t, StatusIncompatible, plan.Status)
-	assert.Contains(t, plan.Reason, "context_management")
-	assert.Empty(t, plan.LossyContentTypes)
+	assert.Equal(t, StatusConvertible, plan.Status)
+	assert.Equal(t, ProtocolChat, plan.UpstreamProtocol)
+	assert.Contains(t, plan.LossyContentTypes, "context_management")
 }

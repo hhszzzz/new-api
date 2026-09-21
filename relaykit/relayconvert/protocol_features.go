@@ -574,7 +574,7 @@ func messagesOutputConfigHasUnsupportedFields(value any) bool {
 	return false
 }
 
-func AnalyzeConversionFeatures(protocol, upstream Protocol, features RequestFeatureSet, allowLossy bool) (string, []string) {
+func AnalyzeConversionFeatures(protocol, upstream Protocol, features RequestFeatureSet, allowLossy bool, allowDirectiveDrop bool) (string, []string) {
 	if features.HasMessagesState && upstream != ProtocolMessages {
 		return "Anthropic thinking state requires its originating Messages upstream", nil
 	}
@@ -643,7 +643,17 @@ func AnalyzeConversionFeatures(protocol, upstream Protocol, features RequestFeat
 	}
 	if protocol == ProtocolMessages {
 		if features.HasContextManagement {
-			return "context_management requires its native Messages upstream", nil
+			// Context trimming is a best-effort server-side directive. Only a
+			// channel that explicitly opted into lossy conversion may drop it,
+			// and only onto a chat upstream, where the field has no
+			// representation at all. The Responses direction keeps the directive
+			// required so a future faithful mapping is not preempted by a
+			// silent drop.
+			if allowDirectiveDrop && upstream == ProtocolChat {
+				lossyFields = append(lossyFields, "context_management")
+			} else {
+				return "context_management requires its native Messages upstream", nil
+			}
 		}
 		if upstream == ProtocolResponses && features.HasStopSequences {
 			return "stop_sequences cannot be represented by a Responses upstream", nil

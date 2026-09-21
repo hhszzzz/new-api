@@ -29,6 +29,11 @@ type Options struct {
 	// approximate built-in-tool semantics. The zero value is safe: unclassified
 	// and semantic losses reject the request before upstream dispatch.
 	ToolLossPolicy types.ConversionLossPolicy
+	// AllowDirectiveDrop permits dropping best-effort server-side directives
+	// (Messages context_management) during request conversion. The host sets it
+	// from the channel's lossy-conversion opt-in; the zero value keeps the
+	// directives required.
+	AllowDirectiveDrop bool
 
 	// OpenRouterDialect marks the upstream as OpenRouter's OpenAI-compatible
 	// surface, which accepts extra fields (reasoning config, cache_control on

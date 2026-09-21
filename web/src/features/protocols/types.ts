@@ -1,6 +1,6 @@
 export type ProtocolPolicy = {
   version: number
-  conversion?: 'native_only' | 'lossless' | 'safe'
+  conversion?: 'native_only' | 'lossless' | 'safe' | 'lossy'
   selection?: 'declared' | 'auto'
   upstream_protocols?: string[]
   request_mode?: 'structured' | 'passthrough'
@@ -13,7 +13,7 @@ export type ProtocolPolicy = {
     request_protocol?: string
     target_protocol?: string
     upstream_protocols?: string[]
-    conversion?: 'native_only' | 'lossless' | 'safe'
+    conversion?: 'native_only' | 'lossless' | 'safe' | 'lossy'
     channel_ids?: number[]
     channel_types?: number[]
     require_structured?: boolean

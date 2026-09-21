@@ -37,7 +37,7 @@ func PlanConversions(from Protocol, operation Operation, transport Transport, ca
 	if policy == "" {
 		policy = "safe"
 	}
-	if !slices.Contains([]string{"native_only", "lossless", "safe"}, policy) {
+	if !slices.Contains([]string{"native_only", "lossless", "safe", "lossy"}, policy) {
 		return nil, fmt.Errorf("unknown conversion policy %q", policy)
 	}
 	validOperation := false
@@ -90,7 +90,7 @@ func PlanConversions(from Protocol, operation Operation, transport Transport, ca
 			plan.CompactionMode = CompactionSummary
 			conversionFeatures = RequestFeatureSet{}
 		}
-		reason, losses := AnalyzeConversionFeatures(from, to, conversionFeatures, policy == "safe")
+		reason, losses := AnalyzeConversionFeatures(from, to, conversionFeatures, policy == "safe" || policy == "lossy", policy == "lossy")
 		if reason != "" {
 			if rejection == "" {
 				rejection = reason

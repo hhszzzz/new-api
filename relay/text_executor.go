@@ -94,6 +94,12 @@ func executeText(c *gin.Context, info *relaycommon.RelayInfo) *hosttypes.NewAPIE
 	if plan.Conversion == hostdto.ProtocolConversionLossless {
 		info.ConversionLossPolicy = types.ConversionLossPolicyStrict
 	}
+	// The plan already decided whether best-effort directives (e.g. Messages
+	// context_management) may be dropped for this channel; mirror that decision
+	// into the execution-time conversion check. Setting it unconditionally keeps
+	// retries honest: a retry on a stricter channel must not inherit a previous
+	// attempt's lossy permission.
+	info.SetAllowDirectiveDrop(plan.Conversion == hostdto.ProtocolConversionLossy)
 	adaptor := GetAdaptorForProtocol(info.ApiType, plan.UpstreamProtocol)
 	if adaptor == nil {
 		return hosttypes.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), hosttypes.ErrorCodeInvalidApiType, hosttypes.ErrOptionWithSkipRetry())

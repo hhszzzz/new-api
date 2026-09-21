@@ -5839,7 +5839,7 @@
     "Runtime status": "Состояние выполнения",
     "Runway": "Запас",
     "s": "s",
-    "Safe degradation only omits display metadata. Required tools, history, and output constraints are preserved.": "Безопасная деградация допускает потерю только метаданных отображения. Необходимые инструменты, история и ограничения вывода сохраняются.",
+    "Lossless conversion preserves everything. Safe degradation only omits display metadata. Lossy conversion may also drop best-effort directives that the upstream cannot carry, such as context trimming.": "Преобразование без потерь сохраняет всё. Безопасная деградация допускает потерю только метаданных отображения. Преобразование с потерями может также отбрасывать директивы best-effort, которые upstream не поддерживает, например обрезку контекста.",
     "Safe degradation preserves required tools, history, and output constraints. Conversation storage respects store=false.": "Безопасное упрощение сохраняет необходимые инструменты, историю и ограничения вывода. Хранение учитывает store=false.",
     "Safe header": "Безопасный заголовок",
     "Safe header exact match": "Точное совпадение безопасного заголовка",

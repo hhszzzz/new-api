@@ -90,6 +90,7 @@ func TestProtocolPolicyMigrationDatabaseMatrix(t *testing.T) {
 				{Id: 2, Type: constant.ChannelTypeAdvancedCustom, Key: "custom-key", Models: "public", OtherSettings: `{"advanced_custom":{"advanced_routes":[{"incoming_path":"/v1/chat/completions","upstream_path":"/private/messages","converter":"openai_chat_completions_to_anthropic_messages","models":["public"],"auth":{"type":"header","name":"x-upstream-secret","value":"private-route-key"}},{"incoming_path":"/v1/messages","upstream_path":"/private/native-messages","converter":"none"},{"incoming_path":"/v1/responses","upstream_path":"/private/native-responses","target_protocol":"native"},{"incoming_path":"/v1/responses/compact","upstream_path":"/private/compact","converter":"none"},{"incoming_path":"/v1/images/generations","upstream_path":"/private/images","converter":"none"}]},"custom_extension":{"keep":true}}`},
 				{Id: 3, Type: constant.ChannelTypeOpenAI, Key: "strict-key", Models: "public", OtherSettings: `{"protocol_capabilities":{"upstream_protocols":["chat"],"allow_conversion":false},"tool_loss_policy":"strict"}`},
 				{Id: 4, Type: constant.ChannelTypeGemini, Key: "gemini-key", Models: "gemini-model"},
+				{Id: 5, Type: constant.ChannelTypeOpenAI, Key: "lossy-key", Models: "public", OtherSettings: `{"protocol_capabilities":{"upstream_protocols":["chat"],"allow_lossy_conversion":true}}`},
 			}
 			require.NoError(t, db.Create(&channels).Error)
 			require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", 4).UpdateColumn("settings", nil).Error)
@@ -143,6 +144,12 @@ func TestProtocolPolicyMigrationDatabaseMatrix(t *testing.T) {
 					for _, route := range settings.AdvancedCustom.Routes[1:] {
 						assert.Equal(t, "native", route.TargetProtocol, route.IncomingPath)
 					}
+				}
+				if channel.Id == 5 {
+					var settings hostdto.ChannelOtherSettings
+					require.NoError(t, common.UnmarshalJsonStr(channel.OtherSettings, &settings))
+					require.NotNil(t, settings.ProtocolPolicy)
+					assert.Equal(t, hostdto.ProtocolConversionLossy, settings.ProtocolPolicy.Conversion)
 				}
 				for _, protocol := range relayconvert.Protocols() {
 					key := fmt.Sprintf("%d/%s", channel.Id, protocol)

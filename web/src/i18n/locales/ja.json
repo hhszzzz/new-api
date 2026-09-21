@@ -5839,7 +5839,7 @@
     "Runtime status": "実行状態",
     "Runway": "残り期間",
     "s": "s",
-    "Safe degradation only omits display metadata. Required tools, history, and output constraints are preserved.": "安全な縮退では表示用メタデータのみを省略します。必要なツール、履歴、出力制約は保持されます。",
+    "Lossless conversion preserves everything. Safe degradation only omits display metadata. Lossy conversion may also drop best-effort directives that the upstream cannot carry, such as context trimming.": "無損失変換はすべてを保持します。安全な縮退では表示用メタデータのみを省略します。非可逆変換では、コンテキストの切り詰めなど、upstream が扱えないベストエフォート指令も破棄される場合があります。",
     "Safe degradation preserves required tools, history, and output constraints. Conversation storage respects store=false.": "安全な縮退では必須ツール、履歴、出力制約を維持します。会話の保存は store=false を尊重します。",
     "Safe header": "安全ヘッダー",
     "Safe header exact match": "安全なヘッダーの完全一致",

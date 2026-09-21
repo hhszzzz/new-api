@@ -140,6 +140,56 @@ describe('protocol policy editor', () => {
     })
   })
 
+  test('selecting the lossy conversion policy writes lossy into the policy', async () => {
+    const user = userEvent.setup()
+    const onChange = renderEditor()
+    await user.click(
+      screen.getByRole('combobox', { name: 'Conversion policy' })
+    )
+    await user.click(
+      screen.getByRole('option', { name: 'Allow lossy conversion' })
+    )
+    expect(JSON.parse(onChange.mock.lastCall?.[0])).toEqual({
+      version: 1,
+      conversion: 'lossy',
+    })
+  })
+
+  test('restores the lossy conversion when cross-protocol conversion is toggled back on', async () => {
+    const user = userEvent.setup()
+    const initial = { version: 1, conversion: 'lossy' }
+    const onChange = vi.fn()
+    const client = new QueryClient()
+    client.setQueryData(['protocol-catalog'], protocolCatalogFixture)
+    function Editor() {
+      const [value, setValue] = useState(JSON.stringify(initial))
+      return (
+        <ProtocolPolicyEditor
+          value={value}
+          onChange={(next) => {
+            onChange(JSON.parse(next))
+            setValue(next)
+          }}
+        />
+      )
+    }
+    render(
+      <QueryClientProvider client={client}>
+        <Editor />
+      </QueryClientProvider>
+    )
+    const toggle = screen.getByRole('switch', {
+      name: 'Cross-protocol conversion',
+    })
+    await user.click(toggle)
+    expect(onChange).toHaveBeenLastCalledWith({
+      version: 1,
+      conversion: 'native_only',
+    })
+    await user.click(toggle)
+    expect(onChange).toHaveBeenLastCalledWith(initial)
+  })
+
   test('locks selection and JSON editing when the user cannot change sensitive configuration', async () => {
     const user = userEvent.setup()
     renderEditor({ disabled: true })

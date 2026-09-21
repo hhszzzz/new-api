@@ -250,7 +250,7 @@ func executeRequestSteps(c context.Context, info convmeta.Meta, from types.Relay
 	if err != nil {
 		return nil, err
 	}
-	reason, losses := AnalyzeConversionFeatures(ProtocolForFormat(from), ProtocolForFormat(target), features, convmeta.OptionsOf(info).EffectiveToolLossPolicy() != types.ConversionLossPolicyStrict)
+	reason, losses := AnalyzeConversionFeatures(ProtocolForFormat(from), ProtocolForFormat(target), features, convmeta.OptionsOf(info).EffectiveToolLossPolicy() != types.ConversionLossPolicyStrict, convmeta.OptionsOf(info).AllowDirectiveDrop)
 	if reason != "" {
 		diagnostics := []types.ConversionDiagnostic{{Code: "unsupported_request_feature", LossClass: types.ConversionLossSemantic, Severity: types.ConversionDiagnosticError, From: from, To: target, Message: reason}}
 		return &RequestResult{From: from, To: target, Diagnostics: diagnostics}, &types.ConversionLossError{Diagnostics: diagnostics}

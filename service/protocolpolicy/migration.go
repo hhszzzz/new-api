@@ -246,6 +246,12 @@ func NormalizeChannel(channel *model.Channel, global model_setting.GlobalSetting
 		if caps != nil && caps.GetSelectionMode() == hostdto.ProtocolSelectionModeAuto {
 			policy.Selection = hostdto.ProtocolSelectionAutomatic
 		}
+		if policy.Conversion == hostdto.ProtocolConversionSafe && caps != nil && caps.AllowLossyConversion {
+			// The channel opted into lossy conversion under the old settings;
+			// encode that effective behavior in the generated policy instead of
+			// dropping the opt-in. Strict tool-loss channels stay lossless.
+			policy.Conversion = hostdto.ProtocolConversionLossy
+		}
 		if channel.Type != constant.ChannelTypeAdvancedCustom {
 			// Freeze each existing configured model's effective route, then preserve
 			// ordered regex overrides and a fallback for later model-list updates.

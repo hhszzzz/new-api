@@ -249,6 +249,11 @@ type RelayInfo struct {
 	PerformanceCacheMissTokens   int64
 	PerformanceBusinessRejection bool
 
+	// AllowDirectiveDrop records that the selected protocol plan permits dropping
+	// best-effort directives (Messages context_management) during conversion.
+	// The text executor sets it from the plan's conversion policy.
+	AllowDirectiveDrop bool
+
 	// convOptions caches the converter settings snapshot (see ConvOptions).
 	convOptions *convmeta.Options
 
@@ -1240,9 +1245,25 @@ func (info *RelayInfo) ConvOptions() *convmeta.Options {
 		} else if info.ChannelMeta != nil && info.ChannelOtherSettings.ToolLossPolicy == "strict" {
 			options.ToolLossPolicy = types.ConversionLossPolicyStrict
 		}
+		// Directive dropping follows the selected protocol plan (see
+		// SetAllowDirectiveDrop), not the raw channel capability: the plan is
+		// where the lossy opt-in is reconciled with the effective policy.
+		options.AllowDirectiveDrop = info.AllowDirectiveDrop
 		info.convOptions = options
 	}
 	return options
+}
+
+// SetAllowDirectiveDrop enables or disables directive dropping and invalidates
+// the cached converter options so late plan decisions take effect. Callers run
+// after the protocol plan is selected, which may happen after helpers already
+// built the cached snapshot.
+func (info *RelayInfo) SetAllowDirectiveDrop(allowed bool) {
+	if info == nil || info.AllowDirectiveDrop == allowed {
+		return
+	}
+	info.AllowDirectiveDrop = allowed
+	info.convOptions = nil
 }
 
 func (info *RelayInfo) shouldPreserveChatReasoningContent() bool {

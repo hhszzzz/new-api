@@ -133,6 +133,15 @@ func PlansForRequest(channel *model.Channel, protocol Protocol, modelName, reque
 		}
 	}
 	base.Conversion = policy.Conversion
+	if settings.ProtocolCapabilities.LossyConversionAllowed() && policy.Conversion == hostdto.ProtocolConversionSafe {
+		// The channel opted into lossy conversion: upgrade the default "safe"
+		// policy so best-effort directives (e.g. Messages context_management)
+		// may be dropped instead of rejecting the request. Explicitly stricter
+		// policies (lossless, native_only) keep their semantics, matching how
+		// the migration encoder preserves strict tool-loss channels.
+		policy.Conversion = hostdto.ProtocolConversionLossy
+		base.Conversion = policy.Conversion
+	}
 	base.RequestMode = policy.RequestMode
 	base.StateScope = policy.StateScope
 	base.StateTTLSeconds = policy.StateTTLSeconds
@@ -295,8 +304,8 @@ func ExtractRequestFeatureSet(protocol Protocol, body []byte) (RequestFeatureSet
 	return relayconvert.ExtractRequestFeatureSet(protocol, body)
 }
 
-func conversionFeatureIncompatibility(protocol, upstream Protocol, features RequestFeatureSet, allowLossy bool) (string, []string) {
-	return relayconvert.AnalyzeConversionFeatures(protocol, upstream, features, allowLossy)
+func conversionFeatureIncompatibility(protocol, upstream Protocol, features RequestFeatureSet, allowLossy, allowDirectiveDrop bool) (string, []string) {
+	return relayconvert.AnalyzeConversionFeatures(protocol, upstream, features, allowLossy, allowDirectiveDrop)
 }
 
 func defaultUpstreamProtocols(channel *model.Channel, modelName string) []string {
