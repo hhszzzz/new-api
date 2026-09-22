@@ -25,6 +25,7 @@ import {
 } from '@tanstack/react-router'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { toast } from 'sonner'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
 import { useAuthStore } from '@/stores/auth-store'
@@ -40,6 +41,13 @@ const apiMock = vi.hoisted(() => ({
   delete: vi.fn(),
 }))
 vi.mock('@/lib/api', () => ({ api: apiMock }))
+
+// The toaster is not mounted in this suite, so the toast calls are observable
+// only through the module.
+vi.mock('sonner', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('sonner')>()
+  return { ...actual, toast: { error: vi.fn(), success: vi.fn() } }
+})
 
 const config: PromptAuditConfig = {
   scope_policies: defaultPromptScopePolicies(),
@@ -341,5 +349,39 @@ describe('prompt audit settings page', () => {
 
     expect(chipLabels()).toEqual([])
     expect(screen.getByPlaceholderText('No directions selected')).toBeVisible()
+  })
+
+  // Every failure kind but two used to collapse into the same generic
+  // sentence, so a rejected token, a redirecting base URL, and a model that
+  // ignores assistant messages looked identical without the network tab.
+  test('a failed model test reports the cause the backend measured', async () => {
+    const user = userEvent.setup()
+    renderSettings()
+    await screen.findByText('Enforcement policy')
+    apiMock.post.mockResolvedValue({
+      data: {
+        success: false,
+        message: 'prompt audit node test failed',
+        data: {
+          endpoint_id: 'guard-a',
+          purpose: 'classify',
+          latency_ms: 251,
+          safety: '',
+          decision: 'pass',
+          error_code: 'endpoint_http_401',
+          direction: 'output',
+        },
+      },
+    })
+
+    await user.click(
+      await screen.findByRole('button', { name: 'Test saved audit model' })
+    )
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        'The audit model returned HTTP 401 during the Generated output check.'
+      )
+    )
   })
 })

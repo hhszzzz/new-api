@@ -166,6 +166,7 @@ export async function testPromptAuditNode(id: string) {
       safety: string
       decision: PromptAuditDecision
       tested_directions?: Array<PromptAuditDirection | 'review'>
+      direction?: PromptAuditDirection | 'review'
       error_code?: string
     }>
   >(`/api/prompt-audit/nodes/${encodeURIComponent(id)}/test`, undefined, {

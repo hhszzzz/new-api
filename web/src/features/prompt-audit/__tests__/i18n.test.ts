@@ -26,6 +26,7 @@ const SOURCE_FILES = [
   '../records.tsx',
   '../wordlists.tsx',
   '../scopes.ts',
+  '../test-failure.ts',
   '../components/scope-policies-section.tsx',
   '../components/advanced-limits-section.tsx',
   '../components/audit-models-section.tsx',

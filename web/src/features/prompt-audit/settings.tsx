@@ -47,6 +47,10 @@ import {
   validatePromptAuditConfig,
 } from './lib'
 import { defaultPromptScopePolicies } from './scopes'
+import {
+  auditDirectionLabel,
+  promptAuditTestFailureMessage,
+} from './test-failure'
 import type {
   PromptAuditCategory,
   PromptAuditConfig,
@@ -149,32 +153,25 @@ function PromptAuditSettingsForm({
     mutationFn: async (id: string) => {
       const result = await testPromptAuditNode(id)
       if (!result.success || !result.data) {
-        if (result.data?.error_code === 'output_capability_unverified') {
-          throw new Error(
-            t(
-              'Output audit test failed. Check that this model evaluates assistant replies and handles refusals correctly.'
-            )
-          )
-        }
-        if (result.data?.error_code === 'input_capability_unverified') {
-          throw new Error(t('Input audit test failed on a harmless sample.'))
-        }
-        throw new Error(result.message || t('Audit model test failed'))
+        // Name the cause the backend measured. Collapsing every kind into
+        // "test failed" left a rejected token, a redirecting base URL, an
+        // unreadable verdict, and a model that ignores assistant messages
+        // looking identical.
+        throw new Error(
+          result.data
+            ? promptAuditTestFailureMessage(t, result.data)
+            : result.message || t('Audit model test failed')
+        )
       }
       return result.data
     },
     onSuccess: (result) => {
-      const directionLabels = {
-        input: t('Request input'),
-        output: t('Generated output'),
-        review: t('Gray-area review'),
-      }
       toast.success(
         result.tested_directions?.length
           ? t('Audit model passed {{directions}} tests in {{latency}} ms', {
               latency: result.latency_ms,
               directions: result.tested_directions
-                .map((direction) => directionLabels[direction])
+                .map((direction) => auditDirectionLabel(t, direction))
                 .join(', '),
             })
           : t('Audit model responded in {{latency}} ms with {{safety}}', {
