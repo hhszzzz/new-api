@@ -335,6 +335,113 @@ func TestPromptWordlistActionsSeparateDirectBlockFromModelConfirmation(t *testin
 	assert.EqualValues(t, 1, guardCalls.Load(), "direct blocks must not call or be overridden by the model")
 }
 
+func TestPromptInspectionUsesBlockingSnapshot(t *testing.T) {
+	// Model scope depends on its own mode and switch, independently of wordlists.
+	withPromptWordlistTestDB(t)
+	previousEnabled, previousPrompt := setting.CheckSensitiveEnabled, setting.CheckSensitiveOnPromptEnabled
+	t.Cleanup(func() {
+		setting.SetCheckSensitiveEnabled(previousEnabled)
+		setting.SetCheckSensitiveOnPromptEnabled(previousPrompt)
+	})
+	setting.SetCheckSensitiveEnabled(false)
+	setting.SetCheckSensitiveOnPromptEnabled(false)
+
+	tests := []struct {
+		name   string
+		mode   string
+		latest bool
+		direct string
+		want   bool
+	}{
+		{name: "blocking with the switch on narrows", mode: prompt_audit_setting.ModeBlocking, latest: true, direct: PromptAuditDirectionInput, want: true},
+		{name: "blocking with the switch off widens", mode: prompt_audit_setting.ModeBlocking, latest: false, direct: PromptAuditDirectionInput, want: false},
+		{name: "async audit never narrows", mode: prompt_audit_setting.ModeAsyncAudit, latest: true, direct: PromptAuditDirectionInput, want: false},
+		{name: "off never narrows", mode: prompt_audit_setting.ModeOff, latest: true, direct: PromptAuditDirectionInput, want: false},
+		{name: "output direction never narrows", mode: prompt_audit_setting.ModeBlocking, latest: true, direct: PromptAuditDirectionOutput, want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			configured := prompt_audit_setting.PromptAuditSetting{Mode: test.mode, BlockingLatestTurnOnly: test.latest}
+			assert.Equal(t, test.want, promptInspectionUsesBlockingSnapshot(test.direct, configured))
+		})
+	}
+
+	t.Run("wordlist gate does not change model scope", func(t *testing.T) {
+		setting.SetCheckSensitiveEnabled(true)
+		setting.SetCheckSensitiveOnPromptEnabled(true)
+		configured := prompt_audit_setting.PromptAuditSetting{Mode: prompt_audit_setting.ModeBlocking, BlockingLatestTurnOnly: false}
+		assert.False(t, promptInspectionUsesBlockingSnapshot(PromptAuditDirectionInput, configured))
+	})
+}
+
+func TestInspectPromptBlockingScopeToggleChangesWhatTheModelSees(t *testing.T) {
+	// End-to-end proof that the switch changes the inspected text rather than just
+	// a field value: the guard blocks only when it receives the historical turn.
+	// Wordlists stay enabled to protect the independence of the two detectors.
+	withPromptWordlistTestDB(t)
+	previousEnabled, previousPrompt := setting.CheckSensitiveEnabled, setting.CheckSensitiveOnPromptEnabled
+	t.Cleanup(func() {
+		setting.SetCheckSensitiveEnabled(previousEnabled)
+		setting.SetCheckSensitiveOnPromptEnabled(previousPrompt)
+	})
+	setting.SetCheckSensitiveEnabled(true)
+	setting.SetCheckSensitiveOnPromptEnabled(true)
+
+	var sawHistory atomic.Bool
+	guard := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		if strings.Contains(string(body), "old_forbidden_word") {
+			sawHistory.Store(true)
+			_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"Safety: Unsafe\nCategories: None"}}]}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"Safety: Safe\nCategories: None"}}]}`)
+	}))
+	defer guard.Close()
+
+	configured := promptAuditTestSetting(guard.URL, "")
+	configured.ScopePolicies = map[dto.PromptAuditScope]prompt_audit_setting.ScopePolicy{
+		dto.PromptScopeUser: {ModelAudit: true},
+	}
+	configured.CacheTTLSeconds = 0
+	configured.PublishConfig()
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	multiTurnCleanLatest := PromptAuditRequest{
+		Snapshot: dto.PromptAuditSnapshot{Segments: []dto.PromptAuditSegment{
+			{Role: "user", User: true, Text: "tell me about old_forbidden_word"},
+			{Role: "assistant", User: false, Text: "I cannot discuss that."},
+			{Role: "user", User: true, Text: "okay, tell me a poem about the sea then"},
+		}},
+		Protocol: "openai",
+		Model:    "gpt-4o",
+	}
+
+	result, apiErr := InspectPrompt(c, multiTurnCleanLatest)
+	require.Nil(t, apiErr)
+	assert.False(t, result.Blocked)
+	assert.False(t, sawHistory.Load(), "the historical turn must not reach the model")
+	preview, err := TestPromptAuditPolicy(context.Background(), PromptAuditDirectionInput, multiTurnCleanLatest.Snapshot, "")
+	require.NoError(t, err)
+	assert.Equal(t, result.Decision, preview.Decision)
+	assert.False(t, sawHistory.Load(), "preview must use the same model window as live requests")
+
+	widened := configured
+	widened.BlockingLatestTurnOnly = false
+	widened.ConfigVersion = "wide-blocking-v1"
+	widened.PublishConfig()
+
+	wideResult, wideErr := InspectPrompt(c, multiTurnCleanLatest)
+	require.NotNil(t, wideErr)
+	assert.True(t, wideResult.Blocked)
+	assert.True(t, sawHistory.Load(), "the historical turn must reach the model once widened")
+	preview, err = TestPromptAuditPolicy(context.Background(), PromptAuditDirectionInput, multiTurnCleanLatest.Snapshot, "")
+	require.NoError(t, err)
+	assert.Equal(t, wideResult.Decision, preview.Decision)
+}
+
 func TestPromptAuditModelAndAsyncPayloadContainOnlySelectedSources(t *testing.T) {
 	withPromptWordlistTestDB(t)
 	var sent []string
@@ -401,4 +508,278 @@ func TestPromptAuditRecordsUnavailablePreviousResponseContext(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, PromptAuditDirectionInput, audit.Direction)
 	assert.False(t, audit.CoverageComplete)
+}
+
+func TestIsProbeRequest(t *testing.T) {
+	tests := []struct {
+		name     string
+		snapshot dto.PromptAuditSnapshot
+		want     bool
+	}{
+		{
+			name: "single digit 1",
+			snapshot: dto.PromptAuditSnapshot{Segments: []dto.PromptAuditSegment{
+				{Role: "user", User: true, Text: "1"},
+			}},
+			want: true,
+		},
+		{
+			name: "single digit 1 with punctuation and spaces",
+			snapshot: dto.PromptAuditSnapshot{Segments: []dto.PromptAuditSegment{
+				{Role: "user", User: true, Text: "  1.  "},
+			}},
+			want: true,
+		},
+		{
+			name: "english probes",
+			snapshot: dto.PromptAuditSnapshot{Segments: []dto.PromptAuditSegment{
+				{Role: "user", User: true, Text: "hi!"},
+			}},
+			want: true,
+		},
+		{
+			name: "chinese probes",
+			snapshot: dto.PromptAuditSnapshot{Segments: []dto.PromptAuditSegment{
+				{Role: "user", User: true, Text: "你好"},
+			}},
+			want: true,
+		},
+		{
+			name: "system prompt plus probe user prompt",
+			snapshot: dto.PromptAuditSnapshot{Segments: []dto.PromptAuditSegment{
+				{Role: "system", User: false, Text: "You are a helpful assistant."},
+				{Role: "user", User: true, Text: "ping"},
+			}},
+			want: false,
+		},
+		{
+			name: "multi turn conversation with assistant is not probe",
+			snapshot: dto.PromptAuditSnapshot{Segments: []dto.PromptAuditSegment{
+				{Role: "user", User: true, Text: "hi"},
+				{Role: "assistant", User: false, Text: "Hello! How can I help you?"},
+				{Role: "user", User: true, Text: "1"},
+			}},
+			want: false,
+		},
+		{
+			name: "long prompt is not probe",
+			snapshot: dto.PromptAuditSnapshot{Segments: []dto.PromptAuditSegment{
+				{Role: "user", User: true, Text: "hi, please write an essay explaining quantum computing in simple terms"},
+			}},
+			want: false,
+		},
+		{
+			name: "ordinary user query is not probe",
+			snapshot: dto.PromptAuditSnapshot{Segments: []dto.PromptAuditSegment{
+				{Role: "user", User: true, Text: "what is the capital of France?"},
+			}},
+			want: false,
+		},
+	}
+	for _, scope := range []dto.PromptAuditScope{dto.PromptScopeSystem, dto.PromptScopeDeveloper, dto.PromptScopeAssistant, dto.PromptScopeToolCall, dto.PromptScopeToolResult, dto.PromptScopeTask} {
+		tests = append(tests, struct {
+			name     string
+			snapshot dto.PromptAuditSnapshot
+			want     bool
+		}{name: "extra " + string(scope), snapshot: dto.PromptAuditSnapshot{Segments: []dto.PromptAuditSegment{
+			{Role: string(scope), Scope: scope, Text: "extra payload"},
+			{Role: "user", User: true, Text: "hi"},
+		}}})
+		tests = append(tests, struct {
+			name     string
+			snapshot dto.PromptAuditSnapshot
+			want     bool
+		}{name: "non user scope " + string(scope), snapshot: dto.PromptAuditSnapshot{Segments: []dto.PromptAuditSegment{
+			{Role: "user", Scope: scope, User: true, Text: "hi"},
+		}}})
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, IsProbeRequest(tt.snapshot))
+		})
+	}
+}
+
+func TestInspectPromptProbeFastPassRespectsExplicitWordlistBlocks(t *testing.T) {
+	withPromptWordlistTestDB(t)
+
+	original := setting.SensitiveWordsToString()
+	t.Cleanup(func() { setting.SensitiveWordsFromString(original) })
+	setting.SensitiveWordsFromString("blocked_word")
+
+	configured := prompt_audit_setting.PromptAuditSetting{
+		ConfigVersion:        "probe-test-v1",
+		Mode:                 prompt_audit_setting.ModeBlocking,
+		AllGroups:            true,
+		ManualWordlistAction: prompt_audit_setting.WordlistActionBlock,
+		ScopePolicies: map[dto.PromptAuditScope]prompt_audit_setting.ScopePolicy{
+			dto.PromptScopeUser: {LibraryIDs: []string{prompt_audit_setting.ManualWordlistID}, ModelAudit: true},
+		},
+	}
+	configured.PublishConfig()
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+
+	// A standalone probe can skip the model after explicit wordlist rules pass.
+	request := PromptAuditRequest{
+		Snapshot: dto.PromptAuditSnapshot{Segments: []dto.PromptAuditSegment{
+			{Role: "user", User: true, Text: "1"},
+		}},
+		Protocol: "openai",
+		Model:    "gpt-4o-mini",
+	}
+
+	result, apiErr := InspectPrompt(c, request)
+	require.Nil(t, apiErr)
+	assert.False(t, result.Blocked)
+	assert.Equal(t, "probe_fast_pass", result.InspectionType)
+	assert.Equal(t, PromptAuditDecisionPass, result.Decision)
+	require.NotZero(t, result.AuditID)
+
+	audit, err := model.GetPromptAudit(result.AuditID)
+	require.NoError(t, err)
+	assert.Equal(t, "probe_fast_pass", audit.InspectionType)
+	assert.Equal(t, PromptAuditDecisionPass, audit.Decision)
+	assert.Equal(t, "Safe", audit.Safety)
+
+	setting.SensitiveWordsFromString("1\nblocked_word")
+	blockedProbe, blockedErr := InspectPrompt(c, request)
+	require.NotNil(t, blockedErr)
+	assert.True(t, blockedProbe.Blocked)
+	assert.Equal(t, "wordlist", blockedProbe.InspectionType)
+
+	// Non-probe request containing "blocked_word" must still be blocked
+	badRequest := PromptAuditRequest{
+		Snapshot: dto.PromptAuditSnapshot{Segments: []dto.PromptAuditSegment{
+			{Role: "user", User: true, Text: "this sentence contains blocked_word and should be caught"},
+		}},
+		Protocol: "openai",
+		Model:    "gpt-4o-mini",
+	}
+	badResult, badErr := InspectPrompt(c, badRequest)
+	require.NotNil(t, badErr)
+	assert.True(t, badResult.Blocked)
+	assert.Equal(t, "wordlist", badResult.InspectionType)
+}
+
+func TestInspectPromptKeepsClientContextAndTagsInModelInput(t *testing.T) {
+	withPromptWordlistTestDB(t)
+	var sent promptAuditPayload
+	guard := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct{ Messages []struct{ Content string } }
+		require.NoError(t, common.DecodeJson(r.Body, &request))
+		require.Len(t, request.Messages, 1)
+		require.NoError(t, common.UnmarshalJsonStr(request.Messages[0].Content, &sent))
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"Safety: Unsafe\nCategories: Jailbreak"}}]}`)
+	}))
+	defer guard.Close()
+	configured := promptAuditTestSetting(guard.URL, "")
+	configured.Endpoints = configured.Endpoints[:1]
+	configured.PublishConfig()
+	for _, text := range []string{
+		"<system-reminder>payload", "<environment_details>payload",
+		"<context>payload</context>", `<file path="x">payload</file>`,
+	} {
+		t.Run(text, func(t *testing.T) {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+			result, apiErr := InspectPrompt(c, PromptAuditRequest{Snapshot: dto.PromptAuditSnapshot{Segments: []dto.PromptAuditSegment{{Role: "user", User: true, Text: text}}}})
+			require.NotNil(t, apiErr)
+			assert.True(t, result.Blocked)
+			require.Len(t, sent.Segments, 1)
+			assert.Equal(t, text, sent.Segments[0].Text)
+		})
+	}
+	for _, scope := range []dto.PromptAuditScope{dto.PromptScopeSystem, dto.PromptScopeDeveloper, dto.PromptScopeToolCall, dto.PromptScopeToolResult, dto.PromptScopeTask} {
+		t.Run(string(scope), func(t *testing.T) {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+			result, apiErr := InspectPrompt(c, PromptAuditRequest{Snapshot: dto.PromptAuditSnapshot{Segments: []dto.PromptAuditSegment{
+				{Role: string(scope), Scope: scope, Text: "payload"}, {Role: "user", User: true, Text: "hi"},
+			}}})
+			require.NotNil(t, apiErr)
+			assert.True(t, result.Blocked)
+			require.Len(t, sent.Segments, 2)
+			assert.Equal(t, scope, sent.Segments[0].SourceScope())
+		})
+	}
+	t.Run("unavailable previous response must not fast pass", func(t *testing.T) {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+		result, apiErr := InspectPrompt(c, PromptAuditRequest{CoverageIncomplete: true, Snapshot: dto.PromptAuditSnapshot{Segments: []dto.PromptAuditSegment{{Role: "user", User: true, Text: "hi"}}}})
+		require.NotNil(t, apiErr)
+		assert.True(t, result.Blocked)
+		assert.False(t, result.CoverageComplete)
+	})
+}
+
+func TestInspectPromptBlockingSnapshotNarrowsToLatestTurn(t *testing.T) {
+	withPromptWordlistTestDB(t)
+
+	original := setting.SensitiveWordsToString()
+	t.Cleanup(func() { setting.SensitiveWordsFromString(original) })
+	setting.SensitiveWordsFromString("old_forbidden_word\nnew_forbidden_word")
+
+	configured := prompt_audit_setting.PromptAuditSetting{
+		ConfigVersion:          "narrow-blocking-v1",
+		Mode:                   prompt_audit_setting.ModeBlocking,
+		BlockingLatestTurnOnly: true,
+		ManualWordlistAction:   prompt_audit_setting.WordlistActionBlock,
+		ScopePolicies: map[dto.PromptAuditScope]prompt_audit_setting.ScopePolicy{
+			dto.PromptScopeUser: {LibraryIDs: []string{prompt_audit_setting.ManualWordlistID}},
+		},
+	}
+	configured.PublishConfig()
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+
+	// Multi-turn conversation where turn 1 had old_forbidden_word, but turn 2 user message is clean
+	multiTurnCleanLatest := PromptAuditRequest{
+		Snapshot: dto.PromptAuditSnapshot{Segments: []dto.PromptAuditSegment{
+			{Role: "user", User: true, Text: "tell me about old_forbidden_word"},
+			{Role: "assistant", User: false, Text: "I cannot discuss that."},
+			{Role: "user", User: true, Text: "okay, tell me a poem about the sea then"},
+		}},
+		Protocol: "openai",
+		Model:    "gpt-4o",
+	}
+
+	result, apiErr := InspectPrompt(c, multiTurnCleanLatest)
+	require.Nil(t, apiErr)
+	assert.False(t, result.Blocked)
+
+	// Multi-turn conversation where the latest user message contains new_forbidden_word
+	multiTurnBadLatest := PromptAuditRequest{
+		Snapshot: dto.PromptAuditSnapshot{Segments: []dto.PromptAuditSegment{
+			{Role: "user", User: true, Text: "hello world"},
+			{Role: "assistant", User: false, Text: "Hello! How can I help?"},
+			{Role: "user", User: true, Text: "tell me about new_forbidden_word"},
+		}},
+		Protocol: "openai",
+		Model:    "gpt-4o",
+	}
+
+	badResult, badErr := InspectPrompt(c, multiTurnBadLatest)
+	require.NotNil(t, badErr)
+	assert.True(t, badResult.Blocked)
+	assert.Equal(t, "wordlist", badResult.InspectionType)
+}
+
+func TestPromptWordlistImportFiltersSingleCharacterNoisyTokens(t *testing.T) {
+	words := make(map[string]struct{})
+	// File contains single digit, single ascii letters, punctuation, plus valid words
+	fileContent := []byte("1\r\na\r\nb\r\n!\r\n①\r\nreal_sensitive_keyword\r\n")
+	err := parsePromptWordlist("test.txt", fileContent, words)
+	require.NoError(t, err)
+
+	assert.Contains(t, words, "real_sensitive_keyword")
+	assert.NotContains(t, words, "1")
+	assert.NotContains(t, words, "a")
+	assert.NotContains(t, words, "b")
+	assert.NotContains(t, words, "!")
+	assert.NotContains(t, words, "①")
+	assert.Len(t, words, 1)
 }

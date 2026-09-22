@@ -7,6 +7,7 @@ import (
 	"errors"
 	"maps"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -140,6 +141,20 @@ type PromptWordlistMatch struct {
 	Action  string               `json:"action"`
 }
 
+// promptInspectionUsesBlockingSnapshot decides whether synchronous input
+// inspection is scoped to the latest user turn.
+//
+// Wordlist selection is independent and must not narrow model inspection.
+//
+// Output direction is never narrowed — the whole generated answer is the payload
+// under inspection, and there is no "latest turn" to narrow to.
+func promptInspectionUsesBlockingSnapshot(direction string, configured prompt_audit_setting.PromptAuditSetting) bool {
+	if direction != PromptAuditDirectionInput {
+		return false
+	}
+	return configured.Mode == prompt_audit_setting.ModeBlocking && configured.BlockingLatestTurnOnly
+}
+
 func matchPromptWordlists(snapshot dto.PromptAuditSnapshot, configured prompt_audit_setting.PromptAuditSetting) (*PromptWordlistMatch, error) {
 	if !setting.ShouldCheckPromptSensitive() {
 		return nil, nil
@@ -193,12 +208,113 @@ func TestPromptWordlists(scope dto.PromptAuditScope, text string) (*PromptWordli
 	return match, configured.Mode != prompt_audit_setting.ModeOff && configured.PolicyFor(scope).ModelAudit, err
 }
 
+var probePattern = regexp.MustCompile(`^(?i)(hi|hello|ping|pong|test|1|1\+1|2|say 1|你好|测试|测活|探活)[.!?。！？\s]*$`)
+
+// IsProbeRequest checks whether an incoming prompt is a single-turn probe or health-check call.
+func IsProbeRequest(snapshot dto.PromptAuditSnapshot) bool {
+	segments := snapshot.OrderedSegments()
+	if len(segments) != 1 || segments[0].SourceScope() != dto.PromptScopeUser ||
+		(!segments[0].User && segments[0].Role != "user") {
+		return false
+	}
+	trimmed := segments[0].Text
+	if utf8.RuneCountInString(trimmed) == 0 || utf8.RuneCountInString(trimmed) > 25 {
+		return false
+	}
+	return probePattern.MatchString(trimmed)
+}
+
 func InspectPrompt(c *gin.Context, request PromptAuditRequest) (PromptAuditResult, *hosttypes.NewAPIError) {
 	configured := prompt_audit_setting.GetSetting()
-	match, err := matchPromptWordlists(request.Snapshot, configured)
+	group := effectivePromptAuditGroup(c)
+	auditConfigured := configured.Mode != prompt_audit_setting.ModeOff && configured.AppliesToGroupForMode(group, configured.Mode)
+	auditEnabled := auditConfigured || setting.ShouldCheckPromptSensitive()
+
+	direction := strings.ToLower(strings.TrimSpace(request.Direction))
+	if direction == "" {
+		direction = PromptAuditDirectionInput
+	}
+
+	wordlistSnapshot := request.Snapshot
+	if direction == PromptAuditDirectionInput {
+		wordlistSnapshot = wordlistSnapshot.BlockingSnapshot()
+	}
+	match, err := matchPromptWordlists(wordlistSnapshot, configured)
+
+	// Probe shortcuts apply only to complete, standalone user input after the
+	// wordlist gate passes. Explicit rules and missing context cannot be bypassed.
+	if direction == PromptAuditDirectionInput && !request.CoverageIncomplete && err == nil && match == nil && IsProbeRequest(request.Snapshot) {
+		text := request.Snapshot.Text()
+		digest := sha256.Sum256([]byte(text))
+		result := PromptAuditResult{
+			Enabled:          auditEnabled,
+			Reviewed:         true,
+			Blocked:          false,
+			Mode:             configured.Mode,
+			Direction:        direction,
+			CoverageComplete: true,
+			Decision:         PromptAuditDecisionPass,
+			Outcome:          PromptAuditDecisionPass,
+			Safety:           "Safe",
+			ConfigVersion:    configured.ConfigVersion,
+			ActualAction:     PromptAuditActionAllow,
+			InputChars:       utf8.RuneCountInString(text),
+			InputSHA256:      hex.EncodeToString(digest[:]),
+			SegmentCount:     len(request.Snapshot.Segments),
+			InspectionType:   "probe_fast_pass",
+		}
+		// Only an active pipeline records the bypass. A disabled one must not
+		// turn every uptime probe into a database insert.
+		if auditConfigured {
+			audit := &model.PromptAudit{
+				RequestID:        resultRequestID(c),
+				UserID:           contextInt(c, "id"),
+				TokenID:          contextInt(c, "token_id"),
+				TokenName:        contextString(c, "token_name"),
+				GroupName:        group,
+				Protocol:         request.Protocol,
+				ModelName:        request.Model,
+				Stage:            normalizedPromptAuditStage(request.Stage),
+				Direction:        direction,
+				CoverageComplete: true,
+				ConfigVersion:    configured.ConfigVersion,
+				ExecutionMode:    result.Mode,
+				Status:           model.PromptAuditStatusDone,
+				PromptHash:       result.InputSHA256,
+				PromptLength:     result.InputChars,
+				SegmentCount:     result.SegmentCount,
+				Decision:         PromptAuditDecisionPass,
+				Safety:           "Safe",
+				WouldAction:      PromptAuditActionAllow,
+				InspectionType:   "probe_fast_pass",
+				Action:           PromptAuditActionAllow,
+				CompletedAt:      common.GetTimestamp(),
+			}
+			setPromptAuditContent(audit, text)
+			if err := model.CreatePromptAudit(audit); err != nil {
+				logger.LogWarn(c, "probe fast pass audit persistence failed")
+			} else {
+				result.AuditID = audit.ID
+			}
+		}
+		AttachPromptAuditResult(c, result)
+		return result, nil
+	}
+
+	// Only the model's own mode and scope switch determine its conversation window.
+	inspectionSnapshot := request.Snapshot
+	if promptInspectionUsesBlockingSnapshot(direction, configured) {
+		inspectionSnapshot = inspectionSnapshot.BlockingSnapshot()
+	}
+
 	if err == nil && (match == nil || match.Action == prompt_audit_setting.WordlistActionReview) {
 		request.Wordlist = match
-		result, apiErr := checkPromptAuditWithSetting(c, request, configured)
+		inspectionRequest := request
+		inspectionRequest.Snapshot = inspectionSnapshot
+		if strings.TrimSpace(inspectionRequest.RawFullText) == "" {
+			inspectionRequest.RawFullText = request.Snapshot.Text()
+		}
+		result, apiErr := checkPromptAuditWithSetting(c, inspectionRequest, configured)
 		return result, apiErr
 	}
 	text := request.Snapshot.Text()
@@ -240,7 +356,13 @@ func InspectPrompt(c *gin.Context, request PromptAuditRequest) (PromptAuditResul
 	}
 	AttachPromptAuditResult(c, result)
 	logger.LogWarn(c, "user sensitive words detected")
-	return result, hosttypes.NewErrorWithStatusCode(errors.New(message), code, status, hosttypes.ErrOptionWithSkipRetry())
+	// Both outcomes are persisted to the prompt audit log (block or
+	// wordlist_unavailable); neither must pollute the user-visible error log.
+	options := []hosttypes.NewAPIErrorOptions{
+		hosttypes.ErrOptionWithSkipRetry(),
+		hosttypes.ErrOptionWithNoRecordErrorLog(),
+	}
+	return result, hosttypes.NewErrorWithStatusCode(errors.New(message), code, status, options...)
 }
 
 func StartPromptWordlistRunner() {
@@ -256,10 +378,10 @@ func StartPromptWordlistRunner() {
 			defer ticker.Stop()
 			for range ticker.C {
 				if err := model.SyncPromptInspectionOptions(); err != nil {
-					logger.LogWarn(context.Background(), "prompt inspection settings sync failed")
+					logger.LogWarn(context.Background(), "prompt inspection settings sync failed: "+err.Error())
 				}
 				if err := RefreshPromptWordlists(); err != nil {
-					logger.LogWarn(context.Background(), "wordlist snapshot refresh failed")
+					logger.LogWarn(context.Background(), "wordlist snapshot refresh failed: "+err.Error())
 				}
 			}
 		}()
@@ -268,7 +390,7 @@ func StartPromptWordlistRunner() {
 			defer ticker.Stop()
 			for range ticker.C {
 				if err := compilePromptWordlists(); err != nil {
-					logger.LogWarn(context.Background(), "wordlist compilation failed")
+					logger.LogWarn(context.Background(), "wordlist compilation failed: "+err.Error())
 				}
 			}
 		}()

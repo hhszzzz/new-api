@@ -60,6 +60,21 @@ type PromptAuditSnapshot struct {
 
 // OrderedSegments normalizes inspectable text while preserving the original
 // message order. It is the canonical representation sent to moderation nodes.
+//
+// Do NOT "align with sub2api" by adding whitespace collapsing or a rune cap
+// here. sub2api ships two independent moderation pipelines, and this function
+// mirrors the newer securityaudit one (prompt_snapshot.go's
+// normalizedPromptSegments), which — like this function — only trims each
+// segment. The two features commonly mistaken for a gap live only in sub2api's
+// legacy content_moderation pipeline:
+//
+//   - strings.Fields whitespace collapsing (normalizeContentModerationText)
+//   - the maxModerationInputRunes = 12000 hard truncation (trimRunes)
+//
+// The 12000 cap is not merely a different choice, it is a defect: it silently
+// exempts the tail of any long prompt from inspection. Long inputs are covered
+// here by splitPromptAuditRunes, which chunks with overlap so the tail is
+// scanned. Adding a hard cap back would reopen that hole.
 func (snapshot PromptAuditSnapshot) OrderedSegments() []PromptAuditSegment {
 	normalized := make([]PromptAuditSegment, 0, len(snapshot.Segments))
 	for _, segment := range snapshot.Segments {
@@ -79,7 +94,7 @@ func (snapshot PromptAuditSnapshot) PrioritizedSegments() []PromptAuditSegment {
 	}
 	latestUser := -1
 	for index := len(normalized) - 1; index >= 0; index-- {
-		if normalized[index].User {
+		if isPromptAuditUserSegment(normalized[index]) || (normalized[index].SourceScope() == PromptScopeTask && normalized[index].User) {
 			latestUser = index
 			break
 		}
@@ -95,6 +110,67 @@ func (snapshot PromptAuditSnapshot) PrioritizedSegments() []PromptAuditSegment {
 		}
 	}
 	return result
+}
+
+// SemanticSegments preserves all client-supplied text for model classification.
+// Reminder and context tags are untrusted text, not proof of gateway ownership.
+func (snapshot PromptAuditSnapshot) SemanticSegments() PromptAuditSnapshot {
+	return PromptAuditSnapshot{Segments: snapshot.OrderedSegments()}
+}
+
+// BlockingSnapshot drops older conversation turns, retaining the latest user,
+// preceding assistant, and the current tool round in their original order.
+// Other sources remain available for independent source-policy selection.
+func (snapshot PromptAuditSnapshot) BlockingSnapshot() PromptAuditSnapshot {
+	normalized := snapshot.OrderedSegments()
+	userStart := latestUserSegmentStart(normalized)
+	if userStart < 0 {
+		// A request without user content cannot be narrowed safely. Preserve the
+		// established full-snapshot behavior for unusual protocol payloads.
+		return PromptAuditSnapshot{Segments: normalized}
+	}
+	assistantStart, assistantEnd := -1, -1
+	for index := userStart - 1; index >= 0; index-- {
+		if !isAssistantOutputSegment(normalized[index]) {
+			continue
+		}
+		start := index
+		for start > 0 && isAssistantOutputSegment(normalized[start-1]) {
+			start--
+		}
+		assistantStart, assistantEnd = start, index
+		break
+	}
+	selected := make([]PromptAuditSegment, 0, len(normalized))
+	for index, segment := range normalized {
+		if index >= userStart || (index >= assistantStart && index <= assistantEnd) ||
+			(segment.SourceScope() != PromptScopeUser && segment.SourceScope() != PromptScopeAssistant) {
+			selected = append(selected, segment)
+		}
+	}
+	return PromptAuditSnapshot{Segments: selected}
+}
+
+func latestUserSegmentStart(segments []PromptAuditSegment) int {
+	latest := -1
+	for index := len(segments) - 1; index >= 0; index-- {
+		if isPromptAuditUserSegment(segments[index]) {
+			latest = index
+			break
+		}
+	}
+	for latest > 0 && isPromptAuditUserSegment(segments[latest-1]) {
+		latest--
+	}
+	return latest
+}
+
+func isPromptAuditUserSegment(segment PromptAuditSegment) bool {
+	return segment.SourceScope() == PromptScopeUser && (segment.User || strings.EqualFold(strings.TrimSpace(segment.Role), "user"))
+}
+
+func isAssistantOutputSegment(segment PromptAuditSegment) bool {
+	return segment.SourceScope() == PromptScopeAssistant
 }
 
 func (snapshot PromptAuditSnapshot) Text() string {

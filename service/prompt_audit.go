@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -34,7 +35,7 @@ import (
 
 const (
 	promptAuditContextKey          = "prompt_audit_result"
-	promptAuditMaxResponseBytes    = 64 * 1024
+	promptAuditMaxResponseBytes    = 256 * 1024
 	promptAuditFullPromptMaxRunes  = 65536
 	promptAuditPreviewSourceRunes  = 96
 	promptAuditLocalCacheMaxItems  = 4096
@@ -42,6 +43,18 @@ const (
 	promptAuditWorkerLeasePadding  = 30 * time.Second
 	promptAuditRetentionBatchSize  = 500
 	promptAuditRetentionCheckEvery = time.Hour
+
+	// Outbound guard transport bounds. The audit node is an operator-managed
+	// deployment target, so a dedicated client is built instead of reusing the
+	// general relay client: the audit path has its own endpoint timeout and must
+	// never inherit ambient HTTP(S)_PROXY configuration. Values mirror sub2api
+	// securityaudit's NewSecureHTTPClient.
+	promptAuditDialTimeout         = 3 * time.Second
+	promptAuditDialKeepAlive       = 30 * time.Second
+	promptAuditMaxIdleConns        = 64
+	promptAuditMaxIdleConnsPerHost = 16
+	promptAuditIdleConnTimeout     = 90 * time.Second
+	promptAuditTLSHandshakeTimeout = 5 * time.Second
 
 	PromptAuditDecisionPass        = "pass"
 	PromptAuditDecisionFlag        = "flag"
@@ -93,6 +106,10 @@ var promptAuditCategoryAliases = map[string]string{
 var (
 	promptAuditBearerPattern = regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._~+\-/]+=*`)
 	promptAuditSecretPattern = regexp.MustCompile(`(?i)\b(sk|rk|pk|api[_-]?key|token|secret|password)[-_:=\s]+[A-Za-z0-9._~+\-/]{8,}`)
+	// promptAuditCanaryPattern masks canary markers while keeping their prefix,
+	// so an audit log still shows that a canary was present without recording
+	// its unique suffix. Mirrors sub2api securityaudit's canaryPattern.
+	promptAuditCanaryPattern = regexp.MustCompile(`(?i)([A-Z]+_CANARY_)[A-Za-z0-9_-]+`)
 	promptAuditEmailPattern  = regexp.MustCompile(`(?i)\b[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}\b`)
 	promptAuditPhonePattern  = regexp.MustCompile(`(?:\+?\d[\d\s().-]{8,}\d)`)
 )
@@ -110,6 +127,7 @@ type PromptAuditRequest struct {
 	Output             string
 	Wordlist           *PromptWordlistMatch
 	Stream             bool
+	RawFullText        string
 }
 
 type promptAuditPayload struct {
@@ -121,18 +139,20 @@ type promptAuditPayload struct {
 }
 
 type promptAuditPolicySnapshot struct {
-	Version             int      `json:"version"`
-	ConfigVersion       string   `json:"config_version"`
-	EnabledCategories   []string `json:"enabled_categories"`
-	ControversialBlocks []string `json:"controversial_block_categories"`
-	ReviewEnabled       bool     `json:"review_enabled"`
-	ReviewPrompt        string   `json:"review_prompt,omitempty"`
-	TotalTimeoutMS      int      `json:"total_timeout_ms"`
-	ChunkOverlap        int      `json:"chunk_overlap"`
-	CacheTTLSeconds     int      `json:"cache_ttl_seconds"`
-	GlobalConcurrency   int      `json:"global_concurrency"`
-	EndpointConcurrency int      `json:"endpoint_concurrency"`
-	Wordlist            *struct {
+	Version                int      `json:"version"`
+	ConfigVersion          string   `json:"config_version"`
+	EnabledCategories      []string `json:"enabled_categories"`
+	ControversialBlocks    []string `json:"controversial_block_categories"`
+	ReviewEnabled          bool     `json:"review_enabled"`
+	ReviewPrompt           string   `json:"review_prompt,omitempty"`
+	BlockingLatestTurnOnly bool     `json:"blocking_latest_turn_only"`
+	TotalTimeoutMS         int      `json:"total_timeout_ms"`
+	ChunkOverlap           int      `json:"chunk_overlap"`
+	ChunkConcurrency       int      `json:"chunk_concurrency"`
+	CacheTTLSeconds        int      `json:"cache_ttl_seconds"`
+	GlobalConcurrency      int      `json:"global_concurrency"`
+	EndpointConcurrency    int      `json:"endpoint_concurrency"`
+	Wordlist               *struct {
 		ID      string               `json:"id"`
 		Name    string               `json:"name"`
 		Version string               `json:"version"`
@@ -285,21 +305,27 @@ func TestPromptAuditPolicy(ctx context.Context, direction string, snapshot dto.P
 	if direction != PromptAuditDirectionInput && direction != PromptAuditDirectionOutput {
 		return PromptAuditResult{}, errors.New("direction must be input or output")
 	}
-	filtered := dto.PromptAuditSnapshot{}
-	for _, segment := range snapshot.OrderedSegments() {
-		if setting.PolicyFor(segment.SourceScope()).ModelAudit {
-			filtered.Segments = append(filtered.Segments, segment)
-		}
-	}
 	var wordlist *PromptWordlistMatch
 	if direction == PromptAuditDirectionInput {
-		match, err := matchPromptWordlists(snapshot, setting)
+		match, err := matchPromptWordlists(snapshot.BlockingSnapshot(), setting)
 		if err != nil {
 			return PromptAuditResult{Enabled: true, Direction: direction, Decision: PromptAuditDecisionUnavailable, Outcome: PromptAuditDecisionUnavailable, FailureKind: "wordlist_unavailable"}, err
 		}
 		wordlist = match
 		if match != nil && match.Action == prompt_audit_setting.WordlistActionBlock {
 			return PromptAuditResult{Enabled: true, Reviewed: true, Blocked: true, Direction: direction, InspectionType: "wordlist", Wordlist: match, Decision: PromptAuditDecisionBlock, Outcome: PromptAuditDecisionBlock, ActualAction: "preview"}, nil
+		}
+		if match == nil && IsProbeRequest(snapshot) {
+			return PromptAuditResult{Enabled: true, Reviewed: true, Direction: direction, CoverageComplete: true, InspectionType: "probe_fast_pass", Safety: "Safe", Decision: PromptAuditDecisionPass, Outcome: PromptAuditDecisionPass, ActualAction: "preview"}, nil
+		}
+	}
+	if promptInspectionUsesBlockingSnapshot(direction, setting) {
+		snapshot = snapshot.BlockingSnapshot()
+	}
+	filtered := dto.PromptAuditSnapshot{}
+	for _, segment := range snapshot.SemanticSegments().Segments {
+		if setting.PolicyFor(segment.SourceScope()).ModelAudit {
+			filtered.Segments = append(filtered.Segments, segment)
 		}
 	}
 	payload := promptAuditPayload{Version: 1, Direction: direction, Segments: filtered.OrderedSegments(), Output: output, CoverageComplete: true}
@@ -346,9 +372,11 @@ func checkPromptAuditWithSetting(c *gin.Context, request PromptAuditRequest, set
 	}
 	result.Enabled = true
 
+	// Only source policies determine which client text reaches the model.
+	semantic := request.Snapshot.SemanticSegments()
 	filtered := dto.PromptAuditSnapshot{}
 	scopes := map[dto.PromptAuditScope]bool{}
-	for _, segment := range request.Snapshot.Segments {
+	for _, segment := range semantic.Segments {
 		if setting.PolicyFor(segment.SourceScope()).ModelAudit {
 			filtered.Segments = append(filtered.Segments, segment)
 			scopes[segment.SourceScope()] = true
@@ -374,7 +402,11 @@ func checkPromptAuditWithSetting(c *gin.Context, request PromptAuditRequest, set
 		texts = append(texts, request.Output)
 	}
 	fullText := strings.Join(texts, "\n\n")
-	result.InputChars = utf8.RuneCountInString(fullText)
+	recordFullText := fullText
+	if strings.TrimSpace(request.RawFullText) != "" {
+		recordFullText = request.RawFullText
+	}
+	result.InputChars = utf8.RuneCountInString(recordFullText)
 	result.SegmentCount = len(segments)
 	digest := sha256.Sum256([]byte(fullText))
 	result.InputSHA256 = hex.EncodeToString(digest[:])
@@ -392,7 +424,7 @@ func checkPromptAuditWithSetting(c *gin.Context, request PromptAuditRequest, set
 	if len(segments) == 0 && strings.TrimSpace(request.Output) == "" {
 		result.Reviewed, result.Outcome, result.Decision = false, "coverage_incomplete", PromptAuditDecisionFlag
 		result.ActualAction = PromptAuditActionMark
-		result.AuditID = persistPromptAuditDecision(c, request, setting, result, fullText, payloadBytes, model.PromptAuditStatusDone)
+		result.AuditID = persistPromptAuditDecision(c, request, setting, result, recordFullText, payloadBytes, model.PromptAuditStatusDone)
 		AttachPromptAuditResult(c, result)
 		return result, nil
 	}
@@ -401,7 +433,7 @@ func checkPromptAuditWithSetting(c *gin.Context, request PromptAuditRequest, set
 	case prompt_audit_setting.ModeAsyncAudit:
 		result.Outcome = "queued"
 		result.ActualAction = PromptAuditActionAllow
-		audit, err := newPromptAuditRecord(c, request, setting, result, fullText, payloadBytes, model.PromptAuditStatusQueued)
+		audit, err := newPromptAuditRecord(c, request, setting, result, recordFullText, payloadBytes, model.PromptAuditStatusQueued)
 		if err == nil {
 			err = model.CreatePromptAudit(audit)
 		}
@@ -440,14 +472,17 @@ func checkPromptAuditWithSetting(c *gin.Context, request PromptAuditRequest, set
 		result.Blocked = true
 		result.ActualAction = PromptAuditActionUnavailable
 		result.FailureKind = promptAuditErrorCode(err)
-		result.AuditID = persistPromptAuditDecision(c, request, setting, result, fullText, payloadBytes, model.PromptAuditStatusFailed)
+		result.AuditID = persistPromptAuditDecision(c, request, setting, result, recordFullText, payloadBytes, model.PromptAuditStatusFailed)
 		AttachPromptAuditResult(c, result)
 		logPromptAuditDecision(c, result)
+		// Unavailable outcomes are recorded in the prompt audit log with the
+		// failure kind; they must not pollute the user-visible error log.
 		return result, hosttypes.NewErrorWithStatusCode(
 			errors.New("prompt audit service is unavailable"),
 			hosttypes.ErrorCodePromptAuditUnavailable,
 			http.StatusServiceUnavailable,
 			hosttypes.ErrOptionWithSkipRetry(),
+			hosttypes.ErrOptionWithNoRecordErrorLog(),
 		)
 	}
 
@@ -466,7 +501,7 @@ func checkPromptAuditWithSetting(c *gin.Context, request PromptAuditRequest, set
 	result.CacheHit = evaluated.CacheHit
 	result.Blocked = evaluated.Decision == PromptAuditDecisionBlock
 	result.ActualAction = promptAuditActionForDecision(result.Decision)
-	result.AuditID = persistPromptAuditDecision(c, request, setting, result, fullText, payloadBytes, model.PromptAuditStatusDone)
+	result.AuditID = persistPromptAuditDecision(c, request, setting, result, recordFullText, payloadBytes, model.PromptAuditStatusDone)
 	AttachPromptAuditResult(c, result)
 	if result.Decision != PromptAuditDecisionPass {
 		logPromptAuditDecision(c, result)
@@ -474,11 +509,14 @@ func checkPromptAuditWithSetting(c *gin.Context, request PromptAuditRequest, set
 	if !result.Blocked {
 		return result, nil
 	}
+	// Blocked requests are already recorded in the prompt audit log; they
+	// must not pollute the user-visible error log.
 	return result, hosttypes.NewErrorWithStatusCode(
 		errors.New("request blocked by prompt audit"),
 		hosttypes.ErrorCodePromptAuditBlocked,
 		http.StatusForbidden,
 		hosttypes.ErrOptionWithSkipRetry(),
+		hosttypes.ErrOptionWithNoRecordErrorLog(),
 	)
 }
 
@@ -488,8 +526,12 @@ func evaluatePromptAudit(ctx context.Context, setting prompt_audit_setting.Promp
 }
 
 func evaluatePromptAuditPayload(ctx context.Context, setting prompt_audit_setting.PromptAuditSetting, payload promptAuditPayload, promptHash string) (PromptAuditResult, error) {
+	mode := setting.Mode
+	if payload.Direction == PromptAuditDirectionOutput {
+		mode = setting.OutputMode
+	}
 	result := PromptAuditResult{
-		Enabled: true, Mode: setting.Mode, ConfigVersion: setting.ConfigVersion, Direction: payload.Direction,
+		Enabled: true, Mode: mode, ConfigVersion: setting.ConfigVersion, Direction: payload.Direction,
 		InputChars: promptAuditPayloadRuneCount(payload), InputSHA256: promptHash, CoverageComplete: payload.CoverageComplete,
 	}
 	cacheKey := promptAuditCacheKey(setting, payload, promptHash)
@@ -510,14 +552,6 @@ func evaluatePromptAuditPayload(ctx context.Context, setting prompt_audit_settin
 	if ctx.Err() != nil {
 		return result, &promptAuditGuardError{code: "total_timeout", timeout: true, retryable: true, cause: ctx.Err()}
 	}
-	globalSlots := promptAuditSlots(&promptAuditGlobalSlots, "global|"+setting.ConfigVersion, setting.GlobalConcurrency)
-	select {
-	case globalSlots <- struct{}{}:
-		defer func() { <-globalSlots }()
-	default:
-		return result, &promptAuditGuardError{code: "concurrency_saturated", retryable: true}
-	}
-
 	chunks := splitPromptAuditPayload(payload, minimumPromptAuditInputLimit(setting, payload.Direction), setting.ChunkOverlap)
 	if len(chunks) == 0 {
 		return result, &promptAuditGuardError{code: "empty_input"}
@@ -525,39 +559,51 @@ func evaluatePromptAuditPayload(ctx context.Context, setting prompt_audit_settin
 	result.ChunkCount = len(chunks)
 	result.Decision = PromptAuditDecisionPass
 	result.Safety = "Safe"
-	categorySet := map[string]struct{}{}
-	unknownSet := map[string]struct{}{}
-	for _, chunk := range chunks {
-		chunkResult, err := scanPromptAuditPayload(ctx, setting, endpoints, chunk)
-		if err != nil {
-			return PromptAuditResult{}, err
+	aggregate := promptAuditChunkAggregate{result: result, categories: map[string]struct{}{}, unknown: map[string]struct{}{}}
+	// Chunks are scanned in batches so a long prompt costs one batch latency
+	// instead of one round trip per chunk. Batching, rather than firing every
+	// chunk at once, keeps the scan bounded and lets a blocked chunk stop the
+	// remaining batches before they are paid for.
+	concurrency := promptAuditBatchSize(setting, endpoints)
+	for start := 0; start < len(chunks); start += concurrency {
+		outcomes := scanPromptAuditChunkBatch(ctx, setting, endpoints, chunks[start:min(start+concurrency, len(chunks))])
+		// A blocked chunk ends the scan. Siblings that share its batch were
+		// already in flight, so they run to completion, but their verdicts are
+		// discarded: the audit record stays byte-for-byte what a serial scan
+		// would have written, and ChunkConcurrency remains a latency knob only.
+		absorbUpTo := len(outcomes)
+		for index, outcome := range outcomes {
+			if outcome.err == nil && outcome.result.Decision == PromptAuditDecisionBlock {
+				absorbUpTo = index + 1
+				break
+			}
 		}
-		if promptAuditDecisionSeverity(chunkResult.Decision) > promptAuditDecisionSeverity(result.Decision) {
-			result.Decision = chunkResult.Decision
-			result.Safety = chunkResult.Safety
-			result.EndpointID = chunkResult.EndpointID
+		var batchErr error
+		for _, outcome := range outcomes[:absorbUpTo] {
+			if outcome.err != nil {
+				if batchErr == nil {
+					batchErr = outcome.err
+				}
+				continue
+			}
+			aggregate.absorb(outcome.result)
 		}
-		if result.EndpointID == "" {
-			result.EndpointID = chunkResult.EndpointID
-		}
-		for _, category := range chunkResult.Categories {
-			categorySet[category] = struct{}{}
-		}
-		for _, category := range chunkResult.UnknownCategories {
-			unknownSet[category] = struct{}{}
-		}
-		if chunkResult.Refusal != "" {
-			result.Refusal = chunkResult.Refusal
-		}
-		if result.Decision == PromptAuditDecisionBlock {
+		// A blocked chunk is a definite verdict. A sibling failure inside the
+		// same batch must not downgrade it to an unavailable result, because the
+		// caller would then serve HTTP 503 for a request the audit did judge.
+		if aggregate.result.Decision == PromptAuditDecisionBlock {
 			break
 		}
+		if batchErr != nil {
+			return PromptAuditResult{}, batchErr
+		}
 	}
+	result = aggregate.result
 	result.Reviewed = true
 	result.Blocked = result.Decision == PromptAuditDecisionBlock
 	result.Outcome = result.Decision
-	result.Categories = orderedPromptAuditCategories(categorySet)
-	result.UnknownCategories = sortedPromptAuditKeys(unknownSet)
+	result.Categories = orderedPromptAuditCategories(aggregate.categories)
+	result.UnknownCategories = sortedPromptAuditKeys(aggregate.unknown)
 	if result.Safety == "Controversial" && setting.ReviewEnabled {
 		reviewed, reviewErr := reviewPromptAuditPayload(ctx, setting, payload)
 		if reviewErr != nil {
@@ -587,7 +633,96 @@ func scanPromptAuditChunk(ctx context.Context, setting prompt_audit_setting.Prom
 	return scanPromptAuditPayload(ctx, setting, endpoints, payload)
 }
 
+// promptAuditChunkOutcome is one chunk's verdict or failure.
+type promptAuditChunkOutcome struct {
+	result PromptAuditResult
+	err    error
+}
+
+// promptAuditChunkAggregate folds chunk verdicts into the payload-level result.
+// Absorbing in submission order keeps the aggregate independent of how many
+// chunks ran concurrently, so the same input and configuration always produce
+// the same audit record.
+type promptAuditChunkAggregate struct {
+	result     PromptAuditResult
+	categories map[string]struct{}
+	unknown    map[string]struct{}
+}
+
+func (aggregate *promptAuditChunkAggregate) absorb(chunkResult PromptAuditResult) {
+	if promptAuditDecisionSeverity(chunkResult.Decision) > promptAuditDecisionSeverity(aggregate.result.Decision) {
+		aggregate.result.Decision = chunkResult.Decision
+		aggregate.result.EndpointID = chunkResult.EndpointID
+	}
+	// Model risk and configured action are independent: a disabled Unsafe
+	// category can be flagged, but must never become eligible for gray review.
+	if chunkResult.Safety == "Unsafe" || (chunkResult.Safety == "Controversial" && aggregate.result.Safety == "Safe") {
+		aggregate.result.Safety = chunkResult.Safety
+	}
+	if aggregate.result.EndpointID == "" {
+		aggregate.result.EndpointID = chunkResult.EndpointID
+	}
+	for _, category := range chunkResult.Categories {
+		aggregate.categories[category] = struct{}{}
+	}
+	for _, category := range chunkResult.UnknownCategories {
+		aggregate.unknown[category] = struct{}{}
+	}
+	if chunkResult.Refusal != "" {
+		aggregate.result.Refusal = chunkResult.Refusal
+	}
+}
+
+// promptAuditBatchSize caps the chunk fan-out at the concurrency the audit nodes
+// can actually absorb. A chunk that cannot acquire its endpoint slot fails the
+// whole batch, so launching more chunks than the smallest configured budget would
+// manufacture endpoint_concurrency_saturated errors instead of saving latency.
+//
+// The clamp is the whole safety mechanism, and it is deliberately not mirrored by
+// a validation rule: rejecting ChunkConcurrency > EndpointConcurrency would block
+// every settings save after an operator lowers the endpoint budget, while the
+// clamp already handles it by running a smaller batch. A batch smaller than
+// requested is invisible in the audit record, so there is nothing to warn about.
+func promptAuditBatchSize(setting prompt_audit_setting.PromptAuditSetting, endpoints []prompt_audit_setting.Endpoint) int {
+	budget := setting.ChunkConcurrency
+	if budget <= 0 {
+		return 1
+	}
+	budget = min(budget, setting.EndpointConcurrency, max(1, setting.GlobalConcurrency))
+	for _, endpoint := range endpoints {
+		if endpoint.Concurrency > 0 {
+			budget = min(budget, endpoint.Concurrency)
+		}
+	}
+	return max(1, budget)
+}
+
+// scanPromptAuditChunkBatch scans one batch of chunks concurrently and returns
+// one outcome per chunk, in batch order. Concurrency is bounded by the batch
+// size, and each chunk still has to acquire the global and per-endpoint slots
+// inside scanPromptAuditPayload, so a large chunk fan-out cannot exceed the
+// operator's configured budget across requests.
+func scanPromptAuditChunkBatch(ctx context.Context, setting prompt_audit_setting.PromptAuditSetting, endpoints []prompt_audit_setting.Endpoint, batch []promptAuditPayload) []promptAuditChunkOutcome {
+	outcomes := make([]promptAuditChunkOutcome, len(batch))
+	var wg sync.WaitGroup
+	for index := range batch {
+		wg.Go(func() {
+			result, err := scanPromptAuditPayload(ctx, setting, endpoints, batch[index])
+			outcomes[index] = promptAuditChunkOutcome{result: result, err: err}
+		})
+	}
+	wg.Wait()
+	return outcomes
+}
+
 func scanPromptAuditPayload(ctx context.Context, setting prompt_audit_setting.PromptAuditSetting, endpoints []prompt_audit_setting.Endpoint, chunk promptAuditPayload) (PromptAuditResult, error) {
+	globalSlots := promptAuditSlots(&promptAuditGlobalSlots, "global|"+setting.ConfigVersion, setting.GlobalConcurrency)
+	select {
+	case globalSlots <- struct{}{}:
+		defer func() { <-globalSlots }()
+	default:
+		return PromptAuditResult{}, &promptAuditGuardError{code: "concurrency_saturated", retryable: true}
+	}
 	var lastErr error
 	for _, endpoint := range endpoints {
 		if ctx.Err() != nil {
@@ -728,6 +863,13 @@ func callPromptAuditEndpoint(ctx context.Context, endpoint prompt_audit_setting.
 }
 
 func reviewPromptAuditPayload(ctx context.Context, setting prompt_audit_setting.PromptAuditSetting, payload promptAuditPayload) (PromptAuditResult, error) {
+	globalSlots := promptAuditSlots(&promptAuditGlobalSlots, "global|"+setting.ConfigVersion, setting.GlobalConcurrency)
+	select {
+	case globalSlots <- struct{}{}:
+		defer func() { <-globalSlots }()
+	default:
+		return PromptAuditResult{}, &promptAuditGuardError{code: "concurrency_saturated", retryable: true}
+	}
 	var lastErr error
 	for _, endpoint := range setting.Endpoints {
 		if !endpoint.Enabled || endpoint.Purpose != prompt_audit_setting.EndpointPurposeReview {
@@ -865,38 +1007,63 @@ func ParseQwen3Guard(content string, enabledCategories []string) (PromptAuditRes
 	return ParseQwen3GuardWithPolicy(content, enabledCategories, []string{"jailbreak", "pii", "suicide_and_self_harm"})
 }
 
+// normalizePromptAuditRefusal maps a Guard refusal token to the stored evidence
+// vocabulary. An unrecognized value yields "" (no evidence recorded) rather than
+// an error: Refusal never influences the audit decision, so a model build that
+// spells it differently must not turn into a user-visible outage.
+func normalizePromptAuditRefusal(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "true", "yes", "refused":
+		return "true"
+	case "false", "no", "not_refused":
+		return "false"
+	default:
+		return ""
+	}
+}
+
+// ParseQwen3GuardWithPolicy locates the Guard fields by prefix instead of by line
+// position, and ignores auxiliary lines. Guard deployments differ in what they
+// emit around the decision — a newer build may add a field, an inference server
+// wrapper may prepend a banner — and none of that changes the verdict. Only a
+// missing or duplicated Safety/Categories field, or an unrecognized Safety
+// value, is fatal. This mirrors sub2api securityaudit's ParseQwen3Guard, whose
+// comment records the same rule: auxiliary Guard fields such as Refusal do not
+// affect audit decisions.
 func ParseQwen3GuardWithPolicy(content string, enabledCategories, controversialBlocks []string) (PromptAuditResult, error) {
-	lines := make([]string, 0, 3)
-	for _, line := range strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			lines = append(lines, line)
-		}
-	}
-	if len(lines) < 2 || len(lines) > 3 {
-		return PromptAuditResult{}, &promptAuditGuardError{code: "invalid_response"}
-	}
-	if !strings.HasPrefix(strings.ToLower(lines[0]), "safety:") ||
-		!strings.HasPrefix(strings.ToLower(lines[1]), "categories:") {
-		return PromptAuditResult{}, &promptAuditGuardError{code: "invalid_response"}
-	}
+	safety := ""
+	categoryLine := ""
+	hasCategories := false
 	refusal := ""
-	if len(lines) == 3 {
-		if !strings.HasPrefix(strings.ToLower(lines[2]), "refusal:") {
-			return PromptAuditResult{}, &promptAuditGuardError{code: "invalid_response"}
+	for line := range strings.SplitSeq(strings.ReplaceAll(content, "\r\n", "\n"), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
 		}
-		refusal = strings.TrimSpace(lines[2][len("refusal:"):])
-		switch strings.ToLower(refusal) {
-		case "true", "yes", "refused":
-			refusal = "true"
-		case "false", "no", "not_refused":
-			refusal = "false"
+		lower := strings.ToLower(line)
+		switch {
+		case strings.HasPrefix(lower, "safety:"):
+			if safety != "" {
+				return PromptAuditResult{}, &promptAuditGuardError{code: "invalid_response"}
+			}
+			safety = strings.TrimSpace(line[len("safety:"):])
+		case strings.HasPrefix(lower, "categories:"):
+			if hasCategories {
+				return PromptAuditResult{}, &promptAuditGuardError{code: "invalid_response"}
+			}
+			hasCategories = true
+			categoryLine = strings.TrimSpace(line[len("categories:"):])
+		case strings.HasPrefix(lower, "refusal:"):
+			if refusal == "" {
+				refusal = normalizePromptAuditRefusal(line[len("refusal:"):])
+			}
 		default:
-			return PromptAuditResult{}, &promptAuditGuardError{code: "invalid_response"}
+			// Unrecognized lines are auxiliary output, not a verdict.
 		}
 	}
-	safety := strings.TrimSpace(lines[0][len("safety:"):])
-	categoryLine := strings.TrimSpace(lines[1][len("categories:"):])
+	if !hasCategories {
+		return PromptAuditResult{}, &promptAuditGuardError{code: "invalid_response"}
+	}
 	switch strings.ToLower(safety) {
 	case "safe":
 		safety = "Safe"
@@ -1020,16 +1187,44 @@ func promptAuditChatCompletionsURL(baseURL string) (string, error) {
 	return parsed.String(), nil
 }
 
+// promptAuditHTTPClient returns a pooled client for one audit endpoint. The client
+// is cached per (id, base URL, timeout) so connection reuse survives across
+// requests: rebuilding the transport per call would forfeit the keep-alive pool
+// this client exists to provide. The cache grows only when an operator edits an
+// endpoint, so its size is bounded by the number of endpoint configurations an
+// administrator has saved, not by request volume.
 func promptAuditHTTPClient(endpoint prompt_audit_setting.Endpoint) *http.Client {
-	key := endpoint.ID + "|" + endpoint.BaseURL
+	timeout := time.Duration(endpoint.TimeoutMS) * time.Millisecond
+	if timeout <= 0 {
+		timeout = time.Duration(prompt_audit_setting.DefaultEndpointTimeoutMS) * time.Millisecond
+	}
+	key := endpoint.ID + "|" + endpoint.BaseURL + "|" + timeout.String()
 	if cached, ok := promptAuditHTTPClients.Load(key); ok {
 		return cached.(*http.Client)
 	}
-	transport := http.DefaultTransport
-	if defaultTransport, ok := http.DefaultTransport.(*http.Transport); ok {
-		transport = defaultTransport.Clone()
+	dialer := &net.Dialer{Timeout: promptAuditDialTimeout, KeepAlive: promptAuditDialKeepAlive}
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
+	if common.TLSInsecureSkipVerify {
+		tlsConfig = common.InsecureTLSConfig.Clone()
+		tlsConfig.MinVersion = tls.VersionTLS12
 	}
-	client := &http.Client{Transport: transport, CheckRedirect: promptAuditNoRedirect}
+	transport := &http.Transport{
+		// Do not inherit HTTP(S)_PROXY. A proxy would move the real destination
+		// dial outside this client's own timeout and TLS policy, and audit nodes
+		// are normally private, operator-managed addresses that a corporate proxy
+		// cannot reach.
+		Proxy:                 nil,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          promptAuditMaxIdleConns,
+		MaxIdleConnsPerHost:   promptAuditMaxIdleConnsPerHost,
+		DialContext:           dialer.DialContext,
+		IdleConnTimeout:       promptAuditIdleConnTimeout,
+		TLSHandshakeTimeout:   promptAuditTLSHandshakeTimeout,
+		ResponseHeaderTimeout: timeout,
+		ExpectContinueTimeout: time.Second,
+		TLSClientConfig:       tlsConfig,
+	}
+	client := &http.Client{Transport: transport, CheckRedirect: promptAuditNoRedirect, Timeout: timeout}
 	actual, _ := promptAuditHTTPClients.LoadOrStore(key, client)
 	return actual.(*http.Client)
 }
@@ -1253,7 +1448,8 @@ func promptAuditCacheKey(setting prompt_audit_setting.PromptAuditSetting, payloa
 		}
 	}
 	digest := sha256.Sum256([]byte(setting.ConfigVersion + "|" + promptAuditReviewTemplateV1 + "|" + payload.Direction + "|" + strings.Join(categories, ",") + "|" + strings.Join(models, ",") + "|" + promptHash))
-	return "new-api:prompt-audit:result:" + hex.EncodeToString(digest[:])
+	// Isolate verdicts computed before mixed-risk aggregation was corrected.
+	return "new-api:prompt-audit:result:v2:" + hex.EncodeToString(digest[:])
 }
 
 func getPromptAuditCache(ctx context.Context, key string) (PromptAuditResult, bool) {
@@ -1350,7 +1546,9 @@ func newPromptAuditRecord(c *gin.Context, request PromptAuditRequest, setting pr
 		Version: 2, ConfigVersion: setting.ConfigVersion, EnabledCategories: append([]string(nil), setting.EnabledCategories...),
 		ControversialBlocks: append([]string(nil), setting.ControversialBlocks...), ReviewEnabled: setting.ReviewEnabled,
 		ReviewPrompt: setting.ReviewPrompt, TotalTimeoutMS: setting.TotalTimeoutMS, ChunkOverlap: setting.ChunkOverlap,
-		CacheTTLSeconds: setting.CacheTTLSeconds, GlobalConcurrency: setting.GlobalConcurrency,
+		ChunkConcurrency:       setting.ChunkConcurrency,
+		BlockingLatestTurnOnly: setting.BlockingLatestTurnOnly,
+		CacheTTLSeconds:        setting.CacheTTLSeconds, GlobalConcurrency: setting.GlobalConcurrency,
 		EndpointConcurrency: setting.EndpointConcurrency,
 	}
 	if result.Wordlist != nil {
@@ -1443,6 +1641,7 @@ func promptAuditPreview(value string) string {
 		}
 		return "***"
 	})
+	value = promptAuditCanaryPattern.ReplaceAllString(value, "${1}***")
 	value = promptAuditEmailPattern.ReplaceAllString(value, "***@***")
 	value = promptAuditPhonePattern.ReplaceAllString(value, "***PHONE***")
 	runes := []rune(strings.TrimSpace(value))
@@ -1673,16 +1872,61 @@ func RecordPromptAuditError(c *gin.Context, result PromptAuditResult, apiErr *ho
 		isStream, c.GetString("group"), other)
 }
 
-func TestPromptAuditEndpoint(ctx context.Context, endpoint prompt_audit_setting.Endpoint) (PromptAuditResult, error) {
+type PromptAuditEndpointTestResult struct {
+	PromptAuditResult
+	TestedDirections []string `json:"tested_directions"`
+}
+
+func TestPromptAuditEndpoint(ctx context.Context, endpoint prompt_audit_setting.Endpoint) (PromptAuditEndpointTestResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	ctx, cancel := context.WithTimeout(ctx, time.Duration(endpoint.TimeoutMS)*time.Millisecond)
-	defer cancel()
+	result := PromptAuditEndpointTestResult{}
 	if endpoint.Purpose == prompt_audit_setting.EndpointPurposeReview {
-		return reviewPromptAuditPayload(ctx, prompt_audit_setting.PromptAuditSetting{Endpoints: []prompt_audit_setting.Endpoint{endpoint}, EndpointConcurrency: endpoint.Concurrency}, promptAuditPayload{Version: 1, Direction: PromptAuditDirectionInput, CoverageComplete: true, Segments: []dto.PromptAuditSegment{{Role: "user", Scope: dto.PromptScopeUser, User: true, Text: "Hello"}}})
+		testCtx, cancel := context.WithTimeout(ctx, time.Duration(endpoint.TimeoutMS)*time.Millisecond)
+		defer cancel()
+		review, err := reviewPromptAuditPayload(testCtx, prompt_audit_setting.PromptAuditSetting{Endpoints: []prompt_audit_setting.Endpoint{endpoint}, EndpointConcurrency: endpoint.Concurrency}, promptAuditPayload{Version: 1, Direction: PromptAuditDirectionInput, CoverageComplete: true, Segments: []dto.PromptAuditSegment{{Role: "user", Scope: dto.PromptScopeUser, User: true, Text: "Hello"}}})
+		result.PromptAuditResult = review
+		if err == nil {
+			result.TestedDirections = []string{"review"}
+		}
+		return result, err
 	}
-	return callPromptAuditEndpoint(ctx, endpoint, promptAuditPayload{Version: 1, Direction: PromptAuditDirectionInput, CoverageComplete: true, Segments: []dto.PromptAuditSegment{{Role: "user", Scope: dto.PromptScopeUser, User: true, Text: "Hello"}}}, prompt_audit_setting.AllCategoryIDs, []string{"jailbreak", "pii", "suicide_and_self_harm"})
+	for _, direction := range []string{PromptAuditDirectionInput, PromptAuditDirectionOutput} {
+		if !promptAuditEndpointSupports(endpoint, direction) {
+			continue
+		}
+		probes := []struct{ input, output, safety, refusal string }{{input: "Hello", safety: "Safe"}}
+		if direction == PromptAuditDirectionOutput {
+			// Opposing input/output risks detect endpoints that ignore assistant
+			// messages and silently perform input classification for both modes.
+			probes = []struct{ input, output, safety, refusal string }{
+				{input: "How can I steal another person's password?", output: "I cannot help steal credentials. I can explain how to protect your own account.", safety: "Safe", refusal: "true"},
+				{input: "Hello", output: "I intend to kill my coworker tomorrow.", safety: "Unsafe", refusal: "false"},
+			}
+		}
+		for _, probe := range probes {
+			payload := promptAuditPayload{Version: 1, Direction: direction, CoverageComplete: true, Output: probe.output, Segments: []dto.PromptAuditSegment{{Role: "user", Scope: dto.PromptScopeUser, User: true, Text: probe.input}}}
+			testCtx, cancel := context.WithTimeout(ctx, time.Duration(endpoint.TimeoutMS)*time.Millisecond)
+			verdict, err := callPromptAuditEndpoint(testCtx, endpoint, payload, prompt_audit_setting.AllCategoryIDs, nil)
+			cancel()
+			result.PromptAuditResult = verdict
+			result.Direction = direction
+			if err != nil {
+				result.FailureKind = promptAuditErrorCode(err)
+				return result, err
+			}
+			if verdict.Safety != probe.safety || (direction == PromptAuditDirectionOutput && verdict.Refusal != "" && verdict.Refusal != probe.refusal) {
+				result.FailureKind = direction + "_capability_unverified"
+				return result, &promptAuditGuardError{code: result.FailureKind}
+			}
+		}
+		result.TestedDirections = append(result.TestedDirections, direction)
+	}
+	if len(result.TestedDirections) == 0 {
+		return result, &promptAuditGuardError{code: "configuration_invalid"}
+	}
+	return result, nil
 }
 
 func StartPromptAuditRunner() {
@@ -1798,30 +2042,42 @@ func processNextPromptAudit(ctx context.Context, workerID string) bool {
 		setting.EnabledCategories = append([]string(nil), snapshot.EnabledCategories...)
 		setting.ControversialBlocks = append([]string(nil), snapshot.ControversialBlocks...)
 		setting.ReviewEnabled, setting.ReviewPrompt = snapshot.ReviewEnabled, snapshot.ReviewPrompt
+		setting.BlockingLatestTurnOnly = snapshot.BlockingLatestTurnOnly
+		currentEndpoints := make(map[string]prompt_audit_setting.Endpoint, len(setting.Endpoints))
+		for _, endpoint := range setting.Endpoints {
+			currentEndpoints[endpoint.ID] = endpoint
+		}
+		setting.Endpoints = make([]prompt_audit_setting.Endpoint, 0, len(snapshot.Endpoints))
+		for _, endpoint := range snapshot.Endpoints {
+			current, exists := currentEndpoints[endpoint.ID]
+			if !exists || !current.Enabled {
+				continue
+			}
+			// Policy snapshots never authorize a retired destination to receive a
+			// current token. Allow rotation only while the same URL is authorized.
+			snapshotURL, snapshotErr := promptAuditChatCompletionsURL(endpoint.BaseURL)
+			currentURL, currentErr := promptAuditChatCompletionsURL(current.BaseURL)
+			if snapshotErr != nil || currentErr != nil || snapshotURL != currentURL {
+				continue
+			}
+			if snapshot.Version < 2 {
+				if current.Model != endpoint.Model || current.Purpose != endpoint.Purpose || !slices.Equal(current.Directions, endpoint.Directions) {
+					continue
+				}
+				endpoint = current
+			}
+			endpoint.Token = current.Token
+			endpoint.Directions = append([]string(nil), endpoint.Directions...)
+			setting.Endpoints = append(setting.Endpoints, endpoint)
+		}
 		if snapshot.Version >= 2 {
 			setting.ConfigVersion = snapshot.ConfigVersion
 			setting.TotalTimeoutMS, setting.ChunkOverlap = snapshot.TotalTimeoutMS, snapshot.ChunkOverlap
 			setting.CacheTTLSeconds, setting.GlobalConcurrency = snapshot.CacheTTLSeconds, snapshot.GlobalConcurrency
 			setting.EndpointConcurrency = snapshot.EndpointConcurrency
-			currentTokens := make(map[string]string, len(setting.Endpoints))
-			for _, endpoint := range setting.Endpoints {
-				currentTokens[endpoint.ID] = endpoint.Token
-			}
-			setting.Endpoints = make([]prompt_audit_setting.Endpoint, 0, len(snapshot.Endpoints))
-			for _, endpoint := range snapshot.Endpoints {
-				endpoint.Token = currentTokens[endpoint.ID]
-				endpoint.Directions = append([]string(nil), endpoint.Directions...)
-				setting.Endpoints = append(setting.Endpoints, endpoint)
-			}
-		} else {
-			allowed := make(map[string]struct{}, len(snapshot.Endpoints))
-			for _, endpoint := range snapshot.Endpoints {
-				allowed[endpoint.ID+"\x00"+endpoint.Model+"\x00"+endpoint.Purpose+"\x00"+strings.Join(endpoint.Directions, ",")] = struct{}{}
-			}
-			setting.Endpoints = slices.DeleteFunc(setting.Endpoints, func(endpoint prompt_audit_setting.Endpoint) bool {
-				_, ok := allowed[endpoint.ID+"\x00"+endpoint.Model+"\x00"+endpoint.Purpose+"\x00"+strings.Join(endpoint.Directions, ",")]
-				return !ok
-			})
+			// Additive field: rows queued before chunk concurrency existed carry 0,
+			// which replays them serially, exactly as they were enqueued.
+			setting.ChunkConcurrency = snapshot.ChunkConcurrency
 		}
 	}
 	var payload promptAuditPayload

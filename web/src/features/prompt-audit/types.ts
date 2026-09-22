@@ -104,6 +104,7 @@ export interface PromptAuditConfig {
   word_filter_enabled?: boolean
   mode: PromptAuditMode
   output_mode: PromptAuditMode
+  blocking_latest_turn_only: boolean
   manual_wordlist_action: PromptWordlistAction
   enabled_categories: string[]
   controversial_block_categories: string[]
@@ -114,6 +115,7 @@ export interface PromptAuditConfig {
   endpoints: PromptAuditEndpoint[]
   total_timeout_ms: number
   chunk_overlap: number
+  chunk_concurrency: number
   cache_ttl_seconds: number
   worker_count: number
   max_attempts: number

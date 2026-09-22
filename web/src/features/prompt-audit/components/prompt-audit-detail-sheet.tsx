@@ -269,7 +269,7 @@ export function PromptAuditDetailSheet({
                   mono
                 />
                 <DetailRow
-                  label={t('Audit node')}
+                  label={t('Audit model')}
                   value={event.endpoint_id || '—'}
                   mono
                 />

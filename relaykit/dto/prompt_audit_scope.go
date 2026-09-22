@@ -56,11 +56,16 @@ func scopedGeminiSegments(role string, parts []GeminiPart) []PromptAuditSegment 
 	var result []PromptAuditSegment
 	scope := (PromptAuditSegment{Role: role}).SourceScope()
 	for _, part := range parts {
-		textScope := scope
 		if part.Thought {
-			textScope = PromptScopeAssistant
+			result = append(result, PromptAuditSegment{
+				Role:  role,
+				Scope: PromptScopeAssistant,
+				Text:  part.Text,
+				User:  false,
+			})
+		} else {
+			result = appendScopeMessage(result, scope, role, []string{part.Text})
 		}
-		result = appendScopeMessage(result, textScope, role, []string{part.Text})
 		if part.FunctionCall != nil {
 			result = appendScopeMessage(result, PromptScopeToolCall, "assistant", orderedStringLeaves(part.FunctionCall.Arguments))
 		}
@@ -86,8 +91,9 @@ func mergePromptAuditParts(parts []PromptAuditSegment) []PromptAuditSegment {
 	for _, part := range parts {
 		if len(result) > 0 {
 			last := &result[len(result)-1]
+			merged := last.Text + "\n" + part.Text
 			if last.SourceScope() == part.SourceScope() && last.Role == part.Role {
-				last.Text += "\n" + part.Text
+				last.Text = merged
 				continue
 			}
 		}

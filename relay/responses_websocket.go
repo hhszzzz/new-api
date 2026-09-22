@@ -650,7 +650,13 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 						if result.Blocked && result.Decision == service.PromptAuditDecisionBlock {
 							code, status, message = types.ErrorCodeOutputAuditBlocked, http.StatusForbidden, "generated output blocked by content audit"
 						}
-						return types.NewErrorWithStatusCode(errors.New(message), code, status, types.ErrOptionWithSkipRetry())
+						options := []types.NewAPIErrorOptions{types.ErrOptionWithSkipRetry()}
+						if code == types.ErrorCodeOutputAuditBlocked {
+							// Blocked output is already recorded in the prompt
+							// audit log; it must not pollute the error log.
+							options = append(options, types.ErrOptionWithNoRecordErrorLog())
+						}
+						return types.NewErrorWithStatusCode(errors.New(message), code, status, options...)
 					}
 					if outputAuditFrames != nil {
 						reader, err := outputAuditFrames.Reader()

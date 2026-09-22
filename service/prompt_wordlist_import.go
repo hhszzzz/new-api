@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
@@ -330,6 +331,12 @@ func parsePromptWordlist(name string, body []byte, words map[string]struct{}) er
 		}
 		if utf8.RuneCountInString(word) > 256 || strings.ContainsAny(word, "\x00\r\n") {
 			return errors.New("invalid_word")
+		}
+		if utf8.RuneCountInString(word) <= 1 {
+			r, _ := utf8.DecodeRuneInString(word)
+			if r < 128 || unicode.IsPunct(r) || unicode.IsSymbol(r) || unicode.IsDigit(r) || unicode.IsNumber(r) || unicode.IsSpace(r) {
+				continue
+			}
 		}
 		words[word] = struct{}{}
 		if len(words) > wordlistMaxWords {

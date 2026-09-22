@@ -170,10 +170,10 @@ export function validatePromptAuditConfig(
   if (
     config.mode !== 'off' &&
     !config.endpoints.some(
-      (node) =>
-        node.enabled &&
-        node.purpose === 'classify' &&
-        node.directions.includes('input')
+      (model) =>
+        model.enabled &&
+        model.purpose === 'classify' &&
+        model.directions.includes('input')
     )
   ) {
     return 'At least one enabled audit node is required.'
@@ -181,10 +181,10 @@ export function validatePromptAuditConfig(
   if (
     config.output_mode !== 'off' &&
     !config.endpoints.some(
-      (node) =>
-        node.enabled &&
-        node.purpose === 'classify' &&
-        node.directions.includes('output')
+      (model) =>
+        model.enabled &&
+        model.purpose === 'classify' &&
+        model.directions.includes('output')
     )
   ) {
     return 'At least one enabled output audit node is required.'
@@ -196,9 +196,18 @@ export function validatePromptAuditConfig(
   ) {
     return 'Select at least one group or enable all groups.'
   }
+  if (
+    config.review_enabled &&
+    !config.endpoints.some(
+      (model) => model.enabled && model.purpose === 'review'
+    )
+  ) {
+    return 'At least one enabled gray-area reviewer node is required.'
+  }
   const numericRanges: Array<[number, number, number]> = [
     [config.total_timeout_ms, 100, 120000],
     [config.chunk_overlap, 0, 512],
+    [config.chunk_concurrency, 1, 16],
     [config.cache_ttl_seconds, 0, 86400],
     [config.worker_count, 1, 64],
     [config.max_attempts, 1, 4],
@@ -219,10 +228,14 @@ export function validatePromptAuditConfig(
   const ids = new Set<string>()
   let minimumInputLimit = Number.POSITIVE_INFINITY
   for (const endpoint of config.endpoints) {
-    if (!endpoint.id || ids.has(endpoint.id)) {
-      return 'Audit node IDs must be non-empty and unique.'
+    // Empty IDs are generated server-side from the model name; only
+    // duplicates among explicitly provided IDs matter here.
+    if (endpoint.id) {
+      if (ids.has(endpoint.id)) {
+        return 'Audit model IDs must be unique.'
+      }
+      ids.add(endpoint.id)
     }
-    ids.add(endpoint.id)
     if (!endpoint.model) return 'Audit node models are required.'
     if (endpoint.purpose !== 'classify' && endpoint.purpose !== 'review') {
       return 'Select a valid audit node purpose.'
@@ -259,14 +272,6 @@ export function validatePromptAuditConfig(
     }
     if (endpoint.enabled && endpoint.purpose === 'classify') {
       minimumInputLimit = Math.min(minimumInputLimit, endpoint.input_limit)
-    }
-    if (
-      config.review_enabled &&
-      !config.endpoints.some(
-        (node) => node.enabled && node.purpose === 'review'
-      )
-    ) {
-      return 'At least one enabled gray-area reviewer node is required.'
     }
   }
   if (config.chunk_overlap >= minimumInputLimit) {

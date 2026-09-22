@@ -234,7 +234,7 @@ export function PromptAuditFilterBar<TData>(props: {
         ['model', t('Model')],
         ['group', t('Group')],
         ['protocol', t('Protocol')],
-        ['endpoint_id', t('Audit node')],
+        ['endpoint_id', t('Audit model')],
         ['request_id', t('Request ID')],
         ['prompt_hash', t('Prompt hash')],
         ['detector', t('Detector')],

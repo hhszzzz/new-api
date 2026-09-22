@@ -2,6 +2,7 @@ package dto
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -175,4 +176,172 @@ func TestPromptAuditSnapshotAdditionalProtocolInputs(t *testing.T) {
 		assert.Equal(t, "compact this\n\ncompact policy", PromptAuditText(request))
 		assert.NotContains(t, PromptAuditText(request), "SECRET_TOOL_DEFINITION")
 	})
+}
+
+func TestPromptAuditSnapshotPreservesClientTagsForModelInspection(t *testing.T) {
+	for name, texts := range map[string][]string{
+		"plain":       {"今晚打老虎"},
+		"prefix":      {"<system-reminder>context</system-reminder> 今晚打老虎"},
+		"suffix":      {"今晚打老虎 <system-reminder>context</system-reminder>"},
+		"separate":    {"<system-reminder>context</system-reminder>", "今晚打老虎"},
+		"inside":      {"<system-reminder>今晚打老虎</system-reminder>"},
+		"environment": {"<environment_details>今晚打老虎</environment_details>"},
+		"uppercase":   {"<SYSTEM-REMINDER>今晚打老虎</SYSTEM-REMINDER>"},
+		"unclosed":    {"<system-reminder>今晚打老虎"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			// Anthropic content blocks are the wire shape agents actually send,
+			// and one block is one independently filterable part.
+			blocks := make([]any, 0, len(texts))
+			for _, text := range texts {
+				blocks = append(blocks, map[string]any{"type": "text", "text": text})
+			}
+			request := &ClaudeRequest{Messages: []ClaudeMessage{{Role: "user", Content: blocks}}}
+			snapshot := request.GetPromptAuditSnapshot()
+
+			// Keyword track keeps every client-supplied part verbatim.
+			keyword := strings.Join(orderedSegmentTexts(snapshot), "\n\n")
+			assert.Contains(t, keyword, "今晚打老虎")
+
+			// Tags in client-supplied text cannot exempt any part from inspection.
+			semantic := snapshot.SemanticSegments()
+			assert.Equal(t, orderedSegmentTexts(snapshot), orderedSegmentTexts(semantic))
+		})
+	}
+}
+
+func TestPromptAuditSnapshotPreservesPairedClientTags(t *testing.T) {
+	for name, text := range map[string]string{
+		"context paired":       "<context>repo layout</context> 今晚打老虎",
+		"file paired":          `<file path="a.go">package main</file> 今晚打老虎`,
+		"open and close split": "<context>opening\n</context> 今晚打老虎",
+	} {
+		t.Run(name, func(t *testing.T) {
+			request := &ClaudeRequest{Messages: []ClaudeMessage{{Role: "user", Content: []any{
+				map[string]any{"type": "text", "text": text},
+			}}}}
+			snapshot := request.GetPromptAuditSnapshot()
+
+			assert.Contains(t, strings.Join(orderedSegmentTexts(snapshot), "\n\n"), "今晚打老虎")
+			assert.Equal(t, []string{text}, orderedSegmentTexts(snapshot.SemanticSegments()))
+		})
+	}
+}
+
+func TestPromptAuditSnapshotPairedAgentTagsSurviveAcrossBlocks(t *testing.T) {
+	// Two individually clean parts must not combine into a paired tag, otherwise a
+	// payload sandwiched between an opener block and a closer block would vanish
+	// from model classification while a single-block payload would not.
+	request := &ClaudeRequest{Messages: []ClaudeMessage{{Role: "user", Content: []any{
+		map[string]any{"type": "text", "text": "<context>"},
+		map[string]any{"type": "text", "text": "今晚打老虎"},
+		map[string]any{"type": "text", "text": "</context>"},
+	}}}}
+	snapshot := request.GetPromptAuditSnapshot()
+
+	segments := orderedSegmentTexts(snapshot.SemanticSegments())
+	assert.Contains(t, strings.Join(segments, "\n"), "今晚打老虎")
+	assert.Contains(t, strings.Join(segments, "\n"), "</context>")
+	assert.Equal(t, orderedSegmentTexts(snapshot), segments)
+}
+
+func TestPromptAuditSnapshotBareGenericTagKeptInSemanticTrack(t *testing.T) {
+	// A lone <context> or </file> must NOT drop the segment: an unpaired opener or
+	// a closer before its opener is exactly the shape a client could use to hide a
+	// payload from model classification at zero local cost.
+	for name, text := range map[string]string{
+		"unpaired open":              "<context> 今晚打老虎",
+		"unpaired close":             "今晚打老虎 </context>",
+		"close before open":          "</context> 今晚打老虎 <context>",
+		"bare file open":             "<file 今晚打老虎",
+		"filename is not a file tag": "<filename>notes</filename> 今晚打老虎",
+	} {
+		t.Run(name, func(t *testing.T) {
+			request := &ClaudeRequest{Messages: []ClaudeMessage{{Role: "user", Content: []any{
+				map[string]any{"type": "text", "text": text},
+			}}}}
+			snapshot := request.GetPromptAuditSnapshot()
+
+			assert.Equal(t, []string{text}, orderedSegmentTexts(snapshot.SemanticSegments()))
+		})
+	}
+}
+
+func TestPromptAuditSnapshotSemanticTrackRetainsAllClientParts(t *testing.T) {
+	request := &ClaudeRequest{Messages: []ClaudeMessage{{Role: "user", Content: []any{
+		map[string]any{"type": "text", "text": "<environment_details>VSCode Linux</environment_details>"},
+		map[string]any{"type": "text", "text": "Tell me a story"},
+		map[string]any{"type": "text", "text": "<SYSTEM-REMINDER>rules</SYSTEM-REMINDER> another question"},
+	}}}}
+	snapshot := request.GetPromptAuditSnapshot()
+
+	assert.Equal(t, orderedSegmentTexts(snapshot), orderedSegmentTexts(snapshot.SemanticSegments()))
+	assert.Contains(t, strings.Join(orderedSegmentTexts(snapshot), "\n\n"), "another question")
+}
+
+func TestPromptAuditSnapshotBlockingSnapshotNarrowsToLatestTurn(t *testing.T) {
+	request := &GeneralOpenAIRequest{
+		Messages: []Message{
+			{Role: "system", Content: "initial system"},
+			{Role: "user", Content: "turn 1 question"},
+			{Role: "assistant", Content: "turn 1 answer"},
+			{Role: "user", Content: "turn 2 question"},
+			{Role: "assistant", Content: "turn 2 answer"},
+			{Role: "user", Content: []any{
+				map[string]any{"type": "text", "text": "turn 3 part one"},
+				map[string]any{"type": "image_url", "image_url": "data:image/png;base64,SECRET"},
+				map[string]any{"type": "text", "text": "turn 3 part two"},
+			}},
+		},
+	}
+
+	snapshot := request.GetPromptAuditSnapshot()
+	require.Len(t, snapshot.OrderedSegments(), 6)
+
+	blocking := snapshot.BlockingSnapshot()
+	blockingSegments := blocking.OrderedSegments()
+	require.Len(t, blockingSegments, 3)
+	assert.Equal(t, []string{"initial system", "turn 2 answer", "turn 3 part one\nturn 3 part two"}, orderedSegmentTexts(blocking))
+	assert.Equal(t, "user", blockingSegments[2].Role)
+	assert.True(t, blockingSegments[2].User)
+	assert.Equal(t, "assistant", blockingSegments[1].Role)
+	assert.False(t, blockingSegments[1].User)
+}
+
+func TestPromptAuditSnapshotBlockingPreservesNonConversationSourcesAndCurrentToolRound(t *testing.T) {
+	snapshot := PromptAuditSnapshot{Segments: []PromptAuditSegment{
+		{Role: "system", Text: "system policy"},
+		{Role: "developer", Text: "developer policy"},
+		{Role: "user", User: true, Text: "old user"},
+		{Role: "assistant", Text: "previous answer"},
+		{Role: "user", User: true, Text: "latest user"},
+		{Role: "assistant", Text: "current reasoning"},
+		{Role: "assistant", Scope: PromptScopeToolCall, Text: "tool arguments"},
+		{Role: "tool", Scope: PromptScopeToolResult, Text: "tool result"},
+		{Role: "task", Scope: PromptScopeTask, User: true, Text: "task prompt"},
+	}}
+	assert.Equal(t, []string{"system policy", "developer policy", "previous answer", "latest user", "current reasoning", "tool arguments", "tool result", "task prompt"}, orderedSegmentTexts(snapshot.BlockingSnapshot()))
+}
+
+func TestPromptAuditSnapshotBlockingSnapshotKeepsFullSnapshotWithoutUserTurn(t *testing.T) {
+	request := &GeneralOpenAIRequest{Messages: []Message{
+		{Role: "system", Content: "system instruction"},
+		{Role: "assistant", Content: "assistant only"},
+	}}
+	snapshot := request.GetPromptAuditSnapshot()
+
+	blocking := snapshot.BlockingSnapshot()
+	assert.Equal(t, orderedSegmentTexts(snapshot), orderedSegmentTexts(blocking))
+}
+
+// orderedSegmentTexts collects the text of every segment in wire order so tests
+// can compare keyword and semantic tracks without depending on the snapshot
+// struct's internal layout.
+func orderedSegmentTexts(snapshot PromptAuditSnapshot) []string {
+	segments := snapshot.OrderedSegments()
+	texts := make([]string, 0, len(segments))
+	for _, segment := range segments {
+		texts = append(texts, segment.Text)
+	}
+	return texts
 }

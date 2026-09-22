@@ -374,7 +374,13 @@ func executeText(c *gin.Context, info *relaycommon.RelayInfo) *hosttypes.NewAPIE
 				if result.Blocked && result.Decision == service.PromptAuditDecisionBlock {
 					code, status, message = hosttypes.ErrorCodeOutputAuditBlocked, http.StatusForbidden, "generated output blocked by content audit"
 				}
-				return hosttypes.NewErrorWithStatusCode(errors.New(message), code, status, hosttypes.ErrOptionWithSkipRetry())
+				options := []hosttypes.NewAPIErrorOptions{hosttypes.ErrOptionWithSkipRetry()}
+				if code == hosttypes.ErrorCodeOutputAuditBlocked {
+					// Blocked output is already recorded in the prompt audit
+					// log; it must not pollute the user-visible error log.
+					options = append(options, hosttypes.ErrOptionWithNoRecordErrorLog())
+				}
+				return hosttypes.NewErrorWithStatusCode(errors.New(message), code, status, options...)
 			}
 			if outputAuditWriter.blocking {
 				if err := outputAuditWriter.commit(); err != nil {

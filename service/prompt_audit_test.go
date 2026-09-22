@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -63,20 +65,48 @@ func TestParseQwen3GuardDecisionTable(t *testing.T) {
 	}
 }
 
-func TestParseQwen3GuardRejectsNonStrictOutput(t *testing.T) {
+func TestParseQwen3GuardRejectsUnusableOutput(t *testing.T) {
 	tests := []string{
 		"Safety: Safe",
 		"Safety: Maybe\nCategories: None",
-		"Safety: Safe\nCategories: None\nExplanation: okay",
 		"Safety: Safe\nSafety: Unsafe\nCategories: None",
 		"Categories: None\nCategories: PII",
-		"Categories: None\nSafety: Safe",
 	}
 	for _, content := range tests {
 		t.Run(strings.ReplaceAll(content, "\n", "_"), func(t *testing.T) {
 			_, err := ParseQwen3Guard(content, prompt_audit_setting.AllCategoryIDs)
 			require.Error(t, err)
 			assert.Equal(t, "invalid_response", promptAuditErrorCode(err))
+		})
+	}
+}
+
+// Guard deployments differ in what they emit around the decision. Reordering the
+// fields, adding an auxiliary line, or spelling Refusal differently must not turn
+// into a terminal invalid_response, which in blocking mode surfaces as HTTP 503.
+func TestParseQwen3GuardToleratesGuardOutputVariants(t *testing.T) {
+	tests := []struct {
+		name     string
+		content  string
+		safety   string
+		refusal  string
+		decision string
+	}{
+		{name: "reordered fields", content: "Categories: None\nSafety: Safe", safety: "Safe", decision: PromptAuditDecisionPass},
+		{name: "auxiliary line after decision", content: "Safety: Safe\nCategories: None\nExplanation: nothing flagged", safety: "Safe", decision: PromptAuditDecisionPass},
+		{name: "auxiliary line before decision", content: "Note: guarded\nSafety: Unsafe\nCategories: None", safety: "Unsafe", decision: PromptAuditDecisionBlock},
+		{name: "refusal last", content: "Safety: Safe\nCategories: None\nRefusal: Yes", safety: "Safe", refusal: "true", decision: PromptAuditDecisionPass},
+		{name: "unrecognized refusal drops evidence", content: "Safety: Safe\nCategories: None\nRefusal: Undecided", safety: "Safe", refusal: "", decision: PromptAuditDecisionPass},
+		{name: "blank refusal drops evidence", content: "Safety: Safe\nCategories: None\nRefusal:", safety: "Safe", refusal: "", decision: PromptAuditDecisionPass},
+		{name: "extra blank lines", content: "\nSafety: Safe\n\nCategories: None\n\n", safety: "Safe", decision: PromptAuditDecisionPass},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := ParseQwen3Guard(test.content, prompt_audit_setting.AllCategoryIDs)
+			require.NoError(t, err)
+			assert.Equal(t, test.safety, result.Safety)
+			assert.Equal(t, test.refusal, result.Refusal)
+			assert.Equal(t, test.decision, result.Decision)
 		})
 	}
 }
@@ -192,12 +222,75 @@ func TestPromptAuditGrayReviewFailurePreservesBaselineFlag(t *testing.T) {
 	assert.Equal(t, "review_endpoint_http_502", result.ReviewReason)
 }
 
+func TestPromptAuditGrayReviewCannotClearAnUnsafeChunk(t *testing.T) {
+	guard := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct{ Messages []struct{ Content string } }
+		require.NoError(t, common.DecodeJson(r.Body, &request))
+		content := "Safety: Controversial\nCategories: Violent"
+		if strings.Contains(request.Messages[0].Content, "unsafe-marker") {
+			content = "Safety: Unsafe\nCategories: Copyright Violation"
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":` + strconv.Quote(content) + `}}]}`))
+	}))
+	defer guard.Close()
+	var reviewCalls atomic.Int32
+	reviewer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		reviewCalls.Add(1)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"decision\":\"pass\",\"policy_codes\":[],\"reason\":\"benign\"}"}}]}`))
+	}))
+	defer reviewer.Close()
+	setting := promptAuditTestSetting(guard.URL, "")
+	setting.Endpoints = setting.Endpoints[:1]
+	setting.Endpoints[0].InputLimit = 512
+	setting.Endpoints = append(setting.Endpoints, prompt_audit_setting.Endpoint{
+		ID: "reviewer", BaseURL: reviewer.URL, Model: "reviewer", TimeoutMS: 1000, InputLimit: 4000, Enabled: true, Purpose: prompt_audit_setting.EndpointPurposeReview,
+	})
+	setting.EnabledCategories = []string{"violent"}
+	setting.ControversialBlocks = nil
+	setting.ReviewEnabled = true
+	payload := promptAuditPayload{Version: 1, Direction: PromptAuditDirectionInput, CoverageComplete: true, Segments: []dto.PromptAuditSegment{
+		{Role: "system", Text: "gray-marker" + strings.Repeat("a", 210)},
+		{Role: "system", Text: "unsafe-marker" + strings.Repeat("b", 210)},
+	}}
+	result, err := evaluatePromptAuditPayload(context.Background(), setting, payload, "mixed-safety")
+	require.NoError(t, err)
+	assert.Equal(t, "Unsafe", result.Safety)
+	assert.Equal(t, PromptAuditDecisionFlag, result.Decision)
+	assert.Zero(t, reviewCalls.Load(), "reviewers may only override Controversial baseline results")
+}
+
 func TestSplitPromptAuditRunesUsesUnicodeAndOverlap(t *testing.T) {
 	chunks := splitPromptAuditRunes("甲乙😀丁戊己", 4, 1)
 	require.Equal(t, []string{"甲乙😀丁", "丁戊己"}, chunks)
 	for _, chunk := range chunks {
 		assert.LessOrEqual(t, utf8.RuneCountInString(chunk), 4)
 	}
+}
+
+func TestPromptAuditPreviewMasksCanarySuffixButKeepsMarker(t *testing.T) {
+	// Mirrors sub2api's TestSnapshotRedactsCanariesAndPreservesHashOfScanText:
+	// the canary's unique suffix must never reach the stored preview, while the
+	// marker prefix survives so an operator can still see a canary was present.
+	// The padding pushes the redacted value past promptAuditPreviewSourceRunes so
+	// the retained head saturates at 24 runes — long enough to hold the whole
+	// "PROMPT_CANARY_***" marker, which a shorter input would cut off.
+	preview := promptAuditPreview("PROMPT_CANARY_ABC123 summarize the quarterly report " + strings.Repeat("x", 96))
+
+	assert.NotContains(t, preview, "ABC123")
+	assert.Contains(t, preview, "PROMPT_CANARY_***")
+
+	t.Run("marker matching is case insensitive", func(t *testing.T) {
+		preview := promptAuditPreview("myapp_canary_zzz999 " + strings.Repeat("y", 96))
+		assert.NotContains(t, preview, "zzz999")
+		assert.Contains(t, preview, "myapp_canary_***")
+	})
+
+	t.Run("prose mentioning canaries is not redacted", func(t *testing.T) {
+		// The pattern requires an underscore-delimited _CANARY_ marker, so ordinary
+		// wording must pass through untouched.
+		assert.False(t, promptAuditCanaryPattern.MatchString("the canary in the coal mine"))
+		assert.False(t, promptAuditCanaryPattern.MatchString("we should canary deploy this"))
+	})
 }
 
 func TestEvaluatePromptAuditScansAllChunksUnlessBlocked(t *testing.T) {
@@ -220,7 +313,7 @@ func TestEvaluatePromptAuditScansAllChunksUnlessBlocked(t *testing.T) {
 		assert.EqualValues(t, 10, calls.Load())
 	})
 
-	t.Run("block stops remaining chunks", func(t *testing.T) {
+	t.Run("block stops remaining batches", func(t *testing.T) {
 		var calls atomic.Int32
 		guard := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			calls.Add(1)
@@ -235,8 +328,151 @@ func TestEvaluatePromptAuditScansAllChunksUnlessBlocked(t *testing.T) {
 		result, err := evaluatePromptAudit(context.Background(), setting, "abcdefghij", strings.Repeat("2", 64))
 		require.NoError(t, err)
 		assert.Equal(t, PromptAuditDecisionBlock, result.Decision)
-		assert.EqualValues(t, 1, calls.Load())
+		// Chunks after the blocking one share its batch and were already in
+		// flight, so the wasted work is bounded by the batch size rather than
+		// eliminated. The extra batches must never run.
+		assert.EqualValues(t, min(setting.ChunkConcurrency, setting.GlobalConcurrency), calls.Load())
 	})
+
+	t.Run("endpoint slot budget caps the batch", func(t *testing.T) {
+		// Without the cap, four chunks would race for two endpoint slots and the
+		// losers would fail the whole audit with endpoint_concurrency_saturated.
+		var calls atomic.Int32
+		guard := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			calls.Add(1)
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"Safety: Controversial\nCategories: Violent"}}]}`))
+		}))
+		defer guard.Close()
+
+		setting := promptAuditTestSetting(guard.URL, guard.URL)
+		setting.Endpoints = setting.Endpoints[:1]
+		setting.Endpoints[0].InputLimit = 4
+		setting.Endpoints[0].Concurrency = 2
+		setting.ChunkOverlap = 1
+		result, err := evaluatePromptAudit(context.Background(), setting, "abcdefghij", strings.Repeat("1", 64))
+		require.NoError(t, err)
+		assert.Equal(t, PromptAuditDecisionFlag, result.Decision)
+		assert.EqualValues(t, 10, calls.Load())
+	})
+}
+
+// ChunkConcurrency is a latency knob: the recorded verdict must not depend on
+// it. This is what makes the audit log diffable and the verdict cache safe.
+func TestEvaluatePromptAuditChunkConcurrencyDoesNotChangeTheVerdict(t *testing.T) {
+	// The guard answers from the chunk text alone, so every chunk gets the same
+	// verdict regardless of which batch it landed in or in what order batches ran.
+	guard := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			}
+		}
+		require.NoError(t, common.DecodeJson(r.Body, &request))
+		require.Len(t, request.Messages, 1)
+		var chunk promptAuditPayload
+		require.NoError(t, common.UnmarshalJsonStr(request.Messages[0].Content, &chunk))
+		var text string
+		for _, segment := range chunk.Segments {
+			text += segment.Text
+		}
+		content := "Safety: Safe\nCategories: None\nRefusal: No"
+		switch {
+		case strings.Contains(text, "BLOCKME"):
+			content = "Safety: Unsafe\nCategories: PII"
+		case strings.Contains(text, "FLAGME"):
+			content = "Safety: Controversial\nCategories: Jailbreak"
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":` + strconv.Quote(content) + `}}]}`))
+	}))
+	defer guard.Close()
+
+	texts := []struct {
+		name       string
+		text       string
+		decision   string
+		categories []string
+	}{
+		{
+			name: "block short-circuits the scan", text: strings.Repeat("z", 100) + "BLOCKME" + strings.Repeat("y", 400),
+			decision: PromptAuditDecisionBlock, categories: []string{"pii"},
+		},
+		{
+			name: "no block merges every chunk", text: strings.Repeat("z", 100) + "FLAGME" + strings.Repeat("y", 400),
+			decision: PromptAuditDecisionFlag, categories: []string{"jailbreak"},
+		},
+	}
+	for _, test := range texts {
+		t.Run(test.name, func(t *testing.T) {
+			verdicts := map[int]PromptAuditResult{}
+			for _, concurrency := range []int{1, 2, 7} {
+				setting := promptAuditTestSetting(guard.URL, guard.URL)
+				setting.Endpoints = setting.Endpoints[:1]
+				setting.Endpoints[0].InputLimit = 400
+				setting.ChunkOverlap = 0
+				setting.ChunkConcurrency = concurrency
+				result, err := evaluatePromptAudit(context.Background(), setting, test.text, strings.Repeat("3", 64))
+				require.NoError(t, err)
+				verdicts[concurrency] = result
+			}
+			reference := verdicts[1]
+			assert.Greater(t, reference.ChunkCount, 1)
+			assert.Equal(t, test.decision, reference.Decision)
+			assert.Equal(t, test.categories, reference.Categories)
+			for concurrency, result := range verdicts {
+				assert.Equal(t, reference.Decision, result.Decision, "concurrency %d", concurrency)
+				assert.Equal(t, reference.Safety, result.Safety, "concurrency %d", concurrency)
+				assert.Equal(t, reference.Categories, result.Categories, "concurrency %d", concurrency)
+				assert.Equal(t, reference.UnknownCategories, result.UnknownCategories, "concurrency %d", concurrency)
+				assert.Equal(t, reference.Refusal, result.Refusal, "concurrency %d", concurrency)
+			}
+		})
+	}
+}
+
+// The batch has to actually overlap, or the setting buys nothing. The handler
+// holds every request until the whole batch is in flight, so a serial scan can
+// never reach the batch size and the assertion below fails.
+func TestEvaluatePromptAuditScansABatchConcurrently(t *testing.T) {
+	const batchSize = 4
+	var inFlight, maxInFlight atomic.Int32
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	guard := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		current := inFlight.Add(1)
+		for {
+			observed := maxInFlight.Load()
+			if current <= observed || maxInFlight.CompareAndSwap(observed, current) {
+				break
+			}
+		}
+		if inFlight.Load() == batchSize {
+			releaseOnce.Do(func() { close(release) })
+		}
+		select {
+		case <-release:
+		case <-time.After(5 * time.Second):
+		}
+		inFlight.Add(-1)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"Safety: Safe\nCategories: None"}}]}`))
+	}))
+	defer guard.Close()
+
+	setting := promptAuditTestSetting(guard.URL, guard.URL)
+	setting.Endpoints = setting.Endpoints[:1]
+	setting.Endpoints[0].InputLimit = 4
+	setting.Endpoints[0].Concurrency = batchSize
+	setting.Endpoints[0].TimeoutMS = 25000
+	setting.ChunkOverlap = 1
+	setting.ChunkConcurrency = batchSize
+	setting.EndpointConcurrency = batchSize
+	setting.GlobalConcurrency = batchSize
+	setting.TotalTimeoutMS = 30000
+
+	result, err := evaluatePromptAudit(context.Background(), setting, "abcdefghij", strings.Repeat("4", 64))
+	require.NoError(t, err)
+	assert.Equal(t, PromptAuditDecisionPass, result.Decision)
+	assert.EqualValues(t, batchSize, maxInFlight.Load())
 }
 
 func TestPromptAuditStoredFullPromptUsesUnicodeCapWithoutTruncatingScanInput(t *testing.T) {
@@ -335,6 +571,12 @@ func TestEvaluatePromptAuditFailsFastWhenBulkheadIsFull(t *testing.T) {
 	_, err := evaluatePromptAudit(context.Background(), setting, "hello", strings.Repeat("a", 64))
 	require.Error(t, err)
 	assert.Equal(t, "concurrency_saturated", promptAuditErrorCode(err))
+	_, err = scanPromptAuditChunk(context.Background(), setting, setting.Endpoints, "another chunk")
+	require.Error(t, err)
+	assert.Equal(t, "concurrency_saturated", promptAuditErrorCode(err), "each parallel chunk must respect the global limit")
+	_, err = reviewPromptAuditPayload(context.Background(), setting, promptAuditPayload{Direction: PromptAuditDirectionInput})
+	require.Error(t, err)
+	assert.Equal(t, "concurrency_saturated", promptAuditErrorCode(err), "review calls share the global limit")
 }
 
 func TestPromptAuditEndpointSaturationFailsOver(t *testing.T) {
@@ -554,14 +796,8 @@ func TestCheckPromptAuditAsyncNeverBlocksMainRequest(t *testing.T) {
 	assert.Equal(t, active.Endpoints[0].BaseURL, policySnapshot.Endpoints[0].BaseURL)
 	assert.NotContains(t, queued.PolicySnapshot, "must-not-be-persisted")
 
-	var replacementCalls atomic.Int32
-	replacement := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		replacementCalls.Add(1)
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"Safety: Safe\nCategories: None"}}]}`))
-	}))
-	defer replacement.Close()
 	changed := active
-	changed.Endpoints[0].BaseURL = replacement.URL
+	changed.Endpoints[0].Model = "replacement-model"
 	changed.PublishConfig()
 	assert.True(t, processNextPromptAudit(context.Background(), "snapshot-worker"))
 	require.NoError(t, db.First(&queued, result.AuditID).Error)
@@ -570,7 +806,6 @@ func TestCheckPromptAuditAsyncNeverBlocksMainRequest(t *testing.T) {
 	assert.Equal(t, PromptAuditActionMark, queued.Action)
 	assert.Equal(t, PromptAuditActionBlock, queued.WouldAction)
 	assert.EqualValues(t, 1, guardCalls.Load(), "worker must use the queued non-secret endpoint snapshot")
-	assert.Zero(t, replacementCalls.Load())
 	assert.Empty(t, queued.ScanPayload)
 	assert.NotEmpty(t, queued.ContentSnapshot)
 
@@ -585,7 +820,87 @@ func TestCheckPromptAuditAsyncNeverBlocksMainRequest(t *testing.T) {
 	assert.Equal(t, "enqueue_failed", result.Outcome)
 	assert.False(t, result.Blocked)
 	assert.EqualValues(t, 1, guardCalls.Load())
-	assert.Zero(t, replacementCalls.Load())
+}
+
+func TestPromptAuditQueuedCredentialsStayBoundToAuthorizedEndpoint(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	previousDB := model.DB
+	previousMainType := common.MainDatabaseType()
+	previousSetting := prompt_audit_setting.GetSetting()
+	t.Cleanup(func() {
+		model.DB = previousDB
+		common.SetDatabaseTypes(previousMainType, common.LogDatabaseType())
+		previousSetting.PublishConfig()
+	})
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.PromptAudit{}))
+	model.DB = db
+	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.LogDatabaseType())
+
+	for _, version := range []int{1, 2} {
+		for _, change := range []string{"rotate", "equivalent_url", "different_url", "disabled", "deleted"} {
+			t.Run(fmt.Sprintf("v%d/%s", version, change), func(t *testing.T) {
+				requests := make(chan string, 1)
+				guard := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					requests <- r.Header.Get("Authorization")
+					_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"Safety: Safe\nCategories: None"}}]}`))
+				}))
+				defer guard.Close()
+				configured := promptAuditTestSetting(guard.URL, guard.URL)
+				configured.Mode = prompt_audit_setting.ModeAsyncAudit
+				configured.Endpoints = configured.Endpoints[:1]
+				configured.Endpoints[0].Token = "old-test-token"
+				configured.PublishConfig()
+				c, _ := gin.CreateTestContext(httptest.NewRecorder())
+				c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+				result, apiErr := CheckPromptAudit(c, PromptAuditRequest{
+					Snapshot: dto.PromptAuditSnapshot{Segments: []dto.PromptAuditSegment{{Role: "user", Scope: dto.PromptScopeUser, User: true, Text: "queued content " + t.Name()}}},
+					Protocol: "openai_responses", Model: "test-model", Stage: "http",
+				})
+				require.Nil(t, apiErr)
+				require.Equal(t, "queued", result.Outcome)
+				var queued model.PromptAudit
+				require.NoError(t, db.First(&queued, result.AuditID).Error)
+				assert.NotContains(t, queued.PolicySnapshot, "old-test-token")
+				if version == 1 {
+					var snapshot promptAuditPolicySnapshot
+					require.NoError(t, common.UnmarshalJsonStr(queued.PolicySnapshot, &snapshot))
+					snapshot.Version = 1
+					data, err := common.Marshal(snapshot)
+					require.NoError(t, err)
+					require.NoError(t, db.Model(&queued).Update("policy_snapshot", string(data)).Error)
+				}
+				changed := prompt_audit_setting.GetSetting()
+				changed.Endpoints[0].Token = "rotated-test-token"
+				switch change {
+				case "equivalent_url":
+					changed.Endpoints[0].BaseURL += "/v1/"
+				case "different_url":
+					changed.Endpoints[0].BaseURL += "/other-tenant"
+				case "disabled":
+					changed.Endpoints[0].Enabled = false
+				case "deleted":
+					changed.Endpoints = nil
+				}
+				changed.PublishConfig()
+				require.True(t, processNextPromptAudit(context.Background(), "credential-worker"))
+				require.NoError(t, db.First(&queued, result.AuditID).Error)
+				if change == "rotate" || change == "equivalent_url" {
+					assert.Equal(t, model.PromptAuditStatusDone, queued.Status)
+					assert.Equal(t, PromptAuditDecisionPass, queued.Decision)
+					require.Len(t, requests, 1)
+					assert.Equal(t, "Bearer rotated-test-token", <-requests)
+				} else {
+					assert.Equal(t, model.PromptAuditStatusFailed, queued.Status)
+					assert.Equal(t, "configuration_invalid", queued.ErrorCode)
+					assert.Empty(t, requests, "revoked destinations must receive neither queued content nor current credentials")
+				}
+				assert.Empty(t, queued.ScanPayload)
+				assert.NotContains(t, queued.PolicySnapshot, "rotated-test-token")
+			})
+		}
+	}
 }
 
 func TestPromptAuditRetryScheduleAllowsThreeRetries(t *testing.T) {
@@ -595,18 +910,82 @@ func TestPromptAuditRetryScheduleAllowsThreeRetries(t *testing.T) {
 	assert.Equal(t, 2*time.Minute, promptAuditRetryDelay(3))
 }
 
+func TestPromptAuditNodeChecksDeclaredDirections(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		directions     []string
+		outputAware    bool
+		includeRefusal bool
+		wantError      string
+		wantCalls      int32
+	}{
+		{name: "input only", directions: []string{"input"}, wantCalls: 1},
+		{name: "input and output", directions: []string{"input", "output"}, outputAware: true, includeRefusal: true, wantCalls: 3},
+		{name: "optional refusal", directions: []string{"output"}, outputAware: true, wantCalls: 2},
+		{name: "assistant messages ignored", directions: []string{"input", "output"}, wantError: "output_capability_unverified", wantCalls: 2},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var calls atomic.Int32
+			guard := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				var request struct {
+					Messages []struct{ Role, Content string }
+				}
+				if err := common.DecodeJson(r.Body, &request); err != nil || len(request.Messages) == 0 {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				content := "Safety: Safe\nCategories: None"
+				last := request.Messages[len(request.Messages)-1]
+				if test.outputAware && last.Role == "assistant" {
+					refusal := "Yes"
+					if strings.Contains(last.Content, "kill") {
+						content = "Safety: Unsafe\nCategories: Violent"
+						refusal = "No"
+					}
+					if test.includeRefusal {
+						content += "\nRefusal: " + refusal
+					}
+				} else if strings.Contains(request.Messages[0].Content, "steal") {
+					content = "Safety: Unsafe\nCategories: Non-violent Illegal Acts"
+				}
+				body, err := common.Marshal(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": content}}}})
+				if err != nil {
+					w.WriteHeader(http.StatusInternalServerError)
+					return
+				}
+				_, _ = w.Write(body)
+			}))
+			defer guard.Close()
+			endpoint := promptAuditTestSetting(guard.URL, guard.URL).Endpoints[0]
+			endpoint.Directions = test.directions
+			result, err := TestPromptAuditEndpoint(context.Background(), endpoint)
+			if test.wantError == "" {
+				require.NoError(t, err)
+				assert.Equal(t, test.directions, result.TestedDirections)
+			} else {
+				require.Error(t, err)
+				assert.Equal(t, test.wantError, result.FailureKind)
+				assert.Equal(t, []string{"input"}, result.TestedDirections)
+			}
+			assert.Equal(t, test.wantCalls, calls.Load())
+		})
+	}
+}
+
 func promptAuditTestSetting(firstURL, secondURL string) prompt_audit_setting.PromptAuditSetting {
 	version := fmt.Sprintf("test-%d", time.Now().UnixNano())
 	return prompt_audit_setting.PromptAuditSetting{
-		Mode:              prompt_audit_setting.ModeBlocking,
-		EnabledCategories: append([]string(nil), prompt_audit_setting.AllCategoryIDs...),
-		AllGroups:         true,
+		Mode:                   prompt_audit_setting.ModeBlocking,
+		BlockingLatestTurnOnly: true,
+		EnabledCategories:      append([]string(nil), prompt_audit_setting.AllCategoryIDs...),
+		AllGroups:              true,
 		Endpoints: []prompt_audit_setting.Endpoint{
-			{ID: "first", BaseURL: firstURL, Model: "guard", TimeoutMS: 500, InputLimit: 4000, Concurrency: 2, Enabled: true},
-			{ID: "second", BaseURL: secondURL, Model: "guard", TimeoutMS: 500, InputLimit: 4000, Concurrency: 2, Enabled: true},
+			{ID: "first", BaseURL: firstURL, Model: "guard", TimeoutMS: 500, InputLimit: 4000, Concurrency: 4, Enabled: true},
+			{ID: "second", BaseURL: secondURL, Model: "guard", TimeoutMS: 500, InputLimit: 4000, Concurrency: 4, Enabled: true},
 		},
-		TotalTimeoutMS: 1000, ChunkOverlap: 64, CacheTTLSeconds: 0,
+		TotalTimeoutMS: 1000, ChunkOverlap: 64, ChunkConcurrency: 4, CacheTTLSeconds: 0,
 		WorkerCount: 1, MaxAttempts: 3, RetentionDays: 30,
-		GlobalConcurrency: 2, EndpointConcurrency: 2, ConfigVersion: version,
+		GlobalConcurrency: 2, EndpointConcurrency: 4, ConfigVersion: version,
 	}
 }

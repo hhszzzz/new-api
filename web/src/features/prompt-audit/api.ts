@@ -165,8 +165,14 @@ export async function testPromptAuditNode(id: string) {
       latency_ms: number
       safety: string
       decision: PromptAuditDecision
+      tested_directions?: Array<PromptAuditDirection | 'review'>
+      error_code?: string
     }>
-  >(`/api/prompt-audit/nodes/${encodeURIComponent(id)}/test`)
+  >(`/api/prompt-audit/nodes/${encodeURIComponent(id)}/test`, undefined, {
+    skipErrorHandler: true,
+    validateStatus: (status) =>
+      status === 503 || (status >= 200 && status < 300),
+  })
   return response.data
 }
 

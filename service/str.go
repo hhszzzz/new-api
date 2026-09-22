@@ -1,7 +1,6 @@
 package service
 
 import (
-	"bytes"
 	"fmt"
 	"hash/fnv"
 	"sort"
@@ -61,8 +60,11 @@ func RemoveDuplicate(s []string) []string {
 }
 
 func InitAc(dict []string) *goahocorasick.Machine {
-	m := new(goahocorasick.Machine)
 	runes := readRunes(dict)
+	if len(runes) == 0 {
+		return nil
+	}
+	m := new(goahocorasick.Machine)
 	if err := m.Build(runes); err != nil {
 		fmt.Println(err)
 		return nil
@@ -121,9 +123,11 @@ func readRunes(dict []string) [][]rune {
 	var runes [][]rune
 
 	for _, word := range dict {
-		word = strings.ToLower(word)
-		l := bytes.TrimSpace([]byte(word))
-		runes = append(runes, bytes.Runes(l))
+		word = strings.ToLower(strings.TrimSpace(word))
+		if word == "" {
+			continue
+		}
+		runes = append(runes, []rune(word))
 	}
 
 	return runes

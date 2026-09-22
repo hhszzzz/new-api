@@ -20,9 +20,14 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowDown,
   ArrowUp,
+  ChevronDown,
   CirclePlus,
+  Cpu,
   FlaskConical,
+  HardDrive,
   Save,
+  ShieldAlert,
+  Timer,
   Trash2,
 } from 'lucide-react'
 import { useState } from 'react'
@@ -42,12 +47,17 @@ import {
   CardTitle,
 } from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Switch } from '@/components/ui/switch'
-import { Textarea } from '@/components/ui/textarea'
 import { getGroups } from '@/features/users/api'
+import { cn } from '@/lib/utils'
 
 import {
   getPromptAuditCategories,
@@ -82,6 +92,16 @@ type NumberFieldProps = {
   onChange: (value: number) => void
 }
 
+const MB = 1024 * 1024
+
+function bytesToMB(bytes: number): number {
+  return Math.max(1, Math.round(bytes / MB))
+}
+
+function mbToBytes(mb: number): number {
+  return Math.max(MB, Math.round(mb * MB))
+}
+
 function NumberField({
   id,
   label,
@@ -92,17 +112,27 @@ function NumberField({
   onChange,
 }: NumberFieldProps) {
   return (
-    <div className='space-y-1.5'>
-      <Label htmlFor={id}>{label}</Label>
-      <Input
-        id={id}
-        type='number'
-        min={min}
-        max={max}
-        value={value}
-        onChange={(event) => onChange(Number(event.target.value || '0'))}
-      />
-      <p className='text-muted-foreground text-xs'>{description}</p>
+    <div className='bg-muted/20 hover:bg-muted/30 flex flex-col justify-between space-y-1.5 rounded-xl border p-3.5 transition-colors'>
+      <div className='space-y-1'>
+        <Label
+          htmlFor={id}
+          className='text-foreground cursor-pointer text-xs font-medium'
+        >
+          {label}
+        </Label>
+        <Input
+          id={id}
+          type='number'
+          min={min}
+          max={max}
+          value={value}
+          className='bg-background h-9 font-mono text-sm'
+          onChange={(event) => onChange(Number(event.target.value || '0'))}
+        />
+      </div>
+      <p className='text-muted-foreground text-[11px] leading-relaxed'>
+        {description}
+      </p>
     </div>
   )
 }
@@ -121,6 +151,7 @@ function promptAuditConfigDraft(
     word_filter_enabled: config.word_filter_enabled ?? true,
     mode: config.mode,
     output_mode: config.output_mode ?? 'off',
+    blocking_latest_turn_only: config.blocking_latest_turn_only ?? true,
     manual_wordlist_action: config.manual_wordlist_action ?? 'block',
     enabled_categories: [...config.enabled_categories],
     controversial_block_categories: [
@@ -132,6 +163,7 @@ function promptAuditConfigDraft(
     groups: [...config.groups],
     total_timeout_ms: config.total_timeout_ms,
     chunk_overlap: config.chunk_overlap,
+    chunk_concurrency: config.chunk_concurrency ?? 4,
     cache_ttl_seconds: config.cache_ttl_seconds,
     worker_count: config.worker_count,
     max_attempts: config.max_attempts,
@@ -162,7 +194,7 @@ function PromptAuditSettingsForm({
     promptAuditEndpointDrafts(initialConfig.endpoints)
   )
   const persistedEndpointIDs = new Set(
-    initialConfig.endpoints.map((node) => node.id)
+    initialConfig.endpoints.map((model) => model.id)
   )
 
   const saveMutation = useMutation({
@@ -201,17 +233,40 @@ function PromptAuditSettingsForm({
     mutationFn: async (id: string) => {
       const result = await testPromptAuditNode(id)
       if (!result.success || !result.data) {
-        throw new Error(result.message || t('Audit node test failed'))
+        if (result.data?.error_code === 'output_capability_unverified') {
+          throw new Error(
+            t(
+              'Output audit test failed. Check that this model evaluates assistant replies and handles refusals correctly.'
+            )
+          )
+        }
+        if (result.data?.error_code === 'input_capability_unverified') {
+          throw new Error(t('Input audit test failed on a harmless sample.'))
+        }
+        throw new Error(result.message || t('Audit model test failed'))
       }
       return result.data
     },
-    onSuccess: (result) =>
+    onSuccess: (result) => {
+      const directionLabels = {
+        input: t('Request input'),
+        output: t('Generated output'),
+        review: t('Gray-area review'),
+      }
       toast.success(
-        t('Audit node responded in {{latency}} ms with {{safety}}', {
-          latency: result.latency_ms,
-          safety: result.safety || result.decision,
-        })
-      ),
+        result.tested_directions?.length
+          ? t('Audit model passed {{directions}} tests in {{latency}} ms', {
+              latency: result.latency_ms,
+              directions: result.tested_directions
+                .map((direction) => directionLabels[direction])
+                .join(', '),
+            })
+          : t('Audit model responded in {{latency}} ms with {{safety}}', {
+              latency: result.latency_ms,
+              safety: result.safety || result.decision,
+            })
+      )
+    },
     onError: (error) => toast.error(error.message),
   })
 
@@ -229,10 +284,10 @@ function PromptAuditSettingsForm({
   const groups = [...new Set([...availableGroups, ...config.groups])].sort()
 
   let modeDescription = t(
-    'Risk matches return 403 and audit failures return 503.'
+    'Synchronous interception: requests wait for the audit result before dispatch. Risk matches return 403; audit failures return 503.'
   )
   if (config.mode === 'off') {
-    modeDescription = t('Requests are not sent to audit nodes.')
+    modeDescription = t('Requests are not sent to audit models.')
   } else if (config.mode === 'async_audit') {
     modeDescription = t(
       'Requests continue normally while durable workers record would_action.'
@@ -242,7 +297,7 @@ function PromptAuditSettingsForm({
   let outputModeDescription = t('Generated output is not collected for audit.')
   if (config.output_mode === 'blocking') {
     outputModeDescription = t(
-      'Generated text is withheld until review passes. Generation usage is still billed when content is blocked.'
+      'Synchronous full-buffer blocking: generation is buffered and delivered only after review passes, adding end-to-end latency. Blocked content returns 403 and generation usage is still billed.'
     )
   } else if (config.output_mode === 'async_audit') {
     outputModeDescription = t(
@@ -262,807 +317,908 @@ function PromptAuditSettingsForm({
           }
           onClick={() => saveMutation.mutate()}
         >
-          <Save />
+          <Save className='size-4' />
           {saveMutation.isPending ? t('Saving...') : t('Save settings')}
         </Button>
       </SectionPageLayout.Actions>
       <SectionPageLayout.Content>
-        <div className='w-full space-y-4'>
+        <div className='w-full space-y-6'>
           <PromptAuditNavigation />
-          {librariesQuery.isPending && <LoadingState />}
-          {librariesQuery.isError && (
-            <ErrorState
-              description={librariesQuery.error.message}
-              onRetry={() => void librariesQuery.refetch()}
-            />
-          )}
-          {librariesQuery.isSuccess && (
-            <ScopePoliciesSection
-              policies={config.scope_policies ?? defaultPromptScopePolicies()}
-              libraries={librariesQuery.data}
-              wordFilterEnabled={config.word_filter_enabled ?? true}
-              onChange={(scope_policies) =>
-                setConfig((current) => ({ ...current, scope_policies }))
-              }
-              onWordFilterChange={(word_filter_enabled) =>
-                setConfig((current) => ({ ...current, word_filter_enabled }))
-              }
-            />
-          )}
-          <Card>
-            <CardHeader>
-              <CardTitle>{t('Enforcement policy')}</CardTitle>
-              <CardDescription>
-                {t(
-                  'Sensitive-word filtering runs first. Blocking mode fails closed before channel selection, billing, and upstream dispatch.'
-                )}
-              </CardDescription>
-            </CardHeader>
-            <CardContent className='space-y-5'>
-              <div className='space-y-1.5'>
-                <Label htmlFor='prompt-audit-mode'>
-                  {t('Model audit mode')}
-                </Label>
-                <NativeSelect
-                  id='prompt-audit-mode'
-                  className='w-full sm:w-72'
-                  value={config.mode}
-                  onChange={(event) =>
-                    setConfig((current) => ({
-                      ...current,
-                      mode: event.target
-                        .value as PromptAuditConfigUpdate['mode'],
-                    }))
-                  }
-                >
-                  <NativeSelectOption value='off'>
-                    {t('Off')}
-                  </NativeSelectOption>
-                  <NativeSelectOption value='async_audit'>
-                    {t('Async audit')}
-                  </NativeSelectOption>
-                  <NativeSelectOption value='blocking'>
-                    {t('Blocking')}
-                  </NativeSelectOption>
-                </NativeSelect>
-                <p className='text-muted-foreground text-xs'>
-                  {modeDescription}
-                </p>
-              </div>
 
-              <div className='space-y-1.5'>
-                <Label htmlFor='prompt-audit-output-mode'>
-                  {t('Output audit mode')}
-                </Label>
-                <NativeSelect
-                  id='prompt-audit-output-mode'
-                  className='w-full sm:w-72'
-                  value={config.output_mode}
-                  onChange={(event) =>
-                    setConfig((current) => ({
-                      ...current,
-                      output_mode: event.target
-                        .value as PromptAuditConfigUpdate['output_mode'],
-                    }))
-                  }
-                >
-                  <NativeSelectOption value='off'>
-                    {t('Off')}
-                  </NativeSelectOption>
-                  <NativeSelectOption value='async_audit'>
-                    {t('Async observation')}
-                  </NativeSelectOption>
-                  <NativeSelectOption value='blocking'>
-                    {t('Full-buffer blocking')}
-                  </NativeSelectOption>
-                </NativeSelect>
-                <p className='text-muted-foreground text-xs'>
-                  {outputModeDescription}
-                </p>
-              </div>
-
-              <div className='flex items-start justify-between gap-4 rounded-lg border p-3'>
-                <div>
-                  <Label htmlFor='prompt-audit-all-groups'>
-                    {t('All groups')}
-                  </Label>
-                  <p className='text-muted-foreground mt-1 text-xs'>
-                    {t(
-                      'Apply the policy to every request group, including newly added groups.'
-                    )}
-                  </p>
-                </div>
-                <Switch
-                  id='prompt-audit-all-groups'
-                  checked={config.all_groups}
-                  onCheckedChange={(allGroups) =>
-                    setConfig((current) => ({
-                      ...current,
-                      all_groups: allGroups,
-                    }))
-                  }
+          <div className='grid w-full grid-cols-1 items-start gap-6 xl:grid-cols-12'>
+            <div className='space-y-6 xl:col-span-7'>
+              {librariesQuery.isPending && <LoadingState />}
+              {librariesQuery.isError && (
+                <ErrorState
+                  description={librariesQuery.error.message}
+                  onRetry={() => void librariesQuery.refetch()}
                 />
-              </div>
-
-              {!config.all_groups && (
-                <div>
-                  <Label>{t('Audited groups')}</Label>
-                  <div className='mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-3'>
-                    {groups.map((group) => (
-                      <label
-                        key={group}
-                        className='flex items-center gap-2 rounded-lg border p-3 text-sm'
-                      >
-                        <Checkbox
-                          checked={config.groups.includes(group)}
-                          onCheckedChange={(checked) =>
-                            setConfig((current) => ({
-                              ...current,
-                              groups: checked
-                                ? [...current.groups, group]
-                                : current.groups.filter(
-                                    (value) => value !== group
-                                  ),
-                            }))
-                          }
-                        />
-                        <span className='break-all'>{group}</span>
-                      </label>
-                    ))}
-                    {groups.length === 0 && (
-                      <p className='text-muted-foreground text-sm'>
-                        {t('No request groups are available.')}
-                      </p>
-                    )}
-                  </div>
-                </div>
               )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>{t('Gray-area review')}</CardTitle>
-              <CardDescription>
-                {t(
-                  'An independent general model may review only Qwen3Guard Controversial results. It cannot override direct wordlist blocks or baseline blocks.'
-                )}
-              </CardDescription>
-            </CardHeader>
-            <CardContent className='space-y-4'>
-              <div className='flex items-start justify-between gap-4 rounded-lg border p-3'>
-                <div>
-                  <Label htmlFor='prompt-audit-review-enabled'>
-                    {t('Enable gray-area review')}
-                  </Label>
-                  <p className='text-muted-foreground mt-1 text-xs'>
-                    {t(
-                      'Requires at least one enabled node with the gray-area reviewer purpose.'
-                    )}
-                  </p>
-                </div>
-                <Switch
-                  id='prompt-audit-review-enabled'
-                  checked={config.review_enabled}
-                  onCheckedChange={(review_enabled) =>
-                    setConfig((current) => ({ ...current, review_enabled }))
+              {librariesQuery.isSuccess && (
+                <ScopePoliciesSection
+                  policies={
+                    config.scope_policies ?? defaultPromptScopePolicies()
                   }
-                />
-              </div>
-              <div className='space-y-1.5'>
-                <Label htmlFor='prompt-audit-review-prompt'>
-                  {t('Reviewer system prompt')}
-                </Label>
-                <Textarea
-                  id='prompt-audit-review-prompt'
-                  value={config.review_prompt}
-                  maxLength={20000}
-                  rows={8}
-                  placeholder={t(
-                    'Leave empty to use the built-in reviewer policy.'
-                  )}
-                  onChange={(event) =>
+                  libraries={librariesQuery.data}
+                  wordFilterEnabled={config.word_filter_enabled ?? true}
+                  onChange={(scope_policies) =>
+                    setConfig((current) => ({ ...current, scope_policies }))
+                  }
+                  onWordFilterChange={(word_filter_enabled) =>
                     setConfig((current) => ({
                       ...current,
-                      review_prompt: event.target.value,
+                      word_filter_enabled,
                     }))
                   }
                 />
-                <p className='text-muted-foreground text-xs'>
-                  {t(
-                    'The server fixes the JSON output protocol; this prompt only defines review policy.'
-                  )}
-                </p>
-              </div>
-              <div>
-                <Label>
-                  {t('Controversial categories blocked before review')}
-                </Label>
-                <div className='mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-3'>
-                  {categories.map((category) => (
-                    <label
-                      key={category.id}
-                      className='flex items-center gap-2 rounded-lg border p-3 text-sm'
-                    >
-                      <Checkbox
-                        checked={config.controversial_block_categories.includes(
-                          category.id
-                        )}
-                        onCheckedChange={(checked) =>
-                          setConfig((current) => ({
-                            ...current,
-                            controversial_block_categories: checked
-                              ? [
-                                  ...current.controversial_block_categories,
-                                  category.id,
-                                ]
-                              : current.controversial_block_categories.filter(
-                                  (value) => value !== category.id
-                                ),
-                          }))
-                        }
-                      />
-                      {t(category.label)}
-                    </label>
-                  ))}
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+              )}
 
-          <Card>
-            <CardHeader>
-              <CardTitle>{t('Risk categories')}</CardTitle>
-              <CardDescription>
-                {t(
-                  'Qwen3Guard always returns its complete classification; these selections only control the blocking policy.'
-                )}
-              </CardDescription>
-            </CardHeader>
-            <CardContent className='grid gap-3 sm:grid-cols-2 lg:grid-cols-3'>
-              {categories.map((category) => (
-                <label
-                  key={category.id}
-                  className='flex items-start gap-3 rounded-lg border p-3'
-                >
-                  <Checkbox
-                    className='mt-0.5'
-                    checked={config.enabled_categories.includes(category.id)}
-                    onCheckedChange={(checked) =>
-                      setConfig((current) => ({
-                        ...current,
-                        enabled_categories: checked
-                          ? [...current.enabled_categories, category.id]
-                          : current.enabled_categories.filter(
-                              (value) => value !== category.id
-                            ),
-                      }))
-                    }
-                  />
-                  <span>
-                    <span className='block text-sm font-medium'>
-                      {t(category.label)}
-                    </span>
-                    <span className='text-muted-foreground mt-1 block text-xs'>
-                      {t(category.description)}
-                    </span>
-                  </span>
-                </label>
-              ))}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>{t('Timeouts, cache, and workers')}</CardTitle>
-              <CardDescription>
-                {t(
-                  'Limits are measured in Unicode characters, milliseconds, seconds, or concurrent requests as labeled.'
-                )}
-              </CardDescription>
-            </CardHeader>
-            <CardContent className='grid gap-4 sm:grid-cols-2 lg:grid-cols-4'>
-              <NumberField
-                id='prompt-audit-total-timeout'
-                label={t('Total timeout (ms)')}
-                value={config.total_timeout_ms}
-                min={100}
-                max={120000}
-                description={t('Deadline for reviewing the complete request.')}
-                onChange={(value) =>
-                  setConfig((current) => ({
-                    ...current,
-                    total_timeout_ms: value,
-                  }))
-                }
-              />
-              <NumberField
-                id='prompt-audit-output-memory'
-                label={t('Output memory threshold (bytes)')}
-                value={config.output_memory_bytes}
-                min={1024}
-                max={config.output_max_bytes}
-                description={t(
-                  'Larger buffered outputs spill to temporary storage.'
-                )}
-                onChange={(value) =>
-                  setConfig((current) => ({
-                    ...current,
-                    output_memory_bytes: value,
-                  }))
-                }
-              />
-              <NumberField
-                id='prompt-audit-output-limit'
-                label={t('Maximum output capture (bytes)')}
-                value={config.output_max_bytes}
-                min={1024}
-                max={64 * 1024 * 1024}
-                description={t(
-                  'Blocking stops delivery when this limit is exceeded.'
-                )}
-                onChange={(value) =>
-                  setConfig((current) => ({
-                    ...current,
-                    output_max_bytes: value,
-                  }))
-                }
-              />
-              <NumberField
-                id='prompt-audit-overlap'
-                label={t('Chunk overlap (characters)')}
-                value={config.chunk_overlap}
-                min={0}
-                max={512}
-                description={t(
-                  'Overlap between adjacent chunks to resist boundary bypasses.'
-                )}
-                onChange={(value) =>
-                  setConfig((current) => ({ ...current, chunk_overlap: value }))
-                }
-              />
-              <NumberField
-                id='prompt-audit-cache-ttl'
-                label={t('Cache TTL (seconds)')}
-                value={config.cache_ttl_seconds}
-                min={0}
-                max={86400}
-                description={t('Use 0 to disable result caching.')}
-                onChange={(value) =>
-                  setConfig((current) => ({
-                    ...current,
-                    cache_ttl_seconds: value,
-                  }))
-                }
-              />
-              <NumberField
-                id='prompt-audit-retention'
-                label={t('Retention (days)')}
-                value={config.retention_days}
-                min={0}
-                max={3650}
-                description={t('Use 0 to retain full prompt text permanently.')}
-                onChange={(value) =>
-                  setConfig((current) => ({
-                    ...current,
-                    retention_days: value,
-                  }))
-                }
-              />
-              <NumberField
-                id='prompt-audit-workers'
-                label={t('Async workers')}
-                value={config.worker_count}
-                min={1}
-                max={64}
-                description={t(
-                  'Durable queue worker count on the elected master.'
-                )}
-                onChange={(value) =>
-                  setConfig((current) => ({ ...current, worker_count: value }))
-                }
-              />
-              <NumberField
-                id='prompt-audit-attempts'
-                label={t('Maximum attempts')}
-                value={config.max_attempts}
-                min={1}
-                max={4}
-                description={t(
-                  'Includes the initial asynchronous audit attempt.'
-                )}
-                onChange={(value) =>
-                  setConfig((current) => ({ ...current, max_attempts: value }))
-                }
-              />
-              <NumberField
-                id='prompt-audit-global-concurrency'
-                label={t('Global concurrency')}
-                value={config.global_concurrency}
-                min={1}
-                max={1024}
-                description={t(
-                  'Maximum simultaneous audit calls in this process.'
-                )}
-                onChange={(value) =>
-                  setConfig((current) => ({
-                    ...current,
-                    global_concurrency: value,
-                  }))
-                }
-              />
-              <NumberField
-                id='prompt-audit-node-concurrency'
-                label={t('Default node concurrency')}
-                value={config.endpoint_concurrency}
-                min={1}
-                max={256}
-                description={t(
-                  'Fallback concurrency used by newly configured nodes.'
-                )}
-                onChange={(value) =>
-                  setConfig((current) => ({
-                    ...current,
-                    endpoint_concurrency: value,
-                  }))
-                }
-              />
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle id='audit-nodes' className='scroll-mt-24'>
-                {t('Qwen3Guard nodes')}
-              </CardTitle>
-              <CardDescription>
-                {t(
-                  'Nodes are tried in order. Tokens are write-only; leave the field untouched to preserve the saved token.'
-                )}
-              </CardDescription>
-            </CardHeader>
-            <CardContent className='space-y-4'>
-              {endpoints.map((endpoint, index) => {
-                let tokenDescription = t('No token is stored for this node.')
-                if (endpoint.token_changed) {
-                  tokenDescription = endpoint.token
-                    ? t('A replacement token will be saved.')
-                    : t('The saved token will be cleared.')
-                } else if (endpoint.has_token) {
-                  tokenDescription = t(
-                    'A token is stored and will not be returned by the API.'
-                  )
-                }
-
-                let testLabel = t('Save before testing')
-                if (
-                  testMutation.isPending &&
-                  testMutation.variables === endpoint.id
-                ) {
-                  testLabel = t('Testing...')
-                } else if (persistedEndpointIDs.has(endpoint.id)) {
-                  testLabel = t('Test saved node')
-                }
-
-                return (
-                  <div
-                    key={endpoint.client_key}
-                    className='space-y-4 rounded-xl border p-4'
-                  >
-                    <div className='flex flex-wrap items-center justify-between gap-3'>
-                      <div className='flex items-center gap-2'>
-                        <Badge variant='outline'>#{index + 1}</Badge>
-                        <Switch
-                          aria-label={`${t('Enabled')}: ${endpoint.name || endpoint.id || index + 1}`}
-                          checked={endpoint.enabled}
-                          onCheckedChange={(enabled) =>
-                            updateEndpoint(index, { enabled })
-                          }
-                        />
-                        <span className='text-sm font-medium'>
-                          {endpoint.name || endpoint.id || t('New audit node')}
-                        </span>
-                      </div>
-                      <div className='flex gap-1'>
-                        <Button
-                          variant='ghost'
-                          size='icon-sm'
-                          aria-label={t('Move node up')}
-                          disabled={index === 0}
-                          onClick={() =>
-                            setEndpoints((current) => {
-                              const next = [...current]
-                              ;[next[index - 1], next[index]] = [
-                                next[index],
-                                next[index - 1],
-                              ]
-                              return next
-                            })
-                          }
-                        >
-                          <ArrowUp />
-                        </Button>
-                        <Button
-                          variant='ghost'
-                          size='icon-sm'
-                          aria-label={t('Move node down')}
-                          disabled={index === endpoints.length - 1}
-                          onClick={() =>
-                            setEndpoints((current) => {
-                              const next = [...current]
-                              ;[next[index], next[index + 1]] = [
-                                next[index + 1],
-                                next[index],
-                              ]
-                              return next
-                            })
-                          }
-                        >
-                          <ArrowDown />
-                        </Button>
-                        <Button
-                          variant='ghost'
-                          size='icon-sm'
-                          aria-label={t('Remove node')}
-                          onClick={() =>
-                            setEndpoints((current) =>
-                              current.filter(
-                                (_, endpointIndex) => endpointIndex !== index
-                              )
-                            )
-                          }
-                        >
-                          <Trash2 />
-                        </Button>
-                      </div>
-                    </div>
-
-                    <div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-3'>
+              <Card>
+                <CardHeader>
+                  <CardTitle>{t('Enforcement policy')}</CardTitle>
+                  <CardDescription>
+                    {t(
+                      'Sensitive-word filtering runs first. Blocking mode fails closed before channel selection, billing, and upstream dispatch.'
+                    )}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className='space-y-5'>
+                  <div className='grid gap-4 sm:grid-cols-2'>
+                    <div className='bg-muted/20 flex flex-col justify-between space-y-3 rounded-xl border p-4'>
                       <div className='space-y-1.5'>
-                        <Label htmlFor={`prompt-audit-node-purpose-${index}`}>
-                          {t('Node purpose')}
+                        <Label
+                          htmlFor='prompt-audit-mode'
+                          className='cursor-pointer text-sm font-medium'
+                        >
+                          {t('Model audit mode')}
                         </Label>
                         <NativeSelect
-                          id={`prompt-audit-node-purpose-${index}`}
-                          value={endpoint.purpose}
+                          id='prompt-audit-mode'
+                          className='w-full'
+                          value={config.mode}
                           onChange={(event) =>
-                            updateEndpoint(index, {
-                              purpose: event.target
-                                .value as PromptAuditEndpointDraft['purpose'],
-                            })
+                            setConfig((current) => ({
+                              ...current,
+                              mode: event.target
+                                .value as PromptAuditConfigUpdate['mode'],
+                            }))
                           }
                         >
-                          <NativeSelectOption value='classify'>
-                            {t('Qwen3Guard classification')}
+                          <NativeSelectOption value='off'>
+                            {t('Off')}
                           </NativeSelectOption>
-                          <NativeSelectOption value='review'>
-                            {t('Gray-area reviewer')}
+                          <NativeSelectOption value='async_audit'>
+                            {t('Async audit')}
+                          </NativeSelectOption>
+                          <NativeSelectOption value='blocking'>
+                            {t('Blocking')}
                           </NativeSelectOption>
                         </NativeSelect>
                       </div>
-                      {endpoint.purpose === 'classify' && (
-                        <div className='space-y-1.5'>
-                          <Label>{t('Audit directions')}</Label>
-                          <div className='flex flex-wrap gap-3 rounded-lg border p-2.5'>
-                            {(
-                              [
-                                ['input', t('Request input')],
-                                ['output', t('Generated output')],
-                              ] as const
-                            ).map(([direction, label]) => (
-                              <label
-                                key={direction}
-                                className='flex items-center gap-2 text-sm'
-                              >
-                                <Checkbox
-                                  checked={endpoint.directions.includes(
-                                    direction
-                                  )}
-                                  onCheckedChange={(checked) =>
-                                    updateEndpoint(index, {
-                                      directions: checked
-                                        ? [...endpoint.directions, direction]
-                                        : endpoint.directions.filter(
-                                            (value) => value !== direction
-                                          ),
-                                    })
-                                  }
-                                />
-                                {label}
-                              </label>
-                            ))}
-                          </div>
-                        </div>
-                      )}
+                      <p className='text-muted-foreground text-xs leading-relaxed'>
+                        {modeDescription}
+                      </p>
+                    </div>
+
+                    <div className='bg-muted/20 flex flex-col justify-between space-y-3 rounded-xl border p-4'>
                       <div className='space-y-1.5'>
-                        <Label htmlFor={`prompt-audit-node-id-${index}`}>
-                          {t('Node ID')}
+                        <Label
+                          htmlFor='prompt-audit-output-mode'
+                          className='cursor-pointer text-sm font-medium'
+                        >
+                          {t('Output audit mode')}
                         </Label>
-                        <Input
-                          id={`prompt-audit-node-id-${index}`}
-                          value={endpoint.id}
+                        <NativeSelect
+                          id='prompt-audit-output-mode'
+                          className='w-full'
+                          value={config.output_mode}
                           onChange={(event) =>
-                            updateEndpoint(index, { id: event.target.value })
+                            setConfig((current) => ({
+                              ...current,
+                              output_mode: event.target
+                                .value as PromptAuditConfigUpdate['output_mode'],
+                            }))
                           }
-                        />
+                        >
+                          <NativeSelectOption value='off'>
+                            {t('Off')}
+                          </NativeSelectOption>
+                          <NativeSelectOption value='async_audit'>
+                            {t('Async observation')}
+                          </NativeSelectOption>
+                          <NativeSelectOption value='blocking'>
+                            {t('Full-buffer blocking')}
+                          </NativeSelectOption>
+                        </NativeSelect>
                       </div>
-                      <div className='space-y-1.5'>
-                        <Label htmlFor={`prompt-audit-node-name-${index}`}>
-                          {t('Name')}
+                      <p className='text-muted-foreground text-xs leading-relaxed'>
+                        {outputModeDescription}
+                      </p>
+                    </div>
+
+                    <div className='bg-muted/30 flex items-center justify-between gap-4 rounded-xl border p-4'>
+                      <div className='space-y-0.5'>
+                        <Label
+                          htmlFor='prompt-audit-blocking-latest-turn-only'
+                          className='cursor-pointer text-sm font-medium'
+                        >
+                          {t('Blocking scans the latest turn only')}
                         </Label>
-                        <Input
-                          id={`prompt-audit-node-name-${index}`}
-                          value={endpoint.name}
-                          onChange={(event) =>
-                            updateEndpoint(index, { name: event.target.value })
-                          }
-                        />
+                        <p className='text-muted-foreground text-xs'>
+                          {t(
+                            'In blocking mode, inspect the latest user turn, preceding assistant turn, and current tool activity. Other enabled sources are still inspected. Turn this off to include older conversation turns.'
+                          )}
+                        </p>
                       </div>
-                      <div className='space-y-1.5 sm:col-span-2 lg:col-span-1'>
-                        <Label htmlFor={`prompt-audit-node-url-${index}`}>
-                          {t('Base URL')}
-                        </Label>
-                        <Input
-                          id={`prompt-audit-node-url-${index}`}
-                          placeholder='https://guard.example.com/v1'
-                          value={endpoint.base_url}
-                          onChange={(event) =>
-                            updateEndpoint(
-                              index,
-                              promptAuditEndpointBaseURLUpdate(
-                                endpoint,
-                                event.target.value
-                              )
-                            )
-                          }
-                        />
-                      </div>
-                      <div className='space-y-1.5'>
-                        <Label htmlFor={`prompt-audit-node-model-${index}`}>
-                          {t('Model')}
-                        </Label>
-                        <Input
-                          id={`prompt-audit-node-model-${index}`}
-                          value={endpoint.model}
-                          onChange={(event) =>
-                            updateEndpoint(index, { model: event.target.value })
-                          }
-                        />
-                      </div>
-                      <NumberField
-                        id={`prompt-audit-node-timeout-${index}`}
-                        label={t('Timeout (ms)')}
-                        value={endpoint.timeout_ms}
-                        min={100}
-                        max={120000}
-                        description={t('Per-attempt node timeout.')}
-                        onChange={(timeout_ms) =>
-                          updateEndpoint(index, { timeout_ms })
+                      <Switch
+                        id='prompt-audit-blocking-latest-turn-only'
+                        checked={config.blocking_latest_turn_only}
+                        onCheckedChange={(latestTurnOnly) =>
+                          setConfig((current) => ({
+                            ...current,
+                            blocking_latest_turn_only: latestTurnOnly,
+                          }))
                         }
                       />
-                      <NumberField
-                        id={`prompt-audit-node-limit-${index}`}
-                        label={t('Input limit (characters)')}
-                        value={endpoint.input_limit}
-                        min={256}
-                        max={1048576}
-                        description={t(
-                          'Smallest enabled value controls chunk size.'
+                    </div>
+                  </div>
+
+                  <div className='bg-muted/30 flex items-center justify-between gap-4 rounded-xl border p-4'>
+                    <div className='space-y-0.5'>
+                      <Label
+                        htmlFor='prompt-audit-all-groups'
+                        className='cursor-pointer text-sm font-medium'
+                      >
+                        {t('All groups')}
+                      </Label>
+                      <p className='text-muted-foreground text-xs'>
+                        {t(
+                          'Apply the policy to every request group, including newly added groups.'
                         )}
-                        onChange={(input_limit) =>
-                          updateEndpoint(index, { input_limit })
-                        }
-                      />
-                      <NumberField
-                        id={`prompt-audit-node-concurrency-${index}`}
-                        label={t('Node concurrency')}
-                        value={endpoint.concurrency}
-                        min={1}
-                        max={256}
-                        description={t(
-                          'Maximum calls to this node per process.'
-                        )}
-                        onChange={(concurrency) =>
-                          updateEndpoint(index, { concurrency })
-                        }
-                      />
-                      <div className='space-y-1.5 sm:col-span-2'>
-                        <Label htmlFor={`prompt-audit-node-token-${index}`}>
-                          {t('API token')}
-                        </Label>
-                        <Input
-                          id={`prompt-audit-node-token-${index}`}
-                          type='password'
-                          autoComplete='new-password'
-                          placeholder={
-                            endpoint.has_token
-                              ? t('Saved token (unchanged)')
-                              : t('Optional token')
-                          }
-                          value={endpoint.token}
-                          onChange={(event) =>
-                            updateEndpoint(index, {
-                              token: event.target.value,
-                              token_changed: true,
-                            })
-                          }
-                        />
-                        <div className='flex items-center justify-between gap-3'>
-                          <p className='text-muted-foreground text-xs'>
-                            {tokenDescription}
+                      </p>
+                    </div>
+                    <Switch
+                      id='prompt-audit-all-groups'
+                      checked={config.all_groups}
+                      onCheckedChange={(allGroups) =>
+                        setConfig((current) => ({
+                          ...current,
+                          all_groups: allGroups,
+                        }))
+                      }
+                    />
+                  </div>
+
+                  {!config.all_groups && (
+                    <div className='bg-background space-y-2.5 rounded-xl border p-4'>
+                      <Label className='text-sm font-medium'>
+                        {t('Audited groups')}
+                      </Label>
+                      <div className='grid gap-2 sm:grid-cols-2 lg:grid-cols-3'>
+                        {groups.map((group) => {
+                          const selected = config.groups.includes(group)
+                          return (
+                            <label
+                              key={group}
+                              className={cn(
+                                'flex items-center gap-2.5 rounded-lg border p-3 text-sm cursor-pointer transition-colors',
+                                selected
+                                  ? 'border-primary/50 bg-primary/5 font-medium'
+                                  : 'hover:bg-muted/40'
+                              )}
+                            >
+                              <Checkbox
+                                checked={selected}
+                                onCheckedChange={(checked) =>
+                                  setConfig((current) => ({
+                                    ...current,
+                                    groups: checked
+                                      ? [...current.groups, group]
+                                      : current.groups.filter(
+                                          (value) => value !== group
+                                        ),
+                                  }))
+                                }
+                              />
+                              <span className='break-all'>{group}</span>
+                            </label>
+                          )
+                        })}
+                        {groups.length === 0 && (
+                          <p className='text-muted-foreground col-span-full text-sm'>
+                            {t('No request groups are available.')}
                           </p>
-                          {endpoint.has_token && !endpoint.token_changed && (
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/*
+                Gray-area review is intentionally hidden from the UI. The backend
+                capability remains intact (review_enabled stays false unless it
+                was already enabled in persisted config).
+              */}
+              <Collapsible className='bg-card text-card-foreground rounded-xl border shadow-2xs'>
+                <CollapsibleTrigger className='group focus-visible:ring-ring/50 hover:bg-muted/30 flex w-full items-center justify-between gap-3 rounded-xl px-5 py-4 text-left transition-colors outline-none focus-visible:ring-3'>
+                  <div className='flex items-center gap-3'>
+                    <div className='bg-primary/10 text-primary flex size-8 shrink-0 items-center justify-center rounded-lg'>
+                      <ShieldAlert className='size-4' />
+                    </div>
+                    <div className='flex items-center gap-2'>
+                      <span className='text-foreground text-sm font-semibold'>
+                        {t('Advanced: risk categories')}
+                      </span>
+                      <Badge
+                        variant='secondary'
+                        className='text-xs font-normal'
+                      >
+                        {config.enabled_categories.length} / {categories.length}
+                      </Badge>
+                    </div>
+                  </div>
+                  <ChevronDown
+                    className='text-muted-foreground size-4 shrink-0 transition-transform duration-200 group-aria-expanded:rotate-180'
+                    aria-hidden='true'
+                  />
+                </CollapsibleTrigger>
+                <CollapsibleContent>
+                  <div className='space-y-4 border-t px-5 pt-4 pb-5'>
+                    <p className='text-muted-foreground text-xs leading-relaxed'>
+                      {t(
+                        'Qwen3Guard always returns its complete classification; these selections only control the blocking policy.'
+                      )}
+                    </p>
+                    <div className='grid gap-3 sm:grid-cols-2'>
+                      {categories.map((category) => {
+                        const isChecked = config.enabled_categories.includes(
+                          category.id
+                        )
+                        return (
+                          <label
+                            key={category.id}
+                            className={cn(
+                              'flex items-start gap-3 rounded-lg border p-3 cursor-pointer transition-colors',
+                              isChecked
+                                ? 'border-primary/40 bg-primary/5 shadow-2xs'
+                                : 'hover:bg-muted/40'
+                            )}
+                          >
+                            <Checkbox
+                              className='mt-0.5'
+                              checked={isChecked}
+                              onCheckedChange={(checked) =>
+                                setConfig((current) => ({
+                                  ...current,
+                                  enabled_categories: checked
+                                    ? [
+                                        ...current.enabled_categories,
+                                        category.id,
+                                      ]
+                                    : current.enabled_categories.filter(
+                                        (value) => value !== category.id
+                                      ),
+                                }))
+                              }
+                            />
+                            <span>
+                              <span className='block text-sm font-medium'>
+                                {t(category.label)}
+                              </span>
+                              <span className='text-muted-foreground mt-1 block text-xs leading-normal'>
+                                {t(category.description)}
+                              </span>
+                            </span>
+                          </label>
+                        )
+                      })}
+                    </div>
+                  </div>
+                </CollapsibleContent>
+              </Collapsible>
+            </div>
+
+            <div className='space-y-6 xl:col-span-5'>
+              <Card>
+                <CardHeader>
+                  <CardTitle id='audit-models' className='scroll-mt-24'>
+                    {t('Audit models')}
+                  </CardTitle>
+                  <CardDescription>
+                    {t(
+                      'Add an OpenAI-compatible chat model used to review content, for example a Qwen3Guard deployment. Models are tried in order; tokens are write-only, so leave the field untouched to preserve the saved token. Save first, then test.'
+                    )}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className='space-y-4'>
+                  {endpoints.map((endpoint, index) => {
+                    let tokenDescription = t(
+                      'No token is stored for this audit model.'
+                    )
+                    if (endpoint.token_changed) {
+                      tokenDescription = endpoint.token
+                        ? t('A replacement token will be saved.')
+                        : t('The saved token will be cleared.')
+                    } else if (endpoint.has_token) {
+                      tokenDescription = t(
+                        'A token is stored and will not be returned by the API.'
+                      )
+                    }
+
+                    let testLabel = t('Save before testing')
+                    if (
+                      testMutation.isPending &&
+                      testMutation.variables === endpoint.id
+                    ) {
+                      testLabel = t('Testing...')
+                    } else if (persistedEndpointIDs.has(endpoint.id)) {
+                      testLabel = t('Test saved audit model')
+                    }
+
+                    return (
+                      <div
+                        key={endpoint.client_key}
+                        className='bg-card text-card-foreground overflow-hidden rounded-xl border shadow-2xs'
+                      >
+                        <div className='bg-muted/40 flex items-center justify-between gap-3 border-b px-4 py-2.5'>
+                          <div className='flex min-w-0 items-center gap-2.5'>
+                            <Badge
+                              variant='outline'
+                              className='shrink-0 font-mono text-xs'
+                            >
+                              #{index + 1}
+                            </Badge>
+                            <Switch
+                              aria-label={`${t('Enabled')}: ${endpoint.model || t('New audit model')}`}
+                              checked={endpoint.enabled}
+                              onCheckedChange={(enabled) =>
+                                updateEndpoint(index, { enabled })
+                              }
+                            />
+                            <span className='truncate text-sm font-semibold'>
+                              {endpoint.model || t('New audit model')}
+                            </span>
+                            <Badge
+                              variant={
+                                endpoint.enabled ? 'default' : 'secondary'
+                              }
+                              className='shrink-0 text-xs font-normal'
+                            >
+                              {endpoint.enabled ? t('Enabled') : t('Disabled')}
+                            </Badge>
+                          </div>
+                          <div className='flex shrink-0 items-center gap-0.5'>
                             <Button
                               variant='ghost'
-                              size='sm'
+                              size='icon-sm'
+                              aria-label={t('Move audit model up')}
+                              disabled={index === 0}
                               onClick={() =>
-                                updateEndpoint(index, {
-                                  token: '',
-                                  token_changed: true,
+                                setEndpoints((current) => {
+                                  const next = [...current]
+                                  ;[next[index - 1], next[index]] = [
+                                    next[index],
+                                    next[index - 1],
+                                  ]
+                                  return next
                                 })
                               }
                             >
-                              {t('Clear saved token')}
+                              <ArrowUp className='size-4' />
                             </Button>
-                          )}
+                            <Button
+                              variant='ghost'
+                              size='icon-sm'
+                              aria-label={t('Move audit model down')}
+                              disabled={index === endpoints.length - 1}
+                              onClick={() =>
+                                setEndpoints((current) => {
+                                  const next = [...current]
+                                  ;[next[index], next[index + 1]] = [
+                                    next[index + 1],
+                                    next[index],
+                                  ]
+                                  return next
+                                })
+                              }
+                            >
+                              <ArrowDown className='size-4' />
+                            </Button>
+                            <Button
+                              variant='ghost'
+                              size='icon-sm'
+                              className='text-destructive hover:text-destructive hover:bg-destructive/10'
+                              aria-label={t('Remove audit model')}
+                              onClick={() =>
+                                setEndpoints((current) =>
+                                  current.filter(
+                                    (_, endpointIndex) =>
+                                      endpointIndex !== index
+                                  )
+                                )
+                              }
+                            >
+                              <Trash2 className='size-4' />
+                            </Button>
+                          </div>
+                        </div>
+
+                        <div className='space-y-4 p-4'>
+                          <div className='grid gap-3 sm:grid-cols-2'>
+                            <div className='space-y-1.5'>
+                              <Label
+                                htmlFor={`prompt-audit-node-purpose-${index}`}
+                              >
+                                {t('Audit model purpose')}
+                              </Label>
+                              <NativeSelect
+                                id={`prompt-audit-node-purpose-${index}`}
+                                value={endpoint.purpose}
+                                onChange={(event) =>
+                                  updateEndpoint(index, {
+                                    purpose: event.target
+                                      .value as PromptAuditEndpointDraft['purpose'],
+                                  })
+                                }
+                              >
+                                <NativeSelectOption value='classify'>
+                                  {t('Qwen3Guard classification')}
+                                </NativeSelectOption>
+                                <NativeSelectOption value='review'>
+                                  {t('Gray-area review model')}
+                                </NativeSelectOption>
+                              </NativeSelect>
+                            </div>
+
+                            {endpoint.purpose === 'classify' ? (
+                              <div className='space-y-1.5'>
+                                <Label>{t('Audit directions')}</Label>
+                                <div className='bg-muted/20 flex items-center gap-3 rounded-lg border px-3 py-2'>
+                                  {(
+                                    [
+                                      ['input', t('Request input')],
+                                      ['output', t('Generated output')],
+                                    ] as const
+                                  ).map(([direction, label]) => (
+                                    <label
+                                      key={direction}
+                                      className='flex cursor-pointer items-center gap-1.5 text-xs font-medium'
+                                    >
+                                      <Checkbox
+                                        checked={endpoint.directions.includes(
+                                          direction
+                                        )}
+                                        onCheckedChange={(checked) =>
+                                          updateEndpoint(index, {
+                                            directions: checked
+                                              ? [
+                                                  ...endpoint.directions,
+                                                  direction,
+                                                ]
+                                              : endpoint.directions.filter(
+                                                  (value) => value !== direction
+                                                ),
+                                          })
+                                        }
+                                      />
+                                      {label}
+                                    </label>
+                                  ))}
+                                </div>
+                              </div>
+                            ) : (
+                              <div />
+                            )}
+                          </div>
+
+                          <div className='space-y-1.5'>
+                            <Label htmlFor={`prompt-audit-node-url-${index}`}>
+                              {t('Base URL')}
+                            </Label>
+                            <Input
+                              id={`prompt-audit-node-url-${index}`}
+                              placeholder='https://guard.example.com/v1'
+                              value={endpoint.base_url}
+                              onChange={(event) =>
+                                updateEndpoint(
+                                  index,
+                                  promptAuditEndpointBaseURLUpdate(
+                                    endpoint,
+                                    event.target.value
+                                  )
+                                )
+                              }
+                            />
+                            <p className='text-muted-foreground text-xs'>
+                              {t(
+                                'Address of an OpenAI-compatible service; /chat/completions is appended automatically.'
+                              )}
+                            </p>
+                          </div>
+
+                          <div className='space-y-1.5'>
+                            <Label htmlFor={`prompt-audit-node-model-${index}`}>
+                              {t('Model')}
+                            </Label>
+                            <Input
+                              id={`prompt-audit-node-model-${index}`}
+                              value={endpoint.model}
+                              onChange={(event) =>
+                                updateEndpoint(index, {
+                                  model: event.target.value,
+                                })
+                              }
+                            />
+                          </div>
+
+                          <div className='grid grid-cols-1 gap-3 sm:grid-cols-3'>
+                            <NumberField
+                              id={`prompt-audit-node-timeout-${index}`}
+                              label={t('Timeout (ms)')}
+                              value={endpoint.timeout_ms}
+                              min={100}
+                              max={120000}
+                              description={t(
+                                'Timeout for a single audit model attempt.'
+                              )}
+                              onChange={(timeout_ms) =>
+                                updateEndpoint(index, { timeout_ms })
+                              }
+                            />
+                            <NumberField
+                              id={`prompt-audit-node-limit-${index}`}
+                              label={t('Input limit (characters)')}
+                              value={endpoint.input_limit}
+                              min={256}
+                              max={1048576}
+                              description={t(
+                                'Smallest enabled value controls chunk size.'
+                              )}
+                              onChange={(input_limit) =>
+                                updateEndpoint(index, { input_limit })
+                              }
+                            />
+                            <NumberField
+                              id={`prompt-audit-node-concurrency-${index}`}
+                              label={t('Audit model concurrency')}
+                              value={endpoint.concurrency}
+                              min={1}
+                              max={256}
+                              description={t(
+                                'Maximum simultaneous calls to this audit model per process.'
+                              )}
+                              onChange={(concurrency) =>
+                                updateEndpoint(index, { concurrency })
+                              }
+                            />
+                          </div>
+
+                          <div className='space-y-2 border-t pt-3'>
+                            <div className='space-y-1.5'>
+                              <Label
+                                htmlFor={`prompt-audit-node-token-${index}`}
+                              >
+                                {t('API token')}
+                              </Label>
+                              <Input
+                                id={`prompt-audit-node-token-${index}`}
+                                type='password'
+                                autoComplete='new-password'
+                                placeholder={
+                                  endpoint.has_token
+                                    ? t('Saved token (unchanged)')
+                                    : t('Optional token')
+                                }
+                                value={endpoint.token}
+                                onChange={(event) =>
+                                  updateEndpoint(index, {
+                                    token: event.target.value,
+                                    token_changed: true,
+                                  })
+                                }
+                              />
+                              <div className='flex items-center justify-between gap-3'>
+                                <p className='text-muted-foreground text-xs'>
+                                  {tokenDescription}
+                                </p>
+                                {endpoint.has_token &&
+                                  !endpoint.token_changed && (
+                                    <Button
+                                      variant='ghost'
+                                      size='sm'
+                                      className='h-7 px-2 text-xs'
+                                      onClick={() =>
+                                        updateEndpoint(index, {
+                                          token: '',
+                                          token_changed: true,
+                                        })
+                                      }
+                                    >
+                                      {t('Clear saved token')}
+                                    </Button>
+                                  )}
+                              </div>
+                            </div>
+
+                            <div className='flex justify-end pt-1'>
+                              <Button
+                                variant='outline'
+                                size='sm'
+                                disabled={
+                                  !persistedEndpointIDs.has(endpoint.id) ||
+                                  (testMutation.isPending &&
+                                    testMutation.variables === endpoint.id)
+                                }
+                                onClick={() => testMutation.mutate(endpoint.id)}
+                              >
+                                <FlaskConical className='size-3.5' />
+                                {testLabel}
+                              </Button>
+                            </div>
+                          </div>
                         </div>
                       </div>
-                    </div>
+                    )
+                  })}
 
-                    <div className='flex justify-end'>
-                      <Button
-                        variant='outline'
-                        disabled={
-                          !persistedEndpointIDs.has(endpoint.id) ||
-                          (testMutation.isPending &&
-                            testMutation.variables === endpoint.id)
+                  {endpoints.length === 0 && (
+                    <p className='text-muted-foreground rounded-lg border border-dashed p-6 text-center text-sm'>
+                      {t('No audit models configured')}
+                    </p>
+                  )}
+
+                  <Button
+                    variant='outline'
+                    className='hover:border-primary/50 hover:bg-primary/5 w-full border-dashed py-4 transition-colors'
+                    onClick={() =>
+                      setEndpoints((current) => [
+                        ...current,
+                        {
+                          client_key: crypto.randomUUID(),
+                          original_id: '',
+                          original_base_url: '',
+                          id: '',
+                          name: '',
+                          base_url: '',
+                          model: 'sileader/qwen3guard:0.6b',
+                          timeout_ms: 3000,
+                          input_limit: 4000,
+                          concurrency: config.endpoint_concurrency,
+                          enabled: true,
+                          purpose: 'classify',
+                          directions: ['input', 'output'],
+                          has_token: false,
+                          token: '',
+                          token_changed: true,
+                        },
+                      ])
+                    }
+                  >
+                    <CirclePlus className='size-4' />
+                    {t('Add audit model')}
+                  </Button>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>{t('Timeouts, cache, and workers')}</CardTitle>
+                  <CardDescription>
+                    {t(
+                      'Limits are measured in Unicode characters, milliseconds, seconds, or concurrent requests as labeled.'
+                    )}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className='space-y-6'>
+                  <div className='space-y-3'>
+                    <div className='text-muted-foreground flex items-center gap-2 border-b pb-2 text-xs font-semibold tracking-wider uppercase'>
+                      <Timer className='text-primary size-3.5' />
+                      <span>{t('Request timeouts and cache')}</span>
+                    </div>
+                    <div className='grid gap-3 sm:grid-cols-2'>
+                      <NumberField
+                        id='prompt-audit-total-timeout'
+                        label={t('Total timeout (ms)')}
+                        value={config.total_timeout_ms}
+                        min={100}
+                        max={120000}
+                        description={t(
+                          'Deadline for reviewing the complete request.'
+                        )}
+                        onChange={(value) =>
+                          setConfig((current) => ({
+                            ...current,
+                            total_timeout_ms: value,
+                          }))
                         }
-                        onClick={() => testMutation.mutate(endpoint.id)}
-                      >
-                        <FlaskConical />
-                        {testLabel}
-                      </Button>
+                      />
+                      <NumberField
+                        id='prompt-audit-overlap'
+                        label={t('Chunk overlap (characters)')}
+                        value={config.chunk_overlap}
+                        min={0}
+                        max={512}
+                        description={t(
+                          'Overlap between adjacent chunks to resist boundary bypasses.'
+                        )}
+                        onChange={(value) =>
+                          setConfig((current) => ({
+                            ...current,
+                            chunk_overlap: value,
+                          }))
+                        }
+                      />
+                      <NumberField
+                        id='prompt-audit-chunk-concurrency'
+                        label={t('Chunk concurrency')}
+                        value={config.chunk_concurrency}
+                        min={1}
+                        max={16}
+                        description={t(
+                          'Maximum parallel checks per prompt, within the global and node limits. A blocking result stops later batches.'
+                        )}
+                        onChange={(value) =>
+                          setConfig((current) => ({
+                            ...current,
+                            chunk_concurrency: value,
+                          }))
+                        }
+                      />
+                      <div className='sm:col-span-2'>
+                        <NumberField
+                          id='prompt-audit-cache-ttl'
+                          label={t('Cache TTL (seconds)')}
+                          value={config.cache_ttl_seconds}
+                          min={0}
+                          max={86400}
+                          description={t('Use 0 to disable result caching.')}
+                          onChange={(value) =>
+                            setConfig((current) => ({
+                              ...current,
+                              cache_ttl_seconds: value,
+                            }))
+                          }
+                        />
+                      </div>
                     </div>
                   </div>
-                )
-              })}
 
-              {endpoints.length === 0 && (
-                <p className='text-muted-foreground rounded-lg border border-dashed p-6 text-center text-sm'>
-                  {t('No audit nodes configured')}
-                </p>
-              )}
-              <Button
-                variant='outline'
-                onClick={() =>
-                  setEndpoints((current) => [
-                    ...current,
-                    {
-                      client_key: crypto.randomUUID(),
-                      original_id: '',
-                      original_base_url: '',
-                      id: `endpoint-${Date.now()}`,
-                      name: '',
-                      base_url: '',
-                      model: 'sileader/qwen3guard:0.6b',
-                      timeout_ms: 3000,
-                      input_limit: 4000,
-                      concurrency: config.endpoint_concurrency,
-                      enabled: true,
-                      purpose: 'classify',
-                      directions: ['input', 'output'],
-                      has_token: false,
-                      token: '',
-                      token_changed: true,
-                    },
-                  ])
-                }
-              >
-                <CirclePlus />
-                {t('Add audit node')}
-              </Button>
-            </CardContent>
-          </Card>
+                  <div className='space-y-3'>
+                    <div className='text-muted-foreground flex items-center gap-2 border-b pb-2 text-xs font-semibold tracking-wider uppercase'>
+                      <HardDrive className='text-primary size-3.5' />
+                      <span>{t('Output buffering and retention')}</span>
+                    </div>
+                    <div className='grid gap-3 sm:grid-cols-2'>
+                      <NumberField
+                        id='prompt-audit-output-memory'
+                        label={t('Output memory threshold (MB)')}
+                        value={bytesToMB(config.output_memory_bytes)}
+                        min={1}
+                        max={Math.max(1, bytesToMB(config.output_max_bytes))}
+                        description={t(
+                          'Larger buffered outputs spill to temporary storage.'
+                        )}
+                        onChange={(mb) =>
+                          setConfig((current) => ({
+                            ...current,
+                            output_memory_bytes: mbToBytes(mb),
+                          }))
+                        }
+                      />
+                      <NumberField
+                        id='prompt-audit-output-limit'
+                        label={t('Maximum output capture (MB)')}
+                        value={bytesToMB(config.output_max_bytes)}
+                        min={1}
+                        max={64}
+                        description={t(
+                          'Blocking stops delivery when this limit is exceeded.'
+                        )}
+                        onChange={(mb) =>
+                          setConfig((current) => ({
+                            ...current,
+                            output_max_bytes: mbToBytes(mb),
+                          }))
+                        }
+                      />
+                      <div className='sm:col-span-2'>
+                        <NumberField
+                          id='prompt-audit-retention'
+                          label={t('Retention (days)')}
+                          value={config.retention_days}
+                          min={0}
+                          max={3650}
+                          description={t(
+                            'Use 0 to retain full prompt text permanently.'
+                          )}
+                          onChange={(value) =>
+                            setConfig((current) => ({
+                              ...current,
+                              retention_days: value,
+                            }))
+                          }
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className='space-y-3'>
+                    <div className='text-muted-foreground flex items-center gap-2 border-b pb-2 text-xs font-semibold tracking-wider uppercase'>
+                      <Cpu className='text-primary size-3.5' />
+                      <span>{t('Queue workers and concurrency')}</span>
+                    </div>
+                    <div className='grid gap-3 sm:grid-cols-2'>
+                      <NumberField
+                        id='prompt-audit-workers'
+                        label={t('Async workers')}
+                        value={config.worker_count}
+                        min={1}
+                        max={64}
+                        description={t(
+                          'Durable queue worker count on the elected master.'
+                        )}
+                        onChange={(value) =>
+                          setConfig((current) => ({
+                            ...current,
+                            worker_count: value,
+                          }))
+                        }
+                      />
+                      <NumberField
+                        id='prompt-audit-attempts'
+                        label={t('Maximum attempts')}
+                        value={config.max_attempts}
+                        min={1}
+                        max={4}
+                        description={t(
+                          'Includes the initial asynchronous audit attempt.'
+                        )}
+                        onChange={(value) =>
+                          setConfig((current) => ({
+                            ...current,
+                            max_attempts: value,
+                          }))
+                        }
+                      />
+                      <NumberField
+                        id='prompt-audit-global-concurrency'
+                        label={t('Global concurrency')}
+                        value={config.global_concurrency}
+                        min={1}
+                        max={1024}
+                        description={t(
+                          'Maximum simultaneous audit calls in this process.'
+                        )}
+                        onChange={(value) =>
+                          setConfig((current) => ({
+                            ...current,
+                            global_concurrency: value,
+                          }))
+                        }
+                      />
+                      <NumberField
+                        id='prompt-audit-node-concurrency'
+                        label={t('Default audit model concurrency')}
+                        value={config.endpoint_concurrency}
+                        min={1}
+                        max={256}
+                        description={t(
+                          'Fallback concurrency used by newly configured audit models.'
+                        )}
+                        onChange={(value) =>
+                          setConfig((current) => ({
+                            ...current,
+                            endpoint_concurrency: value,
+                          }))
+                        }
+                      />
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          </div>
         </div>
       </SectionPageLayout.Content>
     </SectionPageLayout>

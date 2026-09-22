@@ -36,28 +36,30 @@ type promptAuditEndpointUpdate struct {
 }
 
 type promptAuditConfigUpdate struct {
-	ScopePolicies        *map[dto.PromptAuditScope]prompt_audit_setting.ScopePolicy `json:"scope_policies"`
-	WordFilterEnabled    *bool                                                      `json:"word_filter_enabled"`
-	Mode                 *string                                                    `json:"mode"`
-	OutputMode           *string                                                    `json:"output_mode"`
-	ManualWordlistAction *string                                                    `json:"manual_wordlist_action"`
-	EnabledCategories    *[]string                                                  `json:"enabled_categories"`
-	ControversialBlocks  *[]string                                                  `json:"controversial_block_categories"`
-	ReviewEnabled        *bool                                                      `json:"review_enabled"`
-	ReviewPrompt         *string                                                    `json:"review_prompt"`
-	AllGroups            *bool                                                      `json:"all_groups"`
-	Groups               *[]string                                                  `json:"groups"`
-	Endpoints            *[]promptAuditEndpointUpdate                               `json:"endpoints"`
-	TotalTimeoutMS       *int                                                       `json:"total_timeout_ms"`
-	ChunkOverlap         *int                                                       `json:"chunk_overlap"`
-	CacheTTLSeconds      *int                                                       `json:"cache_ttl_seconds"`
-	WorkerCount          *int                                                       `json:"worker_count"`
-	MaxAttempts          *int                                                       `json:"max_attempts"`
-	RetentionDays        *int                                                       `json:"retention_days"`
-	GlobalConcurrency    *int                                                       `json:"global_concurrency"`
-	EndpointConcurrency  *int                                                       `json:"endpoint_concurrency"`
-	OutputMaxBytes       *int                                                       `json:"output_max_bytes"`
-	OutputMemoryBytes    *int                                                       `json:"output_memory_bytes"`
+	ScopePolicies          *map[dto.PromptAuditScope]prompt_audit_setting.ScopePolicy `json:"scope_policies"`
+	WordFilterEnabled      *bool                                                      `json:"word_filter_enabled"`
+	Mode                   *string                                                    `json:"mode"`
+	OutputMode             *string                                                    `json:"output_mode"`
+	BlockingLatestTurnOnly *bool                                                      `json:"blocking_latest_turn_only"`
+	ManualWordlistAction   *string                                                    `json:"manual_wordlist_action"`
+	EnabledCategories      *[]string                                                  `json:"enabled_categories"`
+	ControversialBlocks    *[]string                                                  `json:"controversial_block_categories"`
+	ReviewEnabled          *bool                                                      `json:"review_enabled"`
+	ReviewPrompt           *string                                                    `json:"review_prompt"`
+	AllGroups              *bool                                                      `json:"all_groups"`
+	Groups                 *[]string                                                  `json:"groups"`
+	Endpoints              *[]promptAuditEndpointUpdate                               `json:"endpoints"`
+	TotalTimeoutMS         *int                                                       `json:"total_timeout_ms"`
+	ChunkOverlap           *int                                                       `json:"chunk_overlap"`
+	ChunkConcurrency       *int                                                       `json:"chunk_concurrency"`
+	CacheTTLSeconds        *int                                                       `json:"cache_ttl_seconds"`
+	WorkerCount            *int                                                       `json:"worker_count"`
+	MaxAttempts            *int                                                       `json:"max_attempts"`
+	RetentionDays          *int                                                       `json:"retention_days"`
+	GlobalConcurrency      *int                                                       `json:"global_concurrency"`
+	EndpointConcurrency    *int                                                       `json:"endpoint_concurrency"`
+	OutputMaxBytes         *int                                                       `json:"output_max_bytes"`
+	OutputMemoryBytes      *int                                                       `json:"output_memory_bytes"`
 }
 
 type promptAuditFilterRequest struct {
@@ -136,6 +138,9 @@ func UpdatePromptAuditConfig(c *gin.Context) {
 	if update.OutputMode != nil {
 		values["prompt_audit.output_mode"] = *update.OutputMode
 	}
+	if update.BlockingLatestTurnOnly != nil {
+		values["prompt_audit.blocking_latest_turn_only"] = strconv.FormatBool(*update.BlockingLatestTurnOnly)
+	}
 	if update.ManualWordlistAction != nil {
 		values["prompt_audit.manual_wordlist_action"] = *update.ManualWordlistAction
 		proposed.ManualWordlistAction = *update.ManualWordlistAction
@@ -185,6 +190,7 @@ func UpdatePromptAuditConfig(c *gin.Context) {
 	}
 	promptAuditSetInt(values, "prompt_audit.total_timeout_ms", update.TotalTimeoutMS)
 	promptAuditSetInt(values, "prompt_audit.chunk_overlap", update.ChunkOverlap)
+	promptAuditSetInt(values, "prompt_audit.chunk_concurrency", update.ChunkConcurrency)
 	promptAuditSetInt(values, "prompt_audit.cache_ttl_seconds", update.CacheTTLSeconds)
 	promptAuditSetInt(values, "prompt_audit.worker_count", update.WorkerCount)
 	promptAuditSetInt(values, "prompt_audit.max_attempts", update.MaxAttempts)
@@ -261,16 +267,24 @@ func TestPromptAuditNode(c *gin.Context) {
 	}
 	startedAt := time.Now()
 	result, err := service.TestPromptAuditEndpoint(c.Request.Context(), *selected)
+	data := gin.H{
+		"endpoint_id": selected.ID, "purpose": selected.Purpose, "latency_ms": time.Since(startedAt).Milliseconds(),
+		"safety": result.Safety, "decision": result.Decision, "tested_directions": result.TestedDirections,
+		"direction": result.Direction, "error_code": result.FailureKind,
+	}
+	if selected.Purpose == prompt_audit_setting.EndpointPurposeReview {
+		data["decision"] = result.ReviewDecision
+	}
 	if err != nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{
 			"success": false, "message": "prompt audit node test failed",
-			"data": gin.H{"endpoint_id": selected.ID, "latency_ms": time.Since(startedAt).Milliseconds()},
+			"data": data,
 		})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true, "message": "",
-		"data": gin.H{"endpoint_id": selected.ID, "purpose": selected.Purpose, "latency_ms": time.Since(startedAt).Milliseconds(), "safety": result.Safety, "decision": result.ReviewDecision},
+		"data": data,
 	})
 }
 
@@ -449,23 +463,59 @@ func promptAuditConfigResponse(setting prompt_audit_setting.PromptAuditSetting) 
 	return gin.H{
 		"scope_policies": setting.EffectiveScopePolicies(), "word_filter_enabled": globalsetting.ShouldCheckPromptSensitive(),
 		"mode": setting.Mode, "output_mode": setting.OutputMode, "manual_wordlist_action": setting.ManualWordlistAction,
+		"blocking_latest_turn_only":      setting.BlockingLatestTurnOnly,
 		"enabled_categories":             append([]string{}, setting.EnabledCategories...),
 		"controversial_block_categories": append([]string{}, setting.ControversialBlocks...),
 		"review_enabled":                 setting.ReviewEnabled, "review_prompt": setting.ReviewPrompt,
 		"all_groups": setting.AllGroups, "groups": append([]string{}, setting.Groups...),
 		"endpoints": setting.SanitizedEndpoints(), "total_timeout_ms": setting.TotalTimeoutMS,
-		"chunk_overlap": setting.ChunkOverlap, "cache_ttl_seconds": setting.CacheTTLSeconds,
-		"worker_count": setting.WorkerCount, "max_attempts": setting.MaxAttempts,
+		"chunk_overlap": setting.ChunkOverlap, "chunk_concurrency": setting.ChunkConcurrency,
+		"cache_ttl_seconds": setting.CacheTTLSeconds,
+		"worker_count":      setting.WorkerCount, "max_attempts": setting.MaxAttempts,
 		"retention_days": setting.RetentionDays, "global_concurrency": setting.GlobalConcurrency,
 		"endpoint_concurrency": setting.EndpointConcurrency, "output_max_bytes": setting.OutputMaxBytes,
 		"output_memory_bytes": setting.OutputMemoryBytes, "config_version": setting.ConfigVersion,
 	}
 }
 
+// promptAuditEndpointID generates an initial identifier from a new node's model.
+// Existing node IDs stay stable when the model changes, preserving audit records
+// and queued tasks that resolve node credentials by ID.
+func promptAuditEndpointID(model string, usedIDs map[string]bool) string {
+	var builder strings.Builder
+	for _, character := range strings.ToLower(strings.TrimSpace(model)) {
+		switch {
+		case character >= 'a' && character <= 'z' || character >= '0' && character <= '9' || character == '-':
+			builder.WriteRune(character)
+		case character == ' ' || character == '_' || character == '/' || character == ':' || character == '.':
+			builder.WriteByte('-')
+		}
+	}
+	slug := strings.Trim(builder.String(), "-")
+	if slug == "" {
+		slug = "audit-model"
+	}
+	if len(slug) > 64 {
+		slug = strings.TrimRight(slug[:64], "-")
+	}
+	id := slug
+	for suffix := 2; usedIDs[id]; suffix++ {
+		id = slug + "-" + strconv.Itoa(suffix)
+	}
+	usedIDs[id] = true
+	return id
+}
+
 func mergePromptAuditEndpointUpdates(current []prompt_audit_setting.Endpoint, updates []promptAuditEndpointUpdate) []prompt_audit_setting.Endpoint {
 	existingEndpoints := make(map[string]prompt_audit_setting.Endpoint, len(current))
 	for _, endpoint := range current {
 		existingEndpoints[endpoint.ID] = endpoint
+	}
+	usedIDs := make(map[string]bool)
+	for _, endpoint := range updates {
+		if id := strings.TrimSpace(endpoint.ID); id != "" {
+			usedIDs[id] = true
+		}
 	}
 	endpoints := make([]prompt_audit_setting.Endpoint, 0, len(updates))
 	for _, endpoint := range updates {
@@ -484,8 +534,16 @@ func mergePromptAuditEndpointUpdates(current []prompt_audit_setting.Endpoint, up
 		if endpoint.Token != nil {
 			token = *endpoint.Token
 		}
+		id := strings.TrimSpace(endpoint.ID)
+		if id == "" {
+			id = promptAuditEndpointID(endpoint.Model, usedIDs)
+		}
+		name := strings.TrimSpace(endpoint.Name)
+		if name == "" {
+			name = id
+		}
 		endpoints = append(endpoints, prompt_audit_setting.Endpoint{
-			ID: endpoint.ID, Name: endpoint.Name, BaseURL: endpoint.BaseURL, Token: token,
+			ID: id, Name: name, BaseURL: endpoint.BaseURL, Token: token,
 			Model: endpoint.Model, TimeoutMS: endpoint.TimeoutMS, InputLimit: endpoint.InputLimit,
 			Concurrency: endpoint.Concurrency, Enabled: endpoint.Enabled, Purpose: endpoint.Purpose, Directions: append([]string(nil), endpoint.Directions...),
 		})

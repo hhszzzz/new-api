@@ -36,6 +36,7 @@ const (
 	DefaultRetentionDays       = 30
 	DefaultGlobalConcurrency   = 64
 	DefaultEndpointConcurrency = 16
+	DefaultChunkConcurrency    = 4
 	DefaultOutputMaxBytes      = 8 * 1024 * 1024
 	DefaultOutputMemoryBytes   = 1024 * 1024
 	MaxAttemptsLimit           = 4
@@ -95,48 +96,62 @@ type SanitizedEndpoint struct {
 // endpoints field deliberately ends in "secret" so the legacy root-only option
 // listing omits the complete JSON value (which contains endpoint tokens).
 type PromptAuditSetting struct {
-	ManualWordlistEnabled *bool                                `json:"manual_wordlist_enabled"`
-	ManualWordlistAction  string                               `json:"manual_wordlist_action"`
-	ScopePolicies         map[dto.PromptAuditScope]ScopePolicy `json:"scope_policies"`
-	Mode                  string                               `json:"mode"`
-	OutputMode            string                               `json:"output_mode"`
-	EnabledCategories     []string                             `json:"enabled_categories"`
-	ControversialBlocks   []string                             `json:"controversial_block_categories"`
-	ReviewEnabled         bool                                 `json:"review_enabled"`
-	ReviewPrompt          string                               `json:"review_prompt"`
-	AllGroups             bool                                 `json:"all_groups"`
-	Groups                []string                             `json:"groups"`
-	Endpoints             []Endpoint                           `json:"endpoints_secret"`
-	TotalTimeoutMS        int                                  `json:"total_timeout_ms"`
-	ChunkOverlap          int                                  `json:"chunk_overlap"`
-	CacheTTLSeconds       int                                  `json:"cache_ttl_seconds"`
-	WorkerCount           int                                  `json:"worker_count"`
-	MaxAttempts           int                                  `json:"max_attempts"`
-	RetentionDays         int                                  `json:"retention_days"`
-	GlobalConcurrency     int                                  `json:"global_concurrency"`
-	EndpointConcurrency   int                                  `json:"endpoint_concurrency"`
-	OutputMaxBytes        int                                  `json:"output_max_bytes"`
-	OutputMemoryBytes     int                                  `json:"output_memory_bytes"`
-	ConfigVersion         string                               `json:"-"`
+	ManualWordlistEnabled  *bool                                `json:"manual_wordlist_enabled"`
+	ManualWordlistAction   string                               `json:"manual_wordlist_action"`
+	ScopePolicies          map[dto.PromptAuditScope]ScopePolicy `json:"scope_policies"`
+	Mode                   string                               `json:"mode"`
+	OutputMode             string                               `json:"output_mode"`
+	BlockingLatestTurnOnly bool                                 `json:"blocking_latest_turn_only"`
+	EnabledCategories      []string                             `json:"enabled_categories"`
+	ControversialBlocks    []string                             `json:"controversial_block_categories"`
+	ReviewEnabled          bool                                 `json:"review_enabled"`
+	ReviewPrompt           string                               `json:"review_prompt"`
+	AllGroups              bool                                 `json:"all_groups"`
+	Groups                 []string                             `json:"groups"`
+	Endpoints              []Endpoint                           `json:"endpoints_secret"`
+	TotalTimeoutMS         int                                  `json:"total_timeout_ms"`
+	ChunkOverlap           int                                  `json:"chunk_overlap"`
+	ChunkConcurrency       int                                  `json:"chunk_concurrency"`
+	CacheTTLSeconds        int                                  `json:"cache_ttl_seconds"`
+	WorkerCount            int                                  `json:"worker_count"`
+	MaxAttempts            int                                  `json:"max_attempts"`
+	RetentionDays          int                                  `json:"retention_days"`
+	GlobalConcurrency      int                                  `json:"global_concurrency"`
+	EndpointConcurrency    int                                  `json:"endpoint_concurrency"`
+	OutputMaxBytes         int                                  `json:"output_max_bytes"`
+	OutputMemoryBytes      int                                  `json:"output_memory_bytes"`
+	ConfigVersion          string                               `json:"-"`
 }
 
+// BlockingLatestTurnOnly defaults to the current conversation window to avoid
+// repeatedly blocking on old turns. Explicit source policies still apply to
+// system/developer instructions, tools and tasks. Administrators can opt into
+// full conversation inspection by disabling this setting.
 var promptAuditSetting = PromptAuditSetting{
-	Mode:                 ModeOff,
-	OutputMode:           ModeOff,
-	EnabledCategories:    append([]string(nil), AllCategoryIDs...),
-	ControversialBlocks:  []string{"jailbreak", "pii", "suicide_and_self_harm"},
-	ManualWordlistAction: WordlistActionBlock,
-	AllGroups:            true,
-	TotalTimeoutMS:       DefaultTotalTimeoutMS,
-	ChunkOverlap:         DefaultChunkOverlap,
-	CacheTTLSeconds:      DefaultCacheTTLSeconds,
-	WorkerCount:          DefaultWorkerCount,
-	MaxAttempts:          DefaultMaxAttempts,
-	RetentionDays:        DefaultRetentionDays,
-	GlobalConcurrency:    DefaultGlobalConcurrency,
-	EndpointConcurrency:  DefaultEndpointConcurrency,
-	OutputMaxBytes:       DefaultOutputMaxBytes,
-	OutputMemoryBytes:    DefaultOutputMemoryBytes,
+	Mode:                   ModeOff,
+	OutputMode:             ModeOff,
+	BlockingLatestTurnOnly: true,
+	EnabledCategories:      append([]string(nil), AllCategoryIDs...),
+	ControversialBlocks:    []string{"jailbreak", "pii", "suicide_and_self_harm"},
+	ManualWordlistAction:   WordlistActionBlock,
+	AllGroups:              true,
+	TotalTimeoutMS:         DefaultTotalTimeoutMS,
+	ChunkOverlap:           DefaultChunkOverlap,
+	// ChunkConcurrency defaults to 4 so a long prompt is audited in parallel
+	// batches instead of one guard round trip per chunk. ChunkConcurrency only
+	// affects how many chunks of one payload run at once, never which text is
+	// inspected; sub2api's own parallelism is engine-vs-engine and has no
+	// equivalent here, because new-api runs its wordlist locally before any
+	// guard call and never pays for a model call it does not need.
+	ChunkConcurrency:    DefaultChunkConcurrency,
+	CacheTTLSeconds:     DefaultCacheTTLSeconds,
+	WorkerCount:         DefaultWorkerCount,
+	MaxAttempts:         DefaultMaxAttempts,
+	RetentionDays:       DefaultRetentionDays,
+	GlobalConcurrency:   DefaultGlobalConcurrency,
+	EndpointConcurrency: DefaultEndpointConcurrency,
+	OutputMaxBytes:      DefaultOutputMaxBytes,
+	OutputMemoryBytes:   DefaultOutputMemoryBytes,
 }
 
 var promptAuditSettingSnapshot atomic.Pointer[PromptAuditSetting]
@@ -250,6 +265,14 @@ func (setting *PromptAuditSetting) ValidateConfig() error {
 	if setting.EndpointConcurrency < 1 || setting.EndpointConcurrency > 256 {
 		return fmt.Errorf("prompt audit endpoint concurrency must be between 1 and 256")
 	}
+	if setting.ChunkConcurrency < 1 || setting.ChunkConcurrency > 16 {
+		return fmt.Errorf("prompt audit chunk concurrency must be between 1 and 16")
+	}
+	// ChunkConcurrency above EndpointConcurrency is accepted on purpose: the
+	// clamp in promptAuditBatchSize reduces the batch to the smaller budget, so
+	// the configuration still works. Rejecting it instead would block every
+	// settings save after an operator lowers endpoint concurrency, which is a
+	// far worse failure than a batch that runs smaller than requested.
 	if setting.OutputMaxBytes < 1024 || setting.OutputMaxBytes > 64*1024*1024 {
 		return fmt.Errorf("prompt audit output limit must be between 1024 and 67108864 bytes")
 	}
@@ -406,6 +429,9 @@ func (setting *PromptAuditSetting) PublishConfig() {
 		snapshot.ControversialBlocks[index] = strings.ToLower(strings.TrimSpace(snapshot.ControversialBlocks[index]))
 	}
 	snapshot.ReviewPrompt = strings.TrimSpace(snapshot.ReviewPrompt)
+	if snapshot.ChunkConcurrency == 0 {
+		snapshot.ChunkConcurrency = DefaultChunkConcurrency
+	}
 	for index := range snapshot.Groups {
 		snapshot.Groups[index] = strings.TrimSpace(snapshot.Groups[index])
 	}
@@ -524,10 +550,14 @@ func settingFingerprint(setting PromptAuditSetting) string {
 	builder.WriteByte('|')
 	builder.WriteString(strconv.FormatBool(setting.AllGroups))
 	builder.WriteByte('|')
+	// Include the conversation window and execution limits so policy changes
+	// cannot reuse verdicts produced under a different configuration.
+	builder.WriteString(strconv.FormatBool(setting.BlockingLatestTurnOnly))
+	builder.WriteByte('|')
 	groups := append([]string(nil), setting.Groups...)
 	sort.Strings(groups)
 	builder.WriteString(strings.Join(groups, ","))
-	for _, value := range []int{setting.TotalTimeoutMS, setting.ChunkOverlap, setting.CacheTTLSeconds, setting.WorkerCount, setting.MaxAttempts, setting.RetentionDays, setting.GlobalConcurrency, setting.EndpointConcurrency, setting.OutputMaxBytes, setting.OutputMemoryBytes} {
+	for _, value := range []int{setting.TotalTimeoutMS, setting.ChunkOverlap, setting.ChunkConcurrency, setting.CacheTTLSeconds, setting.WorkerCount, setting.MaxAttempts, setting.RetentionDays, setting.GlobalConcurrency, setting.EndpointConcurrency, setting.OutputMaxBytes, setting.OutputMemoryBytes} {
 		builder.WriteByte('|')
 		builder.WriteString(strconv.Itoa(value))
 	}

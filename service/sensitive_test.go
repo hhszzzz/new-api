@@ -8,6 +8,16 @@ import (
 )
 
 func TestSensitiveWordContainsDoesNotMatchBlankConfiguration(t *testing.T) {
+	assert.NotPanics(t, func() {
+		m := InitAc([]string{"", "   ", "\t", "\n", "forbidden", "  "})
+		assert.NotNil(t, m)
+		hits := sensitiveMachineMatches("this is ordinary text", m, true)
+		assert.Empty(t, hits)
+		hits = sensitiveMachineMatches("this is forbidden text", m, true)
+		assert.NotEmpty(t, hits)
+	})
+	assert.Nil(t, InitAc([]string{"", "   "}))
+
 	original := setting.SensitiveWordsToString()
 	t.Cleanup(func() { setting.SensitiveWordsFromString(original) })
 	setting.SensitiveWordsFromString(" \n\t\n")

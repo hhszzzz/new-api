@@ -35,6 +35,7 @@ import type { PromptAuditConfigUpdate } from '../types'
 const VALID_CONFIG: PromptAuditConfigUpdate = {
   mode: 'blocking',
   output_mode: 'off',
+  blocking_latest_turn_only: true,
   manual_wordlist_action: 'block',
   enabled_categories: ['violent'],
   controversial_block_categories: [],
@@ -58,6 +59,7 @@ const VALID_CONFIG: PromptAuditConfigUpdate = {
   ],
   total_timeout_ms: 10000,
   chunk_overlap: 64,
+  chunk_concurrency: 4,
   cache_ttl_seconds: 600,
   worker_count: 4,
   max_attempts: 4,
@@ -163,6 +165,18 @@ describe('prompt audit management helpers', () => {
 
   test('accepts a complete blocking configuration', () => {
     expect(validatePromptAuditConfig(VALID_CONFIG)).toBeNull()
+  })
+
+  test('rejects enabled gray review when all nodes have been removed', () => {
+    expect(
+      validatePromptAuditConfig({
+        ...VALID_CONFIG,
+        mode: 'off',
+        output_mode: 'off',
+        review_enabled: true,
+        endpoints: [],
+      })
+    ).toBe('At least one enabled gray-area reviewer node is required.')
   })
 
   test('allows administrators to disable every known blocking category', () => {

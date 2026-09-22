@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/prompt_audit_setting"
 
@@ -205,7 +206,9 @@ func TestPromptAuditUnavailableOccursBeforeChannelSelection(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"chat-model","messages":[{"role":"user","content":"hello"}]}`))
+	// A probe-shaped prompt ("hello") is fast-passed before the guard is ever
+	// consulted, so this case must use content that reaches the model node.
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"chat-model","messages":[{"role":"user","content":"hello, please summarize this paragraph for me"}]}`))
 	c.Request.Header.Set("Content-Type", "application/json")
 	common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
 
@@ -224,16 +227,66 @@ func TestPromptAuditUnavailableOccursBeforeChannelSelection(t *testing.T) {
 	assert.Equal(t, "invalid_response", audit.ErrorCode)
 }
 
+func TestPromptAuditProbeFastPassSkipsGuardAndRecordsBypass(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	previousConfig := prompt_audit_setting.GetSetting()
+	previousDB := model.DB
+	previousSensitiveEnabled := setting.CheckSensitiveEnabled
+	t.Cleanup(func() {
+		previousConfig.PublishConfig()
+		model.DB = previousDB
+		setting.SetCheckSensitiveEnabled(previousSensitiveEnabled)
+	})
+	setting.SetCheckSensitiveEnabled(false)
+
+	db, err := gorm.Open(sqlite.Open("file:prompt_audit_probe_middleware?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.PromptAudit{}))
+	model.DB = db
+
+	// The node is deliberately broken: reaching it would fail the request, which
+	// is exactly the cost the probe fast-pass exists to avoid.
+	var guardCalls atomic.Int32
+	guard := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		guardCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`not a valid guard result`))
+	}))
+	defer guard.Close()
+	configured := promptAuditMiddlewareTestConfig(guard.URL)
+	configured.PublishConfig()
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"chat-model","messages":[{"role":"user","content":"hi"}]}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
+
+	cleanup, allowed := inspectPromptBeforeDistribution(c, &ModelRequest{Model: "chat-model"})
+	if cleanup != nil {
+		cleanup()
+	}
+	assert.True(t, allowed)
+	assert.False(t, c.IsAborted())
+	assert.Zero(t, guardCalls.Load(), "a probe must never reach the model node")
+	var audit model.PromptAudit
+	require.NoError(t, db.First(&audit).Error)
+	assert.Equal(t, "probe_fast_pass", audit.InspectionType)
+	assert.Equal(t, model.PromptAuditStatusDone, audit.Status)
+	assert.Equal(t, service.PromptAuditDecisionPass, audit.Decision)
+}
+
 func promptAuditMiddlewareTestConfig(baseURL string) prompt_audit_setting.PromptAuditSetting {
 	return prompt_audit_setting.PromptAuditSetting{
-		Mode:              prompt_audit_setting.ModeBlocking,
-		EnabledCategories: append([]string(nil), prompt_audit_setting.AllCategoryIDs...),
-		AllGroups:         true,
+		Mode:                   prompt_audit_setting.ModeBlocking,
+		BlockingLatestTurnOnly: true,
+		EnabledCategories:      append([]string(nil), prompt_audit_setting.AllCategoryIDs...),
+		AllGroups:              true,
 		Endpoints: []prompt_audit_setting.Endpoint{{
 			ID: "guard", BaseURL: baseURL, Model: "guard", TimeoutMS: 500,
 			InputLimit: 4000, Concurrency: 2, Enabled: true,
 		}},
-		TotalTimeoutMS: 1000, ChunkOverlap: 64, CacheTTLSeconds: 0,
+		TotalTimeoutMS: 1000, ChunkOverlap: 64, ChunkConcurrency: 4, CacheTTLSeconds: 0,
 		WorkerCount: 1, MaxAttempts: 3, RetentionDays: 30,
 		GlobalConcurrency: 2, EndpointConcurrency: 2,
 	}
