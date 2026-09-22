@@ -46,8 +46,11 @@ type ChannelCandidateClassifier func(channel *Channel) ChannelCandidateClass
 
 var ErrNoCompatibleChannel = errors.New("no channel supports the requested protocol or request features")
 
+// channelSelectionTier is one priority level in channel selection. Native and
+// convertible protocol classes share the same tier space: the configured
+// priority number alone decides ordering; the classifier only removes
+// incompatible candidates.
 type channelSelectionTier struct {
-	Class    ChannelCandidateClass
 	Priority int64
 }
 
@@ -180,8 +183,7 @@ func GetChannelInPoolWithClassifier(group string, modelName string, retry int, r
 		if ability.Priority != nil {
 			priority = *ability.Priority
 		}
-		channel := channels[ability.ChannelId]
-		if priority == targetTier.Priority && classifyChannel(channel, candidateClassifier) == targetTier.Class {
+		if priority == targetTier.Priority {
 			targetAbilities = append(targetAbilities, ability)
 		}
 	}
@@ -219,63 +221,44 @@ func classifyChannel(channel *Channel, classifier ChannelCandidateClassifier) Ch
 }
 
 func buildChannelSelectionTiers(channels []*Channel, classifier ChannelCandidateClassifier) []channelSelectionTier {
-	prioritiesByClass := map[ChannelCandidateClass]map[int64]struct{}{
-		ChannelCandidateNative:      {},
-		ChannelCandidateConvertible: {},
-	}
+	priorities := make(map[int64]struct{})
 	for _, channel := range channels {
-		class := classifyChannel(channel, classifier)
-		if class == ChannelCandidateIncompatible {
+		if classifyChannel(channel, classifier) == ChannelCandidateIncompatible {
 			continue
 		}
-		prioritiesByClass[class][channel.GetPriority()] = struct{}{}
+		priorities[channel.GetPriority()] = struct{}{}
 	}
 
-	tiers := make([]channelSelectionTier, 0)
-	for _, class := range []ChannelCandidateClass{ChannelCandidateNative, ChannelCandidateConvertible} {
-		priorities := make([]int64, 0, len(prioritiesByClass[class]))
-		for priority := range prioritiesByClass[class] {
-			priorities = append(priorities, priority)
-		}
-		sort.Slice(priorities, func(i, j int) bool {
-			return priorities[i] > priorities[j]
-		})
-		for _, priority := range priorities {
-			tiers = append(tiers, channelSelectionTier{Class: class, Priority: priority})
-		}
-	}
-	return tiers
+	return buildPriorityTiers(priorities)
 }
 
 func buildAbilitySelectionTiers(abilities []Ability, channels map[int]*Channel, classifier ChannelCandidateClassifier) []channelSelectionTier {
-	prioritiesByClass := map[ChannelCandidateClass]map[int64]struct{}{
-		ChannelCandidateNative:      {},
-		ChannelCandidateConvertible: {},
-	}
+	priorities := make(map[int64]struct{})
 	for _, ability := range abilities {
-		class := classifyChannel(channels[ability.ChannelId], classifier)
-		if class == ChannelCandidateIncompatible {
+		if classifyChannel(channels[ability.ChannelId], classifier) == ChannelCandidateIncompatible {
 			continue
 		}
 		priority := int64(0)
 		if ability.Priority != nil {
 			priority = *ability.Priority
 		}
-		prioritiesByClass[class][priority] = struct{}{}
+		priorities[priority] = struct{}{}
 	}
 
-	tiers := make([]channelSelectionTier, 0)
-	for _, class := range []ChannelCandidateClass{ChannelCandidateNative, ChannelCandidateConvertible} {
-		priorities := make([]int64, 0, len(prioritiesByClass[class]))
-		for priority := range prioritiesByClass[class] {
-			priorities = append(priorities, priority)
-		}
-		sort.Slice(priorities, func(i, j int) bool {
-			return priorities[i] > priorities[j]
-		})
-		for _, priority := range priorities {
-			tiers = append(tiers, channelSelectionTier{Class: class, Priority: priority})
-		}
+	return buildPriorityTiers(priorities)
+}
+
+func buildPriorityTiers(priorities map[int64]struct{}) []channelSelectionTier {
+	ordered := make([]int64, 0, len(priorities))
+	for priority := range priorities {
+		ordered = append(ordered, priority)
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		return ordered[i] > ordered[j]
+	})
+	tiers := make([]channelSelectionTier, 0, len(ordered))
+	for _, priority := range ordered {
+		tiers = append(tiers, channelSelectionTier{Priority: priority})
 	}
 	return tiers
 }

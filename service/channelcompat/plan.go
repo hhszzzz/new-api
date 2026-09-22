@@ -360,25 +360,14 @@ func defaultUpstreamProtocols(channel *model.Channel, modelName string) []string
 			hostdto.ProtocolCapabilityGemini,
 		}
 	case constant.ChannelTypeOpenAI:
-		baseURL := strings.TrimSpace(channel.GetBaseURL())
-		if baseURL == "" && channel.Type >= 0 && channel.Type < len(constant.ChannelBaseURLs) {
-			baseURL = constant.ChannelBaseURLs[channel.Type]
-		}
-		if isOfficialOpenAIBaseURL(baseURL) {
-			return []string{hostdto.ProtocolCapabilityChat, hostdto.ProtocolCapabilityResponses}
-		}
-		return []string{hostdto.ProtocolCapabilityChat}
+		// An OpenAI-format base URL is assumed to serve both entry points by
+		// default. Responses requests to a relay that lacks the endpoint fail
+		// against that channel and retry elsewhere, which is cheaper than
+		// rejecting every relay that actually supports /v1/responses.
+		return []string{hostdto.ProtocolCapabilityChat, hostdto.ProtocolCapabilityResponses}
 	default:
 		return []string{hostdto.ProtocolCapabilityChat}
 	}
-}
-
-func isOfficialOpenAIBaseURL(baseURL string) bool {
-	parsed, err := url.Parse(strings.TrimSpace(baseURL))
-	if err != nil {
-		return false
-	}
-	return strings.EqualFold(parsed.Hostname(), "api.openai.com")
 }
 
 func protocolRelayFormat(protocol Protocol) (types.RelayFormat, bool) {

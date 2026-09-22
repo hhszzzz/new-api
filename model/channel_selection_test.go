@@ -40,26 +40,26 @@ func TestChannelSelectionHandlesLargeWeightsWithAndWithoutCache(t *testing.T) {
 	}
 }
 
-func TestChannelSelectionRanksNativeBeforeConvertibleAcrossPriorityTiers(t *testing.T) {
+func TestChannelSelectionOrdersTiersByPriorityNumberOnly(t *testing.T) {
 	setupUserModelRouteTestDB(t)
 	originalMemoryCacheEnabled := common.MemoryCacheEnabled
 	t.Cleanup(func() { common.MemoryCacheEnabled = originalMemoryCacheEnabled })
 
 	const modelName = "protocol-tier-model"
-	nativeHighPriority := int64(20)
+	convertibleHighPriority := int64(100)
+	nativeMidPriority := int64(20)
 	nativeLowPriority := int64(5)
-	convertiblePriority := int64(100)
 	incompatiblePriority := int64(200)
 	require.NoError(t, DB.Create(&[]Channel{
-		{Id: 21, Name: "native-high", Key: "key-native-high", Type: 1, Status: common.ChannelStatusEnabled, Priority: &nativeHighPriority},
+		{Id: 23, Name: "convertible-high", Key: "key-convertible", Type: 1, Status: common.ChannelStatusEnabled, Priority: &convertibleHighPriority},
+		{Id: 21, Name: "native-mid", Key: "key-native-high", Type: 1, Status: common.ChannelStatusEnabled, Priority: &nativeMidPriority},
 		{Id: 22, Name: "native-low", Key: "key-native-low", Type: 1, Status: common.ChannelStatusEnabled, Priority: &nativeLowPriority},
-		{Id: 23, Name: "convertible", Key: "key-convertible", Type: 1, Status: common.ChannelStatusEnabled, Priority: &convertiblePriority},
 		{Id: 24, Name: "incompatible", Key: "key-incompatible", Type: 1, Status: common.ChannelStatusEnabled, Priority: &incompatiblePriority},
 	}).Error)
 	require.NoError(t, DB.Create(&[]Ability{
-		{Group: "default", Model: modelName, ChannelId: 21, Enabled: true, Priority: &nativeHighPriority, Weight: 10},
+		{Group: "default", Model: modelName, ChannelId: 23, Enabled: true, Priority: &convertibleHighPriority, Weight: 10},
+		{Group: "default", Model: modelName, ChannelId: 21, Enabled: true, Priority: &nativeMidPriority, Weight: 10},
 		{Group: "default", Model: modelName, ChannelId: 22, Enabled: true, Priority: &nativeLowPriority, Weight: 10},
-		{Group: "default", Model: modelName, ChannelId: 23, Enabled: true, Priority: &convertiblePriority, Weight: 10},
 		{Group: "default", Model: modelName, ChannelId: 24, Enabled: true, Priority: &incompatiblePriority, Weight: 10},
 	}).Error)
 
@@ -81,20 +81,22 @@ func TestChannelSelectionRanksNativeBeforeConvertibleAcrossPriorityTiers(t *test
 				InitChannelCache()
 			}
 
+			// A convertible channel with a higher priority number outranks
+			// native channels: ordering follows the configured priority alone.
 			first, err := GetRandomSatisfiedChannelInPoolWithClassifier("default", modelName, 0, "", nil, nil, classifier)
 			require.NoError(t, err)
 			require.NotNil(t, first)
-			assert.Equal(t, 21, first.Id)
+			assert.Equal(t, 23, first.Id)
 
 			second, err := GetRandomSatisfiedChannelInPoolWithClassifier("default", modelName, 1, "", nil, nil, classifier)
 			require.NoError(t, err)
 			require.NotNil(t, second)
-			assert.Equal(t, 22, second.Id)
+			assert.Equal(t, 21, second.Id)
 
 			third, err := GetRandomSatisfiedChannelInPoolWithClassifier("default", modelName, 2, "", nil, nil, classifier)
 			require.NoError(t, err)
 			require.NotNil(t, third)
-			assert.Equal(t, 23, third.Id)
+			assert.Equal(t, 22, third.Id)
 		})
 	}
 }
@@ -117,8 +119,7 @@ func TestChannelSelectionKeepsWeightingInsideProtocolTier(t *testing.T) {
 
 	tiers := buildChannelSelectionTiers(channels, classifier)
 	require.Equal(t, []channelSelectionTier{
-		{Class: ChannelCandidateNative, Priority: priority},
-		{Class: ChannelCandidateConvertible, Priority: priority},
+		{Priority: priority},
 	}, tiers)
 
 	for range 20 {

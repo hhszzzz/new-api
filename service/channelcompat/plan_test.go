@@ -707,7 +707,7 @@ func TestPlanForRequestDefaultUpstreamProtocols(t *testing.T) {
 		{name: "empty OpenAI Responses", channel: &model.Channel{Type: constant.ChannelTypeOpenAI, BaseURL: &emptyURL}, protocol: ProtocolResponses, status: StatusNative},
 		{name: "official OpenAI Responses", channel: &model.Channel{Type: constant.ChannelTypeOpenAI, BaseURL: &officialURL}, protocol: ProtocolResponses, status: StatusNative},
 		{name: "compatible OpenAI Chat", channel: &model.Channel{Type: constant.ChannelTypeOpenAI, BaseURL: &compatibleURL}, protocol: ProtocolChat, status: StatusNative},
-		{name: "compatible OpenAI bridges Responses through Chat", channel: &model.Channel{Type: constant.ChannelTypeOpenAI, BaseURL: &compatibleURL}, protocol: ProtocolResponses, status: StatusConvertible},
+		{name: "compatible OpenAI Responses", channel: &model.Channel{Type: constant.ChannelTypeOpenAI, BaseURL: &compatibleURL}, protocol: ProtocolResponses, status: StatusNative},
 		{name: "Gemini bridges Responses through generateContent", channel: &model.Channel{Type: constant.ChannelTypeGemini}, protocol: ProtocolResponses, status: StatusConvertible},
 		{name: "Vertex Gemini bridges Responses through generateContent", channel: &model.Channel{Type: constant.ChannelTypeVertexAi}, protocol: ProtocolResponses, status: StatusConvertible},
 		{name: "Vertex Claude Messages", channel: &model.Channel{Type: constant.ChannelTypeVertexAi}, protocol: ProtocolMessages, status: StatusNative},

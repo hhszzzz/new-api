@@ -223,59 +223,9 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 
 	startGroupIndex := 0
 	crossGroupRetry := common.GetContextKeyBool(param.Ctx, constant.ContextKeyTokenCrossGroupRetry)
-	_, hasAutoGroupSelection := common.GetContextKey(param.Ctx, constant.ContextKeyAutoGroupIndex)
 	if lastGroupIndex, exists := common.GetContextKey(param.Ctx, constant.ContextKeyAutoGroupIndex); exists {
 		if index, ok := lastGroupIndex.(int); ok {
 			startGroupIndex = index
-		}
-	}
-
-	// A new auto-group request must exhaust the native protocol layer across
-	// groups before an earlier group's convertible channel can win. Once a group
-	// has been selected, retries continue through the existing per-group tiers.
-	if !hasAutoGroupSelection && param.CandidateClassifier != nil {
-		nativeClassifier := func(channel *model.Channel) model.ChannelCandidateClass {
-			if param.CandidateClassifier(channel) == model.ChannelCandidateNative {
-				return model.ChannelCandidateNative
-			}
-			return model.ChannelCandidateIncompatible
-		}
-		for index, autoGroup := range autoGroups {
-			if !clientpolicy.IsGroupAllowed(autoGroup, client) {
-				continue
-			}
-			priorityRetry := param.GetRetry()
-			if index > 0 {
-				priorityRetry = 0
-			}
-			channel, err := model.GetRandomSatisfiedChannelInPoolWithClassifier(
-				autoGroup,
-				param.ModelName,
-				priorityRetry,
-				param.RequestPath,
-				param.AllowedChannelIds,
-				param.effectiveCandidateFilter(),
-				nativeClassifier,
-			)
-			if err != nil {
-				if errors.Is(err, model.ErrNoCompatibleChannel) {
-					continue
-				}
-				return nil, autoGroup, err
-			}
-			if channel == nil {
-				continue
-			}
-
-			publishSelectedGroupContext(param.Ctx, autoGroup)
-			if crossGroupRetry && priorityRetry >= common.RetryTimes {
-				common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroupIndex, index+1)
-				param.SetRetry(0)
-				param.ResetRetryNextTry()
-			} else {
-				common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroupIndex, index)
-			}
-			return channel, autoGroup, nil
 		}
 	}
 

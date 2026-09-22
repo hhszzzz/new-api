@@ -206,13 +206,13 @@ func GetRandomSatisfiedChannelInPoolWithClassifier(group string, model string, r
 
 	targetChannels := make([]*Channel, 0, len(eligibleChannels))
 	for _, channel := range eligibleChannels {
-		if channel.GetPriority() == targetTier.Priority && classifyChannel(channel, candidateClassifier) == targetTier.Class {
+		if channel.GetPriority() == targetTier.Priority {
 			targetChannels = append(targetChannels, channel)
 		}
 	}
 
 	if len(targetChannels) == 0 {
-		return nil, fmt.Errorf("no channel found, group: %s, model: %s, class: %d, priority: %d", group, model, targetTier.Class, targetTier.Priority)
+		return nil, fmt.Errorf("no channel found, group: %s, model: %s, priority: %d", group, model, targetTier.Priority)
 	}
 	channel := selectWeightedChannel(targetChannels)
 	if channel == nil {

@@ -18,7 +18,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestAutoGroupSelectionRanksNativeAcrossGroupsBeforeConvertible(t *testing.T) {
+func TestAutoGroupSelectionIgnoresProtocolClassAtEqualPriority(t *testing.T) {
 	setupAutoGroupSelectionTest(t)
 	createAutoGroupSelectionChannel(t, 301, "default", "auto-protocol-model")
 	createAutoGroupSelectionChannel(t, 302, "vip", "auto-protocol-model")
@@ -31,6 +31,8 @@ func TestAutoGroupSelectionRanksNativeAcrossGroupsBeforeConvertible(t *testing.T
 		}
 		return model.ChannelCandidateConvertible
 	}
+	// Both channels sit at the same priority number, so the protocol class no
+	// longer reorders across groups: the configured group order wins.
 	selected, group, err := CacheGetRandomSatisfiedChannel(&RetryParam{
 		Ctx:                 context,
 		TokenGroup:          "auto",
@@ -41,9 +43,9 @@ func TestAutoGroupSelectionRanksNativeAcrossGroupsBeforeConvertible(t *testing.T
 
 	require.NoError(t, err)
 	require.NotNil(t, selected)
-	assert.Equal(t, 302, selected.Id)
-	assert.Equal(t, "vip", group)
-	assert.Equal(t, 1, common.GetContextKeyInt(context, constant.ContextKeyAutoGroupIndex))
+	assert.Equal(t, 301, selected.Id)
+	assert.Equal(t, "default", group)
+	assert.Equal(t, 0, common.GetContextKeyInt(context, constant.ContextKeyAutoGroupIndex))
 }
 
 func TestAutoGroupSelectionWithoutClassifierPreservesGroupOrder(t *testing.T) {
