@@ -355,10 +355,7 @@ it('opens the mismatch evidence with the keyboard and shows all three models', a
   const popover = screen
     .getByText('Request Model')
     .closest('[data-slot="popover-content"]')
-  expect(popover).toHaveClass(
-    'w-max',
-    'max-w-[calc(100vw-2rem)]'
-  )
+  expect(popover).toHaveClass('w-max', 'max-w-[calc(100vw-2rem)]')
   expect(popover).not.toHaveClass('min-w-72')
   expect(popover).not.toHaveClass('w-96')
 })
@@ -456,8 +453,6 @@ it.each([
   'REQUESTED-MODEL',
   'mapped-model-2026-09-17',
   'MAPPED-MODEL',
-  'deepseek/requested-model',
-  'accounts/vendor/models/MAPPED-MODEL',
 ])(
   'keeps the compatible response %s in the popover without a list annotation',
   async (returned) => {
@@ -484,5 +479,33 @@ it.each([
     expect(
       screen.queryByText(/this warning alone does not prove model substitution/)
     ).not.toBeInTheDocument()
+  }
+)
+
+// A different provider path is a different model even when the base name
+// matches: the same base name can be served by a quantized or otherwise
+// distinct deployment behind another namespace.
+it.each(['deepseek/requested-model', 'accounts/vendor/models/MAPPED-MODEL'])(
+  'annotates the response %s behind another provider path as a mismatch',
+  async (returned) => {
+    const user = userEvent.setup()
+    render(
+      <ModelBadge
+        modelName='requested-model'
+        responseModel={{
+          requested_model: 'requested-model',
+          upstream_model: 'mapped-model',
+          returned_model: returned,
+        }}
+      />
+    )
+    const trigger = screen.getByRole('button', {
+      name: `Model: requested-model, Response model: ${returned}`,
+    })
+    const warning = trigger.querySelector('[data-response-model-warning]')
+    expect(warning).toHaveAttribute('title', `Response model: ${returned}`)
+    await user.click(trigger)
+    expect(await screen.findByText(returned)).toBeVisible()
+    expect(screen.getByText(`Response model: ${returned}`)).toBeVisible()
   }
 )

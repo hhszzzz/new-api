@@ -37,6 +37,10 @@ beforeAll(async () => {
         translation: {},
       },
     },
+    // Mirror src/i18n/config.ts: without this the i18next default escapes
+    // interpolated values ("a/b" becomes "a&#x2F;b"), so tests would assert an
+    // escaped string production never renders.
+    interpolation: { escapeValue: false },
   })
 })
 

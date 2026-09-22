@@ -148,6 +148,8 @@ func TestResponseModelExpectedProviderPath(t *testing.T) {
 		{name: "provider path alone does not match", requested: "vendor/requested", returned: "vendor", mismatch: true},
 		{name: "different model behind same provider still warns", requested: "vendor/requested", returned: "vendor/other", mismatch: true},
 		{name: "same base name behind different provider warns", requested: "vendor/mapped", returned: "other/mapped", mismatch: true},
+		{name: "provider path added for the requested model warns", requested: "requested", returned: "vendor/requested", mismatch: true},
+		{name: "provider path added for the upstream model warns", upstream: "mapped", returned: "accounts/vendor/models/mapped", mismatch: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			info := &relaycommon.RelayInfo{
