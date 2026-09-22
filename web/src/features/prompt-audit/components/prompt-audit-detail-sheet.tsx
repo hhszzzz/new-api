@@ -43,6 +43,7 @@ import {
 import { cn } from '@/lib/utils'
 
 import { getPromptAudit, retryPromptAudit, reviewPromptAudit } from '../api'
+import { getPromptAuditProtocolName } from '../lib'
 import { promptAuditScopeLabel } from '../scopes'
 import type { PromptAuditEvent } from '../types'
 
@@ -115,6 +116,11 @@ export function PromptAuditDetailSheet({
   const prompt = showsFullPrompt
     ? (event?.full_prompt ?? '')
     : (event?.redacted_preview ?? '')
+  // A rejected request never reaches upstream, and the audit deliberately
+  // writes neither a consume log nor an error log for it, so both related-log
+  // links would lead to an empty page.
+  const hasRelatedLogs =
+    event?.action !== 'block' && event?.action !== 'unavailable'
 
   return (
     <Sheet
@@ -202,11 +208,18 @@ export function PromptAuditDetailSheet({
                   mono
                 />
                 <DetailRow
+                  label={t('Username')}
+                  value={event.username || '—'}
+                />
+                <DetailRow
                   label={t('Token')}
                   value={event.token_name || String(event.token_id || '—')}
                 />
                 <DetailRow label={t('Group')} value={event.group || '—'} />
-                <DetailRow label={t('Protocol')} value={event.protocol} mono />
+                <DetailRow
+                  label={t('Protocol')}
+                  value={getPromptAuditProtocolName(event.protocol) || '—'}
+                />
                 <DetailRow
                   label={t('Audit stage')}
                   value={
@@ -241,6 +254,35 @@ export function PromptAuditDetailSheet({
                 />
               </DetailSection>
 
+              <CollapsibleDetailSection label={t('Client')}>
+                <DetailRow label={t('IP')} value={event.ip || '—'} mono />
+                <DetailRow
+                  label={t('User Agent')}
+                  value={event.user_agent || '—'}
+                  mono
+                />
+                <DetailRow
+                  label={t('Method')}
+                  value={event.method || '—'}
+                  mono
+                />
+                <DetailRow
+                  label={t('Request path')}
+                  value={event.request_path || '—'}
+                  mono
+                />
+                <DetailRow
+                  label={t('Origin')}
+                  value={event.origin || '—'}
+                  mono
+                />
+                <DetailRow
+                  label={t('Referer')}
+                  value={event.referer || '—'}
+                  mono
+                />
+              </CollapsibleDetailSection>
+
               <DetailSection label={t('Result')}>
                 <DetailRow
                   label={t('Text source')}
@@ -270,6 +312,13 @@ export function PromptAuditDetailSheet({
                 />
                 <DetailRow
                   label={t('Audit model')}
+                  value={event.endpoint_model || '—'}
+                  mono
+                />
+                {/* The node's configured id, kept next to the model it runs:
+                    two nodes can share a model and only the id tells them apart. */}
+                <DetailRow
+                  label={t('Endpoint')}
                   value={event.endpoint_id || '—'}
                   mono
                 />
@@ -423,7 +472,7 @@ export function PromptAuditDetailSheet({
                 />
               </CollapsibleDetailSection>
 
-              {event.request_id && (
+              {event.request_id && hasRelatedLogs && (
                 <div className='flex flex-wrap gap-2'>
                   <a
                     href={`/usage-logs/common?requestId=${encodeURIComponent(event.request_id)}`}

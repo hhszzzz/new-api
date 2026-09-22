@@ -59,9 +59,15 @@ func TestPromptAuditSensitiveWordsRunBeforeGuardAndChannelSelection(t *testing.T
 	previousDB := model.DB
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.PromptAudit{}))
+	require.NoError(t, db.AutoMigrate(&model.PromptAudit{}, &model.User{}))
 	model.DB = db
 	t.Cleanup(func() { model.DB = previousDB })
+	// The row snapshots the caller's name from the users table, the way the log
+	// tables do; without Redis configured that lookup must not take the cache path.
+	previousRedisEnabled, previousRedis := common.RedisEnabled, common.RDB
+	common.RedisEnabled = false
+	t.Cleanup(func() { common.RedisEnabled, common.RDB = previousRedisEnabled, previousRedis })
+	require.NoError(t, db.Create(&model.User{Id: 9, Username: "wordlist-owner", Password: strings.Repeat("p", 16)}).Error)
 	previousConfig := prompt_audit_setting.GetSetting()
 	previousWords := setting.SensitiveWordsSnapshot()
 	previousSensitiveEnabled := setting.CheckSensitiveEnabled
@@ -99,6 +105,10 @@ func TestPromptAuditSensitiveWordsRunBeforeGuardAndChannelSelection(t *testing.T
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"chat-model","messages":[{"role":"user","content":"blocked_word"}]}`))
 	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Header.Set("User-Agent", "claude-code/2.0.30")
+	c.Request.Header.Set("Origin", "https://console.example.com")
+	c.Request.Header.Set("Referer", "https://console.example.com/chat")
+	c.Set("id", 9)
 	common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
 
 	cleanup, allowed := inspectPromptBeforeDistribution(c, &ModelRequest{Model: "chat-model"})
@@ -118,6 +128,16 @@ func TestPromptAuditSensitiveWordsRunBeforeGuardAndChannelSelection(t *testing.T
 	assert.Equal(t, "manual", audit.WordlistID)
 	assert.Equal(t, []byte("blocked_word"), audit.FullPrompt)
 	assert.Nil(t, audit.ToResponse(false).FullPrompt)
+	assert.Equal(t, "wordlist-owner", audit.Username)
+	assert.Equal(t, "192.0.2.1", audit.Ip)
+	assert.Equal(t, "claude-code/2.0.30", audit.UserAgent)
+	assert.Equal(t, http.MethodPost, audit.Method)
+	assert.Equal(t, "/v1/chat/completions", audit.RequestPath)
+	assert.Equal(t, "https://console.example.com", audit.Origin)
+	assert.Equal(t, "https://console.example.com/chat", audit.Referer)
+	// A wordlist hit never asks a model, so there is no audit model to report.
+	assert.Empty(t, audit.EndpointID)
+	assert.Empty(t, audit.EndpointModel)
 	_, channelSelected := common.GetContextKey(c, constant.ContextKeyChannelId)
 	assert.False(t, channelSelected)
 }
@@ -241,8 +261,14 @@ func TestPromptAuditProbeFastPassSkipsGuardAndRecordsBypass(t *testing.T) {
 
 	db, err := gorm.Open(sqlite.Open("file:prompt_audit_probe_middleware?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.PromptAudit{}))
+	require.NoError(t, db.AutoMigrate(&model.PromptAudit{}, &model.User{}))
 	model.DB = db
+	// The row snapshots the caller's name from the users table, the way the log
+	// tables do; without Redis configured that lookup must not take the cache path.
+	previousRedisEnabled, previousRedis := common.RedisEnabled, common.RDB
+	common.RedisEnabled = false
+	t.Cleanup(func() { common.RedisEnabled, common.RDB = previousRedisEnabled, previousRedis })
+	require.NoError(t, db.Create(&model.User{Id: 11, Username: "probe-owner", Password: strings.Repeat("p", 16)}).Error)
 
 	// The node is deliberately broken: reaching it would fail the request, which
 	// is exactly the cost the probe fast-pass exists to avoid.
@@ -260,6 +286,9 @@ func TestPromptAuditProbeFastPassSkipsGuardAndRecordsBypass(t *testing.T) {
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"chat-model","messages":[{"role":"user","content":"hi"}]}`))
 	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Header.Set("User-Agent", "claude-code/2.0.30")
+	c.Request.Header.Set("Origin", "https://console.example.com")
+	c.Set("id", 11)
 	common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
 
 	cleanup, allowed := inspectPromptBeforeDistribution(c, &ModelRequest{Model: "chat-model"})
@@ -274,6 +303,14 @@ func TestPromptAuditProbeFastPassSkipsGuardAndRecordsBypass(t *testing.T) {
 	assert.Equal(t, "probe_fast_pass", audit.InspectionType)
 	assert.Equal(t, model.PromptAuditStatusDone, audit.Status)
 	assert.Equal(t, service.PromptAuditDecisionPass, audit.Decision)
+	assert.Equal(t, "probe-owner", audit.Username)
+	assert.Equal(t, "192.0.2.1", audit.Ip)
+	assert.Equal(t, "claude-code/2.0.30", audit.UserAgent)
+	assert.Equal(t, http.MethodPost, audit.Method)
+	assert.Equal(t, "/v1/chat/completions", audit.RequestPath)
+	assert.Equal(t, "https://console.example.com", audit.Origin)
+	// The bypass never reaches a model node, so no audit model is recorded.
+	assert.Empty(t, audit.EndpointModel)
 }
 
 func promptAuditMiddlewareTestConfig(baseURL string) prompt_audit_setting.PromptAuditSetting {

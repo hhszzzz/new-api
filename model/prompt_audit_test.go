@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -376,7 +377,7 @@ func TestPromptAuditStorageConfiguredDatabases(t *testing.T) {
 			assert.True(t, db.Migrator().HasTable(&PromptAudit{}))
 
 			queued := &PromptAudit{
-				RequestID: "dialect-request", UserID: 7, GroupName: "default",
+				RequestID: "dialect-request", UserID: 7, Username: "dialect-user", GroupName: "default",
 				Protocol: "openai_responses", ModelName: "guarded-model",
 				Status: PromptAuditStatusQueued, PromptHash: strings.Repeat("d", 64),
 				FullPrompt: []byte("dialect prompt"), ScanPayload: []byte("dialect prompt"),
@@ -435,6 +436,16 @@ func TestPromptAuditStorageConfiguredDatabases(t *testing.T) {
 			assert.EqualValues(t, 1, total)
 			require.Len(t, listed, 1)
 
+			// The records screen filters by username, which is snapshotted at
+			// write time, so the same rows must be reachable by the name alone.
+			byUser, userTotal, err := ListPromptAudits(PromptAuditFilter{Username: "dialect-user"}, 1, 20)
+			require.NoError(t, err)
+			assert.EqualValues(t, 1, userTotal)
+			require.Len(t, byUser, 1)
+			_, missingTotal, err := ListPromptAudits(PromptAuditFilter{Username: "dialect-user-2"}, 1, 20)
+			require.NoError(t, err)
+			assert.Zero(t, missingTotal)
+
 			stats, err := GetPromptAuditStats(PromptAuditFilter{RequestID: "dialect-request"}, []string{"pii"})
 			require.NoError(t, err)
 			assert.EqualValues(t, 1, stats.Total)
@@ -480,6 +491,7 @@ func runPromptAuditWordlistUpgrade(t *testing.T, db *gorm.DB) {
 		"Direction", "GenerationID", "DeliveryStatus", "CoverageComplete", "Refusal", "Action", "ContentSnapshot", "PolicySnapshot",
 		"ReviewStatus", "ReviewDecision", "ReviewCodes", "ReviewReason", "ReviewerEndpointID",
 		"HumanReview", "HumanReviewReason", "ReviewedBy", "ReviewerName", "ReviewedAt",
+		"Username", "EndpointModel", "Ip", "UserAgent", "Method", "RequestPath", "Origin", "Referer",
 	}
 	var fields []reflect.StructField
 	for index := range current.NumField() {
@@ -492,7 +504,7 @@ func runPromptAuditWordlistUpgrade(t *testing.T, db *gorm.DB) {
 	table := db.NamingStrategy.TableName("PromptAudit")
 	require.NoError(t, db.Table(table).AutoMigrate(legacy))
 	require.NoError(t, db.Table(table).Create(map[string]any{
-		"request_id": "legacy-before-wordlists", "group_name": "旧分组",
+		"request_id": "legacy-before-wordlists", "group_name": "旧分组", "user_id": 4242,
 		"prompt_hash": strings.Repeat("b", 64), "full_prompt": []byte("preserved 原文"),
 		"status": "done", "categories": "null", "unknown_categories": "null",
 	}).Error)
@@ -525,6 +537,32 @@ func runPromptAuditWordlistUpgrade(t *testing.T, db *gorm.DB) {
 	for _, index := range before {
 		assert.Contains(t, names, index.Name())
 	}
+	// The records screen narrows by username, so the column carries an index the
+	// same way group_name and model_name do. Assert it by the name GORM derives
+	// from the prefixed test table rather than the literal one.
+	assert.True(t, db.Migrator().HasIndex(&PromptAudit{}, db.NamingStrategy.IndexName(table, "username")))
+	// The declared varchar widths are a load-bearing cross-database contract: they
+	// are the second line of defence that makes MySQL and PostgreSQL reject an
+	// over-long value. A tag GORM cannot parse degrades to an unbounded column
+	// without failing the migration, so lock the widths here, where all three
+	// engines are exercised.
+	columnTypes, err := db.Migrator().ColumnTypes(&PromptAudit{})
+	require.NoError(t, err)
+	widths := map[string]string{
+		"username": "64", "endpoint_model": "255", "ip": "64", "user_agent": "512",
+		"method": "16", "request_path": "255", "origin": "255", "referer": "255",
+	}
+	for _, columnType := range columnTypes {
+		width, tracked := widths[columnType.Name()]
+		if !tracked {
+			continue
+		}
+		delete(widths, columnType.Name())
+		declared, known := columnType.ColumnType()
+		require.True(t, known, columnType.Name())
+		assert.Contains(t, strings.ToLower(declared), "("+width+")", columnType.Name())
+	}
+	assert.Empty(t, widths)
 	var row PromptAudit
 	require.NoError(t, db.Where("request_id = ?", "legacy-before-wordlists").First(&row).Error)
 	assert.Equal(t, "旧分组", row.GroupName)
@@ -533,6 +571,10 @@ func runPromptAuditWordlistUpgrade(t *testing.T, db *gorm.DB) {
 	assert.Equal(t, "not_applicable", row.DeliveryStatus)
 	assert.True(t, row.CoverageComplete)
 	assert.Equal(t, "allow", row.Action)
+	// A row written before the column existed keeps an empty username: like the
+	// two log tables, the name is snapshotted when the row is written and never
+	// backfilled from the users table.
+	assert.Empty(t, row.Username)
 	response := row.ToResponse(false)
 	assert.Equal(t, "model", response.InspectionType)
 	assert.Equal(t, []string{}, response.InspectedScopes)
@@ -698,4 +740,79 @@ func runPromptWordlistStorage(t *testing.T, db *gorm.DB) {
 	require.NoError(t, DeletePromptWordlist(second.ID))
 	require.NoError(t, DeletePromptWordlist(row.ID))
 	assert.Empty(t, prompt_audit_setting.GetSetting().PolicyFor(dto.PromptScopeSystem).LibraryIDs)
+}
+
+func TestPromptAuditClampsOversizedColumns(t *testing.T) {
+	db := withPromptAuditTestDB(t)
+	// Multi-byte values on purpose: clamping counts runes, so a byte-wise
+	// truncation would split a character and the three databases would store
+	// different bytes for the same request.
+	audit := &PromptAudit{
+		RequestID: "clamp-overlong", Status: PromptAuditStatusDone,
+		Ip:            strings.Repeat("7", 80),
+		UserAgent:     strings.Repeat("界", 600),
+		Method:        strings.Repeat("M", 40),
+		RequestPath:   strings.Repeat("/p", 400),
+		Origin:        strings.Repeat("o", 300),
+		Referer:       strings.Repeat("r", 300),
+		Username:      strings.Repeat("u", 100),
+		EndpointModel: strings.Repeat("m", 300),
+		TokenName:     strings.Repeat("t", 300),
+		ModelName:     strings.Repeat("n", 300),
+	}
+	require.NoError(t, CreatePromptAudit(audit))
+	// BeforeCreate clamps in place, so the caller's copy matches the stored row.
+	assert.Equal(t, 64, utf8.RuneCountInString(audit.Ip))
+	assert.Equal(t, 64, utf8.RuneCountInString(audit.Username))
+	assert.Equal(t, 16, utf8.RuneCountInString(audit.Method))
+	for _, value := range []string{audit.RequestPath, audit.Origin, audit.Referer, audit.EndpointModel, audit.TokenName, audit.ModelName} {
+		assert.Equal(t, 255, utf8.RuneCountInString(value))
+	}
+	assert.Equal(t, 512, utf8.RuneCountInString(audit.UserAgent))
+
+	var stored PromptAudit
+	require.NoError(t, db.Where("request_id = ?", "clamp-overlong").First(&stored).Error)
+	assert.Equal(t, strings.Repeat("界", 512), stored.UserAgent)
+	assert.Equal(t, strings.Repeat("/p", 127)+"/", stored.RequestPath)
+
+	// Values within their column are stored byte-for-byte.
+	short := &PromptAudit{
+		RequestID: "clamp-within-limit", Status: PromptAuditStatusDone,
+		Ip: "203.0.113.7", UserAgent: "curl/8.7.1", Method: "POST",
+		RequestPath: "/v1/messages", Origin: "https://example.com", Referer: "https://example.com/app",
+		Username: "tester", EndpointModel: "qwen3guard-gen-0.6b",
+		TokenName: "ui-demo-token", ModelName: "claude-sonnet-5",
+	}
+	require.NoError(t, CreatePromptAudit(short))
+	var storedShort PromptAudit
+	require.NoError(t, db.Where("request_id = ?", "clamp-within-limit").First(&storedShort).Error)
+	assert.Equal(t, "203.0.113.7", storedShort.Ip)
+	assert.Equal(t, "curl/8.7.1", storedShort.UserAgent)
+	assert.Equal(t, "POST", storedShort.Method)
+	assert.Equal(t, "/v1/messages", storedShort.RequestPath)
+	assert.Equal(t, "https://example.com", storedShort.Origin)
+	assert.Equal(t, "https://example.com/app", storedShort.Referer)
+	assert.Equal(t, "tester", storedShort.Username)
+	assert.Equal(t, "qwen3guard-gen-0.6b", storedShort.EndpointModel)
+	assert.Equal(t, "ui-demo-token", storedShort.TokenName)
+	assert.Equal(t, "claude-sonnet-5", storedShort.ModelName)
+}
+
+func TestPromptAuditClampsEndpointModelOnCompletion(t *testing.T) {
+	db := withPromptAuditTestDB(t)
+	queued := &PromptAudit{RequestID: "clamp-completion", Status: PromptAuditStatusQueued, MaxAttempts: 1, ScanPayload: []byte("x")}
+	require.NoError(t, CreatePromptAudit(queued))
+	now := common.GetTimestamp()
+	claimed, ok, err := ClaimPromptAudit("clamp-node", now, now+1000)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, queued.ID, claimed.ID)
+	// FinishPromptAudit writes through an Updates map, which BeforeCreate does
+	// not cover.
+	require.NoError(t, FinishPromptAudit(claimed.ID, "clamp-node", PromptAuditCompletion{
+		EndpointModel: strings.Repeat("m", 300), Decision: "pass",
+	}))
+	var stored PromptAudit
+	require.NoError(t, db.First(&stored, claimed.ID).Error)
+	assert.Equal(t, 255, utf8.RuneCountInString(stored.EndpointModel))
 }

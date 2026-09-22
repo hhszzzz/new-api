@@ -187,11 +187,10 @@ export function PromptAuditFilterBar<TData>(props: {
   const userFilter = (
     <LogsFilterField>
       <LogsFilterInput
-        inputMode='numeric'
-        aria-label={t('User ID')}
-        placeholder={t('User ID')}
-        value={props.filters.user_id}
-        onChange={(event) => props.onChange('user_id', event.target.value)}
+        aria-label={t('Username')}
+        placeholder={t('Username')}
+        value={props.filters.username}
+        onChange={(event) => props.onChange('username', event.target.value)}
         onKeyDown={handleKeyDown}
       />
     </LogsFilterField>
@@ -234,10 +233,7 @@ export function PromptAuditFilterBar<TData>(props: {
         ['model', t('Model')],
         ['group', t('Group')],
         ['protocol', t('Protocol')],
-        ['endpoint_id', t('Audit model')],
         ['request_id', t('Request ID')],
-        ['prompt_hash', t('Prompt hash')],
-        ['detector', t('Detector')],
       ].map(([key, label]) => (
         <LogsFilterField key={key}>
           <LogsFilterInput
@@ -261,16 +257,13 @@ export function PromptAuditFilterBar<TData>(props: {
     props.filters.model,
     props.filters.group,
     props.filters.protocol,
-    props.filters.endpoint_id,
     props.filters.request_id,
-    props.filters.prompt_hash,
     props.filters.direction,
-    props.filters.detector,
   ].filter(Boolean).length
   const primaryCount = [
     props.filters.decision,
     props.filters.category,
-    props.filters.user_id,
+    props.filters.username,
   ].filter(Boolean).length
   const hasActiveFilters = Object.values(props.filters).some(Boolean)
 

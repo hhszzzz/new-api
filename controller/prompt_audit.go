@@ -67,15 +67,12 @@ type promptAuditFilterRequest struct {
 	Status     string  `json:"status"`
 	Decision   string  `json:"decision"`
 	Category   string  `json:"category"`
-	UserID     int     `json:"user_id"`
+	Username   string  `json:"username"`
 	Group      string  `json:"group"`
 	Protocol   string  `json:"protocol"`
 	Model      string  `json:"model"`
-	EndpointID string  `json:"endpoint_id"`
-	PromptHash string  `json:"prompt_hash"`
 	RequestID  string  `json:"request_id"`
 	Direction  string  `json:"direction"`
-	Detector   string  `json:"detector"`
 	StartTime  int64   `json:"start_time"`
 	EndTime    int64   `json:"end_time"`
 	MaxID      int64   `json:"max_id"`
@@ -558,16 +555,14 @@ func promptAuditSetInt(values map[string]string, key string, value *int) {
 }
 
 func promptAuditFilterFromQuery(c *gin.Context) model.PromptAuditFilter {
-	userID, _ := strconv.Atoi(c.Query("user_id"))
 	startTime, _ := strconv.ParseInt(c.Query("start_time"), 10, 64)
 	endTime, _ := strconv.ParseInt(c.Query("end_time"), 10, 64)
 	return model.PromptAuditFilter{
 		Status: strings.TrimSpace(c.Query("status")), Decision: strings.TrimSpace(c.Query("decision")),
-		Category: strings.TrimSpace(c.Query("category")), UserID: userID,
+		Category: strings.TrimSpace(c.Query("category")), Username: strings.TrimSpace(c.Query("username")),
 		Group: strings.TrimSpace(c.Query("group")), Protocol: strings.TrimSpace(c.Query("protocol")),
-		Model: strings.TrimSpace(c.Query("model")), EndpointID: strings.TrimSpace(c.Query("endpoint_id")),
-		PromptHash: strings.TrimSpace(c.Query("prompt_hash")), RequestID: strings.TrimSpace(c.Query("request_id")),
-		Direction: strings.TrimSpace(c.Query("direction")), Detector: strings.TrimSpace(c.Query("detector")),
+		Model: strings.TrimSpace(c.Query("model")), RequestID: strings.TrimSpace(c.Query("request_id")),
+		Direction: strings.TrimSpace(c.Query("direction")),
 		StartTime: startTime, EndTime: endTime,
 	}
 }
@@ -576,10 +571,9 @@ func (request promptAuditFilterRequest) toModel() model.PromptAuditFilter {
 	return model.PromptAuditFilter{
 		IDs: append([]int64(nil), request.IDs...), Status: strings.TrimSpace(request.Status),
 		Decision: strings.TrimSpace(request.Decision), Category: strings.TrimSpace(request.Category),
-		UserID: request.UserID, Group: strings.TrimSpace(request.Group), Protocol: strings.TrimSpace(request.Protocol),
-		Model: strings.TrimSpace(request.Model), EndpointID: strings.TrimSpace(request.EndpointID),
-		PromptHash: strings.TrimSpace(request.PromptHash), RequestID: strings.TrimSpace(request.RequestID),
-		Direction: strings.TrimSpace(request.Direction), Detector: strings.TrimSpace(request.Detector),
+		Username: strings.TrimSpace(request.Username), Group: strings.TrimSpace(request.Group),
+		Protocol: strings.TrimSpace(request.Protocol), Model: strings.TrimSpace(request.Model),
+		RequestID: strings.TrimSpace(request.RequestID), Direction: strings.TrimSpace(request.Direction),
 		StartTime: request.StartTime, EndTime: request.EndTime, MaxID: request.MaxID,
 	}
 }

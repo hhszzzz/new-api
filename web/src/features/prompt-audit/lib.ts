@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { getProtocolName } from '@/features/usage-logs/lib/protocol-conversion'
 import { getDefaultTimeRange } from '@/features/usage-logs/lib/utils'
 import dayjs from '@/lib/dayjs'
 
@@ -31,15 +32,12 @@ export const EMPTY_PROMPT_AUDIT_FILTERS: PromptAuditFilters = {
   status: '',
   decision: '',
   category: '',
-  user_id: '',
+  username: '',
   group: '',
   protocol: '',
   model: '',
-  endpoint_id: '',
-  prompt_hash: '',
   request_id: '',
   direction: '',
-  detector: '',
   start_time: '',
   end_time: '',
 }
@@ -56,7 +54,6 @@ export function getDefaultPromptAuditFilters(): PromptAuditFilters {
 export function promptAuditFilterParams(
   filters: PromptAuditFilters
 ): Record<string, string | number | undefined> {
-  const userID = Number.parseInt(filters.user_id, 10)
   const startTime = filters.start_time
     ? Math.floor(new Date(filters.start_time).getTime() / 1000)
     : undefined
@@ -68,15 +65,12 @@ export function promptAuditFilterParams(
     status: filters.status || undefined,
     decision: filters.decision || undefined,
     category: filters.category || undefined,
-    user_id: Number.isFinite(userID) && userID > 0 ? userID : undefined,
+    username: filters.username.trim() || undefined,
     group: filters.group.trim() || undefined,
     protocol: filters.protocol.trim() || undefined,
     model: filters.model.trim() || undefined,
-    endpoint_id: filters.endpoint_id.trim() || undefined,
-    prompt_hash: filters.prompt_hash.trim() || undefined,
     request_id: filters.request_id.trim() || undefined,
     direction: filters.direction || undefined,
-    detector: filters.detector || undefined,
     start_time:
       startTime !== undefined && Number.isFinite(startTime)
         ? startTime
@@ -291,4 +285,26 @@ export function validatePromptAuditConfig(
     return 'Chunk overlap must be smaller than every enabled node input limit.'
   }
   return null
+}
+
+// Protocol formats the shared usage-log map does not name. Kept local rather
+// than added to protocol-conversion.ts: that map also decides whether a usage
+// log reports a native protocol flow, so extending it would change unrelated
+// log badges. Unmapped values fall through to the shared names, and finally to
+// the raw format, which is what getProtocolName itself does.
+const PROMPT_AUDIT_PROTOCOL_NAMES: Record<string, string> = {
+  openai_responses: 'OpenAI Responses',
+  openai_alpha_search: 'OpenAI Alpha Search',
+  openai_audio: 'OpenAI Audio',
+  openai_image: 'OpenAI Images',
+  openai_realtime: 'OpenAI Realtime',
+  rerank: 'Rerank',
+  embedding: 'Embeddings',
+  task: 'Async Task',
+  mj_proxy: 'Midjourney',
+}
+
+export function getPromptAuditProtocolName(protocol: string): string {
+  if (!protocol) return ''
+  return PROMPT_AUDIT_PROTOCOL_NAMES[protocol] ?? getProtocolName(protocol)
 }

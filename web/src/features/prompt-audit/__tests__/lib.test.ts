@@ -87,13 +87,13 @@ describe('prompt audit management helpers', () => {
     const params = promptAuditFilterParams({
       ...EMPTY_PROMPT_AUDIT_FILTERS,
       status: 'failed',
-      user_id: '42',
+      username: ' uidemo ',
       request_id: ' req-123 ',
       start_time: '2026-08-06T10:30',
     })
 
     expect(params.status).toBe('failed')
-    expect(params.user_id).toBe(42)
+    expect(params.username).toBe('uidemo')
     expect(params.request_id).toBe('req-123')
     expect(params.start_time).toBe(
       Math.floor(new Date('2026-08-06T10:30').getTime() / 1000)

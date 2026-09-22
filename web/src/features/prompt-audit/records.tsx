@@ -149,7 +149,6 @@ export function PromptAuditRecords() {
   const total = listQuery.data?.total ?? 0
   const columns = usePromptAuditColumns({
     canDelete,
-    canViewFullPrompt,
     onOpen: setDetailID,
   })
   const ensurePageInRange = useCallback((pageCount: number) => {

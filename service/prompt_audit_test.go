@@ -746,9 +746,15 @@ func TestCheckPromptAuditAsyncNeverBlocksMainRequest(t *testing.T) {
 	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.PromptAudit{}))
+	require.NoError(t, db.AutoMigrate(&model.PromptAudit{}, &model.User{}))
 	model.DB = db
 	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.LogDatabaseType())
+	// The row snapshots the caller's name from the users table, the way the log
+	// tables do; without Redis configured that lookup must not take the cache path.
+	previousRedisEnabled, previousRedis := common.RedisEnabled, common.RDB
+	common.RedisEnabled = false
+	t.Cleanup(func() { common.RedisEnabled, common.RDB = previousRedisEnabled, previousRedis })
+	require.NoError(t, db.Create(&model.User{Id: 7, Username: "audit-owner", Password: strings.Repeat("p", 16)}).Error)
 
 	var guardCalls atomic.Int32
 	guard := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -763,9 +769,16 @@ func TestCheckPromptAuditAsyncNeverBlocksMainRequest(t *testing.T) {
 	configured.MaxAttempts = prompt_audit_setting.DefaultMaxAttempts
 	configured.PublishConfig()
 	active := prompt_audit_setting.GetSetting()
+	// Captured before the mutation below, which writes through the endpoint slice
+	// that active and changed share.
+	snapshotModel := active.Endpoints[0].Model
 
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses?token=must-not-be-recorded", nil)
+	c.Request.Header.Set("User-Agent", "claude-code/2.0.30")
+	c.Request.Header.Set("Origin", "https://console.example.com")
+	c.Request.Header.Set("Referer", "https://console.example.com/chat")
+	c.Set("id", 7)
 	result, apiErr := CheckPromptAudit(c, PromptAuditRequest{
 		Snapshot: dto.PromptAuditSnapshot{Segments: []dto.PromptAuditSegment{{
 			Role: "user", Text: "dangerous prompt", User: true,
@@ -781,6 +794,22 @@ func TestCheckPromptAuditAsyncNeverBlocksMainRequest(t *testing.T) {
 	var queued model.PromptAudit
 	require.NoError(t, db.First(&queued, result.AuditID).Error)
 	assert.Equal(t, model.PromptAuditStatusQueued, queued.Status)
+	assert.Equal(t, "audit-owner", queued.Username)
+	assert.Equal(t, "192.0.2.1", queued.Ip)
+	assert.Equal(t, "claude-code/2.0.30", queued.UserAgent)
+	assert.Equal(t, http.MethodPost, queued.Method)
+	assert.Equal(t, "/v1/responses", queued.RequestPath, "the query string must never be recorded")
+	assert.Equal(t, "https://console.example.com", queued.Origin)
+	assert.Equal(t, "https://console.example.com/chat", queued.Referer)
+	assert.Empty(t, queued.EndpointModel, "no endpoint has answered while the row is queued")
+	queuedResponse := queued.ToResponse(false)
+	assert.Equal(t, "audit-owner", queuedResponse.Username)
+	assert.Equal(t, "192.0.2.1", queuedResponse.Ip)
+	assert.Equal(t, "claude-code/2.0.30", queuedResponse.UserAgent)
+	assert.Equal(t, http.MethodPost, queuedResponse.Method)
+	assert.Equal(t, "/v1/responses", queuedResponse.RequestPath)
+	assert.Equal(t, "https://console.example.com", queuedResponse.Origin)
+	assert.Equal(t, "https://console.example.com/chat", queuedResponse.Referer)
 	var queuedPayload promptAuditPayload
 	require.NoError(t, common.Unmarshal(queued.ScanPayload, &queuedPayload))
 	require.Len(t, queuedPayload.Segments, 1)
@@ -805,6 +834,9 @@ func TestCheckPromptAuditAsyncNeverBlocksMainRequest(t *testing.T) {
 	assert.Equal(t, PromptAuditDecisionBlock, queued.Decision)
 	assert.Equal(t, PromptAuditActionMark, queued.Action)
 	assert.Equal(t, PromptAuditActionBlock, queued.WouldAction)
+	assert.Equal(t, snapshotModel, queued.EndpointModel, "the worker must record the snapshot endpoint's model")
+	assert.Equal(t, "audit-owner", queued.Username, "completion must not rewrite the captured client metadata")
+	assert.Equal(t, "192.0.2.1", queued.Ip)
 	assert.EqualValues(t, 1, guardCalls.Load(), "worker must use the queued non-secret endpoint snapshot")
 	assert.Empty(t, queued.ScanPayload)
 	assert.NotEmpty(t, queued.ContentSnapshot)

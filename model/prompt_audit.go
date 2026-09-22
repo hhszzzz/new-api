@@ -33,6 +33,14 @@ var (
 // PromptAudit is both the durable async work item and the final audit event.
 // ScanPayload is cleared on terminal completion; FullPrompt is separately capped
 // for authorized administrator review.
+//
+// Ip, UserAgent, Method, RequestPath, Origin and Referer capture the client once,
+// when the row is created; the async worker must never rewrite them. Their widths
+// mirror AuditLog and are enforced by clampPromptAuditColumn, because MySQL and
+// PostgreSQL reject an over-long value and the failed insert would drop the whole
+// audit row. TokenName and ModelName are clamped in the same pass for the same
+// reason: a long administrator-chosen token name or client-supplied model name
+// would drop every row carrying it.
 type PromptAudit struct {
 	InspectionType      string            `json:"inspection_type" gorm:"type:varchar(16);index"`
 	WordlistID          string            `json:"wordlist_id" gorm:"type:varchar(32);index"`
@@ -45,6 +53,7 @@ type PromptAudit struct {
 	UserID              int               `json:"user_id" gorm:"index"`
 	TokenID             int               `json:"token_id" gorm:"index"`
 	TokenName           string            `json:"token_name" gorm:"type:varchar(255)"`
+	Username            string            `json:"username" gorm:"type:varchar(64);index"`
 	GroupName           string            `json:"group" gorm:"type:varchar(64);index"`
 	Protocol            string            `json:"protocol" gorm:"type:varchar(64);index"`
 	ModelName           string            `json:"model" gorm:"type:varchar(255);index"`
@@ -75,6 +84,7 @@ type PromptAudit struct {
 	Categories          string            `json:"-" gorm:"type:text"`
 	UnknownCategories   string            `json:"-" gorm:"type:text"`
 	EndpointID          string            `json:"endpoint_id" gorm:"type:varchar(128);index"`
+	EndpointModel       string            `json:"endpoint_model" gorm:"type:varchar(255)"`
 	ReviewStatus        string            `json:"review_status" gorm:"type:varchar(32);index"`
 	ReviewDecision      string            `json:"review_decision" gorm:"type:varchar(16)"`
 	ReviewCodes         string            `json:"-" gorm:"type:text"`
@@ -92,6 +102,12 @@ type PromptAudit struct {
 	LeaseOwner          string            `json:"-" gorm:"type:varchar(128);index"`
 	LeaseUntil          int64             `json:"-" gorm:"index"`
 	ErrorCode           string            `json:"error_code" gorm:"type:varchar(64);index"`
+	Ip                  string            `json:"ip" gorm:"type:varchar(64)"`
+	UserAgent           string            `json:"user_agent" gorm:"type:varchar(512)"`
+	Method              string            `json:"method" gorm:"type:varchar(16)"`
+	RequestPath         string            `json:"request_path" gorm:"type:varchar(255)"`
+	Origin              string            `json:"origin" gorm:"type:varchar(255)"`
+	Referer             string            `json:"referer" gorm:"type:varchar(255)"`
 	CreatedAt           int64             `json:"created_at" gorm:"index"`
 	UpdatedAt           int64             `json:"updated_at" gorm:"index"`
 	CompletedAt         int64             `json:"completed_at" gorm:"index"`
@@ -109,6 +125,7 @@ type PromptAuditResponse struct {
 	UserID              int               `json:"user_id"`
 	TokenID             int               `json:"token_id"`
 	TokenName           string            `json:"token_name"`
+	Username            string            `json:"username"`
 	GroupName           string            `json:"group"`
 	Protocol            string            `json:"protocol"`
 	ModelName           string            `json:"model"`
@@ -136,6 +153,7 @@ type PromptAuditResponse struct {
 	Categories          []string          `json:"categories"`
 	UnknownCategories   []string          `json:"unknown_categories"`
 	EndpointID          string            `json:"endpoint_id"`
+	EndpointModel       string            `json:"endpoint_model"`
 	ReviewStatus        string            `json:"review_status"`
 	ReviewDecision      string            `json:"review_decision"`
 	ReviewCodes         []string          `json:"review_codes"`
@@ -151,28 +169,36 @@ type PromptAuditResponse struct {
 	MaxAttempts         int               `json:"max_attempts"`
 	NextAttemptAt       int64             `json:"next_attempt_at"`
 	ErrorCode           string            `json:"error_code"`
+	Ip                  string            `json:"ip"`
+	UserAgent           string            `json:"user_agent"`
+	Method              string            `json:"method"`
+	RequestPath         string            `json:"request_path"`
+	Origin              string            `json:"origin"`
+	Referer             string            `json:"referer"`
 	CreatedAt           int64             `json:"created_at"`
 	UpdatedAt           int64             `json:"updated_at"`
 	CompletedAt         int64             `json:"completed_at"`
 }
 
+// PromptAuditFilter mirrors the fields an operator can narrow a listing by. It
+// deliberately keeps no user id, node id, prompt hash or inspection-type
+// filter: the first three are invisible on the records screen, so a filter
+// labelled after them could only be filled in from somewhere else, and the
+// inspection type is an internal label the screen never shows.
 type PromptAuditFilter struct {
-	IDs        []int64
-	Status     string
-	Decision   string
-	Category   string
-	UserID     int
-	Group      string
-	Protocol   string
-	Model      string
-	EndpointID string
-	PromptHash string
-	RequestID  string
-	Direction  string
-	Detector   string
-	StartTime  int64
-	EndTime    int64
-	MaxID      int64
+	IDs       []int64
+	Status    string
+	Decision  string
+	Category  string
+	Username  string
+	Group     string
+	Protocol  string
+	Model     string
+	RequestID string
+	Direction string
+	StartTime int64
+	EndTime   int64
+	MaxID     int64
 }
 
 type PromptAuditStats struct {
@@ -191,6 +217,7 @@ type PromptAuditCompletion struct {
 	Categories         []string
 	UnknownCategories  []string
 	EndpointID         string
+	EndpointModel      string
 	ChunkCount         int
 	LatencyMS          int64
 	ErrorCode          string
@@ -210,6 +237,21 @@ func (audit *PromptAudit) BeforeCreate(_ *gorm.DB) error {
 	if audit.UpdatedAt == 0 {
 		audit.UpdatedAt = now
 	}
+	// Clamp so the in-memory row matches the stored row, and so no single
+	// over-long value can cost the whole audit record. The identity and model
+	// names are included because they are just as unbounded: a token name comes
+	// from an administrator and a model name from the client's request body, and
+	// an over-long one would otherwise drop every audit row that carries it.
+	audit.TokenName = clampPromptAuditColumn(audit.TokenName, 255)
+	audit.Username = clampPromptAuditColumn(audit.Username, 64)
+	audit.ModelName = clampPromptAuditColumn(audit.ModelName, 255)
+	audit.EndpointModel = clampPromptAuditColumn(audit.EndpointModel, 255)
+	audit.Ip = clampPromptAuditColumn(audit.Ip, 64)
+	audit.UserAgent = clampPromptAuditColumn(audit.UserAgent, 512)
+	audit.Method = clampPromptAuditColumn(audit.Method, 16)
+	audit.RequestPath = clampPromptAuditColumn(audit.RequestPath, 255)
+	audit.Origin = clampPromptAuditColumn(audit.Origin, 255)
+	audit.Referer = clampPromptAuditColumn(audit.Referer, 255)
 	return nil
 }
 
@@ -218,7 +260,7 @@ func (audit *PromptAudit) ToResponse(includeFullPrompt bool) PromptAuditResponse
 		InspectionType: audit.InspectionType, WordlistID: audit.WordlistID, WordlistName: audit.WordlistName,
 		WordlistVersion: audit.WordlistVersion, MatchedScope: audit.MatchedScope, InspectedScopes: decodePromptAuditStrings(audit.InspectedScopes),
 		ID: audit.ID, RequestID: audit.RequestID, UserID: audit.UserID,
-		TokenID: audit.TokenID, TokenName: audit.TokenName, GroupName: audit.GroupName,
+		TokenID: audit.TokenID, TokenName: audit.TokenName, GroupName: audit.GroupName, Username: audit.Username,
 		Protocol: audit.Protocol, ModelName: audit.ModelName, Stage: audit.Stage,
 		Direction: audit.Direction, GenerationID: audit.GenerationID, DeliveryStatus: audit.DeliveryStatus,
 		CoverageComplete: audit.CoverageComplete,
@@ -230,7 +272,8 @@ func (audit *PromptAudit) ToResponse(includeFullPrompt bool) PromptAuditResponse
 		Safety: audit.Safety, Refusal: audit.Refusal, Decision: audit.Decision, Action: audit.Action, WouldAction: audit.WouldAction,
 		Categories:        decodePromptAuditStrings(audit.Categories),
 		UnknownCategories: decodePromptAuditStrings(audit.UnknownCategories),
-		EndpointID:        audit.EndpointID, ReviewStatus: audit.ReviewStatus, ReviewDecision: audit.ReviewDecision,
+		EndpointID:        audit.EndpointID, EndpointModel: audit.EndpointModel,
+		ReviewStatus: audit.ReviewStatus, ReviewDecision: audit.ReviewDecision,
 		ReviewCodes: decodePromptAuditStrings(audit.ReviewCodes), ReviewReason: audit.ReviewReason,
 		ReviewerEndpointID: audit.ReviewerEndpointID, HumanReview: audit.HumanReview,
 		HumanReviewReason: audit.HumanReviewReason, ReviewedBy: audit.ReviewedBy,
@@ -239,6 +282,8 @@ func (audit *PromptAudit) ToResponse(includeFullPrompt bool) PromptAuditResponse
 		MaxAttempts: audit.MaxAttempts, NextAttemptAt: audit.NextAttemptAt,
 		ErrorCode: audit.ErrorCode, CreatedAt: audit.CreatedAt, UpdatedAt: audit.UpdatedAt,
 		CompletedAt: audit.CompletedAt,
+		Ip:          audit.Ip, UserAgent: audit.UserAgent, Method: audit.Method,
+		RequestPath: audit.RequestPath, Origin: audit.Origin, Referer: audit.Referer,
 	}
 	if response.InspectionType == "" {
 		response.InspectionType = "model"
@@ -424,6 +469,7 @@ func FinishPromptAudit(id int64, owner string, completion PromptAuditCompletion)
 			"categories":           categories,
 			"unknown_categories":   unknown,
 			"endpoint_id":          completion.EndpointID,
+			"endpoint_model":       clampPromptAuditColumn(completion.EndpointModel, 255),
 			"review_status":        completion.ReviewStatus,
 			"review_decision":      completion.ReviewDecision,
 			"review_codes":         reviewCodes,
@@ -508,6 +554,7 @@ func RetryPromptAudit(id int64, maxAttempts int) error {
 			"categories":         "",
 			"unknown_categories": "",
 			"endpoint_id":        "",
+			"endpoint_model":     "",
 			"latency_ms":         int64(0),
 			"chunk_count":        0,
 			"attempts":           0,
@@ -603,8 +650,8 @@ func applyPromptAuditFilter(query *gorm.DB, filter PromptAuditFilter) *gorm.DB {
 	if filter.Category != "" {
 		query = query.Where("categories LIKE ?", "%\""+filter.Category+"\"%")
 	}
-	if filter.UserID > 0 {
-		query = query.Where("user_id = ?", filter.UserID)
+	if filter.Username != "" {
+		query = query.Where("username = ?", filter.Username)
 	}
 	if filter.Group != "" {
 		query = query.Where("group_name = ?", filter.Group)
@@ -615,20 +662,11 @@ func applyPromptAuditFilter(query *gorm.DB, filter PromptAuditFilter) *gorm.DB {
 	if filter.Model != "" {
 		query = query.Where("model_name = ?", filter.Model)
 	}
-	if filter.EndpointID != "" {
-		query = query.Where("endpoint_id = ?", filter.EndpointID)
-	}
-	if filter.PromptHash != "" {
-		query = query.Where("prompt_hash = ?", filter.PromptHash)
-	}
 	if filter.RequestID != "" {
 		query = query.Where("request_id = ?", filter.RequestID)
 	}
 	if filter.Direction != "" {
 		query = query.Where("direction = ?", filter.Direction)
-	}
-	if filter.Detector != "" {
-		query = query.Where("inspection_type = ?", filter.Detector)
 	}
 	if filter.StartTime > 0 {
 		query = query.Where("created_at >= ?", filter.StartTime)
@@ -692,6 +730,9 @@ func MigratePromptAuditDefaults() error {
 	if err := DB.Model(&PromptAudit{}).Where("(action IS NULL OR action = ?) AND decision = ?", "", "block").Update("action", "block").Error; err != nil {
 		return err
 	}
+	if err := DB.Model(&PromptAudit{}).Where("action IS NULL OR action = ?", "").Update("action", "allow").Error; err != nil {
+		return err
+	}
 	return DB.Model(&PromptAudit{}).Where("action IS NULL OR action = ?", "").Update("action", "allow").Error
 }
 
@@ -701,6 +742,18 @@ func promptAuditActiveStatuses() []PromptAuditStatus {
 
 func promptAuditTerminalStatuses() []PromptAuditStatus {
 	return []PromptAuditStatus{PromptAuditStatusDone, PromptAuditStatusFailed}
+}
+
+// clampPromptAuditColumn truncates by rune, mirroring the treatment AuditLog
+// applies to UserAgent. MySQL and PostgreSQL reject a value wider than its
+// column and the failed insert would lose the whole audit row, whereas SQLite
+// accepts it silently and the three databases would disagree.
+func clampPromptAuditColumn(value string, limit int) string {
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	return string(runes[:limit])
 }
 
 func encodePromptAuditStrings(values []string) (string, error) {

@@ -146,6 +146,7 @@ export interface PromptAuditEvent {
   user_id: number
   token_id: number
   token_name: string
+  username: string
   group: string
   protocol: string
   model: string
@@ -173,6 +174,7 @@ export interface PromptAuditEvent {
   categories: string[]
   unknown_categories: string[]
   endpoint_id: string
+  endpoint_model: string
   review_status: string
   review_decision: PromptAuditDecision
   review_codes: string[]
@@ -188,6 +190,12 @@ export interface PromptAuditEvent {
   max_attempts: number
   next_attempt_at: number
   error_code: string
+  ip: string
+  user_agent: string
+  method: string
+  request_path: string
+  origin: string
+  referer: string
   created_at: number
   updated_at: number
   completed_at: number
@@ -197,15 +205,12 @@ export interface PromptAuditFilters {
   status: string
   decision: string
   category: string
-  user_id: string
+  username: string
   group: string
   protocol: string
   model: string
-  endpoint_id: string
-  prompt_hash: string
   request_id: string
   direction: string
-  detector: string
   start_time: string
   end_time: string
 }
@@ -230,15 +235,12 @@ export interface PromptAuditDeleteFilter {
   status?: string
   decision?: string
   category?: string
-  user_id?: number
+  username?: string
   group?: string
   protocol?: string
   model?: string
-  endpoint_id?: string
-  prompt_hash?: string
   request_id?: string
   direction?: string
-  detector?: string
   start_time?: number
   end_time?: number
 }

@@ -68,6 +68,7 @@ const EVENT: PromptAuditEvent = {
   user_id: 9,
   token_id: 3,
   token_name: 'production',
+  username: 'audit-user',
   group: 'default',
   protocol: 'openai_responses',
   model: 'gpt-test',
@@ -95,6 +96,7 @@ const EVENT: PromptAuditEvent = {
   categories: [],
   unknown_categories: [],
   endpoint_id: 'guard-primary',
+  endpoint_model: 'qwen3guard-gen-0.6b',
   review_status: '',
   review_decision: '',
   review_codes: [],
@@ -110,6 +112,12 @@ const EVENT: PromptAuditEvent = {
   max_attempts: 4,
   next_attempt_at: 0,
   error_code: '',
+  ip: '192.0.2.1',
+  user_agent: 'claude-code/2.0.30',
+  method: 'POST',
+  request_path: '/v1/responses',
+  origin: 'https://console.example.com',
+  referer: 'https://console.example.com/keys',
   created_at: 1_785_000_000,
   updated_at: 1_785_000_000,
   completed_at: 1_785_000_001,
@@ -172,6 +180,52 @@ describe('prompt audit management components', () => {
     expect(await screen.findByText('raw-secret-prompt')).toBeVisible()
     expect(screen.getByText('Full prompt')).toBeVisible()
     expect(screen.queryByText('redacted-preview')).not.toBeInTheDocument()
+  })
+
+  test('hides the related log links for a request the audit rejected', async () => {
+    getPromptAuditMock.mockResolvedValue({
+      success: true,
+      data: { ...EVENT, decision: 'block', action: 'block' },
+    })
+
+    renderWithQueryClient(
+      <PromptAuditDetailSheet
+        eventID={EVENT.id}
+        canViewFullPrompt={false}
+        canManage={false}
+        canDelete={false}
+        onOpenChange={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    )
+
+    expect(await screen.findByText('redacted-preview')).toBeVisible()
+    expect(
+      screen.queryByRole('link', { name: /Related/ })
+    ).not.toBeInTheDocument()
+  })
+
+  test('links the usage and error logs of a request that was let through', async () => {
+    renderWithQueryClient(
+      <PromptAuditDetailSheet
+        eventID={EVENT.id}
+        canViewFullPrompt={false}
+        canManage={false}
+        canDelete={false}
+        onOpenChange={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    )
+
+    expect(
+      await screen.findByRole('link', { name: /Related usage logs/ })
+    ).toHaveAttribute('href', '/usage-logs/common?requestId=req-prompt-audit')
+    expect(
+      screen.getByRole('link', { name: /Related error logs/ })
+    ).toHaveAttribute(
+      'href',
+      '/usage-logs/common?type=5&requestId=req-prompt-audit'
+    )
   })
 
   test('blocks deletion when the preview contains active tasks', async () => {

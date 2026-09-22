@@ -21,11 +21,13 @@ import { Eye } from 'lucide-react'
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { TruncatedCell } from '@/components/data-table'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import dayjs from '@/lib/dayjs'
 
+import { getPromptAuditProtocolName } from '../lib'
 import type { PromptAuditEvent } from '../types'
 
 function decisionBadgeVariant(decision: string) {
@@ -44,11 +46,10 @@ function statusBadgeVariant(status: string) {
 
 export function usePromptAuditColumns(options: {
   canDelete: boolean
-  canViewFullPrompt: boolean
   onOpen: (eventID: number) => void
 }): ColumnDef<PromptAuditEvent>[] {
   const { t } = useTranslation()
-  const { canDelete, canViewFullPrompt, onOpen } = options
+  const { canDelete, onOpen } = options
 
   return useMemo(() => {
     const columns: ColumnDef<PromptAuditEvent>[] = []
@@ -84,16 +85,9 @@ export function usePromptAuditColumns(options: {
         header: t('Time'),
         size: 150,
         cell: ({ row }) => (
-          <div className='min-w-30 font-mono text-xs tabular-nums'>
-            <div>
-              {dayjs
-                .unix(row.original.created_at)
-                .format('YYYY-MM-DD HH:mm:ss')}
-            </div>
-            <div className='text-muted-foreground mt-0.5'>
-              #{row.original.id}
-            </div>
-          </div>
+          <span className='font-mono text-xs tabular-nums'>
+            {dayjs.unix(row.original.created_at).format('YYYY-MM-DD HH:mm:ss')}
+          </span>
         ),
         meta: { label: t('Time'), mobileOrder: 3 },
       },
@@ -141,13 +135,15 @@ export function usePromptAuditColumns(options: {
           const event = row.original
           return (
             <div className='min-w-0'>
-              <div className='font-medium'>
-                {t('User')} #{event.user_id}
-              </div>
-              <div className='text-muted-foreground max-w-52 truncate text-xs'>
-                {event.group || '—'} ·{' '}
-                {event.token_name || `#${event.token_id}`}
-              </div>
+              <TruncatedCell className='max-w-52 font-medium'>
+                {event.username || `#${event.user_id}`}
+              </TruncatedCell>
+              <TruncatedCell className='text-muted-foreground max-w-52 text-xs'>
+                {t('Group')}: {event.group || '—'}
+              </TruncatedCell>
+              <TruncatedCell className='text-muted-foreground max-w-52 text-xs'>
+                {t('Key')}: {event.token_name || `#${event.token_id}`}
+              </TruncatedCell>
             </div>
           )
         },
@@ -161,20 +157,38 @@ export function usePromptAuditColumns(options: {
           const event = row.original
           return (
             <div className='min-w-0'>
-              <div className='max-w-56 truncate font-medium'>
+              <TruncatedCell className='max-w-56 font-medium'>
                 {event.model || '—'}
-              </div>
-              <div className='text-muted-foreground max-w-56 truncate text-xs'>
-                {event.protocol} ·{' '}
-                {event.delivery_status || event.endpoint_id || '—'}
-              </div>
-              <div className='text-muted-foreground max-w-56 truncate font-mono text-[11px]'>
-                {event.request_id || event.prompt_hash}
-              </div>
+              </TruncatedCell>
+              <TruncatedCell className='text-muted-foreground max-w-56 text-xs'>
+                {t('Protocol')}: {getPromptAuditProtocolName(event.protocol)}
+              </TruncatedCell>
+              <TruncatedCell className='text-muted-foreground max-w-56 text-xs'>
+                {t('Audit model')}: {event.endpoint_model || '—'}
+              </TruncatedCell>
             </div>
           )
         },
         meta: { label: t('Request'), mobileTitle: true },
+      },
+      {
+        id: 'client',
+        header: t('Client'),
+        size: 200,
+        cell: ({ row }) => {
+          const event = row.original
+          return (
+            <div className='min-w-0'>
+              <span className='font-mono text-xs'>{event.ip || '—'}</span>
+              <TruncatedCell className='text-muted-foreground max-w-52 text-xs'>
+                {event.user_agent || '—'}
+              </TruncatedCell>
+            </div>
+          )
+        },
+        // Hideable: the reply headers are useful for investigation, but not for
+        // every operator scanning the list.
+        meta: { label: t('Client'), mobileHidden: true },
       },
       {
         id: 'prompt',
@@ -182,17 +196,11 @@ export function usePromptAuditColumns(options: {
         size: 340,
         cell: ({ row }) => {
           const event = row.original
-          const canOpenFull = canViewFullPrompt && event.full_prompt_available
           return (
             <div className='max-w-96 min-w-48'>
               <p className='line-clamp-2 break-words whitespace-normal'>
                 {event.redacted_preview || '—'}
               </p>
-              {canOpenFull && (
-                <Badge variant='outline' className='mt-1.5 text-[10px]'>
-                  {t('Full prompt')}
-                </Badge>
-              )}
             </div>
           )
         },
@@ -200,7 +208,7 @@ export function usePromptAuditColumns(options: {
       },
       {
         id: 'actions',
-        header: t('Actions'),
+        header: t('Details'),
         size: 72,
         enableHiding: false,
         cell: ({ row }) => (
@@ -215,10 +223,10 @@ export function usePromptAuditColumns(options: {
             </Button>
           </div>
         ),
-        meta: { label: t('Actions'), mobileOrder: 4 },
+        meta: { label: t('Details'), mobileOrder: 4 },
       }
     )
 
     return columns
-  }, [canDelete, canViewFullPrompt, onOpen, t])
+  }, [canDelete, onOpen, t])
 }

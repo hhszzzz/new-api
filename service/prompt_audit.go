@@ -180,6 +180,7 @@ type PromptAuditResult struct {
 	Categories         []string             `json:"categories"`
 	UnknownCategories  []string             `json:"unknown_categories"`
 	EndpointID         string               `json:"endpoint_id"`
+	EndpointModel      string               `json:"endpoint_model,omitempty"`
 	ReviewStatus       string               `json:"review_status,omitempty"`
 	ReviewDecision     string               `json:"review_decision,omitempty"`
 	ReviewCodes        []string             `json:"review_codes,omitempty"`
@@ -494,6 +495,7 @@ func checkPromptAuditWithSetting(c *gin.Context, request PromptAuditRequest, set
 	result.Categories = append([]string(nil), evaluated.Categories...)
 	result.UnknownCategories = append([]string(nil), evaluated.UnknownCategories...)
 	result.EndpointID = evaluated.EndpointID
+	result.EndpointModel = evaluated.EndpointModel
 	result.ReviewStatus, result.ReviewDecision = evaluated.ReviewStatus, evaluated.ReviewDecision
 	result.ReviewCodes, result.ReviewReason = append([]string(nil), evaluated.ReviewCodes...), evaluated.ReviewReason
 	result.ReviewerEndpointID = evaluated.ReviewerEndpointID
@@ -653,6 +655,7 @@ func (aggregate *promptAuditChunkAggregate) absorb(chunkResult PromptAuditResult
 	if promptAuditDecisionSeverity(chunkResult.Decision) > promptAuditDecisionSeverity(aggregate.result.Decision) {
 		aggregate.result.Decision = chunkResult.Decision
 		aggregate.result.EndpointID = chunkResult.EndpointID
+		aggregate.result.EndpointModel = chunkResult.EndpointModel
 	}
 	// Model risk and configured action are independent: a disabled Unsafe
 	// category can be flagged, but must never become eligible for gray review.
@@ -661,6 +664,7 @@ func (aggregate *promptAuditChunkAggregate) absorb(chunkResult PromptAuditResult
 	}
 	if aggregate.result.EndpointID == "" {
 		aggregate.result.EndpointID = chunkResult.EndpointID
+		aggregate.result.EndpointModel = chunkResult.EndpointModel
 	}
 	for _, category := range chunkResult.Categories {
 		aggregate.categories[category] = struct{}{}
@@ -859,6 +863,7 @@ func callPromptAuditEndpoint(ctx context.Context, endpoint prompt_audit_setting.
 		return PromptAuditResult{}, err
 	}
 	result.EndpointID = endpoint.ID
+	result.EndpointModel = endpoint.Model
 	return result, nil
 }
 
@@ -1580,6 +1585,7 @@ func newPromptAuditRecord(c *gin.Context, request PromptAuditRequest, setting pr
 		audit.ContentSnapshot = append([]byte(nil), scanPayload...)
 		audit.WouldAction = "pending"
 	}
+	applyPromptAuditRequestContext(audit, c)
 	return audit, nil
 }
 
@@ -1600,6 +1606,7 @@ func persistPromptAuditDecision(c *gin.Context, request PromptAuditRequest, sett
 	audit.Action = result.ActualAction
 	audit.WouldAction = promptAuditActionForDecision(result.Decision)
 	audit.EndpointID = result.EndpointID
+	audit.EndpointModel = result.EndpointModel
 	audit.ReviewStatus, audit.ReviewDecision = result.ReviewStatus, result.ReviewDecision
 	audit.ReviewReason, audit.ReviewerEndpointID = result.ReviewReason, result.ReviewerEndpointID
 	audit.LatencyMS = result.LatencyMillis
@@ -1714,6 +1721,30 @@ func contextInt(c *gin.Context, key string) int {
 	return c.GetInt(key)
 }
 
+// applyPromptAuditRequestContext records who issued the audited request and the
+// client metadata that came with it. audit.UserID must already be assigned.
+func applyPromptAuditRequestContext(audit *model.PromptAudit, c *gin.Context) {
+	if audit == nil || c == nil {
+		return
+	}
+	// Snapshot the caller's name here, at write time, exactly as the usage and
+	// audit logs do: a later rename must not rewrite history.
+	if audit.UserID > 0 {
+		audit.Username, _ = model.GetUsernameById(audit.UserID, false)
+	}
+	if c.Request == nil {
+		return
+	}
+	audit.Ip = c.ClientIP()
+	audit.UserAgent = c.Request.UserAgent()
+	audit.Method = c.Request.Method
+	// The concrete path, without the query string: raw query strings can carry
+	// credentials and are never recorded.
+	audit.RequestPath = c.Request.URL.Path
+	audit.Origin = c.Request.Header.Get("Origin")
+	audit.Referer = c.Request.Header.Get("Referer")
+}
+
 func promptAuditErrorCode(err error) string {
 	var guardErr *promptAuditGuardError
 	if errors.As(err, &guardErr) && guardErr.code != "" {
@@ -1803,6 +1834,9 @@ func (result PromptAuditResult) auditMap() map[string]interface{} {
 	}
 	if result.EndpointID != "" {
 		audit["endpoint_id"] = result.EndpointID
+	}
+	if result.EndpointModel != "" {
+		audit["endpoint_model"] = result.EndpointModel
 	}
 	if result.Refusal != "" {
 		audit["refusal"] = result.Refusal
@@ -2105,7 +2139,7 @@ func processNextPromptAudit(ctx context.Context, workerID string) bool {
 	completion := model.PromptAuditCompletion{
 		Safety: result.Safety, Decision: result.Decision, WouldAction: promptAuditActionForDecision(result.Decision),
 		Categories: result.Categories, UnknownCategories: result.UnknownCategories,
-		EndpointID: result.EndpointID, ChunkCount: result.ChunkCount, LatencyMS: latency, Refusal: result.Refusal,
+		EndpointID: result.EndpointID, EndpointModel: result.EndpointModel, ChunkCount: result.ChunkCount, LatencyMS: latency, Refusal: result.Refusal,
 		ReviewStatus: result.ReviewStatus, ReviewDecision: result.ReviewDecision, ReviewCodes: result.ReviewCodes,
 		ReviewReason: result.ReviewReason, ReviewerEndpointID: result.ReviewerEndpointID,
 	}
