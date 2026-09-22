@@ -13,6 +13,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/claude"
 	"github.com/QuantumNous/new-api/relay/channel/gemini"
@@ -61,6 +62,22 @@ func TestProtocolPlanRequiresStructuredRequestForXAIResponses(t *testing.T) {
 	assert.True(t, protocolPlanRequiresStructuredRequest(xaiInfo, plan))
 	assert.False(t, protocolPlanRequiresStructuredRequest(openAIInfo, plan))
 	assert.False(t, protocolPlanRequiresStructuredRequest(xaiInfo, channelcompat.ProtocolPlan{UpstreamProtocol: channelcompat.ProtocolChat}))
+}
+
+func TestProtocolPlanConversionTierDrivesToolLossPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		plan     channelcompat.ProtocolPlan
+		expected types.ConversionLossPolicy
+	}{
+		{name: "default safe policy", plan: channelcompat.ProtocolPlan{Conversion: hostdto.ProtocolConversionSafe}, expected: types.ConversionLossPolicySafe},
+		{name: "lossless promise", plan: channelcompat.ProtocolPlan{Conversion: hostdto.ProtocolConversionLossless}, expected: types.ConversionLossPolicyStrict},
+		{name: "lossy opt-in", plan: channelcompat.ProtocolPlan{Conversion: hostdto.ProtocolConversionLossy}, expected: types.ConversionLossPolicyLossy},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.expected, conversionLossPolicyForPlan(tc.plan))
+		})
+	}
 }
 
 func TestProtocolBridgeRequestMatrixAppliesUpstreamModeAndConversion(t *testing.T) {

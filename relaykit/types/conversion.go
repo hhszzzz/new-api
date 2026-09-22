@@ -24,7 +24,12 @@ type ConversionDiagnostic struct {
 
 const (
 	ConversionLossPresentation = "presentation"
-	ConversionLossSemantic     = "semantic"
+	// ConversionLossTuning classifies a loss that only changes how much a hosted
+	// tool may run (for example a search-count cap) without widening what it can
+	// reach or changing the shape of its results. The safe policy still rejects
+	// it; only an explicit lossy opt-in tolerates it.
+	ConversionLossTuning   = "tuning"
+	ConversionLossSemantic = "semantic"
 )
 
 type ConversionLossPolicy string
@@ -37,6 +42,10 @@ const (
 	// ConversionLossPolicyStrict rejects every lossy conversion, including
 	// presentation-only metadata loss.
 	ConversionLossPolicyStrict ConversionLossPolicy = "strict"
+	// ConversionLossPolicyLossy rejects losses that change tool execution
+	// semantics while tolerating presentation and execution-tuning loss. Hosts
+	// select it only for a channel that explicitly opted into lossy conversion.
+	ConversionLossPolicyLossy ConversionLossPolicy = "lossy"
 	// ConversionLossPolicyAllow is retained for explicit legacy callers only.
 	// Host protocol policies never select this unrestricted mode.
 	ConversionLossPolicyAllow ConversionLossPolicy = "allow"
@@ -70,7 +79,7 @@ func RejectConversionLoss(policy ConversionLossPolicy, diagnostics []ConversionD
 	}
 	rejected := make([]ConversionDiagnostic, 0, len(diagnostics))
 	for _, diagnostic := range diagnostics {
-		if policy == ConversionLossPolicyStrict || diagnostic.Severity == ConversionDiagnosticError || diagnostic.LossClass != ConversionLossPresentation {
+		if conversionLossIsRejected(policy, diagnostic) {
 			rejected = append(rejected, diagnostic)
 		}
 	}
@@ -78,4 +87,20 @@ func RejectConversionLoss(policy ConversionLossPolicy, diagnostics []ConversionD
 		return nil
 	}
 	return &ConversionLossError{Diagnostics: rejected}
+}
+
+// conversionLossIsRejected reports whether the policy refuses a single loss.
+// The tiers nest: strict refuses every loss, safe refuses everything except
+// display metadata, and lossy refuses everything except display metadata and
+// execution tuning. Losses of an unclassified class stay fatal under lossy so a
+// newly introduced class is never tolerated by accident.
+func conversionLossIsRejected(policy ConversionLossPolicy, diagnostic ConversionDiagnostic) bool {
+	switch policy {
+	case ConversionLossPolicyStrict:
+		return true
+	case ConversionLossPolicyLossy:
+		return diagnostic.LossClass != ConversionLossPresentation && diagnostic.LossClass != ConversionLossTuning
+	default:
+		return diagnostic.Severity == ConversionDiagnosticError || diagnostic.LossClass != ConversionLossPresentation
+	}
 }

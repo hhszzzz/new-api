@@ -1075,7 +1075,7 @@ func openAIChatWebSearchDiagnostics(index int, search *WebSearch) []types.Conver
 		diagnostics = append(diagnostics, semanticLoss(path+".domains", "unsupported_domain_filter", "Chat Completions web_search_options cannot preserve domain access constraints"))
 	}
 	if search.MaxUses != nil {
-		diagnostics = append(diagnostics, semanticLoss(path+".max_uses", "unsupported_search_limit", "Chat Completions cannot preserve Claude max_uses"))
+		diagnostics = append(diagnostics, tuningLoss(path+".max_uses", "unsupported_search_limit", "Chat Completions cannot preserve Claude max_uses"))
 	}
 	if len(search.AllowedCallers) > 0 || search.ExternalWebAccess != nil {
 		diagnostics = append(diagnostics, semanticLoss(path, "unsupported_search_controls", "Chat Completions cannot preserve caller or external-access constraints"))
@@ -1093,7 +1093,7 @@ func openAIResponsesWebSearchDiagnostics(index int, search *WebSearch) []types.C
 	path := fmt.Sprintf("tools[%d]", index)
 	var diagnostics []types.ConversionDiagnostic
 	if search.MaxUses != nil {
-		diagnostics = append(diagnostics, semanticLoss(path+".max_uses", "unsupported_search_limit", "OpenAI Responses cannot preserve Claude max_uses"))
+		diagnostics = append(diagnostics, tuningLoss(path+".max_uses", "unsupported_search_limit", "OpenAI Responses cannot preserve Claude max_uses"))
 	}
 	if len(search.BlockedDomains) > 0 {
 		diagnostics = append(diagnostics, semanticLoss(path+".blocked_domains", "unsupported_blocked_domains", "OpenAI Responses web search supports allow filters but not Claude blocked_domains"))
@@ -1134,8 +1134,11 @@ func geminiWebSearchDiagnostics(index int, search *WebSearch) []types.Conversion
 		return nil
 	}
 	var diagnostics []types.ConversionDiagnostic
-	if len(search.AllowedDomains) > 0 || len(search.BlockedDomains) > 0 || search.ExternalWebAccess != nil || search.MaxUses != nil || len(search.AllowedCallers) > 0 {
-		diagnostics = append(diagnostics, semanticLoss(path, "unsupported_search_constraints", "Gemini Google Search cannot preserve source web-search access or execution constraints"))
+	if len(search.AllowedDomains) > 0 || len(search.BlockedDomains) > 0 || search.ExternalWebAccess != nil || len(search.AllowedCallers) > 0 {
+		diagnostics = append(diagnostics, semanticLoss(path, "unsupported_search_constraints", "Gemini Google Search cannot preserve source web-search access constraints"))
+	}
+	if search.MaxUses != nil {
+		diagnostics = append(diagnostics, tuningLoss(path+".max_uses", "unsupported_search_limit", "Gemini Google Search cannot preserve Claude max_uses"))
 	}
 	if search.Location != nil || search.SearchContextSize != "" || search.ResponseInclusion != "" || len(search.ReturnTokenBudget) > 0 {
 		diagnostics = append(diagnostics, presentationLoss(path, "unsupported_search_tuning", "Gemini Google Search cannot preserve source web-search location or result tuning"))
@@ -1342,6 +1345,10 @@ func semanticLoss(path string, code string, message string) types.ConversionDiag
 
 func presentationLoss(path string, code string, message string) types.ConversionDiagnostic {
 	return types.ConversionDiagnostic{Code: code, Path: path, Message: message, Severity: types.ConversionDiagnosticWarning, LossClass: types.ConversionLossPresentation}
+}
+
+func tuningLoss(path string, code string, message string) types.ConversionDiagnostic {
+	return types.ConversionDiagnostic{Code: code, Path: path, Message: message, Severity: types.ConversionDiagnosticWarning, LossClass: types.ConversionLossTuning}
 }
 
 func locationMap(location *ApproximateLocation) map[string]any {

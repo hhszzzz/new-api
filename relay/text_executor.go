@@ -90,10 +90,7 @@ func executeText(c *gin.Context, info *relaycommon.RelayInfo) *hosttypes.NewAPIE
 	if info.RelayMode == relayconstant.RelayModeCompletions && protocolPlanRequiresConversion(plan) {
 		return newConvertRequestFailedError(c, info, fmt.Errorf("legacy completions require their native operation"))
 	}
-	info.ConversionLossPolicy = types.ConversionLossPolicySafe
-	if plan.Conversion == hostdto.ProtocolConversionLossless {
-		info.ConversionLossPolicy = types.ConversionLossPolicyStrict
-	}
+	info.SetConversionLossPolicy(conversionLossPolicyForPlan(plan))
 	// The plan already decided whether best-effort directives (e.g. Messages
 	// context_management) may be dropped for this channel; mirror that decision
 	// into the execution-time conversion check. Setting it unconditionally keeps

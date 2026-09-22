@@ -73,12 +73,15 @@ export function hasProtocolFieldAdjustments(
   logType: number,
   other: LogOtherData | null
 ): boolean {
-  // Planned losses and unrelated warnings do not prove a field was adjusted.
+  // Planned losses and unrelated warnings do not prove a field was adjusted,
+  // but the drops a lossy channel tolerates do: display metadata and execution
+  // tuning both leave the outbound request different from what the client sent.
   return (
     logType === 2 &&
     getConversionDiagnostics(other).some(
       (item) =>
-        item.severity === 'warning' && item.loss_class === 'presentation'
+        item.severity === 'warning' &&
+        (item.loss_class === 'presentation' || item.loss_class === 'tuning')
     )
   )
 }

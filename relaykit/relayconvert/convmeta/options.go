@@ -26,8 +26,10 @@ type Options struct {
 	// OpenAI-compatible servers may reject the field.
 	PreserveChatReasoningContent bool
 	// ToolLossPolicy controls whether a cross-protocol conversion may omit or
-	// approximate built-in-tool semantics. The zero value is safe: unclassified
-	// and semantic losses reject the request before upstream dispatch.
+	// approximate built-in-tool semantics. The zero value is safe, which rejects
+	// unclassified and semantic losses before upstream dispatch. The lossy policy
+	// additionally tolerates execution-tuning loss for channels that opted into
+	// lossy conversion.
 	ToolLossPolicy types.ConversionLossPolicy
 	// AllowDirectiveDrop permits dropping best-effort server-side directives
 	// (Messages context_management) during request conversion. The host sets it

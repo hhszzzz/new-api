@@ -309,6 +309,34 @@ describe('usage-log model route component visibility', () => {
     ).not.toBeInTheDocument()
   })
 
+  test('marks a translation that dropped execution tuning with the warning icon', async () => {
+    renderModelColumn(
+      ROLE.ADMIN,
+      'all',
+      routedLogWithDiagnostics([
+        {
+          code: 'unsupported_search_limit',
+          severity: 'warning',
+          loss_class: 'tuning',
+          path: 'tools[0].max_uses',
+          message: 'Chat Completions cannot preserve Claude max_uses',
+        },
+      ])
+    )
+    const cell = screen.getByTestId('model-column')
+    const label = await within(cell).findByText('chat translation')
+    const badge = label.closest('[data-slot="status-badge"]')
+    const icon = cell.querySelector<HTMLElement>(
+      '[data-protocol-field-adjustment]'
+    )
+    expect(icon).not.toBeNull()
+    expect(badge).toContainElement(icon)
+    expect(icon).toHaveAttribute(
+      'title',
+      'Fields were adjusted during conversion'
+    )
+  })
+
   test.each([
     [ROLE.USER, 'all'],
     [ROLE.ADMIN, 'self'],

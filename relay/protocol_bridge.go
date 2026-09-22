@@ -9,6 +9,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/relay/channel"
 	claudechannel "github.com/QuantumNous/new-api/relay/channel/claude"
 	geminichannel "github.com/QuantumNous/new-api/relay/channel/gemini"
@@ -151,6 +152,22 @@ func protocolPlanRequiresStructuredRequest(info *relaycommon.RelayInfo, plan cha
 	return info != nil &&
 		plan.UpstreamProtocol == channelcompat.ProtocolResponses &&
 		info.ApiType == constant.APITypeXai
+}
+
+// conversionLossPolicyForPlan maps the conversion tier the channel committed to
+// onto the request-phase tool-loss policy. A channel that opted into lossy
+// conversion also accepts dropping execution tuning (for example a Claude
+// web_search max_uses cap the upstream cannot carry), while losses that change
+// what a tool may reach stay fatal.
+func conversionLossPolicyForPlan(plan channelcompat.ProtocolPlan) types.ConversionLossPolicy {
+	switch plan.Conversion {
+	case hostdto.ProtocolConversionLossless:
+		return types.ConversionLossPolicyStrict
+	case hostdto.ProtocolConversionLossy:
+		return types.ConversionLossPolicyLossy
+	default:
+		return types.ConversionLossPolicySafe
+	}
 }
 
 func protocolPlanUses(c *gin.Context, requestProtocol, upstreamProtocol channelcompat.Protocol) bool {

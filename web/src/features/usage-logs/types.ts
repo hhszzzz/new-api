@@ -352,7 +352,7 @@ export type ConversionDiagnostic = {
   path?: string
   message: string
   severity: 'warning' | 'error'
-  loss_class?: 'presentation' | 'semantic'
+  loss_class?: 'presentation' | 'tuning' | 'semantic'
   from?: string
   to?: string
 }

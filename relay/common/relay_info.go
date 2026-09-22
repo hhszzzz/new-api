@@ -1266,6 +1266,18 @@ func (info *RelayInfo) SetAllowDirectiveDrop(allowed bool) {
 	info.convOptions = nil
 }
 
+// SetConversionLossPolicy records the plan-derived request-phase tool-loss
+// policy and invalidates the cached converter options for the same reason as
+// SetAllowDirectiveDrop: preprocessing helpers may already have built that
+// snapshot before the protocol plan was selected.
+func (info *RelayInfo) SetConversionLossPolicy(policy types.ConversionLossPolicy) {
+	if info == nil || info.ConversionLossPolicy == policy {
+		return
+	}
+	info.ConversionLossPolicy = policy
+	info.convOptions = nil
+}
+
 func (info *RelayInfo) shouldPreserveChatReasoningContent() bool {
 	if info == nil {
 		return false
