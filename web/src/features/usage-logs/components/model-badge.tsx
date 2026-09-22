@@ -227,20 +227,20 @@ export function ResponseModelDetails(props: {
         <span className='text-muted-foreground whitespace-nowrap'>
           {t('Request Model')}
         </span>
-        <span className='min-w-0 max-w-80 font-mono [overflow-wrap:anywhere] break-words'>
+        <span className='max-w-80 min-w-0 font-mono [overflow-wrap:anywhere] break-words'>
           {props.observation.requested_model}
         </span>
         <span className='text-muted-foreground whitespace-nowrap'>
           {t('Upstream Model')}
         </span>
-        <span className='min-w-0 max-w-80 font-mono [overflow-wrap:anywhere] break-words'>
+        <span className='max-w-80 min-w-0 font-mono [overflow-wrap:anywhere] break-words'>
           {props.observation.upstream_model ||
             props.observation.requested_model}
         </span>
         <span className='text-muted-foreground whitespace-nowrap'>
           {t('Response Model')}
         </span>
-        <span className='min-w-0 max-w-80 font-mono [overflow-wrap:anywhere] break-words'>
+        <span className='max-w-80 min-w-0 font-mono [overflow-wrap:anywhere] break-words'>
           {props.observation.returned_model}
         </span>
       </div>

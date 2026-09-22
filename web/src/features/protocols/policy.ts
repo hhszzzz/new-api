@@ -10,7 +10,9 @@ export function hasProtocolOverrides(value: string | undefined): boolean {
   return policy === null || Object.keys(policy).length > 1
 }
 
-const conversion = z.enum(['native_only', 'lossless', 'safe', 'lossy']).optional()
+const conversion = z
+  .enum(['native_only', 'lossless', 'safe', 'lossy'])
+  .optional()
 const protocols = z
   .array(z.string().min(1))
   .refine((values) => new Set(values).size === values.length)
