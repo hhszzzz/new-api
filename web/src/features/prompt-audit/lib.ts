@@ -164,6 +164,19 @@ export function promptAuditEndpointUpdate(
   return update
 }
 
+const BYTES_PER_MB = 1024 * 1024
+
+// Display helpers for the two byte-valued output limits: the settings UI edits
+// them in whole megabytes. Both clamp at 1 MB so a persisted value always
+// satisfies the numeric ranges enforced in validatePromptAuditConfig() below.
+export function bytesToMB(bytes: number): number {
+  return Math.max(1, Math.round(bytes / BYTES_PER_MB))
+}
+
+export function mbToBytes(mb: number): number {
+  return Math.max(BYTES_PER_MB, Math.round(mb * BYTES_PER_MB))
+}
+
 export function validatePromptAuditConfig(
   config: PromptAuditConfigUpdate
 ): string | null {
