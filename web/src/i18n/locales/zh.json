@@ -2938,6 +2938,7 @@
     "Field Path": "字段路径",
     "Fields": "字段",
     "Fields to update": "要更新的字段",
+    "Fields were adjusted during conversion": "转换过程中有字段被调整",
     "File": "文件",
     "File could not be verified": "文件尚未校验",
     "File integrity verified": "文件校验通过",

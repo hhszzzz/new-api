@@ -40,6 +40,7 @@ import {
   isTimingLogType,
 } from '../lib/utils'
 import { ModelBadge, ResponseModelDetails } from './model-badge'
+import { ProtocolTranslationBadge } from './protocol-translation-badge'
 import { StreamTpsCell, TimingMetricsCell } from './timing-metrics-cell'
 import { useLogsViewScope, useUsageLogsContext } from './usage-logs-provider'
 
@@ -65,7 +66,7 @@ export function CommonLogMobileCard<TData>(props: {
 }) {
   const { t } = useTranslation()
   const context = useUsageLogsContext()
-  const { canViewModelRoute } = useLogsViewScope()
+  const { canViewModelRoute, isAdminView } = useLogsViewScope()
   const [selectedField, setSelectedField] = useState<FieldName | null>(null)
   const log = props.log
   const other = parseLogOther(log.other)
@@ -147,13 +148,18 @@ export function CommonLogMobileCard<TData>(props: {
     <div className='min-w-0 space-y-2.5 text-sm leading-5'>
       <div className='flex min-w-0 flex-wrap items-start gap-x-3 gap-y-2'>
         {fields.model.visible && (
-          <div className='min-w-0 flex-[1_1_10rem]'>
+          <div className='flex min-w-0 flex-[1_1_10rem] flex-col items-start gap-0.5'>
             <ModelBadge
               modelName={model.name}
               actualModel={model.actualModel}
               responseModel={model.responseModel}
               wrapText
               onInspect={() => setSelectedField('model')}
+            />
+            <ProtocolTranslationBadge
+              logType={log.type}
+              other={other}
+              isAdminView={isAdminView}
             />
           </div>
         )}

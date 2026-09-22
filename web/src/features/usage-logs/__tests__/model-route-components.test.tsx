@@ -138,6 +138,22 @@ interface RoutePresentationProps {
   log?: UsageLog
 }
 
+/** Routed log whose admin_info carries additional conversion diagnostics. */
+function routedLogWithDiagnostics(
+  diagnostics: Record<string, unknown>[]
+): UsageLog {
+  const other = JSON.parse(routedLog.other as string) as {
+    admin_info: Record<string, unknown>
+  }
+  return {
+    ...routedLog,
+    other: JSON.stringify({
+      ...other,
+      admin_info: { ...other.admin_info, conversion_diagnostics: diagnostics },
+    }),
+  }
+}
+
 function useRequestedScope(scope: LogsViewScope) {
   const permissions = useLogsViewScope()
   const setViewScope = permissions.setViewScope
@@ -249,6 +265,48 @@ describe('usage-log model route component visibility', () => {
     expect(badge?.parentElement).toHaveClass('flex-col', 'items-start')
     expect(badge?.previousElementSibling).toHaveTextContent(REQUESTED_MODEL)
     expect(cell).not.toHaveTextContent('→')
+  })
+
+  test('marks a translation that adjusted fields with an inline warning icon', async () => {
+    renderModelColumn(
+      ROLE.ADMIN,
+      'all',
+      routedLogWithDiagnostics([
+        {
+          code: 'omitted_presentation_metadata',
+          severity: 'warning',
+          loss_class: 'presentation',
+          path: 'metadata',
+          message: 'target protocol does not carry this display metadata',
+        },
+      ])
+    )
+    const cell = screen.getByTestId('model-column')
+    const label = await within(cell).findByText('chat translation')
+    const badge = label.closest('[data-slot="status-badge"]')
+    expect(badge).toHaveClass('text-info')
+    const icon = cell.querySelector<HTMLElement>(
+      '[data-protocol-field-adjustment]'
+    )
+    expect(icon).not.toBeNull()
+    expect(icon).toHaveClass('text-amber-600', 'dark:text-amber-400')
+    expect(badge).toContainElement(icon)
+    expect(badge?.lastElementChild).toBe(icon)
+    expect(icon).toHaveAttribute(
+      'title',
+      'Fields were adjusted during conversion'
+    )
+  })
+
+  test('keeps a translation without field adjustments unmarked', async () => {
+    renderModelColumn(ROLE.ADMIN, 'all')
+    const cell = screen.getByTestId('model-column')
+    const label = await within(cell).findByText('chat translation')
+    const badge = label.closest('[data-slot="status-badge"]')
+    expect(badge).toHaveClass('text-info')
+    expect(
+      cell.querySelector('[data-protocol-field-adjustment]')
+    ).not.toBeInTheDocument()
   })
 
   test.each([

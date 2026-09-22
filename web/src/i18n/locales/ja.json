@@ -2938,6 +2938,7 @@
     "Field Path": "フィールドパス",
     "Fields": "項目",
     "Fields to update": "更新する項目",
+    "Fields were adjusted during conversion": "変換時にフィールドが調整されました",
     "File": "ファイル",
     "File could not be verified": "ファイルを検証できませんでした",
     "File integrity verified": "ファイルの整合性を確認済み",

@@ -2938,6 +2938,7 @@
     "Field Path": "欄位路徑",
     "Fields": "欄位",
     "Fields to update": "要更新的欄位",
+    "Fields were adjusted during conversion": "轉換過程中有欄位被調整",
     "File": "檔案",
     "File could not be verified": "檔案尚未校驗",
     "File integrity verified": "檔案校驗通過",

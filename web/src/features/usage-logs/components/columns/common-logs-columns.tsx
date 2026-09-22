@@ -67,10 +67,6 @@ import {
 } from '../../lib/format'
 import { formatModelName } from '../../lib/model-route'
 import {
-  getProtocolTranslationTarget,
-  hasProtocolFieldAdjustments,
-} from '../../lib/protocol-conversion'
-import {
   isDisplayableLogType,
   isTimingLogType,
   getLogTypeConfig,
@@ -80,6 +76,7 @@ import type { LogOtherData } from '../../types'
 import { DetailsDialog } from '../dialogs/details-dialog'
 import { LogCostDisplay } from '../log-cost-display'
 import { ModelBadge } from '../model-badge'
+import { ProtocolTranslationBadge } from '../protocol-translation-badge'
 import { TimingMetricsCell, StreamTpsCell } from '../timing-metrics-cell'
 import { useUsageLogsContext } from '../usage-logs-provider'
 
@@ -782,7 +779,6 @@ export function useCommonLogsColumns(
       accessorKey: 'model_name',
       header: t('Model'),
       cell: function ModelCell({ row }) {
-        const { t } = useTranslation()
         const log = row.original
         if (!isDisplayableLogType(log.type)) return null
         const other = parseLogOther(log.other)
@@ -791,10 +787,6 @@ export function useCommonLogsColumns(
           other,
           canViewModelRoute
         )
-        const translationTarget = isAdminView
-          ? getProtocolTranslationTarget(log.type, other)
-          : null
-
         return (
           <div className='flex w-fit flex-col items-start gap-0.5'>
             <ModelBadge
@@ -802,22 +794,11 @@ export function useCommonLogsColumns(
               actualModel={modelInfo.actualModel}
               responseModel={modelInfo.responseModel}
             />
-            {translationTarget && (
-              <StatusBadge
-                label={t('{{protocol}} translation', {
-                  protocol: translationTarget,
-                })}
-                variant={
-                  hasProtocolFieldAdjustments(log.type, other)
-                    ? 'warning'
-                    : 'info'
-                }
-                type='text'
-                size='sm'
-                copyable={false}
-                className='h-3 text-[10px] leading-3'
-              />
-            )}
+            <ProtocolTranslationBadge
+              logType={log.type}
+              other={other}
+              isAdminView={isAdminView}
+            />
           </div>
         )
       },

@@ -142,6 +142,88 @@ it('shows model mismatch evidence when tapping the mobile model badge', async (c
   expect(within(dialog).getByText('unexpected-model')).toBeVisible()
 })
 
+function convertedLog(diagnostics?: Record<string, unknown>[]): UsageLog {
+  const other = JSON.parse(log.other as string) as Record<string, unknown>
+  return {
+    ...log,
+    other: JSON.stringify({
+      ...other,
+      request_conversion: ['responses', 'chat'],
+      admin_info: {
+        upstream_protocol: 'chat',
+        protocol_converter: 'responses_to_chat',
+        ...(diagnostics ? { conversion_diagnostics: diagnostics } : {}),
+      },
+    }),
+  }
+}
+
+/** Authenticate as a super admin and return the auth state to restore. */
+function setAdminRole() {
+  const originalAuth = useAuthStore.getState().auth
+  useAuthStore.setState({
+    auth: {
+      ...originalAuth,
+      user: { id: 1, username: 'root', role: ROLE.SUPER_ADMIN },
+    },
+  })
+  return originalAuth
+}
+
+it('shows the protocol translation below the mobile model badge', async (context) => {
+  const originalAuth = setAdminRole()
+  context.onTestFinished(() => useAuthStore.setState({ auth: originalAuth }))
+  renderLogs({ logs: [convertedLog()] })
+  const badge = (await screen.findByText('chat translation')).closest(
+    '[data-slot="status-badge"]'
+  )
+  expect(badge).toHaveClass('text-info')
+  expect(badge?.parentElement).toHaveClass('flex-col', 'items-start')
+  expect(badge?.previousElementSibling).toHaveTextContent(longName)
+  expect(badge?.querySelector('[data-protocol-field-adjustment]')).toBeNull()
+})
+
+it('marks a mobile translation that adjusted fields with the amber icon', async (context) => {
+  const originalAuth = setAdminRole()
+  context.onTestFinished(() => useAuthStore.setState({ auth: originalAuth }))
+  renderLogs({
+    logs: [
+      convertedLog([
+        {
+          code: 'omitted_presentation_metadata',
+          severity: 'warning',
+          loss_class: 'presentation',
+          path: 'metadata',
+          message: 'target protocol does not carry this display metadata',
+        },
+      ]),
+    ],
+  })
+  const badge = (await screen.findByText('chat translation')).closest(
+    '[data-slot="status-badge"]'
+  )
+  const icon = badge?.querySelector('[data-protocol-field-adjustment]')
+  expect(icon).toHaveAttribute(
+    'title',
+    'Fields were adjusted during conversion'
+  )
+  expect(badge?.lastElementChild).toBe(icon)
+})
+
+it('hides the mobile protocol translation outside the admin view', async (context) => {
+  const originalAuth = useAuthStore.getState().auth
+  context.onTestFinished(() => useAuthStore.setState({ auth: originalAuth }))
+  useAuthStore.setState({
+    auth: {
+      ...originalAuth,
+      user: { id: 2, username: 'member', role: ROLE.USER },
+    },
+  })
+  renderLogs({ admin: false, logs: [convertedLog()] })
+  expect(screen.getByText(longName)).toBeVisible()
+  expect(screen.queryByText('chat translation')).not.toBeInTheDocument()
+})
+
 it('opens long channel text on tap and copies the complete value', async () => {
   const user = userEvent.setup()
   const copy = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue()
@@ -207,9 +289,7 @@ it('opens the mobile response-model details when an unchanged model was observed
       },
     ],
   })
-  await user.click(
-    screen.getByRole('button', { name: `Model: ${longName}` })
-  )
+  await user.click(screen.getByRole('button', { name: `Model: ${longName}` }))
   const dialog = await screen.findByRole('dialog', { name: 'Model' })
   expect(within(dialog).getByText('Response Model')).toBeVisible()
   expect(within(dialog).getAllByText(longName)).toHaveLength(4)
