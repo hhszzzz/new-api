@@ -29,9 +29,20 @@ type accountPoolFakeManagement struct {
 	usageRequests     []map[string]interface{}
 	authStatus        string
 	authStatusMessage string
+	authType          string
 	failUsage         bool
 	usageStatus       int
 	usageBody         string
+	usageHeaders      map[string]interface{}
+	usageBodies       map[string]accountPoolFakeEnvelope
+}
+
+// accountPoolFakeEnvelope is the api-call response body the fake returns for one
+// upstream URL: status_code, body, and the headers cliproxyapi would have forwarded.
+type accountPoolFakeEnvelope struct {
+	status  int
+	body    string
+	headers map[string]interface{}
 }
 
 type accountPoolRoundTripFunc func(*http.Request) (*http.Response, error)
@@ -59,6 +70,7 @@ func (fake *accountPoolFakeManagement) handle(writer http.ResponseWriter, reques
 		fake.mu.Lock()
 		authStatus := fake.authStatus
 		authStatusMessage := fake.authStatusMessage
+		authType := fake.authType
 		fake.mu.Unlock()
 		idTokenPayload, err := common.Marshal(map[string]interface{}{
 			"https://api.openai.com/auth": map[string]interface{}{
@@ -69,14 +81,24 @@ func (fake *accountPoolFakeManagement) handle(writer http.ResponseWriter, reques
 		})
 		require.NoError(fake.t, err)
 		idToken := "header." + base64.RawURLEncoding.EncodeToString(idTokenPayload) + ".signature"
+		if authType == "" {
+			authType = "codex"
+		}
 		codexFile := map[string]interface{}{
 			"name":       "/private/codex-admin@example.com.json",
-			"type":       "codex",
+			"type":       authType,
 			"auth_index": "auth-index-secret",
 			"email":      "admin@example.com",
 			"metadata": map[string]interface{}{
 				"id_token": idToken,
 			},
+		}
+		switch authType {
+		case account_pool_setting.ProviderClaude:
+			codexFile["provider"] = account_pool_setting.ProviderClaude
+		case account_pool_setting.ProviderAntigravity:
+			codexFile["provider"] = account_pool_setting.ProviderAntigravity
+			codexFile["project_id"] = "project-secret"
 		}
 		if authStatus != "" {
 			codexFile["status"] = authStatus
@@ -96,6 +118,12 @@ func (fake *accountPoolFakeManagement) handle(writer http.ResponseWriter, reques
 		failUsage := fake.failUsage
 		usageStatus := fake.usageStatus
 		usageBody := fake.usageBody
+		usageHeaders := fake.usageHeaders
+		if envelope, ok := fake.usageBodies[payload["url"].(string)]; ok {
+			usageStatus = envelope.status
+			usageBody = envelope.body
+			usageHeaders = envelope.headers
+		}
 		fake.mu.Unlock()
 		if failUsage {
 			writeAccountPoolTestJSON(fake.t, writer, http.StatusOK, map[string]interface{}{
@@ -105,24 +133,31 @@ func (fake *accountPoolFakeManagement) handle(writer http.ResponseWriter, reques
 			})
 			return
 		}
-		if usageBody != "" {
-			writeAccountPoolTestJSON(fake.t, writer, http.StatusOK, map[string]interface{}{
-				"status_code": usageStatus,
-				"body":        usageBody,
-			})
-			return
+		if usageStatus == 0 {
+			usageStatus = http.StatusOK
 		}
-		writeAccountPoolTestJSON(fake.t, writer, http.StatusOK, map[string]interface{}{
-			"status_code": 200,
-			"header":      map[string]interface{}{"X-Upstream-Secret": []string{"secret-header"}},
-			"body": `{
+		// cliproxyapi answers the management request itself with 200 and reports the
+		// upstream outcome through status_code, header, and a JSON-string body.
+		envelope := map[string]interface{}{
+			"status_code": usageStatus,
+			"body":        usageBody,
+		}
+		if usageHeaders != nil {
+			envelope["header"] = usageHeaders
+		}
+		if usageBody == "" {
+			envelope["body"] = `{
 				"plan_type":"plus",
 				"rate_limit":{
 					"primary_window":{"used_percent":120,"limit_window_seconds":18000,"reset_at":1893456000},
 					"secondary_window":{"used_percent":"25.5","limit_window_seconds":604800,"reset_after_seconds":3600}
 				}
-			}`,
-		})
+			}`
+		}
+		if usageStatus == http.StatusOK && usageHeaders == nil {
+			envelope["header"] = map[string]interface{}{"X-Upstream-Secret": []string{"secret-header"}}
+		}
+		writeAccountPoolTestJSON(fake.t, writer, http.StatusOK, envelope)
 	default:
 		fake.t.Fatalf("unexpected management endpoint: %s %s", request.Method, request.URL.Path)
 	}
@@ -272,6 +307,129 @@ func TestAccountPoolManagerClassifiesAuthFileUsageLimitStatusAsLimited(t *testin
 	assert.Equal(t, "auth-index-secret", requests[0]["auth_index"])
 }
 
+// An exhausted window is not a broken credential: the pool must keep probing an
+// account that a previous call marked as errored, and it must still render the quota
+// the fresh probe reports.
+func TestAccountPoolManagerProbesClaudeAccountMarkedAsErrored(t *testing.T) {
+	now := time.Date(2026, 9, 22, 6, 30, 0, 0, time.UTC)
+	fake := newAccountPoolFakeManagement(t)
+	fake.authType = account_pool_setting.ProviderClaude
+	fake.authStatus = "error"
+	fake.authStatusMessage = `{"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account's rate limit. Please try again later."},"request_id":"req_011CfJ2pNBadn3NtrdF8kK8u"}`
+	fake.usageBodies = map[string]accountPoolFakeEnvelope{
+		accountPoolClaudeUsageURL: {
+			status: http.StatusOK,
+			body:   `{"five_hour":{"utilization":100.0,"resets_at":"2026-09-22T08:00:00.121552+00:00"},"seven_day":{"utilization":23.0,"resets_at":"2026-09-28T07:00:00.121579+00:00"}}`,
+		},
+		accountPoolClaudeProfileURL: {
+			status: http.StatusOK,
+			body:   `{"account":{"has_claude_pro":true},"organization":{"organization_type":"claude_pro"}}`,
+		},
+	}
+	manager := fake.manager(now)
+
+	snapshot, err := manager.get(context.Background())
+	require.NoError(t, err)
+	require.Len(t, snapshot.Accounts, 1)
+	account := snapshot.Accounts[0]
+	assert.Equal(t, "claude", account.Provider)
+	assert.Equal(t, "limited", account.Status)
+	assert.False(t, account.Stale)
+	assert.Equal(t, "pro", account.Plan)
+	require.Len(t, account.WindowGroups, 1)
+	require.NotNil(t, account.PrimaryWindow)
+	require.NotNil(t, account.PrimaryWindow.RemainingPercent)
+	assert.Equal(t, float64(0), *account.PrimaryWindow.RemainingPercent)
+	require.NotNil(t, account.PrimaryWindow.ResetAt)
+	assert.Equal(t, time.Date(2026, 9, 22, 8, 0, 0, 121552000, time.UTC), *account.PrimaryWindow.ResetAt)
+	require.NotNil(t, account.SecondaryWindow)
+	require.NotNil(t, account.SecondaryWindow.UsedPercent)
+	assert.Equal(t, float64(23), *account.SecondaryWindow.UsedPercent)
+	assert.Equal(t, AccountPoolSummary{Total: 1, Limited: 1}, snapshot.Summary)
+	assert.False(t, snapshot.Partial)
+	assert.Equal(t, "success", manager.syncStatus().LastSyncStatus)
+}
+
+// When the usage endpoint itself refuses the probe, the pool still shows when the
+// window resets instead of reporting the account as an error with no quota data.
+func TestAccountPoolManagerRendersRefusedClaudeUsageProbeAsLimitedWindow(t *testing.T) {
+	now := time.Date(2026, 9, 22, 6, 30, 0, 0, time.UTC)
+	refusal := `{"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account's rate limit. Please try again later."},"request_id":"req_011CfJ2pNBadn3NtrdF8kK8u"}`
+	fake := newAccountPoolFakeManagement(t)
+	fake.authType = account_pool_setting.ProviderClaude
+	fake.usageBodies = map[string]accountPoolFakeEnvelope{
+		accountPoolClaudeUsageURL: {
+			status: http.StatusTooManyRequests,
+			body:   refusal,
+			headers: map[string]interface{}{
+				"Anthropic-Ratelimit-Unified-5h-Reset": []string{"1790063400"},
+				"Retry-After":                          []string{"1200"},
+			},
+		},
+		accountPoolClaudeProfileURL: {
+			status: http.StatusOK,
+			body:   `{"account":{"has_claude_max":true}}`,
+		},
+	}
+	manager := fake.manager(now)
+
+	snapshot, err := manager.get(context.Background())
+	require.NoError(t, err)
+	require.Len(t, snapshot.Accounts, 1)
+	account := snapshot.Accounts[0]
+	assert.Equal(t, "limited", account.Status)
+	assert.False(t, account.Stale)
+	assert.Equal(t, "max", account.Plan)
+	require.Len(t, account.WindowGroups, 1)
+	require.NotNil(t, account.PrimaryWindow)
+	require.NotNil(t, account.PrimaryWindow.RemainingPercent)
+	assert.Equal(t, float64(0), *account.PrimaryWindow.RemainingPercent)
+	require.NotNil(t, account.PrimaryWindow.ResetAt)
+	assert.Equal(t, time.Unix(1790063400, 0).UTC(), *account.PrimaryWindow.ResetAt)
+	assert.Equal(t, AccountPoolSummary{Total: 1, Limited: 1}, snapshot.Summary)
+	assert.False(t, snapshot.Partial)
+	assert.Equal(t, "success", manager.syncStatus().LastSyncStatus)
+
+	encoded, err := common.Marshal(manager.buildView(snapshot, common.RoleRootUser, nil, false))
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), "req_011CfJ2pNBadn3NtrdF8kK8u")
+	assert.NotContains(t, string(encoded), "rate limit")
+}
+
+func TestAccountPoolManagerRendersRefusedAntigravityProbeAsLimitedWindow(t *testing.T) {
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	refusal := `{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"Quota exceeded for quota metric"}}`
+	fake := newAccountPoolFakeManagement(t)
+	fake.authType = account_pool_setting.ProviderAntigravity
+	fake.usageBodies = map[string]accountPoolFakeEnvelope{
+		accountPoolAntigravityQuotaDailyURL: {status: http.StatusTooManyRequests, body: refusal},
+		accountPoolAntigravityQuotaProdURL:  {status: http.StatusTooManyRequests, body: refusal},
+	}
+	manager := fake.manager(now)
+
+	snapshot, err := manager.get(context.Background())
+	require.NoError(t, err)
+	require.Len(t, snapshot.Accounts, 1)
+	account := snapshot.Accounts[0]
+	assert.Equal(t, "limited", account.Status)
+	assert.False(t, account.Stale)
+	require.Len(t, account.WindowGroups, 1)
+	require.NotNil(t, account.WindowGroups[0].PrimaryWindow)
+	require.NotNil(t, account.WindowGroups[0].PrimaryWindow.RemainingPercent)
+	assert.Equal(t, float64(0), *account.WindowGroups[0].PrimaryWindow.RemainingPercent)
+	assert.Equal(t, AccountPoolSummary{Total: 1, Limited: 1}, snapshot.Summary)
+	assert.Equal(t, "success", manager.syncStatus().LastSyncStatus)
+
+	fake.mu.Lock()
+	requests := append([]map[string]interface{}(nil), fake.usageRequests...)
+	fake.mu.Unlock()
+	// Both hosts are still consulted before the refusal is accepted, so a daily-host
+	// rate limit cannot mask a production host that would have answered.
+	require.Len(t, requests, 2)
+	assert.Equal(t, accountPoolAntigravityQuotaDailyURL, requests[0]["url"])
+	assert.Equal(t, accountPoolAntigravityQuotaProdURL, requests[1]["url"])
+}
+
 func TestAccountPoolUsageLimitPayloadClassification(t *testing.T) {
 	testCases := []struct {
 		name    string
@@ -283,13 +441,39 @@ func TestAccountPoolUsageLimitPayloadClassification(t *testing.T) {
 		{name: "top level type", payload: map[string]interface{}{"type": "usage_limit_reached"}, limited: true},
 		{name: "top level code", payload: map[string]interface{}{"code": "usage_limit_reached"}, limited: true},
 		{name: "string error", payload: map[string]interface{}{"error": "usage_limit_reached"}, limited: true},
-		{name: "transient rate limit", payload: map[string]interface{}{"error": map[string]interface{}{"type": "rate_limit_exceeded"}}, limited: false},
+		{name: "anthropic rate limit error", payload: map[string]interface{}{"type": "error", "error": map[string]interface{}{"type": "rate_limit_error", "message": "This request would exceed your account's rate limit."}}, limited: true},
+		{name: "google resource exhausted", payload: map[string]interface{}{"error": map[string]interface{}{"code": 429, "status": "RESOURCE_EXHAUSTED"}}, limited: true},
+		{name: "wrapped detail", payload: map[string]interface{}{"detail": map[string]interface{}{"type": "rate_limit_error"}}, limited: true},
+		{name: "upper case token", payload: map[string]interface{}{"error": map[string]interface{}{"type": "USAGE_LIMIT_REACHED"}}, limited: true},
 		{name: "message only", payload: map[string]interface{}{"error": map[string]interface{}{"message": "usage_limit_reached"}}, limited: false},
+		{name: "invalid credential", payload: map[string]interface{}{"type": "error", "error": map[string]interface{}{"type": "authentication_error", "message": "invalid api key"}}, limited: false},
+		{name: "unrelated body text", payload: map[string]interface{}{"error": map[string]interface{}{"message": "quota"}}, limited: false},
 	}
 
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			assert.Equal(t, testCase.limited, isAccountPoolUsageLimitPayload(testCase.payload))
+		})
+	}
+}
+
+func TestAccountPoolUsageLimitStatusMessageClassification(t *testing.T) {
+	testCases := []struct {
+		name    string
+		value   interface{}
+		limited bool
+	}{
+		{name: "raw anthropic envelope", value: `{"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account's rate limit."},"request_id":"req_1"}`, limited: true},
+		{name: "raw codex envelope", value: `{"error":{"type":"usage_limit_reached","message":"The usage limit has been reached"}}`, limited: true},
+		{name: "bare provider token", value: "usage_limit_reached", limited: true},
+		{name: "parsed envelope", value: map[string]interface{}{"error": map[string]interface{}{"code": 429, "status": "RESOURCE_EXHAUSTED"}}, limited: true},
+		{name: "empty message", value: "", limited: false},
+		{name: "credential text", value: "sk-ant-oat01-upstream-secret-value", limited: false},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			assert.Equal(t, testCase.limited, isAccountPoolUsageLimitValue(testCase.value))
 		})
 	}
 }

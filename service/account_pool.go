@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -61,6 +62,30 @@ var (
 		account_pool_setting.ProviderClaude:      "Claude",
 		account_pool_setting.ProviderAntigravity: "Antigravity",
 	}
+
+	// Upstreams report an exhausted account window through an error envelope whose
+	// wording differs per provider: Codex answers usage_limit_reached, Anthropic
+	// answers rate_limit_error, and Google answers RESOURCE_EXHAUSTED. All of them
+	// mean the same thing here, an exhausted quota window rather than a broken
+	// credential or a transient upstream failure.
+	accountPoolRateLimitErrorTypes = []string{
+		accountPoolUsageLimited,
+		"rate_limit_error",
+		"rate_limit_exceeded",
+		"resource_exhausted",
+	}
+
+	// Envelope headers that carry the reset of a window an upstream just refused,
+	// most specific first. The provider names its own header and Retry-After is the
+	// last resort every provider sets.
+	accountPoolResetHeaderNames = []string{
+		"Anthropic-Ratelimit-Unified-5h-Reset",
+		"Anthropic-Ratelimit-Unified-7d-Reset",
+		"Retry-After",
+	}
+
+	// Keys whose value may hold or nest an upstream error envelope.
+	accountPoolErrorScopeKeys = []string{"error", "detail", "usage", "quota"}
 )
 
 type AccountPoolWindow struct {
@@ -531,6 +556,10 @@ func (manager *accountPoolManager) fetchRound(ctx context.Context, config accoun
 
 	for quota := range resultChannel {
 		if errors.Is(quota.err, errAccountPoolUsageLimited) {
+			// A refusal reports no usage numbers, so the window is synthesized from the
+			// refusal itself rather than left empty; an empty window is exactly the state
+			// where the pool stops showing quota data.
+			applyAccountPoolQuotaLimited(&result.accounts[quota.index], quota.payload, now)
 			result.accounts[quota.index].Status = "limited"
 			result.accounts[quota.index].UpdatedAt = now
 			result.accounts[quota.index].Stale = false
@@ -666,8 +695,9 @@ func (manager *accountPoolManager) postAccountPoolAPICall(ctx context.Context, c
 	}
 
 	var apiResponse struct {
-		StatusCode int         `json:"status_code"`
-		Body       interface{} `json:"body"`
+		StatusCode int                    `json:"status_code"`
+		Header     map[string]interface{} `json:"header"`
+		Body       interface{}            `json:"body"`
 	}
 	if err := decodeAccountPoolJSON(response.Body, &apiResponse); err != nil {
 		return nil, err
@@ -677,6 +707,14 @@ func (manager *accountPoolManager) postAccountPoolAPICall(ctx context.Context, c
 		return nil, err
 	}
 	if isAccountPoolUsageLimitPayload(payload) {
+		// A refusal body names the exhausted window but rarely its reset, and the
+		// response headers are the only other reset evidence the envelope carries.
+		// Recording it here keeps the reset with the payload the caller renders.
+		if accountPoolResetAt(payload, manager.now()) == nil {
+			if resetAt := accountPoolEnvelopeReset(apiResponse.Header, manager.now()); resetAt != nil {
+				payload["resets_at"] = resetAt.Format(time.RFC3339Nano)
+			}
+		}
 		return payload, errAccountPoolUsageLimited
 	}
 	if apiResponse.StatusCode < http.StatusOK || apiResponse.StatusCode >= http.StatusMultipleChoices {
@@ -690,27 +728,36 @@ func (manager *accountPoolManager) fetchClaudeUsage(
 	config accountPoolRuntimeConfig,
 	authIndex string,
 ) (map[string]interface{}, error) {
-	usagePayload, err := manager.callAccountPoolAPI(ctx, config, authIndex, http.MethodGet, accountPoolClaudeUsageURL, map[string]string{
+	usagePayload, usageErr := manager.callAccountPoolAPI(ctx, config, authIndex, http.MethodGet, accountPoolClaudeUsageURL, map[string]string{
 		"Authorization":  "Bearer $TOKEN$",
 		"Accept":         "application/json",
 		"Content-Type":   "application/json",
 		"anthropic-beta": accountPoolClaudeBetaHeader,
 	}, nil)
-	if err != nil {
-		return nil, err
-	}
-	profilePayload, err := manager.callAccountPoolAPI(ctx, config, authIndex, http.MethodGet, accountPoolClaudeProfileURL, map[string]string{
+	limited := errors.Is(usageErr, errAccountPoolUsageLimited)
+	// A refused usage probe does not mean a broken credential: the profile endpoint
+	// keeps answering and it carries the plan, so both probes stay independent and
+	// only a round without usable data counts as a failure.
+	profilePayload, profileErr := manager.callAccountPoolAPI(ctx, config, authIndex, http.MethodGet, accountPoolClaudeProfileURL, map[string]string{
 		"Authorization": "Bearer $TOKEN$",
 		"Accept":        "application/json",
 	}, nil)
-	if err != nil {
-		return nil, err
+	if usageErr == nil && profileErr == nil {
+		return map[string]interface{}{
+			"kind":    "claude",
+			"usage":   usagePayload,
+			"profile": profilePayload,
+		}, nil
 	}
-	return map[string]interface{}{
-		"kind":    "claude",
-		"usage":   usagePayload,
-		"profile": profilePayload,
-	}, nil
+	if limited {
+		if profileErr == nil {
+			// The plan does not depend on the refused window, so a profile that
+			// answered is still recorded rather than left to the auth file.
+			usagePayload["profile"] = profilePayload
+		}
+		return usagePayload, errAccountPoolUsageLimited
+	}
+	return nil, ErrAccountPoolUnavailable
 }
 
 func (manager *accountPoolManager) fetchAntigravityQuota(
@@ -727,21 +774,28 @@ func (manager *accountPoolManager) fetchAntigravityQuota(
 		"Content-Type":  "application/json",
 		"User-Agent":    accountPoolAntigravityUserAgent,
 	}
+	// The daily and the production host serve the same account and either may be the
+	// one that reports the exhausted window, so a refusal is remembered while the
+	// cascade still tries the remaining host.
 	var quotaPayload map[string]interface{}
-	var quotaErr error
+	var limitedPayload map[string]interface{}
 	for _, quotaURL := range accountPoolAntigravityQuotaURLs {
-		quotaPayload, quotaErr = manager.callAccountPoolAPI(ctx, config, authIndex, http.MethodPost, quotaURL, quotaHeaders, map[string]interface{}{
+		attemptPayload, attemptErr := manager.callAccountPoolAPI(ctx, config, authIndex, http.MethodPost, quotaURL, quotaHeaders, map[string]interface{}{
 			"project": projectID,
 		})
-		if quotaErr == nil {
+		if attemptErr == nil {
+			quotaPayload, limitedPayload = attemptPayload, nil
 			break
 		}
-		if errors.Is(quotaErr, errAccountPoolUsageLimited) {
-			return nil, quotaErr
+		if limitedPayload == nil && errors.Is(attemptErr, errAccountPoolUsageLimited) {
+			limitedPayload = attemptPayload
 		}
 	}
-	if quotaErr != nil {
-		return nil, quotaErr
+	if quotaPayload == nil {
+		if limitedPayload != nil {
+			return limitedPayload, errAccountPoolUsageLimited
+		}
+		return nil, ErrAccountPoolUnavailable
 	}
 	assistPayload, err := manager.callAccountPoolAPI(ctx, config, authIndex, http.MethodPost, accountPoolAntigravityAssistURL, quotaHeaders, map[string]interface{}{
 		"metadata": map[string]interface{}{"ideType": "ANTIGRAVITY"},
@@ -774,6 +828,11 @@ func (manager *accountPoolManager) fetchCodexUsage(
 		headers["Chatgpt-Account-Id"] = accountID
 	}
 	payload, err := manager.callAccountPoolAPI(ctx, config, authIndex, http.MethodGet, accountPoolCodexUsageURL, headers, nil)
+	if errors.Is(err, errAccountPoolUsageLimited) {
+		// Unlike Anthropic and Google, Codex names the reset in the refusal body
+		// itself, so the payload travels with the limit instead of being dropped.
+		return payload, errAccountPoolUsageLimited
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -852,22 +911,112 @@ func normalizeAccountPoolPayload(body interface{}) (map[string]interface{}, erro
 }
 
 func isAccountPoolUsageLimitPayload(payload map[string]interface{}) bool {
-	if strings.EqualFold(firstAccountPoolString(payload, "type", "code"), accountPoolUsageLimited) {
-		return true
+	for _, scope := range accountPoolErrorScopes(payload) {
+		if accountPoolRateLimitType(firstAccountPoolString(scope, "type", "code", "status")) {
+			return true
+		}
+		if errorText, ok := scope["error"].(string); ok && accountPoolRateLimitType(errorText) {
+			return true
+		}
 	}
-	errorValue, exists := payload["error"]
-	if !exists {
-		return false
-	}
-	if errorText, ok := errorValue.(string); ok {
-		return strings.EqualFold(strings.TrimSpace(errorText), accountPoolUsageLimited)
-	}
-	errorPayload, ok := errorValue.(map[string]interface{})
-	return ok && strings.EqualFold(firstAccountPoolString(errorPayload, "type", "code"), accountPoolUsageLimited)
+	return false
 }
 
+// accountPoolEnvelopeReset reads the reset a refusal header names, in the forms the
+// providers use. A relative header is interpreted against now, so Retry-After works
+// whether cliproxyapi forwards it as seconds or as an HTTP date.
+func accountPoolEnvelopeReset(header map[string]interface{}, now time.Time) *time.Time {
+	for _, name := range accountPoolResetHeaderNames {
+		for _, value := range accountPoolHeaderValues(header, name) {
+			if resetAt := parseAccountPoolTime(value, now, false); resetAt != nil {
+				return resetAt
+			}
+			// Only Retry-After is a relative age; a reset header is always absolute.
+			if !strings.EqualFold(name, "Retry-After") {
+				continue
+			}
+			if parsed, err := http.ParseTime(strings.TrimSpace(value)); err == nil {
+				if resetAt := validAccountPoolTime(parsed.UTC()); resetAt != nil {
+					return resetAt
+				}
+			}
+			if seconds, ok := accountPoolNumber(value); ok && seconds > 0 {
+				resetAt := now.Add(time.Duration(seconds * float64(time.Second)))
+				if valid := validAccountPoolTime(resetAt); valid != nil {
+					return valid
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// accountPoolHeaderValues resolves one response header to its values, case-insensitively,
+// so the lookup does not depend on the casing cliproxyapi preserved.
+func accountPoolHeaderValues(header map[string]interface{}, name string) []string {
+	for key, value := range header {
+		if !strings.EqualFold(key, name) {
+			continue
+		}
+		return accountPoolHeaderStrings(value)
+	}
+	return nil
+}
+
+func accountPoolHeaderStrings(value interface{}) []string {
+	switch typed := value.(type) {
+	case string:
+		return []string{typed}
+	case []interface{}:
+		values := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if text, ok := item.(string); ok {
+				values = append(values, text)
+			}
+		}
+		return values
+	default:
+		return nil
+	}
+}
+
+// accountPoolErrorScopes returns the payload itself plus the wrappers that hold or nest
+// an error envelope. Providers nest the envelope under "error" or "detail", and the
+// per-provider fetcher adds a "usage" or "quota" wrapper while keeping the refusal at
+// the top level, so every one of them is inspected.
+func accountPoolErrorScopes(payload map[string]interface{}) []map[string]interface{} {
+	scopes := make([]map[string]interface{}, 0, 3)
+	scopes = append(scopes, payload)
+	for _, key := range accountPoolErrorScopeKeys {
+		if nested, ok := payload[key].(map[string]interface{}); ok {
+			scopes = append(scopes, nested)
+		}
+	}
+	return scopes
+}
+
+// accountPoolResetAt returns the first reset named by the payload or any scope that
+// holds or nests it.
+func accountPoolResetAt(payload map[string]interface{}, now time.Time) *time.Time {
+	for _, scope := range accountPoolErrorScopes(payload) {
+		if resetAt := parseAccountPoolTime(firstAccountPoolValue(scope, "resets_at", "resetsAt", "reset_time", "resetTime"), now, false); resetAt != nil {
+			return resetAt
+		}
+	}
+	return nil
+}
+
+// accountPoolRateLimitType reports whether a provider error token names an exhausted
+// quota window. The comparison is an exact match against the known error types, so
+// unrelated text such as a returned credential can never be classified as a limit.
+func accountPoolRateLimitType(value string) bool {
+	return slices.Contains(accountPoolRateLimitErrorTypes, strings.ToLower(strings.TrimSpace(value)))
+}
+
+// isAccountPoolUsageLimitValue classifies a credential's recorded status message, which
+// cliproxyapi stores either as the raw error envelope or as the bare provider error type.
 func isAccountPoolUsageLimitValue(value interface{}) bool {
-	if text, ok := value.(string); ok && strings.EqualFold(strings.TrimSpace(text), accountPoolUsageLimited) {
+	if text, ok := value.(string); ok && accountPoolRateLimitType(text) {
 		return true
 	}
 	payload, err := normalizeAccountPoolPayload(value)
@@ -946,21 +1095,20 @@ func buildAccountPoolAccount(file map[string]interface{}, provider string, idSec
 		account.Status = "disabled"
 		return account, "", "", "", false
 	}
-	statusMessage := firstAccountPoolValue(file, "status_message", "statusMessage")
-	usageLimited := (status == "error" || status == "unavailable" || unavailable) && isAccountPoolUsageLimitValue(statusMessage)
-	if usageLimited {
-		account.Status = "limited"
+	if authIndex == "" {
+		account.Status = "error"
+		return account, "", "", "", false
 	}
-	if !usageLimited && unavailable {
+	// A credential the upstream last refused is still probeable: the refusal is
+	// usually an exhausted window that the quota endpoint reports accurately, so the
+	// probe decides the status. Only credentials the operator took out of rotation
+	// are skipped without one.
+	if unavailable && !isAccountPoolUsageLimitValue(firstAccountPoolValue(file, "status_message", "statusMessage")) {
 		account.Status = "unavailable"
 		return account, "", "", "", false
 	}
-	if !usageLimited && (status == "disabled" || status == "error" || status == "unavailable") {
-		account.Status = status
-		return account, "", "", "", false
-	}
-	if authIndex == "" {
-		account.Status = "error"
+	if status == "disabled" {
+		account.Status = "disabled"
 		return account, "", "", "", false
 	}
 	projectID := ""
@@ -1011,6 +1159,39 @@ func applyCodexUsagePayload(account *accountPoolAccount, payload map[string]any,
 		return false, ErrAccountPoolUnavailable
 	}
 	return limited, nil
+}
+
+// applyAccountPoolQuotaLimited records the window of an account whose probe the
+// upstream refused. A refusal reports no usage numbers, so the window states what the
+// refusal itself says: the account is fully used until the reset it names, if it names
+// one. Without this the account would fall back to the last known window or to none,
+// which is exactly the state where the pool stops showing quota data.
+func applyAccountPoolQuotaLimited(account *accountPoolAccount, refusal map[string]interface{}, now time.Time) {
+	used := float64(100)
+	remaining := float64(0)
+	window := AccountPoolWindow{UsedPercent: &used, RemainingPercent: &remaining}
+	if resetAt := accountPoolResetAt(refusal, now); resetAt != nil {
+		window.ResetAt = resetAt
+	}
+	account.PrimaryWindow = &window
+	account.SecondaryWindow = nil
+	account.WindowGroups = []AccountPoolWindowGroup{{PrimaryWindow: &window}}
+	applyAccountPoolRefusalPlan(account, refusal)
+}
+
+// applyAccountPoolRefusalPlan keeps the plan a refused probe still managed to read: a
+// refusal is scoped to the exhausted window, and the plan endpoints answer regardless.
+func applyAccountPoolRefusalPlan(account *accountPoolAccount, payload map[string]interface{}) {
+	switch account.Provider {
+	case account_pool_setting.ProviderClaude:
+		if profile := firstAccountPoolMap(payload, "profile"); profile != nil {
+			account.Plan = accountPoolClaudePlan(profile)
+		}
+	case account_pool_setting.ProviderAntigravity:
+		if assist := firstAccountPoolMap(payload, "code_assist"); assist != nil {
+			account.Plan = accountPoolAntigravityPlan(assist)
+		}
+	}
 }
 
 // applyAccountPoolUsagePayload dispatches a successful api-call payload to the
