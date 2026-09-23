@@ -54,6 +54,21 @@ func TestPromptAuditRequestKindCoversSupportedTextProtocols(t *testing.T) {
 	}
 }
 
+// The token counter is a client utility that generates nothing: it is left out
+// of the audit gate instead of being inspected — and, since blocking inspection
+// is fail-closed, failed — next to the request whose text it counts.
+func TestPromptAuditLeavesTokenCountingToTheGeneratingRequest(t *testing.T) {
+	format, task, supported := promptAuditRequestKind("/v1/messages/count_tokens")
+	assert.False(t, supported)
+	assert.False(t, task)
+	assert.Empty(t, format)
+	// The generation path the counter is a prefix of stays inspected.
+	format, task, supported = promptAuditRequestKind("/v1/messages")
+	assert.True(t, supported)
+	assert.False(t, task)
+	assert.Equal(t, string(types.RelayFormatClaude), string(format))
+}
+
 func TestPromptAuditSensitiveWordsRunBeforeGuardAndChannelSelection(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	previousDB := model.DB

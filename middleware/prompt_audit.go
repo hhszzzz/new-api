@@ -153,6 +153,15 @@ func promptAuditRequestKind(path string) (types.RelayFormat, bool, bool) {
 		return types.RelayFormatTask, true, true
 	case strings.HasPrefix(path, "/pg/chat/completions"):
 		return types.RelayFormatOpenAI, false, true
+	// Anthropic's token counter answers with a number and generates nothing, so
+	// inspecting it protects nothing: whatever text it counts is submitted to
+	// the model — and inspected — when the request that generates from it
+	// arrives. It is also the one call a client makes on every step, which made
+	// the audit node's own rate limiting the caller's problem: a burst of counts
+	// hit the node's limit and each count came back a 503. The path is matched
+	// before the /v1/messages case it is otherwise a prefix of.
+	case strings.HasPrefix(path, "/v1/messages/count_tokens"):
+		return types.RelayFormat(""), false, false
 	case strings.HasPrefix(path, "/v1/messages"):
 		return types.RelayFormatClaude, false, true
 	case strings.HasPrefix(path, "/v1/responses/compact"):
