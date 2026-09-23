@@ -751,6 +751,20 @@ func TestInspectPromptBlockingSnapshotNarrowsToLatestTurn(t *testing.T) {
 	require.Nil(t, apiErr)
 	assert.False(t, result.Blocked)
 
+	// The switch governs both detectors. With it off the wordlist widens with the
+	// model, so the same older turn reaches it and the request is blocked.
+	widened := configured
+	widened.BlockingLatestTurnOnly = false
+	widened.ConfigVersion = "narrow-blocking-v1-widened"
+	widened.PublishConfig()
+
+	widenedResult, widenedErr := InspectPrompt(c, multiTurnCleanLatest)
+	require.NotNil(t, widenedErr)
+	assert.True(t, widenedResult.Blocked)
+	assert.Equal(t, "wordlist", widenedResult.InspectionType)
+	require.NotNil(t, widenedResult.Wordlist)
+	assert.Equal(t, dto.PromptScopeUser, widenedResult.Wordlist.Scope)
+
 	// Multi-turn conversation where the latest user message contains new_forbidden_word
 	multiTurnBadLatest := PromptAuditRequest{
 		Snapshot: dto.PromptAuditSnapshot{Segments: []dto.PromptAuditSegment{

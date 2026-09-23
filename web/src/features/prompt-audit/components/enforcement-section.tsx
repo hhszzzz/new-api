@@ -148,7 +148,7 @@ export function EnforcementSection({
           }
           label={t('Blocking scans the latest turn only')}
           description={t(
-            'In blocking mode, inspect the latest user turn, preceding assistant turn, and current tool activity. Other enabled sources are still inspected. Turn this off to include older conversation turns.'
+            'In blocking mode, inspect the latest user turn, the preceding assistant turn, and the newest tool round. This scope applies to wordlists and model audit alike. Other enabled sources are still inspected. Turn this off to include older conversation turns.'
           )}
         />
         <SettingsSwitchField

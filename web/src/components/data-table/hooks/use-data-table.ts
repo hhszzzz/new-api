@@ -45,6 +45,7 @@ import { isDataTablePageSize } from '../page-size'
 type DataTableFeatureOptions<TData> = Pick<
   TableOptions<TData>,
   | 'enableRowSelection'
+  | 'getRowCanExpand'
   | 'getRowId'
   | 'getSubRows'
   | 'globalFilterFn'
@@ -614,6 +615,9 @@ export function useDataTable<TData>(options: UseDataTableOptions<TData>) {
     enableMultiSort: options.enableMultiSort ?? !manualSorting,
     getRowId: options.getRowId,
     getSubRows: options.getSubRows,
+    // A row whose children are fetched when it is opened has nothing to read
+    // that from, so it says so itself.
+    getRowCanExpand: options.getRowCanExpand,
     globalFilterFn: options.globalFilterFn,
     autoResetPageIndex: options.autoResetPageIndex,
     manualFiltering,

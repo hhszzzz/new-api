@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { ColumnDef } from '@tanstack/react-table'
-import { Eye } from 'lucide-react'
+import { ChevronDown, ChevronRight, Eye, Loader2 } from 'lucide-react'
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -25,9 +25,14 @@ import { TruncatedCell } from '@/components/data-table'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
-import dayjs from '@/lib/dayjs'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
+import { formatTimestampToDate } from '@/lib/format'
 
-import { getPromptAuditProtocolName } from '../lib'
+import { getPromptAuditProtocolName, isMergedPromptAuditRow } from '../lib'
 import type { PromptAuditEvent } from '../types'
 
 function decisionBadgeVariant(decision: string) {
@@ -44,12 +49,45 @@ function statusBadgeVariant(status: string) {
   return 'outline'
 }
 
+/** The chevron of a merged row, spinning while its requests are being fetched. */
+function expandIcon(loading: boolean, expanded: boolean) {
+  if (loading) return <Loader2 className='animate-spin' />
+  return expanded ? <ChevronDown /> : <ChevronRight />
+}
+
+/**
+ * The repeat summary of a row the collapsed listing actually merged. A group of
+ * one is just a request: expanding it would show the very row that is already
+ * there, so it keeps reading like any other row.
+ */
+function mergedRepeat(event: PromptAuditEvent) {
+  return isMergedPromptAuditRow(event) ? event.repeat : undefined
+}
+
+/**
+ * A timestamp split into its day and its clock reading. A merged row names the
+ * day once and then shows both ends of its span, so the two halves are needed
+ * apart: a span that stayed within one day reads as a pair of clock readings,
+ * and only a span that crossed midnight repeats the day it ended on, which a
+ * bare clock reading would leave ambiguous.
+ */
+function timestampParts(timestamp?: number) {
+  const [date = '-', time = ''] = formatTimestampToDate(timestamp).split(' ')
+  return { date, time }
+}
+
 export function usePromptAuditColumns(options: {
   canDelete: boolean
   onOpen: (eventID: number) => void
+  /** The listing merges requests that submitted the same text. */
+  collapsed?: boolean
+  /** Collapsed rows whose requests are still being fetched. */
+  loadingGroupIDs?: Set<number>
 }): ColumnDef<PromptAuditEvent>[] {
   const { t } = useTranslation()
   const { canDelete, onOpen } = options
+  const collapsed = options.collapsed ?? false
+  const loadingGroupIDs = options.loadingGroupIDs
 
   return useMemo(() => {
     const columns: ColumnDef<PromptAuditEvent>[] = []
@@ -68,13 +106,16 @@ export function usePromptAuditColumns(options: {
             aria-label={t('Select current page')}
           />
         ),
-        cell: ({ row }) => (
-          <Checkbox
-            checked={row.getIsSelected()}
-            onCheckedChange={(value) => row.toggleSelected(Boolean(value))}
-            aria-label={t('Select audit record')}
-          />
-        ),
+        cell: ({ row }) =>
+          // A group's child request is not a row the operator deletes as part of
+          // a batch, so it carries no checkbox.
+          row.getCanSelect() ? (
+            <Checkbox
+              checked={row.getIsSelected()}
+              onCheckedChange={(value) => row.toggleSelected(Boolean(value))}
+              aria-label={t('Select audit record')}
+            />
+          ) : null,
         meta: { mobileHidden: true },
       })
     }
@@ -84,11 +125,53 @@ export function usePromptAuditColumns(options: {
         accessorKey: 'created_at',
         header: t('Time'),
         size: 150,
-        cell: ({ row }) => (
-          <span className='font-mono text-xs tabular-nums'>
-            {dayjs.unix(row.original.created_at).format('YYYY-MM-DD HH:mm:ss')}
-          </span>
-        ),
+        cell: ({ row }) => {
+          const event = row.original
+          const repeat = mergedRepeat(event)
+          const first = timestampParts(repeat?.first_at)
+          const last = timestampParts(repeat?.last_at)
+          return (
+            <div className='font-mono text-xs tabular-nums'>
+              {/* A request the group holds is drawn as one of a run: the row
+                  anchors a rule that drops through this column, and the
+                  request's own timestamp sits on it as a dot. Both marks stay
+                  hidden until a table row is there to hold them (the records
+                  table turns them on for the rows it nests), because a card has
+                  no row for the rule to cross. */}
+              {row.depth > 0 && (
+                <span
+                  aria-hidden='true'
+                  className='prompt-audit-timeline bg-muted-foreground/50 absolute top-0 -bottom-px hidden w-px'
+                >
+                  <span className='bg-muted-foreground/60 absolute top-1/2 -left-[2.5px] size-1.5 -translate-y-1/2 rounded-full' />
+                </span>
+              )}
+              <span className='prompt-audit-timeline-text flex items-center gap-1.5'>
+                <span>
+                  {repeat
+                    ? first.date
+                    : formatTimestampToDate(event.created_at)}
+                </span>
+              </span>
+              {/* A merged row stands for requests spread over time: one day, and
+                  both ends of the span ruled apart on the line below. */}
+              {repeat && (
+                <span className='flex items-center gap-1.5'>
+                  <span>{first.time}</span>
+                  <span
+                    aria-hidden='true'
+                    className='bg-muted-foreground/45 h-px w-3'
+                  />
+                  <span>
+                    {last.date === first.date
+                      ? last.time
+                      : `${last.date} ${last.time}`}
+                  </span>
+                </span>
+              )}
+            </div>
+          )
+        },
         meta: { label: t('Time'), mobileOrder: 3 },
       },
       {
@@ -97,9 +180,76 @@ export function usePromptAuditColumns(options: {
         size: 190,
         cell: ({ row }) => {
           const event = row.original
+          const repeat = mergedRepeat(event)
+          const isExpanded = row.getIsExpanded()
+          // A merged row stands for several requests the audit node read as the
+          // same text, so the count says what the whole group decided — a group
+          // can hold a block, an unavailable retry, and an allow.
+          const repeatSummary = repeat
+            ? t('{{count}} requests submitted the same text', {
+                count: repeat.count,
+              })
+            : ''
+          const isGroupLoading = loadingGroupIDs?.has(event.id) === true
           return (
             <div className='min-w-0'>
-              <div className='flex flex-wrap gap-1'>
+              <div className='flex flex-wrap items-center gap-1'>
+                {repeat && (
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <Badge
+                          variant='outline'
+                          className='cursor-help tabular-nums'
+                          role='img'
+                          aria-label={repeatSummary}
+                          tabIndex={0}
+                        >
+                          ×{repeat.count}
+                        </Badge>
+                      }
+                    />
+                    <TooltipContent>
+                      {/* The tooltip lays its children out in a row, so the text
+                          and the table of values are wrapped in one block: given
+                          to the flex row separately they were squeezed until the
+                          timestamps broke in half. */}
+                      <div className='space-y-1.5'>
+                        <p>{repeatSummary}</p>
+                        <dl className='grid grid-cols-[auto_auto] justify-start gap-x-3 gap-y-0.5'>
+                          <dt className='text-muted-foreground'>
+                            {t('Start')}
+                          </dt>
+                          <dd className='font-mono whitespace-nowrap tabular-nums'>
+                            {formatTimestampToDate(repeat.first_at)}
+                          </dd>
+                          <dt className='text-muted-foreground'>{t('End')}</dt>
+                          <dd className='font-mono whitespace-nowrap tabular-nums'>
+                            {formatTimestampToDate(repeat.last_at)}
+                          </dd>
+                          {repeat.blocks > 0 && (
+                            <>
+                              <dt className='text-muted-foreground'>
+                                {t('Blocked')}
+                              </dt>
+                              <dd className='tabular-nums'>{repeat.blocks}</dd>
+                            </>
+                          )}
+                          {repeat.unavailable > 0 && (
+                            <>
+                              <dt className='text-muted-foreground'>
+                                {t('Unavailable')}
+                              </dt>
+                              <dd className='tabular-nums'>
+                                {repeat.unavailable}
+                              </dd>
+                            </>
+                          )}
+                        </dl>
+                      </div>
+                    </TooltipContent>
+                  </Tooltip>
+                )}
                 <Badge variant={decisionBadgeVariant(event.decision)}>
                   {t(event.decision || 'pending')}
                 </Badge>
@@ -116,6 +266,20 @@ export function usePromptAuditColumns(options: {
                     ? t('Generated output')
                     : t('Request input')}
                 </Badge>
+                {/* Only a merged row holds a group, so only it can be
+                    expanded; the count above says how many requests that
+                    reveals. */}
+                {collapsed && row.depth === 0 && repeat && (
+                  <Button
+                    variant={isExpanded ? 'secondary' : 'outline'}
+                    size='icon-xs'
+                    onClick={row.getToggleExpandedHandler()}
+                    aria-label={isExpanded ? t('Collapse') : t('Expand')}
+                    aria-expanded={isExpanded}
+                  >
+                    {expandIcon(isGroupLoading, isExpanded)}
+                  </Button>
+                )}
               </div>
               {event.categories.length > 0 && (
                 <p className='text-muted-foreground mt-1 max-w-48 truncate text-xs'>
@@ -228,5 +392,5 @@ export function usePromptAuditColumns(options: {
     )
 
     return columns
-  }, [canDelete, onOpen, t])
+  }, [canDelete, collapsed, loadingGroupIDs, onOpen, t])
 }

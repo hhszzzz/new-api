@@ -25,6 +25,7 @@ import type {
   PromptAuditDeleteFilter,
   PromptAuditEndpoint,
   PromptAuditEndpointUpdate,
+  PromptAuditEvent,
   PromptAuditFilters,
 } from './types'
 
@@ -51,8 +52,21 @@ export function getDefaultPromptAuditFilters(): PromptAuditFilters {
   }
 }
 
+/**
+ * The records screen's listing mode. Collapsing and expanding are ways of
+ * reading the same filters, so neither is part of PromptAuditFilters: the
+ * delete and statistics paths must keep seeing the filters alone.
+ */
+export interface PromptAuditListingView {
+  /** Merge the requests that submitted the same audited text into one row. */
+  collapseRepeats?: boolean
+  /** Return the requests behind one collapsed row instead of the listing. */
+  groupID?: number
+}
+
 export function promptAuditFilterParams(
-  filters: PromptAuditFilters
+  filters: PromptAuditFilters,
+  view: PromptAuditListingView = {}
 ): Record<string, string | number | undefined> {
   const startTime = filters.start_time
     ? Math.floor(new Date(filters.start_time).getTime() / 1000)
@@ -77,7 +91,63 @@ export function promptAuditFilterParams(
         : undefined,
     end_time:
       endTime !== undefined && Number.isFinite(endTime) ? endTime : undefined,
+    collapse_repeats: view.collapseRepeats ? 'true' : undefined,
+    group_id:
+      view.groupID !== undefined && view.groupID > 0 ? view.groupID : undefined,
   }
+}
+
+const COLLAPSE_REPEATS_STORAGE_KEY = 'prompt-audit:collapse-repeats'
+
+/**
+ * Whether the records listing opens merged. An agent run submits the same text
+ * once per step, so the merged reading is the one that shows what happened; the
+ * choice is remembered because a mode that resets on every visit reads as a
+ * broken feature rather than as a default.
+ */
+export function readPromptAuditCollapseRepeats(): boolean {
+  if (typeof window === 'undefined') return true
+  try {
+    const stored = window.localStorage.getItem(COLLAPSE_REPEATS_STORAGE_KEY)
+    return stored === null ? true : stored === 'true'
+  } catch {
+    return true
+  }
+}
+
+export function writePromptAuditCollapseRepeats(collapsed: boolean): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(COLLAPSE_REPEATS_STORAGE_KEY, String(collapsed))
+  } catch {
+    // Storage can be refused or full; the listing still works, it only forgets
+    // the choice.
+  }
+}
+
+/**
+ * The row id the records table gives one audit. A collapsed row renders the
+ * requests it merged as child rows, and the request that represents the group is
+ * one of them, so a child's id is prefixed with its parent's: otherwise the two
+ * rows would share an id and TanStack Table could not tell them apart. Top-level
+ * ids stay bare because selection and the detail sheet are keyed by them.
+ */
+export function promptAuditRowID(
+  event: PromptAuditEvent,
+  _index: number,
+  parent?: { id: string }
+): string {
+  return parent ? `${parent.id}:${event.id}` : String(event.id)
+}
+
+/**
+ * Whether a listing row stands for more than the one request it shows. The
+ * collapsed listing hands every row a repeat summary, including the groups that
+ * turned out to hold a single request; only a merged one has requests of its own
+ * to reveal, so only it can be opened and only it shows a count.
+ */
+export function isMergedPromptAuditRow(event: PromptAuditEvent): boolean {
+  return event.repeat !== undefined && event.repeat.count > 1
 }
 
 export function promptAuditDeleteFilter(

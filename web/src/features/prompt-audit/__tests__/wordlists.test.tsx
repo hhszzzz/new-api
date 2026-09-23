@@ -16,7 +16,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
   createMemoryHistory,
@@ -175,7 +174,7 @@ describe('wordlist management', () => {
     ).not.toBeInTheDocument()
   })
 
-  test('changing one source preserves the other sources and their model switches', async () => {
+  test('changing one source preserves the other sources and their model audit', async () => {
     const user = userEvent.setup()
     const onChange = vi.fn()
     const options = [
@@ -202,14 +201,21 @@ describe('wordlist management', () => {
       )
     }
     renderManagement(<Policies />)
+    // Model review is one of the choices the source control offers, not a
+    // control of its own, so it is switched off by dropping it from the list —
+    // and it never reaches the wordlist ids that are saved.
     await user.click(
-      await screen.findByRole('switch', { name: 'Model audit: User messages' })
+      await screen.findByRole('combobox', { name: 'User messages' })
     )
+    await user.click(await screen.findByRole('option', { name: 'Model audit' }))
     expect(onChange.mock.lastCall?.[0].user).toEqual({
       library_ids: ['1', '2', '3'],
       model_audit: false,
     })
     expect(onChange.mock.lastCall?.[0].system).toEqual(initial.system)
+    // An open dropdown leaves the rest of the form out of the accessibility
+    // tree, so it is closed before the next source is picked.
+    await user.keyboard('{Escape}')
     await user.click(
       screen.getByRole('combobox', { name: 'System instructions' })
     )
@@ -224,6 +230,48 @@ describe('wordlist management', () => {
     expect(onChange.mock.lastCall?.[0].user).toEqual({
       library_ids: ['1', '2', '3'],
       model_audit: false,
+    })
+  })
+
+  test('turns model review on from the source control itself', async () => {
+    const user = userEvent.setup()
+    const onChange = vi.fn()
+    const initial = defaultPromptScopePolicies()
+    // This source is inspected by model review alone, and it is switched off.
+    initial.system = { library_ids: [], model_audit: false }
+    function Policies() {
+      const [policies, setPolicies] = useState<PromptScopePolicies>(initial)
+      return (
+        <ScopePoliciesSection
+          policies={policies}
+          libraries={libraries}
+          wordFilterEnabled
+          onWordFilterChange={vi.fn()}
+          onChange={(next) => {
+            setPolicies(next)
+            onChange(next)
+          }}
+        />
+      )
+    }
+    renderManagement(<Policies />)
+
+    const control = await screen.findByRole('combobox', {
+      name: 'System instructions',
+    })
+    // Model review reads as one of the choices of that control, not as a
+    // control of its own beside it.
+    expect(
+      screen.queryByRole('switch', { name: /Model audit/ })
+    ).not.toBeInTheDocument()
+    expect(screen.getByPlaceholderText('No inspection selected')).toBeVisible()
+
+    await user.click(control)
+    await user.click(screen.getByRole('option', { name: 'Model audit' }))
+
+    expect(onChange.mock.lastCall?.[0].system).toEqual({
+      library_ids: [],
+      model_audit: true,
     })
   })
 

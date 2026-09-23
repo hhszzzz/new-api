@@ -314,13 +314,70 @@ func TestPromptAuditSnapshotBlockingPreservesNonConversationSourcesAndCurrentToo
 		{Role: "developer", Text: "developer policy"},
 		{Role: "user", User: true, Text: "old user"},
 		{Role: "assistant", Text: "previous answer"},
+		{Role: "assistant", Scope: PromptScopeToolCall, Text: "old tool arguments"},
+		{Role: "tool", Scope: PromptScopeToolResult, Text: "old tool result"},
 		{Role: "user", User: true, Text: "latest user"},
 		{Role: "assistant", Text: "current reasoning"},
+		{Role: "assistant", Scope: PromptScopeToolCall, Text: "earlier tool arguments"},
+		{Role: "tool", Scope: PromptScopeToolResult, Text: "earlier tool result"},
 		{Role: "assistant", Scope: PromptScopeToolCall, Text: "tool arguments"},
 		{Role: "tool", Scope: PromptScopeToolResult, Text: "tool result"},
 		{Role: "task", Scope: PromptScopeTask, User: true, Text: "task prompt"},
 	}}
+	// Superseded rounds go away with the older turns: keeping them would send the
+	// same tool output again on every step of an agent run.
 	assert.Equal(t, []string{"system policy", "developer policy", "previous answer", "latest user", "current reasoning", "tool arguments", "tool result", "task prompt"}, orderedSegmentTexts(snapshot.BlockingSnapshot()))
+}
+
+func TestPromptAuditSnapshotBlockingKeepsNewestToolRoundBeforeTheLatestTurn(t *testing.T) {
+	snapshot := PromptAuditSnapshot{Segments: []PromptAuditSegment{
+		{Role: "user", User: true, Text: "first question"},
+		{Role: "assistant", Scope: PromptScopeToolCall, Text: "tool arguments"},
+		{Role: "tool", Scope: PromptScopeToolResult, Text: "tool result"},
+		{Role: "assistant", Text: "answer"},
+		{Role: "user", User: true, Text: "follow-up"},
+	}}
+	// The newest round is the request's newest tool content, so it survives even
+	// when the conversation moved on: never drop the round actually reported.
+	assert.Equal(t, []string{"tool arguments", "tool result", "answer", "follow-up"}, orderedSegmentTexts(snapshot.BlockingSnapshot()))
+}
+
+func TestPromptAuditSnapshotBlockingKeepsOnlyTheNewestToolRound(t *testing.T) {
+	snapshot := PromptAuditSnapshot{Segments: []PromptAuditSegment{
+		{Role: "user", User: true, Text: "question"},
+		{Role: "assistant", Scope: PromptScopeToolCall, Text: "first call"},
+		{Role: "tool", Scope: PromptScopeToolResult, Text: "first result"},
+		{Role: "assistant", Scope: PromptScopeToolCall, Text: "second call"},
+		{Role: "tool", Scope: PromptScopeToolResult, Text: "second result"},
+	}}
+	// The run is bounded by its newest tool content: a superseded round of the same
+	// turn goes away with the older turns.
+	assert.Equal(t, []string{"question", "second call", "second result"}, orderedSegmentTexts(snapshot.BlockingSnapshot()))
+}
+
+func TestPromptAuditSnapshotBlockingKeepsAParallelToolRoundTogether(t *testing.T) {
+	snapshot := PromptAuditSnapshot{Segments: []PromptAuditSegment{
+		{Role: "user", User: true, Text: "question"},
+		{Role: "assistant", Scope: PromptScopeToolCall, Text: "first call"},
+		{Role: "assistant", Scope: PromptScopeToolCall, Text: "second call"},
+		{Role: "tool", Scope: PromptScopeToolResult, Text: "first result"},
+		{Role: "tool", Scope: PromptScopeToolResult, Text: "second result"},
+	}}
+	// A parallel round is one round: the calls that opened it are read together with
+	// the results they produced, so one call is never read without its answer.
+	assert.Equal(t, []string{"question", "first call", "second call", "first result", "second result"}, orderedSegmentTexts(snapshot.BlockingSnapshot()))
+}
+
+func TestPromptAuditSnapshotBlockingKeepsAnUnansweredToolCall(t *testing.T) {
+	snapshot := PromptAuditSnapshot{Segments: []PromptAuditSegment{
+		{Role: "user", User: true, Text: "question"},
+		{Role: "assistant", Scope: PromptScopeToolCall, Text: "answered call"},
+		{Role: "tool", Scope: PromptScopeToolResult, Text: "answered result"},
+		{Role: "assistant", Scope: PromptScopeToolCall, Text: "running call"},
+	}}
+	// A request can carry a call whose result has not been produced yet. It is the
+	// newest tool content the request holds, so it is the round that survives.
+	assert.Equal(t, []string{"question", "running call"}, orderedSegmentTexts(snapshot.BlockingSnapshot()))
 }
 
 func TestPromptAuditSnapshotBlockingSnapshotKeepsFullSnapshotWithoutUserTurn(t *testing.T) {

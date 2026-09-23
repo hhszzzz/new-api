@@ -21,16 +21,20 @@ import { afterEach, describe, expect, test, vi } from 'vitest'
 import {
   EMPTY_PROMPT_AUDIT_FILTERS,
   getDefaultPromptAuditFilters,
+  isMergedPromptAuditRow,
   promptAuditDeleteFilter,
   promptAuditEndpointBaseURLUpdate,
   promptAuditEndpointDrafts,
   promptAuditEndpointUpdate,
   promptAuditFilterParams,
   type PromptAuditEndpointDraft,
+  promptAuditRowID,
+  readPromptAuditCollapseRepeats,
   validatePromptAuditConfig,
   validatePromptAuditFilters,
+  writePromptAuditCollapseRepeats,
 } from '../lib'
-import type { PromptAuditConfigUpdate } from '../types'
+import type { PromptAuditConfigUpdate, PromptAuditEvent } from '../types'
 
 const VALID_CONFIG: PromptAuditConfigUpdate = {
   mode: 'blocking',
@@ -108,6 +112,74 @@ describe('prompt audit management helpers', () => {
     )
 
     expect(filter).toEqual({ ids: [9, 3] })
+  })
+
+  test('asks for the merged listing only while it is switched on', () => {
+    const filters = { ...EMPTY_PROMPT_AUDIT_FILTERS, status: 'failed' }
+
+    expect(promptAuditFilterParams(filters).collapse_repeats).toBeUndefined()
+    expect(
+      promptAuditFilterParams(filters, { collapseRepeats: true })
+        .collapse_repeats
+    ).toBe('true')
+    // Merging is a way of reading the same filters, never a filter of its own.
+    expect(
+      promptAuditFilterParams(filters, { collapseRepeats: true }).status
+    ).toBe('failed')
+  })
+
+  test('asks for one merged row only with the id of its representative', () => {
+    const filters = { ...EMPTY_PROMPT_AUDIT_FILTERS }
+
+    expect(promptAuditFilterParams(filters).group_id).toBeUndefined()
+    expect(
+      promptAuditFilterParams(filters, { groupID: 0 }).group_id
+    ).toBeUndefined()
+    expect(promptAuditFilterParams(filters, { groupID: 42 }).group_id).toBe(42)
+  })
+
+  test('opens the listing merged and keeps whatever the operator chose instead', () => {
+    window.localStorage.clear()
+
+    // A first visit reads the listing merged: that is what an agent run looks
+    // like, and the switch is still there to read it request by request.
+    expect(readPromptAuditCollapseRepeats()).toBe(true)
+
+    writePromptAuditCollapseRepeats(false)
+    expect(readPromptAuditCollapseRepeats()).toBe(false)
+
+    writePromptAuditCollapseRepeats(true)
+    expect(readPromptAuditCollapseRepeats()).toBe(true)
+  })
+
+  test('keeps a merged row and the requests it reveals apart', () => {
+    // The request that speaks for its group is also one of its children, so a
+    // child's id carries its parent's and the two rows stay distinguishable.
+    expect(promptAuditRowID({ id: 17 } as PromptAuditEvent, 0)).toBe('17')
+    expect(
+      promptAuditRowID({ id: 17 } as PromptAuditEvent, 0, { id: '17' })
+    ).toBe('17:17')
+    expect(
+      promptAuditRowID({ id: 18 } as PromptAuditEvent, 1, { id: '17' })
+    ).toBe('17:18')
+  })
+
+  test('counts only the groups that hold more than one request', () => {
+    const repeat = (count: number) => ({ count }) as PromptAuditEvent['repeat']
+
+    expect(isMergedPromptAuditRow({ id: 17 } as PromptAuditEvent)).toBe(false)
+    expect(
+      isMergedPromptAuditRow({
+        id: 17,
+        repeat: repeat(1),
+      } as PromptAuditEvent)
+    ).toBe(false)
+    expect(
+      isMergedPromptAuditRow({
+        id: 17,
+        repeat: repeat(2),
+      } as PromptAuditEvent)
+    ).toBe(true)
   })
 
   test('does not resend a stored token until the administrator changes it', () => {

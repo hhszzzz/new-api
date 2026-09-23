@@ -21,6 +21,23 @@ const (
 	PromptAuditStatusFailed     PromptAuditStatus = "failed"
 )
 
+// Action values as the pipeline stores them. They mirror the service package's
+// PromptAuditAction* constants, which the model cannot import.
+const (
+	promptAuditActionAllow       = "allow"
+	promptAuditActionMark        = "mark"
+	promptAuditActionBlock       = "block"
+	promptAuditActionUnavailable = "unavailable"
+)
+
+// Decision values as the pipeline stores them, mirrored for the same reason.
+const (
+	promptAuditDecisionPass        = "pass"
+	promptAuditDecisionFlag        = "flag"
+	promptAuditDecisionBlock       = "block"
+	promptAuditDecisionUnavailable = "unavailable"
+)
+
 var (
 	ErrPromptAuditNotFound       = errors.New("prompt audit not found")
 	ErrPromptAuditActive         = errors.New("active prompt audit cannot be deleted")
@@ -114,70 +131,93 @@ type PromptAudit struct {
 }
 
 type PromptAuditResponse struct {
-	InspectionType      string            `json:"inspection_type"`
-	WordlistID          string            `json:"wordlist_id"`
-	WordlistName        string            `json:"wordlist_name"`
-	WordlistVersion     string            `json:"wordlist_version"`
-	MatchedScope        string            `json:"matched_scope"`
-	InspectedScopes     []string          `json:"inspected_scopes"`
-	ID                  int64             `json:"id"`
-	RequestID           string            `json:"request_id"`
-	UserID              int               `json:"user_id"`
-	TokenID             int               `json:"token_id"`
-	TokenName           string            `json:"token_name"`
-	Username            string            `json:"username"`
-	GroupName           string            `json:"group"`
-	Protocol            string            `json:"protocol"`
-	ModelName           string            `json:"model"`
-	Stage               string            `json:"stage"`
-	Direction           string            `json:"direction"`
-	GenerationID        string            `json:"generation_id"`
-	DeliveryStatus      string            `json:"delivery_status"`
-	CoverageComplete    bool              `json:"coverage_complete"`
-	ConfigVersion       string            `json:"config_version"`
-	ExecutionMode       string            `json:"execution_mode"`
-	Status              PromptAuditStatus `json:"status"`
-	PromptHash          string            `json:"prompt_hash"`
-	PromptLength        int               `json:"prompt_length"`
-	SegmentCount        int               `json:"segment_count"`
-	ChunkCount          int               `json:"chunk_count"`
-	FullPrompt          *string           `json:"full_prompt,omitempty"`
-	FullPromptAvailable bool              `json:"full_prompt_available"`
-	FullPromptTruncated bool              `json:"full_prompt_truncated"`
-	RedactedPreview     string            `json:"redacted_preview"`
-	Safety              string            `json:"safety"`
-	Refusal             string            `json:"refusal"`
-	Decision            string            `json:"decision"`
-	Action              string            `json:"action"`
-	WouldAction         string            `json:"would_action"`
-	Categories          []string          `json:"categories"`
-	UnknownCategories   []string          `json:"unknown_categories"`
-	EndpointID          string            `json:"endpoint_id"`
-	EndpointModel       string            `json:"endpoint_model"`
-	ReviewStatus        string            `json:"review_status"`
-	ReviewDecision      string            `json:"review_decision"`
-	ReviewCodes         []string          `json:"review_codes"`
-	ReviewReason        string            `json:"review_reason"`
-	ReviewerEndpointID  string            `json:"reviewer_endpoint_id"`
-	HumanReview         string            `json:"human_review"`
-	HumanReviewReason   string            `json:"human_review_reason"`
-	ReviewedBy          int               `json:"reviewed_by"`
-	ReviewerName        string            `json:"reviewer_name"`
-	ReviewedAt          int64             `json:"reviewed_at"`
-	LatencyMS           int64             `json:"latency_ms"`
-	Attempts            int               `json:"attempts"`
-	MaxAttempts         int               `json:"max_attempts"`
-	NextAttemptAt       int64             `json:"next_attempt_at"`
-	ErrorCode           string            `json:"error_code"`
-	Ip                  string            `json:"ip"`
-	UserAgent           string            `json:"user_agent"`
-	Method              string            `json:"method"`
-	RequestPath         string            `json:"request_path"`
-	Origin              string            `json:"origin"`
-	Referer             string            `json:"referer"`
-	CreatedAt           int64             `json:"created_at"`
-	UpdatedAt           int64             `json:"updated_at"`
-	CompletedAt         int64             `json:"completed_at"`
+	InspectionType      string             `json:"inspection_type"`
+	WordlistID          string             `json:"wordlist_id"`
+	WordlistName        string             `json:"wordlist_name"`
+	WordlistVersion     string             `json:"wordlist_version"`
+	MatchedScope        string             `json:"matched_scope"`
+	InspectedScopes     []string           `json:"inspected_scopes"`
+	ID                  int64              `json:"id"`
+	RequestID           string             `json:"request_id"`
+	UserID              int                `json:"user_id"`
+	TokenID             int                `json:"token_id"`
+	TokenName           string             `json:"token_name"`
+	Username            string             `json:"username"`
+	GroupName           string             `json:"group"`
+	Protocol            string             `json:"protocol"`
+	ModelName           string             `json:"model"`
+	Stage               string             `json:"stage"`
+	Direction           string             `json:"direction"`
+	GenerationID        string             `json:"generation_id"`
+	DeliveryStatus      string             `json:"delivery_status"`
+	CoverageComplete    bool               `json:"coverage_complete"`
+	ConfigVersion       string             `json:"config_version"`
+	ExecutionMode       string             `json:"execution_mode"`
+	Status              PromptAuditStatus  `json:"status"`
+	PromptHash          string             `json:"prompt_hash"`
+	PromptLength        int                `json:"prompt_length"`
+	SegmentCount        int                `json:"segment_count"`
+	ChunkCount          int                `json:"chunk_count"`
+	FullPrompt          *string            `json:"full_prompt,omitempty"`
+	FullPromptAvailable bool               `json:"full_prompt_available"`
+	FullPromptTruncated bool               `json:"full_prompt_truncated"`
+	RedactedPreview     string             `json:"redacted_preview"`
+	Safety              string             `json:"safety"`
+	Refusal             string             `json:"refusal"`
+	Decision            string             `json:"decision"`
+	Action              string             `json:"action"`
+	WouldAction         string             `json:"would_action"`
+	Categories          []string           `json:"categories"`
+	UnknownCategories   []string           `json:"unknown_categories"`
+	EndpointID          string             `json:"endpoint_id"`
+	EndpointModel       string             `json:"endpoint_model"`
+	ReviewStatus        string             `json:"review_status"`
+	ReviewDecision      string             `json:"review_decision"`
+	ReviewCodes         []string           `json:"review_codes"`
+	ReviewReason        string             `json:"review_reason"`
+	ReviewerEndpointID  string             `json:"reviewer_endpoint_id"`
+	HumanReview         string             `json:"human_review"`
+	HumanReviewReason   string             `json:"human_review_reason"`
+	ReviewedBy          int                `json:"reviewed_by"`
+	ReviewerName        string             `json:"reviewer_name"`
+	ReviewedAt          int64              `json:"reviewed_at"`
+	LatencyMS           int64              `json:"latency_ms"`
+	Attempts            int                `json:"attempts"`
+	MaxAttempts         int                `json:"max_attempts"`
+	NextAttemptAt       int64              `json:"next_attempt_at"`
+	ErrorCode           string             `json:"error_code"`
+	Ip                  string             `json:"ip"`
+	UserAgent           string             `json:"user_agent"`
+	Method              string             `json:"method"`
+	RequestPath         string             `json:"request_path"`
+	Origin              string             `json:"origin"`
+	Referer             string             `json:"referer"`
+	CreatedAt           int64              `json:"created_at"`
+	UpdatedAt           int64              `json:"updated_at"`
+	CompletedAt         int64              `json:"completed_at"`
+	Repeat              *PromptAuditRepeat `json:"repeat,omitempty"`
+}
+
+// PromptAuditRepeat describes the requests a collapsed row stands for. One
+// audited text is resent by every step of an agent run, so the listing can merge
+// those rows; the merged row must still report what the whole group decided,
+// which is why the worst action and the two counts travel with it.
+type PromptAuditRepeat struct {
+	Count       int64  `json:"count"`
+	FirstAt     int64  `json:"first_at"`
+	LastAt      int64  `json:"last_at"`
+	WorstAction string `json:"worst_action"`
+	Blocks      int64  `json:"blocks"`
+	Unavailable int64  `json:"unavailable"`
+}
+
+// PromptAuditRepeatRow pairs a collapsed group's first request with its summary.
+// The first request is the representative: it is the one that carried the audited
+// text before later steps appended their context, so it is the row an operator
+// expects to read.
+type PromptAuditRepeatRow struct {
+	Audit  *PromptAudit
+	Repeat PromptAuditRepeat
 }
 
 // PromptAuditFilter mirrors the fields an operator can narrow a listing by. It
@@ -185,6 +225,10 @@ type PromptAuditResponse struct {
 // filter: the first three are invisible on the records screen, so a filter
 // labelled after them could only be filled in from somewhere else, and the
 // inspection type is an internal label the screen never shows.
+//
+// CollapseRepeats is not a filter: it selects the collapsed listing, and no
+// predicate is derived from it, so the deletion and preview paths are unaffected
+// by it.
 type PromptAuditFilter struct {
 	IDs       []int64
 	Status    string
@@ -199,6 +243,8 @@ type PromptAuditFilter struct {
 	StartTime int64
 	EndTime   int64
 	MaxID     int64
+
+	CollapseRepeats bool
 }
 
 type PromptAuditStats struct {
@@ -333,6 +379,227 @@ func ListPromptAudits(filter PromptAuditFilter, page, pageSize int) ([]*PromptAu
 		return nil, 0, err
 	}
 	return audits, total, nil
+}
+
+// promptAuditRepeatEmptyHashKey keeps rows whose prompt hash was never recorded
+// in groups of their own instead of merging every hashless row into one. The
+// CASE form is the portable one: concatenating a nullable column differs between
+// MySQL, PostgreSQL and SQLite.
+const promptAuditRepeatEmptyHashKey = "CASE WHEN prompt_hash = '' THEN id ELSE 0 END"
+
+// promptAuditRepeatRowLimit bounds one group expansion. The largest group seen in
+// production held 61 requests.
+const promptAuditRepeatRowLimit = 200
+
+func promptAuditRepeatGroupColumns() string {
+	return "user_id, model_name, prompt_hash, " + promptAuditRepeatEmptyHashKey
+}
+
+// promptAuditActionSeverity orders actions so a merged row can report the worst
+// one it contains. An unknown action ranks below allow: legacy rows carry an
+// empty action until the migration fills it.
+func promptAuditActionSeverity(action string) int {
+	switch action {
+	case promptAuditActionBlock:
+		return 3
+	case promptAuditActionUnavailable:
+		return 2
+	case promptAuditActionMark:
+		return 1
+	case promptAuditActionAllow:
+		return 0
+	default:
+		return -1
+	}
+}
+
+// ListPromptAuditRepeats collapses the listing to one row per audited text:
+// (user, model, prompt hash) within the filter's range. It returns the collapsed
+// rows, the number of groups, and the number of requests those groups hold, so
+// the screen can show both counts without contradicting its own statistics.
+func ListPromptAuditRepeats(filter PromptAuditFilter, page, pageSize int) ([]PromptAuditRepeatRow, int64, int64, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 20
+	}
+	if pageSize > 200 {
+		pageSize = 200
+	}
+	var recordsTotal int64
+	if err := applyPromptAuditFilter(DB.Model(&PromptAudit{}), filter).Count(&recordsTotal).Error; err != nil {
+		return nil, 0, 0, err
+	}
+
+	groupColumns := promptAuditRepeatGroupColumns()
+	// Counting groups through a derived table keeps one query per dialect: GORM's
+	// Count over a grouped query would count the rows inside the groups instead.
+	var total int64
+	groupQuery := applyPromptAuditFilter(DB.Model(&PromptAudit{}), filter).
+		Select("MIN(id) AS id, user_id, model_name, prompt_hash").
+		Group(groupColumns)
+	if err := DB.Table("(?) AS prompt_audit_repeat_groups", groupQuery).Count(&total).Error; err != nil {
+		return nil, 0, 0, err
+	}
+	if total == 0 {
+		return []PromptAuditRepeatRow{}, 0, recordsTotal, nil
+	}
+
+	type repeatRow struct {
+		ID          int64
+		UserID      int
+		ModelName   string
+		PromptHash  string
+		RepeatCount int64
+		FirstAt     int64
+		LastAt      int64
+	}
+	rows := make([]repeatRow, 0, pageSize)
+	if err := applyPromptAuditFilter(DB.Model(&PromptAudit{}), filter).
+		Select("MIN(id) AS id, user_id, model_name, prompt_hash, COUNT(*) AS repeat_count, MIN(created_at) AS first_at, MAX(created_at) AS last_at").
+		Group(groupColumns).
+		Order("MIN(id) DESC").
+		Limit(pageSize).Offset((page - 1) * pageSize).
+		Scan(&rows).Error; err != nil {
+		return nil, 0, 0, err
+	}
+	ids := make([]int64, 0, len(rows))
+	repeats := make(map[int64]*PromptAuditRepeat, len(rows))
+	// A group that holds a hash is found again by that hash; its group id is its
+	// first request, which is the row the listing shows.
+	representatives := make(map[promptAuditRepeatKey]int64, len(rows))
+	for index := range rows {
+		row := rows[index]
+		ids = append(ids, row.ID)
+		repeats[row.ID] = &PromptAuditRepeat{
+			Count:   row.RepeatCount,
+			FirstAt: row.FirstAt,
+			LastAt:  row.LastAt,
+		}
+		if row.PromptHash != "" {
+			representatives[promptAuditRepeatKey{UserID: row.UserID, ModelName: row.ModelName, PromptHash: row.PromptHash}] = row.ID
+		}
+	}
+
+	// The action tally is a second grouped scan rather than SUM(CASE WHEN …):
+	// aggregate filters diverge across the three supported engines, while
+	// GROUP BY action is plain SQL everywhere. It selects the group's own columns
+	// instead of aggregating an id, because MIN(id) inside a group that is also
+	// split by action is the smallest id of that action, not of the group.
+	type actionCountRow struct {
+		UserID     int
+		ModelName  string
+		PromptHash string
+		Action     string
+		Count      int64
+	}
+	actionCounts := make([]actionCountRow, 0)
+	if err := applyPromptAuditFilter(DB.Model(&PromptAudit{}), filter).
+		Where("prompt_hash <> ''").
+		Select("user_id, model_name, prompt_hash, action, COUNT(*) AS count").
+		Group("user_id, model_name, prompt_hash, action").
+		Scan(&actionCounts).Error; err != nil {
+		return nil, 0, 0, err
+	}
+	for _, entry := range actionCounts {
+		id, ok := representatives[promptAuditRepeatKey{UserID: entry.UserID, ModelName: entry.ModelName, PromptHash: entry.PromptHash}]
+		if !ok {
+			continue
+		}
+		applyPromptAuditAction(repeats[id], entry.Action, entry.Count)
+	}
+
+	var audits []*PromptAudit
+	if err := DB.Where("id IN ?", ids).Find(&audits).Error; err != nil {
+		return nil, 0, 0, err
+	}
+	byID := make(map[int64]*PromptAudit, len(audits))
+	for _, audit := range audits {
+		byID[audit.ID] = audit
+	}
+	collapsed := make([]PromptAuditRepeatRow, 0, len(rows))
+	for _, row := range rows {
+		audit, ok := byID[row.ID]
+		if !ok {
+			continue
+		}
+		// A row with no hash stands alone, so the row's own action is its whole
+		// tally and the scan above skips it.
+		if row.PromptHash == "" {
+			applyPromptAuditAction(repeats[row.ID], audit.Action, 1)
+		}
+		collapsed = append(collapsed, PromptAuditRepeatRow{Audit: audit, Repeat: *repeats[row.ID]})
+	}
+	return collapsed, total, recordsTotal, nil
+}
+
+// promptAuditRepeatKey identifies a collapsed group in the action tally. A group
+// with no hash is never looked up this way: it holds a single row, so that row's
+// own action is its whole tally.
+type promptAuditRepeatKey struct {
+	UserID     int
+	ModelName  string
+	PromptHash string
+}
+
+// applyPromptAuditAction folds one action tally into a collapsed row: the worst
+// action wins, and the two outcomes an operator acts on are counted.
+func applyPromptAuditAction(repeat *PromptAuditRepeat, action string, count int64) {
+	if promptAuditActionSeverity(action) > promptAuditActionSeverity(repeat.WorstAction) {
+		repeat.WorstAction = action
+	}
+	switch action {
+	case promptAuditActionBlock:
+		repeat.Blocks += count
+	case promptAuditActionUnavailable:
+		repeat.Unavailable += count
+	}
+}
+
+// PromptAuditDecisionForAction names the decision that carries an action, for the
+// same reason the actions above are mirrored: the model cannot import the service
+// package. A collapsed row reports the worst outcome its group holds, that outcome
+// is tallied as an action, and the row's decision badge reads in decisions. An
+// action without a decision counterpart — a legacy or unknown value — yields an
+// empty string, so the caller keeps the verdict the row itself recorded.
+func PromptAuditDecisionForAction(action string) string {
+	switch action {
+	case promptAuditActionBlock:
+		return promptAuditDecisionBlock
+	case promptAuditActionUnavailable:
+		return promptAuditDecisionUnavailable
+	case promptAuditActionMark:
+		return promptAuditDecisionFlag
+	case promptAuditActionAllow:
+		return promptAuditDecisionPass
+	default:
+		return ""
+	}
+}
+
+// ListPromptAuditGroupRows returns every request behind one collapsed row. The
+// representative id identifies the group, so the caller never has to know the
+// group key; the same filter is applied again, which keeps the expansion and the
+// collapsed count on one definition.
+func ListPromptAuditGroupRows(filter PromptAuditFilter, representativeID int64) ([]*PromptAudit, error) {
+	representative, err := GetPromptAudit(representativeID)
+	if err != nil {
+		return nil, err
+	}
+	query := DB.Model(&PromptAudit{}).Where("id = ?", representative.ID)
+	if representative.PromptHash != "" {
+		query = DB.Model(&PromptAudit{}).Where(
+			"user_id = ? AND model_name = ? AND prompt_hash = ?",
+			representative.UserID, representative.ModelName, representative.PromptHash,
+		)
+	}
+	var audits []*PromptAudit
+	if err := applyPromptAuditFilter(query, filter).
+		Order("id desc").Limit(promptAuditRepeatRowLimit).Find(&audits).Error; err != nil {
+		return nil, err
+	}
+	return audits, nil
 }
 
 func GetPromptAuditStats(filter PromptAuditFilter, categories []string) (PromptAuditStats, error) {

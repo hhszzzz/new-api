@@ -17,10 +17,17 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { Table } from '@tanstack/react-table'
+import { Rows3 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
+import { Button } from '@/components/ui/button'
 import { Combobox } from '@/components/ui/combobox'
 import { Skeleton } from '@/components/ui/skeleton'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import { CompactDateTimeRangePicker } from '@/features/usage-logs/components/compact-date-time-range-picker'
 import {
   LogsFilterField,
@@ -56,6 +63,9 @@ function PromptAuditStat(props: {
 function PromptAuditStatsBar(props: {
   stats?: PromptAuditStats
   loading: boolean
+  collapsed: boolean
+  groupTotal: number
+  recordsTotal: number
 }) {
   const { t } = useTranslation()
 
@@ -92,7 +102,64 @@ function PromptAuditStatsBar(props: {
         value={props.stats?.statuses.failed ?? 0}
         accent='bg-slate-400/80'
       />
+      {/* While the listing merges requests, the two counts that used to be one
+          are shown together, so nobody has to reconcile them by hand. */}
+      {props.collapsed && (
+        <>
+          <PromptAuditStat
+            label={t('Groups')}
+            value={props.groupTotal}
+            accent='bg-violet-500/70'
+          />
+          <PromptAuditStat
+            label={t('Requests')}
+            value={props.recordsTotal}
+            accent='bg-emerald-500/70'
+          />
+        </>
+      )}
     </div>
+  )
+}
+
+/**
+ * The collapse switch. It decides how the listing is read, not which records it
+ * contains, so it sits with the actions instead of the filters.
+ */
+function PromptAuditCollapseToggle(props: {
+  collapsed: boolean
+  onToggle: () => void
+}) {
+  const { t } = useTranslation()
+  const label = t('Collapse repeated audits')
+
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            // Merging the repeated requests is a different reading of the same
+            // records, and a bare icon that only changes color is far too easy to
+            // leave on without noticing: the pressed state fills in.
+            variant={props.collapsed ? 'secondary' : 'ghost'}
+            size='icon'
+            onClick={props.onToggle}
+            aria-pressed={props.collapsed}
+            aria-label={label}
+            className={cn(
+              'text-muted-foreground hover:text-foreground size-7 max-sm:size-11',
+              props.collapsed && 'text-primary hover:text-primary'
+            )}
+          >
+            <Rows3 />
+          </Button>
+        }
+      />
+      <TooltipContent>
+        <p>{label}</p>
+        <p>{t('Merge requests that submitted the same text into one row.')}</p>
+      </TooltipContent>
+    </Tooltip>
   )
 }
 
@@ -126,6 +193,10 @@ export function PromptAuditFilterBar<TData>(props: {
   stats?: PromptAuditStats
   statsLoading: boolean
   searchLoading: boolean
+  collapsed: boolean
+  groupTotal: number
+  recordsTotal: number
+  onToggleCollapse: () => void
   onChange: (key: keyof PromptAuditFilters, value: string) => void
   onSearch: () => void
   onReset: () => void
@@ -272,7 +343,19 @@ export function PromptAuditFilterBar<TData>(props: {
       table={props.table}
       compactMobile
       stats={
-        <PromptAuditStatsBar stats={props.stats} loading={props.statsLoading} />
+        <PromptAuditStatsBar
+          stats={props.stats}
+          loading={props.statsLoading}
+          collapsed={props.collapsed}
+          groupTotal={props.groupTotal}
+          recordsTotal={props.recordsTotal}
+        />
+      }
+      actionStart={
+        <PromptAuditCollapseToggle
+          collapsed={props.collapsed}
+          onToggle={props.onToggleCollapse}
+        />
       }
       primaryFilters={
         <>

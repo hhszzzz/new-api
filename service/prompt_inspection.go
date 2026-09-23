@@ -144,7 +144,9 @@ type PromptWordlistMatch struct {
 // promptInspectionUsesBlockingSnapshot decides whether synchronous input
 // inspection is scoped to the latest user turn.
 //
-// Wordlist selection is independent and must not narrow model inspection.
+// The wordlist gate and the model audit narrow together. Wordlists used to
+// narrow unconditionally, which made the switch read as broken: turning it off
+// widened only the model, so a wordlist hit from an older turn still arrived.
 //
 // Output direction is never narrowed — the whole generated answer is the payload
 // under inspection, and there is no "latest turn" to narrow to.
@@ -236,7 +238,7 @@ func InspectPrompt(c *gin.Context, request PromptAuditRequest) (PromptAuditResul
 	}
 
 	wordlistSnapshot := request.Snapshot
-	if direction == PromptAuditDirectionInput {
+	if promptInspectionUsesBlockingSnapshot(direction, configured) {
 		wordlistSnapshot = wordlistSnapshot.BlockingSnapshot()
 	}
 	match, err := matchPromptWordlists(wordlistSnapshot, configured)

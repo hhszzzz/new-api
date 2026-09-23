@@ -118,9 +118,21 @@ func (snapshot PromptAuditSnapshot) SemanticSegments() PromptAuditSnapshot {
 	return PromptAuditSnapshot{Segments: snapshot.OrderedSegments()}
 }
 
-// BlockingSnapshot drops older conversation turns, retaining the latest user,
-// preceding assistant, and the current tool round in their original order.
-// Other sources remain available for independent source-policy selection.
+// BlockingSnapshot drops older conversation turns and superseded tool rounds,
+// retaining the latest user turn, the assistant block that precedes it, the last
+// tool round, and every remaining source in their original order.
+//
+// Tool calls and results are the only accumulating source: an agent resends its
+// whole transcript on every step, so keeping their history would re-inspect the
+// same tool output on every request. Each round is already inspected by the
+// request that produced it, so only the last one is carried forward — the newest
+// tool call or result, extended back over the results of that round and the calls
+// that opened it. That round is kept even when it precedes the latest user turn:
+// it is the tool work the request continues.
+//
+// Sources an administrator selects independently (system, developer, task) are
+// never narrowed: they are the request's own authority blocks rather than
+// conversation history, and dropping them would silently disable a policy.
 func (snapshot PromptAuditSnapshot) BlockingSnapshot() PromptAuditSnapshot {
 	normalized := snapshot.OrderedSegments()
 	userStart := latestUserSegmentStart(normalized)
@@ -141,14 +153,55 @@ func (snapshot PromptAuditSnapshot) BlockingSnapshot() PromptAuditSnapshot {
 		assistantStart, assistantEnd = start, index
 		break
 	}
+	toolStart, toolEnd := latestToolRound(normalized)
 	selected := make([]PromptAuditSegment, 0, len(normalized))
 	for index, segment := range normalized {
-		if index >= userStart || (index >= assistantStart && index <= assistantEnd) ||
-			(segment.SourceScope() != PromptScopeUser && segment.SourceScope() != PromptScopeAssistant) {
+		scope := segment.SourceScope()
+		switch {
+		case scope == PromptScopeToolCall || scope == PromptScopeToolResult:
+			if index >= toolStart && index <= toolEnd {
+				selected = append(selected, segment)
+			}
+		case index >= userStart, index >= assistantStart && index <= assistantEnd:
 			selected = append(selected, segment)
+		default:
+			// Every remaining source (system, developer, task) is the request's own
+			// authority block; conversation text outside the retained turns is not.
+			if scope != PromptScopeUser && scope != PromptScopeAssistant {
+				selected = append(selected, segment)
+			}
 		}
 	}
 	return PromptAuditSnapshot{Segments: selected}
+}
+
+// latestToolRound returns the bounds of the last tool round: the newest tool
+// call or result, extended back over the results of the same round and the calls
+// that opened it. -1, -1 means the snapshot carries no tool content at all.
+func latestToolRound(segments []PromptAuditSegment) (int, int) {
+	end := -1
+	for index := len(segments) - 1; index >= 0; index-- {
+		scope := segments[index].SourceScope()
+		if scope == PromptScopeToolCall || scope == PromptScopeToolResult {
+			end = index
+			break
+		}
+	}
+	if end < 0 {
+		return -1, -1
+	}
+	start := end
+	// A round's results follow its calls, so the calls that opened the newest round
+	// sit behind that round's results.
+	if segments[end].SourceScope() == PromptScopeToolResult {
+		for start > 0 && segments[start-1].SourceScope() == PromptScopeToolResult {
+			start--
+		}
+	}
+	for start > 0 && segments[start-1].SourceScope() == PromptScopeToolCall {
+		start--
+	}
+	return start, end
 }
 
 func latestUserSegmentStart(segments []PromptAuditSegment) int {

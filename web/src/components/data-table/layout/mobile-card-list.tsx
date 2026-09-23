@@ -184,7 +184,9 @@ export function MobileCardList<TData>(props: MobileCardListProps<TData>) {
             )}
           >
             <div className='flex min-w-0 items-start gap-2'>
-              {enableRowSelection && (
+              {/* A row the table marks unselectable — a nested row, for
+                  instance — gets no checkbox here either. */}
+              {enableRowSelection && row.getCanSelect() && (
                 <Checkbox
                   className='mt-0.5'
                   checked={row.getIsSelected()}

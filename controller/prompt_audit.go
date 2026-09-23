@@ -63,19 +63,20 @@ type promptAuditConfigUpdate struct {
 }
 
 type promptAuditFilterRequest struct {
-	IDs        []int64 `json:"ids"`
-	Status     string  `json:"status"`
-	Decision   string  `json:"decision"`
-	Category   string  `json:"category"`
-	Username   string  `json:"username"`
-	Group      string  `json:"group"`
-	Protocol   string  `json:"protocol"`
-	Model      string  `json:"model"`
-	RequestID  string  `json:"request_id"`
-	Direction  string  `json:"direction"`
-	StartTime  int64   `json:"start_time"`
-	EndTime    int64   `json:"end_time"`
-	MaxID      int64   `json:"max_id"`
+	IDs             []int64 `json:"ids"`
+	Status          string  `json:"status"`
+	Decision        string  `json:"decision"`
+	Category        string  `json:"category"`
+	Username        string  `json:"username"`
+	Group           string  `json:"group"`
+	Protocol        string  `json:"protocol"`
+	Model           string  `json:"model"`
+	RequestID       string  `json:"request_id"`
+	Direction       string  `json:"direction"`
+	StartTime       int64   `json:"start_time"`
+	EndTime         int64   `json:"end_time"`
+	MaxID           int64   `json:"max_id"`
+	CollapseRepeats bool    `json:"collapse_repeats"`
 }
 
 type promptAuditDeleteRequest struct {
@@ -335,6 +336,56 @@ func ListPromptAudits(c *gin.Context) {
 	filter := promptAuditFilterFromQuery(c)
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	// A group id only exists in the collapsed listing, and only as the handle the
+	// collapsed row carries; while it is set the response is that one group's
+	// requests, so paging and the group counts do not apply.
+	groupID, _ := strconv.ParseInt(c.Query("group_id"), 10, 64)
+	if groupID > 0 {
+		audits, err := model.ListPromptAuditGroupRows(filter, groupID)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		items := make([]model.PromptAuditResponse, 0, len(audits))
+		for _, audit := range audits {
+			items = append(items, audit.ToResponse(false))
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"success": true, "message": "",
+			"data": gin.H{"items": items, "total": len(items), "page": 1, "page_size": len(items)},
+		})
+		return
+	}
+	if filter.CollapseRepeats {
+		rows, groups, recordsTotal, err := model.ListPromptAuditRepeats(filter, page, pageSize)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		items := make([]model.PromptAuditResponse, 0, len(rows))
+		for _, row := range rows {
+			item := row.Audit.ToResponse(false)
+			repeat := row.Repeat
+			// The merged row stands for every request in its group, so it reports
+			// what the whole group decided rather than the verdict of the request
+			// that happens to represent it: a group whose first request passed must
+			// not read as a pass when a later one was blocked. How much of each the
+			// group holds stays readable in repeat.blocks and repeat.unavailable.
+			if worst := model.PromptAuditDecisionForAction(repeat.WorstAction); worst != "" {
+				item.Decision = worst
+				item.Action = repeat.WorstAction
+			}
+			item.Repeat = &repeat
+			items = append(items, item)
+		}
+		// total counts groups and records_total counts the requests behind them,
+		// so the screen can show both without disagreeing with its statistics.
+		c.JSON(http.StatusOK, gin.H{
+			"success": true, "message": "",
+			"data": gin.H{"items": items, "total": groups, "records_total": recordsTotal, "page": page, "page_size": pageSize},
+		})
+		return
+	}
 	audits, total, err := model.ListPromptAudits(filter, page, pageSize)
 	if err != nil {
 		common.ApiError(c, err)
@@ -557,13 +608,16 @@ func promptAuditSetInt(values map[string]string, key string, value *int) {
 func promptAuditFilterFromQuery(c *gin.Context) model.PromptAuditFilter {
 	startTime, _ := strconv.ParseInt(c.Query("start_time"), 10, 64)
 	endTime, _ := strconv.ParseInt(c.Query("end_time"), 10, 64)
+	collapseRepeats, _ := strconv.ParseBool(c.Query("collapse_repeats"))
 	return model.PromptAuditFilter{
 		Status: strings.TrimSpace(c.Query("status")), Decision: strings.TrimSpace(c.Query("decision")),
 		Category: strings.TrimSpace(c.Query("category")), Username: strings.TrimSpace(c.Query("username")),
 		Group: strings.TrimSpace(c.Query("group")), Protocol: strings.TrimSpace(c.Query("protocol")),
 		Model: strings.TrimSpace(c.Query("model")), RequestID: strings.TrimSpace(c.Query("request_id")),
-		Direction: strings.TrimSpace(c.Query("direction")),
-		StartTime: startTime, EndTime: endTime,
+		Direction:       strings.TrimSpace(c.Query("direction")),
+		StartTime:       startTime,
+		EndTime:         endTime,
+		CollapseRepeats: collapseRepeats,
 	}
 }
 
@@ -575,5 +629,6 @@ func (request promptAuditFilterRequest) toModel() model.PromptAuditFilter {
 		Protocol: strings.TrimSpace(request.Protocol), Model: strings.TrimSpace(request.Model),
 		RequestID: strings.TrimSpace(request.RequestID), Direction: strings.TrimSpace(request.Direction),
 		StartTime: request.StartTime, EndTime: request.EndTime, MaxID: request.MaxID,
+		CollapseRepeats: request.CollapseRepeats,
 	}
 }

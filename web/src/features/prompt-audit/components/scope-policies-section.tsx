@@ -20,12 +20,18 @@ import { useTranslation } from 'react-i18next'
 
 import { MultiSelect } from '@/components/multi-select'
 import { Label } from '@/components/ui/label'
-import { Switch } from '@/components/ui/switch'
 import { SettingsSwitchField } from '@/features/system-settings/components/settings-form-layout'
 import { SettingsSection } from '@/features/system-settings/components/settings-section'
 
 import { PROMPT_AUDIT_SCOPES, promptAuditScopeLabel } from '../scopes'
 import type { PromptScopePolicies, PromptWordlist } from '../types'
+
+/**
+ * A scope is inspected by model review, by wordlists, or by both, and the one
+ * control that picks that holds model review as an option of its own. It is not
+ * a wordlist, so it never reaches the ids that are saved.
+ */
+const MODEL_AUDIT_OPTION = 'model_audit'
 
 interface ScopePoliciesSectionProps {
   policies: PromptScopePolicies
@@ -37,17 +43,20 @@ interface ScopePoliciesSectionProps {
 
 export function ScopePoliciesSection(props: ScopePoliciesSectionProps) {
   const { t } = useTranslation()
-  const options = props.libraries.map((library) => ({
-    value: library.id,
-    label:
-      (library.id === 'manual' ? t('Custom wordlist') : library.name) +
-      (library.enabled ? '' : ' (' + t('Disabled') + ')'),
-  }))
+  const options = [
+    { value: MODEL_AUDIT_OPTION, label: t('Model audit') },
+    ...props.libraries.map((library) => ({
+      value: library.id,
+      label:
+        (library.id === 'manual' ? t('Custom wordlist') : library.name) +
+        (library.enabled ? '' : ' (' + t('Disabled') + ')'),
+    })),
+  ]
   return (
     <SettingsSection title={t('Inspection rules by source')}>
       <p className='text-muted-foreground text-xs leading-relaxed'>
         {t(
-          'Choose wordlists and model review separately for each part of a request. Disabled wordlists keep their assignments.'
+          'Choose what inspects each part of a request: model review, wordlists, or both. Disabled wordlists keep their assignments.'
         )}
       </p>
 
@@ -68,11 +77,11 @@ export function ScopePoliciesSection(props: ScopePoliciesSectionProps) {
           return (
             <div
               key={scope}
-              className='grid items-center gap-3 py-3 md:grid-cols-[13rem_1fr_6rem]'
+              className='grid items-center gap-3 py-3 md:grid-cols-[13rem_1fr]'
             >
               <div className='space-y-0.5'>
                 <Label
-                  htmlFor={`scope-libraries-${scope}`}
+                  htmlFor={`scope-inspectors-${scope}`}
                   className='cursor-pointer text-sm font-medium'
                 >
                   {label}
@@ -80,35 +89,24 @@ export function ScopePoliciesSection(props: ScopePoliciesSectionProps) {
               </div>
               <div>
                 <MultiSelect
-                  id={`scope-libraries-${scope}`}
+                  id={`scope-inspectors-${scope}`}
                   aria-label={label}
                   options={options}
-                  selected={policy.library_ids}
+                  selected={[
+                    ...(policy.model_audit ? [MODEL_AUDIT_OPTION] : []),
+                    ...policy.library_ids,
+                  ]}
                   maxVisibleChips={3}
-                  placeholder={t('No wordlists selected')}
-                  onChange={(library_ids) =>
+                  placeholder={t('No inspection selected')}
+                  onChange={(values) =>
                     props.onChange({
                       ...props.policies,
-                      [scope]: { ...policy, library_ids },
-                    })
-                  }
-                />
-              </div>
-              <div className='flex items-center justify-between gap-2 md:justify-end'>
-                <Label
-                  htmlFor={`scope-model-${scope}`}
-                  className='text-muted-foreground text-xs md:sr-only'
-                >
-                  {t('Model audit')}
-                  <span className='sr-only'>: {label}</span>
-                </Label>
-                <Switch
-                  id={`scope-model-${scope}`}
-                  checked={policy.model_audit}
-                  onCheckedChange={(model_audit) =>
-                    props.onChange({
-                      ...props.policies,
-                      [scope]: { ...policy, model_audit },
+                      [scope]: {
+                        library_ids: values.filter(
+                          (value) => value !== MODEL_AUDIT_OPTION
+                        ),
+                        model_audit: values.includes(MODEL_AUDIT_OPTION),
+                      },
                     })
                   }
                 />
@@ -119,7 +117,7 @@ export function ScopePoliciesSection(props: ScopePoliciesSectionProps) {
       </div>
       <p className='text-muted-foreground text-xs leading-relaxed'>
         {t(
-          'Wordlists inspect the latest user and preceding assistant turns, plus other assigned sources. Model audit uses its configured conversation scope.'
+          'Wordlists and model audit inspect the same conversation scope: the latest turn and the newest tool round while the latest-turn switch is on, and the whole request once it is off. System, developer, and task sources are always inspected.'
         )}
       </p>
       <p className='text-muted-foreground text-xs leading-relaxed'>

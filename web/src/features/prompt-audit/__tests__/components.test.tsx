@@ -182,6 +182,65 @@ describe('prompt audit management components', () => {
     expect(screen.queryByText('redacted-preview')).not.toBeInTheDocument()
   })
 
+  test('separates the scopes that were inspected from the retained copy', async () => {
+    getPromptAuditMock.mockResolvedValue({
+      success: true,
+      data: { ...EVENT, inspected_scopes: ['user', 'tool_result'] },
+    })
+
+    renderWithQueryClient(
+      <PromptAuditDetailSheet
+        eventID={EVENT.id}
+        canViewFullPrompt
+        canManage={false}
+        canDelete={false}
+        onOpenChange={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    )
+
+    expect(await screen.findByText('Inspected scope')).toBeVisible()
+    expect(screen.getByText('User messages')).toBeVisible()
+    expect(screen.getByText('Tool results')).toBeVisible()
+    expect(
+      screen.getByText(
+        'Only these parts were submitted for inspection; the rest of the request was not inspected.'
+      )
+    ).toBeVisible()
+  })
+
+  test('records no inspected scope for a wordlist-only row', async () => {
+    getPromptAuditMock.mockResolvedValue({
+      success: true,
+      data: {
+        ...EVENT,
+        inspection_type: 'wordlist',
+        matched_scope: 'user',
+        inspected_scopes: [],
+      },
+    })
+
+    renderWithQueryClient(
+      <PromptAuditDetailSheet
+        eventID={EVENT.id}
+        canViewFullPrompt={false}
+        canManage={false}
+        canDelete={false}
+        onOpenChange={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    )
+
+    expect(await screen.findByText('Inspected scope')).toBeVisible()
+    // The hit is reported as the text source, not as a scope the audit node saw.
+    expect(screen.getByText('Text source')).toBeVisible()
+    expect(
+      screen.queryByText(
+        'Only these parts were submitted for inspection; the rest of the request was not inspected.'
+      )
+    ).not.toBeInTheDocument()
+  })
+
   test('hides the related log links for a request the audit rejected', async () => {
     getPromptAuditMock.mockResolvedValue({
       success: true,
@@ -199,7 +258,7 @@ describe('prompt audit management components', () => {
       />
     )
 
-    expect(await screen.findByText('redacted-preview')).toBeVisible()
+    expect(await screen.findByText('Inspected scope')).toBeVisible()
     expect(
       screen.queryByRole('link', { name: /Related/ })
     ).not.toBeInTheDocument()

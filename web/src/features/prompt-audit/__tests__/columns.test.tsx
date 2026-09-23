@@ -23,10 +23,15 @@ import {
   useReactTable,
 } from '@tanstack/react-table'
 import { render, renderHook, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { describe, expect, test, vi } from 'vitest'
 
+import { DataTableView } from '@/components/data-table/core/data-table-view'
+import { useDataTable } from '@/components/data-table/hooks/use-data-table'
+
 import { usePromptAuditColumns } from '../components/prompt-audit-columns'
-import type { PromptAuditEvent } from '../types'
+import { isMergedPromptAuditRow, promptAuditRowID } from '../lib'
+import type { PromptAuditEvent, PromptAuditRepeat } from '../types'
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -101,11 +106,27 @@ const EVENT: PromptAuditEvent = {
   completed_at: 1_785_000_001,
 }
 
-function columns(): ColumnDef<PromptAuditEvent>[] {
+// One audited text resent three times: an agent run submits the same text on
+// every step, and the verdict cache only holds successes, so a timed-out attempt
+// is retried and recorded as unavailable next to the block that followed it.
+const REPEAT: PromptAuditRepeat = {
+  count: 3,
+  first_at: 1_784_999_400,
+  last_at: 1_785_000_600,
+  worst_action: 'block',
+  blocks: 1,
+  unavailable: 1,
+}
+
+function columns(
+  options: { collapsed?: boolean; loadingGroupIDs?: Set<number> } = {}
+): ColumnDef<PromptAuditEvent>[] {
   return renderHook(() =>
     usePromptAuditColumns({
       canDelete: false,
       onOpen: () => {},
+      collapsed: options.collapsed,
+      loadingGroupIDs: options.loadingGroupIDs,
     })
   ).result.current
 }
@@ -120,7 +141,8 @@ function lines(cell: HTMLElement): (string | null)[] {
 
 function renderCell(
   columnID: string,
-  event: PromptAuditEvent = EVENT
+  event: PromptAuditEvent = EVENT,
+  options: { collapsed?: boolean; loadingGroupIDs?: Set<number> } = {}
 ): HTMLElement {
   function Harness({
     defs,
@@ -147,8 +169,47 @@ function renderCell(
     )
   }
 
-  render(<Harness defs={columns()} row={event} />)
+  render(<Harness defs={columns(options)} row={event} />)
   return screen.getByTestId('cell')
+}
+
+/** A collapsed row plus the requests the table renders under it. */
+type PromptAuditListRow = PromptAuditEvent & { children?: PromptAuditEvent[] }
+
+// The records table renders a collapsed row's requests as child rows, so the
+// harness drives the real table options instead of a hand-built row model.
+function renderCollapsedRow(event: PromptAuditListRow) {
+  // The columns come from a hook, so they are resolved before the table mounts
+  // rather than from inside its render.
+  const defs = columns({ collapsed: true })
+
+  function Harness() {
+    const { table } = useDataTable<PromptAuditListRow>({
+      data: [event],
+      columns: defs,
+      getSubRows: (row) => row.children,
+      // The page hands the table the same rule: a row holds its requests only
+      // after it was opened, so it cannot be told apart from any other row by
+      // the data alone.
+      getRowCanExpand: (row) => isMergedPromptAuditRow(row.original),
+      getRowId: promptAuditRowID,
+      withExpandedRowModel: true,
+    })
+
+    return (
+      <>
+        <div data-testid='row-ids'>
+          {table
+            .getRowModel()
+            .rows.map((row) => row.id)
+            .join(',')}
+        </div>
+        <DataTableView table={table} />
+      </>
+    )
+  }
+
+  render(<Harness />)
 }
 
 describe('prompt audit records table', () => {
@@ -241,5 +302,154 @@ describe('prompt audit records table', () => {
     expect(column?.enableHiding).not.toBe(false)
     expect(meta?.label).toBe('Client')
     expect(meta?.mobileHidden).toBe(true)
+  })
+
+  test('counts the requests a merged row stands for', () => {
+    const cell = renderCell('result', {
+      ...EVENT,
+      decision: 'block',
+      repeat: REPEAT,
+    })
+
+    expect(cell.textContent).toContain('×3')
+    // The count is the accessible name of the badge, not just its glyph.
+    expect(
+      screen.getByRole('img', { name: '3 requests submitted the same text' })
+    ).toBeVisible()
+  })
+
+  test('shows no count on a request that stands alone', () => {
+    const cell = renderCell('result')
+
+    expect(cell.textContent).not.toContain('×')
+    expect(screen.queryByRole('img')).not.toBeInTheDocument()
+  })
+
+  test('reads a group of one as the plain request it is', () => {
+    const cell = renderCell(
+      'result',
+      { ...EVENT, repeat: { ...REPEAT, count: 1 } },
+      { collapsed: true }
+    )
+
+    // Nothing is hidden behind a single request, so it carries neither a count
+    // nor a toggle for a group it does not have.
+    expect(cell.textContent).not.toContain('×')
+    expect(screen.queryByRole('img')).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Expand' })
+    ).not.toBeInTheDocument()
+  })
+
+  test('reads a merged row as the span its requests cover', () => {
+    const cell = renderCell('created_at', { ...EVENT, repeat: REPEAT })
+
+    // The day the requests started is named once, and both ends of the span sit
+    // together under it as clock readings.
+    expect(cell.textContent?.match(/\d{4}-\d{2}-\d{2}/g)).toHaveLength(1)
+    const times = cell.textContent?.match(/\d{2}:\d{2}:\d{2}/g)
+    expect(times).toHaveLength(2)
+    expect(times?.[0]).not.toBe(times?.[1])
+  })
+
+  test('marks a revealed request as one of the run its group forms', async () => {
+    const user = userEvent.setup()
+    renderCollapsedRow({
+      ...EVENT,
+      repeat: REPEAT,
+      children: [{ ...EVENT, redacted_preview: 'first-request' }],
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Expand' }))
+
+    const rows = document.querySelectorAll('tbody tr')
+    expect(rows).toHaveLength(2)
+    // Only the requests under the group hang off a rule; the group's own row
+    // carries the count instead.
+    expect(rows[0].querySelector('.prompt-audit-timeline')).toBeNull()
+    expect(rows[1].querySelector('.prompt-audit-timeline')).not.toBeNull()
+  })
+
+  test('leaves a group of one with a single timestamp', () => {
+    const cell = renderCell('created_at', {
+      ...EVENT,
+      repeat: { ...REPEAT, count: 1 },
+    })
+
+    const stamps = cell.textContent?.match(
+      /\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/g
+    )
+    expect(stamps).toHaveLength(1)
+  })
+
+  test('offers the group toggle only while the listing is collapsed', () => {
+    renderCell('result', { ...EVENT, repeat: REPEAT })
+
+    expect(
+      screen.queryByRole('button', { name: 'Expand' })
+    ).not.toBeInTheDocument()
+  })
+
+  test('keeps the group toggle out of a row the listing did not merge', () => {
+    renderCell('result', EVENT, { collapsed: true })
+
+    expect(
+      screen.queryByRole('button', { name: 'Expand' })
+    ).not.toBeInTheDocument()
+  })
+
+  test('toggles a collapsed row open and closed', async () => {
+    const user = userEvent.setup()
+    renderCollapsedRow({
+      ...EVENT,
+      repeat: REPEAT,
+      children: [{ ...EVENT, redacted_preview: 'first-request' }],
+    })
+
+    const expand = screen.getByRole('button', { name: 'Expand' })
+    expect(expand).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.getByTestId('row-ids')).toHaveTextContent('17')
+
+    await user.click(expand)
+
+    const collapse = screen.getByRole('button', { name: 'Collapse' })
+    expect(collapse).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByTestId('row-ids')).toHaveTextContent('17,17:17')
+  })
+
+  test('opens a merged row whose requests have not arrived', async () => {
+    const user = userEvent.setup()
+    // The group is fetched on the click that opens the row, so at the moment it
+    // is rendered the row carries the count but none of the requests.
+    renderCollapsedRow({ ...EVENT, repeat: REPEAT })
+
+    await user.click(screen.getByRole('button', { name: 'Expand' }))
+
+    expect(screen.getByRole('button', { name: 'Collapse' })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    )
+  })
+
+  test('expands a collapsed row into the requests it counted', async () => {
+    const user = userEvent.setup()
+    renderCollapsedRow({
+      ...EVENT,
+      repeat: REPEAT,
+      children: [
+        { ...EVENT, redacted_preview: 'first-request' },
+        { ...EVENT, id: 18, redacted_preview: 'second-request' },
+      ],
+    })
+
+    expect(screen.queryByText('second-request')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Expand' }))
+
+    expect(screen.getByText('first-request')).toBeVisible()
+    expect(screen.getByText('second-request')).toBeVisible()
+    // The group's first request is one of its children, so the two rows must not
+    // share an id.
+    expect(screen.getByTestId('row-ids')).toHaveTextContent('17,17:17,17:18')
   })
 })

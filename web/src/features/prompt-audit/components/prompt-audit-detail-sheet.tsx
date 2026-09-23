@@ -116,6 +116,9 @@ export function PromptAuditDetailSheet({
   const prompt = showsFullPrompt
     ? (event?.full_prompt ?? '')
     : (event?.redacted_preview ?? '')
+  // Only the model path records which scopes it submitted; a wordlist-only row
+  // reports where it matched instead, under Text source.
+  const inspectedScopes = event?.inspected_scopes ?? []
   // A rejected request never reaches upstream, and the audit deliberately
   // writes neither a consume log nor an error log for it, so both related-log
   // links would lead to an empty page.
@@ -170,6 +173,27 @@ export function PromptAuditDetailSheet({
                 </Badge>
               </div>
 
+              <DetailSection label={t('Inspected scope')}>
+                {inspectedScopes.length === 0 ? (
+                  <span className='text-muted-foreground text-xs'>—</span>
+                ) : (
+                  <>
+                    <div className='flex flex-wrap gap-1.5'>
+                      {inspectedScopes.map((scope) => (
+                        <Badge key={scope} variant='outline'>
+                          {promptAuditScopeLabel(scope, t)}
+                        </Badge>
+                      ))}
+                    </div>
+                    <p className='text-muted-foreground mt-2 text-xs leading-relaxed'>
+                      {t(
+                        'Only these parts were submitted for inspection; the rest of the request was not inspected.'
+                      )}
+                    </p>
+                  </>
+                )}
+              </DetailSection>
+
               <DetailSection label={t('Prompt')}>
                 <div className='mb-2 flex items-center justify-between gap-3'>
                   <span className='text-muted-foreground text-xs font-medium'>
@@ -194,11 +218,9 @@ export function PromptAuditDetailSheet({
                 <pre className='bg-background/70 max-h-[26rem] overflow-auto rounded-md p-3 text-xs leading-relaxed break-words whitespace-pre-wrap [content-visibility:auto]'>
                   {prompt || t('No prompt text retained')}
                 </pre>
-                {!canViewFullPrompt && (
-                  <p className='text-muted-foreground mt-2 text-xs'>
-                    {t('Your permission only allows the redacted preview.')}
-                  </p>
-                )}
+                <p className='text-muted-foreground mt-2 text-xs'>
+                  {t('Your permission only allows the redacted preview.')}
+                </p>
               </DetailSection>
 
               <DetailSection label={t('Context')}>

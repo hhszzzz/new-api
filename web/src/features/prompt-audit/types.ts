@@ -134,6 +134,15 @@ export type PromptAuditConfigUpdate = Omit<
   endpoints: PromptAuditEndpointUpdate[]
 }
 
+export interface PromptAuditRepeat {
+  count: number
+  first_at: number
+  last_at: number
+  worst_action: string
+  blocks: number
+  unavailable: number
+}
+
 export interface PromptAuditEvent {
   inspection_type?: 'wordlist' | 'model' | 'wordlist_model'
   wordlist_id?: string
@@ -199,6 +208,11 @@ export interface PromptAuditEvent {
   created_at: number
   updated_at: number
   completed_at: number
+  /**
+   * Present only in the collapsed listing: the requests this row stands for,
+   * and what the whole group decided. Absent on a single event.
+   */
+  repeat?: PromptAuditRepeat
 }
 
 export interface PromptAuditFilters {
@@ -220,6 +234,8 @@ export interface PromptAuditListData {
   total: number
   page: number
   page_size: number
+  /** Requests behind the rows a collapsed listing returned. */
+  records_total?: number
 }
 
 export interface PromptAuditStats {

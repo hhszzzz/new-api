@@ -323,6 +323,164 @@ func TestPromptAuditStatsQueriesRemainIndependent(t *testing.T) {
 	assert.EqualValues(t, 1, stats.Unknown)
 }
 
+// TestPromptAuditRepeatWorstDecision pins the vocabulary a collapsed row is
+// displayed in: the worst outcome of a group is tallied as an action, and the
+// decision badge reports it in decisions. The two line up one for one, and an
+// unknown action claims no decision at all.
+func TestPromptAuditRepeatWorstDecision(t *testing.T) {
+	for _, testCase := range []struct{ action, decision string }{
+		{promptAuditActionBlock, promptAuditDecisionBlock},
+		{promptAuditActionUnavailable, promptAuditDecisionUnavailable},
+		{promptAuditActionMark, promptAuditDecisionFlag},
+		{promptAuditActionAllow, promptAuditDecisionPass},
+		{"", ""},
+		{"legacy", ""},
+	} {
+		assert.Equal(t, testCase.decision, PromptAuditDecisionForAction(testCase.action), "action %q", testCase.action)
+	}
+}
+
+// TestPromptAuditRepeatListingSQLite runs the collapsed listing against the
+// engine every contributor has. The MySQL and PostgreSQL runs live in
+// TestPromptAuditStorageConfiguredDatabases.
+func TestPromptAuditRepeatListingSQLite(t *testing.T) {
+	db := withPromptAuditTestDB(t)
+	var version string
+	require.NoError(t, db.Raw("SELECT sqlite_version()").Scan(&version).Error)
+	t.Logf("sqlite version: %s", version)
+	runPromptAuditRepeatListing(t, db)
+}
+
+// runPromptAuditRepeatListing covers one audited text resent by every step of an
+// agent run. The group key is a CASE expression, the group count comes from a
+// derived table and the action tally is a second grouped scan, so the statements
+// are dialect-sensitive: sqlite cannot stand in for MySQL or PostgreSQL here.
+func runPromptAuditRepeatListing(t *testing.T, db *gorm.DB) {
+	t.Helper()
+
+	const repeatUsername = "repeat-user"
+	const repeatModel = "guarded-model"
+	sharedHash := strings.Repeat("a", 64)
+	markHash := strings.Repeat("b", 64)
+
+	seed := func(requestID string, userID int, hash, action string, createdAt int64, promptLength int) {
+		t.Helper()
+		require.NoError(t, CreatePromptAudit(&PromptAudit{
+			RequestID: requestID, UserID: userID, Username: repeatUsername, ModelName: repeatModel,
+			Status: PromptAuditStatusDone, PromptHash: hash, Action: action,
+			PromptLength: promptLength, CreatedAt: createdAt,
+		}))
+	}
+
+	// One text resent three times, with a mixed outcome: the verdict cache only
+	// holds successes, so the attempt that timed out is retried and recorded as
+	// unavailable next to the allow that followed it.
+	seed("repeat-block-first", 7, sharedHash, promptAuditActionBlock, 1000, 100)
+	seed("repeat-block-second", 7, sharedHash, promptAuditActionUnavailable, 1010, 200)
+	seed("repeat-block-third", 7, sharedHash, promptAuditActionAllow, 1020, 300)
+	seed("repeat-mark-first", 7, markHash, promptAuditActionMark, 1030, 400)
+	seed("repeat-mark-second", 7, markHash, promptAuditActionAllow, 1040, 500)
+	// Rows from before the hash was recorded carry none, so each must stand alone
+	// rather than merge with the other hashless row sharing its user and model.
+	seed("repeat-legacy-first", 7, "", promptAuditActionAllow, 1050, 600)
+	seed("repeat-legacy-second", 7, "", promptAuditActionAllow, 1060, 700)
+	// The same hash under another user is a different text as far as the operator
+	// is concerned, and must not be folded into the group above.
+	seed("repeat-other-user", 8, sharedHash, promptAuditActionAllow, 1070, 800)
+
+	filter := PromptAuditFilter{Username: repeatUsername}
+	rows, groups, recordsTotal, err := ListPromptAuditRepeats(filter, 1, 20)
+	require.NoError(t, err)
+	assert.EqualValues(t, 5, groups)
+	assert.EqualValues(t, 8, recordsTotal)
+	require.Len(t, rows, 5)
+
+	// Groups are ordered by their first request, newest group first.
+	assert.Equal(t, "repeat-other-user", rows[0].Audit.RequestID)
+	assert.Equal(t, "repeat-legacy-second", rows[1].Audit.RequestID)
+	assert.Equal(t, "repeat-legacy-first", rows[2].Audit.RequestID)
+	assert.Equal(t, "repeat-mark-first", rows[3].Audit.RequestID)
+	assert.Equal(t, "repeat-block-first", rows[4].Audit.RequestID)
+
+	groupFor := func(userID int, hash, requestID string) PromptAuditRepeatRow {
+		for _, row := range rows {
+			if row.Audit.UserID == userID && row.Audit.PromptHash == hash && row.Audit.RequestID == requestID {
+				return row
+			}
+		}
+		t.Fatalf("no collapsed row represents %s", requestID)
+		return PromptAuditRepeatRow{}
+	}
+
+	// The representative is the group's first request: the one that carried the
+	// audited text before later steps appended their context.
+	blocked := groupFor(7, sharedHash, "repeat-block-first")
+	assert.EqualValues(t, 3, blocked.Repeat.Count)
+	assert.EqualValues(t, 1000, blocked.Repeat.FirstAt)
+	assert.EqualValues(t, 1020, blocked.Repeat.LastAt)
+	assert.Equal(t, promptAuditActionBlock, blocked.Repeat.WorstAction)
+	assert.EqualValues(t, 1, blocked.Repeat.Blocks)
+	assert.EqualValues(t, 1, blocked.Repeat.Unavailable)
+	assert.EqualValues(t, 100, blocked.Audit.PromptLength)
+
+	marked := groupFor(7, markHash, "repeat-mark-first")
+	assert.EqualValues(t, 2, marked.Repeat.Count)
+	assert.EqualValues(t, 1030, marked.Repeat.FirstAt)
+	assert.EqualValues(t, 1040, marked.Repeat.LastAt)
+	assert.Equal(t, promptAuditActionMark, marked.Repeat.WorstAction)
+	assert.Zero(t, marked.Repeat.Blocks)
+	assert.Zero(t, marked.Repeat.Unavailable)
+
+	legacy := groupFor(7, "", "repeat-legacy-first")
+	assert.EqualValues(t, 1, legacy.Repeat.Count)
+	assert.Equal(t, promptAuditActionAllow, legacy.Repeat.WorstAction)
+
+	otherUser := groupFor(8, sharedHash, "repeat-other-user")
+	assert.EqualValues(t, 1, otherUser.Repeat.Count)
+
+	// records_total must agree with the uncollapsed listing, or the screen would
+	// show two different record counts for the same filter.
+	uncollapsed, uncollapsedTotal, err := ListPromptAudits(filter, 1, 20)
+	require.NoError(t, err)
+	assert.EqualValues(t, 8, uncollapsedTotal)
+	assert.Len(t, uncollapsed, 8)
+	assert.EqualValues(t, uncollapsedTotal, recordsTotal)
+
+	// Paging counts groups, and the pages must not repeat one.
+	pageOne, pagedGroups, pagedRecords, err := ListPromptAuditRepeats(filter, 1, 2)
+	require.NoError(t, err)
+	require.Len(t, pageOne, 2)
+	assert.EqualValues(t, 5, pagedGroups)
+	assert.EqualValues(t, 8, pagedRecords)
+	pageThree, _, _, err := ListPromptAuditRepeats(filter, 3, 2)
+	require.NoError(t, err)
+	require.Len(t, pageThree, 1)
+	paged := map[int64]bool{}
+	for _, row := range append(append([]PromptAuditRepeatRow{}, pageOne...), pageThree...) {
+		paged[row.Audit.ID] = true
+	}
+	assert.Len(t, paged, 3)
+
+	// Expanding a collapsed row returns exactly the requests it counted.
+	expanded, err := ListPromptAuditGroupRows(filter, blocked.Audit.ID)
+	require.NoError(t, err)
+	require.Len(t, expanded, 3)
+	assert.EqualValues(t, blocked.Repeat.Count, len(expanded))
+	assert.Equal(t, "repeat-block-third", expanded[0].RequestID)
+	assert.Equal(t, "repeat-block-first", expanded[2].RequestID)
+
+	legacyRows, err := ListPromptAuditGroupRows(filter, legacy.Audit.ID)
+	require.NoError(t, err)
+	require.Len(t, legacyRows, 1)
+	assert.Equal(t, legacy.Audit.ID, legacyRows[0].ID)
+
+	// The expansion re-applies the listing's filter, so a group the filter hides
+	// stays hidden even when its representative id is known.
+	hidden, err := ListPromptAuditGroupRows(PromptAuditFilter{Username: repeatUsername, Model: "another-model"}, otherUser.Audit.ID)
+	require.NoError(t, err)
+	assert.Empty(t, hidden)
+}
+
 func TestPromptAuditStorageConfiguredDatabases(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -467,6 +625,8 @@ func TestPromptAuditStorageConfiguredDatabases(t *testing.T) {
 			deleted, err := DeletePromptAudits(PromptAuditFilter{}, eligible, maxID)
 			require.NoError(t, err)
 			assert.EqualValues(t, 2, deleted)
+
+			runPromptAuditRepeatListing(t, db)
 		})
 	}
 }
