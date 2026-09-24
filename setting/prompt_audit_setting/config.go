@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -102,6 +103,8 @@ type PromptAuditSetting struct {
 	Mode                   string                               `json:"mode"`
 	OutputMode             string                               `json:"output_mode"`
 	BlockingLatestTurnOnly bool                                 `json:"blocking_latest_turn_only"`
+	ProbeBlockEnabled      bool                                 `json:"probe_block_enabled"`
+	ProbePhrases           []string                             `json:"probe_phrases"`
 	EnabledCategories      []string                             `json:"enabled_categories"`
 	ControversialBlocks    []string                             `json:"controversial_block_categories"`
 	ReviewEnabled          bool                                 `json:"review_enabled"`
@@ -131,6 +134,7 @@ var promptAuditSetting = PromptAuditSetting{
 	Mode:                   ModeOff,
 	OutputMode:             ModeOff,
 	BlockingLatestTurnOnly: true,
+	ProbePhrases:           defaultProbePhrases(),
 	EnabledCategories:      append([]string(nil), AllCategoryIDs...),
 	ControversialBlocks:    []string{"jailbreak", "pii", "suicide_and_self_harm"},
 	ManualWordlistAction:   WordlistActionBlock,
@@ -155,6 +159,10 @@ var promptAuditSetting = PromptAuditSetting{
 }
 
 var promptAuditSettingSnapshot atomic.Pointer[PromptAuditSetting]
+
+func defaultProbePhrases() []string {
+	return []string{"hi", "hello", "hey", "ping", "test", "1", "你好", "在吗", "测试", "测活", "探活", "你是谁", "who are you"}
+}
 
 func init() {
 	config.GlobalConfig.Register("prompt_audit", &promptAuditSetting)
@@ -228,8 +236,19 @@ func (setting *PromptAuditSetting) ValidateConfig() error {
 	if setting.ControversialBlocks == nil {
 		setting.ControversialBlocks = []string{"jailbreak", "pii", "suicide_and_self_harm"}
 	}
+	if setting.ProbePhrases == nil {
+		setting.ProbePhrases = defaultProbePhrases()
+	}
 	if err := validateScopePolicies(setting.ScopePolicies); err != nil {
 		return err
+	}
+	if len(setting.ProbePhrases) > 256 {
+		return fmt.Errorf("probe phrases must not exceed 256 entries")
+	}
+	for _, phrase := range setting.ProbePhrases {
+		if strings.TrimSpace(phrase) == "" || utf8.RuneCountInString(phrase) > 128 {
+			return fmt.Errorf("probe phrases must contain between 1 and 128 characters")
+		}
 	}
 	mode := strings.ToLower(strings.TrimSpace(setting.Mode))
 	outputMode := strings.ToLower(strings.TrimSpace(setting.OutputMode))
@@ -422,6 +441,9 @@ func (setting *PromptAuditSetting) PublishConfig() {
 	if snapshot.ControversialBlocks == nil {
 		snapshot.ControversialBlocks = []string{"jailbreak", "pii", "suicide_and_self_harm"}
 	}
+	if snapshot.ProbePhrases == nil {
+		snapshot.ProbePhrases = defaultProbePhrases()
+	}
 	for index := range snapshot.EnabledCategories {
 		snapshot.EnabledCategories[index] = strings.ToLower(strings.TrimSpace(snapshot.EnabledCategories[index]))
 	}
@@ -514,6 +536,7 @@ func cloneSetting(setting PromptAuditSetting) PromptAuditSetting {
 	setting.EnabledCategories = append([]string(nil), setting.EnabledCategories...)
 	setting.ControversialBlocks = append([]string(nil), setting.ControversialBlocks...)
 	setting.Groups = append([]string(nil), setting.Groups...)
+	setting.ProbePhrases = slices.Clone(setting.ProbePhrases)
 	setting.Endpoints = append([]Endpoint(nil), setting.Endpoints...)
 	for index := range setting.Endpoints {
 		setting.Endpoints[index].Directions = append([]string(nil), setting.Endpoints[index].Directions...)
@@ -553,6 +576,10 @@ func settingFingerprint(setting PromptAuditSetting) string {
 	// Include the conversation window and execution limits so policy changes
 	// cannot reuse verdicts produced under a different configuration.
 	builder.WriteString(strconv.FormatBool(setting.BlockingLatestTurnOnly))
+	builder.WriteByte('|')
+	builder.WriteString(strconv.FormatBool(setting.ProbeBlockEnabled))
+	builder.WriteByte('|')
+	builder.WriteString(strings.Join(setting.ProbePhrases, ","))
 	builder.WriteByte('|')
 	groups := append([]string(nil), setting.Groups...)
 	sort.Strings(groups)

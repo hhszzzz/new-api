@@ -117,12 +117,17 @@ export function ScopePoliciesSection(props: ScopePoliciesSectionProps) {
       </div>
       <p className='text-muted-foreground text-xs leading-relaxed'>
         {t(
-          'Wordlists and model audit inspect the same conversation scope: the latest turn and the newest tool round while the latest-turn switch is on, and the whole request once it is off. System, developer, and task sources are always inspected.'
+          'While the latest-turn switch is on, wordlists inspect only the latest turn and the newest tool round in every mode, and model audit does so only in blocking mode; async model audit reads the whole request. Other enabled sources (system, developer, task) are always inspected.'
         )}
       </p>
       <p className='text-muted-foreground text-xs leading-relaxed'>
         {t(
-          'Tool definitions, metadata, binary content, and gateway-injected instructions are excluded.'
+          'MCP tool definitions are inspected separately and cached. Other tool definitions, metadata, binary content, and gateway-injected instructions are excluded.'
+        )}
+      </p>
+      <p className='text-muted-foreground text-xs leading-relaxed'>
+        {t(
+          'Clients can forge agent context and skill labels. Disabling inspection for these sources can allow disguised content to bypass your rules.'
         )}
       </p>
     </SettingsSection>

@@ -8,35 +8,53 @@ import (
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 )
 
-// PromptAuditSegment is one client-supplied textual message/instruction. It
-// intentionally carries no tool definitions, metadata, binary payload, or gateway-owned
-// state. User marks segments eligible for latest-user-first prioritization.
+// PromptAuditSegment is one client-supplied textual content block. Binary data,
+// credentials and gateway-owned state are excluded. MCP definitions are marked
+// separately so their verdicts can be cached independently of conversation text.
 type PromptAuditSegment struct {
 	Role  string           `json:"role"`
 	Text  string           `json:"text"`
 	User  bool             `json:"user"`
 	Scope PromptAuditScope `json:"scope,omitempty"`
+	// ToolRoundStart marks the first tool call one assistant response issued:
+	// every call and result after it, up to the next marked call, belongs to the
+	// same round. It is structure read by BlockingSnapshot, not inspected text,
+	// so it never leaves the gateway — payloads sent to audit nodes omit it.
+	ToolRoundStart bool   `json:"-"`
+	ToolPart       string `json:"-"`
+	ToolDefinition bool   `json:"tool_definition,omitempty"`
+	ToolName       string `json:"-"`
+	ToolID         string `json:"-"`
 }
 
 type PromptAuditScope string
 
 const (
-	PromptScopeSystem     PromptAuditScope = "system"
-	PromptScopeDeveloper  PromptAuditScope = "developer"
-	PromptScopeUser       PromptAuditScope = "user"
-	PromptScopeAssistant  PromptAuditScope = "assistant"
-	PromptScopeToolCall   PromptAuditScope = "tool_call"
-	PromptScopeToolResult PromptAuditScope = "tool_result"
-	PromptScopeTask       PromptAuditScope = "task"
+	PromptScopeSystem       PromptAuditScope = "system"
+	PromptScopeDeveloper    PromptAuditScope = "developer"
+	PromptScopeUser         PromptAuditScope = "user"
+	PromptScopeAssistant    PromptAuditScope = "assistant"
+	PromptScopeToolCall     PromptAuditScope = "tool_call"
+	PromptScopeToolResult   PromptAuditScope = "tool_result"
+	PromptScopeTask         PromptAuditScope = "task"
+	PromptScopeAgentContext PromptAuditScope = "agent_context"
+	PromptScopeSkill        PromptAuditScope = "skill"
+	PromptScopeMCP          PromptAuditScope = "mcp"
 )
 
 func PromptAuditScopes() []PromptAuditScope {
-	return []PromptAuditScope{PromptScopeSystem, PromptScopeDeveloper, PromptScopeUser, PromptScopeAssistant, PromptScopeToolCall, PromptScopeToolResult, PromptScopeTask}
+	return []PromptAuditScope{PromptScopeSystem, PromptScopeDeveloper, PromptScopeUser, PromptScopeAssistant, PromptScopeToolCall, PromptScopeToolResult, PromptScopeTask, PromptScopeAgentContext, PromptScopeSkill, PromptScopeMCP}
 }
 
 func (segment PromptAuditSegment) SourceScope() PromptAuditScope {
 	if segment.Scope != "" {
 		return segment.Scope
+	}
+	if segment.ToolPart == "call" {
+		return PromptScopeToolCall
+	}
+	if segment.ToolPart == "result" {
+		return PromptScopeToolResult
 	}
 	switch strings.ToLower(strings.TrimSpace(segment.Role)) {
 	case "system":
@@ -55,7 +73,12 @@ func (segment PromptAuditSegment) SourceScope() PromptAuditScope {
 }
 
 type PromptAuditSnapshot struct {
-	Segments []PromptAuditSegment `json:"segments"`
+	Segments    []PromptAuditSegment `json:"segments"`
+	HumanPrompt string               `json:"-"`
+	RequestKind string               `json:"-"`
+	SessionKey  string               `json:"-"`
+	HasHistory  bool                 `json:"-"`
+	HasMedia    bool                 `json:"-"`
 }
 
 // OrderedSegments normalizes inspectable text while preserving the original
@@ -80,7 +103,7 @@ func (snapshot PromptAuditSnapshot) OrderedSegments() []PromptAuditSegment {
 	for _, segment := range snapshot.Segments {
 		segment.Role = strings.ToLower(strings.TrimSpace(segment.Role))
 		segment.Text = strings.TrimSpace(segment.Text)
-		if segment.Text != "" {
+		if segment.Text != "" || segment.ToolPart != "" {
 			normalized = append(normalized, segment)
 		}
 	}
@@ -115,7 +138,8 @@ func (snapshot PromptAuditSnapshot) PrioritizedSegments() []PromptAuditSegment {
 // SemanticSegments preserves all client-supplied text for model classification.
 // Reminder and context tags are untrusted text, not proof of gateway ownership.
 func (snapshot PromptAuditSnapshot) SemanticSegments() PromptAuditSnapshot {
-	return PromptAuditSnapshot{Segments: snapshot.OrderedSegments()}
+	snapshot.Segments = snapshot.OrderedSegments()
+	return snapshot
 }
 
 // BlockingSnapshot drops older conversation turns and superseded tool rounds,
@@ -124,11 +148,11 @@ func (snapshot PromptAuditSnapshot) SemanticSegments() PromptAuditSnapshot {
 //
 // Tool calls and results are the only accumulating source: an agent resends its
 // whole transcript on every step, so keeping their history would re-inspect the
-// same tool output on every request. Each round is already inspected by the
-// request that produced it, so only the last one is carried forward — the newest
-// tool call or result, extended back over the results of that round and the calls
-// that opened it. That round is kept even when it precedes the latest user turn:
-// it is the tool work the request continues.
+// same tool output on every request. A round that an earlier request already
+// carried as its newest was inspected then, so only the last round is carried
+// forward: every tool call and result from the call that opened the newest
+// round (see latestToolRound). That round is kept even when it precedes the
+// latest user turn: it is the tool work the request continues.
 //
 // Sources an administrator selects independently (system, developer, task) are
 // never narrowed: they are the request's own authority blocks rather than
@@ -139,7 +163,8 @@ func (snapshot PromptAuditSnapshot) BlockingSnapshot() PromptAuditSnapshot {
 	if userStart < 0 {
 		// A request without user content cannot be narrowed safely. Preserve the
 		// established full-snapshot behavior for unusual protocol payloads.
-		return PromptAuditSnapshot{Segments: normalized}
+		snapshot.Segments = normalized
+		return snapshot
 	}
 	assistantStart, assistantEnd := -1, -1
 	for index := userStart - 1; index >= 0; index-- {
@@ -158,7 +183,7 @@ func (snapshot PromptAuditSnapshot) BlockingSnapshot() PromptAuditSnapshot {
 	for index, segment := range normalized {
 		scope := segment.SourceScope()
 		switch {
-		case scope == PromptScopeToolCall || scope == PromptScopeToolResult:
+		case isPromptAuditToolSegment(segment):
 			if index >= toolStart && index <= toolEnd {
 				selected = append(selected, segment)
 			}
@@ -167,22 +192,26 @@ func (snapshot PromptAuditSnapshot) BlockingSnapshot() PromptAuditSnapshot {
 		default:
 			// Every remaining source (system, developer, task) is the request's own
 			// authority block; conversation text outside the retained turns is not.
-			if scope != PromptScopeUser && scope != PromptScopeAssistant {
+			if scope != PromptScopeUser && scope != PromptScopeAssistant && !isPromptAuditUserContext(segment) {
 				selected = append(selected, segment)
 			}
 		}
 	}
-	return PromptAuditSnapshot{Segments: selected}
+	snapshot.Segments = selected
+	return snapshot
 }
 
 // latestToolRound returns the bounds of the last tool round: the newest tool
-// call or result, extended back over the results of the same round and the calls
-// that opened it. -1, -1 means the snapshot carries no tool content at all.
+// call or result, extended back over the contiguous tool calls and results
+// before it up to the call that opened the round. A round opens at a call
+// marked ToolRoundStart. A run of tool segments carrying no mark is kept whole:
+// rounds that cannot be told apart are never split, because a parallel round is
+// often recorded as call/result pairs, and splitting it would drop results that
+// no earlier request carried. -1, -1 means the snapshot carries no tool content.
 func latestToolRound(segments []PromptAuditSegment) (int, int) {
 	end := -1
 	for index := len(segments) - 1; index >= 0; index-- {
-		scope := segments[index].SourceScope()
-		if scope == PromptScopeToolCall || scope == PromptScopeToolResult {
+		if isPromptAuditToolSegment(segments[index]) {
 			end = index
 			break
 		}
@@ -191,17 +220,15 @@ func latestToolRound(segments []PromptAuditSegment) (int, int) {
 		return -1, -1
 	}
 	start := end
-	// A round's results follow its calls, so the calls that opened the newest round
-	// sit behind that round's results.
-	if segments[end].SourceScope() == PromptScopeToolResult {
-		for start > 0 && segments[start-1].SourceScope() == PromptScopeToolResult {
-			start--
-		}
-	}
-	for start > 0 && segments[start-1].SourceScope() == PromptScopeToolCall {
+	for start > 0 && !segments[start].ToolRoundStart && isPromptAuditToolSegment(segments[start-1]) {
 		start--
 	}
 	return start, end
+}
+
+func isPromptAuditToolSegment(segment PromptAuditSegment) bool {
+	scope := segment.SourceScope()
+	return scope == PromptScopeToolCall || scope == PromptScopeToolResult || segment.ToolPart == "call" || segment.ToolPart == "result"
 }
 
 func latestUserSegmentStart(segments []PromptAuditSegment) int {
@@ -212,7 +239,7 @@ func latestUserSegmentStart(segments []PromptAuditSegment) int {
 			break
 		}
 	}
-	for latest > 0 && isPromptAuditUserSegment(segments[latest-1]) {
+	for latest > 0 && (isPromptAuditUserSegment(segments[latest-1]) || isPromptAuditUserContext(segments[latest-1])) {
 		latest--
 	}
 	return latest
@@ -220,6 +247,10 @@ func latestUserSegmentStart(segments []PromptAuditSegment) int {
 
 func isPromptAuditUserSegment(segment PromptAuditSegment) bool {
 	return segment.SourceScope() == PromptScopeUser && (segment.User || strings.EqualFold(strings.TrimSpace(segment.Role), "user"))
+}
+
+func isPromptAuditUserContext(segment PromptAuditSegment) bool {
+	return segment.ToolPart == "" && segment.Role == "user" && (segment.SourceScope() == PromptScopeAgentContext || segment.SourceScope() == PromptScopeSkill)
 }
 
 func isAssistantOutputSegment(segment PromptAuditSegment) bool {
@@ -262,15 +293,24 @@ func (r *GeneralOpenAIRequest) GetPromptAuditSnapshot() PromptAuditSnapshot {
 		return PromptAuditSnapshot{}
 	}
 	segments := make([]PromptAuditSegment, 0, len(r.Messages)+4)
+	hasHistory, hasMedia, userMessages := false, false, 0
 	segments = appendRoleMessage(segments, "system", false, anyTextValues(r.Instruction, false))
 	for index := range r.Messages {
 		message := &r.Messages[index]
 		role := strings.ToLower(strings.TrimSpace(message.Role))
+		if role == "assistant" || role == "tool" || role == "function" {
+			hasHistory = true
+		}
 		if !isPromptAuditRole(role) {
 			continue
 		}
 		texts := make([]string, 0)
+		messageHasMedia := false
 		for _, content := range message.ParseContent() {
+			if role == "user" && content.Type != ContentTypeText {
+				messageHasMedia = true
+				hasMedia = true
+			}
 			if content.Type == ContentTypeText && content.Text != "" {
 				if role == "tool" || role == "function" {
 					texts = append(texts, structuredPromptAuditTexts(content.Text)...)
@@ -280,20 +320,53 @@ func (r *GeneralOpenAIRequest) GetPromptAuditSnapshot() PromptAuditSnapshot {
 			}
 		}
 		messageSegments := appendRoleMessage(nil, role, role == "user", texts)
+		if messageHasMedia {
+			userMessages++
+		}
+		for part := range messageSegments {
+			if !messageHasMedia && isPromptAuditUserSegment(messageSegments[part]) {
+				userMessages++
+				break
+			}
+		}
+		if role == "tool" || role == "function" {
+			for part := range messageSegments {
+				messageSegments[part].ToolPart = "result"
+				messageSegments[part].ToolID = message.ToolCallId
+				if message.Name != nil {
+					messageSegments[part].ToolName = *message.Name
+				}
+			}
+		}
 		messageSegments = appendScopeMessage(messageSegments, PromptScopeAssistant, "assistant", []string{message.GetReasoningContent(), message.GetRefusalContent()})
 		for _, toolCall := range message.ParseToolCalls() {
 			toolTexts := structuredPromptAuditTexts(toolCall.Function.Arguments)
 			toolTexts = append(toolTexts, rawStructuredPromptAuditTexts(toolCall.Custom)...)
-			messageSegments = appendScopeMessage(messageSegments, PromptScopeToolCall, "assistant", toolTexts)
+			name := toolCall.Function.Name
+			if name == "" && len(toolCall.Custom) > 0 {
+				var custom struct {
+					Name string `json:"name"`
+				}
+				_ = kitutil.Unmarshal(toolCall.Custom, &custom)
+				name = custom.Name
+			}
+			messageSegments = append(messageSegments, promptAuditToolSegments(PromptScopeToolCall, "assistant", name, toolCall.ID, toolTexts)...)
 		}
-		segments = append(segments, mergePromptAuditParts(messageSegments)...)
+		if message.FunctionCall != nil {
+			messageSegments = append(messageSegments, promptAuditToolSegments(PromptScopeToolCall, "assistant", message.FunctionCall.Name, "", structuredPromptAuditTexts(message.FunctionCall.Arguments))...)
+		}
+		segments = append(segments, markToolRoundStart(mergePromptAuditParts(messageSegments))...)
 	}
 	if len(r.Messages) == 0 {
 		for _, value := range []any{r.Prompt, r.Prefix, r.Suffix, r.Input} {
 			segments = appendRoleTexts(segments, "task", true, anyTextValues(value, false))
 		}
 	}
-	return PromptAuditSnapshot{Segments: segments}
+	session := r.PromptCacheKey
+	if session == "" {
+		session = promptAuditJSONString(r.User)
+	}
+	return completePromptAuditSnapshot(PromptAuditSnapshot{Segments: segments, HasHistory: hasHistory || userMessages > 1, HasMedia: hasMedia}, r.Tools, session)
 }
 
 func (c *ClaudeRequest) GetPromptAuditSnapshot() PromptAuditSnapshot {
@@ -301,18 +374,39 @@ func (c *ClaudeRequest) GetPromptAuditSnapshot() PromptAuditSnapshot {
 		return PromptAuditSnapshot{}
 	}
 	segments := scopedContentSegments("system", c.System)
+	hasHistory, hasMedia, userMessages := false, false, 0
 	if c.Prompt != "" {
 		segments = appendRoleTexts(segments, "task", true, []string{c.Prompt})
 	}
 	for index := range c.Messages {
 		message := &c.Messages[index]
 		role := strings.ToLower(strings.TrimSpace(message.Role))
+		if role == "assistant" {
+			hasHistory = true
+		}
 		if !isPromptAuditRole(role) {
 			continue
 		}
-		segments = append(segments, scopedContentSegments(role, message.Content)...)
+		parts := markToolRoundStart(scopedContentSegments(role, message.Content))
+		messageHasMedia := role == "user" && promptAuditHasMedia(message.Content)
+		if messageHasMedia {
+			hasMedia = true
+			userMessages++
+		}
+		for _, part := range parts {
+			if !messageHasMedia && isPromptAuditUserSegment(part) {
+				userMessages++
+				break
+			}
+		}
+		for _, part := range parts {
+			if isPromptAuditToolSegment(part) {
+				hasHistory = true
+			}
+		}
+		segments = append(segments, parts...)
 	}
-	return PromptAuditSnapshot{Segments: segments}
+	return completePromptAuditSnapshot(PromptAuditSnapshot{Segments: segments, HasHistory: hasHistory || userMessages > 1, HasMedia: hasMedia}, c.Tools, promptAuditClaudeSession(c.Metadata))
 }
 
 func (r *GeminiChatRequest) GetPromptAuditSnapshot() PromptAuditSnapshot {
@@ -320,6 +414,7 @@ func (r *GeminiChatRequest) GetPromptAuditSnapshot() PromptAuditSnapshot {
 		return PromptAuditSnapshot{}
 	}
 	segments := make([]PromptAuditSegment, 0)
+	hasHistory, hasMedia, userMessages := false, false, 0
 	if r.SystemInstructions != nil {
 		segments = append(segments, scopedGeminiSegments("system", r.SystemInstructions.Parts)...)
 	}
@@ -329,16 +424,46 @@ func (r *GeminiChatRequest) GetPromptAuditSnapshot() PromptAuditSnapshot {
 		if role == "" {
 			role = "user"
 		}
+		if role == "model" || role == "assistant" {
+			hasHistory = true
+		}
 		if !isPromptAuditRole(role) {
 			continue
 		}
-		segments = append(segments, scopedGeminiSegments(role, content.Parts)...)
+		parts := markToolRoundStart(scopedGeminiSegments(role, content.Parts))
+		messageHasMedia := false
+		if role == "user" {
+			for _, part := range content.Parts {
+				if part.InlineData != nil || part.FileData != nil {
+					messageHasMedia = true
+					hasMedia = true
+					break
+				}
+			}
+		}
+		if messageHasMedia {
+			userMessages++
+		}
+		for _, part := range parts {
+			if !messageHasMedia && isPromptAuditUserSegment(part) {
+				userMessages++
+				break
+			}
+		}
+		for _, part := range parts {
+			if isPromptAuditToolSegment(part) {
+				hasHistory = true
+			}
+		}
+		segments = append(segments, parts...)
 	}
 	for index := range r.Requests {
 		child := r.Requests[index].GetPromptAuditSnapshot()
 		segments = append(segments, child.Segments...)
+		hasMedia = hasMedia || child.HasMedia
+		hasHistory = hasHistory || child.HasHistory
 	}
-	return PromptAuditSnapshot{Segments: segments}
+	return completePromptAuditSnapshot(PromptAuditSnapshot{Segments: segments, HasHistory: hasHistory || userMessages > 1, HasMedia: hasMedia}, r.Tools, "")
 }
 
 func (r *GeminiEmbeddingRequest) GetPromptAuditSnapshot() PromptAuditSnapshot {
@@ -367,7 +492,7 @@ func (r *OpenAIResponsesRequest) GetPromptAuditSnapshot() PromptAuditSnapshot {
 	}
 	segments := appendRoleMessage(nil, "system", false, rawTextValues(r.Instructions))
 	segments = append(segments, responsesInputSegments(r.Input)...)
-	return PromptAuditSnapshot{Segments: segments}
+	return completePromptAuditSnapshot(PromptAuditSnapshot{Segments: segments, HasHistory: r.PreviousResponseID != "" || promptAuditResponsesHistory(r.Input), HasMedia: promptAuditHasMedia(r.Input)}, r.Tools, promptAuditJSONString(r.PromptCacheKey))
 }
 
 func (r *OpenAIResponsesCompactionRequest) GetPromptAuditSnapshot() PromptAuditSnapshot {
@@ -376,7 +501,7 @@ func (r *OpenAIResponsesCompactionRequest) GetPromptAuditSnapshot() PromptAuditS
 	}
 	segments := appendRoleMessage(nil, "system", false, rawTextValues(r.Instructions))
 	segments = append(segments, responsesInputSegments(r.Input)...)
-	return PromptAuditSnapshot{Segments: segments}
+	return completePromptAuditSnapshot(PromptAuditSnapshot{Segments: segments, HasHistory: true}, r.Tools, promptAuditJSONString(r.PromptCacheKey))
 }
 
 func (r *EmbeddingRequest) GetPromptAuditSnapshot() PromptAuditSnapshot {
@@ -447,16 +572,14 @@ func appendRoleTexts(segments []PromptAuditSegment, role string, user bool, text
 }
 
 func appendRoleMessage(segments []PromptAuditSegment, role string, user bool, texts []string) []PromptAuditSegment {
-	normalized := make([]string, 0, len(texts))
+	normalized := make([]PromptAuditSegment, 0, len(texts))
 	for _, text := range texts {
 		if strings.TrimSpace(text) != "" {
-			normalized = append(normalized, text)
+			scope := classifyPromptAuditText(text, role)
+			normalized = append(normalized, PromptAuditSegment{Role: role, Text: text, User: user && (scope == PromptScopeUser || scope == PromptScopeTask), Scope: scope})
 		}
 	}
-	if len(normalized) == 0 {
-		return segments
-	}
-	return append(segments, PromptAuditSegment{Role: role, Text: strings.Join(normalized, "\n"), User: user})
+	return append(segments, mergePromptAuditParts(normalized)...)
 }
 
 func userSegments(text string) []PromptAuditSegment {
@@ -697,8 +820,32 @@ func responsesValueSegments(value any) []PromptAuditSegment {
 		return userSegments(typed)
 	case []any:
 		result := make([]PromptAuditSegment, 0, len(typed))
+		// A response's items arrive in order: a reasoning or message item, then
+		// the calls it issued, each possibly followed straight away by its output.
+		// So the first call after any other item opens a new tool round, while a
+		// call that follows a call or an output joins the round already open —
+		// clients record a parallel round as call/output pairs as often as calls
+		// followed by outputs.
+		roundOpen := false
 		for _, item := range typed {
-			result = append(result, responsesValueSegments(item)...)
+			segments := responsesValueSegments(item)
+			typeName := ""
+			if entry, ok := item.(map[string]any); ok {
+				typeName, _ = entry["type"].(string)
+				typeName = strings.ToLower(strings.TrimSpace(typeName))
+			}
+			switch {
+			case strings.HasSuffix(typeName, "_call_output") || typeName == "tool_result":
+				// An output stays inside the round its call opened.
+			case strings.HasSuffix(typeName, "_call"):
+				if !roundOpen {
+					markToolRoundStart(segments)
+					roundOpen = true
+				}
+			default:
+				roundOpen = false
+			}
+			result = append(result, segments...)
 		}
 		return result
 	case map[string]any:
@@ -721,14 +868,30 @@ func responsesValueSegments(value any) []PromptAuditSegment {
 			return appendRoleMessage(nil, "assistant", false, promptAuditReasoningTexts(typed))
 		}
 		if strings.HasSuffix(typeName, "_call_output") || typeName == "tool_result" {
-			return appendRoleMessage(nil, "tool", false, structuredPromptAuditTexts(typed["output"]))
+			id, _ := typed["call_id"].(string)
+			return promptAuditToolSegments(PromptScopeToolResult, "tool", "", id, structuredPromptAuditTexts(typed["output"]))
 		}
 		if typeName == "function_call" || typeName == "custom_tool_call" {
 			payload := typed["arguments"]
 			if payload == nil {
 				payload = typed["input"]
 			}
-			return appendScopeMessage(nil, PromptScopeToolCall, "assistant", structuredPromptAuditTexts(payload))
+			name, _ := typed["name"].(string)
+			id, _ := typed["call_id"].(string)
+			return promptAuditToolSegments(PromptScopeToolCall, "assistant", name, id, structuredPromptAuditTexts(payload))
+		}
+		if typeName == "mcp_list_tools" {
+			return promptAuditMCPDefinitions(typed["tools"], true)
+		}
+		if typeName == "mcp_call" {
+			name, _ := typed["name"].(string)
+			id, _ := typed["id"].(string)
+			parts := promptAuditToolSegments(PromptScopeToolCall, "assistant", name, id, structuredPromptAuditTexts(typed["arguments"]))
+			parts = append(parts, promptAuditToolSegments(PromptScopeToolResult, "tool", name, id, structuredPromptAuditTexts(typed["output"]))...)
+			for index := range parts {
+				parts[index].Scope = PromptScopeMCP
+			}
+			return parts
 		}
 	}
 	return nil

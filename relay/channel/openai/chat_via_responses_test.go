@@ -89,6 +89,44 @@ func TestOaiResponsesToChatStreamHandlerConvertsSSEOrderAndUsage(t *testing.T) {
 	)
 }
 
+func TestResponsesStopEmulationDrainsAndBillsCompleteUpstreamUsage(t *testing.T) {
+	oldTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = oldTimeout })
+	body := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_stop","model":"gpt-test","created_at":1710000000}}`,
+		`data: {"type":"response.output_text.delta","delta":"visible<EN"}`,
+		`data: {"type":"response.output_text.delta","delta":"D>hidden output still billed"}`,
+		`data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":17,"output_tokens":31,"total_tokens":48}}}`,
+		`data: [DONE]`,
+		``,
+	}, "\n")
+	for _, streaming := range []bool{false, true} {
+		t.Run(map[bool]string{false: "buffered", true: "streaming"}[streaming], func(t *testing.T) {
+			c, recorder, resp, info := newResponsesChatTestContext(t, body, streaming)
+			info.SetConversionLossPolicy(types.ConversionLossPolicyLossy)
+			info.SetAllowDirectiveDrop(true)
+			t.Cleanup(info.CloseConversionSession)
+			_, err := info.ConversionSession().Request(c, types.RelayFormatOpenAIResponses, &dto.GeneralOpenAIRequest{Model: "gpt-test", Stop: []string{"<END>"}})
+			require.NoError(t, err)
+			handler := OaiResponsesToChatBufferedStreamHandler
+			if streaming {
+				handler = OaiResponsesToChatStreamHandler
+			}
+			usage, apiErr := handler(c, info, resp)
+			require.Nil(t, apiErr)
+			require.NotNil(t, usage)
+			assert.Equal(t, 17, usage.PromptTokens)
+			assert.Equal(t, 31, usage.CompletionTokens)
+			assert.Equal(t, 48, usage.TotalTokens)
+			assert.Contains(t, recorder.Body.String(), `"content":"visible"`)
+			assert.NotContains(t, recorder.Body.String(), "hidden")
+			assert.NotContains(t, recorder.Body.String(), "<END>")
+			assert.Contains(t, recorder.Body.String(), `"completion_tokens":31`)
+		})
+	}
+}
+
 func TestOaiResponsesToChatStreamHandlerConvertsClaudeSSETerminalsAndUsage(t *testing.T) {
 	oldMode := gin.Mode()
 	gin.SetMode(gin.TestMode)

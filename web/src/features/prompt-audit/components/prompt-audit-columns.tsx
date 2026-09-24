@@ -30,9 +30,15 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
-import { formatTimestampToDate } from '@/lib/format'
+import { toIntlLocale } from '@/i18n/languages'
+import { formatNumber, formatTimestampToDate } from '@/lib/format'
 
-import { getPromptAuditProtocolName, isMergedPromptAuditRow } from '../lib'
+import {
+  getPromptAuditProtocolName,
+  isMergedPromptAuditRow,
+  promptAuditDetectorLabel,
+  promptAuditRequestKindLabel,
+} from '../lib'
 import type { PromptAuditEvent } from '../types'
 
 function decisionBadgeVariant(decision: string) {
@@ -82,12 +88,19 @@ export function usePromptAuditColumns(options: {
   /** The listing merges requests that submitted the same text. */
   collapsed?: boolean
   /** Collapsed rows whose requests are still being fetched. */
-  loadingGroupIDs?: Set<number>
+  loadingGroupIDs?: readonly number[]
+  /**
+   * How many requests each expanded group holds under the filters, by the id
+   * of its row. An expansion returns only the newest of them.
+   */
+  groupTotals?: Readonly<Record<number, number>>
 }): ColumnDef<PromptAuditEvent>[] {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const { canDelete, onOpen } = options
   const collapsed = options.collapsed ?? false
   const loadingGroupIDs = options.loadingGroupIDs
+  const groupTotals = options.groupTotals
+  const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
 
   return useMemo(() => {
     const columns: ColumnDef<PromptAuditEvent>[] = []
@@ -186,11 +199,17 @@ export function usePromptAuditColumns(options: {
           // same text, so the count says what the whole group decided — a group
           // can hold a block, an unavailable retry, and an allow.
           const repeatSummary = repeat
-            ? t('{{count}} requests submitted the same text', {
-                count: repeat.count,
+            ? t('{{requests}} requests belong to the same question', {
+                requests: formatNumber(repeat.count, locale),
               })
             : ''
-          const isGroupLoading = loadingGroupIDs?.has(event.id) === true
+          const isGroupLoading = loadingGroupIDs?.includes(event.id) === true
+          // An expansion returns only the newest requests of a large group, so
+          // the row says how many of them it shows.
+          const groupTotal = groupTotals?.[event.id]
+          const shownRequests = row.subRows.length
+          const isTruncated =
+            isExpanded && groupTotal !== undefined && shownRequests < groupTotal
           return (
             <div className='min-w-0'>
               <div className='flex flex-wrap items-center gap-1'>
@@ -205,7 +224,7 @@ export function usePromptAuditColumns(options: {
                           aria-label={repeatSummary}
                           tabIndex={0}
                         >
-                          ×{repeat.count}
+                          ×{formatNumber(repeat.count, locale)}
                         </Badge>
                       }
                     />
@@ -232,7 +251,9 @@ export function usePromptAuditColumns(options: {
                               <dt className='text-muted-foreground'>
                                 {t('Blocked')}
                               </dt>
-                              <dd className='tabular-nums'>{repeat.blocks}</dd>
+                              <dd className='tabular-nums'>
+                                {formatNumber(repeat.blocks, locale)}
+                              </dd>
                             </>
                           )}
                           {repeat.unavailable > 0 && (
@@ -241,7 +262,7 @@ export function usePromptAuditColumns(options: {
                                 {t('Unavailable')}
                               </dt>
                               <dd className='tabular-nums'>
-                                {repeat.unavailable}
+                                {formatNumber(repeat.unavailable, locale)}
                               </dd>
                             </>
                           )}
@@ -257,10 +278,13 @@ export function usePromptAuditColumns(options: {
                   {t(event.status)}
                 </Badge>
                 <Badge variant='outline'>
-                  {event.inspection_type === 'wordlist'
-                    ? t('Wordlist')
-                    : t('Model audit')}
+                  {promptAuditDetectorLabel(event.inspection_type, t)}
                 </Badge>
+                {row.depth > 0 && event.request_kind && (
+                  <Badge variant='outline'>
+                    {promptAuditRequestKindLabel(event.request_kind, t)}
+                  </Badge>
+                )}
                 <Badge variant='outline'>
                   {event.direction === 'output'
                     ? t('Generated output')
@@ -276,6 +300,7 @@ export function usePromptAuditColumns(options: {
                     onClick={row.getToggleExpandedHandler()}
                     aria-label={isExpanded ? t('Collapse') : t('Expand')}
                     aria-expanded={isExpanded}
+                    aria-busy={isGroupLoading}
                   >
                     {expandIcon(isGroupLoading, isExpanded)}
                   </Button>
@@ -284,6 +309,14 @@ export function usePromptAuditColumns(options: {
               {event.categories.length > 0 && (
                 <p className='text-muted-foreground mt-1 max-w-48 truncate text-xs'>
                   {event.categories.map((category) => t(category)).join(', ')}
+                </p>
+              )}
+              {isTruncated && (
+                <p className='text-muted-foreground mt-1 max-w-48 text-xs whitespace-normal'>
+                  {t('Showing the newest {{shown}} of {{total}} requests', {
+                    shown: formatNumber(shownRequests, locale),
+                    total: formatNumber(groupTotal, locale),
+                  })}
                 </p>
               )}
             </div>
@@ -325,7 +358,7 @@ export function usePromptAuditColumns(options: {
                 {event.model || '—'}
               </TruncatedCell>
               <TruncatedCell className='text-muted-foreground max-w-56 text-xs'>
-                {t('Protocol')}: {getPromptAuditProtocolName(event.protocol)}
+                {t('Protocol')}: {t(getPromptAuditProtocolName(event.protocol))}
               </TruncatedCell>
               <TruncatedCell className='text-muted-foreground max-w-56 text-xs'>
                 {t('Audit model')}: {event.endpoint_model || '—'}
@@ -392,5 +425,5 @@ export function usePromptAuditColumns(options: {
     )
 
     return columns
-  }, [canDelete, collapsed, loadingGroupIDs, onOpen, t])
+  }, [canDelete, collapsed, groupTotals, loadingGroupIDs, locale, onOpen, t])
 }

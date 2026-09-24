@@ -29,6 +29,7 @@ import {
 } from '@/components/ui/collapsible'
 import { Field, FieldDescription, FieldLabel } from '@/components/ui/field'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
+import { Textarea } from '@/components/ui/textarea'
 import {
   SettingsControlChildren,
   SettingsFormGrid,
@@ -80,7 +81,7 @@ export function EnforcementSection({
     <SettingsSection title={t('Enforcement policy')}>
       <p className='text-muted-foreground text-xs leading-relaxed'>
         {t(
-          'Sensitive-word filtering runs first. Blocking mode fails closed before channel selection, billing, and upstream dispatch.'
+          'Probe blocking and wordlist filtering run before model audit, billing, and upstream dispatch.'
         )}
       </p>
 
@@ -141,14 +142,47 @@ export function EnforcementSection({
 
       <div className='divide-y'>
         <SettingsSwitchField
+          controlId='prompt-audit-probe-block'
+          checked={config.probe_block_enabled ?? false}
+          onCheckedChange={(probe_block_enabled) =>
+            onChange({ probe_block_enabled })
+          }
+          label={t('Block probe requests')}
+          description={t(
+            'Block standalone greetings and health checks in every audit mode. Administrators and token-count requests are exempt.'
+          )}
+        />
+        {config.probe_block_enabled && (
+          <SettingsControlChildren className='pb-3'>
+            <Field>
+              <FieldLabel htmlFor='prompt-audit-probe-phrases'>
+                {t('Probe phrases')}
+              </FieldLabel>
+              <Textarea
+                id='prompt-audit-probe-phrases'
+                value={(config.probe_phrases ?? []).join('\n')}
+                onChange={(event) =>
+                  onChange({ probe_phrases: event.target.value.split('\n') })
+                }
+                rows={6}
+              />
+              <FieldDescription>
+                {t(
+                  'One phrase per line. Matches the whole message, ignoring case and punctuation at either end. Conversation history and media are excluded.'
+                )}
+              </FieldDescription>
+            </Field>
+          </SettingsControlChildren>
+        )}
+        <SettingsSwitchField
           controlId='prompt-audit-blocking-latest-turn-only'
           checked={config.blocking_latest_turn_only ?? true}
           onCheckedChange={(blocking_latest_turn_only) =>
             onChange({ blocking_latest_turn_only })
           }
-          label={t('Blocking scans the latest turn only')}
+          label={t('Scan only the latest turn')}
           description={t(
-            'In blocking mode, inspect the latest user turn, the preceding assistant turn, and the newest tool round. This scope applies to wordlists and model audit alike. Other enabled sources are still inspected. Turn this off to include older conversation turns.'
+            'Inspect the latest user turn, the preceding assistant turn, and the newest tool round. Wordlists follow this switch in every mode; model audit follows it only in blocking mode, and async model audit always reads the whole request. Other enabled sources (system, developer, task) are always inspected. Turn this off to include older conversation turns.'
           )}
         />
         <SettingsSwitchField

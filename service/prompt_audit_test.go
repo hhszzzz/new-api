@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/prompt_audit_setting"
@@ -24,6 +25,121 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
+
+func TestPromptAuditProbeBlockingAndExemptions(t *testing.T) {
+	withPromptWordlistTestDB(t)
+	require.NoError(t, i18n.Init())
+	configured := prompt_audit_setting.GetSetting()
+	configured.Mode = prompt_audit_setting.ModeOff
+	configured.ProbeBlockEnabled = true
+	configured.ProbePhrases = []string{"hello", "你好", "who are you"}
+	configured.PublishConfig()
+	for _, test := range []struct {
+		name, text                              string
+		admin, history, media, count, wantBlock bool
+	}{
+		{name: "punctuation and case", text: "  HELLO？！  ", wantBlock: true},
+		{name: "agent greeting", text: "你好", wantBlock: true},
+		{name: "sentence contains greeting", text: "hello, fix my code"},
+		{name: "internal punctuation retained", text: "who, are you"},
+		{name: "administrator", text: "hello", admin: true},
+		{name: "history", text: "hello", history: true},
+		{name: "image and greeting", text: "hello", media: true},
+		{name: "count tokens", text: "hello", count: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+			if test.admin {
+				c.Set("role", common.RoleAdminUser)
+			} else {
+				c.Set("role", common.RoleCommonUser)
+			}
+			snapshot := (&dto.ClaudeRequest{System: "System instructions", Messages: []dto.ClaudeMessage{
+				{Role: "user", Content: []any{map[string]any{"type": "text", "text": "<system-reminder>workspace"}, map[string]any{"type": "text", "text": test.text}}},
+			}}).GetPromptAuditSnapshot()
+			snapshot.HasHistory, snapshot.HasMedia = test.history, test.media
+			result, apiErr := InspectPrompt(c, PromptAuditRequest{Snapshot: snapshot, Protocol: "claude", WordlistOnly: test.count})
+			assert.Equal(t, test.wantBlock, result.Blocked)
+			if !test.wantBlock {
+				require.Nil(t, apiErr)
+				return
+			}
+			require.NotNil(t, apiErr)
+			assert.Equal(t, http.StatusBadRequest, apiErr.StatusCode)
+			assert.Equal(t, "probe_block", result.InspectionType)
+			row, err := model.GetPromptAudit(result.AuditID)
+			require.NoError(t, err)
+			assert.Contains(t, row.RedactedPreview, strings.TrimSpace(test.text))
+			assert.Contains(t, string(row.ScanPayload), strings.TrimSpace(test.text))
+		})
+	}
+}
+
+func TestPromptAuditQuestionIdentityAndSessionBoundaries(t *testing.T) {
+	promptAuditGroupMap.Lock()
+	promptAuditGroupMap.entries = make(map[string]promptAuditGroupEntry)
+	promptAuditGroupMap.Unlock()
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c.Request.Header.Set("session_id", "session-for-group-test")
+	c.Set("id", 42)
+	request := PromptAuditRequest{Snapshot: dto.PromptAuditSnapshot{HumanPrompt: "Fix search", RequestKind: "prompt"}, Model: "model-a"}
+	first := preparePromptAuditRequest(c, request)
+	request.Model = "model-b"
+	assert.Equal(t, first.GroupKey, preparePromptAuditRequest(c, request).GroupKey)
+	side := PromptAuditRequest{Snapshot: dto.PromptAuditSnapshot{RequestKind: "side:web_search"}}
+	assert.Equal(t, first.GroupKey, preparePromptAuditRequest(c, side).GroupKey)
+	request.Snapshot.HumanPrompt = "Fix settings"
+	second := preparePromptAuditRequest(c, request)
+	assert.NotEqual(t, first.GroupKey, second.GroupKey)
+	request.Snapshot.HumanPrompt, request.Snapshot.RequestKind = "Fix search", "step"
+	assert.Equal(t, first.GroupKey, preparePromptAuditRequest(c, request).GroupKey)
+	assert.Equal(t, second.GroupKey, preparePromptAuditRequest(c, side).GroupKey, "an older step must not overwrite the current question")
+	c.Set("id", 43)
+	assert.NotEqual(t, second.GroupKey, preparePromptAuditRequest(c, side).GroupKey)
+	c.Request.Header.Set("session_id", "other-session")
+	assert.NotEqual(t, second.GroupKey, preparePromptAuditRequest(c, side).GroupKey)
+	c.Request.Header.Set("x-openai-subagent", "agent-1")
+	assert.Equal(t, "subagent", preparePromptAuditRequest(c, request).RequestKind)
+}
+
+func TestPromptAuditMCPDefinitionsUseIndependentCache(t *testing.T) {
+	var calls atomic.Int32
+	guard := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		var request struct{ Messages []struct{ Content string } }
+		require.NoError(t, common.DecodeJson(r.Body, &request))
+		decision := "Safety: Safe\nCategories: None"
+		if strings.Contains(request.Messages[0].Content, "unsafe definition") {
+			decision = "Safety: Unsafe\nCategories: Jailbreak"
+		}
+		data, err := common.Marshal(map[string]any{"choices": []any{map[string]any{"message": map[string]any{"content": decision}}}})
+		require.NoError(t, err)
+		_, _ = w.Write(data)
+	}))
+	defer guard.Close()
+	configured := promptAuditTestSetting(guard.URL, "")
+	configured.Endpoints = configured.Endpoints[:1]
+	configured.CacheTTLSeconds = 60
+	payload := promptAuditPayload{Version: 1, Direction: "input", CoverageComplete: true, Segments: []dto.PromptAuditSegment{
+		{Role: "user", Scope: dto.PromptScopeUser, Text: "first question"},
+		{Role: "tool", Scope: dto.PromptScopeMCP, ToolDefinition: true, Text: "unsafe definition"},
+	}}
+	first, err := evaluatePromptAuditPayload(context.Background(), configured, payload, "first")
+	require.NoError(t, err)
+	assert.Equal(t, PromptAuditDecisionBlock, first.Decision)
+	payload.Segments[0].Text = "second question"
+	second, err := evaluatePromptAuditPayload(context.Background(), configured, payload, "second")
+	require.NoError(t, err)
+	assert.Equal(t, PromptAuditDecisionBlock, second.Decision)
+	assert.EqualValues(t, 3, calls.Load(), "two questions and one shared definition")
+	assert.False(t, second.CacheHit)
+	cached, err := evaluatePromptAuditPayload(context.Background(), configured, payload, "second")
+	require.NoError(t, err)
+	assert.True(t, cached.CacheHit)
+	assert.EqualValues(t, 3, calls.Load())
+}
 
 func TestParseQwen3GuardDecisionTable(t *testing.T) {
 	tests := []struct {
@@ -702,7 +818,7 @@ func TestProcessNextPromptAuditCompletesWithoutRequeue(t *testing.T) {
 	require.NoError(t, db.First(&stored, audit.ID).Error)
 	assert.Equal(t, model.PromptAuditStatusDone, stored.Status)
 	assert.Equal(t, PromptAuditActionAllow, stored.WouldAction)
-	assert.Empty(t, stored.ScanPayload)
+	assert.Equal(t, "queued prompt", string(stored.ScanPayload))
 	assert.Equal(t, 1, stored.Attempts)
 	var count int64
 	require.NoError(t, db.Model(&model.PromptAudit{}).Count(&count).Error)
@@ -727,7 +843,7 @@ func TestProcessNextPromptAuditCompletesWithoutRequeue(t *testing.T) {
 	assert.Equal(t, "invalid_response", stored.ErrorCode)
 	assert.Equal(t, 1, stored.Attempts)
 	assert.Zero(t, stored.NextAttemptAt)
-	assert.Empty(t, stored.ScanPayload)
+	assert.Equal(t, "invalid output prompt", string(stored.ScanPayload))
 	require.NoError(t, db.Model(&model.PromptAudit{}).Count(&count).Error)
 	assert.EqualValues(t, 2, count)
 }
@@ -749,8 +865,9 @@ func TestCheckPromptAuditAsyncNeverBlocksMainRequest(t *testing.T) {
 	require.NoError(t, db.AutoMigrate(&model.PromptAudit{}, &model.User{}))
 	model.DB = db
 	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.LogDatabaseType())
-	// The row snapshots the caller's name from the users table, the way the log
-	// tables do; without Redis configured that lookup must not take the cache path.
+	// The request carries no name in its context, so the row falls back to
+	// reading the account; without Redis configured that lookup must not take the
+	// cache path.
 	previousRedisEnabled, previousRedis := common.RedisEnabled, common.RDB
 	common.RedisEnabled = false
 	t.Cleanup(func() { common.RedisEnabled, common.RDB = previousRedisEnabled, previousRedis })
@@ -838,7 +955,7 @@ func TestCheckPromptAuditAsyncNeverBlocksMainRequest(t *testing.T) {
 	assert.Equal(t, "audit-owner", queued.Username, "completion must not rewrite the captured client metadata")
 	assert.Equal(t, "192.0.2.1", queued.Ip)
 	assert.EqualValues(t, 1, guardCalls.Load(), "worker must use the queued non-secret endpoint snapshot")
-	assert.Empty(t, queued.ScanPayload)
+	assert.Equal(t, queued.ContentSnapshot, queued.ScanPayload)
 	assert.NotEmpty(t, queued.ContentSnapshot)
 
 	require.NoError(t, db.Migrator().DropTable(&model.PromptAudit{}))
@@ -928,7 +1045,7 @@ func TestPromptAuditQueuedCredentialsStayBoundToAuthorizedEndpoint(t *testing.T)
 					assert.Equal(t, "configuration_invalid", queued.ErrorCode)
 					assert.Empty(t, requests, "revoked destinations must receive neither queued content nor current credentials")
 				}
-				assert.Empty(t, queued.ScanPayload)
+				assert.Equal(t, queued.ContentSnapshot, queued.ScanPayload)
 				assert.NotContains(t, queued.PolicySnapshot, "rotated-test-token")
 			})
 		}

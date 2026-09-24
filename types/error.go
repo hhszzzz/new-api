@@ -70,6 +70,7 @@ const (
 	ErrorCodeAwsInvokeError         ErrorCode = "aws_invoke_error"
 	ErrorCodeModelNotFound          ErrorCode = "model_not_found"
 	ErrorCodePromptAuditBlocked     ErrorCode = "prompt_audit_blocked"
+	ErrorCodeProbeRequestBlocked    ErrorCode = "probe_request_blocked"
 	ErrorCodePromptAuditUnavailable ErrorCode = "prompt_audit_unavailable"
 	ErrorCodeOutputAuditBlocked     ErrorCode = "output_audit_blocked"
 	ErrorCodeOutputAuditUnavailable ErrorCode = "output_audit_unavailable"

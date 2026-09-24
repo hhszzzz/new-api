@@ -29,12 +29,11 @@ func validateClaudeRequestConversion(request *dto.ClaudeRequest, target string) 
 		name    string
 		present bool
 	}{
-		{name: "output_format", present: meaningfulClaudeRawField(request.OutputFormat)},
 		{name: "container", present: meaningfulClaudeRawField(request.Container)},
 		{name: "mcp_servers", present: meaningfulClaudeRawField(request.McpServers)},
 		{name: "inference_geo", present: strings.TrimSpace(request.InferenceGeo) != ""},
 		{name: "speed", present: meaningfulClaudeRawField(request.Speed)},
-		{name: "service_tier", present: strings.TrimSpace(request.ServiceTier) != ""},
+		{name: "service_tier", present: request.ServiceTier != "" && request.ServiceTier != "auto" && request.ServiceTier != "standard_only"},
 	} {
 		if field.present {
 			return fmt.Errorf("%s requires a native Messages upstream and cannot be converted to %s", field.name, target)
@@ -76,7 +75,7 @@ func claudeOutputConfigHasUnsupportedFields(raw []byte) bool {
 		return true
 	}
 	for field, value := range config {
-		if field != "effort" && value != nil {
+		if field != "effort" && field != "format" && value != nil {
 			return true
 		}
 	}

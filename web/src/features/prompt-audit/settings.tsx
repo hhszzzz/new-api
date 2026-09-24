@@ -46,7 +46,10 @@ import {
   type PromptAuditEndpointDraft,
   validatePromptAuditConfig,
 } from './lib'
-import { defaultPromptScopePolicies } from './scopes'
+import {
+  defaultPromptScopePolicies,
+  normalizePromptScopePolicies,
+} from './scopes'
 import {
   auditDirectionLabel,
   promptAuditTestFailureMessage,
@@ -61,11 +64,13 @@ function promptAuditConfigDraft(
   config: PromptAuditConfig
 ): PromptAuditConfigUpdate {
   return {
-    scope_policies: config.scope_policies ?? defaultPromptScopePolicies(),
+    scope_policies: normalizePromptScopePolicies(config.scope_policies),
     word_filter_enabled: config.word_filter_enabled ?? true,
     mode: config.mode,
     output_mode: config.output_mode ?? 'off',
     blocking_latest_turn_only: config.blocking_latest_turn_only ?? true,
+    probe_block_enabled: config.probe_block_enabled ?? false,
+    probe_phrases: config.probe_phrases ?? [],
     manual_wordlist_action: config.manual_wordlist_action ?? 'block',
     enabled_categories: [...config.enabled_categories],
     controversial_block_categories: [
@@ -121,6 +126,13 @@ function PromptAuditSettingsForm({
     mutationFn: async () => {
       const payload = {
         ...config,
+        probe_phrases: [
+          ...new Set(
+            (config.probe_phrases ?? [])
+              .map((phrase) => phrase.trim())
+              .filter(Boolean)
+          ),
+        ],
         groups: [
           ...new Set(
             config.groups.map((group) => group.trim()).filter(Boolean)

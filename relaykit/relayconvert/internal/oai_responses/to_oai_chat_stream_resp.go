@@ -5,6 +5,8 @@ import (
 	"fmt"
 	sharedbridge "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/bridge"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/internal/toolconv"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -36,6 +38,7 @@ type ResponsesToChatStreamState struct {
 	nextTextIndex              int
 	nextReasoningIndex         int
 	textByKey                  map[string]string
+	logprobsByKey              map[string]int
 	textOutputIndexToKey       map[int]string
 	textItemIDToKey            map[string]string
 	textIdentifiedKeys         map[string]struct{}
@@ -77,6 +80,7 @@ func NewResponsesToChatStreamState(model string, includeUsage bool) *ResponsesTo
 		IncludeUsage:              includeUsage,
 		Usage:                     &dto.Usage{},
 		textByKey:                 make(map[string]string),
+		logprobsByKey:             make(map[string]int),
 		textOutputIndexToKey:      make(map[int]string),
 		textItemIDToKey:           make(map[string]string),
 		textIdentifiedKeys:        make(map[string]struct{}),
@@ -142,7 +146,12 @@ func ResponsesStreamEventToChatChunks(event *dto.ResponsesStreamResponse, state 
 		if event.Delta != "" {
 			state.sawSubstantiveOutput = true
 		}
-		return state.textDeltaForKey(state.bindTextEvent(event), event.Delta), nil
+		key := state.bindTextEvent(event)
+		index := 0
+		if event.ContentIndex != nil {
+			index = *event.ContentIndex
+		}
+		return state.textDeltaForKey(key, event.Delta, state.textLogprobs(key, index, event.Logprobs, false)), nil
 	case responsesEventOutputTextDone, responsesEventRefusalDone:
 		key := state.bindTextEvent(event)
 		finalText := ""
@@ -152,7 +161,12 @@ func ResponsesStreamEventToChatChunks(event *dto.ResponsesStreamResponse, state 
 		if event.Type == responsesEventRefusalDone && event.Refusal != "" {
 			finalText = event.Refusal
 		}
-		return state.textDeltaForKey(key, missingStreamSuffix(state.textByKey[key], finalText)), nil
+		index := 0
+		if event.ContentIndex != nil {
+			index = *event.ContentIndex
+		}
+		probabilities := state.textLogprobs(key, index, event.Logprobs, true)
+		return state.textDeltaForKey(key, missingStreamSuffix(state.textByKey[key], finalText), probabilities), nil
 	case responsesEventOutputItemAdded:
 		if event.Item == nil {
 			return nil, nil
@@ -190,7 +204,7 @@ func ResponsesStreamEventToChatChunks(event *dto.ResponsesStreamResponse, state 
 		}
 		if event.Item.Type == responsesOutputTypeMessage {
 			key := state.bindTextEvent(event)
-			chunks := state.textDeltaForKey(key, missingStreamSuffix(state.textByKey[key], responsesMessageOutputText(event.Item)))
+			chunks := state.textDeltaForKey(key, missingStreamSuffix(state.textByKey[key], responsesMessageOutputText(event.Item)), state.remainingItemLogprobs(key, event.Item))
 			if state.currentTextKey == key {
 				state.currentTextKey = ""
 			}
@@ -310,8 +324,12 @@ func (s *ResponsesToChatStreamState) ensureStart() []dto.ChatCompletionsStreamRe
 	}, nil)}
 }
 
-func (s *ResponsesToChatStreamState) textDeltaForKey(key, delta string) []dto.ChatCompletionsStreamResponse {
-	if delta == "" {
+func (s *ResponsesToChatStreamState) textDeltaForKey(key, delta string, probabilities ...[]dto.TokenLogprob) []dto.ChatCompletionsStreamResponse {
+	var logprobs []dto.TokenLogprob
+	if len(probabilities) > 0 {
+		logprobs = probabilities[0]
+	}
+	if delta == "" && len(logprobs) == 0 {
 		return nil
 	}
 	s.usageText.WriteString(delta)
@@ -322,6 +340,10 @@ func (s *ResponsesToChatStreamState) textDeltaForKey(key, delta string) []dto.Ch
 	chunks = append(chunks, s.makeChunk(dto.ChatCompletionsStreamResponseChoiceDelta{
 		Content: &delta,
 	}, nil))
+	if len(logprobs) > 0 {
+		var value any = dto.ChatLogprobs{Content: logprobs}
+		chunks[len(chunks)-1].Choices[0].Logprobs = &value
+	}
 	return chunks
 }
 
@@ -339,7 +361,8 @@ func (s *ResponsesToChatStreamState) terminalOutputChunks(response *dto.OpenAIRe
 			outputIndex := i
 			key := s.bindTextEvent(&dto.ResponsesStreamResponse{Item: out, OutputIndex: &outputIndex})
 			complete := responsesMessageOutputText(out)
-			chunks = append(chunks, s.textDeltaForKey(key, missingStreamSuffix(s.textByKey[key], complete))...)
+			probabilities := s.remainingItemLogprobs(key, out)
+			chunks = append(chunks, s.textDeltaForKey(key, missingStreamSuffix(s.textByKey[key], complete), probabilities)...)
 			annotationChunks, err := s.remainingAnnotationChunks(out, annotationOffset)
 			if err != nil {
 				return nil, err
@@ -431,6 +454,23 @@ func responsesMessageOutputText(output *dto.ResponsesOutput) string {
 		}
 	}
 	return text.String()
+}
+
+func (s *ResponsesToChatStreamState) textLogprobs(key string, contentIndex int, probabilities []dto.TokenLogprob, cumulative bool) []dto.TokenLogprob {
+	key = fmt.Sprintf("%s/content:%d", key, contentIndex)
+	if cumulative {
+		probabilities = probabilities[min(s.logprobsByKey[key], len(probabilities)):]
+	}
+	s.logprobsByKey[key] += len(probabilities)
+	return probabilities
+}
+
+func (s *ResponsesToChatStreamState) remainingItemLogprobs(key string, item *dto.ResponsesOutput) []dto.TokenLogprob {
+	var probabilities []dto.TokenLogprob
+	for i, part := range item.Content {
+		probabilities = append(probabilities, s.textLogprobs(key, i, part.Logprobs, true)...)
+	}
+	return probabilities
 }
 
 func missingStreamSuffix(sent, complete string) string {
@@ -1081,6 +1121,7 @@ type responsesBufferedItem struct {
 	Refusal             strings.Builder
 	Reasoning           strings.Builder
 	Annotations         []any
+	Logprobs            map[int][]dto.TokenLogprob
 	ToolIndex           int
 	NeedsReasoningBreak bool
 }
@@ -1111,7 +1152,18 @@ func (a *ResponsesBufferedAccumulator) ProcessEvent(event *dto.ResponsesStreamRe
 	}
 	switch event.Type {
 	case responsesEventOutputTextDelta:
-		a.ensureItem(event, responsesOutputTypeMessage).Text.WriteString(event.Delta)
+		item := a.ensureItem(event, responsesOutputTypeMessage)
+		item.Text.WriteString(event.Delta)
+		if len(event.Logprobs) > 0 {
+			index := 0
+			if event.ContentIndex != nil {
+				index = *event.ContentIndex
+			}
+			if item.Logprobs == nil {
+				item.Logprobs = make(map[int][]dto.TokenLogprob)
+			}
+			item.Logprobs[index] = append(item.Logprobs[index], event.Logprobs...)
+		}
 	case responsesEventRefusalDelta:
 		a.ensureItem(event, responsesOutputTypeMessage).Refusal.WriteString(event.Delta)
 	case responsesEventOutputTextAnnotationAdded:
@@ -1146,6 +1198,16 @@ func (a *ResponsesBufferedAccumulator) ProcessEvent(event *dto.ResponsesStreamRe
 		}
 	case responsesEventOutputTextDone, responsesEventRefusalDone:
 		item := a.ensureItem(event, responsesOutputTypeMessage)
+		if len(event.Logprobs) > 0 {
+			index := 0
+			if event.ContentIndex != nil {
+				index = *event.ContentIndex
+			}
+			if item.Logprobs == nil {
+				item.Logprobs = make(map[int][]dto.TokenLogprob)
+			}
+			item.Logprobs[index] = slices.Clone(event.Logprobs)
+		}
 		builder := &item.Text
 		text := event.Text
 		if event.Type == responsesEventRefusalDone {
@@ -1264,7 +1326,11 @@ func (a *ResponsesBufferedAccumulator) BuildOutput() []dto.ResponsesOutput {
 			}
 			if len(item.Content) == 0 {
 				if buffered.Text.Len() > 0 || len(buffered.Annotations) > 0 {
-					item.Content = append(item.Content, dto.ResponsesOutputContent{Type: "output_text", Text: buffered.Text.String(), Annotations: buffered.Annotations})
+					var probabilities []dto.TokenLogprob
+					for _, index := range slices.Sorted(maps.Keys(buffered.Logprobs)) {
+						probabilities = append(probabilities, buffered.Logprobs[index]...)
+					}
+					item.Content = append(item.Content, dto.ResponsesOutputContent{Type: "output_text", Text: buffered.Text.String(), Annotations: buffered.Annotations, Logprobs: probabilities})
 				}
 				if buffered.Refusal.Len() > 0 {
 					item.Content = append(item.Content, dto.ResponsesOutputContent{Type: "refusal", Refusal: buffered.Refusal.String()})
@@ -1275,6 +1341,11 @@ func (a *ResponsesBufferedAccumulator) BuildOutput() []dto.ResponsesOutput {
 						item.Content[i].Annotations = buffered.Annotations
 						break
 					}
+				}
+			}
+			for i := range item.Content {
+				if len(item.Content[i].Logprobs) == 0 && len(buffered.Logprobs[i]) > 0 {
+					item.Content[i].Logprobs = slices.Clone(buffered.Logprobs[i])
 				}
 			}
 		case responsesOutputTypeReasoning:
@@ -1503,6 +1574,13 @@ func mergeResponsesOutput(buffered dto.ResponsesOutput, terminal dto.ResponsesOu
 	}
 	if len(merged.Content) == 0 {
 		merged.Content = append([]dto.ResponsesOutputContent(nil), buffered.Content...)
+	} else {
+		merged.Content = slices.Clone(merged.Content)
+		for i := range merged.Content {
+			if i < len(buffered.Content) && merged.Content[i].Type == buffered.Content[i].Type && merged.Content[i].Text == buffered.Content[i].Text && len(merged.Content[i].Logprobs) == 0 {
+				merged.Content[i].Logprobs = slices.Clone(buffered.Content[i].Logprobs)
+			}
+		}
 	}
 	if len(merged.Summary) == 0 {
 		merged.Summary = append([]dto.ResponsesReasoningSummaryPart(nil), buffered.Summary...)

@@ -48,6 +48,23 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 	if err := sharedclaude.ApplyReasoning(c, &claudeRequest, info, sourceReasoning, true); err != nil {
 		return nil, reasoning.AsClientError(err)
 	}
+	if err := sharedclaude.ApplyOutputFormat(&claudeRequest, textRequest.ResponseFormat); err != nil {
+		return nil, err
+	}
+	if len(textRequest.ServiceTier) > 0 {
+		var tier string
+		if err := kitutil.Unmarshal(textRequest.ServiceTier, &tier); err != nil {
+			return nil, err
+		}
+		switch tier {
+		case "auto":
+			claudeRequest.ServiceTier = "auto"
+		case "default":
+			claudeRequest.ServiceTier = "standard_only"
+		default:
+			return nil, fmt.Errorf("service_tier %q has no Messages mapping", tier)
+		}
+	}
 	if claudeRequest.MaxTokens == nil {
 		if defaultMaxTokens, configured := opts.Claude.DefaultMaxTokensFor(claudeRequest.Model); configured {
 			value := uint(defaultMaxTokens)

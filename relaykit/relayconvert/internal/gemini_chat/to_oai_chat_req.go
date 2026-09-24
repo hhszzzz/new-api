@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/internal/convdiag"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/internal/jsonutil"
+	sharedgemini "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/gemini"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/internal/toolconv"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
@@ -30,6 +31,11 @@ func GeminiGenerateContentRequestToOpenAIChatWithContext(c context.Context, gemi
 		Model:  modelName,
 		Stream: kitutil.GetPointer(isStream),
 	}
+	format, err := sharedgemini.OutputFormat(&geminiRequest.GenerationConfig)
+	if err != nil {
+		return nil, err
+	}
+	openaiRequest.ResponseFormat = format
 	sourceModelName := modelName
 	if info != nil && info.GetOriginModelName() != "" {
 		sourceModelName = info.GetOriginModelName()

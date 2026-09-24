@@ -78,6 +78,24 @@ func ResponsesRequestToChatCompletionsRequestWithContext(c context.Context, req 
 		SafetyIdentifier:     req.SafetyIdentifier,
 		PromptCacheRetention: req.PromptCacheRetention,
 	}
+	if rawJSONPresent(req.Text) {
+		var config map[string]json.RawMessage
+		if err := kitutil.Unmarshal(req.Text, &config); err != nil {
+			return nil, err
+		}
+		out.Verbosity = config["verbosity"]
+	}
+	if rawJSONPresent(req.Include) {
+		var includes []string
+		if err := kitutil.Unmarshal(req.Include, &includes); err != nil {
+			return nil, err
+		}
+		for _, include := range includes {
+			if include == "message.output_text.logprobs" {
+				out.LogProbs = kitutil.GetPointer(true)
+			}
+		}
+	}
 	// Qwen models consume these vendor fields; anywhere else they are
 	// non-standard and must not leak to the upstream request.
 	if dto.IsQwenThinkingBudgetModel(req.Model) {

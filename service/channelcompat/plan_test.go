@@ -149,14 +149,13 @@ func TestExtractRequestFeatureSetMessagesDetectsLossyTopLevelFields(t *testing.T
 	require.NoError(t, err)
 	assert.True(t, features.HasStopSequences)
 	assert.True(t, features.HasTopK)
+	assert.True(t, features.HasSpeed)
 	assert.Equal(t, []string{
-		"output_format",
 		"container",
 		"mcp_servers",
 		"inference_geo",
-		"speed",
 		"service_tier",
-		"output_config",
+		"output_config: output_format conflicts with output_config.format",
 	}, features.MessagesNativeFields)
 
 	effortOnly, err := ExtractRequestFeatureSet(ProtocolMessages, []byte(`{"output_config":{"effort":"max"}}`))

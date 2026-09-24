@@ -16,10 +16,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import type { TFunction } from 'i18next'
+
 import { getProtocolName } from '@/features/usage-logs/lib/protocol-conversion'
 import { getDefaultTimeRange } from '@/features/usage-logs/lib/utils'
 import dayjs from '@/lib/dayjs'
 
+import { PROMPT_AUDIT_SCOPES } from './scopes'
 import type {
   PromptAuditConfigUpdate,
   PromptAuditDeleteFilter,
@@ -27,7 +30,72 @@ import type {
   PromptAuditEndpointUpdate,
   PromptAuditEvent,
   PromptAuditFilters,
+  PromptAuditScope,
 } from './types'
+
+export function promptAuditDetectorLabel(
+  type: string | undefined,
+  t: TFunction
+): string {
+  if (type === 'wordlist') return t('Wordlist')
+  if (type === 'probe_block') return t('Probe blocked')
+  if (type === 'probe_fast_pass') return t('Probe allowed')
+  return t('Model audit')
+}
+
+export function promptAuditRequestKindLabel(
+  kind: string | undefined,
+  t: TFunction
+): string {
+  switch (kind) {
+    case 'step':
+      return t('Conversation step')
+    case 'subagent':
+      return t('Subagent')
+    case 'side:safety':
+      return t('Background: safety check')
+    case 'side:web_search':
+      return t('Background: web search')
+    case 'side:web_summary':
+      return t('Background: web summary')
+    case 'side:status':
+      return t('Background: status')
+    case 'side:recap':
+      return t('Background: recap')
+    case 'side:summary':
+      return t('Background: summary')
+    case 'side:title':
+      return t('Background: title')
+    case 'side:memory':
+      return t('Background: memory')
+    default:
+      return t('User question')
+  }
+}
+
+export function promptAuditPayloadSegments(
+  payload?: string
+): { scope?: PromptAuditScope; text: string }[] {
+  if (!payload) return []
+  try {
+    const parsed: unknown = JSON.parse(payload)
+    if (!parsed || typeof parsed !== 'object') return [{ text: payload }]
+    const envelope = parsed as Record<string, unknown>
+    if (typeof envelope.output === 'string') {
+      return [{ scope: 'assistant', text: envelope.output }]
+    }
+    if (!Array.isArray(envelope.segments)) return [{ text: payload }]
+    return envelope.segments.flatMap((segment: unknown) => {
+      if (!segment || typeof segment !== 'object') return []
+      const part = segment as Record<string, unknown>
+      if (typeof part.text !== 'string') return []
+      const scope = PROMPT_AUDIT_SCOPES.find((scope) => scope === part.scope)
+      return [{ scope, text: part.text }]
+    })
+  } catch {
+    return [{ text: payload }]
+  }
+}
 
 export const EMPTY_PROMPT_AUDIT_FILTERS: PromptAuditFilters = {
   status: '',
@@ -39,6 +107,7 @@ export const EMPTY_PROMPT_AUDIT_FILTERS: PromptAuditFilters = {
   model: '',
   request_id: '',
   direction: '',
+  detector: '',
   start_time: '',
   end_time: '',
 }
@@ -58,7 +127,7 @@ export function getDefaultPromptAuditFilters(): PromptAuditFilters {
  * delete and statistics paths must keep seeing the filters alone.
  */
 export interface PromptAuditListingView {
-  /** Merge the requests that submitted the same audited text into one row. */
+  /** Merge requests for the same question across models into one row. */
   collapseRepeats?: boolean
   /** Return the requests behind one collapsed row instead of the listing. */
   groupID?: number
@@ -85,6 +154,7 @@ export function promptAuditFilterParams(
     model: filters.model.trim() || undefined,
     request_id: filters.request_id.trim() || undefined,
     direction: filters.direction || undefined,
+    detector: filters.detector || undefined,
     start_time:
       startTime !== undefined && Number.isFinite(startTime)
         ? startTime
@@ -150,12 +220,25 @@ export function isMergedPromptAuditRow(event: PromptAuditEvent): boolean {
   return event.repeat !== undefined && event.repeat.count > 1
 }
 
+/**
+ * What a deletion removes. Selected rows of the plain listing are requests and
+ * go by id. A selected row of the collapsed listing stands for its whole group,
+ * so it goes as a group the server expands to every request the current
+ * filters match; its id alone would delete only the request representing it.
+ */
 export function promptAuditDeleteFilter(
   filters: PromptAuditFilters,
-  ids: number[] = []
+  ids: number[] = [],
+  options: { groups?: boolean } = {}
 ): PromptAuditDeleteFilter {
-  if (ids.length > 0) return { ids }
-  return promptAuditFilterParams(filters) as PromptAuditDeleteFilter
+  if (ids.length === 0) {
+    return promptAuditFilterParams(filters) as PromptAuditDeleteFilter
+  }
+  if (!options.groups) return { ids }
+  return {
+    ...(promptAuditFilterParams(filters) as PromptAuditDeleteFilter),
+    group_ids: ids,
+  }
 }
 
 export function validatePromptAuditFilters(
@@ -357,6 +440,27 @@ export function validatePromptAuditConfig(
   return null
 }
 
+/**
+ * The protocol values an audit row stores: the relay formats the gateway
+ * inspects. The server matches the protocol filter against them exactly, so the
+ * filter offers these values rather than free text.
+ */
+export const PROMPT_AUDIT_PROTOCOLS = [
+  'openai',
+  'claude',
+  'gemini',
+  'openai_responses',
+  'openai_responses_compaction',
+  'openai_alpha_search',
+  'openai_audio',
+  'openai_image',
+  'openai_realtime',
+  'rerank',
+  'embedding',
+  'task',
+  'mj_proxy',
+] as const
+
 // Protocol formats the shared usage-log map does not name. Kept local rather
 // than added to protocol-conversion.ts: that map also decides whether a usage
 // log reports a native protocol flow, so extending it would change unrelated
@@ -364,6 +468,9 @@ export function validatePromptAuditConfig(
 // the raw format, which is what getProtocolName itself does.
 const PROMPT_AUDIT_PROTOCOL_NAMES: Record<string, string> = {
   openai_responses: 'OpenAI Responses',
+  // The shared map reads compaction as plain Responses, which would give two
+  // filter options the same name.
+  openai_responses_compaction: 'OpenAI Responses Compaction',
   openai_alpha_search: 'OpenAI Alpha Search',
   openai_audio: 'OpenAI Audio',
   openai_image: 'OpenAI Images',
@@ -374,6 +481,10 @@ const PROMPT_AUDIT_PROTOCOL_NAMES: Record<string, string> = {
   mj_proxy: 'Midjourney',
 }
 
+/**
+ * The label key of a stored protocol value, which callers render through t().
+ * Brand names translate to themselves; generic ones such as Async Task do not.
+ */
 export function getPromptAuditProtocolName(protocol: string): string {
   if (!protocol) return ''
   return PROMPT_AUDIT_PROTOCOL_NAMES[protocol] ?? getProtocolName(protocol)

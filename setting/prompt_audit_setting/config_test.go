@@ -3,11 +3,39 @@ package prompt_audit_setting
 import (
 	"testing"
 
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/config"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPromptAuditProbeDefaultsAndScopeInheritance(t *testing.T) {
+	old := GetSetting()
+	t.Cleanup(func() { old.PublishConfig() })
+	configured := validSetting()
+	require.NoError(t, configured.ValidateConfig())
+	assert.Contains(t, configured.ProbePhrases, "你好")
+	configured.ProbePhrases = []string{}
+	configured.PublishConfig()
+	assert.NotNil(t, GetSetting().ProbePhrases)
+	assert.Empty(t, GetSetting().ProbePhrases)
+	configured.ProbePhrases = []string{"custom"}
+	configured.PublishConfig()
+	configured = validSetting()
+	require.NoError(t, configured.ValidateConfig())
+	assert.Contains(t, configured.ProbePhrases, "hello")
+	configured.ScopePolicies = map[dto.PromptAuditScope]ScopePolicy{
+		dto.PromptScopeUser:       {LibraryIDs: []string{"one"}, ModelAudit: true},
+		dto.PromptScopeToolResult: {LibraryIDs: []string{"two"}, ModelAudit: false},
+	}
+	assert.Equal(t, configured.PolicyFor(dto.PromptScopeUser), configured.PolicyFor(dto.PromptScopeAgentContext))
+	assert.Equal(t, configured.PolicyFor(dto.PromptScopeUser), configured.PolicyFor(dto.PromptScopeSkill))
+	assert.Equal(t, configured.PolicyFor(dto.PromptScopeToolResult), configured.PolicyFor(dto.PromptScopeMCP))
+	configured.ScopePolicies[dto.PromptScopeSkill] = ScopePolicy{}
+	assert.False(t, configured.PolicyFor(dto.PromptScopeSkill).ModelAudit)
+	assert.Empty(t, configured.PolicyFor(dto.PromptScopeSkill).LibraryIDs)
+}
 
 func validSetting() PromptAuditSetting {
 	return PromptAuditSetting{

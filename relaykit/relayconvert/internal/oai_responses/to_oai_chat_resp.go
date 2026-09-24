@@ -141,6 +141,18 @@ func ResponsesResponseToChatCompletionsResponse(resp *dto.OpenAIResponsesRespons
 		},
 		Usage: *usage,
 	}
+	probabilities := dto.ChatLogprobs{}
+	for _, output := range resp.Output {
+		for _, content := range output.Content {
+			if content.Type == "output_text" {
+				probabilities.Content = append(probabilities.Content, content.Logprobs...)
+			}
+		}
+	}
+	if len(probabilities.Content) > 0 {
+		var value any = probabilities
+		out.Choices[0].Logprobs = &value
+	}
 
 	return out, usage, nil
 }

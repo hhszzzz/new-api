@@ -488,12 +488,33 @@ func attachChatResponseAnnotations(out *dto.OpenAIResponsesResponse, source *dto
 	if err != nil {
 		return err
 	}
+	var probabilities dto.ChatLogprobs
+	if source.Choices[0].Logprobs != nil {
+		probabilities, err = kitutil.Any2Type[dto.ChatLogprobs](*source.Choices[0].Logprobs)
+		if err != nil {
+			return err
+		}
+	}
 	offset := 0
 	for i := range out.Output {
 		for j := range out.Output[i].Content {
 			part := &out.Output[i].Content[j]
 			if part.Type != "output_text" {
 				continue
+			}
+			remaining := len(part.Text)
+			for len(probabilities.Content) > 0 {
+				probability := probabilities.Content[0]
+				size := len(probability.Bytes)
+				if size == 0 {
+					size = len(probability.Token)
+				}
+				if size > remaining {
+					break
+				}
+				part.Logprobs = append(part.Logprobs, probability)
+				probabilities.Content = probabilities.Content[1:]
+				remaining -= size
 			}
 			length := utf8.RuneCountInString(part.Text)
 			for _, value := range annotations {

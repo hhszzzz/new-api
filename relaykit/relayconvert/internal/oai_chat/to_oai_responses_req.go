@@ -327,6 +327,19 @@ func ChatCompletionsRequestToResponsesRequestWithContext(c context.Context, req 
 	}
 
 	textRaw := convertChatResponseFormatToResponsesText(req.ResponseFormat)
+	if len(req.Verbosity) > 0 {
+		config := map[string]json.RawMessage{}
+		if len(textRaw) > 0 {
+			if err := kitutil.Unmarshal(textRaw, &config); err != nil {
+				return nil, err
+			}
+		}
+		config["verbosity"] = req.Verbosity
+		textRaw, err = kitutil.Marshal(config)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	maxOutputTokens := lo.FromPtrOr(req.MaxTokens, uint(0))
 	if req.MaxCompletionTokens != nil {
@@ -359,22 +372,33 @@ func ChatCompletionsRequestToResponsesRequestWithContext(c context.Context, req 
 	}
 
 	out := &dto.OpenAIResponsesRequest{
-		Model:            req.Model,
-		Input:            inputRaw,
-		Instructions:     instructionsRaw,
-		Stream:           req.Stream,
-		Temperature:      req.Temperature,
-		Text:             textRaw,
-		Tools:            toolsRaw,
-		TopP:             topP,
-		FrequencyPenalty: frequencyPenaltyRaw,
-		PresencePenalty:  presencePenaltyRaw,
-		User:             req.User,
-		Store:            req.Store,
-		Metadata:         req.Metadata,
-		PromptCacheKey:   promptCacheKeyRaw,
-		EnableThinking:   req.EnableThinking,
-		ThinkingBudget:   req.ThinkingBudget,
+		Model:                req.Model,
+		Input:                inputRaw,
+		Instructions:         instructionsRaw,
+		Stream:               req.Stream,
+		Temperature:          req.Temperature,
+		Text:                 textRaw,
+		Tools:                toolsRaw,
+		TopP:                 topP,
+		FrequencyPenalty:     frequencyPenaltyRaw,
+		PresencePenalty:      presencePenaltyRaw,
+		User:                 req.User,
+		Store:                req.Store,
+		Metadata:             req.Metadata,
+		PromptCacheKey:       promptCacheKeyRaw,
+		EnableThinking:       req.EnableThinking,
+		ThinkingBudget:       req.ThinkingBudget,
+		TopLogProbs:          req.TopLogProbs,
+		SafetyIdentifier:     req.SafetyIdentifier,
+		PromptCacheRetention: req.PromptCacheRetention,
+	}
+	if req.LogProbs != nil && *req.LogProbs {
+		out.Include = []byte(`["message.output_text.logprobs"]`)
+	}
+	if len(req.ServiceTier) > 0 {
+		if err := kitutil.Unmarshal(req.ServiceTier, &out.ServiceTier); err != nil {
+			return nil, err
+		}
 	}
 	if req.MaxTokens != nil || req.MaxCompletionTokens != nil {
 		out.MaxOutputTokens = lo.ToPtr(maxOutputTokens)

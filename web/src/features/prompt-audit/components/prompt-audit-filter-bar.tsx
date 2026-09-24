@@ -34,10 +34,12 @@ import {
   LogsFilterInput,
   LogsFilterToolbar,
 } from '@/features/usage-logs/components/logs-filter-toolbar'
+import { toIntlLocale } from '@/i18n/languages'
 import dayjs from '@/lib/dayjs'
 import { formatNumber } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
+import { getPromptAuditProtocolName, PROMPT_AUDIT_PROTOCOLS } from '../lib'
 import type {
   PromptAuditCategory,
   PromptAuditFilters,
@@ -49,12 +51,15 @@ function PromptAuditStat(props: {
   value: number
   accent: string
 }) {
+  const { i18n } = useTranslation()
+  const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
+
   return (
     <span className='border-border/60 bg-muted/25 inline-flex h-7 items-center gap-2 rounded-md border px-2.5 text-xs shadow-xs'>
       <span className={cn('h-3.5 w-0.5 rounded-full', props.accent)} />
       <span className='text-muted-foreground'>{props.label}</span>
       <span className='text-foreground/85 font-mono font-semibold tabular-nums'>
-        {formatNumber(props.value)}
+        {formatNumber(props.value, locale)}
       </span>
     </span>
   )
@@ -65,7 +70,6 @@ function PromptAuditStatsBar(props: {
   loading: boolean
   collapsed: boolean
   groupTotal: number
-  recordsTotal: number
 }) {
   const { t } = useTranslation()
 
@@ -102,21 +106,14 @@ function PromptAuditStatsBar(props: {
         value={props.stats?.statuses.failed ?? 0}
         accent='bg-slate-400/80'
       />
-      {/* While the listing merges requests, the two counts that used to be one
-          are shown together, so nobody has to reconcile them by hand. */}
+      {/* While the listing merges requests, its rows are groups rather than
+          requests, so their count is shown beside the request statistics. */}
       {props.collapsed && (
-        <>
-          <PromptAuditStat
-            label={t('Groups')}
-            value={props.groupTotal}
-            accent='bg-violet-500/70'
-          />
-          <PromptAuditStat
-            label={t('Requests')}
-            value={props.recordsTotal}
-            accent='bg-emerald-500/70'
-          />
-        </>
+        <PromptAuditStat
+          label={t('Groups')}
+          value={props.groupTotal}
+          accent='bg-violet-500/70'
+        />
       )}
     </div>
   )
@@ -157,7 +154,11 @@ function PromptAuditCollapseToggle(props: {
       />
       <TooltipContent>
         <p>{label}</p>
-        <p>{t('Merge requests that submitted the same text into one row.')}</p>
+        <p>
+          {t(
+            'Merge requests for the same question across models into one row.'
+          )}
+        </p>
       </TooltipContent>
     </Tooltip>
   )
@@ -195,7 +196,6 @@ export function PromptAuditFilterBar<TData>(props: {
   searchLoading: boolean
   collapsed: boolean
   groupTotal: number
-  recordsTotal: number
   onToggleCollapse: () => void
   onChange: (key: keyof PromptAuditFilters, value: string) => void
   onSearch: () => void
@@ -296,14 +296,48 @@ export function PromptAuditFilterBar<TData>(props: {
       }
     />
   )
+  const detectorFilter = (
+    <PromptAuditFilterSelect
+      label={t('Detector')}
+      value={props.filters.detector || 'all'}
+      options={[
+        { value: 'all', label: t('All detectors') },
+        { value: 'wordlist', label: t('Wordlist') },
+        { value: 'model', label: t('Model audit') },
+        { value: 'probe', label: t('Probe requests') },
+      ]}
+      onChange={(value) =>
+        props.onChange('detector', value === 'all' ? '' : value)
+      }
+    />
+  )
+  // The server matches the stored protocol value exactly, while the screen
+  // shows its name, so the filter picks among names and sends the value.
+  const protocolFilter = (
+    <PromptAuditFilterSelect
+      label={t('Protocol')}
+      value={props.filters.protocol || 'all'}
+      options={[
+        { value: 'all', label: t('All protocols') },
+        ...PROMPT_AUDIT_PROTOCOLS.map((value) => ({
+          value,
+          label: t(getPromptAuditProtocolName(value)),
+        })),
+      ]}
+      onChange={(value) =>
+        props.onChange('protocol', value === 'all' ? '' : value)
+      }
+    />
+  )
   const advancedFilters = (
     <>
       {statusFilter}
       {directionFilter}
+      {detectorFilter}
+      {protocolFilter}
       {[
         ['model', t('Model')],
         ['group', t('Group')],
-        ['protocol', t('Protocol')],
         ['request_id', t('Request ID')],
       ].map(([key, label]) => (
         <LogsFilterField key={key}>
@@ -330,6 +364,7 @@ export function PromptAuditFilterBar<TData>(props: {
     props.filters.protocol,
     props.filters.request_id,
     props.filters.direction,
+    props.filters.detector,
   ].filter(Boolean).length
   const primaryCount = [
     props.filters.decision,
@@ -348,7 +383,6 @@ export function PromptAuditFilterBar<TData>(props: {
           loading={props.statsLoading}
           collapsed={props.collapsed}
           groupTotal={props.groupTotal}
-          recordsTotal={props.recordsTotal}
         />
       }
       actionStart={

@@ -41,6 +41,8 @@ type promptAuditConfigUpdate struct {
 	Mode                   *string                                                    `json:"mode"`
 	OutputMode             *string                                                    `json:"output_mode"`
 	BlockingLatestTurnOnly *bool                                                      `json:"blocking_latest_turn_only"`
+	ProbeBlockEnabled      *bool                                                      `json:"probe_block_enabled"`
+	ProbePhrases           *[]string                                                  `json:"probe_phrases"`
 	ManualWordlistAction   *string                                                    `json:"manual_wordlist_action"`
 	EnabledCategories      *[]string                                                  `json:"enabled_categories"`
 	ControversialBlocks    *[]string                                                  `json:"controversial_block_categories"`
@@ -63,20 +65,37 @@ type promptAuditConfigUpdate struct {
 }
 
 type promptAuditFilterRequest struct {
-	IDs             []int64 `json:"ids"`
-	Status          string  `json:"status"`
-	Decision        string  `json:"decision"`
-	Category        string  `json:"category"`
-	Username        string  `json:"username"`
-	Group           string  `json:"group"`
-	Protocol        string  `json:"protocol"`
-	Model           string  `json:"model"`
-	RequestID       string  `json:"request_id"`
-	Direction       string  `json:"direction"`
-	StartTime       int64   `json:"start_time"`
-	EndTime         int64   `json:"end_time"`
-	MaxID           int64   `json:"max_id"`
-	CollapseRepeats bool    `json:"collapse_repeats"`
+	IDs       []int64 `json:"ids"`
+	GroupIDs  []int64 `json:"group_ids"`
+	Status    string  `json:"status"`
+	Decision  string  `json:"decision"`
+	Category  string  `json:"category"`
+	Username  string  `json:"username"`
+	Group     string  `json:"group"`
+	Protocol  string  `json:"protocol"`
+	Model     string  `json:"model"`
+	RequestID string  `json:"request_id"`
+	Direction string  `json:"direction"`
+	Detector  string  `json:"detector"`
+	StartTime int64   `json:"start_time"`
+	EndTime   int64   `json:"end_time"`
+	MaxID     int64   `json:"max_id"`
+
+	// Filters the records screen no longer offers are decoded only to be
+	// refused: dropping one silently would widen what a preview or a deletion
+	// covers for a client that still sends it, such as a page loaded before the
+	// upgrade.
+	RetiredUserID     any `json:"user_id"`
+	RetiredPromptHash any `json:"prompt_hash"`
+	RetiredEndpointID any `json:"endpoint_id"`
+}
+
+// promptAuditRetiredFilters are the listing filters the records screen no longer
+// offers. Every prompt audit endpoint that takes a filter refuses them.
+var promptAuditRetiredFilters = []string{"user_id", "prompt_hash", "endpoint_id"}
+
+func promptAuditRetiredFilterMessage(key string) string {
+	return fmt.Sprintf("the %s filter is no longer supported; reload the page", key)
 }
 
 type promptAuditDeleteRequest struct {
@@ -138,6 +157,19 @@ func UpdatePromptAuditConfig(c *gin.Context) {
 	}
 	if update.BlockingLatestTurnOnly != nil {
 		values["prompt_audit.blocking_latest_turn_only"] = strconv.FormatBool(*update.BlockingLatestTurnOnly)
+	}
+	if update.ProbeBlockEnabled != nil {
+		values["prompt_audit.probe_block_enabled"] = strconv.FormatBool(*update.ProbeBlockEnabled)
+		proposed.ProbeBlockEnabled = *update.ProbeBlockEnabled
+	}
+	if update.ProbePhrases != nil {
+		data, err := common.Marshal(*update.ProbePhrases)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		values["prompt_audit.probe_phrases"] = string(data)
+		proposed.ProbePhrases = append([]string{}, (*update.ProbePhrases)...)
 	}
 	if update.ManualWordlistAction != nil {
 		values["prompt_audit.manual_wordlist_action"] = *update.ManualWordlistAction
@@ -333,15 +365,19 @@ func ReviewPromptAudit(c *gin.Context) {
 }
 
 func ListPromptAudits(c *gin.Context) {
-	filter := promptAuditFilterFromQuery(c)
+	filter, retired := promptAuditFilterFromQuery(c)
+	if retired != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": promptAuditRetiredFilterMessage(retired)})
+		return
+	}
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
 	// A group id only exists in the collapsed listing, and only as the handle the
 	// collapsed row carries; while it is set the response is that one group's
-	// requests, so paging and the group counts do not apply.
+	// requests, capped at the newest ones, with total counting the whole group.
 	groupID, _ := strconv.ParseInt(c.Query("group_id"), 10, 64)
 	if groupID > 0 {
-		audits, err := model.ListPromptAuditGroupRows(filter, groupID)
+		audits, total, err := model.ListPromptAuditGroupRows(filter, groupID)
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -352,12 +388,14 @@ func ListPromptAudits(c *gin.Context) {
 		}
 		c.JSON(http.StatusOK, gin.H{
 			"success": true, "message": "",
-			"data": gin.H{"items": items, "total": len(items), "page": 1, "page_size": len(items)},
+			"data": gin.H{"items": items, "total": total, "page": 1, "page_size": len(items)},
 		})
 		return
 	}
-	if filter.CollapseRepeats {
-		rows, groups, recordsTotal, err := model.ListPromptAuditRepeats(filter, page, pageSize)
+	// Collapsing is a way of reading the listing, not a filter: it never reaches
+	// the statistics, preview or deletion paths.
+	if collapseRepeats, _ := strconv.ParseBool(c.Query("collapse_repeats")); collapseRepeats {
+		rows, groups, err := model.ListPromptAuditRepeats(filter, page, pageSize)
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -366,23 +404,23 @@ func ListPromptAudits(c *gin.Context) {
 		for _, row := range rows {
 			item := row.Audit.ToResponse(false)
 			repeat := row.Repeat
-			// The merged row stands for every request in its group, so it reports
-			// what the whole group decided rather than the verdict of the request
-			// that happens to represent it: a group whose first request passed must
-			// not read as a pass when a later one was blocked. How much of each the
-			// group holds stays readable in repeat.blocks and repeat.unavailable.
-			if worst := model.PromptAuditDecisionForAction(repeat.WorstAction); worst != "" {
-				item.Decision = worst
-				item.Action = repeat.WorstAction
+			// A merged row stands for every request in its group, so it reports the
+			// most severe decision the group holds rather than the verdict of the
+			// request that happens to represent it: a group whose first request
+			// passed must not read as a pass when a later one was blocked. A group of
+			// one keeps its only request's own verdict, and the action is never
+			// replaced — how many requests were refused stays in repeat.blocks and
+			// repeat.unavailable.
+			if repeat.Count > 1 {
+				item.Decision = repeat.WorstDecision
 			}
 			item.Repeat = &repeat
 			items = append(items, item)
 		}
-		// total counts groups and records_total counts the requests behind them,
-		// so the screen can show both without disagreeing with its statistics.
+		// total counts groups; the requests behind them are the statistics total.
 		c.JSON(http.StatusOK, gin.H{
 			"success": true, "message": "",
-			"data": gin.H{"items": items, "total": groups, "records_total": recordsTotal, "page": page, "page_size": pageSize},
+			"data": gin.H{"items": items, "total": groups, "page": page, "page_size": pageSize},
 		})
 		return
 	}
@@ -416,7 +454,7 @@ func GetPromptAudit(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	includeFull := len(audit.FullPrompt) > 0 && authz.Can(c.GetInt("id"), c.GetInt("role"), authz.PromptAuditViewFullPrompt)
+	includeFull := (len(audit.FullPrompt) > 0 || len(audit.ScanPayload) > 0) && authz.Can(c.GetInt("id"), c.GetInt("role"), authz.PromptAuditViewFullPrompt)
 	if includeFull {
 		model.RecordOperationAuditLog(
 			c.GetInt("id"),
@@ -434,7 +472,12 @@ func GetPromptAudit(c *gin.Context) {
 }
 
 func GetPromptAuditStats(c *gin.Context) {
-	stats, err := model.GetPromptAuditStats(promptAuditFilterFromQuery(c), prompt_audit_setting.AllCategoryIDs)
+	filter, retired := promptAuditFilterFromQuery(c)
+	if retired != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": promptAuditRetiredFilterMessage(retired)})
+		return
+	}
+	stats, err := model.GetPromptAuditStats(filter, prompt_audit_setting.AllCategoryIDs)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -466,6 +509,10 @@ func PreviewDeletePromptAudits(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
 		return
 	}
+	if retired := request.Filter.retiredFilter(); retired != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": promptAuditRetiredFilterMessage(retired)})
+		return
+	}
 	filter := request.Filter.toModel()
 	eligible, active, maxID, err := model.PreviewPromptAuditDelete(filter)
 	if err != nil {
@@ -482,6 +529,10 @@ func DeletePromptAudits(c *gin.Context) {
 	var request promptAuditDeleteRequest
 	if err := common.DecodeJson(c.Request.Body, &request); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+	if retired := request.Filter.retiredFilter(); retired != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": promptAuditRetiredFilterMessage(retired)})
 		return
 	}
 	filter := request.Filter.toModel()
@@ -512,6 +563,8 @@ func promptAuditConfigResponse(setting prompt_audit_setting.PromptAuditSetting) 
 		"scope_policies": setting.EffectiveScopePolicies(), "word_filter_enabled": globalsetting.ShouldCheckPromptSensitive(),
 		"mode": setting.Mode, "output_mode": setting.OutputMode, "manual_wordlist_action": setting.ManualWordlistAction,
 		"blocking_latest_turn_only":      setting.BlockingLatestTurnOnly,
+		"probe_block_enabled":            setting.ProbeBlockEnabled,
+		"probe_phrases":                  append([]string{}, setting.ProbePhrases...),
 		"enabled_categories":             append([]string{}, setting.EnabledCategories...),
 		"controversial_block_categories": append([]string{}, setting.ControversialBlocks...),
 		"review_enabled":                 setting.ReviewEnabled, "review_prompt": setting.ReviewPrompt,
@@ -605,30 +658,51 @@ func promptAuditSetInt(values map[string]string, key string, value *int) {
 	}
 }
 
-func promptAuditFilterFromQuery(c *gin.Context) model.PromptAuditFilter {
+// promptAuditFilterFromQuery reads a listing filter from the query string. It
+// also names the first retired filter the query still carries, which the caller
+// must refuse rather than serve with that filter dropped.
+func promptAuditFilterFromQuery(c *gin.Context) (model.PromptAuditFilter, string) {
+	retired := ""
+	for _, key := range promptAuditRetiredFilters {
+		if strings.TrimSpace(c.Query(key)) != "" {
+			retired = key
+			break
+		}
+	}
 	startTime, _ := strconv.ParseInt(c.Query("start_time"), 10, 64)
 	endTime, _ := strconv.ParseInt(c.Query("end_time"), 10, 64)
-	collapseRepeats, _ := strconv.ParseBool(c.Query("collapse_repeats"))
 	return model.PromptAuditFilter{
 		Status: strings.TrimSpace(c.Query("status")), Decision: strings.TrimSpace(c.Query("decision")),
 		Category: strings.TrimSpace(c.Query("category")), Username: strings.TrimSpace(c.Query("username")),
 		Group: strings.TrimSpace(c.Query("group")), Protocol: strings.TrimSpace(c.Query("protocol")),
 		Model: strings.TrimSpace(c.Query("model")), RequestID: strings.TrimSpace(c.Query("request_id")),
-		Direction:       strings.TrimSpace(c.Query("direction")),
-		StartTime:       startTime,
-		EndTime:         endTime,
-		CollapseRepeats: collapseRepeats,
+		Direction: strings.TrimSpace(c.Query("direction")), Detector: strings.TrimSpace(c.Query("detector")),
+		StartTime: startTime, EndTime: endTime,
+	}, retired
+}
+
+// retiredFilter names the first retired filter a request body still carries.
+func (request promptAuditFilterRequest) retiredFilter() string {
+	switch {
+	case request.RetiredUserID != nil:
+		return "user_id"
+	case request.RetiredPromptHash != nil:
+		return "prompt_hash"
+	case request.RetiredEndpointID != nil:
+		return "endpoint_id"
+	default:
+		return ""
 	}
 }
 
 func (request promptAuditFilterRequest) toModel() model.PromptAuditFilter {
 	return model.PromptAuditFilter{
-		IDs: append([]int64(nil), request.IDs...), Status: strings.TrimSpace(request.Status),
-		Decision: strings.TrimSpace(request.Decision), Category: strings.TrimSpace(request.Category),
-		Username: strings.TrimSpace(request.Username), Group: strings.TrimSpace(request.Group),
-		Protocol: strings.TrimSpace(request.Protocol), Model: strings.TrimSpace(request.Model),
-		RequestID: strings.TrimSpace(request.RequestID), Direction: strings.TrimSpace(request.Direction),
+		IDs: append([]int64(nil), request.IDs...), GroupIDs: append([]int64(nil), request.GroupIDs...),
+		Status: strings.TrimSpace(request.Status), Decision: strings.TrimSpace(request.Decision),
+		Category: strings.TrimSpace(request.Category), Username: strings.TrimSpace(request.Username),
+		Group: strings.TrimSpace(request.Group), Protocol: strings.TrimSpace(request.Protocol),
+		Model: strings.TrimSpace(request.Model), RequestID: strings.TrimSpace(request.RequestID),
+		Direction: strings.TrimSpace(request.Direction), Detector: strings.TrimSpace(request.Detector),
 		StartTime: request.StartTime, EndTime: request.EndTime, MaxID: request.MaxID,
-		CollapseRepeats: request.CollapseRepeats,
 	}
 }

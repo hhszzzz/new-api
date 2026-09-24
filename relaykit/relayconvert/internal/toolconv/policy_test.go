@@ -108,15 +108,18 @@ func TestRejectConversionLossFollowsLossClassTier(t *testing.T) {
 	losses := []types.ConversionDiagnostic{
 		{Code: "presentation", LossClass: types.ConversionLossPresentation, Severity: types.ConversionDiagnosticWarning},
 		{Code: "tuning", LossClass: types.ConversionLossTuning, Severity: types.ConversionDiagnosticWarning},
+		// A producer that marks a loss as an error refuses it outright; no tier
+		// below allow may tolerate it because of its class.
+		{Code: "refused-tuning", LossClass: types.ConversionLossTuning, Severity: types.ConversionDiagnosticError},
 		{Code: "semantic", LossClass: types.ConversionLossSemantic, Severity: types.ConversionDiagnosticError},
 	}
 	for _, tc := range []struct {
 		policy   types.ConversionLossPolicy
 		rejected []string
 	}{
-		{policy: types.ConversionLossPolicyStrict, rejected: []string{"presentation", "tuning", "semantic"}},
-		{policy: types.ConversionLossPolicySafe, rejected: []string{"tuning", "semantic"}},
-		{policy: types.ConversionLossPolicyLossy, rejected: []string{"semantic"}},
+		{policy: types.ConversionLossPolicyStrict, rejected: []string{"presentation", "tuning", "refused-tuning", "semantic"}},
+		{policy: types.ConversionLossPolicySafe, rejected: []string{"tuning", "refused-tuning", "semantic"}},
+		{policy: types.ConversionLossPolicyLossy, rejected: []string{"refused-tuning", "semantic"}},
 		{policy: types.ConversionLossPolicyAllow, rejected: nil},
 	} {
 		t.Run(string(tc.policy), func(t *testing.T) {

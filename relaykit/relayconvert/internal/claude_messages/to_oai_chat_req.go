@@ -34,7 +34,11 @@ func ClaudeMessagesRequestToOpenAIChatWithContext(c context.Context, claudeReque
 }
 
 func ClaudeMessagesRequestToOpenAIChatForGeminiBridge(c context.Context, claudeRequest dto.ClaudeRequest, info convmeta.Meta) (*dto.GeneralOpenAIRequest, error) {
-	return claudeMessagesRequestToOpenAIChat(c, claudeRequest, info, sharedtoolmedia.InlineImagesOnly)
+	request, err := claudeMessagesRequestToOpenAIChat(c, claudeRequest, info, sharedtoolmedia.InlineImagesOnly)
+	if err == nil {
+		request.TopK = claudeRequest.TopK
+	}
+	return request, err
 }
 
 func claudeMessagesRequestToOpenAIChat(c context.Context, claudeRequest dto.ClaudeRequest, info convmeta.Meta, toolMediaScope sharedtoolmedia.Scope) (*dto.GeneralOpenAIRequest, error) {
@@ -45,6 +49,17 @@ func claudeMessagesRequestToOpenAIChat(c context.Context, claudeRequest dto.Clau
 		Model:       claudeRequest.Model,
 		Temperature: claudeRequest.Temperature,
 		Metadata:    append([]byte(nil), claudeRequest.Metadata...),
+	}
+	format, err := sharedclaude.OutputFormat(&claudeRequest)
+	if err != nil {
+		return nil, err
+	}
+	openAIRequest.ResponseFormat = format
+	if tier := claudeRequest.ServiceTier; tier != "" {
+		if tier == "standard_only" {
+			tier = "default"
+		}
+		openAIRequest.ServiceTier, _ = kitutil.Marshal(tier)
 	}
 	if claudeRequest.MaxTokens != nil {
 		if sharedchat.UsesMaxCompletionTokens(claudeRequest.Model) {

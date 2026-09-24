@@ -36,6 +36,7 @@ type OpenAITextResponseChoice struct {
 	Index        int `json:"index"`
 	Message      `json:"message"`
 	FinishReason string `json:"finish_reason"`
+	Logprobs     *any   `json:"logprobs,omitempty"`
 }
 
 type OpenAITextResponse struct {
@@ -557,10 +558,23 @@ func ResponsesArgumentsString(arguments json.RawMessage) string {
 }
 
 type ResponsesOutputContent struct {
-	Type        string `json:"type"`
-	Text        string `json:"text"`
-	Refusal     string `json:"refusal,omitempty"`
-	Annotations []any  `json:"annotations"`
+	Type        string         `json:"type"`
+	Text        string         `json:"text"`
+	Refusal     string         `json:"refusal,omitempty"`
+	Annotations []any          `json:"annotations"`
+	Logprobs    []TokenLogprob `json:"logprobs,omitempty"`
+}
+
+type TokenLogprob struct {
+	Token       string         `json:"token"`
+	Logprob     float64        `json:"logprob"`
+	Bytes       []int          `json:"bytes"`
+	TopLogprobs []TokenLogprob `json:"top_logprobs,omitempty"`
+}
+
+type ChatLogprobs struct {
+	Content []TokenLogprob `json:"content"`
+	Refusal []TokenLogprob `json:"refusal,omitempty"`
 }
 
 func (c ResponsesOutputContent) MarshalJSON() ([]byte, error) {
@@ -607,6 +621,7 @@ type ResponsesStreamResponse struct {
 	Type            string                   `json:"type"`
 	Response        *OpenAIResponsesResponse `json:"response,omitempty"`
 	Delta           string                   `json:"delta,omitempty"`
+	Logprobs        []TokenLogprob           `json:"logprobs,omitempty"`
 	Arguments       *string                  `json:"arguments,omitempty"`
 	Name            string                   `json:"name,omitempty"`
 	Text            *string                  `json:"text,omitempty"`

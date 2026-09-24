@@ -5,36 +5,40 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	sharedclaude "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/claude"
 	sharedgemini "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/gemini"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 )
 
 type RequestFeatureSet struct {
-	Stream                  bool     `json:"stream"`
-	HasPreviousResponse     bool     `json:"has_previous_response"`
-	HasConversation         bool     `json:"has_conversation"`
-	HasPrompt               bool     `json:"has_prompt"`
-	HasContextManagement    bool     `json:"has_context_management"`
-	HasThinking             bool     `json:"has_thinking"`
-	HasCustomTools          bool     `json:"has_custom_tools"`
-	HasNamespaceTools       bool     `json:"has_namespace_tools"`
-	HasToolSearch           bool     `json:"has_tool_search"`
-	HasAdditionalTools      bool     `json:"has_additional_tools"`
-	HasStopSequences        bool     `json:"has_stop_sequences"`
-	HasTopK                 bool     `json:"has_top_k"`
-	StopSequenceCount       int      `json:"stop_sequence_count,omitempty"`
-	HasMultipleCandidates   bool     `json:"has_multiple_candidates"`
-	HasOutputConstraint     bool     `json:"has_output_constraint"`
-	HasProviderState        bool     `json:"has_provider_state"`
-	HasMessagesState        bool     `json:"has_messages_state"`
-	UnsupportedGeminiSchema string   `json:"unsupported_gemini_schema,omitempty"`
-	RequiredFields          []string `json:"required_fields,omitempty"`
-	ResponsesIncludes       []string `json:"responses_includes,omitempty"`
-	ContentTypes            []string `json:"content_types,omitempty"`
-	DeclaredHostedTools     []string `json:"declared_hosted_tools,omitempty"`
-	HistoricalHostedTools   []string `json:"historical_hosted_tools,omitempty"`
-	MessagesNativeFields    []string `json:"messages_native_fields,omitempty"`
+	Stream                    bool     `json:"stream"`
+	HasPreviousResponse       bool     `json:"has_previous_response"`
+	HasConversation           bool     `json:"has_conversation"`
+	HasPrompt                 bool     `json:"has_prompt"`
+	HasContextManagement      bool     `json:"has_context_management"`
+	HasThinking               bool     `json:"has_thinking"`
+	HasCustomTools            bool     `json:"has_custom_tools"`
+	HasNamespaceTools         bool     `json:"has_namespace_tools"`
+	HasToolSearch             bool     `json:"has_tool_search"`
+	HasAdditionalTools        bool     `json:"has_additional_tools"`
+	HasStopSequences          bool     `json:"has_stop_sequences"`
+	HasTopK                   bool     `json:"has_top_k"`
+	StopSequenceCount         int      `json:"stop_sequence_count,omitempty"`
+	HasMultipleCandidates     bool     `json:"has_multiple_candidates"`
+	HasOutputConstraint       bool     `json:"has_output_constraint"`
+	HasProviderState          bool     `json:"has_provider_state"`
+	HasMessagesState          bool     `json:"has_messages_state"`
+	UnsupportedGeminiSchema   string   `json:"unsupported_gemini_schema,omitempty"`
+	UnsupportedMessagesSchema string   `json:"unsupported_messages_schema,omitempty"`
+	UnsupportedOpenAISchema   string   `json:"unsupported_openai_schema,omitempty"`
+	HasSpeed                  bool     `json:"has_speed"`
+	RequiredFields            []string `json:"required_fields,omitempty"`
+	ResponsesIncludes         []string `json:"responses_includes,omitempty"`
+	ContentTypes              []string `json:"content_types,omitempty"`
+	DeclaredHostedTools       []string `json:"declared_hosted_tools,omitempty"`
+	HistoricalHostedTools     []string `json:"historical_hosted_tools,omitempty"`
+	MessagesNativeFields      []string `json:"messages_native_fields,omitempty"`
 }
 
 func MergeRequestFeatureSets(featureSets ...RequestFeatureSet) RequestFeatureSet {
@@ -74,6 +78,13 @@ func MergeRequestFeatureSets(featureSets ...RequestFeatureSet) RequestFeatureSet
 		merged.StopSequenceCount = max(merged.StopSequenceCount, features.StopSequenceCount)
 		merged.HasMultipleCandidates = merged.HasMultipleCandidates || features.HasMultipleCandidates
 		merged.HasOutputConstraint = merged.HasOutputConstraint || features.HasOutputConstraint
+		merged.HasSpeed = merged.HasSpeed || features.HasSpeed
+		if features.UnsupportedMessagesSchema != "" {
+			merged.UnsupportedMessagesSchema = features.UnsupportedMessagesSchema
+		}
+		if features.UnsupportedOpenAISchema != "" {
+			merged.UnsupportedOpenAISchema = features.UnsupportedOpenAISchema
+		}
 		merged.HasProviderState = merged.HasProviderState || features.HasProviderState
 		merged.HasMessagesState = merged.HasMessagesState || features.HasMessagesState
 		if features.UnsupportedGeminiSchema != "" {
@@ -142,9 +153,66 @@ func ExtractRequestFeatureSet(protocol Protocol, body []byte) (RequestFeatureSet
 		features.HasStopSequences = features.StopSequenceCount > 0
 		features.HasTopK = nonNullValue(request, "top_k")
 		inspectMessagesNativeFields(request, &features)
+		features.HasSpeed = meaningfulRequestValue(request["speed"])
 	}
 	if protocol == ProtocolGemini {
 		inspectGeminiRequestFeatures(request, &features)
+	}
+	var outputFormat *dto.ResponseFormat
+	switch protocol {
+	case ProtocolChat:
+		if raw := request["response_format"]; raw != nil {
+			outputFormat, _ = kitutil.Any2Type[*dto.ResponseFormat](raw)
+		}
+	case ProtocolResponses:
+		if config, ok := request["text"].(map[string]any); ok {
+			if format, ok := config["format"].(map[string]any); ok {
+				raw, _ := kitutil.Marshal(format)
+				outputFormat = &dto.ResponseFormat{Type: kitutil.Interface2String(format["type"]), JsonSchema: raw}
+			}
+		}
+	case ProtocolMessages:
+		var messages dto.ClaudeRequest
+		if err := kitutil.Unmarshal(body, &messages); err != nil {
+			return features, err
+		}
+		format, err := sharedclaude.OutputFormat(&messages)
+		if err != nil {
+			features.MessagesNativeFields = append(features.MessagesNativeFields, "output_config: "+err.Error())
+		} else {
+			outputFormat = format
+		}
+	case ProtocolGemini:
+		var gemini dto.GeminiChatRequest
+		if err := kitutil.Unmarshal(body, &gemini); err != nil {
+			return features, err
+		}
+		format, err := sharedgemini.OutputFormat(&gemini.GenerationConfig)
+		if err != nil {
+			features.RequiredFields = append(features.RequiredFields, "generationConfig.response: "+err.Error())
+		} else {
+			outputFormat = format
+		}
+	}
+	if outputFormat != nil && outputFormat.Type != "" && outputFormat.Type != "text" {
+		features.HasOutputConstraint = true
+		if outputFormat.Type != "json_schema" {
+			features.UnsupportedMessagesSchema = "output format " + outputFormat.Type + " has no verified Messages mapping"
+		} else {
+			var schema dto.FormatJsonSchema
+			if err := kitutil.Unmarshal(outputFormat.JsonSchema, &schema); err != nil {
+				return features, err
+			}
+			features.UnsupportedGeminiSchema = sharedgemini.UnsupportedOutputSchemaField(schema.Schema, 0)
+			if err := sharedclaude.ValidateOutputSchema(schema.Schema, false); err != nil {
+				features.UnsupportedMessagesSchema = err.Error()
+			}
+			if protocol == ProtocolMessages || protocol == ProtocolGemini {
+				if err := sharedclaude.ValidateOutputSchema(schema.Schema, true); err != nil {
+					features.UnsupportedOpenAISchema = err.Error()
+				}
+			}
+		}
 	}
 	slices.Sort(features.RequiredFields)
 	declaredHostedSeen := make(map[string]struct{})
@@ -277,7 +345,7 @@ func hasOutputConstraint(value any) bool {
 
 func inspectGeminiRequestFeatures(request map[string]any, features *RequestFeatureSet) {
 	config, _ := request["generationConfig"].(map[string]any)
-	portable := strings.Fields("temperature topP top_p maxOutputTokens max_output_tokens stopSequences stop_sequences candidateCount candidate_count thinkingConfig thinking_config")
+	portable := strings.Fields("temperature topP top_p topK top_k maxOutputTokens max_output_tokens stopSequences stop_sequences candidateCount candidate_count thinkingConfig thinking_config responseSchema response_schema responseJsonSchema response_json_schema responseMimeType response_mime_type")
 	for field, value := range config {
 		if value != nil && !slices.Contains(portable, field) {
 			features.RequiredFields = append(features.RequiredFields, "generationConfig."+field)
@@ -536,9 +604,16 @@ func inspectMessagesNativeFields(request map[string]any, features *RequestFeatur
 	if features == nil {
 		return
 	}
-	for _, field := range []string{"output_format", "container", "mcp_servers", "inference_geo", "speed", "service_tier"} {
+	for _, field := range []string{"container", "mcp_servers", "inference_geo"} {
 		if meaningfulRequestValue(request[field]) {
 			features.MessagesNativeFields = append(features.MessagesNativeFields, field)
+		}
+	}
+	if tier := request["service_tier"]; meaningfulRequestValue(tier) {
+		if tier != "auto" && tier != "standard_only" {
+			features.MessagesNativeFields = append(features.MessagesNativeFields, "service_tier")
+		} else {
+			features.RequiredFields = append(features.RequiredFields, "service_tier")
 		}
 	}
 	if outputConfig, exists := request["output_config"]; exists && messagesOutputConfigHasUnsupportedFields(outputConfig) {
@@ -567,7 +642,7 @@ func messagesOutputConfigHasUnsupportedFields(value any) bool {
 		return value != nil
 	}
 	for field, fieldValue := range config {
-		if field != "effort" && fieldValue != nil {
+		if field != "effort" && field != "format" && fieldValue != nil {
 			return true
 		}
 	}
@@ -587,23 +662,41 @@ func AnalyzeConversionFeatures(protocol, upstream Protocol, features RequestFeat
 	if features.HasMultipleCandidates {
 		return "multiple output candidates require a native protocol round trip", nil
 	}
+	var lossyFields []string
 	if features.HasStopSequences && upstream == ProtocolResponses {
-		return "stop sequences (stop_sequences) cannot be represented by a Responses upstream", nil
+		if !allowDirectiveDrop {
+			return "stop sequences (stop_sequences) require lossy gateway emulation for Responses", nil
+		}
+		lossyFields = append(lossyFields, "stop")
 	}
-	if features.HasTopK && (protocol != ProtocolChat || upstream == ProtocolResponses) {
-		return "top_k has no verified mapping on this conversion route", nil
+	if features.HasTopK && (upstream == ProtocolResponses || upstream == ProtocolChat && protocol != ProtocolChat) {
+		if !allowDirectiveDrop {
+			return "top_k has no verified mapping on this conversion route", nil
+		}
+		lossyFields = append(lossyFields, "top_k")
+	}
+	if features.HasSpeed {
+		if !allowDirectiveDrop {
+			return "speed requires a native Messages upstream", nil
+		}
+		lossyFields = append(lossyFields, "speed")
 	}
 	if features.StopSequenceCount > 5 && upstream == ProtocolGemini || features.StopSequenceCount > 4 && protocol == ProtocolGemini {
 		return "stop sequence count exceeds the conversion route's supported limit", nil
 	}
-	if features.HasOutputConstraint && upstream == ProtocolMessages {
-		return "required output format has no verified mapping to Messages", nil
+	if features.HasOutputConstraint && upstream == ProtocolMessages && features.UnsupportedMessagesSchema != "" {
+		return "required output format: " + features.UnsupportedMessagesSchema, nil
+	}
+	if (upstream == ProtocolChat || upstream == ProtocolResponses) && features.UnsupportedOpenAISchema != "" {
+		return features.UnsupportedOpenAISchema, nil
 	}
 	if upstream == ProtocolGemini && features.UnsupportedGeminiSchema != "" {
 		return fmt.Sprintf("Gemini output schema does not preserve constraint %q", features.UnsupportedGeminiSchema), nil
 	}
-	var lossyFields []string
 	for _, include := range features.ResponsesIncludes {
+		if include == "message.output_text.logprobs" && upstream == ProtocolChat {
+			continue
+		}
 		if include != "reasoning.encrypted_content" || upstream != ProtocolMessages {
 			return fmt.Sprintf("Responses include %q has no verified mapping to %s", include, upstream), nil
 		}
@@ -643,23 +736,14 @@ func AnalyzeConversionFeatures(protocol, upstream Protocol, features RequestFeat
 	}
 	if protocol == ProtocolMessages {
 		if features.HasContextManagement {
-			// Context trimming is a best-effort server-side directive. Only a
-			// channel that explicitly opted into lossy conversion may drop it,
-			// and only onto a chat upstream, where the field has no
-			// representation at all. The Responses direction keeps the directive
-			// required so a future faithful mapping is not preempted by a
-			// silent drop.
-			if allowDirectiveDrop && upstream == ProtocolChat {
+			// Gateway context edits use estimated token thresholds. Lossy
+			// conversion must be enabled both for those estimates and for edits
+			// that cannot be applied; the request executor records the outcome.
+			if allowDirectiveDrop {
 				lossyFields = append(lossyFields, "context_management")
 			} else {
 				return "context_management requires its native Messages upstream", nil
 			}
-		}
-		if upstream == ProtocolResponses && features.HasStopSequences {
-			return "stop_sequences cannot be represented by a Responses upstream", nil
-		}
-		if upstream == ProtocolResponses && features.HasTopK {
-			return "top_k cannot be represented by a Responses upstream", nil
 		}
 		if len(features.MessagesNativeFields) > 0 {
 			return fmt.Sprintf("Messages fields require a native Messages upstream: %s", strings.Join(features.MessagesNativeFields, ", ")), nil
@@ -688,17 +772,20 @@ func AnalyzeConversionFeatures(protocol, upstream Protocol, features RequestFeat
 }
 
 func conversionFieldSupported(protocol, upstream Protocol, field string) bool {
+	if field == "service_tier" && (protocol == ProtocolMessages && (upstream == ProtocolChat || upstream == ProtocolResponses) || upstream == ProtocolMessages && (protocol == ProtocolChat || protocol == ProtocolResponses)) {
+		return true
+	}
 	if protocol == ProtocolMessages && upstream == ProtocolResponses && field == "cache_control" {
 		return true
 	}
 	if protocol == ProtocolChat && upstream == ProtocolResponses {
-		return slices.Contains([]string{"frequency_penalty", "presence_penalty", "user", "store", "metadata", "prompt_cache_key"}, field)
+		return slices.Contains([]string{"frequency_penalty", "presence_penalty", "user", "store", "metadata", "prompt_cache_key", "service_tier", "verbosity", "logprobs", "top_logprobs", "safety_identifier", "prompt_cache_retention"}, field)
 	}
 	if protocol == ProtocolChat && upstream == ProtocolGemini {
 		return field == "seed" || field == "extra_body"
 	}
 	if protocol == ProtocolResponses && upstream == ProtocolChat {
-		return slices.Contains([]string{"frequency_penalty", "presence_penalty", "user", "metadata", "prompt_cache_key", "top_logprobs", "service_tier", "prompt_cache_retention", "safety_identifier", "enable_thinking", "thinking_budget"}, field)
+		return slices.Contains([]string{"frequency_penalty", "presence_penalty", "user", "metadata", "prompt_cache_key", "top_logprobs", "service_tier", "prompt_cache_retention", "safety_identifier", "enable_thinking", "thinking_budget", "text.verbosity"}, field)
 	}
 	return false
 }

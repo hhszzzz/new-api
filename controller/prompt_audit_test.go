@@ -66,25 +66,48 @@ func TestPromptAuditEndpointURLChangeCannotForwardStoredToken(t *testing.T) {
 	assert.Equal(t, replacement, merged[0].Token)
 }
 
-// TestPromptAuditListFilterParsesCollapseAndGroup covers the query contract the
-// records screen depends on: the collapse switch is a display mode, so it must
-// never turn into a predicate, and it must survive the request-body path that the
-// deletion preview shares.
-func TestPromptAuditListFilterParsesCollapseAndGroup(t *testing.T) {
-	parse := func(query string) model.PromptAuditFilter {
-		context, _ := gin.CreateTestContext(httptest.NewRecorder())
-		context.Request = httptest.NewRequest(http.MethodGet, "/api/prompt_audit"+query, nil)
-		return promptAuditFilterFromQuery(context)
+// TestPromptAuditRetiredFiltersAreRefused covers the filters the records screen
+// no longer offers. A client that still sends one — a page loaded before the
+// upgrade, a script — must be refused: run with the filter dropped, a preview
+// and the deletion that trusts it would cover every user's records.
+func TestPromptAuditRetiredFiltersAreRefused(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, testCase := range []struct {
+		name    string
+		handler gin.HandlerFunc
+		method  string
+		target  string
+		body    string
+	}{
+		{name: "listing", handler: ListPromptAudits, method: http.MethodGet, target: "/api/prompt-audit/events?user_id=42"},
+		{name: "statistics", handler: GetPromptAuditStats, method: http.MethodGet, target: "/api/prompt-audit/stats?prompt_hash=abc"},
+		{name: "deletion preview", handler: PreviewDeletePromptAudits, method: http.MethodPost, target: "/api/prompt-audit/events/delete-preview", body: `{"filter":{"user_id":42}}`},
+		{name: "deletion", handler: DeletePromptAudits, method: http.MethodDelete, target: "/api/prompt-audit/events", body: `{"filter":{"endpoint_id":"guard"},"expected_count":1,"max_id":9}`},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			context, _ := gin.CreateTestContext(recorder)
+			context.Request = httptest.NewRequest(testCase.method, testCase.target, strings.NewReader(testCase.body))
+			testCase.handler(context)
+			assert.Equal(t, http.StatusBadRequest, recorder.Code)
+			assert.Contains(t, recorder.Body.String(), "no longer supported")
+		})
 	}
 
-	assert.True(t, parse("?collapse_repeats=true").CollapseRepeats)
-	assert.False(t, parse("").CollapseRepeats)
-	// An unparsable value must neither collapse nor widen the listing.
-	assert.False(t, parse("?collapse_repeats=maybe").CollapseRepeats)
-	assert.Equal(t, "guarded-model", parse("?collapse_repeats=true&model=guarded-model").Model)
-	assert.True(t, promptAuditFilterRequest{CollapseRepeats: true, Model: "guarded-model"}.toModel().CollapseRepeats)
+	// The filters the screen does offer parse from both paths, the detector
+	// among them, and the collapse switch never becomes a predicate.
+	context, _ := gin.CreateTestContext(httptest.NewRecorder())
+	context.Request = httptest.NewRequest(http.MethodGet, "/api/prompt-audit/events?collapse_repeats=true&model=guarded-model&detector=wordlist", nil)
+	filter, retired := promptAuditFilterFromQuery(context)
+	assert.Empty(t, retired)
+	assert.Equal(t, model.PromptAuditFilter{Model: "guarded-model", Detector: "wordlist"}, filter)
+	assert.Equal(t, model.PromptAuditFilter{GroupIDs: []int64{3}, Detector: "model", Username: "alice"},
+		promptAuditFilterRequest{GroupIDs: []int64{3}, Detector: " model ", Username: "alice"}.toModel())
 }
 
+// TestListPromptAuditsCollapsedListingAndGroupExpansion covers what the
+// controller adds to the model's grouping: which decision a collapsed row
+// reports and the response shape the records screen reads.
 func TestListPromptAuditsCollapsedListingAndGroupExpansion(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	previousDB := model.DB
@@ -93,20 +116,20 @@ func TestListPromptAuditsCollapsedListingAndGroupExpansion(t *testing.T) {
 	sqlDB, err := database.DB()
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
-	require.NoError(t, database.AutoMigrate(&model.PromptAudit{}))
+	require.NoError(t, database.AutoMigrate(&model.PromptAudit{}, &model.User{}))
 	model.DB = database
 	t.Cleanup(func() {
 		model.DB = previousDB
 		_ = sqlDB.Close()
 	})
 
-	// One audited text resent twice with a mixed outcome — the first request
-	// passed and the second was blocked — plus a hashless row that must stay a
-	// group of its own.
+	// One audited text resent twice under async observation: the first request
+	// passed, the second was judged a block but — as async observation does —
+	// only marked. A single async block stands alone next to them.
 	hash := strings.Repeat("c", 64)
 	for index, outcome := range []struct{ action, decision string }{
 		{"allow", "pass"},
-		{"block", "block"},
+		{"mark", "block"},
 	} {
 		require.NoError(t, model.CreatePromptAudit(&model.PromptAudit{
 			RequestID: fmt.Sprintf("collapsed-%d", index), UserID: 5, Username: "collapsed-user",
@@ -116,24 +139,23 @@ func TestListPromptAuditsCollapsedListingAndGroupExpansion(t *testing.T) {
 	}
 	require.NoError(t, model.CreatePromptAudit(&model.PromptAudit{
 		RequestID: "collapsed-other", UserID: 5, Username: "collapsed-user", ModelName: "guarded-model",
-		Status: model.PromptAuditStatusDone, Action: "allow", Decision: "pass", CreatedAt: 2100,
+		Status: model.PromptAuditStatusDone, PromptHash: strings.Repeat("d", 64), Action: "mark", Decision: "block", CreatedAt: 2100,
 	}))
 
 	type responseBody struct {
 		Success bool `json:"success"`
 		Data    struct {
-			Items        []model.PromptAuditResponse `json:"items"`
-			Total        int64                       `json:"total"`
-			RecordsTotal int64                       `json:"records_total"`
-			Page         int                         `json:"page"`
-			PageSize     int                         `json:"page_size"`
+			Items    []model.PromptAuditResponse `json:"items"`
+			Total    int64                       `json:"total"`
+			Page     int                         `json:"page"`
+			PageSize int                         `json:"page_size"`
 		} `json:"data"`
 	}
 	list := func(query string) (responseBody, string) {
 		t.Helper()
 		recorder := httptest.NewRecorder()
 		context, _ := gin.CreateTestContext(recorder)
-		context.Request = httptest.NewRequest(http.MethodGet, "/api/prompt_audit?"+query, nil)
+		context.Request = httptest.NewRequest(http.MethodGet, "/api/prompt-audit/events?"+query, nil)
 		ListPromptAudits(context)
 		require.Equal(t, http.StatusOK, recorder.Code)
 		var body responseBody
@@ -142,58 +164,46 @@ func TestListPromptAuditsCollapsedListingAndGroupExpansion(t *testing.T) {
 		return body, recorder.Body.String()
 	}
 
-	collapsed, _ := list("collapse_repeats=true&username=collapsed-user")
+	collapsed, collapsedBody := list("collapse_repeats=true&username=collapsed-user")
 	assert.EqualValues(t, 2, collapsed.Data.Total)
-	assert.EqualValues(t, 3, collapsed.Data.RecordsTotal)
+	assert.NotContains(t, collapsedBody, "records_total")
 	require.Len(t, collapsed.Data.Items, 2)
+	merged, single := collapsed.Data.Items[1], collapsed.Data.Items[0]
+	require.Equal(t, hash, merged.PromptHash)
 
-	var merged, single *model.PromptAuditResponse
-	for index := range collapsed.Data.Items {
-		if collapsed.Data.Items[index].PromptHash == hash {
-			merged = &collapsed.Data.Items[index]
-		} else {
-			single = &collapsed.Data.Items[index]
-		}
-	}
-	require.NotNil(t, merged)
-	require.NotNil(t, single)
-
-	// The merged row reports what its whole group decided, not the verdict of the
-	// request that happens to represent it: this one was let through, but the text
-	// was blocked when it was resent.
+	// The merged row reports the most severe decision its group holds — the
+	// observed block — while its own action and its request stay the
+	// representative's: nothing in the group was actually refused.
 	require.NotNil(t, merged.Repeat)
 	assert.EqualValues(t, 2, merged.Repeat.Count)
-	assert.EqualValues(t, 2000, merged.Repeat.FirstAt)
-	assert.EqualValues(t, 2001, merged.Repeat.LastAt)
+	assert.Equal(t, "block", merged.Repeat.WorstDecision)
 	assert.Equal(t, "block", merged.Decision)
-	assert.Equal(t, "block", merged.Action)
-	assert.Equal(t, "block", merged.Repeat.WorstAction)
-	assert.EqualValues(t, 1, merged.Repeat.Blocks)
-	assert.EqualValues(t, 0, merged.Repeat.Unavailable)
+	assert.Equal(t, "allow", merged.Action)
+	assert.Equal(t, "collapsed-0", merged.RequestID)
+	assert.Zero(t, merged.Repeat.Blocks)
 
-	// A row that stands alone keeps its own verdict.
+	// A row that stands alone keeps its own verdict: an observed block stays a
+	// block rather than being read back from its mark action.
 	require.NotNil(t, single.Repeat)
 	assert.EqualValues(t, 1, single.Repeat.Count)
-	assert.Equal(t, "allow", single.Repeat.WorstAction)
-	assert.Equal(t, "pass", single.Decision)
-	assert.Equal(t, "allow", single.Action)
+	assert.Equal(t, "block", single.Decision)
+	assert.Equal(t, "mark", single.Action)
 
-	// The plain listing is untouched, and only the collapsed one carries the
-	// record count the screen pairs with its group count.
-	plain, plainBody := list("username=collapsed-user")
+	// The plain listing is untouched.
+	plain, _ := list("username=collapsed-user")
 	assert.EqualValues(t, 3, plain.Data.Total)
 	require.Len(t, plain.Data.Items, 3)
 	assert.Nil(t, plain.Data.Items[0].Repeat)
-	assert.NotContains(t, plainBody, "records_total")
 
-	// A collapsed row expands into exactly the requests it counted.
+	// A collapsed row expands into exactly the requests it counted, and total
+	// counts the whole group.
 	expanded, _ := list(fmt.Sprintf("collapse_repeats=true&group_id=%d&username=collapsed-user", merged.ID))
 	require.Len(t, expanded.Data.Items, 2)
+	assert.EqualValues(t, 2, expanded.Data.Total)
 	assert.Equal(t, "collapsed-1", expanded.Data.Items[0].RequestID)
 	assert.Equal(t, "collapsed-0", expanded.Data.Items[1].RequestID)
 
-	// A group id the filter no longer covers expands to nothing rather than to
-	// rows the operator filtered away.
-	hidden, _ := list(fmt.Sprintf("collapse_repeats=true&group_id=%d&username=collapsed-user&model=another-model", merged.ID))
-	assert.Empty(t, hidden.Data.Items)
+	// A representative that is gone expands to nothing instead of failing.
+	gone, _ := list(fmt.Sprintf("collapse_repeats=true&group_id=%d&username=collapsed-user", merged.ID+1000))
+	assert.Empty(t, gone.Data.Items)
 }

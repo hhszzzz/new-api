@@ -21,6 +21,7 @@ type ClaudeMediaMessage struct {
 	Source       *ClaudeMessageSource `json:"source,omitempty"`
 	Usage        *ClaudeUsage         `json:"usage,omitempty"`
 	StopReason   *string              `json:"stop_reason,omitempty"`
+	StopSequence *string              `json:"stop_sequence,omitempty"`
 	PartialJson  *string              `json:"partial_json,omitempty"`
 	Role         string               `json:"role,omitempty"`
 	Thinking     *string              `json:"thinking,omitempty"`
@@ -530,6 +531,7 @@ type ClaudeResponse struct {
 	Content      []ClaudeMediaMessage `json:"content,omitempty"`
 	Completion   string               `json:"completion,omitempty"`
 	StopReason   string               `json:"stop_reason,omitempty"`
+	StopSequence *string              `json:"stop_sequence,omitempty"`
 	Model        string               `json:"model,omitempty"`
 	Error        any                  `json:"error,omitempty"`
 	Usage        *ClaudeUsage         `json:"usage,omitempty"`

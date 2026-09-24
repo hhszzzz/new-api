@@ -52,6 +52,24 @@ func ClaudeMessagesRequestToOpenAIResponsesWithContext(c context.Context, claude
 		Metadata:        append([]byte(nil), claudeRequest.Metadata...),
 		ServiceTier:     claudeRequest.ServiceTier,
 	}
+	if request.ServiceTier == "standard_only" {
+		request.ServiceTier = "default"
+	}
+	format, err := sharedclaude.OutputFormat(&claudeRequest)
+	if err != nil {
+		return nil, err
+	}
+	if format != nil {
+		var schema map[string]any
+		if err := kitutil.Unmarshal(format.JsonSchema, &schema); err != nil {
+			return nil, err
+		}
+		schema["type"] = "json_schema"
+		request.Text, err = kitutil.Marshal(map[string]any{"format": schema})
+		if err != nil {
+			return nil, err
+		}
+	}
 	if convmeta.OptionsOf(info).IncludeReasoningEncryptedContent {
 		request.Include, err = kitutil.Marshal([]string{"reasoning.encrypted_content"})
 		if err != nil {

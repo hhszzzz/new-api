@@ -19,8 +19,10 @@ func TestAnalyzeConversionFeaturesMessagesContextManagement(t *testing.T) {
 	assert.Empty(t, reason)
 	assert.Equal(t, []string{"context_management"}, losses)
 
-	// A Responses upstream supports the field natively; lossy conversion must
-	// not silently drop it there.
-	reason, _ = AnalyzeConversionFeatures(ProtocolMessages, ProtocolResponses, features, true, true)
-	assert.Equal(t, "context_management requires its native Messages upstream", reason)
+	// Messages edits are evaluated by the gateway, including Responses routes.
+	for _, target := range []Protocol{ProtocolResponses, ProtocolGemini} {
+		reason, losses = AnalyzeConversionFeatures(ProtocolMessages, target, features, true, true)
+		assert.Empty(t, reason)
+		assert.Equal(t, []string{"context_management"}, losses)
+	}
 }

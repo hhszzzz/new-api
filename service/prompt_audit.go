@@ -128,6 +128,13 @@ type PromptAuditRequest struct {
 	Wordlist           *PromptWordlistMatch
 	Stream             bool
 	RawFullText        string
+	// WordlistOnly holds a request that generates nothing to the local wordlist
+	// gate alone; see InspectPrompt.
+	WordlistOnly bool
+	RequestKind  string
+	SessionKey   string
+	HumanPrompt  string
+	GroupKey     string
 }
 
 type promptAuditPayload struct {
@@ -308,7 +315,13 @@ func TestPromptAuditPolicy(ctx context.Context, direction string, snapshot dto.P
 	}
 	var wordlist *PromptWordlistMatch
 	if direction == PromptAuditDirectionInput {
-		match, err := matchPromptWordlists(snapshot.BlockingSnapshot(), setting)
+		// The preview narrows exactly as the live gate does (InspectPrompt), so it
+		// predicts what live traffic is refused for.
+		wordlistSnapshot := snapshot
+		if promptWordlistUsesBlockingSnapshot(direction, setting) {
+			wordlistSnapshot = wordlistSnapshot.BlockingSnapshot()
+		}
+		match, err := matchPromptWordlists(wordlistSnapshot, setting)
 		if err != nil {
 			return PromptAuditResult{Enabled: true, Direction: direction, Decision: PromptAuditDecisionUnavailable, Outcome: PromptAuditDecisionUnavailable, FailureKind: "wordlist_unavailable"}, err
 		}
@@ -351,6 +364,7 @@ func TestPromptAuditPolicy(ctx context.Context, direction string, snapshot dto.P
 }
 
 func checkPromptAuditWithSetting(c *gin.Context, request PromptAuditRequest, setting prompt_audit_setting.PromptAuditSetting) (PromptAuditResult, *hosttypes.NewAPIError) {
+	request = preparePromptAuditRequest(c, request)
 	direction := strings.ToLower(strings.TrimSpace(request.Direction))
 	if direction == "" {
 		direction = PromptAuditDirectionInput
@@ -528,6 +542,64 @@ func evaluatePromptAudit(ctx context.Context, setting prompt_audit_setting.Promp
 }
 
 func evaluatePromptAuditPayload(ctx context.Context, setting prompt_audit_setting.PromptAuditSetting, payload promptAuditPayload, promptHash string) (PromptAuditResult, error) {
+	if payload.Direction != PromptAuditDirectionInput {
+		return evaluatePromptAuditPayloadPart(ctx, setting, payload, promptHash)
+	}
+	main, definitions := payload, payload
+	main.Segments, definitions.Segments = nil, nil
+	for _, segment := range payload.Segments {
+		if segment.ToolDefinition {
+			definitions.Segments = append(definitions.Segments, segment)
+		} else {
+			main.Segments = append(main.Segments, segment)
+		}
+	}
+	if len(definitions.Segments) == 0 || len(main.Segments) == 0 {
+		return evaluatePromptAuditPayloadPart(ctx, setting, payload, promptHash)
+	}
+	var results []PromptAuditResult
+	var firstErr error
+	for _, part := range []promptAuditPayload{main, definitions} {
+		encoded, err := common.Marshal(part)
+		if err != nil {
+			return PromptAuditResult{}, err
+		}
+		digest := sha256.Sum256(encoded)
+		result, err := evaluatePromptAuditPayloadPart(ctx, setting, part, hex.EncodeToString(digest[:]))
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		results = append(results, result)
+	}
+	if len(results) == 0 {
+		return PromptAuditResult{}, firstErr
+	}
+	winner := results[0]
+	for _, result := range results[1:] {
+		if promptAuditDecisionSeverity(result.Decision) > promptAuditDecisionSeverity(winner.Decision) {
+			winner = result
+		}
+	}
+	if firstErr != nil && winner.Decision != PromptAuditDecisionBlock {
+		return PromptAuditResult{}, firstErr
+	}
+	aggregate := promptAuditChunkAggregate{result: winner, categories: map[string]struct{}{}, unknown: map[string]struct{}{}}
+	aggregate.result.CacheHit, aggregate.result.ChunkCount = true, 0
+	for _, result := range results {
+		aggregate.absorb(result)
+		aggregate.result.ChunkCount += result.ChunkCount
+		aggregate.result.CacheHit = aggregate.result.CacheHit && result.CacheHit
+	}
+	aggregate.result.Categories = orderedPromptAuditCategories(aggregate.categories)
+	aggregate.result.UnknownCategories = sortedPromptAuditKeys(aggregate.unknown)
+	aggregate.result.InputSHA256, aggregate.result.InputChars = promptHash, promptAuditPayloadRuneCount(payload)
+	return aggregate.result, nil
+}
+
+func evaluatePromptAuditPayloadPart(ctx context.Context, setting prompt_audit_setting.PromptAuditSetting, payload promptAuditPayload, promptHash string) (PromptAuditResult, error) {
 	mode := setting.Mode
 	if payload.Direction == PromptAuditDirectionOutput {
 		mode = setting.OutputMode
@@ -1577,12 +1649,14 @@ func newPromptAuditRecord(c *gin.Context, request PromptAuditRequest, setting pr
 		audit.PolicySnapshot = string(data)
 	}
 	setPromptAuditContent(audit, fullText)
+	setPromptAuditInputContext(audit, request)
+	audit.ScanPayload, audit.ScanPayloadTruncated = model.RetainPromptAuditPayload(scanPayload)
+	audit.ContentSnapshot = append([]byte(nil), audit.ScanPayload...)
 	if data, err := common.Marshal(result.InspectedScopes); err == nil {
 		audit.InspectedScopes = string(data)
 	}
 	if status == model.PromptAuditStatusQueued {
 		audit.ScanPayload = append([]byte(nil), scanPayload...)
-		audit.ContentSnapshot = append([]byte(nil), scanPayload...)
 		audit.WouldAction = "pending"
 	}
 	applyPromptAuditRequestContext(audit, c)
@@ -1641,6 +1715,27 @@ func promptAuditStoredFullPrompt(value string) ([]byte, bool) {
 }
 
 func promptAuditPreview(value string) string {
+	value = redactPromptAuditText(value)
+	runes := []rune(strings.TrimSpace(value))
+	if len(runes) == 0 {
+		return ""
+	}
+	truncated := len(runes) > promptAuditPreviewSourceRunes
+	if truncated {
+		runes = runes[:promptAuditPreviewSourceRunes]
+	}
+	if len(runes) < 32 {
+		return "***"
+	}
+	keep := min(len(runes)/4, 24)
+	preview := string(runes[:keep]) + "***"
+	if truncated || keep < len(runes) {
+		preview += "…"
+	}
+	return preview
+}
+
+func redactPromptAuditText(value string) string {
 	value = promptAuditBearerPattern.ReplaceAllString(value, "Bearer ***")
 	value = promptAuditSecretPattern.ReplaceAllStringFunc(value, func(match string) string {
 		if index := strings.IndexAny(match, ":= \t"); index >= 0 {
@@ -1651,29 +1746,7 @@ func promptAuditPreview(value string) string {
 	value = promptAuditCanaryPattern.ReplaceAllString(value, "${1}***")
 	value = promptAuditEmailPattern.ReplaceAllString(value, "***@***")
 	value = promptAuditPhonePattern.ReplaceAllString(value, "***PHONE***")
-	runes := []rune(strings.TrimSpace(value))
-	if len(runes) == 0 {
-		return ""
-	}
-	truncated := len(runes) > promptAuditPreviewSourceRunes
-	if truncated {
-		runes = runes[:promptAuditPreviewSourceRunes]
-	}
-	if len(runes) < 32 {
-		if truncated {
-			return "***…"
-		}
-		return "***"
-	}
-	keep := len(runes) / 4
-	if keep > 24 {
-		keep = 24
-	}
-	preview := string(runes[:keep]) + "***"
-	if truncated || keep < len(runes) {
-		preview += "…"
-	}
-	return preview
+	return value
 }
 
 func normalizedPromptAuditStage(stage string) string {
@@ -1727,9 +1800,12 @@ func applyPromptAuditRequestContext(audit *model.PromptAudit, c *gin.Context) {
 	if audit == nil || c == nil {
 		return
 	}
-	// Snapshot the caller's name here, at write time, exactly as the usage and
-	// audit logs do: a later rename must not rewrite history.
-	if audit.UserID > 0 {
+	// Snapshot the caller's name at write time, as the usage and error logs do: a
+	// later rename must not rewrite history. Authentication already put it in the
+	// context, so the request path pays no lookup; only a caller without it falls
+	// back to reading the account.
+	audit.Username = c.GetString(string(constant.ContextKeyUserName))
+	if audit.Username == "" && audit.UserID > 0 {
 		audit.Username, _ = model.GetUsernameById(audit.UserID, false)
 	}
 	if c.Request == nil {

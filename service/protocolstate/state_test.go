@@ -976,6 +976,61 @@ func TestMergeResponsesToolDeclarationsRejectsToolSearchExecutionConflicts(t *te
 	}
 }
 
+func TestResponsesHistoryFollowsCurrentToolKind(t *testing.T) {
+	for _, test := range []struct{ name, current, historical, payload, want string }{
+		{"function to custom", "custom", "function", `{"input":"echo hello"}`, "echo hello"},
+		{"function object to custom", "custom", "function", `{"command":"pwd"}`, `{"command":"pwd"}`},
+		{"custom text to function", "function", "custom", "echo hello", `{"input":"echo hello"}`},
+		{"custom json to function", "function", "custom", `{"command":"pwd"}`, `{"command":"pwd"}`},
+	} {
+		for _, namespace := range []string{"", "terminal"} {
+			t.Run(test.name+namespace, func(t *testing.T) {
+				current := map[string]any{"type": test.current, "name": "exec"}
+				historical := map[string]any{"type": test.historical, "name": "exec"}
+				if namespace != "" {
+					current = map[string]any{"type": "namespace", "name": namespace, "tools": []any{current}}
+					historical = map[string]any{"type": "namespace", "name": namespace, "tools": []any{historical}}
+				}
+				callType, resultType, field := "function_call", "function_call_output", "arguments"
+				if test.historical == "custom" {
+					callType, resultType, field = "custom_tool_call", "custom_tool_call_output", "input"
+				}
+				request := &dto.OpenAIResponsesRequest{Tools: mustProtocolStateJSON(t, []any{current}), Input: mustProtocolStateJSON(t, []any{map[string]any{"type": callType, "namespace": namespace, "call_id": "call_1", "name": "exec", field: test.payload}, map[string]any{"type": resultType, "call_id": "call_1", "output": "done"}})}
+				var withCarriers []map[string]any
+				require.NoError(t, common.Unmarshal(request.Input, &withCarriers))
+				for _, kind := range []string{"additional_tools", "tool_search_output"} {
+					withCarriers = append(withCarriers, map[string]any{"type": kind, "tools": []any{historical}})
+				}
+				request.Input = mustProtocolStateJSON(t, withCarriers)
+				changed, err := mergeResponsesToolDeclarations(request, []json.RawMessage{mustProtocolStateJSON(t, []any{historical})})
+				require.NoError(t, err)
+				assert.True(t, changed)
+				var items []map[string]any
+				require.NoError(t, common.Unmarshal(request.Input, &items))
+				if test.current == "custom" {
+					assert.Equal(t, "custom_tool_call", items[0]["type"])
+					assert.Equal(t, test.want, items[0]["input"])
+					assert.NotContains(t, items[0], "arguments")
+					assert.Equal(t, "custom_tool_call_output", items[1]["type"])
+				} else {
+					assert.Equal(t, "function_call", items[0]["type"])
+					assert.JSONEq(t, test.want, items[0]["arguments"].(string))
+					assert.NotContains(t, items[0], "input")
+					assert.Equal(t, "function_call_output", items[1]["type"])
+				}
+				assert.Equal(t, "call_1", items[1]["call_id"])
+				assert.Equal(t, "done", items[1]["output"])
+				for _, carrier := range items[2:] {
+					assert.JSONEq(t, string(request.Tools), string(mustProtocolStateJSON(t, carrier["tools"])))
+				}
+				changed, err = mergeResponsesToolDeclarations(request, nil)
+				require.NoError(t, err)
+				assert.False(t, changed)
+			})
+		}
+	}
+}
+
 func TestPrepareResponsesRequestRestoresStoredToolsForNativeContinuation(t *testing.T) {
 	resetProtocolStateCaches(t)
 	rootContext := protocolStateTestContext("native-tool-root", 151, 152)

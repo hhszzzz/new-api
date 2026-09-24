@@ -21,6 +21,8 @@ import path from 'node:path'
 
 import { describe, expect, test } from 'vitest'
 
+import { getPromptAuditProtocolName, PROMPT_AUDIT_PROTOCOLS } from '../lib'
+
 const SOURCE_FILES = [
   '../settings.tsx',
   '../records.tsx',
@@ -70,6 +72,10 @@ const DYNAMIC_KEYS = [
   'Change prompt audit configuration, test nodes, and retry failed jobs.',
   'Delete prompt audits',
   'Preview and delete terminal prompt audit records.',
+  // Protocol labels are looked up from the stored protocol value.
+  ...PROMPT_AUDIT_PROTOCOLS.map((protocol) =>
+    getPromptAuditProtocolName(protocol)
+  ),
 ]
 
 describe('prompt audit translations', () => {

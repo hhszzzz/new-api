@@ -30,6 +30,7 @@ type ChatToResponsesStreamState struct {
 	EmitSequenceNumber bool
 	hostedByID         map[string]*chatToResponsesHostedTool
 	annotations        []any
+	logprobs           []dto.TokenLogprob
 	thinkSplitter      sharedchat.ThinkTagSplitter
 
 	status               string
@@ -383,7 +384,20 @@ func ChatCompletionsStreamChunkToResponsesEvents(chunk *dto.ChatCompletionsStrea
 		}
 		if choice.Delta.GetContentString() != "" {
 			events = append(events, state.finishActiveReasoningItem("completed")...)
-			events = append(events, state.appendTextDelta(choice.Delta.GetContentString())...)
+			textEvents := state.appendTextDelta(choice.Delta.GetContentString())
+			if choice.Logprobs != nil {
+				probabilities, err := kitutil.Any2Type[dto.ChatLogprobs](*choice.Logprobs)
+				if err != nil {
+					return nil, err
+				}
+				state.logprobs = append(state.logprobs, probabilities.Content...)
+				for i := range textEvents {
+					if textEvents[i].Type == responsesEventOutputTextDelta {
+						textEvents[i].Payload.Logprobs = probabilities.Content
+					}
+				}
+			}
+			events = append(events, textEvents...)
 		}
 		if choice.Delta.GetRefusalContent() != "" {
 			events = append(events, state.finishActiveReasoningItem("completed")...)
@@ -578,6 +592,7 @@ func (s *ChatToResponsesStreamState) ensureMessage() []ChatToResponsesStreamEven
 		s.refusalStarted = false
 		s.refusalDone = false
 		s.text.Reset()
+		s.logprobs = nil
 		s.refusal.Reset()
 		s.annotations = nil
 	}
@@ -823,6 +838,7 @@ func (s *ChatToResponsesStreamState) doneDeltaEvents() []ChatToResponsesStreamEv
 			ContentIndex: intPtr(s.textContentIndex),
 			ItemID:       s.messageID(),
 			Text:         kitutil.GetPointer(s.text.String()),
+			Logprobs:     s.logprobs,
 		}))
 		events = append(events, responsesStreamEvent(responsesEventContentPartDone, dto.ResponsesStreamResponse{
 			Type:         responsesEventContentPartDone,
@@ -833,6 +849,7 @@ func (s *ChatToResponsesStreamState) doneDeltaEvents() []ChatToResponsesStreamEv
 				Type:        "output_text",
 				Text:        s.text.String(),
 				Annotations: s.annotations,
+				Logprobs:    s.logprobs,
 			},
 		}))
 	}
@@ -1093,6 +1110,7 @@ func (s *ChatToResponsesStreamState) messageOutput(status string) *dto.Responses
 			Type:        "output_text",
 			Text:        s.text.String(),
 			Annotations: s.annotations,
+			Logprobs:    s.logprobs,
 		}
 	}
 	if s.refusalContentIndex >= 0 {

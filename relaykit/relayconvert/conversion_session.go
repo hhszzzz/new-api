@@ -18,6 +18,7 @@ type ConversionSession struct {
 	bridge  sharedbridge.State
 	streams map[responseConverterRoute]*ResponseStreamState
 	closed  bool
+	stop    *stopEmulator
 }
 
 type sessionMeta struct {
@@ -62,6 +63,7 @@ func NewConversionSession(meta convmeta.Meta) *ConversionSession {
 }
 
 type originalContextKey struct{}
+type conversionSessionContextKey struct{}
 
 func OriginalContext(ctx context.Context) context.Context {
 	if isNilRequest(ctx) {
@@ -77,6 +79,7 @@ func (s *ConversionSession) context(ctx context.Context) context.Context {
 	if isNilRequest(ctx) {
 		ctx = context.Background()
 	}
+	ctx = context.WithValue(ctx, conversionSessionContextKey{}, s)
 	return sharedbridge.WithState(context.WithValue(ctx, originalContextKey{}, OriginalContext(ctx)), &s.bridge)
 }
 
@@ -84,6 +87,7 @@ func (s *ConversionSession) Request(ctx context.Context, target types.RelayForma
 	if s == nil || s.closed {
 		return nil, errors.New("conversion session is closed")
 	}
+	s.stop = nil
 	return ConvertRequest(s.context(ctx), &s.meta, target, request)
 }
 
@@ -91,6 +95,7 @@ func (s *ConversionSession) RequestByID(ctx context.Context, converter string, r
 	if s == nil || s.closed {
 		return nil, errors.New("conversion session is closed")
 	}
+	s.stop = nil
 	return ConvertRequestByID(s.context(ctx), &s.meta, converter, request)
 }
 
@@ -98,6 +103,7 @@ func (s *ConversionSession) RequestVia(ctx context.Context, request any, path ..
 	if s == nil || s.closed {
 		return nil, errors.New("conversion session is closed")
 	}
+	s.stop = nil
 	return ConvertRequestVia(s.context(ctx), &s.meta, request, path...)
 }
 
@@ -105,7 +111,18 @@ func (s *ConversionSession) Response(ctx context.Context, target types.RelayForm
 	if s == nil || s.closed {
 		return nil, errors.New("conversion session is closed")
 	}
-	return ConvertResponse(s.context(ctx), &s.meta, target, response)
+	result, err := ConvertResponse(s.context(ctx), &s.meta, target, response)
+	if err == nil && s.stop != nil && result.From == types.RelayFormatOpenAIResponses {
+		values, filterErr := s.stop.filter(result.Value, false)
+		if filterErr != nil {
+			return nil, filterErr
+		}
+		if len(values) != 1 {
+			return nil, errors.New("stop filter produced no full response")
+		}
+		result.Value = values[0]
+	}
+	return result, err
 }
 
 func (s *ConversionSession) ClaudeState() *convmeta.ClaudeConvertInfo {
@@ -179,7 +196,11 @@ func (s *ConversionSession) Stream(ctx context.Context, state *ResponseStreamSta
 		return nil, errors.New("stream state belongs to a different conversion")
 	}
 	s.streams[key] = state
-	return ConvertStreamResponseChunk(s.context(ctx), &s.meta, state, response)
+	results, err := ConvertStreamResponseChunk(s.context(ctx), &s.meta, state, response)
+	if err != nil || s.stop == nil || state.From != types.RelayFormatOpenAIResponses {
+		return results, err
+	}
+	return s.stop.filterResults(results)
 }
 
 func (s *ConversionSession) Finish(ctx context.Context, state *ResponseStreamState) ([]ResponseResult, error) {
@@ -190,7 +211,11 @@ func (s *ConversionSession) Finish(ctx context.Context, state *ResponseStreamSta
 		return nil, errors.New("stream state does not belong to this conversion session")
 	}
 	state.owner = s
-	return FinalizeStreamResponse(s.context(ctx), &s.meta, state)
+	results, err := FinalizeStreamResponse(s.context(ctx), &s.meta, state)
+	if err != nil || s.stop == nil || state.From != types.RelayFormatOpenAIResponses {
+		return results, err
+	}
+	return s.stop.filterResults(results)
 }
 
 func (s *ConversionSession) Close() {
@@ -201,4 +226,5 @@ func (s *ConversionSession) Close() {
 	s.streams = nil
 	s.bridge = sharedbridge.State{}
 	s.meta = sessionMeta{}
+	s.stop = nil
 }

@@ -7,7 +7,15 @@ import "strings"
 func appendScopeMessage(segments []PromptAuditSegment, scope PromptAuditScope, role string, texts []string) []PromptAuditSegment {
 	parts := appendRoleMessage(nil, role, scope == PromptScopeUser || scope == PromptScopeTask, texts)
 	for _, part := range parts {
-		part.Scope = scope
+		if scope != PromptScopeUser && scope != PromptScopeSystem && scope != PromptScopeDeveloper || (part.Scope != PromptScopeAgentContext && part.Scope != PromptScopeSkill) {
+			part.Scope = scope
+		}
+		switch scope {
+		case PromptScopeToolCall:
+			part.ToolPart = "call"
+		case PromptScopeToolResult:
+			part.ToolPart = "result"
+		}
 		segments = append(segments, part)
 	}
 	return segments
@@ -25,18 +33,36 @@ func scopedContentSegments(role string, value any) []PromptAuditSegment {
 		kind, _ := content["type"].(string)
 		kind = strings.ToLower(strings.TrimSpace(kind))
 		switch {
-		case kind == "tool_result" || strings.HasSuffix(kind, "_call_output"):
+		case kind == "tool_result" || kind == "mcp_tool_result" || strings.HasSuffix(kind, "_call_output"):
 			payload := content["content"]
 			if payload == nil {
 				payload = content["output"]
 			}
-			return appendScopeMessage(nil, PromptScopeToolResult, "tool", structuredPromptAuditTexts(payload))
-		case kind == "tool_use" || kind == "function_call" || kind == "custom_tool_call":
+			id, _ := content["tool_use_id"].(string)
+			if id == "" {
+				id, _ = content["call_id"].(string)
+			}
+			parts := promptAuditToolSegments(PromptScopeToolResult, "tool", "", id, structuredPromptAuditTexts(payload))
+			if kind == "mcp_tool_result" {
+				for index := range parts {
+					parts[index].Scope = PromptScopeMCP
+				}
+			}
+			return parts
+		case kind == "tool_use" || kind == "mcp_tool_use" || kind == "function_call" || kind == "custom_tool_call":
 			payload := content["input"]
 			if payload == nil {
 				payload = content["arguments"]
 			}
-			return appendScopeMessage(nil, PromptScopeToolCall, "assistant", structuredPromptAuditTexts(payload))
+			name, _ := content["name"].(string)
+			id, _ := content["id"].(string)
+			parts := promptAuditToolSegments(PromptScopeToolCall, "assistant", name, id, structuredPromptAuditTexts(payload))
+			if kind == "mcp_tool_use" {
+				for index := range parts {
+					parts[index].Scope = PromptScopeMCP
+				}
+			}
+			return parts
 		case kind == "thinking":
 			return appendScopeMessage(nil, PromptScopeAssistant, "assistant", anyTextValues(content, false))
 		default:
@@ -67,12 +93,12 @@ func scopedGeminiSegments(role string, parts []GeminiPart) []PromptAuditSegment 
 			result = appendScopeMessage(result, scope, role, []string{part.Text})
 		}
 		if part.FunctionCall != nil {
-			result = appendScopeMessage(result, PromptScopeToolCall, "assistant", orderedStringLeaves(part.FunctionCall.Arguments))
+			result = append(result, promptAuditToolSegments(PromptScopeToolCall, "assistant", part.FunctionCall.FunctionName, part.FunctionCall.ID, orderedStringLeaves(part.FunctionCall.Arguments))...)
 		}
 		if part.FunctionResponse != nil {
 			texts := orderedStringLeaves(part.FunctionResponse.Response)
 			texts = append(texts, rawTextValues(part.FunctionResponse.Parts)...)
-			result = appendScopeMessage(result, PromptScopeToolResult, "tool", texts)
+			result = append(result, promptAuditToolSegments(PromptScopeToolResult, "tool", part.FunctionResponse.Name, promptAuditJSONString(part.FunctionResponse.ID), texts)...)
 		}
 		if part.ExecutableCode != nil {
 			result = appendScopeMessage(result, PromptScopeToolCall, "assistant", []string{part.ExecutableCode.Code})
@@ -92,7 +118,7 @@ func mergePromptAuditParts(parts []PromptAuditSegment) []PromptAuditSegment {
 		if len(result) > 0 {
 			last := &result[len(result)-1]
 			merged := last.Text + "\n" + part.Text
-			if last.SourceScope() == part.SourceScope() && last.Role == part.Role {
+			if last.SourceScope() == part.SourceScope() && last.Role == part.Role && last.ToolPart == part.ToolPart && last.ToolID == part.ToolID && last.ToolName == part.ToolName && !part.ToolRoundStart && last.ToolDefinition == part.ToolDefinition {
 				last.Text = merged
 				continue
 			}
@@ -100,4 +126,17 @@ func mergePromptAuditParts(parts []PromptAuditSegment) []PromptAuditSegment {
 		result = append(result, part)
 	}
 	return result
+}
+
+// markToolRoundStart flags the first tool call among the segments of one
+// assistant response: every call a response issues belongs to one tool round.
+// A response that issued no call is returned unchanged.
+func markToolRoundStart(segments []PromptAuditSegment) []PromptAuditSegment {
+	for index := range segments {
+		if segments[index].SourceScope() == PromptScopeToolCall || segments[index].ToolPart == "call" {
+			segments[index].ToolRoundStart = true
+			break
+		}
+	}
+	return segments
 }

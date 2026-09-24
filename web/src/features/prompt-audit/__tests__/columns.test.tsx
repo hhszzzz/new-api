@@ -22,9 +22,9 @@ import {
   getCoreRowModel,
   useReactTable,
 } from '@tanstack/react-table'
-import { render, renderHook, screen } from '@testing-library/react'
+import { render, renderHook, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, test, vi } from 'vitest'
+import { afterEach, describe, expect, test, vi } from 'vitest'
 
 import { DataTableView } from '@/components/data-table/core/data-table-view'
 import { useDataTable } from '@/components/data-table/hooks/use-data-table'
@@ -33,16 +33,31 @@ import { usePromptAuditColumns } from '../components/prompt-audit-columns'
 import { isMergedPromptAuditRow, promptAuditRowID } from '../lib'
 import type { PromptAuditEvent, PromptAuditRepeat } from '../types'
 
+// The interface language and the few translations a test needs; every other
+// key reads as itself.
+const i18nState = vi.hoisted(() => ({
+  language: 'en',
+  translations: {} as Record<string, string>,
+}))
+
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string, values?: Record<string, string | number>) =>
       Object.entries(values || {}).reduce(
         (result, [name, value]) => result.replace(`{{${name}}}`, String(value)),
-        key
+        i18nState.translations[key] ?? key
       ),
-    i18n: { language: 'en', resolvedLanguage: 'en' },
+    i18n: {
+      language: i18nState.language,
+      resolvedLanguage: i18nState.language,
+    },
   }),
 }))
+
+afterEach(() => {
+  i18nState.language = 'en'
+  i18nState.translations = {}
+})
 
 // endpoint_id matches the real production shape: an opaque node id that used to be
 // rendered into the Request column, where only the model name is readable.
@@ -113,20 +128,26 @@ const REPEAT: PromptAuditRepeat = {
   count: 3,
   first_at: 1_784_999_400,
   last_at: 1_785_000_600,
-  worst_action: 'block',
+  worst_decision: 'block',
   blocks: 1,
   unavailable: 1,
 }
 
-function columns(
-  options: { collapsed?: boolean; loadingGroupIDs?: Set<number> } = {}
-): ColumnDef<PromptAuditEvent>[] {
+type ColumnOptions = {
+  canDelete?: boolean
+  collapsed?: boolean
+  loadingGroupIDs?: readonly number[]
+  groupTotals?: Readonly<Record<number, number>>
+}
+
+function columns(options: ColumnOptions = {}): ColumnDef<PromptAuditEvent>[] {
   return renderHook(() =>
     usePromptAuditColumns({
-      canDelete: false,
+      canDelete: options.canDelete ?? false,
       onOpen: () => {},
       collapsed: options.collapsed,
       loadingGroupIDs: options.loadingGroupIDs,
+      groupTotals: options.groupTotals,
     })
   ).result.current
 }
@@ -142,7 +163,7 @@ function lines(cell: HTMLElement): (string | null)[] {
 function renderCell(
   columnID: string,
   event: PromptAuditEvent = EVENT,
-  options: { collapsed?: boolean; loadingGroupIDs?: Set<number> } = {}
+  options: ColumnOptions = {}
 ): HTMLElement {
   function Harness({
     defs,
@@ -178,10 +199,13 @@ type PromptAuditListRow = PromptAuditEvent & { children?: PromptAuditEvent[] }
 
 // The records table renders a collapsed row's requests as child rows, so the
 // harness drives the real table options instead of a hand-built row model.
-function renderCollapsedRow(event: PromptAuditListRow) {
+function renderCollapsedRow(
+  event: PromptAuditListRow,
+  options: Omit<ColumnOptions, 'collapsed'> = {}
+) {
   // The columns come from a hook, so they are resolved before the table mounts
   // rather than from inside its render.
-  const defs = columns({ collapsed: true })
+  const defs = columns({ ...options, collapsed: true })
 
   function Harness() {
     const { table } = useDataTable<PromptAuditListRow>({
@@ -193,6 +217,8 @@ function renderCollapsedRow(event: PromptAuditListRow) {
       // the data alone.
       getRowCanExpand: (row) => isMergedPromptAuditRow(row.original),
       getRowId: promptAuditRowID,
+      // Only the collapsed rows stand for a group, as on the page.
+      enableRowSelection: (row) => row.depth === 0,
       withExpandedRowModel: true,
     })
 
@@ -314,7 +340,9 @@ describe('prompt audit records table', () => {
     expect(cell.textContent).toContain('×3')
     // The count is the accessible name of the badge, not just its glyph.
     expect(
-      screen.getByRole('img', { name: '3 requests submitted the same text' })
+      screen.getByRole('img', {
+        name: '3 requests belong to the same question',
+      })
     ).toBeVisible()
   })
 
@@ -451,5 +479,152 @@ describe('prompt audit records table', () => {
     // The group's first request is one of its children, so the two rows must not
     // share an id.
     expect(screen.getByTestId('row-ids')).toHaveTextContent('17,17:17,17:18')
+  })
+
+  test('names the protocol in the interface language', () => {
+    i18nState.translations = { 'Async Task': 'Tâche asynchrone' }
+
+    const cell = renderCell('request', { ...EVENT, protocol: 'task' })
+
+    expect(lines(cell)).toContain('Protocol: Tâche asynchrone')
+  })
+
+  test('marks the group toggle busy while its requests are loading', () => {
+    renderCell(
+      'result',
+      { ...EVENT, repeat: REPEAT },
+      { collapsed: true, loadingGroupIDs: [17] }
+    )
+
+    expect(screen.getByRole('button', { name: 'Expand' })).toHaveAttribute(
+      'aria-busy',
+      'true'
+    )
+  })
+
+  test('keeps the toggle of a group that is not loading idle', () => {
+    renderCell(
+      'result',
+      { ...EVENT, repeat: REPEAT },
+      { collapsed: true, loadingGroupIDs: [42] }
+    )
+
+    expect(screen.getByRole('button', { name: 'Expand' })).not.toHaveAttribute(
+      'aria-busy',
+      'true'
+    )
+  })
+
+  test('says when an expanded group holds more requests than it revealed', async () => {
+    const user = userEvent.setup()
+    // An expansion returns only the newest requests of a group, while the group
+    // reports how many it holds in all.
+    renderCollapsedRow(
+      {
+        ...EVENT,
+        repeat: { ...REPEAT, count: 1234 },
+        children: [
+          { ...EVENT, id: 18 },
+          { ...EVENT, id: 19 },
+        ],
+      },
+      { groupTotals: { 17: 1234 } }
+    )
+
+    expect(screen.queryByText(/^Showing the newest/)).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Expand' }))
+
+    expect(
+      screen.getByText('Showing the newest 2 of 1,234 requests')
+    ).toBeVisible()
+  })
+
+  test('adds no note to a group whose requests all arrived', async () => {
+    const user = userEvent.setup()
+    renderCollapsedRow(
+      {
+        ...EVENT,
+        repeat: { ...REPEAT, count: 2 },
+        children: [
+          { ...EVENT, id: 18 },
+          { ...EVENT, id: 19 },
+        ],
+      },
+      { groupTotals: { 17: 2 } }
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Expand' }))
+
+    expect(screen.queryByText(/^Showing the newest/)).not.toBeInTheDocument()
+  })
+
+  test('gives the requests of an expanded group no checkbox of their own', async () => {
+    const user = userEvent.setup()
+    renderCollapsedRow(
+      {
+        ...EVENT,
+        repeat: REPEAT,
+        children: [{ ...EVENT, id: 18, redacted_preview: 'second-request' }],
+      },
+      { canDelete: true }
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Expand' }))
+
+    const rows = document.querySelectorAll<HTMLElement>('tbody tr')
+    expect(rows).toHaveLength(2)
+    expect(
+      within(rows[0]).getByRole('checkbox', { name: 'Select audit record' })
+    ).toBeVisible()
+    expect(within(rows[1]).queryByRole('checkbox')).not.toBeInTheDocument()
+  })
+
+  test.each([
+    { language: 'en', count: '1,234' },
+    { language: 'zhCN', count: '1,234' },
+    { language: 'zhTW', count: '1,234' },
+    { language: 'fr', count: '1\u202f234' },
+    { language: 'ru', count: '1\u00a0234' },
+    { language: 'ja', count: '1,234' },
+    { language: 'vi', count: '1.234' },
+    // An interface language Intl cannot read falls back to the runtime default
+    // instead of breaking the row.
+    { language: 'not a language', count: (1234).toLocaleString() },
+  ])('formats the repeat counts for $language', ({ language, count }) => {
+    i18nState.language = language
+
+    renderCell('result', { ...EVENT, repeat: { ...REPEAT, count: 1234 } })
+
+    const badge = screen.getByRole('img', {
+      name: `${count} requests belong to the same question`,
+    })
+    expect(badge.textContent).toBe(`×${count}`)
+  })
+
+  test('re-formats the repeat count when the interface language changes', () => {
+    const event = { ...EVENT, repeat: { ...REPEAT, count: 1234 } }
+    function ResultCell() {
+      const defs = usePromptAuditColumns({ canDelete: false, onOpen: () => {} })
+      // eslint-disable-next-line react/incompatible-library -- the test renders one static row and never memoizes its options.
+      const table = useReactTable({
+        data: [event],
+        columns: defs,
+        getCoreRowModel: getCoreRowModel(),
+      })
+      const cell = table
+        .getRowModel()
+        .rows[0].getVisibleCells()
+        .find((item) => item.column.id === 'result')
+      if (!cell?.column.columnDef.cell) return null
+      return flexRender(cell.column.columnDef.cell, cell.getContext())
+    }
+    const view = render(<ResultCell />)
+    expect(screen.getByRole('img').textContent).toBe('×1,234')
+
+    i18nState.language = 'fr'
+    view.rerender(<ResultCell />)
+
+    expect(screen.getByRole('img').textContent).toBe('×1\u202f234')
   })
 })

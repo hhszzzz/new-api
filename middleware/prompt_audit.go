@@ -30,7 +30,7 @@ func inspectPromptBeforeDistribution(c *gin.Context, modelRequest *ModelRequest)
 		return nil, true
 	}
 	configured := prompt_audit_setting.GetSetting()
-	if !setting.ShouldCheckPromptSensitive() && !configured.AppliesToGroup(common.GetContextKeyString(c, constant.ContextKeyUsingGroup)) {
+	if !configured.ProbeBlockEnabled && !setting.ShouldCheckPromptSensitive() && !configured.AppliesToGroup(common.GetContextKeyString(c, constant.ContextKeyUsingGroup)) {
 		return nil, true
 	}
 
@@ -88,6 +88,12 @@ func inspectPromptBeforeDistribution(c *gin.Context, modelRequest *ModelRequest)
 		Stage:              "pre_distribution",
 		CoverageIncomplete: coverageIncomplete,
 		Stream:             isStream,
+		// Anthropic's token counter generates nothing, but it still forwards the
+		// whole prompt to the upstream account, so listed words are refused there
+		// too. The model audit is left to the request that generates from the
+		// text: counts arrive on every step of an agent run, and auditing each one
+		// turned the audit node's own rate limit into refused counts.
+		WordlistOnly: strings.HasPrefix(c.Request.URL.Path, "/v1/messages/count_tokens"),
 	})
 	if apiErr != nil {
 		service.RecordPromptAuditError(c, result, apiErr, modelName, isStream)
@@ -153,15 +159,6 @@ func promptAuditRequestKind(path string) (types.RelayFormat, bool, bool) {
 		return types.RelayFormatTask, true, true
 	case strings.HasPrefix(path, "/pg/chat/completions"):
 		return types.RelayFormatOpenAI, false, true
-	// Anthropic's token counter answers with a number and generates nothing, so
-	// inspecting it protects nothing: whatever text it counts is submitted to
-	// the model — and inspected — when the request that generates from it
-	// arrives. It is also the one call a client makes on every step, which made
-	// the audit node's own rate limiting the caller's problem: a burst of counts
-	// hit the node's limit and each count came back a 503. The path is matched
-	// before the /v1/messages case it is otherwise a prefix of.
-	case strings.HasPrefix(path, "/v1/messages/count_tokens"):
-		return types.RelayFormat(""), false, false
 	case strings.HasPrefix(path, "/v1/messages"):
 		return types.RelayFormatClaude, false, true
 	case strings.HasPrefix(path, "/v1/responses/compact"):

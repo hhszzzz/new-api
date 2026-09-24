@@ -43,7 +43,12 @@ import {
 import { cn } from '@/lib/utils'
 
 import { getPromptAudit, retryPromptAudit, reviewPromptAudit } from '../api'
-import { getPromptAuditProtocolName } from '../lib'
+import {
+  getPromptAuditProtocolName,
+  promptAuditDetectorLabel,
+  promptAuditPayloadSegments,
+  promptAuditRequestKindLabel,
+} from '../lib'
 import { promptAuditScopeLabel } from '../scopes'
 import type { PromptAuditEvent } from '../types'
 
@@ -119,11 +124,26 @@ export function PromptAuditDetailSheet({
   // Only the model path records which scopes it submitted; a wordlist-only row
   // reports where it matched instead, under Text source.
   const inspectedScopes = event?.inspected_scopes ?? []
-  // A rejected request never reaches upstream, and the audit deliberately
-  // writes neither a consume log nor an error log for it, so both related-log
-  // links would lead to an empty page.
+  const segmentOccurrences = new Map<string, number>()
+  const payloadSegments = (
+    canViewFullPrompt ? promptAuditPayloadSegments(event?.scan_payload) : []
+  ).map((segment) => {
+    const contentKey = JSON.stringify([segment.scope, segment.text])
+    const occurrence = segmentOccurrences.get(contentKey) ?? 0
+    segmentOccurrences.set(contentKey, occurrence + 1)
+    return { ...segment, key: `${contentKey}:${occurrence}` }
+  })
+  const PromptCopySection = showsFullPrompt
+    ? CollapsibleDetailSection
+    : DetailSection
+  // An input the audit rejected never reached upstream, and the audit
+  // deliberately writes neither a consume log nor an error log for it, so both
+  // related-log links would lead to an empty page. Generated output is judged
+  // after upstream already produced and billed it, so its logs exist whatever
+  // the verdict.
   const hasRelatedLogs =
-    event?.action !== 'block' && event?.action !== 'unavailable'
+    event?.direction === 'output' ||
+    (event?.action !== 'block' && event?.action !== 'unavailable')
 
   return (
     <Sheet
@@ -167,9 +187,10 @@ export function PromptAuditDetailSheet({
                   {t(event.status)}
                 </Badge>
                 <Badge variant='outline'>
-                  {event.inspection_type === 'wordlist'
-                    ? t('Wordlist')
-                    : t('Model audit')}
+                  {promptAuditDetectorLabel(event.inspection_type, t)}
+                </Badge>
+                <Badge variant='outline'>
+                  {promptAuditRequestKindLabel(event.request_kind, t)}
                 </Badge>
               </div>
 
@@ -194,7 +215,57 @@ export function PromptAuditDetailSheet({
                 )}
               </DetailSection>
 
-              <DetailSection label={t('Prompt')}>
+              {canViewFullPrompt && (
+                <DetailSection label={t('Inspected content')}>
+                  {payloadSegments.length === 0 ? (
+                    <span className='text-muted-foreground text-xs'>
+                      {t('No inspected content retained')}
+                    </span>
+                  ) : (
+                    payloadSegments.map((segment) => {
+                      const SegmentSection =
+                        segment.text.length > 600
+                          ? CollapsibleDetailSection
+                          : DetailSection
+                      return (
+                        <SegmentSection
+                          key={segment.key}
+                          label={
+                            segment.scope
+                              ? promptAuditScopeLabel(segment.scope, t)
+                              : t('Unknown source')
+                          }
+                        >
+                          <div className='flex justify-end'>
+                            <CopyButton
+                              value={segment.text}
+                              variant='ghost'
+                              size='sm'
+                              tooltip={t('Copy')}
+                            />
+                          </div>
+                          <pre className='bg-background/70 max-h-56 overflow-auto rounded-md p-2 text-xs leading-relaxed break-words whitespace-pre-wrap [content-visibility:auto]'>
+                            {segment.text}
+                          </pre>
+                        </SegmentSection>
+                      )
+                    })
+                  )}
+                  {event.scan_payload_truncated && (
+                    <p className='text-muted-foreground text-xs'>
+                      {t(
+                        'Inspected content was truncated to the retention limit.'
+                      )}
+                    </p>
+                  )}
+                </DetailSection>
+              )}
+
+              <PromptCopySection
+                label={
+                  showsFullPrompt ? t('Retained prompt copy') : t('Prompt')
+                }
+              >
                 <div className='mb-2 flex items-center justify-between gap-3'>
                   <span className='text-muted-foreground text-xs font-medium'>
                     {showsFullPrompt ? t('Full prompt') : t('Redacted preview')}
@@ -218,10 +289,19 @@ export function PromptAuditDetailSheet({
                 <pre className='bg-background/70 max-h-[26rem] overflow-auto rounded-md p-3 text-xs leading-relaxed break-words whitespace-pre-wrap [content-visibility:auto]'>
                   {prompt || t('No prompt text retained')}
                 </pre>
-                <p className='text-muted-foreground mt-2 text-xs'>
-                  {t('Your permission only allows the redacted preview.')}
-                </p>
-              </DetailSection>
+                {showsFullPrompt && (
+                  <p className='text-muted-foreground mt-2 text-xs'>
+                    {t(
+                      'This retained copy is the start of the whole request, not only the parts sent for inspection, which are listed under Inspected scope.'
+                    )}
+                  </p>
+                )}
+                {!canViewFullPrompt && (
+                  <p className='text-muted-foreground mt-2 text-xs'>
+                    {t('Your permission only allows the redacted preview.')}
+                  </p>
+                )}
+              </PromptCopySection>
 
               <DetailSection label={t('Context')}>
                 <DetailRow
@@ -240,7 +320,7 @@ export function PromptAuditDetailSheet({
                 <DetailRow label={t('Group')} value={event.group || '—'} />
                 <DetailRow
                   label={t('Protocol')}
-                  value={getPromptAuditProtocolName(event.protocol) || '—'}
+                  value={t(getPromptAuditProtocolName(event.protocol)) || '—'}
                 />
                 <DetailRow
                   label={t('Audit stage')}
@@ -527,8 +607,10 @@ export function PromptAuditDetailSheet({
                 variant='outline'
                 disabled={
                   retryMutation.isPending ||
-                  event.full_prompt_truncated ||
-                  !event.full_prompt_available
+                  event.scan_payload_truncated ||
+                  (!event.scan_payload &&
+                    (event.full_prompt_truncated ||
+                      !event.full_prompt_available))
                 }
                 onClick={() => retryMutation.mutate(event.id)}
               >

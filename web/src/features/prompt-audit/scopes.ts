@@ -28,6 +28,9 @@ export const PROMPT_AUDIT_SCOPES: PromptAuditScope[] = [
   'tool_call',
   'tool_result',
   'task',
+  'agent_context',
+  'skill',
+  'mcp',
 ]
 
 export function promptAuditScopeLabel(
@@ -49,6 +52,12 @@ export function promptAuditScopeLabel(
       return t('Tool results')
     case 'task':
       return t('Task and standalone input')
+    case 'agent_context':
+      return t('Agent context')
+    case 'skill':
+      return t('Skills')
+    case 'mcp':
+      return t('MCP tools')
   }
 }
 
@@ -57,11 +66,26 @@ export function defaultPromptScopePolicies(): PromptScopePolicies {
     PROMPT_AUDIT_SCOPES.map((scope) => [
       scope,
       {
-        library_ids: scope === 'user' || scope === 'task' ? ['manual'] : [],
+        library_ids: ['user', 'task', 'agent_context', 'skill'].includes(scope)
+          ? ['manual']
+          : [],
         model_audit: true,
       },
     ])
   ) as PromptScopePolicies
+}
+
+export function normalizePromptScopePolicies(
+  policies?: Partial<PromptScopePolicies>
+): PromptScopePolicies {
+  const result = { ...defaultPromptScopePolicies(), ...policies }
+  for (const scope of ['agent_context', 'skill', 'mcp'] as const) {
+    if (!policies?.[scope]) {
+      const inherited = result[scope === 'mcp' ? 'tool_result' : 'user']
+      result[scope] = { ...inherited, library_ids: [...inherited.library_ids] }
+    }
+  }
+  return result
 }
 
 export function promptWordlistError(code: string, t: TFunction): string {

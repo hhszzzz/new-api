@@ -23,11 +23,16 @@ type ConversionDiagnostic struct {
 }
 
 const (
+	// ConversionLossPresentation classifies a loss that only changes how results
+	// are shaped or displayed. That includes preferences about how much result
+	// content a hosted tool run returns (search context size, a return-token
+	// budget, response inclusion): they cap no run, so they are not tuning.
 	ConversionLossPresentation = "presentation"
-	// ConversionLossTuning classifies a loss that only changes how much a hosted
-	// tool may run (for example a search-count cap) without widening what it can
-	// reach or changing the shape of its results. The safe policy still rejects
-	// it; only an explicit lossy opt-in tolerates it.
+	// ConversionLossTuning classifies dropping a cap on how many times a hosted
+	// tool may run (for example a web search max_uses limit). It neither widens
+	// what the tool can reach nor changes the shape of its results, but it removes
+	// a limit the client set, so the safe policy still rejects it; only an
+	// explicit lossy opt-in tolerates it.
 	ConversionLossTuning   = "tuning"
 	ConversionLossSemantic = "semantic"
 )
@@ -92,14 +97,17 @@ func RejectConversionLoss(policy ConversionLossPolicy, diagnostics []ConversionD
 // conversionLossIsRejected reports whether the policy refuses a single loss.
 // The tiers nest: strict refuses every loss, safe refuses everything except
 // display metadata, and lossy refuses everything except display metadata and
-// execution tuning. Losses of an unclassified class stay fatal under lossy so a
-// newly introduced class is never tolerated by accident.
+// execution tuning. An error-severity diagnostic is fatal under both safe and
+// lossy whatever its class, and losses of an unclassified class stay fatal under
+// lossy, so neither a producer's explicit refusal nor a newly introduced class
+// is ever tolerated by accident.
 func conversionLossIsRejected(policy ConversionLossPolicy, diagnostic ConversionDiagnostic) bool {
 	switch policy {
 	case ConversionLossPolicyStrict:
 		return true
 	case ConversionLossPolicyLossy:
-		return diagnostic.LossClass != ConversionLossPresentation && diagnostic.LossClass != ConversionLossTuning
+		return diagnostic.Severity == ConversionDiagnosticError ||
+			(diagnostic.LossClass != ConversionLossPresentation && diagnostic.LossClass != ConversionLossTuning)
 	default:
 		return diagnostic.Severity == ConversionDiagnosticError || diagnostic.LossClass != ConversionLossPresentation
 	}

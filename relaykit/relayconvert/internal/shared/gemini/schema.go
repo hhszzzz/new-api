@@ -2,12 +2,121 @@ package gemini
 
 import (
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 )
+
+func OutputFormat(config *dto.GeminiChatGenerationConfig) (*dto.ResponseFormat, error) {
+	var schema any
+	if len(config.ResponseJsonSchema) > 0 {
+		if err := kitutil.Unmarshal(config.ResponseJsonSchema, &schema); err != nil {
+			return nil, err
+		}
+	}
+	if config.ResponseSchema != nil {
+		legacy, err := kitutil.Any2Type[map[string]any](config.ResponseSchema)
+		if err != nil {
+			return nil, err
+		}
+		converted, err := openAPIOutputSchema(legacy)
+		if err != nil {
+			return nil, err
+		}
+		if schema != nil && !reflect.DeepEqual(schema, converted) {
+			return nil, fmt.Errorf("conflicting responseSchema and responseJsonSchema")
+		}
+		schema = converted
+	}
+	if schema == nil {
+		switch config.ResponseMimeType {
+		case "", "text/plain":
+			return nil, nil
+		case "application/json":
+			return &dto.ResponseFormat{Type: "json_object"}, nil
+		default:
+			return nil, fmt.Errorf("unsupported output MIME type %q", config.ResponseMimeType)
+		}
+	}
+	if config.ResponseMimeType != "application/json" {
+		return nil, fmt.Errorf("output schema requires application/json")
+	}
+	raw, err := kitutil.Marshal(map[string]any{"name": "response", "strict": true, "schema": schema})
+	return &dto.ResponseFormat{Type: "json_schema", JsonSchema: raw}, err
+}
+
+func openAPIOutputSchema(node map[string]any) (map[string]any, error) {
+	result := make(map[string]any, len(node))
+	for key, value := range node {
+		switch key {
+		case "type":
+			kind, ok := value.(string)
+			if !ok {
+				return nil, fmt.Errorf("responseSchema type must be a string")
+			}
+			result[key] = strings.ToLower(kind)
+		case "properties":
+			properties, ok := value.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("responseSchema properties must be an object")
+			}
+			children := make(map[string]any, len(properties))
+			for name, child := range properties {
+				object, ok := child.(map[string]any)
+				if !ok {
+					return nil, fmt.Errorf("responseSchema property must be an object")
+				}
+				converted, err := openAPIOutputSchema(object)
+				if err != nil {
+					return nil, err
+				}
+				children[name] = converted
+			}
+			result[key] = children
+		case "items":
+			object, ok := value.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("responseSchema items must be an object")
+			}
+			converted, err := openAPIOutputSchema(object)
+			if err != nil {
+				return nil, err
+			}
+			result[key] = converted
+		case "anyOf":
+			values, ok := value.([]any)
+			if !ok {
+				return nil, fmt.Errorf("responseSchema anyOf must be an array")
+			}
+			children := make([]any, 0, len(values))
+			for _, child := range values {
+				object, ok := child.(map[string]any)
+				if !ok {
+					return nil, fmt.Errorf("responseSchema anyOf entry must be an object")
+				}
+				converted, err := openAPIOutputSchema(object)
+				if err != nil {
+					return nil, err
+				}
+				children = append(children, converted)
+			}
+			result[key] = children
+		case "nullable":
+			if _, ok := value.(bool); !ok {
+				return nil, fmt.Errorf("responseSchema nullable must be boolean")
+			}
+		default:
+			result[key] = value
+		}
+	}
+	if node["nullable"] == true {
+		return map[string]any{"anyOf": []any{result, map[string]any{"type": "null"}}}, nil
+	}
+	return result, nil
+}
 
 // ApplyOutputFormat preserves the JSON Schema itself. The OpenAPI responseSchema
 // channel cannot express all constraints accepted by OpenAI structured output.

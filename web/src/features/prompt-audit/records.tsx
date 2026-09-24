@@ -21,9 +21,11 @@ import {
   useQueries,
   useQuery,
   useQueryClient,
+  type UseQueryResult,
 } from '@tanstack/react-query'
 import type {
   ExpandedState,
+  OnChangeFn,
   PaginationState,
   RowSelectionState,
 } from '@tanstack/react-table'
@@ -41,6 +43,7 @@ import {
   ADMIN_PERMISSION_RESOURCES,
   hasPermission,
 } from '@/lib/admin-permissions'
+import { createServerError } from '@/lib/server-error-message'
 import { useAuthStore } from '@/stores/auth-store'
 
 import {
@@ -67,6 +70,7 @@ import type {
   PromptAuditDeleteFilter,
   PromptAuditEvent,
   PromptAuditFilters,
+  PromptAuditListData,
 } from './types'
 
 /**
@@ -119,6 +123,9 @@ export function PromptAuditRecords() {
     () => promptAuditFilterParams(filters, { collapseRepeats }),
     [filters, collapseRepeats]
   )
+  // Collapsing changes how the listing reads, not which requests match, so the
+  // statistics are asked for with the filters alone and survive the switch.
+  const statsParams = useMemo(() => promptAuditFilterParams(filters), [filters])
   const listQuery = useQuery({
     queryKey: [
       'prompt-audit',
@@ -141,9 +148,9 @@ export function PromptAuditRecords() {
     placeholderData: keepPreviousData,
   })
   const statsQuery = useQuery({
-    queryKey: ['prompt-audit', 'stats', filterParams],
+    queryKey: ['prompt-audit', 'stats', statsParams],
     queryFn: async () => {
-      const result = await getPromptAuditStats(filterParams)
+      const result = await getPromptAuditStats(statsParams)
       if (!result.success || !result.data) {
         throw new Error(
           result.message || t('Failed to load prompt audit statistics')
@@ -165,75 +172,85 @@ export function PromptAuditRecords() {
   })
 
   // A collapsed row mentions how many requests it merged but carries none of
-  // them, so one group is fetched when the operator expands that row. Every
-  // expanded group is a query of its own, keyed under the listing's prefix so a
-  // refresh or a deletion invalidates it as well.
+  // them, so a group is fetched once the operator expands its row. Only the
+  // merged rows this page lists are asked for: a group that was deleted,
+  // filtered out or paged away stops being fetched along with its row.
   const expandedGroupIDs = useMemo(() => {
     // An ExpandedState is either a per-row record or the "everything" flag, and
     // this table only ever produces the record.
-    if (expanded === true) return []
-    return Object.entries(expanded)
-      .filter(([, isExpanded]) => isExpanded)
-      .map(([rowID]) => Number(rowID))
-      .filter(Number.isFinite)
-  }, [expanded])
-  const groupQueries = useQueries({
-    queries: expandedGroupIDs.map((groupID) => ({
-      queryKey: ['prompt-audit', 'events', 'group', groupID, filterParams],
-      queryFn: async () => {
-        const result = await listPromptAudits({
-          ...filterParams,
-          group_id: groupID,
-        })
-        if (!result.success || !result.data) {
-          throw new Error(result.message || t('Failed to load prompt audits'))
+    if (!collapseRepeats || expanded === true) return []
+    return (listQuery.data?.items ?? [])
+      .filter(
+        (item) => isMergedPromptAuditRow(item) && expanded[String(item.id)]
+      )
+      .map((item) => item.id)
+  }, [collapseRepeats, expanded, listQuery.data])
+  // Query-core structurally shares what this returns between renders, which
+  // only works on plain objects and arrays: kept to those, the rows and the
+  // loading list change only when a group actually does.
+  const combineGroups = useCallback(
+    (results: UseQueryResult<PromptAuditListData>[]) => {
+      const rows: Record<number, PromptAuditEvent[]> = {}
+      const totals: Record<number, number> = {}
+      const loadingIDs: number[] = []
+      expandedGroupIDs.forEach((groupID, index) => {
+        const result = results[index]
+        if (result?.data) {
+          rows[groupID] = result.data.items
+          totals[groupID] = result.data.total
         }
-        return result.data.items
-      },
-    })),
+        if (result?.isFetching) loadingIDs.push(groupID)
+      })
+      return { rows, totals, loadingIDs }
+    },
+    [expandedGroupIDs]
+  )
+  const groups = useQueries({
+    queries: expandedGroupIDs.map((groupID) => {
+      const params = promptAuditFilterParams(filters, {
+        collapseRepeats: true,
+        groupID,
+      })
+      return {
+        // Under the listing's prefix, so a refresh reloads the group as well.
+        queryKey: ['prompt-audit', 'events', 'group', params],
+        queryFn: async () => {
+          const result = await listPromptAudits(params)
+          if (!result.success || !result.data) {
+            throw createServerError(result, t('Failed to load prompt audits'))
+          }
+          return result.data
+        },
+      }
+    }),
+    combine: combineGroups,
   })
-  // The query array is rebuilt on every render, so the loaded rows are
-  // identified by their own timestamps: the map and the loading set then only
-  // change when a group actually resolves.
-  const groupQueriesKey = groupQueries
-    .map((query) => `${query.dataUpdatedAt}:${query.isFetching}`)
-    .join(',')
-  const groupRows = useMemo(
-    () =>
-      new Map<number, PromptAuditEvent[]>(
-        expandedGroupIDs.flatMap((groupID, index) => {
-          const items = groupQueries[index]?.data
-          return items ? [[groupID, items] as const] : []
-        })
-      ),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- covered by groupQueriesKey
-    [expandedGroupIDs, groupQueriesKey]
-  )
-  const loadingGroupIDs = useMemo(
-    () =>
-      new Set(
-        expandedGroupIDs.filter((_, index) => groupQueries[index]?.isFetching)
-      ),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- covered by groupQueriesKey
-    [expandedGroupIDs, groupQueriesKey]
-  )
 
   const events = useMemo<PromptAuditListRow[]>(() => {
     const items = listQuery.data?.items ?? []
     if (!collapseRepeats) return items
     return items.map((item) => {
-      const children = groupRows.get(item.id)
+      const children = groups.rows[item.id]
       return children ? { ...item, children } : item
     })
-  }, [listQuery.data, collapseRepeats, groupRows])
+  }, [listQuery.data, collapseRepeats, groups.rows])
   const total = listQuery.data?.total ?? 0
-  const recordsTotal = listQuery.data?.records_total ?? 0
   const columns = usePromptAuditColumns({
     canDelete,
     onOpen: setDetailID,
     collapsed: collapseRepeats,
-    loadingGroupIDs,
+    loadingGroupIDs: groups.loadingIDs,
+    groupTotals: groups.totals,
   })
+  // Expanded rows belong to the page that listed them, so paging closes them
+  // rather than reopening them whenever those rows are listed again.
+  const changePagination = useCallback<OnChangeFn<PaginationState>>(
+    (updater) => {
+      setPagination(updater)
+      setExpanded({})
+    },
+    []
+  )
   const ensurePageInRange = useCallback((pageCount: number) => {
     setPagination((current) => ({
       ...current,
@@ -247,7 +264,7 @@ export function PromptAuditRecords() {
     pagination,
     rowSelection,
     expanded,
-    onPaginationChange: setPagination,
+    onPaginationChange: changePagination,
     onRowSelectionChange: setRowSelection,
     onExpandedChange: setExpanded,
     getRowId: promptAuditRowID,
@@ -322,11 +339,12 @@ export function PromptAuditRecords() {
       setDeleteFilter(
         promptAuditDeleteFilter(
           filters,
-          scope === 'selected' ? selectedIDs : []
+          scope === 'selected' ? selectedIDs : [],
+          { groups: collapseRepeats }
         )
       )
     },
-    [filters, selectedIDs]
+    [collapseRepeats, filters, selectedIDs]
   )
 
   return (
@@ -389,7 +407,6 @@ export function PromptAuditRecords() {
                     searchLoading={listQuery.isFetching}
                     collapsed={collapseRepeats}
                     groupTotal={total}
-                    recordsTotal={recordsTotal}
                     onToggleCollapse={toggleCollapseRepeats}
                     onChange={setFilter}
                     onSearch={applyFilters}
@@ -442,6 +459,14 @@ export function PromptAuditRecords() {
         onOpenChange={(open) => !open && setDeleteFilter(null)}
         onDeleted={() => {
           setRowSelection({})
+          // The deletion can take an expanded group with it. Its row closes,
+          // and its cached requests are dropped before the refresh, which
+          // reaches every query still mounted and would otherwise ask the
+          // server again for a group that no longer exists.
+          setExpanded({})
+          queryClient.removeQueries({
+            queryKey: ['prompt-audit', 'events', 'group'],
+          })
           void refresh()
         }}
       />

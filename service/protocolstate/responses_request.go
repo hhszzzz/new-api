@@ -31,9 +31,11 @@ func normalizeResponsesRequest(request *dto.OpenAIResponsesRequest, upstreamProt
 type responsesToolSet struct {
 	tools               []map[string]any
 	identities          map[string]string
+	definitions         map[string]map[string]any
 	namespaces          map[string]int
 	hostedTools         map[string]struct{}
 	toolSearchExecution string
+	preferExisting      bool
 }
 
 func mergeResponsesToolDeclarations(request *dto.OpenAIResponsesRequest, historicalTools []json.RawMessage) (bool, error) {
@@ -41,14 +43,17 @@ func mergeResponsesToolDeclarations(request *dto.OpenAIResponsesRequest, histori
 		return false, nil
 	}
 	originalTools := append(json.RawMessage(nil), request.Tools...)
+	originalInput := append(json.RawMessage(nil), request.Input...)
 	set := &responsesToolSet{
 		identities:  make(map[string]string),
+		definitions: make(map[string]map[string]any),
 		namespaces:  make(map[string]int),
 		hostedTools: make(map[string]struct{}),
 	}
 	if err := set.addRawTools(request.Tools); err != nil {
 		return false, fmt.Errorf("invalid Responses tools: %w", err)
 	}
+	set.preferExisting = true
 	if err := set.addInputToolCarriers(request.Input); err != nil {
 		return false, err
 	}
@@ -57,7 +62,7 @@ func mergeResponsesToolDeclarations(request *dto.OpenAIResponsesRequest, histori
 			return false, fmt.Errorf("invalid stored Responses tools: %w", err)
 		}
 	}
-	if err := set.ensureInputCallsDeclared(request.Input); err != nil {
+	if err := set.ensureInputCallsDeclared(request); err != nil {
 		return false, err
 	}
 	if len(set.tools) == 0 {
@@ -68,7 +73,7 @@ func mergeResponsesToolDeclarations(request *dto.OpenAIResponsesRequest, histori
 		return false, err
 	}
 	request.Tools = encoded
-	return !responsesJSONEqual(originalTools, encoded), nil
+	return !responsesJSONEqual(originalTools, encoded) || !responsesJSONEqual(originalInput, request.Input), nil
 }
 
 func (s *responsesToolSet) addRawTools(raw json.RawMessage) error {
@@ -113,17 +118,29 @@ func (s *responsesToolSet) addInputToolCarriers(raw json.RawMessage) error {
 	return nil
 }
 
-func (s *responsesToolSet) ensureInputCallsDeclared(raw json.RawMessage) error {
-	items, err := responsesInputItems(raw)
+func (s *responsesToolSet) ensureInputCallsDeclared(request *dto.OpenAIResponsesRequest) error {
+	items, err := responsesInputItems(request.Input)
 	if err != nil {
 		return fmt.Errorf("invalid Responses input while checking tool calls: %w", err)
 	}
+	changed := false
+	rewrittenCalls := make(map[string]string)
 	for _, item := range items {
 		itemType := strings.TrimSpace(common.Interface2String(item["type"]))
 		name := strings.TrimSpace(common.Interface2String(item["name"]))
 		namespace := strings.TrimSpace(common.Interface2String(item["namespace"]))
 		var kind string
 		switch itemType {
+		case "additional_tools", "tool_search_output":
+			tools, rewritten, err := s.reconcileHistoricalTools(item["tools"], "")
+			if err != nil {
+				return err
+			}
+			if rewritten {
+				item["tools"] = tools
+				changed = true
+			}
+			continue
 		case "function_call":
 			kind = "function"
 		case "custom_tool_call":
@@ -163,7 +180,37 @@ func (s *responsesToolSet) ensureInputCallsDeclared(raw json.RawMessage) error {
 		identity := responsesToolIdentity(namespace, name)
 		if declaredKind, exists := s.identities[identity]; exists {
 			if declaredKind != kind {
-				return fmt.Errorf("Responses tool call %q conflicts with declared %s tool", responsesQualifiedToolName(namespace, name), declaredKind)
+				if declaredKind != "function" && declaredKind != "custom" {
+					return fmt.Errorf("Responses tool call %q conflicts with declared %s tool", responsesQualifiedToolName(namespace, name), declaredKind)
+				}
+				if declaredKind == "custom" {
+					input := common.Interface2String(item["arguments"])
+					var wrapper map[string]any
+					if common.UnmarshalJsonStr(input, &wrapper) == nil && len(wrapper) == 1 {
+						if text, ok := wrapper["input"].(string); ok {
+							input = text
+						}
+					}
+					item["type"], item["input"] = "custom_tool_call", input
+					delete(item, "arguments")
+				} else {
+					input := common.Interface2String(item["input"])
+					var object map[string]any
+					if common.UnmarshalJsonStr(input, &object) != nil || object == nil {
+						encoded, err := common.Marshal(map[string]any{"input": input})
+						if err != nil {
+							return err
+						}
+						input = string(encoded)
+					}
+					item["type"], item["arguments"] = "function_call", input
+					delete(item, "input")
+				}
+				callID := common.Interface2String(item["call_id"])
+				if callID != "" {
+					rewrittenCalls[callID] = declaredKind
+				}
+				changed = true
 			}
 			continue
 		}
@@ -188,6 +235,28 @@ func (s *responsesToolSet) ensureInputCallsDeclared(raw json.RawMessage) error {
 			continue
 		}
 		if err := s.addNamespacedTool(namespace, placeholder); err != nil {
+			return err
+		}
+	}
+	if changed {
+		for _, item := range items {
+			if item["type"] != "function_call_output" && item["type"] != "custom_tool_call_output" {
+				continue
+			}
+			if kind := rewrittenCalls[common.Interface2String(item["call_id"])]; kind != "" {
+				if kind == "custom" {
+					item["type"] = "custom_tool_call_output"
+				} else {
+					item["type"] = "function_call_output"
+				}
+			}
+		}
+		var value any = items
+		if common.GetJsonType(request.Input) == "object" && len(items) == 1 {
+			value = items[0]
+		}
+		request.Input, err = common.Marshal(value)
+		if err != nil {
 			return err
 		}
 	}
@@ -247,12 +316,13 @@ func (s *responsesToolSet) addTopLevelTool(tool map[string]any) error {
 	}
 	identity := responsesToolIdentity("", name)
 	if existing, exists := s.identities[identity]; exists {
-		if existing != kind {
+		if existing != kind && !s.preferExisting {
 			return fmt.Errorf("Responses tool %q is declared as both %s and %s", name, existing, kind)
 		}
 		return nil
 	}
 	s.identities[identity] = kind
+	s.definitions[identity] = tool
 	s.tools = append(s.tools, tool)
 	return nil
 }
@@ -352,13 +422,55 @@ func (s *responsesToolSet) registerNamespacedTool(namespace string, tool map[str
 	}
 	identity := responsesToolIdentity(namespace, name)
 	if existing, exists := s.identities[identity]; exists {
-		if existing != kind {
+		if existing != kind && !s.preferExisting {
 			return false, fmt.Errorf("Responses tool %q is declared as both %s and %s", responsesQualifiedToolName(namespace, name), existing, kind)
 		}
 		return false, nil
 	}
 	s.identities[identity] = kind
+	s.definitions[identity] = tool
 	return true, nil
+}
+
+// Historical tool-search carriers are replayed by both native and converted
+// requests, so their declarations must agree with the rewritten calls too.
+func (s *responsesToolSet) reconcileHistoricalTools(value any, namespace string) ([]map[string]any, bool, error) {
+	tools, err := responsesToolMaps(value)
+	if err != nil {
+		return nil, false, err
+	}
+	changed := false
+	for i, raw := range tools {
+		tool := normalizeResponsesFunctionDeclaration(raw)
+		name := strings.TrimSpace(common.Interface2String(tool["name"]))
+		kind := strings.TrimSpace(common.Interface2String(tool["type"]))
+		if kind == "namespace" {
+			children, exists := tool["tools"]
+			if !exists {
+				children = tool["children"]
+			}
+			reconciled, rewritten, err := s.reconcileHistoricalTools(children, name)
+			if err != nil {
+				return nil, false, err
+			}
+			if rewritten {
+				tool["tools"] = reconciled
+				delete(tool, "children")
+				tools[i], changed = tool, true
+			}
+			continue
+		}
+		if kind == "" {
+			kind = "function"
+		} else if kind == "freeform" {
+			kind = "custom"
+		}
+		identity := responsesToolIdentity(namespace, name)
+		if current := s.definitions[identity]; current != nil && s.identities[identity] != kind {
+			tools[i], changed = current, true
+		}
+	}
+	return tools, changed, nil
 }
 
 func prepareResponsesInputForNativeUpstream(raw json.RawMessage) (json.RawMessage, bool, error) {

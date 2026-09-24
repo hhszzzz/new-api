@@ -3,6 +3,7 @@ package relayconvert
 import (
 	"errors"
 	"fmt"
+	"math"
 	"reflect"
 	"strings"
 	"sync"
@@ -250,12 +251,53 @@ func executeRequestSteps(c context.Context, info convmeta.Meta, from types.Relay
 	if err != nil {
 		return nil, err
 	}
-	reason, losses := AnalyzeConversionFeatures(ProtocolForFormat(from), ProtocolForFormat(target), features, convmeta.OptionsOf(info).EffectiveToolLossPolicy() != types.ConversionLossPolicyStrict, convmeta.OptionsOf(info).AllowDirectiveDrop)
+	opts := convmeta.OptionsOf(info)
+	reason, losses := AnalyzeConversionFeatures(ProtocolForFormat(from), ProtocolForFormat(target), features, opts.EffectiveToolLossPolicy() != types.ConversionLossPolicyStrict, opts.AllowDirectiveDrop && opts.EffectiveToolLossPolicy() == types.ConversionLossPolicyLossy)
 	if reason != "" {
 		diagnostics := []types.ConversionDiagnostic{{Code: "unsupported_request_feature", LossClass: types.ConversionLossSemantic, Severity: types.ConversionDiagnosticError, From: from, To: target, Message: reason}}
 		return &RequestResult{From: from, To: target, Diagnostics: diagnostics}, &types.ConversionLossError{Diagnostics: diagnostics}
 	}
+	var stop *stopEmulator
+	var session *ConversionSession
+	if features.HasStopSequences && target == types.RelayFormatOpenAIResponses {
+		if c != nil {
+			session, _ = c.Value(conversionSessionContextKey{}).(*ConversionSession)
+		}
+		if session == nil {
+			return nil, fmt.Errorf("Responses stop emulation requires a ConversionSession for both request and response")
+		}
+		stop, err = newStopEmulator(ProtocolForFormat(from), body)
+		if err != nil {
+			return nil, err
+		}
+	}
 	c, diagnosticCollector := convdiag.WithCollector(c)
+	if from == types.RelayFormatClaude {
+		var source dto.ClaudeRequest
+		switch value := request.(type) {
+		case dto.ClaudeRequest:
+			source = value
+		case *dto.ClaudeRequest:
+			source = *value
+		}
+		if features.HasContextManagement {
+			edited, message, editErr := applyMessagesContextManagement(&source, info)
+			code := "context_management_emulated"
+			if editErr != nil {
+				code, message = "context_management_omitted", "gateway could not apply context edits: "+editErr.Error()
+				source.ContextManagement = nil
+			} else {
+				source = *edited
+			}
+			convdiag.Add(c, types.ConversionDiagnostic{Code: code, LossClass: types.ConversionLossTuning, Path: "context_management", Severity: types.ConversionDiagnosticWarning, Message: message})
+		}
+		source.Speed = nil
+		if target == types.RelayFormatOpenAIResponses {
+			source.TopK = nil
+			source.StopSequences = nil
+		}
+		request = &source
+	}
 	current, tools, err := toolconv.ExtractRequestForConversion(c, from, request)
 	if err != nil {
 		return nil, err
@@ -263,6 +305,20 @@ func executeRequestSteps(c context.Context, info convmeta.Meta, from types.Relay
 	steps := make([]RequestStep, 0, len(specs))
 	c = toolconv.WithDeferredRequestTools(c)
 	for _, spec := range specs {
+		// Gemini and Messages share top_k. The intermediate Chat envelope must
+		// carry it only for this composite route, never to a Chat-only upstream.
+		if from == types.RelayFormatGemini && target == types.RelayFormatClaude && spec.From == types.RelayFormatOpenAI {
+			var original dto.GeminiChatRequest
+			if err := kitutil.Unmarshal(body, &original); err != nil {
+				return nil, err
+			}
+			if value := original.GenerationConfig.TopK; value != nil {
+				if *value < 0 || *value > math.MaxInt32 || *value != math.Trunc(*value) {
+					return nil, fmt.Errorf("Gemini top_k must be a nonnegative integer")
+				}
+				current.(*dto.GeneralOpenAIRequest).TopK = kitutil.GetPointer(int(*value))
+			}
+		}
 		var step RequestStep
 		var err error
 		current, step, err = executeRequestStep(c, info, spec, current)
@@ -275,7 +331,16 @@ func executeRequestSteps(c context.Context, info convmeta.Meta, from types.Relay
 	current, toolDiagnostics, err := toolconv.AttachRequest(target, current, tools, convmeta.OptionsOf(info))
 	diagnostics := append(diagnosticCollector.Diagnostics(), toolDiagnostics...)
 	for _, field := range losses {
-		diagnostics = append(diagnostics, types.ConversionDiagnostic{Code: "omitted_presentation_metadata", LossClass: types.ConversionLossPresentation, Path: field, Severity: types.ConversionDiagnosticWarning, From: from, To: target, Message: "target protocol does not carry this display metadata"})
+		diagnostic := types.ConversionDiagnostic{Code: "omitted_presentation_metadata", LossClass: types.ConversionLossPresentation, Path: field, Severity: types.ConversionDiagnosticWarning, From: from, To: target, Message: "target protocol does not carry this display metadata"}
+		switch field {
+		case "context_management":
+			continue // The actual edit result was recorded above.
+		case "top_k", "speed":
+			diagnostic.Code, diagnostic.LossClass, diagnostic.Message = "omitted_generation_tuning", types.ConversionLossTuning, "target protocol cannot express "+field+"; upstream generation uses its native default"
+		case "stop":
+			diagnostic.Code, diagnostic.LossClass, diagnostic.Message = "stop_emulated", types.ConversionLossTuning, "gateway truncates visible text at stop sequences; upstream continues and its full usage is billed"
+		}
+		diagnostics = append(diagnostics, diagnostic)
 	}
 	for i := range diagnostics {
 		if diagnostics[i].From == "" {
@@ -299,6 +364,9 @@ func executeRequestSteps(c context.Context, info convmeta.Meta, from types.Relay
 		for _, step := range steps {
 			info.AppendRequestConversion(step.To)
 		}
+	}
+	if session != nil {
+		session.stop = stop
 	}
 
 	converters := make([]string, 0, len(steps))

@@ -11,6 +11,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
@@ -54,19 +55,75 @@ func TestPromptAuditRequestKindCoversSupportedTextProtocols(t *testing.T) {
 	}
 }
 
-// The token counter is a client utility that generates nothing: it is left out
-// of the audit gate instead of being inspected — and, since blocking inspection
-// is fail-closed, failed — next to the request whose text it counts.
-func TestPromptAuditLeavesTokenCountingToTheGeneratingRequest(t *testing.T) {
+// Anthropic's token counter generates nothing but still forwards the whole
+// prompt upstream, so it passes the local wordlist gate like any request, while
+// the model audit — and the audit node's own limits — is left to the request that
+// generates from the text.
+func TestPromptAuditHoldsTokenCountingToTheWordlistGate(t *testing.T) {
 	format, task, supported := promptAuditRequestKind("/v1/messages/count_tokens")
-	assert.False(t, supported)
-	assert.False(t, task)
-	assert.Empty(t, format)
-	// The generation path the counter is a prefix of stays inspected.
-	format, task, supported = promptAuditRequestKind("/v1/messages")
 	assert.True(t, supported)
 	assert.False(t, task)
 	assert.Equal(t, string(types.RelayFormatClaude), string(format))
+
+	gin.SetMode(gin.TestMode)
+	previousDB := model.DB
+	db, err := gorm.Open(sqlite.Open("file:prompt_audit_count_tokens?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.PromptAudit{}))
+	model.DB = db
+	previousConfig := prompt_audit_setting.GetSetting()
+	previousWords := setting.SensitiveWordsSnapshot()
+	previousSensitiveEnabled := setting.CheckSensitiveEnabled
+	previousPromptSensitiveEnabled := setting.CheckSensitiveOnPromptEnabled
+	t.Cleanup(func() {
+		model.DB = previousDB
+		previousConfig.PublishConfig()
+		setting.SensitiveWordsFromString(strings.Join(previousWords, "\n"))
+		setting.SetCheckSensitiveEnabled(previousSensitiveEnabled)
+		setting.SetCheckSensitiveOnPromptEnabled(previousPromptSensitiveEnabled)
+	})
+	// The node is deliberately broken: a count that reached it would fail.
+	var guardCalls atomic.Int32
+	guard := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		guardCalls.Add(1)
+		_, _ = w.Write([]byte(`not a valid guard result`))
+	}))
+	defer guard.Close()
+	configured := promptAuditMiddlewareTestConfig(guard.URL)
+	configured.PublishConfig()
+	setting.SensitiveWordsFromString("blocked_word")
+	setting.SetCheckSensitiveEnabled(true)
+	setting.SetCheckSensitiveOnPromptEnabled(true)
+
+	count := func(text string) (*httptest.ResponseRecorder, bool) {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", strings.NewReader(`{"model":"claude-model","messages":[{"role":"user","content":"`+text+`"}]}`))
+		c.Request.Header.Set("Content-Type", "application/json")
+		c.Set("id", 12)
+		c.Set("username", "count-owner")
+		common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
+		cleanup, allowed := inspectPromptBeforeDistribution(c, &ModelRequest{Model: "claude-model"})
+		if cleanup != nil {
+			cleanup()
+		}
+		return recorder, allowed
+	}
+
+	recorder, allowed := count("please count blocked_word")
+	assert.False(t, allowed)
+	assert.Equal(t, http.StatusBadRequest, recorder.Code)
+	var refused model.PromptAudit
+	require.NoError(t, db.First(&refused).Error)
+	assert.Equal(t, "wordlist", refused.InspectionType)
+	assert.Equal(t, "/v1/messages/count_tokens", refused.RequestPath)
+
+	_, allowed = count("please count these words for me")
+	assert.True(t, allowed)
+	assert.Zero(t, guardCalls.Load(), "a count must never reach the model node")
+	var recorded int64
+	require.NoError(t, db.Model(&model.PromptAudit{}).Count(&recorded).Error)
+	assert.EqualValues(t, 1, recorded, "a count that passes is not recorded")
 }
 
 func TestPromptAuditSensitiveWordsRunBeforeGuardAndChannelSelection(t *testing.T) {
@@ -74,15 +131,9 @@ func TestPromptAuditSensitiveWordsRunBeforeGuardAndChannelSelection(t *testing.T
 	previousDB := model.DB
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.PromptAudit{}, &model.User{}))
+	require.NoError(t, db.AutoMigrate(&model.PromptAudit{}))
 	model.DB = db
 	t.Cleanup(func() { model.DB = previousDB })
-	// The row snapshots the caller's name from the users table, the way the log
-	// tables do; without Redis configured that lookup must not take the cache path.
-	previousRedisEnabled, previousRedis := common.RedisEnabled, common.RDB
-	common.RedisEnabled = false
-	t.Cleanup(func() { common.RedisEnabled, common.RDB = previousRedisEnabled, previousRedis })
-	require.NoError(t, db.Create(&model.User{Id: 9, Username: "wordlist-owner", Password: strings.Repeat("p", 16)}).Error)
 	previousConfig := prompt_audit_setting.GetSetting()
 	previousWords := setting.SensitiveWordsSnapshot()
 	previousSensitiveEnabled := setting.CheckSensitiveEnabled
@@ -123,7 +174,10 @@ func TestPromptAuditSensitiveWordsRunBeforeGuardAndChannelSelection(t *testing.T
 	c.Request.Header.Set("User-Agent", "claude-code/2.0.30")
 	c.Request.Header.Set("Origin", "https://console.example.com")
 	c.Request.Header.Set("Referer", "https://console.example.com/chat")
+	// Authentication puts the caller's id and name in the context; the row
+	// snapshots the name from there.
 	c.Set("id", 9)
+	c.Set("username", "wordlist-owner")
 	common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
 
 	cleanup, allowed := inspectPromptBeforeDistribution(c, &ModelRequest{Model: "chat-model"})
@@ -263,6 +317,7 @@ func TestPromptAuditUnavailableOccursBeforeChannelSelection(t *testing.T) {
 }
 
 func TestPromptAuditProbeFastPassSkipsGuardAndRecordsBypass(t *testing.T) {
+	require.NoError(t, i18n.Init())
 	gin.SetMode(gin.TestMode)
 	previousConfig := prompt_audit_setting.GetSetting()
 	previousDB := model.DB
@@ -276,14 +331,8 @@ func TestPromptAuditProbeFastPassSkipsGuardAndRecordsBypass(t *testing.T) {
 
 	db, err := gorm.Open(sqlite.Open("file:prompt_audit_probe_middleware?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.PromptAudit{}, &model.User{}))
+	require.NoError(t, db.AutoMigrate(&model.PromptAudit{}))
 	model.DB = db
-	// The row snapshots the caller's name from the users table, the way the log
-	// tables do; without Redis configured that lookup must not take the cache path.
-	previousRedisEnabled, previousRedis := common.RedisEnabled, common.RDB
-	common.RedisEnabled = false
-	t.Cleanup(func() { common.RedisEnabled, common.RDB = previousRedisEnabled, previousRedis })
-	require.NoError(t, db.Create(&model.User{Id: 11, Username: "probe-owner", Password: strings.Repeat("p", 16)}).Error)
 
 	// The node is deliberately broken: reaching it would fail the request, which
 	// is exactly the cost the probe fast-pass exists to avoid.
@@ -304,6 +353,7 @@ func TestPromptAuditProbeFastPassSkipsGuardAndRecordsBypass(t *testing.T) {
 	c.Request.Header.Set("User-Agent", "claude-code/2.0.30")
 	c.Request.Header.Set("Origin", "https://console.example.com")
 	c.Set("id", 11)
+	c.Set("username", "probe-owner")
 	common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
 
 	cleanup, allowed := inspectPromptBeforeDistribution(c, &ModelRequest{Model: "chat-model"})
@@ -326,6 +376,32 @@ func TestPromptAuditProbeFastPassSkipsGuardAndRecordsBypass(t *testing.T) {
 	assert.Equal(t, "https://console.example.com", audit.Origin)
 	// The bypass never reaches a model node, so no audit model is recorded.
 	assert.Empty(t, audit.EndpointModel)
+
+	// Even with model auditing off, the independent probe switch aborts before
+	// the distributor can hand the request to channel selection or billing.
+	configured.Mode = prompt_audit_setting.ModeOff
+	configured.ProbeBlockEnabled = true
+	configured.ProbePhrases = []string{"hi"}
+	configured.PublishConfig()
+	recorder = httptest.NewRecorder()
+	c, _ = gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"chat-model","messages":[{"role":"user","content":"hi"}]}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set("id", 11)
+	c.Set("role", common.RoleCommonUser)
+	c.Set("username", "probe-owner")
+	cleanup, allowed = inspectPromptBeforeDistribution(c, &ModelRequest{Model: "chat-model"})
+	if cleanup != nil {
+		cleanup()
+	}
+	assert.False(t, allowed)
+	assert.True(t, c.IsAborted())
+	assert.Equal(t, http.StatusBadRequest, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), "probe_request_blocked")
+	assert.Zero(t, guardCalls.Load())
+	var blocked model.PromptAudit
+	require.NoError(t, db.Where("inspection_type = ?", "probe_block").First(&blocked).Error)
+	assert.Equal(t, service.PromptAuditActionBlock, blocked.Action)
 }
 
 func promptAuditMiddlewareTestConfig(baseURL string) prompt_audit_setting.PromptAuditSetting {

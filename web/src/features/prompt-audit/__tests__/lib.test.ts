@@ -21,7 +21,9 @@ import { afterEach, describe, expect, test, vi } from 'vitest'
 import {
   EMPTY_PROMPT_AUDIT_FILTERS,
   getDefaultPromptAuditFilters,
+  getPromptAuditProtocolName,
   isMergedPromptAuditRow,
+  PROMPT_AUDIT_PROTOCOLS,
   promptAuditDeleteFilter,
   promptAuditEndpointBaseURLUpdate,
   promptAuditEndpointDrafts,
@@ -112,6 +114,47 @@ describe('prompt audit management helpers', () => {
     )
 
     expect(filter).toEqual({ ids: [9, 3] })
+  })
+
+  test('deletes selected merged rows as whole groups within the current filters', () => {
+    const filter = promptAuditDeleteFilter(
+      { ...EMPTY_PROMPT_AUDIT_FILTERS, status: 'failed', detector: 'model' },
+      [17, 42],
+      { groups: true }
+    )
+
+    // Unset filters stay undefined, which the JSON body drops: the request
+    // carries the listing filters and the groups, never bare ids or view flags.
+    expect(filter).toEqual({
+      status: 'failed',
+      detector: 'model',
+      group_ids: [17, 42],
+    })
+  })
+
+  test('sends the detector filter only while one is chosen', () => {
+    expect(
+      promptAuditFilterParams(EMPTY_PROMPT_AUDIT_FILTERS).detector
+    ).toBeUndefined()
+    expect(
+      promptAuditFilterParams({
+        ...EMPTY_PROMPT_AUDIT_FILTERS,
+        detector: 'wordlist',
+      }).detector
+    ).toBe('wordlist')
+  })
+
+  test('gives every stored protocol a label of its own', () => {
+    const labels = PROMPT_AUDIT_PROTOCOLS.map((protocol) =>
+      getPromptAuditProtocolName(protocol)
+    )
+
+    // The compaction endpoint used to borrow the Responses name, so the filter
+    // offered two options that read the same.
+    expect(getPromptAuditProtocolName('openai_responses_compaction')).toBe(
+      'OpenAI Responses Compaction'
+    )
+    expect(new Set(labels).size).toBe(PROMPT_AUDIT_PROTOCOLS.length)
   })
 
   test('asks for the merged listing only while it is switched on', () => {

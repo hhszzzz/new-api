@@ -27,6 +27,9 @@ export type PromptAuditScope =
   | 'tool_call'
   | 'tool_result'
   | 'task'
+  | 'agent_context'
+  | 'skill'
+  | 'mcp'
 export interface PromptScopePolicy {
   library_ids: string[]
   model_audit: boolean
@@ -105,6 +108,8 @@ export interface PromptAuditConfig {
   mode: PromptAuditMode
   output_mode: PromptAuditMode
   blocking_latest_turn_only: boolean
+  probe_block_enabled?: boolean
+  probe_phrases?: string[]
   manual_wordlist_action: PromptWordlistAction
   enabled_categories: string[]
   controversial_block_categories: string[]
@@ -138,13 +143,27 @@ export interface PromptAuditRepeat {
   count: number
   first_at: number
   last_at: number
-  worst_action: string
+  /**
+   * The worst decision any request of the group reached. Empty while a request
+   * is still pending and nothing worse was decided.
+   */
+  worst_decision: PromptAuditDecision
   blocks: number
   unavailable: number
 }
 
 export interface PromptAuditEvent {
-  inspection_type?: 'wordlist' | 'model' | 'wordlist_model'
+  inspection_type?:
+    | 'wordlist'
+    | 'model'
+    | 'wordlist_model'
+    | 'probe_block'
+    | 'probe_fast_pass'
+  group_key?: string
+  session_key?: string
+  request_kind?: string
+  scan_payload?: string
+  scan_payload_truncated?: boolean
   wordlist_id?: string
   wordlist_name?: string
   wordlist_version?: string
@@ -225,17 +244,21 @@ export interface PromptAuditFilters {
   model: string
   request_id: string
   direction: string
+  detector: string
   start_time: string
   end_time: string
 }
 
 export interface PromptAuditListData {
   items: PromptAuditEvent[]
+  /**
+   * Rows matching the filters: groups in the collapsed listing, and every
+   * request of the group when one group is expanded, which can exceed the
+   * requests returned.
+   */
   total: number
   page: number
   page_size: number
-  /** Requests behind the rows a collapsed listing returned. */
-  records_total?: number
 }
 
 export interface PromptAuditStats {
@@ -248,6 +271,11 @@ export interface PromptAuditStats {
 
 export interface PromptAuditDeleteFilter {
   ids?: number[]
+  /**
+   * Rows of the collapsed listing; each stands for every request of its group
+   * that the other filters match.
+   */
+  group_ids?: number[]
   status?: string
   decision?: string
   category?: string
@@ -257,6 +285,7 @@ export interface PromptAuditDeleteFilter {
   model?: string
   request_id?: string
   direction?: string
+  detector?: string
   start_time?: number
   end_time?: number
 }

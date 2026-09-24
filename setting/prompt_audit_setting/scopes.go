@@ -22,6 +22,14 @@ type ScopePolicy struct {
 // A missing policy is the pre-wordlist configuration, not an empty policy.
 // Explicitly saving an empty map disables inspection for every source.
 func (setting PromptAuditSetting) PolicyFor(scope dto.PromptAuditScope) ScopePolicy {
+	if _, exists := setting.ScopePolicies[scope]; !exists {
+		switch scope {
+		case dto.PromptScopeAgentContext, dto.PromptScopeSkill:
+			return setting.PolicyFor(dto.PromptScopeUser)
+		case dto.PromptScopeMCP:
+			return setting.PolicyFor(dto.PromptScopeToolResult)
+		}
+	}
 	if setting.ScopePolicies == nil {
 		ids := []string{}
 		if scope == dto.PromptScopeUser || scope == dto.PromptScopeTask {

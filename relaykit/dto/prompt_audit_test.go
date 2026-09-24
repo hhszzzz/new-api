@@ -5,9 +5,93 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPromptAuditAgentSourcesAndToolCorrelation(t *testing.T) {
+	for _, test := range []struct {
+		name, payload string
+		request       interface{ GetPromptAuditSnapshot() PromptAuditSnapshot }
+	}{
+		{"chat", `{"messages":[{"role":"user","content":[{"type":"text","text":"# AGENTS.md instructions for /project"},{"type":"text","text":"Fix the search button"},{"type":"text","text":"<environment_context>workspace</environment_context>"}]},{"role":"assistant","tool_calls":[{"id":"read","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"/project/SKILL.md\"}"}},{"id":"mcp","type":"function","function":{"name":"mcp__docs__read","arguments":"{}"}}]},{"role":"tool","tool_call_id":"read","content":"skill body"},{"role":"tool","tool_call_id":"mcp","content":"MCP result"}],"tools":[{"type":"function","function":{"name":"mcp__docs__read","description":"MCP description","parameters":{"type":"object"},"headers":{"Authorization":"SECRET"}}},{"type":"function","function":{"name":"read_file","description":"excluded ordinary tool"}}],"prompt_cache_key":"session-a"}`, &GeneralOpenAIRequest{}},
+		{"claude", `{"messages":[{"role":"user","content":[{"type":"text","text":"# AGENTS.md instructions for /project"},{"type":"text","text":"Fix the search button"},{"type":"text","text":"<system-reminder>workspace</system-reminder>"}]},{"role":"assistant","content":[{"type":"tool_use","id":"read","name":"read_file","input":{"path":"/project/SKILL.md"}},{"type":"mcp_tool_use","id":"mcp","name":"mcp__docs__read","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"read","content":"skill body"},{"type":"mcp_tool_result","tool_use_id":"mcp","content":"MCP result"}]}],"tools":[{"name":"mcp__docs__read","description":"MCP description","input_schema":{"type":"object"},"headers":{"Authorization":"SECRET"}},{"name":"read_file","description":"excluded ordinary tool"}],"metadata":{"user_id":"session-a"}}`, &ClaudeRequest{}},
+		{"responses", `{"input":[{"role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions for /project"},{"type":"input_text","text":"Fix the search button"},{"type":"input_text","text":"<environment_context>workspace</environment_context>"}]},{"type":"function_call","call_id":"read","name":"read_file","arguments":"{\"path\":\"/project/SKILL.md\"}"},{"type":"function_call_output","call_id":"read","output":"skill body"},{"type":"function_call","call_id":"mcp","name":"mcp__docs__read","arguments":"{}"},{"type":"function_call_output","call_id":"mcp","output":"MCP result"}],"tools":[{"type":"function","name":"mcp__docs__read","description":"MCP description","parameters":{"type":"object"},"headers":{"Authorization":"SECRET"}},{"type":"function","name":"read_file","description":"excluded ordinary tool"}],"prompt_cache_key":"session-a"}`, &OpenAIResponsesRequest{}},
+		{"gemini", `{"contents":[{"role":"user","parts":[{"text":"# AGENTS.md instructions for /project"},{"text":"Fix the search button"},{"text":"<environment_context>workspace</environment_context>"}]},{"role":"model","parts":[{"functionCall":{"name":"read_file","args":{"path":"/project/SKILL.md"}}},{"functionCall":{"name":"mcp__docs__read","args":{}}}]},{"role":"user","parts":[{"functionResponse":{"name":"read_file","response":{"result":"skill body"}}},{"functionResponse":{"name":"mcp__docs__read","response":{"result":"MCP result"}}}]}],"tools":[{"functionDeclarations":[{"name":"mcp__docs__read","description":"MCP description","parameters":{"type":"object"},"headers":{"Authorization":"SECRET"}},{"name":"read_file","description":"excluded ordinary tool"}]}]}`, &GeminiChatRequest{}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.NoError(t, kitutil.Unmarshal([]byte(test.payload), test.request))
+			snapshot := test.request.GetPromptAuditSnapshot()
+			assert.Equal(t, "Fix the search button", snapshot.HumanPrompt)
+			assert.Equal(t, "step", snapshot.RequestKind)
+			assert.True(t, snapshot.HasHistory)
+			scopes := map[string]PromptAuditScope{}
+			for _, segment := range snapshot.Segments {
+				scopes[segment.Text] = segment.SourceScope()
+			}
+			assert.Equal(t, PromptScopeSkill, scopes["skill body"])
+			assert.Equal(t, PromptScopeMCP, scopes["MCP result"])
+			assert.NotContains(t, snapshot.Text(), "SECRET")
+			assert.NotContains(t, snapshot.Text(), "excluded ordinary tool")
+			definitions := 0
+			for _, segment := range snapshot.Segments {
+				if segment.ToolDefinition {
+					definitions++
+					assert.Equal(t, PromptScopeMCP, segment.Scope)
+				}
+			}
+			assert.Equal(t, 1, definitions)
+			assert.Contains(t, snapshot.BlockingSnapshot().Text(), "Fix the search button")
+		})
+	}
+}
+
+func TestPromptAuditAgentRequestKindsAndLatestHumanTurn(t *testing.T) {
+	for _, test := range []struct{ text, kind string }{
+		{"<transcript>redacted conversation</transcript>", "side:safety"},
+		{"Perform a web search for documentation", "side:web_search"},
+		{"Web page content: redacted page", "side:web_summary"},
+		{"Describe your most recent action", "side:status"},
+		{"The user stepped away for a moment", "side:recap"},
+		{"CRITICAL: Respond with TEXT ONLY summary", "side:summary"},
+		{"Generate a short title for this conversation", "side:title"},
+	} {
+		snapshot := (&ClaudeRequest{Messages: []ClaudeMessage{{Role: "user", Content: test.text}}}).GetPromptAuditSnapshot()
+		assert.Equal(t, test.kind, snapshot.RequestKind)
+		assert.Empty(t, snapshot.HumanPrompt)
+	}
+	snapshot := (&ClaudeRequest{Messages: []ClaudeMessage{
+		{Role: "user", Content: "old question"}, {Role: "assistant", Content: "old answer"},
+		{Role: "user", Content: []any{map[string]any{"type": "text", "text": "<system-reminder>context"}, map[string]any{"type": "text", "text": "new question"}, map[string]any{"type": "text", "text": "Base directory for this skill: /skills"}}},
+		{Role: "user", Content: "<system-reminder>new reminder"},
+	}}).GetPromptAuditSnapshot()
+	assert.Equal(t, "new question", snapshot.HumanPrompt)
+	assert.NotContains(t, snapshot.BlockingSnapshot().Text(), "old question")
+	assert.Contains(t, snapshot.BlockingSnapshot().Text(), "Base directory for this skill:")
+	command := (&GeneralOpenAIRequest{Messages: []Message{{Role: "user", Content: "<command-name>/test</command-name><command-args>hello</command-args>"}}}).GetPromptAuditSnapshot()
+	assert.Contains(t, command.HumanPrompt, "<command-name>")
+}
+
+func TestPromptAuditMCPDefinitionsInsideNamespace(t *testing.T) {
+	for _, declaration := range []string{
+		`{"type":"namespace","name":"tools","tools":[{"type":"function","name":"mcp__docs__read","description":"inspect this definition","parameters":{"type":"object"},"headers":{"Authorization":"SECRET"}}]}`,
+		`{"type":"namespace","name":"mcp__docs","children":[{"type":"function","name":"read","description":"inspect this definition","parameters":{"type":"object"},"headers":{"Authorization":"SECRET"}}]}`,
+	} {
+		request := &OpenAIResponsesRequest{Input: json.RawMessage(`"question"`), Tools: json.RawMessage("[" + declaration + "]")}
+		snapshot := request.GetPromptAuditSnapshot()
+		assert.Contains(t, snapshot.Text(), "inspect this definition")
+		assert.NotContains(t, snapshot.Text(), "SECRET")
+		var definitions []PromptAuditSegment
+		for _, segment := range snapshot.Segments {
+			if segment.ToolDefinition {
+				definitions = append(definitions, segment)
+			}
+		}
+		require.Len(t, definitions, 1)
+		assert.Equal(t, PromptScopeMCP, definitions[0].SourceScope())
+	}
+}
 
 func TestPromptAuditSnapshotOpenAIIncludesClientContextLatestUserFirst(t *testing.T) {
 	reasoning := "visible assistant reasoning"
@@ -314,13 +398,13 @@ func TestPromptAuditSnapshotBlockingPreservesNonConversationSourcesAndCurrentToo
 		{Role: "developer", Text: "developer policy"},
 		{Role: "user", User: true, Text: "old user"},
 		{Role: "assistant", Text: "previous answer"},
-		{Role: "assistant", Scope: PromptScopeToolCall, Text: "old tool arguments"},
+		{Role: "assistant", Scope: PromptScopeToolCall, Text: "old tool arguments", ToolRoundStart: true},
 		{Role: "tool", Scope: PromptScopeToolResult, Text: "old tool result"},
 		{Role: "user", User: true, Text: "latest user"},
 		{Role: "assistant", Text: "current reasoning"},
-		{Role: "assistant", Scope: PromptScopeToolCall, Text: "earlier tool arguments"},
+		{Role: "assistant", Scope: PromptScopeToolCall, Text: "earlier tool arguments", ToolRoundStart: true},
 		{Role: "tool", Scope: PromptScopeToolResult, Text: "earlier tool result"},
-		{Role: "assistant", Scope: PromptScopeToolCall, Text: "tool arguments"},
+		{Role: "assistant", Scope: PromptScopeToolCall, Text: "tool arguments", ToolRoundStart: true},
 		{Role: "tool", Scope: PromptScopeToolResult, Text: "tool result"},
 		{Role: "task", Scope: PromptScopeTask, User: true, Text: "task prompt"},
 	}}
@@ -332,7 +416,7 @@ func TestPromptAuditSnapshotBlockingPreservesNonConversationSourcesAndCurrentToo
 func TestPromptAuditSnapshotBlockingKeepsNewestToolRoundBeforeTheLatestTurn(t *testing.T) {
 	snapshot := PromptAuditSnapshot{Segments: []PromptAuditSegment{
 		{Role: "user", User: true, Text: "first question"},
-		{Role: "assistant", Scope: PromptScopeToolCall, Text: "tool arguments"},
+		{Role: "assistant", Scope: PromptScopeToolCall, Text: "tool arguments", ToolRoundStart: true},
 		{Role: "tool", Scope: PromptScopeToolResult, Text: "tool result"},
 		{Role: "assistant", Text: "answer"},
 		{Role: "user", User: true, Text: "follow-up"},
@@ -345,9 +429,9 @@ func TestPromptAuditSnapshotBlockingKeepsNewestToolRoundBeforeTheLatestTurn(t *t
 func TestPromptAuditSnapshotBlockingKeepsOnlyTheNewestToolRound(t *testing.T) {
 	snapshot := PromptAuditSnapshot{Segments: []PromptAuditSegment{
 		{Role: "user", User: true, Text: "question"},
-		{Role: "assistant", Scope: PromptScopeToolCall, Text: "first call"},
+		{Role: "assistant", Scope: PromptScopeToolCall, Text: "first call", ToolRoundStart: true},
 		{Role: "tool", Scope: PromptScopeToolResult, Text: "first result"},
-		{Role: "assistant", Scope: PromptScopeToolCall, Text: "second call"},
+		{Role: "assistant", Scope: PromptScopeToolCall, Text: "second call", ToolRoundStart: true},
 		{Role: "tool", Scope: PromptScopeToolResult, Text: "second result"},
 	}}
 	// The run is bounded by its newest tool content: a superseded round of the same
@@ -355,10 +439,24 @@ func TestPromptAuditSnapshotBlockingKeepsOnlyTheNewestToolRound(t *testing.T) {
 	assert.Equal(t, []string{"question", "second call", "second result"}, orderedSegmentTexts(snapshot.BlockingSnapshot()))
 }
 
-func TestPromptAuditSnapshotBlockingKeepsAParallelToolRoundTogether(t *testing.T) {
+func TestPromptAuditSnapshotBlockingKeepsAnUnmarkedToolRunWhole(t *testing.T) {
 	snapshot := PromptAuditSnapshot{Segments: []PromptAuditSegment{
 		{Role: "user", User: true, Text: "question"},
 		{Role: "assistant", Scope: PromptScopeToolCall, Text: "first call"},
+		{Role: "tool", Scope: PromptScopeToolResult, Text: "first result"},
+		{Role: "assistant", Scope: PromptScopeToolCall, Text: "second call"},
+		{Role: "tool", Scope: PromptScopeToolResult, Text: "second result"},
+	}}
+	// Without a round mark, call/result pairs from one parallel round look exactly
+	// like two sequential rounds. Splitting them would drop a result no earlier
+	// request carried, so the whole run stays under inspection.
+	assert.Equal(t, []string{"question", "first call", "first result", "second call", "second result"}, orderedSegmentTexts(snapshot.BlockingSnapshot()))
+}
+
+func TestPromptAuditSnapshotBlockingKeepsAParallelToolRoundTogether(t *testing.T) {
+	snapshot := PromptAuditSnapshot{Segments: []PromptAuditSegment{
+		{Role: "user", User: true, Text: "question"},
+		{Role: "assistant", Scope: PromptScopeToolCall, Text: "first call", ToolRoundStart: true},
 		{Role: "assistant", Scope: PromptScopeToolCall, Text: "second call"},
 		{Role: "tool", Scope: PromptScopeToolResult, Text: "first result"},
 		{Role: "tool", Scope: PromptScopeToolResult, Text: "second result"},
@@ -371,13 +469,81 @@ func TestPromptAuditSnapshotBlockingKeepsAParallelToolRoundTogether(t *testing.T
 func TestPromptAuditSnapshotBlockingKeepsAnUnansweredToolCall(t *testing.T) {
 	snapshot := PromptAuditSnapshot{Segments: []PromptAuditSegment{
 		{Role: "user", User: true, Text: "question"},
-		{Role: "assistant", Scope: PromptScopeToolCall, Text: "answered call"},
+		{Role: "assistant", Scope: PromptScopeToolCall, Text: "answered call", ToolRoundStart: true},
 		{Role: "tool", Scope: PromptScopeToolResult, Text: "answered result"},
-		{Role: "assistant", Scope: PromptScopeToolCall, Text: "running call"},
+		{Role: "assistant", Scope: PromptScopeToolCall, Text: "running call", ToolRoundStart: true},
 	}}
 	// A request can carry a call whose result has not been produced yet. It is the
 	// newest tool content the request holds, so it is the round that survives.
 	assert.Equal(t, []string{"question", "running call"}, orderedSegmentTexts(snapshot.BlockingSnapshot()))
+}
+
+// The builders mark where each assistant response opened its tool round, so the
+// blocking snapshot keeps exactly the newest response's calls and every result
+// they produced, whichever order the client recorded them in.
+func TestPromptAuditSnapshotBlockingToolRoundsPerProtocol(t *testing.T) {
+	for _, testCase := range []struct {
+		name    string
+		request Request
+		want    []string
+	}{
+		{
+			// Codex records a parallel round as call/output pairs, and its reasoning
+			// items carry no text: only the reasoning item separates responses.
+			name: "responses parallel round recorded as call/output pairs",
+			request: &OpenAIResponsesRequest{Input: json.RawMessage(`[
+				{"type":"message","role":"user","content":[{"type":"input_text","text":"question"}]},
+				{"type":"reasoning","summary":[],"encrypted_content":"OPAQUE"},
+				{"type":"function_call","call_id":"a","name":"read","arguments":"{\"path\":\"old call\"}"},
+				{"type":"function_call_output","call_id":"a","output":"old output"},
+				{"type":"reasoning","summary":[],"encrypted_content":"OPAQUE"},
+				{"type":"function_call","call_id":"b","name":"read","arguments":"{\"path\":\"first call\"}"},
+				{"type":"function_call_output","call_id":"b","output":"first output"},
+				{"type":"function_call","call_id":"c","name":"read","arguments":"{\"path\":\"second call\"}"},
+				{"type":"function_call_output","call_id":"c","output":"second output"}
+			]`)},
+			want: []string{"question", "first call", "first output", "second call", "second output"},
+		},
+		{
+			name: "responses rounds without anything between them stay whole",
+			request: &OpenAIResponsesRequest{Input: json.RawMessage(`[
+				{"type":"message","role":"user","content":[{"type":"input_text","text":"question"}]},
+				{"type":"function_call","call_id":"a","name":"read","arguments":"{\"path\":\"first call\"}"},
+				{"type":"function_call_output","call_id":"a","output":"first output"},
+				{"type":"function_call","call_id":"b","name":"read","arguments":"{\"path\":\"second call\"}"},
+				{"type":"function_call_output","call_id":"b","output":"second output"}
+			]`)},
+			want: []string{"question", "first call", "first output", "second call", "second output"},
+		},
+		{
+			name: "chat completions round per assistant message",
+			request: &GeneralOpenAIRequest{Messages: []Message{
+				{Role: "user", Content: "question"},
+				{Role: "assistant", ToolCalls: json.RawMessage(`[{"type":"function","function":{"name":"read","arguments":"{\"path\":\"old call\"}"}}]`)},
+				{Role: "tool", Content: "old output"},
+				{Role: "assistant", ToolCalls: json.RawMessage(`[{"type":"function","function":{"name":"read","arguments":"{\"path\":\"first call\"}"}},{"type":"function","function":{"name":"read","arguments":"{\"path\":\"second call\"}"}}]`)},
+				{Role: "tool", Content: "first output"},
+				{Role: "tool", Content: "second output"},
+			}},
+			want: []string{"question", "first call\nsecond call", "first output", "second output"},
+		},
+		{
+			name: "claude messages round per assistant message",
+			request: &ClaudeRequest{Messages: []ClaudeMessage{
+				{Role: "user", Content: "question"},
+				{Role: "assistant", Content: []any{map[string]any{"type": "tool_use", "input": map[string]any{"path": "old call"}}}},
+				{Role: "user", Content: []any{map[string]any{"type": "tool_result", "content": "old output"}}},
+				{Role: "assistant", Content: []any{map[string]any{"type": "tool_use", "input": map[string]any{"path": "new call"}}}},
+				{Role: "user", Content: []any{map[string]any{"type": "tool_result", "content": "new output"}}},
+			}},
+			want: []string{"question", "new call", "new output"},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			snapshot := PromptAuditSnapshotOf(testCase.request)
+			assert.Equal(t, testCase.want, orderedSegmentTexts(snapshot.BlockingSnapshot()))
+		})
+	}
 }
 
 func TestPromptAuditSnapshotBlockingSnapshotKeepsFullSnapshotWithoutUserTurn(t *testing.T) {

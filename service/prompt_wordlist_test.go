@@ -347,22 +347,27 @@ func TestPromptInspectionUsesBlockingSnapshot(t *testing.T) {
 	setting.SetCheckSensitiveOnPromptEnabled(false)
 
 	tests := []struct {
-		name   string
-		mode   string
-		latest bool
-		direct string
-		want   bool
+		name         string
+		mode         string
+		latest       bool
+		direct       string
+		wantModel    bool
+		wantWordlist bool
 	}{
-		{name: "blocking with the switch on narrows", mode: prompt_audit_setting.ModeBlocking, latest: true, direct: PromptAuditDirectionInput, want: true},
-		{name: "blocking with the switch off widens", mode: prompt_audit_setting.ModeBlocking, latest: false, direct: PromptAuditDirectionInput, want: false},
-		{name: "async audit never narrows", mode: prompt_audit_setting.ModeAsyncAudit, latest: true, direct: PromptAuditDirectionInput, want: false},
-		{name: "off never narrows", mode: prompt_audit_setting.ModeOff, latest: true, direct: PromptAuditDirectionInput, want: false},
-		{name: "output direction never narrows", mode: prompt_audit_setting.ModeBlocking, latest: true, direct: PromptAuditDirectionOutput, want: false},
+		{name: "blocking with the switch on narrows both", mode: prompt_audit_setting.ModeBlocking, latest: true, direct: PromptAuditDirectionInput, wantModel: true, wantWordlist: true},
+		{name: "blocking with the switch off widens both", mode: prompt_audit_setting.ModeBlocking, latest: false, direct: PromptAuditDirectionInput},
+		// The wordlist gate refuses synchronously in every mode, so it follows the
+		// switch even where the model audit reads the whole request.
+		{name: "async audit narrows only the wordlist gate", mode: prompt_audit_setting.ModeAsyncAudit, latest: true, direct: PromptAuditDirectionInput, wantWordlist: true},
+		{name: "model audit off still narrows the wordlist gate", mode: prompt_audit_setting.ModeOff, latest: true, direct: PromptAuditDirectionInput, wantWordlist: true},
+		{name: "the switch off widens the wordlist gate in every mode", mode: prompt_audit_setting.ModeOff, latest: false, direct: PromptAuditDirectionInput},
+		{name: "output direction never narrows", mode: prompt_audit_setting.ModeBlocking, latest: true, direct: PromptAuditDirectionOutput},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			configured := prompt_audit_setting.PromptAuditSetting{Mode: test.mode, BlockingLatestTurnOnly: test.latest}
-			assert.Equal(t, test.want, promptInspectionUsesBlockingSnapshot(test.direct, configured))
+			assert.Equal(t, test.wantModel, promptInspectionUsesBlockingSnapshot(test.direct, configured))
+			assert.Equal(t, test.wantWordlist, promptWordlistUsesBlockingSnapshot(test.direct, configured))
 		})
 	}
 
@@ -731,7 +736,6 @@ func TestInspectPromptBlockingSnapshotNarrowsToLatestTurn(t *testing.T) {
 			dto.PromptScopeUser: {LibraryIDs: []string{prompt_audit_setting.ManualWordlistID}},
 		},
 	}
-	configured.PublishConfig()
 
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
@@ -746,25 +750,6 @@ func TestInspectPromptBlockingSnapshotNarrowsToLatestTurn(t *testing.T) {
 		Protocol: "openai",
 		Model:    "gpt-4o",
 	}
-
-	result, apiErr := InspectPrompt(c, multiTurnCleanLatest)
-	require.Nil(t, apiErr)
-	assert.False(t, result.Blocked)
-
-	// The switch governs both detectors. With it off the wordlist widens with the
-	// model, so the same older turn reaches it and the request is blocked.
-	widened := configured
-	widened.BlockingLatestTurnOnly = false
-	widened.ConfigVersion = "narrow-blocking-v1-widened"
-	widened.PublishConfig()
-
-	widenedResult, widenedErr := InspectPrompt(c, multiTurnCleanLatest)
-	require.NotNil(t, widenedErr)
-	assert.True(t, widenedResult.Blocked)
-	assert.Equal(t, "wordlist", widenedResult.InspectionType)
-	require.NotNil(t, widenedResult.Wordlist)
-	assert.Equal(t, dto.PromptScopeUser, widenedResult.Wordlist.Scope)
-
 	// Multi-turn conversation where the latest user message contains new_forbidden_word
 	multiTurnBadLatest := PromptAuditRequest{
 		Snapshot: dto.PromptAuditSnapshot{Segments: []dto.PromptAuditSegment{
@@ -776,10 +761,50 @@ func TestInspectPromptBlockingSnapshotNarrowsToLatestTurn(t *testing.T) {
 		Model:    "gpt-4o",
 	}
 
-	badResult, badErr := InspectPrompt(c, multiTurnBadLatest)
-	require.NotNil(t, badErr)
-	assert.True(t, badResult.Blocked)
-	assert.Equal(t, "wordlist", badResult.InspectionType)
+	// The wordlist gate refuses requests in every mode, so it follows the
+	// latest-turn switch whatever mode the model audit runs in — off included: a
+	// word left in an older turn must not refuse every later request.
+	for _, mode := range []string{prompt_audit_setting.ModeBlocking, prompt_audit_setting.ModeAsyncAudit, prompt_audit_setting.ModeOff} {
+		narrowed := configured
+		narrowed.Mode = mode
+		narrowed.ConfigVersion = "narrow-" + mode
+		narrowed.PublishConfig()
+
+		result, apiErr := InspectPrompt(c, multiTurnCleanLatest)
+		require.Nil(t, apiErr, mode)
+		assert.False(t, result.Blocked, mode)
+
+		badResult, badErr := InspectPrompt(c, multiTurnBadLatest)
+		require.NotNil(t, badErr, mode)
+		assert.True(t, badResult.Blocked, mode)
+		assert.Equal(t, "wordlist", badResult.InspectionType, mode)
+
+		// The policy preview narrows the same way, so it predicts live traffic.
+		// Its model half has no node to ask here and fails; only the wordlist
+		// half is under test.
+		preview, _ := TestPromptAuditPolicy(context.Background(), PromptAuditDirectionInput, multiTurnCleanLatest.Snapshot, "")
+		assert.Nil(t, preview.Wordlist, mode)
+		assert.False(t, preview.Blocked, mode)
+	}
+
+	// With the switch off the wordlist gate reads the whole request, so the same
+	// older turn reaches it and the request is blocked — and the preview says so.
+	widened := configured
+	widened.BlockingLatestTurnOnly = false
+	widened.ConfigVersion = "narrow-blocking-v1-widened"
+	widened.PublishConfig()
+
+	widenedResult, widenedErr := InspectPrompt(c, multiTurnCleanLatest)
+	require.NotNil(t, widenedErr)
+	assert.True(t, widenedResult.Blocked)
+	assert.Equal(t, "wordlist", widenedResult.InspectionType)
+	require.NotNil(t, widenedResult.Wordlist)
+	assert.Equal(t, dto.PromptScopeUser, widenedResult.Wordlist.Scope)
+	preview, err := TestPromptAuditPolicy(context.Background(), PromptAuditDirectionInput, multiTurnCleanLatest.Snapshot, "")
+	require.NoError(t, err)
+	assert.True(t, preview.Blocked)
+	require.NotNil(t, preview.Wordlist)
+	assert.Equal(t, dto.PromptScopeUser, preview.Wordlist.Scope)
 }
 
 func TestPromptWordlistImportFiltersSingleCharacterNoisyTokens(t *testing.T) {

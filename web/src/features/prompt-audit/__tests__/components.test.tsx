@@ -20,7 +20,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { ReactNode } from 'react'
-import { beforeEach, describe, expect, test, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
 import { PromptAuditDeleteDialog } from '../components/prompt-audit-delete-dialog'
 import { PromptAuditDetailSheet } from '../components/prompt-audit-detail-sheet'
@@ -48,12 +48,15 @@ vi.mock('../api', () => ({
   reviewPromptAudit: reviewPromptAuditMock,
 }))
 
+// The few translations a test needs; every other key reads as itself.
+const translations = vi.hoisted(() => ({}) as Record<string, string>)
+
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string, values?: Record<string, string | number>) =>
       Object.entries(values || {}).reduce(
         (result, [name, value]) => result.replace(`{{${name}}}`, String(value)),
-        key
+        translations[key] ?? key
       ),
   }),
 }))
@@ -145,6 +148,9 @@ describe('prompt audit management components', () => {
       data: { deleted_count: 2 },
     })
   })
+  afterEach(() => {
+    for (const key of Object.keys(translations)) delete translations[key]
+  })
 
   test('never renders an API-provided full prompt without the full-prompt permission', async () => {
     renderWithQueryClient(
@@ -177,9 +183,125 @@ describe('prompt audit management components', () => {
       />
     )
 
+    expect(
+      await screen.findByRole('button', { name: 'Retained prompt copy' })
+    ).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByText('raw-secret-prompt')).not.toBeInTheDocument()
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Retained prompt copy' })
+    )
     expect(await screen.findByText('raw-secret-prompt')).toBeVisible()
     expect(screen.getByText('Full prompt')).toBeVisible()
     expect(screen.queryByText('redacted-preview')).not.toBeInTheDocument()
+  })
+
+  test('tells an administrator viewing the full prompt what the retained copy holds', async () => {
+    renderWithQueryClient(
+      <PromptAuditDetailSheet
+        eventID={EVENT.id}
+        canViewFullPrompt
+        canManage={false}
+        canDelete={false}
+        onOpenChange={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    )
+
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Retained prompt copy' })
+    )
+    expect(await screen.findByText('raw-secret-prompt')).toBeVisible()
+    expect(
+      screen.getByText(
+        'This retained copy is the start of the whole request, not only the parts sent for inspection, which are listed under Inspected scope.'
+      )
+    ).toBeVisible()
+    expect(
+      screen.queryByText('Your permission only allows the redacted preview.')
+    ).not.toBeInTheDocument()
+  })
+
+  test('names the protocol in the interface language', async () => {
+    translations['Async Task'] = 'Tâche asynchrone'
+    getPromptAuditMock.mockResolvedValue({
+      success: true,
+      data: { ...EVENT, protocol: 'task' },
+    })
+
+    renderWithQueryClient(
+      <PromptAuditDetailSheet
+        eventID={EVENT.id}
+        canViewFullPrompt={false}
+        canManage={false}
+        canDelete={false}
+        onOpenChange={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    )
+
+    expect(await screen.findByText('Tâche asynchrone')).toBeVisible()
+  })
+
+  test('shows actual inspected text by source and folds long segments', async () => {
+    getPromptAuditMock.mockResolvedValue({
+      success: true,
+      data: {
+        ...EVENT,
+        scan_payload_truncated: true,
+        scan_payload: JSON.stringify({
+          segments: [
+            { scope: 'user', text: 'Extracted user question' },
+            { scope: 'skill', text: 'Long skill body '.repeat(80) },
+          ],
+        }),
+      },
+    })
+    renderWithQueryClient(
+      <PromptAuditDetailSheet
+        eventID={EVENT.id}
+        canViewFullPrompt
+        canManage={false}
+        canDelete={false}
+        onOpenChange={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    )
+    expect(await screen.findByText('Extracted user question')).toBeVisible()
+    expect(
+      screen.queryByText('Long skill body '.repeat(80).trim())
+    ).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Skills' }))
+    expect(screen.getByText('Long skill body '.repeat(80).trim())).toBeVisible()
+    expect(
+      screen.getByText(
+        'Inspected content was truncated to the retention limit.'
+      )
+    ).toBeVisible()
+  })
+
+  test('never renders retained inspection text without content permission', async () => {
+    getPromptAuditMock.mockResolvedValue({
+      success: true,
+      data: {
+        ...EVENT,
+        scan_payload: JSON.stringify({
+          segments: [{ scope: 'mcp', text: 'MCP private content' }],
+        }),
+      },
+    })
+    renderWithQueryClient(
+      <PromptAuditDetailSheet
+        eventID={EVENT.id}
+        canViewFullPrompt={false}
+        canManage={false}
+        canDelete={false}
+        onOpenChange={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    )
+    expect(await screen.findByText('redacted-preview')).toBeVisible()
+    expect(screen.queryByText('MCP private content')).not.toBeInTheDocument()
+    expect(screen.queryByText('Inspected content')).not.toBeInTheDocument()
   })
 
   test('separates the scopes that were inspected from the retained copy', async () => {
@@ -262,6 +384,38 @@ describe('prompt audit management components', () => {
     expect(
       screen.queryByRole('link', { name: /Related/ })
     ).not.toBeInTheDocument()
+  })
+
+  test('links the logs of generated output the audit blocked', async () => {
+    // Output is judged after upstream already produced and billed it, so its
+    // usage and error logs exist whatever the verdict.
+    getPromptAuditMock.mockResolvedValue({
+      success: true,
+      data: {
+        ...EVENT,
+        direction: 'output',
+        decision: 'block',
+        action: 'block',
+      },
+    })
+
+    renderWithQueryClient(
+      <PromptAuditDetailSheet
+        eventID={EVENT.id}
+        canViewFullPrompt={false}
+        canManage={false}
+        canDelete={false}
+        onOpenChange={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    )
+
+    expect(
+      await screen.findByRole('link', { name: /Related usage logs/ })
+    ).toBeVisible()
+    expect(
+      screen.getByRole('link', { name: /Related error logs/ })
+    ).toBeVisible()
   })
 
   test('links the usage and error logs of a request that was let through', async () => {
