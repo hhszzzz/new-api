@@ -579,6 +579,85 @@ func TestAccountPoolPublicIDDoesNotExposeCredentialIdentity(t *testing.T) {
 	assert.NotEqual(t, publicID, accountPoolPublicID("management-secret", account_pool_setting.ProviderClaude, credentialName, authIndex))
 }
 
+func TestAccountPoolManagerReturnsExpiredSnapshotWhileSharedRefreshIsBlocked(t *testing.T) {
+	for _, failRefresh := range []bool{false, true} {
+		t.Run(fmt.Sprintf("refresh_failure=%t", failRefresh), func(t *testing.T) {
+			now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+			fake := newAccountPoolFakeManagement(t)
+			manager := fake.manager(now)
+			first, err := manager.get(t.Context())
+			require.NoError(t, err)
+
+			manager.now = func() time.Time { return now.Add(10 * time.Minute) }
+			fake.mu.Lock()
+			fake.failUsage = failRefresh
+			fake.mu.Unlock()
+			started := make(chan struct{})
+			release := make(chan struct{})
+			var releaseOnce sync.Once
+			unblock := func() { releaseOnce.Do(func() { close(release) }) }
+			defer unblock()
+			var rounds atomic.Int32
+			transport := manager.client.Transport
+			if transport == nil {
+				transport = http.DefaultTransport
+			}
+			manager.client.Transport = accountPoolRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+				if request.URL.Path == "/v0/management/auth-files" {
+					if rounds.Add(1) == 1 {
+						close(started)
+					}
+					select {
+					case <-release:
+					case <-request.Context().Done():
+						return nil, request.Context().Err()
+					}
+				}
+				return transport.RoundTrip(request)
+			})
+			// The timeout only guards a deadlock: the upstream stays blocked until
+			// both cache reads have completed, so this does not depend on timing.
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			cached, err := manager.get(ctx)
+			require.NoError(t, err, "an expired cache read must not wait for quota probes")
+			assert.True(t, cached.Stale)
+			assert.Equal(t, first.UpdatedAt, cached.UpdatedAt)
+			assert.Equal(t, first.Accounts, cached.Accounts)
+			select {
+			case <-started:
+			case <-ctx.Done():
+				t.Fatal("background refresh did not start")
+			}
+
+			cached.Accounts[0].DisplayName = "changed by reader"
+			second, err := manager.get(ctx)
+			require.NoError(t, err)
+			assert.Equal(t, first.Accounts, second.Accounts)
+			completion := manager.startRefresh()
+			unblock()
+			select {
+			case result := <-completion:
+				require.NoError(t, result.Err)
+			case <-ctx.Done():
+				t.Fatal("background refresh did not complete")
+			}
+
+			updated, err := manager.get(ctx)
+			require.NoError(t, err)
+			assert.True(t, updated.NextRefreshAt.After(manager.now()))
+			assert.Equal(t, failRefresh, updated.Stale)
+			assert.Equal(t, failRefresh, updated.Partial)
+			if failRefresh {
+				assert.Equal(t, first.UpdatedAt, updated.UpdatedAt)
+			} else {
+				assert.Equal(t, manager.now(), updated.UpdatedAt)
+			}
+			assert.Equal(t, int32(1), rounds.Load(), "readers share one refresh and respect the retry schedule")
+		})
+	}
+}
+
 func TestAccountPoolManagerKeepsOldSnapshotWhenRefreshFails(t *testing.T) {
 	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
 	fake := newAccountPoolFakeManagement(t)
@@ -594,7 +673,7 @@ func TestAccountPoolManagerKeepsOldSnapshotWhenRefreshFails(t *testing.T) {
 	manager.snapshot.NextRefreshAt = now
 	manager.mu.Unlock()
 
-	fallback, err := manager.get(context.Background())
+	fallback, err := manager.refresh(context.Background())
 	require.NoError(t, err)
 	assert.True(t, fallback.Stale)
 	assert.True(t, fallback.Partial)

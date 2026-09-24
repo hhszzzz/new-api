@@ -248,7 +248,13 @@ func (manager *accountPoolManager) get(ctx context.Context) (*accountPoolSnapsho
 	manager.mu.RLock()
 	snapshot := cloneAccountPoolSnapshot(manager.snapshot)
 	manager.mu.RUnlock()
-	if snapshot != nil && now.Before(snapshot.NextRefreshAt) {
+	if snapshot != nil {
+		if !now.Before(snapshot.NextRefreshAt) {
+			// Quota probes can take an entire refresh round. Let readers use the
+			// last snapshot while one shared round updates it in the background.
+			snapshot.Stale = true
+			manager.startRefresh()
+		}
 		return snapshot, nil
 	}
 	return manager.refresh(ctx)
@@ -273,10 +279,14 @@ func (manager *accountPoolManager) refreshManually(ctx context.Context) (*accoun
 	return manager.refresh(ctx)
 }
 
-func (manager *accountPoolManager) refresh(ctx context.Context) (*accountPoolSnapshot, error) {
-	resultChannel := manager.refreshGroup.DoChan("account-pool", func() (interface{}, error) {
+func (manager *accountPoolManager) startRefresh() <-chan singleflight.Result {
+	return manager.refreshGroup.DoChan("account-pool", func() (any, error) {
 		return manager.performRefresh()
 	})
+}
+
+func (manager *accountPoolManager) refresh(ctx context.Context) (*accountPoolSnapshot, error) {
+	resultChannel := manager.startRefresh()
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
