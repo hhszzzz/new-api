@@ -9,7 +9,8 @@ import (
 
 // The live DeepSWE API uses total/runs_total, unlike the published history
 // snapshot's valid_tasks/total_runs. Keep that translation at the source boundary.
-func normalizeModelRadarMetrics(payload modelRadarMetricsPayload, published []ModelRadarConfiguration) ([]ModelRadarConfiguration, ModelRadarHistoryFrame, error) {
+// harnesses maps model|effort to the runner named by the published payload.
+func normalizeModelRadarMetrics(payload modelRadarMetricsPayload, harnesses map[string]string) ([]ModelRadarConfiguration, ModelRadarHistoryFrame, error) {
 	if payload.Schema != 3 || payload.Mode != "equal_latest_3" || payload.BenchmarkID != "deep-swe" || payload.ScoringMode != "binary-majority" {
 		return nil, ModelRadarHistoryFrame{}, errors.New("unsupported live metrics schema or benchmark")
 	}
@@ -30,10 +31,6 @@ func normalizeModelRadarMetrics(payload modelRadarMetricsPayload, published []Mo
 		if point.CombinedCostIndex != nil && *point.CombinedCostIndex > maxCost {
 			maxCost = *point.CombinedCostIndex
 		}
-	}
-	harnesses := make(map[[2]string]string, len(published))
-	for _, configuration := range published {
-		harnesses[[2]string{configuration.Model, configuration.Effort}] = configuration.Harness
 	}
 	configurations := make([]ModelRadarConfiguration, 0, len(payload.Points))
 	frame := ModelRadarHistoryFrame{Ts: updatedAt, Points: make([]ModelRadarHistoryPoint, 0, len(payload.Points))}
@@ -57,7 +54,7 @@ func normalizeModelRadarMetrics(payload modelRadarMetricsPayload, published []Mo
 			point.LatestGradedAt = metric.SourceUpdatedAt
 		}
 		if strings.TrimSpace(point.Harness) == "" {
-			point.Harness = harnesses[[2]string{strings.TrimSpace(point.Model), strings.ToLower(strings.TrimSpace(point.Effort))}]
+			point.Harness = harnesses[strings.TrimSpace(point.Model)+"|"+strings.TrimSpace(point.Effort)]
 		}
 		configuration, key, err := normalizeModelRadarConfiguration(point)
 		if err != nil {
@@ -70,6 +67,14 @@ func normalizeModelRadarMetrics(payload modelRadarMetricsPayload, published []Mo
 		historyPoint, _, err := normalizeModelRadarHistoryPoint(point)
 		if err != nil {
 			return nil, ModelRadarHistoryFrame{}, err
+		}
+		// The corrected price is supplementary, so an unusable value is dropped
+		// instead of rejecting the configuration.
+		if metric.CorrectedAveragePriceUSD != nil && isFiniteInRange(*metric.CorrectedAveragePriceUSD, 0, math.MaxFloat64) {
+			configuration.CorrectedAveragePriceUSD = metric.CorrectedAveragePriceUSD
+			if metric.CorrectedCostSamples != nil && *metric.CorrectedCostSamples >= 0 {
+				configuration.CorrectedCostSamples = metric.CorrectedCostSamples
+			}
 		}
 		configurations = append(configurations, configuration)
 		frame.Points = append(frame.Points, historyPoint)

@@ -1,7 +1,10 @@
 package service
 
 import (
+	"bytes"
 	"context"
+	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -146,7 +149,8 @@ func TestFetchModelRadarNormalizesCapabilityDataAndDropsRecommendations(t *testi
 	assert.Equal(t, int64(1785024000), *data.Configurations[0].LatestGradedAt)
 	require.Len(t, data.History, 2)
 	require.Len(t, data.DegradationAlerts, 1)
-	assert.Equal(t, 3.0, data.DegradationAlerts[0].Degradation48hIQ)
+	require.NotNil(t, data.DegradationAlerts[0].Degradation48hIQ)
+	assert.Equal(t, 3.0, *data.DegradationAlerts[0].Degradation48hIQ)
 
 	encoded, err := common.Marshal(data)
 	require.NoError(t, err)
@@ -165,7 +169,7 @@ func TestFetchModelRadarRejectsInvalidSourceContracts(t *testing.T) {
 		want       string
 	}{
 		{name: "invalid JSON", efficiency: []byte(`{"schema":`), insights: insights, status: http.StatusOK, want: "decode"},
-		{name: "wrong efficiency schema", efficiency: []byte(`{"schema":3,"type":"distributed_intelligence_efficiency","source_updated_at":"2026-07-26T00:00:00Z","points":[{}],"history":[{}]}`), insights: insights, status: http.StatusOK, want: "unsupported source schema"},
+		{name: "wrong efficiency schema", efficiency: []byte(`{"schema":3,"type":"distributed_intelligence_efficiency","source_updated_at":"2026-07-26T00:00:00Z","points":[{}],"history":[{"at":"2026-07-26T00:00:00Z","points":[]}]}`), insights: insights, status: http.StatusOK, want: "unsupported source schema"},
 		{name: "insights unavailable", efficiency: efficiency, insights: insights, status: http.StatusBadGateway, want: "unexpected HTTP status 502"},
 	}
 	for _, test := range tests {
@@ -178,13 +182,33 @@ func TestFetchModelRadarRejectsInvalidSourceContracts(t *testing.T) {
 	}
 }
 
-func TestFetchModelRadarRejectsOversizedResponse(t *testing.T) {
-	_, insights := modelRadarTestPayloads(t)
-	server := newModelRadarSourceServer(t, []byte(strings.Repeat("x", modelRadarEfficiencyMaxBytes+1)), insights, http.StatusOK)
+func TestFetchModelRadarSourceRejectsResponseOverLimit(t *testing.T) {
+	// A body over the cap must report the cap, not the truncated-JSON decode
+	// error it causes, on both the streaming and the buffered decode paths.
+	efficiency, _ := modelRadarTestPayloads(t)
+	server := newModelRadarSourceServer(t, efficiency, nil, http.StatusOK)
 	defer server.Close()
 
-	_, err := fetchModelRadar(context.Background(), server.Client(), server.URL+"/efficiency", server.URL+"/metrics", server.URL+"/insights")
-	require.ErrorContains(t, err, "response exceeds")
+	for name, decode := range map[string]func(io.Reader) error{
+		"streaming": func(body io.Reader) error {
+			_, err := decodeModelRadarEfficiency(body)
+			return err
+		},
+		"buffered": func(body io.Reader) error {
+			var payload modelRadarEfficiencyPayload
+			data, err := io.ReadAll(body)
+			if err != nil {
+				return err
+			}
+			return common.Unmarshal(data, &payload)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			read, err := fetchModelRadarSource(context.Background(), server.Client(), server.URL+"/efficiency", 64, decode)
+			require.ErrorContains(t, err, "response exceeds 64 bytes")
+			assert.Equal(t, int64(65), read)
+		})
+	}
 }
 
 func TestFetchModelRadarHonorsRequestDeadline(t *testing.T) {
@@ -211,26 +235,29 @@ func TestFetchModelRadarRejectsNonJSONContentType(t *testing.T) {
 	require.ErrorContains(t, err, "expected JSON response")
 }
 
-func TestNormalizeModelRadarEfficiencyRejectsDuplicateAndOutOfRangeData(t *testing.T) {
+func TestNormalizeModelRadarEfficiencyIgnoresUnusablePublishedPoints(t *testing.T) {
+	// Published points only supply the runner name; the live metrics API owns
+	// the capability data. A malformed, placeholder, or duplicate published
+	// point must not block the sync, and history placeholders are dropped.
 	efficiency, _ := modelRadarTestPayloads(t)
 	var payload modelRadarEfficiencyPayload
 	require.NoError(t, common.Unmarshal(efficiency, &payload))
+	outOfRange := 151.0
+	payload.Points = append(payload.Points,
+		modelRadarUpstreamPoint{Model: "gpt-test", Effort: "high", Harness: "other"},
+		modelRadarUpstreamPoint{Model: "gpt-new", Effort: "max", Harness: "DSH", IQ: &outOfRange},
+		modelRadarUpstreamPoint{Model: "", Effort: "low", Harness: "codex"},
+		modelRadarUpstreamPoint{Model: "gpt-long", Effort: "low", Harness: strings.Repeat("a", 33)},
+	)
+	payload.History[1].Points = append(payload.History[1].Points, modelRadarUpstreamPoint{Model: "gpt-new", Effort: "max"})
 
-	t.Run("duplicate configuration", func(t *testing.T) {
-		duplicate := payload
-		duplicate.Points = append(duplicate.Points, duplicate.Points[0])
-		_, _, _, err := normalizeModelRadarEfficiency(duplicate)
-		require.ErrorContains(t, err, "duplicate configuration")
-	})
+	harnesses, history, err := normalizeModelRadarEfficiency(payload)
 
-	t.Run("out of range IQ", func(t *testing.T) {
-		invalid := payload
-		invalid.Points = append([]modelRadarUpstreamPoint(nil), payload.Points...)
-		invalidIQ := 151.0
-		invalid.Points[0].IQ = &invalidIQ
-		_, _, _, err := normalizeModelRadarEfficiency(invalid)
-		require.ErrorContains(t, err, "iq is out of range")
-	})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"gpt-test|high": "codex", "gpt-new|max": "dsh"}, harnesses)
+	require.Len(t, history, 2)
+	require.Len(t, history[1].Points, 1)
+	assert.Equal(t, "gpt-test", history[1].Points[0].Model)
 }
 
 func TestNormalizeModelRadarStationMetrics(t *testing.T) {
@@ -278,100 +305,151 @@ func TestNormalizeModelRadarStationMetrics(t *testing.T) {
 	}
 }
 
-func TestNormalizeModelRadarEfficiencyDropsHistoryOlderThanRetentionWindow(t *testing.T) {
-	// Upstream keeps every frame since launch, which eventually pushed the
-	// response past the fetch cap. Sync must retain only the recent window.
+func TestDecodeModelRadarEfficiencyStreamsOnlyRecentHistory(t *testing.T) {
+	// Upstream keeps every frame since launch, which pushed the response past
+	// the fetch cap twice. Decoding must keep only the 72h window of the newest
+	// frame and skip fields sync does not read, however large they are.
 	efficiency, _ := modelRadarTestPayloads(t)
-	var payload modelRadarEfficiencyPayload
+	var payload map[string]any
 	require.NoError(t, common.Unmarshal(efficiency, &payload))
-
-	// The newest fixture frame is 2026-07-26; the 72h retention window starts
-	// 2026-07-23, so a 2026-07-01 frame must be dropped and the two fixture
-	// frames (2026-07-25/26) retained.
-	oldFrame := modelRadarUpstreamHistoryFrame{
-		At: "2026-07-01T00:00:00Z",
-		Points: []modelRadarUpstreamPoint{{
-			Model: "gpt-test", Effort: "high",
-			IQ:         func() *float64 { v := 80.0; return &v }(),
-			Passed:     func() *float64 { v := 2.0; return &v }(),
-			ValidTasks: func() *float64 { v := 4.0; return &v }(),
-		}},
+	frames := payload["history"].([]any)
+	oldFrame := map[string]any{
+		"at":     "2026-07-01T00:00:00Z",
+		"points": []map[string]any{{"model": "gpt-test", "effort": "high", "iq": 80.0, "passed": 2, "valid_tasks": 4}},
 	}
-	payload.History = append([]modelRadarUpstreamHistoryFrame{oldFrame}, payload.History...)
-	require.Len(t, payload.History, 3)
-
-	_, history, _, err := normalizeModelRadarEfficiency(payload)
+	payload["history"] = append([]any{oldFrame}, frames...)
+	payload["method"] = map[string]any{"iq": "pass_rate * 150", "nested": []any{[]any{1, 2}, map[string]any{"a": "b"}}}
+	payload["fingerprint"] = strings.Repeat("f", 4096)
+	encoded, err := common.Marshal(payload)
 	require.NoError(t, err)
-	require.Len(t, history, 2)
-	assert.Equal(t, "2026-07-25T00:00:00Z", time.Unix(history[0].Ts, 0).UTC().Format(time.RFC3339))
-	assert.Equal(t, "2026-07-26T00:00:00Z", time.Unix(history[1].Ts, 0).UTC().Format(time.RFC3339))
+
+	decoded, err := decodeModelRadarEfficiency(bytes.NewReader(encoded))
+
+	require.NoError(t, err)
+	assert.Equal(t, modelRadarEfficiencySchema, decoded.Schema)
+	assert.Equal(t, modelRadarEfficiencyType, decoded.Type)
+	require.Len(t, decoded.Points, 1)
+	require.Len(t, decoded.History, 2)
+	assert.Equal(t, "2026-07-25T00:00:00Z", decoded.History[0].At)
+	assert.Equal(t, "2026-07-26T00:00:00Z", decoded.History[1].At)
+}
+
+func TestDecodeModelRadarEfficiencyRejectsUnorderedHistory(t *testing.T) {
+	body := `{"schema":2,"history":[{"at":"2026-07-26T00:00:00Z","points":[]},{"at":"2026-07-25T00:00:00Z","points":[]}]}`
+
+	_, err := decodeModelRadarEfficiency(strings.NewReader(body))
+
+	require.ErrorContains(t, err, "strictly increasing")
 }
 
 func TestNormalizeModelRadarInsightsAllowsNoAlerts(t *testing.T) {
-	alerts, updatedAt, err := normalizeModelRadarInsights(modelRadarInsightsPayload{
+	alerts, updatedAt, skipped, err := normalizeModelRadarInsights(modelRadarInsightsPayload{
 		Schema:          modelRadarInsightsSchema,
 		SourceUpdatedAt: "2026-07-26T00:01:00Z",
 	})
 	require.NoError(t, err)
 	assert.Empty(t, alerts)
+	assert.Zero(t, skipped)
 	assert.Equal(t, int64(1785024060), updatedAt)
 }
 
-func TestNormalizeModelRadarInsightsPreservesSignedDegradation(t *testing.T) {
-	iq := 39.0
-	degradation12h := 6.5
-	degradation24h := 6.5
-	degradation48h := -0.2
-	payload := modelRadarInsightsPayload{
-		Schema:          modelRadarInsightsSchema,
-		SourceUpdatedAt: "2026-07-26T13:22:03Z",
-	}
-	payload.DegradationAlerts.Items = []modelRadarUpstreamAlert{{
-		Model:            "gpt-5.6-terra",
-		Effort:           "low",
-		IQ:               &iq,
-		Degradation12hIQ: &degradation12h,
-		Degradation24hIQ: &degradation24h,
-		Degradation48hIQ: &degradation48h,
-	}}
+func TestFetchModelRadarKeepsAlertsWhoseWindowLacksHistory(t *testing.T) {
+	// Regression for 2026-09-23: upstream published grok-4.7 alerts with a null
+	// degradation_48h_iq because the tier was graded under 48 hours ago, and
+	// the strict check failed every sync until the tier aged. The alert must
+	// be kept with the missing window left empty, alongside the trend.
+	efficiency, _ := modelRadarTestPayloads(t)
+	insights := []byte(`{"schema":1,"source_updated_at":"2026-09-24T10:01:22+00:00","comprehensive_points":[],` +
+		`"degradation_alerts":{"rule":"...","items":[{"model":"gpt-test","effort":"high","iq":105,` +
+		`"degradation_12h_iq":45,"degradation_24h_iq":45,"degradation_48h_iq":null,` +
+		`"average_iq_24h":142.81,"average_iq_48h":null,"degradation_severity_score":6.7,` +
+		`"trend_48h":[{"timestamp":"2026-09-22T14:00:54+00:00","iq":150,"samples":2},` +
+		`{"timestamp":"not-a-time","iq":140,"samples":3},` +
+		`{"timestamp":"2026-09-24T10:31:51+00:00","iq":105,"samples":10}]}]}}`)
+	server := newModelRadarSourceServer(t, efficiency, insights, http.StatusOK)
+	defer server.Close()
 
-	alerts, _, err := normalizeModelRadarInsights(payload)
+	data, err := fetchModelRadar(context.Background(), server.Client(), server.URL+"/efficiency", server.URL+"/metrics", server.URL+"/insights")
+
+	require.NoError(t, err)
+	require.Len(t, data.DegradationAlerts, 1)
+	alert := data.DegradationAlerts[0]
+	require.NotNil(t, alert.Degradation24hIQ)
+	assert.Equal(t, 45.0, *alert.Degradation24hIQ)
+	assert.Nil(t, alert.Degradation48hIQ)
+	require.NotNil(t, alert.AverageIQ24h)
+	assert.Equal(t, 142.81, *alert.AverageIQ24h)
+	assert.Nil(t, alert.AverageIQ48h)
+	assert.Equal(t, []ModelRadarTrendPoint{
+		{Ts: time.Date(2026, 9, 22, 14, 0, 54, 0, time.UTC).Unix(), IQ: 150, Samples: 2},
+		{Ts: time.Date(2026, 9, 24, 10, 31, 51, 0, time.UTC).Unix(), IQ: 105, Samples: 10},
+	}, alert.Trend48h)
+
+	encoded, err := common.Marshal(alert)
+	require.NoError(t, err)
+	assert.Contains(t, string(encoded), `"degradation_48h_iq":null`)
+}
+
+func TestNormalizeModelRadarInsightsSkipsInvalidAlertsInsteadOfFailing(t *testing.T) {
+	iq, decline, invalidDecline := 39.0, -0.2, 200.0
+	valid := modelRadarUpstreamAlert{Model: "gpt-5.6-terra", Effort: "low", IQ: &iq, Degradation48hIQ: &decline}
+	payload := modelRadarInsightsPayload{Schema: modelRadarInsightsSchema, SourceUpdatedAt: "2026-07-26T13:22:03Z"}
+	payload.DegradationAlerts.Items = []modelRadarUpstreamAlert{
+		valid,
+		valid,
+		{Model: "gpt-missing-iq", Effort: "low"},
+		{Model: "gpt-bad-window", Effort: "low", IQ: &iq, Degradation12hIQ: &invalidDecline},
+		{Model: "", Effort: "low", IQ: &iq},
+	}
+
+	alerts, _, skipped, err := normalizeModelRadarInsights(payload)
 
 	require.NoError(t, err)
 	require.Len(t, alerts, 1)
-	assert.Equal(t, -0.2, alerts[0].Degradation48hIQ)
+	require.NotNil(t, alerts[0].Degradation48hIQ)
+	assert.Equal(t, -0.2, *alerts[0].Degradation48hIQ, "a recovering tier keeps its signed decline")
+	assert.Nil(t, alerts[0].Degradation12hIQ)
+	assert.Empty(t, alerts[0].Trend48h)
+	assert.Equal(t, 4, skipped)
+
+	payload.Schema = 2
+	_, _, _, err = normalizeModelRadarInsights(payload)
+	require.ErrorContains(t, err, "unsupported insights schema")
 }
 
-func TestNormalizeModelRadarComprehensiveValidatesAndIndexes(t *testing.T) {
-	iq, visual := 95.0, 120.0
-	samples := 10
-	metrics, err := normalizeModelRadarComprehensive(modelRadarInsightsPayload{
+func TestNormalizeModelRadarInsightsKeepsTheMostSevereAlertsWithinLimit(t *testing.T) {
+	iq := 80.0
+	payload := modelRadarInsightsPayload{Schema: modelRadarInsightsSchema, SourceUpdatedAt: "2026-07-26T13:22:03Z"}
+	for index := range modelRadarMaxAlerts + 2 {
+		payload.DegradationAlerts.Items = append(payload.DegradationAlerts.Items,
+			modelRadarUpstreamAlert{Model: fmt.Sprintf("model-%d", index), Effort: "high", IQ: &iq})
+	}
+
+	alerts, _, skipped, err := normalizeModelRadarInsights(payload)
+
+	require.NoError(t, err)
+	require.Len(t, alerts, modelRadarMaxAlerts)
+	assert.Equal(t, "model-0", alerts[0].Model)
+	assert.Equal(t, 2, skipped)
+}
+
+func TestNormalizeModelRadarComprehensiveIndexesValidPointsAndSkipsTheRest(t *testing.T) {
+	iq, visual, outOfRange := 95.0, 120.0, 200.0
+	samples, negative := 10, -1
+	metrics, skipped, err := normalizeModelRadarComprehensive(modelRadarInsightsPayload{
 		Schema: modelRadarInsightsSchema,
 		ComprehensivePoints: []modelRadarComprehensivePoint{
 			{Model: "gpt-test", Effort: "high", IQ: &iq, VisualIQ: &visual, Samples: &samples},
+			{Model: "gpt-test", Effort: "high", IQ: &visual, VisualIQ: &visual},
+			{Model: "gpt-range", Effort: "high", IQ: &iq, VisualIQ: &outOfRange},
+			{Model: "gpt-no-visual", Effort: "high", IQ: &iq},
+			{Model: "gpt-samples", Effort: "high", IQ: &iq, VisualIQ: &visual, Samples: &negative},
 		},
 	})
+
 	require.NoError(t, err)
-	require.Contains(t, metrics, "gpt-test|high")
-	assert.Equal(t, 95.0, metrics["gpt-test|high"].IQ)
-	assert.Equal(t, 120.0, metrics["gpt-test|high"].VisualIQ)
-
-	outOfRange := 200.0
-	_, err = normalizeModelRadarComprehensive(modelRadarInsightsPayload{
-		Schema: modelRadarInsightsSchema,
-		ComprehensivePoints: []modelRadarComprehensivePoint{
-			{Model: "gpt-test", Effort: "high", IQ: &iq, VisualIQ: &outOfRange},
-		},
-	})
-	require.Error(t, err)
-
-	_, err = normalizeModelRadarComprehensive(modelRadarInsightsPayload{
-		Schema: modelRadarInsightsSchema,
-		ComprehensivePoints: []modelRadarComprehensivePoint{
-			{Model: "gpt-test", Effort: "high", IQ: &iq},
-		},
-	})
-	require.Error(t, err)
+	assert.Equal(t, map[string]modelRadarComprehensiveMetrics{"gpt-test|high": {IQ: 95, VisualIQ: 120}}, metrics)
+	assert.Equal(t, 4, skipped)
 }
 
 func TestSyncModelRadarDoesNotReplaceSnapshotWhenOneSourceFails(t *testing.T) {

@@ -87,6 +87,12 @@ export function ConfigurationDetails(props: {
       samplesLabel: t('Cost samples'),
       samples: format.integer(configuration.price_samples),
       priceBand: configuration.average_price_usd_by_band,
+      correctedPrice: format.usd(
+        configuration.corrected_average_price_usd ?? null
+      ),
+      correctedSamples: format.integer(
+        configuration.corrected_cost_samples ?? null
+      ),
     },
     {
       icon: Clock03Icon,
@@ -177,7 +183,8 @@ export function ConfigurationDetails(props: {
               {t('Comprehensive IQ')}
             </p>
             <p className='mt-0.5 text-lg leading-tight font-semibold tabular-nums'>
-              {format.decimal(configuration.comprehensive_iq ?? null) ?? '—'}
+              {format.decimal(configuration.comprehensive_iq ?? null) ??
+                t('Insufficient data')}
             </p>
           </div>
           <div className='bg-muted/30 rounded-lg border px-3 py-2.5'>
@@ -193,7 +200,8 @@ export function ConfigurationDetails(props: {
               {t('Visual spatial reasoning IQ')}
             </p>
             <p className='mt-0.5 text-lg leading-tight font-semibold tabular-nums'>
-              {format.decimal(configuration.visual_iq ?? null) ?? '—'}
+              {format.decimal(configuration.visual_iq ?? null) ??
+                t('Insufficient data')}
             </p>
           </div>
           <div className='bg-muted/30 rounded-lg border px-3 py-2.5'>
@@ -280,6 +288,14 @@ export function ConfigurationDetails(props: {
                     {format.usd(metric.priceBand.off_peak ?? null) ?? '—'} ·{' '}
                     {t('Peak')}{' '}
                     {format.usd(metric.priceBand.peak ?? null) ?? '—'}
+                  </p>
+                ) : null}
+                {metric.correctedPrice ? (
+                  <p className='text-muted-foreground mt-1 text-[10px] tabular-nums'>
+                    {t('Official tariff correction')} {metric.correctedPrice}
+                    {metric.correctedSamples
+                      ? ` · ${t('Cost samples')}: ${metric.correctedSamples}`
+                      : null}
                   </p>
                 ) : null}
               </div>

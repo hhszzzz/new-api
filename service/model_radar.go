@@ -19,17 +19,21 @@ import (
 )
 
 const (
-	modelRadarSchemaVersion      = 1
-	modelRadarEfficiencySchema   = 2
-	modelRadarInsightsSchema     = 1
-	modelRadarEfficiencyType     = "distributed_intelligence_efficiency"
-	modelRadarEfficiencyURL      = "https://codexradar.com/data/intelligence-efficiency.json"
-	modelRadarMetricsURL         = "https://codexradar.com/api/intelligence-efficiency-metrics"
-	modelRadarInsightsURL        = "https://api.codexradar.com/api/v1/radar-insights"
-	modelRadarSourceURL          = "https://codexradar.com"
-	modelRadarAttribution        = "数据来自 Codex 雷达 codexradar.com"
-	modelRadarRequestTimeout     = 15 * time.Second
-	modelRadarEfficiencyMaxBytes = 8 << 20
+	modelRadarSchemaVersion    = 1
+	modelRadarEfficiencySchema = 2
+	modelRadarInsightsSchema   = 1
+	modelRadarEfficiencyType   = "distributed_intelligence_efficiency"
+	modelRadarEfficiencyURL    = "https://codexradar.com/data/intelligence-efficiency.json"
+	modelRadarMetricsURL       = "https://codexradar.com/api/intelligence-efficiency-metrics"
+	modelRadarInsightsURL      = "https://api.codexradar.com/api/v1/radar-insights"
+	modelRadarSourceURL        = "https://codexradar.com"
+	modelRadarAttribution      = "数据来自 Codex 雷达 codexradar.com"
+	modelRadarRequestTimeout   = 15 * time.Second
+	// The published file carries every history frame since launch (7.9 MB on
+	// 2026-09-24, growing about 0.35 MB a day). It is decoded as a stream that
+	// keeps only the retention window, so this cap bounds the transfer rather
+	// than memory; sync logs a warning once the file passes half of it.
+	modelRadarEfficiencyMaxBytes = 128 << 20
 	modelRadarInsightsMaxBytes   = 1 << 20
 	modelRadarMetricsMaxBytes    = 1 << 20
 	modelRadarDefaultInterval    = 10 * time.Minute
@@ -38,9 +42,10 @@ const (
 	modelRadarMaxConfigurations  = 256
 	// The upstream history array grows without bound (one frame per source
 	// refresh, ~2-4h apart). The frontend only charts the 48h degradation
-	// window, so sync drops frames older than this limit after validation.
-	modelRadarMaxHistoryAge = 72 * time.Hour
-	modelRadarMaxAlerts     = 64
+	// window, so sync drops older frames while decoding the published file.
+	modelRadarMaxHistoryAge  = 72 * time.Hour
+	modelRadarMaxAlerts      = 64
+	modelRadarMaxTrendPoints = 128
 )
 
 var ErrModelRadarUnavailable = errors.New("model radar data unavailable")
@@ -73,20 +78,26 @@ type ModelRadarConfiguration struct {
 	AveragePriceUSD       *float64             `json:"average_price_usd"`
 	AveragePriceUSDByBand *ModelRadarPriceBand `json:"average_price_usd_by_band"`
 	PriceSamples          *int                 `json:"price_samples"`
-	AverageMinutes        *float64             `json:"average_minutes"`
-	DurationSamples       *int                 `json:"duration_samples"`
-	IncompleteCostSamples *int                 `json:"incomplete_cost_samples"`
-	TotalRuns             *int                 `json:"total_runs"`
-	Runs24h               *int                 `json:"runs_24h"`
-	Runs48h               *int                 `json:"runs_48h"`
-	LatestGradedAt        *int64               `json:"latest_graded_at"`
-	AverageAgentSteps     *float64             `json:"average_agent_steps"`
-	AgentStepsSamples     *int                 `json:"agent_steps_samples"`
-	AverageTotalTokens    *float64             `json:"average_total_tokens"`
-	TokenSamples          *int                 `json:"token_samples"`
-	CacheHitRate          *float64             `json:"cache_hit_rate"`
-	CacheTokenSamples     *int                 `json:"cache_token_samples"`
-	CombinedCostIndex     *float64             `json:"combined_cost_index"`
+	// CorrectedAveragePriceUSD re-costs the recorded runs against the
+	// provider's official tariff. Upstream publishes it only for tiers whose
+	// recorded cost is known to be off, and still derives the combined cost
+	// index from the recorded price, so both are kept.
+	CorrectedAveragePriceUSD *float64 `json:"corrected_average_price_usd"`
+	CorrectedCostSamples     *int     `json:"corrected_cost_samples"`
+	AverageMinutes           *float64 `json:"average_minutes"`
+	DurationSamples          *int     `json:"duration_samples"`
+	IncompleteCostSamples    *int     `json:"incomplete_cost_samples"`
+	TotalRuns                *int     `json:"total_runs"`
+	Runs24h                  *int     `json:"runs_24h"`
+	Runs48h                  *int     `json:"runs_48h"`
+	LatestGradedAt           *int64   `json:"latest_graded_at"`
+	AverageAgentSteps        *float64 `json:"average_agent_steps"`
+	AgentStepsSamples        *int     `json:"agent_steps_samples"`
+	AverageTotalTokens       *float64 `json:"average_total_tokens"`
+	TokenSamples             *int     `json:"token_samples"`
+	CacheHitRate             *float64 `json:"cache_hit_rate"`
+	CacheTokenSamples        *int     `json:"cache_token_samples"`
+	CombinedCostIndex        *float64 `json:"combined_cost_index"`
 }
 
 type ModelRadarHistoryPoint struct {
@@ -107,13 +118,25 @@ type ModelRadarHistoryFrame struct {
 	Points []ModelRadarHistoryPoint `json:"points"`
 }
 
+// ModelRadarTrendPoint is one hourly IQ reading from the upstream alert trend.
+type ModelRadarTrendPoint struct {
+	Ts      int64   `json:"ts"`
+	IQ      float64 `json:"iq"`
+	Samples int     `json:"samples"`
+}
+
 type ModelRadarDegradationAlert struct {
-	Model            string  `json:"model"`
-	Effort           string  `json:"effort"`
-	IQ               float64 `json:"iq"`
-	Degradation12hIQ float64 `json:"degradation_12h_iq"`
-	Degradation24hIQ float64 `json:"degradation_24h_iq"`
-	Degradation48hIQ float64 `json:"degradation_48h_iq"`
+	Model  string  `json:"model"`
+	Effort string  `json:"effort"`
+	IQ     float64 `json:"iq"`
+	// Each decline window is nil when upstream has too little history to
+	// compare against it, for example a tier first graded under 48 hours ago.
+	Degradation12hIQ *float64               `json:"degradation_12h_iq"`
+	Degradation24hIQ *float64               `json:"degradation_24h_iq"`
+	Degradation48hIQ *float64               `json:"degradation_48h_iq"`
+	AverageIQ24h     *float64               `json:"average_iq_24h"`
+	AverageIQ48h     *float64               `json:"average_iq_48h"`
+	Trend48h         []ModelRadarTrendPoint `json:"trend_48h"`
 }
 
 type ModelRadarData struct {
@@ -181,9 +204,11 @@ type modelRadarEfficiencyPayload struct {
 
 type modelRadarMetricsPoint struct {
 	modelRadarUpstreamPoint
-	Total           *float64 `json:"total"`
-	RunsTotal       *int     `json:"runs_total"`
-	SourceUpdatedAt *string  `json:"source_updated_at"`
+	Total                    *float64 `json:"total"`
+	RunsTotal                *int     `json:"runs_total"`
+	SourceUpdatedAt          *string  `json:"source_updated_at"`
+	CorrectedAveragePriceUSD *float64 `json:"corrected_average_price_usd"`
+	CorrectedCostSamples     *int     `json:"corrected_cost_samples"`
 }
 
 type modelRadarMetricsPayload struct {
@@ -195,13 +220,22 @@ type modelRadarMetricsPayload struct {
 	Points          []modelRadarMetricsPoint `json:"points"`
 }
 
+type modelRadarUpstreamTrendPoint struct {
+	Timestamp string   `json:"timestamp"`
+	IQ        *float64 `json:"iq"`
+	Samples   *int     `json:"samples"`
+}
+
 type modelRadarUpstreamAlert struct {
-	Model            string   `json:"model"`
-	Effort           string   `json:"effort"`
-	IQ               *float64 `json:"iq"`
-	Degradation12hIQ *float64 `json:"degradation_12h_iq"`
-	Degradation24hIQ *float64 `json:"degradation_24h_iq"`
-	Degradation48hIQ *float64 `json:"degradation_48h_iq"`
+	Model            string                         `json:"model"`
+	Effort           string                         `json:"effort"`
+	IQ               *float64                       `json:"iq"`
+	Degradation12hIQ *float64                       `json:"degradation_12h_iq"`
+	Degradation24hIQ *float64                       `json:"degradation_24h_iq"`
+	Degradation48hIQ *float64                       `json:"degradation_48h_iq"`
+	AverageIQ24h     *float64                       `json:"average_iq_24h"`
+	AverageIQ48h     *float64                       `json:"average_iq_48h"`
+	Trend48h         []modelRadarUpstreamTrendPoint `json:"trend_48h"`
 }
 
 type modelRadarComprehensivePoint struct {
@@ -338,11 +372,18 @@ func fetchModelRadar(ctx context.Context, client *http.Client, efficiencyURL str
 	defer cancel()
 
 	var efficiency modelRadarEfficiencyPayload
+	var efficiencyBytes int64
 	var metrics modelRadarMetricsPayload
 	var insights modelRadarInsightsPayload
 	group, groupCtx := errgroup.WithContext(requestCtx)
 	group.Go(func() error {
-		return fetchModelRadarJSON(groupCtx, client, efficiencyURL, modelRadarEfficiencyMaxBytes, &efficiency)
+		read, err := fetchModelRadarSource(groupCtx, client, efficiencyURL, modelRadarEfficiencyMaxBytes, func(body io.Reader) error {
+			var decodeErr error
+			efficiency, decodeErr = decodeModelRadarEfficiency(body)
+			return decodeErr
+		})
+		efficiencyBytes = read
+		return err
 	})
 	group.Go(func() error {
 		return fetchModelRadarJSON(groupCtx, client, metricsURL, modelRadarMetricsMaxBytes, &metrics)
@@ -353,12 +394,15 @@ func fetchModelRadar(ctx context.Context, client *http.Client, efficiencyURL str
 	if err := group.Wait(); err != nil {
 		return nil, err
 	}
+	if efficiencyBytes > modelRadarEfficiencyMaxBytes/2 {
+		common.SysError(fmt.Sprintf("model radar published data is %d bytes, over half of the %d byte fetch limit", efficiencyBytes, modelRadarEfficiencyMaxBytes))
+	}
 
-	published, history, _, err := normalizeModelRadarEfficiency(efficiency)
+	harnesses, history, err := normalizeModelRadarEfficiency(efficiency)
 	if err != nil {
 		return nil, fmt.Errorf("validate model radar efficiency data: %w", err)
 	}
-	configurations, currentFrame, err := normalizeModelRadarMetrics(metrics, published)
+	configurations, currentFrame, err := normalizeModelRadarMetrics(metrics, harnesses)
 	if err != nil {
 		return nil, fmt.Errorf("validate model radar live metrics: %w", err)
 	}
@@ -372,13 +416,16 @@ func fetchModelRadar(ctx context.Context, client *http.Client, efficiencyURL str
 		}
 	}
 	history = append(retained, currentFrame)
-	alerts, alertsUpdatedAt, err := normalizeModelRadarInsights(insights)
+	alerts, alertsUpdatedAt, skippedAlerts, err := normalizeModelRadarInsights(insights)
 	if err != nil {
 		return nil, fmt.Errorf("validate model radar insights data: %w", err)
 	}
-	comprehensive, err := normalizeModelRadarComprehensive(insights)
+	comprehensive, skippedPoints, err := normalizeModelRadarComprehensive(insights)
 	if err != nil {
 		return nil, fmt.Errorf("validate model radar comprehensive data: %w", err)
+	}
+	if skippedAlerts+skippedPoints > 0 {
+		common.SysLog(fmt.Sprintf("model radar sync skipped %d degradation alert(s) and %d comprehensive point(s) that failed validation", skippedAlerts, skippedPoints))
 	}
 	configurationIndex := make(map[string]int, len(configurations))
 	for index := range configurations {
@@ -412,67 +459,156 @@ func fetchModelRadar(ctx context.Context, client *http.Client, efficiencyURL str
 }
 
 func fetchModelRadarJSON(ctx context.Context, client *http.Client, sourceURL string, maxBytes int64, target any) error {
+	_, err := fetchModelRadarSource(ctx, client, sourceURL, maxBytes, func(body io.Reader) error {
+		data, err := io.ReadAll(body)
+		if err != nil {
+			return err
+		}
+		return common.Unmarshal(data, target)
+	})
+	return err
+}
+
+// fetchModelRadarSource requests one source document, hands its body to decode,
+// and returns how many body bytes decode consumed.
+func fetchModelRadarSource(ctx context.Context, client *http.Client, sourceURL string, maxBytes int64, decode func(io.Reader) error) (int64, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, sourceURL, nil)
 	if err != nil {
-		return fmt.Errorf("create model radar request: %w", err)
+		return 0, fmt.Errorf("create model radar request: %w", err)
 	}
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("User-Agent", "new-api-model-radar/1.0")
 
 	response, err := client.Do(request)
 	if err != nil {
-		return fmt.Errorf("fetch %s: %w", request.URL.Host, err)
+		return 0, fmt.Errorf("fetch %s: %w", request.URL.Host, err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("fetch %s: unexpected HTTP status %d", request.URL.Host, response.StatusCode)
+		return 0, fmt.Errorf("fetch %s: unexpected HTTP status %d", request.URL.Host, response.StatusCode)
 	}
 	if contentType := response.Header.Get("Content-Type"); contentType != "" {
 		mediaType, _, parseErr := mime.ParseMediaType(contentType)
 		if parseErr != nil || mediaType != "application/json" {
-			return fmt.Errorf("fetch %s: expected JSON response", request.URL.Host)
+			return 0, fmt.Errorf("fetch %s: expected JSON response", request.URL.Host)
 		}
 	}
-	body, err := io.ReadAll(io.LimitReader(response.Body, maxBytes+1))
-	if err != nil {
-		return fmt.Errorf("read %s response: %w", request.URL.Host, err)
+	body := &modelRadarCountingReader{reader: io.LimitReader(response.Body, maxBytes+1)}
+	decodeErr := decode(body)
+	// Check the cap first: a truncated body surfaces as a decode error.
+	if body.read > maxBytes {
+		return body.read, fmt.Errorf("fetch %s: response exceeds %d bytes", request.URL.Host, maxBytes)
 	}
-	if int64(len(body)) > maxBytes {
-		return fmt.Errorf("fetch %s: response exceeds %d bytes", request.URL.Host, maxBytes)
+	if decodeErr != nil {
+		return body.read, fmt.Errorf("decode %s response: %w", request.URL.Host, decodeErr)
 	}
-	if err := common.Unmarshal(body, target); err != nil {
-		return fmt.Errorf("decode %s response: %w", request.URL.Host, err)
-	}
-	return nil
+	return body.read, nil
 }
 
-func normalizeModelRadarEfficiency(payload modelRadarEfficiencyPayload) ([]ModelRadarConfiguration, []ModelRadarHistoryFrame, int64, error) {
+type modelRadarCountingReader struct {
+	reader io.Reader
+	read   int64
+}
+
+func (r *modelRadarCountingReader) Read(p []byte) (int, error) {
+	n, err := r.reader.Read(p)
+	r.read += int64(n)
+	return n, err
+}
+
+// decodeModelRadarEfficiency streams the published payload. Upstream appends a
+// history frame on every refresh and never prunes, so frames older than the
+// retention window are dropped while decoding instead of after the whole
+// document has been materialized.
+func decodeModelRadarEfficiency(reader io.Reader) (modelRadarEfficiencyPayload, error) {
+	var payload modelRadarEfficiencyPayload
+	stream := common.NewJsonStreamDecoder(reader)
+	if err := stream.Expect('{'); err != nil {
+		return payload, err
+	}
+	for stream.More() {
+		key, err := stream.Key()
+		if err != nil {
+			return payload, err
+		}
+		switch key {
+		case "schema":
+			err = stream.Decode(&payload.Schema)
+		case "type":
+			err = stream.Decode(&payload.Type)
+		case "source_updated_at":
+			err = stream.Decode(&payload.SourceUpdatedAt)
+		case "points":
+			err = stream.Decode(&payload.Points)
+		case "history":
+			payload.History, err = decodeModelRadarRecentHistory(stream)
+		default:
+			err = stream.Skip()
+		}
+		if err != nil {
+			return payload, fmt.Errorf("field %s: %w", key, err)
+		}
+	}
+	return payload, stream.Expect('}')
+}
+
+// decodeModelRadarRecentHistory reads the history array one frame at a time and
+// keeps only the frames inside the retention window of the newest frame.
+func decodeModelRadarRecentHistory(stream *common.JsonStreamDecoder) ([]modelRadarUpstreamHistoryFrame, error) {
+	if err := stream.Expect('['); err != nil {
+		return nil, err
+	}
+	retention := int64(modelRadarMaxHistoryAge.Seconds())
+	var frames []modelRadarUpstreamHistoryFrame
+	var timestamps []int64
+	for stream.More() {
+		var frame modelRadarUpstreamHistoryFrame
+		if err := stream.Decode(&frame); err != nil {
+			return nil, err
+		}
+		ts, err := parseModelRadarTimestamp(frame.At)
+		if err != nil {
+			return nil, fmt.Errorf("invalid history timestamp: %w", err)
+		}
+		if len(timestamps) > 0 && ts <= timestamps[len(timestamps)-1] {
+			return nil, errors.New("history timestamps must be strictly increasing")
+		}
+		frames = append(frames, frame)
+		timestamps = append(timestamps, ts)
+		expired := 0
+		for expired < len(timestamps) && timestamps[expired] < ts-retention {
+			expired++
+		}
+		if expired > 0 {
+			frames = append(frames[:0], frames[expired:]...)
+			timestamps = append(timestamps[:0], timestamps[expired:]...)
+		}
+	}
+	return frames, stream.Expect(']')
+}
+
+// normalizeModelRadarEfficiency validates the published payload. Sync takes
+// only runner metadata (harness per configuration) and recent history from
+// it; the current configurations come from the live metrics API, so a
+// published point that fails validation is ignored instead of blocking sync.
+func normalizeModelRadarEfficiency(payload modelRadarEfficiencyPayload) (map[string]string, []ModelRadarHistoryFrame, error) {
 	if payload.Schema != modelRadarEfficiencySchema || payload.Type != modelRadarEfficiencyType {
-		return nil, nil, 0, errors.New("unsupported source schema")
+		return nil, nil, errors.New("unsupported source schema")
 	}
-	sourceUpdatedAt, err := parseModelRadarTimestamp(payload.SourceUpdatedAt)
-	if err != nil {
-		return nil, nil, 0, fmt.Errorf("invalid source_updated_at: %w", err)
-	}
-	if len(payload.Points) == 0 || len(payload.Points) > modelRadarMaxConfigurations {
-		return nil, nil, 0, errors.New("configuration count is out of range")
-	}
-	if len(payload.History) == 0 {
-		return nil, nil, 0, errors.New("history frame count is out of range")
+	if _, err := parseModelRadarTimestamp(payload.SourceUpdatedAt); err != nil {
+		return nil, nil, fmt.Errorf("invalid source_updated_at: %w", err)
 	}
 
-	configurations := make([]ModelRadarConfiguration, 0, len(payload.Points))
-	seen := make(map[string]struct{}, len(payload.Points))
+	harnesses := make(map[string]string, len(payload.Points))
 	for _, point := range payload.Points {
-		configuration, key, err := normalizeModelRadarConfiguration(point)
-		if err != nil {
-			return nil, nil, 0, err
+		_, _, key, err := validateModelRadarIdentity(point.Model, point.Effort)
+		harness := strings.ToLower(strings.TrimSpace(point.Harness))
+		if err != nil || harness == "" || len(harness) > 32 {
+			continue
 		}
-		if _, exists := seen[key]; exists {
-			return nil, nil, 0, fmt.Errorf("duplicate configuration %s", key)
+		if _, exists := harnesses[key]; !exists {
+			harnesses[key] = harness
 		}
-		seen[key] = struct{}{}
-		configurations = append(configurations, configuration)
 	}
 
 	history := make([]ModelRadarHistoryFrame, 0, len(payload.History))
@@ -480,44 +616,39 @@ func normalizeModelRadarEfficiency(payload modelRadarEfficiencyPayload) ([]Model
 	for _, frame := range payload.History {
 		ts, parseErr := parseModelRadarTimestamp(frame.At)
 		if parseErr != nil {
-			return nil, nil, 0, fmt.Errorf("invalid history timestamp: %w", parseErr)
+			return nil, nil, fmt.Errorf("invalid history timestamp: %w", parseErr)
 		}
 		if previousTs != 0 && ts <= previousTs {
-			return nil, nil, 0, errors.New("history timestamps must be strictly increasing")
+			return nil, nil, errors.New("history timestamps must be strictly increasing")
 		}
 		previousTs = ts
-		if len(frame.Points) == 0 || len(frame.Points) > modelRadarMaxConfigurations {
-			return nil, nil, 0, errors.New("history point count is out of range")
+		if len(frame.Points) > modelRadarMaxConfigurations {
+			return nil, nil, errors.New("history point count is out of range")
 		}
 		points := make([]ModelRadarHistoryPoint, 0, len(frame.Points))
 		frameSeen := make(map[string]struct{}, len(frame.Points))
 		for _, point := range frame.Points {
+			// Upstream lists a tier before its first graded run with a null IQ,
+			// the same placeholder the live metrics API drops.
+			if point.IQ == nil {
+				continue
+			}
 			historyPoint, key, pointErr := normalizeModelRadarHistoryPoint(point)
 			if pointErr != nil {
-				return nil, nil, 0, pointErr
+				return nil, nil, pointErr
 			}
 			if _, exists := frameSeen[key]; exists {
-				return nil, nil, 0, fmt.Errorf("duplicate history configuration %s", key)
+				return nil, nil, fmt.Errorf("duplicate history configuration %s", key)
 			}
 			frameSeen[key] = struct{}{}
 			points = append(points, historyPoint)
 		}
+		if len(points) == 0 {
+			continue
+		}
 		history = append(history, ModelRadarHistoryFrame{Ts: ts, Points: points})
 	}
-	// The upstream payload accumulates history since launch; keep only the
-	// frames inside the degradation window so the stored snapshot stays small.
-	if len(history) > 0 {
-		cutoff := history[len(history)-1].Ts - int64(modelRadarMaxHistoryAge.Seconds())
-		retained := history
-		for i, frame := range history {
-			if frame.Ts >= cutoff {
-				retained = history[i:]
-				break
-			}
-		}
-		history = retained
-	}
-	return configurations, history, sourceUpdatedAt, nil
+	return harnesses, history, nil
 }
 
 func normalizeModelRadarConfiguration(point modelRadarUpstreamPoint) (ModelRadarConfiguration, string, error) {
@@ -616,57 +747,99 @@ func normalizeModelRadarHistoryPoint(point modelRadarUpstreamPoint) (ModelRadarH
 	}, key, nil
 }
 
-func normalizeModelRadarInsights(payload modelRadarInsightsPayload) ([]ModelRadarDegradationAlert, int64, error) {
+func normalizeModelRadarInsights(payload modelRadarInsightsPayload) ([]ModelRadarDegradationAlert, int64, int, error) {
 	if payload.Schema != modelRadarInsightsSchema {
-		return nil, 0, errors.New("unsupported insights schema")
+		return nil, 0, 0, errors.New("unsupported insights schema")
 	}
 	updatedAt, err := parseModelRadarTimestamp(payload.SourceUpdatedAt)
 	if err != nil {
-		return nil, 0, fmt.Errorf("invalid source_updated_at: %w", err)
-	}
-	if len(payload.DegradationAlerts.Items) > modelRadarMaxAlerts {
-		return nil, 0, errors.New("degradation alert count is out of range")
+		return nil, 0, 0, fmt.Errorf("invalid source_updated_at: %w", err)
 	}
 
-	alerts := make([]ModelRadarDegradationAlert, 0, len(payload.DegradationAlerts.Items))
-	seen := make(map[string]struct{}, len(payload.DegradationAlerts.Items))
-	for _, item := range payload.DegradationAlerts.Items {
-		modelName, effort, key, identityErr := validateModelRadarIdentity(item.Model, item.Effort)
-		if identityErr != nil {
-			return nil, 0, identityErr
+	// Alerts are a side panel of the radar. An alert that fails validation is
+	// skipped and counted so it cannot freeze the capability data with it.
+	items := payload.DegradationAlerts.Items
+	alerts := make([]ModelRadarDegradationAlert, 0, min(len(items), modelRadarMaxAlerts))
+	seen := make(map[string]struct{}, len(items))
+	skipped := 0
+	for _, item := range items {
+		alert, key, alertErr := normalizeModelRadarAlert(item)
+		if alertErr != nil {
+			skipped++
+			continue
 		}
 		if _, exists := seen[key]; exists {
-			return nil, 0, fmt.Errorf("duplicate degradation alert %s", key)
+			skipped++
+			continue
+		}
+		// Upstream orders alerts by severity, so the overflow is the mildest.
+		if len(alerts) == modelRadarMaxAlerts {
+			skipped++
+			continue
 		}
 		seen[key] = struct{}{}
-		if item.IQ == nil {
-			return nil, 0, fmt.Errorf("degradation alert %s is missing iq", key)
-		}
-		if !isFiniteInRange(*item.IQ, 0, 150) {
-			return nil, 0, fmt.Errorf("degradation alert %s has invalid iq", key)
-		}
-		for field, value := range map[string]*float64{
-			"degradation_12h_iq": item.Degradation12hIQ,
-			"degradation_24h_iq": item.Degradation24hIQ,
-			"degradation_48h_iq": item.Degradation48hIQ,
-		} {
-			if value == nil {
-				return nil, 0, fmt.Errorf("degradation alert %s is missing %s", key, field)
-			}
-			if !isFiniteInRange(*value, -150, 150) {
-				return nil, 0, fmt.Errorf("degradation alert %s has invalid %s", key, field)
-			}
-		}
-		alerts = append(alerts, ModelRadarDegradationAlert{
-			Model:            modelName,
-			Effort:           effort,
-			IQ:               *item.IQ,
-			Degradation12hIQ: *item.Degradation12hIQ,
-			Degradation24hIQ: *item.Degradation24hIQ,
-			Degradation48hIQ: *item.Degradation48hIQ,
-		})
+		alerts = append(alerts, alert)
 	}
-	return alerts, updatedAt, nil
+	return alerts, updatedAt, skipped, nil
+}
+
+// normalizeModelRadarAlert validates one upstream degradation alert. Only the
+// identity and current IQ are required: upstream publishes an alert for a
+// newly graded tier before every comparison window has history, and reports
+// such a window, or its average, as null.
+func normalizeModelRadarAlert(item modelRadarUpstreamAlert) (ModelRadarDegradationAlert, string, error) {
+	modelName, effort, key, err := validateModelRadarIdentity(item.Model, item.Effort)
+	if err != nil {
+		return ModelRadarDegradationAlert{}, "", err
+	}
+	if item.IQ == nil || !isFiniteInRange(*item.IQ, 0, 150) {
+		return ModelRadarDegradationAlert{}, "", fmt.Errorf("degradation alert %s has invalid iq", key)
+	}
+	for field, value := range map[string]*float64{
+		"degradation_12h_iq": item.Degradation12hIQ,
+		"degradation_24h_iq": item.Degradation24hIQ,
+		"degradation_48h_iq": item.Degradation48hIQ,
+	} {
+		if err := validateOptionalFloat(field, value, -150, 150); err != nil {
+			return ModelRadarDegradationAlert{}, "", fmt.Errorf("degradation alert %s: %w", key, err)
+		}
+	}
+	for field, value := range map[string]*float64{
+		"average_iq_24h": item.AverageIQ24h,
+		"average_iq_48h": item.AverageIQ48h,
+	} {
+		if err := validateOptionalFloat(field, value, 0, 150); err != nil {
+			return ModelRadarDegradationAlert{}, "", fmt.Errorf("degradation alert %s: %w", key, err)
+		}
+	}
+
+	// The trend is display-only, so an unreadable reading is dropped on its own.
+	trend := make([]ModelRadarTrendPoint, 0, min(len(item.Trend48h), modelRadarMaxTrendPoints))
+	for _, point := range item.Trend48h {
+		if point.IQ == nil || !isFiniteInRange(*point.IQ, 0, 150) || point.Samples == nil || *point.Samples < 0 {
+			continue
+		}
+		ts, parseErr := parseModelRadarTimestamp(point.Timestamp)
+		if parseErr != nil || (len(trend) > 0 && ts <= trend[len(trend)-1].Ts) {
+			continue
+		}
+		trend = append(trend, ModelRadarTrendPoint{Ts: ts, IQ: *point.IQ, Samples: *point.Samples})
+	}
+	if len(trend) > modelRadarMaxTrendPoints {
+		trend = trend[len(trend)-modelRadarMaxTrendPoints:]
+	}
+
+	return ModelRadarDegradationAlert{
+		Model:            modelName,
+		Effort:           effort,
+		IQ:               *item.IQ,
+		Degradation12hIQ: item.Degradation12hIQ,
+		Degradation24hIQ: item.Degradation24hIQ,
+		Degradation48hIQ: item.Degradation48hIQ,
+		AverageIQ24h:     item.AverageIQ24h,
+		AverageIQ48h:     item.AverageIQ48h,
+		Trend48h:         trend,
+	}, key, nil
 }
 
 // modelRadarComprehensiveMetrics is the insight-sourced capability data that
@@ -677,36 +850,28 @@ type modelRadarComprehensiveMetrics struct {
 }
 
 // normalizeModelRadarComprehensive indexes the radar insights comprehensive
-// points by model|effort. These are optional: upstream omits any configuration
-// without a visual-spatial score, and those tiers fall back to the software IQ.
-func normalizeModelRadarComprehensive(payload modelRadarInsightsPayload) (map[string]modelRadarComprehensiveMetrics, error) {
+// points by model|effort. These are optional: a tier without a valid
+// visual-spatial score falls back to the software IQ, so an invalid point is
+// skipped and counted rather than failing the sync.
+func normalizeModelRadarComprehensive(payload modelRadarInsightsPayload) (map[string]modelRadarComprehensiveMetrics, int, error) {
 	if payload.Schema != modelRadarInsightsSchema {
-		return nil, errors.New("unsupported insights schema")
-	}
-	if len(payload.ComprehensivePoints) > modelRadarMaxConfigurations {
-		return nil, errors.New("comprehensive point count is out of range")
+		return nil, 0, errors.New("unsupported insights schema")
 	}
 	metrics := make(map[string]modelRadarComprehensiveMetrics, len(payload.ComprehensivePoints))
+	skipped := 0
 	for _, point := range payload.ComprehensivePoints {
 		_, _, key, err := validateModelRadarIdentity(point.Model, point.Effort)
-		if err != nil {
-			return nil, err
-		}
-		if _, exists := metrics[key]; exists {
-			return nil, fmt.Errorf("duplicate comprehensive point %s", key)
-		}
-		if point.IQ == nil || point.VisualIQ == nil {
-			return nil, fmt.Errorf("comprehensive point %s is missing iq or visual_iq", key)
-		}
-		if !isFiniteInRange(*point.IQ, 0, 150) || !isFiniteInRange(*point.VisualIQ, 0, 150) {
-			return nil, fmt.Errorf("comprehensive point %s has invalid iq", key)
-		}
-		if point.Samples != nil && *point.Samples < 0 {
-			return nil, fmt.Errorf("comprehensive point %s has negative samples", key)
+		_, exists := metrics[key]
+		if err != nil || exists || len(metrics) == modelRadarMaxConfigurations ||
+			point.IQ == nil || point.VisualIQ == nil ||
+			!isFiniteInRange(*point.IQ, 0, 150) || !isFiniteInRange(*point.VisualIQ, 0, 150) ||
+			(point.Samples != nil && *point.Samples < 0) {
+			skipped++
+			continue
 		}
 		metrics[key] = modelRadarComprehensiveMetrics{IQ: *point.IQ, VisualIQ: *point.VisualIQ}
 	}
-	return metrics, nil
+	return metrics, skipped, nil
 }
 
 func validateModelRadarIdentity(modelName string, effort string) (string, string, string, error) {

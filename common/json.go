@@ -154,6 +154,73 @@ func walkJsonStringValue(decoder *json.Decoder, path []string, visit func([]stri
 	return nil
 }
 
+// JsonStreamDecoder consumes one JSON document incrementally, so callers can
+// read a large array element by element instead of materializing it at once.
+type JsonStreamDecoder struct {
+	decoder *json.Decoder
+}
+
+func NewJsonStreamDecoder(reader io.Reader) *JsonStreamDecoder {
+	return &JsonStreamDecoder{decoder: json.NewDecoder(reader)}
+}
+
+// Expect consumes the next token and requires it to be the given delimiter:
+// '{' or '[' to enter a value, '}' or ']' to leave it.
+func (d *JsonStreamDecoder) Expect(delimiter byte) error {
+	token, err := d.decoder.Token()
+	if err != nil {
+		return err
+	}
+	if token != json.Delim(delimiter) {
+		return fmt.Errorf("expected JSON delimiter %q, got %v", delimiter, token)
+	}
+	return nil
+}
+
+// More reports whether the current object or array has another element.
+func (d *JsonStreamDecoder) More() bool {
+	return d.decoder.More()
+}
+
+// Key reads the next object key.
+func (d *JsonStreamDecoder) Key() (string, error) {
+	token, err := d.decoder.Token()
+	if err != nil {
+		return "", err
+	}
+	key, ok := token.(string)
+	if !ok {
+		return "", fmt.Errorf("JSON object key is not a string")
+	}
+	return key, nil
+}
+
+// Decode reads the next complete value into v.
+func (d *JsonStreamDecoder) Decode(v any) error {
+	return d.decoder.Decode(v)
+}
+
+// Skip discards the next complete value token by token, so a large value is
+// never held in memory as a whole.
+func (d *JsonStreamDecoder) Skip() error {
+	depth := 0
+	for {
+		token, err := d.decoder.Token()
+		if err != nil {
+			return err
+		}
+		switch token {
+		case json.Delim('{'), json.Delim('['):
+			depth++
+		case json.Delim('}'), json.Delim(']'):
+			depth--
+		}
+		if depth == 0 {
+			return nil
+		}
+	}
+}
+
 func IndentJson(data []byte) ([]byte, error) {
 	var buffer bytes.Buffer
 	if err := json.Indent(&buffer, data, "", "  "); err != nil {

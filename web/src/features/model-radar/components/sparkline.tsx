@@ -53,9 +53,12 @@ export function Sparkline(props: {
   }, [props.values])
 
   if (!geometry) {
+    // A single reading exists but cannot form a trend yet.
     return (
       <div className='text-muted-foreground flex h-12 min-w-0 flex-1 items-center text-[11px]'>
-        {t('No history data available')}
+        {props.values.length === 1
+          ? t('Insufficient data')
+          : t('No history data available')}
       </div>
     )
   }

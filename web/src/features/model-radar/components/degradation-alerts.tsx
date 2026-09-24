@@ -102,10 +102,21 @@ function AlertCard(props: {
   const format = useRadarFormatters()
   const alert = props.alert
   const resolved = resolveRadarModel(alert.model, props.settings)
-  const startIq =
-    props.series.length > 0
-      ? props.series[0]
-      : alert.iq + alert.degradation_48h_iq
+  const trend = alert.trend_48h ?? []
+  // Upstream's hourly trend is finer than the history frames. History still
+  // charts snapshots stored before the trend was synced, and a tier whose
+  // trend has only one reading so far.
+  const series =
+    trend.length >= 2 || (trend.length > 0 && props.series.length < 2)
+      ? trend.map((point) => point.iq)
+      : props.series
+  // Upstream reports no 48-hour window while a tier has less history than
+  // that, so there is no baseline to show.
+  let startIq: number | null = null
+  if (alert.degradation_48h_iq !== null) {
+    startIq =
+      series.length > 0 ? series[0] : alert.iq + alert.degradation_48h_iq
+  }
 
   return (
     <article
@@ -142,30 +153,49 @@ function AlertCard(props: {
             </span>
           </p>
           <p className='text-muted-foreground text-[11px] tabular-nums'>
-            {t('48 hours ago')} {format.decimal(startIq)}
+            {t('48 hours ago')}{' '}
+            {startIq === null
+              ? t('Insufficient data')
+              : format.decimal(startIq)}
           </p>
         </div>
       </div>
 
       <div className='mt-3 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between sm:gap-4'>
         <Sparkline
-          values={props.series}
+          values={series}
           label={`${resolved.displayName} ${alert.effort}`}
         />
         <dl className='grid shrink-0 grid-cols-3 gap-3 border-t pt-2 sm:border-t-0 sm:pt-0'>
           <Decline label={t('12 hours')} value={alert.degradation_12h_iq} />
-          <Decline label={t('24 hours')} value={alert.degradation_24h_iq} />
-          <Decline label={t('48 hours')} value={alert.degradation_48h_iq} />
+          <Decline
+            label={t('24 hours')}
+            value={alert.degradation_24h_iq}
+            average={alert.average_iq_24h ?? null}
+          />
+          <Decline
+            label={t('48 hours')}
+            value={alert.degradation_48h_iq}
+            average={alert.average_iq_48h ?? null}
+          />
         </dl>
       </div>
     </article>
   )
 }
 
-function Decline(props: { label: string; value: number }) {
+function Decline(props: {
+  label: string
+  value: number | null
+  average?: number | null
+}) {
+  const { t } = useTranslation()
+  const format = useRadarFormatters()
   let valueClass = 'text-muted-foreground'
   let displayValue = '0.0'
-  if (props.value > 0) {
+  if (props.value === null) {
+    displayValue = t('Insufficient data')
+  } else if (props.value > 0) {
     valueClass = 'text-destructive'
     displayValue = `-${props.value.toFixed(1)}`
   } else if (props.value < 0) {
@@ -177,10 +207,23 @@ function Decline(props: { label: string; value: number }) {
     <div className='sm:text-right'>
       <dt className='text-muted-foreground text-[10px]'>{props.label}</dt>
       <dd
-        className={cn('mt-0.5 text-xs font-semibold tabular-nums', valueClass)}
+        className={cn(
+          'mt-0.5 tabular-nums',
+          props.value === null
+            ? 'text-[10px] font-normal'
+            : 'text-xs font-semibold',
+          valueClass
+        )}
       >
         {displayValue}
       </dd>
+      {props.value !== null &&
+      props.average !== null &&
+      props.average !== undefined ? (
+        <dd className='text-muted-foreground text-[10px] tabular-nums'>
+          {t('Average {{value}}', { value: format.decimal(props.average) })}
+        </dd>
+      ) : null}
     </div>
   )
 }

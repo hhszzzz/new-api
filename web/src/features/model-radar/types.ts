@@ -42,6 +42,9 @@ export type ModelRadarConfiguration = {
   valid_tasks: number
   average_price_usd: number | null
   price_samples: number | null
+  /** Cost re-computed against the provider's official tariff, when upstream publishes one. */
+  corrected_average_price_usd?: number | null
+  corrected_cost_samples?: number | null
   average_minutes: number | null
   duration_samples: number | null
   incomplete_cost_samples: number | null
@@ -74,13 +77,24 @@ export type ModelRadarHistoryFrame = {
   points: ModelRadarHistoryPoint[]
 }
 
+export type ModelRadarTrendPoint = {
+  ts: number
+  iq: number
+  samples: number
+}
+
 export type ModelRadarDegradationAlert = {
   model: string
   effort: string
   iq: number
-  degradation_12h_iq: number
-  degradation_24h_iq: number
-  degradation_48h_iq: number
+  /** Each decline window is null when upstream has too little history for it. */
+  degradation_12h_iq: number | null
+  degradation_24h_iq: number | null
+  degradation_48h_iq: number | null
+  average_iq_24h?: number | null
+  average_iq_48h?: number | null
+  /** Hourly upstream IQ readings, oldest first. Absent in older snapshots. */
+  trend_48h?: ModelRadarTrendPoint[] | null
 }
 
 export type ModelRadarData = {

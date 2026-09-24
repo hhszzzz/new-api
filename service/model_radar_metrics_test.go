@@ -91,6 +91,32 @@ func TestNormalizeModelRadarMetricsSkipsUngradedPlaceholders(t *testing.T) {
 	require.ErrorContains(t, err, "no graded configurations")
 }
 
+func TestNormalizeModelRadarMetricsKeepsCorrectedTariffPrice(t *testing.T) {
+	// Upstream re-costs some tiers (grok-4.6) against the official tariff and
+	// publishes it beside the recorded price. An unusable correction is
+	// dropped without rejecting the configuration.
+	var payload modelRadarMetricsPayload
+	require.NoError(t, common.Unmarshal([]byte(`{"schema":3,"mode":"equal_latest_3","benchmark_id":"deep-swe","scoring_mode":"binary-majority","source_updated_at":"2026-09-24T10:00:00Z","points":[`+
+		`{"model":"grok-4.6","effort":"high","passed":2,"total":3,"iq":100,"average_price_usd":2.71,"price_basis":"original_recorded_algorithm","corrected_average_price_usd":3.6,"corrected_cost_basis":"grok_46_official_tariff_correction","corrected_cost_samples":318},`+
+		`{"model":"grok-4.6","effort":"low","passed":2,"total":3,"iq":90,"average_price_usd":0.99,"corrected_average_price_usd":-1,"corrected_cost_samples":5},`+
+		`{"model":"gpt-test","effort":"high","passed":2,"total":3,"iq":80,"average_price_usd":1.5,"corrected_average_price_usd":null,"corrected_cost_samples":0}]}`), &payload))
+
+	configurations, _, err := normalizeModelRadarMetrics(payload, nil)
+
+	require.NoError(t, err)
+	require.Len(t, configurations, 3)
+	require.NotNil(t, configurations[0].CorrectedAveragePriceUSD)
+	assert.Equal(t, 3.6, *configurations[0].CorrectedAveragePriceUSD)
+	require.NotNil(t, configurations[0].CorrectedCostSamples)
+	assert.Equal(t, 318, *configurations[0].CorrectedCostSamples)
+	require.NotNil(t, configurations[0].AveragePriceUSD)
+	assert.Equal(t, 2.71, *configurations[0].AveragePriceUSD, "the recorded price stays the primary price")
+	assert.Nil(t, configurations[1].CorrectedAveragePriceUSD)
+	assert.Nil(t, configurations[1].CorrectedCostSamples)
+	assert.Nil(t, configurations[2].CorrectedAveragePriceUSD)
+	assert.Nil(t, configurations[2].CorrectedCostSamples)
+}
+
 func TestNormalizeModelRadarMetricsRejectsInvalidCohortsAndCounts(t *testing.T) {
 	var payload modelRadarMetricsPayload
 	require.NoError(t, common.Unmarshal([]byte(`{"schema":3,"mode":"equal_latest_3","benchmark_id":"deep-swe","scoring_mode":"binary-majority","source_updated_at":"2026-07-27T00:00:00Z","points":[{"model":"a","effort":"high","passed":2,"total":3,"iq":100,"combined_cost_index":200}]}`), &payload))

@@ -91,4 +91,93 @@ describe('model radar degradation alerts', () => {
       view.container.querySelector('[data-icon-key="DeepSeek.Color"]')
     ).not.toBeNull()
   })
+
+  test('shows insufficient data when upstream has no 48-hour window for a new tier', () => {
+    render(
+      <DegradationAlerts
+        alerts={[
+          {
+            model: 'grok-4.7',
+            effort: 'medium',
+            iq: 105,
+            degradation_12h_iq: 45,
+            degradation_24h_iq: 45,
+            degradation_48h_iq: null,
+            average_iq_24h: 142.81,
+            average_iq_48h: null,
+          },
+        ]}
+        configurations={[]}
+        history={[]}
+      />
+    )
+
+    const alert = screen.getByRole('article', { name: 'grok-4.7 medium' })
+    expect(
+      within(alert).getByText('48 hours ago Insufficient data')
+    ).toBeVisible()
+    const fortyEightHours = within(alert).getByText('48 hours').closest('div')
+    expect(fortyEightHours).not.toBeNull()
+    expect(
+      within(fortyEightHours as HTMLElement).getByText('Insufficient data')
+    ).toBeVisible()
+    expect(within(alert).getAllByText('-45.0')).toHaveLength(2)
+    expect(within(alert).getByText('Average 142.81')).toBeVisible()
+  })
+
+  test('charts the upstream hourly trend and starts the 48-hour baseline from it', () => {
+    render(
+      <DegradationAlerts
+        alerts={[
+          {
+            model: 'grok-4.7',
+            effort: 'xhigh',
+            iq: 117,
+            degradation_12h_iq: 19,
+            degradation_24h_iq: 19,
+            degradation_48h_iq: 19,
+            trend_48h: [
+              { ts: 1_790_000_000, iq: 150, samples: 2 },
+              { ts: 1_790_003_600, iq: 128.6, samples: 7 },
+              { ts: 1_790_007_200, iq: 117, samples: 9 },
+            ],
+          },
+        ]}
+        configurations={[]}
+        history={[]}
+      />
+    )
+
+    const alert = screen.getByRole('article', { name: 'grok-4.7 xhigh' })
+    expect(
+      within(alert).getByRole('img', {
+        name: '48-hour IQ trend for grok-4.7 xhigh',
+      })
+    ).toBeVisible()
+    expect(within(alert).getByText('48 hours ago 150')).toBeVisible()
+  })
+
+  test('reports insufficient data when the trend has a single reading', () => {
+    render(
+      <DegradationAlerts
+        alerts={[
+          {
+            model: 'grok-4.7',
+            effort: 'low',
+            iq: 96,
+            degradation_12h_iq: 5.1,
+            degradation_24h_iq: 5.1,
+            degradation_48h_iq: null,
+            trend_48h: [{ ts: 1_790_000_000, iq: 96, samples: 53 }],
+          },
+        ]}
+        configurations={[]}
+        history={[]}
+      />
+    )
+
+    const alert = screen.getByRole('article', { name: 'grok-4.7 low' })
+    expect(within(alert).queryByRole('img')).toBeNull()
+    expect(within(alert).getAllByText('Insufficient data').length).toBe(2)
+  })
 })

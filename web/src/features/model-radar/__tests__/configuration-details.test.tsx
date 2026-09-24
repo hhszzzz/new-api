@@ -89,4 +89,62 @@ describe('configuration details', () => {
     expect(within(dialog).getByText('No history data available')).toBeVisible()
     expect(dialog).not.toHaveTextContent(/NaN|undefined|Off-peak|Peak/)
   })
+
+  test('shows insufficient data for IQ dimensions upstream has not graded yet', () => {
+    render(
+      <ConfigurationDetails
+        open
+        onOpenChange={vi.fn()}
+        configuration={{ ...fixture, comprehensive_iq: null, visual_iq: null }}
+        history={[{ ts: 100, points: [fixture] }]}
+      />
+    )
+    const dialog = screen.getByRole('dialog')
+    for (const label of ['Comprehensive IQ', 'Visual spatial reasoning IQ']) {
+      const card = within(dialog).getByText(label).parentElement
+      expect(card).not.toBeNull()
+      expect(
+        within(card as HTMLElement).getByText('Insufficient data')
+      ).toBeVisible()
+    }
+    expect(
+      within(dialog).getByText('Insufficient data', { selector: 'div' })
+    ).toBeVisible()
+  })
+
+  test('shows the official tariff corrected cost beside the recorded cost', () => {
+    render(
+      <ConfigurationDetails
+        open
+        onOpenChange={vi.fn()}
+        configuration={{
+          ...fixture,
+          corrected_average_price_usd: 1.6,
+          corrected_cost_samples: 318,
+        }}
+        history={[]}
+      />
+    )
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByText('$1.25')).toBeVisible()
+    expect(
+      within(dialog).getByText(
+        'Official tariff correction $1.60 · Cost samples: 318'
+      )
+    ).toBeVisible()
+  })
+
+  test('omits the corrected cost when upstream publishes none', () => {
+    render(
+      <ConfigurationDetails
+        open
+        onOpenChange={vi.fn()}
+        configuration={{ ...fixture, corrected_average_price_usd: null }}
+        history={[]}
+      />
+    )
+    expect(screen.getByRole('dialog')).not.toHaveTextContent(
+      'Official tariff correction'
+    )
+  })
 })
