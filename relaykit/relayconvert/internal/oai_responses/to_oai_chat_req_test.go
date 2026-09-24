@@ -781,6 +781,171 @@ func TestResponsesRequestToChatCompletionsRequestRejectsMalformedPenalty(t *test
 	assert.Contains(t, err.Error(), "frequency_penalty")
 }
 
+func TestResponsesRequestToChatCompletionsRequestToolOutputContentParts(t *testing.T) {
+	const dataURL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+	imagePart := map[string]any{"type": "input_image", "image_url": dataURL}
+
+	tests := []struct {
+		name        string
+		output      any
+		wantContent string
+		jsonContent bool
+		wantMedia   []string
+	}{
+		{
+			name:        "text and image keep text on tool message",
+			output:      []any{map[string]any{"type": "input_text", "text": "screenshot taken"}, imagePart},
+			wantContent: `[{"type":"input_text","text":"screenshot taken"},{"type":"text","text":"[new-api: tool result media moved to the following user message]"}]`,
+			jsonContent: true,
+			wantMedia:   []string{dto.ContentTypeImageURL},
+		},
+		{
+			name:        "image only uses placeholder",
+			output:      []any{imagePart},
+			wantContent: `[{"type":"text","text":"[new-api: tool result media moved to the following user message]"}]`,
+			jsonContent: true,
+			wantMedia:   []string{dto.ContentTypeImageURL},
+		},
+		{
+			name:        "mixed media preserves order and provenance",
+			output:      []any{imagePart, map[string]any{"type": "input_file", "file_id": "file_1"}, imagePart},
+			wantContent: `[{"type":"text","text":"[new-api: tool result media moved to the following user message]"},{"type":"text","text":"[new-api: tool result media moved to the following user message]"},{"type":"text","text":"[new-api: tool result media moved to the following user message]"}]`,
+			jsonContent: true,
+			wantMedia:   []string{dto.ContentTypeImageURL, dto.ContentTypeFile, dto.ContentTypeImageURL},
+		},
+		{
+			name: "text-only parts preserve structure",
+			output: []any{
+				map[string]any{"type": "input_text", "text": "first"},
+				map[string]any{"type": "output_text", "text": ""},
+				map[string]any{"type": "text", "text": "second"},
+			},
+			wantContent: `[{"type":"input_text","text":"first"},{"type":"output_text","text":""},{"type":"text","text":"second"}]`,
+			jsonContent: true,
+		},
+		{
+			name:        "string passes through",
+			output:      "done",
+			wantContent: "done",
+		},
+		{
+			name:        "object stays json",
+			output:      map[string]any{"ok": true},
+			wantContent: `{"ok":true}`,
+			jsonContent: true,
+		},
+		{
+			name:        "plain array stays json",
+			output:      []any{1, 2},
+			wantContent: `[1,2]`,
+			jsonContent: true,
+		},
+		{
+			name:        "unknown parts stay on tool output while recognized media is hoisted",
+			output:      []any{imagePart, map[string]any{"type": "refusal", "refusal": "no"}},
+			wantContent: `[{"type":"text","text":"[new-api: tool result media moved to the following user message]"},{"type":"refusal","refusal":"no"}]`,
+			jsonContent: true,
+			wantMedia:   []string{dto.ContentTypeImageURL},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ResponsesRequestToChatCompletionsRequestWithContext(context.Background(), &dto.OpenAIResponsesRequest{
+				Model: "gpt-test",
+				Input: mustRawMessage(t, []map[string]any{
+					{"type": "function_call", "call_id": "call_1", "name": "view_image", "arguments": "{}"},
+					{"type": "function_call_output", "call_id": "call_1", "output": tt.output},
+					{"role": "user", "content": "next"},
+				}),
+			})
+			require.NoError(t, err)
+
+			wantLen := 3
+			if tt.wantMedia != nil {
+				wantLen = 4
+			}
+			require.Len(t, got.Messages, wantLen)
+			assert.Equal(t, "tool", got.Messages[1].Role)
+			assert.Equal(t, "call_1", got.Messages[1].ToolCallId)
+			if tt.jsonContent {
+				assert.JSONEq(t, tt.wantContent, got.Messages[1].StringContent())
+			} else {
+				assert.Equal(t, tt.wantContent, got.Messages[1].StringContent())
+			}
+			assert.Equal(t, dto.Message{Role: "user", Content: "next"}, got.Messages[wantLen-1])
+			if tt.wantMedia == nil {
+				return
+			}
+
+			assert.Equal(t, "user", got.Messages[2].Role)
+			parts := got.Messages[2].ParseContent()
+			require.Len(t, parts, len(tt.wantMedia)+1)
+			assert.Equal(t, "[new-api: media output of tool call call_1]", parts[0].Text)
+			for i, wantType := range tt.wantMedia {
+				assert.Equal(t, wantType, parts[i+1].Type)
+			}
+			require.NotNil(t, parts[1].GetImageMedia())
+			assert.Equal(t, dataURL, parts[1].GetImageMedia().Url)
+		})
+	}
+}
+
+func TestResponsesRequestToChatCompletionsRequestHoistsToolOutputMediaAfterToolBatch(t *testing.T) {
+	const dataURL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+	imageOutput := []any{map[string]any{"type": "input_image", "image_url": dataURL}}
+
+	t.Run("parallel outputs stay contiguous", func(t *testing.T) {
+		got, err := ResponsesRequestToChatCompletionsRequestWithContext(context.Background(), &dto.OpenAIResponsesRequest{
+			Model: "gpt-test",
+			Input: mustRawMessage(t, []map[string]any{
+				{"type": "function_call", "call_id": "call_1", "name": "screenshot", "arguments": "{}"},
+				{"type": "function_call", "call_id": "call_2", "name": "read_file", "arguments": "{}"},
+				{"type": "function_call_output", "call_id": "call_1", "output": imageOutput},
+				{"type": "function_call_output", "call_id": "call_2", "output": "file contents"},
+				{"role": "user", "content": "what do you see?"},
+			}),
+		})
+		require.NoError(t, err)
+
+		require.Len(t, got.Messages, 5)
+		assert.Equal(t, "assistant", got.Messages[0].Role)
+		assert.Len(t, got.Messages[0].ParseToolCalls(), 2)
+		assert.Equal(t, "tool", got.Messages[1].Role)
+		assert.Equal(t, "call_1", got.Messages[1].ToolCallId)
+		assert.JSONEq(t, `[{"type":"text","text":"[new-api: tool result media moved to the following user message]"}]`, got.Messages[1].StringContent())
+		assert.Equal(t, dto.Message{Role: "tool", ToolCallId: "call_2", Content: "file contents"}, got.Messages[2])
+		assert.Equal(t, "user", got.Messages[3].Role)
+		parts := got.Messages[3].ParseContent()
+		require.Len(t, parts, 2)
+		assert.Equal(t, "[new-api: media output of tool call call_1]", parts[0].Text)
+		assert.Equal(t, dto.ContentTypeImageURL, parts[1].Type)
+		assert.Equal(t, dto.Message{Role: "user", Content: "what do you see?"}, got.Messages[4])
+	})
+
+	t.Run("trailing output flushes media at end of input", func(t *testing.T) {
+		got, err := ResponsesRequestToChatCompletionsRequestWithContext(context.Background(), &dto.OpenAIResponsesRequest{
+			Model: "gpt-test",
+			Input: mustRawMessage(t, []map[string]any{
+				{"type": "function_call", "call_id": "call_1", "name": "screenshot", "arguments": "{}"},
+				{"type": "function_call_output", "call_id": "call_1", "output": imageOutput},
+			}),
+		})
+		require.NoError(t, err)
+
+		require.Len(t, got.Messages, 3)
+		assert.Equal(t, "tool", got.Messages[1].Role)
+		assert.Equal(t, "call_1", got.Messages[1].ToolCallId)
+		assert.JSONEq(t, `[{"type":"text","text":"[new-api: tool result media moved to the following user message]"}]`, got.Messages[1].StringContent())
+		assert.Equal(t, "user", got.Messages[2].Role)
+		parts := got.Messages[2].ParseContent()
+		require.Len(t, parts, 2)
+		assert.Equal(t, "[new-api: media output of tool call call_1]", parts[0].Text)
+		require.NotNil(t, parts[1].GetImageMedia())
+		assert.Equal(t, dataURL, parts[1].GetImageMedia().Url)
+	})
+}
+
 func mustRawMessage(t *testing.T, value any) []byte {
 	t.Helper()
 	raw, err := kitutil.Marshal(value)

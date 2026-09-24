@@ -98,3 +98,46 @@ func TestSharedPluginKeysFilterBothChannelSources(t *testing.T) {
 	assert.Equal(t, []int{910001, 910002}, kept)
 	assert.Empty(t, emptied)
 }
+
+func TestNewAPIChannelServesExtendedTaskPlugins(t *testing.T) {
+	truncateTables(t)
+	priority := int64(0)
+	weight := uint(1)
+	baseURL := "https://gateway.example"
+	extended := `{"task_extend_plugin_keys":["alpha","gamma"]}`
+	single := `{"task_plugin_key":"delta"}`
+	channels := []Channel{
+		{Id: 920001, Type: constant.ChannelTypeNewAPI, Status: common.ChannelStatusEnabled, Name: "gateway", Models: "shared,chat", Group: "default", Priority: &priority, Weight: &weight, BaseURL: &baseURL, Setting: &extended},
+		{Id: 920002, Type: constant.ChannelTypeNewAPI, Status: common.ChannelStatusEnabled, Name: "gateway-single", Models: "shared", Group: "default", Priority: &priority, Weight: &weight, BaseURL: &baseURL, Setting: &single},
+	}
+	for i := range channels {
+		require.NoError(t, channels[i].Insert())
+	}
+
+	selectWithFilters := func(modelName string, filters []dto.ChannelFilter) (*Channel, error) {
+		return GetChannelInPoolWithFilter("default", modelName, 0, "", nil, func(channel *Channel) bool {
+			matches, _ := ChannelSatisfiesFilters(channel, modelName, filters)
+			return matches
+		})
+	}
+	selected, err := selectWithFilters("shared", identityFilters("alpha", nil))
+	require.NoError(t, err)
+	require.NotNil(t, selected)
+	assert.Equal(t, "gateway", selected.Name)
+	selected, err = selectWithFilters("shared", identityFilters("delta", nil))
+	require.NoError(t, err)
+	require.NotNil(t, selected)
+	assert.Equal(t, "gateway-single", selected.Name, "a single task_plugin_key still binds a New API channel")
+	selected, err = selectWithFilters("shared", identityFilters("beta", nil))
+	require.NoError(t, err)
+	assert.Nil(t, selected, "unbound plugins never reach the gateway channel")
+	shared := []dto.ChannelFilter{{Kind: dto.FilterTaskPluginIdentity, TaskPluginKey: "beta", TaskPluginKeys: []string{"beta", "gamma"}}}
+	selected, err = selectWithFilters("shared", shared)
+	require.NoError(t, err)
+	require.NotNil(t, selected)
+	assert.Equal(t, "gateway", selected.Name, "a bound shared-model candidate admits the channel")
+	selected, err = selectWithFilters("chat", identityFilters("", nil))
+	require.NoError(t, err)
+	require.NotNil(t, selected)
+	assert.Equal(t, "gateway", selected.Name, "requests without a pinned plugin keep using the gateway")
+}

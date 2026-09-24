@@ -275,14 +275,17 @@ const fallbackLobeIconPromises = new Map<
   Promise<LoadedFallbackIcon | null>
 >()
 const commonIconVariants = new Set(['Avatar', 'Color', 'Mono'])
-let fallbackLobeIconModulePromise: Promise<Record<string, unknown>> | undefined
-
-function loadFallbackLobeIconModule(): Promise<Record<string, unknown>> {
-  fallbackLobeIconModulePromise ??= import('@lobehub/icons/es/icons.js').then(
-    (module) => module as Record<string, unknown>
-  )
-  return fallbackLobeIconModulePromise
-}
+const ICON_METADATA = new Map(toc.map((icon) => [icon.id, icon]))
+const ICON_VARIANTS = {
+  Avatar: 'hasAvatar',
+  Brand: 'hasBrand',
+  BrandColor: 'hasBrandColor',
+  Color: 'hasColor',
+  Combine: 'hasCombine',
+  Text: 'hasText',
+  TextCn: 'hasTextCn',
+  TextColor: 'hasTextColor',
+} as const
 
 function loadFallbackLobeIcon(
   baseKey: string,
@@ -296,27 +299,34 @@ function loadFallbackLobeIcon(
     return Promise.resolve(null)
   }
 
-  const variant = requestedVariant ?? 'Mono'
-  const fallbackKey = `${baseKey}.${variant}`
+  const fallbackKey = `${baseKey}.${requestedVariant ?? 'Mono'}`
   const existing = fallbackLobeIconPromises.get(fallbackKey)
   if (existing) return existing
 
-  let promise = loadFallbackLobeIconModule()
-    .then((module) => {
-      const baseIcon = module[baseKey] as
-        | (IconComponent & Record<string, unknown>)
-        | undefined
-      if (!baseIcon) return null
+  const metadata = ICON_METADATA.get(baseKey)
+  if (!metadata) {
+    fallbackLobeIcons.set(fallbackKey, null)
+    return Promise.resolve(null)
+  }
+  const variantKey = requestedVariant as keyof typeof ICON_VARIANTS
+  const variantFlag = ICON_VARIANTS[variantKey]
+  let variant: string =
+    variantFlag && metadata.param[variantFlag] ? variantKey : 'Mono'
+  // These published variants are not represented by the package's toc flags.
+  if (
+    (baseKey === 'Gemma' && requestedVariant === 'Simple') ||
+    (baseKey === 'LobeHub' && requestedVariant === 'Morden')
+  ) {
+    variant = requestedVariant
+  }
 
-      const requestedComponent = baseIcon[variant]
-      const component = (
-        typeof requestedComponent === 'function' ||
-        typeof requestedComponent === 'object'
-          ? requestedComponent
-          : baseIcon
-      ) as IconComponent
-      return { component }
-    })
+  // Load only the selected SVG variant. Keep common avatars on the lightweight
+  // local renderer, and support both Unix and Windows bundler paths.
+  let promise = import(
+    /* webpackInclude: /[\\/]components[\\/](Mono|Avatar|Brand|BrandColor|Color|Combine|Text|TextCn|TextColor|Simple|Morden)\.js$/ */
+    `@lobehub/icons/es/${baseKey}/components/${variant}.js`
+  )
+    .then((module) => ({ component: module.default as IconComponent }))
     .catch(() => null)
 
   promise = promise.then((icon) => {

@@ -32,7 +32,3 @@ func SetQuotaPerUnit(value float64) error {
 	quotaPerUnitBits.Store(math.Float64bits(value))
 	return nil
 }
-
-func GetTrustQuota() int {
-	return QuotaFromFloat(10 * GetQuotaPerUnit())
-}

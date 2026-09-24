@@ -669,6 +669,173 @@ func TestFinalizeChatCompletionsStreamToResponsesCheckedRejectsOpenToolCall(t *t
 	assert.Contains(t, err.Error(), "tool calls")
 }
 
+func TestChatCompletionsStreamToResponsesReopensItemsAfterMidStreamFinishReason(t *testing.T) {
+	for _, emitSequenceNumber := range []bool{false, true} {
+		t.Run(map[bool]string{false: "legacy", true: "sequence_numbers"}[emitSequenceNumber], func(t *testing.T) {
+			state := NewChatToResponsesStreamState("resp_1", "gpt-test")
+			state.EmitSequenceNumber = emitSequenceNumber
+			toolIndex := 0
+			toolCalls := "tool_calls"
+			stop := "stop"
+
+			chunks := []*dto.ChatCompletionsStreamResponse{
+				{Id: "chatcmpl_1", Model: "gpt-test", Choices: []dto.ChatCompletionsStreamResponseChoice{{
+					Delta: dto.ChatCompletionsStreamResponseChoiceDelta{ReasoningContent: lo.ToPtr("round 1")},
+				}}},
+				{Choices: []dto.ChatCompletionsStreamResponseChoice{{
+					Delta: dto.ChatCompletionsStreamResponseChoiceDelta{Content: lo.ToPtr("calling")},
+				}}},
+				{Choices: []dto.ChatCompletionsStreamResponseChoice{{
+					Delta: dto.ChatCompletionsStreamResponseChoiceDelta{ToolCalls: []dto.ToolCallResponse{{
+						Index: &toolIndex, ID: "call_1", Type: "function",
+						Function: dto.FunctionResponse{Name: "lookup", Arguments: "{}"},
+					}}},
+				}}},
+				{Choices: []dto.ChatCompletionsStreamResponseChoice{{FinishReason: &toolCalls}}},
+				{Choices: []dto.ChatCompletionsStreamResponseChoice{{
+					Delta: dto.ChatCompletionsStreamResponseChoiceDelta{ReasoningContent: lo.ToPtr("round 2")},
+				}}},
+				{Choices: []dto.ChatCompletionsStreamResponseChoice{{
+					Delta:        dto.ChatCompletionsStreamResponseChoiceDelta{Content: lo.ToPtr("final")},
+					FinishReason: &stop,
+				}}},
+			}
+			var events []ChatToResponsesStreamEvent
+			for _, chunk := range chunks {
+				events = append(events, mustResponsesEventsFromChatChunk(t, state, chunk)...)
+			}
+			events = append(events, FinalizeChatCompletionsStreamToResponses(state)...)
+
+			open := map[string]bool{}
+			partAdded, partDone := 0, 0
+			for _, event := range events {
+				itemID := event.Payload.ItemID
+				if event.Payload.Item != nil {
+					itemID = event.Payload.Item.ID
+				}
+				switch event.Type {
+				case responsesEventOutputItemAdded:
+					assert.Falsef(t, open[itemID], "item %q added twice", itemID)
+					open[itemID] = true
+				case responsesEventOutputItemDone:
+					assert.Truef(t, open[itemID], "item %q done without being open", itemID)
+					delete(open, itemID)
+				case responsesEventReasoningPartAdded:
+					partAdded++
+					assert.Truef(t, open[itemID], "part added for closed item %q", itemID)
+				case responsesEventReasoningPartDone:
+					partDone++
+					assert.Truef(t, open[itemID], "part done for closed item %q", itemID)
+				case responsesEventReasoningSummaryDelta, responsesEventOutputTextDelta:
+					assert.Truef(t, open[itemID], "%s for %q arrived without an active item", event.Type, itemID)
+				}
+			}
+			assert.Empty(t, open)
+			assert.Equal(t, 2, partAdded)
+			assert.Equal(t, 2, partDone)
+
+			completed := events[len(events)-1]
+			require.Equal(t, responsesEventCompleted, completed.Type)
+			require.NotNil(t, completed.Payload.Response)
+			output := completed.Payload.Response.Output
+			require.Len(t, output, 5)
+			assert.Equal(t, []string{
+				responsesOutputTypeReasoning, responsesOutputTypeMessage, responsesOutputTypeFunctionCall,
+				responsesOutputTypeReasoning, responsesOutputTypeMessage,
+			}, []string{output[0].Type, output[1].Type, output[2].Type, output[3].Type, output[4].Type})
+			assert.Equal(t, "round 1", output[0].Summary[0].Text)
+			assert.Equal(t, "calling", output[1].Content[0].Text)
+			assert.Equal(t, "call_1", output[2].CallId)
+			assert.Equal(t, "round 2", output[3].Summary[0].Text)
+			assert.Equal(t, "final", output[4].Content[0].Text)
+			assert.Equal(t, "commentary", output[1].Phase)
+			assert.Equal(t, "final_answer", output[4].Phase)
+			assert.Equal(t, "callingfinal", state.UsageText())
+			ids := make(map[string]bool)
+			for _, item := range output {
+				assert.NotEmpty(t, item.ID)
+				assert.False(t, ids[item.ID], "segments must have unique item IDs")
+				ids[item.ID] = true
+				assert.Equal(t, "completed", item.Status)
+			}
+		})
+	}
+}
+
+func TestChatCompletionsStreamToResponsesResumedSegmentRequiresItsOwnFinishReason(t *testing.T) {
+	for _, tc := range []struct {
+		name, outputType string
+		delta            dto.ChatCompletionsStreamResponseChoiceDelta
+	}{
+		{"text", responsesOutputTypeMessage, dto.ChatCompletionsStreamResponseChoiceDelta{Content: kitutil.GetPointer("partial answer")}},
+		{"reasoning", responsesOutputTypeReasoning, dto.ChatCompletionsStreamResponseChoiceDelta{ReasoningContent: kitutil.GetPointer("partial thought")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state := NewChatToResponsesStreamState("resp_resumed", "gpt-test")
+			mustResponsesEventsFromChatChunk(t, state, &dto.ChatCompletionsStreamResponse{
+				Choices: []dto.ChatCompletionsStreamResponseChoice{{
+					Delta: dto.ChatCompletionsStreamResponseChoiceDelta{
+						Content: kitutil.GetPointer("calling"),
+						ToolCalls: []dto.ToolCallResponse{{
+							Index: kitutil.GetPointer(0), ID: "call_1", Type: "function",
+							Function: dto.FunctionResponse{Name: "lookup", Arguments: "{}"},
+						}},
+					},
+					FinishReason: kitutil.GetPointer("tool_calls"),
+				}},
+			})
+			mustResponsesEventsFromChatChunk(t, state, &dto.ChatCompletionsStreamResponse{
+				Choices: []dto.ChatCompletionsStreamResponseChoice{{Delta: tc.delta}},
+			})
+			events, err := FinalizeChatCompletionsStreamToResponsesChecked(state)
+			require.NoError(t, err)
+			require.NotEmpty(t, events)
+			terminal := events[len(events)-1]
+			assert.Equal(t, responsesEventIncomplete, terminal.Type)
+			require.NotNil(t, terminal.Payload.Response)
+			output := terminal.Payload.Response.Output
+			require.Len(t, output, 3)
+			assert.Equal(t, "completed", output[0].Status)
+			assert.Equal(t, "completed", output[1].Status)
+			assert.Equal(t, tc.outputType, output[2].Type)
+			assert.Equal(t, "incomplete", output[2].Status)
+		})
+	}
+
+	t.Run("new tool precedes resumed text", func(t *testing.T) {
+		state := NewChatToResponsesStreamState("resp_resumed_tool", "gpt-test")
+		mustResponsesEventsFromChatChunk(t, state, &dto.ChatCompletionsStreamResponse{
+			Choices: []dto.ChatCompletionsStreamResponseChoice{{
+				Delta:        dto.ChatCompletionsStreamResponseChoiceDelta{Content: kitutil.GetPointer("first answer")},
+				FinishReason: kitutil.GetPointer("stop"),
+			}},
+		})
+		mustResponsesEventsFromChatChunk(t, state, &dto.ChatCompletionsStreamResponse{
+			Choices: []dto.ChatCompletionsStreamResponseChoice{{Delta: dto.ChatCompletionsStreamResponseChoiceDelta{
+				ToolCalls: []dto.ToolCallResponse{{
+					Index: kitutil.GetPointer(0), ID: "call_2", Type: "function",
+					Function: dto.FunctionResponse{Name: "lookup", Arguments: "{}"},
+				}},
+			}}},
+		})
+		mustResponsesEventsFromChatChunk(t, state, &dto.ChatCompletionsStreamResponse{
+			Choices: []dto.ChatCompletionsStreamResponseChoice{{
+				Delta:        dto.ChatCompletionsStreamResponseChoiceDelta{Content: kitutil.GetPointer("calling")},
+				FinishReason: kitutil.GetPointer("tool_calls"),
+			}},
+		})
+		events, err := FinalizeChatCompletionsStreamToResponsesChecked(state)
+		require.NoError(t, err)
+		require.NotEmpty(t, events)
+		terminal := events[len(events)-1]
+		assert.Equal(t, responsesEventCompleted, terminal.Type)
+		require.NotNil(t, terminal.Payload.Response)
+		require.Len(t, terminal.Payload.Response.Output, 3)
+		assert.Equal(t, "final_answer", terminal.Payload.Response.Output[0].Phase)
+		assert.Equal(t, "commentary", terminal.Payload.Response.Output[2].Phase)
+	})
+}
+
 func mustResponsesEventsFromChatChunk(t *testing.T, state *ChatToResponsesStreamState, chunk *dto.ChatCompletionsStreamResponse) []ChatToResponsesStreamEvent {
 	t.Helper()
 	events, err := ChatCompletionsStreamChunkToResponsesEvents(chunk, state)

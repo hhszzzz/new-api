@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { useQuery } from '@tanstack/react-query'
 import { getRouteApi } from '@tanstack/react-router'
 import type { ColumnDef, OnChangeFn, SortingState } from '@tanstack/react-table'
-import { useMemo } from 'react'
+import { useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import {
@@ -118,6 +118,10 @@ interface UsageLogsTableProps {
 
 export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
   const { t } = useTranslation()
+  const getColumnClassName = useCallback(
+    () => (logCategory === 'common' ? 'py-2' : 'py-3.5'),
+    [logCategory]
+  )
   const {
     isAdminView,
     isRootView: isRoot,
@@ -373,7 +377,8 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
             key={row.id}
             row={row}
             className={cn('transition-colors', tintClass)}
-            getColumnClassName={() => (isCommon ? 'py-2' : 'py-3.5')}
+            getColumnClassName={getColumnClassName}
+            cellRenderColumns={table.options.columns}
           />
         )
       }}

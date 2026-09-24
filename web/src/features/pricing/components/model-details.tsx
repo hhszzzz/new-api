@@ -98,8 +98,9 @@ import { getTaskPricingDisplayTiers } from '../lib/task-matrix-display'
 import {
   hasSimpleTaskPricing,
   taskPriceLabel,
-  taskPricingConditions,
   taskUsageUnitLabel,
+  taskTierConditions,
+  pricingDisplayFallbackKey,
 } from '../lib/task-price-display'
 import type {
   ModelCapability,
@@ -652,7 +653,12 @@ function PriceSection(props: {
               {t('Special billing expression')}
             </div>
             <p className='text-muted-foreground mt-1 text-xs'>
-              {t('Unable to parse structured pricing')}
+              {t(
+                pricingDisplayFallbackKey(
+                  dynamicSummary.rawExpression,
+                  props.model.billing_usage_schema
+                )
+              )}
             </p>
             <div className='mt-3'>
               <div className='text-muted-foreground mb-1 text-[10px] font-medium tracking-wider uppercase'>
@@ -1070,7 +1076,10 @@ function ProviderGroupPricingSection(
             </div>
             <p className='text-muted-foreground mt-1 text-xs'>
               {t(
-                'Group prices cannot be expanded because this expression is not a standard tiered pricing expression.'
+                pricingDisplayFallbackKey(
+                  props.model.billing_expr || '',
+                  props.model.billing_usage_schema
+                )
               )}
             </p>
             <div className='mt-3'>
@@ -1182,8 +1191,8 @@ function ProviderGroupPricingSection(
                               cellClassName:
                                 'text-muted-foreground py-2.5 whitespace-normal break-words',
                               cell: (tier: DynamicPricingTier) =>
-                                taskPricingConditions(
-                                  (tier as ParsedTaskTier).conditions,
+                                taskTierConditions(
+                                  tier as ParsedTaskTier,
                                   props.model.billing_usage_schema,
                                   i18n.language,
                                   t

@@ -160,9 +160,11 @@ const ModelRatioVisualEditorComponent = forwardRef<
   const { t } = useTranslation()
   const { models: pricingModels } = usePricingData()
   const isMobile = useMediaQuery('(max-width: 767px)')
-  const [sheetOpen, setSheetOpen] = useState(false)
-  const [editorOpen, setEditorOpen] = useState(false)
-  const [editData, setEditData] = useState<ModelRatioData | null>(null)
+  const [{ sheetOpen, editorOpen, editData }, setEditorState] = useState<{
+    sheetOpen: boolean
+    editorOpen: boolean
+    editData: ModelRatioData | null
+  }>({ sheetOpen: false, editorOpen: false, editData: null })
   const pricingConfig = useModelPricing(
     editData?.name ? [editData.name] : [],
     Boolean(editData?.name)
@@ -352,31 +354,31 @@ const ModelRatioVisualEditorComponent = forwardRef<
       } else if (editableModel.price && editableModel.price !== '') {
         editBillingMode = 'per-request'
       }
-      setEditData({
-        name: editableModel.name,
-        price: editableModel.price,
-        ratio: editableModel.ratio,
-        cacheRatio: editableModel.cacheRatio,
-        createCacheRatio: editableModel.createCacheRatio,
-        completionRatio: editableModel.completionRatio,
-        imageRatio: editableModel.imageRatio,
-        audioRatio: editableModel.audioRatio,
-        audioCompletionRatio: editableModel.audioCompletionRatio,
-        billingMode: editBillingMode,
-        billingExpr: editableModel.billingExpr,
-        pluginBillingExpr: editableModel.pluginBillingExpr,
-        requestRuleExpr: editableModel.requestRuleExpr,
+      setEditorState({
+        sheetOpen: isMobile,
+        editorOpen: true,
+        editData: {
+          name: editableModel.name,
+          price: editableModel.price,
+          ratio: editableModel.ratio,
+          cacheRatio: editableModel.cacheRatio,
+          createCacheRatio: editableModel.createCacheRatio,
+          completionRatio: editableModel.completionRatio,
+          imageRatio: editableModel.imageRatio,
+          audioRatio: editableModel.audioRatio,
+          audioCompletionRatio: editableModel.audioCompletionRatio,
+          billingMode: editBillingMode,
+          billingExpr: editableModel.billingExpr,
+          pluginBillingExpr: editableModel.pluginBillingExpr,
+          requestRuleExpr: editableModel.requestRuleExpr,
+        },
       })
-      setEditorOpen(true)
-      if (isMobile) setSheetOpen(true)
     },
     [isMobile]
   )
 
   const handleAdd = useCallback(() => {
-    setEditData(null)
-    setEditorOpen(true)
-    if (isMobile) setSheetOpen(true)
+    setEditorState({ editData: null, editorOpen: true, sheetOpen: isMobile })
   }, [isMobile])
 
   const handleGlobalFilterChange = useCallback<OnChangeFn<string>>(
@@ -384,9 +386,11 @@ const ModelRatioVisualEditorComponent = forwardRef<
       setGlobalFilter((previous) => {
         const next = typeof updater === 'function' ? updater(previous) : updater
         if (next !== previous) {
-          setEditData(null)
-          setEditorOpen(false)
-          setSheetOpen(false)
+          setEditorState({
+            editData: null,
+            editorOpen: false,
+            sheetOpen: false,
+          })
         }
         return next
       })
@@ -481,11 +485,13 @@ const ModelRatioVisualEditorComponent = forwardRef<
         JSON.stringify(billingExprMap, null, 2)
       )
 
-      if (editData?.name === name) {
-        setEditData(null)
-        setEditorOpen(false)
-        setSheetOpen(false)
-      }
+      // Keep this event handler stable so opening the editor does not rebuild
+      // table cells and discard the user's text selection.
+      setEditorState((previous) =>
+        previous.editData?.name === name
+          ? { editData: null, editorOpen: false, sheetOpen: false }
+          : previous
+      )
     },
     [
       modelPrice,
@@ -500,7 +506,6 @@ const ModelRatioVisualEditorComponent = forwardRef<
       billingExpr,
       pluginBillingExpr,
       onChange,
-      editData,
     ]
   )
 
@@ -599,7 +604,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
       const committed = await editorPanelRef.current.commitDraft()
       if (!committed) return
       sourceData = committed
-      setEditData(committed)
+      setEditorState((previous) => ({ ...previous, editData: committed }))
     }
 
     const targetNames = table
@@ -633,7 +638,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
         const data = await editorPanelRef.current.commitDraft()
         if (!data) return false
         persistPricingData(data)
-        setEditData(data)
+        setEditorState((previous) => ({ ...previous, editData: data }))
         return true
       },
     }),
@@ -811,7 +816,9 @@ const ModelRatioVisualEditorComponent = forwardRef<
         <ModelPricingSheet
           ref={editorPanelRef}
           open={sheetOpen}
-          onOpenChange={setSheetOpen}
+          onOpenChange={(sheetOpen) =>
+            setEditorState((previous) => ({ ...previous, sheetOpen }))
+          }
           editData={editData}
           pluginVariants={
             pricingConfig.data?.entries.find(

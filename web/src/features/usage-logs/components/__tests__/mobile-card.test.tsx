@@ -391,6 +391,21 @@ it('omits unused token and throughput placeholders for async jobs', () => {
   expect(within(timing as HTMLElement).queryByText('—')).not.toBeInTheDocument()
 })
 
+it('labels a task whose result was returned in the response as synchronous', () => {
+  renderLogs({
+    logs: [
+      {
+        ...log,
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        other: JSON.stringify({ is_task: true, task_sync: true }),
+      },
+    ],
+  })
+  expect(screen.getByText('Sync')).toBeVisible()
+  expect(screen.queryByText('Async')).not.toBeInTheDocument()
+})
+
 it('shows mapped model names in full when inspecting a mobile model badge', async () => {
   // Model routing details are permission-gated; view them as an admin.
   const originalAuth = useAuthStore.getState().auth

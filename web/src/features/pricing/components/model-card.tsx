@@ -47,14 +47,14 @@ import { ModelPerfBadge, type ModelPerfBadgeData } from './model-perf-badge'
 
 export interface ModelCardProps {
   model: PricingModel
-  onClick: () => void
+  onClick: (modelName: string) => void
   priceRate?: number
   usdExchangeRate?: number
   tokenUnit?: TokenUnit
   showRechargePrice?: boolean
   selectedGroup?: string
   perf?: ModelPerfBadgeData
-  onOpenPerformance?: () => void
+  onOpenPerformance?: (modelName: string) => void
   availableGroups?: readonly string[]
 }
 
@@ -394,10 +394,18 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
       <CardFooter className='mt-auto border-0 bg-transparent pt-0'>
         <ModelPerfBadge
           perf={props.perf}
-          onOpenPerformance={props.onOpenPerformance}
+          onOpenPerformance={
+            props.onOpenPerformance
+              ? () => props.onOpenPerformance?.(props.model.model_name || '')
+              : undefined
+          }
           className='border-border/60 border-t pt-2'
         >
-          <Button variant='ghost' size='sm' onClick={props.onClick}>
+          <Button
+            variant='ghost'
+            size='sm'
+            onClick={() => props.onClick(props.model.model_name || '')}
+          >
             {t('Details')}
             <ChevronRight aria-hidden className='size-3.5' />
           </Button>

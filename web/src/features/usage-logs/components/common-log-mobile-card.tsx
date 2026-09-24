@@ -207,6 +207,7 @@ export function CommonLogMobileCard<TData>(props: {
                     log.request_id
                   )}
                   isTask={other?.is_task === true}
+                  isSyncTask={other?.task_sync === true}
                   tokensPerSecond={
                     log.use_time > 0 && log.completion_tokens > 0
                       ? log.completion_tokens / log.use_time

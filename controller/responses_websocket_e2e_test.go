@@ -70,7 +70,7 @@ func TestResponsesWebSocketEndToEndReuseBillingAndChannelDisable(t *testing.T) {
 
 	previousMemoryCache := common.MemoryCacheEnabled
 	previousBatchUpdate := common.BatchUpdateEnabled
-	previousPreConsumedQuota := common.PreConsumedQuota
+	previousCountToken := constant.CountToken
 	previousLogConsume := common.LogConsumeEnabled
 	previousRetryTimes := common.RetryTimes
 	previousRateLimit := setting.ModelRequestRateLimitEnabled
@@ -84,7 +84,7 @@ func TestResponsesWebSocketEndToEndReuseBillingAndChannelDisable(t *testing.T) {
 	t.Cleanup(func() {
 		common.MemoryCacheEnabled = previousMemoryCache
 		common.BatchUpdateEnabled = previousBatchUpdate
-		common.PreConsumedQuota = previousPreConsumedQuota
+		constant.CountToken = previousCountToken
 		common.LogConsumeEnabled = previousLogConsume
 		common.RetryTimes = previousRetryTimes
 		setting.ModelRequestRateLimitEnabled = previousRateLimit
@@ -99,7 +99,7 @@ func TestResponsesWebSocketEndToEndReuseBillingAndChannelDisable(t *testing.T) {
 	})
 	common.MemoryCacheEnabled = false
 	common.BatchUpdateEnabled = false
-	common.PreConsumedQuota = 10
+	constant.CountToken = true
 	common.LogConsumeEnabled = true
 	common.RetryTimes = 0
 	setting.ModelRequestRateLimitEnabled = false

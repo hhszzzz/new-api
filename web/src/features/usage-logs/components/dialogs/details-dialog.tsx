@@ -717,7 +717,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
       description={t('View the complete details for this log entry')}
       contentClassName={cn(
         'min-w-0 overflow-hidden',
-        'max-sm:max-h-[calc(100dvh-1.5rem)] max-sm:w-[calc(100vw-1.5rem)] max-sm:max-w-[calc(100vw-1.5rem)] max-sm:p-4',
+        'max-sm:max-h-(--dialog-available-height) max-sm:w-[calc(100vw-1.5rem)] max-sm:max-w-[calc(100vw-1.5rem)] max-sm:p-4',
         'sm:max-w-xl'
       )}
       headerClassName='max-sm:gap-1'

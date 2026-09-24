@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import type { ColumnDef } from '@tanstack/react-table'
 import { KeyRound, Route, Sparkles } from 'lucide-react'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { GroupBadge } from '@/components/group-badge'
@@ -53,6 +53,7 @@ import { getUserAvatarFallback, getUserAvatarStyle } from '@/lib/avatar'
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
 import { formatLogQuota, formatTimestampToDate } from '@/lib/format'
 import { cn } from '@/lib/utils'
+import { useSystemConfigStore } from '@/stores/system-config-store'
 
 import { LOG_TYPE_ALL_VALUE } from '../../constants'
 import type { UsageLog } from '../../data/schema'
@@ -353,667 +354,687 @@ export function useCommonLogsColumns(
   showBillingSource = false
 ): ColumnDef<UsageLog>[] {
   const { t } = useTranslation()
-  const columns: ColumnDef<UsageLog>[] = [
-    {
-      accessorKey: 'created_at',
-      header: t('Time'),
-      cell: ({ row }) => {
-        const log = row.original
-        const timestamp = row.getValue('created_at') as number
-        const config = getLogTypeConfig(log.type)
+  const currency = useSystemConfigStore((state) => state.config.currency)
+  return useMemo(() => {
+    const columns: ColumnDef<UsageLog>[] = [
+      {
+        accessorKey: 'created_at',
+        header: t('Time'),
+        cell: ({ row }) => {
+          const log = row.original
+          const timestamp = row.getValue('created_at') as number
+          const config = getLogTypeConfig(log.type)
 
-        return (
-          <div className='flex min-w-0 flex-col gap-0.5'>
-            <span className='truncate font-mono text-xs tabular-nums'>
-              {formatTimestampToDate(timestamp)}
-            </span>
+          return (
+            <div className='flex min-w-0 flex-col gap-0.5'>
+              <span className='truncate font-mono text-xs tabular-nums'>
+                {formatTimestampToDate(timestamp)}
+              </span>
+              <StatusBadge
+                label={t(config.label)}
+                variant={config.color as StatusBadgeProps['variant']}
+                size='sm'
+                copyable={false}
+                className='-ml-1.5 !text-xs [&_span]:!text-xs'
+              />
+            </div>
+          )
+        },
+        filterFn: (row, _id, value) => {
+          if (!Array.isArray(value) || value.length === 0) return true
+          if (value.includes(LOG_TYPE_ALL_VALUE)) return true
+          return value.includes(String(row.original.type))
+        },
+        enableHiding: false,
+        size: 180,
+      },
+    ]
+
+    if (isAdminView) {
+      columns.push(
+        {
+          id: 'channel',
+          header: t('Channel'),
+          accessorFn: (row) => row.channel,
+          cell: function ChannelCell({ row }) {
+            const {
+              sensitiveVisible,
+              setAffinityTarget,
+              setAffinityDialogOpen,
+            } = useUsageLogsContext()
+            const log = row.original
+
+            if (!isDisplayableLogType(log.type)) return null
+
+            const other = parseLogOther(log.other)
+            const adminInfo = other?.admin_info
+            const affinity = other?.admin_info?.channel_affinity
+            const rawUseChannel =
+              other?.admin_info?.retry_chain ??
+              other?.admin_info?.use_channel ??
+              []
+            const useChannel = Array.isArray(rawUseChannel)
+              ? rawUseChannel.map(String).filter(Boolean)
+              : []
+            const hasRetryChain = useChannel.length > 1
+            const channelChain = hasRetryChain
+              ? useChannel.join(' → ')
+              : undefined
+            const surfaceChannelName =
+              adminInfo?.surface_channel_name ||
+              adminInfo?.aggregate_name ||
+              log.channel_name ||
+              `#${log.channel}`
+            const actualChannelName =
+              adminInfo?.actual_channel_name || log.channel_name
+            const hasChannelName = Boolean(
+              adminInfo?.surface_channel_name ||
+              adminInfo?.aggregate_name ||
+              log.channel_name
+            )
+            const channelIdDisplay = `#${log.channel}`
+            const actualChannelIdDisplay = `#${
+              adminInfo?.actual_channel_id || log.channel
+            }`
+            const hasChannelRoute =
+              hasRetryChain ||
+              Boolean(
+                actualChannelName && actualChannelName !== surfaceChannelName
+              )
+            const multiKeyIndex = other?.admin_info?.multi_key_index
+            const showMultiKeyIndex =
+              other?.admin_info?.is_multi_key === true &&
+              typeof multiKeyIndex === 'number' &&
+              Number.isFinite(multiKeyIndex)
+
+            return (
+              <div className='flex max-w-[190px] flex-col'>
+                <div className='relative inline-flex w-fit max-w-full items-center gap-1'>
+                  {hasChannelRoute ? (
+                    <Popover>
+                      <PopoverTrigger
+                        render={
+                          <button
+                            type='button'
+                            className='focus-visible:ring-ring inline-flex max-w-full min-w-0 items-center gap-1 rounded-md text-left transition-opacity hover:opacity-80 focus-visible:ring-2 focus-visible:outline-none'
+                            aria-label={
+                              sensitiveVisible
+                                ? surfaceChannelName
+                                : channelIdDisplay
+                            }
+                            onClick={(event) => event.stopPropagation()}
+                          />
+                        }
+                      >
+                        <StatusBadge
+                          label={channelIdDisplay}
+                          autoColor={String(log.channel)}
+                          size='sm'
+                          showDot={false}
+                          copyable={false}
+                          className='font-mono'
+                        />
+                        <Route
+                          className='text-muted-foreground size-3.5 shrink-0'
+                          aria-hidden='true'
+                        />
+                      </PopoverTrigger>
+                      <PopoverContent side='top' align='start' className='w-72'>
+                        <div className='space-y-2 text-xs'>
+                          <div className='flex items-center justify-between gap-3'>
+                            <span className='text-muted-foreground'>
+                              {t('Surface Channel')}
+                            </span>
+                            <span className='text-right font-mono font-medium break-all'>
+                              {sensitiveVisible
+                                ? surfaceChannelName
+                                : channelIdDisplay}
+                            </span>
+                          </div>
+                          <div
+                            data-testid='actual-channel-row'
+                            className='grid grid-cols-[max-content_minmax(0,1fr)] items-center gap-3'
+                          >
+                            <span className='text-muted-foreground'>
+                              {t('Actual Channel')}
+                            </span>
+                            <div className='flex min-w-0 flex-col items-end gap-1 justify-self-end'>
+                              <StatusBadge
+                                data-testid='actual-channel-id'
+                                label={actualChannelIdDisplay}
+                                autoColor={String(
+                                  adminInfo?.actual_channel_id || log.channel
+                                )}
+                                copyText={String(
+                                  adminInfo?.actual_channel_id || log.channel
+                                )}
+                                size='sm'
+                                showDot={false}
+                                className='h-4 px-1 font-mono !text-[11px]'
+                              />
+                              {sensitiveVisible && (
+                                <span className='text-right font-medium break-all'>
+                                  {actualChannelName || '-'}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          {channelChain && (
+                            <div className='flex items-start justify-between gap-3'>
+                              <span className='text-muted-foreground'>
+                                {t('Retry Chain')}
+                              </span>
+                              <span className='text-right font-mono break-all'>
+                                {channelChain}
+                              </span>
+                            </div>
+                          )}
+                          {showMultiKeyIndex && (
+                            <div className='flex items-start justify-between gap-3'>
+                              <span className='text-muted-foreground'>
+                                {t('Key')}
+                              </span>
+                              <span className='font-mono'>{multiKeyIndex}</span>
+                            </div>
+                          )}
+                        </div>
+                      </PopoverContent>
+                    </Popover>
+                  ) : (
+                    <StatusBadge
+                      label={channelIdDisplay}
+                      autoColor={String(log.channel)}
+                      copyText={String(log.channel)}
+                      size='sm'
+                      showDot={false}
+                      className='font-mono'
+                    />
+                  )}
+                  {showMultiKeyIndex && (
+                    <StatusBadge
+                      label={String(multiKeyIndex)}
+                      size='sm'
+                      showDot={false}
+                      copyable={false}
+                      variant='neutral'
+                      className='h-5 min-w-5 justify-center rounded-full px-1 font-mono text-xs'
+                      aria-label={`${t('Key')} ${multiKeyIndex}`}
+                    />
+                  )}
+                  {affinity && (
+                    <button
+                      type='button'
+                      className='absolute -top-1 -right-1 leading-none text-amber-500'
+                      aria-label={t('Channel Affinity')}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        setAffinityTarget({
+                          rule_name: affinity.rule_name || '',
+                          using_group:
+                            affinity.using_group ||
+                            affinity.selected_group ||
+                            '',
+                          key_hint: affinity.key_hint || '',
+                          key_fp: affinity.key_fp || '',
+                        })
+                        setAffinityDialogOpen(true)
+                      }}
+                    >
+                      <Sparkles
+                        className='size-3 fill-current'
+                        aria-hidden='true'
+                      />
+                    </button>
+                  )}
+                </div>
+                {hasChannelName && (
+                  <span className='text-muted-foreground/70 truncate [font-family:var(--font-body)] text-xs'>
+                    {sensitiveVisible ? surfaceChannelName : '••••'}
+                  </span>
+                )}
+              </div>
+            )
+          },
+        },
+        {
+          id: 'user',
+          header: t('User'),
+          accessorFn: (row) => row.username,
+          cell: function UserCell({ row }) {
+            const {
+              sensitiveVisible,
+              setSelectedUserId,
+              setUserInfoDialogOpen,
+            } = useUsageLogsContext()
+            const log = row.original
+
+            if (!log.username) return null
+
+            return (
+              <button
+                type='button'
+                className='flex items-center gap-1.5 text-left'
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setSelectedUserId(log.user_id)
+                  setUserInfoDialogOpen(true)
+                }}
+              >
+                <Avatar className='ring-border/60 size-6 ring-1 max-sm:hidden'>
+                  <AvatarFallback
+                    className={cn(
+                      'text-[11px] font-semibold',
+                      !sensitiveVisible && 'bg-muted text-muted-foreground'
+                    )}
+                    style={
+                      sensitiveVisible
+                        ? getUserAvatarStyle(log.username)
+                        : undefined
+                    }
+                  >
+                    {sensitiveVisible
+                      ? getUserAvatarFallback(log.username)
+                      : '•'}
+                  </AvatarFallback>
+                </Avatar>
+                <TooltipProvider delay={300}>
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <span className='text-muted-foreground max-w-[100px] truncate text-sm hover:underline' />
+                      }
+                    >
+                      {sensitiveVisible ? log.username : '••••'}
+                    </TooltipTrigger>
+                    {sensitiveVisible && log.username.length > 12 && (
+                      <TooltipContent side='top'>{log.username}</TooltipContent>
+                    )}
+                  </Tooltip>
+                </TooltipProvider>
+              </button>
+            )
+          },
+        }
+      )
+    }
+
+    columns.push(
+      {
+        id: 'client',
+        header: t('Client'),
+        accessorFn: (row) =>
+          parseLogOther(row.other)?.diagnostics?.client ?? '',
+        cell: ({ row }) => {
+          const client = parseLogOther(row.original.other)?.diagnostics?.client
+          return client ? (
             <StatusBadge
-              label={t(config.label)}
-              variant={config.color as StatusBadgeProps['variant']}
+              label={client}
+              variant='neutral'
               size='sm'
               copyable={false}
-              className='-ml-1.5 !text-xs [&_span]:!text-xs'
             />
+          ) : (
+            <span className='text-muted-foreground'>—</span>
+          )
+        },
+        size: 130,
+      },
+      {
+        id: 'protocol',
+        header: t('Protocol'),
+        accessorFn: (row) =>
+          parseLogOther(row.other)?.diagnostics?.request_protocol ?? '',
+        cell: ({ row }) => {
+          const other = parseLogOther(row.original.other)
+          const diagnostics = other?.diagnostics
+          const requestProtocol = diagnostics?.request_protocol
+          const upstreamProtocol = isAdminView
+            ? (other?.admin_info?.upstream_protocol ??
+              diagnostics?.upstream_protocol)
+            : undefined
+          if (!requestProtocol && !upstreamProtocol) {
+            return <span className='text-muted-foreground'>—</span>
+          }
+          return (
+            <div className='flex flex-col text-xs'>
+              <span>{requestProtocol || '—'}</span>
+              {upstreamProtocol && upstreamProtocol !== requestProtocol && (
+                <span className='text-muted-foreground'>
+                  → {upstreamProtocol}
+                </span>
+              )}
+            </div>
+          )
+        },
+        size: 150,
+      },
+      {
+        id: 'ip',
+        header: t('IP Address'),
+        accessorFn: (row) =>
+          row.ip || parseLogOther(row.other)?.diagnostics?.ip || '',
+        cell: ({ row }) => {
+          const ip =
+            row.original.ip ||
+            parseLogOther(row.original.other)?.diagnostics?.ip
+          return ip ? (
+            <span className='font-mono text-xs'>{ip}</span>
+          ) : (
+            <span className='text-muted-foreground'>—</span>
+          )
+        },
+        size: 150,
+      }
+    )
+
+    columns.push({
+      accessorKey: 'token_name',
+      header: t('Token'),
+      cell: function TokenNameCell({ row }) {
+        const { sensitiveVisible } = useUsageLogsContext()
+        const log = row.original
+        if (!isDisplayableLogType(log.type)) return null
+
+        const tokenName = log.token_name
+        if (!tokenName) return null
+
+        const other = parseLogOther(log.other)
+        const displayName = sensitiveVisible ? tokenName : '••••'
+        let group = log.group
+        if (!group) group = other?.group || ''
+        const groupRatio = getGroupRatio(other)
+
+        return (
+          <div className='flex max-w-[200px] flex-col gap-0.5'>
+            <TooltipProvider delay={300}>
+              <Tooltip>
+                <TooltipTrigger render={<div className='max-w-full' />}>
+                  <StatusBadge
+                    label={displayName}
+                    icon={KeyRound}
+                    copyText={sensitiveVisible ? tokenName : undefined}
+                    size='sm'
+                    showDot={false}
+                    className='border-border/60 bg-muted/30 text-foreground h-6 max-w-full gap-1.5 overflow-hidden rounded-md border px-2 py-0.5 [font-family:var(--font-body)]'
+                  />
+                </TooltipTrigger>
+                {sensitiveVisible && tokenName.length > 16 && (
+                  <TooltipContent side='top' className='max-w-xs break-all'>
+                    {tokenName}
+                  </TooltipContent>
+                )}
+              </Tooltip>
+            </TooltipProvider>
+            {(group || groupRatio != null) && (
+              <span className='block max-w-full truncate text-xs leading-none'>
+                {group ? (
+                  <GroupBadge
+                    group={group}
+                    label={sensitiveVisible ? undefined : '••••'}
+                    type='text'
+                    size='sm'
+                    className='inline align-baseline text-xs leading-none [&>span]:leading-none'
+                  />
+                ) : null}
+                {group && groupRatio != null ? ' ' : null}
+                {groupRatio != null ? (
+                  <span className='text-muted-foreground/60 relative top-px align-baseline tabular-nums'>
+                    {formatRatioCompact(groupRatio)}x
+                  </span>
+                ) : null}
+              </span>
+            )}
           </div>
         )
       },
-      filterFn: (row, _id, value) => {
-        if (!Array.isArray(value) || value.length === 0) return true
-        if (value.includes(LOG_TYPE_ALL_VALUE)) return true
-        return value.includes(String(row.original.type))
-      },
-      enableHiding: false,
-      size: 180,
-    },
-  ]
-
-  if (isAdminView) {
+      size: 160,
+    })
     columns.push(
       {
-        id: 'channel',
-        header: t('Channel'),
-        accessorFn: (row) => row.channel,
-        cell: function ChannelCell({ row }) {
-          const { sensitiveVisible, setAffinityTarget, setAffinityDialogOpen } =
-            useUsageLogsContext()
+        accessorKey: 'model_name',
+        header: t('Model'),
+        cell: function ModelCell({ row }) {
           const log = row.original
+          if (!isDisplayableLogType(log.type)) return null
+          const other = parseLogOther(log.other)
+          const modelInfo = formatModelName(
+            log.model_name,
+            other,
+            canViewModelRoute
+          )
+          return (
+            <div className='flex w-fit flex-col items-start gap-0.5'>
+              <ModelBadge
+                modelName={modelInfo.name}
+                actualModel={modelInfo.actualModel}
+                responseModel={modelInfo.responseModel}
+              />
+              <ProtocolTranslationBadge
+                logType={log.type}
+                other={other}
+                isAdminView={isAdminView}
+              />
+            </div>
+          )
+        },
+        meta: { mobileTitle: true },
+      },
+      {
+        accessorKey: 'is_stream',
+        header: t('Connection Type'),
+        cell: ({ row }) => {
+          const log = row.original
+          if (!isTimingLogType(log.type)) return null
 
+          const useTime = row.getValue('use_time') as number
+          const other = parseLogOther(log.other)
+          const timing = resolveLogTimingMetrics({
+            other,
+            useTimeSeconds: useTime,
+            completionTokens: log.completion_tokens,
+            isStream: log.is_stream,
+            requestId: log.request_id,
+          })
+
+          return (
+            <StreamTpsCell
+              isStream={timing.isStreaming}
+              transport={timing.transport}
+              tokensPerSecond={timing.tokensPerSecond}
+              isTask={other?.is_task === true}
+              isSyncTask={other?.task_sync === true}
+              streamStatus={other?.stream_status}
+            />
+          )
+        },
+        meta: { label: t('Connection Type') },
+      },
+      {
+        accessorKey: 'prompt_tokens',
+        header: 'Tokens',
+        cell: ({ row }) => {
+          const log = row.original
           if (!isDisplayableLogType(log.type)) return null
 
           const other = parseLogOther(log.other)
-          const adminInfo = other?.admin_info
-          const affinity = other?.admin_info?.channel_affinity
-          const rawUseChannel =
-            other?.admin_info?.retry_chain ??
-            other?.admin_info?.use_channel ??
-            []
-          const useChannel = Array.isArray(rawUseChannel)
-            ? rawUseChannel.map(String).filter(Boolean)
-            : []
-          const hasRetryChain = useChannel.length > 1
-          const channelChain = hasRetryChain
-            ? useChannel.join(' → ')
-            : undefined
-          const surfaceChannelName =
-            adminInfo?.surface_channel_name ||
-            adminInfo?.aggregate_name ||
-            log.channel_name ||
-            `#${log.channel}`
-          const actualChannelName =
-            adminInfo?.actual_channel_name || log.channel_name
-          const hasChannelName = Boolean(
-            adminInfo?.surface_channel_name ||
-            adminInfo?.aggregate_name ||
-            log.channel_name
-          )
-          const channelIdDisplay = `#${log.channel}`
-          const actualChannelIdDisplay = `#${
-            adminInfo?.actual_channel_id || log.channel
-          }`
-          const hasChannelRoute =
-            hasRetryChain ||
-            Boolean(
-              actualChannelName && actualChannelName !== surfaceChannelName
-            )
-          const multiKeyIndex = other?.admin_info?.multi_key_index
-          const showMultiKeyIndex =
-            other?.admin_info?.is_multi_key === true &&
-            typeof multiKeyIndex === 'number' &&
-            Number.isFinite(multiKeyIndex)
+
+          const promptTokens = log.prompt_tokens || 0
+          const completionTokens = log.completion_tokens || 0
+          if (promptTokens === 0 && completionTokens === 0) {
+            return <span className='text-muted-foreground text-xs'>-</span>
+          }
+
+          const cacheReadTokens = other?.cache_tokens || 0
+          const cacheWrite5m = other?.cache_creation_tokens_5m || 0
+          const cacheWrite1h = other?.cache_creation_tokens_1h || 0
+          const hasSplitCache = cacheWrite5m > 0 || cacheWrite1h > 0
+          const cacheWriteTokens = hasSplitCache
+            ? cacheWrite5m + cacheWrite1h
+            : other?.cache_creation_tokens || 0
 
           return (
-            <div className='flex max-w-[190px] flex-col'>
-              <div className='relative inline-flex w-fit max-w-full items-center gap-1'>
-                {hasChannelRoute ? (
-                  <Popover>
-                    <PopoverTrigger
-                      render={
-                        <button
-                          type='button'
-                          className='focus-visible:ring-ring inline-flex max-w-full min-w-0 items-center gap-1 rounded-md text-left transition-opacity hover:opacity-80 focus-visible:ring-2 focus-visible:outline-none'
-                          aria-label={
-                            sensitiveVisible
-                              ? surfaceChannelName
-                              : channelIdDisplay
-                          }
-                          onClick={(event) => event.stopPropagation()}
-                        />
-                      }
-                    >
-                      <StatusBadge
-                        label={channelIdDisplay}
-                        autoColor={String(log.channel)}
-                        size='sm'
-                        showDot={false}
-                        copyable={false}
-                        className='font-mono'
-                      />
-                      <Route
-                        className='text-muted-foreground size-3.5 shrink-0'
-                        aria-hidden='true'
-                      />
-                    </PopoverTrigger>
-                    <PopoverContent side='top' align='start' className='w-72'>
-                      <div className='space-y-2 text-xs'>
-                        <div className='flex items-center justify-between gap-3'>
-                          <span className='text-muted-foreground'>
-                            {t('Surface Channel')}
-                          </span>
-                          <span className='text-right font-mono font-medium break-all'>
-                            {sensitiveVisible
-                              ? surfaceChannelName
-                              : channelIdDisplay}
-                          </span>
-                        </div>
-                        <div
-                          data-testid='actual-channel-row'
-                          className='grid grid-cols-[max-content_minmax(0,1fr)] items-center gap-3'
-                        >
-                          <span className='text-muted-foreground'>
-                            {t('Actual Channel')}
-                          </span>
-                          <div className='flex min-w-0 flex-col items-end gap-1 justify-self-end'>
-                            <StatusBadge
-                              data-testid='actual-channel-id'
-                              label={actualChannelIdDisplay}
-                              autoColor={String(
-                                adminInfo?.actual_channel_id || log.channel
-                              )}
-                              copyText={String(
-                                adminInfo?.actual_channel_id || log.channel
-                              )}
-                              size='sm'
-                              showDot={false}
-                              className='h-4 px-1 font-mono !text-[11px]'
-                            />
-                            {sensitiveVisible && (
-                              <span className='text-right font-medium break-all'>
-                                {actualChannelName || '-'}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        {channelChain && (
-                          <div className='flex items-start justify-between gap-3'>
-                            <span className='text-muted-foreground'>
-                              {t('Retry Chain')}
-                            </span>
-                            <span className='text-right font-mono break-all'>
-                              {channelChain}
-                            </span>
-                          </div>
-                        )}
-                        {showMultiKeyIndex && (
-                          <div className='flex items-start justify-between gap-3'>
-                            <span className='text-muted-foreground'>
-                              {t('Key')}
-                            </span>
-                            <span className='font-mono'>{multiKeyIndex}</span>
-                          </div>
-                        )}
-                      </div>
-                    </PopoverContent>
-                  </Popover>
-                ) : (
-                  <StatusBadge
-                    label={channelIdDisplay}
-                    autoColor={String(log.channel)}
-                    copyText={String(log.channel)}
-                    size='sm'
-                    showDot={false}
-                    className='font-mono'
-                  />
-                )}
-                {showMultiKeyIndex && (
-                  <StatusBadge
-                    label={String(multiKeyIndex)}
-                    size='sm'
-                    showDot={false}
-                    copyable={false}
-                    variant='neutral'
-                    className='h-5 min-w-5 justify-center rounded-full px-1 font-mono text-xs'
-                    aria-label={`${t('Key')} ${multiKeyIndex}`}
-                  />
-                )}
-                {affinity && (
-                  <button
-                    type='button'
-                    className='absolute -top-1 -right-1 leading-none text-amber-500'
-                    aria-label={t('Channel Affinity')}
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      setAffinityTarget({
-                        rule_name: affinity.rule_name || '',
-                        using_group:
-                          affinity.using_group || affinity.selected_group || '',
-                        key_hint: affinity.key_hint || '',
-                        key_fp: affinity.key_fp || '',
-                      })
-                      setAffinityDialogOpen(true)
-                    }}
-                  >
-                    <Sparkles
-                      className='size-3 fill-current'
-                      aria-hidden='true'
-                    />
-                  </button>
-                )}
-              </div>
-              {hasChannelName && (
-                <span className='text-muted-foreground/70 truncate [font-family:var(--font-body)] text-xs'>
-                  {sensitiveVisible ? surfaceChannelName : '••••'}
-                </span>
+            <div className='flex flex-col gap-0.5'>
+              <span className='font-mono text-xs font-medium tabular-nums'>
+                {promptTokens.toLocaleString()} /{' '}
+                {completionTokens.toLocaleString()}
+              </span>
+              {(cacheReadTokens > 0 || cacheWriteTokens > 0) && (
+                <div className='flex items-center gap-1 text-[11px]'>
+                  {cacheReadTokens > 0 && (
+                    <span className='text-muted-foreground/60'>
+                      {t('Cache')}↓ {cacheReadTokens.toLocaleString()}
+                    </span>
+                  )}
+                  {cacheWriteTokens > 0 && (
+                    <span className='text-muted-foreground/60'>
+                      ↑ {cacheWriteTokens.toLocaleString()}
+                    </span>
+                  )}
+                </div>
               )}
             </div>
           )
         },
       },
       {
-        id: 'user',
-        header: t('User'),
-        accessorFn: (row) => row.username,
-        cell: function UserCell({ row }) {
-          const { sensitiveVisible, setSelectedUserId, setUserInfoDialogOpen } =
-            useUsageLogsContext()
+        accessorKey: 'quota',
+        header: t('Cost'),
+        cell: ({ row }) => {
           const log = row.original
+          if (!isDisplayableLogType(log.type)) return null
 
-          if (!log.username) return null
-
+          const quota = row.getValue('quota') as number
+          const other = parseLogOther(log.other)
           return (
-            <button
-              type='button'
-              className='flex items-center gap-1.5 text-left'
-              onClick={(e) => {
-                e.stopPropagation()
-                setSelectedUserId(log.user_id)
-                setUserInfoDialogOpen(true)
-              }}
-            >
-              <Avatar className='ring-border/60 size-6 ring-1 max-sm:hidden'>
-                <AvatarFallback
-                  className={cn(
-                    'text-[11px] font-semibold',
-                    !sensitiveVisible && 'bg-muted text-muted-foreground'
-                  )}
-                  style={
-                    sensitiveVisible
-                      ? getUserAvatarStyle(log.username)
-                      : undefined
-                  }
-                >
-                  {sensitiveVisible ? getUserAvatarFallback(log.username) : '•'}
-                </AvatarFallback>
-              </Avatar>
-              <TooltipProvider delay={300}>
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <span className='text-muted-foreground max-w-[100px] truncate text-sm hover:underline' />
-                    }
-                  >
-                    {sensitiveVisible ? log.username : '••••'}
-                  </TooltipTrigger>
-                  {sensitiveVisible && log.username.length > 12 && (
-                    <TooltipContent side='top'>{log.username}</TooltipContent>
-                  )}
-                </Tooltip>
-              </TooltipProvider>
-            </button>
+            <LogCostDisplay
+              quota={quota}
+              other={other}
+              showBillingSource={showBillingSource}
+            />
           )
         },
+      },
+
+      {
+        accessorKey: 'use_time',
+        header: t('Timing'),
+        cell: ({ row }) => {
+          const log = row.original
+          if (!isTimingLogType(log.type)) return null
+
+          const useTime = row.getValue('use_time') as number
+          const other = parseLogOther(log.other)
+          const timing = resolveLogTimingMetrics({
+            other,
+            useTimeSeconds: useTime,
+            completionTokens: log.completion_tokens,
+            isStream: log.is_stream,
+            requestId: log.request_id,
+          })
+
+          return (
+            <TimingMetricsCell
+              useTimeSec={timing.durationSeconds}
+              completionTokens={log.completion_tokens}
+              frtMs={other?.frt}
+              isStream={timing.isStreaming}
+            />
+          )
+        },
+      },
+
+      {
+        accessorKey: 'content',
+        header: t('Details'),
+        cell: function DetailsCell({ row }) {
+          const { t, i18n } = useTranslation()
+          const [dialogOpen, setDialogOpen] = useState(false)
+          const log = row.original
+          const other = parseLogOther(log.other)
+
+          const pricingData = usePricingData(
+            log.type === 2 &&
+              other?.is_task === true &&
+              other.billing_mode === 'tiered_expr'
+          )
+          const usageSchema = pluginUsageSchema(
+            pricingData.models.find(
+              (model) => model.model_name === log.model_name
+            ),
+            other?.admin_info?.task_plugin?.key
+          )
+          const segments = buildDetailSegments(
+            log,
+            other,
+            t,
+            isAdminView,
+            i18n.language,
+            usageSchema
+          )
+          const primary = segments[0]
+          const hasMore = segments.length > 1
+          let primaryTextClass = 'text-foreground'
+          if (primary?.muted) {
+            primaryTextClass = 'text-muted-foreground/60'
+          } else if (primary?.danger) {
+            primaryTextClass = 'text-red-600 dark:text-red-400'
+          }
+          let detailPreview = (
+            <span className='text-muted-foreground/40'>—</span>
+          )
+          if (primary) {
+            detailPreview = (
+              <span
+                className={cn(
+                  'truncate leading-snug group-hover:underline',
+                  primaryTextClass
+                )}
+              >
+                {primary.text}
+                {hasMore && (
+                  <span className='text-muted-foreground/40 ml-0.5'>
+                    +{segments.length - 1}
+                  </span>
+                )}
+              </span>
+            )
+          } else if (log.content) {
+            detailPreview = (
+              <span className='text-muted-foreground truncate group-hover:underline'>
+                {log.content}
+              </span>
+            )
+          }
+
+          return (
+            <>
+              <Button
+                type='button'
+                variant='ghost'
+                className='group h-auto max-w-[200px] min-w-0 justify-start gap-1.5 p-0 text-left text-xs font-normal'
+                onClick={() => setDialogOpen(true)}
+                title={t('Click to view full details')}
+              >
+                {detailPreview}
+              </Button>
+              <DetailsDialog
+                log={log}
+                isAdminView={isAdminView}
+                isRoot={isRoot}
+                canViewModelRoute={canViewModelRoute}
+                open={dialogOpen}
+                onOpenChange={setDialogOpen}
+              />
+            </>
+          )
+        },
+        size: 180,
+        maxSize: 200,
       }
     )
-  }
 
-  columns.push(
-    {
-      id: 'client',
-      header: t('Client'),
-      accessorFn: (row) => parseLogOther(row.other)?.diagnostics?.client ?? '',
-      cell: ({ row }) => {
-        const client = parseLogOther(row.original.other)?.diagnostics?.client
-        return client ? (
-          <StatusBadge
-            label={client}
-            variant='neutral'
-            size='sm'
-            copyable={false}
-          />
-        ) : (
-          <span className='text-muted-foreground'>—</span>
-        )
-      },
-      size: 130,
-    },
-    {
-      id: 'protocol',
-      header: t('Protocol'),
-      accessorFn: (row) =>
-        parseLogOther(row.other)?.diagnostics?.request_protocol ?? '',
-      cell: ({ row }) => {
-        const other = parseLogOther(row.original.other)
-        const diagnostics = other?.diagnostics
-        const requestProtocol = diagnostics?.request_protocol
-        const upstreamProtocol = isAdminView
-          ? (other?.admin_info?.upstream_protocol ??
-            diagnostics?.upstream_protocol)
-          : undefined
-        if (!requestProtocol && !upstreamProtocol) {
-          return <span className='text-muted-foreground'>—</span>
-        }
-        return (
-          <div className='flex flex-col text-xs'>
-            <span>{requestProtocol || '—'}</span>
-            {upstreamProtocol && upstreamProtocol !== requestProtocol && (
-              <span className='text-muted-foreground'>
-                → {upstreamProtocol}
-              </span>
-            )}
-          </div>
-        )
-      },
-      size: 150,
-    },
-    {
-      id: 'ip',
-      header: t('IP Address'),
-      accessorFn: (row) =>
-        row.ip || parseLogOther(row.other)?.diagnostics?.ip || '',
-      cell: ({ row }) => {
-        const ip =
-          row.original.ip || parseLogOther(row.original.other)?.diagnostics?.ip
-        return ip ? (
-          <span className='font-mono text-xs'>{ip}</span>
-        ) : (
-          <span className='text-muted-foreground'>—</span>
-        )
-      },
-      size: 150,
-    }
-  )
-
-  columns.push({
-    accessorKey: 'token_name',
-    header: t('Token'),
-    cell: function TokenNameCell({ row }) {
-      const { sensitiveVisible } = useUsageLogsContext()
-      const log = row.original
-      if (!isDisplayableLogType(log.type)) return null
-
-      const tokenName = log.token_name
-      if (!tokenName) return null
-
-      const other = parseLogOther(log.other)
-      const displayName = sensitiveVisible ? tokenName : '••••'
-      let group = log.group
-      if (!group) group = other?.group || ''
-      const groupRatio = getGroupRatio(other)
-
-      return (
-        <div className='flex max-w-[200px] flex-col gap-0.5'>
-          <TooltipProvider delay={300}>
-            <Tooltip>
-              <TooltipTrigger render={<div className='max-w-full' />}>
-                <StatusBadge
-                  label={displayName}
-                  icon={KeyRound}
-                  copyText={sensitiveVisible ? tokenName : undefined}
-                  size='sm'
-                  showDot={false}
-                  className='border-border/60 bg-muted/30 text-foreground h-6 max-w-full gap-1.5 overflow-hidden rounded-md border px-2 py-0.5 [font-family:var(--font-body)]'
-                />
-              </TooltipTrigger>
-              {sensitiveVisible && tokenName.length > 16 && (
-                <TooltipContent side='top' className='max-w-xs break-all'>
-                  {tokenName}
-                </TooltipContent>
-              )}
-            </Tooltip>
-          </TooltipProvider>
-          {(group || groupRatio != null) && (
-            <span className='block max-w-full truncate text-xs leading-none'>
-              {group ? (
-                <GroupBadge
-                  group={group}
-                  label={sensitiveVisible ? undefined : '••••'}
-                  type='text'
-                  size='sm'
-                  className='inline align-baseline text-xs leading-none [&>span]:leading-none'
-                />
-              ) : null}
-              {group && groupRatio != null ? ' ' : null}
-              {groupRatio != null ? (
-                <span className='text-muted-foreground/60 relative top-px align-baseline tabular-nums'>
-                  {formatRatioCompact(groupRatio)}x
-                </span>
-              ) : null}
-            </span>
-          )}
-        </div>
-      )
-    },
-    size: 160,
-  })
-  columns.push(
-    {
-      accessorKey: 'model_name',
-      header: t('Model'),
-      cell: function ModelCell({ row }) {
-        const log = row.original
-        if (!isDisplayableLogType(log.type)) return null
-        const other = parseLogOther(log.other)
-        const modelInfo = formatModelName(
-          log.model_name,
-          other,
-          canViewModelRoute
-        )
-        return (
-          <div className='flex w-fit flex-col items-start gap-0.5'>
-            <ModelBadge
-              modelName={modelInfo.name}
-              actualModel={modelInfo.actualModel}
-              responseModel={modelInfo.responseModel}
-            />
-            <ProtocolTranslationBadge
-              logType={log.type}
-              other={other}
-              isAdminView={isAdminView}
-            />
-          </div>
-        )
-      },
-      meta: { mobileTitle: true },
-    },
-    {
-      accessorKey: 'is_stream',
-      header: t('Connection Type'),
-      cell: ({ row }) => {
-        const log = row.original
-        if (!isTimingLogType(log.type)) return null
-
-        const useTime = row.getValue('use_time') as number
-        const other = parseLogOther(log.other)
-        const timing = resolveLogTimingMetrics({
-          other,
-          useTimeSeconds: useTime,
-          completionTokens: log.completion_tokens,
-          isStream: log.is_stream,
-          requestId: log.request_id,
-        })
-
-        return (
-          <StreamTpsCell
-            isStream={timing.isStreaming}
-            transport={timing.transport}
-            tokensPerSecond={timing.tokensPerSecond}
-            isTask={other?.is_task === true}
-            streamStatus={other?.stream_status}
-          />
-        )
-      },
-      meta: { label: t('Connection Type') },
-    },
-    {
-      accessorKey: 'prompt_tokens',
-      header: 'Tokens',
-      cell: ({ row }) => {
-        const log = row.original
-        if (!isDisplayableLogType(log.type)) return null
-
-        const other = parseLogOther(log.other)
-
-        const promptTokens = log.prompt_tokens || 0
-        const completionTokens = log.completion_tokens || 0
-        if (promptTokens === 0 && completionTokens === 0) {
-          return <span className='text-muted-foreground text-xs'>-</span>
-        }
-
-        const cacheReadTokens = other?.cache_tokens || 0
-        const cacheWrite5m = other?.cache_creation_tokens_5m || 0
-        const cacheWrite1h = other?.cache_creation_tokens_1h || 0
-        const hasSplitCache = cacheWrite5m > 0 || cacheWrite1h > 0
-        const cacheWriteTokens = hasSplitCache
-          ? cacheWrite5m + cacheWrite1h
-          : other?.cache_creation_tokens || 0
-
-        return (
-          <div className='flex flex-col gap-0.5'>
-            <span className='font-mono text-xs font-medium tabular-nums'>
-              {promptTokens.toLocaleString()} /{' '}
-              {completionTokens.toLocaleString()}
-            </span>
-            {(cacheReadTokens > 0 || cacheWriteTokens > 0) && (
-              <div className='flex items-center gap-1 text-[11px]'>
-                {cacheReadTokens > 0 && (
-                  <span className='text-muted-foreground/60'>
-                    {t('Cache')}↓ {cacheReadTokens.toLocaleString()}
-                  </span>
-                )}
-                {cacheWriteTokens > 0 && (
-                  <span className='text-muted-foreground/60'>
-                    ↑ {cacheWriteTokens.toLocaleString()}
-                  </span>
-                )}
-              </div>
-            )}
-          </div>
-        )
-      },
-    },
-    {
-      accessorKey: 'quota',
-      header: t('Cost'),
-      cell: ({ row }) => {
-        const log = row.original
-        if (!isDisplayableLogType(log.type)) return null
-
-        const quota = row.getValue('quota') as number
-        const other = parseLogOther(log.other)
-        return (
-          <LogCostDisplay
-            quota={quota}
-            other={other}
-            showBillingSource={showBillingSource}
-          />
-        )
-      },
-    },
-
-    {
-      accessorKey: 'use_time',
-      header: t('Timing'),
-      cell: ({ row }) => {
-        const log = row.original
-        if (!isTimingLogType(log.type)) return null
-
-        const useTime = row.getValue('use_time') as number
-        const other = parseLogOther(log.other)
-        const timing = resolveLogTimingMetrics({
-          other,
-          useTimeSeconds: useTime,
-          completionTokens: log.completion_tokens,
-          isStream: log.is_stream,
-          requestId: log.request_id,
-        })
-
-        return (
-          <TimingMetricsCell
-            useTimeSec={timing.durationSeconds}
-            completionTokens={log.completion_tokens}
-            frtMs={other?.frt}
-            isStream={timing.isStreaming}
-          />
-        )
-      },
-    },
-
-    {
-      accessorKey: 'content',
-      header: t('Details'),
-      cell: function DetailsCell({ row }) {
-        const { t, i18n } = useTranslation()
-        const [dialogOpen, setDialogOpen] = useState(false)
-        const log = row.original
-        const other = parseLogOther(log.other)
-
-        const pricingData = usePricingData(
-          log.type === 2 &&
-            other?.is_task === true &&
-            other.billing_mode === 'tiered_expr'
-        )
-        const usageSchema = pluginUsageSchema(
-          pricingData.models.find(
-            (model) => model.model_name === log.model_name
-          ),
-          other?.admin_info?.task_plugin?.key
-        )
-        const segments = buildDetailSegments(
-          log,
-          other,
-          t,
-          isAdminView,
-          i18n.language,
-          usageSchema
-        )
-        const primary = segments[0]
-        const hasMore = segments.length > 1
-        let primaryTextClass = 'text-foreground'
-        if (primary?.muted) {
-          primaryTextClass = 'text-muted-foreground/60'
-        } else if (primary?.danger) {
-          primaryTextClass = 'text-red-600 dark:text-red-400'
-        }
-        let detailPreview = <span className='text-muted-foreground/40'>—</span>
-        if (primary) {
-          detailPreview = (
-            <span
-              className={cn(
-                'truncate leading-snug group-hover:underline',
-                primaryTextClass
-              )}
-            >
-              {primary.text}
-              {hasMore && (
-                <span className='text-muted-foreground/40 ml-0.5'>
-                  +{segments.length - 1}
-                </span>
-              )}
-            </span>
-          )
-        } else if (log.content) {
-          detailPreview = (
-            <span className='text-muted-foreground truncate group-hover:underline'>
-              {log.content}
-            </span>
-          )
-        }
-
-        return (
-          <>
-            <Button
-              type='button'
-              variant='ghost'
-              className='group h-auto max-w-[200px] min-w-0 justify-start gap-1.5 p-0 text-left text-xs font-normal'
-              onClick={() => setDialogOpen(true)}
-              title={t('Click to view full details')}
-            >
-              {detailPreview}
-            </Button>
-            <DetailsDialog
-              log={log}
-              isAdminView={isAdminView}
-              isRoot={isRoot}
-              canViewModelRoute={canViewModelRoute}
-              open={dialogOpen}
-              onOpenChange={setDialogOpen}
-            />
-          </>
-        )
-      },
-      size: 180,
-      maxSize: 200,
-    }
-  )
-
-  return columns
+    return columns
+    // Log formatters read currency settings from the store.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [t, isAdminView, isRoot, canViewModelRoute, showBillingSource, currency])
 }

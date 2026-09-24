@@ -15,6 +15,7 @@ import (
 	taskdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
+	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	"github.com/QuantumNous/new-api/relay/channel/task/taskcommon"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 
@@ -226,15 +227,35 @@ func UpdateBatchTasks(ctx context.Context, adaptor BatchTaskPollingAdaptor, task
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		err := updateBatchTasks(ctx, adaptor, channelId, taskIds, taskM)
-		if err != nil {
-			logger.LogError(ctx, fmt.Sprintf("渠道 #%d 更新异步任务失败: %s", channelId, err.Error()))
+		// Gateway tokens can belong to different upstream users. A batch must
+		// use the token that submitted its tasks, even after channel rotation.
+		batches := make(map[string][]string)
+		for _, taskID := range taskIds {
+			key := ""
+			if task := taskM[taskID]; task != nil {
+				key = task.PrivateData.Key
+			}
+			batches[key] = append(batches[key], taskID)
+		}
+		for key, batchIDs := range batches {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			batchTasks := make(map[string]*model.Task, len(batchIDs))
+			for _, taskID := range batchIDs {
+				if task := taskM[taskID]; task != nil {
+					batchTasks[taskID] = task
+				}
+			}
+			if err := updateBatchTasks(ctx, adaptor, channelId, batchIDs, batchTasks, key); err != nil {
+				logger.LogError(ctx, fmt.Sprintf("渠道 #%d 更新异步任务失败: %s", channelId, err.Error()))
+			}
 		}
 	}
 	return nil
 }
 
-func updateBatchTasks(ctx context.Context, adaptor BatchTaskPollingAdaptor, channelId int, taskIds []string, taskM map[string]*model.Task) error {
+func updateBatchTasks(ctx context.Context, adaptor BatchTaskPollingAdaptor, channelId int, taskIds []string, taskM map[string]*model.Task, key string) error {
 	logger.LogInfo(ctx, fmt.Sprintf("渠道 #%d 未完成的任务有: %d", channelId, len(taskIds)))
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -273,11 +294,16 @@ func updateBatchTasks(ctx context.Context, adaptor BatchTaskPollingAdaptor, chan
 			tasks = append(tasks, task)
 		}
 	}
+	// The channel type tells plugin adaptors whether the upstream is another
+	// New API gateway, the same signal submission derives from the request.
 	info := &relaycommon.RelayInfo{}
-	info.ChannelMeta = &relaycommon.ChannelMeta{ChannelBaseUrl: baseURL}
-	info.ApiKey = ch.Key
+	info.ChannelMeta = &relaycommon.ChannelMeta{ChannelType: ch.Type, ChannelId: ch.Id, ChannelBaseUrl: baseURL}
+	if key == "" {
+		key = ch.Key
+	}
+	info.ApiKey = key
 	adaptor.Init(info)
-	resp, err := adaptor.FetchBatchTasks(baseURL, ch.Key, tasks, proxy)
+	resp, err := adaptor.FetchBatchTasks(baseURL, key, tasks, proxy)
 	if err != nil {
 		common.SysLog(fmt.Sprintf("Get Task Do req error: %v", err))
 		return recordPollFailureForTasks(ctx, adaptor, tasks, pollClassTransport, 0, err.Error())
@@ -371,10 +397,7 @@ func updateBatchTasks(ctx context.Context, adaptor BatchTaskPollingAdaptor, chan
 			continue
 		}
 		if terminalTransition {
-			billingSettled := settleTaskBillingOnComplete(ctx, adaptor, task, &responseItem.TaskInfo)
-			if task.Status == model.TaskStatusFailure && !billingSettled && task.Quota != 0 {
-				RefundTaskQuota(ctx, task, task.FailReason)
-			}
+			finalizeTerminalTask(ctx, adaptor, task, &responseItem.TaskInfo)
 		}
 	}
 	return nil
@@ -444,6 +467,8 @@ func updateVideoTasks(ctx context.Context, platform constant.TaskPlatform, chann
 	}
 	info := &relaycommon.RelayInfo{}
 	info.ChannelMeta = &relaycommon.ChannelMeta{
+		ChannelType:    cacheGetChannel.Type,
+		ChannelId:      cacheGetChannel.Id,
 		ChannelBaseUrl: cacheGetChannel.GetBaseURL(),
 	}
 	info.ApiKey = cacheGetChannel.Key
@@ -614,13 +639,19 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 	}
 
 	if shouldFinalizeBilling {
-		billingSettled := settleTaskBillingOnComplete(ctx, adaptor, task, taskResult)
-		if task.Status == model.TaskStatusFailure && !billingSettled && task.Quota != 0 {
-			RefundTaskQuota(ctx, task, task.FailReason)
-		}
+		finalizeTerminalTask(ctx, adaptor, task, taskResult)
 	}
 
 	return nil
+}
+
+// finalizeTerminalTask 终态统一收尾（状态 CAS 赢家调用，恰好一次）：采样 + 结算 + 失败兜底退款。
+func finalizeTerminalTask(ctx context.Context, adaptor TaskPollingAdaptor, task *model.Task, taskResult *relaycommon.TaskInfo) {
+	perfmetrics.RecordTaskResult(task, taskResult)
+	billingSettled := settleTaskBillingOnComplete(ctx, adaptor, task, taskResult)
+	if task.Status == model.TaskStatusFailure && !billingSettled && task.Quota != 0 {
+		RefundTaskQuota(ctx, task, task.FailReason)
+	}
 }
 
 func redactVideoResponseBody(body []byte) []byte {
@@ -809,11 +840,7 @@ func failTaskFromPoll(ctx context.Context, adaptor TaskPollingAdaptor, task *mod
 	if !won {
 		return nil
 	}
-	taskResult := relaycommon.FailTaskInfo(reason)
-	billingSettled := settleTaskBillingOnComplete(ctx, adaptor, task, taskResult)
-	if !billingSettled && task.Quota != 0 {
-		RefundTaskQuota(ctx, task, reason)
-	}
+	finalizeTerminalTask(ctx, adaptor, task, relaycommon.FailTaskInfo(reason))
 	return nil
 }
 

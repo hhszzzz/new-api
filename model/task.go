@@ -141,6 +141,11 @@ type TaskPrivateData struct {
 	PluginState json.RawMessage `json:"plugin_state,omitempty"`
 	// PollFailures counts consecutive unrecognized or transient poll outcomes.
 	PollFailures int `json:"poll_failures,omitempty"`
+	// ResultDiscarded marks an immediate terminal result whose submit route
+	// declared retainResult: false. The upstream snapshot was never written
+	// and every retrieval surface treats the task as not found. The zero
+	// value keeps historical rows retained and retrievable.
+	ResultDiscarded bool `json:"result_discarded,omitempty"`
 }
 
 type TaskExecutionSnapshot struct {
@@ -174,6 +179,12 @@ type TaskBillingContext struct {
 	OriginModelName string                       `json:"origin_model_name,omitempty"` // 模型名称，必须为OriginModelName
 	PerCallBilling  bool                         `json:"per_call_billing,omitempty"`  // 按次计费：跳过轮询阶段的差额结算
 	TieredSnapshot  *billingexpr.BillingSnapshot `json:"tiered_snapshot,omitempty"`
+}
+
+// ResultRetrievable reports whether retrieval surfaces (native query routes,
+// protocol retrieve endpoints, artifact projection) may serve this task.
+func (t *Task) ResultRetrievable() bool {
+	return !t.PrivateData.ResultDiscarded
 }
 
 // GetUpstreamTaskID 获取上游真实 task ID（用于与 provider 通信）
@@ -214,7 +225,8 @@ func (p TaskPrivateData) Value() (driver.Value, error) {
 		p.TokenId == 0 && p.NodeName == "" && p.BillingContext == nil &&
 		p.ModelRouteSnapshotVersion == 0 && p.UserModelRouteId == 0 &&
 		p.RouteTargetModelName == "" && p.RouteExecutionGroup == "" &&
-		!p.ResponsesBackground && len(p.PluginState) == 0 && p.PollFailures == 0 {
+		!p.ResponsesBackground && len(p.PluginState) == 0 && p.PollFailures == 0 &&
+		!p.ResultDiscarded {
 		return nil, nil
 	}
 	// 同 Properties.Value:string 避免 PG simple protocol 的 bytea 编码。
@@ -296,8 +308,10 @@ func InitTask(platform constant.TaskPlatform, relayInfo *commonRelay.RelayInfo) 
 		privateData.RouteTargetModelName = relayInfo.RouteTargetModelName
 		privateData.RouteExecutionGroup = relayInfo.RouteExecutionGroup
 		if relayInfo.ChannelMeta != nil {
+			// Keep the submitting gateway token when a New API channel rotates keys.
 			if relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeGemini ||
-				relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeVertexAi {
+				relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeVertexAi ||
+				relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeNewAPI {
 				privateData.Key = relayInfo.ChannelMeta.ApiKey
 			}
 		}
@@ -360,7 +374,9 @@ func TaskGetAllUserTask(userId int, startIdx int, num int, queryParams SyncTaskQ
 	}
 
 	// 获取数据
-	err = NewTaskSortOptions(queryParams.SortBy, queryParams.SortOrder).Apply(query.Omit("channel_id")).Limit(num).Offset(startIdx).Find(&tasks).Error
+	// Task lists never render the persisted upstream snapshot; the dashboard
+	// loads media through the artifacts endpoint instead.
+	err = NewTaskSortOptions(queryParams.SortBy, queryParams.SortOrder).Apply(query.Omit("channel_id", "data")).Limit(num).Offset(startIdx).Find(&tasks).Error
 	if err != nil {
 		return nil
 	}
@@ -405,7 +421,7 @@ func TaskGetAllTasks(startIdx int, num int, queryParams SyncTaskQueryParams) []*
 	}
 
 	// 获取数据
-	err = NewTaskSortOptions(queryParams.SortBy, queryParams.SortOrder).Apply(query).Limit(num).Offset(startIdx).Find(&tasks).Error
+	err = NewTaskSortOptions(queryParams.SortBy, queryParams.SortOrder).Apply(query.Omit("data")).Limit(num).Offset(startIdx).Find(&tasks).Error
 	if err != nil {
 		return nil
 	}
@@ -547,8 +563,15 @@ func (Task *Task) Insert() error {
 	return Task.InsertWithContext(context.Background())
 }
 
-func (Task *Task) InsertWithContext(ctx context.Context) error {
-	return DB.WithContext(ctx).Create(Task).Error
+// InsertWithContext creates the row. omitColumns are left out of the INSERT
+// (for example "data" when the submit route discards the upstream snapshot)
+// while the in-memory task keeps its values for presentation.
+func (Task *Task) InsertWithContext(ctx context.Context, omitColumns ...string) error {
+	tx := DB.WithContext(ctx)
+	if len(omitColumns) > 0 {
+		tx = tx.Omit(omitColumns...)
+	}
+	return tx.Create(Task).Error
 }
 
 type taskSnapshot struct {

@@ -22,7 +22,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { GroupRatioVisualEditor } from '../group-ratio-visual-editor'
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }),
 }))
 
 describe('group pricing authorization presentation', () => {
@@ -49,6 +49,9 @@ describe('group pricing authorization presentation', () => {
   it('does not turn legacy descriptions into editable pricing groups', () => {
     render(
       <GroupRatioVisualEditor
+        section='pricing'
+        onSectionChange={vi.fn()}
+        defaultUseAutoGroupField={null}
         groupRatio='{"default":1}'
         userUsableGroups='{"default":"Default","vip":"Legacy VIP"}'
         groupGroupRatio='{}'

@@ -40,6 +40,8 @@ type ChatToResponsesStreamState struct {
 	textOutputIndex      int
 	messageStarted       bool
 	messageDone          bool
+	messageSegment       int
+	closedMessages       []dto.ResponsesOutput
 	nextContentIndex     int
 	textContentIndex     int
 	textStarted          bool
@@ -75,6 +77,7 @@ type chatToResponsesStreamTool struct {
 	Added         bool
 	Done          bool
 	Skipped       bool
+	Status        string
 }
 
 type chatToResponsesStreamReasoning struct {
@@ -89,6 +92,7 @@ type chatToResponsesStreamReasoning struct {
 
 type chatToResponsesOutputRef struct {
 	Kind           string
+	MessageSegment int
 	ToolIndex      int
 	ReasoningIndex int
 	HostedID       string
@@ -171,6 +175,7 @@ func (s *ChatToResponsesStreamState) StartHostedTool(start HostedToolStreamStart
 	if caller != "" && caller != "null" {
 		return nil, fmt.Errorf("Responses %s cannot preserve Claude hosted-tool caller provenance", start.Type)
 	}
+	s.resumeGeneration()
 
 	tool := &chatToResponsesHostedTool{
 		Output: dto.ResponsesOutput{
@@ -441,8 +446,10 @@ func FinalizeChatCompletionsStreamToResponsesChecked(state *ChatToResponsesStrea
 		if !state.messageStarted && len(state.reasoningItems) == 0 && len(state.toolsByIndex) == 0 && len(state.hostedByID) == 0 {
 			return nil, errors.New("chat stream ended before producing output or a finish reason")
 		}
-		if len(state.toolsByIndex) > 0 {
-			return nil, errors.New("chat stream ended before tool calls were terminated")
+		for _, tool := range state.toolsByIndex {
+			if !tool.Done {
+				return nil, errors.New("chat stream ended before tool calls were terminated")
+			}
 		}
 		state.status = "incomplete"
 		state.incompleteDetails = &dto.IncompleteDetails{Reason: responsesIncompleteReasonMaxTokens}
@@ -454,7 +461,18 @@ func (s *ChatToResponsesStreamState) UsageText() string {
 	if s == nil {
 		return ""
 	}
-	return s.text.String() + s.refusal.String()
+	var text strings.Builder
+	for _, message := range s.closedMessages {
+		for _, content := range message.Content {
+			text.WriteString(content.Text)
+			text.WriteString(content.Refusal)
+		}
+	}
+	if !s.messageDone {
+		text.WriteString(s.text.String())
+		text.WriteString(s.refusal.String())
+	}
+	return text.String()
 }
 
 func (s *ChatToResponsesStreamState) appendTextDelta(delta string) []ChatToResponsesStreamEvent {
@@ -545,6 +563,24 @@ func (s *ChatToResponsesStreamState) appendRefusalDelta(delta string) []ChatToRe
 }
 
 func (s *ChatToResponsesStreamState) ensureMessage() []ChatToResponsesStreamEvent {
+	s.resumeGeneration()
+	if s.messageDone {
+		// A provider may continue after an intermediate finish_reason. Keep the
+		// completed message immutable and give the next segment a fresh item.
+		s.messageSegment++
+		s.messageStarted = false
+		s.messageDone = false
+		s.nextContentIndex = 0
+		s.textContentIndex = -1
+		s.textStarted = false
+		s.textDone = false
+		s.refusalContentIndex = -1
+		s.refusalStarted = false
+		s.refusalDone = false
+		s.text.Reset()
+		s.refusal.Reset()
+		s.annotations = nil
+	}
 	if s.messageStarted {
 		return nil
 	}
@@ -594,6 +630,7 @@ func (s *ChatToResponsesStreamState) appendReasoningDelta(delta string) []ChatTo
 }
 
 func (s *ChatToResponsesStreamState) ensureReasoningItem() (*chatToResponsesStreamReasoning, []ChatToResponsesStreamEvent) {
+	s.resumeGeneration()
 	if s.activeReasoningIndex >= 0 && s.activeReasoningIndex < len(s.reasoningItems) {
 		reasoning := s.reasoningItems[s.activeReasoningIndex]
 		if reasoning != nil && !reasoning.Done {
@@ -666,6 +703,7 @@ func (s *ChatToResponsesStreamState) finishActiveReasoningItem(status string) []
 }
 
 func (s *ChatToResponsesStreamState) appendToolCallDelta(toolCall dto.ToolCallResponse) ([]ChatToResponsesStreamEvent, error) {
+	s.resumeGeneration()
 	s.hasToolCalls = true
 	chatIndex := 0
 	if toolCall.Index != nil {
@@ -820,11 +858,13 @@ func (s *ChatToResponsesStreamState) doneDeltaEvents() []ChatToResponsesStreamEv
 	}
 	if s.messageStarted && !s.messageDone {
 		s.messageDone = true
+		closedMessage := s.messageOutput(status)
 		events = append(events, responsesStreamEvent(responsesEventOutputItemDone, dto.ResponsesStreamResponse{
 			Type:        responsesEventOutputItemDone,
 			OutputIndex: intPtr(s.textOutputIndex),
-			Item:        s.messageOutput(status),
+			Item:        closedMessage,
 		}))
+		s.closedMessages = append(s.closedMessages, *closedMessage)
 	}
 	for _, reasoning := range s.reasoningItems {
 		events = append(events, s.finishReasoningItem(reasoning, status)...)
@@ -839,6 +879,7 @@ func (s *ChatToResponsesStreamState) doneDeltaEvents() []ChatToResponsesStreamEv
 			continue
 		}
 		tool.Done = true
+		tool.Status = status
 		if !tool.Added {
 			events = append(events, s.startToolCall(tool)...)
 		}
@@ -920,6 +961,18 @@ func (s *ChatToResponsesStreamState) doneDeltaEvents() []ChatToResponsesStreamEv
 	return events
 }
 
+// A finish reason closes one generation segment. Any later output must receive
+// its own finish reason before the response can be considered complete.
+func (s *ChatToResponsesStreamState) resumeGeneration() {
+	if !s.sawFinishReason {
+		return
+	}
+	s.sawFinishReason = false
+	s.status = "completed"
+	s.incompleteDetails = nil
+	s.hasToolCalls = false
+}
+
 func (s *ChatToResponsesStreamState) applyFinishReason(finishReason string) {
 	if strings.TrimSpace(finishReason) != "" {
 		s.sawFinishReason = true
@@ -936,6 +989,10 @@ func (s *ChatToResponsesStreamState) finalResponse() *dto.OpenAIResponsesRespons
 	for _, ref := range s.outputOrder {
 		switch ref.Kind {
 		case "message":
+			if ref.MessageSegment < len(s.closedMessages) {
+				output = append(output, s.closedMessages[ref.MessageSegment])
+				continue
+			}
 			output = append(output, *s.messageOutput(status))
 		case "reasoning":
 			if ref.ReasoningIndex >= 0 && ref.ReasoningIndex < len(s.reasoningItems) && s.reasoningItems[ref.ReasoningIndex] != nil {
@@ -948,7 +1005,11 @@ func (s *ChatToResponsesStreamState) finalResponse() *dto.OpenAIResponsesRespons
 			}
 		case "tool":
 			if tool := s.toolsByIndex[ref.ToolIndex]; tool != nil {
-				output = append(output, *s.toolOutput(tool, status))
+				toolStatus := status
+				if tool.Done && tool.Status != "" {
+					toolStatus = tool.Status
+				}
+				output = append(output, *s.toolOutput(tool, toolStatus))
 			}
 		case "hosted":
 			if tool := s.hostedByID[ref.HostedID]; tool != nil {
@@ -982,7 +1043,7 @@ func (s *ChatToResponsesStreamState) createdResponse() *dto.OpenAIResponsesRespo
 func (s *ChatToResponsesStreamState) nextIndex(kind string, toolIndex int, reasoningIndex ...int) int {
 	index := s.nextOutputIndex
 	s.nextOutputIndex++
-	ref := chatToResponsesOutputRef{Kind: kind, ToolIndex: toolIndex, ReasoningIndex: -1}
+	ref := chatToResponsesOutputRef{Kind: kind, MessageSegment: s.messageSegment, ToolIndex: toolIndex, ReasoningIndex: -1}
 	if len(reasoningIndex) > 0 {
 		ref.ReasoningIndex = reasoningIndex[0]
 	}
@@ -1018,7 +1079,7 @@ func (s *ChatToResponsesStreamState) outputStatus() string {
 }
 
 func (s *ChatToResponsesStreamState) messageID() string {
-	return responsesSyntheticItemID("msg", s.ID, 0)
+	return responsesSyntheticItemID("msg", s.ID, s.messageSegment)
 }
 
 func (s *ChatToResponsesStreamState) reasoningID(index int) string {
