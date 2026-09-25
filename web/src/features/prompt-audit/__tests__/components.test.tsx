@@ -341,6 +341,75 @@ describe('prompt audit management components', () => {
     expect(screen.queryByText('Inspected scope')).not.toBeInTheDocument()
   })
 
+  test('keeps one tab for a source the client sent in more than one block', async () => {
+    getPromptAuditMock.mockResolvedValue({
+      success: true,
+      data: {
+        ...EVENT,
+        scan_payload: JSON.stringify({
+          segments: [
+            { scope: 'user', text: '<command-name>/model</command-name>' },
+            { scope: 'system', text: 'System instructions' },
+            { scope: 'user', text: 'Latest question' },
+          ],
+        }),
+      },
+    })
+
+    renderWithQueryClient(
+      <PromptAuditDetailSheet
+        eventID={EVENT.id}
+        canViewFullPrompt
+        canManage={false}
+        canDelete={false}
+        onOpenChange={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    )
+
+    // Both blocks are one source, so they read as one tab holding both rather
+    // than as two tabs under the same name.
+    expect(
+      await screen.findByRole('tab', { name: 'User messages' })
+    ).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getAllByRole('tab', { name: 'User messages' })).toHaveLength(1)
+    const panel = await screen.findByRole('tabpanel')
+    expect(panel).toHaveTextContent('<command-name>/model</command-name>')
+    expect(panel).toHaveTextContent('Latest question')
+  })
+
+  test('keeps the source tabs one row of tabs sized to their own names', async () => {
+    getPromptAuditMock.mockResolvedValue({
+      success: true,
+      data: {
+        ...EVENT,
+        scan_payload: JSON.stringify({
+          segments: [
+            { scope: 'user', text: 'Extracted user question' },
+            { scope: 'tool_result', text: 'Extracted tool output' },
+          ],
+        }),
+      },
+    })
+
+    renderWithQueryClient(
+      <PromptAuditDetailSheet
+        eventID={EVENT.id}
+        canViewFullPrompt
+        canManage={false}
+        canDelete={false}
+        onOpenChange={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    )
+
+    // Fixed size instead of a stretched one: the list is as wide as its tabs, and
+    // the row it sits in scrolls sideways rather than growing taller.
+    const tablist = await screen.findByRole('tablist')
+    expect(tablist.className).toContain('min-w-max')
+    expect(tablist.parentElement?.className).toContain('overflow-x-auto')
+  })
+
   test('shows the selected source text when its tab is chosen', async () => {
     getPromptAuditMock.mockResolvedValue({
       success: true,

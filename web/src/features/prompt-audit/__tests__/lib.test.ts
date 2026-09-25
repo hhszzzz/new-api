@@ -32,6 +32,7 @@ import {
   promptAuditEndpointUpdate,
   promptAuditFilterParams,
   promptAuditOutcome,
+  promptAuditPayloadSources,
   type PromptAuditEndpointDraft,
   promptAuditRowID,
   readPromptAuditCollapseRepeats,
@@ -381,6 +382,44 @@ describe('prompt audit management helpers', () => {
         full_prompt_max_runes: FULL_PROMPT_MAX_RUNES + 1,
       })
     ).toMatch(/stored prompt limit/)
+  })
+
+  test('reads every block of one source as that source, in wire order', () => {
+    const sources = promptAuditPayloadSources(
+      JSON.stringify({
+        segments: [
+          { scope: 'system', text: 'You are an agent' },
+          { scope: 'user', text: 'First block' },
+          { scope: 'tool_result', text: 'Extracted tool output' },
+          { scope: 'user', text: 'Second block' },
+          { text: 'Unstamped block' },
+        ],
+      })
+    )
+
+    expect(sources.map((source) => source.key)).toEqual([
+      'system',
+      'user',
+      'tool_result',
+      'unknown',
+    ])
+    expect(sources[1]).toEqual({
+      key: 'user',
+      scope: 'user',
+      text: 'First block\n\nSecond block',
+    })
+  })
+
+  test('reads a generated output as the assistant source', () => {
+    expect(
+      promptAuditPayloadSources(JSON.stringify({ output: 'Generated text' }))
+    ).toEqual([{ key: 'assistant', scope: 'assistant', text: 'Generated text' }])
+  })
+
+  test('reads a payload without a readable envelope as one unknown source', () => {
+    expect(promptAuditPayloadSources('plain text')).toEqual([
+      { key: 'unknown', scope: undefined, text: 'plain text' },
+    ])
   })
 
   test('rejects an inverted time range', () => {

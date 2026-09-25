@@ -234,12 +234,12 @@ func isPromptAuditToolSegment(segment PromptAuditSegment) bool {
 func latestUserSegmentStart(segments []PromptAuditSegment) int {
 	latest := -1
 	for index := len(segments) - 1; index >= 0; index-- {
-		if isPromptAuditUserSegment(segments[index]) {
+		if isPromptAuditHumanTurn(segments[index]) {
 			latest = index
 			break
 		}
 	}
-	for latest > 0 && (isPromptAuditUserSegment(segments[latest-1]) || isPromptAuditUserContext(segments[latest-1])) {
+	for latest > 0 && (isPromptAuditHumanTurn(segments[latest-1]) || isPromptAuditUserContext(segments[latest-1])) {
 		latest--
 	}
 	return latest
@@ -247,6 +247,17 @@ func latestUserSegmentStart(segments []PromptAuditSegment) int {
 
 func isPromptAuditUserSegment(segment PromptAuditSegment) bool {
 	return segment.SourceScope() == PromptScopeUser && (segment.User || strings.EqualFold(strings.TrimSpace(segment.Role), "user"))
+}
+
+// A human turn is a user message, or the slash-command wrapper a client turns
+// one into. The wrapper is context for the sake of policies, but it is still the
+// turn the user issued: without it the newest command would read as the previous
+// question, which is what grouping and the redacted preview take their text from.
+func isPromptAuditHumanTurn(segment PromptAuditSegment) bool {
+	if isPromptAuditUserSegment(segment) {
+		return true
+	}
+	return isPromptAuditUserContext(segment) && promptAuditCommandWrapper(segment.Text)
 }
 
 func isPromptAuditUserContext(segment PromptAuditSegment) bool {

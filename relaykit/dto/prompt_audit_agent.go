@@ -9,6 +9,21 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 )
 
+// The wrapper markup a client injects around a slash command. Like the other
+// context tags it is client-controlled text, but unlike them it carries the turn
+// the user actually issued: it is classified as context and still reads as the
+// latest human turn, see isPromptAuditHumanTurn.
+var promptAuditCommandTags = []string{"<command-name>", "<command-message>", "<command-args>"}
+
+func promptAuditCommandWrapper(text string) bool {
+	for _, tag := range promptAuditCommandTags {
+		if strings.HasPrefix(text, tag) {
+			return true
+		}
+	}
+	return false
+}
+
 // classifyPromptAuditText classifies a whole text block. These client-controlled
 // wrappers are hints, never trusted evidence that the content is safe.
 func classifyPromptAuditText(text, role string) PromptAuditScope {
@@ -22,6 +37,9 @@ func classifyPromptAuditText(text, role string) PromptAuditScope {
 	}
 	if base != PromptScopeUser {
 		return base
+	}
+	if promptAuditCommandWrapper(text) {
+		return PromptScopeAgentContext
 	}
 	for _, prefix := range []string{"<system-reminder>", "<ide_opened_file>", "<ide_selection>", "<local-command-", "Caveat: The messages below were generated", "# AGENTS.md instructions for", "<environment_context>", "<user_instructions>", "<turn_aborted>"} {
 		if strings.HasPrefix(text, prefix) {
@@ -41,7 +59,7 @@ func HumanPrompt(snapshot PromptAuditSnapshot) string {
 	}
 	var texts []string
 	for _, segment := range segments[start:] {
-		if isPromptAuditUserSegment(segment) {
+		if isPromptAuditHumanTurn(segment) {
 			texts = append(texts, segment.Text)
 		}
 	}

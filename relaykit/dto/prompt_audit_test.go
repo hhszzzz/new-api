@@ -71,6 +71,21 @@ func TestPromptAuditAgentRequestKindsAndLatestHumanTurn(t *testing.T) {
 	assert.Contains(t, snapshot.BlockingSnapshot().Text(), "Base directory for this skill:")
 	command := (&GeneralOpenAIRequest{Messages: []Message{{Role: "user", Content: "<command-name>/test</command-name><command-args>hello</command-args>"}}}).GetPromptAuditSnapshot()
 	assert.Contains(t, command.HumanPrompt, "<command-name>")
+	// The wrapper names a source of its own, so the detail sheet lists it as
+	// context rather than as one more user message among the user's own text.
+	require.Len(t, command.Segments, 1)
+	assert.Equal(t, PromptScopeAgentContext, command.Segments[0].SourceScope())
+	assert.False(t, command.Segments[0].User)
+
+	// Read as context, a command is still the turn the user issued: the record
+	// must not report the question it superseded.
+	afterCommand := (&GeneralOpenAIRequest{Messages: []Message{
+		{Role: "user", Content: "old question"},
+		{Role: "assistant", Content: "old answer"},
+		{Role: "user", Content: "<command-name>/clear</command-name>"},
+	}}).GetPromptAuditSnapshot()
+	assert.Equal(t, "<command-name>/clear</command-name>", afterCommand.HumanPrompt)
+	assert.Equal(t, "step", afterCommand.RequestKind)
 }
 
 func TestPromptAuditMCPDefinitionsInsideNamespace(t *testing.T) {

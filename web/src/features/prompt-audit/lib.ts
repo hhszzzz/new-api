@@ -128,7 +128,41 @@ export function promptAuditRequestKindLabel(
   }
 }
 
-export function promptAuditPayloadSegments(
+/** One inspected source and everything the audit submitted from it. */
+export type PromptAuditPayloadSource = {
+  /** Stable identity of the tab that reads this source. */
+  key: string
+  scope?: PromptAuditScope
+  text: string
+}
+
+/**
+ * The sources the audit submitted, one entry per source. A source is inspected as
+ * whichever content blocks the client sent, so an agent resending its transcript
+ * yields several blocks of the same source — reading each block as its own entry
+ * made the detail sheet show one tab per block, all carrying the same name. Their
+ * text is joined in wire order instead.
+ */
+export function promptAuditPayloadSources(
+  payload?: string
+): PromptAuditPayloadSource[] {
+  const sources = new Map<string, PromptAuditPayloadSource>()
+  for (const block of promptAuditPayloadBlocks(payload)) {
+    // A block whose scope is not one of the known sources gets a reading of its
+    // own; the sheet names it without pretending to know where it came from.
+    const key = block.scope ?? 'unknown'
+    const source = sources.get(key)
+    if (source) {
+      source.text += `\n\n${block.text}`
+      continue
+    }
+    sources.set(key, { key, scope: block.scope, text: block.text })
+  }
+  return [...sources.values()]
+}
+
+/** The content blocks the stored payload carries, in wire order. */
+function promptAuditPayloadBlocks(
   payload?: string
 ): { scope?: PromptAuditScope; text: string }[] {
   if (!payload) return []

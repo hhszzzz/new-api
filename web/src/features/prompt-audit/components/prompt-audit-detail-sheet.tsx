@@ -48,7 +48,7 @@ import {
   getPromptAuditProtocolName,
   promptAuditDetectorLabel,
   promptAuditOutcome,
-  promptAuditPayloadSegments,
+  promptAuditPayloadSources,
   promptAuditRequestKindLabel,
 } from '../lib'
 import { promptAuditScopeLabel } from '../scopes'
@@ -117,28 +117,22 @@ export function PromptAuditDetailSheet({
   const prompt = showsFullPrompt
     ? (event?.full_prompt ?? '')
     : (event?.redacted_preview ?? '')
-  const segmentOccurrences = new Map<string, number>()
-  const payloadSegments = (
-    canViewFullPrompt ? promptAuditPayloadSegments(event?.scan_payload) : []
-  ).map((segment) => {
-    const contentKey = JSON.stringify([segment.scope, segment.text])
-    const occurrence = segmentOccurrences.get(contentKey) ?? 0
-    segmentOccurrences.set(contentKey, occurrence + 1)
-    return { ...segment, key: `${contentKey}:${occurrence}` }
-  })
-  // Which inspected part the tabs show. Held with the record it was chosen for,
+  const payloadSources = canViewFullPrompt
+    ? promptAuditPayloadSources(event?.scan_payload)
+    : []
+  // Which inspected source the tabs show. Held with the record it was chosen for,
   // so a key from a previous record cannot survive into the next one and leave it
   // showing no tab: the record ids simply stop matching.
-  const [chosenSegment, setChosenSegment] = useState<{
+  const [chosenSource, setChosenSource] = useState<{
     eventID: number | null
     key: string
   } | null>(null)
-  const activeSegment =
-    (chosenSegment?.eventID === eventID
-      ? payloadSegments.find((segment) => segment.key === chosenSegment.key)
-      : undefined) ?? payloadSegments[0]
+  const activeSource =
+    (chosenSource?.eventID === eventID
+      ? payloadSources.find((source) => source.key === chosenSource.key)
+      : undefined) ?? payloadSources[0]
   const setActiveKey = (value: unknown) =>
-    setChosenSegment(typeof value === 'string' ? { eventID, key: value } : null)
+    setChosenSource(typeof value === 'string' ? { eventID, key: value } : null)
   const PromptCopySection = showsFullPrompt
     ? CollapsibleDetailSection
     : DetailSection
@@ -200,39 +194,45 @@ export function PromptAuditDetailSheet({
                   which read as a card within a card. */}
               {canViewFullPrompt && (
                 <DetailSection label={t('Inspected content')}>
-                  {payloadSegments.length === 0 ? (
+                  {payloadSources.length === 0 ? (
                     <span className='text-muted-foreground text-xs'>
                       {t('No inspected content retained')}
                     </span>
                   ) : (
-                    <Tabs
-                      value={activeSegment.key}
-                      onValueChange={setActiveKey}
-                    >
+                    <Tabs value={activeSource.key} onValueChange={setActiveKey}>
                       <div className='flex items-center gap-2'>
-                        <TabsList
-                          variant='line'
-                          className='min-w-0 flex-1 flex-wrap justify-start'
-                        >
-                          {payloadSegments.map((segment) => (
-                            <TabsTrigger key={segment.key} value={segment.key}>
-                              {segment.scope
-                                ? promptAuditScopeLabel(segment.scope, t)
-                                : t('Unknown source')}
-                            </TabsTrigger>
-                          ))}
-                        </TabsList>
+                        {/* One row of tabs sized to their own names: the list is
+                            short and its labels are fixed, so tabs stretched
+                            across the sheet only added space, while letting them
+                            wrap made the strip a line taller for a record that
+                            carried one more source. A long list scrolls
+                            sideways, and the padding keeps the active tab's
+                            underline inside the scrolling box. */}
+                        <div className='min-w-0 flex-1 overflow-x-auto pb-1'>
+                          <TabsList
+                            variant='line'
+                            className='min-w-max justify-start'
+                          >
+                            {payloadSources.map((source) => (
+                              <TabsTrigger key={source.key} value={source.key}>
+                                {source.scope
+                                  ? promptAuditScopeLabel(source.scope, t)
+                                  : t('Unknown source')}
+                              </TabsTrigger>
+                            ))}
+                          </TabsList>
+                        </div>
                         <CopyButton
-                          value={activeSegment.text}
+                          value={activeSource.text}
                           variant='ghost'
                           size='sm'
                           tooltip={t('Copy')}
                         />
                       </div>
-                      {payloadSegments.map((segment) => (
-                        <TabsContent key={segment.key} value={segment.key}>
+                      {payloadSources.map((source) => (
+                        <TabsContent key={source.key} value={source.key}>
                           <pre className='bg-background/70 mt-1 max-h-56 overflow-auto rounded-md p-2 text-xs leading-relaxed break-words whitespace-pre-wrap [content-visibility:auto]'>
-                            {segment.text}
+                            {source.text}
                           </pre>
                         </TabsContent>
                       ))}
