@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
@@ -372,10 +372,15 @@ describe('prompt audit management components', () => {
     expect(
       await screen.findByRole('tab', { name: 'User messages' })
     ).toHaveAttribute('aria-selected', 'true')
-    expect(screen.getAllByRole('tab', { name: 'User messages' })).toHaveLength(1)
+    expect(screen.getAllByRole('tab', { name: 'User messages' })).toHaveLength(
+      1
+    )
     const panel = await screen.findByRole('tabpanel')
     expect(panel).toHaveTextContent('<command-name>/model</command-name>')
     expect(panel).toHaveTextContent('Latest question')
+    // The blocks are shown apart, so where one ends and the next begins stays
+    // visible instead of reading as one run of text.
+    expect(within(panel).getAllByRole('separator')).toHaveLength(1)
   })
 
   test('keeps the source tabs one row of tabs sized to their own names', async () => {

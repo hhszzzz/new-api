@@ -406,19 +406,21 @@ describe('prompt audit management helpers', () => {
     expect(sources[1]).toEqual({
       key: 'user',
       scope: 'user',
-      text: 'First block\n\nSecond block',
+      blocks: ['First block', 'Second block'],
     })
   })
 
   test('reads a generated output as the assistant source', () => {
     expect(
       promptAuditPayloadSources(JSON.stringify({ output: 'Generated text' }))
-    ).toEqual([{ key: 'assistant', scope: 'assistant', text: 'Generated text' }])
+    ).toEqual([
+      { key: 'assistant', scope: 'assistant', blocks: ['Generated text'] },
+    ])
   })
 
   test('reads a payload without a readable envelope as one unknown source', () => {
     expect(promptAuditPayloadSources('plain text')).toEqual([
-      { key: 'unknown', scope: undefined, text: 'plain text' },
+      { key: 'unknown', scope: undefined, blocks: ['plain text'] },
     ])
   })
 

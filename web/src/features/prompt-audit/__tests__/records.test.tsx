@@ -292,6 +292,24 @@ describe('prompt audit records', () => {
     ).not.toBeInTheDocument()
   })
 
+  test('asks the server again when the same filters are searched', async () => {
+    const user = userEvent.setup()
+    renderRecords()
+    await screen.findByRole('checkbox', { name: 'Select audit record' })
+    const listingsBefore = listingRequests().length
+    const statsBefore = statsRequests().length
+
+    // Searching is also how an operator asks for the newest rows, and unchanged
+    // filters produce the same query key: the listing has to reach the server
+    // instead of answering from what it already held.
+    await user.click(screen.getByRole('button', { name: 'Search' }))
+
+    await waitFor(() =>
+      expect(listingRequests().length).toBeGreaterThan(listingsBefore)
+    )
+    expect(statsRequests().length).toBeGreaterThan(statsBefore)
+  })
+
   test('offers the batch delete only once rows are selected', async () => {
     const user = userEvent.setup()
     renderRecords()

@@ -308,7 +308,14 @@ export function PromptAuditRecords() {
     setPagination((current) => ({ ...current, pageIndex: 0 }))
     setRowSelection({})
     setExpanded({})
-  }, [draftFilters, t])
+    // Searching is also how an operator asks for the newest rows, and the same
+    // filters keep the same query key: without this the listing would answer
+    // from what it already held. A changed filter is a query of its own and
+    // fetches by itself, so the refresh covers both cases the way the log
+    // screens refresh on search.
+    void queryClient.invalidateQueries({ queryKey: ['prompt-audit', 'events'] })
+    void queryClient.invalidateQueries({ queryKey: ['prompt-audit', 'stats'] })
+  }, [draftFilters, queryClient, t])
   const resetFilters = useCallback(() => {
     const defaults = getDefaultPromptAuditFilters()
     setDraftFilters(defaults)
@@ -316,7 +323,9 @@ export function PromptAuditRecords() {
     setPagination((current) => ({ ...current, pageIndex: 0 }))
     setRowSelection({})
     setExpanded({})
-  }, [])
+    void queryClient.invalidateQueries({ queryKey: ['prompt-audit', 'events'] })
+    void queryClient.invalidateQueries({ queryKey: ['prompt-audit', 'stats'] })
+  }, [queryClient])
   // Collapsing changes what a row is, so the expanded rows of the previous
   // listing cannot survive it.
   const toggleCollapseRepeats = useCallback(() => {

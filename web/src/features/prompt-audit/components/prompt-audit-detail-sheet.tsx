@@ -26,6 +26,7 @@ import { toast } from 'sonner'
 import { CopyButton } from '@/components/copy-button'
 import { Badge } from '@/components/ui/badge'
 import { Button, buttonVariants } from '@/components/ui/button'
+import { Separator } from '@/components/ui/separator'
 import {
   Sheet,
   SheetContent,
@@ -223,7 +224,7 @@ export function PromptAuditDetailSheet({
                           </TabsList>
                         </div>
                         <CopyButton
-                          value={activeSource.text}
+                          value={activeSource.blocks.join('\n\n')}
                           variant='ghost'
                           size='sm'
                           tooltip={t('Copy')}
@@ -231,9 +232,26 @@ export function PromptAuditDetailSheet({
                       </div>
                       {payloadSources.map((source) => (
                         <TabsContent key={source.key} value={source.key}>
-                          <pre className='bg-background/70 mt-1 max-h-56 overflow-auto rounded-md p-2 text-xs leading-relaxed break-words whitespace-pre-wrap [content-visibility:auto]'>
-                            {source.text}
-                          </pre>
+                          {/* One frame per source, one block inside it per part
+                              the client sent: a turn that arrived as several
+                              messages reads as the blocks it was made of, told
+                              apart by a hairline, rather than as one run of text
+                              where the boundary is lost. */}
+                          <div className='bg-background/70 mt-1 max-h-56 overflow-auto rounded-md p-2 [content-visibility:auto]'>
+                            {Array.from(
+                              source.blocks.entries(),
+                              ([position, text]) => (
+                                <div key={`${source.key}-${position}`}>
+                                  {position > 0 && (
+                                    <Separator className='my-2' />
+                                  )}
+                                  <pre className='text-xs leading-relaxed break-words whitespace-pre-wrap'>
+                                    {text}
+                                  </pre>
+                                </div>
+                              )
+                            )}
+                          </div>
                         </TabsContent>
                       ))}
                     </Tabs>
