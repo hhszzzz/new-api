@@ -34,6 +34,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import {
   CollapsibleDetailSection,
@@ -46,6 +47,7 @@ import { getPromptAudit, retryPromptAudit, reviewPromptAudit } from '../api'
 import {
   getPromptAuditProtocolName,
   promptAuditDetectorLabel,
+  promptAuditOutcome,
   promptAuditPayloadSegments,
   promptAuditRequestKindLabel,
 } from '../lib'
@@ -59,16 +61,6 @@ type PromptAuditDetailSheetProps = {
   canDelete: boolean
   onOpenChange: (open: boolean) => void
   onDelete: (event: PromptAuditEvent) => void
-}
-
-function getDecisionBadgeVariant(decision: string) {
-  if (decision === 'block' || decision === 'unavailable') {
-    return 'destructive'
-  }
-  if (decision === 'flag') {
-    return 'warning'
-  }
-  return 'secondary'
 }
 
 export function PromptAuditDetailSheet({
@@ -117,13 +109,14 @@ export function PromptAuditDetailSheet({
   })
 
   const event = detailQuery.data
+  const outcome = promptAuditOutcome({
+    status: event?.status ?? '',
+    decision: event?.decision ?? '',
+  })
   const showsFullPrompt = canViewFullPrompt && event?.full_prompt !== undefined
   const prompt = showsFullPrompt
     ? (event?.full_prompt ?? '')
     : (event?.redacted_preview ?? '')
-  // Only the model path records which scopes it submitted; a wordlist-only row
-  // reports where it matched instead, under Text source.
-  const inspectedScopes = event?.inspected_scopes ?? []
   const segmentOccurrences = new Map<string, number>()
   const payloadSegments = (
     canViewFullPrompt ? promptAuditPayloadSegments(event?.scan_payload) : []
@@ -133,6 +126,19 @@ export function PromptAuditDetailSheet({
     segmentOccurrences.set(contentKey, occurrence + 1)
     return { ...segment, key: `${contentKey}:${occurrence}` }
   })
+  // Which inspected part the tabs show. Held with the record it was chosen for,
+  // so a key from a previous record cannot survive into the next one and leave it
+  // showing no tab: the record ids simply stop matching.
+  const [chosenSegment, setChosenSegment] = useState<{
+    eventID: number | null
+    key: string
+  } | null>(null)
+  const activeSegment =
+    (chosenSegment?.eventID === eventID
+      ? payloadSegments.find((segment) => segment.key === chosenSegment.key)
+      : undefined) ?? payloadSegments[0]
+  const setActiveKey = (value: unknown) =>
+    setChosenSegment(typeof value === 'string' ? { eventID, key: value } : null)
   const PromptCopySection = showsFullPrompt
     ? CollapsibleDetailSection
     : DetailSection
@@ -176,16 +182,9 @@ export function PromptAuditDetailSheet({
           {event && (
             <div className='space-y-4 pt-1'>
               <div className='flex flex-wrap gap-1.5'>
-                <Badge variant={getDecisionBadgeVariant(event.decision)}>
-                  {t(event.decision || 'pending')}
-                </Badge>
-                <Badge
-                  variant={
-                    event.status === 'failed' ? 'destructive' : 'outline'
-                  }
-                >
-                  {t(event.status)}
-                </Badge>
+                {/* The same single reading the records row shows, so opening a
+                    record does not restate its verdict in a second vocabulary. */}
+                <Badge variant={outcome.variant}>{t(outcome.key)}</Badge>
                 <Badge variant='outline'>
                   {promptAuditDetectorLabel(event.inspection_type, t)}
                 </Badge>
@@ -194,27 +193,11 @@ export function PromptAuditDetailSheet({
                 </Badge>
               </div>
 
-              <DetailSection label={t('Inspected scope')}>
-                {inspectedScopes.length === 0 ? (
-                  <span className='text-muted-foreground text-xs'>—</span>
-                ) : (
-                  <>
-                    <div className='flex flex-wrap gap-1.5'>
-                      {inspectedScopes.map((scope) => (
-                        <Badge key={scope} variant='outline'>
-                          {promptAuditScopeLabel(scope, t)}
-                        </Badge>
-                      ))}
-                    </div>
-                    <p className='text-muted-foreground mt-2 text-xs leading-relaxed'>
-                      {t(
-                        'Only these parts were submitted for inspection; the rest of the request was not inspected.'
-                      )}
-                    </p>
-                  </>
-                )}
-              </DetailSection>
-
+              {/* The parts the audit submitted, one tab per source. The tabs
+                  carry what the removed scope list said — which parts were
+                  inspected — by being those parts, and the chosen tab's text
+                  sits directly under them instead of inside a second frame,
+                  which read as a card within a card. */}
               {canViewFullPrompt && (
                 <DetailSection label={t('Inspected content')}>
                   {payloadSegments.length === 0 ? (
@@ -222,34 +205,38 @@ export function PromptAuditDetailSheet({
                       {t('No inspected content retained')}
                     </span>
                   ) : (
-                    payloadSegments.map((segment) => {
-                      const SegmentSection =
-                        segment.text.length > 600
-                          ? CollapsibleDetailSection
-                          : DetailSection
-                      return (
-                        <SegmentSection
-                          key={segment.key}
-                          label={
-                            segment.scope
-                              ? promptAuditScopeLabel(segment.scope, t)
-                              : t('Unknown source')
-                          }
+                    <Tabs
+                      value={activeSegment.key}
+                      onValueChange={setActiveKey}
+                    >
+                      <div className='flex items-center gap-2'>
+                        <TabsList
+                          variant='line'
+                          className='min-w-0 flex-1 flex-wrap justify-start'
                         >
-                          <div className='flex justify-end'>
-                            <CopyButton
-                              value={segment.text}
-                              variant='ghost'
-                              size='sm'
-                              tooltip={t('Copy')}
-                            />
-                          </div>
-                          <pre className='bg-background/70 max-h-56 overflow-auto rounded-md p-2 text-xs leading-relaxed break-words whitespace-pre-wrap [content-visibility:auto]'>
+                          {payloadSegments.map((segment) => (
+                            <TabsTrigger key={segment.key} value={segment.key}>
+                              {segment.scope
+                                ? promptAuditScopeLabel(segment.scope, t)
+                                : t('Unknown source')}
+                            </TabsTrigger>
+                          ))}
+                        </TabsList>
+                        <CopyButton
+                          value={activeSegment.text}
+                          variant='ghost'
+                          size='sm'
+                          tooltip={t('Copy')}
+                        />
+                      </div>
+                      {payloadSegments.map((segment) => (
+                        <TabsContent key={segment.key} value={segment.key}>
+                          <pre className='bg-background/70 mt-1 max-h-56 overflow-auto rounded-md p-2 text-xs leading-relaxed break-words whitespace-pre-wrap [content-visibility:auto]'>
                             {segment.text}
                           </pre>
-                        </SegmentSection>
-                      )
-                    })
+                        </TabsContent>
+                      ))}
+                    </Tabs>
                   )}
                   {event.scan_payload_truncated && (
                     <p className='text-muted-foreground text-xs'>
@@ -262,37 +249,45 @@ export function PromptAuditDetailSheet({
               )}
 
               <PromptCopySection
-                label={
-                  showsFullPrompt ? t('Retained prompt copy') : t('Prompt')
-                }
+                label={showsFullPrompt ? t('Full prompt') : t('Prompt')}
               >
                 <div className='mb-2 flex items-center justify-between gap-3'>
-                  <span className='text-muted-foreground text-xs font-medium'>
-                    {showsFullPrompt ? t('Full prompt') : t('Redacted preview')}
-                  </span>
-                  <div className='flex items-center gap-1.5'>
-                    {event.full_prompt_truncated && (
-                      <Badge variant='warning'>
-                        {t('Retained copy truncated')}
-                      </Badge>
-                    )}
-                    {prompt && (
-                      <CopyButton
-                        value={prompt}
-                        variant='ghost'
-                        size='sm'
-                        tooltip={t('Copy')}
-                      />
-                    )}
-                  </div>
+                  {/* The heading already says "Full prompt" when the whole
+                      request is shown, so the label is only repeated for the
+                      redacted preview, whose heading is just "Prompt". */}
+                  {!showsFullPrompt && (
+                    <span className='text-muted-foreground text-xs font-medium'>
+                      {t('Redacted preview')}
+                    </span>
+                  )}
+                  {prompt && (
+                    <CopyButton
+                      value={prompt}
+                      variant='ghost'
+                      size='sm'
+                      tooltip={t('Copy')}
+                    />
+                  )}
                 </div>
                 <pre className='bg-background/70 max-h-[26rem] overflow-auto rounded-md p-3 text-xs leading-relaxed break-words whitespace-pre-wrap [content-visibility:auto]'>
                   {prompt || t('No prompt text retained')}
                 </pre>
+                {/* Kept off the header row: the truncation applies to the text
+                    below, and a badge above it competed with the verdicts for
+                    attention on nearly every record. The limit itself is a
+                    setting and is not repeated here, because this sheet can be
+                    opened by operators who may not read that configuration. */}
+                {event.full_prompt_truncated && (
+                  <p className='text-muted-foreground mt-2 text-xs'>
+                    {t(
+                      'Only the beginning of the request was stored; the rest was dropped by the retention limit.'
+                    )}
+                  </p>
+                )}
                 {showsFullPrompt && (
                   <p className='text-muted-foreground mt-2 text-xs'>
                     {t(
-                      'This retained copy is the start of the whole request, not only the parts sent for inspection, which are listed under Inspected scope.'
+                      'This is the whole request as sent, while Inspected content lists only the parts the audit submitted.'
                     )}
                   </p>
                 )}

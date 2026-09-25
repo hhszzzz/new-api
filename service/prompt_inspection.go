@@ -301,7 +301,7 @@ func InspectPrompt(c *gin.Context, request PromptAuditRequest) (PromptAuditResul
 		result := PromptAuditResult{Enabled: true, Reviewed: true, Blocked: true, Mode: configured.Mode, Direction: direction, CoverageComplete: true, Decision: PromptAuditDecisionBlock, Outcome: PromptAuditDecisionBlock, Safety: "Safe", ConfigVersion: configured.ConfigVersion, ActualAction: PromptAuditActionBlock, InputChars: utf8.RuneCountInString(text), InputSHA256: hex.EncodeToString(digest[:]), SegmentCount: len(request.Snapshot.Segments), InspectionType: "probe_block"}
 		audit := &model.PromptAudit{RequestID: resultRequestID(c), UserID: contextInt(c, "id"), TokenID: contextInt(c, "token_id"), TokenName: contextString(c, "token_name"), GroupName: group, Protocol: request.Protocol, ModelName: request.Model, Stage: normalizedPromptAuditStage(request.Stage), Direction: direction, CoverageComplete: true, ConfigVersion: configured.ConfigVersion, ExecutionMode: result.Mode, Status: model.PromptAuditStatusDone, PromptHash: result.InputSHA256, PromptLength: result.InputChars, SegmentCount: result.SegmentCount, Decision: result.Decision, Safety: result.Safety, WouldAction: result.ActualAction, InspectionType: "probe_block", Action: result.ActualAction, CompletedAt: common.GetTimestamp()}
 		applyPromptAuditRequestContext(audit, c)
-		setPromptAuditContent(audit, text)
+		setPromptAuditContent(audit, text, configured.FullPromptRetentionLimit())
 		setPromptAuditInputContext(audit, request)
 		payload, _ := common.Marshal(promptAuditPayload{Version: 1, Direction: direction, CoverageComplete: true, Segments: request.Snapshot.OrderedSegments()})
 		audit.ScanPayload, audit.ScanPayloadTruncated = model.RetainPromptAuditPayload(payload)
@@ -375,7 +375,7 @@ func InspectPrompt(c *gin.Context, request PromptAuditRequest) (PromptAuditResul
 				CompletedAt:      common.GetTimestamp(),
 			}
 			applyPromptAuditRequestContext(audit, c)
-			setPromptAuditContent(audit, text)
+			setPromptAuditContent(audit, text, configured.FullPromptRetentionLimit())
 			setPromptAuditInputContext(audit, request)
 			payload, _ := common.Marshal(promptAuditPayload{Version: 1, Direction: direction, CoverageComplete: true, Segments: request.Snapshot.OrderedSegments()})
 			audit.ScanPayload, audit.ScanPayloadTruncated = model.RetainPromptAuditPayload(payload)
@@ -437,7 +437,7 @@ func InspectPrompt(c *gin.Context, request PromptAuditRequest) (PromptAuditResul
 		audit.WordlistID, audit.WordlistName, audit.WordlistVersion, audit.MatchedScope = match.ID, match.Name, match.Version, string(match.Scope)
 	}
 	applyPromptAuditRequestContext(audit, c)
-	setPromptAuditContent(audit, text)
+	setPromptAuditContent(audit, text, configured.FullPromptRetentionLimit())
 	setPromptAuditInputContext(audit, request)
 	var inspected []dto.PromptAuditSegment
 	for _, segment := range wordlistSnapshot.OrderedSegments() {

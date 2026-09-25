@@ -50,9 +50,10 @@ export function AuditModelsSection({
   onTest,
 }: AuditModelsSectionProps) {
   const { t } = useTranslation()
-  const [openClientKey, setOpenClientKey] = useState<string | null>(
-    () => endpoints.at(0)?.client_key ?? null
-  )
+  // Nothing starts open: the list of nodes is long, and a node that opened by
+  // itself pushed the rest of the page down before the operator had read it. A
+  // node the operator adds still opens immediately, through handleAdd.
+  const [openClientKey, setOpenClientKey] = useState<string | null>(null)
 
   const handleAdd = () => {
     const clientKey = crypto.randomUUID()

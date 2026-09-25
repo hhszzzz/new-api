@@ -29,7 +29,7 @@ import type {
   PaginationState,
   RowSelectionState,
 } from '@tanstack/react-table'
-import { RefreshCw, Trash2 } from 'lucide-react'
+import { Trash2 } from 'lucide-react'
 import { useCallback, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -327,21 +327,19 @@ export function PromptAuditRecords() {
     setPagination((current) => ({ ...current, pageIndex: 0 }))
     setRowSelection({})
   }, [collapseRepeats])
-  const refresh = useCallback(async () => {
-    await queryClient.invalidateQueries({ queryKey: ['prompt-audit'] })
-  }, [queryClient])
+  // Deletion always names what it removes: one record from the detail sheet, or
+  // the rows the operator ticked. There is deliberately no "everything matching
+  // the filters" path, which is why the header has no such button either.
   const openDelete = useCallback(
-    (scope: 'selected' | 'filtered', event?: PromptAuditEvent) => {
+    (event?: PromptAuditEvent) => {
       if (event) {
         setDeleteFilter({ ids: [event.id] })
         return
       }
       setDeleteFilter(
-        promptAuditDeleteFilter(
-          filters,
-          scope === 'selected' ? selectedIDs : [],
-          { groups: collapseRepeats }
-        )
+        promptAuditDeleteFilter(filters, selectedIDs, {
+          groups: collapseRepeats,
+        })
       )
     },
     [collapseRepeats, filters, selectedIDs]
@@ -352,25 +350,8 @@ export function PromptAuditRecords() {
       <SectionPageLayout fixedContent>
         <SectionPageLayout.Title>{t('Prompt audit')}</SectionPageLayout.Title>
         <SectionPageLayout.Actions>
-          <Button
-            variant='outline'
-            onClick={refresh}
-            disabled={listQuery.isFetching}
-          >
-            <RefreshCw className={listQuery.isFetching ? 'animate-spin' : ''} />
-            {t('Refresh')}
-          </Button>
-          {canDelete && total > 0 && selectedIDs.length === 0 && (
-            <Button variant='outline' onClick={() => openDelete('filtered')}>
-              <Trash2 />
-              {t('Delete filtered')}
-            </Button>
-          )}
           {canDelete && selectedIDs.length > 0 && (
-            <Button
-              variant='destructive'
-              onClick={() => openDelete('selected')}
-            >
+            <Button variant='destructive' onClick={() => openDelete()}>
               <Trash2 />
               {t('Delete selected')} ({selectedIDs.length})
             </Button>
@@ -450,7 +431,7 @@ export function PromptAuditRecords() {
         onOpenChange={(open) => !open && setDetailID(null)}
         onDelete={(event) => {
           setDetailID(null)
-          openDelete('selected', event)
+          openDelete(event)
         }}
       />
       <PromptAuditDeleteDialog
@@ -467,7 +448,7 @@ export function PromptAuditRecords() {
           queryClient.removeQueries({
             queryKey: ['prompt-audit', 'events', 'group'],
           })
-          void refresh()
+          void queryClient.invalidateQueries({ queryKey: ['prompt-audit'] })
         }}
       />
     </>

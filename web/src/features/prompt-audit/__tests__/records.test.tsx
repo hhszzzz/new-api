@@ -159,7 +159,7 @@ function renderRecords() {
     routeTree: root,
     history: createMemoryHistory({ initialEntries: ['/'] }),
   })
-  return render(<RouterProvider router={router} />)
+  return { ...render(<RouterProvider router={router} />), client }
 }
 
 function listingRequests(matches: (params: Params) => boolean = () => true) {
@@ -275,6 +275,36 @@ afterEach(async () => {
 })
 
 describe('prompt audit records', () => {
+  test('keeps the header free of controls the filter bar already provides', async () => {
+    renderRecords()
+    await screen.findByRole('checkbox', { name: 'Select audit record' })
+
+    // Refreshing and clearing belong to the search controls, and a bulk delete
+    // that ignores the row selection is what the selection exists to avoid.
+    expect(
+      screen.queryByRole('button', { name: 'Refresh' })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Delete filtered' })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: /Delete selected/ })
+    ).not.toBeInTheDocument()
+  })
+
+  test('offers the batch delete only once rows are selected', async () => {
+    const user = userEvent.setup()
+    renderRecords()
+
+    await user.click(
+      await screen.findByRole('checkbox', { name: 'Select audit record' })
+    )
+
+    expect(
+      screen.getByRole('button', { name: 'Delete selected (1)' })
+    ).toBeVisible()
+  })
+
   test('deletes every request a selected merged row stands for', async () => {
     const user = userEvent.setup()
     renderRecords()
@@ -338,14 +368,18 @@ describe('prompt audit records', () => {
     ]
     server.total = 40
     const user = userEvent.setup()
-    renderRecords()
+    const renderResult = renderRecords()
     await expandGroup(user)
 
     await user.click(screen.getByRole('button', { name: 'Go to next page' }))
     expect(await screen.findByText('next-page-request')).toBeVisible()
-    const refresh = screen.getByRole('button', { name: 'Refresh' })
-    await waitFor(() => expect(refresh).toBeEnabled())
-    await user.click(refresh)
+    // The screen has no refresh control of its own; a reload reaches the mounted
+    // queries the same way the rest of the app triggers one.
+    await act(async () => {
+      await renderResult.client.invalidateQueries({
+        queryKey: ['prompt-audit'],
+      })
+    })
 
     await waitFor(() =>
       expect(listingRequests((params) => params.page === 2)).toHaveLength(2)

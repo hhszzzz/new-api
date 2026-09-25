@@ -20,6 +20,8 @@ import { afterEach, describe, expect, test, vi } from 'vitest'
 
 import {
   EMPTY_PROMPT_AUDIT_FILTERS,
+  FULL_PROMPT_MAX_RUNES,
+  FULL_PROMPT_MIN_RUNES,
   getDefaultPromptAuditFilters,
   getPromptAuditProtocolName,
   isMergedPromptAuditRow,
@@ -29,6 +31,7 @@ import {
   promptAuditEndpointDrafts,
   promptAuditEndpointUpdate,
   promptAuditFilterParams,
+  promptAuditOutcome,
   type PromptAuditEndpointDraft,
   promptAuditRowID,
   readPromptAuditCollapseRepeats,
@@ -343,6 +346,43 @@ describe('prompt audit management helpers', () => {
     ).toMatch(/node numeric values/)
   })
 
+  test('accepts a stored prompt limit at the floor, the default, and the ceiling', () => {
+    for (const limit of [FULL_PROMPT_MIN_RUNES, 65536, FULL_PROMPT_MAX_RUNES]) {
+      expect(
+        validatePromptAuditConfig({
+          ...VALID_CONFIG,
+          full_prompt_max_runes: limit,
+        })
+      ).toBeNull()
+    }
+  })
+
+  test('accepts zero, which is how keeping the whole request is stored', () => {
+    expect(
+      validatePromptAuditConfig({ ...VALID_CONFIG, full_prompt_max_runes: 0 })
+    ).toBeNull()
+  })
+
+  test('rejects a stored prompt limit above the ceiling or just below the floor', () => {
+    // The values between 0 and the floor are the dangerous ones: they keep so
+    // little of the request that the record is useless, and one of them is what
+    // a mistyped number field produces.
+    for (const limit of [1, FULL_PROMPT_MIN_RUNES - 1]) {
+      expect(
+        validatePromptAuditConfig({
+          ...VALID_CONFIG,
+          full_prompt_max_runes: limit,
+        })
+      ).toMatch(/stored prompt limit/)
+    }
+    expect(
+      validatePromptAuditConfig({
+        ...VALID_CONFIG,
+        full_prompt_max_runes: FULL_PROMPT_MAX_RUNES + 1,
+      })
+    ).toMatch(/stored prompt limit/)
+  })
+
   test('rejects an inverted time range', () => {
     expect(
       validatePromptAuditFilters({
@@ -351,5 +391,43 @@ describe('prompt audit management helpers', () => {
         end_time: '2026-08-07T11:00',
       })
     ).toMatch(/Start time/)
+  })
+
+  test('reads a finished record by its verdict and an unfinished one by its status', () => {
+    expect(promptAuditOutcome({ status: 'done', decision: 'pass' })).toEqual({
+      key: 'pass',
+      variant: 'secondary',
+    })
+    expect(promptAuditOutcome({ status: 'done', decision: 'block' })).toEqual({
+      key: 'block',
+      variant: 'destructive',
+    })
+    expect(promptAuditOutcome({ status: 'queued', decision: '' })).toEqual({
+      key: 'queued',
+      variant: 'outline',
+    })
+    expect(promptAuditOutcome({ status: 'processing', decision: '' })).toEqual({
+      key: 'processing',
+      variant: 'warning',
+    })
+  })
+
+  test('keeps a failed record explicit while naming the verdict it did reach', () => {
+    expect(promptAuditOutcome({ status: 'failed', decision: '' })).toEqual({
+      key: 'failed',
+      variant: 'destructive',
+    })
+    expect(
+      promptAuditOutcome({ status: 'failed', decision: 'unavailable' })
+    ).toEqual({ key: 'unavailable', variant: 'destructive' })
+  })
+
+  test('never leaves a record without a reading', () => {
+    // Still waiting means no verdict and no terminal status, which is the state
+    // the two separate badges used to show as an empty decision slot.
+    expect(promptAuditOutcome({ status: '', decision: '' })).toEqual({
+      key: 'pending',
+      variant: 'outline',
+    })
   })
 })

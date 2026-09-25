@@ -184,18 +184,15 @@ describe('prompt audit management components', () => {
     )
 
     expect(
-      await screen.findByRole('button', { name: 'Retained prompt copy' })
+      await screen.findByRole('button', { name: 'Full prompt' })
     ).toHaveAttribute('aria-expanded', 'false')
     expect(screen.queryByText('raw-secret-prompt')).not.toBeInTheDocument()
-    await userEvent.click(
-      screen.getByRole('button', { name: 'Retained prompt copy' })
-    )
+    await userEvent.click(screen.getByRole('button', { name: 'Full prompt' }))
     expect(await screen.findByText('raw-secret-prompt')).toBeVisible()
-    expect(screen.getByText('Full prompt')).toBeVisible()
     expect(screen.queryByText('redacted-preview')).not.toBeInTheDocument()
   })
 
-  test('tells an administrator viewing the full prompt what the retained copy holds', async () => {
+  test('tells an administrator viewing the full prompt what the copy holds', async () => {
     renderWithQueryClient(
       <PromptAuditDetailSheet
         eventID={EVENT.id}
@@ -208,12 +205,12 @@ describe('prompt audit management components', () => {
     )
 
     await userEvent.click(
-      await screen.findByRole('button', { name: 'Retained prompt copy' })
+      await screen.findByRole('button', { name: 'Full prompt' })
     )
     expect(await screen.findByText('raw-secret-prompt')).toBeVisible()
     expect(
       screen.getByText(
-        'This retained copy is the start of the whole request, not only the parts sent for inspection, which are listed under Inspected scope.'
+        'This is the whole request as sent, while Inspected content lists only the parts the audit submitted.'
       )
     ).toBeVisible()
     expect(
@@ -242,7 +239,7 @@ describe('prompt audit management components', () => {
     expect(await screen.findByText('Tâche asynchrone')).toBeVisible()
   })
 
-  test('shows actual inspected text by source and folds long segments', async () => {
+  test('shows inspected text by source and keeps the unselected source hidden', async () => {
     getPromptAuditMock.mockResolvedValue({
       success: true,
       data: {
@@ -270,7 +267,7 @@ describe('prompt audit management components', () => {
     expect(
       screen.queryByText('Long skill body '.repeat(80).trim())
     ).not.toBeInTheDocument()
-    await userEvent.click(screen.getByRole('button', { name: 'Skills' }))
+    await userEvent.click(screen.getByRole('tab', { name: 'Skills' }))
     expect(screen.getByText('Long skill body '.repeat(80).trim())).toBeVisible()
     expect(
       screen.getByText(
@@ -304,10 +301,19 @@ describe('prompt audit management components', () => {
     expect(screen.queryByText('Inspected content')).not.toBeInTheDocument()
   })
 
-  test('separates the scopes that were inspected from the retained copy', async () => {
+  test('replaces the inspected scope list with one tab per inspected source', async () => {
     getPromptAuditMock.mockResolvedValue({
       success: true,
-      data: { ...EVENT, inspected_scopes: ['user', 'tool_result'] },
+      data: {
+        ...EVENT,
+        inspected_scopes: ['user', 'tool_result'],
+        scan_payload: JSON.stringify({
+          segments: [
+            { scope: 'user', text: 'Extracted user question' },
+            { scope: 'tool_result', text: 'Extracted tool output' },
+          ],
+        }),
+      },
     })
 
     renderWithQueryClient(
@@ -321,14 +327,52 @@ describe('prompt audit management components', () => {
       />
     )
 
-    expect(await screen.findByText('Inspected scope')).toBeVisible()
-    expect(screen.getByText('User messages')).toBeVisible()
-    expect(screen.getByText('Tool results')).toBeVisible()
+    // The scopes are the tabs, so the sources are named without a separate list
+    // that only repeated them.
     expect(
-      screen.getByText(
-        'Only these parts were submitted for inspection; the rest of the request was not inspected.'
-      )
-    ).toBeVisible()
+      await screen.findByRole('tab', { name: 'User messages' })
+    ).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('tab', { name: 'Tool results' })).toHaveAttribute(
+      'aria-selected',
+      'false'
+    )
+    expect(screen.getByText('Extracted user question')).toBeVisible()
+    expect(screen.queryByText('Extracted tool output')).not.toBeInTheDocument()
+    expect(screen.queryByText('Inspected scope')).not.toBeInTheDocument()
+  })
+
+  test('shows the selected source text when its tab is chosen', async () => {
+    getPromptAuditMock.mockResolvedValue({
+      success: true,
+      data: {
+        ...EVENT,
+        scan_payload: JSON.stringify({
+          segments: [
+            { scope: 'user', text: 'Extracted user question' },
+            { scope: 'tool_result', text: 'Extracted tool output' },
+          ],
+        }),
+      },
+    })
+
+    renderWithQueryClient(
+      <PromptAuditDetailSheet
+        eventID={EVENT.id}
+        canViewFullPrompt
+        canManage={false}
+        canDelete={false}
+        onOpenChange={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    )
+
+    await userEvent.click(
+      await screen.findByRole('tab', { name: 'Tool results' })
+    )
+    expect(screen.getByText('Extracted tool output')).toBeVisible()
+    expect(
+      screen.queryByText('Extracted user question')
+    ).not.toBeInTheDocument()
   })
 
   test('records no inspected scope for a wordlist-only row', async () => {
@@ -353,14 +397,11 @@ describe('prompt audit management components', () => {
       />
     )
 
-    expect(await screen.findByText('Inspected scope')).toBeVisible()
-    // The hit is reported as the text source, not as a scope the audit node saw.
-    expect(screen.getByText('Text source')).toBeVisible()
-    expect(
-      screen.queryByText(
-        'Only these parts were submitted for inspection; the rest of the request was not inspected.'
-      )
-    ).not.toBeInTheDocument()
+    // The hit is reported as the text source, and the inspected-content section
+    // is absent because this viewer may not read retained content at all.
+    expect(await screen.findByText('Text source')).toBeVisible()
+    expect(screen.getByText('User messages')).toBeVisible()
+    expect(screen.queryByText('Inspected content')).not.toBeInTheDocument()
   })
 
   test('hides the related log links for a request the audit rejected', async () => {
@@ -380,7 +421,7 @@ describe('prompt audit management components', () => {
       />
     )
 
-    expect(await screen.findByText('Inspected scope')).toBeVisible()
+    expect(await screen.findByText('Text source')).toBeVisible()
     expect(
       screen.queryByRole('link', { name: /Related/ })
     ).not.toBeInTheDocument()

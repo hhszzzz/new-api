@@ -37,23 +37,10 @@ import {
   getPromptAuditProtocolName,
   isMergedPromptAuditRow,
   promptAuditDetectorLabel,
+  promptAuditOutcome,
   promptAuditRequestKindLabel,
 } from '../lib'
 import type { PromptAuditEvent } from '../types'
-
-function decisionBadgeVariant(decision: string) {
-  if (decision === 'block' || decision === 'unavailable') return 'destructive'
-  if (decision === 'flag') return 'warning'
-  if (decision === 'pass') return 'secondary'
-  return 'outline'
-}
-
-function statusBadgeVariant(status: string) {
-  if (status === 'failed') return 'destructive'
-  if (status === 'retry' || status === 'processing') return 'warning'
-  if (status === 'done') return 'secondary'
-  return 'outline'
-}
 
 /** The chevron of a merged row, spinning while its requests are being fetched. */
 function expandIcon(loading: boolean, expanded: boolean) {
@@ -210,6 +197,7 @@ export function usePromptAuditColumns(options: {
           const shownRequests = row.subRows.length
           const isTruncated =
             isExpanded && groupTotal !== undefined && shownRequests < groupTotal
+          const outcome = promptAuditOutcome(event)
           return (
             <div className='min-w-0'>
               <div className='flex flex-wrap items-center gap-1'>
@@ -271,12 +259,7 @@ export function usePromptAuditColumns(options: {
                     </TooltipContent>
                   </Tooltip>
                 )}
-                <Badge variant={decisionBadgeVariant(event.decision)}>
-                  {t(event.decision || 'pending')}
-                </Badge>
-                <Badge variant={statusBadgeVariant(event.status)}>
-                  {t(event.status)}
-                </Badge>
+                <Badge variant={outcome.variant}>{t(outcome.key)}</Badge>
                 <Badge variant='outline'>
                   {promptAuditDetectorLabel(event.inspection_type, t)}
                 </Badge>

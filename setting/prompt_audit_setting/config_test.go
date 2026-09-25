@@ -37,6 +37,10 @@ func TestPromptAuditProbeDefaultsAndScopeInheritance(t *testing.T) {
 	assert.Empty(t, configured.PolicyFor(dto.PromptScopeSkill).LibraryIDs)
 }
 
+func intPtr(value int) *int {
+	return &value
+}
+
 func validSetting() PromptAuditSetting {
 	return PromptAuditSetting{
 		Mode:                   ModeBlocking,
@@ -88,6 +92,13 @@ func TestPromptAuditSettingValidation(t *testing.T) {
 		}, wantErr: "output classification"},
 		{name: "invalid direction", mutate: func(setting *PromptAuditSetting) { setting.Endpoints[0].Directions = []string{"future"} }, wantErr: "invalid direction"},
 		{name: "review endpoint required", mutate: func(setting *PromptAuditSetting) { setting.ReviewEnabled = true }, wantErr: "review endpoint"},
+		{name: "full prompt limit omitted uses default", mutate: func(setting *PromptAuditSetting) { setting.FullPromptMaxRunes = nil }},
+		{name: "full prompt limit zero keeps everything", mutate: func(setting *PromptAuditSetting) { setting.FullPromptMaxRunes = intPtr(0) }},
+		{name: "full prompt limit at floor", mutate: func(setting *PromptAuditSetting) { setting.FullPromptMaxRunes = intPtr(MinFullPromptMaxRunes) }},
+		{name: "full prompt limit below floor", mutate: func(setting *PromptAuditSetting) { setting.FullPromptMaxRunes = intPtr(MinFullPromptMaxRunes - 1) }, wantErr: "full prompt retention limit"},
+		{name: "full prompt limit at ceiling", mutate: func(setting *PromptAuditSetting) { setting.FullPromptMaxRunes = intPtr(MaxFullPromptMaxRunes) }},
+		{name: "full prompt limit negative", mutate: func(setting *PromptAuditSetting) { setting.FullPromptMaxRunes = intPtr(-1) }, wantErr: "full prompt retention limit"},
+		{name: "full prompt limit above ceiling", mutate: func(setting *PromptAuditSetting) { setting.FullPromptMaxRunes = intPtr(MaxFullPromptMaxRunes + 1) }, wantErr: "full prompt retention limit"},
 	}
 
 	for _, test := range tests {
@@ -117,6 +128,24 @@ func TestOffModeAllowsNoEndpointAndSnapshotIsDeepCopied(t *testing.T) {
 	first.EnabledCategories[0] = "mutated"
 	second := GetSetting()
 	assert.Equal(t, AllCategoryIDs[0], second.EnabledCategories[0])
+}
+
+// The settings screen sends 0 for "keep the whole request", so 0 must survive
+// the resolver unchanged while an omitted field still falls back to the default.
+func TestFullPromptRetentionLimitResolvesUnsetToDefault(t *testing.T) {
+	setting := validSetting()
+
+	setting.FullPromptMaxRunes = nil
+	assert.Equal(t, DefaultFullPromptMaxRunes, setting.FullPromptRetentionLimit())
+
+	setting.FullPromptMaxRunes = intPtr(0)
+	assert.Equal(t, 0, setting.FullPromptRetentionLimit())
+
+	setting.FullPromptMaxRunes = intPtr(2048)
+	assert.Equal(t, 2048, setting.FullPromptRetentionLimit())
+
+	setting.FullPromptMaxRunes = intPtr(MaxFullPromptMaxRunes)
+	assert.Equal(t, MaxFullPromptMaxRunes, setting.FullPromptRetentionLimit())
 }
 
 func TestSettingFingerprintTracksBlockingLatestTurnOnly(t *testing.T) {

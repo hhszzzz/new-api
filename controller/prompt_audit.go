@@ -62,6 +62,7 @@ type promptAuditConfigUpdate struct {
 	EndpointConcurrency    *int                                                       `json:"endpoint_concurrency"`
 	OutputMaxBytes         *int                                                       `json:"output_max_bytes"`
 	OutputMemoryBytes      *int                                                       `json:"output_memory_bytes"`
+	FullPromptMaxRunes     *int                                                       `json:"full_prompt_max_runes"`
 }
 
 type promptAuditFilterRequest struct {
@@ -229,6 +230,7 @@ func UpdatePromptAuditConfig(c *gin.Context) {
 	promptAuditSetInt(values, "prompt_audit.endpoint_concurrency", update.EndpointConcurrency)
 	promptAuditSetInt(values, "prompt_audit.output_max_bytes", update.OutputMaxBytes)
 	promptAuditSetInt(values, "prompt_audit.output_memory_bytes", update.OutputMemoryBytes)
+	promptAuditSetInt(values, "prompt_audit.full_prompt_max_runes", update.FullPromptMaxRunes)
 	if err := validatePromptWordlistReviewBindings(proposed); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
 		return
@@ -575,7 +577,8 @@ func promptAuditConfigResponse(setting prompt_audit_setting.PromptAuditSetting) 
 		"worker_count":      setting.WorkerCount, "max_attempts": setting.MaxAttempts,
 		"retention_days": setting.RetentionDays, "global_concurrency": setting.GlobalConcurrency,
 		"endpoint_concurrency": setting.EndpointConcurrency, "output_max_bytes": setting.OutputMaxBytes,
-		"output_memory_bytes": setting.OutputMemoryBytes, "config_version": setting.ConfigVersion,
+		"output_memory_bytes": setting.OutputMemoryBytes, "full_prompt_max_runes": setting.FullPromptRetentionLimit(),
+		"config_version": setting.ConfigVersion,
 	}
 }
 

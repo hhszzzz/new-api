@@ -36,7 +36,6 @@ import (
 const (
 	promptAuditContextKey          = "prompt_audit_result"
 	promptAuditMaxResponseBytes    = 256 * 1024
-	promptAuditFullPromptMaxRunes  = 65536
 	promptAuditPreviewSourceRunes  = 96
 	promptAuditLocalCacheMaxItems  = 4096
 	promptAuditWorkerPollInterval  = 2 * time.Second
@@ -1648,7 +1647,7 @@ func newPromptAuditRecord(c *gin.Context, request PromptAuditRequest, setting pr
 	if data, marshalErr := common.Marshal(policySnapshot); marshalErr == nil {
 		audit.PolicySnapshot = string(data)
 	}
-	setPromptAuditContent(audit, fullText)
+	setPromptAuditContent(audit, fullText, setting.FullPromptRetentionLimit())
 	setPromptAuditInputContext(audit, request)
 	audit.ScanPayload, audit.ScanPayloadTruncated = model.RetainPromptAuditPayload(scanPayload)
 	audit.ContentSnapshot = append([]byte(nil), audit.ScanPayload...)
@@ -1663,8 +1662,8 @@ func newPromptAuditRecord(c *gin.Context, request PromptAuditRequest, setting pr
 	return audit, nil
 }
 
-func setPromptAuditContent(audit *model.PromptAudit, fullText string) {
-	audit.FullPrompt, audit.FullPromptTruncated = promptAuditStoredFullPrompt(fullText)
+func setPromptAuditContent(audit *model.PromptAudit, fullText string, maxRunes int) {
+	audit.FullPrompt, audit.FullPromptTruncated = promptAuditStoredFullPrompt(fullText, maxRunes)
 	audit.RedactedPreview = promptAuditPreview(fullText)
 }
 
@@ -1706,12 +1705,20 @@ func persistPromptAuditDecision(c *gin.Context, request PromptAuditRequest, sett
 	return audit.ID
 }
 
-func promptAuditStoredFullPrompt(value string) ([]byte, bool) {
-	runes := []rune(value)
-	if len(runes) <= promptAuditFullPromptMaxRunes {
+// promptAuditStoredFullPrompt keeps the beginning of the whole request for the
+// record. maxRunes is the resolved retention limit in characters and is always
+// positive: callers pass FullPromptRetentionLimit, which substitutes the default
+// for an unset value. A limit that exceeds the text keeps all of it and reports
+// truncated=false, because the record does hold everything.
+func promptAuditStoredFullPrompt(value string, maxRunes int) ([]byte, bool) {
+	if maxRunes <= 0 {
 		return []byte(value), false
 	}
-	return []byte(string(runes[:promptAuditFullPromptMaxRunes])), true
+	runes := []rune(value)
+	if len(runes) <= maxRunes {
+		return []byte(value), false
+	}
+	return []byte(string(runes[:maxRunes])), true
 }
 
 func promptAuditPreview(value string) string {

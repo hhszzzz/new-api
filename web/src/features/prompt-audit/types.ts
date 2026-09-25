@@ -129,6 +129,11 @@ export interface PromptAuditConfig {
   endpoint_concurrency: number
   output_max_bytes: number
   output_memory_bytes: number
+  /**
+   * How many characters of the whole request are kept on each record. A value at
+   * or above FULL_PROMPT_MAX_RUNES_LIMIT keeps the entire request.
+   */
+  full_prompt_max_runes?: number
   config_version: string
 }
 

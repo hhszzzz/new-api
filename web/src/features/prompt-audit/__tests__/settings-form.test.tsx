@@ -189,10 +189,43 @@ describe('prompt audit settings page', () => {
 
     // Section ④ is collapsed: none of its eleven numeric fields are mounted.
     expect(nodeDetail(view, 'prompt-audit-total-timeout')).toBeNull()
-    // Section ② keeps only the summary row of the non-first node.
-    expect(nodeDetail(view, 'prompt-audit-node-model-0')).not.toBeNull()
+    // Section ② starts closed too: every node shows only its summary row, so an
+    // operator reads the whole list before opening the one they came for.
+    expect(nodeDetail(view, 'prompt-audit-node-model-0')).toBeNull()
     expect(nodeDetail(view, 'prompt-audit-node-model-1')).toBeNull()
     expect(screen.getAllByRole('button', { name: /guard-/ })).toHaveLength(2)
+  })
+
+  // The switch writes the global sensitive-word master switch, which decides
+  // whether ANY of the per-source wordlist assignments below it run, so it stays
+  // next to those assignments.
+  test('keeps the wordlist filtering master switch above the source pickers', async () => {
+    renderSettings()
+    await screen.findByText('Inspection rules by source')
+
+    expect(
+      screen.getByRole('switch', { name: 'Enable wordlist filtering' })
+    ).toBeInTheDocument()
+    expect(screen.getByLabelText('User messages')).toBeInTheDocument()
+  })
+
+  test('keeps the probe phrase list folded while probe blocking is on', async () => {
+    const user = userEvent.setup()
+    const view = renderSettings()
+    await screen.findByText('Enforcement policy')
+    await user.click(
+      screen.getByRole('switch', { name: 'Block probe requests' })
+    )
+
+    // Turning the switch on does not unfold the list, which is the whole point:
+    // it used to sit open and push everything below it out of view.
+    const trigger = screen.getByRole('button', { name: /Probe phrases/ })
+    expect(trigger).toHaveAttribute('aria-expanded', 'false')
+    expect(nodeDetail(view, 'prompt-audit-probe-phrases')).toBeNull()
+
+    await user.click(trigger)
+    expect(trigger).toHaveAttribute('aria-expanded', 'true')
+    expect(nodeDetail(view, 'prompt-audit-probe-phrases')).not.toBeNull()
   })
 
   test('expanding one node collapses the other', async () => {
@@ -244,6 +277,11 @@ describe('prompt audit settings page', () => {
     const user = userEvent.setup()
     const view = renderSettings()
     await screen.findByText('Enforcement policy')
+    // Open the first node: nothing is expanded until the operator asks.
+    await user.click(screen.getByRole('button', { name: /guard-a/ }))
+    await waitFor(() =>
+      expect(nodeDetail(view, 'prompt-audit-node-model-0')).not.toBeNull()
+    )
 
     // The expanded row stays expanded when its own controls are used; the
     // expansion follows the node, so after the swap it is the second row that
@@ -287,6 +325,7 @@ describe('prompt audit settings page', () => {
     const user = userEvent.setup()
     const view = renderSettings()
     await screen.findByText('Enforcement policy')
+    await user.click(screen.getByRole('button', { name: /guard-a/ }))
 
     expect(
       await screen.findByRole('button', { name: 'Test saved audit model' })
@@ -334,7 +373,8 @@ describe('prompt audit settings page', () => {
       )
     }
 
-    // The first node is expanded by default and starts with both directions.
+    // Opening the first node reveals its directions, which start as both.
+    await user.click(screen.getByRole('button', { name: /guard-a/ }))
     expect(chipLabels()).toEqual(['Request input', 'Generated output'])
 
     // Picking an already-selected option deselects it.
@@ -354,10 +394,57 @@ describe('prompt audit settings page', () => {
   // Every failure kind but two used to collapse into the same generic
   // sentence, so a rejected token, a redirecting base URL, and a model that
   // ignores assistant messages looked identical without the network tab.
+  test('stores the whole request only through the switch, never a typed zero', async () => {
+    const user = userEvent.setup()
+    renderSettings()
+    await screen.findByText('Enforcement policy')
+    await user.click(
+      screen.getByRole('button', { name: 'Advanced parameters' })
+    )
+    // The limit is shown as a number while a limit is in force.
+    expect(
+      screen.getByLabelText('Stored prompt characters')
+    ).toBeInTheDocument()
+
+    await user.click(
+      screen.getByRole('switch', { name: 'Store the entire request' })
+    )
+    // Unlimited hides the number, so no input can report 0 by being emptied.
+    expect(
+      screen.queryByLabelText('Stored prompt characters')
+    ).not.toBeInTheDocument()
+
+    await user.click(
+      screen.getByRole('switch', { name: 'Store the entire request' })
+    )
+    expect(screen.getByLabelText('Stored prompt characters')).toHaveValue(65536)
+  })
+
+  test('saves the unlimited retention limit as the zero the backend reads', async () => {
+    const user = userEvent.setup()
+    renderSettings()
+    await screen.findByText('Enforcement policy')
+    await user.click(
+      screen.getByRole('button', { name: 'Advanced parameters' })
+    )
+    await user.click(
+      screen.getByRole('switch', { name: 'Store the entire request' })
+    )
+
+    await user.click(await screen.findByRole('button', { name: /^Save/ }))
+
+    await waitFor(() => {
+      const put = apiMock.put.mock.calls.at(-1)
+      expect(put?.[0]).toBe('/api/prompt-audit/config')
+      expect(put?.[1]).toMatchObject({ full_prompt_max_runes: 0 })
+    })
+  })
+
   test('a failed model test reports the cause the backend measured', async () => {
     const user = userEvent.setup()
     renderSettings()
     await screen.findByText('Enforcement policy')
+    await user.click(screen.getByRole('button', { name: /guard-a/ }))
     apiMock.post.mockResolvedValue({
       data: {
         success: false,

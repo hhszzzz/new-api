@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { ChevronDown } from 'lucide-react'
+import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
@@ -33,14 +34,14 @@ import {
 import { bytesToMB, mbToBytes } from '../lib'
 import type { PromptAuditConfigUpdate } from '../types'
 import { NumberField } from './number-field'
+import { StoredPromptLimitField } from './stored-prompt-limit-field'
 
-// Optional properties must be stripped first: PromptAuditConfigUpdate marks
-// several numeric fields optional, and `number | undefined extends number` is
-// false, which would silently drop them from this union.
+// Only the required numbers belong in this grid: an optional numeric field reads
+// as `number | undefined`, which does not extend `number`, so this filter leaves
+// it out. That is what keeps the grid's inputs free of a value they cannot show
+// and sends controls for optional fields to the group's footer instead.
 type NumericConfigKey = {
-  [K in keyof PromptAuditConfigUpdate]-?: NonNullable<
-    PromptAuditConfigUpdate[K]
-  > extends number
+  [K in keyof PromptAuditConfigUpdate]-?: PromptAuditConfigUpdate[K] extends number
     ? K
     : never
 }[keyof PromptAuditConfigUpdate]
@@ -60,6 +61,12 @@ type AdvancedNumericFieldSpec = {
 type AdvancedNumericGroupSpec = {
   title: string
   fields: AdvancedNumericFieldSpec[]
+  /**
+   * A control that does not fit the numeric grid above, rendered under it. The
+   * stored-prompt limit uses one because its unlimited mode is the value 0, which
+   * the grid's number input produces on its own whenever it is empty.
+   */
+  footer?: ReactNode
 }
 
 type AdvancedLimitsSectionProps = {
@@ -162,6 +169,14 @@ export function AdvancedLimitsSection({
           full: true,
         },
       ],
+      footer: (
+        <StoredPromptLimitField
+          value={config.full_prompt_max_runes}
+          onChange={(full_prompt_max_runes) =>
+            onChange({ full_prompt_max_runes })
+          }
+        />
+      ),
     },
     {
       title: t('Queue workers and concurrency'),
@@ -264,6 +279,7 @@ export function AdvancedLimitsSection({
                 )
               })}
             </SettingsFormGrid>
+            {group.footer}
           </div>
         ))}
       </CollapsibleContent>

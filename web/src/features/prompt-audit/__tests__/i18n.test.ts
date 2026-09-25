@@ -43,6 +43,7 @@ const SOURCE_FILES = [
   '../components/prompt-audit-filter-bar.tsx',
   '../components/prompt-audit-columns.tsx',
   '../components/prompt-audit-delete-dialog.tsx',
+  '../components/stored-prompt-limit-field.tsx',
 ]
 const LOCALES = ['en', 'zh', 'zh-TW', 'fr', 'ru', 'ja', 'vi']
 const DYNAMIC_KEYS = [

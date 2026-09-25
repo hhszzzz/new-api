@@ -154,24 +154,53 @@ export function EnforcementSection({
         />
         {config.probe_block_enabled && (
           <SettingsControlChildren className='pb-3'>
-            <Field>
-              <FieldLabel htmlFor='prompt-audit-probe-phrases'>
-                {t('Probe phrases')}
-              </FieldLabel>
-              <Textarea
-                id='prompt-audit-probe-phrases'
-                value={(config.probe_phrases ?? []).join('\n')}
-                onChange={(event) =>
-                  onChange({ probe_phrases: event.target.value.split('\n') })
+            {/* Folded away by default: the phrase list is long, and leaving it
+                open pushed every setting below it out of view for as long as
+                probe blocking stayed on. */}
+            <Collapsible className='flex flex-col gap-3'>
+              <CollapsibleTrigger
+                render={
+                  <Button
+                    type='button'
+                    variant='ghost'
+                    className='group justify-between px-0 hover:bg-transparent aria-expanded:bg-transparent dark:hover:bg-transparent'
+                  />
                 }
-                rows={6}
-              />
-              <FieldDescription>
-                {t(
-                  'One phrase per line. Matches the whole message, ignoring case and punctuation at either end. Conversation history and media are excluded.'
-                )}
-              </FieldDescription>
-            </Field>
+              >
+                <span className='flex items-center gap-2'>
+                  <span className='text-sm font-medium'>
+                    {t('Probe phrases')}
+                  </span>
+                  <Badge variant='secondary' className='text-xs font-normal'>
+                    {(config.probe_phrases ?? []).length}
+                  </Badge>
+                </span>
+                <ChevronDown
+                  className='text-muted-foreground size-4 shrink-0 transition-transform duration-200 group-aria-expanded:rotate-180'
+                  aria-hidden='true'
+                />
+              </CollapsibleTrigger>
+              <CollapsibleContent className='flex flex-col gap-3'>
+                <Field>
+                  <Textarea
+                    id='prompt-audit-probe-phrases'
+                    aria-label={t('Probe phrases')}
+                    value={(config.probe_phrases ?? []).join('\n')}
+                    onChange={(event) =>
+                      onChange({
+                        probe_phrases: event.target.value.split('\n'),
+                      })
+                    }
+                    rows={6}
+                  />
+                  <FieldDescription>
+                    {t(
+                      'One phrase per line. Matches the whole message, ignoring case and punctuation at either end. Conversation history and media are excluded.'
+                    )}
+                  </FieldDescription>
+                </Field>
+              </CollapsibleContent>
+            </Collapsible>
           </SettingsControlChildren>
         )}
         <SettingsSwitchField

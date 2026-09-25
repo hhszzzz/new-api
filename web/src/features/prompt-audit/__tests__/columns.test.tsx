@@ -154,6 +154,14 @@ function columns(options: ColumnOptions = {}): ColumnDef<PromptAuditEvent>[] {
 
 // Each rendered line of a multi-line cell is a direct child element, so the
 // children of the cell are the lines an operator sees.
+/** The badges of the result row, in order. They share one flex row, so each
+ *  reading has to be read off its own element rather than the row's text. */
+function resultBadges(cell: HTMLElement): (string | null)[] {
+  const row = cell.firstElementChild?.firstElementChild
+  if (!row) return []
+  return [...row.children].map((child) => child.textContent)
+}
+
 function lines(cell: HTMLElement): (string | null)[] {
   const stack = cell.firstElementChild
   if (!stack) return []
@@ -328,6 +336,55 @@ describe('prompt audit records table', () => {
     expect(column?.enableHiding).not.toBe(false)
     expect(meta?.label).toBe('Client')
     expect(meta?.mobileHidden).toBe(true)
+  })
+
+  // The row used to carry a decision badge and a status badge side by side, so a
+  // finished request read as two words that did not together name a state. It
+  // now carries one reading, and these cases pin which one wins.
+  test('states a finished request as its verdict alone', () => {
+    const cell = renderCell('result', {
+      ...EVENT,
+      status: 'done',
+      decision: 'block',
+    })
+
+    expect(resultBadges(cell)).toEqual([
+      'block',
+      'Model audit',
+      'Request input',
+    ])
+  })
+
+  test('states a request still in flight as its status alone', () => {
+    const cell = renderCell('result', {
+      ...EVENT,
+      status: 'processing',
+      decision: '',
+    })
+
+    expect(resultBadges(cell)).toContain('processing')
+  })
+
+  test('keeps a request that has neither verdict nor status readable', () => {
+    const cell = renderCell('result', {
+      ...EVENT,
+      status: '' as PromptAuditEvent['status'],
+      decision: '',
+    })
+
+    expect(resultBadges(cell)).toContain('pending')
+  })
+
+  test('still says how the request was inspected alongside its reading', () => {
+    const cell = renderCell('result', { ...EVENT, inspection_type: 'wordlist' })
+
+    expect(resultBadges(cell)).toEqual(['pass', 'Wordlist', 'Request input'])
+  })
+
+  test('names the output direction for a generated reply', () => {
+    const cell = renderCell('result', { ...EVENT, direction: 'output' })
+
+    expect(resultBadges(cell)).toContain('Generated output')
   })
 
   test('counts the requests a merged row stands for', () => {

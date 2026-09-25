@@ -592,22 +592,47 @@ func TestEvaluatePromptAuditScansABatchConcurrently(t *testing.T) {
 }
 
 func TestPromptAuditStoredFullPromptUsesUnicodeCapWithoutTruncatingScanInput(t *testing.T) {
-	value := strings.Repeat("甲", promptAuditFullPromptMaxRunes+2)
-	stored, truncated := promptAuditStoredFullPrompt(value)
+	value := strings.Repeat("甲", 66)
+	stored, truncated := promptAuditStoredFullPrompt(value, 64)
 	assert.True(t, truncated)
-	assert.Equal(t, promptAuditFullPromptMaxRunes, utf8.RuneCount(stored))
-	assert.Equal(t, promptAuditFullPromptMaxRunes+2, utf8.RuneCountInString(value))
+	assert.Equal(t, 64, utf8.RuneCount(stored))
+	assert.Equal(t, 66, utf8.RuneCountInString(value))
+}
+
+// A limit past the length of the text keeps everything and reports no
+// truncation, because the record does hold the whole request.
+func TestPromptAuditStoredFullPromptKeepsEverythingWhenLimitExceedsText(t *testing.T) {
+	value := strings.Repeat("甲", 4096)
+	stored, truncated := promptAuditStoredFullPrompt(value, prompt_audit_setting.MaxFullPromptMaxRunes)
+	assert.False(t, truncated)
+	assert.Equal(t, value, string(stored))
+}
+
+// Zero is the settings screen's "keep the whole request", so it must never be
+// read as a cap of zero characters.
+func TestPromptAuditStoredFullPromptKeepsEverythingWhenLimitIsZero(t *testing.T) {
+	value := strings.Repeat("甲", 4096)
+	stored, truncated := promptAuditStoredFullPrompt(value, 0)
+	assert.False(t, truncated)
+	assert.Equal(t, value, string(stored))
+}
+
+func TestPromptAuditStoredFullPromptKeepsWholeValueWithinLimit(t *testing.T) {
+	value := strings.Repeat("甲", 64)
+	stored, truncated := promptAuditStoredFullPrompt(value, 64)
+	assert.False(t, truncated)
+	assert.Equal(t, value, string(stored))
 }
 
 func TestPromptAuditStoredFullPromptPreservesNullCharacters(t *testing.T) {
-	stored, truncated := promptAuditStoredFullPrompt("before\x00after")
+	stored, truncated := promptAuditStoredFullPrompt("before\x00after", 64)
 	assert.False(t, truncated)
 	assert.Equal(t, []byte("before\x00after"), stored)
 }
 
 func TestPromptAuditStoredFullPromptPreservesOuterWhitespace(t *testing.T) {
 	value := "  leading and trailing  \n"
-	stored, truncated := promptAuditStoredFullPrompt(value)
+	stored, truncated := promptAuditStoredFullPrompt(value, 64)
 	assert.False(t, truncated)
 	assert.Equal(t, value, string(stored))
 }

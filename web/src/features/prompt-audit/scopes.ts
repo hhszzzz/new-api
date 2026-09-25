@@ -53,6 +53,8 @@ export function promptAuditScopeLabel(
     case 'task':
       return t('Task and standalone input')
     case 'agent_context':
+      // Not conversation history: these are the wrapper blocks a client injects
+      // into the user turn, such as <system-reminder> or environment context.
       return t('Agent context')
     case 'skill':
       return t('Skills')

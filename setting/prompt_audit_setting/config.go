@@ -41,6 +41,20 @@ const (
 	DefaultOutputMaxBytes      = 8 * 1024 * 1024
 	DefaultOutputMemoryBytes   = 1024 * 1024
 	MaxAttemptsLimit           = 4
+	// DefaultFullPromptMaxRunes bounds how much of the whole request is kept on
+	// every audit record. It matches the cap the audit pipeline shipped with, so
+	// an existing deployment keeps the same written volume until an operator
+	// changes it.
+	DefaultFullPromptMaxRunes = 65536
+	// MaxFullPromptMaxRunes is the largest retention limit an operator may set.
+	// The records table grows with every character kept and retention is often
+	// unlimited, so the limit stays bounded by configuration rather than relying
+	// on operators noticing the growth.
+	MaxFullPromptMaxRunes = 1048576
+	// MinFullPromptMaxRunes is the shortest limit accepted besides 0. A shorter
+	// one would drop nearly the whole request, so it is far more likely a typo
+	// than an intent.
+	MinFullPromptMaxRunes = 1024
 )
 
 var AllCategoryIDs = []string{
@@ -123,7 +137,12 @@ type PromptAuditSetting struct {
 	EndpointConcurrency    int                                  `json:"endpoint_concurrency"`
 	OutputMaxBytes         int                                  `json:"output_max_bytes"`
 	OutputMemoryBytes      int                                  `json:"output_memory_bytes"`
-	ConfigVersion          string                               `json:"-"`
+	// FullPromptMaxRunes keeps exactly what the operator persisted: a pointer so
+	// an absent key stays distinguishable from an explicit 0, which means "keep
+	// the whole request". Without that distinction every deployment upgrading to
+	// this version would silently switch to unlimited retention.
+	FullPromptMaxRunes *int   `json:"full_prompt_max_runes"`
+	ConfigVersion      string `json:"-"`
 }
 
 // BlockingLatestTurnOnly defaults to the current conversation window to avoid
@@ -179,6 +198,18 @@ func GetSetting() PromptAuditSetting {
 
 func (setting PromptAuditSetting) AppliesToGroup(group string) bool {
 	return setting.AppliesToGroupForMode(group, setting.Mode)
+}
+
+// FullPromptRetentionLimit is how many characters of the whole request may be
+// kept on one audit record. 0 means keep all of it, and an absent setting falls
+// back to the default cap so only a deliberate operator choice removes the
+// bound. The stored field is never rewritten, so what the operator set is what
+// the settings screen shows.
+func (setting PromptAuditSetting) FullPromptRetentionLimit() int {
+	if setting.FullPromptMaxRunes == nil {
+		return DefaultFullPromptMaxRunes
+	}
+	return *setting.FullPromptMaxRunes
 }
 
 func (setting PromptAuditSetting) AppliesToGroupForMode(group, mode string) bool {
@@ -297,6 +328,14 @@ func (setting *PromptAuditSetting) ValidateConfig() error {
 	}
 	if setting.OutputMemoryBytes < 1024 || setting.OutputMemoryBytes > setting.OutputMaxBytes {
 		return fmt.Errorf("prompt audit output memory limit must be between 1024 and output_max_bytes")
+	}
+	// 0 is a valid choice and means the whole request is kept, so it is accepted
+	// on its own. Values between 1 and the floor are rejected because a limit
+	// that short drops nearly all of the text and is almost always a typo.
+	if limit := setting.FullPromptRetentionLimit(); limit < 0 || limit > MaxFullPromptMaxRunes {
+		return fmt.Errorf("prompt audit full prompt retention limit must be 0 or between %d and %d characters", MinFullPromptMaxRunes, MaxFullPromptMaxRunes)
+	} else if limit != 0 && limit < MinFullPromptMaxRunes {
+		return fmt.Errorf("prompt audit full prompt retention limit must be 0 or at least %d characters", MinFullPromptMaxRunes)
 	}
 	if utf8.RuneCountInString(setting.ReviewPrompt) > 20000 {
 		return fmt.Errorf("prompt audit review prompt must not exceed 20000 characters")

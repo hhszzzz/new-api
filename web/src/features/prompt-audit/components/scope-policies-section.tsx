@@ -127,7 +127,7 @@ export function ScopePoliciesSection(props: ScopePoliciesSectionProps) {
       </p>
       <p className='text-muted-foreground text-xs leading-relaxed'>
         {t(
-          'Clients can forge agent context and skill labels. Disabling inspection for these sources can allow disguised content to bypass your rules.'
+          'Agent context is the wrapper blocks a client adds to the user turn, such as system reminders and environment descriptions, rather than conversation history. Clients can forge those blocks and the skill labels, so disabling inspection for these sources can allow disguised content to bypass your rules.'
         )}
       </p>
     </SettingsSection>

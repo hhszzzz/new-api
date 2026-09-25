@@ -41,6 +41,7 @@ import { EnforcementSection } from './components/enforcement-section'
 import { PromptAuditNavigation } from './components/prompt-audit-navigation'
 import { ScopePoliciesSection } from './components/scope-policies-section'
 import {
+  FULL_PROMPT_DEFAULT_RUNES,
   promptAuditEndpointDrafts,
   promptAuditEndpointUpdate,
   type PromptAuditEndpointDraft,
@@ -91,6 +92,8 @@ function promptAuditConfigDraft(
     endpoint_concurrency: config.endpoint_concurrency,
     output_max_bytes: config.output_max_bytes ?? 8 * 1024 * 1024,
     output_memory_bytes: config.output_memory_bytes ?? 1024 * 1024,
+    full_prompt_max_runes:
+      config.full_prompt_max_runes ?? FULL_PROMPT_DEFAULT_RUNES,
     endpoints: [],
   }
 }

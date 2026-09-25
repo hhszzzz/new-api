@@ -43,6 +43,61 @@ export function promptAuditDetectorLabel(
   return t('Model audit')
 }
 
+/** The Badge variants the shared component defines, named for this use. */
+export type PromptAuditOutcomeVariant =
+  | 'destructive'
+  | 'warning'
+  | 'secondary'
+  | 'outline'
+
+export interface PromptAuditOutcome {
+  /** A translation key that already exists in every locale. */
+  key: string
+  variant: PromptAuditOutcomeVariant
+}
+
+/**
+ * What one audit row came to, as a single reading. A finished request is read by
+ * its decision, which is the verdict an operator acts on; one still in flight is
+ * read by its status, because it has no verdict yet. Rendering the two apart made
+ * a row carry two badges whose combination was not itself a state — a "done"
+ * paired with a "block" only restated the second one — while still hiding the
+ * pending states behind a decision slot that was empty for them.
+ */
+export function promptAuditOutcome(event: {
+  status: string
+  decision: string
+}): PromptAuditOutcome {
+  switch (event.status) {
+    case 'queued':
+      return { key: 'queued', variant: 'outline' }
+    case 'processing':
+      return { key: 'processing', variant: 'warning' }
+    case 'retry':
+      return { key: 'retry', variant: 'warning' }
+    case 'failed':
+      // A failed request may still carry the decision reached before it failed;
+      // when it does, that verdict is the more useful reading.
+      if (event.decision) return { key: event.decision, variant: 'destructive' }
+      return { key: 'failed', variant: 'destructive' }
+    default:
+      if (event.decision) {
+        return {
+          key: event.decision,
+          variant: decisionOutcomeVariant(event.decision),
+        }
+      }
+      return { key: 'pending', variant: 'outline' }
+  }
+}
+
+function decisionOutcomeVariant(decision: string): PromptAuditOutcomeVariant {
+  if (decision === 'block' || decision === 'unavailable') return 'destructive'
+  if (decision === 'flag') return 'warning'
+  if (decision === 'pass') return 'secondary'
+  return 'outline'
+}
+
 export function promptAuditRequestKindLabel(
   kind: string | undefined,
   t: TFunction
@@ -324,6 +379,17 @@ export function mbToBytes(mb: number): number {
   return Math.max(BYTES_PER_MB, Math.round(mb * BYTES_PER_MB))
 }
 
+/**
+ * The retention limit on the whole request, in characters. These mirror
+ * DefaultFullPromptMaxRunes, MinFullPromptMaxRunes and the unlimited sentinel in
+ * setting/prompt_audit_setting/config.go; keep both sides in step.
+ */
+export const FULL_PROMPT_DEFAULT_RUNES = 65536
+export const FULL_PROMPT_MIN_RUNES = 1024
+export const FULL_PROMPT_MAX_RUNES = 1048576
+/** Keeping the entire request. The backend reads 0 as "no truncation". */
+export const FULL_PROMPT_NO_LIMIT = 0
+
 export function validatePromptAuditConfig(
   config: PromptAuditConfigUpdate
 ): string | null {
@@ -384,6 +450,21 @@ export function validatePromptAuditConfig(
     )
   ) {
     return 'Numeric settings must be whole numbers within the displayed ranges.'
+  }
+  // 0 is the explicit "keep the whole request" choice, so it is valid on its own
+  // rather than part of a range. Anything between it and the floor is a typo that
+  // would drop nearly all of the stored text. The number field turns a cleared
+  // input into 0, which is why the unlimited mode is a separate switch instead of
+  // being the value 0 typed into that field.
+  if (
+    config.full_prompt_max_runes !== undefined &&
+    !(
+      config.full_prompt_max_runes === FULL_PROMPT_NO_LIMIT ||
+      (config.full_prompt_max_runes >= FULL_PROMPT_MIN_RUNES &&
+        config.full_prompt_max_runes <= FULL_PROMPT_MAX_RUNES)
+    )
+  ) {
+    return 'The stored prompt limit must be 0 or at least 1024 characters.'
   }
   const ids = new Set<string>()
   let minimumInputLimit = Number.POSITIVE_INFINITY
