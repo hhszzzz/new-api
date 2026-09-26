@@ -82,9 +82,21 @@ describe('promptAuditTestFailureMessage', () => {
       'The audit model could not be reached: the connection failed.',
     ],
     [
-      'an unreadable verdict points at the missing Safety and Categories lines',
+      'an unreadable verdict says so without inventing a missing field',
       { error_code: 'invalid_response' },
-      'The audit model replied, but its answer had no readable Safety and Categories verdict.',
+      'The audit model answered, but nothing in its answer could be read as a verdict.',
+    ],
+    [
+      // The answer is quoted because the three ways to be unreadable — a
+      // probability under the wrong key, an unanswered question, a value outside
+      // 0..1 — are indistinguishable without seeing what arrived.
+      'an unreadable verdict quotes the answer that could not be read',
+      {
+        error_code: 'invalid_response',
+        failure_detail:
+          '{"model":"jev-1.13.0","answers":{"pii":{"noul":{"probability":0.9}}}}',
+      },
+      'The audit model answered, but nothing in its answer could be read as a verdict. The audit model replied: {"model":"jev-1.13.0","answers":{"pii":{"noul":{"probability":0.9}}}}',
     ],
     [
       'an attempt timeout reports that the model never answered',

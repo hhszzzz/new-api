@@ -214,8 +214,13 @@ type PromptAuditResult struct {
 }
 
 type promptAuditGuardError struct {
-	code       string
-	retryable  bool
+	code      string
+	retryable bool
+	// failover marks a node failure that says nothing about the next node. A
+	// credential is the case: every node in the chain carries its own token, so
+	// a rejected one is a reason to ask the next node and not a reason to retry
+	// the same key as a whole.
+	failover   bool
 	timeout    bool
 	httpStatus int
 	// detail is what the node said when it refused the request. A status code on
@@ -886,7 +891,7 @@ func scanPromptAuditPayload(ctx context.Context, setting prompt_audit_setting.Pr
 		}
 		lastErr = err
 		var guardErr *promptAuditGuardError
-		if !errors.As(err, &guardErr) || !guardErr.retryable {
+		if !errors.As(err, &guardErr) || !(guardErr.retryable || guardErr.failover) {
 			return PromptAuditResult{}, err
 		}
 	}
@@ -1100,33 +1105,30 @@ func callTypeSafe(ctx context.Context, endpoint prompt_audit_setting.Endpoint, s
 	var response struct {
 		Model   string `json:"model"`
 		Answers map[string]struct {
-			Type string `json:"type"`
-			Noul *struct {
-				Probability *float64 `json:"probability"`
-			} `json:"noul"`
-			// Some deployments answer a probability at the top level of the
-			// answer instead of nesting it under noul. Accepting both keeps a
-			// node working across that difference.
-			Probability *float64 `json:"probability"`
+			// The probability is the answer's own noul field and it is a bare
+			// number: {"type":"noul","noul":0.92}. Reading it as an object under
+			// that key fails the whole body, which turns a node that answered
+			// correctly into one that looks like it answered nothing readable.
+			Noul *float64 `json:"noul"`
 		} `json:"answers"`
 	}
+	// Whatever the body was, it is the only thing that explains a refusal to
+	// read it, so it travels with the error as the refusal text would.
+	unreadable := &promptAuditGuardError{code: "invalid_response", detail: promptAuditErrorDetailSnippet(responseBody)}
 	if err := common.Unmarshal(responseBody, &response); err != nil {
-		return nil, "", &promptAuditGuardError{code: "invalid_response", cause: err}
+		unreadable.cause = err
+		return nil, "", unreadable
 	}
 	scores := make(map[string]float64, len(questions))
 	for id := range questions {
 		answer, ok := response.Answers[id]
-		if !ok {
-			return nil, "", &promptAuditGuardError{code: "invalid_response"}
+		// The answer's type is not checked: an answer that carries a probability
+		// is a noul answer, and one that carries none is unusable whatever it
+		// calls itself.
+		if !ok || answer.Noul == nil || *answer.Noul < 0 || *answer.Noul > 1 {
+			return nil, "", unreadable
 		}
-		probability := answer.Probability
-		if answer.Noul != nil && answer.Noul.Probability != nil {
-			probability = answer.Noul.Probability
-		}
-		if probability == nil || *probability < 0 || *probability > 1 {
-			return nil, "", &promptAuditGuardError{code: "invalid_response"}
-		}
-		scores[id] = *probability
+		scores[id] = *answer.Noul
 	}
 	return scores, strings.TrimSpace(response.Model), nil
 }
@@ -1256,10 +1258,13 @@ func postPromptAuditEndpoint(ctx context.Context, endpoint prompt_audit_setting.
 		// range only in the sense that it is a non-standard code; the >= 500 test
 		// still classifies it as retryable, so the next node gets a chance.
 		retryable := response.StatusCode == http.StatusTooManyRequests || response.StatusCode >= http.StatusInternalServerError
+		// TypeSafe refuses a request with no key as 403 and a bad key as 401,
+		// neither of which the next node inherits.
+		failover := response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden
 		refusal, _ := io.ReadAll(io.LimitReader(response.Body, promptAuditMaxResponseBytes+1))
 		return nil, &promptAuditGuardError{
-			code: "endpoint_http_" + strconv.Itoa(response.StatusCode), retryable: retryable, httpStatus: response.StatusCode,
-			detail: promptAuditErrorDetailSnippet(refusal),
+			code: "endpoint_http_" + strconv.Itoa(response.StatusCode), retryable: retryable, failover: failover,
+			httpStatus: response.StatusCode, detail: promptAuditErrorDetailSnippet(refusal),
 		}
 	}
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, promptAuditMaxResponseBytes+1))
@@ -1374,7 +1379,7 @@ func reviewPromptAuditPayload(ctx context.Context, setting prompt_audit_setting.
 		}
 		lastErr = err
 		var guardErr *promptAuditGuardError
-		if !errors.As(err, &guardErr) || !guardErr.retryable {
+		if !errors.As(err, &guardErr) || !(guardErr.retryable || guardErr.failover) {
 			return PromptAuditResult{}, err
 		}
 	}
@@ -1446,7 +1451,12 @@ func callPromptAuditReviewer(ctx context.Context, endpoint prompt_audit_setting.
 	}
 	defer response.Body.Close()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return PromptAuditResult{}, &promptAuditGuardError{code: "review_endpoint_http_" + strconv.Itoa(response.StatusCode), retryable: response.StatusCode == http.StatusTooManyRequests || response.StatusCode >= http.StatusInternalServerError}
+		status := response.StatusCode
+		return PromptAuditResult{}, &promptAuditGuardError{
+			code:      "review_endpoint_http_" + strconv.Itoa(status),
+			retryable: status == http.StatusTooManyRequests || status >= http.StatusInternalServerError,
+			failover:  status == http.StatusUnauthorized || status == http.StatusForbidden,
+		}
 	}
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, promptAuditMaxResponseBytes+1))
 	if err != nil || len(responseBody) > promptAuditMaxResponseBytes {

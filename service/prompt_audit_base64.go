@@ -87,13 +87,17 @@ func promptAuditBase64LooksTextual(text string) bool {
 // expandPromptAuditBase64Pass rewrites one layer of encoded runs. It returns the
 // rewritten text, whether anything changed, and how many decoded bytes the pass
 // spent against the caller's budget.
+//
+// The copy is made only once a run has actually decoded, and the untouched text
+// before it is written in one piece rather than byte by byte. Almost every
+// prompt carries no encoded run at all, and this runs on every prompt and every
+// generated output, so the common case must not allocate a copy of the text to
+// then discard it.
 func expandPromptAuditBase64Pass(text string, maxRuns, budget int) (string, bool, int) {
 	var builder strings.Builder
-	builder.Grow(len(text))
-	runs, spent, changed := 0, 0, false
+	runs, spent, copied := 0, 0, 0
 	for index := 0; index < len(text); {
 		if !isPromptAuditBase64Byte(text[index]) {
-			builder.WriteByte(text[index])
 			index++
 			continue
 		}
@@ -104,18 +108,23 @@ func expandPromptAuditBase64Pass(text string, maxRuns, budget int) (string, bool
 		run := text[index:end]
 		if len(run) >= promptAuditBase64MinRun && runs < maxRuns && spent < budget {
 			if decoded, ok := decodePromptAuditBase64Run(run); ok && len(decoded) <= budget-spent {
+				if copied == 0 {
+					builder.Grow(len(text))
+				}
+				builder.WriteString(text[copied:index])
 				builder.WriteString(decoded)
+				copied = end
 				runs++
 				spent += len(decoded)
-				changed = true
-				index = end
-				continue
 			}
 		}
-		builder.WriteString(run)
 		index = end
 	}
-	return builder.String(), changed, spent
+	if copied == 0 {
+		return text, false, 0
+	}
+	builder.WriteString(text[copied:])
+	return builder.String(), true, spent
 }
 
 // expandPromptAuditBase64 returns the text with every base64 run it can

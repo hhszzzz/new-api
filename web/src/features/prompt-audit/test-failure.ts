@@ -112,8 +112,16 @@ export function promptAuditTestFailureMessage(
     )
   }
   if (kind === 'invalid_response') {
-    return t(
-      'The audit model replied, but its answer had no readable Safety and Categories verdict.'
+    // The node's own answer is the only thing that explains this one: a
+    // probability nested under the wrong key, a question left unanswered, and a
+    // value outside 0..1 all arrive here looking alike. The sentence stays
+    // protocol-neutral because a TypeSafe answer holds no verdict to read — its
+    // verdict is derived from probabilities — while a label-based guard node
+    // answers with one.
+    return annotated(
+      t(
+        'The audit model answered, but nothing in its answer could be read as a verdict.'
+      )
     )
   }
   if (kind === 'endpoint_timeout' || kind === 'total_timeout') {

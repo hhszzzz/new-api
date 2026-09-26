@@ -662,17 +662,24 @@ func TestPromptAuditEndpointFailoverPolicy(t *testing.T) {
 		assert.EqualValues(t, 1, secondCalls.Load())
 	})
 
-	t.Run("terminal 401 does not switch node", func(t *testing.T) {
+	t.Run("a refused credential switches node", func(t *testing.T) {
+		// This used to read "terminal 401 does not switch node", on the reading
+		// that a rejected credential is a configuration fault the operator should
+		// see. It is also the one failure the next node does not inherit: every
+		// node carries its own token, so a chain that stops here leaves a working
+		// node unused and the traffic unaudited. The operator still sees the
+		// refusal — the node test reports it per node, and an audit no node could
+		// answer is recorded with this code.
 		first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusUnauthorized)
 		}))
 		defer first.Close()
 		secondCalls.Store(0)
 		setting := promptAuditTestSetting(first.URL, second.URL)
-		_, err := scanPromptAuditChunk(context.Background(), setting, setting.Endpoints, "hello")
-		require.Error(t, err)
-		assert.Equal(t, "endpoint_http_401", promptAuditErrorCode(err))
-		assert.EqualValues(t, 0, secondCalls.Load())
+		result, err := scanPromptAuditChunk(context.Background(), setting, setting.Endpoints, "hello")
+		require.NoError(t, err)
+		assert.Equal(t, "second", result.EndpointID)
+		assert.EqualValues(t, 1, secondCalls.Load())
 	})
 
 	t.Run("invalid output does not switch node", func(t *testing.T) {
@@ -1232,10 +1239,12 @@ func TestPromptAuditLegacyPolicySnapshotStillRunsOnCurrentNode(t *testing.T) {
 	assert.Equal(t, "legacy", stored.EndpointID)
 }
 
-// typeSafeTestAnswer is one answer in a TypeSafe response.
+// typeSafeTestAnswer is one answer in a TypeSafe response, shaped the way the
+// published schema defines it: the probability is the answer's own noul field
+// and it is a number, not an object.
 type typeSafeTestAnswer struct {
-	Type        string  `json:"type"`
-	Probability float64 `json:"probability"`
+	Type string  `json:"type"`
+	Noul float64 `json:"noul"`
 }
 
 type typeSafeTestResponse struct {
@@ -1251,7 +1260,7 @@ func typeSafeTestScores(scores map[string]float64) typeSafeTestResponse {
 		response.Answers[category] = typeSafeTestAnswer{Type: "noul"}
 	}
 	for id, probability := range scores {
-		response.Answers[id] = typeSafeTestAnswer{Type: "noul", Probability: probability}
+		response.Answers[id] = typeSafeTestAnswer{Type: "noul", Noul: probability}
 	}
 	return response
 }
@@ -1346,6 +1355,63 @@ func TestPromptAuditTypeSafeNodeScoresAndFailsOver(t *testing.T) {
 		assert.Equal(t, "hello there", messages[0].(map[string]any)["text"])
 	})
 
+	t.Run("a response shaped the way the API documents it is read", func(t *testing.T) {
+		// Written out from the published schema rather than built from a struct
+		// of ours: the probability is the answer's own noul field and it is a
+		// number, and the response carries a usage object the node ignores. A
+		// test double assembled from the same struct the reader uses agrees with
+		// the reader whatever the contract says, which is how a node answering
+		// correctly came back as a node answering nothing readable.
+		const documented = `{
+			"model": "jev-1.13.0",
+			"answers": {
+				"violent": {"noul": 0.02, "type": "noul"},
+				"non_violent_illegal_acts": {"noul": 0.03, "type": "noul"},
+				"sexual_content_or_sexual_acts": {"noul": 0.01, "type": "noul"},
+				"pii": {"noul": 0.04, "type": "noul"},
+				"suicide_and_self_harm": {"noul": 0.02, "type": "noul"},
+				"unethical_acts": {"noul": 0.05, "type": "noul"},
+				"politically_sensitive_topics": {"noul": 0.06, "type": "noul"},
+				"copyright_violation": {"noul": 0.03, "type": "noul"},
+				"jailbreak": {"noul": 0.98, "type": "noul"}
+			},
+			"usage": {"input_tokens": 120, "output_tokens": 12}
+		}`
+		node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(documented))
+		}))
+		t.Cleanup(node.Close)
+
+		endpoint := typeSafeTestEndpoint(node.URL, "typesafe")
+		setting := promptAuditTestSetting(node.URL, node.URL)
+		result, err := scanPromptAuditChunk(context.Background(), setting, []prompt_audit_setting.Endpoint{endpoint}, "hello there")
+		require.NoError(t, err, "a documented answer must be readable")
+		assert.Equal(t, "jev-1.13.0", result.EndpointModel)
+		assert.InDelta(t, 0.98, result.Scores["jailbreak"], 1e-9)
+		assert.Equal(t, []string{"jailbreak"}, result.Categories)
+		assert.Equal(t, PromptAuditDecisionBlock, result.Decision)
+	})
+
+	t.Run("an unreadable answer reports the body it could not read", func(t *testing.T) {
+		// A probability nested under noul, which is the shape a reader that
+		// guesses wrong tends to expect. The node test has to show the operator
+		// what arrived, because the refusal text is the only thing that names
+		// the difference.
+		node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"model":"jev-1.13.0","answers":{"pii":{"noul":{"probability":0.9}}}}`))
+		}))
+		t.Cleanup(node.Close)
+
+		endpoint := typeSafeTestEndpoint(node.URL, "typesafe")
+		endpoint.Directions = []string{"input"}
+		result, err := TestPromptAuditEndpoint(context.Background(), endpoint)
+		require.Error(t, err)
+		assert.Equal(t, "invalid_response", promptAuditErrorCode(err))
+		assert.Contains(t, result.FailureDetail, `"noul":{"probability":0.9}`)
+	})
+
 	t.Run("scores decide the category and the action", func(t *testing.T) {
 		node := typeSafeTestServer(t, typeSafeTestScores(map[string]float64{
 			"jailbreak": 0.42, // between review and block: Controversial
@@ -1415,6 +1481,40 @@ func TestPromptAuditTypeSafeNodeScoresAndFailsOver(t *testing.T) {
 		require.NoError(t, err)
 		assert.EqualValues(t, 1, secondCalls.Load())
 		assert.Equal(t, "second", result.EndpointID)
+	})
+
+	t.Run("a refused credential falls over to the next node", func(t *testing.T) {
+		// Each node carries its own token, so a node that rejects one says
+		// nothing about the node after it. The chain has to keep going; failing
+		// here would leave a working second node unused.
+		for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+			first := typeSafeTestServer(t, typeSafeTestResponse{}, status, nil)
+			var secondCalls atomic.Int32
+			second := typeSafeTestServer(t, typeSafeTestScores(nil), 0, func(*http.Request) { secondCalls.Add(1) })
+
+			setting := promptAuditTestSetting(first.URL, second.URL)
+			setting.Endpoints[0] = typeSafeTestEndpoint(first.URL, "first")
+			setting.Endpoints[1] = typeSafeTestEndpoint(second.URL, "second")
+			result, err := scanPromptAuditChunk(context.Background(), setting, setting.Endpoints, "hello")
+			require.NoError(t, err, "a rejected token on node one must not end the chain")
+			assert.EqualValues(t, 1, secondCalls.Load())
+			assert.Equal(t, "second", result.EndpointID)
+		}
+	})
+
+	t.Run("a refused credential is not retried as a whole", func(t *testing.T) {
+		// Retrying the audit would hand the same rejected token to the same node
+		// again. The failure is terminal: only a rate limit or a server fault is
+		// worth a later attempt.
+		node := typeSafeTestServer(t, typeSafeTestResponse{}, http.StatusUnauthorized, nil)
+		endpoint := typeSafeTestEndpoint(node.URL, "only")
+		setting := promptAuditTestSetting(node.URL, node.URL)
+		_, err := scanPromptAuditChunk(context.Background(), setting, []prompt_audit_setting.Endpoint{endpoint}, "hello")
+		require.Error(t, err)
+		assert.Equal(t, "endpoint_http_401", promptAuditErrorCode(err))
+		var guardErr *promptAuditGuardError
+		require.ErrorAs(t, err, &guardErr)
+		assert.False(t, guardErr.retryable, "a rejected token is not going to be accepted on a retry")
 	})
 }
 
@@ -1561,7 +1661,7 @@ func TestPromptAuditTypeSafeEndpointProbes(t *testing.T) {
 		_ = common.Unmarshal(raw, &body)
 		response := typeSafeTestScores(nil)
 		if strings.Contains(body.State.Reply, "kill my coworker") {
-			response.Answers["violent"] = typeSafeTestAnswer{Type: "noul", Probability: 0.96}
+			response.Answers["violent"] = typeSafeTestAnswer{Type: "noul", Noul: 0.96}
 		}
 		data, _ := common.Marshal(response)
 		w.Header().Set("Content-Type", "application/json")
@@ -1736,6 +1836,24 @@ func TestPromptAuditBase64Expansion(t *testing.T) {
 				assert.Equal(t, want, expandPromptAuditBase64(test.input))
 			})
 		}
+	})
+
+	t.Run("a pass over text with nothing to decode copies nothing", func(t *testing.T) {
+		// This runs on every prompt and every generated output, and almost none
+		// of them carry an encoded run, so the pass has to report "unchanged"
+		// without building a copy first. The identity check is what says the
+		// original string came back rather than an equal one.
+		text := "plain text, nothing encoded, no runs long enough to decode"
+		expanded, changed, spent := expandPromptAuditBase64Pass(text, promptAuditBase64RunsPerPass, promptAuditBase64MaxDecoded)
+		assert.False(t, changed)
+		assert.Zero(t, spent)
+		assert.True(t, text == expanded, "the same string must come back, not a copy of it")
+
+		encoded := "run " + encodeStd("the destructive command now")
+		expanded, changed, spent = expandPromptAuditBase64Pass(encoded, promptAuditBase64RunsPerPass, promptAuditBase64MaxDecoded)
+		require.True(t, changed)
+		assert.Equal(t, "run the destructive command now", expanded)
+		assert.Equal(t, len("the destructive command now"), spent)
 	})
 
 	t.Run("nested encoding is expanded one pass at a time", func(t *testing.T) {
