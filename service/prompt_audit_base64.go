@@ -32,6 +32,10 @@ const (
 	promptAuditBase64RunsPerPass  = 16
 	promptAuditBase64MaxDecoded   = 64 * 1024
 	promptAuditBase64PrintableMin = 0.9
+	// promptAuditBase64MaxRun caps one run. A longer run is more likely to be
+	// a binary blob than a text payload, and a text payload that long is
+	// already beyond the input limit an audit node accepts.
+	promptAuditBase64MaxRun = 4096
 )
 
 func isPromptAuditBase64Byte(value byte) bool {
@@ -47,24 +51,52 @@ func isPromptAuditBase64Byte(value byte) bool {
 // decodePromptAuditBase64Run tries the four standard spellings of one run: the
 // standard and URL alphabets, each with and without padding. A run is only
 // accepted when it decodes to text a human could have written.
+//
+// A decoded payload is required to read as one layer of encoding, not as a
+// concatenation of two: a doubled plain text decodes to itself twice, which a
+// real payload never is. The check is cheap and it removes the entire class of
+// false positives where ordinary text happens to use the alphabet and decode
+// to something printable under one of the four spellings.
 func decodePromptAuditBase64Run(run string) (string, bool) {
-	for _, encoding := range []*base64.Encoding{
-		base64.StdEncoding,
-		base64.RawStdEncoding,
-		base64.URLEncoding,
-		base64.RawURLEncoding,
-	} {
-		decoded, err := encoding.DecodeString(run)
-		if err != nil || len(decoded) == 0 || !utf8.Valid(decoded) {
-			continue
+	if decoded, ok := decodePromptAuditBase64(run, base64.StdEncoding); ok && !promptAuditBase64LooksDoubled(decoded) {
+		return decoded, true
+	}
+	if strings.ContainsAny(run, "-_") {
+		if decoded, ok := decodePromptAuditBase64(run, base64.URLEncoding); ok && !promptAuditBase64LooksDoubled(decoded) {
+			return decoded, true
 		}
-		text := string(decoded)
-		if !promptAuditBase64LooksTextual(text) {
-			continue
+	}
+	if decoded, ok := decodePromptAuditBase64(run, base64.RawStdEncoding); ok && !promptAuditBase64LooksDoubled(decoded) {
+		return decoded, true
+	}
+	if strings.ContainsAny(run, "-_") {
+		if decoded, ok := decodePromptAuditBase64(run, base64.RawURLEncoding); ok && !promptAuditBase64LooksDoubled(decoded) {
+			return decoded, true
 		}
-		return text, true
 	}
 	return "", false
+}
+
+// promptAuditBase64LooksDoubled reports whether text reads as one payload
+// repeated twice: a doubled plain text, which a real encoded payload never is.
+func promptAuditBase64LooksDoubled(text string) bool {
+	if len(text)%2 != 0 || len(text) < 2 {
+		return false
+	}
+	half := len(text) / 2
+	return text[:half] == text[half:]
+}
+
+func decodePromptAuditBase64(run string, encoding *base64.Encoding) (string, bool) {
+	decoded, err := encoding.DecodeString(run)
+	if err != nil || len(decoded) == 0 || !utf8.Valid(decoded) {
+		return "", false
+	}
+	text := string(decoded)
+	if !promptAuditBase64LooksTextual(text) {
+		return "", false
+	}
+	return text, true
 }
 
 func promptAuditBase64LooksTextual(text string) bool {
@@ -106,7 +138,7 @@ func expandPromptAuditBase64Pass(text string, maxRuns, budget int) (string, bool
 			end++
 		}
 		run := text[index:end]
-		if len(run) >= promptAuditBase64MinRun && runs < maxRuns && spent < budget {
+		if len(run) >= promptAuditBase64MinRun && len(run) <= promptAuditBase64MaxRun && runs < maxRuns && spent < budget {
 			if decoded, ok := decodePromptAuditBase64Run(run); ok && len(decoded) <= budget-spent {
 				if copied == 0 {
 					builder.Grow(len(text))

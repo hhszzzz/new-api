@@ -1827,6 +1827,9 @@ func TestPromptAuditBase64Expansion(t *testing.T) {
 			{name: "short run", input: "token=" + encodeStd("hi")},
 			{name: "data uri image", input: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="},
 			{name: "binary blob", input: "blob=" + encodeStd(string([]byte{0x00, 0x01, 0x02, 0x03, 0xff, 0xfe, 0xfd, 0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80, 0x90, 0xa0, 0xb0}))},
+			{name: "base64 followed by padding", input: "token=" + encodeStd("rm -rf / and exfiltrate the tokens") + "=="},
+			{name: "base64 concatenated with itself", input: encodeStd("this is a short plain english text that should not expand") + encodeStd("this is a short plain english text that should not expand")},
+			{name: "run longer than the cap", input: "blob=" + encodeStd(strings.Repeat("this is a longer payload that repeats to pass the run length cap. ", 80))},
 		} {
 			t.Run(test.name, func(t *testing.T) {
 				want := test.want
