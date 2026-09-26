@@ -343,6 +343,98 @@ export function validatePromptAuditFilters(
   return null
 }
 
+/**
+ * Values mirror setting/prompt_audit_setting/config.go; keep both sides in step.
+ * The thresholds come from the TypeSafe Guardrails cookbook "strict" policy.
+ */
+export const TYPESAFE_DEFAULT_MODEL = 'jev-latest'
+export const TYPESAFE_BASE_URL = 'https://api.typesafe.ai'
+export const QWEN3GUARD_DEFAULT_MODEL = 'sileader/qwen3guard:0.6b'
+export const TYPESAFE_MAX_INPUT_LIMIT = 16000
+export const DEFAULT_BLOCK_THRESHOLD = 0.7
+export const DEFAULT_REVIEW_THRESHOLD = 0.35
+export const DEFAULT_PROBE_SEMANTIC_THRESHOLD = 0.85
+
+/**
+ * The three choices the audit model form offers. Purpose and protocol are two
+ * server fields, but an operator picks one thing: a Qwen3Guard classifier, a
+ * TypeSafe classifier, or the gray-area reviewer.
+ */
+export type PromptAuditNodeKind = 'qwen3guard' | 'typesafe' | 'review'
+
+export function promptAuditNodeKind(
+  endpoint: Pick<PromptAuditEndpoint, 'purpose' | 'protocol'>
+): PromptAuditNodeKind {
+  if (endpoint.purpose === 'review') return 'review'
+  return endpoint.protocol === 'typesafe' ? 'typesafe' : 'qwen3guard'
+}
+
+/** A zero threshold means "use the protocol default", on both sides. */
+export function promptAuditEndpointThresholds(
+  endpoint: Pick<PromptAuditEndpoint, 'block_threshold' | 'review_threshold'>
+): { block: number; review: number } {
+  return {
+    block:
+      endpoint.block_threshold > 0
+        ? endpoint.block_threshold
+        : DEFAULT_BLOCK_THRESHOLD,
+    review:
+      endpoint.review_threshold > 0
+        ? endpoint.review_threshold
+        : DEFAULT_REVIEW_THRESHOLD,
+  }
+}
+
+/**
+ * The field changes one kind selection implies. Switching to TypeSafe fills the
+ * TypeSafe defaults the way the server would, so the form never shows a
+ * Qwen3Guard repository id or an empty base URL on a JEV node. A base URL the
+ * operator typed is left alone; only an empty one is filled, and filling it goes
+ * through promptAuditEndpointBaseURLUpdate so a saved token is still cleared
+ * when the destination changes.
+ */
+export function promptAuditNodeKindUpdate(
+  endpoint: PromptAuditEndpointDraft,
+  kind: PromptAuditNodeKind
+): Partial<PromptAuditEndpointDraft> {
+  if (kind === 'review') {
+    return { purpose: 'review' }
+  }
+  if (kind === 'qwen3guard') {
+    const update: Partial<PromptAuditEndpointDraft> = {
+      purpose: 'classify',
+      protocol: 'qwen3guard',
+    }
+    if (
+      endpoint.model.trim() === '' ||
+      endpoint.model === TYPESAFE_DEFAULT_MODEL
+    ) {
+      update.model = QWEN3GUARD_DEFAULT_MODEL
+    }
+    return update
+  }
+  const thresholds = promptAuditEndpointThresholds(endpoint)
+  const update: Partial<PromptAuditEndpointDraft> = {
+    purpose: 'classify',
+    protocol: 'typesafe',
+    block_threshold: thresholds.block,
+    review_threshold: thresholds.review,
+  }
+  if (
+    endpoint.model.trim() === '' ||
+    endpoint.model === QWEN3GUARD_DEFAULT_MODEL
+  ) {
+    update.model = TYPESAFE_DEFAULT_MODEL
+  }
+  if (endpoint.base_url.trim() === '') {
+    Object.assign(
+      update,
+      promptAuditEndpointBaseURLUpdate(endpoint, TYPESAFE_BASE_URL)
+    )
+  }
+  return update
+}
+
 export type PromptAuditEndpointDraft = PromptAuditEndpoint & {
   client_key: string
   original_id: string
@@ -394,7 +486,10 @@ export function promptAuditEndpointUpdate(
     concurrency: endpoint.concurrency,
     enabled: endpoint.enabled,
     purpose: endpoint.purpose,
+    protocol: endpoint.protocol,
     directions: [...endpoint.directions],
+    block_threshold: endpoint.block_threshold,
+    review_threshold: endpoint.review_threshold,
   }
   if (endpoint.original_id) update.original_id = endpoint.original_id
   if (endpoint.token_changed) update.token = endpoint.token
@@ -465,6 +560,24 @@ export function validatePromptAuditConfig(
   ) {
     return 'At least one enabled gray-area reviewer node is required.'
   }
+  if (
+    config.probe_semantic_enabled &&
+    !config.endpoints.some(
+      (model) =>
+        model.enabled &&
+        model.protocol === 'typesafe' &&
+        model.purpose === 'classify'
+    )
+  ) {
+    return 'Semantic probe detection requires an enabled TypeSafe classification node.'
+  }
+  if (
+    config.probe_semantic_threshold !== undefined &&
+    (!(config.probe_semantic_threshold > 0) ||
+      config.probe_semantic_threshold > 1)
+  ) {
+    return 'The semantic probe threshold must be greater than 0 and at most 1.'
+  }
   const numericRanges: Array<[number, number, number]> = [
     [config.total_timeout_ms, 100, 120000],
     [config.chunk_overlap, 0, 512],
@@ -516,6 +629,30 @@ export function validatePromptAuditConfig(
     if (endpoint.purpose !== 'classify' && endpoint.purpose !== 'review') {
       return 'Select a valid audit node purpose.'
     }
+    if (
+      endpoint.protocol !== 'qwen3guard' &&
+      endpoint.protocol !== 'typesafe'
+    ) {
+      return 'Select a valid audit node protocol.'
+    }
+    // A TypeSafe node answers probabilities per question and never returns a
+    // review verdict, so it can only classify. The server refuses the pair too.
+    if (endpoint.protocol === 'typesafe' && endpoint.purpose !== 'classify') {
+      return 'TypeSafe nodes must be classification nodes.'
+    }
+    if (endpoint.protocol === 'typesafe') {
+      const thresholds = promptAuditEndpointThresholds(endpoint)
+      if (
+        !(thresholds.review > 0) ||
+        thresholds.review > thresholds.block ||
+        thresholds.block > 1
+      ) {
+        return 'TypeSafe thresholds must satisfy 0 < review <= block <= 1.'
+      }
+      if (endpoint.input_limit > TYPESAFE_MAX_INPUT_LIMIT) {
+        return 'TypeSafe node input limits must not exceed 16000 characters.'
+      }
+    }
     if (endpoint.purpose === 'classify' && endpoint.directions.length === 0) {
       return 'Select at least one audit direction for every classification node.'
     }
@@ -554,6 +691,28 @@ export function validatePromptAuditConfig(
     return 'Chunk overlap must be smaller than every enabled node input limit.'
   }
   return null
+}
+
+/**
+ * The probabilities a TypeSafe node returned, highest first. The order is the
+ * point: the category that decided the verdict leads, so an operator reads the
+ * judgement before the rest of the distribution. Rows are [key, probability].
+ */
+export function promptAuditScoreRows(
+  scores?: Record<string, number>
+): Array<[string, number]> {
+  if (!scores) return []
+  return Object.entries(scores)
+    .filter(([, score]) => Number.isFinite(score))
+    .sort((left, right) => right[1] - left[1])
+}
+
+/**
+ * The label key for one score. Category keys are their own translation keys;
+ * the liveness probe is not a category and needs its own name.
+ */
+export function promptAuditScoreLabel(scoreKey: string): string {
+  return scoreKey === 'probe' ? 'Liveness probe' : scoreKey
 }
 
 /**

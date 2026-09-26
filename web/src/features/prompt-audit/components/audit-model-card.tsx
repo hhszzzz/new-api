@@ -45,7 +45,12 @@ import {
 
 import {
   promptAuditEndpointBaseURLUpdate,
+  promptAuditNodeKind,
+  promptAuditNodeKindUpdate,
+  TYPESAFE_BASE_URL,
+  TYPESAFE_MAX_INPUT_LIMIT,
   type PromptAuditEndpointDraft,
+  type PromptAuditNodeKind,
 } from '../lib'
 import type { PromptAuditDirection } from '../types'
 import { NumberField } from './number-field'
@@ -89,6 +94,7 @@ export function AuditModelCard({
   tokenDescription,
 }: AuditModelCardProps) {
   const { t } = useTranslation()
+  const nodeKind = promptAuditNodeKind(endpoint)
 
   return (
     <Collapsible
@@ -126,15 +132,9 @@ export function AuditModelCard({
             <Badge
               variant='outline'
               className='hidden max-w-40 shrink-0 truncate text-xs font-normal sm:inline'
-              title={
-                endpoint.purpose === 'classify'
-                  ? t('Qwen3Guard classification')
-                  : t('Gray-area review model')
-              }
+              title={t(promptAuditNodeKindLabel(nodeKind))}
             >
-              {endpoint.purpose === 'classify'
-                ? t('Qwen3Guard classification')
-                : t('Gray-area review model')}
+              {t(promptAuditNodeKindLabel(nodeKind))}
             </Badge>
             <span className='text-muted-foreground hidden shrink-0 text-xs sm:inline'>
               {endpoint.directions
@@ -187,16 +187,21 @@ export function AuditModelCard({
               </FieldLabel>
               <NativeSelect
                 id={`prompt-audit-node-purpose-${index}`}
-                value={endpoint.purpose}
+                value={nodeKind}
                 onChange={(event) =>
-                  onChange({
-                    purpose: event.target
-                      .value as PromptAuditEndpointDraft['purpose'],
-                  })
+                  onChange(
+                    promptAuditNodeKindUpdate(
+                      endpoint,
+                      event.target.value as PromptAuditNodeKind
+                    )
+                  )
                 }
               >
-                <NativeSelectOption value='classify'>
+                <NativeSelectOption value='qwen3guard'>
                   {t('Qwen3Guard classification')}
+                </NativeSelectOption>
+                <NativeSelectOption value='typesafe'>
+                  {t('TypeSafe JEV classification')}
                 </NativeSelectOption>
                 <NativeSelectOption value='review'>
                   {t('Gray-area review model')}
@@ -241,7 +246,11 @@ export function AuditModelCard({
               </FieldLabel>
               <Input
                 id={`prompt-audit-node-url-${index}`}
-                placeholder='https://guard.example.com/v1'
+                placeholder={
+                  nodeKind === 'typesafe'
+                    ? TYPESAFE_BASE_URL
+                    : 'https://guard.example.com/v1'
+                }
                 value={endpoint.base_url}
                 onChange={(event) =>
                   onChange(
@@ -253,9 +262,13 @@ export function AuditModelCard({
                 }
               />
               <FieldDescription>
-                {t(
-                  'Address of an OpenAI-compatible service; /chat/completions is appended automatically.'
-                )}
+                {nodeKind === 'typesafe'
+                  ? t(
+                      'Address of a TypeSafe service; /v1/systemone is appended automatically.'
+                    )
+                  : t(
+                      'Address of an OpenAI-compatible service; /chat/completions is appended automatically.'
+                    )}
               </FieldDescription>
             </Field>
           </SettingsFormGridItem>
@@ -289,8 +302,16 @@ export function AuditModelCard({
                 label={t('Input limit (characters)')}
                 value={endpoint.input_limit}
                 min={256}
-                max={1048576}
-                description={t('Smallest enabled value controls chunk size.')}
+                max={
+                  nodeKind === 'typesafe' ? TYPESAFE_MAX_INPUT_LIMIT : 1048576
+                }
+                description={
+                  nodeKind === 'typesafe'
+                    ? t(
+                        'Smallest enabled value controls chunk size. TypeSafe rejects a request above 16000 characters.'
+                      )
+                    : t('Smallest enabled value controls chunk size.')
+                }
                 onChange={(input_limit) => onChange({ input_limit })}
               />
               <NumberField
@@ -306,6 +327,39 @@ export function AuditModelCard({
               />
             </div>
           </SettingsFormGridItem>
+
+          {nodeKind === 'typesafe' ? (
+            <SettingsFormGridItem span='full'>
+              <div className='grid gap-x-5 gap-y-6 sm:grid-cols-2'>
+                <NumberField
+                  id={`prompt-audit-node-block-threshold-${index}`}
+                  label={t('Block threshold')}
+                  value={endpoint.block_threshold}
+                  min={0.01}
+                  max={1}
+                  step={0.01}
+                  description={t(
+                    'Probability at or above which a category is Unsafe.'
+                  )}
+                  onChange={(block_threshold) => onChange({ block_threshold })}
+                />
+                <NumberField
+                  id={`prompt-audit-node-review-threshold-${index}`}
+                  label={t('Review threshold')}
+                  value={endpoint.review_threshold}
+                  min={0.01}
+                  max={1}
+                  step={0.01}
+                  description={t(
+                    'Probability at or above which a category is Controversial.'
+                  )}
+                  onChange={(review_threshold) =>
+                    onChange({ review_threshold })
+                  }
+                />
+              </div>
+            </SettingsFormGridItem>
+          ) : null}
 
           <SettingsFormGridItem span='full'>
             <Field>
@@ -358,4 +412,12 @@ export function AuditModelCard({
       </CollapsibleContent>
     </Collapsible>
   )
+}
+
+// The form shows one choice where the server stores two fields: purpose and
+// protocol. The label key is a t('...') literal the i18n key scraper can see.
+function promptAuditNodeKindLabel(kind: PromptAuditNodeKind): string {
+  if (kind === 'typesafe') return 'TypeSafe JEV classification'
+  if (kind === 'review') return 'Gray-area review model'
+  return 'Qwen3Guard classification'
 }

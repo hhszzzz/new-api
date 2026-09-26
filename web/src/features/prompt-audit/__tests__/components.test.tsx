@@ -614,4 +614,57 @@ describe('prompt audit management components', () => {
     })
     expect(onDeleted).toHaveBeenCalledOnce()
   })
+  // The score list is the record of what the audit actually measured, so it has
+  // to read strongest-first and round the same way every time. A list that
+  // disagreed with the verdict beside it would be worse than no list at all.
+  test('lists audit model scores strongest first with two decimals', async () => {
+    getPromptAuditMock.mockResolvedValue({
+      success: true,
+      data: {
+        ...EVENT,
+        scores: { violent: 0.9, pii: 0.25, probe: 0.5 },
+      },
+    })
+
+    renderWithQueryClient(
+      <PromptAuditDetailSheet
+        eventID={EVENT.id}
+        canViewFullPrompt={false}
+        canManage={false}
+        canDelete={false}
+        onOpenChange={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    )
+
+    const block = (await screen.findByText('Audit model scores'))
+      .parentElement as HTMLElement
+    expect(
+      within(block)
+        .getAllByText(/^\d\.\d\d$/)
+        .map((node) => node.textContent)
+    ).toEqual(['0.90', '0.50', '0.25'])
+    // Each value reads against its own name: a probe score is not a category.
+    expect(
+      within(block)
+        .getAllByText(/^(violent|pii|Liveness probe)$/)
+        .map((node) => node.textContent)
+    ).toEqual(['violent', 'Liveness probe', 'pii'])
+  })
+
+  test('renders no score list for a record that carries none', async () => {
+    renderWithQueryClient(
+      <PromptAuditDetailSheet
+        eventID={EVENT.id}
+        canViewFullPrompt={false}
+        canManage={false}
+        canDelete={false}
+        onOpenChange={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    )
+
+    expect(await screen.findByText('Text source')).toBeVisible()
+    expect(screen.queryByText('Audit model scores')).not.toBeInTheDocument()
+  })
 })

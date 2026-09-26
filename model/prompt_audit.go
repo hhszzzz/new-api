@@ -95,29 +95,33 @@ type PromptAudit struct {
 	ReviewStatus         string            `json:"review_status" gorm:"type:varchar(32);index"`
 	ReviewDecision       string            `json:"review_decision" gorm:"type:varchar(16)"`
 	ReviewCodes          string            `json:"-" gorm:"type:text"`
-	ReviewReason         string            `json:"review_reason" gorm:"type:varchar(512)"`
-	ReviewerEndpointID   string            `json:"reviewer_endpoint_id" gorm:"type:varchar(128)"`
-	HumanReview          string            `json:"human_review" gorm:"type:varchar(32);index"`
-	HumanReviewReason    string            `json:"human_review_reason" gorm:"type:varchar(512)"`
-	ReviewedBy           int               `json:"reviewed_by" gorm:"index"`
-	ReviewerName         string            `json:"reviewer_name" gorm:"type:varchar(255)"`
-	ReviewedAt           int64             `json:"reviewed_at" gorm:"index"`
-	LatencyMS            int64             `json:"latency_ms"`
-	Attempts             int               `json:"attempts"`
-	MaxAttempts          int               `json:"max_attempts"`
-	NextAttemptAt        int64             `json:"next_attempt_at" gorm:"index"`
-	LeaseOwner           string            `json:"-" gorm:"type:varchar(128);index"`
-	LeaseUntil           int64             `json:"-" gorm:"index"`
-	ErrorCode            string            `json:"error_code" gorm:"type:varchar(64);index"`
-	Ip                   string            `json:"ip" gorm:"type:varchar(64)"`
-	UserAgent            string            `json:"user_agent" gorm:"type:varchar(512)"`
-	Method               string            `json:"method" gorm:"type:varchar(16)"`
-	RequestPath          string            `json:"request_path" gorm:"type:varchar(255)"`
-	Origin               string            `json:"origin" gorm:"type:varchar(255)"`
-	Referer              string            `json:"referer" gorm:"type:varchar(255)"`
-	CreatedAt            int64             `json:"created_at" gorm:"index"`
-	UpdatedAt            int64             `json:"updated_at" gorm:"index"`
-	CompletedAt          int64             `json:"completed_at" gorm:"index"`
+	// Scores holds the raw model probabilities a verdict was derived from, keyed
+	// by category. It is stored as JSON and is the record an operator retunes
+	// node thresholds against.
+	Scores             string `json:"-" gorm:"type:text"`
+	ReviewReason       string `json:"review_reason" gorm:"type:varchar(512)"`
+	ReviewerEndpointID string `json:"reviewer_endpoint_id" gorm:"type:varchar(128)"`
+	HumanReview        string `json:"human_review" gorm:"type:varchar(32);index"`
+	HumanReviewReason  string `json:"human_review_reason" gorm:"type:varchar(512)"`
+	ReviewedBy         int    `json:"reviewed_by" gorm:"index"`
+	ReviewerName       string `json:"reviewer_name" gorm:"type:varchar(255)"`
+	ReviewedAt         int64  `json:"reviewed_at" gorm:"index"`
+	LatencyMS          int64  `json:"latency_ms"`
+	Attempts           int    `json:"attempts"`
+	MaxAttempts        int    `json:"max_attempts"`
+	NextAttemptAt      int64  `json:"next_attempt_at" gorm:"index"`
+	LeaseOwner         string `json:"-" gorm:"type:varchar(128);index"`
+	LeaseUntil         int64  `json:"-" gorm:"index"`
+	ErrorCode          string `json:"error_code" gorm:"type:varchar(64);index"`
+	Ip                 string `json:"ip" gorm:"type:varchar(64)"`
+	UserAgent          string `json:"user_agent" gorm:"type:varchar(512)"`
+	Method             string `json:"method" gorm:"type:varchar(16)"`
+	RequestPath        string `json:"request_path" gorm:"type:varchar(255)"`
+	Origin             string `json:"origin" gorm:"type:varchar(255)"`
+	Referer            string `json:"referer" gorm:"type:varchar(255)"`
+	CreatedAt          int64  `json:"created_at" gorm:"index"`
+	UpdatedAt          int64  `json:"updated_at" gorm:"index"`
+	CompletedAt        int64  `json:"completed_at" gorm:"index"`
 }
 
 type PromptAuditResponse struct {
@@ -169,6 +173,7 @@ type PromptAuditResponse struct {
 	ReviewStatus         string             `json:"review_status"`
 	ReviewDecision       string             `json:"review_decision"`
 	ReviewCodes          []string           `json:"review_codes"`
+	Scores               map[string]float64 `json:"scores,omitempty"`
 	ReviewReason         string             `json:"review_reason"`
 	ReviewerEndpointID   string             `json:"reviewer_endpoint_id"`
 	HumanReview          string             `json:"human_review"`
@@ -277,6 +282,7 @@ type PromptAuditCompletion struct {
 	ReviewStatus       string
 	ReviewDecision     string
 	ReviewCodes        []string
+	Scores             map[string]float64
 	ReviewReason       string
 	ReviewerEndpointID string
 }
@@ -329,7 +335,7 @@ func (audit *PromptAudit) ToResponse(includeFullPrompt bool) PromptAuditResponse
 		UnknownCategories: decodePromptAuditStrings(audit.UnknownCategories),
 		EndpointID:        audit.EndpointID, EndpointModel: audit.EndpointModel,
 		ReviewStatus: audit.ReviewStatus, ReviewDecision: audit.ReviewDecision,
-		ReviewCodes: decodePromptAuditStrings(audit.ReviewCodes), ReviewReason: audit.ReviewReason,
+		ReviewCodes: decodePromptAuditStrings(audit.ReviewCodes), Scores: decodePromptAuditScores(audit.Scores), ReviewReason: audit.ReviewReason,
 		ReviewerEndpointID: audit.ReviewerEndpointID, HumanReview: audit.HumanReview,
 		HumanReviewReason: audit.HumanReviewReason, ReviewedBy: audit.ReviewedBy,
 		ReviewerName: audit.ReviewerName, ReviewedAt: audit.ReviewedAt,
@@ -775,6 +781,10 @@ func FinishPromptAudit(id int64, owner string, completion PromptAuditCompletion)
 	if err != nil {
 		return err
 	}
+	scores, err := encodePromptAuditScores(completion.Scores)
+	if err != nil {
+		return err
+	}
 	now := common.GetTimestamp()
 	result := DB.Model(&PromptAudit{}).
 		Where("id = ? AND status = ? AND lease_owner = ?", id, PromptAuditStatusProcessing, owner).
@@ -795,6 +805,7 @@ func FinishPromptAudit(id int64, owner string, completion PromptAuditCompletion)
 			"review_status":          completion.ReviewStatus,
 			"review_decision":        completion.ReviewDecision,
 			"review_codes":           reviewCodes,
+			"scores":                 scores,
 			"review_reason":          completion.ReviewReason,
 			"reviewer_endpoint_id":   completion.ReviewerEndpointID,
 			"chunk_count":            completion.ChunkCount,
@@ -1143,6 +1154,32 @@ func clampPromptAuditColumn(value string, limit int) string {
 		return value
 	}
 	return string([]rune(value)[:limit])
+}
+
+// encodePromptAuditScores stores the raw model probabilities as JSON. A nil map
+// is stored as an empty string so a label-based verdict, which has no scores,
+// leaves the column empty rather than holding "null".
+func encodePromptAuditScores(scores map[string]float64) (string, error) {
+	if len(scores) == 0 {
+		return "", nil
+	}
+	data, err := common.Marshal(scores)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func decodePromptAuditScores(value string) map[string]float64 {
+	value = strings.TrimSpace(value)
+	if value == "" || value == "null" {
+		return nil
+	}
+	var scores map[string]float64
+	if err := common.UnmarshalJsonStr(value, &scores); err != nil || len(scores) == 0 {
+		return nil
+	}
+	return scores
 }
 
 func encodePromptAuditStrings(values []string) (string, error) {

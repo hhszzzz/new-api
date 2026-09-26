@@ -42,6 +42,7 @@ import { PromptAuditNavigation } from './components/prompt-audit-navigation'
 import { ScopePoliciesSection } from './components/scope-policies-section'
 import {
   FULL_PROMPT_DEFAULT_RUNES,
+  QWEN3GUARD_DEFAULT_MODEL,
   promptAuditEndpointDrafts,
   promptAuditEndpointUpdate,
   type PromptAuditEndpointDraft,
@@ -72,6 +73,9 @@ function promptAuditConfigDraft(
     blocking_latest_turn_only: config.blocking_latest_turn_only ?? true,
     probe_block_enabled: config.probe_block_enabled ?? false,
     probe_phrases: config.probe_phrases ?? [],
+    probe_semantic_enabled: config.probe_semantic_enabled ?? false,
+    probe_semantic_threshold: config.probe_semantic_threshold,
+    expand_base64: config.expand_base64 ?? true,
     manual_wordlist_action: config.manual_wordlist_action ?? 'block',
     enabled_categories: [...config.enabled_categories],
     controversial_block_categories: [
@@ -239,13 +243,18 @@ function PromptAuditSettingsForm({
         id: '',
         name: '',
         base_url: '',
-        model: 'sileader/qwen3guard:0.6b',
+        model: QWEN3GUARD_DEFAULT_MODEL,
         timeout_ms: 3000,
         input_limit: 4000,
         concurrency: config.endpoint_concurrency,
         enabled: true,
         purpose: 'classify',
+        protocol: 'qwen3guard',
         directions: ['input', 'output'],
+        // A Qwen3Guard node answers with a label, so the TypeSafe thresholds do
+        // not apply to it; 0 is the server's "use the protocol default".
+        block_threshold: 0,
+        review_threshold: 0,
         has_token: false,
         token: '',
         token_changed: true,

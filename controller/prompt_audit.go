@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/QuantumNous/new-api/service/authz"
 	globalsetting "github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/prompt_audit_setting"
+	"github.com/QuantumNous/new-api/setting/system_setting"
 
 	"github.com/gin-gonic/gin"
 )
@@ -23,6 +25,7 @@ import (
 type promptAuditEndpointUpdate struct {
 	ID          string   `json:"id"`
 	OriginalID  string   `json:"original_id"`
+	Protocol    string   `json:"protocol"`
 	Name        string   `json:"name"`
 	BaseURL     string   `json:"base_url"`
 	Token       *string  `json:"token"`
@@ -33,6 +36,10 @@ type promptAuditEndpointUpdate struct {
 	Enabled     bool     `json:"enabled"`
 	Purpose     string   `json:"purpose"`
 	Directions  []string `json:"directions"`
+	// A threshold of 0 keeps the stored value when the update omits it, which is
+	// what a page that predates the field sends.
+	BlockThreshold  float64 `json:"block_threshold"`
+	ReviewThreshold float64 `json:"review_threshold"`
 }
 
 type promptAuditConfigUpdate struct {
@@ -43,6 +50,9 @@ type promptAuditConfigUpdate struct {
 	BlockingLatestTurnOnly *bool                                                      `json:"blocking_latest_turn_only"`
 	ProbeBlockEnabled      *bool                                                      `json:"probe_block_enabled"`
 	ProbePhrases           *[]string                                                  `json:"probe_phrases"`
+	ProbeSemanticEnabled   *bool                                                      `json:"probe_semantic_enabled"`
+	ProbeSemanticThreshold *float64                                                   `json:"probe_semantic_threshold"`
+	ExpandBase64           *bool                                                      `json:"expand_base64"`
 	ManualWordlistAction   *string                                                    `json:"manual_wordlist_action"`
 	EnabledCategories      *[]string                                                  `json:"enabled_categories"`
 	ControversialBlocks    *[]string                                                  `json:"controversial_block_categories"`
@@ -172,6 +182,17 @@ func UpdatePromptAuditConfig(c *gin.Context) {
 		values["prompt_audit.probe_phrases"] = string(data)
 		proposed.ProbePhrases = append([]string{}, (*update.ProbePhrases)...)
 	}
+	if update.ProbeSemanticEnabled != nil {
+		values["prompt_audit.probe_semantic_enabled"] = strconv.FormatBool(*update.ProbeSemanticEnabled)
+		proposed.ProbeSemanticEnabled = *update.ProbeSemanticEnabled
+	}
+	if update.ProbeSemanticThreshold != nil {
+		values["prompt_audit.probe_semantic_threshold"] = strconv.FormatFloat(*update.ProbeSemanticThreshold, 'f', -1, 64)
+		proposed.ProbeSemanticThreshold = *update.ProbeSemanticThreshold
+	}
+	if update.ExpandBase64 != nil {
+		values["prompt_audit.expand_base64"] = strconv.FormatBool(*update.ExpandBase64)
+	}
 	if update.ManualWordlistAction != nil {
 		values["prompt_audit.manual_wordlist_action"] = *update.ManualWordlistAction
 		proposed.ManualWordlistAction = *update.ManualWordlistAction
@@ -212,6 +233,10 @@ func UpdatePromptAuditConfig(c *gin.Context) {
 	if update.Endpoints != nil {
 		endpoints := mergePromptAuditEndpointUpdates(current.Endpoints, *update.Endpoints)
 		proposed.Endpoints = endpoints
+		if err := rejectPromptAuditSelfReference(endpoints); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
+			return
+		}
 		data, err := common.Marshal(endpoints)
 		if err != nil {
 			common.ApiError(c, err)
@@ -245,6 +270,42 @@ func UpdatePromptAuditConfig(c *gin.Context) {
 	}
 	setting := prompt_audit_setting.GetSetting()
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": promptAuditConfigResponse(setting)})
+}
+
+// rejectPromptAuditSelfReference refuses a TypeSafe node that points back at this
+// deployment. The audit request would enter through the gateway's own
+// /typesafe/v1/systemone route, where prompt inspection runs again before
+// distribution, so every audit call would recursively audit itself.
+//
+// The check deliberately lives in the save path rather than in ValidateConfig:
+// ValidateConfig also runs when persisted configuration is loaded, so a later
+// change to the server address would make an already-saved node fail to load
+// and silently turn auditing off.
+func rejectPromptAuditSelfReference(endpoints []prompt_audit_setting.Endpoint) error {
+	selfHost := serverAddressHost(system_setting.ServerAddress)
+	if selfHost == "" {
+		return nil
+	}
+	for _, endpoint := range endpoints {
+		if !endpoint.Enabled || !endpoint.IsTypeSafeEndpoint() {
+			continue
+		}
+		if serverAddressHost(endpoint.BaseURL) == selfHost {
+			return fmt.Errorf("prompt audit endpoint %q points at this server; auditing it would audit the audit request again", endpoint.ID)
+		}
+	}
+	return nil
+}
+
+// serverAddressHost reduces an address to a comparable host, dropping the port
+// and any case difference so "https://Gateway.example.com:443" and
+// "http://gateway.example.com" still match.
+func serverAddressHost(value string) string {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil {
+		return ""
+	}
+	return strings.ToLower(parsed.Hostname())
 }
 
 func validatePromptWordlistReviewBindings(configured prompt_audit_setting.PromptAuditSetting) error {
@@ -567,6 +628,9 @@ func promptAuditConfigResponse(setting prompt_audit_setting.PromptAuditSetting) 
 		"blocking_latest_turn_only":      setting.BlockingLatestTurnOnly,
 		"probe_block_enabled":            setting.ProbeBlockEnabled,
 		"probe_phrases":                  append([]string{}, setting.ProbePhrases...),
+		"probe_semantic_enabled":         setting.ProbeSemanticEnabled,
+		"probe_semantic_threshold":       setting.ProbeSemanticThreshold,
+		"expand_base64":                  setting.ExpandBase64,
 		"enabled_categories":             append([]string{}, setting.EnabledCategories...),
 		"controversial_block_categories": append([]string{}, setting.ControversialBlocks...),
 		"review_enabled":                 setting.ReviewEnabled, "review_prompt": setting.ReviewPrompt,
@@ -646,10 +710,23 @@ func mergePromptAuditEndpointUpdates(current []prompt_audit_setting.Endpoint, up
 		if name == "" {
 			name = id
 		}
+		blockThreshold, reviewThreshold := endpoint.BlockThreshold, endpoint.ReviewThreshold
+		protocol := prompt_audit_setting.NormalizeEndpointProtocol(endpoint.Protocol)
+		if existing, ok := existingEndpoints[lookupID]; ok {
+			// A request that omits a threshold keeps what is stored rather than
+			// resetting it to the protocol default.
+			if blockThreshold == 0 {
+				blockThreshold = existing.BlockThreshold
+			}
+			if reviewThreshold == 0 {
+				reviewThreshold = existing.ReviewThreshold
+			}
+		}
 		endpoints = append(endpoints, prompt_audit_setting.Endpoint{
-			ID: id, Name: name, BaseURL: endpoint.BaseURL, Token: token,
+			ID: id, Protocol: protocol, Name: name, BaseURL: endpoint.BaseURL, Token: token,
 			Model: endpoint.Model, TimeoutMS: endpoint.TimeoutMS, InputLimit: endpoint.InputLimit,
 			Concurrency: endpoint.Concurrency, Enabled: endpoint.Enabled, Purpose: endpoint.Purpose, Directions: append([]string(nil), endpoint.Directions...),
+			BlockThreshold: blockThreshold, ReviewThreshold: reviewThreshold,
 		})
 	}
 	return endpoints

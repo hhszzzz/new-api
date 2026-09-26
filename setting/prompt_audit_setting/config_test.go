@@ -99,6 +99,48 @@ func TestPromptAuditSettingValidation(t *testing.T) {
 		{name: "full prompt limit at ceiling", mutate: func(setting *PromptAuditSetting) { setting.FullPromptMaxRunes = intPtr(MaxFullPromptMaxRunes) }},
 		{name: "full prompt limit negative", mutate: func(setting *PromptAuditSetting) { setting.FullPromptMaxRunes = intPtr(-1) }, wantErr: "full prompt retention limit"},
 		{name: "full prompt limit above ceiling", mutate: func(setting *PromptAuditSetting) { setting.FullPromptMaxRunes = intPtr(MaxFullPromptMaxRunes + 1) }, wantErr: "full prompt retention limit"},
+		{name: "endpoint protocol omitted is allowed", mutate: func(setting *PromptAuditSetting) { setting.Endpoints[0].Protocol = "" }},
+		{name: "endpoint protocol qwen3guard", mutate: func(setting *PromptAuditSetting) { setting.Endpoints[0].Protocol = EndpointProtocolQwen3Guard }},
+		{name: "unknown endpoint protocol", mutate: func(setting *PromptAuditSetting) { setting.Endpoints[0].Protocol = "chat" }, wantErr: "protocol"},
+		{name: "typesafe endpoint", mutate: func(setting *PromptAuditSetting) {
+			setting.Endpoints[0].Protocol = EndpointProtocolTypeSafe
+			setting.Endpoints[0].Model = ""
+			setting.Endpoints[0].BlockThreshold = DefaultBlockThreshold
+			setting.Endpoints[0].ReviewThreshold = DefaultReviewThreshold
+		}},
+		{name: "typesafe thresholds default when omitted", mutate: func(setting *PromptAuditSetting) {
+			setting.Endpoints[0].Protocol = EndpointProtocolTypeSafe
+		}},
+		{name: "typesafe review threshold above block threshold", mutate: func(setting *PromptAuditSetting) {
+			setting.Endpoints[0].Protocol = EndpointProtocolTypeSafe
+			setting.Endpoints[0].ReviewThreshold = 0.8
+			setting.Endpoints[0].BlockThreshold = 0.6
+		}, wantErr: "thresholds"},
+		{name: "typesafe block threshold above one", mutate: func(setting *PromptAuditSetting) {
+			setting.Endpoints[0].Protocol = EndpointProtocolTypeSafe
+			setting.Endpoints[0].BlockThreshold = 1.2
+		}, wantErr: "thresholds"},
+		{name: "typesafe input limit above the API maximum", mutate: func(setting *PromptAuditSetting) {
+			setting.Endpoints[0].Protocol = EndpointProtocolTypeSafe
+			setting.Endpoints[0].InputLimit = TypeSafeMaxInputLimit + 1
+		}, wantErr: "input limit"},
+		{name: "typesafe node cannot review", mutate: func(setting *PromptAuditSetting) {
+			setting.Endpoints[0].Protocol = EndpointProtocolTypeSafe
+			setting.Endpoints[0].Purpose = EndpointPurposeReview
+		}, wantErr: "typesafe protocol"},
+		{name: "semantic probe threshold omitted uses default", mutate: func(setting *PromptAuditSetting) {
+			setting.ProbeSemanticEnabled = true
+			setting.ProbeSemanticThreshold = 0
+			setting.Endpoints[0].Protocol = EndpointProtocolTypeSafe
+		}},
+		{name: "semantic probe threshold above one", mutate: func(setting *PromptAuditSetting) { setting.ProbeSemanticThreshold = 1.5 }, wantErr: "semantic probe threshold"},
+		{name: "semantic probe threshold negative", mutate: func(setting *PromptAuditSetting) { setting.ProbeSemanticThreshold = -0.2 }, wantErr: "semantic probe threshold"},
+		{name: "semantic probe threshold at one", mutate: func(setting *PromptAuditSetting) { setting.ProbeSemanticThreshold = 1 }},
+		{name: "semantic probe requires a typesafe node", mutate: func(setting *PromptAuditSetting) { setting.ProbeSemanticEnabled = true }, wantErr: "typesafe classification endpoint"},
+		{name: "semantic probe ignores a disabled typesafe node", mutate: func(setting *PromptAuditSetting) {
+			setting.ProbeSemanticEnabled = true
+			setting.Endpoints = append(setting.Endpoints, Endpoint{ID: "jev", Protocol: EndpointProtocolTypeSafe, BaseURL: "https://api.typesafe.ai", Enabled: false, TimeoutMS: DefaultEndpointTimeoutMS, InputLimit: DefaultEndpointInputLimit, Concurrency: DefaultEndpointConcurrency})
+		}, wantErr: "typesafe classification endpoint"},
 	}
 
 	for _, test := range tests {
@@ -180,6 +222,43 @@ func TestSettingFingerprintTracksChunkConcurrency(t *testing.T) {
 	serial := settingFingerprint(setting)
 	setting.ChunkConcurrency = DefaultChunkConcurrency + 1
 	assert.NotEqual(t, serial, settingFingerprint(setting))
+}
+
+func TestSettingFingerprintTracksTheJevFields(t *testing.T) {
+	// Each of these fields changes what a node is asked or how its answer is
+	// read, and the probe answer is cached on its own. A fingerprint that ignored
+	// them would keep serving a verdict computed under the previous node protocol
+	// or threshold, and the stale verdict is indistinguishable from a correct one.
+	typesafe := func(setting *PromptAuditSetting) {
+		setting.Endpoints = []Endpoint{{ID: "jev", Protocol: EndpointProtocolTypeSafe, BaseURL: "https://api.typesafe.ai", Model: DefaultTypeSafeModel, TimeoutMS: DefaultEndpointTimeoutMS, InputLimit: DefaultEndpointInputLimit, Concurrency: DefaultEndpointConcurrency, Enabled: true, Purpose: EndpointPurposeClassify, BlockThreshold: DefaultBlockThreshold, ReviewThreshold: DefaultReviewThreshold}}
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*PromptAuditSetting)
+	}{
+		{name: "node protocol", mutate: func(setting *PromptAuditSetting) {
+			typesafe(setting)
+			setting.Endpoints[0].Protocol = EndpointProtocolQwen3Guard
+		}},
+		{name: "block threshold", mutate: func(setting *PromptAuditSetting) {
+			typesafe(setting)
+			setting.Endpoints[0].BlockThreshold = DefaultBlockThreshold - 0.1
+		}},
+		{name: "review threshold", mutate: func(setting *PromptAuditSetting) {
+			typesafe(setting)
+			setting.Endpoints[0].ReviewThreshold = DefaultReviewThreshold - 0.1
+		}},
+		{name: "semantic probe switch", mutate: func(setting *PromptAuditSetting) { setting.ProbeSemanticEnabled = true }},
+		{name: "semantic probe threshold", mutate: func(setting *PromptAuditSetting) { setting.ProbeSemanticThreshold = 0.5 }},
+		{name: "base64 expansion", mutate: func(setting *PromptAuditSetting) { setting.ExpandBase64 = !setting.ExpandBase64 }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			setting := validSetting()
+			before := settingFingerprint(setting)
+			test.mutate(&setting)
+			assert.NotEqual(t, before, settingFingerprint(setting))
+		})
+	}
 }
 
 func TestChunkConcurrencyAboveEndpointBudgetIsAccepted(t *testing.T) {

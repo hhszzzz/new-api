@@ -37,10 +37,22 @@ import {
   promptAuditRowID,
   readPromptAuditCollapseRepeats,
   validatePromptAuditConfig,
+  promptAuditNodeKind,
+  promptAuditNodeKindUpdate,
+  QWEN3GUARD_DEFAULT_MODEL,
+  promptAuditScoreLabel,
+  promptAuditScoreRows,
+  TYPESAFE_BASE_URL,
+  TYPESAFE_DEFAULT_MODEL,
+  TYPESAFE_MAX_INPUT_LIMIT,
   validatePromptAuditFilters,
   writePromptAuditCollapseRepeats,
 } from '../lib'
-import type { PromptAuditConfigUpdate, PromptAuditEvent } from '../types'
+import type {
+  PromptAuditConfigUpdate,
+  PromptAuditEndpointUpdate,
+  PromptAuditEvent,
+} from '../types'
 
 const VALID_CONFIG: PromptAuditConfigUpdate = {
   mode: 'blocking',
@@ -64,7 +76,10 @@ const VALID_CONFIG: PromptAuditConfigUpdate = {
       concurrency: 16,
       enabled: true,
       purpose: 'classify',
+      protocol: 'qwen3guard',
       directions: ['input', 'output'],
+      block_threshold: 0,
+      review_threshold: 0,
     },
   ],
   total_timeout_ms: 10000,
@@ -472,3 +487,200 @@ describe('prompt audit management helpers', () => {
     })
   })
 })
+
+describe('prompt audit TypeSafe nodes', () => {
+  const QWEN3GUARD_NODE = VALID_CONFIG.endpoints[0]
+  const TYPESAFE_NODE = {
+    ...QWEN3GUARD_NODE,
+    protocol: 'typesafe' as const,
+    base_url: TYPESAFE_BASE_URL,
+    model: TYPESAFE_DEFAULT_MODEL,
+    block_threshold: 0.7,
+    review_threshold: 0.35,
+  }
+  const typesafeConfig = (
+    endpoint: Partial<typeof TYPESAFE_NODE> = {}
+  ): PromptAuditConfigUpdate => ({
+    ...VALID_CONFIG,
+    endpoints: [{ ...TYPESAFE_NODE, ...endpoint }],
+  })
+
+  test('reads one node kind out of the two stored fields', () => {
+    expect(promptAuditNodeKind(QWEN3GUARD_NODE)).toBe('qwen3guard')
+    expect(promptAuditNodeKind(TYPESAFE_NODE)).toBe('typesafe')
+    // Review wins over the protocol: the reviewer is never a classifier, so the
+    // form must not offer the TypeSafe thresholds for one.
+    expect(
+      promptAuditNodeKind({ purpose: 'review', protocol: 'typesafe' })
+    ).toBe('review')
+  })
+
+  test('switching to TypeSafe fills its own defaults, not the guard ones', () => {
+    // A node that was left on the Qwen3Guard defaults: its repository id and an
+    // empty address are what TypeSafe must not be asked for.
+    const update = promptAuditNodeKindUpdate(
+      draftOf({ ...QWEN3GUARD_NODE, base_url: '', model: '' }),
+      'typesafe'
+    )
+    expect(update).toMatchObject({
+      purpose: 'classify',
+      protocol: 'typesafe',
+      model: TYPESAFE_DEFAULT_MODEL,
+      base_url: TYPESAFE_BASE_URL,
+      block_threshold: 0.7,
+      review_threshold: 0.35,
+    })
+  })
+
+  test('switching to TypeSafe replaces a guard default model already filled in', () => {
+    const update = promptAuditNodeKindUpdate(
+      draftOf({ ...QWEN3GUARD_NODE, model: QWEN3GUARD_DEFAULT_MODEL }),
+      'typesafe'
+    )
+    expect(update.model).toBe(TYPESAFE_DEFAULT_MODEL)
+  })
+
+  test('switching to TypeSafe keeps a base URL and model the operator set', () => {
+    const update = promptAuditNodeKindUpdate(
+      {
+        ...draftOf(QWEN3GUARD_NODE),
+        base_url: 'https://nodes.example.com',
+        model: 'my-own-model',
+      },
+      'typesafe'
+    )
+    expect(update.base_url).toBeUndefined()
+    expect(update.model).toBeUndefined()
+  })
+
+  test('switching back to Qwen3Guard restores the guard model', () => {
+    const update = promptAuditNodeKindUpdate(
+      { ...draftOf(TYPESAFE_NODE), model: TYPESAFE_DEFAULT_MODEL },
+      'qwen3guard'
+    )
+    expect(update).toMatchObject({
+      purpose: 'classify',
+      protocol: 'qwen3guard',
+    })
+    expect(update.model).toBe(QWEN3GUARD_DEFAULT_MODEL)
+  })
+
+  test('accepts a complete TypeSafe configuration', () => {
+    expect(validatePromptAuditConfig(typesafeConfig())).toBeNull()
+  })
+
+  test('rejects thresholds that would never block', () => {
+    expect(
+      validatePromptAuditConfig(
+        typesafeConfig({ review_threshold: 0.8, block_threshold: 0.6 })
+      )
+    ).toMatch(/0 < review <= block <= 1/)
+    expect(
+      validatePromptAuditConfig(typesafeConfig({ block_threshold: 1.2 }))
+    ).toMatch(/0 < review <= block <= 1/)
+  })
+
+  test('treats a cleared threshold as the protocol default', () => {
+    expect(
+      validatePromptAuditConfig(
+        typesafeConfig({ block_threshold: 0, review_threshold: 0 })
+      )
+    ).toBeNull()
+  })
+
+  test('rejects an input limit TypeSafe would refuse', () => {
+    expect(
+      validatePromptAuditConfig(
+        typesafeConfig({ input_limit: TYPESAFE_MAX_INPUT_LIMIT + 1 })
+      )
+    ).toMatch(/16000/)
+    expect(
+      validatePromptAuditConfig(
+        typesafeConfig({ input_limit: TYPESAFE_MAX_INPUT_LIMIT })
+      )
+    ).toBeNull()
+  })
+
+  test('rejects an unknown node protocol', () => {
+    expect(
+      validatePromptAuditConfig({
+        ...VALID_CONFIG,
+        endpoints: [{ ...QWEN3GUARD_NODE, protocol: 'chat' as never }],
+      })
+    ).toBe('Select a valid audit node protocol.')
+  })
+
+  test('requires an enabled TypeSafe node for semantic probe detection', () => {
+    expect(
+      validatePromptAuditConfig({
+        ...VALID_CONFIG,
+        probe_semantic_enabled: true,
+      })
+    ).toMatch(/TypeSafe classification node/)
+    // A disabled TypeSafe node is not a node the probe can use: an operator who
+    // switches the node off must switch the probe off with it.
+    expect(
+      validatePromptAuditConfig({
+        ...VALID_CONFIG,
+        probe_semantic_enabled: true,
+        endpoints: [
+          QWEN3GUARD_NODE,
+          { ...TYPESAFE_NODE, id: 'jev', enabled: false },
+        ],
+      })
+    ).toMatch(/TypeSafe classification node/)
+    expect(
+      validatePromptAuditConfig({
+        ...typesafeConfig(),
+        probe_semantic_enabled: true,
+      })
+    ).toBeNull()
+  })
+
+  test('rejects a probe threshold outside (0, 1]', () => {
+    expect(
+      validatePromptAuditConfig({
+        ...typesafeConfig(),
+        probe_semantic_enabled: true,
+        probe_semantic_threshold: 0,
+      })
+    ).toMatch(/greater than 0 and at most 1/)
+    expect(
+      validatePromptAuditConfig({
+        ...typesafeConfig(),
+        probe_semantic_enabled: true,
+        probe_semantic_threshold: 1.5,
+      })
+    ).toMatch(/greater than 0 and at most 1/)
+  })
+
+  test('orders the returned scores highest first', () => {
+    expect(
+      promptAuditScoreRows({ violent: 0.31, jailbreak: 0.92, pii: 0.55 })
+    ).toEqual([
+      ['jailbreak', 0.92],
+      ['pii', 0.55],
+      ['violent', 0.31],
+    ])
+  })
+
+  test('names the liveness probe and passes category keys through', () => {
+    expect(promptAuditScoreLabel('probe')).toBe('Liveness probe')
+    expect(promptAuditScoreLabel('jailbreak')).toBe('jailbreak')
+  })
+
+  test('reports no score rows for a verdict that has none', () => {
+    expect(promptAuditScoreRows(undefined)).toEqual([])
+    expect(promptAuditScoreRows({})).toEqual([])
+  })
+})
+
+// A fixture written as an update — that is how the form receives a node before
+// it has been saved — turned into the draft the card edits.
+function draftOf(
+  endpoint: PromptAuditEndpointUpdate
+): PromptAuditEndpointDraft {
+  return promptAuditEndpointDrafts([
+    { ...endpoint, has_token: endpoint.token !== undefined },
+  ])[0]
+}

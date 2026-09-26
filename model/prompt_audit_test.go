@@ -762,6 +762,9 @@ func TestPromptAuditStorageConfiguredDatabases(t *testing.T) {
 			require.NoError(t, FinishPromptAudit(reclaimed.ID, "retry-worker", PromptAuditCompletion{
 				Safety: "Controversial", Decision: "block", WouldAction: "block",
 				Categories: []string{"pii"}, EndpointID: "guard-primary", ChunkCount: 1,
+				// The probabilities are a text column, so the round trip has to
+				// hold on every engine rather than only where it was written.
+				Scores: map[string]float64{"pii": 0.91, "probe": 0.5},
 			}))
 
 			listed, total, err := ListPromptAudits(PromptAuditFilter{
@@ -770,6 +773,9 @@ func TestPromptAuditStorageConfiguredDatabases(t *testing.T) {
 			require.NoError(t, err)
 			assert.EqualValues(t, 1, total)
 			require.Len(t, listed, 1)
+			storedScores := listed[0].ToResponse(false).Scores
+			assert.InDelta(t, 0.91, storedScores["pii"], 1e-9)
+			assert.InDelta(t, 0.5, storedScores["probe"], 1e-9)
 
 			// The records screen filters by username, which is snapshotted at
 			// write time, so the same rows must be reachable by the name alone.
@@ -834,7 +840,7 @@ func runPromptAuditWordlistUpgrade(t *testing.T, db *gorm.DB) {
 		"ReviewStatus", "ReviewDecision", "ReviewCodes", "ReviewReason", "ReviewerEndpointID",
 		"HumanReview", "HumanReviewReason", "ReviewedBy", "ReviewerName", "ReviewedAt",
 		"Username", "EndpointModel", "Ip", "UserAgent", "Method", "RequestPath", "Origin", "Referer",
-		"GroupKey", "SessionKey", "RequestKind", "ScanPayloadTruncated",
+		"GroupKey", "SessionKey", "RequestKind", "ScanPayloadTruncated", "Scores",
 	}
 	var fields []reflect.StructField
 	for index := range current.NumField() {
@@ -871,6 +877,14 @@ func runPromptAuditWordlistUpgrade(t *testing.T, db *gorm.DB) {
 	require.NoError(t, MigratePromptAuditDefaults())
 	require.NoError(t, db.AutoMigrate(&PromptAudit{}, &PromptWordlist{}))
 	require.NoError(t, MigratePromptAuditDefaults())
+	// A third startup has to be a no-op. A tag one engine reads differently, or a
+	// column whose declared type does not match what was written, shows up here as
+	// an ALTER TABLE issued on every boot rather than as a failed migration.
+	recorder := &migrationSQLRecorder{}
+	recordingDB := db.Session(&gorm.Session{Logger: recorder})
+	require.NoError(t, recordingDB.AutoMigrate(&PromptAudit{}, &PromptWordlist{}))
+	require.NoError(t, MigratePromptAuditDefaults())
+	assert.Empty(t, recorder.schemaMutations())
 	after, err := db.Migrator().GetIndexes(&PromptAudit{})
 	require.NoError(t, err)
 	names := make([]string, 0, len(after))
@@ -935,12 +949,12 @@ func runPromptAuditAgentUpgrade(t *testing.T, db *gorm.DB) {
 	t.Helper()
 	require.NoError(t, db.Migrator().DropTable(&PromptAudit{}))
 	// The deployed 861bfbc15 PromptAudit fields and GORM tags match this model
-	// with these four new fields removed (verified against that Git revision).
+	// with these five new fields removed (verified against that Git revision).
 	current := reflect.TypeFor[PromptAudit]()
 	var fields []reflect.StructField
 	for i := range current.NumField() {
 		field := current.Field(i)
-		if !slices.Contains([]string{"GroupKey", "SessionKey", "RequestKind", "ScanPayloadTruncated"}, field.Name) {
+		if !slices.Contains([]string{"GroupKey", "SessionKey", "RequestKind", "ScanPayloadTruncated", "Scores"}, field.Name) {
 			fields = append(fields, field)
 		}
 	}
@@ -966,6 +980,10 @@ func runPromptAuditAgentUpgrade(t *testing.T, db *gorm.DB) {
 	assert.Equal(t, "retained inspection", string(row.ScanPayload))
 	assert.Empty(t, row.GroupKey)
 	assert.False(t, row.ScanPayloadTruncated)
+	// A row written before the scores column existed reads as no scores at all,
+	// which is what every layer treats as "this verdict carried no numbers".
+	assert.Empty(t, row.Scores)
+	assert.Nil(t, row.ToResponse(false).Scores)
 	require.NoError(t, db.Delete(&row).Error)
 }
 

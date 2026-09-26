@@ -26,6 +26,14 @@ const (
 	WordlistActionBlock     = "block"
 	WordlistActionReview    = "review"
 
+	// EndpointProtocolQwen3Guard is the original audit node: an OpenAI-compatible
+	// guard model that answers with a safety label.
+	EndpointProtocolQwen3Guard = "qwen3guard"
+	// EndpointProtocolTypeSafe is a TypeSafe/JEV node. It answers with a
+	// per-question probability instead of a label, so the verdict comes from the
+	// thresholds below.
+	EndpointProtocolTypeSafe = "typesafe"
+
 	DefaultModel               = "sileader/qwen3guard:0.6b"
 	DefaultEndpointTimeoutMS   = 3000
 	DefaultEndpointInputLimit  = 4000
@@ -38,9 +46,29 @@ const (
 	DefaultGlobalConcurrency   = 64
 	DefaultEndpointConcurrency = 16
 	DefaultChunkConcurrency    = 4
-	DefaultOutputMaxBytes      = 8 * 1024 * 1024
-	DefaultOutputMemoryBytes   = 1024 * 1024
-	MaxAttemptsLimit           = 4
+	// DefaultBlockThreshold and DefaultReviewThreshold follow the TypeSafe
+	// Guardrails cookbook "strict" policy: a question at or above
+	// DefaultBlockThreshold is Unsafe, at or above DefaultReviewThreshold is
+	// Controversial, and anything below is Safe.
+	DefaultBlockThreshold  = 0.70
+	DefaultReviewThreshold = 0.35
+	// DefaultTypeSafeModel is the alias TypeSafe resolves to the current JEV
+	// release, so an operator does not have to pin a version to get updates.
+	DefaultTypeSafeModel = "jev-latest"
+	// TypeSafeMaxInputLimit is the largest prompt a TypeSafe node accepts.
+	// TypeSafe caps a request at 64k tokens, with state plus the longest
+	// question under 32k; a character budget far above that can only produce
+	// rejected requests.
+	TypeSafeMaxInputLimit = 16000
+	// DefaultProbeSemanticThreshold is deliberately close to 1 because a false
+	// positive here refuses a legitimate first message.
+	DefaultProbeSemanticThreshold = 0.85
+	// MaxProbeSemanticRunes bounds the text a semantic probe scores. A real
+	// probe question is a few words; a long first message is somebody working.
+	MaxProbeSemanticRunes    = 128
+	DefaultOutputMaxBytes    = 8 * 1024 * 1024
+	DefaultOutputMemoryBytes = 1024 * 1024
+	MaxAttemptsLimit         = 4
 	// DefaultFullPromptMaxRunes bounds how much of the whole request is kept on
 	// every audit record. It matches the cap the audit pipeline shipped with, so
 	// an existing deployment keeps the same written volume until an operator
@@ -80,7 +108,10 @@ var categorySet = func() map[string]struct{} {
 // Endpoint is one ordered OpenAI-compatible Qwen3Guard node. Token is stored
 // only in the modular option payload; management responses must use Sanitized.
 type Endpoint struct {
-	ID          string   `json:"id"`
+	ID string `json:"id"`
+	// Protocol selects how this node is called and how its answer is read:
+	// EndpointProtocolQwen3Guard (the default) or EndpointProtocolTypeSafe.
+	Protocol    string   `json:"protocol,omitempty"`
 	Name        string   `json:"name"`
 	BaseURL     string   `json:"base_url"`
 	Token       string   `json:"token,omitempty"`
@@ -91,20 +122,28 @@ type Endpoint struct {
 	Enabled     bool     `json:"enabled"`
 	Purpose     string   `json:"purpose,omitempty"`
 	Directions  []string `json:"directions,omitempty"`
+	// BlockThreshold and ReviewThreshold only apply to a TypeSafe node. A zero
+	// value means "use the default", so an endpoint persisted before these
+	// fields existed keeps the default policy instead of blocking everything.
+	BlockThreshold  float64 `json:"block_threshold,omitempty"`
+	ReviewThreshold float64 `json:"review_threshold,omitempty"`
 }
 
 type SanitizedEndpoint struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	BaseURL     string   `json:"base_url"`
-	Model       string   `json:"model"`
-	TimeoutMS   int      `json:"timeout_ms"`
-	InputLimit  int      `json:"input_limit"`
-	Concurrency int      `json:"concurrency"`
-	Enabled     bool     `json:"enabled"`
-	HasToken    bool     `json:"has_token"`
-	Purpose     string   `json:"purpose"`
-	Directions  []string `json:"directions"`
+	ID              string   `json:"id"`
+	Protocol        string   `json:"protocol"`
+	Name            string   `json:"name"`
+	BaseURL         string   `json:"base_url"`
+	Model           string   `json:"model"`
+	TimeoutMS       int      `json:"timeout_ms"`
+	InputLimit      int      `json:"input_limit"`
+	Concurrency     int      `json:"concurrency"`
+	Enabled         bool     `json:"enabled"`
+	HasToken        bool     `json:"has_token"`
+	Purpose         string   `json:"purpose"`
+	Directions      []string `json:"directions"`
+	BlockThreshold  float64  `json:"block_threshold"`
+	ReviewThreshold float64  `json:"review_threshold"`
 }
 
 // PromptAuditSetting is persisted through the modular option manager. The
@@ -119,24 +158,35 @@ type PromptAuditSetting struct {
 	BlockingLatestTurnOnly bool                                 `json:"blocking_latest_turn_only"`
 	ProbeBlockEnabled      bool                                 `json:"probe_block_enabled"`
 	ProbePhrases           []string                             `json:"probe_phrases"`
-	EnabledCategories      []string                             `json:"enabled_categories"`
-	ControversialBlocks    []string                             `json:"controversial_block_categories"`
-	ReviewEnabled          bool                                 `json:"review_enabled"`
-	ReviewPrompt           string                               `json:"review_prompt"`
-	AllGroups              bool                                 `json:"all_groups"`
-	Groups                 []string                             `json:"groups"`
-	Endpoints              []Endpoint                           `json:"endpoints_secret"`
-	TotalTimeoutMS         int                                  `json:"total_timeout_ms"`
-	ChunkOverlap           int                                  `json:"chunk_overlap"`
-	ChunkConcurrency       int                                  `json:"chunk_concurrency"`
-	CacheTTLSeconds        int                                  `json:"cache_ttl_seconds"`
-	WorkerCount            int                                  `json:"worker_count"`
-	MaxAttempts            int                                  `json:"max_attempts"`
-	RetentionDays          int                                  `json:"retention_days"`
-	GlobalConcurrency      int                                  `json:"global_concurrency"`
-	EndpointConcurrency    int                                  `json:"endpoint_concurrency"`
-	OutputMaxBytes         int                                  `json:"output_max_bytes"`
-	OutputMemoryBytes      int                                  `json:"output_memory_bytes"`
+	// ProbeSemanticEnabled asks a TypeSafe node whether a short standalone first
+	// message is a liveness probe when no configured phrase matches it.
+	ProbeSemanticEnabled bool `json:"probe_semantic_enabled"`
+	// ProbeSemanticThreshold is the probability at or above which that answer
+	// counts as a probe.
+	ProbeSemanticThreshold float64 `json:"probe_semantic_threshold"`
+	// ExpandBase64 decodes base64 runs in the scanned text before it is audited.
+	// A guard model that only sees the encoded form cannot judge the content, so
+	// leaving this off lets an encoded request through unclassified. The full
+	// request keeps the original text either way.
+	ExpandBase64        bool       `json:"expand_base64"`
+	EnabledCategories   []string   `json:"enabled_categories"`
+	ControversialBlocks []string   `json:"controversial_block_categories"`
+	ReviewEnabled       bool       `json:"review_enabled"`
+	ReviewPrompt        string     `json:"review_prompt"`
+	AllGroups           bool       `json:"all_groups"`
+	Groups              []string   `json:"groups"`
+	Endpoints           []Endpoint `json:"endpoints_secret"`
+	TotalTimeoutMS      int        `json:"total_timeout_ms"`
+	ChunkOverlap        int        `json:"chunk_overlap"`
+	ChunkConcurrency    int        `json:"chunk_concurrency"`
+	CacheTTLSeconds     int        `json:"cache_ttl_seconds"`
+	WorkerCount         int        `json:"worker_count"`
+	MaxAttempts         int        `json:"max_attempts"`
+	RetentionDays       int        `json:"retention_days"`
+	GlobalConcurrency   int        `json:"global_concurrency"`
+	EndpointConcurrency int        `json:"endpoint_concurrency"`
+	OutputMaxBytes      int        `json:"output_max_bytes"`
+	OutputMemoryBytes   int        `json:"output_memory_bytes"`
 	// FullPromptMaxRunes keeps exactly what the operator persisted: a pointer so
 	// an absent key stays distinguishable from an explicit 0, which means "keep
 	// the whole request". Without that distinction every deployment upgrading to
@@ -154,6 +204,8 @@ var promptAuditSetting = PromptAuditSetting{
 	OutputMode:             ModeOff,
 	BlockingLatestTurnOnly: true,
 	ProbePhrases:           defaultProbePhrases(),
+	ExpandBase64:           true,
+	ProbeSemanticThreshold: DefaultProbeSemanticThreshold,
 	EnabledCategories:      append([]string(nil), AllCategoryIDs...),
 	ControversialBlocks:    []string{"jailbreak", "pii", "suicide_and_self_harm"},
 	ManualWordlistAction:   WordlistActionBlock,
@@ -239,10 +291,11 @@ func (setting PromptAuditSetting) SanitizedEndpoints() []SanitizedEndpoint {
 	result := make([]SanitizedEndpoint, 0, len(setting.Endpoints))
 	for _, endpoint := range setting.Endpoints {
 		result = append(result, SanitizedEndpoint{
-			ID: endpoint.ID, Name: endpoint.Name, BaseURL: endpoint.BaseURL,
+			ID: endpoint.ID, Protocol: endpoint.Protocol, Name: endpoint.Name, BaseURL: endpoint.BaseURL,
 			Model: endpoint.Model, TimeoutMS: endpoint.TimeoutMS,
 			InputLimit: endpoint.InputLimit, Concurrency: endpoint.Concurrency,
 			Enabled: endpoint.Enabled, HasToken: endpoint.Token != "", Purpose: endpoint.Purpose, Directions: append([]string(nil), endpoint.Directions...),
+			BlockThreshold: endpoint.BlockThreshold, ReviewThreshold: endpoint.ReviewThreshold,
 		})
 	}
 	return result
@@ -340,6 +393,15 @@ func (setting *PromptAuditSetting) ValidateConfig() error {
 	if utf8.RuneCountInString(setting.ReviewPrompt) > 20000 {
 		return fmt.Errorf("prompt audit review prompt must not exceed 20000 characters")
 	}
+	// 0 means "not configured", so a setting persisted before this field existed
+	// keeps the default instead of failing every save. Anything else out of range
+	// is a real value the operator typed and is refused.
+	if setting.ProbeSemanticThreshold == 0 {
+		setting.ProbeSemanticThreshold = DefaultProbeSemanticThreshold
+	}
+	if setting.ProbeSemanticThreshold < 0 || setting.ProbeSemanticThreshold > 1 {
+		return fmt.Errorf("prompt audit semantic probe threshold must be greater than 0 and at most 1")
+	}
 
 	seenCategories := make(map[string]struct{}, len(setting.EnabledCategories))
 	for _, category := range setting.EnabledCategories {
@@ -382,7 +444,17 @@ func (setting *PromptAuditSetting) ValidateConfig() error {
 	seenIDs := make(map[string]struct{}, len(setting.Endpoints))
 	inputClassifyCount, outputClassifyCount, reviewCount := 0, 0, 0
 	minimumInputLimit := 0
+	// The endpoints as they will be published. PublishConfig normalizes every
+	// node, so a check that reads the raw fields would refuse a node the runtime
+	// then accepts — an endpoint saved before purposes existed carries none.
+	normalizedEndpoints := make([]Endpoint, 0, len(setting.Endpoints))
 	for index, endpoint := range setting.Endpoints {
+		// An unrecognised protocol is refused before normalization maps it to the
+		// default. Coercing it would call the node the wrong way, which fails the
+		// whole audit at request time instead of at save time.
+		if raw := strings.ToLower(strings.TrimSpace(setting.Endpoints[index].Protocol)); raw != "" && raw != EndpointProtocolQwen3Guard && raw != EndpointProtocolTypeSafe {
+			return fmt.Errorf("prompt audit endpoint %q protocol must be %q or %q", setting.Endpoints[index].ID, EndpointProtocolQwen3Guard, EndpointProtocolTypeSafe)
+		}
 		endpoint = normalizeEndpoint(endpoint, index)
 		if _, duplicate := seenIDs[endpoint.ID]; duplicate {
 			return fmt.Errorf("duplicate prompt audit endpoint id %q", endpoint.ID)
@@ -391,6 +463,21 @@ func (setting *PromptAuditSetting) ValidateConfig() error {
 		if endpoint.Purpose != EndpointPurposeClassify && endpoint.Purpose != EndpointPurposeReview {
 			return fmt.Errorf("prompt audit endpoint %q purpose must be %q or %q", endpoint.ID, EndpointPurposeClassify, EndpointPurposeReview)
 		}
+		// A TypeSafe node answers probabilities per question and never returns a
+		// review verdict, so it can only classify. Letting it be a review node
+		// would fail every grey-area review at request time.
+		if endpoint.Protocol == EndpointProtocolTypeSafe && endpoint.Purpose != EndpointPurposeClassify {
+			return fmt.Errorf("prompt audit endpoint %q uses the typesafe protocol and must have purpose %q", endpoint.ID, EndpointPurposeClassify)
+		}
+		if endpoint.Protocol == EndpointProtocolTypeSafe {
+			if endpoint.ReviewThreshold <= 0 || endpoint.BlockThreshold < endpoint.ReviewThreshold || endpoint.BlockThreshold > 1 {
+				return fmt.Errorf("prompt audit endpoint %q typesafe thresholds must satisfy 0 < review <= block <= 1", endpoint.ID)
+			}
+			if endpoint.InputLimit > TypeSafeMaxInputLimit {
+				return fmt.Errorf("prompt audit endpoint %q typesafe input limit must not exceed %d characters", endpoint.ID, TypeSafeMaxInputLimit)
+			}
+		}
+		normalizedEndpoints = append(normalizedEndpoints, endpoint)
 		if endpoint.Purpose == EndpointPurposeClassify {
 			if len(endpoint.Directions) == 0 {
 				return fmt.Errorf("prompt audit endpoint %q requires at least one direction", endpoint.ID)
@@ -447,6 +534,21 @@ func (setting *PromptAuditSetting) ValidateConfig() error {
 	if setting.ReviewEnabled && reviewCount == 0 {
 		return fmt.Errorf("prompt audit review requires at least one enabled review endpoint")
 	}
+	if setting.ProbeSemanticEnabled {
+		// Detection draws a probe verdict from a model probability, which only a
+		// TypeSafe node provides. Refusing the save is better than accepting a
+		// switch that silently never fires.
+		hasTypeSafeClassifier := false
+		for _, endpoint := range normalizedEndpoints {
+			if endpoint.Enabled && endpoint.Protocol == EndpointProtocolTypeSafe && endpoint.Purpose == EndpointPurposeClassify {
+				hasTypeSafeClassifier = true
+				break
+			}
+		}
+		if !hasTypeSafeClassifier {
+			return fmt.Errorf("prompt audit semantic probe detection requires at least one enabled typesafe classification endpoint")
+		}
+	}
 	if minimumInputLimit > 0 && setting.ChunkOverlap >= minimumInputLimit {
 		return fmt.Errorf("prompt audit chunk overlap must be smaller than the minimum enabled endpoint input limit")
 	}
@@ -483,6 +585,9 @@ func (setting *PromptAuditSetting) PublishConfig() {
 	if snapshot.ProbePhrases == nil {
 		snapshot.ProbePhrases = defaultProbePhrases()
 	}
+	if snapshot.ProbeSemanticThreshold == 0 {
+		snapshot.ProbeSemanticThreshold = DefaultProbeSemanticThreshold
+	}
 	for index := range snapshot.EnabledCategories {
 		snapshot.EnabledCategories[index] = strings.ToLower(strings.TrimSpace(snapshot.EnabledCategories[index]))
 	}
@@ -515,6 +620,7 @@ func normalizeEndpoint(endpoint Endpoint, index int) Endpoint {
 	endpoint.BaseURL = strings.TrimRight(strings.TrimSpace(endpoint.BaseURL), "/")
 	endpoint.Token = strings.TrimSpace(endpoint.Token)
 	endpoint.Model = strings.TrimSpace(endpoint.Model)
+	endpoint.Protocol = NormalizeEndpointProtocol(endpoint.Protocol)
 	endpoint.Purpose = strings.ToLower(strings.TrimSpace(endpoint.Purpose))
 	if endpoint.Purpose == "" {
 		endpoint.Purpose = EndpointPurposeClassify
@@ -527,7 +633,21 @@ func normalizeEndpoint(endpoint Endpoint, index int) Endpoint {
 	}
 	sort.Strings(endpoint.Directions)
 	if endpoint.Model == "" {
-		endpoint.Model = DefaultModel
+		// A TypeSafe node has its own default: DefaultModel is a Qwen3Guard
+		// repository id and would be rejected by the TypeSafe API.
+		if endpoint.Protocol == EndpointProtocolTypeSafe {
+			endpoint.Model = DefaultTypeSafeModel
+		} else {
+			endpoint.Model = DefaultModel
+		}
+	}
+	if endpoint.Protocol == EndpointProtocolTypeSafe {
+		if endpoint.BlockThreshold == 0 {
+			endpoint.BlockThreshold = DefaultBlockThreshold
+		}
+		if endpoint.ReviewThreshold == 0 {
+			endpoint.ReviewThreshold = DefaultReviewThreshold
+		}
 	}
 	if endpoint.TimeoutMS == 0 {
 		endpoint.TimeoutMS = DefaultEndpointTimeoutMS
@@ -539,6 +659,23 @@ func normalizeEndpoint(endpoint Endpoint, index int) Endpoint {
 		endpoint.Concurrency = DefaultEndpointConcurrency
 	}
 	return endpoint
+}
+
+// NormalizeEndpointProtocol maps a stored protocol to one of the two supported
+// values, treating an empty value as the original Qwen3Guard node. It is
+// exported because async audit workers rebuild a snapshot from an older record
+// and must resolve the same protocol the live configuration uses.
+func NormalizeEndpointProtocol(protocol string) string {
+	if strings.ToLower(strings.TrimSpace(protocol)) == EndpointProtocolTypeSafe {
+		return EndpointProtocolTypeSafe
+	}
+	return EndpointProtocolQwen3Guard
+}
+
+// IsTypeSafeEndpoint reports whether the node is called over the TypeSafe
+// /v1/systemone API rather than as an OpenAI-compatible chat completion.
+func (endpoint Endpoint) IsTypeSafeEndpoint() bool {
+	return NormalizeEndpointProtocol(endpoint.Protocol) == EndpointProtocolTypeSafe
 }
 
 func normalizedWordlistAction(action string) string {
@@ -620,6 +757,15 @@ func settingFingerprint(setting PromptAuditSetting) string {
 	builder.WriteByte('|')
 	builder.WriteString(strings.Join(setting.ProbePhrases, ","))
 	builder.WriteByte('|')
+	// Semantic probe detection and base64 expansion change which text reaches a
+	// verdict, and the semantic probe itself is a cached model call, so both the
+	// switch and its threshold belong in the cache key.
+	builder.WriteString(strconv.FormatBool(setting.ProbeSemanticEnabled))
+	builder.WriteByte('|')
+	builder.WriteString(strconv.FormatFloat(setting.ProbeSemanticThreshold, 'f', -1, 64))
+	builder.WriteByte('|')
+	builder.WriteString(strconv.FormatBool(setting.ExpandBase64))
+	builder.WriteByte('|')
 	groups := append([]string(nil), setting.Groups...)
 	sort.Strings(groups)
 	builder.WriteString(strings.Join(groups, ","))
@@ -646,6 +792,12 @@ func settingFingerprint(setting PromptAuditSetting) string {
 		builder.WriteString(strconv.FormatBool(endpoint.Enabled))
 		builder.WriteByte('|')
 		builder.WriteString(endpoint.Purpose)
+		builder.WriteByte('|')
+		builder.WriteString(endpoint.Protocol)
+		builder.WriteByte('|')
+		builder.WriteString(strconv.FormatFloat(endpoint.BlockThreshold, 'f', -1, 64))
+		builder.WriteByte('|')
+		builder.WriteString(strconv.FormatFloat(endpoint.ReviewThreshold, 'f', -1, 64))
 		builder.WriteByte('|')
 		builder.WriteString(strings.Join(endpoint.Directions, ","))
 		tokenDigest := sha256.Sum256([]byte(endpoint.Token))

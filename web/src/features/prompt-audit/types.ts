@@ -80,8 +80,17 @@ export interface PromptAuditCategory {
   description: string
 }
 
+/**
+ * How an audit node is called. 'qwen3guard' is an OpenAI-compatible guard model
+ * that answers with a safety label; 'typesafe' is a TypeSafe/JEV node that
+ * answers with a probability per question.
+ */
+export type PromptAuditNodeProtocol = 'qwen3guard' | 'typesafe'
+export type PromptAuditEndpointPurpose = 'classify' | 'review'
+
 export interface PromptAuditEndpoint {
   id: string
+  protocol: PromptAuditNodeProtocol
   name: string
   base_url: string
   model: string
@@ -90,8 +99,15 @@ export interface PromptAuditEndpoint {
   concurrency: number
   enabled: boolean
   has_token: boolean
-  purpose: 'classify' | 'review'
+  purpose: PromptAuditEndpointPurpose
   directions: PromptAuditDirection[]
+  /**
+   * Only meaningful for a TypeSafe node. A question at or above the block
+   * threshold is Unsafe, at or above the review threshold is Controversial.
+   * A zero value means "use the protocol default" on the server.
+   */
+  block_threshold: number
+  review_threshold: number
 }
 
 export interface PromptAuditEndpointUpdate extends Omit<
@@ -110,6 +126,9 @@ export interface PromptAuditConfig {
   blocking_latest_turn_only: boolean
   probe_block_enabled?: boolean
   probe_phrases?: string[]
+  probe_semantic_enabled?: boolean
+  probe_semantic_threshold?: number
+  expand_base64?: boolean
   manual_wordlist_action: PromptWordlistAction
   enabled_categories: string[]
   controversial_block_categories: string[]
@@ -208,6 +227,11 @@ export interface PromptAuditEvent {
   unknown_categories: string[]
   endpoint_id: string
   endpoint_model: string
+  /**
+   * The raw probabilities a TypeSafe node returned, keyed by category. Absent
+   * for a label-based verdict, which has none.
+   */
+  scores?: Record<string, number>
   review_status: string
   review_decision: PromptAuditDecision
   review_codes: string[]

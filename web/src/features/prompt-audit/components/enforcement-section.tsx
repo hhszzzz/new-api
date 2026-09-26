@@ -38,7 +38,9 @@ import {
 } from '@/features/system-settings/components/settings-form-layout'
 import { SettingsSection } from '@/features/system-settings/components/settings-section'
 
+import { DEFAULT_PROBE_SEMANTIC_THRESHOLD } from '../lib'
 import type { PromptAuditCategory, PromptAuditConfigUpdate } from '../types'
+import { NumberField } from './number-field'
 
 type EnforcementSectionProps = {
   config: PromptAuditConfigUpdate
@@ -201,8 +203,49 @@ export function EnforcementSection({
                 </Field>
               </CollapsibleContent>
             </Collapsible>
+            <SettingsSwitchField
+              controlId='prompt-audit-probe-semantic'
+              checked={config.probe_semantic_enabled ?? false}
+              onCheckedChange={(probe_semantic_enabled) =>
+                onChange({ probe_semantic_enabled })
+              }
+              label={t('Semantic probe detection')}
+              description={t(
+                'Ask a TypeSafe node whether a short standalone first message is just a liveness check, for the greetings the phrase list misses. Costs one cached model call per distinct message; a node error lets the request through.'
+              )}
+            />
+            {config.probe_semantic_enabled && (
+              <SettingsControlChildren>
+                <NumberField
+                  id='prompt-audit-probe-semantic-threshold'
+                  label={t('Semantic probe threshold')}
+                  value={
+                    config.probe_semantic_threshold ??
+                    DEFAULT_PROBE_SEMANTIC_THRESHOLD
+                  }
+                  min={0.01}
+                  max={1}
+                  step={0.01}
+                  description={t(
+                    'Probability at or above which the message counts as a probe. Higher values refuse fewer real questions.'
+                  )}
+                  onChange={(probe_semantic_threshold) =>
+                    onChange({ probe_semantic_threshold })
+                  }
+                />
+              </SettingsControlChildren>
+            )}
           </SettingsControlChildren>
         )}
+        <SettingsSwitchField
+          controlId='prompt-audit-expand-base64'
+          checked={config.expand_base64 ?? true}
+          onCheckedChange={(expand_base64) => onChange({ expand_base64 })}
+          label={t('Decode base64 before auditing')}
+          description={t(
+            'Decode inline base64 runs before the wordlist and audit model read the text, so a request that encodes its real content is judged on the content. The stored full request still shows what the client sent.'
+          )}
+        />
         <SettingsSwitchField
           controlId='prompt-audit-blocking-latest-turn-only'
           checked={config.blocking_latest_turn_only ?? true}

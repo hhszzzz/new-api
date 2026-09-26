@@ -51,6 +51,8 @@ import {
   promptAuditOutcome,
   promptAuditPayloadSources,
   promptAuditRequestKindLabel,
+  promptAuditScoreLabel,
+  promptAuditScoreRows,
 } from '../lib'
 import { promptAuditScopeLabel } from '../scopes'
 import type { PromptAuditEvent } from '../types'
@@ -110,6 +112,7 @@ export function PromptAuditDetailSheet({
   })
 
   const event = detailQuery.data
+  const scoreRows = promptAuditScoreRows(event?.scores)
   const outcome = promptAuditOutcome({
     status: event?.status ?? '',
     decision: event?.decision ?? '',
@@ -460,6 +463,30 @@ export function PromptAuditDetailSheet({
                     </Badge>
                   ))}
                 </div>
+                {/* Only a TypeSafe node returns probabilities, so a label-based
+                    verdict shows nothing here rather than an empty section. */}
+                {scoreRows.length > 0 && (
+                  <div className='pt-2'>
+                    <p className='text-muted-foreground text-xs font-medium'>
+                      {t('Audit model scores')}
+                    </p>
+                    <div className='mt-1 flex flex-col gap-1'>
+                      {scoreRows.map(([scoreKey, score]) => (
+                        <div
+                          key={scoreKey}
+                          className='flex items-center justify-between gap-3 text-xs'
+                        >
+                          <span className='truncate'>
+                            {t(promptAuditScoreLabel(scoreKey))}
+                          </span>
+                          <span className='font-mono tabular-nums'>
+                            {score.toFixed(2)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 {event.review_status && (
                   <div className='mt-3 rounded-md border p-3 text-xs'>
                     <p className='font-medium'>{t('Gray-area review')}</p>

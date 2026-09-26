@@ -25,6 +25,8 @@ type NumberFieldProps = {
   value: number
   min: number
   max: number
+  /** The increment the browser offers on the spinner. Defaults to 1. */
+  step?: number
   description: string
   onChange: (value: number) => void
 }
@@ -37,6 +39,7 @@ export function NumberField({
   value,
   min,
   max,
+  step = 1,
   description,
   onChange,
 }: NumberFieldProps) {
@@ -48,6 +51,7 @@ export function NumberField({
         type='number'
         min={min}
         max={max}
+        step={step}
         value={value}
         className='font-mono'
         onChange={(event) => onChange(Number(event.target.value || '0'))}

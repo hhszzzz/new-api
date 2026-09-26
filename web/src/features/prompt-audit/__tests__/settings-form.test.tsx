@@ -30,6 +30,11 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
 import { useAuthStore } from '@/stores/auth-store'
 
+import {
+  QWEN3GUARD_DEFAULT_MODEL,
+  TYPESAFE_BASE_URL,
+  TYPESAFE_DEFAULT_MODEL,
+} from '../lib'
 import { defaultPromptScopePolicies } from '../scopes'
 import { PromptAuditSettings } from '../settings'
 import type { PromptAuditConfig } from '../types'
@@ -74,7 +79,10 @@ const config: PromptAuditConfig = {
       enabled: true,
       has_token: true,
       purpose: 'classify',
+      protocol: 'qwen3guard',
       directions: ['input', 'output'],
+      block_threshold: 0,
+      review_threshold: 0,
     },
     {
       id: 'guard-b',
@@ -87,7 +95,10 @@ const config: PromptAuditConfig = {
       enabled: false,
       has_token: false,
       purpose: 'classify',
+      protocol: 'qwen3guard',
       directions: ['input'],
+      block_threshold: 0,
+      review_threshold: 0,
     },
   ],
   total_timeout_ms: 1000,
@@ -470,5 +481,89 @@ describe('prompt audit settings page', () => {
         'The audit model returned HTTP 401 during the Generated output check.'
       )
     )
+  })
+  // One control writes two server fields: the purpose and the protocol. A node
+  // switched to TypeSafe has to reach the API as a TypeSafe node carrying its
+  // own thresholds, with the classification-only controls following the kind.
+  test('a TypeSafe node reveals its thresholds and saves both server fields', async () => {
+    const user = userEvent.setup()
+    renderSettings()
+    await screen.findByText('Enforcement policy')
+    await user.click(screen.getByRole('button', { name: /guard-a/ }))
+
+    // A Qwen3Guard node answers with a label, so it carries no thresholds.
+    expect(screen.queryByLabelText('Block threshold')).not.toBeInTheDocument()
+
+    await user.selectOptions(
+      screen.getByLabelText('Audit model purpose'),
+      'typesafe'
+    )
+
+    // The values the server would apply are shown, rather than the zero the
+    // protocol reads as "use the default"; a model the operator typed is theirs
+    // to keep.
+    expect(screen.getByLabelText('Block threshold')).toHaveValue(0.7)
+    expect(screen.getByLabelText('Review threshold')).toHaveValue(0.35)
+    expect(screen.getByLabelText('Model')).toHaveValue('guard-a-model')
+
+    await user.click(await screen.findByRole('button', { name: /^Save/ }))
+
+    await waitFor(() => {
+      const put = apiMock.put.mock.calls.at(-1)
+      const body = put?.[1] as { endpoints: Record<string, unknown>[] }
+      expect(body.endpoints[0]).toMatchObject({
+        id: 'guard-a',
+        protocol: 'typesafe',
+        purpose: 'classify',
+        block_threshold: 0.7,
+        review_threshold: 0.35,
+      })
+    })
+  })
+
+  test('choosing the TypeSafe kind fills the address and model that protocol needs', async () => {
+    const user = userEvent.setup()
+    renderSettings()
+    await screen.findByText('Enforcement policy')
+    await user.click(screen.getByRole('button', { name: 'Add audit model' }))
+    await screen.findByLabelText('Audit model purpose')
+
+    // A new node starts as the Qwen3Guard the field has always assumed.
+    expect(screen.getByLabelText('Model')).toHaveValue(QWEN3GUARD_DEFAULT_MODEL)
+    expect(screen.getByLabelText('Base URL')).toHaveValue('')
+
+    await user.selectOptions(
+      screen.getByLabelText('Audit model purpose'),
+      'typesafe'
+    )
+
+    // Both blanks belong to the form: a default model and an address nobody has
+    // typed yet. A saved token is still cleared, because the destination moved.
+    expect(screen.getByLabelText('Model')).toHaveValue(TYPESAFE_DEFAULT_MODEL)
+    expect(screen.getByLabelText('Base URL')).toHaveValue(TYPESAFE_BASE_URL)
+    expect(screen.getByLabelText('Input limit (characters)')).toHaveValue(4000)
+  })
+
+  // The review kind is a text reviewer, not a classifier, so the controls that
+  // only mean something to a classifier have to leave with it.
+  test('choosing the review kind drops the classification-only controls', async () => {
+    const user = userEvent.setup()
+    renderSettings()
+    await screen.findByText('Enforcement policy')
+    await user.click(screen.getByRole('button', { name: /guard-a/ }))
+    await user.selectOptions(
+      screen.getByLabelText('Audit model purpose'),
+      'typesafe'
+    )
+    expect(screen.getByLabelText('Audit directions')).toBeInTheDocument()
+
+    await user.selectOptions(
+      screen.getByLabelText('Audit model purpose'),
+      'review'
+    )
+
+    expect(screen.queryByLabelText('Audit directions')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Block threshold')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Review threshold')).not.toBeInTheDocument()
   })
 })
