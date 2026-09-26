@@ -240,10 +240,10 @@ func TestResponsesWebSocketEndToEndReuseBillingAndChannelDisable(t *testing.T) {
 	var blocked map[string]any
 	require.NoError(t, common.Unmarshal(blockedEvent, &blocked))
 	assert.Equal(t, "error", blocked["type"])
-	assert.Equal(t, float64(http.StatusForbidden), blocked["status"])
+	assert.Equal(t, float64(http.StatusBadRequest), blocked["status"])
 	assert.Equal(t, "evt-blocked", blocked["event_id"])
 	blockedError, _ := blocked["error"].(map[string]any)
-	assert.Equal(t, string(hosttypes.ErrorCodePromptAuditBlocked), blockedError["code"])
+	assert.Equal(t, string(hosttypes.ErrorCodeSensitiveWordsDetected), blockedError["code"])
 
 	firstCreate := fmt.Sprintf(`{
 		"type":"response.create",

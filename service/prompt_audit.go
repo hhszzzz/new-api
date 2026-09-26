@@ -26,6 +26,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -613,7 +614,7 @@ func checkPromptAuditWithSetting(c *gin.Context, request PromptAuditRequest, set
 		// Unavailable outcomes are recorded in the prompt audit log with the
 		// failure kind; they must not pollute the user-visible error log.
 		return result, hosttypes.NewErrorWithStatusCode(
-			errors.New("prompt audit service is unavailable"),
+			errors.New(i18n.T(c, i18n.MsgPromptAuditServiceUnavailable)),
 			hosttypes.ErrorCodePromptAuditUnavailable,
 			http.StatusServiceUnavailable,
 			hosttypes.ErrOptionWithSkipRetry(),
@@ -648,9 +649,9 @@ func checkPromptAuditWithSetting(c *gin.Context, request PromptAuditRequest, set
 	// Blocked requests are already recorded in the prompt audit log; they
 	// must not pollute the user-visible error log.
 	return result, hosttypes.NewErrorWithStatusCode(
-		errors.New("request blocked by prompt audit"),
-		hosttypes.ErrorCodePromptAuditBlocked,
-		http.StatusForbidden,
+		errors.New(i18n.T(c, i18n.MsgSensitiveWordsDetected)),
+		hosttypes.ErrorCodeSensitiveWordsDetected,
+		http.StatusBadRequest,
 		hosttypes.ErrOptionWithSkipRetry(),
 		hosttypes.ErrOptionWithNoRecordErrorLog(),
 	)

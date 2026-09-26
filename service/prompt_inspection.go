@@ -513,13 +513,13 @@ func InspectPrompt(c *gin.Context, request PromptAuditRequest) (PromptAuditResul
 		InputChars:   utf8.RuneCountInString(text), InputSHA256: hex.EncodeToString(digest[:]), SegmentCount: len(request.Snapshot.Segments),
 		InspectionType: "wordlist", Wordlist: match,
 	}
-	code, status, message := hosttypes.ErrorCodeSensitiveWordsDetected, http.StatusBadRequest, "sensitive words detected"
+	code, status, messageID := hosttypes.ErrorCodeSensitiveWordsDetected, http.StatusBadRequest, i18n.MsgSensitiveWordsDetected
 	auditStatus := model.PromptAuditStatusDone
 	if err != nil {
 		result.Decision, result.Outcome, result.FailureKind = PromptAuditDecisionUnavailable, PromptAuditDecisionUnavailable, "wordlist_unavailable"
 		result.ActualAction = PromptAuditActionUnavailable
 		auditStatus = model.PromptAuditStatusFailed
-		code, status, message = hosttypes.ErrorCodePromptAuditUnavailable, http.StatusServiceUnavailable, "prompt inspection is unavailable"
+		code, status, messageID = hosttypes.ErrorCodePromptAuditUnavailable, http.StatusServiceUnavailable, i18n.MsgPromptAuditServiceUnavailable
 	}
 	audit := &model.PromptAudit{
 		RequestID: resultRequestID(c), UserID: contextInt(c, "id"), TokenID: contextInt(c, "token_id"), TokenName: contextString(c, "token_name"),
@@ -558,7 +558,7 @@ func InspectPrompt(c *gin.Context, request PromptAuditRequest) (PromptAuditResul
 		hosttypes.ErrOptionWithSkipRetry(),
 		hosttypes.ErrOptionWithNoRecordErrorLog(),
 	}
-	return result, hosttypes.NewErrorWithStatusCode(errors.New(message), code, status, options...)
+	return result, hosttypes.NewErrorWithStatusCode(errors.New(i18n.T(c, messageID)), code, status, options...)
 }
 
 func StartPromptWordlistRunner() {

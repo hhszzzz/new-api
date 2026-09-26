@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting"
@@ -19,6 +20,7 @@ import (
 )
 
 func TestRelayReturnsBadRequestWhenSensitiveWordsAreDetected(t *testing.T) {
+	require.NoError(t, i18n.Init())
 	setupSensitiveRelayAuditStore(t)
 	originalWords := setting.SensitiveWordsToString()
 	originalEnabled := setting.CheckSensitiveEnabled
@@ -46,7 +48,7 @@ func TestRelayReturnsBadRequestWhenSensitiveWordsAreDetected(t *testing.T) {
 	}
 	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
 	assert.Equal(t, string(hosttypes.ErrorCodeSensitiveWordsDetected), response.Error.Code)
-	assert.Contains(t, response.Error.Message, "sensitive words detected")
+	assert.Contains(t, response.Error.Message, "prohibited content")
 }
 
 func TestRelayChecksOnlyOpenAIUserTextForSensitiveWords(t *testing.T) {

@@ -224,6 +224,7 @@ func TestPromptAuditManagementWritesHaveStableAuditActions(t *testing.T) {
 }
 
 func TestPromptAuditBlockOccursBeforeChannelSelection(t *testing.T) {
+	require.NoError(t, i18n.Init())
 	gin.SetMode(gin.TestMode)
 	previousConfig := prompt_audit_setting.GetSetting()
 	previousDB := model.DB
@@ -259,8 +260,8 @@ func TestPromptAuditBlockOccursBeforeChannelSelection(t *testing.T) {
 		cleanup()
 	}
 	assert.False(t, allowed)
-	assert.Equal(t, http.StatusForbidden, recorder.Code)
-	assert.Contains(t, recorder.Body.String(), string(hosttypes.ErrorCodePromptAuditBlocked))
+	assert.Equal(t, http.StatusBadRequest, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), string(hosttypes.ErrorCodeSensitiveWordsDetected))
 	_, channelSelected := common.GetContextKey(c, constant.ContextKeyChannelId)
 	assert.False(t, channelSelected)
 	var count int64

@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	hostdto "github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay/channel"
 	claudechannel "github.com/QuantumNous/new-api/relay/channel/claude"
@@ -297,7 +298,7 @@ func executeText(c *gin.Context, info *relaycommon.RelayInfo) *hosttypes.NewAPIE
 				DeliveryStatus: "not_delivered", CoverageComplete: false, Stream: info.IsStream,
 			}, failure)
 			settleTextUsage(c, info, usage)
-			return hosttypes.NewErrorWithStatusCode(errors.New("output audit buffer is unavailable"), hosttypes.ErrorCodeOutputAuditUnavailable, http.StatusServiceUnavailable, hosttypes.ErrOptionWithSkipRetry())
+			return hosttypes.NewErrorWithStatusCode(errors.New(i18n.T(c, i18n.MsgOutputAuditServiceUnavailable)), hosttypes.ErrorCodeOutputAuditUnavailable, http.StatusServiceUnavailable, hosttypes.ErrOptionWithSkipRetry())
 		}
 		if outputAuditWriter != nil && !outputAuditWriter.blocking && outputAuditWriter.capture.size > 0 {
 			auditIncompleteTextOutput(c, info, outputAuditWriter, "delivered_incomplete")
@@ -350,7 +351,7 @@ func executeText(c *gin.Context, info *relaycommon.RelayInfo) *hosttypes.NewAPIE
 				DeliveryStatus: "not_delivered", CoverageComplete: false, Stream: info.IsStream,
 			}, "output_capture_incomplete")
 			settleTextUsage(c, info, usage)
-			return hosttypes.NewErrorWithStatusCode(errors.New("output audit is unavailable"), hosttypes.ErrorCodeOutputAuditUnavailable, http.StatusServiceUnavailable, hosttypes.ErrOptionWithSkipRetry())
+			return hosttypes.NewErrorWithStatusCode(errors.New(i18n.T(c, i18n.MsgOutputAuditServiceUnavailable)), hosttypes.ErrorCodeOutputAuditUnavailable, http.StatusServiceUnavailable, hosttypes.ErrOptionWithSkipRetry())
 		}
 		if outputText != "" {
 			deliveryStatus := "delivered"
@@ -367,17 +368,17 @@ func executeText(c *gin.Context, info *relaycommon.RelayInfo) *hosttypes.NewAPIE
 				settleTextUsage(c, info, usage)
 				code := hosttypes.ErrorCodeOutputAuditUnavailable
 				status := http.StatusServiceUnavailable
-				message := "output audit is unavailable"
+				messageID := i18n.MsgOutputAuditServiceUnavailable
 				if result.Blocked && result.Decision == service.PromptAuditDecisionBlock {
-					code, status, message = hosttypes.ErrorCodeOutputAuditBlocked, http.StatusForbidden, "generated output blocked by content audit"
+					code, status, messageID = hosttypes.ErrorCodeSensitiveWordsDetected, http.StatusBadRequest, i18n.MsgOutputAuditSensitiveWordsDetected
 				}
 				options := []hosttypes.NewAPIErrorOptions{hosttypes.ErrOptionWithSkipRetry()}
-				if code == hosttypes.ErrorCodeOutputAuditBlocked {
+				if code == hosttypes.ErrorCodeSensitiveWordsDetected {
 					// Blocked output is already recorded in the prompt audit
 					// log; it must not pollute the user-visible error log.
 					options = append(options, hosttypes.ErrOptionWithNoRecordErrorLog())
 				}
-				return hosttypes.NewErrorWithStatusCode(errors.New(message), code, status, options...)
+				return hosttypes.NewErrorWithStatusCode(errors.New(i18n.T(c, messageID)), code, status, options...)
 			}
 			if outputAuditWriter.blocking {
 				if err := outputAuditWriter.commit(); err != nil {

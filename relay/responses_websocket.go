@@ -16,6 +16,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	appconstant "github.com/QuantumNous/new-api/constant"
 	appdto "github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
 	appmodel "github.com/QuantumNous/new-api/model"
@@ -238,7 +239,8 @@ func (s *responsesWSSession) runRequest(state *responsesWSCallState, message []b
 	// a corrected request; credential and account authorization failures still
 	// invalidate the session.
 	if apiErr != nil && (apiErr.StatusCode == http.StatusUnauthorized ||
-		apiErr.StatusCode == http.StatusForbidden && apiErr.GetErrorCode() != types.ErrorCodePromptAuditBlocked) {
+		apiErr.StatusCode == http.StatusForbidden && apiErr.GetErrorCode() != types.ErrorCodeSensitiveWordsDetected ||
+		apiErr.StatusCode == http.StatusBadRequest && apiErr.GetErrorCode() != types.ErrorCodeSensitiveWordsDetected && apiErr.GetErrorCode() != types.ErrorCodeInvalidRequest) {
 		state.closeAfter = true
 	}
 }
@@ -595,7 +597,7 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 							Output: outputAuditCollector.String(), Stream: true,
 						}, "output_buffer_limit")
 						state.closeAfter = true
-						return types.NewErrorWithStatusCode(errors.New("output audit buffer limit exceeded"), types.ErrorCodeOutputAuditUnavailable, http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry())
+						return types.NewErrorWithStatusCode(errors.New(i18n.T(c, i18n.MsgOutputAuditServiceUnavailable)), types.ErrorCodeOutputAuditUnavailable, http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry())
 					}
 				}
 			}
@@ -623,7 +625,7 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 							Output: outputText, Stream: true,
 						}, "output_incomplete")
 						state.closeAfter = true
-						return types.NewErrorWithStatusCode(errors.New("generated output could not be extracted for audit"), types.ErrorCodeOutputAuditUnavailable, http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry())
+						return types.NewErrorWithStatusCode(errors.New(i18n.T(c, i18n.MsgOutputAuditServiceUnavailable)), types.ErrorCodeOutputAuditUnavailable, http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry())
 					}
 					if outputText == "" {
 						service.RecordOutputAuditUnavailable(c, service.PromptAuditRequest{
@@ -646,17 +648,17 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 					if outputAuditMode == prompt_audit_setting.ModeBlocking && outputErr != nil {
 						_ = appmodel.UpdatePromptAuditDelivery(result.AuditID, "not_delivered")
 						state.closeAfter = true
-						code, status, message := types.ErrorCodeOutputAuditUnavailable, http.StatusServiceUnavailable, "output audit is unavailable"
+						code, status, messageID := types.ErrorCodeOutputAuditUnavailable, http.StatusServiceUnavailable, i18n.MsgOutputAuditServiceUnavailable
 						if result.Blocked && result.Decision == service.PromptAuditDecisionBlock {
-							code, status, message = types.ErrorCodeOutputAuditBlocked, http.StatusForbidden, "generated output blocked by content audit"
+							code, status, messageID = types.ErrorCodeSensitiveWordsDetected, http.StatusBadRequest, i18n.MsgOutputAuditSensitiveWordsDetected
 						}
 						options := []types.NewAPIErrorOptions{types.ErrOptionWithSkipRetry()}
-						if code == types.ErrorCodeOutputAuditBlocked {
+						if code == types.ErrorCodeSensitiveWordsDetected {
 							// Blocked output is already recorded in the prompt
 							// audit log; it must not pollute the error log.
 							options = append(options, types.ErrOptionWithNoRecordErrorLog())
 						}
-						return types.NewErrorWithStatusCode(errors.New(message), code, status, options...)
+						return types.NewErrorWithStatusCode(errors.New(i18n.T(c, messageID)), code, status, options...)
 					}
 					if outputAuditFrames != nil {
 						reader, err := outputAuditFrames.Reader()
@@ -666,7 +668,7 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 						if err != nil {
 							_ = appmodel.UpdatePromptAuditDelivery(result.AuditID, "delivery_failed")
 							state.closeAfter = true
-							return types.NewErrorWithStatusCode(errors.New("output delivery failed after audit"), types.ErrorCodeOutputAuditUnavailable, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
+							return types.NewErrorWithStatusCode(errors.New(i18n.T(c, i18n.MsgOutputAuditServiceUnavailable)), types.ErrorCodeOutputAuditUnavailable, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
 						}
 						_ = appmodel.UpdatePromptAuditDelivery(result.AuditID, "delivered")
 						state.terminal = nil

@@ -2,6 +2,10 @@ package i18n
 
 const MsgTaskPluginUnknownMetaField = "task_plugin.unknown_meta_field"
 const MsgProbeRequestBlocked = "prompt_audit.probe_request_blocked"
+const MsgSensitiveWordsDetected = "prompt_audit.sensitive_words_detected"
+const MsgPromptAuditServiceUnavailable = "prompt_audit.service_unavailable"
+const MsgOutputAuditSensitiveWordsDetected = "output_audit.sensitive_words_detected"
+const MsgOutputAuditServiceUnavailable = "output_audit.service_unavailable"
 
 // Message keys for i18n translations
 // Use these constants instead of hardcoded strings

@@ -5,6 +5,10 @@ task_plugin.unknown_meta_field: 'Plugin metadata contains an unknown field "{{.F
 
 # Common messages
 prompt_audit.probe_request_blocked: "Standalone greeting and health-check requests are blocked. Please send a substantive request."
+output_audit.service_unavailable: "Output audit service temporarily unavailable, please try again later."
+output_audit.sensitive_words_detected: "Generated output contains prohibited content and was blocked."
+prompt_audit.service_unavailable: "Service temporarily unavailable, please try again later."
+prompt_audit.sensitive_words_detected: "Request contains prohibited content. Please modify and try again."
 common.invalid_params: "Invalid parameters"
 common.database_error: "Database error, please contact the administrator"
 common.retry_later: "Please try again later"
