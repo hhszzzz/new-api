@@ -22,6 +22,7 @@ import { useTranslation } from 'react-i18next'
 import { CopyButton } from '@/components/copy-button'
 import { StatusBadge } from '@/components/status-badge'
 
+import { conversionDiagnosticText } from '../../lib/diagnostic-messages'
 import {
   getConversionDiagnostics,
   getProtocolFlow,
@@ -182,12 +183,7 @@ export function ProtocolConversionDetails(props: {
                   />
                 </div>
                 <p className='text-muted-foreground text-xs leading-relaxed [overflow-wrap:anywhere]'>
-                  {props.logType === 2 &&
-                  item.code === 'omitted_presentation_metadata'
-                    ? t(
-                        'The target protocol does not support this display metadata; it was omitted.'
-                      )
-                    : item.message}
+                  {t(conversionDiagnosticText(item, props.logType))}
                 </p>
               </div>
             ))}

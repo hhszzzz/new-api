@@ -851,7 +851,7 @@ export function useCommonLogsColumns(
       },
       {
         accessorKey: 'prompt_tokens',
-        header: 'Tokens',
+        header: t('Tokens'),
         cell: ({ row }) => {
           const log = row.original
           if (!isDisplayableLogType(log.type)) return null
