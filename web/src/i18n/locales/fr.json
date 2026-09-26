@@ -5384,6 +5384,8 @@
     "Private Deployment URL": "URL de déploiement privé",
     "Probe allowed": "Sonde autorisée",
     "Probe blocked": "Sonde bloquée",
+    "Wordlist probe blocked": "Sonde bloquée par la liste",
+    "JEV probe blocked": "Sonde bloquée par JEV",
     "Probe blocking and wordlist filtering run before model audit, billing, and upstream dispatch.": "Les sondes et les listes de mots sont filtrées avant l’audit du modèle, la facturation et l’envoi en amont.",
     "Probe phrases": "Phrases de sonde",
     "Probe requests": "Sondes",

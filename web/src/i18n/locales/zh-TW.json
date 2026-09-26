@@ -5384,6 +5384,8 @@
     "Private Deployment URL": "私有部署 URL",
     "Probe allowed": "測活已放行",
     "Probe blocked": "測活已攔截",
+    "Wordlist probe blocked": "詞庫攔截",
+    "JEV probe blocked": "JEV 攔截",
     "Probe blocking and wordlist filtering run before model audit, billing, and upstream dispatch.": "測活攔截和詞庫過濾在模型審核、計費及上游轉發之前執行。",
     "Probe phrases": "測活短句",
     "Probe requests": "測活請求",

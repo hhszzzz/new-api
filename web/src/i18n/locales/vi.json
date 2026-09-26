@@ -5384,6 +5384,8 @@
     "Private Deployment URL": "URL Triển khai Riêng",
     "Probe allowed": "Đã cho phép kiểm tra",
     "Probe blocked": "Đã chặn kiểm tra",
+    "Wordlist probe blocked": "Đã chặn theo danh sách từ",
+    "JEV probe blocked": "Đã chặn bởi JEV",
     "Probe blocking and wordlist filtering run before model audit, billing, and upstream dispatch.": "Chặn kiểm tra và lọc danh sách từ được thực hiện trước kiểm duyệt mô hình, tính phí và gửi tới nhà cung cấp.",
     "Probe phrases": "Cụm từ kiểm tra",
     "Probe requests": "Yêu cầu kiểm tra",

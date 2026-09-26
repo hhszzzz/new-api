@@ -5384,6 +5384,8 @@
     "Private Deployment URL": "プライベートデプロイメントURL",
     "Probe allowed": "疎通確認を許可",
     "Probe blocked": "疎通確認を拒否",
+    "Wordlist probe blocked": "ワードリストによる拒否",
+    "JEV probe blocked": "JEV による拒否",
     "Probe blocking and wordlist filtering run before model audit, billing, and upstream dispatch.": "疎通確認のブロックと単語リストの検査は、モデル監査・課金・上流への転送前に行われます。",
     "Probe phrases": "疎通確認フレーズ",
     "Probe requests": "疎通確認リクエスト",

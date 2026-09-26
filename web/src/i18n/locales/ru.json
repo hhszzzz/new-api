@@ -5384,6 +5384,8 @@
     "Private Deployment URL": "URL частного развертывания",
     "Probe allowed": "Проверка разрешена",
     "Probe blocked": "Проверка заблокирована",
+    "Wordlist probe blocked": "Проверка заблокирована списком",
+    "JEV probe blocked": "Проверка заблокирована JEV",
     "Probe blocking and wordlist filtering run before model audit, billing, and upstream dispatch.": "Проверки доступности и фильтрация по словарям выполняются до аудита моделью, оплаты и отправки провайдеру.",
     "Probe phrases": "Фразы проверки",
     "Probe requests": "Проверки доступности",

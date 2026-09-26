@@ -366,7 +366,7 @@ func TestPromptAuditProbePhraseGateBlocksWithoutReachingGuard(t *testing.T) {
 	assert.Contains(t, recorder.Body.String(), "probe_request_blocked")
 	assert.Zero(t, guardCalls.Load(), "a phrase-matched probe must never reach the model node")
 	var blocked model.PromptAudit
-	require.NoError(t, db.Where("inspection_type = ?", "probe_block").First(&blocked).Error)
+	require.NoError(t, db.Where("inspection_type = ?", "probe_phrase").First(&blocked).Error)
 	assert.Equal(t, service.PromptAuditActionBlock, blocked.Action)
 	assert.Equal(t, "probe-owner", blocked.Username)
 	assert.Equal(t, "192.0.2.1", blocked.Ip)

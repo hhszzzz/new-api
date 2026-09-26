@@ -620,6 +620,8 @@ func runPromptAuditListingFilters(t *testing.T, db *gorm.DB) {
 		{"filters-named-wordlist", "legacy-owner", "wordlist", 4242},
 		{"filters-named-mixed", "legacy-owner", "wordlist_model", 4242},
 		{"filters-other-probe", "someone-else", "probe_fast_pass", 4343},
+		{"filters-phrase-probe", "someone-else", "probe_phrase", 4343},
+		{"filters-semantic-probe", "someone-else", "probe_semantic", 4343},
 	} {
 		require.NoError(t, CreatePromptAudit(&PromptAudit{
 			RequestID: seed.requestID, UserID: seed.userID, Username: seed.username,
@@ -644,7 +646,8 @@ func runPromptAuditListingFilters(t *testing.T, db *gorm.DB) {
 	assert.Empty(t, requestIDs(PromptAuditFilter{Username: "no-such-user"}))
 	assert.Equal(t, []string{"filters-named-wordlist"}, requestIDs(PromptAuditFilter{Detector: "wordlist"}))
 	assert.Equal(t, []string{"filters-legacy-model", "filters-named-mixed"}, requestIDs(PromptAuditFilter{Detector: "model"}))
-	assert.Equal(t, []string{"filters-other-probe"}, requestIDs(PromptAuditFilter{Detector: "probe"}))
+	assert.Equal(t, []string{"filters-other-probe", "filters-phrase-probe", "filters-semantic-probe"}, requestIDs(PromptAuditFilter{Detector: "probe"}))
+	assert.Equal(t, []string{"filters-phrase-probe"}, requestIDs(PromptAuditFilter{Detector: "probe_phrase"}))
 	assert.Equal(t, []string{"filters-other-probe"}, requestIDs(PromptAuditFilter{Detector: "probe_fast_pass"}))
 
 	// The same predicates scope a deletion.

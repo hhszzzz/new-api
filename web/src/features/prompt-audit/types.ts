@@ -183,6 +183,8 @@ export interface PromptAuditEvent {
     | 'model'
     | 'wordlist_model'
     | 'probe_block'
+    | 'probe_phrase'
+    | 'probe_semantic'
     | 'probe_fast_pass'
   group_key?: string
   session_key?: string

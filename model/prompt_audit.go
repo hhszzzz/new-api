@@ -1037,9 +1037,9 @@ func applyPromptAuditFilter(query *gorm.DB, filter PromptAuditFilter) *gorm.DB {
 	case "wordlist":
 		query = query.Where("inspection_type = ?", "wordlist")
 	case "model":
-		query = query.Where("(inspection_type IS NULL OR inspection_type NOT IN ?)", []string{"wordlist", "probe_block", "probe_fast_pass"})
+		query = query.Where("(inspection_type IS NULL OR inspection_type NOT IN ?)", []string{"wordlist", "probe_block", "probe_phrase", "probe_semantic", "probe_fast_pass"})
 	case "probe":
-		query = query.Where("inspection_type IN ?", []string{"probe_block", "probe_fast_pass"})
+		query = query.Where("inspection_type IN ?", []string{"probe_block", "probe_phrase", "probe_semantic", "probe_fast_pass"})
 	default:
 		query = query.Where("inspection_type = ?", filter.Detector)
 	}

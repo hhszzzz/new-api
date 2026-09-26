@@ -2477,6 +2477,9 @@ func (result PromptAuditResult) auditMap() map[string]interface{} {
 	if result.EndpointModel != "" {
 		audit["endpoint_model"] = result.EndpointModel
 	}
+	if len(result.Scores) > 0 {
+		audit["scores"] = result.Scores
+	}
 	if result.Refusal != "" {
 		audit["refusal"] = result.Refusal
 	}
@@ -2507,9 +2510,24 @@ func AppendPromptAuditAdminInfo(c *gin.Context, other *model.LogOther) {
 		return
 	}
 	results := promptAuditResultsFromContext(c)
+	// A semantic probe that ran but did not block leaves its score on the
+	// context. Fold it into the audit map so the consume log shows the JEV
+	// probability next to the model verdict that decided the request.
+	var probeScores map[string]float64
+	if value, exists := c.Get("prompt_audit_probe_scores"); exists {
+		if scores, ok := value.(map[string]float64); ok {
+			probeScores = scores
+		}
+	}
 	items := make([]map[string]interface{}, 0, len(results))
 	for _, result := range results {
 		if result.Enabled && result.Outcome != "" {
+			for key, value := range probeScores {
+				if result.Scores == nil {
+					result.Scores = map[string]float64{}
+				}
+				result.Scores[key] = value
+			}
 			items = append(items, result.auditMap())
 		}
 	}

@@ -73,7 +73,7 @@ func TestPromptAuditProbeBlockingAndExemptions(t *testing.T) {
 			}
 			require.NotNil(t, apiErr)
 			assert.Equal(t, http.StatusBadRequest, apiErr.StatusCode)
-			assert.Equal(t, "probe_block", result.InspectionType)
+			assert.Equal(t, "probe_phrase", result.InspectionType)
 			row, err := model.GetPromptAudit(result.AuditID)
 			require.NoError(t, err)
 			assert.Contains(t, row.RedactedPreview, strings.TrimSpace(test.text))
@@ -1742,22 +1742,23 @@ func promptAuditSemanticProbeFixture(t *testing.T, nodeURL string, phrases []str
 // request through when the node answers nothing.
 func TestPromptAuditSemanticProbe(t *testing.T) {
 	type probeCase struct {
-		name          string
-		text          string
-		admin         bool
-		includeAdmins bool
-		nodeStatus    int
-		nodeScore     float64
-		phraseList    []string
-		wantBlocked   bool
-		wantNodeHits  int32
+		name           string
+		text           string
+		admin          bool
+		includeAdmins  bool
+		nodeStatus     int
+		nodeScore      float64
+		phraseList     []string
+		wantBlocked    bool
+		wantInspection string
+		wantNodeHits   int32
 	}
 	for _, test := range []probeCase{
-		{name: "a greeting the phrase list misses", text: "在吗？测一下连通", nodeScore: 0.97, phraseList: []string{"hello"}, wantBlocked: true, wantNodeHits: 1},
+		{name: "a greeting the phrase list misses", text: "在吗？测一下连通", nodeScore: 0.97, phraseList: []string{"hello"}, wantBlocked: true, wantInspection: "probe_semantic", wantNodeHits: 1},
 		{name: "a real question is not a probe", text: "帮我看看这段代码的并发问题", nodeScore: 0.05, phraseList: []string{"hello"}, wantNodeHits: 1},
 		{name: "administrators are exempt", text: "在吗？测一下连通", admin: true, nodeScore: 0.97, phraseList: []string{"hello"}},
-		{name: "administrators are included on request", text: "在吗？测一下连通", admin: true, includeAdmins: true, nodeScore: 0.97, phraseList: []string{"hello"}, wantBlocked: true, wantNodeHits: 1},
-		{name: "a matched phrase never calls the node", text: "hello", nodeScore: 0.97, phraseList: []string{"hello"}, wantBlocked: true},
+		{name: "administrators are included on request", text: "在吗？测一下连通", admin: true, includeAdmins: true, nodeScore: 0.97, phraseList: []string{"hello"}, wantBlocked: true, wantInspection: "probe_semantic", wantNodeHits: 1},
+		{name: "a matched phrase never calls the node", text: "hello", nodeScore: 0.97, phraseList: []string{"hello"}, wantBlocked: true, wantInspection: "probe_phrase"},
 		{name: "a failing node lets the request through", text: "在吗？测一下连通", nodeStatus: http.StatusBadGateway, phraseList: []string{"hello"}, wantNodeHits: 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -1804,8 +1805,8 @@ func TestPromptAuditSemanticProbe(t *testing.T) {
 			if test.wantBlocked {
 				require.NotNil(t, apiErr)
 				assert.Equal(t, http.StatusBadRequest, apiErr.StatusCode)
-				assert.Equal(t, "probe_block", result.InspectionType)
-				if result.InspectionType == "probe_block" && len(result.Scores) > 0 {
+				assert.Equal(t, test.wantInspection, result.InspectionType)
+				if len(result.Scores) > 0 {
 					require.InDelta(t, test.nodeScore, result.Scores[semanticProbeQuestionID], 1e-9)
 					row, err := model.GetPromptAudit(result.AuditID)
 					require.NoError(t, err)

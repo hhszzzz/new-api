@@ -421,6 +421,7 @@ func InspectPrompt(c *gin.Context, request PromptAuditRequest) (PromptAuditResul
 		probeExempt = probeExempt || contextInt(c, "role") >= common.RoleAdminUser
 	}
 	probeBlocked := false
+	probeGate := ""
 	var probeScores map[string]float64
 	var probeEndpointID, probeEndpointModel string
 	if direction == PromptAuditDirectionInput && configured.ProbeBlockEnabled && !probeExempt {
@@ -428,6 +429,9 @@ func InspectPrompt(c *gin.Context, request PromptAuditRequest) (PromptAuditResul
 		// blob decodes to something long, and only the raw turn is what the
 		// caller literally sent as its whole request.
 		probeBlocked = isBlockedProbe(rawSnapshot, configured.ProbePhrases)
+		if probeBlocked {
+			probeGate = "probe_phrase"
+		}
 		// The phrase list matches only the exact greetings it was given. The
 		// semantic gate catches the rest of a probe's surface, at the cost of one
 		// TypeSafe call, and only for text short enough to be one. The scores are
@@ -436,6 +440,9 @@ func InspectPrompt(c *gin.Context, request PromptAuditRequest) (PromptAuditResul
 		if !probeBlocked && configured.ProbeSemanticEnabled {
 			probeScores, probeEndpointID, probeEndpointModel = semanticProbeScores(c, configured, rawSnapshot)
 			probeBlocked = probeScores != nil && probeScores[semanticProbeQuestionID] >= configured.ProbeSemanticThreshold
+			if probeBlocked {
+				probeGate = "probe_semantic"
+			}
 		}
 	}
 	if !probeBlocked && len(probeScores) > 0 {
@@ -448,8 +455,8 @@ func InspectPrompt(c *gin.Context, request PromptAuditRequest) (PromptAuditResul
 	if probeBlocked {
 		text := probeText
 		digest := sha256.Sum256([]byte(text))
-		result := PromptAuditResult{Enabled: true, Reviewed: true, Blocked: true, Mode: configured.Mode, Direction: direction, CoverageComplete: true, Decision: PromptAuditDecisionBlock, Outcome: PromptAuditDecisionBlock, Safety: "", ConfigVersion: configured.ConfigVersion, ActualAction: PromptAuditActionBlock, InputChars: utf8.RuneCountInString(text), InputSHA256: hex.EncodeToString(digest[:]), SegmentCount: len(request.Snapshot.Segments), InspectionType: "probe_block", EndpointID: probeEndpointID, EndpointModel: probeEndpointModel, Scores: probeScores}
-		audit := &model.PromptAudit{RequestID: resultRequestID(c), UserID: contextInt(c, "id"), TokenID: contextInt(c, "token_id"), TokenName: contextString(c, "token_name"), GroupName: group, Protocol: request.Protocol, ModelName: request.Model, Stage: normalizedPromptAuditStage(request.Stage), Direction: direction, CoverageComplete: true, ConfigVersion: configured.ConfigVersion, ExecutionMode: result.Mode, Status: model.PromptAuditStatusDone, PromptHash: result.InputSHA256, PromptLength: result.InputChars, SegmentCount: result.SegmentCount, Decision: result.Decision, Safety: result.Safety, WouldAction: result.ActualAction, InspectionType: "probe_block", Action: result.ActualAction, EndpointID: result.EndpointID, EndpointModel: result.EndpointModel, CompletedAt: common.GetTimestamp()}
+		result := PromptAuditResult{Enabled: true, Reviewed: true, Blocked: true, Mode: configured.Mode, Direction: direction, CoverageComplete: true, Decision: PromptAuditDecisionBlock, Outcome: PromptAuditDecisionBlock, Safety: "", ConfigVersion: configured.ConfigVersion, ActualAction: PromptAuditActionBlock, InputChars: utf8.RuneCountInString(text), InputSHA256: hex.EncodeToString(digest[:]), SegmentCount: len(request.Snapshot.Segments), InspectionType: probeGate, EndpointID: probeEndpointID, EndpointModel: probeEndpointModel, Scores: probeScores}
+		audit := &model.PromptAudit{RequestID: resultRequestID(c), UserID: contextInt(c, "id"), TokenID: contextInt(c, "token_id"), TokenName: contextString(c, "token_name"), GroupName: group, Protocol: request.Protocol, ModelName: request.Model, Stage: normalizedPromptAuditStage(request.Stage), Direction: direction, CoverageComplete: true, ConfigVersion: configured.ConfigVersion, ExecutionMode: result.Mode, Status: model.PromptAuditStatusDone, PromptHash: result.InputSHA256, PromptLength: result.InputChars, SegmentCount: result.SegmentCount, Decision: result.Decision, Safety: result.Safety, WouldAction: result.ActualAction, InspectionType: probeGate, Action: result.ActualAction, EndpointID: result.EndpointID, EndpointModel: result.EndpointModel, CompletedAt: common.GetTimestamp()}
 		if len(result.Scores) > 0 {
 			if data, marshalErr := common.Marshal(result.Scores); marshalErr == nil {
 				audit.Scores = string(data)

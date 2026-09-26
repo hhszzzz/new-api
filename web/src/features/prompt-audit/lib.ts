@@ -38,6 +38,11 @@ export function promptAuditDetectorLabel(
   t: TFunction
 ): string {
   if (type === 'wordlist') return t('Wordlist')
+  // The two probe gates are named for their judge: the phrase list blocks
+  // locally, the semantic gate is a TypeSafe call. Legacy rows written before
+  // the split carry the undifferentiated probe_block value.
+  if (type === 'probe_phrase') return t('Wordlist probe blocked')
+  if (type === 'probe_semantic') return t('JEV probe blocked')
   if (type === 'probe_block') return t('Probe blocked')
   if (type === 'probe_fast_pass') return t('Probe allowed')
   return t('Model audit')

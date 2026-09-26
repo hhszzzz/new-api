@@ -5384,6 +5384,8 @@
     "Private Deployment URL": "Private Deployment URL",
     "Probe allowed": "Probe allowed",
     "Probe blocked": "Probe blocked",
+    "Wordlist probe blocked": "Wordlist probe blocked",
+    "JEV probe blocked": "JEV probe blocked",
     "Probe blocking and wordlist filtering run before model audit, billing, and upstream dispatch.": "Probe blocking and wordlist filtering run before model audit, billing, and upstream dispatch.",
     "Probe phrases": "Probe phrases",
     "Probe requests": "Probe requests",
