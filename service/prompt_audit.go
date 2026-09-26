@@ -342,6 +342,67 @@ func RecordOutputAuditUnavailable(c *gin.Context, request PromptAuditRequest, fa
 	return result
 }
 
+// probeExemptForPreview reports whether the preview caller is exempt from the
+// probe gate. The preview has no token-count or compaction protocol, so only
+// the administrator exemption applies.
+func probeExemptForPreview(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	if ginCtx, ok := ctx.(*gin.Context); ok {
+		return contextInt(ginCtx, "role") >= common.RoleAdminUser
+	}
+	return false
+}
+
+// semanticProbeScoresForPreview runs the semantic probe for the policy preview.
+// It reuses the live gate's cache and concurrency limits but does not write a
+// negative verdict to the cache, because a preview must not suppress a later
+// live call for the same text.
+func semanticProbeScoresForPreview(ctx context.Context, setting prompt_audit_setting.PromptAuditSetting, snapshot dto.PromptAuditSnapshot) (map[string]float64, string, string) {
+	text, ok := standaloneProbeInput(snapshot)
+	if !ok || utf8.RuneCountInString(text) > prompt_audit_setting.MaxProbeSemanticRunes {
+		return nil, "", ""
+	}
+	var endpoint prompt_audit_setting.Endpoint
+	found := false
+	for _, candidate := range enabledPromptAuditEndpoints(setting, PromptAuditDirectionInput) {
+		if candidate.IsTypeSafeEndpoint() {
+			endpoint, found = candidate, true
+			break
+		}
+	}
+	if !found {
+		return nil, "", ""
+	}
+	cacheKey := semanticProbeCacheKey(setting, endpoint, text)
+	if cached, ok := getPromptAuditCache(ctx, cacheKey); ok {
+		return cached.Scores, cached.EndpointID, cached.EndpointModel
+	}
+	limit := endpoint.Concurrency
+	if limit <= 0 {
+		limit = setting.EndpointConcurrency
+	}
+	slots := promptAuditSlots(&promptAuditEndpointSlots, setting.ConfigVersion+"|"+endpoint.ID+"|"+strconv.Itoa(limit), limit)
+	select {
+	case slots <- struct{}{}:
+	default:
+		return nil, "", ""
+	}
+	defer func() { <-slots }()
+	callCtx, cancel := context.WithTimeout(ctx, time.Duration(endpoint.TimeoutMS)*time.Millisecond)
+	defer cancel()
+	scores, model, err := callTypeSafe(callCtx, endpoint, promptAuditTypeSafeState{Message: text}, semanticProbeQuestions, promptAuditTypeSafeProbeVersion)
+	if err != nil {
+		return nil, "", ""
+	}
+	probability := scores[semanticProbeQuestionID]
+	if model == "" {
+		model = endpoint.Model
+	}
+	return map[string]float64{semanticProbeQuestionID: probability}, endpoint.ID, model
+}
+
 func TestPromptAuditPolicy(ctx context.Context, direction string, snapshot dto.PromptAuditSnapshot, output string) (PromptAuditResult, error) {
 	setting := prompt_audit_setting.GetSetting()
 	direction = strings.ToLower(strings.TrimSpace(direction))
@@ -378,8 +439,18 @@ func TestPromptAuditPolicy(ctx context.Context, direction string, snapshot dto.P
 		if match != nil && match.Action == prompt_audit_setting.WordlistActionBlock {
 			return PromptAuditResult{Enabled: true, Reviewed: true, Blocked: true, Direction: direction, InspectionType: "wordlist", Wordlist: match, Decision: PromptAuditDecisionBlock, Outcome: PromptAuditDecisionBlock, ActualAction: "preview"}, nil
 		}
-		if match == nil && IsProbeRequest(snapshot) {
-			return PromptAuditResult{Enabled: true, Reviewed: true, Direction: direction, CoverageComplete: true, InspectionType: "probe_fast_pass", Safety: "Safe", Decision: PromptAuditDecisionPass, Outcome: PromptAuditDecisionPass, ActualAction: "preview"}, nil
+		// The preview must see the same probe gate the live request sees, or the
+		// operator cannot test whether a phrase would be refused.
+		if setting.ProbeBlockEnabled && !probeExemptForPreview(ctx) {
+			if isBlockedProbe(snapshot, setting.ProbePhrases) {
+				return PromptAuditResult{Enabled: true, Reviewed: true, Blocked: true, Direction: direction, CoverageComplete: true, InspectionType: "probe_block", Safety: "Safe", Decision: PromptAuditDecisionBlock, Outcome: PromptAuditDecisionBlock, ActualAction: "preview"}, nil
+			}
+			if setting.ProbeSemanticEnabled {
+				probeScores, probeEndpointID, probeEndpointModel := semanticProbeScoresForPreview(ctx, setting, snapshot)
+				if len(probeScores) > 0 && probeScores[semanticProbeQuestionID] >= setting.ProbeSemanticThreshold {
+					return PromptAuditResult{Enabled: true, Reviewed: true, Blocked: true, Direction: direction, CoverageComplete: true, InspectionType: "probe_block", EndpointID: probeEndpointID, EndpointModel: probeEndpointModel, Scores: probeScores, Safety: "Safe", Decision: PromptAuditDecisionBlock, Outcome: PromptAuditDecisionBlock, ActualAction: "preview"}, nil
+				}
+			}
 		}
 	}
 	if promptInspectionUsesBlockingSnapshot(direction, setting) {
@@ -909,7 +980,7 @@ const promptAuditTypeSafeQuestionSetVersion = "typesafe-v1"
 
 // promptAuditTypeSafeProbeVersion covers the semantic liveness-probe question,
 // which is asked on its own and cached separately.
-const promptAuditTypeSafeProbeVersion = "typesafe-probe-v1"
+const promptAuditTypeSafeProbeVersion = "typesafe-probe-v2"
 
 // promptAuditTypeSafeQuestion is the yes/no question asked about one category.
 // The ID doubles as the answer key and as the audit category it scores. The
@@ -2111,6 +2182,19 @@ func persistPromptAuditDecision(c *gin.Context, request PromptAuditRequest, sett
 	}
 	if data, marshalErr := common.Marshal(result.ReviewCodes); marshalErr == nil {
 		audit.ReviewCodes = string(data)
+	}
+	// A semantic probe that ran on this request leaves its score on the context.
+	// Merge it into the audit scores so the distribution of near-misses is
+	// visible without a separate lookup.
+	if probeScoresValue, exists := c.Get("prompt_audit_probe_scores"); exists {
+		if probeScores, ok := probeScoresValue.(map[string]float64); ok && len(probeScores) > 0 {
+			if result.Scores == nil {
+				result.Scores = map[string]float64{}
+			}
+			for key, value := range probeScores {
+				result.Scores[key] = value
+			}
+		}
 	}
 	if len(result.Scores) > 0 {
 		if data, marshalErr := common.Marshal(result.Scores); marshalErr == nil {

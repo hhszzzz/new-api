@@ -60,9 +60,11 @@ const (
 	// question under 32k; a character budget far above that can only produce
 	// rejected requests.
 	TypeSafeMaxInputLimit = 16000
-	// DefaultProbeSemanticThreshold is deliberately close to 1 because a false
-	// positive here refuses a legitimate first message.
-	DefaultProbeSemanticThreshold = 0.85
+	// DefaultProbeSemanticThreshold is the probability at or above which a
+	// message is treated as a liveness probe. 0.6 sits above the noise floor
+	// of a genuine question and below the confidence a real probe usually
+	// reaches; it is a starting point to be calibrated from recorded scores.
+	DefaultProbeSemanticThreshold = 0.6
 	// MaxProbeSemanticRunes bounds the text a semantic probe scores. A real
 	// probe question is a few words; a long first message is somebody working.
 	MaxProbeSemanticRunes    = 128

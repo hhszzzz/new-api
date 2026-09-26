@@ -7,7 +7,6 @@ import (
 	"errors"
 	"maps"
 	"net/http"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -224,25 +223,6 @@ func TestPromptWordlists(scope dto.PromptAuditScope, text string) (*PromptWordli
 	return match, configured.Mode != prompt_audit_setting.ModeOff && configured.PolicyFor(scope).ModelAudit, err
 }
 
-var probePattern = regexp.MustCompile(`^(?i)(hi|hello|ping|pong|test|1|1\+1|2|say 1|你好|测试|测活|探活)[.!?。！？\s]*$`)
-
-// IsProbeRequest checks whether an incoming prompt is a single-turn probe or health-check call.
-func IsProbeRequest(snapshot dto.PromptAuditSnapshot) bool {
-	if snapshot.HasHistory || snapshot.HasMedia {
-		return false
-	}
-	segments := snapshot.OrderedSegments()
-	if len(segments) != 1 || segments[0].SourceScope() != dto.PromptScopeUser ||
-		(!segments[0].User && segments[0].Role != "user") {
-		return false
-	}
-	trimmed := segments[0].Text
-	if utf8.RuneCountInString(trimmed) == 0 || utf8.RuneCountInString(trimmed) > 25 {
-		return false
-	}
-	return probePattern.MatchString(trimmed)
-}
-
 func normalizeProbePhrase(value string) string {
 	return strings.ToLower(strings.TrimFunc(value, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsPunct(r) }))
 }
@@ -312,14 +292,18 @@ const semanticProbeQuestionID = "probe"
 // score the probe-safe decision on the category answers instead of on its own.
 //
 // The question goes in instructions and the boundary in criteria, the way every
-// TypeSafe question is shaped.
+// TypeSafe question is shaped. The true side covers the three shapes a real
+// probe takes: a bare liveness check, a probe of which model answers, and a
+// fragment with no work to perform. The false side names what real work looks
+// like, so a short genuine question is not pulled into the true side by its
+// brevity alone.
 var semanticProbeQuestions = map[string]promptAuditTypeSafeQuestionBody{
 	semanticProbeQuestionID: {
 		Type:         "noul",
-		Instructions: "Is the message nothing but a liveness check, connectivity test, or greeting, carrying no task, question, or request?",
+		Instructions: "Does this message carry nothing to act on — is it sent only to check that the service is reachable, to learn which model answers, or as a bare greeting, rather than to ask for content?",
 		Criteria: &promptAuditTypeSafeCriteria{
-			True:  "It is a plain liveness check, connectivity test, or greeting.",
-			False: "It carries a task, question, or request.",
+			True:  "A liveness check, a connectivity test, a 'ping', an 'are you there', a 'can you be used', a 'which model are you', a 'test', a 'reply OK', a bare greeting, or a meaningless fragment. There is no work to perform.",
+			False: "It asks for real work: an explanation, an answer, code, analysis, data, a translation, an opinion, or any other content the assistant produces.",
 		},
 	},
 }
@@ -333,9 +317,9 @@ func semanticProbeCacheKey(setting prompt_audit_setting.PromptAuditSetting, endp
 }
 
 // semanticProbeScores asks the first enabled TypeSafe node whether a short
-// standalone message is a liveness probe. It returns the probability only when
-// it is at or above the configured threshold; every other path returns nil, so
-// the caller treats "not a probe".
+// standalone message is a liveness probe. The returned map always carries the
+// probability when a verdict was reached, blocked or not, so the caller can
+// record it; an empty map means the probe was skipped or failed.
 //
 // The probe is an extra gate on top of the wordlist and the model audit, and it
 // must never be the reason traffic is refused. A node that is saturated, down,
@@ -359,10 +343,7 @@ func semanticProbeScores(c *gin.Context, setting prompt_audit_setting.PromptAudi
 	}
 	cacheKey := semanticProbeCacheKey(setting, endpoint, text)
 	if cached, ok := getPromptAuditCache(c.Request.Context(), cacheKey); ok {
-		if cached.Blocked {
-			return cached.Scores, cached.EndpointID, cached.EndpointModel
-		}
-		return nil, "", ""
+		return cached.Scores, cached.EndpointID, cached.EndpointModel
 	}
 	limit := endpoint.Concurrency
 	if limit <= 0 {
@@ -391,9 +372,6 @@ func semanticProbeScores(c *gin.Context, setting prompt_audit_setting.PromptAudi
 	// The negative verdict is cached as well: an uptime probe is the same few
 	// bytes on every call, and it must not cost a TypeSafe call each time.
 	setPromptAuditCache(cacheKey, cached, time.Duration(setting.CacheTTLSeconds)*time.Second)
-	if !cached.Blocked {
-		return nil, "", ""
-	}
 	return cached.Scores, cached.EndpointID, cached.EndpointModel
 }
 
@@ -452,11 +430,20 @@ func InspectPrompt(c *gin.Context, request PromptAuditRequest) (PromptAuditResul
 		probeBlocked = isBlockedProbe(rawSnapshot, configured.ProbePhrases)
 		// The phrase list matches only the exact greetings it was given. The
 		// semantic gate catches the rest of a probe's surface, at the cost of one
-		// TypeSafe call, and only for text short enough to be one.
+		// TypeSafe call, and only for text short enough to be one. The scores are
+		// kept even when the verdict is below the threshold, so every probe call
+		// leaves a measurable trace.
 		if !probeBlocked && configured.ProbeSemanticEnabled {
 			probeScores, probeEndpointID, probeEndpointModel = semanticProbeScores(c, configured, rawSnapshot)
-			probeBlocked = len(probeScores) > 0
+			probeBlocked = probeScores != nil && probeScores[semanticProbeQuestionID] >= configured.ProbeSemanticThreshold
 		}
+	}
+	if !probeBlocked && len(probeScores) > 0 {
+		// The semantic probe ran but the text scored below the threshold. Stash
+		// the score on the context so the ordinary audit can pick it up and
+		// record it, without changing the outcome.
+		c.Set("prompt_audit_probe_scores", probeScores)
+		c.Set("prompt_audit_probe_endpoint", probeEndpointID+":"+probeEndpointModel)
 	}
 	if probeBlocked {
 		text := probeText
@@ -491,70 +478,6 @@ func InspectPrompt(c *gin.Context, request PromptAuditRequest) (PromptAuditResul
 	// block match stops a count; nothing is recorded for one that passes.
 	if request.WordlistOnly && err == nil && (match == nil || match.Action != prompt_audit_setting.WordlistActionBlock) {
 		return PromptAuditResult{Enabled: auditEnabled, Mode: configured.Mode, Direction: direction, ConfigVersion: configured.ConfigVersion, Outcome: "skipped_wordlist_only"}, nil
-	}
-
-	// Probe shortcuts apply only to complete, standalone user input after the
-	// wordlist gate passes. Explicit rules and missing context cannot be bypassed.
-	if direction == PromptAuditDirectionInput && !request.CoverageIncomplete && err == nil && match == nil && IsProbeRequest(request.Snapshot) {
-		text := request.Snapshot.Text()
-		digest := sha256.Sum256([]byte(text))
-		result := PromptAuditResult{
-			Enabled:          auditEnabled,
-			Reviewed:         true,
-			Blocked:          false,
-			Mode:             configured.Mode,
-			Direction:        direction,
-			CoverageComplete: true,
-			Decision:         PromptAuditDecisionPass,
-			Outcome:          PromptAuditDecisionPass,
-			Safety:           "Safe",
-			ConfigVersion:    configured.ConfigVersion,
-			ActualAction:     PromptAuditActionAllow,
-			InputChars:       utf8.RuneCountInString(text),
-			InputSHA256:      hex.EncodeToString(digest[:]),
-			SegmentCount:     len(request.Snapshot.Segments),
-			InspectionType:   "probe_fast_pass",
-		}
-		// Only an active pipeline records the bypass. A disabled one must not
-		// turn every uptime probe into a database insert.
-		if auditConfigured {
-			audit := &model.PromptAudit{
-				RequestID:        resultRequestID(c),
-				UserID:           contextInt(c, "id"),
-				TokenID:          contextInt(c, "token_id"),
-				TokenName:        contextString(c, "token_name"),
-				GroupName:        group,
-				Protocol:         request.Protocol,
-				ModelName:        request.Model,
-				Stage:            normalizedPromptAuditStage(request.Stage),
-				Direction:        direction,
-				CoverageComplete: true,
-				ConfigVersion:    configured.ConfigVersion,
-				ExecutionMode:    result.Mode,
-				Status:           model.PromptAuditStatusDone,
-				PromptHash:       result.InputSHA256,
-				PromptLength:     result.InputChars,
-				SegmentCount:     result.SegmentCount,
-				Decision:         PromptAuditDecisionPass,
-				Safety:           "Safe",
-				WouldAction:      PromptAuditActionAllow,
-				InspectionType:   "probe_fast_pass",
-				Action:           PromptAuditActionAllow,
-				CompletedAt:      common.GetTimestamp(),
-			}
-			applyPromptAuditRequestContext(audit, c)
-			setPromptAuditContent(audit, text, configured.FullPromptRetentionLimit())
-			setPromptAuditInputContext(audit, request)
-			payload, _ := common.Marshal(promptAuditPayload{Version: 1, Direction: direction, CoverageComplete: true, Segments: request.Snapshot.OrderedSegments()})
-			audit.ScanPayload, audit.ScanPayloadTruncated = model.RetainPromptAuditPayload(payload)
-			if err := model.CreatePromptAudit(audit); err != nil {
-				logger.LogWarn(c, "probe fast pass audit persistence failed")
-			} else {
-				result.AuditID = audit.ID
-			}
-		}
-		AttachPromptAuditResult(c, result)
-		return result, nil
 	}
 
 	// Only the model's own mode and scope switch determine its conversation window.

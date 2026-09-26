@@ -1779,7 +1779,7 @@ func TestPromptAuditSemanticProbe(t *testing.T) {
 				// instructions and the boundary in a criteria object.
 				question, _ := questions[semanticProbeQuestionID].(map[string]any)
 				instructions, _ := question["instructions"].(string)
-				assert.Contains(t, instructions, "liveness check")
+				assert.Contains(t, instructions, "reachable")
 				if criteria, ok := question["criteria"].(map[string]any); assert.True(t, ok, "criteria must be an object") {
 					assert.NotEmpty(t, criteria["true"])
 					assert.NotEmpty(t, criteria["false"])

@@ -316,7 +316,7 @@ func TestPromptAuditUnavailableOccursBeforeChannelSelection(t *testing.T) {
 	assert.Equal(t, "invalid_response", audit.ErrorCode)
 }
 
-func TestPromptAuditProbeFastPassSkipsGuardAndRecordsBypass(t *testing.T) {
+func TestPromptAuditProbePhraseGateBlocksWithoutReachingGuard(t *testing.T) {
 	require.NoError(t, i18n.Init())
 	gin.SetMode(gin.TestMode)
 	previousConfig := prompt_audit_setting.GetSetting()
@@ -335,7 +335,7 @@ func TestPromptAuditProbeFastPassSkipsGuardAndRecordsBypass(t *testing.T) {
 	model.DB = db
 
 	// The node is deliberately broken: reaching it would fail the request, which
-	// is exactly the cost the probe fast-pass exists to avoid.
+	// is exactly the cost the phrase gate exists to avoid.
 	var guardCalls atomic.Int32
 	guard := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		guardCalls.Add(1)
@@ -360,48 +360,20 @@ func TestPromptAuditProbeFastPassSkipsGuardAndRecordsBypass(t *testing.T) {
 	if cleanup != nil {
 		cleanup()
 	}
-	assert.True(t, allowed)
-	assert.False(t, c.IsAborted())
-	assert.Zero(t, guardCalls.Load(), "a probe must never reach the model node")
-	var audit model.PromptAudit
-	require.NoError(t, db.First(&audit).Error)
-	assert.Equal(t, "probe_fast_pass", audit.InspectionType)
-	assert.Equal(t, model.PromptAuditStatusDone, audit.Status)
-	assert.Equal(t, service.PromptAuditDecisionPass, audit.Decision)
-	assert.Equal(t, "probe-owner", audit.Username)
-	assert.Equal(t, "192.0.2.1", audit.Ip)
-	assert.Equal(t, "claude-code/2.0.30", audit.UserAgent)
-	assert.Equal(t, http.MethodPost, audit.Method)
-	assert.Equal(t, "/v1/chat/completions", audit.RequestPath)
-	assert.Equal(t, "https://console.example.com", audit.Origin)
-	// The bypass never reaches a model node, so no audit model is recorded.
-	assert.Empty(t, audit.EndpointModel)
-
-	// Even with model auditing off, the independent probe switch aborts before
-	// the distributor can hand the request to channel selection or billing.
-	configured.Mode = prompt_audit_setting.ModeOff
-	configured.ProbeBlockEnabled = true
-	configured.ProbePhrases = []string{"hi"}
-	configured.PublishConfig()
-	recorder = httptest.NewRecorder()
-	c, _ = gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"chat-model","messages":[{"role":"user","content":"hi"}]}`))
-	c.Request.Header.Set("Content-Type", "application/json")
-	c.Set("id", 11)
-	c.Set("role", common.RoleCommonUser)
-	c.Set("username", "probe-owner")
-	cleanup, allowed = inspectPromptBeforeDistribution(c, &ModelRequest{Model: "chat-model"})
-	if cleanup != nil {
-		cleanup()
-	}
 	assert.False(t, allowed)
 	assert.True(t, c.IsAborted())
 	assert.Equal(t, http.StatusBadRequest, recorder.Code)
 	assert.Contains(t, recorder.Body.String(), "probe_request_blocked")
-	assert.Zero(t, guardCalls.Load())
+	assert.Zero(t, guardCalls.Load(), "a phrase-matched probe must never reach the model node")
 	var blocked model.PromptAudit
 	require.NoError(t, db.Where("inspection_type = ?", "probe_block").First(&blocked).Error)
 	assert.Equal(t, service.PromptAuditActionBlock, blocked.Action)
+	assert.Equal(t, "probe-owner", blocked.Username)
+	assert.Equal(t, "192.0.2.1", blocked.Ip)
+	assert.Equal(t, "claude-code/2.0.30", blocked.UserAgent)
+	assert.Equal(t, http.MethodPost, blocked.Method)
+	assert.Equal(t, "/v1/chat/completions", blocked.RequestPath)
+	assert.Equal(t, "https://console.example.com", blocked.Origin)
 }
 
 func promptAuditMiddlewareTestConfig(baseURL string) prompt_audit_setting.PromptAuditSetting {
@@ -417,5 +389,7 @@ func promptAuditMiddlewareTestConfig(baseURL string) prompt_audit_setting.Prompt
 		TotalTimeoutMS: 1000, ChunkOverlap: 64, ChunkConcurrency: 4, CacheTTLSeconds: 0,
 		WorkerCount: 1, MaxAttempts: 3, RetentionDays: 30,
 		GlobalConcurrency: 2, EndpointConcurrency: 2,
+		ProbeBlockEnabled: true,
+		ProbePhrases:      []string{"hi"},
 	}
 }
