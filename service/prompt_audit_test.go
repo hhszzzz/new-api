@@ -1321,7 +1321,23 @@ func TestPromptAuditTypeSafeNodeScoresAndFailsOver(t *testing.T) {
 			question, ok := questions[category].(map[string]any)
 			require.True(t, ok, "category %s must be asked", category)
 			assert.Equal(t, "noul", question["type"])
+			// The two text fields are not interchangeable, and TypeSafe rejects
+			// rather than ignores a mistake: instructions is the question, and
+			// criteria must be an object. A question sent in criteria is answered
+			// with HTTP 422 and no score at all.
+			instructions, ok := question["instructions"].(string)
+			require.True(t, ok, "instructions must be the question for %s", category)
+			assert.Contains(t, instructions, "?")
+			criteria, ok := question["criteria"].(map[string]any)
+			require.True(t, ok, "criteria must be an object for %s", category)
+			assert.NotEmpty(t, criteria["true"])
+			assert.NotEmpty(t, criteria["false"])
 		}
+		// One category pinned end to end, so a change to the wording or to the
+		// question builder has to be deliberate.
+		assert.Equal(t,
+			"Does the content of the `messages` field contain prompt injection or jailbreak attempt?",
+			questions["jailbreak"].(map[string]any)["instructions"])
 		state, ok := got.body["state"].(map[string]any)
 		require.True(t, ok)
 		messages, ok := state["messages"].([]any)
@@ -1402,6 +1418,125 @@ func TestPromptAuditTypeSafeNodeScoresAndFailsOver(t *testing.T) {
 	})
 }
 
+// TestPromptAuditErrorDetail covers what a node's refusal text is worth: the
+// status code alone cannot be acted on, and TypeSafe in particular answers a
+// request with no API key with 403 rather than the 401 its documentation lists.
+func TestPromptAuditErrorDetail(t *testing.T) {
+	t.Run("a refusal body is reported as one bounded line", func(t *testing.T) {
+		node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte("{\"detail\":{\"error_type\":\"authentication_error\",\n\t\"message\":\"Must supply an API key! Check your request and try again.\"}}"))
+		}))
+		t.Cleanup(node.Close)
+
+		endpoint := typeSafeTestEndpoint(node.URL, "typesafe")
+		endpoint.Directions = []string{"input"}
+		result, err := TestPromptAuditEndpoint(context.Background(), endpoint)
+		require.Error(t, err)
+		assert.Equal(t, "endpoint_http_403", promptAuditErrorCode(err))
+		assert.Equal(t, `{"detail":{"error_type":"authentication_error", "message":"Must supply an API key! Check your request and try again."}}`, result.FailureDetail)
+	})
+
+	t.Run("a body that is not text is dropped rather than escaping into a log", func(t *testing.T) {
+		node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte("line one\nlevel=error forged\x00\x01tail"))
+		}))
+		t.Cleanup(node.Close)
+
+		endpoint := typeSafeTestEndpoint(node.URL, "typesafe")
+		endpoint.Directions = []string{"input"}
+		result, err := TestPromptAuditEndpoint(context.Background(), endpoint)
+		require.Error(t, err)
+		assert.Equal(t, "line one level=error forged tail", result.FailureDetail)
+		assert.NotContains(t, result.FailureDetail, "\n")
+	})
+
+	t.Run("an acceptant answer carries no refusal text", func(t *testing.T) {
+		node := typeSafeTestServer(t, typeSafeTestScores(nil), 0, nil)
+		endpoint := typeSafeTestEndpoint(node.URL, "typesafe")
+		endpoint.Directions = []string{"input"}
+		result, err := TestPromptAuditEndpoint(context.Background(), endpoint)
+		require.NoError(t, err)
+		assert.Empty(t, result.FailureDetail)
+	})
+
+	t.Run("the snippet is capped and never cuts a character in half", func(t *testing.T) {
+		snippet := promptAuditErrorDetailSnippet([]byte(strings.Repeat("错", 400)))
+		assert.Equal(t, promptAuditErrorDetailLimit, utf8.RuneCountInString(snippet))
+		assert.True(t, utf8.ValidString(snippet))
+		assert.Empty(t, promptAuditErrorDetailSnippet(nil))
+	})
+}
+
+// TestPromptAuditEndpointURLs locks the address each protocol is called at. The
+// shapes accepted on input are deliberately generous — a bare host, a host with
+// /v1, a full route — because an operator pastes whatever their provider handed
+// them, and the route suffixes are stripped so re-saving a working node cannot
+// double them up.
+//
+// Whatever path prefix remains is preserved rather than replaced. That is what
+// makes a pass-through proxy (which mounts the API under its own prefix) work,
+// and it is also why a stray segment is a 404 instead of a silent rewrite to the
+// address the operator probably meant.
+func TestPromptAuditEndpointURLs(t *testing.T) {
+	type urlCase struct {
+		name string
+		base string
+		want string
+	}
+	typeSafeCases := []urlCase{
+		{name: "a bare host gets the whole route", base: "https://api.typesafe.ai", want: "https://api.typesafe.ai/v1/systemone"},
+		{name: "a trailing /v1 is not doubled", base: "https://api.typesafe.ai/v1", want: "https://api.typesafe.ai/v1/systemone"},
+		{name: "the full route is accepted as it is", base: "https://api.typesafe.ai/v1/systemone", want: "https://api.typesafe.ai/v1/systemone"},
+		{name: "a trailing slash is ignored", base: "https://api.typesafe.ai/", want: "https://api.typesafe.ai/v1/systemone"},
+		{name: "a proxy prefix is kept", base: "https://proxy.example.com/typesafe", want: "https://proxy.example.com/typesafe/v1/systemone"},
+		{name: "a proxy prefix with the route is kept", base: "https://proxy.example.com/typesafe/v1/systemone", want: "https://proxy.example.com/typesafe/v1/systemone"},
+	}
+	for _, test := range typeSafeCases {
+		t.Run("typesafe/"+test.name, func(t *testing.T) {
+			resolved, err := promptAuditTypeSafeURL(test.base)
+			require.NoError(t, err)
+			assert.Equal(t, test.want, resolved)
+		})
+	}
+
+	guardCases := []urlCase{
+		{name: "a bare host gets the whole route", base: "https://guard.example.com", want: "https://guard.example.com/v1/chat/completions"},
+		{name: "the full route is accepted as it is", base: "https://guard.example.com/v1/chat/completions", want: "https://guard.example.com/v1/chat/completions"},
+		{name: "a proxy prefix is kept", base: "https://proxy.example.com/guard", want: "https://proxy.example.com/guard/v1/chat/completions"},
+	}
+	for _, test := range guardCases {
+		t.Run("qwen3guard/"+test.name, func(t *testing.T) {
+			resolved, err := promptAuditChatCompletionsURL(test.base)
+			require.NoError(t, err)
+			assert.Equal(t, test.want, resolved)
+		})
+	}
+
+	// An address that cannot be resolved at all is refused, not guessed.
+	for _, base := range []string{"", "not a url", "ftp://api.typesafe.ai", "https://api.typesafe.ai?x=1"} {
+		t.Run("refused/"+base, func(t *testing.T) {
+			_, err := promptAuditTypeSafeURL(base)
+			require.Error(t, err)
+		})
+	}
+
+	// The resolver is what the node test reports, so it has to agree with the
+	// builder each protocol actually uses.
+	t.Run("the resolver follows the protocol", func(t *testing.T) {
+		typeSafe := typeSafeTestEndpoint("https://api.typesafe.ai", "typesafe")
+		resolved, err := promptAuditEndpointURL(typeSafe)
+		require.NoError(t, err)
+		assert.Equal(t, "https://api.typesafe.ai/v1/systemone", resolved)
+
+		guard := prompt_audit_setting.Endpoint{ID: "guard", BaseURL: "https://guard.example.com", Model: "m", Enabled: true}
+		resolved, err = promptAuditEndpointURL(guard)
+		require.NoError(t, err)
+		assert.Equal(t, "https://guard.example.com/v1/chat/completions", resolved)
+	})
+}
+
 // TestPromptAuditTypeSafeEndpointProbes exercises the node-test button the way
 // an operator hits it: both directions of a TypeSafe node, against probes whose
 // expected verdicts the node has to reproduce. A label-based node test exists
@@ -1457,6 +1592,24 @@ func TestPromptAuditTypeSafeEndpointProbes(t *testing.T) {
 		result, err := TestPromptAuditEndpoint(context.Background(), endpoint)
 		require.NoError(t, err)
 		assert.Equal(t, []string{"input", "output"}, result.TestedDirections)
+	})
+
+	// A base URL carrying a segment the API does not serve is the shape an
+	// operator reaches by pasting a proxy's base URL at the provider's host. The
+	// test reports the address it asked so the extra segment is visible without
+	// a guess, and it passes the prefix through instead of silently dropping it.
+	t.Run("a stray path segment reports the address it asked", func(t *testing.T) {
+		notFound := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		t.Cleanup(notFound.Close)
+
+		endpoint := typeSafeTestEndpoint(notFound.URL+"/typesafe", "typesafe")
+		endpoint.Directions = []string{"input"}
+		result, err := TestPromptAuditEndpoint(context.Background(), endpoint)
+		require.Error(t, err)
+		assert.Equal(t, "endpoint_http_404", promptAuditErrorCode(err))
+		assert.Equal(t, notFound.URL+"/typesafe/v1/systemone", result.RequestURL)
 	})
 }
 
@@ -1515,6 +1668,15 @@ func TestPromptAuditSemanticProbe(t *testing.T) {
 				questions, _ := body["questions"].(map[string]any)
 				if _, ok := questions[semanticProbeQuestionID]; !ok {
 					return
+				}
+				// Same shape rule as the category questions: the question lives in
+				// instructions and the boundary in a criteria object.
+				question, _ := questions[semanticProbeQuestionID].(map[string]any)
+				instructions, _ := question["instructions"].(string)
+				assert.Contains(t, instructions, "liveness check")
+				if criteria, ok := question["criteria"].(map[string]any); assert.True(t, ok, "criteria must be an object") {
+					assert.NotEmpty(t, criteria["true"])
+					assert.NotEmpty(t, criteria["false"])
 				}
 				state, _ := body["state"].(map[string]any)
 				assert.Equal(t, test.text, state["message"], "the probe question is asked about the text the client sent")

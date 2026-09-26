@@ -364,6 +364,7 @@ func TestPromptAuditNode(c *gin.Context) {
 		"endpoint_id": selected.ID, "purpose": selected.Purpose, "latency_ms": time.Since(startedAt).Milliseconds(),
 		"safety": result.Safety, "decision": result.Decision, "tested_directions": result.TestedDirections,
 		"direction": result.Direction, "error_code": result.FailureKind,
+		"request_url": result.RequestURL, "failure_detail": result.FailureDetail,
 	}
 	if selected.Purpose == prompt_audit_setting.EndpointPurposeReview {
 		data["decision"] = result.ReviewDecision

@@ -44,6 +44,44 @@ describe('promptAuditTestFailureMessage', () => {
       'The audit model returned HTTP 429.',
     ],
     [
+      // A base URL carrying a segment the API does not serve reads like a wrong
+      // host until the resolved address is shown.
+      'an HTTP failure names the address the audit model was asked at',
+      {
+        error_code: 'endpoint_http_404',
+        direction: 'input',
+        request_url: 'https://api.typesafe.ai/typesafe/v1/systemone',
+      },
+      'The audit model returned HTTP 404 during the Request input check. The audit model was called at https://api.typesafe.ai/typesafe/v1/systemone.',
+    ],
+    [
+      // "HTTP 403" on its own sends the operator hunting; TypeSafe's own body
+      // names the missing key outright. The reply is quoted verbatim and stands
+      // ahead of the address, because the cause outranks the location.
+      'an HTTP failure quotes what the node said when it refused',
+      {
+        error_code: 'endpoint_http_403',
+        direction: 'input',
+        request_url: 'https://api.typesafe.ai/v1/systemone',
+        failure_detail:
+          '{"detail":{"error_type":"authentication_error", "message":"Must supply an API key! Check your request and try again."}}',
+      },
+      'The audit model returned HTTP 403 during the Request input check. The audit model replied: {"detail":{"error_type":"authentication_error", "message":"Must supply an API key! Check your request and try again."}} The audit model was called at https://api.typesafe.ai/v1/systemone.',
+    ],
+    [
+      'an unreachable node names the address it tried',
+      {
+        error_code: 'network_error',
+        request_url: 'https://guard.example.com/v1/chat/completions',
+      },
+      'The audit model could not be reached: the connection failed. The audit model was called at https://guard.example.com/v1/chat/completions.',
+    ],
+    [
+      'a failure with no resolved address stays as it was',
+      { error_code: 'network_error' },
+      'The audit model could not be reached: the connection failed.',
+    ],
+    [
       'an unreadable verdict points at the missing Safety and Categories lines',
       { error_code: 'invalid_response' },
       'The audit model replied, but its answer had no readable Safety and Categories verdict.',

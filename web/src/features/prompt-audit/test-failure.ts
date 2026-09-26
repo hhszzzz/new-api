@@ -27,6 +27,16 @@ export type PromptAuditTestFailure = {
   error_code?: string
   direction?: PromptAuditDirection | 'review'
   safety?: string
+  /**
+   * The address the probe was sent to, resolved from the node's base URL and
+   * protocol. Absent when the base URL could not be resolved at all, which is
+   * itself reported by the configuration failure.
+   */
+  request_url?: string
+  /**
+   * What the node said when it refused the request, as it worded it.
+   */
+  failure_detail?: string
 }
 
 const promptAuditHTTPStatus = /^endpoint_http_(\d{3})$/
@@ -58,14 +68,36 @@ export function promptAuditTestFailureMessage(
   // A review-purpose node reports the same failures under a `review_` prefix.
   const kind = code.startsWith('review_') ? code.slice('review_'.length) : code
 
+  // A refusal is only actionable with the two things the status code withholds:
+  // what the node said, and the address it was asked at. A 403 is an API key the
+  // node never received when the body says so, and a base URL with a segment the
+  // API does not serve reads exactly like a wrong host until the resolved path is
+  // on screen. Neither sentence is invented here; both quote the backend.
+  const annotated = (message: string): string => {
+    let annotated = message
+    if (failure.failure_detail) {
+      annotated += ` ${t('The audit model replied: {{detail}}', {
+        detail: failure.failure_detail,
+      })}`
+    }
+    if (failure.request_url) {
+      annotated += ` ${t('The audit model was called at {{url}}.', {
+        url: failure.request_url,
+      })}`
+    }
+    return annotated
+  }
+
   const status = promptAuditHTTPStatus.exec(kind)?.[1]
   if (status) {
-    return failure.direction
-      ? t(
-          'The audit model returned HTTP {{status}} during the {{direction}} check.',
-          { status, direction: auditDirectionLabel(t, failure.direction) }
-        )
-      : t('The audit model returned HTTP {{status}}.', { status })
+    return annotated(
+      failure.direction
+        ? t(
+            'The audit model returned HTTP {{status}} during the {{direction}} check.',
+            { status, direction: auditDirectionLabel(t, failure.direction) }
+          )
+        : t('The audit model returned HTTP {{status}}.', { status })
+    )
   }
   if (kind === 'output_capability_unverified') {
     return t(
@@ -88,11 +120,13 @@ export function promptAuditTestFailureMessage(
     return t('The audit model did not answer in time.')
   }
   if (kind === 'network_error') {
-    return t('The audit model could not be reached: the connection failed.')
+    return annotated(
+      t('The audit model could not be reached: the connection failed.')
+    )
   }
   if (kind === 'redirect_not_allowed') {
-    return t(
-      'The audit model base URL redirects, and redirects are not followed.'
+    return annotated(
+      t('The audit model base URL redirects, and redirects are not followed.')
     )
   }
   if (
@@ -100,8 +134,10 @@ export function promptAuditTestFailureMessage(
     kind === 'no_enabled_endpoint' ||
     kind === 'no_enabled_review_endpoint'
   ) {
-    return t(
-      'The audit model configuration is invalid: check the base URL and that at least one audit direction is enabled.'
+    return annotated(
+      t(
+        'The audit model configuration is invalid: check the base URL and that at least one audit direction is enabled.'
+      )
     )
   }
   return code
