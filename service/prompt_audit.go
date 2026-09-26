@@ -443,12 +443,12 @@ func TestPromptAuditPolicy(ctx context.Context, direction string, snapshot dto.P
 		// operator cannot test whether a phrase would be refused.
 		if setting.ProbeBlockEnabled && !probeExemptForPreview(ctx) {
 			if isBlockedProbe(snapshot, setting.ProbePhrases) {
-				return PromptAuditResult{Enabled: true, Reviewed: true, Blocked: true, Direction: direction, CoverageComplete: true, InspectionType: "probe_block", Safety: "Safe", Decision: PromptAuditDecisionBlock, Outcome: PromptAuditDecisionBlock, ActualAction: "preview"}, nil
+				return PromptAuditResult{Enabled: true, Reviewed: true, Blocked: true, Direction: direction, CoverageComplete: true, InspectionType: "probe_block", Safety: "", Decision: PromptAuditDecisionBlock, Outcome: PromptAuditDecisionBlock, ActualAction: "preview"}, nil
 			}
 			if setting.ProbeSemanticEnabled {
 				probeScores, probeEndpointID, probeEndpointModel := semanticProbeScoresForPreview(ctx, setting, snapshot)
 				if len(probeScores) > 0 && probeScores[semanticProbeQuestionID] >= setting.ProbeSemanticThreshold {
-					return PromptAuditResult{Enabled: true, Reviewed: true, Blocked: true, Direction: direction, CoverageComplete: true, InspectionType: "probe_block", EndpointID: probeEndpointID, EndpointModel: probeEndpointModel, Scores: probeScores, Safety: "Safe", Decision: PromptAuditDecisionBlock, Outcome: PromptAuditDecisionBlock, ActualAction: "preview"}, nil
+					return PromptAuditResult{Enabled: true, Reviewed: true, Blocked: true, Direction: direction, CoverageComplete: true, InspectionType: "probe_block", EndpointID: probeEndpointID, EndpointModel: probeEndpointModel, Scores: probeScores, Safety: "", Decision: PromptAuditDecisionBlock, Outcome: PromptAuditDecisionBlock, ActualAction: "preview"}, nil
 				}
 			}
 		}
@@ -2386,10 +2386,20 @@ func promptAuditErrorCode(err error) string {
 }
 
 func logPromptAuditDecision(c *gin.Context, result PromptAuditResult) {
+	endpoint := result.EndpointID
+	if endpoint == "" {
+		endpoint = "-"
+	}
+	scores := ""
+	if len(result.Scores) > 0 {
+		if data, err := common.Marshal(result.Scores); err == nil {
+			scores = " scores=" + string(data)
+		}
+	}
 	logger.LogWarn(c, fmt.Sprintf(
-		"prompt audit: outcome=%s blocked=%t mode=%s endpoint=%s latency_ms=%d input_chars=%d input_sha256=%s failure=%s cache_hit=%t",
-		result.Outcome, result.Blocked, result.Mode, result.EndpointID, result.LatencyMillis,
-		result.InputChars, result.InputSHA256, result.FailureKind, result.CacheHit,
+		"prompt audit: outcome=%s blocked=%t mode=%s inspection=%s endpoint=%s latency_ms=%d input_chars=%d input_sha256=%s failure=%s cache_hit=%t%s",
+		result.Outcome, result.Blocked, result.Mode, result.InspectionType, endpoint, result.LatencyMillis,
+		result.InputChars, result.InputSHA256, result.FailureKind, result.CacheHit, scores,
 	))
 }
 
