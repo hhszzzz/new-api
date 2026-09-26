@@ -52,6 +52,7 @@ type promptAuditConfigUpdate struct {
 	ProbePhrases           *[]string                                                  `json:"probe_phrases"`
 	ProbeSemanticEnabled   *bool                                                      `json:"probe_semantic_enabled"`
 	ProbeSemanticThreshold *float64                                                   `json:"probe_semantic_threshold"`
+	ProbeIncludeAdmins     *bool                                                      `json:"probe_include_admins"`
 	ExpandBase64           *bool                                                      `json:"expand_base64"`
 	ManualWordlistAction   *string                                                    `json:"manual_wordlist_action"`
 	EnabledCategories      *[]string                                                  `json:"enabled_categories"`
@@ -189,6 +190,9 @@ func UpdatePromptAuditConfig(c *gin.Context) {
 	if update.ProbeSemanticThreshold != nil {
 		values["prompt_audit.probe_semantic_threshold"] = strconv.FormatFloat(*update.ProbeSemanticThreshold, 'f', -1, 64)
 		proposed.ProbeSemanticThreshold = *update.ProbeSemanticThreshold
+	}
+	if update.ProbeIncludeAdmins != nil {
+		values["prompt_audit.probe_include_admins"] = strconv.FormatBool(*update.ProbeIncludeAdmins)
 	}
 	if update.ExpandBase64 != nil {
 		values["prompt_audit.expand_base64"] = strconv.FormatBool(*update.ExpandBase64)
@@ -631,6 +635,7 @@ func promptAuditConfigResponse(setting prompt_audit_setting.PromptAuditSetting) 
 		"probe_phrases":                  append([]string{}, setting.ProbePhrases...),
 		"probe_semantic_enabled":         setting.ProbeSemanticEnabled,
 		"probe_semantic_threshold":       setting.ProbeSemanticThreshold,
+		"probe_include_admins":           setting.ProbeIncludeAdmins,
 		"expand_base64":                  setting.ExpandBase64,
 		"enabled_categories":             append([]string{}, setting.EnabledCategories...),
 		"controversial_block_categories": append([]string{}, setting.ControversialBlocks...),

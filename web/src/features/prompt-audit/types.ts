@@ -128,6 +128,7 @@ export interface PromptAuditConfig {
   probe_phrases?: string[]
   probe_semantic_enabled?: boolean
   probe_semantic_threshold?: number
+  probe_include_admins?: boolean
   expand_base64?: boolean
   manual_wordlist_action: PromptWordlistAction
   enabled_categories: string[]

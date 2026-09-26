@@ -151,7 +151,7 @@ export function EnforcementSection({
           }
           label={t('Block probe requests')}
           description={t(
-            'Block standalone greetings and health checks in every audit mode. Administrators and token-count requests are exempt.'
+            'Block standalone greetings and health checks in every audit mode. Token-count requests are exempt.'
           )}
         />
         {config.probe_block_enabled && (
@@ -203,6 +203,19 @@ export function EnforcementSection({
                 </Field>
               </CollapsibleContent>
             </Collapsible>
+            {/* The switch governs the whole probe gate, phrase list included,
+                so it sits beside it rather than under the semantic gate. */}
+            <SettingsSwitchField
+              controlId='prompt-audit-probe-admins'
+              checked={config.probe_include_admins ?? false}
+              onCheckedChange={(probe_include_admins) =>
+                onChange({ probe_include_admins })
+              }
+              label={t('Include administrators in probe detection')}
+              description={t(
+                'Administrators are exempt so their own liveness checks stay ordinary traffic. Turn this on to refuse them under the same rules.'
+              )}
+            />
             <SettingsSwitchField
               controlId='prompt-audit-probe-semantic'
               checked={config.probe_semantic_enabled ?? false}

@@ -164,6 +164,11 @@ type PromptAuditSetting struct {
 	// ProbeSemanticThreshold is the probability at or above which that answer
 	// counts as a probe.
 	ProbeSemanticThreshold float64 `json:"probe_semantic_threshold"`
+	// ProbeIncludeAdmins applies the probe gate to administrators as well. The
+	// gate refuses liveness probes, and an administrator's own health checks are
+	// the traffic it would otherwise refuse by accident, so they stay exempt
+	// until an operator asks for the gate to apply to them too.
+	ProbeIncludeAdmins bool `json:"probe_include_admins"`
 	// ExpandBase64 decodes base64 runs in the scanned text before it is audited.
 	// A guard model that only sees the encoded form cannot judge the content, so
 	// leaving this off lets an encoded request through unclassified. The full
@@ -763,6 +768,8 @@ func settingFingerprint(setting PromptAuditSetting) string {
 	builder.WriteString(strconv.FormatBool(setting.ProbeSemanticEnabled))
 	builder.WriteByte('|')
 	builder.WriteString(strconv.FormatFloat(setting.ProbeSemanticThreshold, 'f', -1, 64))
+	builder.WriteByte('|')
+	builder.WriteString(strconv.FormatBool(setting.ProbeIncludeAdmins))
 	builder.WriteByte('|')
 	builder.WriteString(strconv.FormatBool(setting.ExpandBase64))
 	builder.WriteByte('|')

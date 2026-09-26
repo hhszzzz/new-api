@@ -1098,7 +1098,7 @@
     "Block immediately": "Block immediately",
     "Block probe requests": "Block probe requests",
     "Block selected models": "Block selected models",
-    "Block standalone greetings and health checks in every audit mode. Administrators and token-count requests are exempt.": "Block standalone greetings and health checks in every audit mode. Administrators and token-count requests are exempt.",
+    "Block standalone greetings and health checks in every audit mode. Token-count requests are exempt.": "Block standalone greetings and health checks in every audit mode. Token-count requests are exempt.",
     "Blocked": "Blocked",
     "Blocked keywords": "Blocked keywords",
     "Blocked Models": "Blocked Models",
@@ -8084,6 +8084,8 @@
     "Agent context": "Agent context",
     "Agent context is the wrapper blocks a client adds to the user turn, such as system reminders and environment descriptions, rather than conversation history. Clients can forge those blocks and the skill labels, so disabling inspection for these sources can allow disguised content to bypass your rules.": "Agent context is the wrapper blocks a client adds to the user turn, such as system reminders and environment descriptions, rather than conversation history. Clients can forge those blocks and the skill labels, so disabling inspection for these sources can allow disguised content to bypass your rules.",
     "Enable wordlist filtering": "Enable wordlist filtering",
-    "Sensitive words are now managed with prompt inspection rules and wordlists.": "Sensitive words are now managed with prompt inspection rules and wordlists."
+    "Sensitive words are now managed with prompt inspection rules and wordlists.": "Sensitive words are now managed with prompt inspection rules and wordlists.",
+    "Include administrators in probe detection": "Include administrators in probe detection",
+    "Administrators are exempt so their own liveness checks stay ordinary traffic. Turn this on to refuse them under the same rules.": "Administrators are exempt so their own liveness checks stay ordinary traffic. Turn this on to refuse them under the same rules."
   }
 }

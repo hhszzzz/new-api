@@ -1098,7 +1098,7 @@
     "Block immediately": "Bloquer immédiatement",
     "Block probe requests": "Bloquer les sondes",
     "Block selected models": "Bloquer les modèles sélectionnés",
-    "Block standalone greetings and health checks in every audit mode. Administrators and token-count requests are exempt.": "Bloque les salutations isolées et les sondes dans tous les modes. Les administrateurs et le comptage de tokens sont exemptés.",
+    "Block standalone greetings and health checks in every audit mode. Token-count requests are exempt.": "Bloque les salutations isolées et les sondes dans tous les modes. Le comptage de tokens est exempté.",
     "Blocked": "Bloqués",
     "Blocked keywords": "Mots-clés bloqués",
     "Blocked Models": "Modèles bloqués",
@@ -8084,6 +8084,8 @@
     "Agent context": "Contexte d'agent",
     "Agent context is the wrapper blocks a client adds to the user turn, such as system reminders and environment descriptions, rather than conversation history. Clients can forge those blocks and the skill labels, so disabling inspection for these sources can allow disguised content to bypass your rules.": "Le contexte d'agent désigne les blocs enveloppants qu'un client ajoute au tour de l'utilisateur, comme les rappels système et les descriptions d'environnement, et non l'historique de conversation. Les clients peuvent falsifier ces blocs et les étiquettes de compétence : désactiver l'inspection de ces sources peut donc laisser du contenu déguisé contourner vos règles.",
     "Enable wordlist filtering": "Activer le filtrage par listes",
-    "Sensitive words are now managed with prompt inspection rules and wordlists.": "Les mots sensibles se gèrent désormais dans les règles de contrôle et les listes de mots."
+    "Sensitive words are now managed with prompt inspection rules and wordlists.": "Les mots sensibles se gèrent désormais dans les règles de contrôle et les listes de mots.",
+    "Include administrators in probe detection": "Inclure les administrateurs dans la détection des sondes",
+    "Administrators are exempt so their own liveness checks stay ordinary traffic. Turn this on to refuse them under the same rules.": "Les administrateurs sont exemptés pour que leurs propres vérifications de disponibilité restent du trafic ordinaire. Activez ceci pour les refuser selon les mêmes règles."
   }
 }

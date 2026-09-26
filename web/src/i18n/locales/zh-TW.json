@@ -1098,7 +1098,7 @@
     "Block immediately": "直接封鎖",
     "Block probe requests": "攔截測活請求",
     "Block selected models": "封鎖選取的模型",
-    "Block standalone greetings and health checks in every audit mode. Administrators and token-count requests are exempt.": "在所有審核模式下攔截獨立問候及測活請求。管理員與 token 計數請求豁免。",
+    "Block standalone greetings and health checks in every audit mode. Token-count requests are exempt.": "在所有審核模式下攔截獨立問候及測活請求。token 計數請求豁免。",
     "Blocked": "已攔截",
     "Blocked keywords": "已阻止的關鍵詞",
     "Blocked Models": "已封鎖模型",
@@ -8084,6 +8084,8 @@
     "Agent context": "Agent 上下文",
     "Agent context is the wrapper blocks a client adds to the user turn, such as system reminders and environment descriptions, rather than conversation history. Clients can forge those blocks and the skill labels, so disabling inspection for these sources can allow disguised content to bypass your rules.": "Agent 上下文指客戶端在使用者輪次中附加的包裹區塊（例如系統提醒、環境描述），而不是歷史對話。客戶端可以偽造這些區塊以及技能標籤，因此關閉這些來源的稽核可能讓偽裝內容繞過你的規則。",
     "Enable wordlist filtering": "啟用詞庫過濾",
-    "Sensitive words are now managed with prompt inspection rules and wordlists.": "敏感詞現已統一至提示詞稽核規則與詞庫中管理。"
+    "Sensitive words are now managed with prompt inspection rules and wordlists.": "敏感詞現已統一至提示詞稽核規則與詞庫中管理。",
+    "Include administrators in probe detection": "管理員也納入測活",
+    "Administrators are exempt so their own liveness checks stay ordinary traffic. Turn this on to refuse them under the same rules.": "管理員預設豁免，讓管理員自己的測活請求仍視為一般流量。開啟後管理員也依相同規則被攔截。"
   }
 }

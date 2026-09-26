@@ -1098,7 +1098,7 @@
     "Block immediately": "Chặn ngay",
     "Block probe requests": "Chặn yêu cầu kiểm tra hoạt động",
     "Block selected models": "Chặn các mô hình đã chọn",
-    "Block standalone greetings and health checks in every audit mode. Administrators and token-count requests are exempt.": "Chặn lời chào đơn lẻ và kiểm tra hoạt động trong mọi chế độ. Miễn trừ quản trị viên và yêu cầu đếm token.",
+    "Block standalone greetings and health checks in every audit mode. Token-count requests are exempt.": "Chặn lời chào đơn lẻ và kiểm tra hoạt động trong mọi chế độ. Yêu cầu đếm token được miễn trừ.",
     "Blocked": "Đã chặn",
     "Blocked keywords": "Blocked keyword",
     "Blocked Models": "Mô hình bị chặn",
@@ -8084,6 +8084,8 @@
     "Agent context": "Ngữ cảnh Agent",
     "Agent context is the wrapper blocks a client adds to the user turn, such as system reminders and environment descriptions, rather than conversation history. Clients can forge those blocks and the skill labels, so disabling inspection for these sources can allow disguised content to bypass your rules.": "Ngữ cảnh Agent là các khối bọc mà máy khách thêm vào lượt của người dùng (chẳng hạn nhắc nhở hệ thống, mô tả môi trường), không phải lịch sử hội thoại. Máy khách có thể giả mạo các khối này và nhãn kỹ năng, nên việc tắt kiểm tra những nguồn này có thể cho phép nội dung ngụy trang vượt qua quy tắc của bạn.",
     "Enable wordlist filtering": "Bật lọc theo danh sách từ",
-    "Sensitive words are now managed with prompt inspection rules and wordlists.": "Từ nhạy cảm hiện được quản lý trong quy tắc kiểm tra câu lệnh và danh sách từ."
+    "Sensitive words are now managed with prompt inspection rules and wordlists.": "Từ nhạy cảm hiện được quản lý trong quy tắc kiểm tra câu lệnh và danh sách từ.",
+    "Include administrators in probe detection": "Bao gồm quản trị viên trong phát hiện kiểm tra hoạt động",
+    "Administrators are exempt so their own liveness checks stay ordinary traffic. Turn this on to refuse them under the same rules.": "Quản trị viên được miễn trừ để kiểm tra hoạt động của chính họ vẫn là lưu lượng bình thường. Bật tùy chọn này để từ chối họ theo cùng quy tắc."
   }
 }

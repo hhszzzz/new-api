@@ -1098,7 +1098,7 @@
     "Block immediately": "Немедленно блокировать",
     "Block probe requests": "Блокировать проверки доступности",
     "Block selected models": "Блокировать выбранные модели",
-    "Block standalone greetings and health checks in every audit mode. Administrators and token-count requests are exempt.": "Блокировать отдельные приветствия и проверки во всех режимах аудита. Администраторы и подсчёт токенов исключены.",
+    "Block standalone greetings and health checks in every audit mode. Token-count requests are exempt.": "Блокировать отдельные приветствия и проверки во всех режимах аудита. Подсчёт токенов исключён.",
     "Blocked": "Заблокировано",
     "Blocked keywords": "Заблокированные ключевые слова",
     "Blocked Models": "Заблокированные модели",
@@ -8084,6 +8084,8 @@
     "Agent context": "Контекст агента",
     "Agent context is the wrapper blocks a client adds to the user turn, such as system reminders and environment descriptions, rather than conversation history. Clients can forge those blocks and the skill labels, so disabling inspection for these sources can allow disguised content to bypass your rules.": "Контекст агента — это обёртки, которые клиент добавляет в реплику пользователя (системные напоминания, описания окружения), а не история диалога. Клиенты могут подделать эти блоки и метки навыков, поэтому отключение проверки таких источников позволяет замаскированному содержимому обойти ваши правила.",
     "Enable wordlist filtering": "Включить фильтрацию по словарям",
-    "Sensitive words are now managed with prompt inspection rules and wordlists.": "Чувствительные слова теперь управляются через правила проверки запросов и словари."
+    "Sensitive words are now managed with prompt inspection rules and wordlists.": "Чувствительные слова теперь управляются через правила проверки запросов и словари.",
+    "Include administrators in probe detection": "Включить администраторов в обнаружение проверок",
+    "Administrators are exempt so their own liveness checks stay ordinary traffic. Turn this on to refuse them under the same rules.": "Администраторы исключены, чтобы их собственные проверки доступности оставались обычным трафиком. Включите, чтобы отклонять их по тем же правилам."
   }
 }

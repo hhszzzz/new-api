@@ -428,15 +428,20 @@ func InspectPrompt(c *gin.Context, request PromptAuditRequest) (PromptAuditResul
 	}
 	// The probe gate runs before the wordlist because a listed greeting would
 	// otherwise be reported as a wordlist hit rather than as a probe. The
-	// exemptions match the pre-existing phrase gate exactly: administrators,
-	// token-count calls, incomplete coverage, and compaction requests keep the
-	// shortcut they had.
+	// exemptions match the pre-existing phrase gate exactly: token-count calls,
+	// incomplete coverage, and compaction requests keep the shortcut they had.
 	probeText := request.Snapshot.HumanPrompt
 	if probeText == "" {
 		probeText = request.Snapshot.Text()
 	}
-	probeExempt := contextInt(c, "role") >= common.RoleAdminUser || request.WordlistOnly ||
-		request.CoverageIncomplete || request.Protocol == "openai_responses_compaction"
+	// Administrators keep it too unless the operator asks otherwise, because the
+	// gate refuses liveness probes and an administrator's own health checks are
+	// the traffic it would otherwise refuse by accident.
+	probeExempt := request.WordlistOnly || request.CoverageIncomplete ||
+		request.Protocol == "openai_responses_compaction"
+	if !configured.ProbeIncludeAdmins {
+		probeExempt = probeExempt || contextInt(c, "role") >= common.RoleAdminUser
+	}
 	probeBlocked := false
 	var probeScores map[string]float64
 	var probeEndpointID, probeEndpointModel string

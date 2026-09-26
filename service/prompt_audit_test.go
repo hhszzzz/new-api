@@ -39,17 +39,21 @@ func TestPromptAuditProbeBlockingAndExemptions(t *testing.T) {
 	for _, test := range []struct {
 		name, text                              string
 		admin, history, media, count, wantBlock bool
+		includeAdmins                           bool
 	}{
 		{name: "punctuation and case", text: "  HELLO？！  ", wantBlock: true},
 		{name: "agent greeting", text: "你好", wantBlock: true},
 		{name: "sentence contains greeting", text: "hello, fix my code"},
 		{name: "internal punctuation retained", text: "who, are you"},
 		{name: "administrator", text: "hello", admin: true},
+		{name: "administrator included on request", text: "你好", admin: true, includeAdmins: true, wantBlock: true},
 		{name: "history", text: "hello", history: true},
 		{name: "image and greeting", text: "hello", media: true},
 		{name: "count tokens", text: "hello", count: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			configured.ProbeIncludeAdmins = test.includeAdmins
+			configured.PublishConfig()
 			c, _ := gin.CreateTestContext(httptest.NewRecorder())
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
 			if test.admin {
@@ -1738,19 +1742,21 @@ func promptAuditSemanticProbeFixture(t *testing.T, nodeURL string, phrases []str
 // request through when the node answers nothing.
 func TestPromptAuditSemanticProbe(t *testing.T) {
 	type probeCase struct {
-		name         string
-		text         string
-		admin        bool
-		nodeStatus   int
-		nodeScore    float64
-		phraseList   []string
-		wantBlocked  bool
-		wantNodeHits int32
+		name          string
+		text          string
+		admin         bool
+		includeAdmins bool
+		nodeStatus    int
+		nodeScore     float64
+		phraseList    []string
+		wantBlocked   bool
+		wantNodeHits  int32
 	}
 	for _, test := range []probeCase{
 		{name: "a greeting the phrase list misses", text: "在吗？测一下连通", nodeScore: 0.97, phraseList: []string{"hello"}, wantBlocked: true, wantNodeHits: 1},
 		{name: "a real question is not a probe", text: "帮我看看这段代码的并发问题", nodeScore: 0.05, phraseList: []string{"hello"}, wantNodeHits: 1},
 		{name: "administrators are exempt", text: "在吗？测一下连通", admin: true, nodeScore: 0.97, phraseList: []string{"hello"}},
+		{name: "administrators are included on request", text: "在吗？测一下连通", admin: true, includeAdmins: true, nodeScore: 0.97, phraseList: []string{"hello"}, wantBlocked: true, wantNodeHits: 1},
 		{name: "a matched phrase never calls the node", text: "hello", nodeScore: 0.97, phraseList: []string{"hello"}, wantBlocked: true},
 		{name: "a failing node lets the request through", text: "在吗？测一下连通", nodeStatus: http.StatusBadGateway, phraseList: []string{"hello"}, wantNodeHits: 1},
 	} {
@@ -1781,7 +1787,9 @@ func TestPromptAuditSemanticProbe(t *testing.T) {
 				state, _ := body["state"].(map[string]any)
 				assert.Equal(t, test.text, state["message"], "the probe question is asked about the text the client sent")
 			})
-			promptAuditSemanticProbeFixture(t, node.URL, test.phraseList)
+			configured := promptAuditSemanticProbeFixture(t, node.URL, test.phraseList)
+			configured.ProbeIncludeAdmins = test.includeAdmins
+			configured.PublishConfig()
 
 			c, _ := gin.CreateTestContext(httptest.NewRecorder())
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)

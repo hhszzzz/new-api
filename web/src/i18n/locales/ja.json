@@ -1098,7 +1098,7 @@
     "Block immediately": "即時ブロック",
     "Block probe requests": "疎通確認をブロック",
     "Block selected models": "選択したモデルをブロック",
-    "Block standalone greetings and health checks in every audit mode. Administrators and token-count requests are exempt.": "すべての監査モードで単独の挨拶と疎通確認をブロックします。管理者とトークン数計算のリクエストは対象外です。",
+    "Block standalone greetings and health checks in every audit mode. Token-count requests are exempt.": "すべての監査モードで単独の挨拶と疎通確認をブロックします。トークン数計算のリクエストは対象外です。",
     "Blocked": "ブロック",
     "Blocked keywords": "ブロックされたキーワード",
     "Blocked Models": "ブロック済みモデル",
@@ -8084,6 +8084,8 @@
     "Agent context": "Agent コンテキスト",
     "Agent context is the wrapper blocks a client adds to the user turn, such as system reminders and environment descriptions, rather than conversation history. Clients can forge those blocks and the skill labels, so disabling inspection for these sources can allow disguised content to bypass your rules.": "Agent コンテキストとは、会話履歴ではなく、システムリマインダーや環境記述など、クライアントがユーザーターンに付加するラッパーブロックです。クライアントはこれらのブロックやスキルラベルを偽装できるため、これらのソースの検査を無効にすると、偽装された内容がルールを回避できる可能性があります。",
     "Enable wordlist filtering": "単語リストによるフィルタリングを有効化",
-    "Sensitive words are now managed with prompt inspection rules and wordlists.": "機密語はプロンプト審査ルールと単語リストで管理するようになりました。"
+    "Sensitive words are now managed with prompt inspection rules and wordlists.": "機密語はプロンプト審査ルールと単語リストで管理するようになりました。",
+    "Include administrators in probe detection": "管理者も疎通確認の対象に含める",
+    "Administrators are exempt so their own liveness checks stay ordinary traffic. Turn this on to refuse them under the same rules.": "管理者は対象外のため、管理者自身の疎通確認は通常のトラフィックとして扱われます。オンにすると同じ基準で拒否します。"
   }
 }
