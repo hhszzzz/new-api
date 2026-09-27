@@ -2,7 +2,6 @@ package gemini
 
 import (
 	"context"
-	"fmt"
 	"strconv"
 	"strings"
 
@@ -199,9 +198,15 @@ func ApplyThinkingConfig(ctx context.Context, geminiRequest *dto.GeminiChatReque
 				convdiag.Add(ctx, types.ConversionDiagnostic{
 					Code:     "native_overrode_standard",
 					Path:     "generationConfig.thinkingConfig",
-					Message:  fmt.Sprintf("model %q: Gemini thinking_config effort %q overrides the standard reasoning effort %q", modelName, reasoning.EffectiveEffort(native), reasoning.EffectiveEffort(source)),
 					Severity: types.ConversionDiagnosticWarning,
-				})
+				}.WithMessage(
+					`model "{{model}}": Gemini thinking_config effort "{{selected}}" overrides the standard reasoning effort "{{standard}}"`,
+					map[string]string{
+						"model":    modelName,
+						"selected": string(reasoning.EffectiveEffort(native)),
+						"standard": string(reasoning.EffectiveEffort(source)),
+					},
+				))
 			}
 		}
 		if native.IncludeThoughts == nil {

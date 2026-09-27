@@ -83,7 +83,8 @@ func ApplyReasoningModelSuffix(c *gin.Context, info *relaycommon.RelayInfo, outb
 			diagnostics = append(diagnostics, modelModifierDiagnostic(
 				"model_modifier_overrode_request",
 				"temperature",
-				fmt.Sprintf("model temperature modifier overrides request temperature %v", current),
+				"model temperature modifier overrides request temperature {{value}}",
+				map[string]string{"value": fmt.Sprint(current)},
 			))
 		}
 	}
@@ -92,7 +93,8 @@ func ApplyReasoningModelSuffix(c *gin.Context, info *relaycommon.RelayInfo, outb
 			diagnostics = append(diagnostics, modelModifierDiagnostic(
 				"model_modifier_overrode_request",
 				"topp",
-				fmt.Sprintf("model topp modifier overrides request top_p %v", current),
+				"model topp modifier overrides request top_p {{value}}",
+				map[string]string{"value": fmt.Sprint(current)},
 			))
 		}
 	}
@@ -152,12 +154,17 @@ func overlayRadarAutoEffort(origin parsedModelModifiers, decision *relaycommon.R
 	origin.hasThinking = true
 	origin.intent = radarEffortIntent(decision.To)
 	diagnostics = append(diagnostics, types.ConversionDiagnostic{
-		Code: "radar_auto_effort_applied",
-		Path: "model.radar_auto_effort",
-		Message: fmt.Sprintf("radar auto-effort replaced reasoning effort %q with %q (policy %s)",
-			decision.From, decision.To, decision.Policy),
+		Code:     "radar_auto_effort_applied",
+		Path:     "model.radar_auto_effort",
 		Severity: types.ConversionDiagnosticWarning,
-	})
+	}.WithMessage(
+		`radar auto-effort replaced reasoning effort "{{from}}" with "{{to}}" (policy {{policy}})`,
+		map[string]string{
+			"from":   string(decision.From),
+			"to":     string(decision.To),
+			"policy": decision.Policy,
+		},
+	))
 	return origin, diagnostics
 }
 

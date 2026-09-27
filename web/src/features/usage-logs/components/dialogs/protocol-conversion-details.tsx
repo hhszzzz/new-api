@@ -25,11 +25,12 @@ import { StatusBadge } from '@/components/status-badge'
 import { conversionDiagnosticText } from '../../lib/diagnostic-messages'
 import {
   getConversionDiagnostics,
+  getDiagnosticProtocolName,
   getProtocolFlow,
   getProtocolName,
   getProtocolTranslationTarget,
 } from '../../lib/protocol-conversion'
-import type { LogOtherData } from '../../types'
+import type { ConversionDiagnostic, LogOtherData } from '../../types'
 import {
   CollapsibleDetailSection,
   DetailRow,
@@ -77,6 +78,18 @@ export function ProtocolConversionDetails(props: {
   if (flow.native) outcome = t('Native format')
   if (blocked) outcome = t('Conversion blocked')
   const warningLabel = props.logType === 2 ? t('Adjusted') : t('Warning')
+  // A sentence the backend slotted carries its values separately; the protocol
+  // one is the relay-format enum, so it goes through its display name first.
+  const diagnosticText = (item: ConversionDiagnostic) => {
+    const text = conversionDiagnosticText(item, props.logType)
+    if ('literal' in text) return text.literal
+    if (!text.params) return t(text.key)
+    if (!text.params.protocol) return t(text.key, text.params)
+    return t(text.key, {
+      ...text.params,
+      protocol: t(getDiagnosticProtocolName(text.params.protocol)),
+    })
+  }
   const stateMode = props.other?.admin_info?.protocol_state_mode
   const compactionMode = props.other?.admin_info?.compaction_mode
   const clientValue = getProtocolName(flow.request) || t('Not recorded')
@@ -183,7 +196,7 @@ export function ProtocolConversionDetails(props: {
                   />
                 </div>
                 <p className='text-muted-foreground text-xs leading-relaxed [overflow-wrap:anywhere]'>
-                  {t(conversionDiagnosticText(item, props.logType))}
+                  {diagnosticText(item)}
                 </p>
               </div>
             ))}

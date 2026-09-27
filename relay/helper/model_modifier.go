@@ -40,7 +40,8 @@ func parseExplicitModelModifiers(modelName string) (parsedModelModifiers, error)
 			parsed.diagnostics = append(parsed.diagnostics, modelModifierDiagnostic(
 				"duplicate_model_modifier",
 				modifier.Key,
-				fmt.Sprintf("model modifier %q is repeated; the rightmost value is used", modifier.Key),
+				`model modifier "{{modifier}}" is repeated; the rightmost value is used`,
+				map[string]string{"modifier": modifier.Key},
 			))
 		}
 		last[modifier.Key] = index
@@ -167,13 +168,12 @@ func extractTopP(req dto.Request) (float64, bool) {
 	return 0, false
 }
 
-func modelModifierDiagnostic(code string, key string, message string) types.ConversionDiagnostic {
+func modelModifierDiagnostic(code string, key string, message string, params ...map[string]string) types.ConversionDiagnostic {
 	return types.ConversionDiagnostic{
 		Code:     code,
 		Path:     "model.@" + key,
-		Message:  message,
 		Severity: types.ConversionDiagnosticWarning,
-	}
+	}.WithMessage(message, params...)
 }
 
 func applyModelControls(req dto.Request, parsed parsedModelModifiers) error {

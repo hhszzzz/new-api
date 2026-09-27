@@ -136,14 +136,15 @@ func ParseEffort(value string) (Effort, error) {
 
 // reasoningDiagnostic describes a best-effort resolution between reasoning
 // controls that is not tied to a single provider's field layout. The target
-// format is filled in by the conversion pipeline.
-func reasoningDiagnostic(code string, message string) types.ConversionDiagnostic {
+// format is filled in by the conversion pipeline. Its optional trailing value
+// map works like the other diagnostic constructors: the sentence is written
+// with {{name}} slots when it carries per-request values.
+func reasoningDiagnostic(code string, message string, params ...map[string]string) types.ConversionDiagnostic {
 	return types.ConversionDiagnostic{
 		Code:     code,
 		Path:     "reasoning",
-		Message:  message,
 		Severity: types.ConversionDiagnosticWarning,
-	}
+	}.WithMessage(message, params...)
 }
 
 // normalizeIntent canonicalizes one intent. Only unknown effort or mode values
@@ -169,7 +170,8 @@ func normalizeIntent(intent Intent) (Intent, []types.ConversionDiagnostic, error
 		if budget < -1 {
 			diagnostics = append(diagnostics, reasoningDiagnostic(
 				"reasoning_budget_adjusted",
-				fmt.Sprintf("thinking budget %d is below -1; using the dynamic budget -1", budget),
+				`thinking budget {{budget}} is below -1; using the dynamic budget -1`,
+				map[string]string{"budget": fmt.Sprint(budget)},
 			))
 			budget = -1
 			intent.BudgetTokens = &budget
@@ -186,7 +188,8 @@ func normalizeIntent(intent Intent) (Intent, []types.ConversionDiagnostic, error
 		} else if intent.Mode == ModeDisabled || intent.Effort == EffortNone {
 			diagnostics = append(diagnostics, reasoningDiagnostic(
 				"explicit_fields_conflict",
-				fmt.Sprintf("a non-zero thinking budget %d enables thinking; the disabling mode or effort was ignored", budget),
+				`a non-zero thinking budget {{budget}} enables thinking; the disabling mode or effort was ignored`,
+				map[string]string{"budget": fmt.Sprint(budget)},
 			))
 			intent.Mode = ModeEnabled
 			intent.Effort = ""
@@ -247,7 +250,8 @@ func MergeExplicitAndSuffix(explicit Intent, suffix Intent, model string) (Inten
 	if explicitDisabled != suffixDisabled {
 		diagnostics = append(diagnostics, reasoningDiagnostic(
 			"suffix_overrode_request",
-			fmt.Sprintf("model %q: the model name and request fields disagree about whether thinking is enabled; the model name wins", model),
+			`model "{{model}}": the model name and request fields disagree about whether thinking is enabled; the model name wins`,
+			map[string]string{"model": fmt.Sprint(model)},
 		))
 		return merged, diagnostics, nil
 	}
@@ -268,13 +272,15 @@ func MergeExplicitAndSuffix(explicit Intent, suffix Intent, model string) (Inten
 	if explicit.Effort != "" && explicit.Effort != suffix.Effort {
 		diagnostics = append(diagnostics, reasoningDiagnostic(
 			"suffix_overrode_request",
-			fmt.Sprintf("model %q: request effort %q was replaced by the reasoning strength in the model name", model, explicit.Effort),
+			`model "{{model}}": request effort "{{effort}}" was replaced by the reasoning strength in the model name`,
+			map[string]string{"model": fmt.Sprint(model), "effort": fmt.Sprint(explicit.Effort)},
 		))
 	}
 	if explicit.BudgetTokens != nil && (suffix.BudgetTokens == nil || *explicit.BudgetTokens != *suffix.BudgetTokens) {
 		diagnostics = append(diagnostics, reasoningDiagnostic(
 			"suffix_overrode_request",
-			fmt.Sprintf("model %q: request thinking budget %d was replaced by the reasoning strength in the model name", model, *explicit.BudgetTokens),
+			`model "{{model}}": request thinking budget {{budget}} was replaced by the reasoning strength in the model name`,
+			map[string]string{"model": fmt.Sprint(model), "budget": fmt.Sprint(*explicit.BudgetTokens)},
 		))
 	}
 	return merged, diagnostics, nil
@@ -310,7 +316,8 @@ func MergeExplicit(primary Intent, secondary Intent, model string) (Intent, []ty
 	if primary.HasStrength() && secondary.HasStrength() && primaryDisabled != secondaryDisabled {
 		diagnostics = append(diagnostics, reasoningDiagnostic(
 			"explicit_fields_conflict",
-			fmt.Sprintf("model %q: reasoning fields disagree about whether thinking is enabled; keeping the more specific field", model),
+			`model "{{model}}": reasoning fields disagree about whether thinking is enabled; keeping the more specific field`,
+			map[string]string{"model": fmt.Sprint(model)},
 		))
 		if primary.IncludeThoughts == nil {
 			primary.IncludeThoughts = secondary.IncludeThoughts
@@ -320,13 +327,15 @@ func MergeExplicit(primary Intent, secondary Intent, model string) (Intent, []ty
 	if primary.Effort != "" && secondary.Effort != "" && primary.Effort != secondary.Effort {
 		diagnostics = append(diagnostics, reasoningDiagnostic(
 			"explicit_fields_conflict",
-			fmt.Sprintf("model %q: reasoning efforts %q and %q differ; keeping %q", model, primary.Effort, secondary.Effort, primary.Effort),
+			`model "{{model}}": reasoning efforts "{{primary}}" and "{{secondary}}" differ; keeping "{{kept}}"`,
+			map[string]string{"model": fmt.Sprint(model), "primary": fmt.Sprint(primary.Effort), "secondary": fmt.Sprint(secondary.Effort), "kept": fmt.Sprint(primary.Effort)},
 		))
 	}
 	if primary.BudgetTokens != nil && secondary.BudgetTokens != nil && *primary.BudgetTokens != *secondary.BudgetTokens {
 		diagnostics = append(diagnostics, reasoningDiagnostic(
 			"explicit_fields_conflict",
-			fmt.Sprintf("model %q: thinking budgets %d and %d differ; keeping %d", model, *primary.BudgetTokens, *secondary.BudgetTokens, *primary.BudgetTokens),
+			`model "{{model}}": thinking budgets {{primary}} and {{secondary}} differ; keeping {{kept}}`,
+			map[string]string{"model": fmt.Sprint(model), "primary": fmt.Sprint(*primary.BudgetTokens), "secondary": fmt.Sprint(*secondary.BudgetTokens), "kept": fmt.Sprint(*primary.BudgetTokens)},
 		))
 	}
 
@@ -578,9 +587,11 @@ func FromClaude(req *dto.ClaudeRequest) (Intent, []types.ConversionDiagnostic, e
 			diagnostics = append(diagnostics, types.ConversionDiagnostic{
 				Code:     "claude_thinking_type_coerced",
 				Path:     "thinking",
-				Message:  fmt.Sprintf("unsupported Claude thinking type %q was treated as enabled", req.Thinking.Type),
 				Severity: types.ConversionDiagnosticWarning,
-			})
+			}.WithMessage(
+				`unsupported Claude thinking type "{{type}}" was treated as enabled`,
+				map[string]string{"type": req.Thinking.Type},
+			))
 			intent.Mode = ModeEnabled
 		}
 		intent.BudgetTokens = req.Thinking.BudgetTokens

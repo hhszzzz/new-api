@@ -22,14 +22,14 @@ For commercial licensing, please contact support@quantumnous.com
  * one is also an i18n key, so listing it here is what lets the dialog translate
  * it.
  *
- * A message carrying an interpolated value (a model name, a token budget, a
- * tool name) is deliberately absent: the text differs per request, so it cannot
- * be recognised by exact match. Those keep the recorded English, which is what
- * the dialog showed before this list existed.
+ * A message carrying an interpolated value is not listed: the text differs per
+ * request, so it cannot be recognised by exact match. Those arrive with a
+ * `message_key` and its `params` instead, which the dialog fills in.
  */
 import type { ConversionDiagnostic } from '../types'
 
 export const STATIC_DIAGNOSTIC_MESSAGES: readonly string[] = [
+  'Anthropic thinking state requires its originating Messages upstream',
   'Chat Completions cannot preserve Claude max_uses',
   'Chat Completions cannot preserve caller or external-access constraints',
   'Chat Completions cannot preserve response-inclusion or return-token tuning',
@@ -89,16 +89,32 @@ export const STATIC_DIAGNOSTIC_MESSAGES: readonly string[] = [
   "Responses web-search history cannot reconstruct Claude's encrypted web_search_tool_result continuation state",
   "Responses web-search source metadata cannot reconstruct Claude's encrypted web_search_tool_result",
   'URL context has no verified mapping from the source protocol',
+  'a zero thinking budget disables thinking; the enabling mode or effort was ignored',
   'code execution semantics differ across providers',
+  'context_management is only supported by a native Responses upstream',
+  'context_management requires its native Messages upstream',
+  'conversation is only supported by a native Responses upstream',
+  'effort none disables thinking; the enabling mode was ignored',
   'failed hosted-tool output has no error or output that Claude can preserve',
   'hosted and ordinary blocks share one source message, but Responses represents hosted calls as separate input items',
   'hosted and ordinary content cannot be merged after the intermediate converter coalesced source blocks',
+  'hosted prompt is only supported by a native Responses upstream',
   'hosted-tool blocks were interleaved with content that the target converter coalesced, so their original order cannot be reconstructed',
   'hosted-tool continuation state is preserved, but provider-specific item fields may differ',
   'hosted-tool execution is preserved, but provider-specific result fields may differ',
   'hosted-tool items were interleaved with content that the target converter coalesced, so their original order cannot be reconstructed',
   'hosted-tool output has no id for pairing the call with its result',
+  'mapped-model temperature modifier overrides the origin-model modifier',
+  'mapped-model thinking modifier overrides the origin-model modifier',
+  'mapped-model topp modifier overrides the origin-model modifier',
+  'model thinking modifier overrides structured request reasoning fields',
+  'multiple output candidates require a native protocol round trip',
+  'provider-bound state requires its native protocol and provider',
+  'speed requires a native Messages upstream',
+  "stop sequence count exceeds the conversion route's supported limit",
+  'stop sequences (stop_sequences) require lossy gateway emulation for Responses',
   'target protocol does not carry this display metadata',
+  'top_k has no verified mapping on this conversion route',
 ]
 
 const STATIC_DIAGNOSTIC_MESSAGE_SET = new Set<string>(
@@ -107,27 +123,42 @@ const STATIC_DIAGNOSTIC_MESSAGE_SET = new Set<string>(
 
 /**
  * The i18n key for a recorded diagnostic message, or null when the message
- * carries request-specific values and has no fixed translation. Callers render
- * the recorded message untouched in the null case so a backend wording change
- * degrades to the previous behaviour instead of printing a raw key.
+ * carries request-specific values and has no fixed translation.
  */
 export function staticDiagnosticKey(message: string): string | null {
   return STATIC_DIAGNOSTIC_MESSAGE_SET.has(message) ? message : null
 }
 
 /**
- * The translatable text for one recorded diagnostic, as an i18n key. A message
- * with no translation returns its recorded English, which i18next renders
- * unchanged.
+ * A diagnostic rendered as an i18n key plus the values its sentence slots, or
+ * as recorded text that must be shown verbatim.
+ */
+export type DiagnosticText =
+  | { key: string; params?: Record<string, string> }
+  | { literal: string }
+
+/**
+ * The translatable text for one recorded diagnostic. A sentence the backend
+ * wrote with {{name}} slots keeps its template as the key and carries the
+ * values, so the dialog can translate the sentence and re-fill it. Anything
+ * unrecognised is returned as the recorded English: it can embed request text,
+ * which i18next would otherwise parse for nesting and interpolation syntax.
  */
 export function conversionDiagnosticText(
   diagnostic: ConversionDiagnostic,
   logType: number
-): string {
+): DiagnosticText {
   // The presentation-metadata loss explains why the field is gone instead of
   // repeating the terse backend wording.
   if (logType === 2 && diagnostic.code === 'omitted_presentation_metadata') {
-    return 'The target protocol does not support this display metadata; it was omitted.'
+    return {
+      key: 'The target protocol does not support this display metadata; it was omitted.',
+    }
   }
-  return staticDiagnosticKey(diagnostic.message) ?? diagnostic.message
+  if (diagnostic.message_key) {
+    return { key: diagnostic.message_key, params: diagnostic.params }
+  }
+  const key = staticDiagnosticKey(diagnostic.message)
+  if (key) return { key }
+  return { literal: diagnostic.message }
 }

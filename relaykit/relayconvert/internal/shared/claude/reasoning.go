@@ -142,10 +142,12 @@ func ApplyReasoning(ctx context.Context, req *dto.ClaudeRequest, info convmeta.M
 			convdiag.Add(ctx, types.ConversionDiagnostic{
 				Code:     "claude_sampling_removed",
 				Path:     "temperature/top_p/top_k",
-				Message:  fmt.Sprintf("model %q does not accept sampling controls with the selected thinking mode", capabilityModel),
 				Severity: types.ConversionDiagnosticWarning,
 				To:       types.RelayFormatClaude,
-			})
+			}.WithMessage(
+				`model "{{model}}" does not accept sampling controls with the selected thinking mode`,
+				map[string]string{"model": capabilityModel},
+			))
 		}
 		req.Temperature = nil
 		req.TopP = nil
@@ -161,10 +163,12 @@ func ApplyReasoning(ctx context.Context, req *dto.ClaudeRequest, info convmeta.M
 			convdiag.Add(ctx, types.ConversionDiagnostic{
 				Code:     "claude_sampling_constrained",
 				Path:     "temperature/top_p/top_k",
-				Message:  fmt.Sprintf("model %q accepts only top_p between 0.95 and 1 with manual thinking", capabilityModel),
 				Severity: types.ConversionDiagnosticWarning,
 				To:       types.RelayFormatClaude,
-			})
+			}.WithMessage(
+				`model "{{model}}" accepts only top_p between 0.95 and 1 with manual thinking`,
+				map[string]string{"model": capabilityModel},
+			))
 		}
 	}
 	if info != nil && rendered.EffectiveEffort != "" {

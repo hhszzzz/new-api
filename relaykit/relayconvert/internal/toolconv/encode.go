@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -93,7 +94,8 @@ func attachOpenAIChatRequest(request any, set Set) (any, []types.ConversionDiagn
 			diagnostics = append(diagnostics, semanticLoss(
 				fmt.Sprintf("tools[%d]", index),
 				"unsupported_hosted_tool",
-				fmt.Sprintf("OpenAI Chat Completions cannot represent hosted tool %q", definition.NativeType),
+				`OpenAI Chat Completions cannot represent hosted tool "{{tool}}"`,
+				map[string]string{"tool": definition.NativeType},
 			))
 		}
 	}
@@ -203,7 +205,8 @@ func attachOpenAIResponsesRequest(request any, set Set) (any, []types.Conversion
 			diagnostics = append(diagnostics, semanticLoss(
 				fmt.Sprintf("tools[%d]", index),
 				"unsupported_hosted_tool",
-				fmt.Sprintf("OpenAI Responses has no verified mapping for hosted tool %q", definition.NativeType),
+				`OpenAI Responses has no verified mapping for hosted tool "{{tool}}"`,
+				map[string]string{"tool": definition.NativeType},
 			))
 		}
 	}
@@ -324,7 +327,8 @@ func attachClaudeRequest(request any, set Set, options *convmeta.Options) (any, 
 			diagnostics = append(diagnostics, semanticLoss(
 				fmt.Sprintf("tools[%d]", index),
 				"unsupported_hosted_tool",
-				fmt.Sprintf("Claude Messages has no verified mapping for hosted tool %q", definition.NativeType),
+				`Claude Messages has no verified mapping for hosted tool "{{tool}}"`,
+				map[string]string{"tool": definition.NativeType},
 			))
 		}
 	}
@@ -457,14 +461,16 @@ func attachGeminiRequest(request any, set Set) (any, []types.ConversionDiagnosti
 				diagnostics = append(diagnostics, semanticLoss(
 					fmt.Sprintf("tools[%d]", index),
 					"unsupported_opaque_tool",
-					fmt.Sprintf("Gemini cannot represent OpenAI opaque tool %q; the definition was omitted", definition.NativeType),
+					`Gemini cannot represent OpenAI opaque tool "{{tool}}"; the definition was omitted`,
+					map[string]string{"tool": definition.NativeType},
 				))
 				continue
 			}
 			diagnostics = append(diagnostics, semanticLoss(
 				fmt.Sprintf("tools[%d]", index),
 				"unsupported_hosted_tool",
-				fmt.Sprintf("Gemini generateContent has no verified mapping for hosted tool %q", definition.NativeType),
+				`Gemini generateContent has no verified mapping for hosted tool "{{tool}}"`,
+				map[string]string{"tool": definition.NativeType},
 			))
 		}
 	}
@@ -559,7 +565,8 @@ func appendHostedHistoryToOpenAIResponses(target *dto.OpenAIResponsesRequest, se
 				diagnostics = append(diagnostics, semanticLoss(
 					fmt.Sprintf("hosted_history[%d]", index),
 					"hosted_tool_history_unsupported",
-					fmt.Sprintf("%s cannot preserve hosted-tool continuation item %q", types.RelayFormatOpenAIResponses, history.NativeType),
+					`{{protocol}} cannot preserve hosted-tool continuation item "{{tool}}"`,
+					map[string]string{"protocol": string(types.RelayFormatOpenAIResponses), "tool": history.NativeType},
 				))
 				continue
 			}
@@ -588,11 +595,7 @@ func appendHostedHistoryToOpenAIResponses(target *dto.OpenAIResponsesRequest, se
 								encoded, normalized, err = responsesMCPStringFromClaudeContent(history.Results)
 							}
 							if err != nil {
-								diagnostics = append(diagnostics, semanticLoss(
-									fmt.Sprintf("hosted_history[%d].content", index),
-									"mcp_result_unrepresentable",
-									err.Error(),
-								))
+								diagnostics = append(diagnostics, hostedToolErrorLoss(fmt.Sprintf("hosted_history[%d].content", index), "mcp_result_unrepresentable", err))
 								continue
 							}
 							var value string
@@ -655,11 +658,7 @@ func appendHostedHistoryToOpenAIResponses(target *dto.OpenAIResponsesRequest, se
 				if len(history.Action) > 0 {
 					arguments, err := responsesMCPArgumentsFromClaude(history.Action)
 					if err != nil {
-						diagnostics = append(diagnostics, semanticLoss(
-							fmt.Sprintf("hosted_history[%d].input", index),
-							"mcp_arguments_unrepresentable",
-							err.Error(),
-						))
+						diagnostics = append(diagnostics, hostedToolErrorLoss(fmt.Sprintf("hosted_history[%d].input", index), "mcp_arguments_unrepresentable", err))
 						continue
 					}
 					var value string
@@ -685,11 +684,7 @@ func appendHostedHistoryToOpenAIResponses(target *dto.OpenAIResponsesRequest, se
 						encoded, normalized, err = responsesMCPStringFromClaudeContent(history.Results)
 					}
 					if err != nil {
-						diagnostics = append(diagnostics, semanticLoss(
-							fmt.Sprintf("hosted_history[%d].content", index),
-							"mcp_result_unrepresentable",
-							err.Error(),
-						))
+						diagnostics = append(diagnostics, hostedToolErrorLoss(fmt.Sprintf("hosted_history[%d].content", index), "mcp_result_unrepresentable", err))
 						continue
 					}
 					var value string
@@ -828,7 +823,8 @@ func appendHostedHistoryToClaude(target *dto.ClaudeRequest, set Set) ([]types.Co
 				diagnostics = append(diagnostics, semanticLoss(
 					fmt.Sprintf("hosted_history[%d].status", index),
 					"hosted_tool_status_unrepresentable",
-					fmt.Sprintf("Claude cannot preserve Responses MCP status %q", history.Status),
+					`Claude cannot preserve Responses MCP status "{{status}}"`,
+					map[string]string{"status": history.Status},
 				))
 			}
 			mcpResult := history.Results
@@ -865,11 +861,7 @@ func appendHostedHistoryToClaude(target *dto.ClaudeRequest, set Set) ([]types.Co
 			}
 			input, inputErr := claudeMCPInputFromResponses(history.Action)
 			if inputErr != nil {
-				diagnostics = append(diagnostics, semanticLoss(
-					fmt.Sprintf("hosted_history[%d].arguments", index),
-					"mcp_arguments_unrepresentable",
-					inputErr.Error(),
-				))
+				diagnostics = append(diagnostics, hostedToolErrorLoss(fmt.Sprintf("hosted_history[%d].arguments", index), "mcp_arguments_unrepresentable", inputErr))
 				continue
 			}
 			call := map[string]any{
@@ -890,11 +882,7 @@ func appendHostedHistoryToClaude(target *dto.ClaudeRequest, set Set) ([]types.Co
 			if rawJSONPresent(mcpResult) {
 				content, resultErr := claudeMCPContentFromResponsesString(mcpResult)
 				if resultErr != nil {
-					diagnostics = append(diagnostics, semanticLoss(
-						fmt.Sprintf("hosted_history[%d].output", index),
-						"mcp_result_unrepresentable",
-						resultErr.Error(),
-					))
+					diagnostics = append(diagnostics, hostedToolErrorLoss(fmt.Sprintf("hosted_history[%d].output", index), "mcp_result_unrepresentable", resultErr))
 					continue
 				}
 				result := map[string]any{"type": "mcp_tool_result", "tool_use_id": id, "content": content}
@@ -906,7 +894,8 @@ func appendHostedHistoryToClaude(target *dto.ClaudeRequest, set Set) ([]types.Co
 				diagnostics = append(diagnostics, semanticLoss(
 					fmt.Sprintf("hosted_history[%d]", index),
 					"mcp_result_missing",
-					fmt.Sprintf("Responses MCP history has status %q but no output or error", history.Status),
+					`Responses MCP history has status "{{status}}" but no output or error`,
+					map[string]string{"status": history.Status},
 				))
 			}
 			blocksBySourceIndex[history.MessageIndex] = append(blocksBySourceIndex[history.MessageIndex], blocks...)
@@ -917,7 +906,8 @@ func appendHostedHistoryToClaude(target *dto.ClaudeRequest, set Set) ([]types.Co
 			diagnostics = append(diagnostics, semanticLoss(
 				fmt.Sprintf("hosted_history[%d]", index),
 				"hosted_tool_history_unsupported",
-				fmt.Sprintf("%s cannot preserve hosted-tool continuation item %q", types.RelayFormatClaude, history.NativeType),
+				`{{protocol}} cannot preserve hosted-tool continuation item "{{tool}}"`,
+				map[string]string{"protocol": string(types.RelayFormatClaude), "tool": history.NativeType},
 			))
 			continue
 		}
@@ -929,11 +919,7 @@ func appendHostedHistoryToClaude(target *dto.ClaudeRequest, set Set) ([]types.Co
 		if history.Kind == KindWebSearch {
 			webInput, inputErr := claudeWebSearchInputFromResponses(history.Action)
 			if inputErr != nil {
-				diagnostics = append(diagnostics, semanticLoss(
-					fmt.Sprintf("hosted_history[%d].action", index),
-					"web_search_action_unrepresentable",
-					inputErr.Error(),
-				))
+				diagnostics = append(diagnostics, hostedToolErrorLoss(fmt.Sprintf("hosted_history[%d].action", index), "web_search_action_unrepresentable", inputErr))
 				continue
 			}
 			input = webInput
@@ -1059,7 +1045,8 @@ func unsupportedHostedHistoryDiagnostics(format types.RelayFormat, history []Hos
 		diagnostics = append(diagnostics, semanticLoss(
 			fmt.Sprintf("hosted_history[%d]", index),
 			"hosted_tool_history_unsupported",
-			fmt.Sprintf("%s cannot preserve hosted-tool continuation item %q", format, item.NativeType),
+			`{{protocol}} cannot preserve hosted-tool continuation item "{{tool}}"`,
+			map[string]string{"protocol": string(format), "tool": item.NativeType},
 		))
 	}
 	return diagnostics
@@ -1156,25 +1143,29 @@ func geminiNativeWebSearchDiagnostics(index int, definition Definition, target t
 		return []types.ConversionDiagnostic{semanticLoss(
 			path+".googleSearch",
 			"unsupported_native_search_config",
-			fmt.Sprintf("%s cannot preserve Gemini googleSearch configuration", target),
+			`{{protocol}} cannot preserve Gemini googleSearch configuration`,
+			map[string]string{"protocol": string(target)},
 		)}
 	case "googleSearchRetrieval":
 		return []types.ConversionDiagnostic{semanticLoss(
 			path+".googleSearchRetrieval",
 			"legacy_search_semantics_unrepresentable",
-			fmt.Sprintf("%s cannot preserve Gemini legacy dynamic-retrieval semantics", target),
+			`{{protocol}} cannot preserve Gemini legacy dynamic-retrieval semantics`,
+			map[string]string{"protocol": string(target)},
 		)}
 	case "enterpriseWebSearch":
 		return []types.ConversionDiagnostic{semanticLoss(
 			path+".enterpriseWebSearch",
 			"enterprise_search_semantics_unrepresentable",
-			fmt.Sprintf("%s cannot replace Gemini enterprise search with public web search without changing its data source", target),
+			`{{protocol}} cannot replace Gemini enterprise search with public web search without changing its data source`,
+			map[string]string{"protocol": string(target)},
 		)}
 	default:
 		return []types.ConversionDiagnostic{semanticLoss(
 			path,
 			"unverified_search_mapping",
-			fmt.Sprintf("%s has no verified mapping for Gemini search tool %q", target, definition.NativeType),
+			`{{protocol}} has no verified mapping for Gemini search tool "{{tool}}"`,
+			map[string]string{"protocol": string(target), "tool": definition.NativeType},
 		)}
 	}
 }
@@ -1213,7 +1204,8 @@ func narrowAllowedFunctionChoice(choice *Choice, target types.RelayFormat) (*Cho
 	return &normalized, []types.ConversionDiagnostic{semanticLoss(
 		"tool_choice.allowed_function_names",
 		"allowed_function_subset_unrepresentable",
-		fmt.Sprintf("%s cannot restrict a required tool call to Gemini's %d-name function subset", target, len(choice.AllowedNames)),
+		`{{protocol}} cannot restrict a required tool call to Gemini's {{count}}-name function subset`,
+		map[string]string{"protocol": string(target), "count": strconv.Itoa(len(choice.AllowedNames))},
 	)}
 }
 
@@ -1339,16 +1331,55 @@ func encodeGeminiChoice(choice *Choice) (*dto.ToolConfig, []types.ConversionDiag
 	return config, nil
 }
 
-func semanticLoss(path string, code string, message string) types.ConversionDiagnostic {
-	return types.ConversionDiagnostic{Code: code, Path: path, Message: message, Severity: types.ConversionDiagnosticError, LossClass: types.ConversionLossSemantic}
+// semanticLoss, presentationLoss and tuningLoss take an optional trailing value
+// map. A site whose sentence carries per-request values writes the sentence with
+// {{name}} slots and passes the values; one that does not passes nothing and
+// records the sentence as written.
+func semanticLoss(path string, code string, message string, params ...map[string]string) types.ConversionDiagnostic {
+	text, key, values := types.FillDiagnosticMessage(message, params...)
+	return types.ConversionDiagnostic{Code: code, Path: path, Message: text, MessageKey: key, Params: values, Severity: types.ConversionDiagnosticError, LossClass: types.ConversionLossSemantic}
 }
 
-func presentationLoss(path string, code string, message string) types.ConversionDiagnostic {
-	return types.ConversionDiagnostic{Code: code, Path: path, Message: message, Severity: types.ConversionDiagnosticWarning, LossClass: types.ConversionLossPresentation}
+func presentationLoss(path string, code string, message string, params ...map[string]string) types.ConversionDiagnostic {
+	text, key, values := types.FillDiagnosticMessage(message, params...)
+	return types.ConversionDiagnostic{Code: code, Path: path, Message: text, MessageKey: key, Params: values, Severity: types.ConversionDiagnosticWarning, LossClass: types.ConversionLossPresentation}
 }
 
-func tuningLoss(path string, code string, message string) types.ConversionDiagnostic {
-	return types.ConversionDiagnostic{Code: code, Path: path, Message: message, Severity: types.ConversionDiagnosticWarning, LossClass: types.ConversionLossTuning}
+func tuningLoss(path string, code string, message string, params ...map[string]string) types.ConversionDiagnostic {
+	text, key, values := types.FillDiagnosticMessage(message, params...)
+	return types.ConversionDiagnostic{Code: code, Path: path, Message: text, MessageKey: key, Params: values, Severity: types.ConversionDiagnosticWarning, LossClass: types.ConversionLossTuning}
+}
+
+// hostedToolErrorLossTemplates gives each payload-decoding failure a fixed
+// sentence so a client can translate it. The decoder's own text is not prose and
+// not translatable, so it travels verbatim in the {{error}} slot; the code picks
+// the sentence, which keeps every site reporting that code at the same wording.
+var hostedToolErrorLossTemplates = map[string]string{
+	"mcp_result_unrepresentable":        `the MCP result cannot be represented: {{error}}`,
+	"mcp_arguments_unrepresentable":     `the MCP arguments cannot be represented: {{error}}`,
+	"web_search_action_unrepresentable": `the web search action cannot be represented: {{error}}`,
+	"hosted_tool_input_invalid":         `the hosted-tool input is invalid: {{error}}`,
+}
+
+// hostedToolErrorLoss records a hosted-tool payload that could not be decoded,
+// keeping the decoder's own text as the detail. An unknown code falls back to
+// the bare decoder text.
+func hostedToolErrorLoss(path string, code string, err error) types.ConversionDiagnostic {
+	template, ok := hostedToolErrorLossTemplates[code]
+	if !ok {
+		return semanticLoss(path, code, err.Error())
+	}
+	return semanticLoss(path, code, template, map[string]string{"error": err.Error()})
+}
+
+// responseHostedToolErrorLoss is hostedToolErrorLoss for response-phase
+// conversions, which record no loss class.
+func responseHostedToolErrorLoss(path string, code string, err error) types.ConversionDiagnostic {
+	template, ok := hostedToolErrorLossTemplates[code]
+	if !ok {
+		return responseSemanticLoss(path, code, err.Error())
+	}
+	return responseSemanticLoss(path, code, template, map[string]string{"error": err.Error()})
 }
 
 func locationMap(location *ApproximateLocation) map[string]any {

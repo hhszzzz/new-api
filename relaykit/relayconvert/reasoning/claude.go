@@ -103,7 +103,8 @@ func RenderClaude(model string, intent Intent, maxTokens *uint, adapterBudgetPer
 	if disabledWithEffort {
 		diagnostics = append(diagnostics, claudeReasoningDiagnostic(
 			"claude_disabled_effort_ignored",
-			fmt.Sprintf("model %q cannot apply effort %q while thinking is disabled; the effort was ignored", model, intent.Effort),
+			`model "{{model}}" cannot apply effort "{{effort}}" while thinking is disabled; the effort was ignored`,
+			map[string]string{"model": model, "effort": string(intent.Effort)},
 		))
 	}
 	if !intent.HasStrength() {
@@ -130,7 +131,8 @@ func RenderClaude(model string, intent Intent, maxTokens *uint, adapterBudgetPer
 		if !capabilities.supportsDisable {
 			diagnostics = append(diagnostics, claudeReasoningDiagnostic(
 				"claude_thinking_disable_unsupported",
-				fmt.Sprintf("model %q cannot disable thinking; using the lowest representable thinking mode", model),
+				`model "{{model}}" cannot disable thinking; using the lowest representable thinking mode`,
+				map[string]string{"model": model},
 			))
 			if capabilities.adaptive {
 				thinking := &dto.Thinking{Type: "adaptive"}
@@ -169,7 +171,8 @@ func RenderClaude(model string, intent Intent, maxTokens *uint, adapterBudgetPer
 	if !capabilities.supportsManual && intent.BudgetTokens != nil && intent.Mode == ModeEnabled {
 		diagnostics = append(diagnostics, claudeReasoningDiagnostic(
 			"claude_budget_to_adaptive",
-			fmt.Sprintf("model %q uses adaptive thinking; budget_tokens was converted to an effort level", model),
+			`model "{{model}}" uses adaptive thinking; budget_tokens was converted to an effort level`,
+			map[string]string{"model": model},
 		))
 	}
 	if capabilities.adaptive && !preferManual {
@@ -184,7 +187,8 @@ func RenderClaude(model string, intent Intent, maxTokens *uint, adapterBudgetPer
 		if effort != "" && normalizedEffort != effort {
 			diagnostics = append(diagnostics, claudeReasoningDiagnostic(
 				"claude_effort_adjusted",
-				fmt.Sprintf("model %q does not support effort %q; using %q", model, effort, normalizedEffort),
+				`model "{{model}}" does not support effort "{{effort}}"; using "{{selected}}"`,
+				map[string]string{"model": model, "effort": string(effort), "selected": string(normalizedEffort)},
 			))
 		}
 		effort = normalizedEffort
@@ -226,7 +230,8 @@ func RenderClaude(model string, intent Intent, maxTokens *uint, adapterBudgetPer
 	if intent.Mode == ModeAdaptive {
 		diagnostics = append(diagnostics, claudeReasoningDiagnostic(
 			"claude_adaptive_to_manual",
-			fmt.Sprintf("model %q does not support adaptive thinking; using manual thinking", model),
+			`model "{{model}}" does not support adaptive thinking; using manual thinking`,
+			map[string]string{"model": model},
 		))
 		intent.Mode = ModeEnabled
 		if intent.Effort == "" {
@@ -244,14 +249,23 @@ func RenderClaude(model string, intent Intent, maxTokens *uint, adapterBudgetPer
 		if intent.BudgetTokens != nil && *intent.BudgetTokens >= 0 && *intent.BudgetTokens < math.MaxInt32/2 {
 			raised = max(raised, uint(*intent.BudgetTokens)+1)
 		}
-		current := "a missing max_tokens"
-		if maxTokens != nil {
-			current = fmt.Sprintf("max_tokens %d", *maxTokens)
+		// The unset case says so in the sentence instead of through the value,
+		// so a translated sentence does not end up with an English noun phrase
+		// dropped into the middle of it.
+		code := "claude_max_tokens_raised"
+		if maxTokens == nil {
+			diagnostics = append(diagnostics, claudeReasoningDiagnostic(
+				code,
+				`model "{{model}}" requires max_tokens greater than 1024 for manual thinking; raised the unset max_tokens to {{raised}}`,
+				map[string]string{"model": model, "raised": fmt.Sprint(raised)},
+			))
+		} else {
+			diagnostics = append(diagnostics, claudeReasoningDiagnostic(
+				code,
+				`model "{{model}}" requires max_tokens greater than 1024 for manual thinking; raised max_tokens {{current}} to {{raised}}`,
+				map[string]string{"model": model, "current": fmt.Sprint(*maxTokens), "raised": fmt.Sprint(raised)},
+			))
 		}
-		diagnostics = append(diagnostics, claudeReasoningDiagnostic(
-			"claude_max_tokens_raised",
-			fmt.Sprintf("model %q requires max_tokens greater than 1024 for manual thinking; raised %s to %d", model, current, raised),
-		))
 		raisedMaxTokens = &raised
 		maxTokens = &raised
 	}
@@ -269,14 +283,16 @@ func RenderClaude(model string, intent Intent, maxTokens *uint, adapterBudgetPer
 		if budget != requestedBudget {
 			diagnostics = append(diagnostics, claudeReasoningDiagnostic(
 				"claude_budget_adjusted",
-				fmt.Sprintf("model %q requires 1024 <= budget_tokens < max_tokens; adjusted %d to %d", model, requestedBudget, budget),
+				`model "{{model}}" requires 1024 <= budget_tokens < max_tokens; adjusted {{requested}} to {{budget}}`,
+				map[string]string{"model": model, "requested": fmt.Sprint(requestedBudget), "budget": fmt.Sprint(budget)},
 			))
 		}
 	} else {
 		if intent.BudgetTokens != nil {
 			diagnostics = append(diagnostics, claudeReasoningDiagnostic(
 				"claude_dynamic_budget_converted",
-				fmt.Sprintf("model %q does not support a dynamic budget; derived a manual budget from reasoning effort", model),
+				`model "{{model}}" does not support a dynamic budget; derived a manual budget from reasoning effort`,
+				map[string]string{"model": model},
 			))
 		}
 		percentage := effortPercentage(intent.Effort, adapterBudgetPercentage)
@@ -315,14 +331,16 @@ func RenderClaude(model string, intent Intent, maxTokens *uint, adapterBudgetPer
 	}, nil
 }
 
-func claudeReasoningDiagnostic(code string, message string) types.ConversionDiagnostic {
+// claudeReasoningDiagnostic takes an optional trailing value map. A site whose
+// sentence carries per-request values writes the sentence with {{name}} slots
+// and passes the values; one that does not passes nothing.
+func claudeReasoningDiagnostic(code string, message string, params ...map[string]string) types.ConversionDiagnostic {
 	return types.ConversionDiagnostic{
 		Code:     code,
 		Path:     "thinking",
-		Message:  message,
 		Severity: types.ConversionDiagnosticWarning,
 		To:       types.RelayFormatClaude,
-	}
+	}.WithMessage(message, params...)
 }
 
 // ClaudeUsesManualThinking reports whether an exact numeric budget is rendered

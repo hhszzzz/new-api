@@ -90,7 +90,8 @@ func RenderGemini(model string, intent Intent, maxOutputTokens *uint, adapterBud
 		if intent.HasStrength() || (intent.IncludeThoughts != nil && !capabilities.supportsIncludeThoughts) {
 			render.Diagnostics = append(render.Diagnostics, geminiReasoningDiagnostic(
 				"gemini_thinking_unsupported",
-				fmt.Sprintf("model %q does not support configurable thinking; the requested thinking controls were dropped", model),
+				`model "{{model}}" does not support configurable thinking; the requested thinking controls were dropped`,
+				map[string]string{"model": fmt.Sprint(model)},
 			))
 		}
 		return render, nil
@@ -103,7 +104,8 @@ func RenderGemini(model string, intent Intent, maxOutputTokens *uint, adapterBud
 		if intent.HasStrength() {
 			render.Diagnostics = append(render.Diagnostics, geminiReasoningDiagnostic(
 				"gemini_unknown_capability",
-				fmt.Sprintf("model %q has no known Gemini thinking configuration; the requested thinking strength was not applied", model),
+				`model "{{model}}" has no known Gemini thinking configuration; the requested thinking strength was not applied`,
+				map[string]string{"model": fmt.Sprint(model)},
 			))
 		}
 		if intent.IncludeThoughts != nil {
@@ -120,7 +122,8 @@ func RenderGemini(model string, intent Intent, maxOutputTokens *uint, adapterBud
 			if !capabilities.supportsDisable {
 				diagnostics = append(diagnostics, geminiReasoningDiagnostic(
 					"gemini_thinking_disable_unsupported",
-					fmt.Sprintf("model %q cannot disable thinking; using its minimum thinking budget %d", model, capabilities.minBudget),
+					`model "{{model}}" cannot disable thinking; using its minimum thinking budget {{budget}}`,
+					map[string]string{"model": fmt.Sprint(model), "budget": fmt.Sprint(capabilities.minBudget)},
 				))
 				budget = capabilities.minBudget
 				effort = EffortFromBudget(budget)
@@ -138,7 +141,8 @@ func RenderGemini(model string, intent Intent, maxOutputTokens *uint, adapterBud
 				if clamped != budget {
 					diagnostics = append(diagnostics, geminiReasoningDiagnostic(
 						"gemini_budget_clamped",
-						fmt.Sprintf("thinking budget %d is outside the supported range [%d,%d] for model %q; using %d", budget, capabilities.minBudget, capabilities.maxBudget, model, clamped),
+						`thinking budget {{budget}} is outside the supported range [{{min}},{{max}}] for model "{{model}}"; using {{used}}`,
+						map[string]string{"budget": fmt.Sprint(budget), "min": fmt.Sprint(capabilities.minBudget), "max": fmt.Sprint(capabilities.maxBudget), "model": fmt.Sprint(model), "used": fmt.Sprint(clamped)},
 					))
 					budget = clamped
 				}
@@ -180,7 +184,8 @@ func RenderGemini(model string, intent Intent, maxOutputTokens *uint, adapterBud
 		}
 		diagnostics = append(diagnostics, geminiReasoningDiagnostic(
 			"gemini_thinking_disable_unsupported",
-			fmt.Sprintf("model %q cannot disable thinking; using its lowest thinking level %q", model, level),
+			`model "{{model}}" cannot disable thinking; using its lowest thinking level "{{level}}"`,
+			map[string]string{"model": fmt.Sprint(model), "level": fmt.Sprint(level)},
 		))
 		config.ThinkingLevel = level
 		return GeminiRender{Config: config, EffectiveEffort: Effort(level), Diagnostics: diagnostics}, nil
@@ -190,7 +195,8 @@ func RenderGemini(model string, intent Intent, maxOutputTokens *uint, adapterBud
 		effort = EffortFromBudget(*intent.BudgetTokens)
 		diagnostics = append(diagnostics, geminiReasoningDiagnostic(
 			"gemini_budget_to_level",
-			fmt.Sprintf("model %q uses thinkingLevel; thinking budget %d was converted to effort %q", model, *intent.BudgetTokens, effort),
+			`model "{{model}}" uses thinkingLevel; thinking budget {{budget}} was converted to effort "{{effort}}"`,
+			map[string]string{"model": fmt.Sprint(model), "budget": fmt.Sprint(*intent.BudgetTokens), "effort": fmt.Sprint(effort)},
 		))
 	}
 	if effort != "" {
@@ -201,7 +207,8 @@ func RenderGemini(model string, intent Intent, maxOutputTokens *uint, adapterBud
 		if !strings.EqualFold(level, string(effort)) {
 			diagnostics = append(diagnostics, geminiReasoningDiagnostic(
 				"gemini_level_adjusted",
-				fmt.Sprintf("model %q does not support thinking level %q; using %q", model, effort, level),
+				`model "{{model}}" does not support thinking level "{{level}}"; using "{{used}}"`,
+				map[string]string{"model": fmt.Sprint(model), "level": fmt.Sprint(effort), "used": fmt.Sprint(level)},
 			))
 		}
 		config.ThinkingLevel = level
@@ -256,13 +263,15 @@ func NormalizeGeminiThinkingConfig(model string, generation *dto.GeminiChatGener
 		case geminiThinkingBudget:
 			diagnostics = append(diagnostics, geminiReasoningDiagnostic(
 				"gemini_budget_level_conflict",
-				fmt.Sprintf("model %q uses thinkingBudget; thinkingLevel %q was dropped because both were set", model, config.ThinkingLevel),
+				`model "{{model}}" uses thinkingBudget; thinkingLevel "{{level}}" was dropped because both were set`,
+				map[string]string{"model": fmt.Sprint(model), "level": fmt.Sprint(config.ThinkingLevel)},
 			))
 			config.ThinkingLevel = ""
 		case geminiThinkingLevel:
 			diagnostics = append(diagnostics, geminiReasoningDiagnostic(
 				"gemini_budget_level_conflict",
-				fmt.Sprintf("model %q uses thinkingLevel; thinkingBudget %d was dropped because both were set", model, *config.ThinkingBudget),
+				`model "{{model}}" uses thinkingLevel; thinkingBudget {{budget}} was dropped because both were set`,
+				map[string]string{"model": fmt.Sprint(model), "budget": fmt.Sprint(*config.ThinkingBudget)},
 			))
 			config.ThinkingBudget = nil
 		}
@@ -272,7 +281,8 @@ func NormalizeGeminiThinkingConfig(model string, generation *dto.GeminiChatGener
 		if dropped {
 			diagnostics = append(diagnostics, geminiReasoningDiagnostic(
 				"gemini_thinking_unsupported",
-				fmt.Sprintf("model %q does not support configurable thinking; the thinking configuration was dropped", model),
+				`model "{{model}}" does not support configurable thinking; the thinking configuration was dropped`,
+				map[string]string{"model": fmt.Sprint(model)},
 			))
 		}
 		if !capabilities.supportsIncludeThoughts || config.IncludeThoughts == nil {
@@ -298,7 +308,8 @@ func NormalizeGeminiThinkingConfig(model string, generation *dto.GeminiChatGener
 			budget := gemini25BudgetForEffort(intent.Effort)
 			diagnostics = append(diagnostics, geminiReasoningDiagnostic(
 				"gemini_level_to_budget",
-				fmt.Sprintf("model %q uses thinkingBudget; thinkingLevel %q was converted to budget %d", model, config.ThinkingLevel, budget),
+				`model "{{model}}" uses thinkingBudget; thinkingLevel "{{level}}" was converted to budget {{budget}}`,
+				map[string]string{"model": fmt.Sprint(model), "level": fmt.Sprint(config.ThinkingLevel), "budget": fmt.Sprint(budget)},
 			))
 			config.ThinkingLevel = ""
 			config.ThinkingBudget = &budget
@@ -313,7 +324,8 @@ func NormalizeGeminiThinkingConfig(model string, generation *dto.GeminiChatGener
 		case budget == 0 && !capabilities.supportsDisable:
 			diagnostics = append(diagnostics, geminiReasoningDiagnostic(
 				"gemini_thinking_disable_unsupported",
-				fmt.Sprintf("model %q cannot disable thinking; using its minimum thinking budget %d", model, capabilities.minBudget),
+				`model "{{model}}" cannot disable thinking; using its minimum thinking budget {{budget}}`,
+				map[string]string{"model": fmt.Sprint(model), "budget": fmt.Sprint(capabilities.minBudget)},
 			))
 			budget = capabilities.minBudget
 		case budget != 0 && budget != -1:
@@ -321,7 +333,8 @@ func NormalizeGeminiThinkingConfig(model string, generation *dto.GeminiChatGener
 			if clamped != budget {
 				diagnostics = append(diagnostics, geminiReasoningDiagnostic(
 					"gemini_budget_clamped",
-					fmt.Sprintf("thinking budget %d is outside the supported range [%d,%d] for model %q; using %d", budget, capabilities.minBudget, capabilities.maxBudget, model, clamped),
+					`thinking budget {{budget}} is outside the supported range [{{min}},{{max}}] for model "{{model}}"; using {{used}}`,
+					map[string]string{"budget": fmt.Sprint(budget), "min": fmt.Sprint(capabilities.minBudget), "max": fmt.Sprint(capabilities.maxBudget), "model": fmt.Sprint(model), "used": fmt.Sprint(clamped)},
 				))
 				budget = clamped
 			}
@@ -340,7 +353,8 @@ func NormalizeGeminiThinkingConfig(model string, generation *dto.GeminiChatGener
 			}
 			diagnostics = append(diagnostics, geminiReasoningDiagnostic(
 				"gemini_thinking_disable_unsupported",
-				fmt.Sprintf("model %q cannot disable thinking; using its lowest thinking level %q", model, level),
+				`model "{{model}}" cannot disable thinking; using its lowest thinking level "{{level}}"`,
+				map[string]string{"model": fmt.Sprint(model), "level": fmt.Sprint(level)},
 			))
 			config.ThinkingLevel = level
 			return Effort(level), diagnostics, nil
@@ -351,7 +365,8 @@ func NormalizeGeminiThinkingConfig(model string, generation *dto.GeminiChatGener
 		}
 		diagnostics = append(diagnostics, geminiReasoningDiagnostic(
 			"gemini_budget_to_level",
-			fmt.Sprintf("model %q uses thinkingLevel; thinkingBudget %d was converted to thinkingLevel %q", model, budget, level),
+			`model "{{model}}" uses thinkingLevel; thinkingBudget {{budget}} was converted to thinkingLevel "{{level}}"`,
+			map[string]string{"model": fmt.Sprint(model), "budget": fmt.Sprint(budget), "level": fmt.Sprint(level)},
 		))
 		config.ThinkingLevel = level
 		return Effort(level), diagnostics, nil
@@ -366,7 +381,8 @@ func NormalizeGeminiThinkingConfig(model string, generation *dto.GeminiChatGener
 		}
 		diagnostics = append(diagnostics, geminiReasoningDiagnostic(
 			"gemini_thinking_disable_unsupported",
-			fmt.Sprintf("model %q cannot disable thinking; using its lowest thinking level %q", model, level),
+			`model "{{model}}" cannot disable thinking; using its lowest thinking level "{{level}}"`,
+			map[string]string{"model": fmt.Sprint(model), "level": fmt.Sprint(level)},
 		))
 		config.ThinkingLevel = level
 		return Effort(level), diagnostics, nil
@@ -378,20 +394,23 @@ func NormalizeGeminiThinkingConfig(model string, generation *dto.GeminiChatGener
 	if level != string(intent.Effort) {
 		diagnostics = append(diagnostics, geminiReasoningDiagnostic(
 			"gemini_level_adjusted",
-			fmt.Sprintf("model %q does not support thinkingLevel %q; using %q", model, config.ThinkingLevel, level),
+			`model "{{model}}" does not support thinkingLevel "{{level}}"; using "{{used}}"`,
+			map[string]string{"model": fmt.Sprint(model), "level": fmt.Sprint(config.ThinkingLevel), "used": fmt.Sprint(level)},
 		))
 	}
 	config.ThinkingLevel = level
 	return Effort(level), diagnostics, nil
 }
 
-func geminiReasoningDiagnostic(code string, message string) types.ConversionDiagnostic {
+// geminiReasoningDiagnostic takes an optional trailing value map. A site whose
+// sentence carries per-request values writes the sentence with {{name}} slots
+// and passes the values; one that does not passes nothing.
+func geminiReasoningDiagnostic(code string, message string, params ...map[string]string) types.ConversionDiagnostic {
 	return types.ConversionDiagnostic{
 		Code:     code,
 		Path:     "generationConfig.thinkingConfig",
-		Message:  message,
 		Severity: types.ConversionDiagnosticWarning,
-	}
+	}.WithMessage(message, params...)
 }
 
 // ResolveGeminiDefault materializes documented family defaults when a

@@ -55,6 +55,25 @@ export function getProtocolName(protocol: string): string {
   return protocolNames[protocol] ?? protocol
 }
 
+// A diagnostic records the protocol it names as the relay-format enum. Those
+// values get their own map rather than joining protocolNames, whose keys
+// decide which request_conversion chain entries getProtocolFlow counts as
+// protocols.
+const diagnosticProtocolNames: Record<string, string> = {
+  openai: 'OpenAI Chat Completions',
+  claude: 'Anthropic Messages',
+  gemini: 'Gemini GenerateContent',
+  openai_responses: 'OpenAI Responses',
+}
+
+/**
+ * The display name for a protocol a diagnostic interpolates into its sentence,
+ * already an i18n key. An unknown value is returned as recorded.
+ */
+export function getDiagnosticProtocolName(value: string): string {
+  return diagnosticProtocolNames[value] ?? value
+}
+
 export function getConversionDiagnostics(
   other: LogOtherData | null
 ): ConversionDiagnostic[] {

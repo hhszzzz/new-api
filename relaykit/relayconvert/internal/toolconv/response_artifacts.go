@@ -93,7 +93,8 @@ func AttachHostedResponse(format types.RelayFormat, response any, set HostedResp
 			diagnostics = append(diagnostics, responsePresentationLoss(
 				fmt.Sprintf("hosted_tools[%d]", index),
 				"hosted_tool_event_omitted",
-				fmt.Sprintf("%s cannot represent hosted-tool response %q", format, item.NativeType),
+				`{{protocol}} cannot represent hosted-tool response "{{tool}}"`,
+				map[string]string{"protocol": string(format), "tool": item.NativeType},
 			))
 		}
 	}
@@ -296,7 +297,8 @@ func attachOpenAIHostedResponse(response any, set HostedResponseSet) (any, []typ
 			diagnostics = append(diagnostics, responseSemanticLoss(
 				fmt.Sprintf("hosted_tools[%d]", index),
 				"hosted_tool_unrepresentable",
-				fmt.Sprintf("OpenAI Responses has no lossless response mapping for %q", item.NativeType),
+				`OpenAI Responses has no lossless response mapping for "{{tool}}"`,
+				map[string]string{"tool": item.NativeType},
 			))
 			continue
 		}
@@ -306,7 +308,8 @@ func attachOpenAIHostedResponse(response any, set HostedResponseSet) (any, []typ
 				diagnostics = append(diagnostics, responseSemanticLoss(
 					fmt.Sprintf("hosted_tools[%d].tool_use_id", index),
 					"hosted_tool_result_orphaned",
-					fmt.Sprintf("hosted-tool result references unknown call %q", item.CallID),
+					`hosted-tool result references unknown call "{{call}}"`,
+					map[string]string{"call": item.CallID},
 				))
 				continue
 			}
@@ -325,11 +328,7 @@ func attachOpenAIHostedResponse(response any, set HostedResponseSet) (any, []typ
 					encoded, normalized, err = responsesMCPStringFromClaudeContent(item.Results)
 				}
 				if err != nil {
-					diagnostics = append(diagnostics, responseSemanticLoss(
-						fmt.Sprintf("hosted_tools[%d].content", index),
-						"mcp_result_unrepresentable",
-						err.Error(),
-					))
+					diagnostics = append(diagnostics, responseHostedToolErrorLoss(fmt.Sprintf("hosted_tools[%d].content", index), "mcp_result_unrepresentable", err))
 					continue
 				}
 				if failed {
@@ -388,11 +387,7 @@ func attachOpenAIHostedResponse(response any, set HostedResponseSet) (any, []typ
 			}
 			encodedArguments, argumentErr := responsesMCPArgumentsFromClaude(arguments)
 			if argumentErr != nil {
-				diagnostics = append(diagnostics, responseSemanticLoss(
-					fmt.Sprintf("hosted_tools[%d].input", index),
-					"mcp_arguments_unrepresentable",
-					argumentErr.Error(),
-				))
+				diagnostics = append(diagnostics, responseHostedToolErrorLoss(fmt.Sprintf("hosted_tools[%d].input", index), "mcp_arguments_unrepresentable", argumentErr))
 				continue
 			}
 			output.Arguments = encodedArguments
@@ -450,7 +445,8 @@ func attachClaudeHostedResponse(response any, set HostedResponseSet) (any, []typ
 			diagnostics = append(diagnostics, responseSemanticLoss(
 				fmt.Sprintf("hosted_tools[%d]", index),
 				"hosted_tool_unrepresentable",
-				fmt.Sprintf("Claude has no lossless response mapping for %q", item.NativeType),
+				`Claude has no lossless response mapping for "{{tool}}"`,
+				map[string]string{"tool": item.NativeType},
 			))
 			continue
 		}
@@ -458,22 +454,14 @@ func attachClaudeHostedResponse(response any, set HostedResponseSet) (any, []typ
 		if item.Kind == KindWebSearch {
 			webInput, inputErr := claudeWebSearchInputFromResponses(item.Action)
 			if inputErr != nil {
-				diagnostics = append(diagnostics, responseSemanticLoss(
-					fmt.Sprintf("hosted_tools[%d].action", index),
-					"web_search_action_unrepresentable",
-					inputErr.Error(),
-				))
+				diagnostics = append(diagnostics, responseHostedToolErrorLoss(fmt.Sprintf("hosted_tools[%d].action", index), "web_search_action_unrepresentable", inputErr))
 				continue
 			}
 			input = webInput
 		} else if item.Kind == KindMCP {
 			mcpInput, inputErr := claudeMCPInputFromResponses(item.Arguments)
 			if inputErr != nil {
-				diagnostics = append(diagnostics, responseSemanticLoss(
-					fmt.Sprintf("hosted_tools[%d].arguments", index),
-					"mcp_arguments_unrepresentable",
-					inputErr.Error(),
-				))
+				diagnostics = append(diagnostics, responseHostedToolErrorLoss(fmt.Sprintf("hosted_tools[%d].arguments", index), "mcp_arguments_unrepresentable", inputErr))
 				continue
 			}
 			input = mcpInput
@@ -508,11 +496,7 @@ func attachClaudeHostedResponse(response any, set HostedResponseSet) (any, []typ
 			if item.Kind == KindMCP {
 				decoded, resultErr := claudeMCPContentFromResponsesString(result)
 				if resultErr != nil {
-					diagnostics = append(diagnostics, responseSemanticLoss(
-						fmt.Sprintf("hosted_tools[%d].output", index),
-						"mcp_result_unrepresentable",
-						resultErr.Error(),
-					))
+					diagnostics = append(diagnostics, responseHostedToolErrorLoss(fmt.Sprintf("hosted_tools[%d].output", index), "mcp_result_unrepresentable", resultErr))
 					continue
 				}
 				content = decoded
@@ -537,7 +521,8 @@ func attachClaudeHostedResponse(response any, set HostedResponseSet) (any, []typ
 			diagnostics = append(diagnostics, responseSemanticLoss(
 				fmt.Sprintf("hosted_tools[%d]", index),
 				"mcp_result_missing",
-				fmt.Sprintf("Responses MCP output has status %q but no output or error", item.Status),
+				`Responses MCP output has status "{{status}}" but no output or error`,
+				map[string]string{"status": item.Status},
 			))
 		}
 		hostedContent = append(hostedContent, positionedClaudeBlocks{position: item.Position, blocks: blocks})

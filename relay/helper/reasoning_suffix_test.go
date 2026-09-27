@@ -286,10 +286,12 @@ func TestApplyReasoningModelSuffixAppliesExplicitModifierChain(t *testing.T) {
 	assert.Equal(t, "enabled", info.ReasoningConversion.Mode)
 	assert.Equal(t, "high", info.ReasoningConversion.Effort)
 	assert.Contains(t, info.ConversionDiagnostics(), types.ConversionDiagnostic{
-		Code:     "model_modifier_overrode_request",
-		Path:     "model.@temperature",
-		Message:  "model temperature modifier overrides request temperature 0.9",
-		Severity: types.ConversionDiagnosticWarning,
+		Code:       "model_modifier_overrode_request",
+		Path:       "model.@temperature",
+		Message:    "model temperature modifier overrides request temperature 0.9",
+		MessageKey: "model temperature modifier overrides request temperature {{value}}",
+		Params:     map[string]string{"value": "0.9"},
+		Severity:   types.ConversionDiagnosticWarning,
 	})
 }
 
@@ -384,10 +386,12 @@ func TestApplyReasoningModelSuffixDuplicateModifierLastWins(t *testing.T) {
 	require.NotNil(t, info.ReasoningConversion)
 	assert.Equal(t, "disabled", info.ReasoningConversion.Mode)
 	assert.Contains(t, info.ConversionDiagnostics(), types.ConversionDiagnostic{
-		Code:     "duplicate_model_modifier",
-		Path:     "model.@thinking",
-		Message:  "model modifier \"thinking\" is repeated; the rightmost value is used",
-		Severity: types.ConversionDiagnosticWarning,
+		Code:       "duplicate_model_modifier",
+		Path:       "model.@thinking",
+		Message:    "model modifier \"thinking\" is repeated; the rightmost value is used",
+		MessageKey: "model modifier \"{{modifier}}\" is repeated; the rightmost value is used",
+		Params:     map[string]string{"modifier": "thinking"},
+		Severity:   types.ConversionDiagnosticWarning,
 	})
 }
 

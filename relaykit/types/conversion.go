@@ -2,6 +2,7 @@ package types
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -13,14 +14,50 @@ const (
 )
 
 type ConversionDiagnostic struct {
-	LossClass string                       `json:"loss_class,omitempty"`
-	Code      string                       `json:"code"`
-	Path      string                       `json:"path,omitempty"`
-	Message   string                       `json:"message"`
-	Severity  ConversionDiagnosticSeverity `json:"severity"`
-	From      RelayFormat                  `json:"from"`
-	To        RelayFormat                  `json:"to"`
+	LossClass string `json:"loss_class,omitempty"`
+	Code      string `json:"code"`
+	Path      string `json:"path,omitempty"`
+	Message   string `json:"message"`
+	// MessageKey is Message with its per-request values replaced by {{name}}
+	// slots, so a client can translate the sentence and re-fill it. It is empty
+	// for a message that carries no values, where Message is its own key and the
+	// recorded JSON stays exactly as it was before this field existed.
+	MessageKey string                       `json:"message_key,omitempty"`
+	Params     map[string]string            `json:"params,omitempty"`
+	Severity   ConversionDiagnosticSeverity `json:"severity"`
+	From       RelayFormat                  `json:"from"`
+	To         RelayFormat                  `json:"to"`
 }
+
+// WithMessage fills in a slotted message on a diagnostic written as a literal.
+// Message renders the template for callers that read the log as text, and
+// MessageKey with Params carry what a client needs to translate the sentence
+// and re-fill its slots.
+func (d ConversionDiagnostic) WithMessage(template string, params ...map[string]string) ConversionDiagnostic {
+	d.Message, d.MessageKey, d.Params = FillDiagnosticMessage(template, params...)
+	return d
+}
+
+// FillDiagnosticMessage returns the rendered sentence, the template to use as a
+// translation key, and the values that fill the template's slots. A template
+// without values is its own key, so callers pass nothing and record no params.
+func FillDiagnosticMessage(template string, params ...map[string]string) (string, string, map[string]string) {
+	if len(params) == 0 || len(params[0]) == 0 {
+		return template, "", nil
+	}
+	values := params[0]
+	// One pass over the template: a value that itself looks like a slot (it can
+	// come from the request) is written as-is instead of being filled again.
+	message := diagnosticSlot.ReplaceAllStringFunc(template, func(slot string) string {
+		if value, ok := values[slot[2:len(slot)-2]]; ok {
+			return value
+		}
+		return slot
+	})
+	return message, template, values
+}
+
+var diagnosticSlot = regexp.MustCompile(`\{\{\w+\}\}`)
 
 const (
 	// ConversionLossPresentation classifies a loss that only changes how results

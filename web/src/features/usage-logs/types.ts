@@ -356,6 +356,11 @@ export type ConversionDiagnostic = {
   code: string
   path?: string
   message: string
+  // message_key is message with its per-request values replaced by {{name}}
+  // slots; params carries those values. Absent when the sentence has no values,
+  // where message is its own key.
+  message_key?: string
+  params?: Record<string, string>
   severity: 'warning' | 'error'
   loss_class?: 'presentation' | 'tuning' | 'semantic'
   from?: string
