@@ -59,12 +59,12 @@ func TestValidateAndBuildUserBatchRateLimits(t *testing.T) {
 		{name: "custom", op: &userBatchRateLimitsOp{StreamTpsLimit: &userBatchRateLimitOp{Mode: userBatchCheckinCustom, Value: common.GetPointer(12)}}, wantChanged: true},
 		{name: "first text delay custom", op: &userBatchRateLimitsOp{FirstTokenDelayMs: &userBatchRateLimitOp{Mode: userBatchCheckinCustom, Value: common.GetPointer(1500)}}, wantChanged: true},
 		{name: "first text delay clear", op: &userBatchRateLimitsOp{FirstTokenDelayMs: &userBatchRateLimitOp{Mode: userBatchRateLimitClear}}, wantChanged: true},
-		{name: "first text delay zero", op: &userBatchRateLimitsOp{FirstTokenDelayMs: &userBatchRateLimitOp{Mode: userBatchCheckinCustom, Value: common.GetPointer(0)}}, wantErr: "首个文本延迟 限制必须在 1 到 2147483647 之间"},
-		{name: "custom missing value", op: &userBatchRateLimitsOp{RpmLimit: &userBatchRateLimitOp{Mode: userBatchCheckinCustom}}, wantErr: "RPM 自定义限制需要提供数值"},
-		{name: "custom zero", op: &userBatchRateLimitsOp{RpmLimit: &userBatchRateLimitOp{Mode: userBatchCheckinCustom, Value: common.GetPointer(0)}}, wantErr: "RPM 限制必须在 1 到 2147483647 之间"},
-		{name: "keep with value", op: &userBatchRateLimitsOp{RpmLimit: &userBatchRateLimitOp{Mode: userBatchCheckinKeep, Value: common.GetPointer(1)}}, wantErr: "RPM 保持不变时不得提供数值"},
-		{name: "clear with value", op: &userBatchRateLimitsOp{RpmLimit: &userBatchRateLimitOp{Mode: userBatchRateLimitClear, Value: common.GetPointer(1)}}, wantErr: "RPM 清除覆盖时不得提供数值"},
-		{name: "unknown", op: &userBatchRateLimitsOp{RpmLimit: &userBatchRateLimitOp{Mode: "inherit"}}, wantErr: "无效的RPM限制模式：inherit"},
+		{name: "first text delay zero", op: &userBatchRateLimitsOp{FirstTokenDelayMs: &userBatchRateLimitOp{Mode: userBatchCheckinCustom, Value: common.GetPointer(0)}}, wantErr: "First visible text delay limit must be between 1 and 2147483647"},
+		{name: "custom missing value", op: &userBatchRateLimitsOp{RpmLimit: &userBatchRateLimitOp{Mode: userBatchCheckinCustom}}, wantErr: "A custom RPM limit requires a value"},
+		{name: "custom zero", op: &userBatchRateLimitsOp{RpmLimit: &userBatchRateLimitOp{Mode: userBatchCheckinCustom, Value: common.GetPointer(0)}}, wantErr: "RPM limit must be between 1 and 2147483647"},
+		{name: "keep with value", op: &userBatchRateLimitsOp{RpmLimit: &userBatchRateLimitOp{Mode: userBatchCheckinKeep, Value: common.GetPointer(1)}}, wantErr: "RPM limit cannot have a value when kept unchanged"},
+		{name: "clear with value", op: &userBatchRateLimitsOp{RpmLimit: &userBatchRateLimitOp{Mode: userBatchRateLimitClear, Value: common.GetPointer(1)}}, wantErr: "RPM limit cannot have a value when clearing the override"},
+		{name: "unknown", op: &userBatchRateLimitsOp{RpmLimit: &userBatchRateLimitOp{Mode: "inherit"}}, wantErr: "Invalid RPM limit mode: inherit"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -105,7 +105,7 @@ func TestNormalizeUserBatchIdsAllowsAtMostOneThousandUniqueUsers(t *testing.T) {
 	assert.True(t, slices.Equal(ids, normalized))
 
 	_, err = normalizeUserBatchIds(append(ids, 1001))
-	require.EqualError(t, err, "单次批量操作最多支持 1000 个用户")
+	require.EqualError(t, err, "Too many items in batch request, maximum is 1000")
 }
 
 func TestValidateUserBatchCheckinOp(t *testing.T) {
@@ -123,22 +123,22 @@ func TestValidateUserBatchCheckinOp(t *testing.T) {
 		{
 			name:    "keep everything is rejected",
 			op:      userBatchCheckinOp{Mode: userBatchCheckinKeep, QuotaMode: userBatchCheckinKeep},
-			wantErr: "签到部分未包含任何修改",
+			wantErr: "The check-in part contains no changes",
 		},
 		{
 			name:    "custom quota requires both bounds",
 			op:      userBatchCheckinOp{QuotaMode: userBatchCheckinCustom, MinQuota: common.GetPointer(10)},
-			wantErr: "自定义签到额度需要同时提供最小值和最大值",
+			wantErr: "A custom check-in quota requires both a minimum and a maximum",
 		},
 		{
 			name:    "custom quota rejects inverted range",
 			op:      userBatchCheckinOp{QuotaMode: userBatchCheckinCustom, MinQuota: common.GetPointer(30), MaxQuota: common.GetPointer(20)},
-			wantErr: "签到最大额度不能小于最小额度",
+			wantErr: "Check-in maximum quota cannot be lower than the minimum",
 		},
 		{
 			name:    "unknown mode is rejected",
 			op:      userBatchCheckinOp{Mode: "sometimes"},
-			wantErr: "无效的签到限制模式：sometimes",
+			wantErr: "Invalid check-in restriction mode: sometimes",
 		},
 	}
 	for _, test := range tests {

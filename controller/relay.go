@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	taskdto "github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
@@ -123,7 +124,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	if err != nil {
 		// Map "request body too large" to 413 so clients can handle it correctly
 		if common.IsRequestBodyTooLargeError(err) || errors.Is(err, common.ErrRequestBodyTooLarge) {
-			newAPIError = hosttypes.NewErrorWithStatusCode(err, hosttypes.ErrorCodeReadRequestBodyFailed, http.StatusRequestEntityTooLarge, hosttypes.ErrOptionWithSkipRetry())
+			newAPIError = hosttypes.NewErrorWithStatusCode(errors.New(i18n.T(c, i18n.MsgRelayRequestBodyTooLarge)), hosttypes.ErrorCodeReadRequestBodyFailed, http.StatusRequestEntityTooLarge, hosttypes.ErrOptionWithSkipRetry())
 		} else {
 			newAPIError = hosttypes.NewError(err, hosttypes.ErrorCodeInvalidRequest, hosttypes.ErrOptionWithStatusCode(http.StatusBadRequest), hosttypes.ErrOptionWithSkipRetry())
 		}
@@ -234,7 +235,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			if bodyErr != nil {
 				// Ensure consistent 413 for oversized bodies even when error occurs later (e.g., retry path)
 				if common.IsRequestBodyTooLargeError(bodyErr) || errors.Is(bodyErr, common.ErrRequestBodyTooLarge) {
-					newAPIError = hosttypes.NewErrorWithStatusCode(bodyErr, hosttypes.ErrorCodeReadRequestBodyFailed, http.StatusRequestEntityTooLarge, hosttypes.ErrOptionWithSkipRetry())
+					newAPIError = hosttypes.NewErrorWithStatusCode(errors.New(i18n.T(c, i18n.MsgRelayRequestBodyTooLarge)), hosttypes.ErrorCodeReadRequestBodyFailed, http.StatusRequestEntityTooLarge, hosttypes.ErrOptionWithSkipRetry())
 				} else {
 					newAPIError = hosttypes.NewErrorWithStatusCode(bodyErr, hosttypes.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, hosttypes.ErrOptionWithSkipRetry())
 				}
@@ -415,7 +416,7 @@ func getChannelAttempt(c *gin.Context, info *relaycommon.RelayInfo, retryParam *
 		channel, apiErr := getChannel(c, info, retryParam)
 		if apiErr != nil {
 			if rejected {
-				return nil, nil, service.NewChannelRateLimitError()
+				return nil, nil, service.NewChannelRateLimitError(c)
 			}
 			return nil, nil, apiErr
 		}
@@ -449,7 +450,7 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 			return nil, hosttypes.NewError(fmt.Errorf("failed to reload channel %d for automatic protocol retry: %w", channelID, err), hosttypes.ErrorCodeGetChannelFailed, hosttypes.ErrOptionWithSkipRetry())
 		}
 		if channel == nil || channel.Status != common.ChannelStatusEnabled || !channel.IsSchedulableAt(time.Now()) {
-			return nil, hosttypes.NewError(fmt.Errorf("channel %d is unavailable for automatic protocol retry", channelID), hosttypes.ErrorCodeGetChannelFailed, hosttypes.ErrOptionWithSkipRetry())
+			return nil, hosttypes.NewError(errors.New(i18n.T(c, i18n.MsgRelayChannelUnavailableForProtocolRetry, map[string]any{"Id": channelID})), hosttypes.ErrorCodeGetChannelFailed, hosttypes.ErrOptionWithSkipRetry())
 		}
 		if setupErr := middleware.SetupContextForSelectedChannel(c, channel, info.OriginModelName, true); setupErr != nil {
 			return nil, setupErr
@@ -459,21 +460,22 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 	channel, selectGroup, err := service.CacheGetRandomSatisfiedChannel(retryParam)
 	if err != nil {
 		if errors.Is(err, model.ErrNoCompatibleChannel) {
+			message := i18n.T(c, i18n.MsgRelayNoCompatibleChannel)
 			if reason, ok := common.GetContextKeyType[string](c, constant.ContextKeyProtocolIncompatibleReason); ok && reason != "" {
-				err = fmt.Errorf("%w: %s", err, reason)
+				message = i18n.T(c, i18n.MsgRelayNoCompatibleChannelReason, map[string]any{"Reason": reason})
 			}
-			return nil, hosttypes.NewErrorWithStatusCode(err, hosttypes.ErrorCodeInvalidRequest, http.StatusBadRequest, hosttypes.ErrOptionWithSkipRetry())
+			return nil, hosttypes.NewErrorWithStatusCode(errors.New(message), hosttypes.ErrorCodeInvalidRequest, http.StatusBadRequest, hosttypes.ErrOptionWithSkipRetry())
 		}
 		if common.GetContextKeyInt(c, constant.ContextKeyUserModelRouteId) > 0 {
-			return nil, hosttypes.NewError(fmt.Errorf("用户模型路由没有可用渠道"), hosttypes.ErrorCodeGetChannelFailed, hosttypes.ErrOptionWithSkipRetry())
+			return nil, hosttypes.NewError(errors.New(i18n.T(c, i18n.MsgRelayUserModelRouteNoAvailable)), hosttypes.ErrorCodeGetChannelFailed, hosttypes.ErrOptionWithSkipRetry())
 		}
-		return nil, hosttypes.NewError(fmt.Errorf("获取分组 %s 下模型 %s 的可用渠道失败（retry）: %s", selectGroup, info.OriginModelName, err.Error()), hosttypes.ErrorCodeGetChannelFailed, hosttypes.ErrOptionWithSkipRetry())
+		return nil, hosttypes.NewError(errors.New(i18n.T(c, i18n.MsgRelayGetChannelFailed, map[string]any{"Model": info.OriginModelName, "Group": selectGroup, "Error": err.Error()})), hosttypes.ErrorCodeGetChannelFailed, hosttypes.ErrOptionWithSkipRetry())
 	}
 	if channel == nil {
 		if common.GetContextKeyInt(c, constant.ContextKeyUserModelRouteId) > 0 {
-			return nil, hosttypes.NewError(fmt.Errorf("用户模型路由没有可用渠道"), hosttypes.ErrorCodeGetChannelFailed, hosttypes.ErrOptionWithSkipRetry())
+			return nil, hosttypes.NewError(errors.New(i18n.T(c, i18n.MsgRelayUserModelRouteNoAvailable)), hosttypes.ErrorCodeGetChannelFailed, hosttypes.ErrOptionWithSkipRetry())
 		}
-		return nil, hosttypes.NewError(fmt.Errorf("分组 %s 下模型 %s 的可用渠道不存在（retry）", selectGroup, info.OriginModelName), hosttypes.ErrorCodeGetChannelFailed, hosttypes.ErrOptionWithSkipRetry())
+		return nil, hosttypes.NewError(errors.New(i18n.T(c, i18n.MsgRelayNoAvailableChannel, map[string]any{"Model": info.OriginModelName, "Group": selectGroup})), hosttypes.ErrorCodeGetChannelFailed, hosttypes.ErrOptionWithSkipRetry())
 	}
 
 	if routeGroup := common.GetContextKeyString(c, constant.ContextKeyUserModelRouteGroup); routeGroup != "" {
@@ -512,7 +514,7 @@ func RelayMidjourney(c *gin.Context) {
 
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"description": fmt.Sprintf("failed to generate relay info: %s", err.Error()),
+			"description": i18n.T(c, i18n.MsgRelayGenInfoFailed),
 			"type":        "upstream_error",
 			"code":        4,
 		})
@@ -568,7 +570,7 @@ func RelayMidjourney(c *gin.Context) {
 		policy.Successful = false
 		statusCode := http.StatusBadRequest
 		if mjErr.Code == 30 {
-			mjErr.Result = "当前分组负载已饱和，请稍后再试，或升级账户以提升服务质量。"
+			mjErr.Result = i18n.T(c, i18n.MsgChannelUpstreamSaturated)
 			statusCode = http.StatusTooManyRequests
 		}
 		c.JSON(statusCode, gin.H{
@@ -583,7 +585,7 @@ func RelayMidjourney(c *gin.Context) {
 
 func RelayNotImplemented(c *gin.Context) {
 	err := types.OpenAIError{
-		Message: "API not implemented",
+		Message: i18n.T(c, i18n.MsgRelayNotImplemented),
 		Type:    "new_api_error",
 		Param:   "",
 		Code:    "api_not_implemented",
@@ -600,7 +602,7 @@ func RelayNotFound(c *gin.Context) {
 	c.Header("Pragma", "no-cache")
 	c.Header("Expires", "0")
 	err := types.OpenAIError{
-		Message: fmt.Sprintf("Invalid URL (%s %s)", c.Request.Method, c.Request.URL.Path),
+		Message: i18n.T(c, i18n.MsgRelayInvalidUrl, map[string]any{"Method": c.Request.Method, "Path": c.Request.URL.Path}),
 		Type:    "invalid_request_error",
 		Param:   "",
 		Code:    "",
@@ -623,7 +625,7 @@ func RelayTaskPluginEndpoint(c *gin.Context, fallback gin.HandlerFunc) {
 	if !ok || pinned.Plugin == nil || pinned.Generation == nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": gin.H{
-				"message": "Task protocol request failed",
+				"message": i18n.T(c, i18n.MsgRelayTaskProtocolError),
 				"type":    "new_api_error",
 				"code":    "task_protocol_error",
 			},
@@ -812,7 +814,7 @@ func executeTaskSubmissionWith(
 			}
 			stage = "read_body"
 			if common.IsRequestBodyTooLargeError(bodyErr) || errors.Is(bodyErr, common.ErrRequestBodyTooLarge) {
-				taskErr = service.TaskErrorWrapperLocal(bodyErr, "read_request_body_failed", http.StatusRequestEntityTooLarge)
+				taskErr = service.TaskErrorWrapperLocal(errors.New(i18n.T(c, i18n.MsgRelayRequestBodyTooLarge)), "read_request_body_failed", http.StatusRequestEntityTooLarge)
 			} else {
 				taskErr = service.TaskErrorWrapperLocal(bodyErr, "read_request_body_failed", http.StatusBadRequest)
 			}
@@ -867,7 +869,7 @@ func executeTaskSubmissionWith(
 		return nil, taskErr
 	}
 	if result == nil {
-		taskErr = service.TaskErrorWrapperLocal(errors.New("task submission returned no result"), "task_submit_failed", http.StatusInternalServerError)
+		taskErr = service.TaskErrorWrapperLocal(errors.New(i18n.T(c, i18n.MsgRelayTaskSubmitNoResult)), "task_submit_failed", http.StatusInternalServerError)
 		diagnostics.failed("submit", "missing_result", taskErr, false)
 		return nil, taskErr
 	}
@@ -884,7 +886,7 @@ func executeTaskSubmissionWith(
 		diagnostics.reserve("reserve_start", result.Quota)
 		if reserveErr := relayInfo.Billing.Reserve(result.Quota); reserveErr != nil {
 			common.SysError("reserve adjusted task billing error: " + reserveErr.Error())
-			taskErr = service.TaskErrorWrapperLocal(errors.New("insufficient quota for adjusted task cost"), string(hosttypes.ErrorCodeInsufficientUserQuota), http.StatusForbidden)
+			taskErr = service.TaskErrorWrapperLocal(errors.New(i18n.T(c, i18n.MsgQuotaInsufficient)), string(hosttypes.ErrorCodeInsufficientUserQuota), http.StatusForbidden)
 			diagnostics.failed("reserve", "insufficient_quota", taskErr, false)
 			return nil, taskErr
 		}
@@ -963,7 +965,7 @@ func executeTaskSubmissionWith(
 	diagnostics.insertStart(task)
 	if insertErr := task.InsertWithContext(c.Request.Context(), insertOmits...); insertErr != nil {
 		common.SysError("insert task error: " + insertErr.Error())
-		taskErr = service.TaskErrorWrapperLocal(errors.New("failed to persist task"), "task_insert_failed", http.StatusInternalServerError)
+		taskErr = service.TaskErrorWrapperLocal(errors.New(i18n.T(c, i18n.MsgRelayTaskPersistFailed)), "task_insert_failed", http.StatusInternalServerError)
 		diagnostics.failed("insert", "database_error", taskErr, false)
 		return nil, taskErr
 	}
@@ -974,7 +976,7 @@ func executeTaskSubmissionWith(
 
 	if settleErr := service.SettleBilling(c, relayInfo, result.Quota); settleErr != nil {
 		common.SysError("settle task billing error: " + settleErr.Error())
-		taskErr = service.TaskErrorWrapperLocal(errors.New("failed to settle task billing"), "task_billing_settlement_failed", http.StatusInternalServerError)
+		taskErr = service.TaskErrorWrapperLocal(errors.New(i18n.T(c, i18n.MsgRelayTaskBillingSettleFailed)), "task_billing_settlement_failed", http.StatusInternalServerError)
 		diagnostics.failed("settle", "billing_error", taskErr, true)
 		return nil, taskErr
 	}
@@ -1083,7 +1085,7 @@ func respondTaskError(c *gin.Context, taskErr *taskdto.TaskError) {
 		if taskErr.Code == "rate_limit_exceeded" {
 			taskErr.Message = "rate_limit_exceeded"
 		} else {
-			taskErr.Message = "当前分组上游负载已饱和，请稍后再试"
+			taskErr.Message = i18n.T(c, i18n.MsgChannelUpstreamSaturated)
 		}
 	}
 	c.JSON(taskErr.StatusCode, taskErr)

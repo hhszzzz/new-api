@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 
 	"github.com/gin-gonic/gin"
@@ -71,17 +72,17 @@ func BatchUpdateChannels(c *gin.Context) {
 		return
 	}
 	if request.Updates.Empty() {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "no batch update fields selected"})
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": i18n.T(c, i18n.MsgChannelBatchNoFieldsSelected)})
 		return
 	}
 
-	ids, err := resolveChannelBatchTargetIDs(request.Target)
+	ids, err := resolveChannelBatchTargetIDs(request.Target, c)
 	if err != nil {
-		status := http.StatusBadRequest
 		if errors.Is(err, errChannelBatchTargetChanged) {
-			status = http.StatusConflict
+			c.JSON(http.StatusConflict, gin.H{"success": false, "message": i18n.T(c, i18n.MsgChannelBatchPreviewStale)})
+			return
 		}
-		c.JSON(status, gin.H{"success": false, "message": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
 		return
 	}
 	updated, err := model.BatchUpdateChannels(ids, request.Updates)
@@ -102,31 +103,31 @@ func BatchUpdateChannels(c *gin.Context) {
 	common.ApiSuccess(c, gin.H{"updated": updated})
 }
 
-func resolveChannelBatchTargetIDs(target channelBatchTarget) ([]int, error) {
+func resolveChannelBatchTargetIDs(target channelBatchTarget, c *gin.Context) ([]int, error) {
 	switch target.Mode {
 	case channelBatchTargetSelected:
 		ids := normalizeControllerChannelIDs(target.IDs)
 		if len(ids) == 0 {
-			return nil, fmt.Errorf("no selected channels")
+			return nil, errors.New(i18n.T(c, i18n.MsgChannelBatchNoSelectedChannels))
 		}
 		return ids, nil
 	case channelBatchTargetFiltered:
 		if target.Fingerprint == "" {
-			return nil, fmt.Errorf("filtered target fingerprint is required")
+			return nil, errors.New(i18n.T(c, i18n.MsgChannelBatchFingerprintRequired))
 		}
 		ids, err := resolveChannelBatchFilterIDs(target.Filter)
 		if err != nil {
 			return nil, err
 		}
 		if fingerprintChannelIDs(ids) != target.Fingerprint {
-			return nil, fmt.Errorf("%w; preview and confirm again", errChannelBatchTargetChanged)
+			return nil, errChannelBatchTargetChanged
 		}
 		if len(ids) == 0 {
-			return nil, fmt.Errorf("filtered target contains no channels")
+			return nil, errors.New(i18n.T(c, i18n.MsgChannelBatchFilteredEmpty))
 		}
 		return ids, nil
 	default:
-		return nil, fmt.Errorf("unsupported channel batch target mode %q", target.Mode)
+		return nil, errors.New(i18n.T(c, i18n.MsgChannelBatchUnsupportedMode, map[string]any{"Mode": target.Mode}))
 	}
 }
 

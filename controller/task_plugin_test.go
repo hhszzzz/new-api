@@ -254,7 +254,7 @@ func TestDisableFactoryPluginRespectsInUseGuard(t *testing.T) {
 
 	recorder := postTaskPluginStatus(t, key, "", `{"enabled":false}`)
 	assert.Contains(t, recorder.Body.String(), `"success":false`)
-	assert.Contains(t, recorder.Body.String(), "task plugin is still in use")
+	assert.Contains(t, recorder.Body.String(), "Task plugin is still in use")
 	assert.Empty(t, setting.GetTaskPluginDisabledFactoryKeys())
 	_, ok := jsplugin.DefaultRegistry.Get(key)
 	assert.True(t, ok)
@@ -392,7 +392,7 @@ func TestUploadTaskPluginAcceptsSourcesUpToEightMiB(t *testing.T) {
 
 	rejected := upload(accepted + strings.Repeat("x", 6<<20))
 	assert.Contains(t, rejected.Body.String(), `"success":false`)
-	assert.Contains(t, rejected.Body.String(), "plugin source exceeds 8 MiB")
+	assert.Contains(t, rejected.Body.String(), "Plugin source exceeds 8 MiB")
 	_, err = model.GetTaskPluginVersion("large-source", "2.0.0")
 	assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
 }
@@ -802,7 +802,7 @@ func TestTaskPluginRuntimeSurvivesDatabaseSyncFailure(t *testing.T) {
 	require.True(t, response.Success)
 	assert.Equal(t, generation, response.Data.CurrentGeneration)
 	assert.Equal(t, syncedRevision, response.Data.DatabaseRevision)
-	assert.Equal(t, "database snapshot unavailable", response.Data.DatabaseError)
+	assert.Equal(t, "Database snapshot unavailable", response.Data.DatabaseError)
 	assert.Equal(t, "failed", response.Data.LastRebuild.Status)
 	assert.Equal(t, syncedRevision, response.Data.LastRebuild.DatabaseRevision)
 	assert.Contains(t, response.Data.LastRebuild.Error, "sync task plugins")
@@ -1110,7 +1110,7 @@ func TestUploadTaskPluginSourceSha256(t *testing.T) {
 			key:       "sha256-mismatch",
 			withHash:  true,
 			hash:      "deadbeef",
-			wantError: "plugin source sha256 mismatch",
+			wantError: "Plugin source SHA-256 does not match",
 		},
 		{
 			name:        "absent field unchanged",
@@ -1232,12 +1232,12 @@ func TestUpdateTaskPluginMarketplaceSourcesValidation(t *testing.T) {
 		{
 			name:    "empty name",
 			body:    `[{"name":"","index_url":"https://example.com/index.json"}]`,
-			wantErr: "marketplace source name is required",
+			wantErr: "Marketplace source name is required",
 		},
 		{
 			name:    "invalid URL",
 			body:    `[{"name":"Local","index_url":"not-a-url"}]`,
-			wantErr: "marketplace source index_url must be an absolute http(s) URL",
+			wantErr: "Marketplace source index_url must be an absolute http(s) URL",
 		},
 	}
 	for _, testCase := range tests {

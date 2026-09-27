@@ -43,7 +43,7 @@ func Enable2FA(c *gin.Context) {
 	}
 	var req Verify2FARequest
 	if err := common.DecodeJson(c.Request.Body, &req); err != nil {
-		common.ApiErrorMsg(c, "参数错误")
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
 	if err := service.FinishTwoFASetup(identity, req.FlowToken, req.Code); err != nil {
@@ -81,7 +81,7 @@ func Disable2FA(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"message": "两步验证已禁用",
+		"message": common.TranslateMessage(c, i18n.MsgTwoFADisabledSuccess),
 		"data":    authRotationData(bundle),
 	})
 }
@@ -132,20 +132,14 @@ func RegenerateBackupCodes(c *gin.Context) {
 	// 生成新的备用码
 	backupCodes, err := common.GenerateBackupCodes()
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "生成备用码失败",
-		})
+		common.ApiErrorI18n(c, i18n.MsgTwoFABackupCodesGenerateFailed)
 		common.SysLog("生成备用码失败: " + err.Error())
 		return
 	}
 
 	// 保存新的备用码并原子推进用户鉴权版本
 	if err := model.ReplaceBackupCodesForSession(identity, backupCodes); err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "保存备用码失败",
-		})
+		common.ApiErrorI18n(c, i18n.MsgTwoFABackupCodesSaveFailed)
 		common.SysLog("保存备用码失败: " + err.Error())
 		return
 	}
@@ -162,7 +156,7 @@ func RegenerateBackupCodes(c *gin.Context) {
 	data["backup_codes"] = backupCodes
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"message": "备用码重新生成成功",
+		"message": common.TranslateMessage(c, i18n.MsgTwoFABackupCodesRegenerated),
 		"data":    data,
 	})
 }
@@ -194,7 +188,7 @@ func AdminDisable2FA(c *gin.Context) {
 	if err != nil || userId <= 0 {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
-			"message": "用户ID格式错误",
+			"message": common.TranslateMessage(c, i18n.MsgInvalidId),
 		})
 		return
 	}
@@ -214,7 +208,7 @@ func AdminDisable2FA(c *gin.Context) {
 	if !canManageTargetRole(myRole, targetUser.Role) {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
-			"message": "无权操作同级或更高级用户的2FA设置",
+			"message": common.TranslateMessage(c, i18n.MsgUserNoPermissionHigherLevel),
 		})
 		return
 	}
@@ -224,7 +218,7 @@ func AdminDisable2FA(c *gin.Context) {
 		if errors.Is(err, model.ErrTwoFANotEnabled) {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
-				"message": "用户未启用2FA",
+				"message": common.TranslateMessage(c, i18n.MsgTwoFANotEnabled),
 			})
 			return
 		}
@@ -240,6 +234,6 @@ func AdminDisable2FA(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"message": "用户2FA已被强制禁用",
+		"message": common.TranslateMessage(c, i18n.MsgTwoFAAdminDisabled),
 	})
 }

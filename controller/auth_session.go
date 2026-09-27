@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
@@ -114,7 +116,7 @@ func DeleteLoginSession(c *gin.Context) {
 	}
 	sid := strings.TrimSpace(c.Param("sid"))
 	if sid == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "code": "AUTH_SESSION_ID_REQUIRED", "message": "session id is required"})
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "code": "AUTH_SESSION_ID_REQUIRED", "message": common.TranslateMessage(c, i18n.MsgAuthSessionIdRequired)})
 		return
 	}
 	revoked, err := model.RevokeUserSession(identity.UserID, sid, "user_revoked")
@@ -123,7 +125,7 @@ func DeleteLoginSession(c *gin.Context) {
 		return
 	}
 	if !revoked {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "code": "AUTH_SESSION_NOT_FOUND", "message": "session not found"})
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "code": "AUTH_SESSION_NOT_FOUND", "message": common.TranslateMessage(c, i18n.MsgAuthSessionNotFound)})
 		return
 	}
 	if rawRefreshToken, cookieErr := c.Cookie(service.RefreshCookieName); cookieErr == nil {
@@ -154,7 +156,7 @@ func requireBrowserSession(c *gin.Context) (service.AuthIdentity, bool) {
 		c.JSON(http.StatusForbidden, gin.H{
 			"success": false,
 			"code":    "AUTH_SESSION_REQUIRED",
-			"message": "a dashboard login session is required",
+			"message": common.TranslateMessage(c, i18n.MsgAuthSessionRequired),
 		})
 		return service.AuthIdentity{}, false
 	}

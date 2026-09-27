@@ -3,6 +3,8 @@ package controller
 import (
 	"net/http"
 
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
@@ -13,7 +15,7 @@ func GetRatioConfig(c *gin.Context) {
 	if !ratio_setting.IsExposeRatioEnabled() {
 		c.JSON(http.StatusForbidden, gin.H{
 			"success": false,
-			"message": "倍率配置接口未启用",
+			"message": common.TranslateMessage(c, i18n.MsgFeatureDisabled),
 		})
 		return
 	}

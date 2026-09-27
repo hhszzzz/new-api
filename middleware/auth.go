@@ -361,7 +361,7 @@ func TokenAuthReadOnly() func(c *gin.Context) {
 		if token.Group != "" && !service.GroupInUserUsableGroupsForGroups(userCache.Groups, token.Group) {
 			c.JSON(http.StatusForbidden, gin.H{
 				"success": false,
-				"message": "令牌未绑定有效的用户分组",
+				"message": i18n.T(c, i18n.MsgAuthTokenNoValidGroup),
 			})
 			c.Abort()
 			return
@@ -442,11 +442,11 @@ func TokenAuth() func(c *gin.Context) {
 			logger.LogDebug(c, "Token has IP restrictions, checking client IP %s", clientIp)
 			ip := net.ParseIP(clientIp)
 			if ip == nil {
-				abortWithProtocolMessage(c, http.StatusForbidden, "无法解析客户端 IP 地址")
+				abortWithProtocolMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgAuthClientIPUnparseable))
 				return
 			}
 			if common.IsIpInCIDRList(ip, allowIps) == false {
-				abortWithProtocolMessage(c, http.StatusForbidden, "您的 IP 不在令牌允许访问的列表中", hosttypes.ErrorCodeAccessDenied)
+				abortWithProtocolMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgAuthIPNotAllowed), hosttypes.ErrorCodeAccessDenied)
 				return
 			}
 			logger.LogDebug(c, "Client IP %s passed the token IP restrictions check", clientIp)
@@ -472,11 +472,11 @@ func TokenAuth() func(c *gin.Context) {
 			tokenGroup = userCache.Group
 		}
 		if !service.GroupInUserUsableGroupsForGroups(userCache.Groups, tokenGroup) {
-			abortWithProtocolMessage(c, http.StatusForbidden, fmt.Sprintf("无权访问 %s 分组", tokenGroup))
+			abortWithProtocolMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgAuthGroupAccessDenied, map[string]any{"Group": tokenGroup}))
 			return
 		}
 		if tokenGroup != "auto" && !ratio_setting.ContainsGroupRatio(tokenGroup) {
-			abortWithProtocolMessage(c, http.StatusForbidden, fmt.Sprintf("分组 %s 已被弃用", tokenGroup))
+			abortWithProtocolMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgAuthGroupDeprecated, map[string]any{"Group": tokenGroup}))
 			return
 		}
 		common.SetContextKey(c, constant.ContextKeyUsingGroup, tokenGroup)
@@ -558,8 +558,9 @@ func SetupContextForToken(c *gin.Context, token *model.Token, parts ...string) e
 			})
 		} else {
 			c.Header("specific_channel_version", "701e3ae1dc3f7975556d354e0675168d004891c8")
-			abortWithProtocolMessage(c, http.StatusForbidden, "普通用户不支持指定渠道")
-			return fmt.Errorf("普通用户不支持指定渠道")
+			message := i18n.T(c, i18n.MsgAuthSpecificChannelDenied)
+			abortWithProtocolMessage(c, http.StatusForbidden, message)
+			return errors.New(message)
 		}
 	}
 	return nil

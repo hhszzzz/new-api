@@ -76,7 +76,7 @@ func GenerateOAuthCode(c *gin.Context) {
 	if request.Intent == model.AuthFlowIntentBind || request.Intent == model.AuthFlowIntentVerify {
 		identity, ok := middleware.GetSessionAuthIdentity(c)
 		if !ok {
-			c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "绑定操作需要登录"})
+			c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgOAuthBindRequiresLogin)})
 			return
 		}
 		userID = identity.UserID
@@ -635,7 +635,11 @@ func handleOAuthError(c *gin.Context, err error) {
 			common.ApiErrorI18n(c, e.MsgKey)
 		}
 	case *oauth.AccessDeniedError:
-		common.ApiErrorMsg(c, e.Message)
+		if e.Default {
+			common.ApiErrorI18n(c, i18n.MsgOAuthAccessDenied)
+		} else {
+			common.ApiErrorMsg(c, e.Message)
+		}
 	case *oauth.TrustLevelError:
 		common.ApiErrorI18n(c, i18n.MsgOAuthTrustLevelLow)
 	default:

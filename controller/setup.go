@@ -5,6 +5,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
@@ -48,7 +49,7 @@ func PostSetup(c *gin.Context) {
 	if constant.Setup {
 		c.JSON(200, gin.H{
 			"success": false,
-			"message": "系统已经初始化完成",
+			"message": common.TranslateMessage(c, i18n.MsgSetupAlreadyInitialized),
 		})
 		return
 	}
@@ -61,7 +62,7 @@ func PostSetup(c *gin.Context) {
 	if err != nil {
 		c.JSON(200, gin.H{
 			"success": false,
-			"message": "请求参数有误",
+			"message": common.TranslateMessage(c, i18n.MsgInvalidParams),
 		})
 		return
 	}
@@ -72,7 +73,7 @@ func PostSetup(c *gin.Context) {
 		if len(req.Username) > 12 {
 			c.JSON(200, gin.H{
 				"success": false,
-				"message": "用户名长度不能超过12个字符",
+				"message": common.TranslateMessage(c, i18n.MsgSetupUsernameTooLong, map[string]any{"Max": 12}),
 			})
 			return
 		}
@@ -80,7 +81,7 @@ func PostSetup(c *gin.Context) {
 		if req.Password != req.ConfirmPassword {
 			c.JSON(200, gin.H{
 				"success": false,
-				"message": "两次输入的密码不一致",
+				"message": common.TranslateMessage(c, i18n.MsgSetupPasswordMismatch),
 			})
 			return
 		}
@@ -98,7 +99,7 @@ func PostSetup(c *gin.Context) {
 		if err != nil {
 			c.JSON(200, gin.H{
 				"success": false,
-				"message": "系统错误: " + err.Error(),
+				"message": common.TranslateMessage(c, i18n.MsgSetupInternalError, map[string]any{"Error": err.Error()}),
 			})
 			return
 		}
@@ -115,7 +116,7 @@ func PostSetup(c *gin.Context) {
 		if err != nil {
 			c.JSON(200, gin.H{
 				"success": false,
-				"message": "创建管理员账号失败: " + err.Error(),
+				"message": common.TranslateMessage(c, i18n.MsgSetupCreateAdminFailed, map[string]any{"Error": err.Error()}),
 			})
 			return
 		}
@@ -128,19 +129,13 @@ func PostSetup(c *gin.Context) {
 	// Save operation modes to database for persistence
 	err = model.UpdateOption("SelfUseModeEnabled", boolToString(req.SelfUseModeEnabled))
 	if err != nil {
-		c.JSON(200, gin.H{
-			"success": false,
-			"message": "保存自用模式设置失败: " + err.Error(),
-		})
+		common.ApiErrorI18n(c, i18n.MsgSetupSaveSelfUseModeFailed, map[string]any{"Error": err.Error()})
 		return
 	}
 
 	err = model.UpdateOption("DemoSiteEnabled", boolToString(req.DemoSiteEnabled))
 	if err != nil {
-		c.JSON(200, gin.H{
-			"success": false,
-			"message": "保存演示站点模式设置失败: " + err.Error(),
-		})
+		common.ApiErrorI18n(c, i18n.MsgSetupSaveDemoSiteModeFailed, map[string]any{"Error": err.Error()})
 		return
 	}
 
@@ -153,16 +148,13 @@ func PostSetup(c *gin.Context) {
 	}
 	err = model.DB.Create(&setup).Error
 	if err != nil {
-		c.JSON(200, gin.H{
-			"success": false,
-			"message": "系统初始化失败: " + err.Error(),
-		})
+		common.ApiErrorI18n(c, i18n.MsgSetupInitializeFailed, map[string]any{"Error": err.Error()})
 		return
 	}
 
 	c.JSON(200, gin.H{
 		"success": true,
-		"message": "系统初始化成功",
+		"message": common.TranslateMessage(c, i18n.MsgSetupInitializeSuccess),
 	})
 }
 

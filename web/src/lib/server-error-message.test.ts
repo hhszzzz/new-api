@@ -65,4 +65,24 @@ describe('server error message mapping', () => {
       })
     ).toBe(expected.TELEGRAM_BIND_INTERNAL_ERROR)
   })
+
+  test('maps account conflicts by code, because the server localizes their text', () => {
+    expect(
+      getServerErrorMessageKey({
+        response: {
+          data: { code: 'EMAIL_ALREADY_TAKEN', message: '邮箱地址已被占用' },
+        },
+      })
+    ).toBe('This email address is already in use.')
+    expect(
+      getServerErrorMessageKey({
+        response: {
+          data: {
+            code: 'ACCOUNT_ALREADY_BOUND',
+            message: 'This account has been bound to another user',
+          },
+        },
+      })
+    ).toBe('This external account is already bound.')
+  })
 })

@@ -2,11 +2,11 @@ package controller
 
 import (
 	"errors"
-	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 
 	"github.com/gin-gonic/gin"
@@ -81,50 +81,51 @@ func BatchUpdateUserPolicy(c *gin.Context) {
 	}
 	ids, err := normalizeUserBatchIds(request.UserIds)
 	if err != nil {
-		common.ApiErrorMsg(c, err.Error())
+		common.ApiError(c, err)
 		return
 	}
 	if request.ModelLimits == nil && request.ModelBlocklist == nil && request.Checkin == nil && request.QuotaCap == nil && request.RateLimits == nil {
-		common.ApiErrorMsg(c, "未选择任何批量修改内容")
+		common.ApiErrorI18n(c, i18n.MsgUserBatchNoChangesSelected)
 		return
 	}
 	if err := normalizeUserBatchListOp(request.ModelLimits); err != nil {
-		common.ApiErrorMsg(c, err.Error())
+		common.ApiError(c, err)
 		return
 	}
 	if err := normalizeUserBatchListOp(request.ModelBlocklist); err != nil {
-		common.ApiErrorMsg(c, err.Error())
+		common.ApiError(c, err)
 		return
 	}
 	if err := validateUserBatchCheckinOp(request.Checkin); err != nil {
-		common.ApiErrorMsg(c, err.Error())
+		common.ApiError(c, err)
 		return
 	}
 	if err := validateUserBatchQuotaCapOp(request.QuotaCap); err != nil {
-		common.ApiErrorMsg(c, err.Error())
+		common.ApiError(c, err)
 		return
 	}
 	rateLimitsChanged, err := validateUserBatchRateLimitsOp(request.RateLimits)
 	if err != nil {
-		common.ApiErrorMsg(c, err.Error())
+		common.ApiError(c, err)
 		return
 	}
 	if request.ModelLimits == nil && request.ModelBlocklist == nil && request.Checkin == nil && request.QuotaCap == nil && !rateLimitsChanged {
-		common.ApiErrorMsg(c, "未选择任何批量修改内容")
+		common.ApiErrorI18n(c, i18n.MsgUserBatchNoChangesSelected)
 		return
 	}
 
 	myRole := c.GetInt("role")
 	updated := 0
 	skipped := make([]userBatchSkip, 0)
+	notExistsReason, noPermissionReason := i18n.T(c, i18n.MsgUserNotExists), i18n.T(c, i18n.MsgUserBatchNoPermission)
 	for _, id := range ids {
 		user, err := model.GetUserById(id, false)
 		if err != nil {
-			skipped = append(skipped, userBatchSkip{Id: id, Reason: "用户不存在"})
+			skipped = append(skipped, userBatchSkip{Id: id, Reason: notExistsReason})
 			continue
 		}
 		if !canManageTargetRole(myRole, user.Role) {
-			skipped = append(skipped, userBatchSkip{Id: id, Username: user.Username, Reason: "无权管理该用户"})
+			skipped = append(skipped, userBatchSkip{Id: id, Username: user.Username, Reason: noPermissionReason})
 			continue
 		}
 		partial := buildUserBatchPolicyPartial(user, request)
@@ -165,25 +166,26 @@ func BatchAddUserModelRoutes(c *gin.Context) {
 	}
 	ids, err := normalizeUserBatchIds(request.UserIds)
 	if err != nil {
-		common.ApiErrorMsg(c, err.Error())
+		common.ApiError(c, err)
 		return
 	}
 	if request.Route == nil {
-		common.ApiErrorMsg(c, "缺少模型路由内容")
+		common.ApiErrorI18n(c, i18n.MsgUserBatchRouteRequired)
 		return
 	}
 
 	myRole := c.GetInt("role")
 	created := 0
 	skipped := make([]userBatchSkip, 0)
+	notExistsReason, noPermissionReason := i18n.T(c, i18n.MsgUserNotExists), i18n.T(c, i18n.MsgUserBatchNoPermission)
 	for _, id := range ids {
 		user, err := model.GetUserById(id, false)
 		if err != nil {
-			skipped = append(skipped, userBatchSkip{Id: id, Reason: "用户不存在"})
+			skipped = append(skipped, userBatchSkip{Id: id, Reason: notExistsReason})
 			continue
 		}
 		if !canManageTargetRole(myRole, user.Role) {
-			skipped = append(skipped, userBatchSkip{Id: id, Username: user.Username, Reason: "无权管理该用户"})
+			skipped = append(skipped, userBatchSkip{Id: id, Username: user.Username, Reason: noPermissionReason})
 			continue
 		}
 		userRoute := *request.Route
@@ -193,13 +195,13 @@ func BatchAddUserModelRoutes(c *gin.Context) {
 		userRoute.Id = 0
 		userRoute.UserId = id
 		if err := validateUserModelRouteForUser(user, &userRoute); err != nil {
-			skipped = append(skipped, userBatchSkip{Id: id, Username: user.Username, Reason: err.Error()})
+			skipped = append(skipped, userBatchSkip{Id: id, Username: user.Username, Reason: common.ErrorMessage(c, err)})
 			continue
 		}
 		if err := model.SaveUserModelRoute(&userRoute); err != nil {
-			reason := err.Error()
+			reason := common.ErrorMessage(c, err)
 			if errors.Is(err, model.ErrUserModelRouteConflict) {
-				reason = "同一请求模型已存在重叠的路由规则"
+				reason = i18n.T(c, i18n.MsgUserModelRouteOverlap)
 			}
 			skipped = append(skipped, userBatchSkip{Id: id, Username: user.Username, Reason: reason})
 			continue
@@ -230,10 +232,10 @@ func normalizeUserBatchIds(ids []int) ([]int, error) {
 		normalized = append(normalized, id)
 	}
 	if len(normalized) == 0 {
-		return nil, errors.New("未选择任何用户")
+		return nil, i18n.NewError(i18n.MsgUserBatchNoUsersSelected, nil)
 	}
 	if len(normalized) > maxUserBatchSize {
-		return nil, fmt.Errorf("单次批量操作最多支持 %d 个用户", maxUserBatchSize)
+		return nil, i18n.NewError(i18n.MsgBatchTooMany, map[string]any{"Max": maxUserBatchSize})
 	}
 	sort.Ints(normalized)
 	return normalized, nil
@@ -270,10 +272,10 @@ func normalizeUserBatchListOp(op *userBatchListOp) error {
 		}
 		op.Models = models
 	default:
-		return fmt.Errorf("无效的批量清单模式：%s", op.Mode)
+		return i18n.NewError(i18n.MsgUserBatchInvalidListMode, map[string]any{"Mode": op.Mode})
 	}
 	if op.Mode != userBatchListModeReplace && len(op.Models) == 0 && op.Enabled == nil {
-		return errors.New("模型清单部分未包含任何修改")
+		return i18n.NewError(i18n.MsgUserBatchEmptyModelList, nil)
 	}
 	return nil
 }
@@ -285,24 +287,24 @@ func validateUserBatchCheckinOp(op *userBatchCheckinOp) error {
 	switch op.Mode {
 	case "", userBatchCheckinKeep, userBatchCheckinGlobal, userBatchCheckinAllow, userBatchCheckinDeny:
 	default:
-		return fmt.Errorf("无效的签到限制模式：%s", op.Mode)
+		return i18n.NewError(i18n.MsgUserBatchInvalidCheckinMode, map[string]any{"Mode": op.Mode})
 	}
 	switch op.QuotaMode {
 	case "", userBatchCheckinKeep, userBatchCheckinGlobal:
 	case userBatchCheckinCustom:
 		if op.MinQuota == nil || op.MaxQuota == nil {
-			return errors.New("自定义签到额度需要同时提供最小值和最大值")
+			return i18n.NewError(i18n.MsgUserBatchCheckinCustomQuotaRequired, nil)
 		}
 		if err := validateUserCheckinOverride(op.MinQuota, op.MaxQuota); err != nil {
 			return err
 		}
 	default:
-		return fmt.Errorf("无效的签到额度模式：%s", op.QuotaMode)
+		return i18n.NewError(i18n.MsgUserBatchInvalidCheckinQuotaMode, map[string]any{"Mode": op.QuotaMode})
 	}
 	modeKeep := op.Mode == "" || op.Mode == userBatchCheckinKeep
 	quotaKeep := op.QuotaMode == "" || op.QuotaMode == userBatchCheckinKeep
 	if modeKeep && quotaKeep {
-		return errors.New("签到部分未包含任何修改")
+		return i18n.NewError(i18n.MsgUserBatchEmptyCheckin, nil)
 	}
 	return nil
 }
@@ -316,11 +318,11 @@ func validateUserBatchQuotaCapOp(op *userBatchQuotaCapOp) error {
 		return nil
 	case userBatchCheckinCustom:
 		if op.Value == nil {
-			return errors.New("自定义额度上限需要提供数值")
+			return i18n.NewError(i18n.MsgUserBatchQuotaCapValueRequired, nil)
 		}
 		return validateUserQuotaCap(op.Value)
 	default:
-		return fmt.Errorf("无效的额度上限模式：%s", op.Mode)
+		return i18n.NewError(i18n.MsgUserBatchInvalidQuotaCapMode, map[string]any{"Mode": op.Mode})
 	}
 }
 
@@ -330,13 +332,13 @@ func validateUserBatchRateLimitsOp(op *userBatchRateLimitsOp) (bool, error) {
 	}
 	changed := false
 	limits := []struct {
-		name  string
+		name  i18n.Key
 		limit *userBatchRateLimitOp
 	}{
-		{name: "RPM", limit: op.RpmLimit},
-		{name: "并发", limit: op.ConcurrencyLimit},
-		{name: "流式 TPS", limit: op.StreamTpsLimit},
-		{name: "首个文本延迟", limit: op.FirstTokenDelayMs},
+		{name: i18n.MsgUserLimitNameRPM, limit: op.RpmLimit},
+		{name: i18n.MsgUserLimitNameConcurrency, limit: op.ConcurrencyLimit},
+		{name: i18n.MsgUserLimitNameStreamTPS, limit: op.StreamTpsLimit},
+		{name: i18n.MsgUserLimitNameFirstTokenDelay, limit: op.FirstTokenDelayMs},
 	}
 	for _, item := range limits {
 		name, limit := item.name, item.limit
@@ -346,23 +348,23 @@ func validateUserBatchRateLimitsOp(op *userBatchRateLimitsOp) (bool, error) {
 		switch limit.Mode {
 		case userBatchCheckinKeep:
 			if limit.Value != nil {
-				return false, fmt.Errorf("%s 保持不变时不得提供数值", name)
+				return false, i18n.NewError(i18n.MsgUserRateLimitKeepNoValue, map[string]any{"Name": name})
 			}
 		case userBatchRateLimitClear:
 			if limit.Value != nil {
-				return false, fmt.Errorf("%s 清除覆盖时不得提供数值", name)
+				return false, i18n.NewError(i18n.MsgUserRateLimitClearNoValue, map[string]any{"Name": name})
 			}
 			changed = true
 		case userBatchCheckinCustom:
 			if limit.Value == nil {
-				return false, fmt.Errorf("%s 自定义限制需要提供数值", name)
+				return false, i18n.NewError(i18n.MsgUserRateLimitCustomValueRequired, map[string]any{"Name": name})
 			}
 			if err := validateUserRateLimit(name, limit.Value); err != nil {
 				return false, err
 			}
 			changed = true
 		default:
-			return false, fmt.Errorf("无效的%s限制模式：%s", name, limit.Mode)
+			return false, i18n.NewError(i18n.MsgUserRateLimitInvalidMode, map[string]any{"Name": name, "Mode": limit.Mode})
 		}
 	}
 	return changed, nil

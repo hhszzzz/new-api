@@ -1168,7 +1168,7 @@ func TestSecurityEnrollmentTwoFAFailureAccountingAndStorageErrors(t *testing.T) 
 		require.NoError(t, common.Unmarshal(response.Body.Bytes(), &body))
 		assert.False(t, body.Success, endpoint.path)
 		if endpoint.path == "/api/user/login/2fa" {
-			assert.Equal(t, "参数错误", body.Message, endpoint.path)
+			assert.Equal(t, "Invalid parameters", body.Message, endpoint.path)
 		} else {
 			assert.Equal(t, "SECURITY_PROOF_REQUIRED", body.Code, endpoint.path)
 		}

@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
@@ -13,8 +15,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
 )
-
-const perfMetricsUnavailableMessage = "performance metrics are temporarily unavailable"
 
 type perfMetricsStatusPointView struct {
 	Ts           int64              `json:"ts"`
@@ -114,7 +114,7 @@ func GetPerfMetricsSummary(c *gin.Context) {
 		logger.LogError(c, "failed to query performance metrics summary: "+err.Error())
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
-			"message": perfMetricsUnavailableMessage,
+			"message": common.TranslateMessage(c, i18n.MsgPerfMetricsUnavailable),
 		})
 		return
 	}
@@ -138,7 +138,7 @@ func GetPerfMetrics(c *gin.Context) {
 	if modelName == "" {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
-			"message": "model is required",
+			"message": common.TranslateMessage(c, i18n.MsgPerfModelRequired),
 		})
 		return
 	}
@@ -150,7 +150,7 @@ func GetPerfMetrics(c *gin.Context) {
 	if _, ok := visibleModels[modelName]; !ok {
 		c.JSON(http.StatusNotFound, gin.H{
 			"success": false,
-			"message": "model is not available",
+			"message": common.TranslateMessage(c, i18n.MsgPerfModelNotAvailable),
 		})
 		return
 	}
@@ -162,7 +162,7 @@ func GetPerfMetrics(c *gin.Context) {
 		if !usable || !active {
 			c.JSON(http.StatusNotFound, gin.H{
 				"success": false,
-				"message": "model is not available",
+				"message": common.TranslateMessage(c, i18n.MsgPerfModelNotAvailable),
 			})
 			return
 		}
@@ -185,7 +185,7 @@ func GetPerfMetrics(c *gin.Context) {
 		logger.LogError(c, "failed to query performance metrics: "+err.Error())
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
-			"message": perfMetricsUnavailableMessage,
+			"message": common.TranslateMessage(c, i18n.MsgPerfMetricsUnavailable),
 		})
 		return
 	}
@@ -213,7 +213,7 @@ func GetPerfMetricsStatus(c *gin.Context) {
 		_, usable := usableGroups[requestedGroup]
 		_, active := activeGroupRatios[requestedGroup]
 		if !usable || !active {
-			c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "model is not available"})
+			c.JSON(http.StatusNotFound, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgPerfModelNotAvailable)})
 			return
 		}
 	}
@@ -243,7 +243,7 @@ func GetPerfMetricsStatus(c *gin.Context) {
 	}
 
 	if requestedModel != "" && len(models) == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "model is not available"})
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgPerfModelNotAvailable)})
 		return
 	}
 	activeGroups := make([]string, 0, len(usableGroups))
@@ -260,7 +260,7 @@ func GetPerfMetricsStatus(c *gin.Context) {
 		logger.LogError(c, "failed to query model status metrics: "+err.Error())
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
-			"message": perfMetricsUnavailableMessage,
+			"message": common.TranslateMessage(c, i18n.MsgPerfMetricsUnavailable),
 		})
 		return
 	}

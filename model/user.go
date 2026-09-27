@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	hostdto "github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/i18n"
 	"strconv"
 	"strings"
 
@@ -702,7 +703,7 @@ func (user *User) TransferAffQuotaToQuota(quota int) error {
 	// 检查quota是否小于最小额度
 	quotaPerUnit := common.GetQuotaPerUnit()
 	if float64(quota) < quotaPerUnit {
-		return fmt.Errorf("转移额度最小为%s！", logger.LogQuota(common.QuotaFromFloat(quotaPerUnit)))
+		return i18n.NewError(i18n.MsgUserTransferQuotaMinimum, map[string]any{"Min": logger.LogQuota(common.QuotaFromFloat(quotaPerUnit))})
 	}
 
 	// 开始数据库事务
@@ -720,10 +721,10 @@ func (user *User) TransferAffQuotaToQuota(quota int) error {
 
 	// 再次检查用户的AffQuota是否足够
 	if user.AffQuota < quota {
-		return errors.New("邀请额度不足！")
+		return i18n.NewError(i18n.MsgUserInviteQuotaInsufficient, nil)
 	}
 	if user.QuotaCap != nil && user.Quota+quota > *user.QuotaCap {
-		return errors.New("转移后将超过账户额度上限")
+		return i18n.NewError(i18n.MsgUserTransferExceedsQuotaCap, nil)
 	}
 
 	// 更新用户额度

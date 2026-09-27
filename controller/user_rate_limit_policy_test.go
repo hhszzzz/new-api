@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -50,10 +51,10 @@ func TestUserPolicyMutationDistinguishesOmittedNullAndCustomRateLimits(t *testin
 }
 
 func TestValidateUserRateLimitBounds(t *testing.T) {
-	assert.NoError(t, validateUserRateLimit("RPM", nil))
-	assert.NoError(t, validateUserRateLimit("RPM", common.GetPointer(1)))
-	assert.NoError(t, validateUserRateLimit("RPM", common.GetPointer(maxUserRateLimit)))
-	assert.Error(t, validateUserRateLimit("RPM", common.GetPointer(0)))
-	assert.Error(t, validateUserRateLimit("RPM", common.GetPointer(-1)))
-	assert.Error(t, validateUserRateLimit("首个文本延迟", common.GetPointer(maxUserRateLimit+1)))
+	assert.NoError(t, validateUserRateLimit(i18n.MsgUserLimitNameRPM, nil))
+	assert.NoError(t, validateUserRateLimit(i18n.MsgUserLimitNameRPM, common.GetPointer(1)))
+	assert.NoError(t, validateUserRateLimit(i18n.MsgUserLimitNameRPM, common.GetPointer(maxUserRateLimit)))
+	assert.Error(t, validateUserRateLimit(i18n.MsgUserLimitNameRPM, common.GetPointer(0)))
+	assert.Error(t, validateUserRateLimit(i18n.MsgUserLimitNameRPM, common.GetPointer(-1)))
+	assert.Error(t, validateUserRateLimit(i18n.MsgUserLimitNameFirstTokenDelay, common.GetPointer(maxUserRateLimit+1)))
 }

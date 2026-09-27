@@ -196,10 +196,26 @@ func GetContextKeyType[T any](c *gin.Context, key constant.ContextKey) (T, bool)
 	return t, false
 }
 
+// LocalizedError is an error whose text depends on the request language.
+type LocalizedError interface {
+	error
+	LocalizedMessage(c *gin.Context) string
+}
+
+// ErrorMessage renders err for the caller: in the request language when it
+// carries a message key, as its plain text otherwise.
+func ErrorMessage(c *gin.Context, err error) string {
+	var localized LocalizedError
+	if errors.As(err, &localized) {
+		return localized.LocalizedMessage(c)
+	}
+	return err.Error()
+}
+
 func ApiError(c *gin.Context, err error) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": false,
-		"message": err.Error(),
+		"message": ErrorMessage(c, err),
 	})
 }
 

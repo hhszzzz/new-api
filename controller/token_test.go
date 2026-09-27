@@ -543,7 +543,7 @@ func TestGetAllTokensRejectsInvalidStatusFilter(t *testing.T) {
 
 	response := decodeAPIResponse(t, recorder)
 	assert.False(t, response.Success)
-	assert.Contains(t, response.Message, "无效的令牌状态")
+	assert.Contains(t, response.Message, "Invalid token status")
 }
 
 func TestGetTokenMasksKeyInResponse(t *testing.T) {

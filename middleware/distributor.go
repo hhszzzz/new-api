@@ -52,7 +52,7 @@ func Distribute() func(c *gin.Context) {
 		channelId, ok := common.GetContextKey(c, constant.ContextKeyTokenSpecificChannelId)
 		modelRequest, shouldSelectChannel, err := getModelRequest(c)
 		if err != nil {
-			abortWithProtocolMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidRequest, map[string]any{"Error": err.Error()}))
+			abortWithProtocolMessage(c, http.StatusBadRequest, err.Error())
 			return
 		}
 		if modelRequest.Model != "" {
@@ -63,7 +63,7 @@ func Distribute() func(c *gin.Context) {
 					abortWithProtocolMessage(
 						c,
 						http.StatusNotFound,
-						"The requested model does not exist or you do not have access to it",
+						i18n.T(c, i18n.MsgDistributorModelNotAccessible),
 						hosttypes.ErrorCodeModelNotFound,
 					)
 					return
@@ -75,7 +75,7 @@ func Distribute() func(c *gin.Context) {
 					abortWithProtocolMessage(
 						c,
 						http.StatusNotFound,
-						"The requested model does not exist or you do not have access to it",
+						i18n.T(c, i18n.MsgDistributorModelNotAccessible),
 						hosttypes.ErrorCodeModelNotFound,
 					)
 					return
@@ -128,7 +128,7 @@ func Distribute() func(c *gin.Context) {
 		_, hasResolvedPin, _ := constraints.ResolvedPin()
 		if (shouldSelectChannel || ok || hasResolvedPin) && modelRequest.Model != "" {
 			if _, routeErr := applyUserModelRoute(c, modelRequest.Model, usingGroup); routeErr != nil {
-				abortWithProtocolMessage(c, http.StatusServiceUnavailable, "用户模型路由暂时不可用")
+				abortWithProtocolMessage(c, http.StatusServiceUnavailable, i18n.T(c, i18n.MsgDistributorUserModelRouteUnavailable))
 				return
 			}
 		}
@@ -188,7 +188,7 @@ func Distribute() func(c *gin.Context) {
 				return
 			}
 			if err := validateSelectedRouteChannel(c, channel, c.Request.URL.Path); err != nil {
-				abortWithProtocolMessage(c, http.StatusForbidden, "指定渠道不符合该用户的模型路由")
+				abortWithProtocolMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorChannelOutsideUserRoute))
 				return
 			}
 		} else if ok {
@@ -207,7 +207,7 @@ func Distribute() func(c *gin.Context) {
 				return
 			}
 			if err := validateSelectedRouteChannel(c, channel, c.Request.URL.Path); err != nil {
-				abortWithProtocolMessage(c, http.StatusForbidden, "指定渠道不符合该用户的模型路由")
+				abortWithProtocolMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorChannelOutsideUserRoute))
 				return
 			}
 		} else {
@@ -596,11 +596,11 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 			}
 			midjourneyModel, mjErr, success := service.GetMjRequestModel(relayMode, &midjourneyRequest)
 			if mjErr != nil {
-				return nil, false, fmt.Errorf("%s", mjErr.Description)
+				return nil, false, errors.New(i18n.T(c, i18n.MsgDistributorInvalidRequest, map[string]any{"Error": mjErr.Description}))
 			}
 			if midjourneyModel == "" {
 				if !success {
-					return nil, false, fmt.Errorf("%s", i18n.T(c, i18n.MsgDistributorInvalidParseModel))
+					return nil, false, errors.New(i18n.T(c, i18n.MsgDistributorInvalidParseModel))
 				} else {
 					// task fetch, task fetch by condition, notify
 					shouldSelectChannel = false

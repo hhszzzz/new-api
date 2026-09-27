@@ -9,6 +9,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/relay"
@@ -314,7 +315,7 @@ func ListModels(c *gin.Context, modelType int) {
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
-			"message": "get user group failed",
+			"message": common.TranslateMessage(c, i18n.MsgModelGetUserGroupFailed),
 		})
 		return
 	}
@@ -399,7 +400,7 @@ func DashboardListModels(c *gin.Context) {
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"success": false,
-				"message": "get user group failed",
+				"message": common.TranslateMessage(c, i18n.MsgModelGetUserGroupFailed),
 			})
 			return
 		}
@@ -455,7 +456,7 @@ func RetrieveModel(c *gin.Context, modelType int) {
 		}
 	} else {
 		openAIError := types.OpenAIError{
-			Message: fmt.Sprintf("The model '%s' does not exist", modelId),
+			Message: i18n.T(c, i18n.MsgModelDoesNotExist, map[string]any{"Model": modelId}),
 			Type:    "invalid_request_error",
 			Param:   "model",
 			Code:    "model_not_found",

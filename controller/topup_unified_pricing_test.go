@@ -125,9 +125,9 @@ func TestQuoteTopUpRejectsInvalidOrUnrepresentableQuota(t *testing.T) {
 
 	operation_setting.SetPrice(0)
 	_, err = quoteTopUp(int64(common.GetQuotaPerUnit()))
-	require.ErrorContains(t, err, "价格配置无效")
+	require.ErrorContains(t, err, "The top-up price configuration is invalid")
 
 	operation_setting.SetPrice(math.MaxFloat64)
 	_, err = quoteTopUp(int64(common.GetQuotaPerUnit()))
-	require.ErrorContains(t, err, "金额配置无效")
+	require.ErrorContains(t, err, "The top-up amount configuration is invalid")
 }

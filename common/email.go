@@ -3,6 +3,7 @@ package common
 import (
 	"crypto/tls"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/smtp"
 	"slices"
@@ -10,10 +11,15 @@ import (
 	"time"
 )
 
+var (
+	ErrSMTPAccountInvalid = errors.New("invalid SMTP account")
+	ErrSMTPNotConfigured  = errors.New("SMTP server is not configured")
+)
+
 func generateMessageID() (string, error) {
 	split := strings.Split(SMTPFrom, "@")
 	if len(split) < 2 {
-		return "", fmt.Errorf("invalid SMTP account")
+		return "", ErrSMTPAccountInvalid
 	}
 	domain := strings.Split(SMTPFrom, "@")[1]
 	return fmt.Sprintf("<%d.%s@%s>", time.Now().UnixNano(), GetRandomString(12), domain), nil
@@ -84,7 +90,7 @@ func SendEmail(subject string, receiver string, content string) error {
 		return err2
 	}
 	if SMTPServer == "" && SMTPAccount == "" {
-		return fmt.Errorf("SMTP 服务器未配置")
+		return ErrSMTPNotConfigured
 	}
 	encodedSubject := fmt.Sprintf("=?UTF-8?B?%s?=", base64.StdEncoding.EncodeToString([]byte(subject)))
 	mail := []byte(fmt.Sprintf("To: %s\r\n"+

@@ -450,11 +450,12 @@ func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam
 						Params: map[string]any{"Group": usingGroup, "Model": modelName},
 					}
 				}
-				message := err.Error()
+				selectErr := &ChannelSelectError{StatusCode: http.StatusBadRequest, Code: types.ErrorCodeInvalidRequest, MessageID: i18n.MsgRelayNoCompatibleChannel}
 				if reason := common.GetContextKeyString(c, constant.ContextKeyProtocolIncompatibleReason); reason != "" {
-					message += ": " + reason
+					selectErr.MessageID = i18n.MsgRelayNoCompatibleChannelReason
+					selectErr.Params = map[string]any{"Reason": reason}
 				}
-				return nil, selectGroup, &ChannelSelectError{StatusCode: http.StatusBadRequest, Code: types.ErrorCodeInvalidRequest, Message: message}
+				return nil, selectGroup, selectErr
 			}
 			showGroup := usingGroup
 			if usingGroup == "auto" {

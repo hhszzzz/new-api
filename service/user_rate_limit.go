@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"github.com/QuantumNous/new-api/i18n"
 	hosttypes "github.com/QuantumNous/new-api/types"
 	"net/http"
 	"strings"
@@ -589,7 +590,7 @@ func BeginUserRequestRateLimit(c *gin.Context, policy UserRateLimitPolicy, model
 			logger.LogWarn(c, fmt.Sprintf("user RPM limiter failed open: user=%d request=%s error=%s", policy.UserID, c.GetString(common.RequestIdKey), failOpen.Error()))
 		} else if !allowed {
 			observation.noteRejectedLayer("individual_rpm")
-			return nil, newUserRateLimitError()
+			return nil, newUserRateLimitError(c)
 		}
 	}
 	if policy.SharedRPMLimit > 0 {
@@ -602,7 +603,7 @@ func BeginUserRequestRateLimit(c *gin.Context, policy UserRateLimitPolicy, model
 			logger.LogWarn(c, fmt.Sprintf("group shared RPM limiter failed open: user=%d group=%s request=%s error=%s", policy.UserID, policy.Group, c.GetString(common.RequestIdKey), failOpen.Error()))
 		} else if !allowed {
 			observation.noteRejectedLayer("group_shared_rpm")
-			return nil, newUserRateLimitError()
+			return nil, newUserRateLimitError(c)
 		}
 	}
 	guard := &UserRequestRateGuard{Policy: policy}
@@ -676,9 +677,9 @@ func IsUserStreamPacing(c *gin.Context) bool {
 	return ok && pacer != nil && pacer.pacingCounter().Load() > 0
 }
 
-func newUserRateLimitError() *hosttypes.NewAPIError {
+func newUserRateLimitError(c *gin.Context) *hosttypes.NewAPIError {
 	return hosttypes.NewErrorWithStatusCode(
-		errors.New("rate_limit_exceeded"),
+		errors.New(i18n.T(c, i18n.MsgRateLimitUserExceeded)),
 		hosttypes.ErrorCode("rate_limit_exceeded"),
 		http.StatusTooManyRequests,
 		hosttypes.ErrOptionWithSkipRetry(),
@@ -806,7 +807,7 @@ func acquireRequestConcurrency(c *gin.Context, policy UserRateLimitPolicy, optio
 			removeConcurrencyWaiter(policy, leaseID)
 			noteConcurrencyQueueWait(observation, start, waitedOnUser, waitedOnGroup)
 			observation.noteRejectedLayer(concurrencyRejectedLayer(waitedOnUser, waitedOnGroup))
-			return nil, newUserRateLimitError()
+			return nil, newUserRateLimitError(c)
 		}
 		result, err := client.Eval(c.Request.Context(), `
 	local now = redis.call('TIME')
@@ -894,7 +895,7 @@ func acquireRequestConcurrency(c *gin.Context, policy UserRateLimitPolicy, optio
 		case -1:
 			removeConcurrencyWaiter(policy, leaseID)
 			observation.noteRejectedLayer(concurrencyRejectedLayer(result[1] == 1, result[2] == 1))
-			return nil, newUserRateLimitError()
+			return nil, newUserRateLimitError(c)
 		}
 		queued = true
 
@@ -903,7 +904,7 @@ func acquireRequestConcurrency(c *gin.Context, policy UserRateLimitPolicy, optio
 			removeConcurrencyWaiter(policy, leaseID)
 			noteConcurrencyQueueWait(observation, start, waitedOnUser, waitedOnGroup)
 			observation.noteRejectedLayer(concurrencyRejectedLayer(waitedOnUser, waitedOnGroup))
-			return nil, newUserRateLimitError()
+			return nil, newUserRateLimitError(c)
 		}
 		wait := poll
 		if wait > remaining {

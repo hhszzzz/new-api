@@ -106,7 +106,7 @@ func TestSubscriptionAdminHandlersRejectSameRoleTargets(t *testing.T) {
 			response := callSubscriptionAdminHandler(t, test.handler, test.method, test.body, test.params)
 
 			assert.False(t, response.Success)
-			assert.Contains(t, response.Message, "无权管理")
+			assert.Contains(t, response.Message, "No permission to manage the subscriptions of users at the same or higher level")
 		})
 	}
 

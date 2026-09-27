@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	hostdto "github.com/QuantumNous/new-api/dto"
+	"github.com/go-playground/validator/v10"
 	"net/http"
 	"net/url"
 	"sort"
@@ -29,6 +30,26 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
+
+// userValidationError explains the first rejected user field in the caller's
+// language; the validator's own text is meant for developers.
+func userValidationError(err error) error {
+	var fieldErrors validator.ValidationErrors
+	if errors.As(err, &fieldErrors) && len(fieldErrors) > 0 {
+		field := fieldErrors[0]
+		switch field.StructField() {
+		case "Username":
+			return i18n.NewError(i18n.MsgSetupUsernameTooLong, map[string]any{"Max": field.Param()})
+		case "Password":
+			return i18n.NewError(i18n.MsgUserPasswordLength, map[string]any{"Min": common.MinAccountPasswordLength, "Max": common.MaxAccountPasswordLength})
+		case "DisplayName":
+			return i18n.NewError(i18n.MsgUserDisplayNameTooLong, map[string]any{"Max": field.Param()})
+		case "Email":
+			return i18n.NewError(i18n.MsgUserEmailTooLong, map[string]any{"Max": field.Param()})
+		}
+	}
+	return i18n.NewError(i18n.MsgUserInputInvalid, map[string]any{"Error": err.Error()})
+}
 
 type LoginRequest struct {
 	Username          string `json:"username"`
@@ -240,7 +261,7 @@ func Register(c *gin.Context) {
 		return
 	}
 	if err := common.Validate.Struct(&user); err != nil {
-		common.ApiErrorI18n(c, i18n.MsgUserInputInvalid, map[string]any{"Error": err.Error()})
+		common.ApiError(c, userValidationError(err))
 		return
 	}
 	if common.EmailVerificationEnabled {
@@ -437,7 +458,7 @@ func TransferAffQuota(c *gin.Context) {
 	}
 	err = user.TransferAffQuotaToQuota(tran.Quota)
 	if err != nil {
-		common.ApiErrorI18n(c, i18n.MsgUserTransferFailed, map[string]any{"Error": err.Error()})
+		common.ApiErrorI18n(c, i18n.MsgUserTransferFailed, map[string]any{"Error": common.ErrorMessage(c, err)})
 		return
 	}
 	common.ApiSuccessI18n(c, i18n.MsgUserTransferSuccess, nil)
@@ -453,10 +474,8 @@ func GetAffCode(c *gin.Context) {
 	if user.AffCode == "" {
 		user.AffCode = common.GetRandomString(4)
 		if err := user.Update(false); err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": err.Error(),
-			})
+			common.SysError("failed to save generated aff code for user " + strconv.Itoa(user.Id) + ": " + err.Error())
+			common.ApiErrorI18n(c, i18n.MsgUpdateFailed)
 			return
 		}
 	}
@@ -934,7 +953,7 @@ func normalizeUserPolicyUpdate(update model.UserPolicyUpdate) (model.UserPolicyU
 	for _, group := range update.Groups {
 		group = strings.TrimSpace(group)
 		if group == "" || group == "auto" || !ratio_setting.ContainsGroupRatio(group) {
-			return model.UserPolicyUpdate{}, fmt.Errorf("无效分组：%s", group)
+			return model.UserPolicyUpdate{}, i18n.NewError(i18n.MsgUserPolicyGroupInvalid, map[string]any{"Group": group})
 		}
 		if _, exists := seenGroups[group]; exists {
 			continue
@@ -943,14 +962,14 @@ func normalizeUserPolicyUpdate(update model.UserPolicyUpdate) (model.UserPolicyU
 		groups = append(groups, group)
 	}
 	if len(groups) == 0 {
-		return model.UserPolicyUpdate{}, errors.New("至少需要选择一个用户分组")
+		return model.UserPolicyUpdate{}, i18n.NewError(i18n.MsgUserPolicyGroupRequired, nil)
 	}
 	update.PrimaryGroup = strings.TrimSpace(update.PrimaryGroup)
 	if update.PrimaryGroup == "" {
 		update.PrimaryGroup = groups[0]
 	}
 	if !service.UserHasGroup(groups, update.PrimaryGroup) {
-		return model.UserPolicyUpdate{}, errors.New("默认分组无效")
+		return model.UserPolicyUpdate{}, i18n.NewError(i18n.MsgUserPolicyPrimaryGroupInvalid, nil)
 	}
 	// Keep the primary membership first so legacy reads of users.group and
 	// older token fallback behavior remain deterministic.
@@ -967,7 +986,7 @@ func normalizeUserPolicyUpdate(update model.UserPolicyUpdate) (model.UserPolicyU
 		update.TopupGroup = groups[0]
 	}
 	if !ratio_setting.ContainsGroupRatio(update.TopupGroup) || !service.UserHasGroup(groups, update.TopupGroup) {
-		return model.UserPolicyUpdate{}, errors.New("充值分组无效")
+		return model.UserPolicyUpdate{}, i18n.NewError(i18n.MsgUserPolicyTopupGroupInvalid, nil)
 	}
 
 	publicModels := make(map[string]struct{})
@@ -990,16 +1009,16 @@ func normalizeUserPolicyUpdate(update model.UserPolicyUpdate) (model.UserPolicyU
 	if err := validateUserQuotaCap(update.QuotaCap); err != nil {
 		return model.UserPolicyUpdate{}, err
 	}
-	if err := validateUserRateLimit("RPM", update.RpmLimit); err != nil {
+	if err := validateUserRateLimit(i18n.MsgUserLimitNameRPM, update.RpmLimit); err != nil {
 		return model.UserPolicyUpdate{}, err
 	}
-	if err := validateUserRateLimit("并发", update.ConcurrencyLimit); err != nil {
+	if err := validateUserRateLimit(i18n.MsgUserLimitNameConcurrency, update.ConcurrencyLimit); err != nil {
 		return model.UserPolicyUpdate{}, err
 	}
-	if err := validateUserRateLimit("流式 TPS", update.StreamTpsLimit); err != nil {
+	if err := validateUserRateLimit(i18n.MsgUserLimitNameStreamTPS, update.StreamTpsLimit); err != nil {
 		return model.UserPolicyUpdate{}, err
 	}
-	if err := validateUserRateLimit("首个文本延迟", update.FirstTokenDelayMs); err != nil {
+	if err := validateUserRateLimit(i18n.MsgUserLimitNameFirstTokenDelay, update.FirstTokenDelayMs); err != nil {
 		return model.UserPolicyUpdate{}, err
 	}
 	return update, nil
@@ -1014,12 +1033,12 @@ const maxUserQuotaCap = 2_000_000_000
 
 const maxUserRateLimit = 2_147_483_647
 
-func validateUserRateLimit(name string, limit *int) error {
+func validateUserRateLimit(name i18n.Key, limit *int) error {
 	if limit == nil {
 		return nil
 	}
 	if *limit < 1 || *limit > maxUserRateLimit {
-		return fmt.Errorf("%s 限制必须在 1 到 %d 之间", name, maxUserRateLimit)
+		return i18n.NewError(i18n.MsgUserRateLimitRange, map[string]any{"Name": name, "Max": maxUserRateLimit})
 	}
 	return nil
 }
@@ -1055,29 +1074,29 @@ func validateUserQuotaCap(cap *int) error {
 		return nil
 	}
 	if *cap < 0 {
-		return errors.New("额度上限不能为负数")
+		return i18n.NewError(i18n.MsgUserQuotaCapNegative, nil)
 	}
 	if *cap > maxUserQuotaCap {
-		return fmt.Errorf("额度上限不能超过 %d", maxUserQuotaCap)
+		return i18n.NewError(i18n.MsgUserQuotaCapTooLarge, map[string]any{"Max": maxUserQuotaCap})
 	}
 	return nil
 }
 
 func validateUserCheckinOverride(minQuota, maxQuota *int) error {
 	if (minQuota == nil) != (maxQuota == nil) {
-		return errors.New("签到额度的最小值和最大值必须同时设置或同时留空")
+		return i18n.NewError(i18n.MsgUserCheckinQuotaPairRequired, nil)
 	}
 	if minQuota == nil {
 		return nil
 	}
 	if *minQuota < 0 || *maxQuota < 0 {
-		return errors.New("签到额度不能为负数")
+		return i18n.NewError(i18n.MsgUserCheckinQuotaNegative, nil)
 	}
 	if *maxQuota < *minQuota {
-		return errors.New("签到最大额度不能小于最小额度")
+		return i18n.NewError(i18n.MsgUserCheckinQuotaMaxBelowMin, nil)
 	}
 	if *maxQuota > maxUserCheckinQuotaOverride {
-		return fmt.Errorf("签到额度不能超过 %d", maxUserCheckinQuotaOverride)
+		return i18n.NewError(i18n.MsgUserCheckinQuotaTooLarge, map[string]any{"Max": maxUserCheckinQuotaOverride})
 	}
 	return nil
 }
@@ -1088,7 +1107,7 @@ func normalizeUserPolicyModels(models []string, publicModels map[string]struct{}
 	for _, modelName := range models {
 		modelName = strings.TrimSpace(modelName)
 		if _, exists := publicModels[modelName]; !exists {
-			return nil, fmt.Errorf("模型不是公开可用模型：%s", modelName)
+			return nil, i18n.NewError(i18n.MsgUserModelNotPublic, map[string]any{"Model": modelName})
 		}
 		if _, exists := seenModels[modelName]; exists {
 			continue
@@ -1161,7 +1180,7 @@ func UpdateUserPolicy(c *gin.Context) {
 	}
 	update, err = normalizeUserPolicyUpdate(update)
 	if err != nil {
-		common.ApiErrorMsg(c, err.Error())
+		common.ApiError(c, err)
 		return
 	}
 	if err := model.ReplaceUserPolicy(id, update); err != nil {
@@ -1193,7 +1212,7 @@ func UpdateUser(c *gin.Context) {
 		return
 	}
 	if err := common.Validate.StructExcept(&updatedUser, "Password"); err != nil {
-		common.ApiErrorI18n(c, i18n.MsgUserInputInvalid, map[string]any{"Error": err.Error()})
+		common.ApiError(c, userValidationError(err))
 		return
 	}
 	originUser, err := model.GetUserById(updatedUser.Id, false)
@@ -1230,7 +1249,7 @@ func UpdateUser(c *gin.Context) {
 	}
 	policyUpdate, err := userPolicyFromMutation(updatedUser, rawMutation, &originPolicy)
 	if err != nil {
-		common.ApiErrorMsg(c, err.Error())
+		common.ApiError(c, err)
 		return
 	}
 	// The membership table is authoritative. Keep EditWithTx from writing a
@@ -1332,7 +1351,7 @@ func AdminClearUserBinding(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"message": "success",
+		"message": common.TranslateMessage(c, i18n.MsgOperationSuccess),
 	})
 }
 
@@ -1554,7 +1573,7 @@ func CreateUser(c *gin.Context) {
 		return
 	}
 	if err := common.Validate.Struct(&user); err != nil {
-		common.ApiErrorI18n(c, i18n.MsgUserInputInvalid, map[string]any{"Error": err.Error()})
+		common.ApiError(c, userValidationError(err))
 		return
 	}
 	if user.DisplayName == "" {
@@ -1567,7 +1586,7 @@ func CreateUser(c *gin.Context) {
 	}
 	policyUpdate, err := userPolicyFromMutation(user, rawMutation, nil)
 	if err != nil {
-		common.ApiErrorMsg(c, err.Error())
+		common.ApiError(c, err)
 		return
 	}
 	// Even for admin users, we cannot fully trust them!
@@ -1634,7 +1653,7 @@ func updateAdminPermissionsForUserInTx(c *gin.Context, tx *gorm.DB, userID int, 
 		return false, nil
 	}
 	if c.GetInt("role") != common.RoleRootUser {
-		return false, fmt.Errorf("only root can update admin permissions")
+		return false, errors.New(i18n.T(c, i18n.MsgUserAdminPermissionRootOnly))
 	}
 	if userRole < common.RoleAdminUser {
 		return true, authz.ClearUserAuthorizationInTx(tx, userID)
@@ -1691,10 +1710,8 @@ func ManageUser(c *gin.Context) {
 			return
 		}
 		if err := user.Delete(); err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": err.Error(),
-			})
+			common.SysError("failed to delete user " + strconv.Itoa(user.Id) + ": " + err.Error())
+			common.ApiErrorI18n(c, i18n.MsgDeleteFailed)
 			return
 		}
 		// 删除用户后，强制清理 Redis 中所有该用户令牌的缓存，
@@ -1858,7 +1875,7 @@ func TopUp(c *gin.Context) {
 		// The quota cap is the user's own account state, so surfacing it leaks
 		// nothing about the redemption code itself (the code stays unused).
 		if errors.Is(err, model.ErrQuotaCapExceeded) {
-			common.ApiErrorMsg(c, "兑换失败：该账户已达额度上限")
+			common.ApiErrorI18n(c, i18n.MsgUserRedeemQuotaCapExceeded)
 			return
 		}
 		// 不向用户暴露兑换失败的细分原因，避免攻击者根据错误类型判断兑换码状态。
@@ -2047,7 +2064,7 @@ func UpdateUserRadarAutoEffort(c *gin.Context) {
 	}
 	normalized, err := hostdto.NormalizeRadarAutoEffortSetting(request)
 	if err != nil {
-		common.ApiErrorMsg(c, err.Error())
+		common.ApiErrorI18n(c, i18n.MsgUserInputInvalid, map[string]any{"Error": err.Error()})
 		return
 	}
 

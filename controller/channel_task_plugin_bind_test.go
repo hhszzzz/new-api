@@ -74,7 +74,7 @@ export function parseTaskResult() { return {}; }
 	openaiBody := `{"mode":"single","channel":{"type":1,"name":"openai-channel","key":"sk","models":"gpt","group":"default"}}`
 
 	adminDenied := postAddChannel(t, 2, common.RoleAdminUser, taskPluginBody)
-	assert.Contains(t, adminDenied.Body.String(), "task plugin channels require the task_plugin.bind permission")
+	assert.Contains(t, adminDenied.Body.String(), "Task plugin channels require the task_plugin.bind permission")
 	assert.Contains(t, adminDenied.Body.String(), `"success":false`)
 
 	rootAllowed := postAddChannel(t, 1, common.RoleRootUser, taskPluginBody)
@@ -126,7 +126,7 @@ export function parseTaskResult() { return {}; }
 	context.Request = httptest.NewRequest(http.MethodPut, "/api/channel", strings.NewReader(payload))
 	context.Request.Header.Set("Content-Type", "application/json")
 	UpdateChannel(context)
-	assert.Contains(t, recorder.Body.String(), "task plugin channels require the task_plugin.bind permission")
+	assert.Contains(t, recorder.Body.String(), "Task plugin channels require the task_plugin.bind permission")
 	assert.Contains(t, recorder.Body.String(), `"success":false`)
 }
 
@@ -149,7 +149,7 @@ export function parseTaskResult() { return {}; }
 	}
 
 	noDefault := postAddChannel(t, 1, common.RoleRootUser, body("bind-no-default"))
-	assert.Contains(t, noDefault.Body.String(), "base URL is required for task plugin channels")
+	assert.Contains(t, noDefault.Body.String(), "Base URL is required for task plugin channels")
 
 	filled := postAddChannel(t, 1, common.RoleRootUser, body("bind-default-url"))
 	require.Contains(t, filled.Body.String(), `"success":true`)
@@ -195,7 +195,7 @@ export function parseTaskResult() { return {}; }
 	bound := `{"mode":"single","channel":{"type":60,"name":"gateway","key":"sk","models":"gateway-doc","group":"default","base_url":"https://gateway.example","setting":"{\"task_extend_plugin_keys\":[\"gateway-bind\"]}"}}`
 	unbound := `{"mode":"single","channel":{"type":60,"name":"plain-gateway","key":"sk","models":"gpt","group":"default","base_url":"https://gateway.example"}}`
 	adminDenied := postAddChannel(t, 2, common.RoleAdminUser, bound)
-	assert.Contains(t, adminDenied.Body.String(), "task plugin channels require the task_plugin.bind permission")
+	assert.Contains(t, adminDenied.Body.String(), "Task plugin channels require the task_plugin.bind permission")
 	rootAllowed := postAddChannel(t, 1, common.RoleRootUser, bound)
 	assert.Contains(t, rootAllowed.Body.String(), `"success":true`)
 	adminUnbound := postAddChannel(t, 2, common.RoleAdminUser, unbound)
@@ -212,7 +212,7 @@ export function parseTaskResult() { return {}; }
 	assert.Contains(t, unchanged.Body.String(), `"success":true`, "resubmitting the stored bindings does not need the bind permission")
 	assert.NotContains(t, unchanged.Body.String(), "task_plugin.bind")
 	rebound := putUpdateChannel(t, 2, common.RoleAdminUser, update("renamed-gateway", `{"task_extend_plugin_keys":[]}`))
-	assert.Contains(t, rebound.Body.String(), "task plugin channels require the task_plugin.bind permission")
+	assert.Contains(t, rebound.Body.String(), "Task plugin channels require the task_plugin.bind permission")
 	rootRebound := putUpdateChannel(t, 1, common.RoleRootUser, update("renamed-gateway", `{"task_extend_plugin_keys":[]}`))
 	assert.Contains(t, rootRebound.Body.String(), `"success":true`)
 
@@ -227,6 +227,6 @@ export function parseTaskResult() { return {}; }
 		CopyChannel(context)
 		return recorder
 	}
-	assert.Contains(t, copyChannel(2, common.RoleAdminUser).Body.String(), "task plugin channels require the task_plugin.bind permission")
+	assert.Contains(t, copyChannel(2, common.RoleAdminUser).Body.String(), "Task plugin channels require the task_plugin.bind permission")
 	assert.Contains(t, copyChannel(1, common.RoleRootUser).Body.String(), `"success":true`)
 }

@@ -3,6 +3,7 @@ package controller
 import (
 	"errors"
 	"fmt"
+	"github.com/QuantumNous/new-api/i18n"
 	hosttypes "github.com/QuantumNous/new-api/types"
 
 	"github.com/QuantumNous/new-api/middleware"
@@ -26,7 +27,7 @@ func Playground(c *gin.Context) {
 
 	useAccessToken := c.GetBool("use_access_token")
 	if useAccessToken {
-		newAPIError = hosttypes.NewError(errors.New("暂不支持使用 access token"), hosttypes.ErrorCodeAccessDenied, hosttypes.ErrOptionWithSkipRetry())
+		newAPIError = hosttypes.NewError(errors.New(i18n.T(c, i18n.MsgRelayPlaygroundAccessTokenUnsupported)), hosttypes.ErrorCodeAccessDenied, hosttypes.ErrOptionWithSkipRetry())
 		return
 	}
 

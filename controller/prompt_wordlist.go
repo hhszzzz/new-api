@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
@@ -41,7 +42,7 @@ type promptWordlistResponse struct {
 func ListPromptWordlists(c *gin.Context) {
 	rows, err := model.ListPromptWordlists()
 	if err != nil {
-		common.ApiError(c, errors.New("wordlists are unavailable"))
+		common.ApiErrorI18n(c, i18n.MsgWordlistUnavailable)
 		return
 	}
 	configured := prompt_audit_setting.GetSetting()
@@ -76,12 +77,12 @@ func CreatePromptWordlist(c *gin.Context) {
 	}
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 64*1024)
 	if err := common.DecodeJson(c.Request.Body, &request); err != nil {
-		c.JSON(400, gin.H{"success": false, "message": "invalid wordlist request"})
+		c.JSON(400, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgWordlistInvalidRequest)})
 		return
 	}
 	name := strings.TrimSpace(request.Name)
 	if name == "" || utf8.RuneCountInString(name) > 128 {
-		c.JSON(400, gin.H{"success": false, "message": "wordlist name must contain 1 to 128 characters"})
+		c.JSON(400, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgWordlistNameLength)})
 		return
 	}
 	canonical, err := service.NormalizePromptWordlistURL(request.SourceURL)
@@ -94,7 +95,7 @@ func CreatePromptWordlist(c *gin.Context) {
 	}
 	for _, scope := range request.Scopes {
 		if !slices.Contains(dto.PromptAuditScopes(), scope) {
-			c.JSON(400, gin.H{"success": false, "message": "invalid inspection source"})
+			c.JSON(400, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgWordlistInvalidSource)})
 			return
 		}
 	}
@@ -103,11 +104,11 @@ func CreatePromptWordlist(c *gin.Context) {
 		action = prompt_audit_setting.WordlistActionReview
 	}
 	if !validPromptWordlistAction(action) {
-		c.JSON(400, gin.H{"success": false, "message": "wordlist action must be block or review"})
+		c.JSON(400, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgWordlistActionInvalid)})
 		return
 	}
 	if action == prompt_audit_setting.WordlistActionReview && !promptWordlistReviewAvailable(prompt_audit_setting.GetSetting(), request.Scopes) {
-		c.JSON(400, gin.H{"success": false, "message": "review wordlists require model audit for every selected source and an enabled classification node"})
+		c.JSON(400, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgWordlistReviewRequiresModelAudit)})
 		return
 	}
 	digest := sha256.Sum256([]byte(canonical))
@@ -119,7 +120,7 @@ func CreatePromptWordlist(c *gin.Context) {
 		if errors.Is(err, model.ErrPromptWordlistExists) || errors.Is(err, model.ErrPromptWordlistLimit) {
 			c.JSON(http.StatusConflict, gin.H{"success": false, "message": err.Error()})
 		} else {
-			common.ApiError(c, errors.New("failed to create wordlist"))
+			common.ApiErrorI18n(c, i18n.MsgWordlistCreateFailed)
 		}
 		return
 	}
@@ -136,7 +137,7 @@ func UpdatePromptWordlist(c *gin.Context) {
 			Action  *string `json:"action"`
 		}
 		if common.DecodeJson(http.MaxBytesReader(c.Writer, c.Request.Body, 1024), &request) != nil || (request.Enabled == nil && request.Action == nil) {
-			c.JSON(400, gin.H{"success": false, "message": "enabled or action is required"})
+			c.JSON(400, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgWordlistEnabledOrActionRequired)})
 			return
 		}
 		values := map[string]string{}
@@ -146,7 +147,7 @@ func UpdatePromptWordlist(c *gin.Context) {
 		if request.Action != nil {
 			action := strings.ToLower(strings.TrimSpace(*request.Action))
 			if !validPromptWordlistAction(action) {
-				c.JSON(400, gin.H{"success": false, "message": "wordlist action must be block or review"})
+				c.JSON(400, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgWordlistActionInvalid)})
 				return
 			}
 			if action == prompt_audit_setting.WordlistActionReview {
@@ -158,7 +159,7 @@ func UpdatePromptWordlist(c *gin.Context) {
 					}
 				}
 				if !promptWordlistReviewAvailable(configured, scopes) {
-					c.JSON(400, gin.H{"success": false, "message": "review wordlists require model audit for every selected source and an enabled classification node"})
+					c.JSON(400, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgWordlistReviewRequiresModelAudit)})
 					return
 				}
 			}
@@ -185,13 +186,13 @@ func UpdatePromptWordlist(c *gin.Context) {
 	}
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 64*1024)
 	if common.DecodeJson(c.Request.Body, &request) != nil {
-		c.JSON(400, gin.H{"success": false, "message": "invalid wordlist request"})
+		c.JSON(400, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgWordlistInvalidRequest)})
 		return
 	}
 	if request.Name != nil {
 		*request.Name = strings.TrimSpace(*request.Name)
 		if *request.Name == "" || utf8.RuneCountInString(*request.Name) > 128 {
-			c.JSON(400, gin.H{"success": false, "message": "invalid wordlist name"})
+			c.JSON(400, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgWordlistNameInvalid)})
 			return
 		}
 	}
@@ -210,7 +211,7 @@ func UpdatePromptWordlist(c *gin.Context) {
 	if request.Scopes != nil {
 		for _, scope := range *request.Scopes {
 			if !slices.Contains(dto.PromptAuditScopes(), scope) {
-				c.JSON(400, gin.H{"success": false, "message": "invalid inspection source"})
+				c.JSON(400, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgWordlistInvalidSource)})
 				return
 			}
 		}
@@ -218,7 +219,7 @@ func UpdatePromptWordlist(c *gin.Context) {
 	if request.Action != nil {
 		*request.Action = strings.ToLower(strings.TrimSpace(*request.Action))
 		if !validPromptWordlistAction(*request.Action) {
-			c.JSON(400, gin.H{"success": false, "message": "wordlist action must be block or review"})
+			c.JSON(400, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgWordlistActionInvalid)})
 			return
 		}
 	}
@@ -240,12 +241,12 @@ func UpdatePromptWordlist(c *gin.Context) {
 			effectiveScopes = &selected
 		}
 		if !promptWordlistReviewAvailable(configured, *effectiveScopes) {
-			c.JSON(400, gin.H{"success": false, "message": "review wordlists require model audit for every selected source and an enabled classification node"})
+			c.JSON(400, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgWordlistReviewRequiresModelAudit)})
 			return
 		}
 	}
 	if request.Name == nil && request.SourceURL == nil && request.Scopes == nil && request.Enabled == nil && request.AutoUpdate == nil && request.Action == nil {
-		c.JSON(400, gin.H{"success": false, "message": "no wordlist fields were provided"})
+		c.JSON(400, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgWordlistNoFields)})
 		return
 	}
 	if err := model.UpdatePromptWordlist(row.ID, model.PromptWordlistUpdate{
@@ -257,14 +258,14 @@ func UpdatePromptWordlist(c *gin.Context) {
 			return
 		}
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "wordlist not found"})
+			c.JSON(http.StatusNotFound, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgWordlistNotFound)})
 			return
 		}
-		common.ApiError(c, errors.New("failed to update wordlist"))
+		common.ApiErrorI18n(c, i18n.MsgWordlistUpdateFailed)
 		return
 	}
 	if err := service.RefreshPromptWordlists(); err != nil {
-		common.ApiError(c, errors.New("wordlist saved but runtime refresh failed"))
+		common.ApiErrorI18n(c, i18n.MsgWordlistRefreshFailed)
 		return
 	}
 	c.JSON(200, gin.H{"success": true})
@@ -297,7 +298,7 @@ func SyncPromptWordlist(c *gin.Context) {
 		return
 	}
 	if err := model.RequestPromptWordlistSync(row.ID); err != nil {
-		common.ApiError(c, errors.New("failed to queue wordlist update"))
+		common.ApiErrorI18n(c, i18n.MsgWordlistSyncFailed)
 		return
 	}
 	c.JSON(http.StatusAccepted, gin.H{"success": true})
@@ -309,11 +310,11 @@ func DeletePromptWordlist(c *gin.Context) {
 		return
 	}
 	if err := model.DeletePromptWordlist(row.ID); err != nil {
-		common.ApiError(c, errors.New("failed to delete wordlist"))
+		common.ApiErrorI18n(c, i18n.MsgWordlistDeleteFailed)
 		return
 	}
 	if err := service.RefreshPromptWordlists(); err != nil {
-		common.ApiError(c, errors.New("wordlist removed but runtime refresh failed"))
+		common.ApiErrorI18n(c, i18n.MsgWordlistRefreshFailed)
 		return
 	}
 	c.JSON(200, gin.H{"success": true})
@@ -322,16 +323,16 @@ func DeletePromptWordlist(c *gin.Context) {
 func promptWordlistFromRequest(c *gin.Context) (*model.PromptWordlist, bool) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
-		c.JSON(400, gin.H{"success": false, "message": "invalid wordlist id"})
+		c.JSON(400, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgInvalidId)})
 		return nil, false
 	}
 	row, err := model.GetPromptWordlist(id)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		c.JSON(404, gin.H{"success": false, "message": "wordlist not found"})
+		c.JSON(404, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgWordlistNotFound)})
 		return nil, false
 	}
 	if err != nil {
-		common.ApiError(c, errors.New("wordlist is unavailable"))
+		common.ApiErrorI18n(c, i18n.MsgWordlistUnavailable)
 		return nil, false
 	}
 	return row, true
@@ -347,11 +348,11 @@ func UpdateManualPromptWordlist(c *gin.Context) {
 	}
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 2*1024*1024)
 	if common.DecodeJson(c.Request.Body, &request) != nil || len(request.Words) > 1024*1024 || strings.ContainsRune(request.Words, 0) {
-		c.JSON(400, gin.H{"success": false, "message": "invalid custom wordlist (maximum 1 MiB)"})
+		c.JSON(400, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgWordlistCustomInvalid)})
 		return
 	}
 	if err := model.UpdateOption("SensitiveWords", request.Words); err != nil {
-		common.ApiError(c, errors.New("failed to save custom wordlist"))
+		common.ApiErrorI18n(c, i18n.MsgWordlistUpdateFailed)
 		return
 	}
 	c.JSON(200, gin.H{"success": true})
@@ -364,12 +365,12 @@ func TestPromptWordlists(c *gin.Context) {
 	}
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 128*1024)
 	if common.DecodeJson(c.Request.Body, &request) != nil || !slices.Contains(dto.PromptAuditScopes(), request.Scope) || utf8.RuneCountInString(request.Text) > 16384 {
-		c.JSON(400, gin.H{"success": false, "message": "invalid inspection test"})
+		c.JSON(400, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgWordlistInvalidTest)})
 		return
 	}
 	match, modelAudit, err := service.TestPromptWordlists(request.Scope, request.Text)
 	if err != nil {
-		c.JSON(503, gin.H{"success": false, "message": "wordlist is unavailable"})
+		c.JSON(503, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgWordlistUnavailable)})
 		return
 	}
 	c.JSON(200, gin.H{"success": true, "data": gin.H{"match": match, "model_audit": modelAudit}})

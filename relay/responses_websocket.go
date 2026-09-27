@@ -349,7 +349,7 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 		}
 		channelGuard, allowed := service.TryAcquireChannelRateLimit(c, lockedChannel)
 		if !allowed {
-			return service.NewChannelRateLimitError()
+			return service.NewChannelRateLimitError(c)
 		}
 		defer channelGuard.Release()
 		info = relaycommon.GenRelayInfoResponses(c, &create.Request)
@@ -1113,14 +1113,14 @@ func checkResponsesWSModelAccess(c *gin.Context, modelName string) *types.NewAPI
 	}
 	raw, ok := common.GetContextKey(c, appconstant.ContextKeyTokenModelLimit)
 	if !ok {
-		return types.NewErrorWithStatusCode(errors.New("token has no model access"), types.ErrorCodeAccessDenied, http.StatusForbidden, types.ErrOptionWithSkipRetry())
+		return types.NewErrorWithStatusCode(errors.New(i18n.T(c, i18n.MsgDistributorTokenNoModelAccess)), types.ErrorCodeAccessDenied, http.StatusForbidden, types.ErrOptionWithSkipRetry())
 	}
 	tokenModelLimit, ok := raw.(map[string]bool)
 	if !ok {
 		tokenModelLimit = map[string]bool{}
 	}
 	if !middleware.TokenModelLimitAllows(tokenModelLimit, modelName) {
-		return types.NewErrorWithStatusCode(fmt.Errorf("token is not allowed to use model %s", modelName), types.ErrorCodeAccessDenied, http.StatusForbidden, types.ErrOptionWithSkipRetry())
+		return types.NewErrorWithStatusCode(errors.New(i18n.T(c, i18n.MsgDistributorTokenModelForbidden, map[string]any{"Model": modelName})), types.ErrorCodeAccessDenied, http.StatusForbidden, types.ErrOptionWithSkipRetry())
 	}
 	return nil
 }

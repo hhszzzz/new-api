@@ -25,7 +25,7 @@ export function parseTaskResult() { return {}; }
 	baseURL := "https://example.com"
 
 	channel := &model.Channel{Type: constant.ChannelTypeTaskPlugin, BaseURL: &baseURL}
-	require.ErrorContains(t, validateChannel(channel, false), "task plugin key is required")
+	require.ErrorContains(t, validateChannel(channel, false), "Task plugin key is required")
 
 	missing := `{"task_plugin_key":"missing"}`
 	channel.Setting = &missing
@@ -38,7 +38,7 @@ export function parseTaskResult() { return {}; }
 	valid := `{"task_plugin_key":"channel-validation"}`
 	channel.Setting = &valid
 	channel.BaseURL = nil
-	require.ErrorContains(t, validateChannel(channel, false), "base URL is required")
+	require.ErrorContains(t, validateChannel(channel, false), "Base URL is required")
 }
 
 func TestValidateTaskPluginChannelFillsPluginDefaultBaseURL(t *testing.T) {
@@ -89,9 +89,9 @@ export function parseTaskResult() { return {}; }
 	}{
 		{"single and extension keys", `{"task_plugin_key":"gateway-ext-a","task_extend_plugin_keys":["gateway-ext-b"]}`, ""},
 		{"extension keys only", `{"task_extend_plugin_keys":["gateway-ext-a","gateway-ext-b"]}`, ""},
-		{"unregistered", `{"task_extend_plugin_keys":["gateway-ext-a","missing"]}`, `task plugin "missing" is not registered`},
-		{"vendor-only plugin as extension", `{"task_extend_plugin_keys":["gateway-ext-a","gateway-ext-vendor"]}`, `task plugin "gateway-ext-vendor" does not support a New API upstream`},
-		{"vendor-only plugin as single key", `{"task_plugin_key":"gateway-ext-vendor"}`, `task plugin "gateway-ext-vendor" does not support a New API upstream`},
+		{"unregistered", `{"task_extend_plugin_keys":["gateway-ext-a","missing"]}`, `Task plugin "missing" is not registered`},
+		{"vendor-only plugin as extension", `{"task_extend_plugin_keys":["gateway-ext-a","gateway-ext-vendor"]}`, `Task plugin "gateway-ext-vendor" does not support a New API upstream`},
+		{"vendor-only plugin as single key", `{"task_plugin_key":"gateway-ext-vendor"}`, `Task plugin "gateway-ext-vendor" does not support a New API upstream`},
 		{"duplicate", `{"task_extend_plugin_keys":["gateway-ext-a","gateway-ext-a"]}`, "bound more than once"},
 		{"duplicate of single key", `{"task_plugin_key":"gateway-ext-a","task_extend_plugin_keys":["gateway-ext-a"]}`, "bound more than once"},
 		{"padded", `{"task_extend_plugin_keys":[" gateway-ext-a"]}`, "is invalid"},

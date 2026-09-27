@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
@@ -20,7 +21,7 @@ func GetModelRadar(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{
 			"success": false,
 			"code":    "data_unavailable",
-			"message": "model radar data is not available yet",
+			"message": common.TranslateMessage(c, i18n.MsgModelRadarDataUnavailable),
 		})
 		return
 	}
@@ -29,7 +30,7 @@ func GetModelRadar(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
 			"code":    "internal_error",
-			"message": "model radar data is temporarily unavailable",
+			"message": common.TranslateMessage(c, i18n.MsgModelRadarDataTemporarilyUnavailable),
 		})
 		return
 	}
@@ -49,7 +50,7 @@ func TriggerModelRadarSync(c *gin.Context) {
 	if !created {
 		c.JSON(http.StatusConflict, gin.H{
 			"success": false,
-			"message": "a model radar sync is already running or pending",
+			"message": common.TranslateMessage(c, i18n.MsgModelRadarSyncInProgress),
 			"data":    gin.H{"task_id": task.TaskID, "status": task.Status, "type": task.Type},
 		})
 		return

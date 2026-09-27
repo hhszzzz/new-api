@@ -55,7 +55,7 @@ func TestUserCheckinHonorsPerUserOverrides(t *testing.T) {
 		{
 			name:    "blocked user cannot check in",
 			user:    User{Id: 2, Username: "checkin-blocked", Group: "default", AffCode: "ck2", CheckinEnabled: &blocked},
-			wantErr: "该账户已被限制签到",
+			wantErr: "Check-in is restricted for this account",
 		},
 		{
 			name:       "quota override wins over global range",
@@ -82,7 +82,7 @@ func TestUserCheckinHonorsPerUserOverrides(t *testing.T) {
 			assert.Equal(t, test.wantAmount, quota)
 
 			_, err = UserCheckin(test.user.Id)
-			require.EqualError(t, err, "今日已签到")
+			require.EqualError(t, err, "Already checked in today")
 		})
 	}
 }
@@ -113,7 +113,7 @@ func TestGiftQuotaCapLimitsCheckinRedemptionAndAffTransfer(t *testing.T) {
 	// At the cap, further check-ins are rejected outright.
 	require.NoError(t, DB.Delete(&Checkin{}, "user_id = ?", 11).Error)
 	_, err = UserCheckin(11)
-	require.EqualError(t, err, "账户额度已达上限，无法签到")
+	require.EqualError(t, err, "Your account has reached its quota cap, so you cannot check in")
 
 	// Redemption codes that would exceed the cap are rejected and stay unused.
 	require.NoError(t, DB.Create(&Redemption{Id: 1, UserId: 1, Key: "cap-code-1", Quota: 100, Status: common.RedemptionCodeStatusEnabled, Name: "cap"}).Error)
@@ -126,7 +126,7 @@ func TestGiftQuotaCapLimitsCheckinRedemptionAndAffTransfer(t *testing.T) {
 	// Aff transfers past the cap are rejected too.
 	cappedUser := &User{Id: 11}
 	err = cappedUser.TransferAffQuotaToQuota(500000)
-	require.EqualError(t, err, "转移后将超过账户额度上限")
+	require.EqualError(t, err, "The transfer would exceed your account quota cap")
 }
 
 func TestEffectiveCheckinPolicyClampsInvertedRange(t *testing.T) {

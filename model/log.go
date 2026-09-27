@@ -15,6 +15,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -1450,12 +1451,12 @@ func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int
 	err = tx.Model(&Log{}).Count(&total).Error
 	if err != nil {
 		common.SysError("failed to count user logs: " + err.Error())
-		return nil, 0, errors.New("查询日志失败")
+		return nil, 0, i18n.NewError(i18n.MsgLogQueryFailed, nil)
 	}
 	err = resolveLogSortOptions(sortOptions).Apply(tx).Limit(num).Offset(startIdx).Find(&logs).Error
 	if err != nil {
 		common.SysError("failed to search user logs: " + err.Error())
-		return nil, 0, errors.New("查询日志失败")
+		return nil, 0, i18n.NewError(i18n.MsgLogQueryFailed, nil)
 	}
 
 	formatUserLogs(logs, startIdx, canViewModelRouting)
@@ -1514,7 +1515,7 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 	// 执行查询
 	if err := tx.Scan(&stat).Error; err != nil {
 		common.SysError("failed to query log stat: " + err.Error())
-		return stat, errors.New("查询统计数据失败")
+		return stat, i18n.NewError(i18n.MsgLogStatQueryFailed, nil)
 	}
 	var rpmTpmStat struct {
 		Rpm int
@@ -1522,7 +1523,7 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 	}
 	if err := rpmTpmQuery.Scan(&rpmTpmStat).Error; err != nil {
 		common.SysError("failed to query rpm/tpm stat: " + err.Error())
-		return stat, errors.New("查询统计数据失败")
+		return stat, i18n.NewError(i18n.MsgLogStatQueryFailed, nil)
 	}
 	stat.Rpm = rpmTpmStat.Rpm
 	stat.Tpm = rpmTpmStat.Tpm
@@ -1571,7 +1572,7 @@ func SumUserUsedQuota(userId int, startTimestamp int64, endTimestamp int64, mode
 
 	if err := tx.Scan(&stat).Error; err != nil {
 		common.SysError("failed to query user log stat: " + err.Error())
-		return stat, errors.New("查询统计数据失败")
+		return stat, i18n.NewError(i18n.MsgLogStatQueryFailed, nil)
 	}
 	var rpmTpmStat struct {
 		Rpm int
@@ -1579,7 +1580,7 @@ func SumUserUsedQuota(userId int, startTimestamp int64, endTimestamp int64, mode
 	}
 	if err := rpmTpmQuery.Scan(&rpmTpmStat).Error; err != nil {
 		common.SysError("failed to query user rpm/tpm stat: " + err.Error())
-		return stat, errors.New("查询统计数据失败")
+		return stat, i18n.NewError(i18n.MsgLogStatQueryFailed, nil)
 	}
 	stat.Rpm = rpmTpmStat.Rpm
 	stat.Tpm = rpmTpmStat.Tpm

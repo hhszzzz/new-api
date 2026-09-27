@@ -444,7 +444,7 @@ func TestAdminSubscriptionAssignmentRequiresEnabledPlanAndAcceptsOptionalNote(t 
 	require.NoError(t, DB.Model(&SubscriptionPlan{}).Where("id = ?", plan.Id).Update("enabled", false).Error)
 	InvalidateSubscriptionPlanCache(plan.Id)
 	_, err := AdminBindSubscription(user.Id, plan.Id, "manual grant")
-	assert.EqualError(t, err, "套餐未启用，不能手动分配")
+	assert.EqualError(t, err, "Subscription plan is disabled and cannot be assigned manually")
 
 	require.NoError(t, DB.Model(&SubscriptionPlan{}).Where("id = ?", plan.Id).Updates(map[string]interface{}{
 		"enabled":     true,
@@ -453,7 +453,7 @@ func TestAdminSubscriptionAssignmentRequiresEnabledPlanAndAcceptsOptionalNote(t 
 	InvalidateSubscriptionPlanCache(plan.Id)
 	internalPlan, err := GetSubscriptionPlanById(plan.Id)
 	require.NoError(t, err)
-	assert.EqualError(t, ValidateSubscriptionPlanPurchase(internalPlan), "该套餐仅支持管理员分配")
+	assert.EqualError(t, ValidateSubscriptionPlanPurchase(internalPlan), "This plan can only be assigned by an administrator")
 
 	// The administrator note is optional; an empty note must still assign.
 	_, err = AdminBindSubscription(user.Id, plan.Id, "")
@@ -476,7 +476,7 @@ func TestInternalOnlySubscriptionPlanCannotBePurchasedWithBalance(t *testing.T) 
 	InvalidateSubscriptionPlanCache(plan.Id)
 
 	err := PurchaseSubscriptionWithBalance(user.Id, plan.Id)
-	assert.EqualError(t, err, "该套餐仅支持管理员分配")
+	assert.EqualError(t, err, "This plan can only be assigned by an administrator")
 
 	var subscriptionCount int64
 	require.NoError(t, DB.Model(&UserSubscription{}).Where("user_id = ?", user.Id).Count(&subscriptionCount).Error)

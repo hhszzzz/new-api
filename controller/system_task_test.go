@@ -67,7 +67,7 @@ func TestSystemTaskInvalidFiltersAreRejected(t *testing.T) {
 			c.Request = httptest.NewRequest(http.MethodGet, "/"+tc.query, nil)
 			tc.handler(c)
 			assert.Equal(t, http.StatusBadRequest, recorder.Code)
-			assert.JSONEq(t, `{"success":false,"message":"invalid system task filters"}`, recorder.Body.String())
+			assert.JSONEq(t, `{"success":false,"message":"Invalid system task filters"}`, recorder.Body.String())
 		})
 	}
 }

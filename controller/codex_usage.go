@@ -2,7 +2,6 @@ package controller
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -10,6 +9,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay/channel/codex"
 	"github.com/QuantumNous/new-api/service"
@@ -22,7 +22,7 @@ func GetCodexChannelUsage(c *gin.Context) {
 		c,
 		service.FetchCodexWhamUsage,
 		"failed to fetch codex usage",
-		"获取用量信息失败，请稍后重试",
+		i18n.MsgCodexUsageFetchFailed,
 	)
 }
 
@@ -31,7 +31,7 @@ func GetCodexChannelRateLimitResetCredits(c *gin.Context) {
 		c,
 		service.FetchCodexWhamRateLimitResetCredits,
 		"failed to fetch codex reset credits",
-		"获取重置次数详情失败，请稍后重试",
+		i18n.MsgCodexResetCreditsFetchFailed,
 	)
 }
 
@@ -40,7 +40,7 @@ func ResetCodexChannelUsage(c *gin.Context) {
 		c,
 		service.ConsumeCodexWhamRateLimitResetCredit,
 		"failed to reset codex usage",
-		"重置用量失败，请稍后重试",
+		i18n.MsgCodexResetUsageFailed,
 	)
 }
 
@@ -56,11 +56,11 @@ func fetchCodexChannelWhamData(
 	c *gin.Context,
 	fetch codexWhamFetchFunc,
 	logPrefix string,
-	userMessage string,
+	messageKey string,
 ) {
 	channelId, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
-		common.ApiError(c, fmt.Errorf("invalid channel id: %w", err))
+		common.ApiErrorI18n(c, i18n.MsgChannelIdFormatError)
 		return
 	}
 
@@ -70,32 +70,32 @@ func fetchCodexChannelWhamData(
 		return
 	}
 	if ch == nil {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "channel not found"})
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgChannelNotExists)})
 		return
 	}
 	if ch.Type != constant.ChannelTypeCodex {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "channel type is not Codex"})
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgCodexChannelTypeInvalid)})
 		return
 	}
 	if ch.ChannelInfo.IsMultiKey {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "multi-key channel is not supported"})
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgCodexMultiKeyUnsupported)})
 		return
 	}
 
 	oauthKey, err := codex.ParseOAuthKey(strings.TrimSpace(ch.Key))
 	if err != nil {
 		common.SysError("failed to parse oauth key: " + err.Error())
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "解析凭证失败，请检查渠道配置"})
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgCodexCredentialParseFailed)})
 		return
 	}
 	accessToken := strings.TrimSpace(oauthKey.AccessToken)
 	accountID := strings.TrimSpace(oauthKey.AccountID)
 	if accessToken == "" {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "codex channel: access_token is required"})
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgCodexAccessTokenRequired)})
 		return
 	}
 	if accountID == "" {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "codex channel: account_id is required"})
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgCodexAccountIdRequired)})
 		return
 	}
 
@@ -111,7 +111,7 @@ func fetchCodexChannelWhamData(
 	statusCode, body, err := fetch(ctx, client, ch.GetBaseURL(), accessToken, accountID)
 	if err != nil {
 		common.SysError(logPrefix + ": " + err.Error())
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": userMessage})
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": common.TranslateMessage(c, messageKey)})
 		return
 	}
 
@@ -140,7 +140,7 @@ func fetchCodexChannelWhamData(
 			statusCode, body, err = fetch(ctx2, client, ch.GetBaseURL(), oauthKey.AccessToken, accountID)
 			if err != nil {
 				common.SysError(logPrefix + " after refresh: " + err.Error())
-				c.JSON(http.StatusOK, gin.H{"success": false, "message": userMessage})
+				c.JSON(http.StatusOK, gin.H{"success": false, "message": common.TranslateMessage(c, messageKey)})
 				return
 			}
 		}
@@ -159,7 +159,7 @@ func fetchCodexChannelWhamData(
 		"data":            payload,
 	}
 	if !ok {
-		resp["message"] = fmt.Sprintf("upstream status: %d", statusCode)
+		resp["message"] = common.TranslateMessage(c, i18n.MsgCodexUpstreamStatus, map[string]any{"Status": statusCode})
 	}
 	c.JSON(http.StatusOK, resp)
 }

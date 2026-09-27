@@ -2,7 +2,6 @@ package controller
 
 import (
 	"errors"
-	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -93,7 +92,7 @@ func GetUserModelRouteCandidates(c *gin.Context) {
 			continue
 		}
 		if group == "auto" || !ratio_setting.ContainsGroupRatio(group) {
-			common.ApiErrorMsg(c, fmt.Sprintf("执行分组不存在：%s", group))
+			common.ApiErrorI18n(c, i18n.MsgUserExecutionGroupNotExists, map[string]any{"Group": group})
 			return
 		}
 		if _, exists := seenExecutionGroups[group]; exists {
@@ -170,7 +169,7 @@ func CreateUserModelRoute(c *gin.Context) {
 	}
 	if err := model.SaveUserModelRoute(&route); err != nil {
 		if errors.Is(err, model.ErrUserModelRouteConflict) {
-			common.ApiErrorMsg(c, "同一请求模型的适用分组不能与已有规则重叠")
+			common.ApiErrorI18n(c, i18n.MsgUserModelRouteOverlap)
 			return
 		}
 		common.ApiError(c, err)
@@ -205,7 +204,7 @@ func UpdateUserModelRoute(c *gin.Context) {
 	}
 	if err := model.SaveUserModelRoute(&route); err != nil {
 		if errors.Is(err, model.ErrUserModelRouteConflict) {
-			common.ApiErrorMsg(c, "同一请求模型的适用分组不能与已有规则重叠")
+			common.ApiErrorI18n(c, i18n.MsgUserModelRouteOverlap)
 			return
 		}
 		common.ApiError(c, err)
@@ -288,7 +287,7 @@ func ReplaceUserModelRoutes(c *gin.Context) {
 	}
 	if err := model.ReplaceUserModelRoutes(userId, request.Routes); err != nil {
 		if errors.Is(err, model.ErrUserModelRouteConflict) {
-			common.ApiErrorMsg(c, "同一请求模型的适用分组不能与已有规则重叠")
+			common.ApiErrorI18n(c, i18n.MsgUserModelRouteOverlap)
 			return
 		}
 		common.ApiError(c, err)
@@ -349,7 +348,7 @@ func validateUserModelRoute(c *gin.Context, user *model.User, route *model.UserM
 		return false
 	}
 	if err := validateUserModelRouteForUser(user, route); err != nil {
-		common.ApiErrorMsg(c, err.Error())
+		common.ApiError(c, err)
 		return false
 	}
 	return true
@@ -364,31 +363,31 @@ func validateUserModelRouteForUser(user *model.User, route *model.UserModelRoute
 	model.NormalizeUserModelRouteExecutionGroups(route)
 	route.InjectPrompt = strings.TrimSpace(route.InjectPrompt)
 	if route.SourceModel == "" || route.TargetModel == "" || len(route.ExecutionGroups) == 0 || len(route.ChannelIds) == 0 {
-		return errors.New("模型路由信息不完整")
+		return i18n.NewError(i18n.MsgUserModelRouteIncomplete, nil)
 	}
 	if !model.IsConcreteUserModelRouteTarget(route.TargetModel) {
-		return errors.New("目标模型必须是具体模型，不能使用通配能力名")
+		return i18n.NewError(i18n.MsgUserModelRouteTargetConcrete, nil)
 	}
 	if utf8.RuneCountInString(route.InjectPrompt) > model.UserModelRouteMaxInjectPrompt {
-		return fmt.Errorf("注入提示词过长，最多 %d 个字符", model.UserModelRouteMaxInjectPrompt)
+		return i18n.NewError(i18n.MsgUserModelRouteInjectPromptTooLong, map[string]any{"Max": model.UserModelRouteMaxInjectPrompt})
 	}
 	publicModels := make(map[string]struct{})
 	for _, pricing := range model.GetPricing() {
 		publicModels[pricing.ModelName] = struct{}{}
 	}
 	if _, exists := publicModels[route.SourceModel]; !exists {
-		return fmt.Errorf("请求模型不是公开可用模型：%s", route.SourceModel)
+		return i18n.NewError(i18n.MsgUserModelRouteSourceNotPublic, map[string]any{"Model": route.SourceModel})
 	}
 	for _, executionGroup := range route.ExecutionGroups {
 		if executionGroup == "auto" || !ratio_setting.ContainsGroupRatio(executionGroup) {
-			return fmt.Errorf("执行分组不存在：%s", executionGroup)
+			return i18n.NewError(i18n.MsgUserExecutionGroupNotExists, map[string]any{"Group": executionGroup})
 		}
 	}
 	if route.AllGroups {
 		route.Groups = []string{}
 	} else {
 		if len(route.Groups) == 0 {
-			return errors.New("请至少选择一个适用分组")
+			return i18n.NewError(i18n.MsgUserModelRouteGroupRequired, nil)
 		}
 		applicableGroups := make(map[string]struct{})
 		for _, group := range getUserModelRouteApplicableGroups(user.Groups) {
@@ -397,17 +396,17 @@ func validateUserModelRouteForUser(user *model.User, route *model.UserModelRoute
 		for _, group := range route.Groups {
 			group = strings.TrimSpace(group)
 			if _, ok := applicableGroups[group]; !ok {
-				return fmt.Errorf("用户未获授权使用分组：%s", group)
+				return i18n.NewError(i18n.MsgUserModelRouteGroupNotAuthorized, map[string]any{"Group": group})
 			}
 		}
 	}
 	for _, channelId := range route.ChannelIds {
 		channel, err := model.GetChannelById(channelId, false)
 		if err != nil || channel == nil || channel.Status != common.ChannelStatusEnabled {
-			return fmt.Errorf("渠道不可用：%d", channelId)
+			return i18n.NewError(i18n.MsgUserModelRouteChannelUnavailable, map[string]any{"ChannelId": channelId})
 		}
 		if !model.IsChannelEnabledForAnyGroupModel(route.ExecutionGroups, route.TargetModel, channelId) {
-			return fmt.Errorf("渠道 %d 不支持所选执行分组下的目标模型 %s", channelId, route.TargetModel)
+			return i18n.NewError(i18n.MsgUserModelRouteChannelModelUnsupported, map[string]any{"ChannelId": channelId, "Model": route.TargetModel})
 		}
 	}
 	return nil

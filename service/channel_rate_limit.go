@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/QuantumNous/new-api/i18n"
 	hosttypes "github.com/QuantumNous/new-api/types"
 	"net/http"
 	"sort"
@@ -374,9 +375,9 @@ return 1`, []string{channelConcurrencyKey(g.channelID)}, g.leaseID, g.leaseTTL.M
 	}()
 }
 
-func NewChannelRateLimitError() *hosttypes.NewAPIError {
+func NewChannelRateLimitError(c *gin.Context) *hosttypes.NewAPIError {
 	return hosttypes.NewErrorWithStatusCode(
-		errors.New("rate_limit_exceeded"),
+		errors.New(i18n.T(c, i18n.MsgChannelUpstreamSaturated)),
 		hosttypes.ErrorCode("rate_limit_exceeded"),
 		http.StatusTooManyRequests,
 		hosttypes.ErrOptionWithSkipRetry(),

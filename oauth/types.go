@@ -62,6 +62,9 @@ func NewOAuthErrorWithRaw(msgKey string, params map[string]any, rawError string)
 // AccessDeniedError is a direct user-facing access denial message.
 type AccessDeniedError struct {
 	Message string
+	// Default reports that Message is the built-in sentence rather than the
+	// provider's configured template, so it can be shown in the caller's language.
+	Default bool
 }
 
 func (e *AccessDeniedError) Error() string {

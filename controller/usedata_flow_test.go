@@ -131,5 +131,5 @@ func TestGetUserFlowQuotaDatesRejectsInvalidTimeRange(t *testing.T) {
 	var payload flowQuotaResponse
 	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &payload))
 	require.False(t, payload.Success)
-	require.Equal(t, "invalid start_timestamp", payload.Message)
+	require.Equal(t, "Invalid start_timestamp", payload.Message)
 }

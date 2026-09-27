@@ -3,6 +3,7 @@ package i18n
 import (
 	"embed"
 	hostdto "github.com/QuantumNous/new-api/dto"
+	"maps"
 	"strings"
 	"sync"
 
@@ -30,11 +31,17 @@ var (
 	localizers = make(map[string]*i18n.Localizer)
 	mu         sync.RWMutex
 	initOnce   sync.Once
+	// initErr is kept so every caller of Init sees a failed load, not only the
+	// first one.
+	initErr error
 )
+
+// Key marks a template value that is itself a message key. It is translated in
+// the language of the message it fills, so a slot never mixes languages.
+type Key string
 
 // Init initializes the i18n bundle and loads all translation files
 func Init() error {
-	var initErr error
 	initOnce.Do(func() {
 		bundle = i18n.NewBundle(language.Chinese)
 		bundle.RegisterUnmarshalFunc("yaml", yaml.Unmarshal)
@@ -94,6 +101,10 @@ func T(c *gin.Context, key string, args ...map[string]any) string {
 
 // Translate translates a message key for the specified language
 func Translate(lang, key string, args ...map[string]any) string {
+	// Lazily initialize so callers that never invoke Init (unit tests, helpers)
+	// degrade gracefully instead of panicking on a nil bundle. Init is
+	// idempotent (sync.Once) so this is a no-op after first use.
+	_ = Init()
 	loc := GetLocalizer(lang)
 
 	config := &i18n.LocalizeConfig{
@@ -101,7 +112,22 @@ func Translate(lang, key string, args ...map[string]any) string {
 	}
 
 	if len(args) > 0 && args[0] != nil {
-		config.TemplateData = args[0]
+		// Nested keys are resolved on a copy: callers such as Error
+		// render the same params again in another language.
+		data := args[0]
+		cloned := false
+		for name, value := range args[0] {
+			nested, ok := value.(Key)
+			if !ok {
+				continue
+			}
+			if !cloned {
+				data = maps.Clone(args[0])
+				cloned = true
+			}
+			data[name] = Translate(lang, string(nested))
+		}
+		config.TemplateData = data
 	}
 
 	msg, err := loc.Localize(config)

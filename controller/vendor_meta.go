@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 
 	"github.com/gin-gonic/gin"
@@ -66,7 +67,7 @@ func UpdateVendorMeta(c *gin.Context) {
 		return
 	}
 	if v.Id == 0 {
-		common.ApiErrorMsg(c, "缺少供应商 ID")
+		common.ApiErrorI18n(c, i18n.MsgVendorIdMissing)
 		return
 	}
 	if err := v.Update(); err != nil {

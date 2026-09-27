@@ -2,6 +2,7 @@ package controller
 
 import (
 	"errors"
+	"github.com/QuantumNous/new-api/i18n"
 	hosttypes "github.com/QuantumNous/new-api/types"
 	"net/http"
 
@@ -44,6 +45,7 @@ func CountTokens(c *gin.Context) {
 		statusCode := http.StatusBadRequest
 		if common.IsRequestBodyTooLargeError(err) || errors.Is(err, common.ErrRequestBodyTooLarge) {
 			statusCode = http.StatusRequestEntityTooLarge
+			err = errors.New(i18n.T(c, i18n.MsgRelayRequestBodyTooLarge))
 		}
 		newAPIError = hosttypes.NewErrorWithStatusCode(err, hosttypes.ErrorCodeInvalidRequest, statusCode, hosttypes.ErrOptionWithSkipRetry())
 		return

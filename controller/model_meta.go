@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 
 	"github.com/gin-gonic/gin"
@@ -32,13 +33,13 @@ func listModelsMeta(c *gin.Context, keyword, vendor string) {
 	switch squareState {
 	case "", model.ModelSquareVisible, model.ModelSquareUnavailable, model.ModelSquareHidden, model.ModelSquarePartial:
 	default:
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "Invalid model square state"})
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgModelInvalidSquareState)})
 		return
 	}
 
 	pageInfo := common.GetPageQuery(c)
 	if squareState != "" && (pageInfo.GetPage() < 1 || pageInfo.GetPageSize() < 1) {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "Invalid pagination"})
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgInvalidParams)})
 		return
 	}
 	offset, limit := pageInfo.GetStartIdx(), pageInfo.GetPageSize()
@@ -94,7 +95,7 @@ func GetModelMeta(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		common.ApiError(c, err)
+		common.ApiErrorI18n(c, i18n.MsgInvalidId)
 		return
 	}
 	var m model.Model
@@ -118,7 +119,7 @@ func CreateModelMeta(c *gin.Context) {
 	}
 	m := &request.Model
 	if m.ModelName == "" {
-		common.ApiErrorMsg(c, "模型名称不能为空")
+		common.ApiErrorI18n(c, i18n.MsgModelNameEmpty)
 		return
 	}
 	if err := model.ValidateMetadataValues(model.MetadataValues{Endpoints: m.Endpoints, Status: m.Status, NameRule: m.NameRule}); err != nil {
@@ -130,7 +131,7 @@ func CreateModelMeta(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	} else if dup {
-		common.ApiErrorMsg(c, "模型名称已存在")
+		common.ApiErrorI18n(c, i18n.MsgModelNameExists)
 		return
 	}
 
@@ -159,18 +160,18 @@ func UpdateModelMeta(c *gin.Context) {
 	}
 	m := &request.Model
 	if m.Id == 0 {
-		common.ApiErrorMsg(c, "缺少模型 ID")
+		common.ApiErrorI18n(c, i18n.MsgModelIdMissing)
 		return
 	}
 
 	if statusOnly {
 		if len(request.PricingOptions) > 0 {
-			common.ApiErrorMsg(c, "仅更新状态时不能修改模型定价")
+			common.ApiErrorI18n(c, i18n.MsgModelStatusOnlyPricingImmutable)
 			return
 		}
 
 		if m.Status != 0 && m.Status != 1 {
-			common.ApiErrorMsg(c, "invalid catalog visibility")
+			common.ApiErrorI18n(c, i18n.MsgModelInvalidCatalogVisibility)
 			return
 		}
 		// 只更新状态，防止误清空其他字段
@@ -180,7 +181,7 @@ func UpdateModelMeta(c *gin.Context) {
 		}
 	} else {
 		if strings.TrimSpace(m.ModelName) == "" {
-			common.ApiErrorMsg(c, "模型名称不能为空")
+			common.ApiErrorI18n(c, i18n.MsgModelNameEmpty)
 			return
 		}
 		if err := model.ValidateMetadataValues(model.MetadataValues{Endpoints: m.Endpoints, Status: m.Status, NameRule: m.NameRule}); err != nil {
@@ -192,7 +193,7 @@ func UpdateModelMeta(c *gin.Context) {
 			common.ApiError(c, err)
 			return
 		} else if dup {
-			common.ApiErrorMsg(c, "模型名称已存在")
+			common.ApiErrorI18n(c, i18n.MsgModelNameExists)
 			return
 		}
 
@@ -216,7 +217,7 @@ func DeleteModelMeta(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		common.ApiError(c, err)
+		common.ApiErrorI18n(c, i18n.MsgInvalidId)
 		return
 	}
 	removeFromChannels, err := strconv.ParseBool(c.DefaultQuery("remove_from_channels", "false"))
@@ -230,7 +231,7 @@ func DeleteModelMeta(c *gin.Context) {
 		return
 	}
 	if removePricing && c.GetInt("role") != common.RoleRootUser {
-		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "Model pricing is managed by a super administrator."})
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgModelPricingRootOnly)})
 		return
 	}
 	result, err := model.DeleteModelMetadata([]int{id}, removeFromChannels, removePricing)
@@ -253,7 +254,7 @@ func BatchDeleteModelMeta(c *gin.Context) {
 		return
 	}
 	if request.RemovePricing && c.GetInt("role") != common.RoleRootUser {
-		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "Model pricing is managed by a super administrator."})
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgModelPricingRootOnly)})
 		return
 	}
 	result, err := model.DeleteModelMetadata(request.ModelIDs, request.RemoveFromChannels, request.RemovePricing)

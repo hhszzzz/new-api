@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/pkg/cachex"
 	"github.com/samber/hot"
 	"github.com/shopspring/decimal"
@@ -249,13 +250,13 @@ func (p *SubscriptionPlan) IsPurchasable() bool {
 
 func ValidateSubscriptionPlanPurchase(plan *SubscriptionPlan) error {
 	if plan == nil {
-		return errors.New("套餐不存在")
+		return i18n.NewError(i18n.MsgSubscriptionPlanNotFound, nil)
 	}
 	if !plan.Enabled {
-		return errors.New("套餐未启用")
+		return i18n.NewError(i18n.MsgSubscriptionNotEnabled, nil)
 	}
 	if !plan.IsPurchasable() {
-		return errors.New("该套餐仅支持管理员分配")
+		return i18n.NewError(i18n.MsgSubscriptionAdminAssignOnly, nil)
 	}
 	return nil
 }
@@ -848,7 +849,7 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 			return nil, err
 		}
 		if count >= int64(plan.MaxPurchasePerUser) {
-			return nil, errors.New("已达到该套餐购买上限")
+			return nil, i18n.NewError(i18n.MsgSubscriptionPurchaseMax, nil)
 		}
 	}
 	nowUnix := GetDBTimestamp()
@@ -1094,7 +1095,7 @@ func AdminBindSubscription(userId int, planId int, sourceNote string) (string, e
 		return "", err
 	}
 	if !plan.Enabled {
-		return "", errors.New("套餐未启用，不能手动分配")
+		return "", i18n.NewError(i18n.MsgSubscriptionPlanDisabled, nil)
 	}
 	sourceNote = strings.TrimSpace(sourceNote)
 	if utf8.RuneCountInString(sourceNote) > 255 {
@@ -1197,10 +1198,10 @@ func PurchaseSubscriptionWithBalance(userId int, planId int) error {
 			return err
 		}
 		if plan.PriceAmount < 0 {
-			return errors.New("套餐价格不能为负数")
+			return i18n.NewError(i18n.MsgSubscriptionPriceNegative, nil)
 		}
 		if plan.AllowBalancePay != nil && !*plan.AllowBalancePay {
-			return errors.New("该套餐不允许使用余额兑换")
+			return i18n.NewError(i18n.MsgSubscriptionBalancePayNotAllowed, nil)
 		}
 
 		requiredQuota, err := calcSubscriptionBalanceQuota(plan.PriceAmount)
@@ -1213,7 +1214,7 @@ func PurchaseSubscriptionWithBalance(userId int, planId int) error {
 			return err
 		}
 		if requiredQuota > 0 && user.Quota < requiredQuota {
-			return errors.New("余额不足")
+			return i18n.NewError(i18n.MsgSubscriptionBalanceInsufficient, nil)
 		}
 		if requiredQuota > 0 {
 			if err := tx.Model(&User{}).Where("id = ?", userId).
@@ -1552,7 +1553,7 @@ func AdminResumeUserSubscription(userSubscriptionId int) (string, error) {
 			endTime += pausedFor
 		}
 		if endTime <= now {
-			return errors.New("订阅已过期，无法恢复")
+			return i18n.NewError(i18n.MsgSubscriptionExpiredCannotResume, nil)
 		}
 		if err := tx.Model(&sub).Updates(map[string]any{
 			"status":     SubscriptionStatusActive,

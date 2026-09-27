@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 
 	"github.com/gin-gonic/gin"
@@ -56,14 +57,14 @@ func GetUserLogs(c *gin.Context) {
 		(sortOptions.SortBy == "channel" || sortOptions.SortBy == "model_name" || upstreamRequestId != "") {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
-			"message": "log field is not available",
+			"message": common.TranslateMessage(c, i18n.MsgLogFieldUnavailable),
 		})
 		return
 	}
 	if !canViewRouting && modelName != "" && !isAllowedUserLogModelFilter(modelName, visiblePerfModelSet(c)) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
-			"message": "model filter is not available",
+			"message": common.TranslateMessage(c, i18n.MsgLogModelFilterUnavailable),
 		})
 		return
 	}
@@ -82,7 +83,7 @@ func GetUserLogs(c *gin.Context) {
 func SearchAllLogs(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": false,
-		"message": "该接口已废弃",
+		"message": common.TranslateMessage(c, i18n.MsgLogEndpointDeprecated),
 	})
 }
 
@@ -90,7 +91,7 @@ func SearchAllLogs(c *gin.Context) {
 func SearchUserLogs(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": false,
-		"message": "该接口已废弃",
+		"message": common.TranslateMessage(c, i18n.MsgLogEndpointDeprecated),
 	})
 }
 
@@ -99,7 +100,7 @@ func GetLogByKey(c *gin.Context) {
 	if tokenId == 0 {
 		c.JSON(200, gin.H{
 			"success": false,
-			"message": "无效的令牌",
+			"message": common.TranslateMessage(c, i18n.MsgTokenInvalid),
 		})
 		return
 	}
@@ -157,14 +158,14 @@ func GetLogsSelfStat(c *gin.Context) {
 	if !canViewRouting && channel != 0 {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
-			"message": "channel filter is not available",
+			"message": common.TranslateMessage(c, i18n.MsgLogChannelFilterUnavailable),
 		})
 		return
 	}
 	if !canViewRouting && modelName != "" && !isAllowedUserLogModelFilter(modelName, visiblePerfModelSet(c)) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
-			"message": "model filter is not available",
+			"message": common.TranslateMessage(c, i18n.MsgLogModelFilterUnavailable),
 		})
 		return
 	}

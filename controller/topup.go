@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
@@ -157,7 +158,7 @@ func GetEpayClient() *epay.Client {
 
 func calculateTopUpPayMoney(amount decimal.Decimal, discountKey int64, displayType string, quotaPerUnit float64) (float64, error) {
 	if !amount.IsPositive() {
-		return 0, errors.New("充值数量必须大于零")
+		return 0, i18n.NewError(i18n.MsgTopupAmountMustBePositive, nil)
 	}
 	if displayType == operation_setting.QuotaDisplayTypeTokens {
 		amount = amount.Div(decimal.NewFromFloat(quotaPerUnit))
@@ -165,12 +166,12 @@ func calculateTopUpPayMoney(amount decimal.Decimal, discountKey int64, displayTy
 
 	price := operation_setting.GetPrice()
 	if price <= 0 || math.IsNaN(price) || math.IsInf(price, 0) {
-		return 0, errors.New("充值价格配置无效")
+		return 0, i18n.NewError(i18n.MsgTopupPriceConfigInvalid, nil)
 	}
 	discount := 1.0
 	if configured, ok := operation_setting.GetTopUpDiscount(int(discountKey)); ok {
 		if math.IsNaN(configured) || math.IsInf(configured, 0) {
-			return 0, errors.New("充值折扣配置无效")
+			return 0, i18n.NewError(i18n.MsgTopupDiscountConfigInvalid, nil)
 		}
 		if configured > 0 {
 			discount = configured
@@ -182,7 +183,7 @@ func calculateTopUpPayMoney(amount decimal.Decimal, discountKey int64, displayTy
 		Mul(decimal.NewFromFloat(discount)).
 		InexactFloat64()
 	if payMoney <= 0 || payMoney > float64(math.MaxInt64)/100 || math.IsNaN(payMoney) || math.IsInf(payMoney, 0) {
-		return 0, errors.New("充值金额配置无效")
+		return 0, i18n.NewError(i18n.MsgTopupAmountConfigInvalid, nil)
 	}
 	return payMoney, nil
 }
@@ -205,7 +206,7 @@ func getUnifiedTopupPayMoney(amount float64) float64 {
 
 func quoteTopUp(amount int64) (topUpQuote, error) {
 	if amount <= 0 {
-		return topUpQuote{}, errors.New("充值数量必须大于零")
+		return topUpQuote{}, i18n.NewError(i18n.MsgTopupAmountMustBePositive, nil)
 	}
 
 	displayType := operation_setting.GetQuotaDisplayType()
@@ -221,13 +222,13 @@ func quoteTopUp(amount int64) (topUpQuote, error) {
 	quota, err := common.WalletQuotaFromDecimalStrict(quotaDecimal)
 	if err != nil || quota <= 0 {
 		if maxAmount := getMaxTopUpAmount(); maxAmount > 0 && amount > maxAmount {
-			return topUpQuote{}, fmt.Errorf("单笔充值数量不能大于 %d", maxAmount)
+			return topUpQuote{}, i18n.NewError(i18n.MsgTopupAmountAboveMax, map[string]any{"Max": maxAmount})
 		}
-		return topUpQuote{}, errors.New("充值数量超出支持范围")
+		return topUpQuote{}, i18n.NewError(i18n.MsgTopupAmountOutOfRange, nil)
 	}
 	legacyAmount := dBaseAmount.Truncate(0)
 	if legacyAmount.LessThan(decimal.NewFromInt(1)) || legacyAmount.GreaterThan(decimal.NewFromInt(math.MaxInt64)) {
-		return topUpQuote{}, errors.New("充值数量超出支持范围")
+		return topUpQuote{}, i18n.NewError(i18n.MsgTopupAmountOutOfRange, nil)
 	}
 	payMoney, err := calculateTopUpPayMoney(dAmount, amount, displayType, quotaPerUnit)
 	if err != nil {
@@ -297,10 +298,10 @@ func getMaxTopUpAmount() int64 {
 func validateCreditedQuota(quota decimal.Decimal) (int, error) {
 	value, err := common.WalletQuotaFromDecimalStrict(quota)
 	if err != nil {
-		return 0, errors.New("充值额度超出系统可表示范围")
+		return 0, i18n.NewError(i18n.MsgTopupQuotaOutOfRange, nil)
 	}
 	if value <= 0 {
-		return 0, errors.New("充值额度必须大于 0")
+		return 0, i18n.NewError(i18n.MsgTopupQuotaMustBePositive, nil)
 	}
 	return value, nil
 }
@@ -312,18 +313,33 @@ func validateTopUpQuota(amount int64) (int, error) {
 	}
 	maxAmount := getMaxTopUpAmount()
 	if maxAmount > 0 && amount > maxAmount {
-		return 0, fmt.Errorf("单笔充值数量不能大于 %d", maxAmount)
+		return 0, i18n.NewError(i18n.MsgTopupAmountAboveMax, map[string]any{"Max": maxAmount})
 	}
-	return 0, errors.New("充值数量无效")
+	return 0, i18n.NewError(i18n.MsgTopupInvalidQuota, nil)
+}
+
+// topUpCapacityError turns a wallet-capacity check failure into a message for
+// the caller; unexpected (database) errors stay in the server log.
+func topUpCapacityError(err error) error {
+	switch {
+	case errors.Is(err, model.ErrTopUpQuotaLimitExceeded):
+		return i18n.NewError(i18n.MsgTopupQuotaLimitExceeded, nil)
+	case errors.Is(err, model.ErrInvalidTopUpQuota):
+		return i18n.NewError(i18n.MsgTopupInvalidQuota, nil)
+	}
+	common.SysError("failed to check top-up quota capacity: " + err.Error())
+	return i18n.NewError(i18n.MsgDatabaseError, nil)
 }
 
 func rejectInvalidCreditedQuota(c *gin.Context, userId int, quota decimal.Decimal) bool {
 	creditedQuota, err := validateCreditedQuota(quota)
 	if err == nil {
-		err = model.ValidateTopUpQuotaCapacity(userId, creditedQuota)
+		if err = model.ValidateTopUpQuotaCapacity(userId, creditedQuota); err != nil {
+			err = topUpCapacityError(err)
+		}
 	}
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": err.Error()})
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": common.ErrorMessage(c, err)})
 		return true
 	}
 	return false
@@ -332,10 +348,12 @@ func rejectInvalidCreditedQuota(c *gin.Context, userId int, quota decimal.Decima
 func rejectInvalidTopUpQuota(c *gin.Context, userId int, amount int64) bool {
 	creditedQuota, err := validateTopUpQuota(amount)
 	if err == nil {
-		err = model.ValidateTopUpQuotaCapacity(userId, creditedQuota)
+		if err = model.ValidateTopUpQuotaCapacity(userId, creditedQuota); err != nil {
+			err = topUpCapacityError(err)
+		}
 	}
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": err.Error()})
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": common.ErrorMessage(c, err)})
 		return true
 	}
 	return false
@@ -343,7 +361,7 @@ func rejectInvalidTopUpQuota(c *gin.Context, userId int, amount int64) bool {
 
 func rejectInvalidTopUpQuote(c *gin.Context, userID int, quote topUpQuote) bool {
 	if err := model.ValidateTopUpQuotaCapacity(userID, quote.Quota); err != nil {
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": err.Error()})
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": common.ErrorMessage(c, topUpCapacityError(err))})
 		return true
 	}
 	return false
@@ -353,29 +371,29 @@ func RequestEpay(c *gin.Context) {
 	var req EpayRequest
 	err := c.ShouldBindJSON(&req)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "参数错误"})
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": common.TranslateMessage(c, i18n.MsgInvalidParams)})
 		return
 	}
 	if req.Amount < getMinTopup() {
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("充值数量不能小于 %d", getMinTopup())})
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": common.TranslateMessage(c, i18n.MsgTopupAmountBelowMin, map[string]any{"Min": getMinTopup()})})
 		return
 	}
 	quote, err := quoteTopUp(req.Amount)
 	id := c.GetInt("id")
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": err.Error()})
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": common.ErrorMessage(c, err)})
 		return
 	}
 	if rejectInvalidTopUpQuote(c, id, quote) {
 		return
 	}
 	if quote.PayMoney < 0.01 {
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值金额过低"})
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": common.TranslateMessage(c, i18n.MsgTopupAmountTooLow)})
 		return
 	}
 
 	if !operation_setting.ContainsPayMethod(req.PaymentMethod) {
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "支付方式不存在"})
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": common.TranslateMessage(c, i18n.MsgPaymentMethodNotExists)})
 		return
 	}
 
@@ -386,7 +404,7 @@ func RequestEpay(c *gin.Context) {
 	tradeNo = fmt.Sprintf("USR%dNO%s", id, tradeNo)
 	client := GetEpayClient()
 	if client == nil {
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "当前管理员未配置支付信息"})
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": common.TranslateMessage(c, i18n.MsgPaymentNotConfigured)})
 		return
 	}
 	topUp := &model.TopUp{
@@ -402,7 +420,7 @@ func RequestEpay(c *gin.Context) {
 	}
 	if err = topUp.Insert(); err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("易支付 创建充值订单失败 user_id=%d trade_no=%s payment_method=%s amount=%d error=%q", id, tradeNo, req.PaymentMethod, req.Amount, err.Error()))
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "创建订单失败"})
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": common.TranslateMessage(c, i18n.MsgPaymentCreateFailed)})
 		return
 	}
 	uri, params, err := client.Purchase(&epay.PurchaseArgs{
@@ -420,7 +438,7 @@ func RequestEpay(c *gin.Context) {
 			logger.LogError(c.Request.Context(), fmt.Sprintf("易支付 标记失败订单状态失败 trade_no=%s error=%q", tradeNo, updateErr.Error()))
 		}
 		logger.LogError(c.Request.Context(), fmt.Sprintf("易支付 拉起支付失败 user_id=%d trade_no=%s payment_method=%s amount=%d error=%q", id, tradeNo, req.PaymentMethod, req.Amount, err.Error()))
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "拉起支付失败"})
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": common.TranslateMessage(c, i18n.MsgPaymentStartFailed)})
 		return
 	}
 	logger.LogInfo(c.Request.Context(), fmt.Sprintf("易支付 充值订单创建成功 user_id=%d trade_no=%s payment_method=%s amount=%d money=%.2f uri=%q params=%q", id, tradeNo, req.PaymentMethod, req.Amount, quote.PayMoney, uri, common.GetJsonString(params)))
@@ -550,25 +568,25 @@ func RequestAmount(c *gin.Context) {
 	var req AmountRequest
 	err := c.ShouldBindJSON(&req)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "参数错误"})
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": common.TranslateMessage(c, i18n.MsgInvalidParams)})
 		return
 	}
 
 	if req.Amount < getMinTopup() {
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("充值数量不能小于 %d", getMinTopup())})
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": common.TranslateMessage(c, i18n.MsgTopupAmountBelowMin, map[string]any{"Min": getMinTopup()})})
 		return
 	}
 	quote, err := quoteTopUp(req.Amount)
 	id := c.GetInt("id")
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": err.Error()})
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": common.ErrorMessage(c, err)})
 		return
 	}
 	if rejectInvalidTopUpQuote(c, id, quote) {
 		return
 	}
 	if quote.PayMoney <= 0.01 {
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值金额过低"})
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": common.TranslateMessage(c, i18n.MsgTopupAmountTooLow)})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "success", "data": strconv.FormatFloat(quote.PayMoney, 'f', 2, 64)})
@@ -632,7 +650,7 @@ type AdminCompleteTopupRequest struct {
 func AdminCompleteTopUp(c *gin.Context) {
 	var req AdminCompleteTopupRequest
 	if err := c.ShouldBindJSON(&req); err != nil || req.TradeNo == "" {
-		common.ApiErrorMsg(c, "参数错误")
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
 

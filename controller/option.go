@@ -163,10 +163,10 @@ func normalizeOptionValue(value any) string {
 
 func validateModelPricingOption(key string, value string) error {
 	if !ratio_setting.IsPricingOptionKey(key) {
-		return fmt.Errorf("不支持的模型定价配置: %s", key)
+		return i18n.NewError(i18n.MsgOptionPricingKeyUnsupported, map[string]any{"Key": key})
 	}
 	if err := ratio_setting.ValidatePricingOptionsByJSONString(map[string]string{key: value}); err != nil {
-		return fmt.Errorf("模型定价配置 %s 必须是模型名到非负有限数值的 JSON 对象: %w", key, err)
+		return i18n.NewError(i18n.MsgOptionPricingValueInvalid, map[string]any{"Key": key, "Error": err.Error()})
 	}
 	return nil
 }
@@ -175,7 +175,7 @@ func normalizeModelPricingOptions(options []OptionUpdateRequest) (map[string]str
 	values := make(map[string]string, len(options))
 	for _, option := range options {
 		if _, duplicate := values[option.Key]; duplicate {
-			return nil, fmt.Errorf("模型定价配置包含重复键: %s", option.Key)
+			return nil, i18n.NewError(i18n.MsgOptionPricingKeyDuplicate, map[string]any{"Key": option.Key})
 		}
 		value := normalizeOptionValue(option.Value)
 		if err := validateModelPricingOption(option.Key, value); err != nil {
@@ -236,7 +236,7 @@ func UpdateOption(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
-			"message": "无效的参数",
+			"message": common.TranslateMessage(c, i18n.MsgInvalidParams),
 		})
 		return
 	}
@@ -255,7 +255,7 @@ func UpdateOption(c *gin.Context) {
 		}
 	default:
 		if isPaymentComplianceOptionKey(option.Key) {
-			common.ApiErrorMsg(c, "合规确认字段不允许通过通用设置接口修改")
+			common.ApiErrorI18n(c, i18n.MsgOptionComplianceFieldReadonly)
 			return
 		}
 	}
@@ -270,7 +270,7 @@ func UpdateOption(c *gin.Context) {
 		if option.Value == "true" && common.GitHubClientId == "" {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
-				"message": "无法启用 GitHub OAuth，请先填入 GitHub Client Id 以及 GitHub Client Secret！",
+				"message": common.TranslateMessage(c, i18n.MsgOptionOAuthNotConfigured, map[string]any{"Provider": "GitHub OAuth"}),
 			})
 			return
 		}
@@ -278,7 +278,7 @@ func UpdateOption(c *gin.Context) {
 		if option.Value == "true" && system_setting.GetDiscordSettings().ClientId == "" {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
-				"message": "无法启用 Discord OAuth，请先填入 Discord Client Id 以及 Discord Client Secret！",
+				"message": common.TranslateMessage(c, i18n.MsgOptionOAuthNotConfigured, map[string]any{"Provider": "Discord OAuth"}),
 			})
 			return
 		}
@@ -286,7 +286,7 @@ func UpdateOption(c *gin.Context) {
 		if option.Value == "true" && system_setting.GetOIDCSettings().ClientId == "" {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
-				"message": "无法启用 OIDC 登录，请先填入 OIDC Client Id 以及 OIDC Client Secret！",
+				"message": common.TranslateMessage(c, i18n.MsgOptionOAuthNotConfigured, map[string]any{"Provider": "OIDC"}),
 			})
 			return
 		}
@@ -294,7 +294,7 @@ func UpdateOption(c *gin.Context) {
 		if option.Value == "true" && common.LinuxDOClientId == "" {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
-				"message": "无法启用 LinuxDO OAuth，请先填入 LinuxDO Client Id 以及 LinuxDO Client Secret！",
+				"message": common.TranslateMessage(c, i18n.MsgOptionOAuthNotConfigured, map[string]any{"Provider": "LinuxDO OAuth"}),
 			})
 			return
 		}
@@ -302,7 +302,7 @@ func UpdateOption(c *gin.Context) {
 		if option.Value == "true" && len(common.EmailDomainWhitelist) == 0 {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
-				"message": "无法启用邮箱域名限制，请先填入限制的邮箱域名！",
+				"message": common.TranslateMessage(c, i18n.MsgOptionEmailDomainRestrictionNotConfigured),
 			})
 			return
 		}
@@ -310,7 +310,7 @@ func UpdateOption(c *gin.Context) {
 		if option.Value == "true" && common.WeChatServerAddress == "" {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
-				"message": "无法启用微信登录，请先填入微信登录相关配置信息！",
+				"message": common.TranslateMessage(c, i18n.MsgOptionWeChatNotConfigured),
 			})
 			return
 		}
@@ -318,7 +318,7 @@ func UpdateOption(c *gin.Context) {
 		if option.Value == "true" && common.TurnstileSiteKey == "" {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
-				"message": "无法启用 Turnstile 校验，请先填入 Turnstile 校验相关配置信息！",
+				"message": common.TranslateMessage(c, i18n.MsgOptionTurnstileNotConfigured),
 			})
 
 			return
@@ -328,7 +328,7 @@ func UpdateOption(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
 				"code":    "TELEGRAM_OAUTH_NOT_CONFIGURED",
-				"message": "Telegram OAuth is not configured or enabled. Please contact your administrator.",
+				"message": common.TranslateMessage(c, i18n.MsgOptionTelegramNotConfigured),
 			})
 			return
 		}
@@ -336,7 +336,7 @@ func UpdateOption(c *gin.Context) {
 		if option.Value != "default" {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
-				"message": "Classic 前端已移除，主题只能设置为 default",
+				"message": common.TranslateMessage(c, i18n.MsgOptionClassicThemeRemoved),
 			})
 			return
 		}
@@ -406,7 +406,7 @@ func UpdateOption(c *gin.Context) {
 	case "billing_setting.billing_expr":
 		expressions := make(map[string]string)
 		if err = common.UnmarshalJsonStr(option.Value.(string), &expressions); err != nil {
-			common.ApiErrorMsg(c, "计费表达式配置必须是模型到表达式的 JSON 对象: "+err.Error())
+			common.ApiErrorI18n(c, i18n.MsgOptionBillingExprInvalid, map[string]any{"Error": err.Error()})
 			return
 		}
 		models := make([]string, 0, len(expressions))
@@ -427,20 +427,20 @@ func UpdateOption(c *gin.Context) {
 				billing_setting.PluginBillingExprOption: variants,
 			})
 			if err != nil {
-				common.ApiErrorMsg(c, fmt.Sprintf("模型 %s 的计费表达式无效: %v", modelName, err))
+				common.ApiErrorI18n(c, i18n.MsgOptionBillingExprModelInvalid, map[string]any{"Model": modelName, "Error": err.Error()})
 				return
 			}
 		}
 	case billing_setting.PluginBillingExprOption:
 		var expressions map[string]string
 		if err = common.UnmarshalJsonStr(option.Value.(string), &expressions); err != nil || expressions == nil {
-			common.ApiErrorMsg(c, "plugin billing expressions must be a JSON object")
+			common.ApiErrorI18n(c, i18n.MsgOptionPluginBillingExprInvalid)
 			return
 		}
 		for key, expression := range expressions {
 			plugin, name, valid := billing_setting.SplitPluginBillingExprKey(key)
 			if !valid {
-				common.ApiErrorMsg(c, "invalid plugin billing expression key: "+key)
+				common.ApiErrorI18n(c, i18n.MsgOptionPluginBillingExprKeyInvalid, map[string]any{"Key": key})
 				return
 			}
 			if err = model.ValidateModelPricing(name, model.PricingValues{
@@ -491,13 +491,13 @@ func UpdateOption(c *gin.Context) {
 		switch option.Key {
 		case "log_diagnostic_setting.record_ip", "log_diagnostic_setting.record_headers":
 			if option.Value != "true" && option.Value != "false" {
-				common.ApiErrorMsg(c, "诊断开关必须是布尔值")
+				common.ApiErrorI18n(c, i18n.MsgOptionDiagnosticSwitchInvalid)
 				return
 			}
 		case "log_diagnostic_setting.extra_headers":
 			var headers []string
 			if err := common.UnmarshalJsonStr(option.Value.(string), &headers); err != nil {
-				common.ApiErrorMsg(c, "额外请求头必须是 JSON 数组")
+				common.ApiErrorI18n(c, i18n.MsgOptionExtraHeadersInvalid)
 				return
 			}
 			if err := operation_setting.ValidateLogDiagnosticHeaders(headers); err != nil {
@@ -505,27 +505,27 @@ func UpdateOption(c *gin.Context) {
 				return
 			}
 		default:
-			common.ApiErrorMsg(c, "不支持的日志诊断配置")
+			common.ApiErrorI18n(c, i18n.MsgOptionUnsupportedLogDiagnostic)
 			return
 		}
 	}
 	if strings.HasPrefix(option.Key, "client_policy_setting.") {
 		if option.Key != operation_setting.ClientPolicyRulesOptionKey && option.Key != operation_setting.ClientPolicyGroupsOptionKey {
-			common.ApiErrorMsg(c, "不支持的客户端策略配置")
+			common.ApiErrorI18n(c, i18n.MsgOptionUnsupportedClientPolicy)
 			return
 		}
 		candidate := *operation_setting.GetClientPolicySettingSnapshot()
 		if option.Key == operation_setting.ClientPolicyRulesOptionKey {
 			var rules []operation_setting.ClientIdentificationRule
 			if err := common.UnmarshalJsonStr(option.Value.(string), &rules); err != nil {
-				common.ApiErrorMsg(c, "客户端识别规则必须是 JSON 数组")
+				common.ApiErrorI18n(c, i18n.MsgOptionClientRulesInvalid)
 				return
 			}
 			candidate.Rules = rules
 		} else {
 			var groupPolicies map[string]operation_setting.ClientAccessPolicy
 			if err := common.UnmarshalJsonStr(option.Value.(string), &groupPolicies); err != nil {
-				common.ApiErrorMsg(c, "分组客户端策略必须是 JSON 对象")
+				common.ApiErrorI18n(c, i18n.MsgOptionGroupClientPolicyInvalid)
 				return
 			}
 			candidate.GroupPolicies = groupPolicies
@@ -568,11 +568,11 @@ func UpdateOption(c *gin.Context) {
 func UpdateModelPricingOptions(c *gin.Context) {
 	var request OptionBatchUpdateRequest
 	if err := common.DecodeJson(c.Request.Body, &request); err != nil {
-		common.ApiErrorMsg(c, "无效的参数")
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
 	if len(request.Options) == 0 || len(request.Options) > ratio_setting.PricingOptionKeyCount() {
-		common.ApiErrorMsg(c, "模型定价配置数量无效")
+		common.ApiErrorI18n(c, i18n.MsgOptionPricingCountInvalid)
 		return
 	}
 
@@ -604,7 +604,7 @@ func UpdateModelPricingOptions(c *gin.Context) {
 func UpdateClientPolicyOptions(c *gin.Context) {
 	var request operation_setting.ClientPolicySetting
 	if err := common.DecodeJson(c.Request.Body, &request); err != nil {
-		common.ApiErrorMsg(c, "无效的参数")
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
 	if err := model.UpdateClientPolicySetting(request); err != nil {
@@ -622,11 +622,11 @@ func UpdateClientPolicyOptions(c *gin.Context) {
 func UpdateGroupRateLimitOptions(c *gin.Context) {
 	var request GroupRateLimitOptionsRequest
 	if err := common.DecodeJson(c.Request.Body, &request); err != nil {
-		common.ApiErrorMsg(c, "无效的参数")
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
 	if request.MemberEnabled == nil || request.SharedPoolEnabled == nil || request.ModelRequestRateLimitGroup == nil || request.Policies == nil {
-		common.ApiErrorMsg(c, "分组限速配置必须完整提交")
+		common.ApiErrorI18n(c, i18n.MsgOptionGroupRateLimitIncomplete)
 		return
 	}
 	if err := model.UpdateGroupRateLimitOptions(

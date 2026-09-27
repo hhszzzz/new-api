@@ -6,6 +6,7 @@ import (
 	"maps"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 
 	"github.com/shopspring/decimal"
@@ -374,13 +375,13 @@ func SearchUserTopUps(userId int, keyword string, pageInfo *common.PageInfo) (to
 	if err = query.Limit(searchTopUpCountHardLimit).Count(&total).Error; err != nil {
 		tx.Rollback()
 		common.SysError("failed to count search topups: " + err.Error())
-		return nil, 0, errors.New("搜索充值记录失败")
+		return nil, 0, i18n.NewError(i18n.MsgTopupSearchFailed, nil)
 	}
 
 	if err = query.Order("id desc").Limit(pageInfo.GetPageSize()).Offset(pageInfo.GetStartIdx()).Find(&topups).Error; err != nil {
 		tx.Rollback()
 		common.SysError("failed to search topups: " + err.Error())
-		return nil, 0, errors.New("搜索充值记录失败")
+		return nil, 0, i18n.NewError(i18n.MsgTopupSearchFailed, nil)
 	}
 
 	if err = tx.Commit().Error; err != nil {
@@ -414,13 +415,13 @@ func SearchAllTopUps(keyword string, pageInfo *common.PageInfo) (topups []*TopUp
 	if err = query.Limit(searchTopUpCountHardLimit).Count(&total).Error; err != nil {
 		tx.Rollback()
 		common.SysError("failed to count search topups: " + err.Error())
-		return nil, 0, errors.New("搜索充值记录失败")
+		return nil, 0, i18n.NewError(i18n.MsgTopupSearchFailed, nil)
 	}
 
 	if err = query.Order("id desc").Limit(pageInfo.GetPageSize()).Offset(pageInfo.GetStartIdx()).Find(&topups).Error; err != nil {
 		tx.Rollback()
 		common.SysError("failed to search topups: " + err.Error())
-		return nil, 0, errors.New("搜索充值记录失败")
+		return nil, 0, i18n.NewError(i18n.MsgTopupSearchFailed, nil)
 	}
 
 	if err = tx.Commit().Error; err != nil {

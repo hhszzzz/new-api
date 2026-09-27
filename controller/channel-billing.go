@@ -15,6 +15,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay/channel/advancedcustom"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -506,15 +507,15 @@ func fetchAdvancedCustomBalance(channel *model.Channel) (channelBalanceResult, e
 	return channelBalanceResult{RawResponse: string(formatted)}, nil
 }
 
-func updateChannelBalance(channel *model.Channel) (channelBalanceResult, error) {
+func updateChannelBalance(c *gin.Context, channel *model.Channel) (channelBalanceResult, error) {
 	if channel.Type == constant.ChannelTypeAdvancedCustom {
 		return fetchAdvancedCustomBalance(channel)
 	}
-	balance, err := updateStandardChannelBalance(channel)
+	balance, err := updateStandardChannelBalance(c, channel)
 	return channelBalanceResult{Balance: balance}, err
 }
 
-func updateStandardChannelBalance(channel *model.Channel) (float64, error) {
+func updateStandardChannelBalance(c *gin.Context, channel *model.Channel) (float64, error) {
 	baseURL := constant.GetChannelBaseURL(channel.Type)
 	if channel.GetBaseURL() == "" {
 		channel.BaseURL = &baseURL
@@ -525,7 +526,7 @@ func updateStandardChannelBalance(channel *model.Channel) (float64, error) {
 			baseURL = channel.GetBaseURL()
 		}
 	case constant.ChannelTypeAzure:
-		return 0, errors.New("尚未实现")
+		return 0, errors.New(i18n.T(c, i18n.MsgChannelBalanceUnsupported))
 	case constant.ChannelTypeCustom:
 		baseURL = channel.GetBaseURL()
 	//case common.ChannelTypeOpenAISB:
@@ -545,7 +546,7 @@ func updateStandardChannelBalance(channel *model.Channel) (float64, error) {
 	case constant.ChannelTypeMoonshot:
 		return updateChannelMoonshotBalance(channel)
 	default:
-		return 0, errors.New("尚未实现")
+		return 0, errors.New(i18n.T(c, i18n.MsgChannelBalanceUnsupported))
 	}
 	url := fmt.Sprintf("%s/v1/dashboard/billing/subscription", baseURL)
 
@@ -591,17 +592,14 @@ func UpdateChannelBalance(c *gin.Context) {
 		return
 	}
 	if channel.Type == constant.ChannelTypeTaskPlugin {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "Task Plugin channels do not support balance queries"})
+		common.ApiErrorI18n(c, i18n.MsgChannelTaskPluginBalanceUnsupported)
 		return
 	}
 	if channel.ChannelInfo.IsMultiKey {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "多密钥渠道不支持余额查询",
-		})
+		common.ApiErrorI18n(c, i18n.MsgChannelMultiKeyBalanceUnsupported)
 		return
 	}
-	result, err := updateChannelBalance(channel)
+	result, err := updateChannelBalance(c, channel)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -634,7 +632,7 @@ func updateAllChannelsBalance() error {
 		//if channel.Type != common.ChannelTypeOpenAI && channel.Type != common.ChannelTypeCustom {
 		//	continue
 		//}
-		result, err := updateChannelBalance(channel)
+		result, err := updateChannelBalance(nil, channel)
 		if err != nil {
 			continue
 		} else if result.RawResponse == "" {

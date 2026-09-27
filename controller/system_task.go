@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 
@@ -16,7 +17,7 @@ func CreateLogCleanupSystemTask(c *gin.Context) {
 	if targetTimestamp == 0 {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
-			"message": "target timestamp is required",
+			"message": common.TranslateMessage(c, i18n.MsgSystemTaskTargetTimestampRequired),
 		})
 		return
 	}
@@ -39,7 +40,7 @@ func GetCurrentSystemTask(c *gin.Context) {
 	if taskType == "" {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
-			"message": "type is required",
+			"message": common.TranslateMessage(c, i18n.MsgSystemTaskTypeRequired),
 		})
 		return
 	}
@@ -72,7 +73,7 @@ func ListSystemTasks(c *gin.Context) {
 		Limit  int `form:"limit"`
 	}
 	if err := c.ShouldBindQuery(&query); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid system task filters"})
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgSystemTaskInvalidFilters)})
 		return
 	}
 
@@ -98,7 +99,7 @@ func ListSystemTasks(c *gin.Context) {
 func DeleteSystemTaskHistory(c *gin.Context) {
 	var filter model.SystemTaskFilter
 	if err := c.ShouldBindQuery(&filter); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid system task filters"})
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgSystemTaskInvalidFilters)})
 		return
 	}
 	deleted, err := model.DeleteSystemTaskHistory(filter)
@@ -118,7 +119,7 @@ func GetSystemTask(c *gin.Context) {
 	if taskID == "" {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
-			"message": "task id is required",
+			"message": common.TranslateMessage(c, i18n.MsgSystemTaskIdRequired),
 		})
 		return
 	}
@@ -131,7 +132,7 @@ func GetSystemTask(c *gin.Context) {
 	if task == nil {
 		c.JSON(http.StatusNotFound, gin.H{
 			"success": false,
-			"message": "task not found",
+			"message": common.TranslateMessage(c, i18n.MsgSystemTaskNotFound),
 		})
 		return
 	}

@@ -104,7 +104,7 @@ func getTokenRequestUserGroups(c *gin.Context) ([]string, error) {
 func validateTokenGroup(c *gin.Context, userId int, group string) bool {
 	group = strings.TrimSpace(group)
 	if group == "" {
-		common.ApiErrorMsg(c, "令牌必须绑定一个分组")
+		common.ApiErrorI18n(c, i18n.MsgTokenGroupRequired)
 		return false
 	}
 	userGroups := common.GetContextKeyStringSlice(c, constant.ContextKeyUserGroups)
@@ -122,11 +122,11 @@ func validateTokenGroup(c *gin.Context, userId int, group string) bool {
 		userGroups = user.Groups
 	}
 	if !service.GroupInUserUsableGroupsForGroups(userGroups, group) {
-		common.ApiErrorMsg(c, fmt.Sprintf("无权使用分组 %s", group))
+		common.ApiErrorI18n(c, i18n.MsgAuthGroupAccessDenied, map[string]any{"Group": group})
 		return false
 	}
 	if group != "auto" && !ratio_setting.ContainsGroupRatio(group) {
-		common.ApiErrorMsg(c, fmt.Sprintf("分组 %s 已被弃用", group))
+		common.ApiErrorI18n(c, i18n.MsgAuthGroupDeprecated, map[string]any{"Group": group})
 		return false
 	}
 	return true
@@ -219,7 +219,7 @@ func parseTokenStatusFilter(c *gin.Context) (int, bool) {
 	}
 	status, err := strconv.Atoi(rawStatus)
 	if err != nil || status < common.TokenStatusEnabled || status > common.TokenStatusExhausted {
-		common.ApiErrorMsg(c, "无效的令牌状态")
+		common.ApiErrorI18n(c, i18n.MsgTokenStatusInvalid)
 		return 0, false
 	}
 	return status, true
@@ -298,7 +298,7 @@ func GetTokenUsage(c *gin.Context) {
 	if authHeader == "" {
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"success": false,
-			"message": "No Authorization header",
+			"message": common.TranslateMessage(c, i18n.MsgTokenAuthorizationMissing),
 		})
 		return
 	}
@@ -307,7 +307,7 @@ func GetTokenUsage(c *gin.Context) {
 	if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"success": false,
-			"message": "Invalid Bearer token",
+			"message": common.TranslateMessage(c, i18n.MsgTokenBearerRequired),
 		})
 		return
 	}
@@ -378,7 +378,7 @@ func AddToken(c *gin.Context) {
 	if int(count) >= maxTokens {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
-			"message": fmt.Sprintf("已达到最大令牌数量限制 (%d)", maxTokens),
+			"message": common.TranslateMessage(c, i18n.MsgTokenMaxCountReached, map[string]any{"Max": maxTokens}),
 		})
 		return
 	}

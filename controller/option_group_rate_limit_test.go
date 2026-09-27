@@ -57,7 +57,7 @@ func TestUpdateGroupRateLimitOptionsRequiresCompletePayload(t *testing.T) {
 		"shared_pool_enabled": true,
 	})
 	assert.Equal(t, false, response["success"])
-	assert.Contains(t, response["message"], "必须完整提交")
+	assert.Contains(t, response["message"], "The group rate limit settings must be submitted in full")
 }
 
 func TestUpdateGroupRateLimitOptionsRejectsWholeInvalidPayload(t *testing.T) {

@@ -14,6 +14,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
@@ -58,16 +59,16 @@ func getInferenceChannelStatus(c *gin.Context, channelType int) {
 	c.Header("Cache-Control", "no-store")
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "Invalid channel id"})
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": i18n.T(c, i18n.MsgChannelIdFormatError)})
 		return
 	}
 	channel, err := model.GetChannelById(id, true)
 	if err != nil || channel == nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "Channel not found"})
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": i18n.T(c, i18n.MsgChannelNotExists)})
 		return
 	}
 	if channel.Type != channelType {
-		common.ApiError(c, errors.New("Channel type does not match the status endpoint"))
+		common.ApiErrorI18n(c, i18n.MsgChannelTypeMismatch)
 		return
 	}
 	status, err := fetchInferenceStatus(c.Request.Context(), channel)

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/bytedance/gopkg/util/gopool"
@@ -194,20 +195,20 @@ func sanitizeLikePattern(input string) (string, error) {
 func validateLikePattern(input string) error {
 	// 1. 连续的 % 直接拒绝
 	if strings.Contains(input, "%%") {
-		return errors.New("搜索模式中不允许包含连续的 % 通配符")
+		return i18n.NewError(i18n.MsgSearchConsecutiveWildcards, nil)
 	}
 
 	// 2. 统计 % 数量，不得超过 2
 	count := strings.Count(input, "%")
 	if count > 2 {
-		return errors.New("搜索模式中最多允许包含 2 个 % 通配符")
+		return i18n.NewError(i18n.MsgSearchTooManyWildcards, nil)
 	}
 
 	// 3. 含 % 时，去掉 % 后关键词长度必须 >= 2
 	if count > 0 {
 		stripped := strings.ReplaceAll(input, "%", "")
 		if len(stripped) < 2 {
-			return errors.New("使用模糊搜索时，关键词长度至少为 2 个字符")
+			return i18n.NewError(i18n.MsgSearchKeywordTooShort, nil)
 		}
 	}
 
@@ -236,10 +237,10 @@ func SearchUserTokens(userId int, keyword string, token string, status int, offs
 		count, err := CountUserTokens(userId)
 		if err != nil {
 			common.SysLog("failed to count user tokens: " + err.Error())
-			return nil, 0, errors.New("获取令牌数量失败")
+			return nil, 0, i18n.NewError(i18n.MsgTokenCountFailed, nil)
 		}
 		if int(count) > maxTokens {
-			return nil, 0, errors.New("令牌数量超过上限，仅允许精确搜索，请勿使用 % 通配符")
+			return nil, 0, i18n.NewError(i18n.MsgTokenSearchExactOnly, nil)
 		}
 	}
 
@@ -268,14 +269,14 @@ func SearchUserTokens(userId int, keyword string, token string, status int, offs
 	err = baseQuery.Limit(maxTokens).Count(&total).Error
 	if err != nil {
 		common.SysError("failed to count search tokens: " + err.Error())
-		return nil, 0, errors.New("搜索令牌失败")
+		return nil, 0, i18n.NewError(i18n.MsgTokenSearchFailed, nil)
 	}
 
 	// 再分页查数据
 	err = resolveTokenSortOptions(sortOptions).Apply(baseQuery).Offset(offset).Limit(limit).Find(&tokens).Error
 	if err != nil {
 		common.SysError("failed to search tokens: " + err.Error())
-		return nil, 0, errors.New("搜索令牌失败")
+		return nil, 0, i18n.NewError(i18n.MsgTokenSearchFailed, nil)
 	}
 	return tokens, total, nil
 }

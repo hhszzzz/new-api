@@ -68,6 +68,8 @@ const serverErrorMessageKeys = {
     'This verification method is currently unavailable.',
   TWOFA_SETUP_INVALID:
     'The two-factor setup has expired or changed. Start setup again.',
+  EMAIL_ALREADY_TAKEN: 'This email address is already in use.',
+  ACCOUNT_ALREADY_BOUND: 'This external account is already bound.',
 
   AUTH_SESSION_LIMIT:
     'Too many active login sessions. On a device where you are already signed in, open Login sessions and use “Sign out other sessions” to revoke them. If you cannot access a signed-in device, reset your password to sign out all sessions.',

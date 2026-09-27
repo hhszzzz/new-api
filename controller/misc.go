@@ -27,7 +27,7 @@ func TestStatus(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{
 			"success": false,
-			"message": "数据库连接失败",
+			"message": common.TranslateMessage(c, i18n.MsgDatabaseConnectionFailed),
 		})
 		return
 	}
@@ -35,7 +35,7 @@ func TestStatus(c *gin.Context) {
 	httpStats := middleware.GetStats()
 	c.JSON(http.StatusOK, gin.H{
 		"success":    true,
-		"message":    "Server is running",
+		"message":    common.TranslateMessage(c, i18n.MsgServerRunning),
 		"http_stats": httpStats,
 	})
 	return
@@ -248,6 +248,10 @@ func SendEmailVerification(c *gin.Context) {
 		"<p>您的验证码为: <strong>%s</strong></p>"+
 		"<p>验证码 %d 分钟内有效，如果不是本人操作，请忽略。</p>", common.SystemName, code, common.VerificationValidMinutes)
 	err = common.SendEmail(subject, email, content)
+	if errors.Is(err, common.ErrSMTPNotConfigured) || errors.Is(err, common.ErrSMTPAccountInvalid) {
+		common.ApiErrorI18n(c, i18n.MsgSMTPNotConfigured)
+		return
+	}
 	if err != nil {
 		common.ApiError(c, err)
 		return

@@ -22,7 +22,7 @@ import (
 func GetVerificationMethods(c *gin.Context) {
 	identity, ok := middleware.GetSessionAuthIdentity(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "当前认证方式不支持安全验证"})
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgSecurityProofAuthMethodUnsupported)})
 		return
 	}
 	requirements, err := service.GetVerificationRequirements(identity, c.Query("scope"))
@@ -47,7 +47,7 @@ func writeSecurityOperationError(c *gin.Context, err error) {
 	case errors.Is(err, service.ErrAccountEmailInvalid), errors.Is(err, service.ErrAccountEmailRestricted):
 		code, message = "EMAIL_ADDRESS_REJECTED", err.Error()
 	case errors.Is(err, model.ErrEmailAlreadyTaken):
-		code, message = "EMAIL_ALREADY_TAKEN", "This email address is already in use."
+		code, message = "EMAIL_ALREADY_TAKEN", i18n.T(c, i18n.MsgUserEmailAlreadyTaken)
 	case errors.Is(err, service.ErrEmailBindingDelivery):
 		code, message = "EMAIL_BINDING_DELIVERY_FAILED", err.Error()
 	case errors.Is(err, model.ErrEmailBindingCodeInvalid):
@@ -75,9 +75,9 @@ func writeSecurityOperationError(c *gin.Context, err error) {
 	case errors.Is(err, oauth.ErrTelegramAccountNotBound):
 		code, message = "TELEGRAM_ACCOUNT_NOT_BOUND", oauth.ErrTelegramAccountNotBound.Error()
 	case errors.Is(err, model.ErrExternalIdentityAlreadyClaimed):
-		code, message = "ACCOUNT_ALREADY_BOUND", "This external account is already bound."
+		code, message = "ACCOUNT_ALREADY_BOUND", i18n.T(c, i18n.MsgOAuthAccountUsed)
 		if c.Param("provider") == "telegram" {
-			code, message = "TELEGRAM_BIND_ALREADY_BOUND", "This Telegram account is already bound."
+			code, message = "TELEGRAM_BIND_ALREADY_BOUND", i18n.T(c, i18n.MsgOAuthAlreadyBound, map[string]any{"Provider": "Telegram"})
 		}
 	case errors.Is(err, service.ErrVerificationContextInvalid):
 		status = http.StatusBadRequest
@@ -95,9 +95,9 @@ func writeSecurityOperationError(c *gin.Context, err error) {
 		status = http.StatusBadRequest
 		code, message = "SECURITY_VERIFICATION_FLOW_REQUIRED", service.ErrVerificationFlowRequired.Error()
 	case errors.Is(err, service.ErrProofMethod):
-		code, message = "SECURITY_PROOF_METHOD_MISMATCH", "This verification method is not allowed for this action."
+		code, message = "SECURITY_PROOF_METHOD_MISMATCH", i18n.T(c, i18n.MsgSecurityProofMethodMismatch)
 	case errors.Is(err, service.ErrProofScope):
-		code, message = "SECURITY_PROOF_SCOPE_MISMATCH", "Verification does not match this action."
+		code, message = "SECURITY_PROOF_SCOPE_MISMATCH", i18n.T(c, i18n.MsgSecurityProofScopeMismatch)
 	case errors.Is(err, service.ErrOAuthAccountMismatch):
 		code, message = "OAUTH_ACCOUNT_MISMATCH", service.ErrOAuthAccountMismatch.Error()
 	case errors.Is(err, model.ErrTwoFASetupInvalid):
@@ -106,13 +106,13 @@ func writeSecurityOperationError(c *gin.Context, err error) {
 	case errors.Is(err, model.ErrTwoFACodeInvalid):
 		code, message = "TWOFA_CODE_INVALID", model.ErrTwoFACodeInvalid.Error()
 	case errors.Is(err, model.ErrTwoFAAlreadyEnabled):
-		code, message = "TWOFA_ALREADY_ENABLED", "Two-factor authentication is already enabled."
+		code, message = "TWOFA_ALREADY_ENABLED", i18n.T(c, i18n.MsgTwoFAAlreadyExists)
 	case errors.Is(err, model.ErrTwoFANotEnabled):
-		code, message = "TWOFA_NOT_ENABLED", "Two-factor authentication is not enabled."
+		code, message = "TWOFA_NOT_ENABLED", i18n.T(c, i18n.MsgTwoFANotEnabled)
 	case errors.Is(err, model.ErrPasskeyNotFound):
-		code, message = "PASSKEY_NOT_FOUND", "No Passkey is registered."
+		code, message = "PASSKEY_NOT_FOUND", i18n.T(c, i18n.MsgPasskeyNotFound)
 	case errors.Is(err, model.ErrAuthFlowInvalid), errors.Is(err, model.ErrAuthFlowExpired), errors.Is(err, model.ErrAuthFlowConsumed):
-		code, message = "AUTH_FLOW_INVALID", "Verification flow expired"
+		code, message = "AUTH_FLOW_INVALID", i18n.T(c, i18n.MsgSecurityProofFlowExpired)
 	case errors.Is(err, model.ErrUserSessionInvalid), errors.Is(err, model.ErrUserSessionInactive):
 		writeAuthSessionError(c, service.ErrAuthTokenInvalid)
 		return
@@ -137,12 +137,12 @@ func writeSecurityOperationError(c *gin.Context, err error) {
 func UniversalVerify(c *gin.Context) {
 	identity, ok := middleware.GetSessionAuthIdentity(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "当前认证方式不支持安全验证"})
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgSecurityProofAuthMethodUnsupported)})
 		return
 	}
 	var request service.VerificationInput
 	if err := common.DecodeJson(c.Request.Body, &request); err != nil {
-		common.ApiErrorMsg(c, "参数错误")
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
 	proof, err := service.VerifySecurityInput(identity, request)

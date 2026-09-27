@@ -15,7 +15,7 @@
 
 - `off`：不调用审查节点，默认值。
 - `async_audit`：写入持久队列后立即继续主请求，最终只记录 `would_action`。
-- `blocking`：风险命中返回 `403 / prompt_audit_blocked`；审查不可用返回 `503 / prompt_audit_unavailable`，即失败关闭。
+- `blocking`：风险命中返回 `400 / sensitive_words_detected`（2026-09 起与敏感词命中共用错误码，此前为 `403 / prompt_audit_blocked`）；审查不可用返回 `503 / prompt_audit_unavailable`，即失败关闭。
 
 Responses WebSocket 对每个 `response.create` 单独审查，并复用已经取得的连接和用户限流状态。
 

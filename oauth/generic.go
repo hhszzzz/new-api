@@ -271,7 +271,7 @@ func (p *GenericOAuthProvider) GetUserInfo(ctx context.Context, token *OAuthToke
 			message := renderAccessDeniedMessage(p.config.AccessDeniedMessage, p.config.Name, bodyStr, failure)
 			logger.LogWarn(ctx, fmt.Sprintf("[OAuth-Generic-%s] access denied by policy: field=%s op=%s expected=%v current=%v",
 				p.config.Slug, failure.Field, failure.Op, failure.Expected, failure.Current))
-			return nil, &AccessDeniedError{Message: message}
+			return nil, &AccessDeniedError{Message: message, Default: strings.TrimSpace(p.config.AccessDeniedMessage) == ""}
 		}
 	}
 

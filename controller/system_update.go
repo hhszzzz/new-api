@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/service"
 
@@ -22,7 +23,7 @@ func GetSystemUpdate(c *gin.Context) {
 	info, err := service.CheckSystemUpdate(ctx, common.Version)
 	if err != nil {
 		logger.LogWarn(c, fmt.Sprintf("system update check failed: %v", err))
-		common.ApiErrorMsg(c, "Failed to check GHCR image updates")
+		common.ApiErrorI18n(c, i18n.MsgSystemUpdateCheckFailed)
 		return
 	}
 	common.ApiSuccess(c, info)
@@ -40,12 +41,12 @@ func ApplySystemUpdate(c *gin.Context) {
 	if err != nil {
 		switch {
 		case errors.Is(err, service.ErrSystemUpdateNotConfigured):
-			common.ApiErrorMsg(c, "One-click update is not configured on this deployment.")
+			common.ApiErrorI18n(c, i18n.MsgSystemUpdateNotConfigured)
 		case errors.Is(err, service.ErrSystemUpdateInProgress):
-			common.ApiErrorMsg(c, "A system update is already in progress.")
+			common.ApiErrorI18n(c, i18n.MsgSystemUpdateInProgress)
 		default:
 			logger.LogWarn(c, fmt.Sprintf("system update start failed: %v", err))
-			common.ApiErrorMsg(c, "Failed to trigger system update")
+			common.ApiErrorI18n(c, i18n.MsgSystemUpdateTriggerFailed)
 		}
 		return
 	}

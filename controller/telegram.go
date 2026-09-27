@@ -3,6 +3,8 @@ package controller
 import (
 	"net/http"
 
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/gin-gonic/gin"
 )
 
@@ -12,6 +14,6 @@ func TelegramLegacyAuth(c *gin.Context) {
 	c.JSON(http.StatusGone, gin.H{
 		"success": false,
 		"code":    "TELEGRAM_LEGACY_AUTH_REMOVED",
-		"message": "Telegram login has changed. Reload the page and start Telegram OAuth again.",
+		"message": common.TranslateMessage(c, i18n.MsgTelegramLegacyAuthRemoved),
 	})
 }

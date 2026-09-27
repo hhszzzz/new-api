@@ -11,7 +11,7 @@
 | 分片重叠（Chunk overlap） | 相邻文本分片重复审查的小范围字符，用于降低边界切分绕过风险。 |
 | Pass | 安全放行，不触发拦截。 |
 | Flag | 告警放行；异步或同步记录风险，但不阻断请求。 |
-| Block | 阻断；同步模式返回 `prompt_audit_blocked`。 |
+| Block | 阻断；同步模式返回 `400 / sensitive_words_detected`，与敏感词命中共用错误码。 |
 | Unavailable | 审查无法可靠完成；同步模式失败关闭并返回 `prompt_audit_unavailable`。 |
 | `would_action` | 异步模式下记录如果采用同步策略本应执行的 Pass、Flag、Block 或 Unavailable。 |
 | 配置版本（Config version） | 覆盖模式、类别、分组、节点和运行参数的指纹，用于记录与缓存隔离。 |

@@ -667,5 +667,5 @@ func TestDetectAllChannelUpstreamModelUpdatesRejectsExistingActiveTask(t *testin
 
 	require.Equal(t, http.StatusConflict, recorder.Code)
 	require.Contains(t, recorder.Body.String(), existing.TaskID)
-	require.Contains(t, recorder.Body.String(), "已有模型更新任务正在运行或等待中")
+	require.Contains(t, recorder.Body.String(), "A model update task is already running or queued, so this manual run cannot start")
 }

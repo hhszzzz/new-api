@@ -16,6 +16,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/relay/channel/advancedcustom"
@@ -389,7 +390,7 @@ func fetchChannelUpstreamModelIDs(channel *model.Channel) ([]string, error) {
 	if channel.Type == constant.ChannelTypeGemini {
 		key, _, apiErr := channel.GetNextEnabledKey()
 		if apiErr != nil {
-			return nil, fmt.Errorf("获取渠道密钥失败: %w", apiErr)
+			return nil, i18n.NewError(i18n.MsgChannelNoAvailableKey, nil)
 		}
 		key = strings.TrimSpace(key)
 		models, err := gemini.FetchGeminiModels(baseURL, key, channel.GetSetting().Proxy)
@@ -438,7 +439,7 @@ func fetchChannelUpstreamModelIDs(channel *model.Channel) ([]string, error) {
 
 	key, _, apiErr := channel.GetNextEnabledKey()
 	if apiErr != nil {
-		return nil, fmt.Errorf("获取渠道密钥失败: %w", apiErr)
+		return nil, i18n.NewError(i18n.MsgChannelNoAvailableKey, nil)
 	}
 	key = strings.TrimSpace(key)
 
@@ -468,7 +469,7 @@ func fetchChannelUpstreamModelIDs(channel *model.Channel) ([]string, error) {
 func fetchAdvancedCustomUpstreamModelIDs(channel *model.Channel, baseURL string) ([]string, error) {
 	key, _, apiErr := channel.GetNextEnabledKey()
 	if apiErr != nil {
-		return nil, fmt.Errorf("获取渠道密钥失败: %w", apiErr)
+		return nil, i18n.NewError(i18n.MsgChannelNoAvailableKey, nil)
 	}
 	key = strings.TrimSpace(key)
 
@@ -866,10 +867,7 @@ func ApplyChannelUpstreamModelUpdates(c *gin.Context) {
 		return
 	}
 	if req.ID <= 0 {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "invalid channel id",
-		})
+		common.ApiErrorI18n(c, i18n.MsgChannelIdFormatError)
 		return
 	}
 
@@ -922,10 +920,7 @@ func DetectChannelUpstreamModelUpdates(c *gin.Context) {
 		return
 	}
 	if req.ID <= 0 {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "invalid channel id",
-		})
+		common.ApiErrorI18n(c, i18n.MsgChannelIdFormatError)
 		return
 	}
 
@@ -1125,7 +1120,7 @@ func DetectAllChannelUpstreamModelUpdates(c *gin.Context) {
 	if !created {
 		c.JSON(http.StatusConflict, gin.H{
 			"success": false,
-			"message": "已有模型更新任务正在运行或等待中，不能启动本次手动任务",
+			"message": i18n.T(c, i18n.MsgChannelModelUpdateTaskAlreadyRunning),
 			"data": gin.H{
 				"task_id": task.TaskID,
 				"status":  task.Status,

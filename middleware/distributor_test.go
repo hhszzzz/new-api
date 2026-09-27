@@ -191,7 +191,7 @@ func TestDistributeHidesTaskPluginDetailsButLogsDiagnostics(t *testing.T) {
 	for _, locale := range []struct{ language, message string }{
 		{"en", "No available channel for model task-model under group " + group + ": the model is claimed by a task plugin, which has no enabled channel serving it (distributor)"},
 		{"zh-CN", "分组 " + group + " 下模型 task-model 无可用渠道：该模型由任务插件认领，但当前没有启用的渠道可服务此模型（distributor）"},
-		{"zh-TW", "分組 " + group + " 下模型 task-model 無可用管道：該模型由任務插件認領，但目前沒有啟用的管道可服務此模型（distributor）"},
+		{"zh-TW", "分組 " + group + " 下模型 task-model 無可用渠道：該模型由任務外掛認領，但目前沒有啟用的渠道可服務此模型（distributor）"},
 	} {
 		for _, providerCount := range []int{1, 2} {
 			t.Run(fmt.Sprintf("%s/%d_providers", locale.language, providerCount), func(t *testing.T) {
@@ -341,4 +341,27 @@ func TestSharedEndpointRebindsToBoundNewAPIExtension(t *testing.T) {
 	require.Nil(t, SetupContextForSelectedChannel(c, channel, "task-model", false))
 	assert.Equal(t, "alpha", c.GetString("task_plugin_key"), "the first bound candidate executes regardless of the earlier pin")
 	assert.Equal(t, "alpha", c.MustGet(jsplugin.ContextKeyPinnedEndpoint).(jsplugin.PinnedEndpoint).Plugin.Meta.Key)
+}
+
+func TestDistributeReportsMalformedBodyOnce(t *testing.T) {
+	require.NoError(t, i18n.Init())
+	router := gin.New()
+	router.POST("/v1/chat/completions", Distribute(), func(c *gin.Context) {
+		t.Error("a malformed body must stop before the relay handler")
+	})
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept-Language", "en")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	var body struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &body))
+	assert.True(t, strings.HasPrefix(body.Error.Message, "Invalid request: "), body.Error.Message)
+	assert.Equal(t, 1, strings.Count(body.Error.Message, "Invalid request"), body.Error.Message)
 }

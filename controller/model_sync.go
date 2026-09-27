@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 
 	"github.com/gin-gonic/gin"
@@ -255,7 +256,7 @@ type metadataSyncCandidate struct {
 func fetchMetadataCatalog(c *gin.Context, locale string) (metadataSyncSource, map[string]model.MetadataValues, map[string]model.Vendor, error) {
 	resolved, valid := normalizeLocale(locale)
 	if !valid {
-		return metadataSyncSource{}, nil, nil, errors.New("unsupported metadata language")
+		return metadataSyncSource{}, nil, nil, errors.New(i18n.T(c, i18n.MsgModelSyncUnsupportedLocale))
 	}
 	modelsURL, vendorsURL := getUpstreamURLs(resolved)
 	source := metadataSyncSource{Locale: resolved, ModelsURL: modelsURL, VendorsURL: vendorsURL}
@@ -276,7 +277,7 @@ func fetchMetadataCatalog(c *gin.Context, locale string) (metadataSyncSource, ma
 		return source, nil, nil, fmt.Errorf("fetch vendors (%s, %s): %w", resolved, vendorsURL, vendorsErr)
 	}
 	if !modelsEnv.Success || !vendorsEnv.Success {
-		return source, nil, nil, errors.New("upstream metadata source reported failure")
+		return source, nil, nil, errors.New(i18n.T(c, i18n.MsgModelSyncUpstreamReportedFailure))
 	}
 	models := make(map[string]model.MetadataValues)
 	vendors := make(map[string]model.Vendor)
@@ -417,7 +418,7 @@ func SyncUpstreamModels(c *gin.Context) {
 		Selections    []model.MetadataSyncSelection `json:"selections"`
 	}
 	if err := common.DecodeJson(c.Request.Body, &request); err != nil || len(request.Selections) == 0 || request.SourceVersion == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "Preview and select metadata changes before applying"})
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgModelSyncPreviewRequired)})
 		return
 	}
 	source, upstream, vendors, err := fetchMetadataCatalog(c, request.Locale)
@@ -426,14 +427,14 @@ func SyncUpstreamModels(c *gin.Context) {
 		return
 	}
 	if source.Version != request.SourceVersion {
-		c.JSON(http.StatusConflict, gin.H{"success": false, "message": "Upstream metadata changed; preview again"})
+		c.JSON(http.StatusConflict, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgModelSyncUpstreamChanged)})
 		return
 	}
 	updates := make([]model.MetadataSyncUpdate, 0, len(request.Selections))
 	for _, selection := range request.Selections {
 		values, exists := upstream[selection.ModelName]
 		if !exists {
-			c.JSON(http.StatusConflict, gin.H{"success": false, "message": "Selected upstream model is no longer available"})
+			c.JSON(http.StatusConflict, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgModelSyncSelectionUnavailable)})
 			return
 		}
 		updates = append(updates, model.MetadataSyncUpdate{MetadataSyncSelection: selection, Values: values})

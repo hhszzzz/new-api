@@ -130,7 +130,7 @@ func TestGetPerfMetricsRejectsGroupOutsideVisitorAccessWithoutExistenceLeak(t *t
 	var payload perfMetricsErrorResponse
 	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &payload))
 	assert.False(t, payload.Success)
-	assert.Equal(t, "model is not available", payload.Message)
+	assert.Equal(t, "Model is not available", payload.Message)
 	assert.NotContains(t, recorder.Body.String(), "private")
 }
 
@@ -149,7 +149,7 @@ func TestGetPerfMetricsRejectsModelsOutsideVisiblePricingWithoutExistenceLeak(t 
 			var payload perfMetricsErrorResponse
 			require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &payload))
 			assert.False(t, payload.Success)
-			assert.Equal(t, "model is not available", payload.Message)
+			assert.Equal(t, "Model is not available", payload.Message)
 			assert.NotContains(t, recorder.Body.String(), modelName)
 		})
 	}
@@ -181,6 +181,6 @@ func TestGetPerfMetricsStatusDoesNotExposeInternalQueryErrors(t *testing.T) {
 	var payload perfMetricsErrorResponse
 	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &payload))
 	assert.False(t, payload.Success)
-	assert.Equal(t, "performance metrics are temporarily unavailable", payload.Message)
+	assert.Equal(t, "Performance metrics are temporarily unavailable", payload.Message)
 	assert.NotContains(t, recorder.Body.String(), "private database connection detail")
 }

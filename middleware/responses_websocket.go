@@ -2,7 +2,6 @@ package middleware
 
 import (
 	"errors"
-	"fmt"
 	hosttypes "github.com/QuantumNous/new-api/types"
 	"net/http"
 	"strconv"
@@ -28,7 +27,7 @@ func PrepareResponsesWebSocketRequest(c *gin.Context, modelName string, requestB
 		return hosttypes.NewErrorWithStatusCode(errors.New("invalid responses websocket request context"), hosttypes.ErrorCodeInvalidRequest, http.StatusBadRequest, hosttypes.ErrOptionWithSkipRetry())
 	}
 	if modelName == "" {
-		return hosttypes.NewErrorWithStatusCode(errors.New("model is required"), hosttypes.ErrorCodeInvalidRequest, http.StatusBadRequest, hosttypes.ErrOptionWithSkipRetry())
+		return hosttypes.NewErrorWithStatusCode(errors.New(i18n.T(c, i18n.MsgDistributorModelNameRequired)), hosttypes.ErrorCodeInvalidRequest, http.StatusBadRequest, hosttypes.ErrOptionWithSkipRetry())
 	}
 	common.SetContextKey(c, constant.ContextKeyOriginalModel, modelName)
 
@@ -36,19 +35,19 @@ func PrepareResponsesWebSocketRequest(c *gin.Context, modelName string, requestB
 	if common.GetContextKeyBool(c, constant.ContextKeyUserModelLimitEnabled) {
 		allowed, _ := common.GetContextKeyType[map[string]bool](c, constant.ContextKeyUserModelLimit)
 		if !allowed[matchName] {
-			return hosttypes.NewErrorWithStatusCode(errors.New("The requested model does not exist or you do not have access to it"), hosttypes.ErrorCodeModelNotFound, http.StatusNotFound, hosttypes.ErrOptionWithSkipRetry())
+			return hosttypes.NewErrorWithStatusCode(errors.New(i18n.T(c, i18n.MsgDistributorModelNotAccessible)), hosttypes.ErrorCodeModelNotFound, http.StatusNotFound, hosttypes.ErrOptionWithSkipRetry())
 		}
 	}
 	if common.GetContextKeyBool(c, constant.ContextKeyUserModelBlocklistEnabled) {
 		blocked, _ := common.GetContextKeyType[map[string]bool](c, constant.ContextKeyUserModelBlocklist)
 		if blocked[matchName] {
-			return hosttypes.NewErrorWithStatusCode(errors.New("The requested model does not exist or you do not have access to it"), hosttypes.ErrorCodeModelNotFound, http.StatusNotFound, hosttypes.ErrOptionWithSkipRetry())
+			return hosttypes.NewErrorWithStatusCode(errors.New(i18n.T(c, i18n.MsgDistributorModelNotAccessible)), hosttypes.ErrorCodeModelNotFound, http.StatusNotFound, hosttypes.ErrOptionWithSkipRetry())
 		}
 	}
 	if common.GetContextKeyBool(c, constant.ContextKeyTokenModelLimitEnabled) {
 		allowed, _ := common.GetContextKeyType[map[string]bool](c, constant.ContextKeyTokenModelLimit)
 		if !TokenModelLimitAllows(allowed, modelName) {
-			return hosttypes.NewErrorWithStatusCode(fmt.Errorf("token is not allowed to use model %s", modelName), hosttypes.ErrorCodeAccessDenied, http.StatusForbidden, hosttypes.ErrOptionWithSkipRetry())
+			return hosttypes.NewErrorWithStatusCode(errors.New(i18n.T(c, i18n.MsgDistributorTokenModelForbidden, map[string]any{"Model": modelName})), hosttypes.ErrorCodeAccessDenied, http.StatusForbidden, hosttypes.ErrOptionWithSkipRetry())
 		}
 	}
 
@@ -59,10 +58,10 @@ func PrepareResponsesWebSocketRequest(c *gin.Context, modelName string, requestB
 		common.SetContextKey(c, constant.ContextKeyUsingGroup, usingGroup)
 	}
 	if usingGroup != "auto" && !groupAllowsRequestClient(c, usingGroup) {
-		return hosttypes.NewErrorWithStatusCode(errors.New("group does not allow this client"), hosttypes.ErrorCodeAccessDenied, http.StatusForbidden, hosttypes.ErrOptionWithSkipRetry())
+		return hosttypes.NewErrorWithStatusCode(errors.New(i18n.T(c, i18n.MsgDistributorGroupAccessDenied)), hosttypes.ErrorCodeAccessDenied, http.StatusForbidden, hosttypes.ErrOptionWithSkipRetry())
 	}
 	if _, err := applyUserModelRoute(c, modelName, usingGroup); err != nil {
-		return hosttypes.NewErrorWithStatusCode(errors.New("user model route is temporarily unavailable"), hosttypes.ErrorCodeGetChannelFailed, http.StatusServiceUnavailable, hosttypes.ErrOptionWithSkipRetry())
+		return hosttypes.NewErrorWithStatusCode(errors.New(i18n.T(c, i18n.MsgDistributorUserModelRouteUnavailable)), hosttypes.ErrorCodeGetChannelFailed, http.StatusServiceUnavailable, hosttypes.ErrOptionWithSkipRetry())
 	}
 
 	common.SetContextKey(c, constant.ContextKeyProtocolIncompatibleReason, nil)
