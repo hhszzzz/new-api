@@ -84,6 +84,7 @@ function snapshot(overrides: Partial<AccountPoolSnapshot> = {}) {
     next_refresh_at: '2026-08-29T12:05:00Z',
     manual_refresh_available_at: '2026-08-29T12:00:00Z',
     stale: false,
+    refreshing: false,
     partial: false,
     summary: { total: 0, available: 0, limited: 0, error: 0 },
     provider_summaries: {},
@@ -148,6 +149,23 @@ describe('account pool page states', () => {
     expect(
       await screen.findByText('Quota data could not be refreshed')
     ).toBeInTheDocument()
+  })
+
+  test('keeps the stale warning off while a due snapshot is being refreshed', async () => {
+    apiMocks.getAccountPool.mockResolvedValue({
+      success: true,
+      message: '',
+      data: snapshot({ stale: false, refreshing: true }),
+    })
+    renderAccountPool()
+
+    expect(await screen.findByText('0 accounts rendered')).toBeInTheDocument()
+    expect(
+      screen.queryByText('Quota data could not be refreshed')
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByText('Some account quotas could not be refreshed')
+    ).not.toBeInTheDocument()
   })
 
   test.each([

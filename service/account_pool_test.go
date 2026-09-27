@@ -621,9 +621,10 @@ func TestAccountPoolManagerReturnsExpiredSnapshotWhileSharedRefreshIsBlocked(t *
 			defer cancel()
 			cached, err := manager.get(ctx)
 			require.NoError(t, err, "an expired cache read must not wait for quota probes")
-			assert.True(t, cached.Stale)
+			assert.False(t, cached.Stale, "a snapshot due for its next round has not failed to refresh")
 			assert.Equal(t, first.UpdatedAt, cached.UpdatedAt)
 			assert.Equal(t, first.Accounts, cached.Accounts)
+			assert.True(t, manager.buildView(cached, common.RoleRootUser, nil, false).Refreshing)
 			select {
 			case <-started:
 			case <-ctx.Done():
@@ -646,6 +647,7 @@ func TestAccountPoolManagerReturnsExpiredSnapshotWhileSharedRefreshIsBlocked(t *
 			updated, err := manager.get(ctx)
 			require.NoError(t, err)
 			assert.True(t, updated.NextRefreshAt.After(manager.now()))
+			assert.False(t, manager.buildView(updated, common.RoleRootUser, nil, false).Refreshing)
 			assert.Equal(t, failRefresh, updated.Stale)
 			assert.Equal(t, failRefresh, updated.Partial)
 			if failRefresh {
@@ -843,6 +845,23 @@ func TestAccountPoolViewIncludesServerTime(t *testing.T) {
 	view := manager.buildView(&accountPoolSnapshot{}, common.RoleRootUser, nil, false)
 
 	assert.Equal(t, now, view.ServerTime)
+}
+
+func TestAccountPoolViewDistinguishesDueRefreshFromFailedRefresh(t *testing.T) {
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	manager := newAccountPoolManager()
+	manager.now = func() time.Time { return now }
+
+	due := manager.buildView(&accountPoolSnapshot{NextRefreshAt: now}, common.RoleRootUser, nil, false)
+	assert.True(t, due.Refreshing)
+	assert.False(t, due.Stale, "a snapshot due for its next round has not failed to refresh")
+
+	scheduled := manager.buildView(&accountPoolSnapshot{NextRefreshAt: now.Add(time.Minute)}, common.RoleRootUser, nil, false)
+	assert.False(t, scheduled.Refreshing)
+
+	failed := manager.buildView(&accountPoolSnapshot{NextRefreshAt: now.Add(time.Minute), Stale: true}, common.RoleRootUser, nil, false)
+	assert.True(t, failed.Stale)
+	assert.False(t, failed.Refreshing)
 }
 
 func TestLoadAccountPoolRuntimeConfigFailsClosed(t *testing.T) {

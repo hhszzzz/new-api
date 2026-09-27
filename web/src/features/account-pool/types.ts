@@ -65,7 +65,16 @@ export type AccountPoolSnapshot = {
   updated_at: string
   next_refresh_at: string
   manual_refresh_available_at: string
+  /**
+   * The last completed round failed to update these rows, so the numbers shown
+   * are the previous successful ones.
+   */
   stale: boolean
+  /**
+   * The snapshot is past its own refresh point and a shared round is updating
+   * it. This is the normal state of an idle pool, not a failure.
+   */
+  refreshing: boolean
   partial: boolean
   summary: AccountPoolSummaryCounts
   provider_summaries: Partial<

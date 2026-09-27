@@ -95,6 +95,7 @@ function snapshot(item: AccountPoolAccount): AccountPoolSnapshot {
     next_refresh_at: '2026-08-29T12:04:05Z',
     manual_refresh_available_at: '2026-08-29T12:01:00Z',
     stale: false,
+    refreshing: false,
     partial: false,
     summary: { total: 1, available: 1, limited: 0, error: 0 },
     provider_summaries: {
@@ -140,6 +141,41 @@ describe('account pool table', () => {
     expect(screen.queryByText('Reset')).not.toBeInTheDocument()
     expect(screen.queryByText('Edit')).not.toBeInTheDocument()
     expect(screen.queryByText('Test')).not.toBeInTheDocument()
+  })
+
+  test('marks a due snapshot as refreshing instead of stale', () => {
+    const dueSnapshot = snapshot(account())
+    dueSnapshot.refreshing = true
+
+    const { rerender } = render(
+      <AccountPoolTable
+        snapshot={dueSnapshot}
+        isLoading={false}
+        isFetching
+        isRefreshing={false}
+        refreshDisabled={false}
+        refreshLabel='Refresh all'
+        now={Date.parse('2026-08-29T12:00:00Z')}
+        onRefresh={vi.fn()}
+      />
+    )
+    expect(
+      screen.getByText('Refreshing...').closest('[role="status"]')
+    ).not.toBeNull()
+
+    rerender(
+      <AccountPoolTable
+        snapshot={snapshot(account())}
+        isLoading={false}
+        isFetching={false}
+        isRefreshing={false}
+        refreshDisabled={false}
+        refreshLabel='Refresh all'
+        now={Date.parse('2026-08-29T12:00:00Z')}
+        onRefresh={vi.fn()}
+      />
+    )
+    expect(screen.queryByText('Refreshing...')).not.toBeInTheDocument()
   })
 
   test('filters accounts and summary badges by the selected provider tab', async () => {

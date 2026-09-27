@@ -339,6 +339,18 @@ export function AccountPoolTable(props: AccountPoolTableProps) {
                 })}
               </time>
             ) : null}
+            {props.snapshot?.refreshing ? (
+              <span
+                role='status'
+                className='text-muted-foreground flex items-center gap-1.5 text-xs'
+              >
+                <RefreshCw
+                  className='size-3.5 animate-spin'
+                  aria-hidden='true'
+                />
+                {t('Refreshing...')}
+              </span>
+            ) : null}
             <Button
               type='button'
               size='sm'

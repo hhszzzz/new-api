@@ -124,15 +124,20 @@ type AccountPoolSummary struct {
 }
 
 type AccountPoolView struct {
-	ServerTime               time.Time                     `json:"server_time"`
-	UpdatedAt                time.Time                     `json:"updated_at"`
-	NextRefreshAt            time.Time                     `json:"next_refresh_at"`
-	ManualRefreshAvailableAt time.Time                     `json:"manual_refresh_available_at"`
-	Stale                    bool                          `json:"stale"`
-	Partial                  bool                          `json:"partial"`
-	Summary                  AccountPoolSummary            `json:"summary"`
-	ProviderSummaries        map[string]AccountPoolSummary `json:"provider_summaries"`
-	Accounts                 []AccountPoolViewAccount      `json:"accounts"`
+	ServerTime               time.Time `json:"server_time"`
+	UpdatedAt                time.Time `json:"updated_at"`
+	NextRefreshAt            time.Time `json:"next_refresh_at"`
+	ManualRefreshAvailableAt time.Time `json:"manual_refresh_available_at"`
+	Stale                    bool      `json:"stale"`
+	Partial                  bool      `json:"partial"`
+	// Refreshing reports that the served snapshot has passed its own refresh
+	// point and a shared round is updating it. It is the normal transient state
+	// of an idle pool whose next round has not finished, so it must stay
+	// distinct from Stale, which reports data the last round failed to update.
+	Refreshing        bool                          `json:"refreshing"`
+	Summary           AccountPoolSummary            `json:"summary"`
+	ProviderSummaries map[string]AccountPoolSummary `json:"provider_summaries"`
+	Accounts          []AccountPoolViewAccount      `json:"accounts"`
 }
 
 type AccountPoolSyncStatus struct {
@@ -252,7 +257,9 @@ func (manager *accountPoolManager) get(ctx context.Context) (*accountPoolSnapsho
 		if !now.Before(snapshot.NextRefreshAt) {
 			// Quota probes can take an entire refresh round. Let readers use the
 			// last snapshot while one shared round updates it in the background.
-			snapshot.Stale = true
+			// The reader is told the snapshot is being updated through the view's
+			// refreshing flag rather than by marking it stale, because nothing
+			// about this snapshot failed: it is simply due for its next round.
 			manager.startRefresh()
 		}
 		return snapshot, nil
@@ -405,6 +412,7 @@ func (manager *accountPoolManager) buildView(snapshot *accountPoolSnapshot, role
 		ManualRefreshAvailableAt: manualAvailableAt,
 		Stale:                    snapshot.Stale,
 		Partial:                  snapshot.Partial,
+		Refreshing:               !now.Before(snapshot.NextRefreshAt),
 		ProviderSummaries:        map[string]AccountPoolSummary{},
 		Accounts:                 make([]AccountPoolViewAccount, 0, len(snapshot.Accounts)),
 	}
