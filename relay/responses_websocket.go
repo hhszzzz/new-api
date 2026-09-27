@@ -238,9 +238,7 @@ func (s *responsesWSSession) runRequest(state *responsesWSCallState, message []b
 	// WebSocket session. Keep the connection available so the client can submit
 	// a corrected request; credential and account authorization failures still
 	// invalidate the session.
-	if apiErr != nil && (apiErr.StatusCode == http.StatusUnauthorized ||
-		apiErr.StatusCode == http.StatusForbidden && apiErr.GetErrorCode() != types.ErrorCodeSensitiveWordsDetected ||
-		apiErr.StatusCode == http.StatusBadRequest && apiErr.GetErrorCode() != types.ErrorCodeSensitiveWordsDetected && apiErr.GetErrorCode() != types.ErrorCodeInvalidRequest) {
+	if apiErr != nil && (apiErr.StatusCode == http.StatusUnauthorized || apiErr.StatusCode == http.StatusForbidden) {
 		state.closeAfter = true
 	}
 }

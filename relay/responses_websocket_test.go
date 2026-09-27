@@ -586,6 +586,74 @@ func TestResponsesWSShutdownInterruptsBusyWriter(t *testing.T) {
 	assert.Nil(t, s.getTarget())
 }
 
+func TestResponsesWSSessionClosesOnlyOnAuthorizationFailures(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tests := []struct {
+		name      string
+		first     *types.NewAPIError
+		keepsOpen bool
+	}{
+		{name: "probe block keeps the session", first: types.NewErrorWithStatusCode(errors.New("probe blocked"), types.ErrorCodeProbeRequestBlocked, http.StatusBadRequest), keepsOpen: true},
+		{name: "upstream 400 keeps the session", first: types.NewErrorWithStatusCode(errors.New("upstream rejected"), types.ErrorCode("invalid_input"), http.StatusBadRequest), keepsOpen: true},
+		{name: "sensitive words keep the session", first: types.NewErrorWithStatusCode(errors.New("blocked"), types.ErrorCodeSensitiveWordsDetected, http.StatusBadRequest), keepsOpen: true},
+		{name: "unauthorized closes the session", first: types.NewErrorWithStatusCode(errors.New("unauthorized"), types.ErrorCodeAccessDenied, http.StatusUnauthorized), keepsOpen: false},
+		{name: "forbidden closes the session", first: types.NewErrorWithStatusCode(errors.New("forbidden"), types.ErrorCodeAccessDenied, http.StatusForbidden), keepsOpen: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client, server, cleanup := newTestWebSocketPair(t)
+			defer cleanup()
+			var calls atomic.Int32
+			runner := func(*http.Request, string, func(*gin.Context) *types.NewAPIError) *types.NewAPIError {
+				if calls.Add(1) == 1 {
+					return tt.first
+				}
+				return types.NewErrorWithStatusCode(errors.New("second"), types.ErrorCodeInvalidRequest, http.StatusBadRequest)
+			}
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				_ = ResponsesWebSocketHelper(c, server, runner)
+			}()
+
+			readEventID := func() (string, error) {
+				require.NoError(t, client.SetReadDeadline(time.Now().Add(5*time.Second)))
+				_, payload, err := client.ReadMessage()
+				if err != nil {
+					return "", err
+				}
+				var event struct {
+					EventID string `json:"event_id"`
+				}
+				require.NoError(t, common.Unmarshal(payload, &event))
+				return event.EventID, nil
+			}
+			require.NoError(t, client.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.create","event_id":"evt-1","model":"m","input":"one"}`)))
+			eventID, err := readEventID()
+			require.NoError(t, err)
+			assert.Equal(t, "evt-1", eventID)
+
+			if tt.keepsOpen {
+				require.NoError(t, client.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.create","event_id":"evt-2","model":"m","input":"two"}`)))
+				eventID, err = readEventID()
+				require.NoError(t, err)
+				assert.Equal(t, "evt-2", eventID)
+				_ = client.Close()
+			} else {
+				_, err = readEventID()
+				assert.Error(t, err)
+			}
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("websocket session did not stop")
+			}
+		})
+	}
+}
+
 func TestResponsesWSPassthroughPreservesRawPricingParameters(t *testing.T) {
 	create, _, err := normalizeResponsesWSTestMessage([]byte(`{"type":"response.create","generate":false,"response":{"model":"gpt-5.1","input":"hi","vendor":{"tier":"premium"},"stream":true}}`))
 	require.NoError(t, err)
