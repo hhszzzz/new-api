@@ -169,7 +169,10 @@ describe('model details overview', () => {
     expect(within(section).queryByText(/\$/)).not.toBeInTheDocument()
   })
 
-  test('keeps the per-tier prices for models priced by size, not by clock', () => {
+  test('does not restate chat expression prices per group', () => {
+    // Chat expressions have no per-tier unit-price column, so a per-group
+    // price block would render unlabeled numbers. They report the group ratio
+    // and leave the prices to the tables above.
     const sizeTieredModel: PricingModel = {
       ...model,
       model_name: 'size-tiered-model',
@@ -198,7 +201,9 @@ describe('model details overview', () => {
 
     expect(within(section).getByText('vip')).toBeInTheDocument()
     expect(within(section).getByText('1x')).toBeInTheDocument()
-    expect(within(section).getByText('$8')).toBeInTheDocument()
-    expect(within(section).getByText('$12')).toBeInTheDocument()
+    expect(within(section).queryByText(/\$/)).not.toBeInTheDocument()
+    // The expansion above still names both tiers and their prices.
+    expect(screen.getAllByText('$8').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('$24').length).toBeGreaterThan(0)
   })
 })

@@ -71,6 +71,7 @@ import { useBillingTime } from '../hooks/use-billing-time'
 import { usePricingData } from '../hooks/use-pricing-data'
 import {
   getCurrentTimePricingTiers,
+  localizedTierLabel,
   splitBillingExprAndRequestRules,
   type ParsedTaskTier,
 } from '../lib/billing-expr'
@@ -82,6 +83,7 @@ import {
   getDynamicPricingSummary,
   getDynamicPricingTiers,
   getTaskUsageQuantityUnitLabelKey,
+  hasVaryingBilling,
   isDynamicPricingModel,
   isUnconfiguredTaskUsageModel,
   type DynamicPriceEntry,
@@ -1001,12 +1003,21 @@ function ProviderGroupPricingSection(
   // peak/off-peak prices are already spelled out by the tiered price table
   // above, and repeating them per group would layer the peak markup on top of
   // the group ratio.
-  const isTimePriced = useMemo(() => {
+  //
+  // The same holds for every expression the group table cannot label. Its only
+  // price column is the tier column, which exists for task-usage models alone,
+  // so a chat expression would render unlabeled numbers per group. Those models
+  // report the group ratio instead and keep the expansions in the price table
+  // above; task usage models keep their per-group unit prices.
+  const isGroupRatioOnly = useMemo(() => {
     const { billingExpr } = splitBillingExprAndRequestRules(
       props.model.billing_expr || ''
     )
-    return getCurrentTimePricingTiers(billingExpr, new Date()) !== null
-  }, [props.model.billing_expr])
+    if (getCurrentTimePricingTiers(billingExpr, new Date()) !== null) {
+      return true
+    }
+    return !props.model.billing_usage_schema
+  }, [props.model])
 
   const extraPriceTypes = useMemo(() => {
     const types: { label: string; type: PriceType }[] = []
@@ -1131,7 +1142,7 @@ function ProviderGroupPricingSection(
           <SectionTitle>{t('Pricing by Group')}</SectionTitle>
         )}
         <AutoGroupChain model={props.model} autoGroups={props.autoGroups} />
-        {isTimePriced ? (
+        {isGroupRatioOnly ? (
           <StaticDataTable
             className='-mx-4 rounded-none border-0 sm:mx-0'
             tableClassName='text-sm'
@@ -1190,18 +1201,22 @@ function ProviderGroupPricingSection(
                               className: thClass,
                               cellClassName:
                                 'text-muted-foreground py-2.5 whitespace-normal break-words',
-                              cell: (tier: DynamicPricingTier) =>
-                                taskTierConditions(
+                              cell: (tier: DynamicPricingTier) => {
+                                const conditions = taskTierConditions(
                                   tier as ParsedTaskTier,
                                   props.model.billing_usage_schema,
                                   i18n.language,
                                   t
-                                ) ||
-                                t(
+                                )
+                                if (conditions) return conditions
+                                const label = localizedTierLabel(tier.label, t)
+                                if (label) return label
+                                return t(
                                   dynamicTiers.length > 1
                                     ? 'Other cases'
                                     : 'All requests'
-                                ),
+                                )
+                              },
                             },
                           ]
                         : []),
@@ -1440,11 +1455,18 @@ export function ModelDetailsContent(props: ModelDetailsContentProps) {
     (item) => item.model_name === props.model.model_name
   )
 
-  const isDynamic =
-    props.model.billing_mode === 'tiered_expr' &&
-    Boolean(props.model.billing_expr)
-
   const simpleTaskPricing = hasSimpleTaskPricing(props.model)
+  // Only a model that actually reaches several prices needs the expansion: a
+  // flat expression repeats the base prices above, and a task model with one
+  // unconditional price keeps its usage-condition view. Both are summarized by
+  // the base price rows above.
+  const isDynamic =
+    !simpleTaskPricing &&
+    props.model.billing_mode === 'tiered_expr' &&
+    Boolean(props.model.billing_expr) &&
+    (Boolean(props.model.billing_usage_schema) ||
+      hasVaryingBilling(props.model))
+
   const taskTiers = getTaskPricingDisplayTiers(
     props.model.billing_expr,
     props.model.billing_usage_schema
@@ -1489,7 +1511,7 @@ export function ModelDetailsContent(props: ModelDetailsContentProps) {
                 showRechargePrice={showRechargePrice}
               />
             )}
-            {isDynamic && !simpleTaskPricing && (
+            {isDynamic && (
               <DynamicPricingBreakdown
                 billingExpr={props.model.billing_expr}
                 usageSchema={props.model.billing_usage_schema}
