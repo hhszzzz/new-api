@@ -23,6 +23,7 @@ import { describe, expect, test } from 'vitest'
 import { parseTiersFromExpr } from '../lib/billing-expr'
 import { getBillingModeLabelKey } from '../lib/billing-mode'
 import {
+  getBillingContentKind,
   getCardExamplePrice,
   getDynamicPriceUnitLabelKey,
   getDynamicPricingSummary,
@@ -468,13 +469,64 @@ describe('task dynamic pricing', () => {
           billing_expr: 'tier("base", p * 2 + c * 8)',
         })
       ),
-      'Dynamic Pricing'
+      'Token-based'
+    )
+    assert.equal(
+      getBillingModeLabelKey(
+        pricingModel({
+          billing_mode: 'tiered_expr',
+          billing_expr: 'tier("base", fixed(0.01))',
+        })
+      ),
+      'Per Request'
     )
     assert.equal(getBillingModeLabelKey(pricingModel({})), 'Token-based')
     assert.equal(
       getBillingModeLabelKey(pricingModel({ quota_type: 1 })),
       'Per Request'
     )
+  })
+
+  test('badges expression models by what they charge, not by the storage mode', () => {
+    const flatToken = pricingModel({
+      billing_mode: 'tiered_expr',
+      billing_expr: 'tier("base", p * 4 + c * 20 + cr * 0.2)',
+    })
+    // A clock window alone only re-schedules one price, so it is still token
+    // pricing; several tiers are what make billing dynamic.
+    const clockOnly = pricingModel({
+      billing_mode: 'tiered_expr',
+      billing_expr:
+        'hour("Asia/Shanghai") >= 9 && hour("Asia/Shanghai") < 18 ? tier("peak", p * 4 + c * 20) : tier("off_peak", p * 4 + c * 20)',
+    })
+    const sizeTiered = pricingModel({
+      billing_mode: 'tiered_expr',
+      billing_expr:
+        'len <= 272000 ? tier("standard", p * 4 + c * 20) : tier("long", p * 8 + c * 40)',
+    })
+    const requestRules = pricingModel({
+      billing_mode: 'tiered_expr',
+      billing_expr:
+        'tier("base", p * 4 + c * 20) * (header("x-fast") == "1" ? 2 : 1)',
+    })
+    const mixed = pricingModel({
+      billing_mode: 'tiered_expr',
+      billing_expr:
+        'len < 1000 ? tier("short", fixed(0.01)) : tier("long", p * 4 + c * 20)',
+    })
+    const unexpandable = pricingModel({
+      billing_mode: 'tiered_expr',
+      billing_expr: 'tier("base", p * 4 + c * 20) * 3',
+    })
+
+    assert.equal(getBillingContentKind(flatToken), 'token')
+    assert.equal(getBillingContentKind(clockOnly), 'token')
+    assert.equal(getBillingModeLabelKey(flatToken), 'Token-based')
+    assert.equal(getBillingModeLabelKey(clockOnly), 'Token-based')
+    assert.equal(getBillingModeLabelKey(sizeTiered), 'Dynamic Pricing')
+    assert.equal(getBillingModeLabelKey(requestRules), 'Dynamic Pricing')
+    assert.equal(getBillingModeLabelKey(mixed), 'Dynamic Pricing')
+    assert.equal(getBillingModeLabelKey(unexpandable), 'Dynamic Pricing')
   })
 
   test('marks task usage field labels as schema-owned so they are not translated', () => {

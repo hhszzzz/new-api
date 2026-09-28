@@ -17,7 +17,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { PricingModel } from '../types'
-import { hasTaskUsageSchema, isDynamicPricingModel } from './dynamic-price'
+import {
+  getBillingContentKind,
+  hasTaskUsageSchema,
+  hasVaryingBilling,
+  isDynamicPricingModel,
+} from './dynamic-price'
 import { isTokenBasedModel } from './model-helpers'
 
 export type BillingModeLabelKey =
@@ -26,13 +31,26 @@ export type BillingModeLabelKey =
   | 'Token-based'
   | 'Task billing'
 
+/**
+ * Billing badge for a model. Every new price is an expression now, so the
+ * badge reports what the expression actually charges rather than the storage
+ * mode: a flat token expression is token pricing, a flat `fixed()` expression
+ * is per-request pricing, and only several prices, tiers, a clock window, or a
+ * request-conditional multiplier read as dynamic.
+ */
 export function getBillingModeLabelKey(
   model: PricingModel
 ): BillingModeLabelKey {
   // Task-usage models badge as one business category; the metering unit
   // ($/1M token, $/credit, $/second) is already carried by the price line.
   if (hasTaskUsageSchema(model)) return 'Task billing'
-  if (isDynamicPricingModel(model)) return 'Dynamic Pricing'
+  if (isDynamicPricingModel(model)) {
+    if (hasVaryingBilling(model)) return 'Dynamic Pricing'
+    const kind = getBillingContentKind(model)
+    if (kind === 'token') return 'Token-based'
+    if (kind === 'request') return 'Per Request'
+    return 'Dynamic Pricing'
+  }
   if (isTokenBasedModel(model)) return 'Token-based'
   return 'Per Request'
 }

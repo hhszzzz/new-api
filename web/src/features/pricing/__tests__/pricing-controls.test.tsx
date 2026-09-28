@@ -142,6 +142,57 @@ describe('pricing controls', () => {
     ).toBeVisible()
   })
 
+  it('filters expression models by the billing badge they show', () => {
+    const expressionToken: PricingModel = {
+      id: 1,
+      model_name: 'expression-token-model',
+      quota_type: 1,
+      model_ratio: 1,
+      completion_ratio: 1,
+      enable_groups: ['default'],
+      model_price: 0,
+      billing_mode: 'tiered_expr',
+      billing_expr: 'tier("base", p * 4 + c * 20 + cr * 0.2)',
+    }
+    const expressionRequest: PricingModel = {
+      ...expressionToken,
+      id: 2,
+      model_name: 'expression-request-model',
+      quota_type: 0,
+      billing_mode: 'tiered_expr',
+      billing_expr: 'tier("base", fixed(0.01))',
+    }
+    const expressionDynamic: PricingModel = {
+      ...expressionToken,
+      id: 3,
+      model_name: 'expression-dynamic-model',
+      billing_mode: 'tiered_expr',
+      billing_expr:
+        'len <= 272000 ? tier("standard", p * 4 + c * 20) : tier("long", p * 8 + c * 40)',
+    }
+    const sidebarProps = { ...toolbarProps() }
+
+    render(
+      <PricingSidebar
+        {...sidebarProps}
+        models={[expressionToken, expressionRequest, expressionDynamic]}
+      />
+    )
+    expect(
+      screen.getByRole('button', { name: /^Token-based\s*1$/ })
+    ).toBeVisible()
+    expect(
+      screen.getByRole('button', { name: /^Per Request\s*1$/ })
+    ).toBeVisible()
+    // Every model lands in exactly one bucket, so the counts sum to the total.
+    expect(
+      screen.getByRole('button', { name: /^Dynamic Pricing\s*1$/ })
+    ).toBeVisible()
+    expect(
+      screen.getByRole('button', { name: /^All Models\s*3$/ })
+    ).toBeVisible()
+  })
+
   it('changes the token unit and keeps the selected unit pressed when clicked again', async () => {
     const props = toolbarProps()
     const user = userEvent.setup()

@@ -150,6 +150,63 @@ export function isDynamicPricingModel(model: PricingModel): boolean {
   return model.billing_mode === 'tiered_expr' && Boolean(model.billing_expr)
 }
 
+export type BillingContentKind = 'token' | 'request' | 'task' | 'mixed'
+
+/**
+ * Which quantity the expression charges for, read from its parsed price rows.
+ * Every branch is inspected, so an expression that only re-schedules token
+ * prices (by clock or by request condition) still reports token pricing.
+ * Returns null when the rows cannot be expanded into a price table.
+ */
+export function getBillingContentKind(
+  model: PricingModel
+): BillingContentKind | null {
+  const tiers = getDynamicPricingTiers(model)
+  if (tiers.length === 0) return null
+  const kinds = new Set<BillingContentKind>()
+  for (const tier of tiers) {
+    if (isTaskPricingTier(tier)) {
+      kinds.add('task')
+    } else {
+      kinds.add(tier.billingUnit === 'request' ? 'request' : 'token')
+    }
+  }
+  return kinds.size === 1 ? [...kinds][0] : 'mixed'
+}
+
+/**
+ * Whether an expression reaches more than one distinct price: several tiers
+ * priced differently, clock branches, or a request-conditional multiplier. A
+ * model that only re-arranges one price (for example, one clock window with
+ * the same rates on both sides) behaves like its legacy counterpart.
+ */
+export function hasVaryingBilling(model: PricingModel): boolean {
+  if (hasDynamicRequestRules(model)) return true
+  const signatures = new Set(
+    getDynamicPricingTiers(model).map(billingTierPriceSignature)
+  )
+  return signatures.size > 1
+}
+
+function billingTierPriceSignature(tier: DynamicPricingTier): string {
+  if (isTaskPricingTier(tier)) {
+    return JSON.stringify([
+      'task',
+      tier.constant,
+      Object.entries(tier.unitPrices).sort(([left], [right]) =>
+        left.localeCompare(right)
+      ),
+    ])
+  }
+  return JSON.stringify([
+    tier.billingUnit ?? 'token',
+    tier.fixedPrice ?? null,
+    BILLING_PRICING_VARS.filter((variable) => variable.field).map((variable) =>
+      Number(tier[variable.field as string] ?? 0)
+    ),
+  ])
+}
+
 export function hasTaskUsageSchema(model: PricingModel): boolean {
   return Object.keys(model.billing_usage_schema ?? {}).length > 0
 }

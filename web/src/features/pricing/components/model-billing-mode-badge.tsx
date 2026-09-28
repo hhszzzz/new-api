@@ -21,8 +21,10 @@ import { useTranslation } from 'react-i18next'
 import { StatusBadge, type StatusVariant } from '@/components/status-badge'
 import { cn } from '@/lib/utils'
 
-import { getBillingModeLabelKey } from '../lib/billing-mode'
-import { isDynamicPricingModel } from '../lib/dynamic-price'
+import {
+  getBillingModeLabelKey,
+  type BillingModeLabelKey,
+} from '../lib/billing-mode'
 import type { PricingModel } from '../types'
 
 interface ModelBillingModeBadgeProps {
@@ -31,18 +33,25 @@ interface ModelBillingModeBadgeProps {
   className?: string
 }
 
+/**
+ * The color belongs to the label, never to the storage mode: two models that
+ * show the same badge have to look the same. Coloring by whether the price is
+ * stored as an expression would paint every expression model amber, including
+ * the ones the label reports as token or per-request pricing.
+ */
+const variantByLabel: Record<BillingModeLabelKey, StatusVariant> = {
+  'Token-based': 'info',
+  'Per Request': 'purple',
+  'Dynamic Pricing': 'warning',
+  'Task billing': 'purple',
+}
+
 export function ModelBillingModeBadge(props: ModelBillingModeBadgeProps) {
   const { t } = useTranslation()
   const labelKey = getBillingModeLabelKey(props.model)
   const label = t(labelKey)
   const isCaption = props.appearance === 'caption'
-  let variant: StatusVariant = 'purple'
-
-  if (isDynamicPricingModel(props.model)) {
-    variant = 'warning'
-  } else if (labelKey === 'Token-based') {
-    variant = 'info'
-  }
+  const variant = variantByLabel[labelKey]
 
   return (
     <StatusBadge

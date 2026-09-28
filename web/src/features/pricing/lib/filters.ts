@@ -23,11 +23,13 @@ import {
   SORT_OPTIONS,
   FILTER_ALL,
   QUOTA_TYPES,
-  QUOTA_TYPE_VALUES,
   ENDPOINT_TYPES,
 } from '../constants'
 import type { PricingModel } from '../types'
-import { hasTaskUsageSchema } from './dynamic-price'
+import {
+  getBillingModeLabelKey,
+  type BillingModeLabelKey,
+} from './billing-mode'
 
 // ----------------------------------------------------------------------------
 // Filter Utilities
@@ -75,24 +77,24 @@ export function filterByGroup(
 }
 
 /**
- * Filter models by quota type
+ * Filter models by quota type. Every model lands in exactly one bucket: the
+ * bucket names are the billing badges, so a filtered list never disagrees
+ * with the badge shown on each row.
  */
 export function filterByQuotaType(
   models: PricingModel[],
   quotaType: string
 ): PricingModel[] {
   if (quotaType === QUOTA_TYPES.ALL) return models
-  // Task-usage models form their own bucket, disjoint from token/request.
-  if (quotaType === QUOTA_TYPES.TASK) {
-    return models.filter((m) => hasTaskUsageSchema(m))
+  const labels: Partial<Record<string, BillingModeLabelKey>> = {
+    [QUOTA_TYPES.TOKEN]: 'Token-based',
+    [QUOTA_TYPES.REQUEST]: 'Per Request',
+    [QUOTA_TYPES.DYNAMIC]: 'Dynamic Pricing',
+    [QUOTA_TYPES.TASK]: 'Task billing',
   }
-  const targetType =
-    quotaType === QUOTA_TYPES.TOKEN
-      ? QUOTA_TYPE_VALUES.TOKEN
-      : QUOTA_TYPE_VALUES.REQUEST
-  return models.filter(
-    (m) => m.quota_type === targetType && !hasTaskUsageSchema(m)
-  )
+  const target = labels[quotaType]
+  if (!target) return models
+  return models.filter((m) => getBillingModeLabelKey(m) === target)
 }
 
 /**

@@ -39,6 +39,7 @@ import {
   getEndpointTypeLabels,
   getQuotaTypeLabels,
 } from '../constants'
+import { getBillingModeLabelKey } from '../lib/billing-mode'
 import { hasTaskUsageSchema } from '../lib/dynamic-price'
 import { parseTags } from '../lib/filters'
 import type { PricingModel, PricingVendor } from '../types'
@@ -165,7 +166,7 @@ export const PricingSidebar = memo(function PricingSidebar(
     const vendors = new Map<string, number>()
     const tags = new Map<string, number>()
     const endpoints = new Map<string, number>()
-    const quotas = { token: 0, request: 0, task: 0 }
+    const quotas = { token: 0, request: 0, dynamic: 0, task: 0 }
     for (const model of props.models) {
       if (model.vendor_name) {
         vendors.set(
@@ -183,10 +184,15 @@ export const PricingSidebar = memo(function PricingSidebar(
       }
       if (hasTaskUsageSchema(model)) {
         quotas.task++
-      } else if (model.quota_type === 0) {
+        continue
+      }
+      const label = getBillingModeLabelKey(model)
+      if (label === 'Token-based') {
         quotas.token++
-      } else if (model.quota_type === 1) {
+      } else if (label === 'Per Request') {
         quotas.request++
+      } else {
+        quotas.dynamic++
       }
     }
     return { vendors, tags, endpoints, quotas }
@@ -237,6 +243,11 @@ export const PricingSidebar = memo(function PricingSidebar(
       value: QUOTA_TYPES.REQUEST,
       label: quotaTypeLabels[QUOTA_TYPES.REQUEST],
       count: counts.quotas.request,
+    },
+    {
+      value: QUOTA_TYPES.DYNAMIC,
+      label: quotaTypeLabels[QUOTA_TYPES.DYNAMIC],
+      count: counts.quotas.dynamic,
     },
     {
       value: QUOTA_TYPES.TASK,
