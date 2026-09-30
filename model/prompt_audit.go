@@ -218,6 +218,10 @@ type PromptAuditRepeat struct {
 	WorstDecision string `json:"worst_decision"`
 	Blocks        int64  `json:"blocks"`
 	Unavailable   int64  `json:"unavailable"`
+	// OutcomeCounts partitions every request exactly once: active work first,
+	// then known decisions, failed work without a decision, and unknown results.
+	// Unlike Blocks and Unavailable, these are outcomes, not enforced actions.
+	OutcomeCounts map[string]int64 `json:"outcome_counts"`
 }
 
 // PromptAuditRepeatRow pairs a collapsed group's first request with its summary.
@@ -520,39 +524,33 @@ func ListPromptAuditRepeats(filter PromptAuditFilter, page, pageSize int) ([]Pro
 		return nil, 0, err
 	}
 
+	return listPromptAuditRepeatRows(applyPromptAuditFilter(DB.Model(&PromptAudit{}), filter), page, pageSize, false)
+}
+
+// Session questions share the full-set summaries with the collapsed listing,
+// but prefer a main request as the representative and sort chronologically.
+func listPromptAuditRepeatRows(query *gorm.DB, page, pageSize int, sessionQuestions bool) ([]PromptAuditRepeatRow, int64, error) {
 	groupColumns := promptAuditRepeatGroupColumns()
 	// Counting groups through a derived table keeps one query per dialect: GORM's
 	// Count over a grouped query would count the rows inside the groups instead.
 	var total int64
-	groupQuery := applyPromptAuditFilter(DB.Model(&PromptAudit{}), filter).
-		Select("MIN(id) AS id").
-		Group(groupColumns)
+	groupQuery := query.Session(&gorm.Session{}).Select("MIN(id) AS id").Group(groupColumns)
 	if err := DB.Table("(?) AS prompt_audit_repeat_groups", groupQuery).Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
-	if total == 0 {
-		return []PromptAuditRepeatRow{}, 0, nil
+	if total == 0 || int64(page-1) > total/int64(pageSize) {
+		return []PromptAuditRepeatRow{}, total, nil
 	}
 
-	// One grouped scan returns each group's span, its worst decision and its
-	// enforcement counts together.
-	type repeatRow struct {
-		ID                int64
-		RepeatCount       int64
-		FirstAt           int64
-		LastAt            int64
-		WorstDecisionRank int
-		Blocks            int64
-		Unavailable       int64
+	representative, order := "MIN(id)", "MAX(id) DESC"
+	if sessionQuestions {
+		representative = "COALESCE(MIN(CASE WHEN request_kind IN ('prompt', 'step') THEN id END), MIN(id))"
+		order = "MIN(created_at) ASC, " + representative + " ASC"
 	}
-	rows := make([]repeatRow, 0, pageSize)
-	if err := applyPromptAuditFilter(DB.Model(&PromptAudit{}), filter).
-		Select("MIN(id) AS id, COUNT(*) AS repeat_count, MIN(created_at) AS first_at, MAX(created_at) AS last_at, " +
-			promptAuditWorstDecisionRank + " AS worst_decision_rank, " +
-			"SUM(CASE WHEN action = 'block' THEN 1 ELSE 0 END) AS blocks, " +
-			"SUM(CASE WHEN action = 'unavailable' THEN 1 ELSE 0 END) AS unavailable").
-		Group(groupColumns).
-		Order("MAX(id) DESC").
+	rows := make([]promptAuditRepeatAggregate, 0, pageSize)
+	if err := query.Session(&gorm.Session{}).
+		Select(representative + " AS id, " + promptAuditRepeatSelect()).
+		Group(groupColumns).Order(order).
 		Limit(pageSize).Offset((page - 1) * pageSize).
 		Scan(&rows).Error; err != nil {
 		return nil, 0, err
@@ -578,14 +576,7 @@ func ListPromptAuditRepeats(filter PromptAuditFilter, page, pageSize int) ([]Pro
 		if !ok {
 			continue
 		}
-		worstDecision := ""
-		if row.WorstDecisionRank >= 0 && row.WorstDecisionRank < len(promptAuditDecisionsByRank) {
-			worstDecision = promptAuditDecisionsByRank[row.WorstDecisionRank]
-		}
-		collapsed = append(collapsed, PromptAuditRepeatRow{Audit: audit, Repeat: PromptAuditRepeat{
-			Count: row.RepeatCount, FirstAt: row.FirstAt, LastAt: row.LastAt,
-			WorstDecision: worstDecision, Blocks: row.Blocks, Unavailable: row.Unavailable,
-		}})
+		collapsed = append(collapsed, PromptAuditRepeatRow{Audit: audit, Repeat: row.summary()})
 	}
 	return collapsed, total, nil
 }

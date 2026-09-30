@@ -507,6 +507,117 @@ func ListPromptAudits(c *gin.Context) {
 	})
 }
 
+type promptAuditReadRequest struct {
+	ID        int64
+	ContentID int64
+	Filter    model.PromptAuditFilter
+	Options   model.PromptAuditReadOptions
+}
+
+// A question read keeps the listing's filters, while a session index only reads
+// the selected time range. Reject other parameters rather than silently widening
+// what the caller thinks they are reading.
+func promptAuditReadRequestFromQuery(c *gin.Context, kind string) (promptAuditReadRequest, error) {
+	request := promptAuditReadRequest{Options: model.PromptAuditReadOptions{Page: 1, PageSize: 20}}
+	var err error
+	request.ID, err = strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || request.ID <= 0 {
+		return request, errors.New("invalid prompt audit id")
+	}
+	filter, retired := promptAuditFilterFromQuery(c)
+	if retired != "" {
+		return request, errors.New(promptAuditRetiredFilterMessage(retired))
+	}
+	request.Filter = filter
+	query := c.Request.URL.Query()
+	for key, values := range query {
+		if len(values) != 1 || strings.TrimSpace(values[0]) == "" {
+			return request, errors.New("invalid prompt audit query parameter")
+		}
+		switch key {
+		case "page", "page_size", "max_id", "start_time", "end_time":
+		case "content_id":
+			if kind != "group-records" {
+				return request, errors.New("invalid prompt audit query parameter")
+			}
+		case "status", "decision", "category", "username", "group", "protocol", "model", "request_id", "direction", "detector":
+			if kind == "session-questions" {
+				return request, errors.New("invalid prompt audit query parameter")
+			}
+		default:
+			return request, errors.New("invalid prompt audit query parameter")
+		}
+	}
+	for key, target := range map[string]*int{"page": &request.Options.Page, "page_size": &request.Options.PageSize} {
+		if value, exists := query[key]; exists {
+			*target, err = strconv.Atoi(value[0])
+			if err != nil || *target < 1 {
+				return request, errors.New("invalid prompt audit pagination")
+			}
+		}
+	}
+	if request.Options.PageSize > 200 || request.Options.Page-1 > int(^uint(0)>>1)/request.Options.PageSize {
+		return request, errors.New("invalid prompt audit pagination")
+	}
+	for key, target := range map[string]*int64{
+		"max_id": &request.Options.MaxID, "content_id": &request.ContentID,
+		"start_time": &request.Filter.StartTime, "end_time": &request.Filter.EndTime,
+	} {
+		if value, exists := query[key]; exists {
+			*target, err = strconv.ParseInt(value[0], 10, 64)
+			if err != nil || *target < 0 || (key == "content_id" && *target == 0) {
+				return request, errors.New("invalid prompt audit query parameter")
+			}
+		}
+	}
+	if request.Filter.EndTime > 0 && request.Filter.StartTime > request.Filter.EndTime {
+		return request, errors.New("invalid prompt audit time range")
+	}
+	return request, nil
+}
+
+func respondPromptAuditRead(c *gin.Context, data any, err error) {
+	if errors.Is(err, model.ErrPromptAuditNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, data)
+}
+
+func GetPromptAuditGroupContent(c *gin.Context) {
+	request, err := promptAuditReadRequestFromQuery(c, "group-content")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+	result, err := model.ListPromptAuditGroupContent(request.Filter, request.ID, request.Options)
+	respondPromptAuditRead(c, result, err)
+}
+
+func GetPromptAuditGroupRecords(c *gin.Context) {
+	request, err := promptAuditReadRequestFromQuery(c, "group-records")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+	result, err := model.ListPromptAuditGroupRecords(request.Filter, request.ID, request.ContentID, request.Options)
+	respondPromptAuditRead(c, result, err)
+}
+
+func GetPromptAuditSessionQuestions(c *gin.Context) {
+	request, err := promptAuditReadRequestFromQuery(c, "session-questions")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+	result, err := model.ListPromptAuditSessionQuestions(request.ID, request.Filter.StartTime, request.Filter.EndTime, request.Options)
+	respondPromptAuditRead(c, result, err)
+}
+
 func GetPromptAudit(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {

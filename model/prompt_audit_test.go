@@ -217,6 +217,271 @@ func runPromptAuditQuestionGroupingAcrossModels(t *testing.T, db *gorm.DB) {
 	deleted, err := DeletePromptAudits(filter, eligible, maxID)
 	require.NoError(t, err)
 	assert.EqualValues(t, 2, deleted)
+
+	t.Run("question_reading", func(t *testing.T) {
+		runPromptAuditQuestionReading(t, db)
+	})
+}
+
+// The same complete-set reading contract runs on SQLite and the configured
+// MySQL/PostgreSQL matrix; none of these totals can be inferred from 200 rows.
+func runPromptAuditQuestionReading(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	require.NoError(t, db.Where("1=1").Delete(&PromptAudit{}).Error)
+	payload, err := common.Marshal(map[string]any{
+		"segments": []map[string]string{{"text": "continue"}, {"text": "continue"}},
+	})
+	require.NoError(t, err)
+	create := func(row PromptAudit) PromptAudit {
+		t.Helper()
+		require.NoError(t, CreatePromptAudit(&row))
+		return row
+	}
+	first := create(PromptAudit{
+		UserID: 1, Username: "reading-user", GroupKey: "reading-question", SessionKey: "reading-session",
+		Status: PromptAuditStatusFailed, PromptHash: "earliest", RequestKind: "prompt", Direction: "input",
+		CreatedAt: 1000, RedactedPreview: "earliest failed content", FullPrompt: []byte("secret raw"), ScanPayload: payload, ContentSnapshot: payload,
+	})
+	mainIDs := make([]int64, 0, 220)
+	for i := range 220 {
+		kind := "prompt"
+		if i%2 == 1 {
+			kind = "step"
+		}
+		row := create(PromptAudit{
+			UserID: 1, Username: first.Username, GroupKey: first.GroupKey, SessionKey: first.SessionKey,
+			Status: PromptAuditStatusDone, Decision: "pass", Action: "allow", PromptHash: "shared", RequestKind: kind, Direction: "input",
+			CreatedAt: int64(1001 + i), RedactedPreview: "same preview", FullPrompt: []byte("secret raw"), ScanPayload: payload, ContentSnapshot: payload,
+		})
+		mainIDs = append(mainIDs, row.ID)
+	}
+	// A representative without retained text does not mean every source lacks it.
+	require.NoError(t, db.Model(&PromptAudit{}).Where("id = ?", mainIDs[0]).Updates(map[string]any{
+		"full_prompt": nil, "scan_payload": nil, "content_snapshot": nil,
+	}).Error)
+	var branches []PromptAudit
+	for _, seed := range []struct{ kind, direction, hash, decision string }{
+		{"side:summary", "input", "shared", "block"}, {"side:summary", "input", "shared", "block"},
+		{"subagent", "input", "shared", "flag"}, {"step", "output", "shared", "pass"},
+		{"prompt", "input", "", "pass"}, {"step", "input", "", "pass"},
+	} {
+		branches = append(branches, create(PromptAudit{
+			UserID: 1, Username: first.Username, GroupKey: first.GroupKey, SessionKey: first.SessionKey,
+			Status: PromptAuditStatusDone, Decision: seed.decision, Action: "mark", PromptHash: seed.hash,
+			RequestKind: seed.kind, Direction: seed.direction, CreatedAt: int64(1221 + len(branches)), RedactedPreview: "same preview",
+		}))
+	}
+	filter := PromptAuditFilter{Username: first.Username}
+	page, err := ListPromptAuditGroupContent(filter, first.ID, PromptAuditReadOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, page.Page)
+	assert.Equal(t, 20, page.PageSize)
+	assert.EqualValues(t, 7, page.Total)
+	require.Len(t, page.Items, 7)
+	assert.Equal(t, first.ID, page.Items[0].ID)
+	assert.Equal(t, "earliest failed content", page.Items[0].RedactedPreview)
+	assert.Equal(t, PromptAuditContentVersion{
+		ID: mainIDs[0], Kind: "main", Direction: "input", Count: 220, FirstAt: 1001, LastAt: 1220, RedactedPreview: "same preview",
+	}, page.Items[1])
+	assert.Equal(t, "side:summary", page.Items[2].Kind)
+	assert.EqualValues(t, 2, page.Items[2].Count)
+	assert.Equal(t, "subagent", page.Items[3].Kind)
+	assert.Equal(t, "output", page.Items[4].Direction)
+	assert.EqualValues(t, 1, page.Items[5].Count)
+	assert.EqualValues(t, 1, page.Items[6].Count)
+	assert.EqualValues(t, 227, page.Summary.Count)
+	assert.Equal(t, map[string]int64{"pass": 223, "block": 2, "flag": 1, "failed": 1}, page.Summary.OutcomeCounts)
+	assert.Zero(t, page.Summary.Blocks, "observed blocks were marks, not enforced blocks")
+	assert.Equal(t, "block", page.Summary.WorstDecision)
+
+	// Both metadata lists enumerate the entire group and never include bodies.
+	records, err := ListPromptAuditGroupRecords(filter, first.ID, 0, PromptAuditReadOptions{PageSize: 500})
+	require.NoError(t, err)
+	assert.Equal(t, 200, records.PageSize)
+	assert.EqualValues(t, 227, records.Total)
+	require.Len(t, records.Items, 200)
+	assert.Equal(t, first.ID, records.Items[0].ID)
+	lastPage, err := ListPromptAuditGroupRecords(filter, first.ID, 0, PromptAuditReadOptions{Page: 2, PageSize: 200, MaxID: records.MaxID})
+	require.NoError(t, err)
+	assert.Len(t, lastPage.Items, 27)
+	sources, err := ListPromptAuditGroupRecords(filter, first.ID, mainIDs[0], PromptAuditReadOptions{PageSize: 200})
+	require.NoError(t, err)
+	assert.EqualValues(t, 220, sources.Total)
+	assert.Equal(t, mainIDs[0], sources.Items[0].ID)
+	assert.False(t, sources.Items[0].FullPromptAvailable)
+	assert.True(t, sources.Items[1].FullPromptAvailable)
+	sideSources, err := ListPromptAuditGroupRecords(filter, first.ID, branches[0].ID, PromptAuditReadOptions{})
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, sideSources.Total)
+	hashless, err := ListPromptAuditGroupRecords(filter, first.ID, branches[4].ID, PromptAuditReadOptions{})
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, hashless.Total)
+	assert.Equal(t, branches[4].ID, hashless.Items[0].ID)
+	stored, err := GetPromptAudit(mainIDs[1])
+	require.NoError(t, err)
+	assert.Equal(t, string(payload), *stored.ToResponse(true).ScanPayload, "snapshot-internal repetitions remain unchanged")
+
+	// Every original filter still scopes the group; a source anchor must be in
+	// that question, owned by that user, and visible in the requested filter.
+	blockedFilter := PromptAuditFilter{Username: first.Username, Decision: "block"}
+	blocked, err := ListPromptAuditGroupContent(blockedFilter, first.ID, PromptAuditReadOptions{})
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, blocked.Total)
+	assert.EqualValues(t, 2, blocked.Summary.Count)
+	_, err = ListPromptAuditGroupRecords(blockedFilter, first.ID, mainIDs[0], PromptAuditReadOptions{})
+	assert.ErrorIs(t, err, ErrPromptAuditNotFound)
+	otherUser := create(PromptAudit{UserID: 2, GroupKey: first.GroupKey, SessionKey: first.SessionKey, PromptHash: "shared", CreatedAt: 1300})
+	_, err = ListPromptAuditGroupRecords(PromptAuditFilter{}, first.ID, otherUser.ID, PromptAuditReadOptions{})
+	assert.ErrorIs(t, err, ErrPromptAuditNotFound)
+	otherQuestion := create(PromptAudit{UserID: 1, GroupKey: "later-question", SessionKey: first.SessionKey, PromptHash: "shared", RequestKind: "subagent", CreatedAt: 1400, RedactedPreview: "branch preview", Status: PromptAuditStatusDone, Decision: "flag"})
+	laterMain := create(PromptAudit{UserID: 1, GroupKey: otherQuestion.GroupKey, SessionKey: first.SessionKey, RequestKind: "prompt", CreatedAt: 1410, RedactedPreview: "main preview", Status: PromptAuditStatusDone, Decision: "pass"})
+	_, err = ListPromptAuditGroupRecords(PromptAuditFilter{}, first.ID, otherQuestion.ID, PromptAuditReadOptions{})
+	assert.ErrorIs(t, err, ErrPromptAuditNotFound)
+	for _, scoped := range []PromptAuditFilter{
+		{IDs: []int64{otherQuestion.ID}}, {GroupIDs: []int64{otherQuestion.ID}},
+	} {
+		content, err := ListPromptAuditGroupContent(scoped, first.ID, PromptAuditReadOptions{})
+		require.NoError(t, err)
+		assert.Zero(t, content.Total)
+		records, err := ListPromptAuditGroupRecords(scoped, first.ID, 0, PromptAuditReadOptions{})
+		require.NoError(t, err)
+		assert.Zero(t, records.Total)
+	}
+
+	// Initial watermarks are table-wide, not question-local: later questions
+	// already present must not be lost when the content page opens the session.
+	boundary, err := ListPromptAuditGroupContent(filter, first.ID, PromptAuditReadOptions{PageSize: 2})
+	require.NoError(t, err)
+	assert.Equal(t, laterMain.ID, boundary.MaxID)
+	session, err := ListPromptAuditSessionQuestions(first.ID, 1000, 1500, PromptAuditReadOptions{MaxID: boundary.MaxID})
+	require.NoError(t, err)
+	assert.True(t, session.HasSession)
+	assert.EqualValues(t, 2, session.Total)
+	require.Len(t, session.Items, 2)
+	assert.Equal(t, first.ID, session.Items[0].ID)
+	assert.Equal(t, laterMain.ID, session.Items[1].ID)
+	assert.Equal(t, "prompt", session.Items[1].RequestKind)
+	assert.Equal(t, "main preview", session.Items[1].RedactedPreview)
+	assert.EqualValues(t, 1400, session.Items[1].Repeat.FirstAt)
+	assert.Equal(t, map[string]int64{"pass": 1, "flag": 1}, session.Items[1].Repeat.OutcomeCounts)
+	assert.EqualValues(t, 227, session.Items[0].Repeat.Count)
+	oneQuestion, err := ListPromptAuditSessionQuestions(first.ID, 1400, 1500, PromptAuditReadOptions{})
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, oneQuestion.Total)
+	assert.Equal(t, laterMain.ID, oneQuestion.Items[0].ID)
+
+	newContent := create(PromptAudit{UserID: 1, Username: first.Username, GroupKey: first.GroupKey, SessionKey: first.SessionKey, PromptHash: "new-content", CreatedAt: 1100})
+	branchOnly := create(PromptAudit{UserID: 1, GroupKey: "branch-only", SessionKey: first.SessionKey, RequestKind: "side:compact", CreatedAt: 1350, Status: PromptAuditStatusDone, Decision: "pass"})
+	nextContent, err := ListPromptAuditGroupContent(filter, first.ID, PromptAuditReadOptions{Page: 2, PageSize: 2, MaxID: boundary.MaxID})
+	require.NoError(t, err)
+	assert.EqualValues(t, 7, nextContent.Total)
+	assert.Equal(t, page.Items[2:4], nextContent.Items)
+	refreshedContent, err := ListPromptAuditGroupContent(filter, first.ID, PromptAuditReadOptions{})
+	require.NoError(t, err)
+	assert.EqualValues(t, 8, refreshedContent.Total)
+	assert.Equal(t, newContent.ID, refreshedContent.Items[2].ID, "versions sort by first occurrence, not insertion ID")
+	boundedRecords, err := ListPromptAuditGroupRecords(filter, first.ID, 0, PromptAuditReadOptions{Page: 2, PageSize: 200, MaxID: boundary.MaxID})
+	require.NoError(t, err)
+	assert.EqualValues(t, 227, boundedRecords.Total)
+	assert.Len(t, boundedRecords.Items, 27)
+	_, err = ListPromptAuditGroupRecords(filter, first.ID, newContent.ID, PromptAuditReadOptions{MaxID: boundary.MaxID})
+	assert.ErrorIs(t, err, ErrPromptAuditNotFound)
+	nextSession, err := ListPromptAuditSessionQuestions(first.ID, 1000, 1500, PromptAuditReadOptions{Page: 2, PageSize: 1, MaxID: boundary.MaxID})
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, nextSession.Total)
+	require.Len(t, nextSession.Items, 1)
+	assert.Equal(t, laterMain.ID, nextSession.Items[0].ID)
+	refreshed, err := ListPromptAuditSessionQuestions(first.ID, 1000, 1500, PromptAuditReadOptions{})
+	require.NoError(t, err)
+	assert.EqualValues(t, 3, refreshed.Total)
+	assert.Equal(t, branchOnly.ID, refreshed.Items[1].ID)
+	assert.Equal(t, "side:compact", refreshed.Items[1].RequestKind)
+	assert.Equal(t, laterMain.ID, refreshed.Items[2].ID)
+
+	legacy := create(PromptAudit{UserID: 1, PromptHash: "legacy-reading", Status: PromptAuditStatusDone, CreatedAt: 1500})
+	create(PromptAudit{UserID: 1, PromptHash: legacy.PromptHash, Status: PromptAuditStatusDone, CreatedAt: 1501})
+	legacyPage, err := ListPromptAuditGroupContent(PromptAuditFilter{}, legacy.ID, PromptAuditReadOptions{})
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, legacyPage.Total)
+	assert.EqualValues(t, 2, legacyPage.Items[0].Count)
+	assert.Equal(t, "unknown", legacyPage.Items[0].Kind)
+	noSession, err := ListPromptAuditSessionQuestions(legacy.ID, 0, 0, PromptAuditReadOptions{})
+	require.NoError(t, err)
+	assert.False(t, noSession.HasSession)
+	assert.Empty(t, noSession.Items)
+	require.NotNil(t, noSession.Items)
+	assert.Zero(t, noSession.Total)
+	emptyIdentity := create(PromptAudit{UserID: 1, CreatedAt: 1600})
+	require.NoError(t, db.Model(&PromptAudit{}).Where("id = ?", emptyIdentity.ID).Updates(map[string]any{
+		"group_key": nil, "prompt_hash": nil, "request_kind": nil, "direction": nil, "session_key": nil, "decision": nil,
+	}).Error)
+	create(PromptAudit{UserID: 1, CreatedAt: 1601})
+	emptyPage, err := ListPromptAuditGroupContent(PromptAuditFilter{}, emptyIdentity.ID, PromptAuditReadOptions{})
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, emptyPage.Total)
+	assert.EqualValues(t, 1, emptyPage.Summary.Count)
+	for _, value := range []any{page, records, session} {
+		data, err := common.Marshal(value)
+		require.NoError(t, err)
+		assert.NotContains(t, string(data), `"full_prompt":`)
+		assert.NotContains(t, string(data), `"scan_payload":`)
+		assert.NotContains(t, string(data), `"content_snapshot":`)
+		assert.NotContains(t, string(data), "secret raw")
+		assert.NotContains(t, string(data), "continue")
+	}
+	_, err = ListPromptAuditGroupContent(filter, -1, PromptAuditReadOptions{})
+	assert.ErrorIs(t, err, ErrPromptAuditNotFound)
+	_, err = ListPromptAuditGroupRecords(filter, -1, 0, PromptAuditReadOptions{})
+	assert.ErrorIs(t, err, ErrPromptAuditNotFound)
+	_, err = ListPromptAuditSessionQuestions(-1, 0, 0, PromptAuditReadOptions{})
+	assert.ErrorIs(t, err, ErrPromptAuditNotFound)
+
+	// 126 passes plus one unavailable verdict remain visible separately, while
+	// active statuses and unrecognized terminal outcomes are mutually exclusive.
+	for i := range 127 {
+		decision := "pass"
+		if i == 126 {
+			decision = "unavailable"
+		}
+		create(PromptAudit{UserID: 1, GroupKey: "mixed-reading", Username: "mixed-reading", Status: PromptAuditStatusDone, Decision: decision, Action: "allow"})
+	}
+	mixed, _, err := ListPromptAuditRepeats(PromptAuditFilter{Username: "mixed-reading"}, 1, 20)
+	require.NoError(t, err)
+	require.Len(t, mixed, 1)
+	assert.Equal(t, map[string]int64{"pass": 126, "unavailable": 1}, mixed[0].Repeat.OutcomeCounts)
+	assert.EqualValues(t, 127, mixed[0].Repeat.Count)
+	assert.Zero(t, mixed[0].Repeat.Unavailable)
+	unavailable, _, err := ListPromptAuditRepeats(PromptAuditFilter{Username: "mixed-reading", Decision: "unavailable"}, 1, 20)
+	require.NoError(t, err)
+	require.Len(t, unavailable, 1)
+	assert.EqualValues(t, 1, unavailable[0].Repeat.Count)
+	assert.Equal(t, map[string]int64{"unavailable": 1}, unavailable[0].Repeat.OutcomeCounts)
+	var activeID int64
+	for _, seed := range []struct {
+		status   PromptAuditStatus
+		decision string
+		kind     string
+	}{
+		{PromptAuditStatusQueued, "pass", ""}, {PromptAuditStatusProcessing, "block", "mystery"},
+		{PromptAuditStatusRetry, "unavailable", "side:compact"}, {PromptAuditStatusFailed, "", ""},
+		{PromptAuditStatusDone, "", ""}, {PromptAuditStatusDone, "future-decision", ""},
+		{PromptAuditStatusFailed, "future-decision", ""}, {PromptAuditStatusFailed, "unavailable", ""},
+	} {
+		row := create(PromptAudit{UserID: 1, GroupKey: "active-reading", Status: seed.status, Decision: seed.decision, RequestKind: seed.kind})
+		activeID = row.ID
+	}
+	active, err := ListPromptAuditGroupContent(PromptAuditFilter{}, activeID, PromptAuditReadOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]int64{"queued": 1, "processing": 1, "retry": 1, "failed": 1, "unavailable": 1, "unknown": 3}, active.Summary.OutcomeCounts)
+	assert.Equal(t, "unknown", active.Items[0].Kind)
+	assert.Equal(t, "mystery", active.Items[1].Kind)
+	assert.Equal(t, "side:compact", active.Items[2].Kind)
+	hidden, err := ListPromptAuditGroupContent(PromptAuditFilter{Model: "absent-model"}, first.ID, PromptAuditReadOptions{Page: -1, PageSize: -1})
+	require.NoError(t, err)
+	assert.Empty(t, hidden.Items)
+	require.NotNil(t, hidden.Items)
+	require.NotNil(t, hidden.Summary.OutcomeCounts)
+	assert.Zero(t, hidden.Summary.Count)
 }
 
 func TestPromptAuditExpiredLeaseNeverExceedsAttemptCap(t *testing.T) {
@@ -523,15 +788,23 @@ func runPromptAuditRepeatListing(t *testing.T, db *gorm.DB) {
 	}
 
 	blocked := groupFor("repeat-block-first")
-	assert.Equal(t, PromptAuditRepeat{Count: 3, FirstAt: 1000, LastAt: 1040, WorstDecision: "block", Blocks: 1, Unavailable: 1}, blocked.Repeat)
+	assert.Equal(t, PromptAuditRepeat{Count: 3, FirstAt: 1000, LastAt: 1040, WorstDecision: "block", Blocks: 1, Unavailable: 1, OutcomeCounts: map[string]int64{"pass": 1, "block": 1, "unavailable": 1}}, blocked.Repeat)
 	assert.EqualValues(t, 100, blocked.Audit.PromptLength)
-	assert.Equal(t, PromptAuditRepeat{Count: 2, FirstAt: 1020, LastAt: 1080, WorstDecision: "flag"}, groupFor("repeat-mark-first").Repeat)
+	assert.Equal(t, PromptAuditRepeat{Count: 2, FirstAt: 1020, LastAt: 1080, WorstDecision: "flag", OutcomeCounts: map[string]int64{"pass": 1, "flag": 1}}, groupFor("repeat-mark-first").Repeat)
 	// The worst decision is read from the decisions themselves: an observed block
 	// stays a block although its action only marked the request.
-	assert.Equal(t, PromptAuditRepeat{Count: 2, FirstAt: 1050, LastAt: 1070, WorstDecision: "block"}, groupFor("repeat-async-first").Repeat)
-	assert.Equal(t, PromptAuditRepeat{Count: 2, FirstAt: 1090, LastAt: 1100, WorstDecision: ""}, groupFor("repeat-pending-first").Repeat)
-	assert.Equal(t, PromptAuditRepeat{Count: 1, FirstAt: 1030, LastAt: 1030, WorstDecision: "pass"}, groupFor("repeat-legacy-first").Repeat)
-	assert.Equal(t, PromptAuditRepeat{Count: 1, FirstAt: 1110, LastAt: 1110, WorstDecision: "pass"}, groupFor("repeat-other-user").Repeat)
+	assert.Equal(t, PromptAuditRepeat{Count: 2, FirstAt: 1050, LastAt: 1070, WorstDecision: "block", OutcomeCounts: map[string]int64{"pass": 1, "block": 1}}, groupFor("repeat-async-first").Repeat)
+	assert.Equal(t, PromptAuditRepeat{Count: 2, FirstAt: 1090, LastAt: 1100, WorstDecision: "", OutcomeCounts: map[string]int64{"pass": 1, "queued": 1}}, groupFor("repeat-pending-first").Repeat)
+	assert.Equal(t, PromptAuditRepeat{Count: 1, FirstAt: 1030, LastAt: 1030, WorstDecision: "pass", OutcomeCounts: map[string]int64{"pass": 1}}, groupFor("repeat-legacy-first").Repeat)
+	assert.Equal(t, PromptAuditRepeat{Count: 1, FirstAt: 1110, LastAt: 1110, WorstDecision: "pass", OutcomeCounts: map[string]int64{"pass": 1}}, groupFor("repeat-other-user").Repeat)
+
+	data, err := common.Marshal(blocked.Repeat)
+	require.NoError(t, err)
+	var response struct {
+		OutcomeCounts map[string]int64 `json:"outcome_counts"`
+	}
+	require.NoError(t, common.Unmarshal(data, &response))
+	assert.Equal(t, blocked.Repeat.OutcomeCounts, response.OutcomeCounts)
 
 	// The group count must agree with the plain listing's record count for the
 	// same filter.

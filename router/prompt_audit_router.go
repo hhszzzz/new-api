@@ -19,6 +19,9 @@ func registerPromptAuditRoutes(apiRouter *gin.RouterGroup) {
 	route.GET("/categories", controller.GetPromptAuditCategories)
 	route.GET("/events", middleware.RequirePermission(authz.PromptAuditRead), controller.ListPromptAudits)
 	route.GET("/events/:id", middleware.RequirePermission(authz.PromptAuditRead), controller.GetPromptAudit)
+	route.GET("/events/:id/group-content", middleware.RequirePermission(authz.PromptAuditRead), controller.GetPromptAuditGroupContent)
+	route.GET("/events/:id/group-records", middleware.RequirePermission(authz.PromptAuditRead), controller.GetPromptAuditGroupRecords)
+	route.GET("/events/:id/session-questions", middleware.RequirePermission(authz.PromptAuditRead), controller.GetPromptAuditSessionQuestions)
 	route.GET("/stats", middleware.RequirePermission(authz.PromptAuditRead), controller.GetPromptAuditStats)
 
 	route.GET("/config", middleware.RequirePermission(authz.PromptAuditManage), controller.GetPromptAuditConfig)

@@ -167,6 +167,19 @@ func TestListPromptAuditsCollapsedListingAndGroupExpansion(t *testing.T) {
 	collapsed, collapsedBody := list("collapse_repeats=true&username=collapsed-user")
 	assert.EqualValues(t, 2, collapsed.Data.Total)
 	assert.NotContains(t, collapsedBody, "records_total")
+	var outcomeBody struct {
+		Data struct {
+			Items []struct {
+				Repeat struct {
+					OutcomeCounts map[string]int64 `json:"outcome_counts"`
+				} `json:"repeat"`
+			} `json:"items"`
+		} `json:"data"`
+	}
+	require.NoError(t, common.UnmarshalJsonStr(collapsedBody, &outcomeBody))
+	require.Len(t, outcomeBody.Data.Items, 2)
+	assert.EqualValues(t, 1, outcomeBody.Data.Items[1].Repeat.OutcomeCounts["pass"])
+	assert.EqualValues(t, 1, outcomeBody.Data.Items[1].Repeat.OutcomeCounts["block"])
 	require.Len(t, collapsed.Data.Items, 2)
 	merged, single := collapsed.Data.Items[1], collapsed.Data.Items[0]
 	require.Equal(t, hash, merged.PromptHash)
@@ -206,4 +219,129 @@ func TestListPromptAuditsCollapsedListingAndGroupExpansion(t *testing.T) {
 	// A representative that is gone expands to nothing instead of failing.
 	gone, _ := list(fmt.Sprintf("collapse_repeats=true&group_id=%d&username=collapsed-user", merged.ID+1000))
 	assert.Empty(t, gone.Data.Items)
+}
+
+func TestPromptAuditQuestionReadValidationAndMetadata(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	previousDB := model.DB
+	database, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := database.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	require.NoError(t, database.AutoMigrate(&model.PromptAudit{}))
+	model.DB = database
+	t.Cleanup(func() {
+		model.DB = previousDB
+		_ = sqlDB.Close()
+	})
+	for _, audit := range []model.PromptAudit{
+		{ID: 1, UserID: 7, SessionKey: "shared-session", GroupKey: "question-a", RequestKind: "prompt", PromptHash: "same-content", Status: model.PromptAuditStatusDone, Decision: "pass", Action: "allow", CreatedAt: 100, RedactedPreview: "Question A"},
+		{ID: 2, UserID: 7, SessionKey: "shared-session", GroupKey: "question-a", RequestKind: "step", PromptHash: "same-content", Status: model.PromptAuditStatusFailed, Decision: "unavailable", Action: "unavailable", CreatedAt: 110, RedactedPreview: "Question A"},
+		{ID: 3, UserID: 7, SessionKey: "shared-session", GroupKey: "question-b", RequestKind: "prompt", PromptHash: "other-content", Status: model.PromptAuditStatusDone, Decision: "pass", Action: "allow", CreatedAt: 120, RedactedPreview: "Question B"},
+		{ID: 4, UserID: 8, SessionKey: "shared-session", GroupKey: "question-a", RequestKind: "prompt", PromptHash: "same-content", Status: model.PromptAuditStatusDone, Decision: "pass", Action: "allow", CreatedAt: 130, RedactedPreview: "Other user"},
+		{ID: 5, UserID: 7, PromptHash: "legacy", Status: model.PromptAuditStatusDone, Decision: "pass", CreatedAt: 140, RedactedPreview: "No session"},
+	} {
+		audit.FullPrompt = []byte("private full request")
+		audit.ScanPayload = []byte(`{"segments":[{"text":"private inspected request"}]}`)
+		audit.ContentSnapshot = []byte("private snapshot")
+		audit.PolicySnapshot = "private policy"
+		require.NoError(t, model.CreatePromptAudit(&audit))
+	}
+	router := gin.New()
+	router.GET("/events/:id/group-content", GetPromptAuditGroupContent)
+	router.GET("/events/:id/group-records", GetPromptAuditGroupRecords)
+	router.GET("/events/:id/session-questions", GetPromptAuditSessionQuestions)
+	read := func(target string) *httptest.ResponseRecorder {
+		t.Helper()
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, target, nil))
+		assert.NotContains(t, recorder.Body.String(), "private full request")
+		assert.NotContains(t, recorder.Body.String(), "private inspected request")
+		assert.NotContains(t, recorder.Body.String(), "private snapshot")
+		assert.NotContains(t, recorder.Body.String(), "private policy")
+		return recorder
+	}
+	for _, query := range []string{
+		"page=0", "page=-1", "page=oops", "page=1&page=2", "page_size=0", "page_size=201",
+		"page_size=", "max_id=-1", "max_id=9223372036854775808", "start_time=bad",
+		"start_time=200&end_time=100", "start_time=-1", "user_id=8", "session_key=shared-session",
+		"content_id=1", "unexpected=1",
+	} {
+		t.Run("invalid content query "+query, func(t *testing.T) {
+			assert.Equal(t, http.StatusBadRequest, read("/events/1/group-content?"+query).Code)
+		})
+	}
+	for _, query := range []string{"decision=unavailable", "model=example", "username=other", "group_id=4", "content_id=1", "session_key=shared-session"} {
+		assert.Equal(t, http.StatusBadRequest, read("/events/1/session-questions?"+query).Code)
+	}
+	assert.Equal(t, http.StatusBadRequest, read("/events/1/group-records?content_id=-1").Code)
+	assert.Equal(t, http.StatusNotFound, read("/events/1/group-records?content_id=4").Code)
+	assert.Equal(t, http.StatusNotFound, read("/events/1/group-records?content_id=3").Code)
+	for _, endpoint := range []string{"group-content", "group-records", "session-questions"} {
+		assert.Equal(t, http.StatusBadRequest, read("/events/0/"+endpoint).Code)
+		assert.Equal(t, http.StatusNotFound, read("/events/999/"+endpoint).Code)
+	}
+
+	var content struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Items []struct {
+				ID    int64  `json:"id"`
+				Kind  string `json:"kind"`
+				Count int64  `json:"count"`
+			} `json:"items"`
+			Total   int64 `json:"total"`
+			MaxID   int64 `json:"max_id"`
+			Summary struct {
+				Count    int64            `json:"count"`
+				Outcomes map[string]int64 `json:"outcome_counts"`
+			} `json:"summary"`
+		} `json:"data"`
+	}
+	response := read("/events/1/group-content?start_time=90&end_time=150&page_size=1")
+	require.Equal(t, http.StatusOK, response.Code)
+	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &content))
+	require.True(t, content.Success)
+	assert.EqualValues(t, 5, content.Data.MaxID)
+	assert.EqualValues(t, 1, content.Data.Total)
+	require.Len(t, content.Data.Items, 1)
+	assert.Equal(t, "main", content.Data.Items[0].Kind)
+	assert.EqualValues(t, 2, content.Data.Items[0].Count)
+	assert.EqualValues(t, 2, content.Data.Summary.Count)
+	assert.EqualValues(t, 1, content.Data.Summary.Outcomes["pass"])
+	assert.EqualValues(t, 1, content.Data.Summary.Outcomes["unavailable"])
+	response = read("/events/1/group-content?decision=unavailable")
+	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &content))
+	assert.EqualValues(t, 1, content.Data.Summary.Count)
+
+	var records struct {
+		Data struct {
+			Items      []model.PromptAuditResponse `json:"items"`
+			Total      int64                       `json:"total"`
+			MaxID      int64                       `json:"max_id"`
+			HasSession bool                        `json:"has_session"`
+		} `json:"data"`
+	}
+	response = read("/events/1/group-records?page=2&page_size=1&max_id=5&content_id=1")
+	require.Equal(t, http.StatusOK, response.Code)
+	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &records))
+	assert.EqualValues(t, 2, records.Data.Total)
+	require.Len(t, records.Data.Items, 1)
+	assert.EqualValues(t, 2, records.Data.Items[0].ID)
+	assert.Nil(t, records.Data.Items[0].FullPrompt)
+	assert.Nil(t, records.Data.Items[0].ScanPayload)
+	response = read("/events/1/session-questions?start_time=90&end_time=150&max_id=5")
+	require.Equal(t, http.StatusOK, response.Code)
+	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &records))
+	assert.True(t, records.Data.HasSession)
+	assert.EqualValues(t, 2, records.Data.Total)
+	require.Len(t, records.Data.Items, 2)
+	assert.Equal(t, "Question A", records.Data.Items[0].RedactedPreview)
+	assert.Equal(t, "Question B", records.Data.Items[1].RedactedPreview)
+	response = read("/events/5/session-questions")
+	require.Equal(t, http.StatusOK, response.Code)
+	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &records))
+	assert.False(t, records.Data.HasSession)
+	assert.Empty(t, records.Data.Items)
 }
