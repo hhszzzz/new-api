@@ -41,6 +41,7 @@ import {
   promptAuditRequestKindLabel,
 } from '../lib'
 import type { PromptAuditEvent } from '../types'
+import { PromptAuditOutcomeCounts } from './prompt-audit-outcome-counts'
 
 /** The chevron of a merged row, spinning while its requests are being fetched. */
 function expandIcon(loading: boolean, expanded: boolean) {
@@ -72,6 +73,7 @@ function timestampParts(timestamp?: number) {
 export function usePromptAuditColumns(options: {
   canDelete: boolean
   onOpen: (eventID: number) => void
+  onOpenGroup?: (eventID: number) => void
   /** The listing merges requests that submitted the same text. */
   collapsed?: boolean
   /** Collapsed rows whose requests are still being fetched. */
@@ -83,7 +85,7 @@ export function usePromptAuditColumns(options: {
   groupTotals?: Readonly<Record<number, number>>
 }): ColumnDef<PromptAuditEvent>[] {
   const { t, i18n } = useTranslation()
-  const { canDelete, onOpen } = options
+  const { canDelete, onOpen, onOpenGroup } = options
   const collapsed = options.collapsed ?? false
   const loadingGroupIDs = options.loadingGroupIDs
   const groupTotals = options.groupTotals
@@ -237,7 +239,7 @@ export function usePromptAuditColumns(options: {
                           {repeat.blocks > 0 && (
                             <>
                               <dt className='text-muted-foreground'>
-                                {t('Blocked')}
+                                {t('Block actions')}
                               </dt>
                               <dd className='tabular-nums'>
                                 {formatNumber(repeat.blocks, locale)}
@@ -247,7 +249,7 @@ export function usePromptAuditColumns(options: {
                           {repeat.unavailable > 0 && (
                             <>
                               <dt className='text-muted-foreground'>
-                                {t('Unavailable')}
+                                {t('Unavailable actions')}
                               </dt>
                               <dd className='tabular-nums'>
                                 {formatNumber(repeat.unavailable, locale)}
@@ -259,20 +261,26 @@ export function usePromptAuditColumns(options: {
                     </TooltipContent>
                   </Tooltip>
                 )}
-                <Badge variant={outcome.variant}>{t(outcome.key)}</Badge>
-                <Badge variant='outline'>
-                  {promptAuditDetectorLabel(event.inspection_type, t)}
-                </Badge>
+                {repeat ? (
+                  <PromptAuditOutcomeCounts repeat={repeat} />
+                ) : (
+                  <>
+                    <Badge variant={outcome.variant}>{t(outcome.key)}</Badge>
+                    <Badge variant='outline'>
+                      {promptAuditDetectorLabel(event.inspection_type, t)}
+                    </Badge>
+                    <Badge variant='outline'>
+                      {event.direction === 'output'
+                        ? t('Generated output')
+                        : t('Request input')}
+                    </Badge>
+                  </>
+                )}
                 {row.depth > 0 && event.request_kind && (
                   <Badge variant='outline'>
                     {promptAuditRequestKindLabel(event.request_kind, t)}
                   </Badge>
                 )}
-                <Badge variant='outline'>
-                  {event.direction === 'output'
-                    ? t('Generated output')
-                    : t('Request input')}
-                </Badge>
                 {/* Only a merged row holds a group, so only it can be
                     expanded; the count above says how many requests that
                     reveals. */}
@@ -289,7 +297,7 @@ export function usePromptAuditColumns(options: {
                   </Button>
                 )}
               </div>
-              {event.categories.length > 0 && (
+              {!repeat && event.categories.length > 0 && (
                 <p className='text-muted-foreground mt-1 max-w-48 truncate text-xs'>
                   {event.categories.map((category) => t(category)).join(', ')}
                 </p>
@@ -397,7 +405,18 @@ export function usePromptAuditColumns(options: {
               variant='ghost'
               size='icon-sm'
               aria-label={t('View details')}
-              onClick={() => onOpen(row.original.id)}
+              onClick={() => {
+                if (
+                  collapsed &&
+                  row.depth === 0 &&
+                  isMergedPromptAuditRow(row.original) &&
+                  onOpenGroup
+                ) {
+                  onOpenGroup(row.original.id)
+                } else {
+                  onOpen(row.original.id)
+                }
+              }}
             >
               <Eye />
             </Button>
@@ -408,5 +427,14 @@ export function usePromptAuditColumns(options: {
     )
 
     return columns
-  }, [canDelete, collapsed, groupTotals, loadingGroupIDs, locale, onOpen, t])
+  }, [
+    canDelete,
+    collapsed,
+    groupTotals,
+    loadingGroupIDs,
+    locale,
+    onOpen,
+    onOpenGroup,
+    t,
+  ])
 }

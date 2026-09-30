@@ -55,12 +55,14 @@ import { usePromptAuditColumns } from './components/prompt-audit-columns'
 import { PromptAuditDeleteDialog } from './components/prompt-audit-delete-dialog'
 import { PromptAuditDetailSheet } from './components/prompt-audit-detail-sheet'
 import { PromptAuditFilterBar } from './components/prompt-audit-filter-bar'
+import { PromptAuditGroupDetailSheet } from './components/prompt-audit-group-detail-sheet'
 import { PromptAuditNavigation } from './components/prompt-audit-navigation'
 import {
   getDefaultPromptAuditFilters,
   isMergedPromptAuditRow,
   promptAuditDeleteFilter,
   promptAuditFilterParams,
+  promptAuditGroupFilters,
   promptAuditRowID,
   readPromptAuditCollapseRepeats,
   validatePromptAuditFilters,
@@ -70,6 +72,7 @@ import type {
   PromptAuditDeleteFilter,
   PromptAuditEvent,
   PromptAuditFilters,
+  PromptAuditGroupTarget,
   PromptAuditListData,
 } from './types'
 
@@ -116,6 +119,9 @@ export function PromptAuditRecords() {
   )
   const [expanded, setExpanded] = useState<ExpandedState>({})
   const [detailID, setDetailID] = useState<number | null>(null)
+  const [groupTarget, setGroupTarget] = useState<PromptAuditGroupTarget | null>(
+    null
+  )
   const [deleteFilter, setDeleteFilter] =
     useState<PromptAuditDeleteFilter | null>(null)
 
@@ -235,9 +241,21 @@ export function PromptAuditRecords() {
     })
   }, [listQuery.data, collapseRepeats, groups.rows])
   const total = listQuery.data?.total ?? 0
+  const openGroup = useCallback(
+    (id: number) => {
+      setDetailID(null)
+      setGroupTarget({
+        id,
+        scope: 'filtered',
+        filters: promptAuditGroupFilters(filters),
+      })
+    },
+    [filters]
+  )
   const columns = usePromptAuditColumns({
     canDelete,
     onOpen: setDetailID,
+    onOpenGroup: openGroup,
     collapsed: collapseRepeats,
     loadingGroupIDs: groups.loadingIDs,
     groupTotals: groups.totals,
@@ -305,6 +323,8 @@ export function PromptAuditRecords() {
       return
     }
     setFilters({ ...draftFilters })
+    setDetailID(null)
+    setGroupTarget(null)
     setPagination((current) => ({ ...current, pageIndex: 0 }))
     setRowSelection({})
     setExpanded({})
@@ -320,6 +340,8 @@ export function PromptAuditRecords() {
     const defaults = getDefaultPromptAuditFilters()
     setDraftFilters(defaults)
     setFilters(defaults)
+    setDetailID(null)
+    setGroupTarget(null)
     setPagination((current) => ({ ...current, pageIndex: 0 }))
     setRowSelection({})
     setExpanded({})
@@ -331,6 +353,8 @@ export function PromptAuditRecords() {
   const toggleCollapseRepeats = useCallback(() => {
     const next = !collapseRepeats
     setCollapseRepeats(next)
+    setDetailID(null)
+    setGroupTarget(null)
     writePromptAuditCollapseRepeats(next)
     setExpanded({})
     setPagination((current) => ({ ...current, pageIndex: 0 }))
@@ -419,9 +443,22 @@ export function PromptAuditRecords() {
                       '[&_td_.prompt-audit-timeline-text]:pl-3'
                     )
                   }
-                  if (row.original.decision === 'block') {
+                  const repeat =
+                    collapseRepeats &&
+                    row.depth === 0 &&
+                    isMergedPromptAuditRow(row.original)
+                      ? row.original.repeat
+                      : undefined
+                  const hasBlock = repeat
+                    ? (repeat.outcome_counts?.block ?? 0) > 0 ||
+                      repeat.blocks > 0
+                    : row.original.decision === 'block'
+                  const hasFlag = repeat
+                    ? (repeat.outcome_counts?.flag ?? 0) > 0
+                    : row.original.decision === 'flag'
+                  if (hasBlock) {
                     classes.push('bg-rose-50/35 dark:bg-rose-950/15')
-                  } else if (row.original.decision === 'flag') {
+                  } else if (hasFlag) {
                     classes.push('bg-amber-50/35 dark:bg-amber-950/15')
                   }
                   return classes.join(' ') || undefined
@@ -432,6 +469,15 @@ export function PromptAuditRecords() {
         </SectionPageLayout.Content>
       </SectionPageLayout>
 
+      {groupTarget && (
+        <PromptAuditGroupDetailSheet
+          key={JSON.stringify(groupTarget)}
+          target={groupTarget}
+          canViewFullPrompt={canViewFullPrompt}
+          onOpenChange={(open) => !open && setGroupTarget(null)}
+          onOpenRecord={setDetailID}
+        />
+      )}
       <PromptAuditDetailSheet
         eventID={detailID}
         canViewFullPrompt={canViewFullPrompt}
@@ -440,6 +486,7 @@ export function PromptAuditRecords() {
         onOpenChange={(open) => !open && setDetailID(null)}
         onDelete={(event) => {
           setDetailID(null)
+          setGroupTarget(null)
           openDelete(event)
         }}
       />
@@ -449,6 +496,11 @@ export function PromptAuditRecords() {
         onOpenChange={(open) => !open && setDeleteFilter(null)}
         onDeleted={() => {
           setRowSelection({})
+          setDetailID(null)
+          setGroupTarget(null)
+          queryClient.removeQueries({
+            queryKey: ['prompt-audit', 'group-detail'],
+          })
           // The deletion can take an expanded group with it. Its row closes,
           // and its cached requests are dropped before the refresh, which
           // reaches every query still mounted and would otherwise ask the

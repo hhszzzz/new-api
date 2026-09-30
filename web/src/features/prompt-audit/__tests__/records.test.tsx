@@ -225,6 +225,29 @@ beforeEach(() => {
           },
         }
       }
+      if (url === '/api/prompt-audit/events/17/group-content') {
+        return {
+          data: {
+            success: true,
+            data: {
+              items: [],
+              total: 0,
+              page: 1,
+              page_size: 20,
+              max_id: 99,
+              summary: MERGED.repeat,
+            },
+          },
+        }
+      }
+      if (/\/api\/prompt-audit\/events\/\d+$/.test(url)) {
+        return {
+          data: {
+            success: true,
+            data: { ...EVENT, id: Number(url.split('/').at(-1)) },
+          },
+        }
+      }
       if (url !== '/api/prompt-audit/events') {
         throw new Error(`Unexpected API request: ${url}`)
       }
@@ -275,6 +298,75 @@ afterEach(async () => {
 })
 
 describe('prompt audit records', () => {
+  test('opens group metadata for a merged row and single-event details for its children', async () => {
+    const user = userEvent.setup()
+    renderRecords()
+    const table = await screen.findByRole('table')
+    await user.click(
+      await within(table).findByRole('button', { name: 'View details' })
+    )
+    expect(
+      await screen.findByRole('heading', { name: 'Question details' })
+    ).toBeVisible()
+    expect(
+      apiMock.get.mock.calls.some(
+        ([url]) => url === '/api/prompt-audit/events/17/group-content'
+      )
+    ).toBe(true)
+    expect(
+      apiMock.get.mock.calls.some(
+        ([url]) => url === '/api/prompt-audit/events/17'
+      )
+    ).toBe(false)
+    await user.keyboard('{Escape}')
+    await expandGroup(user)
+    const child = within(table)
+      .getByText('second-request')
+      .closest('tr') as HTMLElement
+    await user.click(
+      within(child).getByRole('button', { name: 'View details' })
+    )
+    expect(
+      await screen.findByRole('heading', { name: 'Prompt audit details' })
+    ).toBeVisible()
+    expect(
+      apiMock.get.mock.calls.some(
+        ([url]) => url === '/api/prompt-audit/events/18'
+      )
+    ).toBe(true)
+  })
+
+  test('opens a group of one as unchanged single-event details', async () => {
+    server.pages = [
+      [
+        {
+          ...MERGED,
+          repeat: {
+            count: 1,
+            first_at: EVENT.created_at,
+            last_at: EVENT.created_at,
+            worst_decision: 'pass',
+            blocks: 0,
+            unavailable: 0,
+          },
+        },
+      ],
+    ]
+    const user = userEvent.setup()
+    renderRecords()
+    await user.click(
+      await screen.findByRole('button', { name: 'View details' })
+    )
+    expect(
+      await screen.findByRole('heading', { name: 'Prompt audit details' })
+    ).toBeVisible()
+    expect(
+      apiMock.get.mock.calls.some(([url]) =>
+        String(url).endsWith('/group-content')
+      )
+    ).toBe(false)
+  })
+
   test('keeps the header free of controls the filter bar already provides', async () => {
     renderRecords()
     await screen.findByRole('checkbox', { name: 'Select audit record' })

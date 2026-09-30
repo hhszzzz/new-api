@@ -30,6 +30,8 @@ import type {
   PromptAuditEndpointUpdate,
   PromptAuditEvent,
   PromptAuditFilters,
+  PromptAuditGroupTarget,
+  PromptAuditRequestFilters,
   PromptAuditScope,
 } from './types'
 
@@ -82,8 +84,14 @@ export function promptAuditOutcome(event: {
       return { key: 'retry', variant: 'warning' }
     case 'failed':
       // A failed request may still carry the decision reached before it failed;
-      // when it does, that verdict is the more useful reading.
-      if (event.decision) return { key: event.decision, variant: 'destructive' }
+      // when it does, that verdict is the more useful reading, and it keeps its
+      // own severity: an unreachable audit node is not a content violation.
+      if (event.decision) {
+        return {
+          key: event.decision,
+          variant: decisionOutcomeVariant(event.decision),
+        }
+      }
       return { key: 'failed', variant: 'destructive' }
     default:
       if (event.decision) {
@@ -97,8 +105,10 @@ export function promptAuditOutcome(event: {
 }
 
 function decisionOutcomeVariant(decision: string): PromptAuditOutcomeVariant {
-  if (decision === 'block' || decision === 'unavailable') return 'destructive'
-  if (decision === 'flag') return 'warning'
+  // Unavailable means the audit never reached a verdict, so it shares the
+  // warning tone with a flag rather than the red a real violation carries.
+  if (decision === 'block') return 'destructive'
+  if (decision === 'flag' || decision === 'unavailable') return 'warning'
   if (decision === 'pass') return 'secondary'
   return 'outline'
 }
@@ -260,6 +270,64 @@ export function promptAuditFilterParams(
     group_id:
       view.groupID !== undefined && view.groupID > 0 ? view.groupID : undefined,
   }
+}
+
+/** Display flags belong to the listing, never the strict group endpoints. */
+export function promptAuditGroupFilters(
+  filters: PromptAuditFilters
+): PromptAuditRequestFilters {
+  const params = promptAuditFilterParams(filters)
+  return Object.fromEntries(
+    Object.entries(params).filter(
+      ([key, value]) =>
+        key !== 'collapse_repeats' && key !== 'group_id' && value !== undefined
+    )
+  )
+}
+
+export function promptAuditGroupQueryKey(
+  target: PromptAuditGroupTarget,
+  section: string,
+  params: object
+) {
+  return [
+    'prompt-audit',
+    'group-detail',
+    target.id,
+    target.scope,
+    target.filters,
+    section,
+    params,
+  ] as const
+}
+
+/** A snapshot kind is not evidence that a human wrote its user-role blocks. */
+export function promptAuditContentKindLabel(
+  kind: string,
+  t: TFunction
+): string {
+  if (kind === 'main') return t('Main requests')
+  if (kind === 'prompt' || kind === 'step' || kind === 'subagent') {
+    return promptAuditRequestKindLabel(kind, t)
+  }
+  if (kind.startsWith('side:')) {
+    if (
+      [
+        'side:safety',
+        'side:web_search',
+        'side:web_summary',
+        'side:status',
+        'side:recap',
+        'side:summary',
+        'side:title',
+        'side:memory',
+      ].includes(kind)
+    ) {
+      return promptAuditRequestKindLabel(kind, t)
+    }
+    return t('Background request: {{kind}}', { kind: kind.slice(5) })
+  }
+  return t('Unknown request type: {{kind}}', { kind: kind || t('Unknown') })
 }
 
 const COLLAPSE_REPEATS_STORAGE_KEY = 'prompt-audit:collapse-repeats'

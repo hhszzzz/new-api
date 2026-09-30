@@ -473,9 +473,17 @@ describe('prompt audit management helpers', () => {
       key: 'failed',
       variant: 'destructive',
     })
+  })
+
+  test('keeps an unavailable audit distinct from a content violation when the request failed', () => {
+    // An unreachable audit node is a different problem from a blocked prompt;
+    // reading the verdict through the failure must not turn it red.
     expect(
       promptAuditOutcome({ status: 'failed', decision: 'unavailable' })
-    ).toEqual({ key: 'unavailable', variant: 'destructive' })
+    ).toEqual({ key: 'unavailable', variant: 'warning' })
+    expect(promptAuditOutcome({ status: 'failed', decision: 'block' })).toEqual(
+      { key: 'block', variant: 'destructive' }
+    )
   })
 
   test('never leaves a record without a reading', () => {

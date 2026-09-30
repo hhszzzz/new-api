@@ -27,6 +27,9 @@ import type {
   PromptAuditDeleteFilter,
   PromptAuditDeletePreview,
   PromptAuditEvent,
+  PromptAuditGroupContent,
+  PromptAuditGroupParams,
+  PromptAuditSessionQuestions,
   PromptAuditListData,
   PromptAuditStats,
   PromptAuditScope,
@@ -226,6 +229,31 @@ export async function listPromptAudits(
 export async function getPromptAudit(id: number) {
   const response = await api.get<ApiResponse<PromptAuditEvent>>(
     `/api/prompt-audit/events/${id}`
+  )
+  return response.data
+}
+
+export async function getPromptAuditGroupContent(
+  id: number,
+  params: PromptAuditGroupParams
+) {
+  const response = await api.get<ApiResponse<PromptAuditGroupContent>>(
+    `/api/prompt-audit/events/${id}/group-content`,
+    { params }
+  )
+  return response.data
+}
+
+export async function getPromptAuditSessionQuestions(
+  id: number,
+  params: Pick<
+    PromptAuditGroupParams,
+    'start_time' | 'end_time' | 'page' | 'page_size' | 'max_id'
+  >
+) {
+  const response = await api.get<ApiResponse<PromptAuditSessionQuestions>>(
+    `/api/prompt-audit/events/${id}/session-questions`,
+    { params }
   )
   return response.data
 }

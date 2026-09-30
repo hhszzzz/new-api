@@ -66,24 +66,45 @@ export function DetailRow(props: {
 export function CollapsibleDetailSection(props: {
   label: string
   count?: number
+  /** For content already framed by its parent; avoids nested cards. */
+  variant?: 'default' | 'plain'
+  /** A control for the section, kept beside the trigger rather than inside it. */
+  action?: ReactNode
   children: ReactNode
 }) {
   return (
     <Collapsible className='min-w-0'>
-      <CollapsibleTrigger className='group focus-visible:ring-ring/50 bg-muted/30 hover:bg-muted/50 flex w-full items-center gap-2 rounded-md border px-2.5 py-2 text-left text-xs font-semibold outline-none focus-visible:ring-3'>
-        <span className='min-w-0 flex-1'>{props.label}</span>
-        {props.count != null && (
-          <span className='text-muted-foreground bg-background/70 rounded px-1.5 py-0.5 font-mono text-[11px] leading-none tabular-nums'>
-            {props.count}
-          </span>
-        )}
-        <ChevronDown
-          className='text-muted-foreground size-3.5 shrink-0 transition-transform group-aria-expanded:rotate-180'
-          aria-hidden='true'
-        />
-      </CollapsibleTrigger>
+      <div className='flex min-w-0 items-center gap-1'>
+        <CollapsibleTrigger
+          className={cn(
+            'group focus-visible:ring-ring/50 hover:bg-muted/50 flex min-w-0 flex-1 items-center gap-2 rounded-md text-left outline-none focus-visible:ring-3',
+            props.variant === 'plain'
+              ? 'px-1 py-2.5 text-sm font-medium'
+              : 'bg-muted/30 border px-2.5 py-2 text-xs font-semibold'
+          )}
+        >
+          <span className='min-w-0 flex-1'>{props.label}</span>
+          {props.count != null && (
+            <span className='text-muted-foreground bg-background/70 rounded px-1.5 py-0.5 font-mono text-[11px] leading-none tabular-nums'>
+              {props.count}
+            </span>
+          )}
+          <ChevronDown
+            className='text-muted-foreground size-3.5 shrink-0 transition-transform group-aria-expanded:rotate-180'
+            aria-hidden='true'
+          />
+        </CollapsibleTrigger>
+        {props.action}
+      </div>
       <CollapsibleContent className='data-open:animate-accordion-down data-closed:animate-accordion-up overflow-hidden'>
-        <div className='bg-muted/20 mt-1 min-w-0 space-y-1 overflow-hidden rounded-md border p-2.5 max-sm:p-2'>
+        <div
+          className={cn(
+            'min-w-0 overflow-hidden',
+            props.variant === 'plain'
+              ? 'space-y-3 pt-1 pb-2'
+              : 'bg-muted/20 mt-1 space-y-1 rounded-md border p-2.5 max-sm:p-2'
+          )}
+        >
           {props.children}
         </div>
       </CollapsibleContent>

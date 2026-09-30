@@ -173,8 +173,56 @@ export interface PromptAuditRepeat {
    * is still pending and nothing worse was decided.
    */
   worst_decision: PromptAuditDecision
+  /** Actual actions, not verdict counts. */
   blocks: number
   unavailable: number
+  /** Mutually exclusive outcomes for the complete filtered group. */
+  outcome_counts?: Record<string, number>
+}
+
+export type PromptAuditRequestFilters = Omit<
+  PromptAuditDeleteFilter,
+  'ids' | 'group_ids'
+>
+
+export interface PromptAuditGroupTarget {
+  id: number
+  filters: PromptAuditRequestFilters
+  scope: 'filtered' | 'session'
+  /** Reuse the database-wide boundary when navigating the session index. */
+  maxID?: number
+}
+
+export interface PromptAuditGroupParams extends PromptAuditRequestFilters {
+  page: number
+  page_size: number
+  max_id?: number
+}
+
+export interface PromptAuditContentVersion {
+  id: number
+  kind: string
+  direction: string
+  count: number
+  first_at: number
+  last_at: number
+  redacted_preview: string
+}
+
+export interface PromptAuditPage<T> {
+  items: T[]
+  total: number
+  page: number
+  page_size: number
+  max_id: number
+}
+
+export interface PromptAuditGroupContent extends PromptAuditPage<PromptAuditContentVersion> {
+  summary: PromptAuditRepeat
+}
+
+export interface PromptAuditSessionQuestions extends PromptAuditPage<PromptAuditEvent> {
+  has_session: boolean
 }
 
 export interface PromptAuditEvent {

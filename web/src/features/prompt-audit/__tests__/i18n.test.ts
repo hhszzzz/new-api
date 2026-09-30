@@ -28,6 +28,12 @@ const SOURCE_FILES = [
   '../records.tsx',
   '../wordlists.tsx',
   '../scopes.ts',
+  '../lib.ts',
+  '../components/prompt-audit-group-detail-sheet.tsx',
+  '../components/prompt-audit-content-version.tsx',
+  '../components/prompt-audit-session-questions.tsx',
+  '../components/prompt-audit-outcome-counts.tsx',
+  '../components/prompt-audit-payload-view.tsx',
   '../test-failure.ts',
   '../components/scope-policies-section.tsx',
   '../components/advanced-limits-section.tsx',
@@ -115,4 +121,37 @@ describe('prompt audit translations', () => {
       )
     }
   })
+
+  // One verdict must read one word wherever it appears. The decision keys carry
+  // the verdict on a record, a filter, and a detail sheet, while the count keys
+  // carry the same verdict inside a merged row. They were authored separately,
+  // so the same "pass" could read 放行 on one screen and 通过 in a group count.
+  test.each([
+    ['pass', 'Passed'],
+    ['block', 'Blocked'],
+    ['flag', 'Flagged'],
+  ])(
+    '%s and %s name the verdict identically in every locale',
+    (decision, count) => {
+      const mismatches: string[] = []
+      for (const locale of LOCALES) {
+        const { translation } = JSON.parse(
+          fs.readFileSync(
+            path.join(process.cwd(), `src/i18n/locales/${locale}.json`),
+            'utf8'
+          )
+        ) as { translation: Record<string, string> }
+        if (
+          typeof translation[decision] !== 'string' ||
+          typeof translation[count] !== 'string' ||
+          translation[decision] !== translation[count]
+        ) {
+          mismatches.push(
+            `${locale}: ${decision}=${translation[decision]} vs ${count}=${translation[count]}`
+          )
+        }
+      }
+      expect(mismatches).toEqual([])
+    }
+  )
 })

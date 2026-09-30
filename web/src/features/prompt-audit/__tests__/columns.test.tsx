@@ -403,6 +403,82 @@ describe('prompt audit records table', () => {
     ).toBeVisible()
   })
 
+  test.each([
+    { count: 90, passes: 89 },
+    { count: 127, passes: 126 },
+  ])(
+    'shows $passes passes and one unavailable result without a group verdict',
+    ({ count, passes }) => {
+      const cell = renderCell('result', {
+        ...EVENT,
+        decision: 'unavailable',
+        repeat: {
+          ...REPEAT,
+          count,
+          blocks: 0,
+          outcome_counts: { pass: passes, unavailable: 1 },
+        },
+      })
+
+      expect(within(cell).getByText(`Passed ${passes}`)).toBeVisible()
+      const unavailable = within(cell).getByText('unavailable 1')
+      expect(unavailable).toBeVisible()
+      expect(unavailable).not.toHaveAttribute('data-variant', 'destructive')
+      expect(
+        within(cell).queryByText('unavailable', { exact: true })
+      ).not.toBeInTheDocument()
+    }
+  )
+
+  test('keeps pending counts and true block verdicts distinct from executed actions', () => {
+    const cell = renderCell('result', {
+      ...EVENT,
+      decision: 'block',
+      action: 'allow',
+      repeat: {
+        ...REPEAT,
+        count: 7,
+        blocks: 0,
+        unavailable: 0,
+        outcome_counts: {
+          block: 1,
+          flag: 1,
+          processing: 2,
+          queued: 1,
+          retry: 1,
+          unknown: 1,
+        },
+      },
+    })
+
+    expect(within(cell).getByText('Blocked 1')).toHaveAttribute(
+      'data-variant',
+      'destructive'
+    )
+    expect(within(cell).getByText('processing 2')).toBeVisible()
+    expect(within(cell).getByText('queued 1')).toBeVisible()
+    expect(within(cell).getByText('retry 1')).toBeVisible()
+    expect(within(cell).getByText('pending 1')).toBeVisible()
+    expect(within(cell).queryByText(/^Passed/)).not.toBeInTheDocument()
+  })
+
+  test('labels an entirely unavailable group without implying content violations', () => {
+    const cell = renderCell('result', {
+      ...EVENT,
+      repeat: { ...REPEAT, outcome_counts: { unavailable: 3 } },
+    })
+    expect(within(cell).getByText('unavailable 3')).toBeVisible()
+    expect(within(cell).queryByText('All unavailable')).not.toBeInTheDocument()
+  })
+
+  test('never invents successful outcomes when an older response omits counts', () => {
+    const cell = renderCell('result', { ...EVENT, repeat: REPEAT })
+    expect(within(cell).getByText('Outcome counts unavailable')).toBeVisible()
+    expect(within(cell).getByText('Block actions 1')).toBeVisible()
+    expect(within(cell).getByText('Unavailable actions 1')).toBeVisible()
+    expect(within(cell).queryByText(/^Passed/)).not.toBeInTheDocument()
+  })
+
   test('shows no count on a request that stands alone', () => {
     const cell = renderCell('result')
 

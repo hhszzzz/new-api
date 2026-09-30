@@ -218,7 +218,98 @@ describe('prompt audit management components', () => {
     ).not.toBeInTheDocument()
   })
 
+  test('keeps the full-prompt copy beside its header instead of on its own row', async () => {
+    const user = userEvent.setup()
+    renderWithQueryClient(
+      <PromptAuditDetailSheet
+        eventID={EVENT.id}
+        canViewFullPrompt
+        canManage={false}
+        canDelete={false}
+        onOpenChange={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    )
+
+    const fullPrompt = await screen.findByRole('button', {
+      name: 'Full prompt',
+    })
+    const copy = screen.getByRole('button', { name: 'Copy · Full prompt' })
+    expect(fullPrompt.parentElement).toContainElement(copy)
+    await user.click(copy)
+    expect(await navigator.clipboard.readText()).toBe('raw-secret-prompt')
+    // Copying reads the header control, so it must not also open the section.
+    expect(fullPrompt).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByText('raw-secret-prompt')).not.toBeInTheDocument()
+  })
+
+  test.each([
+    {
+      inspection: undefined,
+      shown: 'Audit model',
+      hidden: 'Inspection method',
+    },
+    {
+      inspection: 'wordlist',
+      shown: 'Inspection method',
+      hidden: 'Audit model',
+    },
+  ])(
+    'names the detector once in the result, not as a header badge ($inspection)',
+    async ({ inspection, shown, hidden }) => {
+      getPromptAuditMock.mockResolvedValue({
+        success: true,
+        data: { ...EVENT, inspection_type: inspection },
+      })
+      renderWithQueryClient(
+        <PromptAuditDetailSheet
+          eventID={EVENT.id}
+          canViewFullPrompt={false}
+          canManage={false}
+          canDelete={false}
+          onOpenChange={vi.fn()}
+          onDelete={vi.fn()}
+        />
+      )
+
+      const result = await screen.findByRole('region', { name: 'Result' })
+      expect(within(result).getByText(shown)).toBeVisible()
+      expect(within(result).queryByText(hidden)).not.toBeInTheDocument()
+      expect(screen.queryByText('Model audit')).not.toBeInTheDocument()
+    }
+  )
+
+  test('keeps the record and request ids in the technical details, not the title', async () => {
+    const user = userEvent.setup()
+    renderWithQueryClient(
+      <PromptAuditDetailSheet
+        eventID={EVENT.id}
+        canViewFullPrompt={false}
+        canManage={false}
+        canDelete={false}
+        onOpenChange={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    )
+
+    await screen.findByText('Text source')
+    // The title says what the record is, not which row it is.
+    expect(screen.queryByText(`#${EVENT.id}`)).not.toBeInTheDocument()
+    expect(screen.queryByText('Record ID')).not.toBeInTheDocument()
+    expect(screen.queryByText('Request ID')).not.toBeInTheDocument()
+    const result = screen.getByRole('region', { name: 'Result' })
+    expect(within(result).queryByText('Endpoint')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Technical details' }))
+    expect(await screen.findByText('Record ID')).toBeVisible()
+    expect(screen.getByText(String(EVENT.id))).toBeVisible()
+    expect(screen.getByText('Request ID')).toBeVisible()
+    expect(screen.getByText(EVENT.request_id)).toBeVisible()
+    expect(screen.getByText('Endpoint')).toBeVisible()
+  })
+
   test('names the protocol in the interface language', async () => {
+    const user = userEvent.setup()
     translations['Async Task'] = 'Tâche asynchrone'
     getPromptAuditMock.mockResolvedValue({
       success: true,
@@ -236,6 +327,9 @@ describe('prompt audit management components', () => {
       />
     )
 
+    await user.click(
+      await screen.findByRole('button', { name: 'Technical details' })
+    )
     expect(await screen.findByText('Tâche asynchrone')).toBeVisible()
   })
 
@@ -264,6 +358,8 @@ describe('prompt audit management components', () => {
       />
     )
     expect(await screen.findByText('Extracted user question')).toBeVisible()
+    // Prompt text is read as content, in the fixed-width face.
+    expect(screen.getByText('Extracted user question')).toHaveClass('font-mono')
     expect(
       screen.queryByText('Long skill body '.repeat(80).trim())
     ).not.toBeInTheDocument()
@@ -412,6 +508,7 @@ describe('prompt audit management components', () => {
     // the row it sits in scrolls sideways rather than growing taller.
     const tablist = await screen.findByRole('tablist')
     expect(tablist.className).toContain('min-w-max')
+    expect(tablist).toHaveAttribute('data-variant', 'default')
     expect(tablist.parentElement?.className).toContain('overflow-x-auto')
   })
 
@@ -666,5 +763,249 @@ describe('prompt audit management components', () => {
 
     expect(await screen.findByText('Text source')).toBeVisible()
     expect(screen.queryByText('Audit model scores')).not.toBeInTheDocument()
+  })
+
+  test('frames the caller as one card instead of repeating identity rows', async () => {
+    renderWithQueryClient(
+      <PromptAuditDetailSheet
+        eventID={EVENT.id}
+        canViewFullPrompt={false}
+        canManage={false}
+        canDelete={false}
+        onOpenChange={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    )
+
+    await screen.findByText('Text source')
+    const caller = screen.getByRole('region', { name: 'Caller' })
+    expect(caller).toHaveClass('border', 'bg-background')
+    expect(
+      within(caller).getByRole('heading', { name: 'Caller' })
+    ).toBeVisible()
+    expect(within(caller).getByText('audit-user')).toBeVisible()
+    expect(within(caller).getByText('production')).toBeVisible()
+    expect(within(caller).getByText(String(EVENT.user_id))).toBeVisible()
+    expect(within(caller).getByText('default')).toBeVisible()
+    // The identity labels appear exactly once, inside the framed card.
+    expect(screen.getAllByText('Username')).toHaveLength(1)
+    expect(screen.getAllByText('User ID')).toHaveLength(1)
+    expect(screen.getAllByText('Token')).toHaveLength(1)
+    expect(screen.getAllByText('Group')).toHaveLength(1)
+    expect(screen.queryByText('Request ID')).not.toBeInTheDocument()
+  })
+
+  test('carries the creation time in the header and the requested model in the context', async () => {
+    renderWithQueryClient(
+      <PromptAuditDetailSheet
+        eventID={EVENT.id}
+        canViewFullPrompt={false}
+        canManage={false}
+        canDelete={false}
+        onOpenChange={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    )
+
+    await screen.findByText('Text source')
+    const meta = screen.getByText(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/)
+    expect(meta).not.toHaveTextContent('gpt-test')
+    // The requested model is named once, with the other request context.
+    const context = screen.getByRole('region', { name: 'Context' })
+    expect(within(context).getByText('Model')).toBeVisible()
+    expect(within(context).getByText('gpt-test')).toBeVisible()
+    expect(screen.queryByText('Created at')).not.toBeInTheDocument()
+  })
+
+  test('keeps the context to the request and the mechanics in the technical details', async () => {
+    renderWithQueryClient(
+      <PromptAuditDetailSheet
+        eventID={EVENT.id}
+        canViewFullPrompt={false}
+        canManage={false}
+        canDelete={false}
+        onOpenChange={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    )
+
+    await screen.findByText('Text source')
+    const context = screen.getByRole('region', { name: 'Context' })
+    expect(within(context).getByText('Model')).toBeVisible()
+    expect(within(context).getByText('Audit stage')).toBeVisible()
+    // What travelled over the wire and what happened to the block are mechanics,
+    // not context, so they stay collapsed with the rest of them.
+    expect(within(context).queryByText('Protocol')).not.toBeInTheDocument()
+    expect(
+      within(context).queryByText('Delivery status')
+    ).not.toBeInTheDocument()
+  })
+
+  test.each([
+    { coverage: true, expected: 'hidden' },
+    { coverage: false, expected: 'shown' },
+  ])(
+    'shows the coverage caveat only for a partial scan ($expected)',
+    async ({ coverage }) => {
+      getPromptAuditMock.mockResolvedValue({
+        success: true,
+        data: { ...EVENT, coverage_complete: coverage },
+      })
+      renderWithQueryClient(
+        <PromptAuditDetailSheet
+          eventID={EVENT.id}
+          canViewFullPrompt={false}
+          canManage={false}
+          canDelete={false}
+          onOpenChange={vi.fn()}
+          onDelete={vi.fn()}
+        />
+      )
+
+      const result = await screen.findByRole('region', { name: 'Result' })
+      // A complete scan says nothing beyond "the audit ran", so it is not a row.
+      if (coverage) {
+        expect(within(result).queryByText('Coverage')).not.toBeInTheDocument()
+        expect(within(result).queryByText('Complete')).not.toBeInTheDocument()
+      } else {
+        expect(within(result).getByText('Coverage')).toBeVisible()
+        expect(within(result).getByText('Incomplete')).toBeVisible()
+      }
+    }
+  )
+
+  test('omits empty result fields and a suggestion identical to the actual action', async () => {
+    getPromptAuditMock.mockResolvedValue({
+      success: true,
+      data: {
+        ...EVENT,
+        action: 'unavailable',
+        would_action: 'unavailable',
+        safety: '',
+        refusal: '',
+      },
+    })
+    renderWithQueryClient(
+      <PromptAuditDetailSheet
+        eventID={EVENT.id}
+        canViewFullPrompt
+        canManage={false}
+        canDelete={false}
+        onOpenChange={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    )
+    const result = await screen.findByRole('region', { name: 'Result' })
+    expect(within(result).getByText('Actual action')).toBeVisible()
+    for (const label of [
+      'Suggested action',
+      'Safety',
+      'Refusal',
+      'No categories',
+    ]) {
+      expect(within(result).queryByText(label)).not.toBeInTheDocument()
+    }
+  })
+
+  test('copies the complete request id from the technical details', async () => {
+    const user = userEvent.setup()
+    const requestID = 'request-with-long-identifier-'.repeat(10)
+    getPromptAuditMock.mockResolvedValue({
+      success: true,
+      data: { ...EVENT, request_id: requestID },
+    })
+    renderWithQueryClient(
+      <PromptAuditDetailSheet
+        eventID={EVENT.id}
+        canViewFullPrompt
+        canManage={false}
+        canDelete={false}
+        onOpenChange={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    )
+    await user.click(
+      await screen.findByRole('button', { name: 'Technical details' })
+    )
+    expect(await screen.findByText(requestID)).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'Copy · Request ID' }))
+    expect(await navigator.clipboard.readText()).toBe(requestID)
+    // The record id is the other identifier the operator copies out of here.
+    await user.click(screen.getByRole('button', { name: 'Copy · Record ID' }))
+    expect(await navigator.clipboard.readText()).toBe(String(EVENT.id))
+  })
+
+  test('reads the outcome before the evidence and the context', async () => {
+    renderWithQueryClient(
+      <PromptAuditDetailSheet
+        eventID={EVENT.id}
+        canViewFullPrompt
+        canManage={false}
+        canDelete={false}
+        onOpenChange={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    )
+
+    await screen.findByText('Text source')
+    const result = screen.getByRole('region', { name: 'Result' })
+    const inspected = screen.getByRole('region', { name: 'Inspected content' })
+    const context = screen.getByRole('region', { name: 'Context' })
+    expect(
+      result.compareDocumentPosition(inspected) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    expect(
+      inspected.compareDocumentPosition(context) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    expect(
+      within(result).getByRole('heading', { name: 'Result' })
+    ).toBeVisible()
+  })
+
+  test('keeps the client and technical sections collapsed until asked', async () => {
+    const user = userEvent.setup()
+    renderWithQueryClient(
+      <PromptAuditDetailSheet
+        eventID={EVENT.id}
+        canViewFullPrompt={false}
+        canManage={false}
+        canDelete={false}
+        onOpenChange={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    )
+
+    await screen.findByText('Text source')
+    const client = screen.getByRole('button', { name: 'Client' })
+    const technical = screen.getByRole('button', { name: 'Technical details' })
+    expect(client).toHaveAttribute('aria-expanded', 'false')
+    expect(technical).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByText('192.0.2.1')).not.toBeInTheDocument()
+    await user.click(client)
+    expect(await screen.findByText('192.0.2.1')).toBeVisible()
+    expect(client).toHaveAttribute('aria-expanded', 'true')
+  })
+
+  test('offers a retry when the record fails to load', async () => {
+    const user = userEvent.setup()
+    getPromptAuditMock.mockRejectedValue(new Error('network down'))
+    renderWithQueryClient(
+      <PromptAuditDetailSheet
+        eventID={EVENT.id}
+        canViewFullPrompt={false}
+        canManage={false}
+        canDelete={false}
+        onOpenChange={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    )
+
+    const retry = await screen.findByRole('button', { name: 'Retry' })
+    expect(screen.getByText('network down')).toBeVisible()
+    getPromptAuditMock.mockResolvedValue({ success: true, data: EVENT })
+    await user.click(retry)
+    expect(await screen.findByText('Text source')).toBeVisible()
   })
 })
