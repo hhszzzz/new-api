@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { ConfirmDialog } from '@/components/confirm-dialog'
@@ -26,6 +26,8 @@ import { ErrorState } from '@/components/error-state'
 import { LoadingState } from '@/components/loading-state'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Label } from '@/components/ui/label'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { toIntlLocale } from '@/i18n/languages'
 import { formatNumber } from '@/lib/format'
@@ -72,9 +74,11 @@ export function UpstreamUpdateDialog(props: UpstreamUpdateDialogProps) {
 
 function UpstreamUpdateSession(props: UpstreamUpdateDialogProps) {
   const { t } = useTranslation()
+  const ignoreUnselectedId = useId()
   const [activeTab, setActiveTab] = useState(props.upstream.preferredTab)
   const [selectedAdd, setSelectedAdd] = useState(props.upstream.addModels)
   const [selectedRemove, setSelectedRemove] = useState<string[]>([])
+  const [ignoreUnselectedAdd, setIgnoreUnselectedAdd] = useState(true)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const result = props.upstream.result
   const hasChanges =
@@ -87,6 +91,15 @@ function UpstreamUpdateSession(props: UpstreamUpdateDialogProps) {
     added: selectedAdd.length,
     removed: selectedRemove.length,
   })
+  const selectedAddSet = new Set(selectedAdd)
+  const unselectedAddModels = props.upstream.addModels.filter(
+    (model) => !selectedAddSet.has(model)
+  )
+  const ignoredAddModels = ignoreUnselectedAdd ? unselectedAddModels : []
+  const canApply =
+    selectedAdd.length > 0 ||
+    selectedRemove.length > 0 ||
+    ignoredAddModels.length > 0
 
   return (
     <>
@@ -128,7 +141,7 @@ function UpstreamUpdateSession(props: UpstreamUpdateDialogProps) {
                   disabled={
                     props.upstream.applyLoading ||
                     !!props.upstream.applyError ||
-                    (!selectedAdd.length && !selectedRemove.length)
+                    !canApply
                   }
                 >
                   {t('Review selected changes')}
@@ -160,7 +173,7 @@ function UpstreamUpdateSession(props: UpstreamUpdateDialogProps) {
               <AlertTitle>{t('Update completed')}</AlertTitle>
               <AlertDescription>
                 {t(
-                  'The server returned the following result. Unselected models remain pending.'
+                  'The server returned the following result. Unselected models stay pending unless the ignore option was used.'
                 )}
               </AlertDescription>
             </Alert>
@@ -168,6 +181,12 @@ function UpstreamUpdateSession(props: UpstreamUpdateDialogProps) {
               title={t('Added models')}
               models={result.addedModels}
             />
+            {result.ignoredModels.length > 0 && (
+              <ModelChangeList
+                title={t('Ignored models')}
+                models={result.ignoredModels}
+              />
+            )}
             <ModelChangeList
               title={t('Removed models')}
               models={result.removedModels}
@@ -187,7 +206,7 @@ function UpstreamUpdateSession(props: UpstreamUpdateDialogProps) {
             <Alert>
               <AlertDescription>
                 {t(
-                  'Review the model changes before applying. Unselected models stay unchanged and will not be ignored.'
+                  'Review the model changes before applying. Unselected models stay unchanged.'
                 )}
               </AlertDescription>
             </Alert>
@@ -210,6 +229,33 @@ function UpstreamUpdateSession(props: UpstreamUpdateDialogProps) {
               <p className='text-sm font-medium' aria-live='polite'>
                 {summary}
               </p>
+            )}
+            {props.upstream.addModels.length > 0 && (
+              <div className='flex items-start gap-2'>
+                <Checkbox
+                  id={ignoreUnselectedId}
+                  className='mt-0.5 shrink-0'
+                  checked={ignoreUnselectedAdd}
+                  disabled={props.upstream.applyLoading}
+                  onCheckedChange={(checked) =>
+                    !props.upstream.applyLoading &&
+                    setIgnoreUnselectedAdd(checked === true)
+                  }
+                />
+                <div className='min-w-0 space-y-1'>
+                  <Label
+                    htmlFor={ignoreUnselectedId}
+                    className='cursor-pointer text-sm font-normal'
+                  >
+                    {t('Also ignore the unselected new models')}
+                  </Label>
+                  <p className='text-muted-foreground text-xs'>
+                    {t(
+                      'Unselected new models are added to the ignored list of this channel and are not reported again.'
+                    )}
+                  </p>
+                </div>
+              </div>
             )}
             {hasChanges ? (
               <Tabs
@@ -298,11 +344,18 @@ function UpstreamUpdateSession(props: UpstreamUpdateDialogProps) {
           await props.upstream.applyUpdates({
             addModels: selectedAdd,
             removeModels: selectedRemove,
+            ignoreUnselectedAdd,
           })
           setConfirmOpen(false)
         }}
       >
         <ModelChangeList title={t('Add Models')} models={selectedAdd} />
+        {ignoredAddModels.length > 0 && (
+          <ModelChangeList
+            title={t('Ignored models')}
+            models={ignoredAddModels}
+          />
+        )}
         <ModelChangeList title={t('Remove Models')} models={selectedRemove} />
       </ConfirmDialog>
     </>

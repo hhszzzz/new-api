@@ -38,6 +38,7 @@ type UpstreamUpdateChannel = { id: number; name?: string }
 
 type UpstreamUpdateResult = {
   addedModels: string[]
+  ignoredModels: string[]
   removedModels: string[]
   remainingModels: string[]
   remainingRemoveModels: string[]
@@ -115,9 +116,12 @@ export function useChannelUpstreamUpdates(refresh: () => Promise<void>) {
     async ({
       addModels: selectedAdd = [],
       removeModels: selectedRemove = [],
+      ignoreUnselectedAdd = false,
     }: {
       addModels?: string[]
       removeModels?: string[]
+      /** Adds every unselected addition candidate to the channel ignore list. */
+      ignoreUnselectedAdd?: boolean
     } = {}) => {
       if (
         applyRef.current ||
@@ -135,13 +139,26 @@ export function useChannelUpstreamUpdates(refresh: () => Promise<void>) {
       const normSelectedRemove = normalizeModelList(selectedRemove).filter(
         (model) => removeModels.includes(model)
       )
-      if (!normSelectedAdd.length && !normSelectedRemove.length) return
+      const selectedAddSet = new Set(normSelectedAdd)
+      const normIgnoredAdd = ignoreUnselectedAdd
+        ? normalizeModelList(addModels).filter(
+            (model) => !selectedAddSet.has(model)
+          )
+        : []
+      if (
+        !normSelectedAdd.length &&
+        !normSelectedRemove.length &&
+        !normIgnoredAdd.length
+      ) {
+        return
+      }
       applyRef.current = true
       setApplyLoading(true)
       try {
         const res = await api.post<
           UpstreamUpdateResponse<{
             added_models: string[] | null
+            ignored_models: string[] | null
             removed_models: string[] | null
             remaining_models: string[] | null
             remaining_remove_models: string[] | null
@@ -151,7 +168,7 @@ export function useChannelUpstreamUpdates(refresh: () => Promise<void>) {
           {
             id: channel.id,
             add_models: normSelectedAdd,
-            ignore_models: [],
+            ignore_models: normIgnoredAdd,
             remove_models: normSelectedRemove,
           },
           upstreamUpdateRequestConfig
@@ -162,6 +179,7 @@ export function useChannelUpstreamUpdates(refresh: () => Promise<void>) {
         const data = res.data.data
         setResult({
           addedModels: normalizeModelList(data.added_models ?? []),
+          ignoredModels: normalizeModelList(data.ignored_models ?? []),
           removedModels: normalizeModelList(data.removed_models ?? []),
           remainingModels: normalizeModelList(data.remaining_models ?? []),
           remainingRemoveModels: normalizeModelList(

@@ -142,7 +142,7 @@ describe('upstream update preview', () => {
     ).not.toBeChecked()
   })
 
-  test('review lists the selected changes and applies only after confirmation without ignoring unchecked models', async () => {
+  test('turning the ignore option off keeps the unselected additions pending', async () => {
     const post = vi
       .spyOn(api, 'post')
       .mockResolvedValueOnce(detectionResponse)
@@ -150,7 +150,12 @@ describe('upstream update preview', () => {
     const user = userEvent.setup()
     render(<UpstreamUpdateHarness />)
     await user.click(screen.getByRole('button', { name: 'Detect' }))
-    await user.click(await screen.findByRole('checkbox', { name: 'gpt-extra' }))
+    const ignoreOption = await screen.findByRole('checkbox', {
+      name: 'Also ignore the unselected new models',
+    })
+    await user.click(ignoreOption)
+    expect(ignoreOption).not.toBeChecked()
+    await user.click(screen.getByRole('checkbox', { name: 'gpt-extra' }))
     await user.click(screen.getByRole('tab', { name: 'Remove Models (1)' }))
     const removal = screen.getByRole('checkbox', { name: 'gpt-old' })
     expect(removal).not.toBeChecked()
@@ -205,6 +210,107 @@ describe('upstream update preview', () => {
     await waitFor(() => {
       expect(results.contains(document.activeElement)).toBe(true)
     })
+  })
+
+  test('the ignore option is on by default and ignores the unselected additions', async () => {
+    const post = vi
+      .spyOn(api, 'post')
+      .mockResolvedValueOnce(detectionResponse)
+      .mockResolvedValueOnce({
+        data: {
+          success: true,
+          data: {
+            added_models: ['gpt-new'],
+            ignored_models: ['gpt-extra'],
+            removed_models: [],
+            remaining_models: [],
+            remaining_remove_models: [],
+          },
+        },
+      })
+    const user = userEvent.setup()
+    render(<UpstreamUpdateHarness />)
+    await user.click(screen.getByRole('button', { name: 'Detect' }))
+    const ignoreOption = await screen.findByRole('checkbox', {
+      name: 'Also ignore the unselected new models',
+    })
+    expect(ignoreOption).toBeChecked()
+    await user.click(screen.getByRole('checkbox', { name: 'gpt-extra' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Review selected changes' })
+    )
+    const confirmation = screen.getByRole('alertdialog')
+    expect(
+      within(
+        within(confirmation).getByRole('region', { name: 'Ignored models' })
+      ).getByText('gpt-extra')
+    ).toBeVisible()
+    await user.click(
+      within(confirmation).getByRole('button', {
+        name: 'Apply selected changes',
+      })
+    )
+    expect(post).toHaveBeenLastCalledWith(
+      '/api/channel/upstream_updates/apply',
+      {
+        id: 42,
+        add_models: ['gpt-new'],
+        ignore_models: ['gpt-extra'],
+        remove_models: [],
+      },
+      expect.anything()
+    )
+    const results = await screen.findByRole('dialog', {
+      name: 'Update results',
+    })
+    expect(
+      within(
+        within(results).getByRole('region', { name: 'Ignored models' })
+      ).getByText('gpt-extra')
+    ).toBeVisible()
+  })
+
+  test('unchecking every addition still applies while the ignore option is on', async () => {
+    const post = vi
+      .spyOn(api, 'post')
+      .mockResolvedValueOnce(detectionResponse)
+      .mockResolvedValueOnce({
+        data: {
+          success: true,
+          data: {
+            added_models: [],
+            ignored_models: ['gpt-new', 'gpt-extra'],
+            removed_models: [],
+            remaining_models: [],
+            remaining_remove_models: [],
+          },
+        },
+      })
+    const user = userEvent.setup()
+    render(<UpstreamUpdateHarness />)
+    await user.click(screen.getByRole('button', { name: 'Detect' }))
+    const review = await screen.findByRole('button', {
+      name: 'Review selected changes',
+    })
+    await user.click(screen.getByRole('checkbox', { name: 'gpt-new' }))
+    await user.click(screen.getByRole('checkbox', { name: 'gpt-extra' }))
+    expect(review).toBeEnabled()
+    await user.click(review)
+    await user.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', {
+        name: 'Apply selected changes',
+      })
+    )
+    expect(post).toHaveBeenLastCalledWith(
+      '/api/channel/upstream_updates/apply',
+      {
+        id: 42,
+        add_models: [],
+        ignore_models: ['gpt-new', 'gpt-extra'],
+        remove_models: [],
+      },
+      expect.anything()
+    )
   })
 
   test('cancelling the final confirmation returns to the same selection without saving', async () => {
