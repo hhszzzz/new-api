@@ -49,21 +49,88 @@ func classifyPromptAuditText(text, role string) PromptAuditScope {
 	return base
 }
 
-// HumanPrompt returns the text of the most recent user turn without its
-// separately classified context and skill blocks.
+// HumanPrompt returns the latest human question without client automation. This
+// grouping view deliberately does not change the inspection turn boundaries.
 func HumanPrompt(snapshot PromptAuditSnapshot) string {
-	segments := snapshot.OrderedSegments()
-	start := latestUserSegmentStart(segments)
-	if start < 0 {
-		return ""
+	completePromptAuditGrouping(&snapshot)
+	return snapshot.HumanPrompt
+}
+
+func promptAuditSyntheticKind(text string) string {
+	if strings.HasPrefix(text, "This session is being continued from a previous conversation that ran out of context.") {
+		return "continuation"
 	}
-	var texts []string
-	for _, segment := range segments[start:] {
-		if isPromptAuditHumanTurn(segment) {
-			texts = append(texts, segment.Text)
+	if strings.HasPrefix(text, "Current state: ") && strings.Contains(text, "\nTool calls so far:") {
+		return "side:status"
+	}
+	for _, marker := range []struct{ prefix, kind string }{
+		{"<transcript>", "safety"}, {"Perform a web search for", "web_search"},
+		{"Web page content:", "web_summary"}, {"Describe your most recent action", "status"},
+		{"The user stepped away", "recap"}, {"CRITICAL: Respond with TEXT ONLY", "summary"},
+		{"Please write a 5-10 word title for the following conversation", "title"},
+		{"Generate a short title for this conversation", "title"},
+	} {
+		if strings.HasPrefix(text, marker.prefix) {
+			return "side:" + marker.kind
 		}
 	}
-	return strings.Join(texts, "\n")
+	return ""
+}
+
+func completePromptAuditGrouping(snapshot *PromptAuditSnapshot) {
+	mainKind := snapshot.RequestKind
+	if mainKind != "step" {
+		mainKind = "prompt"
+	}
+	kind := mainKind
+	var origin, predecessor PromptAuditOrigin
+	newTurn := true
+	for _, segment := range snapshot.OrderedSegments() {
+		if !isPromptAuditHumanTurn(segment) {
+			if isAssistantOutputSegment(segment) || isPromptAuditToolSegment(segment) {
+				newTurn = true
+			}
+			continue
+		}
+		texts := segment.GroupingTexts
+		if len(texts) == 0 {
+			texts = []string{segment.Text}
+		}
+		for _, text := range texts {
+			text = strings.TrimSpace(text)
+			if text == "" {
+				continue
+			}
+			synthetic := promptAuditSyntheticKind(text)
+			if synthetic != "" {
+				kind, newTurn = synthetic, true
+				if synthetic == "continuation" {
+					digest := sha256.Sum256([]byte(text))
+					predecessor, origin = origin, PromptAuditOrigin{Continuation: hex.EncodeToString(digest[:])}
+				}
+				continue
+			}
+			if newTurn {
+				predecessor, origin = origin, PromptAuditOrigin{Prompt: text}
+			} else {
+				origin.Prompt += "\n" + text
+			}
+			kind, newTurn = mainKind, false
+		}
+	}
+	snapshot.RequestKind, snapshot.GroupOrigin, snapshot.GroupPredecessor = kind, origin, predecessor
+	snapshot.HumanPrompt, snapshot.SummaryKey = "", ""
+	if kind == "prompt" || kind == "step" {
+		snapshot.HumanPrompt = origin.Prompt
+	}
+	if kind == "side:summary" {
+		// The original snapshot distinguishes summary attempts and deduplicates
+		// retries without retaining conversation text in the session cache.
+		if data, err := kitutil.Marshal(snapshot.Segments); err == nil {
+			digest := sha256.Sum256(data)
+			snapshot.SummaryKey = hex.EncodeToString(digest[:])
+		}
+	}
 }
 
 func completePromptAuditSnapshot(snapshot PromptAuditSnapshot, tools any, session string) PromptAuditSnapshot {
@@ -102,7 +169,6 @@ func completePromptAuditSnapshot(snapshot PromptAuditSnapshot, tools any, sessio
 			segment.Scope = PromptScopeMCP
 		}
 	}
-	snapshot.HumanPrompt = HumanPrompt(snapshot)
 	snapshot.RequestKind = "prompt"
 	for index := len(snapshot.Segments) - 1; index >= 0; index-- {
 		segment := snapshot.Segments[index]
@@ -114,19 +180,7 @@ func completePromptAuditSnapshot(snapshot PromptAuditSnapshot, tools any, sessio
 			break
 		}
 	}
-	for _, marker := range []struct{ prefix, kind string }{
-		{"<transcript>", "safety"}, {"Perform a web search for", "web_search"},
-		{"Web page content:", "web_summary"}, {"Describe your most recent action", "status"},
-		{"The user stepped away", "recap"}, {"CRITICAL: Respond with TEXT ONLY", "summary"},
-		{"Please write a 5-10 word title for the following conversation", "title"},
-		{"Generate a short title for this conversation", "title"},
-	} {
-		if strings.HasPrefix(snapshot.HumanPrompt, marker.prefix) {
-			snapshot.RequestKind = "side:" + marker.kind
-			snapshot.HumanPrompt = ""
-			break
-		}
-	}
+	completePromptAuditGrouping(&snapshot)
 	for _, segment := range snapshot.Segments {
 		if segment.SourceScope() == PromptScopeSystem && (strings.Contains(segment.Text, "You are a subagent") || strings.Contains(segment.Text, "You are an agent for Claude Code")) {
 			snapshot.RequestKind = "subagent"

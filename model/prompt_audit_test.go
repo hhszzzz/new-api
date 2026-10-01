@@ -482,6 +482,80 @@ func runPromptAuditQuestionReading(t *testing.T, db *gorm.DB) {
 	require.NotNil(t, hidden.Items)
 	require.NotNil(t, hidden.Summary.OutcomeCounts)
 	assert.Zero(t, hidden.Summary.Count)
+
+	t.Run("continuation_representatives_and_content", func(t *testing.T) {
+		var groups [][]PromptAudit
+		var representatives []int64
+		for i, seed := range []struct {
+			kinds          []string
+			representative int
+		}{
+			{[]string{"side:summary", "continuation", "continuation:unresolved", "step", "prompt"}, 3},
+			{[]string{"side:summary", "continuation", "prompt"}, 2},
+			{[]string{"side:summary", "continuation", "continuation:unresolved"}, 1},
+			{[]string{"side:summary", "continuation:unresolved", "continuation"}, 1},
+			{[]string{"side:summary", "subagent"}, 0},
+		} {
+			var rows []PromptAudit
+			for j, kind := range seed.kinds {
+				rows = append(rows, create(PromptAudit{
+					UserID: 1, Username: "continuation-reading", SessionKey: "continuation-reading",
+					GroupKey: fmt.Sprintf("continuation-question-%d", i), PromptHash: "same-text",
+					RequestKind: kind, Direction: "input", Status: PromptAuditStatusDone, Decision: "pass",
+					CreatedAt: int64(2000 + i*10 + j), RedactedPreview: kind,
+				}))
+			}
+			groups = append(groups, rows)
+			representatives = append(representatives, rows[seed.representative].ID)
+		}
+		filter := PromptAuditFilter{Username: "continuation-reading"}
+		collapsed, total, err := ListPromptAuditRepeats(filter, 1, 20)
+		require.NoError(t, err)
+		assert.EqualValues(t, len(groups), total)
+		require.Len(t, collapsed, len(groups))
+		session, err := ListPromptAuditSessionQuestions(groups[0][0].ID, 0, 0, PromptAuditReadOptions{})
+		require.NoError(t, err)
+		assert.EqualValues(t, len(groups), session.Total)
+		require.Len(t, session.Items, len(groups))
+		for i, rows := range groups {
+			// Representatives change, not newest-first listing or chronological session order.
+			assert.Equal(t, representatives[i], collapsed[len(groups)-1-i].Audit.ID)
+			assert.Equal(t, representatives[i], session.Items[i].ID)
+			assert.EqualValues(t, len(rows), collapsed[len(groups)-1-i].Repeat.Count)
+			assert.EqualValues(t, len(rows), session.Items[i].Repeat.Count)
+			assert.Equal(t, rows[0].CreatedAt, session.Items[i].Repeat.FirstAt)
+		}
+
+		// Identical text does not merge synthesized continuations with human main
+		// requests or with each other; source drill-down retains that distinction.
+		rows := groups[0]
+		content, err := ListPromptAuditGroupContent(filter, rows[0].ID, PromptAuditReadOptions{})
+		require.NoError(t, err)
+		assert.EqualValues(t, 4, content.Total)
+		assert.EqualValues(t, 5, content.Summary.Count)
+		require.Len(t, content.Items, 4)
+		for i, expected := range []struct {
+			kind string
+			ids  []int64
+		}{
+			{"side:summary", []int64{rows[0].ID}},
+			{"continuation", []int64{rows[1].ID}},
+			{"continuation:unresolved", []int64{rows[2].ID}},
+			{"main", []int64{rows[3].ID, rows[4].ID}},
+		} {
+			version := content.Items[i]
+			assert.Equal(t, expected.kind, version.Kind)
+			assert.EqualValues(t, len(expected.ids), version.Count)
+			sources, err := ListPromptAuditGroupRecords(filter, rows[0].ID, version.ID, PromptAuditReadOptions{})
+			require.NoError(t, err)
+			assert.EqualValues(t, len(expected.ids), sources.Total)
+			var sourceIDs []int64
+			for _, source := range sources.Items {
+				sourceIDs = append(sourceIDs, source.ID)
+			}
+			assert.Equal(t, expected.ids, sourceIDs)
+		}
+	})
 }
 
 func TestPromptAuditExpiredLeaseNeverExceedsAttemptCap(t *testing.T) {

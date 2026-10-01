@@ -132,11 +132,12 @@ type PromptAuditRequest struct {
 	RawFullText        string
 	// WordlistOnly holds a request that generates nothing to the local wordlist
 	// gate alone; see InspectPrompt.
-	WordlistOnly bool
-	RequestKind  string
-	SessionKey   string
-	HumanPrompt  string
-	GroupKey     string
+	WordlistOnly  bool
+	RequestKind   string
+	SessionKey    string
+	HumanPrompt   string
+	GroupKey      string
+	groupPrepared bool
 }
 
 type promptAuditPayload struct {

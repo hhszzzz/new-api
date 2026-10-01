@@ -36,7 +36,7 @@ import { formatNumber, formatTimestampToDate } from '@/lib/format'
 import { createServerError } from '@/lib/server-error-message'
 
 import { getPromptAuditGroupContent } from '../api'
-import { promptAuditGroupQueryKey } from '../lib'
+import { isPromptAuditContinuation, promptAuditGroupQueryKey } from '../lib'
 import type { PromptAuditGroupTarget } from '../types'
 import { PromptAuditContentVersionView } from './prompt-audit-content-version'
 import { PromptAuditGroupPagination } from './prompt-audit-group-pagination'
@@ -123,8 +123,14 @@ function PromptAuditGroupReader(
   }
   const bound = maxID ?? query.data.max_id
   const versions = query.data.items
-  const main = versions.filter((version) => version.kind === 'main')
-  const branches = versions.filter((version) => version.kind !== 'main')
+  const execution = versions.filter(
+    (version) =>
+      version.kind === 'main' || isPromptAuditContinuation(version.kind)
+  )
+  const branches = versions.filter(
+    (version) =>
+      version.kind !== 'main' && !isPromptAuditContinuation(version.kind)
+  )
   const summary = query.data.summary
   const firstAt = formatTimestampToDate(summary.first_at)
   const lastAt = formatTimestampToDate(summary.last_at)
@@ -192,7 +198,7 @@ function PromptAuditGroupReader(
               ) : (
                 <>
                   <div className='flex min-w-0 flex-col gap-4'>
-                    {main.map((version) => (
+                    {execution.map((version) => (
                       <PromptAuditContentVersionView
                         key={version.id}
                         version={version}
@@ -203,7 +209,7 @@ function PromptAuditGroupReader(
                       />
                     ))}
                   </div>
-                  {main.length === 0 && (
+                  {execution.length === 0 && (
                     <p className='text-muted-foreground text-xs'>
                       {t('No main request content on this page')}
                     </p>

@@ -82,14 +82,27 @@ func TestPromptAuditProbeBlockingAndExemptions(t *testing.T) {
 	}
 }
 
-func TestPromptAuditQuestionIdentityAndSessionBoundaries(t *testing.T) {
+func withPromptAuditGroupingContext(t *testing.T) *gin.Context {
+	t.Helper()
 	promptAuditGroupMap.Lock()
+	previous := promptAuditGroupMap.entries
 	promptAuditGroupMap.entries = make(map[string]promptAuditGroupEntry)
 	promptAuditGroupMap.Unlock()
+	t.Cleanup(func() {
+		promptAuditGroupMap.Lock()
+		promptAuditGroupMap.entries = previous
+		promptAuditGroupMap.Unlock()
+	})
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
-	c.Request.Header.Set("session_id", "session-for-group-test")
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	c.Request.Header.Set("session_id", "continuation-session")
 	c.Set("id", 42)
+	return c
+}
+
+func TestPromptAuditQuestionIdentityAndSessionBoundaries(t *testing.T) {
+	c := withPromptAuditGroupingContext(t)
+	c.Request.Header.Set("session_id", "session-for-group-test")
 	request := PromptAuditRequest{Snapshot: dto.PromptAuditSnapshot{HumanPrompt: "Fix search", RequestKind: "prompt"}, Model: "model-a"}
 	first := preparePromptAuditRequest(c, request)
 	request.Model = "model-b"
@@ -108,6 +121,132 @@ func TestPromptAuditQuestionIdentityAndSessionBoundaries(t *testing.T) {
 	assert.NotEqual(t, second.GroupKey, preparePromptAuditRequest(c, side).GroupKey)
 	c.Request.Header.Set("x-openai-subagent", "agent-1")
 	assert.Equal(t, "subagent", preparePromptAuditRequest(c, request).RequestKind)
+}
+
+func TestPromptAuditSummaryContinuationGrouping(t *testing.T) {
+	c := withPromptAuditGroupingContext(t)
+	prepare := func(messages ...dto.ClaudeMessage) PromptAuditRequest {
+		return preparePromptAuditRequest(c, PromptAuditRequest{Snapshot: (&dto.ClaudeRequest{Messages: messages}).GetPromptAuditSnapshot()})
+	}
+	question := dto.ClaudeMessage{Role: "user", Content: "Fix search"}
+	answer := dto.ClaudeMessage{Role: "assistant", Content: "Working on search"}
+	summary := dto.ClaudeMessage{Role: "user", Content: "CRITICAL: Respond with TEXT ONLY. Summarize the conversation."}
+	continued := dto.ClaudeMessage{Role: "user", Content: "This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary:\nSearch is in progress."}
+	first := prepare(question)
+	status := prepare(dto.ClaudeMessage{Role: "user", Content: "Current state: working (for 4m)\nTool calls so far: Read×2"})
+	assert.Equal(t, "side:status", status.RequestKind)
+	assert.Equal(t, first.GroupKey, status.GroupKey)
+	assert.Equal(t, first.GroupKey, prepare(question, answer, summary).GroupKey)
+	resume := prepare(continued)
+	assert.Equal(t, "continuation", resume.RequestKind)
+	assert.Equal(t, first.GroupKey, resume.GroupKey)
+	assert.Equal(t, first.GroupKey, prepare(continued, answer).GroupKey)
+	assert.Equal(t, first.GroupKey, prepare(continued, answer, summary).GroupKey)
+	continuedAgain := continued
+	continuedAgain.Content = continued.Content.(string) + "\nSearch verification is in progress."
+	assert.Equal(t, first.GroupKey, prepare(continuedAgain).GroupKey)
+	second := prepare(dto.ClaudeMessage{Role: "user", Content: "Fix settings"})
+	assert.NotEqual(t, first.GroupKey, second.GroupKey)
+	assert.Equal(t, first.GroupKey, prepare(continued, answer).GroupKey)
+	assert.Equal(t, second.GroupKey, prepare(dto.ClaudeMessage{Role: "user", Content: "Generate a short title for this conversation"}).GroupKey)
+	c.Request.Header.Set("session_id", "cold-session")
+	unknown := prepare(continued)
+	assert.Equal(t, "continuation:unresolved", unknown.RequestKind)
+	assert.NotEmpty(t, unknown.GroupKey)
+	assert.NotEqual(t, first.GroupKey, unknown.GroupKey)
+}
+
+func TestPromptAuditContinuationEvidenceBoundaries(t *testing.T) {
+	question := dto.ClaudeMessage{Role: "user", Content: "Fix search"}
+	answer := dto.ClaudeMessage{Role: "assistant", Content: "Working on search"}
+	summary := dto.ClaudeMessage{Role: "user", Content: "CRITICAL: Respond with TEXT ONLY. Summarize the conversation."}
+	continued := dto.ClaudeMessage{Role: "user", Content: "This session is being continued from a previous conversation that ran out of context.\nSummary: search is in progress."}
+	for _, scenario := range []string{"no summary", "interrupted", "overlap", "expired", "other user", "no session", "summary replay", "capacity"} {
+		t.Run(scenario, func(t *testing.T) {
+			c := withPromptAuditGroupingContext(t)
+			prepare := func(messages ...dto.ClaudeMessage) PromptAuditRequest {
+				return preparePromptAuditRequest(c, PromptAuditRequest{Snapshot: (&dto.ClaudeRequest{Messages: messages}).GetPromptAuditSnapshot()})
+			}
+			first := prepare(question)
+			message := continued
+			if scenario != "no summary" {
+				prepare(question, answer, summary)
+			}
+			switch scenario {
+			case "interrupted":
+				prepare(dto.ClaudeMessage{Role: "user", Content: "Fix settings"})
+			case "overlap":
+				prepare(question, dto.ClaudeMessage{Role: "assistant", Content: "Another branch"}, summary)
+			case "expired":
+				promptAuditGroupMap.Lock()
+				for key, entry := range promptAuditGroupMap.entries {
+					entry.ExpiresAt = time.Time{}
+					promptAuditGroupMap.entries[key] = entry
+				}
+				promptAuditGroupMap.Unlock()
+			case "other user":
+				c.Set("id", 43)
+			case "no session":
+				c.Request.Header.Del("session_id")
+			case "summary replay":
+				assert.Equal(t, first.GroupKey, prepare(continued).GroupKey)
+				prepare(question, answer, summary)
+				message.Content = continued.Content.(string) + "\nA different continuation."
+			case "capacity":
+				assert.Equal(t, first.GroupKey, prepare(continued).GroupKey)
+				for index := range 33 {
+					prepare(question, dto.ClaudeMessage{Role: "assistant", Content: fmt.Sprintf("Progress %d", index)}, summary)
+					prepare(dto.ClaudeMessage{Role: "user", Content: fmt.Sprintf("%s\nProgress %d", continued.Content, index)})
+				}
+				message.Content = continued.Content.(string) + "\nBeyond retained evidence."
+			}
+			unknown := prepare(message)
+			assert.Equal(t, "continuation:unresolved", unknown.RequestKind)
+			assert.NotEmpty(t, unknown.GroupKey)
+			assert.NotEqual(t, first.GroupKey, unknown.GroupKey)
+			assert.Equal(t, unknown, preparePromptAuditRequest(c, unknown), "preparation must be idempotent")
+			output := preparePromptAuditRequest(c, PromptAuditRequest{Direction: PromptAuditDirectionOutput, Output: "answer"})
+			assert.Equal(t, unknown.GroupKey, output.GroupKey)
+			assert.Equal(t, unknown.RequestKind, output.RequestKind)
+			if scenario != "no session" {
+				status := dto.ClaudeMessage{Role: "user", Content: "Current state: working (for 4m)\nTool calls so far: Read×2"}
+				assert.Equal(t, unknown.GroupKey, prepare(message, answer, status).GroupKey, "auxiliary traffic must stay with its unresolved origin")
+				prepare(question, answer, summary)
+				assert.Equal(t, unknown.GroupKey, prepare(message).GroupKey, "unresolved aliases must not silently rebind")
+				if scenario == "capacity" {
+					withAncestry := prepare(question, answer, message)
+					assert.Equal(t, unknown.GroupKey, withAncestry.GroupKey)
+					assert.Equal(t, "continuation:unresolved", withAncestry.RequestKind)
+				}
+			} else {
+				assert.NotEqual(t, unknown.GroupKey, prepare(message).GroupKey, "missing sessions cannot pool unrelated continuations")
+			}
+		})
+	}
+}
+
+func TestPromptAuditHumanFollowupDuringToolsAdvancesOnlyItsOwnQuestion(t *testing.T) {
+	c := withPromptAuditGroupingContext(t)
+	prepare := func(messages ...dto.ClaudeMessage) PromptAuditRequest {
+		return preparePromptAuditRequest(c, PromptAuditRequest{Snapshot: (&dto.ClaudeRequest{Messages: messages}).GetPromptAuditSnapshot()})
+	}
+	firstQuestion := dto.ClaudeMessage{Role: "user", Content: "Fix search"}
+	answer := dto.ClaudeMessage{Role: "assistant", Content: "Working"}
+	secondQuestion := dto.ClaudeMessage{Role: "user", Content: "Also fix settings"}
+	first := prepare(firstQuestion)
+	second := prepare(firstQuestion, answer, secondQuestion, answer)
+	assert.Equal(t, "step", second.RequestKind)
+	assert.NotEqual(t, first.GroupKey, second.GroupKey)
+	assert.Equal(t, first.GroupKey, prepare(firstQuestion, answer).GroupKey)
+	status := dto.ClaudeMessage{Role: "user", Content: "Current state: working (for 4m)\nTool calls so far: Read×2"}
+	assert.Equal(t, second.GroupKey, prepare(status).GroupKey)
+	// A background request with its own older transcript does not steal the active question.
+	assert.Equal(t, first.GroupKey, prepare(firstQuestion, answer, status).GroupKey)
+	assert.Equal(t, second.GroupKey, prepare(status).GroupKey)
+	continued := dto.ClaudeMessage{Role: "user", Content: "This session is being continued from a previous conversation that ran out of context.\nSummary: older work."}
+	summary := dto.ClaudeMessage{Role: "user", Content: "CRITICAL: Respond with TEXT ONLY. Summarize."}
+	assert.Equal(t, first.GroupKey, prepare(firstQuestion, answer, continued, answer, summary).GroupKey)
+	assert.Equal(t, second.GroupKey, prepare(status).GroupKey)
 }
 
 func TestPromptAuditMCPDefinitionsUseIndependentCache(t *testing.T) {

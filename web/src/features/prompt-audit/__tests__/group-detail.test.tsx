@@ -143,6 +143,7 @@ const server = {
   hasSession: true,
   payload: event.scan_payload,
   summary,
+  sessionKind: 'side:summary',
 }
 const clients: QueryClient[] = []
 
@@ -189,6 +190,7 @@ beforeEach(() => {
   server.hasSession = true
   server.payload = event.scan_payload
   server.summary = summary
+  server.sessionKind = 'side:summary'
   apiMock.get.mockImplementation(
     async (url: string, config?: { params: Params }) => {
       const params = config?.params ?? {}
@@ -229,7 +231,7 @@ beforeEach(() => {
                     {
                       ...event,
                       id: 41,
-                      request_kind: 'side:summary',
+                      request_kind: server.sessionKind,
                       redacted_preview: 'branch-only-group',
                       repeat: summary,
                     },
@@ -400,6 +402,34 @@ describe('question detail reading', () => {
     ).not.toBeInTheDocument()
   })
 
+  test.each([
+    ['continuation', 'Summary continuation'],
+    ['continuation:unresolved', 'Continuation linkage unresolved'],
+  ])(
+    'shows %s directly without presenting its payload as a human message',
+    async (kind, label) => {
+      server.versions = [{ ...main, kind }, branch]
+      renderGroup()
+
+      const source = await screen.findByRole('region', {
+        name: 'Source record #17',
+      })
+      expect(within(source).getByText(label)).toBeVisible()
+      expect(
+        await within(source).findByRole('tab', { name: 'User-role content' })
+      ).toBeVisible()
+      expect(
+        within(source).queryByRole('tab', { name: 'User messages' })
+      ).not.toBeInTheDocument()
+      expect(
+        screen.queryByText('No main request content on this page')
+      ).not.toBeInTheDocument()
+      expect(
+        screen.getByRole('button', { name: 'Subagent and background content' })
+      ).toHaveAttribute('aria-expanded', 'false')
+    }
+  )
+
   test('never requests plaintext without permission even after browsing session questions', async () => {
     const user = userEvent.setup()
     renderGroup(false)
@@ -500,6 +530,25 @@ describe('question detail reading', () => {
     expect(screen.getByText(/Branch-only question group/)).toBeVisible()
     expect(screen.getByText(/Background: summary/)).toBeVisible()
   })
+
+  test.each([
+    ['continuation', 'Summary continuation'],
+    ['continuation:unresolved', 'Continuation linkage unresolved'],
+  ])(
+    'labels %s session entries without calling them branch-only groups',
+    async (kind, label) => {
+      server.sessionKind = kind
+      const user = userEvent.setup()
+      renderGroup()
+      await screen.findByRole('tab', { name: 'User messages' })
+      await user.click(screen.getByRole('tab', { name: 'Session questions' }))
+
+      expect(await screen.findByText(label)).toBeVisible()
+      expect(
+        screen.queryByText(/Branch-only question group/)
+      ).not.toBeInTheDocument()
+    }
+  )
 
   test('explains that records without a session cannot be linked', async () => {
     server.hasSession = false

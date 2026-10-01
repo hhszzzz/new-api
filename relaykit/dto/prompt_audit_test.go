@@ -88,6 +88,33 @@ func TestPromptAuditAgentRequestKindsAndLatestHumanTurn(t *testing.T) {
 	assert.Equal(t, "step", afterCommand.RequestKind)
 }
 
+func TestPromptAuditContinuationKeepsInspectionContent(t *testing.T) {
+	continuation := "This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary:\nKeep this synthetic text in moderation."
+	status := "Current state: working (for 4m)\nTool calls so far: Read×2\nUser's most recent ask: fix search"
+	for _, test := range []struct{ text, kind string }{
+		{continuation, "continuation"},
+		{status, "side:status"},
+	} {
+		t.Run(test.kind, func(t *testing.T) {
+			snapshot := (&ClaudeRequest{Messages: []ClaudeMessage{{Role: "user", Content: test.text}}}).GetPromptAuditSnapshot()
+			assert.Equal(t, test.kind, snapshot.RequestKind)
+			assert.Empty(t, snapshot.HumanPrompt)
+			assert.Contains(t, snapshot.Text(), test.text)
+			assert.Contains(t, snapshot.BlockingSnapshot().Text(), test.text)
+			assert.Equal(t, PromptScopeUser, snapshot.Segments[0].SourceScope())
+		})
+	}
+	for _, messages := range [][]ClaudeMessage{
+		{{Role: "user", Content: []any{map[string]any{"type": "text", "text": continuation}, map[string]any{"type": "text", "text": "Now fix settings"}}}},
+		{{Role: "user", Content: continuation}, {Role: "user", Content: "Now fix settings"}},
+	} {
+		snapshot := (&ClaudeRequest{Messages: messages}).GetPromptAuditSnapshot()
+		assert.Equal(t, "Now fix settings", snapshot.HumanPrompt)
+		assert.Equal(t, "prompt", snapshot.RequestKind)
+		assert.Contains(t, snapshot.BlockingSnapshot().Text(), continuation)
+	}
+}
+
 func TestPromptAuditMCPDefinitionsInsideNamespace(t *testing.T) {
 	for _, declaration := range []string{
 		`{"type":"namespace","name":"tools","tools":[{"type":"function","name":"mcp__docs__read","description":"inspect this definition","parameters":{"type":"object"},"headers":{"Authorization":"SECRET"}}]}`,

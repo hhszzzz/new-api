@@ -71,6 +71,8 @@ const DYNAMIC_KEYS = [
   'flag',
   'block',
   'unavailable',
+  'Summary continuation',
+  'Continuation linkage unresolved',
   'Read prompt audits',
   'View prompt audit lists, statistics, decisions, and redacted previews.',
   'View full audited prompts',

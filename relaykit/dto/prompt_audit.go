@@ -25,6 +25,9 @@ type PromptAuditSegment struct {
 	ToolDefinition bool   `json:"tool_definition,omitempty"`
 	ToolName       string `json:"-"`
 	ToolID         string `json:"-"`
+	// GroupingTexts preserves original text-part boundaries when inspection parts
+	// are merged. It is presentation metadata, never a moderation source switch.
+	GroupingTexts []string `json:"-"`
 }
 
 type PromptAuditScope string
@@ -72,13 +75,23 @@ func (segment PromptAuditSegment) SourceScope() PromptAuditScope {
 	}
 }
 
+// PromptAuditOrigin identifies client-supplied question ancestry for grouping
+// only. It does not authenticate authorship or exempt any text from inspection.
+type PromptAuditOrigin struct {
+	Prompt       string
+	Continuation string
+}
+
 type PromptAuditSnapshot struct {
-	Segments    []PromptAuditSegment `json:"segments"`
-	HumanPrompt string               `json:"-"`
-	RequestKind string               `json:"-"`
-	SessionKey  string               `json:"-"`
-	HasHistory  bool                 `json:"-"`
-	HasMedia    bool                 `json:"-"`
+	Segments         []PromptAuditSegment `json:"segments"`
+	HumanPrompt      string               `json:"-"`
+	RequestKind      string               `json:"-"`
+	SessionKey       string               `json:"-"`
+	HasHistory       bool                 `json:"-"`
+	HasMedia         bool                 `json:"-"`
+	GroupOrigin      PromptAuditOrigin    `json:"-"`
+	GroupPredecessor PromptAuditOrigin    `json:"-"`
+	SummaryKey       string               `json:"-"`
 }
 
 // OrderedSegments normalizes inspectable text while preserving the original
@@ -587,7 +600,11 @@ func appendRoleMessage(segments []PromptAuditSegment, role string, user bool, te
 	for _, text := range texts {
 		if strings.TrimSpace(text) != "" {
 			scope := classifyPromptAuditText(text, role)
-			normalized = append(normalized, PromptAuditSegment{Role: role, Text: text, User: user && (scope == PromptScopeUser || scope == PromptScopeTask), Scope: scope})
+			part := PromptAuditSegment{Role: role, Text: text, User: user && (scope == PromptScopeUser || scope == PromptScopeTask), Scope: scope}
+			if role == "user" {
+				part.GroupingTexts = []string{text}
+			}
+			normalized = append(normalized, part)
 		}
 	}
 	return append(segments, mergePromptAuditParts(normalized)...)

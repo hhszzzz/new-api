@@ -28,7 +28,11 @@ import { formatNumber, formatTimestampToDate } from '@/lib/format'
 import { createServerError } from '@/lib/server-error-message'
 
 import { getPromptAuditSessionQuestions } from '../api'
-import { promptAuditContentKindLabel, promptAuditGroupQueryKey } from '../lib'
+import {
+  isPromptAuditContinuation,
+  promptAuditContentKindLabel,
+  promptAuditGroupQueryKey,
+} from '../lib'
 import type { PromptAuditGroupTarget } from '../types'
 import { PromptAuditGroupPagination } from './prompt-audit-group-pagination'
 import { PromptAuditOutcomeCounts } from './prompt-audit-outcome-counts'
@@ -116,7 +120,9 @@ export function PromptAuditSessionQuestions(props: {
               {question.request_kind !== 'prompt' &&
                 question.request_kind !== 'step' && (
                   <span>
-                    {t('Branch-only question group')} ·{' '}
+                    {!isPromptAuditContinuation(question.request_kind) && (
+                      <>{t('Branch-only question group')} · </>
+                    )}
                     {promptAuditContentKindLabel(
                       question.request_kind || '',
                       t

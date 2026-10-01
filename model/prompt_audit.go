@@ -513,7 +513,7 @@ func promptAuditRepeatGroupColumns() string {
 // ListPromptAuditRepeats groups requests by user and question across models,
 // falling back to the prompt hash for legacy rows. It returns the collapsed rows
 // and group count within the filter's range. Groups are ordered by their newest
-// request; each row represents the group's first request.
+// request; each row prefers the first main request, then continuation, then any request.
 func ListPromptAuditRepeats(filter PromptAuditFilter, page, pageSize int) ([]PromptAuditRepeatRow, int64, error) {
 	page = max(page, 1)
 	if pageSize < 1 {
@@ -527,8 +527,8 @@ func ListPromptAuditRepeats(filter PromptAuditFilter, page, pageSize int) ([]Pro
 	return listPromptAuditRepeatRows(applyPromptAuditFilter(DB.Model(&PromptAudit{}), filter), page, pageSize, false)
 }
 
-// Session questions share the full-set summaries with the collapsed listing,
-// but prefer a main request as the representative and sort chronologically.
+// Session questions share the full-set summaries and representatives with the
+// collapsed listing, but sort chronologically.
 func listPromptAuditRepeatRows(query *gorm.DB, page, pageSize int, sessionQuestions bool) ([]PromptAuditRepeatRow, int64, error) {
 	groupColumns := promptAuditRepeatGroupColumns()
 	// Counting groups through a derived table keeps one query per dialect: GORM's
@@ -542,9 +542,10 @@ func listPromptAuditRepeatRows(query *gorm.DB, page, pageSize int, sessionQuesti
 		return []PromptAuditRepeatRow{}, total, nil
 	}
 
-	representative, order := "MIN(id)", "MAX(id) DESC"
+	representative := "COALESCE(MIN(CASE WHEN request_kind IN ('prompt', 'step') THEN id END), " +
+		"MIN(CASE WHEN request_kind IN ('continuation', 'continuation:unresolved') THEN id END), MIN(id))"
+	order := "MAX(id) DESC"
 	if sessionQuestions {
-		representative = "COALESCE(MIN(CASE WHEN request_kind IN ('prompt', 'step') THEN id END), MIN(id))"
 		order = "MIN(created_at) ASC, " + representative + " ASC"
 	}
 	rows := make([]promptAuditRepeatAggregate, 0, pageSize)

@@ -120,6 +120,7 @@ func mergePromptAuditParts(parts []PromptAuditSegment) []PromptAuditSegment {
 			merged := last.Text + "\n" + part.Text
 			if last.SourceScope() == part.SourceScope() && last.Role == part.Role && last.ToolPart == part.ToolPart && last.ToolID == part.ToolID && last.ToolName == part.ToolName && !part.ToolRoundStart && last.ToolDefinition == part.ToolDefinition {
 				last.Text = merged
+				last.GroupingTexts = append(last.GroupingTexts, part.GroupingTexts...)
 				continue
 			}
 		}

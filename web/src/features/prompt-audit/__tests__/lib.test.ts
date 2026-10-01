@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { createInstance } from 'i18next'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 
 import {
@@ -26,6 +27,7 @@ import {
   getPromptAuditProtocolName,
   isMergedPromptAuditRow,
   PROMPT_AUDIT_PROTOCOLS,
+  promptAuditContentKindLabel,
   promptAuditDeleteFilter,
   promptAuditEndpointBaseURLUpdate,
   promptAuditEndpointDrafts,
@@ -34,6 +36,7 @@ import {
   promptAuditOutcome,
   promptAuditPayloadSources,
   type PromptAuditEndpointDraft,
+  promptAuditRequestKindLabel,
   promptAuditRowID,
   readPromptAuditCollapseRepeats,
   validatePromptAuditConfig,
@@ -97,6 +100,20 @@ const VALID_CONFIG: PromptAuditConfigUpdate = {
 
 describe('prompt audit management helpers', () => {
   afterEach(() => vi.useRealTimers())
+
+  test.each([
+    ['continuation', 'Summary continuation'],
+    ['continuation:unresolved', 'Continuation linkage unresolved'],
+  ])(
+    'uses the same explicit %s label for requests and content',
+    async (kind, label) => {
+      const i18n = createInstance()
+      await i18n.init({ lng: 'en', resources: { en: { translation: {} } } })
+
+      expect(promptAuditRequestKindLabel(kind, i18n.t)).toBe(label)
+      expect(promptAuditContentKindLabel(kind, i18n.t)).toBe(label)
+    }
+  )
 
   test('defaults to the common log time range for today', () => {
     vi.useFakeTimers()

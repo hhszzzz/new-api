@@ -113,6 +113,10 @@ function decisionOutcomeVariant(decision: string): PromptAuditOutcomeVariant {
   return 'outline'
 }
 
+export function isPromptAuditContinuation(kind: string | undefined): boolean {
+  return kind === 'continuation' || kind === 'continuation:unresolved'
+}
+
 export function promptAuditRequestKindLabel(
   kind: string | undefined,
   t: TFunction
@@ -120,6 +124,10 @@ export function promptAuditRequestKindLabel(
   switch (kind) {
     case 'step':
       return t('Conversation step')
+    case 'continuation':
+      return t('Summary continuation')
+    case 'continuation:unresolved':
+      return t('Continuation linkage unresolved')
     case 'subagent':
       return t('Subagent')
     case 'side:safety':
@@ -307,7 +315,12 @@ export function promptAuditContentKindLabel(
   t: TFunction
 ): string {
   if (kind === 'main') return t('Main requests')
-  if (kind === 'prompt' || kind === 'step' || kind === 'subagent') {
+  if (
+    kind === 'prompt' ||
+    kind === 'step' ||
+    kind === 'subagent' ||
+    isPromptAuditContinuation(kind)
+  ) {
     return promptAuditRequestKindLabel(kind, t)
   }
   if (kind.startsWith('side:')) {

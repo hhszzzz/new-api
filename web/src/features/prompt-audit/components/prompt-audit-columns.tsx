@@ -36,6 +36,7 @@ import { formatNumber, formatTimestampToDate } from '@/lib/format'
 import {
   getPromptAuditProtocolName,
   isMergedPromptAuditRow,
+  isPromptAuditContinuation,
   promptAuditDetectorLabel,
   promptAuditOutcome,
   promptAuditRequestKindLabel,
@@ -187,11 +188,18 @@ export function usePromptAuditColumns(options: {
           // A merged row stands for several requests the audit node read as the
           // same text, so the count says what the whole group decided — a group
           // can hold a block, an unavailable retry, and an allow.
-          const repeatSummary = repeat
-            ? t('{{requests}} requests belong to the same question', {
-                requests: formatNumber(repeat.count, locale),
-              })
-            : ''
+          let repeatSummary = ''
+          if (repeat) {
+            const requests = formatNumber(repeat.count, locale)
+            repeatSummary =
+              event.request_kind === 'continuation:unresolved'
+                ? t('{{requests}} requests share this continuation', {
+                    requests,
+                  })
+                : t('{{requests}} requests belong to the same question', {
+                    requests,
+                  })
+          }
           const isGroupLoading = loadingGroupIDs?.includes(event.id) === true
           // An expansion returns only the newest requests of a large group, so
           // the row says how many of them it shows.
@@ -276,11 +284,13 @@ export function usePromptAuditColumns(options: {
                     </Badge>
                   </>
                 )}
-                {row.depth > 0 && event.request_kind && (
-                  <Badge variant='outline'>
-                    {promptAuditRequestKindLabel(event.request_kind, t)}
-                  </Badge>
-                )}
+                {(row.depth > 0 ||
+                  isPromptAuditContinuation(event.request_kind)) &&
+                  event.request_kind && (
+                    <Badge variant='outline'>
+                      {promptAuditRequestKindLabel(event.request_kind, t)}
+                    </Badge>
+                  )}
                 {/* Only a merged row holds a group, so only it can be
                     expanded; the count above says how many requests that
                     reveals. */}

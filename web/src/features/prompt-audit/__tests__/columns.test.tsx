@@ -247,6 +247,20 @@ function renderCollapsedRow(
 }
 
 describe('prompt audit records table', () => {
+  test.each([
+    ['continuation', 'Summary continuation'],
+    ['continuation:unresolved', 'Continuation linkage unresolved'],
+  ])('labels top-level %s rows without expanding them', (kind, label) => {
+    const cell = renderCell(
+      'result',
+      { ...EVENT, request_kind: kind, repeat: REPEAT },
+      { collapsed: true }
+    )
+
+    expect(within(cell).getByText(label)).toBeVisible()
+    expect(within(cell).queryByText('User question')).not.toBeInTheDocument()
+  })
+
   test('reads the identity column as username, group and key', () => {
     const cell = renderCell('identity')
 
@@ -401,6 +415,25 @@ describe('prompt audit records table', () => {
         name: '3 requests belong to the same question',
       })
     ).toBeVisible()
+  })
+
+  test.each([
+    ['continuation:unresolved', '3 requests share this continuation'],
+    ['continuation', '3 requests belong to the same question'],
+    ['prompt', '3 requests belong to the same question'],
+    ['side:summary', '3 requests belong to the same question'],
+  ])('uses the correct count label and tooltip for %s', async (kind, label) => {
+    const user = userEvent.setup()
+    const cell = renderCell('result', {
+      ...EVENT,
+      request_kind: kind,
+      repeat: REPEAT,
+    })
+    const badge = within(cell).getByRole('img', { name: label })
+    expect(badge).toHaveTextContent('×3')
+
+    await user.hover(badge)
+    expect(await screen.findByText(label)).toBeVisible()
   })
 
   test.each([
