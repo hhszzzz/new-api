@@ -251,6 +251,7 @@ func TestSettingFingerprintTracksTheJevFields(t *testing.T) {
 		{name: "semantic probe switch", mutate: func(setting *PromptAuditSetting) { setting.ProbeSemanticEnabled = true }},
 		{name: "semantic probe threshold", mutate: func(setting *PromptAuditSetting) { setting.ProbeSemanticThreshold = 0.5 }},
 		{name: "base64 expansion", mutate: func(setting *PromptAuditSetting) { setting.ExpandBase64 = !setting.ExpandBase64 }},
+		{name: "administrator scope", mutate: func(setting *PromptAuditSetting) { setting.IncludeAdmins = !setting.IncludeAdmins }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			setting := validSetting()
@@ -289,6 +290,30 @@ func TestBlockingLatestTurnOnlyOptionKeyReachesTheField(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, changed)
 	assert.False(t, GetSetting().BlockingLatestTurnOnly)
+}
+
+func TestAdministratorScopeAndRecordingOptionKeysReachTheFields(t *testing.T) {
+	// Guards the json tags end to end, like the conversation-window switch: a
+	// typo would persist a key that never lands on the field, silently disabling
+	// the switch while the UI kept reporting it. Both ship enabled, so an
+	// upgraded deployment keeps administrators inside the audit and keeps
+	// recording every request until an operator decides otherwise.
+	original := GetSetting()
+	t.Cleanup(func() {
+		_, err := config.GlobalConfig.UpdateFromDB("prompt_audit", map[string]string{"include_admins": "true", "record_all": "true"})
+		require.NoError(t, err)
+		original.PublishConfig()
+	})
+	_, err := config.GlobalConfig.UpdateFromDB("prompt_audit", map[string]string{"include_admins": "true", "record_all": "true"})
+	require.NoError(t, err)
+	assert.True(t, GetSetting().IncludeAdmins)
+	assert.True(t, GetSetting().RecordAll)
+
+	changed, err := config.GlobalConfig.UpdateFromDB("prompt_audit", map[string]string{"include_admins": "false", "record_all": "false"})
+	require.NoError(t, err)
+	assert.True(t, changed)
+	assert.False(t, GetSetting().IncludeAdmins)
+	assert.False(t, GetSetting().RecordAll)
 }
 
 func TestGroupSelection(t *testing.T) {

@@ -171,6 +171,16 @@ type PromptAuditSetting struct {
 	// the traffic it would otherwise refuse by accident, so they stay exempt
 	// until an operator asks for the gate to apply to them too.
 	ProbeIncludeAdmins bool `json:"probe_include_admins"`
+	// IncludeAdmins keeps administrators inside the word-list and model audit.
+	// Administrators already pass through both gates, so this is on by default;
+	// turning it off exempts an operator's own traffic from being refused, while
+	// probe detection keeps its own switch above.
+	IncludeAdmins bool `json:"include_admins"`
+	// RecordAll stores an input and an output record for every request, whether
+	// or not it was inspected. A request no gate read is stored as not inspected
+	// instead of being left out, so the gateway keeps a record of what passed
+	// through it even while enforcement is off.
+	RecordAll bool `json:"record_all"`
 	// ExpandBase64 decodes base64 runs in the scanned text before it is audited.
 	// A guard model that only sees the encoded form cannot judge the content, so
 	// leaving this off lets an encoded request through unclassified. The full
@@ -234,6 +244,8 @@ var promptAuditSetting = PromptAuditSetting{
 	EndpointConcurrency: DefaultEndpointConcurrency,
 	OutputMaxBytes:      DefaultOutputMaxBytes,
 	OutputMemoryBytes:   DefaultOutputMemoryBytes,
+	IncludeAdmins:       true,
+	RecordAll:           true,
 }
 
 var promptAuditSettingSnapshot atomic.Pointer[PromptAuditSetting]
@@ -772,6 +784,10 @@ func settingFingerprint(setting PromptAuditSetting) string {
 	builder.WriteString(strconv.FormatFloat(setting.ProbeSemanticThreshold, 'f', -1, 64))
 	builder.WriteByte('|')
 	builder.WriteString(strconv.FormatBool(setting.ProbeIncludeAdmins))
+	builder.WriteByte('|')
+	// Whether administrators are checked changes who the same verdict applies
+	// to, so it belongs in the cache key beside the probe's own switch.
+	builder.WriteString(strconv.FormatBool(setting.IncludeAdmins))
 	builder.WriteByte('|')
 	builder.WriteString(strconv.FormatBool(setting.ExpandBase64))
 	builder.WriteByte('|')

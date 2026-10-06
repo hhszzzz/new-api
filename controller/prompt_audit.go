@@ -53,6 +53,8 @@ type promptAuditConfigUpdate struct {
 	ProbeSemanticEnabled   *bool                                                      `json:"probe_semantic_enabled"`
 	ProbeSemanticThreshold *float64                                                   `json:"probe_semantic_threshold"`
 	ProbeIncludeAdmins     *bool                                                      `json:"probe_include_admins"`
+	IncludeAdmins          *bool                                                      `json:"include_admins"`
+	RecordAll              *bool                                                      `json:"record_all"`
 	ExpandBase64           *bool                                                      `json:"expand_base64"`
 	ManualWordlistAction   *string                                                    `json:"manual_wordlist_action"`
 	EnabledCategories      *[]string                                                  `json:"enabled_categories"`
@@ -193,6 +195,12 @@ func UpdatePromptAuditConfig(c *gin.Context) {
 	}
 	if update.ProbeIncludeAdmins != nil {
 		values["prompt_audit.probe_include_admins"] = strconv.FormatBool(*update.ProbeIncludeAdmins)
+	}
+	if update.IncludeAdmins != nil {
+		values["prompt_audit.include_admins"] = strconv.FormatBool(*update.IncludeAdmins)
+	}
+	if update.RecordAll != nil {
+		values["prompt_audit.record_all"] = strconv.FormatBool(*update.RecordAll)
 	}
 	if update.ExpandBase64 != nil {
 		values["prompt_audit.expand_base64"] = strconv.FormatBool(*update.ExpandBase64)
@@ -747,6 +755,8 @@ func promptAuditConfigResponse(setting prompt_audit_setting.PromptAuditSetting) 
 		"probe_semantic_enabled":         setting.ProbeSemanticEnabled,
 		"probe_semantic_threshold":       setting.ProbeSemanticThreshold,
 		"probe_include_admins":           setting.ProbeIncludeAdmins,
+		"include_admins":                 setting.IncludeAdmins,
+		"record_all":                     setting.RecordAll,
 		"expand_base64":                  setting.ExpandBase64,
 		"enabled_categories":             append([]string{}, setting.EnabledCategories...),
 		"controversial_block_categories": append([]string{}, setting.ControversialBlocks...),
