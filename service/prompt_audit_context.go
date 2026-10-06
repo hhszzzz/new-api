@@ -14,23 +14,36 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// Bounds on the per-session grouping state. A session entry is refreshed on
+// every request, so a long-lived session needs its own caps; reaching one must
+// stay local to the request that sees it instead of disabling a session.
+const (
+	promptAuditSummaryCheckpointCap = 128
+	promptAuditContinuationAliasCap = 128
+	// A pending summary predicts the continuation that immediately follows it.
+	// An older one is left behind rather than matched by recency.
+	promptAuditPendingSummaryTTL = 10 * time.Minute
+)
+
 type promptAuditSummaryCheckpoint struct {
-	Key     string
-	Pending bool
+	Key      string
+	Pending  bool
+	Deadline time.Time
+	StoredAt time.Time
 }
 
 type promptAuditContinuationLink struct {
 	Key        string
 	Unresolved bool
+	TouchedAt  time.Time
 }
 
 type promptAuditGroupEntry struct {
-	Key              string
-	Epoch            string
-	ExpiresAt        time.Time
-	Summaries        map[string]promptAuditSummaryCheckpoint
-	Continuations    map[string]promptAuditContinuationLink
-	InferenceBlocked bool
+	Key           string
+	Epoch         string
+	ExpiresAt     time.Time
+	Summaries     map[string]promptAuditSummaryCheckpoint
+	Continuations map[string]promptAuditContinuationLink
 }
 
 var promptAuditGroupMap = struct {
@@ -55,59 +68,111 @@ func (entry *promptAuditGroupEntry) originKey(identity string, origin dto.Prompt
 
 // resolveContinuation uses an exact alias or supplied ancestry first. A single
 // observed summary is only a bounded single-flight inference, never proof of
-// client authorship. Lost or conflicting evidence must not become "the latest".
-func (entry *promptAuditGroupEntry) resolveContinuation(identity string, snapshot dto.PromptAuditSnapshot, allowInference bool) promptAuditContinuationLink {
+// client authorship, so it is read only while it is the one unexpired pending
+// summary; two pending summaries for different questions stay unlinked.
+func (entry *promptAuditGroupEntry) resolveContinuation(identity string, snapshot dto.PromptAuditSnapshot, allowInference bool, now time.Time) promptAuditContinuationLink {
 	fingerprint := snapshot.GroupOrigin.Continuation
-	if link, ok := entry.Continuations[fingerprint]; ok {
-		return link
-	}
-	key := ""
-	if len(entry.Continuations) >= 32 || fingerprint == "" {
-		// Without space for an immutable alias, even explicit ancestry cannot be
-		// remembered consistently across later requests carrying only the summary.
-		entry.InferenceBlocked = true
-	} else {
-		key = entry.originKey(identity, snapshot.GroupPredecessor)
-	}
-	if key == "" && allowInference && !entry.InferenceBlocked {
-		pending := ""
-		for fingerprint, checkpoint := range entry.Summaries {
-			if !checkpoint.Pending {
-				continue
-			}
-			if pending != "" {
-				entry.InferenceBlocked = true
-				break
-			}
-			pending = fingerprint
-		}
-		if pending != "" && !entry.InferenceBlocked {
-			checkpoint := entry.Summaries[pending]
-			key = checkpoint.Key
-			checkpoint.Pending = false
-			entry.Summaries[pending] = checkpoint
+	if fingerprint != "" {
+		if link, ok := entry.Continuations[fingerprint]; ok {
+			link.TouchedAt = now
+			entry.Continuations[fingerprint] = link
+			return link
 		}
 	}
-	if key != "" {
-		for fingerprint, checkpoint := range entry.Summaries {
-			if checkpoint.Key == key {
-				checkpoint.Pending = false
-				entry.Summaries[fingerprint] = checkpoint
-			}
-		}
+	key := entry.originKey(identity, snapshot.GroupPredecessor)
+	if key == "" && allowInference {
+		key = entry.consumePendingSummary(now)
 	}
-	link := promptAuditContinuationLink{Key: key, Unresolved: key == ""}
+	link := promptAuditContinuationLink{Key: key, Unresolved: key == "", TouchedAt: now}
 	if link.Unresolved {
 		digest := sha256.Sum256([]byte(identity + "|unresolved|" + entry.Epoch + "|" + fingerprint))
 		link.Key = hex.EncodeToString(digest[:])
 	}
-	if len(entry.Continuations) < 32 && fingerprint != "" {
-		entry.Continuations[fingerprint] = link
-	} else {
-		// Do not evict old aliases and later bind their text to a newer question.
-		entry.InferenceBlocked = true
-	}
+	entry.storeContinuation(fingerprint, link)
 	return link
+}
+
+// consumePendingSummary returns the question of the one unexpired pending
+// summary and retires it. Pending summaries for several questions at once are
+// not evidence: picking one would be guessing, so the continuation stays
+// unlinked and the ambiguous summaries simply age out.
+func (entry *promptAuditGroupEntry) consumePendingSummary(now time.Time) string {
+	target, ambiguous := "", false
+	for fingerprint, checkpoint := range entry.Summaries {
+		if !checkpoint.Pending || checkpoint.Key == "" {
+			continue
+		}
+		if !now.Before(checkpoint.Deadline) {
+			checkpoint.Pending = false
+			entry.Summaries[fingerprint] = checkpoint
+			continue
+		}
+		if target != "" && checkpoint.Key != target {
+			ambiguous = true
+			continue
+		}
+		target = checkpoint.Key
+	}
+	if ambiguous || target == "" {
+		return ""
+	}
+	for fingerprint, checkpoint := range entry.Summaries {
+		if checkpoint.Pending && checkpoint.Key == target {
+			checkpoint.Pending = false
+			entry.Summaries[fingerprint] = checkpoint
+		}
+	}
+	return target
+}
+
+// storeContinuation keeps at most one binding per observed continuation text and
+// drops the least recently seen one at the cap. A dropped text is resolved again
+// if it returns, which bounds this map without rebinding the texts still in use.
+func (entry *promptAuditGroupEntry) storeContinuation(fingerprint string, link promptAuditContinuationLink) {
+	if fingerprint == "" {
+		return
+	}
+	if _, exists := entry.Continuations[fingerprint]; exists {
+		entry.Continuations[fingerprint] = link
+		return
+	}
+	if len(entry.Continuations) >= promptAuditContinuationAliasCap {
+		oldest := ""
+		var touched time.Time
+		for key, value := range entry.Continuations {
+			if oldest == "" || value.TouchedAt.Before(touched) {
+				oldest, touched = key, value.TouchedAt
+			}
+		}
+		delete(entry.Continuations, oldest)
+	}
+	entry.Continuations[fingerprint] = link
+}
+
+// recordSummary remembers the question a summary was made from so the
+// continuation it produces can be linked back to it. That question is not
+// necessarily the active one: a session may work on several questions at once,
+// and a new question does not invalidate the older conversation summarized.
+func (entry *promptAuditGroupEntry) recordSummary(fingerprint, key string, now time.Time) {
+	if fingerprint == "" || key == "" {
+		return
+	}
+	if _, known := entry.Summaries[fingerprint]; known {
+		return
+	}
+	if len(entry.Summaries) >= promptAuditSummaryCheckpointCap {
+		oldest := ""
+		var stored time.Time
+		for candidate, checkpoint := range entry.Summaries {
+			if oldest == "" || checkpoint.StoredAt.Before(stored) {
+				oldest, stored = candidate, checkpoint.StoredAt
+			}
+		}
+		delete(entry.Summaries, oldest)
+	}
+	entry.Summaries[fingerprint] = promptAuditSummaryCheckpoint{
+		Key: key, Pending: true, Deadline: now.Add(promptAuditPendingSummaryTTL), StoredAt: now,
+	}
 }
 
 // Grouping is only presentation metadata. It never determines which content is
@@ -185,17 +250,19 @@ func preparePromptAuditRequest(c *gin.Context, request PromptAuditRequest) Promp
 		originKey := entry.originKey(identity, origin)
 		originGroup := originKey
 		if origin.Continuation != "" && request.RequestKind != "continuation" {
-			// Auxiliary traffic can retain exact ancestry, including an unresolved
-			// group, but cannot consume a pending summary by recency.
-			link := entry.resolveContinuation(identity, request.Snapshot, false)
-			originGroup = link.Key
-			if !link.Unresolved {
-				originKey = link.Key
+			// Auxiliary traffic keeps an exact continuation ancestry, including an
+			// unresolved one, but neither consumes a pending summary nor creates a
+			// binding the continuation request itself would have resolved.
+			if link, ok := entry.Continuations[origin.Continuation]; ok {
+				originGroup = link.Key
+				if !link.Unresolved {
+					originKey = link.Key
+				}
 			}
 		}
 		switch {
 		case request.RequestKind == "continuation":
-			link := entry.resolveContinuation(identity, request.Snapshot, true)
+			link := entry.resolveContinuation(identity, request.Snapshot, true, now)
 			request.GroupKey = link.Key
 			if link.Unresolved {
 				request.RequestKind = "continuation:unresolved"
@@ -203,18 +270,7 @@ func preparePromptAuditRequest(c *gin.Context, request PromptAuditRequest) Promp
 		case request.HumanPrompt != "":
 			predecessor := entry.originKey(identity, request.Snapshot.GroupPredecessor)
 			if request.RequestKind == "prompt" || entry.Key == "" || predecessor == entry.Key {
-				if entry.Key != request.GroupKey {
-					// A first-seen continuation after a new question is ambiguous.
-					// Already bound aliases stay pinned to their original question.
-					for key, checkpoint := range entry.Summaries {
-						if checkpoint.Pending {
-							entry.InferenceBlocked = true
-						}
-						checkpoint.Pending = false
-						entry.Summaries[key] = checkpoint
-					}
-					entry.Key = request.GroupKey
-				}
+				entry.Key = request.GroupKey
 			}
 		default:
 			request.GroupKey = originGroup
@@ -223,18 +279,15 @@ func preparePromptAuditRequest(c *gin.Context, request PromptAuditRequest) Promp
 			}
 		}
 		if request.RequestKind == "side:summary" && request.Snapshot.SummaryKey != "" {
-			if _, known := entry.Summaries[request.Snapshot.SummaryKey]; !known {
-				if len(entry.Summaries) < 32 {
-					// An auxiliary's active-question fallback is not ancestry evidence.
-					pending := originKey != "" && (entry.Key == "" || originKey == entry.Key)
-					if originKey != "" && !pending {
-						entry.InferenceBlocked = true
-					}
-					entry.Summaries[request.Snapshot.SummaryKey] = promptAuditSummaryCheckpoint{Key: originKey, Pending: pending}
-				} else {
-					entry.InferenceBlocked = true
-				}
+			// The summary belongs to the conversation it was made from, which the
+			// transcript still names. With no ancestry at all that is the active
+			// question; an unknown continuation names a different one and must not
+			// be answered with the active question instead.
+			target := originKey
+			if target == "" && request.Snapshot.GroupOrigin.Continuation == "" {
+				target = entry.Key
 			}
+			entry.recordSummary(request.Snapshot.SummaryKey, target, now)
 		}
 		entry.ExpiresAt = now.Add(30 * time.Minute)
 		promptAuditGroupMap.entries[identity] = entry

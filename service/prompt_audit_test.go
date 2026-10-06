@@ -159,9 +159,10 @@ func TestPromptAuditSummaryContinuationGrouping(t *testing.T) {
 func TestPromptAuditContinuationEvidenceBoundaries(t *testing.T) {
 	question := dto.ClaudeMessage{Role: "user", Content: "Fix search"}
 	answer := dto.ClaudeMessage{Role: "assistant", Content: "Working on search"}
+	secondQuestion := dto.ClaudeMessage{Role: "user", Content: "Fix settings"}
 	summary := dto.ClaudeMessage{Role: "user", Content: "CRITICAL: Respond with TEXT ONLY. Summarize the conversation."}
 	continued := dto.ClaudeMessage{Role: "user", Content: "This session is being continued from a previous conversation that ran out of context.\nSummary: search is in progress."}
-	for _, scenario := range []string{"no summary", "interrupted", "overlap", "expired", "other user", "no session", "summary replay", "capacity"} {
+	for _, scenario := range []string{"no summary", "entry expired", "other user", "no session", "ambiguous summaries", "summary replay"} {
 		t.Run(scenario, func(t *testing.T) {
 			c := withPromptAuditGroupingContext(t)
 			prepare := func(messages ...dto.ClaudeMessage) PromptAuditRequest {
@@ -173,11 +174,9 @@ func TestPromptAuditContinuationEvidenceBoundaries(t *testing.T) {
 				prepare(question, answer, summary)
 			}
 			switch scenario {
-			case "interrupted":
-				prepare(dto.ClaudeMessage{Role: "user", Content: "Fix settings"})
-			case "overlap":
-				prepare(question, dto.ClaudeMessage{Role: "assistant", Content: "Another branch"}, summary)
-			case "expired":
+			case "entry expired":
+				// An entry that aged out loses its aliases and its pending summary,
+				// so the continuation that follows cannot be attributed.
 				promptAuditGroupMap.Lock()
 				for key, entry := range promptAuditGroupMap.entries {
 					entry.ExpiresAt = time.Time{}
@@ -188,17 +187,17 @@ func TestPromptAuditContinuationEvidenceBoundaries(t *testing.T) {
 				c.Set("id", 43)
 			case "no session":
 				c.Request.Header.Del("session_id")
+			case "ambiguous summaries":
+				// Two conversations summarized at once: the continuation cannot say
+				// which one it continues, so it is left unlinked rather than guessed.
+				prepare(secondQuestion)
+				prepare(secondQuestion, answer, summary)
+				message.Content = continued.Content.(string) + "\nAmbiguous."
 			case "summary replay":
+				// A consumed summary must not re-arm for a later continuation.
 				assert.Equal(t, first.GroupKey, prepare(continued).GroupKey)
 				prepare(question, answer, summary)
 				message.Content = continued.Content.(string) + "\nA different continuation."
-			case "capacity":
-				assert.Equal(t, first.GroupKey, prepare(continued).GroupKey)
-				for index := range 33 {
-					prepare(question, dto.ClaudeMessage{Role: "assistant", Content: fmt.Sprintf("Progress %d", index)}, summary)
-					prepare(dto.ClaudeMessage{Role: "user", Content: fmt.Sprintf("%s\nProgress %d", continued.Content, index)})
-				}
-				message.Content = continued.Content.(string) + "\nBeyond retained evidence."
 			}
 			unknown := prepare(message)
 			assert.Equal(t, "continuation:unresolved", unknown.RequestKind)
@@ -208,21 +207,83 @@ func TestPromptAuditContinuationEvidenceBoundaries(t *testing.T) {
 			output := preparePromptAuditRequest(c, PromptAuditRequest{Direction: PromptAuditDirectionOutput, Output: "answer"})
 			assert.Equal(t, unknown.GroupKey, output.GroupKey)
 			assert.Equal(t, unknown.RequestKind, output.RequestKind)
-			if scenario != "no session" {
+			switch scenario {
+			case "no session":
+				assert.NotEqual(t, unknown.GroupKey, prepare(message).GroupKey, "missing sessions cannot pool unrelated continuations")
+			case "no summary", "ambiguous summaries", "summary replay":
+				// The binding survives while the entry does: auxiliary traffic keeps
+				// the unresolved origin, and a later summary does not rebind it.
 				status := dto.ClaudeMessage{Role: "user", Content: "Current state: working (for 4m)\nTool calls so far: Read×2"}
 				assert.Equal(t, unknown.GroupKey, prepare(message, answer, status).GroupKey, "auxiliary traffic must stay with its unresolved origin")
 				prepare(question, answer, summary)
 				assert.Equal(t, unknown.GroupKey, prepare(message).GroupKey, "unresolved aliases must not silently rebind")
-				if scenario == "capacity" {
-					withAncestry := prepare(question, answer, message)
-					assert.Equal(t, unknown.GroupKey, withAncestry.GroupKey)
-					assert.Equal(t, "continuation:unresolved", withAncestry.RequestKind)
-				}
-			} else {
-				assert.NotEqual(t, unknown.GroupKey, prepare(message).GroupKey, "missing sessions cannot pool unrelated continuations")
 			}
 		})
 	}
+}
+
+// A summary belongs to the conversation it was made from, which is not
+// necessarily the question active when it arrives: one session can work on
+// several questions at once. The continuation that follows belongs there.
+func TestPromptAuditSummaryContinuationLinksToItsOwnQuestion(t *testing.T) {
+	c := withPromptAuditGroupingContext(t)
+	prepare := func(messages ...dto.ClaudeMessage) PromptAuditRequest {
+		return preparePromptAuditRequest(c, PromptAuditRequest{Snapshot: (&dto.ClaudeRequest{Messages: messages}).GetPromptAuditSnapshot()})
+	}
+	question := dto.ClaudeMessage{Role: "user", Content: "Fix search"}
+	answer := dto.ClaudeMessage{Role: "assistant", Content: "Working on search"}
+	otherQuestion := dto.ClaudeMessage{Role: "user", Content: "Fix settings"}
+	summary := dto.ClaudeMessage{Role: "user", Content: "CRITICAL: Respond with TEXT ONLY. Summarize the conversation."}
+	continued := dto.ClaudeMessage{Role: "user", Content: "This session is being continued from a previous conversation that ran out of context.\nSummary: search is in progress."}
+	first := prepare(question)
+	second := prepare(otherQuestion)
+	require.NotEqual(t, first.GroupKey, second.GroupKey)
+	// The summary names the older conversation, and the newer question is active.
+	prepare(question, answer, summary)
+	resume := prepare(continued)
+	assert.Equal(t, "continuation", resume.RequestKind)
+	assert.Equal(t, first.GroupKey, resume.GroupKey, "the continuation continues the summarized question")
+	// A further summary is made from the continuation, and reaches the same question.
+	prepare(continued, answer, summary)
+	assert.Equal(t, first.GroupKey, prepare(continued, answer).GroupKey)
+	// The newer question keeps its own grouping.
+	assert.Equal(t, second.GroupKey, prepare(dto.ClaudeMessage{Role: "user", Content: "Generate a short title for this conversation"}).GroupKey)
+}
+
+// A pending summary predicts only the request that immediately follows it. An
+// older one is left behind instead of being matched by recency, so a
+// continuation arriving after a newer summary belongs to that newer question.
+func TestPromptAuditStalePendingSummaryAgesOut(t *testing.T) {
+	c := withPromptAuditGroupingContext(t)
+	prepare := func(messages ...dto.ClaudeMessage) PromptAuditRequest {
+		return preparePromptAuditRequest(c, PromptAuditRequest{Snapshot: (&dto.ClaudeRequest{Messages: messages}).GetPromptAuditSnapshot()})
+	}
+	question := dto.ClaudeMessage{Role: "user", Content: "Fix search"}
+	answer := dto.ClaudeMessage{Role: "assistant", Content: "Working on search"}
+	secondQuestion := dto.ClaudeMessage{Role: "user", Content: "Fix settings"}
+	summary := dto.ClaudeMessage{Role: "user", Content: "CRITICAL: Respond with TEXT ONLY. Summarize the conversation."}
+	continued := dto.ClaudeMessage{Role: "user", Content: "This session is being continued from a previous conversation that ran out of context.\nSummary: search is in progress."}
+	first := prepare(question)
+	prepare(question, answer, summary)
+	second := prepare(secondQuestion)
+	prepare(secondQuestion, answer, summary)
+	// Both summaries are still pending: the continuation cannot be attributed.
+	assert.Equal(t, "continuation:unresolved", prepare(continued).RequestKind)
+	// Once the older summary ages out, only the newer question is pending.
+	promptAuditGroupMap.Lock()
+	for key, entry := range promptAuditGroupMap.entries {
+		for fingerprint, checkpoint := range entry.Summaries {
+			if checkpoint.Key == first.GroupKey {
+				checkpoint.Pending = false
+				entry.Summaries[fingerprint] = checkpoint
+			}
+		}
+		promptAuditGroupMap.entries[key] = entry
+	}
+	promptAuditGroupMap.Unlock()
+	resume := prepare(dto.ClaudeMessage{Role: "user", Content: continued.Content.(string) + "\nAfter the wait."})
+	assert.Equal(t, "continuation", resume.RequestKind)
+	assert.Equal(t, second.GroupKey, resume.GroupKey)
 }
 
 func TestPromptAuditHumanFollowupDuringToolsAdvancesOnlyItsOwnQuestion(t *testing.T) {
@@ -245,6 +306,9 @@ func TestPromptAuditHumanFollowupDuringToolsAdvancesOnlyItsOwnQuestion(t *testin
 	assert.Equal(t, second.GroupKey, prepare(status).GroupKey)
 	continued := dto.ClaudeMessage{Role: "user", Content: "This session is being continued from a previous conversation that ran out of context.\nSummary: older work."}
 	summary := dto.ClaudeMessage{Role: "user", Content: "CRITICAL: Respond with TEXT ONLY. Summarize."}
+	assert.Equal(t, first.GroupKey, prepare(firstQuestion, answer, continued).GroupKey)
+	// A second compaction: its summary is made from an already linked
+	// continuation, and still belongs to the question that continuation named.
 	assert.Equal(t, first.GroupKey, prepare(firstQuestion, answer, continued, answer, summary).GroupKey)
 	assert.Equal(t, second.GroupKey, prepare(status).GroupKey)
 }
