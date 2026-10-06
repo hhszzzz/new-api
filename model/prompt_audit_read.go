@@ -53,6 +53,7 @@ type PromptAuditSessionPage struct {
 
 const promptAuditOutcome = "CASE WHEN status IN ('queued', 'processing', 'retry') THEN status " +
 	"WHEN decision IN ('pass', 'block', 'flag', 'unavailable') THEN decision " +
+	"WHEN status = 'stored' THEN 'stored' " +
 	"WHEN status = 'failed' AND COALESCE(decision, '') = '' THEN 'failed' ELSE 'unknown' END"
 
 const promptAuditContentKind = "CASE WHEN request_kind IN ('prompt', 'step') THEN 'main' " +
@@ -76,6 +77,7 @@ type promptAuditRepeatAggregate struct {
 	OutcomeProcessing  int64
 	OutcomeRetry       int64
 	OutcomeFailed      int64
+	OutcomeStored      int64
 	OutcomeUnknown     int64
 }
 
@@ -85,7 +87,7 @@ func promptAuditRepeatSelect() string {
 		promptAuditWorstDecisionRank + " AS worst_decision_rank, " +
 		"SUM(CASE WHEN action = 'block' THEN 1 ELSE 0 END) AS blocks, " +
 		"SUM(CASE WHEN action = 'unavailable' THEN 1 ELSE 0 END) AS unavailable")
-	for _, outcome := range []string{"pass", "block", "flag", "unavailable", "queued", "processing", "retry", "failed", "unknown"} {
+	for _, outcome := range []string{"pass", "block", "flag", "unavailable", "queued", "processing", "retry", "failed", "stored", "unknown"} {
 		sql.WriteString(", SUM(CASE WHEN (" + promptAuditOutcome + ") = '" + outcome + "' THEN 1 ELSE 0 END) AS outcome_" + outcome)
 	}
 	return sql.String()
@@ -95,7 +97,7 @@ func (row promptAuditRepeatAggregate) summary() PromptAuditRepeat {
 	outcomes := map[string]int64{
 		"pass": row.OutcomePass, "block": row.OutcomeBlock, "flag": row.OutcomeFlag,
 		"unavailable": row.OutcomeUnavailable, "queued": row.OutcomeQueued, "processing": row.OutcomeProcessing,
-		"retry": row.OutcomeRetry, "failed": row.OutcomeFailed, "unknown": row.OutcomeUnknown,
+		"retry": row.OutcomeRetry, "failed": row.OutcomeFailed, "stored": row.OutcomeStored, "unknown": row.OutcomeUnknown,
 	}
 	for outcome, count := range outcomes {
 		if count == 0 {

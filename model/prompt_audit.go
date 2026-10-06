@@ -21,6 +21,10 @@ const (
 	PromptAuditStatusRetry      PromptAuditStatus = "retry"
 	PromptAuditStatusDone       PromptAuditStatus = "done"
 	PromptAuditStatusFailed     PromptAuditStatus = "failed"
+	// PromptAuditStatusStored records a request that was kept without being
+	// inspected, because no gate ran for it. It carries no verdict, and the
+	// worker never claims it: only queued and retry rows are work items.
+	PromptAuditStatusStored PromptAuditStatus = "stored"
 )
 
 var (
@@ -369,6 +373,9 @@ func (audit *PromptAudit) ToResponse(includeFullPrompt bool) PromptAuditResponse
 func CreatePromptAudit(audit *PromptAudit) error {
 	if audit == nil {
 		return errors.New("prompt audit is required")
+	}
+	if DB == nil {
+		return errors.New("database is not initialized")
 	}
 	return DB.Create(audit).Error
 }
@@ -1129,7 +1136,7 @@ func promptAuditActiveStatuses() []PromptAuditStatus {
 }
 
 func promptAuditTerminalStatuses() []PromptAuditStatus {
-	return []PromptAuditStatus{PromptAuditStatusDone, PromptAuditStatusFailed}
+	return []PromptAuditStatus{PromptAuditStatusDone, PromptAuditStatusFailed, PromptAuditStatusStored}
 }
 
 // clampPromptAuditColumn makes a client- or upstream-supplied value storable in

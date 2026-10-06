@@ -19,6 +19,7 @@ import (
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/prompt_audit_setting"
 
 	"github.com/gin-gonic/gin"
@@ -311,6 +312,148 @@ func TestPromptAuditHumanFollowupDuringToolsAdvancesOnlyItsOwnQuestion(t *testin
 	// continuation, and still belongs to the question that continuation named.
 	assert.Equal(t, first.GroupKey, prepare(firstQuestion, answer, continued, answer, summary).GroupKey)
 	assert.Equal(t, second.GroupKey, prepare(status).GroupKey)
+}
+
+func TestPromptAuditAdministratorScopeSwitch(t *testing.T) {
+	withPromptWordlistTestDB(t)
+	require.NoError(t, i18n.Init())
+	setting.SensitiveWordsFromString("blocked-marker")
+	configured := prompt_audit_setting.GetSetting()
+	configured.Mode = prompt_audit_setting.ModeOff
+	configured.ProbeBlockEnabled = false
+	configured.RecordAll = false
+	configured.ScopePolicies = map[dto.PromptAuditScope]prompt_audit_setting.ScopePolicy{
+		dto.PromptScopeUser: {LibraryIDs: []string{prompt_audit_setting.ManualWordlistID}},
+	}
+	for _, test := range []struct {
+		name          string
+		includeAdmins bool
+		role          int
+		wantBlocked   bool
+	}{
+		{name: "user inside the scope", includeAdmins: true, role: common.RoleCommonUser, wantBlocked: true},
+		{name: "administrator inside the scope", includeAdmins: true, role: common.RoleAdminUser, wantBlocked: true},
+		{name: "administrator outside the scope", includeAdmins: false, role: common.RoleAdminUser, wantBlocked: false},
+		{name: "user stays inside a scope without administrators", includeAdmins: false, role: common.RoleCommonUser, wantBlocked: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			configured.IncludeAdmins = test.includeAdmins
+			configured.PublishConfig()
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+			c.Set("role", test.role)
+			result, apiErr := InspectPrompt(c, PromptAuditRequest{
+				Snapshot: dto.PromptAuditSnapshot{Segments: []dto.PromptAuditSegment{{
+					Scope: dto.PromptScopeUser, Role: "user", User: true, Text: "blocked-marker",
+				}}},
+				Protocol: "openai_chat", Model: "guarded-model",
+			})
+			assert.Equal(t, test.wantBlocked, result.Blocked)
+			if test.wantBlocked {
+				require.NotNil(t, apiErr)
+				assert.Positive(t, result.AuditID)
+				return
+			}
+			require.Nil(t, apiErr)
+			assert.Zero(t, result.AuditID, "an exempt administrator is not inspected")
+		})
+	}
+}
+
+func TestPromptAuditAdministratorScopeSwitchCoversTheModelGate(t *testing.T) {
+	withPromptWordlistTestDB(t)
+	require.NoError(t, i18n.Init())
+	var guardCalls atomic.Int32
+	guard := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		guardCalls.Add(1)
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"Safety: Unsafe\nCategories: Jailbreak"}}]}`)
+	}))
+	defer guard.Close()
+	configured := promptAuditTestSetting(guard.URL, "")
+	configured.Endpoints = configured.Endpoints[:1]
+	configured.ScopePolicies = map[dto.PromptAuditScope]prompt_audit_setting.ScopePolicy{
+		dto.PromptScopeUser: {ModelAudit: true},
+	}
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	c.Set("role", common.RoleAdminUser)
+	request := PromptAuditRequest{
+		Snapshot: dto.PromptAuditSnapshot{Segments: []dto.PromptAuditSegment{{
+			Scope: dto.PromptScopeUser, Role: "user", User: true, Text: "an ordinary question",
+		}}},
+		Protocol: "openai_chat", Model: "guarded-model",
+	}
+	configured.IncludeAdmins = false
+	configured.PublishConfig()
+	result, apiErr := InspectPrompt(c, request)
+	require.Nil(t, apiErr)
+	assert.False(t, result.Blocked)
+	assert.Zero(t, guardCalls.Load(), "an administrator outside the scope must not reach the audit node")
+
+	configured.IncludeAdmins = true
+	configured.PublishConfig()
+	result, apiErr = InspectPrompt(c, request)
+	require.NotNil(t, apiErr)
+	assert.True(t, result.Blocked)
+	assert.Positive(t, result.AuditID)
+	assert.Positive(t, guardCalls.Load())
+}
+
+func TestPromptAuditRecordsRequestsWithoutInspection(t *testing.T) {
+	withPromptWordlistTestDB(t)
+	configured := prompt_audit_setting.GetSetting()
+	configured.Mode = prompt_audit_setting.ModeOff
+	configured.OutputMode = prompt_audit_setting.ModeOff
+	configured.ProbeBlockEnabled = false
+	configured.RecordAll = true
+	configured.PublishConfig()
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	c.Set("role", common.RoleCommonUser)
+	request := PromptAuditRequest{
+		Snapshot: dto.PromptAuditSnapshot{Segments: []dto.PromptAuditSegment{{
+			Scope: dto.PromptScopeUser, Role: "user", User: true, Text: "store this question",
+		}}},
+		Protocol: "openai_chat", Model: "guarded-model", Stage: "pre_distribution",
+	}
+	result, apiErr := InspectPrompt(c, request)
+	require.Nil(t, apiErr)
+	require.Zero(t, result.AuditID, "nothing is inspected while the audit is off")
+	RecordPromptAuditStored(c, request)
+
+	var audits []*model.PromptAudit
+	require.NoError(t, model.DB.Order("id desc").Limit(1).Find(&audits).Error)
+	require.Len(t, audits, 1)
+	stored := audits[0]
+	assert.Equal(t, model.PromptAuditStatusStored, stored.Status)
+	assert.Empty(t, stored.Decision)
+	assert.Empty(t, stored.Action)
+	assert.Equal(t, "store this question", string(stored.FullPrompt))
+	assert.Contains(t, stored.RedactedPreview, "store this question")
+	assert.NotZero(t, stored.CompletedAt)
+	_, claimed, err := model.ClaimPromptAudit("worker", 100, 200)
+	require.NoError(t, err)
+	assert.False(t, claimed, "a stored record is never claimed for scanning")
+
+	// Recording everything off leaves the same request with no row at all.
+	configured.RecordAll = false
+	configured.PublishConfig()
+	RecordPromptAuditStored(c, request)
+	var count int64
+	require.NoError(t, model.DB.Model(&model.PromptAudit{}).Count(&count).Error)
+	assert.EqualValues(t, 1, count)
+
+	// Retention clears a stored record's content on the same schedule as any
+	// other finished request.
+	configured.RecordAll = true
+	configured.PublishConfig()
+	cleaned, err := model.CleanupPromptAuditPromptsBefore(stored.CompletedAt+1, 500)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, cleaned)
+	after, err := model.GetPromptAudit(stored.ID)
+	require.NoError(t, err)
+	assert.Empty(t, after.FullPrompt)
+	assert.Empty(t, after.ScanPayload)
 }
 
 func TestPromptAuditMCPDefinitionsUseIndependentCache(t *testing.T) {

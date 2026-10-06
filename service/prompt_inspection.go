@@ -475,6 +475,12 @@ func InspectPrompt(c *gin.Context, request PromptAuditRequest) (PromptAuditResul
 		AttachPromptAuditResult(c, result)
 		return result, hosttypes.NewErrorWithStatusCode(errors.New(i18n.T(c, i18n.MsgProbeRequestBlocked)), hosttypes.ErrorCodeProbeRequestBlocked, http.StatusBadRequest, hosttypes.ErrOptionWithSkipRetry(), hosttypes.ErrOptionWithNoRecordErrorLog())
 	}
+	// An administrator outside the audit scope is left to the probe gate alone:
+	// the word list and the model audit would otherwise refuse the operator's own
+	// traffic under rules written for users.
+	if promptAuditAdminExempt(c, configured) {
+		return PromptAuditResult{Enabled: auditEnabled, Mode: configured.Mode, Direction: direction, ConfigVersion: configured.ConfigVersion, Outcome: "skipped_admin_exempt"}, nil
+	}
 	match, err := matchPromptWordlists(wordlistSnapshot, configured)
 
 	// A request that generates nothing (a token count) is held to the wordlist

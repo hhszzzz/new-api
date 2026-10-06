@@ -317,6 +317,56 @@ func PromptAuditAppliesToGroup(c *gin.Context, setting prompt_audit_setting.Prom
 	return setting.AppliesToGroupForMode(effectivePromptAuditGroup(c), mode)
 }
 
+// promptAuditAdminExempt reports whether the operator has taken administrators
+// out of the word-list and model audit. Probe detection is deliberately not part
+// of this: it refuses liveness traffic and keeps its own administrator switch.
+func promptAuditAdminExempt(c *gin.Context, setting prompt_audit_setting.PromptAuditSetting) bool {
+	return !setting.IncludeAdmins && contextInt(c, "role") >= common.RoleAdminUser
+}
+
+// RecordPromptAuditStored keeps a request that no gate inspected, so the gateway
+// still records what passed through it while enforcement is off. The row holds
+// the same content an inspected one would and carries no verdict: the worker
+// never claims it, and the listing reads it as stored only.
+func RecordPromptAuditStored(c *gin.Context, request PromptAuditRequest) {
+	setting := prompt_audit_setting.GetSetting()
+	if !setting.RecordAll {
+		return
+	}
+	request = preparePromptAuditRequest(c, request)
+	direction := strings.ToLower(strings.TrimSpace(request.Direction))
+	if direction == "" {
+		direction = PromptAuditDirectionInput
+	}
+	fullText := promptAuditJoinedText(request.Snapshot, request.Output)
+	if strings.TrimSpace(fullText) == "" {
+		return
+	}
+	coverageComplete := request.CoverageComplete
+	if direction == PromptAuditDirectionInput {
+		coverageComplete = !request.CoverageIncomplete
+	}
+	digest := sha256.Sum256([]byte(fullText))
+	audit := &model.PromptAudit{
+		RequestID: resultRequestID(c), UserID: contextInt(c, "id"), TokenID: contextInt(c, "token_id"),
+		TokenName: contextString(c, "token_name"), GroupName: effectivePromptAuditGroup(c),
+		Protocol: request.Protocol, ModelName: request.Model, Stage: normalizedPromptAuditStage(request.Stage),
+		Direction: direction, CoverageComplete: coverageComplete,
+		GenerationID: request.GenerationID, DeliveryStatus: request.DeliveryStatus,
+		ConfigVersion: setting.ConfigVersion, Status: model.PromptAuditStatusStored,
+		PromptHash: hex.EncodeToString(digest[:]), PromptLength: utf8.RuneCountInString(fullText),
+		SegmentCount: len(request.Snapshot.Segments), CompletedAt: common.GetTimestamp(),
+	}
+	applyPromptAuditRequestContext(audit, c)
+	setPromptAuditContent(audit, fullText, setting.FullPromptRetentionLimit())
+	setPromptAuditInputContext(audit, request)
+	payload, _ := common.Marshal(promptAuditPayload{Version: 1, Direction: direction, CoverageComplete: coverageComplete, Segments: request.Snapshot.OrderedSegments(), Output: request.Output})
+	audit.ScanPayload, audit.ScanPayloadTruncated = model.RetainPromptAuditPayload(payload)
+	if err := model.CreatePromptAudit(audit); err != nil {
+		logger.LogWarn(c, "prompt audit storage failed: %s", err.Error())
+	}
+}
+
 func RecordOutputAuditUnavailable(c *gin.Context, request PromptAuditRequest, failure string) PromptAuditResult {
 	setting := prompt_audit_setting.GetSetting()
 	result := PromptAuditResult{
@@ -504,6 +554,12 @@ func checkPromptAuditWithSetting(c *gin.Context, request PromptAuditRequest, set
 	}
 	group := effectivePromptAuditGroup(c)
 	if !setting.AppliesToGroupForMode(group, mode) {
+		AttachPromptAuditResult(c, result)
+		return result, nil
+	}
+	// An administrator outside the audit scope is not inspected. The request is
+	// still stored by the caller when recording everything is on.
+	if promptAuditAdminExempt(c, setting) {
 		AttachPromptAuditResult(c, result)
 		return result, nil
 	}
