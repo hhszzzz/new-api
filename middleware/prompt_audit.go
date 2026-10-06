@@ -30,7 +30,8 @@ func inspectPromptBeforeDistribution(c *gin.Context, modelRequest *ModelRequest)
 		return nil, true
 	}
 	configured := prompt_audit_setting.GetSetting()
-	if !configured.ProbeBlockEnabled && !setting.ShouldCheckPromptSensitive() && !configured.AppliesToGroup(common.GetContextKeyString(c, constant.ContextKeyUsingGroup)) {
+	enforcing := configured.ProbeBlockEnabled || setting.ShouldCheckPromptSensitive() || configured.AppliesToGroup(common.GetContextKeyString(c, constant.ContextKeyUsingGroup))
+	if !enforcing && !configured.RecordAll {
 		return nil, true
 	}
 
@@ -54,6 +55,12 @@ func inspectPromptBeforeDistribution(c *gin.Context, modelRequest *ModelRequest)
 	if taskRequest {
 		extracted, requestModel, err := service.ExtractTaskPromptAuditSnapshot(c)
 		if err != nil {
+			// Recording everything must not turn a request no gate is enforcing
+			// into one the gateway refuses: it would have been served without the
+			// audit enabled, so it is served now and left unrecorded.
+			if !enforcing {
+				return nil, true
+			}
 			abortPromptAuditInputError(c, err, true)
 			return nil, false
 		}
@@ -65,6 +72,9 @@ func inspectPromptBeforeDistribution(c *gin.Context, modelRequest *ModelRequest)
 	} else {
 		request, err := helper.GetAndValidateRequest(c, format)
 		if err != nil {
+			if !enforcing {
+				return nil, true
+			}
 			abortPromptAuditInputError(c, err, false)
 			return nil, false
 		}
@@ -81,7 +91,7 @@ func inspectPromptBeforeDistribution(c *gin.Context, modelRequest *ModelRequest)
 		return cleanup, false
 	}
 
-	result, apiErr := service.InspectPrompt(c, service.PromptAuditRequest{
+	auditRequest := service.PromptAuditRequest{
 		Snapshot:           snapshot,
 		Protocol:           string(format),
 		Model:              modelName,
@@ -94,11 +104,17 @@ func inspectPromptBeforeDistribution(c *gin.Context, modelRequest *ModelRequest)
 		// text: counts arrive on every step of an agent run, and auditing each one
 		// turned the audit node's own rate limit into refused counts.
 		WordlistOnly: strings.HasPrefix(c.Request.URL.Path, "/v1/messages/count_tokens"),
-	})
+	}
+	result, apiErr := service.InspectPrompt(c, auditRequest)
 	if apiErr != nil {
 		service.RecordPromptAuditError(c, result, apiErr, modelName, isStream)
 		abortPromptAuditRequest(c, apiErr, taskRequest)
 		return cleanup, false
+	}
+	if result.AuditID == 0 {
+		// No gate read this request. With recording on, the gateway still keeps
+		// the record of what passed through it.
+		service.RecordPromptAuditStored(c, auditRequest)
 	}
 	common.SetContextKey(c, constant.ContextKeyPromptAuditChecked, true)
 	return cleanup, true

@@ -298,10 +298,15 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 	if apiErr = middleware.PrepareResponsesWebSocketRequest(c, modelName, create.Body); apiErr != nil {
 		return apiErr
 	}
-	result, auditErr := service.InspectPrompt(c, service.PromptAuditRequest{Snapshot: dto.PromptAuditSnapshotOf(validated), Protocol: "openai_responses", Model: modelName, Stage: "responses_websocket", CoverageIncomplete: strings.TrimSpace(validated.PreviousResponseID) != "", Stream: true})
+	auditRequest := service.PromptAuditRequest{Snapshot: dto.PromptAuditSnapshotOf(validated), Protocol: "openai_responses", Model: modelName, Stage: "responses_websocket", CoverageIncomplete: strings.TrimSpace(validated.PreviousResponseID) != "", Stream: true}
+	result, auditErr := service.InspectPrompt(c, auditRequest)
 	if auditErr != nil {
 		service.RecordPromptAuditError(c, result, auditErr, modelName, true)
 		return auditErr
+	}
+	if result.AuditID == 0 {
+		// No gate read this request; with recording on it is still stored.
+		service.RecordPromptAuditStored(c, auditRequest)
 	}
 	common.SetContextKey(c, appconstant.ContextKeyPromptAuditChecked, true)
 	outputAuditSetting := prompt_audit_setting.GetSetting()
@@ -581,7 +586,7 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 			} else {
 				protocolstate.ObserveResponsesStream(c, &event.ResponsesStreamResponse)
 			}
-			if outputAuditMode != prompt_audit_setting.ModeOff && strings.HasPrefix(event.Type, "response.") {
+			if (outputAuditMode != prompt_audit_setting.ModeOff || outputAuditSetting.RecordAll) && strings.HasPrefix(event.Type, "response.") {
 				var visible any
 				if common.Unmarshal(incoming.body, &visible) == nil {
 					outputAuditCollector.Collect(visible, true)
@@ -670,6 +675,27 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 						}
 						_ = appmodel.UpdatePromptAuditDelivery(result.AuditID, "delivered")
 						state.terminal = nil
+					}
+					if result.AuditID == 0 {
+						// Output auditing is on but no gate produced a verdict, for
+						// example an administrator outside the audit scope. With
+						// recording on the output is still kept.
+						service.RecordPromptAuditStored(c, service.PromptAuditRequest{
+							Snapshot: dto.PromptAuditSnapshotOf(validated), Protocol: "openai_responses", Model: modelName,
+							Stage: "responses_websocket", Direction: service.PromptAuditDirectionOutput,
+							GenerationID: responseID, DeliveryStatus: deliveryStatus, CoverageComplete: coverageComplete, Output: outputText, Stream: true,
+						})
+					}
+				}
+				if outputAuditMode == prompt_audit_setting.ModeOff && outputAuditSetting.RecordAll {
+					// The output is not audited here; with recording on it is still
+					// stored, with the response id that ties it to this turn.
+					if outputText := outputAuditCollector.String(); outputText != "" {
+						service.RecordPromptAuditStored(c, service.PromptAuditRequest{
+							Snapshot: dto.PromptAuditSnapshotOf(validated), Protocol: "openai_responses", Model: modelName,
+							Stage: "responses_websocket", Direction: service.PromptAuditDirectionOutput,
+							GenerationID: responseID, DeliveryStatus: "delivered", CoverageComplete: coverageComplete, Output: outputText, Stream: true,
+						})
 					}
 				}
 				return nil

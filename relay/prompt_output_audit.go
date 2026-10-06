@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/relay/output"
 	"github.com/QuantumNous/new-api/setting/prompt_audit_setting"
 	"github.com/gin-gonic/gin"
 )
@@ -211,6 +212,49 @@ func (writer *promptAuditResponseWriter) WriteString(body string) (int, error) {
 	return writer.Write([]byte(body))
 }
 
+// WriteMessage keeps the typed-event path transparent when the wrapped writer
+// is a protocol sink (the Responses WebSocket bridge): without this method the
+// relay's sink assertions would fail and fall back to rendering, which such a
+// sink rejects as an incomplete protocol event. For plain writers the fallback
+// follows the same contract as ChatWriter: a message carrying a status is a
+// one-shot JSON body, everything else is a stream event. Captured events are
+// stored newline-delimited so they stay parseable without SSE framing.
+func (writer *promptAuditResponseWriter) WriteMessage(message output.Message) error {
+	if sink, ok := writer.ResponseWriter.(output.Sink); ok {
+		if writer.blocking {
+			return writer.captureMessage(message)
+		}
+		if err := sink.WriteMessage(message); err != nil {
+			return err
+		}
+		if !writer.capture.overflow {
+			if captureErr := writer.captureMessage(message); captureErr != nil && !errors.Is(captureErr, errPromptOutputAuditLimit) {
+				writer.capture.overflow = true
+			}
+		}
+		return nil
+	}
+	if message.Status != 0 {
+		return (output.JSON{Writer: writer}).WriteMessage(message)
+	}
+	if err := (output.SSE{Writer: writer}).WriteMessage(message); err != nil {
+		return err
+	}
+	writer.Flush()
+	return nil
+}
+
+func (writer *promptAuditResponseWriter) captureMessage(message output.Message) error {
+	if len(message.Data) == 0 {
+		return nil
+	}
+	line := make([]byte, 0, len(message.Data)+1)
+	line = append(line, message.Data...)
+	line = append(line, '\n')
+	_, err := writer.capture.Write(line)
+	return err
+}
+
 func (writer *promptAuditResponseWriter) Flush() {
 	writer.WriteHeaderNow()
 	if !writer.blocking {
@@ -247,6 +291,20 @@ func (writer *promptAuditResponseWriter) commit() error {
 		destination[key] = append([]string(nil), values...)
 	}
 	writer.ResponseWriter.WriteHeader(writer.status)
+	if sink, ok := writer.ResponseWriter.(output.Sink); ok {
+		// Typed events were captured newline-delimited; replay each line as
+		// the protocol message it came from.
+		for line := range bytes.SplitSeq(body, []byte("\n")) {
+			line = bytes.TrimSpace(line)
+			if len(line) == 0 {
+				continue
+			}
+			if err := sink.WriteMessage(output.Message{Data: line}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	_, err = writer.ResponseWriter.Write(body)
 	return err
 }
@@ -279,10 +337,28 @@ func extractPromptAuditOutput(body []byte) (string, error) {
 		}
 	} else {
 		var value any
-		if err := common.Unmarshal(trimmed, &value); err != nil {
-			return "", errors.New("unsupported text output structure")
+		if err := common.Unmarshal(trimmed, &value); err == nil {
+			collector.Collect(value, false)
+		} else {
+			// Typed protocol events captured outside SSE framing are stored
+			// one JSON document per line.
+			matched := false
+			for line := range bytes.SplitSeq(trimmed, []byte("\n")) {
+				line = bytes.TrimSpace(line)
+				if len(line) == 0 {
+					continue
+				}
+				var event any
+				if common.Unmarshal(line, &event) != nil {
+					return "", errors.New("unsupported text output structure")
+				}
+				collector.Collect(event, true)
+				matched = true
+			}
+			if !matched {
+				return "", errors.New("unsupported text output structure")
+			}
 		}
-		collector.Collect(value, false)
 	}
 	text := collector.String()
 	if text == "" {

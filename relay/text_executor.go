@@ -40,9 +40,13 @@ func executeText(c *gin.Context, info *relaycommon.RelayInfo) *hosttypes.NewAPIE
 	info.InitChannelMeta(c)
 	defer info.CloseConversionSession()
 	outputAuditSetting := prompt_audit_setting.GetSetting()
+	// Enforcement and recording install the same capture writer: one holds the
+	// response back for a verdict, the other only keeps a copy of it.
+	outputAuditEnforcing := outputAuditSetting.OutputMode != prompt_audit_setting.ModeOff &&
+		service.PromptAuditAppliesToGroup(c, outputAuditSetting, outputAuditSetting.OutputMode)
 	baseWriter := c.Writer
 	var outputAuditWriter *promptAuditResponseWriter
-	if outputAuditSetting.OutputMode != prompt_audit_setting.ModeOff && !info.IsChannelTest && service.PromptAuditAppliesToGroup(c, outputAuditSetting, outputAuditSetting.OutputMode) {
+	if !info.IsChannelTest && (outputAuditEnforcing || outputAuditSetting.RecordAll) {
 		outputAuditWriter = newPromptAuditResponseWriter(baseWriter, outputAuditSetting)
 		c.Writer = outputAuditWriter
 		defer func() {
@@ -340,7 +344,19 @@ func executeText(c *gin.Context, info *relaycommon.RelayInfo) *hosttypes.NewAPIE
 		c.Header("X-New-Api-Compaction", relayconvert.CompactionSummary)
 		c.Data(http.StatusOK, "application/json", body)
 	}
-	if outputAuditWriter != nil {
+	if outputAuditWriter != nil && !outputAuditEnforcing {
+		// The output is not audited here; with recording on it is still stored.
+		body, captureErr := outputAuditWriter.capture.Bytes()
+		outputText, extractErr := extractPromptAuditOutput(body)
+		if outputText != "" && captureErr == nil && extractErr == nil {
+			service.RecordPromptAuditStored(c, service.PromptAuditRequest{
+				Snapshot: dto.PromptAuditSnapshotOf(info.Request), Protocol: string(info.RelayFormat), Model: info.OriginModelName,
+				Stage: "text_executor", Direction: service.PromptAuditDirectionOutput, Output: outputText,
+				DeliveryStatus: "delivered", CoverageComplete: !outputAuditWriter.capture.overflow, Stream: info.IsStream,
+			})
+		}
+	}
+	if outputAuditWriter != nil && outputAuditEnforcing {
 		body, captureErr := outputAuditWriter.capture.Bytes()
 		outputText, extractErr := extractPromptAuditOutput(body)
 		coverageComplete := !outputAuditWriter.capture.overflow && captureErr == nil && extractErr == nil
@@ -387,6 +403,16 @@ func executeText(c *gin.Context, info *relaycommon.RelayInfo) *hosttypes.NewAPIE
 					return hosttypes.NewErrorWithStatusCode(errors.New("output delivery failed after audit"), hosttypes.ErrorCodeOutputAuditUnavailable, http.StatusBadGateway, hosttypes.ErrOptionWithSkipRetry())
 				}
 				_ = model.UpdatePromptAuditDelivery(result.AuditID, "delivered")
+			}
+			if result.AuditID == 0 {
+				// Output auditing is on but no gate produced a verdict, for example
+				// an administrator outside the audit scope. With recording on the
+				// output is still kept.
+				service.RecordPromptAuditStored(c, service.PromptAuditRequest{
+					Snapshot: dto.PromptAuditSnapshotOf(info.Request), Protocol: string(info.RelayFormat), Model: info.OriginModelName,
+					Stage: "text_executor", Direction: service.PromptAuditDirectionOutput, Output: outputText,
+					DeliveryStatus: deliveryStatus, CoverageComplete: coverageComplete, Stream: info.IsStream,
+				})
 			}
 		} else if !outputAuditWriter.blocking {
 			service.RecordOutputAuditUnavailable(c, service.PromptAuditRequest{

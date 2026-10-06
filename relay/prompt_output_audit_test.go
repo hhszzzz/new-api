@@ -5,6 +5,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/QuantumNous/new-api/relay/output"
 	"github.com/QuantumNous/new-api/setting/prompt_audit_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -67,6 +68,16 @@ func TestExtractPromptAuditOutputFromJSONAndSSE(t *testing.T) {
 	text, err = extractPromptAuditOutput(multiChoice)
 	require.NoError(t, err)
 	assert.Equal(t, "AB\n\nX", text)
+
+	// Typed protocol events captured outside SSE framing arrive one JSON
+	// document per line (the WebSocket bridge sink path).
+	typedEvents := []byte("{\"type\":\"response.output_text.delta\",\"delta\":\"bridged\"}\n{\"type\":\"response.completed\",\"response\":{}}\n")
+	text, err = extractPromptAuditOutput(typedEvents)
+	require.NoError(t, err)
+	assert.Equal(t, "bridged", text)
+
+	_, err = extractPromptAuditOutput([]byte("{\"type\":\"response.output_text.delta\",\"delta\":\"kept\"}\nnot json\n"))
+	require.Error(t, err)
 }
 
 func TestExtractPromptAuditOutputAcrossTextProtocols(t *testing.T) {
@@ -134,4 +145,61 @@ func TestPromptAuditBlockingOverflowStopsGenerationAndWithholdsOutput(t *testing
 	assert.Zero(t, written)
 	assert.Empty(t, recorder.Body.Bytes())
 	assert.True(t, writer.capture.overflow)
+}
+
+func TestPromptAuditWriterKeepsTypedSinkTransparent(t *testing.T) {
+	var sent []string
+	base := newResponsesWSEventWriter(func(payload []byte) error { sent = append(sent, string(payload)); return nil }, nil)
+	writer := newPromptAuditResponseWriter(base, prompt_audit_setting.PromptAuditSetting{
+		OutputMode: prompt_audit_setting.ModeOff, OutputMaxBytes: 1024, OutputMemoryBytes: 1024,
+	})
+	t.Cleanup(func() { require.NoError(t, writer.capture.Close()) })
+
+	sink, ok := any(writer).(output.Sink)
+	require.True(t, ok, "the audit writer must stay a protocol sink for typed bridges")
+	delta := `{"type":"response.output_text.delta","delta":"hi"}`
+	require.NoError(t, sink.WriteMessage(output.Message{Event: "response.output_text.delta", Data: []byte(delta)}))
+	assert.Equal(t, []string{delta}, sent)
+
+	body, err := writer.capture.Bytes()
+	require.NoError(t, err)
+	text, err := extractPromptAuditOutput(body)
+	require.NoError(t, err)
+	assert.Equal(t, "hi", text)
+}
+
+func TestPromptAuditWriterRendersTypedEventsForPlainWriters(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	writer := newPromptAuditResponseWriter(c.Writer, prompt_audit_setting.PromptAuditSetting{
+		OutputMode: prompt_audit_setting.ModeOff, OutputMaxBytes: 1024, OutputMemoryBytes: 1024,
+	})
+	t.Cleanup(func() { require.NoError(t, writer.capture.Close()) })
+
+	require.NoError(t, writer.WriteMessage(output.Message{Event: "response.output_text.delta", Data: []byte(`{"type":"response.output_text.delta","delta":"hi"}`)}))
+	assert.Contains(t, recorder.Body.String(), "event: response.output_text.delta\n")
+	body, err := writer.capture.Bytes()
+	require.NoError(t, err)
+	text, err := extractPromptAuditOutput(body)
+	require.NoError(t, err)
+	assert.Equal(t, "hi", text)
+}
+
+func TestPromptAuditBlockingWriterDeliversTypedEventsOnCommit(t *testing.T) {
+	var sent []string
+	base := newResponsesWSEventWriter(func(payload []byte) error { sent = append(sent, string(payload)); return nil }, nil)
+	writer := newPromptAuditResponseWriter(base, prompt_audit_setting.PromptAuditSetting{
+		OutputMode: prompt_audit_setting.ModeBlocking, OutputMaxBytes: 1024, OutputMemoryBytes: 1024,
+	})
+	t.Cleanup(func() { require.NoError(t, writer.capture.Close()) })
+
+	delta := `{"type":"response.output_text.delta","delta":"hi"}`
+	terminal := `{"type":"response.completed","response":{"id":"resp_1"}}`
+	require.NoError(t, writer.WriteMessage(output.Message{Data: []byte(delta)}))
+	require.NoError(t, writer.WriteMessage(output.Message{Data: []byte(terminal)}))
+	assert.Empty(t, sent)
+	require.NoError(t, writer.commit())
+	assert.Equal(t, []string{delta}, sent)
+	base.flushHeldEvents()
+	assert.Equal(t, []string{delta, terminal}, sent)
 }

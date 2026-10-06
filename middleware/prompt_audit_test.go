@@ -394,3 +394,69 @@ func promptAuditMiddlewareTestConfig(baseURL string) prompt_audit_setting.Prompt
 		ProbePhrases:      []string{"hi"},
 	}
 }
+
+func TestPromptAuditRecordsRequestsNoGateInspected(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	previousDB := model.DB
+	db, err := gorm.Open(sqlite.Open("file:prompt_audit_record_all?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.PromptAudit{}))
+	model.DB = db
+	previousConfig := prompt_audit_setting.GetSetting()
+	previousWords := setting.SensitiveWordsSnapshot()
+	previousSensitiveEnabled := setting.CheckSensitiveEnabled
+	previousPromptSensitiveEnabled := setting.CheckSensitiveOnPromptEnabled
+	t.Cleanup(func() {
+		model.DB = previousDB
+		previousConfig.PublishConfig()
+		setting.SensitiveWordsFromString(strings.Join(previousWords, "\n"))
+		setting.SetCheckSensitiveEnabled(previousSensitiveEnabled)
+		setting.SetCheckSensitiveOnPromptEnabled(previousPromptSensitiveEnabled)
+	})
+
+	send := func(text string) (*httptest.ResponseRecorder, bool) {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"guard-model","messages":[{"role":"user","content":"`+text+`"}]}`))
+		c.Request.Header.Set("Content-Type", "application/json")
+		c.Set("id", 7)
+		c.Set("username", "record-owner")
+		common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
+		cleanup, allowed := inspectPromptBeforeDistribution(c, &ModelRequest{Model: "guard-model"})
+		if cleanup != nil {
+			cleanup()
+		}
+		return recorder, allowed
+	}
+
+	// Every gate is off, so nothing is inspected; the request is still kept.
+	configured := promptAuditMiddlewareTestConfig("")
+	configured.Mode = prompt_audit_setting.ModeOff
+	configured.ProbeBlockEnabled = false
+	configured.RecordAll = true
+	configured.PublishConfig()
+	setting.SensitiveWordsFromString("")
+	setting.SetCheckSensitiveEnabled(false)
+	setting.SetCheckSensitiveOnPromptEnabled(false)
+	_, allowed := send("keep this question")
+	require.True(t, allowed)
+	var audits []model.PromptAudit
+	require.NoError(t, db.Order("id asc").Find(&audits).Error)
+	require.Len(t, audits, 1)
+	assert.Equal(t, model.PromptAuditStatusStored, audits[0].Status)
+	assert.Empty(t, audits[0].Decision)
+	assert.Contains(t, string(audits[0].FullPrompt), "keep this question")
+
+	// A request a gate did inspect keeps its verdict row and is not also stored.
+	configured.Mode = prompt_audit_setting.ModeBlocking
+	configured.PublishConfig()
+	setting.SensitiveWordsFromString("blocked_word")
+	setting.SetCheckSensitiveEnabled(true)
+	setting.SetCheckSensitiveOnPromptEnabled(true)
+	recorder, allowed := send("please handle blocked_word")
+	assert.False(t, allowed)
+	assert.Equal(t, http.StatusBadRequest, recorder.Code)
+	var stored int64
+	require.NoError(t, db.Model(&model.PromptAudit{}).Where("status = ?", model.PromptAuditStatusStored).Count(&stored).Error)
+	assert.EqualValues(t, 1, stored, "an inspected request is not stored a second time")
+}

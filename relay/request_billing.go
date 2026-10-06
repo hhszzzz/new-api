@@ -44,18 +44,23 @@ func PrepareRequestBilling(c *gin.Context, info *relaycommon.RelayInfo) *hosttyp
 		if responses, ok := info.Request.(*dto.OpenAIResponsesRequest); ok {
 			coverageIncomplete = strings.TrimSpace(responses.PreviousResponseID) != ""
 		}
-		result, apiErr := service.InspectPrompt(c, service.PromptAuditRequest{
+		auditRequest := service.PromptAuditRequest{
 			Snapshot:           dto.PromptAuditSnapshotOf(info.Request),
 			Protocol:           string(info.RelayFormat),
 			Model:              info.OriginModelName,
 			Stage:              "http",
 			Stream:             info.IsStream,
 			CoverageIncomplete: coverageIncomplete,
-		})
+		}
+		result, apiErr := service.InspectPrompt(c, auditRequest)
 		if apiErr != nil {
 			service.RecordPromptAuditError(c, result, apiErr, info.OriginModelName, info.IsStream)
 			service.RecordRequestPolicyTermination(c, apiErr)
 			return apiErr
+		}
+		if result.AuditID == 0 {
+			// No gate read this request; with recording on it is still stored.
+			service.RecordPromptAuditStored(c, auditRequest)
 		}
 	}
 
