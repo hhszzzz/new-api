@@ -65,6 +65,7 @@ export type PromptAuditStatus =
   | 'retry'
   | 'done'
   | 'failed'
+  | 'stored'
 export type PromptAuditDecision = '' | 'pass' | 'flag' | 'block' | 'unavailable'
 
 export interface ApiResponse<T> {
@@ -129,6 +130,8 @@ export interface PromptAuditConfig {
   probe_semantic_enabled?: boolean
   probe_semantic_threshold?: number
   probe_include_admins?: boolean
+  include_admins?: boolean
+  record_all?: boolean
   expand_base64?: boolean
   manual_wordlist_action: PromptWordlistAction
   enabled_categories: string[]

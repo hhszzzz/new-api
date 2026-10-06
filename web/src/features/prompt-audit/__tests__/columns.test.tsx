@@ -504,6 +504,29 @@ describe('prompt audit records table', () => {
     expect(within(cell).queryByText('All unavailable')).not.toBeInTheDocument()
   })
 
+  test('reads a request that was only stored as stored, not inspected', () => {
+    const cell = renderCell('result', {
+      ...EVENT,
+      status: 'stored',
+      decision: '',
+      action: '',
+    })
+
+    expect(within(cell).getByText('Stored, not inspected')).toBeVisible()
+    // Without the stored status the row would fall through to the generic
+    // pending reading, which would claim it is still waiting for an audit.
+    expect(within(cell).queryByText('pending')).not.toBeInTheDocument()
+  })
+
+  test('counts requests that were stored without an audit', () => {
+    const cell = renderCell('result', {
+      ...EVENT,
+      repeat: { ...REPEAT, outcome_counts: { stored: 4 } },
+    })
+
+    expect(within(cell).getByText('Stored, not inspected 4')).toBeVisible()
+  })
+
   test('never invents successful outcomes when an older response omits counts', () => {
     const cell = renderCell('result', { ...EVENT, repeat: REPEAT })
     expect(within(cell).getByText('Outcome counts unavailable')).toBeVisible()

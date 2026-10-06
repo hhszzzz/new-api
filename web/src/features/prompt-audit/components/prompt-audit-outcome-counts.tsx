@@ -55,6 +55,7 @@ export function PromptAuditOutcomeCounts(props: { repeat: PromptAuditRepeat }) {
     ['block', t('Blocked'), 'destructive'],
     ['flag', t('Flagged'), 'warning'],
     ['unavailable', t('unavailable'), 'warning'],
+    ['stored', t('Stored, not inspected'), 'outline'],
     ['queued', t('queued'), 'outline'],
     ['processing', t('processing'), 'warning'],
     ['retry', t('retry'), 'warning'],

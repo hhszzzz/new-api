@@ -144,6 +144,24 @@ export function EnforcementSection({
 
       <div className='divide-y'>
         <SettingsSwitchField
+          controlId='prompt-audit-record-all'
+          checked={config.record_all ?? true}
+          onCheckedChange={(record_all) => onChange({ record_all })}
+          label={t('Store every request even when auditing is off')}
+          description={t(
+            'Input and output are recorded regardless of the audit modes. A request that was not inspected is stored as Stored, not inspected.'
+          )}
+        />
+        <SettingsSwitchField
+          controlId='prompt-audit-include-admins'
+          checked={config.include_admins ?? true}
+          onCheckedChange={(include_admins) => onChange({ include_admins })}
+          label={t('Include administrators in the audit scope')}
+          description={t(
+            'Administrators are checked by the word list and model audit like any other user. Turn this off to exempt your own traffic; probe detection keeps its own switch below.'
+          )}
+        />
+        <SettingsSwitchField
           controlId='prompt-audit-probe-block'
           checked={config.probe_block_enabled ?? false}
           onCheckedChange={(probe_block_enabled) =>

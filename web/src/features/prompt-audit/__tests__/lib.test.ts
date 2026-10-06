@@ -492,6 +492,15 @@ describe('prompt audit management helpers', () => {
     })
   })
 
+  test('reads a stored-but-uninspected record by its status, never as a verdict', () => {
+    // The row was kept without an audit, so it has no decision to read: the
+    // status itself is the whole outcome and must not borrow a severity.
+    expect(promptAuditOutcome({ status: 'stored', decision: '' })).toEqual({
+      key: 'Stored, not inspected',
+      variant: 'outline',
+    })
+  })
+
   test('keeps an unavailable audit distinct from a content violation when the request failed', () => {
     // An unreachable audit node is a different problem from a blocked prompt;
     // reading the verdict through the failure must not turn it red.

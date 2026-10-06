@@ -239,6 +239,49 @@ describe('prompt audit settings page', () => {
     expect(nodeDetail(view, 'prompt-audit-probe-phrases')).not.toBeNull()
   })
 
+  // The backend defaults both switches to on, and the config in this suite
+  // omits them: the form has to show those defaults rather than read an absent
+  // value as false, or a fresh install would silently stop storing requests
+  // and silently exempt administrators.
+  test('shows audit-scope and full-storage switches on when the config omits them', async () => {
+    renderSettings()
+    await screen.findByText('Enforcement policy')
+
+    expect(
+      screen.getByRole('switch', {
+        name: 'Include administrators in the audit scope',
+      })
+    ).toBeChecked()
+    expect(
+      screen.getByRole('switch', {
+        name: 'Store every request even when auditing is off',
+      })
+    ).toBeChecked()
+  })
+
+  test('turns one of the two new switches off without moving the other', async () => {
+    const user = userEvent.setup()
+    renderSettings()
+    await screen.findByText('Enforcement policy')
+
+    await user.click(
+      screen.getByRole('switch', {
+        name: 'Include administrators in the audit scope',
+      })
+    )
+
+    expect(
+      screen.getByRole('switch', {
+        name: 'Include administrators in the audit scope',
+      })
+    ).not.toBeChecked()
+    expect(
+      screen.getByRole('switch', {
+        name: 'Store every request even when auditing is off',
+      })
+    ).toBeChecked()
+  })
+
   test('expanding one node collapses the other', async () => {
     const user = userEvent.setup()
     const view = renderSettings()

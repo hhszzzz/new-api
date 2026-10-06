@@ -76,6 +76,8 @@ function promptAuditConfigDraft(
     probe_semantic_enabled: config.probe_semantic_enabled ?? false,
     probe_semantic_threshold: config.probe_semantic_threshold,
     probe_include_admins: config.probe_include_admins ?? false,
+    include_admins: config.include_admins ?? true,
+    record_all: config.record_all ?? true,
     expand_base64: config.expand_base64 ?? true,
     manual_wordlist_action: config.manual_wordlist_action ?? 'block',
     enabled_categories: [...config.enabled_categories],

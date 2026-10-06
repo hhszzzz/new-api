@@ -93,6 +93,10 @@ export function promptAuditOutcome(event: {
         }
       }
       return { key: 'failed', variant: 'destructive' }
+    case 'stored':
+      // Terminal without ever being inspected, so the status itself is the
+      // whole reading: there is no decision to prefer over it.
+      return { key: 'Stored, not inspected', variant: 'outline' }
     default:
       if (event.decision) {
         return {
