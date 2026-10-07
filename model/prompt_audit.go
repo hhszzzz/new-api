@@ -354,7 +354,10 @@ func (audit *PromptAudit) ToResponse(includeFullPrompt bool) PromptAuditResponse
 		Ip:          audit.Ip, UserAgent: audit.UserAgent, Method: audit.Method,
 		RequestPath: audit.RequestPath, Origin: audit.Origin, Referer: audit.Referer,
 	}
-	if response.InspectionType == "" {
+	if response.Status == PromptAuditStatusStored {
+		response.InspectionType = "stored"
+		response.ExecutionMode = prompt_audit_setting.ModeOff
+	} else if response.InspectionType == "" {
 		response.InspectionType = "model"
 	}
 	if includeFullPrompt && len(audit.FullPrompt) > 0 {
@@ -1036,7 +1039,8 @@ func applyPromptAuditFilter(query *gorm.DB, filter PromptAuditFilter) *gorm.DB {
 	case "wordlist":
 		query = query.Where("inspection_type = ?", "wordlist")
 	case "model":
-		query = query.Where("(inspection_type IS NULL OR inspection_type NOT IN ?)", []string{"wordlist", "probe_block", "probe_phrase", "probe_semantic", "probe_fast_pass"})
+		query = query.Where("COALESCE(status, '') <> ?", PromptAuditStatusStored).
+			Where("(inspection_type IS NULL OR inspection_type NOT IN ?)", []string{"wordlist", "probe_block", "probe_phrase", "probe_semantic", "probe_fast_pass"})
 	case "probe":
 		query = query.Where("inspection_type IN ?", []string{"probe_block", "probe_phrase", "probe_semantic", "probe_fast_pass"})
 	default:

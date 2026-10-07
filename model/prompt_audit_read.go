@@ -52,8 +52,8 @@ type PromptAuditSessionPage struct {
 }
 
 const promptAuditOutcome = "CASE WHEN status IN ('queued', 'processing', 'retry') THEN status " +
-	"WHEN decision IN ('pass', 'block', 'flag', 'unavailable') THEN decision " +
 	"WHEN status = 'stored' THEN 'stored' " +
+	"WHEN decision IN ('pass', 'block', 'flag', 'unavailable') THEN decision " +
 	"WHEN status = 'failed' AND COALESCE(decision, '') = '' THEN 'failed' ELSE 'unknown' END"
 
 const promptAuditContentKind = "CASE WHEN request_kind IN ('prompt', 'step') THEN 'main' " +

@@ -39,6 +39,7 @@ export function promptAuditDetectorLabel(
   type: string | undefined,
   t: TFunction
 ): string {
+  if (type === 'stored') return t('Stored, not inspected')
   if (type === 'wordlist') return t('Wordlist')
   // The two probe gates are named for their judge: the phrase list blocks
   // locally, the semantic gate is a TypeSafe call. Legacy rows written before

@@ -1,11 +1,22 @@
 package relay
 
 import (
+	"fmt"
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/model"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/output"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/prompt_audit_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -17,7 +28,7 @@ func TestPromptAuditBlockingWriterWithholdsAndSpillsBeforeCommit(t *testing.T) {
 	c, _ := gin.CreateTestContext(recorder)
 	writer := newPromptAuditResponseWriter(c.Writer, prompt_audit_setting.PromptAuditSetting{
 		OutputMode: prompt_audit_setting.ModeBlocking, OutputMaxBytes: 1024, OutputMemoryBytes: 4,
-	})
+	}, true)
 	t.Cleanup(func() { require.NoError(t, writer.capture.Close()) })
 
 	body := []byte(`{"choices":[{"message":{"content":"visible"}}]}`)
@@ -125,7 +136,7 @@ func TestPromptAuditObserveOverflowDoesNotInterruptDelivery(t *testing.T) {
 	c, _ := gin.CreateTestContext(recorder)
 	writer := newPromptAuditResponseWriter(c.Writer, prompt_audit_setting.PromptAuditSetting{
 		OutputMode: prompt_audit_setting.ModeAsyncAudit, OutputMaxBytes: 4, OutputMemoryBytes: 4,
-	})
+	}, false)
 	_, err := writer.Write([]byte("delivered"))
 	require.NoError(t, err)
 	assert.Equal(t, "delivered", recorder.Body.String())
@@ -137,7 +148,7 @@ func TestPromptAuditBlockingOverflowStopsGenerationAndWithholdsOutput(t *testing
 	c, _ := gin.CreateTestContext(recorder)
 	writer := newPromptAuditResponseWriter(c.Writer, prompt_audit_setting.PromptAuditSetting{
 		OutputMode: prompt_audit_setting.ModeBlocking, OutputMaxBytes: 4, OutputMemoryBytes: 4,
-	})
+	}, true)
 	t.Cleanup(func() { require.NoError(t, writer.capture.Close()) })
 
 	written, err := writer.Write([]byte("generated output"))
@@ -152,7 +163,7 @@ func TestPromptAuditWriterKeepsTypedSinkTransparent(t *testing.T) {
 	base := newResponsesWSEventWriter(func(payload []byte) error { sent = append(sent, string(payload)); return nil }, nil)
 	writer := newPromptAuditResponseWriter(base, prompt_audit_setting.PromptAuditSetting{
 		OutputMode: prompt_audit_setting.ModeOff, OutputMaxBytes: 1024, OutputMemoryBytes: 1024,
-	})
+	}, false)
 	t.Cleanup(func() { require.NoError(t, writer.capture.Close()) })
 
 	sink, ok := any(writer).(output.Sink)
@@ -173,7 +184,7 @@ func TestPromptAuditWriterRendersTypedEventsForPlainWriters(t *testing.T) {
 	c, _ := gin.CreateTestContext(recorder)
 	writer := newPromptAuditResponseWriter(c.Writer, prompt_audit_setting.PromptAuditSetting{
 		OutputMode: prompt_audit_setting.ModeOff, OutputMaxBytes: 1024, OutputMemoryBytes: 1024,
-	})
+	}, false)
 	t.Cleanup(func() { require.NoError(t, writer.capture.Close()) })
 
 	require.NoError(t, writer.WriteMessage(output.Message{Event: "response.output_text.delta", Data: []byte(`{"type":"response.output_text.delta","delta":"hi"}`)}))
@@ -190,7 +201,7 @@ func TestPromptAuditBlockingWriterDeliversTypedEventsOnCommit(t *testing.T) {
 	base := newResponsesWSEventWriter(func(payload []byte) error { sent = append(sent, string(payload)); return nil }, nil)
 	writer := newPromptAuditResponseWriter(base, prompt_audit_setting.PromptAuditSetting{
 		OutputMode: prompt_audit_setting.ModeBlocking, OutputMaxBytes: 1024, OutputMemoryBytes: 1024,
-	})
+	}, true)
 	t.Cleanup(func() { require.NoError(t, writer.capture.Close()) })
 
 	delta := `{"type":"response.output_text.delta","delta":"hi"}`
@@ -202,4 +213,109 @@ func TestPromptAuditBlockingWriterDeliversTypedEventsOnCommit(t *testing.T) {
 	assert.Equal(t, []string{delta}, sent)
 	base.flushHeldEvents()
 	assert.Equal(t, []string{delta, terminal}, sent)
+}
+
+func TestPromptAuditTextRelayRecordsWithoutEnforcement(t *testing.T) {
+	withProtocolBridgeStreamTestMode(t)
+	service.InitHttpClient()
+	db := setupRelayChannelDB(t)
+	require.NoError(t, db.AutoMigrate(&model.PromptAudit{}, &model.User{}, &model.Token{}))
+	original := prompt_audit_setting.GetSetting()
+	originalLogConsume, originalBatchUpdate := common.LogConsumeEnabled, common.BatchUpdateEnabled
+	t.Cleanup(func() {
+		original.PublishConfig()
+		common.LogConsumeEnabled, common.BatchUpdateEnabled = originalLogConsume, originalBatchUpdate
+	})
+	common.LogConsumeEnabled, common.BatchUpdateEnabled = false, false
+	for _, test := range []struct {
+		name          string
+		outputMode    string
+		allGroups     bool
+		includeAdmins bool
+		role          int
+		stream        bool
+	}{
+		{name: "audit off", outputMode: prompt_audit_setting.ModeOff, allGroups: true, includeAdmins: true},
+		{name: "group outside blocking scope", outputMode: prompt_audit_setting.ModeBlocking, includeAdmins: true},
+		{name: "stream outside blocking scope", outputMode: prompt_audit_setting.ModeBlocking, includeAdmins: true, stream: true},
+		{name: "administrator outside blocking scope", outputMode: prompt_audit_setting.ModeBlocking, allGroups: true, role: common.RoleAdminUser},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.NoError(t, db.Where("1 = 1").Delete(&model.PromptAudit{}).Error)
+			configured := original
+			configured.OutputMode, configured.Mode = test.outputMode, prompt_audit_setting.ModeOff
+			configured.RecordAll, configured.IncludeAdmins = true, test.includeAdmins
+			configured.AllGroups, configured.Groups = test.allGroups, []string{"audited"}
+			configured.OutputMaxBytes, configured.OutputMemoryBytes = 4096, 4096
+			configured.PublishConfig()
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if test.stream {
+					w.Header().Set("Content-Type", "text/event-stream")
+					_, _ = io.WriteString(w, "data: {\"id\":\"chatcmpl_stored\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"recorded answer\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{"id":"chatcmpl_stored","choices":[{"message":{"role":"assistant","content":"recorded answer"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}`)
+			}))
+			defer upstream.Close()
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+			c.Set("role", test.role)
+			common.SetContextKey(c, constant.ContextKeyUserName, "recording-user")
+			common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
+			common.SetContextKey(c, constant.ContextKeyChannelType, constant.ChannelTypeOpenAI)
+			common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, upstream.URL)
+			common.SetContextKey(c, constant.ContextKeyChannelKey, "test-key")
+			info := &relaycommon.RelayInfo{
+				RelayMode: relayconstant.RelayModeChatCompletions, RelayFormat: types.RelayFormatOpenAI,
+				OriginModelName: "recording-model", IsStream: test.stream, DisablePing: true,
+				Request: &dto.GeneralOpenAIRequest{Model: "recording-model", Stream: common.GetPointer(test.stream), Messages: []dto.Message{{Role: "user", Content: "ordinary question"}}},
+			}
+			require.Nil(t, executeText(c, info))
+			assert.Contains(t, recorder.Body.String(), "recorded answer", "recording must preserve normal delivery")
+			var rows []model.PromptAudit
+			require.NoError(t, db.Find(&rows).Error)
+			require.Len(t, rows, 1)
+			assert.Equal(t, model.PromptAuditStatusStored, rows[0].Status)
+			assert.Empty(t, rows[0].Decision)
+			assert.Equal(t, "delivered", rows[0].DeliveryStatus)
+			assert.Contains(t, string(rows[0].ScanPayload), "recorded answer")
+		})
+	}
+}
+
+func TestPromptAuditRecordsInterruptedOutputWithAuditingOff(t *testing.T) {
+	db := setupRelayChannelDB(t)
+	require.NoError(t, db.AutoMigrate(&model.PromptAudit{}))
+	original := prompt_audit_setting.GetSetting()
+	t.Cleanup(func() { original.PublishConfig() })
+	configured := original
+	configured.OutputMode, configured.RecordAll = prompt_audit_setting.ModeOff, true
+	configured.PublishConfig()
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	writer := newPromptAuditResponseWriter(c.Writer, configured, false)
+	t.Cleanup(func() { require.NoError(t, writer.capture.Close()) })
+	_, err := fmt.Fprint(writer, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial answer\"}\n\n")
+	require.NoError(t, err)
+	info := &relaycommon.RelayInfo{Request: &dto.OpenAIResponsesRequest{Model: "recording-model", Input: []byte(`"question"`)}, OriginModelName: "recording-model", RelayFormat: types.RelayFormatOpenAIResponses, IsStream: true}
+	auditIncompleteTextOutput(c, info, writer, "delivered_incomplete")
+	var rows []model.PromptAudit
+	require.NoError(t, db.Find(&rows).Error)
+	require.Len(t, rows, 1)
+	assert.Equal(t, model.PromptAuditStatusStored, rows[0].Status)
+	assert.Empty(t, rows[0].Decision)
+	assert.False(t, rows[0].CoverageComplete)
+	assert.Equal(t, "delivered_incomplete", rows[0].DeliveryStatus)
+	assert.Contains(t, string(rows[0].ScanPayload), "partial answer")
+}
+
+func TestPromptAuditWebSocketRecordingTruncatesAtAValidTextBoundary(t *testing.T) {
+	collector := newPromptAuditTextCollector(4)
+	collector.CollectFrame([]byte(`{"type":"response.output_text.delta","delta":"甲乙"}`))
+	assert.Equal(t, "甲", collector.String())
+	assert.True(t, collector.overflow)
+	collector.CollectFrame([]byte(`{"type":"response.output_text.delta","delta":"later text"}`))
+	assert.Equal(t, "甲", collector.String())
 }

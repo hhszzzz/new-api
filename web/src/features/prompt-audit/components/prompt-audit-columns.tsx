@@ -274,9 +274,11 @@ export function usePromptAuditColumns(options: {
                 ) : (
                   <>
                     <Badge variant={outcome.variant}>{t(outcome.key)}</Badge>
-                    <Badge variant='outline'>
-                      {promptAuditDetectorLabel(event.inspection_type, t)}
-                    </Badge>
+                    {event.status !== 'stored' && (
+                      <Badge variant='outline'>
+                        {promptAuditDetectorLabel(event.inspection_type, t)}
+                      </Badge>
+                    )}
                     <Badge variant='outline'>
                       {event.direction === 'output'
                         ? t('Generated output')

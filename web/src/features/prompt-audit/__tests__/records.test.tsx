@@ -574,6 +574,27 @@ describe('prompt audit records', () => {
     })
   })
 
+  test('filters requests stored without inspection by their status', async () => {
+    server.pages = [[EVENT]]
+    const user = userEvent.setup()
+    renderRecords()
+    expect(await screen.findByText('redacted-preview')).toBeVisible()
+
+    await user.click(screen.getByRole('button', { name: 'Expand' }))
+    await user.click(screen.getByRole('combobox', { name: 'Status' }))
+    await user.click(
+      await screen.findByRole('option', { name: 'Stored, not inspected' })
+    )
+    await user.click(screen.getByRole('button', { name: 'Search' }))
+
+    await waitFor(() =>
+      expect(listingRequests((params) => params.status === 'stored')).toHaveLength(1)
+    )
+    expect(statsRequests().at(-1)?.[1]).toEqual({
+      params: expect.objectContaining({ status: 'stored' }),
+    })
+  })
+
   test('shows the statistics in the interface language', async () => {
     server.decisions = { block: 1234 }
     renderRecords()

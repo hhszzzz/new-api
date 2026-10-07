@@ -313,14 +313,14 @@ func expandPromptAuditRequestBase64(request PromptAuditRequest) PromptAuditReque
 	return request
 }
 
-func PromptAuditAppliesToGroup(c *gin.Context, setting prompt_audit_setting.PromptAuditSetting, mode string) bool {
-	return setting.AppliesToGroupForMode(effectivePromptAuditGroup(c), mode)
+func PromptAuditAppliesToRequest(c *gin.Context, setting prompt_audit_setting.PromptAuditSetting, mode string) bool {
+	return !PromptAuditAdminExempt(c, setting) && setting.AppliesToGroupForMode(effectivePromptAuditGroup(c), mode)
 }
 
-// promptAuditAdminExempt reports whether the operator has taken administrators
+// PromptAuditAdminExempt reports whether the operator has taken administrators
 // out of the word-list and model audit. Probe detection is deliberately not part
 // of this: it refuses liveness traffic and keeps its own administrator switch.
-func promptAuditAdminExempt(c *gin.Context, setting prompt_audit_setting.PromptAuditSetting) bool {
+func PromptAuditAdminExempt(c *gin.Context, setting prompt_audit_setting.PromptAuditSetting) bool {
 	return !setting.IncludeAdmins && contextInt(c, "role") >= common.RoleAdminUser
 }
 
@@ -353,7 +353,7 @@ func RecordPromptAuditStored(c *gin.Context, request PromptAuditRequest) {
 		Protocol: request.Protocol, ModelName: request.Model, Stage: normalizedPromptAuditStage(request.Stage),
 		Direction: direction, CoverageComplete: coverageComplete,
 		GenerationID: request.GenerationID, DeliveryStatus: request.DeliveryStatus,
-		ConfigVersion: setting.ConfigVersion, Status: model.PromptAuditStatusStored,
+		ConfigVersion: setting.ConfigVersion, ExecutionMode: prompt_audit_setting.ModeOff, Status: model.PromptAuditStatusStored,
 		PromptHash: hex.EncodeToString(digest[:]), PromptLength: utf8.RuneCountInString(fullText),
 		SegmentCount: len(request.Snapshot.Segments), CompletedAt: common.GetTimestamp(),
 	}
@@ -376,7 +376,7 @@ func RecordOutputAuditUnavailable(c *gin.Context, request PromptAuditRequest, fa
 		DeliveryStatus: request.DeliveryStatus, CoverageComplete: request.CoverageComplete,
 		ActualAction: PromptAuditActionUnavailable,
 	}
-	if !PromptAuditAppliesToGroup(c, setting, setting.OutputMode) {
+	if !PromptAuditAppliesToRequest(c, setting, setting.OutputMode) {
 		result.Enabled = false
 		return result
 	}
@@ -552,14 +552,7 @@ func checkPromptAuditWithSetting(c *gin.Context, request PromptAuditRequest, set
 	if direction == PromptAuditDirectionInput {
 		result.CoverageComplete = !request.CoverageIncomplete
 	}
-	group := effectivePromptAuditGroup(c)
-	if !setting.AppliesToGroupForMode(group, mode) {
-		AttachPromptAuditResult(c, result)
-		return result, nil
-	}
-	// An administrator outside the audit scope is not inspected. The request is
-	// still stored by the caller when recording everything is on.
-	if promptAuditAdminExempt(c, setting) {
+	if !PromptAuditAppliesToRequest(c, setting, mode) {
 		AttachPromptAuditResult(c, result)
 		return result, nil
 	}

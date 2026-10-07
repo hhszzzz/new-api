@@ -14,6 +14,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
@@ -373,6 +374,147 @@ func TestResponsesWebSocketEndToEndReuseBillingAndChannelDisable(t *testing.T) {
 	require.NoError(t, db.First(&storedChannel, channel.Id).Error)
 	assert.Equal(t, common.ChannelStatusManuallyDisabled, storedChannel.Status)
 	upstream.assertNoError(t)
+}
+
+func TestResponsesWebSocketRecordingPreservesDeliveryAndInterruptedOutput(t *testing.T) {
+	require.NoError(t, i18n.Init())
+	for _, test := range []struct {
+		name        string
+		admin       bool
+		interrupted bool
+		limited     bool
+	}{
+		{name: "completed"},
+		{name: "exempt administrator with incomplete output", admin: true},
+		{name: "upstream disconnect after a delta", interrupted: true},
+		{name: "recording limit preserves delivery", limited: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			db := setupModelListControllerTestDB(t)
+			require.NoError(t, db.AutoMigrate(&model.Token{}, &model.Log{}, &model.PromptAudit{}))
+			originalAudit := prompt_audit_setting.GetSetting()
+			originalModelRatios, originalGroupRatios := ratio_setting.ModelRatio2JSONString(), ratio_setting.GroupRatio2JSONString()
+			originalCache, originalBatch, originalLog := common.MemoryCacheEnabled, common.BatchUpdateEnabled, common.LogConsumeEnabled
+			originalRetry, originalCount, originalTimeout := common.RetryTimes, constant.CountToken, constant.StreamingTimeout
+			originalBridge := model_setting.GetGlobalSettings().ProtocolBridgePolicy
+			t.Cleanup(func() {
+				originalAudit.PublishConfig()
+				require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(originalModelRatios))
+				require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(originalGroupRatios))
+				common.MemoryCacheEnabled, common.BatchUpdateEnabled, common.LogConsumeEnabled = originalCache, originalBatch, originalLog
+				common.RetryTimes, constant.CountToken, constant.StreamingTimeout = originalRetry, originalCount, originalTimeout
+				model_setting.GetGlobalSettings().ProtocolBridgePolicy = originalBridge
+				service.ResetProxyClientCache()
+			})
+			common.MemoryCacheEnabled, common.BatchUpdateEnabled, common.LogConsumeEnabled = false, false, false
+			common.RetryTimes, constant.CountToken, constant.StreamingTimeout = 0, false, 300
+			model_setting.GetGlobalSettings().ProtocolBridgePolicy.Enabled = false
+			require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"recording-model":0}`))
+			require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1}`))
+			configured := originalAudit
+			configured.Mode, configured.OutputMode = prompt_audit_setting.ModeOff, prompt_audit_setting.ModeOff
+			configured.RecordAll, configured.ProbeBlockEnabled, configured.AllGroups = true, false, true
+			configured.IncludeAdmins = !test.admin
+			configured.OutputMaxBytes, configured.OutputMemoryBytes = 4096, 4096
+			if test.admin {
+				configured.OutputMode = prompt_audit_setting.ModeBlocking
+			}
+			if test.limited {
+				configured.OutputMaxBytes, configured.OutputMemoryBytes = 128, 128
+			}
+			configured.PublishConfig()
+			upgrader := websocket.Upgrader{Subprotocols: []string{"responses"}, CheckOrigin: func(*http.Request) bool { return true }}
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				conn, err := upgrader.Upgrade(w, r, nil)
+				if err != nil {
+					return
+				}
+				defer conn.Close()
+				if _, _, err = conn.ReadMessage(); err != nil {
+					return
+				}
+				for _, event := range []string{
+					`{"type":"response.created","response":{"id":"resp_recorded","status":"in_progress"}}`,
+					`{"type":"response.output_text.delta","delta":"recorded answer"}`,
+				} {
+					if err = conn.WriteMessage(websocket.TextMessage, []byte(event)); err != nil {
+						return
+					}
+				}
+				if test.interrupted {
+					return
+				}
+				typeName, status := "response.completed", "completed"
+				if test.admin {
+					typeName, status = "response.incomplete", "incomplete"
+				}
+				if conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf(`{"type":%q,"response":{"id":"resp_recorded","status":%q,"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`, typeName, status))) == nil {
+					_, _, _ = conn.ReadMessage()
+				}
+			}))
+			t.Cleanup(upstream.Close)
+			baseURL := upstream.URL
+			channel := &model.Channel{Type: constant.ChannelTypeOpenAI, Key: "recording-channel-key", Name: "recording test", Status: common.ChannelStatusEnabled, BaseURL: &baseURL, Models: "recording-model", Group: "default"}
+			channel.SetSetting(hostdto.ChannelSettings{ResponsesWebSocketEnabled: true})
+			require.NoError(t, channel.Insert())
+			user := &model.User{Username: "recording-user", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Quota: 1000, Group: "default"}
+			if test.admin {
+				user.Role = common.RoleAdminUser
+			}
+			require.NoError(t, db.Create(user).Error)
+			token := &model.Token{UserId: user.Id, Key: "recordingclientkey", Name: "recording-token", Status: common.TokenStatusEnabled, ExpiredTime: -1, RemainQuota: 1000, Group: "default"}
+			require.NoError(t, db.Create(token).Error)
+			engine := gin.New()
+			engine.Use(func(c *gin.Context) {
+				common.SetContextKey(c, constant.ContextKeyUserId, user.Id)
+				common.SetContextKey(c, constant.ContextKeyUserName, user.Username)
+				common.SetContextKey(c, constant.ContextKeyUserQuota, user.Quota)
+				common.SetContextKey(c, constant.ContextKeyUserStatus, user.Status)
+				common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
+				common.SetContextKey(c, constant.ContextKeyUserGroups, []string{"default"})
+				common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
+				common.SetContextKey(c, constant.ContextKeyTokenId, token.Id)
+				common.SetContextKey(c, constant.ContextKeyTokenKey, token.Key)
+				common.SetContextKey(c, constant.ContextKeyTokenGroup, "default")
+				common.SetContextKey(c, constant.ContextKeyTokenSpecificChannelId, fmt.Sprint(channel.Id))
+				c.Set("role", user.Role)
+				c.Set("token_name", token.Name)
+				c.Set("token_quota", token.RemainQuota)
+				c.Next()
+			})
+			engine.GET("/v1/responses", ResponsesWebSocket)
+			gateway := httptest.NewServer(engine)
+			t.Cleanup(gateway.Close)
+			header := http.Header{"Authorization": {"Bearer " + token.Key}}
+			client, _, err := (&websocket.Dialer{Subprotocols: []string{"responses"}}).Dial("ws"+strings.TrimPrefix(gateway.URL, "http")+"/v1/responses", header)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = client.Close() })
+			require.NoError(t, client.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.create","model":"recording-model","input":"ordinary question"}`)))
+			assert.Contains(t, string(readResponsesWSE2EMessage(t, client)), `"type":"response.created"`)
+			assert.Contains(t, string(readResponsesWSE2EMessage(t, client)), `"delta":"recorded answer"`)
+			if !test.interrupted {
+				terminal := "response.completed"
+				if test.admin {
+					terminal = "response.incomplete"
+				}
+				assert.Contains(t, string(readResponsesWSE2EMessage(t, client)), terminal)
+			}
+			var rows []model.PromptAudit
+			require.Eventually(t, func() bool {
+				return db.Where("direction = ?", "output").Find(&rows).Error == nil && len(rows) == 1
+			}, time.Second, time.Millisecond)
+			assert.Equal(t, model.PromptAuditStatusStored, rows[0].Status)
+			assert.Empty(t, rows[0].Decision)
+			assert.Contains(t, string(rows[0].ScanPayload), "recorded answer")
+			assert.Equal(t, "resp_recorded", rows[0].GenerationID)
+			assert.Equal(t, !test.admin && !test.interrupted && !test.limited, rows[0].CoverageComplete)
+			delivery := "delivered"
+			if test.admin || test.interrupted {
+				delivery = "delivered_incomplete"
+			}
+			assert.Equal(t, delivery, rows[0].DeliveryStatus)
+		})
+	}
 }
 
 func newResponsesWSE2EUpstream(t *testing.T) *responsesWSE2EUpstream {

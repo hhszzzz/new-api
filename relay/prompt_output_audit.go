@@ -139,12 +139,12 @@ type promptAuditResponseWriter struct {
 	capture  promptOutputCapture
 }
 
-func newPromptAuditResponseWriter(writer gin.ResponseWriter, setting prompt_audit_setting.PromptAuditSetting) *promptAuditResponseWriter {
+func newPromptAuditResponseWriter(writer gin.ResponseWriter, setting prompt_audit_setting.PromptAuditSetting, blocking bool) *promptAuditResponseWriter {
 	return &promptAuditResponseWriter{
 		ResponseWriter: writer,
 		header:         writer.Header().Clone(),
 		status:         http.StatusOK,
-		blocking:       setting.OutputMode == prompt_audit_setting.ModeBlocking,
+		blocking:       blocking,
 		capture: promptOutputCapture{
 			maxBytes: setting.OutputMaxBytes, memoryBytes: setting.OutputMemoryBytes,
 		},
@@ -314,7 +314,7 @@ func extractPromptAuditOutput(body []byte) (string, error) {
 	if len(trimmed) == 0 {
 		return "", errors.New("empty output")
 	}
-	collector := newPromptAuditTextCollector()
+	collector := newPromptAuditTextCollector(len(trimmed))
 	if bytes.HasPrefix(trimmed, []byte("data:")) || bytes.Contains(trimmed, []byte("\ndata:")) {
 		scanner := bufio.NewScanner(bytes.NewReader(trimmed))
 		scanner.Buffer(make([]byte, 4096), 8*1024*1024)
@@ -368,16 +368,36 @@ func extractPromptAuditOutput(body []byte) (string, error) {
 }
 
 type promptAuditTextCollector struct {
-	order []string
-	parts map[string]*strings.Builder
+	order         []string
+	parts         map[string]*strings.Builder
+	maxBytes      int
+	size          int
+	capturedBytes int
+	overflow      bool
 }
 
-func newPromptAuditTextCollector() *promptAuditTextCollector {
-	return &promptAuditTextCollector{parts: map[string]*strings.Builder{}}
+func newPromptAuditTextCollector(maxBytes int) *promptAuditTextCollector {
+	return &promptAuditTextCollector{parts: map[string]*strings.Builder{}, maxBytes: maxBytes}
+}
+
+// CollectFrame bounds native WebSocket recording by the same wire-byte budget
+// as HTTP capture. Once full, later events still reach the client normally.
+func (collector *promptAuditTextCollector) CollectFrame(body []byte) {
+	if collector.overflow {
+		return
+	}
+	var value any
+	if common.Unmarshal(body, &value) != nil {
+		return
+	}
+	collector.Collect(value, true)
+	remaining := collector.maxBytes - collector.capturedBytes
+	collector.capturedBytes += min(len(body), remaining)
+	collector.overflow = collector.overflow || len(body) > remaining
 }
 
 func (collector *promptAuditTextCollector) add(key string, values []string) {
-	if len(values) == 0 {
+	if len(values) == 0 || collector.overflow {
 		return
 	}
 	if key == "" {
@@ -390,7 +410,16 @@ func (collector *promptAuditTextCollector) add(key string, values []string) {
 		collector.order = append(collector.order, key)
 	}
 	for _, value := range values {
+		remaining := collector.maxBytes - collector.size
+		if len(value) > remaining {
+			value = strings.ToValidUTF8(value[:remaining], "")
+			collector.overflow = true
+		}
 		builder.WriteString(value)
+		collector.size += len(value)
+		if collector.overflow {
+			return
+		}
 	}
 }
 

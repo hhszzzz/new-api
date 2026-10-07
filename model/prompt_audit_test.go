@@ -130,6 +130,63 @@ func TestPromptAuditTerminalPayloadRetention(t *testing.T) {
 	runPromptAuditTerminalPayloadRetention(t, db)
 }
 
+func TestPromptAuditStoredRecordsSQLite(t *testing.T) {
+	db := withPromptAuditTestDB(t)
+	var version string
+	require.NoError(t, db.Raw("SELECT sqlite_version()").Scan(&version).Error)
+	t.Logf("sqlite version: %s", version)
+	runPromptAuditStoredRecords(t, db)
+}
+
+func runPromptAuditStoredRecords(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	require.NoError(t, db.Where("1=1").Delete(&PromptAudit{}).Error)
+	for range 2 {
+		row := &PromptAudit{
+			UserID: 7, GroupKey: "stored-question", RequestKind: "prompt", Direction: "input",
+			Status: PromptAuditStatusStored, PromptHash: strings.Repeat("e", 64),
+			FullPrompt: []byte("stored question"), ScanPayload: []byte(`{"version":1,"direction":"input","segments":[{"role":"user","text":"stored question"}]}`), CompletedAt: 10,
+		}
+		require.NoError(t, CreatePromptAudit(row))
+		response := row.ToResponse(false)
+		assert.Equal(t, "stored", response.InspectionType)
+		assert.Empty(t, response.Decision)
+		assert.Nil(t, response.FullPrompt)
+	}
+	withDecision := &PromptAudit{UserID: 7, GroupKey: "stored-question", RequestKind: "prompt", Direction: "input", Status: PromptAuditStatusStored, Decision: "pass", PromptHash: strings.Repeat("e", 64), FullPrompt: []byte("stored with stale decision"), CompletedAt: 10}
+	require.NoError(t, CreatePromptAudit(withDecision))
+	_, claimed, err := ClaimPromptAudit("stored-worker", 100, 200)
+	require.NoError(t, err)
+	assert.False(t, claimed)
+	// Historical model decisions have no detector value. Preserve that fallback
+	// while excluding requests that have never been inspected.
+	legacy := &PromptAudit{Status: PromptAuditStatusDone, Decision: "pass", CompletedAt: 100}
+	require.NoError(t, CreatePromptAudit(legacy))
+	modelRows, total, err := ListPromptAudits(PromptAuditFilter{Detector: "model"}, 1, 20)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, total)
+	require.Len(t, modelRows, 1)
+	assert.Equal(t, legacy.ID, modelRows[0].ID)
+	rows, total, err := ListPromptAuditRepeats(PromptAuditFilter{Status: "stored"}, 1, 20)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, total)
+	require.Len(t, rows, 1)
+	assert.Equal(t, map[string]int64{"stored": 3}, rows[0].Repeat.OutcomeCounts)
+	stats, err := GetPromptAuditStats(PromptAuditFilter{Status: "stored"}, nil)
+	require.NoError(t, err)
+	assert.EqualValues(t, 3, stats.Total)
+	assert.EqualValues(t, 3, stats.Statuses["stored"])
+	purged, err := CleanupPromptAuditPromptsBefore(20, 20)
+	require.NoError(t, err)
+	assert.EqualValues(t, 3, purged)
+	stored, _, err := ListPromptAudits(PromptAuditFilter{Status: "stored"}, 1, 20)
+	require.NoError(t, err)
+	for _, row := range stored {
+		assert.Empty(t, row.FullPrompt)
+		assert.Empty(t, row.ScanPayload)
+	}
+}
+
 func runPromptAuditTerminalPayloadRetention(t *testing.T, db *gorm.DB) {
 	t.Helper()
 	require.NoError(t, db.Where("1=1").Delete(&PromptAudit{}).Error)
@@ -1164,6 +1221,7 @@ func TestPromptAuditStorageConfiguredDatabases(t *testing.T) {
 			runPromptAuditUnsafeClientValues(t, db)
 			runPromptAuditQuestionGroupingAcrossModels(t, db)
 			runPromptAuditTerminalPayloadRetention(t, db)
+			runPromptAuditStoredRecords(t, db)
 		})
 	}
 }

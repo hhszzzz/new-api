@@ -43,11 +43,11 @@ func executeText(c *gin.Context, info *relaycommon.RelayInfo) *hosttypes.NewAPIE
 	// Enforcement and recording install the same capture writer: one holds the
 	// response back for a verdict, the other only keeps a copy of it.
 	outputAuditEnforcing := outputAuditSetting.OutputMode != prompt_audit_setting.ModeOff &&
-		service.PromptAuditAppliesToGroup(c, outputAuditSetting, outputAuditSetting.OutputMode)
+		service.PromptAuditAppliesToRequest(c, outputAuditSetting, outputAuditSetting.OutputMode)
 	baseWriter := c.Writer
 	var outputAuditWriter *promptAuditResponseWriter
 	if !info.IsChannelTest && (outputAuditEnforcing || outputAuditSetting.RecordAll) {
-		outputAuditWriter = newPromptAuditResponseWriter(baseWriter, outputAuditSetting)
+		outputAuditWriter = newPromptAuditResponseWriter(baseWriter, outputAuditSetting, outputAuditEnforcing && outputAuditSetting.OutputMode == prompt_audit_setting.ModeBlocking)
 		c.Writer = outputAuditWriter
 		defer func() {
 			_ = outputAuditWriter.capture.Close()
@@ -466,11 +466,15 @@ func auditIncompleteTextOutput(c *gin.Context, info *relaycommon.RelayInfo, writ
 		}, "output_extract_failed")
 		return
 	}
-	_, _ = service.InspectOutput(c, service.PromptAuditRequest{
+	request := service.PromptAuditRequest{
 		Snapshot: dto.PromptAuditSnapshotOf(info.Request), Protocol: string(info.RelayFormat), Model: info.OriginModelName,
 		Stage: "text_executor", Direction: service.PromptAuditDirectionOutput, Output: outputText,
 		DeliveryStatus: deliveryStatus, CoverageComplete: false, Stream: info.IsStream,
-	})
+	}
+	result, _ := service.InspectOutput(c, request)
+	if result.AuditID == 0 {
+		service.RecordPromptAuditStored(c, request)
+	}
 }
 
 func cloneTextRequest(request dto.Request) (dto.Request, error) {

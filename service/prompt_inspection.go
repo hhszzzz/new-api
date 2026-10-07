@@ -379,7 +379,7 @@ func InspectPrompt(c *gin.Context, request PromptAuditRequest) (PromptAuditResul
 	request = preparePromptAuditRequest(c, request)
 	configured := prompt_audit_setting.GetSetting()
 	group := effectivePromptAuditGroup(c)
-	auditConfigured := configured.Mode != prompt_audit_setting.ModeOff && configured.AppliesToGroupForMode(group, configured.Mode)
+	auditConfigured := PromptAuditAppliesToRequest(c, configured, configured.Mode)
 	auditEnabled := auditConfigured || setting.ShouldCheckPromptSensitive()
 
 	direction := strings.ToLower(strings.TrimSpace(request.Direction))
@@ -478,8 +478,10 @@ func InspectPrompt(c *gin.Context, request PromptAuditRequest) (PromptAuditResul
 	// An administrator outside the audit scope is left to the probe gate alone:
 	// the word list and the model audit would otherwise refuse the operator's own
 	// traffic under rules written for users.
-	if promptAuditAdminExempt(c, configured) {
-		return PromptAuditResult{Enabled: auditEnabled, Mode: configured.Mode, Direction: direction, ConfigVersion: configured.ConfigVersion, Outcome: "skipped_admin_exempt"}, nil
+	if PromptAuditAdminExempt(c, configured) {
+		result := PromptAuditResult{Mode: configured.Mode, Direction: direction, ConfigVersion: configured.ConfigVersion, Outcome: "skipped_admin_exempt"}
+		AttachPromptAuditResult(c, result)
+		return result, nil
 	}
 	match, err := matchPromptWordlists(wordlistSnapshot, configured)
 

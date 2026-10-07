@@ -30,7 +30,10 @@ func inspectPromptBeforeDistribution(c *gin.Context, modelRequest *ModelRequest)
 		return nil, true
 	}
 	configured := prompt_audit_setting.GetSetting()
-	enforcing := configured.ProbeBlockEnabled || setting.ShouldCheckPromptSensitive() || configured.AppliesToGroup(common.GetContextKeyString(c, constant.ContextKeyUsingGroup))
+	enforcing := !service.PromptAuditAdminExempt(c, configured) &&
+		(setting.ShouldCheckPromptSensitive() || service.PromptAuditAppliesToRequest(c, configured, configured.Mode))
+	probeEnforcing := configured.ProbeBlockEnabled && (configured.ProbeIncludeAdmins || c.GetInt("role") < common.RoleAdminUser)
+	enforcing = enforcing || probeEnforcing
 	if !enforcing && !configured.RecordAll {
 		return nil, true
 	}

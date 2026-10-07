@@ -513,6 +513,7 @@ describe('prompt audit records table', () => {
     })
 
     expect(within(cell).getByText('Stored, not inspected')).toBeVisible()
+    expect(within(cell).queryByText('Model audit')).not.toBeInTheDocument()
     // Without the stored status the row would fall through to the generic
     // pending reading, which would claim it is still waiting for an audit.
     expect(within(cell).queryByText('pending')).not.toBeInTheDocument()
