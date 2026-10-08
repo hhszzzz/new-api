@@ -276,7 +276,7 @@ export function PromptAuditFilterBar<TData>(props: {
           value,
           label: t(value),
         })),
-        { value: 'stored', label: t('Stored, not inspected') },
+        { value: 'stored', label: t('No review needed') },
       ]}
       onChange={(value) =>
         props.onChange('status', value === 'all' ? '' : value)

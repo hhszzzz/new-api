@@ -149,7 +149,7 @@ export function EnforcementSection({
           onCheckedChange={(record_all) => onChange({ record_all })}
           label={t('Store every request even when auditing is off')}
           description={t(
-            'Input and output are recorded regardless of the audit modes. A request that was not inspected is stored as Stored, not inspected.'
+            'Input and output are recorded regardless of the audit modes. A request that was not inspected is stored and marked No review needed.'
           )}
         />
         <SettingsSwitchField

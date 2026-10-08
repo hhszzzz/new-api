@@ -546,6 +546,83 @@ describe('prompt audit management components', () => {
     ).not.toBeInTheDocument()
   })
 
+  test('reads a stored record as a snapshot, not an inspection', async () => {
+    getPromptAuditMock.mockResolvedValue({
+      success: true,
+      data: {
+        ...EVENT,
+        status: 'stored',
+        decision: '',
+        action: '',
+        inspection_type: 'stored',
+        latency_ms: 0,
+        direction: 'output',
+        delivery_status: 'delivered',
+      },
+    })
+
+    renderWithQueryClient(
+      <PromptAuditDetailSheet
+        eventID={EVENT.id}
+        canViewFullPrompt
+        canManage={false}
+        canDelete={false}
+        onOpenChange={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    )
+
+    expect(
+      await screen.findByRole('region', { name: 'Content snapshot' })
+    ).toBeVisible()
+    expect(
+      screen.queryByRole('region', { name: 'Inspected content' })
+    ).not.toBeInTheDocument()
+    const result = screen.getByRole('region', { name: 'Result' })
+    // Nothing resembles a verdict that never happened: no action, no source
+    // list, no latency; the direction's own delivery is what an output has.
+    expect(within(result).getByText('Inspection method')).toBeVisible()
+    expect(within(result).getByText('No review needed')).toBeVisible()
+    expect(within(result).getByText('Delivery status')).toBeVisible()
+    expect(within(result).queryByText('Actual action')).not.toBeInTheDocument()
+    expect(within(result).queryByText('Text source')).not.toBeInTheDocument()
+    expect(within(result).queryByText('Latency')).not.toBeInTheDocument()
+  })
+
+  test('reads the reply of an output record as its own source, never as history', async () => {
+    getPromptAuditMock.mockResolvedValue({
+      success: true,
+      data: {
+        ...EVENT,
+        direction: 'output',
+        scan_payload: JSON.stringify({
+          segments: [{ scope: 'user', text: 'Extracted user question' }],
+          output: 'The generated reply',
+        }),
+      },
+    })
+
+    renderWithQueryClient(
+      <PromptAuditDetailSheet
+        eventID={EVENT.id}
+        canViewFullPrompt
+        canManage={false}
+        canDelete={false}
+        onOpenChange={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    )
+
+    await userEvent.click(
+      await screen.findByRole('tab', { name: 'Generated output' })
+    )
+    expect(screen.getByText('The generated reply')).toBeVisible()
+    expect(screen.getByRole('tab', { name: 'User messages' })).toBeVisible()
+    expect(
+      screen.queryByRole('tab', { name: 'Historical assistant messages' })
+    ).not.toBeInTheDocument()
+  })
+
   test('records no inspected scope for a wordlist-only row', async () => {
     getPromptAuditMock.mockResolvedValue({
       success: true,

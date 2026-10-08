@@ -121,6 +121,7 @@ export function PromptAuditDetailSheet({
     status: event?.status ?? '',
     decision: event?.decision ?? '',
   })
+  const stored = event?.status === 'stored'
   const prompt = canViewFullPrompt
     ? (event?.full_prompt ?? '')
     : (event?.redacted_preview ?? '')
@@ -183,11 +184,16 @@ export function PromptAuditDetailSheet({
               <section aria-label={t('Result')} className={sectionClassName}>
                 <h3 className='text-sm font-medium'>{t('Result')}</h3>
                 <div className={rowGridClassName}>
-                  <DetailRow
-                    label={t('Actual action')}
-                    value={event.action || '—'}
-                    mono
-                  />
+                  {/* A stored record never reached a verdict: the outcome row
+                      below already says so, and an empty action or latency
+                      would read as an audit that never happened. */}
+                  {!stored && (
+                    <DetailRow
+                      label={t('Actual action')}
+                      value={event.action || '—'}
+                      mono
+                    />
+                  )}
                   {event.would_action &&
                     event.would_action !== event.action && (
                       <DetailRow
@@ -206,16 +212,18 @@ export function PromptAuditDetailSheet({
                       mono
                     />
                   )}
-                  <DetailRow
-                    label={t('Text source')}
-                    value={
-                      event.matched_scope
-                        ? promptAuditScopeLabel(event.matched_scope, t)
-                        : (event.inspected_scopes ?? [])
-                            .map((scope) => promptAuditScopeLabel(scope, t))
-                            .join(' · ') || '—'
-                    }
-                  />
+                  {!stored && (
+                    <DetailRow
+                      label={t('Text source')}
+                      value={
+                        event.matched_scope
+                          ? promptAuditScopeLabel(event.matched_scope, t)
+                          : (event.inspected_scopes ?? [])
+                              .map((scope) => promptAuditScopeLabel(scope, t))
+                              .join(' · ') || '—'
+                      }
+                    />
+                  )}
                   {/* Which detector ran, named exactly once: a model audit is
                       already named by the model row below it, so only the other
                       detectors are called out here. */}
@@ -231,11 +239,22 @@ export function PromptAuditDetailSheet({
                       value={promptAuditDetectorLabel(event.inspection_type, t)}
                     />
                   )}
-                  <DetailRow
-                    label={t('Latency')}
-                    value={`${event.latency_ms} ms`}
-                    mono
-                  />
+                  {/* Only an output has a delivery of its own; a request input
+                      was delivered by the very fact that it was answered. */}
+                  {event.direction === 'output' && (
+                    <DetailRow
+                      label={t('Delivery status')}
+                      value={event.delivery_status || '—'}
+                      mono
+                    />
+                  )}
+                  {!stored && (
+                    <DetailRow
+                      label={t('Latency')}
+                      value={`${event.latency_ms} ms`}
+                      mono
+                    />
+                  )}
                   {/* Coverage earns a row only when it is not complete: an input
                       audit that continues a previous response, or an output
                       audit whose stream never finished, judged part of the
@@ -298,14 +317,18 @@ export function PromptAuditDetailSheet({
               </section>
 
               {/* The parts the audit submitted, framed as one card; the full
-                  prompt sits inside the same frame when it can be shown. */}
+                  prompt sits inside the same frame when it can be shown. A
+                  stored record submitted nothing: it is titled as the stored
+                  snapshot it is, so the tabs are not read as inspected text. */}
               {canViewFullPrompt ? (
                 <section
-                  aria-label={t('Inspected content')}
+                  aria-label={
+                    stored ? t('Content snapshot') : t('Inspected content')
+                  }
                   className='bg-background min-w-0 overflow-hidden rounded-xl border'
                 >
                   <h3 className='px-4 pt-4 pb-1 text-sm font-medium'>
-                    {t('Inspected content')}
+                    {stored ? t('Content snapshot') : t('Inspected content')}
                   </h3>
                   <div className='min-w-0'>
                     <PromptAuditPayloadView
@@ -434,7 +457,7 @@ export function PromptAuditDetailSheet({
                         not beside the audit model it is easily mistaken for. */}
                     <DetailRow label={t('Model')} value={event.model || '—'} />
                     <DetailRow
-                      label={t('Audit stage')}
+                      label={stored ? t('Direction') : t('Audit stage')}
                       value={
                         event.direction === 'output'
                           ? t('Generated output')

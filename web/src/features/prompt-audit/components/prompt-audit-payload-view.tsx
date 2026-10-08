@@ -54,7 +54,9 @@ export function PromptAuditPayloadView(props: {
               <TabsList className='min-w-max justify-start'>
                 {sources.map((source) => {
                   let label = t('Unknown source')
-                  if (source.scope) {
+                  if (source.output) {
+                    label = t('Generated output')
+                  } else if (source.scope) {
                     label = promptAuditScopeLabel(source.scope, t)
                   }
                   if (props.background && source.scope === 'user') {

@@ -583,7 +583,7 @@ describe('prompt audit records', () => {
     await user.click(screen.getByRole('button', { name: 'Expand' }))
     await user.click(screen.getByRole('combobox', { name: 'Status' }))
     await user.click(
-      await screen.findByRole('option', { name: 'Stored, not inspected' })
+      await screen.findByRole('option', { name: 'No review needed' })
     )
     await user.click(screen.getByRole('button', { name: 'Search' }))
 

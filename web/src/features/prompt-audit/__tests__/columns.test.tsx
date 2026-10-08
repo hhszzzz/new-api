@@ -287,6 +287,18 @@ describe('prompt audit records table', () => {
     ])
   })
 
+  test('hides the audit model line on a record that was never inspected', () => {
+    const cell = renderCell('request', {
+      ...EVENT,
+      status: 'stored',
+      inspection_type: 'stored',
+      endpoint_model: '',
+    })
+
+    expect(lines(cell)).toEqual(['gpt-test', 'Protocol: OpenAI Responses'])
+    expect(cell.textContent).not.toContain('Audit model')
+  })
+
   test('names a protocol the shared map already knows', () => {
     const cell = renderCell('request', { ...EVENT, protocol: 'claude' })
 
@@ -512,7 +524,7 @@ describe('prompt audit records table', () => {
       action: '',
     })
 
-    expect(within(cell).getByText('Stored, not inspected')).toBeVisible()
+    expect(within(cell).getByText('No review needed')).toBeVisible()
     expect(within(cell).queryByText('Model audit')).not.toBeInTheDocument()
     // Without the stored status the row would fall through to the generic
     // pending reading, which would claim it is still waiting for an audit.
@@ -525,7 +537,7 @@ describe('prompt audit records table', () => {
       repeat: { ...REPEAT, outcome_counts: { stored: 4 } },
     })
 
-    expect(within(cell).getByText('Stored, not inspected 4')).toBeVisible()
+    expect(within(cell).getByText('No review needed 4')).toBeVisible()
   })
 
   test('never invents successful outcomes when an older response omits counts', () => {

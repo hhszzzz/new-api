@@ -363,9 +363,13 @@ export function usePromptAuditColumns(options: {
               <TruncatedCell className='text-muted-foreground max-w-56 text-xs'>
                 {t('Protocol')}: {t(getPromptAuditProtocolName(event.protocol))}
               </TruncatedCell>
-              <TruncatedCell className='text-muted-foreground max-w-56 text-xs'>
-                {t('Audit model')}: {event.endpoint_model || '—'}
-              </TruncatedCell>
+              {/* A stored request never reached an audit node, so naming one
+                  would read as a review that never happened. */}
+              {event.status !== 'stored' && (
+                <TruncatedCell className='text-muted-foreground max-w-56 text-xs'>
+                  {t('Audit model')}: {event.endpoint_model || '—'}
+                </TruncatedCell>
+              )}
             </div>
           )
         },

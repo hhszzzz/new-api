@@ -237,6 +237,7 @@ export interface PromptAuditEvent {
     | 'probe_phrase'
     | 'probe_semantic'
     | 'probe_fast_pass'
+    | 'stored'
   group_key?: string
   session_key?: string
   request_kind?: string

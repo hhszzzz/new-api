@@ -442,12 +442,41 @@ describe('prompt audit management helpers', () => {
     })
   })
 
-  test('reads a generated output as the assistant source', () => {
+  test('reads a generated output as its own source, not history', () => {
     expect(
       promptAuditPayloadSources(JSON.stringify({ output: 'Generated text' }))
     ).toEqual([
-      { key: 'assistant', scope: 'assistant', blocks: ['Generated text'] },
+      {
+        key: 'output',
+        scope: undefined,
+        output: true,
+        blocks: ['Generated text'],
+      },
     ])
+  })
+
+  test('keeps an output record input blocks and names its reply apart', () => {
+    const sources = promptAuditPayloadSources(
+      JSON.stringify({
+        segments: [
+          { scope: 'user', text: 'Question' },
+          { scope: 'assistant', text: 'Earlier history' },
+        ],
+        output: 'The reply',
+      })
+    )
+
+    expect(sources.map((source) => source.key)).toEqual([
+      'user',
+      'assistant',
+      'output',
+    ])
+    expect(sources[2]).toEqual({
+      key: 'output',
+      scope: undefined,
+      output: true,
+      blocks: ['The reply'],
+    })
   })
 
   test('reads a payload without a readable envelope as one unknown source', () => {
@@ -496,7 +525,7 @@ describe('prompt audit management helpers', () => {
     // The row was kept without an audit, so it has no decision to read: the
     // status itself is the whole outcome and must not borrow a severity.
     expect(promptAuditOutcome({ status: 'stored', decision: '' })).toEqual({
-      key: 'Stored, not inspected',
+      key: 'No review needed',
       variant: 'outline',
     })
   })

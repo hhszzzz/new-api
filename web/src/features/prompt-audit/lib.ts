@@ -39,7 +39,7 @@ export function promptAuditDetectorLabel(
   type: string | undefined,
   t: TFunction
 ): string {
-  if (type === 'stored') return t('Stored, not inspected')
+  if (type === 'stored') return t('No review needed')
   if (type === 'wordlist') return t('Wordlist')
   // The two probe gates are named for their judge: the phrase list blocks
   // locally, the semantic gate is a TypeSafe call. Legacy rows written before
@@ -96,8 +96,9 @@ export function promptAuditOutcome(event: {
       return { key: 'failed', variant: 'destructive' }
     case 'stored':
       // Terminal without ever being inspected, so the status itself is the
-      // whole reading: there is no decision to prefer over it.
-      return { key: 'Stored, not inspected', variant: 'outline' }
+      // whole reading: nothing needed review, so there is no decision to
+      // prefer over it.
+      return { key: 'No review needed', variant: 'outline' }
     default:
       if (event.decision) {
         return {
@@ -161,6 +162,8 @@ export type PromptAuditPayloadSource = {
   /** Stable identity of the tab that reads this source. */
   key: string
   scope?: PromptAuditScope
+  /** The generated output of an output-direction record. */
+  output?: boolean
   /** The blocks of this source, in wire order. */
   blocks: string[]
 }
@@ -179,13 +182,18 @@ export function promptAuditPayloadSources(
   for (const block of promptAuditPayloadBlocks(payload)) {
     // A block whose scope is not one of the known sources gets a reading of its
     // own; the sheet names it without pretending to know where it came from.
-    const key = block.scope ?? 'unknown'
+    const key = block.output ? 'output' : (block.scope ?? 'unknown')
     const source = sources.get(key)
     if (source) {
       source.blocks.push(block.text)
       continue
     }
-    sources.set(key, { key, scope: block.scope, blocks: [block.text] })
+    sources.set(key, {
+      key,
+      scope: block.scope,
+      output: block.output,
+      blocks: [block.text],
+    })
   }
   return [...sources.values()]
 }
@@ -193,23 +201,34 @@ export function promptAuditPayloadSources(
 /** The content blocks the stored payload carries, in wire order. */
 function promptAuditPayloadBlocks(
   payload?: string
-): { scope?: PromptAuditScope; text: string }[] {
+): { scope?: PromptAuditScope; output?: boolean; text: string }[] {
   if (!payload) return []
   try {
     const parsed: unknown = JSON.parse(payload)
     if (!parsed || typeof parsed !== 'object') return [{ text: payload }]
     const envelope = parsed as Record<string, unknown>
-    if (typeof envelope.output === 'string') {
-      return [{ scope: 'assistant', text: envelope.output }]
+    const blocks: {
+      scope?: PromptAuditScope
+      output?: boolean
+      text: string
+    }[] = []
+    if (Array.isArray(envelope.segments)) {
+      for (const segment of envelope.segments) {
+        if (!segment || typeof segment !== 'object') continue
+        const part = segment as Record<string, unknown>
+        if (typeof part.text !== 'string') continue
+        const scope = PROMPT_AUDIT_SCOPES.find((scope) => scope === part.scope)
+        blocks.push({ scope, text: part.text })
+      }
     }
-    if (!Array.isArray(envelope.segments)) return [{ text: payload }]
-    return envelope.segments.flatMap((segment: unknown) => {
-      if (!segment || typeof segment !== 'object') return []
-      const part = segment as Record<string, unknown>
-      if (typeof part.text !== 'string') return []
-      const scope = PROMPT_AUDIT_SCOPES.find((scope) => scope === part.scope)
-      return [{ scope, text: part.text }]
-    })
+    // The generated output is its own source, after the input it answers. It
+    // is never dressed as conversation history: an output record's whole
+    // point is the reply, and the reply was not part of the request.
+    if (typeof envelope.output === 'string' && envelope.output !== '') {
+      blocks.push({ output: true, text: envelope.output })
+    }
+    if (blocks.length === 0) return [{ text: payload }]
+    return blocks
   } catch {
     return [{ text: payload }]
   }
