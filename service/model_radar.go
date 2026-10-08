@@ -25,10 +25,12 @@ const (
 	modelRadarEfficiencyType   = "distributed_intelligence_efficiency"
 	modelRadarEfficiencyURL    = "https://codexradar.com/data/intelligence-efficiency.json"
 	modelRadarMetricsURL       = "https://codexradar.com/api/intelligence-efficiency-metrics"
-	modelRadarInsightsURL      = "https://api.codexradar.com/api/v1/radar-insights"
-	modelRadarSourceURL        = "https://codexradar.com"
-	modelRadarAttribution      = "数据来自 Codex 雷达 codexradar.com"
-	modelRadarRequestTimeout   = 15 * time.Second
+	// Upstream retired api.codexradar.com/api/v1/radar-insights in October 2026;
+	// the dashboard serves insights from the site origin now.
+	modelRadarInsightsURL    = "https://codexradar.com/api/radar-insights"
+	modelRadarSourceURL      = "https://codexradar.com"
+	modelRadarAttribution    = "数据来自 Codex 雷达 codexradar.com"
+	modelRadarRequestTimeout = 15 * time.Second
 	// The published file carries every history frame since launch (7.9 MB on
 	// 2026-09-24, growing about 0.35 MB a day). It is decoded as a stream that
 	// keeps only the retention window, so this cap bounds the transfer rather
@@ -371,10 +373,15 @@ func fetchModelRadar(ctx context.Context, client *http.Client, efficiencyURL str
 	requestCtx, cancel := context.WithTimeout(ctx, modelRadarRequestTimeout)
 	defer cancel()
 
+	// Only the live metrics source is required: it owns the current frame every
+	// snapshot is built around. The published file (history and runner names)
+	// and the insights document (alerts, comprehensive IQ) are supplementary,
+	// so losing either downgrades the snapshot instead of freezing the radar.
 	var efficiency modelRadarEfficiencyPayload
 	var efficiencyBytes int64
 	var metrics modelRadarMetricsPayload
 	var insights modelRadarInsightsPayload
+	var efficiencyErr, insightsErr error
 	group, groupCtx := errgroup.WithContext(requestCtx)
 	group.Go(func() error {
 		read, err := fetchModelRadarSource(groupCtx, client, efficiencyURL, modelRadarEfficiencyMaxBytes, func(body io.Reader) error {
@@ -383,14 +390,17 @@ func fetchModelRadar(ctx context.Context, client *http.Client, efficiencyURL str
 			return decodeErr
 		})
 		efficiencyBytes = read
-		return err
+		efficiencyErr = err
+		return nil
 	})
 	group.Go(func() error {
 		return fetchModelRadarJSON(groupCtx, client, metricsURL, modelRadarMetricsMaxBytes, &metrics)
 	})
 	group.Go(func() error {
-		return fetchModelRadarJSON(groupCtx, client, insightsURL, modelRadarInsightsMaxBytes, &insights)
+		insightsErr = fetchModelRadarJSON(groupCtx, client, insightsURL, modelRadarInsightsMaxBytes, &insights)
+		return nil
 	})
+	// A metrics failure aborts the group, which cancels the optional fetches.
 	if err := group.Wait(); err != nil {
 		return nil, err
 	}
@@ -398,9 +408,14 @@ func fetchModelRadar(ctx context.Context, client *http.Client, efficiencyURL str
 		common.SysError(fmt.Sprintf("model radar published data is %d bytes, over half of the %d byte fetch limit", efficiencyBytes, modelRadarEfficiencyMaxBytes))
 	}
 
-	harnesses, history, err := normalizeModelRadarEfficiency(efficiency)
-	if err != nil {
-		return nil, fmt.Errorf("validate model radar efficiency data: %w", err)
+	var harnesses map[string]string
+	var history []ModelRadarHistoryFrame
+	if efficiencyErr == nil {
+		harnesses, history, efficiencyErr = normalizeModelRadarEfficiency(efficiency)
+	}
+	if efficiencyErr != nil {
+		common.SysError(fmt.Sprintf("model radar sync proceeding without published history: %v", efficiencyErr))
+		harnesses, history = nil, nil
 	}
 	configurations, currentFrame, err := normalizeModelRadarMetrics(metrics, harnesses)
 	if err != nil {
@@ -416,13 +431,20 @@ func fetchModelRadar(ctx context.Context, client *http.Client, efficiencyURL str
 		}
 	}
 	history = append(retained, currentFrame)
-	alerts, alertsUpdatedAt, skippedAlerts, err := normalizeModelRadarInsights(insights)
-	if err != nil {
-		return nil, fmt.Errorf("validate model radar insights data: %w", err)
+	alerts := []ModelRadarDegradationAlert{}
+	var alertsUpdatedAt int64
+	var comprehensive map[string]modelRadarComprehensiveMetrics
+	var skippedAlerts, skippedPoints int
+	if insightsErr == nil {
+		alerts, alertsUpdatedAt, skippedAlerts, insightsErr = normalizeModelRadarInsights(insights)
 	}
-	comprehensive, skippedPoints, err := normalizeModelRadarComprehensive(insights)
-	if err != nil {
-		return nil, fmt.Errorf("validate model radar comprehensive data: %w", err)
+	if insightsErr == nil {
+		comprehensive, skippedPoints, insightsErr = normalizeModelRadarComprehensive(insights)
+	}
+	if insightsErr != nil {
+		common.SysError(fmt.Sprintf("model radar sync proceeding without degradation insights: %v", insightsErr))
+		alerts, alertsUpdatedAt, comprehensive = []ModelRadarDegradationAlert{}, 0, nil
+		skippedAlerts, skippedPoints = 0, 0
 	}
 	if skippedAlerts+skippedPoints > 0 {
 		common.SysLog(fmt.Sprintf("model radar sync skipped %d degradation alert(s) and %d comprehensive point(s) that failed validation", skippedAlerts, skippedPoints))
@@ -463,6 +485,18 @@ func fetchModelRadarJSON(ctx context.Context, client *http.Client, sourceURL str
 		data, err := io.ReadAll(body)
 		if err != nil {
 			return err
+		}
+		// Upstream's own dashboard client unwraps a data envelope before use,
+		// so these endpoints may return the document either directly or
+		// wrapped in {"data": ...}.
+		var envelope struct {
+			Data common.RawMessage `json:"data"`
+		}
+		if err := common.Unmarshal(data, &envelope); err != nil {
+			return err
+		}
+		if len(envelope.Data) > 0 && common.GetJsonType(envelope.Data) == "object" {
+			data = envelope.Data
 		}
 		return common.Unmarshal(data, target)
 	})

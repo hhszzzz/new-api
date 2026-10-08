@@ -13,7 +13,7 @@ import (
 )
 
 func TestFetchModelRadarUsesLiveMetricsAndPublishedHistory(t *testing.T) {
-	efficiency, insights := modelRadarTestPayloads(t)
+	efficiency, _ := modelRadarTestPayloads(t)
 	var published modelRadarEfficiencyPayload
 	require.NoError(t, common.Unmarshal(efficiency, &published))
 	oldFrame := published.History[0]
@@ -21,7 +21,9 @@ func TestFetchModelRadarUsesLiveMetricsAndPublishedHistory(t *testing.T) {
 	published.History = append([]modelRadarUpstreamHistoryFrame{oldFrame}, published.History...)
 	efficiency, err := common.Marshal(published)
 	require.NoError(t, err)
-	server := newModelRadarSourceServer(t, efficiency, insights, http.StatusOK)
+	server := newModelRadarSourceServer(t, map[string]modelRadarEndpointResponse{
+		"/efficiency": {body: efficiency},
+	})
 	defer server.Close()
 	metricsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

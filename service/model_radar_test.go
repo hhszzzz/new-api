@@ -79,11 +79,51 @@ func modelRadarTestPayloads(t *testing.T) ([]byte, []byte) {
 	return efficiency, insights
 }
 
-func newModelRadarSourceServer(t *testing.T, efficiency []byte, insights []byte, insightsStatus int) *httptest.Server {
+type modelRadarEndpointResponse struct {
+	body   []byte
+	status int
+}
+
+// newModelRadarSourceServer serves the standard three-source payloads. Pass an
+// override for an endpoint to simulate a broken or changed source: an empty
+// body keeps the standard payload and a zero status keeps 200.
+func newModelRadarSourceServer(t *testing.T, overrides map[string]modelRadarEndpointResponse) *httptest.Server {
 	t.Helper()
-	validEfficiency, _ := modelRadarTestPayloads(t)
+	efficiency, insights := modelRadarTestPayloads(t)
+	responses := map[string][]byte{
+		"/efficiency": efficiency,
+		"/metrics":    modelRadarTestMetricsPayload(t, efficiency),
+		"/insights":   insights,
+	}
+	statuses := map[string]int{
+		"/efficiency": http.StatusOK,
+		"/metrics":    http.StatusOK,
+		"/insights":   http.StatusOK,
+	}
+	for path, override := range overrides {
+		if len(override.body) > 0 {
+			responses[path] = override.body
+		}
+		if override.status != 0 {
+			statuses[path] = override.status
+		}
+	}
+	return httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		body, ok := responses[request.URL.Path]
+		if !ok {
+			writer.WriteHeader(http.StatusNotFound)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(statuses[request.URL.Path])
+		_, _ = writer.Write(body)
+	}))
+}
+
+func modelRadarTestMetricsPayload(t *testing.T, efficiency []byte) []byte {
+	t.Helper()
 	var published modelRadarEfficiencyPayload
-	require.NoError(t, common.Unmarshal(validEfficiency, &published))
+	require.NoError(t, common.Unmarshal(efficiency, &published))
 	point := published.Points[0]
 	metrics, err := common.Marshal(modelRadarMetricsPayload{
 		Schema: 3, Mode: "equal_latest_3", BenchmarkID: "deep-swe", ScoringMode: "binary-majority",
@@ -91,20 +131,7 @@ func newModelRadarSourceServer(t *testing.T, efficiency []byte, insights []byte,
 		Points:          []modelRadarMetricsPoint{{modelRadarUpstreamPoint: point, Total: point.ValidTasks, RunsTotal: point.TotalRuns}},
 	})
 	require.NoError(t, err)
-	return httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		writer.Header().Set("Content-Type", "application/json")
-		switch request.URL.Path {
-		case "/efficiency":
-			_, _ = writer.Write(efficiency)
-		case "/metrics":
-			_, _ = writer.Write(metrics)
-		case "/insights":
-			writer.WriteHeader(insightsStatus)
-			_, _ = writer.Write(insights)
-		default:
-			writer.WriteHeader(http.StatusNotFound)
-		}
-	}))
+	return metrics
 }
 
 func setupModelRadarServiceTestDB(t *testing.T) *gorm.DB {
@@ -119,8 +146,7 @@ func setupModelRadarServiceTestDB(t *testing.T) *gorm.DB {
 }
 
 func TestFetchModelRadarNormalizesCapabilityDataAndDropsRecommendations(t *testing.T) {
-	efficiency, insights := modelRadarTestPayloads(t)
-	server := newModelRadarSourceServer(t, efficiency, insights, http.StatusOK)
+	server := newModelRadarSourceServer(t, nil)
 	defer server.Close()
 
 	data, err := fetchModelRadar(context.Background(), server.Client(), server.URL+"/efficiency", server.URL+"/metrics", server.URL+"/insights")
@@ -158,23 +184,25 @@ func TestFetchModelRadarNormalizesCapabilityDataAndDropsRecommendations(t *testi
 	assert.NotContains(t, string(encoded), "must not persist")
 }
 
-func TestFetchModelRadarRejectsInvalidSourceContracts(t *testing.T) {
-	efficiency, insights := modelRadarTestPayloads(t)
-
+func TestFetchModelRadarRequiresLiveMetricsSource(t *testing.T) {
+	// History and insights are allowed to degrade; the live metrics document is
+	// the one source whose failure must fail the whole fetch.
+	efficiency, _ := modelRadarTestPayloads(t)
 	tests := []struct {
-		name       string
-		efficiency []byte
-		insights   []byte
-		status     int
-		want       string
+		name    string
+		metrics []byte
+		status  int
+		want    string
 	}{
-		{name: "invalid JSON", efficiency: []byte(`{"schema":`), insights: insights, status: http.StatusOK, want: "decode"},
-		{name: "wrong efficiency schema", efficiency: []byte(`{"schema":3,"type":"distributed_intelligence_efficiency","source_updated_at":"2026-07-26T00:00:00Z","points":[{}],"history":[{"at":"2026-07-26T00:00:00Z","points":[]}]}`), insights: insights, status: http.StatusOK, want: "unsupported source schema"},
-		{name: "insights unavailable", efficiency: efficiency, insights: insights, status: http.StatusBadGateway, want: "unexpected HTTP status 502"},
+		{name: "metrics unavailable", metrics: modelRadarTestMetricsPayload(t, efficiency), status: http.StatusBadGateway, want: "unexpected HTTP status 502"},
+		{name: "invalid metrics JSON", metrics: []byte(`{"schema":`), status: http.StatusOK, want: "decode"},
+		{name: "wrong metrics schema", metrics: []byte(`{"schema":2,"mode":"equal_latest_3","benchmark_id":"deep-swe","scoring_mode":"binary-majority","source_updated_at":"2026-07-26T00:00:00Z","points":[]}`), status: http.StatusOK, want: "unsupported live metrics schema"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			server := newModelRadarSourceServer(t, test.efficiency, test.insights, test.status)
+			server := newModelRadarSourceServer(t, map[string]modelRadarEndpointResponse{
+				"/metrics": {body: test.metrics, status: test.status},
+			})
 			defer server.Close()
 			_, err := fetchModelRadar(context.Background(), server.Client(), server.URL+"/efficiency", server.URL+"/metrics", server.URL+"/insights")
 			require.ErrorContains(t, err, test.want)
@@ -182,11 +210,46 @@ func TestFetchModelRadarRejectsInvalidSourceContracts(t *testing.T) {
 	}
 }
 
+func TestFetchModelRadarProceedsWithoutInsights(t *testing.T) {
+	// The alerts and comprehensive-IQ document is a side channel; losing it
+	// must keep the capability snapshot syncing without it.
+	server := newModelRadarSourceServer(t, map[string]modelRadarEndpointResponse{
+		"/insights": {status: http.StatusBadGateway},
+	})
+	defer server.Close()
+
+	data, err := fetchModelRadar(context.Background(), server.Client(), server.URL+"/efficiency", server.URL+"/metrics", server.URL+"/insights")
+
+	require.NoError(t, err)
+	require.Len(t, data.Configurations, 1)
+	assert.Empty(t, data.DegradationAlerts)
+	assert.Zero(t, data.AlertsUpdatedAt)
+	assert.Nil(t, data.Configurations[0].ComprehensiveIQ)
+	assert.Nil(t, data.Configurations[0].VisualIQ)
+	assert.Len(t, data.History, 2)
+}
+
+func TestFetchModelRadarProceedsWithoutPublishedHistory(t *testing.T) {
+	// History and runner names come from the published file; the live metrics
+	// API still carries the current configuration frame.
+	server := newModelRadarSourceServer(t, map[string]modelRadarEndpointResponse{
+		"/efficiency": {status: http.StatusBadGateway},
+	})
+	defer server.Close()
+
+	data, err := fetchModelRadar(context.Background(), server.Client(), server.URL+"/efficiency", server.URL+"/metrics", server.URL+"/insights")
+
+	require.NoError(t, err)
+	require.Len(t, data.Configurations, 1)
+	require.Len(t, data.History, 1)
+	assert.Equal(t, data.SourceUpdatedAt, data.History[0].Ts)
+	require.Len(t, data.DegradationAlerts, 1)
+}
+
 func TestFetchModelRadarSourceRejectsResponseOverLimit(t *testing.T) {
 	// A body over the cap must report the cap, not the truncated-JSON decode
 	// error it causes, on both the streaming and the buffered decode paths.
-	efficiency, _ := modelRadarTestPayloads(t)
-	server := newModelRadarSourceServer(t, efficiency, nil, http.StatusOK)
+	server := newModelRadarSourceServer(t, nil)
 	defer server.Close()
 
 	for name, decode := range map[string]func(io.Reader) error{
@@ -212,8 +275,7 @@ func TestFetchModelRadarSourceRejectsResponseOverLimit(t *testing.T) {
 }
 
 func TestFetchModelRadarHonorsRequestDeadline(t *testing.T) {
-	efficiency, _ := modelRadarTestPayloads(t)
-	server := newModelRadarSourceServer(t, efficiency, nil, http.StatusOK)
+	server := newModelRadarSourceServer(t, nil)
 	defer server.Close()
 
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
@@ -358,7 +420,6 @@ func TestFetchModelRadarKeepsAlertsWhoseWindowLacksHistory(t *testing.T) {
 	// degradation_48h_iq because the tier was graded under 48 hours ago, and
 	// the strict check failed every sync until the tier aged. The alert must
 	// be kept with the missing window left empty, alongside the trend.
-	efficiency, _ := modelRadarTestPayloads(t)
 	insights := []byte(`{"schema":1,"source_updated_at":"2026-09-24T10:01:22+00:00","comprehensive_points":[],` +
 		`"degradation_alerts":{"rule":"...","items":[{"model":"gpt-test","effort":"high","iq":105,` +
 		`"degradation_12h_iq":45,"degradation_24h_iq":45,"degradation_48h_iq":null,` +
@@ -366,7 +427,9 @@ func TestFetchModelRadarKeepsAlertsWhoseWindowLacksHistory(t *testing.T) {
 		`"trend_48h":[{"timestamp":"2026-09-22T14:00:54+00:00","iq":150,"samples":2},` +
 		`{"timestamp":"not-a-time","iq":140,"samples":3},` +
 		`{"timestamp":"2026-09-24T10:31:51+00:00","iq":105,"samples":10}]}]}}`)
-	server := newModelRadarSourceServer(t, efficiency, insights, http.StatusOK)
+	server := newModelRadarSourceServer(t, map[string]modelRadarEndpointResponse{
+		"/insights": {body: insights},
+	})
 	defer server.Close()
 
 	data, err := fetchModelRadar(context.Background(), server.Client(), server.URL+"/efficiency", server.URL+"/metrics", server.URL+"/insights")
@@ -452,15 +515,16 @@ func TestNormalizeModelRadarComprehensiveIndexesValidPointsAndSkipsTheRest(t *te
 	assert.Equal(t, 4, skipped)
 }
 
-func TestSyncModelRadarDoesNotReplaceSnapshotWhenOneSourceFails(t *testing.T) {
+func TestSyncModelRadarDoesNotReplaceSnapshotWhenMetricsFail(t *testing.T) {
 	setupModelRadarServiceTestDB(t)
 	ctx := context.Background()
 	require.NoError(t, model.SaveModelRadarSnapshot(ctx, &model.ModelRadarSnapshot{
 		SchemaVersion: 1, Payload: []byte(`{"schema_version":1,"model_count":9}`),
 		SourceUpdatedAt: 10, AlertsUpdatedAt: 11, FetchedAt: 12,
 	}))
-	efficiency, insights := modelRadarTestPayloads(t)
-	server := newModelRadarSourceServer(t, efficiency, insights, http.StatusBadGateway)
+	server := newModelRadarSourceServer(t, map[string]modelRadarEndpointResponse{
+		"/metrics": {status: http.StatusBadGateway},
+	})
 	defer server.Close()
 
 	_, err := syncModelRadar(ctx, server.Client(), server.URL+"/efficiency", server.URL+"/metrics", server.URL+"/insights", 1000)
@@ -471,10 +535,35 @@ func TestSyncModelRadarDoesNotReplaceSnapshotWhenOneSourceFails(t *testing.T) {
 	assert.Equal(t, int64(12), snapshot.FetchedAt)
 }
 
+func TestSyncModelRadarPersistsDowngradedSnapshotWhenOptionalSourcesFail(t *testing.T) {
+	// Regression for 2026-10-05: upstream's insights and published-file
+	// endpoints broke while the live metrics API still answered; the snapshot
+	// must keep advancing from the live source instead of freezing.
+	setupModelRadarServiceTestDB(t)
+	ctx := context.Background()
+	server := newModelRadarSourceServer(t, map[string]modelRadarEndpointResponse{
+		"/efficiency": {body: []byte(`{"schema":3,"type":"other"}`)},
+		"/insights":   {status: http.StatusBadGateway},
+	})
+	defer server.Close()
+
+	result, err := syncModelRadar(ctx, server.Client(), server.URL+"/efficiency", server.URL+"/metrics", server.URL+"/insights", 2_000_000_000)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.ModelCount)
+	assert.Zero(t, result.AlertCount)
+
+	data, err := GetModelRadar(ctx)
+	require.NoError(t, err)
+	assert.False(t, data.Stale)
+	require.Len(t, data.Configurations, 1)
+	assert.Empty(t, data.DegradationAlerts)
+	assert.Len(t, data.History, 1)
+	assert.Equal(t, data.SourceUpdatedAt, data.History[0].Ts)
+}
+
 func TestSyncModelRadarPersistsValidatedSnapshot(t *testing.T) {
 	setupModelRadarServiceTestDB(t)
-	efficiency, insights := modelRadarTestPayloads(t)
-	server := newModelRadarSourceServer(t, efficiency, insights, http.StatusOK)
+	server := newModelRadarSourceServer(t, nil)
 	defer server.Close()
 
 	result, err := syncModelRadar(context.Background(), server.Client(), server.URL+"/efficiency", server.URL+"/metrics", server.URL+"/insights", 2_000_000_000)
