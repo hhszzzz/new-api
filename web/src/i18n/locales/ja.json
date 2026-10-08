@@ -1,5 +1,10 @@
 {
   "translation": {
+    "360": "360",
+    "1000": "1000",
+    "10000": "10000",
+    "Content snapshot was truncated to the retention limit.": "内容のスナップショットは保存上限で切り詰められました。",
+    "No content snapshot retained": "内容のスナップショットは保存されていません",
     "Session questions": "セッション内の質問",
     "Clear source filter": "ソースの絞り込みを解除",
     "Passed": "許可",
@@ -35,6 +40,7 @@
     "Source record #{{id}}": "元の記録 #{{id}}",
     "Source records": "元の記録",
     "Subagent and background content": "サブエージェントとバックグラウンドの内容",
+    "This is the retained full text, shown without source separation.": "保存された全文を、ソース別に分けずに表示しています。",
     "This source record has no retained inspected content. Other source records may still retain it.": "この記録には監査対象の内容が保存されていません。他の元記録には残っている場合があります。",
     "Unavailable actions": "利用不可による中断",
     "Unknown request type: {{kind}}": "不明なリクエスト種別: {{kind}}",
@@ -43,9 +49,6 @@
     "invalid prompt audit query parameter": "プロンプト監査のクエリパラメーターが無効です",
     "invalid prompt audit pagination": "プロンプト監査のページ指定が無効です",
     "invalid prompt audit time range": "プロンプト監査の期間が無効です",
-    "360": "360",
-    "1000": "1000",
-    "10000": "10000",
     "The semantic probe threshold must be greater than 0 and at most 1.": "セマンティック疎通確認の閾値は 0 より大きく 1 以下である必要があります。",
     "Semantic probe detection requires an enabled TypeSafe classification node.": "セマンティック疎通確認の検出には有効な TypeSafe 分類ノードが必要です。",
     "TypeSafe node input limits must not exceed 16000 characters.": "TypeSafe ノードの入力上限は 16000 文字を超えてはいけません。",

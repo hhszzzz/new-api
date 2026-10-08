@@ -194,7 +194,8 @@ export function PromptAuditDetailSheet({
                       mono
                     />
                   )}
-                  {event.would_action &&
+                  {!stored &&
+                    event.would_action &&
                     event.would_action !== event.action && (
                       <DetailRow
                         label={t('Suggested action')}
@@ -202,10 +203,10 @@ export function PromptAuditDetailSheet({
                         mono
                       />
                     )}
-                  {event.safety && (
+                  {!stored && event.safety && (
                     <DetailRow label={t('Safety')} value={event.safety} />
                   )}
-                  {event.refusal && (
+                  {!stored && event.refusal && (
                     <DetailRow
                       label={t('Refusal')}
                       value={event.refusal}
@@ -227,18 +228,22 @@ export function PromptAuditDetailSheet({
                   {/* Which detector ran, named exactly once: a model audit is
                       already named by the model row below it, so only the other
                       detectors are called out here. */}
-                  {modelAudit ? (
-                    <DetailRow
-                      label={t('Audit model')}
-                      value={event.endpoint_model || '—'}
-                      mono
-                    />
-                  ) : (
-                    <DetailRow
-                      label={t('Inspection method')}
-                      value={promptAuditDetectorLabel(event.inspection_type, t)}
-                    />
-                  )}
+                  {!stored &&
+                    (modelAudit ? (
+                      <DetailRow
+                        label={t('Audit model')}
+                        value={event.endpoint_model || '—'}
+                        mono
+                      />
+                    ) : (
+                      <DetailRow
+                        label={t('Inspection method')}
+                        value={promptAuditDetectorLabel(
+                          event.inspection_type,
+                          t
+                        )}
+                      />
+                    ))}
                   {/* Only an output has a delivery of its own; a request input
                       was delivered by the very fact that it was answered. */}
                   {event.direction === 'output' && (
@@ -263,24 +268,25 @@ export function PromptAuditDetailSheet({
                     <DetailRow label={t('Coverage')} value={t('Incomplete')} />
                   )}
                 </div>
-                {(event.categories.length > 0 ||
-                  event.unknown_categories.length > 0) && (
-                  <div className='flex flex-wrap gap-1.5'>
-                    {event.categories.map((category) => (
-                      <Badge key={category} variant='outline'>
-                        {t(category)}
-                      </Badge>
-                    ))}
-                    {event.unknown_categories.map((categoryHash) => (
-                      <Badge key={categoryHash} variant='warning'>
-                        {t('Unknown')}: {categoryHash}
-                      </Badge>
-                    ))}
-                  </div>
-                )}
+                {!stored &&
+                  (event.categories.length > 0 ||
+                    event.unknown_categories.length > 0) && (
+                    <div className='flex flex-wrap gap-1.5'>
+                      {event.categories.map((category) => (
+                        <Badge key={category} variant='outline'>
+                          {t(category)}
+                        </Badge>
+                      ))}
+                      {event.unknown_categories.map((categoryHash) => (
+                        <Badge key={categoryHash} variant='warning'>
+                          {t('Unknown')}: {categoryHash}
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
                 {/* Only a TypeSafe node returns probabilities, so a label-based
                     verdict shows nothing here rather than an empty section. */}
-                {scoreRows.length > 0 && (
+                {!stored && scoreRows.length > 0 && (
                   <div className='border-border/60 border-t pt-3'>
                     <p className='text-muted-foreground text-xs font-medium'>
                       {t('Audit model scores')}
@@ -302,7 +308,7 @@ export function PromptAuditDetailSheet({
                     </div>
                   </div>
                 )}
-                {event.review_status && (
+                {!stored && event.review_status && (
                   <div className='border-border/60 border-t pt-3 text-xs'>
                     <p className='font-medium'>{t('Gray-area review')}</p>
                     <p className='text-muted-foreground mt-1'>
@@ -335,6 +341,8 @@ export function PromptAuditDetailSheet({
                       key={eventID}
                       payload={event.scan_payload}
                       truncated={event.scan_payload_truncated}
+                      stored={stored}
+                      preferOutput={event.direction === 'output'}
                     />
                     <div className='border-t px-3 py-1'>
                       <CollapsibleDetailSection
@@ -369,9 +377,13 @@ export function PromptAuditDetailSheet({
                           </p>
                         )}
                         <p className='text-muted-foreground mt-2 text-xs'>
-                          {t(
-                            'This is the whole request as sent, while Inspected content lists only the parts the audit submitted.'
-                          )}
+                          {stored
+                            ? t(
+                                'This is the retained full text, shown without source separation.'
+                              )
+                            : t(
+                                'This is the whole request as sent, while Inspected content lists only the parts the audit submitted.'
+                              )}
                         </p>
                       </CollapsibleDetailSection>
                     </div>

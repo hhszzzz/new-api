@@ -1,5 +1,10 @@
 {
   "translation": {
+    "360": "360",
+    "1000": "1000",
+    "10000": "10000",
+    "Content snapshot was truncated to the retention limit.": "Content snapshot was truncated to the retention limit.",
+    "No content snapshot retained": "No content snapshot retained",
     "Session questions": "Session questions",
     "Clear source filter": "Clear source filter",
     "Passed": "Passed",
@@ -35,6 +40,7 @@
     "Source record #{{id}}": "Source record #{{id}}",
     "Source records": "Source records",
     "Subagent and background content": "Subagent and background content",
+    "This is the retained full text, shown without source separation.": "This is the retained full text, shown without source separation.",
     "This source record has no retained inspected content. Other source records may still retain it.": "This source record has no retained inspected content. Other source records may still retain it.",
     "Unavailable actions": "Unavailable actions",
     "Unknown request type: {{kind}}": "Unknown request type: {{kind}}",
@@ -43,9 +49,6 @@
     "invalid prompt audit query parameter": "invalid prompt audit query parameter",
     "invalid prompt audit pagination": "invalid prompt audit pagination",
     "invalid prompt audit time range": "invalid prompt audit time range",
-    "360": "360",
-    "1000": "1000",
-    "10000": "10000",
     "The semantic probe threshold must be greater than 0 and at most 1.": "The semantic probe threshold must be greater than 0 and at most 1.",
     "Semantic probe detection requires an enabled TypeSafe classification node.": "Semantic probe detection requires an enabled TypeSafe classification node.",
     "TypeSafe node input limits must not exceed 16000 characters.": "TypeSafe node input limits must not exceed 16000 characters.",

@@ -153,8 +153,21 @@ func runPromptAuditStoredRecords(t *testing.T, db *gorm.DB) {
 		assert.Empty(t, response.Decision)
 		assert.Nil(t, response.FullPrompt)
 	}
-	withDecision := &PromptAudit{UserID: 7, GroupKey: "stored-question", RequestKind: "prompt", Direction: "input", Status: PromptAuditStatusStored, Decision: "pass", PromptHash: strings.Repeat("e", 64), FullPrompt: []byte("stored with stale decision"), CompletedAt: 10}
+	withDecision := &PromptAudit{
+		UserID: 7, GroupKey: "stored-question", RequestKind: "prompt", Direction: "input",
+		Status: PromptAuditStatusStored, Decision: "block", Action: "block", WouldAction: "block",
+		Safety: "Unsafe", Categories: `["pii"]`, Scores: `{"pii":0.9}`, EndpointModel: "stale-guard",
+		PromptHash: strings.Repeat("e", 64), FullPrompt: []byte("stored with stale decision"), CompletedAt: 10,
+	}
 	require.NoError(t, CreatePromptAudit(withDecision))
+	response := withDecision.ToResponse(false)
+	assert.Empty(t, response.Decision)
+	assert.Empty(t, response.Action)
+	assert.Empty(t, response.WouldAction)
+	assert.Empty(t, response.Safety)
+	assert.Empty(t, response.Categories)
+	assert.Empty(t, response.Scores)
+	assert.Empty(t, response.EndpointModel)
 	_, claimed, err := ClaimPromptAudit("stored-worker", 100, 200)
 	require.NoError(t, err)
 	assert.False(t, claimed)
@@ -172,6 +185,8 @@ func runPromptAuditStoredRecords(t *testing.T, db *gorm.DB) {
 	assert.EqualValues(t, 1, total)
 	require.Len(t, rows, 1)
 	assert.Equal(t, map[string]int64{"stored": 3}, rows[0].Repeat.OutcomeCounts)
+	assert.Empty(t, rows[0].Repeat.WorstDecision)
+	assert.Zero(t, rows[0].Repeat.Blocks)
 	stats, err := GetPromptAuditStats(PromptAuditFilter{Status: "stored"}, nil)
 	require.NoError(t, err)
 	assert.EqualValues(t, 3, stats.Total)
@@ -234,6 +249,85 @@ func runPromptAuditTerminalPayloadRetention(t *testing.T, db *gorm.DB) {
 		assert.Empty(t, row.ScanPayload)
 		assert.Empty(t, row.ContentSnapshot)
 	}
+}
+
+func TestRetainPromptAuditPayloadReservesTheGeneratedReply(t *testing.T) {
+	type payloadShape struct {
+		Segments []dto.PromptAuditSegment `json:"segments"`
+		Output   string                   `json:"output"`
+	}
+	input := strings.Repeat("input ", 12000)
+	segment := []dto.PromptAuditSegment{{Scope: dto.PromptScopeUser, Role: "user", User: true, Text: input}}
+
+	// A request larger than the whole budget must not squeeze out a reply that
+	// fits comfortably on its own.
+	reply := strings.Repeat("reply ", 200)
+	payload, err := common.Marshal(map[string]any{
+		"version": 1, "direction": "output", "coverage_complete": true,
+		"segments": segment, "output": reply,
+	})
+	require.NoError(t, err)
+	require.Greater(t, len(payload), 64*1024)
+	retained, truncated := RetainPromptAuditPayload(payload)
+	require.True(t, truncated)
+	require.LessOrEqual(t, len(retained), 64*1024)
+	var decoded payloadShape
+	require.NoError(t, common.Unmarshal(retained, &decoded))
+	assert.Equal(t, reply, decoded.Output)
+	require.Len(t, decoded.Segments, 1)
+	assert.NotEmpty(t, decoded.Segments[0].Text)
+	assert.True(t, strings.HasPrefix(input, decoded.Segments[0].Text))
+
+	// A reply larger than its share stays present as a prefix beside the
+	// segments, so neither side of an output record vanishes.
+	hugeReply := strings.Repeat("answer ", 20000)
+	payload, err = common.Marshal(map[string]any{
+		"version": 1, "direction": "output", "coverage_complete": true,
+		"segments": segment, "output": hugeReply,
+	})
+	require.NoError(t, err)
+	retained, truncated = RetainPromptAuditPayload(payload)
+	require.True(t, truncated)
+	decoded = payloadShape{}
+	require.NoError(t, common.Unmarshal(retained, &decoded))
+	assert.NotEmpty(t, decoded.Output)
+	assert.True(t, strings.HasPrefix(hugeReply, decoded.Output))
+	require.NotEmpty(t, decoded.Segments)
+	assert.NotEmpty(t, decoded.Segments[0].Text)
+	for _, escapedReply := range []string{
+		strings.Repeat("中文🙂\n\"\\", 10000),
+		strings.Repeat("\x00<>&", 10000),
+	} {
+		payload, err = common.Marshal(map[string]any{
+			"version": 1, "direction": "output", "coverage_complete": true,
+			"segments": segment, "output": escapedReply,
+		})
+		require.NoError(t, err)
+		retained, truncated = RetainPromptAuditPayload(payload)
+		require.True(t, truncated)
+		require.LessOrEqual(t, len(retained), 64*1024)
+		decoded = payloadShape{}
+		require.NoError(t, common.Unmarshal(retained, &decoded))
+		assert.NotEmpty(t, decoded.Output)
+		assert.True(t, utf8.ValidString(decoded.Output))
+		assert.True(t, strings.HasPrefix(escapedReply, decoded.Output))
+		require.NotEmpty(t, decoded.Segments)
+		assert.NotEmpty(t, decoded.Segments[0].Text)
+	}
+
+	// An input request carries no reply and keeps the previous shape.
+	payload, err = common.Marshal(map[string]any{
+		"version": 1, "direction": "input", "coverage_complete": true,
+		"segments": segment,
+	})
+	require.NoError(t, err)
+	retained, truncated = RetainPromptAuditPayload(payload)
+	require.True(t, truncated)
+	decoded = payloadShape{}
+	require.NoError(t, common.Unmarshal(retained, &decoded))
+	assert.Empty(t, decoded.Output)
+	require.NotEmpty(t, decoded.Segments)
+	assert.True(t, strings.HasPrefix(input, decoded.Segments[0].Text))
 }
 
 func TestPromptAuditQuestionGroupingAcrossModels(t *testing.T) {

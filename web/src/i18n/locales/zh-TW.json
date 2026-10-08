@@ -1,5 +1,10 @@
 {
   "translation": {
+    "360": "360",
+    "1000": "1000",
+    "10000": "10000",
+    "Content snapshot was truncated to the retention limit.": "內容快照已依保留上限截斷。",
+    "No content snapshot retained": "未保留內容快照",
     "Session questions": "同工作階段問題",
     "Clear source filter": "清除來源篩選",
     "Passed": "放行",
@@ -35,6 +40,7 @@
     "Source record #{{id}}": "來源紀錄 #{{id}}",
     "Source records": "來源紀錄",
     "Subagent and background content": "子代理及背景請求內容",
+    "This is the retained full text, shown without source separation.": "此處顯示保留的完整文字，不按來源拆分。",
     "This source record has no retained inspected content. Other source records may still retain it.": "此來源紀錄未保留送審內容，其他來源紀錄可能仍有保留。",
     "Unavailable actions": "因不可用而中止",
     "Unknown request type: {{kind}}": "未知請求類型：{{kind}}",
@@ -43,9 +49,6 @@
     "invalid prompt audit query parameter": "提示詞審核查詢參數無效",
     "invalid prompt audit pagination": "提示詞審核分頁參數無效",
     "invalid prompt audit time range": "提示詞審核時間範圍無效",
-    "360": "360",
-    "1000": "1000",
-    "10000": "10000",
     "The semantic probe threshold must be greater than 0 and at most 1.": "語意測活閾值必須大於 0 且不超過 1。",
     "Semantic probe detection requires an enabled TypeSafe classification node.": "語意測活識別需要至少一個啟用的 TypeSafe 分類節點。",
     "TypeSafe node input limits must not exceed 16000 characters.": "TypeSafe 節點的輸入上限不得超過 16000 字元。",

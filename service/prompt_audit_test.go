@@ -479,14 +479,14 @@ func TestPromptAuditLeavesClientAutomationOutOfTheModelAudit(t *testing.T) {
 	configured.PublishConfig()
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-	heartbeat := dto.PromptAuditSegment{
+	notification := dto.PromptAuditSegment{
 		Scope: dto.PromptScopeUser, Role: "user", User: true,
-		Text: "<heartbeat>\n  <automation_id>ai-agent</automation_id>\n  <instructions>继续执行</instructions>\n</heartbeat>",
+		Text: "Tool loaded.",
 	}
 
 	// A request that is only client automation is never sent to the node.
 	result, apiErr := InspectPrompt(c, PromptAuditRequest{
-		Snapshot: dto.PromptAuditSnapshot{Segments: []dto.PromptAuditSegment{heartbeat}},
+		Snapshot: dto.PromptAuditSnapshot{Segments: []dto.PromptAuditSegment{notification}},
 		Protocol: "openai_chat", Model: "guarded-model",
 	})
 	require.Nil(t, apiErr)
@@ -498,7 +498,7 @@ func TestPromptAuditLeavesClientAutomationOutOfTheModelAudit(t *testing.T) {
 	result, apiErr = InspectPrompt(c, PromptAuditRequest{
 		Snapshot: dto.PromptAuditSnapshot{Segments: []dto.PromptAuditSegment{
 			{Scope: dto.PromptScopeUser, Role: "user", User: true, Text: "an ordinary question"},
-			heartbeat,
+			notification,
 		}},
 		Protocol: "openai_chat", Model: "guarded-model",
 	})
@@ -507,7 +507,55 @@ func TestPromptAuditLeavesClientAutomationOutOfTheModelAudit(t *testing.T) {
 	assert.Positive(t, guardCalls.Load())
 	body, _ := guardBody.Load().(string)
 	assert.Contains(t, body, "an ordinary question")
-	assert.NotContains(t, body, "<heartbeat>")
+	assert.NotContains(t, body, "Tool loaded.")
+}
+
+func TestPromptAuditInspectsUserContentInsideAutomationWrappers(t *testing.T) {
+	withPromptWordlistTestDB(t)
+	require.NoError(t, i18n.Init())
+	var guardBody atomic.Value
+	guard := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		guardBody.Store(string(body))
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"Safety: Unsafe\nCategories: Violent"}}]}`)
+	}))
+	defer guard.Close()
+	configured := promptAuditTestSetting(guard.URL, "")
+	configured.Endpoints = configured.Endpoints[:1]
+	configured.IncludeAdmins = true
+	configured.RecordAll = false
+	configured.ScopePolicies = map[dto.PromptAuditScope]prompt_audit_setting.ScopePolicy{
+		dto.PromptScopeUser: {ModelAudit: true},
+	}
+	configured.PublishConfig()
+	for _, text := range []string{
+		"PLEASE IMPLEMENT THIS PLAN:\nnew user instructions",
+		"<heartbeat><instructions>new user instructions</instructions></heartbeat>",
+		"This session is being continued from a previous conversation that ran out of context.\nnew user instructions",
+	} {
+		t.Run(text, func(t *testing.T) {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+			snapshot := dto.PromptAuditSnapshot{Segments: []dto.PromptAuditSegment{
+				{Scope: dto.PromptScopeUser, Role: "user", User: true, Text: text},
+			}}
+			result, apiErr := InspectPrompt(c, PromptAuditRequest{
+				Snapshot: snapshot, Protocol: "openai_chat", Model: "guarded-model",
+			})
+			require.NotNil(t, apiErr)
+			assert.True(t, result.Reviewed)
+			assert.True(t, result.Blocked)
+			body, _ := guardBody.Load().(string)
+			assert.Contains(t, body, "new user instructions")
+			guardBody.Store("")
+			snapshot.Segments[0].Text = strings.ReplaceAll(text, "new user instructions", "preview user instructions")
+			preview, err := TestPromptAuditPolicy(context.Background(), PromptAuditDirectionInput, snapshot, "")
+			require.NoError(t, err)
+			assert.Equal(t, PromptAuditDecisionBlock, preview.Decision)
+			body, _ = guardBody.Load().(string)
+			assert.Contains(t, body, "preview user instructions")
+		})
+	}
 }
 
 func TestPromptAuditMCPDefinitionsUseIndependentCache(t *testing.T) {

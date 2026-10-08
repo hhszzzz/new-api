@@ -559,9 +559,8 @@ func checkPromptAuditWithSetting(c *gin.Context, request PromptAuditRequest, set
 	}
 	result.Enabled = true
 
-	// Only source policies determine which client text reaches the model, and
-	// client automation is left out of the payload entirely: it is machine
-	// instruction, not reviewable user content.
+	// Source policies select the model input. Only fixed notifications without
+	// user content are omitted; client wrapper prefixes confer no exemption.
 	semantic := request.Snapshot.SemanticSegments()
 	filtered := dto.PromptAuditSnapshot{}
 	scopes := map[dto.PromptAuditScope]bool{}

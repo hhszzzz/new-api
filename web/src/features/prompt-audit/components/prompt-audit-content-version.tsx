@@ -111,19 +111,15 @@ export function PromptAuditContentVersionView(props: {
               onRetry={() => void query.refetch()}
             />
           )}
-          {!query.isError &&
-            query.data &&
-            (!query.data.scan_payload ? (
-              <p className='text-muted-foreground p-3 text-xs'>
-                {t('No inspected content retained')}
-              </p>
-            ) : (
-              <PromptAuditPayloadView
-                payload={query.data.scan_payload}
-                truncated={query.data.scan_payload_truncated}
-                background={props.version.kind !== 'main'}
-              />
-            ))}
+          {!query.isError && query.data && (
+            <PromptAuditPayloadView
+              payload={query.data.scan_payload}
+              truncated={query.data.scan_payload_truncated}
+              background={props.version.kind !== 'main'}
+              stored={query.data.status === 'stored'}
+              preferOutput={props.version.direction === 'output'}
+            />
+          )}
         </div>
       ) : (
         <p className='p-3 font-mono text-sm leading-relaxed [overflow-wrap:anywhere] break-words whitespace-pre-wrap'>

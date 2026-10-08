@@ -1,5 +1,10 @@
 {
   "translation": {
+    "360": "360",
+    "1000": "1000",
+    "10000": "10000",
+    "Content snapshot was truncated to the retention limit.": "Bản chụp nội dung đã bị cắt theo giới hạn lưu trữ.",
+    "No content snapshot retained": "Chưa lưu bản chụp nội dung",
     "Session questions": "Câu hỏi trong phiên",
     "Clear source filter": "Xóa bộ lọc nguồn",
     "Passed": "Cho phép",
@@ -35,6 +40,7 @@
     "Source record #{{id}}": "Bản ghi nguồn #{{id}}",
     "Source records": "Bản ghi nguồn",
     "Subagent and background content": "Nội dung tác nhân phụ và yêu cầu nền",
+    "This is the retained full text, shown without source separation.": "Đây là toàn bộ văn bản đã lưu, được hiển thị không tách theo nguồn.",
     "This source record has no retained inspected content. Other source records may still retain it.": "Bản ghi nguồn này không lưu nội dung kiểm duyệt. Các bản ghi nguồn khác có thể vẫn còn lưu.",
     "Unavailable actions": "Lần dừng do không khả dụng",
     "Unknown request type: {{kind}}": "Loại yêu cầu không xác định: {{kind}}",
@@ -43,9 +49,6 @@
     "invalid prompt audit query parameter": "Tham số truy vấn kiểm duyệt lời nhắc không hợp lệ",
     "invalid prompt audit pagination": "Tham số phân trang kiểm duyệt lời nhắc không hợp lệ",
     "invalid prompt audit time range": "Khoảng thời gian kiểm duyệt lời nhắc không hợp lệ",
-    "360": "360",
-    "1000": "1000",
-    "10000": "10000",
     "The semantic probe threshold must be greater than 0 and at most 1.": "Ngưỡng thăm dò ngữ nghĩa phải lớn hơn 0 và không vượt quá 1.",
     "Semantic probe detection requires an enabled TypeSafe classification node.": "Nhận diện thăm dò ngữ nghĩa cần một nút phân loại TypeSafe đang bật.",
     "TypeSafe node input limits must not exceed 16000 characters.": "Giới hạn đầu vào của nút TypeSafe không được vượt quá 16000 ký tự.",

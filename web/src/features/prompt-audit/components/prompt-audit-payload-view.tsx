@@ -31,17 +31,24 @@ export function PromptAuditPayloadView(props: {
   payload?: string
   truncated?: boolean
   background?: boolean
+  stored?: boolean
+  preferOutput?: boolean
 }) {
   const { t } = useTranslation()
   const sources = promptAuditPayloadSources(props.payload)
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
+  const defaultSource = props.preferOutput
+    ? (sources.find((source) => source.output) ?? sources[0])
+    : sources[0]
   const activeSource =
-    sources.find((source) => source.key === selectedKey) ?? sources[0]
+    sources.find((source) => source.key === selectedKey) ?? defaultSource
   return (
     <>
       {!activeSource ? (
         <p className='text-muted-foreground p-3 text-xs'>
-          {t('No inspected content retained')}
+          {props.stored
+            ? t('No content snapshot retained')
+            : t('No inspected content retained')}
         </p>
       ) : (
         <Tabs
@@ -98,7 +105,9 @@ export function PromptAuditPayloadView(props: {
       )}
       {props.truncated && (
         <p className='text-muted-foreground border-t px-3 py-2 text-xs'>
-          {t('Inspected content was truncated to the retention limit.')}
+          {props.stored
+            ? t('Content snapshot was truncated to the retention limit.')
+            : t('Inspected content was truncated to the retention limit.')}
         </p>
       )}
     </>

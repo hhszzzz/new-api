@@ -581,8 +581,14 @@ describe('prompt audit management components', () => {
     const result = screen.getByRole('region', { name: 'Result' })
     // Nothing resembles a verdict that never happened: no action, no source
     // list, no latency; the direction's own delivery is what an output has.
-    expect(within(result).getByText('Inspection method')).toBeVisible()
-    expect(within(result).getByText('No review needed')).toBeVisible()
+    expect(
+      within(result).queryByText('Inspection method')
+    ).not.toBeInTheDocument()
+    expect(within(result).queryByText('Audit model')).not.toBeInTheDocument()
+    expect(within(result).queryByText('Safety')).not.toBeInTheDocument()
+    expect(
+      within(result).queryByText('Suggested action')
+    ).not.toBeInTheDocument()
     expect(within(result).getByText('Delivery status')).toBeVisible()
     expect(within(result).queryByText('Actual action')).not.toBeInTheDocument()
     expect(within(result).queryByText('Text source')).not.toBeInTheDocument()
@@ -613,15 +619,74 @@ describe('prompt audit management components', () => {
       />
     )
 
-    await userEvent.click(
-      await screen.findByRole('tab', { name: 'Generated output' })
-    )
-    expect(screen.getByText('The generated reply')).toBeVisible()
+    expect(await screen.findByText('The generated reply')).toBeVisible()
+    expect(
+      screen.getByRole('tab', { name: 'Generated output' })
+    ).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByRole('tab', { name: 'User messages' })).toBeVisible()
     expect(
       screen.queryByRole('tab', { name: 'Historical assistant messages' })
     ).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('tab', { name: 'User messages' }))
+    expect(screen.getByText('Extracted user question')).toBeVisible()
   })
+
+  test.each([
+    {
+      payload: undefined,
+      truncated: false,
+      message: 'No content snapshot retained',
+    },
+    {
+      payload: JSON.stringify({ output: 'Retained reply' }),
+      truncated: true,
+      message: 'Content snapshot was truncated to the retention limit.',
+    },
+  ])(
+    'describes a stored snapshot without claiming it was inspected ($truncated)',
+    async ({ payload, truncated, message }) => {
+      getPromptAuditMock.mockResolvedValue({
+        success: true,
+        data: {
+          ...EVENT,
+          status: 'stored',
+          inspection_type: 'stored',
+          scan_payload: payload,
+          scan_payload_truncated: truncated,
+        },
+      })
+      renderWithQueryClient(
+        <PromptAuditDetailSheet
+          eventID={EVENT.id}
+          canViewFullPrompt
+          canManage={false}
+          canDelete={false}
+          onOpenChange={vi.fn()}
+          onDelete={vi.fn()}
+        />
+      )
+      expect(await screen.findByText(message)).toBeVisible()
+      expect(
+        screen.queryByText('No inspected content retained')
+      ).not.toBeInTheDocument()
+      expect(
+        screen.queryByText(
+          'Inspected content was truncated to the retention limit.'
+        )
+      ).not.toBeInTheDocument()
+      await userEvent.click(screen.getByRole('button', { name: 'Full prompt' }))
+      expect(
+        screen.getByText(
+          'This is the retained full text, shown without source separation.'
+        )
+      ).toBeVisible()
+      expect(
+        screen.queryByText(
+          'This is the whole request as sent, while Inspected content lists only the parts the audit submitted.'
+        )
+      ).not.toBeInTheDocument()
+    }
+  )
 
   test('records no inspected scope for a wordlist-only row', async () => {
     getPromptAuditMock.mockResolvedValue({

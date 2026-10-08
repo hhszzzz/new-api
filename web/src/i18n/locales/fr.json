@@ -1,5 +1,10 @@
 {
   "translation": {
+    "360": "360",
+    "1000": "1000",
+    "10000": "10000",
+    "Content snapshot was truncated to the retention limit.": "L’instantané du contenu a été tronqué à la limite de conservation.",
+    "No content snapshot retained": "Aucun instantané du contenu conservé",
     "Session questions": "Questions de la session",
     "Clear source filter": "Effacer le filtre de source",
     "Passed": "Autorisé",
@@ -35,6 +40,7 @@
     "Source record #{{id}}": "Enregistrement source n° {{id}}",
     "Source records": "Enregistrements sources",
     "Subagent and background content": "Contenu des sous-agents et des requêtes en arrière-plan",
+    "This is the retained full text, shown without source separation.": "Voici le texte complet conservé, affiché sans séparation par source.",
     "This source record has no retained inspected content. Other source records may still retain it.": "Le contenu audité n’a pas été conservé dans cet enregistrement source. D’autres enregistrements peuvent encore le contenir.",
     "Unavailable actions": "Actions interrompues pour indisponibilité",
     "Unknown request type: {{kind}}": "Type de requête inconnu : {{kind}}",
@@ -43,9 +49,6 @@
     "invalid prompt audit query parameter": "Paramètre de recherche d’audit invalide",
     "invalid prompt audit pagination": "Pagination d’audit invalide",
     "invalid prompt audit time range": "Période d’audit invalide",
-    "360": "360",
-    "1000": "1000",
-    "10000": "10000",
     "The semantic probe threshold must be greater than 0 and at most 1.": "Le seuil de détection sémantique doit être supérieur à 0 et au plus égal à 1.",
     "Semantic probe detection requires an enabled TypeSafe classification node.": "La détection sémantique des sondes nécessite un nœud de classification TypeSafe activé.",
     "TypeSafe node input limits must not exceed 16000 characters.": "La limite d'entrée d'un nœud TypeSafe ne doit pas dépasser 16 000 caractères.",

@@ -85,8 +85,8 @@ func promptAuditRepeatSelect() string {
 	var sql strings.Builder
 	sql.WriteString("COUNT(*) AS repeat_count, MIN(created_at) AS first_at, MAX(created_at) AS last_at, " +
 		promptAuditWorstDecisionRank + " AS worst_decision_rank, " +
-		"SUM(CASE WHEN action = 'block' THEN 1 ELSE 0 END) AS blocks, " +
-		"SUM(CASE WHEN action = 'unavailable' THEN 1 ELSE 0 END) AS unavailable")
+		"SUM(CASE WHEN COALESCE(status, '') <> 'stored' AND action = 'block' THEN 1 ELSE 0 END) AS blocks, " +
+		"SUM(CASE WHEN COALESCE(status, '') <> 'stored' AND action = 'unavailable' THEN 1 ELSE 0 END) AS unavailable")
 	for _, outcome := range []string{"pass", "block", "flag", "unavailable", "queued", "processing", "retry", "failed", "stored", "unknown"} {
 		sql.WriteString(", SUM(CASE WHEN (" + promptAuditOutcome + ") = '" + outcome + "' THEN 1 ELSE 0 END) AS outcome_" + outcome)
 	}

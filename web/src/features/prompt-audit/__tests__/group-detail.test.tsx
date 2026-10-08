@@ -138,6 +138,7 @@ const target: PromptAuditGroupTarget = {
   },
 }
 const server = {
+  event,
   maxID: 999,
   versions: [main, branch],
   hasSession: true,
@@ -189,6 +190,7 @@ beforeEach(() => {
   server.versions = [main, branch]
   server.hasSession = true
   server.payload = event.scan_payload
+  server.event = event
   server.summary = summary
   server.sessionKind = 'side:summary'
   apiMock.get.mockImplementation(
@@ -250,7 +252,7 @@ beforeEach(() => {
         return {
           data: {
             success: true,
-            data: { ...event, scan_payload: server.payload },
+            data: { ...server.event, scan_payload: server.payload },
           },
         }
       }
@@ -455,6 +457,56 @@ describe('question detail reading', () => {
       screen.getAllByRole('button', { name: /Source record #/ })[0]
     ).toBeEnabled()
   })
+
+  test('opens grouped output on the reply and keeps the request sources available', async () => {
+    server.event = { ...event, direction: 'output' }
+    server.versions = [{ ...main, direction: 'output' }]
+    server.payload = JSON.stringify({
+      segments: [{ scope: 'user', text: 'Retained question' }],
+      output: 'Retained generated reply',
+    })
+    renderGroup()
+    expect(await screen.findByText('Retained generated reply')).toBeVisible()
+    expect(
+      screen.getByRole('tab', { name: 'Generated output' })
+    ).toHaveAttribute('aria-selected', 'true')
+    await userEvent.click(screen.getByRole('tab', { name: 'User messages' }))
+    expect(screen.getByText('Retained question')).toBeVisible()
+  })
+
+  test.each([
+    {
+      payload: undefined,
+      truncated: false,
+      message: 'No content snapshot retained',
+    },
+    {
+      payload: JSON.stringify({ output: 'Retained reply' }),
+      truncated: true,
+      message: 'Content snapshot was truncated to the retention limit.',
+    },
+  ])(
+    'describes grouped stored content without claiming inspection ($truncated)',
+    async ({ payload, truncated, message }) => {
+      server.event = {
+        ...event,
+        status: 'stored',
+        inspection_type: 'stored',
+        scan_payload_truncated: truncated,
+      }
+      server.payload = payload
+      renderGroup()
+      expect(await screen.findByText(message)).toBeVisible()
+      expect(
+        screen.queryByText('No inspected content retained')
+      ).not.toBeInTheDocument()
+      expect(
+        screen.queryByText(
+          'Inspected content was truncated to the retention limit.'
+        )
+      ).not.toBeInTheDocument()
+    }
+  )
 
   test('paginates 21 content versions and opens a record from a source id', async () => {
     const user = userEvent.setup()

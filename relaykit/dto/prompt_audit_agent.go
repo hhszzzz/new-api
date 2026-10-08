@@ -24,33 +24,18 @@ func promptAuditCommandWrapper(text string) bool {
 	return false
 }
 
-// promptAuditAutomationPrefixes open texts a client injects as its own
-// automation: an agent heartbeat, a path manifest for uploaded files, a
-// session-title request, a rollout summary task, or the wrapper a client puts
-// around an approved plan. They are recorded like any other content, but they
-// are machine instruction rather than a person's turn.
-var promptAuditAutomationPrefixes = []string{
-	"<heartbeat>", "<uploaded_files>", "<session>", "Analyze this rollout", "PLEASE IMPLEMENT THIS PLAN:",
-}
-
-// PromptAuditAutomationText reports whether a client injected this text as its
-// own automation rather than as a person's turn. Automation is deliberately not
-// sent to the model audit: the human content it may carry was inspected as its
-// own turn, and the wrappers otherwise only add machine instruction to the
-// guard's input. The synthetic context-management requests (compaction
-// continuations, status, recap, summary, title, search helpers) count as
-// automation too.
+// PromptAuditAutomationText recognizes fixed, content-free notifications.
+// Plan, heartbeat, transcript and continuation wrappers can carry new user
+// instructions, so their prefixes must never exempt the enclosed content.
 func PromptAuditAutomationText(text string) bool {
-	text = strings.TrimSpace(text)
-	if text == "Tool loaded." {
+	switch strings.TrimSpace(text) {
+	case "Tool loaded.",
+		"Describe your most recent action in 5 words or fewer",
+		"The user stepped away and is coming back. Recap in under 40 words.":
 		return true
+	default:
+		return false
 	}
-	for _, prefix := range promptAuditAutomationPrefixes {
-		if strings.HasPrefix(text, prefix) {
-			return true
-		}
-	}
-	return promptAuditSyntheticKind(text) != ""
 }
 
 // classifyPromptAuditText classifies a whole text block. These client-controlled

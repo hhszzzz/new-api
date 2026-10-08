@@ -357,6 +357,12 @@ func (audit *PromptAudit) ToResponse(includeFullPrompt bool) PromptAuditResponse
 	if response.Status == PromptAuditStatusStored {
 		response.InspectionType = "stored"
 		response.ExecutionMode = prompt_audit_setting.ModeOff
+		response.Decision, response.Action, response.WouldAction = "", "", ""
+		response.Safety, response.Refusal = "", ""
+		response.Categories, response.UnknownCategories, response.Scores = []string{}, []string{}, nil
+		response.EndpointID, response.EndpointModel, response.InspectedScopes = "", "", []string{}
+		response.ReviewStatus, response.ReviewDecision, response.ReviewReason = "", "", ""
+		response.ReviewCodes, response.ReviewerEndpointID = []string{}, ""
 	} else if response.InspectionType == "" {
 		response.InspectionType = "model"
 	}
@@ -407,6 +413,12 @@ func RetainPromptAuditPayload(payload []byte) ([]byte, bool) {
 	envelope["segments"] = json.RawMessage("[]")
 	base, _ := common.Marshal(envelope)
 	budget := limit - len(base) - 32
+	// Reserve up to half the text budget for the reply so a long request cannot
+	// consume all its space. Unused request space is also available to output.
+	if output != "" {
+		encoded, _ := common.Marshal(output)
+		budget -= min(len(encoded), budget/2)
+	}
 	retained := make([]json.RawMessage, 0)
 	for _, segment := range segments {
 		var text string
@@ -427,8 +439,13 @@ func RetainPromptAuditPayload(payload []byte) ([]byte, bool) {
 		}
 	}
 	envelope["segments"], _ = common.Marshal(retained)
-	if output != "" && budget > 16 {
-		envelope["output"] = promptAuditJSONTextPrefix(output, budget-12)
+	if output != "" {
+		// Measure the remaining space on the assembled record, including the
+		// output key, so a reply that fits is retained in full.
+		assembled, _ := common.Marshal(envelope)
+		if room := limit - len(assembled) - len(`,"output":`); room >= 2 {
+			envelope["output"] = promptAuditJSONTextPrefix(output, room)
+		}
 	}
 	data, _ := common.Marshal(envelope)
 	if len(data) > limit {
@@ -502,14 +519,14 @@ const promptAuditRepeatEmptyHashKey = "CASE WHEN (" + promptAuditEffectiveGroupK
 const promptAuditRepeatRowLimit = 200
 
 // promptAuditWorstDecisionRank ranks the decisions of a group so the merged row
-// can report the most severe one. A request that has not been decided yet ranks
-// above a pass: until it is decided, the group has not passed. Plain CASE
+// can report the most severe one. A record with no verdict ranks above a pass,
+// including stored records whose old decision fields are ignored. Plain CASE
 // aggregates are the portable form; aggregate FILTER clauses are what diverge
 // across the three supported engines.
-const promptAuditWorstDecisionRank = "MAX(CASE decision WHEN 'block' THEN 4 WHEN 'unavailable' THEN 3 WHEN 'flag' THEN 2 WHEN 'pass' THEN 0 ELSE 1 END)"
+const promptAuditWorstDecisionRank = "MAX(CASE WHEN status = 'stored' THEN 1 ELSE CASE decision WHEN 'block' THEN 4 WHEN 'unavailable' THEN 3 WHEN 'flag' THEN 2 WHEN 'pass' THEN 0 ELSE 1 END END)"
 
 // promptAuditDecisionsByRank reads promptAuditWorstDecisionRank back into the
-// decision it stands for; rank 1 is a request still pending.
+// decision it stands for; rank 1 has no verdict.
 var promptAuditDecisionsByRank = [...]string{0: "pass", 1: "", 2: "flag", 3: "unavailable", 4: "block"}
 
 // promptAuditListingOmittedColumns are the blobs a listing never reads:

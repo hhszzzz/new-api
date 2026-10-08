@@ -588,7 +588,9 @@ describe('prompt audit records', () => {
     await user.click(screen.getByRole('button', { name: 'Search' }))
 
     await waitFor(() =>
-      expect(listingRequests((params) => params.status === 'stored')).toHaveLength(1)
+      expect(
+        listingRequests((params) => params.status === 'stored')
+      ).toHaveLength(1)
     )
     expect(statsRequests().at(-1)?.[1]).toEqual({
       params: expect.objectContaining({ status: 'stored' }),

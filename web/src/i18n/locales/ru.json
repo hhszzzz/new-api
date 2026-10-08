@@ -1,5 +1,10 @@
 {
   "translation": {
+    "360": "360",
+    "1000": "1000",
+    "10000": "10000",
+    "Content snapshot was truncated to the retention limit.": "Снимок содержимого обрезан до лимита хранения.",
+    "No content snapshot retained": "Снимок содержимого не сохранён",
     "Session questions": "Вопросы сеанса",
     "Clear source filter": "Сбросить фильтр источника",
     "Passed": "Разрешено",
@@ -35,6 +40,7 @@
     "Source record #{{id}}": "Исходная запись № {{id}}",
     "Source records": "Исходные записи",
     "Subagent and background content": "Содержимое подагентов и фоновых запросов",
+    "This is the retained full text, shown without source separation.": "Здесь показан весь сохранённый текст без разделения по источникам.",
     "This source record has no retained inspected content. Other source records may still retain it.": "В этой исходной записи проверенное содержимое не сохранено. Оно может быть сохранено в других записях.",
     "Unavailable actions": "Прерывания из-за недоступности",
     "Unknown request type: {{kind}}": "Неизвестный тип запроса: {{kind}}",
@@ -43,9 +49,6 @@
     "invalid prompt audit query parameter": "Недопустимый параметр запроса проверки промптов",
     "invalid prompt audit pagination": "Недопустимые параметры страниц проверки промптов",
     "invalid prompt audit time range": "Недопустимый период проверки промптов",
-    "360": "360",
-    "1000": "1000",
-    "10000": "10000",
     "The semantic probe threshold must be greater than 0 and at most 1.": "Порог семантической проверки должен быть больше 0 и не больше 1.",
     "Semantic probe detection requires an enabled TypeSafe classification node.": "Семантическое обнаружение проверок требует включённого узла классификации TypeSafe.",
     "TypeSafe node input limits must not exceed 16000 characters.": "Ограничение ввода узла TypeSafe не должно превышать 16 000 символов.",
