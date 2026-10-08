@@ -348,7 +348,8 @@ func RecordPromptAuditStored(c *gin.Context, request PromptAuditRequest) {
 	}
 	digest := sha256.Sum256([]byte(fullText))
 	audit := &model.PromptAudit{
-		RequestID: resultRequestID(c), UserID: contextInt(c, "id"), TokenID: contextInt(c, "token_id"),
+		InspectionType: "stored",
+		RequestID:      resultRequestID(c), UserID: contextInt(c, "id"), TokenID: contextInt(c, "token_id"),
 		TokenName: contextString(c, "token_name"), GroupName: effectivePromptAuditGroup(c),
 		Protocol: request.Protocol, ModelName: request.Model, Stage: normalizedPromptAuditStage(request.Stage),
 		Direction: direction, CoverageComplete: coverageComplete,
@@ -510,7 +511,7 @@ func TestPromptAuditPolicy(ctx context.Context, direction string, snapshot dto.P
 	}
 	filtered := dto.PromptAuditSnapshot{}
 	for _, segment := range snapshot.SemanticSegments().Segments {
-		if setting.PolicyFor(segment.SourceScope()).ModelAudit {
+		if setting.PolicyFor(segment.SourceScope()).ModelAudit && !dto.PromptAuditAutomationText(segment.Text) {
 			filtered.Segments = append(filtered.Segments, segment)
 		}
 	}
@@ -558,12 +559,14 @@ func checkPromptAuditWithSetting(c *gin.Context, request PromptAuditRequest, set
 	}
 	result.Enabled = true
 
-	// Only source policies determine which client text reaches the model.
+	// Only source policies determine which client text reaches the model, and
+	// client automation is left out of the payload entirely: it is machine
+	// instruction, not reviewable user content.
 	semantic := request.Snapshot.SemanticSegments()
 	filtered := dto.PromptAuditSnapshot{}
 	scopes := map[dto.PromptAuditScope]bool{}
 	for _, segment := range semantic.Segments {
-		if setting.PolicyFor(segment.SourceScope()).ModelAudit {
+		if setting.PolicyFor(segment.SourceScope()).ModelAudit && !dto.PromptAuditAutomationText(segment.Text) {
 			filtered.Segments = append(filtered.Segments, segment)
 			scopes[segment.SourceScope()] = true
 		}

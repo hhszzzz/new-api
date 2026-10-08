@@ -610,3 +610,31 @@ func orderedSegmentTexts(snapshot PromptAuditSnapshot) []string {
 	}
 	return texts
 }
+
+func TestPromptAuditAutomationText(t *testing.T) {
+	for _, text := range []string{
+		"<heartbeat>\n  <automation_id>ai-agent</automation_id>\n  <instructions>继续执行</instructions>\n</heartbeat>",
+		"<uploaded_files>\n<file><file_path>C:\\Users\\yxk\\a.pdf</file_path></file>\n</uploaded_files>",
+		"<session>\n[question]\n</session>\n\nWrite the title in the predominant language of the session",
+		"Tool loaded.",
+		"Analyze this rollout and produce JSON with `rollout_summary` and `rollout_slug`.",
+		"PLEASE IMPLEMENT THIS PLAN:\n# plan body",
+		"This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion.",
+		"Describe your most recent action in 5 words or fewer",
+		"The user stepped away and is coming back. Recap in under 40 words.",
+		"CRITICAL: Respond with TEXT ONLY",
+		"<transcript>\n{\"Bash\":\"grep -rn clientFee\"}\n</transcript>",
+		"Please write a 5-10 word title for the following conversation",
+	} {
+		assert.True(t, PromptAuditAutomationText(text), "automation: %s", text)
+	}
+	for _, text := range []string{
+		"帮我修复这个 bug",
+		"<command-name>/model</command-name>",
+		"<send_user_message_question_reply>[{\"answer\":\"yes\"}]",
+		"# Files mentioned by the user:\n## note: /tmp/a.md\n\n## My request:\n审查这段实现",
+		"Tool loaded. Now fix the parser",
+	} {
+		assert.False(t, PromptAuditAutomationText(text), "user content: %s", text)
+	}
+}

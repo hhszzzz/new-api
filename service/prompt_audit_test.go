@@ -426,6 +426,7 @@ func TestPromptAuditRecordsRequestsWithoutInspection(t *testing.T) {
 	require.Len(t, audits, 1)
 	stored := audits[0]
 	assert.Equal(t, model.PromptAuditStatusStored, stored.Status)
+	assert.Equal(t, "stored", stored.InspectionType)
 	assert.Empty(t, stored.Decision)
 	assert.Empty(t, stored.Action)
 	assert.Equal(t, "store this question", string(stored.FullPrompt))
@@ -454,6 +455,59 @@ func TestPromptAuditRecordsRequestsWithoutInspection(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, after.FullPrompt)
 	assert.Empty(t, after.ScanPayload)
+}
+
+func TestPromptAuditLeavesClientAutomationOutOfTheModelAudit(t *testing.T) {
+	withPromptWordlistTestDB(t)
+	require.NoError(t, i18n.Init())
+	var guardCalls atomic.Int32
+	var guardBody atomic.Value
+	guard := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		guardCalls.Add(1)
+		body, _ := io.ReadAll(r.Body)
+		guardBody.Store(string(body))
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"Safety: Safe\nCategories: None"}}]}`)
+	}))
+	defer guard.Close()
+	configured := promptAuditTestSetting(guard.URL, "")
+	configured.Endpoints = configured.Endpoints[:1]
+	configured.IncludeAdmins = true
+	configured.RecordAll = false
+	configured.ScopePolicies = map[dto.PromptAuditScope]prompt_audit_setting.ScopePolicy{
+		dto.PromptScopeUser: {ModelAudit: true},
+	}
+	configured.PublishConfig()
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	heartbeat := dto.PromptAuditSegment{
+		Scope: dto.PromptScopeUser, Role: "user", User: true,
+		Text: "<heartbeat>\n  <automation_id>ai-agent</automation_id>\n  <instructions>继续执行</instructions>\n</heartbeat>",
+	}
+
+	// A request that is only client automation is never sent to the node.
+	result, apiErr := InspectPrompt(c, PromptAuditRequest{
+		Snapshot: dto.PromptAuditSnapshot{Segments: []dto.PromptAuditSegment{heartbeat}},
+		Protocol: "openai_chat", Model: "guarded-model",
+	})
+	require.Nil(t, apiErr)
+	assert.False(t, result.Reviewed)
+	assert.Zero(t, result.AuditID)
+	assert.Zero(t, guardCalls.Load(), "client automation must not reach the audit node")
+
+	// A real question beside automation is sent without the automation text.
+	result, apiErr = InspectPrompt(c, PromptAuditRequest{
+		Snapshot: dto.PromptAuditSnapshot{Segments: []dto.PromptAuditSegment{
+			{Scope: dto.PromptScopeUser, Role: "user", User: true, Text: "an ordinary question"},
+			heartbeat,
+		}},
+		Protocol: "openai_chat", Model: "guarded-model",
+	})
+	require.Nil(t, apiErr)
+	assert.True(t, result.Reviewed)
+	assert.Positive(t, guardCalls.Load())
+	body, _ := guardBody.Load().(string)
+	assert.Contains(t, body, "an ordinary question")
+	assert.NotContains(t, body, "<heartbeat>")
 }
 
 func TestPromptAuditMCPDefinitionsUseIndependentCache(t *testing.T) {
