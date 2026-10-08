@@ -8301,6 +8301,12 @@
     "stop sequences (stop_sequences) require lossy gateway emulation for Responses": "Chuỗi dừng (stop_sequences) cần cổng mô phỏng có mất mát cho Responses",
     "top_k has no verified mapping on this conversion route": "top_k không có ánh xạ đã kiểm chứng trên tuyến chuyển đổi này",
     "model \"{{model}}\" requires max_tokens greater than 1024 for manual thinking; raised the unset max_tokens to {{raised}}": "Mô hình \"{{model}}\" yêu cầu max_tokens lớn hơn 1024 cho suy luận thủ công; max_tokens chưa đặt đã được nâng lên {{raised}}",
-    "model \"{{model}}\" requires max_tokens greater than 1024 for manual thinking; raised max_tokens {{current}} to {{raised}}": "Mô hình \"{{model}}\" yêu cầu max_tokens lớn hơn 1024 cho suy luận thủ công; max_tokens {{current}} đã được nâng lên {{raised}}"
+    "model \"{{model}}\" requires max_tokens greater than 1024 for manual thinking; raised max_tokens {{current}} to {{raised}}": "Mô hình \"{{model}}\" yêu cầu max_tokens lớn hơn 1024 cho suy luận thủ công; max_tokens {{current}} đã được nâng lên {{raised}}",
+    "Store all request content and model replies": "Lưu toàn bộ yêu cầu và phản hồi của mô hình",
+    "Keep all request sources and generated replies. Records grow with stored content and stay for the retention period above.": "Lưu tất cả nguồn nội dung yêu cầu và phản hồi được tạo. Bản ghi tăng theo lượng nội dung lưu và được giữ trong thời gian bên trên.",
+    "Stored characters per content block": "Số ký tự lưu cho mỗi khối nội dung",
+    "Maximum characters kept from each content block and generated reply. Turn on full storage above to keep all characters.": "Giới hạn riêng số ký tự lưu cho từng khối nội dung và phản hồi. Bật chế độ lưu đầy đủ phía trên để giữ mọi ký tự.",
+    "Larger buffered outputs spill to temporary storage. Full storage uses this as its memory threshold.": "Phản hồi đệm lớn hơn sẽ được ghi vào tệp tạm. Ở chế độ lưu đầy đủ, giá trị này là ngưỡng bộ nhớ.",
+    "Blocking stops delivery when this limit is exceeded. Full storage disables this cap.": "Chế độ chặn sẽ dừng gửi phản hồi khi vượt giới hạn này. Chế độ lưu đầy đủ sẽ bỏ giới hạn."
   }
 }

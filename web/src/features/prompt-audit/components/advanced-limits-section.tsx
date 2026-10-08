@@ -143,7 +143,9 @@ export function AdvancedLimitsSection({
           label: t('Output memory threshold (MB)'),
           min: 1,
           max: (current) => Math.max(1, bytesToMB(current.output_max_bytes)),
-          description: t('Larger buffered outputs spill to temporary storage.'),
+          description: t(
+            'Larger buffered outputs spill to temporary storage. Full storage uses this as its memory threshold.'
+          ),
           display: bytesToMB,
           persist: mbToBytes,
         },
@@ -154,7 +156,7 @@ export function AdvancedLimitsSection({
           min: 1,
           max: 64,
           description: t(
-            'Blocking stops delivery when this limit is exceeded.'
+            'Blocking stops delivery when this limit is exceeded. Full storage disables this cap.'
           ),
           display: bytesToMB,
           persist: mbToBytes,

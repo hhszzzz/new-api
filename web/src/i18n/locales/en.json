@@ -8301,6 +8301,12 @@
     "stop sequences (stop_sequences) require lossy gateway emulation for Responses": "stop sequences (stop_sequences) require lossy gateway emulation for Responses",
     "top_k has no verified mapping on this conversion route": "top_k has no verified mapping on this conversion route",
     "model \"{{model}}\" requires max_tokens greater than 1024 for manual thinking; raised the unset max_tokens to {{raised}}": "model \"{{model}}\" requires max_tokens greater than 1024 for manual thinking; raised the unset max_tokens to {{raised}}",
-    "model \"{{model}}\" requires max_tokens greater than 1024 for manual thinking; raised max_tokens {{current}} to {{raised}}": "model \"{{model}}\" requires max_tokens greater than 1024 for manual thinking; raised max_tokens {{current}} to {{raised}}"
+    "model \"{{model}}\" requires max_tokens greater than 1024 for manual thinking; raised max_tokens {{current}} to {{raised}}": "model \"{{model}}\" requires max_tokens greater than 1024 for manual thinking; raised max_tokens {{current}} to {{raised}}",
+    "Store all request content and model replies": "Store all request content and model replies",
+    "Keep all request sources and generated replies. Records grow with stored content and stay for the retention period above.": "Keep all request sources and generated replies. Records grow with stored content and stay for the retention period above.",
+    "Stored characters per content block": "Stored characters per content block",
+    "Maximum characters kept from each content block and generated reply. Turn on full storage above to keep all characters.": "Maximum characters kept from each content block and generated reply. Turn on full storage above to keep all characters.",
+    "Larger buffered outputs spill to temporary storage. Full storage uses this as its memory threshold.": "Larger buffered outputs spill to temporary storage. Full storage uses this as its memory threshold.",
+    "Blocking stops delivery when this limit is exceeded. Full storage disables this cap.": "Blocking stops delivery when this limit is exceeded. Full storage disables this cap."
   }
 }

@@ -37,8 +37,8 @@ var (
 )
 
 // PromptAudit is both the durable async work item and the final audit event.
-// ScanPayload stays complete while queued and is replaced by the capped content
-// snapshot on completion. Retained content is restricted to authorized review.
+// ScanPayload stays complete while queued and is retained according to the
+// request's storage policy on completion. Content is restricted to authorized review.
 //
 // Ip, UserAgent, Method, RequestPath, Origin and Referer capture the client once,
 // when the row is created; the async worker must never rewrite them. Their widths
@@ -370,11 +370,15 @@ func (audit *PromptAudit) ToResponse(includeFullPrompt bool) PromptAuditResponse
 		value := string(audit.FullPrompt)
 		response.FullPrompt = &value
 	}
-	if includeFullPrompt && len(audit.ScanPayload) > 0 {
-		payload, truncated := RetainPromptAuditPayload(audit.ScanPayload)
-		response.ScanPayloadTruncated = response.ScanPayloadTruncated || truncated
-		value := string(payload)
-		response.ScanPayload = &value
+	if includeFullPrompt {
+		payload := audit.ContentSnapshot
+		if len(payload) == 0 {
+			payload = audit.ScanPayload
+		}
+		if len(payload) > 0 {
+			value := string(payload)
+			response.ScanPayload = &value
+		}
 	}
 	return response
 }
@@ -389,89 +393,72 @@ func CreatePromptAudit(audit *PromptAudit) error {
 	return DB.Create(audit).Error
 }
 
-func RetainPromptAuditPayload(payload []byte) ([]byte, bool) {
-	const limit = 64 * 1024
-	if len(payload) <= limit {
+// RetainPromptAuditPayload uses the same text-character budget as FullPrompt
+// independently for every source segment and the generated output. Zero keeps
+// the complete snapshot, including source metadata and output.
+func RetainPromptAuditPayload(payload []byte, maxRunes int) ([]byte, bool) {
+	if maxRunes <= 0 {
 		return append([]byte(nil), payload...), false
 	}
 	var envelope map[string]json.RawMessage
 	if common.Unmarshal(payload, &envelope) != nil {
-		text := strings.ToValidUTF8(string(payload[:limit]), "\uFFFD")
-		if len(text) > limit {
-			text = text[:limit]
-			for !utf8.ValidString(text) {
-				text = text[:len(text)-1]
-			}
-		}
-		return []byte(text), true
+		text := strings.ToValidUTF8(string(payload), "\uFFFD")
+		prefix := promptAuditTextPrefix(text, maxRunes)
+		return []byte(prefix), len(prefix) < len(text)
 	}
 	var segments []map[string]json.RawMessage
-	_ = common.Unmarshal(envelope["segments"], &segments)
-	var output string
-	_ = common.Unmarshal(envelope["output"], &output)
-	delete(envelope, "output")
-	envelope["segments"] = json.RawMessage("[]")
-	base, _ := common.Marshal(envelope)
-	budget := limit - len(base) - 32
-	// Reserve up to half the text budget for the reply so a long request cannot
-	// consume all its space. Unused request space is also available to output.
-	if output != "" {
-		encoded, _ := common.Marshal(output)
-		budget -= min(len(encoded), budget/2)
+	if raw, exists := envelope["segments"]; exists && common.Unmarshal(raw, &segments) != nil {
+		text := strings.ToValidUTF8(string(payload), "\uFFFD")
+		prefix := promptAuditTextPrefix(text, maxRunes)
+		return []byte(prefix), len(prefix) < len(text)
 	}
-	retained := make([]json.RawMessage, 0)
+	truncated := false
 	for _, segment := range segments {
-		var text string
-		_ = common.Unmarshal(segment["text"], &text)
-		segment["text"] = json.RawMessage(`""`)
-		empty, _ := common.Marshal(segment)
-		available := budget - len(empty) - 1
-		if available < 0 {
-			break
+		if segment == nil {
+			continue
 		}
-		encoded := promptAuditJSONTextPrefix(text, available+2)
-		segment["text"] = encoded
-		part, _ := common.Marshal(segment)
-		retained = append(retained, part)
-		budget -= len(part) + 1
-		if budget <= 0 {
-			break
+		var text string
+		if err := common.Unmarshal(segment["text"], &text); err != nil {
+			continue
+		}
+		prefix := promptAuditTextPrefix(text, maxRunes)
+		if prefix != text {
+			truncated = true
+			segment["text"], _ = common.Marshal(prefix)
 		}
 	}
-	envelope["segments"], _ = common.Marshal(retained)
-	if output != "" {
-		// Measure the remaining space on the assembled record, including the
-		// output key, so a reply that fits is retained in full.
-		assembled, _ := common.Marshal(envelope)
-		if room := limit - len(assembled) - len(`,"output":`); room >= 2 {
-			envelope["output"] = promptAuditJSONTextPrefix(output, room)
+	if truncated {
+		envelope["segments"], _ = common.Marshal(segments)
+	}
+	if raw, exists := envelope["output"]; exists {
+		var output string
+		if common.Unmarshal(raw, &output) == nil {
+			prefix := promptAuditTextPrefix(output, maxRunes)
+			if prefix != output {
+				truncated = true
+				envelope["output"], _ = common.Marshal(prefix)
+			}
 		}
+	}
+	if !truncated {
+		return append([]byte(nil), payload...), false
 	}
 	data, _ := common.Marshal(envelope)
-	if len(data) > limit {
-		return []byte(`{"version":1,"segments":[],"coverage_complete":false}`), true
-	}
 	return data, true
 }
 
-func promptAuditJSONTextPrefix(text string, limit int) json.RawMessage {
-	encoded, _ := common.Marshal(text)
-	if len(encoded) <= limit {
-		return encoded
+func promptAuditTextPrefix(text string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return text
 	}
-	runes := []rune(text)
-	low, high := 0, min(len(runes), limit)
-	for low < high {
-		mid := (low + high + 1) / 2
-		data, _ := common.Marshal(string(runes[:mid]))
-		if len(data) <= limit {
-			low = mid
-		} else {
-			high = mid - 1
+	count := 0
+	for offset := range text {
+		if count == maxRunes {
+			return text[:offset]
 		}
+		count++
 	}
-	encoded, _ = common.Marshal(string(runes[:low]))
-	return encoded
+	return text
 }
 
 func GetPromptAudit(id int64) (*PromptAudit, error) {
@@ -715,7 +702,7 @@ func ClaimPromptAudit(owner string, now, leaseUntil int64) (*PromptAudit, bool, 
 	}
 	const exhaustedCondition = "((status = ? AND next_attempt_at <= ?) OR (status = ? AND lease_until < ?)) AND attempts >= max_attempts"
 	var exhausted []PromptAudit
-	if err := DB.Select("id", "scan_payload", "content_snapshot", "scan_payload_truncated").
+	if err := DB.Select("id", "scan_payload", "content_snapshot", "scan_payload_truncated", "policy_snapshot").
 		Where(exhaustedCondition, PromptAuditStatusRetry, now, PromptAuditStatusProcessing, now).
 		Order("id asc").Limit(32).Find(&exhausted).Error; err != nil {
 		return nil, false, err
@@ -784,7 +771,7 @@ func ClaimPromptAudit(owner string, now, leaseUntil int64) (*PromptAudit, bool, 
 
 func FinishPromptAudit(id int64, owner string, completion PromptAuditCompletion) error {
 	var audit PromptAudit
-	if err := DB.Select("scan_payload", "content_snapshot", "scan_payload_truncated").Where("id = ? AND status = ? AND lease_owner = ?", id, PromptAuditStatusProcessing, owner).First(&audit).Error; err != nil {
+	if err := DB.Select("scan_payload", "content_snapshot", "scan_payload_truncated", "policy_snapshot").Where("id = ? AND status = ? AND lease_owner = ?", id, PromptAuditStatusProcessing, owner).First(&audit).Error; err != nil {
 		return err
 	}
 	payload, truncated := audit.retainedPayload()
@@ -855,7 +842,7 @@ func FailPromptAudit(id int64, owner, errorCode string, retryAt int64, terminal 
 	}
 	if terminal {
 		var audit PromptAudit
-		if err := DB.Select("scan_payload", "content_snapshot", "scan_payload_truncated").Where("id = ? AND status = ? AND lease_owner = ?", id, PromptAuditStatusProcessing, owner).First(&audit).Error; err != nil {
+		if err := DB.Select("scan_payload", "content_snapshot", "scan_payload_truncated", "policy_snapshot").Where("id = ? AND status = ? AND lease_owner = ?", id, PromptAuditStatusProcessing, owner).First(&audit).Error; err != nil {
 			return err
 		}
 		payload, truncated := audit.retainedPayload()
@@ -886,7 +873,16 @@ func (audit *PromptAudit) retainedPayload() ([]byte, bool) {
 	if len(payload) == 0 {
 		payload = audit.ContentSnapshot
 	}
-	retained, truncated := RetainPromptAuditPayload(payload)
+	maxRunes := prompt_audit_setting.DefaultFullPromptMaxRunes
+	var policy struct {
+		FullPromptMaxRunes *int `json:"full_prompt_max_runes"`
+	}
+	if common.UnmarshalJsonStr(audit.PolicySnapshot, &policy) == nil && policy.FullPromptMaxRunes != nil {
+		if limit := *policy.FullPromptMaxRunes; limit >= 0 && limit <= prompt_audit_setting.MaxFullPromptMaxRunes {
+			maxRunes = limit
+		}
+	}
+	retained, truncated := RetainPromptAuditPayload(payload, maxRunes)
 	return retained, truncated || audit.ScanPayloadTruncated
 }
 

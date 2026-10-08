@@ -55,9 +55,9 @@ export function StoredPromptLimitField(props: StoredPromptLimitFieldProps) {
             unlimited ? FULL_PROMPT_NO_LIMIT : FULL_PROMPT_DEFAULT_RUNES
           )
         }
-        label={t('Store the entire request')}
+        label={t('Store all request content and model replies')}
         description={t(
-          'Keep every character of a request instead of its first part. Records grow with what is kept and stay for the retention period above, so this is the fastest way to enlarge the audit table.'
+          'Keep all request sources and generated replies. Records grow with stored content and stay for the retention period above.'
         )}
       />
       {/* Hidden rather than disabled while unlimited: the switch turning off is
@@ -65,13 +65,13 @@ export function StoredPromptLimitField(props: StoredPromptLimitFieldProps) {
       {!keepsEverything && (
         <NumberField
           id='prompt-audit-full-prompt-limit'
-          label={t('Stored prompt characters')}
+          label={t('Stored characters per content block')}
           value={limit}
           min={FULL_PROMPT_MIN_RUNES}
           max={FULL_PROMPT_MAX_RUNES}
           onChange={props.onChange}
           description={t(
-            'How much of the whole request each record keeps. This bounds the whole-request copy only; what the audit inspected is stored separately.'
+            'Maximum characters kept from each content block and generated reply. Turn on full storage above to keep all characters.'
           )}
         />
       )}

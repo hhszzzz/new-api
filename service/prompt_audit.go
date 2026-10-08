@@ -162,6 +162,7 @@ type promptAuditPolicySnapshot struct {
 	CacheTTLSeconds        int      `json:"cache_ttl_seconds"`
 	GlobalConcurrency      int      `json:"global_concurrency"`
 	EndpointConcurrency    int      `json:"endpoint_concurrency"`
+	FullPromptMaxRunes     *int     `json:"full_prompt_max_runes,omitempty"`
 	Wordlist               *struct {
 		ID      string               `json:"id"`
 		Name    string               `json:"name"`
@@ -362,7 +363,7 @@ func RecordPromptAuditStored(c *gin.Context, request PromptAuditRequest) {
 	setPromptAuditContent(audit, fullText, setting.FullPromptRetentionLimit())
 	setPromptAuditInputContext(audit, request)
 	payload, _ := common.Marshal(promptAuditPayload{Version: 1, Direction: direction, CoverageComplete: coverageComplete, Segments: request.Snapshot.OrderedSegments(), Output: request.Output})
-	audit.ScanPayload, audit.ScanPayloadTruncated = model.RetainPromptAuditPayload(payload)
+	audit.ScanPayload, audit.ScanPayloadTruncated = model.RetainPromptAuditPayload(payload, setting.FullPromptRetentionLimit())
 	if err := model.CreatePromptAudit(audit); err != nil {
 		logger.LogWarn(c, "prompt audit storage failed: %s", err.Error())
 	}
@@ -2156,6 +2157,7 @@ func newPromptAuditRecord(c *gin.Context, request PromptAuditRequest, setting pr
 		audit.WordlistID, audit.WordlistName, audit.WordlistVersion = result.Wordlist.ID, result.Wordlist.Name, result.Wordlist.Version
 		audit.MatchedScope = string(result.Wordlist.Scope)
 	}
+	retentionLimit := setting.FullPromptRetentionLimit()
 	policySnapshot := promptAuditPolicySnapshot{
 		Version: 2, ConfigVersion: setting.ConfigVersion, EnabledCategories: append([]string(nil), setting.EnabledCategories...),
 		ControversialBlocks: append([]string(nil), setting.ControversialBlocks...), ReviewEnabled: setting.ReviewEnabled,
@@ -2164,6 +2166,7 @@ func newPromptAuditRecord(c *gin.Context, request PromptAuditRequest, setting pr
 		BlockingLatestTurnOnly: setting.BlockingLatestTurnOnly,
 		CacheTTLSeconds:        setting.CacheTTLSeconds, GlobalConcurrency: setting.GlobalConcurrency,
 		EndpointConcurrency: setting.EndpointConcurrency,
+		FullPromptMaxRunes:  &retentionLimit,
 	}
 	if result.Wordlist != nil {
 		policySnapshot.Wordlist = &struct {
@@ -2185,9 +2188,9 @@ func newPromptAuditRecord(c *gin.Context, request PromptAuditRequest, setting pr
 	if data, marshalErr := common.Marshal(policySnapshot); marshalErr == nil {
 		audit.PolicySnapshot = string(data)
 	}
-	setPromptAuditContent(audit, fullText, setting.FullPromptRetentionLimit())
+	setPromptAuditContent(audit, fullText, retentionLimit)
 	setPromptAuditInputContext(audit, request)
-	audit.ScanPayload, audit.ScanPayloadTruncated = model.RetainPromptAuditPayload(scanPayload)
+	audit.ScanPayload, audit.ScanPayloadTruncated = model.RetainPromptAuditPayload(scanPayload, retentionLimit)
 	audit.ContentSnapshot = append([]byte(nil), audit.ScanPayload...)
 	if data, err := common.Marshal(result.InspectedScopes); err == nil {
 		audit.InspectedScopes = string(data)
@@ -2262,10 +2265,9 @@ func persistPromptAuditDecision(c *gin.Context, request PromptAuditRequest, sett
 }
 
 // promptAuditStoredFullPrompt keeps the beginning of the whole request for the
-// record. maxRunes is the resolved retention limit in characters and is always
-// positive: callers pass FullPromptRetentionLimit, which substitutes the default
-// for an unset value. A limit that exceeds the text keeps all of it and reports
-// truncated=false, because the record does hold everything.
+// record. maxRunes is the resolved character limit; zero keeps the complete text.
+// Callers pass FullPromptRetentionLimit, which substitutes the default only for
+// an unset value. Text within the limit remains complete and is not marked truncated.
 func promptAuditStoredFullPrompt(value string, maxRunes int) ([]byte, bool) {
 	if maxRunes <= 0 {
 		return []byte(value), false

@@ -70,11 +70,13 @@ const (
 	MaxProbeSemanticRunes    = 128
 	DefaultOutputMaxBytes    = 8 * 1024 * 1024
 	DefaultOutputMemoryBytes = 1024 * 1024
-	MaxAttemptsLimit         = 4
+	// UnlimitedOutputCapture disables the output capture byte limit when the
+	// operator explicitly enables complete prompt and reply retention.
+	UnlimitedOutputCapture = -1
+	MaxAttemptsLimit       = 4
 	// DefaultFullPromptMaxRunes bounds how much of the whole request is kept on
-	// every audit record. It matches the cap the audit pipeline shipped with, so
-	// an existing deployment keeps the same written volume until an operator
-	// changes it.
+	// every audit record, including its content snapshot. An unset configuration
+	// keeps a finite limit until an operator explicitly selects full retention.
 	DefaultFullPromptMaxRunes = 65536
 	// MaxFullPromptMaxRunes is the largest retention limit an operator may set.
 	// The records table grows with every character kept and retention is often
@@ -206,7 +208,7 @@ type PromptAuditSetting struct {
 	OutputMemoryBytes   int        `json:"output_memory_bytes"`
 	// FullPromptMaxRunes keeps exactly what the operator persisted: a pointer so
 	// an absent key stays distinguishable from an explicit 0, which means "keep
-	// the whole request". Without that distinction every deployment upgrading to
+	// the whole request and content snapshot". Without that distinction upgrading to
 	// this version would silently switch to unlimited retention.
 	FullPromptMaxRunes *int   `json:"full_prompt_max_runes"`
 	ConfigVersion      string `json:"-"`
@@ -281,6 +283,15 @@ func (setting PromptAuditSetting) FullPromptRetentionLimit() int {
 		return DefaultFullPromptMaxRunes
 	}
 	return *setting.FullPromptMaxRunes
+}
+
+// OutputCaptureLimit lets complete retention capture full model replies. The
+// capture writer spills beyond OutputMemoryBytes to a temporary file.
+func (setting PromptAuditSetting) OutputCaptureLimit() int {
+	if setting.FullPromptRetentionLimit() == 0 {
+		return UnlimitedOutputCapture
+	}
+	return setting.OutputMaxBytes
 }
 
 func (setting PromptAuditSetting) AppliesToGroupForMode(group, mode string) bool {

@@ -35,7 +35,7 @@ func (capture *promptOutputCapture) Write(body []byte) (int, error) {
 	if capture.overflow {
 		return len(body), nil
 	}
-	if len(body) > capture.maxBytes-capture.size {
+	if capture.maxBytes >= 0 && len(body) > capture.maxBytes-capture.size {
 		capture.overflow = true
 		capture.failure = errPromptOutputAuditLimit
 		return 0, errPromptOutputAuditLimit
@@ -76,6 +76,9 @@ func (capture *promptOutputCapture) Bytes() ([]byte, error) {
 	if _, err := capture.file.Seek(0, io.SeekStart); err != nil {
 		return nil, err
 	}
+	if capture.maxBytes < 0 {
+		return io.ReadAll(capture.file)
+	}
 	return io.ReadAll(io.LimitReader(capture.file, int64(capture.maxBytes)+1))
 }
 
@@ -85,6 +88,9 @@ func (capture *promptOutputCapture) Reader() (io.Reader, error) {
 	}
 	if _, err := capture.file.Seek(0, io.SeekStart); err != nil {
 		return nil, err
+	}
+	if capture.maxBytes < 0 {
+		return capture.file, nil
 	}
 	return io.LimitReader(capture.file, int64(capture.maxBytes)+1), nil
 }
@@ -314,10 +320,11 @@ func extractPromptAuditOutput(body []byte) (string, error) {
 	if len(trimmed) == 0 {
 		return "", errors.New("empty output")
 	}
-	collector := newPromptAuditTextCollector(len(trimmed))
+	collector := newPromptAuditTextCollector(len(trimmed), prompt_audit_setting.DefaultOutputMemoryBytes)
+	defer collector.Close()
 	if bytes.HasPrefix(trimmed, []byte("data:")) || bytes.Contains(trimmed, []byte("\ndata:")) {
 		scanner := bufio.NewScanner(bytes.NewReader(trimmed))
-		scanner.Buffer(make([]byte, 4096), 8*1024*1024)
+		scanner.Buffer(make([]byte, 4096), max(4096, len(trimmed)))
 		for scanner.Scan() {
 			line := strings.TrimSpace(scanner.Text())
 			if !strings.HasPrefix(line, "data:") {
@@ -360,7 +367,10 @@ func extractPromptAuditOutput(body []byte) (string, error) {
 			}
 		}
 	}
-	text := collector.String()
+	text, err := collector.String()
+	if err != nil {
+		return "", err
+	}
 	if text == "" {
 		return "", errors.New("text output is unavailable")
 	}
@@ -369,15 +379,23 @@ func extractPromptAuditOutput(body []byte) (string, error) {
 
 type promptAuditTextCollector struct {
 	order         []string
-	parts         map[string]*strings.Builder
+	parts         map[string]*promptAuditTextPart
 	maxBytes      int
+	memoryMax     int
+	memorySize    int
 	size          int
 	capturedBytes int
+	failed        error
 	overflow      bool
 }
 
-func newPromptAuditTextCollector(maxBytes int) *promptAuditTextCollector {
-	return &promptAuditTextCollector{parts: map[string]*strings.Builder{}, maxBytes: maxBytes}
+type promptAuditTextPart struct {
+	text strings.Builder
+	file *os.File
+}
+
+func newPromptAuditTextCollector(maxBytes, memoryMax int) *promptAuditTextCollector {
+	return &promptAuditTextCollector{parts: map[string]*promptAuditTextPart{}, maxBytes: maxBytes, memoryMax: memoryMax}
 }
 
 // CollectFrame bounds native WebSocket recording by the same wire-byte budget
@@ -391,36 +409,82 @@ func (collector *promptAuditTextCollector) CollectFrame(body []byte) {
 		return
 	}
 	collector.Collect(value, true)
-	remaining := collector.maxBytes - collector.capturedBytes
-	collector.capturedBytes += min(len(body), remaining)
-	collector.overflow = collector.overflow || len(body) > remaining
+	if collector.maxBytes >= 0 {
+		remaining := collector.maxBytes - collector.capturedBytes
+		collector.capturedBytes += min(len(body), remaining)
+		collector.overflow = collector.overflow || len(body) > remaining
+	}
 }
 
 func (collector *promptAuditTextCollector) add(key string, values []string) {
-	if len(values) == 0 || collector.overflow {
+	if len(values) == 0 || collector.overflow || collector.failed != nil {
 		return
 	}
 	if key == "" {
 		key = "default"
 	}
-	builder, exists := collector.parts[key]
+	part, exists := collector.parts[key]
 	if !exists {
-		builder = &strings.Builder{}
-		collector.parts[key] = builder
+		part = &promptAuditTextPart{}
+		collector.parts[key] = part
 		collector.order = append(collector.order, key)
 	}
 	for _, value := range values {
 		remaining := collector.maxBytes - collector.size
-		if len(value) > remaining {
+		if collector.maxBytes >= 0 && len(value) > remaining {
 			value = strings.ToValidUTF8(value[:remaining], "")
 			collector.overflow = true
 		}
-		builder.WriteString(value)
+		if part.file == nil && collector.memorySize+len(value) > collector.memoryMax {
+			if err := collector.spill(); err != nil {
+				collector.failed = err
+				return
+			}
+		}
+		if part.file != nil {
+			written, err := io.WriteString(part.file, value)
+			if err != nil {
+				collector.failed = err
+				return
+			}
+			if written != len(value) {
+				collector.failed = io.ErrShortWrite
+				return
+			}
+		} else {
+			part.text.WriteString(value)
+			collector.memorySize += len(value)
+		}
 		collector.size += len(value)
 		if collector.overflow {
 			return
 		}
 	}
+}
+
+func (collector *promptAuditTextCollector) spill() error {
+	for _, key := range collector.order {
+		part := collector.parts[key]
+		if part.file != nil {
+			continue
+		}
+		file, err := os.CreateTemp("", "new-api-prompt-output-text-*")
+		if err != nil {
+			return err
+		}
+		part.file = file
+		text := part.text.String()
+		written, err := io.WriteString(file, text)
+		if err == nil && written != len(text) {
+			err = io.ErrShortWrite
+		}
+		if err != nil {
+			return err
+		}
+		part.text.Reset()
+	}
+	collector.memorySize = 0
+	return nil
 }
 
 func (collector *promptAuditTextCollector) Collect(value any, streaming bool) {
@@ -482,14 +546,61 @@ func (collector *promptAuditTextCollector) Collect(value any, streaming bool) {
 	collector.add(key, values)
 }
 
-func (collector *promptAuditTextCollector) String() string {
-	values := make([]string, 0, len(collector.order))
+func (collector *promptAuditTextCollector) String() (string, error) {
+	if collector.failed != nil {
+		return "", collector.failed
+	}
+	var result strings.Builder
+	result.Grow(collector.size + max(0, len(collector.order)-1)*2)
+	writtenParts := 0
 	for _, key := range collector.order {
-		if value := collector.parts[key].String(); value != "" {
-			values = append(values, value)
+		part := collector.parts[key]
+		partSize := part.text.Len()
+		if part.file != nil {
+			info, err := part.file.Stat()
+			if err != nil {
+				return "", err
+			}
+			partSize = int(info.Size())
+		}
+		if partSize == 0 {
+			continue
+		}
+		if writtenParts > 0 {
+			result.WriteString("\n\n")
+		}
+		if part.file != nil {
+			if _, err := part.file.Seek(0, io.SeekStart); err != nil {
+				return "", err
+			}
+			if _, err := io.Copy(&result, part.file); err != nil {
+				return "", err
+			}
+		} else {
+			result.WriteString(part.text.String())
+		}
+		writtenParts++
+	}
+	return result.String(), nil
+}
+
+func (collector *promptAuditTextCollector) Close() error {
+	var closeErrs []error
+	for _, part := range collector.parts {
+		if part.file == nil {
+			continue
+		}
+		file := part.file
+		part.file = nil
+		name := file.Name()
+		if err := file.Close(); err != nil {
+			closeErrs = append(closeErrs, err)
+		}
+		if err := os.Remove(name); err != nil {
+			closeErrs = append(closeErrs, err)
 		}
 	}
-	return strings.Join(values, "\n\n")
+	return errors.Join(closeErrs...)
 }
 
 func collectPromptAuditFields(object map[string]any, values *[]string) {

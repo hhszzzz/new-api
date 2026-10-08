@@ -190,6 +190,17 @@ func TestFullPromptRetentionLimitResolvesUnsetToDefault(t *testing.T) {
 	assert.Equal(t, MaxFullPromptMaxRunes, setting.FullPromptRetentionLimit())
 }
 
+func TestOutputCaptureLimitFollowsCompleteRetentionSetting(t *testing.T) {
+	setting := validSetting()
+	assert.Equal(t, DefaultOutputMaxBytes, setting.OutputCaptureLimit())
+
+	setting.FullPromptMaxRunes = intPtr(0)
+	assert.Equal(t, UnlimitedOutputCapture, setting.OutputCaptureLimit())
+
+	setting.FullPromptMaxRunes = intPtr(2048)
+	assert.Equal(t, DefaultOutputMaxBytes, setting.OutputCaptureLimit())
+}
+
 func TestSettingFingerprintTracksBlockingLatestTurnOnly(t *testing.T) {
 	// promptAuditCacheKey mixes ConfigVersion into its digest, so a fingerprint
 	// that ignored this field would keep serving a verdict computed under the

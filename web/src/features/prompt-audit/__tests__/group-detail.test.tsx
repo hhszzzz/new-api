@@ -655,16 +655,21 @@ describe('question detail reading', () => {
       matches: query === '(max-width: 640px)' || matchMedia(query).matches,
     }))
     const longText = 'long-payload-without-spaces'.repeat(300)
+    const secondLongText = 'second-payload-without-spaces'.repeat(300)
     server.payload = JSON.stringify({
-      segments: [{ scope: 'user', text: longText }],
+      segments: [
+        { scope: 'user', text: longText },
+        { scope: 'user', text: secondLongText },
+      ],
     })
     renderGroup()
     const text = await screen.findByText(longText)
     expect(text).toHaveClass('font-mono', 'break-words', 'whitespace-pre-wrap')
-    expect(text.closest('[role="tabpanel"]')).toHaveClass(
-      'max-h-80',
-      'overflow-y-auto'
-    )
+    expect(text.parentElement).toHaveClass('overflow-y-auto')
+    expect(text.parentElement).toHaveStyle({ maxHeight: '320px' })
+    const secondText = await screen.findByText(secondLongText)
+    expect(secondText.parentElement).toHaveClass('overflow-y-auto')
+    expect(secondText.parentElement).toHaveStyle({ maxHeight: '320px' })
     expect(text.closest('[role="tabpanel"]')).toHaveAttribute('tabindex', '0')
     expect(screen.getByRole('dialog')).toHaveClass('w-full')
     const content = screen.getByRole('region', { name: 'Content versions' })

@@ -8301,6 +8301,12 @@
     "stop sequences (stop_sequences) require lossy gateway emulation for Responses": "停止序列（stop_sequences）在 Responses 上需要网关的有损模拟",
     "top_k has no verified mapping on this conversion route": "top_k 在该转换路由上没有已验证的映射",
     "model \"{{model}}\" requires max_tokens greater than 1024 for manual thinking; raised the unset max_tokens to {{raised}}": "模型 \"{{model}}\" 的手动思考要求 max_tokens 大于 1024，已将未设置的 max_tokens 提升到 {{raised}}",
-    "model \"{{model}}\" requires max_tokens greater than 1024 for manual thinking; raised max_tokens {{current}} to {{raised}}": "模型 \"{{model}}\" 的手动思考要求 max_tokens 大于 1024，已将 max_tokens {{current}} 提升到 {{raised}}"
+    "model \"{{model}}\" requires max_tokens greater than 1024 for manual thinking; raised max_tokens {{current}} to {{raised}}": "模型 \"{{model}}\" 的手动思考要求 max_tokens 大于 1024，已将 max_tokens {{current}} 提升到 {{raised}}",
+    "Store all request content and model replies": "完整存储请求内容和模型回复",
+    "Keep all request sources and generated replies. Records grow with stored content and stay for the retention period above.": "保留全部请求来源内容和模型回复。记录大小会随保存内容增加，并按上方的期限保留。",
+    "Stored characters per content block": "每个内容块的保留字符数",
+    "Maximum characters kept from each content block and generated reply. Turn on full storage above to keep all characters.": "分别限制每个内容块和模型回复的保留字符数。开启上方完整存储即可保留全部字符。",
+    "Larger buffered outputs spill to temporary storage. Full storage uses this as its memory threshold.": "较大的缓冲回复会写入临时文件。完整存储模式下，此项用作内存阈值。",
+    "Blocking stops delivery when this limit is exceeded. Full storage disables this cap.": "超过此上限时，拦截模式会停止发送回复。完整存储模式会取消此上限。"
   }
 }

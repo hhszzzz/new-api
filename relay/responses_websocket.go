@@ -310,6 +310,7 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 	}
 	common.SetContextKey(c, appconstant.ContextKeyPromptAuditChecked, true)
 	outputAuditSetting := prompt_audit_setting.GetSetting()
+	outputAuditSetting.OutputMaxBytes = outputAuditSetting.OutputCaptureLimit()
 	outputAuditMode := outputAuditSetting.OutputMode
 	if !service.PromptAuditAppliesToRequest(c, outputAuditSetting, outputAuditMode) {
 		outputAuditMode = prompt_audit_setting.ModeOff
@@ -319,7 +320,8 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 		outputAuditFrames = &promptOutputCapture{maxBytes: outputAuditSetting.OutputMaxBytes, memoryBytes: outputAuditSetting.OutputMemoryBytes}
 		defer outputAuditFrames.Close()
 	}
-	outputAuditCollector := newPromptAuditTextCollector(outputAuditSetting.OutputMaxBytes)
+	outputAuditCollector := newPromptAuditTextCollector(outputAuditSetting.OutputMaxBytes, outputAuditSetting.OutputMemoryBytes)
+	defer outputAuditCollector.Close()
 	var responseID string
 	outputAuditRecorded, outputCoverageComplete := false, false
 	outputDeliveryStatus := "delivered_incomplete"
@@ -330,7 +332,19 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 		if outputAuditRecorded || !outputAuditSetting.RecordAll {
 			return
 		}
-		if outputText := outputAuditCollector.String(); outputText != "" {
+		outputText, err := outputAuditCollector.String()
+		if err != nil {
+			logger.LogWarn(c, "prompt output storage capture failed: "+err.Error())
+			if outputAuditMode != prompt_audit_setting.ModeOff {
+				service.RecordOutputAuditUnavailable(c, service.PromptAuditRequest{
+					Snapshot: dto.PromptAuditSnapshotOf(validated), Protocol: "openai_responses", Model: modelName,
+					Stage: "responses_websocket", Direction: service.PromptAuditDirectionOutput,
+					GenerationID: responseID, DeliveryStatus: outputDeliveryStatus, CoverageComplete: false, Stream: true,
+				}, "output_capture_failed")
+			}
+			return
+		}
+		if outputText != "" {
 			service.RecordPromptAuditStored(c, service.PromptAuditRequest{
 				Snapshot: dto.PromptAuditSnapshotOf(validated), Protocol: "openai_responses", Model: modelName,
 				Stage: "responses_websocket", Direction: service.PromptAuditDirectionOutput,
@@ -608,11 +622,12 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 				outputAuditCollector.CollectFrame(incoming.body)
 				if outputAuditFrames != nil {
 					if err := outputAuditFrames.WriteFrame(incoming.kind, incoming.body); err != nil {
+						outputText, _ := outputAuditCollector.String()
 						result := service.RecordOutputAuditUnavailable(c, service.PromptAuditRequest{
 							Snapshot: dto.PromptAuditSnapshotOf(validated), Protocol: "openai_responses", Model: modelName,
 							Stage: "responses_websocket", Direction: service.PromptAuditDirectionOutput,
 							GenerationID: responseID, DeliveryStatus: "not_delivered", CoverageComplete: false,
-							Output: outputAuditCollector.String(), Stream: true,
+							Output: outputText, Stream: true,
 						}, "output_buffer_limit")
 						outputAuditRecorded = result.AuditID != 0
 						state.closeAfter = true
@@ -639,7 +654,21 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 					}
 				}
 				if outputAuditMode != prompt_audit_setting.ModeOff {
-					outputText := outputAuditCollector.String()
+					outputText, collectErr := outputAuditCollector.String()
+					if collectErr != nil {
+						outputCoverageComplete = false
+						service.RecordOutputAuditUnavailable(c, service.PromptAuditRequest{
+							Snapshot: dto.PromptAuditSnapshotOf(validated), Protocol: "openai_responses", Model: modelName,
+							Stage: "responses_websocket", Direction: service.PromptAuditDirectionOutput,
+							GenerationID: responseID, DeliveryStatus: outputDeliveryStatus, CoverageComplete: false, Stream: true,
+						}, "output_capture_failed")
+						outputAuditRecorded = true
+						if outputAuditMode == prompt_audit_setting.ModeBlocking {
+							state.closeAfter = true
+							return types.NewErrorWithStatusCode(errors.New(i18n.T(c, i18n.MsgOutputAuditServiceUnavailable)), types.ErrorCodeOutputAuditUnavailable, http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry())
+						}
+						return nil
+					}
 					if (!outputCoverageComplete || outputText == "") && outputAuditMode == prompt_audit_setting.ModeBlocking {
 						result := service.RecordOutputAuditUnavailable(c, service.PromptAuditRequest{
 							Snapshot: dto.PromptAuditSnapshotOf(validated), Protocol: "openai_responses", Model: modelName,

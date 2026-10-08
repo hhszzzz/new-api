@@ -457,21 +457,27 @@ describe('prompt audit settings page', () => {
     )
     // The limit is shown as a number while a limit is in force.
     expect(
-      screen.getByLabelText('Stored prompt characters')
+      screen.getByLabelText('Stored characters per content block')
     ).toBeInTheDocument()
 
     await user.click(
-      screen.getByRole('switch', { name: 'Store the entire request' })
+      screen.getByRole('switch', {
+        name: 'Store all request content and model replies',
+      })
     )
     // Unlimited hides the number, so no input can report 0 by being emptied.
     expect(
-      screen.queryByLabelText('Stored prompt characters')
+      screen.queryByLabelText('Stored characters per content block')
     ).not.toBeInTheDocument()
 
     await user.click(
-      screen.getByRole('switch', { name: 'Store the entire request' })
+      screen.getByRole('switch', {
+        name: 'Store all request content and model replies',
+      })
     )
-    expect(screen.getByLabelText('Stored prompt characters')).toHaveValue(65536)
+    expect(
+      screen.getByLabelText('Stored characters per content block')
+    ).toHaveValue(65536)
   })
 
   test('saves the unlimited retention limit as the zero the backend reads', async () => {
@@ -482,7 +488,9 @@ describe('prompt audit settings page', () => {
       screen.getByRole('button', { name: 'Advanced parameters' })
     )
     await user.click(
-      screen.getByRole('switch', { name: 'Store the entire request' })
+      screen.getByRole('switch', {
+        name: 'Store all request content and model replies',
+      })
     )
 
     await user.click(await screen.findByRole('button', { name: /^Save/ }))

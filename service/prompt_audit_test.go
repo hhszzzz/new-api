@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"fmt"
@@ -455,6 +456,111 @@ func TestPromptAuditRecordsRequestsWithoutInspection(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, after.FullPrompt)
 	assert.Empty(t, after.ScanPayload)
+}
+
+func TestPromptAuditFullRetentionPreservesLargeRecords(t *testing.T) {
+	withPromptWordlistTestDB(t)
+	db := model.DB
+	configured := prompt_audit_setting.GetSetting()
+	configured.Mode = prompt_audit_setting.ModeOff
+	configured.OutputMode = prompt_audit_setting.ModeOff
+	configured.RecordAll = true
+	unlimited := 0
+	configured.FullPromptMaxRunes = &unlimited
+	input := strings.Repeat("中文🙂\n\"", 20000) + "request ends here"
+	output := strings.Repeat("回复🙂\n", 20000) + "reply ends here"
+
+	for _, kind := range []string{"stored", "synchronous", "asynchronous"} {
+		t.Run(kind, func(t *testing.T) {
+			configured.PublishConfig()
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+			request := preparePromptAuditRequest(c, PromptAuditRequest{
+				Snapshot: dto.PromptAuditSnapshot{Segments: []dto.PromptAuditSegment{{
+					Scope: dto.PromptScopeUser, Role: "user", User: true, Text: input,
+				}}},
+				Direction: PromptAuditDirectionOutput, Output: output, CoverageComplete: true,
+				Protocol: "openai_responses", Model: "stored-model", Stage: "http",
+			})
+			fullText := promptAuditJoinedText(request.Snapshot, request.Output)
+			payload, err := common.Marshal(promptAuditPayload{
+				Version: 1, Direction: request.Direction, CoverageComplete: true,
+				Segments: request.Snapshot.OrderedSegments(), Output: output,
+			})
+			require.NoError(t, err)
+			result := PromptAuditResult{Direction: request.Direction, CoverageComplete: true, Decision: PromptAuditDecisionPass}
+			if kind == "stored" {
+				RecordPromptAuditStored(c, request)
+			} else {
+				status := model.PromptAuditStatusDone
+				if kind == "asynchronous" {
+					status = model.PromptAuditStatusQueued
+				}
+				audit, err := newPromptAuditRecord(c, request, configured, result, fullText, payload, status)
+				require.NoError(t, err)
+				require.NoError(t, model.CreatePromptAudit(audit))
+			}
+			var saved model.PromptAudit
+			require.NoError(t, db.Order("id desc").First(&saved).Error)
+			assert.Equal(t, fullText, string(saved.FullPrompt))
+			assert.True(t, bytes.Equal(payload, saved.ScanPayload), "retained payload must match complete captured content")
+			assert.False(t, saved.FullPromptTruncated)
+			assert.False(t, saved.ScanPayloadTruncated)
+			response := saved.ToResponse(true)
+			require.NotNil(t, response.ScanPayload)
+			assert.True(t, string(payload) == *response.ScanPayload, "the detail response must contain the complete snapshot")
+			assert.False(t, response.ScanPayloadTruncated)
+			assert.Nil(t, saved.ToResponse(false).ScanPayload)
+			if kind != "asynchronous" {
+				return
+			}
+			// A later settings change must not shrink a request already queued
+			// while the operator was retaining complete content.
+			changed := configured
+			limit := 2048
+			changed.FullPromptMaxRunes = &limit
+			changed.PublishConfig()
+			claimed, ok, err := model.ClaimPromptAudit("full-retention-worker", common.GetTimestamp(), common.GetTimestamp()+60)
+			require.NoError(t, err)
+			require.True(t, ok)
+			require.Equal(t, saved.ID, claimed.ID)
+			require.NoError(t, model.FinishPromptAudit(saved.ID, "full-retention-worker", model.PromptAuditCompletion{Decision: PromptAuditDecisionPass}))
+			completed, err := model.GetPromptAudit(saved.ID)
+			require.NoError(t, err)
+			assert.True(t, bytes.Equal(payload, completed.ScanPayload), "completion must preserve complete captured content")
+			assert.True(t, bytes.Equal(payload, completed.ContentSnapshot), "completion must preserve the complete snapshot")
+			assert.False(t, completed.ScanPayloadTruncated)
+			response = completed.ToResponse(true)
+			require.NotNil(t, response.ScanPayload)
+			assert.True(t, string(payload) == *response.ScanPayload, "completed content must remain fully readable")
+		})
+	}
+	t.Run("configured_limit", func(t *testing.T) {
+		limit := 2048
+		configured.FullPromptMaxRunes = &limit
+		configured.PublishConfig()
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+		RecordPromptAuditStored(c, PromptAuditRequest{
+			Snapshot: dto.PromptAuditSnapshot{Segments: []dto.PromptAuditSegment{{
+				Scope: dto.PromptScopeUser, Role: "user", User: true, Text: input,
+			}}},
+			Direction: PromptAuditDirectionOutput, Output: output, CoverageComplete: true,
+		})
+		var saved model.PromptAudit
+		require.NoError(t, db.Order("id desc").First(&saved).Error)
+		assert.Equal(t, limit, utf8.RuneCount(saved.FullPrompt))
+		assert.True(t, saved.FullPromptTruncated)
+		assert.True(t, saved.ScanPayloadTruncated)
+		var payload promptAuditPayload
+		require.NoError(t, common.Unmarshal(saved.ScanPayload, &payload))
+		require.Len(t, payload.Segments, 1)
+		assert.NotEmpty(t, payload.Output)
+		assert.True(t, strings.HasPrefix(input, payload.Segments[0].Text))
+		assert.True(t, strings.HasPrefix(output, payload.Output))
+		assert.LessOrEqual(t, utf8.RuneCountInString(payload.Segments[0].Text), limit)
+		assert.LessOrEqual(t, utf8.RuneCountInString(payload.Output), limit)
+	})
 }
 
 func TestPromptAuditLeavesClientAutomationOutOfTheModelAudit(t *testing.T) {

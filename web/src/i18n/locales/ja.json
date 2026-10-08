@@ -8301,6 +8301,12 @@
     "stop sequences (stop_sequences) require lossy gateway emulation for Responses": "停止シーケンス（stop_sequences）は Responses ではゲートウェイによる非可逆なエミュレーションが必要です",
     "top_k has no verified mapping on this conversion route": "top_k にはこの変換ルートでの検証済みマッピングがありません",
     "model \"{{model}}\" requires max_tokens greater than 1024 for manual thinking; raised the unset max_tokens to {{raised}}": "モデル「{{model}}」は手動思考に 1024 より大きい max_tokens を要求するため、未設定の max_tokens を {{raised}} に引き上げました",
-    "model \"{{model}}\" requires max_tokens greater than 1024 for manual thinking; raised max_tokens {{current}} to {{raised}}": "モデル「{{model}}」は手動思考に 1024 より大きい max_tokens を要求するため、max_tokens {{current}} を {{raised}} に引き上げました"
+    "model \"{{model}}\" requires max_tokens greater than 1024 for manual thinking; raised max_tokens {{current}} to {{raised}}": "モデル「{{model}}」は手動思考に 1024 より大きい max_tokens を要求するため、max_tokens {{current}} を {{raised}} に引き上げました",
+    "Store all request content and model replies": "リクエストとモデル応答をすべて保存",
+    "Keep all request sources and generated replies. Records grow with stored content and stay for the retention period above.": "すべてのリクエストソースと生成された応答を保存します。保存内容に応じて記録が大きくなり、上記の期間保持されます。",
+    "Stored characters per content block": "コンテンツブロックごとの保存文字数",
+    "Maximum characters kept from each content block and generated reply. Turn on full storage above to keep all characters.": "各コンテンツブロックと生成応答の保存文字数を個別に制限します。上で完全保存を有効にするとすべて保存されます。",
+    "Larger buffered outputs spill to temporary storage. Full storage uses this as its memory threshold.": "大きな応答バッファーは一時ファイルに書き出されます。完全保存ではこの値がメモリ使用量のしきい値になります。",
+    "Blocking stops delivery when this limit is exceeded. Full storage disables this cap.": "この上限を超えるとブロックモードは応答の配信を停止します。完全保存では上限を解除します。"
   }
 }

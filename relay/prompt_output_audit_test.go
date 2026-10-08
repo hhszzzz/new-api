@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -234,11 +235,13 @@ func TestPromptAuditTextRelayRecordsWithoutEnforcement(t *testing.T) {
 		includeAdmins bool
 		role          int
 		stream        bool
+		fullRetention bool
 	}{
 		{name: "audit off", outputMode: prompt_audit_setting.ModeOff, allGroups: true, includeAdmins: true},
 		{name: "group outside blocking scope", outputMode: prompt_audit_setting.ModeBlocking, includeAdmins: true},
 		{name: "stream outside blocking scope", outputMode: prompt_audit_setting.ModeBlocking, includeAdmins: true, stream: true},
 		{name: "administrator outside blocking scope", outputMode: prompt_audit_setting.ModeBlocking, allGroups: true, role: common.RoleAdminUser},
+		{name: "complete model reply beyond the ordinary capture limit", outputMode: prompt_audit_setting.ModeOff, allGroups: true, includeAdmins: true, fullRetention: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			require.NoError(t, db.Where("1 = 1").Delete(&model.PromptAudit{}).Error)
@@ -247,6 +250,12 @@ func TestPromptAuditTextRelayRecordsWithoutEnforcement(t *testing.T) {
 			configured.RecordAll, configured.IncludeAdmins = true, test.includeAdmins
 			configured.AllGroups, configured.Groups = test.allGroups, []string{"audited"}
 			configured.OutputMaxBytes, configured.OutputMemoryBytes = 4096, 4096
+			var fullReply string
+			if test.fullRetention {
+				fullRetentionLimit := 0
+				configured.FullPromptMaxRunes = &fullRetentionLimit
+				fullReply = strings.Repeat("model reply ", (prompt_audit_setting.DefaultOutputMaxBytes/len("model reply "))+1) + "reply tail"
+			}
 			configured.PublishConfig()
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				if test.stream {
@@ -255,6 +264,19 @@ func TestPromptAuditTextRelayRecordsWithoutEnforcement(t *testing.T) {
 					return
 				}
 				w.Header().Set("Content-Type", "application/json")
+				if test.fullRetention {
+					body, err := common.Marshal(map[string]any{
+						"id":      "chatcmpl_stored",
+						"choices": []any{map[string]any{"message": map[string]any{"role": "assistant", "content": fullReply}, "finish_reason": "stop"}},
+						"usage":   map[string]any{"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5},
+					})
+					if err != nil {
+						t.Errorf("marshal response: %v", err)
+						return
+					}
+					_, _ = w.Write(body)
+					return
+				}
 				_, _ = io.WriteString(w, `{"id":"chatcmpl_stored","choices":[{"message":{"role":"assistant","content":"recorded answer"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}`)
 			}))
 			defer upstream.Close()
@@ -273,14 +295,27 @@ func TestPromptAuditTextRelayRecordsWithoutEnforcement(t *testing.T) {
 				Request: &dto.GeneralOpenAIRequest{Model: "recording-model", Stream: common.GetPointer(test.stream), Messages: []dto.Message{{Role: "user", Content: "ordinary question"}}},
 			}
 			require.Nil(t, executeText(c, info))
-			assert.Contains(t, recorder.Body.String(), "recorded answer", "recording must preserve normal delivery")
+			if test.fullRetention {
+				assert.Contains(t, recorder.Body.String(), "reply tail", "full recording must preserve normal delivery")
+			} else {
+				assert.Contains(t, recorder.Body.String(), "recorded answer", "recording must preserve normal delivery")
+			}
 			var rows []model.PromptAudit
 			require.NoError(t, db.Find(&rows).Error)
 			require.Len(t, rows, 1)
 			assert.Equal(t, model.PromptAuditStatusStored, rows[0].Status)
 			assert.Empty(t, rows[0].Decision)
 			assert.Equal(t, "delivered", rows[0].DeliveryStatus)
-			assert.Contains(t, string(rows[0].ScanPayload), "recorded answer")
+			if test.fullRetention {
+				var payload struct {
+					Output string `json:"output"`
+				}
+				require.NoError(t, common.Unmarshal(rows[0].ScanPayload, &payload))
+				assert.Equal(t, fullReply, payload.Output)
+				assert.False(t, rows[0].ScanPayloadTruncated)
+			} else {
+				assert.Contains(t, string(rows[0].ScanPayload), "recorded answer")
+			}
 		})
 	}
 }
@@ -312,10 +347,34 @@ func TestPromptAuditRecordsInterruptedOutputWithAuditingOff(t *testing.T) {
 }
 
 func TestPromptAuditWebSocketRecordingTruncatesAtAValidTextBoundary(t *testing.T) {
-	collector := newPromptAuditTextCollector(4)
+	collector := newPromptAuditTextCollector(4, 4)
+	t.Cleanup(func() { require.NoError(t, collector.Close()) })
 	collector.CollectFrame([]byte(`{"type":"response.output_text.delta","delta":"甲乙"}`))
-	assert.Equal(t, "甲", collector.String())
+	text, err := collector.String()
+	require.NoError(t, err)
+	assert.Equal(t, "甲", text)
 	assert.True(t, collector.overflow)
 	collector.CollectFrame([]byte(`{"type":"response.output_text.delta","delta":"later text"}`))
-	assert.Equal(t, "甲", collector.String())
+	text, err = collector.String()
+	require.NoError(t, err)
+	assert.Equal(t, "甲", text)
+}
+
+func TestPromptAuditWebSocketRecordingSpillsAtTheMemoryThreshold(t *testing.T) {
+	collector := newPromptAuditTextCollector(prompt_audit_setting.UnlimitedOutputCapture, 4)
+	t.Cleanup(func() { require.NoError(t, collector.Close()) })
+	collector.CollectFrame([]byte(`{"type":"response.output_text.delta","output_index":0,"delta":"first"}`))
+	collector.CollectFrame([]byte(`{"type":"response.output_text.delta","output_index":0,"delta":" reply"}`))
+	collector.CollectFrame([]byte(`{"type":"response.output_text.delta","output_index":1,"delta":"second"}`))
+
+	part := collector.parts["default:0"]
+	require.NotNil(t, part)
+	require.NotNil(t, part.file)
+	temporaryPath := part.file.Name()
+	text, err := collector.String()
+	require.NoError(t, err)
+	assert.Equal(t, "first reply\n\nsecond", text)
+	require.NoError(t, collector.Close())
+	_, err = os.Stat(temporaryPath)
+	assert.ErrorIs(t, err, os.ErrNotExist)
 }

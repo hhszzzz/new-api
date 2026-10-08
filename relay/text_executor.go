@@ -40,6 +40,7 @@ func executeText(c *gin.Context, info *relaycommon.RelayInfo) *hosttypes.NewAPIE
 	info.InitChannelMeta(c)
 	defer info.CloseConversionSession()
 	outputAuditSetting := prompt_audit_setting.GetSetting()
+	outputAuditSetting.OutputMaxBytes = outputAuditSetting.OutputCaptureLimit()
 	// Enforcement and recording install the same capture writer: one holds the
 	// response back for a verdict, the other only keeps a copy of it.
 	outputAuditEnforcing := outputAuditSetting.OutputMode != prompt_audit_setting.ModeOff &&

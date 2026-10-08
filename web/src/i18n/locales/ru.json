@@ -8301,6 +8301,12 @@
     "stop sequences (stop_sequences) require lossy gateway emulation for Responses": "Стоп-последовательности (stop_sequences) требуют эмуляции шлюза с потерями для Responses",
     "top_k has no verified mapping on this conversion route": "У top_k нет проверенного сопоставления на этом маршруте конвертации",
     "model \"{{model}}\" requires max_tokens greater than 1024 for manual thinking; raised the unset max_tokens to {{raised}}": "Модель «{{model}}» требует max_tokens больше 1024 для ручных рассуждений; незаданный max_tokens повышен до {{raised}}",
-    "model \"{{model}}\" requires max_tokens greater than 1024 for manual thinking; raised max_tokens {{current}} to {{raised}}": "Модель «{{model}}» требует max_tokens больше 1024 для ручных рассуждений; max_tokens {{current}} повышено до {{raised}}"
+    "model \"{{model}}\" requires max_tokens greater than 1024 for manual thinking; raised max_tokens {{current}} to {{raised}}": "Модель «{{model}}» требует max_tokens больше 1024 для ручных рассуждений; max_tokens {{current}} повышено до {{raised}}",
+    "Store all request content and model replies": "Сохранять весь запрос и ответы модели",
+    "Keep all request sources and generated replies. Records grow with stored content and stay for the retention period above.": "Сохранять все источники запроса и сгенерированные ответы. Записи растут вместе с объёмом данных и хранятся указанный выше срок.",
+    "Stored characters per content block": "Символов в каждом блоке содержимого",
+    "Maximum characters kept from each content block and generated reply. Turn on full storage above to keep all characters.": "Ограничивает число символов в каждом блоке и ответе. Включите полное сохранение выше, чтобы хранить всё.",
+    "Larger buffered outputs spill to temporary storage. Full storage uses this as its memory threshold.": "Большие буферы ответов записываются во временный файл. При полном сохранении это порог использования памяти.",
+    "Blocking stops delivery when this limit is exceeded. Full storage disables this cap.": "Режим блокировки прекращает отправку при превышении лимита. Полное сохранение отключает ограничение."
   }
 }

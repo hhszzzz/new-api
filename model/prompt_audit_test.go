@@ -136,6 +136,7 @@ func TestPromptAuditStoredRecordsSQLite(t *testing.T) {
 	require.NoError(t, db.Raw("SELECT sqlite_version()").Scan(&version).Error)
 	t.Logf("sqlite version: %s", version)
 	runPromptAuditStoredRecords(t, db)
+	runPromptAuditFullRetentionRecords(t, db)
 }
 
 func runPromptAuditStoredRecords(t *testing.T, db *gorm.DB) {
@@ -202,47 +203,112 @@ func runPromptAuditStoredRecords(t *testing.T, db *gorm.DB) {
 	}
 }
 
+func runPromptAuditFullRetentionRecords(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	require.NoError(t, db.Where("1=1").Delete(&PromptAudit{}).Error)
+	text := strings.Repeat("完整请求🙂\n", 18000)
+	payload, err := common.Marshal(map[string]any{
+		"version": 1, "direction": "output", "coverage_complete": true,
+		"segments": []dto.PromptAuditSegment{{Role: "user", Scope: dto.PromptScopeUser, User: true, Text: text}},
+		"output":   "完整模型回复",
+	})
+	require.NoError(t, err)
+	require.Greater(t, len(payload), 64*1024)
+	row := &PromptAudit{
+		Status: PromptAuditStatusStored, Direction: "output", FullPrompt: []byte(text + "\n\n完整模型回复"),
+		ScanPayload: payload, ContentSnapshot: payload, CompletedAt: 10,
+	}
+	require.NoError(t, CreatePromptAudit(row))
+
+	stored, err := GetPromptAudit(row.ID)
+	require.NoError(t, err)
+	assert.Equal(t, text+"\n\n完整模型回复", string(stored.FullPrompt))
+	response := stored.ToResponse(true)
+	require.NotNil(t, response.ScanPayload)
+	assert.Equal(t, string(payload), *response.ScanPayload)
+	assert.False(t, response.ScanPayloadTruncated)
+}
+
 func runPromptAuditTerminalPayloadRetention(t *testing.T, db *gorm.DB) {
 	t.Helper()
 	require.NoError(t, db.Where("1=1").Delete(&PromptAudit{}).Error)
-	text := strings.Repeat("中\"\n", 20000)
-	payload, err := common.Marshal(map[string]any{"version": 1, "direction": "input", "coverage_complete": true, "segments": []dto.PromptAuditSegment{{Role: "user", Scope: dto.PromptScopeUser, User: true, Text: text}}})
+	text := strings.Repeat("中\"\n🙂", 20000)
+	output := "the generated reply must also survive"
+	payload, err := common.Marshal(map[string]any{"version": 1, "direction": "output", "coverage_complete": true, "segments": []dto.PromptAuditSegment{{Role: "user", Scope: dto.PromptScopeUser, User: true, Text: text}}, "output": output})
 	require.NoError(t, err)
-	for _, terminal := range []string{"finish", "fail", "exhausted"} {
-		t.Run(terminal, func(t *testing.T) {
-			row := &PromptAudit{Status: PromptAuditStatusProcessing, LeaseOwner: terminal, LeaseUntil: 10, Attempts: 1, MaxAttempts: 1, ScanPayload: payload, ContentSnapshot: payload}
-			require.NoError(t, CreatePromptAudit(row))
-			assert.Equal(t, payload, row.ScanPayload, "queued work must remain complete")
-			assert.True(t, row.ToResponse(true).ScanPayloadTruncated)
-			switch terminal {
-			case "finish":
-				require.NoError(t, FinishPromptAudit(row.ID, terminal, PromptAuditCompletion{Decision: "pass"}))
-			case "fail":
-				require.NoError(t, FailPromptAudit(row.ID, terminal, "timeout", 0, true))
-			default:
-				_, _, err = ClaimPromptAudit("replacement", 11, 100)
+	for _, retention := range []struct {
+		name   string
+		policy string
+		limit  int
+	}{
+		{name: "legacy_default", limit: prompt_audit_setting.DefaultFullPromptMaxRunes},
+		{name: "configured_cap", policy: `{"version":2,"full_prompt_max_runes":2048}`, limit: 2048},
+		{name: "complete", policy: `{"version":2,"full_prompt_max_runes":0}`},
+	} {
+		for _, terminal := range []string{"finish", "fail", "exhausted"} {
+			t.Run(retention.name+"/"+terminal, func(t *testing.T) {
+				snapshot, truncated := RetainPromptAuditPayload(payload, retention.limit)
+				row := &PromptAudit{
+					Status: PromptAuditStatusProcessing, LeaseOwner: terminal, LeaseUntil: 10, Attempts: 1, MaxAttempts: 1,
+					ScanPayload: payload, ContentSnapshot: snapshot, ScanPayloadTruncated: truncated, PolicySnapshot: retention.policy,
+				}
+				require.NoError(t, CreatePromptAudit(row))
+				assert.Equal(t, payload, row.ScanPayload, "queued work must remain complete")
+				response := row.ToResponse(true)
+				require.NotNil(t, response.ScanPayload)
+				assert.Equal(t, string(snapshot), *response.ScanPayload, "details expose retained content while the worker keeps complete input")
+				switch terminal {
+				case "finish":
+					require.NoError(t, FinishPromptAudit(row.ID, terminal, PromptAuditCompletion{Decision: "pass"}))
+				case "fail":
+					require.NoError(t, FailPromptAudit(row.ID, terminal, "timeout", 0, true))
+				default:
+					_, _, err = ClaimPromptAudit("replacement", 11, 100)
+					require.NoError(t, err)
+				}
+				stored, err := GetPromptAudit(row.ID)
 				require.NoError(t, err)
-			}
-			stored, err := GetPromptAudit(row.ID)
-			require.NoError(t, err)
-			assert.LessOrEqual(t, len(stored.ScanPayload), 64*1024)
-			assert.True(t, stored.ScanPayloadTruncated)
-			assert.Equal(t, stored.ScanPayload, stored.ContentSnapshot)
-			var decoded struct{ Segments []dto.PromptAuditSegment }
-			require.NoError(t, common.Unmarshal(stored.ScanPayload, &decoded))
-			require.Len(t, decoded.Segments, 1)
-			assert.NotEmpty(t, decoded.Segments[0].Text)
-			assert.True(t, strings.HasPrefix(text, decoded.Segments[0].Text))
-			assert.True(t, utf8.Valid(stored.ScanPayload))
-			if terminal != "finish" {
-				assert.ErrorIs(t, RetryPromptAudit(row.ID, 3), ErrPromptAuditPayloadMissing)
-			}
-			require.NoError(t, db.Model(row).Update("completed_at", 10).Error)
-		})
+				assert.Equal(t, retention.limit != 0, stored.ScanPayloadTruncated)
+				assert.Equal(t, stored.ScanPayload, stored.ContentSnapshot)
+				var decoded struct {
+					Segments []dto.PromptAuditSegment
+					Output   string
+				}
+				require.NoError(t, common.Unmarshal(stored.ScanPayload, &decoded))
+				require.Len(t, decoded.Segments, 1)
+				assert.NotEmpty(t, decoded.Segments[0].Text)
+				assert.True(t, strings.HasPrefix(text, decoded.Segments[0].Text))
+				assert.Equal(t, output, decoded.Output)
+				assert.True(t, utf8.Valid(stored.ScanPayload))
+				if retention.limit == 0 {
+					assert.Equal(t, payload, stored.ScanPayload)
+				} else {
+					assert.LessOrEqual(t, utf8.RuneCountInString(decoded.Segments[0].Text), retention.limit)
+					assert.LessOrEqual(t, utf8.RuneCountInString(decoded.Output), retention.limit)
+				}
+				response = stored.ToResponse(true)
+				require.NotNil(t, response.ScanPayload)
+				assert.Equal(t, string(stored.ScanPayload), *response.ScanPayload, "reading retained content must not impose another cap")
+				if terminal != "finish" {
+					if retention.limit != 0 {
+						assert.ErrorIs(t, RetryPromptAudit(row.ID, 3), ErrPromptAuditPayloadMissing)
+					} else {
+						require.NoError(t, RetryPromptAudit(row.ID, 3))
+						claimed, ok, err := ClaimPromptAudit("manual-retry", common.GetTimestamp(), common.GetTimestamp()+60)
+						require.NoError(t, err)
+						require.True(t, ok)
+						require.Equal(t, row.ID, claimed.ID)
+						assert.Equal(t, payload, claimed.ScanPayload)
+						require.NoError(t, FinishPromptAudit(row.ID, "manual-retry", PromptAuditCompletion{Decision: "pass"}))
+					}
+				}
+				require.NoError(t, db.Model(row).Update("completed_at", 10).Error)
+			})
+		}
 	}
 	purged, err := CleanupPromptAuditPromptsBefore(20, 10)
 	require.NoError(t, err)
-	assert.EqualValues(t, 3, purged)
+	assert.EqualValues(t, 9, purged)
 	var rows []PromptAudit
 	require.NoError(t, db.Find(&rows).Error)
 	for _, row := range rows {
@@ -268,13 +334,14 @@ func TestRetainPromptAuditPayloadReservesTheGeneratedReply(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Greater(t, len(payload), 64*1024)
-	retained, truncated := RetainPromptAuditPayload(payload)
+	retained, truncated := RetainPromptAuditPayload(payload, prompt_audit_setting.DefaultFullPromptMaxRunes)
 	require.True(t, truncated)
-	require.LessOrEqual(t, len(retained), 64*1024)
 	var decoded payloadShape
 	require.NoError(t, common.Unmarshal(retained, &decoded))
-	assert.Equal(t, reply, decoded.Output)
 	require.Len(t, decoded.Segments, 1)
+	assert.Equal(t, prompt_audit_setting.DefaultFullPromptMaxRunes, utf8.RuneCountInString(decoded.Segments[0].Text))
+	assert.Equal(t, len([]rune(reply)), utf8.RuneCountInString(decoded.Output))
+	assert.Equal(t, reply, decoded.Output)
 	assert.NotEmpty(t, decoded.Segments[0].Text)
 	assert.True(t, strings.HasPrefix(input, decoded.Segments[0].Text))
 
@@ -286,7 +353,7 @@ func TestRetainPromptAuditPayloadReservesTheGeneratedReply(t *testing.T) {
 		"segments": segment, "output": hugeReply,
 	})
 	require.NoError(t, err)
-	retained, truncated = RetainPromptAuditPayload(payload)
+	retained, truncated = RetainPromptAuditPayload(payload, prompt_audit_setting.DefaultFullPromptMaxRunes)
 	require.True(t, truncated)
 	decoded = payloadShape{}
 	require.NoError(t, common.Unmarshal(retained, &decoded))
@@ -303,15 +370,16 @@ func TestRetainPromptAuditPayloadReservesTheGeneratedReply(t *testing.T) {
 			"segments": segment, "output": escapedReply,
 		})
 		require.NoError(t, err)
-		retained, truncated = RetainPromptAuditPayload(payload)
+		retained, truncated = RetainPromptAuditPayload(payload, prompt_audit_setting.DefaultFullPromptMaxRunes)
 		require.True(t, truncated)
-		require.LessOrEqual(t, len(retained), 64*1024)
 		decoded = payloadShape{}
-		require.NoError(t, common.Unmarshal(retained, &decoded))
+			require.NoError(t, common.Unmarshal(retained, &decoded))
+			require.NotEmpty(t, decoded.Segments)
+			assert.Equal(t, prompt_audit_setting.DefaultFullPromptMaxRunes, utf8.RuneCountInString(decoded.Segments[0].Text))
+			assert.Equal(t, len([]rune(escapedReply)), utf8.RuneCountInString(decoded.Output))
 		assert.NotEmpty(t, decoded.Output)
 		assert.True(t, utf8.ValidString(decoded.Output))
 		assert.True(t, strings.HasPrefix(escapedReply, decoded.Output))
-		require.NotEmpty(t, decoded.Segments)
 		assert.NotEmpty(t, decoded.Segments[0].Text)
 	}
 
@@ -321,13 +389,85 @@ func TestRetainPromptAuditPayloadReservesTheGeneratedReply(t *testing.T) {
 		"segments": segment,
 	})
 	require.NoError(t, err)
-	retained, truncated = RetainPromptAuditPayload(payload)
+	retained, truncated = RetainPromptAuditPayload(payload, prompt_audit_setting.DefaultFullPromptMaxRunes)
 	require.True(t, truncated)
 	decoded = payloadShape{}
 	require.NoError(t, common.Unmarshal(retained, &decoded))
 	assert.Empty(t, decoded.Output)
 	require.NotEmpty(t, decoded.Segments)
 	assert.True(t, strings.HasPrefix(input, decoded.Segments[0].Text))
+}
+
+func TestRetainPromptAuditPayloadUsesConfiguredCharacterLimit(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		limit     int
+		input     string
+		truncated bool
+	}{
+		{name: "complete", input: strings.Repeat("中文🙂\n\"", 20000)},
+		{name: "large_configured_cap", limit: 150000, input: strings.Repeat("中文🙂\n\"", 20000)},
+		{name: "configured_cap", limit: 2048, input: strings.Repeat("中文🙂\n\"", 20000), truncated: true},
+		{name: "unicode_within_cap", limit: 2048, input: strings.Repeat("中文🙂\n\"", 300)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			output := "  reply\x00\n🙂  "
+			payload, err := common.Marshal(map[string]any{
+				"version": 1, "direction": "output", "coverage_complete": true,
+				"segments": []dto.PromptAuditSegment{{Role: "user", Scope: dto.PromptScopeUser, User: true, Text: test.input}},
+				"output":   output,
+			})
+			require.NoError(t, err)
+			retained, truncated := RetainPromptAuditPayload(payload, test.limit)
+			assert.Equal(t, test.truncated, truncated)
+			if !test.truncated {
+				assert.Equal(t, payload, retained)
+			} else {
+				var decoded struct {
+					Segments []dto.PromptAuditSegment
+					Output   string
+				}
+				require.NoError(t, common.Unmarshal(retained, &decoded))
+				require.Len(t, decoded.Segments, 1)
+				assert.Equal(t, output, decoded.Output)
+				assert.True(t, strings.HasPrefix(test.input, decoded.Segments[0].Text))
+				assert.LessOrEqual(t, utf8.RuneCountInString(decoded.Segments[0].Text), test.limit)
+				assert.LessOrEqual(t, utf8.RuneCountInString(decoded.Output), test.limit)
+			}
+			// Historical full snapshots must also remain readable; the detail
+			// response has no independent byte limit.
+			audit := &PromptAudit{ScanPayload: retained, ScanPayloadTruncated: truncated}
+			response := audit.ToResponse(true)
+			require.NotNil(t, response.ScanPayload)
+			assert.Equal(t, string(retained), *response.ScanPayload)
+			assert.Equal(t, truncated, response.ScanPayloadTruncated)
+			assert.Nil(t, audit.ToResponse(false).ScanPayload)
+		})
+	}
+}
+
+func TestRetainPromptAuditPayloadCapsEachSourceAndReplyIndependently(t *testing.T) {
+	payload, err := common.Marshal(map[string]any{
+		"version": 1, "direction": "output", "coverage_complete": true,
+		"segments": []dto.PromptAuditSegment{
+			{Role: "system", Scope: dto.PromptScopeSystem, Text: strings.Repeat("系", 96)},
+			{Role: "user", Scope: dto.PromptScopeUser, User: true, Text: strings.Repeat("用", 96)},
+		},
+		"output": strings.Repeat("回", 96),
+	})
+	require.NoError(t, err)
+
+	retained, truncated := RetainPromptAuditPayload(payload, 64)
+	require.True(t, truncated)
+	var decoded struct {
+		Segments []dto.PromptAuditSegment
+		Output   string
+	}
+	require.NoError(t, common.Unmarshal(retained, &decoded))
+	require.Len(t, decoded.Segments, 2)
+	assert.Equal(t, strings.Repeat("系", 64), decoded.Segments[0].Text)
+	assert.Equal(t, strings.Repeat("用", 64), decoded.Segments[1].Text)
+	assert.Equal(t, strings.Repeat("回", 64), decoded.Output)
 }
 
 func TestPromptAuditQuestionGroupingAcrossModels(t *testing.T) {
@@ -1316,6 +1456,7 @@ func TestPromptAuditStorageConfiguredDatabases(t *testing.T) {
 			runPromptAuditQuestionGroupingAcrossModels(t, db)
 			runPromptAuditTerminalPayloadRetention(t, db)
 			runPromptAuditStoredRecords(t, db)
+			runPromptAuditFullRetentionRecords(t, db)
 		})
 	}
 }

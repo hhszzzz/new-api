@@ -466,7 +466,7 @@ func InspectPrompt(c *gin.Context, request PromptAuditRequest) (PromptAuditResul
 		setPromptAuditContent(audit, text, configured.FullPromptRetentionLimit())
 		setPromptAuditInputContext(audit, request)
 		payload, _ := common.Marshal(promptAuditPayload{Version: 1, Direction: direction, CoverageComplete: true, Segments: request.Snapshot.OrderedSegments()})
-		audit.ScanPayload, audit.ScanPayloadTruncated = model.RetainPromptAuditPayload(payload)
+		audit.ScanPayload, audit.ScanPayloadTruncated = model.RetainPromptAuditPayload(payload, configured.FullPromptRetentionLimit())
 		if createErr := model.CreatePromptAudit(audit); createErr == nil {
 			result.AuditID = audit.ID
 		} else {
@@ -552,7 +552,7 @@ func InspectPrompt(c *gin.Context, request PromptAuditRequest) (PromptAuditResul
 		}
 	}
 	payload, _ := common.Marshal(promptAuditPayload{Version: 1, Direction: direction, CoverageComplete: true, Segments: inspected})
-	audit.ScanPayload, audit.ScanPayloadTruncated = model.RetainPromptAuditPayload(payload)
+	audit.ScanPayload, audit.ScanPayloadTruncated = model.RetainPromptAuditPayload(payload, configured.FullPromptRetentionLimit())
 	if err := model.CreatePromptAudit(audit); err != nil {
 		logger.LogWarn(c, "wordlist audit persistence failed")
 	} else {

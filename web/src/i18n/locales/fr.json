@@ -8301,6 +8301,12 @@
     "stop sequences (stop_sequences) require lossy gateway emulation for Responses": "Les séquences d’arrêt (stop_sequences) exigent une émulation de passerelle avec perte pour Responses",
     "top_k has no verified mapping on this conversion route": "top_k n'a pas de correspondance vérifiée sur cette route de conversion",
     "model \"{{model}}\" requires max_tokens greater than 1024 for manual thinking; raised the unset max_tokens to {{raised}}": "Le modèle « {{model}} » exige un max_tokens supérieur à 1024 pour la réflexion manuelle ; le max_tokens non défini a été relevé à {{raised}}",
-    "model \"{{model}}\" requires max_tokens greater than 1024 for manual thinking; raised max_tokens {{current}} to {{raised}}": "Le modèle « {{model}} » exige un max_tokens supérieur à 1024 pour la réflexion manuelle ; max_tokens {{current}} a été relevé à {{raised}}"
+    "model \"{{model}}\" requires max_tokens greater than 1024 for manual thinking; raised max_tokens {{current}} to {{raised}}": "Le modèle « {{model}} » exige un max_tokens supérieur à 1024 pour la réflexion manuelle ; max_tokens {{current}} a été relevé à {{raised}}",
+    "Store all request content and model replies": "Conserver toute la requête et les réponses",
+    "Keep all request sources and generated replies. Records grow with stored content and stay for the retention period above.": "Conserve toutes les sources de la requête et les réponses générées. Les enregistrements grossissent avec le contenu conservé et restent pendant la durée indiquée.",
+    "Stored characters per content block": "Caractères conservés par bloc de contenu",
+    "Maximum characters kept from each content block and generated reply. Turn on full storage above to keep all characters.": "Limite les caractères conservés pour chaque bloc et réponse. Activez la conservation complète pour tout garder.",
+    "Larger buffered outputs spill to temporary storage. Full storage uses this as its memory threshold.": "Les réponses plus grandes sont écrites dans un fichier temporaire. En conservation complète, cette valeur fixe le seuil mémoire.",
+    "Blocking stops delivery when this limit is exceeded. Full storage disables this cap.": "Le mode blocage arrête la réponse si cette limite est dépassée. La conservation complète désactive cette limite."
   }
 }
