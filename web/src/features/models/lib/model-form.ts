@@ -36,6 +36,11 @@ export const modelFormSchema = z.object({
   tags: z.array(z.string()).default([]),
   vendor_id: z.number().optional(),
   endpoints: z.string().default(''),
+  context_limit: z
+    .number()
+    .int()
+    .positive('Context limit must be a positive integer')
+    .optional(),
   name_rule: z.number().min(0).max(3).default(0),
   status: z.boolean().default(true),
   sync_official: z.boolean().default(true),
@@ -78,6 +83,7 @@ export function transformModelToFormDefaults(model: Model): ModelFormValues {
     tags: parseTagsFromUtils(model.tags),
     vendor_id: model.vendor_id,
     endpoints: model.endpoints || '',
+    context_limit: model.context_limit,
     name_rule: model.name_rule || 0,
     status: model.status === 1,
     sync_official: model.sync_official === 1,
@@ -100,6 +106,7 @@ export function transformFormDataToModelPayload(
     tags: formatTagsArray(formData.tags),
     vendor_id: formData.vendor_id,
     endpoints: formData.endpoints || '',
+    context_limit: formData.context_limit,
     name_rule: formData.name_rule,
     status: formData.status ? 1 : 0,
     sync_official: formData.sync_official ? 1 : 0,

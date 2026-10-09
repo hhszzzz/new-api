@@ -57,6 +57,11 @@ import {
   normalizeChannelSchedule,
 } from './channel-schedule'
 import {
+  contextLimitsTextSchema,
+  formatContextLimits,
+  parseContextLimits,
+} from './context-limits'
+import {
   UPSTREAM_PROTOCOLS,
   formatProtocolModelOverrides,
   parseProtocolModelOverrides,
@@ -304,6 +309,7 @@ export const channelFormSchema = z
     protocol_allow_conversion: z.enum(['inherit', 'allow', 'deny']).optional(),
     protocol_allow_lossy_conversion: z.boolean().optional(),
     protocol_model_overrides: protocolModelOverridesTextSchema.optional(),
+    context_limits: contextLimitsTextSchema.optional(),
     // Multi-key options (not sent to backend directly)
     multi_key_mode: z.enum(['single', 'batch', 'multi_to_single']).optional(),
     multi_key_type: z.enum(['random', 'polling']).optional(),
@@ -543,6 +549,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   protocol_allow_conversion: 'inherit',
   protocol_allow_lossy_conversion: false,
   protocol_model_overrides: '[]',
+  context_limits: '[]',
   multi_key_mode: 'single',
   multi_key_type: 'random',
   batch_add_set_key_prefix_2_name: false,
@@ -663,6 +670,7 @@ export function transformChannelToFormDefaults(
   let protocolAllowLossyConversion = false
   let protocolModelOverrides = '[]'
   let protocolPolicyJSON: string | undefined
+  let contextLimits = '[]'
 
   if (channel.settings) {
     try {
@@ -708,6 +716,7 @@ export function transformChannelToFormDefaults(
       if (Array.isArray(parsed.client_policy?.clients)) {
         clientPolicyClients = parsed.client_policy.clients.join(', ')
       }
+      contextLimits = formatContextLimits(parsed.context_limits)
       const protocolCapabilities = parsed.protocol_capabilities
       if (
         protocolCapabilities &&
@@ -804,6 +813,7 @@ export function transformChannelToFormDefaults(
     protocol_allow_conversion: protocolAllowConversion,
     protocol_allow_lossy_conversion: protocolAllowLossyConversion,
     protocol_model_overrides: protocolModelOverrides,
+    context_limits: contextLimits,
   }
 }
 
@@ -1060,6 +1070,13 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
     settingsObj.protocol_capabilities = protocolCapabilities
   } else if ('protocol_capabilities' in settingsObj) {
     delete settingsObj.protocol_capabilities
+  }
+
+  const contextLimitRules = parseContextLimits(formData.context_limits)
+  if (contextLimitRules.length > 0) {
+    settingsObj.context_limits = contextLimitRules
+  } else if ('context_limits' in settingsObj) {
+    delete settingsObj.context_limits
   }
 
   return JSON.stringify(settingsObj)

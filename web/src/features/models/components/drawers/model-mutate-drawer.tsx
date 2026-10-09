@@ -451,6 +451,36 @@ export function ModelMutateDrawer(props: {
                           </FormItem>
                         )}
                       />
+
+                      <FormField
+                        control={form.control}
+                        name='context_limit'
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>{t('Max context tokens')}</FormLabel>
+                            <FormControl>
+                              <Input
+                                type='number'
+                                min={1}
+                                placeholder={t('e.g. 272000')}
+                                value={field.value ?? ''}
+                                onChange={(event) => {
+                                  const value = event.target.valueAsNumber
+                                  field.onChange(
+                                    Number.isNaN(value) ? undefined : value
+                                  )
+                                }}
+                              />
+                            </FormControl>
+                            <FormDescription>
+                              {t(
+                                'Declared context window advertised to clients through the model list. Stricter channel-level declarations take precedence. Leave empty to stay undeclared.'
+                              )}
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
                     </SideDrawerSection>
 
                     {/* Matching Configuration */}

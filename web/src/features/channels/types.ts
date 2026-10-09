@@ -261,10 +261,17 @@ export interface ChannelOtherSettings {
   protocol_capabilities?: ProtocolCapabilities
   protocol_policy?: ProtocolPolicy
   disable_model_on_error?: boolean
+  context_limits?: ChannelContextLimitRule[]
   client_policy?: {
     mode?: 'unrestricted' | 'allow' | 'deny'
     clients?: string[]
   }
+}
+
+/** Per-model context window declaration on a channel. First matching rule wins. */
+export interface ChannelContextLimitRule {
+  model_pattern: string
+  context_limit: number
 }
 
 /** One (group, model) disabled on a channel. Stored in the channel other_info. */

@@ -46,6 +46,7 @@ export interface Model {
   tags?: string
   vendor_id?: number
   endpoints?: string
+  context_limit?: number
   supported_endpoints?: string[]
   status: number
   sync_official: number
@@ -299,6 +300,11 @@ export const modelFormSchema = z.object({
   tags: z.array(z.string()).default([]),
   vendor_id: z.number().optional(),
   endpoints: z.string().default(''),
+  context_limit: z
+    .number()
+    .int()
+    .positive('Context limit must be a positive integer')
+    .optional(),
   name_rule: z.number().min(0).max(3).default(0),
   status: z.boolean().default(true),
   sync_official: z.boolean().default(true),

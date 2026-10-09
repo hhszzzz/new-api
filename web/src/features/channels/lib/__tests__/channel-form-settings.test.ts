@@ -81,3 +81,88 @@ describe('channel form disable_model_on_error settings', () => {
     expect(disabled.disable_model_on_error).toBe(false)
   })
 })
+
+describe('channel form context_limits settings', () => {
+  test('writes matching rules into the settings JSON', () => {
+    const payload = transformFormDataToUpdatePayload(
+      {
+        ...CHANNEL_FORM_DEFAULT_VALUES,
+        context_limits: '[{"model_pattern":"^kimi-","context_limit":262144}]',
+      },
+      5
+    )
+
+    expect(settingsFrom(payload)).toMatchObject({
+      context_limits: [{ model_pattern: '^kimi-', context_limit: 262144 }],
+    })
+  })
+
+  test('rejects invalid rules through the form schema', async () => {
+    const { channelFormSchema } = await import('../channel-form')
+    const base = {
+      ...CHANNEL_FORM_DEFAULT_VALUES,
+      name: 'channel',
+      models: 'kimi-k3',
+    }
+
+    expect(
+      channelFormSchema.safeParse({
+        ...base,
+        context_limits: '[{"model_pattern":"^kimi-","context_limit":262144}]',
+      }).success
+    ).toBe(true)
+
+    expect(
+      channelFormSchema.safeParse({
+        ...base,
+        context_limits: '[{"model_pattern":"(","context_limit":1}]',
+      }).success
+    ).toBe(false)
+
+    expect(
+      channelFormSchema.safeParse({
+        ...base,
+        context_limits: '[{"model_pattern":"^a$","context_limit":0}]',
+      }).success
+    ).toBe(false)
+  })
+
+  test('removes stored rules when the form value is an empty array', () => {
+    const payload = transformFormDataToUpdatePayload(
+      {
+        ...CHANNEL_FORM_DEFAULT_VALUES,
+        context_limits: '[]',
+        settings:
+          '{"other_flag":true,"context_limits":[{"model_pattern":"^kimi-","context_limit":262144}]}',
+      },
+      5
+    )
+
+    const settings = settingsFrom(payload)
+    expect(settings.other_flag).toBe(true)
+    expect(settings).not.toHaveProperty('context_limits')
+  })
+
+  test('hydrates rules from channel settings as formatted JSON', () => {
+    const values = transformChannelToFormDefaults({
+      id: 1,
+      type: 1,
+      name: 'channel',
+      channel_info: {},
+      settings:
+        '{"context_limits":[{"model_pattern":"^kimi-","context_limit":262144}]}',
+    } as Channel)
+    expect(JSON.parse(values.context_limits || '[]')).toEqual([
+      { model_pattern: '^kimi-', context_limit: 262144 },
+    ])
+
+    const empty = transformChannelToFormDefaults({
+      id: 1,
+      type: 1,
+      name: 'channel',
+      channel_info: {},
+      settings: '{}',
+    } as Channel)
+    expect(empty.context_limits).toBe('[]')
+  })
+})

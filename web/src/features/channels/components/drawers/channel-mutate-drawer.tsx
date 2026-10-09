@@ -314,6 +314,7 @@ const SENSITIVE_FORM_FIELDS = [
   'protocol_allow_conversion',
   'protocol_allow_lossy_conversion',
   'protocol_model_overrides',
+  'context_limits',
   'is_enterprise_account',
   'vertex_key_type',
   'aws_key_type',
@@ -2932,6 +2933,35 @@ export function ChannelMutateDrawer({
                   placeholder={t(
                     'Override request parameters. Cannot override stream parameter.'
                   )}
+                />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+
+        <FormField
+          control={form.control}
+          name='context_limits'
+          render={({ field }) => (
+            <FormItem className='space-y-3 border-t pt-4'>
+              <div className='space-y-1'>
+                <FormLabel>{t('Model Context Limits')}</FormLabel>
+                <FormDescription>
+                  {t(
+                    'Declare per-model context windows in tokens as a JSON array of {"model_pattern", "context_limit"} rules. The first matching rule wins and is advertised to clients through the model list; a stricter declaration here takes precedence over the global model metadata.'
+                  )}
+                </FormDescription>
+              </div>
+              <FormControl>
+                <JsonCodeEditor
+                  value={field.value || ''}
+                  onChange={field.onChange}
+                  name={field.name}
+                  onBlur={field.onBlur}
+                  textareaRef={field.ref}
+                  disabled={sensitiveLocked || isSubmitting}
+                  placeholder='[{"model_pattern":"^kimi-","context_limit":262144}]'
                 />
               </FormControl>
               <FormMessage />
