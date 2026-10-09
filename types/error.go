@@ -59,7 +59,8 @@ const (
 	ErrorCodeClientDisconnected    ErrorCode = "client_disconnected"
 
 	// request error
-	ErrorCodeBadRequestBody ErrorCode = "bad_request_body"
+	ErrorCodeBadRequestBody       ErrorCode = "bad_request_body"
+	ErrorCodeContextLimitExceeded ErrorCode = "context_limit_exceeded"
 
 	// response error
 	ErrorCodeReadResponseBodyFailed ErrorCode = "read_response_body_failed"

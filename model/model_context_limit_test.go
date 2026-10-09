@@ -135,3 +135,34 @@ func TestModelContextLimitNullScansAsZero(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, limits)
 }
+
+func TestGetModelContextLimitUsesPricingCache(t *testing.T) {
+	setupContextLimitTables(t)
+	t.Cleanup(InvalidatePricingCache)
+
+	require.NoError(t, DB.Create(&Channel{
+		Id: 41, Type: 1, Key: "key", Name: "ctx-cache-channel", Status: common.ChannelStatusEnabled,
+	}).Error)
+	require.NoError(t, DB.Create(&Ability{Group: "default", Model: "ctx-cache-model", ChannelId: 41, Enabled: true}).Error)
+	require.NoError(t, DB.Create(&Model{ModelName: "ctx-cache-model", ContextLimit: 123456, Status: 1}).Error)
+
+	RefreshPricing()
+	limit, ok := GetModelContextLimit("ctx-cache-model")
+	require.True(t, ok)
+	assert.Equal(t, 123456, limit)
+
+	// Undeclared and unknown models resolve to nothing.
+	require.NoError(t, DB.Create(&Model{ModelName: "ctx-cache-zero", ContextLimit: 0, Status: 1}).Error)
+	RefreshPricing()
+	limit, ok = GetModelContextLimit("ctx-cache-zero")
+	assert.False(t, ok)
+	assert.Equal(t, 0, limit)
+
+	limit, ok = GetModelContextLimit("ctx-cache-missing")
+	assert.False(t, ok)
+	assert.Equal(t, 0, limit)
+
+	limit, ok = GetModelContextLimit("")
+	assert.False(t, ok)
+	assert.Equal(t, 0, limit)
+}

@@ -230,6 +230,12 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 				newAPIError = billingErr
 				return
 			}
+			// Claude Messages 的超上下文上限拦截：普通超限请求以协议原生 400 拒绝
+			// （客户端由此触发本地压缩），压缩请求本身放行；不重试其他渠道。
+			if contextLimitErr := enforceClaudeContextLimit(relayFormat, request, relayInfo, channel); contextLimitErr != nil {
+				newAPIError = contextLimitErr
+				return
+			}
 
 			bodyStorage, bodyErr := common.GetBodyStorage(c)
 			if bodyErr != nil {
@@ -333,7 +339,11 @@ func writeRelayErrorResponse(c *gin.Context, relayFormat types.RelayFormat, apiE
 		helper.WssError(c, ws, publicError)
 	case types.RelayFormatClaude:
 		publicError := relaycommon.SanitizeUserModelRouteClaudeError(apiError.ToClaudeError(), privacyInfo)
-		if c.Writer.Written() || privacyInfo != nil && privacyInfo.IsStream {
+		// 上下文上限拦截模拟真实 Anthropic API 的流前校验：即便请求带 stream 也以
+		// HTTP 400 JSON 返回（客户端在流开始前识别 prompt-too-long 并触发本地压缩）；
+		// SSE 事件通道对这类错误的识别不可靠。
+		if apiError.GetErrorCode() != hosttypes.ErrorCodeContextLimitExceeded &&
+			(c.Writer.Written() || privacyInfo != nil && privacyInfo.IsStream) {
 			helper.SetEventStreamHeaders(c)
 			if err := helper.ClaudeData(c, dto.ClaudeResponse{Type: "error", Error: publicError}); err != nil {
 				logger.LogError(c, "failed to write Messages stream error: "+err.Error())

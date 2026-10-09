@@ -71,6 +71,10 @@ var (
 	modelEnableGroups     = make(map[string][]string)
 	modelQuotaTypeMap     = make(map[string]int)
 	modelEnableGroupsLock = sync.RWMutex{}
+
+	// 缓存映射：模型名 -> 声明的上下文上限（models.context_limit）
+	modelContextLimits     = make(map[string]int)
+	modelContextLimitsLock = sync.RWMutex{}
 )
 
 var (
@@ -157,6 +161,8 @@ func InvalidatePricingCache() {
 	defer modelSupportEndpointsLock.Unlock()
 	modelEnableGroupsLock.Lock()
 	defer modelEnableGroupsLock.Unlock()
+	modelContextLimitsLock.Lock()
+	defer modelContextLimitsLock.Unlock()
 
 	pricingMap = nil
 	vendorsList = nil
@@ -166,6 +172,7 @@ func InvalidatePricingCache() {
 	modelSupportEndpointTypes = make(map[string][]constant.EndpointType)
 	modelEnableGroups = make(map[string][]string)
 	modelQuotaTypeMap = make(map[string]int)
+	modelContextLimits = make(map[string]int)
 }
 
 // GetVendors 返回当前定价接口使用到的供应商信息
@@ -313,6 +320,14 @@ func updatePricing() bool {
 		names = append(names, ability.Model)
 	}
 	metaMap := resolveModelMetadata(allMeta, names)
+
+	// 提取各模型声明的上下文上限，供 relay 入口快速查询
+	newContextLimits := make(map[string]int)
+	for name, meta := range metaMap {
+		if meta.ContextLimit > 0 {
+			newContextLimits[name] = meta.ContextLimit
+		}
+	}
 
 	// 预加载供应商
 	var vendors []Vendor
@@ -558,6 +573,10 @@ func updatePricing() bool {
 		modelQuotaTypeMap[p.ModelName] = p.QuotaType
 	}
 	modelEnableGroupsLock.Unlock()
+
+	modelContextLimitsLock.Lock()
+	modelContextLimits = newContextLimits
+	modelContextLimitsLock.Unlock()
 
 	lastGetPricingTime = time.Now()
 	pricingCacheValid = true

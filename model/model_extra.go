@@ -61,3 +61,33 @@ func GetModelQuotaTypes(modelName string) []int {
 		return []int{quota}
 	}
 }
+
+// GetModelContextLimit 返回指定模型声明的上下文上限（来自定价缓存）；
+// 未声明或模型不在缓存中时返回 0, false。
+func GetModelContextLimit(modelName string) (int, bool) {
+	if modelName == "" {
+		return 0, false
+	}
+	for {
+		updatePricingLock.RLock()
+		if pricingCacheFreshLocked() {
+			modelContextLimitsLock.RLock()
+			limit, ok := modelContextLimits[modelName]
+			modelContextLimitsLock.RUnlock()
+			updatePricingLock.RUnlock()
+			return limit, ok
+		}
+		updatePricingLock.RUnlock()
+
+		if ensurePricingCache() {
+			continue
+		}
+
+		updatePricingLock.RLock()
+		modelContextLimitsLock.RLock()
+		limit, ok := modelContextLimits[modelName]
+		modelContextLimitsLock.RUnlock()
+		updatePricingLock.RUnlock()
+		return limit, ok
+	}
+}
