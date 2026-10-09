@@ -188,6 +188,33 @@ func ResponsesErrorData(c *gin.Context, openAIError types.OpenAIError) error {
 	return ResponseChunkData(c, dto.ResponsesStreamResponse{Type: payload.Type, SequenceNumber: &sequenceNumber}, string(data))
 }
 
+// ResponsesFailedData 以 Responses 协议的流内失败事件（response.failed）承载错误。
+// 客户端（Codex）从 response.error.code 识别失败类型：context_length_exceeded
+// 会被判定为上下文超限并触发下一轮的本地压缩，裸 error 事件则不会。
+func ResponsesFailedData(c *gin.Context, responseID string, openAIError types.OpenAIError) error {
+	sequenceNumber := 0
+	if previous, ok := c.Get(responsesLastSequenceNumberKey); ok {
+		if value, ok := previous.(int); ok {
+			sequenceNumber = value + 1
+		}
+	}
+	payload := dto.ResponsesFailedEvent{
+		Type:           "response.failed",
+		SequenceNumber: sequenceNumber,
+		Response: &dto.ResponsesFailedResponse{
+			ID:     responseID,
+			Object: "response",
+			Status: "failed",
+			Error:  openAIError,
+		},
+	}
+	data, err := common.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	return ResponseChunkData(c, dto.ResponsesStreamResponse{Type: payload.Type, SequenceNumber: &sequenceNumber}, string(data))
+}
+
 func StringData(c *gin.Context, str string) error {
 	if c == nil || c.Writer == nil {
 		return errors.New("context or writer is nil")

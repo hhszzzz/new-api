@@ -59,7 +59,10 @@ const (
 	ErrorCodeClientDisconnected    ErrorCode = "client_disconnected"
 
 	// request error
-	ErrorCodeBadRequestBody       ErrorCode = "bad_request_body"
+	ErrorCodeBadRequestBody ErrorCode = "bad_request_body"
+	// 内部拦截标记码，必须保持唯一：上游透传的错误可能携带同名 code（如 OpenAI 的
+	// context_length_exceeded），不能与网关自身的拦截识别混淆。OpenAI/Responses
+	// 报文里对客户端可见的 code 由 relay_context_limit.go 单独渲染。
 	ErrorCodeContextLimitExceeded ErrorCode = "context_limit_exceeded"
 
 	// response error
@@ -529,6 +532,14 @@ func ErrOptionWithNoRecordErrorLog() NewAPIErrorOptions {
 func ErrOptionWithStatusCode(statusCode int) NewAPIErrorOptions {
 	return func(e *NewAPIError) {
 		e.StatusCode = statusCode
+	}
+}
+
+// ErrOptionWithErrorCode 覆盖内部错误码，使拦截识别码与上报给客户端的协议
+// 错误码解耦（例如 OpenAI 侧 code=context_length_exceeded 由 RelayError 渲染）。
+func ErrOptionWithErrorCode(errorCode ErrorCode) NewAPIErrorOptions {
+	return func(e *NewAPIError) {
+		e.errorCode = errorCode
 	}
 }
 

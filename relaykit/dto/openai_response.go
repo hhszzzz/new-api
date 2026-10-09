@@ -652,6 +652,21 @@ type ResponsesErrorEvent struct {
 	SequenceNumber int    `json:"sequence_number"`
 }
 
+// ResponsesFailedEvent 是 Responses 流内的失败事件（response.failed）。
+// 客户端（如 Codex）从 response.error.code 识别失败类型并触发恢复路径。
+type ResponsesFailedEvent struct {
+	Type           string                   `json:"type"`
+	SequenceNumber int                      `json:"sequence_number"`
+	Response       *ResponsesFailedResponse `json:"response"`
+}
+
+type ResponsesFailedResponse struct {
+	ID     string            `json:"id"`
+	Object string            `json:"object"`
+	Status string            `json:"status"`
+	Error  types.OpenAIError `json:"error"`
+}
+
 func (r *ResponsesStreamResponse) GetOpenAIError() *types.OpenAIError {
 	if r == nil {
 		return nil

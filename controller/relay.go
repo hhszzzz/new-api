@@ -230,9 +230,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 				newAPIError = billingErr
 				return
 			}
-			// Claude Messages 的超上下文上限拦截：普通超限请求以协议原生 400 拒绝
-			// （客户端由此触发本地压缩），压缩请求本身放行；不重试其他渠道。
-			if contextLimitErr := enforceClaudeContextLimit(relayFormat, request, relayInfo, channel); contextLimitErr != nil {
+			// 上下文上限拦截（Messages / Chat / Responses 入口）：普通超限请求以
+			// 各协议原生的超限错误拒绝（Claude Code、Codex 据此触发本地压缩），
+			// 压缩请求本身放行；不重试其他渠道。
+			if contextLimitErr := enforceContextLimit(relayFormat, request, relayInfo, channel); contextLimitErr != nil {
 				newAPIError = contextLimitErr
 				return
 			}
@@ -356,6 +357,16 @@ func writeRelayErrorResponse(c *gin.Context, relayFormat types.RelayFormat, apiE
 		})
 	case types.RelayFormatOpenAIResponses:
 		publicError := relaycommon.SanitizeUserModelRouteOpenAIError(apiError.ToOpenAIError(), privacyInfo)
+		// 超限拦截按上游的流内失败事件（response.failed）下发：Codex 只有在流内
+		// 事件里才能识别 error.code=context_length_exceeded 并把本轮判定为上下文
+		// 超限（下一次请求前自动压缩）；裸 error 事件与预流式 400 都不被识别。
+		if apiError.GetErrorCode() == hosttypes.ErrorCodeContextLimitExceeded && privacyInfo != nil && privacyInfo.IsStream {
+			helper.SetEventStreamHeaders(c)
+			if err := helper.ResponsesFailedData(c, "resp_"+c.GetString(common.RequestIdKey), publicError); err != nil {
+				logger.LogError(c, "failed to write Responses context-limit event: "+err.Error())
+			}
+			return
+		}
 		if c.Writer.Written() || privacyInfo != nil && privacyInfo.IsStream {
 			helper.SetEventStreamHeaders(c)
 			if err := helper.ResponsesErrorData(c, publicError); err != nil {
@@ -366,6 +377,12 @@ func writeRelayErrorResponse(c *gin.Context, relayFormat types.RelayFormat, apiE
 		c.JSON(apiError.StatusCode, gin.H{"error": publicError})
 	default:
 		publicError := relaycommon.SanitizeUserModelRouteOpenAIError(apiError.ToOpenAIError(), privacyInfo)
+		// 超限拦截模拟真实 OpenAI API 的流前校验：即便请求带 stream 也以 HTTP 400
+		// JSON 返回（客户端在流开始前识别 context_length_exceeded）。
+		if apiError.GetErrorCode() == hosttypes.ErrorCodeContextLimitExceeded {
+			c.JSON(apiError.StatusCode, gin.H{"error": publicError})
+			return
+		}
 		if c.Writer.Written() || privacyInfo != nil && privacyInfo.IsStream {
 			helper.SetEventStreamHeaders(c)
 			if err := helper.ObjectData(c, gin.H{"error": publicError}); err != nil {
