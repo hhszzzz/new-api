@@ -299,6 +299,34 @@ func getAllowedModelNames(c *gin.Context, acceptUnsetRatioModel bool) ([]string,
 	return allowed, groups.ownerGroups, nil
 }
 
+// getListedModelContextLimits merges the global metadata declaration with the
+// smallest channel-level declaration reachable by the given groups. Clients
+// must compact before the smallest window they may land on, so the channel
+// floor wins when it is stricter than the global value.
+func getListedModelContextLimits(modelNames []string, groups []string) map[string]int {
+	globalLimits, err := model.GetModelContextLimits(modelNames)
+	if err != nil {
+		common.SysError("failed to load model context limits: " + err.Error())
+		globalLimits = nil
+	}
+	channelFloors, err := model.GetChannelContextLimitFloor(modelNames, groups)
+	if err != nil {
+		common.SysError("failed to load channel context limits: " + err.Error())
+		channelFloors = nil
+	}
+	limits := make(map[string]int, len(modelNames))
+	for _, name := range modelNames {
+		limit, ok := globalLimits[name]
+		if floor, exists := channelFloors[name]; exists && (!ok || floor < limit) {
+			limit, ok = floor, true
+		}
+		if ok && limit > 0 {
+			limits[name] = limit
+		}
+	}
+	return limits
+}
+
 func ListModels(c *gin.Context, modelType int) {
 	acceptUnsetRatioModel := operation_setting.SelfUseModeEnabled
 	if !acceptUnsetRatioModel {
@@ -324,8 +352,14 @@ func ListModels(c *gin.Context, modelType int) {
 		ownerByModel = getPreferredModelOwners(userModelNames, ownerGroups)
 	}
 	userOpenAiModels := make([]dto.OpenAIModels, 0, len(userModelNames))
+	contextLimits := getListedModelContextLimits(userModelNames, ownerGroups)
 	for _, modelName := range userModelNames {
-		userOpenAiModels = append(userOpenAiModels, buildOpenAIModel(modelName, ownerByModel))
+		oaiModel := buildOpenAIModel(modelName, ownerByModel)
+		if limit, ok := contextLimits[modelName]; ok {
+			oaiModel.MaxInputTokens = limit
+			oaiModel.ContextLength = limit
+		}
+		userOpenAiModels = append(userOpenAiModels, oaiModel)
 	}
 
 	switch modelType {
@@ -333,10 +367,11 @@ func ListModels(c *gin.Context, modelType int) {
 		useranthropicModels := make([]dto.AnthropicModel, len(userOpenAiModels))
 		for i, model := range userOpenAiModels {
 			useranthropicModels[i] = dto.AnthropicModel{
-				ID:          model.Id,
-				CreatedAt:   time.Unix(int64(model.Created), 0).UTC().Format(time.RFC3339),
-				DisplayName: model.Id,
-				Type:        "model",
+				ID:             model.Id,
+				CreatedAt:      time.Unix(int64(model.Created), 0).UTC().Format(time.RFC3339),
+				DisplayName:    model.Id,
+				Type:           "model",
+				MaxInputTokens: model.MaxInputTokens,
 			}
 		}
 		firstID := ""
@@ -443,13 +478,18 @@ func RetrieveModel(c *gin.Context, modelType int) {
 	if err == nil && common.StringsContains(allowedModels, modelId) {
 		owners := getPreferredModelOwners([]string{modelId}, ownerGroups)
 		aiModel := buildOpenAIModel(modelId, owners)
+		if limit, ok := getListedModelContextLimits([]string{modelId}, ownerGroups)[modelId]; ok {
+			aiModel.MaxInputTokens = limit
+			aiModel.ContextLength = limit
+		}
 		switch modelType {
 		case constant.ChannelTypeAnthropic:
 			c.JSON(200, dto.AnthropicModel{
-				ID:          aiModel.Id,
-				CreatedAt:   time.Unix(int64(aiModel.Created), 0).UTC().Format(time.RFC3339),
-				DisplayName: aiModel.Id,
-				Type:        "model",
+				ID:             aiModel.Id,
+				CreatedAt:      time.Unix(int64(aiModel.Created), 0).UTC().Format(time.RFC3339),
+				DisplayName:    aiModel.Id,
+				Type:           "model",
+				MaxInputTokens: aiModel.MaxInputTokens,
 			})
 		default:
 			c.JSON(200, aiModel)

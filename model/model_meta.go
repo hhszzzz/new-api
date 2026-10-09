@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"gorm.io/gorm"
@@ -35,13 +36,17 @@ type BoundChannel struct {
 }
 
 type Model struct {
-	Id                 int            `json:"id"`
-	ModelName          string         `json:"model_name" gorm:"size:128;not null;uniqueIndex:uk_model_name_delete_at,priority:1"`
-	Description        string         `json:"description,omitempty" gorm:"type:text"`
-	Icon               string         `json:"icon,omitempty" gorm:"type:varchar(128)"`
-	Tags               string         `json:"tags,omitempty" gorm:"type:varchar(255)"`
-	VendorID           int            `json:"vendor_id,omitempty" gorm:"index"`
-	Endpoints          string         `json:"endpoints,omitempty" gorm:"type:text"`
+	Id          int    `json:"id"`
+	ModelName   string `json:"model_name" gorm:"size:128;not null;uniqueIndex:uk_model_name_delete_at,priority:1"`
+	Description string `json:"description,omitempty" gorm:"type:text"`
+	Icon        string `json:"icon,omitempty" gorm:"type:varchar(128)"`
+	Tags        string `json:"tags,omitempty" gorm:"type:varchar(255)"`
+	VendorID    int    `json:"vendor_id,omitempty" gorm:"index"`
+	Endpoints   string `json:"endpoints,omitempty" gorm:"type:text"`
+	// ContextLimit declares the model's context window in tokens. Zero leaves
+	// the window undeclared. Advertised through the models listing so clients
+	// can compact before the window fills.
+	ContextLimit       int            `json:"context_limit,omitempty"`
 	SupportedEndpoints []string       `json:"supported_endpoints,omitempty" gorm:"-"`
 	Status             int            `json:"status" gorm:"default:1"`
 	SyncOfficial       int            `json:"sync_official" gorm:"default:1"`
@@ -358,7 +363,7 @@ func (mi *Model) updateWithTx(tx *gorm.DB) error {
 	mi.UpdatedTime = common.GetTimestamp()
 	// 使用 Select 强制更新所有字段，包括零值
 	return tx.Model(&Model{}).Where("id = ?", mi.Id).
-		Select("model_name", "description", "icon", "tags", "vendor_id", "endpoints", "status", "sync_official", "name_rule", "updated_time").
+		Select("model_name", "description", "icon", "tags", "vendor_id", "endpoints", "context_limit", "status", "sync_official", "name_rule", "updated_time").
 		Updates(mi).Error
 }
 
@@ -586,6 +591,71 @@ func GetPreferredModelOwnerChannelTypes(modelNames []string, groups []string) (m
 			continue
 		}
 		result[r.Model] = r.ChannelType
+	}
+	return result, nil
+}
+
+// GetModelContextLimits resolves declared context windows for the given model
+// names from model metadata records, applying catalog rule precedence (exact,
+// prefix, suffix, contains). Models without a positive declaration are absent.
+func GetModelContextLimits(modelNames []string) (map[string]int, error) {
+	result := make(map[string]int)
+	modelNames = normalizeLookupValues(modelNames)
+	if len(modelNames) == 0 {
+		return result, nil
+	}
+	var records []Model
+	if err := DB.Find(&records).Error; err != nil {
+		return nil, err
+	}
+	resolved := resolveModelMetadata(records, modelNames)
+	for _, name := range modelNames {
+		if metadata, ok := resolved[name]; ok && metadata.ContextLimit > 0 {
+			result[name] = metadata.ContextLimit
+		}
+	}
+	return result, nil
+}
+
+// GetChannelContextLimitFloor returns, per model, the smallest context window
+// declared by channel-level rules among the enabled channels serving it in the
+// given groups. Models without any matching channel rule are absent.
+func GetChannelContextLimitFloor(modelNames []string, groups []string) (map[string]int, error) {
+	result := make(map[string]int)
+	modelNames = normalizeLookupValues(modelNames)
+	if len(modelNames) == 0 {
+		return result, nil
+	}
+	type row struct {
+		Model         string
+		OtherSettings string
+	}
+	var rows []row
+	query := DB.Table("abilities").
+		Select("abilities.model as model, channels.settings as other_settings").
+		Joins("JOIN channels ON abilities.channel_id = channels.id").
+		Where("abilities.model IN ? AND abilities.enabled = ? AND channels.status = ?", modelNames, true, common.ChannelStatusEnabled)
+	groups = normalizeLookupValues(groups)
+	if len(groups) > 0 {
+		query = query.Where("abilities."+commonGroupCol+" IN ?", groups)
+	}
+	if err := query.Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		settings := hostdto.ChannelOtherSettings{}
+		if r.OtherSettings != "" {
+			if err := common.Unmarshal([]byte(r.OtherSettings), &settings); err != nil {
+				continue
+			}
+		}
+		limit, ok := settings.ResolveContextLimit(r.Model)
+		if !ok {
+			continue
+		}
+		if floor, exists := result[r.Model]; !exists || limit < floor {
+			result[r.Model] = limit
+		}
 	}
 	return result, nil
 }

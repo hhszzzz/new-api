@@ -694,3 +694,94 @@ func TestSetupLoginDoesNotTouchPasswordWhenPasswordFieldOmitted(t *testing.T) {
 	require.NoError(t, db.First(&stored, user.Id).Error)
 	assert.Equal(t, hashedPassword, stored.Password)
 }
+
+func TestListModelsAdvertisesContextLimits(t *testing.T) {
+	withSelfUseModeEnabled(t)
+	db := setupModelListControllerTestDB(t)
+
+	require.NoError(t, db.Create(&model.User{
+		Id:       1101,
+		Username: "context-limit-model-list-user",
+		Password: "password",
+		Group:    "default",
+		Status:   common.UserStatusEnabled,
+	}).Error)
+
+	newChannel := func(id int, rules ...hostdto.ChannelContextLimitRule) *model.Channel {
+		channel := &model.Channel{
+			Id:     id,
+			Type:   constant.ChannelTypeOpenAI,
+			Key:    "context-limit-key",
+			Name:   "context-limit-channel",
+			Group:  "default",
+			Status: common.ChannelStatusEnabled,
+		}
+		channel.SetOtherSettings(hostdto.ChannelOtherSettings{ContextLimits: rules})
+		return channel
+	}
+	require.NoError(t, db.Create(newChannel(21,
+		hostdto.ChannelContextLimitRule{ModelPattern: `^zz-ctx-floor-model$`, ContextLimit: 128000},
+		hostdto.ChannelContextLimitRule{ModelPattern: `^zz-ctx-channel-only-model$`, ContextLimit: 96000},
+	)).Error)
+	require.NoError(t, db.Create(newChannel(22)).Error)
+
+	require.NoError(t, db.Create(&[]model.Ability{
+		{Group: "default", Model: "zz-ctx-floor-model", ChannelId: 21, Enabled: true},
+		{Group: "default", Model: "zz-ctx-floor-model", ChannelId: 22, Enabled: true},
+		{Group: "default", Model: "zz-ctx-global-model", ChannelId: 22, Enabled: true},
+		{Group: "default", Model: "zz-ctx-channel-only-model", ChannelId: 21, Enabled: true},
+		{Group: "default", Model: "zz-ctx-undeclared-model", ChannelId: 22, Enabled: true},
+	}).Error)
+	require.NoError(t, db.Create(&[]model.Model{
+		{ModelName: "zz-ctx-floor-model", ContextLimit: 272000, Status: 1},
+		{ModelName: "zz-ctx-global-model", ContextLimit: 200000, Status: 1},
+	}).Error)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	ctx.Set("id", 1101)
+
+	ListModels(ctx, constant.ChannelTypeOpenAI)
+
+	payload := decodeListModelsPayload(t, recorder)
+	limits := make(map[string]int, len(payload.Data))
+	for _, item := range payload.Data {
+		limits[item.Id] = int(item.MaxInputTokens)
+		require.Equal(t, item.MaxInputTokens, item.ContextLength, "context_length mirrors max_input_tokens for %s", item.Id)
+	}
+	// A stricter channel declaration wins over the global metadata value.
+	require.Equal(t, 128000, limits["zz-ctx-floor-model"])
+	require.Equal(t, 200000, limits["zz-ctx-global-model"])
+	require.Equal(t, 96000, limits["zz-ctx-channel-only-model"])
+	require.Zero(t, limits["zz-ctx-undeclared-model"])
+
+	var raw struct {
+		Data []map[string]any `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &raw))
+	for _, item := range raw.Data {
+		if item["id"] == "zz-ctx-undeclared-model" {
+			require.NotContains(t, item, "max_input_tokens")
+			require.NotContains(t, item, "context_length")
+		}
+	}
+
+	anthropicRecorder := httptest.NewRecorder()
+	anthropicCtx, _ := gin.CreateTestContext(anthropicRecorder)
+	anthropicCtx.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	anthropicCtx.Set("id", 1101)
+
+	ListModels(anthropicCtx, constant.ChannelTypeAnthropic)
+
+	var anthropicPayload struct {
+		Data []dto.AnthropicModel `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(anthropicRecorder.Body.Bytes(), &anthropicPayload))
+	anthropicLimits := make(map[string]int, len(anthropicPayload.Data))
+	for _, item := range anthropicPayload.Data {
+		anthropicLimits[item.ID] = int(item.MaxInputTokens)
+	}
+	require.Equal(t, 128000, anthropicLimits["zz-ctx-floor-model"])
+	require.Equal(t, 200000, anthropicLimits["zz-ctx-global-model"])
+}

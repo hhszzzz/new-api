@@ -142,6 +142,57 @@ type ChannelOtherSettings struct {
 	// the (group, model) that actually failed. Default false keeps the legacy
 	// channel-level behavior.
 	DisableModelOnError bool `json:"disable_model_on_error,omitempty"`
+	// ContextLimits declares per-model context windows (in tokens) for the
+	// models served by this channel. The first rule whose model_pattern matches
+	// wins. Declared values are advertised through the models listing so
+	// clients can compact before the window fills; an empty list defers to the
+	// global per-model declaration.
+	ContextLimits []ChannelContextLimitRule `json:"context_limits,omitempty"`
+}
+
+// ChannelContextLimitRule declares the context window for the models matching
+// ModelPattern (regular expression).
+type ChannelContextLimitRule struct {
+	ModelPattern string `json:"model_pattern"`
+	ContextLimit int    `json:"context_limit"`
+}
+
+const maxContextLimitTokens = 100_000_000
+
+// ResolveContextLimit returns the declared context window for modelName, or
+// false when no rule matches.
+func (s *ChannelOtherSettings) ResolveContextLimit(modelName string) (int, bool) {
+	if s == nil {
+		return 0, false
+	}
+	for _, rule := range s.ContextLimits {
+		matched, err := regexp.MatchString(strings.TrimSpace(rule.ModelPattern), modelName)
+		if err != nil || !matched {
+			continue
+		}
+		return rule.ContextLimit, true
+	}
+	return 0, false
+}
+
+// ValidateContextLimits checks rule patterns and bounds.
+func (s *ChannelOtherSettings) ValidateContextLimits() error {
+	if s == nil {
+		return nil
+	}
+	for i, rule := range s.ContextLimits {
+		pattern := strings.TrimSpace(rule.ModelPattern)
+		if pattern == "" {
+			return fmt.Errorf("context_limits[%d].model_pattern is required", i)
+		}
+		if _, err := regexp.Compile(pattern); err != nil {
+			return fmt.Errorf("context_limits[%d].model_pattern is invalid: %w", i, err)
+		}
+		if rule.ContextLimit <= 0 || rule.ContextLimit > maxContextLimitTokens {
+			return fmt.Errorf("context_limits[%d].context_limit must be between 1 and %d", i, maxContextLimitTokens)
+		}
+	}
+	return nil
 }
 
 // Disabled model provenance. Manual entries are only cleared by an explicit

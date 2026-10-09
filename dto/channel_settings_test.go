@@ -872,3 +872,47 @@ func TestChannelOtherSettingsValidateToolLossPolicy(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "tool_loss_policy")
 }
+
+func TestChannelOtherSettingsResolveContextLimit(t *testing.T) {
+	require.NoError(t, (*ChannelOtherSettings)(nil).ValidateContextLimits())
+	require.NoError(t, (&ChannelOtherSettings{}).ValidateContextLimits())
+	require.NoError(t, (&ChannelOtherSettings{ContextLimits: []ChannelContextLimitRule{
+		{ModelPattern: `^kimi-`, ContextLimit: 262144},
+		{ModelPattern: `^kimi-k3$`, ContextLimit: 1000000},
+	}}).ValidateContextLimits())
+
+	settings := &ChannelOtherSettings{ContextLimits: []ChannelContextLimitRule{
+		{ModelPattern: `^kimi-`, ContextLimit: 262144},
+		{ModelPattern: `^kimi-k3$`, ContextLimit: 1000000},
+	}}
+	limit, ok := settings.ResolveContextLimit("kimi-k2")
+	require.True(t, ok)
+	assert.Equal(t, 262144, limit)
+
+	// First matching rule wins even when a later rule is more specific.
+	limit, ok = settings.ResolveContextLimit("kimi-k3")
+	require.True(t, ok)
+	assert.Equal(t, 262144, limit)
+
+	_, ok = settings.ResolveContextLimit("gpt-5")
+	assert.False(t, ok)
+
+	_, ok = (*ChannelOtherSettings)(nil).ResolveContextLimit("kimi-k3")
+	assert.False(t, ok)
+
+	err := (&ChannelOtherSettings{ContextLimits: []ChannelContextLimitRule{{ContextLimit: 1}}}).ValidateContextLimits()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "model_pattern is required")
+
+	err = (&ChannelOtherSettings{ContextLimits: []ChannelContextLimitRule{{ModelPattern: "(", ContextLimit: 1}}}).ValidateContextLimits()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "model_pattern is invalid")
+
+	err = (&ChannelOtherSettings{ContextLimits: []ChannelContextLimitRule{{ModelPattern: "^a$", ContextLimit: 0}}}).ValidateContextLimits()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "context_limit must be between")
+
+	err = (&ChannelOtherSettings{ContextLimits: []ChannelContextLimitRule{{ModelPattern: "^a$", ContextLimit: 100000001}}}).ValidateContextLimits()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "context_limit must be between")
+}

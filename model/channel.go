@@ -1522,6 +1522,9 @@ func (channel *Channel) ValidateSettings() error {
 	if err := channelOtherSettings.ProtocolCapabilities.Validate(); err != nil {
 		return err
 	}
+	if err := channelOtherSettings.ValidateContextLimits(); err != nil {
+		return err
+	}
 	if err := channelOtherSettings.ProtocolPolicy.Validate(); err != nil {
 		return err
 	}

@@ -9,6 +9,12 @@ type OpenAIModels struct {
 	Created                int                  `json:"created"`
 	OwnedBy                string               `json:"owned_by"`
 	SupportedEndpointTypes []types.EndpointType `json:"supported_endpoint_types"`
+	// MaxInputTokens declares the model's context window for clients that read
+	// model metadata (Anthropic convention). Zero means undeclared.
+	MaxInputTokens int `json:"max_input_tokens,omitempty"`
+	// ContextLength carries the same declaration for OpenAI-compatible clients
+	// (OpenRouter convention). Always equals MaxInputTokens when set.
+	ContextLength int `json:"context_length,omitempty"`
 }
 
 type AnthropicModel struct {
@@ -16,6 +22,9 @@ type AnthropicModel struct {
 	CreatedAt   string `json:"created_at"`
 	DisplayName string `json:"display_name"`
 	Type        string `json:"type"`
+	// MaxInputTokens declares the model's context window for clients that read
+	// model metadata. Zero means undeclared.
+	MaxInputTokens int `json:"max_input_tokens,omitempty"`
 }
 
 type GeminiModel struct {
