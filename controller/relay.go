@@ -466,6 +466,10 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 			}
 			return nil, hosttypes.NewErrorWithStatusCode(errors.New(message), hosttypes.ErrorCodeInvalidRequest, http.StatusBadRequest, hosttypes.ErrOptionWithSkipRetry())
 		}
+		if errors.Is(err, model.ErrNoChannelSupportsRequestPath) {
+			message := i18n.T(c, i18n.MsgRelayNoChannelSupportsRequestPath, map[string]any{"Group": selectGroup, "Model": info.OriginModelName})
+			return nil, hosttypes.NewErrorWithStatusCode(errors.New(message), hosttypes.ErrorCodeInvalidRequest, http.StatusBadRequest, hosttypes.ErrOptionWithSkipRetry())
+		}
 		if common.GetContextKeyInt(c, constant.ContextKeyUserModelRouteId) > 0 {
 			return nil, hosttypes.NewError(errors.New(i18n.T(c, i18n.MsgRelayUserModelRouteNoAvailable)), hosttypes.ErrorCodeGetChannelFailed, hosttypes.ErrOptionWithSkipRetry())
 		}

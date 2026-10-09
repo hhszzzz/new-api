@@ -641,6 +641,7 @@ relay.get_channel_failed: "Failed to get an available channel for model {{.Model
 relay.playground_access_token_unsupported: "The playground does not support access tokens"
 relay.no_compatible_channel: "No channel supports the requested protocol or request features"
 relay.no_compatible_channel_reason: "No channel supports the requested protocol or request features: {{.Reason}}"
+relay.no_channel_supports_request_path: "No channel for model {{.Model}} under group {{.Group}} supports this request path"
 relay.request_body_too_large: "The request body is too large"
 
 # Setup messages

@@ -230,6 +230,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 	}
 
 	incompatibleCandidateSeen := false
+	pathUnsupportedSeen := false
 	for index := startGroupIndex; index < len(autoGroups); index++ {
 		autoGroup := autoGroups[index]
 		if !clientpolicy.IsGroupAllowed(autoGroup, client) {
@@ -258,6 +259,13 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 				param.SetRetry(0)
 				continue
 			}
+			if errors.Is(err, model.ErrNoChannelSupportsRequestPath) {
+				pathUnsupportedSeen = true
+				common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroupIndex, index+1)
+				common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroupRetryIndex, 0)
+				param.SetRetry(0)
+				continue
+			}
 			return nil, autoGroup, err
 		}
 		if channel == nil {
@@ -281,6 +289,9 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 
 	if incompatibleCandidateSeen {
 		return nil, selectGroup, model.ErrNoCompatibleChannel
+	}
+	if pathUnsupportedSeen {
+		return nil, selectGroup, model.ErrNoChannelSupportsRequestPath
 	}
 	return nil, selectGroup, nil
 }
@@ -456,6 +467,17 @@ func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam
 					selectErr.Params = map[string]any{"Reason": reason}
 				}
 				return nil, selectGroup, selectErr
+			}
+			if errors.Is(err, model.ErrNoChannelSupportsRequestPath) {
+				logger.LogWarn(c, fmt.Sprintf(
+					"no channel supports request path: group=%q model=%q path=%q",
+					usingGroup, modelName, retry.RequestPath,
+				))
+				return nil, selectGroup, &ChannelSelectError{
+					StatusCode: http.StatusBadRequest, Code: types.ErrorCodeInvalidRequest,
+					MessageID: i18n.MsgRelayNoChannelSupportsRequestPath,
+					Params:    map[string]any{"Group": usingGroup, "Model": modelName},
+				}
 			}
 			showGroup := usingGroup
 			if usingGroup == "auto" {

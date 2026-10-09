@@ -145,18 +145,25 @@ func GetRandomSatisfiedChannelInPoolWithClassifier(group string, model string, r
 
 	// First, try to find channels with the exact model name.
 	channels := filterChannelIdsByPool(group2model2channels[group][model], allowedChannelIds)
-	channels = filterChannelsByRequestPathAndModel(channels, requestPath, model)
-	channels = filterChannelIdsByCandidate(channels, candidateFilter)
+	pathEligible := filterChannelsByRequestPathAndModel(channels, requestPath, model)
+	pathUnsupported := requestPath != "" && len(pathEligible) == 0 && poolHasSchedulableChannel(channels)
+	channels = filterChannelIdsByCandidate(pathEligible, candidateFilter)
 
 	// If no channels found, try to find channels with the normalized model name.
 	if len(channels) == 0 {
 		normalizedModel := ratio_setting.RoutingMatchModelName(model)
 		channels = filterChannelIdsByPool(group2model2channels[group][normalizedModel], allowedChannelIds)
-		channels = filterChannelsByRequestPathAndModel(channels, requestPath, model)
-		channels = filterChannelIdsByCandidate(channels, candidateFilter)
+		pathEligible = filterChannelsByRequestPathAndModel(channels, requestPath, model)
+		if !pathUnsupported && requestPath != "" && len(pathEligible) == 0 && poolHasSchedulableChannel(channels) {
+			pathUnsupported = true
+		}
+		channels = filterChannelIdsByCandidate(pathEligible, candidateFilter)
 	}
 
 	if len(channels) == 0 {
+		if pathUnsupported {
+			return nil, ErrNoChannelSupportsRequestPath
+		}
 		return nil, nil
 	}
 	now := time.Now()
@@ -322,6 +329,23 @@ func filterChannelsByRequestPathAndModel(channels []int, requestPath string, mod
 		}
 	}
 	return filtered
+}
+
+// poolHasSchedulableChannel reports whether any candidate id still refers to a
+// schedulable channel. It mirrors the schedulability requirement of the
+// database selection path so both paths judge request-path support on the same
+// candidates. Caller must hold channelSyncLock (read lock).
+func poolHasSchedulableChannel(channels []int) bool {
+	if len(channels) == 0 {
+		return false
+	}
+	now := time.Now()
+	for _, channelId := range channels {
+		if channel, ok := channelsIDM[channelId]; ok && channel.IsSchedulableAt(now) {
+			return true
+		}
+	}
+	return false
 }
 
 func CacheGetChannel(id int) (*Channel, error) {

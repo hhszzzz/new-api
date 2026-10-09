@@ -642,6 +642,7 @@ relay.get_channel_failed: "取得分組 {{.Group}} 下模型 {{.Model}} 的可�
 relay.playground_access_token_unsupported: "Playground 暫不支援使用 access token"
 relay.no_compatible_channel: "沒有渠道支援所請求的協定或請求特性"
 relay.no_compatible_channel_reason: "沒有渠道支援所請求的協定或請求特性：{{.Reason}}"
+relay.no_channel_supports_request_path: "分組 {{.Group}} 下模型 {{.Model}} 不支援該請求路徑"
 relay.request_body_too_large: "請求內容過大"
 
 # Setup messages

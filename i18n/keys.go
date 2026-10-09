@@ -722,6 +722,7 @@ const (
 	MsgRelayPlaygroundAccessTokenUnsupported   = "relay.playground_access_token_unsupported"
 	MsgRelayNoCompatibleChannel                = "relay.no_compatible_channel"
 	MsgRelayNoCompatibleChannelReason          = "relay.no_compatible_channel_reason"
+	MsgRelayNoChannelSupportsRequestPath       = "relay.no_channel_supports_request_path"
 	MsgRelayRequestBodyTooLarge                = "relay.request_body_too_large"
 )
 

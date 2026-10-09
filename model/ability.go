@@ -46,6 +46,12 @@ type ChannelCandidateClassifier func(channel *Channel) ChannelCandidateClass
 
 var ErrNoCompatibleChannel = errors.New("no channel supports the requested protocol or request features")
 
+// ErrNoChannelSupportsRequestPath reports that channels exist for the group and
+// model, but every one of them was rejected by the request-path filter (an
+// Advanced Custom channel without a matching route). It is distinct from an
+// empty result so callers can explain the failure accurately.
+var ErrNoChannelSupportsRequestPath = errors.New("no channel supports the requested request path")
+
 // channelSelectionTier is one priority level in channel selection. Native and
 // convertible protocol classes share the same tier space: the configured
 // priority number alone decides ordering; the classifier only removes
@@ -134,20 +140,25 @@ func GetChannelInPoolWithFilter(group string, modelName string, retry int, reque
 }
 
 func GetChannelInPoolWithClassifier(group string, modelName string, retry int, requestPath string, channelIds []int, candidateFilter ChannelCandidateFilter, candidateClassifier ChannelCandidateClassifier) (*Channel, error) {
-	abilities, channels, err := findEligibleChannelAbilities(group, modelName, modelName, requestPath, channelIds, candidateFilter)
+	abilities, channels, pathUnsupported, err := findEligibleChannelAbilities(group, modelName, modelName, requestPath, channelIds, candidateFilter)
 	if err != nil {
 		return nil, err
 	}
 	if len(abilities) == 0 {
 		normalizedModel := ratio_setting.FormatMatchingModelName(modelName)
 		if normalizedModel != "" && normalizedModel != modelName {
-			abilities, channels, err = findEligibleChannelAbilities(group, normalizedModel, modelName, requestPath, channelIds, candidateFilter)
+			var normalizedPathUnsupported bool
+			abilities, channels, normalizedPathUnsupported, err = findEligibleChannelAbilities(group, normalizedModel, modelName, requestPath, channelIds, candidateFilter)
 			if err != nil {
 				return nil, err
 			}
+			pathUnsupported = pathUnsupported || normalizedPathUnsupported
 		}
 	}
 	if len(abilities) == 0 {
+		if pathUnsupported {
+			return nil, ErrNoChannelSupportsRequestPath
+		}
 		return nil, nil
 	}
 
@@ -265,8 +276,10 @@ func buildPriorityTiers(priorities map[int64]struct{}) []channelSelectionTier {
 
 // findEligibleChannelAbilities loads all priorities first, then removes
 // channels that cannot serve this request. Priority and weight selection must
-// only run over the remaining legal candidates.
-func findEligibleChannelAbilities(group, abilityModel, requestModel, requestPath string, channelIds []int, candidateFilter ChannelCandidateFilter) ([]Ability, map[int]*Channel, error) {
+// only run over the remaining legal candidates. The returned pathUnsupported
+// flag reports that usable candidates existed but every one was rejected by
+// the request-path check.
+func findEligibleChannelAbilities(group, abilityModel, requestModel, requestPath string, channelIds []int, candidateFilter ChannelCandidateFilter) ([]Ability, map[int]*Channel, bool, error) {
 	query := DB.Model(&Ability{}).
 		Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, abilityModel, true)
 	if channelIds != nil {
@@ -274,10 +287,10 @@ func findEligibleChannelAbilities(group, abilityModel, requestModel, requestPath
 	}
 	abilities := make([]Ability, 0)
 	if err := query.Order("priority DESC").Order("weight DESC").Find(&abilities).Error; err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	if len(abilities) == 0 {
-		return abilities, map[int]*Channel{}, nil
+		return abilities, map[int]*Channel{}, false, nil
 	}
 
 	ids := make([]int, 0, len(abilities))
@@ -291,10 +304,10 @@ func findEligibleChannelAbilities(group, abilityModel, requestModel, requestPath
 	}
 	channelRows := make([]*Channel, 0, len(ids))
 	if err := DB.Where("id IN ? AND status = ?", ids, common.ChannelStatusEnabled).Find(&channelRows).Error; err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	if err := HydrateChannelAggregateSnapshots(channelRows); err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	channels := make(map[int]*Channel, len(channelRows))
 	for _, channel := range channelRows {
@@ -305,23 +318,28 @@ func findEligibleChannelAbilities(group, abilityModel, requestModel, requestPath
 	}
 
 	filtered := make([]Ability, 0, len(abilities))
+	usableCandidates := 0
+	pathKept := 0
 	for _, ability := range abilities {
 		channel := channels[ability.ChannelId]
 		if channel == nil {
 			continue
 		}
+		usableCandidates++
 		if requestPath != "" && channel.Type == constant.ChannelTypeAdvancedCustom {
 			config := channel.GetOtherSettings().AdvancedCustom
 			if _, matched := channel.MatchAdvancedCustomRoute(requestPath, requestModel, config); !matched {
 				continue
 			}
 		}
+		pathKept++
 		if candidateFilter != nil && !candidateFilter(channel) {
 			continue
 		}
 		filtered = append(filtered, ability)
 	}
-	return filtered, channels, nil
+	pathUnsupported := requestPath != "" && usableCandidates > 0 && pathKept == 0
+	return filtered, channels, pathUnsupported, nil
 }
 
 // filterAbilitiesByRequestPathAndModel restricts candidates by request path and

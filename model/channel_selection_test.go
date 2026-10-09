@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -173,6 +174,66 @@ func TestChannelSelectionReportsWhenEveryCandidateIsProtocolIncompatible(t *test
 			)
 			assert.Nil(t, selected)
 			require.ErrorIs(t, err, ErrNoCompatibleChannel)
+		})
+	}
+}
+
+func TestChannelSelectionReportsWhenEveryCandidateRejectsRequestPath(t *testing.T) {
+	setupUserModelRouteTestDB(t)
+	originalMemoryCacheEnabled := common.MemoryCacheEnabled
+	t.Cleanup(func() { common.MemoryCacheEnabled = originalMemoryCacheEnabled })
+
+	const modelName = "path-gated-model"
+	const unmatchedModel = "path-gated-unmatched-model"
+	priority := int64(10)
+	// The Advanced Custom channel routes chat completions only, so an
+	// image-generation request matches no route and the channel is unusable.
+	require.NoError(t, DB.Create(&Channel{
+		Id:            51,
+		Name:          "advanced-custom-chat-only",
+		Key:           "key-advanced",
+		Type:          constant.ChannelTypeAdvancedCustom,
+		Status:        common.ChannelStatusEnabled,
+		Models:        modelName,
+		Group:         "default",
+		Priority:      &priority,
+		OtherSettings: `{"advanced_custom":{"advanced_routes":[{"incoming_path":"/v1/chat/completions","upstream_path":"/v1/chat/completions","target_protocol":"native","auth":{"type":"header","name":"Authorization","value":"Bearer {api_key}"}}]}}`,
+	}).Error)
+	require.NoError(t, DB.Create(&Ability{
+		Group:     "default",
+		Model:     modelName,
+		ChannelId: 51,
+		Enabled:   true,
+		Priority:  &priority,
+	}).Error)
+
+	for _, memoryCacheEnabled := range []bool{false, true} {
+		t.Run(map[bool]string{false: "database", true: "memory cache"}[memoryCacheEnabled], func(t *testing.T) {
+			common.MemoryCacheEnabled = memoryCacheEnabled
+			if memoryCacheEnabled {
+				InitChannelCache()
+			}
+
+			selected, err := GetRandomSatisfiedChannelInPoolWithClassifier(
+				"default", modelName, 0, "/v1/images/generations", nil, nil, nil,
+			)
+			assert.Nil(t, selected)
+			require.ErrorIs(t, err, ErrNoChannelSupportsRequestPath)
+
+			// A path the channel routes still selects the channel normally.
+			selected, err = GetRandomSatisfiedChannelInPoolWithClassifier(
+				"default", modelName, 0, "/v1/chat/completions", nil, nil, nil,
+			)
+			require.NoError(t, err)
+			require.NotNil(t, selected)
+			assert.Equal(t, 51, selected.Id)
+
+			// Without any ability for the model the plain empty result is unchanged.
+			selected, err = GetRandomSatisfiedChannelInPoolWithClassifier(
+				"default", unmatchedModel, 0, "/v1/images/generations", nil, nil, nil,
+			)
+			require.NoError(t, err)
+			assert.Nil(t, selected)
 		})
 	}
 }

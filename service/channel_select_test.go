@@ -8,9 +8,11 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -195,6 +197,86 @@ func autoGroupSelectionContext() *gin.Context {
 	context.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 	common.SetContextKey(context, constant.ContextKeyUserGroups, []string{"default", "vip"})
 	return context
+}
+
+const (
+	autoGroupSelectionChatOnlyRoutes = `[{"incoming_path":"/v1/chat/completions","upstream_path":"/v1/chat/completions","target_protocol":"native","auth":{"type":"header","name":"Authorization","value":"Bearer {api_key}"}}]`
+	autoGroupSelectionImageRoutes    = `[{"incoming_path":"/v1/images/generations","upstream_path":"/v1/images/generations","target_protocol":"native","auth":{"type":"header","name":"Authorization","value":"Bearer {api_key}"}}]`
+)
+
+func createAutoGroupSelectionAdvancedCustomChannel(t *testing.T, id int, group, modelName, routesJSON string) {
+	t.Helper()
+	priority := int64(10)
+	require.NoError(t, model.DB.Create(&model.Channel{
+		Id:            id,
+		Name:          group,
+		Key:           "test-key",
+		Type:          constant.ChannelTypeAdvancedCustom,
+		Status:        common.ChannelStatusEnabled,
+		Priority:      &priority,
+		OtherSettings: `{"advanced_custom":{"advanced_routes":` + routesJSON + `}}`,
+	}).Error)
+	require.NoError(t, model.DB.Create(&model.Ability{
+		Group:     group,
+		Model:     modelName,
+		ChannelId: id,
+		Enabled:   true,
+		Priority:  &priority,
+		Weight:    1,
+	}).Error)
+}
+
+func TestAutoGroupSelectionSkipsPathUnsupportedGroupsAndUsesLaterGroup(t *testing.T) {
+	setupAutoGroupSelectionTest(t)
+	createAutoGroupSelectionAdvancedCustomChannel(t, 351, "default", "path-routed-model", autoGroupSelectionChatOnlyRoutes)
+	createAutoGroupSelectionAdvancedCustomChannel(t, 352, "vip", "path-routed-model", autoGroupSelectionImageRoutes)
+	model.InitChannelCache()
+
+	selected, group, err := CacheGetRandomSatisfiedChannel(&RetryParam{
+		Ctx:         autoGroupSelectionContext(),
+		TokenGroup:  "auto",
+		ModelName:   "path-routed-model",
+		RequestPath: "/v1/images/generations",
+		Retry:       common.GetPointer(0),
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, selected)
+	assert.Equal(t, 352, selected.Id)
+	assert.Equal(t, "vip", group)
+}
+
+func TestAutoGroupSelectionReportsPathUnsupportedAfterCheckingAllGroups(t *testing.T) {
+	setupAutoGroupSelectionTest(t)
+	createAutoGroupSelectionAdvancedCustomChannel(t, 361, "default", "path-blocked-model", autoGroupSelectionChatOnlyRoutes)
+	createAutoGroupSelectionAdvancedCustomChannel(t, 362, "vip", "path-blocked-model", autoGroupSelectionChatOnlyRoutes)
+	model.InitChannelCache()
+
+	selected, _, err := CacheGetRandomSatisfiedChannel(&RetryParam{
+		Ctx:         autoGroupSelectionContext(),
+		TokenGroup:  "auto",
+		ModelName:   "path-blocked-model",
+		RequestPath: "/v1/images/generations",
+		Retry:       common.GetPointer(0),
+	})
+	assert.Nil(t, selected)
+	require.ErrorIs(t, err, model.ErrNoChannelSupportsRequestPath)
+
+	// The relay entrypoint surfaces the failure as a request error instead of a
+	// retryable no-capacity condition.
+	context := autoGroupSelectionContext()
+	channel, _, selectErr := SelectChannelForRequest(context, "path-blocked-model", &RetryParam{
+		Ctx:         context,
+		TokenGroup:  "auto",
+		ModelName:   "path-blocked-model",
+		RequestPath: "/v1/images/generations",
+		Retry:       common.GetPointer(0),
+	})
+	assert.Nil(t, channel)
+	require.NotNil(t, selectErr)
+	assert.Equal(t, http.StatusBadRequest, selectErr.StatusCode)
+	assert.Equal(t, types.ErrorCodeInvalidRequest, selectErr.Code)
+	assert.Equal(t, i18n.MsgRelayNoChannelSupportsRequestPath, selectErr.MessageID)
 }
 
 func TestPinnedTaskPluginChannelTypesUsesPinnedGenerationIndex(t *testing.T) {
