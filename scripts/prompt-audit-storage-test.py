@@ -20,6 +20,74 @@ installer = load_script("audit_installer", "install-prompt-audit-storage.py")
 
 
 class PromptAuditHostContracts(unittest.TestCase):
+    def test_cli_and_dump_workers_bound_resources_and_keep_credentials_private(self):
+        app = {"Image": "sha256:app", "Config": {"Env": ["SQL_DSN=postgres://operator:fake-secret@database/audits?sslmode=require", "SESSION_SECRET=unused"]},
+               "NetworkSettings": {"Networks": {"shared": {}}},
+               "Mounts": [{"Type": "bind", "Source": "/host/data", "Destination": "/data", "RW": True}]}
+        database = {"Image": "sha256:postgres", "NetworkSettings": {"Networks": {"shared": {}}}}
+        for role in ("cli", "pg-dump"):
+            with self.subTest(role=role), tempfile.TemporaryDirectory() as directory:
+                config = dict(storage.DEFAULTS, HOST_ROOT=directory)
+                forwarded = storage.maintenance_command(config, role, "stats")
+                configuration = Path(forwarded[forwarded.index("--worker-config")+1])
+                self.assertEqual(json.loads(configuration.read_text())["HOST_ROOT"], directory)
+                self.assertEqual(configuration.stat().st_mode & 0o777, 0o600)
+                captured = []
+
+                def start(arguments):
+                    environment = Path(arguments[arguments.index("--env-file")+1])
+                    self.assertEqual(environment.stat().st_mode & 0o777, 0o600)
+                    self.assertIn("fake-secret", environment.read_text())
+                    self.assertNotIn("unused", environment.read_text())
+                    self.assertNotIn("fake-secret", " ".join(arguments))
+                    self.assertEqual(arguments[arguments.index("--cpus")+1], "0.35")
+                    memory = "512m" if role == "cli" else "256m"
+                    self.assertEqual(arguments[arguments.index("--memory")+1], memory)
+                    self.assertEqual(arguments[arguments.index("--memory-swap")+1], memory)
+                    self.assertEqual(arguments[arguments.index("--log-driver")+1], "none")
+                    self.assertEqual(arguments[arguments.index("--network")+1], "shared")
+                    self.assertIn("/host/data:/data:"+("rw" if role == "cli" else "ro"), arguments)
+                    if role == "pg-dump":
+                        self.assertIn("PGSSLMODE=require", environment.read_text())
+                        self.assertIn("--snapshot=fixture-snapshot", arguments)
+                    captured.append(arguments)
+                    process = Mock()
+                    process.wait.return_value = 0
+                    process.poll.return_value = 0
+                    return process
+
+                replies = [json.dumps([app]).encode(), json.dumps([database]).encode()]
+                with patch.object(storage, "run", side_effect=replies), patch.object(storage.subprocess, "Popen", side_effect=start), patch.object(storage, "cleanup_workers") as cleaned:
+                    storage.maintenance_worker(config, role, ["stats"] if role == "cli" else ["--snapshot=fixture-snapshot"])
+                self.assertEqual(len(captured), 1)
+                self.assertTrue(cleaned.call_args.kwargs["worker_name"].startswith("audit-worker-"))
+
+    def test_worker_completion_does_not_kill_live_snapshot_or_unrelated_container(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = dict(storage.DEFAULTS, HOST_ROOT=directory)
+            root = Path(directory)/"workers"; root.mkdir()
+            exporter, dump = "audit-worker-"+"a"*32, "audit-worker-"+"b"*32
+            for name in (exporter, dump):
+                storage.write_json(root/(name+".json"), {"pid": os.getpid(), "invocation": "same-unit"})
+                (root/(name+".env")).write_text("private environment")
+            inspected = Mock(returncode=0, stdout=json.dumps([{"Id": "owned-dump", "Config": {"Labels": {"new-api.prompt-audit-worker": dump}}}]).encode())
+            with patch.object(storage.subprocess, "run", side_effect=[inspected, Mock(returncode=0)]) as command:
+                storage.cleanup_workers(config, worker_name=dump)
+            self.assertEqual(command.call_args_list[1].args[0], ["docker", "rm", "-f", "owned-dump"])
+            self.assertTrue((root/(exporter+".json")).exists())
+            self.assertTrue((root/(exporter+".env")).exists())
+            self.assertFalse((root/(dump+".json")).exists())
+            unrelated = Mock(returncode=0, stdout=json.dumps([{"Id": "unrelated", "Config": {"Labels": None}}]).encode())
+            with patch.object(storage.subprocess, "run", return_value=unrelated) as command:
+                storage.cleanup_workers(config, invocation="same-unit")
+            self.assertEqual(command.call_count, 1)
+            self.assertTrue((root/(exporter+".json")).exists())
+            unavailable = Mock(returncode=1, stdout=b"", stderr=b"Cannot connect to the Docker daemon")
+            with patch.object(storage.subprocess, "run", return_value=unavailable):
+                with self.assertRaisesRegex(RuntimeError, "cleanup marker retained"):
+                    storage.cleanup_workers(config, invocation="same-unit")
+            self.assertTrue((root/(exporter+".env")).exists())
+
     def test_busy_host_defers_maintenance_without_changing_jobs(self):
         with patch.object(storage.os, "getloadavg", return_value=(8, 3, 1)), patch.object(storage.os, "cpu_count", return_value=3):
             self.assertFalse(storage.maintenance_resources_available())

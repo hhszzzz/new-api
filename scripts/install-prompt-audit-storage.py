@@ -2,6 +2,7 @@
 """Prepare CCS integration; --apply writes it, --activate enables daily archives."""
 import argparse
 import datetime as dt
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -15,7 +16,7 @@ def patch_backup(text):
     invocation = '    /usr/local/bin/ccs-prompt-audit-storage.py backup --stage "$STAGE"'
     bounded = '    systemd-run --quiet --wait --pipe --collect -p MemoryHigh=384M -p MemoryMax=512M -p CPUQuota=50% -p RuntimeMaxSec=7200 -p Nice=15 -p IOSchedulingClass=idle /usr/local/bin/ccs-prompt-audit-storage.py backup --stage "$STAGE"'
     if "# prompt-audit independent daily archive" in text:
-        text = text.replace(invocation, bounded)
+        text = text.replace(bounded, invocation)
     else:
         dump = '  docker exec newapi-postgres pg_dump -U newapi -d newapi 2>/dev/null | gzip > "$STAGE/newapi-postgres.sql.gz"'
         replacement = '''  # prompt-audit independent daily archive (the existing 03:00 timer is retained)
@@ -28,7 +29,13 @@ def patch_backup(text):
         revised = 'if { [ ! -s "$STAGE/newapi-postgres.sql.gz" ] && [ ! -s "$STAGE/newapi-postgres.dump" ]; } || [ ! -d "$STAGE/etc/caddy" ]; then'
         if text.count(dump) != 1 or text.count(sanity) != 1:
             raise RuntimeError("the existing CCS backup script differs from the reviewed version")
-        text = text.replace(dump, replacement).replace(sanity, revised).replace(invocation, bounded)
+        text = text.replace(dump, replacement).replace(sanity, revised)
+    legacy_dump = '    docker exec newapi-postgres pg_dump -U newapi -d newapi 2>/dev/null | gzip > "$STAGE/newapi-postgres.sql.gz"'
+    full_dump = '    /usr/local/bin/ccs-prompt-audit-storage.py database-backup --stage "$STAGE" || { rm -rf "$WORK"; exit 1; }'
+    if legacy_dump in text:
+        text = text.replace(legacy_dump, full_dump)
+    elif full_dump not in text:
+        raise RuntimeError("the reviewed full database backup branch could not be identified")
     if "# prompt-audit verified transfer adapter" not in text:
         transfer = 'BPC="/usr/local/bin/BaiduPCS-Go"'
         if text.count(transfer) != 1:
@@ -99,8 +106,10 @@ Nice=15
 IOSchedulingClass=idle
 MemoryHigh=384M
 MemoryMax=512M
+MemorySwapMax=0
 CPUQuota=50%
 ExecStart=/usr/local/bin/ccs-prompt-audit-storage.py {command}
+ExecStopPost=/usr/local/bin/ccs-prompt-audit-storage.py cleanup-workers
 TimeoutStartSec=7200
 '''
 
@@ -137,13 +146,19 @@ def main():
     for command, interval in (("import-jobs", 1), ("disk-check", 5)):
         changes[f"etc/systemd/system/ccs-prompt-audit-{command}.service"] = unit(command)
         changes[f"etc/systemd/system/ccs-prompt-audit-{command}.timer"] = timer(command, interval)
-    changes["etc/systemd/system/ccs-backup.service.d/prompt-audit.conf"] = "[Service]\nMemoryHigh=384M\nMemoryMax=512M\nCPUQuota=50%\nNice=15\nIOSchedulingClass=idle\nTimeoutStartSec=7200\n"
+    changes["etc/systemd/system/ccs-backup.service.d/prompt-audit.conf"] = "[Service]\nMemoryHigh=384M\nMemoryMax=512M\nMemorySwapMax=0\nCPUQuota=50%\nNice=15\nIOSchedulingClass=idle\nTimeoutStartSec=7200\nExecStopPost=/usr/local/bin/ccs-prompt-audit-storage.py cleanup-workers\n"
     subprocess.run(["bash", "-n"], input=changes["usr/local/bin/ccs-backup.sh"], text=True, capture_output=True, check=True)
     if args.activate:
         if root != Path("/") or not args.apply:
             parser.error("--activate requires --apply on the host")
-        response = subprocess.run(["docker", "exec", "newapi-app", "/new-api", "prompt-audit", "stats"], capture_output=True, check=True, text=True)
-        stats = json.loads(response.stdout.splitlines()[-1])
+        spec = importlib.util.spec_from_file_location("audit_storage", Path(__file__).with_name("prompt-audit-storage.py"))
+        storage = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(storage)
+        config = storage.configuration()
+        app = json.loads(storage.run(["docker", "inspect", config["APP_CONTAINER"]]))[0]
+        if "PROMPT_AUDIT_IMPORT_DIR="+config["CONTAINER_ROOT"]+"/imports" not in app["Config"]["Env"]:
+            raise RuntimeError("recreate the application with its import directory before activation")
+        stats = storage.cli(config, "stats")
         if not stats["shared_enabled"] or stats["unmigrated"] or stats["legacy_bytes"]:
             raise RuntimeError("complete the second migration pass after restarting the application")
         changes["etc/ccs-prompt-audit-storage.enabled"] = "enabled after migration\n"

@@ -8,11 +8,15 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
+import signal
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
+from urllib.parse import parse_qsl, unquote, urlsplit
 
 DEFAULTS = {
     "APP_CONTAINER": "newapi-app", "APP_BINARY": "/new-api",
@@ -68,9 +72,129 @@ def run(arguments, **kwargs):
 
 
 def audit_command(config, *arguments, input_stream=False):
-    return ["docker", "exec", *(["-i"] if input_stream else []),
-            "-e", "GOMAXPROCS=1", "-e", "GOMEMLIMIT=256MiB",
-            config["APP_CONTAINER"], "nice", "-n", "15", config["APP_BINARY"], "prompt-audit", *arguments]
+    return maintenance_command(config, "cli", *arguments)
+
+
+def maintenance_command(config, role, *arguments):
+    root = Path(config["HOST_ROOT"])/"workers"
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    values = {key: config[key] for key in DEFAULTS}
+    path = root/("worker-config-"+uuid.uuid4().hex+".json")
+    write_json(path, values)
+    return [sys.executable, str(Path(__file__).resolve()), "worker", "--role", role,
+            "--worker-config", str(path), "--", *arguments]
+
+
+def cleanup_workers(config, invocation=None, worker_name=None):
+    root = Path(config["HOST_ROOT"])/"workers"
+    if not root.exists():
+        return
+    for marker in root.glob("audit-worker-*.json"):
+        if marker.is_symlink() or not re.fullmatch(r"audit-worker-[a-f0-9]{32}\.json", marker.name):
+            continue
+        record = json.loads(marker.read_text())
+        name = marker.stem
+        if worker_name and worker_name != name:
+            continue
+        if invocation:
+            if record.get("invocation") != invocation:
+                continue
+        elif not worker_name and Path("/proc/"+str(record["pid"])).exists():
+            continue
+        inspected = subprocess.run(["docker", "inspect", name], capture_output=True, timeout=15)
+        if inspected.returncode == 0:
+            container = json.loads(inspected.stdout)[0]
+            if (container["Config"].get("Labels") or {}).get("new-api.prompt-audit-worker") != name:
+                continue
+            subprocess.run(["docker", "rm", "-f", container["Id"]], check=True, timeout=20,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        elif b"no such object" not in inspected.stderr.lower() and b"no such container" not in inspected.stderr.lower():
+            raise RuntimeError("Docker worker inspection failed; cleanup marker retained")
+        (root/(name+".env")).unlink(missing_ok=True)
+        marker.unlink()
+    for path in root.glob("worker-config-*.json"):
+        if not path.is_symlink() and re.fullmatch(r"worker-config-[a-f0-9]{32}\.json", path.name) and time.time()-path.stat().st_mtime > 86400:
+            path.unlink()
+
+
+def maintenance_worker(config, role, arguments):
+    app = json.loads(run(["docker", "inspect", config["APP_CONTAINER"]]))[0]
+    database = json.loads(run(["docker", "inspect", config["DB_CONTAINER"]]))[0]
+    networks = sorted(set(app["NetworkSettings"]["Networks"]) & set(database["NetworkSettings"]["Networks"]))
+    if not networks:
+        raise RuntimeError("the application and database have no shared maintenance network")
+    environment = dict(item.split("=", 1) for item in app["Config"]["Env"] if "=" in item)
+    values = {key: environment[key] for key in ("SQL_DSN", "SQLITE_PATH") if key in environment}
+    image, memory = app["Image"], "512m"
+    entrypoint, command = "nice", ["-n", "15", config["APP_BINARY"], "prompt-audit", *arguments]
+    if role == "pg-dump":
+        dsn = environment.get("SQL_DSN", "")
+        parsed = urlsplit(dsn)
+        if parsed.scheme in ("postgres", "postgresql"):
+            settings = dict(host=parsed.hostname or config["DB_CONTAINER"], port=str(parsed.port or 5432),
+                            user=unquote(parsed.username or config["DB_USER"]),
+                            password=unquote(parsed.password or ""), dbname=unquote(parsed.path.lstrip("/")))
+            settings.update(parse_qsl(parsed.query))
+        else:
+            settings = dict(item.split("=", 1) for item in shlex.split(dsn) if "=" in item)
+        if not settings.get("host") or not settings.get("dbname"):
+            raise RuntimeError("the application PostgreSQL connection could not be identified")
+        keys = {"host": "PGHOST", "hostaddr": "PGHOSTADDR", "port": "PGPORT", "user": "PGUSER",
+                "password": "PGPASSWORD", "dbname": "PGDATABASE", "sslmode": "PGSSLMODE",
+                "sslrootcert": "PGSSLROOTCERT", "sslcert": "PGSSLCERT", "sslkey": "PGSSLKEY",
+                "sslcrl": "PGSSLCRL", "sslcrldir": "PGSSLCRLDIR", "channel_binding": "PGCHANNELBINDING",
+                "ssl_min_protocol_version": "PGSSLMINPROTOCOLVERSION", "ssl_max_protocol_version": "PGSSLMAXPROTOCOLVERSION",
+                "connect_timeout": "PGCONNECT_TIMEOUT", "target_session_attrs": "PGTARGETSESSIONATTRS",
+                "options": "PGOPTIONS"}
+        values = {keys[key]: value for key, value in settings.items() if key in keys}
+        image, memory, entrypoint = database["Image"], "256m", "pg_dump"
+        command = ["-Fc", "-Z", "1", "--no-owner", "--no-privileges", *arguments]
+    if any("\n" in value or "\r" in value for value in values.values()):
+        raise RuntimeError("maintenance environment contains an unsupported line break")
+    root = Path(config["HOST_ROOT"])/"workers"
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    name = "audit-worker-"+uuid.uuid4().hex
+    environment_file, marker = root/(name+".env"), root/(name+".json")
+    with environment_file.open("w") as file:
+        os.chmod(environment_file, 0o600)
+        file.write("".join(key+"="+value+"\n" for key, value in values.items()))
+    invocation = os.environ.get("INVOCATION_ID", "")
+    write_json(marker, {"pid": os.getpid(), "invocation": invocation})
+    arguments = ["docker", "run", "--rm", "--log-driver", "none", "--name", name,
+                 "--label", "new-api.prompt-audit-worker="+name, "--cpus", "0.35",
+                 "--memory", memory, "--memory-swap", memory, "--network", networks[0],
+                 "--env-file", str(environment_file), "-e", "GOMAXPROCS=1", "-e", "GOMEMLIMIT=256MiB"]
+    if role == "cli":
+        arguments.append("-i")
+    for mount in app.get("Mounts", []):
+        if mount["Type"] not in ("bind", "volume"):
+            continue
+        source = mount["Name"] if mount["Type"] == "volume" else mount["Source"]
+        mode = "rw" if role == "cli" and mount.get("RW", False) else "ro"
+        arguments.extend(["--volume", source+":"+mount["Destination"]+":"+mode])
+    arguments.extend(["--entrypoint", entrypoint, image, *command])
+
+    def interrupted(signum, frame):
+        raise SystemExit(128+signum)
+
+    previous = {sig: signal.signal(sig, interrupted) for sig in (signal.SIGTERM, signal.SIGINT)}
+    process = None
+    try:
+        process = subprocess.Popen(arguments)
+        status = process.wait()
+        if status:
+            raise RuntimeError("bounded maintenance container failed")
+    finally:
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+        cleanup_workers(config, worker_name=name)
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
 
 
 def cli(config, *arguments):
@@ -232,7 +356,7 @@ def backup(config, stage):
             dump = Path(stage)/"newapi-postgres.dump"
             with dump.open("wb") as file:
                 os.chmod(dump, 0o600)
-                result = subprocess.run(["docker", "exec", config["DB_CONTAINER"], "pg_dump", "-Fc", "-U", config["DB_USER"], "-d", config["DB_NAME"], "--snapshot="+snapshot["snapshot"], *exclusions], stdout=file, stderr=subprocess.DEVNULL)
+                result = subprocess.run(maintenance_command(config, "pg-dump", "--snapshot="+snapshot["snapshot"], *exclusions), stdout=file, stderr=subprocess.DEVNULL)
             if result.returncode or not dump.stat().st_size:
                 raise RuntimeError("consistent database snapshot backup failed")
             release.touch(mode=0o600)
@@ -256,7 +380,12 @@ def backup(config, stage):
             try:
                 exporter.wait(timeout=10)
             except subprocess.TimeoutExpired:
-                exporter.kill(); exporter.wait()
+                exporter.terminate()
+                try:
+                    exporter.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    exporter.kill(); exporter.wait()
+        cleanup_workers(config)
         shutil.rmtree(work)
 
 
@@ -368,11 +497,59 @@ def maintenance_resources_available():
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["backup", "import-jobs", "disk-check"])
+    parser.add_argument("command", choices=["backup", "import-jobs", "disk-check", "worker", "cleanup-workers", "database-backup"])
     parser.add_argument("--stage")
-    args = parser.parse_args()
+    parser.add_argument("--role", choices=["cli", "pg-dump"])
+    parser.add_argument("--worker-config")
+    args, arguments = parser.parse_known_args()
     config = configuration()
+    if args.command == "worker" and args.worker_config:
+        values = json.loads(Path(args.worker_config).read_text())
+        config.update({key: value for key, value in values.items() if key in DEFAULTS})
     root = Path(config["HOST_ROOT"]); root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if args.command == "worker":
+        if not args.role:
+            parser.error("worker requires --role")
+        try:
+            maintenance_worker(config, args.role, arguments[1:] if arguments[:1] == ["--"] else arguments)
+        finally:
+            if args.worker_config:
+                Path(args.worker_config).unlink(missing_ok=True)
+        return
+    if arguments:
+        parser.error("unexpected maintenance arguments")
+    if args.command == "cleanup-workers":
+        cleanup_workers(config, os.environ.get("INVOCATION_ID") or None)
+        return
+    cleanup_workers(config)
+    if args.command == "database-backup":
+        if not args.stage:
+            parser.error("database-backup requires --stage")
+        path = Path(args.stage)/"newapi-postgres.dump"
+        if not maintenance_resources_available() or shutil.disk_usage(root).free < 1536 << 20:
+            raise RuntimeError("full database backup requires host headroom")
+        process = None
+        try:
+            with path.open("wb") as file:
+                os.chmod(path, 0o600)
+                process = subprocess.Popen(maintenance_command(config, "pg-dump"), stdout=file, stderr=subprocess.DEVNULL)
+                while process.poll() is None:
+                    if shutil.disk_usage(root).free < 1536 << 20:
+                        raise RuntimeError("full database backup stopped before disk headroom was exhausted")
+                    time.sleep(1)
+            if process.returncode or not path.stat().st_size:
+                raise RuntimeError("bounded full database backup failed")
+            if shutil.disk_usage(root).free < path.stat().st_size+(1536 << 20):
+                raise RuntimeError("insufficient space to encrypt the complete core backup")
+        finally:
+            if process is not None and process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    process.kill(); process.wait()
+            cleanup_workers(config)
+        return
     # Backup and viewing imports share one heavy-task lock; disk alerts still run.
     lock_name = "disk-check.lock" if args.command == "disk-check" else "body-maintenance.lock"
     with (root/lock_name).open("w") as lock, (root/"host-backup.lock").open("w") as host_lock:
