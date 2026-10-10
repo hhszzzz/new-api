@@ -165,13 +165,23 @@ export function AdvancedLimitsSection({
           id: 'prompt-audit-retention',
           key: 'retention_days',
           label: t('Retention (days)'),
-          min: 0,
-          max: 3650,
-          description: t('Use 0 to retain full prompt text permanently.'),
+          min: config.shared_content_enabled ? 7 : 0,
+          max: config.shared_content_enabled ? 7 : 3650,
+          description: config.shared_content_enabled
+            ? t(
+                'Complete bodies stay locally for seven days and are removed only after archive verification.'
+              )
+            : t('Use 0 to retain full prompt text permanently.'),
           full: true,
         },
       ],
-      footer: (
+      footer: config.shared_content_enabled ? (
+        <p className='text-muted-foreground text-sm'>
+          {t(
+            'Shared storage keeps complete request and reply bodies without truncation.'
+          )}
+        </p>
+      ) : (
         <StoredPromptLimitField
           value={config.full_prompt_max_runes}
           onChange={(full_prompt_max_runes) =>

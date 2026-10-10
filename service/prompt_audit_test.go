@@ -502,13 +502,16 @@ func TestPromptAuditFullRetentionPreservesLargeRecords(t *testing.T) {
 			}
 			var saved model.PromptAudit
 			require.NoError(t, db.Order("id desc").First(&saved).Error)
-			assert.Equal(t, fullText, string(saved.FullPrompt))
+			assert.True(t, output == string(saved.FullPrompt), "output records retain the complete reply alone")
 			assert.True(t, bytes.Equal(payload, saved.ScanPayload), "retained payload must match complete captured content")
 			assert.False(t, saved.FullPromptTruncated)
 			assert.False(t, saved.ScanPayloadTruncated)
 			response := saved.ToResponse(true)
 			require.NotNil(t, response.ScanPayload)
-			assert.True(t, string(payload) == *response.ScanPayload, "the detail response must contain the complete snapshot")
+			var visible promptAuditPayload
+			require.NoError(t, common.UnmarshalJsonStr(*response.ScanPayload, &visible))
+			assert.True(t, output == visible.Output, "details retain the complete reply")
+			assert.Empty(t, visible.Segments, "request context is reachable through the related request")
 			assert.False(t, response.ScanPayloadTruncated)
 			assert.Nil(t, saved.ToResponse(false).ScanPayload)
 			if kind != "asynchronous" {
@@ -532,9 +535,45 @@ func TestPromptAuditFullRetentionPreservesLargeRecords(t *testing.T) {
 			assert.False(t, completed.ScanPayloadTruncated)
 			response = completed.ToResponse(true)
 			require.NotNil(t, response.ScanPayload)
-			assert.True(t, string(payload) == *response.ScanPayload, "completed content must remain fully readable")
+			require.NoError(t, common.UnmarshalJsonStr(*response.ScanPayload, &visible))
+			assert.True(t, output == visible.Output, "completed replies remain fully readable")
+			assert.Empty(t, visible.Segments)
 		})
 	}
+	t.Run("shared_original_and_inspected_views", func(t *testing.T) {
+		require.NoError(t, model.MigratePromptAuditStorage(db))
+		shared := configured
+		shared.SharedContentEnabled = true
+		shared.PublishConfig()
+		for _, direction := range []string{PromptAuditDirectionInput, PromptAuditDirectionOutput} {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+			request := preparePromptAuditRequest(c, PromptAuditRequest{Direction: direction, Output: output, CoverageComplete: true, Snapshot: dto.PromptAuditSnapshot{Segments: []dto.PromptAuditSegment{{Role: "system", Scope: dto.PromptScopeSystem, Text: "original system rules"}, {Role: "user", Scope: dto.PromptScopeUser, User: true, Text: input}}}})
+			if direction == PromptAuditDirectionInput {
+				request.OriginalOutput, request.Output = "", ""
+			}
+			request.Snapshot.Segments = []dto.PromptAuditSegment{{Role: "user", Scope: dto.PromptScopeUser, User: true, Text: "normalized request"}}
+			if direction == PromptAuditDirectionOutput {
+				request.Output = "normalized reply"
+			}
+			RecordPromptAuditStored(c, request)
+			var saved model.PromptAudit
+			require.NoError(t, db.Order("id desc").First(&saved).Error)
+			assert.Empty(t, saved.FullPrompt)
+			loaded, err := model.GetPromptAudit(saved.ID)
+			require.NoError(t, err)
+			if direction == PromptAuditDirectionInput {
+				assert.Equal(t, "original system rules\n\n"+input, string(loaded.FullPrompt))
+				assert.Contains(t, string(loaded.ScanPayload), "normalized request")
+			} else {
+				assert.Equal(t, output, *loaded.ToResponse(true).FullPrompt)
+				assert.NotContains(t, *loaded.ToResponse(true).ScanPayload, "normalized request")
+				require.NoError(t, model.LoadPromptAuditContent(db, &saved, true))
+				assert.Contains(t, string(saved.ScanPayload), "normalized request")
+				assert.Contains(t, string(saved.ScanPayload), "normalized reply")
+			}
+		}
+	})
 	t.Run("configured_limit", func(t *testing.T) {
 		limit := 2048
 		configured.FullPromptMaxRunes = &limit

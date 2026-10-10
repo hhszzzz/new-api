@@ -26,6 +26,8 @@ import { getPromptAuditProtocolName, PROMPT_AUDIT_PROTOCOLS } from '../lib'
 const SOURCE_FILES = [
   '../settings.tsx',
   '../records.tsx',
+  '../storage.tsx',
+  '../components/archive-import-dialog.tsx',
   '../wordlists.tsx',
   '../scopes.ts',
   '../lib.ts',

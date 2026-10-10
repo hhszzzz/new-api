@@ -27,6 +27,7 @@ import {
   getPromptAuditProtocolName,
   isMergedPromptAuditRow,
   PROMPT_AUDIT_PROTOCOLS,
+  promptAuditBodyText,
   promptAuditContentKindLabel,
   promptAuditDeleteFilter,
   promptAuditEndpointBaseURLUpdate,
@@ -453,6 +454,30 @@ describe('prompt audit management helpers', () => {
         blocks: ['Generated text'],
       },
     ])
+  })
+
+  test('copies and exports the complete original reply while the inspected view can differ', () => {
+    const reply = `${'原始回复🙂\n'.repeat(10000)}complete ending`
+    const event = {
+      direction: 'output',
+      content_state: 'hot',
+      full_prompt: reply,
+      scan_payload: JSON.stringify({ output: 'transformed inspection text' }),
+    } as PromptAuditEvent
+    expect(promptAuditBodyText(event)).toBe(reply)
+  })
+
+  test('extracts only a reply from a legacy mixed snapshot and hides an inseparable snapshot', () => {
+    const event = {
+      direction: 'output',
+      full_prompt: 'question and reply',
+      scan_payload: JSON.stringify({
+        segments: [{ text: 'question' }],
+        output: 'reply',
+      }),
+    } as PromptAuditEvent
+    expect(promptAuditBodyText(event)).toBe('reply')
+    expect(promptAuditBodyText({ ...event, scan_payload: undefined })).toBe('')
   })
 
   test('keeps an output record input blocks and names its reply apart', () => {

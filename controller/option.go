@@ -240,6 +240,10 @@ func UpdateOption(c *gin.Context) {
 		})
 		return
 	}
+	if option.Key == "prompt_audit.shared_content_enabled" {
+		common.ApiErrorMsg(c, "shared audit storage must be changed through prompt audit settings after migration")
+		return
+	}
 	option.Value = normalizeOptionValue(option.Value)
 	if ratio_setting.IsPricingOptionKey(option.Key) {
 		if err := validateModelPricingOption(option.Key, option.Value.(string)); err != nil {

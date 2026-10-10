@@ -46,6 +46,26 @@ func TestPromptAuditEndpointTokensAreWriteOnlyAndSurviveIDRename(t *testing.T) {
 	assert.Empty(t, cleared[0].Token)
 }
 
+func TestPromptAuditStorageCannotBypassMigrationThroughGenericOptions(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, value := range []string{"true", "false"} {
+		t.Run(value, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			context, _ := gin.CreateTestContext(recorder)
+			context.Request = httptest.NewRequest(http.MethodPut, "/api/option", strings.NewReader(`{"key":"prompt_audit.shared_content_enabled","value":`+value+`}`))
+			UpdateOption(context)
+			assert.Equal(t, http.StatusOK, recorder.Code)
+			var response struct {
+				Success bool   `json:"success"`
+				Message string `json:"message"`
+			}
+			require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+			assert.False(t, response.Success)
+			assert.Contains(t, response.Message, "after migration")
+		})
+	}
+}
+
 func TestPromptAuditEndpointURLChangeCannotForwardStoredToken(t *testing.T) {
 	current := []prompt_audit_setting.Endpoint{{
 		ID: "primary", BaseURL: "https://guard.example.com/v1", Token: "top-secret-token",

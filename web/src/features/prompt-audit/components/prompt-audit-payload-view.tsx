@@ -38,7 +38,10 @@ export function PromptAuditPayloadView(props: {
   displayHeight?: number
 }) {
   const { t } = useTranslation()
-  const sources = promptAuditPayloadSources(props.payload)
+  const allSources = promptAuditPayloadSources(props.payload)
+  const sources = props.preferOutput
+    ? allSources.filter((source) => source.output)
+    : allSources
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const defaultSource = props.preferOutput
     ? (sources.find((source) => source.output) ?? sources[0])

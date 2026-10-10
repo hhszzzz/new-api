@@ -7,10 +7,12 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/setting/prompt_audit_setting"
 	"github.com/gin-gonic/gin"
 )
 
@@ -178,6 +180,11 @@ func (entry *promptAuditGroupEntry) recordSummary(fingerprint, key string, now t
 // Grouping is only presentation metadata. It never determines which content is
 // inspected or permits reusing a verdict for a different payload.
 func preparePromptAuditRequest(c *gin.Context, request PromptAuditRequest) PromptAuditRequest {
+	if request.OriginalSnapshot == nil {
+		snapshot := request.Snapshot
+		snapshot.Segments = append([]dto.PromptAuditSegment(nil), snapshot.Segments...)
+		request.OriginalSnapshot, request.OriginalOutput = &snapshot, request.Output
+	}
 	if request.groupPrepared || request.GroupKey != "" {
 		return request
 	}
@@ -310,6 +317,23 @@ func preparePromptAuditRequest(c *gin.Context, request PromptAuditRequest) Promp
 
 func setPromptAuditInputContext(audit *model.PromptAudit, request PromptAuditRequest) {
 	audit.GroupKey, audit.SessionKey, audit.RequestKind = request.GroupKey, request.SessionKey, request.RequestKind
+	snapshot, output := request.Snapshot, request.Output
+	if request.OriginalSnapshot != nil {
+		snapshot, output = *request.OriginalSnapshot, request.OriginalOutput
+	}
+	if prompt_audit_setting.GetSetting().SharedContentEnabled {
+		audit.RawPayload, _ = common.Marshal(promptAuditPayload{Version: 1, Direction: audit.Direction, CoverageComplete: audit.CoverageComplete, Segments: snapshot.OrderedSegments(), Output: output})
+		if audit.Direction != PromptAuditDirectionOutput {
+			originalText := promptAuditJoinedText(dto.PromptAuditSnapshot{Segments: snapshot.OrderedSegments()}, output)
+			setPromptAuditContent(audit, originalText, 0)
+			audit.PromptLength = utf8.RuneCountInString(originalText)
+		}
+	}
+	if audit.Direction == PromptAuditDirectionOutput {
+		setPromptAuditContent(audit, output, prompt_audit_setting.GetSetting().FullPromptRetentionLimit())
+		audit.PromptLength = utf8.RuneCountInString(output)
+		return
+	}
 	if request.HumanPrompt != "" {
 		value := redactPromptAuditText(request.HumanPrompt)
 		runes := []rune(strings.TrimSpace(value))

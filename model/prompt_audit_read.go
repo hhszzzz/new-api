@@ -186,12 +186,12 @@ func ListPromptAuditGroupContent(filter PromptAuditFilter, representativeID int6
 		ids = append(ids, item.ID)
 	}
 	var previews []PromptAudit
-	if err := DB.Select("id, redacted_preview").Where("id IN ?", ids).Find(&previews).Error; err != nil {
+	if err := DB.Select("id, direction, content_manifest, redacted_preview").Where("id IN ?", ids).Find(&previews).Error; err != nil {
 		return result, err
 	}
 	byID := make(map[int64]string, len(previews))
 	for _, preview := range previews {
-		byID[preview.ID] = preview.RedactedPreview
+		byID[preview.ID] = preview.ToResponse(false).RedactedPreview
 	}
 	for i := range result.Items {
 		result.Items[i].RedactedPreview = byID[result.Items[i].ID]

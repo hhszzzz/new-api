@@ -198,6 +198,33 @@ export function promptAuditPayloadSources(
   return [...sources.values()]
 }
 
+export function promptAuditBodyText(event?: PromptAuditEvent): string {
+  if (!event) return ''
+  if (event.direction !== 'output') return event.full_prompt ?? ''
+  if (event.content_state && typeof event.full_prompt === 'string') {
+    return event.full_prompt
+  }
+  const output = promptAuditPayloadSources(event.scan_payload).find(
+    (source) => source.output
+  )
+  if (output) return output.blocks.join('\n\n')
+  return event.content_state && !event.legacy_content
+    ? (event.full_prompt ?? '')
+    : ''
+}
+
+export function downloadPromptAuditBody(event: PromptAuditEvent): void {
+  const blob = new Blob([promptAuditBodyText(event)], {
+    type: 'text/plain;charset=utf-8',
+  })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `prompt-audit-${event.id}-${event.direction}.txt`
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
 /** The content blocks the stored payload carries, in wire order. */
 function promptAuditPayloadBlocks(
   payload?: string

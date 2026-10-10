@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"unicode/utf8"
 
@@ -85,6 +86,15 @@ type PromptAudit struct {
 	ScanPayload          []byte            `json:"-"`
 	ScanPayloadTruncated bool              `json:"scan_payload_truncated"`
 	ContentSnapshot      []byte            `json:"-"`
+	ContentManifest      LongText          `json:"-"`
+	ContentEvicted       bool              `json:"-" gorm:"index"`
+	ArchivedDigest       string            `json:"-" gorm:"type:varchar(64)"`
+	ArchivedAt           int64             `json:"-"`
+	ArchivedBundleID     string            `json:"-" gorm:"type:varchar(64);index"`
+	RelatedInputID       int64             `json:"related_input_id" gorm:"index"`
+	RawPayload           []byte            `json:"-" gorm:"-"`
+	ContentState         string            `json:"-" gorm:"-"`
+	LegacyContent        bool              `json:"-" gorm:"-"`
 	PolicyCategories     string            `json:"-" gorm:"type:text"`
 	PolicySnapshot       string            `json:"-" gorm:"type:text"`
 	Safety               string            `json:"safety" gorm:"type:varchar(32);index"`
@@ -161,6 +171,9 @@ type PromptAuditResponse struct {
 	ChunkCount           int                `json:"chunk_count"`
 	FullPrompt           *string            `json:"full_prompt,omitempty"`
 	FullPromptAvailable  bool               `json:"full_prompt_available"`
+	ContentState         string             `json:"content_state"`
+	LegacyContent        bool               `json:"legacy_content"`
+	RelatedInputID       int64              `json:"related_input_id"`
 	FullPromptTruncated  bool               `json:"full_prompt_truncated"`
 	ScanPayload          *string            `json:"scan_payload,omitempty"`
 	ScanPayloadTruncated bool               `json:"scan_payload_truncated"`
@@ -336,7 +349,8 @@ func (audit *PromptAudit) ToResponse(includeFullPrompt bool) PromptAuditResponse
 		Status: audit.Status, PromptHash: audit.PromptHash, GroupKey: audit.GroupKey, SessionKey: audit.SessionKey,
 		RequestKind: audit.RequestKind, PromptLength: audit.PromptLength,
 		SegmentCount: audit.SegmentCount, ChunkCount: audit.ChunkCount,
-		FullPromptAvailable: len(audit.FullPrompt) > 0,
+		FullPromptAvailable: len(audit.FullPrompt) > 0 || audit.ContentManifest != "" && !audit.ContentEvicted,
+		ContentState:        audit.ContentState, LegacyContent: audit.LegacyContent, RelatedInputID: audit.RelatedInputID,
 		FullPromptTruncated: audit.FullPromptTruncated, ScanPayloadTruncated: audit.ScanPayloadTruncated, RedactedPreview: audit.RedactedPreview,
 		Safety: audit.Safety, Refusal: audit.Refusal, Decision: audit.Decision, Action: audit.Action, WouldAction: audit.WouldAction,
 		Categories:        decodePromptAuditStrings(audit.Categories),
@@ -353,6 +367,20 @@ func (audit *PromptAudit) ToResponse(includeFullPrompt bool) PromptAuditResponse
 		CompletedAt: audit.CompletedAt,
 		Ip:          audit.Ip, UserAgent: audit.UserAgent, Method: audit.Method,
 		RequestPath: audit.RequestPath, Origin: audit.Origin, Referer: audit.Referer,
+	}
+	if response.ContentState == "" {
+		response.ContentState = "hot"
+		if audit.ContentEvicted {
+			response.ContentState = "archived"
+		}
+		if audit.ContentManifest == "" && len(audit.FullPrompt) == 0 {
+			response.ContentState = "missing"
+		}
+	}
+	// Old previews were derived from the mixed request/reply snapshot. Do not
+	// show request text in an output row while its legacy format is unresolved.
+	if audit.Direction == "output" && audit.ContentManifest == "" {
+		response.RedactedPreview = ""
 	}
 	if response.Status == PromptAuditStatusStored {
 		response.InspectionType = "stored"
@@ -372,6 +400,9 @@ func (audit *PromptAudit) ToResponse(includeFullPrompt bool) PromptAuditResponse
 	}
 	if includeFullPrompt {
 		payload := audit.ContentSnapshot
+		if audit.ContentManifest != "" {
+			payload = audit.ScanPayload
+		}
 		if len(payload) == 0 {
 			payload = audit.ScanPayload
 		}
@@ -379,6 +410,7 @@ func (audit *PromptAudit) ToResponse(includeFullPrompt bool) PromptAuditResponse
 			value := string(payload)
 			response.ScanPayload = &value
 		}
+		promptAuditReplyResponse(audit, &response)
 	}
 	return response
 }
@@ -390,7 +422,18 @@ func CreatePromptAudit(audit *PromptAudit) error {
 	if DB == nil {
 		return errors.New("database is not initialized")
 	}
-	return DB.Create(audit).Error
+	if !promptAuditStorageEnabled() {
+		return DB.Create(audit).Error
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		if err := persistPromptAuditContents(tx, audit); err != nil {
+			return err
+		}
+		if err := tx.Create(audit).Error; err != nil {
+			return err
+		}
+		return syncPromptAuditContentRefs(tx, audit)
+	})
 }
 
 // RetainPromptAuditPayload uses the same text-character budget as FullPrompt
@@ -468,6 +511,21 @@ func GetPromptAudit(id int64) (*PromptAudit, error) {
 			return nil, ErrPromptAuditNotFound
 		}
 		return nil, err
+	}
+	if err := LoadPromptAuditContent(DB, &audit, false); err != nil {
+		if !errors.Is(err, ErrPromptAuditContentUnavailable) {
+			return nil, err
+		}
+		audit.ContentState = "archived"
+		audit.FullPrompt, audit.ScanPayload, audit.ContentSnapshot = nil, nil, nil
+	}
+	if audit.Direction == "output" && audit.RelatedInputID == 0 && audit.RequestID != "" {
+		var input PromptAudit
+		err := DB.Select("id").Where("request_id = ? AND user_id = ? AND direction = ?", audit.RequestID, audit.UserID, "input").Order("id asc").First(&input).Error
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, err
+		}
+		audit.RelatedInputID = input.ID
 	}
 	return &audit, nil
 }
@@ -702,33 +760,34 @@ func ClaimPromptAudit(owner string, now, leaseUntil int64) (*PromptAudit, bool, 
 	}
 	const exhaustedCondition = "((status = ? AND next_attempt_at <= ?) OR (status = ? AND lease_until < ?)) AND attempts >= max_attempts"
 	var exhausted []PromptAudit
-	if err := DB.Select("id", "scan_payload", "content_snapshot", "scan_payload_truncated", "policy_snapshot").
+	if err := DB.Select("id").
 		Where(exhaustedCondition, PromptAuditStatusRetry, now, PromptAuditStatusProcessing, now).
 		Order("id asc").Limit(32).Find(&exhausted).Error; err != nil {
 		return nil, false, err
 	}
 	for _, audit := range exhausted {
-		payload, truncated := audit.retainedPayload()
-		terminal := DB.Model(&PromptAudit{}).Where("id = ?", audit.ID).
-			Where(
-				exhaustedCondition,
-				PromptAuditStatusRetry, now, PromptAuditStatusProcessing, now,
-			).
-			Updates(map[string]any{
-				"status":                 PromptAuditStatusFailed,
-				"scan_payload":           payload,
-				"content_snapshot":       payload,
-				"scan_payload_truncated": truncated,
-				"would_action":           "unavailable",
-				"error_code":             "max_attempts_exhausted",
-				"lease_owner":            "",
-				"lease_until":            int64(0),
-				"next_attempt_at":        int64(0),
-				"completed_at":           now,
-				"updated_at":             now,
-			})
-		if terminal.Error != nil {
-			return nil, false, terminal.Error
+		err := DB.Transaction(func(tx *gorm.DB) error {
+			var current PromptAudit
+			if err := lockForUpdate(tx).Where("id = ?", audit.ID).Where(exhaustedCondition, PromptAuditStatusRetry, now, PromptAuditStatusProcessing, now).First(&current).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return nil
+				}
+				return err
+			}
+			updates := map[string]any{
+				"status":          PromptAuditStatusFailed,
+				"would_action":    "unavailable",
+				"error_code":      "max_attempts_exhausted",
+				"lease_owner":     "",
+				"lease_until":     int64(0),
+				"next_attempt_at": int64(0),
+				"completed_at":    now,
+				"updated_at":      now,
+			}
+			return persistPromptAuditWorkResult(tx, &current, updates)
+		})
+		if err != nil {
+			return nil, false, err
 		}
 	}
 	var candidates []PromptAudit
@@ -764,17 +823,15 @@ func ClaimPromptAudit(owner string, now, leaseUntil int64) (*PromptAudit, bool, 
 		if err := DB.Where("id = ?", candidate.ID).First(&claimed).Error; err != nil {
 			return nil, false, err
 		}
+		if err := LoadPromptAuditContent(DB, &claimed, true); err != nil {
+			return nil, false, err
+		}
 		return &claimed, true, nil
 	}
 	return nil, false, nil
 }
 
 func FinishPromptAudit(id int64, owner string, completion PromptAuditCompletion) error {
-	var audit PromptAudit
-	if err := DB.Select("scan_payload", "content_snapshot", "scan_payload_truncated", "policy_snapshot").Where("id = ? AND status = ? AND lease_owner = ?", id, PromptAuditStatusProcessing, owner).First(&audit).Error; err != nil {
-		return err
-	}
-	payload, truncated := audit.retainedPayload()
 	categories, err := encodePromptAuditStrings(completion.Categories)
 	if err != nil {
 		return err
@@ -792,43 +849,38 @@ func FinishPromptAudit(id int64, owner string, completion PromptAuditCompletion)
 		return err
 	}
 	now := common.GetTimestamp()
-	result := DB.Model(&PromptAudit{}).
-		Where("id = ? AND status = ? AND lease_owner = ?", id, PromptAuditStatusProcessing, owner).
-		Updates(map[string]any{
-			"status":                 PromptAuditStatusDone,
-			"scan_payload":           payload,
-			"content_snapshot":       payload,
-			"scan_payload_truncated": truncated,
-			"safety":                 completion.Safety,
-			"refusal":                completion.Refusal,
-			"decision":               completion.Decision,
-			"action":                 completion.Action,
-			"would_action":           completion.WouldAction,
-			"categories":             categories,
-			"unknown_categories":     unknown,
-			"endpoint_id":            completion.EndpointID,
-			"endpoint_model":         clampPromptAuditColumn(completion.EndpointModel, 255),
-			"review_status":          completion.ReviewStatus,
-			"review_decision":        completion.ReviewDecision,
-			"review_codes":           reviewCodes,
-			"scores":                 scores,
-			"review_reason":          completion.ReviewReason,
-			"reviewer_endpoint_id":   completion.ReviewerEndpointID,
-			"chunk_count":            completion.ChunkCount,
-			"latency_ms":             completion.LatencyMS,
-			"error_code":             completion.ErrorCode,
-			"lease_owner":            "",
-			"lease_until":            int64(0),
-			"completed_at":           now,
-			"updated_at":             now,
-		})
-	if result.Error != nil {
-		return result.Error
+	updates := map[string]any{
+		"status":               PromptAuditStatusDone,
+		"safety":               completion.Safety,
+		"refusal":              completion.Refusal,
+		"decision":             completion.Decision,
+		"action":               completion.Action,
+		"would_action":         completion.WouldAction,
+		"categories":           categories,
+		"unknown_categories":   unknown,
+		"endpoint_id":          completion.EndpointID,
+		"endpoint_model":       clampPromptAuditColumn(completion.EndpointModel, 255),
+		"review_status":        completion.ReviewStatus,
+		"review_decision":      completion.ReviewDecision,
+		"review_codes":         reviewCodes,
+		"scores":               scores,
+		"review_reason":        completion.ReviewReason,
+		"reviewer_endpoint_id": completion.ReviewerEndpointID,
+		"chunk_count":          completion.ChunkCount,
+		"latency_ms":           completion.LatencyMS,
+		"error_code":           completion.ErrorCode,
+		"lease_owner":          "",
+		"lease_until":          int64(0),
+		"completed_at":         now,
+		"updated_at":           now,
 	}
-	if result.RowsAffected == 0 {
-		return errors.New("prompt audit lease lost")
-	}
-	return nil
+	return DB.Transaction(func(tx *gorm.DB) error {
+		var audit PromptAudit
+		if err := lockForUpdate(tx).Where("id = ? AND status = ? AND lease_owner = ?", id, PromptAuditStatusProcessing, owner).First(&audit).Error; err != nil {
+			return err
+		}
+		return persistPromptAuditWorkResult(tx, &audit, updates)
+	})
 }
 
 func FailPromptAudit(id int64, owner, errorCode string, retryAt int64, terminal bool) error {
@@ -841,30 +893,37 @@ func FailPromptAudit(id int64, owner, errorCode string, retryAt int64, terminal 
 		"would_action": "unavailable",
 	}
 	if terminal {
-		var audit PromptAudit
-		if err := DB.Select("scan_payload", "content_snapshot", "scan_payload_truncated", "policy_snapshot").Where("id = ? AND status = ? AND lease_owner = ?", id, PromptAuditStatusProcessing, owner).First(&audit).Error; err != nil {
-			return err
-		}
-		payload, truncated := audit.retainedPayload()
 		updates["status"] = PromptAuditStatusFailed
-		updates["scan_payload"] = payload
-		updates["content_snapshot"] = payload
-		updates["scan_payload_truncated"] = truncated
 		updates["completed_at"] = now
 	} else {
 		updates["status"] = PromptAuditStatusRetry
 		updates["next_attempt_at"] = retryAt
 	}
-	result := DB.Model(&PromptAudit{}).
-		Where("id = ? AND status = ? AND lease_owner = ?", id, PromptAuditStatusProcessing, owner).
-		Updates(updates)
-	if result.Error != nil {
-		return result.Error
+	return DB.Transaction(func(tx *gorm.DB) error {
+		var audit PromptAudit
+		if err := lockForUpdate(tx).Where("id = ? AND status = ? AND lease_owner = ?", id, PromptAuditStatusProcessing, owner).First(&audit).Error; err != nil {
+			return err
+		}
+		if terminal {
+			return persistPromptAuditWorkResult(tx, &audit, updates)
+		}
+		updates["archived_digest"] = ""
+		return tx.Model(&PromptAudit{}).Where("id = ?", id).Updates(updates).Error
+	})
+}
+
+func persistPromptAuditWorkResult(tx *gorm.DB, audit *PromptAudit, updates map[string]any) error {
+	if err := LoadPromptAuditContent(tx, audit, true); err != nil {
+		return err
 	}
-	if result.RowsAffected == 0 {
-		return errors.New("prompt audit lease lost")
+	payload, truncated := audit.retainedPayload()
+	contentUpdates, err := retainedPromptAuditContentUpdates(tx, audit, payload, truncated)
+	if err != nil {
+		return err
 	}
-	return nil
+	maps.Copy(updates, contentUpdates)
+	updates["archived_digest"] = ""
+	return tx.Model(&PromptAudit{}).Where("id = ?", audit.ID).Updates(updates).Error
 }
 
 // queued payloads are complete; legacy rows may only have a content snapshot.
@@ -901,6 +960,9 @@ func RetryPromptAudit(id int64, maxAttempts int) error {
 		if audit.Status != PromptAuditStatusFailed {
 			return ErrPromptAuditNotRetryable
 		}
+		if err := LoadPromptAuditContent(tx, &audit, true); err != nil {
+			return ErrPromptAuditPayloadMissing
+		}
 		payload := audit.ContentSnapshot
 		if len(payload) == 0 {
 			payload = audit.FullPrompt
@@ -909,7 +971,7 @@ func RetryPromptAudit(id int64, maxAttempts int) error {
 			return ErrPromptAuditPayloadMissing
 		}
 		now := common.GetTimestamp()
-		return tx.Model(&PromptAudit{}).Where("id = ? AND status = ?", id, PromptAuditStatusFailed).Updates(map[string]any{
+		updates := map[string]any{
 			"status":             PromptAuditStatusQueued,
 			"scan_payload":       append([]byte(nil), payload...),
 			"action":             "pending",
@@ -930,7 +992,12 @@ func RetryPromptAudit(id int64, maxAttempts int) error {
 			"error_code":         "",
 			"completed_at":       int64(0),
 			"updated_at":         now,
-		}).Error
+			"archived_digest":    "",
+		}
+		if audit.ContentManifest != "" {
+			delete(updates, "scan_payload")
+		}
+		return tx.Model(&PromptAudit{}).Where("id = ? AND status = ?", id, PromptAuditStatusFailed).Updates(updates).Error
 	})
 }
 
@@ -984,6 +1051,9 @@ func DeletePromptAudits(filter PromptAuditFilter, expectedCount, maxID int64) (i
 }
 
 func CleanupPromptAuditPromptsBefore(cutoff int64, batchSize int) (int64, error) {
+	if promptAuditStorageEnabled() {
+		return CleanupPromptAuditSharedContent(DB, common.GetTimestamp(), batchSize)
+	}
 	if cutoff <= 0 {
 		return 0, nil
 	}
@@ -1116,6 +1186,7 @@ func ReviewPromptAudit(id int64, reviewerID int, reviewerName, status, reason st
 		return tx.Model(&PromptAudit{}).Where("id = ? AND status IN ?", id, promptAuditTerminalStatuses()).Updates(map[string]any{
 			"human_review": status, "human_review_reason": reason, "reviewed_by": reviewerID,
 			"reviewer_name": strings.TrimSpace(reviewerName), "reviewed_at": now, "updated_at": now,
+			"archived_digest": "",
 		}).Error
 	})
 }
@@ -1125,7 +1196,7 @@ func UpdatePromptAuditDelivery(id int64, status string) error {
 		return nil
 	}
 	status = strings.TrimSpace(status)
-	updates := map[string]any{"delivery_status": status, "updated_at": common.GetTimestamp()}
+	updates := map[string]any{"delivery_status": status, "updated_at": common.GetTimestamp(), "archived_digest": ""}
 	if status == "delivery_failed" {
 		updates["action"] = "unavailable"
 	}

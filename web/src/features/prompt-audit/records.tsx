@@ -480,6 +480,7 @@ export function PromptAuditRecords() {
       )}
       <PromptAuditDetailSheet
         eventID={detailID}
+        onViewRelated={setDetailID}
         canViewFullPrompt={canViewFullPrompt}
         canManage={canManage}
         canDelete={canDelete}

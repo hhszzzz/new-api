@@ -50,6 +50,7 @@ import { Route as AuthenticatedPlaygroundIndexRouteImport } from './routes/_auth
 import { Route as AuthenticatedProfileIndexRouteImport } from './routes/_authenticated/profile/index'
 import { Route as AuthenticatedPromptAuditIndexRouteImport } from './routes/_authenticated/prompt-audit/index'
 import { Route as AuthenticatedPromptAuditSettingsRouteImport } from './routes/_authenticated/prompt-audit/settings'
+import { Route as AuthenticatedPromptAuditStorageRouteImport } from './routes/_authenticated/prompt-audit/storage'
 import { Route as AuthenticatedPromptAuditWordlistsRouteImport } from './routes/_authenticated/prompt-audit/wordlists'
 import { Route as AuthenticatedRedemptionCodesIndexRouteImport } from './routes/_authenticated/redemption-codes/index'
 import { Route as AuthenticatedSecurityIndexRouteImport } from './routes/_authenticated/security/index'
@@ -295,6 +296,12 @@ const AuthenticatedPromptAuditSettingsRoute =
     path: '/prompt-audit/settings',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedPromptAuditStorageRoute =
+  AuthenticatedPromptAuditStorageRouteImport.update({
+    id: '/prompt-audit/storage',
+    path: '/prompt-audit/storage',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedPromptAuditWordlistsRoute =
   AuthenticatedPromptAuditWordlistsRouteImport.update({
     id: '/prompt-audit/wordlists',
@@ -500,6 +507,7 @@ export interface FileRoutesByFullPath {
   '/errors/$error': typeof AuthenticatedErrorsErrorRoute
   '/models/$section': typeof AuthenticatedModelsSectionRoute
   '/prompt-audit/settings': typeof AuthenticatedPromptAuditSettingsRoute
+  '/prompt-audit/storage': typeof AuthenticatedPromptAuditStorageRoute
   '/prompt-audit/wordlists': typeof AuthenticatedPromptAuditWordlistsRoute
   '/usage-logs/$section': typeof AuthenticatedUsageLogsSectionRoute
   '/usage-logs/audit': typeof AuthenticatedUsageLogsAuditRoute
@@ -569,6 +577,7 @@ export interface FileRoutesByTo {
   '/errors/$error': typeof AuthenticatedErrorsErrorRoute
   '/models/$section': typeof AuthenticatedModelsSectionRoute
   '/prompt-audit/settings': typeof AuthenticatedPromptAuditSettingsRoute
+  '/prompt-audit/storage': typeof AuthenticatedPromptAuditStorageRoute
   '/prompt-audit/wordlists': typeof AuthenticatedPromptAuditWordlistsRoute
   '/usage-logs/$section': typeof AuthenticatedUsageLogsSectionRoute
   '/usage-logs/audit': typeof AuthenticatedUsageLogsAuditRoute
@@ -642,6 +651,7 @@ export interface FileRoutesById {
   '/_authenticated/errors/$error': typeof AuthenticatedErrorsErrorRoute
   '/_authenticated/models/$section': typeof AuthenticatedModelsSectionRoute
   '/_authenticated/prompt-audit/settings': typeof AuthenticatedPromptAuditSettingsRoute
+  '/_authenticated/prompt-audit/storage': typeof AuthenticatedPromptAuditStorageRoute
   '/_authenticated/prompt-audit/wordlists': typeof AuthenticatedPromptAuditWordlistsRoute
   '/_authenticated/usage-logs/$section': typeof AuthenticatedUsageLogsSectionRoute
   '/_authenticated/usage-logs/audit': typeof AuthenticatedUsageLogsAuditRoute
@@ -714,6 +724,7 @@ export interface FileRouteTypes {
     | '/errors/$error'
     | '/models/$section'
     | '/prompt-audit/settings'
+    | '/prompt-audit/storage'
     | '/prompt-audit/wordlists'
     | '/usage-logs/$section'
     | '/usage-logs/audit'
@@ -783,6 +794,7 @@ export interface FileRouteTypes {
     | '/errors/$error'
     | '/models/$section'
     | '/prompt-audit/settings'
+    | '/prompt-audit/storage'
     | '/prompt-audit/wordlists'
     | '/usage-logs/$section'
     | '/usage-logs/audit'
@@ -855,6 +867,7 @@ export interface FileRouteTypes {
     | '/_authenticated/errors/$error'
     | '/_authenticated/models/$section'
     | '/_authenticated/prompt-audit/settings'
+    | '/_authenticated/prompt-audit/storage'
     | '/_authenticated/prompt-audit/wordlists'
     | '/_authenticated/usage-logs/$section'
     | '/_authenticated/usage-logs/audit'
@@ -1205,6 +1218,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedPromptAuditSettingsRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/prompt-audit/storage': {
+      id: '/_authenticated/prompt-audit/storage'
+      path: '/prompt-audit/storage'
+      fullPath: '/prompt-audit/storage'
+      preLoaderRoute: typeof AuthenticatedPromptAuditStorageRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/prompt-audit/wordlists': {
       id: '/_authenticated/prompt-audit/wordlists'
       path: '/prompt-audit/wordlists'
@@ -1508,6 +1528,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedErrorsErrorRoute: typeof AuthenticatedErrorsErrorRoute
   AuthenticatedModelsSectionRoute: typeof AuthenticatedModelsSectionRoute
   AuthenticatedPromptAuditSettingsRoute: typeof AuthenticatedPromptAuditSettingsRoute
+  AuthenticatedPromptAuditStorageRoute: typeof AuthenticatedPromptAuditStorageRoute
   AuthenticatedPromptAuditWordlistsRoute: typeof AuthenticatedPromptAuditWordlistsRoute
   AuthenticatedUsageLogsSectionRoute: typeof AuthenticatedUsageLogsSectionRoute
   AuthenticatedUsageLogsAuditRoute: typeof AuthenticatedUsageLogsAuditRoute
@@ -1538,6 +1559,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedErrorsErrorRoute: AuthenticatedErrorsErrorRoute,
   AuthenticatedModelsSectionRoute: AuthenticatedModelsSectionRoute,
   AuthenticatedPromptAuditSettingsRoute: AuthenticatedPromptAuditSettingsRoute,
+  AuthenticatedPromptAuditStorageRoute: AuthenticatedPromptAuditStorageRoute,
   AuthenticatedPromptAuditWordlistsRoute:
     AuthenticatedPromptAuditWordlistsRoute,
   AuthenticatedUsageLogsSectionRoute: AuthenticatedUsageLogsSectionRoute,

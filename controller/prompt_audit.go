@@ -71,6 +71,7 @@ type promptAuditConfigUpdate struct {
 	WorkerCount            *int                                                       `json:"worker_count"`
 	MaxAttempts            *int                                                       `json:"max_attempts"`
 	RetentionDays          *int                                                       `json:"retention_days"`
+	SharedContentEnabled   *bool                                                      `json:"shared_content_enabled"`
 	GlobalConcurrency      *int                                                       `json:"global_concurrency"`
 	EndpointConcurrency    *int                                                       `json:"endpoint_concurrency"`
 	OutputMaxBytes         *int                                                       `json:"output_max_bytes"`
@@ -132,6 +133,21 @@ func UpdatePromptAuditConfig(c *gin.Context) {
 	current := prompt_audit_setting.GetSetting()
 	proposed := current
 	values := map[string]string{}
+	if update.SharedContentEnabled != nil {
+		if current.SharedContentEnabled && !*update.SharedContentEnabled {
+			common.ApiError(c, errors.New("shared storage cannot be disabled after activation"))
+			return
+		}
+		if *update.SharedContentEnabled && !current.SharedContentEnabled {
+			stats, err := model.GetPromptAuditStorageStats(model.DB)
+			if err != nil || stats.Unmigrated > 0 {
+				common.ApiError(c, errors.New("complete the backed-up storage migration before activation"))
+				return
+			}
+		}
+		values["prompt_audit.shared_content_enabled"] = strconv.FormatBool(*update.SharedContentEnabled)
+		proposed.SharedContentEnabled = *update.SharedContentEnabled
+	}
 	if update.ScopePolicies != nil {
 		proposed.ScopePolicies = *update.ScopePolicies
 		rows, err := model.ListPromptWordlists()
@@ -268,6 +284,9 @@ func UpdatePromptAuditConfig(c *gin.Context) {
 	promptAuditSetInt(values, "prompt_audit.output_max_bytes", update.OutputMaxBytes)
 	promptAuditSetInt(values, "prompt_audit.output_memory_bytes", update.OutputMemoryBytes)
 	promptAuditSetInt(values, "prompt_audit.full_prompt_max_runes", update.FullPromptMaxRunes)
+	if proposed.SharedContentEnabled {
+		values["prompt_audit.retention_days"], values["prompt_audit.full_prompt_max_runes"] = "7", "0"
+	}
 	if err := validatePromptWordlistReviewBindings(proposed); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
 		return
@@ -767,7 +786,8 @@ func promptAuditConfigResponse(setting prompt_audit_setting.PromptAuditSetting) 
 		"cache_ttl_seconds": setting.CacheTTLSeconds,
 		"worker_count":      setting.WorkerCount, "max_attempts": setting.MaxAttempts,
 		"retention_days": setting.RetentionDays, "global_concurrency": setting.GlobalConcurrency,
-		"endpoint_concurrency": setting.EndpointConcurrency, "output_max_bytes": setting.OutputMaxBytes,
+		"shared_content_enabled": setting.SharedContentEnabled,
+		"endpoint_concurrency":   setting.EndpointConcurrency, "output_max_bytes": setting.OutputMaxBytes,
 		"output_memory_bytes": setting.OutputMemoryBytes, "full_prompt_max_runes": setting.FullPromptRetentionLimit(),
 		"config_version": setting.ConfigVersion,
 	}

@@ -43,7 +43,12 @@ import {
 import { formatTimestampToDate } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
-import { getPromptAudit, retryPromptAudit, reviewPromptAudit } from '../api'
+import {
+  getPromptAudit,
+  getPromptAuditImportedEvent,
+  retryPromptAudit,
+  reviewPromptAudit,
+} from '../api'
 import {
   getPromptAuditProtocolName,
   promptAuditDetectorLabel,
@@ -51,6 +56,8 @@ import {
   promptAuditRequestKindLabel,
   promptAuditScoreLabel,
   promptAuditScoreRows,
+  promptAuditBodyText,
+  downloadPromptAuditBody,
 } from '../lib'
 import { promptAuditScopeLabel } from '../scopes'
 import type { PromptAuditEvent } from '../types'
@@ -63,6 +70,8 @@ type PromptAuditDetailSheetProps = {
   canDelete: boolean
   onOpenChange: (open: boolean) => void
   onDelete: (event: PromptAuditEvent) => void
+  sourceID?: string
+  onViewRelated?: (id: number) => void
 }
 
 /** Reading groups inside the sheet; only evidence and identity need a frame. */
@@ -77,15 +86,25 @@ export function PromptAuditDetailSheet({
   canDelete,
   onOpenChange,
   onDelete,
+  sourceID,
+  onViewRelated,
 }: PromptAuditDetailSheetProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [reviewReason, setReviewReason] = useState('')
   const detailQuery = useQuery({
-    queryKey: ['prompt-audit', 'event', eventID],
+    queryKey: [
+      'prompt-audit',
+      sourceID ? 'imported-event' : 'event',
+      sourceID,
+      eventID,
+    ],
     enabled: eventID !== null,
+    gcTime: 0,
     queryFn: async () => {
-      const result = await getPromptAudit(eventID ?? 0)
+      const result = sourceID
+        ? await getPromptAuditImportedEvent(sourceID, eventID ?? 0)
+        : await getPromptAudit(eventID ?? 0)
       if (!result.success || !result.data) {
         throw new Error(result.message || t('Failed to load audit details'))
       }
@@ -122,8 +141,21 @@ export function PromptAuditDetailSheet({
     decision: event?.decision ?? '',
   })
   const stored = event?.status === 'stored'
+  let bodyDescription = t(
+    'This is the whole request as sent, while Inspected content lists only the parts the audit submitted.'
+  )
+  if (stored) {
+    bodyDescription = t(
+      'This is the retained full text, shown without source separation.'
+    )
+  }
+  if (event?.direction === 'output') {
+    bodyDescription = t(
+      'The output body contains the complete model reply. Its request is available through the related request link.'
+    )
+  }
   const prompt = canViewFullPrompt
-    ? (event?.full_prompt ?? '')
+    ? promptAuditBodyText(event)
     : (event?.redacted_preview ?? '')
   // An empty inspection type is a legacy row written before the detectors were
   // split; it was a model audit.
@@ -156,7 +188,9 @@ export function PromptAuditDetailSheet({
               <>
                 <Badge variant={outcome.variant}>{t(outcome.key)}</Badge>
                 <Badge variant='outline'>
-                  {promptAuditRequestKindLabel(event.request_kind, t)}
+                  {event.direction === 'output'
+                    ? t('Model reply')
+                    : promptAuditRequestKindLabel(event.request_kind, t)}
                 </Badge>
               </>
             )}
@@ -268,6 +302,36 @@ export function PromptAuditDetailSheet({
                     <DetailRow label={t('Coverage')} value={t('Incomplete')} />
                   )}
                 </div>
+                {event.direction === 'output' &&
+                event.related_input_id &&
+                onViewRelated ? (
+                  <Button
+                    variant='outline'
+                    size='sm'
+                    onClick={() => {
+                      if (event.related_input_id) {
+                        onViewRelated(event.related_input_id)
+                      }
+                    }}
+                  >
+                    {t('View related request')}
+                  </Button>
+                ) : null}
+                {event.content_state === 'archived' ||
+                event.content_state === 'missing' ? (
+                  <p className='text-muted-foreground text-sm'>
+                    {t(
+                      'Body unavailable locally. Import the corresponding day package to view it.'
+                    )}
+                  </p>
+                ) : null}
+                {event.legacy_content && (
+                  <p className='text-muted-foreground text-sm'>
+                    {t(
+                      'Historical mixed snapshot preserved. Only a reliably identified reply is displayed.'
+                    )}
+                  </p>
+                )}
                 {!stored &&
                   (event.categories.length > 0 ||
                     event.unknown_categories.length > 0) && (
@@ -346,7 +410,11 @@ export function PromptAuditDetailSheet({
                     />
                     <div className='border-t px-3 py-1'>
                       <CollapsibleDetailSection
-                        label={t('Full prompt')}
+                        label={
+                          event.direction === 'output'
+                            ? t('Model reply')
+                            : t('Full prompt')
+                        }
                         variant='plain'
                         action={
                           prompt && (
@@ -354,7 +422,7 @@ export function PromptAuditDetailSheet({
                               value={prompt}
                               variant='ghost'
                               size='sm'
-                              tooltip={`${t('Copy')} · ${t('Full prompt')}`}
+                              tooltip={`${t('Copy')} · ${event.direction === 'output' ? t('Model reply') : t('Full prompt')}`}
                             />
                           )
                         }
@@ -377,15 +445,18 @@ export function PromptAuditDetailSheet({
                           </p>
                         )}
                         <p className='text-muted-foreground mt-2 text-xs'>
-                          {stored
-                            ? t(
-                                'This is the retained full text, shown without source separation.'
-                              )
-                            : t(
-                                'This is the whole request as sent, while Inspected content lists only the parts the audit submitted.'
-                              )}
+                          {bodyDescription}
                         </p>
                       </CollapsibleDetailSection>
+                      {prompt && (
+                        <Button
+                          variant='ghost'
+                          size='sm'
+                          onClick={() => downloadPromptAuditBody(event)}
+                        >
+                          {t('Export body')}
+                        </Button>
+                      )}
                     </div>
                   </div>
                 </section>
@@ -722,6 +793,9 @@ export function PromptAuditDetailSheet({
                 variant='outline'
                 disabled={
                   retryMutation.isPending ||
+                  Boolean(
+                    event.content_state && event.content_state !== 'hot'
+                  ) ||
                   event.scan_payload_truncated ||
                   (!event.scan_payload &&
                     (event.full_prompt_truncated ||

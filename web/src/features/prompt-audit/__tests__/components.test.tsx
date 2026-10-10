@@ -595,12 +595,14 @@ describe('prompt audit management components', () => {
     expect(within(result).queryByText('Latency')).not.toBeInTheDocument()
   })
 
-  test('reads the reply of an output record as its own source, never as history', async () => {
+  test('shows only the reply and opens its related request separately', async () => {
+    const onViewRelated = vi.fn()
     getPromptAuditMock.mockResolvedValue({
       success: true,
       data: {
         ...EVENT,
         direction: 'output',
+        related_input_id: 99,
         scan_payload: JSON.stringify({
           segments: [{ scope: 'user', text: 'Extracted user question' }],
           output: 'The generated reply',
@@ -614,21 +616,30 @@ describe('prompt audit management components', () => {
         canViewFullPrompt
         canManage={false}
         canDelete={false}
+        onViewRelated={onViewRelated}
         onOpenChange={vi.fn()}
         onDelete={vi.fn()}
       />
     )
 
     expect(await screen.findByText('The generated reply')).toBeVisible()
+    expect(screen.queryByText('User question')).not.toBeInTheDocument()
     expect(
       screen.getByRole('tab', { name: 'Generated output' })
     ).toHaveAttribute('aria-selected', 'true')
-    expect(screen.getByRole('tab', { name: 'User messages' })).toBeVisible()
+    expect(
+      screen.queryByRole('tab', { name: 'User messages' })
+    ).not.toBeInTheDocument()
     expect(
       screen.queryByRole('tab', { name: 'Historical assistant messages' })
     ).not.toBeInTheDocument()
-    await userEvent.click(screen.getByRole('tab', { name: 'User messages' }))
-    expect(screen.getByText('Extracted user question')).toBeVisible()
+    expect(
+      screen.queryByText('Extracted user question')
+    ).not.toBeInTheDocument()
+    await userEvent.click(
+      screen.getByRole('button', { name: 'View related request' })
+    )
+    expect(onViewRelated).toHaveBeenCalledWith(99)
   })
 
   test.each([

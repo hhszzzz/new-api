@@ -49,6 +49,9 @@ var buildFS embed.FS
 var indexPage []byte
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "prompt-audit" {
+		os.Exit(service.RunPromptAuditStorageCLI(os.Args[2:], os.Stdout, os.Stderr))
+	}
 	if len(os.Args) > 1 && os.Args[1] == "protocol-policy" {
 		os.Exit(protocolpolicy.RunCLI(os.Args[2:], os.Stdout, os.Stderr))
 	}

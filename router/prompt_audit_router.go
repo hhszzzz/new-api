@@ -23,6 +23,13 @@ func registerPromptAuditRoutes(apiRouter *gin.RouterGroup) {
 	route.GET("/events/:id/group-records", middleware.RequirePermission(authz.PromptAuditRead), controller.GetPromptAuditGroupRecords)
 	route.GET("/events/:id/session-questions", middleware.RequirePermission(authz.PromptAuditRead), controller.GetPromptAuditSessionQuestions)
 	route.GET("/stats", middleware.RequirePermission(authz.PromptAuditRead), controller.GetPromptAuditStats)
+	route.GET("/storage", middleware.RequirePermission(authz.PromptAuditRead), controller.GetPromptAuditStorage)
+	route.GET("/archives", middleware.RequirePermission(authz.PromptAuditRead), controller.ListPromptAuditArchives)
+	route.GET("/imports", middleware.RequirePermission(authz.PromptAuditRead), controller.ListPromptAuditImports)
+	route.GET("/imports/:source/events", middleware.RequirePermission(authz.PromptAuditRead), controller.ListPromptAuditImportedEvents)
+	route.GET("/imports/:source/events/:id", middleware.RequirePermission(authz.PromptAuditRead), controller.GetPromptAuditImportedEvent)
+	route.GET("/import-jobs/:id", middleware.RequirePermission(authz.PromptAuditManage), controller.GetPromptAuditImportJob)
+	route.POST("/imports", middleware.RequirePermission(authz.PromptAuditManage), middleware.RequirePermission(authz.PromptAuditViewFullPrompt), controller.ImportPromptAuditArchive)
 
 	route.GET("/config", middleware.RequirePermission(authz.PromptAuditManage), controller.GetPromptAuditConfig)
 	route.PUT("/config", middleware.RequirePermission(authz.PromptAuditManage), controller.UpdatePromptAuditConfig)

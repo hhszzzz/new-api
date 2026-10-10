@@ -130,6 +130,8 @@ type PromptAuditRequest struct {
 	Wordlist           *PromptWordlistMatch
 	Stream             bool
 	RawFullText        string
+	OriginalSnapshot   *dto.PromptAuditSnapshot
+	OriginalOutput     string
 	// WordlistOnly holds a request that generates nothing to the local wordlist
 	// gate alone; see InspectPrompt.
 	WordlistOnly  bool
@@ -288,6 +290,7 @@ func CheckPromptAudit(c *gin.Context, request PromptAuditRequest) (PromptAuditRe
 
 func InspectOutput(c *gin.Context, request PromptAuditRequest) (PromptAuditResult, *hosttypes.NewAPIError) {
 	request.Direction = PromptAuditDirectionOutput
+	request = preparePromptAuditRequest(c, request)
 	setting := prompt_audit_setting.GetSetting()
 	if setting.ExpandBase64 {
 		// The reply and the context slices are both expanded: a client that asked
@@ -370,6 +373,8 @@ func RecordPromptAuditStored(c *gin.Context, request PromptAuditRequest) {
 }
 
 func RecordOutputAuditUnavailable(c *gin.Context, request PromptAuditRequest, failure string) PromptAuditResult {
+	request.Direction = PromptAuditDirectionOutput
+	request = preparePromptAuditRequest(c, request)
 	setting := prompt_audit_setting.GetSetting()
 	result := PromptAuditResult{
 		Enabled: true, Reviewed: false, Direction: PromptAuditDirectionOutput, Mode: setting.OutputMode,

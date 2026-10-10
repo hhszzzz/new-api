@@ -47,6 +47,8 @@ export function PromptAuditNavigation() {
     active = 'wordlists'
   } else if (location.pathname === '/prompt-audit/settings') {
     active = 'settings'
+  } else if (location.pathname === '/prompt-audit/storage') {
+    active = 'storage'
   }
 
   return (
@@ -58,6 +60,8 @@ export function PromptAuditNavigation() {
             void navigate({ to: '/prompt-audit' })
           } else if (value === 'wordlists') {
             void navigate({ to: '/prompt-audit/wordlists' })
+          } else if (value === 'storage') {
+            void navigate({ to: '/prompt-audit/storage' })
           } else {
             void navigate({ to: '/prompt-audit/settings' })
           }
@@ -65,7 +69,12 @@ export function PromptAuditNavigation() {
       >
         <TabsList className='max-w-full flex-wrap justify-start group-data-horizontal/tabs:h-auto'>
           {canRead && (
-            <TabsTrigger value='records'>{t('Audit records')}</TabsTrigger>
+            <>
+              <TabsTrigger value='records'>{t('Audit records')}</TabsTrigger>
+              <TabsTrigger value='storage'>
+                {t('Storage and archives')}
+              </TabsTrigger>
+            </>
           )}
           {canManage && (
             <>

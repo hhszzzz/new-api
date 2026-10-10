@@ -17,7 +17,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { api } from '@/lib/api'
-import { requireServerSuccess } from '@/lib/server-error-message'
+import {
+  createServerError,
+  requireServerSuccess,
+} from '@/lib/server-error-message'
 
 import type {
   ApiResponse,
@@ -39,7 +42,19 @@ import type {
   PromptWordlistAction,
   PromptWordlist,
   PromptWordlistMatch,
+  PromptAuditStorageStats,
+  PromptAuditArchive,
+  PromptAuditArchiveImport,
+  PromptAuditImportJob,
 } from './types'
+
+function requirePromptAuditData<T>(response: ApiResponse<T>): T {
+  const result = requireServerSuccess(response)
+  if (result.data === undefined || result.data === null) {
+    throw createServerError(result)
+  }
+  return result.data
+}
 
 export async function listPromptWordlists(): Promise<PromptWordlist[]> {
   const response = await api.get<ApiResponse<PromptWordlist[]>>(
@@ -231,6 +246,88 @@ export async function getPromptAudit(id: number) {
     `/api/prompt-audit/events/${id}`
   )
   return response.data
+}
+
+export async function getPromptAuditStorage() {
+  return requirePromptAuditData(
+    (
+      await api.get<ApiResponse<PromptAuditStorageStats>>(
+        '/api/prompt-audit/storage'
+      )
+    ).data
+  )
+}
+
+export async function listPromptAuditArchives() {
+  return (
+    requireServerSuccess(
+      (
+        await api.get<ApiResponse<PromptAuditArchive[]>>(
+          '/api/prompt-audit/archives'
+        )
+      ).data
+    ).data ?? []
+  )
+}
+
+export async function listPromptAuditImports() {
+  return (
+    requireServerSuccess(
+      (
+        await api.get<ApiResponse<PromptAuditArchiveImport[]>>(
+          '/api/prompt-audit/imports'
+        )
+      ).data
+    ).data ?? []
+  )
+}
+
+export async function importPromptAuditArchives(files: File[]) {
+  const form = new FormData()
+  for (const file of files) form.append('files', file)
+  return requirePromptAuditData(
+    (
+      await api.post<ApiResponse<PromptAuditImportJob>>(
+        '/api/prompt-audit/imports',
+        form,
+        { timeout: 0 }
+      )
+    ).data
+  )
+}
+
+export async function getPromptAuditImportJob(id: string) {
+  return requirePromptAuditData(
+    (
+      await api.get<ApiResponse<PromptAuditImportJob>>(
+        `/api/prompt-audit/import-jobs/${encodeURIComponent(id)}`
+      )
+    ).data
+  )
+}
+
+export async function listPromptAuditImportedEvents(
+  source: string,
+  page: number,
+  pageSize: number,
+  anchor?: number
+) {
+  return requirePromptAuditData(
+    (
+      await api.get<ApiResponse<PromptAuditListData>>(
+        `/api/prompt-audit/imports/${encodeURIComponent(source)}/events`,
+        { params: { page, page_size: pageSize, anchor } }
+      )
+    ).data
+  )
+}
+
+export async function getPromptAuditImportedEvent(source: string, id: number) {
+  return (
+    await api.get<ApiResponse<PromptAuditEvent>>(
+      `/api/prompt-audit/imports/${encodeURIComponent(source)}/events/${id}`
+    )
+  ).data
 }
 
 export async function getPromptAuditGroupContent(

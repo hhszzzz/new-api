@@ -148,6 +148,7 @@ export interface PromptAuditConfig {
   worker_count: number
   max_attempts: number
   retention_days: number
+  shared_content_enabled?: boolean
   global_concurrency: number
   endpoint_concurrency: number
   output_max_bytes: number
@@ -271,6 +272,9 @@ export interface PromptAuditEvent {
   chunk_count: number
   full_prompt?: string
   full_prompt_available: boolean
+  content_state?: 'hot' | 'archived' | 'imported' | 'missing'
+  legacy_content?: boolean
+  related_input_id?: number
   full_prompt_truncated: boolean
   redacted_preview: string
   safety: string
@@ -378,4 +382,57 @@ export interface PromptAuditDeletePreview {
   eligible_count: number
   active_count: number
   max_id: number
+}
+
+export interface PromptAuditStorageStats {
+  shared_enabled: boolean
+  local_days: number
+  archive_required: boolean
+  raw_bytes: number
+  stored_bytes: number
+  legacy_bytes: number
+  content_blocks: number
+  references: number
+  new_bytes_24h: number
+  archive_backlog: number
+  unmigrated: number
+  imported_bytes: number
+  cache_limit_bytes: number
+  cache_ttl_seconds: number
+}
+
+export interface PromptAuditArchive {
+  archive: {
+    id: string
+    source_id: string
+    day: string
+    status: string
+    created_at: number
+    verified_at: number
+    record_count: number
+    blob_count: number
+    bytes: number
+    digest: string
+  }
+  volumes: Array<{
+    name: string
+    bytes: number
+    sha256: string
+    remote_path: string
+  }>
+}
+
+export interface PromptAuditArchiveImport {
+  id: string
+  source_id: string
+  day: string
+  record_count: number
+  imported_at: number
+  expires_at: number
+}
+
+export interface PromptAuditImportJob {
+  id?: string
+  status: 'queued' | 'running' | 'done' | 'failed'
+  message?: string
 }

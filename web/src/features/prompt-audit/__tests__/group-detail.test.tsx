@@ -458,7 +458,7 @@ describe('question detail reading', () => {
     ).toBeEnabled()
   })
 
-  test('opens grouped output on the reply and keeps the request sources available', async () => {
+  test('shows grouped output as the reply alone', async () => {
     server.event = { ...event, direction: 'output' }
     server.versions = [{ ...main, direction: 'output' }]
     server.payload = JSON.stringify({
@@ -470,8 +470,10 @@ describe('question detail reading', () => {
     expect(
       screen.getByRole('tab', { name: 'Generated output' })
     ).toHaveAttribute('aria-selected', 'true')
-    await userEvent.click(screen.getByRole('tab', { name: 'User messages' }))
-    expect(screen.getByText('Retained question')).toBeVisible()
+    expect(
+      screen.queryByRole('tab', { name: 'User messages' })
+    ).not.toBeInTheDocument()
+    expect(screen.queryByText('Retained question')).not.toBeInTheDocument()
   })
 
   test.each([

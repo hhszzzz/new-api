@@ -95,6 +95,7 @@ function promptAuditConfigDraft(
     worker_count: config.worker_count,
     max_attempts: config.max_attempts,
     retention_days: config.retention_days,
+    shared_content_enabled: config.shared_content_enabled ?? false,
     global_concurrency: config.global_concurrency,
     endpoint_concurrency: config.endpoint_concurrency,
     output_max_bytes: config.output_max_bytes ?? 8 * 1024 * 1024,

@@ -225,7 +225,15 @@ func runPromptAuditFullRetentionRecords(t *testing.T, db *gorm.DB) {
 	assert.Equal(t, text+"\n\n完整模型回复", string(stored.FullPrompt))
 	response := stored.ToResponse(true)
 	require.NotNil(t, response.ScanPayload)
-	assert.Equal(t, string(payload), *response.ScanPayload)
+	var visible struct {
+		Output   string                   `json:"output"`
+		Segments []dto.PromptAuditSegment `json:"segments"`
+	}
+	require.NoError(t, common.UnmarshalJsonStr(*response.ScanPayload, &visible))
+	assert.Equal(t, "完整模型回复", visible.Output)
+	assert.Empty(t, visible.Segments)
+	require.NotNil(t, response.FullPrompt)
+	assert.Equal(t, "完整模型回复", *response.FullPrompt)
 	assert.False(t, response.ScanPayloadTruncated)
 }
 
@@ -373,10 +381,10 @@ func TestRetainPromptAuditPayloadReservesTheGeneratedReply(t *testing.T) {
 		retained, truncated = RetainPromptAuditPayload(payload, prompt_audit_setting.DefaultFullPromptMaxRunes)
 		require.True(t, truncated)
 		decoded = payloadShape{}
-			require.NoError(t, common.Unmarshal(retained, &decoded))
-			require.NotEmpty(t, decoded.Segments)
-			assert.Equal(t, prompt_audit_setting.DefaultFullPromptMaxRunes, utf8.RuneCountInString(decoded.Segments[0].Text))
-			assert.Equal(t, len([]rune(escapedReply)), utf8.RuneCountInString(decoded.Output))
+		require.NoError(t, common.Unmarshal(retained, &decoded))
+		require.NotEmpty(t, decoded.Segments)
+		assert.Equal(t, prompt_audit_setting.DefaultFullPromptMaxRunes, utf8.RuneCountInString(decoded.Segments[0].Text))
+		assert.Equal(t, len([]rune(escapedReply)), utf8.RuneCountInString(decoded.Output))
 		assert.NotEmpty(t, decoded.Output)
 		assert.True(t, utf8.ValidString(decoded.Output))
 		assert.True(t, strings.HasPrefix(escapedReply, decoded.Output))

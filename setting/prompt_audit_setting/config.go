@@ -202,10 +202,13 @@ type PromptAuditSetting struct {
 	WorkerCount         int        `json:"worker_count"`
 	MaxAttempts         int        `json:"max_attempts"`
 	RetentionDays       int        `json:"retention_days"`
-	GlobalConcurrency   int        `json:"global_concurrency"`
-	EndpointConcurrency int        `json:"endpoint_concurrency"`
-	OutputMaxBytes      int        `json:"output_max_bytes"`
-	OutputMemoryBytes   int        `json:"output_memory_bytes"`
+	// Activation is explicit so existing installations can back up and migrate
+	// before switching their writes and cleanup policy.
+	SharedContentEnabled bool `json:"shared_content_enabled"`
+	GlobalConcurrency    int  `json:"global_concurrency"`
+	EndpointConcurrency  int  `json:"endpoint_concurrency"`
+	OutputMaxBytes       int  `json:"output_max_bytes"`
+	OutputMemoryBytes    int  `json:"output_memory_bytes"`
 	// FullPromptMaxRunes keeps exactly what the operator persisted: a pointer so
 	// an absent key stays distinguishable from an explicit 0, which means "keep
 	// the whole request and content snapshot". Without that distinction upgrading to
@@ -279,6 +282,9 @@ func (setting PromptAuditSetting) AppliesToGroup(group string) bool {
 // bound. The stored field is never rewritten, so what the operator set is what
 // the settings screen shows.
 func (setting PromptAuditSetting) FullPromptRetentionLimit() int {
+	if setting.SharedContentEnabled {
+		return 0
+	}
 	if setting.FullPromptMaxRunes == nil {
 		return DefaultFullPromptMaxRunes
 	}
@@ -391,6 +397,11 @@ func (setting *PromptAuditSetting) ValidateConfig() error {
 	}
 	if setting.RetentionDays < 0 || setting.RetentionDays > 3650 {
 		return fmt.Errorf("prompt audit retention days must be between 0 and 3650")
+	}
+	if setting.SharedContentEnabled {
+		setting.RetentionDays = 7
+		value := 0
+		setting.FullPromptMaxRunes = &value
 	}
 	if setting.GlobalConcurrency < 1 || setting.GlobalConcurrency > 1024 {
 		return fmt.Errorf("prompt audit global concurrency must be between 1 and 1024")
@@ -608,6 +619,11 @@ func (setting *PromptAuditSetting) PublishConfig() {
 	}
 	if snapshot.OutputMemoryBytes == 0 {
 		snapshot.OutputMemoryBytes = DefaultOutputMemoryBytes
+	}
+	if snapshot.SharedContentEnabled {
+		snapshot.RetentionDays = 7
+		value := 0
+		snapshot.FullPromptMaxRunes = &value
 	}
 	if snapshot.ControversialBlocks == nil {
 		snapshot.ControversialBlocks = []string{"jailbreak", "pii", "suicide_and_self_harm"}
