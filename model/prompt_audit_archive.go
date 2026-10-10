@@ -52,6 +52,13 @@ type PromptAuditArchiveVolume struct {
 	RemotePath string `json:"remote_path"`
 }
 
+// Historical initialization can archive one creation window at a time. Related
+// requests remain in the package even when they were created outside the window.
+type PromptAuditArchiveWindow struct {
+	CreatedFrom   int64
+	CreatedBefore int64
+}
+
 type PromptAuditArchiveImport struct {
 	ID          string `gorm:"type:varchar(64);primaryKey" json:"id"`
 	SourceID    string `gorm:"type:varchar(64);index" json:"source_id"`
@@ -159,8 +166,18 @@ func ReservePromptAuditArchiveVersion(db *gorm.DB) (int64, error) {
 	return version, err
 }
 
-func WritePromptAuditArchive(tx *gorm.DB, writer io.Writer, sourceID, day string, sequence int64, full bool) (PromptAuditArchive, error) {
+func WritePromptAuditArchive(tx *gorm.DB, writer io.Writer, sourceID, day string, sequence int64, full bool, windows ...PromptAuditArchiveWindow) (PromptAuditArchive, error) {
 	archive := PromptAuditArchive{ID: common.GetUUID(), SourceID: sourceID, Day: day, Sequence: sequence, Status: "ready", CreatedAt: common.GetTimestamp()}
+	var window PromptAuditArchiveWindow
+	if len(windows) > 1 {
+		return archive, errors.New("only one archive creation window is supported")
+	}
+	if len(windows) == 1 {
+		window = windows[0]
+	}
+	if window.CreatedFrom < 0 || window.CreatedBefore < 0 || (window.CreatedBefore > 0 && window.CreatedFrom >= window.CreatedBefore) {
+		return archive, errors.New("invalid archive creation window")
+	}
 	if _, err := time.Parse("2006-01-02", day); err != nil {
 		return archive, err
 	}
@@ -194,7 +211,14 @@ func WritePromptAuditArchive(tx *gorm.DB, writer io.Writer, sourceID, day string
 	var after int64
 	for {
 		var rows []PromptAudit
-		if err := tx.Omit("full_prompt", "scan_payload", "content_snapshot").Where("id > ?", after).Order("id asc").Limit(200).Find(&rows).Error; err != nil {
+		query := tx.Omit("full_prompt", "scan_payload", "content_snapshot").Where("id > ?", after)
+		if window.CreatedFrom > 0 {
+			query = query.Where("created_at >= ?", window.CreatedFrom)
+		}
+		if window.CreatedBefore > 0 {
+			query = query.Where("created_at < ?", window.CreatedBefore)
+		}
+		if err := query.Order("id asc").Limit(200).Find(&rows).Error; err != nil {
 			return archive, err
 		}
 		if len(rows) == 0 {

@@ -31,6 +31,8 @@ func RunPromptAuditStorageCLI(args []string, stdout, stderr io.Writer) int {
 	out := flags.String("out", "", "archive output path")
 	day := flags.String("day", time.Now().In(time.FixedZone("Asia/Shanghai", 8*3600)).Format("2006-01-02"), "archive day")
 	full := flags.Bool("full", false, "include unchanged events")
+	createdFrom := flags.Int64("created-from", 0, "include events created at or after this Unix timestamp")
+	createdBefore := flags.Int64("created-before", 0, "include events created before this Unix timestamp")
 	statePath := flags.String("snapshot-state", "", "snapshot handshake file")
 	releasePath := flags.String("release-file", "", "release snapshot after pg_dump finishes")
 	id := flags.String("id", "", "archive id")
@@ -116,7 +118,7 @@ func RunPromptAuditStorageCLI(args []string, stdout, stderr io.Writer) int {
 		}
 		result = map[string]any{"evicted": total}
 	case "export":
-		result, err = exportPromptAuditSnapshot(db, *out, *day, *statePath, *releasePath, *full)
+		result, err = exportPromptAuditSnapshot(db, *out, *day, *statePath, *releasePath, *full, model.PromptAuditArchiveWindow{CreatedFrom: *createdFrom, CreatedBefore: *createdBefore})
 	case "verify":
 		var data []byte
 		data, err = os.ReadFile(*volumesPath)
@@ -179,13 +181,16 @@ type promptAuditSnapshotState struct {
 	ExcludeTableData []string                 `json:"exclude_table_data"`
 }
 
-func exportPromptAuditSnapshot(db *gorm.DB, path, day, statePath, releasePath string, full bool) (model.PromptAuditArchive, error) {
+func exportPromptAuditSnapshot(db *gorm.DB, path, day, statePath, releasePath string, full bool, window model.PromptAuditArchiveWindow) (model.PromptAuditArchive, error) {
 	var archive model.PromptAuditArchive
 	if path == "" {
 		return archive, errors.New("archive output path is required")
 	}
 	if (statePath == "") != (releasePath == "") {
 		return archive, errors.New("snapshot-state and release-file must be supplied together")
+	}
+	if statePath != "" && (window.CreatedFrom != 0 || window.CreatedBefore != 0) {
+		return archive, errors.New("historical creation windows cannot be used to exclude bodies from a database backup")
 	}
 	if statePath != "" && db.Dialector.Name() != "postgres" {
 		return archive, errors.New("external backup snapshots require PostgreSQL")
@@ -226,7 +231,7 @@ func exportPromptAuditSnapshot(db *gorm.DB, path, day, statePath, releasePath st
 		digest := sha256.New()
 		stream := &promptAuditArchiveStream{Writer: io.MultiWriter(file, digest)}
 		var exportErr error
-		archive, exportErr = model.WritePromptAuditArchive(tx, stream, source, day, version, full)
+		archive, exportErr = model.WritePromptAuditArchive(tx, stream, source, day, version, full, window)
 		if exportErr != nil {
 			return exportErr
 		}

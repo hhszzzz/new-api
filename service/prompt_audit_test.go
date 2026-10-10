@@ -30,6 +30,24 @@ import (
 	"gorm.io/gorm"
 )
 
+func TestPromptAuditHistoricalExportCannotExcludeBackupBodies(t *testing.T) {
+	previousSQLitePath, previousDatabaseType := common.SQLitePath, common.MainDatabaseType()
+	t.Cleanup(func() {
+		common.SQLitePath = previousSQLitePath
+		common.SetMainDatabaseType(previousDatabaseType)
+	})
+	directory := t.TempDir()
+	t.Setenv("SQL_DSN", "")
+	t.Setenv("SQLITE_PATH", directory+"/backup-guard.db")
+	var stdout, stderr bytes.Buffer
+	status := RunPromptAuditStorageCLI([]string{"export", "--out", directory + "/day.tar.zst", "--snapshot-state", directory + "/snapshot.json", "--release-file", directory + "/release", "--created-from", "1", "--created-before", "2"}, &stdout, &stderr)
+	assert.Equal(t, 1, status)
+	assert.Contains(t, stderr.String(), "historical creation windows cannot be used to exclude bodies from a database backup")
+	assert.Empty(t, stdout.String())
+	assert.NoFileExists(t, directory+"/snapshot.json")
+	assert.NoFileExists(t, directory+"/day.tar.zst")
+}
+
 func TestPromptAuditProbeBlockingAndExemptions(t *testing.T) {
 	withPromptWordlistTestDB(t)
 	require.NoError(t, i18n.Init())

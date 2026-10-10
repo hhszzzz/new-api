@@ -163,7 +163,7 @@ func runPromptAuditArchiveLifecycle(t *testing.T, db *gorm.DB, engine string) {
 	conversationPayload, err := common.Marshal(map[string]any{"version": 1, "direction": "input", "segments": conversationSegments})
 	require.NoError(t, err)
 	conversationText := strings.TrimSuffix(strings.Repeat("long conversation message\n\n", len(conversationSegments)), "\n\n")
-	conversation := &PromptAudit{RequestID: "long-conversation", Direction: "input", Status: PromptAuditStatusStored, RawPayload: conversationPayload, ScanPayload: conversationPayload, FullPrompt: []byte(conversationText), CreatedAt: now - 8*86400, CompletedAt: now - 8*86400}
+	conversation := &PromptAudit{RequestID: "long-conversation", Direction: "input", Status: PromptAuditStatusStored, RawPayload: conversationPayload, ScanPayload: conversationPayload, FullPrompt: []byte(conversationText), CreatedAt: now - 8*86400 + 1, CompletedAt: now - 8*86400 + 1}
 	require.NoError(t, CreatePromptAudit(conversation))
 	conversationView, err := GetPromptAudit(conversation.ID)
 	require.NoError(t, err)
@@ -219,6 +219,20 @@ func runPromptAuditArchiveLifecycle(t *testing.T, db *gorm.DB, engine string) {
 	var duplicateCount int64
 	require.NoError(t, db.Model(&PromptAuditContent{}).Where("hash = ?", promptAuditContentHash([]byte("original request"))).Count(&duplicateCount).Error)
 	assert.EqualValues(t, 1, duplicateCount)
+	// The start is inclusive and the end exclusive. An earlier related request
+	// is carried along, while other requests outside the window stay separate.
+	window, windowBytes := archivePromptAuditFixture(t, db, "2026-10-07", PromptAuditArchiveWindow{CreatedFrom: output.CreatedAt, CreatedBefore: output.CreatedAt + 1})
+	assert.EqualValues(t, 3, window.RecordCount)
+	_, err = ImportPromptAuditArchive(db, bytes.NewReader(windowBytes), false)
+	require.NoError(t, err)
+	windowReply, err := GetPromptAuditImportedEvent(db, window.SourceID, output.ID, true)
+	require.NoError(t, err)
+	assert.Equal(t, reply, *windowReply.FullPrompt)
+	windowInput, err := GetPromptAuditImportedEvent(db, window.SourceID, input.ID, true)
+	require.NoError(t, err)
+	assert.Equal(t, "system rules\n\noriginal request", *windowInput.FullPrompt)
+	_, err = GetPromptAuditImportedEvent(db, window.SourceID, conversation.ID, true)
+	assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
 	before, err := GetPromptAuditStorageStats(db)
 	require.NoError(t, err)
 	assert.Greater(t, before.References, before.ContentBlocks)
@@ -350,7 +364,7 @@ func runPromptAuditArchiveLifecycle(t *testing.T, db *gorm.DB, engine string) {
 	assert.Error(t, err)
 }
 
-func archivePromptAuditFixture(t *testing.T, db *gorm.DB, day string) (PromptAuditArchive, []byte) {
+func archivePromptAuditFixture(t *testing.T, db *gorm.DB, day string, windows ...PromptAuditArchiveWindow) (PromptAuditArchive, []byte) {
 	t.Helper()
 	source, err := PromptAuditStorageSource(db)
 	require.NoError(t, err)
@@ -360,7 +374,7 @@ func archivePromptAuditFixture(t *testing.T, db *gorm.DB, day string) (PromptAud
 	var archive PromptAuditArchive
 	require.NoError(t, db.Transaction(func(tx *gorm.DB) error {
 		var err error
-		archive, err = WritePromptAuditArchive(tx, &buffer, source, day, version, false)
+		archive, err = WritePromptAuditArchive(tx, &buffer, source, day, version, false, windows...)
 		return err
 	}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true}))
 	archive.Bytes, archive.Digest = int64(buffer.Len()), promptAuditContentHash(buffer.Bytes())
