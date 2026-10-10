@@ -298,7 +298,7 @@ def replenish_previous_packages(config, work):
             import_encrypted(config, paths, item["archive"]["digest"])
 
 
-def backup(config, stage):
+def backup(config, stage, defer_cleanup=False):
     root = Path(config["HOST_ROOT"])
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     work = root/("export-"+uuid.uuid4().hex)
@@ -370,7 +370,8 @@ def backup(config, stage):
         write_json(proof, volumes)
         cli(config, "verify", "--id", descriptor["archive"]["id"], "--digest", descriptor["archive"]["digest"], "--volumes", container_path(config, proof))
         shutil.copy2(manifest, Path(stage)/"prompt-audit-day.json")
-        cli(config, "cleanup")
+        if not defer_cleanup:
+            cli(config, "cleanup")
         print(json.dumps({"archive": descriptor["archive"]["id"], "volumes": len(volumes), "recovery_complete": True}))
     finally:
         release.touch(mode=0o600)
@@ -499,6 +500,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("command", choices=["backup", "import-jobs", "disk-check", "worker", "cleanup-workers", "database-backup"])
     parser.add_argument("--stage")
+    parser.add_argument("--defer-cleanup", action="store_true", help="retain local bodies while validating the initial recovery backup")
     parser.add_argument("--role", choices=["cli", "pg-dump"])
     parser.add_argument("--worker-config")
     args, arguments = parser.parse_known_args()
@@ -576,7 +578,7 @@ def main():
             if args.command == "backup":
                 if not args.stage:
                     parser.error("backup requires --stage")
-                backup(config, args.stage)
+                backup(config, args.stage, args.defer_cleanup)
             elif args.command == "import-jobs":
                 import_jobs(config)
             else:
