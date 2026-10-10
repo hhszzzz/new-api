@@ -122,6 +122,36 @@ class PromptAuditHostContracts(unittest.TestCase):
             self.assertEqual(len(set(destinations)), 3)
             self.assertTrue(all(not path.exists() for path in destinations))
 
+    def test_upload_timeout_requires_remote_proof_and_can_resume(self):
+        for committed_before_timeout in (False, True):
+            with self.subTest(committed_before_timeout=committed_before_timeout), tempfile.TemporaryDirectory() as directory:
+                file = Path(directory)/"day.age"
+                file.write_bytes(b"complete encrypted archive")
+                config = dict(storage.DEFAULTS)
+                uploads = 0
+                remote_content = None
+
+                def transfer(arguments, **kwargs):
+                    nonlocal uploads, remote_content
+                    if arguments[1] == "upload":
+                        uploads += 1
+                        if uploads == 1:
+                            if committed_before_timeout:
+                                remote_content = file.read_bytes()
+                            raise storage.subprocess.TimeoutExpired(arguments, 1)
+                        remote_content = file.read_bytes()
+                    elif remote_content is not None:
+                        destination = Path(arguments[arguments.index("--saveto")+1])
+                        (destination/file.name).write_bytes(remote_content)
+                    return b""
+
+                with patch.object(storage, "run", side_effect=transfer), patch.object(storage.time, "sleep"):
+                    proof = storage.upload_verified(config, file, config["REMOTE_ROOT"]+"/"+file.name)
+                self.assertEqual(uploads, 1 if committed_before_timeout else 2)
+                self.assertEqual(proof["sha256"], storage.file_digest(file))
+                self.assertEqual(proof["bytes"], file.stat().st_size)
+                self.assertTrue(file.exists())
+
     def test_interrupted_import_resumes_and_extra_files_are_rejected_before_import(self):
         with tempfile.TemporaryDirectory() as directory:
             config = dict(storage.DEFAULTS, HOST_ROOT=directory)

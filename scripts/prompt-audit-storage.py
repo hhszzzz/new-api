@@ -116,10 +116,21 @@ def remote_download(config, remote, directory, name, size, checksum):
 
 def upload_verified(config, path, remote):
     size, checksum = path.stat().st_size, file_digest(path)
-    run([config["BAIDU_CLI"], "upload", "-p", "1", "-l", "1", "--norapid", "--policy", "overwrite", str(path), remote.rsplit("/", 1)[0]+"/"], timeout=max(900, size//(2 << 20)+900))
-    with tempfile.TemporaryDirectory(prefix="verify-", dir=path.parent) as directory:
-        remote_download(config, remote, directory, path.name, size, checksum)
-    return {"name": path.name, "bytes": size, "sha256": checksum, "remote_path": remote}
+    for attempt in range(3):
+        try:
+            run([config["BAIDU_CLI"], "upload", "-p", "1", "-l", "1", "--norapid", "--policy", "overwrite", str(path), remote.rsplit("/", 1)[0]+"/"], timeout=max(900, size//(2 << 20)+900))
+        except (RuntimeError, subprocess.SubprocessError):
+            # A timed-out final response can follow a committed remote upload.
+            # Only downloading the expected bytes can prove it completed.
+            pass
+        try:
+            with tempfile.TemporaryDirectory(prefix="verify-", dir=path.parent) as directory:
+                remote_download(config, remote, directory, path.name, size, checksum)
+            return {"name": path.name, "bytes": size, "sha256": checksum, "remote_path": remote}
+        except (RuntimeError, subprocess.SubprocessError):
+            if attempt < 2:
+                time.sleep(5*(attempt+1))
+    raise RuntimeError("remote volume verification failed after three upload attempts")
 
 
 def decrypt_process(config, paths):
