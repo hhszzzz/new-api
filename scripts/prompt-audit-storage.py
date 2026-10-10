@@ -368,11 +368,11 @@ def backup(config, stage, defer_cleanup=False):
         upload_verified(config, manifest, config["REMOTE_ROOT"].rstrip("/")+"/"+manifest.name)
         proof = work/"verified-volumes.json"
         write_json(proof, volumes)
-        cli(config, "verify", "--id", descriptor["archive"]["id"], "--digest", descriptor["archive"]["digest"], "--volumes", container_path(config, proof))
         shutil.copy2(manifest, Path(stage)/"prompt-audit-day.json")
         if not defer_cleanup:
+            cli(config, "verify", "--id", descriptor["archive"]["id"], "--digest", descriptor["archive"]["digest"], "--volumes", container_path(config, proof))
             cli(config, "cleanup")
-        print(json.dumps({"archive": descriptor["archive"]["id"], "volumes": len(volumes), "recovery_complete": True}))
+        print(json.dumps({"archive": descriptor["archive"]["id"], "volumes": len(volumes), "recovery_complete": True, "acknowledged": not defer_cleanup}))
     finally:
         release.touch(mode=0o600)
         if encrypt and encrypt.poll() is None:
