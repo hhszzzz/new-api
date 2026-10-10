@@ -96,11 +96,22 @@ def notify(config, level, message):
 def remote_download(config, remote, directory, name, size, checksum):
     if not remote.startswith(config["REMOTE_ROOT"].rstrip("/")+"/") or not NAME.fullmatch(name):
         raise RuntimeError("invalid archive remote path")
-    run([config["BAIDU_CLI"], "download", "-p", "1", "-l", "1", "--saveto", str(directory), "--retry", "2", remote], timeout=max(900, size//(2 << 20)+900))
-    matches = list(Path(directory).rglob(name))
-    if len(matches) != 1 or matches[0].stat().st_size != size or file_digest(matches[0]) != checksum:
-        raise RuntimeError("remote volume verification failed")
-    return matches[0]
+    # The client can return success when metadata lookup queued no downloads.
+    # Each retry gets a fresh directory so an incomplete file cannot be skipped.
+    for attempt in range(3):
+        with tempfile.TemporaryDirectory(prefix="download-", dir=directory) as work:
+            try:
+                run([config["BAIDU_CLI"], "download", "-p", "1", "-l", "1", "--saveto", work, "--retry", "2", remote], timeout=max(900, size//(2 << 20)+900))
+                matches = list(Path(work).rglob(name))
+                if len(matches) == 1 and matches[0].stat().st_size == size and file_digest(matches[0]) == checksum:
+                    destination = Path(directory)/name
+                    matches[0].replace(destination)
+                    return destination
+            except (RuntimeError, subprocess.SubprocessError):
+                pass
+        if attempt < 2:
+            time.sleep(2*(attempt+1))
+    raise RuntimeError("remote volume verification failed after three attempts")
 
 
 def upload_verified(config, path, remote):

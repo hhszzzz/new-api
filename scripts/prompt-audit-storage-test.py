@@ -94,10 +94,33 @@ class PromptAuditHostContracts(unittest.TestCase):
                     (destination/file.name).write_bytes(b"damaged encrypted volume!")
                 return b""
 
-            with patch.object(storage, "run", side_effect=commands):
+            with patch.object(storage, "run", side_effect=commands), patch.object(storage.time, "sleep"):
                 with self.assertRaisesRegex(RuntimeError, "verification failed"):
                     storage.upload_verified(config, file, config["REMOTE_ROOT"]+"/"+file.name)
             self.assertTrue(file.exists(), "a failed proof must not discard the staged volume")
+
+    def test_remote_verification_retries_empty_and_damaged_downloads(self):
+        with tempfile.TemporaryDirectory() as directory:
+            expected = Path(directory)/"expected.age"
+            expected.write_bytes(b"verified remote ciphertext")
+            checksum = storage.file_digest(expected)
+            config = dict(storage.DEFAULTS)
+            destinations = []
+
+            def download(arguments, **kwargs):
+                destination = Path(arguments[arguments.index("--saveto")+1])
+                destinations.append(destination)
+                if len(destinations) == 2:
+                    (destination/"day.age").write_bytes(b"damaged remote ciphertext!")
+                elif len(destinations) == 3:
+                    (destination/"day.age").write_bytes(expected.read_bytes())
+                return b""
+
+            with patch.object(storage, "run", side_effect=download), patch.object(storage.time, "sleep"):
+                result = storage.remote_download(config, config["REMOTE_ROOT"]+"/day.age", directory, "day.age", expected.stat().st_size, checksum)
+            self.assertEqual(result.read_bytes(), expected.read_bytes())
+            self.assertEqual(len(set(destinations)), 3)
+            self.assertTrue(all(not path.exists() for path in destinations))
 
     def test_interrupted_import_resumes_and_extra_files_are_rejected_before_import(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -132,10 +155,22 @@ class PromptAuditHostContracts(unittest.TestCase):
             self.assertEqual(json.loads((job_dir/"status.json").read_text())["status"], "failed")
 
     def test_backup_patch_keeps_other_service_backup_and_is_idempotent(self):
-        original = 'prefix\n  docker exec newapi-postgres pg_dump -U newapi -d newapi 2>/dev/null | gzip > "$STAGE/newapi-postgres.sql.gz"\nother service backup\nif [ ! -s "$STAGE/newapi-postgres.sql.gz" ] || [ ! -d "$STAGE/etc/caddy" ]; then\nsuffix\n'
+        original = '''#!/bin/bash
+BPC="/usr/local/bin/BaiduPCS-Go"
+if docker ps --format '{{.Names}}' | grep -qx "newapi-postgres"; then
+  docker exec newapi-postgres pg_dump -U newapi -d newapi 2>/dev/null | gzip > "$STAGE/newapi-postgres.sql.gz"
+fi
+other service backup
+if [ ! -s "$STAGE/newapi-postgres.sql.gz" ] || [ ! -d "$STAGE/etc/caddy" ]; then
+suffix
+'''
         patched = installer.patch_backup(original)
         self.assertIn("other service backup", patched)
         self.assertIn("newapi-postgres.dump", patched)
+        self.assertIn("/opt/new-api/docker-compose.override.yml", patched)
+        self.assertIn("/etc/ccs-prompt-audit-baidu", patched)
+        self.assertIn('cp -a --parents "$path" "$STAGE/prompt-audit-host/"', patched)
+        self.assertIn('[ -f /etc/ccs-prompt-audit-storage.enabled ] && [ -x /usr/local/bin/ccs-prompt-audit-baidu ]', patched)
         self.assertEqual(installer.patch_backup(patched), patched)
         with self.assertRaises(RuntimeError):
             installer.patch_backup("unreviewed script")
