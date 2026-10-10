@@ -375,9 +375,13 @@ def main():
     root = Path(config["HOST_ROOT"]); root.mkdir(parents=True, exist_ok=True, mode=0o700)
     # Backup and viewing imports share one heavy-task lock; disk alerts still run.
     lock_name = "disk-check.lock" if args.command == "disk-check" else "body-maintenance.lock"
-    with (root/lock_name).open("w") as lock:
+    with (root/lock_name).open("w") as lock, (root/"host-backup.lock").open("w") as host_lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if args.command == "import-jobs":
+                # The core backup holds this lock through its final upload;
+                # its inner archive command already holds the body lock.
+                fcntl.flock(host_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             if args.command == "backup":
                 raise RuntimeError("audit body maintenance is already running; backup postponed")

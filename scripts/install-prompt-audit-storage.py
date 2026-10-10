@@ -55,6 +55,20 @@ if [ -f /etc/ccs-prompt-audit-storage.conf ]; then
   done
 fi
 '''+database)
+    if "# prompt-audit host maintenance lock" not in text:
+        transfer = 'BPC="/usr/local/bin/BaiduPCS-Go"'
+        if text.count(transfer) != 1:
+            raise RuntimeError("the CCS backup transfer command differs from the reviewed version")
+        text = text.replace(transfer, '''# prompt-audit host maintenance lock (one heavy job on this host)
+if [ -f /etc/ccs-prompt-audit-storage.conf ]; then
+  mkdir -p /opt/new-api/data/prompt-audit-maintenance
+  exec 9>/opt/new-api/data/prompt-audit-maintenance/host-backup.lock
+  if ! flock -n 9; then
+    echo "CCS backup postponed: prompt audit maintenance is running" >&2
+    exit 0
+  fi
+fi
+'''+transfer)
     return text
 
 

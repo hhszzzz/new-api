@@ -63,6 +63,14 @@ class PromptAuditHostContracts(unittest.TestCase):
                 with patch.object(storage, "configuration", return_value=config), patch.object(storage, "disk_check") as checked, patch("sys.argv", ["maintenance", "disk-check"]):
                     storage.main()
                 checked.assert_called_once()
+            with (Path(directory)/"host-backup.lock").open("w") as lock:
+                storage.fcntl.flock(lock, storage.fcntl.LOCK_EX | storage.fcntl.LOCK_NB)
+                with patch.object(storage, "configuration", return_value=config), patch.object(storage, "import_jobs") as imported, patch("sys.argv", ["maintenance", "import-jobs"]):
+                    storage.main()
+                imported.assert_not_called()
+                with patch.object(storage, "configuration", return_value=config), patch.object(storage, "disk_check") as checked, patch("sys.argv", ["maintenance", "disk-check"]):
+                    storage.main()
+                checked.assert_called_once()
 
     def test_alert_threshold_daily_limit_and_recovery(self):
         state = {}
@@ -201,6 +209,8 @@ suffix
         self.assertIn("/etc/ccs-prompt-audit-baidu", patched)
         self.assertIn('cp -a --parents "$path" "$STAGE/prompt-audit-host/"', patched)
         self.assertIn('[ -f /etc/ccs-prompt-audit-storage.enabled ] && [ -x /usr/local/bin/ccs-prompt-audit-baidu ]', patched)
+        self.assertIn("exec 9>/opt/new-api/data/prompt-audit-maintenance/host-backup.lock", patched)
+        self.assertIn("flock -n 9", patched)
         self.assertEqual(installer.patch_backup(patched), patched)
         with self.assertRaises(RuntimeError):
             installer.patch_backup("unreviewed script")
