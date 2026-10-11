@@ -307,6 +307,14 @@ func runPromptAuditArchiveLifecycle(t *testing.T, db *gorm.DB, engine string) {
 	require.NoError(t, err)
 	assert.Equal(t, "archived", missing.ContentState)
 	assert.Nil(t, missing.ToResponse(true).FullPrompt)
+	// Legacy rows may have a NULL eviction marker; cleanup must treat NULL as false.
+	require.NoError(t, db.Model(&PromptAudit{}).Where("id = ?", output.ID).UpdateColumn("content_evicted", nil).Error)
+	legacyPurged, err := CleanupPromptAuditSharedContent(db, now+16*86400, 100)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, legacyPurged)
+	var legacyEvicted PromptAudit
+	require.NoError(t, db.First(&legacyEvicted, output.ID).Error)
+	assert.True(t, legacyEvicted.ContentEvicted)
 	var originalCount int64
 	require.NoError(t, db.Model(&PromptAudit{}).Count(&originalCount).Error)
 	_, err = ImportPromptAuditArchive(db, bytes.NewReader(secondBytes), false)

@@ -733,7 +733,7 @@ func CleanupPromptAuditSharedContent(db *gorm.DB, now int64, batchSize int) (int
 	cutoff := now - 7*24*60*60
 	var candidates []PromptAudit
 	dependencies := db.Model(&PromptAudit{}).Select("related_input_id").Where("related_input_id > 0 AND (status IN ? OR completed_at >= ?)", promptAuditActiveStatuses(), cutoff)
-	if err := db.Where("content_manifest IS NOT NULL AND content_manifest <> '' AND content_evicted = ? AND status IN ? AND completed_at > 0 AND completed_at < ? AND archived_digest <> ''", false, promptAuditTerminalStatuses(), cutoff).Where("id NOT IN (?)", dependencies).Order("id asc").Limit(min(max(batchSize, 1), 500)).Find(&candidates).Error; err != nil {
+	if err := db.Where("content_manifest IS NOT NULL AND content_manifest <> '' AND COALESCE(content_evicted, false) = ? AND status IN ? AND completed_at > 0 AND completed_at < ? AND archived_digest <> ''", false, promptAuditTerminalStatuses(), cutoff).Where("id NOT IN (?)", dependencies).Order("id asc").Limit(min(max(batchSize, 1), 500)).Find(&candidates).Error; err != nil {
 		return 0, err
 	}
 	var purged int64
