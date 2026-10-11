@@ -124,10 +124,49 @@ func TestPromptAuditSharedStorageMatrix(t *testing.T) {
 					configured.SharedContentEnabled = true
 					configured.PublishConfig()
 					runPromptAuditArchiveLifecycle(t, db, engine)
+					runPromptAuditOrphanCleanup(t, db)
 				})
 			}
 		})
 	}
+}
+
+func runPromptAuditOrphanCleanup(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	events := []PromptAudit{{Status: PromptAuditStatusStored}, {Status: PromptAuditStatusStored}, {Status: PromptAuditStatusStored}}
+	require.NoError(t, db.Create(&events).Error)
+	blobs := make([]PromptAuditContent, 0, 4)
+	for _, text := range []string{"referenced by two events", "only inactive references", "reference to a deleted event", "no references"} {
+		encoded, err := encodePromptAuditContent([]byte(text))
+		require.NoError(t, err)
+		blobs = append(blobs, PromptAuditContent{Hash: promptAuditContentHash([]byte(text)), Data: encoded, RawBytes: int64(len(text)), StoredBytes: int64(len(encoded))})
+	}
+	require.NoError(t, db.Create(&blobs).Error)
+	references := []PromptAuditContentRef{
+		{AuditID: events[0].ID, Hash: blobs[0].Hash, Active: true},
+		{AuditID: events[1].ID, Hash: blobs[0].Hash, Active: true},
+		{AuditID: events[2].ID, Hash: blobs[1].Hash, Active: false},
+		{AuditID: 1 << 60, Hash: blobs[2].Hash, Active: true},
+	}
+	require.NoError(t, db.Create(&references).Error)
+	require.NoError(t, CleanupPromptAuditOrphanContent(db, 100))
+	require.NoError(t, CleanupPromptAuditOrphanContent(db, 100))
+	for i, original := range blobs {
+		var stored PromptAuditContent
+		require.NoError(t, db.First(&stored, "hash = ?", original.Hash).Error)
+		if i == 0 {
+			assert.Equal(t, original.Data, stored.Data, "shared active references protect complete body bytes")
+			assert.Equal(t, original.StoredBytes, stored.StoredBytes)
+		} else {
+			assert.Empty(t, stored.Data)
+			assert.Zero(t, stored.StoredBytes)
+		}
+	}
+	var orphanReferences, survivingEvents int64
+	require.NoError(t, db.Model(&PromptAuditContentRef{}).Where("audit_id = ?", int64(1<<60)).Count(&orphanReferences).Error)
+	assert.Zero(t, orphanReferences)
+	require.NoError(t, db.Model(&PromptAudit{}).Where("id IN ?", []int64{events[0].ID, events[1].ID, events[2].ID}).Count(&survivingEvents).Error)
+	assert.EqualValues(t, 3, survivingEvents, "body cleanup preserves event metadata")
 }
 
 type promptAuditLegacyStorageRow struct {

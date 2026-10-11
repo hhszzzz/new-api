@@ -812,11 +812,21 @@ func CleanupPromptAuditSharedContent(db *gorm.DB, now int64, batchSize int) (int
 }
 
 func CleanupPromptAuditOrphanContent(db *gorm.DB, batchSize int) error {
-	if err := db.Where("audit_id NOT IN (?)", db.Model(&PromptAudit{}).Select("id")).Delete(&PromptAuditContentRef{}).Error; err != nil {
+	eventExists := db.Model(&PromptAudit{}).Select("1").Where(clause.Eq{
+		Column: clause.Column{Table: db.NamingStrategy.TableName("PromptAudit"), Name: "id"},
+		Value:  clause.Column{Table: db.NamingStrategy.TableName("PromptAuditContentRef"), Name: "audit_id"},
+	})
+	if err := db.Where("NOT EXISTS (?)", eventExists).Delete(&PromptAuditContentRef{}).Error; err != nil {
 		return err
 	}
+	// A block can have millions of repeated active references. An indexed
+	// existence check stops at the first one instead of materializing every hash.
+	activeReferenceExists := db.Model(&PromptAuditContentRef{}).Select("1").Where("active = ?", true).Where(clause.Eq{
+		Column: clause.Column{Table: db.NamingStrategy.TableName("PromptAuditContentRef"), Name: "hash"},
+		Value:  clause.Column{Table: db.NamingStrategy.TableName("PromptAuditContent"), Name: "hash"},
+	})
 	var hashes []string
-	if err := db.Model(&PromptAuditContent{}).Where("data IS NOT NULL AND hash NOT IN (?)", db.Model(&PromptAuditContentRef{}).Select("hash").Where("active = ?", true)).Order("hash asc").Limit(min(max(batchSize, 1), 500)).Pluck("hash", &hashes).Error; err != nil {
+	if err := db.Model(&PromptAuditContent{}).Where("data IS NOT NULL AND NOT EXISTS (?)", activeReferenceExists).Order("hash asc").Limit(min(max(batchSize, 1), 500)).Pluck("hash", &hashes).Error; err != nil {
 		return err
 	}
 	for _, hash := range hashes {
