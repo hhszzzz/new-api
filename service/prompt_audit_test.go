@@ -504,6 +504,113 @@ func TestPromptAuditPreviewFallsBackToTheLatestUserBlock(t *testing.T) {
 	require.Len(t, records, 1)
 	assert.Contains(t, records[0].RedactedPreview, "Survey the rep")
 	assert.NotContains(t, records[0].RedactedPreview, "You are Claude Code")
+
+	// A side channel quotes its content through client wrappers; the preview
+	// shows the user's own words inside them, not the markup.
+	transcriptRequest := request
+	transcriptRequest.Snapshot = dto.PromptAuditSnapshot{RequestKind: "side:safety", Segments: []dto.PromptAuditSegment{
+		{Scope: dto.PromptScopeSystem, Role: "system", Text: "You are a security monitor for autonomous AI coding agents."},
+		{Scope: dto.PromptScopeUser, Role: "user", User: true, Text: "<transcript>\n\n{\"user\":\"[Compaction summary — written by the assistant, not by the user.\"}\n\n{\"user\":\"媒体好像没有得到图片拍摄时间的信息？请帮我检查一下上传和展示的完整链路\"}\n\n{\"Bash\":\"cd /tmp && ls\"}\n\n</transcript>\n\nErr on the side of blocking."},
+	}}
+	result, apiErr = InspectPrompt(c, transcriptRequest)
+	require.Nil(t, apiErr)
+	require.Zero(t, result.AuditID)
+	RecordPromptAuditStored(c, transcriptRequest)
+	require.NoError(t, model.DB.Order("id desc").Limit(1).Find(&records).Error)
+	preview := records[0].RedactedPreview
+	assert.Contains(t, preview, "媒体好像")
+	assert.NotContains(t, preview, "<transcript>")
+	assert.NotContains(t, preview, `{"user"`)
+
+	// The title sidecar's excerpt wrapper is markup too.
+	titleRequest := request
+	titleRequest.Snapshot = dto.PromptAuditSnapshot{RequestKind: "side:title", Segments: []dto.PromptAuditSegment{
+		{Scope: dto.PromptScopeUser, Role: "user", User: true, Text: "<session>\n[user]: 媒体好像没有得到图片拍摄时间的信息？请帮我检查\n</session>\n\nWrite the title in the predominant language of the session."},
+	}}
+	result, apiErr = InspectPrompt(c, titleRequest)
+	require.Nil(t, apiErr)
+	require.Zero(t, result.AuditID)
+	RecordPromptAuditStored(c, titleRequest)
+	require.NoError(t, model.DB.Order("id desc").Limit(1).Find(&records).Error)
+	assert.NotContains(t, records[0].RedactedPreview, "<session>")
+	assert.Contains(t, records[0].RedactedPreview, "[user]: 媒体好像")
+}
+
+func TestPromptAuditReadableBlockUnwrapsClientWrappers(t *testing.T) {
+	compaction := "[Compaction summary — written by the assistant, not by the user. The user requests it reports are task context.]\\nThis session is being continued from a previous conversation that ran out of context."
+	for _, test := range []struct {
+		name, text, want string
+	}{
+		{
+			name: "security monitor transcript",
+			text: "<transcript>\n\n{\"user\":\"媒体好像没有得到图片拍摄时间的信息？\"}\n\n{\"Bash\":\"cd /tmp && ls\"}\n\n</transcript>\n\nErr on the side of blocking.",
+			want: "媒体好像没有得到图片拍摄时间的信息？",
+		},
+		{
+			name: "compaction header dropped when it is the only user line",
+			text: "<transcript>\n\n{\"user\":\"" + compaction + "\"}\n\n{\"Bash\":\"cd /tmp && ls\"}\n\n</transcript>",
+			want: "This session is being continued from a previous conversation that ran out of context.",
+		},
+		{
+			name: "later user line beats the compaction summary",
+			text: "<transcript>\n\n{\"user\":\"" + compaction + "\"}\n\n{\"user\":\"先把设置页的错误提示修掉\"}\n\n</transcript>",
+			want: "先把设置页的错误提示修掉",
+		},
+		{
+			name: "unclosed transcript",
+			text: "<transcript>\n\n{\"user\":\"继续\"}\n\n{\"Bash\":\"ls\"}",
+			want: "继续",
+		},
+		{
+			name: "bare jsonl conversation",
+			text: "{\"user\":\"媒体好像没有得到图片拍摄时间的信息？\"}\n{\"Bash\":\"cd /tmp && ls\"}",
+			want: "媒体好像没有得到图片拍摄时间的信息？",
+		},
+		{
+			name: "action-only transcript falls back to the command",
+			text: "<transcript>\n{\"Bash\":\"cd /tmp && ls\"}\n</transcript>",
+			want: "cd /tmp && ls",
+		},
+		{
+			name: "uploaded file list yields to the request after it",
+			text: "<uploaded_files>\n<file><file_path>report.pdf</file_path></file>\n</uploaded_files>\n\n请在这个汇报后面加上附件",
+			want: "请在这个汇报后面加上附件",
+		},
+		{
+			name: "teammate message",
+			text: "<teammate-message teammate_id=\"team-lead\" summary=\"Inventory\">\nSurvey the downstream worktree.",
+			want: "Survey the downstream worktree.",
+		},
+		{
+			name: "automation heartbeat",
+			text: "<heartbeat>\n<automation_id>automation</automation_id>\n<current_time_iso>2026-10-10T00:00:00Z</current_time_iso>\n<instructions>\n继续本线程的迁移任务</instructions>\n</heartbeat>",
+			want: "继续本线程的迁移任务",
+		},
+		{
+			name: "question reply",
+			text: "<send_user_message_question_reply>\n[{\"questionItemId\":\"x\",\"question\":\"是否允许更新应用？\",\"answer\":\"允许\"}]",
+			want: "是否允许更新应用？",
+		},
+		{
+			name: "conversation wrapper",
+			text: "<conversation>\n# Taibu Agent UI 优化计划\n\n先做视觉对齐。\n</conversation>",
+			want: "# Taibu Agent UI 优化计划\n\n先做视觉对齐。",
+		},
+		{
+			name: "plain text unchanged",
+			text: "把设置页的错误提示改掉",
+			want: "把设置页的错误提示改掉",
+		},
+		{
+			name: "user text starting with markup is not rewritten",
+			text: "<div>两个按钮的间距改一下</div>",
+			want: "<div>两个按钮的间距改一下</div>",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, promptAuditReadableBlock(test.text))
+		})
+	}
 }
 
 func TestPromptAuditFullRetentionPreservesLargeRecords(t *testing.T) {

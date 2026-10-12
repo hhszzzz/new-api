@@ -335,7 +335,7 @@ func setPromptAuditInputContext(audit *model.PromptAudit, request PromptAuditReq
 		return
 	}
 	if request.HumanPrompt != "" {
-		value := redactPromptAuditText(request.HumanPrompt)
+		value := redactPromptAuditText(promptAuditReadableBlock(request.HumanPrompt))
 		runes := []rune(strings.TrimSpace(value))
 		if len(runes) > promptAuditPreviewSourceRunes {
 			value = string(runes[:promptAuditPreviewSourceRunes]) + "…"

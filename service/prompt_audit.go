@@ -2293,10 +2293,154 @@ func promptAuditFallbackPreview(snapshot dto.PromptAuditSnapshot) string {
 			continue
 		}
 		if text := strings.TrimSpace(segment.Text); text != "" {
-			return promptAuditPreview(text)
+			return promptAuditPreview(promptAuditReadableBlock(text))
 		}
 	}
 	return ""
+}
+
+// promptAuditContentWrappers names the client wrappers whose children carry
+// their content. Element names with a dash or underscore are treated as
+// wrappers too — they are client-generated names, not prose a user typed — and
+// a metadata wrapper (an uploaded-file list) or one this build does not know
+// yields to the block that follows it.
+var (
+	promptAuditContentWrappers = map[string]bool{"transcript": true, "session": true, "heartbeat": true, "instructions": true, "conversation": true}
+	promptAuditWrapperPattern  = regexp.MustCompile(`^<([A-Za-z][A-Za-z0-9_-]*)(?:\s[^<>]*)?>`)
+)
+
+// promptAuditReadableBlock unwraps the client wrappers a side channel or a
+// structured client quotes its content with: the security monitor's <transcript>
+// block, the title sidecar's <session> excerpt, teammate messages, automation
+// heartbeats and the JSON lines some clients serialize messages as
+// ({"user": …}, {"Bash": …}, question replies). The block carrying the substance
+// describes the record; the markup around it does not. A compaction summary is
+// passed over while a later user line exists, and text without a recognizable
+// wrapper is returned unchanged.
+func promptAuditReadableBlock(text string) string {
+	content := strings.TrimSpace(text)
+	for range 6 {
+		peeled, ok := promptAuditPeelWrapper(content)
+		if !ok || peeled == content {
+			break
+		}
+		content = peeled
+	}
+	return promptAuditExtractValue(content)
+}
+
+// promptAuditPeelWrapper removes one leading wrapper element. A content wrapper
+// hands over its children; every other wrapper hands over the block that follows
+// it when that block is not empty, so a file list or a heartbeat's own id gives
+// way to the request beside it. An unclosed wrapper (a transcript some clients
+// never close) is opened the same way. A tag that is not a client-generated
+// element name is left in place, so a user's own text starting with markup is
+// not rewritten.
+func promptAuditPeelWrapper(content string) (string, bool) {
+	match := promptAuditWrapperPattern.FindStringSubmatch(content)
+	if match == nil {
+		return content, false
+	}
+	name := match[1]
+	if !promptAuditContentWrappers[name] && !strings.ContainsAny(name, "-_") {
+		return content, false
+	}
+	body := content[len(match[0]):]
+	// The title sidecar's excerpt drops its own tag and keeps the words after
+	// the block: the excerpt's first line is what describes the record, and the
+	// instruction behind it is part of the same preview source.
+	if name == "session" {
+		return strings.TrimSpace(body), true
+	}
+	closeTag := "</" + name + ">"
+	if index := strings.Index(body, closeTag); index >= 0 {
+		if !promptAuditContentWrappers[name] {
+			if rest := strings.TrimSpace(body[index+len(closeTag):]); rest != "" {
+				return rest, true
+			}
+		}
+		return strings.TrimSpace(body[:index]), true
+	}
+	return strings.TrimSpace(body), true
+}
+
+// promptAuditExtractValue picks the block that describes the record: the user's
+// own words first, a structured client's question next, then the line clients
+// quote an action with ({"Bash": …}). A compaction summary is used only when no
+// later user line exists, with its generated header dropped.
+func promptAuditExtractValue(content string) string {
+	compaction, other := "", ""
+	for line := range strings.SplitSeq(content, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "{") {
+			if !strings.HasPrefix(line, "[") {
+				continue
+			}
+			var items []map[string]any
+			if common.UnmarshalJsonStr(line, &items) != nil {
+				continue
+			}
+			for _, item := range items {
+				if value, ok := item["question"].(string); ok && strings.TrimSpace(value) != "" {
+					return value
+				}
+				if other == "" {
+					if value, ok := item["answer"].(string); ok && strings.TrimSpace(value) != "" {
+						other = value
+					}
+				}
+			}
+			continue
+		}
+		var fields map[string]any
+		if common.UnmarshalJsonStr(line, &fields) != nil {
+			continue
+		}
+		if value, ok := fields["user"].(string); ok && strings.TrimSpace(value) != "" {
+			if !strings.HasPrefix(strings.TrimSpace(value), "[Compaction summary") {
+				return value
+			}
+			if compaction == "" {
+				compaction = value
+			}
+			continue
+		}
+		if value, ok := fields["question"].(string); ok && strings.TrimSpace(value) != "" {
+			return value
+		}
+		if value, ok := fields["answer"].(string); ok && strings.TrimSpace(value) != "" && other == "" {
+			other = value
+			continue
+		}
+		if other == "" && len(fields) == 1 {
+			for _, value := range fields {
+				if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
+					other = text
+				}
+			}
+		}
+	}
+	if compaction != "" {
+		return promptAuditWithoutCompactionHeader(compaction)
+	}
+	if other != "" {
+		return other
+	}
+	return content
+}
+
+// promptAuditWithoutCompactionHeader drops the generated "[Compaction summary —
+// …]" annotation so the preview opens on the summary the compaction wrote.
+func promptAuditWithoutCompactionHeader(value string) string {
+	if !strings.HasPrefix(strings.TrimSpace(value), "[Compaction summary") {
+		return value
+	}
+	if index := strings.Index(value, "]"); index >= 0 {
+		if rest := strings.TrimSpace(value[index+1:]); rest != "" {
+			return rest
+		}
+	}
+	return value
 }
 
 func promptAuditPreview(value string) string {
