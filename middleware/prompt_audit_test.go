@@ -124,6 +124,15 @@ func TestPromptAuditHoldsTokenCountingToTheWordlistGate(t *testing.T) {
 	var recorded int64
 	require.NoError(t, db.Model(&model.PromptAudit{}).Count(&recorded).Error)
 	assert.EqualValues(t, 1, recorded, "a count that passes is not recorded")
+
+	// Recording everything does not resurrect the passing count: the record of
+	// that content belongs to the request that generates from it.
+	configured.RecordAll = true
+	configured.PublishConfig()
+	_, allowed = count("please count these words for me")
+	assert.True(t, allowed)
+	require.NoError(t, db.Model(&model.PromptAudit{}).Count(&recorded).Error)
+	assert.EqualValues(t, 1, recorded, "recording everything still leaves a passing count unrecorded")
 }
 
 func TestPromptAuditSensitiveWordsRunBeforeGuardAndChannelSelection(t *testing.T) {

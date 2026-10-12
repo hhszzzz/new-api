@@ -2284,6 +2284,21 @@ func promptAuditStoredFullPrompt(value string, maxRunes int) ([]byte, bool) {
 	return []byte(string(runes[:maxRunes])), true
 }
 
+// promptAuditFallbackPreview describes a record whose kind carries no human
+// question. The raw joined text would open on the client's system prompt, so the
+// newest user-supplied block is shown instead; inspection is unaffected.
+func promptAuditFallbackPreview(snapshot dto.PromptAuditSnapshot) string {
+	for _, segment := range snapshot.PrioritizedSegments() {
+		if segment.SourceScope() != dto.PromptScopeUser || segment.ToolPart != "" {
+			continue
+		}
+		if text := strings.TrimSpace(segment.Text); text != "" {
+			return promptAuditPreview(text)
+		}
+	}
+	return ""
+}
+
 func promptAuditPreview(value string) string {
 	value = redactPromptAuditText(value)
 	runes := []rune(strings.TrimSpace(value))

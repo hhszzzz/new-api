@@ -114,9 +114,11 @@ func inspectPromptBeforeDistribution(c *gin.Context, modelRequest *ModelRequest)
 		abortPromptAuditRequest(c, apiErr, taskRequest)
 		return cleanup, false
 	}
-	if result.AuditID == 0 {
+	if result.AuditID == 0 && !auditRequest.WordlistOnly {
 		// No gate read this request. With recording on, the gateway still keeps
-		// the record of what passed through it.
+		// the record of what passed through it. A clean token count is the one
+		// exception: it carries the very content the request that generates from
+		// it will record, and every agent step issues one.
 		service.RecordPromptAuditStored(c, auditRequest)
 	}
 	common.SetContextKey(c, constant.ContextKeyPromptAuditChecked, true)

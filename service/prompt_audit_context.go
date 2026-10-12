@@ -341,5 +341,10 @@ func setPromptAuditInputContext(audit *model.PromptAudit, request PromptAuditReq
 			value = string(runes[:promptAuditPreviewSourceRunes]) + "…"
 		}
 		audit.RedactedPreview = value
+	} else {
+		// Kinds without a human question (subagent, continuation, side channels)
+		// would otherwise preview the head of the joined request: the client's own
+		// system prompt or its rotating attestation line.
+		audit.RedactedPreview = promptAuditFallbackPreview(snapshot)
 	}
 }

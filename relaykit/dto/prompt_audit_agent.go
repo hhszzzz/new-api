@@ -55,7 +55,7 @@ func classifyPromptAuditText(text, role string) PromptAuditScope {
 	if promptAuditCommandWrapper(text) {
 		return PromptScopeAgentContext
 	}
-	for _, prefix := range []string{"<system-reminder>", "<ide_opened_file>", "<ide_selection>", "<local-command-", "Caveat: The messages below were generated", "# AGENTS.md instructions for", "<environment_context>", "<user_instructions>", "<turn_aborted>"} {
+	for _, prefix := range []string{"<system-reminder>", "<ide_opened_file>", "<ide_selection>", "<local-command-", "Caveat: The messages below were generated", "# AGENTS.md instructions for", "<environment_context>", "<user_instructions>", "<turn_aborted>", "The following is the user's CLAUDE.md configuration"} {
 		if strings.HasPrefix(text, prefix) {
 			return PromptScopeAgentContext
 		}
@@ -76,6 +76,12 @@ func promptAuditSyntheticKind(text string) string {
 	}
 	if strings.HasPrefix(text, "Current state: ") && strings.Contains(text, "\nTool calls so far:") {
 		return "side:status"
+	}
+	// The session excerpt a client wraps for title generation is an anchor of its
+	// own: the client repeatedly rewords the instruction after it, but the
+	// wrapper and the request it describes do not change.
+	if strings.HasPrefix(text, "<session>") && strings.Contains(text, "Write the title in the predominant language") {
+		return "side:title"
 	}
 	for _, marker := range []struct{ prefix, kind string }{
 		{"<transcript>", "safety"}, {"Perform a web search for", "web_search"},
@@ -121,6 +127,13 @@ func completePromptAuditGrouping(snapshot *PromptAuditSnapshot) {
 				if synthetic == "continuation" {
 					digest := sha256.Sum256([]byte(text))
 					predecessor, origin = origin, PromptAuditOrigin{Continuation: hex.EncodeToString(digest[:])}
+				}
+				if synthetic == "side:safety" {
+					// A transcript wrapper embeds the monitored conversation as its
+					// own parts: the rest of that message is wrapper data, not a new
+					// question. Other wrappers may precede a real instruction, so only
+					// the transcript owns the remainder of its message.
+					break
 				}
 				continue
 			}
@@ -195,8 +208,16 @@ func completePromptAuditSnapshot(snapshot PromptAuditSnapshot, tools any, sessio
 		}
 	}
 	completePromptAuditGrouping(&snapshot)
+	// Subagent identity is carried by the request's own system prompt. A client
+	// or a compactor may replay history as later system blocks, and a session
+	// that read this file quotes the marker itself: only the leading system
+	// segments are evidence, or an ordinary conversation flips to subagent as
+	// soon as it discusses one.
 	for _, segment := range snapshot.Segments {
-		if segment.SourceScope() == PromptScopeSystem && (strings.Contains(segment.Text, "You are a subagent") || strings.Contains(segment.Text, "You are an agent for Claude Code")) {
+		if segment.SourceScope() != PromptScopeSystem {
+			break
+		}
+		if strings.Contains(segment.Text, "You are a subagent") || strings.Contains(segment.Text, "You are an agent for Claude Code") {
 			snapshot.RequestKind = "subagent"
 			snapshot.HumanPrompt = ""
 			break

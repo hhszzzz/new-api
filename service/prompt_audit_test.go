@@ -476,6 +476,36 @@ func TestPromptAuditRecordsRequestsWithoutInspection(t *testing.T) {
 	assert.Empty(t, after.ScanPayload)
 }
 
+func TestPromptAuditPreviewFallsBackToTheLatestUserBlock(t *testing.T) {
+	withPromptWordlistTestDB(t)
+	configured := prompt_audit_setting.GetSetting()
+	configured.Mode = prompt_audit_setting.ModeOff
+	configured.OutputMode = prompt_audit_setting.ModeOff
+	configured.ProbeBlockEnabled = false
+	configured.RecordAll = true
+	configured.PublishConfig()
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	c.Set("role", common.RoleCommonUser)
+	request := PromptAuditRequest{
+		Snapshot: dto.PromptAuditSnapshot{RequestKind: "subagent", Segments: []dto.PromptAuditSegment{
+			{Scope: dto.PromptScopeSystem, Role: "system", Text: "You are Claude Code, Anthropic's official CLI tool for Claude. You are an interactive agent."},
+			{Scope: dto.PromptScopeUser, Role: "user", User: true, Text: "Survey the repository and report the audit storage layout"},
+		}},
+		Protocol: "claude", Model: "guarded-model", Stage: "pre_distribution",
+	}
+	result, apiErr := InspectPrompt(c, request)
+	require.Nil(t, apiErr)
+	require.Zero(t, result.AuditID, "nothing is inspected while the audit is off")
+	RecordPromptAuditStored(c, request)
+
+	var records []*model.PromptAudit
+	require.NoError(t, model.DB.Order("id desc").Limit(1).Find(&records).Error)
+	require.Len(t, records, 1)
+	assert.Contains(t, records[0].RedactedPreview, "Survey the rep")
+	assert.NotContains(t, records[0].RedactedPreview, "You are Claude Code")
+}
+
 func TestPromptAuditFullRetentionPreservesLargeRecords(t *testing.T) {
 	withPromptWordlistTestDB(t)
 	db := model.DB

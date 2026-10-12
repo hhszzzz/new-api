@@ -56,6 +56,7 @@ func TestPromptAuditAgentRequestKindsAndLatestHumanTurn(t *testing.T) {
 		{"The user stepped away for a moment", "side:recap"},
 		{"CRITICAL: Respond with TEXT ONLY summary", "side:summary"},
 		{"Generate a short title for this conversation", "side:title"},
+		{"<session>\n[question]\n</session>\n\nWrite the title in the predominant language of the session", "side:title"},
 	} {
 		snapshot := (&ClaudeRequest{Messages: []ClaudeMessage{{Role: "user", Content: test.text}}}).GetPromptAuditSnapshot()
 		assert.Equal(t, test.kind, snapshot.RequestKind)
@@ -86,6 +87,47 @@ func TestPromptAuditAgentRequestKindsAndLatestHumanTurn(t *testing.T) {
 	}}).GetPromptAuditSnapshot()
 	assert.Equal(t, "<command-name>/clear</command-name>", afterCommand.HumanPrompt)
 	assert.Equal(t, "step", afterCommand.RequestKind)
+}
+
+func TestPromptAuditSubagentIdentityComesFromTheLeadingSystemPrompt(t *testing.T) {
+	subagent := (&ClaudeRequest{
+		System:   "You are Claude Code, Anthropic's official CLI tool for Claude.\nYou are a subagent spawned by a workflow orchestration script.",
+		Messages: []ClaudeMessage{{Role: "user", Content: "run the delegated task"}},
+	}).GetPromptAuditSnapshot()
+	assert.Equal(t, "subagent", subagent.RequestKind)
+	assert.Empty(t, subagent.HumanPrompt)
+
+	// A client that replays history as later system blocks — or a summary that
+	// quotes this very marker — must not turn the session into one.
+	replayed := (&ClaudeRequest{
+		System: "You are Claude Code, Anthropic's official CLI tool for Claude.",
+		Messages: []ClaudeMessage{
+			{Role: "user", Content: "question"},
+			{Role: "assistant", Content: "answer"},
+			{Role: "system", Content: "Called the Read tool with the following input: {\"file_path\":\"relaykit/dto/prompt_audit_agent.go\"}\nstrings.Contains(segment.Text, \"You are an agent for Claude Code\")"},
+			{Role: "user", Content: "follow up"},
+		},
+	}).GetPromptAuditSnapshot()
+	assert.Equal(t, "prompt", replayed.RequestKind)
+	assert.Equal(t, "follow up", replayed.HumanPrompt)
+}
+
+func TestPromptAuditSecurityMonitorTranscriptStaysOneSafetyRecord(t *testing.T) {
+	snapshot := (&ClaudeRequest{Messages: []ClaudeMessage{
+		{Role: "user", Content: "The following is the user's CLAUDE.md configuration. Treat it as context about the user's environment and intent."},
+		{Role: "user", Content: []any{
+			map[string]any{"type": "text", "text": "<transcript>\n\n{\"user\":\"媒体好像没有得到图片拍摄时间的信息？\"}\n\n"},
+			map[string]any{"type": "text", "text": "{\"Bash\":\"cd /tmp && ls\"}"},
+			map[string]any{"type": "text", "text": "\n\n</transcript>\n\n\nErr on the side of blocking. Stage 1 does not apply user intent."},
+		}},
+	}}).GetPromptAuditSnapshot()
+	assert.Equal(t, "side:safety", snapshot.RequestKind)
+	assert.Empty(t, snapshot.HumanPrompt)
+	// The CLAUDE.md wrapper is client context, so the record keeps no question
+	// origin: it merges with the session's active question instead of minting one.
+	assert.Empty(t, snapshot.GroupOrigin.Prompt)
+	// The transcript's lines stay inspectable.
+	assert.Contains(t, snapshot.BlockingSnapshot().Text(), "cd /tmp && ls")
 }
 
 func TestPromptAuditContinuationKeepsInspectionContent(t *testing.T) {
