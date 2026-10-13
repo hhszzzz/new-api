@@ -344,9 +344,34 @@ func (c *ClaudeRequest) GetTokenCountMeta() *types.TokenCountMeta {
 					texts = append(texts, string(b))
 				}
 			case "tool_result":
-				if media.Content != nil {
-					b, _ := kitutil.Marshal(media.Content)
-					texts = append(texts, string(b))
+				// Extract content blocks instead of marshaling the whole payload:
+				// inlined images (base64) in tool results are media, counted per
+				// file. Counting their base64 as ordinary text inflates the
+				// estimation several-fold (desktop-agent screenshot sessions).
+				if media.Content == nil {
+					continue
+				}
+				if text, ok := media.Content.(string); ok {
+					if text != "" {
+						texts = append(texts, text)
+					}
+					continue
+				}
+				blocks, _ := kitutil.Any2Type[[]ClaudeMediaMessage](media.Content)
+				for _, block := range blocks {
+					switch block.Type {
+					case "text":
+						if blockText := block.GetText(); blockText != "" {
+							texts = append(texts, blockText)
+						}
+					case "image":
+						if source := block.ToFileSource(); source != nil {
+							fileMeta = append(fileMeta, &types.FileMeta{
+								FileType: types.FileTypeImage,
+								Source:   source,
+							})
+						}
+					}
 				}
 			}
 		}
