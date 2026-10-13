@@ -16,7 +16,8 @@ import (
 )
 
 // claudeCompactionPromptMarker 是 Claude Code 本地压缩（full / partial compact）
-// 追加在会话末尾的合成 user 消息开头（NO_TOOLS_PREAMBLE）。
+// 追加在会话末尾的合成 user 消息中（NO_TOOLS_PREAMBLE；CLI 与桌面端 agent
+// 实测形态：或位于消息开头，或作为行首追加在用户文本之后）。
 const claudeCompactionPromptMarker = "CRITICAL: Respond with TEXT ONLY"
 
 // codexCompactionPromptMarker 是 Codex 本地压缩（手动 /compact 或自动压缩）追加在
@@ -48,7 +49,11 @@ func isClaudeCompactionRequest(request *dto.ClaudeRequest) bool {
 		if message.Role != "user" {
 			continue
 		}
-		return strings.HasPrefix(strings.TrimSpace(message.GetStringContent()), claudeCompactionPromptMarker)
+		text := strings.TrimSpace(message.GetStringContent())
+		// CLI 形态标记位于消息开头；桌面端 agent 形态为行首追加在用户
+		// 文本之后（"…\n\nCRITICAL: Respond with TEXT ONLY…"），两者都要放行。
+		return strings.HasPrefix(text, claudeCompactionPromptMarker) ||
+			strings.Contains(text, "\n"+claudeCompactionPromptMarker)
 	}
 	return false
 }

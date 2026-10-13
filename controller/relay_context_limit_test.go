@@ -59,6 +59,22 @@ func TestIsClaudeCompactionRequest(t *testing.T) {
 			true,
 		},
 		{
+			"compact prompt appended after user text on its own line",
+			&dto.ClaudeRequest{Messages: []dto.ClaudeMessage{
+				{Role: "user", Content: "hello"},
+				{Role: "assistant", Content: "hi"},
+				{Role: "user", Content: "整理一下上面的结论\n\n" + claudeTestCompactionPrompt},
+			}},
+			true,
+		},
+		{
+			"marker mid-line mention is not a compaction request",
+			&dto.ClaudeRequest{Messages: []dto.ClaudeMessage{
+				{Role: "user", Content: "docs mention " + claudeCompactionPromptMarker + " as a marker"},
+			}},
+			false,
+		},
+		{
 			"marker only in an earlier turn",
 			&dto.ClaudeRequest{Messages: []dto.ClaudeMessage{
 				{Role: "user", Content: claudeTestCompactionPrompt},
