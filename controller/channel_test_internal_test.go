@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -19,6 +20,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
@@ -676,4 +678,77 @@ func TestTestAllChannelsRejectsExistingActiveTask(t *testing.T) {
 	require.Equal(t, http.StatusConflict, recorder.Code)
 	require.Contains(t, recorder.Body.String(), existing.TaskID)
 	require.Contains(t, recorder.Body.String(), "A channel test task is already running or queued, so this manual run cannot start")
+}
+
+// A partial channel edit (a models-only save, an inline priority or weight change,
+// ...) sends no settings field. validateChannel normalizes that absent value into a
+// generated default policy, so the update has to keep the stored settings rather than
+// persist the skeleton and silently drop every key the client did not send.
+func TestUpdateChannelPartialEditKeepsStoredSettings(t *testing.T) {
+	setupTaskPluginBindChannelTest(t)
+
+	global := model_setting.GetGlobalSettings()
+	previousPolicy := global.ProtocolPolicy
+	global.ProtocolPolicy = &hostdto.ProtocolPolicy{Version: hostdto.ProtocolPolicyVersion}
+	t.Cleanup(func() { global.ProtocolPolicy = previousPolicy })
+
+	t.Run("keeps stored settings when the request omits them", func(t *testing.T) {
+		stored := `{"allow_service_tier":true,"protocol_policy":{"version":1,"conversion":"safe"}}`
+		channel := model.Channel{
+			Id:            41,
+			Type:          constant.ChannelTypeOpenAI,
+			Name:          "openai",
+			Key:           "sk-test",
+			Models:        "gpt-4o",
+			Group:         "default",
+			OtherSettings: stored,
+		}
+		require.NoError(t, model.DB.Create(&channel).Error)
+
+		recorder := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(recorder)
+		ctx.Set("id", 1)
+		ctx.Set("role", common.RoleRootUser)
+		ctx.Request = httptest.NewRequest(http.MethodPut, "/api/channel/", strings.NewReader(
+			fmt.Sprintf(`{"id":%d,"type":1,"name":"openai","models":"gpt-4o","priority":9}`, channel.Id)))
+		ctx.Request.Header.Set("Content-Type", "application/json")
+
+		UpdateChannel(ctx)
+
+		require.Contains(t, recorder.Body.String(), `"success":true`)
+		updated, err := model.GetChannelById(channel.Id, true)
+		require.NoError(t, err)
+		require.NotNil(t, updated.Priority)
+		assert.Equal(t, int64(9), *updated.Priority)
+		assert.Equal(t, stored, updated.OtherSettings)
+	})
+
+	t.Run("advanced custom channel rejects a partial edit instead of losing its routes", func(t *testing.T) {
+		stored := `{"advanced_custom":{"advanced_routes":[{"incoming_path":"/v1/chat/completions","upstream_path":"/v1/chat/completions","target_protocol":"native"}]},"protocol_policy":{"version":1,"conversion":"lossy"}}`
+		channel := model.Channel{
+			Id:            42,
+			Type:          constant.ChannelTypeAdvancedCustom,
+			Name:          "advanced-custom",
+			Key:           "sk-test",
+			Models:        "deepseek-v4.1-flash",
+			Group:         "default",
+			OtherSettings: stored,
+		}
+		require.NoError(t, model.DB.Create(&channel).Error)
+
+		recorder := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(recorder)
+		ctx.Set("id", 1)
+		ctx.Set("role", common.RoleRootUser)
+		ctx.Request = httptest.NewRequest(http.MethodPut, "/api/channel/", strings.NewReader(
+			fmt.Sprintf(`{"id":%d,"type":58,"name":"advanced-custom","models":"deepseek-v4.1-flash","priority":9}`, channel.Id)))
+		ctx.Request.Header.Set("Content-Type", "application/json")
+
+		UpdateChannel(ctx)
+
+		require.Contains(t, recorder.Body.String(), "advanced_custom is required")
+		updated, err := model.GetChannelById(channel.Id, true)
+		require.NoError(t, err)
+		assert.Equal(t, stored, updated.OtherSettings)
+	})
 }

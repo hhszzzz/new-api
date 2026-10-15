@@ -1243,6 +1243,14 @@ func UpdateChannel(c *gin.Context) {
 		return
 	}
 	originProxy := originChannel.GetSetting().Proxy
+	// A partial edit (models-only save, inline priority or weight change, ...) carries
+	// no settings field. validateChannel already ran above and normalized that absent
+	// value into a generated default policy, so keep the stored settings instead of
+	// overwriting them: an advanced_custom channel needs advanced_custom to serve any
+	// request at all, and its routes are exactly what such an edit would drop.
+	if value, provided := requestData["settings"]; !provided || value == nil {
+		channel.OtherSettings = originChannel.OtherSettings
+	}
 	_, rpmLimitProvided := requestData["rpm_limit"]
 	_, concurrencyLimitProvided := requestData["concurrency_limit"]
 	if !rpmLimitProvided {
