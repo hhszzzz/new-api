@@ -94,7 +94,7 @@ def patch_compose(text):
     return text[:begin]+section+text[finish:]
 
 
-def unit(command):
+def unit(command, timeout=7200):
     return f'''[Unit]
 Description=New-API prompt audit {command}
 After=docker.service
@@ -110,7 +110,7 @@ MemorySwapMax=0
 CPUQuota=50%
 ExecStart=/usr/local/bin/ccs-prompt-audit-storage.py {command}
 ExecStopPost=/usr/local/bin/ccs-prompt-audit-storage.py cleanup-workers
-TimeoutStartSec=7200
+TimeoutStartSec={timeout}
 '''
 
 
@@ -143,8 +143,8 @@ def main():
     config = "etc/ccs-prompt-audit-storage.conf"
     if not (root/config).exists():
         changes[config] = "HOST_ROOT=/opt/new-api/data/prompt-audit-maintenance\nCONTAINER_ROOT=/data/prompt-audit-maintenance\nREMOTE_ROOT=/ccs-backup/prompt-audit\nAGE_KEY=/root/.config/age/keys.txt\n"
-    for command, interval in (("import-jobs", 1), ("disk-check", 5)):
-        changes[f"etc/systemd/system/ccs-prompt-audit-{command}.service"] = unit(command)
+    for command, interval, timeout in (("import-jobs", 1, 7200), ("stats", 60, 900), ("disk-check", 60, 900), ("cleanup", 60, 900)):
+        changes[f"etc/systemd/system/ccs-prompt-audit-{command}.service"] = unit(command, timeout)
         changes[f"etc/systemd/system/ccs-prompt-audit-{command}.timer"] = timer(command, interval)
     changes["etc/systemd/system/ccs-backup.service.d/prompt-audit.conf"] = "[Service]\nMemoryHigh=384M\nMemoryMax=512M\nMemorySwapMax=0\nCPUQuota=50%\nNice=15\nIOSchedulingClass=idle\nTimeoutStartSec=7200\nExecStopPost=/usr/local/bin/ccs-prompt-audit-storage.py cleanup-workers\n"
     subprocess.run(["bash", "-n"], input=changes["usr/local/bin/ccs-backup.sh"], text=True, capture_output=True, check=True)
@@ -183,7 +183,7 @@ def main():
         temporary.replace(path)
     if root == Path("/"):
         subprocess.run(["systemctl", "daemon-reload"], check=True)
-        subprocess.run(["systemctl", "enable", "--now", "ccs-prompt-audit-import-jobs.timer", "ccs-prompt-audit-disk-check.timer"], check=True)
+        subprocess.run(["systemctl", "enable", "--now", "ccs-prompt-audit-import-jobs.timer", "ccs-prompt-audit-stats.timer", "ccs-prompt-audit-disk-check.timer", "ccs-prompt-audit-cleanup.timer"], check=True)
     print(json.dumps({"configuration_backup": str(backup), "application_recreate_required": True}))
 
 

@@ -371,7 +371,6 @@ def backup(config, stage, defer_cleanup=False):
         shutil.copy2(manifest, Path(stage)/"prompt-audit-day.json")
         if not defer_cleanup:
             cli(config, "verify", "--id", descriptor["archive"]["id"], "--digest", descriptor["archive"]["digest"], "--volumes", container_path(config, proof))
-            cli(config, "cleanup")
         print(json.dumps({"archive": descriptor["archive"]["id"], "volumes": len(volumes), "recovery_complete": True, "acknowledged": not defer_cleanup}))
     finally:
         release.touch(mode=0o600)
@@ -474,7 +473,7 @@ def disk_check(config):
     now = int(time.time())
     detail = "正文统计暂不可用；归档积压暂不可用"
     try:
-        stats = cli(config, "stats")
+        stats = cli(config, "stats-lite")
         body = stats["stored_bytes"]+stats["legacy_bytes"]
         previous = state.get("sample", {"time": now, "body": body})
         growth = max(0, body-previous["body"])*86400/max(1, now-previous["time"])
@@ -498,7 +497,7 @@ def maintenance_resources_available():
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["backup", "import-jobs", "disk-check", "worker", "cleanup-workers", "database-backup"])
+    parser.add_argument("command", choices=["backup", "import-jobs", "disk-check", "stats", "cleanup", "worker", "cleanup-workers", "database-backup"])
     parser.add_argument("--stage")
     parser.add_argument("--defer-cleanup", action="store_true", help="retain local bodies while validating the initial recovery backup")
     parser.add_argument("--role", choices=["cli", "pg-dump"])
@@ -553,10 +552,12 @@ def main():
             cleanup_workers(config)
         return
     # Backup and viewing imports share one heavy-task lock; disk alerts still run.
-    lock_name = "disk-check.lock" if args.command == "disk-check" else "body-maintenance.lock"
+    lock_name = "disk-check.lock" if args.command == "disk-check" else "stats.lock" if args.command == "stats" else "body-maintenance.lock"
     with (root/lock_name).open("w") as lock, (root/"host-backup.lock").open("w") as host_lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if args.command in ("stats", "cleanup"):
+                fcntl.flock(host_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             if args.command == "import-jobs":
                 # The core backup holds this lock through its final upload;
                 # its inner archive command already holds the body lock.
@@ -571,7 +572,7 @@ def main():
                 for previous in root.glob("export-*"):
                     if re.fullmatch(r"export-[a-f0-9]{32}", previous.name) and previous.is_dir() and not previous.is_symlink() and now-previous.stat().st_mtime > 86400:
                         shutil.rmtree(previous)
-            if args.command != "disk-check" and not maintenance_resources_available():
+            if args.command in ("backup", "import-jobs", "stats", "cleanup") and not maintenance_resources_available():
                 if args.command == "backup":
                     raise RuntimeError("host memory or load has insufficient headroom; original bodies retained")
                 return
@@ -581,11 +582,15 @@ def main():
                 backup(config, args.stage, args.defer_cleanup)
             elif args.command == "import-jobs":
                 import_jobs(config)
+            elif args.command == "stats":
+                cli(config, "stats")
+            elif args.command == "cleanup":
+                cli(config, "cleanup")
             else:
                 disk_check(config)
         except Exception as error:
-            if args.command == "backup":
-                notify(config, "fail", "提示词日包归档失败，七天清理已受保护："+str(error))
+            if args.command in ("backup", "stats", "cleanup"):
+                notify(config, "fail", "提示词存储维护失败："+str(error))
             raise
 
 

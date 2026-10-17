@@ -100,6 +100,8 @@ func TestPromptAuditSharedStorageMatrix(t *testing.T) {
 					}
 					require.NoError(t, MigratePromptAuditStorage(db))
 					require.NoError(t, MigratePromptAuditStorage(db))
+					assert.False(t, db.Migrator().HasIndex(&PromptAuditContentRef{}, db.NamingStrategy.IndexName(db.NamingStrategy.TableName("PromptAuditContentRef"), "active")))
+					assert.True(t, db.Migrator().HasColumn(&PromptAuditContentRef{}, "active"))
 					if phase == "upgrade" {
 						var rejected bytes.Buffer
 						_, err := WritePromptAuditArchive(db, &rejected, "unmigrated-source", "2026-10-09", 1, false)
@@ -120,6 +122,12 @@ func TestPromptAuditSharedStorageMatrix(t *testing.T) {
 					count, err = BackfillPromptAuditContents(db, 100)
 					require.NoError(t, err)
 					assert.Zero(t, count)
+					computed, err := GetPromptAuditStorageStats(db)
+					require.NoError(t, err)
+					require.NoError(t, CachePromptAuditStorageStats(db, computed))
+					cached, err := GetCachedPromptAuditStorageStats(db)
+					require.NoError(t, err)
+					assert.Equal(t, computed, cached)
 					configured := previousSetting
 					configured.SharedContentEnabled = true
 					configured.PublishConfig()
@@ -136,7 +144,7 @@ func runPromptAuditOrphanCleanup(t *testing.T, db *gorm.DB) {
 	events := []PromptAudit{{Status: PromptAuditStatusStored}, {Status: PromptAuditStatusStored}, {Status: PromptAuditStatusStored}}
 	require.NoError(t, db.Create(&events).Error)
 	blobs := make([]PromptAuditContent, 0, 4)
-	for _, text := range []string{"referenced by two events", "only inactive references", "reference to a deleted event", "no references"} {
+	for _, text := range []string{"referenced by two events", "referenced by one event", "reference to a deleted event", "no references"} {
 		encoded, err := encodePromptAuditContent([]byte(text))
 		require.NoError(t, err)
 		blobs = append(blobs, PromptAuditContent{Hash: promptAuditContentHash([]byte(text)), Data: encoded, RawBytes: int64(len(text)), StoredBytes: int64(len(encoded))})
@@ -145,7 +153,7 @@ func runPromptAuditOrphanCleanup(t *testing.T, db *gorm.DB) {
 	references := []PromptAuditContentRef{
 		{AuditID: events[0].ID, Hash: blobs[0].Hash, Active: true},
 		{AuditID: events[1].ID, Hash: blobs[0].Hash, Active: true},
-		{AuditID: events[2].ID, Hash: blobs[1].Hash, Active: false},
+		{AuditID: events[2].ID, Hash: blobs[1].Hash, Active: false}, // Active is historical metadata; every row protects the body.
 		{AuditID: 1 << 60, Hash: blobs[2].Hash, Active: true},
 	}
 	require.NoError(t, db.Create(&references).Error)
@@ -154,8 +162,8 @@ func runPromptAuditOrphanCleanup(t *testing.T, db *gorm.DB) {
 	for i, original := range blobs {
 		var stored PromptAuditContent
 		require.NoError(t, db.First(&stored, "hash = ?", original.Hash).Error)
-		if i == 0 {
-			assert.Equal(t, original.Data, stored.Data, "shared active references protect complete body bytes")
+		if i <= 1 {
+			assert.Equal(t, original.Data, stored.Data, "any surviving reference protects complete body bytes")
 			assert.Equal(t, original.StoredBytes, stored.StoredBytes)
 		} else {
 			assert.Empty(t, stored.Data)

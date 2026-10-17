@@ -37,14 +37,12 @@ import (
 )
 
 const (
-	promptAuditContextKey          = "prompt_audit_result"
-	promptAuditMaxResponseBytes    = 256 * 1024
-	promptAuditPreviewSourceRunes  = 96
-	promptAuditLocalCacheMaxItems  = 4096
-	promptAuditWorkerPollInterval  = 2 * time.Second
-	promptAuditWorkerLeasePadding  = 30 * time.Second
-	promptAuditRetentionBatchSize  = 500
-	promptAuditRetentionCheckEvery = time.Hour
+	promptAuditContextKey         = "prompt_audit_result"
+	promptAuditMaxResponseBytes   = 256 * 1024
+	promptAuditPreviewSourceRunes = 96
+	promptAuditLocalCacheMaxItems = 4096
+	promptAuditWorkerPollInterval = 2 * time.Second
+	promptAuditWorkerLeasePadding = 30 * time.Second
 
 	// Outbound guard transport bounds. The audit node is an operator-managed
 	// deployment target, so a dedicated client is built instead of reusing the
@@ -2878,9 +2876,7 @@ func runPromptAuditSupervisor() {
 	runnerPrefix := common.NodeName + "-prompt-audit-" + common.GetRandomString(8)
 	var workerCancels []context.CancelFunc
 	reconcileTicker := time.NewTicker(2 * time.Second)
-	retentionTicker := time.NewTicker(promptAuditRetentionCheckEvery)
 	defer reconcileTicker.Stop()
-	defer retentionTicker.Stop()
 	reconcile := func() {
 		wanted := prompt_audit_setting.GetSetting().WorkerCount
 		if wanted < 1 {
@@ -2900,13 +2896,10 @@ func runPromptAuditSupervisor() {
 		}
 	}
 	reconcile()
-	runPromptAuditRetentionCleanup()
 	for {
 		select {
 		case <-reconcileTicker.C:
 			reconcile()
-		case <-retentionTicker.C:
-			runPromptAuditRetentionCleanup()
 		}
 	}
 }
@@ -3067,23 +3060,5 @@ func promptAuditRetryDelay(attempt int) time.Duration {
 		return 30 * time.Second
 	default:
 		return 2 * time.Minute
-	}
-}
-
-func runPromptAuditRetentionCleanup() {
-	setting := prompt_audit_setting.GetSetting()
-	if setting.RetentionDays == 0 {
-		return
-	}
-	cutoff := common.GetTimestamp() - int64((time.Duration(setting.RetentionDays) * 24 * time.Hour).Seconds())
-	for {
-		purged, err := model.CleanupPromptAuditPromptsBefore(cutoff, promptAuditRetentionBatchSize)
-		if err != nil {
-			logger.LogWarn(context.Background(), "prompt audit retention cleanup failed")
-			return
-		}
-		if purged < promptAuditRetentionBatchSize {
-			return
-		}
 	}
 }

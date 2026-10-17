@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"gorm.io/gorm"
@@ -26,6 +27,10 @@ type PromptAuditStorageStats struct {
 	CacheLimitBytes int64 `json:"cache_limit_bytes"`
 	CacheTTLSeconds int64 `json:"cache_ttl_seconds"`
 }
+
+const promptAuditStorageStatsCacheTTL = time.Hour
+
+var ErrPromptAuditStorageStatsUnavailable = errors.New("prompt audit storage statistics are temporarily unavailable")
 
 func GetPromptAuditStorageStats(db *gorm.DB) (PromptAuditStorageStats, error) {
 	stats := PromptAuditStorageStats{LocalDays: 7, ArchiveRequired: true, CacheLimitBytes: PromptAuditImportCacheBytes, CacheTTLSeconds: PromptAuditImportTTL}
@@ -55,18 +60,20 @@ func GetPromptAuditStorageStats(db *gorm.DB) (PromptAuditStorageStats, error) {
 		return stats, err
 	}
 	stats.RawBytes, stats.StoredBytes, stats.ContentBlocks = sizes.Raw, sizes.Stored, sizes.Count
-	if err := db.Model(&PromptAuditContentRef{}).Where("active = ?", true).Count(&stats.References).Error; err != nil {
+	if err := db.Model(&PromptAuditContentRef{}).Count(&stats.References).Error; err != nil {
 		return stats, err
 	}
 	if err := db.Model(&PromptAuditContent{}).Where("data IS NOT NULL AND created_at >= ?", common.GetTimestamp()-86400).Select("COALESCE(SUM(stored_bytes), 0)").Scan(&stats.NewBytes24H).Error; err != nil {
 		return stats, err
 	}
-	legacySize := "COALESCE(SUM(COALESCE(" + promptAuditTextBytesExpression(db, "full_prompt") + ", 0) + COALESCE(" + promptAuditTextBytesExpression(db, "scan_payload") + ", 0) + COALESCE(" + promptAuditTextBytesExpression(db, "content_snapshot") + ", 0)), 0)"
-	if err := db.Model(&PromptAudit{}).Select(legacySize).Scan(&stats.LegacyBytes).Error; err != nil {
-		return stats, err
-	}
 	if err := db.Model(&PromptAudit{}).Where("(content_manifest IS NULL OR content_manifest = '') AND (full_prompt IS NOT NULL OR scan_payload IS NOT NULL OR content_snapshot IS NOT NULL)").Count(&stats.Unmigrated).Error; err != nil {
 		return stats, err
+	}
+	if !stats.SharedEnabled || stats.Unmigrated > 0 {
+		legacySize := "COALESCE(SUM(COALESCE(" + promptAuditTextBytesExpression(db, "full_prompt") + ", 0) + COALESCE(" + promptAuditTextBytesExpression(db, "scan_payload") + ", 0) + COALESCE(" + promptAuditTextBytesExpression(db, "content_snapshot") + ", 0)), 0)"
+		if err := db.Model(&PromptAudit{}).Select(legacySize).Scan(&stats.LegacyBytes).Error; err != nil {
+			return stats, err
+		}
 	}
 	if err := db.Model(&PromptAuditImportedContent{}).Where("expires_at > ?", common.GetTimestamp()).Select("COALESCE(SUM(stored_bytes), 0)").Scan(&stats.ImportedBytes).Error; err != nil {
 		return stats, err
@@ -96,6 +103,82 @@ func GetPromptAuditStorageStats(db *gorm.DB) (PromptAuditStorageStats, error) {
 				stats.ArchiveBacklog++
 			}
 		}
+	}
+	return stats, nil
+}
+
+func PromptAuditSharedContentEnabled(db *gorm.DB) (bool, error) {
+	if db == nil {
+		return false, errors.New("prompt audit database is unavailable")
+	}
+	if !db.Migrator().HasTable(&Option{}) {
+		return false, nil
+	}
+	var option Option
+	err := db.Where(map[string]any{"key": "prompt_audit.shared_content_enabled"}).First(&option).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return option.Value == "true", nil
+}
+
+func PromptAuditRetentionDays(db *gorm.DB) (int, error) {
+	days := 30
+	if db == nil {
+		return 0, errors.New("prompt audit database is unavailable")
+	}
+	if !db.Migrator().HasTable(&Option{}) {
+		return days, nil
+	}
+	var options []Option
+	if err := db.Where(map[string]any{"key": []string{"prompt_audit.shared_content_enabled", "prompt_audit.retention_days"}}).Find(&options).Error; err != nil {
+		return 0, err
+	}
+	shared := false
+	for _, option := range options {
+		switch option.Key {
+		case "prompt_audit.shared_content_enabled":
+			shared = option.Value == "true"
+		case "prompt_audit.retention_days":
+			if value, err := strconv.Atoi(option.Value); err == nil && value >= 0 {
+				days = value
+			}
+		}
+	}
+	if shared {
+		days = 7
+	}
+	return days, nil
+}
+
+func CachePromptAuditStorageStats(db *gorm.DB, stats PromptAuditStorageStats) error {
+	data, err := common.Marshal(stats)
+	if err != nil {
+		return err
+	}
+	if _, err := PromptAuditStorageSource(db); err != nil {
+		return err
+	}
+	return db.Model(&PromptAuditStorageState{}).Where("id = ?", 1).Updates(map[string]any{
+		"stats":            LongText(data),
+		"stats_updated_at": common.GetTimestamp(),
+	}).Error
+}
+
+func GetCachedPromptAuditStorageStats(db *gorm.DB) (PromptAuditStorageStats, error) {
+	var state PromptAuditStorageState
+	if err := db.Select("stats", "stats_updated_at").Where("id = ?", 1).First(&state).Error; err != nil {
+		return PromptAuditStorageStats{}, fmt.Errorf("%w: cache row unavailable: %v", ErrPromptAuditStorageStatsUnavailable, err)
+	}
+	if state.Stats == "" || state.StatsUpdatedAt <= 0 || common.GetTimestamp()-state.StatsUpdatedAt > int64(promptAuditStorageStatsCacheTTL/time.Second) {
+		return PromptAuditStorageStats{}, ErrPromptAuditStorageStatsUnavailable
+	}
+	var stats PromptAuditStorageStats
+	if err := common.UnmarshalJsonStr(string(state.Stats), &stats); err != nil {
+		return PromptAuditStorageStats{}, fmt.Errorf("%w: invalid cache: %v", ErrPromptAuditStorageStatsUnavailable, err)
 	}
 	return stats, nil
 }
@@ -248,6 +331,12 @@ func MigratePromptAuditStorage(db *gorm.DB) error {
 	}
 	if err := ensurePromptAuditStorageTables(db); err != nil {
 		return err
+	}
+	indexName := db.NamingStrategy.IndexName(db.NamingStrategy.TableName("PromptAuditContentRef"), "active")
+	if db.Migrator().HasIndex(&PromptAuditContentRef{}, indexName) {
+		if err := db.Migrator().DropIndex(&PromptAuditContentRef{}, indexName); err != nil {
+			return fmt.Errorf("drop obsolete prompt audit active index: %w", err)
+		}
 	}
 	_, err := PromptAuditStorageSource(db)
 	return err

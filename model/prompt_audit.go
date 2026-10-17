@@ -1051,8 +1051,20 @@ func DeletePromptAudits(filter PromptAuditFilter, expectedCount, maxID int64) (i
 }
 
 func CleanupPromptAuditPromptsBefore(cutoff int64, batchSize int) (int64, error) {
-	if promptAuditStorageEnabled() {
-		return CleanupPromptAuditSharedContent(DB, common.GetTimestamp(), batchSize)
+	return CleanupPromptAuditPromptsBeforeOn(DB, cutoff, batchSize)
+}
+
+func CleanupPromptAuditPromptsBeforeOn(db *gorm.DB, cutoff int64, batchSize int) (int64, error) {
+	shared := promptAuditStorageEnabled()
+	if db != DB {
+		var err error
+		shared, err = PromptAuditSharedContentEnabled(db)
+		if err != nil {
+			return 0, err
+		}
+	}
+	if shared {
+		return CleanupPromptAuditSharedContent(db, common.GetTimestamp(), batchSize)
 	}
 	if cutoff <= 0 {
 		return 0, nil
@@ -1061,7 +1073,7 @@ func CleanupPromptAuditPromptsBefore(cutoff int64, batchSize int) (int64, error)
 		batchSize = 500
 	}
 	var ids []int64
-	if err := DB.Model(&PromptAudit{}).
+	if err := db.Model(&PromptAudit{}).
 		Where("status IN ? AND completed_at > 0 AND completed_at < ? AND (full_prompt IS NOT NULL OR content_snapshot IS NOT NULL OR scan_payload IS NOT NULL)", promptAuditTerminalStatuses(), cutoff).
 		Order("id asc").Limit(batchSize).Pluck("id", &ids).Error; err != nil {
 		return 0, err
@@ -1069,7 +1081,7 @@ func CleanupPromptAuditPromptsBefore(cutoff int64, batchSize int) (int64, error)
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	result := DB.Model(&PromptAudit{}).
+	result := db.Model(&PromptAudit{}).
 		Where("id IN ? AND status IN ? AND completed_at > 0 AND completed_at < ?", ids, promptAuditTerminalStatuses(), cutoff).
 		Updates(map[string]any{"full_prompt": []byte(nil), "content_snapshot": []byte(nil), "scan_payload": []byte(nil), "updated_at": common.GetTimestamp()})
 	return result.RowsAffected, result.Error

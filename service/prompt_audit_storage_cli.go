@@ -21,7 +21,7 @@ import (
 // Host maintenance deliberately bypasses gateway startup and background workers.
 func RunPromptAuditStorageCLI(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "prompt-audit: migrate, stats, export, verify, import, cleanup, archives, needed")
+		fmt.Fprintln(stderr, "prompt-audit: migrate, stats, stats-lite, export, verify, import, cleanup, archives, needed")
 		return 2
 	}
 	flags := flag.NewFlagSet("prompt-audit "+args[0], flag.ContinueOnError)
@@ -45,6 +45,10 @@ func RunPromptAuditStorageCLI(args []string, stdout, stderr io.Writer) int {
 	db, err := model.OpenConfigurationDatabase()
 	if err != nil {
 		fmt.Fprintln(stderr, "open audit database:", err)
+		return 1
+	}
+	if err := configurePromptAuditMaintenanceDB(db); err != nil {
+		fmt.Fprintln(stderr, "configure audit database:", err)
 		return 1
 	}
 	defer func() {
@@ -85,7 +89,17 @@ func RunPromptAuditStorageCLI(args []string, stdout, stderr io.Writer) int {
 		}
 		result = map[string]any{"migrated": total, "enabled": *enable && err == nil}
 	case "stats":
-		result, err = model.GetPromptAuditStorageStats(db)
+		var stats model.PromptAuditStorageStats
+		stats, err = model.GetPromptAuditStorageStats(db)
+		if err == nil {
+			err = model.CachePromptAuditStorageStats(db, stats)
+		}
+		result = stats
+		if err != nil {
+			err = fmt.Errorf("compute prompt audit storage statistics: %w", err)
+		}
+	case "stats-lite":
+		result, err = model.GetCachedPromptAuditStorageStats(db)
 	case "archives":
 		var archives []model.PromptAuditArchive
 		archives, err = model.ListPromptAuditArchives(db)
@@ -108,9 +122,19 @@ func RunPromptAuditStorageCLI(args []string, stdout, stderr io.Writer) int {
 		result = items
 	case "cleanup":
 		var total int64
+		days, daysErr := model.PromptAuditRetentionDays(db)
+		if daysErr != nil {
+			err = daysErr
+			break
+		}
+		if days == 0 {
+			result = map[string]any{"evicted": total}
+			break
+		}
+		cutoff := common.GetTimestamp() - int64(days*24*60*60)
 		for {
 			var count int64
-			count, err = model.CleanupPromptAuditSharedContent(db, common.GetTimestamp(), *batch)
+			count, err = model.CleanupPromptAuditPromptsBeforeOn(db, cutoff, *batch)
 			total += count
 			if err != nil || count == 0 {
 				break
@@ -171,6 +195,25 @@ func RunPromptAuditStorageCLI(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintln(stdout, string(data))
 	return 0
+}
+
+func configurePromptAuditMaintenanceDB(db *gorm.DB) error {
+	sqlDB, err := db.DB()
+	if err != nil {
+		return err
+	}
+	// The maintenance CLI is single-purpose. Pin it to one connection so a
+	// session-level timeout applies to every statement it issues.
+	sqlDB.SetMaxOpenConns(1)
+	sqlDB.SetMaxIdleConns(1)
+	switch db.Dialector.Name() {
+	case "postgres":
+		return db.Exec("SET statement_timeout = '120s'").Error
+	case "mysql":
+		return db.Exec("SET SESSION max_execution_time = 120000").Error
+	default:
+		return nil
+	}
 }
 
 type promptAuditSnapshotState struct {

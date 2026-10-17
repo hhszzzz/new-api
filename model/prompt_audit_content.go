@@ -35,7 +35,7 @@ type PromptAuditContent struct {
 type PromptAuditContentRef struct {
 	AuditID int64  `gorm:"primaryKey;autoIncrement:false"`
 	Hash    string `gorm:"type:varchar(64);primaryKey;index"`
-	Active  bool   `gorm:"index"`
+	Active  bool
 }
 
 type PromptAuditImportedContent struct {
@@ -227,6 +227,7 @@ func persistPromptAuditContents(tx *gorm.DB, audit *PromptAudit) error {
 		return err
 	}
 	refs := promptAuditManifestRefs(manifest)
+	content := make([]PromptAuditContent, 0, len(blobs))
 	for _, hash := range refs {
 		data, exists := blobs[hash]
 		if !exists {
@@ -236,19 +237,43 @@ func persistPromptAuditContents(tx *gorm.DB, audit *PromptAudit) error {
 		if compressErr != nil {
 			return compressErr
 		}
-		blob := PromptAuditContent{Hash: hash, Data: compressed, RawBytes: int64(len(data)), StoredBytes: int64(len(compressed)), CreatedAt: common.GetTimestamp()}
-		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&blob).Error; err != nil {
+		content = append(content, PromptAuditContent{Hash: hash, Data: compressed, RawBytes: int64(len(data)), StoredBytes: int64(len(compressed)), CreatedAt: common.GetTimestamp()})
+	}
+	if len(content) > 0 {
+		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(&content, 100).Error; err != nil {
 			return err
 		}
-		var existing PromptAuditContent
-		if err := lockForUpdate(tx).Select("hash", "raw_bytes").Where("hash = ?", hash).First(&existing).Error; err != nil {
+		hashes := make([]string, 0, len(content))
+		for _, blob := range content {
+			hashes = append(hashes, blob.Hash)
+		}
+		var existing []PromptAuditContent
+		if err := lockForUpdate(tx).Select("hash", "raw_bytes").Where("hash IN ?", hashes).Order("hash asc").Find(&existing).Error; err != nil {
 			return err
 		}
-		if existing.RawBytes != blob.RawBytes {
-			return errors.New("prompt audit content identity collision")
+		if len(existing) != len(content) {
+			return errors.New("prompt audit content row is missing")
 		}
-		if err := tx.Model(&PromptAuditContent{}).Where("hash = ? AND data IS NULL", hash).Updates(map[string]any{"data": compressed, "stored_bytes": blob.StoredBytes}).Error; err != nil {
+		expectedBytes := make(map[string]int64, len(content))
+		compressedData := make(map[string][]byte, len(content))
+		for _, blob := range content {
+			expectedBytes[blob.Hash] = blob.RawBytes
+			compressedData[blob.Hash] = blob.Data
+		}
+		for _, blob := range existing {
+			if blob.RawBytes != expectedBytes[blob.Hash] {
+				return errors.New("prompt audit content identity collision")
+			}
+		}
+		var evicted []string
+		if err := tx.Model(&PromptAuditContent{}).Where("hash IN ? AND data IS NULL", hashes).Pluck("hash", &evicted).Error; err != nil {
 			return err
+		}
+		for _, hash := range evicted {
+			data := compressedData[hash]
+			if err := tx.Model(&PromptAuditContent{}).Where("hash = ? AND data IS NULL", hash).Updates(map[string]any{"data": data, "stored_bytes": int64(len(data))}).Error; err != nil {
+				return err
+			}
 		}
 	}
 	audit.ContentManifest = LongText(encoded)

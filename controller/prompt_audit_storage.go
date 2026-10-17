@@ -19,7 +19,11 @@ import (
 )
 
 func GetPromptAuditStorage(c *gin.Context) {
-	data, err := model.GetPromptAuditStorageStats(model.DB)
+	data, err := model.GetCachedPromptAuditStorageStats(model.DB)
+	if errors.Is(err, model.ErrPromptAuditStorageStatsUnavailable) {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "message": err.Error()})
+		return
+	}
 	respondPromptAuditRead(c, data, err)
 }
 

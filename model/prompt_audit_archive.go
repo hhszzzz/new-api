@@ -27,6 +27,8 @@ type PromptAuditStorageState struct {
 	ID             int    `gorm:"primaryKey;autoIncrement:false"`
 	SourceID       string `gorm:"type:varchar(64)"`
 	ExportSequence int64
+	Stats          LongText
+	StatsUpdatedAt int64
 }
 
 type PromptAuditArchive struct {
@@ -731,9 +733,10 @@ func VerifyPromptAuditArchive(db *gorm.DB, id, digest string, volumes []PromptAu
 
 func CleanupPromptAuditSharedContent(db *gorm.DB, now int64, batchSize int) (int64, error) {
 	cutoff := now - 7*24*60*60
+	limit := min(max(batchSize, 1), 500)
 	var candidates []PromptAudit
 	dependencies := db.Model(&PromptAudit{}).Select("related_input_id").Where("related_input_id > 0 AND (status IN ? OR completed_at >= ?)", promptAuditActiveStatuses(), cutoff)
-	if err := db.Where("content_manifest IS NOT NULL AND content_manifest <> '' AND COALESCE(content_evicted, false) = ? AND status IN ? AND completed_at > 0 AND completed_at < ? AND archived_digest <> ''", false, promptAuditTerminalStatuses(), cutoff).Where("id NOT IN (?)", dependencies).Order("id asc").Limit(min(max(batchSize, 1), 500)).Find(&candidates).Error; err != nil {
+	if err := db.Where("content_manifest IS NOT NULL AND content_manifest <> '' AND COALESCE(content_evicted, false) = ? AND status IN ? AND completed_at > 0 AND completed_at < ? AND archived_digest <> ''", false, promptAuditTerminalStatuses(), cutoff).Where("id NOT IN (?)", dependencies).Order("id asc").Limit(limit).Find(&candidates).Error; err != nil {
 		return 0, err
 	}
 	var purged int64
@@ -773,21 +776,34 @@ func CleanupPromptAuditSharedContent(db *gorm.DB, now int64, batchSize int) (int
 				return err
 			}
 			// Writers acquire the same hash locks before installing active references.
-			for _, hash := range promptAuditManifestRefs(manifest) {
-				var blob PromptAuditContent
-				if err := lockForUpdate(tx).Select("hash").Where("hash = ?", hash).First(&blob).Error; err != nil {
+			hashes := promptAuditManifestRefs(manifest)
+			if len(hashes) > 0 {
+				var blobs []PromptAuditContent
+				if err := lockForUpdate(tx).Select("hash").Where("hash IN ?", hashes).Order("hash asc").Find(&blobs).Error; err != nil {
 					return err
 				}
-				if err := tx.Where("audit_id = ? AND hash = ?", audit.ID, hash).Delete(&PromptAuditContentRef{}).Error; err != nil {
+				if len(blobs) != len(hashes) {
+					return errors.New("prompt audit content row is missing")
+				}
+				if err := tx.Where("audit_id = ? AND hash IN ?", audit.ID, hashes).Delete(&PromptAuditContentRef{}).Error; err != nil {
 					return err
 				}
-				var active PromptAuditContentRef
-				activeErr := lockForUpdate(tx).Where("hash = ? AND active = ?", hash, true).First(&active).Error
-				if activeErr != nil && !errors.Is(activeErr, gorm.ErrRecordNotFound) {
-					return activeErr
+				var referenced []string
+				if err := tx.Model(&PromptAuditContentRef{}).Where("hash IN ?", hashes).Distinct("hash").Pluck("hash", &referenced).Error; err != nil {
+					return err
 				}
-				if errors.Is(activeErr, gorm.ErrRecordNotFound) {
-					if err := tx.Model(&PromptAuditContent{}).Where("hash = ?", hash).Updates(map[string]any{"data": nil, "stored_bytes": int64(0)}).Error; err != nil {
+				used := make(map[string]struct{}, len(referenced))
+				for _, hash := range referenced {
+					used[hash] = struct{}{}
+				}
+				orphaned := make([]string, 0, len(hashes))
+				for _, hash := range hashes {
+					if _, ok := used[hash]; !ok {
+						orphaned = append(orphaned, hash)
+					}
+				}
+				if len(orphaned) > 0 {
+					if err := tx.Model(&PromptAuditContent{}).Where("hash IN ?", orphaned).Updates(map[string]any{"data": nil, "stored_bytes": int64(0)}).Error; err != nil {
 						return err
 					}
 				}
@@ -805,13 +821,14 @@ func CleanupPromptAuditSharedContent(db *gorm.DB, now int64, batchSize int) (int
 	if err := cleanupPromptAuditImportCache(db, now); err != nil {
 		return purged, err
 	}
-	if err := CleanupPromptAuditOrphanContent(db, batchSize); err != nil {
+	if err := CleanupPromptAuditOrphanContent(db, limit); err != nil {
 		return purged, err
 	}
 	return purged, nil
 }
 
 func CleanupPromptAuditOrphanContent(db *gorm.DB, batchSize int) error {
+	limit := min(max(batchSize, 1), 500)
 	eventExists := db.Model(&PromptAudit{}).Select("1").Where(clause.Eq{
 		Column: clause.Column{Table: db.NamingStrategy.TableName("PromptAudit"), Name: "id"},
 		Value:  clause.Column{Table: db.NamingStrategy.TableName("PromptAuditContentRef"), Name: "audit_id"},
@@ -819,34 +836,44 @@ func CleanupPromptAuditOrphanContent(db *gorm.DB, batchSize int) error {
 	if err := db.Where("NOT EXISTS (?)", eventExists).Delete(&PromptAuditContentRef{}).Error; err != nil {
 		return err
 	}
-	// A block can have millions of repeated active references. An indexed
-	// existence check stops at the first one instead of materializing every hash.
-	activeReferenceExists := db.Model(&PromptAuditContentRef{}).Select("1").Where("active = ?", true).Where(clause.Eq{
+	// A block can have millions of repeated references. An indexed existence
+	// check stops at the first one instead of materializing every hash.
+	activeReferenceExists := db.Model(&PromptAuditContentRef{}).Select("1").Where(clause.Eq{
 		Column: clause.Column{Table: db.NamingStrategy.TableName("PromptAuditContentRef"), Name: "hash"},
 		Value:  clause.Column{Table: db.NamingStrategy.TableName("PromptAuditContent"), Name: "hash"},
 	})
 	var hashes []string
-	if err := db.Model(&PromptAuditContent{}).Where("data IS NOT NULL AND NOT EXISTS (?)", activeReferenceExists).Order("hash asc").Limit(min(max(batchSize, 1), 500)).Pluck("hash", &hashes).Error; err != nil {
+	if err := db.Model(&PromptAuditContent{}).Where("data IS NOT NULL AND NOT EXISTS (?)", activeReferenceExists).Order("hash asc").Limit(limit).Pluck("hash", &hashes).Error; err != nil {
 		return err
 	}
-	for _, hash := range hashes {
-		if err := db.Transaction(func(tx *gorm.DB) error {
-			var blob PromptAuditContent
-			if err := lockForUpdate(tx).Select("hash").Where("hash = ?", hash).First(&blob).Error; err != nil {
-				return err
-			}
-			var ref PromptAuditContentRef
-			err := lockForUpdate(tx).Where("hash = ? AND active = ?", hash, true).First(&ref).Error
-			if err == nil {
-				return nil
-			}
-			if !errors.Is(err, gorm.ErrRecordNotFound) {
-				return err
-			}
-			return tx.Model(&PromptAuditContent{}).Where("hash = ?", hash).Updates(map[string]any{"data": nil, "stored_bytes": int64(0)}).Error
-		}, &sql.TxOptions{Isolation: sql.LevelReadCommitted}); err != nil {
+	if len(hashes) == 0 {
+		return nil
+	}
+	return db.Transaction(func(tx *gorm.DB) error {
+		var blobs []PromptAuditContent
+		if err := lockForUpdate(tx).Select("hash").Where("hash IN ?", hashes).Order("hash asc").Find(&blobs).Error; err != nil {
 			return err
 		}
-	}
-	return nil
+		if len(blobs) != len(hashes) {
+			return errors.New("prompt audit content row is missing")
+		}
+		var referenced []string
+		if err := tx.Model(&PromptAuditContentRef{}).Where("hash IN ?", hashes).Distinct("hash").Pluck("hash", &referenced).Error; err != nil {
+			return err
+		}
+		used := make(map[string]struct{}, len(referenced))
+		for _, hash := range referenced {
+			used[hash] = struct{}{}
+		}
+		orphaned := make([]string, 0, len(hashes))
+		for _, hash := range hashes {
+			if _, ok := used[hash]; !ok {
+				orphaned = append(orphaned, hash)
+			}
+		}
+		if len(orphaned) == 0 {
+			return nil
+		}
+		return tx.Model(&PromptAuditContent{}).Where("hash IN ?", orphaned).Updates(map[string]any{"data": nil, "stored_bytes": int64(0)}).Error
+	}, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 }

@@ -290,6 +290,20 @@ suffix
         self.assertTrue(patched.endswith("  new-api-updater:\n    image: updater\n"))
         self.assertEqual(installer.patch_compose(patched), patched)
 
+    def test_cleanup_unit_is_hourly_and_bounded(self):
+        service = installer.unit("cleanup", 900)
+        timer = installer.timer("cleanup", 60)
+        self.assertIn("ExecStart=/usr/local/bin/ccs-prompt-audit-storage.py cleanup", service)
+        self.assertIn("TimeoutStartSec=900", service)
+        self.assertIn("OnUnitActiveSec=60min", timer)
+
+    def test_storage_jobs_have_hourly_timers_and_own_timeouts(self):
+        commands = ("stats", "disk-check", "cleanup")
+        self.assertEqual(len(commands), 3)
+        self.assertTrue(all("OnUnitActiveSec=60min" in installer.timer(command, 60) for command in commands))
+        self.assertTrue(all("TimeoutStartSec=900" in installer.unit(command, 900) for command in commands))
+        self.assertIn("fcntl.flock(host_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)", Path(__file__).with_name("prompt-audit-storage.py").read_text())
+
 
 if __name__ == "__main__":
     unittest.main()
