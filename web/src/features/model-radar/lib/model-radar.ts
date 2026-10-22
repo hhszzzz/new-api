@@ -24,9 +24,7 @@ import {
 } from '@/lib/provider-icon'
 
 import type {
-  ModelRadarConfiguration,
-  ModelRadarDegradationAlert,
-  ModelRadarHistoryFrame,
+  ModelRadarBenchCell,
   ModelRadarModelOverride,
   ModelRadarSettings,
 } from '../types'
@@ -137,8 +135,6 @@ export const BUILT_IN_MODEL_OVERRIDES: Readonly<
 }
 
 export const DEFAULT_RADAR_SETTINGS: ModelRadarSettings = {
-  default_vendor: 'openai',
-  show_degradation_alerts: true,
   auto_effort_enabled: true,
   models: {},
 }
@@ -156,15 +152,6 @@ export function resolveRadarSettings(raw: unknown): ModelRadarSettings {
   }
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return settings
   const value = raw as Record<string, unknown>
-  if (
-    typeof value.default_vendor === 'string' &&
-    VENDOR_KEY_PATTERN.test(value.default_vendor)
-  ) {
-    settings.default_vendor = value.default_vendor
-  }
-  if (typeof value.show_degradation_alerts === 'boolean') {
-    settings.show_degradation_alerts = value.show_degradation_alerts
-  }
   if (typeof value.auto_effort_enabled === 'boolean') {
     settings.auto_effort_enabled = value.auto_effort_enabled
   }
@@ -264,94 +251,6 @@ export const IQ_TEXT_CLASSES = {
   mid: 'text-amber-700 dark:text-amber-300',
   low: 'text-destructive',
 } as const
-
-export function filterVisibleConfigurations(
-  configurations: ModelRadarConfiguration[],
-  settings: ModelRadarSettings = DEFAULT_RADAR_SETTINGS
-): ModelRadarConfiguration[] {
-  return configurations.filter(
-    (item) => !resolveRadarModel(item.model, settings).hidden
-  )
-}
-
-export function listVendors(
-  configurations: ModelRadarConfiguration[],
-  settings: ModelRadarSettings = DEFAULT_RADAR_SETTINGS,
-  registry?: ModelRadarIconRegistry
-): Array<{
-  key: string
-  label: string
-  icon: string | null
-  modelCount: number
-}> {
-  const models = new Map<string, Set<string>>()
-  for (const configuration of configurations) {
-    const resolved = resolveRadarModel(configuration.model, settings)
-    if (resolved.hidden) continue
-    const names = models.get(resolved.vendor) ?? new Set<string>()
-    names.add(configuration.model)
-    models.set(resolved.vendor, names)
-  }
-  return Array.from(models, ([key, names]) => {
-    const meta = getVendorMeta(key)
-    const icon = meta.icon
-      ? (registry?.providerIcons.get(meta.icon.toLowerCase()) ??
-        resolveDefaultProviderIconKey(meta.icon))
-      : null
-    return { ...meta, icon, modelCount: names.size }
-  }).sort(
-    (left, right) =>
-      right.modelCount - left.modelCount ||
-      left.label.localeCompare(right.label)
-  )
-}
-
-export function filterByVendor(
-  configurations: ModelRadarConfiguration[],
-  settings: ModelRadarSettings,
-  vendor: string
-): ModelRadarConfiguration[] {
-  return configurations.filter((item) => {
-    const resolved = resolveRadarModel(item.model, settings)
-    return (
-      !resolved.hidden && (vendor === ALL_VENDORS || resolved.vendor === vendor)
-    )
-  })
-}
-
-export function resolveDefaultVendor(
-  settings: ModelRadarSettings,
-  vendors: Array<{ key: string }>
-): string {
-  return vendors.some((item) => item.key === settings.default_vendor)
-    ? settings.default_vendor
-    : ALL_VENDORS
-}
-
-export function filterAlertsByVendor(
-  alerts: ModelRadarDegradationAlert[],
-  configurations: ModelRadarConfiguration[],
-  settings: ModelRadarSettings,
-  vendor: string
-): ModelRadarDegradationAlert[] {
-  const keys = new Set(
-    filterByVendor(configurations, settings, vendor).map((item) =>
-      JSON.stringify([item.model, item.effort])
-    )
-  )
-  return alerts.filter((alert) =>
-    keys.has(JSON.stringify([alert.model, alert.effort]))
-  )
-}
-
-export const EFFORT_ORDER = [
-  'ultra',
-  'max',
-  'xhigh',
-  'high',
-  'medium',
-  'low',
-] as const
 
 export const MODEL_COLORS = [
   '#2563eb',
@@ -492,128 +391,8 @@ export function resolveRadarModel(
   }
 }
 
-export function compareEfforts(left: string, right: string): number {
-  const leftIndex = EFFORT_ORDER.indexOf(
-    left.toLowerCase() as (typeof EFFORT_ORDER)[number]
-  )
-  const rightIndex = EFFORT_ORDER.indexOf(
-    right.toLowerCase() as (typeof EFFORT_ORDER)[number]
-  )
-  if (leftIndex === -1 && rightIndex === -1) {
-    return left.localeCompare(right)
-  }
-  if (leftIndex === -1) return 1
-  if (rightIndex === -1) return -1
-  return leftIndex - rightIndex
-}
-
-export type ModelRadarGroup = {
-  model: string
-  displayName: string
-  vendor: string
-  color: string
-  configurations: ModelRadarConfiguration[]
-}
-
-export function groupConfigurations(
-  configurations: ModelRadarConfiguration[],
-  settings: ModelRadarSettings = DEFAULT_RADAR_SETTINGS
-): ModelRadarGroup[] {
-  const groups = new Map<string, ModelRadarConfiguration[]>()
-  for (const configuration of configurations) {
-    const existing = groups.get(configuration.model)
-    if (existing) {
-      existing.push(configuration)
-    } else {
-      groups.set(configuration.model, [configuration])
-    }
-  }
-
-  return Array.from(groups, ([model, modelConfigurations]) => ({
-    model,
-    displayName: resolveRadarModel(model, settings).displayName,
-    vendor: resolveRadarModel(model, settings).vendor,
-    color: stableModelColor(model),
-    configurations: [...modelConfigurations].sort((left, right) =>
-      compareEfforts(left.effort, right.effort)
-    ),
-  }))
-}
-
-function stableModelColor(model: string): string {
-  let hash = 2166136261
-  for (let index = 0; index < model.length; index += 1) {
-    hash ^= model.charCodeAt(index)
-    hash = Math.imul(hash, 16777619)
-  }
-  return MODEL_COLORS[(hash >>> 0) % MODEL_COLORS.length]
-}
-
-export function matrixEfforts(
-  configurations: ModelRadarConfiguration[]
-): string[] {
-  const efforts = new Set<string>()
-  for (const configuration of configurations) {
-    const effort = configuration.effort.trim().toLowerCase()
-    if (effort) efforts.add(effort)
-  }
-  return [...efforts].sort(compareEfforts)
-}
-
-export function createModelColorMap(
-  configurations: ModelRadarConfiguration[]
-): Map<string, string> {
-  return new Map(
-    groupConfigurations(configurations).map((group) => [
-      group.model,
-      group.color,
-    ])
-  )
-}
-
-export function getPassRate(configuration: ModelRadarConfiguration): number {
-  if (configuration.valid_tasks <= 0) return 0
-  return configuration.passed / configuration.valid_tasks
-}
-
-export type RadarIqDimension = 'comprehensive' | 'software'
-
-// The radar page headlines the comprehensive IQ (software + visual, weighted by
-// valid task count). Configurations upstream has no visual-spatial score for
-// fall back to the software-engineering IQ, which is the only value they have.
-export function getPrimaryIq(configuration: ModelRadarConfiguration): {
-  value: number
-  dimension: RadarIqDimension
-} {
-  const comprehensive = configuration.comprehensive_iq
-  if (comprehensive !== null && comprehensive !== undefined) {
-    return { value: comprehensive, dimension: 'comprehensive' }
-  }
-  return { value: configuration.iq, dimension: 'software' }
-}
-
-// Builds a source-relative IQ trend, oldest first, even for stale snapshots.
-export function getHistorySeries(
-  history: ModelRadarHistoryFrame[],
-  model: string,
-  effort: string,
-  windowHours = 72
-): number[] {
-  const latest = Math.max(...history.map((frame) => frame.ts))
-  return history
-    .filter((frame) => frame.ts >= latest - windowHours * 3600)
-    .sort((left, right) => left.ts - right.ts)
-    .flatMap((frame) =>
-      frame.points
-        .filter((point) => point.model === model && point.effort === effort)
-        .map((point) => point.iq)
-    )
-}
-
-// Maps an IQ value onto the shared capability heat scale.
-// low (<50) → destructive, mid (50–85) → amber, high (≥85) → emerald.
 export function getIqTone(iq: number): 'low' | 'mid' | 'high' {
-  if (iq >= 85) return 'high'
+  if (iq >= 80) return 'high'
   if (iq >= 50) return 'mid'
   return 'low'
 }
@@ -699,37 +478,27 @@ function asGatewayEffort(effort: string): GatewayEffort | null {
   )
 }
 
-function radarCandidatePrice(
-  configuration: ModelRadarConfiguration
-): number | null {
-  if (configuration.average_price_usd !== null) {
-    return configuration.average_price_usd
-  }
-  const offPeak = configuration.average_price_usd_by_band?.off_peak ?? null
-  const peak = configuration.average_price_usd_by_band?.peak ?? null
-  if (offPeak === null || peak === null) return null
-  return (offPeak + peak) / 2
-}
-
 // Orders the tiers a radar model may be switched to: descending IQ, and on
 // equal IQ the weaker tier first so a tie resolves to the cheaper tier.
-export function gatewayEffortCandidates(
-  configurations: ModelRadarConfiguration[],
-  minValidTasks = AUTO_EFFORT_MIN_VALID_TASKS
+export function benchEffortCandidates(
+  cells: ModelRadarBenchCell[],
+  minCoverage = AUTO_EFFORT_MIN_VALID_TASKS
 ): RadarAutoEffortCandidate[] {
   const byEffort = new Map<GatewayEffort, RadarAutoEffortCandidate>()
-  for (const configuration of configurations) {
-    if (configuration.valid_tasks < minValidTasks) continue
-    const effort = asGatewayEffort(configuration.effort)
+  for (const cell of cells) {
+    if (cell.score === null || cell.coverage < minCoverage) continue
+    const effort = asGatewayEffort(cell.effort)
     if (!effort) continue
-    const iq = getPrimaryIq(configuration).value
+    // The published score uses the 150-point display scale; auto-effort keeps
+    // the 0-100 radar IQ scale so configured IQ deltas stay meaningful.
+    const iq = cell.score / 1.5
     const existing = byEffort.get(effort)
     if (existing && existing.iq >= iq) continue
     byEffort.set(effort, {
       effort,
-      radarEffort: configuration.effort.trim().toLowerCase(),
+      radarEffort: cell.effort.trim().toLowerCase(),
       iq,
-      priceUsd: radarCandidatePrice(configuration),
+      priceUsd: cell.price.mean,
     })
   }
   return [...byEffort.values()].sort(

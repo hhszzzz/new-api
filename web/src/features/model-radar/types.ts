@@ -22,79 +22,83 @@ export type ModelRadarSource = {
   attribution: string
 }
 
-export type ModelRadarConfiguration = {
-  model: string
-  effort: string
-  harness: string
-  runs_24h: number | null
-  runs_48h: number | null
-  average_price_usd_by_band: {
-    off_peak: number | null
-    peak: number | null
-  } | null
-  /** Software-engineering (DeepSWE) IQ. */
-  iq: number
-  /** Comprehensive IQ (software + visual, weighted by valid task count). Null when upstream has no visual-spatial score. */
-  comprehensive_iq?: number | null
-  /** Visual-spatial reasoning IQ. Null when upstream has no visual-spatial score. */
-  visual_iq?: number | null
-  passed: number
-  valid_tasks: number
-  average_price_usd: number | null
-  price_samples: number | null
-  /** Cost re-computed against the provider's official tariff, when upstream publishes one. */
-  corrected_average_price_usd?: number | null
-  corrected_cost_samples?: number | null
-  average_minutes: number | null
-  duration_samples: number | null
-  incomplete_cost_samples: number | null
-  total_runs: number | null
+export type ModelRadarBenchMetricStat = {
+  /** Observed mean over the known samples; null when no sample has the measurement. */
+  mean: number | null
+  known_samples: number | null
+  total_samples: number | null
+}
+
+/** One token or turn aggregate over all retained valid grades of a tier. */
+export type ModelRadarBenchDetailMetric = {
+  mean: number | null
+  known_samples: number
+  total_samples: number
+}
+
+/**
+ * Grading activity and token usage published with the v6 RadarBench summary.
+ * `metrics` is empty unless `metrics_state` is `available`.
+ */
+export type ModelRadarBenchDetailMetrics = {
+  valid_grade_events: number
   latest_graded_at: number | null
-  average_agent_steps: number | null
-  agent_steps_samples: number | null
-  average_total_tokens: number | null
-  token_samples: number | null
-  cache_hit_rate: number | null
-  cache_token_samples: number | null
-  combined_cost_index: number | null
+  as_of: number
+  graded_24h: number
+  graded_48h: number
+  metrics_state: string
+  metrics: Record<string, ModelRadarBenchDetailMetric>
 }
 
-export type ModelRadarHistoryPoint = {
+export type ModelRadarBenchSourceScore = {
+  score: number | null
+  coverage: number
+  required_tasks: number
+  graded_runs_count: number | null
+}
+
+export type ModelRadarBenchHistoryPoint = {
+  ts: number
+  score: number | null
+  coverage: number
+  score_status: string
+}
+
+export type ModelRadarBenchCell = {
   model: string
   effort: string
-  iq: number
-  passed: number
-  valid_tasks: number
-  average_price_usd: number | null
-  average_minutes: number | null
-  average_agent_steps: number | null
-  average_total_tokens: number | null
-  cache_hit_rate: number | null
+  score: number | null
+  coverage: number
+  required_tasks: number
+  score_status: string
+  graded_runs_count: number | null
+  source_scores: Record<string, ModelRadarBenchSourceScore>
+  price: ModelRadarBenchMetricStat
+  duration: ModelRadarBenchMetricStat
+  statistics_state: string
+  /** How the score was aggregated; absent in pre-v6 snapshots. */
+  scoring_policy_version?: string
+  /** v6 grading-activity and token detail; null when the snapshot predates it. */
+  detail_metrics: ModelRadarBenchDetailMetrics | null
+  history_state: string
+  history: ModelRadarBenchHistoryPoint[]
+  last_graded_day: number
+  read_at: number
 }
 
-export type ModelRadarHistoryFrame = {
-  ts: number
-  points: ModelRadarHistoryPoint[]
-}
-
-export type ModelRadarTrendPoint = {
-  ts: number
-  iq: number
-  samples: number
-}
-
-export type ModelRadarDegradationAlert = {
-  model: string
-  effort: string
-  iq: number
-  /** Each decline window is null when upstream has too little history for it. */
-  degradation_12h_iq: number | null
-  degradation_24h_iq: number | null
-  degradation_48h_iq: number | null
-  average_iq_24h?: number | null
-  average_iq_48h?: number | null
-  /** Hourly upstream IQ readings, oldest first. Absent in older snapshots. */
-  trend_48h?: ModelRadarTrendPoint[] | null
+export type ModelRadarBench = {
+  benchmark: string
+  catalog_version: string
+  task_set_sha256: string
+  score_version: string
+  score_max: number
+  source_counts: Record<string, number>
+  /** Time of the last round that read every bound selection; 0 until it happens. */
+  read_at: number
+  loaded_count: number
+  total_count: number
+  failed_cells: string[]
+  cells: ModelRadarBenchCell[]
 }
 
 export type ModelRadarData = {
@@ -102,14 +106,11 @@ export type ModelRadarData = {
   schema_version: number
   fetched_at: number
   source_updated_at: number
-  alerts_updated_at: number
   stale: boolean
   source: ModelRadarSource
   model_count: number
   configuration_count: number
-  configurations: ModelRadarConfiguration[]
-  history: ModelRadarHistoryFrame[]
-  degradation_alerts: ModelRadarDegradationAlert[]
+  bench: ModelRadarBench | null
 }
 
 export type ModelRadarModelOverride = {
@@ -123,8 +124,6 @@ export type ModelRadarModelOverride = {
 }
 
 export type ModelRadarSettings = {
-  default_vendor: string
-  show_degradation_alerts: boolean
   /** Administrator kill switch for radar auto-effort. */
   auto_effort_enabled: boolean
   models: Record<string, ModelRadarModelOverride>

@@ -16,14 +16,16 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { render, screen, within } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
+import { render, screen } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 
 import { ModelRadar } from '../index'
-import { resolveRadarSettings } from '../lib/model-radar'
-import type { ModelRadarResponse } from '../types'
+import type {
+  ModelRadarBenchCell,
+  ModelRadarBenchDetailMetrics,
+  ModelRadarResponse,
+} from '../types'
 
 const queryMocks = vi.hoisted(() => ({
   useQuery: vi.fn(),
@@ -58,80 +60,119 @@ vi.mock('@/components/layout', () => ({
 vi.mock('@/components/page-transition', () => ({
   PageTransition: (props: { children: ReactNode }) => props.children,
 }))
-vi.mock('@/lib/use-chart-theme', () => ({
-  useChartTheme: () => ({ resolvedTheme: 'light', themeReady: false }),
-}))
 vi.mock('../hooks/use-radar-formatters', () => ({
   useRadarFormatters: () => ({
     compact: (value: number | null) => String(value),
     dateTime: (value: number | null) => `time:${value}`,
     decimal: (value: number | null) => String(value),
-    historyTime: (value: number) => String(value),
     integer: (value: number | null) => String(value),
     percent: (value: number | null) => String(value),
     usd: (value: number | null) => String(value),
+    utcDay: (value: number | null) => `day:${value}`,
   }),
 }))
 vi.mock('@/hooks', () => ({ useMediaQuery: () => false }))
 vi.mock('@/lib/lobe-icon', () => ({
   getLobeIcon: (iconName: string) => <svg data-icon-key={iconName} />,
 }))
-vi.mock('@visactor/react-vchart', () => ({
-  VChart: () => <div data-testid='radar-chart' />,
-}))
 
-function response(stale: boolean): ModelRadarResponse {
+const detail: ModelRadarBenchDetailMetrics = {
+  valid_grade_events: 8,
+  latest_graded_at: 1_800_000_000,
+  as_of: 1_800_001_000,
+  graded_24h: 1,
+  graded_48h: 2,
+  metrics_state: 'available',
+  metrics: {},
+}
+
+function cell(effort: string): ModelRadarBenchCell {
+  return {
+    model: 'gpt-test',
+    effort,
+    score: 100,
+    coverage: 64,
+    required_tasks: 64,
+    score_status: 'complete',
+    graded_runs_count: 64,
+    source_scores: {
+      deepswe: {
+        score: 100,
+        coverage: 15,
+        required_tasks: 15,
+        graded_runs_count: 15,
+      },
+    },
+    price: { mean: 1, known_samples: 64, total_samples: 64 },
+    duration: { mean: 5, known_samples: 64, total_samples: 64 },
+    statistics_state: 'available',
+    scoring_policy_version: 'radar-bench-v2-last3-per-task-equal-weight-150',
+    detail_metrics: detail,
+    history_state: 'available',
+    history: [],
+    last_graded_day: 1_799_000_000,
+    read_at: 1_800_001_000,
+  }
+}
+
+function response(
+  stale: boolean,
+  cells: ModelRadarBenchCell[] = [cell('low'), cell('high')]
+): ModelRadarResponse {
   return {
     success: true,
     message: '',
     data: {
-      schema_version: 1,
+      schema_version: 2,
       fetched_at: 1_800_001_000,
       source_updated_at: 1_799_999_000,
-      alerts_updated_at: 1_800_000_100,
       stale,
       source: {
         name: 'Codex Radar',
         url: 'https://codexradar.com',
         attribution: 'Data from Codex Radar',
       },
-      model_count: 1,
-      configuration_count: 1,
-      configurations: [
-        {
-          model: 'gpt-a',
-          effort: 'low',
-          harness: 'codex',
-          runs_24h: null,
-          runs_48h: null,
-          average_price_usd_by_band: null,
-          iq: 75,
-          passed: 1,
-          valid_tasks: 2,
-          average_price_usd: null,
-          price_samples: null,
-          average_minutes: null,
-          duration_samples: null,
-          incomplete_cost_samples: null,
-          total_runs: null,
-          latest_graded_at: null,
-          average_agent_steps: null,
-          agent_steps_samples: null,
-          average_total_tokens: null,
-          token_samples: null,
-          cache_hit_rate: null,
-          cache_token_samples: null,
-          combined_cost_index: null,
-        },
-      ],
-      history: [],
-      degradation_alerts: [],
+      model_count: cells.length > 0 ? 1 : 0,
+      configuration_count: cells.length,
+      bench:
+        cells.length > 0
+          ? {
+              benchmark: 'radar-bench-test',
+              catalog_version: 'catalog-test',
+              task_set_sha256: 'a'.repeat(64),
+              score_version: 'radar-bench-v2-150',
+              score_max: 150,
+              source_counts: {
+                deepswe: 15,
+                pompeii: 16,
+                tb4: 14,
+                science: 19,
+              },
+              read_at: 1_800_001_000,
+              loaded_count: cells.length,
+              total_count: cells.length,
+              failed_cells: [],
+              cells,
+            }
+          : null,
     },
   }
 }
 
 function renderPage() {
   return render(<ModelRadar />)
+}
+
+function queryResult(data: ModelRadarResponse | undefined) {
+  return {
+    data,
+    error: null,
+    isError: false,
+    isFetched: true,
+    isFetching: false,
+    isLoading: false,
+    refetch: vi.fn(),
+  }
 }
 
 beforeEach(() => {
@@ -146,180 +187,6 @@ beforeEach(() => {
 })
 
 describe('model radar page states', () => {
-  test.each([
-    { default_vendor: 'anthropic', selected: 'Anthropic 1' },
-    { default_vendor: 'missing', selected: 'All 2' },
-  ])(
-    'honours configured default $default_vendor with an All fallback',
-    ({ default_vendor, selected }) => {
-      const data = response(false)
-      data.data.configurations.push({
-        ...data.data.configurations[0],
-        model: 'claude-a',
-      })
-      data.data.settings = resolveRadarSettings({ default_vendor })
-      queryMocks.useQuery.mockReturnValue({ data, isFetched: true })
-      renderPage()
-      expect(screen.getByRole('tab', { name: selected })).toHaveAttribute(
-        'aria-selected',
-        'true'
-      )
-    }
-  )
-
-  test('hides configured models from counts, cards and alerts, counting each model once across tiers', () => {
-    const data = response(false)
-    data.data.configurations.push(
-      { ...data.data.configurations[0], effort: 'high' },
-      { ...data.data.configurations[0], model: 'claude-a' },
-      { ...data.data.configurations[0], model: 'k3' }
-    )
-    data.data.settings = resolveRadarSettings({
-      default_vendor: 'all',
-      models: { k3: { hidden: true } },
-    })
-    data.data.degradation_alerts = [
-      {
-        model: 'k3',
-        effort: 'low',
-        iq: 70,
-        degradation_12h_iq: 1,
-        degradation_24h_iq: 2,
-        degradation_48h_iq: 3,
-      },
-    ]
-    queryMocks.useQuery.mockReturnValue({ data, isFetched: true })
-    renderPage()
-    expect(screen.getByRole('tab', { name: 'All 2' })).toHaveAttribute(
-      'aria-selected',
-      'true'
-    )
-    expect(screen.getByRole('tab', { name: 'OpenAI 1' })).toBeVisible()
-    expect(screen.queryByRole('tab', { name: /Moonshot/ })).toBeNull()
-    expect(screen.getByText(/2 models, 3 configurations/)).toBeVisible()
-    expect(screen.queryByRole('heading', { name: 'kimi-k3' })).toBeNull()
-    expect(
-      screen.queryByRole('heading', { name: 'Degradation alerts' })
-    ).toBeNull()
-  })
-
-  test('the alert switch hides nonempty alerts and hiding every model shows an empty state', () => {
-    const data = response(false)
-    data.data.settings = resolveRadarSettings({
-      show_degradation_alerts: false,
-    })
-    data.data.degradation_alerts = [
-      {
-        model: 'gpt-a',
-        effort: 'low',
-        iq: 70,
-        degradation_12h_iq: 1,
-        degradation_24h_iq: 2,
-        degradation_48h_iq: 3,
-      },
-    ]
-    queryMocks.useQuery.mockReturnValue({ data, isFetched: true })
-    const view = renderPage()
-    expect(
-      screen.queryByRole('heading', { name: 'Degradation alerts' })
-    ).toBeNull()
-    data.data.settings = resolveRadarSettings({
-      models: { 'gpt-a': { hidden: true } },
-    })
-    view.rerender(<ModelRadar />)
-    expect(screen.getByText(/0 models, 0 configurations/)).toBeVisible()
-    expect(screen.getByText('No models for this vendor yet.')).toBeVisible()
-  })
-  test('defaults to OpenAI and switching vendors filters both model cards and degradation alerts', async () => {
-    const user = userEvent.setup()
-    const data = response(false)
-    data.data.configurations.push({
-      ...data.data.configurations[0],
-      model: 'claude-a',
-      harness: 'dsh',
-    })
-    data.data.degradation_alerts = data.data.configurations.map((item) => ({
-      model: item.model,
-      effort: item.effort,
-      iq: item.iq,
-      degradation_12h_iq: 1,
-      degradation_24h_iq: 2,
-      degradation_48h_iq: 3,
-    }))
-    queryMocks.useQuery.mockReturnValue({ data, isFetched: true })
-    renderPage()
-    expect(screen.getByRole('tab', { name: 'OpenAI 1' })).toHaveAttribute(
-      'aria-selected',
-      'true'
-    )
-    expect(screen.queryByRole('heading', { name: 'claude-a' })).toBeNull()
-    await user.click(screen.getByRole('tab', { name: 'Anthropic 1' }))
-    expect(screen.getByRole('tab', { name: 'Anthropic 1' })).toHaveAttribute(
-      'aria-selected',
-      'true'
-    )
-    const panel = screen.getByRole('tabpanel')
-    expect(
-      within(panel).getByRole('heading', { name: 'claude-a' })
-    ).toBeVisible()
-    expect(within(panel).queryByRole('heading', { name: 'gpt-a' })).toBeNull()
-    expect(
-      within(panel).getByRole('article', { name: 'claude-a low' })
-    ).toBeVisible()
-    expect(
-      within(panel).queryByRole('article', { name: 'gpt-a low' })
-    ).toBeNull()
-  })
-
-  test('refreshing away the selected vendor falls back to the default and does not reselect it when it returns', async () => {
-    const user = userEvent.setup()
-    const data = response(false)
-    data.data.configurations.push({
-      ...data.data.configurations[0],
-      model: 'claude-a',
-      harness: 'dsh',
-    })
-    queryMocks.useQuery.mockReturnValue({ data, isFetched: true })
-    const view = renderPage()
-    await user.click(screen.getByRole('tab', { name: 'Anthropic 1' }))
-    queryMocks.useQuery.mockReturnValue({
-      data: response(false),
-      isFetched: true,
-    })
-    view.rerender(<ModelRadar />)
-    expect(screen.queryByRole('tablist')).toBeNull()
-    expect(screen.getByRole('heading', { name: 'gpt-a' })).toBeVisible()
-    queryMocks.useQuery.mockReturnValue({ data, isFetched: true })
-    view.rerender(<ModelRadar />)
-    expect(screen.getByRole('tab', { name: 'OpenAI 1' })).toHaveAttribute(
-      'aria-selected',
-      'true'
-    )
-  })
-
-  test('shows an empty snapshot state when every vendor loses its configurations', async () => {
-    const user = userEvent.setup()
-    const data = response(false)
-    data.data.configurations.push({
-      ...data.data.configurations[0],
-      model: 'claude-a',
-      harness: 'dsh',
-    })
-    queryMocks.useQuery.mockReturnValue({ data, isFetched: true })
-    const view = renderPage()
-    await user.click(screen.getByRole('tab', { name: 'Anthropic 1' }))
-    queryMocks.useQuery.mockReturnValue({
-      data: { ...data, data: { ...data.data, configurations: [] } },
-      isFetched: true,
-    })
-    view.rerender(<ModelRadar />)
-    expect(
-      screen.getByRole('status', { name: 'No model radar data' })
-    ).toBeVisible()
-    expect(screen.queryByRole('tablist')).toBeNull()
-    expect(screen.queryByRole('button', { name: /View details/ })).toBeNull()
-  })
-
   test('shows the loading skeleton during the initial fetch', () => {
     queryMocks.useQuery.mockReturnValue({
       data: undefined,
@@ -362,89 +229,82 @@ describe('model radar page states', () => {
     ).toBeVisible()
   })
 
-  test('shows stale metadata without an empty alert section or recommendation content', () => {
-    queryMocks.useQuery.mockReturnValue({
-      data: response(true),
-      error: null,
-      isError: false,
-      isFetched: true,
-      isFetching: false,
-      isLoading: false,
-      refetch: vi.fn(),
-    })
+  test('shows an empty state when the snapshot has no bench cells', () => {
+    queryMocks.useQuery.mockReturnValue(queryResult(response(false, [])))
+    renderPage()
+
+    expect(
+      screen.getByRole('status', { name: 'No model radar data' })
+    ).toBeVisible()
+  })
+
+  test('renders bench rows, counts and the source link', () => {
+    queryMocks.useQuery.mockReturnValue(queryResult(response(false)))
+    renderPage()
+
+    expect(
+      screen.getByRole('region', { name: 'RadarBench score' })
+    ).toBeVisible()
+    expect(screen.getByRole('region', { name: 'GPT Test' })).toBeVisible()
+    expect(screen.getByText(/1 models, 2 configurations/)).toBeVisible()
+    expect(screen.getByText(/Updated time:1799999000/)).toBeVisible()
+    for (const link of screen.getAllByRole('link', {
+      name: 'Data from Codex Radar codexradar.com',
+    })) {
+      expect(link).toHaveAttribute('href', 'https://codexradar.com')
+    }
+    expect(screen.queryByText(/recommend/i)).toBeNull()
+  })
+
+  test('shows stale metadata without legacy alert content', () => {
+    queryMocks.useQuery.mockReturnValue(queryResult(response(true)))
     renderPage()
 
     expect(screen.getByText('This data is outdated')).toBeVisible()
     expect(
       screen.getByText(
-        'The last source update was time:1800000100. Showing the latest valid data.'
+        'The last source update was time:1799999000. Showing the latest valid data.'
       )
     ).toBeVisible()
-    expect(
-      screen.queryByRole('heading', { name: 'Degradation alerts' })
-    ).toBeNull()
     expect(screen.getByText('Stale data')).toBeVisible()
-    expect(screen.getByText(/Updated time:1799999000/)).toBeVisible()
-    expect(screen.queryByText(/Updated time:1800001000/)).toBeNull()
-    expect(
-      screen.getByRole('link', {
-        name: 'Data from Codex Radar codexradar.com',
-      })
-    ).toHaveAttribute('href', 'https://codexradar.com')
+    expect(screen.queryByText(/Degradation alerts/)).toBeNull()
     expect(screen.queryByText(/recommend/i)).toBeNull()
   })
 
   test('renders the model icon variant configured for the matching pricing vendor', () => {
     const radarResponse = response(false)
-    radarResponse.data.configurations[0].model = 'deepseek-v3.2'
     queryMocks.useQuery.mockImplementation(
       (query?: { queryKey: readonly string[] }) => {
         if (query?.queryKey[0] === 'pricing') {
-          return {
-            data: {
-              success: true,
-              data: [
-                {
-                  id: 1,
-                  model_name: 'deepseek-v3.2',
-                  icon: 'DeepSeek',
-                  vendor_id: 1,
-                  quota_type: 0,
-                  model_ratio: 1,
-                  completion_ratio: 1,
-                  enable_groups: ['default'],
-                },
-              ],
-              vendors: [{ id: 1, name: 'DeepSeek', icon: 'DeepSeek.Color' }],
-              group_ratio: {},
-              usable_group: {},
-              supported_endpoint: {},
-              auto_groups: [],
-            },
-            error: null,
-            isError: false,
-            isFetched: true,
-            isFetching: false,
-            isLoading: false,
-            refetch: vi.fn(),
-          }
+          return queryResult({
+            success: true,
+            data: [
+              {
+                id: 1,
+                model_name: 'gpt-test',
+                icon: 'OpenAI',
+                vendor_id: 1,
+                quota_type: 0,
+                model_ratio: 1,
+                completion_ratio: 1,
+                enable_groups: ['default'],
+              },
+            ],
+            vendors: [{ id: 1, name: 'OpenAI', icon: 'OpenAI.Color' }],
+            group_ratio: {},
+            usable_group: {},
+            supported_endpoint: {},
+            auto_groups: [],
+          } as never)
         }
-        return {
-          data: radarResponse,
-          error: null,
-          isError: false,
-          isFetched: true,
-          isFetching: false,
-          isLoading: false,
-          refetch: vi.fn(),
-        }
+        return queryResult(radarResponse)
       }
     )
 
     const view = renderPage()
 
     expect(
-      view.container.querySelector('[data-icon-key="DeepSeek.Color"]')
+      view.container.querySelector('[data-icon-key="OpenAI.Color"]')
     ).not.toBeNull()
   })
 })

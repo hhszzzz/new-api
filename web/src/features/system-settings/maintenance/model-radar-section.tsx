@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useMemo } from 'react'
-import { useForm, useWatch } from 'react-hook-form'
+import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 
 import { ErrorState } from '@/components/error-state'
@@ -29,24 +29,9 @@ import {
   FormControl,
   FormDescription,
   FormField,
-  FormItem,
   FormLabel,
-  FormMessage,
 } from '@/components/ui/form'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
-import {
-  ALL_VENDORS,
-  OTHER_VENDOR,
-  RADAR_VENDORS,
-  resolveRadarModel,
-} from '@/features/model-radar/lib/model-radar'
 
 import { getModelRadarManagement } from '../api'
 import {
@@ -112,29 +97,6 @@ function ModelRadarDisplayForm(props: {
     resolver: zodResolver(schema),
     defaultValues: parseModelRadarSettings(props.initialSerialized),
   })
-  const currentVendors = new Set(
-    props.management.snapshot?.models.map(
-      (row) => resolveRadarModel(row.model, props.management.settings).vendor
-    )
-  )
-  const vendors = [
-    ...RADAR_VENDORS,
-    { key: OTHER_VENDOR, label: t('Other') },
-  ].sort(
-    (a, b) =>
-      Number(currentVendors.has(b.key)) - Number(currentVendors.has(a.key))
-  )
-  const options = [
-    { value: ALL_VENDORS, label: t('All') },
-    ...vendors.map((vendor) => ({ value: vendor.key, label: vendor.label })),
-  ]
-  const defaultVendor = useWatch({
-    control: form.control,
-    name: 'defaultVendor',
-  })
-  if (!options.some((option) => option.value === defaultVendor)) {
-    options.push({ value: defaultVendor, label: defaultVendor })
-  }
   const onSubmit = async (values: ModelRadarFormValues) => {
     const serialized = serializeModelRadarSettings(values)
     if (
@@ -160,62 +122,6 @@ function ModelRadarDisplayForm(props: {
           onSave={form.handleSubmit(onSubmit)}
           isSaving={updateOption.isPending}
           saveLabel='Save radar settings'
-        />
-        <h3 className='text-sm font-semibold'>{t('Display settings')}</h3>
-        <FormField
-          control={form.control}
-          name='defaultVendor'
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>{t('Default vendor')}</FormLabel>
-              <Select
-                items={options}
-                value={field.value}
-                onValueChange={field.onChange}
-                disabled={updateOption.isPending}
-              >
-                <FormControl>
-                  <SelectTrigger className='w-full'>
-                    <SelectValue />
-                  </SelectTrigger>
-                </FormControl>
-                <SelectContent>
-                  {options.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <FormDescription>
-                {t('Vendor tab selected when the radar page opens.')}
-              </FormDescription>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-        <FormField
-          control={form.control}
-          name='showDegradationAlerts'
-          render={({ field }) => (
-            <SettingsSwitchItem>
-              <SettingsSwitchContent>
-                <FormLabel>{t('Show degradation alerts')}</FormLabel>
-                <FormDescription>
-                  {t(
-                    'Hide the alert section even when the source reports declines.'
-                  )}
-                </FormDescription>
-              </SettingsSwitchContent>
-              <FormControl>
-                <Switch
-                  checked={field.value}
-                  onCheckedChange={field.onChange}
-                  disabled={updateOption.isPending}
-                />
-              </FormControl>
-            </SettingsSwitchItem>
-          )}
         />
         <FormField
           control={form.control}

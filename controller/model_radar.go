@@ -83,14 +83,16 @@ func GetModelRadarManagement(c *gin.Context) {
 			Efforts            []string `json:"efforts"`
 		}
 		byModel := make(map[string]*modelSummary)
-		for _, configuration := range data.Configurations {
-			summary := byModel[configuration.Model]
-			if summary == nil {
-				summary = &modelSummary{Model: configuration.Model, Efforts: []string{}}
-				byModel[configuration.Model] = summary
+		if data.Bench != nil {
+			for _, cell := range data.Bench.Cells {
+				summary := byModel[cell.Model]
+				if summary == nil {
+					summary = &modelSummary{Model: cell.Model, Efforts: []string{}}
+					byModel[cell.Model] = summary
+				}
+				summary.ConfigurationCount++
+				summary.Efforts = append(summary.Efforts, cell.Effort)
 			}
-			summary.ConfigurationCount++
-			summary.Efforts = append(summary.Efforts, configuration.Effort)
 		}
 		models := make([]modelSummary, 0, len(byModel))
 		for _, summary := range byModel {
@@ -100,9 +102,8 @@ func GetModelRadarManagement(c *gin.Context) {
 		sort.Slice(models, func(i, j int) bool { return models[i].Model < models[j].Model })
 		snapshot = gin.H{
 			"fetched_at": data.FetchedAt, "source_updated_at": data.SourceUpdatedAt,
-			"alerts_updated_at": data.AlertsUpdatedAt, "stale": data.Stale,
-			"model_count": len(models), "configuration_count": len(data.Configurations),
-			"alert_count": len(data.DegradationAlerts), "models": models,
+			"stale": data.Stale, "model_count": len(models),
+			"configuration_count": data.ConfigurationCount, "models": models,
 		}
 	}
 	common.ApiSuccess(c, gin.H{

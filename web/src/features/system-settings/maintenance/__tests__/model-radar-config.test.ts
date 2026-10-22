@@ -34,22 +34,18 @@ describe('model radar settings serialization', () => {
     (raw) => {
       expect(parseModelRadarSettings(raw)).toEqual({
         autoEffortEnabled: true,
-        defaultVendor: 'openai',
-        showDegradationAlerts: true,
         models: [],
       })
     }
   )
 
-  test('normalizes partial overrides and retains an explicit disabled alert switch', () => {
+  test('normalizes partial overrides and ignores removed legacy settings', () => {
     expect(
       parseModelRadarSettings(
-        '{"show_degradation_alerts":false,"models":{"k3":{"hidden":true}}}'
+        '{"show_degradation_alerts":false,"default_vendor":"anthropic","models":{"k3":{"hidden":true}}}'
       )
     ).toEqual({
       autoEffortEnabled: true,
-      defaultVendor: 'openai',
-      showDegradationAlerts: false,
       models: [
         {
           model: 'k3',
@@ -66,8 +62,6 @@ describe('model radar settings serialization', () => {
   test('drops empty overrides and false hidden values while serializing deterministically', () => {
     const serialized = serializeModelRadarSettings({
       autoEffortEnabled: false,
-      defaultVendor: 'anthropic',
-      showDegradationAlerts: false,
       models: [
         {
           model: 'unused',
@@ -96,7 +90,7 @@ describe('model radar settings serialization', () => {
       ],
     })
     expect(serialized).toBe(
-      '{"auto_effort_enabled":false,"default_vendor":"anthropic","show_degradation_alerts":false,"models":{"a":{"hidden":true},"k3":{"display_name":"Kimi K3","vendor":"moonshot","auto_effort":true,"aliases":["k3-turbo"]}}}'
+      '{"auto_effort_enabled":false,"models":{"a":{"hidden":true},"k3":{"display_name":"Kimi K3","vendor":"moonshot","auto_effort":true,"aliases":["k3-turbo"]}}}'
     )
     expect(
       serializeModelRadarSettings(parseModelRadarSettings(serialized))
@@ -106,10 +100,6 @@ describe('model radar settings serialization', () => {
   test('rejects invalid vendor names, duplicate rows, long names and more than 256 overrides', () => {
     const defaults = parseModelRadarSettings('')
     expect(modelRadarSchema.safeParse(defaults).success).toBe(true)
-    expect(
-      modelRadarSchema.safeParse({ ...defaults, defaultVendor: 'Bad Vendor' })
-        .success
-    ).toBe(false)
     const row = {
       model: 'k3',
       displayName: '',

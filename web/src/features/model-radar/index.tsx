@@ -20,7 +20,7 @@ import { RefreshIcon } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useQuery } from '@tanstack/react-query'
 import { isAxiosError } from 'axios'
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { PublicLayout } from '@/components/layout'
@@ -43,20 +43,12 @@ import { useAuthStore } from '@/stores/auth-store'
 
 import { getModelRadar } from './api'
 import { AutoEffortControls } from './components/auto-effort-controls'
-import { CapabilityGrid } from './components/capability-grid'
-import { DegradationAlerts } from './components/degradation-alerts'
-import { VendorTabs } from './components/vendor-tabs'
+import { BenchPanel } from './components/bench-panel'
 import { useRadarAutoEffort } from './hooks/use-radar-auto-effort'
 import { useRadarFormatters } from './hooks/use-radar-formatters'
 import {
-  ALL_VENDORS,
   createModelRadarIconRegistry,
-  filterByVendor,
-  filterAlertsByVendor,
-  filterVisibleConfigurations,
-  listVendors,
   resolveRadarSettings,
-  resolveDefaultVendor,
 } from './lib/model-radar'
 
 const REFRESH_INTERVAL_MS = 10 * 60 * 1000
@@ -90,33 +82,16 @@ export function ModelRadar() {
   )
   const snapshot = radarQuery.data?.data
   const settings = resolveRadarSettings(snapshot?.settings)
-  const visible = filterVisibleConfigurations(
-    snapshot?.configurations ?? [],
-    settings
-  )
-  const totalModels = new Set(visible.map((item) => item.model)).size
-  const vendors = listVendors(visible, settings, iconRegistry)
-  const [vendor, setVendor] = useState<string | null>(null)
-  const vendorExists =
-    vendor === ALL_VENDORS || vendors.some((item) => item.key === vendor)
-  const activeVendor =
-    vendor && vendorExists ? vendor : resolveDefaultVendor(settings, vendors)
-  if (snapshot && vendor !== null && !vendorExists) setVendor(null)
-  const configurations = filterByVendor(visible, settings, activeVendor)
+  const bench = snapshot?.bench ?? null
+  const hasBench = Boolean(bench && bench.cells.length > 0)
   const updatedAt = snapshot
     ? format.dateTime(snapshot.source_updated_at)
-    : null
-  const sourceUpdatedAt = snapshot
-    ? format.dateTime(
-        Math.max(snapshot.source_updated_at, snapshot.alerts_updated_at)
-      )
     : null
   const initialLoading = radarQuery.isLoading && !radarQuery.isFetched
   const unavailable =
     radarQuery.isError &&
     isAxiosError(radarQuery.error) &&
     radarQuery.error.response?.status === 503
-  const hasConfigurations = (snapshot?.configurations.length ?? 0) > 0
   const autoEffortEnabled = Boolean(currentUser) && settings.auto_effort_enabled
 
   let content: React.ReactNode
@@ -130,58 +105,29 @@ export function ModelRadar() {
         onRetry={() => void radarQuery.refetch()}
       />
     )
-  } else if (!snapshot || !hasConfigurations) {
+  } else if (!snapshot || !bench || bench.cells.length === 0) {
     content = <RadarEmpty />
   } else {
     content = (
       <>
-        {snapshot.stale ? (
-          <StaleNotice sourceUpdatedAt={sourceUpdatedAt} />
-        ) : null}
+        {snapshot.stale ? <StaleNotice sourceUpdatedAt={updatedAt} /> : null}
         {radarQuery.isError ? <RefreshFailureNotice /> : null}
-        <VendorTabs
-          vendors={vendors}
-          totalModels={totalModels}
-          value={activeVendor}
-          onValueChange={setVendor}
-        >
-          {settings.show_degradation_alerts ? (
-            <DegradationAlerts
-              alerts={filterAlertsByVendor(
-                snapshot.degradation_alerts,
-                visible,
-                settings,
-                activeVendor
-              )}
-              history={snapshot.history}
-              configurations={visible}
-              settings={settings}
-              iconRegistry={iconRegistry}
-            />
-          ) : null}
-          {configurations.length > 0 ? (
-            <CapabilityGrid
-              configurations={configurations}
-              history={snapshot.history}
-              iconRegistry={iconRegistry}
-              settings={settings}
-              groupByVendor={activeVendor === ALL_VENDORS}
-              autoEffort={
-                autoEffortEnabled
-                  ? {
-                      setting: autoEffort.setting,
-                      isSaving: autoEffort.isSaving,
-                      userModels: userModelsQuery.data ?? [],
-                      onToggle: (model, enabled) =>
-                        void autoEffort.setModelEnabled(model, enabled),
-                    }
-                  : undefined
-              }
-            />
-          ) : (
-            <RadarEmpty vendor />
-          )}
-        </VendorTabs>
+        <BenchPanel
+          bench={bench}
+          settings={snapshot.settings}
+          iconRegistry={iconRegistry}
+          autoEffort={
+            autoEffortEnabled
+              ? {
+                  setting: autoEffort.setting,
+                  isSaving: autoEffort.isSaving,
+                  userModels: userModelsQuery.data ?? [],
+                  onToggle: (model, enabled) =>
+                    void autoEffort.setModelEnabled(model, enabled),
+                }
+              : undefined
+          }
+        />
       </>
     )
   }
@@ -202,7 +148,7 @@ export function ModelRadar() {
               </div>
               <p className='text-muted-foreground mt-1.5 max-w-2xl text-sm'>
                 {t(
-                  'Comprehensive IQ (software + visual) and duration across reasoning efforts.'
+                  'RadarBench scores, grading activity and observed cost across reasoning tiers.'
                 )}
               </p>
               {snapshot ? (
@@ -210,10 +156,15 @@ export function ModelRadar() {
                   className='text-muted-foreground mt-2 text-xs tabular-nums'
                   aria-live='polite'
                 >
-                  {t('{{models}} models, {{configurations}} configurations', {
-                    models: totalModels,
-                    configurations: visible.length,
-                  })}
+                  {hasBench
+                    ? t(
+                        '{{models}} models, {{configurations}} configurations',
+                        {
+                          models: snapshot.model_count,
+                          configurations: snapshot.configuration_count,
+                        }
+                      )
+                    : t('No model radar data')}
                   <span className='mx-1.5' aria-hidden='true'>
                     ·
                   </span>
@@ -291,22 +242,12 @@ function RadarLoading() {
       className='py-6'
     >
       <span className='sr-only'>{t('Loading model radar')}</span>
-      <div className='flex flex-col gap-8' aria-hidden='true'>
-        <div>
-          <Skeleton className='mb-4 h-5 w-32' />
-          <div className='grid gap-3 lg:grid-cols-2'>
-            {Array.from({ length: 4 }, (_, index) => (
-              <Skeleton key={index} className='h-32 rounded-xl' />
-            ))}
-          </div>
-        </div>
-        <div>
-          <Skeleton className='mb-4 h-5 w-32' />
-          <div className='flex flex-col gap-3'>
-            {Array.from({ length: 3 }, (_, index) => (
-              <Skeleton key={index} className='h-24 rounded-xl' />
-            ))}
-          </div>
+      <div className='flex flex-col gap-4' aria-hidden='true'>
+        <Skeleton className='h-5 w-32' />
+        <div className='flex flex-col gap-3'>
+          {Array.from({ length: 5 }, (_, index) => (
+            <Skeleton key={index} className='h-24 rounded-xl' />
+          ))}
         </div>
       </div>
     </div>
@@ -359,7 +300,7 @@ function RadarError(props: {
   )
 }
 
-function RadarEmpty(props: { vendor?: boolean }) {
+function RadarEmpty() {
   const { t } = useTranslation()
   return (
     <Empty
@@ -377,11 +318,9 @@ function RadarEmpty(props: { vendor?: boolean }) {
         </EmptyMedia>
         <EmptyTitle>{t('No model radar data')}</EmptyTitle>
         <EmptyDescription>
-          {props.vendor
-            ? t('No models for this vendor yet.')
-            : t(
-                'The current snapshot does not contain any model configurations.'
-              )}
+          {t(
+            'The current snapshot does not contain any RadarBench configurations.'
+          )}
         </EmptyDescription>
       </EmptyHeader>
     </Empty>

@@ -33,19 +33,16 @@ func TestGetModelRadarReturnsStoredSnapshot(t *testing.T) {
 	db := setupModelListControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.ModelRadarSnapshot{}))
 	payload, err := common.Marshal(service.ModelRadarData{
-		SchemaVersion: 1,
+		SchemaVersion: 2,
 		Source: service.ModelRadarSource{
 			Name: "Codex Radar", URL: "https://codexradar.com", Attribution: "数据来自 Codex 雷达 codexradar.com",
 		},
 		ModelCount: 1, ConfigurationCount: 1,
-		Configurations:    []service.ModelRadarConfiguration{},
-		History:           []service.ModelRadarHistoryFrame{},
-		DegradationAlerts: []service.ModelRadarDegradationAlert{},
 	})
 	require.NoError(t, err)
 	require.NoError(t, model.SaveModelRadarSnapshot(t.Context(), &model.ModelRadarSnapshot{
-		SchemaVersion: 1, Payload: payload, SourceUpdatedAt: 2_000_000_000,
-		AlertsUpdatedAt: 2_000_000_000, FetchedAt: 2_000_000_000,
+		SchemaVersion: 2, Payload: payload, SourceUpdatedAt: 2_000_000_000,
+		FetchedAt: 2_000_000_000,
 	}))
 	recorder := httptest.NewRecorder()
 	context, _ := gin.CreateTestContext(recorder)
@@ -57,7 +54,7 @@ func TestGetModelRadarReturnsStoredSnapshot(t *testing.T) {
 	assert.Contains(t, recorder.Body.String(), `"success":true`)
 	assert.Contains(t, recorder.Body.String(), `"model_count":1`)
 	assert.Contains(t, recorder.Body.String(), `"settings":`)
-	assert.Contains(t, recorder.Body.String(), `"default_vendor":"openai"`)
+	assert.Contains(t, recorder.Body.String(), `"auto_effort_enabled":true`)
 	assert.NotContains(t, recorder.Body.String(), "recommendations")
 }
 
@@ -93,25 +90,31 @@ func TestModelRadarManagementDatabaseMatrix(t *testing.T) {
 			assert.Nil(t, management.Data.Snapshot)
 			assert.Nil(t, management.Data.CurrentTask)
 			assert.False(t, management.Data.Sync.Enabled)
-			assert.Equal(t, "openai", management.Data.Settings.DefaultVendor)
+			assert.True(t, management.Data.Settings.AutoEffortEnabled)
 
-			settingsJSON := `{"default_vendor":"anthropic","show_degradation_alerts":false,"models":{"k3":{"hidden":true}}}`
+			settingsJSON := `{"auto_effort_enabled":false,"models":{"k3":{"hidden":true}}}`
 			require.NoError(t, model.UpdateOption("ModelRadarSettings", settingsJSON))
 			var option model.Option
 			require.NoError(t, db.Where(&model.Option{Key: "ModelRadarSettings"}).First(&option).Error)
 			assert.Equal(t, settingsJSON, option.Value)
-			require.Error(t, model.UpdateOption("ModelRadarSettings", `{"default_vendor":"INVALID"}`))
-			assert.Equal(t, "anthropic", setting.GetModelRadarSettings().DefaultVendor)
+			require.Error(t, model.UpdateOption("ModelRadarSettings", `{"auto_effort_enabled":"nope"}`))
+			assert.False(t, setting.GetModelRadarSettings().AutoEffortEnabled)
 
-			payload, err := common.Marshal(service.ModelRadarData{Configurations: []service.ModelRadarConfiguration{
-				{Model: "k3", Effort: "high"}, {Model: "gpt-a", Effort: "low"}, {Model: "gpt-a", Effort: "high"},
-			}})
+			score := 100.0
+			payload, err := common.Marshal(service.ModelRadarData{
+				ModelCount: 2, ConfigurationCount: 3,
+				Bench: &service.ModelRadarBench{Cells: []service.ModelRadarBenchCell{
+					{Model: "k3", Effort: "high", Score: &score, Coverage: 64},
+					{Model: "gpt-a", Effort: "low", Score: &score, Coverage: 64},
+					{Model: "gpt-a", Effort: "high", Score: &score, Coverage: 64},
+				}},
+			})
 			require.NoError(t, err)
-			require.NoError(t, model.SaveModelRadarSnapshot(t.Context(), &model.ModelRadarSnapshot{SchemaVersion: 1, Payload: payload, FetchedAt: common.GetTimestamp()}))
+			require.NoError(t, model.SaveModelRadarSnapshot(t.Context(), &model.ModelRadarSnapshot{SchemaVersion: 2, Payload: payload, FetchedAt: common.GetTimestamp()}))
 			data, err := service.GetModelRadar(t.Context())
 			require.NoError(t, err)
 			require.NotNil(t, data.Settings)
-			assert.Equal(t, "anthropic", data.Settings.DefaultVendor)
+			assert.False(t, data.Settings.AutoEffortEnabled)
 			assert.True(t, data.Settings.Models["k3"].Hidden)
 			snapshot, err := model.GetModelRadarSnapshot(t.Context())
 			require.NoError(t, err)

@@ -119,9 +119,6 @@ export function ModelRadarSyncCard(props: {
                   configurations: snapshot.configuration_count,
                 })}
               </span>
-              <span className='text-muted-foreground text-xs'>
-                {t('Degradation alerts')}: {snapshot.alert_count}
-              </span>
             </div>
             <dl className='grid gap-3 text-sm sm:grid-cols-2'>
               <div>

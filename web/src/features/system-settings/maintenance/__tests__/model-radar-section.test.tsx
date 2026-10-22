@@ -99,11 +99,9 @@ beforeEach(() => {
     snapshot: {
       fetched_at: 100,
       source_updated_at: 90,
-      alerts_updated_at: 90,
       stale: false,
       model_count: 2,
       configuration_count: 3,
-      alert_count: 0,
       models: [
         { model: 'k3', configuration_count: 2, efforts: ['high', 'low'] },
         { model: 'gpt-a', configuration_count: 1, efforts: ['low'] },
@@ -156,23 +154,16 @@ describe('model radar management', () => {
       expect(updateSystemOption).toHaveBeenCalledWith({
         key: 'ModelRadarSettings',
         value:
-          '{"auto_effort_enabled":true,"default_vendor":"openai","show_degradation_alerts":true,"models":{"k3":{"hidden":true,"aliases":["kimi-k3-latest"]}}}',
+          '{"auto_effort_enabled":true,"models":{"k3":{"hidden":true,"aliases":["kimi-k3-latest"]}}}',
       })
     )
   })
 
-  test('lists canonical vendors and All in the default selector and skips unchanged saves', async () => {
+  test('skips unchanged saves', async () => {
     const user = userEvent.setup()
     renderSection()
     await user.click(
-      await screen.findByRole('combobox', { name: 'Default vendor' })
-    )
-    expect(screen.getByRole('option', { name: 'All' })).toBeVisible()
-    expect(screen.getByRole('option', { name: 'Anthropic' })).toBeVisible()
-    expect(screen.getByRole('option', { name: 'Tencent' })).toBeVisible()
-    await user.keyboard('{Escape}')
-    await user.click(
-      screen.getByRole('button', { name: 'Save radar settings' })
+      await screen.findByRole('button', { name: 'Save radar settings' })
     )
     expect(updateSystemOption).not.toHaveBeenCalled()
   })
@@ -199,8 +190,7 @@ describe('model radar management', () => {
     await waitFor(() =>
       expect(updateSystemOption).toHaveBeenCalledWith({
         key: 'ModelRadarSettings',
-        value:
-          '{"auto_effort_enabled":true,"default_vendor":"openai","show_degradation_alerts":true,"models":{}}',
+        value: '{"auto_effort_enabled":true,"models":{}}',
       })
     )
   })
@@ -219,8 +209,7 @@ describe('model radar management', () => {
     await waitFor(() =>
       expect(updateSystemOption).toHaveBeenCalledWith({
         key: 'ModelRadarSettings',
-        value:
-          '{"auto_effort_enabled":false,"default_vendor":"openai","show_degradation_alerts":true,"models":{}}',
+        value: '{"auto_effort_enabled":false,"models":{}}',
       })
     )
   })
@@ -240,7 +229,7 @@ describe('model radar management', () => {
       expect(updateSystemOption).toHaveBeenCalledWith({
         key: 'ModelRadarSettings',
         value:
-          '{"auto_effort_enabled":true,"default_vendor":"openai","show_degradation_alerts":true,"models":{"k3":{"auto_effort":true}}}',
+          '{"auto_effort_enabled":true,"models":{"k3":{"auto_effort":true}}}',
       })
     )
   })
@@ -299,7 +288,7 @@ describe('model radar management', () => {
     await screen.findByRole('button', { name: 'Sync now' })
     expect(screen.getAllByText('No snapshot yet')).toHaveLength(2)
     expect(
-      screen.getByRole('combobox', { name: 'Default vendor' })
+      screen.getByRole('switch', { name: 'Allow automatic reasoning tiers' })
     ).toBeEnabled()
   })
 
@@ -377,7 +366,7 @@ describe('model radar management', () => {
       expect(updateSystemOption).toHaveBeenCalledWith({
         key: 'ModelRadarSettings',
         value:
-          '{"auto_effort_enabled":true,"default_vendor":"openai","show_degradation_alerts":true,"models":{"deepseek-v4-flash-0731":{"aliases":["deepseek-v4.1-flash"]},"deepseek-v4.1-flash":{"hidden":true}}}',
+          '{"auto_effort_enabled":true,"models":{"deepseek-v4-flash-0731":{"aliases":["deepseek-v4.1-flash"]},"deepseek-v4.1-flash":{"hidden":true}}}',
       })
     )
   })

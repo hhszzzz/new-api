@@ -16,30 +16,15 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import type { ModelRadarConfiguration } from '../types'
 
-export const configurationFixture: ModelRadarConfiguration = {
-  model: 'gpt-radar',
-  effort: 'medium',
-  harness: 'codex',
-  runs_24h: 3,
-  runs_48h: 6,
-  average_price_usd_by_band: null,
-  iq: 93.75,
-  passed: 7,
-  valid_tasks: 10,
-  average_price_usd: 1.25,
-  price_samples: 10,
-  average_minutes: 4.5,
-  duration_samples: 9,
-  incomplete_cost_samples: 1,
-  total_runs: 12,
-  latest_graded_at: 1_800_000_000,
-  average_agent_steps: 22,
-  agent_steps_samples: 8,
-  average_total_tokens: 12_345,
-  token_samples: 7,
-  cache_hit_rate: 0.75,
-  cache_token_samples: 6,
-  combined_cost_index: 45,
+/** Maps a RadarBench coverage status to its English i18n source string. */
+export function benchStatusLabelKey(status: string): string {
+  switch (status) {
+    case 'complete':
+      return 'Complete'
+    case 'provisional':
+      return 'Provisional'
+    default:
+      return 'No valid grades'
+  }
 }

@@ -19,71 +19,53 @@ For commercial licensing, please contact support@quantumnous.com
 import { describe, expect, test } from 'vitest'
 
 import {
+  benchEffortCandidates,
   createModelRadarIconRegistry,
-  gatewayEffortCandidates,
+  DEFAULT_RADAR_SETTINGS,
   getModelIconKey,
-  groupConfigurations,
-  matrixEfforts,
-  listVendors,
-  filterByVendor,
-  filterAlertsByVendor,
+  getVendorMeta,
+  isRadarAutoEffortAllowed,
   matchRadarModelToUserModels,
   pickAutoEffort,
-  isRadarAutoEffortAllowed,
-  resolveRadarSettings,
   resolveRadarModel,
-  resolveDefaultVendor,
+  resolveRadarSettings,
   splitRadarAliases,
-  DEFAULT_RADAR_SETTINGS,
-  getHistorySeries,
-  getPrimaryIq,
-  getVendorMeta,
 } from '../lib/model-radar'
-import type { ModelRadarConfiguration } from '../types'
+import type { ModelRadarBenchCell } from '../types'
 
-function configuration(model: string, effort: string): ModelRadarConfiguration {
+function benchCell(
+  effort: string,
+  score: number | null,
+  coverage = 64,
+  price: number | null = null
+): ModelRadarBenchCell {
   return {
-    model,
+    model: 'gpt-a',
     effort,
-    harness: '',
-    runs_24h: null,
-    runs_48h: null,
-    average_price_usd_by_band: null,
-    iq: 100,
-    passed: 2,
-    valid_tasks: 3,
-    average_price_usd: null,
-    price_samples: null,
-    average_minutes: null,
-    duration_samples: null,
-    incomplete_cost_samples: null,
-    total_runs: null,
-    latest_graded_at: null,
-    average_agent_steps: null,
-    agent_steps_samples: null,
-    average_total_tokens: null,
-    token_samples: null,
-    cache_hit_rate: null,
-    cache_token_samples: null,
-    combined_cost_index: null,
+    score,
+    coverage,
+    required_tasks: 64,
+    score_status: coverage === 64 ? 'complete' : 'provisional',
+    graded_runs_count: coverage,
+    source_scores: {},
+    price: { mean: price, known_samples: coverage, total_samples: coverage },
+    duration: { mean: null, known_samples: null, total_samples: null },
+    statistics_state: 'available',
+    detail_metrics: null,
+    history_state: 'not_provided',
+    history: [],
+    last_graded_day: 0,
+    read_at: 1,
   }
 }
 
-describe('model radar configuration grouping', () => {
-  test('groups by provider regardless of stale runner metadata', () => {
-    const glm = { ...configuration('glm-5.3', 'high'), harness: 'codex' }
-    const grok = { ...configuration('grok-4.6', 'high'), harness: 'codex' }
-    expect(resolveRadarModel(glm.model).vendor).toBe('zhipu')
-    expect(resolveRadarModel(grok.model).vendor).toBe('xai')
-    expect(
-      filterByVendor([glm, grok], DEFAULT_RADAR_SETTINGS, 'zhipu')
-    ).toEqual([glm])
-  })
+describe('model radar settings and model resolution', () => {
   test('does not treat inherited object properties as vendor or model metadata', () => {
     expect(getVendorMeta('constructor').label).toBe('constructor')
     expect(resolveRadarModel('constructor').vendor).toBe('other')
     expect(resolveRadarModel('__proto__').hidden).toBe(false)
   })
+
   test.each([
     ['gpt-5.4', 'OpenAI.Color'],
     ['openai/gpt-5.4', 'OpenAI.Color'],
@@ -93,7 +75,6 @@ describe('model radar configuration grouping', () => {
     ['stepfun/step-3.5-flash', 'Stepfun.Color'],
     ['dsh-deepseek-v4-flash', 'DeepSeek.Color'],
     ['provider/dsh-deepseek-v4-pro', 'DeepSeek.Color'],
-    ['dsh-deepseek-v4-flash-vision-exp', 'DeepSeek.Color'],
     ['k3', 'Moonshot.Color'],
     ['hy4-preview', 'Hunyuan.Color'],
     ['unknown-model', null],
@@ -104,32 +85,25 @@ describe('model radar configuration grouping', () => {
     }
   )
 
-  test('uses the configured vendor icon variant before the radar fallback', () => {
-    const iconRegistry = {
-      modelIcons: new Map<string, string>(),
-      providerIcons: new Map([['deepseek', 'DeepSeek.Color']]),
-    }
-
-    expect(getModelIconKey('deepseek-v3.2', iconRegistry)).toBe(
-      'DeepSeek.Color'
-    )
-  })
-
-  test('resolves DSH models through their underlying model while preserving exact icon overrides', () => {
-    const iconRegistry = {
-      modelIcons: new Map([['deepseek-v4-pro', 'DeepSeek']]),
-      providerIcons: new Map([['deepseek', 'DeepSeek.Color']]),
-    }
-    expect(getModelIconKey('dsh-deepseek-v4-pro', iconRegistry)).toBe(
-      'DeepSeek'
-    )
-    expect(getModelIconKey('dsh-deepseek-v4-flash', iconRegistry)).toBe(
-      'DeepSeek.Color'
-    )
-    iconRegistry.modelIcons.set('dsh-deepseek-v4-pro', 'DeepSeek.Color')
-    expect(getModelIconKey('dsh-deepseek-v4-pro', iconRegistry)).toBe(
-      'DeepSeek.Color'
-    )
+  test('resolves admin overrides before aliases and prefixes', () => {
+    expect(resolveRadarModel('k3')).toMatchObject({
+      displayName: 'kimi-k3',
+      vendor: 'moonshot',
+      iconKey: 'Moonshot.Color',
+      source: 'alias',
+    })
+    const settings = resolveRadarSettings({
+      models: {
+        k3: { display_name: 'Custom Kimi', vendor: 'tencent', hidden: true },
+      },
+    })
+    expect(resolveRadarModel('k3', settings)).toMatchObject({
+      displayName: 'Custom Kimi',
+      vendor: 'tencent',
+      hidden: true,
+      iconKey: 'Hunyuan.Color',
+      source: 'override',
+    })
   })
 
   test('builds the radar icon registry from pricing vendor configuration', () => {
@@ -154,358 +128,96 @@ describe('model radar configuration grouping', () => {
     )
   })
 
-  test('preserves first model appearance while sorting known efforts before unknown efforts', () => {
-    const groups = groupConfigurations([
-      configuration('model-b', 'turbo'),
-      configuration('model-a', 'high'),
-      configuration('model-b', 'max'),
-      configuration('model-b', 'low'),
-      configuration('model-a', 'medium'),
-    ])
-
-    expect(groups.map((group) => group.model)).toEqual(['model-b', 'model-a'])
-    expect(groups[0].configurations.map((item) => item.effort)).toEqual([
-      'max',
-      'low',
-      'turbo',
-    ])
-    expect(groups[1].configurations.map((item) => item.effort)).toEqual([
-      'high',
-      'medium',
-    ])
-  })
-
-  test('keeps fallback model colors stable when source order changes', () => {
-    const forward = groupConfigurations([
-      configuration('model-a', 'low'),
-      configuration('model-b', 'low'),
-    ])
-    const reversed = groupConfigurations([
-      configuration('model-b', 'low'),
-      configuration('model-a', 'low'),
-    ])
-
-    const forwardColors = Object.fromEntries(
-      forward.map((group) => [group.model, group.color])
-    )
-    const reversedColors = Object.fromEntries(
-      reversed.map((group) => [group.model, group.color])
-    )
-    expect(reversedColors).toEqual(forwardColors)
-  })
-
-  test('appends unknown efforts after the canonical matrix columns', () => {
-    expect(
-      matrixEfforts([
-        configuration('model-a', 'turbo'),
-        configuration('model-b', 'high'),
-        configuration('model-c', 'adaptive'),
-      ])
-    ).toEqual(['high', 'adaptive', 'turbo'])
-  })
-
-  test('counts distinct visible models instead of tiers and sorts by size then label', () => {
-    const settings = resolveRadarSettings({
-      models: { hidden: { hidden: true } },
-    })
-    const vendors = listVendors(
-      [
-        configuration('gpt-a', 'low'),
-        configuration('gpt-a', 'high'),
-        configuration('claude-a', 'low'),
-        configuration('claude-b', 'low'),
-        configuration('deepseek-a', 'high'),
-        configuration('hidden', 'high'),
-      ],
-      settings
-    )
-    expect(vendors.map(({ key, modelCount }) => ({ key, modelCount }))).toEqual(
-      [
-        { key: 'anthropic', modelCount: 2 },
-        { key: 'deepseek', modelCount: 1 },
-        { key: 'openai', modelCount: 1 },
-      ]
-    )
-  })
-
-  test('filters configurations and alerts by vendor and drops hidden and absent tiers even in All', () => {
-    const openai = configuration('gpt-a', 'low')
-    const deepseek = configuration('dsh-deepseek-v4-pro', 'high')
-    const configurations = [openai, deepseek, configuration('legacy', 'low')]
-    const settings = resolveRadarSettings({
-      models: { legacy: { hidden: true } },
-    })
-    const alerts = [
-      {
-        model: 'gpt-a',
-        effort: 'low',
-        iq: 80,
-        degradation_12h_iq: 1,
-        degradation_24h_iq: 2,
-        degradation_48h_iq: 3,
-      },
-      {
-        model: 'dsh-deepseek-v4-pro',
-        effort: 'high',
-        iq: 90,
-        degradation_12h_iq: 1,
-        degradation_24h_iq: 2,
-        degradation_48h_iq: 3,
-      },
-    ]
-    alerts.push(
-      { ...alerts[0], model: 'legacy' },
-      { ...alerts[0], effort: 'missing' }
-    )
-    expect(filterByVendor(configurations, settings, 'deepseek')).toEqual([
-      deepseek,
-    ])
-    expect(filterByVendor(configurations, settings, 'all')).toEqual([
-      openai,
-      deepseek,
-    ])
-    expect(filterByVendor(configurations, settings, 'missing')).toEqual([])
-    expect(
-      filterAlertsByVendor(alerts, configurations, settings, 'deepseek')
-    ).toEqual([alerts[1]])
-    expect(
-      filterAlertsByVendor(alerts, configurations, settings, 'all')
-    ).toEqual(alerts.slice(0, 2))
-    expect(
-      filterAlertsByVendor(alerts, configurations, settings, 'missing')
-    ).toEqual([])
-  })
-
-  test('resolves admin overrides before aliases and prefixes while preserving pricing icon precedence', () => {
-    expect(resolveRadarModel('k3')).toMatchObject({
-      displayName: 'kimi-k3',
-      vendor: 'moonshot',
-      iconKey: 'Moonshot.Color',
-      source: 'alias',
-    })
-    expect(resolveRadarModel('hy4-preview')).toMatchObject({
-      displayName: 'hy4-preview',
-      vendor: 'tencent',
-      iconKey: 'Hunyuan.Color',
-    })
-    const settings = resolveRadarSettings({
-      models: {
-        k3: { display_name: 'Custom Kimi', vendor: 'tencent', hidden: true },
-      },
-    })
-    expect(resolveRadarModel('k3', settings)).toMatchObject({
-      displayName: 'Custom Kimi',
-      vendor: 'tencent',
-      hidden: true,
-      iconKey: 'Hunyuan.Color',
-      source: 'override',
-    })
-    const registry = {
-      modelIcons: new Map([['kimi-k3', 'Kimi.Color']]),
-      providerIcons: new Map<string, string>(),
-    }
-    expect(
-      resolveRadarModel('k3', DEFAULT_RADAR_SETTINGS, registry).iconKey
-    ).toBe('Kimi.Color')
-    registry.modelIcons.set('k3', 'Moonshot')
-    expect(resolveRadarModel('k3', settings, registry).iconKey).toBe('Moonshot')
-  })
-
-  test('tolerates missing and invalid settings while respecting explicit false', () => {
+  test('tolerates missing and invalid settings while ignoring removed legacy fields', () => {
     for (const raw of [undefined, null, [], 'invalid', {}]) {
       expect(resolveRadarSettings(raw)).toEqual(DEFAULT_RADAR_SETTINGS)
     }
     expect(
       resolveRadarSettings({
+        auto_effort_enabled: false,
+        default_vendor: 'invalid vendor',
         show_degradation_alerts: false,
-        models: { invalid: null, k3: { hidden: true } },
+        models: { invalid: null, k3: { hidden: true, auto_effort: true } },
       })
     ).toEqual({
       ...DEFAULT_RADAR_SETTINGS,
-      show_degradation_alerts: false,
-      models: { k3: { hidden: true } },
+      auto_effort_enabled: false,
+      models: { k3: { hidden: true, auto_effort: true } },
     })
-    expect(
-      resolveRadarSettings({ default_vendor: 'invalid vendor' }).default_vendor
-    ).toBe('openai')
   })
 
-  test('selects the configured vendor only when it has visible models', () => {
-    expect(
-      resolveDefaultVendor(DEFAULT_RADAR_SETTINGS, [{ key: 'openai' }])
-    ).toBe('openai')
-    expect(
-      resolveDefaultVendor(DEFAULT_RADAR_SETTINGS, [{ key: 'anthropic' }])
-    ).toBe('all')
-    expect(
-      resolveDefaultVendor(
-        resolveRadarSettings({ default_vendor: 'anthropic' }),
-        [{ key: 'anthropic' }]
-      )
-    ).toBe('anthropic')
-  })
-
-  test('limits history to the requested source-relative window and orders it chronologically', () => {
-    const point = configuration('a', 'low')
-    const history = [
-      { ts: 80 * 3600, points: [{ ...point, iq: 90 }] },
-      { ts: 8 * 3600, points: [{ ...point, iq: 70 }] },
-      { ts: 32 * 3600, points: [{ ...point, iq: 80 }] },
-      { ts: 7 * 3600, points: [{ ...point, iq: 60 }] },
-    ]
-    expect(getHistorySeries(history, 'a', 'low')).toEqual([70, 80, 90])
-    expect(getHistorySeries(history, 'a', 'low', 48)).toEqual([80, 90])
-    expect(getHistorySeries(history, 'missing', 'low')).toEqual([])
+  test('splits, lowercases and de-duplicates alias lists', () => {
+    expect(splitRadarAliases(' KIMI-K3, kimi-k3  k3-turbo ')).toEqual([
+      'kimi-k3',
+      'k3-turbo',
+    ])
   })
 })
 
 describe('model radar automatic reasoning tiers', () => {
-  test('keeps only expressible, well-sampled tiers, deduped and IQ ordered', () => {
-    const candidates = gatewayEffortCandidates([
-      configuration('gpt-a', 'ultra'),
-      { ...configuration('gpt-a', 'low'), iq: 95, valid_tasks: 2 },
-      { ...configuration('gpt-a', 'Low'), iq: 70, average_price_usd: 5 },
-      {
-        ...configuration('gpt-a', 'medium'),
-        iq: 90,
-        average_price_usd: 2,
-      },
-      {
-        ...configuration('gpt-a', 'high'),
-        iq: 90,
-        average_price_usd_by_band: { off_peak: 1, peak: 3 },
-      },
-      { ...configuration('gpt-a', 'xhigh'), iq: 80, average_price_usd: 8 },
+  test('keeps expressible, well-covered tiers, converts the display scale and orders by IQ', () => {
+    const candidates = benchEffortCandidates([
+      benchCell('ultra', 150),
+      benchCell('max', 148, 2),
+      benchCell('low', 105),
+      benchCell('medium', 135, 64, 2),
+      benchCell('High', 135),
+      benchCell('xhigh', 120),
     ])
+
     expect(candidates.map((item) => [item.effort, item.iq])).toEqual([
       ['medium', 90],
       ['high', 90],
       ['xhigh', 80],
       ['low', 70],
     ])
-    expect(candidates.map((item) => item.priceUsd)).toEqual([2, 2, 8, 5])
-    expect(candidates[1].radarEffort).toBe('high')
+    expect(candidates[0].priceUsd).toBe(2)
   })
 
-  test('applies each selection strategy and reports whether the tier changes', () => {
-    const candidates = gatewayEffortCandidates([
-      { ...configuration('m', 'high'), iq: 100, average_price_usd: 10 },
-      { ...configuration('m', 'medium'), iq: 90, average_price_usd: 1 },
-      { ...configuration('m', 'low'), iq: 60, average_price_usd: 5 },
+  test('skips a selection without a score', () => {
+    expect(benchEffortCandidates([benchCell('high', null)])).toEqual([])
+  })
+
+  test('picks the best tier, the best value tier, or keeps a close client tier', () => {
+    const candidates = benchEffortCandidates([
+      benchCell('low', 105, 64, 1),
+      benchCell('medium', 135, 64, 4),
+      benchCell('high', 150, 64, 10),
     ])
-    expect(pickAutoEffort(candidates, 'highest_iq', 5)).toEqual({
+
+    expect(pickAutoEffort(candidates, 'highest_iq', 5)).toMatchObject({
       effort: 'high',
-      iq: 100,
       changed: true,
     })
-    expect(pickAutoEffort(candidates, 'highest_iq', 5, 'high')).toEqual({
-      effort: 'high',
-      iq: 100,
-      changed: false,
-    })
-    expect(pickAutoEffort(candidates, 'iq_per_cost', 5)).toEqual({
-      effort: 'medium',
-      iq: 90,
-      changed: true,
-    })
-    // The client's own tier survives while the best tier stays inside the gap.
-    expect(pickAutoEffort(candidates, 'min_iq_delta', 45, 'low')).toEqual({
+    expect(pickAutoEffort(candidates, 'iq_per_cost', 5)).toMatchObject({
       effort: 'low',
-      iq: 60,
-      changed: false,
     })
-    expect(pickAutoEffort(candidates, 'min_iq_delta', 40, 'low')).toEqual({
+    expect(pickAutoEffort(candidates, 'min_iq_delta', 50, 'low')).toMatchObject(
+      { effort: 'low', changed: false }
+    )
+    expect(pickAutoEffort(candidates, 'min_iq_delta', 5, 'low')).toMatchObject({
       effort: 'high',
-      iq: 100,
       changed: true,
     })
-    // An unpriced model cannot be compared by value, so the IQ leader wins.
-    expect(
-      pickAutoEffort(
-        gatewayEffortCandidates([
-          configuration('m', 'high'),
-          { ...configuration('m', 'low'), iq: 70 },
-        ]),
-        'iq_per_cost',
-        5
-      )
-    ).toEqual({ effort: 'high', iq: 100, changed: true })
     expect(pickAutoEffort([], 'highest_iq', 5)).toBeNull()
   })
 
-  test('ranks tiers by comprehensive IQ and falls back to software IQ', () => {
-    expect(getPrimaryIq(configuration('gpt-a', 'high'))).toEqual({
-      value: 100,
-      dimension: 'software',
-    })
+  test('matches gateway names through aliases and requires the admin opt-in', () => {
     expect(
-      getPrimaryIq({
-        ...configuration('gpt-a', 'high'),
-        comprehensive_iq: 120,
-        visual_iq: 140,
-      })
-    ).toEqual({ value: 120, dimension: 'comprehensive' })
-
-    const candidates = gatewayEffortCandidates([
-      { ...configuration('m', 'high'), iq: 95, comprehensive_iq: 88 },
-      { ...configuration('m', 'low'), iq: 70, comprehensive_iq: 110 },
-      { ...configuration('m', 'medium'), iq: 80, comprehensive_iq: null },
-    ])
-    // Comprehensive IQ decides the order; a null comprehensive value falls back
-    // to the software IQ.
-    expect(candidates.map((item) => [item.effort, item.iq])).toEqual([
-      ['low', 110],
-      ['high', 88],
-      ['medium', 80],
-    ])
-  })
-
-  test('matches a radar model to the user names it can be called by', () => {
-    expect(matchRadarModelToUserModels('gpt-5.4', undefined, ['gpt-5.4'])).toBe(
-      true
-    )
-    expect(
-      matchRadarModelToUserModels('gpt-5.4', undefined, ['openai/gpt-5.4'])
+      matchRadarModelToUserModels('gpt-a', ['local-gpt'], ['local-gpt'])
     ).toBe(true)
-    expect(matchRadarModelToUserModels('openai/kimi-k3', ['k3'], ['K3'])).toBe(
-      true
-    )
-    expect(matchRadarModelToUserModels('kimi-k3', ['k3'], ['other'])).toBe(
+    expect(
+      matchRadarModelToUserModels('gpt-a', undefined, ['provider/gpt-a'])
+    ).toBe(true)
+    expect(matchRadarModelToUserModels('gpt-a', undefined, ['gpt-b'])).toBe(
       false
     )
-    expect(matchRadarModelToUserModels('kimi-k3', undefined, [])).toBe(false)
-  })
 
-  test('normalizes alias lists and drops unusable entries from stored settings', () => {
-    expect(splitRadarAliases(' K3 , k3-turbo\n k3 ')).toEqual([
-      'k3',
-      'k3-turbo',
-    ])
-    const aliases = (list: string[]) =>
-      resolveRadarSettings({ models: { 'kimi-k3': { aliases: list } } }).models[
-        'kimi-k3'
-      ].aliases
-    expect(aliases([' KIMI-K3 ', 'k3', '', 'k3', 'x'.repeat(129)])).toEqual([
-      'k3',
-    ])
-    expect(
-      aliases(Array.from({ length: 20 }, (_, index) => `a${index}`))
-    ).toEqual(Array.from({ length: 16 }, (_, index) => `a${index}`))
-  })
-
-  test('opts a model in for tier adjustment only when the administrator allowed it', () => {
     const settings = resolveRadarSettings({
-      models: {
-        'kimi-k3': { auto_effort: true },
-        'gpt-5.4': { hidden: true },
-        'claude-sonnet': { auto_effort: 'yes' },
-      },
+      models: { 'gpt-a': { auto_effort: true } },
     })
-    expect(settings.models['kimi-k3'].auto_effort).toBe(true)
-    expect(settings.models['gpt-5.4'].auto_effort).toBeUndefined()
-    expect(settings.models['claude-sonnet'].auto_effort).toBeUndefined()
-    expect(isRadarAutoEffortAllowed(settings, 'kimi-k3')).toBe(true)
-    expect(isRadarAutoEffortAllowed(settings, 'gpt-5.4')).toBe(false)
-    expect(isRadarAutoEffortAllowed(undefined, 'kimi-k3')).toBe(false)
+    expect(isRadarAutoEffortAllowed(settings, 'gpt-a')).toBe(true)
+    expect(isRadarAutoEffortAllowed(settings, 'gpt-b')).toBe(false)
+    expect(isRadarAutoEffortAllowed(undefined, 'gpt-a')).toBe(false)
   })
 })

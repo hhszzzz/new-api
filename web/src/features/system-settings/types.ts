@@ -128,11 +128,9 @@ export type ModelRadarManagement = {
   snapshot: {
     fetched_at: number
     source_updated_at: number
-    alerts_updated_at: number
     stale: boolean
     model_count: number
     configuration_count: number
-    alert_count: number
     models: Array<{
       model: string
       configuration_count: number

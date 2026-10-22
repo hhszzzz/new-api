@@ -26,12 +26,10 @@ type ModelRadarModelOverride struct {
 }
 
 type ModelRadarSettings struct {
-	DefaultVendor string `json:"default_vendor"`
 	// AutoEffortEnabled is the administrator kill switch for radar auto-effort.
 	// It defaults to true when the option does not set it.
-	AutoEffortEnabled     bool                               `json:"auto_effort_enabled"`
-	ShowDegradationAlerts bool                               `json:"show_degradation_alerts"`
-	Models                map[string]ModelRadarModelOverride `json:"models"`
+	AutoEffortEnabled bool                               `json:"auto_effort_enabled"`
+	Models            map[string]ModelRadarModelOverride `json:"models"`
 }
 
 var modelRadarVendorPattern = regexp.MustCompile(`^[a-z0-9-]{0,32}$`)
@@ -42,8 +40,8 @@ const modelRadarMaxAliasesPerModel = 16
 
 func parseModelRadarSettings(raw string) (ModelRadarSettings, error) {
 	settings := ModelRadarSettings{
-		DefaultVendor: "openai", ShowDegradationAlerts: true, AutoEffortEnabled: true,
-		Models: make(map[string]ModelRadarModelOverride),
+		AutoEffortEnabled: true,
+		Models:            make(map[string]ModelRadarModelOverride),
 	}
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -53,22 +51,11 @@ func parseModelRadarSettings(raw string) (ModelRadarSettings, error) {
 		return settings, fmt.Errorf("model radar settings must be a JSON object")
 	}
 	var config struct {
-		DefaultVendor         string                              `json:"default_vendor"`
-		ShowDegradationAlerts *bool                               `json:"show_degradation_alerts"`
-		AutoEffortEnabled     *bool                               `json:"auto_effort_enabled"`
-		Models                map[string]*ModelRadarModelOverride `json:"models"`
+		AutoEffortEnabled *bool                               `json:"auto_effort_enabled"`
+		Models            map[string]*ModelRadarModelOverride `json:"models"`
 	}
 	if err := common.UnmarshalJsonStr(raw, &config); err != nil {
 		return settings, fmt.Errorf("invalid model radar settings: %w", err)
-	}
-	if !modelRadarVendorPattern.MatchString(config.DefaultVendor) {
-		return settings, fmt.Errorf("model radar default vendor must use up to 32 lowercase letters, digits or hyphens")
-	}
-	if config.DefaultVendor != "" {
-		settings.DefaultVendor = config.DefaultVendor
-	}
-	if config.ShowDegradationAlerts != nil {
-		settings.ShowDegradationAlerts = *config.ShowDegradationAlerts
 	}
 	if config.AutoEffortEnabled != nil {
 		settings.AutoEffortEnabled = *config.AutoEffortEnabled

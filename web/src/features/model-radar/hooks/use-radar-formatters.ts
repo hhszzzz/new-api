@@ -52,6 +52,14 @@ export function useRadarFormatters() {
       hour: '2-digit',
       minute: '2-digit',
     })
+    // Grading days are UTC buckets; rendering them in local time would shift
+    // the date west of UTC.
+    const utcDayFormatter = new Intl.DateTimeFormat(locale, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      timeZone: 'UTC',
+    })
     const historyTimeFormatter = new Intl.DateTimeFormat(locale, {
       month: 'short',
       day: 'numeric',
@@ -72,6 +80,8 @@ export function useRadarFormatters() {
         value === null ? null : percentFormatter.format(value),
       usd: (value: number | null) =>
         value === null ? null : currencyFormatter.format(value),
+      utcDay: (value: number | null) =>
+        value === null ? null : utcDayFormatter.format(value * 1000),
     }
   }, [locale])
 }

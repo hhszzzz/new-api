@@ -23,13 +23,11 @@ func TestValidateModelRadarSettings(t *testing.T) {
 	}{
 		{"empty", "", true},
 		{"partial", `{}`, true},
-		{"valid", `{"default_vendor":"all","show_degradation_alerts":false,"models":{"k3":{"display_name":"Kimi K3","vendor":"moonshot","hidden":true}}}`, true},
+		{"valid", `{"auto_effort_enabled":false,"models":{"k3":{"display_name":"Kimi K3","vendor":"moonshot","hidden":true}}}`, true},
 		{"trimmed names", `{"models":{" k3 ":{"display_name":" kimi-k3 "}}}`, true},
 		{"too many models", string(oversized), false},
-		{"invalid default vendor", `{"default_vendor":"OpenAI"}`, false},
 		{"invalid vendor", `{"models":{"k3":{"vendor":"bad vendor"}}}`, false},
 		{"reserved vendor", `{"models":{"k3":{"vendor":"all"}}}`, false},
-		{"long vendor", `{"default_vendor":"` + strings.Repeat("a", 33) + `"}`, false},
 		{"long model", `{"models":{"` + strings.Repeat("a", 129) + `":{}}}`, false},
 		{"long display", `{"models":{"k3":{"display_name":"` + strings.Repeat("a", 129) + `"}}}`, false},
 		{"empty model", `{"models":{" ":{}}}`, false},
@@ -46,7 +44,6 @@ func TestValidateModelRadarSettings(t *testing.T) {
 		{"hidden model releases its alias", `{"models":{"k3":{"hidden":true,"aliases":["kimi"]},"k4":{"aliases":["kimi"]}}}`, true},
 		{"non boolean auto effort", `{"auto_effort_enabled":"false"}`, false},
 		{"non boolean model auto effort", `{"models":{"k3":{"auto_effort":"yes"}}}`, false},
-		{"non boolean", `{"show_degradation_alerts":"false"}`, false},
 		{"null", `null`, false},
 		{"array", `[]`, false},
 		{"scalar", `true`, false},
@@ -81,23 +78,19 @@ func TestGetModelRadarSettings(t *testing.T) {
 		common.OptionMap = previous
 		common.OptionMapRWMutex.Unlock()
 	})
-	for _, raw := range []string{"", `{}`, `null`, `{"default_vendor":"bad vendor"}`} {
+	for _, raw := range []string{"", `{}`, `null`, `{"default_vendor":"legacy-field"}`} {
 		common.OptionMapRWMutex.Lock()
 		common.OptionMap["ModelRadarSettings"] = raw
 		common.OptionMapRWMutex.Unlock()
 		settings := GetModelRadarSettings()
-		assert.Equal(t, "openai", settings.DefaultVendor)
-		assert.True(t, settings.ShowDegradationAlerts)
 		assert.True(t, settings.AutoEffortEnabled)
 		assert.NotNil(t, settings.Models)
 		assert.Empty(t, settings.Models)
 	}
 	common.OptionMapRWMutex.Lock()
-	common.OptionMap["ModelRadarSettings"] = `{"default_vendor":"anthropic","show_degradation_alerts":false,"auto_effort_enabled":false,"models":{" k3 ":{"display_name":" kimi-k3 ","hidden":true,"auto_effort":true,"aliases":[" KIMI-K3 ","k3"]}}}`
+	common.OptionMap["ModelRadarSettings"] = `{"auto_effort_enabled":false,"models":{" k3 ":{"display_name":" kimi-k3 ","hidden":true,"auto_effort":true,"aliases":[" KIMI-K3 ","k3"]}}}`
 	common.OptionMapRWMutex.Unlock()
 	settings := GetModelRadarSettings()
-	assert.Equal(t, "anthropic", settings.DefaultVendor)
-	assert.False(t, settings.ShowDegradationAlerts)
 	assert.False(t, settings.AutoEffortEnabled)
 	assert.Equal(t, ModelRadarModelOverride{
 		DisplayName: "kimi-k3", Hidden: true, AutoEffort: true, Aliases: []string{"kimi-k3"},
@@ -112,7 +105,7 @@ func TestGetModelRadarSettingsDropsConflictingAliases(t *testing.T) {
 	common.OptionMapRWMutex.Lock()
 	previous := common.OptionMap
 	common.OptionMap = map[string]string{
-		"ModelRadarSettings": `{"default_vendor":"anthropic","auto_effort_enabled":false,"models":{"deepseek-v4-flash-0731":{"aliases":["deepseek-v4.1-flash"]},"deepseek-v4.1-flash":{"display_name":"V4.1 Flash","auto_effort":true}}}`,
+		"ModelRadarSettings": `{"auto_effort_enabled":false,"models":{"deepseek-v4-flash-0731":{"aliases":["deepseek-v4.1-flash"]},"deepseek-v4.1-flash":{"display_name":"V4.1 Flash","auto_effort":true}}}`,
 	}
 	common.OptionMapRWMutex.Unlock()
 	t.Cleanup(func() {
@@ -122,7 +115,6 @@ func TestGetModelRadarSettingsDropsConflictingAliases(t *testing.T) {
 	})
 
 	settings := GetModelRadarSettings()
-	assert.Equal(t, "anthropic", settings.DefaultVendor)
 	assert.False(t, settings.AutoEffortEnabled)
 	assert.Empty(t, settings.Models["deepseek-v4-flash-0731"].Aliases)
 	assert.Equal(t, ModelRadarModelOverride{

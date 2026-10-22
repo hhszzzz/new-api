@@ -106,8 +106,7 @@ func RebuildModelRadarAutoEffortIndex(data *ModelRadarData) {
 		return
 	}
 	built := buildModelRadarAutoEffortIndex(
-		data.Configurations,
-		data.FetchedAt,
+		data,
 		setting.GetModelRadarSettings(),
 		setting.ModelRadarSettingsRaw(),
 	)
@@ -116,44 +115,45 @@ func RebuildModelRadarAutoEffortIndex(data *ModelRadarData) {
 	modelRadarAutoEffortIndexCache.Unlock()
 }
 
-func buildModelRadarAutoEffortIndex(configurations []ModelRadarConfiguration, fetchedAt int64, settings setting.ModelRadarSettings, settingsRaw string) *modelRadarAutoEffortIndex {
+// buildModelRadarAutoEffortIndex maps every usable RadarBench tier onto a
+// gateway reasoning effort. The bench is the radar's only score source, so a
+// model the bench does not grade simply has no automatic choice.
+func buildModelRadarAutoEffortIndex(data *ModelRadarData, settings setting.ModelRadarSettings, settingsRaw string) *modelRadarAutoEffortIndex {
 	byModel := make(map[string]ModelRadarCandidates)
-	for _, configuration := range configurations {
-		if settings.Models[configuration.Model].Hidden {
+	if data == nil || data.Bench == nil {
+		return &modelRadarAutoEffortIndex{byModel: byModel, settingsRaw: settingsRaw, loadedAt: common.GetTimestamp()}
+	}
+	for _, cell := range data.Bench.Cells {
+		if settings.Models[cell.Model].Hidden || cell.Score == nil ||
+			cell.Coverage < modelRadarAutoEffortMinValidTasks {
 			continue
 		}
-		if configuration.ValidTasks < modelRadarAutoEffortMinValidTasks {
+		if strings.EqualFold(strings.TrimSpace(cell.Effort), modelRadarAutoEffortExcludedTier) {
 			continue
 		}
-		if strings.EqualFold(strings.TrimSpace(configuration.Effort), modelRadarAutoEffortExcludedTier) {
-			continue
-		}
-		effort, err := kitreasoning.ParseEffort(configuration.Effort)
+		effort, err := kitreasoning.ParseEffort(cell.Effort)
 		if err != nil || effort == "" {
-			// Radar publishes other tiers the gateway cannot express.
 			continue
 		}
-		key := normalizeModelRadarLookupName(configuration.Model)
+		// The published score uses the 150-point display scale; auto-effort
+		// keeps the 0-100 radar IQ scale so configured IQ deltas stay meaningful.
+		iq := *cell.Score / modelRadarBenchDisplayMultiplier
+		if !isFiniteInRange(iq, 0, math.MaxFloat64) {
+			continue
+		}
+		key := normalizeModelRadarLookupName(cell.Model)
 		if key == "" {
 			continue
 		}
-		// Prefer the comprehensive IQ the radar page headlines, but fall back to
-		// the software-engineering IQ for models upstream has no visual score
-		// for (all Claude/DeepSeek/GLM tiers today). Coverage is all-or-nothing
-		// per model, so a bucket never mixes the two scales.
-		iq := configuration.IQ
-		if configuration.ComprehensiveIQ != nil {
-			iq = *configuration.ComprehensiveIQ
-		}
 		bucket := byModel[key]
-		bucket.Model = configuration.Model
-		bucket.FetchedAt = fetchedAt
+		bucket.Model = cell.Model
+		bucket.FetchedAt = data.FetchedAt
 		bucket.Candidates = append(bucket.Candidates, ModelRadarEffortCandidate{
 			Effort:      effort,
-			RadarEffort: configuration.Effort,
+			RadarEffort: cell.Effort,
 			IQ:          iq,
-			ValidTasks:  configuration.ValidTasks,
-			PriceUSD:    modelRadarCandidatePrice(configuration),
+			ValidTasks:  cell.Coverage,
+			PriceUSD:    cell.Price.Mean,
 		})
 		byModel[key] = bucket
 	}
@@ -204,23 +204,6 @@ func sortModelRadarCandidates(candidates []ModelRadarEffortCandidate) []ModelRad
 		return modelRadarEffortRank[left.Effort] - modelRadarEffortRank[right.Effort]
 	})
 	return ordered
-}
-
-// modelRadarCandidatePrice prefers the published average price per task and
-// falls back to the mean of the off-peak/peak bands.
-func modelRadarCandidatePrice(configuration ModelRadarConfiguration) *float64 {
-	if configuration.AveragePriceUSD != nil {
-		return configuration.AveragePriceUSD
-	}
-	bands := configuration.AveragePriceUSDByBand
-	if bands == nil || bands.OffPeak == nil || bands.Peak == nil {
-		return nil
-	}
-	mean := (*bands.OffPeak + *bands.Peak) / 2
-	if math.IsNaN(mean) || math.IsInf(mean, 0) {
-		return nil
-	}
-	return &mean
 }
 
 // loadModelRadarAutoEffortIndex serves the in-process index while it matches the
@@ -283,7 +266,7 @@ func buildModelRadarAutoEffortIndexFromSnapshot(settingsRaw string) *modelRadarA
 		common.SysLog("failed to decode model radar snapshot for auto-effort: " + err.Error())
 		return nil
 	}
-	return buildModelRadarAutoEffortIndex(data.Configurations, snapshot.FetchedAt, setting.GetModelRadarSettings(), settingsRaw)
+	return buildModelRadarAutoEffortIndex(&data, setting.GetModelRadarSettings(), settingsRaw)
 }
 
 func reusableModelRadarAutoEffortIndex(settingsRaw string, now int64, ttl int64) *modelRadarAutoEffortIndex {

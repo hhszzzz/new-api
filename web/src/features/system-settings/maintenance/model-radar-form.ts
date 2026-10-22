@@ -48,8 +48,6 @@ export const createModelRadarSchema = (
 ) =>
   z.object({
     autoEffortEnabled: z.boolean(),
-    defaultVendor: vendorSchema,
-    showDegradationAlerts: z.boolean(),
     models: z
       .array(
         z.object({
@@ -126,8 +124,6 @@ export function parseModelRadarSettings(raw: string): ModelRadarFormValues {
   const settings = resolveRadarSettings(parsed)
   return {
     autoEffortEnabled: settings.auto_effort_enabled,
-    defaultVendor: settings.default_vendor,
-    showDegradationAlerts: settings.show_degradation_alerts,
     models: Object.entries(settings.models).map(([model, override]) => ({
       model,
       displayName: override.display_name ?? '',
@@ -162,8 +158,6 @@ export function serializeModelRadarSettings(
   }
   return JSON.stringify({
     auto_effort_enabled: values.autoEffortEnabled,
-    default_vendor: values.defaultVendor || 'openai',
-    show_degradation_alerts: values.showDegradationAlerts,
     models: Object.fromEntries(models),
   })
 }
