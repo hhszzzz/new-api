@@ -29,16 +29,25 @@ func TestCheckSystemUpdateUsesLatestSuccessfulGHCRWorkflow(t *testing.T) {
 	}
 	client := &http.Client{Transport: systemUpdateRoundTripper(func(request *http.Request) (*http.Response, error) {
 		assert.Equal(t, "/repos/hhszzzz/new-api/actions/workflows/publish-fork-image.yml/runs", request.URL.Path)
-		assert.Equal(t, "main", request.URL.Query().Get("branch"))
+		assert.Empty(t, request.URL.Query().Get("branch"))
 		assert.Equal(t, "success", request.URL.Query().Get("status"))
-		assert.Equal(t, "1", request.URL.Query().Get("per_page"))
+		assert.Equal(t, "30", request.URL.Query().Get("per_page"))
 		assert.Equal(t, "Bearer github-token", request.Header.Get("Authorization"))
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     make(http.Header),
 			Body: io.NopCloser(strings.NewReader(`{
 				"workflow_runs": [{
+					"head_sha": "1111111111111111111111111111111111111111",
+					"head_branch": "release",
+					"status": "completed",
+					"conclusion": "success",
+					"html_url": "https://github.com/hhszzzz/new-api/actions/runs/122",
+					"updated_at": "2026-07-29T10:39:04Z",
+					"head_commit": {"message": "Unrelated branch"}
+				}, {
 					"head_sha": "9de2eea0ab7d1708e3708bb8eadc89bafa2744b7",
+					"head_branch": "main",
 					"status": "completed",
 					"conclusion": "success",
 					"html_url": "https://github.com/hhszzzz/new-api/actions/runs/123",
@@ -75,6 +84,7 @@ func TestCheckSystemUpdateRecognizesRunningWorkflowRevision(t *testing.T) {
 			Body: io.NopCloser(strings.NewReader(`{
 				"workflow_runs": [{
 					"head_sha": "9de2eea0ab7d1708e3708bb8eadc89bafa2744b7",
+					"head_branch": "main",
 					"status": "completed",
 					"conclusion": "success",
 					"head_commit": {"message": "Publish new image"}
@@ -88,6 +98,33 @@ func TestCheckSystemUpdateRecognizesRunningWorkflowRevision(t *testing.T) {
 	assert.False(t, info.UpdateAvailable)
 	assert.Equal(t, "9de2eea0", info.CurrentRevision)
 	assert.False(t, info.UpdateEnabled)
+}
+
+func TestCheckSystemUpdateRejectsRunsOutsideBranch(t *testing.T) {
+	config := systemUpdateConfig{
+		Repository: "hhszzzz/new-api",
+		Workflow:   "publish-fork-image.yml",
+		Branch:     "main",
+		Image:      "ghcr.io/hhszzzz/new-api:main",
+	}
+	client := &http.Client{Transport: systemUpdateRoundTripper(func(_ *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body: io.NopCloser(strings.NewReader(`{
+				"workflow_runs": [{
+					"head_sha": "9de2eea0ab7d1708e3708bb8eadc89bafa2744b7",
+					"head_branch": "release",
+					"status": "completed",
+					"conclusion": "success",
+					"head_commit": {"message": "Publish new image"}
+				}]
+			}`)),
+		}, nil
+	})}
+
+	_, err := checkSystemUpdateWithClient(context.Background(), client, config, "main-deadbeef")
+	require.ErrorContains(t, err, "no successful GHCR workflow run found")
 }
 
 func TestTriggerSystemUpdateUsesAuthenticatedWebhook(t *testing.T) {

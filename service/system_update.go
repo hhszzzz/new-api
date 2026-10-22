@@ -76,6 +76,7 @@ type githubWorkflowRunsResponse struct {
 
 type githubWorkflowRun struct {
 	HeadSHA    string `json:"head_sha"`
+	HeadBranch string `json:"head_branch"`
 	Status     string `json:"status"`
 	Conclusion string `json:"conclusion"`
 	HTMLURL    string `json:"html_url"`
@@ -218,7 +219,23 @@ func checkSystemUpdateWithClient(ctx context.Context, client *http.Client, confi
 		return nil, errors.New("no successful GHCR workflow run found")
 	}
 
-	latestRun := payload.WorkflowRuns[0]
+	// GitHub's workflow-runs API intermittently returns an empty list when the
+	// branch and status filters are combined (observed 2026-10-22), so the
+	// request filters on success only and the branch is selected here.
+	latestRun := githubWorkflowRun{}
+	found := false
+	for _, run := range payload.WorkflowRuns {
+		if !strings.EqualFold(run.HeadBranch, config.Branch) {
+			continue
+		}
+		latestRun = run
+		found = true
+		break
+	}
+	if !found {
+		return nil, errors.New("no successful GHCR workflow run found")
+	}
+
 	latestRevision := strings.ToLower(strings.TrimSpace(latestRun.HeadSHA))
 	if latestRun.Status != "completed" || latestRun.Conclusion != "success" || len(latestRevision) < 8 {
 		return nil, errors.New("latest GHCR workflow run is not a completed successful build")
@@ -257,9 +274,8 @@ func systemUpdateWorkflowRunsURL(config systemUpdateConfig) (string, error) {
 		),
 	}
 	query := requestURL.Query()
-	query.Set("branch", config.Branch)
 	query.Set("status", "success")
-	query.Set("per_page", "1")
+	query.Set("per_page", "30")
 	requestURL.RawQuery = query.Encode()
 	return requestURL.String(), nil
 }
