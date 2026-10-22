@@ -234,11 +234,13 @@ export interface ChannelSettings {
   system_prompt_override?: boolean
   http_protocol?: 'auto' | 'http1' | string
   http2_connection_shards?: number
+  tls_insecure_skip_verify?: boolean
 }
 
 export interface ChannelOtherSettings {
   azure_responses_version?: string
   vertex_key_type?: 'json' | 'api_key'
+  vertex_project_id?: string
   openrouter_enterprise?: boolean
   aws_key_type?: 'ak_sk' | 'api_key'
   allow_alpha_search?: boolean

@@ -82,6 +82,20 @@ func newSMTPClient(addr string) (*smtp.Client, error) {
 }
 
 func SendEmail(subject string, receiver string, content string) error {
+	OptionMapRWMutex.RLock()
+	provider := OptionMap["EmailProvider"]
+	resendKey := OptionMap["ResendApiKey"]
+	resendFrom := OptionMap["ResendFrom"]
+	OptionMapRWMutex.RUnlock()
+	// One selector controls delivery. Never fall back to a second provider:
+	// a failed response does not prove that the first provider did not send.
+	switch provider {
+	case "resend":
+		return sendResendEmail(resendKey, resendFrom, subject, receiver, content)
+	case "", "smtp": // Preserve existing installations without a selector.
+	default:
+		return NewMessage("Email sending method must be SMTP or Resend")
+	}
 	if SMTPFrom == "" { // for compatibility
 		SMTPFrom = SMTPAccount
 	}
@@ -136,7 +150,7 @@ func SendEmail(subject string, receiver string, content string) error {
 	}
 	err = client.Quit()
 	if err != nil {
-		SysError(fmt.Sprintf("failed to send email to %s: %v", receiver, err))
+		SysError(LogText("failed to send email to %s: %v", receiver, err))
 	}
 	return err
 }

@@ -12,7 +12,7 @@ func NormalizeEffort(effort string) string {
 	return strings.ToLower(strings.TrimSpace(effort))
 }
 
-func ClaudeEffort(nativeEffort string, thinkingEnabled bool, budgetTokens int) string {
+func ClaudeEffortFromRequest(nativeEffort string, thinkingEnabled bool, budgetTokens int) string {
 	if effort := NormalizeEffort(nativeEffort); effort != "" {
 		return effort
 	}

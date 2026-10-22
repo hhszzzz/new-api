@@ -97,6 +97,7 @@ type NewAPIError struct {
 	errorCode                  ErrorCode
 	StatusCode                 int
 	Metadata                   json.RawMessage
+	upstreamURLs               []string
 }
 
 func (e *NewAPIError) MarkProtocolUnsupported() {
@@ -258,7 +259,7 @@ func (e *NewAPIError) MaskSensitiveError() string {
 	if e.errorCode == ErrorCodeCountTokenFailed {
 		return errStr
 	}
-	return kitutil.MaskSensitiveInfo(errStr)
+	return kitutil.MaskSensitiveInfo(errStr, e.upstreamURLs...)
 }
 
 func (e *NewAPIError) MaskSensitiveErrorWithStatusCode() string {
@@ -335,7 +336,7 @@ func (e *NewAPIError) ToOpenAIError() OpenAIError {
 		result.Message = e.Error()
 	}
 	if e.errorCode != ErrorCodeCountTokenFailed {
-		result.Message = kitutil.MaskSensitiveInfo(result.Message)
+		result.Message = kitutil.MaskSensitiveInfo(result.Message, e.upstreamURLs...)
 	}
 	if result.Message == "" {
 		result.Message = string(e.errorType)
@@ -367,7 +368,7 @@ func (e *NewAPIError) ToClaudeError() ClaudeError {
 		result.Message = e.Error()
 	}
 	if e.errorCode != ErrorCodeCountTokenFailed {
-		result.Message = kitutil.MaskSensitiveInfo(result.Message)
+		result.Message = kitutil.MaskSensitiveInfo(result.Message, e.upstreamURLs...)
 	}
 	if result.Message == "" {
 		result.Message = string(e.errorType)
@@ -520,6 +521,13 @@ func IsSkipRetryError(err *NewAPIError) bool {
 func ErrOptionWithSkipRetry() NewAPIErrorOptions {
 	return func(e *NewAPIError) {
 		e.skipRetry = true
+	}
+}
+
+// ErrOptionWithUpstreamURLs retains the configured addresses for public error masking.
+func ErrOptionWithUpstreamURLs(addresses ...string) NewAPIErrorOptions {
+	return func(e *NewAPIError) {
+		e.upstreamURLs = append([]string(nil), addresses...)
 	}
 }
 

@@ -11,7 +11,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
-	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/tokenkit"
 	hosttypes "github.com/QuantumNous/new-api/types"
 )
 
@@ -266,7 +266,7 @@ func responsesEnforcementTokens(request *dto.OpenAIResponsesRequest, modelName s
 			}
 		}
 	}
-	return service.CountTextToken(builder.String(), modelName)
+	return tokenkit.Count(modelName, builder.String())
 }
 
 // effectiveContextLimit 合并全局（模型元数据）与渠道级声明：两者都声明时取更严者，

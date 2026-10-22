@@ -98,7 +98,7 @@ func TestProcessChannelErrorKeepsMappedModelOutOfPublicLog(t *testing.T) {
 	assert.Equal(t, true, storedAdminInfo["model_routing_checked"])
 	assert.Equal(t, "requested", storedAdminInfo["model_name_scope"])
 
-	publicLogs, total, err := model.GetUserLogs(7, model.LogTypeError, 0, 0, "", "", 0, 10, "", "", "", false)
+	publicLogs, total, err := model.GetUserLogs(7, model.LogFilter{Type: model.LogTypeError}, 0, 10)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, total)
 	require.Len(t, publicLogs, 1)
@@ -111,7 +111,7 @@ func TestProcessChannelErrorKeepsMappedModelOutOfPublicLog(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, string(hosttypes.ErrorCodeModelNotFound), publicOther["error_code"])
 
-	adminLogs, total, err := model.GetUserLogs(7, model.LogTypeError, 0, 0, "", "", 0, 10, "", "", "", true)
+	adminLogs, total, err := model.GetUserLogs(7, model.LogFilter{Type: model.LogTypeError, CanViewModelRouting: true}, 0, 10)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, total)
 	require.Len(t, adminLogs, 1)
@@ -154,7 +154,7 @@ func TestProcessChannelErrorKeepsMappedModelOutOfPublicLog(t *testing.T) {
 	assert.Equal(t, "requested", overrideAdminInfo["model_name_scope"])
 	assert.Contains(t, overrideAdminInfo, "po")
 
-	publicOverrideLogs, total, err := model.GetUserLogs(7, model.LogTypeError, 0, 0, "requested-override-model", "", 0, 10, "", "", "", false)
+	publicOverrideLogs, total, err := model.GetUserLogs(7, model.LogFilter{Type: model.LogTypeError, ModelName: "requested-override-model"}, 0, 10)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, total)
 	require.Len(t, publicOverrideLogs, 1)
@@ -168,7 +168,7 @@ func TestProcessChannelErrorKeepsMappedModelOutOfPublicLog(t *testing.T) {
 	assert.NotContains(t, publicOverrideOther["error_code"], "private-override-model")
 	assert.NotContains(t, publicOverrideOther["error_type"], "private-override-model")
 
-	adminOverrideLogs, total, err := model.GetUserLogs(7, model.LogTypeError, 0, 0, "requested-override-model", "", 0, 10, "", "", "", true)
+	adminOverrideLogs, total, err := model.GetUserLogs(7, model.LogFilter{Type: model.LogTypeError, ModelName: "requested-override-model", CanViewModelRouting: true}, 0, 10)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, total)
 	require.Len(t, adminOverrideLogs, 1)

@@ -73,6 +73,9 @@ func InitOptionMap() {
 	common.OptionMap["EmailAliasRestrictionEnabled"] = strconv.FormatBool(common.EmailAliasRestrictionEnabled)
 	common.OptionMap["EmailDomainWhitelist"] = strings.Join(common.EmailDomainWhitelist, ",")
 	common.OptionMap["SMTPServer"] = ""
+	common.OptionMap["EmailProvider"] = "smtp"
+	common.OptionMap["ResendApiKey"] = ""
+	common.OptionMap["ResendFrom"] = ""
 	common.OptionMap["SMTPFrom"] = ""
 	common.OptionMap["SMTPPort"] = strconv.Itoa(common.SMTPPort)
 	common.OptionMap["SMTPAccount"] = ""
@@ -150,6 +153,7 @@ func InitOptionMap() {
 	common.OptionMap["QuotaForNewUser"] = strconv.Itoa(common.QuotaForNewUser)
 	common.OptionMap["QuotaForInviter"] = strconv.Itoa(common.QuotaForInviter)
 	common.OptionMap["QuotaForInvitee"] = strconv.Itoa(common.QuotaForInvitee)
+	common.OptionMap["QuotaRemindEnabled"] = strconv.FormatBool(common.QuotaRemindEnabled)
 	common.OptionMap["QuotaRemindThreshold"] = strconv.Itoa(common.QuotaRemindThreshold)
 	common.OptionMap["PreConsumedQuota"] = strconv.Itoa(common.PreConsumedQuota)
 	common.OptionMap["ModelRequestRateLimitCount"] = strconv.Itoa(setting.ModelRequestRateLimitCount)
@@ -222,7 +226,7 @@ func publishPersistedOptions(options []*Option) {
 	defer requestPolicyOptionMutex.Unlock()
 	defer func() {
 		if err := refreshRequestPolicySnapshot(); err != nil {
-			common.SysError("invalid request policy: " + err.Error())
+			common.SysError(common.LogText("invalid request policy: %s", err.Error()))
 		}
 	}()
 	passkeyOptionMutex.Lock()
@@ -318,17 +322,23 @@ func publishPersistedOptions(options []*Option) {
 func SyncOptions(frequency int) {
 	for {
 		time.Sleep(time.Duration(frequency) * time.Second)
-		common.SysLog("syncing options from database")
+		common.SysLog(common.LogText("syncing options from database"))
 		loadOptionsFromDatabase()
 	}
 }
 
 func validateOptionValue(key string, value string) error {
+	if key == legacyAccessTokenRetireAtKey {
+		return errLegacyRetireAtReadOnly
+	}
 	if key == operation_setting.ToolPriceOptionKey {
 		return operation_setting.ValidateToolPricesJSON(value)
 	}
 	if key == operation_setting.ChannelTestConcurrencyOptionKey {
 		return operation_setting.ValidateChannelTestConcurrency(value)
+	}
+	if key == operation_setting.LogMaxRangeDaysOptionKey {
+		return operation_setting.ValidateLogMaxRangeDays(value)
 	}
 	if key == "MaxTokenAutoGroups" {
 		return setting.ValidateMaxTokenAutoGroups(value)
@@ -680,7 +690,7 @@ func updateOptionMapFromDB(key string, value string) error {
 }
 
 func updateOptionMapWithSource(key string, value string, fromDB bool) (err error) {
-	if key == retiredThemeOptionKey {
+	if key == retiredThemeOptionKey || key == legacyAccessTokenRetireAtKey {
 		common.OptionMapRWMutex.Lock()
 		delete(common.OptionMap, key)
 		common.OptionMapRWMutex.Unlock()
@@ -743,6 +753,8 @@ func updateOptionMapWithSource(key string, value string, fromDB bool) (err error
 			common.AutomaticDisableChannelEnabled = boolValue
 		case "AutomaticEnableChannelEnabled":
 			common.AutomaticEnableChannelEnabled = boolValue
+		case "QuotaRemindEnabled":
+			common.QuotaRemindEnabled = boolValue
 		case "LogConsumeEnabled":
 			common.LogConsumeEnabled = boolValue
 		case "DisplayInCurrencyEnabled":

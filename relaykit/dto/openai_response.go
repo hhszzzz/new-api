@@ -412,9 +412,9 @@ type ResponsesOutput struct {
 	CallId              string                          `json:"call_id,omitempty"`
 	Name                string                          `json:"name,omitempty"`
 	Namespace           string                          `json:"namespace,omitempty"`
-	Input               string                          `json:"input,omitempty"`
 	Execution           string                          `json:"execution,omitempty"`
 	Arguments           json.RawMessage                 `json:"arguments,omitempty"`
+	Input               json.RawMessage                 `json:"input,omitempty"`
 	Action              json.RawMessage                 `json:"action,omitempty"`
 	CreatedBy           string                          `json:"created_by,omitempty"`
 	EncryptedContent    string                          `json:"encrypted_content,omitempty"`
@@ -435,9 +435,24 @@ type ResponsesOutput struct {
 
 // MarshalJSON keeps hosted-tool variants within their protocol-specific
 // schemas. ResponsesOutput also represents messages, images, and function
-// calls, whose fields must not leak into web_search_call or mcp_call items.
+// calls, whose fields must not leak into web_search_call, mcp_call, or
+// custom_tool_call items.
 func (r ResponsesOutput) MarshalJSON() ([]byte, error) {
 	switch r.Type {
+	case "custom_tool_call":
+		input := r.Input
+		if len(input) == 0 {
+			input = json.RawMessage(`""`)
+		}
+		return kitutil.Marshal(struct {
+			Type      string          `json:"type"`
+			ID        string          `json:"id,omitempty"`
+			Status    string          `json:"status,omitempty"`
+			CallID    string          `json:"call_id"`
+			Name      string          `json:"name"`
+			Namespace string          `json:"namespace,omitempty"`
+			Input     json.RawMessage `json:"input"`
+		}{Type: r.Type, ID: r.ID, Status: r.Status, CallID: r.CallId, Name: r.Name, Namespace: r.Namespace, Input: input})
 	case "web_search_call":
 		return kitutil.Marshal(struct {
 			Type   string          `json:"type"`
@@ -467,6 +482,16 @@ func (r ResponsesOutput) MarshalJSON() ([]byte, error) {
 			Error:             r.ItemError,
 			ApprovalRequestID: r.ApprovalRequestID,
 		})
+	case "reasoning":
+		// summary is required on a reasoning item, even before any summary text exists.
+		type responsesOutputAlias ResponsesOutput
+		if len(r.Summary) > 0 {
+			return kitutil.Marshal(responsesOutputAlias(r))
+		}
+		return kitutil.Marshal(struct {
+			responsesOutputAlias
+			Summary []ResponsesReasoningSummaryPart `json:"summary"`
+		}{responsesOutputAlias(r), []ResponsesReasoningSummaryPart{}})
 	default:
 		type responsesOutputAlias ResponsesOutput
 		return kitutil.Marshal(responsesOutputAlias(r))

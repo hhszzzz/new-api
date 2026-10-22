@@ -87,7 +87,7 @@ func GetOptions(c *gin.Context) {
 	optionValues := make(map[string]string)
 	common.OptionMapRWMutex.Lock()
 	for k, v := range common.OptionMap {
-		if k == "theme.frontend" || k == "billing_setting.billing_mode" || k == "billing_setting.billing_expr" {
+		if k == "theme.frontend" || k == "billing_setting.billing_mode" || k == "billing_setting.billing_expr" || k == "ResendKeyConfigured" {
 			continue
 		}
 		value := common.Interface2String(v)
@@ -107,6 +107,9 @@ func GetOptions(c *gin.Context) {
 			optionValues[k] = value
 		}
 	}
+	options = append(options, &model.Option{
+		Key: "ResendKeyConfigured", Value: strconv.FormatBool(strings.TrimSpace(common.OptionMap["ResendApiKey"]) != ""),
+	})
 	common.OptionMapRWMutex.Unlock()
 	// Display the same effective expressions used by pricing and settlement,
 	// including built-in defaults absent from persisted administrator options.
@@ -195,7 +198,7 @@ func UpdatePasskeyDomains(c *gin.Context) {
 		RemovalConfirmation string  `json:"removal_confirmation"`
 	}
 	if err := common.DecodeJson(c.Request.Body, &request); err != nil || request.RPID == nil || request.LegacyRPIDs == nil || request.Origins == nil {
-		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		common.ApiErrorT(c, "Invalid parameters")
 		return
 	}
 	change, err := model.UpdatePasskeyDomainOptions(map[string]string{
@@ -217,9 +220,9 @@ func UpdatePasskeyDomains(c *gin.Context) {
 func writePasskeyDomainSettingsError(c *gin.Context, err error) {
 	var removal *model.PasskeyDomainRemovalError
 	if errors.As(err, &removal) {
-		c.JSON(http.StatusConflict, gin.H{
-			"success": false, "code": "PASSKEY_RP_ID_REMOVAL_CONFIRMATION_REQUIRED",
-			"message": i18n.T(c, i18n.MsgPasskeyRPIDRemovalConfirmation), "data": removal.Change,
+		common.ApiErrorStatus(c, http.StatusConflict, common.NewMessage("Review the affected Passkeys and confirm the domain removal. If the settings or impact have changed, confirmation is required again."), gin.H{
+			"code": "PASSKEY_RP_ID_REMOVAL_CONFIRMATION_REQUIRED",
+			"data": removal.Change,
 		})
 		return
 	}
@@ -244,6 +247,10 @@ func UpdateOption(c *gin.Context) {
 		common.ApiErrorMsg(c, "shared audit storage must be changed through prompt audit settings after migration")
 		return
 	}
+	if option.Key == "ResendKeyConfigured" {
+		common.ApiErrorMsg(c, "ResendKeyConfigured is read-only")
+		return
+	}
 	option.Value = normalizeOptionValue(option.Value)
 	if ratio_setting.IsPricingOptionKey(option.Key) {
 		if err := validateModelPricingOption(option.Key, option.Value.(string)); err != nil {
@@ -254,7 +261,7 @@ func UpdateOption(c *gin.Context) {
 	switch option.Key {
 	case "QuotaForInviter", "QuotaForInvitee":
 		if isPositiveOptionValue(option.Value.(string)) && !operation_setting.IsPaymentComplianceConfirmed() {
-			common.ApiErrorI18n(c, i18n.MsgPaymentComplianceRequired)
+			common.ApiErrorT(c, "Payment, redemption, subscription, and invitation reward features are disabled. The administrator must confirm compliance terms before enabling them.")
 			return
 		}
 	default:
@@ -265,11 +272,33 @@ func UpdateOption(c *gin.Context) {
 	}
 	if option.Key == "TaskPublicAddress" && option.Value.(string) != "" {
 		if err := service.ValidateTaskArtifactBaseURL(option.Value.(string)); err != nil {
-			common.ApiErrorMsg(c, err.Error())
+			common.ApiError(c, err)
 			return
 		}
 	}
 	switch option.Key {
+	case "EmailProvider", "ResendApiKey", "ResendFrom":
+		common.OptionMapRWMutex.RLock()
+		provider, apiKey, from := common.OptionMap["EmailProvider"], common.OptionMap["ResendApiKey"], common.OptionMap["ResendFrom"]
+		common.OptionMapRWMutex.RUnlock()
+		switch option.Key {
+		case "EmailProvider":
+			provider = option.Value.(string)
+			if provider != "smtp" && provider != "resend" {
+				common.ApiErrorT(c, "Email sending method must be SMTP or Resend")
+				return
+			}
+		case "ResendApiKey":
+			apiKey = option.Value.(string)
+		case "ResendFrom":
+			from = option.Value.(string)
+		}
+		if provider == "resend" {
+			if err := common.ValidateResendConfiguration(apiKey, from); err != nil {
+				common.ApiError(c, err)
+				return
+			}
+		}
 	case "GitHubOAuthEnabled":
 		if option.Value == "true" && common.GitHubClientId == "" {
 			c.JSON(http.StatusOK, gin.H{
@@ -347,64 +376,43 @@ func UpdateOption(c *gin.Context) {
 	case "GroupRatio":
 		err = ratio_setting.CheckGroupRatio(option.Value.(string))
 		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": err.Error(),
-			})
+			common.ApiError(c, err)
 			return
 		}
 	case "gemini.safety_settings":
 		err = model_setting.ValidateGeminiSafetySettings(option.Value.(string))
 		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": err.Error(),
-			})
+			common.ApiError(c, err)
 			return
 		}
 	case "claude.default_max_tokens":
 		err = model_setting.ValidateClaudeDefaultMaxTokens(option.Value.(string))
 		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": err.Error(),
-			})
+			common.ApiError(c, err)
 			return
 		}
 	case operation_setting.ToolPriceOptionKey:
 		err = operation_setting.ValidateToolPricesJSON(option.Value.(string))
 		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": err.Error(),
-			})
+			common.ApiError(c, err)
 			return
 		}
 	case "ModelRequestRateLimitGroup":
 		err = setting.CheckModelRequestRateLimitGroup(option.Value.(string))
 		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": err.Error(),
-			})
+			common.ApiError(c, err)
 			return
 		}
 	case "AutomaticDisableStatusCodes":
 		_, err = operation_setting.ParseHTTPStatusCodeRanges(option.Value.(string))
 		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": err.Error(),
-			})
+			common.ApiError(c, err)
 			return
 		}
 	case "AutomaticRetryStatusCodes":
 		_, err = operation_setting.ParseHTTPStatusCodeRanges(option.Value.(string))
 		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": err.Error(),
-			})
+			common.ApiError(c, err)
 			return
 		}
 	case "billing_setting.billing_expr":
@@ -450,44 +458,32 @@ func UpdateOption(c *gin.Context) {
 			if err = model.ValidateModelPricing(name, model.PricingValues{
 				billing_setting.PluginBillingExprOption: map[string]any{plugin: expression},
 			}); err != nil {
-				common.ApiErrorMsg(c, err.Error())
+				common.ApiError(c, err)
 				return
 			}
 		}
 	case "console_setting.api_info":
 		err = console_setting.ValidateConsoleSettings(option.Value.(string), "ApiInfo")
 		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": err.Error(),
-			})
+			common.ApiError(c, err)
 			return
 		}
 	case "console_setting.announcements":
 		err = console_setting.ValidateConsoleSettings(option.Value.(string), "Announcements")
 		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": err.Error(),
-			})
+			common.ApiError(c, err)
 			return
 		}
 	case "console_setting.faq":
 		err = console_setting.ValidateConsoleSettings(option.Value.(string), "FAQ")
 		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": err.Error(),
-			})
+			common.ApiError(c, err)
 			return
 		}
 	case "console_setting.uptime_kuma_groups":
 		err = console_setting.ValidateConsoleSettings(option.Value.(string), "UptimeKumaGroups")
 		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": err.Error(),
-			})
+			common.ApiError(c, err)
 			return
 		}
 	}

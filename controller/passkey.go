@@ -38,7 +38,7 @@ func parsePasskeyFinishRequest(c *gin.Context) (*passkeyFinishRequest, error) {
 		return nil, err
 	}
 	if request.FlowToken == "" || len(request.Credential) == 0 {
-		return nil, errors.New("Passkey 流程参数不完整")
+		return nil, errors.New("incomplete Passkey flow parameters")
 	}
 	return &request, nil
 }
@@ -93,7 +93,7 @@ func PasskeyRegisterBegin(c *gin.Context) {
 		return
 	}
 
-	identity, ok := middleware.GetSessionAuthIdentity(c)
+	identity, ok := middleware.GetStepUpIdentity(c)
 	if !ok {
 		common.ApiErrorI18n(c, i18n.MsgSecurityProofAuthMethodUnsupported)
 		return
@@ -153,7 +153,7 @@ func PasskeyRegisterFinish(c *gin.Context) {
 		credentialRecord = nil
 	}
 
-	identity, ok := middleware.GetSessionAuthIdentity(c)
+	identity, ok := middleware.GetStepUpIdentity(c)
 	if !ok {
 		common.ApiErrorI18n(c, i18n.MsgSecurityProofAuthMethodUnsupported)
 		return
@@ -225,7 +225,7 @@ func PasskeyDelete(c *gin.Context) {
 		return
 	}
 
-	identity, ok := middleware.GetSessionAuthIdentity(c)
+	identity, ok := middleware.GetStepUpIdentity(c)
 	if !ok {
 		common.ApiErrorI18n(c, i18n.MsgSecurityProofAuthMethodUnsupported)
 		return
@@ -379,7 +379,7 @@ func PasskeyLoginFinish(c *gin.Context) {
 		// 首先通过凭证ID查找用户
 		credential, err := model.GetPasskeyByCredentialID(rawID)
 		if err != nil {
-			return nil, fmt.Errorf("未找到 Passkey 凭证: %w", err)
+			return nil, fmt.Errorf("passkey credential not found: %w", err)
 		}
 
 		if credential.RPID != nil && *credential.RPID != "" && *credential.RPID != sessionData.RelyingPartyID {
@@ -389,7 +389,7 @@ func PasskeyLoginFinish(c *gin.Context) {
 		// 通过凭证获取用户
 		user := &model.User{Id: credential.UserID}
 		if err := user.FillUserById(); err != nil {
-			return nil, fmt.Errorf("用户信息获取失败: %w", err)
+			return nil, fmt.Errorf("failed to load the passkey user: %w", err)
 		}
 
 		if user.Status != common.UserStatusEnabled {
@@ -400,9 +400,9 @@ func PasskeyLoginFinish(c *gin.Context) {
 			userID, parseErr := strconv.Atoi(string(userHandle))
 			if parseErr != nil {
 				// 记录异常但继续验证，因为某些客户端可能使用非数字格式
-				common.SysLog(fmt.Sprintf("PasskeyLogin: userHandle parse error for credential, length: %d", len(userHandle)))
+				common.SysLog(common.LogText("PasskeyLogin: userHandle parse error for credential, length: %d", len(userHandle)))
 			} else if userID != user.Id {
-				return nil, errors.New("用户句柄与凭证不匹配")
+				return nil, errors.New("user handle does not match the credential")
 			}
 		}
 
@@ -458,6 +458,10 @@ func AdminResetPasskey(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgForbidden)
 		return
 	}
+	authorization := requireAdminUserProof(c, service.VerificationScopeAdminUserPasskeyReset, service.AdminUserContext{UserID: user.Id})
+	if authorization == nil {
+		return
+	}
 
 	if _, err := model.GetPasskeyByUserID(user.Id); err != nil {
 		if errors.Is(err, model.ErrPasskeyNotFound) {
@@ -481,13 +485,11 @@ func AdminResetPasskey(c *gin.Context) {
 	}
 
 	recordManageAuditFor(c, user.Id, "user.reset_passkey", map[string]any{
-		"username": user.Username,
-		"id":       user.Id,
+		"username":            user.Username,
+		"id":                  user.Id,
+		"verification_method": authorization.Method,
 	})
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": common.TranslateMessage(c, i18n.MsgPasskeyResetSuccess),
-	})
+	common.ApiSuccessT(c, "Passkey reset successfully", nil)
 }
 
 func PasskeyVerifyBegin(c *gin.Context) {
@@ -514,7 +516,7 @@ func PasskeyVerifyBegin(c *gin.Context) {
 		writeSecurityOperationError(c, err)
 		return
 	}
-	identity, ok := middleware.GetSessionAuthIdentity(c)
+	identity, ok := middleware.GetStepUpIdentity(c)
 	if !ok {
 		writeSecurityOperationError(c, service.ErrAuthTokenInvalid)
 		return
@@ -607,7 +609,7 @@ func PasskeyVerifyFinish(c *gin.Context) {
 		return
 	}
 
-	identity, ok := middleware.GetSessionAuthIdentity(c)
+	identity, ok := middleware.GetStepUpIdentity(c)
 	if !ok {
 		common.ApiErrorI18n(c, i18n.MsgSecurityProofAuthMethodUnsupported)
 		return

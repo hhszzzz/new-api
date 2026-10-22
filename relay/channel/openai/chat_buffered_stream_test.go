@@ -210,7 +210,7 @@ func TestOaiChatBufferedStreamHandlerRestoresResponsesExtendedTools(t *testing.T
 	require.Len(t, response.Output, 4)
 	assert.Equal(t, "custom_tool_call", response.Output[0].Type)
 	assert.Equal(t, "apply_patch", response.Output[0].Name)
-	assert.Equal(t, "patch body", response.Output[0].Input)
+	assert.Equal(t, "\"patch body\"", string(response.Output[0].Input))
 	assert.Equal(t, "function_call", response.Output[1].Type)
 	assert.Equal(t, "workspace", response.Output[1].Namespace)
 	assert.Equal(t, "exec", response.Output[1].Name)

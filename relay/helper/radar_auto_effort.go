@@ -1,7 +1,6 @@
 package helper
 
 import (
-	"fmt"
 	hostdto "github.com/QuantumNous/new-api/dto"
 
 	"github.com/QuantumNous/new-api/common"
@@ -106,8 +105,8 @@ func ResolveRadarAutoEffort(c *gin.Context, info *relaycommon.RelayInfo) {
 		info.BillingModelName = resolveBillingModelNameForEffort(parsed.base, to)
 	}
 	if c != nil {
-		logger.LogDebug(c, fmt.Sprintf("radar auto-effort: model %s reasoning effort %s -> %s (policy %s, IQ %.1f)",
-			parsed.base, from, to, decision.Policy, iq))
+		logger.LogDebug(c, "radar auto-effort: model %s reasoning effort %s -> %s (policy %s, IQ %.1f)",
+			parsed.base, from, to, decision.Policy, iq)
 	}
 }
 

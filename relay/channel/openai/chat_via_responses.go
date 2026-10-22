@@ -233,6 +233,18 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		info.ClaudeConvertInfo = &relaycommon.ClaudeConvertInfo{LastMessagesType: relaycommon.LastMessageTypeNone}
 	}
 
+	// writeFailed stops the stream after a failed client write. When the client
+	// went away the upstream already produced output, so the request settles
+	// normally instead of failing; any other write error stays a server error.
+	writeFailed := func(err error) {
+		if c.Request.Context().Err() != nil {
+			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, err)
+			return
+		}
+		streamErr = hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
+		info.StreamStatus.MarkWriteError(err)
+	}
+
 	sendGeminiResponse := func(geminiResponse *dto.GeminiChatResponse) bool {
 		if geminiResponse == nil {
 			return true
@@ -243,8 +255,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			return false
 		}
 		if err := helper.StringData(c, string(geminiResponseStr)); err != nil {
-			streamErr = hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
-			info.StreamStatus.MarkWriteError(err)
+			writeFailed(err)
 			return false
 		}
 		return true
@@ -257,8 +268,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 				return true
 			}
 			if err := helper.ObjectData(c, &value); err != nil {
-				streamErr = hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
-				info.StreamStatus.MarkWriteError(err)
+				writeFailed(err)
 				return false
 			}
 			return true
@@ -267,16 +277,14 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 				return true
 			}
 			if err := helper.ObjectData(c, value); err != nil {
-				streamErr = hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
-				info.StreamStatus.MarkWriteError(err)
+				writeFailed(err)
 				return false
 			}
 			return true
 		case dto.ClaudeResponse:
 			protocolstate.ObserveClaudeStream(c, &value)
 			if err := helper.ClaudeData(c, value); err != nil {
-				streamErr = hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
-				info.StreamStatus.MarkWriteError(err)
+				writeFailed(err)
 				return false
 			}
 			return true
@@ -286,8 +294,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			}
 			protocolstate.ObserveClaudeStream(c, value)
 			if err := helper.ClaudeData(c, *value); err != nil {
-				streamErr = hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusInternalServerError)
-				info.StreamStatus.MarkWriteError(err)
+				writeFailed(err)
 				return false
 			}
 			return true
@@ -303,7 +310,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		if streamErr != nil {
-			sr.Stop(streamErr)
+			stopStream(sr, streamErr)
 			return
 		}
 
@@ -315,7 +322,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			return
 		}
 
-		accumulator.Observe(&streamResp)
+		accumulator.Observe(&streamResp, []byte(data))
 		if streamResp.Type == "error" || streamResp.Type == "response.error" || streamResp.Type == "response.failed" {
 			if oaiErr := streamResp.GetOpenAIError(); oaiErr != nil {
 				streamErr = hosttypes.WithOpenAIError(*oaiErr, http.StatusInternalServerError)
@@ -398,13 +405,16 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		}
 		for _, result := range results {
 			if !sendStreamResult(result) {
-				sr.Stop(streamErr)
+				stopStream(sr, streamErr)
 				return
 			}
 		}
 	})
 
 	usage := accumulator.Finish()
+	if info.StreamStatus.IsClientGone() {
+		return usage, nil
+	}
 	if streamErr != nil {
 		return usage, streamErr
 	}

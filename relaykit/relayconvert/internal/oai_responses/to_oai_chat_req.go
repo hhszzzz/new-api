@@ -77,6 +77,7 @@ func ResponsesRequestToChatCompletionsRequestWithContext(c context.Context, req 
 		Metadata:             req.Metadata,
 		SafetyIdentifier:     req.SafetyIdentifier,
 		PromptCacheRetention: req.PromptCacheRetention,
+		ParallelTooCalls:     responsesParallelToolCalls(req.ParallelToolCalls),
 	}
 	if rawJSONPresent(req.Text) {
 		var config map[string]json.RawMessage
@@ -568,6 +569,7 @@ func responsesContentPartsToChatContent(c context.Context, parts []any) (any, er
 	chatParts := make([]any, 0, len(parts))
 	var textOnly strings.Builder
 	onlyText := true
+	droppedFile := false
 
 	for _, rawPart := range parts {
 		part, ok := rawPart.(map[string]any)
@@ -626,6 +628,10 @@ func responsesContentPartsToChatContent(c context.Context, parts []any) (any, er
 
 	if onlyText {
 		return textOnly.String(), nil
+	}
+	if len(chatParts) == 0 && droppedFile {
+		// Chat rejects an empty content array; name what was omitted instead.
+		return "[file]", nil
 	}
 	return chatParts, nil
 }
@@ -846,6 +852,12 @@ func RequestTextToChatResponseFormat(raw json.RawMessage) (*dto.ResponseFormat, 
 
 func responsesImagePartToChatImageURL(part map[string]any) any {
 	if imageURL, ok := part["image_url"]; ok {
+		// Chat Completions takes the URL inside an object. detail is left out:
+		// Chat upstreams that validate it with older OpenAI SDKs reject newer
+		// values such as "original".
+		if url, ok := imageURL.(string); ok {
+			return map[string]any{"url": url}
+		}
 		return imageURL
 	}
 	imageURL := map[string]any{}

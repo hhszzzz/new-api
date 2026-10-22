@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/internal/convdiag"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/internal/jsonutil"
+	relaymedia "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/media"
 	sharedgemini "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/gemini"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/internal/toolconv"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
@@ -119,7 +120,7 @@ func GeminiGenerateContentRequestToOpenAIChatWithContext(c context.Context, gemi
 		return ""
 	}
 	fallbackCallIndex := 0
-	for _, content := range geminiRequest.Contents {
+	for contentIndex, content := range geminiRequest.Contents {
 		message := dto.Message{
 			Role: convertGeminiRoleToOpenAI(content.Role),
 		}
@@ -127,7 +128,7 @@ func GeminiGenerateContentRequestToOpenAIChatWithContext(c context.Context, gemi
 		var mediaContents []dto.MediaContent
 		var toolCalls []dto.ToolCallRequest
 		var reasoningTexts []string
-		for _, part := range content.Parts {
+		for partIndex, part := range content.Parts {
 			if part.Text != "" {
 				if part.Thought {
 					reasoningTexts = append(reasoningTexts, part.Text)
@@ -138,24 +139,20 @@ func GeminiGenerateContentRequestToOpenAIChatWithContext(c context.Context, gemi
 					Text: part.Text,
 				}
 				mediaContents = append(mediaContents, mediaContent)
-			} else if part.InlineData != nil {
-				mediaContent := dto.MediaContent{
-					Type: "image_url",
-					ImageUrl: &dto.MessageImageUrl{
-						Url:      fmt.Sprintf("data:%s;base64,%s", part.InlineData.MimeType, part.InlineData.Data),
-						Detail:   "auto",
-						MimeType: part.InlineData.MimeType,
-					},
-				}
-				mediaContents = append(mediaContents, mediaContent)
-			} else if part.FileData != nil {
-				mediaContent := dto.MediaContent{
-					Type: "image_url",
-					ImageUrl: &dto.MessageImageUrl{
-						Url:      part.FileData.FileUri,
-						Detail:   "auto",
-						MimeType: part.FileData.MimeType,
-					},
+			} else if part.InlineData != nil || part.FileData != nil {
+				mediaContent, reason := geminiMediaToChatContent(part.InlineData, part.FileData)
+				if reason != "" {
+					kind := "inlineData"
+					if part.InlineData == nil {
+						kind = "fileData"
+					}
+					convdiag.Add(c, types.ConversionDiagnostic{
+						Code:     "unsupported_media_type",
+						Path:     fmt.Sprintf("contents[%d].parts[%d].%s", contentIndex, partIndex, kind),
+						Message:  reason + "; the part was omitted",
+						Severity: types.ConversionDiagnosticError,
+					})
+					continue
 				}
 				mediaContents = append(mediaContents, mediaContent)
 			} else if part.FunctionCall != nil {
@@ -283,4 +280,67 @@ func extractTextFromGeminiParts(parts []dto.GeminiPart) string {
 		}
 	}
 	return strings.Join(texts, "\n")
+}
+
+var chatImageMediaTypes = map[string]struct{}{
+	"image/png":  {},
+	"image/jpeg": {},
+	"image/webp": {},
+	"image/gif":  {},
+}
+
+func geminiMediaToChatContent(inlineData *dto.GeminiInlineData, fileData *dto.GeminiFileData) (dto.MediaContent, string) {
+	if inlineData == nil {
+		if fileData == nil {
+			return dto.MediaContent{}, "Gemini media data is missing"
+		}
+		mimeType := strings.ToLower(strings.TrimSpace(fileData.MimeType))
+		if mimeType == "image/jpg" {
+			mimeType = "image/jpeg"
+		}
+		if _, supported := chatImageMediaTypes[mimeType]; mimeType != "" && !supported {
+			return dto.MediaContent{}, fmt.Sprintf("Chat Completions content cannot reference a Gemini file of MIME type %q", fileData.MimeType)
+		}
+		return dto.MediaContent{
+			Type:     dto.ContentTypeImageURL,
+			ImageUrl: &dto.MessageImageUrl{Url: fileData.FileUri, Detail: "auto", MimeType: mimeType},
+		}, ""
+	}
+	mimeType := strings.ToLower(strings.TrimSpace(inlineData.MimeType))
+	if mimeType == "image/jpg" {
+		mimeType = "image/jpeg"
+	}
+	if _, supported := chatImageMediaTypes[mimeType]; supported {
+		return dto.MediaContent{
+			Type:     dto.ContentTypeImageURL,
+			ImageUrl: &dto.MessageImageUrl{Url: fmt.Sprintf("data:%s;base64,%s", mimeType, inlineData.Data), Detail: "auto", MimeType: mimeType},
+		}, ""
+	}
+	switch {
+	case strings.HasPrefix(mimeType, "image/"):
+		return dto.MediaContent{}, fmt.Sprintf("Chat Completions content accepts only PNG, JPEG, WebP, and GIF images, not %q", inlineData.MimeType)
+	case mimeType == "application/pdf":
+		return dto.MediaContent{
+			Type: dto.ContentTypeFile,
+			File: &dto.MessageFile{FileName: "document.pdf", FileData: "data:application/pdf;base64," + inlineData.Data},
+		}, ""
+	case strings.HasPrefix(mimeType, "text/") || mimeType == "application/json" || mimeType == "application/xml":
+		text, ok := relaymedia.DecodeText(inlineData.Data)
+		if !ok {
+			return dto.MediaContent{}, fmt.Sprintf("Gemini inlineData of MIME type %q could not be decoded as UTF-8 text", inlineData.MimeType)
+		}
+		return dto.MediaContent{Type: dto.ContentTypeText, Text: text}, ""
+	case mimeType == "audio/wav" || mimeType == "audio/x-wav" || mimeType == "audio/wave":
+		return dto.MediaContent{
+			Type:       dto.ContentTypeInputAudio,
+			InputAudio: &dto.MessageInputAudio{Data: inlineData.Data, Format: "wav"},
+		}, ""
+	case mimeType == "audio/mp3" || mimeType == "audio/mpeg":
+		return dto.MediaContent{
+			Type:       dto.ContentTypeInputAudio,
+			InputAudio: &dto.MessageInputAudio{Data: inlineData.Data, Format: "mp3"},
+		}, ""
+	default:
+		return dto.MediaContent{}, fmt.Sprintf("Gemini inlineData of MIME type %q has no Chat Completions content part", inlineData.MimeType)
+	}
 }

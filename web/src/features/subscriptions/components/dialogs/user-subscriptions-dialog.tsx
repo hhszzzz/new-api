@@ -51,6 +51,7 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { formatQuota } from '@/lib/format'
 import { handleServerError } from '@/lib/handle-server-error'
+import { getServerMessage } from '@/lib/server-error-message'
 
 import {
   getAdminPlans,
@@ -251,7 +252,7 @@ export function UserSubscriptionsDialog(props: Props) {
         source_note: assignment.sourceNote,
       })
       if (res.success) {
-        toast.success(res.data?.message || t('Added successfully'))
+        toast.success(getServerMessage(res.data) || t('Added successfully'))
         setSelectedPlanId('')
         setSourceNote('')
         await refreshData()

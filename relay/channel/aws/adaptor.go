@@ -102,6 +102,9 @@ func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
 }
 
 func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
+	if info.ChannelOtherSettings.AwsApiType == hostdto.AwsApiTypeMantle {
+		return mantleRequestURL(info)
+	}
 	if info.ChannelOtherSettings.AwsKeyType == hostdto.AwsKeyTypeApiKey {
 		_, _, err := parseBedrockAPIKey(info.ApiKey)
 		if err != nil {
@@ -171,6 +174,17 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 }
 
 func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (*channel.TransportResult, error) {
+	if info.ChannelOtherSettings.AwsApiType == hostdto.AwsApiTypeMantle {
+		req, err := a.newMantleRequest(c, info, requestBody)
+		if err != nil {
+			return nil, err
+		}
+		resp, err := channel.DoRequest(c, req, info)
+		if err != nil {
+			return nil, newAwsInvokeError(c.Request.Context(), err, "Mantle Messages")
+		}
+		return channel.HTTPResult(resp, nil)
+	}
 	if err := prepareAwsRequest(c, info, a, requestBody); err != nil {
 		return nil, err
 	}
@@ -178,6 +192,9 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 }
 
 func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage dto.UsageResult, err *hosttypes.NewAPIError) {
+	if info.ChannelOtherSettings.AwsApiType == hostdto.AwsApiTypeMantle {
+		return (&claude.Adaptor{}).DoResponse(c, resp, info)
+	}
 	if a.IsNova {
 		return (&openai.Adaptor{}).DoResponse(c, resp, info)
 	}

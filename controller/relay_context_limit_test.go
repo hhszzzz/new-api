@@ -14,7 +14,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
-	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/tokenkit"
 	hosttypes "github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -361,7 +361,7 @@ func TestResponsesEnforcementTokensCountsOutputsAndToolResults(t *testing.T) {
 	}
 	tokens := responsesEnforcementTokens(request, "ctx-enforce-model")
 	// 平台估算会跳过 assistant 输出与工具结果；闸门估算必须覆盖它们。
-	assistantOnly := service.CountTextToken(assistantText, "ctx-enforce-model")
+	assistantOnly := tokenkit.Estimate("ctx-enforce-model", assistantText)
 	require.Positive(t, assistantOnly)
 	assert.GreaterOrEqual(t, tokens, assistantOnly)
 

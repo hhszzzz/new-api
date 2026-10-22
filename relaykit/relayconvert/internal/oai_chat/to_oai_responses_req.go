@@ -9,6 +9,7 @@ import (
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/internal/convdiag"
+	relaymedia "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/media"
 	sharedbridge "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/bridge"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/internal/toolconv"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
@@ -256,9 +257,14 @@ func ChatCompletionsRequestToResponsesRequestWithContext(c context.Context, req 
 					"text": part.Text,
 				})
 			case dto.ContentTypeImageURL:
+				var sourceDetail string
+				if img := part.GetImageMedia(); img != nil {
+					sourceDetail = img.Detail
+				}
 				contentParts = append(contentParts, map[string]any{
 					"type":      "input_image",
 					"image_url": normalizeChatImageURLToString(part.ImageUrl),
+					"detail":    relaymedia.ResponsesImageDetail(sourceDetail),
 				})
 			case dto.ContentTypeInputAudio:
 				contentParts = append(contentParts, map[string]any{
@@ -266,10 +272,20 @@ func ChatCompletionsRequestToResponsesRequestWithContext(c context.Context, req 
 					"input_audio": part.InputAudio,
 				})
 			case dto.ContentTypeFile:
-				contentParts = append(contentParts, map[string]any{
-					"type": "input_file",
-					"file": part.File,
-				})
+				// Responses carries the file fields on the input_file part itself.
+				inputFile := map[string]any{"type": "input_file"}
+				if file := part.GetFile(); file != nil {
+					if file.FileName != "" {
+						inputFile["filename"] = file.FileName
+					}
+					if file.FileData != "" {
+						inputFile["file_data"] = file.FileData
+					}
+					if file.FileId != "" {
+						inputFile["file_id"] = file.FileId
+					}
+				}
+				contentParts = append(contentParts, inputFile)
 			case dto.ContentTypeVideoUrl:
 				contentParts = append(contentParts, map[string]any{
 					"type":      "input_video",

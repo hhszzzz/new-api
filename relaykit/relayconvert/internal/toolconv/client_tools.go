@@ -421,14 +421,19 @@ func DeclaredUpstreamToolName(state *sharedbridge.ToolState, kind sharedbridge.T
 }
 
 func CustomInputArguments(input any) string {
-	value := input
-	if value == nil {
-		value = ""
-	}
-	if _, ok := value.(string); !ok {
-		raw, err := kitutil.Marshal(value)
+	value := ""
+	switch typed := input.(type) {
+	case nil:
+	case string:
+		value = typed
+	case json.RawMessage:
+		value = kitutil.JsonRawMessageToString(typed)
+	case []byte:
+		value = kitutil.JsonRawMessageToString(json.RawMessage(typed))
+	default:
+		raw, err := kitutil.Marshal(typed)
 		if err == nil {
-			value = string(raw)
+			value = kitutil.JsonRawMessageToString(raw)
 		}
 	}
 	raw, err := kitutil.Marshal(map[string]any{"input": value})

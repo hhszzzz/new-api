@@ -60,6 +60,7 @@ func TestMain(m *testing.M) {
 		&SystemInstance{},
 		&SystemTask{},
 		&SystemTaskLock{},
+		&UserAccessToken{},
 	); err != nil {
 		panic("failed to migrate: " + err.Error())
 	}

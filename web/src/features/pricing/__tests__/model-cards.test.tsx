@@ -22,6 +22,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createJSONStorage } from 'zustand/middleware'
 
+import { api } from '@/lib/api'
 import {
   DEFAULT_CURRENCY_CONFIG,
   useSystemConfigStore,
@@ -199,7 +200,7 @@ describe('model cards', () => {
     expect(onClick).toHaveBeenCalledWith(name)
   })
 
-  it('retains a neutral health strip and missing values when metrics are unavailable', () => {
+  it('shows missing values without placeholder bars when metrics are unavailable', () => {
     render(<ModelCard model={pricingModel()} onClick={vi.fn()} />)
     const metrics = screen.getByLabelText(
       'Performance metrics for the last 24 hours'
@@ -219,13 +220,90 @@ describe('model cards', () => {
     expect(screen.getByRole('button', { name: 'Details' })).toBeEnabled()
   })
 
-  it('uses fixed spacing between hourly status bars', () => {
-    render(<ModelCard model={pricingModel()} onClick={vi.fn()} />)
+  it('uses fixed spacing between available status samples', () => {
+    render(
+      <ModelCard
+        model={pricingModel()}
+        onClick={vi.fn()}
+        perf={{
+          avg_latency_ms: 1200,
+          avg_tps: 42,
+          success_rate: 50,
+          recent_success_series: [
+            { ts: 3600, success_rate: 100 },
+            { ts: 18000, success_rate: 0 },
+          ],
+        }}
+      />
+    )
     const statusStrip = screen.getByRole('img', {
       name: 'Recent success-rate samples; gray bars indicate missing data.',
     })
     expect(statusStrip).toHaveClass('gap-px')
     expect(statusStrip).not.toHaveClass('justify-between')
+    expect(statusStrip.children).toHaveLength(24)
+    expect(statusStrip.children[22]).toHaveClass('bg-emerald-500')
+    expect(statusStrip.children[23]).toHaveClass('bg-red-500')
+  })
+
+  it('shows server history for idle models while preserving the current window metrics', async () => {
+    const request = vi.spyOn(api, 'get').mockResolvedValue({
+      data: {
+        success: true,
+        data: {
+          models: [
+            {
+              model_name: 'active-model',
+              avg_latency_ms: 1200,
+              avg_tps: 42,
+              success_rate: 99.8,
+              recent_success_series: [{ ts: 7200, success_rate: 0 }],
+            },
+          ],
+          recent_success_series: {
+            'active-model': [{ ts: 3600, success_rate: 100 }],
+            'idle-model': [
+              { ts: 3600, success_rate: 0 },
+              { ts: 7200, success_rate: 100 },
+            ],
+          },
+        },
+      },
+    })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ModelCardGrid
+          models={[
+            pricingModel({ model_name: 'active-model' }),
+            pricingModel({ id: 2, model_name: 'idle-model' }),
+          ]}
+          onModelClick={vi.fn()}
+        />
+      </QueryClientProvider>
+    )
+    await screen.findByText('99.80%')
+    expect(request).toHaveBeenCalledWith('/api/perf-metrics/summary', {
+      params: { hours: 24, recent_model: ['active-model', 'idle-model'] },
+      paramsSerializer: { indexes: null },
+    })
+    const [active, idle] = screen.getAllByLabelText(
+      'Performance metrics for the last 24 hours'
+    )
+    expect(within(active).getByText('1.20s')).toBeVisible()
+    expect(
+      within(active).getByRole('img', {
+        name: 'Recent success-rate samples; gray bars indicate missing data.',
+      }).children[23]
+    ).toHaveClass('bg-emerald-500')
+    const samples = within(idle).getByRole('img', {
+      name: 'Recent success-rate samples; gray bars indicate missing data.',
+    }).children
+    expect(samples).toHaveLength(24)
+    expect(samples[22]).toHaveClass('bg-red-500')
+    expect(samples[23]).toHaveClass('bg-emerald-500')
+    expect(within(idle).getAllByText('—')[0]).toBeVisible()
+    expect(within(idle).getByText('—s')).toBeVisible()
+    expect(within(idle).getByText('—t/s')).toBeVisible()
   })
 
   it('keeps group, endpoint and tag overflow counts with their own metadata', () => {
@@ -394,6 +472,68 @@ describe('model cards', () => {
     )
   })
 
+  it('shows the cache read price of an expression model after its input and output prices', () => {
+    render(
+      <ModelCard
+        model={pricingModel({
+          billing_mode: 'tiered_expr',
+          billing_expr: 'tier("base", p * 0.15 + c * 0.6 + cr * 0.003)',
+        })}
+        onClick={vi.fn()}
+        tokenUnit='M'
+        selectedGroup='default'
+      />
+    )
+    expect(screen.getByText('Input').parentElement).toHaveTextContent(
+      /\$0.15\s*\/\s*1M/
+    )
+    expect(screen.getByText('Output').parentElement).toHaveTextContent(
+      /\$0.6\s*\/\s*1M/
+    )
+    expect(screen.getByText('Cache Read').parentElement).toHaveTextContent(
+      /\$0.003\s*\/\s*1M/
+    )
+  })
+
+  it('shows the cache read price once when a plugin provider already lists it as a main price', () => {
+    render(
+      <ModelCard
+        model={pricingModel({
+          billing_plugin_variants: [
+            {
+              plugin_key: 'alpha',
+              plugin_name: 'Alpha',
+              billing_mode: 'tiered_expr',
+              billing_expr: 'tier("base", p * 1 + c * 2 + cr * 0.5)',
+              billing_usage_schema: {},
+            },
+          ],
+        })}
+        onClick={vi.fn()}
+        tokenUnit='M'
+        selectedGroup='default'
+      />
+    )
+    expect(screen.getAllByText('Cache Read')).toHaveLength(1)
+  })
+
+  it('shows the cache read price of an expression model that prices nothing else', () => {
+    render(
+      <ModelCard
+        model={pricingModel({
+          billing_mode: 'tiered_expr',
+          billing_expr: 'tier("base", cr * 0.5)',
+        })}
+        onClick={vi.fn()}
+        tokenUnit='M'
+        selectedGroup='default'
+      />
+    )
+    expect(screen.getByText('Cache Read').parentElement).toHaveTextContent(
+      /\$0.5\s*\/\s*1M/
+    )
+  })
+
   it('keeps task price ranges in their actual usage unit instead of the selected token unit', () => {
     render(
       <ModelCard
@@ -414,6 +554,47 @@ describe('model cards', () => {
       /0.4 – \$0.8\s*\/\s*s/
     )
     expect(screen.queryByText(/1K|1M/)).not.toBeInTheDocument()
+  })
+
+  it('hides a task usage price left at zero while another usage price is set', () => {
+    render(
+      <ModelCard
+        model={pricingModel({
+          billing_mode: 'tiered_expr',
+          billing_expr: 'tier("base", u("count") * 0 + u("seconds") * 0.7)',
+          billing_usage_schema: {
+            count: {
+              type: 'number',
+              unit: 'count',
+              description: { en: 'Per-task price' },
+            },
+            seconds: {
+              type: 'number',
+              unit: 'second',
+              description: { en: 'Video generation unit price' },
+            },
+          },
+        })}
+        onClick={vi.fn()}
+      />
+    )
+    expect(screen.getByText('Video generation unit price')).toBeVisible()
+    expect(screen.queryByText('Per-task price')).not.toBeInTheDocument()
+  })
+
+  it('does not show the tier name of a single-tier task price', () => {
+    render(
+      <ModelCard
+        model={pricingModel({
+          billing_mode: 'tiered_expr',
+          billing_expr: 'tier("base", u("seconds") * 0.4)',
+          billing_usage_schema: { seconds: { type: 'number', unit: 'second' } },
+        })}
+        onClick={vi.fn()}
+      />
+    )
+    expect(screen.getByText(/^\$0\.4$/)).toBeVisible()
+    expect(screen.queryByText('(base)')).not.toBeInTheDocument()
   })
 
   it('shows the unconfigured usage message without inventing a token price', () => {
@@ -491,6 +672,9 @@ describe('model cards', () => {
   })
 
   it('paginates the model cards and disables navigation at both boundaries', async () => {
+    const request = vi.spyOn(api, 'get').mockResolvedValue({
+      data: { success: true, data: { models: [] } },
+    })
     const models = Array.from({ length: 21 }, (_, index) =>
       pricingModel({ id: index + 1, model_name: `model-${index + 1}` })
     )
@@ -502,16 +686,27 @@ describe('model cards', () => {
     )
     expect(screen.getByRole('button', { name: 'Previous page' })).toBeDisabled()
     expect(screen.getAllByRole('heading', { level: 3 })).toHaveLength(20)
+    expect(request).toHaveBeenCalledWith('/api/perf-metrics/summary', {
+      params: {
+        hours: 24,
+        recent_model: models.slice(0, 20).map((model) => model.model_name),
+      },
+      paramsSerializer: { indexes: null },
+    })
     await user.click(screen.getByRole('button', { name: 'Next page' }))
     expect(screen.getAllByRole('heading', { level: 3 })).toHaveLength(1)
     expect(screen.getByRole('heading', { name: 'model-21' })).toBeVisible()
+    expect(request).toHaveBeenLastCalledWith('/api/perf-metrics/summary', {
+      params: { hours: 24, recent_model: ['model-21'] },
+      paramsSerializer: { indexes: null },
+    })
     expect(screen.getByRole('button', { name: 'Next page' })).toBeDisabled()
     await user.click(screen.getByRole('button', { name: 'Previous page' }))
     expect(screen.getByRole('heading', { name: 'model-1' })).toBeVisible()
   })
 
   it('switches the card grid to three columns at the xl breakpoint instead of 2xl', () => {
-    queryClient.setQueryData(['perf-metrics-summary', 24], {
+    queryClient.setQueryData(['perf-metrics-summary', 24, ['example-model']], {
       success: true,
       data: { models: [] },
     })
@@ -528,7 +723,7 @@ describe('model cards', () => {
     expect(grid).not.toHaveClass('min-[1440px]:grid-cols-3')
   })
 
-  it('positions sparse hourly data accurately and opens performance from the strip', async () => {
+  it('places sparse status samples at the right and opens performance from the strip', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     vi.setSystemTime(new Date('2026-09-07T12:37:00.000Z'))
     const currentHourStart = Math.floor(Date.now() / 1000 / 3600) * 3600
@@ -559,7 +754,7 @@ describe('model cards', () => {
     expect(strip.children).toHaveLength(24)
     const spans = [...strip.children]
     spans.forEach((slot, index) => {
-      if (index === 18) {
+      if (index === 23) {
         expect(slot.classList.contains('bg-muted-foreground/15')).toBe(false)
         return
       }
@@ -576,7 +771,7 @@ describe('model cards', () => {
     vi.useRealTimers()
   })
 
-  it('lights slots 23 and 18 when series has the current hour and five hours earlier', () => {
+  it('places the latest three valid status samples at the right edge', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-09-07T12:00:00.000Z'))
     const currentHourStart = Math.floor(Date.now() / 1000 / 3600) * 3600
@@ -593,6 +788,7 @@ describe('model cards', () => {
           recent_success_series: [
             { ts: currentHourStart, success_rate: 100 },
             { ts: currentHourStart - 5 * 3600, success_rate: 80 },
+            { ts: currentHourStart - 3 * 3600, success_rate: 0 },
           ],
         }}
       />
@@ -604,13 +800,9 @@ describe('model cards', () => {
       }).children,
     ]
     expect(spans).toHaveLength(24)
-    spans.forEach((slot, index) => {
-      if (index === 18 || index === 23) {
-        expect(slot.classList.contains('bg-muted-foreground/15')).toBe(false)
-        return
-      }
-      expect(slot.classList.contains('bg-muted-foreground/15')).toBe(true)
-    })
+    expect(spans[21]).toHaveClass('bg-amber-500')
+    expect(spans[22]).toHaveClass('bg-red-500')
+    expect(spans[23]).toHaveClass('bg-emerald-500')
     vi.useRealTimers()
   })
 
@@ -634,11 +826,16 @@ describe('model cards', () => {
     })
   })
 
-  it('keeps all 24 slots gray when a series point is 24 hours before the current hour', () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(new Date('2026-09-07T12:00:00.000Z'))
-    const currentHourStart = Math.floor(Date.now() / 1000 / 3600) * 3600
-
+  it('shows the latest 24 valid samples without requiring hourly window metadata or mutating the series', () => {
+    const recentSeries = [
+      { ts: 0, success_rate: 0 },
+      ...Array.from({ length: 24 }, (_, index) => ({
+        ts: (index + 1) * 7200,
+        success_rate: 100,
+      })),
+      { ts: 25 * 7200, success_rate: Number.NaN },
+    ].reverse()
+    const originalSeries = [...recentSeries]
     render(
       <ModelCard
         model={pricingModel()}
@@ -647,10 +844,7 @@ describe('model cards', () => {
           avg_latency_ms: 1200,
           avg_tps: 42,
           success_rate: 100,
-          window_start: currentHourStart - 23 * 3600,
-          recent_success_series: [
-            { ts: currentHourStart - 24 * 3600, success_rate: 100 },
-          ],
+          recent_success_series: recentSeries,
         }}
       />
     )
@@ -661,33 +855,39 @@ describe('model cards', () => {
       }).children,
     ]
     expect(spans).toHaveLength(24)
-    spans.forEach((slot) => {
-      expect(slot.classList.contains('bg-muted-foreground/15')).toBe(true)
+    spans.forEach((sample) => {
+      expect(sample).toHaveClass('bg-emerald-500')
     })
-    vi.useRealTimers()
+    expect(recentSeries).toEqual(originalSeries)
   })
 
-  it('keeps all 24 slots gray when recent_success_series is undefined', () => {
-    render(
-      <ModelCard
-        model={pricingModel()}
-        onClick={vi.fn()}
-        perf={{ avg_latency_ms: 1200, avg_tps: 42, success_rate: 100 }}
-      />
-    )
+  it.each([undefined, [], [{ ts: 3600, success_rate: Number.NaN }]])(
+    'shows missing status slots when the series has no valid samples: %j',
+    (series) => {
+      render(
+        <ModelCard
+          model={pricingModel()}
+          onClick={vi.fn()}
+          perf={{
+            avg_latency_ms: 1200,
+            avg_tps: 42,
+            success_rate: 100,
+            recent_success_series: series,
+          }}
+        />
+      )
 
-    const spans = [
-      ...screen.getByRole('img', {
+      const statusStrip = screen.getByRole('img', {
         name: 'Recent success-rate samples; gray bars indicate missing data.',
-      }).children,
-    ]
-    expect(spans).toHaveLength(24)
-    spans.forEach((slot) => {
-      expect(slot.classList.contains('bg-muted-foreground/15')).toBe(true)
-    })
-  })
+      })
+      expect(statusStrip.children).toHaveLength(24)
+      for (const slot of statusStrip.children) {
+        expect(slot).toHaveClass('bg-muted-foreground/15')
+      }
+    }
+  )
 
-  it('uses the server window even when the browser clock is a day ahead', () => {
+  it('shows a single server sample without padding when the browser clock is a day ahead', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-09-07T12:37:00.000Z'))
     const currentHourStart = Math.floor(Date.now() / 1000 / 3600) * 3600
@@ -714,13 +914,8 @@ describe('model cards', () => {
       }).children,
     ]
     expect(spans).toHaveLength(24)
-    spans.forEach((slot, index) => {
-      if (index === 18) {
-        expect(slot.classList.contains('bg-muted-foreground/15')).toBe(false)
-        return
-      }
-      expect(slot.classList.contains('bg-muted-foreground/15')).toBe(true)
-    })
+    expect(spans[22]).toHaveClass('bg-muted-foreground/15')
+    expect(spans[23]).toHaveClass('bg-amber-500')
     vi.useRealTimers()
   })
 })

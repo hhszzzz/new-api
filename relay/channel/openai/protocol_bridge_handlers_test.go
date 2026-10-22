@@ -1,7 +1,6 @@
 package openai
 
 import (
-	"github.com/QuantumNous/new-api/service"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -645,7 +644,6 @@ func TestNativeResponsesTruncatedStreamIsFatal(t *testing.T) {
 
 func withOpenAIProtocolStreamTestMode(t *testing.T) {
 	t.Helper()
-	service.InitTokenEncoders()
 	oldMode := gin.Mode()
 	gin.SetMode(gin.TestMode)
 	t.Cleanup(func() { gin.SetMode(oldMode) })

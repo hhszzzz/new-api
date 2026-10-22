@@ -1,7 +1,6 @@
 package controller
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
 
@@ -407,11 +406,17 @@ func AdminBindSubscription(c *gin.Context) {
 		"plan_id":     req.PlanId,
 		"source_note": strings.TrimSpace(req.SourceNote),
 	})
-	if msg != "" {
-		common.ApiSuccess(c, gin.H{"message": msg})
+	subscriptionChangeSuccess(c, msg)
+}
+
+func subscriptionChangeSuccess(c *gin.Context, message *common.Message) {
+	if message == nil {
+		common.ApiSuccess(c, nil)
 		return
 	}
-	common.ApiSuccess(c, nil)
+	data := message.Fields()
+	data["message"] = message.Error()
+	common.ApiSuccess(c, data)
 }
 
 // ---- Admin: user subscription management ----
@@ -454,9 +459,12 @@ func recordSubscriptionResetUserLogs(c *gin.Context, result *model.SubscriptionR
 	if result == nil || result.ResetCount == 0 {
 		return
 	}
-	content := fmt.Sprintf("管理员重置订阅套餐 %s（ID: %d）额度", result.PlanTitle, result.PlanId)
+	const action = "subscription.user_quota_reset"
+	params := map[string]any{"plan_id": result.PlanId, "plan_title": result.PlanTitle}
+	operation := model.AuditOperation{Action: action, Params: params}
+	content := auditContentEN(action, params)
 	for _, userId := range result.AffectedUserIds {
-		model.RecordLogWithAdminInfo(userId, model.LogTypeManage, content, adminInfo, nil, c)
+		model.RecordLogWithAdminInfo(userId, model.LogTypeManage, content, adminInfo, &operation, c)
 	}
 }
 
@@ -484,11 +492,7 @@ func AdminCreateUserSubscription(c *gin.Context) {
 		"plan_id":     req.PlanId,
 		"source_note": strings.TrimSpace(req.SourceNote),
 	})
-	if msg != "" {
-		common.ApiSuccess(c, gin.H{"message": msg})
-		return
-	}
-	common.ApiSuccess(c, nil)
+	subscriptionChangeSuccess(c, msg)
 }
 
 func AdminResetUserSubscriptionsByPlan(c *gin.Context) {
@@ -545,7 +549,7 @@ func AdminResetPlanSubscriptions(c *gin.Context) {
 		return
 	}
 	recordSubscriptionResetUserLogs(c, result, auditOperatorInfo(c))
-	common.SysLog(fmt.Sprintf("admin reset subscription plan %d quota: reset_count=%d user_count=%d advance_reset_time=%t",
+	common.SysLog(common.LogText("admin reset subscription plan %d quota: reset_count=%d user_count=%d advance_reset_time=%t",
 		result.PlanId, result.ResetCount, result.UserCount, result.AdvanceResetTime))
 	recordManageAudit(c, "subscription.plan_reset", map[string]any{
 		"plan_id":            result.PlanId,
@@ -572,11 +576,7 @@ func AdminInvalidateUserSubscription(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	if msg != "" {
-		common.ApiSuccess(c, gin.H{"message": msg})
-		return
-	}
-	common.ApiSuccess(c, nil)
+	subscriptionChangeSuccess(c, msg)
 }
 
 // AdminPauseUserSubscription suspends an active user subscription.
@@ -598,11 +598,7 @@ func AdminPauseUserSubscription(c *gin.Context) {
 	recordManageAuditFor(c, userId, "subscription.user_pause", map[string]any{
 		"user_subscription_id": subId,
 	})
-	if msg != "" {
-		common.ApiSuccess(c, gin.H{"message": msg})
-		return
-	}
-	common.ApiSuccess(c, nil)
+	subscriptionChangeSuccess(c, msg)
 }
 
 // AdminResumeUserSubscription reactivates a paused user subscription.
@@ -624,11 +620,7 @@ func AdminResumeUserSubscription(c *gin.Context) {
 	recordManageAuditFor(c, userId, "subscription.user_resume", map[string]any{
 		"user_subscription_id": subId,
 	})
-	if msg != "" {
-		common.ApiSuccess(c, gin.H{"message": msg})
-		return
-	}
-	common.ApiSuccess(c, nil)
+	subscriptionChangeSuccess(c, msg)
 }
 
 // AdminDeleteUserSubscription hard-deletes a user subscription.
@@ -646,11 +638,7 @@ func AdminDeleteUserSubscription(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	if msg != "" {
-		common.ApiSuccess(c, gin.H{"message": msg})
-		return
-	}
-	common.ApiSuccess(c, nil)
+	subscriptionChangeSuccess(c, msg)
 }
 
 // ---- Admin: batch user subscriptions ----

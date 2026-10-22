@@ -142,7 +142,7 @@ func Chats2JsonString() string {
 
 	jsonBytes, err := common.Marshal(serialized)
 	if err != nil {
-		common.SysLog("error marshalling chats: " + err.Error())
+		common.SysLog(common.LogText("error marshalling chats: %s", err.Error()))
 		return "[]"
 	}
 	return string(jsonBytes)

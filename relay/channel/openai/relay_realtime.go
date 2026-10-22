@@ -258,7 +258,7 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*hostty
 						if countErr != nil {
 							return fmt.Errorf("error counting text token: %w", countErr)
 						}
-						logger.LogInfo(c, fmt.Sprintf("type: %s, textToken: %d, audioToken: %d", realtimeEvent.Type, textToken, audioToken))
+						logger.LogInfo(c, common.LogText("type: %s, textToken: %d, audioToken: %d", realtimeEvent.Type, textToken, audioToken))
 						localUsage.TotalTokens += textToken + audioToken
 						localUsage.OutputTokens += textToken + audioToken
 						localUsage.OutputTokenDetails.TextTokens += textToken

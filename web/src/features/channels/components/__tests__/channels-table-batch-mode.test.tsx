@@ -80,6 +80,8 @@ vi.mock('../channels-provider', () => ({
     batchMode: true,
     enableTagMode: false,
     idSort: false,
+    sorting: [],
+    setSorting: vi.fn(),
     sensitiveVisible: true,
     setSensitiveVisible: vi.fn(),
     setCurrentRow: vi.fn(),

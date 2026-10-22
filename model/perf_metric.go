@@ -363,6 +363,42 @@ func GetPerfMetricsSummaryBucketsAll(startTs int64, endTs int64, groups []string
 	return summaries, nil
 }
 
+// GetRecentPerfMetricSuccessBuckets returns the latest nonempty hours across
+// legacy aggregates and per-writer contributions within the history window.
+func GetRecentPerfMetricSuccessBuckets(modelName string, startTs int64, endTs int64, groups []string, limit int) ([]PerfMetricSummaryBucket, error) {
+	if modelName == "" || limit <= 0 || (groups != nil && len(groups) == 0) {
+		return nil, nil
+	}
+	const hourBucket = "bucket_ts - (bucket_ts % 3600)"
+	merged := make(map[int64]PerfMetricSummaryBucket)
+	for _, source := range []any{&PerfMetric{}, &PerfMetricInstance{}} {
+		query := DB.Model(source).
+			Select("model_name, "+hourBucket+" AS bucket_ts, SUM(request_count) AS request_count, SUM(success_count) AS success_count").
+			Where("model_name = ? AND bucket_ts >= ? AND bucket_ts <= ? AND request_count > 0", modelName, startTs, endTs)
+		if groups != nil {
+			query = query.Where(clause.Eq{Column: clause.Column{Name: "group"}, Value: groups})
+		}
+		var buckets []PerfMetricSummaryBucket
+		if err := query.Group("model_name, " + hourBucket).Order("bucket_ts DESC").Limit(limit).Find(&buckets).Error; err != nil {
+			return nil, err
+		}
+		for _, bucket := range buckets {
+			value := merged[bucket.BucketTs]
+			value.ModelName = modelName
+			value.BucketTs = bucket.BucketTs
+			value.RequestCount += bucket.RequestCount
+			value.SuccessCount += bucket.SuccessCount
+			merged[bucket.BucketTs] = value
+		}
+	}
+	buckets := make([]PerfMetricSummaryBucket, 0, len(merged))
+	for _, bucket := range merged {
+		buckets = append(buckets, bucket)
+	}
+	sort.Slice(buckets, func(i, j int) bool { return buckets[i].BucketTs > buckets[j].BucketTs })
+	return buckets[:min(limit, len(buckets))], nil
+}
+
 func GetPerfMetricsHourlySummaryBucketsForModels(startTs int64, endTs int64, excludedBucketTs int64, groups []string, modelNames []string) ([]PerfMetricSummaryBucket, error) {
 	var summaries []PerfMetricSummaryBucket
 	// Both arguments are allowlists for the public status view. An omitted or

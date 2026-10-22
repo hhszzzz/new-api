@@ -27,7 +27,7 @@ func NormalizeEffort(effort string) string {
 // thinking) or as a token budget on enabled thinking, so both spellings are
 // folded into the shared vocabulary. An empty result means thinking is off.
 func ClaudeEffort(nativeEffort string, thinkingEnabled bool, budgetTokens int) string {
-	return kitreasoning.ClaudeEffort(nativeEffort, thinkingEnabled, budgetTokens)
+	return kitreasoning.ClaudeEffortFromRequest(nativeEffort, thinkingEnabled, budgetTokens)
 }
 
 // EffortFromBudgetTokens describes a thinking-token budget as an effort level.

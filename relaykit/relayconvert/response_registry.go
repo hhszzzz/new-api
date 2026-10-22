@@ -904,7 +904,7 @@ func usageFromClaudeResponse(resp *dto.ClaudeResponse) *dto.Usage {
 	return nil
 }
 
-func convertOAIChatResponseToOAIResponses(c context.Context, _ convmeta.Meta, response any) (any, *dto.Usage, error) {
+func convertOAIChatResponseToOAIResponses(c context.Context, info convmeta.Meta, response any) (any, *dto.Usage, error) {
 	chatResponse, err := asOAIChatResponse(response)
 	if err != nil {
 		return nil, nil, err
@@ -916,9 +916,45 @@ func convertOAIChatResponseToOAIResponses(c context.Context, _ convmeta.Meta, re
 	return chatCompletionsResponseToResponsesResponseWithBridgeState(
 		chatResponse,
 		id,
-		sharedbridge.ToolStateFromContext(c),
+		responseToolState(c, info),
 		sharedbridge.ResponseOutputStateFromContext(c),
 	)
+}
+
+func responseToolState(c context.Context, info convmeta.Meta) *sharedbridge.ToolState {
+	if state := sharedbridge.ToolStateFromContext(c); state != nil {
+		return state
+	}
+	recorded := convmeta.ResponsesToolStateOf(info)
+	if recorded == nil {
+		return nil
+	}
+	state := sharedbridge.NewToolState()
+	upstreamNames := make(map[string]struct{}, len(recorded.CustomToolNames)+len(recorded.Namespaces))
+	for name := range recorded.CustomToolNames {
+		upstreamNames[name] = struct{}{}
+	}
+	for name := range recorded.Namespaces {
+		upstreamNames[name] = struct{}{}
+	}
+	for upstreamName := range upstreamNames {
+		namespace := recorded.Namespaces[upstreamName]
+		name := upstreamName
+		if namespace != "" {
+			name = strings.TrimPrefix(name, namespace+"__")
+		}
+		kind := sharedbridge.ToolKindFunction
+		if _, ok := recorded.CustomToolNames[upstreamName]; ok {
+			kind = sharedbridge.ToolKindCustom
+		}
+		state.Register(sharedbridge.ToolIdentity{
+			Kind:         kind,
+			Name:         name,
+			Namespace:    namespace,
+			UpstreamName: upstreamName,
+		})
+	}
+	return state
 }
 
 func convertOAIResponsesResponseToOAIChat(c context.Context, _ convmeta.Meta, response any) (any, *dto.Usage, error) {
@@ -998,7 +1034,7 @@ func newOAIChatToOAIResponsesStreamState(options ResponseStreamOptions) any {
 	return state
 }
 
-func convertOAIChatStreamResponseToOAIResponses(c context.Context, _ convmeta.Meta, response any, state any) ([]any, *dto.Usage, error) {
+func convertOAIChatStreamResponseToOAIResponses(c context.Context, info convmeta.Meta, response any, state any) ([]any, *dto.Usage, error) {
 	chatResponse, err := asOAIChatStreamResponse(response)
 	if err != nil {
 		return nil, nil, err
@@ -1007,7 +1043,7 @@ func convertOAIChatStreamResponseToOAIResponses(c context.Context, _ convmeta.Me
 	if !ok || streamState == nil {
 		return nil, nil, errors.New("OAI chat to OAI responses stream state is required")
 	}
-	streamState.ToolState = sharedbridge.ToolStateFromContext(c)
+	streamState.ToolState = responseToolState(c, info)
 	events, err := ChatCompletionsStreamChunkToResponsesEvents(chatResponse, streamState)
 	if err != nil {
 		return nil, nil, err

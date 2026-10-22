@@ -138,7 +138,7 @@ func TestRealtimeSettlementAndRelayPerformanceOutcome(t *testing.T) {
 				},
 			}
 
-			PostWssConsumeQuota(ctx, relayInfo, &test.usage, "")
+			PostWssConsumeQuota(ctx, relayInfo, &test.usage, nil)
 			var apiErr *types.NewAPIError
 			if test.usage.TotalTokens == 0 {
 				apiErr = types.NewOpenAIError(errors.New("upstream returned no usage"), types.ErrorCodeEmptyResponse, http.StatusBadGateway)

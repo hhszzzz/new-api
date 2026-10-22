@@ -4,19 +4,13 @@ import (
 	"net/http"
 
 	"github.com/QuantumNous/new-api/controller"
-	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/gin-gonic/gin"
 )
 
 func registerUserModelRouteRoutes(adminRoute *gin.RouterGroup) {
 	for _, route := range userModelRoutePermissionRoutes {
-		adminRoute.Handle(
-			route.method,
-			route.path,
-			middleware.RequirePermission(route.permission),
-			route.handler,
-		)
+		handlePermissionRoute(adminRoute, route.method, route.path, route.permission, route.handler)
 	}
 }
 

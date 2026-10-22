@@ -238,7 +238,7 @@ func TestSubscriptionExplicitDowngradeBecomesPrimaryAfterLastGrantEnds(t *testin
 
 	message, err = AdminInvalidateUserSubscription(second.Id)
 	require.NoError(t, err)
-	assert.Equal(t, "用户主分组将调整为 default", message)
+	assert.Equal(t, common.NewMessage("User group will be reverted to {{group}}", map[string]any{"group": "default"}), message)
 	assert.Equal(t, []string{"default", "legacy"}, groupNames(policySubscriptionTestGroups(t, user.Id)))
 	assert.Equal(t, "default", mustLoadPolicySubscriptionUser(t, user.Id).Group)
 	assert.Equal(t, "default", mustLoadPolicySubscriptionUser(t, user.Id).TopupGroup)
@@ -258,7 +258,7 @@ func TestSubscriptionDowngradeWithoutUpgradePreservesLegacyMembership(t *testing
 	message, err := AdminInvalidateUserSubscription(subscription.Id)
 	require.NoError(t, err)
 
-	assert.Equal(t, "用户主分组将调整为 default", message)
+	assert.Equal(t, common.NewMessage("User group will be reverted to {{group}}", map[string]any{"group": "default"}), message)
 	assert.Equal(t, []string{"default", "legacy"}, groupNames(policySubscriptionTestGroups(t, user.Id)))
 	assert.Equal(t, "default", mustLoadPolicySubscriptionUser(t, user.Id).Group)
 }

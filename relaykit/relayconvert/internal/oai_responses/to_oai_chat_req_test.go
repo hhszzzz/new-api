@@ -651,14 +651,19 @@ func TestResponsesRequestToChatCompletionsRequestCustomToolCallUsesTemporaryFunc
 			{
 				"type":    "custom_tool_call",
 				"call_id": "call_custom",
-				"name":    "apply_patch",
-				"input":   "patch body",
+				"name":    "exec",
+				"input":   "echo \"hi\" && ls",
+			},
+			{
+				"type":    "custom_tool_call_output",
+				"call_id": "call_custom",
+				"output":  "hi",
 			},
 		}),
 	})
 	require.NoError(t, err)
 
-	require.Len(t, got.Messages, 1)
+	require.Len(t, got.Messages, 2)
 	toolCalls := got.Messages[0].ParseToolCalls()
 	require.Len(t, toolCalls, 1)
 	assert.Equal(t, "function", toolCalls[0].Type)
@@ -921,6 +926,25 @@ func TestResponsesRequestToChatCompletionsRequestHoistsToolOutputMediaAfterToolB
 		assert.Equal(t, "[new-api: media output of tool call call_1]", parts[0].Text)
 		assert.Equal(t, dto.ContentTypeImageURL, parts[1].Type)
 		assert.Equal(t, dto.Message{Role: "user", Content: "what do you see?"}, got.Messages[4])
+	})
+
+	t.Run("custom tool outputs stay in the same batch", func(t *testing.T) {
+		got, err := ResponsesRequestToChatCompletionsRequestWithContext(context.Background(), &dto.OpenAIResponsesRequest{
+			Model: "gpt-test",
+			Input: mustRawMessage(t, []map[string]any{
+				{"type": "function_call", "call_id": "call_1", "name": "screenshot", "arguments": "{}"},
+				{"type": "custom_tool_call", "call_id": "call_2", "name": "exec", "input": "ls"},
+				{"type": "function_call_output", "call_id": "call_1", "output": imageOutput},
+				{"type": "custom_tool_call_output", "call_id": "call_2", "output": "file.txt"},
+			}),
+		})
+		require.NoError(t, err)
+
+		require.Len(t, got.Messages, 4)
+		assert.Len(t, got.Messages[0].ParseToolCalls(), 2)
+		assert.Equal(t, dto.Message{Role: "tool", ToolCallId: "call_1", Content: "[image]"}, got.Messages[1])
+		assert.Equal(t, dto.Message{Role: "tool", ToolCallId: "call_2", Content: "file.txt"}, got.Messages[2])
+		assert.Equal(t, "user", got.Messages[3].Role)
 	})
 
 	t.Run("trailing output flushes media at end of input", func(t *testing.T) {

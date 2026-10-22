@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -355,6 +356,7 @@ func cleanGeminiFunctionParametersWithDepth(params any, depth int) any {
 		}
 
 		normalizeGeminiSchemaTypeAndNullable(cleanedMap)
+		sanitizeGeminiEnum(cleanedMap)
 
 		if props, ok := cleanedMap["properties"].(map[string]any); ok && props != nil {
 			cleanedProps := make(map[string]any)
@@ -401,6 +403,7 @@ func cleanGeminiFunctionParametersShallow(params any) any {
 			}
 		}
 		normalizeGeminiSchemaTypeAndNullable(cleanedMap)
+		sanitizeGeminiEnum(cleanedMap)
 		delete(cleanedMap, "properties")
 		delete(cleanedMap, "items")
 		delete(cleanedMap, "anyOf")
@@ -410,6 +413,124 @@ func cleanGeminiFunctionParametersShallow(params any) any {
 	default:
 		return params
 	}
+}
+
+// sanitizeGeminiEnum keeps an enum only when each value is a string, the
+// supported shape for Gemini's legacy Schema. Other JSON Schema enum values
+// are removed because Gemini rejects them.
+func sanitizeGeminiEnum(schema map[string]any) {
+	raw, exists := schema["enum"]
+	if !exists {
+		return
+	}
+	values, ok := raw.([]any)
+	if !ok {
+		delete(schema, "enum")
+		return
+	}
+	for _, value := range values {
+		if _, isString := value.(string); !isString {
+			delete(schema, "enum")
+			return
+		}
+	}
+}
+
+var geminiSchemaInt64Fields = map[string]struct{}{
+	"maxItems": {}, "minItems": {}, "maxLength": {}, "minLength": {},
+	"maxProperties": {}, "minProperties": {},
+}
+
+// OpenAPISchemaToJSONSchema rewrites a schema in Gemini's OpenAPI subset to
+// JSON Schema and reports Gemini-only keywords that have no equivalent.
+func OpenAPISchemaToJSONSchema(schema any) (any, []string) {
+	dropped := make(map[string]struct{})
+	converted := openAPISchemaToJSONSchema(schema, 0, dropped)
+	keywords := make([]string, 0, len(dropped))
+	for keyword := range dropped {
+		keywords = append(keywords, keyword)
+	}
+	slices.Sort(keywords)
+	return converted, keywords
+}
+
+func openAPISchemaToJSONSchema(schema any, depth int, dropped map[string]struct{}) any {
+	value, ok := schema.(map[string]any)
+	if !ok || depth >= geminiFunctionSchemaMaxDepth {
+		return schema
+	}
+	converted := make(map[string]any, len(value))
+	nullable := false
+	for key, item := range value {
+		switch key {
+		case "type":
+			if typeName, ok := item.(string); ok {
+				typeName = strings.ToLower(strings.TrimSpace(typeName))
+				if typeName != "" && typeName != "type_unspecified" {
+					converted[key] = typeName
+				}
+			} else {
+				converted[key] = item
+			}
+		case "nullable":
+			nullable, _ = item.(bool)
+		case "propertyOrdering":
+			dropped[key] = struct{}{}
+		case "example":
+			if _, exists := value["examples"]; exists {
+				dropped[key] = struct{}{}
+			} else {
+				converted["examples"] = []any{item}
+			}
+		case "properties":
+			if properties, ok := item.(map[string]any); ok {
+				convertedProperties := make(map[string]any, len(properties))
+				for name, property := range properties {
+					convertedProperties[name] = openAPISchemaToJSONSchema(property, depth+1, dropped)
+				}
+				converted[key] = convertedProperties
+			} else {
+				converted[key] = item
+			}
+		case "items":
+			converted[key] = openAPISchemaToJSONSchema(item, depth+1, dropped)
+		case "anyOf":
+			if variants, ok := item.([]any); ok {
+				convertedVariants := make([]any, len(variants))
+				for index, variant := range variants {
+					convertedVariants[index] = openAPISchemaToJSONSchema(variant, depth+1, dropped)
+				}
+				converted[key] = convertedVariants
+			} else {
+				converted[key] = item
+			}
+		default:
+			if _, isInt64 := geminiSchemaInt64Fields[key]; isInt64 {
+				if text, ok := item.(string); ok {
+					if number, err := strconv.ParseInt(strings.TrimSpace(text), 10, 64); err == nil {
+						converted[key] = number
+						continue
+					}
+				}
+			}
+			converted[key] = item
+		}
+	}
+	if !nullable {
+		return converted
+	}
+	switch typed := converted["type"].(type) {
+	case string:
+		converted["type"] = []any{typed, "null"}
+	default:
+		if variants, ok := converted["anyOf"].([]any); ok {
+			converted["anyOf"] = append(variants, map[string]any{"type": "null"})
+		}
+	}
+	if values, ok := converted["enum"].([]any); ok && !slices.Contains(values, nil) {
+		converted["enum"] = append(values, nil)
+	}
+	return converted
 }
 
 func normalizeGeminiSchemaTypeAndNullable(schema map[string]any) {

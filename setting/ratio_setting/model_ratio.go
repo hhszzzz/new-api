@@ -379,7 +379,7 @@ func GetModelRatio(name string) (float64, bool, string) {
 func DefaultModelRatio2JSONString() string {
 	jsonBytes, err := common.Marshal(defaultModelRatio)
 	if err != nil {
-		common.SysError("error marshalling model ratio: " + err.Error())
+		common.SysError(common.LogText("error marshalling model ratio: %s", err.Error()))
 	}
 	return string(jsonBytes)
 }

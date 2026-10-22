@@ -114,7 +114,7 @@ export type ThemeFont = 'default' | 'sans' | 'serif'
  * needs simple attribute selectors (no `:not()` gymnastics, no per-preset
  * font branches).
  */
-export type ResolvedThemeFont = Exclude<ThemeFont, 'default'>
+export type ResolvedThemeFont = 'system' | Exclude<ThemeFont, 'default'>
 
 export type ThemeCustomization = {
   preset: ThemePreset

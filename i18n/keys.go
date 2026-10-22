@@ -7,10 +7,7 @@ const MsgPromptAuditServiceUnavailable = "prompt_audit.service_unavailable"
 const MsgOutputAuditSensitiveWordsDetected = "output_audit.sensitive_words_detected"
 const MsgOutputAuditServiceUnavailable = "output_audit.service_unavailable"
 
-// Message keys for i18n translations
-// Use these constants instead of hardcoded strings
-
-// Common error messages
+// Errors returned to AI clients
 const (
 	MsgInvalidParams     = "common.invalid_params"
 	MsgDatabaseError     = "common.database_error"
@@ -56,7 +53,9 @@ const (
 
 	MsgAuthTokenNoValidGroup     = "auth.token_no_valid_group"
 	MsgAuthClientIPUnparseable   = "auth.client_ip_unparseable"
+	MsgAuthClientIPUnresolved    = "auth.client_ip_unresolved"
 	MsgAuthIPNotAllowed          = "auth.ip_not_allowed"
+	MsgAuthTokenIPNotAllowed     = "auth.token_ip_not_allowed"
 	MsgAuthGroupAccessDenied     = "auth.group_access_denied"
 	MsgAuthGroupDeprecated       = "auth.group_deprecated"
 	MsgAuthSpecificChannelDenied = "auth.specific_channel_denied"
@@ -86,22 +85,18 @@ const (
 
 // Token related messages
 const (
-	MsgTokenNameTooLong          = "token.name_too_long"
-	MsgTokenQuotaNegative        = "token.quota_negative"
-	MsgTokenQuotaExceedMax       = "token.quota_exceed_max"
-	MsgTokenGenerateFailed       = "token.generate_failed"
-	MsgTokenGetInfoFailed        = "token.get_info_failed"
-	MsgTokenExpiredCannotEnable  = "token.expired_cannot_enable"
-	MsgTokenExhaustedCannotEable = "token.exhausted_cannot_enable"
-	MsgTokenInvalid              = "token.invalid"
-	MsgTokenNotProvided          = "token.not_provided"
-	MsgTokenExpired              = "token.expired"
-	MsgTokenExhausted            = "token.exhausted"
-	MsgTokenStatusUnavailable    = "token.status_unavailable"
-	MsgTokenDbError              = "token.db_error"
-	MsgTokenAutoGroupsTooMany    = "token.auto_groups_too_many"
-	MsgTokenAutoGroupsDuplicate  = "token.auto_groups_duplicate"
-	MsgTokenAutoGroupsInvalid    = "token.auto_groups_invalid"
+	MsgTokenNameTooLong         = "token.name_too_long"
+	MsgTokenQuotaNegative       = "token.quota_negative"
+	MsgTokenQuotaExceedMax      = "token.quota_exceed_max"
+	MsgTokenGenerateFailed      = "token.generate_failed"
+	MsgTokenGetInfoFailed       = "token.get_info_failed"
+	MsgTokenInvalid             = "token.invalid"
+	MsgTokenNotProvided         = "token.not_provided"
+	MsgTokenStatusUnavailable   = "token.status_unavailable"
+	MsgTokenDbError             = "token.db_error"
+	MsgTokenAutoGroupsTooMany   = "token.auto_groups_too_many"
+	MsgTokenAutoGroupsDuplicate = "token.auto_groups_duplicate"
+	MsgTokenAutoGroupsInvalid   = "token.auto_groups_invalid"
 
 	MsgTokenStatusInvalid        = "token.status_invalid"
 	MsgTokenAuthorizationMissing = "token.authorization_missing"
@@ -585,7 +580,6 @@ const (
 	MsgDistributorInvalidRequest               = "distributor.invalid_request"
 	MsgDistributorInvalidChannelId             = "distributor.invalid_channel_id"
 	MsgDistributorChannelDisabled              = "distributor.channel_disabled"
-	MsgDistributorAffinityChannelDisabled      = "distributor.affinity_channel_disabled"
 	MsgDistributorTokenNoModelAccess           = "distributor.token_no_model_access"
 	MsgDistributorTokenModelForbidden          = "distributor.token_model_forbidden"
 	MsgDistributorModelNameRequired            = "distributor.model_name_required"
@@ -594,14 +588,14 @@ const (
 	MsgDistributorGetChannelFailed             = "distributor.get_channel_failed"
 	MsgDistributorNoAvailableChannel           = "distributor.no_available_channel"
 	MsgDistributorNoAvailableChannelTaskPlugin = "distributor.no_available_channel_task_plugin"
-	MsgDistributorInvalidMidjourney            = "distributor.invalid_midjourney_request"
 	MsgDistributorInvalidParseModel            = "distributor.invalid_request_parse_model"
 	MsgDistributorUserModelRouteUnavailable    = "distributor.user_model_route_unavailable"
 	MsgDistributorChannelOutsideUserRoute      = "distributor.channel_outside_user_route"
 	MsgDistributorModelNotAccessible           = "distributor.model_not_accessible"
 )
 
-// Custom OAuth provider related messages
+// Emails and the name of the token created at registration, in the
+// recipient's language
 const (
 	MsgCustomOAuthNotFound          = "custom_oauth.not_found"
 	MsgCustomOAuthSlugEmpty         = "custom_oauth.slug_empty"
@@ -713,6 +707,7 @@ const (
 	MsgRelayInvalidUrl                         = "relay.invalid_url"
 	MsgRelayTaskProtocolError                  = "relay.task_protocol_error"
 	MsgRelayTaskSubmitNoResult                 = "relay.task_submit_no_result"
+	MsgRelayTaskChannelDisabled                = "relay.task_channel_disabled"
 	MsgRelayTaskPersistFailed                  = "relay.task_persist_failed"
 	MsgRelayTaskBillingSettleFailed            = "relay.task_billing_settle_failed"
 	MsgRelayUserModelRouteNoAvailable          = "relay.user_model_route_no_available"
@@ -724,6 +719,8 @@ const (
 	MsgRelayNoCompatibleChannelReason          = "relay.no_compatible_channel_reason"
 	MsgRelayNoChannelSupportsRequestPath       = "relay.no_channel_supports_request_path"
 	MsgRelayRequestBodyTooLarge                = "relay.request_body_too_large"
+	MsgRelayModelPriceNotConfigured            = "relay.model_price_not_configured"
+	MsgRelayModelPriceNotConfiguredAdmin       = "relay.model_price_not_configured_admin"
 )
 
 // Setup related messages
@@ -808,4 +805,62 @@ const (
 	MsgWordlistEnabledOrActionRequired  = "wordlist.enabled_or_action_required"
 	MsgWordlistCustomInvalid            = "wordlist.custom_invalid"
 	MsgWordlistInvalidTest              = "wordlist.invalid_test"
+)
+
+const (
+	MsgUserDefaultTokenName      = "user.default_token_name"
+	MsgEmailVerificationSubject  = "email.verification.subject"
+	MsgEmailVerificationGreeting = "email.verification.greeting"
+	MsgEmailVerificationCode     = "email.verification.code"
+	MsgEmailVerificationValidity = "email.verification.validity"
+
+	MsgEmailPasswordResetSubject      = "email.password_reset.subject"
+	MsgEmailPasswordResetGreeting     = "email.password_reset.greeting"
+	MsgEmailPasswordResetLink         = "email.password_reset.link"
+	MsgEmailPasswordResetLinkFallback = "email.password_reset.link_fallback"
+	MsgEmailPasswordResetValidity     = "email.password_reset.validity"
+
+	MsgEmailBindingSubject     = "email.binding.subject"
+	MsgEmailBindingNewIntro    = "email.binding.new_intro"
+	MsgEmailBindingOldIntro    = "email.binding.old_intro"
+	MsgEmailBindingCode        = "email.binding.code"
+	MsgEmailBindingNewValidity = "email.binding.new_validity"
+	MsgEmailBindingOldValidity = "email.binding.old_validity"
+
+	MsgEmailSecurityNoticeSubject = "email.security_notice.subject"
+	MsgEmailSecurityNoticeChanged = "email.security_notice.changed"
+	MsgEmailSecurityNoticeAdvice  = "email.security_notice.advice"
+
+	MsgSecurityEventPasswordUpdated      = "email.security_event.password_updated"
+	MsgSecurityEventEmailChangeRequested = "email.security_event.email_change_requested"
+	MsgSecurityEventEmailChanged         = "email.security_event.email_changed"
+	MsgSecurityEventEmailConfirmed       = "email.security_event.email_confirmed"
+	MsgSecurityEventLoginLinked          = "email.security_event.login_linked"
+	MsgSecurityEventLoginUnlinked        = "email.security_event.login_unlinked"
+	MsgSecurityEventWeChatLinked         = "email.security_event.wechat_linked"
+
+	MsgNotifyQuotaLowTitle             = "notify.quota_low_title"
+	MsgNotifySubscriptionQuotaLowTitle = "notify.subscription_quota_low_title"
+	MsgNotifyQuotaLowBark              = "notify.quota_low_bark"
+	MsgNotifyQuotaLowGotify            = "notify.quota_low_gotify"
+	MsgNotifyQuotaLowEmail             = "notify.quota_low_email"
+
+	MsgChannelNotifyDisabledSubject = "channel.notify_disabled_subject"
+	MsgChannelNotifyDisabledContent = "channel.notify_disabled_content"
+	MsgChannelNotifyEnabledSubject  = "channel.notify_enabled_subject"
+	MsgChannelNotifyEnabledContent  = "channel.notify_enabled_content"
+	MsgChannelTestCompletedSubject  = "channel.test_completed_subject"
+	MsgChannelTestCompletedContent  = "channel.test_completed_content"
+	MsgChannelResponseTimeExceeded  = "channel.response_time_exceeded"
+	MsgChannelModelDisabledSubject  = "channel.model_disabled_subject"
+	MsgChannelModelDisabledContent  = "channel.model_disabled_content"
+
+	MsgChannelUpstreamUpdateNotifySubject   = "channel.upstream_update_notify_subject"
+	MsgChannelUpstreamUpdateSummary         = "channel.upstream_update_summary"
+	MsgChannelUpstreamUpdateChangedChannels = "channel.upstream_update_changed_channels"
+	MsgChannelUpstreamUpdateMoreChannels    = "channel.upstream_update_more_channels"
+	MsgChannelUpstreamUpdateAddedModels     = "channel.upstream_update_added_models"
+	MsgChannelUpstreamUpdateRemovedModels   = "channel.upstream_update_removed_models"
+	MsgChannelUpstreamUpdateFailedChannels  = "channel.upstream_update_failed_channels"
+	MsgChannelUpstreamUpdateMoreOmitted     = "channel.upstream_update_more_omitted"
 )

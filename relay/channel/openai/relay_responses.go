@@ -75,13 +75,11 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 			info.CountBillableToolCall(dto.BuildInCallFunctionCall, output.Name)
 		}
 	}
+	info.ApplyVendorToolUsage(responseBody)
 
 	imageCounter := &relaycommon.ImageGenerationCallCounter{}
-	if !relaycommon.IsNonBillableResponsesStatus(responsesResponse.Status) {
-		for i := range responsesResponse.Output {
-			idx := i
-			imageCounter.Observe(&responsesResponse.Output[i], &idx)
-		}
+	for i := range responsesResponse.Output {
+		imageCounter.Observe(&responsesResponse.Output[i], &i)
 	}
 	imageCounter.Commit(info)
 
@@ -113,9 +111,10 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			sr.Stop(streamErr)
 			return
 		}
-		accumulator.Observe(&streamResponse)
+		rawData := []byte(data)
+		accumulator.Observe(&streamResponse, rawData)
 		if streamResponse.Response != nil {
-			data = string(rewriteSGLangResponsesCreatedAt(info, []byte(data), "response.created_at", streamResponse.Response.CreatedAt))
+			data = string(rewriteSGLangResponsesCreatedAt(info, rawData, "response.created_at", streamResponse.Response.CreatedAt))
 		}
 		if streamResponse.Type == "error" || streamResponse.Type == "response.error" || streamResponse.Type == "response.failed" {
 			if openAIError := streamResponse.GetOpenAIError(); openAIError != nil {

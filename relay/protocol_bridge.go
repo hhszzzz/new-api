@@ -41,17 +41,22 @@ func applyProtocolPlan(info *relaycommon.RelayInfo, plan channelcompat.ProtocolP
 	}
 	savedRelayMode := info.RelayMode
 	savedRequestURLPath := info.RequestURLPath
+	savedFinalFormat := info.FinalRequestRelayFormat
 	switch plan.UpstreamProtocol {
 	case channelcompat.ProtocolChat:
+		info.FinalRequestRelayFormat = types.RelayFormatOpenAI
 		info.RelayMode = relayconstant.RelayModeChatCompletions
 		info.RequestURLPath = "/v1/chat/completions"
 	case channelcompat.ProtocolMessages:
+		info.FinalRequestRelayFormat = types.RelayFormatClaude
 		info.RelayMode = relayconstant.RelayModeUnknown
 		info.RequestURLPath = "/v1/messages"
 	case channelcompat.ProtocolResponses:
+		info.FinalRequestRelayFormat = types.RelayFormatOpenAIResponses
 		info.RelayMode = relayconstant.RelayModeResponses
 		info.RequestURLPath = "/v1/responses"
 	case channelcompat.ProtocolGemini:
+		info.FinalRequestRelayFormat = types.RelayFormatGemini
 		if plan.CompactionMode == relayconvert.CompactionSummary {
 			info.RelayMode = relayconstant.RelayModeGemini
 		}
@@ -71,6 +76,7 @@ func applyProtocolPlan(info *relaycommon.RelayInfo, plan channelcompat.ProtocolP
 	return func() {
 		info.RelayMode = savedRelayMode
 		info.RequestURLPath = savedRequestURLPath
+		info.FinalRequestRelayFormat = savedFinalFormat
 	}
 }
 

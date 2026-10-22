@@ -3,9 +3,10 @@ package controller
 import (
 	"errors"
 	"fmt"
-	"github.com/QuantumNous/new-api/i18n"
 	hosttypes "github.com/QuantumNous/new-api/types"
 
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -19,6 +20,7 @@ func Playground(c *gin.Context) {
 
 	defer func() {
 		if newAPIError != nil {
+			newAPIError.SetMessage(common.MaskSensitiveInfo(newAPIError.Error(), common.UpstreamAddresses(c)...))
 			c.JSON(newAPIError.StatusCode, gin.H{
 				"error": newAPIError.ToOpenAIError(),
 			})

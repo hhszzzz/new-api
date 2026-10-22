@@ -153,7 +153,7 @@ func CloseResponseBodyGracefully(httpResponse *http.Response) {
 	}
 	err := httpResponse.Body.Close()
 	if err != nil {
-		common.SysError("failed to close response body: " + err.Error())
+		common.SysError(common.LogText("failed to close response body: %s", err.Error()))
 	}
 }
 

@@ -145,7 +145,7 @@ func GetChannelInPoolWithClassifier(group string, modelName string, retry int, r
 		return nil, err
 	}
 	if len(abilities) == 0 {
-		normalizedModel := ratio_setting.FormatMatchingModelName(modelName)
+		normalizedModel := ratio_setting.RoutingMatchModelName(modelName)
 		if normalizedModel != "" && normalizedModel != modelName {
 			var normalizedPathUnsupported bool
 			abilities, channels, normalizedPathUnsupported, err = findEligibleChannelAbilities(group, normalizedModel, modelName, requestPath, channelIds, candidateFilter)
@@ -595,7 +595,7 @@ var fixLock = sync.Mutex{}
 func FixAbility() (int, int, error) {
 	lock := fixLock.TryLock()
 	if !lock {
-		return 0, 0, errors.New("已经有一个修复任务在运行中，请稍后再试")
+		return 0, 0, common.NewMessage("A repair task is already running. Please try again later")
 	}
 	defer fixLock.Unlock()
 
@@ -603,13 +603,13 @@ func FixAbility() (int, int, error) {
 	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
 		err := DB.Exec("DELETE FROM abilities").Error
 		if err != nil {
-			common.SysLog(fmt.Sprintf("Delete abilities failed: %s", err.Error()))
+			common.SysLog(common.LogText("Delete abilities failed: %s", err.Error()))
 			return 0, 0, err
 		}
 	} else {
 		err := DB.Exec("TRUNCATE TABLE abilities").Error
 		if err != nil {
-			common.SysLog(fmt.Sprintf("Truncate abilities failed: %s", err.Error()))
+			common.SysLog(common.LogText("Truncate abilities failed: %s", err.Error()))
 			return 0, 0, err
 		}
 	}
@@ -629,7 +629,7 @@ func FixAbility() (int, int, error) {
 		// Delete all abilities of this channel
 		err = DB.Where("channel_id IN ?", ids).Delete(&Ability{}).Error
 		if err != nil {
-			common.SysLog(fmt.Sprintf("Delete abilities failed: %s", err.Error()))
+			common.SysLog(common.LogText("Delete abilities failed: %s", err.Error()))
 			failCount += len(chunk)
 			continue
 		}
@@ -637,7 +637,7 @@ func FixAbility() (int, int, error) {
 		for _, channel := range chunk {
 			err = channel.AddAbilities(nil)
 			if err != nil {
-				common.SysLog(fmt.Sprintf("Add abilities for channel %d failed: %s", channel.Id, err.Error()))
+				common.SysLog(common.LogText("Add abilities for channel %d failed: %s", channel.Id, err.Error()))
 				failCount++
 			} else {
 				successCount++

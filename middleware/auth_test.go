@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
@@ -32,12 +33,13 @@ func setupDashboardAuthMiddlewareTest(t *testing.T) {
 	previousSecret := common.SessionSecret
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.UserSession{}, &model.AuditLog{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.UserSession{}, &model.AuditLog{}, &model.UserAccessToken{}, &model.Option{}))
 	model.DB = db
 	model.LOG_DB = db
 	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
 	common.RedisEnabled = false
 	common.SessionSecret = "middleware-auth-test-secret"
+	require.NoError(t, model.EnsureLegacyAccessTokenRetireAt(time.Now().Unix()))
 	t.Cleanup(func() {
 		model.DB = previousDB
 		model.LOG_DB = previousLogDB
@@ -224,6 +226,45 @@ func createMiddlewarePATUser(t *testing.T, username, token string) *model.User {
 	return user
 }
 
+func createMiddlewareScopedToken(t *testing.T, userID int, expiresAt int64, scope string) (string, *model.UserAccessToken) {
+	t.Helper()
+	suffix, err := common.GenerateRandomCharsKey(43)
+	require.NoError(t, err)
+	raw := model.AccessTokenPrefix + suffix
+	token := &model.UserAccessToken{
+		Name:      "middleware scoped token",
+		TokenHash: model.AccessTokenFingerprint(raw),
+		TokenHint: model.AccessTokenHint(raw),
+		ExpiresAt: expiresAt,
+	}
+	require.NoError(t, token.SetScopes([]string{scope}))
+	require.NoError(t, model.CreateUserAccessToken(userID, token, service.AccessTokenMaxPerUser))
+	return raw, token
+}
+
+// Read-only API key routes (/api/usage/token, /api/log/token) are called by
+// scripts, not the web console, so their errors are translated by the backend
+// in the language the request asks for.
+func TestTokenAuthReadOnlyTranslatesErrors(t *testing.T) {
+	require.NoError(t, i18n.Init())
+	for _, tc := range []struct {
+		acceptLanguage string
+		want           string
+	}{
+		{"zh-CN", "未提供令牌"},
+		{"en-US", "Token not provided"},
+	} {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodGet, "/api/log/token", nil)
+		c.Request.Header.Set("Accept-Language", tc.acceptLanguage)
+		TokenAuthReadOnly()(c)
+		assert.True(t, c.IsAborted(), tc.acceptLanguage)
+		assert.Equal(t, http.StatusUnauthorized, recorder.Code, tc.acceptLanguage)
+		assert.JSONEq(t, `{"success":false,"message":"`+tc.want+`"}`, recorder.Body.String(), tc.acceptLanguage)
+	}
+}
+
 func TestUserAuthAllowsOpaqueDottedPAT(t *testing.T) {
 	setupDashboardAuthMiddlewareTest(t)
 	user := createMiddlewarePATUser(t, "dotted-pat-user", "opaque.key.with-dots")
@@ -272,6 +313,7 @@ func TestTryUserAuthCredentialClassification(t *testing.T) {
 
 	patUser := createMiddlewarePATUser(t, "optional-pat-user", "optional.pat.with-dots")
 	internalUser := createMiddlewarePATUser(t, "optional-session-user", "unrelated-pat")
+	scopedPAT, _ := createMiddlewareScopedToken(t, patUser.Id, 0, "profile:read")
 	now := time.Now().Unix()
 	session := &model.UserSession{
 		SID:             "optional-auth-session",
@@ -326,6 +368,7 @@ func TestTryUserAuthCredentialClassification(t *testing.T) {
 		{name: "dotted unmatched credential", token: "ordinary.key.with-dots", wantStatus: http.StatusOK},
 		{name: "third party jwt", token: externalToken, wantStatus: http.StatusOK},
 		{name: "valid pat", token: "optional.pat.with-dots", wantStatus: http.StatusOK, wantUserID: patUser.Id, wantPAT: true},
+		{name: "scoped pat outside its grant stays anonymous", token: scopedPAT, wantStatus: http.StatusOK},
 		{name: "valid internal access jwt", token: accessToken, wantStatus: http.StatusOK, wantUserID: internalUser.Id},
 		{name: "expired internal access jwt", token: issueExpiredDashboardAccessToken(t, identity), wantStatus: http.StatusUnauthorized, wantErrorCode: "AUTH_TOKEN_EXPIRED"},
 		{name: "tampered internal access jwt", token: tamperDashboardToken(accessToken), wantStatus: http.StatusUnauthorized, wantErrorCode: "AUTH_UNAUTHORIZED"},

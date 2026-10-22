@@ -18,7 +18,9 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { describe, expect, test } from 'vitest'
 
-import { getServerErrorMessageKey } from './server-error-message'
+import {
+  getServerErrorMessageKey,
+} from './server-error-message'
 
 describe('server error message mapping', () => {
   test('maps the active-session limit to recovery instructions', () => {

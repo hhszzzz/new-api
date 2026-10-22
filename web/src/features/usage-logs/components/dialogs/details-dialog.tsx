@@ -60,6 +60,7 @@ import { formatSubscriptionName } from '@/features/subscriptions/lib'
 import { PolicyDecisionRecord } from '@/features/system-settings/request-policies/decision-record'
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
 import { formatLogQuota, formatTokens, formatUseTime } from '@/lib/format'
+import { translateServerText } from '@/lib/server-error-message'
 import { cn } from '@/lib/utils'
 
 import { AuditDetailFields } from '../../audit/components/audit-detail-fields'
@@ -80,6 +81,7 @@ import {
   getReasoningEffortAutoPolicyLabel,
   getReasoningEffortAutoSkipLabel,
   renderAuditContent,
+  logTokenName,
 } from '../../lib/format'
 import { buildQuotaAuditOperation } from '../../lib/quota-audit-operation'
 import {
@@ -816,7 +818,11 @@ export function DetailsDialog(props: DetailsDialogProps) {
           )}
 
           {props.log.token_name && (
-            <DetailRow label={t('Token')} value={props.log.token_name} mono />
+            <DetailRow
+              label={t('Token')}
+              value={logTokenName(props.log, t)}
+              mono
+            />
           )}
 
           {(props.log.group || other?.group) && (
@@ -1079,7 +1085,10 @@ export function DetailsDialog(props: DetailsDialogProps) {
               <DetailRow label={t('Task ID')} value={other.task_id} mono />
             )}
             {other.reason && (
-              <DetailRow label={t('Reason')} value={other.reason} />
+              <DetailRow
+                label={t('Reason')}
+                value={translateServerText(t, other.reason)}
+              />
             )}
           </DetailSection>
         )}

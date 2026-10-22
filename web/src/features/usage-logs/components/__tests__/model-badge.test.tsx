@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { beforeAll, expect, it, vi } from 'vitest'
+import { expect, it, vi } from 'vitest'
 
 import {
   categorizeModels,
@@ -27,11 +27,6 @@ import {
 import { getLobeIconNames } from '@/lib/lobe-icon'
 
 import { ModelBadge } from '../model-badge'
-
-// Load the installed registry once; each case verifies the actual provider SVG.
-beforeAll(async () => {
-  await import('@lobehub/icons/es/icons.js')
-}, 60000)
 
 const providers = [
   {
@@ -205,6 +200,9 @@ const providers = [
       'llama2',
       'llama3',
       'meta-custom',
+      'meta/muse-spark-1.3-contributor',
+      'muse-spark-1.3',
+      'meta/muse-spark-1.2',
     ],
   },
   {

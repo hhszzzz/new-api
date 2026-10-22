@@ -321,7 +321,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	//// 创建一个用于日志的 info 副本，移除 ApiKey
 	//logInfo := info
 	//logInfo.ApiKey = ""
-	common.SysLog(fmt.Sprintf("testing channel %d with model %s , info %+v ", channel.Id, testModel, info.ToString()))
+	common.SysLog(common.LogText("testing channel %d with model %s , info %+v ", channel.Id, testModel, info.ToString()))
 
 	priceData, err := helper.ModelPriceHelper(c, info, 0, request.GetTokenCountMeta())
 	if err != nil {
@@ -456,7 +456,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 		httpResp = resp.Response
 		if httpResp.StatusCode != http.StatusOK {
 			err := service.RelayErrorHandler(c.Request.Context(), httpResp, true)
-			common.SysError(fmt.Sprintf(
+			common.SysError(common.LogText(
 				"channel test bad response: channel_id=%d name=%s type=%d model=%s endpoint_type=%s status=%d err=%v",
 				channel.Id,
 				channel.Name,
@@ -521,9 +521,9 @@ func finishChannelTest(c *gin.Context, w *httptest.ResponseRecorder, info *relay
 		PromptTokens:     usage.PromptTokens,
 		CompletionTokens: usage.CompletionTokens,
 		ModelName:        info.OriginModelName,
-		TokenName:        "模型测试",
+		TokenName:        "Model test",
 		Quota:            quota,
-		Content:          "模型测试",
+		Content:          []*common.Message{common.NewMessage("Model test")},
 		UseTimeSeconds:   int(consumedTime),
 		IsStream:         info.IsStream,
 		Group:            info.UsingGroup,
@@ -1134,8 +1134,9 @@ func performChannelTests(ctx context.Context, channels []*model.Channel, testUse
 // stops promptly. mode selects the channel set: an empty mode falls back to the
 // configured monitor ChannelTestMode (scheduled behavior), while a manual
 // trigger passes ChannelTestModeScheduledAll to test every channel. When notify
-// is set the root user is notified on completion. Cross-instance execution is
-// guarded by the system task per-type lock, so no process-local guard is needed.
+// is set, the administrators who receive channel notices are notified on
+// completion. Cross-instance execution is guarded by the system task per-type
+// lock, so no process-local guard is needed.
 func runChannelTestTask(ctx context.Context, mode string, notify bool, report func(processed, total int)) (channelTestSummary, error) {
 	testUserID, err := resolveChannelTestUserID(nil)
 	if err != nil {
@@ -1160,7 +1161,9 @@ func runChannelTestTask(ctx context.Context, mode string, notify bool, report fu
 	concurrency := operation_setting.GetMonitorSetting().ChannelTestConcurrency
 	summary := performChannelTests(ctx, selected, testUserID, allowDisable, isScheduledRun, concurrency, report)
 	if notify && (ctx == nil || ctx.Err() == nil) {
-		service.NotifyRootUser(dto.NotifyTypeChannelTest, "通道测试完成", "所有通道测试已完成")
+		service.NotifyChannelWatchers(dto.NotifyTypeChannelTest, func(lang string) (string, string) {
+			return i18n.Translate(lang, i18n.MsgChannelTestCompletedSubject), i18n.Translate(lang, i18n.MsgChannelTestCompletedContent)
+		})
 	}
 	return summary, nil
 }

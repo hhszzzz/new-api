@@ -20,7 +20,7 @@ import (
 )
 
 func GetVerificationMethods(c *gin.Context) {
-	identity, ok := middleware.GetSessionAuthIdentity(c)
+	identity, ok := middleware.GetStepUpIdentity(c)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgSecurityProofAuthMethodUnsupported)})
 		return
@@ -41,9 +41,9 @@ func writeSecurityOperationError(c *gin.Context, err error) {
 	var protocolError *protocol.Error
 	switch {
 	case errors.Is(err, passkeysvc.ErrRPIDUnavailable):
-		code, message = "PASSKEY_RP_ID_UNAVAILABLE", i18n.T(c, i18n.MsgPasskeyRPIDUnavailable)
+		code, message = "PASSKEY_RP_ID_UNAVAILABLE", "This Passkey domain is not available on this website. Use its original website or another verification method."
 	case errors.Is(err, system_setting.ErrPasskeyRPIDInvalid):
-		code, message = "PASSKEY_RP_ID_INVALID", i18n.T(c, i18n.MsgPasskeyRPIDInvalid)
+		code, message = "PASSKEY_RP_ID_INVALID", "Invalid Passkey domain. Enter a domain without a scheme, port, path or wildcard."
 	case errors.Is(err, service.ErrAccountEmailInvalid), errors.Is(err, service.ErrAccountEmailRestricted):
 		code, message = "EMAIL_ADDRESS_REJECTED", err.Error()
 	case errors.Is(err, model.ErrEmailAlreadyTaken):
@@ -129,13 +129,34 @@ func writeSecurityOperationError(c *gin.Context, err error) {
 		}
 		// Protocol details can contain challenges and client-controlled data.
 		// Only fixed categories and the server-selected public RP ID are logged.
-		logger.LogWarn(c.Request.Context(), "passkey verification rejected: code=%s reason=%s rp_id=%q", code, reason, c.GetString("passkey_rp_id"))
+		logger.LogWarn(c.Request.Context(), common.LogText("passkey verification rejected: code=%s reason=%s rp_id=%q", code, reason, c.GetString("passkey_rp_id")))
 	}
-	c.JSON(status, gin.H{"success": false, "code": code, "message": message})
+	// Every message above is fixed English text, so it is also the key the web
+	// console translates.
+	common.ApiErrorStatus(c, status, common.NewMessage(message), gin.H{"code": code})
+}
+
+// writeAccountStatusError responds with a web console message under a non-200
+// status.
+func writeAccountStatusError(c *gin.Context, status int, key string) {
+	common.ApiErrorStatus(c, status, common.NewMessage(key))
+}
+
+// requireAdminUserProof consumes the step-up proof for an administrative user
+// operation after the caller has already authorized the operator against the
+// managed user. context is one of the service.AdminUser*Context structs.
+func requireAdminUserProof(c *gin.Context, scope string, context any) *model.AuthFlowAuthorization {
+	payload, err := common.Marshal(context)
+	if err != nil {
+		_ = c.Error(err)
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"success": false, "code": "AUTH_INTERNAL_ERROR", "message": "Please try again later."})
+		return nil
+	}
+	return middleware.RequireSecurityProof(c, service.VerificationOperation{Scope: scope, Context: payload})
 }
 
 func UniversalVerify(c *gin.Context) {
-	identity, ok := middleware.GetSessionAuthIdentity(c)
+	identity, ok := middleware.GetStepUpIdentity(c)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgSecurityProofAuthMethodUnsupported)})
 		return

@@ -3,7 +3,7 @@ package oairesponses
 import (
 	"context"
 	"fmt"
-	"github.com/QuantumNous/new-api/relaykit/relayconvert/internal/toolconv"
+	"slices"
 	"strings"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -13,6 +13,7 @@ import (
 	sharedbridge "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/bridge"
 	sharedclaude "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/claude"
 	sharedtoolmedia "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/toolmedia"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/internal/toolconv"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -195,6 +196,11 @@ func OpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Met
 			claudeRequest.Messages = appendClaudeConversationContent(claudeRequest.Messages, role, parts)
 		}
 	}
+	claudeRequest.Messages = omitTrailingAssistantText(c, claudeRequest.Messages,
+		func(message dto.ClaudeMessage) bool { return message.Role == "user" },
+		func(message dto.ClaudeMessage) bool {
+			return message.Role == "assistant" && !slices.ContainsFunc(claudeMessageContentParts(message.Content), func(part dto.ClaudeMediaMessage) bool { return part.Type == "tool_use" })
+		})
 
 	if len(systemMessages) > 0 {
 		claudeRequest.System = systemMessages
@@ -326,28 +332,28 @@ func responsesInputContentToClaudeMediaMessages(c context.Context, content any) 
 					partType,
 				)
 			}
+			// Claude content blocks carry images, PDF documents, and text
+			// documents; audio and video have no Claude block.
 			base64Data, mimeType, err := relaymedia.ResolveBase64Data(c, source, "formatting Responses input for Claude")
 			if err != nil {
 				return nil, fmt.Errorf("get file data failed: %s", err.Error())
 			}
+			block, reason := sharedclaude.MediaBlock(base64Data, mimeType, partType == "input_image")
+			if reason != "" {
+				convdiag.Add(c, types.ConversionDiagnostic{
+					Code:     "unsupported_media_type",
+					Path:     "input.content",
+					Message:  reason + "; the part was omitted",
+					Severity: types.ConversionDiagnosticError,
+				})
+				continue
+			}
 			if partType == "input_image" && !strings.HasPrefix(strings.ToLower(strings.TrimSpace(mimeType)), "image/") {
 				return nil, fmt.Errorf("Responses input_image resolved to non-image MIME type %q", mimeType)
 			}
-			claudePart := dto.ClaudeMediaMessage{
-				Source: &dto.ClaudeMessageSource{
-					Type:      "base64",
-					MediaType: mimeType,
-					Data:      base64Data,
-				},
-			}
-			if partType == "input_file" {
-				claudePart.Type = "document"
-			} else {
-				claudePart.Type = "image"
-			}
-			claudePart.Title = strings.TrimSpace(kitutil.Interface2String(contentPart["filename"]))
-			claudePart.Filename = claudePart.Title
-			parts = append(parts, claudePart)
+			block.Title = strings.TrimSpace(kitutil.Interface2String(contentPart["filename"]))
+			block.Filename = block.Title
+			parts = append(parts, block)
 		case "encrypted_content":
 			// Opaque provider-bound reasoning state: unreadable by any other
 			// provider, dropped when lossy conversion admitted the request.

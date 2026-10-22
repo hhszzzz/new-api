@@ -139,7 +139,9 @@ func TestRelayInfoMetaTypedNilReceiver(t *testing.T) {
 		meta.SetReasoningEffort("high")
 		meta.IncrSendResponseCount()
 		meta.AppendRequestConversion(types.RelayFormatClaude)
+		meta.SetResponsesToolState(&convmeta.ResponsesToolState{})
 	})
+	assert.Nil(t, meta.ResponsesToolState())
 
 	firstState := meta.EnsureClaudeConvertInfo()
 	secondState := meta.EnsureClaudeConvertInfo()

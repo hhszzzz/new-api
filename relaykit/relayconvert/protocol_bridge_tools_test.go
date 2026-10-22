@@ -105,7 +105,7 @@ func TestResponsesChatBridgeRestoresExtendedToolKinds(t *testing.T) {
 
 	assert.Equal(t, "custom_tool_call", response.Output[0].Type)
 	assert.Equal(t, "apply_patch", response.Output[0].Name)
-	assert.Equal(t, "patch body", response.Output[0].Input)
+	assert.Equal(t, `"patch body"`, string(response.Output[0].Input))
 
 	assert.Equal(t, "function_call", response.Output[1].Type)
 	assert.Equal(t, "crm", response.Output[1].Namespace)
@@ -114,7 +114,7 @@ func TestResponsesChatBridgeRestoresExtendedToolKinds(t *testing.T) {
 	assert.Equal(t, "custom_tool_call", response.Output[2].Type)
 	assert.Equal(t, "crm", response.Output[2].Namespace)
 	assert.Equal(t, "render_customer", response.Output[2].Name)
-	assert.Equal(t, "customer 1", response.Output[2].Input)
+	assert.Equal(t, `"customer 1"`, string(response.Output[2].Input))
 
 	assert.Equal(t, "tool_search_call", response.Output[3].Type)
 	assert.Equal(t, "client", response.Output[3].Execution)
@@ -468,7 +468,7 @@ func TestResponsesBridgeWrapsFreeformToolsAndRestoresCustomCalls(t *testing.T) {
 	require.Len(t, response.Output, 1)
 	assert.Equal(t, "custom_tool_call", response.Output[0].Type)
 	assert.Equal(t, "shell", response.Output[0].Name)
-	assert.Equal(t, "pwd", response.Output[0].Input)
+	assert.Equal(t, `"pwd"`, string(response.Output[0].Input))
 }
 
 func TestResponsesChatBridgeRestoresCustomToolStreamLifecycle(t *testing.T) {
@@ -551,7 +551,7 @@ func TestResponsesChatBridgeRestoresCustomToolStreamLifecycle(t *testing.T) {
 	assert.Empty(t, events[2].Payload.ItemID)
 	assert.Equal(t, "patch body", events[3].Payload.Delta)
 	assert.Equal(t, "patch body", events[4].Payload.Input)
-	assert.Equal(t, "patch body", events[5].Payload.Item.Input)
+	assert.Equal(t, `"patch body"`, string(events[5].Payload.Item.Input))
 }
 
 func TestResponsesMessagesBridgeRestoresExtendedToolKinds(t *testing.T) {
@@ -614,7 +614,7 @@ func TestResponsesMessagesBridgeRestoresExtendedToolKinds(t *testing.T) {
 	require.Len(t, response.Output, 3)
 	assert.Equal(t, "custom_tool_call", response.Output[0].Type)
 	assert.Equal(t, "apply_patch", response.Output[0].Name)
-	assert.Equal(t, "patch body", response.Output[0].Input)
+	assert.Equal(t, `"patch body"`, string(response.Output[0].Input))
 	assert.Equal(t, "function_call", response.Output[1].Type)
 	assert.Equal(t, "crm", response.Output[1].Namespace)
 	assert.Equal(t, "get_customer", response.Output[1].Name)
@@ -719,7 +719,7 @@ func TestResponsesMessagesBridgeRestoresCustomToolStreamLifecycle(t *testing.T) 
 	assert.Empty(t, events[2].Payload.ItemID)
 	assert.Equal(t, "patch body", events[3].Payload.Delta)
 	assert.Equal(t, "patch body", events[4].Payload.Input)
-	assert.Equal(t, "patch body", events[5].Payload.Item.Input)
+	assert.Equal(t, `"patch body"`, string(events[5].Payload.Item.Input))
 }
 
 func TestResponsesMessagesBridgeReplaysSignedThinkingOnlyOnOriginChannel(t *testing.T) {

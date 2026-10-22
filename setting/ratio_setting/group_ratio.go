@@ -98,7 +98,7 @@ func UpdateGroupRatioByJSONString(jsonStr string) error {
 func GetGroupRatio(name string) float64 {
 	ratio, ok := GetGroupRatioSetting().GroupRatio.Get(name)
 	if !ok {
-		common.SysLog("group ratio not found: " + name)
+		common.SysLog(common.LogText("group ratio not found: %s", name))
 		return 1
 	}
 	return ratio

@@ -26,6 +26,11 @@ var (
 // hiding fields or making response-only privacy hardening changes.
 const seriesSchema = "dbcd0a3c01b55203"
 
+// MaxRecentModels bounds the historical lookups made by one summary request.
+const MaxRecentModels = 50
+const recentSuccessSampleLimit = 24
+const recentSuccessHistoryHours = 7 * 24
+
 func Init() {
 	go flushLoop()
 	startRedisPublisher()
@@ -200,20 +205,45 @@ func Query(params QueryParams) (QueryResult, error) {
 	return result, nil
 }
 
-func QuerySummaryAll(hours int, groups []string) (SummaryAllResult, error) {
-	startTs, endTs := queryWindow(time.Now(), hours)
+func QuerySummaryAll(hours int, groups []string, recentModels ...string) (SummaryAllResult, error) {
+	if len(recentModels) > MaxRecentModels {
+		return SummaryAllResult{}, common.NewMessage("Invalid parameters")
+	}
+	now := time.Now()
+	startTs, endTs := queryWindow(now, hours)
+	recentStartTs, _ := queryWindow(now, recentSuccessHistoryHours)
 	allowedGroups := allowedGroupSet(groups)
-
-	// See Query: the DB read and hot-bucket scan form one logical snapshot with
-	// respect to local completed-bucket flushes.
+	queryStartTs := startTs
+	// The history, summary, and hot buckets must stay on one side of a flush.
 	bucketFlushMu.RLock()
-	rows, err := model.GetPerfMetricsSummaryBucketsAll(startTs, endTs, groups)
+	defer bucketFlushMu.RUnlock()
+	recentBuckets := make(map[string]map[int64]counters, len(recentModels))
+	for _, name := range recentModels {
+		if name == "" {
+			continue
+		}
+		if _, exists := recentBuckets[name]; exists {
+			continue
+		}
+		recentBuckets[name] = map[int64]counters{}
+		buckets, err := model.GetRecentPerfMetricSuccessBuckets(name, recentStartTs, endTs, groups, recentSuccessSampleLimit)
+		if err != nil {
+			return SummaryAllResult{}, err
+		}
+		for _, bucket := range buckets {
+			queryStartTs = min(queryStartTs, bucket.BucketTs)
+			mergeModelBucket(recentBuckets, name, bucket.BucketTs, counters{
+				requestCount: bucket.RequestCount,
+				successCount: bucket.SuccessCount,
+			})
+		}
+	}
+
+	rows, err := model.GetPerfMetricsSummaryBucketsAll(queryStartTs, endTs, groups)
 	if err != nil {
-		bucketFlushMu.RUnlock()
 		return SummaryAllResult{}, err
 	}
 
-	totals := map[string]counters{}
 	modelBuckets := map[string]map[int64]counters{}
 	for _, row := range rows {
 		value := counters{
@@ -225,13 +255,12 @@ func QuerySummaryAll(hours int, groups []string) (SummaryAllResult, error) {
 			cacheHitTokens:  row.CacheHitTokens,
 			cacheMissTokens: row.CacheMissTokens,
 		}
-		mergeModelTotals(totals, row.ModelName, value)
 		mergeModelBucket(modelBuckets, row.ModelName, row.BucketTs, value)
 	}
 
 	hotBuckets.Range(func(key, value any) bool {
 		k := key.(bucketKey)
-		if k.bucketTs < startTs || k.bucketTs > endTs {
+		if k.bucketTs > endTs {
 			return true
 		}
 		if allowedGroups != nil {
@@ -243,11 +272,40 @@ func QuerySummaryAll(hours int, groups []string) (SummaryAllResult, error) {
 		if snap.requestCount == 0 {
 			return true
 		}
-		mergeModelTotals(totals, k.model, snap)
+		if _, requested := recentBuckets[k.model]; requested && k.bucketTs >= recentStartTs {
+			mergeModelBucket(recentBuckets, k.model, k.bucketTs, snap)
+		}
+		if k.bucketTs < queryStartTs {
+			return true
+		}
 		mergeModelBucket(modelBuckets, k.model, k.bucketTs, snap)
 		return true
 	})
-	bucketFlushMu.RUnlock()
+
+	recentSeries := make(map[string][]SuccessRatePoint, len(recentBuckets))
+	for name, buckets := range recentBuckets {
+		points := recentSuccessSeries(buckets)
+		if len(points) == 0 {
+			continue
+		}
+		recentSeries[name] = points[max(0, len(points)-recentSuccessSampleLimit):]
+	}
+
+	// Requested models are summarized over the same hours as their status samples.
+	totals := map[string]counters{}
+	for name, buckets := range modelBuckets {
+		fromTs := startTs
+		if points, ok := recentSeries[name]; ok {
+			fromTs = points[0].Ts
+		}
+		for bucketTs, value := range buckets {
+			if bucketTs < fromTs {
+				delete(buckets, bucketTs)
+				continue
+			}
+			mergeModelTotals(totals, name, value)
+		}
+	}
 
 	all := counters{}
 	models := make([]ModelSummary, 0, len(totals))
@@ -260,6 +318,8 @@ func QuerySummaryAll(hours int, groups []string) (SummaryAllResult, error) {
 		all.totalLatencyMs += total.totalLatencyMs
 		all.outputTokens += total.outputTokens
 		all.generationMs += total.generationMs
+		all.cacheHitTokens += total.cacheHitTokens
+		all.cacheMissTokens += total.cacheMissTokens
 		avgLatency := total.totalLatencyMs / total.requestCount
 		successRate := float64(total.successCount) / float64(total.requestCount) * 100
 		avgTps := 0.0
@@ -280,7 +340,10 @@ func QuerySummaryAll(hours int, groups []string) (SummaryAllResult, error) {
 		return models[i].RequestCount > models[j].RequestCount
 	})
 
-	return SummaryAllResult{Summary: summarize(all), WindowStart: startTs, WindowEnd: endTs, Models: models}, nil
+	return SummaryAllResult{
+		Summary: summarize(all), WindowStart: startTs, WindowEnd: endTs,
+		Models: models, RecentSuccessSeries: recentSeries,
+	}, nil
 }
 
 func mergeModelTotals(totals map[string]counters, modelName string, value counters) {

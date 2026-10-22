@@ -61,7 +61,7 @@ func TestPaginatedListSortingAppliesBeforeRowsAreLimited(t *testing.T) {
 		{Id: 1, CreatedAt: 1, Quota: 200, Other: "{}"},
 		{Id: 2, CreatedAt: 2, Quota: 100, Other: "{}"},
 	}).Error)
-	logs, total, err := GetAllLogs(LogTypeUnknown, 0, 0, "", "", "", 0, 1, 0, "", "", "", NewLogSortOptions("quota", "asc"))
+	logs, total, err := GetAllLogs(LogFilter{SortOptions: NewLogSortOptions("quota", "asc")}, 0, 1)
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), total)
 	require.Len(t, logs, 1)

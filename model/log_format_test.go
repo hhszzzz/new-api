@@ -815,26 +815,26 @@ func TestUserLogModelFiltersUsePublicModelIdentity(t *testing.T) {
 		}),
 	}).Error)
 
-	publicExact, total, err := GetUserLogs(1, LogTypeConsume, 0, 0, "private-model", "", 0, 10, "", "", "", false)
+	publicExact, total, err := GetUserLogs(1, LogFilter{Type: LogTypeConsume, ModelName: "private-model"}, 0, 10)
 	require.NoError(t, err)
 	require.Zero(t, total)
 	require.Empty(t, publicExact)
 
-	publicExact, total, err = GetUserLogs(1, LogTypeConsume, 0, 0, "public-model", "", 0, 10, "", "", "", false)
+	publicExact, total, err = GetUserLogs(1, LogFilter{Type: LogTypeConsume, ModelName: "public-model"}, 0, 10)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, total)
 	require.Len(t, publicExact, 1)
 	require.Equal(t, "public-model", publicExact[0].ModelName)
 
-	spoofedExact, total, err := GetUserLogs(1, LogTypeConsume, 0, 0, "spoof-public-model", "", 0, 10, "", "", "", false)
+	spoofedExact, total, err := GetUserLogs(1, LogFilter{Type: LogTypeConsume, ModelName: "spoof-public-model"}, 0, 10)
 	require.NoError(t, err)
 	require.Zero(t, total)
 	require.Empty(t, spoofedExact)
 
-	_, _, err = GetUserLogs(1, LogTypeConsume, 0, 0, "%model", "", 0, 1, "", "", "", false)
+	_, _, err = GetUserLogs(1, LogFilter{Type: LogTypeConsume, ModelName: "%model"}, 0, 1)
 	require.EqualError(t, err, "model filter is not available")
 
-	adminExact, total, err := GetUserLogs(1, LogTypeConsume, 0, 0, "private-model", "", 0, 10, "", "", "", true)
+	adminExact, total, err := GetUserLogs(1, LogFilter{Type: LogTypeConsume, ModelName: "private-model", CanViewModelRouting: true}, 0, 10)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, total)
 	require.Len(t, adminExact, 1)

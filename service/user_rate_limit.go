@@ -18,6 +18,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting/group_rate_limit_setting"
+	"github.com/QuantumNous/new-api/tokenkit"
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v8"
@@ -1111,7 +1112,7 @@ func (p *UserStreamPacer) PacePayload(ctx context.Context, payload []byte) error
 	}
 	tokens := 1
 	if hasRateLimit {
-		tokens = CountTextToken(text, p.modelName)
+		tokens = tokenkit.Count(p.modelName, text)
 		if tokens < 1 {
 			tokens = 1
 		}

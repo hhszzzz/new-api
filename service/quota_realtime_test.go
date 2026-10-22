@@ -40,6 +40,10 @@ func (r *realtimeBillingRecorder) Reserve(targetQuota int) error {
 	return nil
 }
 
+func (r *realtimeBillingRecorder) ReserveBeforeSubmit(targetQuota int) error {
+	return r.Reserve(targetQuota)
+}
+
 func TestPreWssConsumeQuotaUsesFrozenAudioRatios(t *testing.T) {
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 	recorder := &realtimeBillingRecorder{preConsumed: 50}

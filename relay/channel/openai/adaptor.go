@@ -98,6 +98,9 @@ func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayIn
 
 func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
 	a.ChannelType = info.ChannelType
+	if info.ChannelType == constant.ChannelTypeAzure {
+		info.VendorToolUsage = azureResponsesToolUsage
+	}
 }
 
 func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {

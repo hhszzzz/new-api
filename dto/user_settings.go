@@ -128,7 +128,9 @@ func (s *RadarAutoEffortSetting) MinIQDeltaOrDefault() float64 {
 
 type UserSetting struct {
 	NotifyType                       string  `json:"notify_type,omitempty"`                          // QuotaWarningType 额度预警类型
+	QuotaWarningEnabled              *bool   `json:"quota_warning_enabled,omitempty"`                // QuotaWarningEnabled 额度预警开关
 	QuotaWarningThreshold            float64 `json:"quota_warning_threshold,omitempty"`              // QuotaWarningThreshold 额度预警阈值
+	ChannelNotifyEnabled             *bool   `json:"channel_notify_enabled,omitempty"`               // ChannelNotifyEnabled 是否接收自动禁用/启用渠道通知
 	WebhookUrl                       string  `json:"webhook_url,omitempty"`                          // WebhookUrl webhook地址
 	WebhookSecret                    string  `json:"webhook_secret,omitempty"`                       // WebhookSecret webhook密钥
 	NotificationEmail                string  `json:"notification_email,omitempty"`                   // NotificationEmail 通知邮箱地址

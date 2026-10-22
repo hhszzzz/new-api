@@ -53,6 +53,8 @@ func relayHandler(c *gin.Context, info *relaycommon.RelayInfo) *hosttypes.NewAPI
 		err = relay.ResponsesHelper(c, info)
 	case relayconstant.RelayModeAlphaSearch:
 		err = relay.AlphaSearchHelper(c, info)
+	case relayconstant.RelayModeToolsSearch, relayconstant.RelayModeToolsFetch:
+		err = relay.DeepSeekToolsHelper(c, info)
 	default:
 		err = relay.TextHelper(c, info)
 	}
@@ -188,6 +190,12 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 	}()
 
+	generalSettings := operation_setting.GetGeneralSetting()
+	if relayFormat == types.RelayFormatClaude && relayInfo.IsStream && generalSettings.PingIntervalEnabled {
+		stopKeepAlive := helper.StartStreamKeepAlive(c, time.Duration(generalSettings.PingIntervalSeconds)*time.Second)
+		defer stopKeepAlive()
+	}
+
 	if newAPIError = relay.PrepareRequestBilling(c, relayInfo); newAPIError != nil {
 		return
 	}
@@ -306,7 +314,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	useChannel := c.GetStringSlice("use_channel")
 	if len(useChannel) > 1 {
-		retryLogStr := fmt.Sprintf("重试：%s", strings.Trim(strings.Join(strings.Fields(fmt.Sprint(useChannel)), "->"), "[]"))
+		retryLogStr := common.LogText("retry: %s", strings.Trim(strings.Join(strings.Fields(fmt.Sprint(useChannel)), "->"), "[]"))
 		logger.LogInfo(c, retryLogStr)
 	}
 }
@@ -337,14 +345,17 @@ func writeRelayErrorResponse(c *gin.Context, relayFormat types.RelayFormat, apiE
 	switch relayFormat {
 	case types.RelayFormatOpenAIRealtime:
 		publicError := relaycommon.SanitizeUserModelRouteOpenAIError(apiError.ToOpenAIError(), privacyInfo)
+		publicError.Message = common.MaskSensitiveInfo(publicError.Message, common.UpstreamAddresses(c)...)
 		helper.WssError(c, ws, publicError)
 	case types.RelayFormatClaude:
 		publicError := relaycommon.SanitizeUserModelRouteClaudeError(apiError.ToClaudeError(), privacyInfo)
+		publicError.Message = common.MaskSensitiveInfo(publicError.Message, common.UpstreamAddresses(c)...)
 		// 上下文上限拦截模拟真实 Anthropic API 的流前校验：即便请求带 stream 也以
 		// HTTP 400 JSON 返回（客户端在流开始前识别 prompt-too-long 并触发本地压缩）；
 		// SSE 事件通道对这类错误的识别不可靠。
 		if apiError.GetErrorCode() != hosttypes.ErrorCodeContextLimitExceeded &&
 			(c.Writer.Written() || privacyInfo != nil && privacyInfo.IsStream) {
+			markRelayStreamFailure(c, apiError, privacyInfo, publicError.Type)
 			helper.SetEventStreamHeaders(c)
 			if err := helper.ClaudeData(c, dto.ClaudeResponse{Type: "error", Error: publicError}); err != nil {
 				logger.LogError(c, "failed to write Messages stream error: "+err.Error())
@@ -357,10 +368,12 @@ func writeRelayErrorResponse(c *gin.Context, relayFormat types.RelayFormat, apiE
 		})
 	case types.RelayFormatOpenAIResponses:
 		publicError := relaycommon.SanitizeUserModelRouteOpenAIError(apiError.ToOpenAIError(), privacyInfo)
+		publicError.Message = common.MaskSensitiveInfo(publicError.Message, common.UpstreamAddresses(c)...)
 		// 超限拦截按上游的流内失败事件（response.failed）下发：Codex 只有在流内
 		// 事件里才能识别 error.code=context_length_exceeded 并把本轮判定为上下文
 		// 超限（下一次请求前自动压缩）；裸 error 事件与预流式 400 都不被识别。
 		if apiError.GetErrorCode() == hosttypes.ErrorCodeContextLimitExceeded && privacyInfo != nil && privacyInfo.IsStream {
+			markRelayStreamFailure(c, apiError, privacyInfo, publicError.Type)
 			helper.SetEventStreamHeaders(c)
 			if err := helper.ResponsesFailedData(c, "resp_"+c.GetString(common.RequestIdKey), publicError); err != nil {
 				logger.LogError(c, "failed to write Responses context-limit event: "+err.Error())
@@ -368,6 +381,7 @@ func writeRelayErrorResponse(c *gin.Context, relayFormat types.RelayFormat, apiE
 			return
 		}
 		if c.Writer.Written() || privacyInfo != nil && privacyInfo.IsStream {
+			markRelayStreamFailure(c, apiError, privacyInfo, publicError.Type)
 			helper.SetEventStreamHeaders(c)
 			if err := helper.ResponsesErrorData(c, publicError); err != nil {
 				logger.LogError(c, "failed to write Responses stream error: "+err.Error())
@@ -377,6 +391,7 @@ func writeRelayErrorResponse(c *gin.Context, relayFormat types.RelayFormat, apiE
 		c.JSON(apiError.StatusCode, gin.H{"error": publicError})
 	default:
 		publicError := relaycommon.SanitizeUserModelRouteOpenAIError(apiError.ToOpenAIError(), privacyInfo)
+		publicError.Message = common.MaskSensitiveInfo(publicError.Message, common.UpstreamAddresses(c)...)
 		// 超限拦截模拟真实 OpenAI API 的流前校验：即便请求带 stream 也以 HTTP 400
 		// JSON 返回（客户端在流开始前识别 context_length_exceeded）。
 		if apiError.GetErrorCode() == hosttypes.ErrorCodeContextLimitExceeded {
@@ -384,14 +399,40 @@ func writeRelayErrorResponse(c *gin.Context, relayFormat types.RelayFormat, apiE
 			return
 		}
 		if c.Writer.Written() || privacyInfo != nil && privacyInfo.IsStream {
+			streamAlreadyStarted := c.Writer.Written()
+			markRelayStreamFailure(c, apiError, privacyInfo, publicError.Type)
 			helper.SetEventStreamHeaders(c)
 			if err := helper.ObjectData(c, gin.H{"error": publicError}); err != nil {
 				logger.LogError(c, "failed to write Chat Completions stream error: "+err.Error())
+			} else if streamAlreadyStarted {
+				if err := helper.Done(c); err != nil {
+					logger.LogError(c, "failed to terminate Chat Completions error stream: "+err.Error())
+				}
 			}
 			return
 		}
 		c.JSON(apiError.StatusCode, gin.H{"error": publicError})
 	}
+}
+
+func markRelayStreamFailure(c *gin.Context, apiError *hosttypes.NewAPIError, privacyInfo *relaycommon.RelayInfo, errorType string) {
+	if c == nil || apiError == nil {
+		return
+	}
+	status, _ := common.GetContextKeyType[*relaycommon.StreamStatus](c, constant.ContextKeyResponseStreamStatus)
+	if status == nil {
+		if privacyInfo != nil {
+			status = privacyInfo.StreamStatus
+		}
+		if status == nil {
+			status = relaycommon.NewStreamStatus()
+		}
+	}
+	if privacyInfo != nil {
+		privacyInfo.StreamStatus = status
+	}
+	common.SetContextKey(c, constant.ContextKeyResponseStreamStatus, status)
+	status.MarkFailed(string(apiError.GetErrorCode()), errorType, apiError.StatusCode)
 }
 
 // CountClaudeTokens implements Anthropic's token-counting utility endpoint.
@@ -610,7 +651,7 @@ func RelayMidjourney(c *gin.Context) {
 			"code":        mjErr.Code,
 		})
 		channelId := c.GetInt("channel_id")
-		logger.LogError(c, fmt.Sprintf("relay error (channel #%d, status code %d): %s", channelId, statusCode, fmt.Sprintf("%s %s", mjErr.Description, mjErr.Result)))
+		logger.LogError(c, common.LogText("relay error (channel #%d, status code %d): %s", channelId, statusCode, fmt.Sprintf("%s %s", mjErr.Description, mjErr.Result)))
 	}
 }
 
@@ -891,7 +932,7 @@ func executeTaskSubmissionWith(
 
 	useChannel := c.GetStringSlice("use_channel")
 	if len(useChannel) > 1 {
-		retryLogStr := fmt.Sprintf("重试：%s", strings.Trim(strings.Join(strings.Fields(fmt.Sprint(useChannel)), "->"), "[]"))
+		retryLogStr := common.LogText("retry: %s", strings.Trim(strings.Join(strings.Fields(fmt.Sprint(useChannel)), "->"), "[]"))
 		logger.LogInfo(c, retryLogStr)
 	}
 
@@ -983,7 +1024,7 @@ func executeTaskSubmissionWith(
 				task.PrivateData.ResultDiscarded = true
 				insertOmits = append(insertOmits, "data")
 			} else {
-				logger.LogWarn(c, fmt.Sprintf("task plugin route %s %s declares retainResult: false but returned an asynchronous result; retaining task %s", pinned.Route.Method, pinned.Route.Path, task.TaskID))
+				logger.LogWarn(c, common.LogText("task plugin route %s %s declares retainResult: false but returned an asynchronous result; retaining task %s", pinned.Route.Method, pinned.Route.Path, task.TaskID))
 			}
 		}
 	}
@@ -1044,13 +1085,13 @@ func presentTaskSubmission(c *gin.Context, outcome *taskSubmissionOutcome) {
 						c.JSON(http.StatusOK, body)
 						return
 					} else {
-						logger.LogError(c, "task plugin native submit presenter failed: "+callErr.Error())
+						logger.LogError(c, common.LogText("task plugin native submit presenter failed: %s", callErr.Error()))
 					}
 				} else {
-					logger.LogError(c, "encode task plugin native submit view failed: "+valueErr.Error())
+					logger.LogError(c, common.LogText("encode task plugin native submit view failed: %s", valueErr.Error()))
 				}
 			} else {
-				logger.LogError(c, "build task plugin native submit view failed: "+err.Error())
+				logger.LogError(c, common.LogText("build task plugin native submit view failed: %s", err.Error()))
 			}
 		}
 	}

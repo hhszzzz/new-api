@@ -3,12 +3,15 @@ package relay
 import (
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -110,7 +113,7 @@ func TestSanitizeTaskErrorForPublicKeepsInternalErrorAndHidesPublicRouting(t *te
 		},
 	}
 
-	publicError := sanitizeTaskErrorForPublic(taskErr, info)
+	publicError := sanitizeTaskErrorForPublic(nil, taskErr, info)
 	publicJSON, err := common.Marshal(publicError)
 	require.NoError(t, err)
 	assert.NotContains(t, string(publicJSON), upstreamModel)
@@ -143,14 +146,17 @@ func TestSanitizeTaskErrorForPublicMasksSensitiveUpstreamURLAfterModelRedaction(
 		},
 	}
 
-	publicError := sanitizeTaskErrorForPublic(taskErr, info)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, "https://internal.example")
+	common.SetContextKey(c, constant.ContextKeyChannelSetting, dto.ChannelSettings{Proxy: "https://metadata.internal"})
+	publicError := sanitizeTaskErrorForPublic(c, taskErr, info)
 
 	assert.NotContains(t, publicError.Message, "SECRET")
 	assert.NotContains(t, publicError.Message, "internal.example")
 	assert.NotContains(t, publicError.Message, "v1/tasks")
 	assert.NotContains(t, publicError.Message, "Provider-Internal-Video-Model")
 	assert.Contains(t, publicError.Message, originModel)
-	assert.Contains(t, publicError.Message, "https://***.example/***")
+	assert.Contains(t, publicError.Message, "https://***.example/***/***")
 	assert.Contains(t, publicError.Error.Error(), "SECRET")
 	publicJSON, err := common.Marshal(publicError)
 	require.NoError(t, err)

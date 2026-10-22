@@ -3,6 +3,7 @@ package dto
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"strings"
 
@@ -138,6 +139,9 @@ type ClaudeMessageSource struct {
 type ClaudeMessage struct {
 	Role    string `json:"role"`
 	Content any    `json:"content"`
+	// OutputConfig carries per-message effort (beta): an effort-only system
+	// message has empty content and the new level in output_config.effort.
+	OutputConfig json.RawMessage `json:"output_config,omitempty"`
 	// ProviderResponsesOutput is gateway-owned state for replaying an assistant
 	// turn to the same Responses channel. It is never exposed on the Anthropic
 	// wire format and must only be populated after the host verifies session,
@@ -250,6 +254,7 @@ type ClaudeRequest struct {
 	TopK              *int            `json:"top_k,omitempty"`
 	Stream            *bool           `json:"stream,omitempty"`
 	Tools             any             `json:"tools,omitempty"`
+	Safeguards        json.RawMessage `json:"safeguards,omitempty"`
 	ContextManagement json.RawMessage `json:"context_management,omitempty"`
 	OutputConfig      json.RawMessage `json:"output_config,omitempty"`
 	OutputFormat      json.RawMessage `json:"output_format,omitempty"`
@@ -496,6 +501,18 @@ func ProcessTools(tools []any) ([]*Tool, []*ClaudeWebSearchTool) {
 			normalTools = append(normalTools, &t)
 		case ClaudeWebSearchTool:
 			webSearchTools = append(webSearchTools, &t)
+		case map[string]any:
+			// Tools decoded from client JSON arrive as maps.
+			toolType, _ := t["type"].(string)
+			if strings.HasPrefix(toolType, "web_search") {
+				if webSearchTool, err := kitutil.Any2Type[ClaudeWebSearchTool](t); err == nil {
+					webSearchTools = append(webSearchTools, &webSearchTool)
+				}
+				continue
+			}
+			if normalTool, err := kitutil.Any2Type[Tool](t); err == nil {
+				normalTools = append(normalTools, &normalTool)
+			}
 		default:
 			// 未知类型，跳过
 			continue
@@ -513,6 +530,50 @@ type Thinking struct {
 	// the visible summary that was default on Opus 4.6; "omitted" (default on
 	// 4.7) suppresses it. Pass-through field from upstream Anthropic API.
 	Display string `json:"display,omitempty"`
+	// BlockBinding carries the client's preserved-thinking controls, such as
+	// {"prefix_mismatch_behavior":"drop_block"} (beta
+	// thinking-binding-controls-2026-08-01). It is forwarded verbatim and
+	// never added by the gateway.
+	BlockBinding json.RawMessage `json:"block_binding,omitempty"`
+
+	// Extra keeps thinking fields this struct does not model yet, so a native
+	// Claude request forwards them instead of silently dropping them. It is
+	// exported so common.DeepCopy copies it; MarshalJSON writes it back.
+	Extra map[string]json.RawMessage `json:"-"`
+}
+
+func (c *Thinking) UnmarshalJSON(data []byte) error {
+	type thinkingFields Thinking
+	var fields thinkingFields
+	if err := kitutil.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	var all map[string]json.RawMessage
+	if err := kitutil.Unmarshal(data, &all); err != nil {
+		return err
+	}
+	for _, known := range []string{"type", "budget_tokens", "display", "block_binding"} {
+		delete(all, known)
+	}
+	*c = Thinking(fields)
+	if len(all) > 0 {
+		c.Extra = all
+	}
+	return nil
+}
+
+func (c Thinking) MarshalJSON() ([]byte, error) {
+	type thinkingFields Thinking
+	data, err := kitutil.Marshal(thinkingFields(c))
+	if err != nil || len(c.Extra) == 0 {
+		return data, err
+	}
+	merged := make(map[string]json.RawMessage, len(c.Extra)+4)
+	maps.Copy(merged, c.Extra)
+	if err := kitutil.Unmarshal(data, &merged); err != nil {
+		return nil, err
+	}
+	return kitutil.Marshal(merged)
 }
 
 func (c *Thinking) GetBudgetTokens() int {

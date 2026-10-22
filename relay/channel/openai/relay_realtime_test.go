@@ -55,6 +55,10 @@ func (r *realtimeReserveRecorder) Reserve(targetQuota int) error {
 	return nil
 }
 
+func (r *realtimeReserveRecorder) ReserveBeforeSubmit(targetQuota int) error {
+	return r.Reserve(targetQuota)
+}
+
 func TestPreConsumeUsageReservesCumulativeQuotaWithoutSettling(t *testing.T) {
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 	recorder := &realtimeReserveRecorder{}

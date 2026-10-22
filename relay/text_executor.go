@@ -442,7 +442,7 @@ func settleTextUsage(c *gin.Context, info *relaycommon.RelayInfo, usage *dto.Usa
 	containsAudio := usage.CompletionTokenDetails.AudioTokens > 0 || usage.PromptTokensDetails.AudioTokens > 0
 	audioPricing := ratio_setting.ContainsAudioRatio(info.OriginModelName) || ratio_setting.ContainsAudioCompletionRatio(info.OriginModelName)
 	if containsAudio && audioPricing || info.RelayFormat == types.RelayFormatOpenAIResponses && strings.HasPrefix(info.OriginModelName, "gpt-4o-audio") {
-		service.PostAudioConsumeQuota(c, info, usage, "")
+		service.PostAudioConsumeQuota(c, info, usage, nil)
 	} else {
 		service.PostTextConsumeQuota(c, info, usage, nil)
 	}

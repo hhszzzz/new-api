@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"cmp"
 	"fmt"
 	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
@@ -133,7 +134,7 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 				data = patchClaudeMessageDeltaUsageData(data, buildMessageDeltaPatchUsage(&claudeResponse, claudeInfo))
 			}
 		}
-		countClaudeStreamBillableTools(c, info, &claudeResponse)
+		countClaudeStreamBillableTools(info, &claudeResponse)
 		if info.PublicResponseModelName() != "" {
 			redacted, redactErr := relaycommon.RedactUserModelRouteJSON([]byte(data), info)
 			if redactErr != nil {
@@ -159,7 +160,7 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 			return nil
 		}
 
-		countClaudeStreamBillableTools(c, info, &claudeResponse)
+		countClaudeStreamBillableTools(info, &claudeResponse)
 
 		if response == nil {
 			return nil
@@ -188,7 +189,7 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 			}
 			protocolstate.SetUpstreamResponseID(c, claudeResponse.Message.Id)
 		}
-		countClaudeStreamBillableTools(c, info, &claudeResponse)
+		countClaudeStreamBillableTools(info, &claudeResponse)
 		results, convertErr := service.ConvertStreamResponseChunk(c, info, state, &claudeResponse)
 		if convertErr != nil {
 			return hosttypes.NewError(convertErr, hosttypes.ErrorCodeBadResponse)
@@ -214,7 +215,7 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 			return hosttypes.NewError(err, hosttypes.ErrorCodeBadResponseBody)
 		}
 		FormatClaudeResponseInfo(&claudeResponse, nil, claudeInfo)
-		countClaudeStreamBillableTools(c, info, &claudeResponse)
+		countClaudeStreamBillableTools(info, &claudeResponse)
 		if sendErr := sendGeminiStreamResults(c, results); sendErr != nil {
 			return sendErr
 		}
@@ -277,20 +278,53 @@ func sendGeminiStreamResults(c *gin.Context, results []relayconvert.ResponseResu
 	return nil
 }
 
-func countClaudeStreamBillableTools(c *gin.Context, info *relaycommon.RelayInfo, claudeResponse *dto.ClaudeResponse) {
+func countClaudeStreamBillableTools(info *relaycommon.RelayInfo, claudeResponse *dto.ClaudeResponse) {
 	if claudeResponse == nil {
 		return
 	}
-	if claudeResponse.Type == "content_block_start" &&
-		claudeResponse.ContentBlock != nil &&
-		claudeResponse.ContentBlock.Type == "tool_use" {
-		info.CountBillableToolCall(dto.BuildInCallToolUse, claudeResponse.ContentBlock.Name)
+	if claudeResponse.Type == "content_block_start" && claudeResponse.ContentBlock != nil {
+		countClaudeContentBlockTools(info, claudeResponse.ContentBlock)
 	}
-	if claudeResponse.Type == "message_delta" &&
-		claudeResponse.Usage != nil &&
-		claudeResponse.Usage.ServerToolUse != nil &&
-		claudeResponse.Usage.ServerToolUse.WebSearchRequests > 0 {
-		c.Set("claude_web_search_requests", claudeResponse.Usage.ServerToolUse.WebSearchRequests)
+	if claudeResponse.Type == "message_delta" && claudeResponse.Usage != nil {
+		// message_delta usage is cumulative, so the last report wins.
+		recordClaudeServerToolUse(info, claudeResponse.Usage.ServerToolUse)
+	}
+}
+
+// countClaudeContentBlockTools counts the billable tool calls of one content
+// block. On a channel whose upstream prices search itself
+// (WebSearchBillingKey), every web_search_tool_result that carries results
+// bills one search: usage.server_tool_use replaces that count when reported,
+// and it stands when a stream ends before message_delta.
+func countClaudeContentBlockTools(info *relaycommon.RelayInfo, block *dto.ClaudeMediaMessage) {
+	switch block.Type {
+	case "tool_use":
+		info.CountBillableToolCall(dto.BuildInCallToolUse, block.Name)
+	case "web_search_tool_result":
+		if _, delivered := block.Content.([]any); delivered && info.WebSearchBillingKey != "" {
+			info.CountBillableToolCall(dto.BuildInCallWebSearchCall, "")
+		}
+	}
+}
+
+// recordClaudeServerToolUse bills the server tool requests Anthropic reports
+// in usage.server_tool_use. Searches and fetches use the channel's own keys
+// when its adaptor sets them; otherwise web_fetch, code_execution, and
+// tool_search have no built-in price and bill only once an operator prices
+// them.
+func recordClaudeServerToolUse(info *relaycommon.RelayInfo, serverToolUse *dto.ClaudeServerToolUse) {
+	if info == nil || serverToolUse == nil {
+		return
+	}
+	for name, count := range map[string]int{
+		cmp.Or(info.WebSearchBillingKey, dto.BuildInToolWebSearch): serverToolUse.WebSearchRequests,
+		cmp.Or(info.WebFetchBillingKey, "web_fetch"):               serverToolUse.WebFetchRequests,
+		"code_execution": serverToolUse.CodeExecutionRequests,
+		"tool_search":    serverToolUse.ToolSearchRequests,
+	} {
+		if count > 0 {
+			info.SetBillableToolCount(name, count)
+		}
 	}
 }
 
@@ -321,20 +355,22 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 		claudeInfo.Usage = usage
 		return nil
 	}
-	if claudeInfo.Usage.PromptTokens == 0 {
-		//上游出错
-	}
-	if claudeInfo.Usage.CompletionTokens == 0 || !claudeInfo.Done {
+	missingInputUsage := buildOpenAIStyleUsageFromClaudeUsage(claudeInfo.Usage).PromptTokens == 0
+	missingOutputUsage := claudeInfo.Usage.CompletionTokens == 0 && claudeInfo.ResponseText.Len() > 0
+	if missingInputUsage || missingOutputUsage || !claudeInfo.Done {
 		if common.DebugEnabled {
-			common.SysLog("claude response usage is not complete, maybe upstream error")
+			common.SysLog(common.LogText("claude response usage is not complete, maybe upstream error"))
 		}
 		// 只补缺失字段，不整份覆盖——保留 message_start 已拿到的 cache 字段
 		fallback := service.ResponseText2Usage(c, claudeInfo.ResponseText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
-		if claudeInfo.Usage.CompletionTokens == 0 ||
+		// Each tool_use block costs about 40 output tokens beyond its name and JSON
+		// input (measured on Claude Haiku 4.5 and Sonnet 5 agent turns).
+		fallback.CompletionTokens += claudeInfo.ToolUseCount * 40
+		if missingOutputUsage ||
 			(!claudeInfo.Done && fallback.CompletionTokens > claudeInfo.Usage.CompletionTokens) {
 			claudeInfo.Usage.CompletionTokens = fallback.CompletionTokens
 		}
-		if claudeInfo.Usage.PromptTokens == 0 {
+		if missingInputUsage {
 			claudeInfo.Usage.PromptTokens = fallback.PromptTokens
 		}
 		claudeInfo.Usage.TotalTokens = claudeInfo.Usage.PromptTokens + claudeInfo.Usage.CompletionTokens
@@ -556,14 +592,11 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		}
 	}
 
-	if claudeResponse.Usage != nil && claudeResponse.Usage.ServerToolUse != nil && claudeResponse.Usage.ServerToolUse.WebSearchRequests > 0 {
-		c.Set("claude_web_search_requests", claudeResponse.Usage.ServerToolUse.WebSearchRequests)
+	for i := range claudeResponse.Content {
+		countClaudeContentBlockTools(info, &claudeResponse.Content[i])
 	}
-
-	for _, block := range claudeResponse.Content {
-		if block.Type == "tool_use" {
-			info.CountBillableToolCall(dto.BuildInCallToolUse, block.Name)
-		}
+	if claudeResponse.Usage != nil {
+		recordClaudeServerToolUse(info, claudeResponse.Usage.ServerToolUse)
 	}
 
 	if err := service.IOCopyBytesGracefully(c, httpResp, responseData); err != nil {

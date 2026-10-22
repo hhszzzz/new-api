@@ -64,6 +64,6 @@ func WssHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *hostty
 		service.ResetStatusCode(newAPIError, statusCodeMappingStr)
 		return newAPIError
 	}
-	service.PostWssConsumeQuota(c, info, usage.(*dto.RealtimeUsage), "")
+	service.PostWssConsumeQuota(c, info, usage.(*dto.RealtimeUsage), nil)
 	return nil
 }

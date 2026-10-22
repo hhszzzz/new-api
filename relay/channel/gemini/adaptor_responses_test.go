@@ -2,12 +2,14 @@ package gemini
 
 import (
 	hostdto "github.com/QuantumNous/new-api/dto"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -276,4 +278,27 @@ func mustGeminiRawMessage(t *testing.T, value any) []byte {
 	raw, err := common.Marshal(value)
 	require.NoError(t, err)
 	return raw
+}
+
+// Gemini embeds plain text only. A content part fails the request with a 400
+// that skips retries, because the request estimate billed for this channel
+// counts parts Gemini would never receive.
+func TestConvertEmbeddingRequestRejectsContentParts(t *testing.T) {
+	imagePart := map[string]any{"type": "image_url", "image_url": map[string]any{"url": "https://example.com/cat.png"}}
+	textPart := map[string]any{"type": "text", "text": "a cat"}
+	for _, input := range []any{[]any{"a cat", imagePart}, []any{textPart}} {
+		info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "gemini-embedding-001"}}
+		_, err := (&Adaptor{}).ConvertEmbeddingRequest(nil, info, dto.EmbeddingRequest{Model: "gemini-embedding-001", Input: input})
+		var apiErr *hosttypes.NewAPIError
+		require.ErrorAs(t, err, &apiErr)
+		assert.Equal(t, http.StatusBadRequest, apiErr.StatusCode)
+		assert.True(t, hosttypes.IsSkipRetryError(apiErr))
+	}
+
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "gemini-embedding-001"}}
+	got, err := (&Adaptor{}).ConvertEmbeddingRequest(nil, info, dto.EmbeddingRequest{Model: "gemini-embedding-001", Input: []any{"a cat", "a dog"}})
+	require.NoError(t, err)
+	wire, err := common.Marshal(got)
+	require.NoError(t, err)
+	assert.JSONEq(t, `["a cat","a dog"]`, gjson.GetBytes(wire, "requests.#.content.parts.0.text").Raw)
 }

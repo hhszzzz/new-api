@@ -18,8 +18,9 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
 import { getRouteApi } from '@tanstack/react-router'
-import type { OnChangeFn, Row, SortingState } from '@tanstack/react-table'
+import type { ColumnDef, OnChangeFn, Row, SortingState } from '@tanstack/react-table'
 import { AlertTriangle, Eye, EyeOff, Pencil, RefreshCw } from 'lucide-react'
+import { createPortal } from 'react-dom'
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -29,7 +30,7 @@ import {
   DataTablePage,
   useDebouncedColumnFilter,
   useDataTable,
-  usePersistedTableSorting,
+  useDataTableViewMode,
 } from '@/components/data-table'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -41,11 +42,16 @@ import {
 } from '@/components/ui/tooltip'
 import { useMediaQuery } from '@/hooks'
 import { useTableUrlState } from '@/hooks/use-table-url-state'
+import { hasPermission } from '@/lib/admin-permissions'
 import { getLobeIcon } from '@/lib/lobe-icon'
 import { requireServerSuccess } from '@/lib/server-error-message'
+import { cn } from '@/lib/utils'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { getChannels, searchChannels, getGroups } from '../api'
 import { DEFAULT_PAGE_SIZE, CHANNEL_STATUS_OPTIONS } from '../constants'
+import { useChannelPriorityDrag } from '../hooks/use-channel-priority-drag'
+import { useChannelPriorityOrder } from '../hooks/use-channel-priority-order'
 import {
   channelsQueryKeys,
   aggregateChannelsByAggregate,
@@ -59,6 +65,13 @@ import {
 } from '../lib'
 import type { Channel, ChannelBatchFilter, ChannelSortBy } from '../types'
 import { ChannelCard } from './channel-card'
+import { ChannelPriorityContext } from './channel-priority-context'
+import {
+  ChannelPriorityHandle,
+  ChannelPriorityModeToggle,
+  ChannelPriorityStatus,
+} from './channel-priority-controls'
+import { ChannelPriorityDropHint } from './channel-priority-drop-hint'
 import { useChannelsColumns } from './channels-columns'
 import { useChannels } from './channels-provider'
 import { DataTableBulkActions } from './data-table-bulk-actions'
@@ -91,20 +104,17 @@ export function ChannelsTable() {
   const { t } = useTranslation()
   const {
     enableTagMode,
-    idSort,
+    sorting,
+    setSorting,
     batchMode,
     sensitiveVisible,
     setSensitiveVisible,
+    priorityActionContainer,
   } = useChannels()
   const isMobile = useMediaQuery('(max-width: 640px)')
+  const idSort = sorting[0]?.id === 'id'
   const defaultPageSize = isMobile ? 10 : DEFAULT_PAGE_SIZE
   const [showFilteredBatchEdit, setShowFilteredBatchEdit] = useState(false)
-
-  // Table state
-  const [sorting, setSorting] = usePersistedTableSorting(
-    CHANNELS_TABLE_STATE_STORAGE_KEY,
-    CHANNEL_SORTABLE_COLUMNS
-  )
 
   // URL state management
   const {
@@ -203,13 +213,10 @@ export function ChannelsTable() {
   }, [sorting])
 
   const handleSortingChange: OnChangeFn<SortingState> = (updater) => {
-    setSorting((previous) => {
-      const next = typeof updater === 'function' ? updater(previous) : updater
-      if (pagination.pageIndex > 0) {
-        onPaginationChange({ ...pagination, pageIndex: 0 })
-      }
-      return next
-    })
+    setSorting(updater)
+    if (pagination.pageIndex > 0) {
+      onPaginationChange({ ...pagination, pageIndex: 0 })
+    }
   }
 
   // Fetch groups for filter
@@ -323,6 +330,60 @@ export function ChannelsTable() {
 
   const totalCount = data?.data?.total || 0
   const typeCounts = data?.data?.type_counts
+  const [viewMode, setViewMode] = useDataTableViewMode({
+    storageKey: CHANNELS_VIEW_MODE_STORAGE_KEY,
+    defaultMode: 'card',
+  })
+  const user = useAuthStore((state) => state.auth.user)
+  const sortField = (sorting[0]?.id ?? (idSort ? 'id' : 'priority')) as ChannelSortBy
+  const sortDesc = sorting[0]?.desc ?? true
+  const [reorderEnabled, setReorderEnabled] = useState(false)
+  const canReorder =
+    sortField === 'priority' &&
+    !enableTagMode &&
+    hasPermission(user, 'channel', 'write')
+  const reorderActive = reorderEnabled && canReorder
+  useEffect(() => {
+    // eslint-disable-next-line react/set-state-in-effect -- Revoke reorder mode when permission or sort scope disallows it.
+    if (!canReorder) setReorderEnabled(false)
+  }, [canReorder])
+  const reorderScope = JSON.stringify([
+    viewMode,
+    reorderActive,
+    sorting,
+    idSort,
+    enableTagMode,
+    columnFilters,
+    globalFilter,
+    pagination,
+    channels.map((channel) => [channel.id, channel.priority]),
+  ])
+  const priorityOrder = useChannelPriorityOrder({
+    channels,
+    desc: sortDesc,
+    scope: reorderScope,
+    enabled: reorderActive,
+  })
+  const drag = useChannelPriorityDrag({
+    items: channels,
+    desc: sortDesc,
+    enabled: reorderActive && !priorityOrder.saving && !isFetching,
+    scope: reorderScope,
+    begin: priorityOrder.begin,
+    select: priorityOrder.select,
+    commit: priorityOrder.commit,
+    cancel: priorityOrder.cancel,
+    previewStore: priorityOrder.previewStore,
+  })
+  let dragReason: 'sort' | 'tag' | 'permission' | 'busy' | null = null
+  if (sortField !== 'priority') dragReason = 'sort'
+  else if (enableTagMode) dragReason = 'tag'
+  else if (!hasPermission(user, 'channel', 'write')) dragReason = 'permission'
+  else if (priorityOrder.saving || isFetching) dragReason = 'busy'
+  const dragControls = useMemo(
+    () => ({ reason: dragReason, start: drag.start, keyDown: drag.keyDown }),
+    [dragReason, drag.start, drag.keyDown]
+  )
 
   useEffect(() => {
     const now = Date.now() / 1000
@@ -341,12 +402,33 @@ export function ChannelsTable() {
     return () => window.clearTimeout(timer)
   }, [data, refetch])
 
-  // Columns configuration
-  const columns = useChannelsColumns({ enableSelection: batchMode })
+  // Reuse the same handle cell in the table and channel cards.
+  const baseColumns = useChannelsColumns({ enableSelection: batchMode })
+  const columns = useMemo<ColumnDef<Channel>[]>(
+    () =>
+      reorderActive
+        ? [
+            {
+              id: 'reorder',
+              header: '',
+              size: 40,
+              minSize: 40,
+              maxSize: 40,
+              enableSorting: false,
+              enableHiding: false,
+              enableResizing: false,
+              meta: { mobileHidden: true },
+              cell: ({ row }) => <ChannelPriorityHandle id={row.original.id} />,
+            },
+            ...baseColumns,
+          ]
+        : baseColumns,
+    [baseColumns, reorderActive]
+  )
 
   // React Table instance
   const { table } = useDataTable({
-    data: channels,
+    data: priorityOrder.items,
     columns,
     tableStateStorageKey: CHANNELS_TABLE_STATE_STORAGE_KEY,
     totalCount,
@@ -479,10 +561,17 @@ export function ChannelsTable() {
         enableCardView
         viewModeStorageKey={CHANNELS_VIEW_MODE_STORAGE_KEY}
         renderCard={(row, { isSelected }) => (
-          <ChannelCard row={row} isSelected={isSelected} />
+          <ChannelCard
+            row={row}
+            isSelected={isSelected}
+            reorderEnabled={reorderActive}
+          />
         )}
         cardGridClassName='grid grid-cols-1 gap-3 sm:gap-4 lg:grid-cols-3'
+        viewMode={viewMode}
+        onViewModeChange={setViewMode}
         applyHeaderSize
+        afterTable={<ChannelPriorityStatus order={priorityOrder} />}
         toolbarProps={{
           collapsibleOnMobile: true,
           searchPlaceholder: t('Filter by name, ID, or key...'),
@@ -558,6 +647,26 @@ export function ChannelsTable() {
                   {sensitiveVisible ? t('Hide') : t('Show')}
                 </TooltipContent>
               </Tooltip>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      variant='ghost'
+                      size='icon'
+                      onClick={() => void refetch()}
+                      aria-label={t('Refresh')}
+                      aria-busy={isFetching}
+                      className='text-muted-foreground hover:text-foreground size-8'
+                    />
+                  }
+                >
+                  <RefreshCw
+                    aria-hidden
+                    className={cn(isFetching && 'animate-spin')}
+                  />
+                </TooltipTrigger>
+                <TooltipContent>{t('Refresh')}</TooltipContent>
+              </Tooltip>
             </>
           ),
         }}
@@ -610,25 +719,52 @@ export function ChannelsTable() {
   }
 
   return (
-    <div className='flex h-full min-h-0 flex-col gap-2'>
-      {isError && (
-        <Alert>
-          <AlertTriangle className='h-4 w-4' />
-          <AlertDescription className='flex items-center justify-between gap-3'>
-            <span>{errorMessage}</span>
-            <Button
-              type='button'
-              variant='outline'
-              size='sm'
-              onClick={() => void refetch()}
-            >
-              <RefreshCw className='h-4 w-4' />
-              {t('Retry')}
-            </Button>
-          </AlertDescription>
-        </Alert>
-      )}
-      {tablePage}
-    </div>
+    <ChannelPriorityContext.Provider value={dragControls}>
+      {priorityActionContainer &&
+        createPortal(
+          <ChannelPriorityModeToggle
+            active={reorderActive}
+            viewMode={viewMode}
+            reason={dragReason}
+            onChange={() => setReorderEnabled((value) => !value)}
+          />,
+          priorityActionContainer
+        )}
+      <ChannelPriorityDropHint
+        container={drag.feedbackContainer}
+        order={priorityOrder}
+        channels={channels}
+      />
+      {/* eslint-disable react/refs -- The drag hook supplies its DOM ref and pointer handlers to this root. */}
+      <div
+        ref={drag.root}
+        role='region'
+        aria-label={t('Channels')}
+        {...drag.rootEvents}
+        className='relative h-full min-h-0 data-[priority-dragging=true]:select-none data-[priority-dragging=true]:[&_[data-sortable-id]]:pointer-events-none'
+      >
+        <div className='flex h-full min-h-0 flex-col gap-2'>
+          {isError && (
+            <Alert>
+              <AlertTriangle className='h-4 w-4' />
+              <AlertDescription className='flex items-center justify-between gap-3'>
+                <span>{errorMessage}</span>
+                <Button
+                  type='button'
+                  variant='outline'
+                  size='sm'
+                  onClick={() => void refetch()}
+                >
+                  <RefreshCw className='h-4 w-4' />
+                  {t('Retry')}
+                </Button>
+              </AlertDescription>
+            </Alert>
+          )}
+          {tablePage}
+        </div>
+      </div>
+      {/* eslint-enable react/refs */}
+    </ChannelPriorityContext.Provider>
   )
 }

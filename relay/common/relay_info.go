@@ -183,6 +183,8 @@ type RelayInfo struct {
 	BillingSource string
 	// SubscriptionId is the user_subscriptions.id used when BillingSource == "subscription"
 	SubscriptionId int
+	// SubscriptionPreConsumed is the amount reserved from the subscription for this request.
+	SubscriptionPreConsumed int64
 	// SubscriptionPostDelta is the post-consume delta applied to amount_used (quota units; can be negative).
 	SubscriptionPostDelta int64
 	// SubscriptionPlanTitle is the funding subscription's plan title, used as the
@@ -242,6 +244,27 @@ type RelayInfo struct {
 	FinalRequestRelayFormat types.RelayFormat
 
 	StreamStatus *StreamStatus
+	// VendorToolUsage reads the upstream's own billed tool counts from a raw
+	// response body (non-stream) or the raw terminal stream frame. The channel
+	// adaptor's Init sets it for upstreams whose usage extension names a billed
+	// count; it stays nil for everyone else. Keys are tool-price keys. A zero
+	// value suppresses the protocol items counted under that key, so a vendor
+	// count can supersede web_search_call items billed under a different key.
+	VendorToolUsage func(raw []byte) map[string]int
+	// WebSearchBillingKey overrides the tool-price key of hosted web search:
+	// usage.server_tool_use.web_search_requests and web_search_tool_result
+	// blocks in the Claude handler, and web_search_call items counted by
+	// CountBillableToolCall. Set by a channel adaptor whose upstream bills
+	// search under its own price list; empty keeps the protocol defaults.
+	WebSearchBillingKey string
+	// WebFetchBillingKey overrides the tool-price key of
+	// usage.server_tool_use.web_fetch_requests in the Claude handler, for an
+	// upstream that bills page fetches under its own price list; empty keeps
+	// the protocol default web_fetch.
+	WebFetchBillingKey string
+	// requestInferredToolKey is the tool-price key RecordRequestInferredToolCall
+	// billed for the current channel attempt.
+	requestInferredToolKey string
 	// PerformanceOutputTokens is captured by settlement and sampled once at
 	// the request boundary, independently of billing success or failure.
 	PerformanceOutputTokens      int64
@@ -256,6 +279,9 @@ type RelayInfo struct {
 
 	// convOptions caches the converter settings snapshot (see ConvOptions).
 	convOptions *convmeta.Options
+	// responsesToolState is written by request conversion and read by the
+	// matching response conversion (see ResponsesToolState).
+	responsesToolState *convmeta.ResponsesToolState
 
 	conversionDiagnostics          []types.ConversionDiagnostic
 	conversionDiagnosticKeys       map[conversionDiagnosticKey]struct{}
@@ -498,6 +524,10 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 	info.ParamOverrideAudit = nil
 	info.DifyWorkflowRunID = ""
 	info.DifyWorkflowStatus = ""
+	info.VendorToolUsage = nil
+	info.WebSearchBillingKey = ""
+	info.WebFetchBillingKey = ""
+	info.requestInferredToolKey = ""
 	if info.Request != nil && c != nil && c.Request != nil && c.Request.URL != nil {
 		info.IsStream = info.Request.IsStream(c.Request)
 	}
@@ -990,6 +1020,9 @@ func GenRelayInfo(c *gin.Context, relayFormat types.RelayFormat, request dto.Req
 			return GenRelayInfoAlphaSearch(c, request), nil
 		}
 		return nil, errors.New("request is not a AlphaSearchRequest")
+	case types.RelayFormatDeepSeekTools:
+		info = genBaseRelayInfo(c, request)
+		info.RelayFormat = types.RelayFormatDeepSeekTools
 	case types.RelayFormatTask:
 		info = genBaseRelayInfo(c, nil)
 		info.TaskRelayInfo = &TaskRelayInfo{}
@@ -1195,6 +1228,19 @@ func (info *RelayInfo) EnsureClaudeConvertInfo() *convmeta.ClaudeConvertInfo {
 	return info.ClaudeConvertInfo
 }
 
+func (info *RelayInfo) ResponsesToolState() *convmeta.ResponsesToolState {
+	if info == nil {
+		return nil
+	}
+	return info.responsesToolState
+}
+
+func (info *RelayInfo) SetResponsesToolState(state *convmeta.ResponsesToolState) {
+	if info != nil {
+		info.responsesToolState = state
+	}
+}
+
 func (info *RelayInfo) GetSendResponseCount() int {
 	if info == nil {
 		return 0
@@ -1218,6 +1264,7 @@ func (info *RelayInfo) ConvOptions() *convmeta.Options {
 
 	claudeSettings := model_setting.GetClaudeSettings()
 	geminiSettings := model_setting.GetGeminiSettings()
+	channelType := info.GetChannelType()
 	options := &convmeta.Options{
 		ProviderStateSecret:              common.CryptoSecret,
 		IncludeReasoningEncryptedContent: info != nil && info.GetChannelType() == constant.ChannelTypeCodex,
@@ -1233,6 +1280,11 @@ func (info *RelayInfo) ConvOptions() *convmeta.Options {
 			FunctionCallThoughtSignatureEnabled:   geminiSettings.FunctionCallThoughtSignatureEnabled,
 			SupportsImagine:                       model_setting.IsGeminiModelSupportImagine,
 			SafetySetting:                         model_setting.GetGeminiSafetySetting,
+			// Gemini API v1 has no parametersJsonSchema; v1beta and Vertex AI
+			// accept it.
+			SupportsJSONSchema: func(modelName string) bool {
+				return channelType == constant.ChannelTypeVertexAi || model_setting.GetGeminiVersionSetting(modelName) != "v1"
+			},
 		},
 		OpenRouterDialect:      info != nil && info.GetChannelType() == constant.ChannelTypeOpenRouter,
 		PreserveThinkingSuffix: model_setting.ShouldPreserveThinkingSuffix,
@@ -1466,7 +1518,7 @@ func RemoveDisabledFields(jsonData []byte, channelOtherSettings hostdto.ChannelO
 
 	var data map[string]any
 	if err := common.Unmarshal(jsonData, &data); err != nil {
-		common.SysError("RemoveDisabledFields Unmarshal error :" + err.Error())
+		common.SysError(common.LogText("RemoveDisabledFields Unmarshal error :%s", err.Error()))
 		return jsonData, nil
 	}
 
@@ -1523,7 +1575,7 @@ func RemoveDisabledFields(jsonData []byte, channelOtherSettings hostdto.ChannelO
 
 	jsonDataAfter, err := common.Marshal(data)
 	if err != nil {
-		common.SysError("RemoveDisabledFields Marshal error :" + err.Error())
+		common.SysError(common.LogText("RemoveDisabledFields Marshal error :%s", err.Error()))
 		return jsonData, nil
 	}
 	return jsonDataAfter, nil
@@ -1557,7 +1609,7 @@ func RemoveGeminiDisabledFields(jsonData []byte) ([]byte, error) {
 
 	var data map[string]any
 	if err := common.Unmarshal(jsonData, &data); err != nil {
-		common.SysError("RemoveGeminiDisabledFields Unmarshal error: " + err.Error())
+		common.SysError(common.LogText("RemoveGeminiDisabledFields Unmarshal error: %s", err.Error()))
 		return jsonData, nil
 	}
 
@@ -1586,7 +1638,7 @@ func RemoveGeminiDisabledFields(jsonData []byte) ([]byte, error) {
 
 	jsonDataAfter, err := common.Marshal(data)
 	if err != nil {
-		common.SysError("RemoveGeminiDisabledFields Marshal error: " + err.Error())
+		common.SysError(common.LogText("RemoveGeminiDisabledFields Marshal error: %s", err.Error()))
 		return jsonData, nil
 	}
 	return jsonDataAfter, nil

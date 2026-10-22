@@ -1,10 +1,12 @@
 package helper
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
@@ -20,6 +22,126 @@ import (
 const responsesLastSequenceNumberKey = "responses_last_sequence_number"
 
 const streamWriteMutexKey = "stream_write_mutex"
+
+type streamKeepAliveWriter struct {
+	gin.ResponseWriter
+	mutex       sync.Mutex
+	cancel      context.CancelFunc
+	done        chan struct{}
+	pingContext *gin.Context
+}
+
+func (writer *streamKeepAliveWriter) stop() {
+	writer.cancel()
+	<-writer.done
+}
+
+func (writer *streamKeepAliveWriter) Unwrap() http.ResponseWriter {
+	return writer.ResponseWriter
+}
+
+func (writer *streamKeepAliveWriter) Write(data []byte) (int, error) {
+	writer.stop()
+	return writer.ResponseWriter.Write(data)
+}
+
+func (writer *streamKeepAliveWriter) WriteString(data string) (int, error) {
+	writer.stop()
+	return writer.ResponseWriter.WriteString(data)
+}
+
+func (writer *streamKeepAliveWriter) WriteHeader(status int) {
+	writer.stop()
+	writer.ResponseWriter.WriteHeader(status)
+}
+
+func (writer *streamKeepAliveWriter) WriteHeaderNow() {
+	writer.stop()
+	writer.ResponseWriter.WriteHeaderNow()
+}
+
+func (writer *streamKeepAliveWriter) Flush() {
+	writer.stop()
+	writer.ResponseWriter.Flush()
+}
+
+func (writer *streamKeepAliveWriter) Status() int {
+	writer.mutex.Lock()
+	defer writer.mutex.Unlock()
+	return writer.ResponseWriter.Status()
+}
+
+func (writer *streamKeepAliveWriter) Size() int {
+	writer.mutex.Lock()
+	defer writer.mutex.Unlock()
+	return writer.ResponseWriter.Size()
+}
+
+func (writer *streamKeepAliveWriter) Written() bool {
+	writer.mutex.Lock()
+	defer writer.mutex.Unlock()
+	return writer.ResponseWriter.Written()
+}
+
+func (writer *streamKeepAliveWriter) ping() error {
+	writer.mutex.Lock()
+	defer writer.mutex.Unlock()
+	ExtendWriteDeadline(writer.pingContext)
+	SetEventStreamHeaders(writer.pingContext)
+	return PingData(writer.pingContext)
+}
+
+// StartStreamKeepAlive covers request preparation and retries. StreamScannerHandler
+// takes over pinging once the upstream response is ready.
+func StartStreamKeepAlive(c *gin.Context, interval time.Duration) func() {
+	if previous, ok := c.Writer.(*streamKeepAliveWriter); ok {
+		select {
+		case <-previous.done:
+			c.Writer = previous.ResponseWriter
+		default:
+			return func() {}
+		}
+	}
+	if requestContextDone(c) {
+		return func() {}
+	}
+	if interval <= 0 {
+		interval = DefaultPingInterval
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 120*time.Minute)
+	pingContext := c.Copy()
+	pingContext.Writer = c.Writer
+	writer := &streamKeepAliveWriter{ResponseWriter: c.Writer, cancel: cancel, done: make(chan struct{}), pingContext: pingContext}
+	c.Writer = writer
+	go writer.keepAlive(ctx, interval)
+	return writer.stop
+}
+
+func (writer *streamKeepAliveWriter) keepAlive(ctx context.Context, interval time.Duration) {
+	defer close(writer.done)
+	defer writer.cancel()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			logger.LogDebug(writer.pingContext, "SSE ping goroutine panic recovered: %v", recovered)
+		}
+	}()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if ctx.Err() != nil {
+				return
+			}
+			if err := writer.ping(); err != nil {
+				logger.LogError(writer.pingContext, "SSE ping failed: "+err.Error())
+				return
+			}
+		}
+	}
+}
 
 func EnsureStreamWriteMutex(c *gin.Context) {
 	if c == nil {
@@ -269,7 +391,7 @@ func Done(c *gin.Context) error {
 
 func WssString(c *gin.Context, ws *websocket.Conn, str string) error {
 	if ws == nil {
-		logger.LogError(c, "websocket connection is nil")
+		logger.LogError(c, common.LogText("websocket connection is nil"))
 		return errors.New("websocket connection is nil")
 	}
 	//common.LogInfo(c, fmt.Sprintf("sending message: %s", str))
@@ -282,7 +404,7 @@ func WssObject(c *gin.Context, ws *websocket.Conn, object any) error {
 		return fmt.Errorf("error marshalling object: %w", err)
 	}
 	if ws == nil {
-		logger.LogError(c, "websocket connection is nil")
+		logger.LogError(c, common.LogText("websocket connection is nil"))
 		return errors.New("websocket connection is nil")
 	}
 	//common.LogInfo(c, fmt.Sprintf("sending message: %s", jsonData))

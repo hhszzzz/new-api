@@ -559,7 +559,7 @@ func TestUnifiedProtocolCompactChannelTestUsesSummaryWithoutChargingWallet(t *te
 	var logs []model.Log
 	require.NoError(t, db.Where("type = ?", model.LogTypeConsume).Find(&logs).Error)
 	require.Len(t, logs, 1)
-	assert.Equal(t, "模型测试", logs[0].TokenName)
+	assert.Equal(t, "Model test", logs[0].TokenName)
 	assert.Equal(t, "summary", gjson.Get(logs[0].Other, "admin_info.compaction_mode").String())
 }
 

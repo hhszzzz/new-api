@@ -6,6 +6,7 @@ import (
 	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/QuantumNous/new-api/relay/channel"
@@ -190,6 +191,20 @@ func (a *Adaptor) ConvertRerankRequest(c *gin.Context, relayMode int, request dt
 func (a *Adaptor) ConvertEmbeddingRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.EmbeddingRequest) (any, error) {
 	if request.Input == nil {
 		return nil, errors.New("input is required")
+	}
+	// Gemini embeds text only. The request estimate billed for this channel
+	// counts image, video and text parts, so a part must fail the request
+	// instead of being dropped and charged without reaching Gemini.
+	if items, ok := request.Input.([]any); ok && slices.ContainsFunc(items, func(item any) bool {
+		_, isPart := item.(map[string]any)
+		return isPart
+	}) {
+		return nil, hosttypes.NewErrorWithStatusCode(
+			errors.New("gemini embedding models accept only plain text input; images, videos and other content parts are not supported"),
+			hosttypes.ErrorCodeInvalidRequest,
+			http.StatusBadRequest,
+			hosttypes.ErrOptionWithSkipRetry(),
+		)
 	}
 
 	inputs := request.ParseInput()

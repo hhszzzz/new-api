@@ -673,10 +673,10 @@ func (s *ResponsesToChatStreamState) toolItem(event *dto.ResponsesStreamResponse
 	}
 	switch event.Item.Type {
 	case responsesOutputTypeCustomToolCall:
-		if event.Item.Input != "" {
-			tool.CustomInput = event.Item.Input
+		if len(event.Item.Input) > 0 {
+			tool.CustomInput = dto.ResponsesArgumentsString(event.Item.Input)
 		}
-		if event.Type == responsesEventOutputItemDone || event.Item.Input != "" {
+		if event.Type == responsesEventOutputItemDone || len(event.Item.Input) > 0 {
 			tool.Arguments = toolconv.CustomInputArguments(tool.CustomInput)
 		}
 	case responsesOutputTypeToolSearchCall:
@@ -1238,9 +1238,9 @@ func (a *ResponsesBufferedAccumulator) ProcessEvent(event *dto.ResponsesStreamRe
 				tool.Arguments.Reset()
 				tool.Arguments.WriteString(args)
 			}
-			if event.Item.Type == responsesOutputTypeCustomToolCall && event.Item.Input != "" {
+			if event.Item.Type == responsesOutputTypeCustomToolCall && len(event.Item.Input) > 0 {
 				tool.Arguments.Reset()
-				tool.Arguments.WriteString(event.Item.Input)
+				tool.Arguments.WriteString(dto.ResponsesArgumentsString(event.Item.Input))
 			}
 		}
 	case responsesEventFunctionArgsDelta, responsesEventCustomToolInputDelta:
@@ -1482,7 +1482,7 @@ func (a *ResponsesBufferedAccumulator) bufferedToolOutput(tool *responsesBuffere
 	}
 	if item, ok := a.itemForTool(tool); ok && item.Type == responsesOutputTypeCustomToolCall {
 		output.Type = responsesOutputTypeCustomToolCall
-		output.Input = tool.Arguments.String()
+		output.Input, _ = kitutil.Marshal(tool.Arguments.String())
 		output.Arguments = nil
 	} else if ok && item.Type == responsesOutputTypeToolSearchCall {
 		output.Type = responsesOutputTypeToolSearchCall
@@ -1594,8 +1594,8 @@ func mergeResponsesOutput(buffered dto.ResponsesOutput, terminal dto.ResponsesOu
 	if merged.Namespace == "" {
 		merged.Namespace = buffered.Namespace
 	}
-	if merged.Input == "" {
-		merged.Input = buffered.Input
+	if len(merged.Input) == 0 {
+		merged.Input = append(merged.Input[:0], buffered.Input...)
 	}
 	if merged.Execution == "" {
 		merged.Execution = buffered.Execution

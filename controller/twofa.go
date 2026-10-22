@@ -25,7 +25,7 @@ func Setup2FA(c *gin.Context) {
 	if authorization == nil {
 		return
 	}
-	identity, _ := middleware.GetSessionAuthIdentity(c)
+	identity, _ := middleware.GetStepUpIdentity(c)
 	setup, err := service.StartTwoFASetup(identity, authorization)
 	if err != nil {
 		writeSecurityOperationError(c, err)
@@ -36,7 +36,7 @@ func Setup2FA(c *gin.Context) {
 }
 
 func Enable2FA(c *gin.Context) {
-	identity, ok := middleware.GetSessionAuthIdentity(c)
+	identity, ok := middleware.GetStepUpIdentity(c)
 	if !ok {
 		writeSecurityOperationError(c, service.ErrAuthTokenInvalid)
 		return
@@ -64,7 +64,7 @@ func Disable2FA(c *gin.Context) {
 	if middleware.RequireSecurityProof(c, service.VerificationOperation{Scope: service.VerificationScopeTwoFADisable}) == nil {
 		return
 	}
-	identity, _ := middleware.GetSessionAuthIdentity(c)
+	identity, _ := middleware.GetStepUpIdentity(c)
 	userId := identity.UserID
 	if err := model.DisableTwoFAForSession(identity); err != nil {
 		writeSecurityOperationError(c, err)
@@ -108,7 +108,7 @@ func Get2FAStatus(c *gin.Context) {
 			// 获取剩余备用码数量
 			backupCount, err := model.GetUnusedBackupCodeCount(userId)
 			if err != nil {
-				common.SysLog("获取备用码数量失败: " + err.Error())
+				common.SysLog(common.LogText("failed to count backup codes: %s", err.Error()))
 			} else {
 				status["backup_codes_remaining"] = backupCount
 			}
@@ -127,7 +127,7 @@ func RegenerateBackupCodes(c *gin.Context) {
 	if middleware.RequireSecurityProof(c, service.VerificationOperation{Scope: service.VerificationScopeTwoFABackupCodes}) == nil {
 		return
 	}
-	identity, _ := middleware.GetSessionAuthIdentity(c)
+	identity, _ := middleware.GetStepUpIdentity(c)
 	userId := identity.UserID
 	// 生成新的备用码
 	backupCodes, err := common.GenerateBackupCodes()
@@ -196,7 +196,7 @@ func AdminDisable2FA(c *gin.Context) {
 	// 检查目标用户权限
 	targetUser, err := model.GetUserById(userId, false)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		common.ApiErrorI18n(c, i18n.MsgUserNotExists)
+		common.ApiErrorT(c, "User does not exist")
 		return
 	}
 	if err != nil {
@@ -210,6 +210,10 @@ func AdminDisable2FA(c *gin.Context) {
 			"success": false,
 			"message": common.TranslateMessage(c, i18n.MsgUserNoPermissionHigherLevel),
 		})
+		return
+	}
+	authorization := requireAdminUserProof(c, service.VerificationScopeAdminUserTwoFADisable, service.AdminUserContext{UserID: userId})
+	if authorization == nil {
 		return
 	}
 
@@ -230,10 +234,9 @@ func AdminDisable2FA(c *gin.Context) {
 		return
 	}
 
-	recordManageAuditFor(c, userId, "user.2fa_disable", nil)
-
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": common.TranslateMessage(c, i18n.MsgTwoFAAdminDisabled),
+	recordManageAuditFor(c, userId, "user.2fa_disable", map[string]any{
+		"username":            targetUser.Username,
+		"verification_method": authorization.Method,
 	})
+	common.ApiSuccessT(c, "Two-factor authentication reset", nil)
 }

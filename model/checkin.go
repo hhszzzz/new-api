@@ -1,7 +1,6 @@
 package model
 
 import (
-	"errors"
 	"math/rand"
 	"time"
 
@@ -92,7 +91,7 @@ func EffectiveCheckinPolicy(userId int) (allowed bool, minQuota, maxQuota int, e
 func UserCheckin(userId int) (*Checkin, error) {
 	setting := operation_setting.GetCheckinSetting()
 	if !setting.Enabled {
-		return nil, errors.New("签到功能未启用")
+		return nil, common.NewMessage("Check-in feature is not enabled")
 	}
 	allowed, minQuota, maxQuota, err := EffectiveCheckinPolicy(userId)
 	if err != nil {

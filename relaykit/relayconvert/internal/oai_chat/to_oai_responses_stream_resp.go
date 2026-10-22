@@ -809,10 +809,14 @@ func (s *ChatToResponsesStreamState) startToolCall(tool *chatToResponsesStreamTo
 	tool.OutputIndex = s.nextIndex("tool", tool.ChatIndex)
 	tool.ItemID = responsesSyntheticItemID(toolItemIDPrefix(tool), s.ID, tool.ChatIndex)
 	tool.Added = true
+	item := s.toolOutput(tool, "in_progress")
+	if toolKind(tool) == sharedbridge.ToolKindCustom {
+		item.Input = chatArgumentsRawMessage("")
+	}
 	events := []ChatToResponsesStreamEvent{responsesStreamEvent(responsesEventOutputItemAdded, dto.ResponsesStreamResponse{
 		Type:        responsesEventOutputItemAdded,
 		OutputIndex: intPtr(tool.OutputIndex),
-		Item:        s.toolOutput(tool, "in_progress"),
+		Item:        item,
 	})}
 	if toolKind(tool) == sharedbridge.ToolKindFunction && tool.ArgumentsSent < tool.Arguments.Len() {
 		delta := tool.Arguments.String()[tool.ArgumentsSent:]
@@ -1189,7 +1193,7 @@ func (s *ChatToResponsesStreamState) toolOutput(tool *chatToResponsesStreamTool,
 	switch toolKind(tool) {
 	case sharedbridge.ToolKindCustom:
 		output.Type = "custom_tool_call"
-		output.Input = sharedbridge.DecodeCustomInput(tool.Arguments.String())
+		output.Input = chatArgumentsRawMessage(sharedbridge.DecodeCustomInput(tool.Arguments.String()))
 		output.Arguments = nil
 	case sharedbridge.ToolKindToolSearch:
 		output.Type = "tool_search_call"

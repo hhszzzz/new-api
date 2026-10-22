@@ -2,7 +2,6 @@ package service
 
 import (
 	"crypto/tls"
-	"fmt"
 	hostdto "github.com/QuantumNous/new-api/dto"
 	"net/http"
 	"strings"
@@ -69,15 +68,13 @@ func (s *shardedRoundTripper) RoundTrip(req *http.Request) (*http.Response, erro
 		}
 		logger.LogDebug(
 			req.Context(),
-			fmt.Sprintf(
-				"http transport: host=%s protocol=%s shard=%d/%d policy=%s negotiated=%s",
-				host,
-				s.policy.Protocol,
-				idx,
-				s.n,
-				s.policy.cacheKeyPart(),
-				proto,
-			),
+			"http transport: host=%s protocol=%s shard=%d/%d policy=%s negotiated=%s",
+			host,
+			s.policy.Protocol,
+			idx,
+			s.n,
+			s.policy.cacheKeyPart(),
+			proto,
 		)
 	}
 	return resp, err

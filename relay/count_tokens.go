@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/channelcompat"
 	"github.com/gin-gonic/gin"
@@ -105,6 +106,7 @@ func CountTokensHelper(c *gin.Context, info *relaycommon.RelayInfo) *hosttypes.N
 	if plan.Status == channelcompat.StatusNative &&
 		plan.UpstreamProtocol == channelcompat.ProtocolMessages &&
 		canForwardNativeMessages {
+		info.FinalRequestRelayFormat = types.RelayFormatClaude
 		adaptor := GetAdaptorForProtocol(info.ApiType, plan.UpstreamProtocol)
 		if adaptor == nil {
 			return hosttypes.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), hosttypes.ErrorCodeInvalidApiType, hosttypes.ErrOptionWithSkipRetry())

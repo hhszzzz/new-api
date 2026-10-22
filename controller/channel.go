@@ -456,10 +456,7 @@ func SearchChannels(c *gin.Context) {
 	if enableTagMode {
 		tags, err := model.SearchTags(keyword, group, modelKeyword, idSort)
 		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": err.Error(),
-			})
+			common.ApiError(c, err)
 			return
 		}
 		for _, tag := range tags {
@@ -469,10 +466,7 @@ func SearchChannels(c *gin.Context) {
 					Omit("key").
 					Find(&tagChannels).Error
 				if err != nil {
-					c.JSON(http.StatusOK, gin.H{
-						"success": false,
-						"message": err.Error(),
-					})
+					common.ApiError(c, err)
 					return
 				}
 				channelData = append(channelData, tagChannels...)
@@ -481,10 +475,7 @@ func SearchChannels(c *gin.Context) {
 	} else {
 		channels, err := model.SearchChannels(keyword, group, modelKeyword, idSort, sortOptions)
 		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": err.Error(),
-			})
+			common.ApiError(c, err)
 			return
 		}
 		channelData = channels
@@ -595,7 +586,7 @@ func GetChannelKey(c *gin.Context) {
 	// 获取渠道信息（包含密钥）
 	channel, err := model.GetChannelById(channelId, true)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		common.ApiErrorI18n(c, i18n.MsgChannelNotExists)
+		common.ApiErrorT(c, "Channel does not exist")
 		return
 	}
 	if err != nil {
@@ -829,7 +820,7 @@ func getVertexArrayKeys(c *gin.Context, keys string) ([]string, error) {
 		case string:
 			keyStr = strings.TrimSpace(v)
 		default:
-			bytes, err := json.Marshal(v)
+			bytes, err := common.Marshal(v)
 			if err != nil {
 				return nil, errors.New(i18n.T(c, i18n.MsgChannelVertexKeyEncodeFailed))
 			}
@@ -887,10 +878,7 @@ func AddChannel(c *gin.Context) {
 		if addChannelRequest.Channel.Type == constant.ChannelTypeVertexAi && addChannelRequest.Channel.GetOtherSettings().VertexKeyType != hostdto.VertexKeyTypeAPIKey {
 			array, err := getVertexArrayKeys(c, addChannelRequest.Channel.Key)
 			if err != nil {
-				c.JSON(http.StatusOK, gin.H{
-					"success": false,
-					"message": err.Error(),
-				})
+				common.ApiError(c, err)
 				return
 			}
 			addChannelRequest.Channel.ChannelInfo.MultiKeySize = len(array)
@@ -913,10 +901,7 @@ func AddChannel(c *gin.Context) {
 			// multi json
 			keys, err = getVertexArrayKeys(c, addChannelRequest.Channel.Key)
 			if err != nil {
-				c.JSON(http.StatusOK, gin.H{
-					"success": false,
-					"message": err.Error(),
-				})
+				common.ApiError(c, err)
 				return
 			}
 		} else {
@@ -1112,7 +1097,7 @@ func EditTagChannels(c *gin.Context) {
 	}
 	if (channelTag.ParamOverride != nil || channelTag.HeaderOverride != nil) &&
 		!authz.Can(c.GetInt("id"), c.GetInt("role"), authz.ChannelSensitiveWrite) {
-		common.ApiErrorI18n(c, i18n.MsgAuthInsufficientPrivilege)
+		common.ApiErrorT(c, "Unauthorized, insufficient privileges")
 		return
 	}
 	if channelTag.ParamOverride != nil {
@@ -1212,7 +1197,7 @@ func UpdateChannel(c *gin.Context) {
 		return
 	}
 	if _, ok := requestData["status"]; ok {
-		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		common.ApiErrorT(c, "Invalid parameters")
 		return
 	}
 	clearChannelReadOnlyFields(&channel, requestData)
@@ -1236,10 +1221,7 @@ func UpdateChannel(c *gin.Context) {
 	// Preserve existing ChannelInfo to ensure multi-key channels keep correct state even if the client does not send ChannelInfo in the request.
 	originChannel, err := model.GetChannelById(channel.Id, true)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
+		common.ApiError(c, err)
 		return
 	}
 	originProxy := originChannel.GetSetting().Proxy
@@ -1297,7 +1279,7 @@ func UpdateChannel(c *gin.Context) {
 
 	if channelHasSensitiveChanges(&channel, originChannel, requestData) &&
 		!authz.Can(c.GetInt("id"), c.GetInt("role"), authz.ChannelSensitiveWrite) {
-		common.ApiErrorI18n(c, i18n.MsgAuthInsufficientPrivilege)
+		common.ApiErrorT(c, "Unauthorized, insufficient privileges")
 		return
 	}
 
@@ -1446,12 +1428,12 @@ func UpdateChannel(c *gin.Context) {
 func UpdateChannelStatus(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
-		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		common.ApiErrorT(c, "Invalid parameters")
 		return
 	}
 	req := ChannelStatusRequest{}
 	if err := c.ShouldBindJSON(&req); err != nil || !isManageableChannelStatus(req.Status) {
-		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		common.ApiErrorT(c, "Invalid parameters")
 		return
 	}
 	changed := model.UpdateChannelStatus(id, "", req.Status, "manual operation")
@@ -1476,7 +1458,7 @@ func UpdateChannelStatus(c *gin.Context) {
 func BatchUpdateChannelStatus(c *gin.Context) {
 	req := ChannelStatusBatchRequest{}
 	if err := c.ShouldBindJSON(&req); err != nil || len(req.Ids) == 0 || !isManageableChannelStatus(req.Status) {
-		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		common.ApiErrorT(c, "Invalid parameters")
 		return
 	}
 	changedIDs := make([]int, 0, len(req.Ids))
@@ -1809,7 +1791,7 @@ func GetTagModels(c *gin.Context) {
 // POST /api/channel/copy/:id
 // Optional query params:
 //
-//	suffix         - string appended to the original name (default "_复制")
+//	suffix         - string appended to the original name (default "_copy")
 //	reset_balance  - bool, when true will reset balance & used_quota to 0 (default true)
 func CopyChannel(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
@@ -1818,7 +1800,7 @@ func CopyChannel(c *gin.Context) {
 		return
 	}
 
-	suffix := c.DefaultQuery("suffix", "_复制")
+	suffix := c.DefaultQuery("suffix", "_copy")
 	resetBalance := true
 	if rbStr := c.DefaultQuery("reset_balance", "true"); rbStr != "" {
 		if v, err := strconv.ParseBool(rbStr); err == nil {
@@ -1925,7 +1907,7 @@ func ManageMultiKeys(c *gin.Context) {
 	}
 	if multiKeyActionRequiresSensitiveWrite(request.Action) &&
 		!authz.Can(c.GetInt("id"), c.GetInt("role"), authz.ChannelSensitiveWrite) {
-		common.ApiErrorI18n(c, i18n.MsgAuthInsufficientPrivilege)
+		common.ApiErrorT(c, "Unauthorized, insufficient privileges")
 		return
 	}
 

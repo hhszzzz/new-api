@@ -283,7 +283,7 @@ func TestGeminiTruncatedStreamDoesNotSynthesizeResponsesCompletion(t *testing.T)
 	})
 
 	require.NotNil(t, usage)
-	assert.Equal(t, 2, usage.CompletionTokens)
+	assert.Equal(t, 1, usage.CompletionTokens)
 	require.NotNil(t, apiErr)
 	assert.Contains(t, apiErr.Error(), "terminal finish reason")
 	assert.Contains(t, recorder.Body.String(), `"delta":"partial"`)

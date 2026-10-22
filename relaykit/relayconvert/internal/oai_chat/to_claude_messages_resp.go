@@ -223,7 +223,6 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 		}
 
 		var claudeResponse dto.ClaudeResponse
-		var isEmpty bool
 		claudeResponse.Type = "content_block_delta"
 		toolCalls := chosenChoice.Delta.ParseToolCalls()
 		if len(toolCalls) > 0 {
@@ -240,6 +239,8 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 			state.LastMessagesType = convmeta.LastMessageTypeTools
 			claudeResponses = append(claudeResponses, appendClaudeToolCallDeltas(state, toolCalls)...)
 		} else {
+			// Some upstreams put the last reasoning token and the first answer
+			// text in one chunk: the thinking block closes before the text block opens.
 			reasoning := chosenChoice.Delta.GetReasoningContent()
 			textContent := chosenChoice.Delta.GetContentString()
 			if textContent == "" {
@@ -264,34 +265,38 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 						Type:     "thinking_delta",
 						Thinking: &reasoning,
 					}
-				} else {
-					if state.LastMessagesType != convmeta.LastMessageTypeText {
-						stopOpenBlocksAndAdvance()
-						idx := state.Index
-						claudeResponses = append(claudeResponses, &dto.ClaudeResponse{
-							Index: &idx,
-							Type:  "content_block_start",
-							ContentBlock: &dto.ClaudeMediaMessage{
-								Type: "text",
-								Text: kitutil.GetPointer[string](""),
-							},
-						})
-					}
-					state.LastMessagesType = convmeta.LastMessageTypeText
-					claudeResponse.Delta = &dto.ClaudeMediaMessage{
+					claudeResponses = append(claudeResponses, &dto.ClaudeResponse{
+						Index: kitutil.GetPointer[int](state.Index),
+						Type:  "content_block_delta",
+						Delta: claudeResponse.Delta,
+					})
+				}
+			}
+			if textContent != "" {
+				if state.LastMessagesType != convmeta.LastMessageTypeText {
+					stopOpenBlocksAndAdvance()
+					idx := state.Index
+					claudeResponses = append(claudeResponses, &dto.ClaudeResponse{
+						Index: &idx,
+						Type:  "content_block_start",
+						ContentBlock: &dto.ClaudeMediaMessage{
+							Type: "text",
+							Text: kitutil.GetPointer[string](""),
+						},
+					})
+				}
+				state.LastMessagesType = convmeta.LastMessageTypeText
+				claudeResponses = append(claudeResponses, &dto.ClaudeResponse{
+					Index: kitutil.GetPointer[int](state.Index),
+					Type:  "content_block_delta",
+					Delta: &dto.ClaudeMediaMessage{
 						Type: "text_delta",
 						Text: kitutil.GetPointer[string](textContent),
-					}
-				}
-			} else {
-				isEmpty = true
+					},
+				})
 			}
 		}
 
-		claudeResponse.Index = kitutil.GetPointer[int](state.Index)
-		if !isEmpty && claudeResponse.Delta != nil {
-			claudeResponses = append(claudeResponses, &claudeResponse)
-		}
 		appendCitationDeltas(chosenChoice.Delta.Annotations)
 
 		if doneChunk || state.Done {

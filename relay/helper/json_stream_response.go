@@ -331,7 +331,7 @@ func appendResponsesJSONAsSSE(stream *bytes.Buffer, body []byte) error {
 		case "function_call":
 			startItem.Arguments = nil
 		case "custom_tool_call":
-			startItem.Input = ""
+			startItem.Input = nil
 		}
 		if err := appendEvent(&dto.ResponsesStreamResponse{
 			Type:        "response.output_item.added",
@@ -435,11 +435,12 @@ func appendResponsesJSONAsSSE(stream *bytes.Buffer, body []byte) error {
 				return err
 			}
 		case "custom_tool_call":
+			input := dto.ResponsesArgumentsString(item.Input)
 			if err := appendEvent(&dto.ResponsesStreamResponse{
 				Type:        "response.custom_tool_call_input.delta",
 				OutputIndex: common.GetPointer(index),
 				ItemID:      item.ID,
-				Delta:       item.Input,
+				Delta:       input,
 			}); err != nil {
 				return err
 			}
@@ -447,7 +448,7 @@ func appendResponsesJSONAsSSE(stream *bytes.Buffer, body []byte) error {
 				Type:        "response.custom_tool_call_input.done",
 				OutputIndex: common.GetPointer(index),
 				ItemID:      item.ID,
-				Input:       item.Input,
+				Input:       input,
 			}); err != nil {
 				return err
 			}

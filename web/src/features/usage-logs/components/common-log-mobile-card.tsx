@@ -32,7 +32,7 @@ import dayjs from '@/lib/dayjs'
 import { formatLogQuota, formatTimestampToDate } from '@/lib/format'
 
 import type { UsageLog } from '../data/schema'
-import { parseLogOther, resolveLogTransport } from '../lib/format'
+import { logTokenName, parseLogOther, resolveLogTransport } from '../lib/format'
 import { formatModelName } from '../lib/model-route'
 import {
   getLogTypeConfig,
@@ -109,7 +109,7 @@ export function CommonLogMobileCard<TData>(props: {
     },
     token: {
       label: t('Token'),
-      value: log.token_name,
+      value: logTokenName(log, t),
       visible: displayable && props.cells.has('token_name') && !!log.token_name,
       sensitive: true,
     },

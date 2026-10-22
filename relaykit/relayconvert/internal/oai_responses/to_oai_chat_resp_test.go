@@ -103,7 +103,7 @@ func TestResponsesResponseToChatCompletionsWrapsCustomAndToolSearchArguments(t *
 				ID:     "ct_1",
 				CallId: "call_custom",
 				Name:   "apply_patch",
-				Input:  "*** Begin Patch\n*** End Patch",
+				Input:  []byte(`"*** Begin Patch\n*** End Patch"`),
 			},
 			{
 				Type:      responsesOutputTypeToolSearchCall,
@@ -444,7 +444,7 @@ func TestResponsesStreamEventToChatChunksBuffersCustomInputAsValidFunctionArgume
 			ID:     "ct_1",
 			CallId: "call_custom",
 			Name:   "apply_patch",
-			Input:  "line 1\nline 2",
+			Input:  []byte(`"line 1\nline 2"`),
 		},
 	})...)
 	chunks = append(chunks, mustStreamChunks(t, state, &dto.ResponsesStreamResponse{

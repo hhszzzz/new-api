@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery } from '@tanstack/react-query'
 import { Pencil } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useForm, useWatch } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -32,8 +32,8 @@ import {
   sideDrawerHeaderClassName,
 } from '@/components/drawer-layout'
 import { MultiSelect } from '@/components/multi-select'
+import { PermissionMatrix } from '@/components/permission-matrix'
 import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
 import {
   Form,
   FormControl,
@@ -121,10 +121,11 @@ export function UsersMutateDrawer({
   const { t } = useTranslation()
   const isUpdate = !!currentRow
   const currentRowId = currentRow?.id
-  const { triggerRefresh } = useUsers()
+  const { triggerRefresh, requestVerification } = useUsers()
   const currentUser = useAuthStore((s) => s.auth.user)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [quotaDialogOpen, setQuotaDialogOpen] = useState(false)
+  const loadedPermissions = useRef<UserFormValues['admin_permissions']>(undefined)
   const submitScope = open ? (currentRowId ?? 'create') : null
   const { begin: beginSubmitTask, invalidate: invalidateSubmitTask } =
     useLatestAsyncTask(submitScope)
@@ -177,7 +178,10 @@ export function UsersMutateDrawer({
     [t]
   )
   const handleUserFormLoaded = useCallback(
-    (values: UserFormValues) => form.reset(values),
+    (values: UserFormValues) => {
+      loadedPermissions.current = values.admin_permissions
+      form.reset(values)
+    },
     [form]
   )
   const handleUserFormLoadError = useCallback(
@@ -283,10 +287,41 @@ export function UsersMutateDrawer({
         currentRow?.id,
         permissionCatalog
       )
+      if (
+        isUpdate &&
+        payload.admin_permissions &&
+        JSON.stringify(payload.admin_permissions) ===
+          JSON.stringify(normalizeAdminPermissions(loadedPermissions.current, permissionCatalog))
+      ) {
+        delete payload.admin_permissions
+      }
+      let proofToken: string | undefined
+      if (isUpdate && currentRow) {
+        if (payload.password || payload.admin_permissions) {
+          const proof = await requestVerification({
+            scope: 'admin.user.update',
+            context: { user_id: currentRow.id },
+            title: t('Verify to update user credentials'),
+            description: t('Confirm your identity before changing the account {{username}}.', { username: currentRow.username }),
+          })
+          if (!proof || !isCurrent()) return
+          proofToken = proof.proof_token
+        }
+      } else if ((payload.role ?? 0) >= ROLE.ADMIN) {
+        const proof = await requestVerification({
+          scope: 'admin.user.create',
+          context: { role: payload.role ?? ROLE.ADMIN },
+          title: t('Verify to create administrator'),
+          description: t('Confirm your identity before creating an administrator account.'),
+        })
+        if (!proof || !isCurrent()) return
+        proofToken = proof.proof_token
+      }
 
       if (isUpdate && currentRow) {
         const result = await updateUser(
-          payload as typeof payload & { id: number }
+          payload as typeof payload & { id: number },
+          proofToken
         )
         if (!isCurrent()) return
         if (!result.success) {
@@ -295,7 +330,7 @@ export function UsersMutateDrawer({
         }
         toast.success(t(SUCCESS_MESSAGES.USER_UPDATED))
       } else {
-        const result = await createUser(payload)
+        const result = await createUser(payload, proofToken)
         if (!isCurrent()) return
         if (!result.success) {
           handleServerError(result, t(ERROR_MESSAGES.CREATE_FAILED))
@@ -312,6 +347,9 @@ export function UsersMutateDrawer({
       if (isCurrent()) setIsSubmitting(false)
     }
   }
+
+  // eslint-disable-next-line react/refs -- React Hook Form reads its refs when the returned handler is submitted.
+  const submitForm = form.handleSubmit(onSubmit)
 
   const refreshUserData = async () => {
     if (await reloadUserForm()) triggerRefresh()
@@ -345,7 +383,7 @@ export function UsersMutateDrawer({
           <Form {...form}>
             <form
               id='user-form'
-              onSubmit={form.handleSubmit(onSubmit)}
+              onSubmit={submitForm}
               className={sideDrawerFormClassName()}
               aria-busy={isUserLoading}
               inert={isUserLoading}
@@ -992,52 +1030,11 @@ export function UsersMutateDrawer({
                         )
                         return (
                           <FormItem>
-                            <div className='space-y-3'>
-                              {permissionCatalog.resources.map((resource) => (
-                                <div
-                                  key={resource.resource}
-                                  className='space-y-2 rounded-md border p-3'
-                                >
-                                  <div className='text-sm font-medium'>
-                                    {t(resource.label_key)}
-                                  </div>
-                                  <div className='space-y-2'>
-                                    {resource.actions.map((option) => (
-                                      <label
-                                        key={option.action}
-                                        className='flex items-start gap-3'
-                                      >
-                                        <Checkbox
-                                          checked={
-                                            selected[resource.resource]?.[
-                                              option.action
-                                            ] === true
-                                          }
-                                          onCheckedChange={(checked) => {
-                                            field.onChange({
-                                              ...selected,
-                                              [resource.resource]: {
-                                                ...selected[resource.resource],
-                                                [option.action]:
-                                                  checked === true,
-                                              },
-                                            })
-                                          }}
-                                        />
-                                        <span className='flex flex-col gap-1'>
-                                          <span className='text-sm font-medium'>
-                                            {t(option.label_key)}
-                                          </span>
-                                          <span className='text-muted-foreground text-xs'>
-                                            {t(option.description_key)}
-                                          </span>
-                                        </span>
-                                      </label>
-                                    ))}
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
+                            <PermissionMatrix
+                              resources={permissionCatalog.resources}
+                              value={selected}
+                              onChange={field.onChange}
+                            />
                             <FormMessage />
                           </FormItem>
                         )

@@ -64,7 +64,7 @@ func TestPostWssConsumeQuotaKeepsRoutedModelAdminOnly(t *testing.T) {
 		},
 	}
 
-	PostWssConsumeQuota(ctx, relayInfo, &dto.RealtimeUsage{}, "")
+	PostWssConsumeQuota(ctx, relayInfo, &dto.RealtimeUsage{}, nil)
 
 	var savedLog model.Log
 	require.NoError(t, model.LOG_DB.Where("user_id = ? AND type = ?", 1, model.LogTypeConsume).First(&savedLog).Error)
@@ -78,7 +78,7 @@ func TestPostWssConsumeQuotaKeepsRoutedModelAdminOnly(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "error", rawStreamStatus["status"])
 
-	publicLogs, total, err := model.GetUserLogs(1, model.LogTypeConsume, 0, 0, "", "", 0, 10, "", "", "", false)
+	publicLogs, total, err := model.GetUserLogs(1, model.LogFilter{Type: model.LogTypeConsume}, 0, 10)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, total)
 	require.Len(t, publicLogs, 1)
@@ -92,7 +92,7 @@ func TestPostWssConsumeQuotaKeepsRoutedModelAdminOnly(t *testing.T) {
 	assert.Equal(t, "requested-realtime-model timed out", publicStreamStatus["end_error"])
 	assert.Equal(t, []interface{}{"requested-realtime-model frame failed"}, publicStreamStatus["errors"])
 
-	adminLogs, total, err := model.GetUserLogs(1, model.LogTypeConsume, 0, 0, "", "", 0, 10, "", "", "", true)
+	adminLogs, total, err := model.GetUserLogs(1, model.LogFilter{Type: model.LogTypeConsume, CanViewModelRouting: true}, 0, 10)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, total)
 	require.Len(t, adminLogs, 1)

@@ -37,6 +37,7 @@ const (
 	responsesEventReasoningPartAdded        = "response.reasoning_summary_part.added"
 	responsesEventReasoningPartDone         = "response.reasoning_summary_part.done"
 	responsesOutputTypeFunctionCall         = "function_call"
+	responsesOutputTypeCustomToolCall       = "custom_tool_call"
 	responsesOutputTypeMessage              = "message"
 	responsesOutputTypeReasoning            = "reasoning"
 	responsesIncompleteReasonContentFilter  = "content_filter"
@@ -83,6 +84,9 @@ func ChatCompletionsResponseToResponsesResponseWithBridgeState(resp *dto.OpenAIT
 	toolOutputs := make([]dto.ResponsesOutput, 0, len(toolCalls))
 	usedToolCallIDs := make(map[string]struct{}, len(toolCalls))
 	for i, toolCall := range toolCalls {
+		if (toolCall.Type == "" || toolCall.Type == "function") && strings.TrimSpace(toolCall.Function.Name) == "" {
+			continue
+		}
 		toolOutput, err := chatToolCallToResponsesOutput(toolCall, responseID, i, responseOutputStatus(out), toolState, usedToolCallIDs)
 		if err != nil {
 			return nil, nil, err
@@ -326,7 +330,7 @@ func chatToolCallToResponsesOutput(toolCall dto.ToolCallRequest, responseID stri
 					CallId:    callID,
 					Name:      identity.Name,
 					Namespace: identity.Namespace,
-					Input:     sharedbridge.DecodeCustomInput(toolCall.Function.Arguments),
+					Input:     chatArgumentsRawMessage(sharedbridge.DecodeCustomInput(toolCall.Function.Arguments)),
 				}, nil
 			case sharedbridge.ToolKindToolSearch:
 				return dto.ResponsesOutput{

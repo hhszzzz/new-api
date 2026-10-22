@@ -12,19 +12,21 @@ import (
 
 // QuotaData 柱状图数据
 type QuotaData struct {
-	Id         int    `json:"id"`
-	UserID     int    `json:"user_id" gorm:"index"`
-	Username   string `json:"username" gorm:"index:idx_qdt_model_user_name,priority:2;size:64;default:''"`
-	ModelName  string `json:"model_name" gorm:"index:idx_qdt_model_user_name,priority:1;size:64;default:''"`
-	ModelScope int    `json:"-" gorm:"-"`
-	CreatedAt  int64  `json:"created_at" gorm:"bigint;index:idx_qdt_created_at,priority:2"`
-	UseGroup   string `json:"use_group" gorm:"index;size:64;default:''"`
-	TokenID    int    `json:"token_id" gorm:"index;default:0"`
-	ChannelID  int    `json:"channel_id" gorm:"index;default:0"`
-	NodeName   string `json:"node_name" gorm:"index;size:64;default:''"`
-	TokenUsed  int    `json:"token_used" gorm:"default:0"`
-	Count      int    `json:"count" gorm:"default:0"`
-	Quota      int    `json:"quota" gorm:"default:0"`
+	Id                  int    `json:"id"`
+	UserID              int    `json:"user_id" gorm:"index"`
+	Username            string `json:"username" gorm:"index:idx_qdt_model_user_name,priority:2;size:64;default:''"`
+	ModelName           string `json:"model_name" gorm:"index:idx_qdt_model_user_name,priority:1;size:64;default:''"`
+	ModelScope          int    `json:"-" gorm:"-"`
+	CreatedAt           int64  `json:"created_at" gorm:"bigint;index:idx_qdt_created_at,priority:2"`
+	UseGroup            string `json:"use_group" gorm:"index;size:64;default:''"`
+	TokenID             int    `json:"token_id" gorm:"index;default:0"`
+	ChannelID           int    `json:"channel_id" gorm:"index;default:0"`
+	NodeName            string `json:"node_name" gorm:"index;size:64;default:''"`
+	TokenUsed           int    `json:"token_used" gorm:"default:0"`
+	Count               int    `json:"count" gorm:"default:0"`
+	Quota               int    `json:"quota" gorm:"default:0"`
+	CacheReadTokens     int64  `json:"cache_read_tokens" gorm:"default:0"`
+	CacheCreationTokens int64  `json:"cache_creation_tokens" gorm:"default:0"`
 }
 
 // ScopedQuotaData stores quota aggregates written after model provenance was
@@ -32,19 +34,21 @@ type QuotaData struct {
 // process, whose aggregation key does not include model_scope, from merging
 // routed-model data into a requested-model row during a rolling upgrade.
 type ScopedQuotaData struct {
-	Id         int
-	UserID     int    `gorm:"index"`
-	Username   string `gorm:"index:idx_qds_model_user_name,priority:2;size:64;default:''"`
-	ModelName  string `gorm:"index:idx_qds_model_user_name,priority:1;size:64;default:''"`
-	ModelScope int    `gorm:"not null;default:0"`
-	CreatedAt  int64  `gorm:"bigint;index:idx_qds_created_at,priority:2"`
-	UseGroup   string `gorm:"index;size:64;default:''"`
-	TokenID    int    `gorm:"index;default:0"`
-	ChannelID  int    `gorm:"index;default:0"`
-	NodeName   string `gorm:"index;size:64;default:''"`
-	TokenUsed  int    `gorm:"default:0"`
-	Count      int    `gorm:"default:0"`
-	Quota      int    `gorm:"default:0"`
+	Id                  int
+	UserID              int    `gorm:"index"`
+	Username            string `gorm:"index:idx_qds_model_user_name,priority:2;size:64;default:''"`
+	ModelName           string `gorm:"index:idx_qds_model_user_name,priority:1;size:64;default:''"`
+	ModelScope          int    `gorm:"not null;default:0"`
+	CreatedAt           int64  `gorm:"bigint;index:idx_qds_created_at,priority:2"`
+	UseGroup            string `gorm:"index;size:64;default:''"`
+	TokenID             int    `gorm:"index;default:0"`
+	ChannelID           int    `gorm:"index;default:0"`
+	NodeName            string `gorm:"index;size:64;default:''"`
+	TokenUsed           int    `gorm:"default:0"`
+	Count               int    `gorm:"default:0"`
+	Quota               int    `gorm:"default:0"`
+	CacheReadTokens     int64  `gorm:"default:0"`
+	CacheCreationTokens int64  `gorm:"default:0"`
 }
 
 func (ScopedQuotaData) TableName() string {
@@ -53,18 +57,20 @@ func (ScopedQuotaData) TableName() string {
 
 func scopedQuotaData(quotaData *QuotaData) *ScopedQuotaData {
 	return &ScopedQuotaData{
-		UserID:     quotaData.UserID,
-		Username:   quotaData.Username,
-		ModelName:  quotaData.ModelName,
-		ModelScope: quotaData.ModelScope,
-		CreatedAt:  quotaData.CreatedAt,
-		UseGroup:   quotaData.UseGroup,
-		TokenID:    quotaData.TokenID,
-		ChannelID:  quotaData.ChannelID,
-		NodeName:   quotaData.NodeName,
-		TokenUsed:  quotaData.TokenUsed,
-		Count:      quotaData.Count,
-		Quota:      quotaData.Quota,
+		UserID:              quotaData.UserID,
+		Username:            quotaData.Username,
+		ModelName:           quotaData.ModelName,
+		ModelScope:          quotaData.ModelScope,
+		CreatedAt:           quotaData.CreatedAt,
+		UseGroup:            quotaData.UseGroup,
+		TokenID:             quotaData.TokenID,
+		ChannelID:           quotaData.ChannelID,
+		NodeName:            quotaData.NodeName,
+		TokenUsed:           quotaData.TokenUsed,
+		Count:               quotaData.Count,
+		Quota:               quotaData.Quota,
+		CacheReadTokens:     quotaData.CacheReadTokens,
+		CacheCreationTokens: quotaData.CacheCreationTokens,
 	}
 }
 
@@ -75,19 +81,21 @@ func quotaDataRows(rows []*ScopedQuotaData) []*QuotaData {
 			continue
 		}
 		result = append(result, &QuotaData{
-			Id:         row.Id,
-			UserID:     row.UserID,
-			Username:   row.Username,
-			ModelName:  row.ModelName,
-			ModelScope: row.ModelScope,
-			CreatedAt:  row.CreatedAt,
-			UseGroup:   row.UseGroup,
-			TokenID:    row.TokenID,
-			ChannelID:  row.ChannelID,
-			NodeName:   row.NodeName,
-			TokenUsed:  row.TokenUsed,
-			Count:      row.Count,
-			Quota:      row.Quota,
+			Id:                  row.Id,
+			UserID:              row.UserID,
+			Username:            row.Username,
+			ModelName:           row.ModelName,
+			ModelScope:          row.ModelScope,
+			CreatedAt:           row.CreatedAt,
+			UseGroup:            row.UseGroup,
+			TokenID:             row.TokenID,
+			ChannelID:           row.ChannelID,
+			NodeName:            row.NodeName,
+			TokenUsed:           row.TokenUsed,
+			Count:               row.Count,
+			Quota:               row.Quota,
+			CacheReadTokens:     row.CacheReadTokens,
+			CacheCreationTokens: row.CacheCreationTokens,
 		})
 	}
 	return result
@@ -105,14 +113,16 @@ type QuotaDataLogParams struct {
 	ModelName string
 	// ModelScope must be explicitly set when ModelName is known to be the
 	// client-facing requested model. Zero fails closed as legacy/unknown.
-	ModelScope int
-	Quota      int
-	CreatedAt  int64
-	TokenUsed  int
-	UseGroup   string
-	TokenID    int
-	ChannelID  int
-	NodeName   string
+	ModelScope          int
+	Quota               int
+	CreatedAt           int64
+	TokenUsed           int
+	CacheReadTokens     int64
+	CacheCreationTokens int64
+	UseGroup            string
+	TokenID             int
+	ChannelID           int
+	NodeName            string
 }
 
 func UpdateQuotaData() {
@@ -151,6 +161,8 @@ func logQuotaDataCache(quotaData *QuotaData) {
 		cachedQuotaData.Count += count
 		cachedQuotaData.Quota += quota
 		cachedQuotaData.TokenUsed += tokenUsed
+		cachedQuotaData.CacheReadTokens += quotaData.CacheReadTokens
+		cachedQuotaData.CacheCreationTokens += quotaData.CacheCreationTokens
 		quotaData = cachedQuotaData
 	}
 	CacheQuotaData[key] = quotaData
@@ -160,18 +172,20 @@ func LogQuotaData(params QuotaDataLogParams) {
 	// 只精确到小时
 	createdAt := params.CreatedAt - (params.CreatedAt % 3600)
 	quotaData := &QuotaData{
-		UserID:     params.UserID,
-		Username:   params.Username,
-		ModelName:  params.ModelName,
-		ModelScope: params.ModelScope,
-		CreatedAt:  createdAt,
-		UseGroup:   params.UseGroup,
-		TokenID:    params.TokenID,
-		ChannelID:  params.ChannelID,
-		NodeName:   params.NodeName,
-		Count:      1,
-		Quota:      params.Quota,
-		TokenUsed:  params.TokenUsed,
+		UserID:              params.UserID,
+		Username:            params.Username,
+		ModelName:           params.ModelName,
+		ModelScope:          params.ModelScope,
+		CreatedAt:           createdAt,
+		UseGroup:            params.UseGroup,
+		TokenID:             params.TokenID,
+		ChannelID:           params.ChannelID,
+		NodeName:            params.NodeName,
+		Count:               1,
+		Quota:               params.Quota,
+		TokenUsed:           params.TokenUsed,
+		CacheReadTokens:     params.CacheReadTokens,
+		CacheCreationTokens: params.CacheCreationTokens,
 	}
 
 	CacheQuotaDataLock.Lock()
@@ -227,9 +241,11 @@ func persistQuotaData(quotaData *ScopedQuotaData) error {
 	result = DB.Model(&ScopedQuotaData{}).
 		Where("id = ?", existing.Id).
 		Updates(map[string]any{
-			"count":      gorm.Expr("count + ?", quotaData.Count),
-			"quota":      gorm.Expr("quota + ?", quotaData.Quota),
-			"token_used": gorm.Expr("token_used + ?", quotaData.TokenUsed),
+			"count":                 gorm.Expr("count + ?", quotaData.Count),
+			"quota":                 gorm.Expr("quota + ?", quotaData.Quota),
+			"token_used":            gorm.Expr("token_used + ?", quotaData.TokenUsed),
+			"cache_read_tokens":     gorm.Expr("cache_read_tokens + ?", quotaData.CacheReadTokens),
+			"cache_creation_tokens": gorm.Expr("cache_creation_tokens + ?", quotaData.CacheCreationTokens),
 		})
 	if result.Error != nil {
 		return result.Error
@@ -243,7 +259,7 @@ func persistQuotaData(quotaData *ScopedQuotaData) error {
 func GetQuotaDataByUsername(username string, startTime int64, endTime int64) (quotaData []*QuotaData, err error) {
 	var legacyRows []*ScopedQuotaData
 	err = DB.Table("quota_data").
-		Select("user_id, username, model_name, created_at, sum(count) as count, sum(quota) as quota, sum(token_used) as token_used").
+		Select("user_id, username, model_name, created_at, sum(count) as count, sum(quota) as quota, sum(token_used) as token_used, sum(cache_read_tokens) as cache_read_tokens, sum(cache_creation_tokens) as cache_creation_tokens").
 		Where("username = ? and created_at >= ? and created_at <= ?", username, startTime, endTime).
 		Group("user_id, username, model_name, created_at").
 		Find(&legacyRows).Error
@@ -252,7 +268,7 @@ func GetQuotaDataByUsername(username string, startTime int64, endTime int64) (qu
 	}
 	var scopedRows []*ScopedQuotaData
 	err = DB.Model(&ScopedQuotaData{}).
-		Select("user_id, username, model_name, model_scope, created_at, sum(count) as count, sum(quota) as quota, sum(token_used) as token_used").
+		Select("user_id, username, model_name, model_scope, created_at, sum(count) as count, sum(quota) as quota, sum(token_used) as token_used, sum(cache_read_tokens) as cache_read_tokens, sum(cache_creation_tokens) as cache_creation_tokens").
 		Where("username = ? and created_at >= ? and created_at <= ?", username, startTime, endTime).
 		Group("user_id, username, model_name, model_scope, created_at").
 		Find(&scopedRows).Error
@@ -266,7 +282,7 @@ func GetQuotaDataByUsername(username string, startTime int64, endTime int64) (qu
 func GetQuotaDataByUserId(userId int, startTime int64, endTime int64, canViewPrivate bool) (quotaData []*QuotaData, err error) {
 	var legacyRows []*ScopedQuotaData
 	err = DB.Table("quota_data").
-		Select("user_id, username, model_name, created_at, sum(count) as count, sum(quota) as quota, sum(token_used) as token_used").
+		Select("user_id, username, model_name, created_at, sum(count) as count, sum(quota) as quota, sum(token_used) as token_used, sum(cache_read_tokens) as cache_read_tokens, sum(cache_creation_tokens) as cache_creation_tokens").
 		Where("user_id = ? and created_at >= ? and created_at <= ?", userId, startTime, endTime).
 		Group("user_id, username, model_name, created_at").
 		Find(&legacyRows).Error
@@ -275,7 +291,7 @@ func GetQuotaDataByUserId(userId int, startTime int64, endTime int64, canViewPri
 	}
 	var scopedRows []*ScopedQuotaData
 	err = DB.Model(&ScopedQuotaData{}).
-		Select("user_id, username, model_name, model_scope, created_at, sum(count) as count, sum(quota) as quota, sum(token_used) as token_used").
+		Select("user_id, username, model_name, model_scope, created_at, sum(count) as count, sum(quota) as quota, sum(token_used) as token_used, sum(cache_read_tokens) as cache_read_tokens, sum(cache_creation_tokens) as cache_creation_tokens").
 		Where("user_id = ? and created_at >= ? and created_at <= ?", userId, startTime, endTime).
 		Group("user_id, username, model_name, model_scope, created_at").
 		Find(&scopedRows).Error
@@ -289,7 +305,7 @@ func GetQuotaDataByUserId(userId int, startTime int64, endTime int64, canViewPri
 func GetQuotaDataGroupByUser(startTime int64, endTime int64) (quotaData []*QuotaData, err error) {
 	var legacyRows []*ScopedQuotaData
 	err = DB.Table("quota_data").
-		Select("username, created_at, sum(count) as count, sum(quota) as quota, sum(token_used) as token_used").
+		Select("username, created_at, sum(count) as count, sum(quota) as quota, sum(token_used) as token_used, sum(cache_read_tokens) as cache_read_tokens, sum(cache_creation_tokens) as cache_creation_tokens").
 		Where("created_at >= ? and created_at <= ?", startTime, endTime).
 		Group("username, created_at").
 		Find(&legacyRows).Error
@@ -298,7 +314,7 @@ func GetQuotaDataGroupByUser(startTime int64, endTime int64) (quotaData []*Quota
 	}
 	var scopedRows []*ScopedQuotaData
 	err = DB.Model(&ScopedQuotaData{}).
-		Select("username, created_at, sum(count) as count, sum(quota) as quota, sum(token_used) as token_used").
+		Select("username, created_at, sum(count) as count, sum(quota) as quota, sum(token_used) as token_used, sum(cache_read_tokens) as cache_read_tokens, sum(cache_creation_tokens) as cache_creation_tokens").
 		Where("created_at >= ? and created_at <= ?", startTime, endTime).
 		Group("username, created_at").
 		Find(&scopedRows).Error
@@ -315,7 +331,7 @@ func GetAllQuotaDates(startTime int64, endTime int64, username string) (quotaDat
 	}
 	var legacyRows []*ScopedQuotaData
 	err = DB.Table("quota_data").
-		Select("model_name, created_at, sum(count) as count, sum(quota) as quota, sum(token_used) as token_used").
+		Select("model_name, created_at, sum(count) as count, sum(quota) as quota, sum(token_used) as token_used, sum(cache_read_tokens) as cache_read_tokens, sum(cache_creation_tokens) as cache_creation_tokens").
 		Where("created_at >= ? and created_at <= ?", startTime, endTime).
 		Group("model_name, created_at").
 		Find(&legacyRows).Error
@@ -324,7 +340,7 @@ func GetAllQuotaDates(startTime int64, endTime int64, username string) (quotaDat
 	}
 	var scopedRows []*ScopedQuotaData
 	err = DB.Model(&ScopedQuotaData{}).
-		Select("model_name, model_scope, created_at, sum(count) as count, sum(quota) as quota, sum(token_used) as token_used").
+		Select("model_name, model_scope, created_at, sum(count) as count, sum(quota) as quota, sum(token_used) as token_used, sum(cache_read_tokens) as cache_read_tokens, sum(cache_creation_tokens) as cache_creation_tokens").
 		Where("created_at >= ? and created_at <= ?", startTime, endTime).
 		Group("model_name, model_scope, created_at").
 		Find(&scopedRows).Error

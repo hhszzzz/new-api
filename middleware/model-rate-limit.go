@@ -82,10 +82,11 @@ func recordRedisRequest(ctx context.Context, rdb *redis.Client, key string, maxC
 	rdb.Expire(ctx, key, time.Duration(setting.ModelRequestRateLimitDurationMinutes)*time.Minute)
 }
 
-func modelRequestRateLimitConfig(c *gin.Context) (duration int64, totalMaxCount int, successMaxCount int) {
+func modelRequestRateLimitConfig(c *gin.Context) (duration int64, totalMaxCount int, successMaxCount int, subject string) {
 	duration = rateLimitDurationSeconds(setting.ModelRequestRateLimitDurationMinutes)
 	totalMaxCount = setting.ModelRequestRateLimitCount
 	successMaxCount = setting.ModelRequestRateLimitSuccessCount
+	subject = strconv.Itoa(c.GetInt("id"))
 
 	group := common.GetContextKeyString(c, constant.ContextKeyTokenGroup)
 	if group == "" {
@@ -94,8 +95,9 @@ func modelRequestRateLimitConfig(c *gin.Context) (duration int64, totalMaxCount 
 	if groupTotalCount, groupSuccessCount, found := setting.GetGroupRateLimit(group); found {
 		totalMaxCount = groupTotalCount
 		successMaxCount = groupSuccessCount
+		subject += ":" + group
 	}
-	return duration, totalMaxCount, successMaxCount
+	return duration, totalMaxCount, successMaxCount, subject
 }
 
 func newModelRateLimitError(message string, statusCode int) *hosttypes.NewAPIError {
@@ -123,8 +125,7 @@ func CheckModelRequestRateLimit(c *gin.Context) (ModelRequestRateLimitCommit, *h
 		return func(bool) {}, nil
 	}
 
-	duration, totalMaxCount, successMaxCount := modelRequestRateLimitConfig(c)
-	userID := strconv.Itoa(c.GetInt("id"))
+	duration, totalMaxCount, successMaxCount, userID := modelRequestRateLimitConfig(c)
 
 	if common.RedisEnabled && common.RDB != nil {
 		ctx := context.Background()
@@ -189,14 +190,13 @@ func isResponsesWebSocketHandshake(c *gin.Context) bool {
 }
 
 // Redis限流处理器
-func redisRateLimitHandler(duration int64, totalMaxCount, successMaxCount int) gin.HandlerFunc {
+func redisRateLimitHandler(subject string, duration int64, totalMaxCount, successMaxCount int) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		userId := strconv.Itoa(c.GetInt("id"))
 		ctx := context.Background()
 		rdb := common.RDB
 
 		// 1. 检查成功请求数限制
-		successKey := fmt.Sprintf("rateLimit:%s:%s", ModelRequestRateLimitSuccessCountMark, userId)
+		successKey := fmt.Sprintf("rateLimit:%s:%s", ModelRequestRateLimitSuccessCountMark, subject)
 		allowed, err := checkRedisRateLimit(ctx, rdb, successKey, successMaxCount, duration)
 		if err != nil {
 			fmt.Println("检查成功请求数限制失败:", err.Error())
@@ -210,7 +210,7 @@ func redisRateLimitHandler(duration int64, totalMaxCount, successMaxCount int) g
 
 		//2.检查总请求数限制并记录总请求（当totalMaxCount为0时会自动跳过，使用令牌桶限流器
 		if totalMaxCount > 0 {
-			totalKey := fmt.Sprintf("rateLimit:%s", userId)
+			totalKey := fmt.Sprintf("rateLimit:%s", subject)
 			// 初始化
 			tb := limiter.New(ctx, rdb)
 			allowed, err = tb.Allow(
@@ -244,18 +244,16 @@ func redisRateLimitHandler(duration int64, totalMaxCount, successMaxCount int) g
 }
 
 // 内存限流处理器
-func memoryRateLimitHandler(duration int64, totalMaxCount, successMaxCount int) gin.HandlerFunc {
+func memoryRateLimitHandler(subject string, duration int64, totalMaxCount, successMaxCount int) gin.HandlerFunc {
 	inMemoryRateLimiter.Init(time.Duration(setting.ModelRequestRateLimitDurationMinutes) * time.Minute)
 
 	return func(c *gin.Context) {
-		userId := strconv.Itoa(c.GetInt("id"))
-		totalKey := ModelRequestRateLimitCountMark + userId
-		successKey := ModelRequestRateLimitSuccessCountMark + userId
+		totalKey := ModelRequestRateLimitCountMark + subject
+		successKey := ModelRequestRateLimitSuccessCountMark + subject
 
 		// 1. 检查总请求数限制（当totalMaxCount为0时跳过）
 		if totalMaxCount > 0 && !inMemoryRateLimiter.Request(totalKey, totalMaxCount, duration) {
-			c.Status(http.StatusTooManyRequests)
-			c.Abort()
+			abortWithOpenAiMessage(c, http.StatusTooManyRequests, i18n.T(c, i18n.MsgRateLimitTotalReached, map[string]any{"Minutes": setting.ModelRequestRateLimitDurationMinutes, "Max": totalMaxCount}))
 			return
 		}
 
@@ -263,7 +261,7 @@ func memoryRateLimitHandler(duration int64, totalMaxCount, successMaxCount int) 
 		if successMaxCount > 0 {
 			reservation = inMemoryRateLimiter.Reserve(successKey, successMaxCount, duration)
 			if reservation == nil {
-				c.AbortWithStatus(http.StatusTooManyRequests)
+				abortWithOpenAiMessage(c, http.StatusTooManyRequests, i18n.T(c, i18n.MsgRateLimitReached, map[string]any{"Minutes": setting.ModelRequestRateLimitDurationMinutes, "Max": successMaxCount}))
 				return
 			}
 			defer reservation.Complete(false)

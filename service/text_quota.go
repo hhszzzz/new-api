@@ -1,7 +1,6 @@
 package service
 
 import (
-	"fmt"
 	"math"
 	"sort"
 	"strings"
@@ -72,11 +71,15 @@ type textQuotaSummary struct {
 }
 
 // hasBillableUsage reports whether this request should incur any charge.
-// A request can carry zero tokens yet still be billable via a tool-call
+// Claude reports cache tokens separately from ordinary input and output.
+// A request can carry zero ordinary tokens yet still be billable via cache or a tool-call
 // surcharge (e.g. /v1/alpha/search returns no usage but bills one web_search
 // call), so token count alone is not sufficient to decide.
 func (s *textQuotaSummary) hasBillableUsage() bool {
-	return s.FixedPriceBilling || s.TotalTokens > 0 || !s.ToolCallSurchargeQuota.IsZero()
+	return s.FixedPriceBilling || s.TotalTokens > 0 ||
+		(s.IsClaudeUsageSemantic && (s.CacheTokens > 0 || s.CacheCreationTokens > 0 ||
+			s.CacheCreationTokens5m > 0 || s.CacheCreationTokens1h > 0)) ||
+		!s.ToolCallSurchargeQuota.IsZero()
 }
 
 func cacheWriteTokensTotal(summary textQuotaSummary) int {
@@ -157,6 +160,10 @@ func collectToolSurchargeItem(items []ToolSurchargeItem, toolPrices *operation_s
 	if count <= 0 {
 		return items
 	}
+	if count > relaycommon.MaxBillableToolCallCount {
+		common.SysError(common.LogText("tool surcharge call count exceeds limit for %s", name))
+		count = relaycommon.MaxBillableToolCallCount
+	}
 	price := toolPrices.GetToolPriceForModel(name, modelName)
 	if price <= 0 || math.IsNaN(price) || math.IsInf(price, 0) {
 		return items
@@ -186,7 +193,7 @@ func mergeToolSurchargeItems(items []ToolSurchargeItem) []ToolSurchargeItem {
 			merged[lastIndex].Name == item.Name &&
 			merged[lastIndex].Price == item.Price {
 			if item.Count > math.MaxInt-merged[lastIndex].Count {
-				common.SysError("tool surcharge call count overflow for " + item.Name)
+				common.SysError(common.LogText("tool surcharge call count overflow for %s", item.Name))
 				merged[lastIndex].Count = math.MaxInt
 			} else {
 				merged[lastIndex].Count += item.Count
@@ -242,6 +249,9 @@ func calculateTextToolCallSurcharge(ctx *gin.Context, relayInfo *relaycommon.Rel
 	}
 
 	summary.ToolSurchargeItems = mergeToolSurchargeItems(items)
+	for i := range summary.ToolSurchargeItems {
+		summary.ToolSurchargeItems[i].Count = min(summary.ToolSurchargeItems[i].Count, relaycommon.MaxBillableToolCallCount)
+	}
 	var surcharge decimal.Decimal
 	for _, item := range summary.ToolSurchargeItems {
 		surcharge = surcharge.Add(decimal.NewFromFloat(item.Price).
@@ -461,11 +471,11 @@ func usageSemanticFromUsage(relayInfo *relaycommon.RelayInfo, usage *dto.Usage) 
 	return "openai"
 }
 
-func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []string) {
+func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []*common.Message) {
 	originUsage := usage
 	billingUsage := effectiveBillingUsage(usage)
 	if usage == nil {
-		extraContent = append(extraContent, "上游无计费信息")
+		extraContent = append(extraContent, common.NewMessage("Upstream returned no usage"))
 	}
 	if originUsage != nil {
 		ObserveChannelAffinityUsageCacheByRelayFormat(ctx, billingUsage, relayInfo.GetFinalRequestRelayFormat())
@@ -508,41 +518,39 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 			Div(decimal.NewFromInt(1000)).
 			Mul(decimal.NewFromFloat(summary.GroupRatio)).
 			Mul(decimal.NewFromFloat(summary.QuotaPerUnit))
-		extraContent = append(extraContent, fmt.Sprintf(
-			"%s 调用 %d 次，调用花费 %s",
-			item.Name,
-			item.Count,
-			logger.LogQuota(common.QuotaFromDecimal(q)),
-		))
+		extraContent = append(extraContent, common.NewMessage("{{name}} called {{count}} times, cost {{quota}}", map[string]any{
+			"name":  item.Name,
+			"count": item.Count,
+			"quota": logger.FormatQuota(common.QuotaFromDecimal(q)),
+		}))
 	}
 	if summary.AudioInputPrice > 0 && summary.AudioTokens > 0 {
 		q := decimal.NewFromFloat(summary.AudioInputPrice).Div(decimal.NewFromInt(1000000)).Mul(decimal.NewFromInt(int64(summary.AudioTokens))).Mul(decimal.NewFromFloat(summary.GroupRatio)).Mul(decimal.NewFromFloat(summary.QuotaPerUnit))
-		extraContent = append(extraContent, fmt.Sprintf("Audio Input 花费 %s", logger.LogQuota(common.QuotaFromDecimal(q))))
+		extraContent = append(extraContent, common.NewMessage("Audio input cost {{quota}}", map[string]any{"quota": logger.FormatQuota(common.QuotaFromDecimal(q))}))
 	}
 
 	if !summary.hasBillableUsage() {
-		extraContent = append(extraContent, "上游没有返回计费信息，无法扣费（可能是上游超时）")
-		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, summary.ModelName, relayInfo.FinalPreConsumedQuota))
+		extraContent = append(extraContent, common.NewMessage("Upstream returned no usage, so nothing was charged (possibly an upstream timeout)"))
+		logger.LogError(ctx, common.LogText("total tokens is 0, cannot consume quota, userId %d, channelId %d, tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, summary.ModelName, relayInfo.FinalPreConsumedQuota))
 	} else {
 		model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, summary.Quota)
 		model.UpdateChannelUsedQuota(relayInfo.ChannelId, summary.Quota)
 	}
 
 	if err := SettleBilling(ctx, relayInfo, summary.Quota); err != nil {
-		logger.LogError(ctx, "error settling billing: "+err.Error())
+		logger.LogError(ctx, common.LogText("error settling billing: %s", err.Error()))
 	}
 
 	logModel := summary.ModelName
 	if strings.HasPrefix(logModel, "gpt-4-gizmo") {
 		logModel = "gpt-4-gizmo-*"
-		extraContent = append(extraContent, fmt.Sprintf("模型 %s", summary.ModelName))
+		extraContent = append(extraContent, common.NewMessage("Model {{model}}", map[string]any{"model": summary.ModelName}))
 	}
 	if strings.HasPrefix(logModel, "gpt-4o-gizmo") {
 		logModel = "gpt-4o-gizmo-*"
-		extraContent = append(extraContent, fmt.Sprintf("模型 %s", summary.ModelName))
+		extraContent = append(extraContent, common.NewMessage("Model {{model}}", map[string]any{"model": summary.ModelName}))
 	}
 
-	logContent := strings.Join(extraContent, ", ")
 	var other *model.LogOther
 	if summary.IsClaudeUsageSemantic {
 		other = GenerateClaudeOtherInfo(ctx, relayInfo,
@@ -605,19 +613,21 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	attachQuotaSaturation(ctx, relayInfo, other)
 
 	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
-		ChannelId:        relayInfo.ChannelId,
-		PromptTokens:     summary.PromptTokens,
-		CompletionTokens: summary.CompletionTokens,
-		TokenUsed:        usageStatsTokenTotal(&summary),
-		ModelName:        logModel,
-		TokenName:        summary.TokenName,
-		Quota:            summary.Quota,
-		Content:          logContent,
-		TokenId:          relayInfo.TokenId,
-		UseTimeSeconds:   int(summary.UseTimeSeconds),
-		IsStream:         relayInfo.IsStream,
-		Group:            relayInfo.UsingGroup,
-		Other:            other,
+		ChannelId:           relayInfo.ChannelId,
+		PromptTokens:        summary.PromptTokens,
+		CompletionTokens:    summary.CompletionTokens,
+		TokenUsed:           usageStatsTokenTotal(&summary),
+		CacheReadTokens:     int64(summary.CacheTokens),
+		CacheCreationTokens: int64(cacheWriteTokens),
+		ModelName:           logModel,
+		TokenName:           summary.TokenName,
+		Quota:               summary.Quota,
+		Content:             extraContent,
+		TokenId:             relayInfo.TokenId,
+		UseTimeSeconds:      int(summary.UseTimeSeconds),
+		IsStream:            relayInfo.IsStream,
+		Group:               relayInfo.UsingGroup,
+		Other:               other,
 	})
 	relayInfo.PerformanceOutputTokens = int64(summary.CompletionTokens)
 	relayInfo.PerformanceCacheHitTokens = summary.CacheHitTokens

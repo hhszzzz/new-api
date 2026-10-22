@@ -10,6 +10,7 @@ import (
 	sharedgemini "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/gemini"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/samber/lo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -647,6 +648,7 @@ func TestRequestConverterRegistryListsSupportedTextConverters(t *testing.T) {
 				ConverterGeminiContentToOpenAIChat,
 				ConverterOpenAIChatToOpenAIResponses,
 			},
+			advancedCustom: true,
 		},
 		{
 			converter:      requestConverterResponsesToClaude,
@@ -1044,7 +1046,6 @@ func TestConvertRequestResponsesToGeminiLowersCustomToolsAndHistory(t *testing.T
 	}
 
 	result, err := ConvertRequest(nil, info, types.RelayFormatGemini, req)
-
 	require.NoError(t, err)
 	geminiReq, ok := result.Value.(*dto.GeminiChatRequest)
 	require.True(t, ok)
@@ -1069,6 +1070,18 @@ func TestConvertRequestResponsesToGeminiLowersCustomToolsAndHistory(t *testing.T
 	require.NotNil(t, functionResponse)
 	assert.Equal(t, "apply_patch", functionResponse.Name)
 	assert.Equal(t, []types.RelayFormat{types.RelayFormatOpenAIResponses, types.RelayFormatGemini}, info.ConversionChain)
+
+	t.Run("missing name", func(t *testing.T) {
+		req := &dto.OpenAIResponsesRequest{
+			Model: "claude-test",
+			Input: mustRawMessage(t, []map[string]any{
+				{"type": "custom_tool_call", "call_id": "call_custom", "input": "ls"},
+				{"type": "custom_tool_call_output", "call_id": "call_custom", "output": "ok"},
+			}),
+		}
+		_, err := ConvertRequest(nil, &convmeta.Values{}, types.RelayFormatClaude, req)
+		require.ErrorContains(t, err, "custom_tool_call item is missing name")
+	})
 }
 
 func TestConvertRequestResponsesToGeminiUsesDirectConverter(t *testing.T) {
@@ -1669,4 +1682,39 @@ func inputContentText(t *testing.T, item map[string]any) string {
 	text, ok := part["text"].(string)
 	require.True(t, ok)
 	return text
+}
+
+func TestConvertRequestRecordsResponsesCustomToolsForEachTarget(t *testing.T) {
+	codexRequest := func(tools ...map[string]any) *dto.OpenAIResponsesRequest {
+		return &dto.OpenAIResponsesRequest{
+			Model:           "model-test",
+			MaxOutputTokens: lo.ToPtr(uint(64)),
+			Input:           mustMarshalRequestJSON(t, "hello"),
+			Tools:           mustMarshalRequestJSON(t, tools),
+		}
+	}
+	execTool := map[string]any{"type": "custom", "name": "exec", "description": "Run code", "format": map[string]any{"type": "text"}}
+	waitTool := map[string]any{"type": "function", "name": "wait", "parameters": map[string]any{"type": "object"}}
+
+	for _, target := range []types.RelayFormat{types.RelayFormatOpenAI, types.RelayFormatClaude, types.RelayFormatGemini} {
+		t.Run(string(target), func(t *testing.T) {
+			info := &convmeta.Values{}
+			_, err := ConvertRequest(nil, info, target, codexRequest(execTool, waitTool))
+			require.NoError(t, err)
+			require.NotNil(t, info.ResponsesTools)
+			assert.True(t, info.ResponsesTools.IsCustomTool("exec"))
+			assert.False(t, info.ResponsesTools.IsCustomTool("wait"))
+
+			_, err = ConvertRequest(nil, info, target, codexRequest(waitTool))
+			require.NoError(t, err)
+			assert.Nil(t, info.ResponsesTools, "a retry without custom tools must not keep the previous record")
+		})
+	}
+}
+
+func mustMarshalRequestJSON(t *testing.T, value any) []byte {
+	t.Helper()
+	raw, err := kitutil.Marshal(value)
+	require.NoError(t, err)
+	return raw
 }

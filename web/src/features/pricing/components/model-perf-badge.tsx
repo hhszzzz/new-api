@@ -44,7 +44,11 @@ export interface ModelPerfBadgeProps extends React.HTMLAttributes<HTMLDivElement
   onOpenPerformance?: () => void
 }
 
-const STATUS_SLOTS = Array.from({ length: 24 }, (_, slot) => slot)
+const STATUS_SAMPLE_LIMIT = 24
+const STATUS_SLOTS = Array.from(
+  { length: STATUS_SAMPLE_LIMIT },
+  (_, slot) => slot
+)
 
 // 24-hour success-rate strip. When `onOpenPerformance` is provided the strip
 // becomes a ghost button that opens the model's performance details, without
@@ -120,20 +124,31 @@ export const ModelPerfBadge = memo(function ModelPerfBadge(
     Number.isFinite(successRate) &&
     successRate >= 0 &&
     successRate <= 100
-  // Hourly points use the server window, including the current partial hour.
-  // Hours without traffic stay gray. Slot 23 is the current, partial hour.
+  const statusSamples = useMemo(
+    () =>
+      (props.perf?.recent_success_series ?? [])
+        .filter(
+          (point) =>
+            Number.isFinite(point.ts) &&
+            Number.isFinite(point.success_rate) &&
+            point.success_rate >= 0 &&
+            point.success_rate <= 100
+        )
+        .sort((a, b) => a.ts - b.ts)
+        .slice(-STATUS_SAMPLE_LIMIT),
+    [props.perf?.recent_success_series]
+  )
   const statusRates = useMemo(() => {
-    const windowStart = props.perf?.window_start
-    if (windowStart == null) return STATUS_SLOTS.map(() => undefined)
-    const ratesByHour = new Map<number, number>()
-    for (const point of props.perf?.recent_success_series ?? []) {
-      ratesByHour.set(point.ts, point.success_rate)
-    }
-    return STATUS_SLOTS.map((slot) => {
-      const hourStart = windowStart + slot * 3600
-      return ratesByHour.get(hourStart)
+    const rates: Array<number | undefined> = Array.from(
+      { length: STATUS_SAMPLE_LIMIT },
+      () => undefined
+    )
+    const offset = STATUS_SAMPLE_LIMIT - statusSamples.length
+    statusSamples.forEach((sample, index) => {
+      rates[offset + index] = sample.success_rate
     })
-  }, [props.perf?.recent_success_series, props.perf?.window_start])
+    return rates
+  }, [statusSamples])
 
   return (
     <div
