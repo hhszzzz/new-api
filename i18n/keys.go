@@ -707,6 +707,8 @@ const (
 	MsgRelayInvalidUrl                         = "relay.invalid_url"
 	MsgRelayTaskProtocolError                  = "relay.task_protocol_error"
 	MsgRelayTaskSubmitNoResult                 = "relay.task_submit_no_result"
+	MsgRelayTaskUsagePriceUnsupported          = "relay.task_usage_price_unsupported"
+	MsgRelaySharedTaskPriceNeedsOverride       = "relay.shared_task_price_needs_override"
 	MsgRelayTaskChannelDisabled                = "relay.task_channel_disabled"
 	MsgRelayTaskPersistFailed                  = "relay.task_persist_failed"
 	MsgRelayTaskBillingSettleFailed            = "relay.task_billing_settle_failed"

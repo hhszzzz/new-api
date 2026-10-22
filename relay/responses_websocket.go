@@ -113,6 +113,9 @@ type responsesWSSession struct {
 	privacy               *relaycommon.RelayInfo
 	nativeTransportFailed bool
 
+	// clientWriteBudget is guarded by clientWriteMu.
+	clientWriteBudget helper.StreamWriteBudget
+
 	// These fields belong to the serial request worker and describe the actual
 	// established connection. Per-request token/user data is never stored here.
 	lastResponseID  string
@@ -216,7 +219,7 @@ func (s *responsesWSSession) runRequest(state *responsesWSCallState, message []b
 		s.clientWriteMu.Lock()
 		s.stateMu.Lock()
 		if outgoing != nil {
-			if err := s.client.SetWriteDeadline(time.Now().Add(responsesWSWriteTimeout)); err != nil {
+			if err := s.client.SetWriteDeadline(s.clientWriteBudget.Deadline(time.Now(), len(outgoing.body))); err != nil {
 				state.closeCode = websocket.CloseInternalServerErr
 			} else if err := s.client.WriteMessage(outgoing.kind, outgoing.body); err != nil {
 				state.closeCode = websocket.CloseInternalServerErr
@@ -994,7 +997,7 @@ func (s *responsesWSSession) writeClient(kind int, message []byte) error {
 	}
 	s.clientWriteMu.Lock()
 	defer s.clientWriteMu.Unlock()
-	if err := s.client.SetWriteDeadline(time.Now().Add(responsesWSWriteTimeout)); err != nil {
+	if err := s.client.SetWriteDeadline(s.clientWriteBudget.Deadline(time.Now(), len(message))); err != nil {
 		return err
 	}
 	return s.client.WriteMessage(kind, message)

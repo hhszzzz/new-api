@@ -29,7 +29,6 @@ import {
 } from '@/components/ui/popover'
 import { getLobeIcon } from '@/lib/lobe-icon'
 import { resolveModelProvider } from '@/lib/model-provider'
-import { resolveDefaultProviderIconKey } from '@/lib/provider-icon'
 import { cn } from '@/lib/utils'
 
 import { isResponseModelMismatch } from '../lib/response-model'
@@ -73,7 +72,7 @@ function ModelBadgeContent(props: ModelBadgeProps & { copyable: boolean }) {
             title={provider.label ?? provider.name}
             aria-label={provider.label ?? provider.name}
           >
-            {getLobeIcon(resolveDefaultProviderIconKey(provider.icon), 18)}
+            {getLobeIcon(provider.icon, 18)}
           </span>
         )}
         <span

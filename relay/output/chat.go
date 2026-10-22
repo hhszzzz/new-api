@@ -20,6 +20,21 @@ type ChatWriter struct {
 	thinking          map[int]bool
 }
 
+// WrappedWriter and SetResponseWriter let stream transport wrappers apply
+// deadlines to the underlying connection without hiding ChatWriter's
+// protocol-aware WriteMessage method.
+func (w *ChatWriter) WrappedWriter() gin.ResponseWriter {
+	return w.ResponseWriter
+}
+
+func (w *ChatWriter) SetResponseWriter(writer gin.ResponseWriter) {
+	w.ResponseWriter = writer
+}
+
+func (w *ChatWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
 func (w *ChatWriter) WriteMessage(message Message) error {
 	data, err := w.format(message)
 	if err != nil {

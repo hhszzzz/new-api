@@ -236,6 +236,24 @@ func Distribute() func(c *gin.Context) {
 					}
 				}
 				if channel == nil {
+					if value, exists := c.Get(contextKeyTaskPluginEndpointSelection); exists {
+						if selected, ok := value.(taskPluginEndpointSelection); ok &&
+							selected.Model == modelRequest.Model && selected.Channel != nil &&
+							selected.Model == selectionModel && selected.Channel.IsSchedulableAt(time.Now()) &&
+							(candidateFilter == nil || candidateFilter(selected.Channel)) &&
+							channelMatchesCandidateClassifier(selected.Channel, candidateClassifier) &&
+							channelSupportsRequestPath(selected.Channel, c.Request.URL.Path, selectionModel) &&
+							channelPassesFilters(selected.Channel, selectionModel, constraints.Filters) &&
+							routeChannelAllowed(c, selected.Channel.Id) {
+							resolvedGroup, groupUsable := resolveAffinitySelectionGroup(c, selectionGroup, selectionModel, selected.Channel.Id)
+							if groupUsable {
+								channel = selected.Channel
+								commitRouteSelectionGroup(c, selectionGroup, resolvedGroup)
+							}
+						}
+					}
+				}
+				if channel == nil {
 					var selectErr *service.ChannelSelectError
 					channel, _, selectErr = service.SelectChannelForRequest(c, selectionModel, &service.RetryParam{
 						Ctx: c, ModelName: selectionModel, TokenGroup: selectionGroup,

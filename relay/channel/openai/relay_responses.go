@@ -222,6 +222,9 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			terminalSucceeded = true
 			info.StreamStatus.MarkTerminalSuccess()
 			info.StreamStatus.MarkTerminalDelivered()
+			if streamResponse.Response != nil && info.StreamStatus.ResponseOutcome() == string(relaycommon.ResponseOutcomeCompleted) {
+				sr.Done()
+			}
 		}
 	})
 	common.SetContextKey(c, constant.ContextKeyResponseStreamStatus, info.StreamStatus)

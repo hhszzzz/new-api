@@ -184,6 +184,20 @@ func FlushWriter(c *gin.Context) (err error) {
 	if err := http.NewResponseController(c.Writer).Flush(); err != nil {
 		return fmt.Errorf("flush stream response: %w", err)
 	}
+	// Gin's response writer can hide FlushError from an underlying transport.
+	// Walk the wrapper chain after flushing so a client write failure reaches
+	// the stream status and retry handling.
+	var writer http.ResponseWriter = c.Writer
+	for {
+		if flusher, ok := writer.(interface{ FlushError() error }); ok {
+			return flusher.FlushError()
+		}
+		unwrapper, ok := writer.(interface{ Unwrap() http.ResponseWriter })
+		if !ok {
+			break
+		}
+		writer = unwrapper.Unwrap()
+	}
 	return nil
 }
 
@@ -223,6 +237,24 @@ func SetEventStreamHeaders(c *gin.Context) {
 	c.Writer.Header().Set("Connection", "keep-alive")
 	c.Writer.Header().Set("Transfer-Encoding", "chunked")
 	c.Writer.Header().Set("X-Accel-Buffering", "no")
+	if rebinder, ok := c.Writer.(interface {
+		WrappedWriter() gin.ResponseWriter
+		SetResponseWriter(gin.ResponseWriter)
+	}); ok {
+		underlying := rebinder.WrappedWriter()
+		if _, alreadyWrapped := underlying.(*streamResponseWriter); !alreadyWrapped {
+			rebinder.SetResponseWriter(&streamResponseWriter{ResponseWriter: underlying})
+		}
+		return
+	}
+	if sink, ok := c.Writer.(output.Sink); ok {
+		c.Writer = &streamResponseSinkWriter{
+			streamResponseWriter: &streamResponseWriter{ResponseWriter: c.Writer},
+			sink:                 sink,
+		}
+		return
+	}
+	c.Writer = &streamResponseWriter{ResponseWriter: c.Writer}
 }
 
 func ClaudeData(c *gin.Context, resp dto.ClaudeResponse) error {

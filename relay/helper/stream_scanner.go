@@ -15,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relay/output"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
@@ -32,7 +33,8 @@ const (
 	// unconditional wg.Wait() in cleanup can always finish. Without it, a slow
 	// but connected client (full TCP buffer, no server WriteTimeout) could hang
 	// the handler forever.
-	streamWriteTimeout = 30 * time.Second
+	streamWriteTimeout  = 30 * time.Second
+	streamMinClientRate = 8 << 10 // bytes per second
 	// DefaultPingMaxDuration bounds the heartbeat goroutine so it can never
 	// outlive a stuck stream. Override with STREAM_PING_MAX_DURATION when the
 	// upstream legitimately stays silent for longer (long agent workflows).
@@ -90,7 +92,66 @@ func ExtendWriteDeadline(c *gin.Context) {
 	if c == nil || c.Writer == nil {
 		return
 	}
+	for writer := http.ResponseWriter(c.Writer); writer != nil; {
+		if _, ok := writer.(*streamResponseWriter); ok {
+			return
+		}
+		unwrapper, ok := writer.(interface{ Unwrap() http.ResponseWriter })
+		if !ok {
+			break
+		}
+		writer = unwrapper.Unwrap()
+	}
 	_ = http.NewResponseController(c.Writer).SetWriteDeadline(time.Now().Add(streamWriteTimeout))
+}
+
+// StreamWriteBudget gives a slow client enough time to drain the bytes already
+// queued for the stream while still bounding a client that stops reading.
+type StreamWriteBudget struct {
+	drainBy time.Time
+}
+
+// Deadline returns the write deadline for n more bytes written at now.
+func (b *StreamWriteBudget) Deadline(now time.Time, n int) time.Time {
+	if b.drainBy.Before(now) {
+		b.drainBy = now
+	}
+	b.drainBy = b.drainBy.Add(time.Duration(n) * time.Second / streamMinClientRate)
+	return b.drainBy.Add(streamWriteTimeout)
+}
+
+// streamResponseWriter applies a cumulative write budget to the underlying
+// connection. It preserves the writer wrapper chain so ResponseController can
+// still reach Flush and transport-specific deadlines.
+type streamResponseWriter struct {
+	gin.ResponseWriter
+	budget StreamWriteBudget
+}
+
+func (w *streamResponseWriter) Write(p []byte) (int, error) {
+	_ = http.NewResponseController(w.ResponseWriter).SetWriteDeadline(w.budget.Deadline(time.Now(), len(p)))
+	return w.ResponseWriter.Write(p)
+}
+
+func (w *streamResponseWriter) WriteString(s string) (int, error) {
+	_ = http.NewResponseController(w.ResponseWriter).SetWriteDeadline(w.budget.Deadline(time.Now(), len(s)))
+	return w.ResponseWriter.WriteString(s)
+}
+
+func (w *streamResponseWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
+// streamResponseSinkWriter keeps protocol-aware sinks visible after adding
+// the transport write budget. Without this adapter, SSE helpers fall back to
+// serializing already-complete WebSocket or formatted chat events as SSE.
+type streamResponseSinkWriter struct {
+	*streamResponseWriter
+	sink output.Sink
+}
+
+func (w *streamResponseSinkWriter) WriteMessage(message output.Message) error {
+	return w.sink.WriteMessage(message)
 }
 
 type StreamScannerOptions struct {

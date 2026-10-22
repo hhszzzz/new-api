@@ -40,6 +40,9 @@ func BuildChannelCandidateFilter(c *gin.Context, modelName string) model.Channel
 		if !clientpolicy.IsChannelAllowed(channel, client) {
 			return false
 		}
+		if _, matched := pinnedEndpointCandidateForChannel(c, channel, c.GetString("expected_task_plugin_key")); matched {
+			return true
+		}
 		if bridgeClassifierOwnsProtocolFiltering {
 			return true
 		}
@@ -59,6 +62,9 @@ func BuildChannelCandidateClassifier(c *gin.Context, modelName string) model.Cha
 	features := requestProtocolFeatures(c, protocol)
 	modelName = strings.TrimSpace(modelName)
 	return func(channel *model.Channel) model.ChannelCandidateClass {
+		if _, matched := pinnedEndpointCandidateForChannel(c, channel, c.GetString("expected_task_plugin_key")); matched {
+			return model.ChannelCandidateNative
+		}
 		plans := channelcompat.PlansForRequest(channel, protocol, modelName, requestPath, features)
 		if len(plans) == 0 {
 			return model.ChannelCandidateIncompatible
@@ -141,6 +147,13 @@ func applySelectedChannelCompatibility(c *gin.Context, channel *model.Channel, m
 	common.SetContextKey(c, constant.ContextKeyProtocolResponseStreamState, nil)
 	if !clientpolicy.IsChannelAllowed(channel, requestClient(c)) {
 		return fmt.Errorf("channel %d does not allow client %s", channel.Id, requestClient(c))
+	}
+	if _, matched := pinnedEndpointCandidateForChannel(c, channel, c.GetString("expected_task_plugin_key")); matched {
+		// A prepared plugin endpoint implements its declared host protocol itself.
+		// Ordinary channel protocol capabilities do not describe that endpoint.
+		common.SetContextKey(c, constant.ContextKeyProtocolAutoAttempt, nil)
+		common.SetContextKey(c, constant.ContextKeyProtocolPlan, nil)
+		return nil
 	}
 	protocol := channelcompat.DetectRequestProtocol(c.Request.URL.Path)
 	if protocol == "" {

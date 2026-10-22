@@ -21,10 +21,10 @@ import { useTranslation } from 'react-i18next'
 import { CopyButton } from '@/components/copy-button'
 import { StatusBadge } from '@/components/status-badge'
 import { Checkbox } from '@/components/ui/checkbox'
-import { localizedTierLabel } from '@/features/pricing/lib/billing-expr'
 import { cn } from '@/lib/utils'
 
 import type { PricingSyncValues } from '../types'
+import { PriceAdjustmentSelect } from './price-adjustment-select'
 import {
   getSyncPriceKind,
   getSyncPriceLines,
@@ -66,12 +66,12 @@ export function SyncPriceCell(props: {
           <div className='space-y-2'>
             {parsed.tiers.map((tier) => (
               <div
-                key={`${tier.label}::${tier.condition}`}
+                key={`${tier.label}:${tier.condition}`}
                 className='space-y-1'
               >
                 {parsed.tiers.length > 1 && (
                   <div className='text-muted-foreground text-xs!'>
-                    {tier.condition || localizedTierLabel(tier.label, t)}
+                    {tier.condition || tier.label || t('Default')}
                   </div>
                 )}
                 <SyncPriceMetrics lines={tier.lines} />
@@ -181,18 +181,22 @@ export function SyncSourcePriceCell(props: {
   const model = props.row.model
   const values = props.row.prices.upstreams[props.source]
   if (!values) return <span className='text-muted-foreground'>—</span>
+  const selected = context.selectedSources[model] === props.source
+  const mode = selected ? (context.adjustments[model] ?? 'keep') : 'keep'
+  const result = selected ? context.adjustedPrices[model] : undefined
   const same = sameSyncPrice(values, props.row.prices.current)
+  const canSelect = !same || context.showUnchanged || selected
   const confident = Object.values(props.row.differences ?? {}).every(
     (diff) => diff?.confidence?.[props.source] !== false
   )
   return (
     <div
       className={cn(
-        'flex min-h-10 min-w-0 items-center gap-3 rounded-md px-2 py-1 -mx-2',
+        'flex min-h-10 min-w-0 flex-wrap items-center gap-x-3 gap-y-1 rounded-md px-2 py-1 -mx-2',
         context.selectedSources[model] === props.source && 'bg-primary/8'
       )}
     >
-      {same ? (
+      {!canSelect ? (
         <StatusBadge
           label={t('Same as Local')}
           variant='neutral'
@@ -224,7 +228,37 @@ export function SyncSourcePriceCell(props: {
           )}
         </div>
       )}
-      <SyncPriceCell values={values} compareTo={props.row.prices.current} />
+      <div className='flex min-w-0 flex-1 flex-wrap items-center gap-2'>
+        <div className='min-w-0'>
+          <SyncPriceCell
+            values={result?.values ?? values}
+            compareTo={props.row.prices.current}
+          />
+        </div>
+        {canSelect && context.onAdjustPrices && (
+          <PriceAdjustmentSelect
+            compact
+            value={mode}
+            currency={context.currency}
+            disabled={context.isDisabled}
+            label={t('Price adjustment for {{model}} from {{source}}', {
+              model,
+              source: getUpstreamDisplayName(props.source, t),
+            })}
+            onChange={(next) => {
+              if (!selected) {
+                context.onSelectPrices([{ model, source: props.source }])
+              }
+              context.onAdjustPrices?.([model], next)
+            }}
+          />
+        )}
+      </div>
+      {result?.error && (
+        <p role='alert' className='text-destructive w-full pl-7 text-xs'>
+          {t(result.error)}
+        </p>
+      )}
     </div>
   )
 }
