@@ -172,7 +172,7 @@ func TestOpenAIResponsesRequestToClaudeMessagesUsesLowestEffortWhenThinkingCanno
 	require.NoError(t, err)
 	require.NotNil(t, got.Thinking)
 	assert.Equal(t, "adaptive", got.Thinking.Type)
-	assert.Empty(t, got.OutputConfig)
+	assert.Equal(t, "low", got.GetEfforts())
 }
 
 func TestOpenAIResponsesRequestToClaudeMessagesDisablesAdaptiveThinkingAfterUnsignedToolResult(t *testing.T) {

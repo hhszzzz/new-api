@@ -396,7 +396,10 @@ func responsesCallItemToClaudeToolUse(item map[string]any, inputKey string, kind
 		namespace = ""
 	}
 	if name == "" {
-		return dto.ClaudeMediaMessage{}, fmt.Errorf("Responses tool call is missing name")
+		if kind == sharedbridge.ToolKindCustom {
+			return dto.ClaudeMediaMessage{}, fmt.Errorf("custom_tool_call item is missing name")
+		}
+		return dto.ClaudeMediaMessage{}, fmt.Errorf("function_call item is missing name")
 	}
 	upstreamName, err := toolconv.UpstreamToolName(toolState, kind, namespace, name)
 	if err != nil {

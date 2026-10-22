@@ -668,9 +668,20 @@ func TestResponsesRequestToChatCompletionsRequestCustomToolCallUsesTemporaryFunc
 	require.Len(t, toolCalls, 1)
 	assert.Equal(t, "function", toolCalls[0].Type)
 	assert.Equal(t, "call_custom", toolCalls[0].ID)
-	assert.Equal(t, "apply_patch", toolCalls[0].Function.Name)
-	assert.Equal(t, "patch body", gjson.Get(toolCalls[0].Function.Arguments, "input").String())
+	assert.Equal(t, "exec", toolCalls[0].Function.Name)
+	assert.Equal(t, `echo "hi" && ls`, gjson.Get(toolCalls[0].Function.Arguments, "input").String())
 	assert.Empty(t, toolCalls[0].Custom)
+	assert.Equal(t, dto.Message{Role: "tool", ToolCallId: "call_custom", Content: "hi"}, got.Messages[1])
+}
+
+func TestResponsesRequestToChatCompletionsRequestRejectsNamelessCustomToolCall(t *testing.T) {
+	_, err := ResponsesRequestToChatCompletionsRequest(&dto.OpenAIResponsesRequest{
+		Model: "gpt-test",
+		Input: mustRawMessage(t, []map[string]any{
+			{"type": "custom_tool_call", "call_id": "call_custom", "input": "ls"},
+		}),
+	})
+	require.ErrorContains(t, err, "custom_tool_call item is missing name")
 }
 
 func TestResponsesRequestToChatCompletionsRequestRejectsEncodedToolNameCollision(t *testing.T) {
@@ -942,9 +953,14 @@ func TestResponsesRequestToChatCompletionsRequestHoistsToolOutputMediaAfterToolB
 
 		require.Len(t, got.Messages, 4)
 		assert.Len(t, got.Messages[0].ParseToolCalls(), 2)
-		assert.Equal(t, dto.Message{Role: "tool", ToolCallId: "call_1", Content: "[image]"}, got.Messages[1])
+		assert.Equal(t, "tool", got.Messages[1].Role)
+		assert.Equal(t, "call_1", got.Messages[1].ToolCallId)
+		assert.JSONEq(t, `[{"type":"text","text":"[new-api: tool result media moved to the following user message]"}]`, got.Messages[1].StringContent())
 		assert.Equal(t, dto.Message{Role: "tool", ToolCallId: "call_2", Content: "file.txt"}, got.Messages[2])
 		assert.Equal(t, "user", got.Messages[3].Role)
+		parts := got.Messages[3].ParseContent()
+		require.Len(t, parts, 2)
+		assert.Equal(t, dto.ContentTypeImageURL, parts[1].Type)
 	})
 
 	t.Run("trailing output flushes media at end of input", func(t *testing.T) {

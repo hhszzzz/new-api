@@ -206,6 +206,27 @@ describe('pricing synchronization', () => {
     expect(screen.getByText(custom)).toBeVisible()
   })
 
+  it('localizes well-known tier labels in synchronized prices', () => {
+    render(
+      <TableFixture
+        prices={{
+          labeled: {
+            current: {},
+            upstreams: {
+              upstream: {
+                billing_mode: 'tiered_expr',
+                billing_expr:
+                  'len <= 128000 ? tier("base", p * 2 + c * 8 + cr * 0.2) : tier("standard", p * 4 + c * 12 + cr * 0.4)',
+              },
+            },
+          },
+        }}
+      />
+    )
+    expect(screen.getByText('Standard')).toBeVisible()
+    expect(screen.queryByText('standard')).not.toBeInTheDocument()
+  })
+
   it('shows a mobile comparison list and preserves source-wide selection', async () => {
     const original = window.matchMedia
     vi.spyOn(window, 'matchMedia').mockImplementation((query) => ({
