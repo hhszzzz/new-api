@@ -383,7 +383,12 @@ export function usePromptAuditColumns(options: {
           const event = row.original
           return (
             <div className='min-w-0'>
-              <span className='font-mono text-xs'>{event.ip || '—'}</span>
+              {/* An IPv6 address runs to 39 characters, much wider than this
+                  column; truncate it in the list and keep the whole value in
+                  the tooltip, like the user agent below. */}
+              <TruncatedCell className='max-w-56 font-mono text-xs'>
+                {event.ip || '—'}
+              </TruncatedCell>
               <TruncatedCell className='text-muted-foreground max-w-52 text-xs'>
                 {event.user_agent || '—'}
               </TruncatedCell>
