@@ -115,13 +115,6 @@ func Distribute() func(c *gin.Context) {
 			abortWithProtocolMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorGroupAccessDenied))
 			return
 		}
-		promptAuditCleanup, promptAuditAllowed := inspectPromptBeforeDistribution(c, modelRequest)
-		if promptAuditCleanup != nil {
-			defer promptAuditCleanup()
-		}
-		if !promptAuditAllowed {
-			return
-		}
 
 		// Resolve the user-specific route before channel selection so every
 		// configured user receives strict target-model/channel-pool selection.
@@ -292,6 +285,16 @@ func Distribute() func(c *gin.Context) {
 				abortWithProtocolMessage(c, setupErr.StatusCode, setupErr.Error(), setupErr.GetErrorCode())
 				return
 			}
+		}
+		// Prompt inspection runs after channel selection so a channel-level
+		// exemption can apply to automatically routed requests too. It still runs
+		// before the handler, so no inspected prompt reaches the upstream provider.
+		promptAuditCleanup, promptAuditAllowed := inspectPromptBeforeDistribution(c, modelRequest)
+		if promptAuditCleanup != nil {
+			defer promptAuditCleanup()
+		}
+		if !promptAuditAllowed {
+			return
 		}
 		c.Next()
 		if channel != nil && c.Writer != nil && c.Writer.Status() < http.StatusBadRequest {

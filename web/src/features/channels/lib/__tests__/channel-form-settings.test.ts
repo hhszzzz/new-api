@@ -82,6 +82,59 @@ describe('channel form disable_model_on_error settings', () => {
   })
 })
 
+describe('channel form prompt_audit_exempt settings', () => {
+  test('writes the exemption into the settings JSON when enabled', () => {
+    const payload = transformFormDataToUpdatePayload(
+      {
+        ...CHANNEL_FORM_DEFAULT_VALUES,
+        prompt_audit_exempt: true,
+        settings: '{"other_flag":true}',
+      },
+      5
+    )
+
+    expect(settingsFrom(payload)).toMatchObject({
+      other_flag: true,
+      prompt_audit_exempt: true,
+    })
+  })
+
+  test('removes a stored exemption when the form value is off', () => {
+    const payload = transformFormDataToUpdatePayload(
+      {
+        ...CHANNEL_FORM_DEFAULT_VALUES,
+        prompt_audit_exempt: false,
+        settings: '{"other_flag":true,"prompt_audit_exempt":true}',
+      },
+      5
+    )
+
+    const settings = settingsFrom(payload)
+    expect(settings.other_flag).toBe(true)
+    expect(settings).not.toHaveProperty('prompt_audit_exempt')
+  })
+
+  test('hydrates the exemption from channel settings', () => {
+    const enabled = transformChannelToFormDefaults({
+      id: 1,
+      type: 1,
+      name: 'channel',
+      channel_info: {},
+      settings: '{"prompt_audit_exempt":true}',
+    } as Channel)
+    expect(enabled.prompt_audit_exempt).toBe(true)
+
+    const disabled = transformChannelToFormDefaults({
+      id: 1,
+      type: 1,
+      name: 'channel',
+      channel_info: {},
+      settings: '{}',
+    } as Channel)
+    expect(disabled.prompt_audit_exempt).toBe(false)
+  })
+})
+
 describe('channel form context_limits settings', () => {
   test('writes matching rules into the settings JSON', () => {
     const payload = transformFormDataToUpdatePayload(

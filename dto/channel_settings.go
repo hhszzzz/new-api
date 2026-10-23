@@ -154,6 +154,10 @@ type ChannelOtherSettings struct {
 	// the (group, model) that actually failed. Default false keeps the legacy
 	// channel-level behavior.
 	DisableModelOnError bool `json:"disable_model_on_error,omitempty"`
+	// PromptAuditExempt skips prompt inspection for traffic this channel serves.
+	// The request is still stored as an uninspected audit record while recording
+	// is on, so the gateway keeps a record of what passed through it.
+	PromptAuditExempt bool `json:"prompt_audit_exempt,omitempty"`
 	// ContextLimits declares per-model context windows (in tokens) for the
 	// models served by this channel. The first rule whose model_pattern matches
 	// wins. Declared values are advertised through the models listing so

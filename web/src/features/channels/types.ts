@@ -263,6 +263,7 @@ export interface ChannelOtherSettings {
   protocol_capabilities?: ProtocolCapabilities
   protocol_policy?: ProtocolPolicy
   disable_model_on_error?: boolean
+  prompt_audit_exempt?: boolean
   context_limits?: ChannelContextLimitRule[]
   client_policy?: {
     mode?: 'unrestricted' | 'allow' | 'deny'

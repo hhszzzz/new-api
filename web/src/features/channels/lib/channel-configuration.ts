@@ -64,6 +64,7 @@ const CONFIGURATION_BLOCKS = {
       'rpm_limit',
       'concurrency_limit',
       'disable_model_on_error',
+      'prompt_audit_exempt',
     ],
   },
   overrideRules: {
@@ -172,6 +173,7 @@ export function getChannelConfigurationState(
       values.rpm_limit ||
       values.concurrency_limit ||
       values.disable_model_on_error ||
+      values.prompt_audit_exempt ||
       (values.auto_ban ?? 1) !== 1
     ),
     overrideRules:

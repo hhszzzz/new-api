@@ -17,6 +17,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -98,6 +100,44 @@ func TestPromptAuditProbeBlockingAndExemptions(t *testing.T) {
 			require.NoError(t, err)
 			assert.Contains(t, row.RedactedPreview, strings.TrimSpace(test.text))
 			assert.Contains(t, string(row.ScanPayload), strings.TrimSpace(test.text))
+		})
+	}
+}
+
+// A channel marked exempt is served without any gate, including the probe gate,
+// and leaves no verdict; the caller stores it as an uninspected record.
+func TestPromptAuditChannelExemptionSkipsGates(t *testing.T) {
+	withPromptWordlistTestDB(t)
+	configured := prompt_audit_setting.GetSetting()
+	configured.Mode = prompt_audit_setting.ModeOff
+	configured.ProbeBlockEnabled = true
+	configured.ProbePhrases = []string{"hello"}
+	configured.PublishConfig()
+	snapshot := (&dto.ClaudeRequest{Messages: []dto.ClaudeMessage{{
+		Role: "user", Content: []any{map[string]any{"type": "text", "text": "hello"}},
+	}}}).GetPromptAuditSnapshot()
+	for _, test := range []struct {
+		name    string
+		exempt  bool
+		blocked bool
+	}{
+		{name: "exempt channel", exempt: true},
+		{name: "ordinary channel", blocked: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+			c.Set("role", common.RoleCommonUser)
+			common.SetContextKey(c, constant.ContextKeyChannelOtherSetting, hostdto.ChannelOtherSettings{PromptAuditExempt: test.exempt})
+			result, apiErr := InspectPrompt(c, PromptAuditRequest{Snapshot: snapshot, Protocol: "claude"})
+			assert.Equal(t, test.blocked, result.Blocked)
+			if test.blocked {
+				require.NotNil(t, apiErr)
+				return
+			}
+			require.Nil(t, apiErr)
+			assert.Zero(t, result.AuditID)
+			assert.Equal(t, "skipped_channel_exempt", result.Outcome)
 		})
 	}
 }

@@ -18,9 +18,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// inspectPromptBeforeDistribution runs after authentication and request-rate
-// limiting, but before user routing and channel selection. It returns false
-// after writing and aborting a rejected request.
+// inspectPromptBeforeDistribution runs after authentication, request-rate
+// limiting, and channel selection, but before the relay handler, so it can read
+// the selected channel's settings while no prompt has reached the upstream
+// provider yet. It returns false after writing and aborting a rejected request.
 func inspectPromptBeforeDistribution(c *gin.Context, modelRequest *ModelRequest) (func(), bool) {
 	if c == nil || c.Request == nil {
 		return nil, true

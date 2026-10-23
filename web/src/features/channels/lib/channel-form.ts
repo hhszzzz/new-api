@@ -353,6 +353,7 @@ export const channelFormSchema = z
     upstream_model_update_auto_sync_enabled: z.boolean().optional(),
     upstream_model_update_ignored_models: z.string().optional(),
     disable_model_on_error: z.boolean().optional(),
+    prompt_audit_exempt: z.boolean().optional(),
   })
   .superRefine((data, ctx) => {
     if (
@@ -591,6 +592,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   upstream_model_update_auto_sync_enabled: false,
   upstream_model_update_ignored_models: '',
   disable_model_on_error: false,
+  prompt_audit_exempt: false,
   advanced_custom: '',
 }
 
@@ -670,6 +672,7 @@ export function transformChannelToFormDefaults(
   let upstreamModelUpdateAutoSyncEnabled = false
   let upstreamModelUpdateIgnoredModels = ''
   let disableModelOnError = false
+  let promptAuditExempt = false
   let advancedCustom = ''
   let clientPolicyMode: 'unrestricted' | 'allow' | 'deny' = 'unrestricted'
   let clientPolicyClients = ''
@@ -716,6 +719,7 @@ export function transformChannelToFormDefaults(
         ? parsed.upstream_model_update_ignored_models.join(',')
         : ''
       disableModelOnError = parsed.disable_model_on_error === true
+      promptAuditExempt = parsed.prompt_audit_exempt === true
       if (parsed.advanced_custom) {
         advancedCustom = stringifyAdvancedCustomConfig(parsed.advanced_custom)
       }
@@ -817,6 +821,7 @@ export function transformChannelToFormDefaults(
     upstream_model_update_auto_sync_enabled: upstreamModelUpdateAutoSyncEnabled,
     upstream_model_update_ignored_models: upstreamModelUpdateIgnoredModels,
     disable_model_on_error: disableModelOnError,
+    prompt_audit_exempt: promptAuditExempt,
     advanced_custom: advancedCustom,
     client_policy_mode: clientPolicyMode,
     client_policy_clients: clientPolicyClients,
@@ -1010,6 +1015,13 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
     settingsObj.disable_model_on_error = true
   } else if ('disable_model_on_error' in settingsObj) {
     delete settingsObj.disable_model_on_error
+  }
+
+  // Serve this channel's traffic without prompt inspection.
+  if (formData.prompt_audit_exempt === true) {
+    settingsObj.prompt_audit_exempt = true
+  } else if ('prompt_audit_exempt' in settingsObj) {
+    delete settingsObj.prompt_audit_exempt
   }
 
   // Upstream model update settings (for model-fetchable channel types)

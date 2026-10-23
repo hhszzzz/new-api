@@ -387,6 +387,14 @@ func InspectPrompt(c *gin.Context, request PromptAuditRequest) (PromptAuditResul
 		direction = PromptAuditDirectionInput
 	}
 
+	// An exempt channel is served without any gate, including the probe gate. The
+	// caller stores the request as an uninspected record while recording is on.
+	if PromptAuditChannelExempt(c) {
+		result := PromptAuditResult{Mode: configured.Mode, Direction: direction, ConfigVersion: configured.ConfigVersion, Outcome: "skipped_channel_exempt"}
+		AttachPromptAuditResult(c, result)
+		return result, nil
+	}
+
 	// An inline base64 run is expanded before any gate reads the text: a client
 	// that encodes its real request must not be matched on the encoding. The
 	// original snapshot stays as it was — it is what the request actually

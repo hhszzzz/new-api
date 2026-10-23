@@ -26,6 +26,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
@@ -326,6 +327,15 @@ func PromptAuditAdminExempt(c *gin.Context, setting prompt_audit_setting.PromptA
 	return !setting.IncludeAdmins && contextInt(c, "role") >= common.RoleAdminUser
 }
 
+// PromptAuditChannelExempt reports whether the selected channel is excluded from
+// prompt inspection. The caller still records the request as stored while
+// recording is on, so an exempt channel keeps the same trail without paying for
+// a guard call.
+func PromptAuditChannelExempt(c *gin.Context) bool {
+	settings, ok := common.GetContextKeyType[hostdto.ChannelOtherSettings](c, constant.ContextKeyChannelOtherSetting)
+	return ok && settings.PromptAuditExempt
+}
+
 // RecordPromptAuditStored keeps a request that no gate inspected, so the gateway
 // still records what passed through it while enforcement is off. The row holds
 // the same content an inspected one would and carries no verdict: the worker
@@ -558,6 +568,14 @@ func checkPromptAuditWithSetting(c *gin.Context, request PromptAuditRequest, set
 		result.CoverageComplete = !request.CoverageIncomplete
 	}
 	if !PromptAuditAppliesToRequest(c, setting, mode) {
+		AttachPromptAuditResult(c, result)
+		return result, nil
+	}
+	// An exempt channel serves the request without inspection. The caller stores
+	// it as an uninspected record, so the exemption removes the guard call and its
+	// verdict rather than the trail.
+	if PromptAuditChannelExempt(c) {
+		result.Outcome = "skipped_channel_exempt"
 		AttachPromptAuditResult(c, result)
 		return result, nil
 	}

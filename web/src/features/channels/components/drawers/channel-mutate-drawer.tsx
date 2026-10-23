@@ -5207,6 +5207,28 @@ export function ChannelMutateDrawer({
                   </FormItem>
                 )}
               />
+              <FormField
+                control={form.control}
+                name='prompt_audit_exempt'
+                render={({ field }) => (
+                  <FormItem className='flex items-center justify-between'>
+                    <div className='space-y-0.5'>
+                      <FormLabel>{t('Skip prompt audit')}</FormLabel>
+                      <FormDescription>
+                        {t(
+                          'Requests served by this channel are not inspected by the prompt audit. They are still recorded as uninspected when recording is on.'
+                        )}
+                      </FormDescription>
+                    </div>
+                    <FormControl>
+                      <Switch
+                        checked={field.value === true}
+                        onCheckedChange={field.onChange}
+                      />
+                    </FormControl>
+                  </FormItem>
+                )}
+              />
               {isEditing && channelId && (
                 <Button
                   type='button'
