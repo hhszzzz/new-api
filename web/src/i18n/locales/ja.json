@@ -7289,6 +7289,7 @@
     "Stopping...": "停止中...",
     "Storage": "ストレージ",
     "Storage and archives": "ストレージとアーカイブ",
+    "Storage statistics were last updated at {{time}} and are waiting for the next background refresh.": "ストレージ統計の最終更新は {{time}} です。次回のバックグラウンド更新を待っています。",
     "Store": "Store",
     "Store + product created": "ストア + 商品を作成しました",
     "Store all request content and model replies": "リクエストとモデル応答をすべて保存",

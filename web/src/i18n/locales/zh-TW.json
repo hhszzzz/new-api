@@ -7289,6 +7289,7 @@
     "Stopping...": "正在停止...",
     "Storage": "儲存",
     "Storage and archives": "儲存與封存",
+    "Storage statistics were last updated at {{time}} and are waiting for the next background refresh.": "儲存統計最後更新於 {{time}}，正在等待下一次背景重新整理。",
     "Store": "店鋪",
     "Store + product created": "店鋪和產品已建立",
     "Store all request content and model replies": "完整儲存請求內容和模型回覆",

@@ -7289,6 +7289,7 @@
     "Stopping...": "Arrêt...",
     "Storage": "Stockage",
     "Storage and archives": "Stockage et archives",
+    "Storage statistics were last updated at {{time}} and are waiting for the next background refresh.": "Les statistiques de stockage ont été mises à jour le {{time}} et attendent la prochaine actualisation en arrière-plan.",
     "Store": "Store",
     "Store + product created": "Boutique + produit créés",
     "Store all request content and model replies": "Conserver toute la requête et les réponses",

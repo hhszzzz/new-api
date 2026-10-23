@@ -270,6 +270,16 @@ export function PromptAuditStorage() {
                 : t('Shared body storage is not enabled yet.')}
             </p>
           )}
+          {stats.data?.stale && (
+            <p className='text-sm text-amber-600 dark:text-amber-500'>
+              {t(
+                'Storage statistics were last updated at {{time}} and are waiting for the next background refresh.',
+                {
+                  time: formatTimestampToDate(stats.data.stats_updated_at),
+                }
+              )}
+            </p>
+          )}
           {stats.isPending && <LoadingState />}
           {stats.isError && (
             <ErrorState

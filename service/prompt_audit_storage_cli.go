@@ -140,6 +140,11 @@ func RunPromptAuditStorageCLI(args []string, stdout, stderr io.Writer) int {
 				break
 			}
 		}
+		if err == nil {
+			// Reference and block orphans are collected once, after every batch has
+			// been purged; the scan costs the same whether it runs once or per batch.
+			err = model.CleanupPromptAuditOrphanContent(db, 500)
+		}
 		result = map[string]any{"evicted": total}
 	case "export":
 		result, err = exportPromptAuditSnapshot(db, *out, *day, *statePath, *releasePath, *full, model.PromptAuditArchiveWindow{CreatedFrom: *createdFrom, CreatedBefore: *createdBefore})

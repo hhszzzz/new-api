@@ -114,13 +114,15 @@ TimeoutStartSec={timeout}
 '''
 
 
-def timer(command, interval):
+def timer(command, interval, minute=None):
+    # Two hourly jobs that share the maintenance lock must not fire in the same
+    # second: the loser exits silently and its work is skipped for the hour.
+    schedule = f"OnCalendar=*-*-* *:{minute:02d}:00" if minute is not None else f"OnBootSec={interval}min\nOnUnitActiveSec={interval}min"
     return f'''[Unit]
 Description=New-API prompt audit {command} every {interval} minutes
 
 [Timer]
-OnBootSec={interval}min
-OnUnitActiveSec={interval}min
+{schedule}
 Unit=ccs-prompt-audit-{command}.service
 
 [Install]
@@ -143,9 +145,9 @@ def main():
     config = "etc/ccs-prompt-audit-storage.conf"
     if not (root/config).exists():
         changes[config] = "HOST_ROOT=/opt/new-api/data/prompt-audit-maintenance\nCONTAINER_ROOT=/data/prompt-audit-maintenance\nREMOTE_ROOT=/ccs-backup/prompt-audit\nAGE_KEY=/root/.config/age/keys.txt\n"
-    for command, interval, timeout in (("import-jobs", 1, 7200), ("stats", 60, 900), ("disk-check", 60, 900), ("cleanup", 60, 900)):
+    for command, interval, timeout, minute in (("import-jobs", 1, 7200, None), ("stats", 60, 900, 5), ("disk-check", 60, 900, None), ("cleanup", 60, 900, 35)):
         changes[f"etc/systemd/system/ccs-prompt-audit-{command}.service"] = unit(command, timeout)
-        changes[f"etc/systemd/system/ccs-prompt-audit-{command}.timer"] = timer(command, interval)
+        changes[f"etc/systemd/system/ccs-prompt-audit-{command}.timer"] = timer(command, interval, minute)
     changes["etc/systemd/system/ccs-backup.service.d/prompt-audit.conf"] = "[Service]\nMemoryHigh=384M\nMemoryMax=512M\nMemorySwapMax=0\nCPUQuota=50%\nNice=15\nIOSchedulingClass=idle\nTimeoutStartSec=7200\nExecStopPost=/usr/local/bin/ccs-prompt-audit-storage.py cleanup-workers\n"
     subprocess.run(["bash", "-n"], input=changes["usr/local/bin/ccs-backup.sh"], text=True, capture_output=True, check=True)
     if args.activate:

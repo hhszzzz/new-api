@@ -7289,6 +7289,7 @@
     "Stopping...": "Stopping...",
     "Storage": "Storage",
     "Storage and archives": "Storage and archives",
+    "Storage statistics were last updated at {{time}} and are waiting for the next background refresh.": "Storage statistics were last updated at {{time}} and are waiting for the next background refresh.",
     "Store": "Store",
     "Store + product created": "Store + product created",
     "Store all request content and model replies": "Store all request content and model replies",

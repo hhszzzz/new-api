@@ -7289,6 +7289,7 @@
     "Stopping...": "Остановка...",
     "Storage": "Хранилище",
     "Storage and archives": "Хранилище и архивы",
+    "Storage statistics were last updated at {{time}} and are waiting for the next background refresh.": "Статистика хранилища последний раз обновлялась {{time}} и ожидает следующего фонового обновления.",
     "Store": "Store",
     "Store + product created": "Магазин и продукт созданы",
     "Store all request content and model replies": "Сохранять весь запрос и ответы модели",

@@ -26,6 +26,11 @@ type PromptAuditStorageStats struct {
 	ImportedBytes   int64 `json:"imported_bytes"`
 	CacheLimitBytes int64 `json:"cache_limit_bytes"`
 	CacheTTLSeconds int64 `json:"cache_ttl_seconds"`
+	// StatsUpdatedAt is when the cached measurement was taken, and Stale reports
+	// that the background refresh has not run since it expired. Both are set from
+	// the cache row rather than stored inside the measurement.
+	StatsUpdatedAt int64 `json:"stats_updated_at"`
+	Stale          bool  `json:"stale,omitempty"`
 }
 
 const promptAuditStorageStatsCacheTTL = time.Hour
@@ -155,6 +160,8 @@ func PromptAuditRetentionDays(db *gorm.DB) (int, error) {
 }
 
 func CachePromptAuditStorageStats(db *gorm.DB, stats PromptAuditStorageStats) error {
+	// The cache row carries the timestamp; the measurement itself must not.
+	stats.StatsUpdatedAt, stats.Stale = 0, false
 	data, err := common.Marshal(stats)
 	if err != nil {
 		return err
@@ -173,13 +180,18 @@ func GetCachedPromptAuditStorageStats(db *gorm.DB) (PromptAuditStorageStats, err
 	if err := db.Select("stats", "stats_updated_at").Where("id = ?", 1).First(&state).Error; err != nil {
 		return PromptAuditStorageStats{}, fmt.Errorf("%w: cache row unavailable: %v", ErrPromptAuditStorageStatsUnavailable, err)
 	}
-	if state.Stats == "" || state.StatsUpdatedAt <= 0 || common.GetTimestamp()-state.StatsUpdatedAt > int64(promptAuditStorageStatsCacheTTL/time.Second) {
+	if state.Stats == "" || state.StatsUpdatedAt <= 0 {
 		return PromptAuditStorageStats{}, ErrPromptAuditStorageStatsUnavailable
 	}
 	var stats PromptAuditStorageStats
 	if err := common.UnmarshalJsonStr(string(state.Stats), &stats); err != nil {
 		return PromptAuditStorageStats{}, fmt.Errorf("%w: invalid cache: %v", ErrPromptAuditStorageStatsUnavailable, err)
 	}
+	stats.StatsUpdatedAt = state.StatsUpdatedAt
+	// An expired measurement is still the last known one. The background refresh
+	// can be delayed by the maintenance lock, so the page shows the numbers with
+	// their age instead of failing while it waits.
+	stats.Stale = common.GetTimestamp()-state.StatsUpdatedAt > int64(promptAuditStorageStatsCacheTTL/time.Second)
 	return stats, nil
 }
 

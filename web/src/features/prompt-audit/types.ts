@@ -399,6 +399,8 @@ export interface PromptAuditStorageStats {
   imported_bytes: number
   cache_limit_bytes: number
   cache_ttl_seconds: number
+  stats_updated_at: number
+  stale?: boolean
 }
 
 export interface PromptAuditArchive {

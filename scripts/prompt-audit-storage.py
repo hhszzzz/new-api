@@ -495,6 +495,21 @@ def maintenance_resources_available():
     return os.getloadavg()[0] < max(1, os.cpu_count() or 1)*1.5
 
 
+def acquire_host_lock(host_lock, wait_seconds):
+    # Stats only reads, so it waits for cleanup or a backup to release the shared
+    # maintenance lock instead of skipping the whole hour and leaving the cached
+    # measurement to expire.
+    deadline = time.monotonic()+wait_seconds
+    while True:
+        try:
+            fcntl.flock(host_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(5)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("command", choices=["backup", "import-jobs", "disk-check", "stats", "cleanup", "worker", "cleanup-workers", "database-backup"])
@@ -556,7 +571,9 @@ def main():
     with (root/lock_name).open("w") as lock, (root/"host-backup.lock").open("w") as host_lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            if args.command in ("stats", "cleanup"):
+            if args.command == "stats":
+                acquire_host_lock(host_lock, 300)
+            elif args.command == "cleanup":
                 fcntl.flock(host_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             if args.command == "import-jobs":
                 # The core backup holds this lock through its final upload;

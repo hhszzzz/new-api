@@ -127,7 +127,18 @@ func TestPromptAuditSharedStorageMatrix(t *testing.T) {
 					require.NoError(t, CachePromptAuditStorageStats(db, computed))
 					cached, err := GetCachedPromptAuditStorageStats(db)
 					require.NoError(t, err)
+					assert.Positive(t, cached.StatsUpdatedAt)
+					assert.False(t, cached.Stale)
+					cached.StatsUpdatedAt, cached.Stale = 0, false
 					assert.Equal(t, computed, cached)
+					// A refresh delayed past the cache TTL still serves the last
+					// measurement, marked stale, instead of failing the read.
+					require.NoError(t, db.Model(&PromptAuditStorageState{}).Where("id = ?", 1).UpdateColumn("stats_updated_at", common.GetTimestamp()-2*int64(promptAuditStorageStatsCacheTTL/time.Second)).Error)
+					stale, err := GetCachedPromptAuditStorageStats(db)
+					require.NoError(t, err)
+					assert.True(t, stale.Stale)
+					stale.StatsUpdatedAt, stale.Stale = 0, false
+					assert.Equal(t, computed, stale)
 					configured := previousSetting
 					configured.SharedContentEnabled = true
 					configured.PublishConfig()

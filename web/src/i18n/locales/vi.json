@@ -7289,6 +7289,7 @@
     "Stopping...": "Đang dừng...",
     "Storage": "Lưu trữ",
     "Storage and archives": "Lưu trữ và kho lưu",
+    "Storage statistics were last updated at {{time}} and are waiting for the next background refresh.": "Thống kê lưu trữ được cập nhật lần cuối lúc {{time}} và đang chờ lần làm mới nền tiếp theo.",
     "Store": "Store",
     "Store + product created": "Đã tạo cửa hàng + sản phẩm",
     "Store all request content and model replies": "Lưu toàn bộ yêu cầu và phản hồi của mô hình",

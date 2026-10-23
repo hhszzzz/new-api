@@ -821,9 +821,8 @@ func CleanupPromptAuditSharedContent(db *gorm.DB, now int64, batchSize int) (int
 	if err := cleanupPromptAuditImportCache(db, now); err != nil {
 		return purged, err
 	}
-	if err := CleanupPromptAuditOrphanContent(db, limit); err != nil {
-		return purged, err
-	}
+	// Orphan collection scans every reference row, so it runs once after the
+	// caller has purged its batches rather than on each one.
 	return purged, nil
 }
 
