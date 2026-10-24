@@ -700,7 +700,12 @@ func GetUserModels(c *gin.Context) {
 			groupsToQuery = []string{group}
 		}
 	}
-	models := service.GetGroupsEnabledModels(groupsToQuery)
+	var models []string
+	if client := strings.TrimSpace(c.Query("client")); client != "" {
+		models = service.GetGroupsEnabledModelsForClient(groupsToQuery, client)
+	} else {
+		models = service.GetGroupsEnabledModels(groupsToQuery)
+	}
 	if user.Role != common.RoleRootUser {
 		routeSources, routeErr := model.GetEnabledUserModelRouteSources(user.Id, groupsToQuery)
 		if routeErr == nil && len(routeSources) > 0 {

@@ -77,6 +77,15 @@ func GetGroupEnabledModels(group string) []string {
 	return models
 }
 
+// GetGroupEnabledAbilities returns every enabled ability row in one group.
+// Callers that must explain or filter per-channel eligibility use these rows
+// instead of the distinct model names.
+func GetGroupEnabledAbilities(group string) []Ability {
+	var abilities []Ability
+	DB.Where(commonGroupCol+" = ? and enabled = ?", group, true).Find(&abilities)
+	return abilities
+}
+
 func GetEnabledModels() []string {
 	var models []string
 	// Find distinct models

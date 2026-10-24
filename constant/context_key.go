@@ -31,6 +31,8 @@ const (
 	ContextKeyProtocolAutoAttempt         ContextKey = "protocol_auto_attempt"
 	ContextKeyProtocolIncompatibleReason  ContextKey = "protocol_incompatible_reason"
 	ContextKeyClientName                  ContextKey = "client_name"
+	ContextKeyChannelClientBlocked        ContextKey = "channel_client_blocked"
+	ContextKeyChannelClientAllowed        ContextKey = "channel_client_allowed"
 	ContextKeyUpstreamRequestSize         ContextKey = "upstream_request_size"
 
 	/* token related keys */

@@ -9,10 +9,46 @@ import (
 )
 
 const (
-	ClientUnknown    = "unknown"
-	ClientCodex      = "codex"
-	ClientClaudeCode = "claude_code"
+	ClientUnknown         = "unknown"
+	ClientCodex           = "codex"
+	ClientClaudeCode      = "claude_code"
+	ClientPi              = "pi"
+	ClientDeepSeekHarness = "deepseek_harness"
 )
+
+// DisplayName is the product name shown to people, while the constants above
+// remain the stable identifiers stored in channel and group policies.
+func DisplayName(client string) string {
+	switch normalizeClientName(client) {
+	case ClientCodex:
+		return "Codex"
+	case ClientClaudeCode:
+		return "Claude Code"
+	case ClientPi:
+		return "Pi"
+	case ClientDeepSeekHarness:
+		return "DeepSeek Harness"
+	case ClientUnknown:
+		return "Unknown"
+	default:
+		return strings.TrimSpace(client)
+	}
+}
+
+// AllowedClients returns the display names an allow-list policy accepts. A deny
+// policy returns nil because its list names rejected clients, not accepted ones.
+func AllowedClients(policy operation_setting.ClientAccessPolicy) []string {
+	if operation_setting.NormalizeClientPolicyMode(policy.Mode) != operation_setting.ClientPolicyModeAllow {
+		return nil
+	}
+	clients := make([]string, 0, len(policy.Clients))
+	for _, client := range policy.Clients {
+		if name := DisplayName(client); name != "" {
+			clients = append(clients, name)
+		}
+	}
+	return clients
+}
 
 func Detect(request *http.Request) string {
 	if request == nil {
@@ -41,6 +77,17 @@ func Detect(request *http.Request) string {
 	}
 	userAgent := strings.ToLower(strings.TrimSpace(request.UserAgent()))
 	originator := strings.ToLower(strings.TrimSpace(request.Header.Get("Originator")))
+	// Pi and DeepSeek Harness identify themselves on every relay protocol, so
+	// their signatures are checked before the path-scoped built-ins. Pi sends
+	// "pi (darwin ...)" or "pi/<version>" on provider calls and "pi-coding-agent"
+	// on its Cloudflare provider; it also sets the pi originator on some routes.
+	if strings.HasPrefix(userAgent, "deepseek-harness/") {
+		return ClientDeepSeekHarness
+	}
+	if strings.HasPrefix(userAgent, "pi (") || strings.HasPrefix(userAgent, "pi/") ||
+		strings.HasPrefix(userAgent, "pi-coding-agent") || originator == ClientPi {
+		return ClientPi
+	}
 	if strings.HasPrefix(path, "/v1/responses") && (strings.HasPrefix(userAgent, "codex_cli_rs/") ||
 		strings.HasPrefix(userAgent, "codex-cli/") ||
 		strings.HasPrefix(originator, "codex") ||

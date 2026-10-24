@@ -6,6 +6,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service/clientpolicy"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
@@ -162,6 +163,30 @@ func GetGroupsEnabledModels(groups []string) []string {
 			}
 			seen[modelName] = struct{}{}
 			models = append(models, modelName)
+		}
+	}
+	return models
+}
+
+// GetGroupsEnabledModelsForClient keeps only models that at least one enabled
+// channel in the requested groups allows for client. It mirrors channel
+// distribution so a model list does not advertise entries every serving channel
+// rejects for the current client.
+func GetGroupsEnabledModelsForClient(groups []string, client string) []string {
+	seen := make(map[string]struct{})
+	models := make([]string, 0)
+	for _, group := range groups {
+		for _, ability := range model.GetGroupEnabledAbilities(group) {
+			if _, ok := seen[ability.Model]; ok {
+				continue
+			}
+			channel, err := model.CacheGetChannel(ability.ChannelId)
+			if err != nil || channel == nil || channel.Status != common.ChannelStatusEnabled ||
+				!clientpolicy.IsChannelAllowed(channel, client) {
+				continue
+			}
+			seen[ability.Model] = struct{}{}
+			models = append(models, ability.Model)
 		}
 	}
 	return models

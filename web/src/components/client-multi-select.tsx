@@ -32,6 +32,8 @@ interface ClientMultiSelectProps {
 const BUILTIN_CLIENT_OPTIONS: Option[] = [
   { label: 'Codex', value: 'codex' },
   { label: 'Claude Code', value: 'claude_code' },
+  { label: 'Pi', value: 'pi' },
+  { label: 'DeepSeek Harness', value: 'deepseek_harness' },
 ]
 
 function normalizeClientName(value: string): string {

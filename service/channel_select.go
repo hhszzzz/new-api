@@ -489,6 +489,26 @@ func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam
 			}
 		}
 		if channel == nil {
+			if retry.GetRetry() == 0 && common.GetContextKeyBool(c, constant.ContextKeyChannelClientBlocked) {
+				client := common.GetContextKeyString(c, constant.ContextKeyClientName)
+				if client == "" {
+					client = clientpolicy.Detect(c.Request)
+				}
+				clientName := clientpolicy.DisplayName(client)
+				if client == clientpolicy.ClientUnknown {
+					clientName = i18n.T(c, i18n.MsgClientUnknown)
+				}
+				params := map[string]any{"Group": usingGroup, "Model": modelName, "Client": clientName}
+				messageID := i18n.MsgDistributorNoChannelForClient
+				if allowed := common.GetContextKeyStringSlice(c, constant.ContextKeyChannelClientAllowed); len(allowed) > 0 {
+					messageID = i18n.MsgDistributorNoChannelClientMismatch
+					params["Allowed"] = strings.Join(allowed, ", ")
+				}
+				return nil, selectGroup, &ChannelSelectError{
+					StatusCode: http.StatusServiceUnavailable, Code: types.ErrorCodeModelNotFound,
+					MessageID: messageID, Params: params,
+				}
+			}
 			return nil, selectGroup, &ChannelSelectError{
 				StatusCode: http.StatusServiceUnavailable, Code: types.ErrorCodeModelNotFound, MessageID: i18n.MsgDistributorNoAvailableChannel,
 				Params: map[string]any{"Group": usingGroup, "Model": modelName}, NoAvailableChannel: true,

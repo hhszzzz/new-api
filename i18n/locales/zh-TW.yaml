@@ -527,11 +527,16 @@ distributor.group_access_denied: "無權存取該分組"
 distributor.get_channel_failed: "取得分組 {{.Group}} 下模型 {{.Model}} 的可用渠道失敗（distributor）：{{.Error}}"
 distributor.no_available_channel: "分組 {{.Group}} 下模型 {{.Model}} 無可用渠道（distributor）"
 distributor.no_available_channel_task_plugin: "分組 {{.Group}} 下模型 {{.Model}} 無可用渠道：該模型由任務外掛認領，但目前沒有啟用的渠道可服務此模型（distributor）"
+distributor.no_channel_for_client: "分組 {{.Group}} 下模型 {{.Model}} 不允許 {{.Client}} 用戶端"
+distributor.no_channel_client_mismatch: "分組 {{.Group}} 下模型 {{.Model}} 僅允許 {{.Allowed}} 用戶端"
 distributor.invalid_midjourney_request: "無效的 Midjourney 請求：{{.Error}}"
 distributor.invalid_request_parse_model: "無效的請求，無法解析模型"
 distributor.user_model_route_unavailable: "使用者模型路由暫時無法使用"
 distributor.channel_outside_user_route: "指定渠道不符合該使用者的模型路由"
 distributor.model_not_accessible: "請求的模型不存在或您無權存取"
+
+# Client identification labels
+client.unknown: "未知"
 
 # Custom OAuth provider messages
 custom_oauth.not_found: "自訂 OAuth 供應商不存在"

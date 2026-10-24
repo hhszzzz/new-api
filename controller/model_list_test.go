@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/service/clientpolicy"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -261,6 +262,64 @@ func TestGetUserModelsExcludesBlockedModels(t *testing.T) {
 	GetUserModels(context)
 
 	assert.ElementsMatch(t, []string{"zz-allowed-model"}, decodeUserModelsResponse(t, recorder))
+}
+
+func TestGetUserModelsFiltersModelsByClientPolicy(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	previousMemoryCacheEnabled := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = false
+	t.Cleanup(func() { common.MemoryCacheEnabled = previousMemoryCacheEnabled })
+
+	require.NoError(t, db.Create(&model.User{
+		Id:       1005,
+		Username: "client-policy-model-user",
+		Password: "password",
+		Group:    "default",
+		Status:   common.UserStatusEnabled,
+	}).Error)
+
+	claudeOnly := &model.Channel{
+		Id:     31,
+		Type:   constant.ChannelTypeOpenAI,
+		Key:    "client-policy-claude-key",
+		Name:   "client-policy-claude-channel",
+		Group:  "default",
+		Status: common.ChannelStatusEnabled,
+		Models: "zz-claude-only-model",
+	}
+	claudeOnly.SetOtherSettings(hostdto.ChannelOtherSettings{
+		ClientPolicy: operation_setting.ClientAccessPolicy{
+			Mode:    operation_setting.ClientPolicyModeAllow,
+			Clients: []string{clientpolicy.ClientClaudeCode},
+		},
+	})
+	open := &model.Channel{
+		Id:     32,
+		Type:   constant.ChannelTypeOpenAI,
+		Key:    "client-policy-open-key",
+		Name:   "client-policy-open-channel",
+		Group:  "default",
+		Status: common.ChannelStatusEnabled,
+		Models: "zz-open-model",
+	}
+	require.NoError(t, db.Create([]*model.Channel{claudeOnly, open}).Error)
+	require.NoError(t, db.Create(&[]model.Ability{
+		{Group: "default", Model: "zz-claude-only-model", ChannelId: 31, Enabled: true},
+		{Group: "default", Model: "zz-open-model", ChannelId: 32, Enabled: true},
+	}).Error)
+
+	modelsFor := func(query string) []string {
+		recorder := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(recorder)
+		ctx.Request = httptest.NewRequest(http.MethodGet, "/api/user/models?"+query, nil)
+		ctx.Set("id", 1005)
+		GetUserModels(ctx)
+		return decodeUserModelsResponse(t, recorder)
+	}
+
+	assert.ElementsMatch(t, []string{"zz-claude-only-model", "zz-open-model"}, modelsFor("group=default"))
+	assert.ElementsMatch(t, []string{"zz-open-model"}, modelsFor("group=default&client=unknown"))
+	assert.ElementsMatch(t, []string{"zz-claude-only-model", "zz-open-model"}, modelsFor("group=default&client=claude_code"))
 }
 
 func TestGetUserModelsExpandsAutoGroupsInConfiguredOrder(t *testing.T) {

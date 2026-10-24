@@ -14,10 +14,14 @@ import (
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
+	"github.com/QuantumNous/new-api/service/clientpolicy"
 	"github.com/QuantumNous/new-api/setting/model_setting"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func TestChannelMatchesExpectedTaskPluginUsesGenericChannelSetting(t *testing.T) {
@@ -287,6 +291,64 @@ func TestNoAvailableChannelMessageWithoutPlugin(t *testing.T) {
 	generic := noAvailableChannelMessage(plain, "default", "gpt-4o")
 	assert.NotContains(t, generic, "task plugin")
 	assert.Contains(t, generic, "gpt-4o")
+}
+
+func TestDistributeExplainsClientPolicyRejection(t *testing.T) {
+	require.NoError(t, i18n.Init())
+	previousDB := model.DB
+	previousMemoryCacheEnabled := common.MemoryCacheEnabled
+	db, err := gorm.Open(sqlite.Open("file:distributor_client_policy?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}))
+	model.DB = db
+	common.MemoryCacheEnabled = true
+	t.Cleanup(func() {
+		model.DB = previousDB
+		common.MemoryCacheEnabled = previousMemoryCacheEnabled
+		if previousMemoryCacheEnabled && previousDB != nil {
+			model.InitChannelCache()
+		}
+	})
+
+	channel := &model.Channel{
+		Id:     41,
+		Type:   constant.ChannelTypeOpenAI,
+		Key:    "client-policy-distributor-key",
+		Name:   "client-policy-distributor-channel",
+		Group:  "default",
+		Status: common.ChannelStatusEnabled,
+		Models: "zz-client-policy-model",
+	}
+	channel.SetOtherSettings(hostdto.ChannelOtherSettings{
+		ClientPolicy: operation_setting.ClientAccessPolicy{
+			Mode:    operation_setting.ClientPolicyModeAllow,
+			Clients: []string{clientpolicy.ClientClaudeCode},
+		},
+	})
+	require.NoError(t, db.Create(channel).Error)
+	require.NoError(t, db.Create(&model.Ability{
+		Group: "default", Model: "zz-client-policy-model", ChannelId: 41, Enabled: true,
+	}).Error)
+	model.InitChannelCache()
+
+	router := gin.New()
+	router.POST("/v1/chat/completions", func(c *gin.Context) {
+		common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
+		common.SetContextKey(c, constant.ContextKeyUserGroups, []string{"default"})
+	}, Distribute(), func(c *gin.Context) {
+		t.Error("a client rejected by channel policy must stop before the relay handler")
+		c.Status(http.StatusNoContent)
+	})
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"zz-client-policy-model","messages":[{"role":"user","content":"hi"}]}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept-Language", "en")
+	request.Header.Set("User-Agent", "curl/8.0")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), "Model zz-client-policy-model under group default only allows the Claude Code client")
 }
 
 func TestSharedEndpointRebindsToSelectedType61Plugin(t *testing.T) {

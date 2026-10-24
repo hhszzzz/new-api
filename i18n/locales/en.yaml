@@ -531,11 +531,16 @@ distributor.group_access_denied: "No permission to access this group"
 distributor.get_channel_failed: "Failed to get available channel for model {{.Model}} under group {{.Group}} (distributor): {{.Error}}"
 distributor.no_available_channel: "No available channel for model {{.Model}} under group {{.Group}} (distributor)"
 distributor.no_available_channel_task_plugin: "No available channel for model {{.Model}} under group {{.Group}}: the model is claimed by a task plugin, which has no enabled channel serving it (distributor)"
+distributor.no_channel_for_client: "Model {{.Model}} under group {{.Group}} does not allow the {{.Client}} client"
+distributor.no_channel_client_mismatch: "Model {{.Model}} under group {{.Group}} only allows the {{.Allowed}} client"
 distributor.invalid_midjourney_request: "Invalid Midjourney request: {{.Error}}"
 distributor.invalid_request_parse_model: "Invalid request, unable to parse model"
 distributor.user_model_route_unavailable: "The user model route is temporarily unavailable"
 distributor.channel_outside_user_route: "The specified channel is outside this user's model route"
 distributor.model_not_accessible: "The requested model does not exist or you do not have access to it"
+
+# Client identification labels
+client.unknown: "Unknown"
 
 # Custom OAuth provider messages
 custom_oauth.not_found: "Custom OAuth provider not found"

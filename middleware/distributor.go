@@ -21,6 +21,7 @@ import (
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/clientpolicy"
 	"github.com/QuantumNous/new-api/service/protocolstate"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
@@ -880,7 +881,7 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	}
 	if selectionGroup != "" && !groupAllowsRequestClient(c, selectionGroup) {
 		return hosttypes.NewErrorWithStatusCode(
-			fmt.Errorf("group %s does not allow client %s", selectionGroup, requestClient(c)),
+			fmt.Errorf("group %s does not allow client %s", selectionGroup, clientpolicy.DisplayName(requestClient(c))),
 			hosttypes.ErrorCodeInvalidRequest,
 			http.StatusForbidden,
 			hosttypes.ErrOptionWithSkipRetry(),

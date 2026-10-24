@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { api } from '@/lib/api'
 import { requireServerSuccess } from '@/lib/server-error-message'
 
-import { API_ENDPOINTS } from './constants'
+import { API_ENDPOINTS, PLAYGROUND_CLIENT } from './constants'
 import type {
   ChatCompletionRequest,
   ChatCompletionResponse,
@@ -46,7 +46,7 @@ export async function sendChatCompletion(
  */
 export async function getUserModels(group: string): Promise<ModelOption[]> {
   const res = await api.get(API_ENDPOINTS.USER_MODELS, {
-    params: { group },
+    params: { group, client: PLAYGROUND_CLIENT },
   })
   const { data } = res
   requireServerSuccess(data)

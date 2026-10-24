@@ -53,9 +53,45 @@ func TestDetectRecognizesBuiltInAndConfiguredClients(t *testing.T) {
 	claude.Header.Set("User-Agent", "claude-cli/2.0.0")
 	assert.Equal(t, ClientClaudeCode, Detect(claude))
 
+	deepseekHarness := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	deepseekHarness.Header.Set("User-Agent", "deepseek-harness/0.2.1-rc.2 (+https://github.com/deepseek-ai/deepseek-harness)")
+	assert.Equal(t, ClientDeepSeekHarness, Detect(deepseekHarness))
+
+	pi := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	pi.Header.Set("User-Agent", "pi (darwin 22.4.0; x64)")
+	assert.Equal(t, ClientPi, Detect(pi))
+
+	versionedPi := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	versionedPi.Header.Set("User-Agent", "pi/0.80.3 (darwin; node/v22.19.0; arm64)")
+	assert.Equal(t, ClientPi, Detect(versionedPi))
+
 	unknown := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	unknown.Header.Set("User-Agent", "curl/8.0")
 	assert.Equal(t, ClientUnknown, Detect(unknown))
+}
+
+func TestDisplayNameUsesProductNames(t *testing.T) {
+	assert.Equal(t, "Codex", DisplayName(ClientCodex))
+	assert.Equal(t, "Claude Code", DisplayName(ClientClaudeCode))
+	assert.Equal(t, "Pi", DisplayName(ClientPi))
+	assert.Equal(t, "DeepSeek Harness", DisplayName(ClientDeepSeekHarness))
+	assert.Equal(t, "Unknown", DisplayName(ClientUnknown))
+	assert.Equal(t, "custom_agent", DisplayName("custom_agent"))
+}
+
+func TestAllowedClientsOnlyDescribesAllowPolicies(t *testing.T) {
+	assert.Equal(t,
+		[]string{"Claude Code", "DeepSeek Harness"},
+		AllowedClients(operation_setting.ClientAccessPolicy{
+			Mode:    operation_setting.ClientPolicyModeAllow,
+			Clients: []string{ClientClaudeCode, ClientDeepSeekHarness},
+		}),
+	)
+	assert.Nil(t, AllowedClients(operation_setting.ClientAccessPolicy{
+		Mode:    operation_setting.ClientPolicyModeDeny,
+		Clients: []string{ClientPi},
+	}))
+	assert.Nil(t, AllowedClients(operation_setting.ClientAccessPolicy{}))
 }
 
 func TestDetectRejectsUnsafeCustomHeaderRules(t *testing.T) {

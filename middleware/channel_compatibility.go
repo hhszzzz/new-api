@@ -4,6 +4,7 @@ import (
 	"fmt"
 	hostdto "github.com/QuantumNous/new-api/dto"
 	hosttypes "github.com/QuantumNous/new-api/types"
+	"slices"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -38,6 +39,22 @@ func BuildChannelCandidateFilter(c *gin.Context, modelName string) model.Channel
 	bridgeClassifierOwnsProtocolFiltering := protocol == channelcompat.ProtocolResponses || protocol == channelcompat.ProtocolMessages
 	return func(channel *model.Channel) bool {
 		if !clientpolicy.IsChannelAllowed(channel, client) {
+			// Remember that a candidate existed but the client policy removed it,
+			// so an empty result can be explained instead of reported as a plain
+			// "no available channel". Allow-list policies also contribute the
+			// clients they would accept, which is what the caller needs to fix
+			// the request.
+			common.SetContextKey(c, constant.ContextKeyChannelClientBlocked, true)
+			allowed := clientpolicy.AllowedClients(channel.GetOtherSettings().ClientPolicy)
+			if len(allowed) > 0 {
+				seen := common.GetContextKeyStringSlice(c, constant.ContextKeyChannelClientAllowed)
+				for _, name := range allowed {
+					if !slices.Contains(seen, name) {
+						seen = append(seen, name)
+					}
+				}
+				common.SetContextKey(c, constant.ContextKeyChannelClientAllowed, seen)
+			}
 			return false
 		}
 		if _, matched := pinnedEndpointCandidateForChannel(c, channel, c.GetString("expected_task_plugin_key")); matched {
@@ -146,7 +163,7 @@ func applySelectedChannelCompatibility(c *gin.Context, channel *model.Channel, m
 	c.Request = c.Request.WithContext(relayconvert.WithProtocolBridgeContext(c.Request.Context()))
 	common.SetContextKey(c, constant.ContextKeyProtocolResponseStreamState, nil)
 	if !clientpolicy.IsChannelAllowed(channel, requestClient(c)) {
-		return fmt.Errorf("channel %d does not allow client %s", channel.Id, requestClient(c))
+		return fmt.Errorf("channel %d does not allow client %s", channel.Id, clientpolicy.DisplayName(requestClient(c)))
 	}
 	if _, matched := pinnedEndpointCandidateForChannel(c, channel, c.GetString("expected_task_plugin_key")); matched {
 		// A prepared plugin endpoint implements its declared host protocol itself.

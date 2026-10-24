@@ -43,6 +43,11 @@ export const API_ENDPOINTS = {
 // only selected when the backend confirms it is available for the user.
 export const DEFAULT_GROUP = 'default' as const
 
+// Browser playground requests carry no client signature of their own, so relay
+// requests through /pg are classified as unknown clients. The model list uses
+// the same identity to hide models whose channels reject that client.
+export const PLAYGROUND_CLIENT = 'unknown' as const
+
 // Default configuration
 export const DEFAULT_CONFIG: PlaygroundConfig = {
   model: 'gpt-4o',
