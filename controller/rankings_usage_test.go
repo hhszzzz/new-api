@@ -143,6 +143,119 @@ func TestRankingsCustomPeriodRejectsMissingAndReversedEndpoints(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, reversed.Code)
 }
 
+func TestRankingsModelUsageScopesAllStatisticsToViewerGroups(t *testing.T) {
+	service.InvalidateRankingsCache()
+	t.Cleanup(service.InvalidateRankingsCache)
+	db := setupModelListControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.QuotaData{}, &model.ScopedQuotaData{}))
+	require.NoError(t, db.Create(&model.Channel{Id: 982, Name: "rankings-groups", Status: common.ChannelStatusEnabled}).Error)
+	for _, name := range []string{"ranking-model-a", "ranking-model-b", "ranking-hidden-model"} {
+		require.NoError(t, db.Create(&model.Ability{Group: "default", Model: name, ChannelId: 982, Enabled: true}).Error)
+	}
+	// The same public model has usage in both assigned and unassigned groups.
+	// Legacy rows must obey the same group filter even when their names are redacted.
+	require.NoError(t, db.Create(&[]model.QuotaData{
+		{Username: "alice", ModelName: "ranking-model-a", CreatedAt: 7201, UseGroup: "team-a", TokenUsed: 10, Quota: 50000, Count: 1},
+		{Username: "alice", ModelName: "ranking-hidden-model", CreatedAt: 7201, UseGroup: "secret", TokenUsed: 700, Quota: 700000, Count: 1},
+		{Username: "alice", ModelName: "ranking-hidden-model", CreatedAt: 7201, TokenUsed: 800, Quota: 800000, Count: 1},
+		{Username: "alice", ModelName: "ranking-model-a", CreatedAt: 3601, UseGroup: "team-a", TokenUsed: 5, Quota: 25000, Count: 1},
+		{Username: "alice", ModelName: "ranking-hidden-model", CreatedAt: 3601, UseGroup: "secret", TokenUsed: 800, Quota: 800000, Count: 1},
+	}).Error)
+	require.NoError(t, db.Create(&[]model.ScopedQuotaData{
+		{Username: "alice", ModelName: "ranking-model-a", ModelScope: model.QuotaModelScopeRequested, CreatedAt: 7201, UseGroup: "team-a", TokenUsed: 100, Quota: 500000, Count: 1},
+		{Username: "bob", ModelName: "ranking-model-b", ModelScope: model.QuotaModelScopeRequested, CreatedAt: 7201, UseGroup: "team-b", TokenUsed: 50, Quota: 250000, Count: 1},
+		{Username: "alice", ModelName: "ranking-model-a", ModelScope: model.QuotaModelScopeRequested, CreatedAt: 7201, UseGroup: "secret", TokenUsed: 900, Quota: 900000, Count: 1},
+		{Username: "secret", ModelName: "ranking-hidden-model", ModelScope: model.QuotaModelScopeRequested, CreatedAt: 7201, UseGroup: "secret", TokenUsed: 1000, Quota: 1000000, Count: 1},
+		{Username: "unknown", ModelName: "ranking-hidden-model", ModelScope: model.QuotaModelScopeRequested, CreatedAt: 7201, TokenUsed: 600, Quota: 600000, Count: 1},
+		{Username: "alice", ModelName: "ranking-model-a", ModelScope: model.QuotaModelScopeRequested, CreatedAt: 3601, UseGroup: "team-a", TokenUsed: 50, Quota: 250000, Count: 1},
+		{Username: "bob", ModelName: "ranking-model-b", ModelScope: model.QuotaModelScopeRequested, CreatedAt: 3601, UseGroup: "team-b", TokenUsed: 25, Quota: 125000, Count: 1},
+		{Username: "secret", ModelName: "ranking-model-b", ModelScope: model.QuotaModelScopeRequested, CreatedAt: 3601, UseGroup: "secret", TokenUsed: 2000, Quota: 2000000, Count: 1},
+	}).Error)
+	model.InvalidatePricingCache()
+
+	const requestURL = "/api/rankings?period=custom&start_timestamp=7200&end_timestamp=10799"
+	var firstSnapshot service.RankingsResponse
+	for _, test := range []struct {
+		name   string
+		groups []string
+		tokens int64
+		quota  int64
+		models int
+	}{
+		{name: "all memberships", groups: []string{"team-a", "team-b"}, tokens: 160, quota: 800000, models: 3},
+		{name: "different memberships", groups: []string{"team-b"}, tokens: 50, quota: 250000, models: 1},
+		{name: "no memberships", groups: nil},
+		{name: "blank memberships", groups: []string{"", " "}},
+		{name: "canonical memberships", groups: []string{"team-b", "team-a", "team-a"}, tokens: 160, quota: 800000, models: 3},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := invokeRankingsUsageRequest(t, requestURL, 7, common.RoleCommonUser, test.groups...)
+			require.Equal(t, http.StatusOK, recorder.Code)
+			var payload rankingsVisibilityResponse
+			require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &payload))
+			require.True(t, payload.Success)
+			data := payload.Data
+			assert.Equal(t, test.tokens, data.TotalTokens)
+			assert.Equal(t, test.quota, data.TotalQuota)
+			assert.InDelta(t, float64(test.quota)/common.GetQuotaPerUnit(), data.TotalUSD, 0.000001)
+			require.Len(t, data.Models, test.models)
+			assert.NotContains(t, recorder.Body.String(), "ranking-hidden-model")
+			var modelTokens, modelQuota, vendorTokens, vendorQuota, historyTokens, historyQuota, vendorHistoryTokens, vendorHistoryQuota int64
+			for _, item := range data.Models {
+				modelTokens += item.TotalTokens
+				modelQuota += item.TotalQuota
+				assert.Equal(t, float64(100), item.GrowthPct)
+				require.NotNil(t, item.PreviousRank)
+				assert.Equal(t, item.Rank, *item.PreviousRank)
+			}
+			for _, item := range data.Vendors {
+				vendorTokens += item.TotalTokens
+				vendorQuota += item.TotalQuota
+				assert.Equal(t, float64(100), item.GrowthPct)
+			}
+			for _, point := range data.ModelsHistory.Points {
+				historyTokens += point.Tokens
+				historyQuota += point.Quota
+			}
+			for _, point := range data.VendorShareHistory.Points {
+				vendorHistoryTokens += point.Tokens
+				vendorHistoryQuota += point.Quota
+			}
+			assert.Equal(t, test.tokens, modelTokens)
+			assert.Equal(t, test.quota, modelQuota)
+			assert.Equal(t, test.tokens, vendorTokens)
+			assert.Equal(t, test.quota, vendorQuota)
+			assert.Equal(t, test.tokens, historyTokens)
+			assert.Equal(t, test.quota, historyQuota)
+			assert.Equal(t, test.tokens, vendorHistoryTokens)
+			assert.Equal(t, test.quota, vendorHistoryQuota)
+			assert.Empty(t, data.TopMovers)
+			assert.Empty(t, data.TopDroppers)
+			require.NotNil(t, data.UserUsage)
+			assert.Equal(t, test.tokens, data.UserUsage.TotalTokens)
+			assert.Equal(t, test.quota, data.UserUsage.TotalQuota)
+			if test.tokens == 0 {
+				assert.Empty(t, data.UserUsage.Users)
+				assert.Empty(t, data.ModelsHistory.Models)
+				assert.Empty(t, data.VendorShareHistory.Vendors)
+			}
+			if test.name == "all memberships" {
+				firstSnapshot = data
+			} else if test.name == "canonical memberships" {
+				assert.Equal(t, firstSnapshot, data)
+			}
+		})
+	}
+
+	admin := invokeRankingsUsageRequest(t, requestURL, 9, common.RoleAdminUser)
+	require.Equal(t, http.StatusOK, admin.Code)
+	var adminPayload rankingsVisibilityResponse
+	require.NoError(t, common.Unmarshal(admin.Body.Bytes(), &adminPayload))
+	assert.Equal(t, int64(4160), adminPayload.Data.TotalTokens)
+	assert.Equal(t, int64(4800000), adminPayload.Data.TotalQuota)
+	assert.Contains(t, admin.Body.String(), "ranking-hidden-model")
+}
+
 func TestRankingsCustomPeriodAcceptsExactly366Days(t *testing.T) {
 	service.InvalidateRankingsCache()
 	db := setupModelListControllerTestDB(t)

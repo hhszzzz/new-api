@@ -36,7 +36,7 @@ func TestRankingAggregatesQuotaOnlyRowsAndScopedUserGroups(t *testing.T) {
 		},
 	}).Error)
 
-	totals, err := GetRankingQuotaTotals(0, 7200, []string{"visible-model"}, false)
+	totals, err := GetRankingQuotaTotals(0, 7200, []string{"visible-model"}, false, nil)
 	require.NoError(t, err)
 	require.Len(t, totals, 2)
 	assert.Equal(t, "visible-model", totals[0].ModelName)
@@ -46,11 +46,11 @@ func TestRankingAggregatesQuotaOnlyRowsAndScopedUserGroups(t *testing.T) {
 	assert.Equal(t, int64(0), totals[1].TotalTokens)
 	assert.Equal(t, int64(1250000), totals[1].TotalQuota)
 
-	buckets, err := GetRankingQuotaBuckets(0, 7200, 3600, 0, []string{"visible-model"}, false)
+	buckets, err := GetRankingQuotaBuckets(0, 7200, 3600, 0, []string{"visible-model"}, false, nil)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1500000), sumRankingTestQuota(buckets))
 
-	users, err := GetRankingUserQuotaTotals(0, 7200, nil, true)
+	users, err := GetRankingUserQuotaTotals(0, 7200, nil, true, nil)
 	require.NoError(t, err)
 	require.Len(t, users, 3)
 	var userQuota int64
@@ -78,7 +78,7 @@ func TestRankingUserQuotaTotalsResolvesMissingUsernameAndDropsUnattributedRows(t
 		{UserID: 0, Username: "legacy-user", CreatedAt: 3600, UseGroup: "default", Quota: 300, Count: 1},
 	}).Error)
 
-	rows, err := GetRankingUserQuotaTotals(0, 7200, nil, true)
+	rows, err := GetRankingUserQuotaTotals(0, 7200, nil, true, nil)
 	require.NoError(t, err)
 	require.Len(t, rows, 2)
 	quotaByUsername := make(map[string]int64, len(rows))
@@ -104,7 +104,7 @@ func TestRankingQuotaBucketsCanAnchorToRequestedRangeStart(t *testing.T) {
 		{ModelName: "anchored-model", CreatedAt: start + 3600 + 60, TokenUsed: 1, Count: 1},
 	}).Error)
 
-	buckets, err := GetRankingQuotaBuckets(start, start+7200, 3600, start, nil, true)
+	buckets, err := GetRankingQuotaBuckets(start, start+7200, 3600, start, nil, true, nil)
 	require.NoError(t, err)
 	require.Len(t, buckets, 2)
 	assert.Equal(t, start, buckets[0].Bucket)
@@ -156,21 +156,84 @@ func TestRankingAggregatesConfiguredDatabases(t *testing.T) {
 				{UserID: 902, Username: "hidden", ModelName: "private", ModelScope: QuotaModelScopeAdminOnly, CreatedAt: 3600, UseGroup: "secret", TokenUsed: 0, Quota: 750000, Count: 1},
 			}).Error)
 
-			totals, err := GetRankingQuotaTotals(0, 7200, []string{"visible"}, false)
+			totals, err := GetRankingQuotaTotals(0, 7200, []string{"visible"}, false, nil)
 			require.NoError(t, err)
 			var totalQuota int64
 			for _, row := range totals {
 				totalQuota += row.TotalQuota
 			}
 			assert.Equal(t, int64(1000000), totalQuota)
-			buckets, err := GetRankingQuotaBuckets(0, 7200, 3600, 0, []string{"visible"}, false)
+			buckets, err := GetRankingQuotaBuckets(0, 7200, 3600, 0, []string{"visible"}, false, nil)
 			require.NoError(t, err)
 			assert.Equal(t, int64(1000000), sumRankingTestQuota(buckets))
-			users, err := GetRankingUserQuotaTotals(0, 7200, nil, true)
+			users, err := GetRankingUserQuotaTotals(0, 7200, nil, true, nil)
 			require.NoError(t, err)
 			require.Len(t, users, 2)
 			usernames := []string{users[0].Username, users[1].Username}
 			assert.ElementsMatch(t, []string{"resolved", "hidden"}, usernames)
+
+			t.Run("group scope", TestRankingAggregatesScopeGroups)
+		})
+	}
+}
+
+func TestRankingAggregatesScopeGroups(t *testing.T) {
+	require.NoError(t, DB.Exec("DELETE FROM quota_data").Error)
+	require.NoError(t, DB.Exec("DELETE FROM quota_data_scoped").Error)
+	t.Cleanup(func() {
+		DB.Exec("DELETE FROM quota_data")
+		DB.Exec("DELETE FROM quota_data_scoped")
+	})
+	require.NoError(t, DB.Create(&[]QuotaData{
+		{Username: "legacy", ModelName: "visible", UseGroup: "team-a", CreatedAt: 3600, TokenUsed: 10, Quota: 100, Count: 1},
+		{Username: "legacy", ModelName: "visible", UseGroup: "team-b", CreatedAt: 3600, TokenUsed: 20, Quota: 200, Count: 1},
+		{Username: "legacy", ModelName: "visible", UseGroup: "secret", CreatedAt: 3600, TokenUsed: 100, Quota: 1000, Count: 1},
+		{Username: "legacy", ModelName: "visible", CreatedAt: 3600, TokenUsed: 1000, Quota: 10000, Count: 1},
+	}).Error)
+	require.NoError(t, DB.Create(&[]ScopedQuotaData{
+		{Username: "scoped", ModelName: "visible", ModelScope: QuotaModelScopeRequested, UseGroup: "team-a", CreatedAt: 3600, TokenUsed: 1, Quota: 10, Count: 1},
+		{Username: "scoped", ModelName: "visible", ModelScope: QuotaModelScopeRequested, UseGroup: "team-b", CreatedAt: 3600, TokenUsed: 2, Quota: 20, Count: 1},
+		{Username: "scoped", ModelName: "visible", ModelScope: QuotaModelScopeRequested, UseGroup: "secret", CreatedAt: 3600, TokenUsed: 100, Quota: 1000, Count: 1},
+		{Username: "scoped", ModelName: "visible", ModelScope: QuotaModelScopeRequested, CreatedAt: 3600, TokenUsed: 1000, Quota: 10000, Count: 1},
+		{Username: "scoped", ModelName: "private", ModelScope: QuotaModelScopeAdminOnly, UseGroup: "team-a", CreatedAt: 3600, TokenUsed: 3, Quota: 30, Count: 1},
+	}).Error)
+
+	for _, test := range []struct {
+		name   string
+		groups []string
+		tokens int64
+	}{
+		{name: "unscoped", groups: nil, tokens: 2236},
+		{name: "multiple groups", groups: []string{"team-a", "team-b"}, tokens: 36},
+		{name: "single group", groups: []string{"team-b"}, tokens: 22},
+		{name: "no groups", groups: []string{}},
+		{name: "unassigned group", groups: []string{"missing"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			totals, err := GetRankingQuotaTotals(3600, 3600, []string{"visible"}, false, test.groups)
+			require.NoError(t, err)
+			var tokens, quota int64
+			for _, row := range totals {
+				tokens += row.TotalTokens
+				quota += row.TotalQuota
+			}
+			assert.Equal(t, test.tokens, tokens)
+			assert.Equal(t, test.tokens*10, quota)
+			buckets, err := GetRankingQuotaBuckets(3600, 3600, 3600, 0, []string{"visible"}, false, test.groups)
+			require.NoError(t, err)
+			assert.Equal(t, test.tokens*10, sumRankingTestQuota(buckets))
+			users, err := GetRankingUserQuotaTotals(3600, 3600, []string{"visible"}, false, test.groups)
+			require.NoError(t, err)
+			var userTokens, userQuota int64
+			for _, row := range users {
+				userTokens += row.TotalTokens
+				userQuota += row.TotalQuota
+				if test.groups != nil {
+					assert.Contains(t, test.groups, row.UseGroup)
+				}
+			}
+			assert.Equal(t, test.tokens, userTokens)
+			assert.Equal(t, test.tokens*10, userQuota)
 		})
 	}
 }

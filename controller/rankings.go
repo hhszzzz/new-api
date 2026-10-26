@@ -42,8 +42,7 @@ func GetRankings(c *gin.Context) {
 		viewer = service.RankingViewerAdmin
 	} else if c.GetInt("id") > 0 {
 		viewer = service.RankingViewerUser
-		// The per-user group breakdown is scoped to the viewer's memberships:
-		// users must not read other users' usage in groups they cannot join.
+		// All usage statistics are scoped to the viewer's assigned groups.
 		viewerGroups = common.GetContextKeyStringSlice(c, constant.ContextKeyUserGroups)
 	}
 	result, err := service.GetRankingsSnapshotWithOptions(service.RankingsRequest{

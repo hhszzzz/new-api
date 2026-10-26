@@ -37,14 +37,15 @@ type RankingUserQuotaRow struct {
 	TotalQuota  int64  `json:"total_quota"`
 }
 
-func GetRankingQuotaTotals(startTime int64, endTime int64, visibleModelNames []string, canViewPrivate bool) ([]RankingQuotaTotal, error) {
+// viewerGroups is nil for an unscoped view; an empty non-nil slice permits no groups.
+func GetRankingQuotaTotals(startTime int64, endTime int64, visibleModelNames []string, canViewPrivate bool, viewerGroups []string) ([]RankingQuotaTotal, error) {
 	var legacyRows []RankingQuotaTotal
 	query := DB.Table("quota_data").
 		Select("model_name, sum(token_used) as total_tokens, sum(quota) as total_quota").
 		Group("model_name").
 		Having("sum(token_used) > 0 OR sum(quota) > 0").
 		Order("total_tokens DESC")
-	query = applyRankingQuotaTimeRange(query, startTime, endTime)
+	query = applyRankingQuotaFilters(query, startTime, endTime, viewerGroups)
 	err := query.Find(&legacyRows).Error
 	if err != nil {
 		return nil, err
@@ -55,7 +56,7 @@ func GetRankingQuotaTotals(startTime int64, endTime int64, visibleModelNames []s
 		Group("model_name, model_scope").
 		Having("sum(token_used) > 0 OR sum(quota) > 0").
 		Order("total_tokens DESC")
-	query = applyRankingQuotaTimeRange(query, startTime, endTime)
+	query = applyRankingQuotaFilters(query, startTime, endTime, viewerGroups)
 	err = query.Find(&scopedRows).Error
 	if err != nil {
 		return nil, err
@@ -63,7 +64,7 @@ func GetRankingQuotaTotals(startTime int64, endTime int64, visibleModelNames []s
 	return sanitizeRankingQuotaTotals(append(legacyRows, scopedRows...), visibleModelNames, canViewPrivate), nil
 }
 
-func GetRankingQuotaBuckets(startTime int64, endTime int64, bucketSize int64, bucketAnchor int64, visibleModelNames []string, canViewPrivate bool) ([]RankingQuotaBucket, error) {
+func GetRankingQuotaBuckets(startTime int64, endTime int64, bucketSize int64, bucketAnchor int64, visibleModelNames []string, canViewPrivate bool, viewerGroups []string) ([]RankingQuotaBucket, error) {
 	if bucketSize <= 0 {
 		bucketSize = 3600
 	}
@@ -74,7 +75,7 @@ func GetRankingQuotaBuckets(startTime int64, endTime int64, bucketSize int64, bu
 		Group(fmt.Sprintf("model_name, %s", bucketExpr)).
 		Having("sum(token_used) > 0 OR sum(quota) > 0").
 		Order("bucket ASC")
-	query = applyRankingQuotaTimeRange(query, startTime, endTime)
+	query = applyRankingQuotaFilters(query, startTime, endTime, viewerGroups)
 	err := query.Find(&legacyRows).Error
 	if err != nil {
 		return nil, err
@@ -85,7 +86,7 @@ func GetRankingQuotaBuckets(startTime int64, endTime int64, bucketSize int64, bu
 		Group(fmt.Sprintf("model_name, model_scope, %s", bucketExpr)).
 		Having("sum(token_used) > 0 OR sum(quota) > 0").
 		Order("bucket ASC")
-	query = applyRankingQuotaTimeRange(query, startTime, endTime)
+	query = applyRankingQuotaFilters(query, startTime, endTime, viewerGroups)
 	err = query.Find(&scopedRows).Error
 	if err != nil {
 		return nil, err
@@ -98,13 +99,13 @@ func GetRankingQuotaBuckets(startTime int64, endTime int64, bucketSize int64, bu
 // main leaderboard before the rows leave this layer. Both export tables are
 // read so historical usage remains part of the same leaderboard after an
 // upgrade.
-func GetRankingUserQuotaTotals(startTime int64, endTime int64, visibleModelNames []string, canViewPrivate bool) ([]RankingUserQuotaRow, error) {
+func GetRankingUserQuotaTotals(startTime int64, endTime int64, visibleModelNames []string, canViewPrivate bool, viewerGroups []string) ([]RankingUserQuotaRow, error) {
 	var legacyRows []RankingUserQuotaRow
 	query := DB.Table("quota_data").
 		Select("user_id, username, use_group, model_name, sum(token_used) as total_tokens, sum(quota) as total_quota").
 		Group("user_id, username, use_group, model_name").
 		Having("sum(token_used) > 0 OR sum(quota) > 0")
-	query = applyRankingQuotaTimeRange(query, startTime, endTime)
+	query = applyRankingQuotaFilters(query, startTime, endTime, viewerGroups)
 	if err := query.Find(&legacyRows).Error; err != nil {
 		return nil, err
 	}
@@ -114,7 +115,7 @@ func GetRankingUserQuotaTotals(startTime int64, endTime int64, visibleModelNames
 		Select("user_id, username, use_group, model_name, model_scope, sum(token_used) as total_tokens, sum(quota) as total_quota").
 		Group("user_id, username, use_group, model_name, model_scope").
 		Having("sum(token_used) > 0 OR sum(quota) > 0")
-	query = applyRankingQuotaTimeRange(query, startTime, endTime)
+	query = applyRankingQuotaFilters(query, startTime, endTime, viewerGroups)
 	if err := query.Find(&scopedRows).Error; err != nil {
 		return nil, err
 	}
@@ -169,12 +170,15 @@ func rankingBucketExpr(bucketSize int64, bucketAnchor int64) string {
 	return fmt.Sprintf("((created_at - %d) / %d) * %d + %d", bucketAnchor, bucketSize, bucketSize, bucketAnchor)
 }
 
-func applyRankingQuotaTimeRange(query *gorm.DB, startTime int64, endTime int64) *gorm.DB {
+func applyRankingQuotaFilters(query *gorm.DB, startTime int64, endTime int64, viewerGroups []string) *gorm.DB {
 	if startTime > 0 {
 		query = query.Where("created_at >= ?", startTime)
 	}
 	if endTime > 0 {
 		query = query.Where("created_at <= ?", endTime)
+	}
+	if viewerGroups != nil {
+		query = query.Where("use_group IN ?", viewerGroups)
 	}
 	return query
 }

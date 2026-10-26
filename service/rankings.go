@@ -46,9 +46,9 @@ type RankingsRequest struct {
 	VisibleModels  []string
 	Viewer         RankingViewer
 	// ViewerGroups carries the authenticated viewer's group memberships. For
-	// RankingViewerUser the per-user group breakdown is redacted to these
-	// groups so users cannot read other users' usage in groups they do not
-	// belong to. Admins bypass the scoping.
+	// RankingViewerUser all usage statistics are scoped to these groups so
+	// users cannot read usage in groups they do not belong to. An empty list
+	// permits no groups. Anonymous and admin viewers bypass the scoping.
 	ViewerGroups []string
 }
 
@@ -592,18 +592,18 @@ func makeResolvedRankingRange(config rankingPeriodConfig, start int64, end int64
 }
 
 func buildRankingsSnapshot(resolved rankingResolvedRange, visibleModelNames []string, canViewPrivate bool, viewer RankingViewer, viewerGroups []string, quotaPerUnit float64) (*RankingsResponse, error) {
-	currentTotals, err := model.GetRankingQuotaTotals(resolved.start, resolved.end, visibleModelNames, canViewPrivate)
+	currentTotals, err := model.GetRankingQuotaTotals(resolved.start, resolved.end, visibleModelNames, canViewPrivate, viewerGroups)
 	if err != nil {
 		return nil, err
 	}
-	currentBuckets, err := model.GetRankingQuotaBuckets(resolved.start, resolved.end, resolved.config.bucketSize, resolved.bucketAnchor, visibleModelNames, canViewPrivate)
+	currentBuckets, err := model.GetRankingQuotaBuckets(resolved.start, resolved.end, resolved.config.bucketSize, resolved.bucketAnchor, visibleModelNames, canViewPrivate, viewerGroups)
 	if err != nil {
 		return nil, err
 	}
 
 	var previousTotals []model.RankingQuotaTotal
 	if resolved.config.hasPrevious {
-		previousTotals, err = model.GetRankingQuotaTotals(resolved.previousStart, resolved.previousEnd, visibleModelNames, canViewPrivate)
+		previousTotals, err = model.GetRankingQuotaTotals(resolved.previousStart, resolved.previousEnd, visibleModelNames, canViewPrivate, viewerGroups)
 		if err != nil {
 			return nil, err
 		}
@@ -646,7 +646,7 @@ func buildRankingsSnapshot(resolved rankingResolvedRange, visibleModelNames []st
 		VendorShareHistory: vendorHistory,
 	}
 	if viewer != RankingViewerAnonymous {
-		userRows, queryErr := model.GetRankingUserQuotaTotals(resolved.start, resolved.end, visibleModelNames, canViewPrivate)
+		userRows, queryErr := model.GetRankingUserQuotaTotals(resolved.start, resolved.end, visibleModelNames, canViewPrivate, viewerGroups)
 		if queryErr != nil {
 			return nil, queryErr
 		}

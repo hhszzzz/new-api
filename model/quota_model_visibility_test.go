@@ -101,7 +101,7 @@ func TestQuotaDataModelScopeProtectsSelfFlowAndAnonymousRankings(t *testing.T) {
 	assert.Equal(t, 30, flowByModel["requested-private"].Quota)
 	assert.Equal(t, 15, flowByModel["public-model"].Quota)
 
-	totals, err := GetRankingQuotaTotals(0, 7200, []string{"public-model"}, false)
+	totals, err := GetRankingQuotaTotals(0, 7200, []string{"public-model"}, false, nil)
 	require.NoError(t, err)
 	require.Len(t, totals, 2)
 	assert.Equal(t, "", totals[0].ModelName)
@@ -109,14 +109,14 @@ func TestQuotaDataModelScopeProtectsSelfFlowAndAnonymousRankings(t *testing.T) {
 	assert.Equal(t, "public-model", totals[1].ModelName)
 	assert.Equal(t, int64(15), totals[1].TotalTokens)
 
-	buckets, err := GetRankingQuotaBuckets(0, 7200, 3600, 0, []string{"public-model"}, false)
+	buckets, err := GetRankingQuotaBuckets(0, 7200, 3600, 0, []string{"public-model"}, false, nil)
 	require.NoError(t, err)
 	require.Len(t, buckets, 2)
 	assert.Equal(t, int64(115), buckets[0].Tokens+buckets[1].Tokens)
 	assert.NotContains(t, []string{buckets[0].ModelName, buckets[1].ModelName}, "private-upstream")
 	assert.NotContains(t, []string{buckets[0].ModelName, buckets[1].ModelName}, "requested-private")
 
-	adminTotals, err := GetRankingQuotaTotals(0, 7200, nil, true)
+	adminTotals, err := GetRankingQuotaTotals(0, 7200, nil, true, nil)
 	require.NoError(t, err)
 	require.Len(t, adminTotals, 4)
 	adminModels := make(map[string]struct{}, len(adminTotals))
@@ -143,7 +143,7 @@ func TestAnonymousRankingsPreserveUsageWhoseLegacyModelNameIsBlank(t *testing.T)
 		CreatedAt: 3600, TokenUsed: 3, Count: 1,
 	}).Error)
 
-	totals, err := GetRankingQuotaTotals(0, 7200, []string{"visible-model"}, false)
+	totals, err := GetRankingQuotaTotals(0, 7200, []string{"visible-model"}, false, nil)
 	require.NoError(t, err)
 	require.Len(t, totals, 2)
 	assert.Equal(t, "", totals[0].ModelName)
@@ -151,7 +151,7 @@ func TestAnonymousRankingsPreserveUsageWhoseLegacyModelNameIsBlank(t *testing.T)
 	assert.Equal(t, "visible-model", totals[1].ModelName)
 	assert.Equal(t, int64(3), totals[1].TotalTokens)
 
-	buckets, err := GetRankingQuotaBuckets(0, 7200, 3600, 0, []string{"visible-model"}, false)
+	buckets, err := GetRankingQuotaBuckets(0, 7200, 3600, 0, []string{"visible-model"}, false, nil)
 	require.NoError(t, err)
 	require.Len(t, buckets, 2)
 	assert.Equal(t, int64(10), buckets[0].Tokens+buckets[1].Tokens)
