@@ -42,7 +42,10 @@ const (
 	accountPoolAntigravityQuotaDailyURL = "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
 	accountPoolAntigravityQuotaProdURL  = "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
 	accountPoolAntigravityAssistURL     = "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"
-	accountPoolAntigravityUserAgent     = "antigravity/cli/1.0.13 (aidev_client; os_type=darwin; arch=arm64)"
+	// Google decides which quota groups the summary lists from the client
+	// identity. A stale client version is answered with only the third-party
+	// pool, so the Gemini pool silently disappears from the summary.
+	accountPoolAntigravityUserAgent = "antigravity/cli/2.25.0 (aidev_client; os_type=darwin; arch=arm64)"
 
 	accountPoolPerRequestTimeout = 12 * time.Second
 	accountPoolRoundTimeout      = 20 * time.Second
@@ -793,8 +796,9 @@ func (manager *accountPoolManager) fetchAntigravityQuota(
 		"User-Agent":    accountPoolAntigravityUserAgent,
 	}
 	// The daily and the production host serve the same account and either may be the
-	// one that reports the exhausted window, so a refusal is remembered while the
-	// cascade still tries the remaining host.
+	// one that reports the exhausted window or the complete group list, so a refusal
+	// is remembered while the cascade still tries the remaining host, and successful
+	// answers are merged instead of ending the cascade at the first one.
 	var quotaPayload map[string]interface{}
 	var limitedPayload map[string]interface{}
 	for _, quotaURL := range accountPoolAntigravityQuotaURLs {
@@ -802,8 +806,14 @@ func (manager *accountPoolManager) fetchAntigravityQuota(
 			"project": projectID,
 		})
 		if attemptErr == nil {
-			quotaPayload, limitedPayload = attemptPayload, nil
-			break
+			quotaPayload = mergeAccountPoolAntigravityQuota(quotaPayload, attemptPayload)
+			// A host can answer with only a subset of the model groups: the Gemini
+			// pool went missing this way while the third-party group kept answering.
+			// Keep the remaining hosts in the cascade until the Gemini pool is seen.
+			if accountPoolAntigravityQuotaHasGemini(quotaPayload) {
+				break
+			}
+			continue
 		}
 		if limitedPayload == nil && errors.Is(attemptErr, errAccountPoolUsageLimited) {
 			limitedPayload = attemptPayload
@@ -826,6 +836,97 @@ func (manager *accountPoolManager) fetchAntigravityQuota(
 		"quota":       quotaPayload,
 		"code_assist": assistPayload,
 	}, nil
+}
+
+// mergeAccountPoolAntigravityQuota combines summaries served by different hosts.
+// Both hosts report the same account, but either may answer with only a subset of
+// the model groups, so groups are keyed by name and their buckets by id, with the
+// first value for a key winning.
+func mergeAccountPoolAntigravityQuota(base map[string]interface{}, incoming map[string]interface{}) map[string]interface{} {
+	incomingGroups, _ := incoming["groups"].([]interface{})
+	if len(incomingGroups) == 0 {
+		return base
+	}
+	if base == nil {
+		base = map[string]interface{}{}
+	}
+	if _, exists := base["description"]; !exists {
+		if description, ok := incoming["description"]; ok {
+			base["description"] = description
+		}
+	}
+	groups, _ := base["groups"].([]interface{})
+	for index, rawIncoming := range incomingGroups {
+		incomingGroup, ok := rawIncoming.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		label := firstAccountPoolString(incomingGroup, "displayName", "display_name")
+		var target map[string]interface{}
+		for _, rawGroup := range groups {
+			group, ok := rawGroup.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if strings.EqualFold(firstAccountPoolString(group, "displayName", "display_name"), label) {
+				target = group
+				break
+			}
+		}
+		if target == nil {
+			// Keep the group order of the host that reported it, so a group missing
+			// from an earlier partial answer still lands where upstream puts it.
+			groups = slices.Insert(groups, min(index, len(groups)), any(incomingGroup))
+			continue
+		}
+		incomingBuckets, _ := incomingGroup["buckets"].([]interface{})
+		buckets, _ := target["buckets"].([]interface{})
+		for _, rawBucket := range incomingBuckets {
+			bucket, ok := rawBucket.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			bucketID := firstAccountPoolString(bucket, "bucketId", "bucket_id")
+			exists := false
+			for _, rawExisting := range buckets {
+				existing, ok := rawExisting.(map[string]interface{})
+				if ok && firstAccountPoolString(existing, "bucketId", "bucket_id") == bucketID {
+					exists = true
+					break
+				}
+			}
+			if !exists {
+				buckets = append(buckets, bucket)
+			}
+		}
+		target["buckets"] = buckets
+	}
+	base["groups"] = groups
+	return base
+}
+
+// accountPoolAntigravityQuotaHasGemini reports whether the merged summary already
+// lists the Gemini pool, which every Antigravity account has. A summary without
+// it came from a host that answered with a partial group list.
+func accountPoolAntigravityQuotaHasGemini(payload map[string]interface{}) bool {
+	groups, _ := payload["groups"].([]interface{})
+	for _, rawGroup := range groups {
+		group, ok := rawGroup.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if strings.Contains(strings.ToLower(firstAccountPoolString(group, "displayName", "display_name")), "gemini") {
+			return true
+		}
+		buckets, _ := group["buckets"].([]interface{})
+		for _, rawBucket := range buckets {
+			bucket, ok := rawBucket.(map[string]interface{})
+			if ok && strings.HasPrefix(strings.ToLower(firstAccountPoolString(bucket, "bucketId", "bucket_id")), "gemini") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (manager *accountPoolManager) fetchCodexUsage(
@@ -1357,9 +1458,18 @@ func applyAntigravityQuotaPayload(account *accountPoolAccount, payload map[strin
 }
 
 func parseAccountPoolRemainingWindow(bucket map[string]interface{}, now time.Time) *AccountPoolWindow {
+	if firstAccountPoolBool(bucket, "disabled") {
+		return nil
+	}
+	// Proto3 JSON omits zero values, so an exhausted bucket arrives without
+	// remainingFraction. Treating it as missing would drop the bucket, and with it
+	// the exhausted group, instead of showing the window at zero.
 	fraction, ok := firstAccountPoolNumber(bucket, "remainingFraction", "remaining_fraction")
 	if !ok {
-		return nil
+		if firstAccountPoolValue(bucket, "resetTime", "reset_time") == nil {
+			return nil
+		}
+		fraction = 0
 	}
 	fraction = math.Max(0, math.Min(1, fraction))
 	remaining := math.Round(fraction * 100)

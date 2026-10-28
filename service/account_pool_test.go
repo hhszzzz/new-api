@@ -430,6 +430,68 @@ func TestAccountPoolManagerRendersRefusedAntigravityProbeAsLimitedWindow(t *test
 	assert.Equal(t, accountPoolAntigravityQuotaProdURL, requests[1]["url"])
 }
 
+func TestAccountPoolManagerMergesAntigravityQuotaGroupsAcrossHosts(t *testing.T) {
+	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	// The daily host answers with only the third-party group while the production
+	// host still lists the Gemini pool, and proto3 JSON omits an exhausted bucket's
+	// remainingFraction.
+	partialDaily := `{"groups":[{"displayName":"Claude and GPT models","buckets":[{"bucketId":"3p-5h","window":"5h","resetTime":"2026-10-28T15:00:00Z","remainingFraction":0.5}]}]}`
+	completeProd := `{"groups":[
+		{"displayName":"Gemini Models","buckets":[
+			{"bucketId":"gemini-5h","window":"5h","resetTime":"2026-10-28T15:00:00Z"},
+			{"bucketId":"gemini-weekly","window":"weekly","resetTime":"2026-11-04T00:00:00Z","remainingFraction":0.2},
+			{"bucketId":"gemini-disabled","window":"weekly","disabled":true,"remainingFraction":1}
+		]},
+		{"displayName":"Claude and GPT models","buckets":[
+			{"bucketId":"3p-5h","window":"5h","resetTime":"2026-10-28T15:00:00Z","remainingFraction":0.5},
+			{"bucketId":"3p-weekly","window":"weekly","resetTime":"2026-11-04T00:00:00Z","remainingFraction":1}
+		]}
+	]}`
+	fake := newAccountPoolFakeManagement(t)
+	fake.authType = account_pool_setting.ProviderAntigravity
+	fake.usageBodies = map[string]accountPoolFakeEnvelope{
+		accountPoolAntigravityQuotaDailyURL: {status: http.StatusOK, body: partialDaily},
+		accountPoolAntigravityQuotaProdURL:  {status: http.StatusOK, body: completeProd},
+		accountPoolAntigravityAssistURL:     {status: http.StatusOK, body: `{"paidTier":{"id":"g1-pro-tier"}}`},
+	}
+	manager := fake.manager(now)
+
+	snapshot, err := manager.get(context.Background())
+	require.NoError(t, err)
+	require.Len(t, snapshot.Accounts, 1)
+	account := snapshot.Accounts[0]
+	assert.Equal(t, "limited", account.Status)
+	require.Len(t, account.WindowGroups, 2)
+
+	gemini := account.WindowGroups[0]
+	assert.Equal(t, "Gemini Models", gemini.Label)
+	require.NotNil(t, gemini.PrimaryWindow)
+	require.NotNil(t, gemini.PrimaryWindow.RemainingPercent)
+	// A missing remainingFraction is an exhausted bucket, not a missing bucket.
+	assert.Equal(t, float64(0), *gemini.PrimaryWindow.RemainingPercent)
+	require.NotNil(t, gemini.SecondaryWindow)
+	require.NotNil(t, gemini.SecondaryWindow.RemainingPercent)
+	assert.Equal(t, float64(20), *gemini.SecondaryWindow.RemainingPercent)
+
+	thirdParty := account.WindowGroups[1]
+	assert.Equal(t, "Claude and GPT models", thirdParty.Label)
+	require.NotNil(t, thirdParty.PrimaryWindow)
+	require.NotNil(t, thirdParty.PrimaryWindow.RemainingPercent)
+	assert.Equal(t, float64(50), *thirdParty.PrimaryWindow.RemainingPercent)
+	require.NotNil(t, thirdParty.SecondaryWindow)
+	require.NotNil(t, thirdParty.SecondaryWindow.RemainingPercent)
+	assert.Equal(t, float64(100), *thirdParty.SecondaryWindow.RemainingPercent)
+
+	fake.mu.Lock()
+	requests := append([]map[string]interface{}(nil), fake.usageRequests...)
+	fake.mu.Unlock()
+	// The partial daily answer is not final, so the production host is still asked.
+	require.Len(t, requests, 3)
+	assert.Equal(t, accountPoolAntigravityQuotaDailyURL, requests[0]["url"])
+	assert.Equal(t, accountPoolAntigravityQuotaProdURL, requests[1]["url"])
+	assert.Equal(t, accountPoolAntigravityAssistURL, requests[2]["url"])
+}
+
 func TestAccountPoolUsageLimitPayloadClassification(t *testing.T) {
 	testCases := []struct {
 		name    string
