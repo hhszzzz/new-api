@@ -91,15 +91,15 @@ func RefreshAccountPool(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": view})
 }
 
-type accountPoolQuotaOverrideRequest struct {
+type accountPoolQuotaWindowOverrideRequest struct {
 	OffsetPercent  float64    `json:"offset_percent"`
 	Pinned         bool       `json:"pinned"`
 	PinReleaseMode string     `json:"pin_release_mode"`
 	PinReleaseAt   *time.Time `json:"pin_release_at"`
 }
 
-func (request accountPoolQuotaOverrideRequest) toOverride() account_pool_setting.QuotaOverride {
-	override := account_pool_setting.QuotaOverride{OffsetPercent: request.OffsetPercent}
+func (request accountPoolQuotaWindowOverrideRequest) toOverride() account_pool_setting.QuotaWindowOverride {
+	override := account_pool_setting.QuotaWindowOverride{OffsetPercent: request.OffsetPercent}
 	if !request.Pinned {
 		return override
 	}
@@ -109,6 +109,18 @@ func (request accountPoolQuotaOverrideRequest) toOverride() account_pool_setting
 	}
 	override.Pin = pin
 	return override
+}
+
+type accountPoolQuotaOverrideRequest struct {
+	Primary   accountPoolQuotaWindowOverrideRequest `json:"primary"`
+	Secondary accountPoolQuotaWindowOverrideRequest `json:"secondary"`
+}
+
+func (request accountPoolQuotaOverrideRequest) toOverride() account_pool_setting.QuotaOverride {
+	return account_pool_setting.QuotaOverride{
+		Primary:   request.Primary.toOverride(),
+		Secondary: request.Secondary.toOverride(),
+	}
 }
 
 func UpdateAccountPoolQuotaOverride(c *gin.Context) {
@@ -137,9 +149,9 @@ func UpdateAccountPoolQuotaOverride(c *gin.Context) {
 		"success": true,
 		"message": "",
 		"data": gin.H{
-			"public_id":      publicID,
-			"offset_percent": override.OffsetPercent,
-			"pinned":         override.Pin != nil,
+			"public_id": publicID,
+			"primary":   accountPoolQuotaWindowOverrideResponse(override.Primary),
+			"secondary": accountPoolQuotaWindowOverrideResponse(override.Secondary),
 		},
 	})
 }
@@ -169,8 +181,15 @@ func accountPoolQuotaOverridePublicID(c *gin.Context) (string, bool) {
 }
 
 func accountPoolQuotaOverrideAuditParams(publicID string, override account_pool_setting.QuotaOverride) map[string]interface{} {
+	return map[string]interface{}{
+		"public_id": publicID,
+		"primary":   accountPoolQuotaWindowOverrideAuditParams(override.Primary),
+		"secondary": accountPoolQuotaWindowOverrideAuditParams(override.Secondary),
+	}
+}
+
+func accountPoolQuotaWindowOverrideAuditParams(override account_pool_setting.QuotaWindowOverride) map[string]interface{} {
 	params := map[string]interface{}{
-		"public_id":      publicID,
 		"offset_percent": override.OffsetPercent,
 	}
 	if override.Pin == nil {
@@ -181,6 +200,13 @@ func accountPoolQuotaOverrideAuditParams(publicID string, override account_pool_
 		params["release_at"] = override.Pin.ReleaseAt.Format(time.RFC3339)
 	}
 	return params
+}
+
+func accountPoolQuotaWindowOverrideResponse(override account_pool_setting.QuotaWindowOverride) map[string]interface{} {
+	return map[string]interface{}{
+		"offset_percent": override.OffsetPercent,
+		"pinned":         override.Pin != nil,
+	}
 }
 
 func GetAccountPoolSettings(c *gin.Context) {

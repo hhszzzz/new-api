@@ -19,33 +19,55 @@ For commercial licensing, please contact support@quantumnous.com
 import { useTranslation } from 'react-i18next'
 
 import { Badge } from '@/components/ui/badge'
+import { cn } from '@/lib/utils'
 
 import { formatAccountPoolOffset } from '../lib/quota'
-import type { AccountPoolQuotaOverride } from '../types'
+import type {
+  AccountPoolQuotaOverride,
+  AccountPoolQuotaWindowOverride,
+} from '../types'
+
+function QuotaLimitBadge(props: {
+  label: string
+  override: AccountPoolQuotaWindowOverride
+}) {
+  const { t } = useTranslation()
+  if (props.override.offset_percent === 0 && !props.override.pinned) {
+    return null
+  }
+  const value = props.override.pinned
+    ? t('Pinned at 100%')
+    : t('Offset {{percent}}%', {
+        percent: formatAccountPoolOffset(props.override.offset_percent),
+      })
+  return (
+    <Badge
+      variant='outline'
+      className={cn(
+        props.override.pinned
+          ? 'border-success/30 bg-success/10 text-success'
+          : 'border-warning/30 bg-warning/10 text-warning'
+      )}
+    >
+      {props.label}: {value}
+    </Badge>
+  )
+}
 
 export function QuotaOverrideBadge(props: {
   override: AccountPoolQuotaOverride
 }) {
   const { t } = useTranslation()
-  if (props.override.pinned) {
-    return (
-      <Badge
-        variant='outline'
-        className='border-success/30 bg-success/10 text-success'
-      >
-        {t('Pinned at 100%')}
-      </Badge>
-    )
-  }
-  if (props.override.offset_percent === 0) return null
   return (
-    <Badge
-      variant='outline'
-      className='border-warning/30 bg-warning/10 text-warning'
-    >
-      {t('Offset {{percent}}%', {
-        percent: formatAccountPoolOffset(props.override.offset_percent),
-      })}
-    </Badge>
+    <div className='flex flex-wrap gap-1'>
+      <QuotaLimitBadge
+        label={t('5-hour quota')}
+        override={props.override.primary}
+      />
+      <QuotaLimitBadge
+        label={t('Weekly / monthly quota')}
+        override={props.override.secondary}
+      />
+    </div>
   )
 }

@@ -195,12 +195,16 @@ func publishQuotaOverridesForTest(t *testing.T, overrides map[string]QuotaOverri
 	setting.PublishConfig()
 }
 
+func quotaWindowOverride(offset float64, pin *QuotaPin) QuotaWindowOverride {
+	return QuotaWindowOverride{OffsetPercent: offset, Pin: pin}
+}
+
 func TestPrepareQuotaOverridesValidatesAndDropsEmptyEntries(t *testing.T) {
 	releaseAt := time.Now().Add(time.Hour)
 	prepared, err := PrepareQuotaOverrides(map[string]QuotaOverride{
 		quotaOverrideTestID("a"): {
-			OffsetPercent: 12.5,
-			Pin:           &QuotaPin{ReleaseMode: QuotaPinReleaseAtTime, ReleaseAt: &releaseAt},
+			Primary:   quotaWindowOverride(12.5, &QuotaPin{ReleaseMode: QuotaPinReleaseAtTime, ReleaseAt: &releaseAt}),
+			Secondary: quotaWindowOverride(-5, nil),
 		},
 		quotaOverrideTestID("b"): {},
 	})
@@ -208,9 +212,10 @@ func TestPrepareQuotaOverridesValidatesAndDropsEmptyEntries(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, prepared, 1)
 	override := prepared[quotaOverrideTestID("a")]
-	require.NotNil(t, override.Pin)
-	assert.Equal(t, 12.5, override.OffsetPercent)
-	assert.Equal(t, QuotaPinReleaseAtTime, override.Pin.ReleaseMode)
+	require.NotNil(t, override.Primary.Pin)
+	assert.Equal(t, 12.5, override.Primary.OffsetPercent)
+	assert.Equal(t, QuotaPinReleaseAtTime, override.Primary.Pin.ReleaseMode)
+	assert.Equal(t, -5.0, override.Secondary.OffsetPercent)
 }
 
 func TestPrepareQuotaOverridesRejectsInvalidEntries(t *testing.T) {
@@ -220,12 +225,13 @@ func TestPrepareQuotaOverridesRejectsInvalidEntries(t *testing.T) {
 		publicID string
 		override QuotaOverride
 	}{
-		{name: "invalid id", publicID: "bad-id", override: QuotaOverride{OffsetPercent: 1}},
-		{name: "offset too large", publicID: quotaOverrideTestID("a"), override: QuotaOverride{OffsetPercent: 101}},
-		{name: "offset too small", publicID: quotaOverrideTestID("a"), override: QuotaOverride{OffsetPercent: -101}},
-		{name: "unknown release mode", publicID: quotaOverrideTestID("a"), override: QuotaOverride{Pin: &QuotaPin{ReleaseMode: "later"}}},
-		{name: "at_time without release", publicID: quotaOverrideTestID("a"), override: QuotaOverride{Pin: &QuotaPin{ReleaseMode: QuotaPinReleaseAtTime}}},
-		{name: "refresh mode with release", publicID: quotaOverrideTestID("a"), override: QuotaOverride{Pin: &QuotaPin{ReleaseMode: QuotaPinReleaseAnyRefresh, ReleaseAt: &releaseAt}}},
+		{name: "invalid id", publicID: "bad-id", override: QuotaOverride{Primary: quotaWindowOverride(1, nil)}},
+		{name: "primary offset too large", publicID: quotaOverrideTestID("a"), override: QuotaOverride{Primary: quotaWindowOverride(101, nil)}},
+		{name: "secondary offset too small", publicID: quotaOverrideTestID("a"), override: QuotaOverride{Secondary: quotaWindowOverride(-101, nil)}},
+		{name: "unknown release mode", publicID: quotaOverrideTestID("a"), override: QuotaOverride{Primary: quotaWindowOverride(0, &QuotaPin{ReleaseMode: "later"})}},
+		{name: "at_time without release", publicID: quotaOverrideTestID("a"), override: QuotaOverride{Secondary: quotaWindowOverride(0, &QuotaPin{ReleaseMode: QuotaPinReleaseAtTime})}},
+		{name: "refresh mode with release", publicID: quotaOverrideTestID("a"), override: QuotaOverride{Primary: quotaWindowOverride(0, &QuotaPin{ReleaseMode: QuotaPinReleaseAnyRefresh, ReleaseAt: &releaseAt})}},
+		{name: "legacy fields", publicID: quotaOverrideTestID("a"), override: QuotaOverride{LegacyOffsetPercent: &releaseAt1}},
 	}
 
 	for _, test := range tests {
@@ -236,16 +242,20 @@ func TestPrepareQuotaOverridesRejectsInvalidEntries(t *testing.T) {
 	}
 }
 
+var releaseAt1 = 1.0
+
 func TestQuotaOverridesLoadedConfigDropsInvalidEntries(t *testing.T) {
 	releaseAt := time.Now().Add(time.Hour)
+	legacyOffset := 15.0
 	setting := quotaOverridesSetting{Overrides: map[string]QuotaOverride{
-		quotaOverrideTestID("a"): {OffsetPercent: 10},
-		"not-a-public-id":        {OffsetPercent: 10},
-		quotaOverrideTestID("b"): {OffsetPercent: 200},
-		quotaOverrideTestID("c"): {Pin: &QuotaPin{ReleaseMode: "invalid"}},
-		quotaOverrideTestID("d"): {OffsetPercent: 5, Pin: &QuotaPin{ReleaseMode: QuotaPinReleaseAtTime}},
+		quotaOverrideTestID("a"): {Primary: quotaWindowOverride(10, nil)},
+		"not-a-public-id":        {Primary: quotaWindowOverride(10, nil)},
+		quotaOverrideTestID("b"): {Primary: quotaWindowOverride(200, nil)},
+		quotaOverrideTestID("c"): {Secondary: quotaWindowOverride(5, &QuotaPin{ReleaseMode: "invalid"})},
+		quotaOverrideTestID("d"): {Primary: quotaWindowOverride(5, &QuotaPin{ReleaseMode: QuotaPinReleaseAtTime})},
 		quotaOverrideTestID("e"): {},
-		quotaOverrideTestID("f"): {Pin: &QuotaPin{ReleaseMode: QuotaPinReleaseAnyRefresh, ReleaseAt: &releaseAt}},
+		quotaOverrideTestID("f"): {Primary: quotaWindowOverride(0, &QuotaPin{ReleaseMode: QuotaPinReleaseAnyRefresh, ReleaseAt: &releaseAt})},
+		quotaOverrideTestID("9"): {LegacyOffsetPercent: &legacyOffset, LegacyPin: &QuotaPin{ReleaseMode: QuotaPinReleaseManual}},
 	}}
 
 	require.NoError(t, setting.ValidateLoadedConfig())
@@ -253,13 +263,24 @@ func TestQuotaOverridesLoadedConfigDropsInvalidEntries(t *testing.T) {
 	assert.Contains(t, setting.Overrides, quotaOverrideTestID("a"))
 	assert.NotContains(t, setting.Overrides, "not-a-public-id")
 	assert.NotContains(t, setting.Overrides, quotaOverrideTestID("b"))
-	assert.NotContains(t, setting.Overrides, quotaOverrideTestID("c"))
+	assert.Contains(t, setting.Overrides, quotaOverrideTestID("c"))
+	assert.Nil(t, setting.Overrides[quotaOverrideTestID("c")].Secondary.Pin)
+	assert.Equal(t, 5.0, setting.Overrides[quotaOverrideTestID("c")].Secondary.OffsetPercent)
 	assert.Contains(t, setting.Overrides, quotaOverrideTestID("d"))
-	assert.Nil(t, setting.Overrides[quotaOverrideTestID("d")].Pin)
-	assert.Equal(t, 5.0, setting.Overrides[quotaOverrideTestID("d")].OffsetPercent)
+	assert.Nil(t, setting.Overrides[quotaOverrideTestID("d")].Primary.Pin)
+	assert.Equal(t, 5.0, setting.Overrides[quotaOverrideTestID("d")].Primary.OffsetPercent)
 	assert.NotContains(t, setting.Overrides, quotaOverrideTestID("e"))
 	assert.Contains(t, setting.Overrides, quotaOverrideTestID("f"))
-	assert.Nil(t, setting.Overrides[quotaOverrideTestID("f")].Pin.ReleaseAt)
+	assert.Nil(t, setting.Overrides[quotaOverrideTestID("f")].Primary.Pin.ReleaseAt)
+
+	legacy, ok := setting.Overrides[quotaOverrideTestID("9")]
+	require.True(t, ok)
+	assert.Equal(t, 15.0, legacy.Primary.OffsetPercent)
+	assert.Equal(t, 15.0, legacy.Secondary.OffsetPercent)
+	assert.Equal(t, QuotaPinReleaseManual, legacy.Primary.Pin.ReleaseMode)
+	assert.NotNil(t, legacy.Secondary.Pin)
+	assert.Nil(t, legacy.LegacyOffsetPercent)
+	assert.Nil(t, legacy.LegacyPin)
 }
 
 func TestGetQuotaOverridesReturnsDeepCopy(t *testing.T) {
@@ -269,18 +290,23 @@ func TestGetQuotaOverridesReturnsDeepCopy(t *testing.T) {
 	releaseAt := time.Now().Add(time.Hour)
 	publicID := quotaOverrideTestID("a")
 	publishQuotaOverridesForTest(t, map[string]QuotaOverride{
-		publicID: {OffsetPercent: 20, Pin: &QuotaPin{ReleaseMode: QuotaPinReleaseAtTime, ReleaseAt: &releaseAt}},
+		publicID: {
+			Primary:   quotaWindowOverride(20, &QuotaPin{ReleaseMode: QuotaPinReleaseAtTime, ReleaseAt: &releaseAt}),
+			Secondary: quotaWindowOverride(5, nil),
+		},
 	})
 
 	overrides := GetQuotaOverrides()
 	override := overrides[publicID]
-	*override.Pin.ReleaseAt = releaseAt.Add(time.Hour)
-	override.OffsetPercent = 80
+	*override.Primary.Pin.ReleaseAt = releaseAt.Add(time.Hour)
+	override.Primary.OffsetPercent = 80
+	override.Secondary.OffsetPercent = 90
 
 	stored, ok := GetQuotaOverride(publicID)
 	require.True(t, ok)
-	assert.Equal(t, 20.0, stored.OffsetPercent)
-	assert.Equal(t, releaseAt, *stored.Pin.ReleaseAt)
+	assert.Equal(t, 20.0, stored.Primary.OffsetPercent)
+	assert.Equal(t, releaseAt, *stored.Primary.Pin.ReleaseAt)
+	assert.Equal(t, 5.0, stored.Secondary.OffsetPercent)
 }
 
 func TestQuotaPinReleaseSemantics(t *testing.T) {

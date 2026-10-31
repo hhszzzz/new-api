@@ -105,11 +105,16 @@ type AccountPoolWindowGroup struct {
 	SecondaryWindow *AccountPoolWindow `json:"secondary_window"`
 }
 
-type AccountPoolQuotaOverride struct {
+type AccountPoolQuotaWindowOverride struct {
 	OffsetPercent  float64    `json:"offset_percent"`
 	Pinned         bool       `json:"pinned"`
 	PinReleaseMode string     `json:"pin_release_mode,omitempty"`
 	PinReleaseAt   *time.Time `json:"pin_release_at,omitempty"`
+}
+
+type AccountPoolQuotaOverride struct {
+	Primary   AccountPoolQuotaWindowOverride `json:"primary"`
+	Secondary AccountPoolQuotaWindowOverride `json:"secondary"`
 }
 
 type AccountPoolViewAccount struct {
@@ -292,12 +297,21 @@ func (manager *accountPoolManager) setQuotaOverride(publicID string, override ac
 
 	overrides := manager.loadQuotaOverrides()
 	override.UpdatedAt = manager.now()
-	if override.OffsetPercent == 0 && override.Pin == nil {
+	if accountPoolQuotaOverrideEmpty(override) {
 		delete(overrides, publicID)
 	} else {
 		overrides[publicID] = override
 	}
 	return manager.persistQuotaOverrides(overrides)
+}
+
+func accountPoolQuotaOverrideEmpty(override account_pool_setting.QuotaOverride) bool {
+	return accountPoolQuotaWindowOverrideEmpty(override.Primary) &&
+		accountPoolQuotaWindowOverrideEmpty(override.Secondary)
+}
+
+func accountPoolQuotaWindowOverrideEmpty(override account_pool_setting.QuotaWindowOverride) bool {
+	return override.OffsetPercent == 0 && override.Pin == nil
 }
 
 func (manager *accountPoolManager) clearQuotaOverride(publicID string) error {
@@ -324,14 +338,15 @@ func (manager *accountPoolManager) releaseAccountPoolPinsAfterRefresh(kind strin
 	now := manager.now()
 	changed := false
 	for publicID, override := range overrides {
-		if override.Pin == nil || override.UpdatedAt.After(cutoff) {
+		if override.UpdatedAt.After(cutoff) {
 			continue
 		}
-		if override.Pin.ActiveAt(now) && !override.Pin.ReleasedByRefresh(kind) {
+		releasedPrimary := accountPoolReleaseQuotaWindowPin(&override.Primary, kind, now)
+		releasedSecondary := accountPoolReleaseQuotaWindowPin(&override.Secondary, kind, now)
+		if !releasedPrimary && !releasedSecondary {
 			continue
 		}
-		override.Pin = nil
-		if override.OffsetPercent == 0 {
+		if accountPoolQuotaOverrideEmpty(override) {
 			delete(overrides, publicID)
 		} else {
 			overrides[publicID] = override
@@ -344,6 +359,17 @@ func (manager *accountPoolManager) releaseAccountPoolPinsAfterRefresh(kind strin
 	if err := manager.persistQuotaOverrides(overrides); err != nil {
 		common.SysError("failed to persist account pool quota pin release: " + err.Error())
 	}
+}
+
+func accountPoolReleaseQuotaWindowPin(window *account_pool_setting.QuotaWindowOverride, kind string, now time.Time) bool {
+	if window.Pin == nil {
+		return false
+	}
+	if window.Pin.ActiveAt(now) && !window.Pin.ReleasedByRefresh(kind) {
+		return false
+	}
+	window.Pin = nil
+	return true
 }
 
 func (manager *accountPoolManager) get(ctx context.Context) (*accountPoolSnapshot, error) {
@@ -556,7 +582,7 @@ func (manager *accountPoolManager) buildView(snapshot *accountPoolSnapshot, role
 			effect := applyAccountPoolQuotaOverride(&item, override, now)
 			item.Status = accountPoolOverrideStatus(item.Status, effect)
 			if role >= common.RoleAdminUser {
-				item.QuotaOverride = accountPoolQuotaOverrideView(override, effect)
+				item.QuotaOverride = accountPoolQuotaOverrideView(override, now)
 			}
 		}
 		view.ProviderSummaries[account.Provider] = incrementAccountPoolSummary(view.ProviderSummaries[account.Provider], item.Status)
@@ -567,9 +593,8 @@ func (manager *accountPoolManager) buildView(snapshot *accountPoolSnapshot, role
 }
 
 type accountPoolQuotaOverrideEffect struct {
-	pinActive     bool
-	offsetApplied bool
-	minRemaining  *float64
+	changed      bool
+	minRemaining *float64
 }
 
 // applyAccountPoolQuotaOverride rewrites the copied windows of one view row.
@@ -577,83 +602,102 @@ type accountPoolQuotaOverrideEffect struct {
 // as the next view is built instead of waiting for the next quota round.
 func applyAccountPoolQuotaOverride(item *AccountPoolViewAccount, override account_pool_setting.QuotaOverride, now time.Time) accountPoolQuotaOverrideEffect {
 	effect := accountPoolQuotaOverrideEffect{}
-	hasWindow := item.PrimaryWindow != nil || item.SecondaryWindow != nil
+	primaryWindows := []*AccountPoolWindow{item.PrimaryWindow}
+	secondaryWindows := []*AccountPoolWindow{item.SecondaryWindow}
 	for _, group := range item.WindowGroups {
-		if group.PrimaryWindow != nil || group.SecondaryWindow != nil {
-			hasWindow = true
-			break
-		}
+		primaryWindows = append(primaryWindows, group.PrimaryWindow)
+		secondaryWindows = append(secondaryWindows, group.SecondaryWindow)
 	}
-	if !hasWindow {
+	if !accountPoolHasQuotaWindow(primaryWindows) && !accountPoolHasQuotaWindow(secondaryWindows) {
 		return effect
 	}
-	eachWindow := func(apply func(*AccountPoolWindow)) {
-		apply(item.PrimaryWindow)
-		apply(item.SecondaryWindow)
-		for index := range item.WindowGroups {
-			apply(item.WindowGroups[index].PrimaryWindow)
-			apply(item.WindowGroups[index].SecondaryWindow)
+
+	primaryChanged := accountPoolApplyQuotaWindowOverride(primaryWindows, override.Primary, now)
+	secondaryChanged := accountPoolApplyQuotaWindowOverride(secondaryWindows, override.Secondary, now)
+	effect.changed = primaryChanged || secondaryChanged
+	effect.minRemaining = accountPoolMinimumRemaining(primaryWindows, secondaryWindows)
+	return effect
+}
+
+func accountPoolHasQuotaWindow(windows []*AccountPoolWindow) bool {
+	for _, window := range windows {
+		if window != nil {
+			return true
 		}
 	}
+	return false
+}
 
+func accountPoolApplyQuotaWindowOverride(windows []*AccountPoolWindow, override account_pool_setting.QuotaWindowOverride, now time.Time) bool {
 	if override.Pin != nil && override.Pin.ActiveAt(now) {
-		effect.pinActive = true
-		eachWindow(func(window *AccountPoolWindow) {
+		for _, window := range windows {
 			if window == nil {
-				return
+				continue
 			}
 			remaining := 100.0
 			used := 0.0
 			window.RemainingPercent = &remaining
 			window.UsedPercent = &used
-		})
-		return effect
+		}
+		return true
 	}
-
 	if override.OffsetPercent == 0 {
-		return effect
+		return false
 	}
-	eachWindow(func(window *AccountPoolWindow) {
+	changed := false
+	for _, window := range windows {
 		if window == nil || window.RemainingPercent == nil {
-			return
+			continue
 		}
 		remaining := math.Max(0, math.Min(100, *window.RemainingPercent+override.OffsetPercent))
 		used := 100 - remaining
 		window.RemainingPercent = &remaining
 		window.UsedPercent = &used
-		effect.offsetApplied = true
-		if effect.minRemaining == nil || remaining < *effect.minRemaining {
-			effect.minRemaining = &remaining
+		changed = true
+	}
+	return changed
+}
+
+func accountPoolMinimumRemaining(windowLists ...[]*AccountPoolWindow) *float64 {
+	var minimum *float64
+	for _, windows := range windowLists {
+		for _, window := range windows {
+			if window == nil || window.RemainingPercent == nil {
+				continue
+			}
+			if minimum == nil || *window.RemainingPercent < *minimum {
+				remaining := *window.RemainingPercent
+				minimum = &remaining
+			}
 		}
-	})
-	return effect
+	}
+	return minimum
 }
 
 func accountPoolOverrideStatus(status string, effect accountPoolQuotaOverrideEffect) string {
-	if effect.pinActive {
-		if status == "available" || status == "limited" {
-			return "available"
-		}
+	if status != "available" && status != "limited" {
 		return status
 	}
-	if !effect.offsetApplied || effect.minRemaining == nil {
+	if !effect.changed || effect.minRemaining == nil {
 		return status
 	}
-	if status == "limited" && *effect.minRemaining > 0 {
-		return "available"
-	}
-	if status == "available" && *effect.minRemaining <= 0 {
+	if *effect.minRemaining <= 0 {
 		return "limited"
 	}
-	return status
+	return "available"
 }
 
-func accountPoolQuotaOverrideView(override account_pool_setting.QuotaOverride, effect accountPoolQuotaOverrideEffect) *AccountPoolQuotaOverride {
-	view := &AccountPoolQuotaOverride{
-		OffsetPercent: override.OffsetPercent,
-		Pinned:        effect.pinActive,
+func accountPoolQuotaOverrideView(override account_pool_setting.QuotaOverride, now time.Time) *AccountPoolQuotaOverride {
+	return &AccountPoolQuotaOverride{
+		Primary:   accountPoolQuotaWindowOverrideView(override.Primary, now),
+		Secondary: accountPoolQuotaWindowOverrideView(override.Secondary, now),
 	}
-	if effect.pinActive && override.Pin != nil {
+}
+
+func accountPoolQuotaWindowOverrideView(override account_pool_setting.QuotaWindowOverride, now time.Time) AccountPoolQuotaWindowOverride {
+	view := AccountPoolQuotaWindowOverride{OffsetPercent: override.OffsetPercent}
+	if override.Pin != nil && override.Pin.ActiveAt(now) {
+		view.Pinned = true
 		view.PinReleaseMode = override.Pin.ReleaseMode
 		view.PinReleaseAt = copyTimePointer(override.Pin.ReleaseAt)
 	}

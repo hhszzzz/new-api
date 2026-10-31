@@ -16,7 +16,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 
@@ -49,6 +55,13 @@ function account(
   }
 }
 
+function section(title: string) {
+  const heading = screen.getByRole('heading', { name: title })
+  const container = heading.closest('section')
+  if (!container) throw new Error(`section ${title} not found`)
+  return within(container)
+}
+
 function renderDialog(
   props: Partial<{
     item: AccountPoolAccount
@@ -74,27 +87,45 @@ function renderDialog(
 afterEach(cleanup)
 
 describe('account pool quota adjustment dialog', () => {
-  test('submits an offset and a manual-refresh pin', async () => {
+  test('adjusts the two limits independently', async () => {
     const user = userEvent.setup()
     const { onSave } = renderDialog()
 
-    const offset = screen.getByLabelText('Remaining percentage offset')
-    await user.clear(offset)
-    await user.type(offset, '25')
+    const primary = section('5-hour quota')
+    const secondary = section('Weekly / monthly quota')
+
+    const primaryOffset = primary.getByLabelText('Remaining percentage offset')
+    await user.clear(primaryOffset)
+    await user.type(primaryOffset, '25')
     await user.click(
-      screen.getByRole('switch', { name: 'Pin remaining at 100%' })
+      primary.getByRole('switch', {
+        name: '5-hour quota Pin remaining at 100%',
+      })
     )
     await user.click(
-      screen.getByRole('button', { name: 'Next manual refresh' })
+      primary.getByRole('button', { name: 'Next manual refresh' })
     )
+
+    const secondaryOffset = secondary.getByLabelText(
+      'Remaining percentage offset'
+    )
+    await user.clear(secondaryOffset)
+    await user.type(secondaryOffset, '-20')
+
     await user.click(screen.getByRole('button', { name: 'Save' }))
 
     await waitFor(() =>
       expect(onSave).toHaveBeenCalledWith({
-        offset_percent: 25,
-        pinned: true,
-        pin_release_mode: 'manual_refresh',
-        pin_release_at: null,
+        primary: {
+          offset_percent: 25,
+          pinned: true,
+          pin_release_mode: 'manual_refresh',
+          pin_release_at: null,
+        },
+        secondary: {
+          offset_percent: -20,
+          pinned: false,
+        },
       })
     )
   })
@@ -103,11 +134,14 @@ describe('account pool quota adjustment dialog', () => {
     const user = userEvent.setup()
     const { onSave } = renderDialog()
 
+    const primary = section('5-hour quota')
     await user.click(
-      screen.getByRole('switch', { name: 'Pin remaining at 100%' })
+      primary.getByRole('switch', {
+        name: '5-hour quota Pin remaining at 100%',
+      })
     )
     await user.click(
-      screen.getByRole('button', { name: 'At a specified time' })
+      primary.getByRole('button', { name: 'At a specified time' })
     )
     await user.click(screen.getByRole('button', { name: 'Save' }))
 
@@ -119,10 +153,18 @@ describe('account pool quota adjustment dialog', () => {
     const user = userEvent.setup()
     const { onClear, onClose } = renderDialog({
       item: account({
-        offset_percent: 10,
-        pinned: false,
-        pin_release_mode: null,
-        pin_release_at: null,
+        primary: {
+          offset_percent: 10,
+          pinned: false,
+          pin_release_mode: null,
+          pin_release_at: null,
+        },
+        secondary: {
+          offset_percent: 0,
+          pinned: false,
+          pin_release_mode: null,
+          pin_release_at: null,
+        },
       }),
     })
 

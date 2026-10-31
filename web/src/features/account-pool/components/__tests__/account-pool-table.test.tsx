@@ -418,10 +418,18 @@ describe('account pool quota management', () => {
       ...account('admin@example.com'),
       public_id: 'adjusted-1',
       quota_override: {
-        offset_percent: 15,
-        pinned: false,
-        pin_release_mode: null,
-        pin_release_at: null,
+        primary: {
+          offset_percent: 15,
+          pinned: false,
+          pin_release_mode: null,
+          pin_release_at: null,
+        },
+        secondary: {
+          offset_percent: 0,
+          pinned: true,
+          pin_release_mode: 'manual_refresh',
+          pin_release_at: null,
+        },
       },
     }
 
@@ -443,7 +451,10 @@ describe('account pool quota management', () => {
     expect(screen.getByTestId('column-order')).toHaveTextContent(
       'account,status,plan,primary-window,secondary-window,subscription_active_until,actions'
     )
-    expect(screen.getByText('Offset +15%')).toBeInTheDocument()
+    expect(screen.getByText('5-hour quota: Offset +15%')).toBeInTheDocument()
+    expect(
+      screen.getByText('Weekly / monthly quota: Pinned at 100%')
+    ).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: 'Adjust quota' }))
     expect(onAdjust).toHaveBeenCalledWith(adjustedAccount)

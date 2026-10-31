@@ -376,28 +376,34 @@ func TestUpdateAccountPoolQuotaOverridesPersistsAndPublishes(t *testing.T) {
 	updatedAt := time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC)
 	overrides := map[string]account_pool_setting.QuotaOverride{
 		publicID: {
-			OffsetPercent: 12.5,
-			Pin:           &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseAtTime, ReleaseAt: &releaseAt},
-			UpdatedAt:     updatedAt,
+			Primary: account_pool_setting.QuotaWindowOverride{
+				OffsetPercent: 12.5,
+				Pin:           &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseAtTime, ReleaseAt: &releaseAt},
+			},
+			Secondary: account_pool_setting.QuotaWindowOverride{OffsetPercent: -3},
+			UpdatedAt: updatedAt,
 		},
 	}
 
 	require.NoError(t, UpdateAccountPoolQuotaOverrides(overrides))
 	stored, ok := account_pool_setting.GetQuotaOverride(publicID)
 	require.True(t, ok)
-	assert.Equal(t, 12.5, stored.OffsetPercent)
-	require.NotNil(t, stored.Pin)
-	assert.Equal(t, releaseAt, *stored.Pin.ReleaseAt)
+	assert.Equal(t, 12.5, stored.Primary.OffsetPercent)
+	require.NotNil(t, stored.Primary.Pin)
+	assert.Equal(t, releaseAt, *stored.Primary.Pin.ReleaseAt)
+	assert.Equal(t, -3.0, stored.Secondary.OffsetPercent)
 
 	var persisted map[string]account_pool_setting.QuotaOverride
 	require.NoError(t, common.UnmarshalJsonStr(requireOptionValue(t, db, account_pool_setting.QuotaOverridesOptionKey), &persisted))
-	assert.Equal(t, 12.5, persisted[publicID].OffsetPercent)
+	assert.Equal(t, 12.5, persisted[publicID].Primary.OffsetPercent)
+	assert.Equal(t, -3.0, persisted[publicID].Secondary.OffsetPercent)
 
 	require.Error(t, UpdateAccountPoolQuotaOverrides(map[string]account_pool_setting.QuotaOverride{
-		publicID: {OffsetPercent: 200},
+		publicID: {Primary: account_pool_setting.QuotaWindowOverride{OffsetPercent: 200}},
 	}))
 	require.NoError(t, common.UnmarshalJsonStr(requireOptionValue(t, db, account_pool_setting.QuotaOverridesOptionKey), &persisted))
-	assert.Equal(t, 12.5, persisted[publicID].OffsetPercent)
+	assert.Equal(t, 12.5, persisted[publicID].Primary.OffsetPercent)
+	assert.Equal(t, -3.0, persisted[publicID].Secondary.OffsetPercent)
 
 	require.NoError(t, UpdateAccountPoolQuotaOverrides(map[string]account_pool_setting.QuotaOverride{}))
 	assert.Empty(t, account_pool_setting.GetQuotaOverrides())

@@ -22,6 +22,8 @@ import type {
   AccountPoolQuotaOverride,
   AccountPoolQuotaOverrideInput,
   AccountPoolQuotaReleaseMode,
+  AccountPoolQuotaWindowOverride,
+  AccountPoolQuotaWindowOverrideInput,
 } from '../types'
 
 export const ACCOUNT_POOL_QUOTA_RELEASE_OPTIONS = [
@@ -34,7 +36,7 @@ export const ACCOUNT_POOL_QUOTA_RELEASE_OPTIONS = [
   labelKey: string
 }>
 
-export const accountPoolQuotaAdjustmentSchema = z
+const quotaWindowAdjustmentSchema = z
   .object({
     offset_percent: z.coerce
       .number()
@@ -68,13 +70,21 @@ export const accountPoolQuotaAdjustmentSchema = z
     }
   })
 
+export const accountPoolQuotaAdjustmentSchema = z.object({
+  primary: quotaWindowAdjustmentSchema,
+  secondary: quotaWindowAdjustmentSchema,
+})
+
+export type AccountPoolQuotaWindowAdjustmentValues = z.infer<
+  typeof quotaWindowAdjustmentSchema
+>
 export type AccountPoolQuotaAdjustmentValues = z.infer<
   typeof accountPoolQuotaAdjustmentSchema
 >
 
-export function accountPoolQuotaAdjustmentValues(
-  override?: AccountPoolQuotaOverride | null
-): AccountPoolQuotaAdjustmentValues {
+function quotaWindowAdjustmentValues(
+  override?: AccountPoolQuotaWindowOverride | null
+): AccountPoolQuotaWindowAdjustmentValues {
   const releaseAt = override?.pin_release_at
     ? new Date(override.pin_release_at)
     : undefined
@@ -87,9 +97,9 @@ export function accountPoolQuotaAdjustmentValues(
   }
 }
 
-export function accountPoolQuotaAdjustmentInput(
-  values: AccountPoolQuotaAdjustmentValues
-): AccountPoolQuotaOverrideInput {
+function quotaWindowAdjustmentInput(
+  values: AccountPoolQuotaWindowAdjustmentValues
+): AccountPoolQuotaWindowOverrideInput {
   if (!values.pinned) {
     return { offset_percent: values.offset_percent, pinned: false }
   }
@@ -101,5 +111,23 @@ export function accountPoolQuotaAdjustmentInput(
       values.release_mode === 'at_time'
         ? (values.release_at?.toISOString() ?? null)
         : null,
+  }
+}
+
+export function accountPoolQuotaAdjustmentValues(
+  override?: AccountPoolQuotaOverride | null
+): AccountPoolQuotaAdjustmentValues {
+  return {
+    primary: quotaWindowAdjustmentValues(override?.primary),
+    secondary: quotaWindowAdjustmentValues(override?.secondary),
+  }
+}
+
+export function accountPoolQuotaAdjustmentInput(
+  values: AccountPoolQuotaAdjustmentValues
+): AccountPoolQuotaOverrideInput {
+  return {
+    primary: quotaWindowAdjustmentInput(values.primary),
+    secondary: quotaWindowAdjustmentInput(values.secondary),
   }
 }

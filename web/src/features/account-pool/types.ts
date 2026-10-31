@@ -51,7 +51,19 @@ export type AccountPoolQuotaReleaseMode =
   | 'manual_refresh'
   | 'any_refresh'
 
+export type AccountPoolQuotaWindowOverride = {
+  offset_percent: number
+  pinned: boolean
+  pin_release_mode?: AccountPoolQuotaReleaseMode | null
+  pin_release_at?: string | null
+}
+
 export type AccountPoolQuotaOverride = {
+  primary: AccountPoolQuotaWindowOverride
+  secondary: AccountPoolQuotaWindowOverride
+}
+
+export type AccountPoolQuotaWindowOverrideInput = {
   offset_percent: number
   pinned: boolean
   pin_release_mode?: AccountPoolQuotaReleaseMode | null
@@ -59,10 +71,8 @@ export type AccountPoolQuotaOverride = {
 }
 
 export type AccountPoolQuotaOverrideInput = {
-  offset_percent: number
-  pinned: boolean
-  pin_release_mode?: AccountPoolQuotaReleaseMode | null
-  pin_release_at?: string | null
+  primary: AccountPoolQuotaWindowOverrideInput
+  secondary: AccountPoolQuotaWindowOverrideInput
 }
 
 export type AccountPoolAccount = {

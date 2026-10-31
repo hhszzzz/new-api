@@ -190,12 +190,13 @@ func TestUpdateAccountPoolQuotaOverrideRejectsInvalidRequest(t *testing.T) {
 		publicID string
 		body     string
 	}{
-		{name: "invalid public id", publicID: "bad", body: `{"offset_percent":10}`},
+		{name: "invalid public id", publicID: "bad", body: `{"primary":{"offset_percent":10}}`},
 		{name: "malformed body", publicID: validPublicID, body: `{`},
-		{name: "offset out of range", publicID: validPublicID, body: `{"offset_percent":101}`},
-		{name: "time pin without release", publicID: validPublicID, body: `{"pinned":true,"pin_release_mode":"at_time"}`},
-		{name: "pin without release mode", publicID: validPublicID, body: `{"pinned":true}`},
-		{name: "unknown release mode", publicID: validPublicID, body: `{"pinned":true,"pin_release_mode":"later"}`},
+		{name: "primary offset out of range", publicID: validPublicID, body: `{"primary":{"offset_percent":101}}`},
+		{name: "secondary offset out of range", publicID: validPublicID, body: `{"secondary":{"offset_percent":-101}}`},
+		{name: "time pin without release", publicID: validPublicID, body: `{"primary":{"pinned":true,"pin_release_mode":"at_time"}}`},
+		{name: "pin without release mode", publicID: validPublicID, body: `{"secondary":{"pinned":true}}`},
+		{name: "unknown release mode", publicID: validPublicID, body: `{"primary":{"pinned":true,"pin_release_mode":"later"}}`},
 	}
 
 	for _, test := range tests {

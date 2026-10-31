@@ -1233,113 +1233,146 @@ func quotaOverrideTestID(char string) string {
 func cloneAccountPoolQuotaOverrides(input map[string]account_pool_setting.QuotaOverride) map[string]account_pool_setting.QuotaOverride {
 	copied := make(map[string]account_pool_setting.QuotaOverride, len(input))
 	for publicID, override := range input {
-		copy := override
-		if override.Pin != nil {
-			pin := *override.Pin
-			if override.Pin.ReleaseAt != nil {
-				releaseAt := *override.Pin.ReleaseAt
-				pin.ReleaseAt = &releaseAt
-			}
-			copy.Pin = &pin
-		}
-		copied[publicID] = copy
+		copied[publicID] = cloneAccountPoolQuotaOverride(override)
 	}
 	return copied
 }
 
-func TestApplyAccountPoolQuotaOverrideAdjustsWindowsAndStatus(t *testing.T) {
+func cloneAccountPoolQuotaOverride(override account_pool_setting.QuotaOverride) account_pool_setting.QuotaOverride {
+	copied := override
+	copied.Primary = cloneAccountPoolQuotaWindowOverride(override.Primary)
+	copied.Secondary = cloneAccountPoolQuotaWindowOverride(override.Secondary)
+	return copied
+}
+
+func cloneAccountPoolQuotaWindowOverride(override account_pool_setting.QuotaWindowOverride) account_pool_setting.QuotaWindowOverride {
+	copied := override
+	if override.Pin != nil {
+		pin := *override.Pin
+		if override.Pin.ReleaseAt != nil {
+			releaseAt := *override.Pin.ReleaseAt
+			pin.ReleaseAt = &releaseAt
+		}
+		copied.Pin = &pin
+	}
+	return copied
+}
+
+func TestApplyAccountPoolQuotaOverrideAdjustsEachLimitIndependently(t *testing.T) {
 	now := time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC)
-	releaseAt := now.Add(time.Hour)
-	expiredAt := now.Add(-time.Minute)
+	future := now.Add(time.Hour)
+	past := now.Add(-time.Minute)
 
 	tests := []struct {
-		name          string
-		remaining     *float64
-		status        string
-		override      account_pool_setting.QuotaOverride
-		wantRemaining *float64
-		wantUsed      *float64
-		wantStatus    string
-		wantPin       bool
+		name               string
+		primaryRemaining   *float64
+		secondaryRemaining *float64
+		status             string
+		override           account_pool_setting.QuotaOverride
+		wantPrimary        *float64
+		wantSecondary      *float64
+		wantStatus         string
+		wantChanged        bool
 	}{
 		{
-			name:      "positive offset lifts a limited account",
-			remaining: quotaOverridePercent(5), status: "limited",
-			override:      account_pool_setting.QuotaOverride{OffsetPercent: 30},
-			wantRemaining: quotaOverridePercent(35), wantUsed: quotaOverridePercent(65), wantStatus: "available",
+			name:             "primary offset lifts only the primary window",
+			primaryRemaining: quotaOverridePercent(5), secondaryRemaining: quotaOverridePercent(50), status: "limited",
+			override:    account_pool_setting.QuotaOverride{Primary: account_pool_setting.QuotaWindowOverride{OffsetPercent: 30}},
+			wantPrimary: quotaOverridePercent(35), wantSecondary: quotaOverridePercent(50), wantStatus: "available", wantChanged: true,
 		},
 		{
-			name:      "positive offset clamps at full",
-			remaining: quotaOverridePercent(40), status: "available",
-			override:      account_pool_setting.QuotaOverride{OffsetPercent: 80},
-			wantRemaining: quotaOverridePercent(100), wantUsed: quotaOverridePercent(0), wantStatus: "available",
+			name:             "secondary offset exhausts only the secondary window",
+			primaryRemaining: quotaOverridePercent(80), secondaryRemaining: quotaOverridePercent(50), status: "available",
+			override:    account_pool_setting.QuotaOverride{Secondary: account_pool_setting.QuotaWindowOverride{OffsetPercent: -60}},
+			wantPrimary: quotaOverridePercent(80), wantSecondary: quotaOverridePercent(0), wantStatus: "limited", wantChanged: true,
 		},
 		{
-			name:      "negative offset clamps at empty and limits the account",
-			remaining: quotaOverridePercent(30), status: "available",
-			override:      account_pool_setting.QuotaOverride{OffsetPercent: -50},
-			wantRemaining: quotaOverridePercent(0), wantUsed: quotaOverridePercent(100), wantStatus: "limited",
+			name:             "primary offset clamps at full",
+			primaryRemaining: quotaOverridePercent(40), secondaryRemaining: quotaOverridePercent(40), status: "available",
+			override:    account_pool_setting.QuotaOverride{Primary: account_pool_setting.QuotaWindowOverride{OffsetPercent: 80}},
+			wantPrimary: quotaOverridePercent(100), wantSecondary: quotaOverridePercent(40), wantStatus: "available", wantChanged: true,
 		},
 		{
-			name:      "active pin wins over offset",
-			remaining: quotaOverridePercent(5), status: "limited",
+			name:             "primary pin leaves the secondary window alone",
+			primaryRemaining: quotaOverridePercent(5), secondaryRemaining: quotaOverridePercent(40), status: "limited",
+			override:    account_pool_setting.QuotaOverride{Primary: account_pool_setting.QuotaWindowOverride{Pin: &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseAtTime, ReleaseAt: &future}}},
+			wantPrimary: quotaOverridePercent(100), wantSecondary: quotaOverridePercent(40), wantStatus: "available", wantChanged: true,
+		},
+		{
+			name:             "secondary pin leaves the primary window alone",
+			primaryRemaining: quotaOverridePercent(5), secondaryRemaining: quotaOverridePercent(0), status: "limited",
+			override:    account_pool_setting.QuotaOverride{Secondary: account_pool_setting.QuotaWindowOverride{Pin: &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseAnyRefresh}}},
+			wantPrimary: quotaOverridePercent(5), wantSecondary: quotaOverridePercent(100), wantStatus: "available", wantChanged: true,
+		},
+		{
+			name:             "both pins apply to their own window",
+			primaryRemaining: quotaOverridePercent(0), secondaryRemaining: quotaOverridePercent(0), status: "limited",
 			override: account_pool_setting.QuotaOverride{
-				OffsetPercent: -100,
-				Pin:           &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseAtTime, ReleaseAt: &releaseAt},
+				Primary:   account_pool_setting.QuotaWindowOverride{Pin: &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseManual}},
+				Secondary: account_pool_setting.QuotaWindowOverride{Pin: &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseAuto}},
 			},
-			wantRemaining: quotaOverridePercent(100), wantUsed: quotaOverridePercent(0), wantStatus: "available", wantPin: true,
+			wantPrimary: quotaOverridePercent(100), wantSecondary: quotaOverridePercent(100), wantStatus: "available", wantChanged: true,
 		},
 		{
-			name:      "expired time pin falls back to the offset",
-			remaining: quotaOverridePercent(10), status: "available",
-			override: account_pool_setting.QuotaOverride{
+			name:             "expired primary time pin falls back to the primary offset",
+			primaryRemaining: quotaOverridePercent(10), secondaryRemaining: quotaOverridePercent(50), status: "available",
+			override: account_pool_setting.QuotaOverride{Primary: account_pool_setting.QuotaWindowOverride{
 				OffsetPercent: 20,
-				Pin:           &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseAtTime, ReleaseAt: &expiredAt},
-			},
-			wantRemaining: quotaOverridePercent(30), wantUsed: quotaOverridePercent(70), wantStatus: "available",
+				Pin:           &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseAtTime, ReleaseAt: &past},
+			}},
+			wantPrimary: quotaOverridePercent(30), wantSecondary: quotaOverridePercent(50), wantStatus: "available", wantChanged: true,
 		},
 		{
-			name:      "nil remaining is left unchanged",
-			remaining: nil, status: "available",
-			override:   account_pool_setting.QuotaOverride{OffsetPercent: 30},
-			wantStatus: "available",
+			name:             "nil secondary remaining is left unchanged",
+			primaryRemaining: quotaOverridePercent(60), secondaryRemaining: nil, status: "available",
+			override:    account_pool_setting.QuotaOverride{Secondary: account_pool_setting.QuotaWindowOverride{OffsetPercent: 30}},
+			wantPrimary: quotaOverridePercent(60), wantSecondary: nil, wantStatus: "available", wantChanged: false,
 		},
 		{
-			name:      "error status is never flipped by a pin",
-			remaining: quotaOverridePercent(0), status: "error",
-			override: account_pool_setting.QuotaOverride{
-				Pin: &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseAnyRefresh},
-			},
-			wantRemaining: quotaOverridePercent(100), wantUsed: quotaOverridePercent(0), wantStatus: "error", wantPin: true,
+			name:             "error status is never flipped by a pin",
+			primaryRemaining: quotaOverridePercent(0), secondaryRemaining: quotaOverridePercent(0), status: "error",
+			override:    account_pool_setting.QuotaOverride{Primary: account_pool_setting.QuotaWindowOverride{Pin: &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseAnyRefresh}}},
+			wantPrimary: quotaOverridePercent(100), wantSecondary: quotaOverridePercent(0), wantStatus: "error", wantChanged: true,
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			item := AccountPoolViewAccount{
-				Status:        test.status,
-				PrimaryWindow: &AccountPoolWindow{RemainingPercent: test.remaining, UsedPercent: quotaOverridePercent(100 - valueOrZero(test.remaining))},
+				Status:          test.status,
+				PrimaryWindow:   &AccountPoolWindow{RemainingPercent: test.primaryRemaining, UsedPercent: quotaOverridePercent(100 - valueOrZero(test.primaryRemaining))},
+				SecondaryWindow: &AccountPoolWindow{RemainingPercent: test.secondaryRemaining, UsedPercent: quotaOverridePercent(100 - valueOrZero(test.secondaryRemaining))},
 				WindowGroups: []AccountPoolWindowGroup{{
-					PrimaryWindow: &AccountPoolWindow{RemainingPercent: test.remaining, UsedPercent: quotaOverridePercent(100 - valueOrZero(test.remaining))},
+					PrimaryWindow:   &AccountPoolWindow{RemainingPercent: test.primaryRemaining, UsedPercent: quotaOverridePercent(100 - valueOrZero(test.primaryRemaining))},
+					SecondaryWindow: &AccountPoolWindow{RemainingPercent: test.secondaryRemaining, UsedPercent: quotaOverridePercent(100 - valueOrZero(test.secondaryRemaining))},
 				}},
 			}
 
 			effect := applyAccountPoolQuotaOverride(&item, test.override, now)
 
 			for _, window := range []*AccountPoolWindow{item.PrimaryWindow, item.WindowGroups[0].PrimaryWindow} {
-				if test.wantRemaining == nil {
-					assert.Nil(t, window.RemainingPercent)
-					continue
-				}
-				require.NotNil(t, window.RemainingPercent)
-				assert.Equal(t, *test.wantRemaining, *window.RemainingPercent)
-				require.NotNil(t, window.UsedPercent)
-				assert.Equal(t, *test.wantUsed, *window.UsedPercent)
+				assertWindowPercent(t, window, test.wantPrimary)
 			}
-			assert.Equal(t, test.wantPin, effect.pinActive)
+			for _, window := range []*AccountPoolWindow{item.SecondaryWindow, item.WindowGroups[0].SecondaryWindow} {
+				assertWindowPercent(t, window, test.wantSecondary)
+			}
+			assert.Equal(t, test.wantChanged, effect.changed)
 			assert.Equal(t, test.wantStatus, accountPoolOverrideStatus(test.status, effect))
 		})
 	}
+}
+
+func assertWindowPercent(t *testing.T, window *AccountPoolWindow, want *float64) {
+	t.Helper()
+	require.NotNil(t, window)
+	if want == nil {
+		assert.Nil(t, window.RemainingPercent)
+		return
+	}
+	require.NotNil(t, window.RemainingPercent)
+	assert.Equal(t, *want, *window.RemainingPercent)
+	require.NotNil(t, window.UsedPercent)
+	assert.Equal(t, 100-*want, *window.UsedPercent)
 }
 
 func valueOrZero(value *float64) float64 {
@@ -1358,14 +1391,18 @@ func TestAccountPoolViewAppliesOverrideAndHidesDetailsFromRegularUsers(t *testin
 	manager.loadSetting = func() *account_pool_setting.Setting { return &setting }
 	manager.loadQuotaOverrides = func() map[string]account_pool_setting.QuotaOverride {
 		return map[string]account_pool_setting.QuotaOverride{
-			publicID: {OffsetPercent: 30},
+			publicID: {
+				Primary:   account_pool_setting.QuotaWindowOverride{OffsetPercent: 30},
+				Secondary: account_pool_setting.QuotaWindowOverride{Pin: &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseAnyRefresh}},
+			},
 		}
 	}
 	snapshot := &accountPoolSnapshot{Accounts: []accountPoolAccount{{
-		PublicID:      publicID,
-		Provider:      account_pool_setting.ProviderCodex,
-		Status:        "limited",
-		PrimaryWindow: &AccountPoolWindow{RemainingPercent: quotaOverridePercent(0), UsedPercent: quotaOverridePercent(100)},
+		PublicID:        publicID,
+		Provider:        account_pool_setting.ProviderCodex,
+		Status:          "limited",
+		PrimaryWindow:   &AccountPoolWindow{RemainingPercent: quotaOverridePercent(0), UsedPercent: quotaOverridePercent(100)},
+		SecondaryWindow: &AccountPoolWindow{RemainingPercent: quotaOverridePercent(50), UsedPercent: quotaOverridePercent(50)},
 	}}}
 
 	rootView := manager.buildView(snapshot, common.RoleRootUser, nil, false)
@@ -1373,14 +1410,17 @@ func TestAccountPoolViewAppliesOverrideAndHidesDetailsFromRegularUsers(t *testin
 	rootAccount := rootView.Accounts[0]
 	assert.Equal(t, "available", rootAccount.Status)
 	assert.Equal(t, 30.0, *rootAccount.PrimaryWindow.RemainingPercent)
+	assert.Equal(t, 100.0, *rootAccount.SecondaryWindow.RemainingPercent)
 	require.NotNil(t, rootAccount.QuotaOverride)
-	assert.Equal(t, 30.0, rootAccount.QuotaOverride.OffsetPercent)
+	assert.Equal(t, 30.0, rootAccount.QuotaOverride.Primary.OffsetPercent)
+	assert.True(t, rootAccount.QuotaOverride.Secondary.Pinned)
 	assert.Equal(t, AccountPoolSummary{Total: 1, Available: 1}, rootView.Summary)
 
 	userView := manager.buildView(snapshot, common.RoleCommonUser, []string{"vip"}, false)
 	require.Len(t, userView.Accounts, 1)
 	assert.Nil(t, userView.Accounts[0].QuotaOverride)
 	assert.Equal(t, 30.0, *userView.Accounts[0].PrimaryWindow.RemainingPercent)
+	assert.Equal(t, 100.0, *userView.Accounts[0].SecondaryWindow.RemainingPercent)
 }
 
 func TestReleaseAccountPoolPinsAfterRefreshHonoursKindCutoffAndExpiry(t *testing.T) {
@@ -1389,33 +1429,87 @@ func TestReleaseAccountPoolPinsAfterRefreshHonoursKindCutoffAndExpiry(t *testing
 	future := now.Add(time.Hour)
 	oldTimestamp := now.Add(-time.Hour)
 	newTimestamp := now.Add(time.Minute)
+
 	initial := map[string]account_pool_setting.QuotaOverride{
-		quotaOverrideTestID("a"): {UpdatedAt: oldTimestamp, Pin: &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseAuto}},
-		quotaOverrideTestID("b"): {UpdatedAt: oldTimestamp, Pin: &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseManual}},
-		quotaOverrideTestID("c"): {UpdatedAt: oldTimestamp, Pin: &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseAnyRefresh}},
-		quotaOverrideTestID("d"): {UpdatedAt: newTimestamp, Pin: &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseAuto}},
-		quotaOverrideTestID("e"): {UpdatedAt: oldTimestamp, Pin: &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseAtTime, ReleaseAt: &past}},
-		quotaOverrideTestID("f"): {UpdatedAt: oldTimestamp, OffsetPercent: 15},
-		quotaOverrideTestID("g"): {UpdatedAt: oldTimestamp, Pin: &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseAtTime, ReleaseAt: &future}},
+		quotaOverrideTestID("a"): {
+			Primary:   account_pool_setting.QuotaWindowOverride{Pin: &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseAuto}},
+			Secondary: account_pool_setting.QuotaWindowOverride{OffsetPercent: 15},
+			UpdatedAt: oldTimestamp,
+		},
+		quotaOverrideTestID("b"): {
+			Primary:   account_pool_setting.QuotaWindowOverride{OffsetPercent: 10},
+			Secondary: account_pool_setting.QuotaWindowOverride{Pin: &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseManual}},
+			UpdatedAt: oldTimestamp,
+		},
+		quotaOverrideTestID("c"): {
+			Primary:   account_pool_setting.QuotaWindowOverride{Pin: &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseAnyRefresh}},
+			Secondary: account_pool_setting.QuotaWindowOverride{Pin: &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseAnyRefresh}},
+			UpdatedAt: oldTimestamp,
+		},
+		quotaOverrideTestID("d"): {
+			Primary:   account_pool_setting.QuotaWindowOverride{Pin: &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseAuto}},
+			UpdatedAt: newTimestamp,
+		},
+		quotaOverrideTestID("e"): {
+			Primary:   account_pool_setting.QuotaWindowOverride{Pin: &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseAtTime, ReleaseAt: &past}},
+			Secondary: account_pool_setting.QuotaWindowOverride{OffsetPercent: 5},
+			UpdatedAt: oldTimestamp,
+		},
+		quotaOverrideTestID("f"): {
+			Primary:   account_pool_setting.QuotaWindowOverride{OffsetPercent: 10},
+			Secondary: account_pool_setting.QuotaWindowOverride{OffsetPercent: 20},
+			UpdatedAt: oldTimestamp,
+		},
+		quotaOverrideTestID("9"): {
+			Primary:   account_pool_setting.QuotaWindowOverride{Pin: &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseAtTime, ReleaseAt: &future}},
+			UpdatedAt: oldTimestamp,
+		},
+		quotaOverrideTestID("8"): {
+			Primary:   account_pool_setting.QuotaWindowOverride{Pin: &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseAuto}},
+			Secondary: account_pool_setting.QuotaWindowOverride{Pin: &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseManual}},
+			UpdatedAt: oldTimestamp,
+		},
 	}
 
+	type expectedOverride struct {
+		gone            bool
+		primaryPin      bool
+		secondaryPin    bool
+		primaryOffset   float64
+		secondaryOffset float64
+	}
 	tests := []struct {
-		name       string
-		kind       string
-		wantPinned []string
-		wantGone   []string
+		name     string
+		kind     string
+		expected map[string]expectedOverride
 	}{
 		{
-			name:       "automatic round releases automatic and any pins",
-			kind:       account_pool_setting.QuotaRefreshAuto,
-			wantPinned: []string{"b", "d", "g"},
-			wantGone:   []string{"a", "c", "e"},
+			name: "automatic round releases automatic and any pins",
+			kind: account_pool_setting.QuotaRefreshAuto,
+			expected: map[string]expectedOverride{
+				"a": {secondaryOffset: 15},
+				"b": {primaryOffset: 10, secondaryPin: true},
+				"c": {gone: true},
+				"d": {primaryPin: true},
+				"e": {secondaryOffset: 5},
+				"f": {primaryOffset: 10, secondaryOffset: 20},
+				"9": {primaryPin: true},
+				"8": {secondaryPin: true},
+			},
 		},
 		{
-			name:       "manual round releases manual and any pins",
-			kind:       account_pool_setting.QuotaRefreshManual,
-			wantPinned: []string{"a", "d", "g"},
-			wantGone:   []string{"b", "c", "e"},
+			name: "manual round releases manual and any pins",
+			kind: account_pool_setting.QuotaRefreshManual,
+			expected: map[string]expectedOverride{
+				"a": {primaryPin: true, secondaryOffset: 15},
+				"b": {primaryOffset: 10},
+				"c": {gone: true},
+				"d": {primaryPin: true},
+				"e": {secondaryOffset: 5},
+				"f": {primaryOffset: 10, secondaryOffset: 20},
+				"9": {primaryPin: true},
+				"8": {primaryPin: true},
+			},
 		},
 	}
 
@@ -1435,17 +1529,18 @@ func TestReleaseAccountPoolPinsAfterRefreshHonoursKindCutoffAndExpiry(t *testing
 			manager.releaseAccountPoolPinsAfterRefresh(test.kind, now)
 
 			require.NotNil(t, persisted)
-			for _, char := range test.wantPinned {
+			for char, expected := range test.expected {
 				override, ok := persisted[quotaOverrideTestID(char)]
+				if expected.gone {
+					assert.False(t, ok, "entry %s should be removed", char)
+					continue
+				}
 				require.True(t, ok, "entry %s should remain", char)
-				assert.NotNil(t, override.Pin)
+				assert.Equal(t, expected.primaryPin, override.Primary.Pin != nil, "entry %s primary pin", char)
+				assert.Equal(t, expected.secondaryPin, override.Secondary.Pin != nil, "entry %s secondary pin", char)
+				assert.Equal(t, expected.primaryOffset, override.Primary.OffsetPercent, "entry %s primary offset", char)
+				assert.Equal(t, expected.secondaryOffset, override.Secondary.OffsetPercent, "entry %s secondary offset", char)
 			}
-			for _, char := range test.wantGone {
-				assert.NotContains(t, persisted, quotaOverrideTestID(char))
-			}
-			assert.Contains(t, persisted, quotaOverrideTestID("f"))
-			assert.Equal(t, 15.0, persisted[quotaOverrideTestID("f")].OffsetPercent)
-			assert.NotContains(t, persisted, quotaOverrideTestID("d")+"x")
 		})
 	}
 }
@@ -1454,8 +1549,11 @@ func TestAccountPoolRefreshReleasesOnlyItsOwnPins(t *testing.T) {
 	now := time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC)
 	oldTimestamp := now.Add(-time.Hour)
 	initial := map[string]account_pool_setting.QuotaOverride{
-		quotaOverrideTestID("a"): {UpdatedAt: oldTimestamp, Pin: &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseAuto}},
-		quotaOverrideTestID("b"): {UpdatedAt: oldTimestamp, Pin: &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseManual}},
+		quotaOverrideTestID("a"): {
+			Primary:   account_pool_setting.QuotaWindowOverride{Pin: &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseAuto}},
+			Secondary: account_pool_setting.QuotaWindowOverride{Pin: &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseManual}},
+			UpdatedAt: oldTimestamp,
+		},
 	}
 
 	t.Run("automatic refresh keeps a manual pin", func(t *testing.T) {
@@ -1474,8 +1572,9 @@ func TestAccountPoolRefreshReleasesOnlyItsOwnPins(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, refreshed)
 		require.NotNil(t, persisted)
-		assert.NotContains(t, persisted, quotaOverrideTestID("a"))
-		assert.Contains(t, persisted, quotaOverrideTestID("b"))
+		override := persisted[quotaOverrideTestID("a")]
+		assert.Nil(t, override.Primary.Pin)
+		assert.NotNil(t, override.Secondary.Pin)
 	})
 
 	t.Run("manual refresh releases a manual pin", func(t *testing.T) {
@@ -1493,7 +1592,9 @@ func TestAccountPoolRefreshReleasesOnlyItsOwnPins(t *testing.T) {
 		_, err := manager.refreshManually(t.Context())
 		require.NoError(t, err)
 		require.NotNil(t, persisted)
-		assert.NotContains(t, persisted, quotaOverrideTestID("b"))
+		override := persisted[quotaOverrideTestID("a")]
+		assert.NotNil(t, override.Primary.Pin)
+		assert.Nil(t, override.Secondary.Pin)
 	})
 
 	t.Run("failed refresh keeps every pin", func(t *testing.T) {
@@ -1536,8 +1637,13 @@ func TestSetAccountPoolQuotaOverrideStampsTimestampAndDropsEmpty(t *testing.T) {
 	}
 
 	publicID := quotaOverrideTestID("a")
-	require.NoError(t, manager.setQuotaOverride(publicID, account_pool_setting.QuotaOverride{OffsetPercent: 10}))
+	require.NoError(t, manager.setQuotaOverride(publicID, account_pool_setting.QuotaOverride{
+		Primary:   account_pool_setting.QuotaWindowOverride{OffsetPercent: 10},
+		Secondary: account_pool_setting.QuotaWindowOverride{Pin: &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseAuto}},
+	}))
 	assert.Equal(t, now, persisted[publicID].UpdatedAt)
+	assert.Equal(t, 10.0, persisted[publicID].Primary.OffsetPercent)
+	assert.NotNil(t, persisted[publicID].Secondary.Pin)
 
 	require.NoError(t, manager.setQuotaOverride(publicID, account_pool_setting.QuotaOverride{}))
 	assert.NotContains(t, persisted, publicID)
