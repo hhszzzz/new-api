@@ -29,6 +29,14 @@ type PromptAuditStorageState struct {
 	ExportSequence int64
 	Stats          LongText
 	StatsUpdatedAt int64
+	// StatsPass holds the measurement whose archive-backlog scan is still in
+	// progress. StatsScanAfter is the last audit id already counted, StatsScanLimit
+	// is the id the pass started from, and StatsScanBacklog accumulates the pending
+	// count between maintenance invocations.
+	StatsPass        LongText
+	StatsScanAfter   int64
+	StatsScanLimit   int64
+	StatsScanBacklog int64
 }
 
 type PromptAuditArchive struct {
@@ -826,14 +834,28 @@ func CleanupPromptAuditSharedContent(db *gorm.DB, now int64, batchSize int) (int
 	return purged, nil
 }
 
-func CleanupPromptAuditOrphanContent(db *gorm.DB, batchSize int) error {
+// CleanupPromptAuditOrphanContent collects references whose audit is gone and
+// clears blocks that no reference protects. The reference delete is bounded to a
+// page of audit ids so a large reference table can be swept across invocations
+// instead of being rolled back with the whole statement. It returns the number of
+// rows changed; a zero result means the sweep for this page is complete.
+func CleanupPromptAuditOrphanContent(db *gorm.DB, batchSize int) (int64, error) {
 	limit := min(max(batchSize, 1), 500)
 	eventExists := db.Model(&PromptAudit{}).Select("1").Where(clause.Eq{
 		Column: clause.Column{Table: db.NamingStrategy.TableName("PromptAudit"), Name: "id"},
 		Value:  clause.Column{Table: db.NamingStrategy.TableName("PromptAuditContentRef"), Name: "audit_id"},
 	})
-	if err := db.Where("NOT EXISTS (?)", eventExists).Delete(&PromptAuditContentRef{}).Error; err != nil {
-		return err
+	var auditIDs []int64
+	if err := db.Model(&PromptAuditContentRef{}).Where("NOT EXISTS (?)", eventExists).Distinct("audit_id").Order("audit_id asc").Limit(limit).Pluck("audit_id", &auditIDs).Error; err != nil {
+		return 0, err
+	}
+	changed := int64(0)
+	if len(auditIDs) > 0 {
+		result := db.Where("audit_id IN ?", auditIDs).Delete(&PromptAuditContentRef{})
+		if result.Error != nil {
+			return 0, result.Error
+		}
+		changed = result.RowsAffected
 	}
 	// A block can have millions of repeated references. An indexed existence
 	// check stops at the first one instead of materializing every hash.
@@ -843,12 +865,12 @@ func CleanupPromptAuditOrphanContent(db *gorm.DB, batchSize int) error {
 	})
 	var hashes []string
 	if err := db.Model(&PromptAuditContent{}).Where("data IS NOT NULL AND NOT EXISTS (?)", activeReferenceExists).Order("hash asc").Limit(limit).Pluck("hash", &hashes).Error; err != nil {
-		return err
+		return changed, err
 	}
 	if len(hashes) == 0 {
-		return nil
+		return changed, nil
 	}
-	return db.Transaction(func(tx *gorm.DB) error {
+	err := db.Transaction(func(tx *gorm.DB) error {
 		var blobs []PromptAuditContent
 		if err := lockForUpdate(tx).Select("hash").Where("hash IN ?", hashes).Order("hash asc").Find(&blobs).Error; err != nil {
 			return err
@@ -873,6 +895,9 @@ func CleanupPromptAuditOrphanContent(db *gorm.DB, batchSize int) error {
 		if len(orphaned) == 0 {
 			return nil
 		}
-		return tx.Model(&PromptAuditContent{}).Where("hash IN ?", orphaned).Updates(map[string]any{"data": nil, "stored_bytes": int64(0)}).Error
+		result := tx.Model(&PromptAuditContent{}).Where("hash IN ?", orphaned).Updates(map[string]any{"data": nil, "stored_bytes": int64(0)})
+		changed += result.RowsAffected
+		return result.Error
 	}, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	return changed, err
 }

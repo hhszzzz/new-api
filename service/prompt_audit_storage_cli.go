@@ -39,6 +39,8 @@ func RunPromptAuditStorageCLI(args []string, stdout, stderr io.Writer) int {
 	digest := flags.String("digest", "", "archive digest")
 	volumesPath := flags.String("volumes", "", "verified remote volume manifest")
 	restore := flags.Bool("restore", false, "restore recovery bodies instead of viewing cache")
+	budget := flags.Int("budget", 1800, "seconds a statistics refresh may work before checkpointing")
+	force := flags.Bool("force", false, "refresh statistics even when the cached measurement is recent")
 	if err := flags.Parse(args[1:]); err != nil {
 		return 2
 	}
@@ -90,11 +92,9 @@ func RunPromptAuditStorageCLI(args []string, stdout, stderr io.Writer) int {
 		result = map[string]any{"migrated": total, "enabled": *enable && err == nil}
 	case "stats":
 		var stats model.PromptAuditStorageStats
-		stats, err = model.GetPromptAuditStorageStats(db)
-		if err == nil {
-			err = model.CachePromptAuditStorageStats(db, stats)
-		}
-		result = stats
+		var complete bool
+		stats, complete, err = model.AdvancePromptAuditStorageStats(db, time.Duration(*budget)*time.Second, *force)
+		result = map[string]any{"stats": stats, "complete": complete}
 		if err != nil {
 			err = fmt.Errorf("compute prompt audit storage statistics: %w", err)
 		}
@@ -141,9 +141,15 @@ func RunPromptAuditStorageCLI(args []string, stdout, stderr io.Writer) int {
 			}
 		}
 		if err == nil {
-			// Reference and block orphans are collected once, after every batch has
-			// been purged; the scan costs the same whether it runs once or per batch.
-			err = model.CleanupPromptAuditOrphanContent(db, 500)
+			// Reference and block orphans are collected in bounded pages; the scan
+			// reads every reference row, so it repeats only until a page is empty.
+			for {
+				var changed int64
+				changed, err = model.CleanupPromptAuditOrphanContent(db, 500)
+				if err != nil || changed == 0 {
+					break
+				}
+			}
 		}
 		result = map[string]any{"evicted": total}
 	case "export":

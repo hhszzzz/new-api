@@ -150,6 +150,88 @@ func TestPromptAuditSharedStorageMatrix(t *testing.T) {
 	}
 }
 
+func TestPromptAuditStorageStatsRefreshCheckpoints(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "refresh.sqlite")+"?_pragma=busy_timeout(30000)&_pragma=journal_mode(WAL)&_txlock=immediate"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	previousDB, previousType, previousSetting := DB, common.MainDatabaseType(), prompt_audit_setting.GetSetting()
+	DB = db
+	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
+	t.Cleanup(func() {
+		_ = db.Migrator().DropTable(&PromptAudit{}, &PromptAuditContentRef{}, &PromptAuditContent{}, &PromptAuditImportedContent{}, &PromptAuditArchive{}, &PromptAuditArchiveImport{}, &PromptAuditImportedRecord{}, &PromptAuditStorageState{})
+		DB = previousDB
+		common.SetMainDatabaseType(previousType)
+		previousSetting.PublishConfig()
+		_ = sqlDB.Close()
+	})
+	// The released storage-state table predates the checkpoint columns; migrating
+	// must add them without disturbing the existing measurement row.
+	legacyState := struct {
+		ID             int `gorm:"primaryKey;autoIncrement:false"`
+		SourceID       string
+		ExportSequence int64
+		Stats          string
+		StatsUpdatedAt int64
+	}{ID: 1, SourceID: "legacy-source", Stats: `{}`}
+	require.NoError(t, db.Table(db.NamingStrategy.TableName("PromptAuditStorageState")).AutoMigrate(&legacyState))
+	require.NoError(t, db.Table(db.NamingStrategy.TableName("PromptAuditStorageState")).Create(&legacyState).Error)
+	require.NoError(t, MigratePromptAuditStorage(db))
+	require.NoError(t, MigratePromptAuditStorage(db))
+	for _, column := range []string{"stats_pass", "stats_scan_after", "stats_scan_limit", "stats_scan_backlog"} {
+		assert.True(t, db.Migrator().HasColumn(&PromptAuditStorageState{}, column), column)
+	}
+	var migratedState PromptAuditStorageState
+	require.NoError(t, db.First(&migratedState, "id = ?", 1).Error)
+	assert.Equal(t, "legacy-source", migratedState.SourceID)
+	assert.Zero(t, migratedState.StatsScanLimit)
+
+	now := common.GetTimestamp()
+	events := []PromptAudit{
+		{RequestID: "archived", Status: PromptAuditStatusStored, ContentManifest: `{"version":1,"blocks":[]}`, CreatedAt: now, UpdatedAt: now, CompletedAt: now},
+		{RequestID: "pending-one", Status: PromptAuditStatusStored, ContentManifest: `{"version":1,"blocks":[]}`, CreatedAt: now, UpdatedAt: now, CompletedAt: now},
+		{RequestID: "pending-two", Status: PromptAuditStatusStored, ContentManifest: `{"version":1,"blocks":[]}`, CreatedAt: now, UpdatedAt: now, CompletedAt: now},
+	}
+	require.NoError(t, db.Create(&events).Error)
+	var archived PromptAudit
+	require.NoError(t, db.Omit("full_prompt", "scan_payload", "content_snapshot").First(&archived, events[0].ID).Error)
+	digest, err := promptAuditArchiveFingerprint(archived)
+	require.NoError(t, err)
+	require.NoError(t, db.Model(&PromptAudit{}).Where("id = ?", archived.ID).UpdateColumn("archived_digest", digest).Error)
+
+	// A spent budget publishes nothing, but the pass and its aggregates survive.
+	_, complete, err := AdvancePromptAuditStorageStats(db, 0, true)
+	require.NoError(t, err)
+	assert.False(t, complete)
+	var state PromptAuditStorageState
+	require.NoError(t, db.First(&state, "id = ?", 1).Error)
+	assert.NotEmpty(t, state.StatsPass)
+	assert.Zero(t, state.StatsScanAfter)
+	assert.Equal(t, events[2].ID, state.StatsScanLimit)
+	assert.Zero(t, state.StatsUpdatedAt)
+
+	// The next invocation resumes where the pass stopped and publishes the result.
+	stats, complete, err := AdvancePromptAuditStorageStats(db, time.Minute, false)
+	require.NoError(t, err)
+	assert.True(t, complete)
+	assert.EqualValues(t, 2, stats.ArchiveBacklog)
+	cached, err := GetCachedPromptAuditStorageStats(db)
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, cached.ArchiveBacklog)
+	assert.False(t, cached.Stale)
+	require.NoError(t, db.First(&state, "id = ?", 1).Error)
+	assert.Zero(t, state.StatsScanLimit)
+	assert.Empty(t, state.StatsPass)
+
+	// A recent measurement is served as is; the refresh interval decides the work.
+	stats, complete, err = AdvancePromptAuditStorageStats(db, time.Minute, false)
+	require.NoError(t, err)
+	assert.True(t, complete)
+	assert.EqualValues(t, 2, stats.ArchiveBacklog)
+	require.NoError(t, db.First(&state, "id = ?", 1).Error)
+	assert.Zero(t, state.StatsScanLimit)
+}
+
 func runPromptAuditOrphanCleanup(t *testing.T, db *gorm.DB) {
 	t.Helper()
 	events := []PromptAudit{{Status: PromptAuditStatusStored}, {Status: PromptAuditStatusStored}, {Status: PromptAuditStatusStored}}
@@ -168,8 +250,13 @@ func runPromptAuditOrphanCleanup(t *testing.T, db *gorm.DB) {
 		{AuditID: 1 << 60, Hash: blobs[2].Hash, Active: true},
 	}
 	require.NoError(t, db.Create(&references).Error)
-	require.NoError(t, CleanupPromptAuditOrphanContent(db, 100))
-	require.NoError(t, CleanupPromptAuditOrphanContent(db, 100))
+	// The sweep is paged; both pages must leave referenced bodies untouched.
+	changed, err := CleanupPromptAuditOrphanContent(db, 100)
+	require.NoError(t, err)
+	assert.Positive(t, changed)
+	changed, err = CleanupPromptAuditOrphanContent(db, 100)
+	require.NoError(t, err)
+	assert.Zero(t, changed)
 	for i, original := range blobs {
 		var stored PromptAuditContent
 		require.NoError(t, db.First(&stored, "hash = ?", original.Hash).Error)

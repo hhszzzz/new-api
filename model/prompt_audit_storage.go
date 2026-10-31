@@ -33,11 +33,24 @@ type PromptAuditStorageStats struct {
 	Stale          bool  `json:"stale,omitempty"`
 }
 
-const promptAuditStorageStatsCacheTTL = time.Hour
+// The measurement is refreshed once a day; one extra hour of slack keeps the
+// cached numbers from being reported stale while the refresh waits for its slot.
+const promptAuditStorageStatsRefreshInterval = 24 * time.Hour
+const promptAuditStorageStatsCacheTTL = promptAuditStorageStatsRefreshInterval + time.Hour
+const promptAuditStorageStatsScanBatch = 200
 
 var ErrPromptAuditStorageStatsUnavailable = errors.New("prompt audit storage statistics are temporarily unavailable")
 
 func GetPromptAuditStorageStats(db *gorm.DB) (PromptAuditStorageStats, error) {
+	stats, err := promptAuditStorageBaseStats(db)
+	if err != nil {
+		return stats, err
+	}
+	stats.ArchiveBacklog, err = promptAuditArchiveBacklog(db, 0, 0)
+	return stats, err
+}
+
+func promptAuditStorageBaseStats(db *gorm.DB) (PromptAuditStorageStats, error) {
 	stats := PromptAuditStorageStats{LocalDays: 7, ArchiveRequired: true, CacheLimitBytes: PromptAuditImportCacheBytes, CacheTTLSeconds: PromptAuditImportTTL}
 	if db.Migrator().HasTable(&Option{}) {
 		var options []Option
@@ -88,28 +101,126 @@ func GetPromptAuditStorageStats(db *gorm.DB) (PromptAuditStorageStats, error) {
 		return stats, err
 	}
 	stats.ImportedBytes += metadataBytes
-	// A fingerprint catches changes within the same second as the previous export.
-	var after int64
+	return stats, nil
+}
+
+// promptAuditArchiveBacklog counts audits whose archived copy is out of date. A
+// zero limit scans to the end; an explicit limit lets the refresh stop at the id
+// it started from so newly written audits cannot extend one pass forever.
+func promptAuditArchiveBacklog(db *gorm.DB, after, limit int64) (int64, error) {
+	total := int64(0)
 	for {
-		var rows []PromptAudit
-		if err := db.Omit("full_prompt", "scan_payload", "content_snapshot").Where("id > ? AND content_manifest IS NOT NULL AND content_manifest <> ''", after).Order("id asc").Limit(200).Find(&rows).Error; err != nil {
-			return stats, err
+		pending, next, exhausted, err := promptAuditArchiveBacklogStep(db, after, limit, promptAuditStorageStatsScanBatch)
+		if err != nil {
+			return total, err
 		}
-		if len(rows) == 0 {
-			break
-		}
-		for _, audit := range rows {
-			after = audit.ID
-			fingerprint, err := promptAuditArchiveFingerprint(audit)
-			if err != nil {
-				return stats, err
-			}
-			if fingerprint != audit.ArchivedDigest {
-				stats.ArchiveBacklog++
-			}
+		total += pending
+		after = next
+		if exhausted {
+			return total, nil
 		}
 	}
-	return stats, nil
+}
+
+func promptAuditArchiveBacklogStep(db *gorm.DB, after, limit int64, batchSize int) (int64, int64, bool, error) {
+	var rows []PromptAudit
+	query := db.Omit("full_prompt", "scan_payload", "content_snapshot").
+		Where("id > ? AND content_manifest IS NOT NULL AND content_manifest <> ''", after)
+	if limit > 0 {
+		query = query.Where("id <= ?", limit)
+	}
+	if err := query.Order("id asc").Limit(batchSize).Find(&rows).Error; err != nil {
+		return 0, after, false, err
+	}
+	if len(rows) == 0 {
+		return 0, after, true, nil
+	}
+	pending := int64(0)
+	for _, audit := range rows {
+		after = audit.ID
+		fingerprint, err := promptAuditArchiveFingerprint(audit)
+		if err != nil {
+			return pending, after, false, err
+		}
+		// A fingerprint catches changes within the same second as the previous export.
+		if fingerprint != audit.ArchivedDigest {
+			pending++
+		}
+	}
+	return pending, after, len(rows) < batchSize, nil
+}
+
+// AdvancePromptAuditStorageStats refreshes the cached measurement at most once per
+// refresh interval. The archive-backlog scan is checkpointed between invocations so
+// a large audit table no longer has to finish inside one maintenance time budget.
+// The caller must hold the maintenance lock; the checkpoint tolerates a killed
+// invocation but not two refresh passes running at the same time.
+func AdvancePromptAuditStorageStats(db *gorm.DB, budget time.Duration, force bool) (PromptAuditStorageStats, bool, error) {
+	if _, err := PromptAuditStorageSource(db); err != nil {
+		return PromptAuditStorageStats{}, false, err
+	}
+	deadline := time.Now().Add(budget)
+	var state PromptAuditStorageState
+	if err := db.Select("stats_updated_at", "stats_pass", "stats_scan_after", "stats_scan_limit", "stats_scan_backlog").Where("id = ?", 1).First(&state).Error; err != nil {
+		return PromptAuditStorageStats{}, false, err
+	}
+	if state.StatsScanLimit <= 0 || force {
+		if !force && state.StatsUpdatedAt > 0 && common.GetTimestamp()-state.StatsUpdatedAt < int64(promptAuditStorageStatsRefreshInterval/time.Second) {
+			stats, err := GetCachedPromptAuditStorageStats(db)
+			return stats, true, err
+		}
+		stats, err := promptAuditStorageBaseStats(db)
+		if err != nil {
+			return stats, false, err
+		}
+		data, err := common.Marshal(stats)
+		if err != nil {
+			return stats, false, err
+		}
+		var limit int64
+		if err := db.Model(&PromptAudit{}).Where("content_manifest IS NOT NULL AND content_manifest <> ''").Select("COALESCE(MAX(id), 0)").Scan(&limit).Error; err != nil {
+			return stats, false, err
+		}
+		state.StatsPass, state.StatsScanAfter, state.StatsScanLimit, state.StatsScanBacklog = LongText(data), 0, limit, 0
+		if err := db.Model(&PromptAuditStorageState{}).Where("id = ?", 1).Updates(map[string]any{
+			"stats_pass": state.StatsPass, "stats_scan_after": int64(0), "stats_scan_limit": limit, "stats_scan_backlog": int64(0),
+		}).Error; err != nil {
+			return stats, false, err
+		}
+	}
+	var stats PromptAuditStorageStats
+	if err := common.UnmarshalJsonStr(string(state.StatsPass), &stats); err != nil {
+		return stats, false, err
+	}
+	for state.StatsScanAfter < state.StatsScanLimit && time.Now().Before(deadline) {
+		pending, next, exhausted, err := promptAuditArchiveBacklogStep(db, state.StatsScanAfter, state.StatsScanLimit, promptAuditStorageStatsScanBatch)
+		if err != nil {
+			return stats, false, err
+		}
+		state.StatsScanBacklog += pending
+		state.StatsScanAfter = next
+		if exhausted || next >= state.StatsScanLimit {
+			state.StatsScanAfter = state.StatsScanLimit
+		}
+		if err := db.Model(&PromptAuditStorageState{}).Where("id = ?", 1).Updates(map[string]any{
+			"stats_scan_after": state.StatsScanAfter, "stats_scan_backlog": state.StatsScanBacklog,
+		}).Error; err != nil {
+			return stats, false, err
+		}
+	}
+	stats.ArchiveBacklog = state.StatsScanBacklog
+	if state.StatsScanAfter < state.StatsScanLimit {
+		return stats, false, nil
+	}
+	if err := CachePromptAuditStorageStats(db, stats); err != nil {
+		return stats, false, err
+	}
+	if err := db.Model(&PromptAuditStorageState{}).Where("id = ?", 1).Updates(map[string]any{
+		"stats_pass": "", "stats_scan_after": int64(0), "stats_scan_limit": int64(0), "stats_scan_backlog": int64(0),
+	}).Error; err != nil {
+		return stats, false, err
+	}
+	return stats, true, nil
 }
 
 func PromptAuditSharedContentEnabled(db *gorm.DB) (bool, error) {
