@@ -22,6 +22,7 @@ import { api } from '@/lib/api'
 
 import type {
   AccountPoolApiResponse,
+  AccountPoolQuotaOverrideInput,
   AccountPoolSettings,
   AccountPoolSettingsResponseData,
   AccountPoolSnapshot,
@@ -60,6 +61,28 @@ export async function updateAccountPoolSettings(
   const response = await api.put('/api/account-pool/settings', settings, {
     skipErrorHandler: true,
   })
+  return response.data
+}
+
+export async function updateAccountPoolQuotaOverride(
+  publicId: string,
+  input: AccountPoolQuotaOverrideInput
+): Promise<AccountPoolApiResponse<{ public_id: string }>> {
+  const response = await api.put(
+    `/api/account-pool/accounts/${encodeURIComponent(publicId)}/quota-override`,
+    input,
+    { skipErrorHandler: true }
+  )
+  return response.data
+}
+
+export async function clearAccountPoolQuotaOverride(
+  publicId: string
+): Promise<AccountPoolApiResponse<{ public_id: string }>> {
+  const response = await api.delete(
+    `/api/account-pool/accounts/${encodeURIComponent(publicId)}/quota-override`,
+    { skipErrorHandler: true }
+  )
   return response.data
 }
 

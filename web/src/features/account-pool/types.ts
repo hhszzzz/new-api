@@ -45,6 +45,26 @@ export type AccountPoolWindowGroup = {
   secondary_window: AccountPoolWindow | null
 }
 
+export type AccountPoolQuotaReleaseMode =
+  | 'at_time'
+  | 'auto_refresh'
+  | 'manual_refresh'
+  | 'any_refresh'
+
+export type AccountPoolQuotaOverride = {
+  offset_percent: number
+  pinned: boolean
+  pin_release_mode?: AccountPoolQuotaReleaseMode | null
+  pin_release_at?: string | null
+}
+
+export type AccountPoolQuotaOverrideInput = {
+  offset_percent: number
+  pinned: boolean
+  pin_release_mode?: AccountPoolQuotaReleaseMode | null
+  pin_release_at?: string | null
+}
+
 export type AccountPoolAccount = {
   public_id: string
   display_name: string
@@ -58,6 +78,8 @@ export type AccountPoolAccount = {
   window_groups: AccountPoolWindowGroup[]
   updated_at: string
   stale: boolean
+  /** Administrators only; displayed windows already contain the adjusted values. */
+  quota_override?: AccountPoolQuotaOverride | null
 }
 
 export type AccountPoolSnapshot = {

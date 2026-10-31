@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting"
@@ -354,4 +355,50 @@ func TestUpdateOptionRejectsInvalidHeaderNavigationBeforePersistence(t *testing.
 	published := common.OptionMap["HeaderNavModules"]
 	common.OptionMapRWMutex.RUnlock()
 	assert.JSONEq(t, valid, published)
+}
+
+func TestUpdateAccountPoolQuotaOverridesPersistsAndPublishes(t *testing.T) {
+	db := useFrontendOptionMigrationDB(t)
+	previousOptions := common.OptionMap
+	common.OptionMapRWMutex.Lock()
+	common.OptionMap = map[string]string{}
+	common.OptionMapRWMutex.Unlock()
+	previous := account_pool_setting.GetQuotaOverrides()
+	t.Cleanup(func() {
+		require.NoError(t, UpdateAccountPoolQuotaOverrides(previous))
+		common.OptionMapRWMutex.Lock()
+		common.OptionMap = previousOptions
+		common.OptionMapRWMutex.Unlock()
+	})
+
+	publicID := "aaaaaaaaaaaaaaaaaaaaaaaa"
+	releaseAt := time.Date(2026, 10, 31, 13, 0, 0, 0, time.UTC)
+	updatedAt := time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC)
+	overrides := map[string]account_pool_setting.QuotaOverride{
+		publicID: {
+			OffsetPercent: 12.5,
+			Pin:           &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseAtTime, ReleaseAt: &releaseAt},
+			UpdatedAt:     updatedAt,
+		},
+	}
+
+	require.NoError(t, UpdateAccountPoolQuotaOverrides(overrides))
+	stored, ok := account_pool_setting.GetQuotaOverride(publicID)
+	require.True(t, ok)
+	assert.Equal(t, 12.5, stored.OffsetPercent)
+	require.NotNil(t, stored.Pin)
+	assert.Equal(t, releaseAt, *stored.Pin.ReleaseAt)
+
+	var persisted map[string]account_pool_setting.QuotaOverride
+	require.NoError(t, common.UnmarshalJsonStr(requireOptionValue(t, db, account_pool_setting.QuotaOverridesOptionKey), &persisted))
+	assert.Equal(t, 12.5, persisted[publicID].OffsetPercent)
+
+	require.Error(t, UpdateAccountPoolQuotaOverrides(map[string]account_pool_setting.QuotaOverride{
+		publicID: {OffsetPercent: 200},
+	}))
+	require.NoError(t, common.UnmarshalJsonStr(requireOptionValue(t, db, account_pool_setting.QuotaOverridesOptionKey), &persisted))
+	assert.Equal(t, 12.5, persisted[publicID].OffsetPercent)
+
+	require.NoError(t, UpdateAccountPoolQuotaOverrides(map[string]account_pool_setting.QuotaOverride{}))
+	assert.Empty(t, account_pool_setting.GetQuotaOverrides())
 }

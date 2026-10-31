@@ -28,7 +28,9 @@ import { AccountPoolTable } from '../account-pool-table'
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string, values?: Record<string, unknown>) =>
-      key.replace('{{time}}', String(values?.time ?? '{{time}}')),
+      key
+        .replace('{{time}}', String(values?.time ?? '{{time}}'))
+        .replace('{{percent}}', String(values?.percent ?? '{{percent}}')),
   }),
 }))
 
@@ -405,5 +407,65 @@ describe('account pool table', () => {
     expect(
       screen.getByText('Accounts will appear after the first successful sync.')
     ).toBeInTheDocument()
+  })
+})
+
+describe('account pool quota management', () => {
+  test('shows the adjustment action and badge only to managers', async () => {
+    const user = userEvent.setup()
+    const onAdjust = vi.fn()
+    const adjustedAccount: AccountPoolAccount = {
+      ...account('admin@example.com'),
+      public_id: 'adjusted-1',
+      quota_override: {
+        offset_percent: 15,
+        pinned: false,
+        pin_release_mode: null,
+        pin_release_at: null,
+      },
+    }
+
+    render(
+      <AccountPoolTable
+        snapshot={snapshot(adjustedAccount)}
+        isLoading={false}
+        isFetching={false}
+        isRefreshing={false}
+        refreshDisabled={false}
+        refreshLabel='Refresh all'
+        now={Date.parse('2026-08-29T12:00:00Z')}
+        canManage
+        onRefresh={vi.fn()}
+        onAdjust={onAdjust}
+      />
+    )
+
+    expect(screen.getByTestId('column-order')).toHaveTextContent(
+      'account,status,plan,primary-window,secondary-window,subscription_active_until,actions'
+    )
+    expect(screen.getByText('Offset +15%')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Adjust quota' }))
+    expect(onAdjust).toHaveBeenCalledWith(adjustedAccount)
+  })
+
+  test('hides the adjustment action from non-managers', () => {
+    render(
+      <AccountPoolTable
+        snapshot={snapshot(account())}
+        isLoading={false}
+        isFetching={false}
+        isRefreshing={false}
+        refreshDisabled={false}
+        refreshLabel='Refresh all'
+        now={Date.parse('2026-08-29T12:00:00Z')}
+        onRefresh={vi.fn()}
+      />
+    )
+
+    expect(screen.getByTestId('column-order')).not.toHaveTextContent('actions')
+    expect(
+      screen.queryByRole('button', { name: 'Adjust quota' })
+    ).not.toBeInTheDocument()
   })
 })

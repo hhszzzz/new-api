@@ -17,10 +17,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { Table } from '@tanstack/react-table'
-import { Database } from 'lucide-react'
+import { Database, SlidersHorizontal } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import {
   Empty,
   EmptyDescription,
@@ -37,12 +38,15 @@ import {
 } from '../lib/quota'
 import type { AccountPoolAccount } from '../types'
 import { AccountStatusBadge } from './account-status-badge'
+import { QuotaOverrideBadge } from './quota-override-badge'
 import { QuotaWindow } from './quota-window'
 
 type AccountPoolMobileListProps = {
   table: Table<AccountPoolAccount>
   isLoading: boolean
   now: number
+  canManage?: boolean
+  onAdjust?: (account: AccountPoolAccount) => void
 }
 
 export function AccountPoolMobileList(props: AccountPoolMobileListProps) {
@@ -95,7 +99,7 @@ export function AccountPoolMobileList(props: AccountPoolMobileListProps) {
             className='bg-card space-y-4 rounded-xl border p-4 shadow-xs'
           >
             <header className='flex min-w-0 items-start justify-between gap-3'>
-              <div className='min-w-0'>
+              <div className='min-w-0 space-y-1'>
                 <div className='truncate text-sm font-semibold'>
                   {account.display_name}
                 </div>
@@ -104,8 +108,24 @@ export function AccountPoolMobileList(props: AccountPoolMobileListProps) {
                     {account.email}
                   </div>
                 ) : null}
+                {account.quota_override ? (
+                  <QuotaOverrideBadge override={account.quota_override} />
+                ) : null}
               </div>
-              <AccountStatusBadge status={account.status} />
+              <div className='flex shrink-0 items-center gap-1'>
+                <AccountStatusBadge status={account.status} />
+                {props.canManage ? (
+                  <Button
+                    type='button'
+                    size='icon'
+                    variant='ghost'
+                    aria-label={t('Adjust quota')}
+                    onClick={() => props.onAdjust?.(account)}
+                  >
+                    <SlidersHorizontal className='size-4' aria-hidden='true' />
+                  </Button>
+                ) : null}
+              </div>
             </header>
 
             <div className='text-xs'>

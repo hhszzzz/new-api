@@ -48,6 +48,11 @@ export function getAccountPoolSecondaryWindowLabel(
   return 'Weekly quota'
 }
 
+export function formatAccountPoolOffset(offset: number) {
+  const rounded = Math.round(offset * 10) / 10
+  return `${rounded > 0 ? '+' : ''}${rounded}`
+}
+
 // Upstream group display names (e.g. antigravity) mapped to i18n keys;
 // unknown labels fall back to the raw upstream text.
 const ACCOUNT_POOL_WINDOW_GROUP_LABEL_KEYS: Record<string, string> = {

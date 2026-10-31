@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting/account_pool_setting"
 	"golang.org/x/sync/singleflight"
 )
@@ -104,6 +105,13 @@ type AccountPoolWindowGroup struct {
 	SecondaryWindow *AccountPoolWindow `json:"secondary_window"`
 }
 
+type AccountPoolQuotaOverride struct {
+	OffsetPercent  float64    `json:"offset_percent"`
+	Pinned         bool       `json:"pinned"`
+	PinReleaseMode string     `json:"pin_release_mode,omitempty"`
+	PinReleaseAt   *time.Time `json:"pin_release_at,omitempty"`
+}
+
 type AccountPoolViewAccount struct {
 	PublicID                string                   `json:"public_id"`
 	Provider                string                   `json:"provider"`
@@ -117,6 +125,9 @@ type AccountPoolViewAccount struct {
 	WindowGroups            []AccountPoolWindowGroup `json:"window_groups"`
 	UpdatedAt               time.Time                `json:"updated_at"`
 	Stale                   bool                     `json:"stale"`
+	// QuotaOverride is only returned to administrators. The displayed windows
+	// already carry the adjusted values for every viewer.
+	QuotaOverride *AccountPoolQuotaOverride `json:"quota_override,omitempty"`
 }
 
 type AccountPoolSummary struct {
@@ -205,17 +216,33 @@ type accountPoolManager struct {
 	refreshGroup             singleflight.Group
 	loadRuntimeConfig        func() (accountPoolRuntimeConfig, error)
 	loadSetting              func() *account_pool_setting.Setting
+	loadQuotaOverrides       func() map[string]account_pool_setting.QuotaOverride
+	persistQuotaOverrides    func(map[string]account_pool_setting.QuotaOverride) error
 }
 
-var defaultAccountPoolManager = newAccountPoolManager()
+type accountPoolRefreshResult struct {
+	snapshot  *accountPoolSnapshot
+	refreshed bool
+}
+
+var (
+	defaultAccountPoolManager = newAccountPoolManager()
+
+	// accountPoolQuotaOverrideMu serializes the load-modify-persist cycle so
+	// concurrent administrators and background pin releases cannot drop each
+	// other's entries. Across multiple gateway instances the last writer wins.
+	accountPoolQuotaOverrideMu sync.Mutex
+)
 
 func newAccountPoolManager() *accountPoolManager {
 	return &accountPoolManager{
-		now:               time.Now,
-		client:            newAccountPoolHTTPClient(),
-		loadRuntimeConfig: loadAccountPoolRuntimeConfig,
-		loadSetting:       account_pool_setting.GetSettingSnapshot,
-		lastSyncStatus:    "never",
+		now:                   time.Now,
+		client:                newAccountPoolHTTPClient(),
+		loadRuntimeConfig:     loadAccountPoolRuntimeConfig,
+		loadSetting:           account_pool_setting.GetSettingSnapshot,
+		loadQuotaOverrides:    account_pool_setting.GetQuotaOverrides,
+		persistQuotaOverrides: model.UpdateAccountPoolQuotaOverrides,
+		lastSyncStatus:        "never",
 	}
 }
 
@@ -251,6 +278,74 @@ func InvalidateAccountPoolCache() {
 	defaultAccountPoolManager.invalidate()
 }
 
+func SetAccountPoolQuotaOverride(publicID string, override account_pool_setting.QuotaOverride) error {
+	return defaultAccountPoolManager.setQuotaOverride(publicID, override)
+}
+
+func ClearAccountPoolQuotaOverride(publicID string) error {
+	return defaultAccountPoolManager.clearQuotaOverride(publicID)
+}
+
+func (manager *accountPoolManager) setQuotaOverride(publicID string, override account_pool_setting.QuotaOverride) error {
+	accountPoolQuotaOverrideMu.Lock()
+	defer accountPoolQuotaOverrideMu.Unlock()
+
+	overrides := manager.loadQuotaOverrides()
+	override.UpdatedAt = manager.now()
+	if override.OffsetPercent == 0 && override.Pin == nil {
+		delete(overrides, publicID)
+	} else {
+		overrides[publicID] = override
+	}
+	return manager.persistQuotaOverrides(overrides)
+}
+
+func (manager *accountPoolManager) clearQuotaOverride(publicID string) error {
+	accountPoolQuotaOverrideMu.Lock()
+	defer accountPoolQuotaOverrideMu.Unlock()
+
+	overrides := manager.loadQuotaOverrides()
+	if _, exists := overrides[publicID]; !exists {
+		return nil
+	}
+	delete(overrides, publicID)
+	return manager.persistQuotaOverrides(overrides)
+}
+
+// releaseAccountPoolPinsAfterRefresh drops pins released by a completed refresh
+// round and prunes pins whose wall-clock release has passed. Entries updated
+// after the round (or after the manual request) started are left alone: the
+// administrator who set them is not responsible for a refresh already running.
+func (manager *accountPoolManager) releaseAccountPoolPinsAfterRefresh(kind string, cutoff time.Time) {
+	accountPoolQuotaOverrideMu.Lock()
+	defer accountPoolQuotaOverrideMu.Unlock()
+
+	overrides := manager.loadQuotaOverrides()
+	now := manager.now()
+	changed := false
+	for publicID, override := range overrides {
+		if override.Pin == nil || override.UpdatedAt.After(cutoff) {
+			continue
+		}
+		if override.Pin.ActiveAt(now) && !override.Pin.ReleasedByRefresh(kind) {
+			continue
+		}
+		override.Pin = nil
+		if override.OffsetPercent == 0 {
+			delete(overrides, publicID)
+		} else {
+			overrides[publicID] = override
+		}
+		changed = true
+	}
+	if !changed {
+		return
+	}
+	if err := manager.persistQuotaOverrides(overrides); err != nil {
+		common.SysError("failed to persist account pool quota pin release: " + err.Error())
+	}
+}
+
 func (manager *accountPoolManager) get(ctx context.Context) (*accountPoolSnapshot, error) {
 	now := manager.now()
 	manager.mu.RLock()
@@ -263,11 +358,12 @@ func (manager *accountPoolManager) get(ctx context.Context) (*accountPoolSnapsho
 			// The reader is told the snapshot is being updated through the view's
 			// refreshing flag rather than by marking it stale, because nothing
 			// about this snapshot failed: it is simply due for its next round.
-			manager.startRefresh()
+			manager.startRefresh(account_pool_setting.QuotaRefreshAuto)
 		}
 		return snapshot, nil
 	}
-	return manager.refresh(ctx)
+	snapshot, _, err := manager.refresh(ctx, account_pool_setting.QuotaRefreshAuto)
+	return snapshot, err
 }
 
 func (manager *accountPoolManager) refreshManually(ctx context.Context) (*accountPoolSnapshot, error) {
@@ -286,33 +382,45 @@ func (manager *accountPoolManager) refreshManually(ctx context.Context) (*accoun
 	manager.manualRefreshAvailableAt = now.Add(time.Duration(setting.ManualRefreshCooldown) * time.Second)
 	manager.mu.Unlock()
 
-	return manager.refresh(ctx)
+	requestedAt := now
+	snapshot, refreshed, err := manager.refresh(ctx, account_pool_setting.QuotaRefreshManual)
+	if err != nil {
+		return nil, err
+	}
+	// A manual request may have joined an in-flight automatic round, which only
+	// releases automatic pins. Apply the manual release explicitly so pressing
+	// refresh always honours a manual-release pin, whoever pressed it.
+	if refreshed {
+		manager.releaseAccountPoolPinsAfterRefresh(account_pool_setting.QuotaRefreshManual, requestedAt)
+	}
+	return snapshot, nil
 }
 
-func (manager *accountPoolManager) startRefresh() <-chan singleflight.Result {
+func (manager *accountPoolManager) startRefresh(kind string) <-chan singleflight.Result {
 	return manager.refreshGroup.DoChan("account-pool", func() (any, error) {
-		return manager.performRefresh()
+		return manager.performRefresh(kind)
 	})
 }
 
-func (manager *accountPoolManager) refresh(ctx context.Context) (*accountPoolSnapshot, error) {
-	resultChannel := manager.startRefresh()
+func (manager *accountPoolManager) refresh(ctx context.Context, kind string) (*accountPoolSnapshot, bool, error) {
+	resultChannel := manager.startRefresh(kind)
 	select {
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, false, ctx.Err()
 	case result := <-resultChannel:
 		if result.Err != nil {
-			return nil, result.Err
+			return nil, false, result.Err
 		}
-		snapshot, ok := result.Val.(*accountPoolSnapshot)
-		if !ok || snapshot == nil {
-			return nil, ErrAccountPoolUnavailable
+		round, ok := result.Val.(*accountPoolRefreshResult)
+		if !ok || round == nil || round.snapshot == nil {
+			return nil, false, ErrAccountPoolUnavailable
 		}
-		return cloneAccountPoolSnapshot(snapshot), nil
+		return cloneAccountPoolSnapshot(round.snapshot), round.refreshed, nil
 	}
 }
 
-func (manager *accountPoolManager) performRefresh() (*accountPoolSnapshot, error) {
+func (manager *accountPoolManager) performRefresh(kind string) (*accountPoolRefreshResult, error) {
+	roundStart := manager.now()
 	setting := manager.loadSetting()
 	if setting == nil {
 		return nil, ErrAccountPoolUnavailable
@@ -320,7 +428,8 @@ func (manager *accountPoolManager) performRefresh() (*accountPoolSnapshot, error
 	config, err := manager.loadRuntimeConfig()
 	if err != nil {
 		manager.recordFailedSync()
-		return manager.fallbackSnapshot(setting, err)
+		snapshot, fallbackErr := manager.fallbackSnapshot(setting, err)
+		return &accountPoolRefreshResult{snapshot: snapshot}, fallbackErr
 	}
 
 	roundContext, cancel := context.WithTimeout(context.Background(), accountPoolRoundTimeout)
@@ -328,7 +437,8 @@ func (manager *accountPoolManager) performRefresh() (*accountPoolSnapshot, error
 	result, err := manager.fetchRound(roundContext, config)
 	if err != nil {
 		manager.recordFailedSync()
-		return manager.fallbackSnapshot(setting, err)
+		snapshot, fallbackErr := manager.fallbackSnapshot(setting, err)
+		return &accountPoolRefreshResult{snapshot: snapshot}, fallbackErr
 	}
 
 	now := manager.now()
@@ -361,7 +471,8 @@ func (manager *accountPoolManager) performRefresh() (*accountPoolSnapshot, error
 		manager.lastSyncStatus = "success"
 	}
 	manager.mu.Unlock()
-	return snapshot, nil
+	manager.releaseAccountPoolPinsAfterRefresh(kind, roundStart)
+	return &accountPoolRefreshResult{snapshot: snapshot, refreshed: true}, nil
 }
 
 func (manager *accountPoolManager) fallbackSnapshot(setting *account_pool_setting.Setting, cause error) (*accountPoolSnapshot, error) {
@@ -401,6 +512,7 @@ func (manager *accountPoolManager) recordFailedSync() {
 func (manager *accountPoolManager) buildView(snapshot *accountPoolSnapshot, role int, userGroups []string, includeEmail bool) AccountPoolView {
 	now := manager.now()
 	setting := manager.loadSetting()
+	overrides := manager.loadQuotaOverrides()
 	manager.mu.RLock()
 	manualAvailableAt := manager.manualRefreshAvailableAt
 	manager.mu.RUnlock()
@@ -440,9 +552,110 @@ func (manager *accountPoolManager) buildView(snapshot *accountPoolSnapshot, role
 			email := account.Email
 			item.Email = &email
 		}
-		view.ProviderSummaries[account.Provider] = incrementAccountPoolSummary(view.ProviderSummaries[account.Provider], account.Status)
-		view.Summary = incrementAccountPoolSummary(view.Summary, account.Status)
+		if override, exists := overrides[account.PublicID]; exists {
+			effect := applyAccountPoolQuotaOverride(&item, override, now)
+			item.Status = accountPoolOverrideStatus(item.Status, effect)
+			if role >= common.RoleAdminUser {
+				item.QuotaOverride = accountPoolQuotaOverrideView(override, effect)
+			}
+		}
+		view.ProviderSummaries[account.Provider] = incrementAccountPoolSummary(view.ProviderSummaries[account.Provider], item.Status)
+		view.Summary = incrementAccountPoolSummary(view.Summary, item.Status)
 		view.Accounts = append(view.Accounts, item)
+	}
+	return view
+}
+
+type accountPoolQuotaOverrideEffect struct {
+	pinActive     bool
+	offsetApplied bool
+	minRemaining  *float64
+}
+
+// applyAccountPoolQuotaOverride rewrites the copied windows of one view row.
+// The snapshot itself is never mutated, so an expiring pin takes effect as soon
+// as the next view is built instead of waiting for the next quota round.
+func applyAccountPoolQuotaOverride(item *AccountPoolViewAccount, override account_pool_setting.QuotaOverride, now time.Time) accountPoolQuotaOverrideEffect {
+	effect := accountPoolQuotaOverrideEffect{}
+	hasWindow := item.PrimaryWindow != nil || item.SecondaryWindow != nil
+	for _, group := range item.WindowGroups {
+		if group.PrimaryWindow != nil || group.SecondaryWindow != nil {
+			hasWindow = true
+			break
+		}
+	}
+	if !hasWindow {
+		return effect
+	}
+	eachWindow := func(apply func(*AccountPoolWindow)) {
+		apply(item.PrimaryWindow)
+		apply(item.SecondaryWindow)
+		for index := range item.WindowGroups {
+			apply(item.WindowGroups[index].PrimaryWindow)
+			apply(item.WindowGroups[index].SecondaryWindow)
+		}
+	}
+
+	if override.Pin != nil && override.Pin.ActiveAt(now) {
+		effect.pinActive = true
+		eachWindow(func(window *AccountPoolWindow) {
+			if window == nil {
+				return
+			}
+			remaining := 100.0
+			used := 0.0
+			window.RemainingPercent = &remaining
+			window.UsedPercent = &used
+		})
+		return effect
+	}
+
+	if override.OffsetPercent == 0 {
+		return effect
+	}
+	eachWindow(func(window *AccountPoolWindow) {
+		if window == nil || window.RemainingPercent == nil {
+			return
+		}
+		remaining := math.Max(0, math.Min(100, *window.RemainingPercent+override.OffsetPercent))
+		used := 100 - remaining
+		window.RemainingPercent = &remaining
+		window.UsedPercent = &used
+		effect.offsetApplied = true
+		if effect.minRemaining == nil || remaining < *effect.minRemaining {
+			effect.minRemaining = &remaining
+		}
+	})
+	return effect
+}
+
+func accountPoolOverrideStatus(status string, effect accountPoolQuotaOverrideEffect) string {
+	if effect.pinActive {
+		if status == "available" || status == "limited" {
+			return "available"
+		}
+		return status
+	}
+	if !effect.offsetApplied || effect.minRemaining == nil {
+		return status
+	}
+	if status == "limited" && *effect.minRemaining > 0 {
+		return "available"
+	}
+	if status == "available" && *effect.minRemaining <= 0 {
+		return "limited"
+	}
+	return status
+}
+
+func accountPoolQuotaOverrideView(override account_pool_setting.QuotaOverride, effect accountPoolQuotaOverrideEffect) *AccountPoolQuotaOverride {
+	view := &AccountPoolQuotaOverride{
+		OffsetPercent: override.OffsetPercent,
+		Pinned:        effect.pinActive,
+	}
+	if effect.pinActive && override.Pin != nil {
+		view.PinReleaseMode = override.Pin.ReleaseMode
+		view.PinReleaseAt = copyTimePointer(override.Pin.ReleaseAt)
 	}
 	return view
 }

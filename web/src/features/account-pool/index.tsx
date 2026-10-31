@@ -38,17 +38,21 @@ import { ROLE } from '@/lib/roles'
 import { useAuthStore } from '@/stores/auth-store'
 
 import {
+  clearAccountPoolQuotaOverride,
   getAccountPool,
   getAccountPoolApiError,
   refreshAccountPool,
+  updateAccountPoolQuotaOverride,
 } from './api'
 import { AccountPoolTable } from './components/account-pool-table'
+import { QuotaAdjustmentDialog } from './components/quota-adjustment-dialog'
 import { formatAccountPoolCountdown } from './lib/quota'
 import {
   getAccountPoolRefetchInterval,
   getAccountPoolServerNow,
   shouldRefreshAccountPoolOnVisibility,
 } from './lib/refresh'
+import type { AccountPoolAccount, AccountPoolQuotaOverrideInput } from './types'
 
 const ACCOUNT_POOL_QUERY_KEY = ['account-pool'] as const
 
@@ -119,6 +123,9 @@ export function AccountPool() {
   const currentUser = useAuthStore((state) => state.auth.user)
   const setUser = useAuthStore((state) => state.auth.setUser)
   const [clientNow, setClientNow] = useState(() => Date.now())
+  const [editingAccount, setEditingAccount] =
+    useState<AccountPoolAccount | null>(null)
+  const canManage = currentUser?.role === ROLE.SUPER_ADMIN
   const accountPoolQuery = useQuery({
     queryKey: ACCOUNT_POOL_QUERY_KEY,
     queryFn: getAccountPool,
@@ -198,6 +205,27 @@ export function AccountPool() {
       }
       toast.error(t('Failed to refresh account pool'))
     },
+  })
+
+  const saveQuotaOverrideMutation = useMutation({
+    mutationFn: (variables: {
+      publicId: string
+      input: AccountPoolQuotaOverrideInput
+    }) => updateAccountPoolQuotaOverride(variables.publicId, variables.input),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ACCOUNT_POOL_QUERY_KEY })
+      toast.success(t('Quota adjustment saved'))
+    },
+    onError: () => toast.error(t('Failed to save quota adjustment')),
+  })
+
+  const clearQuotaOverrideMutation = useMutation({
+    mutationFn: (publicId: string) => clearAccountPoolQuotaOverride(publicId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ACCOUNT_POOL_QUERY_KEY })
+      toast.success(t('Quota adjustment cleared'))
+    },
+    onError: () => toast.error(t('Failed to clear quota adjustment')),
   })
 
   const manualAvailableAt = snapshot?.manual_refresh_available_at
@@ -292,9 +320,43 @@ export function AccountPool() {
               refreshDisabled={refreshDisabled}
               refreshLabel={refreshLabel}
               now={serverNow}
+              canManage={canManage}
               onRefresh={() => refreshMutation.mutate()}
+              onAdjust={setEditingAccount}
             />
           )}
+          {editingAccount ? (
+            <QuotaAdjustmentDialog
+              key={editingAccount.public_id}
+              account={editingAccount}
+              pending={
+                saveQuotaOverrideMutation.isPending ||
+                clearQuotaOverrideMutation.isPending
+              }
+              onClose={() => setEditingAccount(null)}
+              onSave={async (input) => {
+                try {
+                  await saveQuotaOverrideMutation.mutateAsync({
+                    publicId: editingAccount.public_id,
+                    input,
+                  })
+                  return true
+                } catch {
+                  return false
+                }
+              }}
+              onClear={async () => {
+                try {
+                  await clearQuotaOverrideMutation.mutateAsync(
+                    editingAccount.public_id
+                  )
+                  return true
+                } catch {
+                  return false
+                }
+              }}
+            />
+          ) : null}
         </div>
       </SectionPageLayout.Content>
     </SectionPageLayout>

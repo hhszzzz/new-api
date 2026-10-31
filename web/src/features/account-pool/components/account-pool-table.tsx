@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { ColumnDef } from '@tanstack/react-table'
-import { RefreshCw } from 'lucide-react'
+import { RefreshCw, SlidersHorizontal } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -49,6 +49,7 @@ import type {
 } from '../types'
 import { AccountPoolMobileList } from './account-pool-mobile-list'
 import { AccountStatusBadge } from './account-status-badge'
+import { QuotaOverrideBadge } from './quota-override-badge'
 import { QuotaWindow } from './quota-window'
 
 type AccountPoolTableProps = {
@@ -59,7 +60,9 @@ type AccountPoolTableProps = {
   refreshDisabled: boolean
   refreshLabel: string
   now: number
+  canManage?: boolean
   onRefresh: () => void
+  onAdjust?: (account: AccountPoolAccount) => void
 }
 
 type StatusFilter = 'all' | AccountPoolAccount['status']
@@ -167,14 +170,16 @@ export function AccountPoolTable(props: AccountPoolTableProps) {
     props.now
   )
 
-  const columns = useMemo<ColumnDef<AccountPoolAccount, unknown>[]>(
-    () => [
+  const canManage = props.canManage
+  const onAdjust = props.onAdjust
+  const columns = useMemo<ColumnDef<AccountPoolAccount, unknown>[]>(() => {
+    const baseColumns: ColumnDef<AccountPoolAccount, unknown>[] = [
       {
         id: 'account',
         header: t('Account'),
         size: 190,
         cell: ({ row }) => (
-          <div className='min-w-0 py-1'>
+          <div className='min-w-0 space-y-1 py-1'>
             <div className='truncate font-medium'>
               {row.original.display_name}
             </div>
@@ -182,6 +187,9 @@ export function AccountPoolTable(props: AccountPoolTableProps) {
               <div className='text-muted-foreground max-w-52 truncate text-xs'>
                 {row.original.email}
               </div>
+            ) : null}
+            {row.original.quota_override ? (
+              <QuotaOverrideBadge override={row.original.quota_override} />
             ) : null}
           </div>
         ),
@@ -240,9 +248,27 @@ export function AccountPoolTable(props: AccountPoolTableProps) {
           </span>
         ),
       },
-    ],
-    [props.now, t]
-  )
+    ]
+    if (canManage) {
+      baseColumns.push({
+        id: 'actions',
+        header: t('Actions'),
+        size: 80,
+        cell: ({ row }) => (
+          <Button
+            type='button'
+            size='icon'
+            variant='ghost'
+            aria-label={t('Adjust quota')}
+            onClick={() => onAdjust?.(row.original)}
+          >
+            <SlidersHorizontal className='size-4' aria-hidden='true' />
+          </Button>
+        ),
+      })
+    }
+    return baseColumns
+  }, [canManage, onAdjust, props.now, t])
 
   const { table } = useDataTable({
     data: filteredAccounts,
@@ -373,6 +399,8 @@ export function AccountPoolTable(props: AccountPoolTableProps) {
           table={table}
           isLoading={props.isLoading}
           now={props.now}
+          canManage={props.canManage}
+          onAdjust={props.onAdjust}
         />
       }
     />

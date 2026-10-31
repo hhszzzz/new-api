@@ -7,6 +7,20 @@ import (
 	"github.com/QuantumNous/new-api/setting/account_pool_setting"
 )
 
+func UpdateAccountPoolQuotaOverrides(overrides map[string]account_pool_setting.QuotaOverride) error {
+	prepared, err := account_pool_setting.PrepareQuotaOverrides(overrides)
+	if err != nil {
+		return err
+	}
+	encoded, err := common.Marshal(prepared)
+	if err != nil {
+		return err
+	}
+	return UpdateOptionsBulk(map[string]string{
+		account_pool_setting.QuotaOverridesOptionKey: string(encoded),
+	})
+}
+
 func UpdateAccountPoolSetting(setting account_pool_setting.Setting) error {
 	prepared, err := account_pool_setting.PrepareSetting(setting)
 	if err != nil {

@@ -1,7 +1,9 @@
 package account_pool_setting
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting/config"
@@ -181,4 +183,120 @@ func TestAccountPoolConfigManagerRejectsPartialInvalidPublication(t *testing.T) 
 	assert.True(t, setting.Enabled)
 	assert.Equal(t, 300, setting.RegularRefreshSeconds)
 	assert.Equal(t, 60, setting.NearResetRefreshSeconds)
+}
+
+func quotaOverrideTestID(char string) string {
+	return strings.Repeat(char, 24)
+}
+
+func publishQuotaOverridesForTest(t *testing.T, overrides map[string]QuotaOverride) {
+	t.Helper()
+	setting := quotaOverridesSetting{Overrides: cloneQuotaOverrides(overrides)}
+	setting.PublishConfig()
+}
+
+func TestPrepareQuotaOverridesValidatesAndDropsEmptyEntries(t *testing.T) {
+	releaseAt := time.Now().Add(time.Hour)
+	prepared, err := PrepareQuotaOverrides(map[string]QuotaOverride{
+		quotaOverrideTestID("a"): {
+			OffsetPercent: 12.5,
+			Pin:           &QuotaPin{ReleaseMode: QuotaPinReleaseAtTime, ReleaseAt: &releaseAt},
+		},
+		quotaOverrideTestID("b"): {},
+	})
+
+	require.NoError(t, err)
+	require.Len(t, prepared, 1)
+	override := prepared[quotaOverrideTestID("a")]
+	require.NotNil(t, override.Pin)
+	assert.Equal(t, 12.5, override.OffsetPercent)
+	assert.Equal(t, QuotaPinReleaseAtTime, override.Pin.ReleaseMode)
+}
+
+func TestPrepareQuotaOverridesRejectsInvalidEntries(t *testing.T) {
+	releaseAt := time.Now().Add(time.Hour)
+	tests := []struct {
+		name     string
+		publicID string
+		override QuotaOverride
+	}{
+		{name: "invalid id", publicID: "bad-id", override: QuotaOverride{OffsetPercent: 1}},
+		{name: "offset too large", publicID: quotaOverrideTestID("a"), override: QuotaOverride{OffsetPercent: 101}},
+		{name: "offset too small", publicID: quotaOverrideTestID("a"), override: QuotaOverride{OffsetPercent: -101}},
+		{name: "unknown release mode", publicID: quotaOverrideTestID("a"), override: QuotaOverride{Pin: &QuotaPin{ReleaseMode: "later"}}},
+		{name: "at_time without release", publicID: quotaOverrideTestID("a"), override: QuotaOverride{Pin: &QuotaPin{ReleaseMode: QuotaPinReleaseAtTime}}},
+		{name: "refresh mode with release", publicID: quotaOverrideTestID("a"), override: QuotaOverride{Pin: &QuotaPin{ReleaseMode: QuotaPinReleaseAnyRefresh, ReleaseAt: &releaseAt}}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := PrepareQuotaOverrides(map[string]QuotaOverride{test.publicID: test.override})
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestQuotaOverridesLoadedConfigDropsInvalidEntries(t *testing.T) {
+	releaseAt := time.Now().Add(time.Hour)
+	setting := quotaOverridesSetting{Overrides: map[string]QuotaOverride{
+		quotaOverrideTestID("a"): {OffsetPercent: 10},
+		"not-a-public-id":        {OffsetPercent: 10},
+		quotaOverrideTestID("b"): {OffsetPercent: 200},
+		quotaOverrideTestID("c"): {Pin: &QuotaPin{ReleaseMode: "invalid"}},
+		quotaOverrideTestID("d"): {OffsetPercent: 5, Pin: &QuotaPin{ReleaseMode: QuotaPinReleaseAtTime}},
+		quotaOverrideTestID("e"): {},
+		quotaOverrideTestID("f"): {Pin: &QuotaPin{ReleaseMode: QuotaPinReleaseAnyRefresh, ReleaseAt: &releaseAt}},
+	}}
+
+	require.NoError(t, setting.ValidateLoadedConfig())
+
+	assert.Contains(t, setting.Overrides, quotaOverrideTestID("a"))
+	assert.NotContains(t, setting.Overrides, "not-a-public-id")
+	assert.NotContains(t, setting.Overrides, quotaOverrideTestID("b"))
+	assert.NotContains(t, setting.Overrides, quotaOverrideTestID("c"))
+	assert.Contains(t, setting.Overrides, quotaOverrideTestID("d"))
+	assert.Nil(t, setting.Overrides[quotaOverrideTestID("d")].Pin)
+	assert.Equal(t, 5.0, setting.Overrides[quotaOverrideTestID("d")].OffsetPercent)
+	assert.NotContains(t, setting.Overrides, quotaOverrideTestID("e"))
+	assert.Contains(t, setting.Overrides, quotaOverrideTestID("f"))
+	assert.Nil(t, setting.Overrides[quotaOverrideTestID("f")].Pin.ReleaseAt)
+}
+
+func TestGetQuotaOverridesReturnsDeepCopy(t *testing.T) {
+	previous := GetQuotaOverrides()
+	t.Cleanup(func() { publishQuotaOverridesForTest(t, previous) })
+
+	releaseAt := time.Now().Add(time.Hour)
+	publicID := quotaOverrideTestID("a")
+	publishQuotaOverridesForTest(t, map[string]QuotaOverride{
+		publicID: {OffsetPercent: 20, Pin: &QuotaPin{ReleaseMode: QuotaPinReleaseAtTime, ReleaseAt: &releaseAt}},
+	})
+
+	overrides := GetQuotaOverrides()
+	override := overrides[publicID]
+	*override.Pin.ReleaseAt = releaseAt.Add(time.Hour)
+	override.OffsetPercent = 80
+
+	stored, ok := GetQuotaOverride(publicID)
+	require.True(t, ok)
+	assert.Equal(t, 20.0, stored.OffsetPercent)
+	assert.Equal(t, releaseAt, *stored.Pin.ReleaseAt)
+}
+
+func TestQuotaPinReleaseSemantics(t *testing.T) {
+	now := time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC)
+	past := now.Add(-time.Minute)
+	future := now.Add(time.Minute)
+
+	assert.False(t, (*QuotaPin)(nil).ActiveAt(now))
+	assert.False(t, (&QuotaPin{ReleaseMode: QuotaPinReleaseAtTime, ReleaseAt: &past}).ActiveAt(now))
+	assert.True(t, (&QuotaPin{ReleaseMode: QuotaPinReleaseAtTime, ReleaseAt: &future}).ActiveAt(now))
+	assert.True(t, (&QuotaPin{ReleaseMode: QuotaPinReleaseAuto}).ActiveAt(now))
+
+	assert.True(t, (&QuotaPin{ReleaseMode: QuotaPinReleaseAuto}).ReleasedByRefresh(QuotaRefreshAuto))
+	assert.False(t, (&QuotaPin{ReleaseMode: QuotaPinReleaseAuto}).ReleasedByRefresh(QuotaRefreshManual))
+	assert.True(t, (&QuotaPin{ReleaseMode: QuotaPinReleaseManual}).ReleasedByRefresh(QuotaRefreshManual))
+	assert.True(t, (&QuotaPin{ReleaseMode: QuotaPinReleaseAnyRefresh}).ReleasedByRefresh(QuotaRefreshAuto))
+	assert.True(t, (&QuotaPin{ReleaseMode: QuotaPinReleaseAnyRefresh}).ReleasedByRefresh(QuotaRefreshManual))
+	assert.False(t, (&QuotaPin{ReleaseMode: QuotaPinReleaseAtTime, ReleaseAt: &future}).ReleasedByRefresh(QuotaRefreshAuto))
 }

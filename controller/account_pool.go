@@ -6,6 +6,8 @@ import (
 	"math"
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -87,6 +89,98 @@ func RefreshAccountPool(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": view})
+}
+
+type accountPoolQuotaOverrideRequest struct {
+	OffsetPercent  float64    `json:"offset_percent"`
+	Pinned         bool       `json:"pinned"`
+	PinReleaseMode string     `json:"pin_release_mode"`
+	PinReleaseAt   *time.Time `json:"pin_release_at"`
+}
+
+func (request accountPoolQuotaOverrideRequest) toOverride() account_pool_setting.QuotaOverride {
+	override := account_pool_setting.QuotaOverride{OffsetPercent: request.OffsetPercent}
+	if !request.Pinned {
+		return override
+	}
+	pin := &account_pool_setting.QuotaPin{ReleaseMode: request.PinReleaseMode}
+	if request.PinReleaseMode == account_pool_setting.QuotaPinReleaseAtTime {
+		pin.ReleaseAt = request.PinReleaseAt
+	}
+	override.Pin = pin
+	return override
+}
+
+func UpdateAccountPoolQuotaOverride(c *gin.Context) {
+	publicID, ok := accountPoolQuotaOverridePublicID(c)
+	if !ok {
+		return
+	}
+	var request accountPoolQuotaOverrideRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		respondAccountPoolError(c, http.StatusBadRequest, "account_pool_quota_override_invalid", "Invalid quota adjustment")
+		return
+	}
+	override := request.toOverride()
+	if _, err := account_pool_setting.PrepareQuotaOverrides(map[string]account_pool_setting.QuotaOverride{
+		publicID: override,
+	}); err != nil {
+		respondAccountPoolError(c, http.StatusBadRequest, "account_pool_quota_override_invalid", err.Error())
+		return
+	}
+	if err := service.SetAccountPoolQuotaOverride(publicID, override); err != nil {
+		respondAccountPoolError(c, http.StatusInternalServerError, "account_pool_quota_override_update_failed", "Failed to update quota adjustment")
+		return
+	}
+	recordManageAudit(c, "option.account_pool.quota_override.update", accountPoolQuotaOverrideAuditParams(publicID, override))
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "",
+		"data": gin.H{
+			"public_id":      publicID,
+			"offset_percent": override.OffsetPercent,
+			"pinned":         override.Pin != nil,
+		},
+	})
+}
+
+func DeleteAccountPoolQuotaOverride(c *gin.Context) {
+	publicID, ok := accountPoolQuotaOverridePublicID(c)
+	if !ok {
+		return
+	}
+	if err := service.ClearAccountPoolQuotaOverride(publicID); err != nil {
+		respondAccountPoolError(c, http.StatusInternalServerError, "account_pool_quota_override_update_failed", "Failed to update quota adjustment")
+		return
+	}
+	recordManageAudit(c, "option.account_pool.quota_override.clear", map[string]interface{}{
+		"public_id": publicID,
+	})
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": gin.H{"public_id": publicID}})
+}
+
+func accountPoolQuotaOverridePublicID(c *gin.Context) (string, bool) {
+	publicID := strings.TrimSpace(c.Param("publicId"))
+	if !account_pool_setting.IsQuotaOverridePublicID(publicID) {
+		respondAccountPoolError(c, http.StatusBadRequest, "account_pool_quota_override_invalid", "Invalid account id")
+		return "", false
+	}
+	return publicID, true
+}
+
+func accountPoolQuotaOverrideAuditParams(publicID string, override account_pool_setting.QuotaOverride) map[string]interface{} {
+	params := map[string]interface{}{
+		"public_id":      publicID,
+		"offset_percent": override.OffsetPercent,
+	}
+	if override.Pin == nil {
+		return params
+	}
+	params["release_mode"] = override.Pin.ReleaseMode
+	if override.Pin.ReleaseAt != nil {
+		params["release_at"] = override.Pin.ReleaseAt.Format(time.RFC3339)
+	}
+	return params
 }
 
 func GetAccountPoolSettings(c *gin.Context) {

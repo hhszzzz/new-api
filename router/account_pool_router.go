@@ -21,4 +21,11 @@ func registerAccountPoolRoutes(apiRouter *gin.RouterGroup) {
 		accountPoolSettingsRoute.GET("", controller.GetAccountPoolSettings)
 		accountPoolSettingsRoute.PUT("", controller.UpdateAccountPoolSettings)
 	}
+
+	accountPoolOverrideRoute := apiRouter.Group("/account-pool/accounts")
+	accountPoolOverrideRoute.Use(middleware.RootAuth(), middleware.DisableCache())
+	{
+		accountPoolOverrideRoute.PUT("/:publicId/quota-override", controller.UpdateAccountPoolQuotaOverride)
+		accountPoolOverrideRoute.DELETE("/:publicId/quota-override", controller.DeleteAccountPoolQuotaOverride)
+	}
 }

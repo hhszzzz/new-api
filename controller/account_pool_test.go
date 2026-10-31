@@ -182,3 +182,45 @@ func TestSelfUserDataIncludesServerCalculatedAccountPoolCapability(t *testing.T)
 	require.True(t, ok)
 	assert.Equal(t, false, deniedPermissions["account_pool"])
 }
+
+func TestUpdateAccountPoolQuotaOverrideRejectsInvalidRequest(t *testing.T) {
+	validPublicID := "aaaaaaaaaaaaaaaaaaaaaaaa"
+	tests := []struct {
+		name     string
+		publicID string
+		body     string
+	}{
+		{name: "invalid public id", publicID: "bad", body: `{"offset_percent":10}`},
+		{name: "malformed body", publicID: validPublicID, body: `{`},
+		{name: "offset out of range", publicID: validPublicID, body: `{"offset_percent":101}`},
+		{name: "time pin without release", publicID: validPublicID, body: `{"pinned":true,"pin_release_mode":"at_time"}`},
+		{name: "pin without release mode", publicID: validPublicID, body: `{"pinned":true}`},
+		{name: "unknown release mode", publicID: validPublicID, body: `{"pinned":true,"pin_release_mode":"later"}`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			context, _ := gin.CreateTestContext(recorder)
+			context.Params = gin.Params{{Key: "publicId", Value: test.publicID}}
+			context.Request = httptest.NewRequest(http.MethodPut, "/", strings.NewReader(test.body))
+			context.Request.Header.Set("Content-Type", "application/json")
+
+			UpdateAccountPoolQuotaOverride(context)
+
+			assert.Equal(t, http.StatusBadRequest, recorder.Code)
+			assert.Contains(t, recorder.Body.String(), "account_pool_quota_override_invalid")
+		})
+	}
+}
+
+func TestDeleteAccountPoolQuotaOverrideRejectsInvalidPublicID(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Params = gin.Params{{Key: "publicId", Value: "bad"}}
+
+	DeleteAccountPoolQuotaOverride(context)
+
+	assert.Equal(t, http.StatusBadRequest, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), "account_pool_quota_override_invalid")
+}

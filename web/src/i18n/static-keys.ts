@@ -19,6 +19,10 @@ For commercial licensing, please contact support@quantumnous.com
 // Static translation keys that don't get picked up by the t('...') regex.
 // These cover dynamic labels (e.g. constants, configs) that are passed into t at runtime.
 export const STATIC_I18N_KEYS = [
+  'At a specified time',
+  'Next automatic refresh',
+  'Next manual refresh',
+  'Next refresh (automatic or manual)',
   'Target protocol conflicts with legacy converter',
   'Target protocol does not support this operation',
   'Task usage metadata is unavailable. Pricing details cannot be displayed.',
@@ -911,7 +915,7 @@ export const STATIC_I18N_KEYS = [
   'View deployments and price estimates.',
   'Create, edit, and delete deployments, and test connections.',
   'Logs',
-  'View all users\' usage logs, statistics, and tasks.',
+  "View all users' usage logs, statistics, and tasks.",
   'Redemption codes',
   'View redemption codes.',
   'Create, edit, and delete redemption codes.',

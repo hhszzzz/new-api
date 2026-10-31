@@ -697,7 +697,7 @@ func TestAccountPoolManagerReturnsExpiredSnapshotWhileSharedRefreshIsBlocked(t *
 			second, err := manager.get(ctx)
 			require.NoError(t, err)
 			assert.Equal(t, first.Accounts, second.Accounts)
-			completion := manager.startRefresh()
+			completion := manager.startRefresh(account_pool_setting.QuotaRefreshAuto)
 			unblock()
 			select {
 			case result := <-completion:
@@ -737,7 +737,7 @@ func TestAccountPoolManagerKeepsOldSnapshotWhenRefreshFails(t *testing.T) {
 	manager.snapshot.NextRefreshAt = now
 	manager.mu.Unlock()
 
-	fallback, err := manager.refresh(context.Background())
+	fallback, _, err := manager.refresh(context.Background(), account_pool_setting.QuotaRefreshAuto)
 	require.NoError(t, err)
 	assert.True(t, fallback.Stale)
 	assert.True(t, fallback.Partial)
@@ -1220,4 +1220,325 @@ func TestAccountPoolManagerFetchesClaudeAndAntigravityAccounts(t *testing.T) {
 	require.Empty(t, noAccess.Accounts)
 	require.Empty(t, noAccess.ProviderSummaries)
 	assert.Equal(t, AccountPoolSummary{}, noAccess.Summary)
+}
+
+func quotaOverridePercent(value float64) *float64 {
+	return &value
+}
+
+func quotaOverrideTestID(char string) string {
+	return strings.Repeat(char, 24)
+}
+
+func cloneAccountPoolQuotaOverrides(input map[string]account_pool_setting.QuotaOverride) map[string]account_pool_setting.QuotaOverride {
+	copied := make(map[string]account_pool_setting.QuotaOverride, len(input))
+	for publicID, override := range input {
+		copy := override
+		if override.Pin != nil {
+			pin := *override.Pin
+			if override.Pin.ReleaseAt != nil {
+				releaseAt := *override.Pin.ReleaseAt
+				pin.ReleaseAt = &releaseAt
+			}
+			copy.Pin = &pin
+		}
+		copied[publicID] = copy
+	}
+	return copied
+}
+
+func TestApplyAccountPoolQuotaOverrideAdjustsWindowsAndStatus(t *testing.T) {
+	now := time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC)
+	releaseAt := now.Add(time.Hour)
+	expiredAt := now.Add(-time.Minute)
+
+	tests := []struct {
+		name          string
+		remaining     *float64
+		status        string
+		override      account_pool_setting.QuotaOverride
+		wantRemaining *float64
+		wantUsed      *float64
+		wantStatus    string
+		wantPin       bool
+	}{
+		{
+			name:      "positive offset lifts a limited account",
+			remaining: quotaOverridePercent(5), status: "limited",
+			override:      account_pool_setting.QuotaOverride{OffsetPercent: 30},
+			wantRemaining: quotaOverridePercent(35), wantUsed: quotaOverridePercent(65), wantStatus: "available",
+		},
+		{
+			name:      "positive offset clamps at full",
+			remaining: quotaOverridePercent(40), status: "available",
+			override:      account_pool_setting.QuotaOverride{OffsetPercent: 80},
+			wantRemaining: quotaOverridePercent(100), wantUsed: quotaOverridePercent(0), wantStatus: "available",
+		},
+		{
+			name:      "negative offset clamps at empty and limits the account",
+			remaining: quotaOverridePercent(30), status: "available",
+			override:      account_pool_setting.QuotaOverride{OffsetPercent: -50},
+			wantRemaining: quotaOverridePercent(0), wantUsed: quotaOverridePercent(100), wantStatus: "limited",
+		},
+		{
+			name:      "active pin wins over offset",
+			remaining: quotaOverridePercent(5), status: "limited",
+			override: account_pool_setting.QuotaOverride{
+				OffsetPercent: -100,
+				Pin:           &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseAtTime, ReleaseAt: &releaseAt},
+			},
+			wantRemaining: quotaOverridePercent(100), wantUsed: quotaOverridePercent(0), wantStatus: "available", wantPin: true,
+		},
+		{
+			name:      "expired time pin falls back to the offset",
+			remaining: quotaOverridePercent(10), status: "available",
+			override: account_pool_setting.QuotaOverride{
+				OffsetPercent: 20,
+				Pin:           &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseAtTime, ReleaseAt: &expiredAt},
+			},
+			wantRemaining: quotaOverridePercent(30), wantUsed: quotaOverridePercent(70), wantStatus: "available",
+		},
+		{
+			name:      "nil remaining is left unchanged",
+			remaining: nil, status: "available",
+			override:   account_pool_setting.QuotaOverride{OffsetPercent: 30},
+			wantStatus: "available",
+		},
+		{
+			name:      "error status is never flipped by a pin",
+			remaining: quotaOverridePercent(0), status: "error",
+			override: account_pool_setting.QuotaOverride{
+				Pin: &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseAnyRefresh},
+			},
+			wantRemaining: quotaOverridePercent(100), wantUsed: quotaOverridePercent(0), wantStatus: "error", wantPin: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			item := AccountPoolViewAccount{
+				Status:        test.status,
+				PrimaryWindow: &AccountPoolWindow{RemainingPercent: test.remaining, UsedPercent: quotaOverridePercent(100 - valueOrZero(test.remaining))},
+				WindowGroups: []AccountPoolWindowGroup{{
+					PrimaryWindow: &AccountPoolWindow{RemainingPercent: test.remaining, UsedPercent: quotaOverridePercent(100 - valueOrZero(test.remaining))},
+				}},
+			}
+
+			effect := applyAccountPoolQuotaOverride(&item, test.override, now)
+
+			for _, window := range []*AccountPoolWindow{item.PrimaryWindow, item.WindowGroups[0].PrimaryWindow} {
+				if test.wantRemaining == nil {
+					assert.Nil(t, window.RemainingPercent)
+					continue
+				}
+				require.NotNil(t, window.RemainingPercent)
+				assert.Equal(t, *test.wantRemaining, *window.RemainingPercent)
+				require.NotNil(t, window.UsedPercent)
+				assert.Equal(t, *test.wantUsed, *window.UsedPercent)
+			}
+			assert.Equal(t, test.wantPin, effect.pinActive)
+			assert.Equal(t, test.wantStatus, accountPoolOverrideStatus(test.status, effect))
+		})
+	}
+}
+
+func valueOrZero(value *float64) float64 {
+	if value == nil {
+		return 0
+	}
+	return *value
+}
+
+func TestAccountPoolViewAppliesOverrideAndHidesDetailsFromRegularUsers(t *testing.T) {
+	now := time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC)
+	publicID := quotaOverrideTestID("a")
+	manager := newAccountPoolManager()
+	manager.now = func() time.Time { return now }
+	setting := accountPoolTestSetting()
+	manager.loadSetting = func() *account_pool_setting.Setting { return &setting }
+	manager.loadQuotaOverrides = func() map[string]account_pool_setting.QuotaOverride {
+		return map[string]account_pool_setting.QuotaOverride{
+			publicID: {OffsetPercent: 30},
+		}
+	}
+	snapshot := &accountPoolSnapshot{Accounts: []accountPoolAccount{{
+		PublicID:      publicID,
+		Provider:      account_pool_setting.ProviderCodex,
+		Status:        "limited",
+		PrimaryWindow: &AccountPoolWindow{RemainingPercent: quotaOverridePercent(0), UsedPercent: quotaOverridePercent(100)},
+	}}}
+
+	rootView := manager.buildView(snapshot, common.RoleRootUser, nil, false)
+	require.Len(t, rootView.Accounts, 1)
+	rootAccount := rootView.Accounts[0]
+	assert.Equal(t, "available", rootAccount.Status)
+	assert.Equal(t, 30.0, *rootAccount.PrimaryWindow.RemainingPercent)
+	require.NotNil(t, rootAccount.QuotaOverride)
+	assert.Equal(t, 30.0, rootAccount.QuotaOverride.OffsetPercent)
+	assert.Equal(t, AccountPoolSummary{Total: 1, Available: 1}, rootView.Summary)
+
+	userView := manager.buildView(snapshot, common.RoleCommonUser, []string{"vip"}, false)
+	require.Len(t, userView.Accounts, 1)
+	assert.Nil(t, userView.Accounts[0].QuotaOverride)
+	assert.Equal(t, 30.0, *userView.Accounts[0].PrimaryWindow.RemainingPercent)
+}
+
+func TestReleaseAccountPoolPinsAfterRefreshHonoursKindCutoffAndExpiry(t *testing.T) {
+	now := time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC)
+	past := now.Add(-time.Minute)
+	future := now.Add(time.Hour)
+	oldTimestamp := now.Add(-time.Hour)
+	newTimestamp := now.Add(time.Minute)
+	initial := map[string]account_pool_setting.QuotaOverride{
+		quotaOverrideTestID("a"): {UpdatedAt: oldTimestamp, Pin: &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseAuto}},
+		quotaOverrideTestID("b"): {UpdatedAt: oldTimestamp, Pin: &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseManual}},
+		quotaOverrideTestID("c"): {UpdatedAt: oldTimestamp, Pin: &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseAnyRefresh}},
+		quotaOverrideTestID("d"): {UpdatedAt: newTimestamp, Pin: &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseAuto}},
+		quotaOverrideTestID("e"): {UpdatedAt: oldTimestamp, Pin: &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseAtTime, ReleaseAt: &past}},
+		quotaOverrideTestID("f"): {UpdatedAt: oldTimestamp, OffsetPercent: 15},
+		quotaOverrideTestID("g"): {UpdatedAt: oldTimestamp, Pin: &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseAtTime, ReleaseAt: &future}},
+	}
+
+	tests := []struct {
+		name       string
+		kind       string
+		wantPinned []string
+		wantGone   []string
+	}{
+		{
+			name:       "automatic round releases automatic and any pins",
+			kind:       account_pool_setting.QuotaRefreshAuto,
+			wantPinned: []string{"b", "d", "g"},
+			wantGone:   []string{"a", "c", "e"},
+		},
+		{
+			name:       "manual round releases manual and any pins",
+			kind:       account_pool_setting.QuotaRefreshManual,
+			wantPinned: []string{"a", "d", "g"},
+			wantGone:   []string{"b", "c", "e"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			manager := newAccountPoolManager()
+			manager.now = func() time.Time { return now }
+			manager.loadQuotaOverrides = func() map[string]account_pool_setting.QuotaOverride {
+				return cloneAccountPoolQuotaOverrides(initial)
+			}
+			var persisted map[string]account_pool_setting.QuotaOverride
+			manager.persistQuotaOverrides = func(overrides map[string]account_pool_setting.QuotaOverride) error {
+				persisted = overrides
+				return nil
+			}
+
+			manager.releaseAccountPoolPinsAfterRefresh(test.kind, now)
+
+			require.NotNil(t, persisted)
+			for _, char := range test.wantPinned {
+				override, ok := persisted[quotaOverrideTestID(char)]
+				require.True(t, ok, "entry %s should remain", char)
+				assert.NotNil(t, override.Pin)
+			}
+			for _, char := range test.wantGone {
+				assert.NotContains(t, persisted, quotaOverrideTestID(char))
+			}
+			assert.Contains(t, persisted, quotaOverrideTestID("f"))
+			assert.Equal(t, 15.0, persisted[quotaOverrideTestID("f")].OffsetPercent)
+			assert.NotContains(t, persisted, quotaOverrideTestID("d")+"x")
+		})
+	}
+}
+
+func TestAccountPoolRefreshReleasesOnlyItsOwnPins(t *testing.T) {
+	now := time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC)
+	oldTimestamp := now.Add(-time.Hour)
+	initial := map[string]account_pool_setting.QuotaOverride{
+		quotaOverrideTestID("a"): {UpdatedAt: oldTimestamp, Pin: &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseAuto}},
+		quotaOverrideTestID("b"): {UpdatedAt: oldTimestamp, Pin: &account_pool_setting.QuotaPin{ReleaseMode: account_pool_setting.QuotaPinReleaseManual}},
+	}
+
+	t.Run("automatic refresh keeps a manual pin", func(t *testing.T) {
+		fake := newAccountPoolFakeManagement(t)
+		manager := fake.manager(now)
+		manager.loadQuotaOverrides = func() map[string]account_pool_setting.QuotaOverride {
+			return cloneAccountPoolQuotaOverrides(initial)
+		}
+		var persisted map[string]account_pool_setting.QuotaOverride
+		manager.persistQuotaOverrides = func(overrides map[string]account_pool_setting.QuotaOverride) error {
+			persisted = overrides
+			return nil
+		}
+
+		_, refreshed, err := manager.refresh(t.Context(), account_pool_setting.QuotaRefreshAuto)
+		require.NoError(t, err)
+		assert.True(t, refreshed)
+		require.NotNil(t, persisted)
+		assert.NotContains(t, persisted, quotaOverrideTestID("a"))
+		assert.Contains(t, persisted, quotaOverrideTestID("b"))
+	})
+
+	t.Run("manual refresh releases a manual pin", func(t *testing.T) {
+		fake := newAccountPoolFakeManagement(t)
+		manager := fake.manager(now)
+		manager.loadQuotaOverrides = func() map[string]account_pool_setting.QuotaOverride {
+			return cloneAccountPoolQuotaOverrides(initial)
+		}
+		var persisted map[string]account_pool_setting.QuotaOverride
+		manager.persistQuotaOverrides = func(overrides map[string]account_pool_setting.QuotaOverride) error {
+			persisted = overrides
+			return nil
+		}
+
+		_, err := manager.refreshManually(t.Context())
+		require.NoError(t, err)
+		require.NotNil(t, persisted)
+		assert.NotContains(t, persisted, quotaOverrideTestID("b"))
+	})
+
+	t.Run("failed refresh keeps every pin", func(t *testing.T) {
+		fake := newAccountPoolFakeManagement(t)
+		manager := fake.manager(now)
+		manager.loadQuotaOverrides = func() map[string]account_pool_setting.QuotaOverride {
+			return cloneAccountPoolQuotaOverrides(initial)
+		}
+		persisted := false
+		manager.persistQuotaOverrides = func(map[string]account_pool_setting.QuotaOverride) error {
+			persisted = true
+			return nil
+		}
+		_, err := manager.get(t.Context())
+		require.NoError(t, err)
+		persisted = false
+
+		fake.mu.Lock()
+		fake.failUsage = true
+		fake.mu.Unlock()
+		manager.now = func() time.Time { return now.Add(10 * time.Minute) }
+		_, refreshed, err := manager.refresh(t.Context(), account_pool_setting.QuotaRefreshAuto)
+		require.NoError(t, err)
+		assert.False(t, refreshed)
+		assert.False(t, persisted)
+	})
+}
+
+func TestSetAccountPoolQuotaOverrideStampsTimestampAndDropsEmpty(t *testing.T) {
+	now := time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC)
+	manager := newAccountPoolManager()
+	manager.now = func() time.Time { return now }
+	persisted := map[string]account_pool_setting.QuotaOverride{}
+	manager.loadQuotaOverrides = func() map[string]account_pool_setting.QuotaOverride {
+		return cloneAccountPoolQuotaOverrides(persisted)
+	}
+	manager.persistQuotaOverrides = func(overrides map[string]account_pool_setting.QuotaOverride) error {
+		persisted = overrides
+		return nil
+	}
+
+	publicID := quotaOverrideTestID("a")
+	require.NoError(t, manager.setQuotaOverride(publicID, account_pool_setting.QuotaOverride{OffsetPercent: 10}))
+	assert.Equal(t, now, persisted[publicID].UpdatedAt)
+
+	require.NoError(t, manager.setQuotaOverride(publicID, account_pool_setting.QuotaOverride{}))
+	assert.NotContains(t, persisted, publicID)
 }
