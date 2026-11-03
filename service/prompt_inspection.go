@@ -395,6 +395,17 @@ func InspectPrompt(c *gin.Context, request PromptAuditRequest) (PromptAuditResul
 		return result, nil
 	}
 
+	// With the latest-turn window on, a side:safety transcript is the client's
+	// copy of earlier turns, not a new question. It is stored by the caller but
+	// never sent to a gate: the setting's rule is that older context is recorded
+	// rather than re-audited, and the wrapper would otherwise carry all of it
+	// into every gate as if it were the latest user turn.
+	if request.RequestKind == promptAuditRequestKindSideSafety && promptWordlistUsesBlockingSnapshot(direction, configured) {
+		result := PromptAuditResult{Mode: configured.Mode, Direction: direction, ConfigVersion: configured.ConfigVersion, Outcome: "skipped_side_safety"}
+		AttachPromptAuditResult(c, result)
+		return result, nil
+	}
+
 	// An inline base64 run is expanded before any gate reads the text: a client
 	// that encodes its real request must not be matched on the encoding. The
 	// original snapshot stays as it was — it is what the request actually
