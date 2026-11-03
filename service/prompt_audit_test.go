@@ -1801,9 +1801,9 @@ func TestCheckPromptAuditAsyncNeverBlocksMainRequest(t *testing.T) {
 // path's result handoff. The probabilities a verdict was derived from are what
 // an operator retunes thresholds with, so both the returned result and the
 // stored row must keep them when the request is refused on the request path.
-// A side:safety transcript is earlier conversation, not a new question: with
-// the latest-turn window on it is stored and never sent to the audit node.
-func TestPromptAuditBlockingKeepsScoresAndStoresSideSafety(t *testing.T) {
+// A side wrapper is earlier conversation, not a new question: with the
+// latest-turn window on it is stored and never sent to the audit node.
+func TestPromptAuditBlockingKeepsScoresAndStoresSideConversation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	previousDB := model.DB
 	previousMainType := common.MainDatabaseType()
@@ -1853,26 +1853,34 @@ func TestPromptAuditBlockingKeepsScoresAndStoresSideSafety(t *testing.T) {
 	require.NoError(t, db.First(&stored, result.AuditID).Error)
 	assert.InDelta(t, 0.9, stored.ToResponse(false).Scores["pii"], 1e-9)
 
-	// The transcript wrapper kind is the client's copy of earlier turns. It must
+	// A client-generated view of the conversation is not a new question. It must
 	// not reach the audit node, and the caller records it as stored instead.
-	sideSafety := request
-	sideSafety.Snapshot.RequestKind = promptAuditRequestKindSideSafety
-	c, _ = gin.CreateTestContext(httptest.NewRecorder())
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
-	c.Set("id", 7)
-	skipped, apiErr := InspectPrompt(c, sideSafety)
-	require.Nil(t, apiErr)
-	assert.Equal(t, "skipped_side_safety", skipped.Outcome)
-	assert.Zero(t, skipped.AuditID)
-	assert.False(t, skipped.Blocked)
-	assert.EqualValues(t, 1, guardCalls.Load(), "the transcript wrapper must not be sent to the audit node")
+	for _, tc := range []struct {
+		requestKind string
+		outcome     string
+	}{
+		{promptAuditRequestKindSideSafety, "skipped_side_safety"},
+		{"side:summary", "skipped_side_conversation"},
+	} {
+		side := request
+		side.Snapshot.RequestKind = tc.requestKind
+		c, _ = gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+		c.Set("id", 7)
+		skipped, apiErr := InspectPrompt(c, side)
+		require.Nil(t, apiErr)
+		assert.Equal(t, tc.outcome, skipped.Outcome)
+		assert.Zero(t, skipped.AuditID)
+		assert.False(t, skipped.Blocked)
+		assert.EqualValues(t, 1, guardCalls.Load(), "a side wrapper must not be sent to the audit node")
 
-	RecordPromptAuditStored(c, sideSafety)
-	var storedSideSafety model.PromptAudit
-	require.NoError(t, db.Order("id desc").First(&storedSideSafety).Error)
-	assert.Equal(t, model.PromptAuditStatusStored, storedSideSafety.Status)
-	assert.Equal(t, promptAuditRequestKindSideSafety, storedSideSafety.RequestKind)
-	assert.Empty(t, storedSideSafety.Decision)
+		RecordPromptAuditStored(c, side)
+		var storedSide model.PromptAudit
+		require.NoError(t, db.Order("id desc").First(&storedSide).Error)
+		assert.Equal(t, model.PromptAuditStatusStored, storedSide.Status)
+		assert.Equal(t, tc.requestKind, storedSide.RequestKind)
+		assert.Empty(t, storedSide.Decision)
+	}
 }
 
 func TestPromptAuditQueuedCredentialsStayBoundToAuthorizedEndpoint(t *testing.T) {
@@ -2219,13 +2227,18 @@ func TestPromptAuditTypeSafeNodeScoresAndFailsOver(t *testing.T) {
 			questions["jailbreak"].(map[string]any)["instructions"])
 		// PII is asked with a narrowed definition. "Personal identifying
 		// information" scored local paths, account handles and code fixtures in
-		// ordinary coding traffic above the review threshold, so the question has
-		// to state what counts and what does not.
+		// ordinary coding traffic above the review threshold, and a "full name"
+		// wording blocked a published paper's author list. The operator's policy
+		// keeps only credential values, passport/license numbers, financial
+		// account or card numbers and home addresses.
 		piiQuestion, ok := questions["pii"].(map[string]any)["instructions"].(string)
 		require.True(t, ok)
-		assert.Contains(t, piiQuestion, "actual personal data about a real person")
-		assert.Contains(t, piiQuestion, "exposed credentials such as passwords, API keys, or private keys")
-		assert.Contains(t, piiQuestion, "excluding usernames, local file paths, code identifiers, project names, model names, and placeholder values")
+		assert.Contains(t, piiQuestion, "an exposed credential value such as a password, API key, private key, or access token")
+		assert.Contains(t, piiQuestion, "a passport or driver's license number")
+		assert.Contains(t, piiQuestion, "a financial account or payment card number")
+		assert.Contains(t, piiQuestion, "or a home address")
+		assert.Contains(t, piiQuestion, "not a field name, variable name, code identifier, local file path")
+		assert.Contains(t, piiQuestion, "test fixture, documentation example, or placeholder value")
 		assert.NotContains(t, piiQuestion, "personal identifying information")
 		state, ok := got.body["state"].(map[string]any)
 		require.True(t, ok)
