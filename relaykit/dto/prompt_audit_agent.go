@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"regexp"
 	"strings"
 
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
@@ -18,6 +19,49 @@ var promptAuditCommandTags = []string{"<command-name>", "<command-message>", "<c
 func promptAuditCommandWrapper(text string) bool {
 	for _, tag := range promptAuditCommandTags {
 		if strings.HasPrefix(text, tag) {
+			return true
+		}
+	}
+	return false
+}
+
+// A command wrapper keeps its arguments inline. The wrapper is client context,
+// but the arguments are the text the user typed into the command and must stay
+// inspectable under the user source.
+var promptAuditCommandArgsPattern = regexp.MustCompile(`(?s)<command-args>(.*?)</command-args>`)
+
+func detachPromptAuditCommandArgs(text string) (string, string) {
+	match := promptAuditCommandArgsPattern.FindStringSubmatchIndex(text)
+	if match == nil {
+		return text, ""
+	}
+	args := strings.TrimSpace(text[match[2]:match[3]])
+	if args == "" {
+		return text, ""
+	}
+	return text[:match[2]] + text[match[3]:], args
+}
+
+// promptAuditClientAutomationText recognizes whole client-generated notices that
+// carry no user question: coding harnesses' timing/runtime preambles and the
+// markers a client injects around interrupted or empty turns. Only text that
+// starts with the marker is matched; a real request that merely contains one of
+// these strings stays inspectable.
+func promptAuditClientAutomationText(text string) bool {
+	switch text {
+	case "Tool loaded.", "(no content)":
+		return true
+	}
+	// Clients also spell the interruption marker for a refused tool use.
+	if strings.HasPrefix(text, "[Request interrupted by user") {
+		return true
+	}
+	for _, prefix := range []string{
+		"Time sampled while preparing turn ",
+		"Current runtime context.",
+		"<external_codex_apps_open_page>",
+	} {
+		if strings.HasPrefix(text, prefix) {
 			return true
 		}
 	}
@@ -53,6 +97,15 @@ func classifyPromptAuditText(text, role string) PromptAuditScope {
 		return base
 	}
 	if promptAuditCommandWrapper(text) {
+		return PromptScopeAgentContext
+	}
+	// A heartbeat is a client-formatted instruction block, not a human message.
+	// It stays inspectable through the task source, but it no longer reads as
+	// the turn the user just issued.
+	if strings.HasPrefix(text, "<heartbeat>") {
+		return PromptScopeTask
+	}
+	if promptAuditClientAutomationText(text) {
 		return PromptScopeAgentContext
 	}
 	for _, prefix := range []string{"<system-reminder>", "<ide_opened_file>", "<ide_selection>", "<local-command-", "Caveat: The messages below were generated", "# AGENTS.md instructions for", "<environment_context>", "<user_instructions>", "<turn_aborted>", "The following is the user's CLAUDE.md configuration"} {

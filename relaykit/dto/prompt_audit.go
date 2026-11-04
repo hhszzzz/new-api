@@ -600,6 +600,15 @@ func appendRoleMessage(segments []PromptAuditSegment, role string, user bool, te
 	for _, text := range texts {
 		if strings.TrimSpace(text) != "" {
 			scope := classifyPromptAuditText(text, role)
+			if role == "user" && scope == PromptScopeAgentContext && (promptAuditCommandWrapper(text) || strings.HasPrefix(strings.TrimSpace(text), "<local-command-")) {
+				if wrapper, args := detachPromptAuditCommandArgs(text); args != "" {
+					if strings.TrimSpace(wrapper) != "" {
+						normalized = append(normalized, PromptAuditSegment{Role: role, Text: wrapper, User: false, Scope: PromptScopeAgentContext, GroupingTexts: []string{wrapper}})
+					}
+					normalized = append(normalized, PromptAuditSegment{Role: role, Text: args, User: true, Scope: PromptScopeUser, GroupingTexts: []string{args}})
+					continue
+				}
+			}
 			part := PromptAuditSegment{Role: role, Text: text, User: user && (scope == PromptScopeUser || scope == PromptScopeTask), Scope: scope}
 			if role == "user" {
 				part.GroupingTexts = []string{text}
@@ -652,6 +661,21 @@ func anyTextValues(value any, nestedToolResult bool) []string {
 				}
 			}
 		}
+		// A text document is client-supplied prose, not binary media: its body
+		// belongs in the inspection snapshot like any other text block. Base64,
+		// URL and file sources stay excluded as unreadable payloads.
+		if typeName == "document" {
+			return documentPromptAuditTexts(typed)
+		}
+		// Search results embedded in a user message are external prose the model
+		// will read; keep their title and text content inspectable.
+		if typeName == "search_result" {
+			texts := make([]string, 0, 2)
+			if title, ok := typed["title"].(string); ok && strings.TrimSpace(title) != "" {
+				texts = append(texts, title)
+			}
+			return append(texts, anyTextValues(typed["content"], false)...)
+		}
 		if nestedToolResult && (typeName == "tool_result" || strings.HasSuffix(typeName, "_call_output")) {
 			if content, exists := typed["content"]; exists {
 				return structuredPromptAuditTexts(content)
@@ -667,6 +691,27 @@ func anyTextValues(value any, nestedToolResult bool) []string {
 				}
 			}
 		}
+	}
+	return nil
+}
+
+// documentPromptAuditTexts returns the readable text of an Anthropic document
+// block. A text source carries the document body directly; a content source
+// carries the provider's extracted text blocks. Binary sources have no text to
+// inspect.
+func documentPromptAuditTexts(document map[string]any) []string {
+	source, _ := document["source"].(map[string]any)
+	if source == nil {
+		return nil
+	}
+	sourceType, _ := source["type"].(string)
+	switch strings.ToLower(strings.TrimSpace(sourceType)) {
+	case "text":
+		if data, ok := source["data"].(string); ok && strings.TrimSpace(data) != "" {
+			return []string{data}
+		}
+	case "content":
+		return anyTextValues(source["content"], false)
 	}
 	return nil
 }
@@ -920,6 +965,30 @@ func responsesValueSegments(value any) []PromptAuditSegment {
 				parts[index].Scope = PromptScopeMCP
 			}
 			return parts
+		}
+		// Any other client tool call (computer_call, local_shell_call, …) carries
+		// its arguments in arguments, input or action. It is tool traffic rather
+		// than conversation text, but its payload must still be readable.
+		if strings.HasSuffix(typeName, "_call") {
+			payload := typed["arguments"]
+			if payload == nil {
+				payload = typed["input"]
+			}
+			if payload == nil {
+				payload = typed["action"]
+			}
+			if payload == nil {
+				return nil
+			}
+			name, _ := typed["name"].(string)
+			if name == "" {
+				name = typeName
+			}
+			id, _ := typed["call_id"].(string)
+			if id == "" {
+				id, _ = typed["id"].(string)
+			}
+			return promptAuditToolSegments(PromptScopeToolCall, "assistant", name, id, structuredPromptAuditTexts(payload))
 		}
 	}
 	return nil

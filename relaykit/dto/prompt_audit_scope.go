@@ -7,7 +7,7 @@ import "strings"
 func appendScopeMessage(segments []PromptAuditSegment, scope PromptAuditScope, role string, texts []string) []PromptAuditSegment {
 	parts := appendRoleMessage(nil, role, scope == PromptScopeUser || scope == PromptScopeTask, texts)
 	for _, part := range parts {
-		if scope != PromptScopeUser && scope != PromptScopeSystem && scope != PromptScopeDeveloper || (part.Scope != PromptScopeAgentContext && part.Scope != PromptScopeSkill) {
+		if scope != PromptScopeUser && scope != PromptScopeSystem && scope != PromptScopeDeveloper || (part.Scope != PromptScopeAgentContext && part.Scope != PromptScopeSkill && part.Scope != PromptScopeTask) {
 			part.Scope = scope
 		}
 		switch scope {
@@ -49,7 +49,7 @@ func scopedContentSegments(role string, value any) []PromptAuditSegment {
 				}
 			}
 			return parts
-		case kind == "tool_use" || kind == "mcp_tool_use" || kind == "function_call" || kind == "custom_tool_call":
+		case kind == "tool_use" || kind == "mcp_tool_use" || kind == "server_tool_use" || kind == "function_call" || kind == "custom_tool_call":
 			payload := content["input"]
 			if payload == nil {
 				payload = content["arguments"]

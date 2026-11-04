@@ -72,11 +72,29 @@ func TestPromptAuditAgentRequestKindsAndLatestHumanTurn(t *testing.T) {
 	assert.Contains(t, snapshot.BlockingSnapshot().Text(), "Base directory for this skill:")
 	command := (&GeneralOpenAIRequest{Messages: []Message{{Role: "user", Content: "<command-name>/test</command-name><command-args>hello</command-args>"}}}).GetPromptAuditSnapshot()
 	assert.Contains(t, command.HumanPrompt, "<command-name>")
+	assert.Contains(t, command.HumanPrompt, "hello")
 	// The wrapper names a source of its own, so the detail sheet lists it as
-	// context rather than as one more user message among the user's own text.
-	require.Len(t, command.Segments, 1)
+	// context; the arguments are the text the user typed and stay inspectable
+	// under the user source.
+	require.Len(t, command.Segments, 2)
 	assert.Equal(t, PromptScopeAgentContext, command.Segments[0].SourceScope())
 	assert.False(t, command.Segments[0].User)
+	assert.Equal(t, PromptScopeUser, command.Segments[1].SourceScope())
+	assert.True(t, command.Segments[1].User)
+	assert.Equal(t, "hello", command.Segments[1].Text)
+
+	// A wrapper run directly by the client still carries the user's arguments.
+	local := (&ClaudeRequest{Messages: []ClaudeMessage{{Role: "user", Content: "<local-command-caveat>ran directly</local-command-caveat>\n<command-name>/goal</command-name>\n<command-args>keep going</command-args>"}}}).GetPromptAuditSnapshot()
+	assert.Contains(t, local.HumanPrompt, "keep going")
+	require.Len(t, local.Segments, 2)
+	assert.Equal(t, PromptScopeUser, local.Segments[1].SourceScope())
+	assert.Equal(t, "keep going", local.Segments[1].Text)
+
+	// A context block that merely quotes a command keeps its arguments inside
+	// the context: only a command wrapper itself owns user-issued arguments.
+	quoted := (&ClaudeRequest{Messages: []ClaudeMessage{{Role: "user", Content: "<system-reminder>\nexample: <command-args>not mine</command-args>\n</system-reminder>"}}}).GetPromptAuditSnapshot()
+	require.Len(t, quoted.Segments, 1)
+	assert.Equal(t, PromptScopeAgentContext, quoted.Segments[0].SourceScope())
 
 	// Read as context, a command is still the turn the user issued: the record
 	// must not report the question it superseded.
@@ -87,6 +105,99 @@ func TestPromptAuditAgentRequestKindsAndLatestHumanTurn(t *testing.T) {
 	}}).GetPromptAuditSnapshot()
 	assert.Equal(t, "<command-name>/clear</command-name>", afterCommand.HumanPrompt)
 	assert.Equal(t, "step", afterCommand.RequestKind)
+}
+
+func TestPromptAuditClientAutomationPreambleStaysContext(t *testing.T) {
+	runtimeContext := "Current runtime context. This snapshot supersedes earlier runtime-context snapshots.\n\nCurrent working directory: \"/project\"."
+	for name, text := range map[string]string{
+		"time preamble":    "Time sampled while preparing turn 1, step 2: 2026-11-04T11:15:44+08:00[Asia/Shanghai]\nBrowser time zone for this request: Asia/Shanghai. Interpret otherwise-unqualified dates and times in this zone.\nElapsed since the preceding step context: 10m 44s.",
+		"runtime context":  runtimeContext,
+		"interrupted":      "[Request interrupted by user]",
+		"interrupted tool": "[Request interrupted by user for tool use]",
+		"empty turn":       "(no content)",
+		"tool loaded":      "Tool loaded.",
+	} {
+		t.Run(name, func(t *testing.T) {
+			snapshot := (&ClaudeRequest{Messages: []ClaudeMessage{
+				{Role: "user", Content: "fix the button"},
+				{Role: "assistant", Content: "working"},
+				{Role: "user", Content: text},
+			}}).GetPromptAuditSnapshot()
+			// The automation notice must not displace the question the user issued.
+			assert.Equal(t, "fix the button", snapshot.HumanPrompt)
+			assert.Contains(t, snapshot.BlockingSnapshot().Text(), "fix the button")
+			found := false
+			for _, segment := range snapshot.Segments {
+				if segment.Text == text {
+					found = true
+					assert.Equal(t, PromptScopeAgentContext, segment.SourceScope())
+					assert.False(t, segment.User)
+				}
+			}
+			assert.True(t, found)
+		})
+	}
+
+	// A real question followed by runtime context in the same block stays user
+	// text: only a block that starts with the notice is client automation.
+	merged := "fix the search button\n" + runtimeContext
+	snapshot := (&ClaudeRequest{Messages: []ClaudeMessage{{Role: "user", Content: merged}}}).GetPromptAuditSnapshot()
+	assert.Equal(t, merged, snapshot.HumanPrompt)
+	assert.Equal(t, PromptScopeUser, snapshot.Segments[0].SourceScope())
+}
+
+func TestPromptAuditHeartbeatStaysInspectableWithoutBecomingHumanTurn(t *testing.T) {
+	heartbeat := "<heartbeat>\n  <automation_id>automation</automation_id>\n  <current_time_iso>2026-11-03T19:08:58.818Z</current_time_iso>\n  <instructions>\n开始审查\n  </instructions>\n</heartbeat>"
+	snapshot := (&ClaudeRequest{Messages: []ClaudeMessage{
+		{Role: "user", Content: "fix the button"},
+		{Role: "assistant", Content: "working"},
+		{Role: "user", Content: heartbeat},
+	}}).GetPromptAuditSnapshot()
+	assert.Equal(t, "fix the button", snapshot.HumanPrompt)
+
+	found := false
+	for _, segment := range snapshot.Segments {
+		if segment.Text == heartbeat {
+			found = true
+			assert.Equal(t, PromptScopeTask, segment.SourceScope())
+			assert.True(t, segment.User)
+		}
+	}
+	assert.True(t, found)
+	// The task source stays in the inspected window even though it is not the
+	// human turn.
+	assert.Contains(t, snapshot.BlockingSnapshot().Text(), "开始审查")
+}
+
+func TestPromptAuditUserDocumentAndSearchResultAreInspectable(t *testing.T) {
+	request := &ClaudeRequest{Messages: []ClaudeMessage{{Role: "user", Content: []any{
+		map[string]any{"type": "document", "source": map[string]any{"type": "text", "media_type": "text/plain", "data": "portable document body"}},
+		map[string]any{"type": "search_result", "title": "Search title", "content": []any{map[string]any{"type": "text", "text": "search body"}}},
+		map[string]any{"type": "text", "text": "question"},
+	}}}}
+	snapshot := request.GetPromptAuditSnapshot()
+	text := snapshot.Text()
+	assert.Contains(t, text, "portable document body")
+	assert.Contains(t, text, "Search title")
+	assert.Contains(t, text, "search body")
+	assert.Contains(t, text, "question")
+}
+
+func TestPromptAuditClaudeServerToolUseIsToolCall(t *testing.T) {
+	snapshot := (&ClaudeRequest{Messages: []ClaudeMessage{{Role: "user", Content: []any{
+		map[string]any{"type": "server_tool_use", "id": "srv", "name": "web_search", "input": map[string]any{"query": "hello"}},
+	}}}}).GetPromptAuditSnapshot()
+	require.NotEmpty(t, snapshot.Segments)
+	assert.Equal(t, PromptScopeToolCall, snapshot.Segments[0].SourceScope())
+	assert.Contains(t, snapshot.Text(), "hello")
+}
+
+func TestPromptAuditResponsesGenericToolCallKeepsArguments(t *testing.T) {
+	request := &OpenAIResponsesRequest{Input: json.RawMessage(`[{"type":"local_shell_call","call_id":"call_1","action":{"command":["echo","hello"]}}]`)}
+	snapshot := request.GetPromptAuditSnapshot()
+	require.NotEmpty(t, snapshot.Segments)
+	assert.Equal(t, PromptScopeToolCall, snapshot.Segments[0].SourceScope())
+	assert.Contains(t, snapshot.Text(), "echo")
 }
 
 func TestPromptAuditSubagentIdentityComesFromTheLeadingSystemPrompt(t *testing.T) {
