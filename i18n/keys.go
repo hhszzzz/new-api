@@ -30,6 +30,7 @@ const (
 	MsgAlreadyExists     = "common.already_exists"
 	MsgNameCannotBeEmpty = "common.name_cannot_be_empty"
 	MsgBatchTooMany      = "common.batch_too_many"
+	MsgSiteClosed        = "common.site_closed"
 
 	MsgServerRunning              = "common.server_running"
 	MsgInvalidParamsDetail        = "common.invalid_params_detail"

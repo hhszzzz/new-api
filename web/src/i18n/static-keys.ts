@@ -220,6 +220,12 @@ export const STATIC_I18N_KEYS = [
   'Routing Reliability',
   'Maintenance',
 
+  // Site closure / backend-only messages
+  'The site is closed for maintenance. Please try again later.',
+  'Maintenance title must be at most 200 characters',
+  'Maintenance message must be at most 8192 characters',
+  'Expected recovery time must not be negative',
+
   // System info
   'online',
   'stale',

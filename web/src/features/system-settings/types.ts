@@ -261,6 +261,11 @@ export type SiteSettings = {
   HeaderNavModules: string
   ModelRadarSettings: string
   SidebarModulesAdmin: string
+  'site_closure.web_closed': boolean
+  'site_closure.api_paused': boolean
+  'site_closure.title': string
+  'site_closure.message': string
+  'site_closure.expected_recovery_at': number
 }
 
 export type AuthSettings = {

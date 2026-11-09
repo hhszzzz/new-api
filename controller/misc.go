@@ -46,6 +46,15 @@ func GetStatus(c *gin.Context) {
 	cs := console_setting.GetConsoleSetting()
 	generalSetting := operation_setting.GetGeneralSetting()
 	passkeySetting := system_setting.PasskeySettingsSnapshot()
+
+	// Resolve the caller before taking the option-map read lock: the credential
+	// path may touch settings, and RWMutex re-entrancy must be avoided.
+	siteClosure := operation_setting.GetSiteClosureSetting()
+	siteClosureBypass := true
+	if siteClosure.WebClosed {
+		siteClosureBypass = middleware.IsAdminRequest(c)
+	}
+
 	common.OptionMapRWMutex.RLock()
 	defer common.OptionMapRWMutex.RUnlock()
 
@@ -124,13 +133,21 @@ func GetStatus(c *gin.Context) {
 		"passkey_user_verification":   passkeySetting.UserVerification,
 		"passkey_attachment":          passkeySetting.AttachmentPreference,
 		"setup":                       constant.Setup,
-		"user_agreement_enabled":      legalSetting.UserAgreement != "",
-		"privacy_policy_enabled":      legalSetting.PrivacyPolicy != "",
-		"checkin_enabled":             operation_setting.GetCheckinSetting().Enabled,
-		"log_export_enabled":          operation_setting.GetLogSetting().UserExportEnabled,
-		"log_max_range_days":          operation_setting.GetLogSetting().MaxRangeDays,
-		"quota_remind_enabled":        common.QuotaRemindEnabled,
-		"quota_remind_threshold":      common.QuotaRemindThreshold,
+		"site_closure": gin.H{
+			"web_closed":           siteClosure.WebClosed,
+			"api_paused":           siteClosure.APIPaused,
+			"title":                siteClosure.Title,
+			"message":              siteClosure.Message,
+			"expected_recovery_at": siteClosure.ExpectedRecoveryAt,
+			"bypass":               siteClosureBypass,
+		},
+		"user_agreement_enabled": legalSetting.UserAgreement != "",
+		"privacy_policy_enabled": legalSetting.PrivacyPolicy != "",
+		"checkin_enabled":        operation_setting.GetCheckinSetting().Enabled,
+		"log_export_enabled":     operation_setting.GetLogSetting().UserExportEnabled,
+		"log_max_range_days":     operation_setting.GetLogSetting().MaxRangeDays,
+		"quota_remind_enabled":   common.QuotaRemindEnabled,
+		"quota_remind_threshold": common.QuotaRemindThreshold,
 	}
 
 	// 根据启用状态注入可选内容

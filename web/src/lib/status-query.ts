@@ -31,10 +31,14 @@ import {
 /**
  * Single source of truth for `/api/status`.
  *
- * `/api/status` is entirely global on the backend: every field is read from
- * in-memory option maps under a read lock, with no user context and no auth
- * middleware on the route. That makes it safe to share one cache entry across
- * every consumer — branding, nav module gates, and the setup guard.
+ * `/api/status` is global on the backend: every field is read from in-memory
+ * option maps under a read lock, with no user context and no auth middleware on
+ * the route. That makes it safe to share one cache entry across every consumer
+ * — branding, nav module gates, and the setup guard.
+ *
+ * Exception: `site_closure.bypass` depends on the caller's dashboard
+ * credential. It may only be reused within the current browser session and
+ * never across users (the backend also marks the endpoint non-cacheable).
  *
  * Anything that needs status must go through `statusQueryOptions` so React
  * Query can dedupe. Calling `getStatus()` directly re-introduces the duplicate

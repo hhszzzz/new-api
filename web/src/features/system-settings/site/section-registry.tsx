@@ -29,6 +29,7 @@ import { NoticeSection } from '../maintenance/notice-section'
 import { SidebarModulesSection } from '../maintenance/sidebar-modules-section'
 import type { SiteSettings } from '../types'
 import { createSectionRegistry } from '../utils/section-registry'
+import { SiteClosureSection } from './site-closure-section'
 
 const SITE_SECTIONS = [
   {
@@ -60,6 +61,24 @@ const SITE_SECTIONS = [
     titleKey: 'System Notice',
     build: (settings: SiteSettings) => (
       <NoticeSection defaultValue={settings.Notice ?? ''} />
+    ),
+  },
+  {
+    id: 'site-closure',
+    titleKey: 'Site Closure',
+    build: (settings: SiteSettings) => (
+      <SiteClosureSection
+        defaultValues={{
+          site_closure: {
+            web_closed: settings['site_closure.web_closed'] ?? false,
+            api_paused: settings['site_closure.api_paused'] ?? false,
+            title: settings['site_closure.title'] ?? '',
+            message: settings['site_closure.message'] ?? '',
+            expected_recovery_at:
+              settings['site_closure.expected_recovery_at'] ?? 0,
+          },
+        }}
+      />
     ),
   },
   {

@@ -34,6 +34,10 @@ import { saveAffiliateCode } from '@/features/auth/lib/storage'
 import { GeneralError } from '@/features/errors/general-error'
 import { NotFoundError } from '@/features/errors/not-found-error'
 import { getSetupStatus } from '@/features/setup/api'
+import {
+  isSiteClosureBlocked,
+  parseSiteClosureStatus,
+} from '@/features/site-closure/lib'
 import { useSystemConfig } from '@/hooks/use-system-config'
 import {
   bootstrapAuthentication,
@@ -42,6 +46,7 @@ import {
 } from '@/lib/auth-session'
 import { subscribeAuthSessionEvents } from '@/lib/auth-session-sync'
 import { resolveLegacyRoute } from '@/lib/legacy-route'
+import { ensureStatus } from '@/lib/status-query'
 import { useAuthStore } from '@/stores/auth-store'
 
 function RootComponent() {
@@ -114,7 +119,7 @@ export const Route = createRootRouteWithContext<{
   queryClient: QueryClient
 }>()({
   // 应用初始化与路由解析前统一校验会话
-  beforeLoad: async ({ location }) => {
+  beforeLoad: async ({ location, context }) => {
     const legacyTarget = resolveLegacyRoute(location.href)
     if (legacyTarget) {
       throw redirect({ href: legacyTarget, replace: true })
@@ -124,6 +129,9 @@ export const Route = createRootRouteWithContext<{
     const needsSetupCheck =
       !setupStatusChecked && !pathname.startsWith('/setup')
     const authBootstrap = bootstrapAuthentication()
+    const siteStatusPromise = ensureStatus(context.queryClient).catch(
+      () => null
+    )
 
     // 只检查 setup 状态（如果需要）
     if (needsSetupCheck) {
@@ -146,6 +154,20 @@ export const Route = createRootRouteWithContext<{
       }
     } else {
       await authBootstrap
+    }
+
+    const siteStatus = await siteStatusPromise
+    if (siteStatus) {
+      const { auth } = useAuthStore.getState()
+      if (
+        isSiteClosureBlocked(
+          parseSiteClosureStatus(siteStatus),
+          auth.user?.role,
+          pathname
+        )
+      ) {
+        throw redirect({ to: '/maintenance', replace: true })
+      }
     }
   },
   component: RootComponent,

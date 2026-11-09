@@ -49,6 +49,7 @@ export type {
   BindEmailPayload,
   ApiResponse,
   SystemStatus,
+  SiteClosureStatus,
   OAuthProvider,
   AuthFormProps,
 } from './types'

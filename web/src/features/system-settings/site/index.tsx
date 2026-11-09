@@ -39,6 +39,11 @@ const defaultSiteSettings: SiteSettings = {
   HeaderNavModules: '',
   ModelRadarSettings: '',
   SidebarModulesAdmin: '',
+  'site_closure.web_closed': false,
+  'site_closure.api_paused': false,
+  'site_closure.title': '',
+  'site_closure.message': '',
+  'site_closure.expected_recovery_at': 0,
 }
 
 export function SiteSettings() {

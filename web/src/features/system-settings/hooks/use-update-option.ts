@@ -50,6 +50,11 @@ const STATUS_RELATED_KEYS = new Set([
   'passkey.origins',
   'QuotaRemindEnabled',
   'QuotaRemindThreshold',
+  'site_closure.web_closed',
+  'site_closure.api_paused',
+  'site_closure.title',
+  'site_closure.message',
+  'site_closure.expected_recovery_at',
 ])
 
 export function useUpdateOption() {

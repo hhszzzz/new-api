@@ -87,6 +87,15 @@ export interface ApiResponse<T = unknown> {
 // System Status
 // ============================================================================
 
+export interface SiteClosureStatus {
+  web_closed: boolean
+  api_paused: boolean
+  title: string
+  message: string
+  expected_recovery_at: number
+  bypass: boolean
+}
+
 export interface SystemStatus {
   success?: boolean
   message?: string
@@ -94,6 +103,7 @@ export interface SystemStatus {
     version?: string
     system_name?: string
     logo?: string
+    site_closure?: SiteClosureStatus
     github_oauth?: boolean
     github_client_id?: string
     discord_oauth?: boolean
@@ -141,6 +151,7 @@ export interface SystemStatus {
   version?: string
   system_name?: string
   logo?: string
+  site_closure?: SiteClosureStatus
   github_oauth?: boolean
   github_client_id?: string
   discord_oauth?: boolean
