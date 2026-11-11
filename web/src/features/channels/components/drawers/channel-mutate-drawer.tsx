@@ -109,6 +109,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { SecureVerificationDialog } from '@/features/auth/secure-verification'
+import { ChannelUserRateLimitEditor } from '@/features/channels/components/channel-user-rate-limit-editor'
 import {
   inheritedProtocolPolicy,
   parseProtocolPolicy,
@@ -5171,6 +5172,22 @@ export function ChannelMutateDrawer({
                         'Capacity-full channels are skipped so another eligible channel can be tried.'
                       )}
                     </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name='user_rate_limits'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Per-user limits')}</FormLabel>
+                    <FormControl>
+                      <ChannelUserRateLimitEditor
+                        value={field.value ?? []}
+                        onChange={field.onChange}
+                      />
+                    </FormControl>
                     <FormMessage />
                   </FormItem>
                 )}

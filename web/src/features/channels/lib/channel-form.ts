@@ -38,6 +38,7 @@ import {
 } from '../constants'
 import {
   channelScheduleSchema,
+  channelUserRateLimitSchema,
   type Channel,
   type ProtocolCapabilities,
   type ProtocolSelectionMode,
@@ -252,6 +253,17 @@ export const channelFormSchema = z
     weight: z.number().optional(),
     rpm_limit: z.number().int().min(1).max(2_147_483_647).optional(),
     concurrency_limit: z.number().int().min(1).max(2_147_483_647).optional(),
+    user_rate_limits: z
+      .array(channelUserRateLimitSchema)
+      .optional()
+      .refine(
+        (limits) =>
+          (limits ?? []).every(
+            (limit) =>
+              limit.rpm_limit != null || limit.concurrency_limit != null
+          ),
+        'Each user override needs RPM or concurrency'
+      ),
     test_model: z.string().optional(),
     auto_ban: z.number().optional(),
     status: z.number(),
@@ -530,6 +542,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   weight: 0,
   rpm_limit: undefined,
   concurrency_limit: undefined,
+  user_rate_limits: [],
   test_model: '',
   auto_ban: 1,
   status: CHANNEL_STATUS.ENABLED,
@@ -779,6 +792,7 @@ export function transformChannelToFormDefaults(
     weight: channel.weight || 0,
     rpm_limit: channel.rpm_limit ?? undefined,
     concurrency_limit: channel.concurrency_limit ?? undefined,
+    user_rate_limits: channel.user_rate_limits ?? [],
     test_model: channel.test_model || '',
     auto_ban: channel.auto_ban ?? 1,
     status: channel.status,
@@ -1150,6 +1164,7 @@ export function transformFormDataToCreatePayload(formData: ChannelFormValues): {
     weight: formData.weight || null,
     rpm_limit: formData.rpm_limit ?? null,
     concurrency_limit: formData.concurrency_limit ?? null,
+    user_rate_limits: formData.user_rate_limits ?? [],
     test_model: formData.test_model || null,
     auto_ban: formData.auto_ban ?? 1,
     status: formData.status,
@@ -1203,6 +1218,7 @@ export function transformFormDataToUpdatePayload(
     weight: formData.weight ?? 0,
     rpm_limit: formData.rpm_limit ?? null,
     concurrency_limit: formData.concurrency_limit ?? null,
+    user_rate_limits: formData.user_rate_limits ?? [],
     test_model: formData.test_model || null,
     auto_ban: formData.auto_ban ?? 1,
     status_code_mapping: formData.status_code_mapping || null,

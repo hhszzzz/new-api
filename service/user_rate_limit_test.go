@@ -176,6 +176,49 @@ func TestUserRPMFixedMinuteWindowAndSharedUserCounter(t *testing.T) {
 	assert.True(t, allowed, "a new Redis-server minute must use a fresh counter")
 }
 
+func TestUserRateLimitRejectionsDistinguishRPMFromConcurrency(t *testing.T) {
+	env := useUserRateLimitMiniRedis(t)
+
+	policy := UserRateLimitPolicy{UserID: 601, Group: "vip", RPMLimit: 1}
+	guard, apiErr := BeginUserRequestRateLimit(newUserRateLimitTestContext(t.Context()), policy, "gpt-4o", UserConcurrencyWaitOptions{})
+	require.Nil(t, apiErr)
+	guard.Release()
+
+	_, apiErr = BeginUserRequestRateLimit(newUserRateLimitTestContext(t.Context()), policy, "gpt-4o", UserConcurrencyWaitOptions{})
+	require.NotNil(t, apiErr)
+	assert.Equal(t, "Request rate limit reached. Please try again later", apiErr.Error())
+
+	sharedPolicy := UserRateLimitPolicy{UserID: 602, Group: "shared", RPMLimit: 10, SharedRPMLimit: 1}
+	guard, apiErr = BeginUserRequestRateLimit(newUserRateLimitTestContext(t.Context()), sharedPolicy, "gpt-4o", UserConcurrencyWaitOptions{})
+	require.Nil(t, apiErr)
+	guard.Release()
+
+	_, apiErr = BeginUserRequestRateLimit(newUserRateLimitTestContext(t.Context()), sharedPolicy, "gpt-4o", UserConcurrencyWaitOptions{})
+	require.NotNil(t, apiErr)
+	assert.Equal(t, "Request rate limit reached. Please try again later", apiErr.Error())
+
+	now, err := env.client.Time(t.Context()).Result()
+	require.NoError(t, err)
+	require.NoError(t, env.client.ZAdd(t.Context(), userConcurrencyActiveKey(603), &redis.Z{Score: float64(now.UnixMilli()), Member: "active"}).Err())
+	config := userConcurrencyConfig{
+		leaseTTL:     time.Second,
+		renewEvery:   time.Second,
+		waitTimeout:  20 * time.Millisecond,
+		heartbeat:    10 * time.Millisecond,
+		initialPoll:  time.Millisecond,
+		maximumPoll:  2 * time.Millisecond,
+		waitingLimit: 20,
+	}
+	_, apiErr = acquireRequestConcurrency(newUserRateLimitTestContext(t.Context()), UserRateLimitPolicy{UserID: 603, ConcurrencyLimit: 1}, UserConcurrencyWaitOptions{}, &UserRateLimitObservation{}, config)
+	require.NotNil(t, apiErr)
+	assert.Equal(t, "Concurrency limit reached. Please try again later", apiErr.Error())
+
+	require.NoError(t, env.client.ZAdd(t.Context(), groupConcurrencyActiveKey("shared-concurrency"), &redis.Z{Score: float64(now.UnixMilli()), Member: "active"}).Err())
+	_, apiErr = acquireRequestConcurrency(newUserRateLimitTestContext(t.Context()), UserRateLimitPolicy{UserID: 604, Group: "shared-concurrency", SharedConcurrencyLimit: 1}, UserConcurrencyWaitOptions{}, &UserRateLimitObservation{}, config)
+	require.NotNil(t, apiErr)
+	assert.Equal(t, "Concurrency limit reached. Please try again later", apiErr.Error())
+}
+
 func TestUserRPMRedisFailureIsFailOpen(t *testing.T) {
 	env := useUserRateLimitMiniRedis(t)
 	require.NoError(t, env.client.Close())

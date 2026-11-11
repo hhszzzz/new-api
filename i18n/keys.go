@@ -385,6 +385,7 @@ const (
 	MsgChannelSettingsInvalid                  = "channel.settings_invalid"
 	MsgChannelScheduleInvalid                  = "channel.schedule_invalid"
 	MsgChannelLimitOutOfRange                  = "channel.limit_out_of_range"
+	MsgChannelUserRateLimitInvalid             = "channel.user_rate_limit_invalid"
 	MsgChannelTaskPluginKeyRequired            = "channel.task_plugin_key_required"
 	MsgChannelTaskPluginKeyTooLong             = "channel.task_plugin_key_too_long"
 	MsgChannelTaskPluginNotRegistered          = "channel.task_plugin_not_registered"
@@ -489,7 +490,8 @@ const (
 	MsgRateLimitCheckFailed                  = "rate_limit.check_failed"
 	MsgRateLimitEmailVerificationWait        = "rate_limit.email_verification_wait"
 	MsgRateLimitEmailVerificationTooFrequent = "rate_limit.email_verification_too_frequent"
-	MsgRateLimitUserExceeded                 = "rate_limit.user_exceeded"
+	MsgRateLimitRPMExceeded                  = "rate_limit.rpm_exceeded"
+	MsgRateLimitConcurrencyExceeded          = "rate_limit.concurrency_exceeded"
 )
 
 // Setting related messages

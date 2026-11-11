@@ -644,6 +644,47 @@ func TestRespondTaskSubmissionErrorWithoutCause(t *testing.T) {
 	assert.Equal(t, service.PolicyDecision{Action: "stop", Reason: "local_rejection", Source: "system"}, decideTaskRetry(c, &dto.TaskError{StatusCode: http.StatusForbidden, LocalError: true, Message: "billing"}, 2), "local errors stop once the status rules do not force a retry")
 }
 
+func TestRespondTaskErrorPreservesLocalRateLimitMessageAndMasksUpstream(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		localError bool
+		message    string
+		want       string
+	}{
+		{
+			name:       "local rate limit",
+			localError: true,
+			message:    "Concurrency limit reached. Please try again later",
+			want:       "Concurrency limit reached. Please try again later",
+		},
+		{
+			name:    "upstream rate limit",
+			message: "upstream response details",
+			want:    "rate_limit_exceeded",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/plugin/submit", strings.NewReader(`{}`))
+
+			respondTaskError(c, &dto.TaskError{
+				Code:       "rate_limit_exceeded",
+				Message:    tc.message,
+				StatusCode: http.StatusTooManyRequests,
+				LocalError: tc.localError,
+			})
+
+			assert.Equal(t, http.StatusTooManyRequests, recorder.Code)
+			var response struct {
+				Message string `json:"message"`
+			}
+			require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+			assert.Equal(t, tc.want, response.Message)
+		})
+	}
+}
+
 func TestExecuteTaskSubmissionRefundsWhenFinalReserveFails(t *testing.T) {
 	events := []string{}
 	setupTaskSubmissionDatabase(t, true, &events)

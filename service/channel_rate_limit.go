@@ -42,14 +42,19 @@ func getChannelRateLimitRedisClient() (*redis.Client, bool) {
 }
 
 type channelRateLimitSnapshot struct {
-	ChannelID        int
-	RPMLimit         int
-	ConcurrencyLimit int
+	ChannelID            int
+	UserId               int
+	RPMLimit             int
+	ConcurrencyLimit     int
+	UserRPMLimit         int
+	UserConcurrencyLimit int
 }
 
 type channelRateLimitRejection struct {
 	ChannelID int
+	UserId    int
 	Layer     string
+	Pool      string
 }
 
 type ChannelRateLimitObservation struct {
@@ -89,12 +94,12 @@ func (o *ChannelRateLimitObservation) noteSnapshot(snapshot channelRateLimitSnap
 	o.mu.Unlock()
 }
 
-func (o *ChannelRateLimitObservation) noteRejected(channelID int, layer string) {
+func (o *ChannelRateLimitObservation) noteRejected(channelID, userId int, layer, pool string) {
 	if o == nil || channelID <= 0 || layer == "" {
 		return
 	}
 	o.mu.Lock()
-	o.skipped = append(o.skipped, channelRateLimitRejection{ChannelID: channelID, Layer: layer})
+	o.skipped = append(o.skipped, channelRateLimitRejection{ChannelID: channelID, UserId: userId, Layer: layer, Pool: pool})
 	o.mu.Unlock()
 }
 
@@ -123,6 +128,34 @@ func (o *ChannelRateLimitObservation) noteLeaseReleased() {
 	o.mu.Lock()
 	o.leaseReleased++
 	o.mu.Unlock()
+}
+
+func (o *ChannelRateLimitObservation) rejectionLayer() string {
+	if o == nil {
+		return ""
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	hasRPM := false
+	hasConcurrency := false
+	for _, rejection := range o.skipped {
+		switch rejection.Layer {
+		case "rpm":
+			hasRPM = true
+		case "concurrency":
+			hasConcurrency = true
+		}
+	}
+	switch {
+	case hasRPM && hasConcurrency:
+		return "mixed"
+	case hasRPM:
+		return "rpm"
+	case hasConcurrency:
+		return "concurrency"
+	default:
+		return ""
+	}
 }
 
 func (o *ChannelRateLimitObservation) noteRedisFailOpen(component string) {
@@ -167,11 +200,20 @@ func AppendChannelRateLimitAdminInfo(c *gin.Context, other *model.LogOther) {
 		for _, id := range ids {
 			snapshot := observation.channels[id]
 			entry := map[string]interface{}{"channel_id": snapshot.ChannelID}
+			if snapshot.UserId > 0 {
+				entry["user_id"] = snapshot.UserId
+			}
 			if snapshot.RPMLimit > 0 {
 				entry["rpm_limit"] = snapshot.RPMLimit
 			}
 			if snapshot.ConcurrencyLimit > 0 {
 				entry["concurrency_limit"] = snapshot.ConcurrencyLimit
+			}
+			if snapshot.UserRPMLimit > 0 {
+				entry["user_rpm_limit"] = snapshot.UserRPMLimit
+			}
+			if snapshot.UserConcurrencyLimit > 0 {
+				entry["user_concurrency_limit"] = snapshot.UserConcurrencyLimit
 			}
 			channels = append(channels, entry)
 		}
@@ -180,10 +222,17 @@ func AppendChannelRateLimitAdminInfo(c *gin.Context, other *model.LogOther) {
 	if len(observation.skipped) > 0 {
 		skipped := make([]map[string]interface{}, 0, len(observation.skipped))
 		for _, rejection := range observation.skipped {
-			skipped = append(skipped, map[string]interface{}{
+			entry := map[string]interface{}{
 				"channel_id": rejection.ChannelID,
 				"layer":      rejection.Layer,
-			})
+			}
+			if rejection.UserId > 0 {
+				entry["user_id"] = rejection.UserId
+			}
+			if rejection.Pool != "" {
+				entry["pool"] = rejection.Pool
+			}
+			skipped = append(skipped, entry)
 		}
 		info["skipped_candidates"] = skipped
 		info["fallback_count"] = len(skipped)
@@ -208,10 +257,13 @@ func AppendChannelRateLimitAdminInfo(c *gin.Context, other *model.LogOther) {
 
 type ChannelRateLimitGuard struct {
 	channelID   int
+	userId      int
 	leaseID     string
 	requestID   string
 	leaseTTL    time.Duration
 	renewEvery  time.Duration
+	totalLease  bool
+	userLease   bool
 	observation *ChannelRateLimitObservation
 	stop        chan struct{}
 	done        chan struct{}
@@ -224,15 +276,25 @@ func TryAcquireChannelRateLimit(c *gin.Context, channel *model.Channel) (*Channe
 	}
 	rpmLimit := configuredLimit(channel.RpmLimit)
 	concurrencyLimit := configuredLimit(channel.ConcurrencyLimit)
-	if rpmLimit <= 0 && concurrencyLimit <= 0 {
+	userId := c.GetInt("id")
+	userRPMLimit := 0
+	userConcurrencyLimit := 0
+	if override, ok := channel.UserRateLimits.ForUser(userId); ok {
+		userRPMLimit = configuredLimit(override.RPMLimit)
+		userConcurrencyLimit = configuredLimit(override.ConcurrencyLimit)
+	}
+	if rpmLimit <= 0 && concurrencyLimit <= 0 && userRPMLimit <= 0 && userConcurrencyLimit <= 0 {
 		return nil, true
 	}
 
 	observation := channelRateLimitObservation(c)
 	snapshot := channelRateLimitSnapshot{
-		ChannelID:        channel.Id,
-		RPMLimit:         rpmLimit,
-		ConcurrencyLimit: concurrencyLimit,
+		ChannelID:            channel.Id,
+		UserId:               userId,
+		RPMLimit:             rpmLimit,
+		ConcurrencyLimit:     concurrencyLimit,
+		UserRPMLimit:         userRPMLimit,
+		UserConcurrencyLimit: userConcurrencyLimit,
 	}
 	observation.noteSnapshot(snapshot)
 
@@ -250,31 +312,58 @@ local now_ms = tonumber(now[1]) * 1000 + math.floor(tonumber(now[2]) / 1000)
 local minute = math.floor(tonumber(now[1]) / 60)
 local rpm_limit = tonumber(ARGV[2])
 local concurrency_limit = tonumber(ARGV[3])
-local lease_ttl = tonumber(ARGV[4])
+local user_rpm_limit = tonumber(ARGV[4])
+local user_concurrency_limit = tonumber(ARGV[5])
+local lease_ttl = tonumber(ARGV[6])
 redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', now_ms - lease_ttl)
-local rpm_count = 0
+redis.call('ZREMRANGEBYSCORE', KEYS[4], '-inf', now_ms - lease_ttl)
+local rpm_blocked = false
 if rpm_limit > 0 then
+  local stored_minute = tonumber(redis.call('HGET', KEYS[1], 'minute'))
+  if stored_minute == minute then
+    rpm_blocked = (tonumber(redis.call('HGET', KEYS[1], 'count')) or 0) >= rpm_limit
+  end
+end
+local user_rpm_blocked = false
+if user_rpm_limit > 0 then
+  local stored_minute = tonumber(redis.call('HGET', KEYS[3], 'minute'))
+  if stored_minute == minute then
+    user_rpm_blocked = (tonumber(redis.call('HGET', KEYS[3], 'count')) or 0) >= user_rpm_limit
+  end
+end
+local concurrency_blocked = concurrency_limit > 0 and redis.call('ZCARD', KEYS[2]) >= concurrency_limit
+local user_concurrency_blocked = user_concurrency_limit > 0 and redis.call('ZCARD', KEYS[4]) >= user_concurrency_limit
+if rpm_blocked or user_rpm_blocked or concurrency_blocked or user_concurrency_blocked then
+  return {0, rpm_blocked and 1 or 0, concurrency_blocked and 1 or 0, user_rpm_blocked and 1 or 0, user_concurrency_blocked and 1 or 0}
+end
+if rpm_limit > 0 then
+  local rpm_count = 0
   local stored_minute = tonumber(redis.call('HGET', KEYS[1], 'minute'))
   if stored_minute == minute then
     rpm_count = tonumber(redis.call('HGET', KEYS[1], 'count')) or 0
   end
-  if rpm_count >= rpm_limit then
-    return {0, 1, 0}
-  end
-end
-if concurrency_limit > 0 and redis.call('ZCARD', KEYS[2]) >= concurrency_limit then
-  return {0, 0, 1}
-end
-if rpm_limit > 0 then
   redis.call('HSET', KEYS[1], 'minute', minute, 'count', rpm_count + 1)
   redis.call('PEXPIRE', KEYS[1], 120000)
+end
+if user_rpm_limit > 0 then
+  local user_rpm_count = 0
+  local stored_minute = tonumber(redis.call('HGET', KEYS[3], 'minute'))
+  if stored_minute == minute then
+    user_rpm_count = tonumber(redis.call('HGET', KEYS[3], 'count')) or 0
+  end
+  redis.call('HSET', KEYS[3], 'minute', minute, 'count', user_rpm_count + 1)
+  redis.call('PEXPIRE', KEYS[3], 120000)
 end
 if concurrency_limit > 0 then
   redis.call('ZADD', KEYS[2], now_ms, ARGV[1])
   redis.call('PEXPIRE', KEYS[2], lease_ttl * 2)
 end
-return {1, 0, 0}`, channelRateLimitKeys(channel.Id), leaseID, rpmLimit, concurrencyLimit, channelConcurrencyLeaseTTL.Milliseconds()).Int64Slice()
-	if err != nil || len(result) != 3 {
+if user_concurrency_limit > 0 then
+  redis.call('ZADD', KEYS[4], now_ms, ARGV[1])
+  redis.call('PEXPIRE', KEYS[4], lease_ttl * 2)
+end
+return {1, 0, 0, 0, 0}`, channelRateLimitKeys(channel.Id, userId), leaseID, rpmLimit, concurrencyLimit, userRPMLimit, userConcurrencyLimit, channelConcurrencyLeaseTTL.Milliseconds()).Int64Slice()
+	if err != nil || len(result) != 5 {
 		if c.Request.Context().Err() != nil {
 			return nil, false
 		}
@@ -287,22 +376,32 @@ return {1, 0, 0}`, channelRateLimitKeys(channel.Id), leaseID, rpmLimit, concurre
 		return nil, true
 	}
 	if result[0] != 1 {
-		layer := "concurrency"
 		if result[1] == 1 {
-			layer = "rpm"
+			observation.noteRejected(channel.Id, userId, "rpm", "total")
 		}
-		observation.noteRejected(channel.Id, layer)
+		if result[3] == 1 {
+			observation.noteRejected(channel.Id, userId, "rpm", "user")
+		}
+		if result[2] == 1 {
+			observation.noteRejected(channel.Id, userId, "concurrency", "total")
+		}
+		if result[4] == 1 {
+			observation.noteRejected(channel.Id, userId, "concurrency", "user")
+		}
 		return nil, false
 	}
 
 	guard := &ChannelRateLimitGuard{
 		channelID:   channel.Id,
+		userId:      userId,
 		requestID:   c.GetString(common.RequestIdKey),
 		leaseTTL:    channelConcurrencyLeaseTTL,
 		renewEvery:  channelConcurrencyRenewEvery,
+		totalLease:  concurrencyLimit > 0,
+		userLease:   userConcurrencyLimit > 0,
 		observation: observation,
 	}
-	if concurrencyLimit > 0 {
+	if guard.totalLease || guard.userLease {
 		guard.leaseID = leaseID
 		guard.stop = make(chan struct{})
 		guard.done = make(chan struct{})
@@ -326,9 +425,12 @@ func (g *ChannelRateLimitGuard) Release() {
 			g.observation.noteRedisFailOpen("release")
 			return
 		}
-		if err := client.ZRem(ctx, channelConcurrencyKey(g.channelID), g.leaseID).Err(); err != nil {
+		if err := client.Eval(ctx, `
+if tonumber(ARGV[2]) == 1 then redis.call('ZREM', KEYS[1], ARGV[1]) end
+if tonumber(ARGV[3]) == 1 then redis.call('ZREM', KEYS[2], ARGV[1]) end
+return 1`, channelRateLimitActiveKeys(g.channelID, g.userId), g.leaseID, boolInt(g.totalLease), boolInt(g.userLease)).Err(); err != nil {
 			g.observation.noteRedisFailOpen("release")
-			common.SysError(fmt.Sprintf("failed to release channel concurrency lease: channel=%d request=%s error=%s", g.channelID, g.requestID, err.Error()))
+			common.SysError(fmt.Sprintf("failed to release channel concurrency lease: channel=%d user=%d request=%s error=%s", g.channelID, g.userId, g.requestID, err.Error()))
 			return
 		}
 		g.observation.noteLeaseReleased()
@@ -351,12 +453,19 @@ func (g *ChannelRateLimitGuard) startRenewal(c *gin.Context) {
 				}
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				result, err := client.Eval(ctx, `
-if not redis.call('ZSCORE', KEYS[1], ARGV[1]) then return 0 end
+if tonumber(ARGV[3]) == 1 and not redis.call('ZSCORE', KEYS[1], ARGV[1]) then return 0 end
+if tonumber(ARGV[4]) == 1 and not redis.call('ZSCORE', KEYS[2], ARGV[1]) then return 0 end
 local now = redis.call('TIME')
 local now_ms = tonumber(now[1]) * 1000 + math.floor(tonumber(now[2]) / 1000)
-redis.call('ZADD', KEYS[1], now_ms, ARGV[1])
-redis.call('PEXPIRE', KEYS[1], tonumber(ARGV[2]) * 2)
-return 1`, []string{channelConcurrencyKey(g.channelID)}, g.leaseID, g.leaseTTL.Milliseconds()).Int()
+if tonumber(ARGV[3]) == 1 then
+  redis.call('ZADD', KEYS[1], now_ms, ARGV[1])
+  redis.call('PEXPIRE', KEYS[1], tonumber(ARGV[2]) * 2)
+end
+if tonumber(ARGV[4]) == 1 then
+  redis.call('ZADD', KEYS[2], now_ms, ARGV[1])
+  redis.call('PEXPIRE', KEYS[2], tonumber(ARGV[2]) * 2)
+end
+return 1`, channelRateLimitActiveKeys(g.channelID, g.userId), g.leaseID, g.leaseTTL.Milliseconds(), boolInt(g.totalLease), boolInt(g.userLease)).Int()
 				cancel()
 				if err != nil || result != 1 {
 					g.observation.noteRedisFailOpen("renew")
@@ -376,22 +485,45 @@ return 1`, []string{channelConcurrencyKey(g.channelID)}, g.leaseID, g.leaseTTL.M
 }
 
 func NewChannelRateLimitError(c *gin.Context) *hosttypes.NewAPIError {
+	key := i18n.MsgChannelUpstreamSaturated
+	if c != nil {
+		if value, ok := c.Get(channelRateLimitObservationKey); ok {
+			if observation, valid := value.(*ChannelRateLimitObservation); valid && observation != nil {
+				switch observation.rejectionLayer() {
+				case "rpm":
+					key = i18n.MsgRateLimitRPMExceeded
+				case "concurrency":
+					key = i18n.MsgRateLimitConcurrencyExceeded
+				}
+			}
+		}
+	}
 	return hosttypes.NewErrorWithStatusCode(
-		errors.New(i18n.T(c, i18n.MsgChannelUpstreamSaturated)),
+		errors.New(i18n.T(c, key)),
 		hosttypes.ErrorCode("rate_limit_exceeded"),
 		http.StatusTooManyRequests,
 		hosttypes.ErrOptionWithSkipRetry(),
 	)
 }
 
-func channelRateLimitKeys(channelID int) []string {
+func channelRateLimitKeys(channelID, userId int) []string {
 	tag := fmt.Sprintf("{channel:%d}", channelID)
 	return []string{
 		"channel_rate_limit:" + tag + ":rpm",
 		"channel_rate_limit:" + tag + ":active",
+		fmt.Sprintf("channel_rate_limit:%s:rpm:user:%d", tag, userId),
+		fmt.Sprintf("channel_rate_limit:%s:active:user:%d", tag, userId),
+	}
+}
+
+func channelRateLimitActiveKeys(channelID, userId int) []string {
+	tag := fmt.Sprintf("{channel:%d}", channelID)
+	return []string{
+		"channel_rate_limit:" + tag + ":active",
+		fmt.Sprintf("channel_rate_limit:%s:active:user:%d", tag, userId),
 	}
 }
 
 func channelConcurrencyKey(channelID int) string {
-	return channelRateLimitKeys(channelID)[1]
+	return channelRateLimitActiveKeys(channelID, 0)[0]
 }

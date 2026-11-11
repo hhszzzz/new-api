@@ -9032,6 +9032,15 @@
     "Maintenance title must be at most 200 characters": "维护页标题不能超过 200 个字符",
     "Maintenance message must be at most 8192 characters": "维护页正文不能超过 8192 个字符",
     "Expected recovery time must not be negative": "预计恢复时间不能为负数",
-    "The site is closed for maintenance. Please try again later.": "站点正在维护，请稍后再试。"
+    "The site is closed for maintenance. Please try again later.": "站点正在维护，请稍后再试。",
+    "Per-user limits": "用户单独限速",
+    "Add user": "添加用户",
+    "Search by username, email, or ID": "按用户名、邮箱或 ID 搜索",
+    "Type a username, email, or ID": "输入用户名、邮箱或 ID",
+    "Searching...": "搜索中…",
+    "No users found": "未找到用户",
+    "No per-user overrides.": "暂无用户单独限速",
+    "Each user override needs RPM or concurrency": "每个用户至少需要设置 RPM 或并发",
+    "Overrides apply only to this channel. Users without an override still use the channel-wide limits.": "仅对当前渠道生效；未单独设置的用户仍使用渠道总限制。"
   }
 }

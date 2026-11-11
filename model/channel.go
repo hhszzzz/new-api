@@ -45,20 +45,21 @@ type Channel struct {
 	UsedQuota          int64   `json:"used_quota" gorm:"bigint;default:0"`
 	ModelMapping       *string `json:"model_mapping" gorm:"type:text"`
 	//MaxInputTokens     *int    `json:"max_input_tokens" gorm:"default:0"`
-	StatusCodeMapping       *string         `json:"status_code_mapping" gorm:"type:varchar(1024);default:''"`
-	Priority                *int64          `json:"priority" gorm:"bigint;default:0"`
-	RpmLimit                *int            `json:"rpm_limit" gorm:"column:rpm_limit"`
-	ConcurrencyLimit        *int            `json:"concurrency_limit" gorm:"column:concurrency_limit"`
-	AutoBan                 *int            `json:"auto_ban" gorm:"default:1"`
-	OtherInfo               string          `json:"other_info"`
-	Tag                     *string         `json:"tag" gorm:"index"`
-	Setting                 *string         `json:"setting" gorm:"type:text"` // 渠道额外设置
-	ParamOverride           *string         `json:"param_override" gorm:"type:text"`
-	HeaderOverride          *string         `json:"header_override" gorm:"type:text"`
-	Remark                  *string         `json:"remark" gorm:"type:varchar(255)" validate:"max=255"`
-	Schedule                ChannelSchedule `json:"schedule" gorm:"type:text"`
-	AggregateId             *int            `json:"aggregate_id,omitempty" gorm:"index"`
-	InheritAggregateBaseURL bool            `json:"inherit_aggregate_base_url"`
+	StatusCodeMapping       *string               `json:"status_code_mapping" gorm:"type:varchar(1024);default:''"`
+	Priority                *int64                `json:"priority" gorm:"bigint;default:0"`
+	RpmLimit                *int                  `json:"rpm_limit" gorm:"column:rpm_limit"`
+	ConcurrencyLimit        *int                  `json:"concurrency_limit" gorm:"column:concurrency_limit"`
+	UserRateLimits          ChannelUserRateLimits `json:"user_rate_limits" gorm:"type:text"`
+	AutoBan                 *int                  `json:"auto_ban" gorm:"default:1"`
+	OtherInfo               string                `json:"other_info"`
+	Tag                     *string               `json:"tag" gorm:"index"`
+	Setting                 *string               `json:"setting" gorm:"type:text"` // 渠道额外设置
+	ParamOverride           *string               `json:"param_override" gorm:"type:text"`
+	HeaderOverride          *string               `json:"header_override" gorm:"type:text"`
+	Remark                  *string               `json:"remark" gorm:"type:varchar(255)" validate:"max=255"`
+	Schedule                ChannelSchedule       `json:"schedule" gorm:"type:text"`
+	AggregateId             *int                  `json:"aggregate_id,omitempty" gorm:"index"`
+	InheritAggregateBaseURL bool                  `json:"inherit_aggregate_base_url"`
 	// add after v0.8.5
 	ChannelInfo ChannelInfo `json:"channel_info" gorm:"type:json"`
 

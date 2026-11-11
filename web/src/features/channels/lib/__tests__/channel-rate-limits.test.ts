@@ -19,8 +19,14 @@ For commercial licensing, please contact support@quantumnous.com
 import { describe, expect, test } from 'vitest'
 
 import {
+  channelSchema,
+  type Channel,
+  type ChannelUserRateLimit,
+} from '../../types'
+import {
   CHANNEL_FORM_DEFAULT_VALUES,
   channelFormSchema,
+  transformChannelToFormDefaults,
   transformFormDataToCreatePayload,
   transformFormDataToUpdatePayload,
 } from '../channel-form'
@@ -31,6 +37,36 @@ const BASE_CHANNEL_FORM = {
   key: 'sk-test',
   models: 'gpt-4.1',
   group: ['default'],
+}
+
+const PER_USER_LIMITS: ChannelUserRateLimit[] = [
+  { user_id: 7, username: 'alice', rpm_limit: 30 },
+  { user_id: 8, concurrency_limit: 2 },
+]
+
+function channelWithUserRateLimits(
+  userRateLimits: ChannelUserRateLimit[]
+): Channel {
+  return channelSchema.parse({
+    id: 9,
+    type: 1,
+    key: '',
+    status: 1,
+    name: 'limited-channel',
+    created_time: 0,
+    test_time: 0,
+    response_time: 0,
+    balance_updated_time: 0,
+    models: 'gpt-4.1',
+    group: 'default',
+    user_rate_limits: userRateLimits,
+    channel_info: {
+      is_multi_key: false,
+      multi_key_size: 0,
+      multi_key_polling_index: 0,
+      multi_key_mode: 'random',
+    },
+  })
 }
 
 describe('channel request-limit form contract', () => {
@@ -70,5 +106,53 @@ describe('channel request-limit form contract', () => {
       rpm_limit: null,
       concurrency_limit: null,
     })
+  })
+})
+
+describe('channel per-user limit form contract', () => {
+  test('loads stored overrides into the form and sends them back unchanged', () => {
+    const defaults = transformChannelToFormDefaults(
+      channelWithUserRateLimits(PER_USER_LIMITS)
+    )
+    expect(defaults.user_rate_limits).toEqual(PER_USER_LIMITS)
+
+    const values = { ...defaults, user_rate_limits: PER_USER_LIMITS }
+    expect(channelFormSchema.safeParse(values).success).toBe(true)
+
+    const created = transformFormDataToCreatePayload(values)
+    expect(created.channel.user_rate_limits).toEqual(PER_USER_LIMITS)
+
+    const updated = transformFormDataToUpdatePayload(values, 9)
+    expect(updated.user_rate_limits).toEqual(PER_USER_LIMITS)
+  })
+
+  test('sends an empty array when every override is removed', () => {
+    const cleared = transformFormDataToUpdatePayload(BASE_CHANNEL_FORM, 9)
+    expect(cleared.user_rate_limits).toEqual([])
+  })
+
+  test('rejects an override that configures neither RPM nor concurrency', () => {
+    expect(
+      channelFormSchema.safeParse({
+        ...BASE_CHANNEL_FORM,
+        user_rate_limits: [{ user_id: 7 }],
+      }).success
+    ).toBe(false)
+  })
+
+  test('rejects non-positive user ids and limit values', () => {
+    for (const override of [
+      { user_id: 0, rpm_limit: 10 },
+      { user_id: -1, concurrency_limit: 1 },
+      { user_id: 7, rpm_limit: 0 },
+      { user_id: 7, concurrency_limit: -1 },
+    ]) {
+      expect(
+        channelFormSchema.safeParse({
+          ...BASE_CHANNEL_FORM,
+          user_rate_limits: [override],
+        }).success
+      ).toBe(false)
+    }
   })
 })

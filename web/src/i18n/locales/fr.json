@@ -9032,6 +9032,15 @@
     "Maintenance title must be at most 200 characters": "Maintenance title must be at most 200 characters",
     "Maintenance message must be at most 8192 characters": "Maintenance message must be at most 8192 characters",
     "Expected recovery time must not be negative": "Expected recovery time must not be negative",
-    "The site is closed for maintenance. Please try again later.": "The site is closed for maintenance. Please try again later."
+    "The site is closed for maintenance. Please try again later.": "The site is closed for maintenance. Please try again later.",
+    "Per-user limits": "Limites par utilisateur",
+    "Add user": "Ajouter un utilisateur",
+    "Search by username, email, or ID": "Rechercher par nom d'utilisateur, e-mail ou ID",
+    "Type a username, email, or ID": "Saisissez un nom d'utilisateur, un e-mail ou un ID",
+    "Searching...": "Recherche...",
+    "No users found": "Aucun utilisateur trouvé",
+    "No per-user overrides.": "Aucune limite par utilisateur.",
+    "Each user override needs RPM or concurrency": "Chaque limite utilisateur doit définir un RPM ou une concurrence",
+    "Overrides apply only to this channel. Users without an override still use the channel-wide limits.": "Ces limites ne s'appliquent qu'à ce canal. Les utilisateurs sans limite individuelle utilisent les limites du canal."
   }
 }

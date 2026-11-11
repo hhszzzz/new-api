@@ -9032,6 +9032,15 @@
     "Maintenance title must be at most 200 characters": "Maintenance title must be at most 200 characters",
     "Maintenance message must be at most 8192 characters": "Maintenance message must be at most 8192 characters",
     "Expected recovery time must not be negative": "Expected recovery time must not be negative",
-    "The site is closed for maintenance. Please try again later.": "The site is closed for maintenance. Please try again later."
+    "The site is closed for maintenance. Please try again later.": "The site is closed for maintenance. Please try again later.",
+    "Per-user limits": "Per-user limits",
+    "Add user": "Add user",
+    "Search by username, email, or ID": "Search by username, email, or ID",
+    "Type a username, email, or ID": "Type a username, email, or ID",
+    "Searching...": "Searching...",
+    "No users found": "No users found",
+    "No per-user overrides.": "No per-user overrides.",
+    "Each user override needs RPM or concurrency": "Each user override needs RPM or concurrency",
+    "Overrides apply only to this channel. Users without an override still use the channel-wide limits.": "Overrides apply only to this channel. Users without an override still use the channel-wide limits."
   }
 }

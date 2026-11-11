@@ -565,6 +565,7 @@ func GetChannel(c *gin.Context) {
 	if channel != nil {
 		clearChannelInfo(channel)
 		channel.PopulateScheduleStateAt(time.Now())
+		model.HydrateChannelUserRateLimitUsernames(channel)
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -641,6 +642,9 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 		if value != nil && (*value < 1 || int64(*value) > math.MaxInt32) {
 			return i18n.NewError(i18n.MsgChannelLimitOutOfRange, map[string]any{"Name": name, "Max": math.MaxInt32})
 		}
+	}
+	if err := channel.UserRateLimits.Validate(); err != nil {
+		return i18n.NewError(i18n.MsgChannelUserRateLimitInvalid, map[string]any{"Error": err.Error()})
 	}
 	if channel.Type == constant.ChannelTypeTaskPlugin {
 		pluginKey := strings.TrimSpace(channel.GetSetting().TaskPluginKey)
@@ -943,6 +947,7 @@ func AddChannel(c *gin.Context) {
 			"rpm_limit":         addChannelRequest.Channel.RpmLimit,
 			"concurrency_limit": addChannelRequest.Channel.ConcurrencyLimit,
 		},
+		"user_rate_limit_users": addChannelRequest.Channel.UserRateLimits.UserIDs(),
 	}
 	if baseURLFromPluginDefault {
 		createAudit["base_url_source"] = "plugin_default"
@@ -1241,6 +1246,9 @@ func UpdateChannel(c *gin.Context) {
 	if !concurrencyLimitProvided {
 		channel.ConcurrencyLimit = originChannel.ConcurrencyLimit
 	}
+	if _, userRateLimitsProvided := requestData["user_rate_limits"]; !userRateLimitsProvided {
+		channel.UserRateLimits = originChannel.UserRateLimits
+	}
 	if _, scheduleProvided := requestData["schedule"]; !scheduleProvided {
 		channel.Schedule = originChannel.Schedule
 	}
@@ -1402,6 +1410,9 @@ func UpdateChannel(c *gin.Context) {
 	if !equalIntPtr(channel.ConcurrencyLimit, originChannel.ConcurrencyLimit) {
 		changedFields = append(changedFields, "concurrency_limit")
 	}
+	if !channel.UserRateLimits.Equal(originChannel.UserRateLimits) {
+		changedFields = append(changedFields, "user_rate_limits")
+	}
 	updateAudit := map[string]any{
 		"id":             channel.Id,
 		"name":           channel.Name,
@@ -1410,6 +1421,7 @@ func UpdateChannel(c *gin.Context) {
 			"rpm_limit":         channel.RpmLimit,
 			"concurrency_limit": channel.ConcurrencyLimit,
 		},
+		"user_rate_limit_users": channel.UserRateLimits.UserIDs(),
 	}
 	if baseURLFromPluginDefault {
 		updateAudit["base_url_source"] = "plugin_default"
@@ -1417,6 +1429,7 @@ func UpdateChannel(c *gin.Context) {
 	recordManageAudit(c, "channel.update", updateAudit)
 	channel.Key = ""
 	clearChannelInfo(&channel.Channel)
+	model.HydrateChannelUserRateLimitUsernames(&channel.Channel)
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",

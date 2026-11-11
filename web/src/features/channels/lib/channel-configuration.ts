@@ -63,6 +63,7 @@ const CONFIGURATION_BLOCKS = {
       'client_policy_clients',
       'rpm_limit',
       'concurrency_limit',
+      'user_rate_limits',
       'disable_model_on_error',
       'prompt_audit_exempt',
     ],
@@ -172,6 +173,7 @@ export function getChannelConfigurationState(
         values.client_policy_mode !== 'unrestricted') ||
       values.rpm_limit ||
       values.concurrency_limit ||
+      (values.user_rate_limits?.length ?? 0) > 0 ||
       values.disable_model_on_error ||
       values.prompt_audit_exempt ||
       (values.auto_ban ?? 1) !== 1

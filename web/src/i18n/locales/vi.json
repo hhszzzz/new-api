@@ -9032,6 +9032,15 @@
     "Maintenance title must be at most 200 characters": "Maintenance title must be at most 200 characters",
     "Maintenance message must be at most 8192 characters": "Maintenance message must be at most 8192 characters",
     "Expected recovery time must not be negative": "Expected recovery time must not be negative",
-    "The site is closed for maintenance. Please try again later.": "The site is closed for maintenance. Please try again later."
+    "The site is closed for maintenance. Please try again later.": "The site is closed for maintenance. Please try again later.",
+    "Per-user limits": "Giới hạn theo người dùng",
+    "Add user": "Thêm người dùng",
+    "Search by username, email, or ID": "Tìm theo tên người dùng, email hoặc ID",
+    "Type a username, email, or ID": "Nhập tên người dùng, email hoặc ID",
+    "Searching...": "Đang tìm kiếm...",
+    "No users found": "Không tìm thấy người dùng",
+    "No per-user overrides.": "Chưa có giới hạn theo người dùng.",
+    "Each user override needs RPM or concurrency": "Mỗi người dùng cần đặt RPM hoặc số lượng đồng thời",
+    "Overrides apply only to this channel. Users without an override still use the channel-wide limits.": "Chỉ áp dụng cho kênh này. Người dùng không có giới hạn riêng vẫn dùng giới hạn chung của kênh."
   }
 }

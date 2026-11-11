@@ -9032,6 +9032,15 @@
     "Maintenance title must be at most 200 characters": "Maintenance title must be at most 200 characters",
     "Maintenance message must be at most 8192 characters": "Maintenance message must be at most 8192 characters",
     "Expected recovery time must not be negative": "Expected recovery time must not be negative",
-    "The site is closed for maintenance. Please try again later.": "The site is closed for maintenance. Please try again later."
+    "The site is closed for maintenance. Please try again later.": "The site is closed for maintenance. Please try again later.",
+    "Per-user limits": "ユーザー別制限",
+    "Add user": "ユーザーを追加",
+    "Search by username, email, or ID": "ユーザー名、メール、ID で検索",
+    "Type a username, email, or ID": "ユーザー名、メール、ID を入力",
+    "Searching...": "検索中...",
+    "No users found": "ユーザーが見つかりません",
+    "No per-user overrides.": "ユーザー別制限はありません。",
+    "Each user override needs RPM or concurrency": "各ユーザーに RPM または同時実行数のいずれかを設定してください",
+    "Overrides apply only to this channel. Users without an override still use the channel-wide limits.": "このチャネルにのみ適用されます。個別設定のないユーザーはチャネル全体の制限を使用します。"
   }
 }

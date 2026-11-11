@@ -109,6 +109,15 @@ export const channelScheduleStateSchema = z.object({
 
 export type ChannelScheduleState = z.infer<typeof channelScheduleStateSchema>
 
+export const channelUserRateLimitSchema = z.object({
+  user_id: z.number().int().positive(),
+  username: z.string().nullish(),
+  rpm_limit: z.number().int().positive().nullish(),
+  concurrency_limit: z.number().int().positive().nullish(),
+})
+
+export type ChannelUserRateLimit = z.infer<typeof channelUserRateLimitSchema>
+
 export const channelSchema = z.object({
   id: z.number(),
   type: z.number(),
@@ -133,6 +142,7 @@ export const channelSchema = z.object({
   priority: z.number().nullish(),
   rpm_limit: z.number().nullish(),
   concurrency_limit: z.number().nullish(),
+  user_rate_limits: z.array(channelUserRateLimitSchema).nullish(),
   auto_ban: z.number().nullish(),
   other_info: z.string().default(''),
   tag: z.string().nullish(),

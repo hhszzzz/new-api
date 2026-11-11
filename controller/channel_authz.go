@@ -139,6 +139,7 @@ var channelNonSensitiveFields = map[string]struct{}{
 	"priority":            {},
 	"rpm_limit":           {},
 	"concurrency_limit":   {},
+	"user_rate_limits":    {},
 	"auto_ban":            {},
 	"other_info":          {},
 	"tag":                 {},

@@ -90,6 +90,21 @@ func TestValidateChannelProxy(t *testing.T) {
 	}
 }
 
+func TestValidateChannelUserRateLimits(t *testing.T) {
+	rpm := 60
+	zero := 0
+	channel := &model.Channel{
+		UserRateLimits: model.ChannelUserRateLimits{{UserId: 7, RPMLimit: &rpm}},
+	}
+	require.NoError(t, validateChannel(channel, false))
+
+	channel.UserRateLimits = model.ChannelUserRateLimits{{UserId: 7, RPMLimit: &zero}}
+	require.ErrorContains(t, validateChannel(channel, false), "rpm_limit must be between")
+
+	channel.UserRateLimits = model.ChannelUserRateLimits{{UserId: 0, RPMLimit: &rpm}}
+	require.ErrorContains(t, validateChannel(channel, false), "user_id must be positive")
+}
+
 func TestPerformChannelTestsSkipsChannelsOutsideSchedule(t *testing.T) {
 	future := time.Now().Add(time.Hour).Unix()
 	channel := &model.Channel{
@@ -314,6 +329,53 @@ func TestUpdateChannelScheduleOmissionAndExplicitClear(t *testing.T) {
 	var cleared model.Channel
 	require.NoError(t, db.First(&cleared, "id = ?", channel.Id).Error)
 	assert.Nil(t, cleared.Schedule.StartsAt)
+}
+
+func TestUpdateChannelUserRateLimitsOmissionAndExplicitClear(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	rpmLimit := 30
+	channel := &model.Channel{
+		Name:   "per-user limited channel",
+		Key:    "test-key",
+		Type:   constant.ChannelTypeOpenAI,
+		Status: common.ChannelStatusEnabled,
+		Models: "gpt-test",
+		Group:  "default",
+		UserRateLimits: model.ChannelUserRateLimits{
+			{UserId: 7, RPMLimit: &rpmLimit},
+		},
+	}
+	require.NoError(t, db.Create(channel).Error)
+
+	update := func(body string) {
+		t.Helper()
+		recorder := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(recorder)
+		ctx.Request = httptest.NewRequest(http.MethodPut, "/api/channel/", bytes.NewBufferString(body))
+		ctx.Request.Header.Set("Content-Type", "application/json")
+
+		UpdateChannel(ctx)
+
+		var response struct {
+			Success bool   `json:"success"`
+			Message string `json:"message"`
+		}
+		require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+		require.True(t, response.Success, response.Message)
+	}
+
+	update(fmt.Sprintf(`{"id":%d,"priority":9}`, channel.Id))
+	var preserved model.Channel
+	require.NoError(t, db.First(&preserved, "id = ?", channel.Id).Error)
+	limit, ok := preserved.UserRateLimits.ForUser(7)
+	require.True(t, ok, "a partial update must preserve per-user limits")
+	require.NotNil(t, limit.RPMLimit)
+	assert.Equal(t, 30, *limit.RPMLimit)
+
+	update(fmt.Sprintf(`{"id":%d,"user_rate_limits":[]}`, channel.Id))
+	var cleared model.Channel
+	require.NoError(t, db.First(&cleared, "id = ?", channel.Id).Error)
+	assert.Empty(t, cleared.UserRateLimits)
 }
 
 func TestAggregateAwareChannelPagination(t *testing.T) {

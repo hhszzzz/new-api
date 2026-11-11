@@ -856,7 +856,8 @@ func executeTaskSubmissionWith(
 			var allowed bool
 			channelRateGuard, allowed = service.TryAcquireChannelRateLimit(c, channel)
 			if !allowed {
-				taskErr = service.TaskErrorWrapperLocal(errors.New("rate_limit_exceeded"), "rate_limit_exceeded", http.StatusTooManyRequests)
+				rateLimitError := service.NewChannelRateLimitError(c)
+				taskErr = service.TaskErrorWrapperLocal(rateLimitError.Err, "rate_limit_exceeded", http.StatusTooManyRequests)
 				break
 			}
 		} else {
@@ -1155,7 +1156,9 @@ func buildRelayRetryParam(c *gin.Context, info *relaycommon.RelayInfo) *service.
 func respondTaskError(c *gin.Context, taskErr *taskdto.TaskError) {
 	if taskErr.StatusCode == http.StatusTooManyRequests {
 		if taskErr.Code == "rate_limit_exceeded" {
-			taskErr.Message = "rate_limit_exceeded"
+			if !taskErr.LocalError {
+				taskErr.Message = "rate_limit_exceeded"
+			}
 		} else {
 			taskErr.Message = i18n.T(c, i18n.MsgChannelUpstreamSaturated)
 		}

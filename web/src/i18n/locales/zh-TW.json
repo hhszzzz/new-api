@@ -9032,6 +9032,15 @@
     "Maintenance title must be at most 200 characters": "維護頁標題不能超過 200 個字元",
     "Maintenance message must be at most 8192 characters": "維護頁內容不能超過 8192 個字元",
     "Expected recovery time must not be negative": "預計恢復時間不能為負數",
-    "The site is closed for maintenance. Please try again later.": "站點正在維護，請稍後再試。"
+    "The site is closed for maintenance. Please try again later.": "站點正在維護，請稍後再試。",
+    "Per-user limits": "使用者單獨限速",
+    "Add user": "新增使用者",
+    "Search by username, email, or ID": "依使用者名稱、電子郵件或 ID 搜尋",
+    "Type a username, email, or ID": "輸入使用者名稱、電子郵件或 ID",
+    "Searching...": "搜尋中…",
+    "No users found": "找不到使用者",
+    "No per-user overrides.": "尚無使用者單獨限速",
+    "Each user override needs RPM or concurrency": "每位使用者至少需設定 RPM 或並行",
+    "Overrides apply only to this channel. Users without an override still use the channel-wide limits.": "僅對目前渠道生效；未單獨設定的使用者仍使用渠道總限制。"
   }
 }
