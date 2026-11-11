@@ -45,6 +45,7 @@ type textQuotaSummary struct {
 	CacheCreationTokens1h  int
 	CacheHitTokens         int64
 	CacheMissTokens        int64
+	CacheCreationTokens12h int
 	ImageTokens            int
 	AudioTokens            int
 	ModelName              string
@@ -61,6 +62,7 @@ type textQuotaSummary struct {
 	CacheCreationRatio5m   float64
 	CacheCreationRatio1h   float64
 	QuotaPerUnit           float64
+	CacheCreationRatio12h  float64
 	Quota                  int
 	IsClaudeUsageSemantic  bool
 	UsageSemantic          string
@@ -321,6 +323,7 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 		CacheCreationRatio1h: relayInfo.PriceData.CacheCreation1hRatio,
 		QuotaPerUnit:         quotaPerUnitFromPriceData(relayInfo.PriceData),
 		UsageSemantic:        usageSemanticFromUsage(relayInfo, usage),
+		CacheCreationRatio12h: relayInfo.PriceData.CacheCreation12hRatio,
 	}
 	summary.IsClaudeUsageSemantic = summary.UsageSemantic == "anthropic"
 
@@ -343,6 +346,9 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 	summary.ImageTokens = usage.PromptTokensDetails.ImageTokens
 	summary.AudioTokens = usage.PromptTokensDetails.AudioTokens
 	legacyClaudeDerived := isLegacyClaudeDerivedOpenAIUsage(relayInfo, usage)
+	if !summary.IsClaudeUsageSemantic && !legacyClaudeDerived {
+		summary.CacheCreationTokens12h = usage.PromptTokensDetails.CacheWrite12hTokens()
+	}
 	isOpenRouterClaudeBilling := relayInfo.ChannelMeta != nil &&
 		relayInfo.ChannelType == constant.ChannelTypeOpenRouter &&
 		summary.IsClaudeUsageSemantic
@@ -376,6 +382,7 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 	dCacheCreationRatio5m := decimal.NewFromFloat(summary.CacheCreationRatio5m)
 	dCacheCreationRatio1h := decimal.NewFromFloat(summary.CacheCreationRatio1h)
 	dQuotaPerUnit := decimal.NewFromFloat(summary.QuotaPerUnit)
+	dCacheCreationRatio12h := decimal.NewFromFloat(summary.CacheCreationRatio12h)
 
 	ratio := dModelRatio.Mul(dGroupRatio)
 	summary.ToolCallSurchargeQuota = calculateTextToolCallSurcharge(ctx, relayInfo, &summary)
@@ -397,7 +404,10 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 		if !dCachedCreationTokens.IsZero() || hasSplitCacheCreationTokens {
 			if !summary.IsClaudeUsageSemantic && !legacyClaudeDerived {
 				baseTokens = baseTokens.Sub(dCachedCreationTokens)
-				cachedCreationTokensWithRatio = dCachedCreationTokens.Mul(dCacheCreationRatio)
+				// The total includes the 12h writes, which have their own ratio.
+				dCachedCreationTokens12h := decimal.NewFromInt(int64(summary.CacheCreationTokens12h))
+				cachedCreationTokensWithRatio = dCachedCreationTokens.Sub(dCachedCreationTokens12h).Mul(dCacheCreationRatio)
+				cachedCreationTokensWithRatio = cachedCreationTokensWithRatio.Add(dCachedCreationTokens12h.Mul(dCacheCreationRatio12h))
 			} else {
 				remaining := max(summary.CacheCreationTokens-summary.CacheCreationTokens5m-summary.CacheCreationTokens1h, 0)
 				cachedCreationTokensWithRatio = decimal.NewFromInt(int64(remaining)).Mul(dCacheCreationRatio)
@@ -590,6 +600,10 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	if summary.CacheCreationTokens1h > 0 {
 		other.SetPublic("cache_creation_tokens_1h", summary.CacheCreationTokens1h)
 		other.SetPublic("cache_creation_ratio_1h", summary.CacheCreationRatio1h)
+	}
+	if summary.CacheCreationTokens12h > 0 {
+		other.SetPublic("cache_creation_tokens_12h", summary.CacheCreationTokens12h)
+		other.SetPublic("cache_creation_ratio_12h", summary.CacheCreationRatio12h)
 	}
 	cacheWriteTokens := cacheWriteTokensTotal(summary)
 	if cacheWriteTokens > 0 {

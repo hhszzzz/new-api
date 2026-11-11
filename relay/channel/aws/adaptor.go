@@ -27,6 +27,7 @@ type Adaptor struct {
 	InvokeInput *bedrockruntime.InvokeModelInput
 	StreamInput *bedrockruntime.InvokeModelWithResponseStreamInput
 	IsNova      bool
+	AwsReq      any
 }
 
 func parseBedrockAPIKey(value string) (apiKey string, region string, err error) {

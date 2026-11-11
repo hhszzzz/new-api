@@ -26,6 +26,7 @@ type AwsClaudeRequest struct {
 	StopSequences     []string            `json:"stop_sequences,omitempty"`
 	Tools             any                 `json:"tools,omitempty"`
 	ToolChoice        any                 `json:"tool_choice,omitempty"`
+	Safeguards        json.RawMessage     `json:"safeguards,omitempty"`
 	ContextManagement json.RawMessage     `json:"context_management,omitempty"`
 	Thinking          *dto.Thinking       `json:"thinking,omitempty"`
 	OutputConfig      json.RawMessage     `json:"output_config,omitempty"`
@@ -235,7 +236,7 @@ func convertToNovaRequest(req *dto.GeneralOpenAIRequest) (*NovaRequest, error) {
 			}
 			parameters := tool.Function.Parameters
 			if parameters == nil {
-				parameters = map[string]any{"type": "object", "properties": map[string]any{}}
+				parameters = json.RawMessage(`{"type":"object","properties":{}}`)
 			}
 			novaReq.ToolConfig.Tools = append(novaReq.ToolConfig.Tools, NovaTool{ToolSpec: NovaToolSpec{
 				Name:        name,

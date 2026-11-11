@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/QuantumNous/new-api/common"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -57,8 +58,8 @@ func TestConvertOpenAIResponsesRequestToGeminiFunctionToolAndChoice(t *testing.T
 
 	tools := got.GetTools()
 	require.Len(t, tools, 1)
-	assert.Equal(t, "lookup", gjson.GetBytes(got.Tools, "0.functionDeclarations.0.name").String())
-	assert.Equal(t, "Lookup data", gjson.GetBytes(got.Tools, "0.functionDeclarations.0.description").String())
+	assert.Equal(t, "lookup", ojson.GetBytes(got.Tools, "0.functionDeclarations.0.name").String())
+	assert.Equal(t, "Lookup data", ojson.GetBytes(got.Tools, "0.functionDeclarations.0.description").String())
 	require.NotNil(t, got.ToolConfig)
 	require.NotNil(t, got.ToolConfig.FunctionCallingConfig)
 	assert.Equal(t, dto.FunctionCallingConfigMode("ANY"), got.ToolConfig.FunctionCallingConfig.Mode)
@@ -300,5 +301,5 @@ func TestConvertEmbeddingRequestRejectsContentParts(t *testing.T) {
 	require.NoError(t, err)
 	wire, err := common.Marshal(got)
 	require.NoError(t, err)
-	assert.JSONEq(t, `["a cat","a dog"]`, gjson.GetBytes(wire, "requests.#.content.parts.0.text").Raw)
+	assert.JSONEq(t, `["a cat","a dog"]`, ojson.GetBytes(wire, "requests.#.content.parts.0.text").Raw)
 }

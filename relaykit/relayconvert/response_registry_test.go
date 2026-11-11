@@ -2,6 +2,7 @@ package relayconvert
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -296,7 +297,7 @@ func TestConvertResponseDirectAndMultiHopConverters(t *testing.T) {
 	assert.Equal(t, "text", claudeValue.Content[0].Type)
 	assert.Equal(t, "tool_use", claudeValue.Content[1].Type)
 	assert.Equal(t, "lookup", claudeValue.Content[1].Name)
-	assert.Equal(t, map[string]any{"q": "x"}, claudeValue.Content[1].Input)
+	assertJSONValue(t, `{"q":"x"}`, claudeValue.Content[1].Input)
 	assert.Equal(t, 11, toClaude.Usage.TotalTokens)
 
 	toGemini, err := ConvertResponse(nil, &convmeta.Values{ChannelMetaAttached: true, UpstreamModelName: "gemini-test"}, types.RelayFormatGemini, responses)
@@ -516,10 +517,17 @@ func TestConvertGeminiResponseToClaudeMatchesCCSwitchVisibleParts(t *testing.T) 
 	assert.Equal(t, "tool_use", response.Content[1].Type)
 	assert.Equal(t, "call_1", response.Content[1].Id)
 	assert.Equal(t, "lookup", response.Content[1].Name)
-	assert.Equal(t, map[string]interface{}{"q": "x"}, response.Content[1].Input)
+	assertJSONValue(t, `{"q":"x"}`, response.Content[1].Input)
 	assert.Equal(t, "text", response.Content[2].Type)
 	assert.Equal(t, "after", response.Content[2].GetText())
 	assert.Equal(t, "tool_use", response.StopReason)
+}
+
+func assertJSONValue(t *testing.T, expected string, actual any) {
+	t.Helper()
+	encoded, err := kitutil.Marshal(actual)
+	require.NoError(t, err)
+	assert.JSONEq(t, expected, string(encoded))
 }
 
 func TestConvertGeminiResponseToClaudeDoesNotInventSafetyText(t *testing.T) {
@@ -954,7 +962,7 @@ func TestResponsesToClaudeReasoningDoesNotExposeProviderState(t *testing.T) {
 			{Role: "assistant", Content: claudeResponse.Content},
 			{Role: "user", Content: []dto.ClaudeMediaMessage{{Type: "tool_result", ToolUseId: "call_1", Content: "done"}}},
 		},
-		Tools: []dto.Tool{{Name: "lookup", InputSchema: map[string]any{"type": "object"}}},
+		Tools: []dto.Tool{{Name: "lookup", InputSchema: json.RawMessage(`{"type":"object"}`)}},
 	}
 	requestResult, err := ConvertRequest(WithProtocolBridgeContext(context.Background()), meta, types.RelayFormatOpenAIResponses, nextRequest)
 	require.NoError(t, err)

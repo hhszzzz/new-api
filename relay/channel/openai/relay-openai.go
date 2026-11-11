@@ -1,9 +1,7 @@
 package openai
 
 import (
-	"encoding/json"
 	"fmt"
-	hosttypes "github.com/QuantumNous/new-api/types"
 	"io"
 	"net/http"
 	"strings"
@@ -20,7 +18,9 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/protocolstate"
 	"github.com/QuantumNous/new-api/tokenkit"
+	hosttypes "github.com/QuantumNous/new-api/types"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gin-gonic/gin"
 )
 
@@ -298,6 +298,7 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 		}
 	}
 	info.ApplyVendorToolUsage(responseBody)
+	forceFormat := info.ChannelSetting.ForceFormat
 
 	usageModified := false
 	if simpleResponse.Usage.PromptTokens == 0 {
@@ -321,25 +322,28 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 
 	switch info.RelayFormat {
 	case types.RelayFormatOpenAI:
-		if usageModified || info.HasUserModelRoute() {
-			var bodyMap map[string]json.RawMessage
-			err = common.Unmarshal(responseBody, &bodyMap)
+		if usageModified {
+			usageJSON, err := common.Marshal(simpleResponse.Usage)
 			if err != nil {
 				return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 			}
-			usageJSON, marshalErr := common.Marshal(simpleResponse.Usage)
+			responseBody, err = ojson.SetRawBytes(responseBody, "usage", usageJSON)
+			if err != nil {
+				return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+			}
+		}
+		if info.HasUserModelRoute() {
+			modelJSON, marshalErr := common.Marshal(info.PublicResponseModelName())
 			if marshalErr != nil {
 				return nil, hosttypes.NewOpenAIError(marshalErr, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 			}
-			bodyMap["usage"] = usageJSON
-			if info.HasUserModelRoute() {
-				modelJSON, marshalErr := common.Marshal(info.PublicResponseModelName())
-				if marshalErr != nil {
-					return nil, hosttypes.NewOpenAIError(marshalErr, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
-				}
-				bodyMap["model"] = modelJSON
+			responseBody, err = ojson.SetRawBytes(responseBody, "model", modelJSON)
+			if err != nil {
+				return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 			}
-			responseBody, err = common.Marshal(bodyMap)
+		}
+		if forceFormat {
+			responseBody, err = common.Marshal(simpleResponse)
 			if err != nil {
 				return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 			}

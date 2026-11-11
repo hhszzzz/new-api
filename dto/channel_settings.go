@@ -117,8 +117,9 @@ type ClientAccessPolicy struct {
 
 type ChannelOtherSettings struct {
 	AzureResponsesVersion                 string                `json:"azure_responses_version,omitempty"`
-	VertexKeyType                         VertexKeyType         `json:"vertex_key_type,omitempty"`   // "json" or "api_key"
-	VertexProjectID                       string                `json:"vertex_project_id,omitempty"` // 仅当 vertex_key_type=api_key 时使用；JSON 模式下从 service account 解析
+	VertexKeyType                         VertexKeyType         `json:"vertex_key_type,omitempty"`    // "json" or "api_key"
+	VertexProjectID                       string                `json:"vertex_project_id,omitempty"`  // 仅当 vertex_key_type=api_key 时使用；JSON 模式下从 service account 解析
+	VertexAPIVersion                      string                `json:"vertex_api_version,omitempty"` // Google 模型（Gemini、Imagen）请求路径版本："v1"（默认）或 "v1beta1"
 	OpenRouterEnterprise                  *bool                 `json:"openrouter_enterprise,omitempty"`
 	ClaudeBetaQuery                       bool                  `json:"claude_beta_query,omitempty"`          // Claude 渠道是否强制追加 ?beta=true
 	AllowAlphaSearch                      bool                  `json:"allow_alpha_search,omitempty"`         // 是否允许默认 OpenAI 渠道转发 /v1/alpha/search（默认关闭）

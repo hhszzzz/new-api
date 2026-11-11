@@ -273,6 +273,10 @@ func ResponsesToolToChatFunctions(tool map[string]any, namespace string, state *
 		description = sharedbridge.LocalShellFunctionDescription
 		parameters = sharedbridge.LocalShellFunctionParameters()
 	}
+	parametersJSON, err := kitutil.Marshal(parameters)
+	if err != nil {
+		return nil, fmt.Errorf("encode Chat function parameters for %q: %w", upstreamName, err)
+	}
 
 	return []dto.ToolCallRequest{
 		{
@@ -280,7 +284,7 @@ func ResponsesToolToChatFunctions(tool map[string]any, namespace string, state *
 			Function: dto.FunctionRequest{
 				Name:        upstreamName,
 				Description: description,
-				Parameters:  parameters,
+				Parameters:  parametersJSON,
 				Strict:      strict,
 			},
 		},

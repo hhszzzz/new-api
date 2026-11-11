@@ -197,7 +197,7 @@ func ResponseGeminiChat2OpenAI(id string, created int64, response *dto.GeminiCha
 			if reasoning.Len() > 0 {
 				reasoningText := reasoning.String()
 				choice.Message.ReasoningContent = &reasoningText
-			}
+		}
 		}
 		if candidate.FinishReason != nil {
 			choice.FinishReason, allowToolFinish = geminiFinishReasonToChat(*candidate.FinishReason)

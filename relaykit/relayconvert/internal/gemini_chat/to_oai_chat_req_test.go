@@ -129,8 +129,8 @@ func TestGeminiGenerateContentRequestToOpenAIChatRestoresParametersJSONSchema(t 
 
 	require.NoError(t, err)
 	require.Len(t, converted.Tools, 1)
-	parameters, ok := converted.Tools[0].Function.Parameters.(map[string]any)
-	require.True(t, ok)
+	var parameters map[string]any
+	require.NoError(t, kitutil.Unmarshal(converted.Tools[0].Function.Parameters, &parameters))
 	assert.Equal(t, "object", parameters["type"])
 	assert.Equal(t, false, parameters["additionalProperties"])
 }

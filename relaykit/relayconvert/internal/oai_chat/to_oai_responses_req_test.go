@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/samber/lo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tidwall/gjson"
 )
 
 func TestChatCompletionsRequestToResponsesRequestInstructionsAndTools(t *testing.T) {
@@ -33,7 +33,7 @@ func TestChatCompletionsRequestToResponsesRequestInstructionsAndTools(t *testing
 				Type: "function",
 				Function: dto.FunctionRequest{
 					Name:       "lookup",
-					Parameters: map[string]any{"type": "object"},
+					Parameters: json.RawMessage(`{"type":"object"}`),
 					Strict:     &strict,
 				},
 			},
@@ -45,11 +45,11 @@ func TestChatCompletionsRequestToResponsesRequestInstructionsAndTools(t *testing
 
 	assert.Equal(t, "gpt-test", got.Model)
 	assert.Equal(t, `"system rules\n\ndeveloper rules"`, string(got.Instructions))
-	assert.Equal(t, "input_image", gjson.GetBytes(got.Input, "0.content.1.type").String())
-	assert.Equal(t, "function_call", gjson.GetBytes(got.Input, "2.type").String())
-	assert.Equal(t, "call_1", gjson.GetBytes(got.Input, "2.call_id").String())
-	assert.Equal(t, "function_call_output", gjson.GetBytes(got.Input, "3.type").String())
-	assert.True(t, gjson.GetBytes(got.Tools, "0.strict").Bool())
+	assert.Equal(t, "input_image", ojson.GetBytes(got.Input, "0.content.1.type").String())
+	assert.Equal(t, "function_call", ojson.GetBytes(got.Input, "2.type").String())
+	assert.Equal(t, "call_1", ojson.GetBytes(got.Input, "2.call_id").String())
+	assert.Equal(t, "function_call_output", ojson.GetBytes(got.Input, "3.type").String())
+	assert.True(t, ojson.GetBytes(got.Tools, "0.strict").Bool())
 }
 
 func TestChatCompletionsRequestToResponsesRequestImageDetail(t *testing.T) {
@@ -77,8 +77,8 @@ func TestChatCompletionsRequestToResponsesRequestImageDetail(t *testing.T) {
 			})
 			require.NoError(t, err)
 
-			assert.Equal(t, "input_image", gjson.GetBytes(got.Input, "0.content.0.type").String())
-			assert.Equal(t, tt.want, gjson.GetBytes(got.Input, "0.content.0.detail").String())
+			assert.Equal(t, "input_image", ojson.GetBytes(got.Input, "0.content.0.type").String())
+			assert.Equal(t, tt.want, ojson.GetBytes(got.Input, "0.content.0.detail").String())
 		})
 	}
 }
@@ -99,7 +99,7 @@ func TestChatCompletionsRequestToResponsesRequestPreservesPromptCacheKey(t *test
 
 		encoded, err := kitutil.Marshal(got)
 		require.NoError(t, err)
-		assert.Equal(t, key, gjson.GetBytes(encoded, "prompt_cache_key").String())
+		assert.Equal(t, key, ojson.GetBytes(encoded, "prompt_cache_key").String())
 	})
 
 	t.Run("absent", func(t *testing.T) {
@@ -111,7 +111,7 @@ func TestChatCompletionsRequestToResponsesRequestPreservesPromptCacheKey(t *test
 
 		encoded, err := kitutil.Marshal(got)
 		require.NoError(t, err)
-		assert.False(t, gjson.GetBytes(encoded, "prompt_cache_key").Exists())
+		assert.False(t, ojson.GetBytes(encoded, "prompt_cache_key").Exists())
 	})
 }
 
@@ -143,8 +143,8 @@ func TestChatCompletionsRequestToResponsesRequestPreservesQwenThinkingBudget(t *
 			encoded, err := kitutil.Marshal(got)
 			require.NoError(t, err)
 
-			assert.True(t, gjson.GetBytes(encoded, "enable_thinking").Bool())
-			value := gjson.GetBytes(encoded, "thinking_budget")
+			assert.True(t, ojson.GetBytes(encoded, "enable_thinking").Bool())
+			value := ojson.GetBytes(encoded, "thinking_budget")
 			assert.True(t, value.Exists())
 			assert.Equal(t, tt.want, value.Int())
 		})
@@ -171,11 +171,11 @@ func TestChatCompletionsRequestToResponsesRequestDropsUntrustedAssistantReasonin
 	})
 	require.NoError(t, err)
 
-	assert.Equal(t, "assistant", gjson.GetBytes(got.Input, "0.role").String())
-	assert.Equal(t, "I will call lookup.", gjson.GetBytes(got.Input, "0.content").String())
-	assert.Equal(t, "function_call", gjson.GetBytes(got.Input, "1.type").String())
-	assert.False(t, gjson.GetBytes(got.Input, `#(type=="reasoning")`).Exists())
-	assert.Equal(t, "lookup", gjson.GetBytes(got.Tools, "0.name").String())
+	assert.Equal(t, "assistant", ojson.GetBytes(got.Input, "0.role").String())
+	assert.Equal(t, "I will call lookup.", ojson.GetBytes(got.Input, "0.content").String())
+	assert.Equal(t, "function_call", ojson.GetBytes(got.Input, "1.type").String())
+	assert.False(t, ojson.GetBytes(got.Input, `#(type=="reasoning")`).Exists())
+	assert.Equal(t, "lookup", ojson.GetBytes(got.Tools, "0.name").String())
 	assert.Empty(t, got.ToolChoice)
 	assert.Empty(t, got.ParallelToolCalls)
 }
@@ -192,12 +192,12 @@ func TestChatCompletionsRequestToResponsesRequestLinksLegacyFunctionResult(t *te
 
 	got, err := ChatCompletionsRequestToResponsesRequest(&req)
 	require.NoError(t, err)
-	assert.Equal(t, "function_call", gjson.GetBytes(got.Input, "1.type").String())
-	assert.Equal(t, "call_0", gjson.GetBytes(got.Input, "1.call_id").String())
-	assert.Equal(t, "lookup", gjson.GetBytes(got.Input, "1.name").String())
-	assert.Equal(t, "function_call_output", gjson.GetBytes(got.Input, "2.type").String())
-	assert.Equal(t, "call_0", gjson.GetBytes(got.Input, "2.call_id").String())
-	assert.Equal(t, "found", gjson.GetBytes(got.Input, "2.output").String())
+	assert.Equal(t, "function_call", ojson.GetBytes(got.Input, "1.type").String())
+	assert.Equal(t, "call_0", ojson.GetBytes(got.Input, "1.call_id").String())
+	assert.Equal(t, "lookup", ojson.GetBytes(got.Input, "1.name").String())
+	assert.Equal(t, "function_call_output", ojson.GetBytes(got.Input, "2.type").String())
+	assert.Equal(t, "call_0", ojson.GetBytes(got.Input, "2.call_id").String())
+	assert.Equal(t, "found", ojson.GetBytes(got.Input, "2.output").String())
 }
 
 func TestChatCompletionsRequestToResponsesRequestRejectsUnmatchedLegacyFunctionResult(t *testing.T) {
@@ -221,7 +221,9 @@ func TestChatCompletionsRequestToResponsesRequestPreservesSystemWhitespace(t *te
 		},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, "  first  \n\n\tsecond\n", gjson.ParseBytes(got.Instructions).String())
+	var instructions string
+	require.NoError(t, kitutil.Unmarshal(got.Instructions, &instructions))
+	assert.Equal(t, "  first  \n\n\tsecond\n", instructions)
 }
 
 func TestChatCompletionsRequestToResponsesRequestPreservesPenalties(t *testing.T) {

@@ -1,6 +1,7 @@
 package gemini
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"slices"
@@ -236,7 +237,13 @@ func PrepareFunctionDeclaration(function *dto.FunctionRequest) {
 	if function == nil {
 		return
 	}
-	schema := normalizeFunctionJSONSchema(function.Parameters)
+	var schema any
+	if len(function.Parameters) > 0 {
+		if err := kitutil.Unmarshal(function.Parameters, &schema); err != nil {
+			return
+		}
+	}
+	schema = normalizeFunctionJSONSchema(schema)
 	if schemaMap, ok := schema.(map[string]any); ok {
 		typeName, _ := schemaMap["type"].(string)
 		if strings.TrimSpace(typeName) == "" {
@@ -261,8 +268,34 @@ func PrepareFunctionDeclaration(function *dto.FunctionRequest) {
 		function.ParametersJsonSchema = schema
 		return
 	}
-	function.Parameters = CleanFunctionParameters(schema)
+	cleaned, err := kitutil.Marshal(CleanFunctionParameters(schema))
+	if err != nil {
+		return
+	}
+	function.Parameters = cleaned
 	function.ParametersJsonSchema = nil
+}
+
+// CleanFunctionParametersJSON cleans a Gemini function schema while preserving
+// JSON as the relaykit boundary type.
+func CleanFunctionParametersJSON(parameters json.RawMessage) (json.RawMessage, error) {
+	if len(parameters) == 0 {
+		return nil, nil
+	}
+	var schema any
+	if err := kitutil.Unmarshal(parameters, &schema); err != nil {
+		return nil, err
+	}
+	if object, ok := schema.(map[string]any); ok {
+		if properties, ok := object["properties"].(map[string]any); ok && len(properties) == 0 {
+			return nil, nil
+		}
+	}
+	cleaned := CleanFunctionParameters(schema)
+	if cleaned == nil {
+		return nil, nil
+	}
+	return kitutil.Marshal(cleaned)
 }
 
 func normalizeFunctionJSONSchema(value any) any {

@@ -23,19 +23,20 @@ import {
   SORT_OPTIONS,
   FILTER_ALL,
   QUOTA_TYPES,
+  QUOTA_TYPE_VALUES,
   ENDPOINT_TYPES,
+  type QuotaTypeOption,
   type SortOption,
 } from '../constants'
 import type { PricingModel } from '../types'
+import { compileBillingExpression } from './billing-expression/parser'
+import { visitExpression } from './billing-expression/types'
 import {
   getCardExamplePrice,
   getDynamicPricingSummary,
+  hasTaskUsageSchema,
   isUnconfiguredTaskUsageModel,
 } from './dynamic-price'
-import {
-  getBillingModeLabelKey,
-  type BillingModeLabelKey,
-} from './billing-mode'
 import { isTokenBasedModel } from './model-helpers'
 import { calculateTokenPrice } from './price'
 
@@ -84,6 +85,39 @@ export function filterByGroup(
   return models.filter((m) => m.enable_groups?.includes(group))
 }
 
+/** Pricing category of the active configuration, shared by filters and counts. */
+export function getModelQuotaType(
+  model: PricingModel
+): Exclude<QuotaTypeOption, 'all'> | undefined {
+  if (hasTaskUsageSchema(model)) return QUOTA_TYPES.TASK
+
+  if (model.billing_mode === 'tiered_expr' && model.billing_expr) {
+    const compiled = compileBillingExpression(model.billing_expr)
+    if (compiled.status === 'ready') {
+      let fixedTiers = 0
+      let tokenTiers = 0
+      visitExpression(compiled.ast, (node) => {
+        if (node.kind !== 'call' || node.name !== 'tier') return
+        const price = node.args[1]
+        if (price.kind === 'call' && price.name === 'fixed') fixedTiers++
+        else tokenTiers++
+      })
+      if (fixedTiers > 0 && tokenTiers === 0) return QUOTA_TYPES.REQUEST
+      if (fixedTiers === 0 && tokenTiers > 1) return QUOTA_TYPES.DYNAMIC
+      if (tokenTiers > 0) return QUOTA_TYPES.TOKEN
+      if (!compiled.functions.has('fixed')) return QUOTA_TYPES.TOKEN
+      return QUOTA_TYPES.REQUEST
+    }
+  }
+
+  // Preserve legacy classification when the expression cannot be parsed.
+  if (model.quota_type === QUOTA_TYPE_VALUES.TOKEN) return QUOTA_TYPES.TOKEN
+  if (model.quota_type === QUOTA_TYPE_VALUES.REQUEST) {
+    return QUOTA_TYPES.REQUEST
+  }
+  return undefined
+}
+
 /**
  * Filter models by quota type. Every model lands in exactly one bucket: the
  * bucket names are the billing badges, so a filtered list never disagrees
@@ -94,15 +128,7 @@ export function filterByQuotaType(
   quotaType: string
 ): PricingModel[] {
   if (quotaType === QUOTA_TYPES.ALL) return models
-  const labels: Partial<Record<string, BillingModeLabelKey>> = {
-    [QUOTA_TYPES.TOKEN]: 'Token-based',
-    [QUOTA_TYPES.REQUEST]: 'Per Request',
-    [QUOTA_TYPES.DYNAMIC]: 'Dynamic Pricing',
-    [QUOTA_TYPES.TASK]: 'Task billing',
-  }
-  const target = labels[quotaType]
-  if (!target) return models
-  return models.filter((m) => getBillingModeLabelKey(m) === target)
+  return models.filter((model) => getModelQuotaType(model) === quotaType)
 }
 
 /**

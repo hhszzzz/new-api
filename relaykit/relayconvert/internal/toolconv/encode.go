@@ -66,7 +66,10 @@ func attachOpenAIChatRequest(request any, set Set, options *convmeta.Options) (a
 			if definition.Function == nil {
 				continue
 			}
-			parameters, schemaDiagnostics := jsonSchemaParameters(index, definition.Function)
+			parameters, schemaDiagnostics, err := jsonSchemaParameters(index, definition.Function)
+			if err != nil {
+				return nil, diagnostics, err
+			}
 			diagnostics = append(diagnostics, schemaDiagnostics...)
 			target.Tools = append(target.Tools, dto.ToolCallRequest{
 				Type: "function",
@@ -230,19 +233,27 @@ func toolChoiceWithoutToolsDiagnostics(set Set) []types.ConversionDiagnostic {
 
 // jsonSchemaParameters returns function parameters as JSON Schema for a
 // non-Gemini target, rewriting Gemini's OpenAPI schema subset.
-func jsonSchemaParameters(index int, function *Function) (any, []types.ConversionDiagnostic) {
-	if !function.OpenAPISchema {
-		return function.Parameters, nil
+func jsonSchemaParameters(index int, function *Function) (json.RawMessage, []types.ConversionDiagnostic, error) {
+	if !function.OpenAPISchema || function.Parameters == nil {
+		return function.Parameters, nil, nil
 	}
-	parameters, dropped := sharedgemini.OpenAPISchemaToJSONSchema(function.Parameters)
+	var schema any
+	if err := kitutil.Unmarshal(function.Parameters, &schema); err != nil {
+		return nil, nil, fmt.Errorf("tools[%d].parameters: %w", index, err)
+	}
+	converted, dropped := sharedgemini.OpenAPISchemaToJSONSchema(schema)
+	parameters, err := kitutil.Marshal(converted)
+	if err != nil {
+		return nil, nil, fmt.Errorf("tools[%d].parameters: %w", index, err)
+	}
 	if len(dropped) == 0 {
-		return parameters, nil
+		return parameters, nil, nil
 	}
 	return parameters, []types.ConversionDiagnostic{presentationLoss(
 		fmt.Sprintf("tools[%d]", index),
 		"gemini_schema_keyword_dropped",
 		fmt.Sprintf("JSON Schema has no equivalent for Gemini schema keywords %s; they were dropped", strings.Join(dropped, ", ")),
-	)}
+	)}, nil
 }
 
 // responsesCustomTool is a Responses custom (freeform) tool sent upstream as
@@ -269,12 +280,13 @@ func (tool *responsesCustomTool) inputSchema() map[string]any {
 }
 
 func (tool *responsesCustomTool) chatTool() dto.ToolCallRequest {
+	parameters, _ := kitutil.Marshal(tool.inputSchema())
 	return dto.ToolCallRequest{
 		Type: "function",
 		Function: dto.FunctionRequest{
 			Name:        tool.name,
 			Description: tool.description,
-			Parameters:  tool.inputSchema(),
+			Parameters:  parameters,
 		},
 	}
 }
@@ -448,7 +460,10 @@ func attachOpenAIResponsesRequest(request any, set Set, options *convmeta.Option
 			if definition.Function == nil {
 				continue
 			}
-			parameters, schemaDiagnostics := jsonSchemaParameters(index, definition.Function)
+			parameters, schemaDiagnostics, err := jsonSchemaParameters(index, definition.Function)
+			if err != nil {
+				return nil, diagnostics, err
+			}
 			diagnostics = append(diagnostics, schemaDiagnostics...)
 			tool := map[string]any{
 				"type":        "function",
@@ -584,11 +599,14 @@ func attachClaudeRequest(request any, set Set, options *convmeta.Options) (any, 
 			if definition.Function == nil {
 				continue
 			}
-			parameters, schemaDiagnostics := jsonSchemaParameters(index, definition.Function)
-			diagnostics = append(diagnostics, schemaDiagnostics...)
-			inputSchema, err := functionParametersMap(parameters)
+			parameters, schemaDiagnostics, err := jsonSchemaParameters(index, definition.Function)
 			if err != nil {
-				return nil, diagnostics, fmt.Errorf("tools[%d].input_schema: %w", index, err)
+				return nil, diagnostics, err
+			}
+			diagnostics = append(diagnostics, schemaDiagnostics...)
+			inputSchema, ok := sharedclaude.FunctionParametersToInputSchema(parameters)
+			if !ok {
+				return nil, diagnostics, fmt.Errorf("tools[%d].input_schema: function parameters must be a JSON object", index)
 			}
 			tools = append(tools, &dto.Tool{
 				Name:        definition.Function.Name,
@@ -661,10 +679,11 @@ func attachClaudeRequest(request any, set Set, options *convmeta.Options) (any, 
 			}
 			if tool, handled := customTools[index]; handled {
 				if tool != nil {
+					inputSchema, _ := kitutil.Marshal(tool.inputSchema())
 					tools = append(tools, &dto.Tool{
 						Name:        tool.name,
 						Description: tool.description,
-						InputSchema: tool.inputSchema(),
+						InputSchema: inputSchema,
 					})
 				}
 				continue
@@ -1762,24 +1781,4 @@ func deleteEmptyStrings(value map[string]any) {
 			delete(value, key)
 		}
 	}
-}
-
-func functionParametersMap(parameters any) (map[string]any, error) {
-	if parameters == nil {
-		return map[string]any{
-			"type":       "object",
-			"properties": map[string]any{},
-		}, nil
-	}
-	converted, err := kitutil.Any2Type[map[string]any](parameters)
-	if err != nil {
-		return nil, err
-	}
-	if converted["type"] == nil {
-		converted["type"] = "object"
-	}
-	if converted["properties"] == nil {
-		converted["properties"] = map[string]any{}
-	}
-	return converted, nil
 }

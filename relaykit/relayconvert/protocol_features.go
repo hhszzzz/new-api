@@ -782,7 +782,7 @@ func conversionFieldSupported(protocol, upstream Protocol, field string) bool {
 		return slices.Contains([]string{"frequency_penalty", "presence_penalty", "user", "store", "metadata", "prompt_cache_key", "service_tier", "verbosity", "logprobs", "top_logprobs", "safety_identifier", "prompt_cache_retention"}, field)
 	}
 	if protocol == ProtocolChat && upstream == ProtocolGemini {
-		return field == "seed" || field == "extra_body"
+		return slices.Contains([]string{"seed", "extra_body", "imageConfig"}, field)
 	}
 	if protocol == ProtocolResponses && upstream == ProtocolChat {
 		return slices.Contains([]string{"frequency_penalty", "presence_penalty", "user", "metadata", "prompt_cache_key", "top_logprobs", "service_tier", "prompt_cache_retention", "safety_identifier", "enable_thinking", "thinking_budget", "text.verbosity"}, field)
@@ -791,6 +791,9 @@ func conversionFieldSupported(protocol, upstream Protocol, field string) bool {
 }
 
 func convertedContentTypeSupported(protocol, upstream Protocol, contentType string) bool {
+	if protocol == ProtocolGemini && upstream == ProtocolChat && contentType == "content_after_function_call" {
+		return true
+	}
 	switch protocol {
 	case ProtocolChat:
 		switch contentType {

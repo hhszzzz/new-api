@@ -75,8 +75,8 @@ func TestResponsesChatBridgeRestoresExtendedToolKinds(t *testing.T) {
 	assert.Equal(t, "crm__render_customer", chatRequest.Tools[3].Function.Name)
 	assert.Equal(t, "tool_search", chatRequest.Tools[4].Function.Name)
 	assert.Equal(t, "added_lookup", chatRequest.Tools[5].Function.Name)
-	assert.Equal(t, []string{"input"}, chatRequest.Tools[1].Function.Parameters.(map[string]any)["required"])
-	assert.Equal(t, []string{"query"}, chatRequest.Tools[4].Function.Parameters.(map[string]any)["required"])
+	assert.Equal(t, []string{"input"}, protocolBridgeRequired(t, chatRequest.Tools[1].Function.Parameters))
+	assert.Equal(t, []string{"query"}, protocolBridgeRequired(t, chatRequest.Tools[4].Function.Parameters))
 	require.Len(t, chatRequest.Messages, 1)
 	assert.Equal(t, "hello", chatRequest.Messages[0].StringContent())
 
@@ -448,7 +448,7 @@ func TestResponsesBridgeWrapsFreeformToolsAndRestoresCustomCalls(t *testing.T) {
 	require.True(t, ok)
 	require.Len(t, chatRequest.Tools, 1)
 	assert.Equal(t, "shell", chatRequest.Tools[0].Function.Name)
-	assert.Equal(t, []string{"input"}, chatRequest.Tools[0].Function.Parameters.(map[string]any)["required"])
+	assert.Equal(t, []string{"input"}, protocolBridgeRequired(t, chatRequest.Tools[0].Function.Parameters))
 
 	upstream := &dto.OpenAITextResponse{
 		Id:    "resp-freeform",
@@ -595,7 +595,11 @@ func TestResponsesMessagesBridgeRestoresExtendedToolKinds(t *testing.T) {
 	assert.Equal(t, "crm__render_customer", tools[2].Name)
 	assert.Equal(t, "tool_search", tools[3].Name)
 	assert.Equal(t, "added_lookup", tools[4].Name)
-	assert.Equal(t, []any{"input"}, tools[0].InputSchema["required"])
+	var inputSchema struct {
+		Required []string `json:"required"`
+	}
+	require.NoError(t, kitutil.Unmarshal(tools[0].InputSchema, &inputSchema))
+	assert.Equal(t, []string{"input"}, inputSchema.Required)
 
 	upstream := &dto.ClaudeResponse{
 		Id:         "msg_tools",
@@ -1026,6 +1030,15 @@ func TestResetProtocolBridgeContextDropsAttemptScopedToolState(t *testing.T) {
 	assert.Equal(t, "function_call", response.Output[0].Type)
 }
 
+func protocolBridgeRequired(t *testing.T, raw []byte) []string {
+	t.Helper()
+	var schema struct {
+		Required []string `json:"required"`
+	}
+	require.NoError(t, kitutil.Unmarshal(raw, &schema))
+	return schema.Required
+}
+
 func protocolBridgeRaw(t *testing.T, value any) []byte {
 	t.Helper()
 	raw, err := kitutil.Marshal(value)
@@ -1066,7 +1079,7 @@ func TestResponsesChatBridgeLowersAndRestoresLocalShell(t *testing.T) {
 	// Declaration: local_shell lowers to a function tool, web_search drops.
 	require.Len(t, chatRequest.Tools, 2)
 	assert.Equal(t, "local_shell", chatRequest.Tools[0].Function.Name)
-	assert.Equal(t, []string{"command"}, chatRequest.Tools[0].Function.Parameters.(map[string]any)["required"])
+	assert.Equal(t, []string{"command"}, protocolBridgeRequired(t, chatRequest.Tools[0].Function.Parameters))
 	assert.Equal(t, "lookup", chatRequest.Tools[1].Function.Name)
 
 	// History: local_shell_call lowers to a paired assistant tool call.

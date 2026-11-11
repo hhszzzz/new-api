@@ -1,6 +1,7 @@
 package oaichat
 
 import (
+	"encoding/json"
 	"sort"
 	"strings"
 
@@ -606,14 +607,14 @@ func openAIToolCallToClaudeContent(toolUse dto.ToolCallRequest, usedToolCallIDs 
 		Type:  "tool_use",
 		Id:    uniqueClaudeToolUseID(usedToolCallIDs, toolUse.ID),
 		Name:  toolUse.Function.Name,
-		Input: map[string]any{},
+		Input: json.RawMessage(`{}`),
 	}
 	if strings.TrimSpace(toolUse.Function.Arguments) == "" {
 		return content
 	}
-	var input map[string]any
-	if err := kitutil.Unmarshal([]byte(toolUse.Function.Arguments), &input); err == nil && input != nil {
-		content.Input = input
+	arguments := json.RawMessage(toolUse.Function.Arguments)
+	if kitutil.GetJsonType(arguments) == "object" && kitutil.Valid(arguments) {
+		content.Input = arguments
 	}
 	return content
 }

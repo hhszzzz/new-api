@@ -125,7 +125,7 @@ func TestConvertOpenAIRequestBuildsNovaMessagesV1ToolLoop(t *testing.T) {
 			Function: dto.FunctionRequest{
 				Name:        "lookup",
 				Description: "Lookup weather",
-				Parameters:  map[string]any{"type": "object", "properties": map[string]any{"q": map[string]any{"type": "string"}}},
+				Parameters:  common.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}}}`),
 			},
 		}},
 		ToolChoice: map[string]any{"type": "function", "function": map[string]any{"name": "lookup"}},

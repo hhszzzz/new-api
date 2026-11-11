@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
@@ -18,7 +19,6 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/protocolstate"
 	"github.com/gin-gonic/gin"
-	"github.com/tidwall/gjson"
 )
 
 func GeminiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *hosttypes.NewAPIError) {
@@ -34,7 +34,7 @@ func GeminiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 	if err := common.Unmarshal(responseBody, &geminiResponse); err != nil {
 		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
-	info.ObserveResponseModel(gjson.GetBytes(responseBody, "modelVersion").Str)
+	info.ObserveResponseModel(ojson.GetBytes(responseBody, "modelVersion").Str)
 	var grounding geminiGroundingCounter
 	grounding.observe(&geminiResponse)
 	grounding.commit(info)

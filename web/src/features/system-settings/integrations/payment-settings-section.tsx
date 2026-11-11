@@ -44,8 +44,17 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Textarea } from '@/components/ui/textarea'
 import { getPaymentErrorTranslation } from '@/features/wallet/lib/payment'
 import { handleServerError } from '@/lib/handle-server-error'
 import { cn } from '@/lib/utils'
@@ -104,6 +113,9 @@ const paymentSchema = z.object({
   }, 'Provide a valid callback URL starting with http:// or https://'),
   EpayId: z.string(),
   EpayKey: z.string(),
+  EpaySignType: z.string(),
+  EpayMerchantPrivateKey: z.string(),
+  EpayPlatformPublicKey: z.string(),
   Price: z.coerce.number().min(0),
   MinTopUp: z.coerce.number().min(0),
   CustomCallbackAddress: z
@@ -233,6 +245,11 @@ export function PaymentSettingsSection({
       ...waffoPancakeDefaultValues,
     }),
     [defaultValues, waffoDefaultValues, waffoPancakeDefaultValues]
+  )
+  const initialRef = React.useRef(initialFormValues)
+  const defaultsSignature = React.useMemo(
+    () => JSON.stringify(initialFormValues),
+    [initialFormValues]
   )
 
   const [payMethodsVisualMode, setPayMethodsVisualMode] = React.useState(true)
@@ -426,20 +443,25 @@ export function PaymentSettingsSection({
   )
 
   React.useEffect(() => {
+    const parsedDefaults = JSON.parse(defaultsSignature) as PaymentFormValues
+    initialRef.current = parsedDefaults
     form.reset({
-      ...initialFormValues,
-      PayMethods: formatJsonForEditor(initialFormValues.PayMethods),
-      AmountOptions: formatJsonForEditor(initialFormValues.AmountOptions),
-      AmountDiscount: formatJsonForEditor(initialFormValues.AmountDiscount),
-      CreemProducts: formatJsonForEditor(initialFormValues.CreemProducts),
+      ...parsedDefaults,
+      PayMethods: formatJsonForEditor(parsedDefaults.PayMethods),
+      AmountOptions: formatJsonForEditor(parsedDefaults.AmountOptions),
+      AmountDiscount: formatJsonForEditor(parsedDefaults.AmountDiscount),
+      CreemProducts: formatJsonForEditor(parsedDefaults.CreemProducts),
     })
-  }, [initialFormValues, form])
+  }, [defaultsSignature, form])
 
   const onSubmit = async (values: PaymentFormValues) => {
     const sanitized = {
       PayAddress: removeTrailingSlash(values.PayAddress),
       EpayId: values.EpayId.trim(),
       EpayKey: values.EpayKey.trim(),
+      EpaySignType: values.EpaySignType,
+      EpayMerchantPrivateKey: values.EpayMerchantPrivateKey.trim(),
+      EpayPlatformPublicKey: values.EpayPlatformPublicKey.trim(),
       Price: values.Price,
       MinTopUp: values.MinTopUp,
       CustomCallbackAddress: removeTrailingSlash(values.CustomCallbackAddress),
@@ -479,49 +501,52 @@ export function PaymentSettingsSection({
     }
 
     const initial = {
-      PayAddress: removeTrailingSlash(initialFormValues.PayAddress),
-      EpayId: initialFormValues.EpayId.trim(),
-      EpayKey: initialFormValues.EpayKey.trim(),
-      Price: initialFormValues.Price,
-      MinTopUp: initialFormValues.MinTopUp,
+      PayAddress: removeTrailingSlash(initialRef.current.PayAddress),
+      EpayId: initialRef.current.EpayId.trim(),
+      EpayKey: initialRef.current.EpayKey.trim(),
+      EpaySignType: initialRef.current.EpaySignType,
+      EpayMerchantPrivateKey: initialRef.current.EpayMerchantPrivateKey.trim(),
+      EpayPlatformPublicKey: initialRef.current.EpayPlatformPublicKey.trim(),
+      Price: initialRef.current.Price,
+      MinTopUp: initialRef.current.MinTopUp,
       CustomCallbackAddress: removeTrailingSlash(
-        initialFormValues.CustomCallbackAddress
+        initialRef.current.CustomCallbackAddress
       ),
-      PayMethods: initialFormValues.PayMethods.trim(),
-      AmountOptions: initialFormValues.AmountOptions.trim(),
-      AmountDiscount: initialFormValues.AmountDiscount.trim(),
-      StripeApiSecret: initialFormValues.StripeApiSecret.trim(),
-      StripeWebhookSecret: initialFormValues.StripeWebhookSecret.trim(),
-      StripePriceId: initialFormValues.StripePriceId.trim(),
-      StripeUnitPrice: initialFormValues.StripeUnitPrice,
-      StripeMinTopUp: initialFormValues.StripeMinTopUp,
+      PayMethods: initialRef.current.PayMethods.trim(),
+      AmountOptions: initialRef.current.AmountOptions.trim(),
+      AmountDiscount: initialRef.current.AmountDiscount.trim(),
+      StripeApiSecret: initialRef.current.StripeApiSecret.trim(),
+      StripeWebhookSecret: initialRef.current.StripeWebhookSecret.trim(),
+      StripePriceId: initialRef.current.StripePriceId.trim(),
+      StripeUnitPrice: initialRef.current.StripeUnitPrice,
+      StripeMinTopUp: initialRef.current.StripeMinTopUp,
       StripePromotionCodesEnabled:
-        initialFormValues.StripePromotionCodesEnabled,
-      CreemApiKey: initialFormValues.CreemApiKey.trim(),
-      CreemWebhookSecret: initialFormValues.CreemWebhookSecret.trim(),
-      CreemTestMode: initialFormValues.CreemTestMode,
-      CreemProducts: initialFormValues.CreemProducts.trim(),
-      WaffoEnabled: initialFormValues.WaffoEnabled,
-      WaffoSandbox: initialFormValues.WaffoSandbox,
-      WaffoMerchantId: initialFormValues.WaffoMerchantId.trim(),
-      WaffoCurrency: initialFormValues.WaffoCurrency.trim() || 'USD',
-      WaffoUnitPrice: initialFormValues.WaffoUnitPrice,
-      WaffoMinTopUp: initialFormValues.WaffoMinTopUp,
-      WaffoNotifyUrl: initialFormValues.WaffoNotifyUrl.trim(),
-      WaffoReturnUrl: initialFormValues.WaffoReturnUrl.trim(),
-      WaffoPublicCert: initialFormValues.WaffoPublicCert.trim(),
-      WaffoSandboxPublicCert: initialFormValues.WaffoSandboxPublicCert.trim(),
-      WaffoApiKey: initialFormValues.WaffoApiKey.trim(),
-      WaffoPrivateKey: initialFormValues.WaffoPrivateKey.trim(),
-      WaffoSandboxApiKey: initialFormValues.WaffoSandboxApiKey.trim(),
-      WaffoSandboxPrivateKey: initialFormValues.WaffoSandboxPrivateKey.trim(),
+        initialRef.current.StripePromotionCodesEnabled,
+      CreemApiKey: initialRef.current.CreemApiKey.trim(),
+      CreemWebhookSecret: initialRef.current.CreemWebhookSecret.trim(),
+      CreemTestMode: initialRef.current.CreemTestMode,
+      CreemProducts: initialRef.current.CreemProducts.trim(),
+      WaffoEnabled: initialRef.current.WaffoEnabled,
+      WaffoSandbox: initialRef.current.WaffoSandbox,
+      WaffoMerchantId: initialRef.current.WaffoMerchantId.trim(),
+      WaffoCurrency: initialRef.current.WaffoCurrency.trim() || 'USD',
+      WaffoUnitPrice: initialRef.current.WaffoUnitPrice,
+      WaffoMinTopUp: initialRef.current.WaffoMinTopUp,
+      WaffoNotifyUrl: initialRef.current.WaffoNotifyUrl.trim(),
+      WaffoReturnUrl: initialRef.current.WaffoReturnUrl.trim(),
+      WaffoPublicCert: initialRef.current.WaffoPublicCert.trim(),
+      WaffoSandboxPublicCert: initialRef.current.WaffoSandboxPublicCert.trim(),
+      WaffoApiKey: initialRef.current.WaffoApiKey.trim(),
+      WaffoPrivateKey: initialRef.current.WaffoPrivateKey.trim(),
+      WaffoSandboxApiKey: initialRef.current.WaffoSandboxApiKey.trim(),
+      WaffoSandboxPrivateKey: initialRef.current.WaffoSandboxPrivateKey.trim(),
       WaffoPayMethods: JSON.stringify(
         parseWaffoPayMethods(waffoDefaultValues.WaffoPayMethods)
       ),
-      WaffoPancakeMerchantID: initialFormValues.WaffoPancakeMerchantID.trim(),
-      WaffoPancakePrivateKey: initialFormValues.WaffoPancakePrivateKey.trim(),
+      WaffoPancakeMerchantID: initialRef.current.WaffoPancakeMerchantID.trim(),
+      WaffoPancakePrivateKey: initialRef.current.WaffoPancakePrivateKey.trim(),
       WaffoPancakeReturnURL: removeTrailingSlash(
-        initialFormValues.WaffoPancakeReturnURL.trim()
+        initialRef.current.WaffoPancakeReturnURL.trim()
       ),
     }
 
@@ -537,6 +562,31 @@ export function PaymentSettingsSection({
 
     if (sanitized.EpayKey && sanitized.EpayKey !== initial.EpayKey) {
       updates.push({ key: 'EpayKey', value: sanitized.EpayKey })
+    }
+
+    // Keys go first: the server only accepts RSA once both saved keys work.
+    if (
+      sanitized.EpayMerchantPrivateKey &&
+      sanitized.EpayMerchantPrivateKey !== initial.EpayMerchantPrivateKey
+    ) {
+      updates.push({
+        key: 'payment_setting.epay_merchant_private_key',
+        value: sanitized.EpayMerchantPrivateKey,
+      })
+    }
+
+    if (sanitized.EpayPlatformPublicKey !== initial.EpayPlatformPublicKey) {
+      updates.push({
+        key: 'payment_setting.epay_platform_public_key',
+        value: sanitized.EpayPlatformPublicKey,
+      })
+    }
+
+    if (sanitized.EpaySignType !== initial.EpaySignType) {
+      updates.push({
+        key: 'payment_setting.epay_sign_type',
+        value: sanitized.EpaySignType,
+      })
     }
 
     if (sanitized.Price !== initial.Price) {
@@ -1229,7 +1279,7 @@ export function PaymentSettingsSection({
                   />
                 </div>
 
-                <div className='grid gap-6 md:grid-cols-2'>
+                <div className='grid gap-6 md:grid-cols-2 md:items-start'>
                   <FormField
                     control={form.control}
                     name='EpayId'
@@ -1253,29 +1303,116 @@ export function PaymentSettingsSection({
 
                   <FormField
                     control={form.control}
-                    name='EpayKey'
+                    name='EpaySignType'
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>{t('Epay secret key')}</FormLabel>
-                        <FormControl>
-                          <Input
-                            type='password'
-                            placeholder={t('Enter new key to update')}
-                            autoComplete='new-password'
-                            {...field}
-                            onChange={(event) =>
-                              field.onChange(event.target.value)
-                            }
-                          />
-                        </FormControl>
+                        <FormLabel>{t('Signature type')}</FormLabel>
+                        <Select
+                          items={[
+                            { value: 'MD5', label: 'MD5' },
+                            { value: 'RSA', label: 'RSA' },
+                          ]}
+                          value={field.value}
+                          onValueChange={field.onChange}
+                        >
+                          <FormControl>
+                            <SelectTrigger className='w-full'>
+                              <SelectValue />
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent alignItemWithTrigger={false}>
+                            <SelectGroup>
+                              <SelectItem value='MD5'>MD5</SelectItem>
+                              <SelectItem value='RSA'>RSA</SelectItem>
+                            </SelectGroup>
+                          </SelectContent>
+                        </Select>
                         <FormDescription>
-                          {t('Leave blank unless rotating the secret')}
+                          {t(
+                            'Use the same signature type as in your Epay merchant console'
+                          )}
                         </FormDescription>
                         <FormMessage />
                       </FormItem>
                     )}
                   />
                 </div>
+
+                {currentFormValues.EpaySignType === 'RSA' ? (
+                  <div className='grid gap-6 md:grid-cols-2 md:items-start'>
+                    <FormField
+                      control={form.control}
+                      name='EpayMerchantPrivateKey'
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>{t('Merchant private key')}</FormLabel>
+                          <FormControl>
+                            <Textarea
+                              rows={4}
+                              placeholder='MIIEvQIBADANBgkqhkiG9w0BAQEFAASC...'
+                              autoComplete='off'
+                              spellCheck={false}
+                              className='font-mono text-xs break-all'
+                              {...field}
+                            />
+                          </FormControl>
+                          <FormDescription>
+                            {t('Leave blank to keep the existing key')}
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={form.control}
+                      name='EpayPlatformPublicKey'
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>{t('Platform public key')}</FormLabel>
+                          <FormControl>
+                            <Textarea
+                              rows={4}
+                              placeholder='MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A...'
+                              autoComplete='off'
+                              spellCheck={false}
+                              className='font-mono text-xs break-all'
+                              {...field}
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </div>
+                ) : (
+                  <div className='grid gap-6 md:grid-cols-2'>
+                    <FormField
+                      control={form.control}
+                      name='EpayKey'
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>{t('Epay secret key')}</FormLabel>
+                          <FormControl>
+                            <Input
+                              type='password'
+                              placeholder={t('Enter new key to update')}
+                              autoComplete='new-password'
+                              {...field}
+                              onChange={(event) =>
+                                field.onChange(event.target.value)
+                              }
+                            />
+                          </FormControl>
+                          <FormDescription>
+                            {t('Leave blank unless rotating the secret')}
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </div>
+                )}
               </div>
             </TabsContent>
 

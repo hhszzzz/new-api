@@ -39,9 +39,7 @@ import {
   getEndpointTypeLabels,
   getQuotaTypeLabels,
 } from '../constants'
-import { getBillingModeLabelKey } from '../lib/billing-mode'
-import { hasTaskUsageSchema } from '../lib/dynamic-price'
-import { parseTags } from '../lib/filters'
+import { getModelQuotaType, parseTags } from '../lib/filters'
 import type { PricingModel, PricingVendor } from '../types'
 
 type FilterOption = {
@@ -182,18 +180,8 @@ export const PricingSidebar = memo(function PricingSidebar(
       for (const endpoint of new Set(model.supported_endpoint_types ?? [])) {
         endpoints.set(endpoint, (endpoints.get(endpoint) ?? 0) + 1)
       }
-      if (hasTaskUsageSchema(model)) {
-        quotas.task++
-        continue
-      }
-      const label = getBillingModeLabelKey(model)
-      if (label === 'Token-based') {
-        quotas.token++
-      } else if (label === 'Per Request') {
-        quotas.request++
-      } else {
-        quotas.dynamic++
-      }
+      const quotaType = getModelQuotaType(model)
+      if (quotaType) quotas[quotaType]++
     }
     return { vendors, tags, endpoints, quotas }
   }, [props.models])

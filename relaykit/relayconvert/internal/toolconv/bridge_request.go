@@ -67,9 +67,13 @@ func ExtractRequestForConversion(ctx context.Context, format types.RelayFormat, 
 			if err != nil {
 				return nil, set, err
 			}
-			for _, function := range functions {
+				for functionIndex, function := range functions {
 				identity, _ := state.ResolveUpstream(function.Function.Name)
-				set.Definitions = append(set.Definitions, Definition{Kind: KindFunction, Execution: ExecutionClient, Name: function.Function.Name, Identity: &identity, Function: &Function{Name: function.Function.Name, Description: function.Function.Description, Parameters: function.Function.Parameters, Strict: function.Function.Strict}})
+					parameters, err := functionParametersJSON(function.Function.Parameters)
+					if err != nil {
+						return nil, set, fmt.Errorf("tools[%d].parameters: %w", functionIndex, err)
+					}
+					set.Definitions = append(set.Definitions, Definition{Kind: KindFunction, Execution: ExecutionClient, Name: function.Function.Name, Identity: &identity, Function: &Function{Name: function.Function.Name, Description: function.Function.Description, Parameters: parameters, Strict: function.Function.Strict}})
 			}
 		default:
 			raw, err := kitutil.Marshal(tool)

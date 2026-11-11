@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strconv"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 
@@ -25,20 +27,22 @@ var ErrUserAuthVersionConflict = errors.New("user authentication version update 
 
 var ErrUserPolicyVersionConflict = errors.New("user policy version update conflicted")
 
+// Fence and version keys use the user cache key as their hash tag so the
+// cache fill script and the floor MGET stay in one slot on sharded Redis.
 func getUserAuthFenceKey(userId int) string {
-	return fmt.Sprintf("auth:user:fence:%d", userId)
+	return fmt.Sprintf("auth:user:fence:{%s}", getUserCacheKey(userId))
 }
 
 func getUserAuthVersionKey(userId int) string {
-	return fmt.Sprintf("auth:user:version:%d", userId)
+	return fmt.Sprintf("auth:user:version:{%s}", getUserCacheKey(userId))
 }
 
 func getUserPolicyFenceKey(userId int) string {
-	return fmt.Sprintf("auth:user:policy:fence:%d", userId)
+	return fmt.Sprintf("auth:user:policy:fence:{%s}", getUserCacheKey(userId))
 }
 
 func getUserPolicyVersionKey(userId int) string {
-	return fmt.Sprintf("auth:user:policy:version:%d", userId)
+	return fmt.Sprintf("auth:user:policy:version:{%s}", getUserCacheKey(userId))
 }
 
 // A pending fence only covers the interval between publishing the next
@@ -98,6 +102,11 @@ func writeUserCache(user *UserBase, includeQuota bool) error {
 	if user.FirstTokenDelayMs != nil {
 		firstTokenDelayMs = strconv.Itoa(*user.FirstTokenDelayMs)
 	}
+	user.CacheExpiresAt = time.Now().Add(time.Duration(ttl) * time.Second).UnixMilli()
+	mac, err := user.cacheMAC()
+	if err != nil {
+		return err
+	}
 	const script = `
 local incoming = tonumber(ARGV[1])
 local pending = tonumber(redis.call('GET', KEYS[2]) or '0')
@@ -133,11 +142,11 @@ redis.call('HSET', KEYS[1],
   'Status', ARGV[5], 'Role', ARGV[6], 'Username', ARGV[7],
 	'Setting', ARGV[8], 'AuthVersion', ARGV[1], 'CacheSchema', ARGV[9],
 	'Groups', ARGV[13], 'TopupGroup', ARGV[14],
-		'ModelLimitsEnabled', ARGV[15], 'ModelLimits', ARGV[16],
-		'ModelBlocklistEnabled', ARGV[17], 'ModelBlocklist', ARGV[18], 'PolicyVersion', ARGV[19],
-			'RpmLimit', ARGV[20], 'ConcurrencyLimit', ARGV[21], 'StreamTpsLimit', ARGV[22],
-			'FirstTokenDelayMs', ARGV[23])
-if ARGV[10] == '1' and redis.call('HEXISTS', KEYS[1], 'Quota') == 0 then
+	'ModelLimitsEnabled', ARGV[15], 'ModelLimits', ARGV[16],
+	'ModelBlocklistEnabled', ARGV[17], 'ModelBlocklist', ARGV[18], 'PolicyVersion', ARGV[19],
+	'RpmLimit', ARGV[20], 'ConcurrencyLimit', ARGV[21], 'StreamTpsLimit', ARGV[22],
+	'FirstTokenDelayMs', ARGV[23], 'CacheExpiresAt', ARGV[24], 'CacheMAC', ARGV[25])
+if ARGV[10] == '1' and not string.match(redis.call('HGET', KEYS[1], 'Quota') or '', '^-?%d+$') then
   redis.call('HSET', KEYS[1], 'Quota', ARGV[11])
 end
 redis.call('EXPIRE', KEYS[1], ARGV[12])
@@ -152,6 +161,7 @@ return 1`
 		string(groupsJSON), user.TopupGroup, user.ModelLimitsEnabled, string(modelLimitsJSON),
 		user.ModelBlocklistEnabled, string(modelBlocklistJSON), user.PolicyVersion,
 		rpmLimit, concurrencyLimit, streamTpsLimit, firstTokenDelayMs,
+		user.CacheExpiresAt, mac,
 	).Int()
 	if err != nil {
 		return err
@@ -383,14 +393,40 @@ func BumpUserAuthVersion(userId int) (int64, error) {
 	return next, nil
 }
 
-// PublishUserAuthCache refreshes the current database state after a successful
-// auth-sensitive transaction without touching the cached quota field.
+// PublishUserAuthCache refreshes user metadata from the database. Quota stays
+// under the atomic quota-delta paths.
 func PublishUserAuthCache(userId int) error {
-	user, err := GetUserById(userId, false)
+	if !common.RedisEnabled {
+		return nil
+	}
+	if userId <= 0 {
+		return fmt.Errorf("invalid user id")
+	}
+	authoritative, err := GetUserById(userId, false)
 	if err != nil {
 		return err
 	}
-	return updateUserCache(*user)
+	// Group and profile updates keep the same authentication version. Re-read
+	// after publishing so a delayed refresh repairs any newer metadata it replaced.
+	for range 3 {
+		if err := updateUserCache(*authoritative); err != nil {
+			return err
+		}
+		verified, err := GetUserById(userId, false)
+		if err != nil {
+			return err
+		}
+		previousBase, verifiedBase := authoritative.ToBaseUser(), verified.ToBaseUser()
+		previousBase.Quota, verifiedBase.Quota = 0, 0
+			if reflect.DeepEqual(previousBase, verifiedBase) {
+			return nil
+		}
+		authoritative = verified
+	}
+	if err := updateUserCache(*authoritative); err != nil {
+		return err
+	}
+	return fmt.Errorf("user metadata changed repeatedly during cache refresh")
 }
 
 func PublishUserPolicyCache(userId int) error {
@@ -408,46 +444,4 @@ func PublishUserPolicyCache(userId int) error {
 // existing database. It is idempotent and portable across all supported DBs.
 func InitializeUserAuthVersions() error {
 	return DB.Model(&User{}).Where("auth_version IS NULL OR auth_version < ?", 1).Update("auth_version", 1).Error
-}
-
-func updateUserCacheFieldAtVersion(userId int, field string, value any, authVersion int64) error {
-	if !common.RedisEnabled {
-		return nil
-	}
-	if userId <= 0 || authVersion <= 0 {
-		return fmt.Errorf("invalid user auth version")
-	}
-	const script = `
-local incoming = tonumber(ARGV[1])
-local pending = tonumber(redis.call('GET', KEYS[2]) or '0')
-local committed = tonumber(redis.call('GET', KEYS[3]) or '0')
-local current = tonumber(redis.call('HGET', KEYS[1], 'AuthVersion') or '0')
-if pending > incoming or committed > incoming or current > incoming then
-  return 0
-end
-if committed < incoming then
-  redis.call('SET', KEYS[3], ARGV[1])
-end
-if pending > 0 and pending <= incoming then
-  redis.call('DEL', KEYS[2])
-end
-if redis.call('EXISTS', KEYS[1]) == 0 then
-  return 1
-end
-if current ~= incoming then
-  return 1
-end
-redis.call('HSET', KEYS[1], ARGV[2], ARGV[3], 'CacheSchema', ARGV[4])
-return 1`
-	result, err := common.RDB.Eval(context.Background(), script,
-		[]string{getUserCacheKey(userId), getUserAuthFenceKey(userId), getUserAuthVersionKey(userId)},
-		authVersion, field, value, userCacheSchemaVersion,
-	).Int()
-	if err != nil {
-		return err
-	}
-	if result == 0 {
-		return ErrUserAuthCachePending
-	}
-	return nil
 }

@@ -8,11 +8,26 @@ import (
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
+	sharedclaude "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/claude"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/QuantumNous/new-api/relaykit/types"
 )
 
 const maxClaudeWebSearchUses = 1000
+
+func functionParametersJSON(value any) (json.RawMessage, error) {
+	switch parameters := value.(type) {
+	case nil:
+		return nil, nil
+	case json.RawMessage:
+		return append(json.RawMessage(nil), parameters...), nil
+	case []byte:
+		return append(json.RawMessage(nil), parameters...), nil
+	default:
+		encoded, err := kitutil.Marshal(value)
+		return json.RawMessage(encoded), err
+	}
+}
 
 func ExtractRequest(format types.RelayFormat, request any) (any, Set, error) {
 	switch format {
@@ -46,11 +61,15 @@ func extractOpenAIChatRequest(request any) (any, Set, error) {
 		if err := kitutil.Unmarshal(source.Functions, &functions); err != nil {
 			return nil, Set{}, fmt.Errorf("invalid legacy functions: %w", err)
 		}
-		for _, function := range functions {
+		for index, function := range functions {
+			parameters, err := functionParametersJSON(function.Parameters)
+			if err != nil {
+				return nil, Set{}, fmt.Errorf("functions[%d].parameters: %w", index, err)
+			}
 			set.Definitions = append(set.Definitions, Definition{
 				Kind:      KindFunction,
 				Execution: ExecutionClient,
-				Function:  &Function{Name: function.Name, Description: function.Description, Parameters: function.Parameters, Strict: function.Strict},
+				Function:  &Function{Name: function.Name, Description: function.Description, Parameters: parameters, Strict: function.Strict},
 			})
 		}
 	}
@@ -60,13 +79,17 @@ func extractOpenAIChatRequest(request any) (any, Set, error) {
 				set.Definitions = append(set.Definitions, definition)
 				continue
 			}
+			parameters, err := functionParametersJSON(tool.Function.Parameters)
+			if err != nil {
+				return nil, Set{}, fmt.Errorf("tools[%d].parameters: %w", index, err)
+			}
 			set.Definitions = append(set.Definitions, Definition{
 				Kind:      KindFunction,
 				Execution: ExecutionClient,
 				Function: &Function{
 					Name:        tool.Function.Name,
 					Description: tool.Function.Description,
-					Parameters:  tool.Function.Parameters,
+					Parameters:  parameters,
 					Strict:      tool.Function.Strict,
 				},
 			})
@@ -405,7 +428,7 @@ func decodeOpenAIResponsesDefinition(raw json.RawMessage) (Definition, error) {
 			Function: &Function{
 				Name:        strings.TrimSpace(kitutil.Interface2String(tool["name"])),
 				Description: kitutil.Interface2String(tool["description"]),
-				Parameters:  tool["parameters"],
+				Parameters:  kitutil.ObjectMember(raw, "parameters"),
 				Strict:      boolPointer(tool, "strict"),
 			},
 		}, nil
@@ -504,9 +527,9 @@ func decodeClaudeDefinition(raw json.RawMessage) (Definition, error) {
 		}, nil
 	}
 	if toolType == "" || toolType == "custom" {
-		parameters, err := functionParametersMap(tool["input_schema"])
-		if err != nil {
-			return Definition{}, fmt.Errorf("invalid Claude input_schema: %w", err)
+		parameters, ok := sharedclaude.FunctionParametersToInputSchema(kitutil.ObjectMember(raw, "input_schema"))
+		if !ok {
+			return Definition{}, fmt.Errorf("invalid Claude input_schema")
 		}
 		return Definition{
 			Kind:      KindFunction,
@@ -536,21 +559,27 @@ func decodeGeminiDefinitions(raw json.RawMessage) ([]Definition, error) {
 		return nil, err
 	}
 	definitions := make([]Definition, 0)
-	if functions, ok := tool["functionDeclarations"].([]any); ok {
-		for _, value := range functions {
-			function, ok := value.(map[string]any)
-			if !ok {
+	if _, ok := tool["functionDeclarations"].([]any); ok {
+		var declarations struct {
+			FunctionDeclarations []json.RawMessage `json:"functionDeclarations"`
+		}
+		if err := kitutil.Unmarshal(raw, &declarations); err != nil {
+			return nil, err
+		}
+		for _, declaration := range declarations.FunctionDeclarations {
+			var function map[string]any
+			if err := kitutil.Unmarshal(declaration, &function); err != nil || function == nil {
 				continue
 			}
-			parameters := function["parameters"]
+			parametersKey := "parameters"
 			parametersJSONSchema, hasParametersJSONSchema := function["parametersJsonSchema"]
-			if parameters != nil && hasParametersJSONSchema && parametersJSONSchema != nil {
+			if function["parameters"] != nil && hasParametersJSONSchema && parametersJSONSchema != nil {
 				return nil, fmt.Errorf("function %q declares both parameters and parametersJsonSchema", strings.TrimSpace(kitutil.Interface2String(function["name"])))
 			}
-			if parameters == nil && hasParametersJSONSchema {
-				parameters = parametersJSONSchema
+			if function["parameters"] == nil && hasParametersJSONSchema {
+				parametersKey = "parametersJsonSchema"
 			}
-			functionRaw, err := rawJSON(map[string]any{"functionDeclarations": []any{value}})
+			functionRaw, err := rawJSON(map[string]any{"functionDeclarations": []json.RawMessage{declaration}})
 			if err != nil {
 				return nil, err
 			}
@@ -562,7 +591,7 @@ func decodeGeminiDefinitions(raw json.RawMessage) ([]Definition, error) {
 				Function: &Function{
 					Name:          strings.TrimSpace(kitutil.Interface2String(function["name"])),
 					Description:   kitutil.Interface2String(function["description"]),
-					Parameters:    parameters,
+					Parameters:    kitutil.ObjectMember(declaration, parametersKey),
 					OpenAPISchema: function["parameters"] != nil,
 				},
 			})

@@ -80,8 +80,9 @@ func xAIStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			containStreamUsage = true
 			usage.PromptTokens = xAIResp.Usage.PromptTokens
 			usage.TotalTokens = xAIResp.Usage.TotalTokens
+			usage.PromptTokensDetails = xAIResp.Usage.PromptTokensDetails
 			usage.CompletionTokenDetails = xAIResp.Usage.CompletionTokenDetails
-			normalizeXAIUsage(usage)
+				normalizeXAIUsage(usage)
 		}
 
 		openaiResponse := streamResponseXAI2OpenAI(xAIResp, usage)

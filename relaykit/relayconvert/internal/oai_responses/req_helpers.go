@@ -2,6 +2,7 @@ package oairesponses
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -119,6 +120,42 @@ func responsesContentParts(content any) ([]map[string]any, error) {
 
 func ContentParts(content any) ([]map[string]any, error) {
 	return responsesContentParts(content)
+}
+
+func responsesRequestFunctionDeclarations(raw []byte) ([]dto.FunctionRequest, error) {
+	if !rawJSONPresent(raw) {
+		return nil, nil
+	}
+
+	var tools []json.RawMessage
+	if err := kitutil.Unmarshal(raw, &tools); err != nil {
+		return nil, fmt.Errorf("invalid tools: %w", err)
+	}
+
+	functions := make([]dto.FunctionRequest, 0, len(tools))
+	for _, rawTool := range tools {
+		var tool map[string]any
+		if err := kitutil.Unmarshal(rawTool, &tool); err != nil {
+			return nil, fmt.Errorf("invalid tools: %w", err)
+		}
+		if strings.TrimSpace(kitutil.Interface2String(tool["type"])) != "function" {
+			continue
+		}
+		name := strings.TrimSpace(kitutil.Interface2String(tool["name"]))
+		if name == "" {
+			continue
+		}
+		functions = append(functions, dto.FunctionRequest{
+			Name:        name,
+			Description: kitutil.Interface2String(tool["description"]),
+			Parameters:  kitutil.ObjectMember(rawTool, "parameters"),
+		})
+	}
+	return functions, nil
+}
+
+func RequestFunctionDeclarations(raw []byte) ([]dto.FunctionRequest, error) {
+	return responsesRequestFunctionDeclarations(raw)
 }
 
 func responsesReasoningEffort(req *dto.OpenAIResponsesRequest) string {

@@ -420,6 +420,9 @@ func (a *Adaptor) resolve(c *gin.Context, info *relaycommon.RelayInfo) error {
 	route, ok := config.MatchPathForModel(incomingPath, selectionModel)
 	if plan, planned := advancedCustomProtocolPlan(c); planned && plan.AdvancedCustomRoute != nil {
 		route, ok = *plan.AdvancedCustomRoute, true
+		if plan.Status == channelcompat.StatusConvertible {
+			route.Converter = plan.RequestConverter
+		}
 	}
 	if ok {
 		route.Converter = strings.TrimSpace(route.Converter)

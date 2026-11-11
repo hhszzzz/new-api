@@ -92,7 +92,11 @@ func closeActiveChannelWebSockets(channelIDs []int) {
 }
 
 func restoreMultiKeyChannelIfAvailable(channel *model.Channel) {
-	if channel.Status != common.ChannelStatusManuallyDisabled || !hasEnabledMultiKey(channel) {
+	if channel == nil {
+		return
+	}
+	disabled := channel.Status == common.ChannelStatusManuallyDisabled || channel.Status == common.ChannelStatusAutoDisabled
+	if !disabled || !hasEnabledMultiKey(channel) {
 		return
 	}
 	info := channel.GetOtherInfo()
@@ -744,6 +748,12 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 		if regionMap["default"] == nil {
 			return i18n.NewError(i18n.MsgChannelVertexRegionDefaultRequired, nil)
 		}
+
+		switch channel.GetOtherSettings().VertexAPIVersion {
+		case "", "v1", "v1beta1":
+		default:
+			return common.NewMessage("Vertex AI API version must be v1 or v1beta1")
+		}
 	}
 
 	// Codex OAuth key validation (optional, only when JSON object is provided)
@@ -808,17 +818,18 @@ type AddChannelRequest struct {
 	Channel                   *model.Channel        `json:"channel"`
 }
 
-func getVertexArrayKeys(c *gin.Context, keys string) ([]string, error) {
+func getVertexArrayKeys(c *gin.Context, keys string) ([]string, []int, error) {
 	if keys == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 	var keyArray []any
 	err := common.Unmarshal([]byte(keys), &keyArray)
 	if err != nil {
-		return nil, errors.New(i18n.T(c, i18n.MsgChannelVertexBatchKeysInvalid))
+		return nil, nil, errors.New(i18n.T(c, i18n.MsgChannelVertexBatchKeysInvalid))
 	}
 	cleanKeys := make([]string, 0, len(keyArray))
-	for _, key := range keyArray {
+	inputIndices := make([]int, 0, len(keyArray))
+	for i, key := range keyArray {
 		var keyStr string
 		switch v := key.(type) {
 		case string:
@@ -826,18 +837,19 @@ func getVertexArrayKeys(c *gin.Context, keys string) ([]string, error) {
 		default:
 			bytes, err := common.Marshal(v)
 			if err != nil {
-				return nil, errors.New(i18n.T(c, i18n.MsgChannelVertexKeyEncodeFailed))
+				return nil, nil, errors.New(i18n.T(c, i18n.MsgChannelVertexKeyEncodeFailed))
 			}
 			keyStr = string(bytes)
 		}
 		if keyStr != "" {
 			cleanKeys = append(cleanKeys, keyStr)
+			inputIndices = append(inputIndices, i)
 		}
 	}
 	if len(cleanKeys) == 0 {
-		return nil, errors.New(i18n.T(c, i18n.MsgChannelVertexKeysEmpty))
+		return nil, nil, errors.New(i18n.T(c, i18n.MsgChannelVertexKeysEmpty))
 	}
-	return cleanKeys, nil
+	return cleanKeys, inputIndices, nil
 }
 
 func AddChannel(c *gin.Context) {
@@ -875,26 +887,29 @@ func AddChannel(c *gin.Context) {
 
 	addChannelRequest.Channel.CreatedTime = common.GetTimestamp()
 	keys := make([]string, 0)
+	inputIndices := make([]int, 0)
 	switch addChannelRequest.Mode {
 	case "multi_to_single":
 		addChannelRequest.Channel.ChannelInfo.IsMultiKey = true
 		addChannelRequest.Channel.ChannelInfo.MultiKeyMode = addChannelRequest.MultiKeyMode
 		if addChannelRequest.Channel.Type == constant.ChannelTypeVertexAi && addChannelRequest.Channel.GetOtherSettings().VertexKeyType != hostdto.VertexKeyTypeAPIKey {
-			array, err := getVertexArrayKeys(c, addChannelRequest.Channel.Key)
+			array, indices, err := getVertexArrayKeys(c, addChannelRequest.Channel.Key)
 			if err != nil {
 				common.ApiError(c, err)
 				return
 			}
 			addChannelRequest.Channel.ChannelInfo.MultiKeySize = len(array)
 			addChannelRequest.Channel.Key = strings.Join(array, "\n")
+			inputIndices = indices
 		} else {
 			cleanKeys := make([]string, 0)
-			for key := range strings.SplitSeq(addChannelRequest.Channel.Key, "\n") {
+			for i, key := range strings.Split(addChannelRequest.Channel.Key, "\n") {
 				if key == "" {
 					continue
 				}
 				key = strings.TrimSpace(key)
 				cleanKeys = append(cleanKeys, key)
+				inputIndices = append(inputIndices, i)
 			}
 			addChannelRequest.Channel.ChannelInfo.MultiKeySize = len(cleanKeys)
 			addChannelRequest.Channel.Key = strings.Join(cleanKeys, "\n")
@@ -903,23 +918,28 @@ func AddChannel(c *gin.Context) {
 	case "batch":
 		if addChannelRequest.Channel.Type == constant.ChannelTypeVertexAi && addChannelRequest.Channel.GetOtherSettings().VertexKeyType != hostdto.VertexKeyTypeAPIKey {
 			// multi json
-			keys, err = getVertexArrayKeys(c, addChannelRequest.Channel.Key)
+			keys, inputIndices, err = getVertexArrayKeys(c, addChannelRequest.Channel.Key)
 			if err != nil {
 				common.ApiError(c, err)
 				return
 			}
 		} else {
 			keys = strings.Split(addChannelRequest.Channel.Key, "\n")
+			for i := range keys {
+				inputIndices = append(inputIndices, i)
+			}
 		}
 	case "single":
 		keys = []string{addChannelRequest.Channel.Key}
+		inputIndices = []int{0}
 	default:
 		common.ApiErrorI18n(c, i18n.MsgChannelUnsupportedAddMode)
 		return
 	}
 
 	channels := make([]model.Channel, 0, len(keys))
-	for _, key := range keys {
+	channelInputIndices := make([][]int, 0, len(keys))
+	for i, key := range keys {
 		if key == "" {
 			continue
 		}
@@ -933,6 +953,11 @@ func AddChannel(c *gin.Context) {
 			localChannel.Name = fmt.Sprintf("%s %s", localChannel.Name, keyPrefix)
 		}
 		channels = append(channels, *localChannel)
+		if addChannelRequest.Mode == "multi_to_single" {
+			channelInputIndices = append(channelInputIndices, inputIndices)
+		} else {
+			channelInputIndices = append(channelInputIndices, []int{inputIndices[i]})
+		}
 	}
 	err = model.BatchInsertChannels(channels)
 	if err != nil {
@@ -953,9 +978,22 @@ func AddChannel(c *gin.Context) {
 		createAudit["base_url_source"] = "plugin_default"
 	}
 	recordManageAudit(c, "channel.create", createAudit)
+	ids := make([]int, len(channels))
+	results := make([]gin.H, 0, len(inputIndices))
+	for i, channel := range channels {
+		ids[i] = channel.Id
+		for _, inputIndex := range channelInputIndices[i] {
+			results = append(results, gin.H{"input_index": inputIndex, "channel_id": channel.Id})
+		}
+	}
+	data := gin.H{"ids": ids, "results": results}
+	if len(ids) == 1 {
+		data["id"] = ids[0]
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
+		"data":    data,
 	})
 	return
 }
@@ -1324,7 +1362,7 @@ func UpdateChannel(c *gin.Context) {
 				if channel.Type == constant.ChannelTypeVertexAi && channel.GetOtherSettings().VertexKeyType != hostdto.VertexKeyTypeAPIKey {
 					// 尝试解析新密钥为JSON数组
 					if strings.HasPrefix(strings.TrimSpace(channel.Key), "[") {
-						array, err := getVertexArrayKeys(c, channel.Key)
+						array, _, err := getVertexArrayKeys(c, channel.Key)
 						if err != nil {
 							common.ApiError(c, err)
 							return

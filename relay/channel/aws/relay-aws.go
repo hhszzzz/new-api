@@ -18,6 +18,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gin-gonic/gin"
 	"github.com/pkg/errors"
 
@@ -129,6 +130,7 @@ func prepareAwsRequest(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor, 
 		}
 		awsReq.Body = reqBody
 		a.InvokeInput = awsReq
+		a.AwsReq = awsReq
 		return nil
 	} else {
 		awsClaudeReq, err := formatRequest(requestBody, requestHeader)
@@ -147,6 +149,7 @@ func prepareAwsRequest(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor, 
 				return hosttypes.NewError(errors.Wrap(err, "marshal aws request fail"), hosttypes.ErrorCodeBadRequestBody)
 			}
 			a.StreamInput = awsReq
+			a.AwsReq = awsReq
 			return nil
 		} else {
 			awsReq := &bedrockruntime.InvokeModelInput{
@@ -159,6 +162,7 @@ func prepareAwsRequest(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor, 
 				return hosttypes.NewError(errors.Wrap(err, "marshal aws request fail"), hosttypes.ErrorCodeBadRequestBody)
 			}
 			a.InvokeInput = awsReq
+			a.AwsReq = awsReq
 			return nil
 		}
 	}
@@ -190,13 +194,18 @@ func buildAwsRequestBody(c *gin.Context, info *relaycommon.RelayInfo, awsClaudeR
 		if err != nil {
 			return nil, errors.Wrap(err, "get request body bytes fail")
 		}
-		var data map[string]any
-		if err := common.Unmarshal(body, &data); err != nil {
-			return nil, errors.Wrap(err, "pass-through unmarshal request body fail")
+		// Only model and stream are removed: the rest keeps the client's bytes
+		// and key order. The Doc reads body in place and never changes it.
+		if !ojson.ValidBytes(body) || !ojson.GetBytesNoCopy(body, "@this").IsObject() {
+			return nil, errors.New("pass-through unmarshal request body fail: request body must be a JSON object")
 		}
-		delete(data, "model")
-		delete(data, "stream")
-		return common.Marshal(data)
+		data := ojson.NewDoc(body)
+		for _, key := range []string{"model", "stream"} {
+			if err := relaycommon.DeleteJSONMember(data, key); err != nil {
+				return nil, errors.Wrap(err, "pass-through unmarshal request body fail")
+			}
+		}
+		return data.Bytes(), nil
 	}
 	return common.Marshal(awsClaudeReq)
 }

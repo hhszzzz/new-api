@@ -383,8 +383,12 @@ func TestClaudeMessagesRequestToOpenAIChatNormalizesToolSchemas(t *testing.T) {
 	got, err := ClaudeMessagesRequestToOpenAIChat(request, nil)
 	require.NoError(t, err)
 	require.Len(t, got.Tools, 2)
-	assert.Equal(t, "object", got.Tools[0].Function.Parameters.(map[string]any)["type"])
-	assert.Equal(t, map[string]any{"type": "object", "properties": map[string]any{}}, got.Tools[1].Function.Parameters)
+	var firstParameters map[string]any
+	require.NoError(t, kitutil.Unmarshal(got.Tools[0].Function.Parameters, &firstParameters))
+	assert.Equal(t, "object", firstParameters["type"])
+	var secondParameters map[string]any
+	require.NoError(t, kitutil.Unmarshal(got.Tools[1].Function.Parameters, &secondParameters))
+	assert.Equal(t, map[string]any{"type": "object", "properties": map[string]any{}}, secondParameters)
 }
 
 func TestClaudeMessagesRequestToOpenAIChatRejectsUnmappedTypedTools(t *testing.T) {

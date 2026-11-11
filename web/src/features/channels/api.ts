@@ -239,9 +239,12 @@ export async function detachChannelsFromAggregates(
 export async function getChannelOps(
   autoBan?: boolean
 ): Promise<ChannelOpsResponse> {
-  const config = channelActionConfig()
-  config.params = autoBan === undefined ? undefined : { auto_ban: autoBan }
-  const res = await api.get('/api/channel/ops', config)
+  const res = await api.get(
+    '/api/channel/ops',
+    channelActionConfig({
+      params: autoBan === undefined ? undefined : { auto_ban: autoBan },
+    })
+  )
   return res.data
 }
 

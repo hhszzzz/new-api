@@ -2,6 +2,7 @@ package model
 
 import (
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -13,6 +14,28 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
+
+// Sharded Redis hashes only the text inside the first brace pair, so fence
+// and version keys tagged with the untagged cache key share its slot.
+// Miniredis does not enforce slots, so check the tags explicitly.
+func TestAuthCacheKeysShareClusterHashTag(t *testing.T) {
+	for _, tc := range []struct {
+		cacheKey string
+		related  []string
+	}{
+		{getUserCacheKey(5), []string{getUserAuthFenceKey(5), getUserAuthVersionKey(5)}},
+		{getTokenCacheKey("test-token"), []string{getTokenCacheFenceKey("test-token")}},
+	} {
+		assert.NotContains(t, tc.cacheKey, "{")
+		for _, key := range tc.related {
+			_, suffix, ok := strings.Cut(key, "{")
+			require.True(t, ok)
+			tag, _, ok := strings.Cut(suffix, "}")
+			require.True(t, ok)
+			assert.Equal(t, tc.cacheKey, tag)
+		}
+	}
+}
 
 func useUserCacheMiniRedis(t *testing.T) *miniredis.Miniredis {
 	t.Helper()
@@ -107,11 +130,11 @@ func TestUserCacheRoundTripsModelBlocklist(t *testing.T) {
 	assert.Equal(t, []string{"gpt-5.5"}, cached.ModelBlocklist)
 }
 
-func TestUserCacheSchemaSixRoundTripsNullableRateLimits(t *testing.T) {
+func TestUserCacheSchemaSevenRoundTripsNullableRateLimits(t *testing.T) {
 	useUserCacheMiniRedis(t)
 	const userID = 4204
 
-	require.Equal(t, 6, userCacheSchemaVersion)
+	require.Equal(t, 7, userCacheSchemaVersion)
 	require.NoError(t, writeUserCache(&UserBase{
 		Id:                userID,
 		Group:             "default",
@@ -156,7 +179,7 @@ func TestUserAuthFieldUpdateRejectsVersionMismatch(t *testing.T) {
 		Id: userID, Group: "current", Username: "cached", AuthVersion: 3,
 	}, true))
 
-	err := updateUserCacheFieldAtVersion(userID, "Group", "stale", 2)
+	err := writeUserCache(&UserBase{Id: userID, Group: "stale", AuthVersion: 2}, false)
 
 	assert.ErrorIs(t, err, ErrUserAuthCachePending)
 	group, err := common.RDB.HGet(t.Context(), getUserCacheKey(userID), "Group").Result()

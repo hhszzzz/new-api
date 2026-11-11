@@ -20,19 +20,30 @@ import (
 // read, replacing whatever the previous test left in the process-wide index.
 // Radar auto-effort is opt-in per model, so the snapshot's models are also
 // allowed by the administrator unless a test overrides the allowlist.
-func rebuildRadarAutoEffortIndex(t *testing.T, configurations ...service.ModelRadarConfiguration) {
+func rebuildRadarAutoEffortIndex(t *testing.T, cells ...service.ModelRadarBenchCell) {
 	t.Helper()
-	models := make([]string, 0, len(configurations))
-	for _, configuration := range configurations {
-		models = append(models, configuration.Model)
+	models := make([]string, 0, len(cells))
+	for _, cell := range cells {
+		models = append(models, cell.Model)
 	}
 	// The allowlist must be in place before the index snapshots the raw option,
 	// otherwise the cached index looks stale and the lookup falls back to the DB.
 	allowRadarModels(t, models...)
 	service.RebuildModelRadarAutoEffortIndex(&service.ModelRadarData{
-		FetchedAt:      common.GetTimestamp(),
-		Configurations: configurations,
+		FetchedAt: common.GetTimestamp(),
+		Bench:     &service.ModelRadarBench{Cells: cells},
 	})
+}
+
+func radarAutoEffortCell(model, effort string, iq float64, validTasks int, price *float64) service.ModelRadarBenchCell {
+	score := iq * 1.5
+	return service.ModelRadarBenchCell{
+		Model:    model,
+		Effort:   effort,
+		Score:    &score,
+		Coverage: validTasks,
+		Price:    service.ModelRadarBenchMetricStat{Mean: price},
+	}
 }
 
 // allowRadarModels replaces the administrator's per-model opt-in list for the
@@ -94,9 +105,9 @@ func radarAutoEffortRequest(model string, effort string) *dto.GeneralOpenAIReque
 
 func TestResolveRadarAutoEffortReplacesExplicitTier(t *testing.T) {
 	rebuildRadarAutoEffortIndex(t,
-		service.ModelRadarConfiguration{Model: "gpt-test", Effort: "high", IQ: 90, ValidTasks: 10},
-		service.ModelRadarConfiguration{Model: "gpt-test", Effort: "medium", IQ: 80, ValidTasks: 10},
-		service.ModelRadarConfiguration{Model: "gpt-test", Effort: "low", IQ: 60, ValidTasks: 10},
+		radarAutoEffortCell("gpt-test", "high", 90, 10, nil),
+		radarAutoEffortCell("gpt-test", "medium", 80, 10, nil),
+		radarAutoEffortCell("gpt-test", "low", 60, 10, nil),
 	)
 	info := newRadarAutoEffortRelayInfo("gpt-test", radarAutoEffortRequest("gpt-test", "low"),
 		radarAutoEffortSetting(hostdto.RadarAutoEffortPolicyHighestIQ, 0, "gpt-test"))
@@ -114,7 +125,7 @@ func TestResolveRadarAutoEffortReplacesExplicitTier(t *testing.T) {
 
 func TestResolveRadarAutoEffortSkipsWhenClientKeptTheDefaultTier(t *testing.T) {
 	rebuildRadarAutoEffortIndex(t,
-		service.ModelRadarConfiguration{Model: "gpt-test", Effort: "high", IQ: 90, ValidTasks: 10},
+		radarAutoEffortCell("gpt-test", "high", 90, 10, nil),
 	)
 	info := newRadarAutoEffortRelayInfo("gpt-test", radarAutoEffortRequest("gpt-test", ""),
 		radarAutoEffortSetting(hostdto.RadarAutoEffortPolicyHighestIQ, 0, "gpt-test"))
@@ -129,7 +140,7 @@ func TestResolveRadarAutoEffortSkipsWhenClientKeptTheDefaultTier(t *testing.T) {
 
 func TestResolveRadarAutoEffortIgnoresDisabledModels(t *testing.T) {
 	rebuildRadarAutoEffortIndex(t,
-		service.ModelRadarConfiguration{Model: "gpt-test", Effort: "high", IQ: 90, ValidTasks: 10},
+		radarAutoEffortCell("gpt-test", "high", 90, 10, nil),
 	)
 	info := newRadarAutoEffortRelayInfo("gpt-test", radarAutoEffortRequest("gpt-test", "low"),
 		radarAutoEffortSetting(hostdto.RadarAutoEffortPolicyHighestIQ, 0, "other-model"))
@@ -145,9 +156,9 @@ func TestResolveRadarAutoEffortIgnoresModelsTheAdministratorDidNotAllow(t *testi
 	allowRadarModels(t, "other-model")
 	service.RebuildModelRadarAutoEffortIndex(&service.ModelRadarData{
 		FetchedAt: common.GetTimestamp(),
-		Configurations: []service.ModelRadarConfiguration{
-			{Model: "gpt-test", Effort: "high", IQ: 90, ValidTasks: 10},
-		},
+		Bench: &service.ModelRadarBench{Cells: []service.ModelRadarBenchCell{
+			radarAutoEffortCell("gpt-test", "high", 90, 10, nil),
+		}},
 	})
 	info := newRadarAutoEffortRelayInfo("gpt-test", radarAutoEffortRequest("gpt-test", "low"),
 		radarAutoEffortSetting(hostdto.RadarAutoEffortPolicyHighestIQ, 0, "gpt-test"))
@@ -160,7 +171,7 @@ func TestResolveRadarAutoEffortIgnoresModelsTheAdministratorDidNotAllow(t *testi
 
 func TestResolveRadarAutoEffortIgnoresAStoredStrategyWithoutEnabledModels(t *testing.T) {
 	rebuildRadarAutoEffortIndex(t,
-		service.ModelRadarConfiguration{Model: "gpt-test", Effort: "high", IQ: 90, ValidTasks: 10},
+		radarAutoEffortCell("gpt-test", "high", 90, 10, nil),
 	)
 	// Disabling the last model keeps a non-default strategy stored, so the
 	// resolver must still treat the request as opted out.
@@ -177,9 +188,9 @@ func TestResolveRadarAutoEffortSkipsStaleSnapshot(t *testing.T) {
 	allowRadarModels(t, "gpt-test")
 	service.RebuildModelRadarAutoEffortIndex(&service.ModelRadarData{
 		FetchedAt: common.GetTimestamp() - int64(service.ModelRadarStaleAfter().Seconds()) - 1,
-		Configurations: []service.ModelRadarConfiguration{
-			{Model: "gpt-test", Effort: "high", IQ: 90, ValidTasks: 10},
-		},
+		Bench: &service.ModelRadarBench{Cells: []service.ModelRadarBenchCell{
+			radarAutoEffortCell("gpt-test", "high", 90, 10, nil),
+		}},
 	})
 	info := newRadarAutoEffortRelayInfo("gpt-test", radarAutoEffortRequest("gpt-test", "low"),
 		radarAutoEffortSetting(hostdto.RadarAutoEffortPolicyHighestIQ, 0, "gpt-test"))
@@ -194,8 +205,8 @@ func TestResolveRadarAutoEffortSkipsStaleSnapshot(t *testing.T) {
 
 func TestResolveRadarAutoEffortKeepsTierWithinMinimumIQDelta(t *testing.T) {
 	rebuildRadarAutoEffortIndex(t,
-		service.ModelRadarConfiguration{Model: "gpt-test", Effort: "high", IQ: 90, ValidTasks: 10},
-		service.ModelRadarConfiguration{Model: "gpt-test", Effort: "medium", IQ: 88, ValidTasks: 10},
+		radarAutoEffortCell("gpt-test", "high", 90, 10, nil),
+		radarAutoEffortCell("gpt-test", "medium", 88, 10, nil),
 	)
 	info := newRadarAutoEffortRelayInfo("gpt-test", radarAutoEffortRequest("gpt-test", "medium"),
 		radarAutoEffortSetting(hostdto.RadarAutoEffortPolicyMinIQDelta, 5, "gpt-test"))
@@ -211,8 +222,8 @@ func TestResolveRadarAutoEffortKeepsTierWithinMinimumIQDelta(t *testing.T) {
 
 func TestResolveRadarAutoEffortReplacesTierBeyondMinimumIQDelta(t *testing.T) {
 	rebuildRadarAutoEffortIndex(t,
-		service.ModelRadarConfiguration{Model: "gpt-test", Effort: "high", IQ: 90, ValidTasks: 10},
-		service.ModelRadarConfiguration{Model: "gpt-test", Effort: "medium", IQ: 80, ValidTasks: 10},
+		radarAutoEffortCell("gpt-test", "high", 90, 10, nil),
+		radarAutoEffortCell("gpt-test", "medium", 80, 10, nil),
 	)
 	info := newRadarAutoEffortRelayInfo("gpt-test", radarAutoEffortRequest("gpt-test", "medium"),
 		radarAutoEffortSetting(hostdto.RadarAutoEffortPolicyMinIQDelta, 5, "gpt-test"))
@@ -226,8 +237,8 @@ func TestResolveRadarAutoEffortReplacesTierBeyondMinimumIQDelta(t *testing.T) {
 
 func TestResolveRadarAutoEffortIQPerCostPrefersCheaperTier(t *testing.T) {
 	rebuildRadarAutoEffortIndex(t,
-		service.ModelRadarConfiguration{Model: "gpt-test", Effort: "xhigh", IQ: 95, ValidTasks: 10, AveragePriceUSD: common.GetPointer(50.0)},
-		service.ModelRadarConfiguration{Model: "gpt-test", Effort: "medium", IQ: 85, ValidTasks: 10, AveragePriceUSD: common.GetPointer(1.0)},
+		radarAutoEffortCell("gpt-test", "xhigh", 95, 10, common.GetPointer(50.0)),
+		radarAutoEffortCell("gpt-test", "medium", 85, 10, common.GetPointer(1.0)),
 	)
 	info := newRadarAutoEffortRelayInfo("gpt-test", radarAutoEffortRequest("gpt-test", "low"),
 		radarAutoEffortSetting(hostdto.RadarAutoEffortPolicyIQPerCost, 0, "gpt-test"))
@@ -241,7 +252,7 @@ func TestResolveRadarAutoEffortIQPerCostPrefersCheaperTier(t *testing.T) {
 
 func TestResolveRadarAutoEffortReplacesModifierSelectedTier(t *testing.T) {
 	rebuildRadarAutoEffortIndex(t,
-		service.ModelRadarConfiguration{Model: "gpt-test", Effort: "high", IQ: 90, ValidTasks: 10},
+		radarAutoEffortCell("gpt-test", "high", 90, 10, nil),
 	)
 	info := newRadarAutoEffortRelayInfo("gpt-test@effort:low", radarAutoEffortRequest("gpt-test@effort:low", ""),
 		radarAutoEffortSetting(hostdto.RadarAutoEffortPolicyHighestIQ, 0, "gpt-test"))
@@ -256,7 +267,7 @@ func TestResolveRadarAutoEffortReplacesModifierSelectedTier(t *testing.T) {
 
 func TestResolveRadarAutoEffortKeepsGeminiBillingIdentity(t *testing.T) {
 	rebuildRadarAutoEffortIndex(t,
-		service.ModelRadarConfiguration{Model: "gemini-test", Effort: "high", IQ: 90, ValidTasks: 10},
+		radarAutoEffortCell("gemini-test", "high", 90, 10, nil),
 	)
 	info := newRadarAutoEffortRelayInfo("gemini-test", radarAutoEffortRequest("gemini-test", "low"),
 		radarAutoEffortSetting(hostdto.RadarAutoEffortPolicyHighestIQ, 0, "gemini-test"))
@@ -301,7 +312,7 @@ func TestResolveBillingModelNameForEffortFollowsTheReplacement(t *testing.T) {
 
 func TestApplyReasoningModelSuffixAppliesRadarDecision(t *testing.T) {
 	rebuildRadarAutoEffortIndex(t,
-		service.ModelRadarConfiguration{Model: "gpt-test", Effort: "high", IQ: 90, ValidTasks: 10},
+		radarAutoEffortCell("gpt-test", "high", 90, 10, nil),
 	)
 	request := radarAutoEffortRequest("gpt-test", "low")
 	info := newRadarAutoEffortRelayInfo("gpt-test", request, radarAutoEffortSetting(hostdto.RadarAutoEffortPolicyHighestIQ, 0, "gpt-test"))
@@ -320,7 +331,7 @@ func TestApplyReasoningModelSuffixAppliesRadarDecision(t *testing.T) {
 
 func TestApplyReasoningModelSuffixKeepsMappedModelModifierOverRadarDecision(t *testing.T) {
 	rebuildRadarAutoEffortIndex(t,
-		service.ModelRadarConfiguration{Model: "gpt-test", Effort: "high", IQ: 90, ValidTasks: 10},
+		radarAutoEffortCell("gpt-test", "high", 90, 10, nil),
 	)
 	request := radarAutoEffortRequest("gpt-test", "low")
 	info := newRadarAutoEffortRelayInfo("gpt-test", request, radarAutoEffortSetting(hostdto.RadarAutoEffortPolicyHighestIQ, 0, "gpt-test"))

@@ -114,6 +114,8 @@ type StreamStatus struct {
 // enter it because they may contain credentials or request content.
 type StreamOutcome struct {
 	EndReason        StreamEndReason
+	EndError         error
+	ErrorCount       int
 	HasErrors        bool
 	ExpectsTerminal  bool
 	Response         ResponseOutcome
@@ -351,6 +353,8 @@ func (s *StreamStatus) OutcomeSnapshot() StreamOutcome {
 	snapshot := s.Snapshot()
 	return StreamOutcome{
 		EndReason:        snapshot.EndReason,
+		EndError:         snapshot.EndError,
+		ErrorCount:       snapshot.ErrorCount,
 		HasErrors:        snapshot.ErrorCount > 0,
 		ExpectsTerminal:  snapshot.ExpectsTerminal,
 		Response:         snapshot.Response,

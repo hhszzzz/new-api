@@ -211,11 +211,8 @@ func TestExplicitResponsesPlanUsesResponsesWireForOpenAIAndAzure(t *testing.T) {
 				Messages:  []dto.ClaudeMessage{{Role: "user", Content: "hello"}},
 				MaxTokens: common.GetPointer(uint(64)),
 				Tools: []dto.Tool{{
-					Name: "lookup",
-					InputSchema: map[string]any{
-						"type":       "object",
-						"properties": map[string]any{"q": map[string]any{"type": "string"}},
-					},
+					Name:        "lookup",
+					InputSchema: common.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}}}`),
 				}},
 			}
 			converted, err := convertRequestForProtocolPlan(ctx, info, adaptor, plan, request)

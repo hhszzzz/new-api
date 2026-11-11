@@ -4,30 +4,44 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+func rawSchema(t *testing.T, schema any) []byte {
+	t.Helper()
+	raw, err := kitutil.Marshal(schema)
+	require.NoError(t, err)
+	return raw
+}
+
+func decodedSchema(t *testing.T, raw []byte) map[string]any {
+	t.Helper()
+	var schema map[string]any
+	require.NoError(t, kitutil.Unmarshal(raw, &schema))
+	return schema
+}
+
 func TestPrepareFunctionDeclarationUsesRestrictedParametersForSimpleSchema(t *testing.T) {
 	function := dto.FunctionRequest{
 		Name: "lookup",
-		Parameters: map[string]interface{}{
+		Parameters: rawSchema(t, map[string]any{
 			"type": "object",
-			"properties": map[string]interface{}{
-				"q": map[string]interface{}{"type": "string"},
+			"properties": map[string]any{
+				"q": map[string]any{"type": "string"},
 			},
-		},
+		}),
 	}
 
 	PrepareFunctionDeclaration(&function)
 
 	assert.Nil(t, function.ParametersJsonSchema)
-	parameters, ok := function.Parameters.(map[string]interface{})
-	require.True(t, ok)
+	parameters := decodedSchema(t, function.Parameters)
 	assert.Equal(t, "OBJECT", parameters["type"])
-	properties, ok := parameters["properties"].(map[string]interface{})
+	properties, ok := parameters["properties"].(map[string]any)
 	require.True(t, ok)
-	query, ok := properties["q"].(map[string]interface{})
+	query, ok := properties["q"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "STRING", query["type"])
 }
@@ -35,17 +49,17 @@ func TestPrepareFunctionDeclarationUsesRestrictedParametersForSimpleSchema(t *te
 func TestPrepareFunctionDeclarationUsesJSONSchemaForRichConstraints(t *testing.T) {
 	function := dto.FunctionRequest{
 		Name: "lookup",
-		Parameters: map[string]interface{}{
+		Parameters: rawSchema(t, map[string]any{
 			"$schema":              "https://json-schema.org/draft/2020-12/schema",
 			"type":                 "object",
 			"additionalProperties": false,
-			"properties": map[string]interface{}{
-				"q": map[string]interface{}{
+			"properties": map[string]any{
+				"q": map[string]any{
 					"type":             "number",
 					"exclusiveMinimum": 0,
 				},
 			},
-		},
+		}),
 	}
 
 	PrepareFunctionDeclaration(&function)
@@ -59,7 +73,7 @@ func TestPrepareFunctionDeclarationUsesJSONSchemaForRichConstraints(t *testing.T
 	require.True(t, ok)
 	query, ok := properties["q"].(map[string]interface{})
 	require.True(t, ok)
-	assert.Equal(t, 0, query["exclusiveMinimum"])
+	assert.Equal(t, float64(0), query["exclusiveMinimum"])
 }
 
 func TestPrepareFunctionDeclarationKeepsExplicitObjectForNoArgumentTool(t *testing.T) {
@@ -67,10 +81,9 @@ func TestPrepareFunctionDeclarationKeepsExplicitObjectForNoArgumentTool(t *testi
 
 	PrepareFunctionDeclaration(&function)
 
-	parameters, ok := function.Parameters.(map[string]interface{})
-	require.True(t, ok)
+	parameters := decodedSchema(t, function.Parameters)
 	assert.Equal(t, "OBJECT", parameters["type"])
-	properties, ok := parameters["properties"].(map[string]interface{})
+	properties, ok := parameters["properties"].(map[string]any)
 	require.True(t, ok)
 	assert.Empty(t, properties)
 }
