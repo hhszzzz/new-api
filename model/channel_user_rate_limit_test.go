@@ -32,13 +32,14 @@ func testChannelUserRateLimitPersistence(t *testing.T, db *gorm.DB) {
 	fixture := channelUserRateLimitPersistenceFixture{
 		UserRateLimits: ChannelUserRateLimits{
 			{UserId: 7, RPMLimit: &rpmLimit, ConcurrencyLimit: &concurrencyLimit, Username: "ignored"},
+			{UserId: 8, Priority: 100},
 		},
 	}
 	require.NoError(t, tableDB.Create(&fixture).Error)
 
 	var stored string
 	require.NoError(t, tableDB.Select("user_rate_limits").Where("id = ?", fixture.ID).Scan(&stored).Error)
-	assert.JSONEq(t, `[{"user_id":7,"rpm_limit":60,"concurrency_limit":5}]`, stored, "display names must not be persisted")
+	assert.JSONEq(t, `[{"user_id":7,"rpm_limit":60,"concurrency_limit":5},{"user_id":8,"rpm_limit":null,"concurrency_limit":null,"priority":100}]`, stored, "display names must not be persisted")
 
 	var loaded channelUserRateLimitPersistenceFixture
 	require.NoError(t, tableDB.First(&loaded, fixture.ID).Error)
@@ -48,6 +49,10 @@ func testChannelUserRateLimitPersistence(t *testing.T, db *gorm.DB) {
 	require.NotNil(t, limit.ConcurrencyLimit)
 	assert.Equal(t, 60, *limit.RPMLimit)
 	assert.Equal(t, 5, *limit.ConcurrencyLimit)
+
+	priorityLimit, ok := loaded.UserRateLimits.ForUser(8)
+	require.True(t, ok)
+	assert.Equal(t, 100, priorityLimit.Priority)
 
 	emptyValue, err := ChannelUserRateLimits{}.Value()
 	require.NoError(t, err)
@@ -104,7 +109,7 @@ func TestChannelUserRateLimitPersistsThroughChannelUpdate(t *testing.T) {
 	rpm := 60
 	concurrency := 2
 	channel.UserRateLimits = ChannelUserRateLimits{
-		{UserId: 7, RPMLimit: &rpm, ConcurrencyLimit: &concurrency},
+		{UserId: 7, RPMLimit: &rpm, ConcurrencyLimit: &concurrency, Priority: 100},
 	}
 	require.NoError(t, channel.Update())
 
@@ -116,6 +121,7 @@ func TestChannelUserRateLimitPersistsThroughChannelUpdate(t *testing.T) {
 	assert.Equal(t, 60, *limit.RPMLimit)
 	require.NotNil(t, limit.ConcurrencyLimit)
 	assert.Equal(t, 2, *limit.ConcurrencyLimit)
+	assert.Equal(t, 100, limit.Priority)
 
 	channel.UserRateLimits = ChannelUserRateLimits{}
 	require.NoError(t, channel.Update())
@@ -198,11 +204,13 @@ func TestChannelUserRateLimitsNormalize(t *testing.T) {
 		{UserId: 1, RPMLimit: &valid},
 		{UserId: 2},
 		{UserId: 3, ConcurrencyLimit: &valid, Username: "ignored"},
+		{UserId: 4, Priority: 100},
 	}
 	normalized, err := limits.normalized()
 	require.NoError(t, err)
-	require.Len(t, normalized, 2, "entries with no limits must be dropped")
+	require.Len(t, normalized, 3, "entries with no limits and no priority must be dropped")
 	assert.Zero(t, normalized[1].Username)
+	assert.Equal(t, 100, normalized[2].Priority, "a priority-only override must be kept")
 
 	_, err = ChannelUserRateLimits{{UserId: 1, RPMLimit: &valid}, {UserId: 1, RPMLimit: &valid}}.normalized()
 	assert.Error(t, err, "duplicate user ids must be rejected")
@@ -226,5 +234,6 @@ func TestChannelUserRateLimitsEqualIgnoresOrder(t *testing.T) {
 	right := ChannelUserRateLimits{{UserId: 2, ConcurrencyLimit: &second}, {UserId: 1, RPMLimit: &first}}
 	assert.True(t, left.Equal(right))
 	assert.False(t, left.Equal(ChannelUserRateLimits{{UserId: 1, RPMLimit: &second}, {UserId: 2, ConcurrencyLimit: &second}}))
+	assert.False(t, left.Equal(ChannelUserRateLimits{{UserId: 1, RPMLimit: &first}, {UserId: 2, ConcurrencyLimit: &second, Priority: 100}}))
 	assert.False(t, left.Equal(ChannelUserRateLimits{{UserId: 1, RPMLimit: &first}}))
 }

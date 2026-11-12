@@ -40,7 +40,7 @@ const BASE_CHANNEL_FORM = {
 }
 
 const PER_USER_LIMITS: ChannelUserRateLimit[] = [
-  { user_id: 7, username: 'alice', rpm_limit: 30 },
+  { user_id: 7, username: 'alice', rpm_limit: 30, priority: 100 },
   { user_id: 8, concurrency_limit: 2 },
 ]
 
@@ -138,6 +138,17 @@ describe('channel per-user limit form contract', () => {
         user_rate_limits: [{ user_id: 7 }],
       }).success
     ).toBe(false)
+  })
+
+  test('accepts a priority-only override', () => {
+    const values = {
+      ...BASE_CHANNEL_FORM,
+      user_rate_limits: [{ user_id: 7, priority: 100 }],
+    }
+    expect(channelFormSchema.safeParse(values).success).toBe(true)
+    expect(
+      transformFormDataToUpdatePayload(values, 9).user_rate_limits
+    ).toEqual([{ user_id: 7, priority: 100 }])
   })
 
   test('rejects non-positive user ids and limit values', () => {

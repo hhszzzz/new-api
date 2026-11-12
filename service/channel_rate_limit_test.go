@@ -131,6 +131,183 @@ func TestChannelUserRateLimitIsTighterThanChannelTotal(t *testing.T) {
 	first.Release()
 }
 
+func TestChannelNumericPriorityDrainsLowerPriority(t *testing.T) {
+	env := useChannelRateLimitMiniRedis(t)
+	channel := &model.Channel{
+		Id:               605,
+		ConcurrencyLimit: channelLimitInt(2),
+		UserRateLimits: model.ChannelUserRateLimits{
+			{UserId: 84, Priority: 100},
+		},
+	}
+
+	low1, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 85), channel)
+	require.True(t, allowed)
+	require.NotNil(t, low1)
+	low2, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 86), channel)
+	require.True(t, allowed)
+	require.NotNil(t, low2)
+
+	high, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 84), channel)
+	assert.False(t, allowed, "high priority waits for a channel slot")
+	assert.Nil(t, high)
+
+	low1.Release()
+	newLow, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 85), channel)
+	assert.False(t, allowed, "a higher-priority demand blocks new lower-priority requests")
+	assert.Nil(t, newLow)
+
+	high, allowed = TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 84), channel)
+	assert.True(t, allowed)
+	require.NotNil(t, high)
+
+	low2.Release()
+	secondHigh, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 84), channel)
+	assert.True(t, allowed, "high priority may use the full channel limit")
+	require.NotNil(t, secondHigh)
+
+	thirdHigh, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 84), channel)
+	assert.False(t, allowed, "the channel limit still applies to high priority")
+	assert.Nil(t, thirdHigh)
+
+	high.Release()
+	secondHigh.Release()
+	demandExists, err := env.client.Exists(t.Context(), channelRateLimitKeys(channel.Id, 0)[4]).Result()
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), demandExists, "the demand marker survives the admission window")
+
+	now, err := env.client.Time(t.Context()).Result()
+	require.NoError(t, err)
+	env.server.SetTime(now.Add(11 * time.Second))
+	low, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 85), channel)
+	assert.True(t, allowed, "the demand marker must expire for lower priorities")
+	if low != nil {
+		low.Release()
+	}
+}
+
+func TestChannelNumericPriorityOrdersLevels(t *testing.T) {
+	useChannelRateLimitMiniRedis(t)
+	channel := &model.Channel{
+		Id:               606,
+		ConcurrencyLimit: channelLimitInt(2),
+		UserRateLimits: model.ChannelUserRateLimits{
+			{UserId: 91, Priority: 200},
+			{UserId: 92, Priority: 100},
+		},
+	}
+
+	lowA, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 93), channel)
+	require.True(t, allowed)
+	require.NotNil(t, lowA)
+	lowB, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 93), channel)
+	require.True(t, allowed)
+	require.NotNil(t, lowB)
+
+	p100, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 92), channel)
+	assert.False(t, allowed)
+	assert.Nil(t, p100)
+	p200, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 91), channel)
+	assert.False(t, allowed)
+	assert.Nil(t, p200)
+
+	lowA.Release()
+	p100, allowed = TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 92), channel)
+	assert.False(t, allowed, "a lower priority must yield to a waiting higher priority")
+	assert.Nil(t, p100)
+
+	p200, allowed = TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 91), channel)
+	assert.True(t, allowed, "the highest waiting priority takes the free slot")
+	require.NotNil(t, p200)
+
+	p200.Release()
+	lowB.Release()
+}
+
+func TestChannelPriorityHonorsUserConcurrency(t *testing.T) {
+	useChannelRateLimitMiniRedis(t)
+	channel := &model.Channel{
+		Id:               607,
+		ConcurrencyLimit: channelLimitInt(3),
+		UserRateLimits: model.ChannelUserRateLimits{
+			{UserId: 95, Priority: 100, ConcurrencyLimit: channelLimitInt(1)},
+		},
+	}
+
+	high, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 95), channel)
+	require.True(t, allowed)
+	require.NotNil(t, high)
+
+	blockedHigh, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 95), channel)
+	assert.False(t, allowed, "high priority still obeys the user's own concurrency limit")
+	assert.Nil(t, blockedHigh)
+
+	low, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 96), channel)
+	assert.True(t, allowed, "a user-level rejection must not create channel priority demand")
+	if low != nil {
+		low.Release()
+	}
+	high.Release()
+}
+
+func TestChannelPriorityHonorsUserRPM(t *testing.T) {
+	useChannelRateLimitMiniRedis(t)
+	channel := &model.Channel{
+		Id:               609,
+		ConcurrencyLimit: channelLimitInt(2),
+		UserRateLimits: model.ChannelUserRateLimits{
+			{UserId: 931, Priority: 100, RPMLimit: channelLimitInt(1)},
+		},
+	}
+
+	high, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 931), channel)
+	require.True(t, allowed)
+	require.NotNil(t, high)
+
+	blockedHigh, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 931), channel)
+	assert.False(t, allowed, "high priority still obeys the user's own RPM limit")
+	assert.Nil(t, blockedHigh)
+
+	low, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 932), channel)
+	assert.True(t, allowed, "a user-level RPM rejection must not create channel priority demand")
+	if low != nil {
+		low.Release()
+	}
+	high.Release()
+}
+
+func TestChannelPriorityDemandExpires(t *testing.T) {
+	env := useChannelRateLimitMiniRedis(t)
+	channel := &model.Channel{
+		Id:               608,
+		ConcurrencyLimit: channelLimitInt(1),
+		UserRateLimits: model.ChannelUserRateLimits{
+			{UserId: 97, Priority: 100},
+		},
+	}
+
+	low, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 98), channel)
+	require.True(t, allowed)
+	require.NotNil(t, low)
+	high, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 97), channel)
+	assert.False(t, allowed)
+	assert.Nil(t, high)
+
+	low.Release()
+	blockedLow, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 98), channel)
+	assert.False(t, allowed, "lower priority must wait out the demand window")
+	assert.Nil(t, blockedLow)
+
+	now, err := env.client.Time(t.Context()).Result()
+	require.NoError(t, err)
+	env.server.SetTime(now.Add(11 * time.Second))
+	low, allowed = TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 98), channel)
+	assert.True(t, allowed, "lower priority resumes after the demand marker expires")
+	if low != nil {
+		low.Release()
+	}
+}
+
 func TestChannelRateLimitRPMUsesRedisMinuteAndIsolatesChannels(t *testing.T) {
 	env := useChannelRateLimitMiniRedis(t)
 	channel := &model.Channel{Id: 501, RpmLimit: channelLimitInt(2)}
@@ -277,10 +454,11 @@ func TestChannelConcurrencyLeaseRenewsWithServerTime(t *testing.T) {
 
 func TestChannelRateLimitKeysShareRedisClusterHashTag(t *testing.T) {
 	keys := channelRateLimitKeys(99, 7)
-	require.Len(t, keys, 4)
+	require.Len(t, keys, 5)
 	for _, key := range keys {
 		assert.Contains(t, key, "{channel:99}")
 	}
 	assert.Contains(t, keys[2], ":rpm:user:7")
 	assert.Contains(t, keys[3], ":active:user:7")
+	assert.Contains(t, keys[4], ":priority:demand")
 }

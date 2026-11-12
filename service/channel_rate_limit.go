@@ -24,6 +24,10 @@ const (
 
 	channelConcurrencyLeaseTTL   = 60 * time.Second
 	channelConcurrencyRenewEvery = 20 * time.Second
+
+	// channelPriorityDemandTTL gives a rejected higher-priority client time to
+	// retry before lower-priority requests may refill the free slots.
+	channelPriorityDemandTTL = 10 * time.Second
 )
 
 type channelRateLimitRedisSource struct {
@@ -48,6 +52,7 @@ type channelRateLimitSnapshot struct {
 	ConcurrencyLimit     int
 	UserRPMLimit         int
 	UserConcurrencyLimit int
+	Priority             int
 }
 
 type channelRateLimitRejection struct {
@@ -215,6 +220,9 @@ func AppendChannelRateLimitAdminInfo(c *gin.Context, other *model.LogOther) {
 			if snapshot.UserConcurrencyLimit > 0 {
 				entry["user_concurrency_limit"] = snapshot.UserConcurrencyLimit
 			}
+			if snapshot.Priority != 0 {
+				entry["priority"] = snapshot.Priority
+			}
 			channels = append(channels, entry)
 		}
 		info["channels"] = channels
@@ -279,10 +287,13 @@ func TryAcquireChannelRateLimit(c *gin.Context, channel *model.Channel) (*Channe
 	userId := c.GetInt("id")
 	userRPMLimit := 0
 	userConcurrencyLimit := 0
+	priority := 0
 	if override, ok := channel.UserRateLimits.ForUser(userId); ok {
 		userRPMLimit = configuredLimit(override.RPMLimit)
 		userConcurrencyLimit = configuredLimit(override.ConcurrencyLimit)
+		priority = override.Priority
 	}
+	priorityEnabled := concurrencyLimit > 0 && channel.UserRateLimits.HasPriorities()
 	if rpmLimit <= 0 && concurrencyLimit <= 0 && userRPMLimit <= 0 && userConcurrencyLimit <= 0 {
 		return nil, true
 	}
@@ -295,6 +306,7 @@ func TryAcquireChannelRateLimit(c *gin.Context, channel *model.Channel) (*Channe
 		ConcurrencyLimit:     concurrencyLimit,
 		UserRPMLimit:         userRPMLimit,
 		UserConcurrencyLimit: userConcurrencyLimit,
+		Priority:             priority,
 	}
 	observation.noteSnapshot(snapshot)
 
@@ -315,6 +327,9 @@ local concurrency_limit = tonumber(ARGV[3])
 local user_rpm_limit = tonumber(ARGV[4])
 local user_concurrency_limit = tonumber(ARGV[5])
 local lease_ttl = tonumber(ARGV[6])
+local priority_enabled = tonumber(ARGV[7])
+local priority = tonumber(ARGV[8])
+local demand_ttl = tonumber(ARGV[9])
 redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', now_ms - lease_ttl)
 redis.call('ZREMRANGEBYSCORE', KEYS[4], '-inf', now_ms - lease_ttl)
 local rpm_blocked = false
@@ -331,10 +346,30 @@ if user_rpm_limit > 0 then
     user_rpm_blocked = (tonumber(redis.call('HGET', KEYS[3], 'count')) or 0) >= user_rpm_limit
   end
 end
-local concurrency_blocked = concurrency_limit > 0 and redis.call('ZCARD', KEYS[2]) >= concurrency_limit
-local user_concurrency_blocked = user_concurrency_limit > 0 and redis.call('ZCARD', KEYS[4]) >= user_concurrency_limit
-if rpm_blocked or user_rpm_blocked or concurrency_blocked or user_concurrency_blocked then
-  return {0, rpm_blocked and 1 or 0, concurrency_blocked and 1 or 0, user_rpm_blocked and 1 or 0, user_concurrency_blocked and 1 or 0}
+local total_active = tonumber(redis.call('ZCARD', KEYS[2]))
+local concurrency_blocked = concurrency_limit > 0 and total_active >= concurrency_limit
+local user_concurrency_blocked = user_concurrency_limit > 0 and tonumber(redis.call('ZCARD', KEYS[4])) >= user_concurrency_limit
+local priority_blocked = false
+local set_demand = false
+if priority_enabled == 1 then
+  redis.call('ZREMRANGEBYSCORE', KEYS[5], '-inf', now_ms)
+  local demands = redis.call('ZRANGE', KEYS[5], 0, -1)
+  for _, member in ipairs(demands) do
+    if tonumber(member) > priority then
+      priority_blocked = true
+      break
+    end
+  end
+  if concurrency_blocked and not rpm_blocked and not user_rpm_blocked and not user_concurrency_blocked then
+    set_demand = true
+  end
+end
+if rpm_blocked or user_rpm_blocked or concurrency_blocked or user_concurrency_blocked or priority_blocked then
+  if set_demand then
+    redis.call('ZADD', KEYS[5], now_ms + demand_ttl, priority)
+    redis.call('PEXPIRE', KEYS[5], demand_ttl * 2)
+  end
+  return {0, rpm_blocked and 1 or 0, concurrency_blocked and 1 or 0, user_rpm_blocked and 1 or 0, user_concurrency_blocked and 1 or 0, priority_blocked and 1 or 0}
 end
 if rpm_limit > 0 then
   local rpm_count = 0
@@ -362,8 +397,8 @@ if user_concurrency_limit > 0 then
   redis.call('ZADD', KEYS[4], now_ms, ARGV[1])
   redis.call('PEXPIRE', KEYS[4], lease_ttl * 2)
 end
-return {1, 0, 0, 0, 0}`, channelRateLimitKeys(channel.Id, userId), leaseID, rpmLimit, concurrencyLimit, userRPMLimit, userConcurrencyLimit, channelConcurrencyLeaseTTL.Milliseconds()).Int64Slice()
-	if err != nil || len(result) != 5 {
+return {1, 0, 0, 0, 0, 0}`, channelRateLimitKeys(channel.Id, userId), leaseID, rpmLimit, concurrencyLimit, userRPMLimit, userConcurrencyLimit, channelConcurrencyLeaseTTL.Milliseconds(), boolInt(priorityEnabled), priority, channelPriorityDemandTTL.Milliseconds()).Int64Slice()
+	if err != nil || len(result) != 6 {
 		if c.Request.Context().Err() != nil {
 			return nil, false
 		}
@@ -387,6 +422,9 @@ return {1, 0, 0, 0, 0}`, channelRateLimitKeys(channel.Id, userId), leaseID, rpmL
 		}
 		if result[4] == 1 {
 			observation.noteRejected(channel.Id, userId, "concurrency", "user")
+		}
+		if result[5] == 1 {
+			observation.noteRejected(channel.Id, userId, "concurrency", "priority")
 		}
 		return nil, false
 	}
@@ -513,6 +551,7 @@ func channelRateLimitKeys(channelID, userId int) []string {
 		"channel_rate_limit:" + tag + ":active",
 		fmt.Sprintf("channel_rate_limit:%s:rpm:user:%d", tag, userId),
 		fmt.Sprintf("channel_rate_limit:%s:active:user:%d", tag, userId),
+		"channel_rate_limit:" + tag + ":priority:demand",
 	}
 }
 

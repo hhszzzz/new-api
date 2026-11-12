@@ -92,6 +92,19 @@ export function ChannelUserRateLimitEditor(
     )
   }
 
+  const updatePriority = (userId: number, rawValue: string) => {
+    props.onChange(
+      props.value.map((limit) =>
+        limit.user_id === userId
+          ? {
+              ...limit,
+              priority: rawValue === '' ? undefined : Number(rawValue),
+            }
+          : limit
+      )
+    )
+  }
+
   return (
     <div className='space-y-3'>
       <div className='flex flex-wrap items-center justify-between gap-2'>
@@ -147,6 +160,11 @@ export function ChannelUserRateLimitEditor(
           </PopoverContent>
         </Popover>
       </div>
+      <p className='text-muted-foreground text-xs'>
+        {t(
+          'Higher priority values take channel concurrency slots first. Lower-priority requests use free slots but yield when a higher-priority request is waiting; active requests finish normally. All user, channel, and global limits still apply.'
+        )}
+      </p>
 
       {props.value.length === 0 ? (
         <p className='text-muted-foreground text-xs'>
@@ -208,6 +226,24 @@ export function ChannelUserRateLimitEditor(
                       'concurrency_limit',
                       event.target.value
                     )
+                  }
+                />
+              </div>
+              <div className='w-24'>
+                <Label
+                  htmlFor={`channel-user-priority-${limit.user_id}`}
+                  className='text-xs'
+                >
+                  {t('Priority')}
+                </Label>
+                <Input
+                  id={`channel-user-priority-${limit.user_id}`}
+                  type='number'
+                  step={1}
+                  value={limit.priority ?? ''}
+                  placeholder='0'
+                  onChange={(event) =>
+                    updatePriority(limit.user_id, event.target.value)
                   }
                 />
               </div>

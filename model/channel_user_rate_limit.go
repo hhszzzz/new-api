@@ -4,6 +4,7 @@ import (
 	"database/sql/driver"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -20,6 +21,7 @@ type ChannelUserRateLimit struct {
 	Username         string `json:"username,omitempty" gorm:"-"`
 	RPMLimit         *int   `json:"rpm_limit"`
 	ConcurrencyLimit *int   `json:"concurrency_limit"`
+	Priority         int    `json:"priority,omitempty"`
 }
 
 type ChannelUserRateLimits []ChannelUserRateLimit
@@ -87,6 +89,12 @@ func (limits ChannelUserRateLimits) UserIDs() []int {
 	return ids
 }
 
+func (limits ChannelUserRateLimits) HasPriorities() bool {
+	return slices.ContainsFunc(limits, func(limit ChannelUserRateLimit) bool {
+		return limit.Priority != 0
+	})
+}
+
 func (limits ChannelUserRateLimits) Equal(other ChannelUserRateLimits) bool {
 	if len(limits) != len(other) {
 		return false
@@ -98,6 +106,7 @@ func (limits ChannelUserRateLimits) Equal(other ChannelUserRateLimits) bool {
 	for _, limit := range limits {
 		otherLimit, exists := byUser[limit.UserId]
 		if !exists ||
+			limit.Priority != otherLimit.Priority ||
 			!equalChannelUserLimit(limit.RPMLimit, otherLimit.RPMLimit) ||
 			!equalChannelUserLimit(limit.ConcurrencyLimit, otherLimit.ConcurrencyLimit) {
 			return false
@@ -127,7 +136,7 @@ func (limits ChannelUserRateLimits) normalized() (ChannelUserRateLimits, error) 
 			return nil, fmt.Errorf("duplicate user_id %d", limit.UserId)
 		}
 		seen[limit.UserId] = struct{}{}
-		if limit.RPMLimit == nil && limit.ConcurrencyLimit == nil {
+		if limit.RPMLimit == nil && limit.ConcurrencyLimit == nil && limit.Priority == 0 {
 			continue
 		}
 		if err := validateChannelUserLimit("rpm_limit", limit.RPMLimit); err != nil {

@@ -187,6 +187,28 @@ test('edits concurrency while keeping the configured RPM', async () => {
   ])
 })
 
+test('sets a numeric priority for an override', async () => {
+  const user = userEvent.setup()
+  const onChange = vi.fn()
+  renderEditor(
+    <StatefulEditor
+      initial={[{ user_id: 7, username: 'Alice' }]}
+      onChange={onChange}
+    />
+  )
+
+  const priority = screen.getByLabelText('Priority')
+  await user.type(priority, '100')
+  expect(onChange).toHaveBeenLastCalledWith([
+    { user_id: 7, username: 'Alice', priority: 100 },
+  ])
+
+  await user.clear(priority)
+  expect(onChange).toHaveBeenLastCalledWith([
+    { user_id: 7, username: 'Alice', priority: undefined },
+  ])
+})
+
 test('removes a configured override', async () => {
   const user = userEvent.setup()
   const onChange = vi.fn()

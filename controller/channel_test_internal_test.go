@@ -98,6 +98,9 @@ func TestValidateChannelUserRateLimits(t *testing.T) {
 	}
 	require.NoError(t, validateChannel(channel, false))
 
+	channel.UserRateLimits = model.ChannelUserRateLimits{{UserId: 8, Priority: 100}}
+	require.NoError(t, validateChannel(channel, false), "a priority-only override is valid")
+
 	channel.UserRateLimits = model.ChannelUserRateLimits{{UserId: 7, RPMLimit: &zero}}
 	require.ErrorContains(t, validateChannel(channel, false), "rpm_limit must be between")
 
@@ -342,7 +345,7 @@ func TestUpdateChannelUserRateLimitsOmissionAndExplicitClear(t *testing.T) {
 		Models: "gpt-test",
 		Group:  "default",
 		UserRateLimits: model.ChannelUserRateLimits{
-			{UserId: 7, RPMLimit: &rpmLimit},
+			{UserId: 7, RPMLimit: &rpmLimit, Priority: 100},
 		},
 	}
 	require.NoError(t, db.Create(channel).Error)
@@ -371,6 +374,7 @@ func TestUpdateChannelUserRateLimitsOmissionAndExplicitClear(t *testing.T) {
 	require.True(t, ok, "a partial update must preserve per-user limits")
 	require.NotNil(t, limit.RPMLimit)
 	assert.Equal(t, 30, *limit.RPMLimit)
+	assert.Equal(t, 100, limit.Priority)
 
 	update(fmt.Sprintf(`{"id":%d,"user_rate_limits":[]}`, channel.Id))
 	var cleared model.Channel

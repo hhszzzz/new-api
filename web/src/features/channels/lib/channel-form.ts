@@ -260,9 +260,11 @@ export const channelFormSchema = z
         (limits) =>
           (limits ?? []).every(
             (limit) =>
-              limit.rpm_limit != null || limit.concurrency_limit != null
+              limit.rpm_limit != null ||
+              limit.concurrency_limit != null ||
+              (limit.priority != null && limit.priority !== 0)
           ),
-        'Each user override needs RPM or concurrency'
+        'Each user override needs RPM, concurrency, or a non-zero priority'
       ),
     test_model: z.string().optional(),
     auto_ban: z.number().optional(),
