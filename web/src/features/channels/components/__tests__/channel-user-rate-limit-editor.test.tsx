@@ -198,6 +198,8 @@ test('sets a numeric priority for an override', async () => {
   )
 
   const priority = screen.getByLabelText('Priority')
+  expect(priority).toHaveAttribute('min', '-2147483647')
+  expect(priority).toHaveAttribute('max', '2147483647')
   await user.type(priority, '100')
   expect(onChange).toHaveBeenLastCalledWith([
     { user_id: 7, username: 'Alice', priority: 100 },

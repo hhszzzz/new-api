@@ -114,7 +114,12 @@ export const channelUserRateLimitSchema = z.object({
   username: z.string().nullish(),
   rpm_limit: z.number().int().positive().nullish(),
   concurrency_limit: z.number().int().positive().nullish(),
-  priority: z.number().int().optional(),
+  priority: z
+    .number()
+    .int()
+    .min(-2_147_483_647, 'priority must be between -2147483647 and 2147483647')
+    .max(2_147_483_647, 'priority must be between -2147483647 and 2147483647')
+    .optional(),
 })
 
 export type ChannelUserRateLimit = z.infer<typeof channelUserRateLimitSchema>

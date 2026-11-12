@@ -218,6 +218,14 @@ func TestChannelUserRateLimitsNormalize(t *testing.T) {
 	assert.Error(t, err, "user ids must be positive")
 	_, err = ChannelUserRateLimits{{UserId: 1, RPMLimit: &zero}}.normalized()
 	assert.Error(t, err, "limits must be positive")
+	_, err = ChannelUserRateLimits{{UserId: 5, Priority: maxChannelUserPriority}}.normalized()
+	require.NoError(t, err, "the largest supported priority is accepted")
+	_, err = ChannelUserRateLimits{{UserId: 6, Priority: -maxChannelUserPriority}}.normalized()
+	require.NoError(t, err, "the smallest supported priority is accepted")
+	_, err = ChannelUserRateLimits{{UserId: 5, Priority: maxChannelUserPriority + 1}}.normalized()
+	assert.ErrorContains(t, err, "priority must be between")
+	_, err = ChannelUserRateLimits{{UserId: 6, Priority: -maxChannelUserPriority - 1}}.normalized()
+	assert.ErrorContains(t, err, "priority must be between")
 
 	tooMany := make(ChannelUserRateLimits, maxChannelUserRateLimits+1)
 	for i := range tooMany {

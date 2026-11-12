@@ -20,7 +20,8 @@ import (
 )
 
 const (
-	channelRateLimitObservationKey = "channel_rate_limit_observation"
+	channelRateLimitObservationKey  = "channel_rate_limit_observation"
+	channelPriorityDemandMarkersKey = "channel_rate_limit_priority_demand_markers"
 
 	channelConcurrencyLeaseTTL   = 60 * time.Second
 	channelConcurrencyRenewEvery = 20 * time.Second
@@ -28,7 +29,14 @@ const (
 	// channelPriorityDemandTTL gives a rejected higher-priority client time to
 	// retry before lower-priority requests may refill the free slots.
 	channelPriorityDemandTTL = 10 * time.Second
+	// channelPriorityDemandMaxMembers bounds the Lua scan during admission.
+	channelPriorityDemandMaxMembers = 1024
 )
+
+type channelPriorityDemandMarker struct {
+	channelID int
+	member    string
+}
 
 type channelRateLimitRedisSource struct {
 	client  *redis.Client
@@ -175,6 +183,60 @@ func (o *ChannelRateLimitObservation) noteRedisFailOpen(component string) {
 	o.mu.Unlock()
 }
 
+func rememberChannelPriorityDemand(c *gin.Context, channelID int, member string) {
+	if c == nil || channelID <= 0 || member == "" {
+		return
+	}
+	markers, _ := c.Get(channelPriorityDemandMarkersKey)
+	demands, ok := markers.(map[channelPriorityDemandMarker]struct{})
+	if !ok {
+		demands = make(map[channelPriorityDemandMarker]struct{})
+	}
+	demands[channelPriorityDemandMarker{channelID: channelID, member: member}] = struct{}{}
+	c.Set(channelPriorityDemandMarkersKey, demands)
+}
+
+func clearChannelPriorityDemandMarkers(c *gin.Context, client *redis.Client) {
+	if c == nil || client == nil {
+		return
+	}
+	markers, _ := c.Get(channelPriorityDemandMarkersKey)
+	demands, ok := markers.(map[channelPriorityDemandMarker]struct{})
+	if !ok || len(demands) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err := client.Pipelined(ctx, func(pipe redis.Pipeliner) error {
+		for marker := range demands {
+			key := channelRateLimitKeys(marker.channelID, 0)[4]
+			pipe.ZRem(ctx, key, marker.member)
+		}
+		return nil
+	})
+	if err != nil {
+		channelRateLimitObservation(c).noteRedisFailOpen("priority_demand_release")
+		logger.LogWarn(c, fmt.Sprintf("channel priority demand cleanup failed: request=%s error=%s", c.GetString(common.RequestIdKey), err.Error()))
+	}
+	c.Set(channelPriorityDemandMarkersKey, map[channelPriorityDemandMarker]struct{}{})
+}
+
+func ClearChannelPriorityDemandMarkers(channelID int) {
+	if channelID <= 0 {
+		return
+	}
+	client, enabled := getChannelRateLimitRedisClient()
+	if !enabled {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	key := channelRateLimitKeys(channelID, 0)[4]
+	if err := client.Del(ctx, key).Err(); err != nil {
+		common.SysError(fmt.Sprintf("failed to clear channel priority demand markers: channel=%d error=%s", channelID, err.Error()))
+	}
+}
+
 func AppendChannelRateLimitAdminInfo(c *gin.Context, other *model.LogOther) {
 	if c == nil || other == nil {
 		return
@@ -295,6 +357,9 @@ func TryAcquireChannelRateLimit(c *gin.Context, channel *model.Channel) (*Channe
 	}
 	priorityEnabled := concurrencyLimit > 0 && channel.UserRateLimits.HasPriorities()
 	if rpmLimit <= 0 && concurrencyLimit <= 0 && userRPMLimit <= 0 && userConcurrencyLimit <= 0 {
+		if client, enabled := getChannelRateLimitRedisClient(); enabled {
+			clearChannelPriorityDemandMarkers(c, client)
+		}
 		return nil, true
 	}
 
@@ -330,6 +395,9 @@ local lease_ttl = tonumber(ARGV[6])
 local priority_enabled = tonumber(ARGV[7])
 local priority = tonumber(ARGV[8])
 local demand_ttl = tonumber(ARGV[9])
+local demand_member_limit = tonumber(ARGV[12])
+local user_id = ARGV[10]
+local priority_demand_member = ARGV[11]
 redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', now_ms - lease_ttl)
 redis.call('ZREMRANGEBYSCORE', KEYS[4], '-inf', now_ms - lease_ttl)
 local rpm_blocked = false
@@ -351,25 +419,51 @@ local concurrency_blocked = concurrency_limit > 0 and total_active >= concurrenc
 local user_concurrency_blocked = user_concurrency_limit > 0 and tonumber(redis.call('ZCARD', KEYS[4])) >= user_concurrency_limit
 local priority_blocked = false
 local set_demand = false
+local min_demand_priority = nil
+local min_demand_member = nil
 if priority_enabled == 1 then
   redis.call('ZREMRANGEBYSCORE', KEYS[5], '-inf', now_ms)
   local demands = redis.call('ZRANGE', KEYS[5], 0, -1)
+  local user_suffix = '|' .. user_id
   for _, member in ipairs(demands) do
-    if tonumber(member) > priority then
-      priority_blocked = true
-      break
+    local same_user = user_id ~= '0' and string.sub(member, -string.len(user_suffix)) == user_suffix
+    if same_user then
+      redis.call('ZREM', KEYS[5], member)
+    else
+      local separator = string.find(member, '|', 1, true)
+      local demand_priority = tonumber(separator and string.sub(member, 1, separator - 1) or member)
+      if demand_priority then
+        if demand_priority > priority then
+          priority_blocked = true
+        end
+        if min_demand_priority == nil or demand_priority < min_demand_priority then
+          min_demand_priority = demand_priority
+          min_demand_member = member
+        end
+      end
     end
   end
-  if concurrency_blocked and not rpm_blocked and not user_rpm_blocked and not user_concurrency_blocked then
+  if (concurrency_blocked or priority_blocked) and not rpm_blocked and not user_rpm_blocked and not user_concurrency_blocked then
     set_demand = true
   end
 end
 if rpm_blocked or user_rpm_blocked or concurrency_blocked or user_concurrency_blocked or priority_blocked then
+  local demand_set = 0
   if set_demand then
-    redis.call('ZADD', KEYS[5], now_ms + demand_ttl, priority)
-    redis.call('PEXPIRE', KEYS[5], demand_ttl * 2)
+    local demand_count = tonumber(redis.call('ZCARD', KEYS[5]))
+    if demand_count < demand_member_limit then
+      redis.call('ZADD', KEYS[5], now_ms + demand_ttl, priority_demand_member)
+      demand_set = 1
+    elseif min_demand_priority and priority > min_demand_priority then
+      redis.call('ZREM', KEYS[5], min_demand_member)
+      redis.call('ZADD', KEYS[5], now_ms + demand_ttl, priority_demand_member)
+      demand_set = 1
+    end
+    if demand_set == 1 then
+      redis.call('PEXPIRE', KEYS[5], demand_ttl * 2)
+    end
   end
-  return {0, rpm_blocked and 1 or 0, concurrency_blocked and 1 or 0, user_rpm_blocked and 1 or 0, user_concurrency_blocked and 1 or 0, priority_blocked and 1 or 0}
+  return {0, rpm_blocked and 1 or 0, concurrency_blocked and 1 or 0, user_rpm_blocked and 1 or 0, user_concurrency_blocked and 1 or 0, priority_blocked and 1 or 0, demand_set}
 end
 if rpm_limit > 0 then
   local rpm_count = 0
@@ -397,8 +491,8 @@ if user_concurrency_limit > 0 then
   redis.call('ZADD', KEYS[4], now_ms, ARGV[1])
   redis.call('PEXPIRE', KEYS[4], lease_ttl * 2)
 end
-return {1, 0, 0, 0, 0, 0}`, channelRateLimitKeys(channel.Id, userId), leaseID, rpmLimit, concurrencyLimit, userRPMLimit, userConcurrencyLimit, channelConcurrencyLeaseTTL.Milliseconds(), boolInt(priorityEnabled), priority, channelPriorityDemandTTL.Milliseconds()).Int64Slice()
-	if err != nil || len(result) != 6 {
+return {1, 0, 0, 0, 0, 0, 0}`, channelRateLimitKeys(channel.Id, userId), leaseID, rpmLimit, concurrencyLimit, userRPMLimit, userConcurrencyLimit, channelConcurrencyLeaseTTL.Milliseconds(), boolInt(priorityEnabled), priority, channelPriorityDemandTTL.Milliseconds(), userId, priorityDemandMember(priority, userId), channelPriorityDemandMaxMembers).Int64Slice()
+	if err != nil || len(result) != 7 {
 		if c.Request.Context().Err() != nil {
 			return nil, false
 		}
@@ -411,6 +505,9 @@ return {1, 0, 0, 0, 0, 0}`, channelRateLimitKeys(channel.Id, userId), leaseID, r
 		return nil, true
 	}
 	if result[0] != 1 {
+		if result[6] == 1 {
+			rememberChannelPriorityDemand(c, channel.Id, priorityDemandMember(priority, userId))
+		}
 		if result[1] == 1 {
 			observation.noteRejected(channel.Id, userId, "rpm", "total")
 		}
@@ -428,6 +525,7 @@ return {1, 0, 0, 0, 0, 0}`, channelRateLimitKeys(channel.Id, userId), leaseID, r
 		}
 		return nil, false
 	}
+	clearChannelPriorityDemandMarkers(c, client)
 
 	guard := &ChannelRateLimitGuard{
 		channelID:   channel.Id,
@@ -553,6 +651,13 @@ func channelRateLimitKeys(channelID, userId int) []string {
 		fmt.Sprintf("channel_rate_limit:%s:active:user:%d", tag, userId),
 		"channel_rate_limit:" + tag + ":priority:demand",
 	}
+}
+
+func priorityDemandMember(priority, userId int) string {
+	if userId > 0 {
+		return fmt.Sprintf("%d|%d", priority, userId)
+	}
+	return fmt.Sprintf("%d", priority)
 }
 
 func channelRateLimitActiveKeys(channelID, userId int) []string {

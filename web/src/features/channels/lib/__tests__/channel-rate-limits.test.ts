@@ -52,6 +52,7 @@ function channelWithUserRateLimits(
     type: 1,
     key: '',
     status: 1,
+    concurrency_limit: 3,
     name: 'limited-channel',
     created_time: 0,
     test_time: 0,
@@ -140,15 +141,40 @@ describe('channel per-user limit form contract', () => {
     ).toBe(false)
   })
 
-  test('accepts a priority-only override', () => {
+  test('accepts a priority-only override when channel concurrency is limited', () => {
     const values = {
       ...BASE_CHANNEL_FORM,
+      concurrency_limit: 3,
       user_rate_limits: [{ user_id: 7, priority: 100 }],
     }
     expect(channelFormSchema.safeParse(values).success).toBe(true)
     expect(
       transformFormDataToUpdatePayload(values, 9).user_rate_limits
     ).toEqual([{ user_id: 7, priority: 100 }])
+  })
+
+  test('rejects priorities outside the supported numeric range', () => {
+    for (const priority of [-2_147_483_648, 2_147_483_648]) {
+      expect(
+        channelFormSchema.safeParse({
+          ...BASE_CHANNEL_FORM,
+          concurrency_limit: 3,
+          user_rate_limits: [{ user_id: 7, priority }],
+        }).success
+      ).toBe(false)
+    }
+  })
+
+  test('requires channel concurrency when a user priority is configured', () => {
+    const priorityOnly = {
+      ...BASE_CHANNEL_FORM,
+      user_rate_limits: [{ user_id: 7, priority: 100 }],
+    }
+    expect(channelFormSchema.safeParse(priorityOnly).success).toBe(false)
+    expect(
+      channelFormSchema.safeParse({ ...priorityOnly, concurrency_limit: 3 })
+        .success
+    ).toBe(true)
   })
 
   test('rejects non-positive user ids and limit values', () => {

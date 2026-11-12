@@ -229,7 +229,7 @@ export function ChannelUserRateLimitEditor(
                   }
                 />
               </div>
-              <div className='w-24'>
+              <div className='w-32'>
                 <Label
                   htmlFor={`channel-user-priority-${limit.user_id}`}
                   className='text-xs'
@@ -239,6 +239,8 @@ export function ChannelUserRateLimitEditor(
                 <Input
                   id={`channel-user-priority-${limit.user_id}`}
                   type='number'
+                  min={-2_147_483_647}
+                  max={2_147_483_647}
                   step={1}
                   value={limit.priority ?? ''}
                   placeholder='0'

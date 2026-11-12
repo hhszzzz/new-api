@@ -99,7 +99,9 @@ func TestValidateChannelUserRateLimits(t *testing.T) {
 	require.NoError(t, validateChannel(channel, false))
 
 	channel.UserRateLimits = model.ChannelUserRateLimits{{UserId: 8, Priority: 100}}
-	require.NoError(t, validateChannel(channel, false), "a priority-only override is valid")
+	require.ErrorContains(t, validateChannel(channel, false), "a positive channel concurrency_limit is required")
+	channel.ConcurrencyLimit = &rpm
+	require.NoError(t, validateChannel(channel, false), "a priority-only override is valid with channel concurrency")
 
 	channel.UserRateLimits = model.ChannelUserRateLimits{{UserId: 7, RPMLimit: &zero}}
 	require.ErrorContains(t, validateChannel(channel, false), "rpm_limit must be between")

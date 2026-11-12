@@ -372,6 +372,19 @@ export const channelFormSchema = z
   })
   .superRefine((data, ctx) => {
     if (
+      (data.user_rate_limits ?? []).some(
+        (limit) => limit.priority != null && limit.priority !== 0
+      ) &&
+      (data.concurrency_limit ?? 0) <= 0
+    ) {
+      addRequiredIssue(
+        ctx,
+        'concurrency_limit',
+        'User priorities require a positive channel concurrency limit'
+      )
+    }
+
+    if (
       data.protocol_policy_json === undefined &&
       data.protocol_capabilities_enabled === true &&
       (data.protocol_selection_mode ?? 'strict') === 'strict' &&

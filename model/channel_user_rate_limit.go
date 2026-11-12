@@ -13,6 +13,7 @@ import (
 // maxChannelUserRateLimits keeps the serialized JSON well below MySQL TEXT's
 // 64 KiB payload limit on the shared channel table.
 const maxChannelUserRateLimits = 500
+const maxChannelUserPriority = math.MaxInt32
 
 // ChannelUserRateLimit is a per-user override of the channel-wide request
 // limits. It applies only to the channel that owns it.
@@ -138,6 +139,9 @@ func (limits ChannelUserRateLimits) normalized() (ChannelUserRateLimits, error) 
 		seen[limit.UserId] = struct{}{}
 		if limit.RPMLimit == nil && limit.ConcurrencyLimit == nil && limit.Priority == 0 {
 			continue
+		}
+		if limit.Priority < -maxChannelUserPriority || limit.Priority > maxChannelUserPriority {
+			return nil, fmt.Errorf("priority must be between %d and %d", -maxChannelUserPriority, maxChannelUserPriority)
 		}
 		if err := validateChannelUserLimit("rpm_limit", limit.RPMLimit); err != nil {
 			return nil, err

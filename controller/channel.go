@@ -650,6 +650,11 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 	if err := channel.UserRateLimits.Validate(); err != nil {
 		return i18n.NewError(i18n.MsgChannelUserRateLimitInvalid, map[string]any{"Error": err.Error()})
 	}
+	if channel.UserRateLimits.HasPriorities() && channel.ConcurrencyLimit == nil {
+		return i18n.NewError(i18n.MsgChannelUserRateLimitInvalid, map[string]any{
+			"Error": "a positive channel concurrency_limit is required when user priorities are configured",
+		})
+	}
 	if channel.Type == constant.ChannelTypeTaskPlugin {
 		pluginKey := strings.TrimSpace(channel.GetSetting().TaskPluginKey)
 		if pluginKey == "" {
@@ -1415,6 +1420,10 @@ func UpdateChannel(c *gin.Context) {
 	if err != nil {
 		common.ApiError(c, err)
 		return
+	}
+	if !channel.UserRateLimits.Equal(originChannel.UserRateLimits) ||
+		!equalIntPtr(channel.ConcurrencyLimit, originChannel.ConcurrencyLimit) {
+		service.ClearChannelPriorityDemandMarkers(channel.Id)
 	}
 	if err := model.HydrateChannelAggregateSnapshots([]*model.Channel{&channel.Channel}); err != nil {
 		common.ApiError(c, err)

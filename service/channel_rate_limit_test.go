@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -166,34 +167,42 @@ func TestChannelNumericPriorityDrainsLowerPriority(t *testing.T) {
 	assert.True(t, allowed, "high priority may use the full channel limit")
 	require.NotNil(t, secondHigh)
 
-	thirdHigh, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 84), channel)
+	thirdHighContext := channelRateLimitTestContextForUser(t.Context(), 84)
+	thirdHigh, allowed := TryAcquireChannelRateLimit(thirdHighContext, channel)
 	assert.False(t, allowed, "the channel limit still applies to high priority")
 	assert.Nil(t, thirdHigh)
 
 	high.Release()
 	secondHigh.Release()
-	demandExists, err := env.client.Exists(t.Context(), channelRateLimitKeys(channel.Id, 0)[4]).Result()
-	require.NoError(t, err)
-	assert.Equal(t, int64(1), demandExists, "the demand marker survives the admission window")
+	blockedLow, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 85), channel)
+	assert.False(t, allowed, "a still-waiting high-priority request keeps its demand marker")
+	assert.Nil(t, blockedLow)
 
-	now, err := env.client.Time(t.Context()).Result()
-	require.NoError(t, err)
-	env.server.SetTime(now.Add(11 * time.Second))
+	thirdHigh, allowed = TryAcquireChannelRateLimit(thirdHighContext, channel)
+	assert.True(t, allowed, "the waiting high-priority request can acquire the released capacity")
+	require.NotNil(t, thirdHigh)
+	thirdHigh.Release()
+
 	low, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 85), channel)
-	assert.True(t, allowed, "the demand marker must expire for lower priorities")
+	assert.True(t, allowed, "lower-priority requests can use capacity when no higher-priority request is waiting")
 	if low != nil {
 		low.Release()
 	}
+	demandExists, err := env.client.Exists(t.Context(), channelRateLimitKeys(channel.Id, 0)[4]).Result()
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), demandExists, "admission clears the default-tier marker too")
 }
 
 func TestChannelNumericPriorityOrdersLevels(t *testing.T) {
-	useChannelRateLimitMiniRedis(t)
+	env := useChannelRateLimitMiniRedis(t)
 	channel := &model.Channel{
 		Id:               606,
 		ConcurrencyLimit: channelLimitInt(2),
 		UserRateLimits: model.ChannelUserRateLimits{
 			{UserId: 91, Priority: 200},
 			{UserId: 92, Priority: 100},
+			{UserId: 94, Priority: 100},
+			{UserId: 95, Priority: -100},
 		},
 	}
 
@@ -207,6 +216,9 @@ func TestChannelNumericPriorityOrdersLevels(t *testing.T) {
 	p100, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 92), channel)
 	assert.False(t, allowed)
 	assert.Nil(t, p100)
+	p100Other, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 94), channel)
+	assert.False(t, allowed)
+	assert.Nil(t, p100Other)
 	p200, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 91), channel)
 	assert.False(t, allowed)
 	assert.Nil(t, p200)
@@ -215,13 +227,55 @@ func TestChannelNumericPriorityOrdersLevels(t *testing.T) {
 	p100, allowed = TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 92), channel)
 	assert.False(t, allowed, "a lower priority must yield to a waiting higher priority")
 	assert.Nil(t, p100)
+	priority100Demand, err := env.client.ZScore(t.Context(), channelRateLimitKeys(channel.Id, 0)[4], "100|92").Result()
+	require.NoError(t, err)
+	assert.Greater(t, priority100Demand, float64(0), "a lower tier blocked by priority 200 must retain its demand")
 
 	p200, allowed = TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 91), channel)
 	assert.True(t, allowed, "the highest waiting priority takes the free slot")
 	require.NotNil(t, p200)
 
 	p200.Release()
+	blockedLow, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 93), channel)
+	assert.False(t, allowed, "priority 100 demand continues to hold off the default tier")
+	assert.Nil(t, blockedLow)
+	blockedDefault, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 97), channel)
+	assert.False(t, allowed, "another default-tier request waits behind priority 100")
+	assert.Nil(t, blockedDefault)
+
+	p100, allowed = TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 92), channel)
+	assert.True(t, allowed, "the next waiting priority tier takes the available slot")
+	require.NotNil(t, p100)
+	p100.Release()
+
+	blockedLow, allowed = TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 93), channel)
+	assert.False(t, allowed, "one admitted user must not clear another user's same-tier demand")
+	assert.Nil(t, blockedLow)
+
+	p100Other, allowed = TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 94), channel)
+	assert.True(t, allowed, "the other user at priority 100 can acquire the next free slot")
+	require.NotNil(t, p100Other)
+	p100Other.Release()
+
 	lowB.Release()
+	defaultTier, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 93), channel)
+	assert.True(t, allowed, "the default tier resumes after all higher-priority demand is served")
+	require.NotNil(t, defaultTier)
+	defaultTier.Release()
+
+	negativeTier, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 95), channel)
+	assert.False(t, allowed, "one default-tier admission must not clear another user's pending demand")
+	assert.Nil(t, negativeTier)
+	defaultTier, allowed = TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 97), channel)
+	assert.True(t, allowed)
+	require.NotNil(t, defaultTier)
+	defaultTier.Release()
+
+	negativeTier, allowed = TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 95), channel)
+	assert.True(t, allowed, "lower priorities resume after each default-tier demand is served")
+	if negativeTier != nil {
+		negativeTier.Release()
+	}
 }
 
 func TestChannelPriorityHonorsUserConcurrency(t *testing.T) {
@@ -306,6 +360,143 @@ func TestChannelPriorityDemandExpires(t *testing.T) {
 	if low != nil {
 		low.Release()
 	}
+}
+
+func TestChannelPriorityDemandMarkerLimitPreservesHigherPriorities(t *testing.T) {
+	env := useChannelRateLimitMiniRedis(t)
+	channel := &model.Channel{
+		Id:               615,
+		ConcurrencyLimit: channelLimitInt(1),
+		UserRateLimits: model.ChannelUserRateLimits{
+			{UserId: 1, Priority: 200},
+			{UserId: 2, Priority: 100},
+		},
+	}
+	demandKey := channelRateLimitKeys(channel.Id, 0)[4]
+	redisTime, err := env.client.Time(t.Context()).Result()
+	require.NoError(t, err)
+	expiresAt := float64(redisTime.UnixMilli() + channelPriorityDemandTTL.Milliseconds())
+	demands := make([]*redis.Z, channelPriorityDemandMaxMembers)
+	for userID := range channelPriorityDemandMaxMembers {
+		demands[userID] = &redis.Z{Score: expiresAt, Member: "100|" + strconv.Itoa(10_000+userID)}
+	}
+	require.NoError(t, env.client.ZAdd(t.Context(), demandKey, demands...).Err())
+
+	lower, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 2), channel)
+	require.True(t, allowed)
+	require.NotNil(t, lower)
+	higher, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 1), channel)
+	assert.False(t, allowed)
+	assert.Nil(t, higher)
+	require.NoError(t, env.client.ZScore(t.Context(), demandKey, "200|1").Err())
+
+	count, err := env.client.ZCard(t.Context(), demandKey).Result()
+	require.NoError(t, err)
+	assert.Equal(t, int64(channelPriorityDemandMaxMembers), count)
+
+	lower.Release()
+	lower, allowed = TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 2), channel)
+	assert.False(t, allowed, "a full marker set must retain the higher-priority demand")
+	assert.Nil(t, lower)
+}
+
+func TestChannelPriorityDemandClearsWhenRequestUsesAnotherChannel(t *testing.T) {
+	env := useChannelRateLimitMiniRedis(t)
+	limitedChannel := &model.Channel{
+		Id:               610,
+		ConcurrencyLimit: channelLimitInt(1),
+		UserRateLimits:   model.ChannelUserRateLimits{{UserId: 101, Priority: 100}},
+	}
+	secondLimitedChannel := &model.Channel{
+		Id:               613,
+		ConcurrencyLimit: channelLimitInt(1),
+		UserRateLimits:   model.ChannelUserRateLimits{{UserId: 101, Priority: 100}},
+	}
+
+	low, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 102), limitedChannel)
+	require.True(t, allowed)
+	require.NotNil(t, low)
+	secondLow, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 103), secondLimitedChannel)
+	require.True(t, allowed)
+	require.NotNil(t, secondLow)
+
+	highContext := channelRateLimitTestContextForUser(t.Context(), 101)
+	high, allowed := TryAcquireChannelRateLimit(highContext, limitedChannel)
+	assert.False(t, allowed)
+	assert.Nil(t, high)
+
+	markerKey := channelRateLimitKeys(limitedChannel.Id, 0)[4]
+	markers, err := env.client.ZRange(t.Context(), markerKey, 0, -1).Result()
+	require.NoError(t, err)
+	assert.Contains(t, markers, "100|101")
+	_, allowed = TryAcquireChannelRateLimit(highContext, secondLimitedChannel)
+	assert.False(t, allowed)
+	secondMarkerKey := channelRateLimitKeys(secondLimitedChannel.Id, 0)[4]
+	markers, err = env.client.ZRange(t.Context(), secondMarkerKey, 0, -1).Result()
+	require.NoError(t, err)
+	assert.Contains(t, markers, "100|101")
+
+	_, allowed = TryAcquireChannelRateLimit(highContext, &model.Channel{Id: 611})
+	require.True(t, allowed, "an admitted fallback channel satisfies this request's blocked candidate demands")
+
+	markers, err = env.client.ZRange(t.Context(), markerKey, 0, -1).Result()
+	require.NoError(t, err)
+	assert.NotContains(t, markers, "100|101")
+	markers, err = env.client.ZRange(t.Context(), secondMarkerKey, 0, -1).Result()
+	require.NoError(t, err)
+	assert.NotContains(t, markers, "100|101")
+
+	low.Release()
+	low, allowed = TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 102), limitedChannel)
+	assert.True(t, allowed, "the previously blocked channel can immediately serve lower priority")
+	if low != nil {
+		low.Release()
+	}
+	secondLow.Release()
+	secondLow, allowed = TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 103), secondLimitedChannel)
+	assert.True(t, allowed, "the other previously blocked channel can immediately serve lower priority")
+	if secondLow != nil {
+		secondLow.Release()
+	}
+}
+
+func TestClearChannelPriorityDemandMarkers(t *testing.T) {
+	env := useChannelRateLimitMiniRedis(t)
+	key := channelRateLimitKeys(614, 0)[4]
+	require.NoError(t, env.client.ZAdd(t.Context(), key,
+		&redis.Z{Score: 1, Member: "100|one"},
+		&redis.Z{Score: 2, Member: "50|two"},
+	).Err())
+
+	ClearChannelPriorityDemandMarkers(614)
+
+	count, err := env.client.Exists(t.Context(), key).Result()
+	require.NoError(t, err)
+	assert.Zero(t, count)
+}
+
+func TestChannelPriorityChangeDoesNotBlockTheSameUser(t *testing.T) {
+	useChannelRateLimitMiniRedis(t)
+	channel := &model.Channel{
+		Id:               612,
+		ConcurrencyLimit: channelLimitInt(1),
+		UserRateLimits:   model.ChannelUserRateLimits{{UserId: 103, Priority: 200}},
+	}
+
+	low, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 104), channel)
+	require.True(t, allowed)
+	require.NotNil(t, low)
+
+	high, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 103), channel)
+	assert.False(t, allowed)
+	assert.Nil(t, high)
+
+	channel.UserRateLimits[0].Priority = 100
+	low.Release()
+	high, allowed = TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 103), channel)
+	assert.True(t, allowed, "a stale marker from the user's previous priority must not block the user")
+	require.NotNil(t, high)
+	high.Release()
 }
 
 func TestChannelRateLimitRPMUsesRedisMinuteAndIsolatesChannels(t *testing.T) {
