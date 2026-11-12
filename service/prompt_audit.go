@@ -361,6 +361,43 @@ func PromptAuditChannelExempt(c *gin.Context) bool {
 	return ok && settings.PromptAuditExempt
 }
 
+const promptAuditPendingStoredKey = "prompt_audit_pending_stored"
+
+// DeferPromptAuditStored freezes a store-only row at arrival without writing it.
+// The relay commits it once the request is handed to an upstream, so attempts
+// rejected before distribution (for example by a channel concurrency limit)
+// leave no audit row behind. Callers must run InspectPrompt first: that call
+// prepares the grouping identity the deferred row keeps.
+func DeferPromptAuditStored(c *gin.Context, request PromptAuditRequest) {
+	if c == nil || !prompt_audit_setting.GetSetting().RecordAll {
+		return
+	}
+	if _, exists := c.Get(promptAuditPendingStoredKey); exists {
+		return
+	}
+	request = preparePromptAuditRequest(c, request)
+	c.Set(promptAuditPendingStoredKey, &request)
+}
+
+// CommitPromptAuditStored writes the deferred store-only row and clears it. It
+// is idempotent: a second call, or a call with nothing pending, is a no-op, so
+// gateway retries that switch channels store the request only once.
+func CommitPromptAuditStored(c *gin.Context) {
+	if c == nil {
+		return
+	}
+	value, exists := c.Get(promptAuditPendingStoredKey)
+	if !exists || value == nil {
+		return
+	}
+	delete(c.Keys, promptAuditPendingStoredKey)
+	request, ok := value.(*PromptAuditRequest)
+	if !ok || request == nil {
+		return
+	}
+	RecordPromptAuditStored(c, *request)
+}
+
 // RecordPromptAuditStored keeps a request that no gate inspected, so the gateway
 // still records what passed through it while enforcement is off. The row holds
 // the same content an inspected one would and carries no verdict: the worker

@@ -425,7 +425,7 @@ func TestPromptAuditRecordsRequestsNoGateInspected(t *testing.T) {
 		setting.SetCheckSensitiveOnPromptEnabled(previousPromptSensitiveEnabled)
 	})
 
-	send := func(text string) (*httptest.ResponseRecorder, bool) {
+	send := func(text string) (*httptest.ResponseRecorder, *gin.Context, bool) {
 		recorder := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(recorder)
 		c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"guard-model","messages":[{"role":"user","content":"`+text+`"}]}`))
@@ -437,10 +437,11 @@ func TestPromptAuditRecordsRequestsNoGateInspected(t *testing.T) {
 		if cleanup != nil {
 			cleanup()
 		}
-		return recorder, allowed
+		return recorder, c, allowed
 	}
 
-	// Every gate is off, so nothing is inspected; the request is still kept.
+	// Every gate is off, so nothing is inspected; the request is kept, but only
+	// once the relay admits it to a channel and commits the deferred row.
 	configured := promptAuditMiddlewareTestConfig("")
 	configured.Mode = prompt_audit_setting.ModeOff
 	configured.ProbeBlockEnabled = false
@@ -449,14 +450,21 @@ func TestPromptAuditRecordsRequestsNoGateInspected(t *testing.T) {
 	setting.SensitiveWordsFromString("")
 	setting.SetCheckSensitiveEnabled(false)
 	setting.SetCheckSensitiveOnPromptEnabled(false)
-	_, allowed := send("keep this question")
+	_, c, allowed := send("keep this question")
 	require.True(t, allowed)
 	var audits []model.PromptAudit
+	require.NoError(t, db.Order("id asc").Find(&audits).Error)
+	require.Empty(t, audits, "an unadmitted request must not be stored")
+	service.CommitPromptAuditStored(c)
 	require.NoError(t, db.Order("id asc").Find(&audits).Error)
 	require.Len(t, audits, 1)
 	assert.Equal(t, model.PromptAuditStatusStored, audits[0].Status)
 	assert.Empty(t, audits[0].Decision)
 	assert.Contains(t, string(audits[0].FullPrompt), "keep this question")
+	service.CommitPromptAuditStored(c)
+	var committed int64
+	require.NoError(t, db.Model(&model.PromptAudit{}).Count(&committed).Error)
+	assert.EqualValues(t, 1, committed, "committing twice stores the request once")
 
 	// A request a gate did inspect keeps its verdict row and is not also stored.
 	configured.Mode = prompt_audit_setting.ModeBlocking
@@ -464,7 +472,7 @@ func TestPromptAuditRecordsRequestsNoGateInspected(t *testing.T) {
 	setting.SensitiveWordsFromString("blocked_word")
 	setting.SetCheckSensitiveEnabled(true)
 	setting.SetCheckSensitiveOnPromptEnabled(true)
-	recorder, allowed := send("please handle blocked_word")
+	recorder, _, allowed := send("please handle blocked_word")
 	assert.False(t, allowed)
 	assert.Equal(t, http.StatusBadRequest, recorder.Code)
 	var stored int64

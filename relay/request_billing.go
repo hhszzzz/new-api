@@ -58,8 +58,9 @@ func PrepareRequestBilling(c *gin.Context, info *relaycommon.RelayInfo) *hosttyp
 			return apiErr
 		}
 		if result.AuditID == 0 {
-			// No gate read this request; with recording on it is still stored.
-			service.RecordPromptAuditStored(c, auditRequest)
+			// No gate read this request; with recording on it is still stored,
+			// but only once a channel admits it and the request is forwarded.
+			service.DeferPromptAuditStored(c, auditRequest)
 		}
 	}
 

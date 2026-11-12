@@ -322,8 +322,9 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 		return auditErr
 	}
 	if result.AuditID == 0 {
-		// No gate read this request; with recording on it is still stored.
-		service.RecordPromptAuditStored(c, auditRequest)
+		// No gate read this request; with recording on it is still stored, but
+		// only once a channel admits the create and it is forwarded.
+		service.DeferPromptAuditStored(c, auditRequest)
 	}
 	common.SetContextKey(c, appconstant.ContextKeyPromptAuditChecked, true)
 	outputAuditSetting := prompt_audit_setting.GetSetting()
@@ -420,6 +421,7 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 		if apiErr != nil {
 			return apiErr
 		}
+		service.CommitPromptAuditStored(c)
 		if err := s.writeTarget(websocket.TextMessage, payload); err != nil {
 			state.closeCode = websocket.CloseInternalServerErr
 			return types.NewError(err, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry())
@@ -481,6 +483,7 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 			if !s.setTarget(target) {
 				return types.NewError(context.Canceled, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry())
 			}
+			service.CommitPromptAuditStored(c)
 			if err := s.writeTarget(websocket.TextMessage, payload); err != nil {
 				state.closeCode = websocket.CloseInternalServerErr
 				return types.NewError(err, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry())

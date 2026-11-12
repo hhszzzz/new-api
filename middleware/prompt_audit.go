@@ -117,10 +117,9 @@ func inspectPromptBeforeDistribution(c *gin.Context, modelRequest *ModelRequest)
 	}
 	if result.AuditID == 0 && !auditRequest.WordlistOnly {
 		// No gate read this request. With recording on, the gateway still keeps
-		// the record of what passed through it. A clean token count is the one
-		// exception: it carries the very content the request that generates from
-		// it will record, and every agent step issues one.
-		service.RecordPromptAuditStored(c, auditRequest)
+		// the record of what passed through it — but only once a channel admits
+		// the request: the relay commits it right before forwarding.
+		service.DeferPromptAuditStored(c, auditRequest)
 	}
 	common.SetContextKey(c, constant.ContextKeyPromptAuditChecked, true)
 	return cleanup, true

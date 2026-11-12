@@ -257,6 +257,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 				return
 			}
 			c.Request.Body = io.NopCloser(bodyStorage)
+			// The request is now handed to the selected channel; only at this
+			// point does a store-only audit row describe something forwarded.
+			service.CommitPromptAuditStored(c)
 			forwarded = true
 
 			switch relayFormat {
@@ -622,6 +625,9 @@ func RelayMidjourney(c *gin.Context) {
 		}
 		service.AppendUsedChannel(c, channel.Id)
 	}
+	// The request is handed to the Midjourney handler; any pending store-only
+	// audit row describes a request that is actually being forwarded now.
+	service.CommitPromptAuditStored(c)
 
 	var mjErr *taskdto.MidjourneyResponse
 	switch relayInfo.RelayMode {
@@ -896,6 +902,7 @@ func executeTaskSubmissionWith(
 			break
 		}
 		c.Request.Body = io.NopCloser(bodyStorage)
+		service.CommitPromptAuditStored(c)
 
 		stage = "submit"
 		func() {
@@ -964,7 +971,7 @@ func executeTaskSubmissionWith(
 		if reserveErr := relayInfo.Billing.Reserve(result.Quota); reserveErr != nil {
 			common.SysError(common.LogText("reserve adjusted task billing error: %s", reserveErr.Error()))
 			if !c.Writer.Written() {
-			taskErr = service.TaskErrorWrapperLocal(errors.New(i18n.T(c, i18n.MsgQuotaInsufficient)), string(hosttypes.ErrorCodeInsufficientUserQuota), http.StatusForbidden)
+				taskErr = service.TaskErrorWrapperLocal(errors.New(i18n.T(c, i18n.MsgQuotaInsufficient)), string(hosttypes.ErrorCodeInsufficientUserQuota), http.StatusForbidden)
 				diagnostics.failed("reserve", "insufficient_quota", taskErr, false)
 				return nil, taskErr
 			}

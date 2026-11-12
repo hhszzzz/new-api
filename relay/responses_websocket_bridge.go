@@ -136,6 +136,7 @@ func (s *responsesWSSession) runHTTPBridgeCall(c *gin.Context, state *responsesW
 			guard.Release()
 			return apiErr
 		}
+		service.CommitPromptAuditStored(c)
 		service.RequestPolicy(c).BeginAttempt(channel, state.info.UsingGroup)
 		apiErr = ResponsesHelper(c, state.info)
 		guard.Release()

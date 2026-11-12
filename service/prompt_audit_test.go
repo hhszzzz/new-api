@@ -589,6 +589,67 @@ func TestPromptAuditRecordsRequestsWithoutInspection(t *testing.T) {
 	assert.Empty(t, after.ScanPayload)
 }
 
+func TestPromptAuditDeferredStorageWaitsForAdmission(t *testing.T) {
+	withPromptWordlistTestDB(t)
+	configured := prompt_audit_setting.GetSetting()
+	configured.Mode = prompt_audit_setting.ModeOff
+	configured.OutputMode = prompt_audit_setting.ModeOff
+	configured.ProbeBlockEnabled = false
+	configured.RecordAll = true
+	configured.PublishConfig()
+
+	newRequest := func() (*gin.Context, PromptAuditRequest) {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+		c.Request.Header.Set("x-deepseek-harness-session-id", "deferred-session")
+		c.Set("role", common.RoleCommonUser)
+		return c, PromptAuditRequest{
+			Snapshot: dto.PromptAuditSnapshot{Segments: []dto.PromptAuditSegment{{
+				Scope: dto.PromptScopeUser, Role: "user", User: true, Text: "store this question",
+			}}},
+			Protocol: "openai_chat", Model: "guarded-model", Stage: "pre_distribution",
+		}
+	}
+	countAudits := func() int64 {
+		var count int64
+		require.NoError(t, model.DB.Model(&model.PromptAudit{}).Count(&count).Error)
+		return count
+	}
+
+	// An attempt rejected before forwarding defers the row and never commits it.
+	c, request := newRequest()
+	result, apiErr := InspectPrompt(c, request)
+	require.Nil(t, apiErr)
+	require.Zero(t, result.AuditID)
+	DeferPromptAuditStored(c, request)
+	assert.Zero(t, countAudits(), "a rejected request must not leave an audit row")
+
+	// The admitted attempt commits once, keeping the identity prepared at arrival.
+	CommitPromptAuditStored(c)
+	require.EqualValues(t, 1, countAudits())
+	CommitPromptAuditStored(c)
+	assert.EqualValues(t, 1, countAudits(), "committing twice stores the request once")
+
+	var audit model.PromptAudit
+	require.NoError(t, model.DB.Order("id desc").First(&audit).Error)
+	assert.Equal(t, model.PromptAuditStatusStored, audit.Status)
+	assert.Equal(t, "stored", audit.InspectionType)
+	assert.Contains(t, string(audit.FullPrompt), "store this question")
+	assert.NotEmpty(t, audit.SessionKey)
+	assert.NotEmpty(t, audit.GroupKey)
+	assert.NotZero(t, audit.CompletedAt)
+
+	// Recording everything off leaves the deferral a no-op.
+	configured.RecordAll = false
+	configured.PublishConfig()
+	c, request = newRequest()
+	_, apiErr = InspectPrompt(c, request)
+	require.Nil(t, apiErr)
+	DeferPromptAuditStored(c, request)
+	CommitPromptAuditStored(c)
+	assert.EqualValues(t, 1, countAudits())
+}
+
 func TestPromptAuditPreviewFallsBackToTheLatestUserBlock(t *testing.T) {
 	withPromptWordlistTestDB(t)
 	configured := prompt_audit_setting.GetSetting()
