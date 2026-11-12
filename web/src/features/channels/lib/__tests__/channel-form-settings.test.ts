@@ -219,3 +219,57 @@ describe('channel form context_limits settings', () => {
     expect(empty.context_limits).toBe('[]')
   })
 })
+
+describe('channel admission control settings', () => {
+  test('writes queue policy settings while preserving unrelated settings', () => {
+    const payload = transformFormDataToUpdatePayload(
+      {
+        ...CHANNEL_FORM_DEFAULT_VALUES,
+        admission_wait_timeout_ms: 45_000,
+        admission_max_waiting_total: 30,
+        admission_max_waiting_per_user: 6,
+        admission_soup_mode: 'ratio',
+        admission_soup_ratio_percent: 25,
+        settings: '{"other_flag":true}',
+      },
+      5
+    )
+
+    expect(settingsFrom(payload)).toMatchObject({
+      other_flag: true,
+      admission_control: {
+        wait_timeout_ms: 45_000,
+        max_waiting_total: 30,
+        max_waiting_per_user: 6,
+        soup_mode: 'ratio',
+        soup_ratio_percent: 25,
+      },
+    })
+  })
+
+  test('hydrates existing queue policy and falls back to defaults', () => {
+    const configured = transformChannelToFormDefaults({
+      id: 1,
+      type: 1,
+      name: 'channel',
+      channel_info: {},
+      settings:
+        '{"admission_control":{"wait_timeout_ms":45000,"max_waiting_total":30,"max_waiting_per_user":6,"soup_mode":"ratio","soup_ratio_percent":25}}',
+    } as Channel)
+    expect(configured.admission_wait_timeout_ms).toBe(45_000)
+    expect(configured.admission_max_waiting_total).toBe(30)
+    expect(configured.admission_max_waiting_per_user).toBe(6)
+    expect(configured.admission_soup_mode).toBe('ratio')
+    expect(configured.admission_soup_ratio_percent).toBe(25)
+
+    const defaults = transformChannelToFormDefaults({
+      id: 2,
+      type: 1,
+      name: 'channel',
+      channel_info: {},
+      settings: '{}',
+    } as Channel)
+    expect(defaults.admission_wait_timeout_ms).toBe(30_000)
+    expect(defaults.admission_max_waiting_total).toBe(20)
+  })
+})

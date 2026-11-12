@@ -110,14 +110,40 @@ func (s *responsesWSSession) runHTTPBridgeCall(c *gin.Context, state *responsesW
 		}
 	}()
 	retry := middleware.NewResponsesBridgeRetryParam(c, create.Request.Model)
+	var preferredChannel *appmodel.Channel
 	for ; retry.GetRetry() <= common.RetryTimes; retry.IncreaseRetry() {
 		protocolstate.ResetAttempt(c)
 		channel, selectErr := s.selectHTTPBridgeChannel(c, create.Request.Model, retry)
 		if selectErr != nil {
-			return selectErr
+			if preferredChannel == nil {
+				return selectErr
+			}
+			if callCtx.Err() != nil {
+				return hosttypes.NewError(callCtx.Err(), hosttypes.ErrorCodeClientDisconnected, hosttypes.ErrOptionWithSkipRetry())
+			}
+			channel = preferredChannel
+			if setupErr := middleware.SetupContextForSelectedChannel(c, channel, create.Request.Model, true); setupErr != nil {
+				return setupErr
+			}
 		}
-		guard, allowed := service.TryAcquireChannelRateLimit(c, channel)
+		var guard *service.ChannelRateLimitGuard
+		var allowed bool
+		if channel == preferredChannel && retry.IsChannelExcluded(channel.Id) {
+			guard, allowed = service.AcquireChannelRateLimit(c, channel, service.ChannelRateLimitOptions{
+				RefreshChannel: func() (*appmodel.Channel, error) {
+					return appmodel.CacheGetChannel(channel.Id)
+				},
+				Heartbeat: func() error {
+					return s.client.WriteControl(websocket.PingMessage, nil, time.Now().Add(time.Second))
+				},
+			})
+		} else {
+			guard, allowed = service.TryAcquireChannelRateLimit(c, channel)
+		}
 		if !allowed {
+			if preferredChannel == nil && service.ChannelRateLimitWasConcurrencyBlocked(c, channel.Id) {
+				preferredChannel = channel
+			}
 			retry.ExcludeChannel(channel.Id)
 			retry.ResetRetryNextTry()
 			continue

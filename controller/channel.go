@@ -579,6 +579,30 @@ func GetChannel(c *gin.Context) {
 	return
 }
 
+func GetChannelAdmissionStats(c *gin.Context) {
+	channelID, err := strconv.Atoi(c.Param("id"))
+	if err != nil || channelID <= 0 {
+		common.ApiErrorT(c, "Invalid channel ID")
+		return
+	}
+	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
+	startTimestamp, _ := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)
+	end := time.Now()
+	if endTimestamp > 0 {
+		end = time.Unix(endTimestamp, 0)
+	}
+	var start time.Time
+	if startTimestamp > 0 {
+		start = time.Unix(startTimestamp, 0)
+	}
+	stats, err := service.GetChannelAdmissionStats(c.Request.Context(), channelID, start, end)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, stats)
+}
+
 // GetChannelKey 获取渠道密钥（需要通过安全验证中间件）
 // 此函数依赖 SecureVerificationRequired 中间件，确保用户已通过安全验证
 func GetChannelKey(c *gin.Context) {
@@ -1420,10 +1444,6 @@ func UpdateChannel(c *gin.Context) {
 	if err != nil {
 		common.ApiError(c, err)
 		return
-	}
-	if !channel.UserRateLimits.Equal(originChannel.UserRateLimits) ||
-		!equalIntPtr(channel.ConcurrencyLimit, originChannel.ConcurrencyLimit) {
-		service.ClearChannelPriorityDemandMarkers(channel.Id)
 	}
 	if err := model.HydrateChannelAggregateSnapshots([]*model.Channel{&channel.Channel}); err != nil {
 		common.ApiError(c, err)

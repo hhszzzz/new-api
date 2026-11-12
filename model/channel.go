@@ -8,8 +8,8 @@ import (
 	hostdto "github.com/QuantumNous/new-api/dto"
 	hosttypes "github.com/QuantumNous/new-api/types"
 	"math/rand"
-	"sort"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 
@@ -1526,6 +1526,9 @@ func (channel *Channel) ValidateSettings() error {
 		}
 	}
 	if err := channelOtherSettings.ValidateToolLossPolicy(); err != nil {
+		return err
+	}
+	if err := channelOtherSettings.ValidateAdmissionControl(); err != nil {
 		return err
 	}
 	if preset := common.GetAdvancedCustomPreset(channel.Type); preset != nil {

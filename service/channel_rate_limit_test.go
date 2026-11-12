@@ -2,11 +2,13 @@ package service
 
 import (
 	"context"
-	"strconv"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
@@ -132,149 +134,418 @@ func TestChannelUserRateLimitIsTighterThanChannelTotal(t *testing.T) {
 	first.Release()
 }
 
-func TestChannelNumericPriorityDrainsLowerPriority(t *testing.T) {
+func TestChannelPriorityQueueUsesDescendingPriorityAndFIFO(t *testing.T) {
 	env := useChannelRateLimitMiniRedis(t)
 	channel := &model.Channel{
 		Id:               605,
-		ConcurrencyLimit: channelLimitInt(2),
+		ConcurrencyLimit: channelLimitInt(1),
 		UserRateLimits: model.ChannelUserRateLimits{
-			{UserId: 84, Priority: 100},
+			{UserId: 501, Priority: 5},
+			{UserId: 502, Priority: 4},
+			{UserId: 503, Priority: 3},
+			{UserId: 504, Priority: 3},
 		},
 	}
-
-	low1, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 85), channel)
+	occupant, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 599), channel)
 	require.True(t, allowed)
-	require.NotNil(t, low1)
-	low2, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 86), channel)
-	require.True(t, allowed)
-	require.NotNil(t, low2)
+	require.NotNil(t, occupant)
+	env.server.SetTime(time.Now().Truncate(time.Millisecond))
 
-	high, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 84), channel)
-	assert.False(t, allowed, "high priority waits for a channel slot")
-	assert.Nil(t, high)
-
-	low1.Release()
-	newLow, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 85), channel)
-	assert.False(t, allowed, "a higher-priority demand blocks new lower-priority requests")
-	assert.Nil(t, newLow)
-
-	high, allowed = TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 84), channel)
-	assert.True(t, allowed)
-	require.NotNil(t, high)
-
-	low2.Release()
-	secondHigh, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 84), channel)
-	assert.True(t, allowed, "high priority may use the full channel limit")
-	require.NotNil(t, secondHigh)
-
-	thirdHighContext := channelRateLimitTestContextForUser(t.Context(), 84)
-	thirdHigh, allowed := TryAcquireChannelRateLimit(thirdHighContext, channel)
-	assert.False(t, allowed, "the channel limit still applies to high priority")
-	assert.Nil(t, thirdHigh)
-
-	high.Release()
-	secondHigh.Release()
-	blockedLow, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 85), channel)
-	assert.False(t, allowed, "a still-waiting high-priority request keeps its demand marker")
-	assert.Nil(t, blockedLow)
-
-	thirdHigh, allowed = TryAcquireChannelRateLimit(thirdHighContext, channel)
-	assert.True(t, allowed, "the waiting high-priority request can acquire the released capacity")
-	require.NotNil(t, thirdHigh)
-	thirdHigh.Release()
-
-	low, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 85), channel)
-	assert.True(t, allowed, "lower-priority requests can use capacity when no higher-priority request is waiting")
-	if low != nil {
-		low.Release()
+	type queuedResult struct {
+		userID int
+		guard  *ChannelRateLimitGuard
+		ok     bool
 	}
-	demandExists, err := env.client.Exists(t.Context(), channelRateLimitKeys(channel.Id, 0)[4]).Result()
-	require.NoError(t, err)
-	assert.Equal(t, int64(0), demandExists, "admission clears the default-tier marker too")
+	results := make(chan queuedResult, 4)
+	contexts := make([]context.CancelFunc, 4)
+	for index, userID := range []int{501, 502, 503, 504} {
+		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+		contexts[index] = cancel
+		go func(userID int, ctx context.Context) {
+			guard, ok := AcquireChannelRateLimit(channelRateLimitTestContextForUser(ctx, userID), channel, ChannelRateLimitOptions{WaitTimeout: 2 * time.Second})
+			results <- queuedResult{userID: userID, guard: guard, ok: ok}
+		}(userID, ctx)
+		require.Eventually(t, func() bool {
+			count, err := env.client.ZCard(t.Context(), channelRateLimitKeys(channel.Id, userID)[4]).Result()
+			return err == nil && count == int64(index+1)
+		}, time.Second, 5*time.Millisecond)
+	}
+	defer func() {
+		for _, cancel := range contexts {
+			cancel()
+		}
+	}()
+
+	occupant.Release()
+	for _, expectedUser := range []int{501, 502, 503, 504} {
+		select {
+		case result := <-results:
+			require.True(t, result.ok)
+			require.Equal(t, expectedUser, result.userID)
+			require.NotNil(t, result.guard)
+			result.guard.Release()
+		case <-time.After(3 * time.Second):
+			t.Fatal("queued request did not acquire its slot")
+		}
+	}
 }
 
-func TestChannelNumericPriorityOrdersLevels(t *testing.T) {
-	env := useChannelRateLimitMiniRedis(t)
-	channel := &model.Channel{
-		Id:               606,
-		ConcurrencyLimit: channelLimitInt(2),
-		UserRateLimits: model.ChannelUserRateLimits{
-			{UserId: 91, Priority: 200},
-			{UserId: 92, Priority: 100},
-			{UserId: 94, Priority: 100},
-			{UserId: 95, Priority: -100},
+func TestChannelPrioritySoupModesGrantNextPriorityWithinTheirBudget(t *testing.T) {
+	tests := []struct {
+		name          string
+		admissionJSON string
+		wantOrder     []int
+		wantSoup      int64
+	}{
+		{
+			name:          "interval",
+			admissionJSON: `{"soup_mode":"interval","soup_after_ms":1000,"soup_interval_ms":60000}`,
+			wantOrder:     []int{702, 701},
+			wantSoup:      1,
+		},
+		{
+			name:          "ratio",
+			admissionJSON: `{"soup_mode":"ratio","soup_after_ms":1000,"soup_ratio_percent":50}`,
+			wantOrder:     []int{702, 701},
+			wantSoup:      1,
 		},
 	}
 
-	lowA, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 93), channel)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			env := useChannelRateLimitMiniRedis(t)
+			channel := &model.Channel{
+				Id:               617,
+				ConcurrencyLimit: channelLimitInt(1),
+				OtherSettings:    `{"admission_control":` + test.admissionJSON + `}`,
+				UserRateLimits: model.ChannelUserRateLimits{
+					{UserId: 701, Priority: 5},
+					{UserId: 702, Priority: 4},
+				},
+			}
+			wantMode := dto.ChannelAdmissionSoupModeRatio
+			if test.name == "interval" {
+				wantMode = dto.ChannelAdmissionSoupModeInterval
+			}
+			assert.Equal(t, wantMode, channelAdmissionConfig(channel).SoupMode)
+			occupant, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 700), channel)
+			require.True(t, allowed)
+			require.NotNil(t, occupant)
+
+			type queuedResult struct {
+				userID int
+				guard  *ChannelRateLimitGuard
+				ok     bool
+			}
+			results := make(chan queuedResult, 2)
+			contexts := make([]context.CancelFunc, 2)
+			for index, userID := range []int{701, 702} {
+				ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+				contexts[index] = cancel
+				go func(userID int, ctx context.Context) {
+					guard, ok := AcquireChannelRateLimit(channelRateLimitTestContextForUser(ctx, userID), channel, ChannelRateLimitOptions{WaitTimeout: 4 * time.Second})
+					results <- queuedResult{userID: userID, guard: guard, ok: ok}
+				}(userID, ctx)
+				require.Eventually(t, func() bool {
+					count, err := env.client.ZCard(t.Context(), channelRateLimitKeys(channel.Id, 0)[4]).Result()
+					return err == nil && count == int64(index+1)
+				}, time.Second, 5*time.Millisecond)
+			}
+			defer func() {
+				for _, cancel := range contexts {
+					cancel()
+				}
+			}()
+
+			redisNow, err := env.client.Time(t.Context()).Result()
+			require.NoError(t, err)
+			env.server.SetTime(redisNow.Add(2 * time.Second))
+			occupant.Release()
+
+			order := make([]int, 0, len(test.wantOrder))
+			for range len(test.wantOrder) {
+				select {
+				case result := <-results:
+					require.True(t, result.ok)
+					require.NotNil(t, result.guard)
+					order = append(order, result.userID)
+					result.guard.Release()
+				case <-time.After(5 * time.Second):
+					t.Fatal("queued request did not acquire its slot")
+				}
+			}
+			assert.Equal(t, test.wantOrder, order)
+
+			redisNow, err = env.client.Time(t.Context()).Result()
+			require.NoError(t, err)
+			stats, err := GetChannelAdmissionStats(t.Context(), channel.Id, redisNow.Add(-time.Minute), redisNow.Add(time.Minute))
+			require.NoError(t, err)
+			assert.Equal(t, test.wantSoup, stats.SoupGrants)
+		})
+	}
+}
+
+func TestChannelAdmissionQueueCapacityTimeoutAndCancellation(t *testing.T) {
+	t.Run("capacity and cancellation", func(t *testing.T) {
+		env := useChannelRateLimitMiniRedis(t)
+		channel := &model.Channel{
+			Id:               618,
+			ConcurrencyLimit: channelLimitInt(1),
+			OtherSettings:    `{"admission_control":{"max_waiting_total":1,"max_waiting_per_user":1}}`,
+		}
+		occupant, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 710), channel)
+		require.True(t, allowed)
+		require.NotNil(t, occupant)
+
+		waitCtx, cancelWait := context.WithCancel(t.Context())
+		defer cancelWait()
+		waitResult := make(chan bool, 1)
+		go func() {
+			_, ok := AcquireChannelRateLimit(
+				channelRateLimitTestContextForUser(waitCtx, 711),
+				channel,
+				ChannelRateLimitOptions{WaitTimeout: 2 * time.Second},
+			)
+			waitResult <- ok
+		}()
+		queueKey := channelRateLimitKeys(channel.Id, 0)[4]
+		require.Eventually(t, func() bool {
+			count, err := env.client.ZCard(t.Context(), queueKey).Result()
+			return err == nil && count == 1
+		}, time.Second, 5*time.Millisecond)
+
+		fullContext := channelRateLimitTestContextForUser(t.Context(), 712)
+		fullGuard, fullAllowed := AcquireChannelRateLimit(
+			fullContext,
+			channel,
+			ChannelRateLimitOptions{WaitTimeout: time.Second},
+		)
+		assert.False(t, fullAllowed)
+		assert.Nil(t, fullGuard)
+		assert.Equal(t, "30", fullContext.Writer.Header().Get("Retry-After"))
+
+		cancelWait()
+		select {
+		case ok := <-waitResult:
+			assert.False(t, ok)
+		case <-time.After(time.Second):
+			t.Fatal("cancelled request did not leave the admission queue")
+		}
+		require.Eventually(t, func() bool {
+			count, err := env.client.ZCard(t.Context(), queueKey).Result()
+			return err == nil && count == 0
+		}, time.Second, 5*time.Millisecond)
+		occupant.Release()
+
+		stats, err := GetChannelAdmissionStats(t.Context(), channel.Id, time.Now().Add(-time.Minute), time.Now())
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), stats.QueueFull)
+		assert.Zero(t, stats.Waiting)
+	})
+
+	t.Run("timeout", func(t *testing.T) {
+		useChannelRateLimitMiniRedis(t)
+		channel := &model.Channel{Id: 619, ConcurrencyLimit: channelLimitInt(1)}
+		occupant, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 720), channel)
+		require.True(t, allowed)
+		require.NotNil(t, occupant)
+
+		timeoutContext := channelRateLimitTestContextForUser(t.Context(), 721)
+		guard, acquired := AcquireChannelRateLimit(
+			timeoutContext,
+			channel,
+			ChannelRateLimitOptions{WaitTimeout: 30 * time.Millisecond},
+		)
+		assert.False(t, acquired)
+		assert.Nil(t, guard)
+		assert.Equal(t, "30", timeoutContext.Writer.Header().Get("Retry-After"))
+		occupant.Release()
+
+		stats, err := GetChannelAdmissionStats(t.Context(), channel.Id, time.Now().Add(-time.Minute), time.Now())
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), stats.Timeouts)
+		assert.Zero(t, stats.Waiting)
+	})
+}
+
+func TestUserOnlyConcurrencyQueueDoesNotConsumeAnotherUsersCapacity(t *testing.T) {
+	env := useChannelRateLimitMiniRedis(t)
+	channel := &model.Channel{
+		Id:            620,
+		OtherSettings: `{"admission_control":{"max_waiting_total":1,"max_waiting_per_user":1}}`,
+		UserRateLimits: model.ChannelUserRateLimits{
+			{UserId: 730, Priority: 100, ConcurrencyLimit: channelLimitInt(1)},
+			{UserId: 731, ConcurrencyLimit: channelLimitInt(1)},
+		},
+	}
+	occupant, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 730), channel)
 	require.True(t, allowed)
-	require.NotNil(t, lowA)
-	lowB, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 93), channel)
+	require.NotNil(t, occupant)
+
+	waitResult := make(chan bool, 1)
+	go func() {
+		guard, ok := AcquireChannelRateLimit(
+			channelRateLimitTestContextForUser(t.Context(), 730),
+			channel,
+			ChannelRateLimitOptions{WaitTimeout: time.Second},
+		)
+		if guard != nil {
+			guard.Release()
+		}
+		waitResult <- ok
+	}()
+	queueKey := channelRateLimitKeys(channel.Id, 0)[4]
+	require.Eventually(t, func() bool {
+		count, err := env.client.ZCard(t.Context(), queueKey).Result()
+		return err == nil && count == 1
+	}, time.Second, 5*time.Millisecond)
+
+	otherUser, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 731), channel)
+	assert.True(t, allowed, "a per-user queue must not block another user's available slot without a channel-wide limit")
+	require.NotNil(t, otherUser)
+	otherUser.Release()
+	occupant.Release()
+
+	select {
+	case ok := <-waitResult:
+		assert.True(t, ok)
+	case <-time.After(time.Second):
+		t.Fatal("waiting user did not acquire the released user slot")
+	}
+}
+
+func TestQueuedChannelAdmissionUsesCurrentConcurrencyLimit(t *testing.T) {
+	env := useChannelRateLimitMiniRedis(t)
+	channel := &model.Channel{Id: 621, ConcurrencyLimit: channelLimitInt(1)}
+	occupant, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 740), channel)
 	require.True(t, allowed)
-	require.NotNil(t, lowB)
+	require.NotNil(t, occupant)
 
-	p100, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 92), channel)
-	assert.False(t, allowed)
-	assert.Nil(t, p100)
-	p100Other, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 94), channel)
-	assert.False(t, allowed)
-	assert.Nil(t, p100Other)
-	p200, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 91), channel)
-	assert.False(t, allowed)
-	assert.Nil(t, p200)
+	currentChannel := &model.Channel{Id: channel.Id, ConcurrencyLimit: channelLimitInt(2)}
+	result := make(chan *ChannelRateLimitGuard, 1)
+	go func() {
+		guard, ok := AcquireChannelRateLimit(
+			channelRateLimitTestContextForUser(t.Context(), 741),
+			channel,
+			ChannelRateLimitOptions{
+				WaitTimeout: time.Second,
+				RefreshChannel: func() (*model.Channel, error) {
+					return currentChannel, nil
+				},
+			},
+		)
+		if ok {
+			result <- guard
+		}
+	}()
+	require.Eventually(t, func() bool {
+		count, err := env.client.ZCard(t.Context(), channelRateLimitKeys(channel.Id, 0)[4]).Result()
+		return err == nil && count == 1
+	}, time.Second, 5*time.Millisecond)
 
-	lowA.Release()
-	p100, allowed = TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 92), channel)
-	assert.False(t, allowed, "a lower priority must yield to a waiting higher priority")
-	assert.Nil(t, p100)
-	priority100Demand, err := env.client.ZScore(t.Context(), channelRateLimitKeys(channel.Id, 0)[4], "100|92").Result()
-	require.NoError(t, err)
-	assert.Greater(t, priority100Demand, float64(0), "a lower tier blocked by priority 200 must retain its demand")
+	select {
+	case guard := <-result:
+		require.NotNil(t, guard)
+		guard.Release()
+	case <-time.After(time.Second):
+		t.Fatal("queued request did not use the increased channel concurrency limit")
+	}
+	occupant.Release()
+}
 
-	p200, allowed = TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 91), channel)
-	assert.True(t, allowed, "the highest waiting priority takes the free slot")
-	require.NotNil(t, p200)
+func TestQueuedChannelAdmissionUsesCurrentUserConcurrencyLimit(t *testing.T) {
+	env := useChannelRateLimitMiniRedis(t)
+	channel := &model.Channel{
+		Id:               623,
+		ConcurrencyLimit: channelLimitInt(3),
+		UserRateLimits: model.ChannelUserRateLimits{
+			{UserId: 743, ConcurrencyLimit: channelLimitInt(1)},
+		},
+	}
+	occupant, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 743), channel)
+	require.True(t, allowed)
+	require.NotNil(t, occupant)
 
-	p200.Release()
-	blockedLow, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 93), channel)
-	assert.False(t, allowed, "priority 100 demand continues to hold off the default tier")
-	assert.Nil(t, blockedLow)
-	blockedDefault, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 97), channel)
-	assert.False(t, allowed, "another default-tier request waits behind priority 100")
-	assert.Nil(t, blockedDefault)
+	currentChannel := &model.Channel{
+		Id:               channel.Id,
+		ConcurrencyLimit: channelLimitInt(3),
+		UserRateLimits: model.ChannelUserRateLimits{
+			{UserId: 743, ConcurrencyLimit: channelLimitInt(2)},
+		},
+	}
+	result := make(chan *ChannelRateLimitGuard, 1)
+	go func() {
+		guard, ok := AcquireChannelRateLimit(
+			channelRateLimitTestContextForUser(t.Context(), 743),
+			channel,
+			ChannelRateLimitOptions{
+				WaitTimeout: time.Second,
+				RefreshChannel: func() (*model.Channel, error) {
+					return currentChannel, nil
+				},
+			},
+		)
+		if ok {
+			result <- guard
+		}
+	}()
+	require.Eventually(t, func() bool {
+		count, err := env.client.ZCard(t.Context(), channelRateLimitKeys(channel.Id, 743)[4]).Result()
+		return err == nil && count == 1
+	}, time.Second, 5*time.Millisecond)
 
-	p100, allowed = TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 92), channel)
-	assert.True(t, allowed, "the next waiting priority tier takes the available slot")
-	require.NotNil(t, p100)
-	p100.Release()
+	select {
+	case guard := <-result:
+		require.NotNil(t, guard)
+		guard.Release()
+	case <-time.After(time.Second):
+		t.Fatal("queued request did not use the increased user concurrency limit")
+	}
+	occupant.Release()
+}
 
-	blockedLow, allowed = TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 93), channel)
-	assert.False(t, allowed, "one admitted user must not clear another user's same-tier demand")
-	assert.Nil(t, blockedLow)
+func TestChannelAdmissionPrunesExpiredQueueEntriesBeforeCapacityCheck(t *testing.T) {
+	env := useChannelRateLimitMiniRedis(t)
+	channel := &model.Channel{
+		Id:               624,
+		ConcurrencyLimit: channelLimitInt(1),
+		OtherSettings:    `{"admission_control":{"max_waiting_total":1,"max_waiting_per_user":1}}`,
+	}
+	occupant, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 750), channel)
+	require.True(t, allowed)
+	require.NotNil(t, occupant)
 
-	p100Other, allowed = TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 94), channel)
-	assert.True(t, allowed, "the other user at priority 100 can acquire the next free slot")
-	require.NotNil(t, p100Other)
-	p100Other.Release()
+	oldEnqueued := time.Now().Add(-channelAdmissionWaitTTL - time.Second).UnixMilli()
+	staleMember := fmt.Sprintf("%013d|%020d|stale", oldEnqueued, 1)
+	keys := channelRateLimitKeys(channel.Id, 749)
+	require.NoError(t, env.client.ZAdd(t.Context(), keys[4], &redis.Z{Score: 0, Member: staleMember}).Err())
+	require.NoError(t, env.client.ZAdd(t.Context(), keys[6], &redis.Z{Score: float64(oldEnqueued), Member: staleMember}).Err())
+	require.NoError(t, env.client.HSet(t.Context(), keys[5], "stale", fmt.Sprintf("749|0|%d|1", oldEnqueued)).Err())
 
-	lowB.Release()
-	defaultTier, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 93), channel)
-	assert.True(t, allowed, "the default tier resumes after all higher-priority demand is served")
-	require.NotNil(t, defaultTier)
-	defaultTier.Release()
+	result := make(chan *ChannelRateLimitGuard, 1)
+	go func() {
+		guard, ok := AcquireChannelRateLimit(
+			channelRateLimitTestContextForUser(t.Context(), 751),
+			channel,
+			ChannelRateLimitOptions{WaitTimeout: time.Second},
+		)
+		if ok {
+			result <- guard
+		}
+	}()
+	queueKey := channelRateLimitKeys(channel.Id, 0)[4]
+	require.Eventually(t, func() bool {
+		members, err := env.client.ZRange(t.Context(), queueKey, 0, -1).Result()
+		return err == nil && len(members) == 1 && members[0] != staleMember
+	}, time.Second, 5*time.Millisecond)
+	occupant.Release()
 
-	negativeTier, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 95), channel)
-	assert.False(t, allowed, "one default-tier admission must not clear another user's pending demand")
-	assert.Nil(t, negativeTier)
-	defaultTier, allowed = TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 97), channel)
-	assert.True(t, allowed)
-	require.NotNil(t, defaultTier)
-	defaultTier.Release()
-
-	negativeTier, allowed = TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 95), channel)
-	assert.True(t, allowed, "lower priorities resume after each default-tier demand is served")
-	if negativeTier != nil {
-		negativeTier.Release()
+	select {
+	case guard := <-result:
+		require.NotNil(t, guard)
+		guard.Release()
+	case <-time.After(time.Second):
+		t.Fatal("request did not enter after the expired queue entry was pruned")
 	}
 }
 
@@ -327,175 +598,6 @@ func TestChannelPriorityHonorsUserRPM(t *testing.T) {
 	if low != nil {
 		low.Release()
 	}
-	high.Release()
-}
-
-func TestChannelPriorityDemandExpires(t *testing.T) {
-	env := useChannelRateLimitMiniRedis(t)
-	channel := &model.Channel{
-		Id:               608,
-		ConcurrencyLimit: channelLimitInt(1),
-		UserRateLimits: model.ChannelUserRateLimits{
-			{UserId: 97, Priority: 100},
-		},
-	}
-
-	low, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 98), channel)
-	require.True(t, allowed)
-	require.NotNil(t, low)
-	high, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 97), channel)
-	assert.False(t, allowed)
-	assert.Nil(t, high)
-
-	low.Release()
-	blockedLow, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 98), channel)
-	assert.False(t, allowed, "lower priority must wait out the demand window")
-	assert.Nil(t, blockedLow)
-
-	now, err := env.client.Time(t.Context()).Result()
-	require.NoError(t, err)
-	env.server.SetTime(now.Add(11 * time.Second))
-	low, allowed = TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 98), channel)
-	assert.True(t, allowed, "lower priority resumes after the demand marker expires")
-	if low != nil {
-		low.Release()
-	}
-}
-
-func TestChannelPriorityDemandMarkerLimitPreservesHigherPriorities(t *testing.T) {
-	env := useChannelRateLimitMiniRedis(t)
-	channel := &model.Channel{
-		Id:               615,
-		ConcurrencyLimit: channelLimitInt(1),
-		UserRateLimits: model.ChannelUserRateLimits{
-			{UserId: 1, Priority: 200},
-			{UserId: 2, Priority: 100},
-		},
-	}
-	demandKey := channelRateLimitKeys(channel.Id, 0)[4]
-	redisTime, err := env.client.Time(t.Context()).Result()
-	require.NoError(t, err)
-	expiresAt := float64(redisTime.UnixMilli() + channelPriorityDemandTTL.Milliseconds())
-	demands := make([]*redis.Z, channelPriorityDemandMaxMembers)
-	for userID := range channelPriorityDemandMaxMembers {
-		demands[userID] = &redis.Z{Score: expiresAt, Member: "100|" + strconv.Itoa(10_000+userID)}
-	}
-	require.NoError(t, env.client.ZAdd(t.Context(), demandKey, demands...).Err())
-
-	lower, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 2), channel)
-	require.True(t, allowed)
-	require.NotNil(t, lower)
-	higher, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 1), channel)
-	assert.False(t, allowed)
-	assert.Nil(t, higher)
-	require.NoError(t, env.client.ZScore(t.Context(), demandKey, "200|1").Err())
-
-	count, err := env.client.ZCard(t.Context(), demandKey).Result()
-	require.NoError(t, err)
-	assert.Equal(t, int64(channelPriorityDemandMaxMembers), count)
-
-	lower.Release()
-	lower, allowed = TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 2), channel)
-	assert.False(t, allowed, "a full marker set must retain the higher-priority demand")
-	assert.Nil(t, lower)
-}
-
-func TestChannelPriorityDemandClearsWhenRequestUsesAnotherChannel(t *testing.T) {
-	env := useChannelRateLimitMiniRedis(t)
-	limitedChannel := &model.Channel{
-		Id:               610,
-		ConcurrencyLimit: channelLimitInt(1),
-		UserRateLimits:   model.ChannelUserRateLimits{{UserId: 101, Priority: 100}},
-	}
-	secondLimitedChannel := &model.Channel{
-		Id:               613,
-		ConcurrencyLimit: channelLimitInt(1),
-		UserRateLimits:   model.ChannelUserRateLimits{{UserId: 101, Priority: 100}},
-	}
-
-	low, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 102), limitedChannel)
-	require.True(t, allowed)
-	require.NotNil(t, low)
-	secondLow, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 103), secondLimitedChannel)
-	require.True(t, allowed)
-	require.NotNil(t, secondLow)
-
-	highContext := channelRateLimitTestContextForUser(t.Context(), 101)
-	high, allowed := TryAcquireChannelRateLimit(highContext, limitedChannel)
-	assert.False(t, allowed)
-	assert.Nil(t, high)
-
-	markerKey := channelRateLimitKeys(limitedChannel.Id, 0)[4]
-	markers, err := env.client.ZRange(t.Context(), markerKey, 0, -1).Result()
-	require.NoError(t, err)
-	assert.Contains(t, markers, "100|101")
-	_, allowed = TryAcquireChannelRateLimit(highContext, secondLimitedChannel)
-	assert.False(t, allowed)
-	secondMarkerKey := channelRateLimitKeys(secondLimitedChannel.Id, 0)[4]
-	markers, err = env.client.ZRange(t.Context(), secondMarkerKey, 0, -1).Result()
-	require.NoError(t, err)
-	assert.Contains(t, markers, "100|101")
-
-	_, allowed = TryAcquireChannelRateLimit(highContext, &model.Channel{Id: 611})
-	require.True(t, allowed, "an admitted fallback channel satisfies this request's blocked candidate demands")
-
-	markers, err = env.client.ZRange(t.Context(), markerKey, 0, -1).Result()
-	require.NoError(t, err)
-	assert.NotContains(t, markers, "100|101")
-	markers, err = env.client.ZRange(t.Context(), secondMarkerKey, 0, -1).Result()
-	require.NoError(t, err)
-	assert.NotContains(t, markers, "100|101")
-
-	low.Release()
-	low, allowed = TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 102), limitedChannel)
-	assert.True(t, allowed, "the previously blocked channel can immediately serve lower priority")
-	if low != nil {
-		low.Release()
-	}
-	secondLow.Release()
-	secondLow, allowed = TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 103), secondLimitedChannel)
-	assert.True(t, allowed, "the other previously blocked channel can immediately serve lower priority")
-	if secondLow != nil {
-		secondLow.Release()
-	}
-}
-
-func TestClearChannelPriorityDemandMarkers(t *testing.T) {
-	env := useChannelRateLimitMiniRedis(t)
-	key := channelRateLimitKeys(614, 0)[4]
-	require.NoError(t, env.client.ZAdd(t.Context(), key,
-		&redis.Z{Score: 1, Member: "100|one"},
-		&redis.Z{Score: 2, Member: "50|two"},
-	).Err())
-
-	ClearChannelPriorityDemandMarkers(614)
-
-	count, err := env.client.Exists(t.Context(), key).Result()
-	require.NoError(t, err)
-	assert.Zero(t, count)
-}
-
-func TestChannelPriorityChangeDoesNotBlockTheSameUser(t *testing.T) {
-	useChannelRateLimitMiniRedis(t)
-	channel := &model.Channel{
-		Id:               612,
-		ConcurrencyLimit: channelLimitInt(1),
-		UserRateLimits:   model.ChannelUserRateLimits{{UserId: 103, Priority: 200}},
-	}
-
-	low, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 104), channel)
-	require.True(t, allowed)
-	require.NotNil(t, low)
-
-	high, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 103), channel)
-	assert.False(t, allowed)
-	assert.Nil(t, high)
-
-	channel.UserRateLimits[0].Priority = 100
-	low.Release()
-	high, allowed = TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 103), channel)
-	assert.True(t, allowed, "a stale marker from the user's previous priority must not block the user")
-	require.NotNil(t, high)
 	high.Release()
 }
 
@@ -645,11 +747,81 @@ func TestChannelConcurrencyLeaseRenewsWithServerTime(t *testing.T) {
 
 func TestChannelRateLimitKeysShareRedisClusterHashTag(t *testing.T) {
 	keys := channelRateLimitKeys(99, 7)
-	require.Len(t, keys, 5)
+	require.Len(t, keys, 12)
 	for _, key := range keys {
 		assert.Contains(t, key, "{channel:99}")
 	}
 	assert.Contains(t, keys[2], ":rpm:user:7")
 	assert.Contains(t, keys[3], ":active:user:7")
-	assert.Contains(t, keys[4], ":priority:demand")
+	assert.Contains(t, keys[4], ":waiting")
+	assert.Contains(t, keys[8], ":metrics:values")
+	assert.Contains(t, keys[11], ":waiting:sequence")
+}
+
+func TestChannelAdmissionQueueWaitUpdatesMinuteMetrics(t *testing.T) {
+	env := useChannelRateLimitMiniRedis(t)
+	channel := &model.Channel{Id: 616, ConcurrencyLimit: channelLimitInt(1)}
+	occupant, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 610), channel)
+	require.True(t, allowed)
+	require.NotNil(t, occupant)
+
+	queued := make(chan *ChannelRateLimitGuard, 1)
+	go func() {
+		guard, ok := AcquireChannelRateLimit(
+			channelRateLimitTestContextForUser(t.Context(), 611),
+			channel,
+			ChannelRateLimitOptions{WaitTimeout: time.Second},
+		)
+		if ok {
+			queued <- guard
+		}
+	}()
+	require.Eventually(t, func() bool {
+		count, err := env.client.ZCard(t.Context(), channelRateLimitKeys(channel.Id, 0)[4]).Result()
+		return err == nil && count == 1
+	}, time.Second, 5*time.Millisecond)
+	occupant.Release()
+
+	select {
+	case guard := <-queued:
+		require.NotNil(t, guard)
+		guard.Release()
+	case <-time.After(time.Second):
+		t.Fatal("waiting request did not acquire the released channel slot")
+	}
+
+	stats, err := GetChannelAdmissionStats(t.Context(), channel.Id, time.Now().Add(-time.Minute), time.Now())
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), stats.Grants)
+	assert.Equal(t, int64(0), stats.Active)
+	assert.Equal(t, int64(0), stats.Waiting)
+	assert.NotEmpty(t, stats.MinuteSeries)
+	assert.Positive(t, stats.WaitP50Ms)
+}
+
+func TestChannelAdmissionObservationUsesAdminLogJSON(t *testing.T) {
+	c := newUserRateLimitTestContext(t.Context())
+	observation := channelRateLimitObservation(c)
+	observation.noteSnapshot(channelRateLimitSnapshot{ChannelID: 622, ConcurrencyLimit: 2, Priority: 5})
+	observation.noteRejected(622, 740, "concurrency", "queue_timeout")
+	observation.noteQueueWait(2 * time.Second)
+	observation.noteSoupGrant()
+
+	other := model.NewLogOther()
+	AppendChannelRateLimitAdminInfo(c, other)
+	encoded, err := common.Marshal(other)
+	require.NoError(t, err)
+	var decoded map[string]any
+	require.NoError(t, common.Unmarshal(encoded, &decoded))
+
+	adminInfo, ok := decoded["admin_info"].(map[string]any)
+	require.True(t, ok)
+	rateLimits, ok := adminInfo["channel_rate_limits"].(map[string]any)
+	require.True(t, ok)
+	admission, ok := rateLimits["admission"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, float64(1), admission["queued_requests"])
+	assert.Equal(t, float64(2_000), admission["average_wait_ms"])
+	assert.Equal(t, float64(1), admission["soup_grants"])
+	assert.Equal(t, float64(1), admission["timeouts"])
 }

@@ -324,6 +324,15 @@ export const channelFormSchema = z
     protocol_allow_lossy_conversion: z.boolean().optional(),
     protocol_model_overrides: protocolModelOverridesTextSchema.optional(),
     context_limits: contextLimitsTextSchema.optional(),
+    admission_wait_timeout_ms: z.number().int().min(1_000).max(300_000),
+    admission_heartbeat_interval_ms: z.number().int().min(1_000).max(30_000),
+    admission_max_waiting_total: z.number().int().min(1).max(1_000),
+    admission_max_waiting_per_user: z.number().int().min(1).max(1_000),
+    admission_soup_mode: z.enum(['interval', 'ratio', 'off']),
+    admission_soup_after_ms: z.number().int().min(0).max(300_000),
+    admission_soup_interval_ms: z.number().int().min(1_000).max(600_000),
+    admission_soup_ratio_percent: z.number().int().min(1).max(50),
+    admission_retry_after_seconds: z.number().int().min(1).max(300),
     // Multi-key options (not sent to backend directly)
     multi_key_mode: z.enum(['single', 'batch', 'multi_to_single']).optional(),
     multi_key_type: z.enum(['random', 'polling']).optional(),
@@ -371,6 +380,14 @@ export const channelFormSchema = z
     prompt_audit_exempt: z.boolean().optional(),
   })
   .superRefine((data, ctx) => {
+    if (data.admission_max_waiting_per_user > data.admission_max_waiting_total) {
+      addRequiredIssue(
+        ctx,
+        'admission_max_waiting_per_user',
+        'Per-user queue limit cannot exceed the channel queue limit'
+      )
+    }
+
     if (
       (data.user_rate_limits ?? []).some(
         (limit) => limit.priority != null && limit.priority !== 0
@@ -583,6 +600,15 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   protocol_allow_lossy_conversion: false,
   protocol_model_overrides: '[]',
   context_limits: '[]',
+  admission_wait_timeout_ms: 30_000,
+  admission_heartbeat_interval_ms: 5_000,
+  admission_max_waiting_total: 20,
+  admission_max_waiting_per_user: 5,
+  admission_soup_mode: 'interval',
+  admission_soup_after_ms: 30_000,
+  admission_soup_interval_ms: 15_000,
+  admission_soup_ratio_percent: 20,
+  admission_retry_after_seconds: 30,
   multi_key_mode: 'single',
   multi_key_type: 'random',
   batch_add_set_key_prefix_2_name: false,
@@ -715,6 +741,7 @@ export function transformChannelToFormDefaults(
   let protocolModelOverrides = '[]'
   let protocolPolicyJSON: string | undefined
   let contextLimits = '[]'
+  let admissionControl: Record<string, unknown> = {}
 
   if (channel.settings) {
     try {
@@ -766,6 +793,13 @@ export function transformChannelToFormDefaults(
         clientPolicyClients = parsed.client_policy.clients.join(', ')
       }
       contextLimits = formatContextLimits(parsed.context_limits)
+      if (
+        parsed.admission_control &&
+        typeof parsed.admission_control === 'object' &&
+        !Array.isArray(parsed.admission_control)
+      ) {
+        admissionControl = parsed.admission_control
+      }
       const protocolCapabilities = parsed.protocol_capabilities
       if (
         protocolCapabilities &&
@@ -868,6 +902,42 @@ export function transformChannelToFormDefaults(
     protocol_allow_lossy_conversion: protocolAllowLossyConversion,
     protocol_model_overrides: protocolModelOverrides,
     context_limits: contextLimits,
+    admission_wait_timeout_ms:
+      typeof admissionControl.wait_timeout_ms === 'number'
+        ? admissionControl.wait_timeout_ms
+        : 30_000,
+    admission_heartbeat_interval_ms:
+      typeof admissionControl.heartbeat_interval_ms === 'number'
+        ? admissionControl.heartbeat_interval_ms
+        : 5_000,
+    admission_max_waiting_total:
+      typeof admissionControl.max_waiting_total === 'number'
+        ? admissionControl.max_waiting_total
+        : 20,
+    admission_max_waiting_per_user:
+      typeof admissionControl.max_waiting_per_user === 'number'
+        ? admissionControl.max_waiting_per_user
+        : 5,
+    admission_soup_mode:
+      admissionControl.soup_mode === 'ratio' || admissionControl.soup_mode === 'off'
+        ? admissionControl.soup_mode
+        : 'interval',
+    admission_soup_after_ms:
+      typeof admissionControl.soup_after_ms === 'number'
+        ? admissionControl.soup_after_ms
+        : 30_000,
+    admission_soup_interval_ms:
+      typeof admissionControl.soup_interval_ms === 'number'
+        ? admissionControl.soup_interval_ms
+        : 15_000,
+    admission_soup_ratio_percent:
+      typeof admissionControl.soup_ratio_percent === 'number'
+        ? admissionControl.soup_ratio_percent
+        : 20,
+    admission_retry_after_seconds:
+      typeof admissionControl.retry_after_seconds === 'number'
+        ? admissionControl.retry_after_seconds
+        : 30,
   }
 }
 
@@ -1151,6 +1221,18 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
     settingsObj.context_limits = contextLimitRules
   } else if ('context_limits' in settingsObj) {
     delete settingsObj.context_limits
+  }
+
+  settingsObj.admission_control = {
+    wait_timeout_ms: formData.admission_wait_timeout_ms,
+    heartbeat_interval_ms: formData.admission_heartbeat_interval_ms,
+    max_waiting_total: formData.admission_max_waiting_total,
+    max_waiting_per_user: formData.admission_max_waiting_per_user,
+    soup_mode: formData.admission_soup_mode,
+    soup_after_ms: formData.admission_soup_after_ms,
+    soup_interval_ms: formData.admission_soup_interval_ms,
+    soup_ratio_percent: formData.admission_soup_ratio_percent,
+    retry_after_seconds: formData.admission_retry_after_seconds,
   }
 
   return JSON.stringify(settingsObj)

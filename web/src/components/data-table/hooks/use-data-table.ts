@@ -233,17 +233,30 @@ function readJsonStorage(storageKey: string | undefined): unknown {
 
 function readColumnOrder(
   storageKey: string | undefined,
-  validColumnIds: string[]
+  defaultColumnOrder: string[]
 ): ColumnOrderState | undefined {
   const parsed = readJsonStorage(storageKey)
   if (!Array.isArray(parsed)) return undefined
-  const valid = new Set(validColumnIds)
+  const valid = new Set(defaultColumnOrder)
   const restored = parsed.filter(
     (value): value is string => typeof value === 'string' && valid.has(value)
   )
   if (restored.length === 0 && parsed.length > 0) return undefined
+  const merged = [...restored]
   const seen = new Set(restored)
-  return [...restored, ...validColumnIds.filter((id) => !seen.has(id))]
+  for (const [index, columnId] of defaultColumnOrder.entries()) {
+    if (seen.has(columnId)) continue
+    const nextRestoredColumn = defaultColumnOrder
+      .slice(index + 1)
+      .find((candidate) => seen.has(candidate))
+    if (nextRestoredColumn) {
+      merged.splice(merged.indexOf(nextRestoredColumn), 0, columnId)
+    } else {
+      merged.push(columnId)
+    }
+    seen.add(columnId)
+  }
+  return merged
 }
 
 function readSorting(
@@ -510,9 +523,9 @@ export function useDataTable<TData>(options: UseDataTableOptions<TData>) {
     return [...restored, ...leafColumnIds.filter((id) => !seen.has(id))]
   }, [initialColumnOrder, leafColumnIds])
   const resolvedInitialColumnOrder = React.useMemo(() => {
-    const restored = readColumnOrder(columnOrderStorageKey, leafColumnIds)
+    const restored = readColumnOrder(columnOrderStorageKey, defaultColumnOrder)
     return restored ?? defaultColumnOrder
-  }, [columnOrderStorageKey, defaultColumnOrder, leafColumnIds])
+  }, [columnOrderStorageKey, defaultColumnOrder])
   const resolvedInitialPagination = React.useMemo(
     () => ({
       ...initialPagination,

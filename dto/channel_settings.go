@@ -147,10 +147,11 @@ type ChannelOtherSettings struct {
 	// ToolLossPolicy is a channel-level opt-in for request-phase conversion
 	// rejection. Empty follows the default allow policy. Accepted values:
 	// "", "allow", "safe", "strict".
-	ToolLossPolicy       string                `json:"tool_loss_policy,omitempty"`
-	ProtocolCapabilities *ProtocolCapabilities `json:"protocol_capabilities,omitempty"`
-	ProtocolPolicy       *ProtocolPolicy       `json:"protocol_policy,omitempty"`
-	ClientPolicy         ClientAccessPolicy    `json:"client_policy,omitempty"`
+	ToolLossPolicy       string                   `json:"tool_loss_policy,omitempty"`
+	ProtocolCapabilities *ProtocolCapabilities    `json:"protocol_capabilities,omitempty"`
+	ProtocolPolicy       *ProtocolPolicy          `json:"protocol_policy,omitempty"`
+	ClientPolicy         ClientAccessPolicy       `json:"client_policy,omitempty"`
+	AdmissionControl     *ChannelAdmissionControl `json:"admission_control,omitempty"`
 	// DisableModelOnError narrows automatic disabling from the whole channel to
 	// the (group, model) that actually failed. Default false keeps the legacy
 	// channel-level behavior.
@@ -165,6 +166,97 @@ type ChannelOtherSettings struct {
 	// clients can compact before the window fills; an empty list defers to the
 	// global per-model declaration.
 	ContextLimits []ChannelContextLimitRule `json:"context_limits,omitempty"`
+}
+
+type ChannelAdmissionControl struct {
+	WaitTimeoutMs       int    `json:"wait_timeout_ms,omitempty"`
+	HeartbeatIntervalMs int    `json:"heartbeat_interval_ms,omitempty"`
+	MaxWaitingTotal     int    `json:"max_waiting_total,omitempty"`
+	MaxWaitingPerUser   int    `json:"max_waiting_per_user,omitempty"`
+	SoupMode            string `json:"soup_mode,omitempty"`
+	SoupAfterMs         *int   `json:"soup_after_ms,omitempty"`
+	SoupIntervalMs      int    `json:"soup_interval_ms,omitempty"`
+	SoupRatioPercent    int    `json:"soup_ratio_percent,omitempty"`
+	RetryAfterSeconds   int    `json:"retry_after_seconds,omitempty"`
+}
+
+const (
+	ChannelAdmissionSoupModeInterval = "interval"
+	ChannelAdmissionSoupModeRatio    = "ratio"
+	ChannelAdmissionSoupModeOff      = "off"
+)
+
+func (settings ChannelAdmissionControl) Normalized() ChannelAdmissionControl {
+	if settings.WaitTimeoutMs == 0 {
+		settings.WaitTimeoutMs = 30_000
+	}
+	if settings.HeartbeatIntervalMs == 0 {
+		settings.HeartbeatIntervalMs = 5_000
+	}
+	if settings.MaxWaitingTotal == 0 {
+		settings.MaxWaitingTotal = 20
+	}
+	if settings.MaxWaitingPerUser == 0 {
+		settings.MaxWaitingPerUser = 5
+	}
+	if settings.SoupMode == "" {
+		settings.SoupMode = ChannelAdmissionSoupModeInterval
+	}
+	if settings.SoupAfterMs == nil {
+		soupAfterMs := 30_000
+		settings.SoupAfterMs = &soupAfterMs
+	}
+	if settings.SoupIntervalMs == 0 {
+		settings.SoupIntervalMs = 15_000
+	}
+	if settings.SoupRatioPercent == 0 {
+		settings.SoupRatioPercent = 20
+	}
+	if settings.RetryAfterSeconds == 0 {
+		settings.RetryAfterSeconds = 30
+	}
+	return settings
+}
+
+func (settings ChannelAdmissionControl) Validate() error {
+	settings = settings.Normalized()
+	if settings.WaitTimeoutMs < 1_000 || settings.WaitTimeoutMs > 300_000 {
+		return fmt.Errorf("admission_control.wait_timeout_ms must be between 1000 and 300000")
+	}
+	if settings.HeartbeatIntervalMs < 1_000 || settings.HeartbeatIntervalMs > 30_000 {
+		return fmt.Errorf("admission_control.heartbeat_interval_ms must be between 1000 and 30000")
+	}
+	if settings.MaxWaitingTotal < 1 || settings.MaxWaitingTotal > 1_000 {
+		return fmt.Errorf("admission_control.max_waiting_total must be between 1 and 1000")
+	}
+	if settings.MaxWaitingPerUser < 1 || settings.MaxWaitingPerUser > settings.MaxWaitingTotal {
+		return fmt.Errorf("admission_control.max_waiting_per_user must be between 1 and max_waiting_total")
+	}
+	if *settings.SoupAfterMs < 0 || *settings.SoupAfterMs > 300_000 {
+		return fmt.Errorf("admission_control.soup_after_ms must be between 0 and 300000")
+	}
+	if settings.SoupIntervalMs < 1_000 || settings.SoupIntervalMs > 600_000 {
+		return fmt.Errorf("admission_control.soup_interval_ms must be between 1000 and 600000")
+	}
+	if settings.SoupRatioPercent < 1 || settings.SoupRatioPercent > 50 {
+		return fmt.Errorf("admission_control.soup_ratio_percent must be between 1 and 50")
+	}
+	if settings.RetryAfterSeconds < 1 || settings.RetryAfterSeconds > 300 {
+		return fmt.Errorf("admission_control.retry_after_seconds must be between 1 and 300")
+	}
+	switch settings.SoupMode {
+	case ChannelAdmissionSoupModeInterval, ChannelAdmissionSoupModeRatio, ChannelAdmissionSoupModeOff:
+		return nil
+	default:
+		return fmt.Errorf("admission_control.soup_mode must be interval, ratio, or off")
+	}
+}
+
+func (settings *ChannelOtherSettings) ValidateAdmissionControl() error {
+	if settings == nil || settings.AdmissionControl == nil {
+		return nil
+	}
+	return settings.AdmissionControl.Validate()
 }
 
 // ChannelContextLimitRule declares the context window for the models matching

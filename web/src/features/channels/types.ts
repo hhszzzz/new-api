@@ -179,6 +179,32 @@ export const channelSchema = z.object({
 
 export type Channel = z.infer<typeof channelSchema>
 
+export interface ChannelAdmissionMetricPoint {
+  timestamp_ms: number
+  grants: number
+  soup_grants: number
+  queue_full: number
+  timeouts: number
+  wait_p50_ms: number
+  wait_p95_ms: number
+}
+
+export interface ChannelAdmissionStats {
+  channel_id: number
+  window_start_ms: number
+  window_end_ms: number
+  active: number
+  waiting: number
+  oldest_wait_ms: number
+  wait_p50_ms: number
+  wait_p95_ms: number
+  grants: number
+  soup_grants: number
+  queue_full: number
+  timeouts: number
+  minute_series: ChannelAdmissionMetricPoint[]
+}
+
 export type ChannelAggregate = {
   id: number
   name: string
@@ -279,6 +305,7 @@ export interface ChannelOtherSettings {
   advanced_custom?: AdvancedCustomConfig
   protocol_capabilities?: ProtocolCapabilities
   protocol_policy?: ProtocolPolicy
+  admission_control?: ChannelAdmissionControlSettings
   disable_model_on_error?: boolean
   prompt_audit_exempt?: boolean
   context_limits?: ChannelContextLimitRule[]
@@ -286,6 +313,18 @@ export interface ChannelOtherSettings {
     mode?: 'unrestricted' | 'allow' | 'deny'
     clients?: string[]
   }
+}
+
+export interface ChannelAdmissionControlSettings {
+  wait_timeout_ms?: number
+  heartbeat_interval_ms?: number
+  max_waiting_total?: number
+  max_waiting_per_user?: number
+  soup_mode?: 'interval' | 'ratio' | 'off'
+  soup_after_ms?: number
+  soup_interval_ms?: number
+  soup_ratio_percent?: number
+  retry_after_seconds?: number
 }
 
 /** Per-model context window declaration on a channel. First matching rule wins. */

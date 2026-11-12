@@ -10,6 +10,38 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestChannelAdmissionControlDefaultsValidationAndRoundTrip(t *testing.T) {
+	defaults := (ChannelAdmissionControl{}).Normalized()
+	assert.Equal(t, 30_000, defaults.WaitTimeoutMs)
+	assert.Equal(t, 5_000, defaults.HeartbeatIntervalMs)
+	assert.Equal(t, 20, defaults.MaxWaitingTotal)
+	assert.Equal(t, 5, defaults.MaxWaitingPerUser)
+	assert.Equal(t, ChannelAdmissionSoupModeInterval, defaults.SoupMode)
+	require.NotNil(t, defaults.SoupAfterMs)
+	assert.Equal(t, 30_000, *defaults.SoupAfterMs)
+	assert.Equal(t, 15_000, defaults.SoupIntervalMs)
+	assert.Equal(t, 20, defaults.SoupRatioPercent)
+	require.NoError(t, defaults.Validate())
+
+	soupAfterMs := 0
+	explicitZero := ChannelAdmissionControl{SoupAfterMs: &soupAfterMs}.Normalized()
+	require.NotNil(t, explicitZero.SoupAfterMs)
+	assert.Zero(t, *explicitZero.SoupAfterMs)
+	require.NoError(t, explicitZero.Validate())
+
+	settings := ChannelOtherSettings{AdmissionControl: &ChannelAdmissionControl{SoupMode: ChannelAdmissionSoupModeRatio}}
+	encoded, err := json.Marshal(settings)
+	require.NoError(t, err)
+	var decoded ChannelOtherSettings
+	require.NoError(t, json.Unmarshal(encoded, &decoded))
+	require.NotNil(t, decoded.AdmissionControl)
+	assert.Equal(t, ChannelAdmissionSoupModeRatio, decoded.AdmissionControl.SoupMode)
+	assert.Equal(t, 20, decoded.AdmissionControl.Normalized().SoupRatioPercent)
+
+	invalid := &ChannelAdmissionControl{MaxWaitingTotal: 2, MaxWaitingPerUser: 3}
+	assert.ErrorContains(t, invalid.Validate(), "max_waiting_per_user")
+}
+
 func TestProtocolCapabilitiesValidate(t *testing.T) {
 	allow := true
 	valid := &ProtocolCapabilities{

@@ -74,8 +74,8 @@ describe('shared data table persisted view', () => {
     expect(result.current.table.getState().columnSizing).toEqual({ name: 220 })
     expect(result.current.table.getState().columnOrder).toEqual([
       'status',
-      'name',
       'id',
+      'name',
     ])
     expect(result.current.table.getState().sorting).toEqual([
       { id: 'name', desc: true },
@@ -84,6 +84,35 @@ describe('shared data table persisted view', () => {
       pageIndex: 0,
       pageSize: 50,
     })
+  })
+
+  test('inserts newly added columns at their default position in a saved order', () => {
+    window.localStorage.setItem(
+      'demo:column-order',
+      JSON.stringify(['id', 'name', 'status'])
+    )
+    const updatedColumns: ColumnDef<RowData>[] = [
+      { accessorKey: 'id', header: 'ID', size: 80 },
+      { accessorKey: 'name', header: 'Name', size: 160, minSize: 100 },
+      { id: 'admission', header: 'Admission', size: 180 },
+      { accessorKey: 'status', header: 'Status', size: 120 },
+    ]
+
+    const { result } = renderHook(() =>
+      useDataTable({
+        data,
+        columns: updatedColumns,
+        tableStateStorageKey: 'demo',
+        enableColumnResizing: false,
+      })
+    )
+
+    expect(result.current.table.getState().columnOrder).toEqual([
+      'id',
+      'name',
+      'admission',
+      'status',
+    ])
   })
 
   test('uses the configured initial column order when no saved order exists', () => {

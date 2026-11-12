@@ -403,7 +403,14 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 		}
-		channelGuard, allowed := service.TryAcquireChannelRateLimit(c, lockedChannel)
+		channelGuard, allowed := service.AcquireChannelRateLimit(c, lockedChannel, service.ChannelRateLimitOptions{
+			RefreshChannel: func() (*appmodel.Channel, error) {
+				return appmodel.CacheGetChannel(lockedChannel.Id)
+			},
+			Heartbeat: func() error {
+				return s.client.WriteControl(websocket.PingMessage, nil, time.Now().Add(time.Second))
+			},
+		})
 		if !allowed {
 			return service.NewChannelRateLimitError(c)
 		}
@@ -428,14 +435,40 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 		}
 	} else {
 		retry := middleware.NewResponsesWebSocketRetryParam(c, modelName)
+		var preferredChannel *appmodel.Channel
 		for ; retry.GetRetry() <= common.RetryTimes; retry.IncreaseRetry() {
 			var channel *appmodel.Channel
 			channel, apiErr = selectResponsesWSChannel(c, modelName, retry)
 			if apiErr != nil {
-				break
+				if preferredChannel == nil {
+					break
+				}
+				if apiErr = s.restoreConnectionContext(c, modelName); apiErr != nil {
+					break
+				}
+				if apiErr = middleware.SetupContextForSelectedChannel(c, preferredChannel, modelName, true); apiErr != nil {
+					break
+				}
+				channel = preferredChannel
 			}
-			channelGuard, allowed := service.TryAcquireChannelRateLimit(c, channel)
+			var channelGuard *service.ChannelRateLimitGuard
+			var allowed bool
+			if channel == preferredChannel && apiErr == nil && retry.IsChannelExcluded(channel.Id) {
+				channelGuard, allowed = service.AcquireChannelRateLimit(c, channel, service.ChannelRateLimitOptions{
+					RefreshChannel: func() (*appmodel.Channel, error) {
+						return appmodel.CacheGetChannel(channel.Id)
+					},
+					Heartbeat: func() error {
+						return s.client.WriteControl(websocket.PingMessage, nil, time.Now().Add(time.Second))
+					},
+				})
+			} else {
+				channelGuard, allowed = service.TryAcquireChannelRateLimit(c, channel)
+			}
 			if !allowed {
+				if preferredChannel == nil && service.ChannelRateLimitWasConcurrencyBlocked(c, channel.Id) {
+					preferredChannel = channel
+				}
 				retry.ExcludeChannel(channel.Id)
 				retry.ResetRetryNextTry()
 				continue

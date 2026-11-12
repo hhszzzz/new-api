@@ -206,6 +206,23 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	retryParam := buildRelayRetryParam(c, relayInfo)
 	relayInfo.RetryIndex = 0
 	relayInfo.LastError = nil
+	channelAdmissionOptions := service.ChannelRateLimitOptions{}
+	if relayInfo.IsStream {
+		if relayFormat == types.RelayFormatOpenAIRealtime {
+			channelAdmissionOptions.Heartbeat = func() error {
+				if ws == nil {
+					return errors.New("websocket connection is nil")
+				}
+				return ws.WriteControl(websocket.PingMessage, nil, time.Now().Add(time.Second))
+			}
+		} else {
+			helper.EnsureStreamWriteMutex(c)
+			channelAdmissionOptions.Heartbeat = func() error {
+				helper.SetEventStreamHeaders(c)
+				return helper.PingData(c)
+			}
+		}
+	}
 
 	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
 		relayInfo.StreamStatus = nil
@@ -221,7 +238,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		if relayInfo.IsChannelTest {
 			channel, channelErr = getChannel(c, relayInfo, retryParam)
 		} else {
-			channel, channelRateGuard, channelErr = getChannelAttempt(c, relayInfo, retryParam)
+			channel, channelRateGuard, channelErr = getChannelAttempt(c, relayInfo, retryParam, channelAdmissionOptions)
 		}
 		if channelErr != nil {
 			logger.LogError(c, channelErr.Error())
@@ -477,16 +494,41 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
-func getChannelAttempt(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service.RetryParam) (*model.Channel, *service.ChannelRateLimitGuard, *hosttypes.NewAPIError) {
+func getChannelAttempt(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service.RetryParam, admissionOptions ...service.ChannelRateLimitOptions) (*model.Channel, *service.ChannelRateLimitGuard, *hosttypes.NewAPIError) {
 	if retryParam == nil {
 		return nil, nil, hosttypes.NewError(errors.New("invalid channel selection parameters"), hosttypes.ErrorCodeGetChannelFailed, hosttypes.ErrOptionWithSkipRetry())
 	}
+	options := service.ChannelRateLimitOptions{}
+	if len(admissionOptions) > 0 {
+		options = admissionOptions[0]
+	}
 	rejected := false
+	var preferred *model.Channel
 	defer retryParam.ClearChannelExclusions()
 	for {
 		channel, apiErr := getChannel(c, info, retryParam)
 		if apiErr != nil {
 			if rejected {
+				if preferred == nil {
+					return nil, nil, service.NewChannelRateLimitError(c)
+				}
+				service.RequestPolicy(c).BeginAttempt(preferred, info.UsingGroup)
+				if setupErr := middleware.SetupContextForSelectedChannel(c, preferred, info.OriginModelName, true); setupErr != nil {
+					return nil, nil, setupErr
+				}
+				waitOptions := options
+				if waitOptions.RefreshChannel == nil {
+					waitOptions.RefreshChannel = func() (*model.Channel, error) {
+						return model.CacheGetChannel(preferred.Id)
+					}
+				}
+				guard, allowed := service.AcquireChannelRateLimit(c, preferred, waitOptions)
+				if allowed {
+					return preferred, guard, nil
+				}
+				if c.Request.Context().Err() != nil {
+					return nil, nil, hosttypes.NewError(c.Request.Context().Err(), hosttypes.ErrorCodeClientDisconnected, hosttypes.ErrOptionWithSkipRetry())
+				}
 				return nil, nil, service.NewChannelRateLimitError(c)
 			}
 			return nil, nil, apiErr
@@ -497,6 +539,9 @@ func getChannelAttempt(c *gin.Context, info *relaycommon.RelayInfo, retryParam *
 		}
 		if c.Request.Context().Err() != nil {
 			return nil, nil, hosttypes.NewError(c.Request.Context().Err(), hosttypes.ErrorCodeClientDisconnected, hosttypes.ErrOptionWithSkipRetry())
+		}
+		if preferred == nil && service.ChannelRateLimitWasConcurrencyBlocked(c, channel.Id) {
+			preferred = channel
 		}
 		rejected = true
 		retryParam.ExcludeChannel(channel.Id)
@@ -862,7 +907,12 @@ func executeTaskSubmissionWith(
 				}
 			}
 			var allowed bool
-			channelRateGuard, allowed = service.TryAcquireChannelRateLimit(c, channel)
+			channelRateGuard, allowed = service.AcquireChannelRateLimit(c, channel, service.ChannelRateLimitOptions{
+				WaitTimeout: 5 * time.Second,
+				RefreshChannel: func() (*model.Channel, error) {
+					return model.CacheGetChannel(channel.Id)
+				},
+			})
 			if !allowed {
 				rateLimitError := service.NewChannelRateLimitError(c)
 				taskErr = service.TaskErrorWrapperLocal(rateLimitError.Err, "rate_limit_exceeded", http.StatusTooManyRequests)
@@ -870,7 +920,7 @@ func executeTaskSubmissionWith(
 			}
 		} else {
 			var channelErr *hosttypes.NewAPIError
-			channel, channelRateGuard, channelErr = getChannelAttempt(c, relayInfo, retryParam)
+			channel, channelRateGuard, channelErr = getChannelAttempt(c, relayInfo, retryParam, service.ChannelRateLimitOptions{WaitTimeout: 5 * time.Second})
 			if channelErr != nil {
 				logger.LogError(c, channelErr.Error())
 				statusCode := channelErr.StatusCode

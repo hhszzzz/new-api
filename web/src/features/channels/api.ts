@@ -34,6 +34,7 @@ import type {
   ChannelAggregateMergeResponse,
   ChannelAggregateResponse,
   ChannelAggregatesResponse,
+  ChannelAdmissionStats,
   ChannelBalanceResponse,
   ChannelBatchFilter,
   ChannelBatchPreviewResponse,
@@ -170,6 +171,16 @@ export async function searchChannels(
  */
 export async function getChannel(id: number): Promise<GetChannelResponse> {
   const res = await api.get(`/api/channel/${id}`)
+  return res.data
+}
+
+export async function getChannelAdmissionStats(
+  id: number,
+  range?: { start_timestamp?: number; end_timestamp?: number }
+): Promise<{ success: boolean; data?: ChannelAdmissionStats }> {
+  const res = await api.get(`/api/channel/${id}/admission/stats`, {
+    params: range,
+  })
   return res.data
 }
 

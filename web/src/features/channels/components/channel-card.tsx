@@ -41,7 +41,7 @@ const SENSITIVE_MASK = '••••'
  * preserved: row selection, provider/multi-key/IO.NET type badge, id,
  * name/remark + warning icons, status (with tooltips), groups, inline
  * priority/weight spinners, balance refresh, response/test times, tag
- * expand-collapse, and the per-row (or per-tag) actions menu.
+ * expand-collapse, admission monitoring, and the per-row (or per-tag) actions menu.
  */
 function ChannelCardComponent({
   row,
@@ -72,6 +72,7 @@ function ChannelCardComponent({
 
   const reorderCell = reorderEnabled ? renderCell('reorder') : null
   const selectCell = renderCell('select')
+  const admissionMonitorCell = renderCell('admission-monitor')
   const typeCell = renderCell('type')
   const nameCell = renderCell('name')
   const statusCell = renderCell('status')
@@ -179,6 +180,11 @@ function ChannelCardComponent({
             <span className='text-muted-foreground text-sm'>-</span>
           )}
         </div>
+        {!isSummaryRow && admissionMonitorCell && (
+          <div className='flex min-w-0 items-center border-t pt-2'>
+            {admissionMonitorCell}
+          </div>
+        )}
       </div>
     </ChannelRowActionsLayoutContext.Provider>
   )

@@ -160,7 +160,21 @@ func TestInferencePresetSettingsAndDatabaseRoundTrip(t *testing.T) {
 						defaults.Routes[0].UpstreamPath = "/changed-locally"
 						assert.Equal(t, "/v1/chat/completions", loaded.GetOtherSettings().AdvancedCustom.Routes[0].UpstreamPath)
 					}
-					settings := hostdto.ChannelOtherSettings{AdvancedCustom: &hostdto.AdvancedCustomConfig{Routes: []hostdto.AdvancedCustomRoute{{IncomingPath: "/v1/chat/completions", UpstreamPath: "/custom/chat", Models: []string{"allowed"}, Auth: &hostdto.AdvancedCustomRouteAuth{Type: "none"}}}}}
+					soupAfterMs := 0
+					settings := hostdto.ChannelOtherSettings{
+						AdmissionControl: &hostdto.ChannelAdmissionControl{
+							WaitTimeoutMs:       45_000,
+							HeartbeatIntervalMs: 5_000,
+							MaxWaitingTotal:     30,
+							MaxWaitingPerUser:   6,
+							SoupMode:            hostdto.ChannelAdmissionSoupModeRatio,
+							SoupAfterMs:         &soupAfterMs,
+							SoupIntervalMs:      15_000,
+							SoupRatioPercent:    25,
+							RetryAfterSeconds:   30,
+						},
+						AdvancedCustom: &hostdto.AdvancedCustomConfig{Routes: []hostdto.AdvancedCustomRoute{{IncomingPath: "/v1/chat/completions", UpstreamPath: "/custom/chat", Models: []string{"allowed"}, Auth: &hostdto.AdvancedCustomRouteAuth{Type: "none"}}}},
+					}
 					channel.SetOtherSettings(settings)
 					require.NoError(t, channel.ValidateSettings())
 					require.NoError(t, table.Save(channel).Error)
@@ -168,6 +182,12 @@ func TestInferencePresetSettingsAndDatabaseRoundTrip(t *testing.T) {
 						var loaded Channel
 						require.NoError(t, table.First(&loaded, channel.Id).Error)
 						actual := loaded.GetOtherSettings().AdvancedCustom
+						admission := loaded.GetOtherSettings().AdmissionControl
+						require.NotNil(t, admission)
+						require.NotNil(t, admission.SoupAfterMs)
+						assert.Equal(t, 45_000, admission.WaitTimeoutMs)
+						assert.Equal(t, hostdto.ChannelAdmissionSoupModeRatio, admission.SoupMode)
+						assert.Zero(t, *admission.SoupAfterMs)
 						require.Equal(t, common.GetAdvancedCustomPreset(channelType), actual, "named channels must ignore editable advanced_custom overrides")
 						assert.Equal(t, channel.OtherSettings, loaded.OtherSettings)
 						for _, tc := range []struct {

@@ -5222,6 +5222,247 @@ export function ChannelMutateDrawer({
               />
             </div>
             <div className='space-y-4 rounded-lg border p-4'>
+              <CardHeading
+                title={t('Channel Admission Queue')}
+                icon={<SlidersHorizontal className='size-4' />}
+              />
+              <div className='grid gap-3 sm:grid-cols-2'>
+                <FormField
+                  control={form.control}
+                  name='admission_wait_timeout_ms'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Queue wait timeout (ms)')}</FormLabel>
+                      <FormControl>
+                        <Input
+                          type='number'
+                          min={1_000}
+                          max={300_000}
+                          step={1_000}
+                          value={field.value}
+                          onChange={(event) =>
+                            field.onChange(Number(event.target.value))
+                          }
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name='admission_heartbeat_interval_ms'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>
+                        {t('Queue heartbeat interval (ms)')}
+                      </FormLabel>
+                      <FormControl>
+                        <Input
+                          type='number'
+                          min={1_000}
+                          max={30_000}
+                          step={1_000}
+                          value={field.value}
+                          onChange={(event) =>
+                            field.onChange(Number(event.target.value))
+                          }
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name='admission_retry_after_seconds'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Retry-After (seconds)')}</FormLabel>
+                      <FormControl>
+                        <Input
+                          type='number'
+                          min={1}
+                          max={300}
+                          step={1}
+                          value={field.value}
+                          onChange={(event) =>
+                            field.onChange(Number(event.target.value))
+                          }
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name='admission_max_waiting_total'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Maximum queued requests')}</FormLabel>
+                      <FormControl>
+                        <Input
+                          type='number'
+                          min={1}
+                          max={1_000}
+                          step={1}
+                          value={field.value}
+                          onChange={(event) =>
+                            field.onChange(Number(event.target.value))
+                          }
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name='admission_max_waiting_per_user'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>
+                        {t('Maximum queued requests per user')}
+                      </FormLabel>
+                      <FormControl>
+                        <Input
+                          type='number'
+                          min={1}
+                          max={1_000}
+                          step={1}
+                          value={field.value}
+                          onChange={(event) =>
+                            field.onChange(Number(event.target.value))
+                          }
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name='admission_soup_mode'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Lower-priority release mode')}</FormLabel>
+                      <Select
+                        value={field.value}
+                        onValueChange={field.onChange}
+                        items={[
+                          { value: 'interval', label: t('Interval') },
+                          { value: 'ratio', label: t('Admission ratio') },
+                          { value: 'off', label: t('Off') },
+                        ]}
+                      >
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent alignItemWithTrigger={false}>
+                          <SelectGroup>
+                            <SelectItem value='interval'>
+                              {t('Interval')}
+                            </SelectItem>
+                            <SelectItem value='ratio'>
+                              {t('Admission ratio')}
+                            </SelectItem>
+                            <SelectItem value='off'>{t('Off')}</SelectItem>
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                {formValues.admission_soup_mode === 'interval' && (
+                  <>
+                    <FormField
+                      control={form.control}
+                      name='admission_soup_after_ms'
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>
+                            {t('Minimum queue age for a release (ms)')}
+                          </FormLabel>
+                          <FormControl>
+                            <Input
+                              type='number'
+                              min={0}
+                              max={300_000}
+                              step={1_000}
+                              value={field.value}
+                              onChange={(event) =>
+                                field.onChange(Number(event.target.value))
+                              }
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={form.control}
+                      name='admission_soup_interval_ms'
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>
+                            {t('Minimum interval between releases (ms)')}
+                          </FormLabel>
+                          <FormControl>
+                            <Input
+                              type='number'
+                              min={1_000}
+                              max={600_000}
+                              step={1_000}
+                              value={field.value}
+                              onChange={(event) =>
+                                field.onChange(Number(event.target.value))
+                              }
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </>
+                )}
+                {formValues.admission_soup_mode === 'ratio' && (
+                  <FormField
+                    control={form.control}
+                    name='admission_soup_ratio_percent'
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>
+                          {t('Lower-priority admission share (%)')}
+                        </FormLabel>
+                        <FormControl>
+                          <Input
+                            type='number'
+                            min={1}
+                            max={50}
+                            step={1}
+                            value={field.value}
+                            onChange={(event) =>
+                              field.onChange(Number(event.target.value))
+                            }
+                          />
+                        </FormControl>
+                        <FormDescription>
+                          {t(
+                            'Measured by admitted requests while a higher priority is waiting.'
+                          )}
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                )}
+              </div>
+            </div>
+            <div className='space-y-4 rounded-lg border p-4'>
               <FormField
                 control={form.control}
                 name='disable_model_on_error'

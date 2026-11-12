@@ -94,6 +94,7 @@ import {
 import { parseUpstreamUpdateMeta } from '../lib/upstream-update-utils'
 import type { Channel } from '../types'
 import { AggregateUpstreamUpdateTags } from './aggregate-upstream-update-tags'
+import { ChannelAdmissionSummaryCell } from './channel-admission-summary-cell'
 import { ChannelRowActionsLayoutContext } from './channel-row-actions-context'
 import { TaskPluginChannelBadge } from './channel-type-badge'
 import { useChannels } from './channels-provider'
@@ -872,6 +873,32 @@ export function useChannelsColumns(
         },
         size: 260,
         minSize: 200,
+      },
+
+      // Admission monitor summary stays beside the channel identity so it is
+      // visible without colliding with the pinned actions column.
+      {
+        id: 'admission-monitor',
+        header: t('Admission Monitor'),
+        cell: ({ row }) => {
+          const channel = row.original
+          if (isTagAggregateRow(channel) || isChannelAggregateRow(channel)) {
+            return null
+          }
+          const hasConcurrencyLimit =
+            (channel.concurrency_limit ?? 0) > 0 ||
+            channel.user_rate_limits?.some(
+              (limit) => (limit.concurrency_limit ?? 0) > 0
+            )
+          if (!hasConcurrencyLimit) return null
+
+          return <ChannelAdmissionSummaryCell channelId={channel.id} />
+        },
+        enableSorting: false,
+        enableHiding: false,
+        size: 220,
+        minSize: 190,
+        meta: { mobileHidden: true },
       },
 
       {
