@@ -530,6 +530,36 @@ func GetPromptAudit(id int64) (*PromptAudit, error) {
 	return &audit, nil
 }
 
+func GetPromptAuditStage(id int64, stage PromptAuditContentStage) (*PromptAudit, error) {
+	if stage == PromptAuditContentStageBody {
+		return GetPromptAudit(id)
+	}
+	var audit PromptAudit
+	if err := DB.Omit("full_prompt", "scan_payload", "content_snapshot").Where("id = ?", id).First(&audit).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrPromptAuditNotFound
+		}
+		return nil, err
+	}
+	if stage != PromptAuditContentStageMetadata {
+		if err := LoadPromptAuditContentStage(DB, &audit, stage); err != nil {
+			if !errors.Is(err, ErrPromptAuditContentUnavailable) {
+				return nil, err
+			}
+			audit.ContentState = "archived"
+		}
+	}
+	if audit.Direction == "output" && audit.RelatedInputID == 0 && audit.RequestID != "" {
+		var input PromptAudit
+		err := DB.Select("id").Where("request_id = ? AND user_id = ? AND direction = ?", audit.RequestID, audit.UserID, "input").Order("id asc").First(&input).Error
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, err
+		}
+		audit.RelatedInputID = input.ID
+	}
+	return &audit, nil
+}
+
 func ListPromptAudits(filter PromptAuditFilter, page, pageSize int) ([]*PromptAudit, int64, error) {
 	if page < 1 {
 		page = 1

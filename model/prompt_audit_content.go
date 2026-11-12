@@ -22,6 +22,16 @@ import (
 
 var ErrPromptAuditContentUnavailable = errors.New("prompt audit content is unavailable; import its archive to view it")
 
+type PromptAuditContentStage string
+
+const (
+	PromptAuditContentStageMetadata PromptAuditContentStage = "metadata"
+	PromptAuditContentStageUser     PromptAuditContentStage = "user"
+	PromptAuditContentStageContext  PromptAuditContentStage = "context"
+	PromptAuditContentStageOutput   PromptAuditContentStage = "output"
+	PromptAuditContentStageBody     PromptAuditContentStage = "body"
+)
+
 // A content identity describes the uncompressed bytes, independently of codecs,
 // event direction, inspection policy and the user who owns the event.
 type PromptAuditContent struct {
@@ -333,28 +343,72 @@ func readPromptAuditContent(tx *gorm.DB, hash string, cache map[string][]byte, a
 	if hash == "" {
 		return nil, nil
 	}
-	if data, ok := cache[hash]; ok {
-		return data, nil
-	}
-	var blob PromptAuditContent
-	err := tx.Where("hash = ? AND data IS NOT NULL", hash).First(&blob).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) && allowImported {
-		var imported PromptAuditImportedContent
-		err = tx.Where("hash = ? AND expires_at > ?", hash, common.GetTimestamp()).First(&imported).Error
-		blob = PromptAuditContent{Hash: imported.Hash, Data: imported.Data, RawBytes: imported.RawBytes}
-	}
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, ErrPromptAuditContentUnavailable
-	}
-	if err != nil {
+	if err := readPromptAuditContents(tx, []string{hash}, cache, allowImported); err != nil {
 		return nil, err
 	}
-	data, err := decodePromptAuditContent(hash, blob.Data, blob.RawBytes)
-	if err != nil {
-		return nil, err
+	return cache[hash], nil
+}
+
+// readPromptAuditContents loads selected blocks in bounded batches so a long
+// conversation does not issue one database query for every message.
+func readPromptAuditContents(tx *gorm.DB, hashes []string, cache map[string][]byte, allowImported bool) error {
+	missing := make([]string, 0, len(hashes))
+	seen := make(map[string]bool, len(hashes))
+	for _, hash := range hashes {
+		if hash == "" || seen[hash] {
+			continue
+		}
+		seen[hash] = true
+		if _, exists := cache[hash]; !exists {
+			missing = append(missing, hash)
+		}
 	}
-	cache[hash] = data
-	return data, nil
+	if len(missing) == 0 {
+		return nil
+	}
+	type promptAuditContentBlob struct {
+		Data     []byte
+		RawBytes int64
+	}
+	blobs := make(map[string]promptAuditContentBlob, len(missing))
+	for batch := range slices.Chunk(missing, 500) {
+		var local []PromptAuditContent
+		if err := tx.Select("hash", "data", "raw_bytes").Where("hash IN ? AND data IS NOT NULL", batch).Find(&local).Error; err != nil {
+			return err
+		}
+		for _, content := range local {
+			blobs[content.Hash] = promptAuditContentBlob{Data: content.Data, RawBytes: content.RawBytes}
+		}
+	}
+	if allowImported {
+		remaining := make([]string, 0, len(missing)-len(blobs))
+		for _, hash := range missing {
+			if _, exists := blobs[hash]; !exists {
+				remaining = append(remaining, hash)
+			}
+		}
+		for batch := range slices.Chunk(remaining, 500) {
+			var imported []PromptAuditImportedContent
+			if err := tx.Select("hash", "data", "raw_bytes").Where("hash IN ? AND expires_at > ?", batch, common.GetTimestamp()).Find(&imported).Error; err != nil {
+				return err
+			}
+			for _, content := range imported {
+				blobs[content.Hash] = promptAuditContentBlob{Data: content.Data, RawBytes: content.RawBytes}
+			}
+		}
+	}
+	for _, hash := range missing {
+		blob, exists := blobs[hash]
+		if !exists {
+			return ErrPromptAuditContentUnavailable
+		}
+		data, err := decodePromptAuditContent(hash, blob.Data, blob.RawBytes)
+		if err != nil {
+			return err
+		}
+		cache[hash] = data
+	}
+	return nil
 }
 
 func loadPromptAuditPayload(tx *gorm.DB, payload promptAuditStoredPayload, cache map[string][]byte, context, imported bool) ([]byte, error) {
@@ -400,6 +454,189 @@ func loadPromptAuditPayload(tx *gorm.DB, payload promptAuditStoredPayload, cache
 		}
 	}
 	return common.Marshal(fields)
+}
+
+func promptAuditStoredSegmentIsHumanInput(segment promptAuditStoredSegment) bool {
+	var role string
+	roleValid := common.Unmarshal(segment.Fields["role"], &role) == nil
+	var scope string
+	if raw, exists := segment.Fields["scope"]; exists && common.Unmarshal(raw, &scope) != nil {
+		return false
+	}
+	var user bool
+	userRaw, hasUser := segment.Fields["user"]
+	if hasUser && common.Unmarshal(userRaw, &user) != nil {
+		return false
+	}
+	if scope == "task" {
+		return hasUser && user
+	}
+	if scope != "" && scope != "user" {
+		return false
+	}
+	if hasUser && !user {
+		return false
+	}
+	return scope == "user" || roleValid && strings.EqualFold(role, "user")
+}
+
+func promptAuditHumanInputMask(segments []promptAuditStoredSegment, requestKind string) []bool {
+	mask := make([]bool, len(segments))
+	if requestKind != "" && requestKind != "prompt" && requestKind != "step" && requestKind != "main" {
+		return mask
+	}
+	for index, segment := range segments {
+		mask[index] = promptAuditStoredSegmentIsHumanInput(segment)
+	}
+	return mask
+}
+
+// loadPromptAuditPayloadStage reconstructs only the requested source blocks.
+// The metadata manifest lets the common user-message path avoid reading or
+// decompressing assistant and tool history.
+func loadPromptAuditPayloadStage(tx *gorm.DB, payload promptAuditStoredPayload, cache map[string][]byte, requestKind string, stage PromptAuditContentStage, imported bool) ([]byte, error) {
+	if payload.OpaqueRef != "" {
+		if stage == PromptAuditContentStageContext || stage == PromptAuditContentStageOutput {
+			return readPromptAuditContent(tx, payload.OpaqueRef, cache, imported)
+		}
+		return nil, nil
+	}
+	if payload.Fields == nil && len(payload.Segments) == 0 && payload.OutputRef == "" {
+		return nil, nil
+	}
+	fields := make(map[string]json.RawMessage, len(payload.Fields)+2)
+	for key, value := range payload.Fields {
+		fields[key] = value
+	}
+	humanInputs := promptAuditHumanInputMask(payload.Segments, requestKind)
+	selected := make([]int, 0, len(payload.Segments))
+	refs := make([]string, 0, len(payload.Segments)+1)
+	for index, segment := range payload.Segments {
+		include := stage == PromptAuditContentStageContext
+		if stage == PromptAuditContentStageUser {
+			include = humanInputs[index]
+		} else if stage == PromptAuditContentStageContext {
+			include = !humanInputs[index]
+		}
+		if include {
+			selected = append(selected, index)
+			refs = append(refs, segment.TextRef)
+		}
+	}
+	if (stage == PromptAuditContentStageContext || stage == PromptAuditContentStageOutput) && payload.OutputRef != "" {
+		refs = append(refs, payload.OutputRef)
+	}
+	if err := readPromptAuditContents(tx, refs, cache, imported); err != nil {
+		return nil, err
+	}
+	segments := make([]map[string]json.RawMessage, 0, len(payload.Segments))
+	for _, index := range selected {
+		segment := payload.Segments[index]
+		item := make(map[string]json.RawMessage, len(segment.Fields)+1)
+		for key, value := range segment.Fields {
+			item[key] = value
+		}
+		text, err := common.Marshal(string(cache[segment.TextRef]))
+		if err != nil {
+			return nil, err
+		}
+		item["text"] = text
+		segments = append(segments, item)
+	}
+	if len(segments) > 0 {
+		fields["segments"], _ = common.Marshal(segments)
+	}
+	if (stage == PromptAuditContentStageContext || stage == PromptAuditContentStageOutput) && payload.OutputRef != "" {
+		output, err := readPromptAuditContent(tx, payload.OutputRef, cache, imported)
+		if err != nil {
+			return nil, err
+		}
+		fields["output"], err = common.Marshal(string(output))
+		if err != nil {
+			return nil, err
+		}
+	}
+	return common.Marshal(fields)
+}
+
+func filterLegacyPromptAuditPayloadStage(payload []byte, requestKind string, stage PromptAuditContentStage) ([]byte, error) {
+	if len(payload) == 0 {
+		return nil, nil
+	}
+	var fields map[string]json.RawMessage
+	if common.Unmarshal(payload, &fields) != nil || fields == nil {
+		if stage == PromptAuditContentStageContext {
+			return bytes.Clone(payload), nil
+		}
+		return nil, nil
+	}
+	var segments []map[string]json.RawMessage
+	if raw, exists := fields["segments"]; exists {
+		if common.Unmarshal(raw, &segments) != nil {
+			if stage == PromptAuditContentStageContext {
+				return bytes.Clone(payload), nil
+			}
+			return nil, nil
+		}
+	}
+	metadata := make([]promptAuditStoredSegment, len(segments))
+	for index, segment := range segments {
+		metadata[index] = promptAuditStoredSegment{Fields: segment}
+	}
+	humanInputs := promptAuditHumanInputMask(metadata, requestKind)
+	selected := make([]map[string]json.RawMessage, 0, len(segments))
+	for index, segment := range segments {
+		include := stage == PromptAuditContentStageContext
+		if stage == PromptAuditContentStageUser {
+			include = humanInputs[index]
+		} else if stage == PromptAuditContentStageContext {
+			include = !humanInputs[index]
+		}
+		if include {
+			selected = append(selected, segment)
+		}
+	}
+	if len(selected) == 0 {
+		delete(fields, "segments")
+	} else {
+		fields["segments"], _ = common.Marshal(selected)
+	}
+	if stage == PromptAuditContentStageUser {
+		delete(fields, "output")
+	}
+	return common.Marshal(fields)
+}
+
+func LoadPromptAuditContentStage(tx *gorm.DB, audit *PromptAudit, stage PromptAuditContentStage) error {
+	if stage == PromptAuditContentStageBody {
+		return LoadPromptAuditContent(tx, audit, false)
+	}
+	if audit.ContentManifest == "" {
+		payload, err := filterLegacyPromptAuditPayloadStage(audit.ScanPayload, audit.RequestKind, stage)
+		if err != nil {
+			return err
+		}
+		audit.ScanPayload = payload
+		return nil
+	}
+	var manifest promptAuditContentManifest
+	if err := common.UnmarshalJsonStr(string(audit.ContentManifest), &manifest); err != nil {
+		return err
+	}
+	if manifest.Version != 1 {
+		return errors.New("unsupported prompt audit content version")
+	}
+	payload, err := loadPromptAuditPayloadStage(tx, manifest.Scan, make(map[string][]byte), audit.RequestKind, stage, true)
+	if err != nil {
+		return err
+	}
+	audit.ScanPayload = payload
+	audit.ContentState = "hot"
+	if audit.ContentEvicted {
+		audit.ContentState = "imported"
+	}
+	audit.LegacyContent = manifest.LegacyFullRef != ""
+	return nil
 }
 
 func LoadPromptAuditContent(tx *gorm.DB, audit *PromptAudit, work bool) error {

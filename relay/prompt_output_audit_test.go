@@ -346,6 +346,59 @@ func TestPromptAuditRecordsInterruptedOutputWithAuditingOff(t *testing.T) {
 	assert.Contains(t, string(rows[0].ScanPayload), "partial answer")
 }
 
+func TestPromptAuditBlockingOutputRecordsIncompleteUpstreamResponse(t *testing.T) {
+	withProtocolBridgeStreamTestMode(t)
+	service.InitHttpClient()
+	db := setupRelayChannelDB(t)
+	require.NoError(t, db.AutoMigrate(&model.PromptAudit{}, &model.User{}, &model.Token{}))
+	original := prompt_audit_setting.GetSetting()
+	originalLogConsume, originalBatchUpdate := common.LogConsumeEnabled, common.BatchUpdateEnabled
+	t.Cleanup(func() {
+		original.PublishConfig()
+		common.LogConsumeEnabled, common.BatchUpdateEnabled = originalLogConsume, originalBatchUpdate
+	})
+	common.LogConsumeEnabled, common.BatchUpdateEnabled = false, false
+	configured := original
+	configured.Mode = prompt_audit_setting.ModeOff
+	configured.OutputMode = prompt_audit_setting.ModeBlocking
+	configured.RecordAll = false
+	configured.IncludeAdmins = true
+	configured.AllGroups = true
+	configured.OutputMaxBytes, configured.OutputMemoryBytes = 4096, 4096
+	configured.PublishConfig()
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"id\":\"chatcmpl_partial\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial \"}}]}\n\n")
+		_, _ = io.WriteString(w, "data: {\"id\":\"chatcmpl_partial\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"answer\"}}]}\n\n")
+	}))
+	defer upstream.Close()
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
+	common.SetContextKey(c, constant.ContextKeyChannelType, constant.ChannelTypeOpenAI)
+	common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, upstream.URL)
+	common.SetContextKey(c, constant.ContextKeyChannelKey, "test-key")
+	info := &relaycommon.RelayInfo{
+		RelayMode: relayconstant.RelayModeChatCompletions, RelayFormat: types.RelayFormatOpenAI,
+		OriginModelName: "recording-model", IsStream: true, DisablePing: true,
+		Request: &dto.GeneralOpenAIRequest{Model: "recording-model", Stream: common.GetPointer(true), Messages: []dto.Message{{Role: "user", Content: "ordinary question"}}},
+	}
+
+	apiErr := executeText(c, info)
+	require.NotNil(t, apiErr, "an upstream stream without a terminal event is incomplete")
+	assert.Empty(t, recorder.Body.String(), "blocking output must not expose a partial reply")
+	var audit model.PromptAudit
+	require.NoError(t, db.Where("direction = ?", service.PromptAuditDirectionOutput).First(&audit).Error)
+	assert.Equal(t, model.PromptAuditStatusFailed, audit.Status)
+	assert.Equal(t, service.PromptAuditDecisionUnavailable, audit.Decision)
+	assert.Equal(t, "upstream_incomplete", audit.ErrorCode)
+	assert.Equal(t, "not_delivered", audit.DeliveryStatus)
+	assert.False(t, audit.CoverageComplete)
+	assert.Contains(t, string(audit.ScanPayload), "partial ")
+}
+
 func TestPromptAuditWebSocketRecordingTruncatesAtAValidTextBoundary(t *testing.T) {
 	collector := newPromptAuditTextCollector(4, 4)
 	t.Cleanup(func() { require.NoError(t, collector.Close()) })

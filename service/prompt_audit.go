@@ -437,12 +437,12 @@ func RecordOutputAuditUnavailable(c *gin.Context, request PromptAuditRequest, fa
 // probeExemptForPreview reports whether the preview caller is exempt from the
 // probe gate. The preview has no token-count or compaction protocol, so only
 // the administrator exemption applies.
-func probeExemptForPreview(ctx context.Context) bool {
+func probeExemptForPreview(ctx context.Context, setting prompt_audit_setting.PromptAuditSetting) bool {
 	if ctx == nil {
 		return false
 	}
 	if ginCtx, ok := ctx.(*gin.Context); ok {
-		return contextInt(ginCtx, "role") >= common.RoleAdminUser
+		return !setting.ProbeIncludeAdmins && contextInt(ginCtx, "role") >= common.RoleAdminUser
 	}
 	return false
 }
@@ -533,7 +533,7 @@ func TestPromptAuditPolicy(ctx context.Context, direction string, snapshot dto.P
 		}
 		// The preview must see the same probe gate the live request sees, or the
 		// operator cannot test whether a phrase would be refused.
-		if setting.ProbeBlockEnabled && !probeExemptForPreview(ctx) {
+		if setting.ProbeBlockEnabled && !probeExemptForPreview(ctx, setting) {
 			if isBlockedProbe(snapshot, setting.ProbePhrases) {
 				return PromptAuditResult{Enabled: true, Reviewed: true, Blocked: true, Direction: direction, CoverageComplete: true, InspectionType: "probe_block", Safety: "", Decision: PromptAuditDecisionBlock, Outcome: PromptAuditDecisionBlock, ActualAction: "preview"}, nil
 			}

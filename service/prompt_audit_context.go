@@ -198,7 +198,11 @@ func preparePromptAuditRequest(c *gin.Context, request PromptAuditRequest) Promp
 	}
 	if c != nil && c.Request != nil {
 		if request.SessionKey == "" {
-			if session := strings.TrimSpace(c.GetHeader("session_id")); session != "" {
+			session := strings.TrimSpace(c.GetHeader("x-deepseek-harness-session-id"))
+			if session == "" {
+				session = strings.TrimSpace(c.GetHeader("session_id"))
+			}
+			if session != "" {
 				digest := sha256.Sum256([]byte(session))
 				request.SessionKey = hex.EncodeToString(digest[:])
 			}

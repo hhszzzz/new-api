@@ -47,6 +47,27 @@ func TestPromptAuditAgentSourcesAndToolCorrelation(t *testing.T) {
 	}
 }
 
+func TestPromptAuditDeepSeekToolsSeparatesOriginalQuestionFromSearchAndFetch(t *testing.T) {
+	request := &DeepSeekToolsRequest{RawBody: json.RawMessage(`{"query":"site:docs.example policy","ori_question":"How does this policy work?","url":"https://docs.example/policy","localization":"203.0.113.1","count":10}`)}
+	snapshot := PromptAuditSnapshotOf(request)
+
+	assert.Equal(t, "How does this policy work?", snapshot.HumanPrompt)
+	assert.Equal(t, "side:web_search", snapshot.RequestKind)
+	assert.Equal(t, []string{"How does this policy work?", "site:docs.example policy", "https://docs.example/policy"}, orderedSegmentTexts(snapshot))
+	assert.Equal(t, PromptScopeUser, snapshot.Segments[0].SourceScope())
+	assert.True(t, snapshot.Segments[0].User)
+	assert.Equal(t, PromptScopeToolCall, snapshot.Segments[1].SourceScope())
+	assert.Equal(t, PromptScopeToolCall, snapshot.Segments[2].SourceScope())
+	assert.NotContains(t, snapshot.Text(), "localization")
+	assert.NotContains(t, snapshot.Text(), "203.0.113.1")
+	assert.NotContains(t, snapshot.Text(), "\"count\"")
+
+	directQuery := PromptAuditSnapshotOf(&DeepSeekToolsRequest{RawBody: json.RawMessage(`{"query":"Explain request limits"}`)})
+	assert.Empty(t, directQuery.RequestKind)
+	assert.Equal(t, "Explain request limits", directQuery.HumanPrompt)
+	assert.Equal(t, []string{"Explain request limits"}, orderedSegmentTexts(directQuery))
+}
+
 func TestPromptAuditAgentRequestKindsAndLatestHumanTurn(t *testing.T) {
 	for _, test := range []struct{ text, kind string }{
 		{"<transcript>redacted conversation</transcript>", "side:safety"},

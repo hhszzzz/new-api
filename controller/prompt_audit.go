@@ -105,6 +105,26 @@ type promptAuditFilterRequest struct {
 	RetiredEndpointID any `json:"endpoint_id"`
 }
 
+func (request promptAuditFilterRequest) validate() error {
+	if request.StartTime < 0 || request.EndTime < 0 || request.MaxID < 0 {
+		return errors.New("invalid prompt audit filter range")
+	}
+	if request.EndTime > 0 && request.StartTime > request.EndTime {
+		return errors.New("invalid prompt audit time range")
+	}
+	for _, id := range request.IDs {
+		if id <= 0 {
+			return errors.New("invalid prompt audit ids")
+		}
+	}
+	for _, id := range request.GroupIDs {
+		if id <= 0 {
+			return errors.New("invalid prompt audit group ids")
+		}
+	}
+	return nil
+}
+
 // promptAuditRetiredFilters are the listing filters the records screen no longer
 // offers. Every prompt audit endpoint that takes a filter refuses them.
 var promptAuditRetiredFilters = []string{"user_id", "prompt_hash", "endpoint_id"}
@@ -126,6 +146,7 @@ func GetPromptAuditConfig(c *gin.Context) {
 
 func UpdatePromptAuditConfig(c *gin.Context) {
 	var update promptAuditConfigUpdate
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 2*1024*1024)
 	if err := common.DecodeJson(c.Request.Body, &update); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
 		return
@@ -303,10 +324,10 @@ func UpdatePromptAuditConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": promptAuditConfigResponse(setting)})
 }
 
-// rejectPromptAuditSelfReference refuses a TypeSafe node that points back at this
-// deployment. The audit request would enter through the gateway's own
-// /typesafe/v1/systemone route, where prompt inspection runs again before
-// distribution, so every audit call would recursively audit itself.
+// rejectPromptAuditSelfReference refuses an enabled audit endpoint that points
+// back at this deployment. Its request would enter through the gateway's own
+// relay route, where prompt inspection runs again before distribution, so every
+// audit call would recursively audit itself.
 //
 // The check deliberately lives in the save path rather than in ValidateConfig:
 // ValidateConfig also runs when persisted configuration is loaded, so a later
@@ -318,7 +339,7 @@ func rejectPromptAuditSelfReference(endpoints []prompt_audit_setting.Endpoint) e
 		return nil
 	}
 	for _, endpoint := range endpoints {
-		if !endpoint.Enabled || !endpoint.IsTypeSafeEndpoint() {
+		if !endpoint.Enabled {
 			continue
 		}
 		if serverAddressHost(endpoint.BaseURL) == selfHost {
@@ -336,7 +357,7 @@ func serverAddressHost(value string) string {
 	if err != nil {
 		return ""
 	}
-	return strings.ToLower(parsed.Hostname())
+	return strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
 }
 
 func validatePromptWordlistReviewBindings(configured prompt_audit_setting.PromptAuditSetting) error {
@@ -460,17 +481,53 @@ func ReviewPromptAudit(c *gin.Context) {
 }
 
 func ListPromptAudits(c *gin.Context) {
-	filter, retired := promptAuditFilterFromQuery(c)
+	filter, retired, filterErr := promptAuditFilterFromQuery(c)
 	if retired != "" {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": promptAuditRetiredFilterMessage(retired)})
 		return
 	}
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	if filterErr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": filterErr.Error()})
+		return
+	}
+	page, pageSize := 1, 20
+	query := c.Request.URL.Query()
+	for key, target := range map[string]*int{"page": &page, "page_size": &pageSize} {
+		values, exists := query[key]
+		if !exists {
+			continue
+		}
+		if len(values) != 1 || strings.TrimSpace(values[0]) == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid prompt audit pagination"})
+			return
+		}
+		parsed, err := strconv.Atoi(values[0])
+		if err != nil || parsed < 1 {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid prompt audit pagination"})
+			return
+		}
+		*target = parsed
+	}
+	if pageSize > 200 || page-1 > int(^uint(0)>>1)/pageSize {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid prompt audit pagination"})
+		return
+	}
 	// A group id only exists in the collapsed listing, and only as the handle the
 	// collapsed row carries; while it is set the response is that one group's
 	// requests, capped at the newest ones, with total counting the whole group.
-	groupID, _ := strconv.ParseInt(c.Query("group_id"), 10, 64)
+	groupID := int64(0)
+	if values, exists := query["group_id"]; exists {
+		if len(values) != 1 || strings.TrimSpace(values[0]) == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid prompt audit group id"})
+			return
+		}
+		var err error
+		groupID, err = strconv.ParseInt(values[0], 10, 64)
+		if err != nil || groupID <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid prompt audit group id"})
+			return
+		}
+	}
 	if groupID > 0 {
 		audits, total, err := model.ListPromptAuditGroupRows(filter, groupID)
 		if err != nil {
@@ -489,7 +546,20 @@ func ListPromptAudits(c *gin.Context) {
 	}
 	// Collapsing is a way of reading the listing, not a filter: it never reaches
 	// the statistics, preview or deletion paths.
-	if collapseRepeats, _ := strconv.ParseBool(c.Query("collapse_repeats")); collapseRepeats {
+	collapseRepeats := false
+	if values, exists := query["collapse_repeats"]; exists {
+		if len(values) != 1 {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid prompt audit listing mode"})
+			return
+		}
+		parsed, err := strconv.ParseBool(values[0])
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid prompt audit listing mode"})
+			return
+		}
+		collapseRepeats = parsed
+	}
+	if collapseRepeats {
 		rows, groups, err := model.ListPromptAuditRepeats(filter, page, pageSize)
 		if err != nil {
 			common.ApiError(c, err)
@@ -551,9 +621,12 @@ func promptAuditReadRequestFromQuery(c *gin.Context, kind string) (promptAuditRe
 	if err != nil || request.ID <= 0 {
 		return request, errors.New("invalid prompt audit id")
 	}
-	filter, retired := promptAuditFilterFromQuery(c)
+	filter, retired, filterErr := promptAuditFilterFromQuery(c)
 	if retired != "" {
 		return request, errors.New(promptAuditRetiredFilterMessage(retired))
+	}
+	if filterErr != nil {
+		return request, filterErr
 	}
 	request.Filter = filter
 	query := c.Request.URL.Query()
@@ -651,7 +724,16 @@ func GetPromptAudit(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid prompt audit id"})
 		return
 	}
-	audit, err := model.GetPromptAudit(id)
+	stage, err := promptAuditContentStageFromQuery(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+	canViewFull := authz.Can(c.GetInt("id"), c.GetInt("role"), authz.PromptAuditViewFullPrompt)
+	if !canViewFull {
+		stage = model.PromptAuditContentStageMetadata
+	}
+	audit, err := model.GetPromptAuditStage(id, stage)
 	if err != nil {
 		if errors.Is(err, model.ErrPromptAuditNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"success": false, "message": err.Error()})
@@ -660,8 +742,7 @@ func GetPromptAudit(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	includeFull := (len(audit.FullPrompt) > 0 || len(audit.ScanPayload) > 0) && authz.Can(c.GetInt("id"), c.GetInt("role"), authz.PromptAuditViewFullPrompt)
-	if includeFull {
+	if canViewFull && stage != model.PromptAuditContentStageMetadata {
 		model.RecordOperationAuditLog(
 			c.GetInt("id"),
 			c.GetInt("role"),
@@ -674,13 +755,50 @@ func GetPromptAudit(c *gin.Context) {
 			c,
 		)
 	}
-	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": audit.ToResponse(includeFull)})
+	var response model.PromptAuditResponse
+	if stage == model.PromptAuditContentStageBody {
+		response = audit.ToResponse(canViewFull)
+	} else {
+		response = audit.ToResponse(false)
+		if canViewFull && len(audit.ScanPayload) > 0 {
+			payload := string(audit.ScanPayload)
+			response.ScanPayload = &payload
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": response})
+}
+
+func validPromptAuditContentStage(stage model.PromptAuditContentStage) bool {
+	switch stage {
+	case model.PromptAuditContentStageMetadata, model.PromptAuditContentStageUser, model.PromptAuditContentStageContext, model.PromptAuditContentStageOutput, model.PromptAuditContentStageBody:
+		return true
+	default:
+		return false
+	}
+}
+
+func promptAuditContentStageFromQuery(c *gin.Context) (model.PromptAuditContentStage, error) {
+	stage := model.PromptAuditContentStageBody
+	if values, exists := c.Request.URL.Query()["stage"]; exists {
+		if len(values) != 1 || strings.TrimSpace(values[0]) == "" {
+			return "", errors.New("invalid prompt audit content stage")
+		}
+		stage = model.PromptAuditContentStage(values[0])
+	}
+	if !validPromptAuditContentStage(stage) {
+		return "", errors.New("invalid prompt audit content stage")
+	}
+	return stage, nil
 }
 
 func GetPromptAuditStats(c *gin.Context) {
-	filter, retired := promptAuditFilterFromQuery(c)
+	filter, retired, filterErr := promptAuditFilterFromQuery(c)
 	if retired != "" {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": promptAuditRetiredFilterMessage(retired)})
+		return
+	}
+	if filterErr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": filterErr.Error()})
 		return
 	}
 	stats, err := model.GetPromptAuditStats(filter, prompt_audit_setting.AllCategoryIDs)
@@ -715,6 +833,10 @@ func PreviewDeletePromptAudits(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
 		return
 	}
+	if err := request.Filter.validate(); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
+		return
+	}
 	if retired := request.Filter.retiredFilter(); retired != "" {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": promptAuditRetiredFilterMessage(retired)})
 		return
@@ -735,6 +857,10 @@ func DeletePromptAudits(c *gin.Context) {
 	var request promptAuditDeleteRequest
 	if err := common.DecodeJson(c.Request.Body, &request); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+	if err := request.Filter.validate(); err != nil || request.ExpectedCount < 0 || request.MaxID < 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid prompt audit deletion filter"})
 		return
 	}
 	if retired := request.Filter.retiredFilter(); retired != "" {
@@ -888,7 +1014,7 @@ func promptAuditSetInt(values map[string]string, key string, value *int) {
 // promptAuditFilterFromQuery reads a listing filter from the query string. It
 // also names the first retired filter the query still carries, which the caller
 // must refuse rather than serve with that filter dropped.
-func promptAuditFilterFromQuery(c *gin.Context) (model.PromptAuditFilter, string) {
+func promptAuditFilterFromQuery(c *gin.Context) (model.PromptAuditFilter, string, error) {
 	retired := ""
 	for _, key := range promptAuditRetiredFilters {
 		if strings.TrimSpace(c.Query(key)) != "" {
@@ -896,8 +1022,32 @@ func promptAuditFilterFromQuery(c *gin.Context) (model.PromptAuditFilter, string
 			break
 		}
 	}
-	startTime, _ := strconv.ParseInt(c.Query("start_time"), 10, 64)
-	endTime, _ := strconv.ParseInt(c.Query("end_time"), 10, 64)
+	query := c.Request.URL.Query()
+	parseTimestamp := func(key string) (int64, error) {
+		values, exists := query[key]
+		if !exists {
+			return 0, nil
+		}
+		if len(values) != 1 || strings.TrimSpace(values[0]) == "" {
+			return 0, errors.New("invalid prompt audit time range")
+		}
+		value, err := strconv.ParseInt(values[0], 10, 64)
+		if err != nil || value < 0 {
+			return 0, errors.New("invalid prompt audit time range")
+		}
+		return value, nil
+	}
+	startTime, err := parseTimestamp("start_time")
+	if err != nil {
+		return model.PromptAuditFilter{}, retired, err
+	}
+	endTime, err := parseTimestamp("end_time")
+	if err != nil {
+		return model.PromptAuditFilter{}, retired, err
+	}
+	if endTime > 0 && startTime > endTime {
+		return model.PromptAuditFilter{}, retired, errors.New("invalid prompt audit time range")
+	}
 	return model.PromptAuditFilter{
 		Status: strings.TrimSpace(c.Query("status")), Decision: strings.TrimSpace(c.Query("decision")),
 		Category: strings.TrimSpace(c.Query("category")), Username: strings.TrimSpace(c.Query("username")),
@@ -905,7 +1055,7 @@ func promptAuditFilterFromQuery(c *gin.Context) (model.PromptAuditFilter, string
 		Model: strings.TrimSpace(c.Query("model")), RequestID: strings.TrimSpace(c.Query("request_id")),
 		Direction: strings.TrimSpace(c.Query("direction")), Detector: strings.TrimSpace(c.Query("detector")),
 		StartTime: startTime, EndTime: endTime,
-	}, retired
+	}, retired, nil
 }
 
 // retiredFilter names the first retired filter a request body still carries.

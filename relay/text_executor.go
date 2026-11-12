@@ -305,6 +305,21 @@ func executeText(c *gin.Context, info *relaycommon.RelayInfo) *hosttypes.NewAPIE
 			settleTextUsage(c, info, usage)
 			return hosttypes.NewErrorWithStatusCode(errors.New(i18n.T(c, i18n.MsgOutputAuditServiceUnavailable)), hosttypes.ErrorCodeOutputAuditUnavailable, http.StatusServiceUnavailable, hosttypes.ErrOptionWithSkipRetry())
 		}
+		if outputAuditWriter != nil && outputAuditWriter.blocking && outputAuditWriter.capture.size > 0 {
+			body, captureErr := outputAuditWriter.capture.Bytes()
+			outputText, extractErr := extractPromptAuditOutput(body)
+			failure := "upstream_incomplete"
+			if captureErr != nil {
+				failure = "output_capture_failed"
+			} else if extractErr != nil {
+				failure = "output_extract_failed"
+			}
+			service.RecordOutputAuditUnavailable(c, service.PromptAuditRequest{
+				Snapshot: dto.PromptAuditSnapshotOf(info.Request), Protocol: string(info.RelayFormat), Model: info.OriginModelName,
+				Stage: "text_executor", Direction: service.PromptAuditDirectionOutput, Output: outputText,
+				DeliveryStatus: "not_delivered", CoverageComplete: false, Stream: info.IsStream,
+			}, failure)
+		}
 		if outputAuditWriter != nil && !outputAuditWriter.blocking && outputAuditWriter.capture.size > 0 {
 			auditIncompleteTextOutput(c, info, outputAuditWriter, "delivered_incomplete")
 		}

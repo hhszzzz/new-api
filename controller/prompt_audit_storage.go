@@ -69,9 +69,17 @@ func GetPromptAuditImportedEvent(c *gin.Context) {
 		common.ApiError(c, errors.New("invalid event id"))
 		return
 	}
-	full := authz.Can(c.GetInt("id"), c.GetInt("role"), authz.PromptAuditViewFullPrompt)
-	data, err := model.GetPromptAuditImportedEvent(model.DB, c.Param("source"), id, full)
-	if err == nil && full {
+	stage, err := promptAuditContentStageFromQuery(c)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	canViewFull := authz.Can(c.GetInt("id"), c.GetInt("role"), authz.PromptAuditViewFullPrompt)
+	if !canViewFull {
+		stage = model.PromptAuditContentStageMetadata
+	}
+	data, err := model.GetPromptAuditImportedEventStage(model.DB, c.Param("source"), id, stage)
+	if err == nil && canViewFull && stage != model.PromptAuditContentStageMetadata {
 		model.RecordOperationAuditLog(c.GetInt("id"), c.GetInt("role"), "Viewed imported prompt audit content", c.ClientIP(), "prompt_audit.view_full_prompt", map[string]any{"source_id": c.Param("source"), "prompt_audit_id": id}, auditOperatorInfo(c), &model.AuditRequestInfo{Method: http.MethodGet, Route: c.FullPath(), Path: c.Request.URL.Path, Status: http.StatusOK, Success: true}, c)
 	}
 	respondPromptAuditRead(c, data, err)

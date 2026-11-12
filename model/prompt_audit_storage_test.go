@@ -301,6 +301,37 @@ func runPromptAuditArchiveLifecycle(t *testing.T, db *gorm.DB, engine string) {
 	assert.Equal(t, "system rules\n\noriginal request", string(inputView.FullPrompt))
 	assert.Contains(t, string(inputView.ScanPayload), "normalized request")
 	assert.NotContains(t, string(inputView.ScanPayload), "system rules")
+	multiTurnPayload := []byte(`{"version":1,"direction":"input","segments":[{"role":"user","scope":"user","user":true,"text":"earlier question"},{"role":"assistant","scope":"assistant","user":false,"text":"earlier answer"},{"scope":"user","user":true,"text":"current question"}]}`)
+	multiTurnBody := "earlier question\n\nearlier answer\n\ncurrent question"
+	multiTurn := &PromptAudit{
+		RequestID: "multi-turn", UserID: 7, Direction: "input", RequestKind: "step",
+		Status: PromptAuditStatusStored, RawPayload: multiTurnPayload, ScanPayload: multiTurnPayload,
+		FullPrompt: []byte(multiTurnBody), CreatedAt: now,
+	}
+	require.NoError(t, CreatePromptAudit(multiTurn))
+	userStage, err := GetPromptAuditStage(multiTurn.ID, PromptAuditContentStageUser)
+	require.NoError(t, err)
+	assert.Contains(t, string(userStage.ScanPayload), "earlier question")
+	assert.Contains(t, string(userStage.ScanPayload), "current question")
+	assert.NotContains(t, string(userStage.ScanPayload), "earlier answer")
+	contextStage, err := GetPromptAuditStage(multiTurn.ID, PromptAuditContentStageContext)
+	require.NoError(t, err)
+	assert.Contains(t, string(contextStage.ScanPayload), "earlier answer")
+	assert.NotContains(t, string(contextStage.ScanPayload), "earlier question")
+	assert.NotContains(t, string(contextStage.ScanPayload), "current question")
+	bodyStage, err := GetPromptAuditStage(multiTurn.ID, PromptAuditContentStageBody)
+	require.NoError(t, err)
+	assert.Equal(t, multiTurnBody, string(bodyStage.FullPrompt))
+	task := &PromptAudit{
+		Direction: "input", RequestKind: "prompt", Status: PromptAuditStatusStored,
+		RawPayload:  []byte(`{"version":1,"direction":"input","segments":[{"role":"task","scope":"task","user":true,"text":"image prompt"}]}`),
+		ScanPayload: []byte(`{"version":1,"direction":"input","segments":[{"role":"task","scope":"task","user":true,"text":"image prompt"}]}`),
+		CreatedAt:   now,
+	}
+	require.NoError(t, CreatePromptAudit(task))
+	taskStage, err := GetPromptAuditStage(task.ID, PromptAuditContentStageUser)
+	require.NoError(t, err)
+	assert.Contains(t, string(taskStage.ScanPayload), "image prompt")
 	conversationSegments := make([]map[string]any, 400)
 	for index := range conversationSegments {
 		conversationSegments[index] = map[string]any{"role": "user", "scope": "user", "text": "long conversation message", "source_index": index}

@@ -319,6 +319,26 @@ func ListPromptAuditArchiveImports(db *gorm.DB) ([]PromptAuditArchiveImport, err
 }
 
 func GetPromptAuditImportedEvent(db *gorm.DB, source string, id int64, full bool) (PromptAuditResponse, error) {
+	stage := PromptAuditContentStageBody
+	if !full {
+		var stored PromptAuditImportedRecord
+		if err := db.Where("source_id = ? AND audit_id = ? AND expires_at > ?", source, id, common.GetTimestamp()).First(&stored).Error; err != nil {
+			return PromptAuditResponse{}, err
+		}
+		var record promptAuditArchiveRecord
+		if err := common.UnmarshalJsonStr(string(stored.Record), &record); err != nil {
+			return PromptAuditResponse{}, err
+		}
+		audit := record.event()
+		audit.ContentEvicted, audit.ContentState = true, "imported"
+		response := audit.ToResponse(false)
+		response.FullPromptAvailable = true
+		return response, nil
+	}
+	return GetPromptAuditImportedEventStage(db, source, id, stage)
+}
+
+func GetPromptAuditImportedEventStage(db *gorm.DB, source string, id int64, stage PromptAuditContentStage) (PromptAuditResponse, error) {
 	var stored PromptAuditImportedRecord
 	if err := db.Where("source_id = ? AND audit_id = ? AND expires_at > ?", source, id, common.GetTimestamp()).First(&stored).Error; err != nil {
 		return PromptAuditResponse{}, err
@@ -329,17 +349,24 @@ func GetPromptAuditImportedEvent(db *gorm.DB, source string, id int64, full bool
 	}
 	audit := record.event()
 	audit.ContentEvicted, audit.ContentState = true, "imported"
-	if full {
-		if err := LoadPromptAuditContent(db, &audit, false); err != nil {
-			if !errors.Is(err, ErrPromptAuditContentUnavailable) {
-				return PromptAuditResponse{}, err
-			}
-			audit.ContentState = "missing"
-		}
-	}
-	response := audit.ToResponse(full)
-	if !full {
+	if stage == PromptAuditContentStageMetadata {
+		response := audit.ToResponse(false)
 		response.FullPromptAvailable = true
+		return response, nil
+	}
+	if err := LoadPromptAuditContentStage(db, &audit, stage); err != nil {
+		if !errors.Is(err, ErrPromptAuditContentUnavailable) {
+			return PromptAuditResponse{}, err
+		}
+		audit.ContentState = "missing"
+	}
+	if stage == PromptAuditContentStageBody {
+		return audit.ToResponse(true), nil
+	}
+	response := audit.ToResponse(false)
+	if len(audit.ScanPayload) > 0 {
+		value := string(audit.ScanPayload)
+		response.ScanPayload = &value
 	}
 	return response, nil
 }

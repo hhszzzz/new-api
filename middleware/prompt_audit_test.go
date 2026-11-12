@@ -35,6 +35,8 @@ func TestPromptAuditRequestKindCoversSupportedTextProtocols(t *testing.T) {
 		{path: "/v1/messages", format: types.RelayFormatClaude},
 		{path: "/v1/responses", format: types.RelayFormatOpenAIResponses},
 		{path: "/v1/responses/compact", format: types.RelayFormatOpenAIResponsesCompaction},
+		{path: "/v1/tools/search", format: types.RelayFormatDeepSeekTools},
+		{path: "/v1/tools/fetch", format: types.RelayFormatDeepSeekTools},
 		{path: "/v1beta/models/gemini:generateContent", format: types.RelayFormatGemini},
 		{path: "/v1/embeddings", format: types.RelayFormatEmbedding},
 		{path: "/v1/rerank", format: types.RelayFormatRerank},

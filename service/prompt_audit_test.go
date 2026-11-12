@@ -104,6 +104,33 @@ func TestPromptAuditProbeBlockingAndExemptions(t *testing.T) {
 	}
 }
 
+func TestPromptAuditPolicyPreviewHonorsProbeAdminSetting(t *testing.T) {
+	original := prompt_audit_setting.GetSetting()
+	t.Cleanup(func() { original.PublishConfig() })
+	configured := original
+	configured.Mode = prompt_audit_setting.ModeOff
+	configured.ProbeBlockEnabled = true
+	configured.ProbeIncludeAdmins = true
+	configured.ProbePhrases = []string{"hello"}
+	configured.ScopePolicies = map[dto.PromptAuditScope]prompt_audit_setting.ScopePolicy{
+		dto.PromptScopeUser: {ModelAudit: true},
+	}
+	configured.Endpoints = nil
+	configured.PublishConfig()
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/prompt-audit/test", nil)
+	c.Set("role", common.RoleAdminUser)
+	snapshot := dto.PromptAuditSnapshot{Segments: []dto.PromptAuditSegment{{
+		Role: "user", Scope: dto.PromptScopeUser, User: true, Text: "hello",
+	}}}
+
+	result, err := TestPromptAuditPolicy(c, PromptAuditDirectionInput, snapshot, "")
+	require.NoError(t, err)
+	assert.True(t, result.Blocked)
+	assert.Equal(t, "probe_block", result.InspectionType)
+}
+
 // A channel marked exempt is served without any gate, including the probe gate,
 // and leaves no verdict; the caller stores it as an uninspected record.
 func TestPromptAuditChannelExemptionSkipsGates(t *testing.T) {
@@ -181,6 +208,29 @@ func TestPromptAuditQuestionIdentityAndSessionBoundaries(t *testing.T) {
 	assert.NotEqual(t, second.GroupKey, preparePromptAuditRequest(c, side).GroupKey)
 	c.Request.Header.Set("x-openai-subagent", "agent-1")
 	assert.Equal(t, "subagent", preparePromptAuditRequest(c, request).RequestKind)
+}
+
+func TestPromptAuditDeepSeekHarnessSessionHeaderGroupsQuestionsBySession(t *testing.T) {
+	c := withPromptAuditGroupingContext(t)
+	c.Request.Header.Del("session_id")
+	c.Request.Header.Set("X-DeepSeek-Harness-Session-ID", "dsh-session-123")
+	prepare := func(question string) PromptAuditRequest {
+		snapshot := (&dto.ClaudeRequest{Messages: []dto.ClaudeMessage{{Role: "user", Content: question}}}).GetPromptAuditSnapshot()
+		return preparePromptAuditRequest(c, PromptAuditRequest{Snapshot: snapshot})
+	}
+
+	first := prepare("Fix the search panel")
+	second := prepare("Fix the keyboard shortcut")
+
+	require.NotEmpty(t, first.SessionKey)
+	assert.NotEqual(t, "dsh-session-123", first.SessionKey, "persist only the hashed session identity")
+	assert.Equal(t, first.SessionKey, second.SessionKey)
+	assert.NotEqual(t, first.GroupKey, second.GroupKey, "different questions in one Harness session remain distinct")
+
+	c.Request.Header.Set("X-DeepSeek-Harness-Session-ID", "another-session")
+	third := prepare("Fix the search panel")
+	assert.NotEqual(t, first.SessionKey, third.SessionKey)
+	assert.NotEqual(t, first.GroupKey, third.GroupKey)
 }
 
 func TestPromptAuditSummaryContinuationGrouping(t *testing.T) {

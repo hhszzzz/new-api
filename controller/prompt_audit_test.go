@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting/prompt_audit_setting"
+	"github.com/QuantumNous/new-api/setting/system_setting"
 
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
@@ -44,6 +45,21 @@ func TestPromptAuditEndpointTokensAreWriteOnlyAndSurviveIDRename(t *testing.T) {
 	cleared := mergePromptAuditEndpointUpdates(current, updates)
 	require.Len(t, cleared, 1)
 	assert.Empty(t, cleared[0].Token)
+}
+
+func TestUpdatePromptAuditConfigRejectsOversizedBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(
+		http.MethodPut,
+		"/api/prompt-audit/config",
+		strings.NewReader("{\"review_prompt\":\""+strings.Repeat("x", 2*1024*1024)+"\"}"),
+	)
+
+	UpdatePromptAuditConfig(context)
+
+	assert.Equal(t, http.StatusBadRequest, recorder.Code)
 }
 
 func TestPromptAuditStorageCannotBypassMigrationThroughGenericOptions(t *testing.T) {
@@ -86,6 +102,26 @@ func TestPromptAuditEndpointURLChangeCannotForwardStoredToken(t *testing.T) {
 	assert.Equal(t, replacement, merged[0].Token)
 }
 
+func TestPromptAuditRejectsEnabledSelfReferencingEndpoints(t *testing.T) {
+	previousAddress := system_setting.ServerAddress
+	system_setting.ServerAddress = "https://gateway.example.com"
+	t.Cleanup(func() { system_setting.ServerAddress = previousAddress })
+
+	for _, endpoint := range []prompt_audit_setting.Endpoint{
+		{ID: "guard", Protocol: prompt_audit_setting.EndpointProtocolQwen3Guard, BaseURL: "https://GATEWAY.example.com.:9443/v1", Enabled: true},
+		{ID: "typesafe", Protocol: prompt_audit_setting.EndpointProtocolTypeSafe, BaseURL: "http://gateway.example.com/v1", Enabled: true},
+	} {
+		err := rejectPromptAuditSelfReference([]prompt_audit_setting.Endpoint{endpoint})
+		require.Error(t, err, "enabled %s endpoint must not recurse through the gateway", endpoint.Protocol)
+	}
+
+	disabled := prompt_audit_setting.Endpoint{
+		ID: "disabled", Protocol: prompt_audit_setting.EndpointProtocolQwen3Guard,
+		BaseURL: "https://gateway.example.com/v1", Enabled: false,
+	}
+	assert.NoError(t, rejectPromptAuditSelfReference([]prompt_audit_setting.Endpoint{disabled}))
+}
+
 // TestPromptAuditRetiredFiltersAreRefused covers the filters the records screen
 // no longer offers. A client that still sends one — a page loaded before the
 // upgrade, a script — must be refused: run with the filter dropped, a preview
@@ -118,11 +154,79 @@ func TestPromptAuditRetiredFiltersAreRefused(t *testing.T) {
 	// among them, and the collapse switch never becomes a predicate.
 	context, _ := gin.CreateTestContext(httptest.NewRecorder())
 	context.Request = httptest.NewRequest(http.MethodGet, "/api/prompt-audit/events?collapse_repeats=true&model=guarded-model&detector=wordlist", nil)
-	filter, retired := promptAuditFilterFromQuery(context)
+	filter, retired, err := promptAuditFilterFromQuery(context)
 	assert.Empty(t, retired)
+	assert.NoError(t, err)
 	assert.Equal(t, model.PromptAuditFilter{Model: "guarded-model", Detector: "wordlist"}, filter)
 	assert.Equal(t, model.PromptAuditFilter{GroupIDs: []int64{3}, Detector: "model", Username: "alice"},
 		promptAuditFilterRequest{GroupIDs: []int64{3}, Detector: " model ", Username: "alice"}.toModel())
+}
+
+func TestPromptAuditListingRejectsInvalidPaginationAndTimeFilters(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, testCase := range []struct {
+		name    string
+		handler gin.HandlerFunc
+		target  string
+	}{
+		{name: "invalid page", handler: ListPromptAudits, target: "/api/prompt-audit/events?page=invalid"},
+		{name: "duplicate page", handler: ListPromptAudits, target: "/api/prompt-audit/events?page=1&page=2"},
+		{name: "oversized page", handler: ListPromptAudits, target: "/api/prompt-audit/events?page_size=201"},
+		{name: "overflowing offset", handler: ListPromptAudits, target: "/api/prompt-audit/events?page=9223372036854775807&page_size=200"},
+		{name: "invalid start time", handler: ListPromptAudits, target: "/api/prompt-audit/events?start_time=invalid"},
+		{name: "duplicate end time", handler: GetPromptAuditStats, target: "/api/prompt-audit/stats?end_time=100&end_time=200"},
+		{name: "negative start time", handler: GetPromptAuditStats, target: "/api/prompt-audit/stats?start_time=-1"},
+		{name: "reversed time range", handler: GetPromptAuditStats, target: "/api/prompt-audit/stats?start_time=200&end_time=100"},
+		{name: "invalid group id", handler: ListPromptAudits, target: "/api/prompt-audit/events?group_id=invalid"},
+		{name: "invalid listing mode", handler: ListPromptAudits, target: "/api/prompt-audit/events?collapse_repeats=invalid"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			context, _ := gin.CreateTestContext(recorder)
+			context.Request = httptest.NewRequest(http.MethodGet, testCase.target, nil)
+			testCase.handler(context)
+			assert.Equal(t, http.StatusBadRequest, recorder.Code)
+		})
+	}
+}
+
+func TestPromptAuditDeleteEndpointsRejectInvalidFilterRanges(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, testCase := range []struct {
+		name    string
+		handler gin.HandlerFunc
+		method  string
+		body    string
+	}{
+		{name: "preview negative start", handler: PreviewDeletePromptAudits, method: http.MethodPost, body: `{"filter":{"start_time":-1}}`},
+		{name: "preview reversed range", handler: PreviewDeletePromptAudits, method: http.MethodPost, body: `{"filter":{"start_time":200,"end_time":100}}`},
+		{name: "preview nonpositive id", handler: PreviewDeletePromptAudits, method: http.MethodPost, body: `{"filter":{"ids":[0]}}`},
+		{name: "delete negative end", handler: DeletePromptAudits, method: http.MethodDelete, body: `{"filter":{"end_time":-1},"expected_count":0,"max_id":1}`},
+		{name: "delete negative boundary", handler: DeletePromptAudits, method: http.MethodDelete, body: `{"filter":{},"expected_count":0,"max_id":-1}`},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			context, _ := gin.CreateTestContext(recorder)
+			context.Request = httptest.NewRequest(testCase.method, "/api/prompt-audit/events", strings.NewReader(testCase.body))
+			testCase.handler(context)
+			assert.Equal(t, http.StatusBadRequest, recorder.Code)
+		})
+	}
+}
+
+func TestPromptAuditDetailRejectsInvalidContentStage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, target := range []string{
+		"/api/prompt-audit/events/1?stage=unknown",
+		"/api/prompt-audit/events/1?stage=user&stage=body",
+		"/api/prompt-audit/events/1?stage=",
+	} {
+		recorder := httptest.NewRecorder()
+		context, _ := gin.CreateTestContext(recorder)
+		context.Request = httptest.NewRequest(http.MethodGet, target, nil)
+		GetPromptAudit(context)
+		assert.Equal(t, http.StatusBadRequest, recorder.Code, target)
+	}
 }
 
 // TestListPromptAuditsCollapsedListingAndGroupExpansion covers what the

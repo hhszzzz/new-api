@@ -189,6 +189,8 @@ func promptAuditRequestKind(path string) (types.RelayFormat, bool, bool) {
 		return types.RelayFormatOpenAIResponses, false, true
 	case strings.HasPrefix(path, "/v1/alpha/search"):
 		return types.RelayFormatOpenAIAlphaSearch, false, true
+	case strings.HasPrefix(path, "/v1/tools/search"), strings.HasPrefix(path, "/v1/tools/fetch"):
+		return types.RelayFormatDeepSeekTools, false, true
 	case strings.HasPrefix(path, "/v1/images/"), strings.HasPrefix(path, "/v1/edits"):
 		return types.RelayFormatOpenAIImage, false, true
 	case strings.HasPrefix(path, "/v1/audio/"):
