@@ -1946,6 +1946,7 @@
     "Controls whether user verification (biometrics/PIN) is required during Passkey flows.": "Contrôle si la vérification de l'utilisateur (biométrie/PIN) est requise lors des flux de Passkey.",
     "Controversial categories blocked before review": "Catégories controversées bloquées avant révision",
     "Conversation cleared": "Conversation effacée",
+    "Conversation context": "Contexte de la conversation",
     "conversation is only supported by a native Responses upstream": "conversation n'est pris en charge que par un upstream Responses natif",
     "Conversation step": "Étape de conversation",
     "Conversation storage": "Stockage des conversations",

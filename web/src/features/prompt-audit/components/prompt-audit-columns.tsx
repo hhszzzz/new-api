@@ -17,7 +17,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { ColumnDef } from '@tanstack/react-table'
-import { ChevronDown, ChevronRight, Eye, Loader2 } from 'lucide-react'
+import {
+  ChevronDown,
+  ChevronRight,
+  Eye,
+  Loader2,
+  RefreshCw,
+} from 'lucide-react'
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -79,6 +85,9 @@ export function usePromptAuditColumns(options: {
   collapsed?: boolean
   /** Collapsed rows whose requests are still being fetched. */
   loadingGroupIDs?: readonly number[]
+  /** Collapsed rows whose request fetch failed. */
+  errorGroupIDs?: readonly number[]
+  onRetryGroup?: (groupID: number) => void
   /**
    * How many requests each expanded group holds under the filters, by the id
    * of its row. An expansion returns only the newest of them.
@@ -89,7 +98,9 @@ export function usePromptAuditColumns(options: {
   const { canDelete, onOpen, onOpenGroup } = options
   const collapsed = options.collapsed ?? false
   const loadingGroupIDs = options.loadingGroupIDs
+  const errorGroupIDs = options.errorGroupIDs
   const groupTotals = options.groupTotals
+  const onRetryGroup = options.onRetryGroup
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
 
   return useMemo(() => {
@@ -201,6 +212,7 @@ export function usePromptAuditColumns(options: {
                   })
           }
           const isGroupLoading = loadingGroupIDs?.includes(event.id) === true
+          const hasGroupError = errorGroupIDs?.includes(event.id) === true
           // An expansion returns only the newest requests of a large group, so
           // the row says how many of them it shows.
           const groupTotal = groupTotals?.[event.id]
@@ -321,6 +333,26 @@ export function usePromptAuditColumns(options: {
                     total: formatNumber(groupTotal, locale),
                   })}
                 </p>
+              )}
+              {hasGroupError && (
+                <div
+                  role='status'
+                  className='text-destructive mt-1 flex flex-wrap items-center gap-1.5 text-xs'
+                >
+                  <span>{t('Failed to load prompt audits')}</span>
+                  <Button
+                    type='button'
+                    variant='ghost'
+                    size='icon-xs'
+                    aria-label={t('Retry')}
+                    onClick={(clickEvent) => {
+                      clickEvent.stopPropagation()
+                      onRetryGroup?.(event.id)
+                    }}
+                  >
+                    <RefreshCw className='size-3.5' />
+                  </Button>
+                </div>
               )}
             </div>
           )
@@ -451,11 +483,13 @@ export function usePromptAuditColumns(options: {
   }, [
     canDelete,
     collapsed,
+    errorGroupIDs,
     groupTotals,
     loadingGroupIDs,
     locale,
     onOpen,
     onOpenGroup,
+    onRetryGroup,
     t,
   ])
 }

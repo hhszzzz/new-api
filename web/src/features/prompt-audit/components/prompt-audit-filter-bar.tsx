@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { Table } from '@tanstack/react-table'
-import { Rows3 } from 'lucide-react'
+import { RefreshCw, Rows3 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
@@ -68,6 +68,8 @@ function PromptAuditStat(props: {
 function PromptAuditStatsBar(props: {
   stats?: PromptAuditStats
   loading: boolean
+  error: boolean
+  onRetry: () => void
   collapsed: boolean
   groupTotal: number
 }) {
@@ -80,6 +82,31 @@ function PromptAuditStatsBar(props: {
         <Skeleton className='h-7 w-24 rounded-md' />
         <Skeleton className='h-7 w-24 rounded-md' />
         <Skeleton className='h-7 w-24 rounded-md' />
+      </div>
+    )
+  }
+
+  if (props.error) {
+    return (
+      <div className='flex flex-wrap items-center gap-2'>
+        <span role='status' className='text-destructive text-xs'>
+          {t('Failed to load prompt audit statistics')}
+        </span>
+        <Button
+          variant='ghost'
+          size='icon-xs'
+          aria-label={t('Retry')}
+          onClick={props.onRetry}
+        >
+          <RefreshCw className='size-3.5' />
+        </Button>
+        {props.collapsed && (
+          <PromptAuditStat
+            label={t('Groups')}
+            value={props.groupTotal}
+            accent='bg-violet-500/70'
+          />
+        )}
       </div>
     )
   }
@@ -193,6 +220,8 @@ export function PromptAuditFilterBar<TData>(props: {
   categories: PromptAuditCategory[]
   stats?: PromptAuditStats
   statsLoading: boolean
+  statsError: boolean
+  onRetryStats: () => void
   searchLoading: boolean
   collapsed: boolean
   groupTotal: number
@@ -382,6 +411,8 @@ export function PromptAuditFilterBar<TData>(props: {
         <PromptAuditStatsBar
           stats={props.stats}
           loading={props.statsLoading}
+          error={props.statsError}
+          onRetry={props.onRetryStats}
           collapsed={props.collapsed}
           groupTotal={props.groupTotal}
         />

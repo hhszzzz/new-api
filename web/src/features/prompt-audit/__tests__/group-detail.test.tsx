@@ -121,9 +121,11 @@ const event: PromptAuditEvent = {
   request_kind: 'prompt',
   scan_payload: JSON.stringify({
     segments: [
-      { scope: 'user', text: 'continue' },
+      { scope: 'user', text: 'first question' },
+      { scope: 'assistant', text: 'first answer' },
+      { scope: 'user', text: 'follow-up question' },
       { scope: 'system', text: 'system text' },
-      { scope: 'user', text: 'continue' },
+      { scope: 'user', text: 'current question' },
     ],
   }),
 }
@@ -143,6 +145,21 @@ const server = {
   versions: [main, branch],
   hasSession: true,
   payload: event.scan_payload,
+  stagePayloads: {
+    user: JSON.stringify({
+      segments: [
+        { scope: 'user', text: 'first question' },
+        { scope: 'user', text: 'follow-up question' },
+        { scope: 'user', text: 'current question' },
+      ],
+    }),
+    context: JSON.stringify({
+      segments: [
+        { scope: 'assistant', text: 'first answer' },
+        { scope: 'system', text: 'system text' },
+      ],
+    }),
+  },
   summary,
   sessionKind: 'side:summary',
 }
@@ -184,12 +201,43 @@ function plaintextRequests() {
   )
 }
 
+function stagePayload(
+  payload: string | undefined,
+  stage: string,
+  kind: string
+) {
+  if (!payload || stage === 'body') return payload
+  const parsed = JSON.parse(payload) as Record<string, unknown>
+  if (stage === 'output') {
+    delete parsed.segments
+    return JSON.stringify(parsed)
+  }
+  if (kind === 'main' || kind === 'prompt' || kind === 'step') {
+    if (stage === 'user') return server.stagePayloads.user
+    if (stage === 'context') return server.stagePayloads.context
+  }
+  return payload
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   server.maxID = 999
   server.versions = [main, branch]
   server.hasSession = true
   server.payload = event.scan_payload
+  server.stagePayloads.user = JSON.stringify({
+    segments: [
+      { scope: 'user', text: 'first question' },
+      { scope: 'user', text: 'follow-up question' },
+      { scope: 'user', text: 'current question' },
+    ],
+  })
+  server.stagePayloads.context = JSON.stringify({
+    segments: [
+      { scope: 'assistant', text: 'first answer' },
+      { scope: 'system', text: 'system text' },
+    ],
+  })
   server.event = event
   server.summary = summary
   server.sessionKind = 'side:summary'
@@ -249,10 +297,19 @@ beforeEach(() => {
         }
       }
       if (/\/events\/\d+$/.test(url)) {
+        const id = Number(url.match(/\/(\d+)$/)?.[1])
+        const version = server.versions.find((item) => item.id === id)
+        const requestKind =
+          version?.kind ?? server.event.request_kind ?? 'prompt'
+        const stage = String(params.stage ?? 'body')
         return {
           data: {
             success: true,
-            data: { ...server.event, scan_payload: server.payload },
+            data: {
+              ...server.event,
+              request_kind: requestKind,
+              scan_payload: stagePayload(server.payload, stage, requestKind),
+            },
           },
         }
       }
@@ -353,7 +410,9 @@ describe('question detail reading', () => {
     const first = await screen.findByRole('region', {
       name: 'Source record #17',
     })
-    expect(first.parentElement).toHaveClass('flex', 'flex-col', 'gap-4')
+    expect(
+      screen.getByRole('region', { name: 'Source record #19' })
+    ).toBeVisible()
     const entry = within(first).getByRole('button', {
       name: 'Source record #17',
     })
@@ -362,23 +421,23 @@ describe('question detail reading', () => {
     expect(entry.parentElement).not.toHaveClass('flex-wrap')
   })
 
-  test('keeps repeated blocks, supports keyboard tabs and copies only the selected inspected source', async () => {
+  test('loads every user message by default and copies only those messages', async () => {
     const user = userEvent.setup()
     renderGroup()
     await screen.findByRole('tab', { name: 'User messages' })
     const source = screen.getByRole('region', { name: 'Source record #17' })
     const panel = await within(source).findByRole('tabpanel')
-    expect(within(panel).getAllByText('continue')).toHaveLength(2)
-    expect(within(panel).getAllByRole('separator')).toHaveLength(1)
+    expect(within(panel).getByText('first question')).toBeVisible()
+    expect(within(panel).getByText('follow-up question')).toBeVisible()
+    expect(within(panel).getByText('current question')).toBeVisible()
+    expect(within(panel).queryByText('system text')).not.toBeInTheDocument()
+    expect(within(panel).queryByText('first answer')).not.toBeInTheDocument()
     expect(screen.queryByText('raw-request-only')).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Copy' }))
-    expect(await navigator.clipboard.readText()).toBe('continue\n\ncontinue')
-    screen.getByRole('tab', { name: 'User messages' }).focus()
-    await user.keyboard('{ArrowRight}{Enter}')
-    expect(await screen.findByText('system text')).toBeVisible()
-    expect(
-      screen.getByRole('tab', { name: 'System instructions' })
-    ).toHaveAttribute('aria-selected', 'true')
+    expect(await navigator.clipboard.readText()).toBe(
+      'first question\n\nfollow-up question\n\ncurrent question'
+    )
+    expect(plaintextRequests()[0][1].params.stage).toBe('user')
   })
 
   test('keeps background user-role payload apart and does not call it a human message', async () => {
@@ -394,6 +453,9 @@ describe('question detail reading', () => {
       name: 'Source record #18',
     })
     expect(within(branchRegion).getByText('Background: summary')).toBeVisible()
+    await user.click(
+      within(branchRegion).getByRole('button', { name: /Background: summary/ })
+    )
     expect(
       await within(branchRegion).findByRole('tab', {
         name: 'User-role content',
@@ -664,6 +726,7 @@ describe('question detail reading', () => {
         { scope: 'user', text: secondLongText },
       ],
     })
+    server.stagePayloads.user = server.payload ?? ''
     renderGroup()
     const text = await screen.findByText(longText)
     expect(text).toHaveClass('font-mono', 'break-words', 'whitespace-pre-wrap')

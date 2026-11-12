@@ -1946,6 +1946,7 @@
     "Controls whether user verification (biometrics/PIN) is required during Passkey flows.": "Passkeyフロー中にユーザー認証（生体認証/PIN）が必要かどうかを制御します。",
     "Controversial categories blocked before review": "審査前にブロックする議論のあるカテゴリ",
     "Conversation cleared": "会話を消去しました",
+    "Conversation context": "会話のコンテキスト",
     "conversation is only supported by a native Responses upstream": "conversation はネイティブの Responses アップストリームでのみ対応しています",
     "Conversation step": "会話ステップ",
     "Conversation storage": "会話の保存",

@@ -1946,6 +1946,7 @@
     "Controls whether user verification (biometrics/PIN) is required during Passkey flows.": "Kiểm soát xem liệu có yêu cầu xác minh người dùng (sinh trắc học/mã PIN) trong các luồng Passkey hay không.",
     "Controversial categories blocked before review": "Danh mục gây tranh cãi bị chặn trước khi xem xét",
     "Conversation cleared": "Đã xóa cuộc trò chuyện",
+    "Conversation context": "Ngữ cảnh cuộc trò chuyện",
     "conversation is only supported by a native Responses upstream": "conversation chỉ được upstream Responses gốc hỗ trợ",
     "Conversation step": "Bước hội thoại",
     "Conversation storage": "Lưu trữ hội thoại",

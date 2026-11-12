@@ -234,13 +234,16 @@ describe('prompt audit management components', () => {
     const fullPrompt = await screen.findByRole('button', {
       name: 'Full prompt',
     })
-    const copy = screen.getByRole('button', { name: 'Copy · Full prompt' })
+    await user.click(fullPrompt)
+    const copy = await screen.findByRole('button', {
+      name: 'Copy · Full prompt',
+    })
     expect(fullPrompt.parentElement).toContainElement(copy)
     await user.click(copy)
     expect(await navigator.clipboard.readText()).toBe('raw-secret-prompt')
-    // Copying reads the header control, so it must not also open the section.
-    expect(fullPrompt).toHaveAttribute('aria-expanded', 'false')
-    expect(screen.queryByText('raw-secret-prompt')).not.toBeInTheDocument()
+    // Copying reads the header control, so it must not close the section.
+    expect(fullPrompt).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByText('raw-secret-prompt')).toBeVisible()
   })
 
   test.each([

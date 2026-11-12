@@ -92,6 +92,30 @@ export function PromptAuditDetailSheet({
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [reviewReason, setReviewReason] = useState('')
+  const [expandedStages, setExpandedStages] = useState<{
+    eventID: number | null
+    context: boolean
+    body: boolean
+  }>({ eventID: null, context: false, body: false })
+  const contextOpen =
+    expandedStages.eventID === eventID && expandedStages.context
+  const bodyOpen = expandedStages.eventID === eventID && expandedStages.body
+  const setContextOpen = (open: boolean) => {
+    setExpandedStages((current) => {
+      if (current.eventID !== eventID) {
+        return { eventID, context: open, body: false }
+      }
+      return { ...current, context: open }
+    })
+  }
+  const setBodyOpen = (open: boolean) => {
+    setExpandedStages((current) => {
+      if (current.eventID !== eventID) {
+        return { eventID, context: false, body: open }
+      }
+      return { ...current, body: open }
+    })
+  }
   const detailQuery = useQuery({
     queryKey: [
       'prompt-audit',
@@ -103,8 +127,84 @@ export function PromptAuditDetailSheet({
     gcTime: 0,
     queryFn: async () => {
       const result = sourceID
-        ? await getPromptAuditImportedEvent(sourceID, eventID ?? 0)
-        : await getPromptAudit(eventID ?? 0)
+        ? await getPromptAuditImportedEvent(sourceID, eventID ?? 0, 'metadata')
+        : await getPromptAudit(eventID ?? 0, 'metadata')
+      if (!result.success || !result.data) {
+        throw new Error(result.message || t('Failed to load audit details'))
+      }
+      return result.data
+    },
+  })
+  const event = detailQuery.data
+  let userStage: 'user' | 'context' | 'output' = 'user'
+  if (event?.direction === 'output') {
+    userStage = 'output'
+  } else if (
+    event?.request_kind &&
+    event.request_kind !== 'prompt' &&
+    event.request_kind !== 'step'
+  ) {
+    userStage = 'context'
+  }
+  const contentQuery = useQuery({
+    queryKey: [
+      'prompt-audit',
+      sourceID ? 'imported-event' : 'event',
+      sourceID,
+      eventID,
+      userStage,
+    ],
+    enabled: eventID !== null && !!event && canViewFullPrompt,
+    gcTime: 0,
+    queryFn: async () => {
+      const result = sourceID
+        ? await getPromptAuditImportedEvent(sourceID, eventID ?? 0, userStage)
+        : await getPromptAudit(eventID ?? 0, userStage)
+      if (!result.success || !result.data) {
+        throw new Error(result.message || t('Failed to load audit details'))
+      }
+      return result.data
+    },
+  })
+  const contextQuery = useQuery({
+    queryKey: [
+      'prompt-audit',
+      sourceID ? 'imported-event' : 'event',
+      sourceID,
+      eventID,
+      'context',
+    ],
+    enabled:
+      eventID !== null &&
+      !!event &&
+      canViewFullPrompt &&
+      contextOpen &&
+      event.direction !== 'output',
+    gcTime: 0,
+    queryFn: async () => {
+      const result = sourceID
+        ? await getPromptAuditImportedEvent(sourceID, eventID ?? 0, 'context')
+        : await getPromptAudit(eventID ?? 0, 'context')
+      if (!result.success || !result.data) {
+        throw new Error(result.message || t('Failed to load audit details'))
+      }
+      return result.data
+    },
+  })
+  const bodyQuery = useQuery({
+    queryKey: [
+      'prompt-audit',
+      sourceID ? 'imported-event' : 'event',
+      sourceID,
+      eventID,
+      'body',
+    ],
+    enabled: eventID !== null && !!event && canViewFullPrompt && bodyOpen,
+    gcTime: 0,
+    queryFn: async () => {
+      const result = sourceID
+        ? await getPromptAuditImportedEvent(sourceID, eventID ?? 0, 'body')
+        : await getPromptAudit(eventID ?? 0, 'body')
       if (!result.success || !result.data) {
         throw new Error(result.message || t('Failed to load audit details'))
       }
@@ -134,7 +234,6 @@ export function PromptAuditDetailSheet({
     onError: (error) => toast.error(error.message),
   })
 
-  const event = detailQuery.data
   const scoreRows = promptAuditScoreRows(event?.scores)
   const outcome = promptAuditOutcome({
     status: event?.status ?? '',
@@ -155,7 +254,7 @@ export function PromptAuditDetailSheet({
     )
   }
   const prompt = canViewFullPrompt
-    ? promptAuditBodyText(event)
+    ? promptAuditBodyText(bodyQuery.data)
     : (event?.redacted_preview ?? '')
   // An empty inspection type is a legacy row written before the detectors were
   // split; it was a model audit.
@@ -400,64 +499,136 @@ export function PromptAuditDetailSheet({
                   <h3 className='px-4 pt-4 pb-1 text-sm font-medium'>
                     {stored ? t('Content snapshot') : t('Inspected content')}
                   </h3>
-                  <div className='min-w-0'>
-                    <PromptAuditPayloadView
-                      key={eventID}
-                      payload={event.scan_payload}
-                      truncated={event.scan_payload_truncated}
-                      stored={stored}
-                      preferOutput={event.direction === 'output'}
-                    />
+                  <div className='min-w-0' aria-busy={contentQuery.isFetching}>
+                    {contentQuery.isPending && (
+                      <LoadingState
+                        size='sm'
+                        className='min-h-20'
+                        message={t('Loading audit details...')}
+                      />
+                    )}
+                    {contentQuery.isError && (
+                      <ErrorState
+                        className='min-h-24'
+                        description={contentQuery.error.message}
+                        onRetry={() => void contentQuery.refetch()}
+                      />
+                    )}
+                    {contentQuery.data && (
+                      <PromptAuditPayloadView
+                        key={`${eventID}-${userStage}`}
+                        payload={contentQuery.data.scan_payload}
+                        truncated={event.scan_payload_truncated}
+                        stored={stored}
+                        background={Boolean(
+                          event.request_kind &&
+                          event.request_kind !== 'prompt' &&
+                          event.request_kind !== 'step'
+                        )}
+                        preferOutput={event.direction === 'output'}
+                      />
+                    )}
+                  </div>
+                  {event.direction !== 'output' && (
                     <div className='border-t px-3 py-1'>
                       <CollapsibleDetailSection
-                        label={
-                          event.direction === 'output'
-                            ? t('Model reply')
-                            : t('Full prompt')
-                        }
+                        label={t('Conversation context')}
                         variant='plain'
-                        action={
-                          prompt && (
-                            <CopyButton
-                              value={prompt}
+                        open={contextOpen}
+                        onOpenChange={setContextOpen}
+                      >
+                        {contextQuery.isPending && (
+                          <LoadingState
+                            size='sm'
+                            className='min-h-20'
+                            message={t('Loading audit details...')}
+                          />
+                        )}
+                        {contextQuery.isError && (
+                          <ErrorState
+                            className='min-h-24'
+                            description={contextQuery.error.message}
+                            onRetry={() => void contextQuery.refetch()}
+                          />
+                        )}
+                        {contextQuery.data && (
+                          <PromptAuditPayloadView
+                            key={`${eventID}-context`}
+                            payload={contextQuery.data.scan_payload}
+                            truncated={event.scan_payload_truncated}
+                            stored={stored}
+                          />
+                        )}
+                      </CollapsibleDetailSection>
+                    </div>
+                  )}
+                  <div className='border-t px-3 py-1'>
+                    <CollapsibleDetailSection
+                      label={
+                        event.direction === 'output'
+                          ? t('Model reply')
+                          : t('Full prompt')
+                      }
+                      variant='plain'
+                      open={bodyOpen}
+                      onOpenChange={setBodyOpen}
+                      action={
+                        prompt && (
+                          <CopyButton
+                            value={prompt}
+                            variant='ghost'
+                            size='sm'
+                            tooltip={`${t('Copy')} · ${event.direction === 'output' ? t('Model reply') : t('Full prompt')}`}
+                          />
+                        )
+                      }
+                    >
+                      {bodyQuery.isPending && (
+                        <LoadingState
+                          size='sm'
+                          className='min-h-20'
+                          message={t('Loading audit details...')}
+                        />
+                      )}
+                      {bodyQuery.isError && (
+                        <ErrorState
+                          className='min-h-24'
+                          description={bodyQuery.error.message}
+                          onRetry={() => void bodyQuery.refetch()}
+                        />
+                      )}
+                      {bodyQuery.data && (
+                        <>
+                          <pre
+                            tabIndex={0}
+                            className='focus-visible:ring-ring/50 bg-muted/30 max-h-80 overflow-y-auto overscroll-contain rounded-md p-3 font-mono text-sm leading-relaxed [overflow-wrap:anywhere] break-words whitespace-pre-wrap outline-none focus-visible:ring-2 focus-visible:ring-inset'
+                          >
+                            {prompt || t('No prompt text retained')}
+                          </pre>
+                          {event.full_prompt_truncated && (
+                            <p className='text-muted-foreground mt-2 text-xs'>
+                              {t(
+                                'Only the beginning of the request was stored; the rest was dropped by the retention limit.'
+                              )}
+                            </p>
+                          )}
+                          <p className='text-muted-foreground mt-2 text-xs'>
+                            {bodyDescription}
+                          </p>
+                          {prompt && (
+                            <Button
                               variant='ghost'
                               size='sm'
-                              tooltip={`${t('Copy')} · ${event.direction === 'output' ? t('Model reply') : t('Full prompt')}`}
-                            />
-                          )
-                        }
-                      >
-                        <pre
-                          tabIndex={0}
-                          className='focus-visible:ring-ring/50 bg-muted/30 max-h-80 overflow-y-auto overscroll-contain rounded-md p-3 font-mono text-sm leading-relaxed [overflow-wrap:anywhere] break-words whitespace-pre-wrap outline-none focus-visible:ring-2 focus-visible:ring-inset'
-                        >
-                          {prompt || t('No prompt text retained')}
-                        </pre>
-                        {/* The truncation applies to the text below; the limit
-                          itself is a setting and is not repeated here, because
-                          this sheet can be opened by operators who may not read
-                          that configuration. */}
-                        {event.full_prompt_truncated && (
-                          <p className='text-muted-foreground mt-2 text-xs'>
-                            {t(
-                              'Only the beginning of the request was stored; the rest was dropped by the retention limit.'
-                            )}
-                          </p>
-                        )}
-                        <p className='text-muted-foreground mt-2 text-xs'>
-                          {bodyDescription}
-                        </p>
-                      </CollapsibleDetailSection>
-                      {prompt && (
-                        <Button
-                          variant='ghost'
-                          size='sm'
-                          onClick={() => downloadPromptAuditBody(event)}
-                        >
-                          {t('Export body')}
-                        </Button>
+                              onClick={() =>
+                                downloadPromptAuditBody(bodyQuery.data)
+                              }
+                            >
+                              {t('Export body')}
+                            </Button>
+                          )}
+                        </>
                       )}
-                    </div>
+                    </CollapsibleDetailSection>
                   </div>
                 </section>
               ) : (

@@ -66,6 +66,8 @@ export function DetailRow(props: {
 export function CollapsibleDetailSection(props: {
   label: string
   count?: number
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
   /** For content already framed by its parent; avoids nested cards. */
   variant?: 'default' | 'plain'
   /** A control for the section, kept beside the trigger rather than inside it. */
@@ -73,7 +75,11 @@ export function CollapsibleDetailSection(props: {
   children: ReactNode
 }) {
   return (
-    <Collapsible className='min-w-0'>
+    <Collapsible
+      className='min-w-0'
+      open={props.open}
+      onOpenChange={props.onOpenChange}
+    >
       <div className='flex min-w-0 items-center gap-1'>
         <CollapsibleTrigger
           className={cn(

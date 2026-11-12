@@ -138,6 +138,8 @@ const server = {
   total: 0,
   decisions: {} as Record<string, number>,
   groups: {} as Record<number, PromptAuditEvent[]>,
+  failStats: false,
+  failGroups: false,
 }
 const clients: QueryClient[] = []
 
@@ -205,6 +207,8 @@ beforeEach(() => {
   server.total = 1
   server.decisions = {}
   server.groups = { 17: MERGED_REQUESTS }
+  server.failStats = false
+  server.failGroups = false
   apiMock.get.mockImplementation(
     async (url: string, config?: { params?: Params }) => {
       const params = config?.params ?? {}
@@ -212,6 +216,9 @@ beforeEach(() => {
         return { data: { success: true, data: [] } }
       }
       if (url === '/api/prompt-audit/stats') {
+        if (server.failStats) {
+          return { data: { success: false, message: 'statistics unavailable' } }
+        }
         return {
           data: {
             success: true,
@@ -252,6 +259,9 @@ beforeEach(() => {
         throw new Error(`Unexpected API request: ${url}`)
       }
       if (params.group_id !== undefined) {
+        if (server.failGroups) {
+          return { data: { success: false, message: 'group unavailable' } }
+        }
         const items = server.groups[Number(params.group_id)]
         if (!items) {
           return { data: { success: false, message: 'prompt audit not found' } }
@@ -365,6 +375,26 @@ describe('prompt audit records', () => {
         String(url).endsWith('/group-content')
       )
     ).toBe(false)
+  })
+
+  test('shows a retry when loading an expanded group fails', async () => {
+    const user = userEvent.setup()
+    server.failGroups = true
+    renderRecords()
+    const table = await screen.findByRole('table')
+    await user.click(
+      await within(table).findByRole('button', { name: 'Expand' })
+    )
+    await waitFor(() => expect(groupRequests(17)).toHaveLength(1))
+    expect(
+      await screen.findByText('Failed to load prompt audits')
+    ).toBeVisible()
+
+    server.failGroups = false
+    await user.click(screen.getByRole('button', { name: 'Retry' }))
+
+    expect(await screen.findByText('second-request')).toBeVisible()
+    expect(groupRequests(17)).toHaveLength(2)
   })
 
   test('keeps the header free of controls the filter bar already provides', async () => {
@@ -612,5 +642,21 @@ describe('prompt audit records', () => {
         normalizer: getDefaultNormalizer({ collapseWhitespace: false }),
       })
     ).toBeVisible()
+  })
+
+  test('shows and retries a statistics load failure', async () => {
+    const user = userEvent.setup()
+    server.failStats = true
+    server.decisions = { block: 23 }
+    renderRecords()
+    expect(
+      await screen.findByText('Failed to load prompt audit statistics')
+    ).toBeVisible()
+
+    server.failStats = false
+    await user.click(screen.getByRole('button', { name: 'Retry' }))
+
+    expect(await screen.findByText('23')).toBeVisible()
+    expect(statsRequests()).toHaveLength(2)
   })
 })

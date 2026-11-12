@@ -198,7 +198,7 @@ function PromptAuditGroupReader(
               ) : (
                 <>
                   <div className='flex min-w-0 flex-col gap-4'>
-                    {execution.map((version) => (
+                    {execution.map((version, index) => (
                       <PromptAuditContentVersionView
                         key={version.id}
                         version={version}
@@ -206,6 +206,7 @@ function PromptAuditGroupReader(
                         maxID={bound}
                         canViewFullPrompt={props.canViewFullPrompt}
                         onOpenRecord={props.onOpenRecord}
+                        initiallyOpen={index === 0}
                       />
                     ))}
                   </div>

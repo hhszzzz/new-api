@@ -241,9 +241,20 @@ export async function listPromptAudits(
   return response.data
 }
 
-export async function getPromptAudit(id: number) {
+export type PromptAuditContentStage =
+  | 'metadata'
+  | 'user'
+  | 'context'
+  | 'output'
+  | 'body'
+
+export async function getPromptAudit(
+  id: number,
+  stage: PromptAuditContentStage = 'body'
+) {
   const response = await api.get<ApiResponse<PromptAuditEvent>>(
-    `/api/prompt-audit/events/${id}`
+    `/api/prompt-audit/events/${id}`,
+    { params: { stage } }
   )
   return response.data
 }
@@ -322,10 +333,15 @@ export async function listPromptAuditImportedEvents(
   )
 }
 
-export async function getPromptAuditImportedEvent(source: string, id: number) {
+export async function getPromptAuditImportedEvent(
+  source: string,
+  id: number,
+  stage: PromptAuditContentStage = 'body'
+) {
   return (
     await api.get<ApiResponse<PromptAuditEvent>>(
-      `/api/prompt-audit/imports/${encodeURIComponent(source)}/events/${id}`
+      `/api/prompt-audit/imports/${encodeURIComponent(source)}/events/${id}`,
+      { params: { stage } }
     )
   ).data
 }

@@ -1946,6 +1946,7 @@
     "Controls whether user verification (biometrics/PIN) is required during Passkey flows.": "控制在通行金鑰流程中是否需要用戶驗證（生物識別/PIN）。",
     "Controversial categories blocked before review": "複核前直接封鎖的爭議類別",
     "Conversation cleared": "對話已清空",
+    "Conversation context": "對話上下文",
     "conversation is only supported by a native Responses upstream": "conversation 僅支援原生 Responses 上游",
     "Conversation step": "對話步驟",
     "Conversation storage": "對話儲存",

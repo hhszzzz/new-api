@@ -199,6 +199,7 @@ export function PromptAuditRecords() {
       const rows: Record<number, PromptAuditEvent[]> = {}
       const totals: Record<number, number> = {}
       const loadingIDs: number[] = []
+      const errorIDs: number[] = []
       expandedGroupIDs.forEach((groupID, index) => {
         const result = results[index]
         if (result?.data) {
@@ -206,8 +207,9 @@ export function PromptAuditRecords() {
           totals[groupID] = result.data.total
         }
         if (result?.isFetching) loadingIDs.push(groupID)
+        if (result?.isError && !result.isFetching) errorIDs.push(groupID)
       })
-      return { rows, totals, loadingIDs }
+      return { rows, totals, loadingIDs, errorIDs }
     },
     [expandedGroupIDs]
   )
@@ -231,6 +233,19 @@ export function PromptAuditRecords() {
     }),
     combine: combineGroups,
   })
+  const retryGroup = useCallback(
+    (groupID: number) => {
+      const params = promptAuditFilterParams(filters, {
+        collapseRepeats: true,
+        groupID,
+      })
+      void queryClient.invalidateQueries({
+        queryKey: ['prompt-audit', 'events', 'group', params],
+        exact: true,
+      })
+    },
+    [filters, queryClient]
+  )
 
   const events = useMemo<PromptAuditListRow[]>(() => {
     const items = listQuery.data?.items ?? []
@@ -258,7 +273,9 @@ export function PromptAuditRecords() {
     onOpenGroup: openGroup,
     collapsed: collapseRepeats,
     loadingGroupIDs: groups.loadingIDs,
+    errorGroupIDs: groups.errorIDs,
     groupTotals: groups.totals,
+    onRetryGroup: retryGroup,
   })
   // Expanded rows belong to the page that listed them, so paging closes them
   // rather than reopening them whenever those rows are listed again.
@@ -417,7 +434,9 @@ export function PromptAuditRecords() {
                     filters={draftFilters}
                     categories={categoriesQuery.data ?? []}
                     stats={statsQuery.data}
-                    statsLoading={statsQuery.isLoading}
+                    statsLoading={statsQuery.isFetching}
+                    statsError={statsQuery.isError && !statsQuery.isFetching}
+                    onRetryStats={() => void statsQuery.refetch()}
                     searchLoading={listQuery.isFetching}
                     collapsed={collapseRepeats}
                     groupTotal={total}
