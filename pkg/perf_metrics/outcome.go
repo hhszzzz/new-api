@@ -103,6 +103,12 @@ func classifyFailure(local bool, code, errorType string, status int) Outcome {
 			types.ErrorCodeConvertRequestFailed, types.ErrorCodeAccessDenied, types.ErrorCodeBadRequestBody,
 			types.ErrorCodeInsufficientUserQuota, types.ErrorCodePreConsumeTokenQuotaFailed, types.ErrorCodePromptBlocked:
 			return OutcomeIgnored
+		case types.ErrorCodeRateLimitExceeded:
+			// Local admission control rejected the request before dispatch
+			// (channel concurrency/RPM or user limits). The client retries that
+			// by policy; it is not a channel or model failure. An upstream 429
+			// keeps the same code but is not local, so it stays a failure below.
+			return OutcomeIgnored
 		}
 		return OutcomeFailure
 	}

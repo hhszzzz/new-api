@@ -34,6 +34,7 @@ const (
 	ErrorCodePromptBlocked          ErrorCode = "prompt_blocked"
 	ErrorCodeViolationFeeGrokCSAM   ErrorCode = "violation_fee.grok.csam"
 	ErrorCodeSiteClosed             ErrorCode = "site_closed"
+	ErrorCodeRateLimitExceeded      ErrorCode = "rate_limit_exceeded"
 
 	// new api error
 	ErrorCodeCountTokenFailed   ErrorCode = "count_token_failed"
