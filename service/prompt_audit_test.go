@@ -233,6 +233,29 @@ func TestPromptAuditDeepSeekHarnessSessionHeaderGroupsQuestionsBySession(t *test
 	assert.NotEqual(t, first.GroupKey, third.GroupKey)
 }
 
+func TestPromptAuditDeepSeekHarnessCompactionIsStoredWithItsSessionQuestion(t *testing.T) {
+	c := withPromptAuditGroupingContext(t)
+	c.Request.Header.Del("session_id")
+	c.Request.Header.Set("X-DeepSeek-Harness-Session-ID", "dsh-session-123")
+	question := (&dto.ClaudeRequest{Messages: []dto.ClaudeMessage{{Role: "user", Content: "Fix the search panel"}}}).GetPromptAuditSnapshot()
+	first := preparePromptAuditRequest(c, PromptAuditRequest{Snapshot: question})
+
+	c.Request.Header.Set("X-DeepSeek-Harness-Compact", "1")
+	compaction := (&dto.ClaudeRequest{Messages: []dto.ClaudeMessage{{Role: "user", Content: "Summarize the previous turns before continuing."}}}).GetPromptAuditSnapshot()
+	compactRequest := preparePromptAuditRequest(c, PromptAuditRequest{Snapshot: compaction})
+
+	assert.Equal(t, "side:summary", compactRequest.RequestKind)
+	assert.Empty(t, compactRequest.HumanPrompt)
+	assert.NotEmpty(t, compactRequest.Snapshot.SummaryKey)
+	assert.Equal(t, first.GroupKey, compactRequest.GroupKey)
+
+	c.Request.Header.Del("X-DeepSeek-Harness-Compact")
+	continued := (&dto.ClaudeRequest{Messages: []dto.ClaudeMessage{{Role: "user", Content: "This session is being continued from a previous conversation that ran out of context. Summary: search panel fix is underway."}}}).GetPromptAuditSnapshot()
+	resume := preparePromptAuditRequest(c, PromptAuditRequest{Snapshot: continued})
+
+	assert.Equal(t, first.GroupKey, resume.GroupKey)
+}
+
 func TestPromptAuditSummaryContinuationGrouping(t *testing.T) {
 	c := withPromptAuditGroupingContext(t)
 	prepare := func(messages ...dto.ClaudeMessage) PromptAuditRequest {

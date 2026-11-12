@@ -207,7 +207,17 @@ func preparePromptAuditRequest(c *gin.Context, request PromptAuditRequest) Promp
 				request.SessionKey = hex.EncodeToString(digest[:])
 			}
 		}
-		if c.GetHeader("x-openai-subagent") != "" {
+		if strings.TrimSpace(c.GetHeader("x-deepseek-harness-compact")) == "1" {
+			request.RequestKind, request.HumanPrompt = "side:summary", ""
+			request.Snapshot.GroupOrigin = dto.PromptAuditOrigin{}
+			request.Snapshot.GroupPredecessor = dto.PromptAuditOrigin{}
+			if request.Snapshot.SummaryKey == "" {
+				if data, err := common.Marshal(request.Snapshot.OrderedSegments()); err == nil {
+					digest := sha256.Sum256(data)
+					request.Snapshot.SummaryKey = hex.EncodeToString(digest[:])
+				}
+			}
+		} else if c.GetHeader("x-openai-subagent") != "" {
 			request.RequestKind, request.HumanPrompt = "subagent", ""
 		} else if c.GetHeader("x-openai-memgen-request") != "" {
 			request.RequestKind, request.HumanPrompt = "side:memory", ""
