@@ -500,8 +500,8 @@ export function ChannelAdmissionMonitor(props: {
               />
             </div>
           </header>
-          <div className='grid gap-3 p-3 sm:p-4 lg:grid-cols-[220px_minmax(0,1fr)]'>
-            <div className='bg-muted/40 border-border/50 flex flex-col rounded-lg border p-3'>
+          <div className='grid gap-3 p-3 sm:p-4 lg:h-52 lg:grid-cols-[220px_minmax(0,1fr)]'>
+            <div className='bg-muted/40 border-border/50 flex min-h-0 flex-col rounded-lg border p-3'>
               <div className='text-muted-foreground text-[10px] font-medium'>
                 {t('Concurrency')}
               </div>
@@ -520,47 +520,50 @@ export function ChannelAdmissionMonitor(props: {
                 )}
               </div>
               <div className='border-border/50 mt-3 border-t pt-3 lg:mt-auto'>
-                {activeUsers.length > 0 ? (
-                  <div className='mt-1.5 flex flex-wrap gap-1.5'>
-                    {activeUsers.flatMap((user) => {
-                      const name =
-                        user.username || `${t('User')} #${user.user_id}`
-                      return Array.from({ length: user.count }, (_, index) => {
-                        const pillKey = `${user.user_id}-${index}`
-                        const justAdmitted = admittedPills.has(pillKey)
-                        return (
-                          <div
-                            key={pillKey}
-                            data-admission-user={user.user_id}
-                            ref={(element) => {
-                              if (element) {
-                                activePillRefs.current.set(pillKey, element)
-                              } else {
-                                activePillRefs.current.delete(pillKey)
-                              }
-                            }}
-                            className={cn(
-                              'bg-background/70 border-border/40 inline-flex items-center rounded-full border px-2 py-0.5 text-xs',
-                              justAdmitted && 'admission-row-admitted'
-                            )}
-                          >
-                            <span className='max-w-32 truncate font-medium'>
-                              {name}
-                            </span>
-                          </div>
+                <div className='mt-1.5 flex min-h-[26px] flex-wrap items-center gap-1.5 lg:max-h-24 lg:overflow-y-auto'>
+                  {activeUsers.length > 0 ? (
+                    <>
+                      {activeUsers.flatMap((user) => {
+                        const name =
+                          user.username || `${t('User')} #${user.user_id}`
+                        return Array.from(
+                          { length: user.count },
+                          (_, index) => {
+                            const pillKey = `${user.user_id}-${index}`
+                            const justAdmitted = admittedPills.has(pillKey)
+                            return (
+                              <div
+                                key={pillKey}
+                                data-admission-user={user.user_id}
+                                ref={(element) => {
+                                  if (element) {
+                                    activePillRefs.current.set(pillKey, element)
+                                  } else {
+                                    activePillRefs.current.delete(pillKey)
+                                  }
+                                }}
+                                className={cn(
+                                  'bg-background/70 border-border/40 inline-flex items-center rounded-full border px-2 py-0.5 text-xs',
+                                  justAdmitted && 'admission-row-admitted'
+                                )}
+                              >
+                                <span className='max-w-32 truncate font-medium'>
+                                  {name}
+                                </span>
+                              </div>
+                            )
+                          }
                         )
-                      })
-                    })}
-                  </div>
-                ) : (
-                  <span className='text-muted-foreground mt-1 block text-xs'>
-                    —
-                  </span>
-                )}
+                      })}
+                    </>
+                  ) : (
+                    <span className='text-muted-foreground text-xs'>—</span>
+                  )}
+                </div>
               </div>
             </div>
 
-            <div className='flex min-w-0 flex-col gap-3'>
+            <div className='flex min-h-0 min-w-0 flex-col gap-3'>
               <div className='grid grid-cols-2 gap-2 sm:grid-cols-3'>
                 <MetricCell label={t('Waiting')} value={waitingLabel} />
                 <MetricCell
@@ -577,7 +580,7 @@ export function ChannelAdmissionMonitor(props: {
                 />
               </div>
 
-              <div className='bg-muted/30 border-border/60 flex flex-1 flex-col rounded-xl border p-3'>
+              <div className='bg-muted/30 border-border/60 flex min-h-0 flex-1 flex-col rounded-xl border p-3'>
                 <header className='flex items-center gap-2'>
                   <span className='text-xs font-medium'>
                     {t('Queued requests')}
@@ -586,56 +589,53 @@ export function ChannelAdmissionMonitor(props: {
                     {waitingRequests.length}
                   </span>
                 </header>
-                {waitingRequests.length > 0 ? (
-                  <ul className='mt-2 flex flex-wrap gap-1.5'>
-                    {waitingRequests.map((request) => {
-                      const displayName =
-                        request.username || `${t('User')} #${request.user_id}`
-                      const meta: string[] = []
-                      if (request.username) {
-                        meta.push(`#${request.user_id}`)
-                      }
-                      if (request.priority !== 0) {
-                        meta.push(`${t('Priority')} ${request.priority}`)
-                      }
-                      return (
-                        <li
-                          key={request.id}
-                          ref={(element) => {
-                            if (element) {
-                              queuedRowRefs.current.set(
-                                request.user_id,
-                                element
-                              )
-                            } else {
-                              queuedRowRefs.current.delete(request.user_id)
-                            }
-                          }}
-                          className='admission-queued-enter bg-background/70 border-border/40 flex w-full items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 sm:w-56'
-                        >
-                          <span className='min-w-0'>
-                            <span className='block truncate text-xs font-medium'>
+                <div className='mt-2 flex min-h-0 flex-1 flex-col overflow-y-auto pr-0.5'>
+                  {waitingRequests.length > 0 ? (
+                    <ul className='flex flex-wrap gap-1.5'>
+                      {waitingRequests.map((request) => {
+                        const displayName =
+                          request.username || `${t('User')} #${request.user_id}`
+                        const priorityLabel =
+                          request.priority !== 0
+                            ? `${t('Priority')} ${request.priority}`
+                            : ''
+                        return (
+                          <li
+                            key={request.id}
+                            ref={(element) => {
+                              if (element) {
+                                queuedRowRefs.current.set(
+                                  request.user_id,
+                                  element
+                                )
+                              } else {
+                                queuedRowRefs.current.delete(request.user_id)
+                              }
+                            }}
+                            className='admission-queued-enter bg-background/70 border-border/40 flex w-full items-center gap-2 rounded-full border px-2.5 py-1 sm:w-64'
+                          >
+                            <span className='min-w-0 flex-1 truncate text-xs font-medium'>
                               {displayName}
                             </span>
-                            {meta.length > 0 && (
-                              <span className='text-muted-foreground block truncate text-[11px]'>
-                                {meta.join(' · ')}
+                            {priorityLabel && (
+                              <span className='text-muted-foreground shrink-0 text-[10px]'>
+                                {priorityLabel}
                               </span>
                             )}
-                          </span>
-                          <span className='text-muted-foreground shrink-0 text-right text-[11px] tabular-nums'>
-                            {formatAdmissionWaitMs(request.wait_ms)}
-                          </span>
-                        </li>
-                      )
-                    })}
-                  </ul>
-                ) : (
-                  <div className='text-muted-foreground mt-2 flex items-center gap-1.5 text-xs'>
-                    <CheckCircle2 className='text-success size-3.5' />
-                    <span>{t('No users are waiting')}</span>
-                  </div>
-                )}
+                            <span className='text-muted-foreground shrink-0 text-[11px] tabular-nums'>
+                              {formatAdmissionWaitMs(request.wait_ms)}
+                            </span>
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  ) : (
+                    <div className='text-muted-foreground m-auto flex items-center gap-1.5 text-xs'>
+                      <CheckCircle2 className='text-success size-3.5' />
+                      <span>{t('No users are waiting')}</span>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           </div>
