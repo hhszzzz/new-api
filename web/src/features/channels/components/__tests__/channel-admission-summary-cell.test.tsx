@@ -32,6 +32,7 @@ import { I18nextProvider } from 'react-i18next'
 import { afterEach, expect, it, vi } from 'vitest'
 
 import * as channelApi from '../../api'
+import type { Channel } from '../../types'
 import { ChannelAdmissionSummaryCell } from '../channel-admission-summary-cell'
 
 const i18n = createInstance()
@@ -41,31 +42,22 @@ await i18n.init({
   initAsync: false,
 })
 
+const channel = {
+  id: 12,
+  name: 'apikey.casa',
+  concurrency_limit: 2,
+  rpm_limit: null,
+  priority: 1,
+  settings: '{}',
+  user_rate_limits: [],
+} as unknown as Channel
+
 afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
 })
 
-it('shows a compact summary and opens the selected channel detail', async () => {
-  vi.spyOn(channelApi, 'getChannelAdmissionStats').mockResolvedValue({
-    success: true,
-    data: {
-      channel_id: 12,
-      window_start_ms: 0,
-      window_end_ms: 0,
-      active: 2,
-      waiting: 1,
-      oldest_wait_ms: 800,
-      wait_p50_ms: 500,
-      wait_p95_ms: 1_000,
-      grants: 20,
-      soup_grants: 4,
-      queue_full: 1,
-      timeouts: 0,
-      minute_series: [],
-    },
-  })
-
+async function renderCell() {
   const rootRoute = createRootRoute({ component: () => <Outlet /> })
   const channelsRoute = createRoute({
     getParentRoute: () => rootRoute,
@@ -75,7 +67,7 @@ it('shows a compact summary and opens the selected channel detail', async () => 
   const listRoute = createRoute({
     getParentRoute: () => channelsRoute,
     path: '/',
-    component: () => <ChannelAdmissionSummaryCell channelId={12} />,
+    component: () => <ChannelAdmissionSummaryCell channel={channel} />,
   })
   const admissionRoute = createRoute({
     getParentRoute: () => channelsRoute,
@@ -103,12 +95,62 @@ it('shows a compact summary and opens the selected channel detail', async () => 
       </QueryClientProvider>
     </I18nextProvider>
   )
+  return { router, queryClient }
+}
 
-  expect(await screen.findByText('Active: 2 · Waiting: 1')).toBeVisible()
-  expect(screen.getByText('Oldest wait: 800 ms')).toBeVisible()
-  await userEvent
-    .setup()
-    .click(screen.getByRole('button', { name: 'Admission Monitor' }))
+it('shows a compact summary and opens the selected channel detail', async () => {
+  vi.spyOn(channelApi, 'getChannelAdmissionStats').mockResolvedValue({
+    success: true,
+    data: {
+      channel_id: 12,
+      window_start_ms: 0,
+      window_end_ms: 0,
+      bucket_seconds: 60,
+      active: 2,
+      active_users: 2,
+      waiting: 1,
+      oldest_wait_ms: 800,
+      wait_p50_ms: 500,
+      wait_p95_ms: 1_000,
+      grants: 20,
+      waited_grants: 4,
+      soup_grants: 4,
+      queue_full: 1,
+      timeouts: 0,
+      waiting_users: [
+        {
+          user_id: 5,
+          username: 'cbk',
+          priority: 2,
+          position: 1,
+          count: 1,
+          oldest_wait_ms: 800,
+        },
+      ],
+      minute_series: [
+        {
+          timestamp_ms: 0,
+          grants: 2,
+          waited: 1,
+          soup_grants: 0,
+          queue_full: 0,
+          timeouts: 0,
+          wait_p50_ms: 500,
+          wait_p95_ms: 800,
+        },
+      ],
+    },
+  })
+
+  const { router, queryClient } = await renderCell()
+
+  expect(await screen.findByText('Concurrency 2/2 · Queued 1')).toBeVisible()
+  expect(screen.getByText('Oldest wait: 0.8s')).toBeVisible()
+  expect(screen.getAllByTestId('admission-spark-bar')).toHaveLength(1)
+  const user = userEvent.setup()
+  await user.hover(screen.getByRole('button', { name: /Admission Monitor/ }))
+  expect(await screen.findByText('Queued users')).toBeVisible()
+  await user.click(screen.getByRole('button', { name: /Admission Monitor/ }))
   expect(await screen.findByText('Detailed monitor')).toBeVisible()
   expect(router.state.location.pathname).toBe('/channels/admission')
   expect(router.state.location.search).toEqual({ channel_id: 12 })
@@ -119,5 +161,19 @@ it('shows a compact summary and opens the selected channel detail', async () => 
       end_timestamp: expect.any(Number),
     })
   )
+  queryClient.clear()
+})
+
+it('shows unknown values instead of idle zeros when statistics fail', async () => {
+  vi.spyOn(channelApi, 'getChannelAdmissionStats').mockRejectedValue(
+    new Error('redis is unavailable')
+  )
+
+  const { queryClient } = await renderCell()
+
+  expect(await screen.findByText('Concurrency —/2 · Queued —')).toBeVisible()
+  expect(
+    screen.queryByText('Concurrency 0/2 · Queued 0')
+  ).not.toBeInTheDocument()
   queryClient.clear()
 })

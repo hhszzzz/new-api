@@ -30,6 +30,7 @@ import {
   RefreshCw,
   ArrowUpFromLine,
   Layers3,
+  Gauge,
 } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -241,6 +242,15 @@ export function ChannelsPrimaryButtons() {
               {t('Manage channel aggregates')}
               <DropdownMenuShortcut>
                 <Layers3 className='h-4 w-4' />
+              </DropdownMenuShortcut>
+            </DropdownMenuItem>
+
+            <DropdownMenuItem
+              onSelect={() => void navigate({ to: '/channels/admission' })}
+            >
+              {t('Channel Admission')}
+              <DropdownMenuShortcut>
+                <Gauge className='h-4 w-4' />
               </DropdownMenuShortcut>
             </DropdownMenuItem>
 

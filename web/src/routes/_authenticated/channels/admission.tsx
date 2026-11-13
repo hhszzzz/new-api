@@ -26,12 +26,25 @@ import { useAuthStore } from '@/stores/auth-store'
 const route = getRouteApi('/_authenticated/channels/admission')
 const admissionSearchSchema = z.object({
   channel_id: z.number().optional().catch(undefined),
+  range: z
+    .union([
+      z.literal(1),
+      z.literal(6),
+      z.literal(12),
+      z.literal(24),
+      z.literal(168),
+    ])
+    .optional()
+    .catch(undefined),
 })
 
 function AdmissionMonitorRoute() {
-  const { channel_id } = route.useSearch()
+  const { channel_id, range } = route.useSearch()
   return (
-    <ChannelAdmissionMonitor key={channel_id} initialChannelId={channel_id} />
+    <ChannelAdmissionMonitor
+      initialChannelId={channel_id}
+      initialRangeHours={range}
+    />
   )
 }
 

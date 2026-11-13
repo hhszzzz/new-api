@@ -182,6 +182,7 @@ export type Channel = z.infer<typeof channelSchema>
 export interface ChannelAdmissionMetricPoint {
   timestamp_ms: number
   grants: number
+  waited: number
   soup_grants: number
   queue_full: number
   timeouts: number
@@ -189,19 +190,32 @@ export interface ChannelAdmissionMetricPoint {
   wait_p95_ms: number
 }
 
+export interface ChannelAdmissionWaitingUser {
+  user_id: number
+  username?: string
+  priority: number
+  position: number
+  count: number
+  oldest_wait_ms: number
+}
+
 export interface ChannelAdmissionStats {
   channel_id: number
   window_start_ms: number
   window_end_ms: number
+  bucket_seconds: number
   active: number
+  active_users: number
   waiting: number
   oldest_wait_ms: number
   wait_p50_ms: number
   wait_p95_ms: number
   grants: number
+  waited_grants: number
   soup_grants: number
   queue_full: number
   timeouts: number
+  waiting_users: ChannelAdmissionWaitingUser[]
   minute_series: ChannelAdmissionMetricPoint[]
 }
 

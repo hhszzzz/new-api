@@ -707,11 +707,16 @@ for _, member in ipairs(stale_members) do
   end
 end
 local stored_wait_meta = redis.call('HGET', KEYS[6], lease_id)
+if stored_wait_meta == false then stored_wait_meta = nil end
 local waiting_member = nil
+local wait_enqueued = nil
 local was_waiting = stored_wait_meta ~= nil
 if stored_wait_meta then
   local enqueued, sequence = string.match(stored_wait_meta, '([^|]+)|([^|]+)$')
-  if enqueued and sequence then waiting_member = string.format('%013d|%020d|%s', tonumber(enqueued), tonumber(sequence), lease_id) end
+  if enqueued and sequence then
+    wait_enqueued = tonumber(enqueued)
+    waiting_member = string.format('%013d|%020d|%s', tonumber(enqueued), tonumber(sequence), lease_id)
+  end
 end
 local total_active = tonumber(redis.call('ZCARD', KEYS[2]))
 local total_blocked = channel_limit > 0 and total_active >= channel_limit
@@ -729,6 +734,7 @@ if not waiting_member then
     end
   end
   local sequence = redis.call('INCR', KEYS[12])
+  wait_enqueued = now_ms
   waiting_member = string.format('%013d|%020d|%s', now_ms, sequence, lease_id)
   redis.call('ZADD', KEYS[5], -priority, waiting_member)
   redis.call('ZADD', waiting_user_key, now_ms, waiting_member)
@@ -805,8 +811,7 @@ if not winner or winner.id ~= lease_id then
   end
   return {0, 0, 0, 0, waiting_count, waiting_member or ''}
 end
-local enqueued = tonumber(string.match(redis.call('HGET', KEYS[6], lease_id), '([^|]+)$')) or now_ms
-local elapsed = math.max(0, now_ms - enqueued)
+local elapsed = math.max(0, now_ms - (wait_enqueued or now_ms))
 if rpm_limit > 0 then
   local count = tonumber(redis.call('HGET', KEYS[1], 'count')) or 0
   if tonumber(redis.call('HGET', KEYS[1], 'minute')) ~= minute then count = 0 end

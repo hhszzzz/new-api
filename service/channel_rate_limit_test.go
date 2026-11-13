@@ -793,10 +793,132 @@ func TestChannelAdmissionQueueWaitUpdatesMinuteMetrics(t *testing.T) {
 	stats, err := GetChannelAdmissionStats(t.Context(), channel.Id, time.Now().Add(-time.Minute), time.Now())
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), stats.Grants)
+	assert.Equal(t, int64(1), stats.WaitedGrants)
+	assert.Equal(t, int64(60), stats.BucketSeconds)
 	assert.Equal(t, int64(0), stats.Active)
 	assert.Equal(t, int64(0), stats.Waiting)
 	assert.NotEmpty(t, stats.MinuteSeries)
 	assert.Positive(t, stats.WaitP50Ms)
+	assert.LessOrEqual(t, stats.WaitP50Ms, int64(5_000))
+}
+
+func TestChannelAdmissionStatsBucketAggregationZeroFillsGaps(t *testing.T) {
+	env := useChannelRateLimitMiniRedis(t)
+	channelID := 617
+	keys := channelRateLimitKeys(channelID, 0)
+	now := time.Now()
+	firstMinute := now.Add(-10*time.Minute).UnixMilli() / 60_000
+	secondMinute := now.Add(-5*time.Minute).UnixMilli() / 60_000
+
+	seed := func(minute int64, values map[string]int64) {
+		for metric, value := range values {
+			member := fmt.Sprintf("%d|%s", minute, metric)
+			require.NoError(t, env.client.HSet(t.Context(), keys[8], member, value).Err())
+			require.NoError(t, env.client.ZAdd(t.Context(), keys[9], &redis.Z{
+				Score:  float64(minute*60_000 + 1_000),
+				Member: member,
+			}).Err())
+		}
+	}
+	seed(firstMinute, map[string]int64{
+		"grants":        3,
+		"wait_le_500ms": 2,
+		"timeout":       1,
+	})
+	seed(secondMinute, map[string]int64{
+		"grants":        2,
+		"wait_le_100ms": 2,
+		"queue_full":    1,
+	})
+
+	stats, err := GetChannelAdmissionStats(t.Context(), channelID, now.Add(-time.Hour), now)
+	require.NoError(t, err)
+	assert.Equal(t, int64(60), stats.BucketSeconds)
+	assert.GreaterOrEqual(t, len(stats.MinuteSeries), 60)
+	assert.LessOrEqual(t, len(stats.MinuteSeries), 62)
+	assert.Equal(t, int64(5), stats.Grants)
+	assert.Equal(t, int64(3), stats.WaitedGrants)
+	assert.Equal(t, int64(1), stats.Timeouts)
+	assert.Equal(t, int64(1), stats.QueueFull)
+
+	byTimestamp := make(map[int64]ChannelAdmissionMetricPoint, len(stats.MinuteSeries))
+	for _, point := range stats.MinuteSeries {
+		byTimestamp[point.TimestampMs] = point
+	}
+	first, ok := byTimestamp[firstMinute*60_000]
+	require.True(t, ok)
+	assert.Equal(t, int64(3), first.Grants)
+	assert.Equal(t, int64(1), first.Waited)
+	assert.Equal(t, int64(1), first.Timeouts)
+	assert.Equal(t, int64(500), first.WaitP50Ms)
+
+	second, ok := byTimestamp[secondMinute*60_000]
+	require.True(t, ok)
+	assert.Equal(t, int64(2), second.Grants)
+	assert.Equal(t, int64(2), second.Waited)
+	assert.Equal(t, int64(1), second.QueueFull)
+	assert.Equal(t, int64(100), second.WaitP95Ms)
+
+	emptyPoints := 0
+	for _, point := range stats.MinuteSeries {
+		if point.Grants == 0 && point.Waited == 0 && point.Timeouts == 0 && point.QueueFull == 0 {
+			emptyPoints++
+		}
+	}
+	assert.Greater(t, emptyPoints, 50)
+}
+
+func TestChannelAdmissionBucketSecondsFollowsWindow(t *testing.T) {
+	assert.Equal(t, int64(60), channelAdmissionBucketSeconds(time.Hour.Milliseconds()))
+	assert.Equal(t, int64(300), channelAdmissionBucketSeconds(24*time.Hour.Milliseconds()))
+	assert.Equal(t, int64(3600), channelAdmissionBucketSeconds(7*24*time.Hour.Milliseconds()))
+}
+
+func TestChannelAdmissionStatsReportsLiveQueueUsers(t *testing.T) {
+	env := useChannelRateLimitMiniRedis(t)
+	channelID := 618
+	keys := channelRateLimitKeys(channelID, 0)
+	now := time.Now().UnixMilli()
+	require.NoError(t, env.client.ZAdd(t.Context(), keys[1], &redis.Z{
+		Score: float64(now), Member: "active-lease",
+	}).Err())
+	require.NoError(t, env.client.HSet(t.Context(), keys[7], "active-lease", "5|0").Err())
+
+	enqueuedLow := now - 5_000
+	lowMember := fmt.Sprintf("%013d|%020d|%s", enqueuedLow, 1, "waiting-lease")
+	require.NoError(t, env.client.ZAdd(t.Context(), keys[4], &redis.Z{
+		Score: 0, Member: lowMember,
+	}).Err())
+	require.NoError(t, env.client.HSet(t.Context(), keys[5], "waiting-lease",
+		fmt.Sprintf("5|0|%d|1", enqueuedLow)).Err())
+	enqueuedHigh := now - 1_000
+	highMember := fmt.Sprintf("%013d|%020d|%s", enqueuedHigh, 2, "waiting-high")
+	require.NoError(t, env.client.ZAdd(t.Context(), keys[4], &redis.Z{
+		Score: -2, Member: highMember,
+	}).Err())
+	require.NoError(t, env.client.HSet(t.Context(), keys[5], "waiting-high",
+		fmt.Sprintf("6|2|%d|2", enqueuedHigh)).Err())
+
+	stats, err := GetChannelAdmissionStats(
+		t.Context(),
+		channelID,
+		time.UnixMilli(now).Add(-time.Minute),
+		time.UnixMilli(now),
+	)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), stats.Active)
+	assert.Equal(t, int64(1), stats.ActiveUsers)
+	assert.Equal(t, int64(2), stats.Waiting)
+	require.Len(t, stats.WaitingUsers, 2)
+	assert.Equal(t, 6, stats.WaitingUsers[0].UserID)
+	assert.Equal(t, 2, stats.WaitingUsers[0].Priority)
+	assert.Equal(t, 1, stats.WaitingUsers[0].Position)
+	assert.Equal(t, 5, stats.WaitingUsers[1].UserID)
+	assert.Equal(t, 0, stats.WaitingUsers[1].Priority)
+	assert.Equal(t, 2, stats.WaitingUsers[1].Position)
+	assert.Equal(t, int64(1), stats.WaitingUsers[1].Count)
+	assert.GreaterOrEqual(t, stats.WaitingUsers[1].OldestWaitMs, int64(5_000))
+	assert.GreaterOrEqual(t, stats.OldestWaitMs, int64(5_000))
 }
 
 func TestChannelAdmissionObservationUsesAdminLogJSON(t *testing.T) {

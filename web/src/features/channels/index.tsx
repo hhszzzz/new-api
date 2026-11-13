@@ -33,6 +33,7 @@ import { requireServerSuccess } from '@/lib/server-error-message'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { getChannelOps } from './api'
+import { ChannelEditDeepLink } from './components/channel-edit-deep-link'
 import { ChannelsDialogs } from './components/channels-dialogs'
 import { ChannelsPrimaryButtons } from './components/channels-primary-buttons'
 import { ChannelsProvider } from './components/channels-provider'
@@ -87,6 +88,7 @@ export function Channels() {
 
   return (
     <ChannelsProvider>
+      <ChannelEditDeepLink />
       <SectionPageLayout fixedContent>
         <SectionPageLayout.Title>
           <span className='flex min-w-0 items-center gap-2'>

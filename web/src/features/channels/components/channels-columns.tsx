@@ -82,6 +82,7 @@ import {
   handleUpdateChannelField,
   handleUpdateTagField,
   createChannelFieldUpdateScheduler,
+  hasAdmissionQueue,
   isTagAggregateRow,
   isChannelAggregateRow,
   type ChannelAggregateRow,
@@ -879,23 +880,22 @@ export function useChannelsColumns(
       // visible without colliding with the pinned actions column.
       {
         id: 'admission-monitor',
-        header: t('Admission Monitor'),
+        header: t('Monitor'),
+        // Display-only column; the accessor keeps it in the table's View menu
+        // so its visibility and position remain user-configurable.
+        accessorFn: () => null,
         cell: ({ row }) => {
           const channel = row.original
           if (isTagAggregateRow(channel) || isChannelAggregateRow(channel)) {
             return null
           }
-          const hasConcurrencyLimit =
-            (channel.concurrency_limit ?? 0) > 0 ||
-            channel.user_rate_limits?.some(
-              (limit) => (limit.concurrency_limit ?? 0) > 0
-            )
-          if (!hasConcurrencyLimit) return null
+          if (!hasAdmissionQueue(channel)) {
+            return <span className='text-muted-foreground text-xs'>—</span>
+          }
 
-          return <ChannelAdmissionSummaryCell channelId={channel.id} />
+          return <ChannelAdmissionSummaryCell channel={channel} />
         },
         enableSorting: false,
-        enableHiding: false,
         size: 220,
         minSize: 190,
         meta: { mobileHidden: true },

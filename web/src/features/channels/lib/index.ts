@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 // Re-export all library functions
+export * from './admission'
 export * from './channel-actions'
 export * from './channel-batch'
 export * from './channel-batch-merge'

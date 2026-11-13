@@ -157,6 +157,25 @@ export async function getChannels(
 }
 
 /**
+ * Walk every page of the channel list. The list API caps page_size at 100, so
+ * pickers that must include every channel cannot rely on a single request.
+ */
+export async function getAllChannels(): Promise<Channel[]> {
+  const items: Channel[] = []
+  for (let page = 1; page <= 1_000; page += 1) {
+    const response = await getChannels({ p: page, page_size: 100 })
+    const data = requireServerSuccess(response).data
+    const pageItems = data?.items ?? []
+    items.push(...pageItems)
+    const total = data?.total ?? items.length
+    if (pageItems.length === 0 || items.length >= total) {
+      break
+    }
+  }
+  return items
+}
+
+/**
  * Search channels with filters
  */
 export async function searchChannels(
