@@ -108,6 +108,9 @@ it('shows a compact summary and opens the selected channel detail', async () => 
       bucket_seconds: 60,
       active: 2,
       active_users: 2,
+      active_user_list: [
+        { user_id: 1, username: 'hhs', priority: 1, count: 2 },
+      ],
       waiting: 1,
       oldest_wait_ms: 800,
       wait_p50_ms: 500,

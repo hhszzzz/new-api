@@ -23,6 +23,7 @@ import {
   DEFAULT_ADMISSION_CONTROL,
   DEFAULT_ADMISSION_LIVE_REFRESH_SECONDS,
   admissionBucketLabel,
+  admissionLiveStatus,
   admissionSparklineBars,
   effectiveAdmissionControl,
   formatAdmissionBucketWidth,
@@ -197,5 +198,18 @@ describe('parseAdmissionLiveRefreshSeconds', () => {
     expect(parseAdmissionLiveRefreshSeconds('4')).toBe(4)
     expect(parseAdmissionLiveRefreshSeconds('60')).toBe(60)
     expect(parseAdmissionLiveRefreshSeconds('0')).toBe(0)
+  })
+})
+
+describe('admissionLiveStatus', () => {
+  test('reports running whenever requests are in flight', () => {
+    expect(admissionLiveStatus(1, 0)).toBe('running')
+    expect(admissionLiveStatus(1, 2)).toBe('running')
+    expect(admissionLiveStatus(2, 5)).toBe('running')
+  })
+
+  test('reports waiting only when nothing is in flight', () => {
+    expect(admissionLiveStatus(0, 1)).toBe('waiting')
+    expect(admissionLiveStatus(0, 0)).toBe('ready')
   })
 })

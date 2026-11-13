@@ -77,6 +77,8 @@ export function ChannelAdmissionSummaryCell(props: { channel: Channel }) {
   const waitingText = hasStats ? formatCount(waiting) : '—'
   const waitingUsers = stats?.waiting_users ?? []
   const queuedPreview = waitingUsers.slice(0, 5)
+  const activeUsers = stats?.active_user_list ?? []
+  const activePreview = activeUsers.slice(0, 5)
   const sparkBars = admissionSparklineBars(stats?.minute_series ?? [], 24)
   const sparkMax = Math.max(1, ...sparkBars.map((bar) => bar.grants))
   let statusDot = 'bg-emerald-500'
@@ -201,6 +203,32 @@ export function ChannelAdmissionSummaryCell(props: { channel: Channel }) {
             {userLimitSummary && (
               <div>
                 {t('Per-user limits')}: {userLimitSummary}
+              </div>
+            )}
+            {activePreview.length > 0 && (
+              <div className='border-t pt-1'>
+                <div className='font-medium'>{t('Active users')}</div>
+                {activePreview.map((user) => (
+                  <div
+                    key={user.user_id}
+                    className='flex items-center justify-between gap-3'
+                  >
+                    <span className='truncate'>
+                      {user.username || `${t('User')} #${user.user_id}`}
+                      {user.priority !== 0 && ` · P${user.priority}`}
+                    </span>
+                    {user.count > 1 && (
+                      <span className='text-muted-foreground shrink-0 tabular-nums'>
+                        ×{user.count}
+                      </span>
+                    )}
+                  </div>
+                ))}
+                {activeUsers.length > activePreview.length && (
+                  <div className='text-muted-foreground'>
+                    +{activeUsers.length - activePreview.length}
+                  </div>
+                )}
               </div>
             )}
             {queuedPreview.length > 0 && (

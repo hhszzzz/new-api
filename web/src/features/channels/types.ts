@@ -190,6 +190,13 @@ export interface ChannelAdmissionMetricPoint {
   wait_p95_ms: number
 }
 
+export interface ChannelAdmissionActiveUser {
+  user_id: number
+  username?: string
+  priority: number
+  count: number
+}
+
 export interface ChannelAdmissionWaitingUser {
   user_id: number
   username?: string
@@ -206,6 +213,7 @@ export interface ChannelAdmissionStats {
   bucket_seconds: number
   active: number
   active_users: number
+  active_user_list: ChannelAdmissionActiveUser[]
   waiting: number
   oldest_wait_ms: number
   wait_p50_ms: number

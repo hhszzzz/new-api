@@ -96,6 +96,25 @@ export function hasCustomizedAdmissionControl(
   return Boolean(parseChannelOtherSettings(channel.settings).admission_control)
 }
 
+/**
+ * Concurrency wins over queue depth: a channel that is serving requests is not
+ * "waiting" just because more requests are queued behind the limit.
+ */
+export type AdmissionLiveStatus = 'ready' | 'running' | 'waiting'
+
+export function admissionLiveStatus(
+  active: number,
+  waiting: number
+): AdmissionLiveStatus {
+  if (active > 0) {
+    return 'running'
+  }
+  if (waiting > 0) {
+    return 'waiting'
+  }
+  return 'ready'
+}
+
 export function effectiveAdmissionControl(
   channel: Pick<Channel, 'settings'>
 ): EffectiveAdmissionControl {

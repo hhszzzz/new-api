@@ -89,6 +89,18 @@ export const getUserLogStats = (
 ) => fetchLogStats('/api/log', params, false)
 
 /**
+ * Current in-flight relay requests on this instance. Served from the relay
+ * router's stats middleware rather than the log database.
+ */
+export async function getRelayConcurrency(): Promise<number> {
+  const res = await api.get<{
+    success: boolean
+    data?: { active_connections?: number }
+  }>('/api/status/concurrency', { skipErrorHandler: true })
+  return res.data.data?.active_connections ?? 0
+}
+
+/**
  * Stream the logs matching params, newest first. The server sends one JSON
  * log per line and ends with an API response object; a stream that ends
  * without a successful one is a failed export. Resolves with the log count.

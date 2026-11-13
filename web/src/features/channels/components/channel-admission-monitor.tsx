@@ -44,6 +44,7 @@ import { cn } from '@/lib/utils'
 import { getAllChannels, getChannel, getChannelAdmissionStats } from '../api'
 import {
   DEFAULT_ADMISSION_LIVE_REFRESH_SECONDS,
+  admissionLiveStatus,
   effectiveAdmissionControl,
   formatAdmissionBucketWidth,
   formatAdmissionWaitMs,
@@ -228,6 +229,7 @@ export function ChannelAdmissionMonitor(props: {
     }
   }
   const live = liveQuery.data ?? stats
+  const activeUsers = live?.active_user_list ?? []
   const waitingUsers = live?.waiting_users ?? []
   const waitingCount = live?.waiting ?? 0
   const selectedChannel =
@@ -247,10 +249,6 @@ export function ChannelAdmissionMonitor(props: {
     })
   }
   const limit = selectedChannel?.concurrency_limit ?? 0
-  const activeLabel =
-    limit > 0
-      ? `${formatCount(live?.active)} / ${formatCount(limit)}`
-      : formatCount(live?.active)
   const queueEnabled = selectedChannel
     ? hasAdmissionQueue(selectedChannel)
     : true
@@ -266,16 +264,18 @@ export function ChannelAdmissionMonitor(props: {
   )
   const rangeLabel = t(rangeOption?.label ?? 'Last 24 hours')
   const bucketWidth = formatAdmissionBucketWidth(stats?.bucket_seconds ?? 60)
+  const activeCount = live?.active ?? 0
+  const liveStatus = admissionLiveStatus(activeCount, waitingCount)
   let liveStatusLabel = t('Ready')
   let liveStatusVariant: StatusVariant = 'neutral'
   let liveStatusPulse = false
-  if (waitingCount > 0) {
-    liveStatusLabel = t('Waiting')
-    liveStatusVariant = 'warning'
-    liveStatusPulse = true
-  } else if ((live?.active ?? 0) > 0) {
+  if (liveStatus === 'running') {
     liveStatusLabel = t('Running')
     liveStatusVariant = 'success'
+    liveStatusPulse = true
+  } else if (liveStatus === 'waiting') {
+    liveStatusLabel = t('Waiting')
+    liveStatusVariant = 'warning'
     liveStatusPulse = true
   }
   let content: ReactNode
@@ -338,6 +338,15 @@ export function ChannelAdmissionMonitor(props: {
               pulse={liveStatusPulse}
               copyable={false}
             />
+            {liveStatus === 'running' && waitingCount > 0 && (
+              <StatusBadge
+                label={`${t('Queued')} ${formatCount(waitingCount)}`}
+                variant='warning'
+                size='sm'
+                pulse
+                copyable={false}
+              />
+            )}
             <div className='ml-auto'>
               <ChannelAdmissionLiveRefreshSelect
                 seconds={liveRefreshSeconds}
@@ -345,61 +354,98 @@ export function ChannelAdmissionMonitor(props: {
               />
             </div>
           </header>
-          <div className='space-y-3 p-3 sm:p-4'>
-            <div className='grid grid-cols-2 content-start gap-2 sm:grid-cols-3 xl:grid-cols-5'>
-              <MetricCell label={t('Concurrency')} value={activeLabel} />
-              <MetricCell
-                label={t('Active users')}
-                value={formatCount(live?.active_users)}
-              />
-              <MetricCell label={t('Waiting')} value={waitingLabel} />
-              <MetricCell
-                label={t('Waiting users')}
-                value={formatCount(waitingUsers.length)}
-              />
-              <MetricCell
-                label={t('Oldest wait')}
-                value={
-                  waitingCount > 0
-                    ? formatAdmissionWaitMs(live?.oldest_wait_ms)
-                    : '—'
-                }
-              />
+          <div className='grid gap-3 p-3 sm:p-4 lg:grid-cols-[220px_minmax(0,1fr)]'>
+            <div className='bg-muted/40 border-border/50 flex flex-col rounded-lg border p-3'>
+              <div className='text-muted-foreground text-[10px] font-medium'>
+                {t('Concurrency')}
+              </div>
+              <div className='mt-1 font-mono text-3xl font-semibold tabular-nums'>
+                {formatCount(live?.active)}
+                {limit > 0 && (
+                  <span className='text-muted-foreground text-xl'>
+                    {' / '}
+                    {formatCount(limit)}
+                  </span>
+                )}
+              </div>
+              <div className='border-border/50 mt-3 border-t pt-3 lg:mt-auto'>
+                <div className='text-muted-foreground text-[10px] font-medium'>
+                  {t('Active users')}
+                </div>
+                {activeUsers.length > 0 ? (
+                  <div className='mt-1.5 flex flex-wrap gap-1.5'>
+                    {activeUsers.map((user) => {
+                      const name =
+                        user.username || `${t('User')} #${user.user_id}`
+                      let label = name
+                      if (user.count > 1) {
+                        label += ` ×${user.count}`
+                      }
+                      if (user.priority !== 0) {
+                        label += ` · ${t('Priority')} ${user.priority}`
+                      }
+                      return (
+                        <StatusBadge
+                          key={user.user_id}
+                          label={label}
+                          variant='blue'
+                          size='sm'
+                          copyable={false}
+                        />
+                      )
+                    })}
+                  </div>
+                ) : (
+                  <span className='text-muted-foreground mt-1 block text-xs'>
+                    —
+                  </span>
+                )}
+              </div>
             </div>
 
-            <div className='bg-muted/30 border-border/60 rounded-xl border p-3'>
-              <header className='flex items-center gap-2'>
-                <span className='text-xs font-medium'>{t('Queued users')}</span>
-                <span className='text-muted-foreground ml-auto text-xs tabular-nums'>
-                  {waitingUsers.length}
-                </span>
-              </header>
-              {waitingUsers.length > 0 ? (
-                <ul className='mt-2 grid gap-1.5 sm:grid-cols-2 xl:grid-cols-3'>
-                  {waitingUsers.map((user) => {
-                    const displayName =
-                      user.username || `${t('User')} #${user.user_id}`
-                    const initial = user.username
-                      ? user.username.slice(0, 1).toUpperCase()
-                      : '#'
-                    const badge =
-                      user.position > 0 ? String(user.position) : initial
-                    const meta: string[] = []
-                    if (user.username) {
-                      meta.push(`#${user.user_id}`)
-                    }
-                    if (user.priority !== 0) {
-                      meta.push(`${t('Priority')} ${user.priority}`)
-                    }
-                    return (
-                      <li
-                        key={user.user_id}
-                        className='bg-background/70 border-border/40 flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5'
-                      >
-                        <span className='flex min-w-0 items-center gap-2'>
-                          <span className='bg-warning/10 text-warning flex size-6 shrink-0 items-center justify-center rounded-md text-[10px] font-semibold'>
-                            {badge}
-                          </span>
+            <div className='flex min-w-0 flex-col gap-3'>
+              <div className='grid grid-cols-2 gap-2 sm:grid-cols-3'>
+                <MetricCell label={t('Waiting')} value={waitingLabel} />
+                <MetricCell
+                  label={t('Waiting users')}
+                  value={formatCount(waitingUsers.length)}
+                />
+                <MetricCell
+                  label={t('Oldest wait')}
+                  value={
+                    waitingCount > 0
+                      ? formatAdmissionWaitMs(live?.oldest_wait_ms)
+                      : '—'
+                  }
+                />
+              </div>
+
+              <div className='bg-muted/30 border-border/60 flex flex-1 flex-col rounded-xl border p-3'>
+                <header className='flex items-center gap-2'>
+                  <span className='text-xs font-medium'>
+                    {t('Queued users')}
+                  </span>
+                  <span className='text-muted-foreground ml-auto text-xs tabular-nums'>
+                    {waitingUsers.length}
+                  </span>
+                </header>
+                {waitingUsers.length > 0 ? (
+                  <ul className='mt-2 flex flex-wrap gap-1.5'>
+                    {waitingUsers.map((user) => {
+                      const displayName =
+                        user.username || `${t('User')} #${user.user_id}`
+                      const meta: string[] = []
+                      if (user.username) {
+                        meta.push(`#${user.user_id}`)
+                      }
+                      if (user.priority !== 0) {
+                        meta.push(`${t('Priority')} ${user.priority}`)
+                      }
+                      return (
+                        <li
+                          key={user.user_id}
+                          className='bg-background/70 border-border/40 flex w-full items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 sm:w-56'
+                        >
                           <span className='min-w-0'>
                             <span className='block truncate text-xs font-medium'>
                               {displayName}
@@ -410,25 +456,27 @@ export function ChannelAdmissionMonitor(props: {
                               </span>
                             )}
                           </span>
-                        </span>
-                        <span className='shrink-0 text-right text-[11px] tabular-nums'>
-                          <span className='block font-semibold'>
-                            ×{user.count}
+                          <span className='shrink-0 text-right text-[11px] tabular-nums'>
+                            {user.count > 1 && (
+                              <span className='block font-semibold'>
+                                ×{user.count}
+                              </span>
+                            )}
+                            <span className='text-muted-foreground block'>
+                              {formatAdmissionWaitMs(user.oldest_wait_ms)}
+                            </span>
                           </span>
-                          <span className='text-muted-foreground'>
-                            {formatAdmissionWaitMs(user.oldest_wait_ms)}
-                          </span>
-                        </span>
-                      </li>
-                    )
-                  })}
-                </ul>
-              ) : (
-                <div className='text-muted-foreground mt-2 flex items-center gap-1.5 text-xs'>
-                  <CheckCircle2 className='text-success size-3.5' />
-                  <span>{t('No users are waiting')}</span>
-                </div>
-              )}
+                        </li>
+                      )
+                    })}
+                  </ul>
+                ) : (
+                  <div className='text-muted-foreground mt-2 flex items-center gap-1.5 text-xs'>
+                    <CheckCircle2 className='text-success size-3.5' />
+                    <span>{t('No users are waiting')}</span>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </section>

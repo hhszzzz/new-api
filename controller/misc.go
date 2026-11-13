@@ -22,6 +22,13 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func GetRelayConcurrency(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    middleware.GetStats(),
+	})
+}
+
 func TestStatus(c *gin.Context) {
 	err := model.PingDB()
 	if err != nil {

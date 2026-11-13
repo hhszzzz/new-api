@@ -18,6 +18,13 @@ const (
 	channelAdmissionMaximumPoints = 2000
 )
 
+type ChannelAdmissionActiveUser struct {
+	UserID   int    `json:"user_id"`
+	Username string `json:"username,omitempty"`
+	Priority int    `json:"priority"`
+	Count    int64  `json:"count"`
+}
+
 type ChannelAdmissionWaitingUser struct {
 	UserID       int    `json:"user_id"`
 	Username     string `json:"username,omitempty"`
@@ -39,23 +46,24 @@ type ChannelAdmissionMetricPoint struct {
 }
 
 type ChannelAdmissionStats struct {
-	ChannelID     int                           `json:"channel_id"`
-	WindowStartMs int64                         `json:"window_start_ms"`
-	WindowEndMs   int64                         `json:"window_end_ms"`
-	BucketSeconds int64                         `json:"bucket_seconds"`
-	Active        int64                         `json:"active"`
-	ActiveUsers   int64                         `json:"active_users"`
-	Waiting       int64                         `json:"waiting"`
-	OldestWaitMs  int64                         `json:"oldest_wait_ms"`
-	WaitP50Ms     int64                         `json:"wait_p50_ms"`
-	WaitP95Ms     int64                         `json:"wait_p95_ms"`
-	Grants        int64                         `json:"grants"`
-	WaitedGrants  int64                         `json:"waited_grants"`
-	SoupGrants    int64                         `json:"soup_grants"`
-	QueueFull     int64                         `json:"queue_full"`
-	Timeouts      int64                         `json:"timeouts"`
-	WaitingUsers  []ChannelAdmissionWaitingUser `json:"waiting_users"`
-	MinuteSeries  []ChannelAdmissionMetricPoint `json:"minute_series"`
+	ChannelID      int                           `json:"channel_id"`
+	WindowStartMs  int64                         `json:"window_start_ms"`
+	WindowEndMs    int64                         `json:"window_end_ms"`
+	BucketSeconds  int64                         `json:"bucket_seconds"`
+	Active         int64                         `json:"active"`
+	ActiveUsers    int64                         `json:"active_users"`
+	ActiveUserList []ChannelAdmissionActiveUser  `json:"active_user_list"`
+	Waiting        int64                         `json:"waiting"`
+	OldestWaitMs   int64                         `json:"oldest_wait_ms"`
+	WaitP50Ms      int64                         `json:"wait_p50_ms"`
+	WaitP95Ms      int64                         `json:"wait_p95_ms"`
+	Grants         int64                         `json:"grants"`
+	WaitedGrants   int64                         `json:"waited_grants"`
+	SoupGrants     int64                         `json:"soup_grants"`
+	QueueFull      int64                         `json:"queue_full"`
+	Timeouts       int64                         `json:"timeouts"`
+	WaitingUsers   []ChannelAdmissionWaitingUser `json:"waiting_users"`
+	MinuteSeries   []ChannelAdmissionMetricPoint `json:"minute_series"`
 }
 
 func GetChannelAdmissionStats(ctx context.Context, channelID int, start, end time.Time) (*ChannelAdmissionStats, error) {
@@ -81,12 +89,13 @@ func GetChannelAdmissionStats(ctx context.Context, channelID int, start, end tim
 	keys := channelRateLimitKeys(channelID, 0)
 	startMs, endMs := start.UnixMilli(), end.UnixMilli()
 	stats := &ChannelAdmissionStats{
-		ChannelID:     channelID,
-		WindowStartMs: startMs,
-		WindowEndMs:   endMs,
-		BucketSeconds: channelAdmissionBucketSeconds(endMs - startMs),
-		WaitingUsers:  make([]ChannelAdmissionWaitingUser, 0),
-		MinuteSeries:  make([]ChannelAdmissionMetricPoint, 0),
+		ChannelID:      channelID,
+		WindowStartMs:  startMs,
+		WindowEndMs:    endMs,
+		BucketSeconds:  channelAdmissionBucketSeconds(endMs - startMs),
+		ActiveUserList: make([]ChannelAdmissionActiveUser, 0),
+		WaitingUsers:   make([]ChannelAdmissionWaitingUser, 0),
+		MinuteSeries:   make([]ChannelAdmissionMetricPoint, 0),
 	}
 	if err := fillChannelAdmissionLiveStats(ctx, client, keys, stats); err != nil {
 		return nil, err
@@ -168,10 +177,11 @@ func fillChannelAdmissionLiveStats(ctx context.Context, client *redis.Client, ke
 		return err
 	}
 	stats.Active = int64(len(activeMembers))
-	stats.ActiveUsers, err = channelAdmissionActiveUserCount(ctx, client, keys[7], activeMembers)
+	stats.ActiveUserList, err = channelAdmissionActiveUserStats(ctx, client, keys[7], activeMembers)
 	if err != nil {
 		return err
 	}
+	stats.ActiveUsers = int64(len(stats.ActiveUserList))
 
 	waitingMembers, err := client.ZRange(ctx, keys[4], 0, -1).Result()
 	if err != nil {
@@ -190,25 +200,66 @@ func fillChannelAdmissionLiveStats(ctx context.Context, client *redis.Client, ke
 	return nil
 }
 
-func channelAdmissionActiveUserCount(ctx context.Context, client *redis.Client, metaKey string, members []string) (int64, error) {
+func channelAdmissionActiveUserStats(ctx context.Context, client *redis.Client, metaKey string, members []string) ([]ChannelAdmissionActiveUser, error) {
 	if len(members) == 0 {
-		return 0, nil
+		return []ChannelAdmissionActiveUser{}, nil
 	}
 	values, err := client.HMGet(ctx, metaKey, members...).Result()
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	seen := make(map[int]struct{}, len(values))
+	byUser := make(map[int]*ChannelAdmissionActiveUser, len(values))
 	for _, value := range values {
 		if value == nil {
 			continue
 		}
-		userID, parseErr := strconv.Atoi(strings.SplitN(fmt.Sprint(value), "|", 2)[0])
-		if parseErr == nil && userID > 0 {
-			seen[userID] = struct{}{}
+		parts := strings.SplitN(fmt.Sprint(value), "|", 2)
+		userID, parseErr := strconv.Atoi(parts[0])
+		if parseErr != nil || userID <= 0 {
+			continue
+		}
+		priority := 0
+		if len(parts) > 1 {
+			if parsedPriority, priorityErr := strconv.Atoi(parts[1]); priorityErr == nil {
+				priority = parsedPriority
+			}
+		}
+		entry := byUser[userID]
+		if entry == nil {
+			entry = &ChannelAdmissionActiveUser{
+				UserID:   userID,
+				Priority: priority,
+			}
+			byUser[userID] = entry
+		}
+		entry.Count++
+		if priority > entry.Priority {
+			entry.Priority = priority
 		}
 	}
-	return int64(len(seen)), nil
+	users := make([]ChannelAdmissionActiveUser, 0, len(byUser))
+	for _, entry := range byUser {
+		entry.Username = channelAdmissionUsername(entry.UserID)
+		users = append(users, *entry)
+	}
+	sort.SliceStable(users, func(i, j int) bool {
+		if users[i].Count != users[j].Count {
+			return users[i].Count > users[j].Count
+		}
+		return users[i].UserID < users[j].UserID
+	})
+	return users, nil
+}
+
+func channelAdmissionUsername(userID int) string {
+	if model.DB == nil {
+		return ""
+	}
+	user, err := model.GetUserCache(userID)
+	if err != nil || user == nil {
+		return ""
+	}
+	return user.Username
 }
 
 func channelAdmissionWaitingUserStats(ctx context.Context, client *redis.Client, metaKey string, members []string) ([]ChannelAdmissionWaitingUser, error) {
@@ -293,11 +344,7 @@ func channelAdmissionWaitingUserStats(ctx context.Context, client *redis.Client,
 			Count:        byUser[userID].count,
 			OldestWaitMs: byUser[userID].oldest,
 		}
-		if model.DB != nil {
-			if user, lookupErr := model.GetUserCache(userID); lookupErr == nil && user != nil {
-				entry.Username = user.Username
-			}
-		}
+		entry.Username = channelAdmissionUsername(userID)
 		users = append(users, entry)
 	}
 	sort.SliceStable(users, func(i, j int) bool {

@@ -25,7 +25,7 @@ import { formatLogQuota } from '@/lib/format'
 import { requireServerSuccess } from '@/lib/server-error-message'
 import { cn } from '@/lib/utils'
 
-import { getLogStats, getUserLogStats } from '../api'
+import { getLogStats, getRelayConcurrency, getUserLogStats } from '../api'
 import { DEFAULT_LOG_STATS } from '../constants'
 import { isSameUsageLogsQueryScope } from '../lib/query-params'
 import { buildApiParams } from '../lib/utils'
@@ -81,6 +81,16 @@ export function CommonLogsStats() {
         : undefined,
   })
 
+  const concurrencyQuery = useQuery({
+    queryKey: ['relay-concurrency'],
+    queryFn: getRelayConcurrency,
+    enabled: isAdmin,
+    refetchInterval: 5_000,
+    staleTime: 4_000,
+    retry: false,
+    meta: { errorToast: false },
+  })
+
   if (isLoading) {
     return (
       <div className='flex items-center gap-2'>
@@ -108,6 +118,13 @@ export function CommonLogsStats() {
         value={stats?.tpm || 0}
         accent='bg-slate-400/70'
       />
+      {isAdmin && (
+        <StatBadge
+          label={t('Concurrency')}
+          value={concurrencyQuery.data ?? '—'}
+          accent='bg-emerald-500/70'
+        />
+      )}
     </div>
   )
 }
