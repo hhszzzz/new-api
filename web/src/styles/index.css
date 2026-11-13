@@ -479,6 +479,60 @@ For commercial licensing, please contact support@quantumnous.com
   }
 }
 
+/* Admission queue: a user capsule that just received a waiting request. */
+@keyframes admission-admitted {
+  0% {
+    transform: scale(0.9);
+    background-color: rgba(16, 185, 129, 0.24);
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.55);
+  }
+  45% {
+    transform: scale(1.07);
+    background-color: rgba(16, 185, 129, 0.16);
+    box-shadow: 0 0 0 5px rgba(16, 185, 129, 0.18);
+  }
+  100% {
+    transform: scale(1);
+    background-color: rgba(16, 185, 129, 0);
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .admission-row-admitted {
+    animation: admission-admitted 800ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .admission-queued-enter {
+    animation: admission-queued-enter 260ms ease-out;
+  }
+
+  .admission-count-bump {
+    animation: admission-count-bump 420ms ease-out;
+    transform-origin: left center;
+  }
+}
+
+/* A request that just joined the queue slides in instead of popping. */
+@keyframes admission-queued-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* The big concurrency number bumps when a slot is granted or released. */
+@keyframes admission-count-bump {
+  35% {
+    transform: scale(1.12);
+    color: #10b981;
+  }
+}
+
 /* ── Landing page scroll-triggered animations ── */
 @keyframes landing-fade-up {
   from {

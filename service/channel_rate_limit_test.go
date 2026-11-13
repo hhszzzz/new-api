@@ -760,7 +760,13 @@ func TestChannelRateLimitKeysShareRedisClusterHashTag(t *testing.T) {
 
 func TestChannelAdmissionQueueWaitUpdatesMinuteMetrics(t *testing.T) {
 	env := useChannelRateLimitMiniRedis(t)
-	channel := &model.Channel{Id: 616, ConcurrencyLimit: channelLimitInt(1)}
+	channel := &model.Channel{
+		Id:               616,
+		ConcurrencyLimit: channelLimitInt(1),
+		UserRateLimits: model.ChannelUserRateLimits{
+			{UserId: 611, Priority: 3},
+		},
+	}
 	occupant, allowed := TryAcquireChannelRateLimit(channelRateLimitTestContextForUser(t.Context(), 610), channel)
 	require.True(t, allowed)
 	require.NotNil(t, occupant)
@@ -793,6 +799,7 @@ func TestChannelAdmissionQueueWaitUpdatesMinuteMetrics(t *testing.T) {
 	stats, err := GetChannelAdmissionStats(t.Context(), channel.Id, time.Now().Add(-time.Minute), time.Now())
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), stats.Grants)
+	assert.Equal(t, int64(1), stats.PriorityGrants)
 	assert.Equal(t, int64(1), stats.WaitedGrants)
 	assert.Equal(t, int64(60), stats.BucketSeconds)
 	assert.Equal(t, int64(0), stats.Active)
@@ -891,6 +898,13 @@ func TestChannelAdmissionStatsReportsLiveQueueUsers(t *testing.T) {
 	}).Err())
 	require.NoError(t, env.client.HSet(t.Context(), keys[5], "waiting-lease",
 		fmt.Sprintf("5|0|%d|1", enqueuedLow)).Err())
+	enqueuedLater := now - 2_000
+	laterMember := fmt.Sprintf("%013d|%020d|%s", enqueuedLater, 3, "waiting-later")
+	require.NoError(t, env.client.ZAdd(t.Context(), keys[4], &redis.Z{
+		Score: 0, Member: laterMember,
+	}).Err())
+	require.NoError(t, env.client.HSet(t.Context(), keys[5], "waiting-later",
+		fmt.Sprintf("5|0|%d|3", enqueuedLater)).Err())
 	enqueuedHigh := now - 1_000
 	highMember := fmt.Sprintf("%013d|%020d|%s", enqueuedHigh, 2, "waiting-high")
 	require.NoError(t, env.client.ZAdd(t.Context(), keys[4], &redis.Z{
@@ -911,7 +925,7 @@ func TestChannelAdmissionStatsReportsLiveQueueUsers(t *testing.T) {
 	require.Len(t, stats.ActiveUserList, 1)
 	assert.Equal(t, 5, stats.ActiveUserList[0].UserID)
 	assert.Equal(t, int64(1), stats.ActiveUserList[0].Count)
-	assert.Equal(t, int64(2), stats.Waiting)
+	assert.Equal(t, int64(3), stats.Waiting)
 	require.Len(t, stats.WaitingUsers, 2)
 	assert.Equal(t, 6, stats.WaitingUsers[0].UserID)
 	assert.Equal(t, 2, stats.WaitingUsers[0].Priority)
@@ -919,8 +933,21 @@ func TestChannelAdmissionStatsReportsLiveQueueUsers(t *testing.T) {
 	assert.Equal(t, 5, stats.WaitingUsers[1].UserID)
 	assert.Equal(t, 0, stats.WaitingUsers[1].Priority)
 	assert.Equal(t, 2, stats.WaitingUsers[1].Position)
-	assert.Equal(t, int64(1), stats.WaitingUsers[1].Count)
+	assert.Equal(t, int64(2), stats.WaitingUsers[1].Count)
 	assert.GreaterOrEqual(t, stats.WaitingUsers[1].OldestWaitMs, int64(5_000))
+	require.Len(t, stats.WaitingRequests, 3)
+	assert.Equal(t, 6, stats.WaitingRequests[0].UserID)
+	assert.Equal(t, 1, stats.WaitingRequests[0].Position)
+	assert.Equal(t, 5, stats.WaitingRequests[1].UserID)
+	assert.Equal(t, 2, stats.WaitingRequests[1].Position)
+	assert.GreaterOrEqual(t, stats.WaitingRequests[1].WaitMs, int64(5_000))
+	assert.Equal(t, 5, stats.WaitingRequests[2].UserID)
+	assert.Equal(t, 3, stats.WaitingRequests[2].Position)
+	assert.GreaterOrEqual(t, stats.WaitingRequests[2].WaitMs, int64(2_000))
+	assert.NotEmpty(t, stats.WaitingRequests[0].ID)
+	assert.NotEqual(t, stats.WaitingRequests[0].ID, stats.WaitingRequests[1].ID)
+	assert.NotEqual(t, stats.WaitingRequests[1].ID, stats.WaitingRequests[2].ID)
+	assert.GreaterOrEqual(t, stats.WaitingRequests[1].WaitMs, stats.WaitingRequests[2].WaitMs)
 	assert.GreaterOrEqual(t, stats.OldestWaitMs, int64(5_000))
 }
 

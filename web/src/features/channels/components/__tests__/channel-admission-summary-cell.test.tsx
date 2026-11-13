@@ -118,6 +118,7 @@ it('shows a compact summary and opens the selected channel detail', async () => 
       grants: 20,
       waited_grants: 4,
       soup_grants: 4,
+      priority_grants: 0,
       queue_full: 1,
       timeouts: 0,
       waiting_users: [
@@ -130,12 +131,23 @@ it('shows a compact summary and opens the selected channel detail', async () => 
           oldest_wait_ms: 800,
         },
       ],
+      waiting_requests: [
+        {
+          id: 'req-1',
+          user_id: 5,
+          username: 'cbk',
+          priority: 2,
+          position: 1,
+          wait_ms: 800,
+        },
+      ],
       minute_series: [
         {
           timestamp_ms: 0,
           grants: 2,
           waited: 1,
           soup_grants: 0,
+          priority_grants: 0,
           queue_full: 0,
           timeouts: 0,
           wait_p50_ms: 500,
@@ -152,7 +164,7 @@ it('shows a compact summary and opens the selected channel detail', async () => 
   expect(screen.getAllByTestId('admission-spark-bar')).toHaveLength(1)
   const user = userEvent.setup()
   await user.hover(screen.getByRole('button', { name: /Admission Monitor/ }))
-  expect(await screen.findByText('Queued users')).toBeVisible()
+  expect(await screen.findByText('Queued requests')).toBeVisible()
   await user.click(screen.getByRole('button', { name: /Admission Monitor/ }))
   expect(await screen.findByText('Detailed monitor')).toBeVisible()
   expect(router.state.location.pathname).toBe('/channels/admission')

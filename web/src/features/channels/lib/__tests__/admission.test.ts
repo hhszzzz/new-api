@@ -31,6 +31,7 @@ import {
   formatUserAdmissionLimit,
   hasAdmissionQueue,
   hasCustomizedAdmissionControl,
+  newlyAdmittedUserIds,
   parseAdmissionLiveRefreshSeconds,
 } from '../admission'
 
@@ -211,5 +212,29 @@ describe('admissionLiveStatus', () => {
   test('reports waiting only when nothing is in flight', () => {
     expect(admissionLiveStatus(0, 1)).toBe('waiting')
     expect(admissionLiveStatus(0, 0)).toBe('ready')
+  })
+})
+
+describe('newlyAdmittedUserIds', () => {
+  test('reports users whose active request count grew', () => {
+    const previous = new Map([
+      [1, 1],
+      [3, 0],
+    ])
+    expect(
+      newlyAdmittedUserIds(previous, [
+        { user_id: 1, count: 2 },
+        { user_id: 3, count: 0 },
+      ])
+    ).toEqual([1])
+  })
+
+  test('ignores users that are new to the snapshot and unchanged users', () => {
+    expect(newlyAdmittedUserIds(new Map(), [{ user_id: 7, count: 1 }])).toEqual(
+      [7]
+    )
+    expect(
+      newlyAdmittedUserIds(new Map([[7, 1]]), [{ user_id: 7, count: 1 }])
+    ).toEqual([])
   })
 })

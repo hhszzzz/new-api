@@ -184,6 +184,7 @@ export interface ChannelAdmissionMetricPoint {
   grants: number
   waited: number
   soup_grants: number
+  priority_grants: number
   queue_full: number
   timeouts: number
   wait_p50_ms: number
@@ -206,6 +207,15 @@ export interface ChannelAdmissionWaitingUser {
   oldest_wait_ms: number
 }
 
+export interface ChannelAdmissionWaitingRequest {
+  id: string
+  user_id: number
+  username?: string
+  priority: number
+  position: number
+  wait_ms: number
+}
+
 export interface ChannelAdmissionStats {
   channel_id: number
   window_start_ms: number
@@ -221,9 +231,11 @@ export interface ChannelAdmissionStats {
   grants: number
   waited_grants: number
   soup_grants: number
+  priority_grants: number
   queue_full: number
   timeouts: number
   waiting_users: ChannelAdmissionWaitingUser[]
+  waiting_requests: ChannelAdmissionWaitingRequest[]
   minute_series: ChannelAdmissionMetricPoint[]
 }
 

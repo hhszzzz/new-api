@@ -845,6 +845,7 @@ if waiting_member then
   if was_waiting then metric(wait_bucket(elapsed)) end
 end
 metric('grants')
+if priority > 0 then metric('priority_grants') end
 if soup then metric('soup_grants') end
 return {1, soup and 2 or 0, 0, 0, waiting_count, waiting_member or ''}
 `

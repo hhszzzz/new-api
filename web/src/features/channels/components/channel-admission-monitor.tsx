@@ -19,7 +19,14 @@ For commercial licensing, please contact support@quantumnous.com
 import { useQuery } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { ArrowLeft, CheckCircle2, Gauge, RefreshCw } from 'lucide-react'
-import { useMemo, useState, type ReactNode } from 'react'
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { EmptyState } from '@/components/empty-state'
@@ -49,6 +56,7 @@ import {
   formatAdmissionBucketWidth,
   formatAdmissionWaitMs,
   hasAdmissionQueue,
+  newlyAdmittedUserIds,
   parseAdmissionLiveRefreshSeconds,
 } from '../lib/admission'
 import type { Channel } from '../types'
@@ -231,7 +239,145 @@ export function ChannelAdmissionMonitor(props: {
   const live = liveQuery.data ?? stats
   const activeUsers = live?.active_user_list ?? []
   const waitingUsers = live?.waiting_users ?? []
+  const waitingRequests = useMemo(() => live?.waiting_requests ?? [], [live])
   const waitingCount = live?.waiting ?? 0
+  const activeSignature = activeUsers
+    .map((user) => `${user.user_id}:${user.count}`)
+    .join(',')
+  const previousActiveRef = useRef<Map<number, number>>(new Map())
+  const activeInitializedRef = useRef(false)
+  const [admittedPills, setAdmittedPills] = useState<ReadonlySet<string>>(
+    () => new Set()
+  )
+  useEffect(() => {
+    const next = new Map<number, number>()
+    for (const entry of activeSignature.split(',')) {
+      if (!entry) {
+        continue
+      }
+      const [userId, count] = entry.split(':').map(Number)
+      next.set(userId, count)
+    }
+    const previous = previousActiveRef.current
+    previousActiveRef.current = next
+    if (!activeInitializedRef.current) {
+      activeInitializedRef.current = true
+      return
+    }
+    const increased = newlyAdmittedUserIds(
+      previous,
+      Array.from(next, ([user_id, count]) => ({ user_id, count }))
+    )
+    const pillKeys: string[] = []
+    for (const userId of increased) {
+      const before = previous.get(userId) ?? 0
+      const after = next.get(userId) ?? 0
+      for (let index = before; index < after; index++) {
+        pillKeys.push(`${userId}-${index}`)
+      }
+    }
+    if (pillKeys.length === 0) {
+      return
+    }
+    const showTimer = window.setTimeout(
+      () => setAdmittedPills(new Set(pillKeys)),
+      0
+    )
+    const clearTimer = window.setTimeout(() => setAdmittedPills(new Set()), 900)
+    return () => {
+      window.clearTimeout(showTimer)
+      window.clearTimeout(clearTimer)
+    }
+  }, [activeSignature])
+  const queuedRowRefs = useRef<Map<number, HTMLLIElement>>(new Map())
+  const queuedRowSnapshotsRef = useRef<
+    Map<number, { rect: DOMRect; capturedAt: number }>
+  >(new Map())
+  const activePillRefs = useRef<Map<string, HTMLElement>>(new Map())
+  useLayoutEffect(() => {
+    for (const request of waitingRequests) {
+      const element = queuedRowRefs.current.get(request.user_id)
+      if (element) {
+        queuedRowSnapshotsRef.current.set(request.user_id, {
+          rect: element.getBoundingClientRect(),
+          capturedAt: Date.now(),
+        })
+      }
+    }
+  }, [waitingRequests])
+  useLayoutEffect(() => {
+    if (
+      admittedPills.size === 0 ||
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    ) {
+      return
+    }
+    for (const pillKey of admittedPills) {
+      const pill = activePillRefs.current.get(pillKey)
+      if (!pill) {
+        continue
+      }
+      const userId = Number(pillKey.slice(0, pillKey.lastIndexOf('-')))
+      const snapshot = queuedRowSnapshotsRef.current.get(userId)
+      if (!snapshot || Date.now() - snapshot.capturedAt > 5_000) {
+        continue
+      }
+      const { rect: start } = snapshot
+      const target = pill.getBoundingClientRect()
+      if (
+        Math.abs(target.left - start.left) < 2 &&
+        Math.abs(target.top - start.top) < 2
+      ) {
+        continue
+      }
+      const ghost = pill.cloneNode(true) as HTMLElement
+      ghost.removeAttribute('data-admission-user')
+      ghost.classList.remove('admission-row-admitted')
+      ghost.setAttribute('aria-hidden', 'true')
+      const startLeft = start.left + 12
+      const startTop = start.top + (start.height - target.height) / 2
+      const deltaX = target.left - startLeft
+      const deltaY = target.top - startTop
+      ghost.style.cssText = [
+        'position: fixed',
+        `left: ${startLeft}px`,
+        `top: ${startTop}px`,
+        `width: ${target.width}px`,
+        `height: ${target.height}px`,
+        'margin: 0',
+        'z-index: 60',
+        'pointer-events: none',
+        'background-color: var(--background)',
+        'transform-origin: top left',
+        'will-change: transform, opacity',
+        'box-shadow: 0 12px 28px rgba(16, 185, 129, 0.28)',
+      ].join(';')
+      document.body.appendChild(ghost)
+      const animation = ghost.animate(
+        [
+          { transform: 'translate3d(0, 0, 0) scale(0.8)', opacity: 0.35 },
+          {
+            transform: `translate3d(${deltaX * 0.72}px, ${deltaY * 0.72}px, 0) scale(1.05)`,
+            opacity: 0.9,
+            offset: 0.38,
+          },
+          {
+            transform: `translate3d(${deltaX * 0.94}px, ${deltaY * 0.94}px, 0) scale(1)`,
+            opacity: 0.12,
+            offset: 0.68,
+          },
+          {
+            transform: `translate3d(${deltaX}px, ${deltaY}px, 0) scale(1)`,
+            opacity: 0,
+          },
+        ],
+        { duration: 700, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' }
+      )
+      const removeGhost = () => ghost.remove()
+      animation.addEventListener('finish', removeGhost, { once: true })
+      animation.addEventListener('cancel', removeGhost, { once: true })
+    }
+  }, [admittedPills])
   const selectedChannel =
     sortedChannels.find((channel) => channel.id === channelId) ??
     selectedChannelQuery.data
@@ -360,7 +506,12 @@ export function ChannelAdmissionMonitor(props: {
                 {t('Concurrency')}
               </div>
               <div className='mt-1 font-mono text-3xl font-semibold tabular-nums'>
-                {formatCount(live?.active)}
+                <span
+                  key={live?.active}
+                  className='admission-count-bump inline-block'
+                >
+                  {formatCount(live?.active)}
+                </span>
                 {limit > 0 && (
                   <span className='text-muted-foreground text-xl'>
                     {' / '}
@@ -369,30 +520,36 @@ export function ChannelAdmissionMonitor(props: {
                 )}
               </div>
               <div className='border-border/50 mt-3 border-t pt-3 lg:mt-auto'>
-                <div className='text-muted-foreground text-[10px] font-medium'>
-                  {t('Active users')}
-                </div>
                 {activeUsers.length > 0 ? (
                   <div className='mt-1.5 flex flex-wrap gap-1.5'>
-                    {activeUsers.map((user) => {
+                    {activeUsers.flatMap((user) => {
                       const name =
                         user.username || `${t('User')} #${user.user_id}`
-                      let label = name
-                      if (user.count > 1) {
-                        label += ` ×${user.count}`
-                      }
-                      if (user.priority !== 0) {
-                        label += ` · ${t('Priority')} ${user.priority}`
-                      }
-                      return (
-                        <StatusBadge
-                          key={user.user_id}
-                          label={label}
-                          variant='blue'
-                          size='sm'
-                          copyable={false}
-                        />
-                      )
+                      return Array.from({ length: user.count }, (_, index) => {
+                        const pillKey = `${user.user_id}-${index}`
+                        const justAdmitted = admittedPills.has(pillKey)
+                        return (
+                          <div
+                            key={pillKey}
+                            data-admission-user={user.user_id}
+                            ref={(element) => {
+                              if (element) {
+                                activePillRefs.current.set(pillKey, element)
+                              } else {
+                                activePillRefs.current.delete(pillKey)
+                              }
+                            }}
+                            className={cn(
+                              'bg-background/70 border-border/40 inline-flex items-center rounded-full border px-2 py-0.5 text-xs',
+                              justAdmitted && 'admission-row-admitted'
+                            )}
+                          >
+                            <span className='max-w-32 truncate font-medium'>
+                              {name}
+                            </span>
+                          </div>
+                        )
+                      })
                     })}
                   </div>
                 ) : (
@@ -423,28 +580,38 @@ export function ChannelAdmissionMonitor(props: {
               <div className='bg-muted/30 border-border/60 flex flex-1 flex-col rounded-xl border p-3'>
                 <header className='flex items-center gap-2'>
                   <span className='text-xs font-medium'>
-                    {t('Queued users')}
+                    {t('Queued requests')}
                   </span>
                   <span className='text-muted-foreground ml-auto text-xs tabular-nums'>
-                    {waitingUsers.length}
+                    {waitingRequests.length}
                   </span>
                 </header>
-                {waitingUsers.length > 0 ? (
+                {waitingRequests.length > 0 ? (
                   <ul className='mt-2 flex flex-wrap gap-1.5'>
-                    {waitingUsers.map((user) => {
+                    {waitingRequests.map((request) => {
                       const displayName =
-                        user.username || `${t('User')} #${user.user_id}`
+                        request.username || `${t('User')} #${request.user_id}`
                       const meta: string[] = []
-                      if (user.username) {
-                        meta.push(`#${user.user_id}`)
+                      if (request.username) {
+                        meta.push(`#${request.user_id}`)
                       }
-                      if (user.priority !== 0) {
-                        meta.push(`${t('Priority')} ${user.priority}`)
+                      if (request.priority !== 0) {
+                        meta.push(`${t('Priority')} ${request.priority}`)
                       }
                       return (
                         <li
-                          key={user.user_id}
-                          className='bg-background/70 border-border/40 flex w-full items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 sm:w-56'
+                          key={request.id}
+                          ref={(element) => {
+                            if (element) {
+                              queuedRowRefs.current.set(
+                                request.user_id,
+                                element
+                              )
+                            } else {
+                              queuedRowRefs.current.delete(request.user_id)
+                            }
+                          }}
+                          className='admission-queued-enter bg-background/70 border-border/40 flex w-full items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 sm:w-56'
                         >
                           <span className='min-w-0'>
                             <span className='block truncate text-xs font-medium'>
@@ -456,15 +623,8 @@ export function ChannelAdmissionMonitor(props: {
                               </span>
                             )}
                           </span>
-                          <span className='shrink-0 text-right text-[11px] tabular-nums'>
-                            {user.count > 1 && (
-                              <span className='block font-semibold'>
-                                ×{user.count}
-                              </span>
-                            )}
-                            <span className='text-muted-foreground block'>
-                              {formatAdmissionWaitMs(user.oldest_wait_ms)}
-                            </span>
+                          <span className='text-muted-foreground shrink-0 text-right text-[11px] tabular-nums'>
+                            {formatAdmissionWaitMs(request.wait_ms)}
                           </span>
                         </li>
                       )
@@ -489,7 +649,7 @@ export function ChannelAdmissionMonitor(props: {
               {t('Aggregated every {{interval}}', { interval: bucketWidth })}
             </span>
           </header>
-          <div className='grid grid-cols-2 gap-2 p-3 sm:grid-cols-3 sm:p-4 lg:grid-cols-4 xl:grid-cols-7'>
+          <div className='grid grid-cols-2 gap-2 p-3 sm:grid-cols-3 sm:p-4 lg:grid-cols-4 xl:grid-cols-8'>
             <MetricCell
               label={t('Grants')}
               value={formatCount(stats?.grants)}
@@ -509,6 +669,10 @@ export function ChannelAdmissionMonitor(props: {
             <MetricCell
               label={t('Lower-priority grants')}
               value={formatCount(stats?.soup_grants)}
+            />
+            <MetricCell
+              label={t('Priority grants')}
+              value={formatCount(stats?.priority_grants)}
             />
             <MetricCell
               label={t('Wait p50')}
@@ -554,12 +718,17 @@ export function ChannelAdmissionMonitor(props: {
             points={stats?.minute_series ?? []}
             bucketSeconds={stats?.bucket_seconds ?? 60}
             series={[
-              { key: 'queue_full', label: 'Queue full', color: '#f97316' },
-              { key: 'timeouts', label: 'Timeouts', color: '#8b5cf6' },
+              { key: 'queue_full', label: 'Queue full', color: '#f59e0b' },
+              { key: 'timeouts', label: 'Timeouts', color: '#ef4444' },
               {
                 key: 'soup_grants',
                 label: 'Lower-priority grants',
-                color: '#0ea5e9',
+                color: '#8b5cf6',
+              },
+              {
+                key: 'priority_grants',
+                label: 'Priority grants',
+                color: '#10b981',
               },
             ]}
           />

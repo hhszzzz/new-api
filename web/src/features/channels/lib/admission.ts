@@ -20,6 +20,7 @@ import { formatUseTime } from '@/lib/format'
 
 import type {
   Channel,
+  ChannelAdmissionActiveUser,
   ChannelAdmissionMetricPoint,
   ChannelUserRateLimit,
 } from '../types'
@@ -113,6 +114,19 @@ export function admissionLiveStatus(
     return 'waiting'
   }
   return 'ready'
+}
+
+/**
+ * Users whose in-flight lease count grew between two live snapshots. A growth
+ * means a queued request was admitted (or a fresh request took a free slot).
+ */
+export function newlyAdmittedUserIds(
+  previous: ReadonlyMap<number, number>,
+  activeUsers: Array<Pick<ChannelAdmissionActiveUser, 'user_id' | 'count'>>
+): number[] {
+  return activeUsers
+    .filter((user) => user.count > (previous.get(user.user_id) ?? 0))
+    .map((user) => user.user_id)
 }
 
 export function effectiveAdmissionControl(

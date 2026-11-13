@@ -75,8 +75,8 @@ export function ChannelAdmissionSummaryCell(props: { channel: Channel }) {
       : activeCount
   const waiting = stats?.waiting ?? 0
   const waitingText = hasStats ? formatCount(waiting) : '—'
-  const waitingUsers = stats?.waiting_users ?? []
-  const queuedPreview = waitingUsers.slice(0, 5)
+  const waitingRequests = stats?.waiting_requests ?? []
+  const queuedPreview = waitingRequests.slice(0, 5)
   const activeUsers = stats?.active_user_list ?? []
   const activePreview = activeUsers.slice(0, 5)
   const sparkBars = admissionSparklineBars(stats?.minute_series ?? [], 24)
@@ -215,7 +215,6 @@ export function ChannelAdmissionSummaryCell(props: { channel: Channel }) {
                   >
                     <span className='truncate'>
                       {user.username || `${t('User')} #${user.user_id}`}
-                      {user.priority !== 0 && ` · P${user.priority}`}
                     </span>
                     {user.count > 1 && (
                       <span className='text-muted-foreground shrink-0 tabular-nums'>
@@ -233,29 +232,29 @@ export function ChannelAdmissionSummaryCell(props: { channel: Channel }) {
             )}
             {queuedPreview.length > 0 && (
               <div className='border-t pt-1'>
-                <div className='font-medium'>{t('Queued users')}</div>
-                {queuedPreview.map((user) => (
+                <div className='font-medium'>{t('Queued requests')}</div>
+                {queuedPreview.map((request) => (
                   <div
-                    key={user.user_id}
+                    key={`${request.position}-${request.user_id}`}
                     className='flex items-center justify-between gap-3'
                   >
                     <span className='truncate'>
-                      {user.position > 0 && (
+                      {request.position > 0 && (
                         <span className='text-muted-foreground'>
-                          {user.position}.
+                          {request.position}.
                         </span>
                       )}{' '}
-                      {user.username || `${t('User')} #${user.user_id}`}
-                      {user.priority !== 0 && ` · P${user.priority}`}
+                      {request.username || `${t('User')} #${request.user_id}`}
+                      {request.priority !== 0 && ` · P${request.priority}`}
                     </span>
                     <span className='text-muted-foreground shrink-0 tabular-nums'>
-                      {formatAdmissionWaitMs(user.oldest_wait_ms)}
+                      {formatAdmissionWaitMs(request.wait_ms)}
                     </span>
                   </div>
                 ))}
-                {waitingUsers.length > queuedPreview.length && (
+                {waitingRequests.length > queuedPreview.length && (
                   <div className='text-muted-foreground'>
-                    +{waitingUsers.length - queuedPreview.length}
+                    +{waitingRequests.length - queuedPreview.length}
                   </div>
                 )}
               </div>

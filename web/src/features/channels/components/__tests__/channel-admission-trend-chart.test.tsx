@@ -65,6 +65,7 @@ function point(
     grants: 0,
     waited: 0,
     soup_grants: 0,
+    priority_grants: 0,
     queue_full: 0,
     timeouts: 0,
     wait_p50_ms: 0,
