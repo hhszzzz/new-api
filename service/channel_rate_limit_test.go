@@ -611,6 +611,13 @@ func TestChannelRateLimitRPMUsesRedisMinuteAndIsolatesChannels(t *testing.T) {
 		require.NotNil(t, guard)
 		guard.Release()
 	}
+	keys := channelRateLimitKeys(channel.Id, 0)
+	rpmUsers, err := env.client.ZRange(t.Context(), keys[12], 0, -1).Result()
+	require.NoError(t, err)
+	assert.Equal(t, []string{"0"}, rpmUsers, "channel RPM usage must also be attributed per user")
+	userRPMCount, err := env.client.HGet(t.Context(), keys[2], "count").Int()
+	require.NoError(t, err)
+	assert.Equal(t, 2, userRPMCount)
 	guard, allowed := TryAcquireChannelRateLimit(newUserRateLimitTestContext(t.Context()), channel)
 	assert.False(t, allowed)
 	assert.Nil(t, guard)
@@ -747,7 +754,7 @@ func TestChannelConcurrencyLeaseRenewsWithServerTime(t *testing.T) {
 
 func TestChannelRateLimitKeysShareRedisClusterHashTag(t *testing.T) {
 	keys := channelRateLimitKeys(99, 7)
-	require.Len(t, keys, 12)
+	require.Len(t, keys, 13)
 	for _, key := range keys {
 		assert.Contains(t, key, "{channel:99}")
 	}
@@ -756,6 +763,7 @@ func TestChannelRateLimitKeysShareRedisClusterHashTag(t *testing.T) {
 	assert.Contains(t, keys[4], ":waiting")
 	assert.Contains(t, keys[8], ":metrics:values")
 	assert.Contains(t, keys[11], ":waiting:sequence")
+	assert.Contains(t, keys[12], ":rpm:users")
 }
 
 func TestChannelAdmissionQueueWaitUpdatesMinuteMetrics(t *testing.T) {
@@ -912,6 +920,15 @@ func TestChannelAdmissionStatsReportsLiveQueueUsers(t *testing.T) {
 	}).Err())
 	require.NoError(t, env.client.HSet(t.Context(), keys[5], "waiting-high",
 		fmt.Sprintf("6|2|%d|2", enqueuedHigh)).Err())
+	nowMinute := time.Now().Unix() / 60
+	require.NoError(t, env.client.HSet(t.Context(), keys[0],
+		"minute", nowMinute, "count", 17).Err())
+	require.NoError(t, env.client.HSet(t.Context(),
+		fmt.Sprintf("channel_rate_limit:{channel:%d}:rpm:user:%d", channelID, 5),
+		"minute", nowMinute, "count", 6).Err())
+	require.NoError(t, env.client.ZAdd(t.Context(), keys[12], &redis.Z{
+		Score: float64(now), Member: "5",
+	}).Err())
 
 	stats, err := GetChannelAdmissionStats(
 		t.Context(),
@@ -925,6 +942,10 @@ func TestChannelAdmissionStatsReportsLiveQueueUsers(t *testing.T) {
 	require.Len(t, stats.ActiveUserList, 1)
 	assert.Equal(t, 5, stats.ActiveUserList[0].UserID)
 	assert.Equal(t, int64(1), stats.ActiveUserList[0].Count)
+	assert.Equal(t, int64(17), stats.RPM)
+	require.Len(t, stats.RPMUsers, 1)
+	assert.Equal(t, 5, stats.RPMUsers[0].UserID)
+	assert.Equal(t, int64(6), stats.RPMUsers[0].Count)
 	assert.Equal(t, int64(3), stats.Waiting)
 	require.Len(t, stats.WaitingUsers, 2)
 	assert.Equal(t, 6, stats.WaitingUsers[0].UserID)

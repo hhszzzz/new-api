@@ -55,6 +55,12 @@ type ChannelAdmissionMetricPoint struct {
 	WaitP95Ms      int64 `json:"wait_p95_ms"`
 }
 
+type ChannelAdmissionRPMUser struct {
+	UserID   int    `json:"user_id"`
+	Username string `json:"username,omitempty"`
+	Count    int64  `json:"count"`
+}
+
 type ChannelAdmissionStats struct {
 	ChannelID       int                              `json:"channel_id"`
 	WindowStartMs   int64                            `json:"window_start_ms"`
@@ -63,6 +69,8 @@ type ChannelAdmissionStats struct {
 	Active          int64                            `json:"active"`
 	ActiveUsers     int64                            `json:"active_users"`
 	ActiveUserList  []ChannelAdmissionActiveUser     `json:"active_user_list"`
+	RPM             int64                            `json:"rpm"`
+	RPMUsers        []ChannelAdmissionRPMUser        `json:"rpm_users"`
 	Waiting         int64                            `json:"waiting"`
 	OldestWaitMs    int64                            `json:"oldest_wait_ms"`
 	WaitP50Ms       int64                            `json:"wait_p50_ms"`
@@ -106,6 +114,7 @@ func GetChannelAdmissionStats(ctx context.Context, channelID int, start, end tim
 		WindowEndMs:     endMs,
 		BucketSeconds:   channelAdmissionBucketSeconds(endMs - startMs),
 		ActiveUserList:  make([]ChannelAdmissionActiveUser, 0),
+		RPMUsers:        make([]ChannelAdmissionRPMUser, 0),
 		WaitingUsers:    make([]ChannelAdmissionWaitingUser, 0),
 		WaitingRequests: make([]ChannelAdmissionWaitingRequest, 0),
 		MinuteSeries:    make([]ChannelAdmissionMetricPoint, 0),
@@ -187,6 +196,9 @@ func GetChannelAdmissionStats(ctx context.Context, channelID int, start, end tim
 }
 
 func fillChannelAdmissionLiveStats(ctx context.Context, client *redis.Client, keys []string, stats *ChannelAdmissionStats) error {
+	if err := channelAdmissionRPMStats(ctx, client, stats, keys[0], keys[12]); err != nil {
+		return err
+	}
 	activeMembers, err := client.ZRange(ctx, keys[1], 0, -1).Result()
 	if err != nil {
 		return err
@@ -212,6 +224,67 @@ func fillChannelAdmissionLiveStats(ctx context.Context, client *redis.Client, ke
 			stats.OldestWaitMs = user.OldestWaitMs
 		}
 	}
+	return nil
+}
+
+func channelAdmissionRPMStats(ctx context.Context, client *redis.Client, stats *ChannelAdmissionStats, rpmKey, usersKey string) error {
+	nowMinute := time.Now().Unix() / 60
+	channelValues, err := client.HMGet(ctx, rpmKey, "minute", "count").Result()
+	if err != nil {
+		return err
+	}
+	if len(channelValues) == 2 && channelValues[0] != nil && channelValues[1] != nil {
+		minute, minuteErr := strconv.ParseInt(fmt.Sprint(channelValues[0]), 10, 64)
+		count, countErr := strconv.ParseInt(fmt.Sprint(channelValues[1]), 10, 64)
+		if minuteErr == nil && countErr == nil && minute == nowMinute {
+			stats.RPM = count
+		}
+	}
+
+	userIDs, err := client.ZRange(ctx, usersKey, 0, -1).Result()
+	if err != nil || len(userIDs) == 0 {
+		return err
+	}
+	tag := strings.TrimSuffix(rpmKey, ":rpm")
+	pipe := client.Pipeline()
+	commands := make([]*redis.SliceCmd, len(userIDs))
+	parsedIDs := make([]int, len(userIDs))
+	for index, userIDText := range userIDs {
+		userID, parseErr := strconv.Atoi(userIDText)
+		if parseErr != nil || userID <= 0 {
+			continue
+		}
+		parsedIDs[index] = userID
+		commands[index] = pipe.HMGet(ctx, fmt.Sprintf("%s:rpm:user:%d", tag, userID), "minute", "count")
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return err
+	}
+	for index, command := range commands {
+		if command == nil {
+			continue
+		}
+		values := command.Val()
+		if len(values) != 2 || values[0] == nil || values[1] == nil {
+			continue
+		}
+		minute, minuteErr := strconv.ParseInt(fmt.Sprint(values[0]), 10, 64)
+		count, countErr := strconv.ParseInt(fmt.Sprint(values[1]), 10, 64)
+		if minuteErr != nil || countErr != nil || minute != nowMinute || count <= 0 {
+			continue
+		}
+		stats.RPMUsers = append(stats.RPMUsers, ChannelAdmissionRPMUser{
+			UserID:   parsedIDs[index],
+			Username: channelAdmissionUsername(parsedIDs[index]),
+			Count:    count,
+		})
+	}
+	sort.SliceStable(stats.RPMUsers, func(i, j int) bool {
+		if stats.RPMUsers[i].Count != stats.RPMUsers[j].Count {
+			return stats.RPMUsers[i].Count > stats.RPMUsers[j].Count
+		}
+		return stats.RPMUsers[i].UserID < stats.RPMUsers[j].UserID
+	})
 	return nil
 }
 

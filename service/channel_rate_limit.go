@@ -685,15 +685,6 @@ end
 redis.call('ZREMRANGEBYSCORE', active_user_key, '-inf', now_ms - lease_ttl)
 local existing_active = redis.call('ZSCORE', KEYS[2], lease_id)
 if existing_active then return {1, 0, 0, 0, 0, 0} end
-local total_rpm_blocked = false
-if rpm_limit > 0 and tonumber(redis.call('HGET', KEYS[1], 'minute')) == minute then
-  total_rpm_blocked = (tonumber(redis.call('HGET', KEYS[1], 'count')) or 0) >= rpm_limit
-end
-local user_rpm_blocked = false
-if user_rpm_limit > 0 and tonumber(redis.call('HGET', KEYS[3], 'minute')) == minute then
-  user_rpm_blocked = (tonumber(redis.call('HGET', KEYS[3], 'count')) or 0) >= user_rpm_limit
-end
-if total_rpm_blocked or user_rpm_blocked then return {-1, 0, total_rpm_blocked and 1 or 0, user_rpm_blocked and 1 or 0, 0, 0} end
 local stale_members = redis.call('ZRANGE', KEYS[5], 0, -1)
 for _, member in ipairs(stale_members) do
   local queued_id = string.match(member, '^%d+|%d+|(.+)$')
@@ -717,6 +708,22 @@ if stored_wait_meta then
     wait_enqueued = tonumber(enqueued)
     waiting_member = string.format('%013d|%020d|%s', tonumber(enqueued), tonumber(sequence), lease_id)
   end
+end
+local total_rpm_blocked = false
+if rpm_limit > 0 and tonumber(redis.call('HGET', KEYS[1], 'minute')) == minute then
+  total_rpm_blocked = (tonumber(redis.call('HGET', KEYS[1], 'count')) or 0) >= rpm_limit
+end
+local user_rpm_blocked = false
+if user_rpm_limit > 0 and tonumber(redis.call('HGET', KEYS[3], 'minute')) == minute then
+  user_rpm_blocked = (tonumber(redis.call('HGET', KEYS[3], 'count')) or 0) >= user_rpm_limit
+end
+if total_rpm_blocked or user_rpm_blocked then
+  if waiting_member then
+    redis.call('ZREM', KEYS[5], waiting_member)
+    redis.call('ZREM', waiting_user_key, waiting_member)
+    redis.call('HDEL', KEYS[6], lease_id)
+  end
+  return {-1, 0, total_rpm_blocked and 1 or 0, user_rpm_blocked and 1 or 0, 0, waiting_member or ''}
 end
 local total_active = tonumber(redis.call('ZCARD', KEYS[2]))
 local total_blocked = channel_limit > 0 and total_active >= channel_limit
@@ -818,11 +825,13 @@ if rpm_limit > 0 then
   redis.call('HSET', KEYS[1], 'minute', minute, 'count', count + 1)
   redis.call('PEXPIRE', KEYS[1], 120000)
 end
-if user_rpm_limit > 0 then
+if rpm_limit > 0 or user_rpm_limit > 0 then
   local count = tonumber(redis.call('HGET', KEYS[3], 'count')) or 0
   if tonumber(redis.call('HGET', KEYS[3], 'minute')) ~= minute then count = 0 end
   redis.call('HSET', KEYS[3], 'minute', minute, 'count', count + 1)
   redis.call('PEXPIRE', KEYS[3], 120000)
+  redis.call('ZADD', KEYS[13], now_ms, user_id)
+  redis.call('PEXPIRE', KEYS[13], 120000)
 end
 if channel_limit > 0 or user_limit > 0 then
   redis.call('ZADD', KEYS[2], now_ms, lease_id)
@@ -998,6 +1007,7 @@ func channelRateLimitKeys(channelID, userId int) []string {
 		"channel_rate_limit:" + tag + ":metrics:index",
 		"channel_rate_limit:" + tag + ":soup",
 		"channel_rate_limit:" + tag + ":waiting:sequence",
+		"channel_rate_limit:" + tag + ":rpm:users",
 	}
 }
 
