@@ -17,17 +17,18 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Link } from '@tanstack/react-router'
-import { ChevronDown, Settings2 } from 'lucide-react'
+import { ChevronDown, Settings2, SlidersHorizontal } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { StatusBadge } from '@/components/status-badge'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from '@/components/ui/collapsible'
+import { IconBadge } from '@/components/ui/icon-badge'
 import { cn } from '@/lib/utils'
 
 import {
@@ -79,7 +80,7 @@ export function ChannelAdmissionSettingsPanel(props: { channel: Channel }) {
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
       <section className='bg-card overflow-hidden rounded-2xl border shadow-xs'>
-        <header className='flex flex-wrap items-center gap-2 px-4 py-2.5'>
+        <header className='flex flex-wrap items-center gap-2 px-4 py-3 sm:px-5'>
           <CollapsibleTrigger
             render={
               <button
@@ -89,13 +90,13 @@ export function ChannelAdmissionSettingsPanel(props: { channel: Channel }) {
               />
             }
           >
+            <IconBadge tone='neutral' size='sm'>
+              <SlidersHorizontal />
+            </IconBadge>
             <h2 className='text-sm font-semibold'>{t('Admission settings')}</h2>
-            <StatusBadge
-              label={customized ? t('Customized') : t('Default')}
-              variant={customized ? 'blue' : 'neutral'}
-              size='sm'
-              copyable={false}
-            />
+            <Badge variant={customized ? 'secondary' : 'outline'}>
+              {customized ? t('Customized') : t('Default')}
+            </Badge>
             <ChevronDown
               className={cn(
                 'text-muted-foreground size-4 transition-transform',
@@ -115,17 +116,17 @@ export function ChannelAdmissionSettingsPanel(props: { channel: Channel }) {
           </Button>
         </header>
         <CollapsibleContent>
-          <div className='space-y-3 border-t p-3 sm:p-4'>
+          <div className='flex flex-col gap-3 border-t p-4 sm:p-5'>
             <p className='text-muted-foreground text-xs'>
               {t(
                 'These values control how this channel queues requests when its concurrency limit is reached.'
               )}
             </p>
-            <dl className='grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4'>
+            <dl className='grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4'>
               {items.map(([label, value]) => (
                 <div
                   key={String(label)}
-                  className='bg-muted/40 border-border/50 rounded-lg border px-2.5 py-2'
+                  className='bg-muted/40 rounded-xl px-3 py-2.5'
                 >
                   <dt className='text-muted-foreground truncate text-[11px] font-medium'>
                     {label}
@@ -140,19 +141,19 @@ export function ChannelAdmissionSettingsPanel(props: { channel: Channel }) {
               ))}
             </dl>
             {userLimits.length > 0 && (
-              <div className='bg-muted/30 border-border/60 space-y-2 rounded-xl border p-3'>
+              <div className='bg-muted/30 flex flex-col gap-2 rounded-xl p-3'>
                 <p className='text-muted-foreground text-[11px] font-medium'>
                   {t('Per-user limits')}
                 </p>
                 <div className='flex flex-wrap gap-1.5'>
                   {userLimits.map((limit) => (
-                    <StatusBadge
+                    <Badge
                       key={limit.user_id}
-                      label={formatUserAdmissionLimit(limit, t)}
-                      variant='neutral'
-                      size='sm'
-                      copyable={false}
-                    />
+                      variant='secondary'
+                      className='font-mono font-normal tabular-nums'
+                    >
+                      {formatUserAdmissionLimit(limit, t)}
+                    </Badge>
                   ))}
                 </div>
               </div>

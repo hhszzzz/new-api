@@ -9159,6 +9159,9 @@
     "Admission queue is inactive": "Admission queue is inactive",
     "This channel has no concurrency limit, so requests are never queued. Configure a concurrency limit to start using the queue.": "This channel has no concurrency limit, so requests are never queued. Configure a concurrency limit to start using the queue.",
     "Create a channel before monitoring its admission queue.": "Create a channel before monitoring its admission queue.",
-    "Search channels": "Search channels"
+    "Search channels": "Search channels",
+    "RPM limit reached": "RPM limit reached",
+    "RPM users": "RPM users",
+    "No RPM usage this minute": "No RPM usage this minute"
   }
 }

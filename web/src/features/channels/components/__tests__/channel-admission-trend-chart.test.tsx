@@ -76,6 +76,7 @@ function point(
 
 function renderChart(props: {
   title: string
+  summary?: string
   points: ChannelAdmissionMetricPoint[]
   series: typeof countSeries
   unit?: string
@@ -84,6 +85,7 @@ function renderChart(props: {
     <I18nextProvider i18n={i18n}>
       <ChannelAdmissionTrendChart
         title={props.title}
+        summary={props.summary ? <span>{props.summary}</span> : undefined}
         points={props.points}
         bucketSeconds={300}
         series={props.series}
@@ -126,6 +128,17 @@ it('renders area buckets with integer count ticks', async () => {
     expect.objectContaining({ series: 'Grants', value: 2 }),
   ])
   expect(spec.axes[1].tick?.noDecimals).toBe(true)
+})
+
+it('renders optional header summary alongside the bucket interval', () => {
+  renderChart({
+    title: 'Admissions',
+    summary: 'Grants 12',
+    points: [],
+    series: countSeries,
+  })
+
+  expect(screen.getByText('Grants 12')).toBeVisible()
 })
 
 it('formats wait-time values in seconds', async () => {

@@ -18,9 +18,12 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
+import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Separator } from '@/components/ui/separator'
 import {
   Tooltip,
   TooltipContent,
@@ -34,12 +37,71 @@ import { cn } from '@/lib/utils'
 
 import { getChannelAdmissionStats } from '../api'
 import {
-  admissionSparklineBars,
+  admissionRpmBlocked,
   effectiveAdmissionControl,
   formatAdmissionWaitMs,
-  formatUserAdmissionLimit,
+  hasAdmissionQueue,
 } from '../lib/admission'
 import type { Channel } from '../types'
+
+const MAX_SEGMENTED_SLOTS = 8
+
+function rpmUsageBarClass(ratio: number): string {
+  if (ratio >= 1) {
+    return 'bg-destructive'
+  }
+  if (ratio >= 0.8) {
+    return 'bg-warning'
+  }
+  return 'bg-success'
+}
+
+function AdmissionUsageBar(props: { ratio: number; toneClass: string }) {
+  const clamped = Math.max(0, Math.min(1, props.ratio))
+  return (
+    <span
+      aria-hidden='true'
+      data-slot='admission-usage-bar'
+      className='bg-foreground/10 block h-1 w-full overflow-hidden rounded-full'
+    >
+      <span
+        className={cn(
+          'block h-full rounded-full transition-[width,background-color]',
+          props.toneClass
+        )}
+        style={{ width: `${clamped * 100}%` }}
+      />
+    </span>
+  )
+}
+
+function AdmissionSlotGauge(props: {
+  active: number
+  limit: number
+  toneClass: string
+}) {
+  return (
+    <span
+      aria-hidden='true'
+      data-slot='admission-slot-gauge'
+      className='grid w-full gap-0.5'
+      style={{
+        gridTemplateColumns: `repeat(${props.limit}, minmax(0, 1fr))`,
+      }}
+    >
+      {Array.from({ length: props.limit }, (_, index) => (
+        <span
+          key={index}
+          data-occupied={index < props.active ? 'true' : 'false'}
+          className={cn(
+            'h-1 rounded-full transition-colors',
+            index < props.active ? props.toneClass : 'bg-foreground/10'
+          )}
+        />
+      ))}
+    </span>
+  )
+}
 
 export function ChannelAdmissionSummaryCell(props: { channel: Channel }) {
   const { t, i18n } = useTranslation()
@@ -47,8 +109,6 @@ export function ChannelAdmissionSummaryCell(props: { channel: Channel }) {
   const statsQuery = useQuery({
     queryKey: ['channel-admission-summary', channel.id],
     queryFn: async () => {
-      // One hour of minute buckets feeds the compact sparkline, while the same
-      // response carries the live active/waiting state.
       const end = Math.floor(Date.now() / 1000)
       const start = end - 60 * 60
       return requireServerSuccess(
@@ -67,34 +127,258 @@ export function ChannelAdmissionSummaryCell(props: { channel: Channel }) {
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   const formatCount = (value: number | undefined) =>
     value === undefined ? '—' : formatCompactNumber(value, locale)
+
   const concurrencyLimit = channel.concurrency_limit ?? 0
-  const activeCount = hasStats ? formatCount(stats.active) : '—'
+  const active = stats?.active ?? 0
+  const activeCount = hasStats ? formatCount(active) : '—'
   const activeText =
     concurrencyLimit > 0
       ? `${activeCount}/${formatCount(concurrencyLimit)}`
       : activeCount
   const waiting = stats?.waiting ?? 0
   const waitingText = hasStats ? formatCount(waiting) : '—'
-  const waitingRequests = stats?.waiting_requests ?? []
-  const queuedPreview = waitingRequests.slice(0, 5)
   const activeUsers = stats?.active_user_list ?? []
   const activePreview = activeUsers.slice(0, 5)
-  const sparkBars = admissionSparklineBars(stats?.minute_series ?? [], 24)
-  const sparkMax = Math.max(1, ...sparkBars.map((bar) => bar.grants))
-  let statusDot = 'bg-emerald-500'
-  if (statsQuery.isError) {
-    statusDot = 'bg-destructive'
-  } else if (!hasStats) {
-    statusDot = 'bg-muted-foreground/40'
-  } else if (waiting > 0) {
-    statusDot = 'bg-amber-500'
-  }
+
   const rpmLimit = channel.rpm_limit ?? 0
-  const control = effectiveAdmissionControl(channel)
   const userLimits = channel.user_rate_limits ?? []
-  const userLimitSummary = userLimits
-    .map((limit) => formatUserAdmissionLimit(limit, t))
-    .join(', ')
+  const control = effectiveAdmissionControl(channel)
+  const hasQueue = hasAdmissionQueue(channel)
+  const rpm = stats?.rpm ?? 0
+  const rpmUsers = stats?.rpm_users ?? []
+  const userRpmLimits = new Map(
+    userLimits.map((entry) => [entry.user_id, entry.rpm_limit ?? 0])
+  )
+  const rpmConfigured =
+    rpmLimit > 0 ||
+    [...userRpmLimits.values()].some((userLimit) => userLimit > 0)
+  const rpmBlocked =
+    hasStats && admissionRpmBlocked(rpm, rpmLimit, rpmUsers, userRpmLimits)
+
+  const rpmCountText = hasStats ? formatCount(rpm) : '—'
+  const rpmDisplay =
+    rpmLimit > 0 ? `${rpmCountText}/${formatCount(rpmLimit)}` : rpmCountText
+
+  let rpmRatio = 0
+  if (hasStats) {
+    if (rpmLimit > 0) {
+      rpmRatio = Math.min(1, rpm / rpmLimit)
+    } else {
+      for (const user of rpmUsers) {
+        const userLimit = userRpmLimits.get(user.user_id) ?? 0
+        if (userLimit > 0) {
+          rpmRatio = Math.max(rpmRatio, Math.min(1, user.count / userLimit))
+        }
+      }
+    }
+  }
+  const rpmTone = statsQuery.isError
+    ? 'bg-destructive'
+    : rpmUsageBarClass(rpmBlocked ? 1 : rpmRatio)
+
+  let concurrencyTone = 'bg-success'
+  if (statsQuery.isError) {
+    concurrencyTone = 'bg-destructive'
+  } else if (!hasStats) {
+    concurrencyTone = 'bg-muted-foreground/30'
+  } else if (
+    waiting > 0 ||
+    (concurrencyLimit > 0 && active >= concurrencyLimit)
+  ) {
+    concurrencyTone = 'bg-warning'
+  }
+
+  let concurrencyMeter: ReactNode
+  if (concurrencyLimit > 0 && concurrencyLimit <= MAX_SEGMENTED_SLOTS) {
+    concurrencyMeter = (
+      <AdmissionSlotGauge
+        active={hasStats ? active : 0}
+        limit={concurrencyLimit}
+        toneClass={concurrencyTone}
+      />
+    )
+  } else if (concurrencyLimit > MAX_SEGMENTED_SLOTS) {
+    concurrencyMeter = (
+      <AdmissionUsageBar
+        ratio={hasStats ? Math.min(1, active / concurrencyLimit) : 0}
+        toneClass={concurrencyTone}
+      />
+    )
+  } else {
+    concurrencyMeter = (
+      <AdmissionUsageBar
+        ratio={hasStats && active > 0 ? 1 : 0}
+        toneClass={concurrencyTone}
+      />
+    )
+  }
+
+  const topRpmUser = hasQueue ? undefined : rpmUsers[0]
+  const topRpmLimit = topRpmUser
+    ? (userRpmLimits.get(topRpmUser.user_id) ?? 0)
+    : 0
+  let topRpmRatio = 0
+  if (topRpmUser) {
+    if (topRpmLimit > 0) {
+      topRpmRatio = Math.min(1, topRpmUser.count / topRpmLimit)
+    } else if (rpmLimit > 0) {
+      topRpmRatio = Math.min(1, topRpmUser.count / rpmLimit)
+    }
+  }
+  const topUserAtLimit =
+    topRpmUser !== undefined &&
+    topRpmLimit > 0 &&
+    topRpmUser.count >= topRpmLimit
+
+  let primaryTrack: ReactNode
+  let secondaryTrack: ReactNode
+
+  if (hasQueue) {
+    primaryTrack = (
+      <span className='flex w-full min-w-0 flex-col gap-1'>
+        <span className='flex min-w-0 items-center justify-between gap-1.5'>
+          <span className='flex min-w-0 items-center gap-1.5'>
+            <span className='text-muted-foreground min-w-0 truncate text-xs! font-normal!'>
+              {t('Concurrency')}
+            </span>
+          </span>
+          <span className='flex shrink-0 items-center gap-1.5'>
+            {waiting > 0 && (
+              <Badge
+                variant='warning'
+                className='h-4 px-1.5 py-0 text-[10px]! leading-none font-medium! tabular-nums'
+              >
+                {t('Queued')} {waitingText}
+              </Badge>
+            )}
+            <span
+              className={cn(
+                'font-mono! text-xs! font-semibold! tabular-nums',
+                statsQuery.isError ? 'text-destructive' : 'text-foreground'
+              )}
+            >
+              {activeText}
+            </span>
+          </span>
+        </span>
+        {concurrencyMeter}
+      </span>
+    )
+
+    secondaryTrack = (
+      <span className='flex w-full min-w-0 flex-col gap-1'>
+        <span className='flex min-w-0 items-center justify-between gap-1.5'>
+          <span className='text-muted-foreground min-w-0 truncate text-xs! font-normal!'>
+            {t('RPM')}
+          </span>
+          <span className='flex shrink-0 items-center gap-1.5'>
+            {rpmBlocked && (
+              <Badge
+                variant='destructive'
+                className='h-4 px-1.5 py-0 text-[10px]! leading-none font-medium!'
+              >
+                {t('Limited')}
+              </Badge>
+            )}
+            <span
+              className={cn(
+                'font-mono! text-xs! font-semibold! tabular-nums',
+                rpmBlocked && 'text-destructive',
+                !rpmBlocked && !rpmConfigured && 'text-muted-foreground',
+                !rpmBlocked && rpmConfigured && 'text-foreground'
+              )}
+            >
+              {rpmConfigured ? rpmDisplay : '—'}
+            </span>
+          </span>
+        </span>
+        <AdmissionUsageBar
+          ratio={rpmConfigured ? rpmRatio : 0}
+          toneClass={rpmTone}
+        />
+      </span>
+    )
+  } else {
+    primaryTrack = (
+      <span className='flex w-full min-w-0 flex-col gap-1'>
+        <span className='flex min-w-0 items-center justify-between gap-1.5'>
+          <span className='flex min-w-0 items-center gap-1.5'>
+            <span className='text-muted-foreground min-w-0 truncate text-xs! font-normal!'>
+              {t('RPM')}
+            </span>
+          </span>
+          <span className='flex shrink-0 items-center gap-1.5'>
+            {rpmBlocked && (
+              <Badge
+                variant='destructive'
+                className='h-4 px-1.5 py-0 text-[10px]! leading-none font-medium!'
+              >
+                {t('Limited')}
+              </Badge>
+            )}
+            <span
+              className={cn(
+                'font-mono! text-xs! font-semibold! tabular-nums',
+                statsQuery.isError || rpmBlocked
+                  ? 'text-destructive'
+                  : 'text-foreground'
+              )}
+            >
+              {rpmDisplay}
+            </span>
+          </span>
+        </span>
+        <AdmissionUsageBar ratio={rpmRatio} toneClass={rpmTone} />
+      </span>
+    )
+
+    if (topRpmUser) {
+      secondaryTrack = (
+        <span className='flex w-full min-w-0 flex-col gap-1'>
+          <span className='flex min-w-0 items-center justify-between gap-1.5'>
+            <span className='flex min-w-0 items-center gap-1'>
+              <span className='text-muted-foreground min-w-0 truncate text-xs! font-normal!'>
+                {topRpmUser.username || `${t('User')} #${topRpmUser.user_id}`}
+              </span>
+              {rpmUsers.length > 1 && (
+                <span className='text-muted-foreground/75 shrink-0 font-mono! text-[10px]! font-normal! tabular-nums'>
+                  +{rpmUsers.length - 1}
+                </span>
+              )}
+            </span>
+            <span
+              className={cn(
+                'shrink-0 font-mono! text-xs! font-semibold! tabular-nums',
+                topUserAtLimit ? 'text-destructive' : 'text-foreground'
+              )}
+            >
+              {formatCount(topRpmUser.count)}
+              {topRpmLimit > 0 ? `/${formatCount(topRpmLimit)}` : ''}
+            </span>
+          </span>
+          <AdmissionUsageBar
+            ratio={topRpmRatio}
+            toneClass={rpmUsageBarClass(topUserAtLimit ? 1 : topRpmRatio)}
+          />
+        </span>
+      )
+    } else {
+      secondaryTrack = (
+        <span className='flex w-full min-w-0 flex-col gap-1'>
+          <span className='flex min-w-0 items-center justify-between gap-1.5'>
+            <span className='text-muted-foreground min-w-0 truncate text-xs! font-normal!'>
+              {t('No RPM usage this minute')}
+            </span>
+            <span className='text-muted-foreground shrink-0 font-mono! text-xs! font-semibold! tabular-nums'>
+              {hasStats ? '0' : '—'}
+            </span>
+          </span>
+          <AdmissionUsageBar ratio={0} toneClass='bg-success' />
+        </span>
+      )
+    }
+  }
+
   let soupSummary: string
   if (control.soup_mode === 'off') {
     soupSummary = t('Off')
@@ -107,13 +391,13 @@ export function ChannelAdmissionSummaryCell(props: { channel: Channel }) {
   return (
     <TooltipProvider delay={150}>
       <Tooltip>
-        <TooltipTrigger render={<span className='block min-w-0' />}>
+        <TooltipTrigger render={<span className='block w-full min-w-0' />}>
           <Button
             type='button'
             variant='ghost'
             size='sm'
-            className='h-auto min-h-9 max-w-full justify-start px-1 py-1 text-left whitespace-normal'
-            aria-label={`${t('Admission Monitor')}: ${t('Concurrency')} ${activeText}, ${t('Queued')} ${waitingText}`}
+            className='border-border/60 bg-muted/25 hover:border-border hover:bg-muted/60 h-auto w-full max-w-full justify-start rounded-lg border px-2.5 py-1.5 text-left whitespace-normal transition-colors'
+            aria-label={`${t('Admission Monitor')}: ${hasQueue ? `${t('Concurrency')} ${activeText}, ${t('Queued')} ${waitingText}` : `${t('RPM')} ${rpmDisplay}`}`}
             title={t('Admission Monitor')}
             onClick={(event) => event.stopPropagation()}
             render={
@@ -123,76 +407,28 @@ export function ChannelAdmissionSummaryCell(props: { channel: Channel }) {
               />
             }
           >
-            <span className='grid min-w-0 gap-0.5 text-xs leading-tight'>
-              <span className='flex min-w-0 items-center gap-1.5'>
-                <span
-                  aria-hidden='true'
-                  className={cn('size-1.5 shrink-0 rounded-full', statusDot)}
-                />
-                <span className='truncate'>
-                  {t('Concurrency')} {activeText} · {t('Queued')} {waitingText}
-                </span>
-              </span>
-              {hasStats && sparkBars.length > 0 && (
-                <span className='flex w-full flex-col gap-1'>
-                  <span
-                    aria-hidden='true'
-                    data-testid='admission-sparkline'
-                    className='flex h-4 w-full items-end gap-[2px]'
-                  >
-                    {sparkBars.map((bar) => {
-                      let barClass = 'bg-muted-foreground/20'
-                      if (bar.timeouts > 0 || bar.queueFull > 0) {
-                        barClass = 'bg-destructive/80'
-                      } else if (bar.waited > 0) {
-                        barClass = 'bg-warning'
-                      } else if (bar.grants > 0) {
-                        barClass = 'bg-success/80'
-                      }
-                      return (
-                        <span
-                          key={bar.timestampMs}
-                          className='flex h-full min-w-0 flex-1 items-end'
-                        >
-                          <span
-                            data-testid='admission-spark-bar'
-                            className={cn('w-full rounded-sm', barClass)}
-                            style={{
-                              height: `${Math.max(15, (bar.grants / sparkMax) * 100)}%`,
-                            }}
-                          />
-                        </span>
-                      )
-                    })}
-                  </span>
-                  {waiting > 0 && (
-                    <span className='text-muted-foreground text-[11px]'>
-                      {t('Oldest wait')}:{' '}
-                      {formatAdmissionWaitMs(stats?.oldest_wait_ms)}
-                    </span>
-                  )}
-                </span>
-              )}
+            <span
+              data-testid='admission-summary'
+              data-table-text='secondary'
+              className='flex w-full min-w-0 flex-col gap-1.5 text-xs! leading-none font-normal'
+            >
+              {primaryTrack}
+              {secondaryTrack}
             </span>
           </Button>
         </TooltipTrigger>
         <TooltipContent side='top' className='max-w-xs'>
-          <div className='space-y-1 text-xs'>
+          <div className='flex flex-col gap-1.5 text-xs'>
             {statsQuery.isError && (
               <div className='text-destructive'>
                 {t('Failed to load channel admission statistics')}
               </div>
             )}
-            <div>
-              {t('Concurrency limit')}:{' '}
-              {concurrencyLimit > 0 ? concurrencyLimit : t('Unlimited')}
-            </div>
-            <div>
-              {t('RPM limit')}: {rpmLimit > 0 ? rpmLimit : t('Unlimited')}
-            </div>
-            <div>
-              {t('Priority')}: {channel.priority ?? 0}
-            </div>
+            {rpmBlocked && (
+              <div className='text-destructive font-medium'>
+                {t('RPM limit reached')}
+              </div>
+            )}
             <div>
               {t('Wait timeout')}:{' '}
               {formatAdmissionWaitMs(control.wait_timeout_ms)}
@@ -200,64 +436,63 @@ export function ChannelAdmissionSummaryCell(props: { channel: Channel }) {
             <div>
               {t('Lower-priority release')}: {soupSummary}
             </div>
-            {userLimitSummary && (
-              <div>
-                {t('Per-user limits')}: {userLimitSummary}
-              </div>
-            )}
             {activePreview.length > 0 && (
-              <div className='border-t pt-1'>
-                <div className='font-medium'>{t('Active users')}</div>
-                {activePreview.map((user) => (
-                  <div
-                    key={user.user_id}
-                    className='flex items-center justify-between gap-3'
-                  >
-                    <span className='truncate'>
-                      {user.username || `${t('User')} #${user.user_id}`}
-                    </span>
-                    {user.count > 1 && (
-                      <span className='text-muted-foreground shrink-0 tabular-nums'>
-                        ×{user.count}
+              <>
+                <Separator />
+                <div className='flex flex-col gap-0.5'>
+                  <div className='font-medium'>{t('Active users')}</div>
+                  {activePreview.map((user) => (
+                    <div
+                      key={user.user_id}
+                      className='flex items-center justify-between gap-3'
+                    >
+                      <span className='truncate'>
+                        {user.username || `${t('User')} #${user.user_id}`}
                       </span>
-                    )}
-                  </div>
-                ))}
-                {activeUsers.length > activePreview.length && (
-                  <div className='text-muted-foreground'>
-                    +{activeUsers.length - activePreview.length}
-                  </div>
-                )}
-              </div>
-            )}
-            {queuedPreview.length > 0 && (
-              <div className='border-t pt-1'>
-                <div className='font-medium'>{t('Queued requests')}</div>
-                {queuedPreview.map((request) => (
-                  <div
-                    key={`${request.position}-${request.user_id}`}
-                    className='flex items-center justify-between gap-3'
-                  >
-                    <span className='truncate'>
-                      {request.position > 0 && (
-                        <span className='text-muted-foreground'>
-                          {request.position}.
+                      {user.count > 1 && (
+                        <span className='text-muted-foreground shrink-0 font-mono tabular-nums'>
+                          ×{user.count}
                         </span>
-                      )}{' '}
-                      {request.username || `${t('User')} #${request.user_id}`}
-                      {request.priority !== 0 && ` · P${request.priority}`}
-                    </span>
-                    <span className='text-muted-foreground shrink-0 tabular-nums'>
-                      {formatAdmissionWaitMs(request.wait_ms)}
-                    </span>
-                  </div>
-                ))}
-                {waitingRequests.length > queuedPreview.length && (
-                  <div className='text-muted-foreground'>
-                    +{waitingRequests.length - queuedPreview.length}
-                  </div>
-                )}
-              </div>
+                      )}
+                    </div>
+                  ))}
+                  {activeUsers.length > activePreview.length && (
+                    <div className='text-muted-foreground'>
+                      +{activeUsers.length - activePreview.length}
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+            {rpmUsers.length > 0 && (
+              <>
+                <Separator />
+                <div className='flex flex-col gap-0.5'>
+                  <div className='font-medium'>{t('RPM users')}</div>
+                  {rpmUsers.slice(0, 5).map((user) => {
+                    const userLimit = userRpmLimits.get(user.user_id) ?? 0
+                    return (
+                      <div
+                        key={user.user_id}
+                        className='flex items-center justify-between gap-3'
+                      >
+                        <span className='truncate'>
+                          {user.username || `${t('User')} #${user.user_id}`}
+                        </span>
+                        <span className='text-muted-foreground shrink-0 font-mono tabular-nums'>
+                          {formatCount(user.count)}
+                          {userLimit > 0 ? ` / ${formatCount(userLimit)}` : ''}
+                        </span>
+                      </div>
+                    )
+                  })}
+                  {rpmUsers.length > 5 && (
+                    <div className='text-muted-foreground'>
+                      +{rpmUsers.length - 5}
+                    </div>
+                  )}
+                </div>
+              </>
             )}
           </div>
         </TooltipContent>

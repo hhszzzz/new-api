@@ -17,9 +17,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { VChart } from '@visactor/react-vchart'
-import { useMemo } from 'react'
+import { Activity, BarChart3, type LucideIcon } from 'lucide-react'
+import { useMemo, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { IconBadge, type IconBadgeTone } from '@/components/ui/icon-badge'
 import { useChartTheme } from '@/lib/use-chart-theme'
 import { cn } from '@/lib/utils'
 import { VCHART_OPTION } from '@/lib/vchart'
@@ -33,6 +35,9 @@ import type { ChannelAdmissionMetricPoint } from '../types'
 
 export function ChannelAdmissionTrendChart(props: {
   title: string
+  icon?: LucideIcon
+  iconTone?: IconBadgeTone
+  summary?: ReactNode
   points: ChannelAdmissionMetricPoint[]
   bucketSeconds: number
   series: Array<{
@@ -45,6 +50,7 @@ export function ChannelAdmissionTrendChart(props: {
   className?: string
 }) {
   const { t } = useTranslation()
+  const HeaderIcon = props.icon ?? Activity
   const { resolvedTheme, themeReady } = useChartTheme()
   const textColor =
     resolvedTheme === 'dark'
@@ -144,19 +150,23 @@ export function ChannelAdmissionTrendChart(props: {
   return (
     <section
       className={cn(
-        'bg-card overflow-hidden rounded-2xl border shadow-xs',
+        'bg-card touch-pan-y overflow-hidden rounded-2xl border shadow-xs',
         props.className
       )}
     >
-      <header className='flex flex-wrap items-center gap-2 border-b px-4 py-2.5'>
+      <header className='flex flex-wrap items-center gap-2 border-b px-4 py-3 sm:px-5'>
+        <IconBadge tone={props.iconTone ?? 'info'} size='sm'>
+          <HeaderIcon />
+        </IconBadge>
         <h2 className='text-sm font-semibold'>{t(props.title)}</h2>
-        <span className='text-muted-foreground ml-auto text-xs'>
+        {props.summary}
+        <span className='text-muted-foreground ml-auto font-mono text-xs tabular-nums'>
           {t('Aggregated every {{interval}}', {
             interval: formatAdmissionBucketWidth(props.bucketSeconds),
           })}
         </span>
       </header>
-      <div className='h-56 p-2 sm:h-64'>
+      <div className='h-56 p-3 sm:h-64 sm:p-4'>
         {themeReady &&
           (hasActivity && spec ? (
             <VChart
@@ -170,8 +180,11 @@ export function ChannelAdmissionTrendChart(props: {
               className='h-full w-full'
             />
           ) : (
-            <div className='text-muted-foreground flex h-full items-center justify-center text-xs'>
-              {t('No data available')}
+            <div className='text-muted-foreground flex h-full flex-col items-center justify-center gap-2 text-xs'>
+              <span className='bg-muted/60 flex size-9 items-center justify-center rounded-xl'>
+                <BarChart3 className='size-4' aria-hidden='true' />
+              </span>
+              <span>{t('No data available')}</span>
             </div>
           ))}
       </div>

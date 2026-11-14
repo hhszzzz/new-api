@@ -21,7 +21,7 @@ import { formatUseTime } from '@/lib/format'
 import type {
   Channel,
   ChannelAdmissionActiveUser,
-  ChannelAdmissionMetricPoint,
+  ChannelAdmissionRPMUser,
   ChannelUserRateLimit,
 } from '../types'
 import { parseChannelOtherSettings } from './channel-utils'
@@ -91,6 +91,18 @@ export function hasAdmissionQueue(
   )
 }
 
+// RPM-only channels still deserve a monitor entry even though they never queue.
+export function hasAdmissionMonitor(
+  channel: Pick<Channel, 'concurrency_limit' | 'user_rate_limits' | 'rpm_limit'>
+): boolean {
+  if (hasAdmissionQueue(channel) || (channel.rpm_limit ?? 0) > 0) {
+    return true
+  }
+  return (channel.user_rate_limits ?? []).some(
+    (limit) => (limit.rpm_limit ?? 0) > 0
+  )
+}
+
 export function hasCustomizedAdmissionControl(
   channel: Pick<Channel, 'settings'>
 ): boolean {
@@ -127,6 +139,21 @@ export function newlyAdmittedUserIds(
   return activeUsers
     .filter((user) => user.count > (previous.get(user.user_id) ?? 0))
     .map((user) => user.user_id)
+}
+
+export function admissionRpmBlocked(
+  rpm: number,
+  rpmLimit: number,
+  rpmUsers: Array<Pick<ChannelAdmissionRPMUser, 'user_id' | 'count'>>,
+  userLimits: ReadonlyMap<number, number>
+): boolean {
+  if (rpmLimit > 0 && rpm >= rpmLimit) {
+    return true
+  }
+  return rpmUsers.some((user) => {
+    const userLimit = userLimits.get(user.user_id) ?? 0
+    return userLimit > 0 && user.count >= userLimit
+  })
 }
 
 export function effectiveAdmissionControl(
@@ -210,50 +237,4 @@ export function formatAdmissionBucketWidth(seconds: number): string {
     return `${Math.round(seconds / 60)}m`
   }
   return `${seconds}s`
-}
-
-export interface AdmissionSparkBar {
-  timestampMs: number
-  grants: number
-  waited: number
-  timeouts: number
-  queueFull: number
-}
-
-export function admissionSparklineBars(
-  points: Array<
-    Pick<
-      ChannelAdmissionMetricPoint,
-      'timestamp_ms' | 'grants' | 'waited' | 'timeouts' | 'queue_full'
-    >
-  >,
-  maxBars = 20
-): AdmissionSparkBar[] {
-  if (points.length === 0) {
-    return []
-  }
-  const barCount = Math.min(maxBars, points.length)
-  const bars: AdmissionSparkBar[] = []
-  for (let index = 0; index < barCount; index++) {
-    const start = Math.floor((index * points.length) / barCount)
-    const end = Math.floor(((index + 1) * points.length) / barCount)
-    let grants = 0
-    let waited = 0
-    let timeouts = 0
-    let queueFull = 0
-    for (const point of points.slice(start, end)) {
-      grants += point.grants
-      waited += point.waited
-      timeouts += point.timeouts
-      queueFull += point.queue_full
-    }
-    bars.push({
-      timestampMs: points[start].timestamp_ms,
-      grants,
-      waited,
-      timeouts,
-      queueFull,
-    })
-  }
-  return bars
 }

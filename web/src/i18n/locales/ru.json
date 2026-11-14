@@ -9159,6 +9159,9 @@
     "Admission queue is inactive": "Очередь допуска неактивна",
     "This channel has no concurrency limit, so requests are never queued. Configure a concurrency limit to start using the queue.": "Для этого канала не задан лимит одновременных запросов, поэтому запросы не ставятся в очередь. Задайте лимит, чтобы включить очередь.",
     "Create a channel before monitoring its admission queue.": "Создайте канал, прежде чем отслеживать его очередь допуска.",
-    "Search channels": "Поиск каналов"
+    "Search channels": "Поиск каналов",
+    "RPM limit reached": "Лимит RPM достигнут",
+    "RPM users": "Пользователи RPM",
+    "No RPM usage this minute": "Нет использования RPM в эту минуту"
   }
 }

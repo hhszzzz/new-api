@@ -24,11 +24,12 @@ import {
   DEFAULT_ADMISSION_LIVE_REFRESH_SECONDS,
   admissionBucketLabel,
   admissionLiveStatus,
-  admissionSparklineBars,
+  admissionRpmBlocked,
   effectiveAdmissionControl,
   formatAdmissionBucketWidth,
   formatAdmissionWaitMs,
   formatUserAdmissionLimit,
+  hasAdmissionMonitor,
   hasAdmissionQueue,
   hasCustomizedAdmissionControl,
   newlyAdmittedUserIds,
@@ -66,6 +67,23 @@ describe('hasAdmissionQueue', () => {
         })
       )
     ).toBe(false)
+  })
+})
+
+describe('hasAdmissionMonitor', () => {
+  test('includes RPM-only channels even though they never queue', () => {
+    expect(
+      hasAdmissionMonitor(channelWith({ settings: '{}', rpm_limit: 60 }))
+    ).toBe(true)
+    expect(
+      hasAdmissionMonitor(
+        channelWith({
+          settings: '{}',
+          user_rate_limits: [{ user_id: 5, rpm_limit: 10 }],
+        })
+      )
+    ).toBe(true)
+    expect(hasAdmissionMonitor(channelWith({ settings: '{}' }))).toBe(false)
   })
 })
 
@@ -157,27 +175,6 @@ describe('formatUserAdmissionLimit', () => {
   })
 })
 
-describe('admissionSparklineBars', () => {
-  test('aggregates minute points into at most the requested bar count', () => {
-    const points = Array.from({ length: 61 }, (_, index) => ({
-      timestamp_ms: index * 60_000,
-      grants: index === 60 ? 2 : 0,
-      waited: index === 60 ? 1 : 0,
-      timeouts: 0,
-      queue_full: 0,
-    }))
-
-    const bars = admissionSparklineBars(points, 20)
-
-    expect(bars).toHaveLength(20)
-    expect(bars.at(-1)).toMatchObject({ grants: 2, waited: 1 })
-  })
-
-  test('returns no bars for an empty series', () => {
-    expect(admissionSparklineBars([])).toEqual([])
-  })
-})
-
 describe('parseAdmissionLiveRefreshSeconds', () => {
   test('defaults to ten seconds for missing or invalid values', () => {
     expect(parseAdmissionLiveRefreshSeconds(null)).toBe(
@@ -236,5 +233,28 @@ describe('newlyAdmittedUserIds', () => {
     expect(
       newlyAdmittedUserIds(new Map([[7, 1]]), [{ user_id: 7, count: 1 }])
     ).toEqual([])
+  })
+})
+
+describe('admissionRpmBlocked', () => {
+  test('reports a full channel minute', () => {
+    expect(admissionRpmBlocked(60, 60, [], new Map())).toBe(true)
+    expect(admissionRpmBlocked(59, 60, [], new Map())).toBe(false)
+  })
+
+  test('reports a user whose own RPM limit is reached', () => {
+    const limits = new Map([[7, 10]])
+    expect(
+      admissionRpmBlocked(20, 0, [{ user_id: 7, count: 10 }], limits)
+    ).toBe(true)
+    expect(admissionRpmBlocked(20, 0, [{ user_id: 7, count: 9 }], limits)).toBe(
+      false
+    )
+  })
+
+  test('ignores users without an RPM limit', () => {
+    expect(
+      admissionRpmBlocked(500, 0, [{ user_id: 7, count: 500 }], new Map())
+    ).toBe(false)
   })
 })

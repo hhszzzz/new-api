@@ -216,6 +216,12 @@ export interface ChannelAdmissionWaitingRequest {
   wait_ms: number
 }
 
+export interface ChannelAdmissionRPMUser {
+  user_id: number
+  username?: string
+  count: number
+}
+
 export interface ChannelAdmissionStats {
   channel_id: number
   window_start_ms: number
@@ -224,6 +230,8 @@ export interface ChannelAdmissionStats {
   active: number
   active_users: number
   active_user_list: ChannelAdmissionActiveUser[]
+  rpm: number
+  rpm_users: ChannelAdmissionRPMUser[]
   waiting: number
   oldest_wait_ms: number
   wait_p50_ms: number

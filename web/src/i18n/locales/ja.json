@@ -9159,6 +9159,9 @@
     "Admission queue is inactive": "アドミッションキューは無効です",
     "This channel has no concurrency limit, so requests are never queued. Configure a concurrency limit to start using the queue.": "このチャンネルには同時実行上限がないため、リクエストはキューに入りません。同時実行上限を設定するとキューが有効になります。",
     "Create a channel before monitoring its admission queue.": "アドミッションキューの監視を開始する前にチャンネルを作成してください。",
-    "Search channels": "チャンネルを検索"
+    "Search channels": "チャンネルを検索",
+    "RPM limit reached": "RPM上限に達しました",
+    "RPM users": "RPM ユーザー",
+    "No RPM usage this minute": "この1分間のRPM使用はありません"
   }
 }

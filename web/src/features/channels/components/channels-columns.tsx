@@ -82,7 +82,7 @@ import {
   handleUpdateChannelField,
   handleUpdateTagField,
   createChannelFieldUpdateScheduler,
-  hasAdmissionQueue,
+  hasAdmissionMonitor,
   isTagAggregateRow,
   isChannelAggregateRow,
   type ChannelAggregateRow,
@@ -889,7 +889,7 @@ export function useChannelsColumns(
           if (isTagAggregateRow(channel) || isChannelAggregateRow(channel)) {
             return null
           }
-          if (!hasAdmissionQueue(channel)) {
+          if (!hasAdmissionMonitor(channel)) {
             return <span className='text-muted-foreground text-xs'>—</span>
           }
 

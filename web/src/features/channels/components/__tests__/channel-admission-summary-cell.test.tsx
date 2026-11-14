@@ -25,7 +25,7 @@ import {
   Outlet,
   RouterProvider,
 } from '@tanstack/react-router'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { createInstance } from 'i18next'
 import { I18nextProvider } from 'react-i18next'
@@ -57,7 +57,7 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-async function renderCell() {
+async function renderCell(target: Channel = channel) {
   const rootRoute = createRootRoute({ component: () => <Outlet /> })
   const channelsRoute = createRoute({
     getParentRoute: () => rootRoute,
@@ -67,7 +67,7 @@ async function renderCell() {
   const listRoute = createRoute({
     getParentRoute: () => channelsRoute,
     path: '/',
-    component: () => <ChannelAdmissionSummaryCell channel={channel} />,
+    component: () => <ChannelAdmissionSummaryCell channel={target} />,
   })
   const admissionRoute = createRoute({
     getParentRoute: () => channelsRoute,
@@ -111,6 +111,8 @@ it('shows a compact summary and opens the selected channel detail', async () => 
       active_user_list: [
         { user_id: 1, username: 'hhs', priority: 1, count: 2 },
       ],
+      rpm: 12,
+      rpm_users: [{ user_id: 1, username: 'hhs', count: 12 }],
       waiting: 1,
       oldest_wait_ms: 800,
       wait_p50_ms: 500,
@@ -159,12 +161,25 @@ it('shows a compact summary and opens the selected channel detail', async () => 
 
   const { router, queryClient } = await renderCell()
 
-  expect(await screen.findByText('Concurrency 2/2 · Queued 1')).toBeVisible()
-  expect(screen.getByText('Oldest wait: 0.8s')).toBeVisible()
-  expect(screen.getAllByTestId('admission-spark-bar')).toHaveLength(1)
+  const summary = await screen.findByTestId('admission-summary')
+  await waitFor(() => {
+    expect(summary).toHaveTextContent('Concurrency')
+    expect(summary).toHaveTextContent('2/2')
+    expect(summary).toHaveTextContent('Queued 1')
+    expect(summary).toHaveTextContent(/RPM\s*—/)
+  })
+  const slotGauge = summary.querySelector('[data-slot="admission-slot-gauge"]')
+  expect(slotGauge).not.toBeNull()
+  expect(slotGauge?.querySelectorAll('[data-occupied="true"]')).toHaveLength(2)
+  expect(slotGauge?.querySelectorAll('[data-occupied="false"]')).toHaveLength(0)
+
   const user = userEvent.setup()
   await user.hover(screen.getByRole('button', { name: /Admission Monitor/ }))
-  expect(await screen.findByText('Queued requests')).toBeVisible()
+  expect(await screen.findByText(/Wait timeout/)).toBeVisible()
+  expect(screen.getByText('Active users')).toBeVisible()
+  expect(screen.getAllByText('hhs').length).toBeGreaterThanOrEqual(1)
+  expect(screen.queryByText('Queued requests')).not.toBeInTheDocument()
+  expect(screen.queryByText(/Concurrency limit:/)).not.toBeInTheDocument()
   await user.click(screen.getByRole('button', { name: /Admission Monitor/ }))
   expect(await screen.findByText('Detailed monitor')).toBeVisible()
   expect(router.state.location.pathname).toBe('/channels/admission')
@@ -179,6 +194,109 @@ it('shows a compact summary and opens the selected channel detail', async () => 
   queryClient.clear()
 })
 
+it('shows RPM usage and user breakdown for RPM-only channels', async () => {
+  vi.spyOn(channelApi, 'getChannelAdmissionStats').mockResolvedValue({
+    success: true,
+    data: {
+      channel_id: 12,
+      window_start_ms: 0,
+      window_end_ms: 0,
+      bucket_seconds: 60,
+      active: 0,
+      active_users: 0,
+      active_user_list: [],
+      rpm: 14,
+      rpm_users: [
+        { user_id: 1, username: 'hhs', count: 12 },
+        { user_id: 2, username: 'cbk', count: 2 },
+      ],
+      waiting: 0,
+      oldest_wait_ms: 0,
+      wait_p50_ms: 0,
+      wait_p95_ms: 0,
+      grants: 14,
+      waited_grants: 0,
+      soup_grants: 0,
+      priority_grants: 0,
+      queue_full: 0,
+      timeouts: 0,
+      waiting_users: [],
+      waiting_requests: [],
+      minute_series: [],
+    },
+  })
+  const rpmOnly = {
+    ...channel,
+    concurrency_limit: 0,
+    rpm_limit: 60,
+    user_rate_limits: [{ user_id: 1, rpm_limit: 10 }],
+  } as unknown as Channel
+
+  const { queryClient } = await renderCell(rpmOnly)
+
+  const summary = await screen.findByTestId('admission-summary')
+  await waitFor(() => {
+    expect(summary).toHaveTextContent('RPM')
+    expect(summary).toHaveTextContent('Limited')
+    expect(summary).toHaveTextContent('14/60')
+    expect(summary).toHaveTextContent('hhs')
+    expect(summary).toHaveTextContent('+1')
+    expect(summary).toHaveTextContent('12/10')
+  })
+  expect(
+    summary.querySelectorAll('[data-slot="admission-usage-bar"]')
+  ).toHaveLength(2)
+  queryClient.clear()
+})
+
+it('keeps the two-track structure when an RPM-only channel is idle', async () => {
+  vi.spyOn(channelApi, 'getChannelAdmissionStats').mockResolvedValue({
+    success: true,
+    data: {
+      channel_id: 12,
+      window_start_ms: 0,
+      window_end_ms: 0,
+      bucket_seconds: 60,
+      active: 0,
+      active_users: 0,
+      active_user_list: [],
+      rpm: 0,
+      rpm_users: [],
+      waiting: 0,
+      oldest_wait_ms: 0,
+      wait_p50_ms: 0,
+      wait_p95_ms: 0,
+      grants: 0,
+      waited_grants: 0,
+      soup_grants: 0,
+      priority_grants: 0,
+      queue_full: 0,
+      timeouts: 0,
+      waiting_users: [],
+      waiting_requests: [],
+      minute_series: [],
+    },
+  })
+  const rpmOnly = {
+    ...channel,
+    concurrency_limit: 0,
+    rpm_limit: 60,
+    user_rate_limits: [],
+  } as unknown as Channel
+
+  const { queryClient } = await renderCell(rpmOnly)
+
+  const summary = await screen.findByTestId('admission-summary')
+  await waitFor(() => {
+    expect(summary).toHaveTextContent(/RPM\s*0\/60/)
+    expect(summary).toHaveTextContent(/No RPM usage this minute\s*0/)
+  })
+  expect(
+    summary.querySelectorAll('[data-slot="admission-usage-bar"]')
+  ).toHaveLength(2)
+  queryClient.clear()
+})
+
 it('shows unknown values instead of idle zeros when statistics fail', async () => {
   vi.spyOn(channelApi, 'getChannelAdmissionStats').mockRejectedValue(
     new Error('redis is unavailable')
@@ -186,9 +304,31 @@ it('shows unknown values instead of idle zeros when statistics fail', async () =
 
   const { queryClient } = await renderCell()
 
-  expect(await screen.findByText('Concurrency —/2 · Queued —')).toBeVisible()
-  expect(
-    screen.queryByText('Concurrency 0/2 · Queued 0')
-  ).not.toBeInTheDocument()
+  const summary = await screen.findByTestId('admission-summary')
+  await waitFor(() => {
+    expect(summary).toHaveTextContent(/Concurrency\s*—\/2/)
+  })
+  expect(summary).not.toHaveTextContent(/Concurrency\s*0\/2/)
+  queryClient.clear()
+})
+
+it('shows unknown RPM instead of zero when an RPM-only statistics request fails', async () => {
+  vi.spyOn(channelApi, 'getChannelAdmissionStats').mockRejectedValue(
+    new Error('redis is unavailable')
+  )
+  const rpmOnly = {
+    ...channel,
+    concurrency_limit: 0,
+    rpm_limit: 60,
+    user_rate_limits: [],
+  } as unknown as Channel
+
+  const { queryClient } = await renderCell(rpmOnly)
+
+  const summary = await screen.findByTestId('admission-summary')
+  await waitFor(() => {
+    expect(summary).toHaveTextContent(/RPM\s*—\/60/)
+  })
+  expect(summary).not.toHaveTextContent(/RPM\s*0\/60/)
   queryClient.clear()
 })

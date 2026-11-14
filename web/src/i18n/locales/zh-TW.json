@@ -9159,6 +9159,9 @@
     "Admission queue is inactive": "排隊佇列未啟用",
     "This channel has no concurrency limit, so requests are never queued. Configure a concurrency limit to start using the queue.": "此渠道未設定並發上限，請求不會進入排隊。設定並發上限後佇列才會啟用。",
     "Create a channel before monitoring its admission queue.": "請先建立渠道，再查看其排隊監控。",
-    "Search channels": "搜尋渠道"
+    "Search channels": "搜尋渠道",
+    "RPM limit reached": "RPM 已達上限",
+    "RPM users": "RPM 使用者",
+    "No RPM usage this minute": "本分鐘尚無 RPM 使用"
   }
 }

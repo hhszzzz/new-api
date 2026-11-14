@@ -9159,6 +9159,9 @@
     "Admission queue is inactive": "Hàng đợi tiếp nhận chưa hoạt động",
     "This channel has no concurrency limit, so requests are never queued. Configure a concurrency limit to start using the queue.": "Kênh này không có giới hạn đồng thời nên yêu cầu không bao giờ được xếp hàng. Hãy đặt giới hạn đồng thời để bật hàng đợi.",
     "Create a channel before monitoring its admission queue.": "Hãy tạo kênh trước khi theo dõi hàng đợi tiếp nhận của kênh.",
-    "Search channels": "Tìm kiếm kênh"
+    "Search channels": "Tìm kiếm kênh",
+    "RPM limit reached": "Đã đạt giới hạn RPM",
+    "RPM users": "Người dùng RPM",
+    "No RPM usage this minute": "Không có mức dùng RPM trong phút này"
   }
 }
