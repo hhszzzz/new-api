@@ -20,7 +20,7 @@ import (
 // read, replacing whatever the previous test left in the process-wide index.
 // Radar auto-effort is opt-in per model, so the snapshot's models are also
 // allowed by the administrator unless a test overrides the allowlist.
-func rebuildRadarAutoEffortIndex(t *testing.T, cells ...service.ModelRadarBenchCell) {
+func rebuildRadarAutoEffortIndex(t *testing.T, cells ...service.ModelRadarFourTaskCell) {
 	t.Helper()
 	models := make([]string, 0, len(cells))
 	for _, cell := range cells {
@@ -31,18 +31,19 @@ func rebuildRadarAutoEffortIndex(t *testing.T, cells ...service.ModelRadarBenchC
 	allowRadarModels(t, models...)
 	service.RebuildModelRadarAutoEffortIndex(&service.ModelRadarData{
 		FetchedAt: common.GetTimestamp(),
-		Bench:     &service.ModelRadarBench{Cells: cells},
+		FourTask:  &service.ModelRadarFourTask{Cells: cells},
 	})
 }
 
-func radarAutoEffortCell(model, effort string, iq float64, validTasks int, price *float64) service.ModelRadarBenchCell {
+func radarAutoEffortCell(model, effort string, iq float64, gradedTasks int, cost *float64) service.ModelRadarFourTaskCell {
 	score := iq * 1.5
-	return service.ModelRadarBenchCell{
-		Model:    model,
-		Effort:   effort,
-		Score:    &score,
-		Coverage: validTasks,
-		Price:    service.ModelRadarBenchMetricStat{Mean: price},
+	return service.ModelRadarFourTaskCell{
+		Model:         model,
+		Effort:        effort,
+		Score:         &score,
+		GradedTasks:   gradedTasks,
+		RequiredTasks: 4,
+		CostUSD:       cost,
 	}
 }
 
@@ -156,7 +157,7 @@ func TestResolveRadarAutoEffortIgnoresModelsTheAdministratorDidNotAllow(t *testi
 	allowRadarModels(t, "other-model")
 	service.RebuildModelRadarAutoEffortIndex(&service.ModelRadarData{
 		FetchedAt: common.GetTimestamp(),
-		Bench: &service.ModelRadarBench{Cells: []service.ModelRadarBenchCell{
+		FourTask: &service.ModelRadarFourTask{Cells: []service.ModelRadarFourTaskCell{
 			radarAutoEffortCell("gpt-test", "high", 90, 10, nil),
 		}},
 	})
@@ -188,7 +189,7 @@ func TestResolveRadarAutoEffortSkipsStaleSnapshot(t *testing.T) {
 	allowRadarModels(t, "gpt-test")
 	service.RebuildModelRadarAutoEffortIndex(&service.ModelRadarData{
 		FetchedAt: common.GetTimestamp() - int64(service.ModelRadarStaleAfter().Seconds()) - 1,
-		Bench: &service.ModelRadarBench{Cells: []service.ModelRadarBenchCell{
+		FourTask: &service.ModelRadarFourTask{Cells: []service.ModelRadarFourTaskCell{
 			radarAutoEffortCell("gpt-test", "high", 90, 10, nil),
 		}},
 	})

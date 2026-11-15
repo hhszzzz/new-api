@@ -32,14 +32,6 @@ export function useRadarFormatters() {
     const decimalFormatter = new Intl.NumberFormat(locale, {
       maximumFractionDigits: 2,
     })
-    const compactFormatter = new Intl.NumberFormat(locale, {
-      notation: 'compact',
-      maximumFractionDigits: 2,
-    })
-    const percentFormatter = new Intl.NumberFormat(locale, {
-      style: 'percent',
-      maximumFractionDigits: 1,
-    })
     const currencyFormatter = new Intl.NumberFormat(locale, {
       style: 'currency',
       currency: 'USD',
@@ -52,36 +44,16 @@ export function useRadarFormatters() {
       hour: '2-digit',
       minute: '2-digit',
     })
-    // Grading days are UTC buckets; rendering them in local time would shift
-    // the date west of UTC.
-    const utcDayFormatter = new Intl.DateTimeFormat(locale, {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      timeZone: 'UTC',
-    })
-    const historyTimeFormatter = new Intl.DateTimeFormat(locale, {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-    })
 
     return {
-      compact: (value: number | null) =>
-        value === null ? null : compactFormatter.format(value),
       dateTime: (value: number | null) =>
         value === null ? null : dateTimeFormatter.format(value * 1000),
       decimal: (value: number | null) =>
         value === null ? null : decimalFormatter.format(value),
-      historyTime: (value: number) => historyTimeFormatter.format(value * 1000),
       integer: (value: number | null) =>
         value === null ? null : integerFormatter.format(value),
-      percent: (value: number | null) =>
-        value === null ? null : percentFormatter.format(value),
       usd: (value: number | null) =>
         value === null ? null : currencyFormatter.format(value),
-      utcDay: (value: number | null) =>
-        value === null ? null : utcDayFormatter.format(value * 1000),
     }
   }, [locale])
 }

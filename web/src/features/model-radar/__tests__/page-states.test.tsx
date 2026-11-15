@@ -21,11 +21,7 @@ import type { ReactNode } from 'react'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 
 import { ModelRadar } from '../index'
-import type {
-  ModelRadarBenchCell,
-  ModelRadarBenchDetailMetrics,
-  ModelRadarResponse,
-} from '../types'
+import type { ModelRadarFourTaskCell, ModelRadarResponse } from '../types'
 
 const queryMocks = vi.hoisted(() => ({
   useQuery: vi.fn(),
@@ -62,13 +58,10 @@ vi.mock('@/components/page-transition', () => ({
 }))
 vi.mock('../hooks/use-radar-formatters', () => ({
   useRadarFormatters: () => ({
-    compact: (value: number | null) => String(value),
     dateTime: (value: number | null) => `time:${value}`,
     decimal: (value: number | null) => String(value),
     integer: (value: number | null) => String(value),
-    percent: (value: number | null) => String(value),
     usd: (value: number | null) => String(value),
-    utcDay: (value: number | null) => `day:${value}`,
   }),
 }))
 vi.mock('@/hooks', () => ({ useMediaQuery: () => false }))
@@ -76,54 +69,62 @@ vi.mock('@/lib/lobe-icon', () => ({
   getLobeIcon: (iconName: string) => <svg data-icon-key={iconName} />,
 }))
 
-const detail: ModelRadarBenchDetailMetrics = {
-  valid_grade_events: 8,
-  latest_graded_at: 1_800_000_000,
-  as_of: 1_800_001_000,
-  graded_24h: 1,
-  graded_48h: 2,
-  metrics_state: 'available',
-  metrics: {},
-}
-
-function cell(effort: string): ModelRadarBenchCell {
+function cell(effort: string): ModelRadarFourTaskCell {
   return {
     model: 'gpt-test',
     effort,
     score: 100,
-    coverage: 64,
-    required_tasks: 64,
-    score_status: 'complete',
-    graded_runs_count: 64,
-    source_scores: {
-      deepswe: {
+    graded_tasks: 4,
+    required_tasks: 4,
+    rank: 1,
+    components: {
+      combined: {
         score: 100,
-        coverage: 15,
-        required_tasks: 15,
-        graded_runs_count: 15,
+        weight: 60,
+        contribution: 60,
+        cost_usd: 1,
+        duration_minutes: 10,
+        state: 'graded',
+      },
+      pompeii: {
+        score: 100,
+        weight: 45,
+        contribution: 45,
+        cost_usd: 1,
+        duration_minutes: 10,
+        state: 'graded',
+      },
+      pelican: {
+        score: 100,
+        weight: 22.5,
+        contribution: 22.5,
+        cost_usd: 1,
+        duration_minutes: 10,
+        state: 'graded',
+      },
+      candy: {
+        score: 100,
+        weight: 22.5,
+        contribution: 22.5,
+        cost_usd: 1,
+        duration_minutes: 10,
+        state: 'graded',
       },
     },
-    price: { mean: 1, known_samples: 64, total_samples: 64 },
-    duration: { mean: 5, known_samples: 64, total_samples: 64 },
-    statistics_state: 'available',
-    scoring_policy_version: 'radar-bench-v2-last3-per-task-equal-weight-150',
-    detail_metrics: detail,
-    history_state: 'available',
-    history: [],
-    last_graded_day: 1_799_000_000,
-    read_at: 1_800_001_000,
+    cost_usd: 4,
+    duration_minutes: 40,
   }
 }
 
 function response(
   stale: boolean,
-  cells: ModelRadarBenchCell[] = [cell('low'), cell('high')]
+  cells: ModelRadarFourTaskCell[] = [cell('low'), cell('high')]
 ): ModelRadarResponse {
   return {
     success: true,
     message: '',
     data: {
-      schema_version: 2,
+      schema_version: 3,
       fetched_at: 1_800_001_000,
       source_updated_at: 1_799_999_000,
       stale,
@@ -134,24 +135,30 @@ function response(
       },
       model_count: cells.length > 0 ? 1 : 0,
       configuration_count: cells.length,
-      bench:
+      four_task:
         cells.length > 0
           ? {
-              benchmark: 'radar-bench-test',
-              catalog_version: 'catalog-test',
-              task_set_sha256: 'a'.repeat(64),
-              score_version: 'radar-bench-v2-150',
+              protocol: 'codex-four-weighted-150-v2',
+              round_id: 'round-test',
               score_max: 150,
-              source_counts: {
-                deepswe: 15,
-                pompeii: 16,
-                tb4: 14,
-                science: 19,
+              source_sha256: 'a'.repeat(64),
+              publication_status: 'authorized_partial',
+              verified_at: 1_799_999_000,
+              test_started_at: 1_799_000_000,
+              test_completed_at: 1_800_000_000,
+              graded: cells.length * 4,
+              expected: cells.length * 4,
+              ungraded: 0,
+              valid_totals: cells.length,
+              task_weights: {
+                combined: 60,
+                pompeii: 45,
+                pelican: 22.5,
+                candy: 22.5,
               },
+              model_names: { 'gpt-test': 'GPT Test' },
+              model_order: ['gpt-test'],
               read_at: 1_800_001_000,
-              loaded_count: cells.length,
-              total_count: cells.length,
-              failed_cells: [],
               cells,
             }
           : null,
@@ -229,7 +236,7 @@ describe('model radar page states', () => {
     ).toBeVisible()
   })
 
-  test('shows an empty state when the snapshot has no bench cells', () => {
+  test('shows an empty state when the snapshot has no four-task configurations', () => {
     queryMocks.useQuery.mockReturnValue(queryResult(response(false, [])))
     renderPage()
 
@@ -238,12 +245,12 @@ describe('model radar page states', () => {
     ).toBeVisible()
   })
 
-  test('renders bench rows, counts and the source link', () => {
+  test('renders four-task rows, counts and the source link', () => {
     queryMocks.useQuery.mockReturnValue(queryResult(response(false)))
     renderPage()
 
     expect(
-      screen.getByRole('region', { name: 'RadarBench score' })
+      screen.getByRole('region', { name: 'Four-task score' })
     ).toBeVisible()
     expect(screen.getByRole('region', { name: 'GPT Test' })).toBeVisible()
     expect(screen.getByText(/1 models, 2 configurations/)).toBeVisible()

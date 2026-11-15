@@ -83,8 +83,8 @@ func GetModelRadarManagement(c *gin.Context) {
 			Efforts            []string `json:"efforts"`
 		}
 		byModel := make(map[string]*modelSummary)
-		if data.Bench != nil {
-			for _, cell := range data.Bench.Cells {
+		if data.FourTask != nil {
+			for _, cell := range data.FourTask.Cells {
 				summary := byModel[cell.Model]
 				if summary == nil {
 					summary = &modelSummary{Model: cell.Model, Efforts: []string{}}

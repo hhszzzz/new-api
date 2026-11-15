@@ -19,9 +19,9 @@ For commercial licensing, please contact support@quantumnous.com
 import { describe, expect, test } from 'vitest'
 
 import {
-  benchEffortCandidates,
   createModelRadarIconRegistry,
   DEFAULT_RADAR_SETTINGS,
+  fourTaskEffortCandidates,
   getModelIconKey,
   getVendorMeta,
   isRadarAutoEffortAllowed,
@@ -31,31 +31,24 @@ import {
   resolveRadarSettings,
   splitRadarAliases,
 } from '../lib/model-radar'
-import type { ModelRadarBenchCell } from '../types'
+import type { ModelRadarFourTaskCell } from '../types'
 
-function benchCell(
+function fourTaskCell(
   effort: string,
   score: number | null,
-  coverage = 64,
-  price: number | null = null
-): ModelRadarBenchCell {
+  gradedTasks = 4,
+  cost: number | null = null
+): ModelRadarFourTaskCell {
   return {
     model: 'gpt-a',
     effort,
     score,
-    coverage,
-    required_tasks: 64,
-    score_status: coverage === 64 ? 'complete' : 'provisional',
-    graded_runs_count: coverage,
-    source_scores: {},
-    price: { mean: price, known_samples: coverage, total_samples: coverage },
-    duration: { mean: null, known_samples: null, total_samples: null },
-    statistics_state: 'available',
-    detail_metrics: null,
-    history_state: 'not_provided',
-    history: [],
-    last_graded_day: 0,
-    read_at: 1,
+    graded_tasks: gradedTasks,
+    required_tasks: 4,
+    rank: null,
+    components: {},
+    cost_usd: cost,
+    duration_minutes: null,
   }
 }
 
@@ -156,13 +149,13 @@ describe('model radar settings and model resolution', () => {
 
 describe('model radar automatic reasoning tiers', () => {
   test('keeps expressible, well-covered tiers, converts the display scale and orders by IQ', () => {
-    const candidates = benchEffortCandidates([
-      benchCell('ultra', 150),
-      benchCell('max', 148, 2),
-      benchCell('low', 105),
-      benchCell('medium', 135, 64, 2),
-      benchCell('High', 135),
-      benchCell('xhigh', 120),
+    const candidates = fourTaskEffortCandidates([
+      fourTaskCell('ultra', 150),
+      fourTaskCell('max', 148, 2),
+      fourTaskCell('low', 105),
+      fourTaskCell('medium', 135, 4, 2),
+      fourTaskCell('High', 135),
+      fourTaskCell('xhigh', 120),
     ])
 
     expect(candidates.map((item) => [item.effort, item.iq])).toEqual([
@@ -175,14 +168,14 @@ describe('model radar automatic reasoning tiers', () => {
   })
 
   test('skips a selection without a score', () => {
-    expect(benchEffortCandidates([benchCell('high', null)])).toEqual([])
+    expect(fourTaskEffortCandidates([fourTaskCell('high', null)])).toEqual([])
   })
 
   test('picks the best tier, the best value tier, or keeps a close client tier', () => {
-    const candidates = benchEffortCandidates([
-      benchCell('low', 105, 64, 1),
-      benchCell('medium', 135, 64, 4),
-      benchCell('high', 150, 64, 10),
+    const candidates = fourTaskEffortCandidates([
+      fourTaskCell('low', 105, 4, 1),
+      fourTaskCell('medium', 135, 4, 4),
+      fourTaskCell('high', 150, 4, 10),
     ])
 
     expect(pickAutoEffort(candidates, 'highest_iq', 5)).toMatchObject({

@@ -103,11 +103,14 @@ func TestModelRadarManagementDatabaseMatrix(t *testing.T) {
 			score := 100.0
 			payload, err := common.Marshal(service.ModelRadarData{
 				ModelCount: 2, ConfigurationCount: 3,
-				Bench: &service.ModelRadarBench{Cells: []service.ModelRadarBenchCell{
-					{Model: "k3", Effort: "high", Score: &score, Coverage: 64},
-					{Model: "gpt-a", Effort: "low", Score: &score, Coverage: 64},
-					{Model: "gpt-a", Effort: "high", Score: &score, Coverage: 64},
-				}},
+				FourTask: &service.ModelRadarFourTask{
+					ModelOrder: []string{"gpt-a", "k3"},
+					Cells: []service.ModelRadarFourTaskCell{
+						{Model: "k3", Effort: "high", Score: &score, GradedTasks: 4},
+						{Model: "gpt-a", Effort: "low", Score: &score, GradedTasks: 4},
+						{Model: "gpt-a", Effort: "high", Score: &score, GradedTasks: 4},
+					},
+				},
 			})
 			require.NoError(t, err)
 			require.NoError(t, model.SaveModelRadarSnapshot(t.Context(), &model.ModelRadarSnapshot{SchemaVersion: 2, Payload: payload, FetchedAt: common.GetTimestamp()}))

@@ -106,27 +106,23 @@ func TestGetModelRadarTreatsFreshFetchAsCurrentWhenSourceHasNotChanged(t *testin
 	assert.False(t, data.Stale)
 }
 
-func TestGetModelRadarDerivesSummaryFromBench(t *testing.T) {
+func TestGetModelRadarDerivesSummaryFromFourTask(t *testing.T) {
 	setupModelRadarServiceTestDB(t)
-	latest := int64(900)
 	// A snapshot written by the legacy build still carries its own counts, update
-	// time and archive. The page only shows the bench board, so the summary must
-	// describe that board instead.
+	// time and archive. The page only shows the four-task board, so the summary
+	// must describe that board instead.
 	payload, err := common.Marshal(map[string]any{
 		"schema_version":      1,
 		"model_count":         24,
 		"configuration_count": 89,
 		"source_updated_at":   100,
-		"bench": ModelRadarBench{
-			ReadAt: 50,
-			Cells: []ModelRadarBenchCell{
+		"four_task": ModelRadarFourTask{
+			VerifiedAt: 900,
+			ModelOrder: []string{"gpt-a", "gpt-b"},
+			Cells: []ModelRadarFourTaskCell{
 				{Model: "gpt-a", Effort: "low"},
 				{Model: "gpt-a", Effort: "high"},
-				{
-					Model:         "gpt-b",
-					Effort:        "low",
-					DetailMetrics: &ModelRadarBenchDetailMetrics{LatestGradedAt: &latest},
-				},
+				{Model: "gpt-b", Effort: "low"},
 			},
 		},
 	})
@@ -162,22 +158,6 @@ func TestModelRadarSyncIntervalUsesTenMinuteFloor(t *testing.T) {
 	assert.Equal(t, 75*time.Minute, ModelRadarStaleAfter())
 }
 
-func TestModelRadarBenchContentTime(t *testing.T) {
-	assert.Zero(t, modelRadarBenchContentTime(nil))
-	assert.Equal(t, int64(50), modelRadarBenchContentTime(&ModelRadarBench{ReadAt: 50}))
-
-	latest := int64(90)
-	bench := &ModelRadarBench{
-		ReadAt: 50,
-		Cells: []ModelRadarBenchCell{
-			{LastGradedDay: 60},
-			{LastGradedDay: 70, DetailMetrics: &ModelRadarBenchDetailMetrics{LatestGradedAt: &latest}},
-			{LastGradedDay: 80},
-		},
-	}
-	assert.Equal(t, int64(90), modelRadarBenchContentTime(bench), "the newest valid grade wins")
-}
-
 func TestSyncModelRadarLiveSource(t *testing.T) {
 	if os.Getenv("TEST_MODEL_RADAR_LIVE") != "1" {
 		t.Skip("set TEST_MODEL_RADAR_LIVE=1 to run the live CodexRadar smoke test")
@@ -194,8 +174,8 @@ func TestSyncModelRadarLiveSource(t *testing.T) {
 	snapshot, err := GetModelRadar(ctx)
 	require.NoError(t, err)
 	require.NotNil(t, snapshot)
-	require.NotNil(t, snapshot.Bench)
-	assert.NotEmpty(t, snapshot.Bench.Cells)
+	require.NotNil(t, snapshot.FourTask)
+	assert.NotEmpty(t, snapshot.FourTask.Cells)
 	assert.Equal(t, modelRadarSourceURL, snapshot.Source.URL)
 }
 
@@ -205,17 +185,17 @@ func TestBuildModelRadarAutoEffortIndexFiltersAndOrders(t *testing.T) {
 	score := func(value float64) *float64 { return &value }
 	data := &ModelRadarData{
 		FetchedAt: 1700000000,
-		Bench: &ModelRadarBench{Cells: []ModelRadarBenchCell{
-			{Model: "gpt-test", Effort: "high", Score: score(135), Coverage: 64,
-				Price: ModelRadarBenchMetricStat{Mean: float64Pointer(2)}},
-			{Model: "gpt-test", Effort: "medium", Score: score(135), Coverage: 64},
-			{Model: "gpt-test", Effort: "xhigh", Score: score(120), Coverage: 64},
-			{Model: "gpt-test", Effort: "low", Score: score(105), Coverage: 64},
+		FourTask: &ModelRadarFourTask{Cells: []ModelRadarFourTaskCell{
+			{Model: "gpt-test", Effort: "high", Score: score(135), GradedTasks: 4,
+				CostUSD: float64Pointer(2)},
+			{Model: "gpt-test", Effort: "medium", Score: score(135), GradedTasks: 4},
+			{Model: "gpt-test", Effort: "xhigh", Score: score(120), GradedTasks: 4},
+			{Model: "gpt-test", Effort: "low", Score: score(105), GradedTasks: 4},
 			// Excluded from automatic selection by name.
-			{Model: "gpt-test", Effort: "ultra", Score: score(150), Coverage: 64},
+			{Model: "gpt-test", Effort: "ultra", Score: score(150), GradedTasks: 4},
 			// Too few graded tasks to drive an automatic change.
-			{Model: "gpt-test", Effort: "max", Score: score(148), Coverage: modelRadarAutoEffortMinValidTasks - 1},
-			{Model: "hidden-model", Effort: "high", Score: score(142.5), Coverage: 64},
+			{Model: "gpt-test", Effort: "max", Score: score(148), GradedTasks: modelRadarAutoEffortMinValidTasks - 1},
+			{Model: "hidden-model", Effort: "high", Score: score(142.5), GradedTasks: 4},
 		}},
 	}
 	settings := setting.ModelRadarSettings{
@@ -261,15 +241,15 @@ func TestBuildModelRadarAutoEffortIndexFiltersAndOrders(t *testing.T) {
 	assert.False(t, hidden, "a hidden model never reaches auto-effort")
 }
 
-func TestBuildModelRadarAutoEffortIndexRequiresBenchScores(t *testing.T) {
+func TestBuildModelRadarAutoEffortIndexRequiresFourTaskScores(t *testing.T) {
 	settings := setting.ModelRadarSettings{AutoEffortEnabled: true}
 	index := buildModelRadarAutoEffortIndex(&ModelRadarData{FetchedAt: 1}, settings, `{}`)
 	assert.Empty(t, index.byModel, "there is no other score source to fall back to")
 
 	index = buildModelRadarAutoEffortIndex(&ModelRadarData{
 		FetchedAt: 1,
-		Bench: &ModelRadarBench{Cells: []ModelRadarBenchCell{
-			{Model: "gpt-test", Effort: "high", Coverage: 64},
+		FourTask: &ModelRadarFourTask{Cells: []ModelRadarFourTaskCell{
+			{Model: "gpt-test", Effort: "high", GradedTasks: 4},
 		}},
 	}, settings, `{}`)
 	assert.Empty(t, index.byModel, "a tier without a score cannot be selected")
@@ -280,8 +260,8 @@ func TestLookupModelRadarCandidatesResolvesNames(t *testing.T) {
 	score := 120.0
 	RebuildModelRadarAutoEffortIndex(&ModelRadarData{
 		FetchedAt: common.GetTimestamp(),
-		Bench: &ModelRadarBench{Cells: []ModelRadarBenchCell{
-			{Model: "GPT-Test", Effort: "high", Score: &score, Coverage: 64},
+		FourTask: &ModelRadarFourTask{Cells: []ModelRadarFourTaskCell{
+			{Model: "GPT-Test", Effort: "high", Score: &score, GradedTasks: 4},
 		}},
 	})
 

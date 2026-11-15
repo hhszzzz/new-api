@@ -18,7 +18,6 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { Tick02Icon } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
-import type { TFunction } from 'i18next'
 import { useMemo, useState, type CSSProperties } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -34,9 +33,14 @@ import { cn } from '@/lib/utils'
 
 import { isModelAutoEffortEnabled } from '../hooks/use-radar-auto-effort'
 import { useRadarFormatters } from '../hooks/use-radar-formatters'
-import { benchStatusLabelKey } from '../lib/bench'
 import {
-  benchEffortCandidates,
+  FOUR_TASK_DIMENSIONS,
+  fourTaskComponentStatusLabelKey,
+  fourTaskStatusLabelKey,
+  type FourTaskDimension,
+} from '../lib/four-task'
+import {
+  fourTaskEffortCandidates,
   getIqTone,
   IQ_TEXT_CLASSES,
   isRadarAutoEffortAllowed,
@@ -47,16 +51,16 @@ import {
   type ModelRadarIconRegistry,
 } from '../lib/model-radar'
 import type {
-  ModelRadarBench,
-  ModelRadarBenchCell,
-  ModelRadarBenchSourceScore,
+  ModelRadarFourTask,
+  ModelRadarFourTaskCell,
+  ModelRadarFourTaskComponent,
   ModelRadarSettings,
 } from '../types'
-import { BenchCellDetails } from './bench-cell-details'
+import { FourTaskCellDetails } from './four-task-cell-details'
 import { ModelBadge } from './model-badge'
 
-/** Per-model auto-effort controls the bench renders next to each model name. */
-export type BenchAutoEffortState = {
+/** Per-model auto-effort controls the board renders next to each model name. */
+export type FourTaskAutoEffortState = {
   setting: RadarAutoEffortSetting
   isSaving: boolean
   /** Models the signed-in user may call. */
@@ -64,17 +68,7 @@ export type BenchAutoEffortState = {
   onToggle: (model: string, enabled: boolean) => void
 }
 
-const BENCH_DIMENSIONS = [
-  { key: 'total', label: 'Total' },
-  { key: 'deepswe', label: 'Software engineering' },
-  { key: 'pompeii', label: 'Visual-spatial reasoning' },
-  { key: 'tb4', label: 'Terminal & systems' },
-  { key: 'science', label: 'Scientific research' },
-] as const
-
-type BenchDimension = (typeof BENCH_DIMENSIONS)[number]['key']
-
-const BENCH_EFFORT_ORDER = [
+const FOUR_TASK_EFFORT_ORDER = [
   'ultra',
   'max',
   'xhigh',
@@ -83,97 +77,106 @@ const BENCH_EFFORT_ORDER = [
   'low',
 ] as const
 
-// The dashboard titles the model names as GPT-6.1 Sol / GPT-5.6 Luna.
-function formatBenchModelName(model: string): string {
+// The station titles the model names as GPT-6.1 Sol / GPT-5.6 Luna.
+function formatModelName(model: string): string {
   return model
     .replace(/^gpt-/i, 'GPT-')
     .replaceAll(/-([a-z0-9])/g, (_, char: string) => ` ${char.toUpperCase()}`)
 }
 
-function benchScoreTone(score: number): keyof typeof IQ_TEXT_CLASSES {
-  return getIqTone((score / 150) * 100)
+function fourTaskScoreTone(
+  score: number,
+  dimension: FourTaskDimension
+): keyof typeof IQ_TEXT_CLASSES {
+  return getIqTone(dimension === 'total' ? score / 1.5 : score)
 }
 
-// One row of the grid is one model; efforts the binding does not grade for that
+// One row of the grid is one model; efforts the round does not grade for that
 // model stay hidden so every column keeps its place.
-function benchModelRows(bench: ModelRadarBench) {
-  const models: string[] = []
-  const byModel = new Map<string, ModelRadarBenchCell[]>()
-  for (const cell of bench.cells) {
+function fourTaskModelRows(board: ModelRadarFourTask) {
+  const byModel = new Map<string, ModelRadarFourTaskCell[]>()
+  for (const cell of board.cells) {
     const cells = byModel.get(cell.model)
     if (cells) {
       cells.push(cell)
     } else {
       byModel.set(cell.model, [cell])
-      models.push(cell.model)
     }
   }
   for (const cells of byModel.values()) {
     cells.sort(
       (left, right) =>
-        BENCH_EFFORT_ORDER.indexOf(
-          left.effort as (typeof BENCH_EFFORT_ORDER)[number]
+        FOUR_TASK_EFFORT_ORDER.indexOf(
+          left.effort as (typeof FOUR_TASK_EFFORT_ORDER)[number]
         ) -
-        BENCH_EFFORT_ORDER.indexOf(
-          right.effort as (typeof BENCH_EFFORT_ORDER)[number]
+        FOUR_TASK_EFFORT_ORDER.indexOf(
+          right.effort as (typeof FOUR_TASK_EFFORT_ORDER)[number]
         )
     )
   }
+  const models =
+    board.model_order.length > 0
+      ? board.model_order.filter((model) => byModel.has(model))
+      : [...byModel.keys()]
   return models.map((model, index) => ({
     model,
+    displayName: board.model_names[model] ?? formatModelName(model),
     cells: byModel.get(model) ?? [],
     color: MODEL_COLORS[index % MODEL_COLORS.length],
   }))
 }
 
-type BenchDimensionScore = {
+type FourTaskDimensionScore = {
   score: number | null
-  coverage: number
-  requiredTasks: number
+  graded: number
+  required: number
   status: string
+  rank: number | null
 }
 
-function benchDimensionScore(
-  cell: ModelRadarBenchCell,
-  dimension: BenchDimension
-): BenchDimensionScore {
+function fourTaskDimensionScore(
+  cell: ModelRadarFourTaskCell,
+  dimension: FourTaskDimension
+): FourTaskDimensionScore {
   if (dimension === 'total') {
     return {
       score: cell.score,
-      coverage: cell.coverage,
-      requiredTasks: cell.required_tasks,
-      status: cell.score_status,
+      graded: cell.graded_tasks,
+      required: cell.required_tasks,
+      status: fourTaskStatusLabelKey(cell),
+      rank: cell.rank,
     }
   }
-  const row: ModelRadarBenchSourceScore | undefined =
-    cell.source_scores[dimension]
-  if (!row) {
-    return { score: null, coverage: 0, requiredTasks: 0, status: 'missing' }
-  }
-  let status = 'provisional'
-  if (row.coverage === 0) {
-    status = 'missing_current_result'
-  } else if (row.coverage === row.required_tasks) {
-    status = 'complete'
+  const component: ModelRadarFourTaskComponent | undefined =
+    cell.components[dimension]
+  if (!component) {
+    return {
+      score: null,
+      graded: 0,
+      required: 1,
+      status: 'Missing',
+      rank: null,
+    }
   }
   return {
-    score: row.score,
-    coverage: row.coverage,
-    requiredTasks: row.required_tasks,
-    status,
+    score: component.score,
+    graded: component.score === null ? 0 : 1,
+    required: 1,
+    status: fourTaskComponentStatusLabelKey(component.score),
+    rank: null,
   }
 }
 
-// Mirrors the gateway's per-model auto-effort state so the bench can show the
+// Mirrors the gateway's per-model auto-effort state so the board can show the
 // switch and preview which tier the next request would use.
 function resolveRowAutoEffort(
-  row: { model: string; cells: ModelRadarBenchCell[] },
+  row: { model: string; cells: ModelRadarFourTaskCell[] },
   settings: ModelRadarSettings | undefined,
-  autoEffort: BenchAutoEffortState | undefined
+  autoEffort: FourTaskAutoEffortState | undefined
 ) {
   if (!autoEffort) return null
   const pick = pickAutoEffort(
-    benchEffortCandidates(row.cells),
+    fourTaskEffortCandidates(row.cells),
     autoEffort.setting.policy ?? 'highest_iq',
     autoEffort.setting.min_iq_delta ?? 5
   )
@@ -194,34 +197,30 @@ function resolveRowAutoEffort(
   }
 }
 
-export function BenchPanel(props: {
-  bench: ModelRadarBench
+export function FourTaskPanel(props: {
+  board: ModelRadarFourTask
   settings?: ModelRadarSettings
   iconRegistry?: ModelRadarIconRegistry
-  autoEffort?: BenchAutoEffortState
+  autoEffort?: FourTaskAutoEffortState
 }) {
   const { t } = useTranslation()
-  const [dimension, setDimension] = useState<BenchDimension>('total')
+  const format = useRadarFormatters()
+  const [dimension, setDimension] = useState<FourTaskDimension>('total')
   const [detail, setDetail] = useState<{
-    cell: ModelRadarBenchCell
+    cell: ModelRadarFourTaskCell
     displayName: string
   } | null>(null)
-  const rows = useMemo(() => benchModelRows(props.bench), [props.bench])
-  const bench = props.bench
-  const partial = bench.loaded_count < bench.total_count
-  const failedCells = useMemo(
-    () => new Set(bench.failed_cells),
-    [bench.failed_cells]
-  )
+  const rows = useMemo(() => fourTaskModelRows(props.board), [props.board])
+  const board = props.board
 
   return (
-    <section aria-label={t('RadarBench score')} className='mt-5'>
+    <section aria-label={t('Four-task score')} className='mt-5'>
       <div
         role='group'
         aria-label={t('Score dimension')}
         className='flex flex-wrap gap-1.5'
       >
-        {BENCH_DIMENSIONS.map((item) => (
+        {FOUR_TASK_DIMENSIONS.map((item) => (
           <button
             key={item.key}
             type='button'
@@ -240,13 +239,15 @@ export function BenchPanel(props: {
       </div>
 
       <div
-        className='bg-background text-muted-foreground sticky top-16 z-10 mt-3 mb-1 hidden grid-cols-[repeat(var(--bench-effort-count),minmax(0,1fr))] gap-1.5 py-1 text-center text-xs font-medium md:grid lg:pl-[16rem]'
+        className='bg-background text-muted-foreground sticky top-16 z-10 mt-3 mb-1 hidden grid-cols-[repeat(var(--four-task-effort-count),minmax(0,1fr))] gap-1.5 py-1 text-center text-xs font-medium md:grid lg:pl-[16rem]'
         style={
-          { '--bench-effort-count': BENCH_EFFORT_ORDER.length } as CSSProperties
+          {
+            '--four-task-effort-count': FOUR_TASK_EFFORT_ORDER.length,
+          } as CSSProperties
         }
         aria-hidden='true'
       >
-        {BENCH_EFFORT_ORDER.map((effort) => (
+        {FOUR_TASK_EFFORT_ORDER.map((effort) => (
           <span key={effort} className='capitalize'>
             {effort}
           </span>
@@ -262,7 +263,7 @@ export function BenchPanel(props: {
           )
           const displayName =
             resolved.displayName === row.model
-              ? formatBenchModelName(row.model)
+              ? row.displayName
               : resolved.displayName
           const auto = resolveRowAutoEffort(
             row,
@@ -274,7 +275,7 @@ export function BenchPanel(props: {
           const rowBestScore = Math.max(
             ...row.cells.map(
               (cell) =>
-                benchDimensionScore(cell, dimension).score ??
+                fourTaskDimensionScore(cell, dimension).score ??
                 Number.NEGATIVE_INFINITY
             )
           )
@@ -328,14 +329,14 @@ export function BenchPanel(props: {
                 ) : null}
               </header>
               <div
-                className='grid grid-cols-2 gap-1.5 md:grid-cols-[repeat(var(--bench-effort-count),minmax(0,1fr))]'
+                className='grid grid-cols-2 gap-1.5 md:grid-cols-[repeat(var(--four-task-effort-count),minmax(0,1fr))]'
                 style={
                   {
-                    '--bench-effort-count': BENCH_EFFORT_ORDER.length,
+                    '--four-task-effort-count': FOUR_TASK_EFFORT_ORDER.length,
                   } as CSSProperties
                 }
               >
-                {BENCH_EFFORT_ORDER.map((effort) => {
+                {FOUR_TASK_EFFORT_ORDER.map((effort) => {
                   const cell = row.cells.find(
                     (item) => item.effort.trim().toLowerCase() === effort
                   )
@@ -348,7 +349,7 @@ export function BenchPanel(props: {
                       />
                     )
                   }
-                  const view = benchDimensionScore(cell, dimension)
+                  const view = fourTaskDimensionScore(cell, dimension)
                   const autoSelected =
                     activeEffort !== null &&
                     cell.effort.trim().toLowerCase() === activeEffort
@@ -357,11 +358,11 @@ export function BenchPanel(props: {
                       ? autoSelected
                       : view.score !== null && view.score === rowBestScore
                   return (
-                    <BenchCell
+                    <FourTaskCell
                       key={effort}
                       cell={cell}
                       dimension={dimension}
-                      carried={failedCells.has(`${cell.model}|${cell.effort}`)}
+                      testedAt={board.test_completed_at}
                       best={best}
                       autoSelected={autoSelected}
                       onOpen={() => setDetail({ cell, displayName })}
@@ -375,18 +376,27 @@ export function BenchPanel(props: {
       </div>
 
       <footer className='text-muted-foreground mt-3 flex flex-col gap-0.5 text-xs'>
-        {partial ? (
-          <span>
-            {t(
-              'This round read {{loaded}} of {{total}} configurations; failed tiers keep their previous values.',
-              { loaded: bench.loaded_count, total: bench.total_count }
-            )}
-          </span>
-        ) : null}
+        <span>
+          {t(
+            '{{graded}}/{{expected}} graded · {{totals}} totals · {{ungraded}} missing',
+            {
+              graded: format.integer(board.graded),
+              expected: format.integer(board.expected),
+              totals: format.integer(board.valid_totals),
+              ungraded: format.integer(board.ungraded),
+            }
+          )}
+        </span>
+        <span>
+          {t('Tested {{time}}', {
+            time: format.dateTime(board.test_completed_at),
+          })}
+        </span>
       </footer>
 
-      <BenchCellDetails
+      <FourTaskCellDetails
         cell={detail?.cell ?? null}
+        board={board}
         displayName={detail?.displayName ?? ''}
         open={detail !== null}
         onOpenChange={(open) => {
@@ -397,11 +407,10 @@ export function BenchPanel(props: {
   )
 }
 
-function BenchCell(props: {
-  cell: ModelRadarBenchCell
-  dimension: BenchDimension
-  /** A failed tier keeps the previous round's values. */
-  carried: boolean
+function FourTaskCell(props: {
+  cell: ModelRadarFourTaskCell
+  dimension: FourTaskDimension
+  testedAt: number
   /** Highest score of the row in the selected dimension. */
   best: boolean
   /** Tier the gateway would select for this model right now. */
@@ -411,29 +420,24 @@ function BenchCell(props: {
   const { t } = useTranslation()
   const format = useRadarFormatters()
   const cell = props.cell
-  const view = benchDimensionScore(cell, props.dimension)
-  const carried = props.carried && cell.read_at > 0
+  const view = fourTaskDimensionScore(cell, props.dimension)
+  const missingComponents = FOUR_TASK_DIMENSIONS.slice(1)
+    .map((item) => cell.components[item.key])
+    .filter((component) => component && component.score === null)
   const detail = [
-    `${t('Covered tasks / required tasks')}: ${format.integer(view.coverage)}/${format.integer(view.requiredTasks)}`,
-    cell.graded_runs_count == null
-      ? null
-      : t('{{count}} graded runs', {
-          count: format.integer(cell.graded_runs_count),
-        }),
-    cell.last_graded_day > 0
-      ? t('Latest graded day {{date}}', {
-          date: format.utcDay(cell.last_graded_day),
-        })
-      : null,
-    benchMetricTitle(t, format, t('Mean API equivalent'), cell.price, false),
-    benchMetricTitle(t, format, t('Mean duration'), cell.duration, true),
-    cell.statistics_state === 'invalid_source_statistics'
-      ? t('Invalid source statistics')
-      : null,
-    carried
-      ? t('Keeping the previous read from {{time}}', {
-          time: format.dateTime(cell.read_at),
-        })
+    t('Graded tasks {{graded}}/{{required}}', {
+      graded: format.integer(view.graded),
+      required: format.integer(view.required),
+    }),
+    view.rank === null ? null : t('Rank #{{rank}}', { rank: view.rank }),
+    `${t('Cost (USD)')}: ${format.usd(cell.cost_usd) ?? '—'}`,
+    `${t('Runtime (min)')}: ${format.decimal(cell.duration_minutes) ?? '—'}`,
+    t('Tested {{time}}', { time: format.dateTime(props.testedAt) }),
+    missingComponents.length > 0
+      ? `${t('Missing')}: ${missingComponents
+          .map((component) => component?.missing_reason)
+          .filter(Boolean)
+          .join(', ')}`
       : null,
   ]
     .filter(Boolean)
@@ -450,7 +454,6 @@ function BenchCell(props: {
       })}
       className={cn(
         'bg-card relative flex min-h-11 min-w-0 flex-col justify-center gap-0.5 rounded-md border px-1.5 py-1 text-center transition-colors hover:bg-muted/40 focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none',
-        carried && 'border-dashed',
         props.best && 'ring-primary/40 ring-1',
         props.autoSelected && 'border-primary/60 bg-primary/5'
       )}
@@ -479,32 +482,28 @@ function BenchCell(props: {
           'text-base leading-5 font-semibold tabular-nums',
           view.score == null
             ? 'text-muted-foreground'
-            : IQ_TEXT_CLASSES[benchScoreTone(view.score)]
+            : IQ_TEXT_CLASSES[fourTaskScoreTone(view.score, props.dimension)]
         )}
       >
-        {view.score == null ? '—' : view.score.toFixed(1)}
+        {view.score == null ? '—' : format.decimal(view.score)}
       </span>
       <span className='text-muted-foreground mx-auto flex w-full max-w-32 flex-wrap items-center justify-between gap-x-1 text-[10px] leading-[14px] tabular-nums'>
         <span>
-          {view.requiredTasks > 0
-            ? `${format.integer(view.coverage)}/${format.integer(view.requiredTasks)}`
+          {view.required > 0
+            ? `${format.integer(view.graded)}/${format.integer(view.required)}`
             : '—'}
         </span>
-        <span className='whitespace-nowrap'>
-          {t(benchStatusLabelKey(view.status))}
-        </span>
+        <span className='whitespace-nowrap'>{t(view.status)}</span>
       </span>
       {props.dimension === 'total' ? (
         <span className='text-muted-foreground mx-auto flex w-full max-w-32 flex-wrap items-center justify-between gap-x-1 text-[10px] leading-[14px] tabular-nums'>
-          <span>
-            {cell.price.mean == null ? '—' : format.usd(cell.price.mean)}
-          </span>
+          <span>{format.usd(cell.cost_usd) ?? '—'}</span>
           <span className='whitespace-nowrap'>
-            {cell.duration.mean == null ? (
+            {cell.duration_minutes == null ? (
               '—'
             ) : (
               <>
-                {format.decimal(cell.duration.mean)} {t('min')}
+                {format.decimal(cell.duration_minutes)} {t('min')}
               </>
             )}
           </span>
@@ -512,38 +511,4 @@ function BenchCell(props: {
       ) : null}
     </button>
   )
-}
-
-function benchMetricTitle(
-  t: TFunction,
-  format: ReturnType<typeof useRadarFormatters>,
-  label: string,
-  stat: {
-    mean: number | null
-    known_samples: number | null
-    total_samples: number | null
-  },
-  isDuration: boolean
-): string {
-  if (stat.known_samples == null || stat.total_samples == null) {
-    return `${label}: ${t('Not provided by this source')}`
-  }
-  const known = t('Known samples {{known}}/{{total}}', {
-    known: format.integer(stat.known_samples),
-    total: format.integer(stat.total_samples),
-  })
-  let observed = t('No known values')
-  if (stat.mean != null) {
-    observed = isDuration
-      ? `${format.decimal(stat.mean)} ${t('min')}`
-      : (format.usd(stat.mean) ?? '')
-  }
-  const parts = [`${label}: ${observed}`, known]
-  if (stat.mean != null && stat.known_samples < stat.total_samples) {
-    parts.push(t('Partial sample mean'))
-  }
-  if (!isDuration && stat.mean != null) {
-    parts.push(t('Not a subscription charge'))
-  }
-  return parts.join(' · ')
 }

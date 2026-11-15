@@ -43,7 +43,7 @@ import { useAuthStore } from '@/stores/auth-store'
 
 import { getModelRadar } from './api'
 import { AutoEffortControls } from './components/auto-effort-controls'
-import { BenchPanel } from './components/bench-panel'
+import { FourTaskPanel } from './components/four-task-panel'
 import { useRadarAutoEffort } from './hooks/use-radar-auto-effort'
 import { useRadarFormatters } from './hooks/use-radar-formatters'
 import {
@@ -82,8 +82,8 @@ export function ModelRadar() {
   )
   const snapshot = radarQuery.data?.data
   const settings = resolveRadarSettings(snapshot?.settings)
-  const bench = snapshot?.bench ?? null
-  const hasBench = Boolean(bench && bench.cells.length > 0)
+  const fourTask = snapshot?.four_task ?? null
+  const hasFourTask = Boolean(fourTask && fourTask.cells.length > 0)
   const updatedAt = snapshot
     ? format.dateTime(snapshot.source_updated_at)
     : null
@@ -105,15 +105,15 @@ export function ModelRadar() {
         onRetry={() => void radarQuery.refetch()}
       />
     )
-  } else if (!snapshot || !bench || bench.cells.length === 0) {
+  } else if (!snapshot || !fourTask || fourTask.cells.length === 0) {
     content = <RadarEmpty />
   } else {
     content = (
       <>
         {snapshot.stale ? <StaleNotice sourceUpdatedAt={updatedAt} /> : null}
         {radarQuery.isError ? <RefreshFailureNotice /> : null}
-        <BenchPanel
-          bench={bench}
+        <FourTaskPanel
+          board={fourTask}
           settings={snapshot.settings}
           iconRegistry={iconRegistry}
           autoEffort={
@@ -148,7 +148,7 @@ export function ModelRadar() {
               </div>
               <p className='text-muted-foreground mt-1.5 max-w-2xl text-sm'>
                 {t(
-                  'RadarBench scores, grading activity and observed cost across reasoning tiers.'
+                  'Four-task radar scores, cost and runtime across reasoning tiers.'
                 )}
               </p>
               {snapshot ? (
@@ -156,7 +156,7 @@ export function ModelRadar() {
                   className='text-muted-foreground mt-2 text-xs tabular-nums'
                   aria-live='polite'
                 >
-                  {hasBench
+                  {hasFourTask
                     ? t(
                         '{{models}} models, {{configurations}} configurations',
                         {
@@ -319,7 +319,7 @@ function RadarEmpty() {
         <EmptyTitle>{t('No model radar data')}</EmptyTitle>
         <EmptyDescription>
           {t(
-            'The current snapshot does not contain any RadarBench configurations.'
+            'The current snapshot does not contain any four-task radar configurations.'
           )}
         </EmptyDescription>
       </EmptyHeader>

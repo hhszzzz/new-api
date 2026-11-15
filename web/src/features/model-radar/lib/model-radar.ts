@@ -24,7 +24,7 @@ import {
 } from '@/lib/provider-icon'
 
 import type {
-  ModelRadarBenchCell,
+  ModelRadarFourTaskCell,
   ModelRadarModelOverride,
   ModelRadarSettings,
 } from '../types'
@@ -428,7 +428,7 @@ export type GatewayEffort = (typeof GATEWAY_EFFORT_ORDER)[number]
 
 // A tier graded on fewer tasks than this is too noisy to drive an automatic
 // change. The backend applies the same floor.
-export const AUTO_EFFORT_MIN_VALID_TASKS = 3
+export const AUTO_EFFORT_MIN_GRADED_TASKS = 3
 
 export const AUTO_EFFORT_POLICIES = [
   {
@@ -480,13 +480,13 @@ function asGatewayEffort(effort: string): GatewayEffort | null {
 
 // Orders the tiers a radar model may be switched to: descending IQ, and on
 // equal IQ the weaker tier first so a tie resolves to the cheaper tier.
-export function benchEffortCandidates(
-  cells: ModelRadarBenchCell[],
-  minCoverage = AUTO_EFFORT_MIN_VALID_TASKS
+export function fourTaskEffortCandidates(
+  cells: ModelRadarFourTaskCell[],
+  minGradedTasks = AUTO_EFFORT_MIN_GRADED_TASKS
 ): RadarAutoEffortCandidate[] {
   const byEffort = new Map<GatewayEffort, RadarAutoEffortCandidate>()
   for (const cell of cells) {
-    if (cell.score === null || cell.coverage < minCoverage) continue
+    if (cell.score === null || cell.graded_tasks < minGradedTasks) continue
     const effort = asGatewayEffort(cell.effort)
     if (!effort) continue
     // The published score uses the 150-point display scale; auto-effort keeps
@@ -498,7 +498,7 @@ export function benchEffortCandidates(
       effort,
       radarEffort: cell.effort.trim().toLowerCase(),
       iq,
-      priceUsd: cell.price.mean,
+      priceUsd: cell.cost_usd,
     })
   }
   return [...byEffort.values()].sort(

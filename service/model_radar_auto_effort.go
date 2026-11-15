@@ -115,17 +115,17 @@ func RebuildModelRadarAutoEffortIndex(data *ModelRadarData) {
 	modelRadarAutoEffortIndexCache.Unlock()
 }
 
-// buildModelRadarAutoEffortIndex maps every usable RadarBench tier onto a
-// gateway reasoning effort. The bench is the radar's only score source, so a
-// model the bench does not grade simply has no automatic choice.
+// buildModelRadarAutoEffortIndex maps every usable four-task configuration onto
+// a gateway reasoning effort. The four-task board is the radar's only score
+// source, so a model the board does not grade simply has no automatic choice.
 func buildModelRadarAutoEffortIndex(data *ModelRadarData, settings setting.ModelRadarSettings, settingsRaw string) *modelRadarAutoEffortIndex {
 	byModel := make(map[string]ModelRadarCandidates)
-	if data == nil || data.Bench == nil {
+	if data == nil || data.FourTask == nil {
 		return &modelRadarAutoEffortIndex{byModel: byModel, settingsRaw: settingsRaw, loadedAt: common.GetTimestamp()}
 	}
-	for _, cell := range data.Bench.Cells {
+	for _, cell := range data.FourTask.Cells {
 		if settings.Models[cell.Model].Hidden || cell.Score == nil ||
-			cell.Coverage < modelRadarAutoEffortMinValidTasks {
+			cell.GradedTasks < modelRadarAutoEffortMinValidTasks {
 			continue
 		}
 		if strings.EqualFold(strings.TrimSpace(cell.Effort), modelRadarAutoEffortExcludedTier) {
@@ -137,7 +137,7 @@ func buildModelRadarAutoEffortIndex(data *ModelRadarData, settings setting.Model
 		}
 		// The published score uses the 150-point display scale; auto-effort
 		// keeps the 0-100 radar IQ scale so configured IQ deltas stay meaningful.
-		iq := *cell.Score / modelRadarBenchDisplayMultiplier
+		iq := *cell.Score / modelRadarFourTaskDisplayMultiplier
 		if !isFiniteInRange(iq, 0, math.MaxFloat64) {
 			continue
 		}
@@ -152,8 +152,8 @@ func buildModelRadarAutoEffortIndex(data *ModelRadarData, settings setting.Model
 			Effort:      effort,
 			RadarEffort: cell.Effort,
 			IQ:          iq,
-			ValidTasks:  cell.Coverage,
-			PriceUSD:    cell.Price.Mean,
+			ValidTasks:  cell.GradedTasks,
+			PriceUSD:    cell.CostUSD,
 		})
 		byModel[key] = bucket
 	}

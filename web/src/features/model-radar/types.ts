@@ -22,83 +22,51 @@ export type ModelRadarSource = {
   attribution: string
 }
 
-export type ModelRadarBenchMetricStat = {
-  /** Observed mean over the known samples; null when no sample has the measurement. */
-  mean: number | null
-  known_samples: number | null
-  total_samples: number | null
-}
-
-/** One token or turn aggregate over all retained valid grades of a tier. */
-export type ModelRadarBenchDetailMetric = {
-  mean: number | null
-  known_samples: number
-  total_samples: number
-}
-
-/**
- * Grading activity and token usage published with the v6 RadarBench summary.
- * `metrics` is empty unless `metrics_state` is `available`.
- */
-export type ModelRadarBenchDetailMetrics = {
-  valid_grade_events: number
-  latest_graded_at: number | null
-  as_of: number
-  graded_24h: number
-  graded_48h: number
-  metrics_state: string
-  metrics: Record<string, ModelRadarBenchDetailMetric>
-}
-
-export type ModelRadarBenchSourceScore = {
+export type ModelRadarFourTaskComponent = {
+  /** Component result on its 0-100 scale; null when the component was not graded. */
   score: number | null
-  coverage: number
-  required_tasks: number
-  graded_runs_count: number | null
+  /** Share of the 150-point total. */
+  weight: number
+  /** Weight * score / 100. */
+  contribution: number | null
+  cost_usd: number | null
+  duration_minutes: number | null
+  state: string
+  missing_reason?: string
 }
 
-export type ModelRadarBenchHistoryPoint = {
-  ts: number
-  score: number | null
-  coverage: number
-  score_status: string
-}
-
-export type ModelRadarBenchCell = {
+export type ModelRadarFourTaskCell = {
   model: string
   effort: string
+  /** Weighted total; null unless every component was graded. */
   score: number | null
-  coverage: number
+  graded_tasks: number
   required_tasks: number
-  score_status: string
-  graded_runs_count: number | null
-  source_scores: Record<string, ModelRadarBenchSourceScore>
-  price: ModelRadarBenchMetricStat
-  duration: ModelRadarBenchMetricStat
-  statistics_state: string
-  /** How the score was aggregated; absent in pre-v6 snapshots. */
-  scoring_policy_version?: string
-  /** v6 grading-activity and token detail; null when the snapshot predates it. */
-  detail_metrics: ModelRadarBenchDetailMetrics | null
-  history_state: string
-  history: ModelRadarBenchHistoryPoint[]
-  last_graded_day: number
-  read_at: number
+  /** Place among the published totals, highest first; null without a total. */
+  rank: number | null
+  components: Record<string, ModelRadarFourTaskComponent>
+  cost_usd: number | null
+  duration_minutes: number | null
 }
 
-export type ModelRadarBench = {
-  benchmark: string
-  catalog_version: string
-  task_set_sha256: string
-  score_version: string
+export type ModelRadarFourTask = {
+  protocol: string
+  round_id: string
   score_max: number
-  source_counts: Record<string, number>
-  /** Time of the last round that read every bound selection; 0 until it happens. */
+  source_sha256: string
+  publication_status: string
+  verified_at: number
+  test_started_at: number
+  test_completed_at: number
+  graded: number
+  expected: number
+  ungraded: number
+  valid_totals: number
+  task_weights: Record<string, number>
+  model_names: Record<string, string>
+  model_order: string[]
   read_at: number
-  loaded_count: number
-  total_count: number
-  failed_cells: string[]
-  cells: ModelRadarBenchCell[]
+  cells: ModelRadarFourTaskCell[]
 }
 
 export type ModelRadarData = {
@@ -110,7 +78,7 @@ export type ModelRadarData = {
   source: ModelRadarSource
   model_count: number
   configuration_count: number
-  bench: ModelRadarBench | null
+  four_task: ModelRadarFourTask | null
 }
 
 export type ModelRadarModelOverride = {
