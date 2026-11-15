@@ -18,17 +18,6 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import type { ModelRadarFourTaskCell } from '../types'
 
-/** Score dimensions in display order; the keys match the upstream components. */
-export const FOUR_TASK_DIMENSIONS = [
-  { key: 'total', label: 'Total score' },
-  { key: 'combined', label: 'Qin Shi Huang' },
-  { key: 'pompeii', label: 'Pompeii' },
-  { key: 'pelican', label: 'Pelican' },
-  { key: 'candy', label: 'Candy' },
-] as const
-
-export type FourTaskDimension = (typeof FOUR_TASK_DIMENSIONS)[number]['key']
-
 /** Maps a four-task configuration to its status label. A total is published
  * only when all four components were graded, so a partially graded tier stays
  * visibly different from one with no results at all. */
@@ -38,9 +27,4 @@ export function fourTaskStatusLabelKey(
   if (cell.score !== null) return 'Complete'
   if (cell.graded_tasks === 0) return 'No valid grades'
   return 'Missing'
-}
-
-/** Maps one component's result to its status label. */
-export function fourTaskComponentStatusLabelKey(score: number | null): string {
-  return score === null ? 'Missing' : 'Complete'
 }

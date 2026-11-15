@@ -33,12 +33,7 @@ import { cn } from '@/lib/utils'
 
 import { isModelAutoEffortEnabled } from '../hooks/use-radar-auto-effort'
 import { useRadarFormatters } from '../hooks/use-radar-formatters'
-import {
-  FOUR_TASK_DIMENSIONS,
-  fourTaskComponentStatusLabelKey,
-  fourTaskStatusLabelKey,
-  type FourTaskDimension,
-} from '../lib/four-task'
+import { fourTaskStatusLabelKey } from '../lib/four-task'
 import {
   fourTaskEffortCandidates,
   getIqTone,
@@ -53,7 +48,6 @@ import {
 import type {
   ModelRadarFourTask,
   ModelRadarFourTaskCell,
-  ModelRadarFourTaskComponent,
   ModelRadarSettings,
 } from '../types'
 import { FourTaskCellDetails } from './four-task-cell-details'
@@ -84,11 +78,8 @@ function formatModelName(model: string): string {
     .replaceAll(/-([a-z0-9])/g, (_, char: string) => ` ${char.toUpperCase()}`)
 }
 
-function fourTaskScoreTone(
-  score: number,
-  dimension: FourTaskDimension
-): keyof typeof IQ_TEXT_CLASSES {
-  return getIqTone(dimension === 'total' ? score / 1.5 : score)
+function fourTaskScoreTone(score: number): keyof typeof IQ_TEXT_CLASSES {
+  return getIqTone((score / 150) * 100)
 }
 
 // One row of the grid is one model; efforts the round does not grade for that
@@ -124,47 +115,6 @@ function fourTaskModelRows(board: ModelRadarFourTask) {
     cells: byModel.get(model) ?? [],
     color: MODEL_COLORS[index % MODEL_COLORS.length],
   }))
-}
-
-type FourTaskDimensionScore = {
-  score: number | null
-  graded: number
-  required: number
-  status: string
-  rank: number | null
-}
-
-function fourTaskDimensionScore(
-  cell: ModelRadarFourTaskCell,
-  dimension: FourTaskDimension
-): FourTaskDimensionScore {
-  if (dimension === 'total') {
-    return {
-      score: cell.score,
-      graded: cell.graded_tasks,
-      required: cell.required_tasks,
-      status: fourTaskStatusLabelKey(cell),
-      rank: cell.rank,
-    }
-  }
-  const component: ModelRadarFourTaskComponent | undefined =
-    cell.components[dimension]
-  if (!component) {
-    return {
-      score: null,
-      graded: 0,
-      required: 1,
-      status: 'Missing',
-      rank: null,
-    }
-  }
-  return {
-    score: component.score,
-    graded: component.score === null ? 0 : 1,
-    required: 1,
-    status: fourTaskComponentStatusLabelKey(component.score),
-    rank: null,
-  }
 }
 
 // Mirrors the gateway's per-model auto-effort state so the board can show the
@@ -205,7 +155,6 @@ export function FourTaskPanel(props: {
 }) {
   const { t } = useTranslation()
   const format = useRadarFormatters()
-  const [dimension, setDimension] = useState<FourTaskDimension>('total')
   const [detail, setDetail] = useState<{
     cell: ModelRadarFourTaskCell
     displayName: string
@@ -215,29 +164,6 @@ export function FourTaskPanel(props: {
 
   return (
     <section aria-label={t('Four-task score')} className='mt-5'>
-      <div
-        role='group'
-        aria-label={t('Score dimension')}
-        className='flex flex-wrap gap-1.5'
-      >
-        {FOUR_TASK_DIMENSIONS.map((item) => (
-          <button
-            key={item.key}
-            type='button'
-            aria-pressed={dimension === item.key}
-            onClick={() => setDimension(item.key)}
-            className={cn(
-              'focus-visible:ring-ring rounded-md border px-2.5 py-1 text-xs font-medium transition-colors outline-none focus-visible:ring-2',
-              dimension === item.key
-                ? 'bg-primary text-primary-foreground border-primary'
-                : 'bg-background hover:bg-muted/50'
-            )}
-          >
-            {t(item.label)}
-          </button>
-        ))}
-      </div>
-
       <div
         className='bg-background text-muted-foreground sticky top-16 z-10 mt-3 mb-1 hidden grid-cols-[repeat(var(--four-task-effort-count),minmax(0,1fr))] gap-1.5 py-1 text-center text-xs font-medium md:grid lg:pl-[16rem]'
         style={
@@ -273,11 +199,7 @@ export function FourTaskPanel(props: {
           const activeEffort =
             auto?.enabled && auto.available ? auto.targetEffort : null
           const rowBestScore = Math.max(
-            ...row.cells.map(
-              (cell) =>
-                fourTaskDimensionScore(cell, dimension).score ??
-                Number.NEGATIVE_INFINITY
-            )
+            ...row.cells.map((cell) => cell.score ?? Number.NEGATIVE_INFINITY)
           )
           return (
             <section
@@ -349,19 +271,17 @@ export function FourTaskPanel(props: {
                       />
                     )
                   }
-                  const view = fourTaskDimensionScore(cell, dimension)
                   const autoSelected =
                     activeEffort !== null &&
                     cell.effort.trim().toLowerCase() === activeEffort
                   const best =
                     activeEffort !== null
                       ? autoSelected
-                      : view.score !== null && view.score === rowBestScore
+                      : cell.score !== null && cell.score === rowBestScore
                   return (
                     <FourTaskCell
                       key={effort}
                       cell={cell}
-                      dimension={dimension}
                       testedAt={board.test_completed_at}
                       best={best}
                       autoSelected={autoSelected}
@@ -409,9 +329,8 @@ export function FourTaskPanel(props: {
 
 function FourTaskCell(props: {
   cell: ModelRadarFourTaskCell
-  dimension: FourTaskDimension
   testedAt: number
-  /** Highest score of the row in the selected dimension. */
+  /** Highest score of the row. */
   best: boolean
   /** Tier the gateway would select for this model right now. */
   autoSelected: boolean
@@ -420,25 +339,15 @@ function FourTaskCell(props: {
   const { t } = useTranslation()
   const format = useRadarFormatters()
   const cell = props.cell
-  const view = fourTaskDimensionScore(cell, props.dimension)
-  const missingComponents = FOUR_TASK_DIMENSIONS.slice(1)
-    .map((item) => cell.components[item.key])
-    .filter((component) => component && component.score === null)
   const detail = [
     t('Graded tasks {{graded}}/{{required}}', {
-      graded: format.integer(view.graded),
-      required: format.integer(view.required),
+      graded: format.integer(cell.graded_tasks),
+      required: format.integer(cell.required_tasks),
     }),
-    view.rank === null ? null : t('Rank #{{rank}}', { rank: view.rank }),
+    cell.rank === null ? null : t('Rank #{{rank}}', { rank: cell.rank }),
     `${t('Cost (USD)')}: ${format.usd(cell.cost_usd) ?? '—'}`,
     `${t('Runtime (min)')}: ${format.decimal(cell.duration_minutes) ?? '—'}`,
     t('Tested {{time}}', { time: format.dateTime(props.testedAt) }),
-    missingComponents.length > 0
-      ? `${t('Missing')}: ${missingComponents
-          .map((component) => component?.missing_reason)
-          .filter(Boolean)
-          .join(', ')}`
-      : null,
   ]
     .filter(Boolean)
     .join(' · ')
@@ -480,35 +389,35 @@ function FourTaskCell(props: {
       <span
         className={cn(
           'text-base leading-5 font-semibold tabular-nums',
-          view.score == null
+          cell.score == null
             ? 'text-muted-foreground'
-            : IQ_TEXT_CLASSES[fourTaskScoreTone(view.score, props.dimension)]
+            : IQ_TEXT_CLASSES[fourTaskScoreTone(cell.score)]
         )}
       >
-        {view.score == null ? '—' : format.decimal(view.score)}
+        {cell.score == null ? '—' : format.decimal(cell.score)}
       </span>
       <span className='text-muted-foreground mx-auto flex w-full max-w-32 flex-wrap items-center justify-between gap-x-1 text-[10px] leading-[14px] tabular-nums'>
         <span>
-          {view.required > 0
-            ? `${format.integer(view.graded)}/${format.integer(view.required)}`
+          {cell.required_tasks > 0
+            ? `${format.integer(cell.graded_tasks)}/${format.integer(cell.required_tasks)}`
             : '—'}
         </span>
-        <span className='whitespace-nowrap'>{t(view.status)}</span>
-      </span>
-      {props.dimension === 'total' ? (
-        <span className='text-muted-foreground mx-auto flex w-full max-w-32 flex-wrap items-center justify-between gap-x-1 text-[10px] leading-[14px] tabular-nums'>
-          <span>{format.usd(cell.cost_usd) ?? '—'}</span>
-          <span className='whitespace-nowrap'>
-            {cell.duration_minutes == null ? (
-              '—'
-            ) : (
-              <>
-                {format.decimal(cell.duration_minutes)} {t('min')}
-              </>
-            )}
-          </span>
+        <span className='whitespace-nowrap'>
+          {t(fourTaskStatusLabelKey(cell))}
         </span>
-      ) : null}
+      </span>
+      <span className='text-muted-foreground mx-auto flex w-full max-w-32 flex-wrap items-center justify-between gap-x-1 text-[10px] leading-[14px] tabular-nums'>
+        <span>{format.usd(cell.cost_usd) ?? '—'}</span>
+        <span className='whitespace-nowrap'>
+          {cell.duration_minutes == null ? (
+            '—'
+          ) : (
+            <>
+              {format.decimal(cell.duration_minutes)} {t('min')}
+            </>
+          )}
+        </span>
+      </span>
     </button>
   )
 }

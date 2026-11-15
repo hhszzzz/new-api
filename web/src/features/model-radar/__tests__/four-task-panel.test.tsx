@@ -130,22 +130,15 @@ describe('model radar four-task panel', () => {
     expect(within(row).getAllByText('40 min')).toHaveLength(2)
   })
 
-  test('switches the score dimension to the four components', async () => {
-    const user = userEvent.setup()
+  test('shows only the total score without component dimension controls', () => {
     render(<FourTaskPanel board={boardFixture()} />)
 
-    const total = screen.getByRole('button', { name: 'Total score' })
-    const qin = screen.getByRole('button', { name: 'Qin Shi Huang' })
-    expect(total).toHaveAttribute('aria-pressed', 'true')
-
-    await user.click(qin)
-
-    expect(qin).toHaveAttribute('aria-pressed', 'true')
-    expect(total).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.queryByRole('group', { name: 'Score dimension' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Qin Shi Huang' })).toBeNull()
     const row = screen.getByRole('region', { name: 'GPT Test Astra' })
-    expect(within(row).getAllByText('80')).toHaveLength(2)
-    expect(within(row).getAllByText('1/1')).toHaveLength(2)
-    expect(within(row).queryByText('$4')).toBeNull()
+    expect(within(row).getByText('121.1')).toBeVisible()
+    expect(within(row).getByText('95.2')).toBeVisible()
+    expect(within(row).queryByText('80')).toBeNull()
   })
 
   test('reports the published round counts and test time', () => {
@@ -155,7 +148,7 @@ describe('model radar four-task panel', () => {
     expect(screen.getByText('Tested time:1800000000')).toBeVisible()
   })
 
-  test('opens the tier detail dialog with components, observed metrics and round metadata', async () => {
+  test('opens the tier detail dialog with total score, observed metrics and round metadata', async () => {
     const user = userEvent.setup()
     render(<FourTaskPanel board={boardFixture()} />)
 
@@ -166,18 +159,15 @@ describe('model radar four-task panel', () => {
     )
 
     const dialog = await screen.findByRole('dialog')
-    expect(within(dialog).getByText('Components')).toBeVisible()
-    expect(within(dialog).getByText('Qin Shi Huang')).toBeVisible()
-    expect(within(dialog).getByText(/Weight: 60/)).toBeVisible()
+    expect(within(dialog).getByText('Total score')).toBeVisible()
+    expect(within(dialog).getByText('Rank')).toBeVisible()
+    expect(within(dialog).queryByText('Components')).toBeNull()
+    expect(within(dialog).queryByText('Qin Shi Huang')).toBeNull()
+    expect(within(dialog).queryByText(/Weight:/)).toBeNull()
     expect(within(dialog).getByText('Cost (USD)')).toBeVisible()
     expect(within(dialog).getByText('Runtime (min)')).toBeVisible()
     expect(within(dialog).getByText('round-test')).toBeVisible()
     expect(within(dialog).getByText('codex-four-weighted-150-v2')).toBeVisible()
-    expect(
-      within(dialog).getByText(
-        'Weights: Qin Shi Huang 60, Pompeii 45, Pelican 22.5, Candy 22.5.'
-      )
-    ).toBeVisible()
   })
 
   test('marks a configuration with a missing component', async () => {
@@ -205,7 +195,6 @@ describe('model radar four-task panel', () => {
 
     const row = screen.getByRole('region', { name: 'GPT Test Astra' })
     expect(within(row).getAllByText('Missing').length).toBeGreaterThan(0)
-    expect(within(row).getByTitle(/required_svg_not_delivered/)).toBeVisible()
 
     await user.click(
       screen.getByRole('button', {

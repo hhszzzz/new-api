@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Cancel01Icon, InformationCircleIcon } from '@hugeicons/core-free-icons'
+import { Cancel01Icon } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useTranslation } from 'react-i18next'
 
@@ -33,11 +33,7 @@ import {
 import { cn } from '@/lib/utils'
 
 import { useRadarFormatters } from '../hooks/use-radar-formatters'
-import {
-  FOUR_TASK_DIMENSIONS,
-  fourTaskComponentStatusLabelKey,
-  fourTaskStatusLabelKey,
-} from '../lib/four-task'
+import { fourTaskStatusLabelKey } from '../lib/four-task'
 import { getIqTone, IQ_TEXT_CLASSES } from '../lib/model-radar'
 import type { ModelRadarFourTask, ModelRadarFourTaskCell } from '../types'
 
@@ -125,44 +121,6 @@ export function FourTaskCellDetails(props: {
           </div>
         </div>
 
-        <section aria-label={t('Components')}>
-          <h3 className='mb-2 text-xs font-semibold'>{t('Components')}</h3>
-          <dl className='overflow-hidden rounded-lg border'>
-            {FOUR_TASK_DIMENSIONS.slice(1).map((item) => {
-              const component = cell.components[item.key]
-              if (!component) return null
-              const missing = component.score === null
-              return (
-                <div
-                  key={item.key}
-                  className='border-border/70 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-b px-3 py-2 last:border-b-0'
-                >
-                  <dt className='min-w-0'>
-                    <span className='block truncate text-xs'>{t(item.label)}</span>
-                    <span className='text-muted-foreground block truncate text-[10px] tabular-nums'>
-                      {t('Weight')}: {format.decimal(component.weight)}
-                      {missing
-                        ? ''
-                        : ` · ${t('Contribution')}: ${format.decimal(component.contribution)}`}
-                    </span>
-                    {missing && component.missing_reason ? (
-                      <span className='text-muted-foreground block truncate text-[10px]'>
-                        {component.missing_reason}
-                      </span>
-                    ) : null}
-                  </dt>
-                  <dd className='text-right text-sm font-medium tabular-nums'>
-                    {missing ? '—' : format.decimal(component.score)}
-                    <span className='text-muted-foreground ml-2 text-[10px] font-normal'>
-                      {t(fourTaskComponentStatusLabelKey(component.score))}
-                    </span>
-                  </dd>
-                </div>
-              )
-            })}
-          </dl>
-        </section>
-
         <section aria-label={t('Observed metrics')}>
           <h3 className='mb-2 text-xs font-semibold'>
             {t('Observed metrics')}
@@ -226,38 +184,6 @@ export function FourTaskCellDetails(props: {
             ))}
           </dl>
         </section>
-
-        <div className='bg-muted/40 flex items-start gap-2 rounded-lg p-3'>
-          <HugeiconsIcon
-            icon={InformationCircleIcon}
-            className='text-muted-foreground mt-0.5 size-4 shrink-0'
-            strokeWidth={2}
-            aria-hidden='true'
-          />
-          <div className='text-muted-foreground text-xs leading-relaxed'>
-            <p>
-              {t(
-                'The total is the weighted sum of four independently graded components.'
-              )}
-            </p>
-            <p className='mt-1'>
-              {t(
-                'Weights: Qin Shi Huang {{combined}}, Pompeii {{pompeii}}, Pelican {{pelican}}, Candy {{candy}}.',
-                {
-                  combined: format.decimal(board.task_weights.combined),
-                  pompeii: format.decimal(board.task_weights.pompeii),
-                  pelican: format.decimal(board.task_weights.pelican),
-                  candy: format.decimal(board.task_weights.candy),
-                }
-              )}
-            </p>
-            <p className='mt-1'>
-              {t(
-                'A missing component leaves the total unpublished; it is not counted as zero.'
-              )}
-            </p>
-          </div>
-        </div>
       </DialogContent>
     </Dialog>
   )
