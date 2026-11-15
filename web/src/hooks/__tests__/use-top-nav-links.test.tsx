@@ -95,7 +95,7 @@ describe('top navigation model status link', () => {
       }))
     ).toEqual([
       {
-        title: 'Models',
+        title: 'Model Square',
         href: '/pricing',
         requiresAuth: true,
       },
