@@ -8,9 +8,11 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
+	"github.com/QuantumNous/new-api/service/clientpolicy"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
@@ -19,6 +21,23 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
+
+func TestRetryParamEnforcesChannelClientPolicyWithoutCallerFilter(t *testing.T) {
+	context, _ := gin.CreateTestContext(httptest.NewRecorder())
+	context.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", http.NoBody)
+	context.Request.Header.Set("User-Agent", "codex_cli_rs/1.0")
+	channel := &model.Channel{Id: 1}
+	channel.SetOtherSettings(hostdto.ChannelOtherSettings{
+		ClientPolicy: hostdto.ClientAccessPolicy{
+			Mode:    "deny",
+			Clients: []string{clientpolicy.ClientCodex},
+		},
+	})
+
+	assert.False(t, (&RetryParam{Ctx: context}).AllowsChannel(channel))
+	assert.Equal(t, clientpolicy.ClientCodex, common.GetContextKeyString(context, constant.ContextKeyClientName))
+	assert.Equal(t, "builtin:codex", common.GetContextKeyString(context, constant.ContextKeyClientDetectionRule))
+}
 
 func TestAutoGroupSelectionIgnoresProtocolClassAtEqualPriority(t *testing.T) {
 	setupAutoGroupSelectionTest(t)

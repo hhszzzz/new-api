@@ -147,9 +147,10 @@ func requestClient(c *gin.Context) string {
 	if client := common.GetContextKeyString(c, constant.ContextKeyClientName); client != "" {
 		return client
 	}
-	client := clientpolicy.Detect(c.Request)
-	common.SetContextKey(c, constant.ContextKeyClientName, client)
-	return client
+	identity := clientpolicy.Identify(c.Request)
+	common.SetContextKey(c, constant.ContextKeyClientName, identity.Client)
+	common.SetContextKey(c, constant.ContextKeyClientDetectionRule, identity.Rule)
+	return identity.Client
 }
 
 func groupAllowsRequestClient(c *gin.Context, group string) bool {

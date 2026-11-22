@@ -24,6 +24,25 @@ export const CLIENT_POLICY_MODE_LABEL_KEYS = {
 
 export type ClientPolicyMode = keyof typeof CLIENT_POLICY_MODE_LABEL_KEYS
 
+const CODEX_CLIENT_ALIASES = new Set([
+  'codex_cli_rs',
+  'codex-cli',
+  'codex-tui',
+  'codex_vscode',
+  'codex_desktop',
+  'codex-chatgpt-desktop',
+  'codex_chatgpt_desktop',
+  'codex_atlas',
+])
+
+export function normalizeClientId(value: string): string {
+  const normalized = value.trim().toLowerCase()
+  if (CODEX_CLIENT_ALIASES.has(normalized) || normalized.startsWith('codex ')) {
+    return 'codex'
+  }
+  return normalized
+}
+
 export const CLIENT_MATCH_SOURCE_LABEL_KEYS = {
   path: 'Path',
   user_agent: 'User-Agent',

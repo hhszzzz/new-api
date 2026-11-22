@@ -31,6 +31,7 @@ import { useState, useMemo, useContext, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
+import { ClientPolicyIndicator } from '@/components/client-policy-indicator'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { BadgeListCell } from '@/components/data-table'
 import { GroupBadge } from '@/components/group-badge'
@@ -78,6 +79,7 @@ import {
   parseModelsList,
   parseGroupsList,
   parseChannelSettings,
+  parseChannelOtherSettings,
   channelsQueryKeys,
   handleUpdateChannelField,
   handleUpdateTagField,
@@ -808,6 +810,7 @@ export function useChannelsColumns(
 
           // Regular channel row
           const settings = parseChannelSettings(channel.setting)
+          const otherSettings = parseChannelOtherSettings(channel.settings)
           const isPassThrough = settings.pass_through_body_enabled === true
           const hasParamOverride = Boolean(channel.param_override?.trim())
 
@@ -820,6 +823,7 @@ export function useChannelsColumns(
                     className='font-medium'
                     maxWidth='max-w-full'
                   />
+                  <ClientPolicyIndicator policy={otherSettings.client_policy} />
                   {isPassThrough && (
                     <TooltipProvider delay={100}>
                       <Tooltip>

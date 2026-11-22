@@ -413,6 +413,9 @@ func appendLogDiagnostics(c *gin.Context, channelId int, isStream bool, other ma
 		if value := common.GetContextKeyString(c, constant.ContextKeyClientName); value != "" {
 			diagnostics["client"] = value
 		}
+		if value := common.GetContextKeyString(c, constant.ContextKeyClientDetectionRule); value != "" {
+			diagnostics["client_rule"] = value
+		}
 		for key, target := range map[constant.ContextKey]string{
 			constant.ContextKeyRequestProtocol:    "request_protocol",
 			constant.ContextKeyUserModelRoutePool: "route_pool_name",
@@ -781,8 +784,8 @@ func retainPublicLogDiagnostics(other map[string]interface{}) {
 		return
 	}
 
-	publicDiagnostics := make(map[string]interface{}, 2)
-	for _, field := range []string{"client", "request_protocol"} {
+	publicDiagnostics := make(map[string]interface{}, 3)
+	for _, field := range []string{"client", "client_rule", "request_protocol"} {
 		value, ok := diagnostics[field].(string)
 		if !ok || strings.TrimSpace(value) == "" {
 			continue

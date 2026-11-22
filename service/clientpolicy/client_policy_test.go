@@ -44,10 +44,25 @@ func TestDetectRecognizesBuiltInAndConfiguredClients(t *testing.T) {
 	configured := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 	configured.Header.Set("X-Client-Request-Id", "desktop-123")
 	assert.Equal(t, "desktop_agent", Detect(configured))
+	assert.Equal(t, Identity{Client: "desktop_agent", Rule: "custom:desktop_agent"}, Identify(configured))
 
 	codex := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 	codex.Header.Set("User-Agent", "codex_cli_rs/1.2.3")
 	assert.Equal(t, ClientCodex, Detect(codex))
+	assert.Equal(t, Identity{Client: ClientCodex, Rule: "builtin:codex"}, Identify(codex))
+
+	for _, originator := range []string{
+		"codex_cli_rs",
+		"codex-tui",
+		"codex_vscode",
+		"codex_chatgpt_desktop",
+		"codex_atlas",
+		"Codex Desktop",
+	} {
+		request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+		request.Header.Set("Originator", originator)
+		assert.Equal(t, ClientCodex, Detect(request), originator)
+	}
 
 	claude := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
 	claude.Header.Set("User-Agent", "claude-cli/2.0.0")
@@ -61,6 +76,42 @@ func TestDetectRecognizesBuiltInAndConfiguredClients(t *testing.T) {
 	pi.Header.Set("User-Agent", "pi (darwin 22.4.0; x64)")
 	assert.Equal(t, ClientPi, Detect(pi))
 
+	piPlatform := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	piPlatform.Header.Set("X-Msh-Platform", "pi")
+	assert.Equal(t, ClientPi, Detect(piPlatform))
+
+	antigravity := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	antigravity.Header.Set("User-Agent", "Mozilla/5.0 Electron/35.0 Antigravity/1.0")
+	assert.Equal(t, ClientAntigravity, Detect(antigravity))
+
+	antigravityMetadata := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	antigravityMetadata.Header.Set("Client-Metadata", `{"ideType": "ANTIGRAVITY", "platform": "linux"}`)
+	assert.Equal(t, ClientAntigravity, Detect(antigravityMetadata))
+
+	cline := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	cline.Header.Set("X-Title", "Cline")
+	assert.Equal(t, ClientCline, Detect(cline))
+
+	openCode := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	openCode.Header.Set("User-Agent", "opencode/1.2.3")
+	assert.Equal(t, ClientOpenCode, Detect(openCode))
+
+	kimiCode := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	kimiCode.Header.Set("User-Agent", "kimi-code-cli/0.43.1")
+	assert.Equal(t, ClientKimiCode, Detect(kimiCode))
+
+	kimiCodeIdentity := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	kimiCodeIdentity.Header.Set("User-Agent", "kimi-code/0.43.1")
+	assert.Equal(t, ClientKimiCode, Detect(kimiCodeIdentity))
+
+	zcode := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	zcode.Header.Set("User-Agent", "ZCode/1.0.0")
+	assert.Equal(t, ClientZCode, Detect(zcode))
+
+	zcodeTitle := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	zcodeTitle.Header.Set("X-Title", "ZCode")
+	assert.Equal(t, ClientZCode, Detect(zcodeTitle))
+
 	versionedPi := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	versionedPi.Header.Set("User-Agent", "pi/0.80.3 (darwin; node/v22.19.0; arm64)")
 	assert.Equal(t, ClientPi, Detect(versionedPi))
@@ -68,6 +119,10 @@ func TestDetectRecognizesBuiltInAndConfiguredClients(t *testing.T) {
 	unknown := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	unknown.Header.Set("User-Agent", "curl/8.0")
 	assert.Equal(t, ClientUnknown, Detect(unknown))
+
+	retiredGeminiCLI := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	retiredGeminiCLI.Header.Set("User-Agent", "GeminiCLI-acp-zed/0.1.0")
+	assert.Equal(t, ClientUnknown, Detect(retiredGeminiCLI))
 }
 
 func TestDisplayNameUsesProductNames(t *testing.T) {
@@ -75,6 +130,11 @@ func TestDisplayNameUsesProductNames(t *testing.T) {
 	assert.Equal(t, "Claude Code", DisplayName(ClientClaudeCode))
 	assert.Equal(t, "Pi", DisplayName(ClientPi))
 	assert.Equal(t, "DeepSeek Harness", DisplayName(ClientDeepSeekHarness))
+	assert.Equal(t, "Antigravity", DisplayName(ClientAntigravity))
+	assert.Equal(t, "Cline", DisplayName(ClientCline))
+	assert.Equal(t, "OpenCode", DisplayName(ClientOpenCode))
+	assert.Equal(t, "Kimi Code", DisplayName(ClientKimiCode))
+	assert.Equal(t, "ZCode", DisplayName(ClientZCode))
 	assert.Equal(t, "Unknown", DisplayName(ClientUnknown))
 	assert.Equal(t, "custom_agent", DisplayName("custom_agent"))
 }

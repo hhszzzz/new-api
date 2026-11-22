@@ -20,6 +20,7 @@ import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { MultiSelect, type Option } from '@/components/multi-select'
+import { normalizeClientId } from '@/lib/client-policy'
 
 interface ClientMultiSelectProps {
   selected: string[]
@@ -34,11 +35,12 @@ const BUILTIN_CLIENT_OPTIONS: Option[] = [
   { label: 'Claude Code', value: 'claude_code' },
   { label: 'Pi', value: 'pi' },
   { label: 'DeepSeek Harness', value: 'deepseek_harness' },
+  { label: 'Antigravity', value: 'antigravity' },
+  { label: 'Cline', value: 'cline' },
+  { label: 'OpenCode', value: 'opencode' },
+  { label: 'Kimi Code', value: 'kimi_code' },
+  { label: 'ZCode', value: 'zcode' },
 ]
-
-function normalizeClientName(value: string): string {
-  return value.trim().toLowerCase()
-}
 
 export function ClientMultiSelect(props: ClientMultiSelectProps) {
   const { t } = useTranslation()
@@ -47,7 +49,7 @@ export function ClientMultiSelect(props: ClientMultiSelectProps) {
       BUILTIN_CLIENT_OPTIONS.map((option) => [option.value, option])
     )
     for (const raw of props.availableClients ?? []) {
-      const value = normalizeClientName(raw)
+      const value = normalizeClientId(raw)
       if (!value || byValue.has(value)) continue
       byValue.set(value, { label: value, value })
     }
@@ -58,10 +60,10 @@ export function ClientMultiSelect(props: ClientMultiSelectProps) {
     <MultiSelect
       id={props.id}
       options={options}
-      selected={props.selected.map(normalizeClientName).filter(Boolean)}
+      selected={props.selected.map(normalizeClientId).filter(Boolean)}
       onChange={(clients) =>
         props.onChange([
-          ...new Set(clients.map(normalizeClientName).filter(Boolean)),
+          ...new Set(clients.map(normalizeClientId).filter(Boolean)),
         ])
       }
       placeholder={t('Select clients or add custom names')}

@@ -22,6 +22,7 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import { ClientMultiSelect } from '@/components/client-multi-select'
+import { ClientPolicyIndicator } from '@/components/client-policy-indicator'
 import { MultiSelect, type Option } from '@/components/multi-select'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -35,18 +36,21 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { getGroups } from '@/features/users/api'
 import {
   CLIENT_MATCH_MODE_LABEL_KEYS,
   CLIENT_MATCH_SOURCE_LABEL_KEYS,
-  CLIENT_POLICY_MODE_LABEL_KEYS,
   type ClientMatchMode,
   type ClientMatchSource,
   type ClientPolicyMode,
 } from '@/lib/client-policy'
 
 import { updateClientPolicyOptions } from '../api'
-import { SettingsForm } from '../components/settings-form-layout'
+import {
+  SettingsForm,
+  SettingsSwitchField,
+} from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
 
@@ -61,6 +65,7 @@ type Match = MatchConfig & { draftId: number }
 type Rule = { draftId: number; name: string; matches: Match[] }
 type StoredRule = { name: string; matches: MatchConfig[] }
 type Policy = { mode: ClientPolicyMode; clients: string[] }
+type RestrictedPolicyMode = Extract<ClientPolicyMode, 'allow' | 'deny'>
 type Props = {
   defaultValues: {
     'client_policy_setting.rules': string
@@ -72,11 +77,15 @@ const SAFE_HEADER_OPTIONS = [
   { label: 'Anthropic-Beta', value: 'anthropic-beta' },
   { label: 'Anthropic-Version', value: 'anthropic-version' },
   { label: 'Originator', value: 'originator' },
+  { label: 'Client-Metadata', value: 'client-metadata' },
   { label: 'X-App', value: 'x-app' },
   { label: 'X-Codex-Beta-Features', value: 'x-codex-beta-features' },
   { label: 'X-Client-Request-Id', value: 'x-client-request-id' },
+  { label: 'X-Goog-Api-Client', value: 'x-goog-api-client' },
+  { label: 'X-Msh-Platform', value: 'x-msh-platform' },
   { label: 'X-Stainless-Lang', value: 'x-stainless-lang' },
   { label: 'X-Stainless-Runtime', value: 'x-stainless-runtime' },
+  { label: 'X-Title', value: 'x-title' },
 ]
 
 type RuleTemplate = {
@@ -328,6 +337,36 @@ export function ClientPolicySettingsSection(props: Props) {
     editRevisionRef.current += 1
     setPolicies(updater)
   }
+  const previousPolicyModesRef = useRef<Record<string, RestrictedPolicyMode>>(
+    {}
+  )
+
+  useEffect(() => {
+    for (const [group, policy] of Object.entries(parsedPolicies)) {
+      if (policy.mode === 'allow' || policy.mode === 'deny') {
+        previousPolicyModesRef.current[group] = policy.mode
+      }
+    }
+  }, [parsedPolicies])
+
+  const updateGroupPolicy = (group: string, policy: Policy) => {
+    if (policy.mode === 'allow' || policy.mode === 'deny') {
+      previousPolicyModesRef.current[group] = policy.mode
+    }
+    editPolicies((current) => ({ ...current, [group]: policy }))
+  }
+
+  const setGroupRestriction = (group: string, enabled: boolean) => {
+    const policy = policies[group] ?? { mode: 'unrestricted', clients: [] }
+    if (enabled) {
+      updateGroupPolicy(group, {
+        ...policy,
+        mode: previousPolicyModesRef.current[group] ?? 'deny',
+      })
+      return
+    }
+    updateGroupPolicy(group, { ...policy, mode: 'unrestricted' })
+  }
 
   const availableGroups = useMemo(() => {
     const configuredGroups = groupsQuery.data?.data ?? []
@@ -457,16 +496,18 @@ export function ClientPolicySettingsSection(props: Props) {
     const cleanPolicies: Record<string, Policy> = {}
     for (const [group, policy] of Object.entries(policies)) {
       const normalizedGroup = group.trim()
-      if (!normalizedGroup || policy.mode === 'unrestricted') continue
+      if (!normalizedGroup) continue
+      const clients = [
+        ...new Set(
+          policy.clients
+            .map((client) => client.trim().toLowerCase())
+            .filter(Boolean)
+        ),
+      ]
+      if (policy.mode === 'unrestricted' && clients.length === 0) continue
       cleanPolicies[normalizedGroup] = {
         mode: policy.mode,
-        clients: [
-          ...new Set(
-            policy.clients
-              .map((client) => client.trim().toLowerCase())
-              .filter(Boolean)
-          ),
-        ],
+        clients,
       }
     }
     if (clientPolicyMutation.isPending) return
@@ -672,7 +713,8 @@ export function ClientPolicySettingsSection(props: Props) {
             <div className='text-muted-foreground text-xs'>
               {t(
                 'Allow lists reject unknown clients; deny lists allow unknown clients. Policies apply to both requested and routed execution groups.'
-              )}
+              )}{' '}
+              {t('Turning off client restrictions does not disable the group.')}
             </div>
           </div>
           <div className='space-y-2'>
@@ -681,48 +723,82 @@ export function ClientPolicySettingsSection(props: Props) {
                 mode: 'unrestricted' as const,
                 clients: [],
               }
+              const groupId = encodeURIComponent(group)
               return (
                 <div
                   key={group}
-                  className='grid gap-2 rounded-lg border p-3 md:grid-cols-[minmax(0,1fr)_12rem_minmax(0,2fr)] md:items-center'
+                  data-testid={`client-policy-group-${groupId}`}
+                  className='grid gap-3 rounded-lg border p-3 md:grid-cols-[minmax(0,1fr)_minmax(12rem,auto)_minmax(0,2fr)] md:items-start'
                 >
-                  <div className='font-medium'>{group}</div>
-                  <Select
-                    value={policy.mode}
-                    onValueChange={(value) =>
-                      editPolicies((current) => ({
-                        ...current,
-                        [group]: { ...policy, mode: value as Policy['mode'] },
-                      }))
-                    }
-                  >
-                    <SelectTrigger>
-                      <SelectValue>
-                        {t(CLIENT_POLICY_MODE_LABEL_KEYS[policy.mode])}
-                      </SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        <SelectItem value='unrestricted'>
-                          {t('Unrestricted')}
-                        </SelectItem>
-                        <SelectItem value='allow'>{t('Allow only')}</SelectItem>
-                        <SelectItem value='deny'>{t('Deny')}</SelectItem>
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                  <ClientMultiSelect
-                    id={`group-client-policy-${group}`}
-                    selected={policy.clients}
-                    availableClients={availableClients}
-                    disabled={policy.mode === 'unrestricted'}
-                    onChange={(clients) =>
-                      editPolicies((current) => ({
-                        ...current,
-                        [group]: { ...policy, clients },
-                      }))
-                    }
-                  />
+                  <div className='flex min-w-0 items-center gap-2'>
+                    <span className='truncate font-medium'>{group}</span>
+                    <ClientPolicyIndicator policy={policy} />
+                  </div>
+                  <div className='min-w-0'>
+                    <SettingsSwitchField
+                      controlId={`group-client-policy-enabled-${groupId}`}
+                      label={t('Restrict clients')}
+                      description={t(
+                        'Turn on to allow only selected clients or block selected clients.'
+                      )}
+                      checked={policy.mode !== 'unrestricted'}
+                      onCheckedChange={(enabled) =>
+                        setGroupRestriction(group, enabled)
+                      }
+                      className='py-1'
+                    />
+                    {policy.mode !== 'unrestricted' && (
+                      <ToggleGroup
+                        value={[policy.mode]}
+                        onValueChange={(values) => {
+                          const nextMode = values.find(
+                            (value) => value !== policy.mode
+                          )
+                          if (nextMode === 'allow' || nextMode === 'deny') {
+                            updateGroupPolicy(group, {
+                              ...policy,
+                              mode: nextMode,
+                            })
+                          }
+                        }}
+                        variant='outline'
+                        size='sm'
+                        aria-label={t('Policy mode')}
+                        className='w-full'
+                      >
+                        <ToggleGroupItem
+                          value='allow'
+                          className='min-w-0 flex-1 px-2 text-xs whitespace-normal'
+                        >
+                          {t('Allow only selected clients')}
+                        </ToggleGroupItem>
+                        <ToggleGroupItem
+                          value='deny'
+                          className='min-w-0 flex-1 px-2 text-xs whitespace-normal'
+                        >
+                          {t('Block selected clients')}
+                        </ToggleGroupItem>
+                      </ToggleGroup>
+                    )}
+                  </div>
+                  <div className='min-w-0 space-y-1'>
+                    <ClientMultiSelect
+                      id={`group-client-policy-${groupId}`}
+                      selected={policy.clients}
+                      availableClients={availableClients}
+                      disabled={policy.mode === 'unrestricted'}
+                      onChange={(clients) =>
+                        updateGroupPolicy(group, { ...policy, clients })
+                      }
+                    />
+                    {policy.mode === 'allow' && policy.clients.length === 0 && (
+                      <p className='text-destructive text-xs'>
+                        {t(
+                          'No clients selected; an allow list blocks every client.'
+                        )}
+                      </p>
+                    )}
+                  </div>
                 </div>
               )
             })}

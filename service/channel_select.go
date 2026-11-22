@@ -123,6 +123,16 @@ func (p *RetryParam) AllowsChannel(channel *model.Channel) bool {
 	if channel == nil {
 		return false
 	}
+	client := clientpolicy.ClientUnknown
+	if p != nil {
+		client = requestClientName(p.Ctx)
+	}
+	if !clientpolicy.IsChannelAllowed(channel, client) {
+		if p != nil && p.CandidateFilter != nil {
+			p.CandidateFilter(channel)
+		}
+		return false
+	}
 	if p != nil {
 		if len(p.AllowedChannelIds) > 0 && !slices.Contains(p.AllowedChannelIds, channel.Id) {
 			return false
@@ -136,6 +146,19 @@ func (p *RetryParam) AllowsChannel(channel *model.Channel) bool {
 	}
 	filter := p.effectiveCandidateFilter()
 	return filter == nil || filter(channel)
+}
+
+func requestClientName(c *gin.Context) string {
+	if c == nil || c.Request == nil {
+		return clientpolicy.ClientUnknown
+	}
+	if client := common.GetContextKeyString(c, constant.ContextKeyClientName); client != "" {
+		return client
+	}
+	identity := clientpolicy.Identify(c.Request)
+	common.SetContextKey(c, constant.ContextKeyClientName, identity.Client)
+	common.SetContextKey(c, constant.ContextKeyClientDetectionRule, identity.Rule)
+	return identity.Client
 }
 
 func (p *RetryParam) effectiveCandidateFilter() model.ChannelCandidateFilter {
@@ -169,11 +192,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 		return nil, "", errors.New("invalid channel selection parameters")
 	}
 	selectGroup := param.TokenGroup
-	client := common.GetContextKeyString(param.Ctx, constant.ContextKeyClientName)
-	if client == "" {
-		client = clientpolicy.Detect(param.Ctx.Request)
-		common.SetContextKey(param.Ctx, constant.ContextKeyClientName, client)
-	}
+	client := requestClientName(param.Ctx)
 	if param.TokenGroup != "auto" && len(param.AllowedGroups) <= 1 {
 		if !clientpolicy.IsGroupAllowed(param.TokenGroup, client) {
 			return nil, selectGroup, nil
@@ -394,6 +413,7 @@ type ChannelSelectError struct {
 // filters. The group the channel was chosen from is returned for auto-group
 // callers. The caller still applies SetupContextForSelectedChannel.
 func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam) (*model.Channel, string, *ChannelSelectError) {
+	client := requestClientName(c)
 	constraints := GetChannelConstraints(c)
 	if pin, found, overridden := constraints.ResolvedPin(); found {
 		for _, lost := range overridden {
@@ -444,7 +464,7 @@ func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam
 						groups = GetRequestAutoGroupsForGroups(c, userGroups)
 					}
 					for _, g := range groups {
-						if clientpolicy.IsGroupAllowed(g, common.GetContextKeyString(c, constant.ContextKeyClientName)) && model.IsChannelEnabledForGroupModel(g, modelName, preferred.Id) {
+						if clientpolicy.IsGroupAllowed(g, client) && model.IsChannelEnabledForGroupModel(g, modelName, preferred.Id) {
 							selectGroup = g
 							publishSelectedGroupContext(c, g)
 							channel = preferred
@@ -453,7 +473,7 @@ func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam
 							break
 						}
 					}
-				} else if clientpolicy.IsGroupAllowed(usingGroup, common.GetContextKeyString(c, constant.ContextKeyClientName)) && model.IsChannelEnabledForGroupModel(usingGroup, modelName, preferred.Id) {
+				} else if clientpolicy.IsGroupAllowed(usingGroup, client) && model.IsChannelEnabledForGroupModel(usingGroup, modelName, preferred.Id) {
 					channel = preferred
 					selectGroup = usingGroup
 					affinityUsable = true
@@ -510,10 +530,7 @@ func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam
 		}
 		if channel == nil {
 			if retry.GetRetry() == 0 && common.GetContextKeyBool(c, constant.ContextKeyChannelClientBlocked) {
-				client := common.GetContextKeyString(c, constant.ContextKeyClientName)
-				if client == "" {
-					client = clientpolicy.Detect(c.Request)
-				}
+				client := requestClientName(c)
 				clientName := clientpolicy.DisplayName(client)
 				if client == clientpolicy.ClientUnknown {
 					clientName = i18n.T(c, i18n.MsgClientUnknown)

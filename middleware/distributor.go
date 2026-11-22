@@ -915,7 +915,25 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	selectionModel := routeSelectionModel(c, modelName)
 	selectionGroup := routeSelectionGroup(c, common.GetContextKeyString(c, constant.ContextKeyUsingGroup))
 	if selectionGroup == "auto" {
-		selectionGroup = common.GetContextKeyString(c, constant.ContextKeyAutoGroup)
+		resolvedGroup := common.GetContextKeyString(c, constant.ContextKeyAutoGroup)
+		if resolvedGroup != "" && (!groupAllowsRequestClient(c, resolvedGroup) ||
+			!model.IsChannelEnabledForGroupModel(resolvedGroup, selectionModel, channel.Id)) {
+			resolvedGroup = ""
+		}
+		if resolvedGroup == "" {
+			var groupUsable bool
+			resolvedGroup, groupUsable = resolveAffinitySelectionGroup(c, "auto", selectionModel, channel.Id)
+			if !groupUsable {
+				return hosttypes.NewErrorWithStatusCode(
+					fmt.Errorf("selected channel is not available in an allowed auto group"),
+					hosttypes.ErrorCodeInvalidRequest,
+					http.StatusForbidden,
+					hosttypes.ErrOptionWithSkipRetry(),
+				)
+			}
+		}
+		commitRouteSelectionGroup(c, "auto", resolvedGroup)
+		selectionGroup = resolvedGroup
 	}
 	if selectionGroup != "" && !groupAllowsRequestClient(c, selectionGroup) {
 		return hosttypes.NewErrorWithStatusCode(

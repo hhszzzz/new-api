@@ -328,24 +328,101 @@ describe('client policy settings selected labels', () => {
       </QueryClientProvider>
     )
 
-    const defaultSelector = await screen.findByTestId(
+    const defaultRow = await screen.findByTestId('client-policy-group-default')
+    const vipRow = screen.getByTestId('client-policy-group-vip')
+    const legacyRow = screen.getByTestId('client-policy-group-legacy')
+    const defaultSelector = within(defaultRow).getByTestId(
       'group-client-policy-default'
     )
-    const vipSelector = screen.getByTestId('group-client-policy-vip')
-    const legacySelector = screen.getByTestId('group-client-policy-legacy')
+    const vipSelector = within(vipRow).getByTestId('group-client-policy-vip')
+    const legacySelector = within(legacyRow).getByTestId(
+      'group-client-policy-legacy'
+    )
 
     expect(defaultSelector).toHaveAttribute('data-disabled', 'true')
     expect(vipSelector).toHaveAttribute('data-selected', 'codex,desktop_agent')
     expect(vipSelector).toHaveAttribute('data-disabled', 'false')
     expect(legacySelector).toHaveAttribute('data-selected', 'claude_code')
+    expect(within(defaultRow).getByRole('switch')).toHaveAttribute(
+      'aria-checked',
+      'false'
+    )
+    expect(within(vipRow).getByRole('switch')).toHaveAttribute(
+      'aria-checked',
+      'true'
+    )
+    const indicators = screen.getAllByTestId('client-policy-indicator')
+    expect(indicators).toHaveLength(2)
 
-    const vipRow = vipSelector.parentElement
-    if (!vipRow) throw new Error('VIP policy row was not rendered')
-    expect(vipRow.querySelector('[data-value="allow"]')).not.toBeNull()
+    expect(
+      within(vipRow)
+        .getByTestId('client-policy-indicator')
+        .getAttribute('data-policy-mode')
+    ).toBe('allow')
+    expect(
+      within(legacyRow)
+        .getByTestId('client-policy-indicator')
+        .getAttribute('data-policy-mode')
+    ).toBe('deny')
+    expect(
+      within(vipRow).getByRole('button', {
+        name: 'translated:Allow only selected clients',
+      })
+    ).toHaveAttribute('aria-pressed', 'true')
     expect(
       within(vipRow).queryByRole('button', { name: 'translated:Remove' })
     ).not.toBeInTheDocument()
     expect(screen.queryByText('translated:Add group')).not.toBeInTheDocument()
+  })
+
+  test('turns group client filtering off without disabling the group or losing its client list', async () => {
+    const user = userEvent.setup()
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    const { container } = render(
+      <QueryClientProvider client={queryClient}>
+        <ClientPolicySettingsSection
+          defaultValues={{
+            'client_policy_setting.rules': '[]',
+            'client_policy_setting.group_policies': JSON.stringify({
+              vip: { mode: 'allow', clients: ['codex'] },
+            }),
+          }}
+        />
+      </QueryClientProvider>
+    )
+
+    const vipRow = await screen.findByTestId('client-policy-group-vip')
+    const switchControl = within(vipRow).getByRole('switch')
+    const clientSelector = within(vipRow).getByTestId('group-client-policy-vip')
+
+    await user.click(switchControl)
+    expect(switchControl).toHaveAttribute('aria-checked', 'false')
+    expect(clientSelector).toHaveAttribute('data-disabled', 'true')
+
+    await user.click(switchControl)
+    expect(switchControl).toHaveAttribute('aria-checked', 'true')
+    expect(clientSelector).toHaveAttribute('data-disabled', 'false')
+    expect(
+      within(vipRow).getByRole('button', {
+        name: 'translated:Allow only selected clients',
+      })
+    ).toHaveAttribute('aria-pressed', 'true')
+
+    await user.click(switchControl)
+    const form = container.querySelector('form')
+    if (!form) throw new Error('settings form was not rendered')
+    fireEvent.submit(form)
+
+    await waitFor(() =>
+      expect(updateClientPolicyOptionsMock).toHaveBeenCalledOnce()
+    )
+    expect(
+      updateClientPolicyOptionsMock.mock.calls[0]?.[0].group_policies
+    ).toEqual({
+      vip: { mode: 'unrestricted', clients: ['codex'] },
+    })
   })
 
   test.each([
