@@ -36,6 +36,15 @@ export function useDistributionRiskEventColumns(
   return useMemo(
     () => [
       {
+        accessorKey: 'id',
+        header: t('Risk event ID'),
+        size: 110,
+        cell: ({ row }) => (
+          <span className='font-mono tabular-nums'>#{row.original.id}</span>
+        ),
+        meta: { label: t('Risk event ID') },
+      },
+      {
         accessorKey: 'created_at',
         header: t('Observed at'),
         size: 180,

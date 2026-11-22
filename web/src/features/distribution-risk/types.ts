@@ -47,9 +47,9 @@ export type DistributionRiskConfigUpdate = Omit<
 >
 
 export interface DistributionRiskEvidence {
-  ips: string[]
-  user_agents: string[]
-  session_hashes: string[]
+  ips?: string[] | null
+  user_agents?: string[] | null
+  session_hashes?: string[] | null
 }
 
 export interface DistributionRiskEvent {
@@ -60,7 +60,7 @@ export interface DistributionRiskEvent {
   token_ids: number[]
   score: number
   level: 'medium' | 'high'
-  category_scores: Record<string, number>
+  category_scores: Record<string, number> | null
   status: DistributionRiskStatus
   created_at: number
   reviewed_at: number

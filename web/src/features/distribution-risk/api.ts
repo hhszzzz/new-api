@@ -56,11 +56,12 @@ export async function updateDistributionRiskConfig(
 export async function listDistributionRiskEvents(
   filters: DistributionRiskEventQuery,
   page: number,
-  pageSize: number
+  pageSize: number,
+  signal?: AbortSignal
 ): Promise<DistributionRiskEventList> {
   const response = await api.get<ApiResponse<DistributionRiskEventList>>(
     '/api/distribution-risk/events',
-    { params: { ...filters, page, page_size: pageSize } }
+    { params: { ...filters, page, page_size: pageSize }, signal }
   )
   return requireData(response.data)
 }

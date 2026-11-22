@@ -17,11 +17,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import { ConfirmDialog } from '@/components/confirm-dialog'
+import { CopyButton } from '@/components/copy-button'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -35,7 +36,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { formatTimestampToDate } from '@/lib/format'
 
 import { getDistributionRiskEvent, reviewDistributionRiskEvent } from '../api'
-import type { DistributionRiskEvent } from '../types'
+import type { DistributionRiskEvent, DistributionRiskEvidence } from '../types'
 
 type Props = {
   eventID: number | null
@@ -76,20 +77,33 @@ export function DistributionRiskEventDialog(props: Props) {
   const event = detailQuery.data
   const isOpen = props.eventID !== null
   const canReview = props.canManage && event?.status === 'pending'
-  const hasEvidence = Boolean(
-    event?.evidence &&
-    (event.evidence.ips.length > 0 ||
-      event.evidence.user_agents.length > 0 ||
-      event.evidence.session_hashes.length > 0)
-  )
+  const evidence: DistributionRiskEvidence = {
+    ips: event?.evidence?.ips ?? [],
+    user_agents: event?.evidence?.user_agents ?? [],
+    session_hashes: event?.evidence?.session_hashes ?? [],
+  }
+  const hasEvidence = Object.values(evidence).some((values) => !!values?.length)
 
   return (
     <>
       <Dialog open={isOpen} onOpenChange={props.onOpenChange}>
         <DialogContent className='sm:max-w-3xl'>
           <DialogHeader>
-            <DialogTitle>
-              {t('Risk event')} #{event?.id ?? props.eventID}
+            <DialogTitle className='flex items-center gap-2'>
+              <span>
+                {t('Risk event')} #{event?.id ?? props.eventID}
+              </span>
+              {event && (
+                <CopyButton
+                  value={String(event.id)}
+                  className='size-6'
+                  iconClassName='size-3.5'
+                  tooltip={t('Copy {{field}}', { field: t('Risk event ID') })}
+                  aria-label={t('Copy {{field}}', {
+                    field: t('Risk event ID'),
+                  })}
+                />
+              )}
             </DialogTitle>
             <DialogDescription>
               {t('Review the evidence and record a reason for your decision.')}
@@ -101,13 +115,26 @@ export function DistributionRiskEventDialog(props: Props) {
             </p>
           )}
           {detailQuery.isError && (
-            <p className='text-destructive py-6 text-sm'>
-              {detailQuery.error.message || t('Failed to load event details')}
-            </p>
+            <div
+              role='alert'
+              className='text-destructive flex flex-wrap items-center justify-between gap-3 py-6 text-sm'
+            >
+              <span>
+                {detailQuery.error.message || t('Failed to load event details')}
+              </span>
+              <Button
+                size='sm'
+                variant='outline'
+                onClick={() => void detailQuery.refetch()}
+              >
+                {t('Retry')}
+              </Button>
+            </div>
           )}
           {!detailQuery.isLoading && !detailQuery.isError && event && (
             <EventDetail
               event={event}
+              evidence={evidence}
               hasEvidence={hasEvidence}
               canReview={canReview}
               reason={reason}
@@ -153,6 +180,7 @@ export function DistributionRiskEventDialog(props: Props) {
 
 function EventDetail(props: {
   event: DistributionRiskEvent
+  evidence: DistributionRiskEvidence
   hasEvidence: boolean
   canReview: boolean
   reason: string
@@ -166,10 +194,17 @@ function EventDetail(props: {
   return (
     <div className='max-h-[70dvh] space-y-5 overflow-y-auto pr-1'>
       <div className='grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-4'>
-        <Fact label={t('User ID')} value={String(event.user_id)} />
+        <Fact
+          label={t('User ID')}
+          value={String(event.user_id)}
+          copyValue={String(event.user_id)}
+          copyLabel={t('Copy {{field}}', { field: t('User ID') })}
+        />
         <Fact
           label={t('Scope')}
           value={`${event.scope_kind === 'user' ? t('User account') : t('Token')} ${event.scope_id}`}
+          copyValue={String(event.scope_id)}
+          copyLabel={t('Copy {{field}}', { field: t('Scope ID') })}
         />
         <Fact label={t('Risk score')} value={String(event.score)} />
         <Fact
@@ -179,36 +214,57 @@ function EventDetail(props: {
         <Fact
           label={t('Contributing tokens')}
           value={event.token_ids.join(', ') || '-'}
+          copyValue={event.token_ids.join(', ')}
+          copyLabel={t('Copy {{field}}', { field: t('Contributing tokens') })}
         />
         <Fact label={t('Status')} value={statusLabel(event.status, t)} />
+        {event.reviewed_at > 0 && (
+          <Fact
+            label={t('Reviewed at')}
+            value={formatTimestampToDate(event.reviewed_at)}
+          />
+        )}
+        {event.reviewer_id > 0 && (
+          <Fact
+            label={t('Reviewer ID')}
+            value={String(event.reviewer_id)}
+            copyValue={String(event.reviewer_id)}
+            copyLabel={t('Copy {{field}}', { field: t('Reviewer ID') })}
+          />
+        )}
       </div>
 
       <section className='space-y-2'>
         <h3 className='text-sm font-semibold'>{t('Signal scores')}</h3>
         <div className='flex flex-wrap gap-2'>
-          {Object.entries(event.category_scores).map(([category, score]) => (
-            <Badge key={category} variant={score >= 30 ? 'warning' : 'outline'}>
-              {t(categoryLabel(category))} {score}
-            </Badge>
-          ))}
+          {Object.entries(event.category_scores ?? {}).map(
+            ([category, score]) => (
+              <Badge
+                key={category}
+                variant={score >= 30 ? 'warning' : 'outline'}
+              >
+                {t(categoryLabel(category))} {score}
+              </Badge>
+            )
+          )}
         </div>
       </section>
 
       <section className='space-y-3'>
         <h3 className='text-sm font-semibold'>{t('Client evidence')}</h3>
-        {props.hasEvidence && event.evidence ? (
+        {props.hasEvidence ? (
           <div className='grid gap-4 sm:grid-cols-2'>
             <EvidenceList
               title={t('IP addresses')}
-              values={event.evidence.ips}
+              values={props.evidence.ips ?? []}
             />
             <EvidenceList
               title={t('User agents')}
-              values={event.evidence.user_agents}
+              values={props.evidence.user_agents ?? []}
             />
             <EvidenceList
               title={t('Hashed session IDs')}
-              values={event.evidence.session_hashes}
+              values={props.evidence.session_hashes ?? []}
             />
           </div>
         ) : (
@@ -255,21 +311,52 @@ function EventDetail(props: {
   )
 }
 
-function Fact(props: { label: string; value: string }) {
+function Fact(props: {
+  label: string
+  value: ReactNode
+  copyValue?: string
+  copyLabel?: string
+}) {
   return (
     <div className='min-w-0 space-y-0.5'>
       <p className='text-muted-foreground text-xs'>{props.label}</p>
-      <p className='text-sm font-medium break-words'>{props.value}</p>
+      <div className='flex min-w-0 items-start gap-1'>
+        <p className='min-w-0 flex-1 text-sm font-medium break-words'>
+          {props.value}
+        </p>
+        {props.copyValue && (
+          <CopyButton
+            value={props.copyValue}
+            className='size-5'
+            iconClassName='size-3'
+            tooltip={props.copyLabel ?? props.label}
+            aria-label={props.copyLabel ?? props.label}
+          />
+        )}
+      </div>
     </div>
   )
 }
 
 function EvidenceList(props: { title: string; values: string[] }) {
+  const { t } = useTranslation()
+  const copyLabel = t('Copy {{field}}', { field: props.title })
+
   return (
     <div className='min-w-0 space-y-1'>
-      <h4 className='text-muted-foreground text-xs font-medium'>
-        {props.title} ({props.values.length})
-      </h4>
+      <div className='flex items-center justify-between gap-2'>
+        <h4 className='text-muted-foreground text-xs font-medium'>
+          {props.title} ({props.values.length})
+        </h4>
+        {props.values.length > 0 && (
+          <CopyButton
+            value={props.values.join('\n')}
+            className='size-6 p-1'
+            tooltip={copyLabel}
+            aria-label={copyLabel}
+          />
+        )}
+      </div>
       <ul className='max-h-36 space-y-1 overflow-y-auto rounded-md border p-2 font-mono text-xs'>
         {props.values.map((value) => (
           <li className='break-all' key={value}>

@@ -16,13 +16,17 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { RefreshCw, Settings2 } from 'lucide-react'
 import { useCallback, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { DataTablePage, useDataTable } from '@/components/data-table'
+import {
+  DataTablePage,
+  getInitialTablePageSize,
+  useDataTable,
+} from '@/components/data-table'
 import { SectionPageLayout } from '@/components/layout'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -38,13 +42,14 @@ import { useAuthStore } from '@/stores/auth-store'
 import { listDistributionRiskEvents } from './api'
 import { useDistributionRiskEventColumns } from './components/distribution-risk-event-columns'
 import { DistributionRiskEventDialog } from './components/distribution-risk-event-dialog'
+import { DistributionRiskExportDialog } from './components/distribution-risk-export-dialog'
 import {
   DistributionRiskFilterBar,
   type DistributionRiskEventDraftFilters,
 } from './components/distribution-risk-filter-bar'
 import type { DistributionRiskEvent, DistributionRiskEventQuery } from './types'
 
-const PAGE_SIZE = 20
+const TABLE_STATE_KEY = 'distribution-risk:events'
 const EMPTY_EVENTS: DistributionRiskEvent[] = []
 const DEFAULT_FILTERS: DistributionRiskEventDraftFilters = {
   status: 'all',
@@ -55,7 +60,6 @@ const DEFAULT_FILTERS: DistributionRiskEventDraftFilters = {
 
 export function DistributionRiskPage() {
   const { t } = useTranslation()
-  const queryClient = useQueryClient()
   const user = useAuthStore((state) => state.auth.user)
   const canRead = hasPermission(
     user,
@@ -71,10 +75,10 @@ export function DistributionRiskPage() {
     useState<DistributionRiskEventDraftFilters>(DEFAULT_FILTERS)
   const [appliedFilters, setAppliedFilters] =
     useState<DistributionRiskEventDraftFilters>(DEFAULT_FILTERS)
-  const [pagination, setPagination] = useState({
+  const [pagination, setPagination] = useState(() => ({
     pageIndex: 0,
-    pageSize: PAGE_SIZE,
-  })
+    pageSize: getInitialTablePageSize(TABLE_STATE_KEY, 20),
+  }))
   const [eventID, setEventID] = useState<number | null>(null)
   const isSuperAdmin = user?.role === ROLE.SUPER_ADMIN
 
@@ -117,28 +121,54 @@ export function DistributionRiskPage() {
       pagination.pageIndex + 1,
       pagination.pageSize,
     ],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       listDistributionRiskEvents(
         queryFilters,
         pagination.pageIndex + 1,
-        pagination.pageSize
+        pagination.pageSize,
+        signal
       ),
     enabled: canRead && !invalidUserID,
     refetchInterval: 60_000,
   })
+  const hasEventsError = eventsQuery.error !== null
+  const pendingCount =
+    hasEventsError || invalidUserID ? 0 : (eventsQuery.data?.pending_count ?? 0)
 
   const openDetails = useCallback((id: number) => setEventID(id), [])
   const columns = useDistributionRiskEventColumns(openDetails)
   const { table } = useDataTable({
     columns,
-    data: eventsQuery.data?.items ?? EMPTY_EVENTS,
+    tableStateStorageKey: TABLE_STATE_KEY,
+    data:
+      canRead && !hasEventsError && !invalidUserID
+        ? (eventsQuery.data?.items ?? EMPTY_EVENTS)
+        : EMPTY_EVENTS,
     getRowId: (event) => String(event.id),
-    totalCount: eventsQuery.data?.total ?? 0,
+    totalCount:
+      hasEventsError || invalidUserID ? 0 : (eventsQuery.data?.total ?? 0),
     pagination,
     onPaginationChange: (updater) => {
-      if (eventsQuery.isFetching || eventsQuery.isError) return
+      if (eventsQuery.isFetching || hasEventsError || invalidUserID) return
+      setPagination((current) => {
+        const next = typeof updater === 'function' ? updater(current) : updater
+        if (next.pageSize === current.pageSize) {
+          return next
+        }
+        return {
+          ...next,
+          pageIndex: 0,
+        }
+      })
+    },
+    ensurePageInRange: (pageCount) => {
+      if (!eventsQuery.isSuccess || eventsQuery.isFetching || invalidUserID) {
+        return
+      }
       setPagination((current) =>
-        typeof updater === 'function' ? updater(current) : updater
+        current.pageIndex >= Math.max(1, pageCount)
+          ? { ...current, pageIndex: Math.max(0, pageCount - 1) }
+          : current
       )
     },
     enableRowSelection: false,
@@ -152,6 +182,13 @@ export function DistributionRiskPage() {
 
   const applyFilters = () => {
     if (invalidDateRange || invalidDraftUserID) return
+    if (
+      pagination.pageIndex === 0 &&
+      JSON.stringify(draftFilters) === JSON.stringify(appliedFilters)
+    ) {
+      void eventsQuery.refetch()
+      return
+    }
     setAppliedFilters({ ...draftFilters })
     setPagination((current) => ({ ...current, pageIndex: 0 }))
   }
@@ -163,13 +200,13 @@ export function DistributionRiskPage() {
   }
 
   return (
-    <SectionPageLayout>
+    <SectionPageLayout fixedContent>
       <SectionPageLayout.Title>{t('Risk logs')}</SectionPageLayout.Title>
       <SectionPageLayout.Actions>
-        {(eventsQuery.data?.pending_count ?? 0) > 0 && (
+        {canRead && pendingCount > 0 && (
           <Badge variant='warning'>
             {t('Pending: {{count}}', {
-              count: eventsQuery.data?.pending_count ?? 0,
+              count: pendingCount,
             })}
           </Badge>
         )}
@@ -190,8 +227,8 @@ export function DistributionRiskPage() {
         )}
       </SectionPageLayout.Actions>
       <SectionPageLayout.Content>
-        <div className='space-y-3'>
-          {canRead && (eventsQuery.data?.pending_count ?? 0) > 0 && (
+        <div className='flex h-full min-h-0 flex-col gap-3'>
+          {canRead && pendingCount > 0 && (
             <div
               className='border-warning/40 bg-warning/10 flex flex-wrap items-center justify-between gap-3 rounded-md border px-3 py-2.5'
               role='status'
@@ -199,7 +236,7 @@ export function DistributionRiskPage() {
               <p className='text-sm'>
                 {t(
                   '{{count}} distribution risk events are waiting for review.',
-                  { count: eventsQuery.data?.pending_count ?? 0 }
+                  { count: pendingCount }
                 )}
               </p>
               <Button
@@ -257,10 +294,12 @@ export function DistributionRiskPage() {
               isLoading={eventsQuery.isPending && !invalidUserID}
               isFetching={eventsQuery.isFetching}
               emptyTitle={
-                eventsQuery.isError
+                hasEventsError
                   ? t('Failed to load risk events')
                   : t('No risk events')
               }
+              className='h-auto min-h-0 flex-1'
+              pinnedColumns={[{ columnId: 'details', side: 'right' }]}
               applyHeaderSize
               getColumnClassName={() => 'py-2'}
               tableClassName='[&_[data-slot=table]]:text-[13px] [&_[data-slot=table]_td]:text-[13px] [&_[data-slot=table]_td_*]:text-[13px] [&_[data-slot=table]_th]:text-[13px] [&_[data-slot=table]_th_*]:text-[13px]'
@@ -273,19 +312,24 @@ export function DistributionRiskPage() {
                   onReset={resetFilters}
                   isFetching={eventsQuery.isFetching}
                   actionEnd={
-                    <Button
-                      type='button'
-                      size='icon-sm'
-                      variant='outline'
-                      aria-label={t('Refresh')}
-                      title={t('Refresh')}
-                      disabled={eventsQuery.isFetching}
-                      onClick={() => void eventsQuery.refetch()}
-                    >
-                      <RefreshCw
-                        className={eventsQuery.isFetching ? 'animate-spin' : ''}
-                      />
-                    </Button>
+                    <div className='flex items-center gap-2'>
+                      <DistributionRiskExportDialog filters={queryFilters} />
+                      <Button
+                        type='button'
+                        size='icon-sm'
+                        variant='outline'
+                        aria-label={t('Refresh')}
+                        title={t('Refresh')}
+                        disabled={eventsQuery.isFetching}
+                        onClick={() => void eventsQuery.refetch()}
+                      >
+                        <RefreshCw
+                          className={
+                            eventsQuery.isFetching ? 'animate-spin' : ''
+                          }
+                        />
+                      </Button>
+                    </div>
                   }
                 />
               }
@@ -307,9 +351,6 @@ export function DistributionRiskPage() {
           }}
           onReviewed={() => {
             setPagination((current) => ({ ...current, pageIndex: 0 }))
-            void queryClient.invalidateQueries({
-              queryKey: ['distribution-risk', 'events'],
-            })
           }}
         />
       </SectionPageLayout.Content>
