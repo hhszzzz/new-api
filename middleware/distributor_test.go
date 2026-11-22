@@ -348,7 +348,7 @@ func TestDistributeExplainsClientPolicyRejection(t *testing.T) {
 	router.ServeHTTP(recorder, request)
 
 	require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
-	assert.Contains(t, recorder.Body.String(), "Model zz-client-policy-model under group default only allows the Claude Code client")
+	assert.Contains(t, recorder.Body.String(), "Model zz-client-policy-model under group default only accepts requests from Claude Code")
 }
 
 func TestSharedEndpointRebindsToSelectedType61Plugin(t *testing.T) {

@@ -937,7 +937,7 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	}
 	if selectionGroup != "" && !groupAllowsRequestClient(c, selectionGroup) {
 		return hosttypes.NewErrorWithStatusCode(
-			fmt.Errorf("group %s does not allow client %s", selectionGroup, clientpolicy.DisplayName(requestClient(c))),
+			fmt.Errorf("group %s does not accept requests from %s", selectionGroup, clientpolicy.DisplayName(requestClient(c))),
 			hosttypes.ErrorCodeInvalidRequest,
 			http.StatusForbidden,
 			hosttypes.ErrOptionWithSkipRetry(),

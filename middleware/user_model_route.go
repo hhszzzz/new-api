@@ -31,7 +31,7 @@ func applyUserModelRoute(c *gin.Context, sourceModel, usingGroup string) (*model
 			}
 		}
 	} else if !groupAllowsRequestClient(c, usingGroup) {
-		return nil, fmt.Errorf("client is not allowed to use request group %s", usingGroup)
+		return nil, fmt.Errorf("request group %s does not accept requests from this source", usingGroup)
 	}
 	if len(applicableGroups) == 0 {
 		return nil, nil
@@ -62,7 +62,7 @@ func applyUserModelRoute(c *gin.Context, sourceModel, usingGroup string) (*model
 		}
 	}
 	if len(executionGroups) == 0 {
-		return nil, fmt.Errorf("client is not allowed to use any routed execution group")
+		return nil, fmt.Errorf("no routed execution group accepts requests from this source")
 	}
 	executionGroup := executionGroups[0]
 	channels := append([]int(nil), route.ChannelIds...)

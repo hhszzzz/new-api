@@ -1,7 +1,8 @@
 import { Bot, Ban } from 'lucide-react'
-import { useMemo } from 'react'
+import { type ReactNode, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import kimiCodeIcon from '@/assets/brand-icons/kimi-icon-round.png'
 import {
   Avatar,
   AvatarFallback,
@@ -40,7 +41,10 @@ const CLIENT_ICONS: Record<string, string> = {
   pi: 'Pi',
   deepseek_harness: 'DeepSeek.Color',
   cline: 'Cline',
-  kimi_code: 'Moonshot',
+}
+
+const CLIENT_ICON_IMAGES: Record<string, string> = {
+  kimi_code: kimiCodeIcon,
 }
 
 function normalizeClients(clients: string[] | undefined): string[] {
@@ -107,24 +111,50 @@ export function ClientPolicyIndicator(props: { policy?: ClientPolicy }) {
                 </Avatar>
               ) : (
                 <AvatarGroup className='-space-x-1.5'>
-                  {clients.slice(0, 3).map((client) => (
-                    <Avatar
-                      key={client}
-                      size='sm'
-                      className={`bg-background !size-5 ${avatarOutlineClass}`}
-                    >
-                      <AvatarFallback className='bg-background p-0.5'>
-                        {CLIENT_ICONS[client] ? (
-                          getLobeIcon(CLIENT_ICONS[client], 14)
-                        ) : (
-                          <Bot
-                            className='text-muted-foreground size-3.5'
-                            aria-hidden='true'
-                          />
-                        )}
-                      </AvatarFallback>
-                    </Avatar>
-                  ))}
+                  {clients.slice(0, 3).map((client) => {
+                    const clientImage = CLIENT_ICON_IMAGES[client]
+                    const clientIcon = CLIENT_ICONS[client]
+                    let iconContent: ReactNode
+
+                    if (clientImage) {
+                      iconContent = (
+                        <img
+                          src={clientImage}
+                          alt=''
+                          aria-hidden='true'
+                          className='size-full rounded-full object-contain'
+                          data-testid={
+                            client === 'kimi_code'
+                              ? 'client-icon-kimi-code'
+                              : undefined
+                          }
+                        />
+                      )
+                    } else if (clientIcon) {
+                      iconContent = getLobeIcon(clientIcon, 14)
+                    } else {
+                      iconContent = (
+                        <Bot
+                          className='text-muted-foreground size-3.5'
+                          aria-hidden='true'
+                        />
+                      )
+                    }
+
+                    return (
+                      <Avatar
+                        key={client}
+                        size='sm'
+                        className={`bg-background !size-5 ${avatarOutlineClass}`}
+                      >
+                        <AvatarFallback
+                          className={`bg-background ${clientImage ? 'p-0' : 'p-0.5'}`}
+                        >
+                          {iconContent}
+                        </AvatarFallback>
+                      </Avatar>
+                    )
+                  })}
                   {clients.length > 3 && (
                     <AvatarGroupCount
                       className={`!size-5 border text-[9px] ${outlineColorClass}`}

@@ -164,7 +164,7 @@ func applySelectedChannelCompatibility(c *gin.Context, channel *model.Channel, m
 	c.Request = c.Request.WithContext(relayconvert.WithProtocolBridgeContext(c.Request.Context()))
 	common.SetContextKey(c, constant.ContextKeyProtocolResponseStreamState, nil)
 	if !clientpolicy.IsChannelAllowed(channel, requestClient(c)) {
-		return fmt.Errorf("channel %d does not allow client %s", channel.Id, clientpolicy.DisplayName(requestClient(c)))
+		return fmt.Errorf("channel %d does not accept requests from %s", channel.Id, clientpolicy.DisplayName(requestClient(c)))
 	}
 	if _, matched := pinnedEndpointCandidateForChannel(c, channel, c.GetString("expected_task_plugin_key")); matched {
 		// A prepared plugin endpoint implements its declared host protocol itself.

@@ -57,9 +57,13 @@ describe('client policy indicator', () => {
     expect(
       indicator.querySelector('[data-client-icon="Codex.Color"]')
     ).not.toBeNull()
-    expect(
-      indicator.querySelector('[data-client-icon="Moonshot"]')
-    ).not.toBeNull()
+    const kimiIcon = indicator.querySelector(
+      '[data-testid="client-icon-kimi-code"]'
+    )
+    expect(kimiIcon).toHaveAttribute('alt', '')
+    expect(kimiIcon?.closest('[data-slot="avatar"]')).toHaveClass(
+      'after:!border-success'
+    )
     expect(indicator.querySelector('[data-client-icon="Cline"]')).not.toBeNull()
 
     await user.hover(indicator)
