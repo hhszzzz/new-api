@@ -404,6 +404,8 @@ func migrateDB() error {
 		&PromptAuditArchiveImport{},
 		&PromptAuditImportedRecord{},
 		&PromptAuditStorageState{},
+		&DistributionRiskEvent{},
+		&DistributionRiskHold{},
 		&PromptWordlist{},
 		&ModelRadarSnapshot{},
 		&CasbinRule{},
