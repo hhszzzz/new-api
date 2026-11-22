@@ -30,6 +30,7 @@ import {
   PlugZap,
   Radio,
   ScanSearch,
+  ShieldAlert,
   ServerCog,
   Settings,
   ShieldCheck,
@@ -68,6 +69,16 @@ export function useSidebarData(badges: SidebarBadges = {}): SidebarData {
   const canManagePromptAudit = hasPermission(
     user,
     ADMIN_PERMISSION_RESOURCES.PROMPT_AUDIT,
+    ADMIN_PERMISSION_ACTIONS.MANAGE
+  )
+  const canReadDistributionRisk = hasPermission(
+    user,
+    ADMIN_PERMISSION_RESOURCES.DISTRIBUTION_RISK,
+    ADMIN_PERMISSION_ACTIONS.READ
+  )
+  const canManageDistributionRisk = hasPermission(
+    user,
+    ADMIN_PERMISSION_RESOURCES.DISTRIBUTION_RISK,
     ADMIN_PERMISSION_ACTIONS.MANAGE
   )
 
@@ -213,6 +224,15 @@ export function useSidebarData(badges: SidebarBadges = {}): SidebarData {
             url: '/subscriptions',
             icon: CreditCard,
           },
+          ...(canReadDistributionRisk || canManageDistributionRisk
+            ? [
+                {
+                  title: t('Distribution risk'),
+                  url: '/distribution-risk',
+                  icon: ShieldAlert,
+                },
+              ]
+            : []),
           {
             title: t('System Info'),
             url: '/system-info',

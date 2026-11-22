@@ -132,6 +132,8 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 		return
 	}
+	sessionID := distributionRiskSessionID(c, request)
+	c.Request.Header.Del("X-Session-ID")
 
 	relayInfo, err = relaycommon.GenRelayInfo(c, relayFormat, request, ws)
 	if err != nil {
@@ -140,6 +142,22 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 	if relayFormat == types.RelayFormatGemini {
 		relay.ConfigureGeminiBillingModel(relayInfo)
+	}
+	riskDecision, riskErr := service.CheckDistributionRisk(c, relayInfo.UserId, relayInfo.TokenId, c.ClientIP(), c.Request.UserAgent(), sessionID)
+	if riskErr != nil {
+		common.SysLog(common.LogText("distribution risk check failed: %s", riskErr.Error()))
+	}
+	if riskDecision != nil && riskDecision.Release != nil {
+		defer riskDecision.Release()
+	}
+	if riskDecision != nil && riskDecision.Blocked {
+		newAPIError = hosttypes.NewErrorWithStatusCode(
+			errors.New(i18n.T(c, i18n.MsgRateLimitRPMExceeded)),
+			hosttypes.ErrorCodeRateLimitExceeded,
+			http.StatusTooManyRequests,
+			hosttypes.ErrOptionWithSkipRetry(),
+		)
+		return
 	}
 	// The radar-driven tier override must be decided before ModelPriceHelper
 	// fixes the pricing identity and pre-consumes quota below.
@@ -337,6 +355,31 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		retryLogStr := common.LogText("retry: %s", strings.Trim(strings.Join(strings.Fields(fmt.Sprint(useChannel)), "->"), "[]"))
 		logger.LogInfo(c, retryLogStr)
 	}
+}
+
+func distributionRiskSessionID(c *gin.Context, request dto.Request) string {
+	for _, header := range []string{"x-deepseek-harness-session-id", "session_id", "x-session-id"} {
+		if value := strings.TrimSpace(c.GetHeader(header)); value != "" {
+			return value
+		}
+	}
+	claudeRequest, ok := request.(*dto.ClaudeRequest)
+	if !ok || len(claudeRequest.Metadata) == 0 {
+		return ""
+	}
+	var metadata struct {
+		UserID string `json:"user_id"`
+	}
+	if err := common.Unmarshal(claudeRequest.Metadata, &metadata); err != nil || strings.TrimSpace(metadata.UserID) == "" {
+		return ""
+	}
+	var identity struct {
+		SessionID string `json:"session_id"`
+	}
+	if err := common.Unmarshal([]byte(metadata.UserID), &identity); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(identity.SessionID)
 }
 
 func shouldApplyUserRateLimits(c *gin.Context, relayInfo *relaycommon.RelayInfo) bool {

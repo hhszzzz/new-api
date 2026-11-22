@@ -283,6 +283,38 @@ describe('prompt audit sidebar entry', () => {
   })
 })
 
+describe('distribution risk sidebar entry', () => {
+  it.each([ADMIN_PERMISSION_ACTIONS.READ, ADMIN_PERMISSION_ACTIONS.MANAGE])(
+    'shows the entry with distribution-risk %s permission',
+    (action) => {
+      const { result } = sidebarFor(undefined, undefined, true, {
+        role: ROLE.ADMIN,
+        permissions: {
+          admin_permissions: {
+            [ADMIN_PERMISSION_RESOURCES.DISTRIBUTION_RISK]: { [action]: true },
+          },
+        },
+      })
+
+      const riskItem = result.current
+        .flatMap((group) => group.items)
+        .find((item) => item.title === 'Distribution risk')
+      expect(riskItem).toMatchObject({ url: '/distribution-risk' })
+    }
+  )
+
+  it('hides the entry without distribution-risk read or manage permission', () => {
+    const { result } = sidebarFor(undefined, undefined, true, {
+      role: ROLE.ADMIN,
+    })
+    expect(
+      result.current
+        .flatMap((group) => group.items)
+        .some((item) => item.title === 'Distribution risk')
+    ).toBe(false)
+  })
+})
+
 describe('audit log route access', () => {
   it('redirects a regular user to the forbidden page', () => {
     useAuthStore.getState().auth.setUser({
