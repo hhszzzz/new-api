@@ -33,6 +33,10 @@ describe('client policy settings location', () => {
       title: 'Client Policies',
       url: '/system-settings/security/client-policy',
     })
+    expect(securityItems).toContainEqual({
+      title: 'Distribution risk detection',
+      url: '/system-settings/security/distribution-risk',
+    })
     expect(operationsItems).not.toContainEqual(
       expect.objectContaining({ title: 'Client Policies' })
     )

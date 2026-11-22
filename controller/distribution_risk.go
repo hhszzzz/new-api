@@ -124,6 +124,47 @@ func ListDistributionRiskEvents(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "Invalid event status"})
 		return
 	}
+	level := strings.TrimSpace(c.Query("level"))
+	if level != "" && level != "all" && level != "medium" && level != "high" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "Invalid risk level"})
+		return
+	}
+	scopeKind := strings.TrimSpace(c.Query("scope_kind"))
+	if scopeKind != "" && scopeKind != "all" && scopeKind != "user" && scopeKind != "token" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "Invalid event scope"})
+		return
+	}
+	filters := model.DistributionRiskEventFilters{Status: status, Level: level, ScopeKind: scopeKind}
+	if rawUserID := strings.TrimSpace(c.Query("user_id")); rawUserID != "" {
+		userID, err := strconv.Atoi(rawUserID)
+		if err != nil || userID <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "Invalid user ID"})
+			return
+		}
+		filters.UserID = userID
+	}
+	startTimestamp := strings.TrimSpace(c.Query("start_timestamp"))
+	if startTimestamp != "" {
+		parsed, err := strconv.ParseInt(startTimestamp, 10, 64)
+		if err != nil || parsed <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "Invalid event time range"})
+			return
+		}
+		filters.StartTime = parsed
+	}
+	endTimestamp := strings.TrimSpace(c.Query("end_timestamp"))
+	if endTimestamp != "" {
+		parsed, err := strconv.ParseInt(endTimestamp, 10, 64)
+		if err != nil || parsed <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "Invalid event time range"})
+			return
+		}
+		filters.EndTime = parsed
+	}
+	if filters.StartTime > 0 && filters.EndTime > 0 && filters.StartTime > filters.EndTime {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "Invalid event time range"})
+		return
+	}
 	page, err := strconv.Atoi(c.DefaultQuery("page", "1"))
 	if err != nil || page < 1 {
 		page = 1
@@ -132,7 +173,7 @@ func ListDistributionRiskEvents(c *gin.Context) {
 	if err != nil || pageSize < 1 || pageSize > 100 {
 		pageSize = 20
 	}
-	events, total, err := model.ListDistributionRiskEvents(status, (page-1)*pageSize, pageSize)
+	events, total, err := model.ListDistributionRiskEvents(filters, (page-1)*pageSize, pageSize)
 	if err != nil {
 		common.ApiError(c, err)
 		return

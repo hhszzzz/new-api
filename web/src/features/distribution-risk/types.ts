@@ -18,6 +18,14 @@ For commercial licensing, please contact support@quantumnous.com
 */
 export type DistributionRiskMode = 'disabled' | 'shadow' | 'enforce'
 export type DistributionRiskStatus = 'pending' | 'confirmed' | 'false_positive'
+export type DistributionRiskEventQuery = {
+  status: DistributionRiskStatus | 'all'
+  level: 'medium' | 'high' | 'all'
+  scope_kind: 'user' | 'token' | 'all'
+  user_id?: number
+  start_timestamp?: number
+  end_timestamp?: number
+}
 
 export interface DistributionRiskConfig {
   enabled: boolean

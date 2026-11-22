@@ -16,41 +16,42 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronLeft, ChevronRight, Eye } from 'lucide-react'
-import { useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { Link } from '@tanstack/react-router'
+import { RefreshCw, Settings2 } from 'lucide-react'
+import { useCallback, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { toast } from 'sonner'
 
+import { DataTablePage, useDataTable } from '@/components/data-table'
 import { SectionPageLayout } from '@/components/layout'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   ADMIN_PERMISSION_ACTIONS,
   ADMIN_PERMISSION_RESOURCES,
   hasPermission,
 } from '@/lib/admin-permissions'
-import { formatTimestampToDate } from '@/lib/format'
+import { ROLE } from '@/lib/roles'
 import { useAuthStore } from '@/stores/auth-store'
 
-import {
-  getDistributionRiskConfig,
-  listDistributionRiskEvents,
-  updateDistributionRiskConfig,
-} from './api'
+import { listDistributionRiskEvents } from './api'
+import { useDistributionRiskEventColumns } from './components/distribution-risk-event-columns'
 import { DistributionRiskEventDialog } from './components/distribution-risk-event-dialog'
-import { DistributionRiskSettings } from './components/distribution-risk-settings'
+import {
+  DistributionRiskFilterBar,
+  type DistributionRiskEventDraftFilters,
+} from './components/distribution-risk-filter-bar'
+import type { DistributionRiskEvent, DistributionRiskEventQuery } from './types'
 
 const PAGE_SIZE = 20
+const EMPTY_EVENTS: DistributionRiskEvent[] = []
+const DEFAULT_FILTERS: DistributionRiskEventDraftFilters = {
+  status: 'all',
+  level: 'all',
+  scope_kind: 'all',
+  user_id: '',
+}
 
 export function DistributionRiskPage() {
   const { t } = useTranslation()
@@ -66,56 +67,133 @@ export function DistributionRiskPage() {
     ADMIN_PERMISSION_RESOURCES.DISTRIBUTION_RISK,
     ADMIN_PERMISSION_ACTIONS.MANAGE
   )
-  const [status, setStatus] = useState<'pending' | 'all'>('pending')
-  const [page, setPage] = useState(1)
+  const [draftFilters, setDraftFilters] =
+    useState<DistributionRiskEventDraftFilters>(DEFAULT_FILTERS)
+  const [appliedFilters, setAppliedFilters] =
+    useState<DistributionRiskEventDraftFilters>(DEFAULT_FILTERS)
+  const [pagination, setPagination] = useState({
+    pageIndex: 0,
+    pageSize: PAGE_SIZE,
+  })
   const [eventID, setEventID] = useState<number | null>(null)
+  const isSuperAdmin = user?.role === ROLE.SUPER_ADMIN
 
-  const configQuery = useQuery({
-    queryKey: ['distribution-risk', 'config'],
-    queryFn: getDistributionRiskConfig,
-    enabled: canManage,
-    refetchInterval: 60_000,
-  })
+  const invalidDateRange =
+    draftFilters.start_timestamp !== undefined &&
+    draftFilters.end_timestamp !== undefined &&
+    draftFilters.start_timestamp > draftFilters.end_timestamp
+  const invalidUserID =
+    appliedFilters.user_id !== '' &&
+    (!/^\d+$/.test(appliedFilters.user_id) ||
+      !Number.isSafeInteger(Number(appliedFilters.user_id)) ||
+      Number(appliedFilters.user_id) <= 0)
+  const invalidDraftUserID =
+    draftFilters.user_id !== '' &&
+    (!/^\d+$/.test(draftFilters.user_id) ||
+      !Number.isSafeInteger(Number(draftFilters.user_id)) ||
+      Number(draftFilters.user_id) <= 0)
+
+  const queryFilters = useMemo<DistributionRiskEventQuery>(() => {
+    const filters: DistributionRiskEventQuery = {
+      status: appliedFilters.status,
+      level: appliedFilters.level,
+      scope_kind: appliedFilters.scope_kind,
+    }
+    if (appliedFilters.user_id) filters.user_id = Number(appliedFilters.user_id)
+    if (appliedFilters.start_timestamp !== undefined) {
+      filters.start_timestamp = appliedFilters.start_timestamp
+    }
+    if (appliedFilters.end_timestamp !== undefined) {
+      filters.end_timestamp = appliedFilters.end_timestamp
+    }
+    return filters
+  }, [appliedFilters])
+
   const eventsQuery = useQuery({
-    queryKey: ['distribution-risk', 'events', status, page],
-    queryFn: () => listDistributionRiskEvents(status, page, PAGE_SIZE),
-    enabled: canRead,
+    queryKey: [
+      'distribution-risk',
+      'events',
+      queryFilters,
+      pagination.pageIndex + 1,
+      pagination.pageSize,
+    ],
+    queryFn: () =>
+      listDistributionRiskEvents(
+        queryFilters,
+        pagination.pageIndex + 1,
+        pagination.pageSize
+      ),
+    enabled: canRead && !invalidUserID,
     refetchInterval: 60_000,
   })
-  const updateMutation = useMutation({
-    mutationFn: updateDistributionRiskConfig,
-    onSuccess: async (config) => {
-      queryClient.setQueryData(['distribution-risk', 'config'], config)
-      await queryClient.invalidateQueries({
-        queryKey: ['distribution-risk', 'events'],
-      })
-      toast.success(t('Distribution risk settings saved'))
+
+  const openDetails = useCallback((id: number) => setEventID(id), [])
+  const columns = useDistributionRiskEventColumns(openDetails)
+  const { table } = useDataTable({
+    columns,
+    data: eventsQuery.data?.items ?? EMPTY_EVENTS,
+    getRowId: (event) => String(event.id),
+    totalCount: eventsQuery.data?.total ?? 0,
+    pagination,
+    onPaginationChange: (updater) => {
+      if (eventsQuery.isFetching || eventsQuery.isError) return
+      setPagination((current) =>
+        typeof updater === 'function' ? updater(current) : updater
+      )
     },
-    onError: (error) =>
-      toast.error(error.message || t('Failed to save settings')),
+    enableRowSelection: false,
+    enableSorting: false,
+    manualFiltering: true,
+    manualPagination: true,
   })
 
-  const pendingCount = eventsQuery.data?.pending_count ?? 0
-  const totalPages = Math.max(
-    1,
-    Math.ceil((eventsQuery.data?.total ?? 0) / PAGE_SIZE)
-  )
+  const onFilterChange = (patch: Partial<DistributionRiskEventDraftFilters>) =>
+    setDraftFilters((current) => ({ ...current, ...patch }))
+
+  const applyFilters = () => {
+    if (invalidDateRange || invalidDraftUserID) return
+    setAppliedFilters({ ...draftFilters })
+    setPagination((current) => ({ ...current, pageIndex: 0 }))
+  }
+
+  const resetFilters = () => {
+    setDraftFilters(DEFAULT_FILTERS)
+    setAppliedFilters(DEFAULT_FILTERS)
+    setPagination((current) => ({ ...current, pageIndex: 0 }))
+  }
 
   return (
     <SectionPageLayout>
       <SectionPageLayout.Title>
-        {t('Distribution risk')}
+        {t('Distribution risk logs')}
       </SectionPageLayout.Title>
       <SectionPageLayout.Actions>
-        {pendingCount > 0 && (
+        {(eventsQuery.data?.pending_count ?? 0) > 0 && (
           <Badge variant='warning'>
-            {t('Pending: {{count}}', { count: pendingCount })}
+            {t('Pending: {{count}}', {
+              count: eventsQuery.data?.pending_count ?? 0,
+            })}
           </Badge>
+        )}
+        {isSuperAdmin && (
+          <Button
+            size='sm'
+            variant='outline'
+            render={
+              <Link
+                to='/system-settings/security/$section'
+                params={{ section: 'distribution-risk' }}
+              />
+            }
+          >
+            <Settings2 data-icon='inline-start' />
+            {t('Detection settings')}
+          </Button>
         )}
       </SectionPageLayout.Actions>
       <SectionPageLayout.Content>
-        <div className='space-y-5'>
-          {pendingCount > 0 && canRead && (
+        <div className='space-y-3'>
+          {canRead && (eventsQuery.data?.pending_count ?? 0) > 0 && (
             <div
               className='border-warning/40 bg-warning/10 flex flex-wrap items-center justify-between gap-3 rounded-md border px-3 py-2.5'
               role='status'
@@ -123,17 +201,17 @@ export function DistributionRiskPage() {
               <p className='text-sm'>
                 {t(
                   '{{count}} distribution risk events are waiting for review.',
-                  {
-                    count: pendingCount,
-                  }
+                  { count: eventsQuery.data?.pending_count ?? 0 }
                 )}
               </p>
               <Button
                 size='sm'
                 variant='outline'
                 onClick={() => {
-                  setStatus('pending')
-                  setPage(1)
+                  const next = { ...DEFAULT_FILTERS, status: 'pending' as const }
+                  setDraftFilters(next)
+                  setAppliedFilters(next)
+                  setPagination((current) => ({ ...current, pageIndex: 0 }))
                 }}
               >
                 {t('Review pending')}
@@ -141,171 +219,83 @@ export function DistributionRiskPage() {
             </div>
           )}
 
-          {canManage && configQuery.data && (
-            <DistributionRiskSettings
-              key={[
-                configQuery.data.enabled,
-                configQuery.data.started_at,
-                configQuery.data.ip_floor,
-                configQuery.data.user_agent_floor,
-                configQuery.data.session_floor,
-                configQuery.data.requests_per_minute_floor,
-                configQuery.data.concurrency_floor,
-                configQuery.data.min_requests,
-                configQuery.data.min_active_days,
-              ].join(':')}
-              config={configQuery.data}
-              isSaving={updateMutation.isPending}
-              onSave={(update) => updateMutation.mutate(update)}
-            />
+          {invalidDateRange && (
+            <Alert variant='destructive'>
+              <AlertDescription>
+                {t('End time must be after start time')}
+              </AlertDescription>
+            </Alert>
           )}
-          {canManage && configQuery.isError && (
-            <p className='text-destructive text-sm'>
-              {configQuery.error.message ||
-                t('Failed to load detection settings')}
-            </p>
+          {invalidDraftUserID && (
+            <Alert variant='destructive'>
+              <AlertDescription>{t('Enter a valid user ID')}</AlertDescription>
+            </Alert>
+          )}
+          {eventsQuery.isError && (
+            <Alert variant='destructive'>
+              <AlertDescription className='flex items-center justify-between gap-3'>
+                <span>
+                  {eventsQuery.error.message || t('Failed to load risk events')}
+                </span>
+                <Button
+                  type='button'
+                  size='sm'
+                  variant='outline'
+                  onClick={() => void eventsQuery.refetch()}
+                >
+                  {t('Retry')}
+                </Button>
+              </AlertDescription>
+            </Alert>
           )}
 
           {canRead ? (
-            <section className='space-y-3'>
-              <div className='flex flex-wrap items-center justify-between gap-3'>
-                <h3 className='text-sm font-semibold'>{t('Risk events')}</h3>
-                <Tabs
-                  value={status}
-                  onValueChange={(value) => {
-                    if (value === 'pending' || value === 'all') {
-                      setStatus(value)
-                      setPage(1)
-                    }
-                  }}
-                >
-                  <TabsList>
-                    <TabsTrigger value='pending'>{t('Pending')}</TabsTrigger>
-                    <TabsTrigger value='all'>{t('All events')}</TabsTrigger>
-                  </TabsList>
-                </Tabs>
-              </div>
-              {eventsQuery.isError ? (
-                <p className='text-destructive py-6 text-sm'>
-                  {eventsQuery.error.message || t('Failed to load risk events')}
-                </p>
-              ) : (
-                <div className='overflow-x-auto rounded-md border'>
-                  <Table className='min-w-[900px]' withContainer={false}>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>{t('Observed at')}</TableHead>
-                        <TableHead>{t('User ID')}</TableHead>
-                        <TableHead>{t('Scope')}</TableHead>
-                        <TableHead>{t('Tokens')}</TableHead>
-                        <TableHead>{t('Score')}</TableHead>
-                        <TableHead>{t('Risk')}</TableHead>
-                        <TableHead>{t('Status')}</TableHead>
-                        <TableHead className='w-28'>{t('Details')}</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {eventsQuery.isLoading && (
-                        <TableRow>
-                          <TableCell
-                            colSpan={8}
-                            className='text-muted-foreground py-8 text-center'
-                          >
-                            {t('Loading...')}
-                          </TableCell>
-                        </TableRow>
-                      )}
-                      {!eventsQuery.isLoading &&
-                        eventsQuery.data?.items.map((event) => (
-                          <TableRow key={event.id}>
-                            <TableCell>
-                              {formatTimestampToDate(event.created_at)}
-                            </TableCell>
-                            <TableCell className='font-mono'>
-                              {event.user_id}
-                            </TableCell>
-                            <TableCell>
-                              {event.scope_kind === 'user'
-                                ? t('User account')
-                                : t('Token')}{' '}
-                              {event.scope_id}
-                            </TableCell>
-                            <TableCell className='max-w-56 truncate font-mono'>
-                              {event.token_ids.join(', ')}
-                            </TableCell>
-                            <TableCell className='font-semibold'>
-                              {event.score}
-                            </TableCell>
-                            <TableCell>
-                              <Badge
-                                variant={
-                                  event.level === 'high'
-                                    ? 'destructive'
-                                    : 'warning'
-                                }
-                              >
-                                {event.level === 'high'
-                                  ? t('High')
-                                  : t('Medium')}
-                              </Badge>
-                            </TableCell>
-                            <TableCell>
-                              {statusLabel(event.status, t)}
-                            </TableCell>
-                            <TableCell>
-                              <Button
-                                size='sm'
-                                variant='outline'
-                                onClick={() => setEventID(event.id)}
-                              >
-                                <Eye />
-                                {t('Details')}
-                              </Button>
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      {!eventsQuery.isLoading &&
-                        !eventsQuery.data?.items.length && (
-                          <TableRow>
-                            <TableCell
-                              colSpan={8}
-                              className='text-muted-foreground py-8 text-center'
-                            >
-                              {t('No risk events')}
-                            </TableCell>
-                          </TableRow>
-                        )}
-                    </TableBody>
-                  </Table>
-                </div>
-              )}
-              <div className='flex items-center justify-end gap-2'>
-                <span className='text-muted-foreground mr-2 text-xs'>
-                  {t('Page {{page}} of {{total}}', { page, total: totalPages })}
-                </span>
-                <Button
-                  aria-label={t('Previous page')}
-                  disabled={page <= 1 || eventsQuery.isFetching}
-                  onClick={() => setPage((current) => Math.max(1, current - 1))}
-                  size='icon-sm'
-                  variant='outline'
-                >
-                  <ChevronLeft />
-                </Button>
-                <Button
-                  aria-label={t('Next page')}
-                  disabled={page >= totalPages || eventsQuery.isFetching}
-                  onClick={() =>
-                    setPage((current) => Math.min(totalPages, current + 1))
+            <DataTablePage
+              table={table}
+              columns={columns}
+              isLoading={eventsQuery.isPending && !invalidUserID}
+              isFetching={eventsQuery.isFetching}
+              emptyTitle={
+                eventsQuery.isError
+                  ? t('Failed to load risk events')
+                  : t('No risk events')
+              }
+              applyHeaderSize
+              getColumnClassName={() => 'py-2'}
+              tableClassName='[&_[data-slot=table]]:text-[13px] [&_[data-slot=table]_td]:text-[13px] [&_[data-slot=table]_td_*]:text-[13px] [&_[data-slot=table]_th]:text-[13px] [&_[data-slot=table]_th_*]:text-[13px]'
+              toolbar={
+                <DistributionRiskFilterBar
+                  table={table}
+                  filters={draftFilters}
+                  onChange={onFilterChange}
+                  onSearch={applyFilters}
+                  onReset={resetFilters}
+                  isFetching={eventsQuery.isFetching}
+                  actionEnd={
+                    <Button
+                      type='button'
+                      size='icon-sm'
+                      variant='outline'
+                      aria-label={t('Refresh')}
+                      title={t('Refresh')}
+                      disabled={eventsQuery.isFetching}
+                      onClick={() => void eventsQuery.refetch()}
+                    >
+                      <RefreshCw
+                        className={eventsQuery.isFetching ? 'animate-spin' : ''}
+                      />
+                    </Button>
                   }
-                  size='icon-sm'
-                  variant='outline'
-                >
-                  <ChevronRight />
-                </Button>
-              </div>
-            </section>
-          ) : null}
+                />
+              }
+            />
+          ) : (
+            <Alert variant='destructive'>
+              <AlertDescription>
+                {t('You do not have permission to view risk events')}
+              </AlertDescription>
+            </Alert>
+          )}
         </div>
         <DistributionRiskEventDialog
           key={eventID ?? 'closed'}
@@ -315,7 +305,7 @@ export function DistributionRiskPage() {
             if (!open) setEventID(null)
           }}
           onReviewed={() => {
-            setPage(1)
+            setPagination((current) => ({ ...current, pageIndex: 0 }))
             void queryClient.invalidateQueries({
               queryKey: ['distribution-risk', 'events'],
             })
@@ -324,13 +314,4 @@ export function DistributionRiskPage() {
       </SectionPageLayout.Content>
     </SectionPageLayout>
   )
-}
-
-function statusLabel(
-  status: 'pending' | 'confirmed' | 'false_positive',
-  t: (key: string) => string
-) {
-  if (status === 'false_positive') return t('False positive')
-  if (status === 'confirmed') return t('Confirmed')
-  return t('Pending')
 }

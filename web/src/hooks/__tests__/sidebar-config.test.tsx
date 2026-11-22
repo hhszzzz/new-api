@@ -41,17 +41,17 @@ import {
   serializeSidebarModulesAdmin,
 } from '@/features/system-settings/maintenance/config'
 import {
-  ADMIN_PERMISSION_ACTIONS,
-  ADMIN_PERMISSION_RESOURCES,
-} from '@/lib/admin-permissions'
-import { ROLE } from '@/lib/roles'
-import { Route as AuditLogsRoute } from '@/routes/_authenticated/usage-logs/audit'
-import { useAuthStore, type AuthUser } from '@/stores/auth-store'
-import {
   MODEL_PRICING_ISSUES_QUERY_KEY,
   type ModelPricingIssue,
 } from '@/features/system-settings/models/pricing-issues'
+import {
+  ADMIN_PERMISSION_ACTIONS,
+  ADMIN_PERMISSION_RESOURCES,
+} from '@/lib/admin-permissions'
 import { api } from '@/lib/api'
+import { ROLE } from '@/lib/roles'
+import { Route as AuditLogsRoute } from '@/routes/_authenticated/usage-logs/audit'
+import { useAuthStore, type AuthUser } from '@/stores/auth-store'
 
 import { useSidebarConfig } from '../use-sidebar-config'
 import { useSidebarData } from '../use-sidebar-data'
@@ -298,7 +298,7 @@ describe('distribution risk sidebar entry', () => {
 
       const riskItem = result.current
         .flatMap((group) => group.items)
-        .find((item) => item.title === 'Distribution risk')
+        .find((item) => item.title === 'Distribution risk logs')
       expect(riskItem).toMatchObject({ url: '/distribution-risk' })
     }
   )
@@ -310,7 +310,7 @@ describe('distribution risk sidebar entry', () => {
     expect(
       result.current
         .flatMap((group) => group.items)
-        .some((item) => item.title === 'Distribution risk')
+        .some((item) => item.title === 'Distribution risk logs')
     ).toBe(false)
   })
 })

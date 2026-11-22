@@ -76,6 +76,15 @@ type DistributionRiskEvent struct {
 	ReviewReason   string               `json:"review_reason" gorm:"type:varchar(512)"`
 }
 
+type DistributionRiskEventFilters struct {
+	Status    string
+	Level     string
+	ScopeKind string
+	UserID    int
+	StartTime int64
+	EndTime   int64
+}
+
 // DistributionRiskHold keeps a high-risk token blocked until an administrator
 // reviews the incident. The Redis mirror is only a hot-path cache.
 type DistributionRiskHold struct {
@@ -138,7 +147,7 @@ func GetDistributionRiskEvent(id int64) (*DistributionRiskEvent, error) {
 	return &event, nil
 }
 
-func ListDistributionRiskEvents(status string, offset, limit int) ([]DistributionRiskEvent, int64, error) {
+func ListDistributionRiskEvents(filters DistributionRiskEventFilters, offset, limit int) ([]DistributionRiskEvent, int64, error) {
 	if offset < 0 {
 		offset = 0
 	}
@@ -146,8 +155,23 @@ func ListDistributionRiskEvents(status string, offset, limit int) ([]Distributio
 		limit = 20
 	}
 	query := DB.Model(&DistributionRiskEvent{})
-	if status != "" && status != "all" {
-		query = query.Where("status = ?", status)
+	if filters.Status != "" && filters.Status != "all" {
+		query = query.Where("status = ?", filters.Status)
+	}
+	if filters.Level != "" && filters.Level != "all" {
+		query = query.Where("level = ?", filters.Level)
+	}
+	if filters.ScopeKind != "" && filters.ScopeKind != "all" {
+		query = query.Where("scope_kind = ?", filters.ScopeKind)
+	}
+	if filters.UserID > 0 {
+		query = query.Where("user_id = ?", filters.UserID)
+	}
+	if filters.StartTime > 0 {
+		query = query.Where("created_at >= ?", filters.StartTime)
+	}
+	if filters.EndTime > 0 {
+		query = query.Where("created_at <= ?", filters.EndTime)
 	}
 	var total int64
 	if err := query.Count(&total).Error; err != nil {

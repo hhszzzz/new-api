@@ -224,7 +224,7 @@ export function GroupRegistryEditor({ onChanged }: GroupRegistryEditorProps) {
             },
             {
               id: 'sort_order',
-              header: t('Sort order'),
+              header: t('Display order'),
               className: 'w-24 text-right',
               cellClassName: 'text-right tabular-nums',
               cell: (group) => formatNumber(group.sort_order, locale),
@@ -333,7 +333,7 @@ export function GroupRegistryEditor({ onChanged }: GroupRegistryEditorProps) {
               />
             </div>
             <div className='space-y-2'>
-              <Label htmlFor='group-sort-order'>{t('Sort order')}</Label>
+              <Label htmlFor='group-sort-order'>{t('Display order')}</Label>
               <Input
                 id='group-sort-order'
                 type='number'
@@ -346,6 +346,11 @@ export function GroupRegistryEditor({ onChanged }: GroupRegistryEditorProps) {
                   }))
                 }
               />
+              <p className='text-muted-foreground text-xs'>
+                {t(
+                  'Lower values appear first in the registry; ties are sorted by group name. Auto key order is configured separately.'
+                )}
+              </p>
             </div>
           </div>
           <SheetFooter className={sideDrawerFooterClassName()}>

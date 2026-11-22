@@ -139,8 +139,20 @@ func TestDistributionRiskPersistenceDatabaseMatrix(t *testing.T) {
 
 			falsePositive := &model.DistributionRiskEvent{UserID: 7, Score: 65, Level: "medium", Evidence: `{"ips":["192.0.2.1"]}`}
 			require.NoError(t, model.CreateDistributionRiskEvent(falsePositive, true, []int{41}))
-			secondIncident := &model.DistributionRiskEvent{UserID: 7, Score: 90, Level: "high", Evidence: `{"ips":["192.0.2.2"]}`}
+			secondIncident := &model.DistributionRiskEvent{UserID: 7, ScopeKind: "token", Score: 90, Level: "high", Evidence: `{"ips":["192.0.2.2"]}`}
 			require.NoError(t, model.CreateDistributionRiskEvent(secondIncident, true, []int{41}))
+			filteredEvents, filteredTotal, err := model.ListDistributionRiskEvents(model.DistributionRiskEventFilters{
+				Status:    model.DistributionRiskPending,
+				Level:     "high",
+				ScopeKind: "token",
+				UserID:    7,
+				StartTime: secondIncident.CreatedAt - 1,
+				EndTime:   secondIncident.CreatedAt + 1,
+			}, 0, 20)
+			require.NoError(t, err)
+			assert.Equal(t, int64(1), filteredTotal)
+			require.Len(t, filteredEvents, 1)
+			assert.Equal(t, secondIncident.ID, filteredEvents[0].ID)
 			held, err := model.IsDistributionRiskTokenHeld(41)
 			require.NoError(t, err)
 			assert.True(t, held)

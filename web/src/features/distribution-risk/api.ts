@@ -25,6 +25,7 @@ import type {
   DistributionRiskConfigUpdate,
   DistributionRiskEvent,
   DistributionRiskEventList,
+  DistributionRiskEventQuery,
 } from './types'
 
 function requireData<T>(response: ApiResponse<T>): T {
@@ -53,13 +54,13 @@ export async function updateDistributionRiskConfig(
 }
 
 export async function listDistributionRiskEvents(
-  status: string,
+  filters: DistributionRiskEventQuery,
   page: number,
   pageSize: number
 ): Promise<DistributionRiskEventList> {
   const response = await api.get<ApiResponse<DistributionRiskEventList>>(
     '/api/distribution-risk/events',
-    { params: { status, page, page_size: pageSize } }
+    { params: { ...filters, page, page_size: pageSize } }
   )
   return requireData(response.data)
 }

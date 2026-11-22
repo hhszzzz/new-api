@@ -227,7 +227,7 @@ export function useSidebarData(badges: SidebarBadges = {}): SidebarData {
           ...(canReadDistributionRisk || canManageDistributionRisk
             ? [
                 {
-                  title: t('Distribution risk'),
+                  title: t('Distribution risk logs'),
                   url: '/distribution-risk',
                   icon: ShieldAlert,
                 },

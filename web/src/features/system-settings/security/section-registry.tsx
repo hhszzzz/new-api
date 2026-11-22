@@ -38,6 +38,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { RateLimitSection } from '../request-limits/rate-limit-section'
 import { SSRFSection } from '../request-limits/ssrf-section'
 import { TokenLimitSection } from '../request-limits/token-limit-section'
+import { DistributionRiskSettingsSection } from '@/features/distribution-risk/settings-section'
 import type { SecuritySettings } from '../types'
 import { createSectionRegistry } from '../utils/section-registry'
 
@@ -115,6 +116,11 @@ const SECURITY_SECTIONS = [
         }}
       />
     ),
+  },
+  {
+    id: 'distribution-risk',
+    titleKey: 'Distribution risk detection',
+    build: () => <DistributionRiskSettingsSection />,
   },
 ] as const
 

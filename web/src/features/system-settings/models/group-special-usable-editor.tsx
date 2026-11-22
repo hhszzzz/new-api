@@ -51,6 +51,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { cn } from '@/lib/utils'
 
 const sectionCardClassName = 'min-w-0 shadow-none'
 const sectionHeaderClassName = 'gap-2 border-b'
@@ -153,7 +154,7 @@ function GroupSelect(props: GroupSelectProps) {
       onValueChange={(value) => {
         if (value) props.onValueChange(value)
       }}
-      className={props.className}
+      className={cn('h-8 min-w-0', props.className)}
       placeholder={props.placeholder}
       aria-label={props.placeholder}
     />
